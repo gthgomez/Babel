@@ -1,0 +1,91 @@
+{
+  "cases": [
+    {
+      "name": "planning_default_suppresses_guard",
+      "model": "CODEX",
+      "taskMode": "planning",
+      "toolCanWriteFiles": false,
+      "approvalMode": "default",
+      "expected": {
+        "guardRequested": false,
+        "guardSuppressed": true,
+        "guardLoaded": false,
+        "guardReasons": [],
+        "effectiveLoadFileSuffixes": [
+          "LLM_COLLABORATION_SYSTEM/RULES_CORE.md",
+          "LLM_COLLABORATION_SYSTEM/ADAPTER_BABEL.md",
+          "LLM_COLLABORATION_SYSTEM/RULES_MODEL_CODEX.md",
+          "PROJECT_CONTEXT.md"
+        ]
+      }
+    },
+    {
+      "name": "implement_task_mode_alone_activates_guard",
+      "model": "CODEX",
+      "taskMode": "implement",
+      "toolCanWriteFiles": false,
+      "approvalMode": "default",
+      "expected": {
+        "guardRequested": true,
+        "guardSuppressed": false,
+        "guardLoaded": true,
+        "guardReasons": [
+          "task_mode=implement"
+        ],
+        "effectiveLoadFileSuffixes": [
+          "LLM_COLLABORATION_SYSTEM/RULES_CORE.md",
+          "LLM_COLLABORATION_SYSTEM/ADAPTER_BABEL.md",
+          "LLM_COLLABORATION_SYSTEM/RULES_GUARD.md",
+          "LLM_COLLABORATION_SYSTEM/RULES_MODEL_CODEX.md",
+          "PROJECT_CONTEXT.md"
+        ]
+      }
+    },
+    {
+      "name": "implement_full_execution_signals_activate_guard",
+      "model": "CODEX",
+      "taskMode": "implement",
+      "toolCanWriteFiles": true,
+      "approvalMode": "auto_edit",
+      "expected": {
+        "guardRequested": true,
+        "guardSuppressed": false,
+        "guardLoaded": true,
+        "guardReasons": [
+          "tool_can_write_files=true",
+          "approval_mode=auto_edit",
+          "task_mode=implement"
+        ],
+        "effectiveLoadFileSuffixes": [
+          "LLM_COLLABORATION_SYSTEM/RULES_CORE.md",
+          "LLM_COLLABORATION_SYSTEM/ADAPTER_BABEL.md",
+          "LLM_COLLABORATION_SYSTEM/RULES_GUARD.md",
+          "LLM_COLLABORATION_SYSTEM/RULES_MODEL_CODEX.md",
+          "PROJECT_CONTEXT.md"
+        ]
+      }
+    },
+    {
+      "name": "planning_suppression_overrides_execution_signals",
+      "model": "CODEX",
+      "taskMode": "planning",
+      "toolCanWriteFiles": true,
+      "approvalMode": "auto_edit",
+      "expected": {
+        "guardRequested": true,
+        "guardSuppressed": true,
+        "guardLoaded": false,
+        "guardReasons": [
+          "tool_can_write_files=true",
+          "approval_mode=auto_edit"
+        ],
+        "effectiveLoadFileSuffixes": [
+          "LLM_COLLABORATION_SYSTEM/RULES_CORE.md",
+          "LLM_COLLABORATION_SYSTEM/ADAPTER_BABEL.md",
+          "LLM_COLLABORATION_SYSTEM/RULES_MODEL_CODEX.md",
+          "PROJECT_CONTEXT.md"
+        ]
+      }
+    }
+  ]
+}

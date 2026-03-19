@@ -1,0 +1,32 @@
+{
+  "version": 2,
+  "description": "Canonical source inputs used to compile AGENTS.md and GEMINI.md. CLAUDE.md is manually maintained.",
+  "shared_inputs": [
+    "PROJECT_CONTEXT.md",
+    "LLM_COLLABORATION_SYSTEM/README_FOR_HUMANS_AND_LLMS.md",
+    "LLM_COLLABORATION_SYSTEM/ACTIVATION_CONTRACT.yaml",
+    "LLM_COLLABORATION_SYSTEM/RULES_CORE.md",
+    "LLM_COLLABORATION_SYSTEM/RULES_GUARD.md",
+    "LLM_COLLABORATION_SYSTEM/ADAPTER_BABEL.md",
+    "LLM_COLLABORATION_SYSTEM/RULES_SHARED_ALL_MODELS.md"
+  ],
+  "models": [
+    {
+      "model": "CODEX",
+      "manifest_file": "AGENTS.md",
+      "model_rules_path": "LLM_COLLABORATION_SYSTEM/RULES_MODEL_CODEX.md"
+    },
+    {
+      "model": "GEMINI",
+      "manifest_file": "GEMINI.md",
+      "model_rules_path": "LLM_COLLABORATION_SYSTEM/RULES_MODEL_GEMINI.md"
+    }
+  ],
+  "excluded_models": [
+    {
+      "model": "CLAUDE",
+      "manifest_file": "CLAUDE.md",
+      "reason": "Manually maintained per v3.0 cascade. Root CLAUDE.md + per-project lean files."
+    }
+  ]
+}

@@ -1,0 +1,405 @@
+version: 3
+catalog_scope: babel_prompt_library
+maintainer: control_plane
+root: "<YOUR_PROJECT_ROOT>/Babel"
+last_updated: "2026-03-07"
+
+# ─────────────────────────────────────────────
+# 00 — SYSTEM ROUTER
+# ─────────────────────────────────────────────
+entries:
+
+  - id: system_bible
+    layer: entrypoint
+    path: BABEL_BIBLE.md
+    description: >
+      Human-facing Babel entrypoint. Tells any model or operator how to use the
+      Babel system, which files are authoritative, and how to assemble a prompt
+      stack from the catalog.
+    status: active
+    tags: [entrypoint, bible, human, llm]
+
+  - id: orchestrator_v8
+    layer: orchestrator
+    path: 00_System_Router/OLS-v8-Orchestrator.md
+    description: >
+      Master dispatcher. Reads user input, matches project, classifies task type,
+      selects model adapter, and outputs a strict JSON prompt manifest for the
+      Worker Agent pipeline. Outputs JSON only — no prose.
+    status: active
+    supersedes: "00_System_Router/Orchestrator_Router-v1.0.md"
+    tags: [router, orchestrator, pipeline_entry]
+    token_budget: 220
+
+  - id: orchestrator_v9
+    layer: orchestrator
+    path: 00_System_Router/OLS-v9-Orchestrator.md
+    description: >
+      Typed instruction orchestrator. Emits structured routing intent via
+      instruction_stack plus resolution policy, leaving prompt_manifest
+      compilation to the downstream resolver/compiler.
+    status: active
+    tags: [router, orchestrator, pipeline_entry, typed, compiler_lane]
+    token_budget: 240
+
+# ─────────────────────────────────────────────
+# 01 — BEHAVIORAL OS  (always loaded, always first)
+# ─────────────────────────────────────────────
+
+  - id: behavioral_core_v7
+    layer: behavioral_os
+    path: 01_Behavioral_OS/OLS-v7-Core-Universal.md
+    description: >
+      Universal state machine (PLAN → ACT). Enforces execution discipline,
+      epistemic honesty, and the anti-eager behavior pattern across all agents.
+      Load position [1] — always first in any manifest.
+    status: active
+    load_position: 1
+    tags: [core, state_machine, always_load]
+    token_budget: 450
+
+  - id: behavioral_guard_v7
+    layer: behavioral_os
+    path: 01_Behavioral_OS/OLS-v7-Guard-Auto.md
+    description: >
+      Autonomous execution safety gates. Defines the conditions under which an
+      agent may act without human confirmation. Load position [2] — always
+      second in any manifest.
+    status: active
+    load_position: 2
+    # always_load: Guard is always included in the assembled manifest (selection
+    # authority). Whether Guard behavioral gates are ACTIVE is governed by
+    # ACTIVATION_CONTRACT.yaml, not this tag. In planning/research/brainstorm/
+    # architecture contexts, Guard is present but its gates must not be enforced.
+    tags: [guard, safety, always_load]
+    token_budget: 325
+
+# ─────────────────────────────────────────────
+# 02 — DOMAIN ARCHITECTS  (load 1 per task)
+# ─────────────────────────────────────────────
+
+  - id: domain_swe_backend
+    layer: domain_architect
+    path: 02_Domain_Architects/Clean_SWE_Backend-v7.md
+    description: >
+      Principal-engineer backend coding partner (Clean Modular v7.0).
+      Covers Supabase Edge Functions, PostgreSQL, API routing, auth,
+      and BCDP. Optimized for skill-based injection.
+    status: active
+    load_position: 3
+    tags: [backend, api, database, swe, clean, modular]
+    dependencies: []
+    conflicts: []
+    token_budget: 250
+    default_skill_ids:
+      - skill_ts_zod
+      - skill_supabase_pg
+
+  - id: domain_swe_frontend
+    layer: domain_architect
+    path: 02_Domain_Architects/Clean_SWE_Frontend-v6.md
+    description: >
+      UI/UX coding partner (Clean Modular v6.0).
+      Covers React, Next.js, design systems, and WCAG accessibility.
+      Optimized for skill-based injection.
+    status: active
+    load_position: 3
+    tags: [frontend, react, nextjs, ui_ux, swe, clean, modular]
+    dependencies: []
+    conflicts: []
+    token_budget: 250
+    default_skill_ids:
+      - skill_react_nextjs
+      - skill_a11y_design
+
+  - id: skill_catalog
+    layer: config
+    path: 02_Skills/Skill-Catalog.yaml
+    description: >
+      Registry of atomic technical skills (Lang, DB, API, UI).
+      Used for Just-in-Time (JIT) prompt assembly.
+    status: active
+    tags: [config, skills, catalog]
+
+  - id: skill_ts_zod
+    layer: skill
+    path: 02_Skills/Lang/TS-Zod-v1.md
+    description: TypeScript strict typing and Zod validation rules.
+    status: active
+    tags: [typescript, zod, validation, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_swe_backend
+    token_budget: 300
+
+  - id: skill_supabase_pg
+    layer: skill
+    path: 02_Skills/DB/Supabase-PG-v1.md
+    description: Supabase and Postgres RLS, migration, and naming rules.
+    status: active
+    tags: [supabase, postgres, database, rls, skill]
+    dependencies:
+      - skill_ts_zod
+    conflicts: []
+    default_for_domains:
+      - domain_swe_backend
+    token_budget: 350
+
+  - id: skill_a11y_design
+    layer: skill
+    path: 02_Skills/UI/A11y-Design-v1.md
+    description: WCAG 2.2 AA and semantic HTML accessibility rules.
+    status: active
+    tags: [accessibility, ui, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_swe_frontend
+    token_budget: 300
+
+  - id: skill_react_nextjs
+    layer: skill
+    path: 02_Skills/Framework/React-NextJS-v1.md
+    description: React/Next.js component state and performance rules.
+    status: active
+    tags: [react, nextjs, performance, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_swe_frontend
+    token_budget: 325
+
+  - id: domain_compliance_gpc
+    layer: domain_architect
+    path: 02_Domain_Architects/Compliance_GPC-v1.0.md
+    description: >
+      Compliance strategist for GPC, GDPR, CCPA, and related privacy regulations.
+      Enforces deterministic, evidence-first reasoning. Never produces vague
+      regulatory claims.
+    status: active
+    load_position: 3
+    tags: [compliance, gpc, gdpr, ccpa, legal]
+
+  - id: domain_research
+    layer: domain_architect
+    path: 02_Domain_Architects/General_Research-v4.1.md
+    description: >
+      General research and strategy agent. Uses MPAF/GSA frameworks for
+      structured investigation. Apex of OLS v4.1 General APEX lineage.
+    status: active
+    load_position: 3
+    tags: [research, strategy, analysis]
+
+  - id: domain_devops
+    layer: domain_architect
+    path: 02_Domain_Architects/DevOps_Architect-v1.0.md
+    description: >
+      Principal SRE/DevOps architect. Classifies every change as Stateful,
+      Stateless, or Read-Only. Enforces the Four Fails Standard (Fast, Safe,
+      Observable, Idempotent), mandatory ROLLBACK_STRATEGY and INFRA_BCDP for
+      stateful changes, dry-run gate before all applies, and strict secrets
+      management. Adds INFRA_ACT gate for production stateful changes beyond
+      the standard QA PASS.
+    status: active
+    load_position: 3
+    tags: [devops, infra, cicd, docker, terraform, vercel, migrations, secrets]
+
+  - id: pipeline_qa_reviewer
+    layer: pipeline_stage
+    path: 02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md
+    description: >
+      Adversarial QA gate. Reviews SWE plans across six audit layers: Evidence Gate,
+      SFDIPOT coverage, NAMIT code-level checklist, BCDP contract verification,
+      Security audit, and Root Cause verification. Outputs only PASS or REJECT with
+      tagged failures and per-claim confidence scores. Never writes code. Loaded by
+      pipeline_mode: verified or autonomous.
+    status: active
+    load_position: 7
+    tags: [qa, namit, sfdipot, bcdp, pipeline_stage, verification]
+    token_budget: 425
+
+  - id: pipeline_cli_executor
+    layer: pipeline_stage
+    path: 02_Domain_Architects/CLI_Executor-v1.0.md
+    description: >
+      CLI "Hands" agent. Activates only after QA PASS. Translates the approved
+      MINIMAL ACTION SET into physical tool calls (file_read, file_write,
+      shell_exec, test_run) one step at a time with verification after each.
+      On any failure, halts and emits a PIPELINE_ERROR payload routed back to
+      the SWE Agent. Zero architectural authority. Loaded by pipeline_mode: autonomous.
+    status: active
+    load_position: 8
+    tags: [cli, executor, pipeline_stage, autonomous, file_write, shell_exec]
+
+# ─────────────────────────────────────────────
+# 03 — MODEL ADAPTERS  (load 1 per task)
+# ─────────────────────────────────────────────
+
+  - id: adapter_claude
+    layer: model_adapter
+    path: 03_Model_Adapters/Claude_AntiEager.md
+    description: >
+      Personality adapter for Claude (Sonnet/Opus). Suppresses over-helpfulness,
+      enforces strict PLAN→ACT gating, and prevents hallucinated file paths.
+      Derived from OLS v6.2 Claude variant.
+    status: active
+    load_position: 4
+    tags: [claude, adapter, anti_eager]
+
+  - id: adapter_codex
+    layer: model_adapter
+    path: 03_Model_Adapters/Codex_UltraTerse.md
+    description: >
+      Personality adapter for Codex/o1. Maximizes brevity and precision for
+      dense algorithmic tasks and schema generation. Derived from OLS v6.2
+      Codex variant.
+    status: active
+    load_position: 4
+    tags: [codex, openai, adapter, terse]
+
+  - id: adapter_codex_balanced
+    layer: model_adapter
+    path: 03_Model_Adapters/Codex_Balanced.md
+    description: >
+      Balanced Codex adapter for multi-file refactors, frontend work, and
+      architecture-sensitive edits. Preserves Codex execution strengths without
+      the heavy compression bias of the ultra-terse variant.
+    status: active
+    load_position: 4
+    tags: [codex, openai, adapter, balanced, refactor, frontend]
+    token_budget: 275
+
+  - id: adapter_gemini
+    layer: model_adapter
+    path: 03_Model_Adapters/Gemini_LongContext.md
+    description: >
+      Personality adapter for Gemini. Optimized for long-context document
+      synthesis, log analysis, and multi-file research tasks. Derived from OLS
+      v6.2 Gemini variant.
+    status: active
+    load_position: 4
+    tags: [gemini, google, adapter, long_context]
+
+# ─────────────────────────────────────────────
+# 04 — META TOOLS  (authoring and governance)
+# ─────────────────────────────────────────────
+
+  - id: meta_prompt_compiler
+    layer: meta_tool
+    path: 04_Meta_Tools/Prompt_Compiler-v4.1.md
+    description: >
+      Prompt authoring framework. Use this as the template engine when drafting
+      new domain or adapter prompts. Apex of OLS v4.1 Canonical lineage.
+    status: active
+    tags: [meta, authoring, compiler]
+
+  - id: meta_research_optimizer
+    layer: meta_tool
+    path: 04_Meta_Tools/Research_Optimizer.md
+    description: >
+      Prompt improvement research plan. Guides structured investigation of
+      whether a prompt change is grounded in evidence before adopting it.
+    status: active
+    tags: [meta, research, optimization]
+
+  - id: meta_namit_critique
+    layer: meta_tool
+    path: 04_Meta_Tools/NAMIT-Research-Critique.md
+    description: >
+      Research critique of the NAMIT edge-case framework and confidence scoring
+      protocol. Confirms NAMIT is a proprietary OLS mnemonic (not industry-
+      standard). Recommends Hybrid approach: SFDIPOT for test planning + NAMIT
+      for code-level checks. Reference when authoring QA_Adversarial_Reviewer.
+    status: active
+    tags: [meta, namit, research, reference]
+
+  - id: meta_role_creation_gate
+    layer: meta_tool
+    path: 04_Meta_Tools/Role_Creation_Gate.md
+    description: >
+      Governance protocol for adding new prompt roles to the Babel library.
+      Enforces overlap check, delta justification, lineage declaration, and
+      registry update before any new file is created.
+    status: active
+    tags: [meta, governance, gate]
+
+# ─────────────────────────────────────────────
+# 05 — PROJECT OVERLAYS  (thin, per-project context)
+# ─────────────────────────────────────────────
+
+  - id: overlay_gpcguard
+    layer: project_overlay
+    path: 05_Project_Overlays/GPCGuard-Context.md
+    description: >
+      Project context for GPCGuard. Covers tech stack (Deno, Supabase Edge
+      Functions, Next.js, Stripe, PostgreSQL), hard constraints (fail-closed,
+      deterministic enforcement, multi-tenant isolation), and brand rules
+      (no AI-driven framing, evidence-first).
+    status: active
+    load_position: 5
+    project: GPCGuard
+    tags: [overlay, gpcguard, context]
+
+  - id: overlay_prismatix
+    layer: project_overlay
+    path: 05_Project_Overlays/Prismatix-Context.md
+    description: >
+      Project context for Prismatix. Covers tech stack (Supabase router, React/
+      Vite, multi-provider LLM, SSE), core invariants (normalized SSE contract,
+      server-side ownership checks, AbortError→504 mapping), and primary
+      objects (router manifests, conversation records).
+    status: active
+    load_position: 5
+    project: Prismatix
+    tags: [overlay, prismatix, context]
+
+  - id: overlay_auditguard
+    layer: project_overlay
+    path: 05_Project_Overlays/AuditGuard-Context.md
+    description: >
+      Project context for AuditGuard. Covers tech stack (Next.js, Prisma,
+      Supabase, TanStack React Query), hard constraints (append-only audit
+      records, CI validator gating), and primary objects (audit entries,
+      evidence artifacts, compliance reports).
+    status: active
+    load_position: 5
+    project: AuditGuard
+    tags: [overlay, auditguard, context]
+
+# ─────────────────────────────────────────────
+# 06 — TASK OVERLAYS  (optional, load after project overlay)
+# ─────────────────────────────────────────────
+
+  - id: task_frontend_professionalism
+    layer: task_overlay
+    path: 06_Task_Overlays/Frontend-Professionalism-v1.0.md
+    description: >
+      Reusable task overlay for polishing existing frontends, reducing prototype
+      noise, tightening design systems, and improving professional SaaS UX.
+    status: active
+    load_position: 6
+    tags: [task_overlay, frontend, ui_ux, professionalism, reuse]
+
+  - id: task_gpcguard_frontend_professionalism
+    layer: task_overlay
+    path: 06_Task_Overlays/GPCGuard-Frontend-Professionalism-v1.0.md
+    description: >
+      GPCGuard-specific delta overlay for frontend professionalism tasks.
+      Preserves auth/API boundaries and reinforces evidence-first product tone.
+    status: active
+    load_position: 6
+    project: GPCGuard
+    tags: [task_overlay, gpcguard, frontend, ui_ux, professionalism]
+
+# ─────────────────────────────────────────────
+# DEPRECATED / SUPERSEDED
+# ─────────────────────────────────────────────
+
+  - id: stub_orchestrator_v1
+    layer: orchestrator
+    path: 00_System_Router/Orchestrator_Router-v1.0.md
+    description: Initial stub placeholder. Superseded by OLS-v8-Orchestrator.md.
+    status: deprecated
+    superseded_by: orchestrator_v8
+    tags: [deprecated, stub]

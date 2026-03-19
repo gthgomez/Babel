@@ -1,0 +1,759 @@
+{
+  "version": 1,
+  "description": "Deterministic fixture suite for Phase 4 quality grading.",
+  "fixtures": [
+    {
+      "id": "planning_quality_pass",
+      "category": "planning_quality",
+      "responsePath": "tests/fixtures/eval-quality/responses/planning-quality-pass.md",
+      "checks": [
+        {
+          "id": "has_objective",
+          "description": "Includes OBJECTIVE section",
+          "type": "contains",
+          "value": "OBJECTIVE:"
+        },
+        {
+          "id": "has_known_facts",
+          "description": "Includes KNOWN FACTS section",
+          "type": "contains",
+          "value": "KNOWN FACTS:"
+        },
+        {
+          "id": "has_assumptions",
+          "description": "Includes ASSUMPTIONS section",
+          "type": "contains",
+          "value": "ASSUMPTIONS:"
+        },
+        {
+          "id": "has_risks",
+          "description": "Includes RISKS section",
+          "type": "contains",
+          "value": "RISKS:"
+        },
+        {
+          "id": "has_minimal_action_set",
+          "description": "Includes MINIMAL ACTION SET section",
+          "type": "contains",
+          "value": "MINIMAL ACTION SET:"
+        },
+        {
+          "id": "has_verification_method",
+          "description": "Includes VERIFICATION METHOD section",
+          "type": "contains",
+          "value": "VERIFICATION METHOD:"
+        },
+        {
+          "id": "no_code_fence",
+          "description": "Plan does not include markdown code fences",
+          "type": "not_contains",
+          "value": "```"
+        },
+        {
+          "id": "avoids_vague_verification",
+          "description": "Plan avoids vague confidence phrases",
+          "type": "not_regex",
+          "value": "\\b(should work|looks fine|seems fine)\\b"
+        }
+      ],
+      "expected": {
+        "pass": true,
+        "failedCheckIds": []
+      }
+    },
+    {
+      "id": "planning_quality_fail",
+      "category": "planning_quality",
+      "responsePath": "tests/fixtures/eval-quality/responses/planning-quality-fail.md",
+      "checks": [
+        {
+          "id": "has_objective",
+          "description": "Includes OBJECTIVE section",
+          "type": "contains",
+          "value": "OBJECTIVE:"
+        },
+        {
+          "id": "has_known_facts",
+          "description": "Includes KNOWN FACTS section",
+          "type": "contains",
+          "value": "KNOWN FACTS:"
+        },
+        {
+          "id": "has_assumptions",
+          "description": "Includes ASSUMPTIONS section",
+          "type": "contains",
+          "value": "ASSUMPTIONS:"
+        },
+        {
+          "id": "has_risks",
+          "description": "Includes RISKS section",
+          "type": "contains",
+          "value": "RISKS:"
+        },
+        {
+          "id": "has_minimal_action_set",
+          "description": "Includes MINIMAL ACTION SET section",
+          "type": "contains",
+          "value": "MINIMAL ACTION SET:"
+        },
+        {
+          "id": "has_verification_method",
+          "description": "Includes VERIFICATION METHOD section",
+          "type": "contains",
+          "value": "VERIFICATION METHOD:"
+        },
+        {
+          "id": "no_code_fence",
+          "description": "Plan does not include markdown code fences",
+          "type": "not_contains",
+          "value": "```"
+        },
+        {
+          "id": "avoids_vague_verification",
+          "description": "Plan avoids vague confidence phrases",
+          "type": "not_regex",
+          "value": "\\b(should work|looks fine|seems fine)\\b"
+        }
+      ],
+      "expected": {
+        "pass": false,
+        "failedCheckIds": [
+          "avoids_vague_verification",
+          "has_assumptions",
+          "has_verification_method"
+        ]
+      }
+    },
+    {
+      "id": "contract_preservation_pass",
+      "category": "contract_preservation",
+      "responsePath": "tests/fixtures/eval-quality/responses/contract-preservation-pass.md",
+      "checks": [
+        {
+          "id": "has_contract",
+          "description": "Identifies the contract being preserved",
+          "type": "contains",
+          "value": "Contract:"
+        },
+        {
+          "id": "has_consumers",
+          "description": "Names known contract consumers",
+          "type": "contains",
+          "value": "Consumers:"
+        },
+        {
+          "id": "has_bcdp_classification",
+          "description": "Includes explicit BCDP severity classification",
+          "type": "regex",
+          "value": "Breaking Changes \\(BCDP\\):\\s*(COMPATIBLE|RISKY|BREAKING)"
+        },
+        {
+          "id": "has_migration_strategy",
+          "description": "Includes migration strategy statement",
+          "type": "contains",
+          "value": "Migration Strategy:"
+        },
+        {
+          "id": "has_invariant_preservation",
+          "description": "Includes explicit invariant-preservation notes",
+          "type": "contains",
+          "value": "Invariant Preservation:"
+        },
+        {
+          "id": "avoids_consumer_bypass",
+          "description": "Does not suggest bypassing consumer impact checks",
+          "type": "not_regex",
+          "value": "\\bignore consumers\\b"
+        }
+      ],
+      "expected": {
+        "pass": true,
+        "failedCheckIds": []
+      }
+    },
+    {
+      "id": "contract_preservation_fail",
+      "category": "contract_preservation",
+      "responsePath": "tests/fixtures/eval-quality/responses/contract-preservation-fail.md",
+      "checks": [
+        {
+          "id": "has_contract",
+          "description": "Identifies the contract being preserved",
+          "type": "contains",
+          "value": "Contract:"
+        },
+        {
+          "id": "has_consumers",
+          "description": "Names known contract consumers",
+          "type": "contains",
+          "value": "Consumers:"
+        },
+        {
+          "id": "has_bcdp_classification",
+          "description": "Includes explicit BCDP severity classification",
+          "type": "regex",
+          "value": "Breaking Changes \\(BCDP\\):\\s*(COMPATIBLE|RISKY|BREAKING)"
+        },
+        {
+          "id": "has_migration_strategy",
+          "description": "Includes migration strategy statement",
+          "type": "contains",
+          "value": "Migration Strategy:"
+        },
+        {
+          "id": "has_invariant_preservation",
+          "description": "Includes explicit invariant-preservation notes",
+          "type": "contains",
+          "value": "Invariant Preservation:"
+        },
+        {
+          "id": "avoids_consumer_bypass",
+          "description": "Does not suggest bypassing consumer impact checks",
+          "type": "not_regex",
+          "value": "\\bignore consumers\\b"
+        }
+      ],
+      "expected": {
+        "pass": false,
+        "failedCheckIds": [
+          "avoids_consumer_bypass",
+          "has_bcdp_classification",
+          "has_consumers",
+          "has_migration_strategy"
+        ]
+      }
+    },
+    {
+      "id": "verification_quality_pass",
+      "category": "verification_quality",
+      "responsePath": "tests/fixtures/eval-quality/responses/verification-quality-pass.md",
+      "checks": [
+        {
+          "id": "has_verification_method",
+          "description": "Includes verification method section",
+          "type": "contains",
+          "value": "Verification Method:"
+        },
+        {
+          "id": "has_step_list",
+          "description": "Contains an explicit numbered verification sequence",
+          "type": "regex",
+          "value": "^1\\.\\s+",
+          "multiline": true
+        },
+        {
+          "id": "mentions_exit_code",
+          "description": "References observable exit code checks",
+          "type": "contains",
+          "value": "exit code 0"
+        },
+        {
+          "id": "has_expected_evidence",
+          "description": "Defines expected evidence",
+          "type": "contains",
+          "value": "Expected evidence:"
+        },
+        {
+          "id": "has_failure_signal",
+          "description": "Defines failure signal",
+          "type": "contains",
+          "value": "Failure signal:"
+        },
+        {
+          "id": "avoids_vague_verification",
+          "description": "Avoids vague verification language",
+          "type": "not_regex",
+          "value": "\\b(should work|looks fine|seems good|eyeball)\\b"
+        }
+      ],
+      "expected": {
+        "pass": true,
+        "failedCheckIds": []
+      }
+    },
+    {
+      "id": "verification_quality_fail",
+      "category": "verification_quality",
+      "responsePath": "tests/fixtures/eval-quality/responses/verification-quality-fail.md",
+      "checks": [
+        {
+          "id": "has_verification_method",
+          "description": "Includes verification method section",
+          "type": "contains",
+          "value": "Verification Method:"
+        },
+        {
+          "id": "has_step_list",
+          "description": "Contains an explicit numbered verification sequence",
+          "type": "regex",
+          "value": "^1\\.\\s+",
+          "multiline": true
+        },
+        {
+          "id": "mentions_exit_code",
+          "description": "References observable exit code checks",
+          "type": "contains",
+          "value": "exit code 0"
+        },
+        {
+          "id": "has_expected_evidence",
+          "description": "Defines expected evidence",
+          "type": "contains",
+          "value": "Expected evidence:"
+        },
+        {
+          "id": "has_failure_signal",
+          "description": "Defines failure signal",
+          "type": "contains",
+          "value": "Failure signal:"
+        },
+        {
+          "id": "avoids_vague_verification",
+          "description": "Avoids vague verification language",
+          "type": "not_regex",
+          "value": "\\b(should work|looks fine|seems good|eyeball)\\b"
+        }
+      ],
+      "expected": {
+        "pass": false,
+        "failedCheckIds": [
+          "avoids_vague_verification",
+          "has_expected_evidence",
+          "has_failure_signal",
+          "has_step_list",
+          "mentions_exit_code"
+        ]
+      }
+    },
+    {
+      "id": "review_discipline_pass",
+      "category": "review_discipline",
+      "responsePath": "tests/fixtures/eval-quality/responses/review-discipline-pass.md",
+      "checks": [
+        {
+          "id": "has_state",
+          "description": "Includes current state for the review",
+          "type": "contains",
+          "value": "State: review"
+        },
+        {
+          "id": "has_active_repo_root",
+          "description": "Locks the review to one active repo root",
+          "type": "contains",
+          "value": "Active Repo Root:"
+        },
+        {
+          "id": "has_scope_exclusions",
+          "description": "States scope exclusions explicitly",
+          "type": "contains",
+          "value": "Scope Exclusions:"
+        },
+        {
+          "id": "has_findings",
+          "description": "Reports findings first",
+          "type": "contains",
+          "value": "Findings:"
+        },
+        {
+          "id": "has_verified_facts",
+          "description": "Separates verified facts from inference",
+          "type": "contains",
+          "value": "Verified Facts:"
+        },
+        {
+          "id": "has_inference",
+          "description": "Separates inference from verified facts",
+          "type": "contains",
+          "value": "Inference:"
+        },
+        {
+          "id": "has_line_references",
+          "description": "Uses exact file and line references",
+          "type": "regex",
+          "value": "#L\\d+"
+        },
+        {
+          "id": "has_verification_limits",
+          "description": "States what the verification does and does not prove",
+          "type": "contains",
+          "value": "Verification Limits:"
+        },
+        {
+          "id": "avoids_overclaim_from_limited_search",
+          "description": "Does not turn a limited grep into a global cleanliness claim",
+          "type": "not_regex",
+          "value": "\\b(grepped a few docs|all startup surfaces are safe)\\b"
+        }
+      ],
+      "expected": {
+        "pass": true,
+        "failedCheckIds": []
+      }
+    },
+    {
+      "id": "review_discipline_fail",
+      "category": "review_discipline",
+      "responsePath": "tests/fixtures/eval-quality/responses/review-discipline-fail.md",
+      "checks": [
+        {
+          "id": "has_state",
+          "description": "Includes current state for the review",
+          "type": "contains",
+          "value": "State: review"
+        },
+        {
+          "id": "has_active_repo_root",
+          "description": "Locks the review to one active repo root",
+          "type": "contains",
+          "value": "Active Repo Root:"
+        },
+        {
+          "id": "has_scope_exclusions",
+          "description": "States scope exclusions explicitly",
+          "type": "contains",
+          "value": "Scope Exclusions:"
+        },
+        {
+          "id": "has_findings",
+          "description": "Reports findings first",
+          "type": "contains",
+          "value": "Findings:"
+        },
+        {
+          "id": "has_verified_facts",
+          "description": "Separates verified facts from inference",
+          "type": "contains",
+          "value": "Verified Facts:"
+        },
+        {
+          "id": "has_inference",
+          "description": "Separates inference from verified facts",
+          "type": "contains",
+          "value": "Inference:"
+        },
+        {
+          "id": "has_line_references",
+          "description": "Uses exact file and line references",
+          "type": "regex",
+          "value": "#L\\d+"
+        },
+        {
+          "id": "has_verification_limits",
+          "description": "States what the verification does and does not prove",
+          "type": "contains",
+          "value": "Verification Limits:"
+        },
+        {
+          "id": "avoids_overclaim_from_limited_search",
+          "description": "Does not turn a limited grep into a global cleanliness claim",
+          "type": "not_regex",
+          "value": "\\b(grepped a few docs|all startup surfaces are safe)\\b"
+        }
+      ],
+      "expected": {
+        "pass": false,
+        "failedCheckIds": [
+          "avoids_overclaim_from_limited_search",
+          "has_active_repo_root",
+          "has_inference",
+          "has_line_references",
+          "has_scope_exclusions",
+          "has_verified_facts",
+          "has_verification_limits"
+        ]
+      }
+    },
+    {
+      "id": "cp-001",
+      "category": "constraint-precedence",
+      "responsePath": "01_Behavioral_OS/OLS-v7-Core-Universal.md",
+      "checks": [
+        {
+          "id": "cp-001-a",
+          "type": "contains",
+          "value": "exactly one of two states at any given time",
+          "description": "Core defines the authoritative two-state model with no hybrid states",
+          "caseSensitive": false
+        },
+        {
+          "id": "cp-001-b",
+          "type": "not_contains",
+          "value": "AUTO-ACT",
+          "description": "Core must not define or reference AUTO-ACT as a state",
+          "caseSensitive": true
+        },
+        {
+          "id": "cp-001-c",
+          "type": "not_contains",
+          "value": "TRIVIAL-PLAN",
+          "description": "Core must not define plan-depth sub-states; those belong in adapters",
+          "caseSensitive": true
+        }
+      ],
+      "expected": {
+        "pass": true,
+        "failedCheckIds": []
+      }
+    },
+    {
+      "id": "cp-002",
+      "category": "constraint-precedence",
+      "responsePath": "03_Model_Adapters/Claude_AntiEager.md",
+      "checks": [
+        {
+          "id": "cp-002-a",
+          "type": "not_contains",
+          "value": "Exactly three states",
+          "description": "Claude adapter must not claim ownership of the state count (3-state framing removed)",
+          "caseSensitive": true
+        },
+        {
+          "id": "cp-002-b",
+          "type": "not_contains",
+          "value": "AUTO-ACT",
+          "description": "AUTO-ACT must be fully renamed to TRIVIAL-PLAN throughout Claude adapter",
+          "caseSensitive": true
+        },
+        {
+          "id": "cp-002-c",
+          "type": "contains",
+          "value": "TRIVIAL-PLAN",
+          "description": "TRIVIAL-PLAN label must be present in Claude adapter after normalization",
+          "caseSensitive": true
+        }
+      ],
+      "expected": {
+        "pass": true,
+        "failedCheckIds": []
+      }
+    },
+    {
+      "id": "cp-003",
+      "category": "constraint-precedence",
+      "responsePath": "02_Domain_Architects/SWE_Backend-v6.2.md",
+      "checks": [
+        {
+          "id": "cp-003-a",
+          "type": "not_contains",
+          "value": "AUTO-ACT",
+          "description": "AUTO-ACT must be fully renamed to TRIVIAL-PLAN throughout SWE_Backend",
+          "caseSensitive": true
+        },
+        {
+          "id": "cp-003-b",
+          "type": "not_contains",
+          "value": "You operate in exactly one of these states",
+          "description": "Section 2 must not claim state machine ownership; that belongs to Core",
+          "caseSensitive": false
+        },
+        {
+          "id": "cp-003-c",
+          "type": "contains",
+          "value": "Plan Depth Guidance",
+          "description": "Section 2 must be renamed to Plan Depth Guidance",
+          "caseSensitive": true
+        }
+      ],
+      "expected": {
+        "pass": true,
+        "failedCheckIds": []
+      }
+    },
+    {
+      "id": "cp-004",
+      "category": "constraint-precedence",
+      "responsePath": "02_Domain_Architects/SWE_Frontend-v5.0.md",
+      "checks": [
+        {
+          "id": "cp-004-a",
+          "type": "not_contains",
+          "value": "AUTO-ACT** (skip plan)",
+          "description": "Decision Table rows must not use AUTO-ACT label",
+          "caseSensitive": true
+        },
+        {
+          "id": "cp-004-b",
+          "type": "not_contains",
+          "value": "auto-act decisions",
+          "description": "Quick Reference card must not use AUTO-ACT label",
+          "caseSensitive": false
+        },
+        {
+          "id": "cp-004-c",
+          "type": "contains",
+          "value": "TRIVIAL-PLAN",
+          "description": "TRIVIAL-PLAN label must be present in SWE_Frontend after normalization",
+          "caseSensitive": true
+        }
+      ],
+      "expected": {
+        "pass": true,
+        "failedCheckIds": []
+      }
+    },
+    {
+      "id": "cp-005",
+      "category": "constraint-precedence",
+      "responsePath": "03_Model_Adapters/Gemini_LongContext.md",
+      "checks": [
+        {
+          "id": "cp-005-a",
+          "type": "not_contains",
+          "value": "exactly three states",
+          "description": "Gemini adapter must not inherit the 3-state framing from v6.2",
+          "caseSensitive": false
+        },
+        {
+          "id": "cp-005-b",
+          "type": "not_contains",
+          "value": "AUTO-ACT",
+          "description": "AUTO-ACT must not appear in Gemini adapter",
+          "caseSensitive": true
+        }
+      ],
+      "expected": {
+        "pass": true,
+        "failedCheckIds": []
+      }
+    },
+    {
+      "id": "cp-006",
+      "category": "constraint-precedence",
+      "responsePath": "03_Model_Adapters/Codex_UltraTerse.md",
+      "checks": [
+        {
+          "id": "cp-006-a",
+          "type": "not_contains",
+          "value": "PLAN | AUTO-ACT | ACT",
+          "description": "Codex adapter must not define a 3-state machine in the States section",
+          "caseSensitive": true
+        },
+        {
+          "id": "cp-006-b",
+          "type": "not_contains",
+          "value": "AUTO-ACT",
+          "description": "AUTO-ACT must be fully renamed to TRIVIAL-PLAN throughout Codex adapter",
+          "caseSensitive": true
+        },
+        {
+          "id": "cp-006-c",
+          "type": "contains",
+          "value": "TRIVIAL-PLAN",
+          "description": "TRIVIAL-PLAN label must be present in Codex adapter after normalization",
+          "caseSensitive": true
+        }
+      ],
+      "expected": {
+        "pass": true,
+        "failedCheckIds": []
+      }
+    },
+    {
+      "id": "cp-007",
+      "category": "constraint-precedence",
+      "responsePath": "03_Model_Adapters/Claude_AntiEager.md",
+      "checks": [
+        {
+          "id": "cp-007-a",
+          "type": "not_contains",
+          "value": "*.md, *.txt, README, comments, JSDoc",
+          "description": "Claude adapter must not contain a standalone routing table row (routing delegated to domain architects)",
+          "caseSensitive": false
+        },
+        {
+          "id": "cp-007-b",
+          "type": "contains",
+          "value": "domain architect",
+          "description": "Claude adapter must delegate plan depth routing to the domain architect",
+          "caseSensitive": false
+        }
+      ],
+      "expected": {
+        "pass": true,
+        "failedCheckIds": []
+      }
+    },
+    {
+      "id": "cp-008",
+      "category": "constraint-precedence",
+      "responsePath": "03_Model_Adapters/Codex_UltraTerse.md",
+      "checks": [
+        {
+          "id": "cp-008-a",
+          "type": "not_contains",
+          "value": "*.md / comments / docs",
+          "description": "Codex adapter must not contain a standalone routing table row (routing delegated to domain architects)",
+          "caseSensitive": false
+        },
+        {
+          "id": "cp-008-b",
+          "type": "contains",
+          "value": "domain architect",
+          "description": "Codex adapter must delegate plan depth routing to the domain architect",
+          "caseSensitive": false
+        }
+      ],
+      "expected": {
+        "pass": true,
+        "failedCheckIds": []
+      }
+    },
+    {
+      "id": "cp-009",
+      "category": "constraint-precedence",
+      "responsePath": "LLM_COLLABORATION_SYSTEM/ACTIVATION_CONTRACT.yaml",
+      "checks": [
+        {
+          "id": "cp-009-a",
+          "type": "contains",
+          "value": "BEHAVIORAL GATE ENFORCEMENT",
+          "description": "ACTIVATION_CONTRACT preamble must declare its scope as behavioral gate enforcement (not file selection)",
+          "caseSensitive": true
+        },
+        {
+          "id": "cp-009-b",
+          "type": "contains",
+          "value": "do_not_load_guard_when",
+          "description": "ACTIVATION_CONTRACT must contain the Guard suppression policy key for planning contexts",
+          "caseSensitive": true
+        },
+        {
+          "id": "cp-009-c",
+          "type": "contains",
+          "value": "Guard behavioral gates MUST NOT be applied",
+          "description": "ACTIVATION_CONTRACT must contain the explicit compiled-manifest precedence rule",
+          "caseSensitive": true
+        }
+      ],
+      "expected": {
+        "pass": true,
+        "failedCheckIds": []
+      }
+    },
+    {
+      "id": "cp-010",
+      "category": "constraint-precedence",
+      "responsePath": "LLM_COLLABORATION_SYSTEM/ACTIVATION_CONTRACT.yaml",
+      "checks": [
+        {
+          "id": "cp-010-a",
+          "type": "contains",
+          "value": "Owner: prompt_catalog.yaml",
+          "description": "ACTIVATION_CONTRACT preamble must name prompt_catalog.yaml as the selection authority owner",
+          "caseSensitive": true
+        },
+        {
+          "id": "cp-010-b",
+          "type": "contains",
+          "value": "Owner: THIS FILE",
+          "description": "ACTIVATION_CONTRACT preamble must name itself as the behavioral activation authority owner",
+          "caseSensitive": true
+        }
+      ],
+      "expected": {
+        "pass": true,
+        "failedCheckIds": []
+      }
+    }
+  ]
+}

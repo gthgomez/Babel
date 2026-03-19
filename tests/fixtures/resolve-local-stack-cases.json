@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "gpcguard_frontend_codex_balanced",
+      "taskCategory": "frontend",
+      "project": "GPCGuard",
+      "projectPathFixture": "GPCGuardFixture",
+      "model": "codex",
+      "pipelineMode": "direct",
+      "expected": {
+        "selectedCodexAdapter": "balanced",
+        "selectedStackIds": [
+          "behavioral_core_v7",
+          "behavioral_guard_v7",
+          "domain_swe_frontend",
+          "adapter_codex_balanced",
+          "overlay_gpcguard",
+          "task_frontend_professionalism",
+          "task_gpcguard_frontend_professionalism"
+        ],
+        "recommendedTaskOverlayIds": [
+          "task_frontend_professionalism",
+          "task_gpcguard_frontend_professionalism"
+        ],
+        "repoLocalSystemPresent": true,
+        "repoContextFilesCount": 2,
+        "projectPathResolvedSuffix": "tests\\fixtures\\projects\\GPCGuardFixture",
+        "repoContextFileSuffixes": [
+          "PROJECT_CONTEXT.md",
+          "LLM_COLLABORATION_SYSTEM\\README_FOR_HUMANS_AND_LLMS.md"
+        ],
+        "kickoffPrompt": "Read Babel's BABEL_BIBLE.md first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM/README_FOR_HUMANS_AND_LLMS.md before planning or coding."
+      }
+    },
+    {
+      "name": "gpcguard_backend_claude_verified",
+      "taskCategory": "backend",
+      "project": "GPCGuard",
+      "projectPathFixture": "GPCGuardFixture",
+      "model": "claude",
+      "pipelineMode": "verified",
+      "expected": {
+        "selectedStackIds": [
+          "behavioral_core_v7",
+          "behavioral_guard_v7",
+          "domain_swe_backend",
+          "adapter_claude",
+          "overlay_gpcguard",
+          "pipeline_qa_reviewer"
+        ],
+        "recommendedTaskOverlayIds": [],
+        "repoLocalSystemPresent": true,
+        "repoContextFilesCount": 2,
+        "repoContextFileSuffixes": [
+          "PROJECT_CONTEXT.md",
+          "LLM_COLLABORATION_SYSTEM\\README_FOR_HUMANS_AND_LLMS.md"
+        ],
+        "kickoffPrompt": "Read Babel's BABEL_BIBLE.md first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM/README_FOR_HUMANS_AND_LLMS.md before planning or coding."
+      }
+    },
+    {
+      "name": "global_research_gemini_direct",
+      "taskCategory": "research",
+      "project": "global",
+      "model": "gemini",
+      "pipelineMode": "direct",
+      "expected": {
+        "selectedStackIds": [
+          "behavioral_core_v7",
+          "behavioral_guard_v7",
+          "domain_research",
+          "adapter_gemini"
+        ],
+        "recommendedTaskOverlayIds": [],
+        "repoLocalSystemPresent": false,
+        "repoContextFilesCount": 0,
+        "kickoffPrompt": "Read Babel's BABEL_BIBLE.md first and use Babel to select the right instruction stack for this task before planning or coding."
+      }
+    },
+    {
+      "name": "gpcguard_frontend_codex_ultra_no_recommended_overlays",
+      "taskCategory": "frontend",
+      "project": "GPCGuard",
+      "projectPathFixture": "GPCGuardFixture",
+      "model": "codex",
+      "codexAdapter": "ultra",
+      "pipelineMode": "direct",
+      "disableRecommendedTaskOverlays": true,
+      "expected": {
+        "selectedCodexAdapter": "ultra",
+        "selectedStackIds": [
+          "behavioral_core_v7",
+          "behavioral_guard_v7",
+          "domain_swe_frontend",
+          "adapter_codex",
+          "overlay_gpcguard"
+        ],
+        "recommendedTaskOverlayIds": [],
+        "repoLocalSystemPresent": true,
+        "repoContextFilesCount": 2
+      }
+    },
+    {
+      "name": "global_frontend_codex_alias_overlay",
+      "taskCategory": "frontend",
+      "project": "global",
+      "model": "codex",
+      "pipelineMode": "direct",
+      "disableRecommendedTaskOverlays": true,
+      "taskOverlayIds": [
+        "frontend-professionalism"
+      ],
+      "expected": {
+        "selectedCodexAdapter": "balanced",
+        "selectedStackIds": [
+          "behavioral_core_v7",
+          "behavioral_guard_v7",
+          "domain_swe_frontend",
+          "adapter_codex_balanced",
+          "task_frontend_professionalism"
+        ],
+        "recommendedTaskOverlayIds": [
+          "task_frontend_professionalism"
+        ],
+        "repoLocalSystemPresent": false,
+        "repoContextFilesCount": 0
+      }
+    }
+  ]
+}

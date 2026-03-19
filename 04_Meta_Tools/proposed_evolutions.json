@@ -1,0 +1,1347 @@
+{
+  "generated_at": "2026-03-18T20:33:17.075Z",
+  "runs_dir": "runs",
+  "runs_scanned": 37,
+  "reject_verdicts_found": 21,
+  "architects_affected": 5,
+  "proposals": [
+    {
+      "target_file": "QA_Adversarial_Reviewer-v1.0.md",
+      "target_file_full_path": "02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md",
+      "total_rejection_count": 51,
+      "failure_patterns": [
+        {
+          "tag": "EVIDENCE-GATE",
+          "count": 11,
+          "occurrences": [
+            {
+              "run_dir": "20260301_005720_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan references artifacts whose current content is not present in the submission context (repository tree/existing Python-test files, calculator.py, tests/test_calculator.py), so impact cannot be fully verified.",
+              "confidence": 5,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_005720_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "calculator.py is referenced for modification but its current content is not present in the submission context.",
+              "confidence": 5,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_005720_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "tests/test_calculator.py is referenced for modification but its current content is not present in the submission context.",
+              "confidence": 5,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_005720_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan references calculator.py for modification without current file content present in submission context.",
+              "confidence": 5,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_005720_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan references tests/test_calculator.py for modification without current file content present in submission context.",
+              "confidence": 5,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "Missing current content of file 'pages/[...catchAll].tsx'",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address evidence gate violations by providing file contents, enhance structural coverage of Next.js routing and concurrency handling, implement input validation for shell_exec commands, and identify root cause for refactoring request."
+            },
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "Missing current content of file 'utils/execCommands.ts'",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address evidence gate violations by providing file contents, enhance structural coverage of Next.js routing and concurrency handling, implement input validation for shell_exec commands, and identify root cause for refactoring request."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The current content of target file 'tailwind.config.js' is not in the submission context.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address the evidence gate by providing the file content, operational concerns, and input validation for the AuditGuard report analysis."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan directly accesses and modifies 'src/styles/app.css' without verifying the current content of that file.",
+              "confidence": 5,
+              "proposed_fix_strategy": "Enhance input validation for the AuditGuard report and provide more comprehensive operational monitoring."
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The current content of target file 'tailwind.config.js' is not in the submission context.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address environment constraints and provide root cause analysis"
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The current content of tailwind.config.js and analytics.js are not provided in the context.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address the evidence gate by providing file contents or marking as created; add operational coverage for failure modes; and clarify or address the root cause of alignment issues"
+            }
+          ]
+        },
+        {
+          "tag": "NAMIT-N",
+          "count": 7,
+          "occurrences": [
+            {
+              "run_dir": "20260301_005720_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The minimal action set does not define or verify behavior for null/None inputs to add/subtract/multiply/divide.",
+              "confidence": 4,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_010334_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not define expected behavior or test coverage for null/None operands across add, subtract, multiply, and divide, leaving null-input handling undefined.",
+              "confidence": 4,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_015705_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not define behavior or verification for null/None operands in calculator functions; only divide-by-zero is explicitly covered.",
+              "confidence": 4,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "Step 1: The plan does not explicitly handle the scenario where the shell_exec for listing pages/routes returns a null or empty result.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Focus on enhancing null handling and array boundary validations in file listing and file reading operations."
+            },
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "Step 2: The plan does not explicitly handle the scenario where the shell_exec for listing UI components returns a null or empty result.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Focus on enhancing null handling and array boundary validations in file listing and file reading operations."
+            },
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "Step 3: There is no explicit handling for a null result when reading the main layout file.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Focus on enhancing null handling and array boundary validations in file listing and file reading operations."
+            },
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "Step 4: There is no explicit handling for a null result when reading the main page component.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Focus on enhancing null handling and array boundary validations in file listing and file reading operations."
+            }
+          ]
+        },
+        {
+          "tag": "NAMIT-I",
+          "count": 7,
+          "occurrences": [
+            {
+              "run_dir": "20260301_005720_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The minimal action set does not define or verify behavior for malformed or non-numeric inputs at the calculator function boundaries.",
+              "confidence": 3,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_010334_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not define validation or rejection behavior for non-numeric/malformed inputs, so type-coercion and invalid-input paths remain unverified.",
+              "confidence": 4,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_015705_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not specify input validation or verification for non-numeric/malformed operands, leaving input-handling behavior undefined.",
+              "confidence": 4,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "Inadequate input validation for shell_exec commands",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address evidence gate violations by providing file contents, enhance structural coverage of Next.js routing and concurrency handling, implement input validation for shell_exec commands, and identify root cause for refactoring request."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not address input validation or injection prevention for the AuditGuard report analysis.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address the evidence gate by providing the file content, operational concerns, and input validation for the AuditGuard report analysis."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan does not explicitly validate user inputs from the AuditGuard report for potential injection risks.",
+              "confidence": 4,
+              "proposed_fix_strategy": "Enhance input validation for the AuditGuard report and provide more comprehensive operational monitoring."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan does not explicitly handle input validation for the AuditGuard report, beyond 'implement explicit validation for all user inputs'.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational coverage gaps, enhance input validation handling, and clarify root cause identification for feature requests."
+            }
+          ]
+        },
+        {
+          "tag": "SFDIPOT-O",
+          "count": 7,
+          "occurrences": [
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not explicitly address operational concerns such as monitoring or logging of the CSS/Tailwind fixes.",
+              "confidence": 3,
+              "proposed_fix_strategy": "Address the evidence gate by providing the file content, operational concerns, and input validation for the AuditGuard report analysis."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan does not provide comprehensive operational monitoring beyond a basic build check and manual visual inspection plan.",
+              "confidence": 4,
+              "proposed_fix_strategy": "Enhance input validation for the AuditGuard report and provide more comprehensive operational monitoring."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan does not explicitly address operational failure modes or recovery paths for the AuditGuard report generation and parsing steps.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational coverage gaps, enhance input validation handling, and clarify root cause identification for feature requests."
+            },
+            {
+              "run_dir": "20260304_093530_evidence-request-perform-a-visual-layout-audit-o",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not address operational coverage, such as monitoring or logging for the proposed refactoring",
+              "confidence": 4,
+              "proposed_fix_strategy": "Address operational coverage gaps and clarify or remove root cause information for feature requests"
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan does not explicitly address operational concerns such as monitoring, logging, and recovery paths for the refactored Hero section.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational concerns, timing and async operations, and provide a more thorough root cause analysis."
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan does not explicitly address operational failure modes for the refactored Hero section.",
+              "confidence": 3,
+              "proposed_fix_strategy": "Address the evidence gate by providing file contents or marking as created; add operational coverage for failure modes; and clarify or address the root cause of alignment issues"
+            },
+            {
+              "run_dir": "20260304_131710_evidence-request-use-auditguard-to-audit-the-lay",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "No operational coverage: no plan for monitoring, logging, or recovery paths",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational coverage gaps and async timing issues"
+            }
+          ]
+        },
+        {
+          "tag": "ROOT-CAUSE-MISSING",
+          "count": 5,
+          "occurrences": [
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "No root cause identified for refactoring request",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address evidence gate violations by providing file contents, enhance structural coverage of Next.js routing and concurrency handling, implement input validation for shell_exec commands, and identify root cause for refactoring request."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan does not identify a root cause for a specific problem, as it is marked 'N/A — feature request'.",
+              "confidence": 3,
+              "proposed_fix_strategy": "Address operational coverage gaps, enhance input validation handling, and clarify root cause identification for feature requests."
+            },
+            {
+              "run_dir": "20260304_093530_evidence-request-perform-a-visual-layout-audit-o",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan is not in response to a bug or failure, but 'root_cause' is still provided as 'N/A — feature request'",
+              "confidence": 5,
+              "proposed_fix_strategy": "Address operational coverage gaps and clarify or remove root cause information for feature requests"
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The root cause is marked as 'N/A — feature request', but the plan does not identify any root cause for potential issues.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address environment constraints and provide root cause analysis"
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The root cause is marked as 'N/A — feature request', but the plan involves fixing alignment and spacing issues, implying a bug fix.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address the evidence gate by providing file contents or marking as created; add operational coverage for failure modes; and clarify or address the root cause of alignment issues"
+            }
+          ]
+        },
+        {
+          "tag": "INCOMPLETE_SUBMISSION",
+          "count": 3,
+          "occurrences": [
+            {
+              "run_dir": "20260301_005227_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The submission is missing required plan sections in the mandated format, specifically an explicit OBJECTIVE section and an explicit VERIFICATION METHOD section.",
+              "confidence": 5,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_005227_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The submission does not include explicit required sections for OBJECTIVE and VERIFICATION METHOD; `task_summary` and per-step `verification` fields do not satisfy the mandated top-level section format.",
+              "confidence": 5,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_005227_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan omits required top-level sections OBJECTIVE and VERIFICATION METHOD; task_summary and per-step verification do not satisfy the required submission format.",
+              "confidence": 5,
+              "proposed_fix_strategy": null
+            }
+          ]
+        },
+        {
+          "tag": "NAMIT-A",
+          "count": 2,
+          "occurrences": [
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "Step 1: Array boundary conditions are not explicitly addressed for the list of pages/routes.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Focus on enhancing null handling and array boundary validations in file listing and file reading operations."
+            },
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "Step 2: Array boundary conditions are not explicitly addressed for the list of UI components.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Focus on enhancing null handling and array boundary validations in file listing and file reading operations."
+            }
+          ]
+        },
+        {
+          "tag": "SFDIPOT-S",
+          "count": 2,
+          "occurrences": [
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan does not explicitly address potential structural gaps in Next.js routing (e.g., internationalized routes, catch-all routes).",
+              "confidence": 3,
+              "proposed_fix_strategy": "Address potential concurrency issues and add structural coverage for Next.js routing edge cases."
+            },
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "Insufficient structural coverage of Next.js routing and concurrency handling",
+              "confidence": 3,
+              "proposed_fix_strategy": "Address evidence gate violations by providing file contents, enhance structural coverage of Next.js routing and concurrency handling, implement input validation for shell_exec commands, and identify root cause for refactoring request."
+            }
+          ]
+        },
+        {
+          "tag": "NAMIT-T",
+          "count": 2,
+          "occurrences": [
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan does not explicitly handle timing and async operations for the refactored Hero section.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational concerns, timing and async operations, and provide a more thorough root cause analysis."
+            },
+            {
+              "run_dir": "20260304_131710_evidence-request-use-auditguard-to-audit-the-lay",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "No handling for async timing issues in step 3",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational coverage gaps and async timing issues"
+            }
+          ]
+        },
+        {
+          "tag": "NAMIT-M",
+          "count": 1,
+          "occurrences": [
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan does not explicitly handle potential concurrency issues with shell_exec commands (e.g., race conditions if commands are run in parallel).",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address potential concurrency issues and add structural coverage for Next.js routing edge cases."
+            }
+          ]
+        },
+        {
+          "tag": "SECURITY-INJECTION",
+          "count": 1,
+          "occurrences": [
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "Potential for command injection in shell_exec commands",
+              "confidence": 3,
+              "proposed_fix_strategy": "Address evidence gate violations by providing file contents, enhance structural coverage of Next.js routing and concurrency handling, implement input validation for shell_exec commands, and identify root cause for refactoring request."
+            }
+          ]
+        },
+        {
+          "tag": "SFDIPOT-P",
+          "count": 1,
+          "occurrences": [
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "No verification that the local Tailwind code can handle environment constraints (e.g., different screen sizes, browsers).",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address environment constraints and provide root cause analysis"
+            }
+          ]
+        },
+        {
+          "tag": "ROOT-CAUSE-SHALLOW",
+          "count": 1,
+          "occurrences": [
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The root cause identified is shallow and does not consider other potential causes of Hero section issues.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational concerns, timing and async operations, and provide a more thorough root cause analysis."
+            }
+          ]
+        },
+        {
+          "tag": "SECURITY-EXPOSURE",
+          "count": 1,
+          "occurrences": [
+            {
+              "run_dir": "20260304_131710_evidence-request-use-auditguard-to-audit-the-lay",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "Potential data exposure through incomplete UX audit",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational coverage gaps and async timing issues"
+            }
+          ]
+        }
+      ],
+      "evolution_prompt": "You are a Prompt Engineer maintaining the Babel Multi-Agent OS prompt library.\n\nThe prompt file \"QA_Adversarial_Reviewer-v1.0.md\" has accumulated 51 QA\nREJECT verdict(s) across multiple pipeline runs. The QA Adversarial Reviewer\nconsistently raised the following failure patterns:\n\n  - [EVIDENCE-GATE] × 11: \"The plan references artifacts whose current content is not present in the submission context (repository tree/existing Python-test files, calculator.py, tests/test_calculator.py), so impact cannot be fully verified.\" (plus 10 similar occurrence(s))\n  - [NAMIT-N] × 7: \"The minimal action set does not define or verify behavior for null/None inputs to add/subtract/multiply/divide.\" (plus 6 similar occurrence(s))\n  - [NAMIT-I] × 7: \"The minimal action set does not define or verify behavior for malformed or non-numeric inputs at the calculator function boundaries.\" (plus 6 similar occurrence(s))\n  - [SFDIPOT-O] × 7: \"The plan does not explicitly address operational concerns such as monitoring or logging of the CSS/Tailwind fixes.\" (plus 6 similar occurrence(s))\n  - [ROOT-CAUSE-MISSING] × 5: \"No root cause identified for refactoring request\" (plus 4 similar occurrence(s))\n  - [INCOMPLETE_SUBMISSION] × 3: \"The submission is missing required plan sections in the mandated format, specifically an explicit OBJECTIVE section and an explicit VERIFICATION METHOD section.\" (plus 2 similar occurrence(s))\n  - [NAMIT-A] × 2: \"Step 1: Array boundary conditions are not explicitly addressed for the list of pages/routes.\" (plus 1 similar occurrence(s))\n  - [SFDIPOT-S] × 2: \"The plan does not explicitly address potential structural gaps in Next.js routing (e.g., internationalized routes, catch-all routes).\" (plus 1 similar occurrence(s))\n  - [NAMIT-T] × 2: \"The plan does not explicitly handle timing and async operations for the refactored Hero section.\" (plus 1 similar occurrence(s))\n  - [NAMIT-M] × 1: \"The plan does not explicitly handle potential concurrency issues with shell_exec commands (e.g., race conditions if commands are run in parallel).\"\n  - [SECURITY-INJECTION] × 1: \"Potential for command injection in shell_exec commands\"\n  - [SFDIPOT-P] × 1: \"No verification that the local Tailwind code can handle environment constraints (e.g., different screen sizes, browsers).\"\n  - [ROOT-CAUSE-SHALLOW] × 1: \"The root cause identified is shallow and does not consider other potential causes of Hero section issues.\"\n  - [SECURITY-EXPOSURE] × 1: \"Potential data exposure through incomplete UX audit\"\n\nQA-suggested fix directions (optional context):\n  - Address evidence gate violations by providing file contents, enhance structural coverage of Next.js routing and concurrency handling, implement input validation for shell_exec commands, and identify root cause for refactoring request.\n  - Address the evidence gate by providing the file content, operational concerns, and input validation for the AuditGuard report analysis.\n  - Enhance input validation for the AuditGuard report and provide more comprehensive operational monitoring.\n  - Address environment constraints and provide root cause analysis\n  - Address the evidence gate by providing file contents or marking as created; add operational coverage for failure modes; and clarify or address the root cause of alignment issues\n  - Focus on enhancing null handling and array boundary validations in file listing and file reading operations.\n  - Address operational coverage gaps, enhance input validation handling, and clarify root cause identification for feature requests.\n  - Address operational coverage gaps and clarify or remove root cause information for feature requests\n  - Address operational concerns, timing and async operations, and provide a more thorough root cause analysis.\n  - Address operational coverage gaps and async timing issues\n  - Address potential concurrency issues and add structural coverage for Next.js routing edge cases.\n\nYOUR TASK:\nPropose a new strict rule or clarification to APPEND to the file \"QA_Adversarial_Reviewer-v1.0.md\"\nthat would prevent these failure patterns from recurring. The rule must:\n  1. Be written in the imperative voice (e.g. \"The SWE Agent MUST ...\").\n  2. Address the root pattern, not just the surface symptom.\n  3. Be a self-contained section the SWE Agent can act on without extra context.\n  4. NOT alter any existing rules — append only.\n\nOutput ONLY the proposed markdown block. No preamble, no explanation."
+    },
+    {
+      "target_file": "SWE_Frontend-v5.0.md",
+      "target_file_full_path": "02_Domain_Architects/SWE_Frontend-v5.0.md",
+      "total_rejection_count": 34,
+      "failure_patterns": [
+        {
+          "tag": "EVIDENCE-GATE",
+          "count": 6,
+          "occurrences": [
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "Missing current content of file 'pages/[...catchAll].tsx'",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address evidence gate violations by providing file contents, enhance structural coverage of Next.js routing and concurrency handling, implement input validation for shell_exec commands, and identify root cause for refactoring request."
+            },
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "Missing current content of file 'utils/execCommands.ts'",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address evidence gate violations by providing file contents, enhance structural coverage of Next.js routing and concurrency handling, implement input validation for shell_exec commands, and identify root cause for refactoring request."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The current content of target file 'tailwind.config.js' is not in the submission context.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address the evidence gate by providing the file content, operational concerns, and input validation for the AuditGuard report analysis."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan directly accesses and modifies 'src/styles/app.css' without verifying the current content of that file.",
+              "confidence": 5,
+              "proposed_fix_strategy": "Enhance input validation for the AuditGuard report and provide more comprehensive operational monitoring."
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The current content of target file 'tailwind.config.js' is not in the submission context.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address environment constraints and provide root cause analysis"
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The current content of tailwind.config.js and analytics.js are not provided in the context.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address the evidence gate by providing file contents or marking as created; add operational coverage for failure modes; and clarify or address the root cause of alignment issues"
+            }
+          ]
+        },
+        {
+          "tag": "SFDIPOT-O",
+          "count": 6,
+          "occurrences": [
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not explicitly address operational concerns such as monitoring or logging of the CSS/Tailwind fixes.",
+              "confidence": 3,
+              "proposed_fix_strategy": "Address the evidence gate by providing the file content, operational concerns, and input validation for the AuditGuard report analysis."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan does not provide comprehensive operational monitoring beyond a basic build check and manual visual inspection plan.",
+              "confidence": 4,
+              "proposed_fix_strategy": "Enhance input validation for the AuditGuard report and provide more comprehensive operational monitoring."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan does not explicitly address operational failure modes or recovery paths for the AuditGuard report generation and parsing steps.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational coverage gaps, enhance input validation handling, and clarify root cause identification for feature requests."
+            },
+            {
+              "run_dir": "20260304_093530_evidence-request-perform-a-visual-layout-audit-o",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not address operational coverage, such as monitoring or logging for the proposed refactoring",
+              "confidence": 4,
+              "proposed_fix_strategy": "Address operational coverage gaps and clarify or remove root cause information for feature requests"
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan does not explicitly address operational concerns such as monitoring, logging, and recovery paths for the refactored Hero section.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational concerns, timing and async operations, and provide a more thorough root cause analysis."
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan does not explicitly address operational failure modes for the refactored Hero section.",
+              "confidence": 3,
+              "proposed_fix_strategy": "Address the evidence gate by providing file contents or marking as created; add operational coverage for failure modes; and clarify or address the root cause of alignment issues"
+            }
+          ]
+        },
+        {
+          "tag": "ROOT-CAUSE-MISSING",
+          "count": 5,
+          "occurrences": [
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "No root cause identified for refactoring request",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address evidence gate violations by providing file contents, enhance structural coverage of Next.js routing and concurrency handling, implement input validation for shell_exec commands, and identify root cause for refactoring request."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan does not identify a root cause for a specific problem, as it is marked 'N/A — feature request'.",
+              "confidence": 3,
+              "proposed_fix_strategy": "Address operational coverage gaps, enhance input validation handling, and clarify root cause identification for feature requests."
+            },
+            {
+              "run_dir": "20260304_093530_evidence-request-perform-a-visual-layout-audit-o",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan is not in response to a bug or failure, but 'root_cause' is still provided as 'N/A — feature request'",
+              "confidence": 5,
+              "proposed_fix_strategy": "Address operational coverage gaps and clarify or remove root cause information for feature requests"
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The root cause is marked as 'N/A — feature request', but the plan does not identify any root cause for potential issues.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address environment constraints and provide root cause analysis"
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The root cause is marked as 'N/A — feature request', but the plan involves fixing alignment and spacing issues, implying a bug fix.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address the evidence gate by providing file contents or marking as created; add operational coverage for failure modes; and clarify or address the root cause of alignment issues"
+            }
+          ]
+        },
+        {
+          "tag": "NAMIT-N",
+          "count": 4,
+          "occurrences": [
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "Step 1: The plan does not explicitly handle the scenario where the shell_exec for listing pages/routes returns a null or empty result.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Focus on enhancing null handling and array boundary validations in file listing and file reading operations."
+            },
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "Step 2: The plan does not explicitly handle the scenario where the shell_exec for listing UI components returns a null or empty result.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Focus on enhancing null handling and array boundary validations in file listing and file reading operations."
+            },
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "Step 3: There is no explicit handling for a null result when reading the main layout file.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Focus on enhancing null handling and array boundary validations in file listing and file reading operations."
+            },
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "Step 4: There is no explicit handling for a null result when reading the main page component.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Focus on enhancing null handling and array boundary validations in file listing and file reading operations."
+            }
+          ]
+        },
+        {
+          "tag": "NAMIT-I",
+          "count": 4,
+          "occurrences": [
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "Inadequate input validation for shell_exec commands",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address evidence gate violations by providing file contents, enhance structural coverage of Next.js routing and concurrency handling, implement input validation for shell_exec commands, and identify root cause for refactoring request."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not address input validation or injection prevention for the AuditGuard report analysis.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address the evidence gate by providing the file content, operational concerns, and input validation for the AuditGuard report analysis."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan does not explicitly validate user inputs from the AuditGuard report for potential injection risks.",
+              "confidence": 4,
+              "proposed_fix_strategy": "Enhance input validation for the AuditGuard report and provide more comprehensive operational monitoring."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan does not explicitly handle input validation for the AuditGuard report, beyond 'implement explicit validation for all user inputs'.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational coverage gaps, enhance input validation handling, and clarify root cause identification for feature requests."
+            }
+          ]
+        },
+        {
+          "tag": "NAMIT-A",
+          "count": 2,
+          "occurrences": [
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "Step 1: Array boundary conditions are not explicitly addressed for the list of pages/routes.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Focus on enhancing null handling and array boundary validations in file listing and file reading operations."
+            },
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "Step 2: Array boundary conditions are not explicitly addressed for the list of UI components.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Focus on enhancing null handling and array boundary validations in file listing and file reading operations."
+            }
+          ]
+        },
+        {
+          "tag": "SFDIPOT-S",
+          "count": 2,
+          "occurrences": [
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan does not explicitly address potential structural gaps in Next.js routing (e.g., internationalized routes, catch-all routes).",
+              "confidence": 3,
+              "proposed_fix_strategy": "Address potential concurrency issues and add structural coverage for Next.js routing edge cases."
+            },
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "Insufficient structural coverage of Next.js routing and concurrency handling",
+              "confidence": 3,
+              "proposed_fix_strategy": "Address evidence gate violations by providing file contents, enhance structural coverage of Next.js routing and concurrency handling, implement input validation for shell_exec commands, and identify root cause for refactoring request."
+            }
+          ]
+        },
+        {
+          "tag": "NAMIT-M",
+          "count": 1,
+          "occurrences": [
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan does not explicitly handle potential concurrency issues with shell_exec commands (e.g., race conditions if commands are run in parallel).",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address potential concurrency issues and add structural coverage for Next.js routing edge cases."
+            }
+          ]
+        },
+        {
+          "tag": "SECURITY-INJECTION",
+          "count": 1,
+          "occurrences": [
+            {
+              "run_dir": "20260303_002117_perform-a-visual-ui-ux-audit-of-https-www-gpcgua",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "Potential for command injection in shell_exec commands",
+              "confidence": 3,
+              "proposed_fix_strategy": "Address evidence gate violations by providing file contents, enhance structural coverage of Next.js routing and concurrency handling, implement input validation for shell_exec commands, and identify root cause for refactoring request."
+            }
+          ]
+        },
+        {
+          "tag": "SFDIPOT-P",
+          "count": 1,
+          "occurrences": [
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "No verification that the local Tailwind code can handle environment constraints (e.g., different screen sizes, browsers).",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address environment constraints and provide root cause analysis"
+            }
+          ]
+        },
+        {
+          "tag": "NAMIT-T",
+          "count": 1,
+          "occurrences": [
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan does not explicitly handle timing and async operations for the refactored Hero section.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational concerns, timing and async operations, and provide a more thorough root cause analysis."
+            }
+          ]
+        },
+        {
+          "tag": "ROOT-CAUSE-SHALLOW",
+          "count": 1,
+          "occurrences": [
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The root cause identified is shallow and does not consider other potential causes of Hero section issues.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational concerns, timing and async operations, and provide a more thorough root cause analysis."
+            }
+          ]
+        }
+      ],
+      "evolution_prompt": "You are a Prompt Engineer maintaining the Babel Multi-Agent OS prompt library.\n\nThe prompt file \"SWE_Frontend-v5.0.md\" has accumulated 34 QA\nREJECT verdict(s) across multiple pipeline runs. The QA Adversarial Reviewer\nconsistently raised the following failure patterns:\n\n  - [EVIDENCE-GATE] × 6: \"Missing current content of file 'pages/[...catchAll].tsx'\" (plus 5 similar occurrence(s))\n  - [SFDIPOT-O] × 6: \"The plan does not explicitly address operational concerns such as monitoring or logging of the CSS/Tailwind fixes.\" (plus 5 similar occurrence(s))\n  - [ROOT-CAUSE-MISSING] × 5: \"No root cause identified for refactoring request\" (plus 4 similar occurrence(s))\n  - [NAMIT-N] × 4: \"Step 1: The plan does not explicitly handle the scenario where the shell_exec for listing pages/routes returns a null or empty result.\" (plus 3 similar occurrence(s))\n  - [NAMIT-I] × 4: \"Inadequate input validation for shell_exec commands\" (plus 3 similar occurrence(s))\n  - [NAMIT-A] × 2: \"Step 1: Array boundary conditions are not explicitly addressed for the list of pages/routes.\" (plus 1 similar occurrence(s))\n  - [SFDIPOT-S] × 2: \"The plan does not explicitly address potential structural gaps in Next.js routing (e.g., internationalized routes, catch-all routes).\" (plus 1 similar occurrence(s))\n  - [NAMIT-M] × 1: \"The plan does not explicitly handle potential concurrency issues with shell_exec commands (e.g., race conditions if commands are run in parallel).\"\n  - [SECURITY-INJECTION] × 1: \"Potential for command injection in shell_exec commands\"\n  - [SFDIPOT-P] × 1: \"No verification that the local Tailwind code can handle environment constraints (e.g., different screen sizes, browsers).\"\n  - [NAMIT-T] × 1: \"The plan does not explicitly handle timing and async operations for the refactored Hero section.\"\n  - [ROOT-CAUSE-SHALLOW] × 1: \"The root cause identified is shallow and does not consider other potential causes of Hero section issues.\"\n\nQA-suggested fix directions (optional context):\n  - Address evidence gate violations by providing file contents, enhance structural coverage of Next.js routing and concurrency handling, implement input validation for shell_exec commands, and identify root cause for refactoring request.\n  - Address the evidence gate by providing the file content, operational concerns, and input validation for the AuditGuard report analysis.\n  - Enhance input validation for the AuditGuard report and provide more comprehensive operational monitoring.\n  - Address environment constraints and provide root cause analysis\n  - Address the evidence gate by providing file contents or marking as created; add operational coverage for failure modes; and clarify or address the root cause of alignment issues\n  - Address operational coverage gaps, enhance input validation handling, and clarify root cause identification for feature requests.\n  - Address operational coverage gaps and clarify or remove root cause information for feature requests\n  - Address operational concerns, timing and async operations, and provide a more thorough root cause analysis.\n  - Focus on enhancing null handling and array boundary validations in file listing and file reading operations.\n  - Address potential concurrency issues and add structural coverage for Next.js routing edge cases.\n\nYOUR TASK:\nPropose a new strict rule or clarification to APPEND to the file \"SWE_Frontend-v5.0.md\"\nthat would prevent these failure patterns from recurring. The rule must:\n  1. Be written in the imperative voice (e.g. \"The SWE Agent MUST ...\").\n  2. Address the root pattern, not just the surface symptom.\n  3. Be a self-contained section the SWE Agent can act on without extra context.\n  4. NOT alter any existing rules — append only.\n\nOutput ONLY the proposed markdown block. No preamble, no explanation."
+    },
+    {
+      "target_file": "CLI_Executor-v1.0.md",
+      "target_file_full_path": "02_Domain_Architects/CLI_Executor-v1.0.md",
+      "total_rejection_count": 23,
+      "failure_patterns": [
+        {
+          "tag": "SFDIPOT-O",
+          "count": 7,
+          "occurrences": [
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not explicitly address operational concerns such as monitoring or logging of the CSS/Tailwind fixes.",
+              "confidence": 3,
+              "proposed_fix_strategy": "Address the evidence gate by providing the file content, operational concerns, and input validation for the AuditGuard report analysis."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan does not provide comprehensive operational monitoring beyond a basic build check and manual visual inspection plan.",
+              "confidence": 4,
+              "proposed_fix_strategy": "Enhance input validation for the AuditGuard report and provide more comprehensive operational monitoring."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan does not explicitly address operational failure modes or recovery paths for the AuditGuard report generation and parsing steps.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational coverage gaps, enhance input validation handling, and clarify root cause identification for feature requests."
+            },
+            {
+              "run_dir": "20260304_093530_evidence-request-perform-a-visual-layout-audit-o",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not address operational coverage, such as monitoring or logging for the proposed refactoring",
+              "confidence": 4,
+              "proposed_fix_strategy": "Address operational coverage gaps and clarify or remove root cause information for feature requests"
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan does not explicitly address operational concerns such as monitoring, logging, and recovery paths for the refactored Hero section.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational concerns, timing and async operations, and provide a more thorough root cause analysis."
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan does not explicitly address operational failure modes for the refactored Hero section.",
+              "confidence": 3,
+              "proposed_fix_strategy": "Address the evidence gate by providing file contents or marking as created; add operational coverage for failure modes; and clarify or address the root cause of alignment issues"
+            },
+            {
+              "run_dir": "20260304_131710_evidence-request-use-auditguard-to-audit-the-lay",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "No operational coverage: no plan for monitoring, logging, or recovery paths",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational coverage gaps and async timing issues"
+            }
+          ]
+        },
+        {
+          "tag": "EVIDENCE-GATE",
+          "count": 4,
+          "occurrences": [
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The current content of target file 'tailwind.config.js' is not in the submission context.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address the evidence gate by providing the file content, operational concerns, and input validation for the AuditGuard report analysis."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan directly accesses and modifies 'src/styles/app.css' without verifying the current content of that file.",
+              "confidence": 5,
+              "proposed_fix_strategy": "Enhance input validation for the AuditGuard report and provide more comprehensive operational monitoring."
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The current content of target file 'tailwind.config.js' is not in the submission context.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address environment constraints and provide root cause analysis"
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The current content of tailwind.config.js and analytics.js are not provided in the context.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address the evidence gate by providing file contents or marking as created; add operational coverage for failure modes; and clarify or address the root cause of alignment issues"
+            }
+          ]
+        },
+        {
+          "tag": "ROOT-CAUSE-MISSING",
+          "count": 4,
+          "occurrences": [
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan does not identify a root cause for a specific problem, as it is marked 'N/A — feature request'.",
+              "confidence": 3,
+              "proposed_fix_strategy": "Address operational coverage gaps, enhance input validation handling, and clarify root cause identification for feature requests."
+            },
+            {
+              "run_dir": "20260304_093530_evidence-request-perform-a-visual-layout-audit-o",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan is not in response to a bug or failure, but 'root_cause' is still provided as 'N/A — feature request'",
+              "confidence": 5,
+              "proposed_fix_strategy": "Address operational coverage gaps and clarify or remove root cause information for feature requests"
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The root cause is marked as 'N/A — feature request', but the plan does not identify any root cause for potential issues.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address environment constraints and provide root cause analysis"
+            },
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The root cause is marked as 'N/A — feature request', but the plan involves fixing alignment and spacing issues, implying a bug fix.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address the evidence gate by providing file contents or marking as created; add operational coverage for failure modes; and clarify or address the root cause of alignment issues"
+            }
+          ]
+        },
+        {
+          "tag": "NAMIT-I",
+          "count": 3,
+          "occurrences": [
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not address input validation or injection prevention for the AuditGuard report analysis.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address the evidence gate by providing the file content, operational concerns, and input validation for the AuditGuard report analysis."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan does not explicitly validate user inputs from the AuditGuard report for potential injection risks.",
+              "confidence": 4,
+              "proposed_fix_strategy": "Enhance input validation for the AuditGuard report and provide more comprehensive operational monitoring."
+            },
+            {
+              "run_dir": "20260304_050328_audit-the-visual-layout-of-https-www-gpcguard-ap",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan does not explicitly handle input validation for the AuditGuard report, beyond 'implement explicit validation for all user inputs'.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational coverage gaps, enhance input validation handling, and clarify root cause identification for feature requests."
+            }
+          ]
+        },
+        {
+          "tag": "NAMIT-T",
+          "count": 2,
+          "occurrences": [
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The plan does not explicitly handle timing and async operations for the refactored Hero section.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational concerns, timing and async operations, and provide a more thorough root cause analysis."
+            },
+            {
+              "run_dir": "20260304_131710_evidence-request-use-auditguard-to-audit-the-lay",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "No handling for async timing issues in step 3",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational coverage gaps and async timing issues"
+            }
+          ]
+        },
+        {
+          "tag": "SFDIPOT-P",
+          "count": 1,
+          "occurrences": [
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "No verification that the local Tailwind code can handle environment constraints (e.g., different screen sizes, browsers).",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address environment constraints and provide root cause analysis"
+            }
+          ]
+        },
+        {
+          "tag": "ROOT-CAUSE-SHALLOW",
+          "count": 1,
+          "occurrences": [
+            {
+              "run_dir": "20260304_112754_evidence-request-use-auditguard-to-audit-the-lan",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The root cause identified is shallow and does not consider other potential causes of Hero section issues.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational concerns, timing and async operations, and provide a more thorough root cause analysis."
+            }
+          ]
+        },
+        {
+          "tag": "SECURITY-EXPOSURE",
+          "count": 1,
+          "occurrences": [
+            {
+              "run_dir": "20260304_131710_evidence-request-use-auditguard-to-audit-the-lay",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "Potential data exposure through incomplete UX audit",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational coverage gaps and async timing issues"
+            }
+          ]
+        }
+      ],
+      "evolution_prompt": "You are a Prompt Engineer maintaining the Babel Multi-Agent OS prompt library.\n\nThe prompt file \"CLI_Executor-v1.0.md\" has accumulated 23 QA\nREJECT verdict(s) across multiple pipeline runs. The QA Adversarial Reviewer\nconsistently raised the following failure patterns:\n\n  - [SFDIPOT-O] × 7: \"The plan does not explicitly address operational concerns such as monitoring or logging of the CSS/Tailwind fixes.\" (plus 6 similar occurrence(s))\n  - [EVIDENCE-GATE] × 4: \"The current content of target file 'tailwind.config.js' is not in the submission context.\" (plus 3 similar occurrence(s))\n  - [ROOT-CAUSE-MISSING] × 4: \"The plan does not identify a root cause for a specific problem, as it is marked 'N/A — feature request'.\" (plus 3 similar occurrence(s))\n  - [NAMIT-I] × 3: \"The plan does not address input validation or injection prevention for the AuditGuard report analysis.\" (plus 2 similar occurrence(s))\n  - [NAMIT-T] × 2: \"The plan does not explicitly handle timing and async operations for the refactored Hero section.\" (plus 1 similar occurrence(s))\n  - [SFDIPOT-P] × 1: \"No verification that the local Tailwind code can handle environment constraints (e.g., different screen sizes, browsers).\"\n  - [ROOT-CAUSE-SHALLOW] × 1: \"The root cause identified is shallow and does not consider other potential causes of Hero section issues.\"\n  - [SECURITY-EXPOSURE] × 1: \"Potential data exposure through incomplete UX audit\"\n\nQA-suggested fix directions (optional context):\n  - Address the evidence gate by providing the file content, operational concerns, and input validation for the AuditGuard report analysis.\n  - Enhance input validation for the AuditGuard report and provide more comprehensive operational monitoring.\n  - Address operational coverage gaps, enhance input validation handling, and clarify root cause identification for feature requests.\n  - Address operational coverage gaps and clarify or remove root cause information for feature requests\n  - Address operational concerns, timing and async operations, and provide a more thorough root cause analysis.\n  - Address the evidence gate by providing file contents or marking as created; add operational coverage for failure modes; and clarify or address the root cause of alignment issues\n  - Address operational coverage gaps and async timing issues\n  - Address environment constraints and provide root cause analysis\n\nYOUR TASK:\nPropose a new strict rule or clarification to APPEND to the file \"CLI_Executor-v1.0.md\"\nthat would prevent these failure patterns from recurring. The rule must:\n  1. Be written in the imperative voice (e.g. \"The SWE Agent MUST ...\").\n  2. Address the root pattern, not just the surface symptom.\n  3. Be a self-contained section the SWE Agent can act on without extra context.\n  4. NOT alter any existing rules — append only.\n\nOutput ONLY the proposed markdown block. No preamble, no explanation."
+    },
+    {
+      "target_file": "SWE_Backend-v6.2.md",
+      "target_file_full_path": "02_Domain_Architects/SWE_Backend-v6.2.md",
+      "total_rejection_count": 14,
+      "failure_patterns": [
+        {
+          "tag": "EVIDENCE-GATE",
+          "count": 5,
+          "occurrences": [
+            {
+              "run_dir": "20260301_005720_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan references artifacts whose current content is not present in the submission context (repository tree/existing Python-test files, calculator.py, tests/test_calculator.py), so impact cannot be fully verified.",
+              "confidence": 5,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_005720_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "calculator.py is referenced for modification but its current content is not present in the submission context.",
+              "confidence": 5,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_005720_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "tests/test_calculator.py is referenced for modification but its current content is not present in the submission context.",
+              "confidence": 5,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_005720_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan references calculator.py for modification without current file content present in submission context.",
+              "confidence": 5,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_005720_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan references tests/test_calculator.py for modification without current file content present in submission context.",
+              "confidence": 5,
+              "proposed_fix_strategy": null
+            }
+          ]
+        },
+        {
+          "tag": "INCOMPLETE_SUBMISSION",
+          "count": 3,
+          "occurrences": [
+            {
+              "run_dir": "20260301_005227_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The submission is missing required plan sections in the mandated format, specifically an explicit OBJECTIVE section and an explicit VERIFICATION METHOD section.",
+              "confidence": 5,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_005227_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v2.json",
+              "verdict_attempt": 2,
+              "condition": "The submission does not include explicit required sections for OBJECTIVE and VERIFICATION METHOD; `task_summary` and per-step `verification` fields do not satisfy the mandated top-level section format.",
+              "confidence": 5,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_005227_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v3.json",
+              "verdict_attempt": 3,
+              "condition": "The plan omits required top-level sections OBJECTIVE and VERIFICATION METHOD; task_summary and per-step verification do not satisfy the required submission format.",
+              "confidence": 5,
+              "proposed_fix_strategy": null
+            }
+          ]
+        },
+        {
+          "tag": "NAMIT-N",
+          "count": 3,
+          "occurrences": [
+            {
+              "run_dir": "20260301_005720_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The minimal action set does not define or verify behavior for null/None inputs to add/subtract/multiply/divide.",
+              "confidence": 4,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_010334_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not define expected behavior or test coverage for null/None operands across add, subtract, multiply, and divide, leaving null-input handling undefined.",
+              "confidence": 4,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_015705_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not define behavior or verification for null/None operands in calculator functions; only divide-by-zero is explicitly covered.",
+              "confidence": 4,
+              "proposed_fix_strategy": null
+            }
+          ]
+        },
+        {
+          "tag": "NAMIT-I",
+          "count": 3,
+          "occurrences": [
+            {
+              "run_dir": "20260301_005720_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The minimal action set does not define or verify behavior for malformed or non-numeric inputs at the calculator function boundaries.",
+              "confidence": 3,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_010334_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not define validation or rejection behavior for non-numeric/malformed inputs, so type-coercion and invalid-input paths remain unverified.",
+              "confidence": 4,
+              "proposed_fix_strategy": null
+            },
+            {
+              "run_dir": "20260301_015705_build-a-simple-python-calculator-with-add-subtra",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not specify input validation or verification for non-numeric/malformed operands, leaving input-handling behavior undefined.",
+              "confidence": 4,
+              "proposed_fix_strategy": null
+            }
+          ]
+        }
+      ],
+      "evolution_prompt": "You are a Prompt Engineer maintaining the Babel Multi-Agent OS prompt library.\n\nThe prompt file \"SWE_Backend-v6.2.md\" has accumulated 14 QA\nREJECT verdict(s) across multiple pipeline runs. The QA Adversarial Reviewer\nconsistently raised the following failure patterns:\n\n  - [EVIDENCE-GATE] × 5: \"The plan references artifacts whose current content is not present in the submission context (repository tree/existing Python-test files, calculator.py, tests/test_calculator.py), so impact cannot be fully verified.\" (plus 4 similar occurrence(s))\n  - [INCOMPLETE_SUBMISSION] × 3: \"The submission is missing required plan sections in the mandated format, specifically an explicit OBJECTIVE section and an explicit VERIFICATION METHOD section.\" (plus 2 similar occurrence(s))\n  - [NAMIT-N] × 3: \"The minimal action set does not define or verify behavior for null/None inputs to add/subtract/multiply/divide.\" (plus 2 similar occurrence(s))\n  - [NAMIT-I] × 3: \"The minimal action set does not define or verify behavior for malformed or non-numeric inputs at the calculator function boundaries.\" (plus 2 similar occurrence(s))\n\nYOUR TASK:\nPropose a new strict rule or clarification to APPEND to the file \"SWE_Backend-v6.2.md\"\nthat would prevent these failure patterns from recurring. The rule must:\n  1. Be written in the imperative voice (e.g. \"The SWE Agent MUST ...\").\n  2. Address the root pattern, not just the surface symptom.\n  3. Be a self-contained section the SWE Agent can act on without extra context.\n  4. NOT alter any existing rules — append only.\n\nOutput ONLY the proposed markdown block. No preamble, no explanation."
+    },
+    {
+      "target_file": "General_Research-v4.1.md",
+      "target_file_full_path": "02_Domain_Architects/General_Research-v4.1.md",
+      "total_rejection_count": 8,
+      "failure_patterns": [
+        {
+          "tag": "SFDIPOT-O",
+          "count": 2,
+          "occurrences": [
+            {
+              "run_dir": "20260304_131710_evidence-request-use-auditguard-to-audit-the-lay",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "No operational coverage: no plan for monitoring, logging, or recovery paths",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational coverage gaps and async timing issues"
+            },
+            {
+              "run_dir": "20260305_160058_manual-bridge-smoke-test-validate-executor-robus",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not address operational failure modes for sandbox rejection.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address the Evidence Gate requirement by providing the shell_exec allowlist content, and expand the plan to cover operational failure modes and root cause analysis."
+            }
+          ]
+        },
+        {
+          "tag": "EVIDENCE-GATE",
+          "count": 2,
+          "occurrences": [
+            {
+              "run_dir": "20260304_210235_manual-bridge-smoke-test-validate-executor-robus",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan references the current content of 'SafeExecutor command whitelist' but it is not present in the submission context.",
+              "confidence": 4,
+              "proposed_fix_strategy": "Address evidence for the SafeExecutor whitelist and identify root causes beyond smoke testing."
+            },
+            {
+              "run_dir": "20260305_160058_manual-bridge-smoke-test-validate-executor-robus",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan references the current content of shell_exec allowlist, which is not provided in the context.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address the Evidence Gate requirement by providing the shell_exec allowlist content, and expand the plan to cover operational failure modes and root cause analysis."
+            }
+          ]
+        },
+        {
+          "tag": "ROOT-CAUSE-MISSING",
+          "count": 2,
+          "occurrences": [
+            {
+              "run_dir": "20260304_210235_manual-bridge-smoke-test-validate-executor-robus",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not identify a root cause for the sandbox rejection path, only a smoke test.",
+              "confidence": 4,
+              "proposed_fix_strategy": "Address evidence for the SafeExecutor whitelist and identify root causes beyond smoke testing."
+            },
+            {
+              "run_dir": "20260305_160058_manual-bridge-smoke-test-validate-executor-robus",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "The plan does not explicitly state the root cause of the failure mode under test.",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address the Evidence Gate requirement by providing the shell_exec allowlist content, and expand the plan to cover operational failure modes and root cause analysis."
+            }
+          ]
+        },
+        {
+          "tag": "NAMIT-T",
+          "count": 1,
+          "occurrences": [
+            {
+              "run_dir": "20260304_131710_evidence-request-use-auditguard-to-audit-the-lay",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "No handling for async timing issues in step 3",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational coverage gaps and async timing issues"
+            }
+          ]
+        },
+        {
+          "tag": "SECURITY-EXPOSURE",
+          "count": 1,
+          "occurrences": [
+            {
+              "run_dir": "20260304_131710_evidence-request-use-auditguard-to-audit-the-lay",
+              "verdict_file": "03_qa_verdict_v1.json",
+              "verdict_attempt": 1,
+              "condition": "Potential data exposure through incomplete UX audit",
+              "confidence": 2,
+              "proposed_fix_strategy": "Address operational coverage gaps and async timing issues"
+            }
+          ]
+        }
+      ],
+      "evolution_prompt": "You are a Prompt Engineer maintaining the Babel Multi-Agent OS prompt library.\n\nThe prompt file \"General_Research-v4.1.md\" has accumulated 8 QA\nREJECT verdict(s) across multiple pipeline runs. The QA Adversarial Reviewer\nconsistently raised the following failure patterns:\n\n  - [SFDIPOT-O] × 2: \"No operational coverage: no plan for monitoring, logging, or recovery paths\" (plus 1 similar occurrence(s))\n  - [EVIDENCE-GATE] × 2: \"The plan references the current content of 'SafeExecutor command whitelist' but it is not present in the submission context.\" (plus 1 similar occurrence(s))\n  - [ROOT-CAUSE-MISSING] × 2: \"The plan does not identify a root cause for the sandbox rejection path, only a smoke test.\" (plus 1 similar occurrence(s))\n  - [NAMIT-T] × 1: \"No handling for async timing issues in step 3\"\n  - [SECURITY-EXPOSURE] × 1: \"Potential data exposure through incomplete UX audit\"\n\nQA-suggested fix directions (optional context):\n  - Address operational coverage gaps and async timing issues\n  - Address the Evidence Gate requirement by providing the shell_exec allowlist content, and expand the plan to cover operational failure modes and root cause analysis.\n  - Address evidence for the SafeExecutor whitelist and identify root causes beyond smoke testing.\n\nYOUR TASK:\nPropose a new strict rule or clarification to APPEND to the file \"General_Research-v4.1.md\"\nthat would prevent these failure patterns from recurring. The rule must:\n  1. Be written in the imperative voice (e.g. \"The SWE Agent MUST ...\").\n  2. Address the root pattern, not just the surface symptom.\n  3. Be a self-contained section the SWE Agent can act on without extra context.\n  4. NOT alter any existing rules — append only.\n\nOutput ONLY the proposed markdown block. No preamble, no explanation."
+    }
+  ]
+}

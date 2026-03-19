@@ -1,0 +1,27 @@
+name: Validate Catalog
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  validate-catalog:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate prompt catalog
+        shell: pwsh
+        run: .\tools\validate-catalog.ps1
+
+      - name: Test local stack resolver
+        shell: pwsh
+        run: .\tools\test-resolve-local-stack.ps1
+
+      - name: Test local session analyzer
+        shell: pwsh
+        run: .\tools\test-analyze-local-sessions.ps1

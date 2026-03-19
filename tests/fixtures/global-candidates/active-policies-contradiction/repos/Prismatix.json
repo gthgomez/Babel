@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-03-07T00:00:00.0000000Z",
+  "scope_type": "repo",
+  "scope_key": "Prismatix",
+  "policies": [
+    {
+      "schema_version": 1,
+      "policy_id": "repo:prismatix:verification_loop_hints:strict",
+      "policy_version": "active-v1",
+      "scope_type": "repo",
+      "scope_key": "Prismatix",
+      "target_surface": "verification_loop_hints",
+      "state": "active",
+      "created_at_utc": "2026-03-05T00:00:00.0000000Z",
+      "updated_at_utc": "2026-03-07T00:00:00.0000000Z",
+      "activated_at_utc": "2026-03-07T00:00:00.0000000Z",
+      "baseline_window": {
+        "first_observed_at_utc": "2026-03-05T09:00:00.0000000Z",
+        "last_observed_at_utc": "2026-03-06T14:00:00.0000000Z",
+        "event_count": 3,
+        "distinct_utc_day_count": 2
+      },
+      "treatment_window": {
+        "activated_at_utc": "2026-03-07T00:00:00.0000000Z",
+        "treatment_event_count": 2,
+        "event_ids": ["bundle:prismatix-04", "bundle:prismatix-05"]
+      },
+      "supporting_event_ids": ["bundle:prismatix-01", "bundle:prismatix-02", "bundle:prismatix-03"],
+      "hard_fail_event_ids": [],
+      "baseline_metrics": {
+        "applicable_event_count": 3,
+        "success_rate": 0.0,
+        "failed_rate": 0.6667,
+        "follow_up_rate": 0.3333,
+        "stack_override_rate": 0.0,
+        "comparison_win_rate": 0.0
+      },
+      "treatment_metrics": {
+        "applicable_event_count": 2,
+        "success_rate": 1.0,
+        "failed_rate": 0.0,
+        "follow_up_rate": 0.0,
+        "stack_override_rate": 0.0,
+        "comparison_win_rate": 0.0
+      },
+      "rollback_thresholds": {
+        "hard_failures_in_first_5_applicable_runs": 2,
+        "trailing_window_size": 10,
+        "relative_regression_limit": 0.05
+      },
+      "expiry_policy": {
+        "reconfirm_after_days": 30,
+        "reconfirm_after_applicable_runs": 25
+      },
+      "proposed_change": {
+        "checklist": ["require_root_cause_line"],
+        "affected_task_categories": ["research"],
+        "rationale_tags": ["root-cause-missing"]
+      },
+      "reversible": true,
+      "requires_human_review": false,
+      "decision_reasons": ["verification_failures_recurring", "support_tag:root-cause-missing"],
+      "shadow_decision": {
+        "eligible": true,
+        "would_change_stack_ranking": false,
+        "would_change_kickoff_phrasing": false,
+        "would_change_heuristics": true,
+        "likely_improvement_signals": ["qa_reject_or_verification_failure_repeated"]
+      },
+      "activation_mode": "measured"
+    }
+  ]
+}

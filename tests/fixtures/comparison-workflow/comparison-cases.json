@@ -1,0 +1,216 @@
+{
+  "schemaVersion": 1,
+  "description": "Deterministic Phase 5 pairwise comparison fixtures.",
+  "cases": [
+    {
+      "id": "weighted_total_winner",
+      "task": {
+        "project": "global",
+        "taskCategory": "backend",
+        "objective": "Compare two responses for preserving invariants and verification quality."
+      },
+      "rubric": {
+        "scoreScale": {
+          "min": 0,
+          "max": 2,
+          "passThreshold": 1
+        },
+        "criteria": [
+          {
+            "id": "invariant_preservation",
+            "description": "Preserves explicit project or contract invariants.",
+            "weight": 5,
+            "critical": true
+          },
+          {
+            "id": "verification_quality",
+            "description": "Defines objective verification with observable signals.",
+            "weight": 4,
+            "critical": true
+          },
+          {
+            "id": "minimal_action_set",
+            "description": "Stays within minimal, bounded scope.",
+            "weight": 3,
+            "critical": false
+          },
+          {
+            "id": "evidence_clarity",
+            "description": "Uses concrete file-backed evidence and exact references.",
+            "weight": 2,
+            "critical": false
+          }
+        ]
+      },
+      "candidates": [
+        {
+          "id": "candidate_a",
+          "label": "Codex Balanced Run A",
+          "model": "codex",
+          "adapter": "adapter_codex_balanced",
+          "clientSurface": "codex_extension",
+          "sessionId": "cmp-weighted-a",
+          "selectedStackIds": [
+            "behavioral_core_v7",
+            "behavioral_guard_v7",
+            "domain_swe_backend",
+            "adapter_codex_balanced"
+          ],
+          "responsePath": "tests/fixtures/comparison-workflow/responses/weighted-total-candidate-a.md"
+        },
+        {
+          "id": "candidate_b",
+          "label": "Claude Run B",
+          "model": "claude",
+          "adapter": "adapter_claude",
+          "clientSurface": "claude_code",
+          "sessionId": "cmp-weighted-b",
+          "selectedStackIds": [
+            "behavioral_core_v7",
+            "behavioral_guard_v7",
+            "domain_swe_backend",
+            "adapter_claude"
+          ],
+          "responsePath": "tests/fixtures/comparison-workflow/responses/weighted-total-candidate-b.md"
+        }
+      ],
+      "scoring": [
+        {
+          "candidateId": "candidate_a",
+          "criterionScores": {
+            "invariant_preservation": 2,
+            "verification_quality": 1,
+            "minimal_action_set": 2,
+            "evidence_clarity": 1
+          }
+        },
+        {
+          "candidateId": "candidate_b",
+          "criterionScores": {
+            "invariant_preservation": 2,
+            "verification_quality": 2,
+            "minimal_action_set": 1,
+            "evidence_clarity": 2
+          }
+        }
+      ],
+      "expected": {
+        "winnerId": "candidate_b",
+        "decisionRule": "weighted_total",
+        "weightedTotals": {
+          "candidate_a": 22,
+          "candidate_b": 25
+        },
+        "criticalPassCounts": {
+          "candidate_a": 2,
+          "candidate_b": 2
+        }
+      }
+    },
+    {
+      "id": "verification_tiebreak_winner",
+      "task": {
+        "project": "global",
+        "taskCategory": "research",
+        "objective": "Exercise deterministic tie-break handling when weighted totals tie."
+      },
+      "rubric": {
+        "scoreScale": {
+          "min": 0,
+          "max": 2,
+          "passThreshold": 1
+        },
+        "criteria": [
+          {
+            "id": "invariant_preservation",
+            "description": "Preserves hard boundaries and avoids contract drift.",
+            "weight": 4,
+            "critical": true
+          },
+          {
+            "id": "verification_quality",
+            "description": "Includes deterministic checks and failure signals.",
+            "weight": 4,
+            "critical": true
+          },
+          {
+            "id": "scope_control",
+            "description": "Avoids scope expansion outside the asked task.",
+            "weight": 2,
+            "critical": false
+          },
+          {
+            "id": "recommendation_value",
+            "description": "Stores result metadata useful for future recommendation logic.",
+            "weight": 2,
+            "critical": false
+          }
+        ]
+      },
+      "candidates": [
+        {
+          "id": "candidate_a",
+          "label": "Gemini Run A",
+          "model": "gemini",
+          "adapter": "adapter_gemini",
+          "clientSurface": "gemini_cli",
+          "sessionId": "cmp-tie-a",
+          "selectedStackIds": [
+            "behavioral_core_v7",
+            "behavioral_guard_v7",
+            "domain_research",
+            "adapter_gemini"
+          ],
+          "responsePath": "tests/fixtures/comparison-workflow/responses/verification-tiebreak-candidate-a.md"
+        },
+        {
+          "id": "candidate_b",
+          "label": "Codex Balanced Run B",
+          "model": "codex",
+          "adapter": "adapter_codex_balanced",
+          "clientSurface": "vscode_chat",
+          "sessionId": "cmp-tie-b",
+          "selectedStackIds": [
+            "behavioral_core_v7",
+            "behavioral_guard_v7",
+            "domain_research",
+            "adapter_codex_balanced"
+          ],
+          "responsePath": "tests/fixtures/comparison-workflow/responses/verification-tiebreak-candidate-b.md"
+        }
+      ],
+      "scoring": [
+        {
+          "candidateId": "candidate_a",
+          "criterionScores": {
+            "invariant_preservation": 2,
+            "verification_quality": 1,
+            "scope_control": 2,
+            "recommendation_value": 1
+          }
+        },
+        {
+          "candidateId": "candidate_b",
+          "criterionScores": {
+            "invariant_preservation": 2,
+            "verification_quality": 2,
+            "scope_control": 1,
+            "recommendation_value": 0
+          }
+        }
+      ],
+      "expected": {
+        "winnerId": "candidate_b",
+        "decisionRule": "verification_quality_score",
+        "weightedTotals": {
+          "candidate_a": 18,
+          "candidate_b": 18
+        },
+        "criticalPassCounts": {
+          "candidate_a": 2,
+          "candidate_b": 2
+        }
+      }
+    }
+  ]
+}

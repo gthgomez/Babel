@@ -1,0 +1,5 @@
+{
+  "hook_event_name": "SessionEnd",
+  "session_id": "claude-hook-session-001",
+  "reason": "clear"
+}

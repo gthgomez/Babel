@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-03-07T00:00:00.0000000Z",
+  "scope_type": "local_client",
+  "scope_key": "codex_extension.codex",
+  "policies": [
+    {
+      "schema_version": 1,
+      "policy_id": "local_client:codex_extension.codex:kickoff_prompt_preset:strict",
+      "policy_version": "active-v1",
+      "scope_type": "local_client",
+      "scope_key": "codex_extension.codex",
+      "target_surface": "kickoff_prompt_preset",
+      "state": "active",
+      "created_at_utc": "2026-03-05T00:00:00.0000000Z",
+      "updated_at_utc": "2026-03-07T00:00:00.0000000Z",
+      "activated_at_utc": "2026-03-07T00:00:00.0000000Z",
+      "baseline_window": {
+        "first_observed_at_utc": "2026-03-05T08:00:00.0000000Z",
+        "last_observed_at_utc": "2026-03-06T12:00:00.0000000Z",
+        "event_count": 3,
+        "distinct_utc_day_count": 2
+      },
+      "treatment_window": {
+        "activated_at_utc": "2026-03-07T00:00:00.0000000Z",
+        "treatment_event_count": 2,
+        "event_ids": ["bundle:codex-04", "bundle:codex-05"]
+      },
+      "supporting_event_ids": ["bundle:codex-01", "bundle:codex-02", "bundle:codex-03"],
+      "hard_fail_event_ids": [],
+      "baseline_metrics": {
+        "applicable_event_count": 3,
+        "success_rate": 0.0,
+        "failed_rate": 0.6667,
+        "follow_up_rate": 0.3333,
+        "stack_override_rate": 0.0,
+        "comparison_win_rate": 0.0
+      },
+      "treatment_metrics": {
+        "applicable_event_count": 2,
+        "success_rate": 1.0,
+        "failed_rate": 0.0,
+        "follow_up_rate": 0.0,
+        "stack_override_rate": 0.0,
+        "comparison_win_rate": 0.0
+      },
+      "rollback_thresholds": {
+        "hard_failures_in_first_5_applicable_runs": 2,
+        "trailing_window_size": 10,
+        "relative_regression_limit": 0.05
+      },
+      "expiry_policy": {
+        "reconfirm_after_days": 30,
+        "reconfirm_after_applicable_runs": 25
+      },
+      "proposed_change": {
+        "preset_id": "strict-backend"
+      },
+      "reversible": true,
+      "requires_human_review": false,
+      "decision_reasons": ["verification_failures_recurring"],
+      "shadow_decision": {
+        "eligible": true,
+        "would_change_stack_ranking": false,
+        "would_change_kickoff_phrasing": true,
+        "would_change_heuristics": false,
+        "likely_improvement_signals": ["qa_reject_or_verification_failure_repeated"]
+      },
+      "activation_mode": "measured"
+    }
+  ]
+}

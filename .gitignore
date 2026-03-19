@@ -1,0 +1,45 @@
+# ─── Secrets ──────────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+
+# ─── Evidence bundles (generated at runtime) ──────────────────────────────────
+runs/
+_patch_backups/
+tools/reports/
+
+# ─── Artifacts with local absolute paths (machine-specific, not portable) ─────
+artifacts/bundle-comparisons/*.json
+04_Meta_Tools/archive/
+
+# ─── Project-specific working guides (internal only, not for public release) ───
+06_Task_Overlays/GPCGuard-Frontend-Professionalism-v1.0.md
+
+# ─── CLI source (pending security audit before public release) ────────────────
+babel-cli/
+
+# ─── Runtime databases ────────────────────────────────────────────────────────
+*.sqlite
+
+# ─── Development test artifacts ───────────────────────────────────────────────
+babel-cli/babel_live_test.js
+
+# ─── Node ─────────────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+
+# ─── TypeScript build output ───────────────────────────────────────────────────
+babel-cli/dist/
+
+# ─── OS / editor noise ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+*.bak

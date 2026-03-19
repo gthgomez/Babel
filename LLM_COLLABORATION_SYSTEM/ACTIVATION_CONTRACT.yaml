@@ -1,0 +1,66 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ACTIVATION CONTRACT — Behavioral Activation Authority
+#
+# Scope: This contract governs BEHAVIORAL GATE ENFORCEMENT, not manifest
+# assembly (file selection). These are distinct operations:
+#
+#   Selection authority  — which files are assembled into the final prompt stack
+#                          Owner: prompt_catalog.yaml
+#                          OLS-v9-Orchestrator.md is the default typed runtime lane in babel-cli; OLS-v8-Orchestrator.md remains callable as the compatibility fallback until migration is explicitly retired.
+#                          The compiler/resolver materializes the ordered manifest from that intent.
+#                          The catalog's `always_load` tag means "always
+#                          included in the assembled file list." It does NOT
+#                          mean "Guard gates are always enforced."
+#
+#   Behavioral activation — which assembled files actively enforce their gates
+#                          Owner: THIS FILE (ACTIVATION_CONTRACT.yaml)
+#
+# Compiled-manifest precedence rule:
+#   RULES_GUARD.md content may appear in downstream compiled artifacts
+#   (AGENTS.md, CLAUDE.md, GEMINI.md, and v9-compiled prompt manifests).
+#   When Guard content is present in a compiled manifest, this contract is the
+#   authority on whether Guard gates are ACTIVE. If task_mode appears in
+#   `do_not_load_guard_when`, Guard behavioral gates MUST NOT be applied even
+#   though Guard content is visible in the prompt.
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: 1
+project: Babel
+contract_type: activation_contract
+
+always_load:
+  - RULES_CORE.md
+  - ADAPTER_BABEL.md
+
+conditional_load:
+  - when:
+      tool_can_write_files: true
+    load:
+      - RULES_GUARD.md
+  - when:
+      approval_mode_in:
+        - auto_edit
+        - yolo
+    load:
+      - RULES_GUARD.md
+  - when:
+      task_mode_in:
+        - implement
+        - migrate
+        - deploy
+        - hotfix
+    load:
+      - RULES_GUARD.md
+
+do_not_load_guard_when:
+  task_mode_in:
+    - research
+    - brainstorm
+    - architecture
+    - planning
+
+fallback_if_signal_missing:
+  load:
+    - RULES_CORE.md
+    - ADAPTER_BABEL.md
+  note: Guard not loaded by default when execution intent is ambiguous.

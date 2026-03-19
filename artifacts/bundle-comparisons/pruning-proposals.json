@@ -1,0 +1,43 @@
+{
+  "generated_at": "2026-03-17T17:18:26.532Z",
+  "proposals": [
+    {
+      "domain_id": "domain_swe_backend",
+      "current_bundle": [
+        "skill_ts_zod",
+        "skill_supabase_pg"
+      ],
+      "proposed_trimmed_bundle": [],
+      "expected_budget_savings": 650,
+      "qa_risk": "high",
+      "evidence_count": 3,
+      "introduced_failure_tags": [
+        "NAMIT-I",
+        "SFDIPOT-I",
+        "SECURITY-AUTHZ",
+        "BCDP-MISSING"
+      ],
+      "recommendation": "keep_default",
+      "approval_status": "proposed"
+    },
+    {
+      "domain_id": "domain_swe_frontend",
+      "current_bundle": [
+        "skill_react_nextjs",
+        "skill_a11y_design"
+      ],
+      "proposed_trimmed_bundle": [],
+      "expected_budget_savings": 625,
+      "qa_risk": "high",
+      "evidence_count": 3,
+      "introduced_failure_tags": [
+        "SFDIPOT-F",
+        "NAMIT-I",
+        "SFDIPOT-I",
+        "SFDIPOT-P"
+      ],
+      "recommendation": "keep_default",
+      "approval_status": "proposed"
+    }
+  ]
+}

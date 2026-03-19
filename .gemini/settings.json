@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/google-gemini/gemini-cli/main/schemas/settings.schema.json",
+  "model": {
+    "name": "auto"
+  },
+  "general": {
+    "defaultApprovalMode": "auto_edit"
+  },
+  "ui": {
+    "useAlternateBuffer": false,
+    "incrementalRendering": true
+  }
+}

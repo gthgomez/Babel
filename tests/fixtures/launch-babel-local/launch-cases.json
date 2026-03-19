@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "description": "Deterministic regression cases for Phase 6 launch helper.",
+  "cases": [
+    {
+      "name": "codex_plan_default_surface",
+      "params": {
+        "taskCategory": "backend",
+        "project": "global",
+        "model": "codex",
+        "workMode": "plan",
+        "taskPrompt": "Implement only the requested backend fix and keep scope minimal.",
+        "sessionId": "launch-case-codex-plan-001"
+      },
+      "expected": {
+        "clientSurface": "codex_extension",
+        "workMode": "plan",
+        "selectedCodexAdapter": "balanced",
+        "recommendedStackIds": [
+          "behavioral_core_v7",
+          "behavioral_guard_v7",
+          "domain_swe_backend",
+          "adapter_codex_balanced"
+        ],
+        "workModeDirectiveContains": "Start in PLAN mode.",
+        "launchPromptContains": [
+          "Task:",
+          "Implement only the requested backend fix and keep scope minimal."
+        ]
+      }
+    },
+    {
+      "name": "codex_plan_auto_session_id_empty_project_path",
+      "params": {
+        "taskCategory": "backend",
+        "project": "global",
+        "model": "codex",
+        "workMode": "plan",
+        "taskPrompt": "Auto-generate session id when omitted."
+      },
+      "expected": {
+        "clientSurface": "codex_extension",
+        "workMode": "plan",
+        "selectedCodexAdapter": "balanced",
+        "sessionIdPrefix": "launch-codex-",
+        "recommendedStackIds": [
+          "behavioral_core_v7",
+          "behavioral_guard_v7",
+          "domain_swe_backend",
+          "adapter_codex_balanced"
+        ],
+        "workModeDirectiveContains": "Start in PLAN mode.",
+        "launchPromptContains": [
+          "Task:",
+          "Auto-generate session id when omitted."
+        ]
+      }
+    },
+    {
+      "name": "claude_act_default_surface",
+      "params": {
+        "taskCategory": "devops",
+        "project": "global",
+        "model": "claude",
+        "workMode": "act",
+        "taskPrompt": "Apply the smallest deterministic tooling patch and run verification.",
+        "sessionId": "launch-case-claude-act-001"
+      },
+      "expected": {
+        "clientSurface": "claude_code",
+        "workMode": "act",
+        "selectedCodexAdapter": null,
+        "recommendedStackIds": [
+          "behavioral_core_v7",
+          "behavioral_guard_v7",
+          "domain_devops",
+          "adapter_claude"
+        ],
+        "workModeDirectiveContains": "Proceed in ACT mode",
+        "launchPromptContains": [
+          "Task:",
+          "Apply the smallest deterministic tooling patch and run verification."
+        ]
+      }
+    },
+    {
+      "name": "gemini_plan_default_surface",
+      "params": {
+        "taskCategory": "research",
+        "project": "global",
+        "model": "gemini",
+        "workMode": "plan",
+        "taskPrompt": "Summarize findings and provide an explicit verification method.",
+        "sessionId": "launch-case-gemini-plan-001"
+      },
+      "expected": {
+        "clientSurface": "gemini_cli",
+        "workMode": "plan",
+        "selectedCodexAdapter": null,
+        "recommendedStackIds": [
+          "behavioral_core_v7",
+          "behavioral_guard_v7",
+          "domain_research",
+          "adapter_gemini"
+        ],
+        "workModeDirectiveContains": "Start in PLAN mode.",
+        "launchPromptContains": [
+          "Task:",
+          "Summarize findings and provide an explicit verification method."
+        ]
+      }
+    }
+  ]
+}

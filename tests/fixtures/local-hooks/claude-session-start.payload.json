@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "SessionStart",
+  "session_id": "claude-hook-session-001",
+  "cwd": "C:\\Projects\\Babel",
+  "source": "startup"
+}
