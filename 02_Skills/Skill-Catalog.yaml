@@ -1,0 +1,78 @@
+version: 1
+catalog_scope: babel_skills
+maintainer: control_plane
+root: "<YOUR_PROJECT_ROOT>/Babel/02_Skills"
+last_updated: "2026-03-28"
+
+skills:
+  - id: skill_json_output_contract
+    path: Governance/Json-Output-Contract-v1.md
+    tags: [governance, json, output_contract, schema, validation, pipeline]
+
+  - id: skill_context_budget_defense
+    path: Governance/Context-Budget-Defense-v1.md
+    tags: [governance, context, token_budget, truncation, degradation]
+
+  - id: skill_evidence_gathering
+    path: Governance/Evidence-Gathering-v1.md
+    tags: [governance, evidence, pre_plan, evidence_gate, planning]
+
+  - id: skill_reject_loop_recovery
+    path: Governance/Reject-Loop-Recovery-v1.md
+    tags: [governance, reject_loop, recovery, anti_anchor, escalation]
+
+  - id: skill_bcdp_contracts
+    path: Governance/BCDP-Contracts-v1.md
+    tags: [governance, contracts, breaking_change, migration, api, schema, bcdp]
+
+  - id: skill_ts_zod
+    path: Lang/TS-Zod-v1.md
+    tags: [typescript, zod, validation, lang]
+
+  - id: skill_supabase_pg
+    path: DB/Supabase-PG-v1.md
+    tags: [supabase, postgres, database, rls, migrations]
+
+  - id: skill_a11y_design
+    path: UI/A11y-Design-v1.md
+    tags: [accessibility, ui, ux, a11y, web]
+
+  - id: skill_react_nextjs
+    path: Framework/React-NextJS-v1.md
+    tags: [react, nextjs, frontend, ui_ux, performance]
+
+  - id: skill_google_play_billing
+    path: Mobile/Google-Play-Billing-v1.md
+    tags: [android, billing, iap, google-play, mobile]
+
+  - id: skill_android_play_store_compliance
+    path: Mobile/Android-Play-Store-Compliance-v1.md
+    tags: [android, play-store, compliance, permissions, accessibility, mobile]
+
+  - id: skill_jetpack_compose
+    path: Mobile/Jetpack-Compose-v1.md
+    tags: [android, compose, jetpack, material3, ui, mobile]
+
+  - id: skill_android_release_build
+    path: Mobile/Android-Release-Build-v1.md
+    tags: [android, release, signing, proguard, r8, material-theme, mobile]
+
+  - id: skill_android_app_bundle
+    path: Mobile/Android-App-Bundle-v1.md
+    tags: [android, aab, bundletool, release, packaging, mobile, store]
+
+  - id: skill_samsung_galaxy_store
+    path: Mobile/Samsung-Galaxy-Store-v1.md
+    tags: [android, samsung, galaxy-store, iap, mobile, store, compliance]
+
+  - id: skill_amazon_appstore
+    path: Mobile/Amazon-Appstore-v1.md
+    tags: [android, amazon, appstore, fire-os, iap, mobile, store, compliance]
+
+  - id: skill_revenuecat_iap
+    path: Mobile/RevenueCat-IAP-v1.md
+    tags: [android, revenuecat, iap, billing, amazon, google-play, mobile, cross-platform]
+
+  - id: skill_google_play_store
+    path: Mobile/Google-Play-Store-v1.md
+    tags: [android, google-play, compliance, billing, permissions, mobile, store]

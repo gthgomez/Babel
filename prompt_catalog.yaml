@@ -1,0 +1,1057 @@
+version: 3
+catalog_scope: babel_prompt_library
+maintainer: control_plane
+root: "<YOUR_PROJECT_ROOT>/Babel"
+last_updated: "2026-03-28"
+# Pass 1 additions (2026-03-28): domain_python_backend, skill_deno_edge_functions, skill_sse_streaming
+# Pass 2 additions (2026-03-28): domain_llm_router, skill_prisma_orm, skill_stripe_webhook
+# Pass 3 additions (2026-03-28): skill_playwright_e2e, skill_vite_react, skill_multi_agent_pipeline
+# Pass 4 additions (2026-03-28): skill_android_app_bundle, android mobile routing cleanup
+# Pass 5 additions (2026-03-29): skill_android_saf, skill_android_instrumented_testing, skill_android_pdf_processing
+
+# ─────────────────────────────────────────────
+# 00 — SYSTEM ROUTER
+# ─────────────────────────────────────────────
+entries:
+
+  - id: system_bible
+    layer: entrypoint
+    path: BABEL_BIBLE.md
+    description: >
+      Human-facing Babel entrypoint. Tells any model or operator how to use the
+      Babel system, which files are authoritative, and how to assemble a prompt
+      stack from the catalog.
+    status: active
+    token_budget: 450
+    tags: [entrypoint, bible, human, llm]
+
+  - id: orchestrator_v8
+    layer: orchestrator
+    path: 00_System_Router/OLS-v8-Orchestrator.md
+    description: >
+      Master dispatcher. Reads user input, matches project, classifies task type,
+      selects model adapter, and outputs a strict JSON prompt manifest for the
+      Worker Agent pipeline. Outputs JSON only — no prose.
+    status: active
+    supersedes: "00_System_Router/Orchestrator_Router-v1.0.md"
+    tags: [router, orchestrator, pipeline_entry]
+    token_budget: 220
+
+  - id: orchestrator_v9
+    layer: orchestrator
+    path: 00_System_Router/OLS-v9-Orchestrator.md
+    description: >
+      Typed instruction orchestrator. Emits structured routing intent via
+      instruction_stack plus resolution policy, leaving prompt_manifest
+      compilation to the downstream resolver/compiler.
+    status: active
+    tags: [router, orchestrator, pipeline_entry, typed, compiler_lane]
+    token_budget: 240
+
+# ─────────────────────────────────────────────
+# 01 — BEHAVIORAL OS  (always loaded, always first)
+# ─────────────────────────────────────────────
+
+  - id: behavioral_core_v7
+    layer: behavioral_os
+    path: 01_Behavioral_OS/OLS-v7-Core-Universal.md
+    description: >
+      Universal state machine (PLAN → ACT). Enforces execution discipline,
+      epistemic honesty, and the anti-eager behavior pattern across all agents.
+      Load position [1] — always first in any manifest.
+    status: active
+    load_position: 1
+    tags: [core, state_machine, always_load]
+    token_budget: 450
+
+  - id: behavioral_guard_v7
+    layer: behavioral_os
+    path: 01_Behavioral_OS/OLS-v7-Guard-Auto.md
+    description: >
+      Autonomous execution safety gates. Defines the conditions under which an
+      agent may act without human confirmation. Load position [2] — always
+      second in any manifest.
+    status: active
+    load_position: 2
+    # always_load: Guard is always included in the assembled manifest.
+    # The runtime/task context decides when Guard's behavioral gates are actively
+    # enforced. In planning/research/brainstorm/architecture contexts, Guard is
+    # present but its action gates must not be treated as universally active.
+    tags: [guard, safety, always_load]
+    token_budget: 325
+
+# ─────────────────────────────────────────────
+# 02 — DOMAIN ARCHITECTS  (load 1 per task)
+# ─────────────────────────────────────────────
+
+  - id: domain_swe_backend
+    layer: domain_architect
+    path: 02_Domain_Architects/Clean_SWE_Backend-v7.md
+    description: >
+      Principal-engineer backend coding partner (Clean Modular v7.0).
+      Covers Supabase Edge Functions, PostgreSQL, API routing, auth,
+      and BCDP. Optimized for skill-based injection.
+    status: active
+    load_position: 3
+    tags: [backend, api, database, swe, clean, modular]
+    dependencies: []
+    conflicts: []
+    token_budget: 250
+    default_skill_ids:
+      - skill_ts_zod
+      - skill_supabase_pg
+      - skill_evidence_gathering
+      - skill_bcdp_contracts
+
+  - id: domain_swe_frontend
+    layer: domain_architect
+    path: 02_Domain_Architects/Clean_SWE_Frontend-v6.md
+    description: >
+      UI/UX coding partner (Clean Modular v6.0).
+      Covers React, Next.js, design systems, and WCAG accessibility.
+      Optimized for skill-based injection.
+    status: active
+    load_position: 3
+    tags: [frontend, react, nextjs, ui_ux, swe, clean, modular]
+    dependencies: []
+    conflicts: []
+    token_budget: 250
+    default_skill_ids:
+      - skill_react_nextjs
+      - skill_a11y_design
+      - skill_evidence_gathering
+      - skill_bcdp_contracts
+
+  - id: skill_catalog
+    layer: config
+    path: 02_Skills/Skill-Catalog.yaml
+    description: >
+      Registry of atomic technical skills (Lang, DB, API, UI).
+      Used for Just-in-Time (JIT) prompt assembly.
+    status: active
+    token_budget: 200
+    tags: [config, skills, catalog]
+
+  - id: skill_ts_zod
+    layer: skill
+    path: 02_Skills/Lang/TS-Zod-v1.md
+    description: TypeScript strict typing and Zod validation rules.
+    status: active
+    tags: [typescript, zod, validation, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_swe_backend
+    token_budget: 300
+
+  - id: skill_supabase_pg
+    layer: skill
+    path: 02_Skills/DB/Supabase-PG-v1.md
+    description: Supabase and Postgres RLS, migration, and naming rules.
+    status: active
+    tags: [supabase, postgres, database, rls, skill]
+    dependencies:
+      - skill_ts_zod
+    conflicts: []
+    default_for_domains:
+      - domain_swe_backend
+    token_budget: 350
+
+  - id: skill_prisma_orm
+    layer: skill
+    path: 02_Skills/DB/Prisma-ORM-v1.md
+    description: >
+      Prisma ORM rules for schema-first database access. Covers migration workflow
+      (migrate dev vs migrate deploy, immutable migration files, prisma generate after
+      every schema edit), dual-URL env var pattern (DATABASE_URL for pooler, DIRECT_URL
+      for migrations), schema conventions (camelCase fields + @map to snake_case columns,
+      @@map for table names, @id @default(cuid()), @updatedAt, Decimal precision),
+      relation rules (onDelete: Cascade, @@index on FK columns, @@unique compounds),
+      backward-compatible evolution table (COMPATIBLE/RISKY/BREAKING classification),
+      singleton client pattern (global guard for Next.js HMR), common query patterns
+      (findUnique, upsert, nested create), and high-risk zones.
+    status: active
+    tags: [prisma, orm, database, migrations, schema, nextjs, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_swe_backend
+      - domain_swe_frontend
+    token_budget: 375
+
+  - id: skill_a11y_design
+    layer: skill
+    path: 02_Skills/UI/A11y-Design-v1.md
+    description: WCAG 2.2 AA and semantic HTML accessibility rules.
+    status: active
+    tags: [accessibility, ui, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_swe_frontend
+    token_budget: 300
+
+  - id: skill_react_nextjs
+    layer: skill
+    path: 02_Skills/Framework/React-NextJS-v1.md
+    description: React/Next.js component state and performance rules.
+    status: active
+    tags: [react, nextjs, performance, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_swe_frontend
+    token_budget: 325
+
+  - id: skill_deno_edge_functions
+    layer: skill
+    path: 02_Skills/Framework/Deno-Edge-Functions-v1.md
+    description: >
+      Deno runtime rules for Supabase Edge Functions. Covers ESM import semantics
+      (URL imports, pinned versions, esm.sh for npm compat), Deno.env.get() for all
+      secrets, CORS OPTIONS preflight requirement, standard Response pattern, dual-client
+      boundary (service-role for auth bootstrap only, JWT-scoped client for RLS data ops),
+      JWT verification via supabase.auth.getUser(), deno check vs tsc, EdgeRuntime
+      constraints (150s timeout, stateless, no persistent storage), and --no-verify-jwt
+      deploy flag semantics.
+    status: active
+    tags: [deno, edge-functions, supabase, runtime, cors, jwt, rls, skill]
+    dependencies:
+      - skill_supabase_pg
+    conflicts: []
+    default_for_domains:
+      - domain_swe_backend
+    token_budget: 375
+
+  - id: skill_sse_streaming
+    layer: skill
+    path: 02_Skills/Framework/SSE-Streaming-v1.md
+    description: >
+      Server-Sent Events (SSE) production and consumption patterns for Deno Edge
+      Functions and React clients. Covers SSE wire format (Content-Type, Cache-Control,
+      double-newline framing, [DONE] sentinel, keep-alive pings), server-side stream
+      production with TransformStream and EdgeRuntime.waitUntil(), provider normalization
+      contract (Anthropic/OpenAI/Google → unified { type, delta } shape), response headers
+      as stable API contract (X-Router-Model, X-Provider, X-Cost-Estimate-USD), fetch vs
+      EventSource decision (fetch required for auth/headers), ReadableStream line parser,
+      AbortController lifecycle (abort on unmount, AbortError → 504 mapping), and
+      high-risk zones (buffering, missing DONE, header contract drift).
+    status: active
+    tags: [sse, streaming, deno, fetch, readablestream, example_llm_router, router, skill]
+    dependencies:
+      - skill_deno_edge_functions
+    conflicts: []
+    default_for_domains:
+      - domain_swe_backend
+    token_budget: 400
+
+  - id: skill_playwright_e2e
+    layer: skill
+    path: 02_Skills/Framework/Playwright-E2E-v1.md
+    description: >
+      Playwright E2E testing patterns for Next.js and Vite apps. Covers
+      playwright.config.ts setup (webServer block, CI-aware retries/workers,
+      trace/screenshot/video retention on failure), ARIA-first selector priority
+      (getByRole > getByLabel > getByText > CSS — never CSS selectors),
+      auth-gated test pattern (env var credentials, test.skip for missing creds,
+      shared auth helper functions), auto-retrying assertions, dark/light mode
+      testing with emulateMedia, screenshot conventions (test-results/ directory),
+      CI integration (playwright install --with-deps, artifact upload), and
+      high-risk zones (hardcoded credentials, waitForTimeout, test.only committed).
+    status: active
+    tags: [playwright, e2e, testing, accessibility, aria, example_web_audit, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_swe_frontend
+    token_budget: 375
+
+  - id: skill_vite_react
+    layer: skill
+    path: 02_Skills/Framework/Vite-React-v1.md
+    description: >
+      Vite + plain React SPA patterns (no Next.js). Covers what does NOT apply
+      from Next.js (no pages/, no getServerSideProps, no next/link, no middleware),
+      vite.config.ts structure (plugin-react, Vitest co-location, manualChunks,
+      optimizeDeps), environment variables (import.meta.env.VITE_* required prefix,
+      import.meta.env.DEV/PROD/MODE, never process.env), entry point chain
+      (index.html → main.tsx → App.tsx), client-side auth gating in App.tsx
+      (isLoading guard before isAuthenticated), mobile viewport fix
+      (--app-vh custom property instead of 100vh), code splitting with React.lazy,
+      and TypeScript dual-config (tsconfig.json for src/, tsconfig.node.json for
+      vite.config.ts).
+    status: active
+    tags: [vite, react, spa, example_llm_router, client-side, env-vars, skill]
+    dependencies: []
+    conflicts:
+      - skill_react_nextjs
+    default_for_domains:
+      - domain_swe_frontend
+    token_budget: 350
+
+  - id: skill_evidence_gathering
+    layer: skill
+    path: 02_Skills/Governance/Evidence-Gathering-v1.md
+    description: >
+      Mandatory pre-plan evidence protocol. Three phases: File Index (confirm all required
+      files are in context), Schema/Type Index (confirm all contracts are in context),
+      Consumer Index (enumerate consumers if a contract will be modified). Outputs a
+      machine-parseable EVIDENCE RECEIPT before any plan section is authored.
+      When skill_bcdp_contracts is also loaded, the Consumer Index (Step 3) feeds directly
+      into BCDP Step 1 — consumer enumeration runs once, not twice.
+    status: active
+    tags: [evidence, planning, gate, governance, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_swe_backend
+      - domain_swe_frontend
+    token_budget: 350
+
+  - id: skill_bcdp_contracts
+    layer: skill
+    path: 02_Skills/Governance/BCDP-Contracts-v1.md
+    description: >
+      Breaking Change Detection Protocol. Before modifying any API shape, schema,
+      interface, component props, or environment variable: identify all consumers,
+      classify the change as COMPATIBLE / RISKY / BREAKING, and produce the required
+      safety artifacts (verification plan, migration bridge, rollback strategy).
+      When skill_evidence_gathering is also loaded, its Consumer Index (Step 3) is the
+      input to BCDP Step 1 — impact classification picks up directly from that list.
+    status: active
+    tags: [bcdp, breaking-change, contracts, migration, governance, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_swe_backend
+      - domain_swe_frontend
+    token_budget: 350
+
+  - id: skill_reject_loop_recovery
+    layer: skill
+    path: 02_Skills/Governance/Reject-Loop-Recovery-v1.md
+    description: >
+      QA REJECT loop recovery protocol. Load only after receiving a REJECT verdict from
+      the QA Adversarial Reviewer — not for first-attempt plans. Six-step protocol:
+      discard the rejected plan, read failure tags (not prose), execute
+      PROPOSED_FIX_STRATEGY, anti-anchor check, increment plan_version, and escalation
+      trigger at v4+. Prevents anchor bias — the most common cause of repeated REJECT
+      cycles. The [SFDIPOT-O] tag action in Step 2 delegates to skill_ops_observability.
+    status: active
+    tags: [reject, qa, recovery, anchor-bias, governance, skill]
+    dependencies: []
+    conflicts: []
+    token_budget: 325
+
+  - id: skill_json_output_contract
+    layer: skill
+    path: 02_Skills/Governance/Json-Output-Contract-v1.md
+    description: >
+      Pre-emission JSON self-check for all pipeline stages. Four-step protocol:
+      boundary check (output starts/ends with braces, no text contamination),
+      required field audit (nulls, enums, integers, plan_version), stage-specific
+      schema invariants (Orchestrator, SWE Plan, QA Verdict, CLI Executor), and
+      self-correction gate. Prevents parse failures before they reach the Zod validator.
+      Load for any stage that emits JSON into the pipeline.
+    status: active
+    tags: [json, output, schema, pipeline, governance, skill]
+    dependencies: []
+    conflicts: []
+    token_budget: 300
+
+  - id: skill_context_budget_defense
+    layer: skill
+    path: 02_Skills/Governance/Context-Budget-Defense-v1.md
+    description: >
+      Behavioral response protocol for context window pressure. Defines layer drop
+      priority (behavioral OS and active BCDP assessment are never dropped; task overlays
+      drop first), truncation declaration format, summarize-before-truncate protocol, and
+      acceptable vs. unacceptable token pressure trade-offs. Primary pairing is
+      adapter_gemini for long-context tasks, but applies to any stage sensing that earlier
+      instructions may have degraded out of effective attention.
+    status: active
+    tags: [context, budget, truncation, gemini, governance, skill]
+    dependencies: []
+    conflicts: []
+    token_budget: 300
+
+  - id: skill_multi_agent_pipeline
+    layer: skill
+    path: 02_Skills/Governance/Multi-Agent-Pipeline-v1.md
+    description: >
+      Multi-agent LLM pipeline patterns from example_saas_backend scanner system. Covers
+      BaseAgent contract (abstract _get_agent_name/_get_system_prompt, review()
+      returns AgentExecutionResult with explicit ExecutionState), timeout chain
+      invariant (AGENT_TIMEOUTS → agent_timeout → api_timeout = agent_timeout - 5s),
+      aggregation weights (must sum 1.0, security highest at 0.25), smart routing
+      via ROUTING_RULES (dispatch only relevant agents per file pattern), context
+      budgeting (CONTEXT_BUDGETS per agent, EXCLUDED_PATTERNS for generated files),
+      learning pipeline guardrails (learning_modifications_enabled and
+      learning_auto_apply always False — locked after prior regression incident),
+      execution state handling (OK/TIMEOUT/PARSE_ERROR/PROVIDER_ERROR/SKIPPED),
+      SLO gates (34% unavailability rate triggers NEEDS_REVISION), quality guards
+      and consolidation thresholds, and new-agent checklist (timeouts, weights,
+      routing, context budget, tests).
+    status: active
+    tags: [multi-agent, pipeline, llm, review, learning, example_saas_backend, governance, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_python_backend
+    token_budget: 400
+
+  - id: skill_ops_observability
+    layer: skill
+    path: 02_Skills/Governance/Ops-Observability-v1.md
+    description: >
+      Pre-plan OPERATIONAL section protocol. Forces declaration of operation surface,
+      logging strategy (fields, levels, correlation ID), and recovery paths (retry,
+      circuit-breaker, fail-closed) before MINIMAL ACTION SET is written.
+      Directly addresses the [SFDIPOT-O] QA rejection cluster.
+    status: active
+    tags: [observability, logging, recovery, operations, sfdipot, governance, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_swe_backend
+      - domain_devops
+    token_budget: 325
+
+  - id: skill_stripe_webhook
+    layer: skill
+    path: 02_Skills/Payments/Stripe-Webhook-v1.md
+    description: >
+      Stripe webhook handling for Deno Edge Functions (Supabase). Covers the two
+      load-bearing rules (signature first, status code semantics), Deno-specific SDK
+      initialization (createFetchHttpClient() required, pinned apiVersion), raw body
+      read before any parsing (req.text() before req.json()), constructEventAsync for
+      async Deno environment, status code decision table (400 for sig failure → Stripe
+      retries; 200 for all handled/unhandled events → no retry), idempotency pattern
+      (read before write, handle re-delivery), account correlation via client_reference_id
+      and stripe_customer_id, service role justification (no user JWT in server-to-server
+      calls), structured tagged logging with ACTION REQUIRED comments for DB errors,
+      and local testing with stripe listen CLI.
+    status: active
+    tags: [stripe, webhook, payments, billing, deno, edge-functions, idempotency, skill]
+    dependencies:
+      - skill_deno_edge_functions
+      - skill_idempotency
+    conflicts: []
+    default_for_domains:
+      - domain_swe_backend
+    token_budget: 400
+
+  - id: skill_idempotency
+    layer: skill
+    path: 02_Skills/Governance/Idempotency-Contract-v1.md
+    description: >
+      Idempotency classification and contract enforcement for serverless and edge
+      environments. Classifies each mutation (NATURAL / KEY_GATED / CONDITIONAL /
+      NON_IDEMPOTENT), mandates deduplication strategies for webhook handlers and
+      payment operations, and declares retry surface before any operation is written.
+    status: active
+    tags: [idempotency, webhooks, retry, deduplication, serverless, governance, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_swe_backend
+      - domain_devops
+    token_budget: 325
+
+  - id: skill_google_play_billing
+    layer: skill
+    path: 02_Skills/Mobile/Google-Play-Billing-v1.md
+    description: >
+      Google Play Billing contract enforcement for Android IAP. Covers the full billing
+      lifecycle (connect → queryPurchasesAsync → acknowledge), billing isolation contract
+      (zero billing imports in domain/processing layers), PRO_PRODUCT_ID contract rules,
+      required ProGuard rules for release builds, entitlement model classification
+      (client-side vs server-side), and v7→v8 migration guidance (v7 EOL Aug 2026).
+    status: active
+    tags: [android, billing, iap, google-play, mobile, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_android_kotlin
+    token_budget: 350
+
+  - id: skill_android_play_store_compliance
+    layer: skill
+    path: 02_Skills/Mobile/Android-Play-Store-Compliance-v1.md
+    description: >
+      Android Play Store compliance enforcement. Covers permission audit (no unnecessary
+      dangerous permissions), Photo Picker requirement (PickVisualMedia, Android 14+),
+      accessibility service policy (utility use cases disqualified; UsageStatsManager
+      is the policy-durable alternative), Android 15/SDK 35 behavioral changes
+      (edge-to-edge enforcement, predictive back, background launch restrictions),
+      and store listing accuracy checks.
+    status: active
+    tags: [android, play-store, compliance, permissions, accessibility, mobile, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_android_kotlin
+    token_budget: 350
+
+  - id: skill_jetpack_compose
+    layer: skill
+    path: 02_Skills/Mobile/Jetpack-Compose-v1.md
+    description: >
+      Jetpack Compose best practices for Android. Covers state model (mutableStateOf in
+      ViewModel vs remember in Composable), state hoisting rules, correct side-effect APIs
+      (LaunchedEffect key discipline, DisposableEffect for listeners, rememberCoroutineScope
+      for event handlers), screen-enum navigation pattern (no NavHost), Material3 + insets
+      for SDK 35 edge-to-edge enforcement, recomposition discipline (derivedStateOf, key,
+      unstable lambdas), and Compose UI testing with fake BillingGateway injection.
+    status: active
+    tags: [android, compose, jetpack, material3, ui, mobile, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_android_kotlin
+    token_budget: 375
+
+  - id: skill_android_release_build
+    layer: skill
+    path: 02_Skills/Mobile/Android-Release-Build-v1.md
+    description: >
+      Android release build readiness. Covers MaterialTheme wrapper setup (dynamic color
+      API 31+ / static fallback), signing configuration (env vars only, no hardcoded
+      credentials), ProGuard/R8 keep rules for billing and coroutines, release build
+      checklist, and onResume billing lifecycle reconnect pattern. Pair with the Android
+      App Bundle skill when the task touches store artifact selection or bundle validation.
+      Addresses the most common silent failures between debug and production builds.
+    status: active
+    tags: [android, release, signing, proguard, r8, material-theme, mobile, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_android_kotlin
+    token_budget: 375
+
+  - id: skill_android_app_bundle
+    layer: skill
+    path: 02_Skills/Mobile/Android-App-Bundle-v1.md
+    description: >
+      Android App Bundle packaging and distribution guidance. Covers the artifact chain
+      (Gradle bundle -> store processing -> APK delivery), store matrix (Google Play vs
+      Samsung vs Amazon), bundletool validation, flavor-specific bundle tasks, and side
+      artifacts like mapping files. Use for any release/build task that touches AABs,
+      bundle generation, store upload targets, or cross-store artifact selection.
+    status: active
+    tags: [android, aab, bundletool, release, packaging, mobile, store, skill]
+    dependencies: []
+    conflicts: []
+    token_budget: 375
+
+  - id: skill_samsung_galaxy_store
+    layer: skill
+    path: 02_Skills/Mobile/Samsung-Galaxy-Store-v1.md
+    description: >
+      Samsung Galaxy Store submission requirements and compliance (verified March 2026).
+      Covers binary format (APK + AAB accepted; no Play Asset/Feature Delivery), target API
+      ≥ 33 + 64-bit requirement, 16KB page size deadline July 1 2026, data safety mandatory
+      since Sep 24 2025, Samsung IAP vs Google Play Billing choice (both allowed; Samsung IAP
+      offers 80/85% revenue share), IARC content rating, asset specs, Seller Portal account
+      setup, and dual-store product flavor strategy.
+    status: active
+    tags: [android, samsung, galaxy-store, iap, mobile, store, compliance, skill]
+    dependencies: []
+    conflicts: []
+    token_budget: 400
+
+  - id: skill_amazon_appstore
+    layer: skill
+    path: 02_Skills/Mobile/Amazon-Appstore-v1.md
+    description: >
+      Amazon Appstore submission requirements and compliance (verified March 2026). Covers
+      binary format (APK + AAB accepted via bundletool 1.11; no dynamic delivery), mandatory
+      Amazon IAP SDK (Google Play Billing forbidden on Fire OS), Appstore Billing Compatibility
+      SDK as drop-in replacement, Google services replacement table (FCM→A3L, Sign-In→A3L),
+      unsupported features (themes, widgets, custom keyboards), asset specs, Amazon's own
+      content rating system, App Testing Service rejection patterns, and dual-store
+      product flavor build strategy.
+    status: active
+    tags: [android, amazon, appstore, fire-os, iap, mobile, store, compliance, skill]
+    dependencies: []
+    conflicts: []
+    token_budget: 425
+
+  - id: skill_revenuecat_iap
+    layer: skill
+    path: 02_Skills/Mobile/RevenueCat-IAP-v1.md
+    description: >
+      RevenueCat SDK v9+ integration for cross-platform Android IAP (Google Play + Amazon Appstore).
+      Covers artifact split — Amazon flavor requires BOTH purchases (core) + purchases-store-amazon
+      (store adapter); purchases-store-amazon declares purchases as runtime-only so core must be
+      added explicitly or Purchases/CustomerInfo/PurchaseParams are unresolved at compile time.
+      purchases-amazon no longer exists (renamed in v9). Dashboard wiring order (project → app →
+      entitlement → product → attach; missing attach = isActive false despite successful purchase).
+      AmazonConfiguration vs PurchasesConfiguration by flavor. BillingGateway wrapper pattern (RC
+      stays in flavor source set; ViewModel imports nothing from RC). v9 lifecycle API: connect
+      idempotent via isConfigured guard; refreshEntitlement uses awaitCustomerInfo() + awaitOfferings()
+      (old lambda callbacks removed); launchPurchase launches MainScope coroutine calling
+      awaitPurchaseResult(PurchaseParams) returning Result<PurchaseResult>; dispose cancels scope.
+      PurchaseParams moved from models package to root in v9. notifyFulfillment auto-handled on
+      Amazon. ProGuard rules required for release builds (RC does not ship consumer rules).
+    status: active
+    tags: [android, revenuecat, iap, billing, amazon, google-play, mobile, cross-platform, skill]
+    dependencies:
+      - skill_amazon_appstore
+      - skill_android_dependency_research
+    conflicts: []
+    default_for_domains:
+      - domain_android_kotlin
+    token_budget: 500
+
+  - id: skill_android_dependency_research
+    layer: skill
+    path: 02_Skills/Mobile/Android-Dependency-Research-v1.md
+    description: >
+      Pre-implementation dependency verification protocol for Android/Gradle projects. Covers three
+      failure modes: wrong artifact name/version (artifact renamed between major versions; version
+      doesn't exist on Maven Central), runtime-scope compile gap (transitive dep declared runtime in
+      POM or Gradle module metadata is absent from compile classpath; unresolved reference errors),
+      and major-version API breaks (renamed methods, removed callbacks, restructured packages).
+      Protocol: verify artifact via maven-metadata.xml curl before writing any implementation line;
+      find latest version via GitHub releases API; inspect POM scope and Gradle .module API vs
+      Runtime variants to identify which transitive deps need to be added explicitly; check library
+      source and CHANGELOG before using any API from a new major version; check for coroutine
+      await* extensions as cleaner alternatives to callback-style APIs; verify settings.gradle.kts
+      repo declarations. Includes hard rules against guessing artifact names, assuming transitive
+      compile availability, or copy-pasting version numbers from docs without verification.
+    status: active
+    tags: [android, gradle, maven, dependencies, build, mobile, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_android_kotlin
+    token_budget: 350
+
+  - id: skill_google_play_store
+    layer: skill
+    path: 02_Skills/Mobile/Google-Play-Store-v1.md
+    description: >
+      Google Play Store submission requirements and policy compliance (verified March 2026).
+      Covers all enforced 2025-2026 deadlines: targetSdk 35 mandate (Aug 31 2025), AAB
+      mandatory, Billing Library v7 minimum (Aug 31 2025) with v8 migration required before
+      Aug 2026, Photo Picker enforcement (May 28 2025), AccessibilityService non-disability
+      ban (Jan 28 2026), US billing exclusivity ended (Sep 12 2025 Epic injunction), SafetyNet
+      shutdown (May 20 2025) → Play Integrity API, IARC rating re-review (Jan 31 2026), 16KB
+      page size (Nov 1 2025), exact asset specs, and Data Safety section requirements.
+      Policy/deadline layer only; pair with Android Play Store Compliance for implementation
+      changes and Android App Bundle for packaging execution.
+    status: active
+    tags: [android, google-play, compliance, billing, permissions, mobile, store, skill]
+    dependencies: []
+    conflicts: []
+    token_budget: 450
+
+  - id: skill_android_saf
+    layer: skill
+    path: 02_Skills/Mobile/Android-SAF-v1.md
+    description: >
+      Storage Access Framework patterns for Android file-handling apps. Covers SAF contract
+      selection (OpenDocument vs OpenMultipleDocuments vs CreateDocument vs FileProvider share),
+      content URI seekability problem (PdfRenderer / seekable FD requirement → must copy to temp
+      file via openInputStream), content URI metadata queries (size, display name, MIME type via
+      ContentResolver — never File(uri.path)), FileProvider setup (authority naming, file_paths.xml
+      path declarations, exported=false + grantUriPermissions=true security invariant),
+      temp file lifecycle discipline (unique names, cleanup in onCleared / onCreate / failure
+      branches), URI permission persistence (takePersistableUriPermission only for cross-session
+      reuse), and MIME type reliability (validate magic bytes — content providers don't enforce
+      MIME filters). Essential for any app that picks, saves, or shares files.
+    status: active
+    tags: [android, saf, content-uri, fileprovider, file-picker, mobile, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_android_kotlin
+    token_budget: 425
+
+  - id: skill_android_instrumented_testing
+    layer: skill
+    path: 02_Skills/Mobile/Android-Instrumented-Testing-v1.md
+    description: >
+      Android instrumented test patterns for apps using platform APIs. Covers placement decision
+      (androidTest/ vs test/ vs Robolectric — anything importing android.* belongs in androidTest/),
+      context handling (targetContext vs instrumentationContext — always targetContext for app code),
+      fixture file creation (programmatic PdfDocument / Bitmap fixtures — no binary fixtures in repo),
+      FileProvider in test context (works via targetContext.packageName), test lifecycle and cleanup
+      (@Before setUp / @After tearDown, register every created File for deletion), coroutine testing
+      (runTest preferred over runBlocking, generous timeouts for emulators), fake injection patterns
+      (FakePdfEngine and FakeBillingGateway via interfaces — use real PdfProcessor for engine tests),
+      and Compose UI testing (createComposeRule, testTag strategy, paywall transition test pattern).
+    status: active
+    tags: [android, testing, instrumented, androidtest, compose-test, coroutines, mobile, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_android_kotlin
+    token_budget: 400
+
+  - id: skill_android_pdf_processing
+    layer: skill
+    path: 02_Skills/Mobile/Android-PDF-Processing-v1.md
+    description: >
+      PdfRenderer and PdfDocument platform API patterns for Android PDF processing apps. Covers
+      PdfRenderer contract (seekable FD requirement, encrypted PDF detection via constructor throw,
+      0-indexed page access), page rendering pipeline (DPI-to-pixel conversion, mandatory white
+      background erase, RENDER_MODE_FOR_DISPLAY vs RENDER_MODE_FOR_PRINT), OOM guard protocol
+      (bitmap.recycle() immediately after use, OutOfMemoryError is Throwable — not caught by
+      catch(Exception), per-page recycle in finally), JPEG round-trip compression technique
+      (render → compress to JPEG bytes → decode back → draw on PdfDocument page — reduces output
+      size significantly, rasterizes text), DPI/quality ladder pattern for target-size iteration,
+      PdfDocument contract (1-indexed page numbers, finishPage before next startPage, writeTo before
+      close, close always in finally), and ANR prevention (Dispatchers.IO for all rendering,
+      never render on main thread). Pair with skill_android_saf for the URI-to-temp-file step.
+    status: active
+    tags: [android, pdf, pdfrenderer, pdfdocument, processing, compression, mobile, skill]
+    dependencies:
+      - skill_android_saf
+    conflicts: []
+    default_for_domains:
+      - domain_android_kotlin
+    token_budget: 450
+
+  - id: domain_compliance_gpc
+    layer: domain_architect
+    path: 02_Domain_Architects/Compliance_GPC-v1.0.md
+    description: >
+      Compliance strategist for GPC, GDPR, CCPA, and related privacy regulations.
+      Enforces deterministic, evidence-first reasoning. Never produces vague
+      regulatory claims.
+    status: active
+    token_budget: 250
+    load_position: 3
+    tags: [compliance, gpc, gdpr, ccpa, legal]
+
+  - id: domain_research
+    layer: domain_architect
+    path: 02_Domain_Architects/General_Research-v4.1.md
+    description: >
+      General research and strategy agent. Uses MPAF/GSA frameworks for
+      structured investigation. Apex of OLS v4.1 General APEX lineage.
+    status: active
+    token_budget: 250
+    load_position: 3
+    tags: [research, strategy, analysis]
+
+  - id: domain_devops
+    layer: domain_architect
+    path: 02_Domain_Architects/DevOps_Architect-v1.0.md
+    description: >
+      Principal SRE/DevOps architect. Classifies every change as Stateful,
+      Stateless, or Read-Only. Enforces the Four Fails Standard (Fast, Safe,
+      Observable, Idempotent), mandatory ROLLBACK_STRATEGY and INFRA_BCDP for
+      stateful changes, dry-run gate before all applies, and strict secrets
+      management. Adds INFRA_ACT gate for production stateful changes beyond
+      the standard QA PASS.
+    status: active
+    token_budget: 250
+    load_position: 3
+    tags: [devops, infra, cicd, docker, terraform, vercel, migrations, secrets]
+
+  - id: domain_llm_router
+    layer: domain_architect
+    path: 02_Domain_Architects/LLM_Router-v1.0.md
+    description: >
+      Systems engineer domain for multi-provider LLM routing and stream normalization.
+      Covers example_llm_router router architecture (routing decision tree, provider fallback chain,
+      normalized SSE contract, response header API stability, ownership checks, cost tracking,
+      debate/SMD modes). Enforces: no raw provider SSE to frontend, no header renames without
+      frontend update, no conversationId write without ownership check, no new model without
+      pricing entry, AbortError → 504 mapping.
+    status: active
+    load_position: 3
+    tags: [llm, router, streaming, sse, multi-provider, example_llm_router, cost, orchestration]
+    dependencies: []
+    conflicts: []
+    token_budget: 325
+    default_skill_ids:
+      - skill_sse_streaming
+      - skill_deno_edge_functions
+      - skill_evidence_gathering
+      - skill_bcdp_contracts
+
+  - id: domain_python_backend
+    layer: domain_architect
+    path: 02_Domain_Architects/Python_Backend-v1.0.md
+    description: >
+      Senior Python backend engineer for multi-agent pipelines and deterministic
+      validators. Covers example_saas_backend scanner (async agents, learning pipeline, guardrail
+      contracts, CI hooks, pytest suites) and example_web_audit ci-validator (scoring weights,
+      schema checks, deterministic output). Enforces async hygiene, exception propagation,
+      mutable-default-argument prohibition, and learning guardrail lock invariants.
+    status: active
+    load_position: 3
+    tags: [python, backend, async, agents, pipeline, cli, validators, scoring, pytest]
+    dependencies: []
+    conflicts: []
+    token_budget: 300
+    default_skill_ids:
+      - skill_evidence_gathering
+      - skill_bcdp_contracts
+      - skill_ops_observability
+
+  - id: domain_android_kotlin
+    layer: domain_architect
+    path: 02_Domain_Architects/Android_Kotlin-v1.0.md
+    description: >
+      Senior Android engineer architect for Kotlin + Jetpack Compose utility apps.
+      Enforces billing isolation contract (zero billing imports outside billing/),
+      blast-radius classification (Manifest and PRO_PRODUCT_ID are HIGH), screen-enum
+      navigation pattern (no NavHost), and absolute prohibitions around signing keys
+      and file:// URIs. Default skills vary by task type — billing, Compose, and
+      compliance skills are loaded selectively.
+    status: active
+    token_budget: 250
+    load_position: 3
+    tags: [android, kotlin, compose, mobile, billing, iap]
+    dependencies: []
+    conflicts: []
+    default_skill_ids:
+      - skill_evidence_gathering
+      - skill_bcdp_contracts
+
+  - id: pipeline_qa_reviewer
+    layer: pipeline_stage
+    path: 02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md
+    description: >
+      Adversarial QA gate. Reviews SWE plans across six audit layers: Evidence Gate,
+      SFDIPOT coverage, NAMIT code-level checklist, BCDP contract verification,
+      Security audit, and Root Cause verification. Outputs only PASS or REJECT with
+      tagged failures and per-claim confidence scores. Never writes code. Loaded by
+      pipeline_mode: verified or autonomous.
+    status: active
+    load_position: 7
+    tags: [qa, namit, sfdipot, bcdp, pipeline_stage, verification]
+    token_budget: 425
+
+  - id: pipeline_cli_executor
+    layer: pipeline_stage
+    path: 02_Domain_Architects/CLI_Executor-v1.0.md
+    description: >
+      CLI "Hands" agent. Activates only after QA PASS. Translates the approved
+      MINIMAL ACTION SET into physical tool calls (file_read, file_write,
+      shell_exec, test_run) one step at a time with verification after each.
+      On any failure, halts and emits a PIPELINE_ERROR payload routed back to
+      the SWE Agent. Zero architectural authority. Loaded by pipeline_mode: autonomous.
+    status: active
+    load_position: 8
+    tags: [cli, executor, pipeline_stage, autonomous, file_write, shell_exec]
+    token_budget: 375
+
+# ─────────────────────────────────────────────
+# 03 — MODEL ADAPTERS  (load 1 per task)
+# ─────────────────────────────────────────────
+
+  - id: adapter_claude
+    layer: model_adapter
+    path: 03_Model_Adapters/Claude_AntiEager.md
+    description: >
+      Personality adapter for Claude (Sonnet/Opus). Suppresses over-helpfulness,
+      enforces strict PLAN→ACT gating, and prevents hallucinated file paths.
+      Derived from OLS v6.2 Claude variant.
+    status: active
+    token_budget: 275
+    load_position: 4
+    tags: [claude, adapter, anti_eager]
+
+  - id: adapter_codex
+    layer: model_adapter
+    path: 03_Model_Adapters/Codex_UltraTerse.md
+    description: >
+      Personality adapter for Codex/o1. Maximizes brevity and precision for
+      dense algorithmic tasks and schema generation. Derived from OLS v6.2
+      Codex variant.
+    status: active
+    token_budget: 275
+    load_position: 4
+    tags: [codex, openai, adapter, terse]
+
+  - id: adapter_codex_balanced
+    layer: model_adapter
+    path: 03_Model_Adapters/Codex_Balanced.md
+    description: >
+      Balanced Codex adapter for multi-file refactors, frontend work, and
+      architecture-sensitive edits. Preserves Codex execution strengths without
+      the heavy compression bias of the ultra-terse variant.
+    status: active
+    load_position: 4
+    tags: [codex, openai, adapter, balanced, refactor, frontend]
+    token_budget: 275
+
+  - id: adapter_gemini
+    layer: model_adapter
+    path: 03_Model_Adapters/Gemini_LongContext.md
+    description: >
+      Personality adapter for Gemini. Optimized for long-context document
+      synthesis, log analysis, and multi-file research tasks. Derived from OLS
+      v6.2 Gemini variant.
+    status: active
+    token_budget: 275
+    load_position: 4
+    tags: [gemini, google, adapter, long_context]
+
+# ─────────────────────────────────────────────
+# 04 — META TOOLS  (authoring and governance)
+# ─────────────────────────────────────────────
+
+  - id: meta_prompt_compiler
+    layer: meta_tool
+    path: 04_Meta_Tools/Prompt_Compiler-v4.1.md
+    description: >
+      Prompt authoring framework. Use this as the template engine when drafting
+      new domain or adapter prompts. Apex of OLS v4.1 Canonical lineage.
+    status: active
+    token_budget: 300
+    tags: [meta, authoring, compiler]
+
+  - id: meta_research_optimizer
+    layer: meta_tool
+    path: 04_Meta_Tools/Research_Optimizer.md
+    description: >
+      Prompt improvement research plan. Guides structured investigation of
+      whether a prompt change is grounded in evidence before adopting it.
+    status: active
+    token_budget: 275
+    tags: [meta, research, optimization]
+
+  - id: meta_namit_critique
+    layer: meta_tool
+    path: 04_Meta_Tools/NAMIT-Research-Critique.md
+    description: >
+      Research critique of the NAMIT edge-case framework and confidence scoring
+      protocol. Confirms NAMIT is a proprietary OLS mnemonic (not industry-
+      standard). Recommends Hybrid approach: SFDIPOT for test planning + NAMIT
+      for code-level checks. Reference when authoring QA_Adversarial_Reviewer.
+    status: active
+    token_budget: 275
+    tags: [meta, namit, research, reference]
+
+  - id: meta_role_creation_gate
+    layer: meta_tool
+    path: 04_Meta_Tools/Role_Creation_Gate.md
+    description: >
+      Governance protocol for adding new prompt roles to the Babel library.
+      Enforces overlap check, delta justification, lineage declaration, and
+      registry update before any new file is created.
+    status: active
+    token_budget: 275
+    tags: [meta, governance, gate]
+
+  - id: meta_mcp_adapter_v1
+    layer: meta_tool
+    path: docs/MCP_Adapter-v1.md
+    description: >
+      Read-only MCP control-plane adapter for Babel v10 Phase 1. Documents the
+      safe stdio interface for catalog inspection, typed stack resolution,
+      instruction stack preview, and manifest preview. No execution tools.
+    status: active
+    token_budget: 275
+    tags: [meta, mcp, control_plane, read_only, compiler_lane]
+
+# ─────────────────────────────────────────────
+# 05 — PROJECT OVERLAYS  (thin, per-project context)
+# ─────────────────────────────────────────────
+
+  - id: overlay_example_saas_backend
+    layer: project_overlay
+    path: 05_Project_Overlays/Example-SaaS-Backend-Context.md
+    description: >
+      Project context for example_saas_backend. Covers tech stack (Deno, Supabase Edge
+      Functions, Next.js, Stripe, PostgreSQL), hard constraints (fail-closed,
+      deterministic enforcement, multi-tenant isolation), and brand rules
+      (no AI-driven framing, evidence-first).
+    status: active
+    token_budget: 325
+    load_position: 5
+    project: example_saas_backend
+    tags: [overlay, example_saas_backend, context]
+
+  - id: overlay_example_llm_router
+    layer: project_overlay
+    path: 05_Project_Overlays/Example-LLM-Router-Context.md
+    description: >
+      Project context for example_llm_router. Covers tech stack (Supabase router, React/
+      Vite, multi-provider LLM, SSE), core invariants (normalized SSE contract,
+      server-side ownership checks, AbortError→504 mapping), and primary
+      objects (router manifests, conversation records).
+    status: active
+    token_budget: 325
+    load_position: 5
+    project: example_llm_router
+    tags: [overlay, example_llm_router, context]
+
+  - id: overlay_example_web_audit
+    layer: project_overlay
+    path: 05_Project_Overlays/Example-Web-Audit-Context.md
+    description: >
+      Project context for example_web_audit. Covers tech stack (Next.js, Prisma,
+      Supabase, TanStack React Query), hard constraints (append-only audit
+      records, CI validator gating), and primary objects (audit entries,
+      evidence artifacts, compliance reports).
+    status: active
+    token_budget: 325
+    load_position: 5
+    project: example_web_audit
+    tags: [overlay, example_web_audit, context]
+
+  - id: overlay_example_mobile_suite
+    layer: project_overlay
+    path: 05_Project_Overlays/Example-Mobile-Suite-Context.md
+    description: >
+      Project context for example_mobile_suite monorepo. Four Kotlin utility apps:
+      example_app_one, example_app_two, example_app_three (all IAP-monetized, Compose),
+      and example_app_four (accessibility service, ViewBinding). Current billing
+      version 7.1.1 (v7 EOL Aug 2026 — migration to v8 required). Compose BOM
+      2026.03.01, targetSdk 35. Encodes hard invariants: billing isolation, FileProvider
+      security, screen-enum navigation, no NavHost, EXIF-before-crop rule, JPEG quality
+      floor 35, and example_app_four policy risk flag.
+    status: active
+    token_budget: 350
+    load_position: 5
+    project: example_mobile_suite
+    tags: [overlay, android, kotlin, mobile, billing, compose]
+
+# ─────────────────────────────────────────────
+# 06 — TASK OVERLAYS  (optional, load after project overlay)
+# ─────────────────────────────────────────────
+
+  - id: task_frontend_professionalism
+    layer: task_overlay
+    path: 06_Task_Overlays/Frontend-Professionalism-v1.0.md
+    description: >
+      Reusable task overlay for polishing existing frontends, reducing prototype
+      noise, tightening design systems, and improving professional SaaS UX.
+    status: active
+    token_budget: 325
+    load_position: 6
+    tags: [task_overlay, frontend, ui_ux, professionalism, reuse]
+
+  - id: task_example_saas_backend_frontend_professionalism
+    layer: task_overlay
+    path: 06_Task_Overlays/Example-SaaS-Backend-Frontend-Professionalism-v1.0.md
+    description: >
+      example_saas_backend-specific delta overlay for frontend professionalism tasks.
+      Preserves auth/API boundaries and reinforces evidence-first product tone.
+    status: active
+    token_budget: 325
+    load_position: 6
+    project: example_saas_backend
+    tags: [task_overlay, example_saas_backend, frontend, ui_ux, professionalism]
+
+# ─────────────────────────────────────────────
+# DEPRECATED / SUPERSEDED
+# ─────────────────────────────────────────────
+
+  - id: stub_orchestrator_v1
+    layer: orchestrator
+    path: 00_System_Router/Orchestrator_Router-v1.0.md
+    description: Initial stub placeholder. Superseded by OLS-v8-Orchestrator.md.
+    status: deprecated
+    token_budget: 200
+    superseded_by: orchestrator_v8
+    tags: [deprecated, stub]
+

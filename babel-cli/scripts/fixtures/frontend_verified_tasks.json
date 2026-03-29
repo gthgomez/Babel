@@ -1,0 +1,44 @@
+[
+  {
+    "id": "frontend_accessible_auth_flow",
+    "task": "Bundle comparison fixture: frontend verified lane accessible auth flow hardening.",
+    "variant_expectations": {
+      "default": {
+        "qa_verdict": "PASS",
+        "qa_failure_tags": []
+      },
+      "minimal": {
+        "qa_verdict": "REJECT",
+        "qa_failure_tags": ["SFDIPOT-F", "NAMIT-I"]
+      }
+    }
+  },
+  {
+    "id": "frontend_navigation_shell_cleanup",
+    "task": "Bundle comparison fixture: frontend verified lane navigation shell cleanup.",
+    "variant_expectations": {
+      "default": {
+        "qa_verdict": "PASS",
+        "qa_failure_tags": []
+      },
+      "minimal": {
+        "qa_verdict": "REJECT",
+        "qa_failure_tags": ["SFDIPOT-I", "SFDIPOT-P"]
+      }
+    }
+  },
+  {
+    "id": "frontend_render_state_cleanup",
+    "task": "Bundle comparison fixture: frontend verified lane render state cleanup.",
+    "variant_expectations": {
+      "default": {
+        "qa_verdict": "PASS",
+        "qa_failure_tags": []
+      },
+      "minimal": {
+        "qa_verdict": "PASS",
+        "qa_failure_tags": []
+      }
+    }
+  }
+]
