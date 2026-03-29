@@ -1,0 +1,278 @@
+{
+  "schema_version": 1,
+  "selection": {
+    "task_category": "backend",
+    "project": "example_saas_backend",
+    "model": "codex",
+    "pipeline_mode": "verified",
+    "selected_codex_adapter": "balanced",
+    "requested_skill_ids": [],
+    "requested_task_overlay_ids": [],
+    "recommended_task_overlay_ids": [],
+    "applied_task_overlay_ids": []
+  },
+  "instruction_stack": {
+    "behavioral_ids": [
+      "behavioral_core_v7",
+      "behavioral_guard_v7"
+    ],
+    "domain_id": "domain_swe_backend",
+    "skill_ids": [],
+    "model_adapter_id": "adapter_codex_balanced",
+    "project_overlay_id": "overlay_example_saas_backend",
+    "task_overlay_ids": [],
+    "pipeline_stage_ids": [
+      "pipeline_qa_reviewer"
+    ]
+  },
+  "resolution_policy": {
+    "apply_domain_default_skills": true,
+    "expand_skill_dependencies": true,
+    "strict_conflict_mode": "error"
+  },
+  "compiled_artifacts": {
+    "selected_entry_ids": [
+      "behavioral_core_v7",
+      "behavioral_guard_v7",
+      "domain_swe_backend",
+      "skill_ts_zod",
+      "skill_supabase_pg",
+      "skill_evidence_gathering",
+      "skill_bcdp_contracts",
+      "adapter_codex_balanced",
+      "overlay_example_saas_backend",
+      "pipeline_qa_reviewer"
+    ],
+    "prompt_manifest": [
+      "01_Behavioral_OS/OLS-v7-Core-Universal.md",
+      "01_Behavioral_OS/OLS-v7-Guard-Auto.md",
+      "02_Domain_Architects/Clean_SWE_Backend-v7.md",
+      "02_Skills/Lang/TS-Zod-v1.md",
+      "02_Skills/DB/Supabase-PG-v1.md",
+      "02_Skills/Governance/Evidence-Gathering-v1.md",
+      "02_Skills/Governance/BCDP-Contracts-v1.md",
+      "03_Model_Adapters/Codex_Balanced.md",
+      "05_Project_Overlays/Example-SaaS-Backend-Context.md",
+      "02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md"
+    ],
+    "token_budget_total": 3400,
+    "token_budget_missing": [],
+    "token_budget_by_entry": {
+      "behavioral_core_v7": 450,
+      "behavioral_guard_v7": 325,
+      "domain_swe_backend": 250,
+      "skill_ts_zod": 300,
+      "skill_supabase_pg": 350,
+      "skill_evidence_gathering": 350,
+      "skill_bcdp_contracts": 350,
+      "adapter_codex_balanced": 275,
+      "overlay_example_saas_backend": 325,
+      "pipeline_qa_reviewer": 425
+    },
+    "budget_policy": {
+      "enabled": true,
+      "scope": {
+        "domain_ids": [
+          "domain_swe_backend",
+          "domain_swe_frontend"
+        ],
+        "required_pipeline_stage_ids": [
+          "pipeline_qa_reviewer"
+        ],
+        "orchestrator_versions": [
+          "9.0"
+        ]
+      },
+      "warn_threshold": 2400,
+      "severe_warn_threshold": 2600,
+      "count_layers": "all_compiled_layers",
+      "missing_budget_mode": "severe"
+    },
+    "budget_diagnostics": [
+      {
+        "severity": "info",
+        "code": "total_token_budget",
+        "message": "Total token budget: 3400"
+      },
+      {
+        "severity": "severe",
+        "code": "budget_threshold_severe",
+        "message": "Compiled stack token budget 3400 reached the severe threshold 2600."
+      }
+    ],
+    "warnings": [
+      "Total token budget: 3400",
+      "Compiled stack token budget 3400 reached the severe threshold 2600."
+    ]
+  },
+  "ordered_entries": [
+    {
+      "id": "behavioral_core_v7",
+      "layer": "behavioral_os",
+      "relative_path": "01_Behavioral_OS/OLS-v7-Core-Universal.md",
+      "load_position": 1,
+      "token_budget": 450,
+      "order_index": 1,
+      "status": "active",
+      "tags": [
+        "core",
+        "state_machine",
+        "always_load"
+      ],
+      "project": null
+    },
+    {
+      "id": "behavioral_guard_v7",
+      "layer": "behavioral_os",
+      "relative_path": "01_Behavioral_OS/OLS-v7-Guard-Auto.md",
+      "load_position": 2,
+      "token_budget": 325,
+      "order_index": 2,
+      "status": "active",
+      "tags": [
+        "guard",
+        "safety",
+        "always_load"
+      ],
+      "project": null
+    },
+    {
+      "id": "domain_swe_backend",
+      "layer": "domain_architect",
+      "relative_path": "02_Domain_Architects/Clean_SWE_Backend-v7.md",
+      "load_position": 3,
+      "token_budget": 250,
+      "order_index": 3,
+      "status": "active",
+      "tags": [
+        "backend",
+        "api",
+        "database",
+        "swe",
+        "clean",
+        "modular"
+      ],
+      "project": null
+    },
+    {
+      "id": "skill_ts_zod",
+      "layer": "skill",
+      "relative_path": "02_Skills/Lang/TS-Zod-v1.md",
+      "load_position": null,
+      "token_budget": 300,
+      "order_index": 4,
+      "status": "active",
+      "tags": [
+        "typescript",
+        "zod",
+        "validation",
+        "skill"
+      ],
+      "project": null
+    },
+    {
+      "id": "skill_supabase_pg",
+      "layer": "skill",
+      "relative_path": "02_Skills/DB/Supabase-PG-v1.md",
+      "load_position": null,
+      "token_budget": 350,
+      "order_index": 5,
+      "status": "active",
+      "tags": [
+        "supabase",
+        "postgres",
+        "database",
+        "rls",
+        "skill"
+      ],
+      "project": null
+    },
+    {
+      "id": "skill_evidence_gathering",
+      "layer": "skill",
+      "relative_path": "02_Skills/Governance/Evidence-Gathering-v1.md",
+      "load_position": null,
+      "token_budget": 350,
+      "order_index": 6,
+      "status": "active",
+      "tags": [
+        "evidence",
+        "planning",
+        "gate",
+        "governance",
+        "skill"
+      ],
+      "project": null
+    },
+    {
+      "id": "skill_bcdp_contracts",
+      "layer": "skill",
+      "relative_path": "02_Skills/Governance/BCDP-Contracts-v1.md",
+      "load_position": null,
+      "token_budget": 350,
+      "order_index": 7,
+      "status": "active",
+      "tags": [
+        "bcdp",
+        "breaking-change",
+        "contracts",
+        "migration",
+        "governance",
+        "skill"
+      ],
+      "project": null
+    },
+    {
+      "id": "adapter_codex_balanced",
+      "layer": "model_adapter",
+      "relative_path": "03_Model_Adapters/Codex_Balanced.md",
+      "load_position": 4,
+      "token_budget": 275,
+      "order_index": 8,
+      "status": "active",
+      "tags": [
+        "codex",
+        "openai",
+        "adapter",
+        "balanced",
+        "refactor",
+        "frontend"
+      ],
+      "project": null
+    },
+    {
+      "id": "overlay_example_saas_backend",
+      "layer": "project_overlay",
+      "relative_path": "05_Project_Overlays/Example-SaaS-Backend-Context.md",
+      "load_position": 5,
+      "token_budget": 325,
+      "order_index": 9,
+      "status": "active",
+      "tags": [
+        "overlay",
+        "example_saas_backend",
+        "context"
+      ],
+      "project": "example_saas_backend"
+    },
+    {
+      "id": "pipeline_qa_reviewer",
+      "layer": "pipeline_stage",
+      "relative_path": "02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md",
+      "load_position": 7,
+      "token_budget": 425,
+      "order_index": 10,
+      "status": "active",
+      "tags": [
+        "qa",
+        "namit",
+        "sfdipot",
+        "bcdp",
+        "pipeline_stage",
+        "verification"
+      ],
+      "project": null
+    }
+  ]
+}
+

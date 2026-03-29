@@ -1,0 +1,44 @@
+[
+  {
+    "id": "backend_auth_callback_session",
+    "task": "Bundle comparison fixture: backend verified lane auth callback session preservation hardening.",
+    "variant_expectations": {
+      "default": {
+        "qa_verdict": "PASS",
+        "qa_failure_tags": []
+      },
+      "minimal": {
+        "qa_verdict": "REJECT",
+        "qa_failure_tags": ["NAMIT-I", "SFDIPOT-I"]
+      }
+    }
+  },
+  {
+    "id": "backend_rls_webhook_contract",
+    "task": "Bundle comparison fixture: backend verified lane RLS and webhook contract hardening.",
+    "variant_expectations": {
+      "default": {
+        "qa_verdict": "PASS",
+        "qa_failure_tags": []
+      },
+      "minimal": {
+        "qa_verdict": "REJECT",
+        "qa_failure_tags": ["SECURITY-AUTHZ", "BCDP-MISSING"]
+      }
+    }
+  },
+  {
+    "id": "backend_retry_observability_cleanup",
+    "task": "Bundle comparison fixture: backend verified lane retry and observability cleanup.",
+    "variant_expectations": {
+      "default": {
+        "qa_verdict": "PASS",
+        "qa_failure_tags": []
+      },
+      "minimal": {
+        "qa_verdict": "PASS",
+        "qa_failure_tags": []
+      }
+    }
+  }
+]

@@ -1,0 +1,7 @@
+* text=auto
+
+*.md text
+*.yaml text
+*.yml text
+*.json text
+*.ps1 text eol=crlf
