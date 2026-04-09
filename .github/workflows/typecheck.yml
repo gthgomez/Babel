@@ -1,0 +1,36 @@
+name: Type Check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'babel-cli/**'
+      - 'prompt_catalog.yaml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'babel-cli/**'
+      - 'prompt_catalog.yaml'
+
+jobs:
+  typecheck:
+    name: TypeScript Type Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: babel-cli/package-lock.json
+
+      - name: Install dependencies
+        working-directory: babel-cli
+        run: npm ci
+
+      - name: Type check
+        working-directory: babel-cli
+        run: npx tsc --noEmit
