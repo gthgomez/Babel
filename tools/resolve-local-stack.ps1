@@ -4,7 +4,7 @@ param(
     [ValidateSet("frontend", "backend", "compliance", "devops", "research", "mobile")]
     [string]$TaskCategory,
 
-    [ValidateSet("global", "example_saas_backend", "example_llm_router", "example_web_audit", "example_mobile_suite", "Antigavity_Projects")]
+    [ValidateSet("global", "example_saas_backend", "example_llm_router", "example_web_audit", "example_mobile_suite", "example_autonomous_agent")]
     [string]$Project = "global",
 
     [string]$ProjectPath = "",
@@ -225,6 +225,64 @@ function Get-RepoMapValue {
     }
 
     return [string]$property.Value
+}
+
+function Convert-ToPublicDisplayPath {
+    param(
+        [AllowNull()]
+        [string]$Path,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+
+        [string]$ExternalBasePath = "",
+
+        [string]$ExternalPlaceholder = "<external-path>"
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $null
+    }
+
+    $candidate = if (Test-Path -LiteralPath $Path) {
+        (Resolve-Path -LiteralPath $Path).Path
+    } else {
+        $Path
+    }
+
+    $resolvedRepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
+    if ($candidate -eq $resolvedRepoRoot) {
+        return "."
+    }
+
+    $repoPrefix = $resolvedRepoRoot.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    if ($candidate.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $candidate.Substring($repoPrefix.Length).Replace('\', '/')
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ExternalBasePath)) {
+        $resolvedExternalBase = if (Test-Path -LiteralPath $ExternalBasePath) {
+            (Resolve-Path -LiteralPath $ExternalBasePath).Path
+        } else {
+            $ExternalBasePath
+        }
+
+        if ($candidate -eq $resolvedExternalBase) {
+            return $ExternalPlaceholder
+        }
+
+        $externalPrefix = $resolvedExternalBase.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+        if ($candidate.StartsWith($externalPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $tail = $candidate.Substring($externalPrefix.Length).Replace('\', '/')
+            if ([string]::IsNullOrWhiteSpace($tail)) {
+                return $ExternalPlaceholder
+            }
+
+            return ($ExternalPlaceholder.TrimEnd('/') + "/" + $tail)
+        }
+    }
+
+    return $ExternalPlaceholder
 }
 
 function Get-EntryById {
@@ -695,23 +753,24 @@ $domainIdMap = @{
 }
 
 $projectOverlayIdMap = @{
-    example_saas_backend           = "overlay_example_saas_backend"
-    example_llm_router          = "overlay_example_llm_router"
-    example_web_audit         = "overlay_example_web_audit"
-    example_mobile_suite    = "overlay_example_mobile_suite"
+    example_saas_backend     = "overlay_example_saas_backend"
+    example_llm_router       = "overlay_example_llm_router"
+    example_web_audit        = "overlay_example_web_audit"
+    example_mobile_suite     = "overlay_example_mobile_suite"
+    example_autonomous_agent = "overlay_example_autonomous_agent"
 }
 
 $projectRepoKeyMap = @{
-    example_saas_backend            = "example_saas_backend"
-    example_llm_router           = "example_llm_router"
-    example_web_audit          = "example_web_audit"
+    example_saas_backend     = "example_saas_backend"
+    example_llm_router       = "example_llm_router"
+    example_web_audit        = "example_web_audit"
     example_mobile_suite     = "example_mobile_suite"
-    Antigavity_Projects = "antigavity_projects"
+    example_autonomous_agent = "example_autonomous_agent"
 }
 
 $taskOverlayAliasMap = @{
-    "frontend-professionalism"           = "task_frontend_professionalism"
-    "example_saas_backend-frontend-professionalism"  = "task_example_saas_backend_frontend_professionalism"
+    "frontend-professionalism"                    = "task_frontend_professionalism"
+    "example-saas-backend-frontend-professionalism" = "task_example_saas_backend_frontend_professionalism"
 }
 
 $selectedCodexAdapterName = switch ($CodexAdapter) {
@@ -884,7 +943,7 @@ foreach ($entry in $baseEntries) {
         Layer = $entry.Layer
         LoadPosition = $entry.LoadPosition
         RelativePath = $entry.Path
-        FullPath = Join-Path $Root $entry.Path
+        FullPath = $entry.Path
         OrderIndex = $order++
     })
 }
@@ -898,7 +957,7 @@ if ($Project -ne "global") {
             Layer = $entry.Layer
             LoadPosition = $entry.LoadPosition
             RelativePath = $entry.Path
-            FullPath = Join-Path $Root $entry.Path
+            FullPath = $entry.Path
             OrderIndex = $order++
         })
     }
@@ -917,7 +976,7 @@ foreach ($overlayId in $selectedTaskOverlayIds) {
         Layer = $entry.Layer
         LoadPosition = $entry.LoadPosition
         RelativePath = $entry.Path
-        FullPath = Join-Path $Root $entry.Path
+        FullPath = $entry.Path
         OrderIndex = $order++
     })
 }
@@ -930,7 +989,7 @@ switch ($PipelineMode) {
             Layer = $entry.Layer
             LoadPosition = $entry.LoadPosition
             RelativePath = $entry.Path
-            FullPath = Join-Path $Root $entry.Path
+            FullPath = $entry.Path
             OrderIndex = $order++
         })
     }
@@ -942,7 +1001,7 @@ switch ($PipelineMode) {
                 Layer = $entry.Layer
                 LoadPosition = $entry.LoadPosition
                 RelativePath = $entry.Path
-                FullPath = Join-Path $Root $entry.Path
+                FullPath = $entry.Path
                 OrderIndex = $order++
             })
         }
@@ -978,11 +1037,11 @@ if (-not [string]::IsNullOrWhiteSpace($ProjectPath)) {
         $resolvedProjectPath = (Resolve-Path $mappedProjectPath).Path
     } else {
         $legacyFamilyMap = @{
-            example_saas_backend            = "Project_SaaS"
-            example_llm_router           = "Project_SaaS"
-            example_web_audit          = "Project_SaaS"
+            example_saas_backend     = ""
+            example_llm_router       = ""
+            example_web_audit        = ""
             example_mobile_suite     = ""
-            Antigavity_Projects = ""
+            example_autonomous_agent = ""
         }
 
         $family = $legacyFamilyMap[$Project]
@@ -1026,18 +1085,18 @@ $compactKickoffActive = (
 
 $kickoffPrompt = if ($compactKickoffActive) {
     if ($repoLocalSystemPresent) {
-        "Read C:\Workspace\Babel-private\BABEL_BIBLE.md, then this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM before planning or coding."
+        "Read BABEL_BIBLE.md, then this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM before planning or coding."
     } elseif ($repoContextFiles.Count -gt 0) {
-        "Read C:\Workspace\Babel-private\BABEL_BIBLE.md, then this repo's PROJECT_CONTEXT.md before planning or coding."
+        "Read BABEL_BIBLE.md, then this repo's PROJECT_CONTEXT.md before planning or coding."
     } else {
-        "Read C:\Workspace\Babel-private\BABEL_BIBLE.md before planning or coding."
+        "Read BABEL_BIBLE.md before planning or coding."
     }
 } elseif ($repoLocalSystemPresent) {
-    "Read Babel's C:\Workspace\Babel-private\BABEL_BIBLE.md first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM/README_FOR_HUMANS_AND_LLMS.md before planning or coding."
+    "Read Babel's BABEL_BIBLE.md first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM/README_FOR_HUMANS_AND_LLMS.md before planning or coding."
 } elseif ($repoContextFiles.Count -gt 0) {
-    "Read Babel's C:\Workspace\Babel-private\BABEL_BIBLE.md first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md before planning or coding."
+    "Read Babel's BABEL_BIBLE.md first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md before planning or coding."
 } else {
-    "Read Babel's C:\Workspace\Babel-private\BABEL_BIBLE.md first and use Babel to select the right instruction stack for this task before planning or coding."
+    "Read Babel's BABEL_BIBLE.md first and use Babel to select the right instruction stack for this task before planning or coding."
 }
 
 $verificationHints = @(Normalize-StringArray -Items $activeVerificationHints.ToArray())
@@ -1045,11 +1104,18 @@ if ($verificationHints.Count -gt 0) {
     $kickoffPrompt = $kickoffPrompt + " " + (($verificationHints | ForEach-Object { [string]$_ }) -join " ")
 }
 
+$displayProjectPath = Convert-ToPublicDisplayPath -Path $resolvedProjectPath -RepoRoot $Root -ExternalBasePath $resolvedProjectPath -ExternalPlaceholder "<external-project-root>"
+$displayRepoContextFiles = @(
+    foreach ($path in $repoContextFiles) {
+        Convert-ToPublicDisplayPath -Path ([string]$path) -RepoRoot $Root -ExternalBasePath $resolvedProjectPath -ExternalPlaceholder "<external-project-root>"
+    }
+) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
 $result = [PSCustomObject]@{
-    BabelRoot = $Root
-    LocalLearningRoot = $LocalLearningRoot
+    BabelRoot = "."
+    LocalLearningRoot = "runs/local-learning"
     Project = $Project
-    ProjectPath = $resolvedProjectPath
+    ProjectPath = $displayProjectPath
     TaskCategory = $TaskCategory
     Model = $Model
     ClientSurface = $resolvedClientSurface
@@ -1064,13 +1130,13 @@ $result = [PSCustomObject]@{
     SelectedCodexAdapter = if ($Model -eq "codex") { $selectedCodexAdapterName } else { $null }
     RecommendedTaskOverlayIds = @($selectedTaskOverlayIds)
     RecommendedSkillIds = @($selectedCognitionSkillIds)
-    BabelEntrypoint = Join-Path $Root "BABEL_BIBLE.md"
+    BabelEntrypoint = "BABEL_BIBLE.md"
     BabelReferenceFiles = @(
-        Join-Path $Root "PROJECT_CONTEXT.md"
-        Join-Path $Root "prompt_catalog.yaml"
+        "PROJECT_CONTEXT.md"
+        "prompt_catalog.yaml"
     )
     SelectedStack = $selectedEntries
-    RepoContextFiles = $repoContextFiles
+    RepoContextFiles = $displayRepoContextFiles
     RepoLocalSystemPresent = $repoLocalSystemPresent
     PrecedenceRules = @(
         "Babel chooses the cross-project stack and operating mode."

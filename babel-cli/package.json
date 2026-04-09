@@ -8,6 +8,7 @@
     "babel": "bin/babel.js"
   },
   "scripts": {
+    "audit:token-usage": "tsx --no-warnings=ExperimentalWarning scripts/audit_token_usage.ts",
     "build": "npm run clean:dist && tsc",
     "clean:dist": "node scripts/clean_dist.mjs",
     "check:dist": "node scripts/check_dist_clean.mjs",
@@ -28,19 +29,20 @@
     "prepublishOnly": "npm run check:source-provenance && npm run check:dist"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.37.0",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.213.0",
     "@opentelemetry/resources": "^2.6.0",
     "@opentelemetry/sdk-trace-base": "^2.6.0",
     "@opentelemetry/sdk-trace-node": "^2.6.0",
     "@opentelemetry/semantic-conventions": "^1.40.0",
-    "@anthropic-ai/sdk": "^0.37.0",
     "commander": "^12.1.0",
     "groq-sdk": "^0.37.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "js-tiktoken": "^1.0.21",
     "tsx": "^4.19.0",
     "typescript": "^5.5.4"
   },

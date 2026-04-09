@@ -1,7 +1,7 @@
 version: 3
 catalog_scope: babel_prompt_library
 maintainer: control_plane
-root: "C:\\Workspace\\Babel-private"
+root: "."
 last_updated: "2026-04-03"
 # Pass 1 additions (2026-03-28): domain_python_backend, skill_deno_edge_functions, skill_sse_streaming
 # Pass 2 additions (2026-03-28): domain_llm_router, skill_prisma_orm, skill_stripe_webhook
@@ -1813,7 +1813,7 @@ entries:
     path: 05_Project_Overlays/Example-Autonomous-Agent-Context.md
     description: >
       Project context for example_autonomous_agent autonomous agent. Covers runtime surface
-      (Step-3.5-Flash/DeepInfra, Slack async, C:\Workspace\ execution authority),
+      (Step-3.5-Flash/DeepInfra, Slack async, local workspace execution authority),
       agent IDs (main, antigravity), and hard constraints: governance triad always
       required, Babel mandatory for dev tasks, AGENTS.md immutable, startup
       acknowledgment required, absent-user protocol always active.

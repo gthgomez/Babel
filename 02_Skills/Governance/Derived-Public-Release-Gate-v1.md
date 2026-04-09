@@ -31,7 +31,7 @@ This skill forces the model to step back and answer:
 Before touching GitHub:
 
 1. identify the target repo as `public_derived`
-2. classify the touched content with `docs/SURFACE_CLASSIFICATION_GATE.md`
+2. classify the touched content with the repo's surface-classification workflow
 3. split it into:
    - `public_safe`
    - `sanitize_and_export`
@@ -43,19 +43,13 @@ If any touched item is `private_only`, it must not ship to the public repo.
 
 ## Step 2 — ROUTE THROUGH THE DERIVED-REPO WORKFLOW
 
-For Babel, load and follow:
-
-- `REPO_ROLE.md`
-- `docs/PUBLIC_EXPORT_REPO_ROLE.md`
-- `docs/PRIVATE_TO_PUBLIC_WORKFLOW.md`
-- `docs/PUBLIC_REPO_SANITIZATION_RULES.md`
-- `docs/PUBLIC_EXPORT_CHECKLIST.md`
+For Babel, load and follow the paired-repo workflow, release checklist, and public validation path for the current repo set.
 
 If the task is “publish Babel,” the default assumption is:
 
-- author in `Babel-private`
+- author in the private source repo
 - export or sanitize intentionally
-- validate in `Babel-public`
+- validate in the public repo
 - push only the derived public tree
 
 ---

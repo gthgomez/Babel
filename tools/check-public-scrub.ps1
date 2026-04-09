@@ -25,8 +25,11 @@ function Get-PublicScrubFiles {
 
 # Run this in Babel-public before release. It is expected to fail in Babel-private.
 $patterns = @(
+  'Babel-private',
   'C:\\Users\\',
   'C:/Users/',
+  'C:\\Workspace\\',
+  'C:/Workspace/',
   '\.supabase\.co',
   'ExactUploadFixer',
   'PDFFixerPro',

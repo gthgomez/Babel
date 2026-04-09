@@ -57,13 +57,12 @@ The full multi-agent pipeline harness is present but is an advanced surface, not
 - **Router Contract:** `OLS-v9-Orchestrator.md` defines the public typed lane.
 - **Compiler Contract:** the public resolver expands domain default skills, expands skill dependencies, checks conflicts, and emits the ordered manifest preview.
 - **Behavioral Contract:** all assembled stacks include `01_Behavioral_OS`.
-- **Public Safety Contract:** `docs/PUBLIC_REPO_SANITIZATION_RULES.md` and `tools/check-public-scrub.ps1` define the public boundary gate.
+- **Release Contract:** `tools/validate-public-release.ps1` is the public integrity gate for this repo.
 
 ## First-Success Surfaces
 
 - `tools/validate-public-release.ps1`
 - `tools/resolve-local-stack.ps1`
-- `babel-cli/scripts/preview_manifest.ts`
 - `babel mcp`
 - `examples/manifest-previews/*.json`
 

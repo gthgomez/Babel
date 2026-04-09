@@ -10,7 +10,7 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 # Skill: Public Export Hardening (v1.0)
 **Category:** Governance
 **Status:** Active
-**Activation:** Load when preparing `Babel-private` content for `Babel-public` or any similar private-to-public repo export, especially when the task includes sanitization, example-overlay replacement, public scrub validation, or release-readiness review.
+**Activation:** Load when preparing content from a private source repo for a derived public repo, especially when the task includes sanitization, example-overlay replacement, public scrub validation, or release-readiness review.
 
 ---
 
@@ -33,14 +33,7 @@ It assumes repo targeting has already been checked. If the task is ambiguous abo
 
 ## Read This First
 
-Load only the docs needed for the current step:
-
-- `REPO_ROLE.md` — private source-of-truth role
-- `docs/PUBLIC_EXPORT_REPO_ROLE.md` — derived public repo role
-- `docs/PRIVATE_TO_PUBLIC_WORKFLOW.md` — overall export flow
-- `docs/PUBLIC_EXPORT_CHECKLIST.md` — release checklist
-- `docs/PUBLIC_REPO_SANITIZATION_RULES.md` — what must never leak
-- `docs/SURFACE_CLASSIFICATION_GATE.md` — surface classification before editing
+Load only the repo-role, export-workflow, release-checklist, and surface-classification docs needed for the current step.
 
 Use these tools, not ad hoc copy/scrub flows:
 
@@ -73,7 +66,7 @@ Preferred path:
 3. let the export pipeline perform the replacement rules
 4. harden the public tree afterward only where needed
 
-**Rule:** Do not use sanitization rules as permission to rewrite `Babel-private` into a pseudo-public repo.
+**Rule:** Do not use sanitization rules as permission to rewrite `private source repo` into a pseudo-public repo.
 
 ### Step 3 — REVIEW THE HIGH-RISK PUBLIC SURFACES
 
@@ -91,7 +84,7 @@ Minimum validation:
 
 1. `tools/check-public-scrub.ps1`
 2. `tools/validate-public-release.ps1`
-3. deterministic preview checks from `docs/PUBLIC_EXPORT_CHECKLIST.md`
+3. deterministic preview checks against the repo's checked-in public manifest examples
 
 If validation is not run, the export is not release-ready.
 
@@ -99,7 +92,7 @@ If validation is not run, the export is not release-ready.
 
 ## Hard Rules
 
-1. Never mass-scrub `Babel-private` to make it publishable.
+1. Never mass-scrub the private source repo to make it publishable.
 2. Never publish private overlays, local paths, live deployment URLs, or private project/product identifiers.
 3. Never treat the public export as clean without running scrub and release validation in the exported tree.
 4. Never keep private IDs in `prompt_catalog.yaml` examples or public manifest previews.
