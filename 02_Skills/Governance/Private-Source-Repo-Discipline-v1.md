@@ -41,11 +41,7 @@ Before any commit or push, write a `repo_role_map` with:
    - `all_working_changes`
    - `sanitized_export_only`
 
-If the task touches Babel specifically, start by reading:
-
-- `REPO_ROLE.md`
-- `docs/PUBLIC_EXPORT_REPO_ROLE.md`
-- `docs/PRIVATE_TO_PUBLIC_WORKFLOW.md`
+If the task touches Babel specifically, start by reading the repo-role and paired-repo workflow docs for the current private/public repo set.
 
 If those files and the git remotes disagree, stop and treat it as a repo-configuration bug.
 

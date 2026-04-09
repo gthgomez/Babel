@@ -25,8 +25,11 @@ function Get-PublicScrubFiles {
 
 # Run this in Babel-public before release. It is expected to fail in [REDACTED_PRIVATE_IDENTIFIER].
 $patterns = @(
+  '[REDACTED_PRIVATE_IDENTIFIER]',
   'C:\\Users\\',
   'C:/Users/',
+  'C:\\Workspace\\',
+  'C:/Workspace/',
   '\.supabase\.co',
   '[REDACTED_PRIVATE_IDENTIFIER]',
   '[REDACTED_PRIVATE_IDENTIFIER]',
