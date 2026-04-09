@@ -49,7 +49,7 @@ The resolver uses it to:
 
 The public helper flow is intentionally catalog-driven:
 
-1. choose a task category, project, model, and optional requested skills
+1. choose a task category, project, model, and pipeline mode
 2. build a typed `instruction_stack`
 3. apply the default `resolution_policy`
 4. resolve the final ordered manifest from the catalog
@@ -57,7 +57,7 @@ The public helper flow is intentionally catalog-driven:
 The easiest public entrypoints are:
 
 - `pwsh -File tools\resolve-local-stack.ps1`
-- `npm run preview:manifest -- ...`
+- `pwsh -File tools\validate-public-release.ps1`
 - `babel mcp`
 
 ## The v9 Lane
@@ -80,7 +80,7 @@ Public proof:
 - the mobile skills are cataloged
 - `overlay_example_mobile_suite` is cataloged
 - `tools/resolve-local-stack.ps1` supports `-TaskCategory mobile -Project example_mobile_suite`
-- `examples/manifest-previews/mobile-pdf-direct.json` proves dependency expansion on the mobile lane
+- `examples/manifest-previews/mobile-direct.json` proves the mobile lane resolves end to end
 
 ## Read-Only MCP Surface
 
@@ -110,8 +110,7 @@ That surface should be described as optional/advanced in public docs, not as the
 ## Public Proof Artifacts
 
 - [examples/manifest-previews/backend-verified.json](../../examples/manifest-previews/backend-verified.json)
-- [examples/manifest-previews/mobile-pdf-direct.json](../../examples/manifest-previews/mobile-pdf-direct.json)
+- [examples/manifest-previews/mobile-direct.json](../../examples/manifest-previews/mobile-direct.json)
 - `npm run test:resolver`
-- `npm run test:manifest-preview`
 - `npm run test:mcp-adapter`
 - `npm run test:orchestrator-routing`

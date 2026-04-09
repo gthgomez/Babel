@@ -63,7 +63,7 @@ For a deterministic no-credentials proof path, prefer:
 
 - `pwsh -File tools\validate-public-release.ps1`
 - `pwsh -File tools\resolve-local-stack.ps1 ...`
-- `npm run preview:manifest -- ...`
+- `babel mcp`
 
 ## Local Run Discipline
 

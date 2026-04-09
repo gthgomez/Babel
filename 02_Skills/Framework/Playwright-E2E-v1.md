@@ -275,4 +275,3 @@ E2E_EMAIL=test@example.com E2E_PASSWORD=secret npx playwright test
 | Screenshots in `tests/` directory | Binary files accidentally committed |
 | Missing `webServer` block | Tests run against stale or absent server |
 | No `test.skip` for credential-gated tests | Hard failure instead of graceful skip in environments without secrets |
-

@@ -89,6 +89,22 @@ fun SearchBar(query: String, onQueryChange: (String) -> Unit) {
 whether a tooltip is showing) does not need to be hoisted. Hoist only when the parent or
 a sibling needs to read or change the state.
 
+### When the single `AppUiState` pattern breaks down
+
+The single `AppUiState` data class + `StateFlow` + enum screen pattern works well for small
+utility apps. Watch for these signals that it is time to split:
+
+| Signal | What it means |
+|--------|--------------|
+| One screen change invalidates unrelated screens | State is too wide — split per-screen slices |
+| `state.copy()` blocks are long and touch unrelated fields | Reducer scope is too broad |
+| `derivedStateOf {}` used frequently just to throttle recomposition | State changes at different frequencies; split by change rate |
+| "UI-only" fields (dialog visibility, focus state) accumulating in top-level state | Local state leaking into global state; move it back to Composable-local |
+
+**Rule:** Keep a root state only for truly shared app-level concerns (screen enum, billing
+entitlement, processing result). Give each screen its own state slice when its fields
+change independently of the others.
+
 ---
 
 ## Step 3 — SIDE EFFECTS
@@ -227,7 +243,29 @@ Unnecessary recomposition is the most common Compose performance problem in non-
 
 ---
 
-## Step 7 — COMPOSE UI TESTING
+## Step 7 — ICONS: REMOVE `material-icons-extended`
+
+`material-icons-extended` is a large artifact (~5 MB added to APK). The entire icon set is
+included even if only a few icons are used. For utility apps, remove it.
+
+**Recommended approach for 2026:**
+
+1. Remove `implementation(libs.androidx.material.icons.extended)` from `build.gradle.kts`
+2. For each icon previously used from the extended set, import it as a vector drawable:
+   - Android Studio → New → Vector Asset → select the icon
+   - Or download SVG from fonts.google.com/icons (Material Symbols) and import
+3. Call via `Icon(painterResource(R.drawable.ic_name), contentDescription = "...")`
+
+**Going forward:** Use **Material Symbols** (fonts.google.com/icons) for any new icons.
+They support variable font axes (weight, grade, optical size) and auto-mirroring via the
+`autoMirror` parameter — more capable than the old filled/outlined icon set.
+
+**Exception:** If the app genuinely uses 30+ icons from the extended set, ProGuard shrinking
+reduces the impact. Keep the dependency only in that case and verify with APK Analyzer.
+
+---
+
+## Step 8 — COMPOSE UI TESTING
 
 The billing paywall and screen transitions should have automated Compose UI test coverage.
 

@@ -44,15 +44,13 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
   -TaskCategory mobile `
   -Project example_mobile_suite `
   -Model codex `
-  -SkillIds skill_android_pdf_processing `
   -Format json
 ```
 
 Reference output:
 
-- `examples/manifest-previews/mobile-pdf-direct.json`
+- `examples/manifest-previews/mobile-direct.json`
 
 ## Takeaway
 
 Babel does not make the model smarter by magic. It makes the task boundaries, constraints, and reusable protocols explicit so the model is far more likely to behave correctly on the first pass.
-

@@ -60,6 +60,10 @@ function getExecutor(): SafeExecutor {
 
 export const ToolCallRequestSchema = z.discriminatedUnion('tool', [
   z.object({
+    tool: z.literal('directory_list'),
+    path: z.string().min(1),
+  }),
+  z.object({
     tool: z.literal('file_read'),
     path: z.string().min(1),
   }),
@@ -104,6 +108,13 @@ export const ToolCallRequestSchema = z.discriminatedUnion('tool', [
 export type ToolCallRequest = z.infer<typeof ToolCallRequestSchema>;
 
 // ─── Individual tool handlers ─────────────────────────────────────────────────
+
+function handleDirectoryList(
+  req: Extract<ToolCallRequest, { tool: 'directory_list' }>,
+): ToolResult {
+  // directory_list is always live — listing is non-destructive.
+  return getExecutor().listDirectory(req.path);
+}
 
 function handleFileRead(
   req: Extract<ToolCallRequest, { tool: 'file_read' }>,
@@ -171,6 +182,40 @@ function handleTestRun(
 /** Hard limit (ms) for a single MCP server round-trip. */
 const MCP_TIMEOUT_MS = 15_000;
 
+function buildMcpLifecycle(
+  server: string,
+  phase: 'server_lookup' | 'spawn' | 'write_request' | 'await_response' | 'response_parse' | 'complete',
+  outcome: 'success' | 'failure',
+  reasonCode: string | null = null,
+  evidence: string[] | null = null,
+): NonNullable<ToolResult['mcp_lifecycle']> {
+  return {
+    phase,
+    outcome,
+    reason_code: reasonCode,
+    server,
+    evidence,
+  };
+}
+
+function buildMcpResult(
+  server: string,
+  phase: 'server_lookup' | 'spawn' | 'write_request' | 'await_response' | 'response_parse' | 'complete',
+  outcome: 'success' | 'failure',
+  exitCode: number,
+  stdout: string,
+  stderr: string,
+  reasonCode: string | null = null,
+  evidence: string[] | null = null,
+): ToolResult {
+  return {
+    exit_code: exitCode,
+    stdout,
+    stderr,
+    mcp_lifecycle: buildMcpLifecycle(server, phase, outcome, reasonCode, evidence),
+  };
+}
+
 /**
  * Spawns the configured MCP server as a child process, sends a single
  * JSON-RPC 2.0 `tools/call` request over its stdin, and awaits the
@@ -197,11 +242,16 @@ async function handleMcpRequest(
   const config = MCP_SERVERS[req.server];
   if (config === undefined) {
     const available = Object.keys(MCP_SERVERS).join(', ');
-    return {
-      exit_code: 1,
-      stdout:    '',
-      stderr:    `[MCP_ERROR] Unknown server '${req.server}'. Available: ${available}`,
-    };
+    return buildMcpResult(
+      req.server,
+      'server_lookup',
+      'failure',
+      1,
+      '',
+      `[MCP_ERROR] Unknown server '${req.server}'. Available: ${available}`,
+      'unknown_server',
+      [`requested_server:${req.server}`, `available_servers:${available}`],
+    );
   }
 
   console.log(`  [MCP] mcp_request → server="${req.server}" query="${req.query}"`);
@@ -241,15 +291,19 @@ async function handleMcpRequest(
 
     // ── 4. Hard timeout ────────────────────────────────────────────────────
     const timeoutHandle = setTimeout(() => {
-      settle({
-        exit_code: 1,
-        stdout:    '',
-        stderr:
-          `[MCP_TIMEOUT] Server '${req.server}' did not respond within ` +
-          `${MCP_TIMEOUT_MS / 1000}s. The server may require a JSON-RPC ` +
-          `initialization handshake (initialize/initialized) before accepting ` +
-          `tools/call — this is not yet implemented in the simplified harness.`,
-      });
+      settle(buildMcpResult(
+        req.server,
+        'await_response',
+        'failure',
+        1,
+        '',
+        `[MCP_TIMEOUT] Server '${req.server}' did not respond within ` +
+        `${MCP_TIMEOUT_MS / 1000}s. The server may require a JSON-RPC ` +
+        `initialization handshake (initialize/initialized) before accepting ` +
+        `tools/call — this is not yet implemented in the simplified harness.`,
+        'response_timeout',
+        [`timeout_ms:${MCP_TIMEOUT_MS}`],
+      ));
     }, MCP_TIMEOUT_MS);
 
     // ── 5. Collect stdout; scan line-by-line for our JSON-RPC response ─────
@@ -286,50 +340,68 @@ async function handleMcpRequest(
         if ('error' in response) {
           // Surface the MCP server's JSON-RPC error verbatim so the SWE Agent
           // can see exactly which tool name or argument schema was wrong.
-          settle({
-            exit_code: 1,
-            stdout:    '',
-            stderr:    JSON.stringify({
+          settle(buildMcpResult(
+            req.server,
+            'response_parse',
+            'failure',
+            1,
+            '',
+            JSON.stringify({
               source: 'mcp_rpc_error',
               server: req.server,
               error:  response['error'],
             }),
-          });
+            'rpc_error',
+            [`rpc_error_code:${String((response['error'] as Record<string, unknown> | undefined)?.['code'] ?? 'unknown')}`],
+          ));
         } else {
-          settle({
-            exit_code: 0,
-            stdout:    JSON.stringify({
+          settle(buildMcpResult(
+            req.server,
+            'complete',
+            'success',
+            0,
+            JSON.stringify({
               status: 'success',
               server: req.server,
               result: response['result'] ?? null,
             }),
-            stderr: '',
-          });
+            '',
+            'response_received',
+            [`command:${config.command}`],
+          ));
         }
       }
     });
 
     // ── 6. Spawn error (binary not on PATH, permissions, etc.) ─────────────
     child.on('error', (err: Error) => {
-      settle({
-        exit_code: 1,
-        stdout:    '',
-        stderr:
-          `[MCP_SPAWN_ERROR] Failed to start '${config.command}' for server ` +
-          `'${req.server}': ${err.message}`,
-      });
+      settle(buildMcpResult(
+        req.server,
+        'spawn',
+        'failure',
+        1,
+        '',
+        `[MCP_SPAWN_ERROR] Failed to start '${config.command}' for server ` +
+        `'${req.server}': ${err.message}`,
+        'spawn_error',
+        [`command:${config.command}`],
+      ));
     });
 
     // ── 7. Process closed before a response arrived ────────────────────────
     child.on('close', (code: number | null) => {
       if (!settled) {
-        settle({
-          exit_code: code ?? 1,
-          stdout:    '',
-          stderr:
-            `[MCP_CLOSED] Server '${req.server}' exited (code ${code ?? 'null'}) ` +
-            `before returning a response.`,
-        });
+        settle(buildMcpResult(
+          req.server,
+          'await_response',
+          'failure',
+          code ?? 1,
+          '',
+          `[MCP_CLOSED] Server '${req.server}' exited (code ${code ?? 'null'}) ` +
+          `before returning a response.`,
+          'closed_before_response',
+          [`exit_code:${code ?? 'null'}`],
+        ));
       }
     });
 
@@ -338,13 +410,17 @@ async function handleMcpRequest(
     if (child.stdin) {
       child.stdin.write(rpcPayload, 'utf8', (err?: Error | null) => {
         if (err && !settled) {
-          settle({
-            exit_code: 1,
-            stdout:    '',
-            stderr:
-              `[MCP_WRITE_ERROR] Could not write to '${req.server}' stdin: ` +
-              `${err.message}`,
-          });
+          settle(buildMcpResult(
+            req.server,
+            'write_request',
+            'failure',
+            1,
+            '',
+            `[MCP_WRITE_ERROR] Could not write to '${req.server}' stdin: ` +
+            `${err.message}`,
+            'write_error',
+            [`command:${config.command}`],
+          ));
         }
       });
       // Signal EOF so servers that read until stdin closes know we're done.
@@ -617,6 +693,7 @@ function handleMemoryQuery(
  */
 export async function executeTool(req: ToolCallRequest): Promise<ToolResult> {
   switch (req.tool) {
+    case 'directory_list': return handleDirectoryList(req);
     case 'file_read':   return handleFileRead(req);
     case 'file_write':  return handleFileWrite(req);
     case 'shell_exec':  return handleShellExec(req);

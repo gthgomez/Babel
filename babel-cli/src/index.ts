@@ -24,6 +24,8 @@
 import { Command } from 'commander';
 import { runBabelPipeline, resumeManualBridge } from './pipeline.js';
 import { runBabelMcpServer } from './mcp/server.js';
+import { formatDoctorHuman, runDoctor, type DoctorScope } from './doctor.js';
+import { MODEL_POLICY_TIERS, resolveFamilyModelPolicy } from './modelPolicy.js';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import type { Dirent } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -39,18 +41,93 @@ function printBanner(): void {
   console.log('');
 }
 
+const TOP_LEVEL_HELP_TEXT = `
+Examples:
+  $ babel run "Fix webhook retry handling" --project example_saas_backend
+  $ babel doctor --scope repos --json
+  $ babel plan example_llm_router "Prepare rollout plan"
+  $ babel resume --project example_saas_backend --plan clipboard
+  $ babel example_saas_backend "Investigate dashboard latency"
+
+Command Guide:
+  Everyday:          run, doctor
+  Manual Bridge:     plan, resume, apply (legacy alias)
+  Diagnostics:       smoke, test (legacy alias)
+  Advanced/Internal: mcp
+
+Notes:
+  - Shorthand is supported: babel <Project> "<task...>" maps to babel run --project <Project> "<task...>"
+  - Use "babel <command> --help" for command-specific examples and caveats.
+`;
+
 // ─── CLI definition ───────────────────────────────────────────────────────────
 
 const program = new Command();
 
 program
   .name('babel')
-  .description('Babel Multi-Agent OS — local runtime harness')
-  .version('1.0.0');
+  .description('Babel Multi-Agent OS — local runtime harness for multi-repo workspaces')
+  .version('1.0.0')
+  .addHelpText('after', TOP_LEVEL_HELP_TEXT);
+
+program
+  .command('doctor')
+  .description('Everyday diagnostic: run Babel workspace health and integrity checks')
+  .option('--json', 'Emit structured JSON only')
+  .option('--strict', 'Treat warnings as fatal in the overall result')
+  .option('--verbose', 'Include additional diagnostic details')
+  .option('--scope <scope>', 'Check scope: all | workspace | repos | export', 'all')
+  .addHelpText('after', `
+Examples:
+  $ babel doctor
+  $ babel doctor --scope repos
+  $ babel doctor --scope export --strict
+  $ babel doctor --json
+`)
+  .action(async (options: { json?: boolean; strict?: boolean; verbose?: boolean; scope?: string }) => {
+    const scope = (options.scope ?? 'all') as DoctorScope;
+    if (!['all', 'workspace', 'repos', 'export'].includes(scope)) {
+      console.error(`[babel] Invalid doctor scope "${options.scope}". Valid values: all, workspace, repos, export`);
+      process.exit(1);
+    }
+
+    try {
+      const result = await runDoctor({
+        babelRoot: BABEL_ROOT,
+        strict: options.strict === true,
+        verbose: options.verbose === true,
+        scope,
+      });
+
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      } else {
+        console.log(formatDoctorHuman(result, options.verbose === true));
+      }
+
+      if (result.status === 'fail') {
+        process.exit(1);
+      }
+    } catch (err: unknown) {
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify({
+          status: 'fail',
+          error: err instanceof Error ? err.message : String(err),
+        }, null, 2)}\n`);
+      } else {
+        console.error(`[babel] Doctor fatal: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      process.exit(1);
+    }
+  });
 
 program
   .command('mcp')
-  .description('Run the read-only Babel MCP control-plane server over stdio')
+  .description('Advanced/internal: run the read-only Babel MCP control-plane server over stdio')
+  .addHelpText('after', `
+Notes:
+  - This is an integration surface for MCP clients, not the normal day-to-day Babel task runner.
+`)
   .action(async () => {
     try {
       await runBabelMcpServer();
@@ -66,9 +143,24 @@ const VALID_MODES   = ['direct', 'verified', 'autonomous', 'manual'] as const;
 type ValidMode      = typeof VALID_MODES[number];
 
 const VALID_MODELS  = ['Claude', 'Codex', 'Gemini'] as const;
+const VALID_MODEL_TIERS = [...MODEL_POLICY_TIERS] as const;
 type ValidModel     = typeof VALID_MODELS[number];
 
-const VALID_PROJECTS = ['example_saas_backend', 'example_llm_router', 'example_web_audit'] as const;
+function normalizeModelName(value: string): ValidModel | undefined {
+  const normalized = value.trim().toLowerCase();
+  switch (normalized) {
+    case 'claude':
+      return 'Claude';
+    case 'codex':
+      return 'Codex';
+    case 'gemini':
+      return 'Gemini';
+    default:
+      return undefined;
+  }
+}
+
+const VALID_PROJECTS = ['example_saas_backend', 'example_llm_router', 'example_web_audit', 'example_mobile_suite', 'Antigavity_Projects'] as const;
 type ValidProject = typeof VALID_PROJECTS[number];
 const VALID_ORCHESTRATORS = ['v8', 'v9'] as const;
 type ValidOrchestrator = typeof VALID_ORCHESTRATORS[number];
@@ -82,6 +174,10 @@ const VALUE_OPTIONS = new Set([
   '-p', '--project',
   '--mode',
   '-m', '--model',
+  '--model-tier',
+  '--session-id',
+  '--session-start-path',
+  '--local-learning-root',
   '--orchestrator',
 ]);
 
@@ -91,6 +187,18 @@ function isTopLevelMetaToken(token: string): boolean {
     token === '--help' ||
     token === '-V' ||
     token === '--version';
+}
+
+function preflightRequestedModelPolicy(
+  model: ValidModel,
+  options: { modelTier?: string; allowExpensive?: boolean },
+) {
+  return resolveFamilyModelPolicy({
+    family: model,
+    ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
+    allowExpensive: options.allowExpensive === true,
+    babelRoot: BABEL_ROOT,
+  });
 }
 
 function rewriteRunArgs(argsAfterRun: string[]): string[] {
@@ -346,6 +454,48 @@ function extractHaltTagFromExecutionReport(runDir: string): string {
   }
 }
 
+function extractStructuredDenialFromExecutionReport(
+  runDir: string,
+): Record<string, unknown> | null {
+  const reportPath = join(runDir, '04_execution_report.json');
+  try {
+    const report = JSON.parse(readFileSync(reportPath, 'utf-8')) as Record<string, unknown>;
+    const toolCallLog = Array.isArray(report['tool_call_log'])
+      ? report['tool_call_log'] as Array<Record<string, unknown>>
+      : [];
+    const lastToolOutput = toolCallLog.length > 0 ? toolCallLog[toolCallLog.length - 1] : null;
+    const denial = lastToolOutput && typeof lastToolOutput === 'object'
+      ? lastToolOutput['denial']
+      : null;
+    return denial && typeof denial === 'object'
+      ? denial as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractMcpLifecycleFromExecutionReport(
+  runDir: string,
+): Record<string, unknown> | null {
+  const reportPath = join(runDir, '04_execution_report.json');
+  try {
+    const report = JSON.parse(readFileSync(reportPath, 'utf-8')) as Record<string, unknown>;
+    const toolCallLog = Array.isArray(report['tool_call_log'])
+      ? report['tool_call_log'] as Array<Record<string, unknown>>
+      : [];
+    const lastToolOutput = toolCallLog.length > 0 ? toolCallLog[toolCallLog.length - 1] : null;
+    const lifecycle = lastToolOutput && typeof lastToolOutput === 'object'
+      ? lastToolOutput['mcp_lifecycle']
+      : null;
+    return lifecycle && typeof lifecycle === 'object'
+      ? lifecycle as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function runManualBridgeStart(
   task: string,
   options: {
@@ -355,12 +505,18 @@ async function runManualBridgeStart(
     sessionStartPath?: string;
     localLearningRoot?: string;
     orchestratorVersion?: string;
+    modelTier?: string;
+    allowExpensive?: boolean;
+    showModelPolicy?: boolean;
   },
 ): Promise<void> {
   const result = await withMutedConsole(() => runBabelPipeline(task, {
     ...(options.project !== undefined ? { project: options.project } : {}),
     ...(options.model !== undefined ? { modelOverride: options.model } : {}),
     ...(options.orchestratorVersion !== undefined ? { orchestratorVersion: options.orchestratorVersion as ValidOrchestrator } : {}),
+    ...(options.modelTier !== undefined ? { modelTier: options.modelTier } : {}),
+    ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+    ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
     ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
     ...(options.sessionStartPath !== undefined ? { sessionStartPath: options.sessionStartPath } : {}),
     ...(options.localLearningRoot !== undefined ? { localLearningRoot: options.localLearningRoot } : {}),
@@ -383,6 +539,10 @@ async function runManualBridgeStart(
       'Or paste via stdin: babel apply --plan -',
     ],
   };
+  if (options.showModelPolicy === true && result.modelPolicy) {
+    payload['model_policy'] = result.modelPolicy;
+  }
+
   if (clipboard.ok) {
     payload['clipboard'] = 'COPIED';
   } else {
@@ -397,6 +557,7 @@ function buildSmokeFixtures(runDir: string, projectRoot: string): SmokePlanFixtu
   const readOnlyPath = join(runDir, 'smoke_plan_read_only.json');
   const safeWritePath = join(runDir, 'smoke_plan_safe_write.json');
   const rejectionPath = join(runDir, 'smoke_plan_sandbox_rejection.json');
+  const mcpUnknownServerPath = join(runDir, 'smoke_plan_mcp_unknown_server.json');
   const readTarget = findGuaranteedReadTarget(projectRoot);
   const safeWriteTarget = '/project/babel_smoke_tmp.txt';
 
@@ -525,7 +686,7 @@ function buildSmokeFixtures(runDir: string, projectRoot: string): SmokePlanFixtu
         target: 'echo smoke-sandbox-rejection',
         rationale: 'Intentional negative test for sandbox rejection',
         reversible: true,
-        verification: 'Either QA rejects for safety OR executor halts with command rejected error',
+        verification: 'Either QA rejects for safety OR executor halts with sandbox rejection and structured denial metadata',
       },
     ],
     root_cause: 'The failure mode under test is unsafe command execution; robust behavior is explicit rejection before mutation.',
@@ -534,29 +695,77 @@ function buildSmokeFixtures(runDir: string, projectRoot: string): SmokePlanFixtu
     ],
   });
 
+  writeJsonFile(mcpUnknownServerPath, {
+    plan_version: '1.0',
+    plan_type: 'IMPLEMENTATION_PLAN',
+    task_summary: 'OBJECTIVE: Confirm manual bridge surfaces structured MCP lifecycle metadata for an unknown MCP server request.',
+    known_facts: [
+      'mcp_request is a read-only executor tool',
+      'Babel validates the MCP server name before spawning a child process',
+    ],
+    assumptions: [
+      'Executor should halt with STEP_VERIFICATION_FAIL when mcp_request targets an unconfigured server',
+    ],
+    risks: [
+      {
+        risk: 'Model emits a different server name',
+        likelihood: 'medium',
+        mitigation: 'Use explicit target and verification text',
+      },
+    ],
+    minimal_action_set: [
+      {
+        step: 1,
+        description: 'Call an unconfigured MCP server to trigger lifecycle evidence',
+        tool: 'mcp_request',
+        target: 'missing-server → smoke lifecycle probe',
+        rationale: 'Intentional negative test for MCP lifecycle visibility on governed read-only requests',
+        reversible: true,
+        verification: 'Executor halts with unknown-server lifecycle metadata captured in the execution report',
+      },
+    ],
+    root_cause: 'The failure mode under test is MCP control-plane misconfiguration; robust behavior is explicit lifecycle evidence at the validation boundary.',
+    out_of_scope: [
+      'Any successful MCP request execution',
+    ],
+  });
+
   return [
     { name: 'read_only', path: readOnlyPath },
     { name: 'safe_write', path: safeWritePath },
     { name: 'sandbox_rejection', path: rejectionPath },
+    { name: 'mcp_unknown_server', path: mcpUnknownServerPath },
   ];
 }
 
 program
   .command('run')
   .argument('<task>', 'task prompt')
-  .description('Run a task through the full Babel pipeline')
+  .description('Everyday command: run a task through the full Babel pipeline')
   .option(
     '-p, --project <name>',
-    'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite)',
+    'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | Antigavity_Projects)',
   )
   .option(
     '--mode <mode>',
-    'Pipeline mode: direct | verified | autonomous | manual',
+    'Pipeline mode: direct | verified | autonomous | manual (manual emits Manual Bridge handoff JSON)',
     'verified',
   )
   .option(
     '-m, --model <model>',
-    'Override the Orchestrator and force a specific model (Claude|Codex|Gemini)',
+    'Override the Orchestrator and force a specific model family (Claude|Codex|Gemini, case-insensitive)',
+  )
+  .option(
+    '--model-tier <tier>',
+    `Model policy tier: ${VALID_MODEL_TIERS.join(' | ')} (defaults to configured policy tier)`,
+  )
+  .option(
+    '--allow-expensive',
+    'Explicitly opt in to models marked expensive or blocked by policy',
+  )
+  .option(
+    '--show-model-policy',
+    'Print the resolved backend model, provider ID, and approximate cost metadata',
   )
   .option(
     '--session-id <id>',
@@ -574,12 +783,30 @@ program
     '--orchestrator <version>',
     'Advanced: override orchestrator contract version (default v9)',
   )
+  .addHelpText('after', `
+Examples:
+  $ babel run "Fix webhook retry handling" --project example_saas_backend
+  $ babel run "Add dark mode toggle" --project example_llm_router --mode verified
+  $ babel run "Deploy to production" --project example_web_audit --mode autonomous
+  $ babel run "Prepare rollout plan" --project example_saas_backend --mode manual --show-model-policy
+  $ babel run "Refine ingestion worker" --project example_llm_router --model Codex --model-tier standard
+  $ babel example_saas_backend "Investigate dashboard latency"
+
+Notes:
+  - --mode manual switches run into the Manual Bridge start flow and emits handoff JSON instead of the standard banner/status output.
+  - --model-tier selects the backend model tier under the current family route; default is loaded from config/model-policy.json.
+  - Expensive or policy-blocked models require --allow-expensive before execution.
+  - Shorthand is supported: babel <Project> "<task...>" maps to babel run --project <Project> "<task...>".
+`)
   .action(async (
     task: string,
     options: {
       project?: string;
       mode?: string;
       model?: string;
+      modelTier?: string;
+      allowExpensive?: boolean;
+      showModelPolicy?: boolean;
       sessionId?: string;
       sessionStartPath?: string;
       localLearningRoot?: string;
@@ -587,6 +814,8 @@ program
     },
   ) => {
     const mode = (options.mode ?? 'verified') as string;
+    const normalizedModel = options.model !== undefined ? normalizeModelName(options.model) : undefined;
+    const normalizedModelTier = options.modelTier !== undefined ? options.modelTier.trim().toLowerCase() : undefined;
 
     if (!VALID_MODES.includes(mode as ValidMode)) {
       console.error(
@@ -596,10 +825,18 @@ program
       process.exit(1);
     }
 
-    if (options.model !== undefined && !VALID_MODELS.includes(options.model as ValidModel)) {
+    if (options.model !== undefined && normalizedModel === null) {
       console.error(
         `[babel] Invalid model "${options.model}". ` +
-        `Valid values: ${VALID_MODELS.join(', ')}`,
+        `Valid values: ${VALID_MODELS.join(', ')} (case-insensitive)`,
+      );
+      process.exit(1);
+    }
+
+    if (normalizedModelTier !== undefined && !VALID_MODEL_TIERS.includes(normalizedModelTier as typeof VALID_MODEL_TIERS[number])) {
+      console.error(
+        `[babel] Invalid model tier "${options.modelTier}". ` +
+        `Valid values: ${VALID_MODEL_TIERS.join(', ')}`,
       );
       process.exit(1);
     }
@@ -612,12 +849,34 @@ program
       process.exit(1);
     }
 
+    if (normalizedModel !== undefined) {
+      try {
+        preflightRequestedModelPolicy(normalizedModel, {
+          ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
+          ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+        });
+      } catch (error: unknown) {
+        if (mode === 'manual') {
+          process.stdout.write(`${JSON.stringify({
+            status: 'MANUAL_BRIDGE_FAILED',
+            error: error instanceof Error ? error.message : String(error),
+          }, null, 2)}\n`);
+          return;
+        }
+        console.error(`[babel] Fatal: ${error instanceof Error ? error.message : String(error)}`);
+        process.exit(1);
+      }
+    }
+
     if (mode === 'manual') {
       try {
         await runManualBridgeStart(task, {
           ...(options.project !== undefined ? { project: options.project } : {}),
-          ...(options.model !== undefined ? { model: options.model } : {}),
+          ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
           ...(options.orchestrator !== undefined ? { orchestratorVersion: options.orchestrator } : {}),
+          ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
+          ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+          ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
           ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
           ...(options.sessionStartPath !== undefined ? { sessionStartPath: options.sessionStartPath } : {}),
           ...(options.localLearningRoot !== undefined ? { localLearningRoot: options.localLearningRoot } : {}),
@@ -637,8 +896,12 @@ program
     console.log(`[babel] Task:    ${task}`);
     console.log(`[babel] Project: ${options.project ?? '(auto-detect)'}`);
     console.log(`[babel] Mode:    ${mode}`);
-    if (options.model) {
-      console.log(`[babel] Model:   ${options.model} (forced override)`);
+    if (normalizedModel) {
+      console.log(`[babel] Model:   ${normalizedModel} (forced override)`);
+    }
+    console.log(`[babel] Tier:    ${normalizedModelTier ?? 'policy default'}`);
+    if (options.allowExpensive === true) {
+      console.log('[babel] Policy:  expensive-model opt-in enabled');
     }
     console.log(`[babel] Router:  ${options.orchestrator ?? process.env['BABEL_ORCHESTRATOR_VERSION'] ?? 'v9'}`);
     if (options.sessionId) {
@@ -656,8 +919,11 @@ program
       // exactOptionalPropertyTypes requires absent keys, not undefined values.
       const result = await runBabelPipeline(task, {
         ...(options.project !== undefined ? { project: options.project } : {}),
-        ...(options.model !== undefined ? { modelOverride: options.model } : {}),
+        ...(normalizedModel !== undefined ? { modelOverride: normalizedModel } : {}),
         ...(options.orchestrator !== undefined ? { orchestratorVersion: options.orchestrator as ValidOrchestrator } : {}),
+        ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
+        ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+        ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
         ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
         ...(options.sessionStartPath !== undefined ? { sessionStartPath: options.sessionStartPath } : {}),
         ...(options.localLearningRoot !== undefined ? { localLearningRoot: options.localLearningRoot } : {}),
@@ -686,9 +952,25 @@ program
 
 program
   .command('plan')
-  .description('Alias for: run --mode manual --project <project> <intent...>')
-  .argument('<project>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite)')
+  .description('Manual Bridge start flow (non-breaking alias for: run --mode manual --project <project> <intent...>)')
+  .argument('<project>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | Antigavity_Projects)')
   .argument('<intent...>', 'Task intent/prompt')
+  .option(
+    '-m, --model <model>',
+    'Force a specific model family for the manual-bridge worker (Claude|Codex|Gemini, case-insensitive)',
+  )
+  .option(
+    '--model-tier <tier>',
+    `Model policy tier: ${VALID_MODEL_TIERS.join(' | ')} (defaults to configured policy tier)`,
+  )
+  .option(
+    '--allow-expensive',
+    'Explicitly opt in to models marked expensive or blocked by policy',
+  )
+  .option(
+    '--show-model-policy',
+    'Include resolved backend model policy details in the manual-bridge JSON output',
+  )
   .option(
     '--session-id <id>',
     'Associate this manual-bridge run with a Local Mode session ID',
@@ -705,10 +987,25 @@ program
     '--orchestrator <version>',
     'Advanced: override orchestrator contract version (default v9)',
   )
+  .addHelpText('after', `
+Examples:
+  $ babel plan example_saas_backend "Prepare rollout plan"
+  $ babel plan example_llm_router "Draft migration plan" --model Codex --model-tier standard --show-model-policy
+  $ babel plan example_llm_router "Draft migration plan" --session-id launch-demo-001
+
+Notes:
+  - This is a Manual Bridge entry command, not a generic planner.
+  - It returns Manual Bridge handoff JSON and points you to the follow-up apply/resume step.
+  - Model policy flags work here too because plan is a manual-mode entry surface.
+`)
   .action(async (
     project: string,
     intent: string[],
     options: {
+      model?: string;
+      modelTier?: string;
+      allowExpensive?: boolean;
+      showModelPolicy?: boolean;
       sessionId?: string;
       sessionStartPath?: string;
       localLearningRoot?: string;
@@ -716,11 +1013,29 @@ program
     },
   ) => {
     const task = intent.join(' ').trim();
+    const normalizedModel = options.model !== undefined ? normalizeModelName(options.model) : undefined;
+    const normalizedModelTier = options.modelTier !== undefined ? options.modelTier.trim().toLowerCase() : undefined;
     if (!task) {
       process.stdout.write(`${JSON.stringify({
         status: 'PLAN_ALIAS_FAILED',
         error: 'Intent is required.',
       }, null, 2)}\n`);
+      process.exit(1);
+    }
+    if (options.model !== undefined && normalizedModel === null) {
+      process.stdout.write(`${JSON.stringify({
+        status: 'PLAN_ALIAS_FAILED',
+        error: `Invalid model "${options.model}". Valid values: ${VALID_MODELS.join(', ')} (case-insensitive)`,
+      }, null, 2)}
+`);
+      process.exit(1);
+    }
+    if (normalizedModelTier !== undefined && !VALID_MODEL_TIERS.includes(normalizedModelTier as typeof VALID_MODEL_TIERS[number])) {
+      process.stdout.write(`${JSON.stringify({
+        status: 'PLAN_ALIAS_FAILED',
+        error: `Invalid model tier "${options.modelTier}". Valid values: ${VALID_MODEL_TIERS.join(', ')}`,
+      }, null, 2)}
+`);
       process.exit(1);
     }
     if (options.orchestrator !== undefined && !VALID_ORCHESTRATORS.includes(options.orchestrator as ValidOrchestrator)) {
@@ -730,10 +1045,28 @@ program
       }, null, 2)}\n`);
       process.exit(1);
     }
+    if (normalizedModel !== undefined) {
+      try {
+        preflightRequestedModelPolicy(normalizedModel, {
+          ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
+          ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+        });
+      } catch (error: unknown) {
+        process.stdout.write(`${JSON.stringify({
+          status: 'PLAN_ALIAS_FAILED',
+          error: error instanceof Error ? error.message : String(error),
+        }, null, 2)}\n`);
+        process.exit(1);
+      }
+    }
     try {
       await runManualBridgeStart(task, {
         project,
+        ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
         ...(options.orchestrator !== undefined ? { orchestratorVersion: options.orchestrator } : {}),
+        ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
+        ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+        ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
         ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
         ...(options.sessionStartPath !== undefined ? { sessionStartPath: options.sessionStartPath } : {}),
         ...(options.localLearningRoot !== undefined ? { localLearningRoot: options.localLearningRoot } : {}),
@@ -835,20 +1168,36 @@ async function handleResumeCommand(
 
 program
   .command('resume')
-  .description('Resume a manual bridge run from a validated plan.json file')
+  .description('Manual Bridge resume flow from a validated plan.json file')
   .option('--run <run_dir>', 'Existing Babel run directory path')
   .option('--project <name>', 'Use latest run pointer for this project when --run is omitted')
-  .option('--plan <path>', 'Path to manual plan.json, "-" for stdin, or "clipboard"')
+  .option('--plan <path>', 'Path to manual plan.json, "-" for stdin, or "clipboard"; when omitted, resume uses <run_dir>/manual/plan.json')
+  .addHelpText('after', `
+Examples:
+  $ babel resume --run C:/path/to/run --plan C:/path/to/plan.json
+  $ babel resume --project example_saas_backend --plan clipboard
+  $ type ./plan.json | babel resume --run C:/path/to/run --plan -
+
+Important:
+  - If --run is omitted, Babel may fall back to the latest run pointer for the selected project or the global latest run.
+  - If --plan is omitted, Babel uses <run_dir>/manual/plan.json and may create/open that file for editing first.
+`)
   .action(async (options: { run?: string; plan?: string; project?: string }) => {
     await handleResumeCommand(options);
   });
 
 program
   .command('apply')
-  .description('Alias for resume')
+  .description('Legacy alias for resume (Manual Bridge resume flow)')
   .option('--run <run_dir>', 'Existing Babel run directory path')
   .option('--project <name>', 'Use latest run pointer for this project when --run is omitted')
-  .option('--plan <path>', 'Path to manual plan.json, "-" for stdin, or "clipboard"')
+  .option('--plan <path>', 'Path to manual plan.json, "-" for stdin, or "clipboard"; when omitted, apply uses <run_dir>/manual/plan.json')
+  .addHelpText('after', `
+Notes:
+  - apply is kept for compatibility. Prefer resume in new docs and examples.
+  - If --run is omitted, Babel may fall back to the latest run pointer for the selected project or the global latest run.
+  - If --plan is omitted, Babel uses <run_dir>/manual/plan.json and may create/open that file for editing first.
+`)
   .action(async (options: { run?: string; plan?: string; project?: string }) => {
     await handleResumeCommand(options);
   });
@@ -872,14 +1221,28 @@ async function handleSmokeCommand(options: { project: string }): Promise<void> {
       throw new Error('Unable to resolve project root for smoke fixtures.');
     }
     const fixtures = buildSmokeFixtures(runDir, projectRoot);
-    const cases: Array<{ name: string; status: 'PASS' | 'HALT'; halt_tag: string }> = [];
+    const cases: Array<{
+      name: string;
+      status: 'PASS' | 'HALT';
+      halt_tag: string;
+      denial_category?: string | null;
+      denial_reason_code?: string | null;
+      mcp_phase?: string | null;
+      mcp_outcome?: string | null;
+      mcp_reason_code?: string | null;
+    }> = [];
 
     for (const fixture of fixtures) {
-      const maxAttempts = fixture.name === 'sandbox_rejection' ? 1 : 3;
+      const maxAttempts =
+        fixture.name === 'sandbox_rejection' || fixture.name === 'mcp_unknown_server'
+          ? 1
+          : 3;
       let resumed = await withMutedConsole(() => resumeManualBridge(runDir, fixture.path));
       let haltTag = extractHaltTagFromExecutionReport(runDir);
+      let denial = extractStructuredDenialFromExecutionReport(runDir);
+      let mcpLifecycle = extractMcpLifecycleFromExecutionReport(runDir);
 
-      if (fixture.name !== 'sandbox_rejection') {
+      if (fixture.name !== 'sandbox_rejection' && fixture.name !== 'mcp_unknown_server') {
         for (let attempt = 2; attempt <= maxAttempts; attempt++) {
           const shouldRetry =
             (resumed.status === 'QA_REJECTED_MAX_LOOPS') ||
@@ -887,6 +1250,8 @@ async function handleSmokeCommand(options: { project: string }): Promise<void> {
           if (!shouldRetry) break;
           resumed = await withMutedConsole(() => resumeManualBridge(runDir, fixture.path));
           haltTag = extractHaltTagFromExecutionReport(runDir);
+          denial = extractStructuredDenialFromExecutionReport(runDir);
+          mcpLifecycle = extractMcpLifecycleFromExecutionReport(runDir);
         }
       }
 
@@ -895,15 +1260,66 @@ async function handleSmokeCommand(options: { project: string }): Promise<void> {
           cases.push({ name: fixture.name, status: 'PASS', halt_tag: 'QA_REJECTED_EXPECTED' });
           continue;
         }
-        if (resumed.status === 'COMPLETE' && haltTag === 'STEP_VERIFICATION_FAIL') {
-          cases.push({ name: fixture.name, status: 'PASS', halt_tag: haltTag });
+        const denialCategory = typeof denial?.['category'] === 'string' ? String(denial['category']) : null;
+        const denialReasonCode = typeof denial?.['reason_code'] === 'string' ? String(denial['reason_code']) : null;
+        if (
+          resumed.status === 'COMPLETE' &&
+          haltTag === 'STEP_VERIFICATION_FAIL' &&
+          denialCategory === 'sandbox_policy' &&
+          denialReasonCode !== null
+        ) {
+          cases.push({
+            name: fixture.name,
+            status: 'PASS',
+            halt_tag: haltTag,
+            denial_category: denialCategory,
+            denial_reason_code: denialReasonCode,
+          });
           continue;
         }
         if (resumed.status === 'MANUAL_PLAN_INVALID') {
           cases.push({ name: fixture.name, status: 'HALT', halt_tag: 'MANUAL_PLAN_INVALID' });
           continue;
         }
-        cases.push({ name: fixture.name, status: 'HALT', halt_tag: resumed.status });
+        cases.push({
+          name: fixture.name,
+          status: 'HALT',
+          halt_tag: resumed.status,
+          denial_category: denialCategory,
+          denial_reason_code: denialReasonCode,
+        });
+        continue;
+      }
+
+      if (fixture.name === 'mcp_unknown_server') {
+        const lifecyclePhase = typeof mcpLifecycle?.['phase'] === 'string' ? String(mcpLifecycle['phase']) : null;
+        const lifecycleOutcome = typeof mcpLifecycle?.['outcome'] === 'string' ? String(mcpLifecycle['outcome']) : null;
+        const lifecycleReasonCode = typeof mcpLifecycle?.['reason_code'] === 'string' ? String(mcpLifecycle['reason_code']) : null;
+        if (
+          resumed.status === 'COMPLETE' &&
+          haltTag === 'STEP_VERIFICATION_FAIL' &&
+          lifecyclePhase === 'server_lookup' &&
+          lifecycleOutcome === 'failure' &&
+          lifecycleReasonCode === 'unknown_server'
+        ) {
+          cases.push({
+            name: fixture.name,
+            status: 'PASS',
+            halt_tag: haltTag,
+            mcp_phase: lifecyclePhase,
+            mcp_outcome: lifecycleOutcome,
+            mcp_reason_code: lifecycleReasonCode,
+          });
+          continue;
+        }
+        cases.push({
+          name: fixture.name,
+          status: 'HALT',
+          halt_tag: resumed.status,
+          mcp_phase: lifecyclePhase,
+          mcp_outcome: lifecycleOutcome,
+          mcp_reason_code: lifecycleReasonCode,
+        });
         continue;
       }
 
@@ -937,17 +1353,29 @@ async function handleSmokeCommand(options: { project: string }): Promise<void> {
 
 program
   .command('smoke')
-  .description('Run Manual Bridge smoke suite and summarize executor outcomes')
-  .requiredOption('--project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite)')
+  .description('Advanced diagnostic: run Manual Bridge smoke suite and summarize executor outcomes')
+  .requiredOption('--project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | Antigavity_Projects)')
+  .addHelpText('after', `
+Examples:
+  $ babel smoke --project example_saas_backend
+
+Notes:
+  - This is a diagnostic harness for Manual Bridge executor behavior, not a normal product test runner.
+`)
   .action(async (options: { project: string }) => {
     await handleSmokeCommand(options);
   });
 
 program
   .command('test')
-  .description('Alias for smoke')
-  .option('--project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite)')
+  .description('Legacy alias for smoke diagnostic; not a general project test runner')
+  .option('--project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | Antigavity_Projects)')
   .argument('[project]', 'Target project')
+  .addHelpText('after', `
+Notes:
+  - test is kept for compatibility. Prefer smoke for this diagnostic command.
+  - This command does not run a repo's normal unit/integration test suite.
+`)
   .action(async (projectArg: string | undefined, options: { project?: string }) => {
     const project = options.project ?? projectArg;
     if (!project) {

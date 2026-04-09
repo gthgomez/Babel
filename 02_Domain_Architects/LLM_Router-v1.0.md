@@ -225,4 +225,3 @@ Load based on task type:
 | Any contract / header change | `skill_bcdp_contracts` |
 | Any DB persistence change | `skill_supabase_pg` |
 | All tasks (pre-plan gate) | `skill_evidence_gathering` |
-

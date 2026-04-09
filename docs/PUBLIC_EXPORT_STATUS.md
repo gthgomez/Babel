@@ -1,6 +1,6 @@
 # Public Export Status
 
-Generated from [REDACTED_PRIVATE_IDENTIFIER] at $generatedAt.
+Generated from [REDACTED_PRIVATE_IDENTIFIER] at 2026-04-09T07:40:27Z.
 
 This tree was created by `tools/export-babel-public.ps1`.
 

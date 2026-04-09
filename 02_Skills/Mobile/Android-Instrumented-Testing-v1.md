@@ -11,7 +11,11 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 
 **Category:** Mobile
 **Status:** Active
-**Pairs with:** `domain_android_kotlin`
+**Load order:** Load after `skill_android_testing_strategy`. That file confirms whether `androidTest/` is the correct surface — do not load this file without the strategy file unless the routing decision is already resolved.
+**Load before:** `skill_android_test_enforcement` — enforcement loads last.
+**Takes precedence when:** The class under test imports `android.*` and instrumented placement is confirmed.
+
+**Pairs with:** `domain_android_kotlin`, `skill_android_testing_strategy`
 **Activation:** Load for any task that writes or modifies tests in `androidTest/`, tests that
 use Android APIs (Context, ContentResolver, PdfRenderer, ActivityScenario), or any task
 verifying processing engine correctness, billing flows, or Compose UI behavior.
@@ -33,6 +37,40 @@ Three failure modes this skill prevents:
    instrumentation runner's own context.
 3. Forgetting to delete test-created files in `@After`, causing intermittent test failures
    when stale files from a prior run affect the next run.
+
+---
+
+## Step 0 — NO DEVICE AVAILABLE: PARTIAL VERIFICATION GATE
+
+When no device or emulator is connected, instrumented tests cannot run. This is a hard
+infrastructure constraint, not a test failure. The acceptable partial gate is:
+
+```bash
+# Verify instrumented tests compile without errors — catches import mistakes,
+# missing dependencies, type errors. Does NOT run the tests.
+./gradlew :app:compileDebugAndroidTestKotlin
+
+# For flavored builds:
+./gradlew :app:compileGooglePlayDebugAndroidTestKotlin
+```
+
+**When to use this gate:**
+- CI environments without an emulator
+- Local development when recording that tests are written but not yet runnable
+- Unblocking dependent tasks (e.g. screenshot tests) that don't need a device
+
+**How to record the constraint explicitly in plans and tickets:**
+> "Instrumented tests compile OK (`compileDebugAndroidTestKotlin` passes). Full execution
+> requires a connected device. Run command when available:
+> `./gradlew :app:connectedDebugAndroidTest`"
+
+**Starting an emulator in GitHub Actions (reference):**
+```yaml
+- uses: reactivecircus/android-emulator-runner@v2
+  with:
+    api-level: 35
+    script: ./gradlew :app:connectedDebugAndroidTest
+```
 
 ---
 
@@ -287,4 +325,6 @@ composeTestRule.onNodeWithTag("compress_cta").assertIsEnabled()
    than devices; generous or no timeouts are correct.
 6. Never add test artifacts (`ui-test-junit4`, `espresso-core`) to `implementation`
    scope. They must be `androidTestImplementation` only.
-
+7. Never block a plan on instrumented test execution when no device is available. Use
+   `compileDebugAndroidTestKotlin` as the partial gate (Step 0) and record the full
+   run command. Never treat "no device" as a test failure.

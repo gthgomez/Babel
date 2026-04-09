@@ -1,35 +1,44 @@
 /**
  * execute.ts — Per-Stage LLM Waterfall Executor
  *
- * Implements four dedicated waterfalls, one per pipeline stage:
+ * Implements four dedicated waterfalls, one per pipeline stage.
+ * All tiers are DeepInfra API runners (≤$2.50/M tokens). No CLI runners.
+ *
+ * Model selection is evidence-based (benchmarks, July 2026):
  *
  *   orchestrator  (Stage 1 — manifest generation, domain/model routing)
- *     1. Gemini CLI (gemini-3.1-flash-lite-preview)  — fastest structured JSON
- *     2. Nemotron 3 Super (DeepInfra)                — strong schema repair, ~3–4× cheaper than Claude
- *     3. Codex CLI                                   — ChatGPT Plus rare rescue
+ *     Goal: reliable structured JSON output, fast, cheap.
+ *     1. Llama-4-Scout       $0.08/$0.30 — confirmed JSON mode, lowest TTFT (0.48s), 328K ctx
+ *     2. Qwen3-235B-Instruct $0.07/$0.10 — IFEval 88.7, cheapest output, 262K ctx, no thinking overhead
+ *     3. Step-3.5-Flash      $0.10/$0.30 — Intelligence Index #13/67, 256K ctx, reliable instruction following
+ *     4. Qwen3-32B           $0.08/$0.28 — function calling, budget rescue
  *
  *   planning      (Stage 2 — SWE Agent minimal-action-set plan)
- *     1. Codex CLI                                   — ChatGPT Plus, best coding/reasoning
- *     2. Nemotron 3 Super (DeepInfra)                — agentic-tuned fallback
- *     3. Gemini CLI (gemini-3-flash-preview)         — mid-tier rescue
- *     4. Gemini CLI (gemini-3.1-pro-preview)         — Pro rescue (Gemini Advanced required)
+ *     Goal: deepest SE reasoning. SWE-bench is the key metric.
+ *     1. Step-3.5-Flash      $0.10/$0.30 — SWE-bench 74.4 (best in class at this price), AIME 97.3
+ *     2. Nemotron 3 Super    $0.10/$0.50 — Intelligence Index #2/58, agentic TauBench 61.1, 262K ctx
+ *     3. DeepSeek-V3-0324    $0.20/$0.77 — top practitioner SE model, HumanEval 82.6, MATH-500 90.2
+ *     4. Qwen3-235B-Instruct $0.07/$0.10 — MMLU-Redux 93.1, MultiPL-E 87.9, cheap deep rescue
+ *     5. Qwen3-32B           $0.08/$0.28 — last-resort budget fallback
  *
  *   qa            (Stage 3 — QA Reviewer adversarial verdict)
- *     1. Nemotron 3 Super (DeepInfra)                — cost-effective adversarial critique
- *     2. Codex CLI                                   — stronger adversarial judgment (ChatGPT Plus)
- *     3. Gemini CLI (gemini-3-flash-preview)         — mid-tier rare rescue
+ *     Goal: adversarial critique, catch plan flaws. Instruction following + reasoning depth.
+ *     1. Nemotron 3 Super    $0.10/$0.50 — GPQA Diamond 79.4, IFBench 72.3, Arena-Hard 76.1, 262K ctx
+ *     2. DeepSeek-V3-0324    $0.20/$0.77 — broad pretraining (14.8T tokens), IFEval 86.1, strong critic
+ *     3. Step-3.5-Flash      $0.10/$0.30 — BBH 88.2, sharp reasoning fallback
+ *     4. Qwen3-32B           $0.08/$0.28 — budget rescue
  *
  *   executor      (Stage 4 — multi-turn tool call loop)
- *     1. Gemini CLI (gemini-3.1-flash-lite-preview)  — fast per-turn structured JSON
- *     2. Qwen3-32B (DeepInfra)                       — ultra-cheap structured reliability
- *     3. Nemotron 3 Super (DeepInfra)                — complex history reasoning fallback
+ *     Goal: cheapest reliable JSON per tool-call turn, lowest latency.
+ *     1. Llama-4-Scout       $0.08/$0.30 — JSON mode confirmed, TTFT 0.48s, 144.8 tok/s, 328K ctx
+ *     2. Qwen3-235B-Instruct $0.07/$0.10 — cheapest output ($0.10/M), no thinking tokens, 262K ctx
+ *     3. Qwen3-32B           $0.08/$0.28 — function calling, compact output, budget rescue
+ *     4. Nemotron 3 Super    $0.10/$0.50 — complex history reasoning fallback, 262K ctx
  *
  * Cascade rules:
- *   1. Binary not found / not recognised → cascade immediately (no retry).
- *   2. Rate-limit / quota signal         → cascade immediately (no retry).
- *   3. JSON / Zod failure                → retry up to `maxCliAttempts`, then cascade.
- *   4. Spawn timeout / non-zero exit     → same policy as rule 3.
- *   5. Runner construction error         → cascade immediately (e.g. missing API key).
+ *   1. Rate-limit / quota signal         → cascade immediately (no retry).
+ *   2. JSON / Zod failure                → retry up to `maxAttempts`, then cascade.
+ *   3. Runner construction error         → cascade immediately (e.g. missing API key).
  *
  * Backward compatibility:
  *   `mode: 'structural'` maps to the `orchestrator` waterfall.
@@ -37,21 +46,13 @@
  *   `stage` takes priority over `mode` when both are provided.
  *
  * Environment variables:
- *   DEEPINFRA_API_KEY          — Required for Nemotron / Qwen3 tiers.
+ *   DEEPINFRA_API_KEY          — Required for all tiers.
  *   BABEL_DEEPINFRA_TOKENS     — max_tokens for DeepInfra responses. Default: 8096
- *   BABEL_DISABLE_API_FALLBACK — Set to "true" to skip all API tiers.
- *   BABEL_GEMINI_MODEL_FAST    — Override fast Gemini model. Default: gemini-3.1-flash-lite-preview
- *   BABEL_GEMINI_MODEL_MID     — Override mid Gemini model.  Default: gemini-3-flash-preview
- *   BABEL_GEMINI_MODEL_PRO     — Override pro Gemini model.  Default: gemini-3.1-pro-preview
+ *   BABEL_DISABLE_API_FALLBACK — Set to "true" to halt after first tier failure.
  */
 
 import type { ZodType, ZodTypeDef } from 'zod';
-import { ClaudeCliRunner }       from './runners/claudeCli.js';
-import { CodexCliRunner }        from './runners/codexCli.js';
-import { GeminiCliRunner }       from './runners/geminiCli.js';
 import { DeepInfraApiRunner }    from './runners/deepInfraApi.js';
-import { CliParseError }         from './runners/cliBase.js';
-import { StructuredRunner }      from './runners/structuredRunner.js';
 import type { LlmRunner }        from './runners/base.js';
 import type { EvidenceBundle }   from './evidence.js';
 import type { TargetModel }      from './schemas/agentContracts.js';
@@ -60,6 +61,10 @@ import {
   reorderWaterfallByStartIndex,
   type RoutingStage,
 }                                from './routingEngine.js';
+import {
+  resolveStagePolicyRoutes,
+  type ResolvedModelPolicyEntry,
+}                                from './modelPolicy.js';
 
 export type { TargetModel };
 
@@ -92,17 +97,21 @@ export interface WaterfallOutcome {
 const DISABLE_API_FALLBACK =
   process.env['BABEL_DISABLE_API_FALLBACK'] === 'true';
 
-// DeepInfra model IDs
-const NEMOTRON_MODEL = 'nvidia/NVIDIA-Nemotron-3-Super-120B-A12B';
-const QWEN3_MODEL    = 'Qwen/Qwen3-32B';
-
-// Gemini CLI model IDs (env overrides for forward compatibility)
-// FAST  — primary tier in Stage 1/4 (lowest latency, free/sub-included)
-// MID   — fallback tier in Stage 3; rescue in Stage 2
-// PRO   — rare rescue in Stage 2 (highest quality, Gemini Advanced required)
-const GEMINI_MODEL_FAST = process.env['BABEL_GEMINI_MODEL_FAST'] ?? 'gemini-3.1-flash-lite-preview';
-const GEMINI_MODEL_MID  = process.env['BABEL_GEMINI_MODEL_MID']  ?? 'gemini-3-flash-preview';
-const GEMINI_MODEL_PRO  = process.env['BABEL_GEMINI_MODEL_PRO']  ?? 'gemini-3.1-pro-preview';
+// DeepInfra model IDs (all ≤$2.50/M tokens — pricing verified July 2026)
+//
+// Strengths summary:
+//   LLAMA4_SCOUT:   JSON mode confirmed, TTFT 0.48s, 328K ctx, 144.8 tok/s — best Stage 1/4 lead
+//   QWEN3_235B:     IFEval 88.7, MMLU-Redux 93.1, $0.07/$0.10 — cheapest capable output on platform
+//   STEP_FLASH:     SWE-bench 74.4, AIME 97.3, Intelligence Index #13/67 — best SE reasoning per dollar
+//   NEMOTRON:       GPQA 79.4, IFBench 72.3, Arena-Hard 76.1, agentic TauBench 61.1 — best critic
+//   DEEPSEEK_V3:    HumanEval 82.6, MATH-500 90.2, IFEval 86.1 — top practitioner SE, 14.8T pretrain
+//   QWEN3_32B:      function calling, 41K ctx, budget-tier rescue across all stages
+const LLAMA4_SCOUT  = 'meta-llama/Llama-4-Scout-17B-16E-Instruct';   // $0.08/$0.30 — JSON mode, 328K ctx
+const QWEN3_235B    = 'Qwen/Qwen3-235B-A22B-Instruct-2507';          // $0.07/$0.10 — cheapest output
+const STEP_FLASH    = 'stepfun-ai/Step-3.5-Flash';                   // $0.10/$0.30 — SWE-bench 74.4
+const NEMOTRON      = 'nvidia/NVIDIA-Nemotron-3-Super-120B-A12B';    // $0.10/$0.50 — adversarial critic
+const DEEPSEEK_V3   = 'deepseek-ai/DeepSeek-V3-0324';               // $0.20/$0.77 — SE coding depth
+const QWEN3_32B     = 'Qwen/Qwen3-32B';                              // $0.08/$0.28 — budget rescue
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -195,97 +204,113 @@ interface TierSpec {
 
 /**
  * Stage 1 — Orchestrator
- * Goal: high first-try structured JSON reliability + low latency.
+ * Goal: reliable structured JSON output, fast and cheap.
+ * Llama-4-Scout leads: only model with confirmed JSON mode on DeepInfra,
+ * lowest TTFT (0.48s), 328K context. Qwen3-235B-Instruct backs up with the
+ * cheapest output price on the platform ($0.10/M) and IFEval 88.7.
  */
 const ORCHESTRATOR_WATERFALL: TierSpec[] = [
   {
-    kind: 'cli', name: `Gemini CLI (${GEMINI_MODEL_FAST})`,
-    factory: () => new StructuredRunner(new GeminiCliRunner(GEMINI_MODEL_FAST), `Gemini CLI (${GEMINI_MODEL_FAST})`),
+    kind: 'api', name: 'Llama-4-Scout',
+    factory: () => new DeepInfraApiRunner(LLAMA4_SCOUT),
   },
   {
-    kind: 'api', name: 'Nemotron 3 Super',
-    factory: () => new DeepInfraApiRunner(NEMOTRON_MODEL),
+    kind: 'api', name: 'Qwen3-235B-Instruct-2507',
+    factory: () => new DeepInfraApiRunner(QWEN3_235B),
   },
   {
-    kind: 'cli', name: 'Codex CLI',
-    factory: () => new StructuredRunner(new CodexCliRunner(), 'Codex CLI'),
+    kind: 'api', name: 'Step-3.5-Flash',
+    factory: () => new DeepInfraApiRunner(STEP_FLASH),
+  },
+  {
+    kind: 'api', name: 'Qwen3-32B',
+    factory: () => new DeepInfraApiRunner(QWEN3_32B),
   },
 ];
 
 /**
  * Stage 2 — Planning (SWE Agent)
- * Goal: deepest reasoning + accurate action-set generation.
+ * Goal: deepest SE reasoning for action-set generation.
+ * Step-3.5-Flash leads: SWE-bench 74.4 is the highest score at this price
+ * bracket — no other sub-$0.50/M model comes close on software engineering.
+ * Nemotron backs up with the best long-context agentic scores (TauBench 61.1).
+ * DeepSeek-V3-0324 is the top practitioner model for SE at $0.77/M output.
  */
 const PLANNING_WATERFALL: TierSpec[] = [
   {
-    kind: 'cli', name: 'Codex CLI',
-    factory: () => new StructuredRunner(new CodexCliRunner(), 'Codex CLI'),
+    kind: 'api', name: 'Step-3.5-Flash',
+    factory: () => new DeepInfraApiRunner(STEP_FLASH),
   },
   {
     kind: 'api', name: 'Nemotron 3 Super',
-    factory: () => new DeepInfraApiRunner(NEMOTRON_MODEL),
+    factory: () => new DeepInfraApiRunner(NEMOTRON),
   },
   {
-    // Mid-tier rescue — better quality than Flash-Lite for complex plans.
-    kind: 'cli', name: `Gemini CLI (${GEMINI_MODEL_MID})`,
-    factory: () => new StructuredRunner(new GeminiCliRunner(GEMINI_MODEL_MID), `Gemini CLI (${GEMINI_MODEL_MID})`),
+    kind: 'api', name: 'DeepSeek-V3-0324',
+    factory: () => new DeepInfraApiRunner(DEEPSEEK_V3),
   },
   {
-    // Pro rescue — best quality; requires Gemini Advanced subscription.
-    kind: 'cli', name: `Gemini CLI (${GEMINI_MODEL_PRO})`,
-    factory: () => new StructuredRunner(new GeminiCliRunner(GEMINI_MODEL_PRO), `Gemini CLI (${GEMINI_MODEL_PRO})`),
+    kind: 'api', name: 'Qwen3-235B-Instruct-2507',
+    factory: () => new DeepInfraApiRunner(QWEN3_235B),
+  },
+  {
+    kind: 'api', name: 'Qwen3-32B',
+    factory: () => new DeepInfraApiRunner(QWEN3_32B),
   },
 ];
 
 /**
  * Stage 3 — QA Reviewer
- * Goal: strong adversarial judgment without over-spending on premium subscriptions.
+ * Goal: adversarial critique and plan verification.
+ * Nemotron leads: GPQA Diamond 79.4, IFBench 72.3, Arena-Hard 76.1 — the
+ * strongest critical reasoning scores and explicitly adversarial post-training.
+ * DeepSeek-V3-0324 backs up with broad pretraining (14.8T tokens) for factual
+ * grounding and IFEval 86.1 for following structured critique schemas.
  */
 const QA_WATERFALL: TierSpec[] = [
   {
     kind: 'api', name: 'Nemotron 3 Super',
-    factory: () => new DeepInfraApiRunner(NEMOTRON_MODEL),
+    factory: () => new DeepInfraApiRunner(NEMOTRON),
   },
   {
-    kind: 'cli', name: 'Codex CLI',
-    factory: () => new StructuredRunner(new CodexCliRunner(), 'Codex CLI'),
+    kind: 'api', name: 'DeepSeek-V3-0324',
+    factory: () => new DeepInfraApiRunner(DEEPSEEK_V3),
   },
   {
-    kind: 'cli', name: `Gemini CLI (${GEMINI_MODEL_MID})`,
-    factory: () => new StructuredRunner(new GeminiCliRunner(GEMINI_MODEL_MID), `Gemini CLI (${GEMINI_MODEL_MID})`),
+    kind: 'api', name: 'Step-3.5-Flash',
+    factory: () => new DeepInfraApiRunner(STEP_FLASH),
+  },
+  {
+    kind: 'api', name: 'Qwen3-32B',
+    factory: () => new DeepInfraApiRunner(QWEN3_32B),
   },
 ];
 
 /**
  * Stage 4 — Executor
- * Goal: fast, cheap, reliable structured JSON for each tool-call turn.
+ * Goal: cheapest reliable JSON per tool-call turn, lowest latency.
+ * Llama-4-Scout leads: confirmed JSON mode, TTFT 0.48s, 144.8 tok/s throughput,
+ * 328K context to hold full task history. Qwen3-235B-Instruct backs up at
+ * $0.10/M output — cheapest on the platform with no thinking token overhead.
  */
 const EXECUTOR_WATERFALL: TierSpec[] = [
   {
-    kind: 'cli', name: `Gemini CLI (${GEMINI_MODEL_FAST})`,
-    factory: () => new StructuredRunner(new GeminiCliRunner(GEMINI_MODEL_FAST), `Gemini CLI (${GEMINI_MODEL_FAST})`),
+    kind: 'api', name: 'Llama-4-Scout',
+    factory: () => new DeepInfraApiRunner(LLAMA4_SCOUT),
+  },
+  {
+    kind: 'api', name: 'Qwen3-235B-Instruct-2507',
+    factory: () => new DeepInfraApiRunner(QWEN3_235B),
   },
   {
     kind: 'api', name: 'Qwen3-32B',
-    factory: () => new DeepInfraApiRunner(QWEN3_MODEL),
+    factory: () => new DeepInfraApiRunner(QWEN3_32B),
   },
   {
     kind: 'api', name: 'Nemotron 3 Super',
-    factory: () => new DeepInfraApiRunner(NEMOTRON_MODEL),
+    factory: () => new DeepInfraApiRunner(NEMOTRON),
   },
 ];
-
-/** Resolve a stage or legacy mode to its waterfall. */
-function resolveWaterfall(stage: PipelineStage | undefined, mode: RunMode | undefined): TierSpec[] {
-  // stage takes priority
-  if (stage === 'orchestrator') return ORCHESTRATOR_WATERFALL;
-  if (stage === 'planning')     return PLANNING_WATERFALL;
-  if (stage === 'qa')           return QA_WATERFALL;
-  if (stage === 'executor')     return EXECUTOR_WATERFALL;
-  // legacy mode fallback
-  if (mode === 'reasoning')     return PLANNING_WATERFALL;
-  return ORCHESTRATOR_WATERFALL; // structural / unset → orchestrator
-}
 
 /**
  * Converts a `PipelineStage` or legacy `RunMode` to the `RoutingStage` union
@@ -299,6 +324,60 @@ function resolveEffectiveStage(
   if (stage !== undefined) return stage;        // PipelineStage ⊂ RoutingStage
   if (mode === 'reasoning') return 'planning';
   return 'orchestrator';
+}
+
+function getPolicyDisplayName(entry: ResolvedModelPolicyEntry): string {
+  switch (entry.backendKey) {
+    case 'deepinfra:llama-4-scout':
+      return 'Llama-4-Scout';
+    case 'deepinfra:qwen3-235b-instruct-2507':
+      return 'Qwen3-235B-Instruct-2507';
+    case 'deepinfra:step-3.5-flash':
+      return 'Step-3.5-Flash';
+    case 'deepinfra:nemotron-3-super-120b-a12b':
+      return 'Nemotron 3 Super';
+    case 'deepinfra:deepseek-v3-0324':
+      return 'DeepSeek-V3-0324';
+    case 'deepinfra:qwen3-32b':
+      return 'Qwen3-32B';
+    default:
+      return entry.providerModelId;
+  }
+}
+
+function tierSpecFromPolicyEntry(entry: ResolvedModelPolicyEntry): TierSpec {
+  if (entry.provider !== 'deepinfra') {
+    throw new Error(
+      `Unsupported stage policy provider "${entry.provider}" for backend "${entry.backendKey}".`,
+    );
+  }
+
+  return {
+    kind: 'api',
+    name: getPolicyDisplayName(entry),
+    factory: () => new DeepInfraApiRunner(entry.providerModelId),
+  };
+}
+
+function resolvePolicyWaterfall(stage: PipelineStage): TierSpec[] | null {
+  const routes = resolveStagePolicyRoutes();
+  const route = routes.find((candidate) => candidate.stage === stage);
+  if (!route) return null;
+  return route.orderedBackends.map(tierSpecFromPolicyEntry);
+}
+
+/** Resolve a stage or legacy mode to its waterfall. */
+function resolveWaterfall(stage: PipelineStage | undefined, mode: RunMode | undefined): TierSpec[] {
+  const effectiveStage = resolveEffectiveStage(stage, mode) as PipelineStage;
+  const policyWaterfall = resolvePolicyWaterfall(effectiveStage);
+  if (policyWaterfall && policyWaterfall.length > 0) {
+    return policyWaterfall;
+  }
+
+  if (effectiveStage === 'planning') return PLANNING_WATERFALL;
+  if (effectiveStage === 'qa')       return QA_WATERFALL;
+  if (effectiveStage === 'executor') return EXECUTOR_WATERFALL;
+  return ORCHESTRATOR_WATERFALL;
 }
 
 // ─── Cascade signal detection ─────────────────────────────────────────────────
@@ -325,46 +404,6 @@ function isImmediateCascade(err: Error): boolean {
   );
 }
 
-// ─── Debug file writer ────────────────────────────────────────────────────────
-
-function writeDebugFiles(err: CliParseError, evidence: EvidenceBundle | undefined): void {
-  if (!evidence) return;
-
-  const separator = '═'.repeat(60);
-
-  evidence.writeDebugFile(
-    'debug_cli_raw_stdout.log',
-    [
-      separator,
-      'RAW CLI STDOUT',
-      separator,
-      err.rawStdout,
-      '',
-      separator,
-      'RAW CLI STDERR',
-      separator,
-      err.rawStderr,
-      '',
-      separator,
-      'ERROR MESSAGE',
-      separator,
-      err.message,
-    ].join('\n'),
-  );
-
-  if (err.zodError !== undefined) {
-    evidence.writeDebugFile(
-      'debug_zod_error.json',
-      JSON.stringify(err.zodError, null, 2),
-    );
-  }
-
-  console.warn(
-    `[babel] Parse failure — debug files written to:\n` +
-    `  ${evidence.runDir}/debug_cli_raw_stdout.log`,
-  );
-}
-
 // ─── Internal waterfall runner ────────────────────────────────────────────────
 
 interface WaterfallRunResult<T> {
@@ -387,11 +426,12 @@ async function runWaterfall<T>(
     const spec = waterfall[tier]!;
     const next = waterfall[tier + 1];
 
-    // ── API-tier gate ──────────────────────────────────────────────────────
-    if (DISABLE_API_FALLBACK && spec.kind === 'api') {
+    // ── Waterfall halt gate ────────────────────────────────────────────────
+    // BABEL_DISABLE_API_FALLBACK=true halts the pipeline after the first tier
+    // fails, since all tiers are now DeepInfra API runners.
+    if (DISABLE_API_FALLBACK && tiersSkipped.length > 0) {
       throw new Error(
-        `CLI tiers exhausted and API fallback is disabled ` +
-        `(BABEL_DISABLE_API_FALLBACK=true). Halting pipeline. ` +
+        `First tier failed and BABEL_DISABLE_API_FALLBACK=true. Halting pipeline. ` +
         `Last error: ${lastError?.message ?? 'unknown'}`,
       );
     }
@@ -456,10 +496,6 @@ async function runWaterfall<T>(
 
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
-
-        if (err instanceof CliParseError) {
-          writeDebugFiles(err, evidence);
-        }
 
         if (isImmediateCascade(lastError)) {
           cascadeFromTier = true;

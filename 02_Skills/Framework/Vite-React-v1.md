@@ -253,4 +253,3 @@ Both must be referenced in `tsconfig.json` via `references`. Running `tsc --noEm
 | `100vh` CSS on mobile | Address bar clips content — use `--app-vh` custom property |
 | No `manualChunks` | React bundled with app code, cache busted on every deploy |
 | `@vitejs/plugin-react-swc` without testing | Some Babel transforms (decorators, legacy class properties) require the Babel plugin variant |
-

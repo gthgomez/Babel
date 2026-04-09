@@ -109,6 +109,31 @@ PurchasingService.getPurchaseUpdates(false) // false = since last call; true = a
 
 ---
 
+## Step 2B — PHOTO PICKER ON FIRE OS
+
+`ActivityResultContracts.PickVisualMedia` depends on the Google Play Services backport on
+Android < 13. Fire OS ships without Google Play Services — the standard photo picker backport
+is not available on most Fire devices.
+
+**AndroidX auto-fallback (Activity 1.7.0+):** When `PickVisualMedia` detects the picker is
+unavailable, it automatically falls back to `ACTION_OPEN_DOCUMENT`. Check availability with:
+
+```kotlin
+val pickerAvailable = ActivityResultContracts.isPhotoPickerAvailable(context)
+```
+
+**Action for Amazon builds:**
+1. Confirm your `androidx.activity` version is 1.7.0+ (current project uses 1.9.3 ✓)
+2. Test image picking on a real Fire device or Fire OS emulator before submission
+3. If the `ACTION_OPEN_DOCUMENT` auto-fallback UX is acceptable, no code change is needed
+4. If the fallback UX is not acceptable, implement `ActivityResultContracts.GetContent("image/*")`
+   scoped to the `amazon` flavor source set only
+
+**Rule:** Never remove the `PickVisualMedia` + auto-fallback combo from the Google Play flavor.
+The fallback workaround, if needed, belongs exclusively in `src/amazon/` source set code.
+
+---
+
 ## Step 3 — GOOGLE SERVICES REPLACEMENT
 
 Google services do not exist on Fire OS. Apps that call them at runtime will crash.
@@ -252,4 +277,3 @@ android {
 6. Minimum 3 screenshots required — fewer will block submission.
 7. Always test the Amazon build on a physical Fire device or the Fire OS emulator before
    submission — Fire OS has subtle differences from stock Android that only surface at runtime.
-

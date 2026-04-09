@@ -52,11 +52,14 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
   -Format json
 ```
 
-Or call the resolver directly:
+Or run the resolver directly from the public helper:
 
 ```powershell
-cd .\babel-cli
-npm run preview:manifest -- --task-category backend --project example_saas_backend --model codex --pipeline-mode verified
+pwsh -File .\tools\resolve-local-stack.ps1 `
+  -TaskCategory mobile `
+  -Project example_mobile_suite `
+  -Model codex `
+  -Format json
 ```
 
 ## Relationship To Other Repos

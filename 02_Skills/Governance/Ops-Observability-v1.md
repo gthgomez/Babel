@@ -7,7 +7,7 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
 -->
 
-# Skill: Ops Observability Protocol (v1.0)
+# Skill: Ops Observability Protocol (v1.1)
 
 **Category:** Governance
 **Status:** Active
@@ -27,6 +27,9 @@ converts the SFDIPOT-O check from a reactive rejection into a proactive pre-plan
 
 A plan with no OPERATIONAL section is a plan that will fail silently in production. Silent failures
 are worse than loud ones.
+
+This skill is especially important for jobs, privacy workflows, billing transitions, alerting,
+and any support-facing process where failure can hide behind a “successful” UI.
 
 ---
 
@@ -61,6 +64,16 @@ For every operation in the plan's MINIMAL ACTION SET, declare:
 If any operation has failure mode `SILENT` or `PARTIAL`, that operation requires a recovery path
 in Step 3.
 
+Also declare operational dependencies when relevant:
+- scheduler or cron source
+- queue or fallback store
+- notification channel
+- required environment variables
+- operator-facing destination
+- live authorization surface (RLS, grants, service-role bypass, policy path)
+- partitioned-table behavior if reads or writes hit parent tables with attached partitions
+- deployment/cache layer if runtime behavior depends on schema visibility or fresh function code
+
 ---
 
 ## Step 2 — LOGGING STRATEGY
@@ -79,6 +92,12 @@ For each operation classified in Step 1, declare what is logged and at what leve
 - Every external call must log at start and completion (success or failure).
 - Every state transition must log before and after state with a correlation ID.
 - Every unrecoverable error must log enough context to reproduce the failure without guessing.
+- Every scheduled job must log run start, run end, outcome, and affected counts.
+- Every alerting path must log both detection and delivery outcome.
+- Every operator workflow must name where failures become visible.
+- Every alert raised by a scheduled job must be traceable back to a concrete run ledger row or correlation ID.
+- Every deduplicated alert path must define how severity escalation is surfaced, not just how duplicates are suppressed.
+- Every stateful permission or policy change must declare how live remote verification is performed after apply.
 
 If the task cannot guarantee structured logging, declare it explicitly:
 
@@ -107,6 +126,7 @@ For each operation with a non-trivial failure mode, declare the recovery path:
 | `DEAD_LETTER` | Route failed items to DLQ for manual recovery. |
 | `FAIL_CLOSED` | Reject new operations until failure is resolved. Use for safety-critical paths. |
 | `FAIL_OPEN` | Allow operations to continue despite failure. Use only for low-safety paths. |
+| `OPERATOR_ESCALATION` | Route failure to a named human/operator workflow with a runbook path. |
 
 **Rule:** `FAIL_OPEN` on a safety-critical path (auth, payment, permissions check) requires explicit
 justification in KNOWN FACTS. The default for safety-critical paths is `FAIL_CLOSED`.
@@ -116,6 +136,17 @@ Reference the IDEMPOTENCY CONTRACT section produced by `skill_idempotency` inste
 classifies the operation and provides the deduplication proof. Write:
 `IDEMPOTENT_REPLAY — see IDEMPOTENCY CONTRACT` in the recovery table and leave the full
 justification to that section.
+
+If the task adds a job, alert, or support/compliance workflow, the recovery table must also name:
+- where the failure is surfaced
+- who is expected to act
+- whether the system continues `FAIL_OPEN` or `FAIL_CLOSED`
+- whether recurrence, escalation, acknowledgement, resolution, and stale-alert handling are explicit
+
+If the task depends on database authorization or schema visibility, the recovery table must also name:
+- how grant drift is detected
+- whether future partitions inherit the required privileges
+- whether schema cache or function redeploy is required before the system is truly recovered
 
 ---
 
@@ -137,6 +168,10 @@ Recovery:
 
 Failure Modes Unmitigated:
   [any operation with no recovery path — state why it is acceptable]
+
+Visibility:
+  [where operators see job health, alert state, and stuck items]
+  [where live grant/policy state is checked if auth or RLS is in the blast radius]
 ```
 
 This section must appear in the plan before VERIFICATION METHOD.
@@ -155,3 +190,8 @@ This section must appear in the plan before VERIFICATION METHOD.
    is not safe to execute.
 5. If the task modifies an existing operation that already has a logging or recovery strategy,
    the plan must explicitly preserve or supersede that strategy — not silently replace it.
+6. A job with no execution ledger, last-run signal, or visible failure surface is not operationally complete.
+7. “We can inspect logs later” is not an operator surface.
+8. A deduplicated alert with no escalation rule can silently hide the moment an incident becomes critical.
+9. A multi-step job that records only all-or-nothing success/failure is missing partial-failure evidence.
+10. A stateful fix that is applied manually to remote infrastructure but not represented in versioned code is not operationally complete.

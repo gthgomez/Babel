@@ -473,7 +473,7 @@ export type BcdpAssessment = z.infer<typeof BcdpAssessmentSchema>;
 export const ActionStepSchema = z.object({
   step:         z.number().int().min(1),
   description:  z.string().min(1),
-  tool:         z.enum(['file_read', 'file_write', 'shell_exec', 'test_run', 'mcp_request', 'audit_ui', 'memory_store', 'memory_query']),
+  tool:         z.enum(['directory_list', 'file_read', 'file_write', 'shell_exec', 'test_run', 'mcp_request', 'audit_ui', 'memory_store', 'memory_query']),
   target:       z.string().min(1),   // File path or shell command
   rationale:    z.string().min(1),   // Why this step is in the minimal set
   reversible:   z.boolean(),
@@ -637,16 +637,46 @@ export const HaltTagSchema = z.enum([
 export type HaltTag = z.infer<typeof HaltTagSchema>;
 
 /**
+ * Structured payload for governed sandbox/executor policy denials.
+ * This is additive metadata; raw stdout/stderr/exit_code remain authoritative.
+ */
+export const StructuredDenialSchema = z.object({
+  category:      z.enum(['sandbox_policy', 'executor_policy']),
+  reason_code:   z.string().min(1),
+  message:       z.string().min(1),
+  tool:          z.string().min(1).nullable(),
+  active_mode:   z.string().min(1).nullable(),
+  required_mode: z.string().min(1).nullable(),
+  evidence:      z.array(z.string()).nullable(),
+});
+export type StructuredDenial = z.infer<typeof StructuredDenialSchema>;
+
+/**
+ * Structured lifecycle snapshot for read-only MCP requests.
+ * Records the last meaningful phase reached by the simplified MCP harness.
+ */
+export const McpLifecycleSchema = z.object({
+  phase: z.enum(['server_lookup', 'spawn', 'write_request', 'await_response', 'response_parse', 'complete']),
+  outcome: z.enum(['success', 'failure']),
+  reason_code: z.string().min(1).nullable(),
+  server: z.string().min(1),
+  evidence: z.array(z.string()).nullable(),
+});
+export type McpLifecycle = z.infer<typeof McpLifecycleSchema>;
+
+/**
  * Log entry for a single tool call — injected by the host environment.
  * `stdout` and `stderr` are the verbatim strings returned by the host.
  */
 export const ToolCallLogSchema = z.object({
   step:       z.number().int().min(1),
-  tool:       z.enum(['file_read', 'file_write', 'shell_exec', 'test_run', 'mcp_request', 'audit_ui', 'memory_store', 'memory_query']),
+  tool:       z.enum(['directory_list', 'file_read', 'file_write', 'shell_exec', 'test_run', 'mcp_request', 'audit_ui', 'memory_store', 'memory_query']),
   target:     z.string().min(1),
   exit_code:  z.number().int(),
   stdout:     z.string(),
   stderr:     z.string(),
+  denial:     StructuredDenialSchema.optional(),
+  mcp_lifecycle: McpLifecycleSchema.optional(),
   verified:   z.boolean(),  // Did the step's verification check pass?
 });
 export type ToolCallLog = z.infer<typeof ToolCallLogSchema>;
@@ -732,8 +762,8 @@ export type ExecutorReport = z.infer<typeof ExecutorReportSchema>;
  */
 export const ExecutorTurnToolCallSchema = z.object({
   type:              z.literal('tool_call'),
-  tool:              z.enum(['file_read', 'file_write', 'shell_exec', 'test_run', 'mcp_request', 'audit_ui', 'memory_store', 'memory_query']),
-  // file_read / file_write
+  tool:              z.enum(['directory_list', 'file_read', 'file_write', 'shell_exec', 'test_run', 'mcp_request', 'audit_ui', 'memory_store', 'memory_query']),
+  // directory_list / file_read / file_write
   path:              z.string().optional(),
   content:           z.string().optional(),
   // shell_exec / test_run

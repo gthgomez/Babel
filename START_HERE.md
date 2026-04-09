@@ -1,10 +1,6 @@
 # Start Here
 
-In under two minutes, `Babel-public` can show you the exact ordered stack it would resolve for a real task.
-
-The default public path is the typed `v9` lane; `v8` remains only as a legacy fallback.
-
-The quickest way to understand it is one deterministic success path:
+`Babel-public` is easiest to understand through one deterministic success path:
 
 1. install `babel-cli`
 2. validate the public repo
@@ -49,13 +45,12 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
   -TaskCategory mobile `
   -Project example_mobile_suite `
   -Model codex `
-  -SkillIds skill_android_pdf_processing `
   -Format json
 ```
 
 Expected reference output:
 
-- [examples/manifest-previews/mobile-pdf-direct.json](./examples/manifest-previews/mobile-pdf-direct.json)
+- [examples/manifest-previews/mobile-direct.json](./examples/manifest-previews/mobile-direct.json)
 
 ## What You Just Proved
 

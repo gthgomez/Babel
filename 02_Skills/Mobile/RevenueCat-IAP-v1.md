@@ -296,4 +296,3 @@ internal class names may change between major versions.
    Purchase succeeds, receipt verifies, but `isActive` stays false. No error surfaces in-app.
 7. Never ship a release build without verifying RC ProGuard rules are present.
    RC billing fails silently in minified builds. Works in debug. Broken in production.
-

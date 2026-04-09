@@ -212,4 +212,3 @@ fun onResume() {
 6. Always upload the R8 mapping file to the store for crash report symbolication.
 7. Never treat store artifact selection as covered by this skill alone. Pair with
    `skill_android_app_bundle` when the task touches AABs, bundletool, or cross-store release paths.
-

@@ -251,4 +251,3 @@ Before submitting a new agent:
 - [ ] `CONTEXT_BUDGETS["{name}"]` set if the agent has different payload tolerance
 - [ ] Pytest test in `scanners/tests/` covering at least: OK result, TIMEOUT result, output schema validation
 - [ ] Regression test golden diff added covering the new agent's domain
-

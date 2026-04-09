@@ -1,13 +1,11 @@
 # Babel
 
-**Babel-public lets you validate the public catalog and preview the exact governed instruction stack Babel would load for a real task before any full execution begins.**
-
-It is a runnable public-safe subset of Babel focused on making instruction-stack selection inspectable, deterministic, and repeatable.
+**Babel-public is a runnable public-safe subset of Babel focused on one thing: making instruction-stack selection inspectable, deterministic, and repeatable.**
 
 This public repo includes:
 
 - the layered prompt library
-- the typed `v9` router contract as the default lane, with `v8` preserved as a legacy fallback
+- the typed `v9` router contract
 - the catalog-driven resolver/compiler
 - a read-only MCP control-plane surface
 - public examples, golden previews, and regression tests
@@ -33,8 +31,6 @@ What is present but not the primary onboarding path:
 - model-execution flows that depend on local model setup or credentials
 
 ## Quick Start
-
-In the first two minutes, you can install the CLI, validate the public repo, and preview a real manifest resolved from `prompt_catalog.yaml`.
 
 1. Install CLI dependencies:
 
@@ -72,11 +68,10 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
   -TaskCategory mobile `
   -Project example_mobile_suite `
   -Model codex `
-  -SkillIds skill_android_pdf_processing `
   -Format json
 ```
 
-- [examples/manifest-previews/mobile-pdf-direct.json](./examples/manifest-previews/mobile-pdf-direct.json)
+- [examples/manifest-previews/mobile-direct.json](./examples/manifest-previews/mobile-direct.json)
 
 ## What Babel Does
 
@@ -94,7 +89,7 @@ Babel makes the stack explicit before the model starts working:
 - [START_HERE.md](./START_HERE.md) — the fastest public onboarding path
 - [examples/first-success.md](./examples/first-success.md) — the shortest before/after explanation
 - [examples/manifest-previews/backend-verified.json](./examples/manifest-previews/backend-verified.json) — golden backend preview
-- [examples/manifest-previews/mobile-pdf-direct.json](./examples/manifest-previews/mobile-pdf-direct.json) — golden Android/mobile preview
+- [examples/manifest-previews/mobile-direct.json](./examples/manifest-previews/mobile-direct.json) — golden Android/mobile preview
 - [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) — public architecture and product shape
 - [docs/BABEL_LOCAL_MODE.md](./docs/BABEL_LOCAL_MODE.md) — what the public runtime does and does not promise
 
@@ -103,8 +98,12 @@ Babel makes the stack explicit before the model starts working:
 Preview a manifest directly from the resolver:
 
 ```powershell
-cd .\babel-cli
-npm run preview:manifest -- --task-category backend --project example_saas_backend --model codex --pipeline-mode verified
+pwsh -File .\tools\resolve-local-stack.ps1 `
+  -TaskCategory backend `
+  -Project example_saas_backend `
+  -Model codex `
+  -PipelineMode verified `
+  -Format json
 ```
 
 Run the read-only MCP server:

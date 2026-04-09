@@ -17,6 +17,9 @@ artifacts/bundle-comparisons/*.json
 # ─── Project-specific working guides (internal only, not for public release) ───
 06_Task_Overlays/GPCGuard-Frontend-Professionalism-v1.0.md
 
+# ─── CLI source (pending security audit before public release) ────────────────
+babel-cli/
+
 # ─── Internal task prompts and planning docs (not for public release) ─────────
 BABEL_PHASE_1_5_TELEMETRY_ACTIVATION.md
 

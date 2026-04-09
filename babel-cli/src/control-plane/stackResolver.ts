@@ -63,25 +63,35 @@ const LAYER_ORDER: Record<Extract<CatalogLayer,
   pipeline_stage: 7,
 };
 
+const CATALOG_ID_ALIASES: Record<string, string> = {
+  skill_gradle: 'skill_gradle_wrapper',
+  skill_gradle_bootstrap: 'skill_gradle_wrapper',
+};
+
+function normalizeCatalogId(entryId: string): string {
+  return CATALOG_ID_ALIASES[entryId] ?? entryId;
+}
+
 function requireEntry(
   entriesById: Map<string, CatalogEntry>,
   entryId: string,
   expectedLayer?: string,
 ): CatalogEntry {
-  const entry = entriesById.get(entryId);
+  const normalizedId = normalizeCatalogId(entryId);
+  const entry = entriesById.get(normalizedId);
   if (!entry) {
     throw new Error(`[resolver] Unknown catalog id: ${entryId}`);
   }
   if (entry.status && entry.status !== 'active') {
-    throw new Error(`[resolver] Catalog entry is not active: ${entryId}`);
+    throw new Error(`[resolver] Catalog entry is not active: ${normalizedId}`);
   }
   if (expectedLayer && entry.layer !== expectedLayer) {
     throw new Error(
-      `[resolver] Catalog id ${entryId} has layer "${entry.layer}" but "${expectedLayer}" was required.`,
+      `[resolver] Catalog id ${normalizedId} has layer "${entry.layer}" but "${expectedLayer}" was required.`,
     );
   }
   if (!entry.path) {
-    throw new Error(`[resolver] Catalog entry is missing a path: ${entryId}`);
+    throw new Error(`[resolver] Catalog entry is missing a path: ${normalizedId}`);
   }
   return entry;
 }
@@ -97,15 +107,16 @@ function expandSkillIds(
 
   const visit = (skillId: string): void => {
     const entry = requireEntry(entriesById, skillId, 'skill');
+    const resolvedSkillId = entry.id;
 
-    if (visited.has(skillId)) {
+    if (visited.has(resolvedSkillId)) {
       return;
     }
-    if (visiting.has(skillId)) {
-      throw new Error(`[resolver] Skill dependency cycle detected at ${skillId}`);
+    if (visiting.has(resolvedSkillId)) {
+      throw new Error(`[resolver] Skill dependency cycle detected at ${resolvedSkillId}`);
     }
 
-    visiting.add(skillId);
+    visiting.add(resolvedSkillId);
 
     if (resolutionPolicy.expand_skill_dependencies) {
       for (const dependencyId of entry.dependencies) {
@@ -113,9 +124,9 @@ function expandSkillIds(
       }
     }
 
-    visiting.delete(skillId);
-    visited.add(skillId);
-    resolved.push(skillId);
+    visiting.delete(resolvedSkillId);
+    visited.add(resolvedSkillId);
+    resolved.push(resolvedSkillId);
   };
 
   for (const skillId of seeds) {

@@ -201,4 +201,3 @@ Required before any submission:
 5. By July 1, 2026: all new/updated apps with native code targeting Android 15+ must be 16KB page-size compliant.
 6. If using Samsung IAP: Samsung Account is required for purchases — document this UX difference.
 7. Minimum 4 screenshots required — 2 is not sufficient for Galaxy Store (differs from Google Play).
-

@@ -2,77 +2,305 @@ version: 1
 catalog_scope: babel_skills
 maintainer: control_plane
 root: "<YOUR_PROJECT_ROOT>/Babel/02_Skills"
-last_updated: "2026-03-28"
+last_updated: "2026-04-03"
 
 skills:
-  - id: skill_json_output_contract
-    path: Governance/Json-Output-Contract-v1.md
-    tags: [governance, json, output_contract, schema, validation, pipeline]
-
-  - id: skill_context_budget_defense
-    path: Governance/Context-Budget-Defense-v1.md
-    tags: [governance, context, token_budget, truncation, degradation]
-
-  - id: skill_evidence_gathering
-    path: Governance/Evidence-Gathering-v1.md
-    tags: [governance, evidence, pre_plan, evidence_gate, planning]
-
-  - id: skill_reject_loop_recovery
-    path: Governance/Reject-Loop-Recovery-v1.md
-    tags: [governance, reject_loop, recovery, anti_anchor, escalation]
-
-  - id: skill_bcdp_contracts
-    path: Governance/BCDP-Contracts-v1.md
-    tags: [governance, contracts, breaking_change, migration, api, schema, bcdp]
-
   - id: skill_ts_zod
     path: Lang/TS-Zod-v1.md
-    tags: [typescript, zod, validation, lang]
+    tags: [typescript, zod, validation, skill]
 
   - id: skill_supabase_pg
     path: DB/Supabase-PG-v1.md
-    tags: [supabase, postgres, database, rls, migrations]
+    tags: [supabase, postgres, database, rls, skill]
+
+  - id: skill_prisma_orm
+    path: DB/Prisma-ORM-v1.md
+    tags: [prisma, orm, database, migrations, schema, nextjs, skill]
 
   - id: skill_a11y_design
     path: UI/A11y-Design-v1.md
-    tags: [accessibility, ui, ux, a11y, web]
+    tags: [accessibility, ui, skill]
 
   - id: skill_react_nextjs
     path: Framework/React-NextJS-v1.md
-    tags: [react, nextjs, frontend, ui_ux, performance]
+    tags: [react, nextjs, performance, skill]
+
+  - id: skill_deno_edge_functions
+    path: Framework/Deno-Edge-Functions-v1.md
+    tags: [deno, edge-functions, supabase, runtime, cors, jwt, rls, skill]
+
+  - id: skill_sse_streaming
+    path: Framework/SSE-Streaming-v1.md
+    tags: [sse, streaming, deno, fetch, readablestream, example_llm_router, router, skill]
+
+  - id: skill_playwright_e2e
+    path: Framework/Playwright-E2E-v1.md
+    tags: [playwright, e2e, testing, accessibility, aria, example_web_audit, skill]
+
+  - id: skill_nodejs_cli
+    path: Framework/NodeJS-CLI-v1.md
+    tags: [nodejs, cli, esm, modules, args, exit-codes, filesystem, skill]
+
+  - id: skill_npm_oss_release
+    path: Framework/NPM-OSS-Release-v1.md
+    tags: [npm, oss, release, packaging, nodejs, cli, metadata, skill]
+
+  - id: skill_vite_react
+    path: Framework/Vite-React-v1.md
+    tags: [vite, react, spa, example_llm_router, client-side, env-vars, skill]
+
+  - id: skill_evidence_gathering
+    path: Governance/Evidence-Gathering-v1.md
+    tags: [evidence, planning, gate, governance, skill]
+
+  - id: skill_claim_extraction_ledger
+    path: Governance/Claim-Extraction-Ledger-v1.md
+    tags: [claims, extraction, ledger, audit, research, governance, skill]
+
+  - id: skill_product_reality_audit
+    path: Governance/Product-Reality-Audit-v1.md
+    tags: [audit, product, verification, marketing, implementation, governance, skill]
+
+  - id: skill_compliance_evidence_audit
+    path: Governance/Compliance-Evidence-Audit-v1.md
+    tags: [compliance, evidence, audit, retention, export, governance, skill]
+
+  - id: skill_competitive_teardown
+    path: Governance/Competitive-Teardown-v1.md
+    tags: [competitive, teardown, positioning, wedge, research, governance, skill]
+
+  - id: skill_bcdp_contracts
+    path: Governance/BCDP-Contracts-v1.md
+    tags: [bcdp, breaking-change, contracts, migration, governance, skill]
+
+  - id: skill_reject_loop_recovery
+    path: Governance/Reject-Loop-Recovery-v1.md
+    tags: [reject, qa, recovery, anchor-bias, governance, skill]
+
+  - id: skill_json_output_contract
+    path: Governance/Json-Output-Contract-v1.md
+    tags: [json, output, schema, pipeline, governance, skill]
+
+  - id: skill_context_budget_defense
+    path: Governance/Context-Budget-Defense-v1.md
+    tags: [context, budget, truncation, gemini, governance, skill]
+
+  - id: skill_adaptive_depth
+    path: Cognition/Adaptive-Depth-v1.md
+    tags: [cognition, depth, user-model, explanation, teaching, skill]
+
+  - id: skill_epistemic_calibration
+    path: Cognition/Epistemic-Calibration-v1.md
+    tags: [cognition, epistemics, confidence, evidence, verification, skill]
+
+  - id: skill_exploration_learning
+    path: Cognition/Exploration-Learning-v1.md
+    tags: [cognition, exploration, learning, compare, scenarios, skill]
+
+  - id: skill_skill_authoring
+    path: Governance/Skill-Authoring-v1.md
+    tags: [babel, skills, authoring, governance, catalog, reuse, skill]
+
+  - id: skill_capability_gap_review
+    path: Governance/Capability-Gap-Review-v1.md
+    tags: [babel, capability-gap, retrospectives, governance, routing, skills, skill]
+
+  - id: skill_babel_catalog_tuning
+    path: Governance/Babel-Catalog-Tuning-v1.md
+    tags: [babel, catalog, tuning, token-budget, validation, governance, skill]
+
+  - id: skill_public_export_hardening
+    path: Governance/Public-Export-Hardening-v1.md
+    tags: [babel, public-export, sanitization, release, governance, scrub, skill]
+
+  - id: skill_outbound_truth_redlining
+    path: Governance/Outbound-Truth-Redlining-v1.md
+    tags: [outbound, redline, marketing, sales, pricing, copy, evidence, governance, skill]
+
+  - id: skill_prompt_runtime_continuity
+    path: Governance/Prompt-Runtime-Continuity-v1.md
+    tags: [prompt, runtime, continuity, schema, examples, docs, contracts, governance, skill]
+
+  - id: skill_in_app_truth_sweep
+    path: Governance/In-App-Truth-Sweep-v1.md
+    tags: [app-copy, truth-sweep, ui-copy, product-scope, docs, dashboard, governance, skill]
+
+  - id: skill_repo_boundary_release_hygiene
+    path: Governance/Repo-Boundary-Release-Hygiene-v1.md
+    tags: [git, github, repo-boundary, staging, release, deployment, governance, skill]
+
+  - id: skill_dirty_worktree_triage
+    path: Governance/Dirty-Worktree-Triage-v1.md
+    tags: [git, github, dirty-worktree, triage, staging, release, governance, skill]
+
+  - id: skill_github_release_batching
+    path: Governance/GitHub-Release-Batching-v1.md
+    tags: [git, github, batching, commits, push, release, deployment, governance, skill]
+
+  - id: skill_private_source_repo_discipline
+    path: Governance/Private-Source-Repo-Discipline-v1.md
+    tags: [git, github, private-repo, public-repo, remote-role, release, governance, skill]
+
+  - id: skill_derived_public_release_gate
+    path: Governance/Derived-Public-Release-Gate-v1.md
+    tags: [git, github, public-release, sanitization, export, secrets, governance, skill]
+
+  - id: skill_multi_agent_pipeline
+    path: Governance/Multi-Agent-Pipeline-v1.md
+    tags: [multi-agent, pipeline, llm, review, learning, example_saas_backend, governance, skill]
+
+  - id: skill_ops_observability
+    path: Governance/Ops-Observability-v1.md
+    tags: [observability, logging, recovery, operations, sfdipot, governance, skill]
+
+  - id: skill_supabase_rls_drift_audit
+    path: Governance/Supabase-RLS-Drift-Audit-v1.md
+    tags: [supabase, postgres, rls, grants, partitions, schema-cache, drift, governance, skill]
+
+  - id: skill_session_model_reality_audit
+    path: Governance/Session-Model-Reality-Audit-v1.md
+    tags: [auth, session, cookies, refresh-token, logout, claims, governance, skill]
+
+  - id: skill_supabase_exposed_schema_hardening
+    path: Governance/Supabase-Exposed-Schema-Hardening-v1.md
+    tags: [supabase, postgres, public-schema, grants, rls, exposure, hardening, governance, skill]
+
+  - id: skill_auth_enumeration_resistance
+    path: Governance/Auth-Enumeration-Resistance-v1.md
+    tags: [auth, enumeration, signup, login, reset, ux, leakage, governance, skill]
+
+  - id: skill_security_release_gate
+    path: Governance/Security-Release-Gate-v1.md
+    tags: [security, release-gate, audit, launch, verification, governance, skill]
+
+  - id: skill_evidence_field_consistency_audit
+    path: Governance/Evidence-Field-Consistency-Audit-v1.md
+    tags: [evidence, field-consistency, response, database, rpc, ui, drift, governance, skill]
+
+  - id: skill_run_artifact_inspection
+    path: Governance/Run-Artifact-Inspection-v1.md
+    tags: [babel, inspect, evidence, manifest, stack, runs, observability, governance, skill]
+
+  - id: skill_stripe_webhook
+    path: Payments/Stripe-Webhook-v1.md
+    tags: [stripe, webhook, payments, billing, deno, edge-functions, idempotency, skill]
+
+  - id: skill_idempotency
+    path: Governance/Idempotency-Contract-v1.md
+    tags: [idempotency, webhooks, retry, deduplication, serverless, governance, skill]
 
   - id: skill_google_play_billing
     path: Mobile/Google-Play-Billing-v1.md
-    tags: [android, billing, iap, google-play, mobile]
+    tags: [android, billing, iap, google-play, mobile, skill]
 
   - id: skill_android_play_store_compliance
     path: Mobile/Android-Play-Store-Compliance-v1.md
-    tags: [android, play-store, compliance, permissions, accessibility, mobile]
+    tags: [android, play-store, compliance, permissions, accessibility, mobile, skill]
 
   - id: skill_jetpack_compose
     path: Mobile/Jetpack-Compose-v1.md
-    tags: [android, compose, jetpack, material3, ui, mobile]
+    tags: [android, compose, jetpack, material3, ui, mobile, skill]
+
+  - id: skill_android_ui_audit_review
+    path: Mobile/Android-UI-Audit-Review-v1.md
+    tags: [android, compose, ui, ux, audit, review, critique, planning, mobile, skill]
 
   - id: skill_android_release_build
     path: Mobile/Android-Release-Build-v1.md
-    tags: [android, release, signing, proguard, r8, material-theme, mobile]
+    tags: [android, release, signing, proguard, r8, material-theme, mobile, skill]
 
   - id: skill_android_app_bundle
     path: Mobile/Android-App-Bundle-v1.md
-    tags: [android, aab, bundletool, release, packaging, mobile, store]
+    tags: [android, aab, bundletool, release, packaging, mobile, store, skill]
 
   - id: skill_samsung_galaxy_store
     path: Mobile/Samsung-Galaxy-Store-v1.md
-    tags: [android, samsung, galaxy-store, iap, mobile, store, compliance]
+    tags: [android, samsung, galaxy-store, iap, mobile, store, compliance, skill]
 
   - id: skill_amazon_appstore
     path: Mobile/Amazon-Appstore-v1.md
-    tags: [android, amazon, appstore, fire-os, iap, mobile, store, compliance]
+    tags: [android, amazon, appstore, fire-os, iap, mobile, store, compliance, skill]
 
   - id: skill_revenuecat_iap
     path: Mobile/RevenueCat-IAP-v1.md
-    tags: [android, revenuecat, iap, billing, amazon, google-play, mobile, cross-platform]
+    tags: [android, revenuecat, iap, billing, amazon, google-play, mobile, cross-platform, skill]
+
+  - id: skill_android_dependency_research
+    path: Mobile/Android-Dependency-Research-v1.md
+    tags: [android, gradle, maven, dependencies, build, mobile, skill]
+
+  - id: skill_android_app_classification
+    path: Mobile/Android-App-Classification-v1.md
+    tags: [android, architecture, classification, routing, minimalism, mobile, skill]
+
+  - id: skill_android_navigation_strategy
+    path: Mobile/Android-Navigation-Strategy-v1.md
+    tags: [android, navigation, compose, back-stack, state, mobile, skill]
+
+  - id: skill_android_state_management
+    path: Mobile/Android-State-Management-v1.md
+    tags: [android, state, stateflow, viewmodel, compose, architecture, mobile, skill]
+
+  - id: skill_android_testing_strategy
+    path: Mobile/Android-Testing-Strategy-v1.md
+    tags: [android, testing, strategy, routing, orchestration, mobile, skill]
+
+  - id: skill_android_unit_testing
+    path: Mobile/Android-Unit-Testing-v1.md
+    tags: [android, testing, junit, turbine, coroutines, viewmodel, mobile, skill]
+
+  - id: skill_android_screenshot_testing
+    path: Mobile/Android-Screenshot-Testing-v1.md
+    tags: [android, testing, screenshot, roborazzi, compose, visual-regression, mobile, skill]
+
+  - id: skill_android_test_enforcement
+    path: Mobile/Android-Test-Enforcement-v1.md
+    tags: [android, testing, ci, enforcement, turbine, screenshot, mobile, skill]
+
+  - id: skill_android_file_handling
+    path: Mobile/Platform/Android-File-Handling-v1.md
+    tags: [android, files, contentresolver, fileprovider, saf, storage, mobile, skill]
+
+  - id: skill_android_photo_picker
+    path: Mobile/Platform/Android-PhotoPicker-v1.md
+    tags: [android, photo-picker, media, permissions, fire-os, amazon, mobile, skill]
+
+  - id: skill_android_permissions
+    path: Mobile/Platform/Android-Permissions-v1.md
+    tags: [android, permissions, policy, overlay, usage-access, compliance, mobile, skill]
+
+  - id: skill_android_background_work
+    path: Mobile/Platform/Android-Background-Work-v1.md
+    tags: [android, background-work, workmanager, foreground-service, lifecycle, mobile, skill]
+
+  - id: skill_android_performance_hardening
+    path: Mobile/Android-Performance-Hardening-v1.md
+    tags: [android, performance, baseline-profile, macrobenchmark, startup, compose, mobile, skill]
 
   - id: skill_google_play_store
     path: Mobile/Google-Play-Store-v1.md
-    tags: [android, google-play, compliance, billing, permissions, mobile, store]
+    tags: [android, google-play, compliance, billing, permissions, mobile, store, skill]
+
+  - id: skill_android_saf
+    path: Mobile/Android-SAF-v1.md
+    tags: [android, saf, content-uri, fileprovider, file-picker, mobile, skill]
+
+  - id: skill_android_instrumented_testing
+    path: Mobile/Android-Instrumented-Testing-v1.md
+    tags: [android, testing, instrumented, androidtest, compose-test, coroutines, mobile, skill]
+
+  - id: skill_android_pdf_processing
+    path: Mobile/Android-PDF-Processing-v1.md
+    tags: [android, pdf, pdfrenderer, pdfdocument, processing, compression, mobile, skill]
+
+  - id: skill_untrusted_input_guard
+    path: Governance/Untrusted-Input-Guard-v1.md
+    tags: [security, injection, untrusted-input, autonomous, governance, skill]
+
+  - id: skill_autonomous_agent_state_machine
+    path: Governance/Autonomous-Agent-State-Machine-v1.md
+    tags: [state-machine, autonomous, async, hitl, halt, governance, skill]
+
+  - id: skill_async_task_delivery
+    path: Governance/Async-Task-Delivery-v1.md
+    tags: [async, delivery, output, slack, discord, confidence, governance, skill]

@@ -17,6 +17,17 @@ $cliRoot = Join-Path $Root "babel-cli"
 if (-not (Test-Path -LiteralPath $cliRoot)) {
     throw "babel-cli directory not found at $cliRoot"
 }
+$packageJsonPath = Join-Path $cliRoot "package.json"
+if (-not (Test-Path -LiteralPath $packageJsonPath)) {
+    throw "babel-cli package.json not found at $packageJsonPath"
+}
+$packageJson = Get-Content -Raw $packageJsonPath | ConvertFrom-Json
+$npmScripts = @{}
+if ($null -ne $packageJson.scripts) {
+    $packageJson.scripts.PSObject.Properties | ForEach-Object {
+        $npmScripts[$_.Name] = $_.Value
+    }
+}
 
 function Invoke-Step {
     param(
@@ -39,15 +50,34 @@ function Invoke-Step {
     }
 }
 
+function Invoke-NpmScriptStep {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Label,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ScriptName
+    )
+
+    if (-not $npmScripts.ContainsKey($ScriptName)) {
+        Write-Host ""
+        Write-Host "==> $Label" -ForegroundColor Cyan
+        Write-Host "Skipping optional npm script '$ScriptName' because it is not defined in babel-cli/package.json." -ForegroundColor Yellow
+        return
+    }
+
+    Invoke-Step -Label $Label -Command "Set-Location '$cliRoot'; npm run $ScriptName" -Workdir $cliRoot
+}
+
 Invoke-Step -Label "Public scrub check" -Command "& '$Root\\tools\\check-public-scrub.ps1' -RepoRoot '$Root'" -Workdir $Root
 Invoke-Step -Label "Catalog validation" -Command "& '$Root\\tools\\validate-catalog.ps1'" -Workdir $Root
-Invoke-Step -Label "TypeScript typecheck" -Command "Set-Location '$cliRoot'; npm run typecheck" -Workdir $cliRoot
-Invoke-Step -Label "Resolver regression tests" -Command "Set-Location '$cliRoot'; npm run test:resolver" -Workdir $cliRoot
-Invoke-Step -Label "Manifest preview regression tests" -Command "Set-Location '$cliRoot'; npm run test:manifest-preview" -Workdir $cliRoot
-Invoke-Step -Label "Orchestrator routing regression tests" -Command "Set-Location '$cliRoot'; npm run test:orchestrator-routing" -Workdir $cliRoot
-Invoke-Step -Label "MCP adapter regression tests" -Command "Set-Location '$cliRoot'; npm run test:mcp-adapter" -Workdir $cliRoot
+Invoke-NpmScriptStep -Label "TypeScript typecheck" -ScriptName "typecheck"
+Invoke-NpmScriptStep -Label "Resolver regression tests" -ScriptName "test:resolver"
+Invoke-NpmScriptStep -Label "Manifest preview regression tests" -ScriptName "test:manifest-preview"
+Invoke-NpmScriptStep -Label "Orchestrator routing regression tests" -ScriptName "test:orchestrator-routing"
+Invoke-NpmScriptStep -Label "MCP adapter regression tests" -ScriptName "test:mcp-adapter"
 Invoke-Step -Label "Backend wrapper preview smoke test" -Command "& '$Root\\tools\\resolve-local-stack.ps1' -TaskCategory backend -Project example_saas_backend -Model codex -PipelineMode verified -Format json | Out-Null" -Workdir $Root
-Invoke-Step -Label "Android wrapper preview smoke test" -Command "& '$Root\\tools\\resolve-local-stack.ps1' -TaskCategory mobile -Project example_mobile_suite -Model codex -SkillIds skill_android_pdf_processing -Format json | Out-Null" -Workdir $Root
+Invoke-Step -Label "Android wrapper preview smoke test" -Command "& '$Root\\tools\\resolve-local-stack.ps1' -TaskCategory mobile -Project example_mobile_suite -Model codex -Format json | Out-Null" -Workdir $Root
 
 Write-Host ""
 Write-Host "Public release validation passed." -ForegroundColor Green

@@ -39,10 +39,51 @@ This skill converts those silent failure modes into explicit plan requirements.
 
 **Current in-project version: 7.1.1.** Migration to v8 is required before August 2026.
 
-**Migration note (v7 → v8):**
-- Remove all `queryPurchaseHistoryAsync` calls. For active purchases use `queryPurchasesAsync`.
-  For consumed/canceled history, use your backend records or the Voided Purchases API.
-- Replace `BillingClient.ProductType.INAPP` string literal references where the API changed.
+**Migration note (v7 → v8) — verified against official migration guide, Feb 2026:**
+
+Minimal diff for one-time IAP (INAPP-only apps):
+
+```kotlin
+// BEFORE (v7)
+BillingClient.newBuilder(context)
+    .enablePendingPurchases()                     // no-arg overload — removed in v8
+    .setListener(this)
+    .build()
+
+billingClient.queryPurchasesAsync(BillingClient.ProductType.INAPP, listener)
+
+// AFTER (v8)
+val pendingParams = PendingPurchasesParams.newBuilder()
+    .enableOneTimeProducts()                       // explicit opt-in required
+    .build()
+
+BillingClient.newBuilder(context)
+    .enablePendingPurchases(pendingParams)
+    .enableAutoServiceReconnection()               // v8 handles reconnect internally
+    .setListener(this)
+    .build()
+
+val queryParams = QueryPurchasesParams.newBuilder()
+    .setProductType(BillingClient.ProductType.INAPP)
+    .build()
+billingClient.queryPurchasesAsync(queryParams, listener)
+```
+
+**What did NOT change:** `acknowledgePurchase` 3-day rule, `queryPurchasesAsync` on-reconnect
+contract, `BillingGateway` interface — all identical in v8.
+
+**`queryProductDetailsAsync`:** Listener signature is unchanged in v8 for one-time IAP apps.
+No migration work needed there.
+
+**Race condition warning:** When adding `enableAutoServiceReconnection()`, remove any existing
+manual retry loop in `onBillingServiceDisconnected`. Keeping both causes two concurrent
+`queryPurchasesAsync` calls on reconnect, producing duplicate billing state updates in the ViewModel.
+The ViewModel's `onResume → connect()` pattern (Step 1, row 2) is still required — that is
+separate from the `onBillingServiceDisconnected` retry loop.
+
+Additional migration steps:
+- Remove all `queryPurchaseHistoryAsync` calls — removed in v8. Use `queryPurchasesAsync` for
+  active purchases; use the Voided Purchases API or backend records for history.
 - Re-verify ProGuard rules after migration — v8 renamed internal classes.
 
 ---
@@ -143,5 +184,9 @@ server-side verification design using the Google Play Developer API v3 and a ser
 4. Never change `PRO_PRODUCT_ID` without updating Play Console first. The constant is
    meaningless without a matching product in the console.
 5. Never ship a release build with billing changes without verifying ProGuard rules are in place.
-6. Never let `autoServiceReconnection` behavior be the sole reconnection strategy. The
-   ViewModel must call `connect()` again on `onResume` for robust entitlement restoration.
+6. `enableAutoServiceReconnection()` handles transient network drops — it does NOT replace
+   the `onResume → connect() → queryPurchasesAsync()` sequence. Both are required and serve
+   different purposes. The ViewModel must still call `connect()` on `onResume`.
+7. When adding `enableAutoServiceReconnection()`, remove any manual retry loop that was
+   previously in `onBillingServiceDisconnected`. Keeping both fires duplicate
+   `queryPurchasesAsync` calls on reconnect and creates race conditions in billing state.

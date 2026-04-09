@@ -297,4 +297,3 @@ try {
 | Changing response header names | Breaks frontend metadata display; silent undefined values |
 | Using `EventSource` for authenticated routes | Cannot send Authorization header; 401 response silently ignored |
 | Not calling `controller.abort()` on unmount | Connection leak; `setState` on unmounted component |
-

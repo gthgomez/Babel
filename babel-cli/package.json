@@ -8,23 +8,24 @@
     "babel": "bin/babel.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "npm run clean:dist && tsc",
+    "clean:dist": "node scripts/clean_dist.mjs",
+    "check:dist": "node scripts/check_dist_clean.mjs",
+    "check:source-provenance": "node scripts/check_source_provenance.mjs",
     "compare:v9-bundles": "tsx --no-warnings=ExperimentalWarning scripts/compare_v9_bundles.ts",
     "dev": "tsx --env-file=.env --no-warnings=ExperimentalWarning src/index.ts",
     "dev:watch": "tsx watch --no-warnings=ExperimentalWarning src/index.ts",
-    "preview:manifest": "tsx --no-warnings=ExperimentalWarning scripts/preview_manifest.ts",
     "start": "node dist/index.js",
     "init-chronicle": "tsx --no-warnings=ExperimentalWarning scripts/init_chronicle.ts",
     "report:v9": "tsx --no-warnings=ExperimentalWarning scripts/report_v9_runs.ts",
     "test:mcp-adapter": "tsx --no-warnings=ExperimentalWarning scripts/test_mcp_adapter.ts",
-    "test:manifest-preview": "tsx --no-warnings=ExperimentalWarning scripts/test_manifest_preview.ts",
     "test:otel-tracing": "tsx --no-warnings=ExperimentalWarning scripts/test_otel_tracing.ts",
     "test:orchestrator-routing": "tsx --no-warnings=ExperimentalWarning scripts/test_orchestrator_routing.ts",
     "test:pipeline-v8": "tsx --no-warnings=ExperimentalWarning scripts/test_pipeline_v8.ts",
     "test:pipeline-v9": "tsx --no-warnings=ExperimentalWarning scripts/test_pipeline_v9.ts",
     "test:resolver": "tsx --no-warnings=ExperimentalWarning scripts/test_resolver.ts",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run check:source-provenance && npm run check:dist"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",

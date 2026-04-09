@@ -25,7 +25,8 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 | `example_saas_backend` | `...\Project_SaaS\example_saas_backend` | GPC, privacy, consent, GDPR, CCPA, webhook, Stripe, Supabase, edge function |
 | `example_llm_router` | `...\Project_SaaS\example_llm_router` | example_llm_router, design system, component library, tokens, theming |
 | `example_web_audit` | `...\Project_SaaS\example_web_audit` | example_web_audit, audit, compliance log, report, trail |
-| `example_mobile_suite` | `...\example_mobile_suite` | example_mobile_suite, android, kotlin, jetpack compose, compose, mobile app, play store, google play, billing client, billing library, AAB, APK, bundletool, example_app_one, example_app_two, example_app_three, example_app_four |
+| `example_mobile_suite` | `...\example_mobile_suite` | example_mobile_suite, android, kotlin, jetpack compose, compose, mobile app, play store, google play, billing client, billing library, billing wiring, billing integration, documented android contracts, manifest declarations, policy-sensitive manifest declarations, manifest policy declarations, AAB, APK, bundletool, example_app_one, example_app_two, example_app_three, example_app_four |
+| `example_autonomous_agent` | `/agent-root/example-autonomous-agent` | example_autonomous_agent, example_autonomous_agent agent, autonomous agent, AGENTS.md, SOUL.md, example_autonomous_agent workspace, example_autonomous_agent config, agent instruction, agent startup, unattended agent |
 
 If a request cannot be matched to any project, set `target_project` to `"global"`.
 
@@ -62,7 +63,8 @@ Classify the task to determine which single Domain Architect ID to load.
 |-----------|------------------|-----------|
 | **Frontend / UI** | React, CSS, component, layout, user flow, design, Tailwind, accessibility | `domain_swe_frontend` |
 | **Backend / API** | database, edge function, API route, auth, webhook, Stripe, Supabase, schema, query | `domain_swe_backend` |
-| **Mobile / Android** | android, kotlin, jetpack compose, compose, mobile app, play store, google play, samsung galaxy store, amazon appstore, AAB, APK, bundletool, billing client, billing library, example_app_one, example_app_two, example_app_three, example_app_four | `domain_android_kotlin` |
+| **Mobile / Android** | android, kotlin, jetpack compose, compose, mobile app, play store, google play, samsung galaxy store, amazon appstore, AAB, APK, bundletool, billing client, billing library, billing wiring, billing integration, documented android contracts, manifest declarations, policy-sensitive manifest declarations, manifest policy declarations, example_app_one, example_app_two, example_app_three, example_app_four | `domain_android_kotlin` |
+| **Product Audit / Reality Check** | verify claims, truth extraction, marketing vs implementation, product audit, competitive reality, reality check, implementation vs positioning, claims audit, product reality audit | `domain_product_audit` |
 | **Compliance / Legal** | GPC, GDPR, CCPA, consent, privacy policy, terms, regulatory | `domain_compliance_gpc` |
 | **DevOps / Infra** | CI/CD, Docker, Vercel, GitHub Actions, Terraform, deploy, `.env`, migrations | `domain_devops` |
 | **Research / Strategy** | brainstorm, research, market, strategy, compare, investigate, document | `domain_research` |
@@ -72,11 +74,26 @@ If the task spans multiple types, select the **primary** type and note the secon
 Precedence rules for ambiguous words:
 - `compose` means `domain_android_kotlin` when the request also includes Android/Kotlin/mobile terms. It means `domain_swe_frontend` only for web React/UI requests.
 - `billing`, `Play Store`, `AAB`, `APK`, and `bundletool` are mobile triggers when tied to app packaging or store distribution. Do not route those to backend unless the request explicitly focuses on server-side purchase verification APIs.
+- `billing wiring`, `billing integration`, `manifest declarations`, `policy-sensitive manifest declarations`, `manifest policy declarations`, and `documented Android contracts` are Android/mobile verification triggers when the request references app metadata, Play policy, or the `example_mobile_suite` repo. Do not collapse those to backend just because the wording includes `verify`, `contracts`, or compliance-style language.
 - Do not route Android/mobile requests to `domain_swe_frontend` just because they mention UI.
+- Do route explicit claim-verification / product-reality / marketing-vs-implementation requests to `domain_product_audit`, even when the target project is technical.
+- Do not route neutral research, broad synthesis, or statute-only analysis to `domain_product_audit` unless the user is explicitly asking for truth-classification of claims.
 
 ### Step C: SKILL_SELECTION
 
 Select zero or more `skill_ids` based on task shape and domain choice.
+
+Before seeding any generic cognition skill, emit exactly one `analysis.purpose_mode`.
+
+Purpose rules:
+- `execution` is the default for routine SWE, governed execution, deterministic repo changes, and unattended-safe work.
+- `verification` is for truth checks, uncertainty handling, evidence-backed validation, and current-status confirmation.
+- `learning` is for teaching, onboarding, first-principles walkthroughs, and explanation-depth calibration.
+- `exploration` is for bounded option-space analysis before commitment.
+- `audit` is for adversarial truth classification and product-reality work.
+- Emit exactly one primary purpose. Do not emit arrays or composite purpose values.
+- If the request mixes multiple purposes, choose the dominant purpose and record the tradeoff in `analysis.ambiguity_note`.
+- Requests framed as `verify`, `confirm`, `still match`, `before any edits`, or `before changing anything` should usually emit `analysis.purpose_mode = "verification"` unless the user is explicitly asking to implement or refactor.
 
 Default skill rules for this first slice:
 - If `instruction_stack.domain_id = "domain_swe_backend"`, include:
@@ -85,6 +102,7 @@ Default skill rules for this first slice:
 - If `instruction_stack.domain_id = "domain_swe_frontend"`, include:
   - `skill_react_nextjs`
   - `skill_a11y_design`
+- If `instruction_stack.domain_id = "domain_product_audit"`, prefer the domain defaults and add no extra skills unless the task explicitly needs bounded evidence-depth or competitive work.
 - If `instruction_stack.domain_id = "domain_android_kotlin"`, apply these minimal mobile rules:
   - AAB / bundle / APK-set / Play App Signing / bundletool / store artifact / release packaging → include `skill_android_app_bundle`
   - release build hardening / signing / keystore / R8 / ProGuard / mapping file / release-only billing failure → include `skill_android_release_build`
@@ -95,6 +113,30 @@ Default skill rules for this first slice:
   - RevenueCat / purchases-amazon / purchases artifact split / shared cross-store entitlement routing → include `skill_revenuecat_iap`
   - Google Play Billing lifecycle / `acknowledgePurchase` / `queryPurchasesAsync` / `ProductDetails` / `PRO_PRODUCT_ID` → include `skill_google_play_billing`
   - Jetpack Compose state / `BackHandler` / `LaunchedEffect` / `collectAsStateWithLifecycle` / screen-enum navigation → include `skill_jetpack_compose`
+- Purpose-driven generic cognition rules:
+  - `analysis.purpose_mode = "execution"` → add no generic cognition skill
+  - `analysis.purpose_mode = "verification"` → may include `skill_epistemic_calibration`
+  - `analysis.purpose_mode = "learning"` → may include `skill_adaptive_depth`
+  - `analysis.purpose_mode = "exploration"` → may include `skill_exploration_learning`
+  - `analysis.purpose_mode = "audit"` → add no generic cognition skill by default
+- Generic cognition seeding must stay bounded:
+  - seed at most one generic cognition skill from `purpose_mode`
+  - `purpose_mode` influences only generic cognition seeding
+  - `purpose_mode` must not choose `domain_id`, `pipeline_mode`, model adapter, or project/task overlays
+- Heuristic intent phrases are fallback-only. If purpose is unclear, infer one primary `purpose_mode`; do not stack multiple generic cognition skills because the task mentions several soft intent phrases.
+- Hard suppression: if `instruction_stack.domain_id = "domain_research"`, do not add the three generic cognition skills. `domain_research` already contains richer versions of those behaviors and generic stacking is redundant.
+- Audit precedence: if `instruction_stack.domain_id = "domain_product_audit"`, do not add generic cognition skills by default. Preserve the domain's adversarial verification posture and hard verdict structure.
+- Autonomous protection:
+  - `analysis.purpose_mode = "exploration"` must not broaden ACT.
+  - In unattended or autonomous lanes, treat `learning` and `exploration` as non-authorizing. Do not let them widen deterministic execution.
+
+Autonomous governance rules:
+- If `target_project = "example_autonomous_agent"` OR `pipeline_mode = "autonomous"`, always include these three skills — in this order, before any domain skills:
+  1. `skill_untrusted_input_guard`
+  2. `skill_autonomous_agent_state_machine`
+  3. `skill_async_task_delivery`
+  These are non-negotiable for any unattended execution context. Do not omit them to reduce token budget.
+- If `pipeline_mode = "verified"` and the task source is an async channel (Slack, Discord, webhook), also include `skill_untrusted_input_guard` and `skill_autonomous_agent_state_machine`.
 
 Conservative rules:
 - Never select pipeline stages as skills.
@@ -186,6 +228,8 @@ Load task overlays only when they add bounded value beyond the domain architect 
 Examples:
 - existing frontend polish or design-system tightening → `task_frontend_professionalism`
 - example_saas_backend frontend polish → both `task_frontend_professionalism` and `task_example_saas_backend_frontend_professionalism`
+- generic claim-reality audit → usually no task overlay unless output structure needs tightening via `task_adversarial_claims_audit`
+- example_saas_backend claim-reality audit → add `task_example_saas_backend_adversarial_claims_audit` only when project-specific claim families materially matter
 
 If no task overlay materially helps, load none.
 
@@ -219,6 +263,9 @@ You must output **ONLY** valid JSON. No prose. No Markdown outside the JSON obje
     "secondary_category": "[category or null]",
     "complexity_estimate": "[Low | Medium | High]",
     "pipeline_mode": "[direct | verified | autonomous | manual]",
+    "purpose_mode": "[execution | verification | learning | exploration | audit]",
+    "purpose_source": "[explicit_user_request | router_inferred | fallback_default]",
+    "purpose_confidence": 0.85,
     "ambiguity_note": "[string or null]",
     "routing_confidence": 0.95
   },
@@ -282,6 +329,7 @@ You must output **ONLY** valid JSON. No prose. No Markdown outside the JSON obje
 - If a required catalog entry appears missing, emit the typed stack anyway and include the issue in `analysis.ambiguity_note`.
 - Never route Android/mobile store-distribution work to `domain_swe_frontend` or `domain_swe_backend` when `domain_android_kotlin` is the clear fit.
 - Never ignore `overlay_example_mobile_suite` when the request clearly targets `example_mobile_suite`.
+- Never downgrade `example_mobile_suite` billing + manifest + policy verification requests to backend merely because they mention `contracts`, `verify`, or documentation. Those stay on `domain_android_kotlin` with verification purpose unless the user explicitly scopes the work to server-side purchase verification APIs.
 
 ### routing_confidence — Required Field
 
@@ -473,6 +521,66 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
 }
 ```
 
+### Example — Android billing + manifest contract verification
+
+```json
+{
+  "orchestrator_version": "9.0",
+  "target_project": "example_mobile_suite",
+  "target_project_path": "<YOUR_PROJECT_ROOT>/example_mobile_suite",
+  "analysis": {
+    "task_summary": "Verify that Android billing wiring and policy-sensitive manifest declarations still match the documented repo contracts before any edits.",
+    "task_category": "Mobile",
+    "secondary_category": "Compliance",
+    "complexity_estimate": "Medium",
+    "pipeline_mode": "verified",
+    "purpose_mode": "verification",
+    "purpose_source": "explicit_user_request",
+    "purpose_confidence": 0.9,
+    "ambiguity_note": null,
+    "routing_confidence": 0.94
+  },
+  "compilation_state": "uncompiled",
+  "instruction_stack": {
+    "behavioral_ids": ["behavioral_core_v7", "behavioral_guard_v7"],
+    "domain_id": "domain_android_kotlin",
+    "skill_ids": ["skill_google_play_billing", "skill_android_play_store_compliance"],
+    "model_adapter_id": "adapter_codex_balanced",
+    "project_overlay_id": "overlay_example_mobile_suite",
+    "task_overlay_ids": [],
+    "pipeline_stage_ids": ["pipeline_qa_reviewer"]
+  },
+  "resolution_policy": {
+    "apply_domain_default_skills": true,
+    "expand_skill_dependencies": true,
+    "strict_conflict_mode": "error"
+  },
+  "platform_profile": {
+    "profile_source": "not_required_for_routing",
+    "client_surface": "unspecified",
+    "container_model": null,
+    "ingestion_mode": "none",
+    "repo_write_mode": null,
+    "output_surface": [],
+    "platform_modes": [],
+    "execution_trust": null,
+    "data_trust": null,
+    "freshness_trust": null,
+    "action_trust": null,
+    "approval_mode": "none"
+  },
+  "worker_configuration": {
+    "assigned_model": "Codex",
+    "rationale": "Codex Balanced fits repo-backed Android verification work that touches billing and manifest compliance together."
+  },
+  "prompt_manifest": [],
+  "handoff_payload": {
+    "user_request": "Verify that billing wiring plus manifest policy declarations still match the repo's documented Android contracts before changing anything.",
+    "system_directive": "Resolve instruction_stack against prompt_catalog.yaml, expand dependencies, compile prompt_manifest, then load the compiled files in order."
+  }
+}
+```
+
 ### Example — Amazon + Samsung multi-store distribution
 
 ```json
@@ -529,4 +637,3 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
   }
 }
 ```
-
