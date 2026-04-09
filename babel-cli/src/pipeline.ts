@@ -172,6 +172,15 @@ interface RuntimeCompiledArtifacts {
   warnings?: string[];
 }
 
+type ExecutorTerminalStatus = 'EXECUTION_COMPLETE' | 'EXECUTION_HALTED' | 'ACTIVATION_REFUSED';
+
+interface ExecutorLoopResult {
+  toolCallLog: ToolCallLog[];
+  terminalStatus: ExecutorTerminalStatus;
+  haltTag?: HaltTag;
+  condition?: string;
+}
+
 // ─── Logger ───────────────────────────────────────────────────────────────────
 
 function log(msg: string): void {
@@ -1973,7 +1982,7 @@ async function runExecutorLoop(
   targetModel:  TargetModel,
   reportWarnings: string[] = [],
   initialToolCallLog: ToolCallLog[] = [],
-): Promise<{ toolCallLog: ToolCallLog[] }> {
+): Promise<ExecutorLoopResult> {
   assertExecutorGate(evidence.runDir);
 
   // ── Compile base context once ────────────────────────────────────────────
@@ -2009,7 +2018,14 @@ async function runExecutorLoop(
       );
       writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
       log('  Executor: EXECUTION_HALTED [HALLUCINATED_OUTPUT]');
-      return { toolCallLog };
+      return {
+        toolCallLog,
+        terminalStatus: 'EXECUTION_HALTED',
+        haltTag: 'HALLUCINATED_OUTPUT',
+        condition:
+          `All runner tiers failed to produce a valid executor turn. ` +
+          `Last error: ${err instanceof Error ? err.message : String(err)}`,
+      };
     }
 
     // ── Terminal completion ──────────────────────────────────────────────────
@@ -2025,7 +2041,25 @@ async function runExecutorLoop(
       } else {
         log(`  Executor: ACTIVATION_REFUSED — ${executorTurn.reason}`);
       }
-      return { toolCallLog };
+      if (executorTurn.status === 'EXECUTION_COMPLETE') {
+        return {
+          toolCallLog,
+          terminalStatus: 'EXECUTION_COMPLETE',
+        };
+      }
+      if (executorTurn.status === 'EXECUTION_HALTED') {
+        return {
+          toolCallLog,
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: executorTurn.halt_tag,
+          condition: executorTurn.condition,
+        };
+      }
+      return {
+        toolCallLog,
+        terminalStatus: 'ACTIVATION_REFUSED',
+        condition: executorTurn.reason,
+      };
     }
 
     // ── Tool call ────────────────────────────────────────────────────────────
@@ -2062,7 +2096,14 @@ async function runExecutorLoop(
       );
       writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
       log('  Executor: EXECUTION_HALTED [AMBIGUOUS_PLAN]');
-      return { toolCallLog };
+      return {
+        toolCallLog,
+        terminalStatus: 'EXECUTION_HALTED',
+        haltTag: 'AMBIGUOUS_PLAN',
+        condition:
+          `Executor tool call failed strict validation (repair attempted and failed). ` +
+          `Zod error: ${parsedReq.error.toString().slice(0, 200)}`,
+      };
     }
 
     const req     = parsedReq.data;
@@ -2097,7 +2138,16 @@ async function runExecutorLoop(
       );
       writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
       log(`  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] at step ${stepNum}`);
-      return { toolCallLog };
+      return {
+        toolCallLog,
+        terminalStatus: 'EXECUTION_HALTED',
+        haltTag: 'STEP_VERIFICATION_FAIL',
+        condition:
+          `Tool ${req.tool} on "${getTarget(req)}" exited with code ${toolResult.exit_code}. ` +
+          `stderr: ${toolResult.stderr.slice(0, 200)}` +
+          `${denialSummary ? ` denial: ${denialSummary}` : ''}` +
+          `${mcpLifecycleSummary ? ` mcp_lifecycle: ${mcpLifecycleSummary}` : ''}`,
+      };
     }
 
     // Append result to history so the next turn has full context.
@@ -2112,7 +2162,12 @@ async function runExecutorLoop(
   );
   writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
   log(`  Executor: EXECUTION_HALTED — exceeded ${MAX_EXECUTOR_TURNS} turns`);
-  return { toolCallLog };
+  return {
+    toolCallLog,
+    terminalStatus: 'EXECUTION_HALTED',
+    haltTag: 'TOOL_CALL_ERROR',
+    condition: `Executor exceeded the maximum of ${MAX_EXECUTOR_TURNS} turns without a terminal signal.`,
+  };
 }
 
 // ─── Report builders ──────────────────────────────────────────────────────────
@@ -3213,13 +3268,32 @@ export async function runBabelPipeline(
       }
     }
     try {
-      ({ toolCallLog } = await runExecutorLoop(
+      const executorResult = await runExecutorLoop(
         approvedPlan,
         evidence,
         effectiveModel,
         executionReportWarnings,
         initialExecutorLog,
-      ));
+      );
+      toolCallLog = executorResult.toolCallLog;
+      if (executorResult.terminalStatus !== 'EXECUTION_COMPLETE') {
+        log(
+          `Pipeline halted after executor terminal status ${executorResult.terminalStatus}. ` +
+          `Evidence bundle: ${evidence.runDir}`,
+        );
+        v9StackTelemetry = markRuntimeTelemetryOutcome(
+          v9StackTelemetry,
+          'EXECUTOR_HALTED',
+          effectiveMode,
+        );
+        writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+        return await finalizeResult({
+          runDir: evidence.runDir,
+          manifest,
+          plan: approvedPlan,
+          status: 'EXECUTOR_HALTED',
+        });
+      }
     } catch (err) {
       log(`CLI Executor error: ${err instanceof Error ? err.message : String(err)}`);
       v9StackTelemetry = markRuntimeTelemetryOutcome(
@@ -3420,7 +3494,21 @@ export async function resumeManualBridge(
     }
   }
   try {
-    await runExecutorLoop(swePlan, evidence, targetModel, planWarnings, initialExecutorLog);
+    const executorResult = await runExecutorLoop(
+      swePlan,
+      evidence,
+      targetModel,
+      planWarnings,
+      initialExecutorLog,
+    );
+    if (executorResult.terminalStatus !== 'EXECUTION_COMPLETE') {
+      return {
+        runDir,
+        manifest,
+        plan: swePlan,
+        status: 'EXECUTOR_HALTED',
+      };
+    }
   } catch (err) {
     log(`CLI Executor error: ${err instanceof Error ? err.message : String(err)}`);
     return {
