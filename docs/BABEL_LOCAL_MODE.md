@@ -82,6 +82,8 @@ node .\dist\index.js doctor
 - `babel plan` / `resume` = manual bridge flow
 - `babel mcp` = read-only integration surface for MCP clients
 
+If you want copy-paste examples for those commands, use [CLI_QUICKSTART.md](./CLI_QUICKSTART.md).
+
 The CLI is real, but it is not the easiest first contact with Babel. The resolver and validator are still the clearest public starting point.
 
 ## What Advanced Runtime Usually Requires
