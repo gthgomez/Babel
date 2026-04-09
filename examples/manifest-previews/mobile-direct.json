@@ -1,0 +1,111 @@
+{
+  "BabelRoot": "C:\\Workspace\\Babel-private",
+  "LocalLearningRoot": "C:\\Workspace\\Babel-private\\runs\\local-learning",
+  "Project": "example_mobile_suite",
+  "ProjectPath": "C:\\Workspace\\example_mobile_suite",
+  "TaskCategory": "mobile",
+  "Model": "codex",
+  "ClientSurface": "codex_extension",
+  "PipelineMode": "direct",
+  "PurposeResolutionMode": "provisional",
+  "ProvisionalPurposeMode": "execution",
+  "ProvisionalPurposeSource": "provisional_local_default",
+  "ProvisionalPurposeConfidence": 0.3,
+  "PurposeModeCanonical": false,
+  "PurposeSeedSkillId": null,
+  "PurposeSuppressionReason": "no_seed_execution",
+  "SelectedCodexAdapter": "balanced",
+  "RecommendedTaskOverlayIds": [],
+  "RecommendedSkillIds": [],
+  "BabelEntrypoint": "C:\\Workspace\\Babel-private\\BABEL_BIBLE.md",
+  "BabelReferenceFiles": [
+    "C:\\Workspace\\Babel-private\\PROJECT_CONTEXT.md",
+    "C:\\Workspace\\Babel-private\\prompt_catalog.yaml"
+  ],
+  "SelectedStack": [
+    {
+      "Id": "behavioral_core_v7",
+      "Layer": "behavioral_os",
+      "LoadPosition": 1,
+      "RelativePath": "01_Behavioral_OS/OLS-v7-Core-Universal.md",
+      "FullPath": "C:\\Workspace\\Babel-private\\01_Behavioral_OS\\OLS-v7-Core-Universal.md",
+      "OrderIndex": 0
+    },
+    {
+      "Id": "behavioral_cognitive_micro_v7",
+      "Layer": "behavioral_os",
+      "LoadPosition": 2,
+      "RelativePath": "01_Behavioral_OS/OLS-v7-Cognitive-Micro.md",
+      "FullPath": "C:\\Workspace\\Babel-private\\01_Behavioral_OS\\OLS-v7-Cognitive-Micro.md",
+      "OrderIndex": 1
+    },
+    {
+      "Id": "behavioral_guard_v7",
+      "Layer": "behavioral_os",
+      "LoadPosition": 3,
+      "RelativePath": "01_Behavioral_OS/OLS-v7-Guard-Auto.md",
+      "FullPath": "C:\\Workspace\\Babel-private\\01_Behavioral_OS\\OLS-v7-Guard-Auto.md",
+      "OrderIndex": 2
+    },
+    {
+      "Id": "domain_android_kotlin",
+      "Layer": "domain_architect",
+      "LoadPosition": 3,
+      "RelativePath": "02_Domain_Architects/Android_Kotlin-v1.0.md",
+      "FullPath": "C:\\Workspace\\Babel-private\\02_Domain_Architects\\Android_Kotlin-v1.0.md",
+      "OrderIndex": 3
+    },
+    {
+      "Id": "skill_android_app_classification",
+      "Layer": "skill",
+      "LoadPosition": null,
+      "RelativePath": "02_Skills/Mobile/Android-App-Classification-v1.md",
+      "FullPath": "C:\\Workspace\\Babel-private\\02_Skills\\Mobile\\Android-App-Classification-v1.md",
+      "OrderIndex": 4
+    },
+    {
+      "Id": "skill_evidence_gathering",
+      "Layer": "skill",
+      "LoadPosition": null,
+      "RelativePath": "02_Skills/Governance/Evidence-Gathering-v1.md",
+      "FullPath": "C:\\Workspace\\Babel-private\\02_Skills\\Governance\\Evidence-Gathering-v1.md",
+      "OrderIndex": 5
+    },
+    {
+      "Id": "skill_bcdp_contracts",
+      "Layer": "skill",
+      "LoadPosition": null,
+      "RelativePath": "02_Skills/Governance/BCDP-Contracts-v1.md",
+      "FullPath": "C:\\Workspace\\Babel-private\\02_Skills\\Governance\\BCDP-Contracts-v1.md",
+      "OrderIndex": 6
+    },
+    {
+      "Id": "adapter_codex_balanced",
+      "Layer": "model_adapter",
+      "LoadPosition": 4,
+      "RelativePath": "03_Model_Adapters/Codex_Balanced.md",
+      "FullPath": "C:\\Workspace\\Babel-private\\03_Model_Adapters\\Codex_Balanced.md",
+      "OrderIndex": 7
+    },
+    {
+      "Id": "overlay_example_mobile_suite",
+      "Layer": "project_overlay",
+      "LoadPosition": 5,
+      "RelativePath": "05_Project_Overlays/Example-Mobile-Suite-Context.md",
+      "FullPath": "C:\\Workspace\\Babel-private\\05_Project_Overlays\\Example-Mobile-Suite-Context.md",
+      "OrderIndex": 8
+    }
+  ],
+  "RepoContextFiles": [
+    "C:\\Workspace\\example_mobile_suite\\PROJECT_CONTEXT.md"
+  ],
+  "RepoLocalSystemPresent": false,
+  "PrecedenceRules": [
+    "Babel chooses the cross-project stack and operating mode.",
+    "The repo-local collaboration system defines repo-specific invariants and startup rules.",
+    "Repo-local invariants win for repo-specific conflicts."
+  ],
+  "KickoffPrompt": "Read Babel's C:\\Workspace\\Babel-private\\BABEL_BIBLE.md first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md before planning or coding.",
+  "ActivePolicyIds": [],
+  "PolicyVersionApplied": ""
+}

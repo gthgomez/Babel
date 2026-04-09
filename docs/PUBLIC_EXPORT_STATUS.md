@@ -1,6 +1,6 @@
 # Public Export Status
 
-Generated from Babel-private at $generatedAt.
+Generated from Babel-private at 2026-04-09T07:40:27Z.
 
 This tree was created by `tools/export-babel-public.ps1`.
 

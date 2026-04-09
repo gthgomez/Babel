@@ -167,10 +167,20 @@ Load based on task type:
 
 | Task type | Skills to load |
 |-----------|---------------|
+| New Android app, architecture selection, or "should this stay minimal?" decision | `skill_android_app_classification` |
+| Navigation, back-stack behavior, deep links, or screen-flow redesign | `skill_android_navigation_strategy` + `skill_android_state_management` |
+| ViewModel, `AppUiState`, reducer logic, or state ownership changes | `skill_android_state_management` |
+| UI audit, UX critique, screen review, or "suggest changes" planning for existing Compose screens | `skill_android_ui_audit_review` + `skill_jetpack_compose` |
 | Any billing / entitlement work | `skill_google_play_billing` |
 | RevenueCat integration / multi-store billing | `skill_revenuecat_iap` + `skill_amazon_appstore` + `skill_android_dependency_research` |
 | Any UI / Composable / screen work | `skill_jetpack_compose` |
+| Test planning, CI gates, or deciding which Android tests are mandatory | `skill_android_testing_strategy` + `skill_android_test_enforcement` |
 | Manifest, permissions, runtime compliance changes | `skill_android_play_store_compliance` |
+| Photo picking or media import flows | `skill_android_photo_picker` |
+| File import/export, sharing, `ContentResolver`, FileProvider, or temp-file workflows | `skill_android_file_handling` + `skill_android_saf` |
+| Permission prompts, overlay access, usage access, or special app access workflows | `skill_android_permissions` + `skill_android_play_store_compliance` |
+| WorkManager, foreground service, or background execution work | `skill_android_background_work` |
+| Startup optimization, baseline profiles, macrobenchmark, or release performance work | `skill_android_performance_hardening` |
 | Google Play submission, policy, deadlines, listing, or Data Safety work | `skill_google_play_store` |
 | Release packaging, AAB generation, bundletool validation, or store artifact selection | `skill_android_app_bundle` + `skill_android_release_build` |
 | Samsung Galaxy Store submission or Samsung-specific distribution | `skill_samsung_galaxy_store` + `skill_android_app_bundle` |
@@ -179,6 +189,33 @@ Load based on task type:
 | Any contract change (product ID, FileProvider, billing API) | `skill_bcdp_contracts` |
 | File picking, document saving, sharing, FileProvider, content URIs, or SAF workflows | `skill_android_saf` |
 | PDF rendering, compression, merging, or any PdfRenderer / PdfDocument work | `skill_android_pdf_processing` + `skill_android_saf` |
-| Writing or modifying tests in androidTest/ (processor, billing, UI, fixture creation) | `skill_android_instrumented_testing` |
+| Writing or modifying tests in `src/test/` (ViewModel, processing logic, Turbine, fakes) | `skill_android_testing_strategy` + `skill_android_unit_testing` |
+| Writing or modifying tests in `src/androidTest/` (processor, billing, UI, fixture creation) | `skill_android_testing_strategy` + `skill_android_instrumented_testing` |
+| Adding or updating screenshot golden files (Roborazzi, visual regression) | `skill_android_testing_strategy` + `skill_android_screenshot_testing` |
 | All tasks (pre-plan gate) | `skill_evidence_gathering` |
+| Any session where AI is generating or reviewing Kotlin/Compose/billing code | `task_overlay_ai_android_development` |
 
+---
+
+## 6. SKILL COMPOSITION GUIDE
+
+Android testing work must load in a disciplined order. Do not jump directly from the domain shell
+to a leaf testing skill.
+
+### Correct testing stack order
+
+1. `domain_android_kotlin` — establishes Android blast radius, QA expectations, and project-level invariants
+2. Project overlay + app-local context — exact versions, flavor/build quirks, `QA_CHECKLIST.md`, and app-specific constraints
+3. `skill_android_testing_strategy` — first testing skill, always. It decides the correct surface (`src/test/`, `src/androidTest/`, screenshot), resolves state-shape questions (`mutableStateOf` vs `StateFlow`), and checks setup constraints such as AGP / Roborazzi compatibility before leaf guidance loads.
+4. Exactly the needed leaf testing skills:
+   - `skill_android_unit_testing`
+   - `skill_android_instrumented_testing`
+   - `skill_android_screenshot_testing`
+5. `skill_android_test_enforcement` — load last when the task includes planning mandatory coverage, CI gates, or exit criteria
+
+### Routing note
+
+For the current `example_mobile_suite` monetized apps, the main app ViewModels expose UI state through
+`mutableStateOf`, not `StateFlow`. That means the testing strategy layer should route main
+ViewModel tests toward direct state assertions first, and only route to Turbine when the surface
+under test actually exposes `Flow` / `StateFlow`.

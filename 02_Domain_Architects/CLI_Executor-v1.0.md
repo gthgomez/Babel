@@ -478,4 +478,3 @@ Before issuing the first tool call, run through this checklist:
 6. Am I about to add a command that is not in the MINIMAL ACTION SET because it "seems necessary"? If YES → stop. If the command is missing from the plan, that is a `[COMMAND_NOT_IN_PLAN]` halt, not an improvisation opportunity.
 
 Only after all six checks pass should the first tool call be issued.
-

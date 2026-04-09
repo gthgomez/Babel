@@ -34,6 +34,6 @@ Use this checklist when updating `Babel-public` from `Babel-private`.
 1. Run `pwsh -File tools\validate-public-release.ps1`
 2. Run `pwsh -File tools\resolve-local-stack.ps1 -TaskCategory backend -Project example_saas_backend -Model codex -PipelineMode verified -Format json`
 3. Compare that output to `examples/manifest-previews/backend-verified.json`
-4. Run `pwsh -File tools\resolve-local-stack.ps1 -TaskCategory mobile -Project example_mobile_suite -Model codex -SkillIds skill_android_pdf_processing -Format json`
-5. Compare that output to `examples/manifest-previews/mobile-pdf-direct.json`
+4. Run `pwsh -File tools\resolve-local-stack.ps1 -TaskCategory mobile -Project example_mobile_suite -Model codex -Format json`
+5. Compare that output to `examples/manifest-previews/mobile-direct.json`
 6. Manually review `README.md`, `START_HERE.md`, `examples/`, and release notes for private fingerprints

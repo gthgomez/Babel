@@ -68,7 +68,16 @@ Apps targeting SDK 34+ must use the Android Photo Picker for image selection:
 | `ACTION_PICK` with direct gallery | **Non-compliant** | Deprecated pattern. |
 
 If the plan adds or modifies image selection, it must use `PickVisualMedia`. Never introduce
-`GetContent()` for image use cases in new code.
+`GetContent()` for image use cases in new code targeting Google Play.
+
+**Fire OS / Amazon flavor exception:**
+`PickVisualMedia` depends on Play Services backport on Android < 13. Fire OS ships without
+Google Play Services. AndroidX Activity **1.7.0+** provides an automatic fallback to
+`ACTION_OPEN_DOCUMENT` when the picker is unavailable — use `isPhotoPickerAvailable(context)`
+to check at runtime. For Amazon-flavor builds, test on a real Fire device or the Fire OS
+emulator. If the auto-fallback behavior is acceptable, no extra code is needed; if it is not,
+implement a manual `ActivityResultContracts.GetContent("image/*")` fallback scoped to the
+Amazon flavor only. Never apply this exception to the Google Play flavor.
 
 ---
 
@@ -85,7 +94,9 @@ voice control). Google is actively auditing and removing apps that use it for ot
 | Automation, monitoring, keep-awake features | **NOT PERMITTED** — must use narrower API |
 | Content scraping or UI interaction automation | **NEVER PERMITTED** |
 
-**For foreground app detection (example_app_four):**
+**example_app_four has two separate problems that need two separate API migrations:**
+
+**Problem A — Foreground app detection (which app is in front):**
 
 `UsageStatsManager + PACKAGE_USAGE_STATS` is the policy-durable alternative:
 
@@ -113,14 +124,42 @@ val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, now - 5000, no
 val foreground = stats?.maxByOrNull { it.lastTimeUsed }?.packageName
 ```
 
-**Trade-offs vs AccessibilityService:**
+**Trade-offs vs AccessibilityService (foreground detection):**
 - Permission grant requires user to navigate to Settings > Special app access > Usage access
-- No real-time event stream — must poll
+- No real-time event stream — must poll every 1–3 seconds
 - More policy-durable; used by digital-wellbeing and parental-control apps without restriction
+
+**Problem B — Keeping the screen on (screen-sleep prevention):**
+
+`FLAG_KEEP_SCREEN_ON` via a visible overlay window is the correct platform API. **Do not use
+`PowerManager.PARTIAL_WAKE_LOCK` for screen-sleep** — it keeps the CPU awake but not the
+screen, and Google penalizes apps that hold wake locks for extended periods.
+`FLAG_KEEP_SCREEN_ON` cannot be set in a Service — it requires an Activity window or a
+visible `TYPE_APPLICATION_OVERLAY` window.
+
+```kotlin
+// Recommended: overlay window with FLAG_KEEP_SCREEN_ON
+// Requires SYSTEM_ALERT_WINDOW permission (special access, user must grant)
+val params = WindowManager.LayoutParams(
+    1, 1,
+    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+    PixelFormat.TRANSLUCENT
+)
+windowManager.addView(overlayView, params)
+```
+
+This approach:
+- Drops the accessibility service entirely
+- Uses the platform-intended API for screen-keep
+- Avoids battery-drain WakeLock penalties
+- Requires user to grant the overlay permission once
 
 **Rule:** Any plan for example_app_four that retains `BIND_ACCESSIBILITY_SERVICE` for foreground
 detection must include an explicit policy-risk acknowledgment in RISKS. The preferred direction
-is migration to `UsageStatsManager`.
+is migration to `UsageStatsManager` (foreground detection) + overlay `FLAG_KEEP_SCREEN_ON`
+(screen-sleep prevention).
 
 ---
 
@@ -210,4 +249,3 @@ this skill with the store/package skill instead of expanding this file's scope.
 4. Never ignore `paddingValues` from `Scaffold` in a targetSdk 35 app.
 5. Never treat store listing, Data Safety, or asset-spec work as fully covered by this skill.
    Load the store-specific policy skill too.
-

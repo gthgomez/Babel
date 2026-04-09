@@ -155,10 +155,32 @@ the policy threshold and the Play Console consequences.
 - Google uses ML to cross-check declared data vs. SDK runtime behavior — accurate declarations are enforced
 - Third-party SDK data collection counts as your collection — declare all SDKs' behavior
 
-**For offline utility apps (example_app_one pattern):**
+**For offline utility apps with no billing SDK (example_app_four pattern):**
 - Declare: no data collected or transmitted
-- Privacy policy must state "100% offline. No data collected."
+- Privacy policy must state "All processing occurs locally on device. No data is collected or transmitted."
 - Verify no analytics SDK is linked in the APK (use APK Analyzer in Android Studio)
+
+**For utility apps that include RevenueCat or any billing SDK:**
+Local file/image/PDF processing is not collected data — that remains correct. However,
+RevenueCat transmits purchase history off-device. RevenueCat's own Play Data Safety
+documentation requires declaring **purchase history as collected financial information**.
+Apps with RevenueCat cannot answer "No data collected" in the Data Safety form.
+
+| App | Local processing | RevenueCat present | Data Safety answer |
+|-----|-----------------|-------------------|--------------------|
+| example_app_one (Play flavor) | ✓ local only | ✓ YES | Declare purchase history |
+| example_app_two (Play flavor) | ✓ local only | ✓ YES | Declare purchase history |
+| example_app_three (Play flavor) | ✓ local only | ✓ YES | Declare purchase history |
+| example_app_four | ✓ local only | ✗ NO | "No data collected" (if no other SDK transmits) |
+
+Privacy policy text for billing apps:
+> *"All file, image, and PDF processing occurs locally on your device and is never transmitted
+> to any server. Purchase transactions are processed by Google Play and RevenueCat in
+> accordance with their respective privacy policies."*
+
+**Rule:** Third-party SDK data collection counts as your collection. Audit every SDK in the
+APK (including transitive dependencies via APK Analyzer) before completing the Data Safety
+form. RevenueCat purchase history is the most commonly missed declaration in this codebase.
 
 ---
 
@@ -243,4 +265,3 @@ automatically for uncompressed shared libraries. Pure Kotlin/Java apps are unaff
 11. Never treat this file as the implementation guide for manifest/runtime compliance. Pair it with
     `skill_android_play_store_compliance` for code-level changes and `skill_android_app_bundle` for
     AAB/release artifact work.
-

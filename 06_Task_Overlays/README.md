@@ -40,4 +40,3 @@ Task overlays solve that problem.
 Example:
 - `Frontend-Professionalism-v1.0.md`
 - `Example-SaaS-Backend-Frontend-Professionalism-v1.0.md`
-

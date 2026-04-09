@@ -28,6 +28,7 @@
 
 import { spawnSync }                      from 'node:child_process';
 import { mkdirSync, readFileSync,
+         readdirSync, statSync,
          writeFileSync }                  from 'node:fs';
 import {
   resolve,
@@ -40,10 +41,30 @@ import {
 // ─── Shared result type ───────────────────────────────────────────────────────
 
 /** Result returned by every SafeExecutor tool method. */
+export interface StructuredDenial {
+  category: 'sandbox_policy' | 'executor_policy';
+  reason_code: string;
+  message: string;
+  tool: string | null;
+  active_mode: string | null;
+  required_mode: string | null;
+  evidence: string[] | null;
+}
+
+export interface McpLifecycle {
+  phase: 'server_lookup' | 'spawn' | 'write_request' | 'await_response' | 'response_parse' | 'complete';
+  outcome: 'success' | 'failure';
+  reason_code: string | null;
+  server: string;
+  evidence: string[] | null;
+}
+
 export interface ToolResult {
   exit_code: number;
   stdout:    string;
   stderr:    string;
+  denial?:   StructuredDenial;
+  mcp_lifecycle?: McpLifecycle;
 }
 
 // ─── Configuration ────────────────────────────────────────────────────────────
@@ -54,6 +75,15 @@ const ALLOWED_COMMANDS = new Set([
   'npx',
   'node',
   'git',
+  'java',
+  'winget',
+  'gradle',
+  'gradlew',
+  'gradlew.bat',
+  'sdkmanager',
+  'sdkmanager.bat',
+  'adb',
+  'adb.exe',
   'python',
   'python3',
   'py',
@@ -68,6 +98,50 @@ const ALLOWED_COMMANDS = new Set([
  * anywhere in the command string, shellExec will refuse to execute.
  */
 const SHELL_OPERATOR_RE = /[;&|><`$(){}!\\\r\n]/;
+
+function buildSandboxPolicyDenial(
+  reasonCode: string,
+  message: string,
+  tool: string,
+  evidence: string[] | null = null,
+): StructuredDenial {
+  return {
+    category: 'sandbox_policy',
+    reason_code: reasonCode,
+    message,
+    tool,
+    active_mode: null,
+    required_mode: null,
+    evidence: evidence && evidence.length > 0 ? [...evidence] : null,
+  };
+}
+
+function policyDeniedResult(
+  reasonCode: string,
+  message: string,
+  tool: string,
+  evidence: string[] | null = null,
+): ToolResult {
+  return {
+    exit_code: 1,
+    stdout: '',
+    stderr: message,
+    denial: buildSandboxPolicyDenial(reasonCode, message, tool, evidence),
+  };
+}
+
+function maybePolicyDeniedResult(
+  err: unknown,
+  tool: string,
+  evidence: string[] | null = null,
+): ToolResult | null {
+  const message = err instanceof Error ? err.message : String(err);
+  if (!message.startsWith('[sandbox] Path traversal denied:')) {
+    return null;
+  }
+
+  return policyDeniedResult('path_jail_rejected', message, tool, evidence);
+}
 
 // ─── SafeExecutor ─────────────────────────────────────────────────────────────
 
@@ -146,9 +220,48 @@ export class SafeExecutor {
   fileRead(inputPath: string): ToolResult {
     try {
       const safePath = this.resolveSafe(inputPath);
+      const stats = statSync(safePath);
+      if (stats.isDirectory()) {
+        const entries = readdirSync(safePath, { withFileTypes: true })
+          .sort((left, right) => left.name.localeCompare(right.name))
+          .map((entry) => `${entry.isDirectory() ? 'dir ' : 'file'} ${entry.name}`);
+        const listing = [
+          `Directory: ${safePath}`,
+          ...entries,
+        ].join('\n');
+        return { exit_code: 0, stdout: listing, stderr: '' };
+      }
       const content  = readFileSync(safePath, 'utf-8');
       return { exit_code: 0, stdout: content, stderr: '' };
     } catch (err) {
+      const denied = maybePolicyDeniedResult(err, 'file_read', [inputPath]);
+      if (denied) return denied;
+      return { exit_code: 1, stdout: '', stderr: String(err) };
+    }
+  }
+
+  listDirectory(inputPath: string): ToolResult {
+    try {
+      const safePath = this.resolveSafe(inputPath);
+      const stats = statSync(safePath);
+      if (!stats.isDirectory()) {
+        return {
+          exit_code: 1,
+          stdout: '',
+          stderr: `[sandbox] directory_list expected a directory but received: ${safePath}`,
+        };
+      }
+      const entries = readdirSync(safePath, { withFileTypes: true })
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .map((entry) => `${entry.isDirectory() ? 'dir ' : 'file'} ${entry.name}`);
+      const listing = [
+        `Directory: ${safePath}`,
+        ...entries,
+      ].join('\n');
+      return { exit_code: 0, stdout: listing, stderr: '' };
+    } catch (err) {
+      const denied = maybePolicyDeniedResult(err, 'directory_list', [inputPath]);
+      if (denied) return denied;
       return { exit_code: 1, stdout: '', stderr: String(err) };
     }
   }
@@ -160,6 +273,8 @@ export class SafeExecutor {
       writeFileSync(safePath, content, 'utf-8');
       return { exit_code: 0, stdout: `Written: ${safePath}`, stderr: '' };
     } catch (err) {
+      const denied = maybePolicyDeniedResult(err, 'file_write', [inputPath]);
+      if (denied) return denied;
       return { exit_code: 1, stdout: '', stderr: String(err) };
     }
   }
@@ -173,29 +288,33 @@ export class SafeExecutor {
    * @param cwd        Working directory — must resolve within projectRoot.
    * @param timeoutMs  Hard kill timeout in milliseconds.
    */
-  shellExec(command: string, cwd: string, timeoutMs: number): ToolResult {
+  shellExec(
+    command: string,
+    cwd: string,
+    timeoutMs: number,
+    toolName = 'shell_exec',
+  ): ToolResult {
     // ── Injection guard ──────────────────────────────────────────────────────
     if (SHELL_OPERATOR_RE.test(command)) {
-      return {
-        exit_code: 1,
-        stdout:    '',
-        stderr:    `[sandbox] Command rejected — shell operator detected in: "${command}"`,
-      };
+      const message = `[sandbox] Command rejected — shell operator detected in: "${command}"`;
+      return policyDeniedResult('shell_operator_rejected', message, toolName, [command]);
     }
 
     // ── Parse argv ──────────────────────────────────────────────────────────
     const argv    = command.trim().split(/\s+/);
     const rawCmd  = argv[0] ?? '';
+    const normalizedRawCmd = process.platform === 'win32'
+      ? rawCmd
+          .replace(/^\.\//, '.\\')
+          .replace(/\//g, '\\')
+      : rawCmd;
 
     // ── Whitelist check ──────────────────────────────────────────────────────
     // Strip .cmd / .exe suffixes that Windows appends to shims in PATH.
-    const cmdBase = basename(rawCmd).replace(/\.(cmd|exe)$/i, '').toLowerCase();
+    const cmdBase = basename(normalizedRawCmd).replace(/\.(cmd|exe|bat)$/i, '').toLowerCase();
     if (!ALLOWED_COMMANDS.has(cmdBase)) {
-      return {
-        exit_code: 1,
-        stdout:    '',
-        stderr:    `[sandbox] Command rejected — "${cmdBase}" is not in the allowed command list.`,
-      };
+      const message = `[sandbox] Command rejected — "${cmdBase}" is not in the allowed command list.`;
+      return policyDeniedResult('command_allowlist_rejected', message, toolName, [command, cmdBase]);
     }
 
     // ── CWD safety ───────────────────────────────────────────────────────────
@@ -203,13 +322,15 @@ export class SafeExecutor {
     try {
       safeCwd = this.resolveSafe(cwd);
     } catch (err) {
+      const denied = maybePolicyDeniedResult(err, toolName, [cwd]);
+      if (denied) return denied;
       return { exit_code: 1, stdout: '', stderr: String(err) };
     }
 
     // ── Spawn (shell: false, Windows cmd.exe shim resolution) ───────────────
     const isWin     = process.platform === 'win32';
-    const spawnCmd  = isWin ? 'cmd.exe' : rawCmd;
-    const spawnArgs = isWin ? ['/c', rawCmd, ...argv.slice(1)] : argv.slice(1);
+    const spawnCmd  = isWin ? 'cmd.exe' : normalizedRawCmd;
+    const spawnArgs = isWin ? ['/c', normalizedRawCmd, ...argv.slice(1)] : argv.slice(1);
 
     // Strip API keys from the environment so spawned processes (npm, git, etc.)
     // cannot read them via process.env — they have no legitimate need for LLM keys.
@@ -245,6 +366,6 @@ export class SafeExecutor {
 
   /** Sugar over shellExec with a default timeout suitable for test runners. */
   testRun(command: string, cwd: string, timeoutMs: number): ToolResult {
-    return this.shellExec(command, cwd, timeoutMs);
+    return this.shellExec(command, cwd, timeoutMs, 'test_run');
   }
 }

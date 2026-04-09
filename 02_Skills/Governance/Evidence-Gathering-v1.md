@@ -7,7 +7,7 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
 -->
 
-# Skill: Evidence Gathering Protocol (v1.0)
+# Skill: Evidence Gathering Protocol (v1.1)
 
 **Category:** Governance
 **Status:** Active
@@ -82,6 +82,39 @@ If any schema or type is inaccessible, apply the same HALT output from Step 1.
 
 ---
 
+## Step 2.5 — EXECUTION SURFACE INDEX
+
+If the task touches operational behavior, enumerate the execution surface before planning:
+
+| Surface | Kind | In Context? | Action |
+|---------|------|-------------|--------|
+| `[scheduler / cron / trigger]` | execution | YES | No action. |
+| `[env var / secret / webhook target]` | runtime dependency | NO — accessible | Read now. |
+| `[runbook / operator page / queue store]` | operational surface | NO — accessible | Read now. |
+| `[surface]` | execution / runtime / operational | NO — inaccessible | Treat as `[EVIDENCE-GATE]`. |
+
+Use this step whenever the task includes scheduled jobs, billing providers, notification channels,
+webhooks, or support/compliance operator workflows.
+
+**Rule:** If a plan references a cron, portal, queue, env var, webhook, or runbook you have not
+confirmed, that plan is incomplete even if the code file itself is visible.
+
+For recurring-job and incident tasks, also confirm:
+- the execution ledger table or run history surface
+- the alert table or alert view used by operators
+- the acknowledge / resolve path if the workflow expects human closure
+- the escalation signal path, not just the initial alert-creation path
+
+For database-auth, Supabase, or partitioned-table tasks, also confirm:
+- the parent table grants
+- the current active partition grants
+- the RLS policy text currently live
+- whether remote migration state matches local migration state
+- whether schema cache / PostgREST visibility is relevant
+- whether the runtime is using a JWT-scoped client or service-role client
+
+---
+
 ## Step 3 — CONSUMER INDEX (required if any contract will be modified)
 
 If the task involves modifying a contract (schema, interface, API shape, component props,
@@ -107,6 +140,15 @@ integration). External consumers must be treated as BREAKING-risk until proven o
 If consumer enumeration is incomplete, do not claim it is complete. State:
 `Consumer list is NOT_VERIFIED — additional consumers may exist outside visible context.`
 
+For operational tasks, include non-code consumers too:
+- support teams
+- compliance operators
+- dashboards
+- schedulers
+- external providers
+- incident responders consuming deduplicated alerts or run ledgers
+- deployment/runtime layers such as Vercel, Supabase Edge Functions, and PostgREST schema cache when they can preserve stale behavior after code changes
+
 ---
 
 ## Evidence Receipt
@@ -118,6 +160,7 @@ EVIDENCE RECEIPT
 ────────────────
 Files confirmed in context:    [n]
 Schemas confirmed in context:  [n]
+Execution surfaces confirmed:  [n]
 Consumers identified:          [n] (IN_CONTEXT: [n], NOT_VERIFIED: [n], EXTERNAL: [n])
 Status: EVIDENCE COMPLETE — proceeding to plan.
 ```
@@ -134,3 +177,5 @@ This receipt is machine-parseable. Do not omit it, paraphrase it, or combine it 
 4. "The file probably looks like X" is not evidence. It is an assumption — and it must be labeled as one.
 5. If the task was triggered by an error message or log output, that output is required evidence.
    If it is not in context, request it before planning.
+6. A runtime dependency you have not confirmed is evidence missing, not implementation detail.
+7. A live auth or RLS problem is not fully understood until both code intent and remote effective grants/policies are checked.

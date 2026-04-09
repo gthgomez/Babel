@@ -24,7 +24,6 @@ import type { ZodType, ZodTypeDef } from 'zod';
 import type { LlmRunner }    from './base.js';
 import { CliParseError }     from './cliBase.js';
 import { GeminiApiRunner }   from './geminiApi.js';
-import { ApiFallbackRunner } from './apiFallback.js';
 import { extractJson }       from '../utils/extractJson.js';
 
 // ─── Sentinel constants ────────────────────────────────────────────────────────
@@ -78,15 +77,12 @@ function buildRepairPrompt(rawStdout: string): string {
 
 /**
  * Attempts to construct a repair API runner.
- * Priority order:
- *   1. Gemini API (GEMINI_API_KEY) — large context window, near-zero cost;
- *      best choice for repairing large EVIDENCE_REQUEST log outputs.
- *   2. Anthropic (ANTHROPIC_API_KEY) — last resort.
- * Returns null if no API keys are configured.
+ *   Gemini API (GEMINI_API_KEY) — large context window, near-zero cost;
+ *   best choice for repairing large EVIDENCE_REQUEST log outputs.
+ * Returns null if GEMINI_API_KEY is not configured.
  */
 function createRepairRunner(): LlmRunner | null {
-  try { return new GeminiApiRunner(); }   catch { /* GEMINI_API_KEY not set */ }
-  try { return new ApiFallbackRunner(); } catch { /* ANTHROPIC_API_KEY not set */ }
+  try { return new GeminiApiRunner(); } catch { /* GEMINI_API_KEY not set */ }
   return null;
 }
 

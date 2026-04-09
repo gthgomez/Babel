@@ -43,4 +43,3 @@ pwsh -File tools\export-babel-public.ps1
 3. Run `pwsh -File tools\resolve-local-stack.ps1 -TaskCategory backend -Project example_saas_backend -Model codex -PipelineMode verified -Format json`
 4. Compare the output to `examples/manifest-previews/backend-verified.json`
 5. Apply any final public-only hardening inside `Babel-public`, not `Babel-private`
-

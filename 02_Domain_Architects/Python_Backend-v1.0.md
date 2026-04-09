@@ -175,4 +175,3 @@ Load based on task type:
 | Any scoring / weight change | `skill_evidence_gathering` |
 | Webhook or queue operations | `skill_idempotency` |
 | All tasks (pre-plan gate) | `skill_evidence_gathering` |
-

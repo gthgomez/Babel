@@ -54,6 +54,7 @@ Babel/
 │   └── OLS-v8-Orchestrator.md          ← YOU ARE HERE
 ├── 01_Behavioral_OS/
 │   ├── OLS-v7-Core-Universal.md        ← ALWAYS LOADED
+│   ├── OLS-v7-Cognitive-Micro.md       ← ALWAYS LOADED
 │   └── OLS-v7-Guard-Auto.md            ← ALWAYS LOADED
 ├── 02_Domain_Architects/
 │   ├── SWE_Backend-v6.2.md
@@ -219,13 +220,14 @@ The manifest tells the downstream system which files to concatenate and feed to 
 
 ```
 [1] 01_Behavioral_OS/OLS-v7-Core-Universal.md            ← Base rules, always first
-[2] 01_Behavioral_OS/OLS-v7-Guard-Auto.md                 ← Safety gates, always second
-[3] 02_Domain_Architects/[Selected_Domain].md             ← Task-specific rules
-[4] 03_Model_Adapters/[Selected_Adapter].md               ← Model personality tuning
-[5] 05_Project_Overlays/[target_project]-Context.md       ← Project stack & constraints, always after adapter
-[6] 06_Task_Overlays/[Selected_Task_Overlay].md           ← Optional bounded task guidance
-[7] 02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md ← Only if mode = verified or autonomous
-[8] 02_Domain_Architects/CLI_Executor-v1.0.md             ← Only if mode = autonomous
+[2] 01_Behavioral_OS/OLS-v7-Cognitive-Micro.md           ← Minimal contextual + epistemic discipline
+[3] 01_Behavioral_OS/OLS-v7-Guard-Auto.md                ← Safety gates, always after cognitive micro
+[4] 02_Domain_Architects/[Selected_Domain].md            ← Task-specific rules
+[5] 03_Model_Adapters/[Selected_Adapter].md              ← Model personality tuning
+[6] 05_Project_Overlays/[target_project]-Context.md      ← Project stack & constraints, always after adapter
+[7] 06_Task_Overlays/[Selected_Task_Overlay].md          ← Optional bounded task guidance
+[8] 02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md ← Only if mode = verified or autonomous
+[9] 02_Domain_Architects/CLI_Executor-v1.0.md            ← Only if mode = autonomous
 ```
 
 **Project Overlay rule:** If `target_project` is `"global"`, omit step [5]. Otherwise it is mandatory — the Worker Agent must know which project it is operating in before entering PLAN state.
@@ -274,6 +276,7 @@ You must output **ONLY** valid JSON. No conversational filler. No Markdown outsi
   },
   "prompt_manifest": [
     "<YOUR_PROJECT_ROOT>/Babel\\01_Behavioral_OS\\OLS-v7-Core-Universal.md",
+    "<YOUR_PROJECT_ROOT>/Babel\\01_Behavioral_OS\\OLS-v7-Cognitive-Micro.md",
     "<YOUR_PROJECT_ROOT>/Babel\\01_Behavioral_OS\\OLS-v7-Guard-Auto.md",
     "<YOUR_PROJECT_ROOT>/Babel\\02_Domain_Architects\\[Selected_Domain_File]",
     "<YOUR_PROJECT_ROOT>/Babel\\03_Model_Adapters\\[Selected_Adapter_File]",
@@ -327,6 +330,7 @@ Include `platform_profile` in every output. If the task is platform-agnostic, em
   },
   "prompt_manifest": [
     "<YOUR_PROJECT_ROOT>/Babel\\01_Behavioral_OS\\OLS-v7-Core-Universal.md",
+    "<YOUR_PROJECT_ROOT>/Babel\\01_Behavioral_OS\\OLS-v7-Cognitive-Micro.md",
     "<YOUR_PROJECT_ROOT>/Babel\\01_Behavioral_OS\\OLS-v7-Guard-Auto.md",
     "<YOUR_PROJECT_ROOT>/Babel\\02_Domain_Architects\\SWE_Backend-v6.2.md",
     "<YOUR_PROJECT_ROOT>/Babel\\03_Model_Adapters\\Claude_AntiEager.md",
@@ -376,6 +380,7 @@ Include `platform_profile` in every output. If the task is platform-agnostic, em
   },
   "prompt_manifest": [
     "<YOUR_PROJECT_ROOT>/Babel\\01_Behavioral_OS\\OLS-v7-Core-Universal.md",
+    "<YOUR_PROJECT_ROOT>/Babel\\01_Behavioral_OS\\OLS-v7-Cognitive-Micro.md",
     "<YOUR_PROJECT_ROOT>/Babel\\01_Behavioral_OS\\OLS-v7-Guard-Auto.md",
     "<YOUR_PROJECT_ROOT>/Babel\\02_Domain_Architects\\General_Research-v4.1.md",
     "<YOUR_PROJECT_ROOT>/Babel\\03_Model_Adapters\\Claude_AntiEager.md"
@@ -418,4 +423,3 @@ When a routing decision is later found to be incorrect (wrong project matched, w
 | Date | Input Pattern | Wrong Routing | Correct Routing | Fix Applied |
 |------|--------------|---------------|-----------------|-------------|
 | —    | —            | —             | —               | —           |
-

@@ -205,4 +205,3 @@ supabase functions deploy health-check --no-verify-jwt
 | Floating dependency versions | Upstream change breaks without notice |
 | JWT manual verification | Key rotation, algorithm drift — always delegate to `supabase.auth.getUser()` |
 | `--no-verify-jwt` on authenticated endpoints | Removes the auth gate entirely |
-

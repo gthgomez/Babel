@@ -22,6 +22,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath }          from 'node:url';
+import { spawnSync }              from 'node:child_process';
 import { SpanStatusCode }         from '@opentelemetry/api';
 import { z }                      from 'zod';
 
@@ -34,6 +35,7 @@ import {
   isConfidenceGateEnabled,
 }                                  from './confidenceGate.js';
 import { runWithFallback }        from './execute.js';
+import { resolveFamilyModelPolicy } from './modelPolicy.js';
 import { EvidenceBundle }         from './evidence.js';
 import { truncateLogs }           from './utils/truncate.js';
 import { collectHarnessMetadata } from './telemetry/metadata.js';
@@ -41,6 +43,15 @@ import { PipelineTrace, endSpan } from './telemetry/tracing.js';
 import { executeTool,
          ToolCallRequestSchema,
          DRY_RUN }                from './localTools.js';
+import type { ToolResult }        from './localTools.js';
+import {
+  buildGroundingQaReject,
+  buildTaskGrounding,
+  classifyTaskContract,
+  collectPlanGroundingViolations,
+  formatGroundingContext,
+  normalizePlanTargetsAgainstGrounding,
+} from './taskCompletion.js';
 import {
   OrchestratorManifestSchema,
   OrchestratorErrorHaltSchema,
@@ -64,6 +75,7 @@ import type {
 } from './schemas/agentContracts.js';
 
 import type { TargetModel } from './execute.js';
+import type { ResolvedModelPolicy } from './modelPolicy.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -73,6 +85,7 @@ const __dirname  = dirname(__filename);
 /** Absolute path to the Babel prompt library root (parent of babel-cli/). */
 const BABEL_ROOT     = process.env['BABEL_ROOT']     ?? resolve(__dirname, '../..');
 const BABEL_RUNS_DIR = process.env['BABEL_RUNS_DIR'] ?? join(BABEL_ROOT, 'runs');
+const GRADLE_CACHE_DIR = join(BABEL_ROOT, 'cache', 'gradle-distributions');
 
 /** Maximum SWE → QA iterations before halting with an error. */
 const MAX_SWE_QA_LOOPS    = 3;
@@ -121,6 +134,12 @@ export interface PipelineOptions {
   orchestratorVersion?: OrchestratorRuntimeVersion;
   /** Skip Orchestrator model-selection and force a specific worker model. */
   modelOverride?: string;
+  /** Select which configured model-policy tier should be resolved. */
+  modelTier?: string;
+  /** Opt in explicitly to model-policy entries marked expensive. */
+  allowExpensive?: boolean;
+  /** Include resolved model-policy details in user-visible outputs. */
+  showModelPolicy?: boolean;
   /** Associate the raw evidence bundle with a Local Mode session ID. */
   sessionId?: string;
   /** Optional session-start artifact path for exact protocol reconciliation. */
@@ -137,6 +156,7 @@ export interface PipelineResult {
   manualPromptPath?: string;
   repairPromptPath?: string;
   errors?: string[];
+  modelPolicy?: ResolvedModelPolicy;
 }
 
 interface RuntimeCompiledArtifacts {
@@ -440,13 +460,531 @@ function buildOrchestratorTask(
     : buildV8OrchestratorTask(task, options);
 }
 
+type JavaRuntimeStatus = {
+  available: boolean;
+  source: 'java_home' | 'path' | 'missing';
+  summary: string;
+};
+
+type AndroidSdkStatus = {
+  available: boolean;
+  source: 'android_home' | 'android_sdk_root' | 'local_default' | 'missing';
+  sdkRoot: string | null;
+  sdkManagerPath: string | null;
+  adbPath: string | null;
+  platforms: string[];
+  buildTools: string[];
+  summary: string;
+};
+
+type CommandRuntimeStatus = {
+  available: boolean;
+  source: 'path' | 'missing';
+  summary: string;
+  command: string;
+  resolvedPath: string | null;
+};
+
+function detectCommandOnPath(command: string): CommandRuntimeStatus {
+  const locatorCommand = process.platform === 'win32' ? 'where' : 'which';
+  const locatorResult = spawnSync(locatorCommand, [command], {
+    encoding: 'utf-8',
+    windowsHide: true,
+  });
+  if (locatorResult.status === 0) {
+    const firstMatch = String(locatorResult.stdout ?? '')
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .find(line => line.length > 0);
+    if (firstMatch) {
+      return {
+        available: true,
+        source: 'path',
+        summary: `${command} available on PATH (${firstMatch})`,
+        command,
+        resolvedPath: firstMatch,
+      };
+    }
+  }
+
+  return {
+    available: false,
+    source: 'missing',
+    summary: `${command} is NOT available on PATH in the current executor environment.`,
+    command,
+    resolvedPath: null,
+  };
+}
+
+function detectGradleInstallCandidate(): string | null {
+  const roots = process.platform === 'win32'
+    ? [
+        'C:\\Program Files\\Gradle',
+        'C:\\Program Files (x86)\\Gradle',
+      ]
+    : ['/opt/gradle', '/usr/local/gradle'];
+
+  const candidates: string[] = [];
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    try {
+      const entries = readdirSync(root, { withFileTypes: true })
+        .filter(entry => entry.isDirectory())
+        .map(entry => join(
+          root,
+          entry.name,
+          'bin',
+          process.platform === 'win32' ? 'gradle.bat' : 'gradle',
+        ))
+        .filter(candidate => existsSync(candidate))
+        .sort((left, right) => right.localeCompare(left));
+      candidates.push(...entries);
+    } catch {
+      continue;
+    }
+  }
+
+  return candidates[0] ?? null;
+}
+
+function prependProcessPath(pathEntry: string): void {
+  const currentPath = process.env.PATH ?? '';
+  const delimiter = process.platform === 'win32' ? ';' : ':';
+  const normalizedEntry = resolve(pathEntry);
+  const existing = currentPath
+    .split(delimiter)
+    .map(entry => entry.trim())
+    .filter(entry => entry.length > 0);
+
+  const alreadyPresent = existing.some(entry =>
+    process.platform === 'win32'
+      ? entry.toLowerCase() === normalizedEntry.toLowerCase()
+      : entry === normalizedEntry,
+  );
+  if (alreadyPresent) {
+    return;
+  }
+
+  process.env.PATH = [normalizedEntry, ...existing].join(delimiter);
+}
+
+function parseGradleDistributionUrl(propertiesContent: string): string | null {
+  const match = String(propertiesContent ?? '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .find(line => line.startsWith('distributionUrl='));
+  if (!match) {
+    return null;
+  }
+
+  return match
+    .slice('distributionUrl='.length)
+    .trim()
+    .replace(/\\:/g, ':')
+    .replace(/\\=/g, '=');
+}
+
+function detectGradleBinaryFromExtractedRoot(extractedRoot: string): string | null {
+  const binaryName = process.platform === 'win32' ? 'gradle.bat' : 'gradle';
+  const directCandidate = join(extractedRoot, 'bin', binaryName);
+  if (existsSync(directCandidate)) {
+    return directCandidate;
+  }
+
+  if (!existsSync(extractedRoot)) {
+    return null;
+  }
+
+  try {
+    const entries = readdirSync(extractedRoot, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => join(extractedRoot, entry.name, 'bin', binaryName))
+      .filter(candidate => existsSync(candidate))
+      .sort((left, right) => right.localeCompare(left));
+    return entries[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function repairSettingsGradleKtsContent(content: string): {
+  content: string;
+  changed: boolean;
+  notes: string[];
+} {
+  let next = String(content ?? '');
+  const notes: string[] = [];
+
+  const includeBareStringRe = /^(\s*)include\s+"([^"]+)"\s*$/gm;
+  if (includeBareStringRe.test(next)) {
+    next = next.replace(includeBareStringRe, '$1include("$2")');
+    notes.push('Normalized bare include syntax to include("...").');
+  }
+
+  return {
+    content: next,
+    changed: notes.length > 0,
+    notes,
+  };
+}
+
+function buildDeterministicRootBuildGradleKtsContent(): string {
+  return [
+    'plugins {',
+    '    id("com.android.application") version "8.7.3" apply false',
+    '    id("org.jetbrains.kotlin.android") version "1.9.24" apply false',
+    '}',
+    '',
+  ].join('\n');
+}
+
+function detectJavaRuntimeStatus(): JavaRuntimeStatus {
+  const javaHome = process.env.JAVA_HOME?.trim();
+  if (javaHome) {
+    const javaHomeCandidate = join(
+      javaHome,
+      'bin',
+      process.platform === 'win32' ? 'java.exe' : 'java',
+    );
+    if (existsSync(javaHomeCandidate)) {
+      return {
+        available: true,
+        source: 'java_home',
+        summary: `Java available via JAVA_HOME (${javaHomeCandidate})`,
+      };
+    }
+  }
+
+  const javaPathStatus = detectCommandOnPath('java');
+  if (javaPathStatus.available) {
+    return {
+      available: true,
+      source: 'path',
+      summary: `Java available on PATH (${javaPathStatus.resolvedPath})`,
+    };
+  }
+
+  return {
+    available: false,
+    source: 'missing',
+    summary: 'Java is NOT available in the current executor environment. JAVA_HOME is unset or invalid and no java executable is on PATH.',
+  };
+}
+
+function listDirectoryNamesIfPresent(dirPath: string): string[] {
+  if (!existsSync(dirPath)) {
+    return [];
+  }
+
+  try {
+    return readdirSync(dirPath, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => entry.name)
+      .sort((left, right) => left.localeCompare(right));
+  } catch {
+    return [];
+  }
+}
+
+function detectAndroidSdkStatus(): AndroidSdkStatus {
+  const candidates: Array<{ source: AndroidSdkStatus['source']; root: string | null }> = [
+    { source: 'android_home', root: process.env.ANDROID_HOME?.trim() ?? null },
+    { source: 'android_sdk_root', root: process.env.ANDROID_SDK_ROOT?.trim() ?? null },
+    {
+      source: 'local_default',
+      root: process.env.LOCALAPPDATA
+        ? join(process.env.LOCALAPPDATA, 'Android', 'Sdk')
+        : null,
+    },
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate.root || !existsSync(candidate.root)) {
+      continue;
+    }
+
+    const platforms = listDirectoryNamesIfPresent(join(candidate.root, 'platforms'));
+    const buildTools = listDirectoryNamesIfPresent(join(candidate.root, 'build-tools'));
+    const platformToolsDir = join(candidate.root, 'platform-tools');
+    const toolsBinDir = join(candidate.root, 'tools', 'bin');
+    const adbPath = existsSync(join(platformToolsDir, process.platform === 'win32' ? 'adb.exe' : 'adb'))
+      ? join(platformToolsDir, process.platform === 'win32' ? 'adb.exe' : 'adb')
+      : null;
+    const sdkManagerPath = existsSync(join(toolsBinDir, process.platform === 'win32' ? 'sdkmanager.bat' : 'sdkmanager'))
+      ? join(toolsBinDir, process.platform === 'win32' ? 'sdkmanager.bat' : 'sdkmanager')
+      : null;
+
+    if (platforms.length > 0 && buildTools.length > 0) {
+      return {
+        available: true,
+        source: candidate.source,
+        sdkRoot: candidate.root,
+        sdkManagerPath,
+        adbPath,
+        platforms,
+        buildTools,
+        summary: `Android SDK available via ${candidate.source} (${candidate.root}); platforms=${platforms.join(', ') || 'none'}; build-tools=${buildTools.join(', ') || 'none'}`,
+      };
+    }
+  }
+
+  return {
+    available: false,
+    source: 'missing',
+    sdkRoot: null,
+    sdkManagerPath: null,
+    adbPath: null,
+    platforms: [],
+    buildTools: [],
+    summary: 'Android SDK is NOT available in the executor environment. ANDROID_HOME / ANDROID_SDK_ROOT are unset or invalid and no usable local SDK was discovered.',
+  };
+}
+
+function buildLocalPropertiesSdkLine(sdkRoot: string): string {
+  return `sdk.dir=${sdkRoot.replace(/\\/g, '\\\\')}`;
+}
+
+function ensureAndroidSdkEnvironment(sdkStatus: AndroidSdkStatus): string[] {
+  if (!sdkStatus.available || !sdkStatus.sdkRoot) {
+    return [];
+  }
+
+  process.env.ANDROID_HOME = sdkStatus.sdkRoot;
+  process.env.ANDROID_SDK_ROOT = sdkStatus.sdkRoot;
+
+  const prependedPaths: string[] = [];
+  for (const dirPath of [
+    join(sdkStatus.sdkRoot, 'platform-tools'),
+    join(sdkStatus.sdkRoot, 'tools', 'bin'),
+    join(sdkStatus.sdkRoot, 'emulator'),
+  ]) {
+    if (existsSync(dirPath)) {
+      prependProcessPath(dirPath);
+      prependedPaths.push(dirPath);
+    }
+  }
+
+  return prependedPaths;
+}
+
+function usesGradleLikeCommand(target: string): boolean {
+  return /\b(?:gradle|gradlew(?:\.bat)?)\b/i.test(String(target ?? ''));
+}
+
+function isGradleProvisioningStep(step: SwePlan['minimal_action_set'][number]): boolean {
+  if (step.tool !== 'shell_exec' && step.tool !== 'test_run') {
+    return false;
+  }
+
+  const target = String(step.target ?? '').trim();
+  if (!target) {
+    return false;
+  }
+
+  return /\b(winget|choco|scoop)\b.*\bgradle\b/i.test(target);
+}
+
+function shouldUseDeterministicGradleBootstrapLane(
+  manifest: OrchestratorManifest,
+): boolean {
+  const projectRoot = inferProjectRoot(manifest);
+  if (!projectRoot || !existsSync(projectRoot)) {
+    return false;
+  }
+
+  const wrapperJarPath = join(projectRoot, 'gradle', 'wrapper', 'gradle-wrapper.jar');
+  const gradlewPath = join(projectRoot, 'gradlew');
+  const gradlewBatPath = join(projectRoot, 'gradlew.bat');
+  const wrapperPropertiesPath = join(projectRoot, 'gradle', 'wrapper', 'gradle-wrapper.properties');
+
+  return (
+    !existsSync(wrapperJarPath) &&
+    existsSync(wrapperPropertiesPath) &&
+    (existsSync(gradlewPath) || existsSync(gradlewBatPath))
+  );
+}
+
+function shouldUseDeterministicAndroidSdkBootstrapLane(
+  manifest: OrchestratorManifest,
+): boolean {
+  const projectRoot = inferProjectRoot(manifest);
+  if (!projectRoot || !existsSync(projectRoot)) {
+    return false;
+  }
+
+  return (
+    existsSync(join(projectRoot, 'settings.gradle.kts')) ||
+    existsSync(join(projectRoot, 'app', 'build.gradle.kts')) ||
+    existsSync(join(projectRoot, 'app', 'src', 'main', 'AndroidManifest.xml'))
+  );
+}
+
+function isJavaProvisioningStep(step: SwePlan['minimal_action_set'][number]): boolean {
+  if (step.tool !== 'shell_exec' && step.tool !== 'test_run') {
+    return false;
+  }
+
+  const target = String(step.target ?? '').trim();
+  if (!target) {
+    return false;
+  }
+
+  return (
+    /\b(winget|choco|scoop)\b.*\b(jdk|java|temurin|openjdk|corretto|microsoft-openjdk)\b/i.test(target) ||
+    /\b(setx|export)\b[^\r\n]*\bJAVA_HOME\b/i.test(target) ||
+    /\bJAVA_HOME\s*=/.test(target) ||
+    /\bgradle\s+wrapper\b/i.test(target)
+  );
+}
+
 function buildSweTask(
   manifest:            OrchestratorManifest,
   qaRejections:        string[],
   proposedFixStrategy: string | undefined,
   evidenceContext:     string = '',
+  groundingContext:    string = '',
 ): string {
   const { user_request } = manifest.handoff_payload;
+  const projectRoot = inferProjectRoot(manifest);
+  const projectRootLines: string[] = [];
+  const wrapperBootstrapLines: string[] = [];
+  const runtimePreflightLines: string[] = [];
+  const deterministicLaneLines: string[] = [];
+  const javaRuntimeStatus = detectJavaRuntimeStatus();
+  const gradleRuntimeStatus = detectCommandOnPath('gradle');
+  const androidSdkStatus = detectAndroidSdkStatus();
+  const wingetRuntimeStatus = process.platform === 'win32'
+    ? detectCommandOnPath('winget')
+    : { available: false, source: 'missing', summary: 'winget is unavailable on non-Windows platforms.', command: 'winget', resolvedPath: null } satisfies CommandRuntimeStatus;
+
+  if (projectRoot) {
+    projectRootLines.push(`Target project root: ${projectRoot}`);
+
+    if (existsSync(projectRoot)) {
+      const topLevelEntries = readdirSync(projectRoot, { withFileTypes: true })
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .map((entry) => `${entry.isDirectory() ? 'dir' : 'file'} ${entry.name}`);
+      const hasExistingAndroidProject =
+        existsSync(join(projectRoot, 'app')) ||
+        existsSync(join(projectRoot, 'settings.gradle.kts')) ||
+        existsSync(join(projectRoot, 'app', 'build.gradle.kts')) ||
+        existsSync(join(projectRoot, 'app', 'src', 'main', 'AndroidManifest.xml'));
+
+      projectRootLines.push(
+        `Current top-level entries: ${topLevelEntries.length > 0 ? topLevelEntries.join(', ') : '(empty)'}`,
+      );
+      projectRootLines.push(
+        hasExistingAndroidProject
+          ? 'Existing target state: partial Android project already exists at the target root. Continue in place; do not create a second nested app root.'
+          : 'Existing target state: no Android project markers detected yet at the target root.',
+      );
+
+      const wrapperPropertiesPath = join(projectRoot, 'gradle', 'wrapper', 'gradle-wrapper.properties');
+      const wrapperJarPath = join(projectRoot, 'gradle', 'wrapper', 'gradle-wrapper.jar');
+      const gradlewPath = join(projectRoot, 'gradlew');
+      const gradlewBatPath = join(projectRoot, 'gradlew.bat');
+      const wrapperPropertiesExists = existsSync(wrapperPropertiesPath);
+      const wrapperJarExists = existsSync(wrapperJarPath);
+      const gradlewExists = existsSync(gradlewPath);
+      const gradlewBatExists = existsSync(gradlewBatPath);
+      const rootBuildGradlePath = join(projectRoot, 'build.gradle.kts');
+      const appBuildGradlePath = join(projectRoot, 'app', 'build.gradle.kts');
+      const rootBuildGradleExists = existsSync(rootBuildGradlePath);
+      const appBuildGradleExists = existsSync(appBuildGradlePath);
+      const mirroredGradleCandidates = [
+        join(projectRoot, 'reference-montecarlo-ledger', 'build.gradle.kts'),
+        join(projectRoot, 'reference-montecarlo-ledger', 'settings.gradle.kts'),
+        join(projectRoot, 'reference-montecarlo-ledger', 'app', 'build.gradle.kts'),
+        join(projectRoot, 'reference-montecarlo-ledger', 'gradle', 'wrapper', 'gradle-wrapper.properties'),
+        join(projectRoot, 'reference-montecarlo-ledger', 'gradle', 'wrapper', 'gradle-wrapper.jar'),
+      ];
+      const missingMirroredGradleFiles = mirroredGradleCandidates
+        .filter(candidatePath => !existsSync(candidatePath))
+        .map(candidatePath => candidatePath.replace(/\\/g, '/'));
+
+      projectRootLines.push(
+        `Gradle wrapper state: properties=${wrapperPropertiesExists ? 'present' : 'missing'}, jar=${wrapperJarExists ? 'present' : 'missing'}, gradlew=${gradlewExists ? 'present' : 'missing'}, gradlew.bat=${gradlewBatExists ? 'present' : 'missing'}`,
+      );
+      projectRootLines.push(
+        `Build file state: root build.gradle.kts=${rootBuildGradleExists ? 'present' : 'missing'}, app/build.gradle.kts=${appBuildGradleExists ? 'present' : 'missing'}, settings.gradle.kts=${existsSync(join(projectRoot, 'settings.gradle.kts')) ? 'present' : 'missing'}`,
+      );
+      runtimePreflightLines.push(`Executor Java runtime: ${javaRuntimeStatus.summary}`);
+      runtimePreflightLines.push(`Executor Gradle runtime: ${gradleRuntimeStatus.summary}`);
+      runtimePreflightLines.push(`Executor Android SDK runtime: ${androidSdkStatus.summary}`);
+      runtimePreflightLines.push(`Executor winget runtime: ${wingetRuntimeStatus.summary}`);
+      if (missingMirroredGradleFiles.length > 0) {
+        runtimePreflightLines.push(
+          `Known missing mirrored Gradle files: ${missingMirroredGradleFiles.join(', ')}`,
+        );
+      }
+
+      if (!gradlewExists || !gradlewBatExists || !wrapperPropertiesExists) {
+        wrapperBootstrapLines.push(
+          'Wrapper bootstrap mode is ACTIVE.',
+          'If gradle/wrapper/gradle-wrapper.properties exists in the target root, treat that target file as the source of truth and create missing gradlew / gradlew.bat directly with file_write.',
+          'Do NOT plan file_read or directory_list steps against wrapper files in the mirrored reference repo unless those exact wrapper files are already known to exist there.',
+          'Known wrapper generation rule:',
+          '  - write gradlew as a standard POSIX Gradle launcher script that invokes "%APP_HOME%/gradle/wrapper/gradle-wrapper.jar" via Java when present',
+          '  - write gradlew.bat as a standard Windows Gradle launcher script that invokes "%APP_HOME%\\gradle\\wrapper\\gradle-wrapper.jar" via Java when present',
+          '  - if gradle-wrapper.properties is missing, create it directly at gradle/wrapper/gradle-wrapper.properties with a valid Gradle distributionUrl before creating wrapper scripts',
+          '  - if wrapper scripts are missing, create them directly in the target root instead of trying to copy or inspect them from the mirrored source repo',
+          '  - if gradle-wrapper.jar is also missing, prefer a direct shell_exec step like "gradle wrapper" in the target root after the project files are in place',
+        );
+      }
+
+      if (!gradleRuntimeStatus.available && !wrapperJarExists) {
+        wrapperBootstrapLines.push(
+          'Gradle bootstrap sequencing is REQUIRED because gradle-wrapper.jar is missing and global gradle is also missing.',
+          'A deterministic executor bootstrap lane will provision Gradle and generate gradle-wrapper.jar before normal execution begins.',
+          'Do NOT spend plan steps on installing Gradle, running `gradle --version`, or running `gradle wrapper` when this lane is active.',
+          'The plan MUST provision Gradle first (for example via winget install) BEFORE any step that runs `gradle wrapper`, `gradle --version`, or other global Gradle commands.',
+          'Do NOT place `gradle --version` before the Gradle provisioning step.',
+          'Do NOT plan any file_read or directory_list steps against known-missing mirrored Gradle files while bootstrapping Gradle.',
+          'Until the lane completes, focus the action set on concrete project files and post-bootstrap verification/build steps only.',
+        );
+        deterministicLaneLines.push(
+          'Deterministic Gradle bootstrap lane is ACTIVE for this task.',
+          'The plan must assume wrapper/bootstrap prerequisites will be satisfied before normal execution begins.',
+          'BANNED plan steps while this lane is active:',
+          '  - `winget install Gradle.Gradle` or any other Gradle provisioning command',
+          '  - `gradle --version`',
+          '  - `gradle wrapper`',
+          '  - reading `gradle-wrapper.jar` as if it already exists',
+          '  - verifying future APK output files by reading them before the build runs',
+          'Allowed post-bootstrap work:',
+          '  - read existing project files that already exist',
+          '  - create missing build files directly with file_write when target files are missing',
+          '  - run wrapper-based commands like `gradlew tasks` or `gradlew assembleDebug` after bootstrap',
+        );
+      }
+
+      if (!gradleRuntimeStatus.available && wrapperJarExists && (gradlewExists || gradlewBatExists)) {
+        deterministicLaneLines.push(
+          'Existing Gradle wrapper mode is ACTIVE for this task.',
+          'The target project already has gradlew / gradlew.bat and gradle-wrapper.jar, while global gradle is missing from PATH.',
+          'BANNED plan steps in this mode:',
+          '  - any global `gradle ...` command, including `gradle --version` and `gradle wrapper`',
+          '  - provisioning or re-creating the wrapper when the existing wrapper files are already present',
+          'Required behavior in this mode:',
+          '  - use only wrapper-based commands such as `gradlew tasks` or `gradlew assembleDebug` for build verification',
+          '  - treat wrapper execution as the canonical Gradle path for this task',
+        );
+      }
+
+      if (!rootBuildGradleExists) {
+        deterministicLaneLines.push(
+          'Target root build.gradle.kts is currently missing. If needed, CREATE it directly with file_write; do not try to file_read it first.',
+        );
+      }
+      if (appBuildGradleExists) {
+        deterministicLaneLines.push(
+          'Target app/build.gradle.kts already exists. Prefer reading this real target file instead of any mirrored build.gradle.kts.',
+        );
+      }
+    } else {
+      projectRootLines.push('Current top-level entries: target root does not exist yet.');
+    }
+  }
 
   const lines = [
     'Analyze the task below and produce the SWE Plan as a single raw JSON object.',
@@ -462,7 +1000,7 @@ function buildSweTask(
     '  "risks": [{ "risk": "...", "likelihood": "low|medium|high", "mitigation": "..." }],',
     '  "minimal_action_set": [{',
     '    "step": 1, "description": "...",',
-    '    "tool": "file_read|file_write|shell_exec|test_run|mcp_request|audit_ui|memory_store|memory_query",',
+    '    "tool": "directory_list|file_read|file_write|shell_exec|test_run|mcp_request|audit_ui|memory_store|memory_query",',
     '    "target": "<path or command>", "rationale": "...",',
     '    "reversible": true, "verification": "<how to confirm success>"',
     '  }],',
@@ -471,6 +1009,83 @@ function buildSweTask(
     '}',
     '',
     `Task: ${user_request}`,
+    ...(projectRootLines.length > 0
+      ? [
+          '',
+          'Target project context:',
+          ...projectRootLines,
+        ]
+      : []),
+    '',
+    'Planning rules for executable steps:',
+    '  - Use "directory_list" to inspect folders. Do NOT use "file_read" on a directory path.',
+    '  - Use "file_read" only for actual files whose contents need inspection.',
+    '  - Every file_read target must be a concrete file path. Never use placeholder targets like <path-to-main-source-file>.',
+    '  - For "shell_exec" and "test_run", the target must be the executable command itself.',
+    '  - Do NOT wrap commands with "cmd /c", PowerShell, bash, shell chaining, helper scripts, or "cd ... &&".',
+    '  - Use project-root or module-root paths in working_directory instead of shell wrappers.',
+    '  - Prefer file_write over shell-based bulk transforms. Do NOT create or run wrapper scripts to rewrite many files.',
+    '  - If the target root already contains a partial project, continue by editing that existing tree in place.',
+    '  - Do NOT create a second nested application root inside the target root unless the user explicitly asked for that.',
+    '  - If a mirrored reference repo already lives inside the target root, read from that mirrored path instead of any external path.',
+    '  - Prefer a small number of concrete file_read steps followed by direct file_write steps for the files that need to change.',
+    '  - When the task is to restore or generate missing wrapper/build scripts (for example gradlew or gradlew.bat), do NOT plan file_read steps against those missing files.',
+    '  - If a required wrapper script is missing but its companion config exists (for example gradle/wrapper/gradle-wrapper.properties), read the existing config and then create the missing wrapper script directly with file_write.',
+    '  - Do not use the mirrored reference repo as a source of truth for wrapper files unless those exact wrapper files actually exist there.',
+    '  - Treat runtime prerequisites as part of the executable plan. Do not assume Java, JAVA_HOME, SDKs, or build tools exist unless the target context confirms that they do.',
+    ...(javaRuntimeStatus.available
+      ? [
+          `  - Current Java preflight: ${javaRuntimeStatus.summary}.`,
+        ]
+      : [
+          '  - Current Java preflight: Java is missing in the executor environment.',
+          '  - If you plan any gradle/gradlew verification or build step, add an explicit Java bootstrap/configuration step BEFORE the first Gradle command.',
+          '  - That bootstrap step must install or configure a JDK / JAVA_HOME, not just assume java exists.',
+        ]),
+    ...(gradleRuntimeStatus.available
+      ? [
+          `  - Current Gradle preflight: ${gradleRuntimeStatus.summary}.`,
+        ]
+      : [
+          '  - Current Gradle preflight: global gradle is missing from PATH.',
+          '  - If gradle-wrapper.jar is missing, do NOT plan a `gradle wrapper` step unless the plan first installs/configures Gradle or uses another explicit bootstrap path.',
+          '  - When global gradle is absent and gradle-wrapper.jar is missing, the first global-Gradle-related step must be a provisioning step, not `gradle --version` and not a mirrored Gradle file read.',
+          ...(wingetRuntimeStatus.available
+            ? ['  - A valid recovery path is to install Gradle explicitly with winget before invoking `gradle wrapper`, because winget is available in this executor environment.']
+            : []),
+        ]),
+    ...(androidSdkStatus.available
+      ? [
+          `  - Current Android SDK preflight: ${androidSdkStatus.summary}.`,
+          '  - For Android build verification, prefer relying on the deterministic executor Android SDK lane rather than planning manual SDK discovery steps.',
+          '  - If local.properties is missing, do NOT plan a file_read against it; the executor SDK lane can create or repair it directly.',
+        ]
+      : [
+          '  - Current Android SDK preflight: no usable Android SDK has been discovered yet.',
+          '  - If you plan Android build verification steps like `gradlew assembleDebug`, the plan must either provision/configure the Android SDK first or explicitly rely on an executor bootstrap lane when one is active.',
+          '  - Do NOT treat missing local.properties as an existing file that must be read first; if needed, create it directly with file_write.',
+        ]),
+    ...(wrapperBootstrapLines.length > 0
+      ? [
+          '',
+          'Wrapper bootstrap context:',
+          ...wrapperBootstrapLines,
+        ]
+      : []),
+    ...(runtimePreflightLines.length > 0
+      ? [
+          '',
+          'Runtime preflight context:',
+          ...runtimePreflightLines,
+        ]
+      : []),
+    ...(deterministicLaneLines.length > 0
+      ? [
+          '',
+          'Deterministic bootstrap context:',
+          ...deterministicLaneLines,
+        ]
+      : []),
   ];
 
   if (qaRejections.length > 0) {
@@ -513,10 +1128,23 @@ function buildSweTask(
     );
   }
 
+  if (groundingContext.trim().length > 0) {
+    lines.push(
+      '',
+      groundingContext.trim(),
+    );
+  }
+
   return lines.join('\n');
 }
 
-function buildQaTask(swePlan: SwePlan): string {
+function buildQaTask(
+  swePlan: SwePlan,
+  javaRuntimeStatus: JavaRuntimeStatus,
+  gradleRuntimeStatus: CommandRuntimeStatus,
+  androidSdkStatus: AndroidSdkStatus,
+  deterministicGradleBootstrapLaneActive = false,
+): string {
   return [
     'Review the SWE Plan below and produce a QA verdict as a single raw JSON object.',
     'Respond with ONLY valid JSON — no markdown fences, no explanation, no tool calls.',
@@ -541,6 +1169,36 @@ function buildQaTask(swePlan: SwePlan): string {
     'yet — there is no current content to inspect). A file_write step with a target path',
     'that the plan is creating from scratch is NOT an EVIDENCE-GATE violation.',
     '',
+    '--- EXECUTOR SAFETY RULES ---',
+    'Reject the plan if any minimal_action_set step contains any of the following:',
+    '  - unresolved placeholder targets such as <path-to-file> or other angle-bracket placeholders',
+    '  - file or directory targets outside target_project_path',
+    '  - shell-wrapped commands such as cmd /c, powershell -c, bash -lc, sh -c',
+    '  - command chaining or directory-changing wrappers such as cd ... &&',
+    '  - gradle/gradlew verification steps that assume Java exists when the runtime preflight says Java is missing and the plan does not bootstrap/configure Java first',
+    '  - `gradle ...` steps that assume global Gradle exists when the runtime preflight says Gradle is missing and the plan does not install/configure Gradle first',
+    'Use INCOMPLETE_SUBMISSION for unresolved placeholders.',
+    'Use SFDIPOT-P for executor/runtime-incompatible paths or shell-wrapped commands.',
+    `Current Java runtime preflight: ${javaRuntimeStatus.summary}`,
+    `Current Gradle runtime preflight: ${gradleRuntimeStatus.summary}`,
+    `Current Android SDK runtime preflight: ${androidSdkStatus.summary}`,
+    ...(deterministicGradleBootstrapLaneActive
+      ? [
+          'Deterministic Gradle bootstrap lane status: ACTIVE.',
+          'When this lane is ACTIVE, the executor/runtime owns Gradle provisioning, root build bootstrap repair, wrapper generation, and halting if bootstrap fails.',
+          'Do NOT reject a plan merely because global gradle is missing when the plan only uses post-bootstrap wrapper commands such as `gradlew tasks` or `gradlew assembleDebug`.',
+          'Do NOT require the plan to include its own bootstrap/failure-handling steps for gradle-wrapper.jar generation when the lane is ACTIVE.',
+          'Only reject for Gradle/bootstrap reasons if the plan still includes forbidden global `gradle ...` commands, mirrored Gradle file probes, or other executor-incompatible steps.',
+        ]
+      : []),
+    ...(process.platform === 'win32'
+      ? [
+          'Windows-specific rule: do NOT reject a plan merely because it does not include wrapper permission, chmod, or Unblock-File steps for `gradlew` / `gradlew.bat`.',
+          'Only reject for Windows wrapper-permission issues if the grounded evidence explicitly shows the wrapper file is blocked, unreadable, or failing because of a permission/MOTW issue.',
+        ]
+      : []),
+    'Wrapper rule: if gradlew / gradlew.bat already exists in the target project, do NOT reject a plan merely because global gradle is unavailable on PATH when the plan uses wrapper-based commands only.',
+    '',
     'PASS shape:   { "verdict": "PASS", "overall_confidence": <1-5>, "notes": "..." }',
     'REJECT shape: { "verdict": "REJECT", "failure_count": <N>, "overall_confidence": <1-5>,',
     '  "failures": [{ "tag": "NAMIT-I", "condition": "...", "confidence": <1-5> }],',
@@ -556,6 +1214,176 @@ function buildQaTask(swePlan: SwePlan): string {
     'SWE Plan to review:',
     JSON.stringify(swePlan, null, 2),
   ].join('\n');
+}
+
+function sanitizeQaVerdictForDeterministicGradleBootstrapLane(
+  verdict: z.infer<typeof QaVerdictSchema>,
+  swePlan: SwePlan,
+  manifest: OrchestratorManifest,
+): z.infer<typeof QaVerdictSchema> {
+  if (
+    verdict.verdict !== 'REJECT' ||
+    !shouldUseDeterministicGradleBootstrapLane(manifest)
+  ) {
+    return verdict;
+  }
+
+  const usesForbiddenGlobalGradle = swePlan.minimal_action_set.some(step =>
+    (step.tool === 'shell_exec' || step.tool === 'test_run') &&
+    /\bgradle\b/i.test(String(step.target ?? '')) &&
+    !/\bgradlew(?:\.bat)?\b/i.test(String(step.target ?? '')) &&
+    !/\b(winget|choco|scoop)\b/i.test(String(step.target ?? '')),
+  );
+
+  if (usesForbiddenGlobalGradle) {
+    return verdict;
+  }
+
+  const filteredFailures = verdict.failures.filter(failure => {
+    const condition = String(failure.condition ?? '');
+    if (
+      failure.tag === 'SFDIPOT-P' &&
+      /gradle is not available on path/i.test(condition) &&
+      /gradlew/i.test(condition)
+    ) {
+      return false;
+    }
+
+    if (
+      failure.tag === 'NAMIT-N' &&
+      /gradle-wrapper\.jar generation fails during bootstrap/i.test(condition)
+    ) {
+      return false;
+    }
+
+    return true;
+  });
+
+  if (filteredFailures.length === verdict.failures.length) {
+    return verdict;
+  }
+
+  if (filteredFailures.length === 0) {
+    return {
+      verdict: 'PASS',
+      overall_confidence: Math.max(3, verdict.overall_confidence),
+      notes: 'Deterministic Gradle bootstrap lane owns Gradle provisioning and wrapper-generation failure handling for this plan.',
+    };
+  }
+
+  return {
+    ...verdict,
+    failure_count: filteredFailures.length,
+    failures: filteredFailures,
+  };
+}
+
+function sanitizeWindowsGradlewPermissionQaVerdict(
+  verdict: z.infer<typeof QaVerdictSchema>,
+  swePlan: SwePlan,
+): z.infer<typeof QaVerdictSchema> {
+  if (process.platform !== 'win32' || verdict.verdict !== 'REJECT') {
+    return verdict;
+  }
+
+  const filteredFailures = verdict.failures.filter(failure => {
+    const condition = String(failure.condition ?? '');
+    return !(
+      failure.tag === 'SFDIPOT-P' &&
+      /\bgradlew(?:\.bat)?\b/i.test(condition) &&
+      (
+        /permission/i.test(condition) ||
+        /mark of the web/i.test(condition) ||
+        /unblock-file/i.test(condition) ||
+        /executable permissions/i.test(condition)
+      )
+    );
+  });
+
+  if (filteredFailures.length === verdict.failures.length) {
+    return verdict;
+  }
+
+  if (filteredFailures.length === 0) {
+    return {
+      verdict: 'PASS',
+      overall_confidence: Math.max(3, verdict.overall_confidence),
+      notes: 'Windows wrapper-permission rejection removed because no grounded evidence showed gradlew / gradlew.bat was blocked.',
+    };
+  }
+
+  return {
+    ...verdict,
+    failure_count: filteredFailures.length,
+    failures: filteredFailures,
+  };
+}
+
+function sanitizeExistingWrapperQaVerdict(
+  verdict: z.infer<typeof QaVerdictSchema>,
+  swePlan: SwePlan,
+  manifest: OrchestratorManifest,
+): z.infer<typeof QaVerdictSchema> {
+  if (verdict.verdict !== 'REJECT') {
+    return verdict;
+  }
+
+  const projectRoot = inferProjectRoot(manifest);
+  if (!projectRoot) {
+    return verdict;
+  }
+
+  const wrapperExists =
+    existsSync(join(projectRoot, 'gradlew')) ||
+    existsSync(join(projectRoot, 'gradlew.bat'));
+  const usesGlobalGradle = swePlan.minimal_action_set.some(step =>
+    (step.tool === 'shell_exec' || step.tool === 'test_run') &&
+    /\bgradle\b/i.test(String(step.target ?? '')) &&
+    !/\bgradlew(?:\.bat)?\b/i.test(String(step.target ?? '')) &&
+    !/\b(winget|choco|scoop)\b/i.test(String(step.target ?? '')),
+  );
+
+  if (!wrapperExists || usesGlobalGradle) {
+    return verdict;
+  }
+
+  const filteredFailures = verdict.failures.filter(failure => {
+    const condition = String(failure.condition ?? '');
+    return !(
+      failure.tag === 'SFDIPOT-P' &&
+      /gradle (?:wrapper )?execution steps/i.test(condition) &&
+      /not available on path/i.test(condition)
+    );
+  });
+
+  if (filteredFailures.length === verdict.failures.length) {
+    return verdict;
+  }
+
+  if (filteredFailures.length === 0) {
+    return {
+      verdict: 'PASS',
+      overall_confidence: Math.max(3, verdict.overall_confidence),
+      notes: 'Existing gradlew / gradlew.bat wrapper allows wrapper-based execution without requiring global gradle on PATH.',
+    };
+  }
+
+  return {
+    ...verdict,
+    failure_count: filteredFailures.length,
+    failures: filteredFailures,
+  };
+}
+
+function sanitizeGroundingViolationsForAndroidSdkLane(
+  violations: string[],
+  manifest: OrchestratorManifest,
+): string[] {
+  if (!shouldUseDeterministicAndroidSdkBootstrapLane(manifest)) {
+    return violations;
+  }
+
+  return violations.filter(condition => !/references missing path: .*local\.properties/i.test(condition));
 }
 
 // ─── Orchestrator output parser ───────────────────────────────────────────────
@@ -620,6 +1448,251 @@ function formatZodErrors(err: z.ZodError): string[] {
     const path = issue.path.length > 0 ? issue.path.join('.') : '(root)';
     return `${path}: ${issue.message}`;
   });
+}
+
+function isWithinProjectRootPath(projectRoot: string, candidatePath: string): boolean {
+  const root = resolve(projectRoot);
+  const target = resolve(candidatePath);
+
+  if (process.platform === 'win32') {
+    const rootNorm = root.toLowerCase();
+    const targetNorm = target.toLowerCase();
+    return targetNorm === rootNorm || targetNorm.startsWith(`${rootNorm}\\`);
+  }
+
+  return target === root || target.startsWith(`${root}/`);
+}
+
+function extractWindowsAbsolutePaths(value: string): string[] {
+  const quotedMatches = Array.from(value.matchAll(/["']([A-Za-z]:\\[^"']+)["']/g), match => match[1] ?? '');
+  const bareMatches = Array.from(value.matchAll(/\b([A-Za-z]:\\[^\s"'|;&]+)/g), match => match[1] ?? '');
+  return [...new Set([...quotedMatches, ...bareMatches].filter(match => match.length > 0))];
+}
+
+function collectExecutorSafetyViolations(
+  swePlan: SwePlan,
+  manifest: OrchestratorManifest,
+): QaVerdictReject | null {
+  const projectRoot = inferProjectRoot(manifest);
+  if (!projectRoot) {
+    return null;
+  }
+
+  const failures: QaVerdictReject['failures'] = [];
+  const shellWrapperRe = /\b(cmd(\.exe)?\s*\/c|powershell(\.exe)?\b|pwsh\b|bash\b|sh\b)\b/i;
+  const shellChainingRe = /&&|\|\||[;|]/;
+  const cdWrapperRe = /\bcd\s+[A-Za-z]:\\/i;
+
+  for (const step of swePlan.minimal_action_set) {
+    const target = String(step.target ?? '').trim();
+    if (!target) continue;
+
+    if (/<[^>]+>/.test(target)) {
+      failures.push({
+        tag: 'INCOMPLETE_SUBMISSION',
+        condition: `[EXECUTOR_SAFETY] Step ${step.step} contains an unresolved placeholder target: ${target}`,
+        confidence: 5,
+        fix_hint: 'Replace placeholders with a concrete in-project path or command before sending the plan to executor.',
+      });
+      continue;
+    }
+
+    if (step.tool === 'directory_list' || step.tool === 'file_read' || step.tool === 'file_write') {
+      const resolvedTarget = /^[A-Za-z]:[\\/]/.test(target)
+        ? resolve(target)
+        : resolve(projectRoot, target);
+      if (!isWithinProjectRootPath(projectRoot, resolvedTarget)) {
+        failures.push({
+          tag: 'SFDIPOT-P',
+          condition: `[EXECUTOR_SAFETY] Step ${step.step} targets a path outside target_project_path: ${target}`,
+          confidence: 5,
+          fix_hint: 'Use only project-root-relative paths or mirrored in-root references for executor-accessible files.',
+        });
+      }
+      continue;
+    }
+
+    if (step.tool === 'shell_exec' || step.tool === 'test_run') {
+      if (shellWrapperRe.test(target) || shellChainingRe.test(target) || cdWrapperRe.test(target)) {
+        failures.push({
+          tag: 'SFDIPOT-P',
+          condition: `[EXECUTOR_SAFETY] Step ${step.step} uses shell-wrapped or chained command syntax that violates executor contract: ${target}`,
+          confidence: 5,
+          fix_hint: 'Emit the executable command only and rely on working_directory instead of shell wrappers or chaining.',
+        });
+      }
+
+      const outOfRootPaths = extractWindowsAbsolutePaths(target)
+        .filter(candidatePath => !isWithinProjectRootPath(projectRoot, candidatePath));
+      if (outOfRootPaths.length > 0) {
+        failures.push({
+          tag: 'SFDIPOT-P',
+          condition: `[EXECUTOR_SAFETY] Step ${step.step} references out-of-root path(s) in command target: ${outOfRootPaths.join(', ')}`,
+          confidence: 5,
+          fix_hint: 'Use only paths rooted under target_project_path or stage mirrored references inside the project root first.',
+        });
+      }
+    }
+  }
+
+  if (failures.length === 0) {
+    return null;
+  }
+
+  return {
+    verdict: 'REJECT',
+    failure_count: failures.length,
+    failures,
+    overall_confidence: 5,
+    proposed_fix_strategy: 'Regenerate the plan so every executor-facing target is concrete, in-root, and free of shell-wrapper syntax.',
+  };
+}
+
+function collectRuntimePrerequisiteViolations(
+  swePlan: SwePlan,
+  javaRuntimeStatus: JavaRuntimeStatus,
+  gradleRuntimeStatus: CommandRuntimeStatus,
+): QaVerdictReject | null {
+  const failures: QaVerdictReject['failures'] = [];
+
+  const firstGradleLikeStep = swePlan.minimal_action_set.find(step =>
+    (step.tool === 'shell_exec' || step.tool === 'test_run') &&
+    usesGradleLikeCommand(String(step.target ?? '')),
+  );
+
+  if (!firstGradleLikeStep) {
+    return null;
+  }
+
+  const priorSteps = swePlan.minimal_action_set.filter(step => step.step < firstGradleLikeStep.step);
+  const hasJavaProvisioning = priorSteps.some(step => isJavaProvisioningStep(step));
+  const hasGradleProvisioning = priorSteps.some(step => isGradleProvisioningStep(step));
+
+  if (!javaRuntimeStatus.available && !hasJavaProvisioning) {
+    failures.push({
+      tag: 'SFDIPOT-P',
+      condition: `[RUNTIME_PREFLIGHT] Step ${firstGradleLikeStep.step} invokes Gradle (${firstGradleLikeStep.target}) but Java is currently unavailable in the executor environment.`,
+      confidence: 5,
+      fix_hint: 'Add an earlier step that installs or configures Java/JDK and JAVA_HOME before the first gradle/gradlew command.',
+    });
+  }
+
+  const usesGlobalGradle = swePlan.minimal_action_set.some(step =>
+    (step.tool === 'shell_exec' || step.tool === 'test_run') &&
+    /\bgradle\b/i.test(String(step.target ?? '')) &&
+    !/\b(winget|choco|scoop)\b/i.test(String(step.target ?? '')) &&
+    !/\bgradlew(?:\.bat)?\b/i.test(String(step.target ?? '')),
+  );
+
+  if (usesGlobalGradle && !gradleRuntimeStatus.available && !hasGradleProvisioning) {
+    const firstGlobalGradleStep = swePlan.minimal_action_set.find(step =>
+      (step.tool === 'shell_exec' || step.tool === 'test_run') &&
+      /\bgradle\b/i.test(String(step.target ?? '')) &&
+      !/\b(winget|choco|scoop)\b/i.test(String(step.target ?? '')) &&
+      !/\bgradlew(?:\.bat)?\b/i.test(String(step.target ?? '')),
+    );
+    if (firstGlobalGradleStep) {
+      failures.push({
+        tag: 'SFDIPOT-P',
+        condition: `[RUNTIME_PREFLIGHT] Step ${firstGlobalGradleStep.step} invokes global Gradle (${firstGlobalGradleStep.target}) but gradle is not available on PATH in the executor environment.`,
+        confidence: 5,
+        fix_hint: 'Install or configure Gradle before the first global `gradle` command, or switch to a wrapper-based path that does not assume global Gradle already exists.',
+      });
+    }
+  }
+
+  if (failures.length === 0) {
+    return null;
+  }
+
+  return {
+    verdict: 'REJECT',
+    failure_count: failures.length,
+    failures,
+    overall_confidence: 5,
+    proposed_fix_strategy: 'Regenerate the plan so runtime prerequisites are satisfied first: bootstrap the missing Java/Gradle dependency, then run Gradle verification or builds.',
+  };
+}
+
+function collectGradleBootstrapSequencingViolations(
+  swePlan: SwePlan,
+  manifest: OrchestratorManifest,
+  gradleRuntimeStatus: CommandRuntimeStatus,
+): QaVerdictReject | null {
+  const projectRoot = inferProjectRoot(manifest);
+  if (!projectRoot) {
+    return null;
+  }
+
+  const wrapperJarPath = join(projectRoot, 'gradle', 'wrapper', 'gradle-wrapper.jar');
+  const wrapperJarExists = existsSync(wrapperJarPath);
+  if (gradleRuntimeStatus.available || wrapperJarExists) {
+    return null;
+  }
+
+  const failures: QaVerdictReject['failures'] = [];
+  const provisioningIndex = swePlan.minimal_action_set.findIndex(step => isGradleProvisioningStep(step));
+  const provisioningStepNumber = provisioningIndex >= 0
+    ? swePlan.minimal_action_set[provisioningIndex]?.step ?? null
+    : null;
+
+  for (const step of swePlan.minimal_action_set) {
+    const target = String(step.target ?? '').trim();
+    if (!target) continue;
+
+    const normalizedTarget = target.replace(/\//g, '\\').toLowerCase();
+    const isMirroredGradleRead = (
+      (step.tool === 'file_read' || step.tool === 'directory_list') &&
+      normalizedTarget.includes('\\reference-montecarlo-ledger\\') &&
+      normalizedTarget.includes('gradle')
+    ) || (
+      (step.tool === 'file_read' || step.tool === 'directory_list') &&
+      normalizedTarget.includes('\\reference-montecarlo-ledger\\build.gradle.kts')
+    ) || (
+      (step.tool === 'file_read' || step.tool === 'directory_list') &&
+      normalizedTarget.includes('\\reference-montecarlo-ledger\\settings.gradle.kts')
+    ) || (
+      (step.tool === 'file_read' || step.tool === 'directory_list') &&
+      normalizedTarget.includes('\\reference-montecarlo-ledger\\app\\build.gradle.kts')
+    );
+
+    if (isMirroredGradleRead) {
+      failures.push({
+        tag: 'SFDIPOT-P',
+        condition: `[GRADLE_BOOTSTRAP] Step ${step.step} probes mirrored Gradle files during bootstrap even though global gradle is absent and gradle-wrapper.jar is missing: ${target}`,
+        confidence: 5,
+        fix_hint: 'Provision Gradle first, then generate/verify gradle-wrapper.jar. Do not read mirrored Gradle files during bootstrap unless they are already confirmed to exist.',
+      });
+    }
+
+    const usesGlobalGradle = (step.tool === 'shell_exec' || step.tool === 'test_run')
+      && /\bgradle\b/i.test(target)
+      && !/\b(winget|choco|scoop)\b/i.test(target)
+      && !/\bgradlew(?:\.bat)?\b/i.test(target);
+    if (
+      usesGlobalGradle &&
+      (provisioningStepNumber === null || step.step < provisioningStepNumber)
+    ) {
+      failures.push({
+        tag: 'SFDIPOT-P',
+        condition: `[GRADLE_BOOTSTRAP] Step ${step.step} uses global Gradle before any concrete provisioning step while gradle is absent and gradle-wrapper.jar is missing: ${target}`,
+        confidence: 5,
+        fix_hint: 'Make the first global-Gradle-related step a concrete provisioning step such as winget install Gradle.Gradle, then verify gradle, then run gradle wrapper.',
+      });
+    }
+  }
+
+  if (failures.length === 0) {
+    return null;
+  }
+
+  return {
+    verdict: 'REJECT',
+    failure_count: failures.length,
+    failures,
+    overall_confidence: 5,
+    proposed_fix_strategy: 'Regenerate the Gradle bootstrap portion so it provisions Gradle first, avoids mirrored Gradle file reads during bootstrap, and only then generates/verifies gradle-wrapper.jar.',
+  };
 }
 
 function buildManualPlanRepairPrompt(
@@ -694,7 +1767,7 @@ function writeValidatedExecutionReport(
 // ─── Stage 4: Stateless text-loop executor ────────────────────────────────────
 
 function getTarget(req: z.infer<typeof ToolCallRequestSchema>): string {
-  if (req.tool === 'file_read'  || req.tool === 'file_write')   return req.path;
+  if (req.tool === 'directory_list' || req.tool === 'file_read'  || req.tool === 'file_write')   return req.path;
   if (req.tool === 'shell_exec' || req.tool === 'test_run')     return req.command;
   if (req.tool === 'mcp_request')                               return `${req.server} → ${req.query}`;
   if (req.tool === 'audit_ui')                                  return req.url ?? JSON.stringify(req);
@@ -718,9 +1791,22 @@ function formatExecutionResults(toolCallLog: ToolCallLog[], loopCount: number): 
       `[Step ${entry.step}] ${entry.tool} → ${entry.target}`,
       `stdout: ${entry.stdout.trim() || '(empty)'}`,
       ...(entry.stderr.trim() ? [`stderr: ${entry.stderr.trim()}`] : []),
+      ...(entry.denial ? [`denial: ${JSON.stringify(entry.denial)}`] : []),
+      ...(entry.mcp_lifecycle ? [`mcp_lifecycle: ${JSON.stringify(entry.mcp_lifecycle)}`] : []),
     ].join('\n'),
   );
   return [header, ...entries].join('\n\n');
+}
+
+function formatDenialSummary(denial: ToolCallLog['denial']): string | null {
+  if (!denial) return null;
+  return `${denial.category}/${denial.reason_code}: ${denial.message}`;
+}
+
+function formatMcpLifecycleSummary(lifecycle: ToolCallLog['mcp_lifecycle']): string | null {
+  if (!lifecycle) return null;
+  const reason = lifecycle.reason_code ? ` (${lifecycle.reason_code})` : '';
+  return `${lifecycle.phase}/${lifecycle.outcome}${reason}`;
 }
 
 /**
@@ -733,11 +1819,17 @@ function buildExecutorTask(approvedPlan: SwePlan): string {
     'Execute the following approved SWE Plan.',
     'Respond with ONLY valid JSON — no markdown fences, no explanation, no prose.',
     '',
+    'ACTIVATION STATUS:',
+    '- The pipeline has already verified a QA PASS verdict for this plan.',
+    '- You are authorized to begin tool execution now.',
+    '- Do NOT refuse activation for missing QA approval unless the prompt explicitly says QA failed.',
+    '',
     'On each turn emit EXACTLY ONE of these JSON shapes:',
+    '  directory_list: { "type": "tool_call", "tool": "directory_list", "path": "<project-relative or /project/... path>" }',
     '  file_read:  { "type": "tool_call", "tool": "file_read",  "path": "<project-relative or /project/... path>" }',
     '  file_write: { "type": "tool_call", "tool": "file_write", "path": "<project-relative or /project/... path>", "content": "<full file content>" }',
-    '  shell_exec: { "type": "tool_call", "tool": "shell_exec", "command": "<cmd>", "working_directory": "<project-relative or /project/... path>", "timeout_seconds": 120 }',
-    '  test_run:     { "type": "tool_call", "tool": "test_run",     "command": "<cmd>", "working_directory": "<project-relative or /project/... path>", "timeout_seconds": 300 }',
+    '  shell_exec: { "type": "tool_call", "tool": "shell_exec", "command": "<cmd-without-cmd-slash-c-or-cd>", "working_directory": "<project-relative or /project/... path>", "timeout_seconds": 120 }',
+    '  test_run:     { "type": "tool_call", "tool": "test_run",     "command": "<cmd-without-cmd-slash-c-or-cd>", "working_directory": "<project-relative or /project/... path>", "timeout_seconds": 300 }',
     '  mcp_request:  { "type": "tool_call", "tool": "mcp_request",  "server": "<server_name>", "query": "<query>" }',
     '  audit_ui:     { "type": "tool_call", "tool": "audit_ui",     "url": "<url>", "run_id": "<run_id>" }',
     '  memory_store: { "type": "tool_call", "tool": "memory_store", "key": "<key>", "value": "<value>" }',
@@ -761,6 +1853,8 @@ function formatHistoryEntry(entry: ToolCallLog): string {
     `Exit code: ${entry.exit_code}`,
     `Stdout: ${truncateLogs(entry.stdout) || '(empty)'}`,
     `Stderr: ${truncateLogs(entry.stderr) || '(empty)'}`,
+    ...(entry.denial ? [`Denial: ${formatDenialSummary(entry.denial)}`] : []),
+    ...(entry.mcp_lifecycle ? [`MCP lifecycle: ${formatMcpLifecycleSummary(entry.mcp_lifecycle)}`] : []),
     `Verification: ${entry.verified ? 'PASSED' : 'FAILED'}`,
   ].join('\n');
 }
@@ -878,6 +1972,7 @@ async function runExecutorLoop(
   evidence:     EvidenceBundle,
   targetModel:  TargetModel,
   reportWarnings: string[] = [],
+  initialToolCallLog: ToolCallLog[] = [],
 ): Promise<{ toolCallLog: ToolCallLog[] }> {
   assertExecutorGate(evidence.runDir);
 
@@ -888,8 +1983,8 @@ async function runExecutorLoop(
   );
   evidence.writeCompiledContext('executor', baseContext);
 
-  let executionHistory = '';
-  const toolCallLog: ToolCallLog[] = [];
+  let executionHistory = initialToolCallLog.map(formatHistoryEntry).join('\n\n');
+  const toolCallLog: ToolCallLog[] = [...initialToolCallLog];
 
   for (let turn = 1; turn <= MAX_EXECUTOR_TURNS; turn++) {
     logDetail(`Executor turn ${turn}/${MAX_EXECUTOR_TURNS}...`);
@@ -983,16 +2078,22 @@ async function runExecutorLoop(
       exit_code: toolResult.exit_code,
       stdout:    toolResult.stdout,
       stderr:    toolResult.stderr,
+      ...(toolResult.denial ? { denial: toolResult.denial } : {}),
+      ...(toolResult.mcp_lifecycle ? { mcp_lifecycle: toolResult.mcp_lifecycle } : {}),
       verified:  toolResult.exit_code === 0,
     };
     toolCallLog.push(entry);
 
     // Halt immediately on live tool failure.
     if (!DRY_RUN && toolResult.exit_code !== 0) {
+      const denialSummary = formatDenialSummary(toolResult.denial);
+      const mcpLifecycleSummary = formatMcpLifecycleSummary(toolResult.mcp_lifecycle);
       const report = buildHaltReport(
         toolCallLog, 'STEP_VERIFICATION_FAIL', stepNum,
         `Tool ${req.tool} on "${getTarget(req)}" exited with code ${toolResult.exit_code}. ` +
-        `stderr: ${toolResult.stderr.slice(0, 200)}`,
+        `stderr: ${toolResult.stderr.slice(0, 200)}` +
+        `${denialSummary ? ` denial: ${denialSummary}` : ''}` +
+        `${mcpLifecycleSummary ? ` mcp_lifecycle: ${mcpLifecycleSummary}` : ''}`,
       );
       writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
       log(`  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] at step ${stepNum}`);
@@ -1070,6 +2171,387 @@ function buildHaltReport(
   };
 }
 
+async function runDeterministicAndroidSdkBootstrapLane(
+  manifest: OrchestratorManifest,
+): Promise<{ toolCallLog: ToolCallLog[]; haltedReport?: object }> {
+  const projectRoot = inferProjectRoot(manifest);
+  if (!projectRoot) {
+    return { toolCallLog: [] };
+  }
+
+  const toolCallLog: ToolCallLog[] = [];
+  const recordSyntheticStep = (
+    tool: ToolCallLog['tool'],
+    target: string,
+    exitCode: number,
+    stdout: string,
+    stderr = '',
+  ): void => {
+    toolCallLog.push({
+      step: toolCallLog.length + 1,
+      tool,
+      target,
+      exit_code: exitCode,
+      stdout,
+      stderr,
+      verified: exitCode === 0,
+    });
+  };
+
+  const sdkStatus = detectAndroidSdkStatus();
+  if (!sdkStatus.available || !sdkStatus.sdkRoot) {
+    return {
+      toolCallLog,
+      haltedReport: buildHaltReport(
+        toolCallLog,
+        'STEP_VERIFICATION_FAIL',
+        toolCallLog.length + 1,
+        'Deterministic Android SDK bootstrap lane requires a usable Android SDK, but none was discovered in the executor environment.',
+      ),
+    };
+  }
+
+  const prependedPaths = ensureAndroidSdkEnvironment(sdkStatus);
+  recordSyntheticStep(
+    'directory_list',
+    sdkStatus.sdkRoot,
+    0,
+    `Configured Android SDK environment from ${sdkStatus.sdkRoot}. PATH additions: ${prependedPaths.length > 0 ? prependedPaths.join(', ') : 'none'}`,
+  );
+
+  const localPropertiesPath = join(projectRoot, 'local.properties');
+  const desiredSdkLine = buildLocalPropertiesSdkLine(sdkStatus.sdkRoot);
+  const existingLocalProperties = existsSync(localPropertiesPath)
+    ? readFileSync(localPropertiesPath, 'utf-8')
+    : '';
+  const existingLines = existingLocalProperties
+    .split(/\r?\n/)
+    .filter(line => line.trim().length > 0 && !line.trim().startsWith('sdk.dir='));
+  const nextLocalProperties = `${[desiredSdkLine, ...existingLines].join('\n')}\n`;
+
+  if (existingLocalProperties !== nextLocalProperties) {
+    writeFileSync(localPropertiesPath, nextLocalProperties, 'utf-8');
+    recordSyntheticStep(
+      'file_write',
+      localPropertiesPath,
+      0,
+      `Wrote deterministic Android SDK local.properties using ${sdkStatus.sdkRoot}.`,
+    );
+  } else {
+    recordSyntheticStep(
+      'file_read',
+      localPropertiesPath,
+      0,
+      `Reused existing local.properties with matching sdk.dir for ${sdkStatus.sdkRoot}.`,
+    );
+  }
+
+  return { toolCallLog };
+}
+
+async function runDeterministicGradleBootstrapLane(
+  manifest: OrchestratorManifest,
+): Promise<{ toolCallLog: ToolCallLog[]; haltedReport?: object }> {
+  const projectRoot = inferProjectRoot(manifest);
+  if (!projectRoot) {
+    return { toolCallLog: [] };
+  }
+
+  const wrapperJarPath = join(projectRoot, 'gradle', 'wrapper', 'gradle-wrapper.jar');
+  if (existsSync(wrapperJarPath)) {
+    return { toolCallLog: [] };
+  }
+  const settingsGradlePath = join(projectRoot, 'settings.gradle.kts');
+
+  const toolCallLog: ToolCallLog[] = [];
+  const recordSyntheticStep = (
+    tool: ToolCallLog['tool'],
+    target: string,
+    exitCode: number,
+    stdout: string,
+    stderr = '',
+  ): void => {
+    toolCallLog.push({
+      step: toolCallLog.length + 1,
+      tool,
+      target,
+      exit_code: exitCode,
+      stdout,
+      stderr,
+      verified: exitCode === 0,
+    });
+  };
+  const executeLaneTool = async (
+    req: z.infer<typeof ToolCallRequestSchema>,
+  ): Promise<ToolResult> => {
+    const stepNum = toolCallLog.length + 1;
+    const toolResult = await executeTool(req);
+    const entry: ToolCallLog = {
+      step: stepNum,
+      tool: req.tool,
+      target: getTarget(req),
+      exit_code: toolResult.exit_code,
+      stdout: toolResult.stdout,
+      stderr: toolResult.stderr,
+      ...(toolResult.denial ? { denial: toolResult.denial } : {}),
+      ...(toolResult.mcp_lifecycle ? { mcp_lifecycle: toolResult.mcp_lifecycle } : {}),
+      verified: toolResult.exit_code === 0,
+    };
+    toolCallLog.push(entry);
+    return toolResult;
+  };
+
+  const javaStatus = detectJavaRuntimeStatus();
+  if (!javaStatus.available) {
+    return {
+      toolCallLog,
+      haltedReport: buildHaltReport(
+        toolCallLog,
+        'STEP_VERIFICATION_FAIL',
+        toolCallLog.length + 1,
+        'Deterministic Gradle bootstrap lane requires Java, but Java is unavailable in the executor environment.',
+      ),
+    };
+  }
+
+  const javaProbe = await executeLaneTool({
+    tool: 'shell_exec',
+    command: 'java -version',
+    working_directory: projectRoot,
+    timeout_seconds: 60,
+  });
+  if (javaProbe.exit_code !== 0) {
+    return {
+      toolCallLog,
+      haltedReport: buildHaltReport(
+        toolCallLog,
+        'STEP_VERIFICATION_FAIL',
+        toolCallLog.length,
+        `Deterministic Gradle bootstrap lane failed while verifying Java. stderr: ${javaProbe.stderr.slice(0, 200)}`,
+      ),
+    };
+  }
+
+  if (existsSync(settingsGradlePath)) {
+    const settingsContent = readFileSync(settingsGradlePath, 'utf-8');
+    const repairedSettings = repairSettingsGradleKtsContent(settingsContent);
+    if (repairedSettings.changed) {
+      writeFileSync(settingsGradlePath, repairedSettings.content, 'utf-8');
+      recordSyntheticStep(
+        'file_write',
+        settingsGradlePath,
+        0,
+        `Applied deterministic settings.gradle.kts repair: ${repairedSettings.notes.join(' ')}`,
+      );
+    }
+  }
+
+  const rootBuildGradlePath = join(projectRoot, 'build.gradle.kts');
+  if (!existsSync(rootBuildGradlePath)) {
+    writeFileSync(
+      rootBuildGradlePath,
+      buildDeterministicRootBuildGradleKtsContent(),
+      'utf-8',
+    );
+    recordSyntheticStep(
+      'file_write',
+      rootBuildGradlePath,
+      0,
+      'Created deterministic root build.gradle.kts with Android and Kotlin plugin versions for bootstrap.',
+    );
+  }
+
+  let gradleStatus = detectCommandOnPath('gradle');
+  if (!gradleStatus.available) {
+    const propertiesRead = await executeLaneTool({
+      tool: 'file_read',
+      path: join(projectRoot, 'gradle', 'wrapper', 'gradle-wrapper.properties'),
+    });
+    if (propertiesRead.exit_code !== 0) {
+      return {
+        toolCallLog,
+        haltedReport: buildHaltReport(
+          toolCallLog,
+          'STEP_VERIFICATION_FAIL',
+          toolCallLog.length,
+          `Deterministic Gradle bootstrap lane failed while reading gradle-wrapper.properties. stderr: ${propertiesRead.stderr.slice(0, 200)}`,
+        ),
+      };
+    }
+
+    const distributionUrl = parseGradleDistributionUrl(propertiesRead.stdout);
+    if (!distributionUrl) {
+      return {
+        toolCallLog,
+        haltedReport: buildHaltReport(
+          toolCallLog,
+          'STEP_VERIFICATION_FAIL',
+          toolCallLog.length + 1,
+          'Deterministic Gradle bootstrap lane could not parse distributionUrl from gradle-wrapper.properties.',
+        ),
+      };
+    }
+
+    mkdirSync(GRADLE_CACHE_DIR, { recursive: true });
+    const archiveName = distributionUrl.split('/').pop() ?? 'gradle-distribution.zip';
+    const archivePath = join(GRADLE_CACHE_DIR, archiveName);
+    const extractedRoot = join(
+      GRADLE_CACHE_DIR,
+      archiveName.replace(/\.zip$/i, ''),
+    );
+
+    if (!existsSync(archivePath)) {
+      const response = await fetch(distributionUrl);
+      if (!response.ok) {
+        recordSyntheticStep(
+          'file_write',
+          archivePath,
+          1,
+          '',
+          `Failed to download Gradle distribution from ${distributionUrl} (HTTP ${response.status}).`,
+        );
+        return {
+          toolCallLog,
+          haltedReport: buildHaltReport(
+            toolCallLog,
+            'STEP_VERIFICATION_FAIL',
+            toolCallLog.length,
+            `Deterministic Gradle bootstrap lane failed while downloading Gradle from distributionUrl. HTTP ${response.status}.`,
+          ),
+        };
+      }
+
+      const archiveBuffer = Buffer.from(await response.arrayBuffer());
+      writeFileSync(archivePath, archiveBuffer);
+      recordSyntheticStep(
+        'file_write',
+        archivePath,
+        0,
+        `Cached Gradle distribution from ${distributionUrl} to ${archivePath}`,
+      );
+    } else {
+      recordSyntheticStep(
+        'file_read',
+        archivePath,
+        0,
+        `Reusing cached Gradle distribution at ${archivePath}`,
+      );
+    }
+
+    let gradleCandidate = detectGradleBinaryFromExtractedRoot(extractedRoot);
+    if (!gradleCandidate) {
+      mkdirSync(extractedRoot, { recursive: true });
+      const tarResult = spawnSync(
+        'tar',
+        ['-xf', archivePath, '-C', extractedRoot],
+        { encoding: 'utf-8', windowsHide: true },
+      );
+      recordSyntheticStep(
+        'shell_exec',
+        `tar -xf ${archivePath} -C ${extractedRoot}`,
+        tarResult.status ?? 1,
+        String(tarResult.stdout ?? ''),
+        String(tarResult.stderr ?? ''),
+      );
+      if (tarResult.status !== 0) {
+        return {
+          toolCallLog,
+          haltedReport: buildHaltReport(
+            toolCallLog,
+            'STEP_VERIFICATION_FAIL',
+            toolCallLog.length,
+            `Deterministic Gradle bootstrap lane failed while extracting cached Gradle distribution. stderr: ${String(tarResult.stderr ?? '').slice(0, 200)}`,
+          ),
+        };
+      }
+      gradleCandidate = detectGradleBinaryFromExtractedRoot(extractedRoot);
+    }
+
+    if (!gradleCandidate) {
+      return {
+        toolCallLog,
+        haltedReport: buildHaltReport(
+          toolCallLog,
+          'STEP_VERIFICATION_FAIL',
+          toolCallLog.length + 1,
+          `Deterministic Gradle bootstrap lane extracted ${archiveName} but could not locate a Gradle binary in ${extractedRoot}.`,
+        ),
+      };
+    }
+
+    prependProcessPath(dirname(gradleCandidate));
+    gradleStatus = detectCommandOnPath('gradle');
+    if (!gradleStatus.available) {
+      return {
+        toolCallLog,
+        haltedReport: buildHaltReport(
+          toolCallLog,
+          'STEP_VERIFICATION_FAIL',
+          toolCallLog.length + 1,
+          'Deterministic Gradle bootstrap lane cached and extracted Gradle, but the gradle command is still unavailable on PATH.',
+        ),
+      };
+    }
+  }
+
+  const gradleProbe = await executeLaneTool({
+    tool: 'shell_exec',
+    command: 'gradle --version',
+    working_directory: projectRoot,
+    timeout_seconds: 120,
+  });
+  if (gradleProbe.exit_code !== 0) {
+    return {
+      toolCallLog,
+      haltedReport: buildHaltReport(
+        toolCallLog,
+        'STEP_VERIFICATION_FAIL',
+        toolCallLog.length,
+        `Deterministic Gradle bootstrap lane failed while verifying Gradle. stderr: ${gradleProbe.stderr.slice(0, 200)}`,
+      ),
+    };
+  }
+
+  const wrapperResult = await executeLaneTool({
+    tool: 'shell_exec',
+    command: 'gradle wrapper',
+    working_directory: projectRoot,
+    timeout_seconds: 600,
+  });
+  if (wrapperResult.exit_code !== 0) {
+    return {
+      toolCallLog,
+      haltedReport: buildHaltReport(
+        toolCallLog,
+        'STEP_VERIFICATION_FAIL',
+        toolCallLog.length,
+        `Deterministic Gradle bootstrap lane failed while generating gradle-wrapper.jar. stderr: ${wrapperResult.stderr.slice(0, 200)}`,
+      ),
+    };
+  }
+
+  const wrapperListing = await executeLaneTool({
+    tool: 'directory_list',
+    path: join(projectRoot, 'gradle', 'wrapper'),
+  });
+  if (
+    wrapperListing.exit_code !== 0 ||
+    !existsSync(wrapperJarPath)
+  ) {
+    return {
+      toolCallLog,
+      haltedReport: buildHaltReport(
+        toolCallLog,
+        'STEP_VERIFICATION_FAIL',
+        toolCallLog.length,
+        'Deterministic Gradle bootstrap lane did not produce gradle-wrapper.jar after running gradle wrapper.',
+      ),
+    };
+  }
+
+  return { toolCallLog };
+}
+
 // ─── Main pipeline ────────────────────────────────────────────────────────────
 
 /**
@@ -1092,6 +2574,7 @@ export async function runBabelPipeline(
   const sessionStartPath = options.sessionStartPath?.trim() || process.env['BABEL_SESSION_START_PATH']?.trim() || undefined;
   const localLearningRoot = options.localLearningRoot?.trim() || process.env['BABEL_LOCAL_LEARNING_ROOT']?.trim() || undefined;
   const harnessMetadata = collectHarnessMetadata(sessionStartPath, localLearningRoot);
+  let resolvedModelPolicy: ResolvedModelPolicy | undefined;
   const traceOptions = {
     runDir: evidence.runDir,
     orchestratorVersion,
@@ -1107,7 +2590,13 @@ export async function runBabelPipeline(
     const traceSummary = await pipelineTrace.finish(result.status);
     evidence.writeTraceContext(traceSummary);
     evidence.writeWaterfallTelemetry();
-    return result;
+    if (result.modelPolicy !== undefined || resolvedModelPolicy === undefined) {
+      return result;
+    }
+    return {
+      ...result,
+      modelPolicy: resolvedModelPolicy,
+    };
   };
 
   const finalizeError = async (error: unknown): Promise<never> => {
@@ -1325,6 +2814,17 @@ export async function runBabelPipeline(
     const effectiveModel = (
       options.modelOverride ?? manifest.worker_configuration.assigned_model ?? 'Codex'
     ) as TargetModel;
+    const taskContract = classifyTaskContract(manifest.handoff_payload.user_request);
+    const taskGrounding = buildTaskGrounding(taskContract, inferProjectRoot(manifest));
+    const groundingContext = formatGroundingContext(taskGrounding);
+    const javaRuntimeStatus = detectJavaRuntimeStatus();
+    const gradleRuntimeStatus = detectCommandOnPath('gradle');
+    resolvedModelPolicy = resolveFamilyModelPolicy({
+      family: effectiveModel,
+      ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
+      ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+      babelRoot: BABEL_ROOT,
+    });
 
     pipelineTrace.setRootAttributes({
       'babel.target_project': manifest.target_project,
@@ -1360,7 +2860,7 @@ export async function runBabelPipeline(
 
     if (effectiveMode === 'manual') {
       log('Stage 2 / 4  —  Manual Bridge Export');
-      const sweTask    = buildSweTask(manifest, [], undefined, '');
+      const sweTask    = buildSweTask(manifest, [], undefined, '', groundingContext);
       const sweContext = compileContext(manifest.prompt_manifest, sweTask);
       evidence.writeManualSwePrompt(sweContext);
       evidence.writeCompiledContext('swe_manual', sweContext);
@@ -1412,7 +2912,7 @@ export async function runBabelPipeline(
       // prompt_manifest contains ordered absolute path strings — use directly.
       const swePaths = manifest.prompt_manifest;
 
-      const sweTask    = buildSweTask(manifest, qaRejections, proposedFixStrategy, additionalEvidenceContext);
+      const sweTask    = buildSweTask(manifest, qaRejections, proposedFixStrategy, additionalEvidenceContext, groundingContext);
       const sweContext = compileContext(swePaths, sweTask);
       evidence.writeCompiledContext(`swe_v${attempt}`, sweContext);
 
@@ -1420,10 +2920,14 @@ export async function runBabelPipeline(
         evidence,
         stage: 'planning',
       });
-      const { plan: swePlan, warnings: planWarnings } = normalizeSwePlan(swePlanRaw);
-      if (planWarnings.length > 0) {
+      const { plan: normalizedPlan, warnings: planWarnings } = normalizeSwePlan(swePlanRaw);
+      const { plan: groundedPlan, warnings: groundingWarnings } = normalizePlanTargetsAgainstGrounding(taskGrounding, normalizedPlan);
+      const swePlan = groundedPlan;
+      if (planWarnings.length > 0 || groundingWarnings.length > 0) {
         executionReportWarnings.push(...planWarnings);
+        executionReportWarnings.push(...groundingWarnings);
         planWarnings.forEach(w => logDetail(`SWE plan warning: ${w}`));
+        groundingWarnings.forEach(w => logDetail(`SWE plan warning: ${w}`));
       }
       evidence.writeSwePlan(swePlan, attempt);
       logDetail(
@@ -1438,13 +2942,123 @@ export async function runBabelPipeline(
         break;
       }
 
+      const groundingViolations = sanitizeGroundingViolationsForAndroidSdkLane(
+        collectPlanGroundingViolations(taskContract, taskGrounding, swePlan),
+        manifest,
+      );
+      if (groundingViolations.length > 0) {
+        const groundingReject = buildGroundingQaReject(groundingViolations) as QaVerdictReject;
+        evidence.writeQaVerdict(groundingReject, attempt);
+        logDetail(
+          `QA: REJECT  (${groundingReject.failure_count} failure(s), confidence: ${groundingReject.overall_confidence}/5)`,
+        );
+        groundingReject.failures.forEach((failure, index) => {
+          logDetail(`  ${index + 1}. [${failure.tag}]  ${failure.condition}`);
+        });
+
+        qaRejections = groundingReject.failures.map(failure =>
+          failure.fix_hint
+            ? `[${failure.tag}] ${failure.condition} (hint: ${failure.fix_hint})`
+            : `[${failure.tag}] ${failure.condition}`,
+        );
+        proposedFixStrategy = groundingReject.proposed_fix_strategy;
+        v9StackTelemetry = markRuntimeTelemetryQaReject(v9StackTelemetry, groundingReject);
+        writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+        pipelineTrace.recordQaVerdict('REJECT', groundingReject.failures.map(failure => failure.tag));
+        continue;
+      }
+
+      const executorSafetyReject = collectExecutorSafetyViolations(swePlan, manifest);
+      if (executorSafetyReject) {
+        evidence.writeQaVerdict(executorSafetyReject, attempt);
+        logDetail(
+          `QA: REJECT  (${executorSafetyReject.failure_count} failure(s), confidence: ${executorSafetyReject.overall_confidence}/5)`,
+        );
+        executorSafetyReject.failures.forEach((failure, index) => {
+          logDetail(`  ${index + 1}. [${failure.tag}]  ${failure.condition}`);
+        });
+
+        qaRejections = executorSafetyReject.failures.map(failure =>
+          failure.fix_hint
+            ? `[${failure.tag}] ${failure.condition} (hint: ${failure.fix_hint})`
+            : `[${failure.tag}] ${failure.condition}`,
+        );
+        proposedFixStrategy = executorSafetyReject.proposed_fix_strategy;
+        v9StackTelemetry = markRuntimeTelemetryQaReject(v9StackTelemetry, executorSafetyReject);
+        writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+        pipelineTrace.recordQaVerdict('REJECT', executorSafetyReject.failures.map(failure => failure.tag));
+        continue;
+      }
+
+      const runtimePrereqReject = collectRuntimePrerequisiteViolations(
+        swePlan,
+        javaRuntimeStatus,
+        gradleRuntimeStatus,
+      );
+      if (runtimePrereqReject) {
+        evidence.writeQaVerdict(runtimePrereqReject, attempt);
+        logDetail(
+          `QA: REJECT  (${runtimePrereqReject.failure_count} failure(s), confidence: ${runtimePrereqReject.overall_confidence}/5)`,
+        );
+        runtimePrereqReject.failures.forEach((failure, index) => {
+          logDetail(`  ${index + 1}. [${failure.tag}]  ${failure.condition}`);
+        });
+
+        qaRejections = runtimePrereqReject.failures.map(failure =>
+          failure.fix_hint
+            ? `[${failure.tag}] ${failure.condition} (hint: ${failure.fix_hint})`
+            : `[${failure.tag}] ${failure.condition}`,
+        );
+        proposedFixStrategy = runtimePrereqReject.proposed_fix_strategy;
+        v9StackTelemetry = markRuntimeTelemetryQaReject(v9StackTelemetry, runtimePrereqReject);
+        writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+        pipelineTrace.recordQaVerdict('REJECT', runtimePrereqReject.failures.map(failure => failure.tag));
+        continue;
+      }
+
+      const gradleBootstrapReject = collectGradleBootstrapSequencingViolations(
+        swePlan,
+        manifest,
+        gradleRuntimeStatus,
+      );
+      if (gradleBootstrapReject) {
+        evidence.writeQaVerdict(gradleBootstrapReject, attempt);
+        logDetail(
+          `QA: REJECT  (${gradleBootstrapReject.failure_count} failure(s), confidence: ${gradleBootstrapReject.overall_confidence}/5)`,
+        );
+        gradleBootstrapReject.failures.forEach((failure, index) => {
+          logDetail(`  ${index + 1}. [${failure.tag}]  ${failure.condition}`);
+        });
+
+        qaRejections = gradleBootstrapReject.failures.map(failure =>
+          failure.fix_hint
+            ? `[${failure.tag}] ${failure.condition} (hint: ${failure.fix_hint})`
+            : `[${failure.tag}] ${failure.condition}`,
+        );
+        proposedFixStrategy = gradleBootstrapReject.proposed_fix_strategy;
+        v9StackTelemetry = markRuntimeTelemetryQaReject(v9StackTelemetry, gradleBootstrapReject);
+        writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+        pipelineTrace.recordQaVerdict('REJECT', gradleBootstrapReject.failures.map(failure => failure.tag));
+        continue;
+      }
+
       // ── Stage 3: QA Reviewer ───────────────────────────────────────────────
       log(
         `Stage 3 / 4  —  QA Reviewer` +
         (attempt > 1 ? ` (attempt ${attempt}/${MAX_SWE_QA_LOOPS})` : ''),
       );
 
-      const qaContext = compileContext(abs(QA_PATHS), buildQaTask(swePlan));
+      const deterministicGradleBootstrapLaneActive = shouldUseDeterministicGradleBootstrapLane(manifest);
+      const qaContext = compileContext(
+        abs(QA_PATHS),
+        buildQaTask(
+          swePlan,
+          javaRuntimeStatus,
+          gradleRuntimeStatus,
+          detectAndroidSdkStatus(),
+          deterministicGradleBootstrapLaneActive,
+        ),
+      );
       evidence.writeCompiledContext(`qa_v${attempt}`, qaContext);
 
       const qaSpan = pipelineTrace.startChildSpan('babel.qa', {
@@ -1457,6 +3071,13 @@ export async function runBabelPipeline(
           evidence,
           stage: 'qa',
         });
+        verdict = sanitizeQaVerdictForDeterministicGradleBootstrapLane(
+          verdict,
+          swePlan,
+          manifest,
+        );
+        verdict = sanitizeWindowsGradlewPermissionQaVerdict(verdict, swePlan);
+        verdict = sanitizeExistingWrapperQaVerdict(verdict, swePlan, manifest);
       } catch (error) {
         endSpan(qaSpan, SpanStatusCode.ERROR, {}, error);
         throw error;
@@ -1560,12 +3181,44 @@ export async function runBabelPipeline(
     endSpan(executorActivationSpan, SpanStatusCode.OK);
 
     let toolCallLog: ToolCallLog[];
+    const initialExecutorLog: ToolCallLog[] = [];
+    if (shouldUseDeterministicAndroidSdkBootstrapLane(manifest)) {
+      logDetail('Deterministic Android SDK bootstrap lane activated.');
+      const androidSdkBootstrapResult = await runDeterministicAndroidSdkBootstrapLane(manifest);
+      initialExecutorLog.push(...androidSdkBootstrapResult.toolCallLog);
+      if (androidSdkBootstrapResult.haltedReport) {
+        writeValidatedExecutionReport(
+          evidence,
+          androidSdkBootstrapResult.haltedReport,
+          initialExecutorLog,
+          executionReportWarnings,
+        );
+        log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during deterministic Android SDK bootstrap lane');
+        return await finalizeResult({ runDir: evidence.runDir, manifest, plan: approvedPlan, status: 'EXECUTOR_HALTED' });
+      }
+    }
+    if (shouldUseDeterministicGradleBootstrapLane(manifest)) {
+      logDetail('Deterministic Gradle bootstrap lane activated.');
+      const bootstrapResult = await runDeterministicGradleBootstrapLane(manifest);
+      initialExecutorLog.push(...bootstrapResult.toolCallLog);
+      if (bootstrapResult.haltedReport) {
+        writeValidatedExecutionReport(
+          evidence,
+          bootstrapResult.haltedReport,
+          initialExecutorLog,
+          executionReportWarnings,
+        );
+        log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during deterministic Gradle bootstrap lane');
+        return await finalizeResult({ runDir: evidence.runDir, manifest, plan: approvedPlan, status: 'EXECUTOR_HALTED' });
+      }
+    }
     try {
       ({ toolCallLog } = await runExecutorLoop(
         approvedPlan,
         evidence,
         effectiveModel,
         executionReportWarnings,
+        initialExecutorLog,
       ));
     } catch (err) {
       log(`CLI Executor error: ${err instanceof Error ? err.message : String(err)}`);
@@ -1690,16 +3343,31 @@ export async function resumeManualBridge(
 
   const targetModel = manifest.worker_configuration.assigned_model as TargetModel;
   log('Stage 3 / 4  —  QA Reviewer (resume)');
-  const qaContext = compileContext(abs(QA_PATHS), buildQaTask(swePlan));
+  const qaContext = compileContext(
+    abs(QA_PATHS),
+    buildQaTask(
+      swePlan,
+      detectJavaRuntimeStatus(),
+      detectCommandOnPath('gradle'),
+      detectAndroidSdkStatus(),
+      shouldUseDeterministicGradleBootstrapLane(manifest),
+    ),
+  );
   evidence.writeCompiledContext('qa_v1', qaContext);
 
-  const verdict = await runWithFallback(qaContext, QaVerdictSchema, {
-    evidence,
-    stage: 'qa',
-  });
-  evidence.writeQaVerdict(verdict, 1);
+  const verdict = sanitizeQaVerdictForDeterministicGradleBootstrapLane(
+    await runWithFallback(qaContext, QaVerdictSchema, {
+      evidence,
+      stage: 'qa',
+    }),
+    swePlan,
+    manifest,
+  );
+  const sanitizedVerdict = sanitizeWindowsGradlewPermissionQaVerdict(verdict, swePlan);
+  const normalizedVerdict = sanitizeExistingWrapperQaVerdict(sanitizedVerdict, swePlan, manifest);
+  evidence.writeQaVerdict(normalizedVerdict, 1);
 
-  if (verdict.verdict !== 'PASS') {
+  if (normalizedVerdict.verdict !== 'PASS') {
     log(`QA rejected the resumed manual plan. Pipeline halted at Stage 3.`);
     return {
       runDir,
@@ -1710,8 +3378,49 @@ export async function resumeManualBridge(
   }
 
   log('Stage 4 / 4  —  CLI Executor');
+  const executionReportWarnings: string[] = [];
+  const initialExecutorLog: ToolCallLog[] = [];
+  if (shouldUseDeterministicAndroidSdkBootstrapLane(manifest)) {
+    logDetail('Deterministic Android SDK bootstrap lane activated.');
+    const androidSdkBootstrapResult = await runDeterministicAndroidSdkBootstrapLane(manifest);
+    initialExecutorLog.push(...androidSdkBootstrapResult.toolCallLog);
+    if (androidSdkBootstrapResult.haltedReport) {
+      writeValidatedExecutionReport(
+        evidence,
+        androidSdkBootstrapResult.haltedReport,
+        initialExecutorLog,
+        executionReportWarnings,
+      );
+      log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during deterministic Android SDK bootstrap lane');
+      return {
+        runDir,
+        manifest,
+        plan: swePlan,
+        status: 'EXECUTOR_HALTED',
+      };
+    }
+  }
+  if (shouldUseDeterministicGradleBootstrapLane(manifest)) {
+    logDetail('Deterministic Gradle bootstrap lane activated.');
+    const bootstrapResult = await runDeterministicGradleBootstrapLane(manifest);
+    initialExecutorLog.push(...bootstrapResult.toolCallLog);
+    if (bootstrapResult.haltedReport) {
+      writeValidatedExecutionReport(
+        evidence,
+        bootstrapResult.haltedReport,
+        initialExecutorLog,
+        planWarnings,
+      );
+      return {
+        runDir,
+        manifest,
+        plan: swePlan,
+        status: 'EXECUTOR_HALTED',
+      };
+    }
+  }
   try {
-    await runExecutorLoop(swePlan, evidence, targetModel, planWarnings);
+    await runExecutorLoop(swePlan, evidence, targetModel, planWarnings, initialExecutorLog);
   } catch (err) {
     log(`CLI Executor error: ${err instanceof Error ? err.message : String(err)}`);
     return {

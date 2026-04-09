@@ -5,9 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-Location $RepoRoot
 
-if (-not (Get-Command rg -ErrorAction SilentlyContinue)) {
-  Write-Error 'ripgrep (rg) is required for check-public-scrub.ps1'
-}
+$rgCommand = Get-Command rg -ErrorAction SilentlyContinue
 
 $excludeDirectoryNames = @('.git', 'node_modules', 'runs', 'dist', 'coverage', 'artifacts')
 
@@ -43,28 +41,64 @@ $patterns = @(
   'Prismatix',
   'AuditGuard',
   'Project_Android',
+  'Openclaw',
+  'openclaw',
+  '\.openclaw',
   'scanners/gpcguard_monitor',
   'PlayBillingGateway'
 )
 
-$joinedPattern = ($patterns -join '|')
-$args = @(
-  '--glob', '!.git/**',
-  '--glob', '!node_modules/**',
-  '--glob', '!runs/**',
-  '--glob', '!tools/check-public-scrub.ps1',
-  '-n',
-  '--ignore-case',
-  '-e', $joinedPattern,
-  '.'
-)
+function Get-LeakSearchResults {
+  if ($null -ne $rgCommand) {
+    $joinedPattern = ($patterns -join '|')
+    $args = @(
+      '--glob', '!.git/**',
+      '--glob', '!node_modules/**',
+      '--glob', '!runs/**',
+      '--glob', '!tools/check-public-scrub.ps1',
+      '-n',
+      '--ignore-case',
+      '-e', $joinedPattern,
+      '.'
+    )
 
-$results = & rg @args
-$exitCode = $LASTEXITCODE
+    $results = & $rgCommand.Source @args
+    $exitCode = $LASTEXITCODE
 
-if ($exitCode -gt 1) {
-  Write-Error "ripgrep failed with exit code $exitCode"
+    if ($exitCode -gt 1) {
+      Write-Error "ripgrep failed with exit code $exitCode"
+    }
+
+    return [PSCustomObject]@{
+      Results = @($results)
+      ExitCode = $exitCode
+      Engine = 'rg'
+    }
+  }
+
+  Write-Host 'ripgrep (rg) not found; falling back to Select-String for scrub scan.' -ForegroundColor Yellow
+  $results = New-Object System.Collections.Generic.List[string]
+  foreach ($file in Get-PublicScrubFiles) {
+    $relative = $file.FullName.Substring((Get-Location).Path.Length).TrimStart('\', '/').Replace('\', '/')
+    if ($relative -eq 'tools/check-public-scrub.ps1') {
+      continue
+    }
+
+    $matches = Select-String -LiteralPath $file.FullName -Pattern $patterns -AllMatches -CaseSensitive:$false -ErrorAction SilentlyContinue
+    foreach ($match in $matches) {
+      $results.Add((".\{0}:{1}:{2}" -f $relative, $match.LineNumber, $match.Line.Trim()))
+    }
+  }
+
+  return [PSCustomObject]@{
+    Results = @($results)
+    ExitCode = $(if ($results.Count -gt 0) { 0 } else { 1 })
+    Engine = 'select-string'
+  }
 }
+$leakScan = Get-LeakSearchResults
+$results = $leakScan.Results
+$exitCode = $leakScan.ExitCode
 
 $forbiddenFiles = Get-PublicScrubFiles | Where-Object {
   $_.Name -match '^\.(env)(\..+)?$' -and $_.Name -ne '.env.example'

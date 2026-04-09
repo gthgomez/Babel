@@ -278,4 +278,3 @@ on non-PDFs), validate before processing rather than relying on the MIME filter.
    have an owner and a deletion trigger.
 7. Never trust the MIME filter alone for security-sensitive file processing. Validate magic
    bytes or attempt to open the file before committing to the processing pipeline.
-
