@@ -58,6 +58,7 @@ The easiest public entrypoints are:
 
 - `pwsh -File tools\resolve-local-stack.ps1`
 - `pwsh -File tools\validate-public-release.ps1`
+- `babel doctor` after building `babel-cli`
 - `babel mcp`
 
 ## The v9 Lane
@@ -106,6 +107,13 @@ It may require:
 - explicit runtime configuration
 
 That surface should be described as optional/advanced in public docs, not as the primary onboarding promise.
+
+From a new-user standpoint, the product hierarchy should be:
+
+1. validate
+2. preview
+3. inspect
+4. run
 
 ## Public Proof Artifacts
 

@@ -4,7 +4,7 @@ param(
     [ValidateSet("frontend", "backend", "mobile", "compliance", "devops", "research")]
     [string]$TaskCategory,
 
-    [ValidateSet("global", "example_saas_backend", "example_llm_router", "example_web_audit", "example_mobile_suite")]
+    [ValidateSet("global", "example_saas_backend", "example_llm_router", "example_web_audit", "example_mobile_suite", "example_autonomous_agent")]
     [string]$Project = "global",
 
     [Parameter(Mandatory = $true)]

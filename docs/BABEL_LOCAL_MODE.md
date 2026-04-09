@@ -11,6 +11,11 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 In `Babel-public`, Local Mode means using the public control plane from your own machine without private repo tooling.
 
+There are two Local Mode surfaces:
+
+1. **Preview-first Local Mode**
+2. **Advanced runtime harness**
+
 The public-first Local Mode workflow is:
 
 1. validate the repo
@@ -52,7 +57,7 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
   -Format json
 ```
 
-Or run the resolver directly from the public helper:
+Preview the mobile lane too:
 
 ```powershell
 pwsh -File .\tools\resolve-local-stack.ps1 `
@@ -61,6 +66,43 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
   -Model codex `
   -Format json
 ```
+
+If you want the compiled CLI commands shown in `babel --help`, build first:
+
+```powershell
+cd .\babel-cli
+npm run build
+node .\dist\index.js doctor
+```
+
+## What The CLI Is Good For
+
+- `babel doctor` = environment and workspace diagnostics
+- `babel run` = run a task through the Babel pipeline
+- `babel plan` / `resume` = manual bridge flow
+- `babel mcp` = read-only integration surface for MCP clients
+
+The CLI is real, but it is not the easiest first contact with Babel. The resolver and validator are still the clearest public starting point.
+
+## What Advanced Runtime Usually Requires
+
+Expect some or all of the following before `babel run` feels smooth:
+
+- `npm install` in `babel-cli`
+- `npm run build` if you want the compiled `node .\dist\index.js ...` commands
+- provider credentials or local model CLIs for the model family you choose
+- explicit runtime configuration if you want autonomous execution rather than preview/manual flows
+
+If you just want to understand Babel, you do not need any of that. Stay on the preview-first lane.
+
+## Run Modes
+
+`babel run` supports four modes:
+
+- `direct` = fastest path with minimal extra gating
+- `verified` = adds QA review before execution
+- `manual` = produces a manual-bridge handoff instead of a normal run
+- `autonomous` = most capable and most demanding runtime path
 
 ## Relationship To Other Repos
 

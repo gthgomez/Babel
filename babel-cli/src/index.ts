@@ -160,7 +160,7 @@ function normalizeModelName(value: string): ValidModel | undefined {
   }
 }
 
-const VALID_PROJECTS = ['example_saas_backend', 'example_llm_router', 'example_web_audit', 'example_mobile_suite', 'Antigavity_Projects'] as const;
+const VALID_PROJECTS = ['example_saas_backend', 'example_llm_router', 'example_web_audit', 'example_mobile_suite', 'example_autonomous_agent'] as const;
 type ValidProject = typeof VALID_PROJECTS[number];
 const VALID_ORCHESTRATORS = ['v8', 'v9'] as const;
 type ValidOrchestrator = typeof VALID_ORCHESTRATORS[number];
@@ -744,7 +744,7 @@ program
   .description('Everyday command: run a task through the full Babel pipeline')
   .option(
     '-p, --project <name>',
-    'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | Antigavity_Projects)',
+    'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_autonomous_agent)',
   )
   .option(
     '--mode <mode>',
@@ -953,7 +953,7 @@ Notes:
 program
   .command('plan')
   .description('Manual Bridge start flow (non-breaking alias for: run --mode manual --project <project> <intent...>)')
-  .argument('<project>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | Antigavity_Projects)')
+  .argument('<project>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_autonomous_agent)')
   .argument('<intent...>', 'Task intent/prompt')
   .option(
     '-m, --model <model>',
@@ -1354,7 +1354,7 @@ async function handleSmokeCommand(options: { project: string }): Promise<void> {
 program
   .command('smoke')
   .description('Advanced diagnostic: run Manual Bridge smoke suite and summarize executor outcomes')
-  .requiredOption('--project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | Antigavity_Projects)')
+  .requiredOption('--project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_autonomous_agent)')
   .addHelpText('after', `
 Examples:
   $ babel smoke --project example_saas_backend
@@ -1369,7 +1369,7 @@ Notes:
 program
   .command('test')
   .description('Legacy alias for smoke diagnostic; not a general project test runner')
-  .option('--project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | Antigavity_Projects)')
+  .option('--project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_autonomous_agent)')
   .argument('[project]', 'Target project')
   .addHelpText('after', `
 Notes:

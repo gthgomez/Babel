@@ -1,6 +1,6 @@
 # Babel
 
-**Babel-public is a runnable public-safe subset of Babel focused on one thing: making instruction-stack selection inspectable, deterministic, and repeatable.**
+**Babel helps you choose the right prompt stack for a software task, inspect exactly what it selected, and optionally run that task locally.**
 
 This public repo includes:
 
@@ -29,6 +29,21 @@ What is present but not the primary onboarding path:
 - `babel-cli run`
 - manual bridge / pipeline harness commands
 - model-execution flows that depend on local model setup or credentials
+
+## Choose Your Path
+
+If you are new here, pick one lane:
+
+- **Verify the repo works:** run `pwsh -File .\tools\validate-public-release.ps1`
+- **See what Babel would choose for a task:** run `pwsh -File .\tools\resolve-local-stack.ps1 ...`
+- **Inspect the control plane from another tool:** use `babel mcp` after building the CLI
+- **Run a real task through Babel:** use `babel doctor` first, then `babel run ...`
+
+Public rule of thumb:
+
+- preview and validation are the default product
+- the task-running CLI is real, but it is the advanced lane
+- MCP is an integration surface, not the everyday starting point
 
 ## Quick Start
 
@@ -73,6 +88,15 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
 
 - [examples/manifest-previews/mobile-direct.json](./examples/manifest-previews/mobile-direct.json)
 
+6. If you want the compiled CLI commands, build `babel-cli`:
+
+```powershell
+cd .\babel-cli
+npm run build
+node .\dist\index.js doctor
+cd ..
+```
+
 ## What Babel Does
 
 Babel makes the stack explicit before the model starts working:
@@ -83,6 +107,15 @@ Babel makes the stack explicit before the model starts working:
 4. attach the model adapter
 5. attach the relevant project/task overlays
 6. compile the ordered manifest preview from the catalog
+
+## What Babel Local Means
+
+There are two practical surfaces in this repo:
+
+- **Preview-first Local Mode:** validate the repo, preview the manifest, compare to golden examples, inspect the MCP surface
+- **Advanced runtime harness:** run tasks through the pipeline with `babel run` or `tools/run-babel-local-cli.ps1`
+
+The first surface is what the public repo is optimized for. The second is available, but it assumes more local setup.
 
 ## Proof Surfaces
 
@@ -95,6 +128,12 @@ Babel makes the stack explicit before the model starts working:
 
 ## Useful Commands
 
+Verify the public repo:
+
+```powershell
+pwsh -File .\tools\validate-public-release.ps1
+```
+
 Preview a manifest directly from the resolver:
 
 ```powershell
@@ -104,6 +143,14 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
   -Model codex `
   -PipelineMode verified `
   -Format json
+```
+
+Build the compiled CLI and run diagnostics:
+
+```powershell
+cd .\babel-cli
+npm run build
+node .\dist\index.js doctor
 ```
 
 Run the read-only MCP server:
@@ -124,6 +171,13 @@ pwsh -File .\tools\run-babel-local-cli.ps1 `
   -Mode manual `
   -TaskPrompt "Plan a safe backend refactor"
 ```
+
+`babel run` modes in plain English:
+
+- `direct` = fastest path with the fewest gates
+- `verified` = adds QA review before execution
+- `manual` = emits manual-bridge handoff JSON instead of normal run output
+- `autonomous` = highest-risk lane; may use more tool execution and runtime setup
 
 ## Repository Structure
 
