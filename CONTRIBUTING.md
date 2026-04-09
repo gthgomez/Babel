@@ -9,6 +9,34 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 
 # Contributing
 
+## Setup
+
+### Requirements
+
+- Node.js 20+
+- PowerShell 7+
+
+### Install
+
+```bash
+git clone https://github.com/gthgomez/Babel.git
+cd Babel/babel-cli && npm install && cd ..
+```
+
+### Verify the repo works
+
+```powershell
+pwsh -File .\tools\validate-public-release.ps1
+```
+
+### Type check
+
+```bash
+cd babel-cli && npx tsc --noEmit
+```
+
+---
+
 ## Scope
 
 Babel is a prompt operating system, not a generic notes folder.
