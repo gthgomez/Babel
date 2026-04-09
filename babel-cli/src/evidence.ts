@@ -78,7 +78,8 @@ export class EvidenceBundle {
    */
   static fromExistingRun(runDir: string): EvidenceBundle {
     const bundle = Object.create(EvidenceBundle.prototype) as EvidenceBundle;
-    (bundle as { runDir: string }).runDir = runDir;
+    (bundle as unknown as { runDir: string }).runDir = runDir;
+    (bundle as unknown as { _waterfallLog: object[] })._waterfallLog = [];
     return bundle;
   }
 
