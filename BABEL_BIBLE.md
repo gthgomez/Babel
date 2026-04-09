@@ -9,7 +9,7 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 ## Purpose
 
-This is the human-facing entrypoint for `Babel-public`.
+This is the model-facing and integration-facing entrypoint for `Babel-public`.
 
 When a user says:
 
@@ -18,6 +18,8 @@ When a user says:
 - "Use the Babel system before doing the task"
 
 the model should read this file first, then follow the public Babel workflow before planning or implementing anything.
+
+If you are a human exploring the repo for the first time, start with `README.md` and `START_HERE.md` first. Come here when you want the invocation contract that another model, client, or wrapper should follow.
 
 ## Public Repo Root And First Read
 
@@ -72,7 +74,7 @@ For public onboarding, start with the preview and validation flow above.
 If you want to use the advanced runtime harness:
 
 - install `babel-cli` dependencies first
-- optionally build `babel-cli`
+- build `babel-cli` if you want the compiled `node dist` command path
 - use `tools/run-babel-local-cli.ps1` or invoke `babel-cli` directly
 
 `Babel-public` does **not** assume private lifecycle scripts, private run-artifact trees, or private activation contracts.

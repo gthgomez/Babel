@@ -6,6 +6,7 @@
 2. validate the public repo
 3. preview a resolved stack/manifest
 4. compare it to a golden output checked into the repo
+5. only then decide whether you want the advanced runtime harness
 
 ## First Success
 
@@ -52,16 +53,25 @@ Expected reference output:
 
 - [examples/manifest-previews/mobile-direct.json](./examples/manifest-previews/mobile-direct.json)
 
+If you want to try the compiled CLI afterward:
+
+```powershell
+cd .\babel-cli
+npm run build
+node .\dist\index.js doctor
+```
+
 ## What You Just Proved
 
 - the catalog is internally valid
 - the public resolver expands default skills and dependencies
 - the ordered manifest comes from `prompt_catalog.yaml`
 - Android/mobile is a real first-class route in the public helper flow
+- the compiled CLI is available if you want to move from preview into runtime diagnostics
 
 ## Where To Go Next
 
 - [README.md](./README.md) for the repo overview
-- [BABEL_BIBLE.md](./BABEL_BIBLE.md) for the invocation contract
 - [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for the technical shape
 - [docs/BABEL_LOCAL_MODE.md](./docs/BABEL_LOCAL_MODE.md) for runtime expectations
+- [BABEL_BIBLE.md](./BABEL_BIBLE.md) if you are wiring Babel into another model/client surface
