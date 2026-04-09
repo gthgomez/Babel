@@ -72,6 +72,7 @@ node .\dist\index.js doctor
 ## Where To Go Next
 
 - [README.md](./README.md) for the repo overview
+- [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md) for copy-paste CLI flows
 - [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for the technical shape
 - [docs/BABEL_LOCAL_MODE.md](./docs/BABEL_LOCAL_MODE.md) for runtime expectations
 - [BABEL_BIBLE.md](./BABEL_BIBLE.md) if you are wiring Babel into another model/client surface
