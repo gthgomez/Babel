@@ -15,7 +15,7 @@ artifacts/bundle-comparisons/*.json
 04_Meta_Tools/archive/
 
 # ─── Project-specific working guides (internal only, not for public release) ───
-06_Task_Overlays/GPCGuard-Frontend-Professionalism-v1.0.md
+06_Task_Overlays/*-Frontend-Professionalism-v1.0.md
 
 # ─── CLI source (pending security audit before public release) ────────────────
 babel-cli/

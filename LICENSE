@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2025–2026 Jonathan Gomez Aguilar
+Copyright (c) 2025-2026 Jonathan Gomez Aguilar
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,14 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Babel is an open Prompt Operating System.
-
-You are explicitly encouraged to:
-- Use it in commercial products and SaaS applications
-- Fork it and build on top of it
-- Modify the prompt layers, CLI, or Local learning system
-
-The only requirement is that the original copyright notice above is preserved.

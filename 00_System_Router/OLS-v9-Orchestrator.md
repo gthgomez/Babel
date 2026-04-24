@@ -113,6 +113,7 @@ Default skill rules for this first slice:
   - RevenueCat / purchases-amazon / purchases artifact split / shared cross-store entitlement routing → include `skill_revenuecat_iap`
   - Google Play Billing lifecycle / `acknowledgePurchase` / `queryPurchasesAsync` / `ProductDetails` / `PRO_PRODUCT_ID` → include `skill_google_play_billing`
   - Jetpack Compose state / `BackHandler` / `LaunchedEffect` / `collectAsStateWithLifecycle` / screen-enum navigation → include `skill_jetpack_compose`
+  - Room database / SQLite / DAO / RoomDatabase / entity / migration / repository / local persistence → include `skill_android_room`
 - Purpose-driven generic cognition rules:
   - `analysis.purpose_mode = "execution"` → add no generic cognition skill
   - `analysis.purpose_mode = "verification"` → may include `skill_epistemic_calibration`
@@ -459,6 +460,63 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
   "prompt_manifest": [],
   "handoff_payload": {
     "user_request": "Build the Android AAB release, validate it with bundletool, and confirm the upload artifact path.",
+    "system_directive": "Resolve instruction_stack against prompt_catalog.yaml, expand dependencies, compile prompt_manifest, then load the compiled files in order."
+  }
+}
+```
+
+### Example — Android Room/ViewModel task
+
+```json
+{
+  "orchestrator_version": "9.0",
+  "target_project": "example_mobile_suite",
+  "target_project_path": "<YOUR_PROJECT_ROOT>/example_mobile_suite",
+  "analysis": {
+    "task_summary": "Wire a Room-backed Android ViewModel through a repository and StateFlow.",
+    "task_category": "Mobile",
+    "secondary_category": null,
+    "complexity_estimate": "High",
+    "pipeline_mode": "autonomous",
+    "ambiguity_note": null,
+    "routing_confidence": 0.93
+  },
+  "compilation_state": "uncompiled",
+  "instruction_stack": {
+    "behavioral_ids": ["behavioral_core_v7", "behavioral_guard_v7"],
+    "domain_id": "domain_android_kotlin",
+    "skill_ids": ["skill_android_room", "skill_jetpack_compose"],
+    "model_adapter_id": "adapter_codex_balanced",
+    "project_overlay_id": "overlay_example_mobile_suite",
+    "task_overlay_ids": [],
+    "pipeline_stage_ids": ["pipeline_qa_reviewer", "pipeline_cli_executor"]
+  },
+  "resolution_policy": {
+    "apply_domain_default_skills": true,
+    "expand_skill_dependencies": true,
+    "strict_conflict_mode": "error"
+  },
+  "platform_profile": {
+    "profile_source": "not_required_for_routing",
+    "client_surface": "unspecified",
+    "container_model": null,
+    "ingestion_mode": "none",
+    "repo_write_mode": null,
+    "output_surface": [],
+    "platform_modes": [],
+    "execution_trust": null,
+    "data_trust": null,
+    "freshness_trust": null,
+    "action_trust": null,
+    "approval_mode": "none"
+  },
+  "worker_configuration": {
+    "assigned_model": "Codex",
+    "rationale": "Codex Balanced for Kotlin MVVM implementation work."
+  },
+  "prompt_manifest": [],
+  "handoff_payload": {
+    "user_request": "Write an Android ViewModel that wires a Room-backed repository and StateFlow.",
     "system_directive": "Resolve instruction_stack against prompt_catalog.yaml, expand dependencies, compile prompt_manifest, then load the compiled files in order."
   }
 }
