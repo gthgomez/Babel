@@ -1,5 +1,11 @@
 # Babel
 
+[![Type Check](https://github.com/gthgomez/Babel/actions/workflows/typecheck.yml/badge.svg)](https://github.com/gthgomez/Babel/actions/workflows/typecheck.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/)
+[![PowerShell](https://img.shields.io/badge/PowerShell-%3E%3D7-blue)](https://github.com/PowerShell/PowerShell)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#platform-notes)
+
 **Babel helps you choose the right prompt stack for a software task, inspect exactly what it selected, and optionally run that task locally.**
 
 This public repo includes:
@@ -44,6 +50,14 @@ Public rule of thumb:
 - preview and validation are the default product
 - the task-running CLI is real, but it is the advanced lane
 - MCP is an integration surface, not the everyday starting point
+
+## Platform Notes
+
+The Quick Start and tools use **PowerShell 7+** (`pwsh`). This is the primary supported shell.
+
+- **Windows:** works out of the box with PowerShell 7+
+- **Linux / macOS:** install [PowerShell 7+](https://github.com/PowerShell/PowerShell#get-powershell) (`brew install powershell` on macOS, or the official Linux package). All `pwsh -File` commands are cross-platform once `pwsh` is on your PATH.
+- **Node.js 20+** is required for the CLI regardless of platform.
 
 ## Quick Start
 
@@ -203,6 +217,10 @@ Babel-public/
 ├── docs/
 └── tools/
 ```
+
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for release history.
 
 ## License
 
