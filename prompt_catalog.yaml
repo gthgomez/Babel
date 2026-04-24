@@ -28,6 +28,7 @@ last_updated: "2026-04-03"
 # Pass 23 additions (2026-04-03): skill_evidence_field_consistency_audit for response→DB→RPC→UI mismatch tracing on live events
 # Pass 24 additions (2026-04-03): session-model reality audit, exposed-schema hardening, auth enumeration resistance, and security release gating skills
 # Pass 25 additions (2026-04-07): skill_gradle_wrapper for wrapper bootstrap and launcher restoration
+# Pass 26 additions (2026-04-13): skill_android_room — Room database patterns (entities, DAOs, migrations, repository, integer-cents rule)
 
 # ─────────────────────────────────────────────
 # 00 — SYSTEM ROUTER
@@ -1406,6 +1407,24 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 450
+
+  - id: skill_android_room
+    layer: skill
+    path: 02_Skills/Mobile/Android-Room-Database-v1.md
+    description: >
+      Android Room database patterns for Kotlin apps. Enforces correct entity annotation
+      (@Entity, @PrimaryKey, foreign keys with indices), DAO contracts (suspend writes,
+      Flow observables, no raw Cursor exposure), RoomDatabase singleton construction,
+      explicit Migration objects for every schema version bump, repository layer
+      separation (no DAO/entity imports in UI), and integer-cents monetary storage
+      rule (no Double/Float/BigDecimal in entities).
+    status: active
+    tags: [android, room, sqlite, database, dao, entity, migration, repository, mobile, skill]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_android_kotlin
+    token_budget: 420
 
   - id: domain_compliance_gpc
     layer: domain_architect
