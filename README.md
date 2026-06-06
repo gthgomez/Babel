@@ -1,6 +1,6 @@
 # Babel
 
-**Babel helps you choose the right prompt stack for a software task, inspect exactly what it selected, and optionally run that task locally.**
+**Babel is a prompt operating system for software work: it chooses a small, explicit instruction stack for a task, shows you exactly what it selected, and gives you local tools to validate, inspect, and run that stack.**
 
 This public repo includes:
 
@@ -8,13 +8,13 @@ This public repo includes:
 - the typed `v9` router contract
 - the catalog-driven resolver/compiler
 - a read-only MCP control-plane surface
-- public examples, golden previews, and regression tests
+- public examples, golden previews, regression tests, and security/release gates
 
-It also includes the larger multi-agent runtime harness, but that is **advanced** and usually requires local model tooling or credentials. The canonical public success path is the deterministic preview flow, not a full end-to-end autonomous run.
+It also includes the larger CLI/runtime harness. That surface is real and typechecked in public CI, but model-backed execution can require local tooling, credentials, and workspace-specific policy. The canonical first success path remains deterministic validation and preview.
 
 ## Public Identity
 
-`Babel-public` should be understood as a **runnable public-safe Babel control-plane subset**.
+`Babel-public` should be understood as a **runnable, public-safe Babel release**.
 
 What is fully supported from this repo alone:
 
@@ -22,13 +22,39 @@ What is fully supported from this repo alone:
 - deterministic stack selection preview
 - deterministic manifest preview from `prompt_catalog.yaml`
 - read-only MCP manifest/stack inspection
-- regression tests proving those surfaces behave predictably
+- CLI typechecking and public release validation
+- secret scanning and public scrub gates
+- regression tests proving the public surfaces behave predictably
 
 What is present but not the primary onboarding path:
 
 - `babel-cli run`
 - manual bridge / pipeline harness commands
 - model-execution flows that depend on local model setup or credentials
+
+## Current State
+
+Babel-public is now generated from a hardened private-to-public export lane. The public repository is intended to be useful to a new community user without private workspace knowledge:
+
+- public templates generate community-facing docs, issue templates, and CI
+- `scratch/`, private repo fingerprints, and private-only operator notes are excluded
+- `package-lock.json` is retained for reproducible install, with local-path/private-dependency checks
+- public CI runs typecheck and the required secret scan
+- release publishing goes through a release branch and PR, not direct pushes to `main`
+
+## Vision
+
+Babel is meant to become the community prompt layer for reliable AI-assisted software work.
+
+The direction is:
+
+1. make stack selection understandable before a model acts
+2. keep prompts modular, inspectable, and testable
+3. let tools integrate through read-only control-plane surfaces first
+4. make task execution progressively safer with evidence, verification, and repo-local rules
+5. keep the public repo clean enough that anyone can fork it, learn from it, and build on it
+
+For the longer product direction, see [docs/VISION.md](./docs/VISION.md).
 
 ## Choose Your Path
 
@@ -120,6 +146,7 @@ The first surface is what the public repo is optimized for. The second is availa
 ## Proof Surfaces
 
 - [START_HERE.md](./START_HERE.md) — the fastest public onboarding path
+- [docs/VISION.md](./docs/VISION.md) — current state, principles, and roadmap direction
 - [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md) — copy-paste CLI flows for `doctor`, `run`, `plan`, and `mcp`
 - [examples/first-success.md](./examples/first-success.md) — the shortest before/after explanation
 - [examples/manifest-previews/backend-verified.json](./examples/manifest-previews/backend-verified.json) — golden backend preview
@@ -181,6 +208,18 @@ pwsh -File .\tools\run-babel-local-cli.ps1 `
 - `verified` = adds QA review before execution
 - `manual` = emits manual-bridge handoff JSON instead of normal run output
 - `autonomous` = highest-risk lane; may use more tool execution and runtime setup
+
+## Contributing Direction
+
+Good public contributions usually improve one of these surfaces:
+
+- clearer onboarding docs
+- safer or more deterministic resolver behavior
+- better public examples and golden previews
+- more precise skills, domain architects, or adapters
+- stronger validation, scrub, and release checks
+
+Private workspace names, credentials, local paths, and operator-only release notes do not belong in this repo.
 
 ## Repository Structure
 
