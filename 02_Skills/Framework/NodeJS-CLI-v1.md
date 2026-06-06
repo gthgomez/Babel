@@ -11,6 +11,14 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Category:** Framework / Runtime
 **Status:** Active
 **Pairs with:** `domain_swe_backend`, `domain_python_backend`
+**Last Verified:** 2026-04-25
+
+## Package bridge
+
+- **Canonical package:** `skills/nodejs-cli/` (`SKILL.md`, `skill.yaml`, `contracts/`, `examples/`, `tests/`)
+- **Catalog id:** `skill_nodejs_cli`
+- **This file:** Babel prompt routing and layer behavior only
+- Do not duplicate schemas or examples here; use the package skill for I/O contracts and fixtures
 
 ---
 
@@ -32,7 +40,7 @@ Node.js CLI tools have a distinct set of correctness patterns that differ from s
     "my-cli": "./run.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=24"
   }
 }
 ```
@@ -40,7 +48,7 @@ Node.js CLI tools have a distinct set of correctness patterns that differ from s
 **Rules:**
 - `"type": "module"` enables ES module syntax (`import`/`export`) throughout. Do NOT mix `require()` in an ESM package — it will throw at runtime.
 - `"bin"` is required if the tool should be runnable as `npx my-cli` or installed globally.
-- `"engines"` prevents silent failures on old Node versions. Node 18+ is safe for `crypto.randomBytes`, `URL`, `fs/promises`, and `node:util` `parseArgs`.
+- `"engines"` prevents silent failures on old Node versions. For new CLIs, target Node 24+ (active LTS in 2026). Use Node 22+ only when a deployment target requires the older maintenance LTS line, and document that constraint in the package or project overlay.
 - Do NOT add `"main"` unless this is also a library. CLI-only packages have a `bin` entry, not a `main`.
 
 ---
@@ -126,7 +134,7 @@ function parseArgs(argv) {
 }
 ```
 
-### Option B — `node:util` parseArgs (Node 18+, more features)
+### Option B — `node:util` parseArgs (available in supported LTS lines, default for Node 24+ CLIs)
 
 ```javascript
 import { parseArgs } from 'node:util'
@@ -193,8 +201,6 @@ async function main() {
 ```javascript
 // Correct top-level pattern
 async function main() { /* ... */ }
-main() // don't await at top level in ESM — async rejection surfaces differently
-       // but DO handle the error:
 main().catch((err) => {
   console.error(`Unexpected error: ${err.message}`)
   process.exit(2)
@@ -292,5 +298,5 @@ async function main() {
 | `process.exit()` in library code | Kills the whole process from a non-entrypoint — caller has no chance to handle |
 | `parseInt()` without `isNaN()` check | Silent `NaN` propagated into numeric comparisons |
 | Relative `outputDir` passed to `join()` without `resolve()` | Files written to wrong location when cwd differs from expected |
-| Unhandled promise rejection in `main()` | Process exits with code 1 and a deprecation warning in Node 18+, code 0 in older versions — unpredictable |
+| Unhandled promise rejection in `main()` | Runtime exits outside the CLI's error contract, producing inconsistent diagnostics and exit codes for callers |
 | stdout contaminated with progress messages | JSON output piped to another tool is broken without warning |

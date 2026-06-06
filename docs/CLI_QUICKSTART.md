@@ -85,4 +85,4 @@ What it does:
 - use `plan` if you want a manual-bridge workflow
 - use `mcp` if you are integrating Babel into another client
 
-If you are still learning the repo, start with [START_HERE.md](../../START_HERE.md) and [BABEL_LOCAL_MODE.md](./BABEL_LOCAL_MODE.md) first.
+If you are still learning the repo, start with [START_HERE.md](../../START_HERE.md) and [BABEL_LOCAL_MODE.md](./architecture/BABEL_LOCAL_MODE.md) first.

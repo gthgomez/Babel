@@ -12,12 +12,16 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Status:** ACTIVE
 **Layer:** 02_Domain_Architects
 **Pipeline Position:** Domain layer. Loaded as position [3] when task category is Python backend, CLI tools, multi-agent pipelines, or deterministic validators.
-**Requirement:** Must be layered on top of `OLS-v7-Core-Universal.md` and `OLS-v7-Guard-Auto.md`.
+**Requirement:** Must be layered on top of `OLS-v10-Core-Universal.md`, `OLS-v7-Cognitive-Micro.md`, and relevant conditional Guard modules.
+**Contract Anchor:** `00_System_Router/Babel_Runtime_Contracts-v1.0.md`
+**Last Verified:** 2026-04-25
 
 **Core Directive:** Python backend systems in this stack span two distinct risk profiles:
 **(1) multi-agent pipelines** (example_saas_backend scanner — async agents, learning queues, CI hooks, guardrailed auto-apply) and
 **(2) deterministic validators** (example_web_audit ci-validator — scoring logic, schema contracts, weight arithmetic).
 A wrong async context, an unguarded mutable default, or a silently swallowed exception in an agent doesn't cause a visible error — it corrupts scores, stale-locks learning state, or passes compliance checks that should have failed. Your planning discipline must match this risk.
+
+**Scope Boundary:** example_saas_backend and example_web_audit details below are concrete examples and known workspace overlays, not universal Python doctrine. When a project overlay is loaded, the overlay is authoritative for project-specific paths, table names, and guardrail state.
 
 ---
 
@@ -164,7 +168,47 @@ Verification:
 
 ---
 
-## 5. DEFAULT SKILLS
+## 5. ASYNC PATTERNS (Python 3.11+, 2026)
+
+The multi-agent pipeline uses asyncio. Apply these patterns consistently:
+
+### TaskGroup (preferred over `asyncio.gather`)
+
+Python 3.11+ `asyncio.TaskGroup` is the modern pattern for structured concurrency:
+
+```python
+# Preferred (Python 3.11+ / 3.13):
+async with asyncio.TaskGroup() as tg:
+    task_a = tg.create_task(agent_a.run(diff))
+    task_b = tg.create_task(agent_b.run(diff))
+# Both tasks complete or both are cancelled on first exception
+results = [task_a.result(), task_b.result()]
+
+# Legacy (still valid, less safe on exception):
+results = await asyncio.gather(coro_a, coro_b, return_exceptions=True)
+```
+
+Prefer `TaskGroup` for agent coordination — it propagates exceptions correctly and cancels
+sibling tasks automatically on failure. Use `gather(return_exceptions=True)` only when you
+explicitly want to collect failures per-agent without cancelling the group.
+
+### Python 3.13 No-GIL Note
+
+Python 3.13's experimental no-GIL build (PEP 703) is maturing in 2026. The multi-agent pipeline
+is I/O-bound (LLM API calls), so asyncio remains the correct pattern — no-GIL primarily benefits
+CPU-bound tasks. Do not restructure the async pipeline toward `threading` or `multiprocessing`
+based on no-GIL without explicit profiling evidence.
+
+### Timeout Chain
+
+All agent coroutines must respect the timeout chain:
+- `config.py` defines `AGENT_TIMEOUTS` (minimum 10s, maximum 180s).
+- `base_agent.py` enforces `agent_timeout ≥ api_timeout + 5s` at construction.
+- Use `asyncio.wait_for(coro, timeout=agent_timeout)` — never rely on the API client timeout alone.
+
+---
+
+## 6. DEFAULT SKILLS
 
 Load based on task type:
 

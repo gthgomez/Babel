@@ -2,42 +2,32 @@
  * execute.ts — Per-Stage LLM Waterfall Executor
  *
  * Implements four dedicated waterfalls, one per pipeline stage.
- * All tiers are DeepInfra API runners (≤$2.50/M tokens). No CLI runners.
+ * Default tiers are DeepInfra API runners; direct DeepSeek is supported for
+ * live governance proof and explicit model-policy entries. No CLI runners.
  *
- * Model selection is evidence-based (benchmarks, July 2026):
+ * Model selection is loaded from config/model-policy.json. Pricing and
+ * capability notes belong in that config with source_url / verified_at /
+ * expires_at metadata, not in this runtime header.
  *
  *   orchestrator  (Stage 1 — manifest generation, domain/model routing)
  *     Goal: reliable structured JSON output, fast, cheap.
- *     1. Llama-4-Scout       $0.08/$0.30 — confirmed JSON mode, lowest TTFT (0.48s), 328K ctx
- *     2. Qwen3-235B-Instruct $0.07/$0.10 — IFEval 88.7, cheapest output, 262K ctx, no thinking overhead
- *     3. Step-3.5-Flash      $0.10/$0.30 — Intelligence Index #13/67, 256K ctx, reliable instruction following
- *     4. Qwen3-32B           $0.08/$0.28 — function calling, budget rescue
+ *     Route: configured stage waterfall.
  *
  *   planning      (Stage 2 — SWE Agent minimal-action-set plan)
- *     Goal: deepest SE reasoning. SWE-bench is the key metric.
- *     1. Step-3.5-Flash      $0.10/$0.30 — SWE-bench 74.4 (best in class at this price), AIME 97.3
- *     2. Nemotron 3 Super    $0.10/$0.50 — Intelligence Index #2/58, agentic TauBench 61.1, 262K ctx
- *     3. DeepSeek-V3-0324    $0.20/$0.77 — top practitioner SE model, HumanEval 82.6, MATH-500 90.2
- *     4. Qwen3-235B-Instruct $0.07/$0.10 — MMLU-Redux 93.1, MultiPL-E 87.9, cheap deep rescue
- *     5. Qwen3-32B           $0.08/$0.28 — last-resort budget fallback
+ *     Goal: fast structured minimal-action-set planning that can recover.
+ *     Route: configured stage waterfall.
  *
  *   qa            (Stage 3 — QA Reviewer adversarial verdict)
  *     Goal: adversarial critique, catch plan flaws. Instruction following + reasoning depth.
- *     1. Nemotron 3 Super    $0.10/$0.50 — GPQA Diamond 79.4, IFBench 72.3, Arena-Hard 76.1, 262K ctx
- *     2. DeepSeek-V3-0324    $0.20/$0.77 — broad pretraining (14.8T tokens), IFEval 86.1, strong critic
- *     3. Step-3.5-Flash      $0.10/$0.30 — BBH 88.2, sharp reasoning fallback
- *     4. Qwen3-32B           $0.08/$0.28 — budget rescue
+ *     Route: configured stage waterfall.
  *
  *   executor      (Stage 4 — multi-turn tool call loop)
  *     Goal: cheapest reliable JSON per tool-call turn, lowest latency.
- *     1. Llama-4-Scout       $0.08/$0.30 — JSON mode confirmed, TTFT 0.48s, 144.8 tok/s, 328K ctx
- *     2. Qwen3-235B-Instruct $0.07/$0.10 — cheapest output ($0.10/M), no thinking tokens, 262K ctx
- *     3. Qwen3-32B           $0.08/$0.28 — function calling, compact output, budget rescue
- *     4. Nemotron 3 Super    $0.10/$0.50 — complex history reasoning fallback, 262K ctx
+ *     Route: configured stage waterfall.
  *
  * Cascade rules:
  *   1. Rate-limit / quota signal         → cascade immediately (no retry).
- *   2. JSON / Zod failure                → retry up to `maxAttempts`, then cascade.
+ *   2. JSON / Zod failure                → one schema-focused retry, then cascade.
  *   3. Runner construction error         → cascade immediately (e.g. missing API key).
  *
  * Backward compatibility:
@@ -46,25 +36,44 @@
  *   `stage` takes priority over `mode` when both are provided.
  *
  * Environment variables:
- *   DEEPINFRA_API_KEY          — Required for all tiers.
+ *   DEEPINFRA_API_KEY          — Required for DeepInfra tiers.
+ *   DEEPSEEK_API_KEY           — Required for direct DeepSeek tiers.
  *   BABEL_DEEPINFRA_TOKENS     — max_tokens for DeepInfra responses. Default: 8096
+ *   BABEL_WATERFALL_TIMEOUT_MS — aggregate wall-clock timeout per stage waterfall. Default: 180000
  *   BABEL_DISABLE_API_FALLBACK — Set to "true" to halt after first tier failure.
  */
 
-import type { ZodType, ZodTypeDef } from 'zod';
+import type { ZodType } from 'zod';
+// Note: Legacy API runners (ClaudeCliRunner, CodexCliRunner, etc.) have been kept
+// in the `runners/` directory for public-use fallback capabilities, but the internal
+// Babel system uses API runners across all stages.
 import { DeepInfraApiRunner }    from './runners/deepInfraApi.js';
-import type { LlmRunner }        from './runners/base.js';
+import { DeepSeekApiRunner }     from './runners/deepSeekApi.js';
+import type { LlmRunner, RunnerInvocationMetadata, RunnerCallbacks, RunnerProgressEvent } from './runners/base.js';
 import type { EvidenceBundle }   from './evidence.js';
 import type { TargetModel }      from './schemas/agentContracts.js';
 import {
   selectBestTierForStage,
   reorderWaterfallByStartIndex,
+  clearRoutingCache,
   type RoutingStage,
 }                                from './routingEngine.js';
+import { BabelEventBus }         from './pipeline/logging.js';
+
+export { clearRoutingCache };
 import {
   resolveStagePolicyRoutes,
   type ResolvedModelPolicyEntry,
 }                                from './modelPolicy.js';
+import { globalCostTracker }      from './services/costTracker.js';
+import type { CostPrecision }     from './services/modelPricingRegistry.js';
+import {
+  appendSchemaFailureEntry,
+  appendSchemaFailureRecovery,
+  appendSchemaFailureTerminal,
+  readSchemaShadowHints,
+  type SchemaFailureLedgerEntry,
+}                                from './services/schemaFailureLedger.js';
 
 export type { TargetModel };
 
@@ -90,28 +99,69 @@ export interface WaterfallOutcome {
   cascade_reason: string;
   /** ISO 8601 timestamp of when this call completed. */
   ts:             string;
+  /** Successful and failed attempts observed during this waterfall call. */
+  attempts_detail?: WaterfallAttemptOutcome[];
+  /** Schema-failure ledger entry ids observed during this waterfall call. */
+  schema_failure_entry_ids?: string[];
+  /** Aggregate latency across all attempts for this waterfall call. */
+  total_latency_ms?: number | null;
+  /** Aggregate prompt token count across all attempts with provider usage data. */
+  total_prompt_tokens?: number | null;
+  /** Aggregate completion token count across all attempts with provider usage data. */
+  total_completion_tokens?: number | null;
+  /** Aggregate total token count across all attempts with provider usage data. */
+  total_tokens?: number | null;
+  /** Aggregate estimated provider cost across all attempts with pricing metadata. */
+  total_estimated_cost_usd?: number | null;
+}
+
+export interface WaterfallAttemptOutcome {
+  tier_name: string;
+  tier_index: number;
+  attempt: number;
+  succeeded: boolean;
+  error_summary?: string | null;
+  provider?: string | null;
+  provider_model_id?: string | null;
+  latency_ms?: number | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
+  estimated_cost_usd?: number | null;
+  prompt_cache_hit_tokens?: number | null;
+  prompt_cache_miss_tokens?: number | null;
+  cost_precision?: CostPrecision | null;
+  pricing_source_url?: string | null;
+  pricing_verified_at?: string | null;
+  input_cost_per_1m?: number | null;
+  output_cost_per_1m?: number | null;
+  input_cache_hit_cost_per_1m?: number | null;
+  input_cache_miss_cost_per_1m?: number | null;
+  schema_failure_entry_id?: string | null;
+  ttft_ms?: number | null;
+  generation_ms?: number | null;
+  validation_ms?: number | null;
 }
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
 const DISABLE_API_FALLBACK =
   process.env['BABEL_DISABLE_API_FALLBACK'] === 'true';
+const DEFAULT_WATERFALL_TIMEOUT_MS = 180_000;
+const AGGREGATE_WATERFALL_TIMEOUT_PREFIX = '[waterfall-timeout]';
 
-// DeepInfra model IDs (all ≤$2.50/M tokens — pricing verified July 2026)
-//
-// Strengths summary:
-//   LLAMA4_SCOUT:   JSON mode confirmed, TTFT 0.48s, 328K ctx, 144.8 tok/s — best Stage 1/4 lead
-//   QWEN3_235B:     IFEval 88.7, MMLU-Redux 93.1, $0.07/$0.10 — cheapest capable output on platform
-//   STEP_FLASH:     SWE-bench 74.4, AIME 97.3, Intelligence Index #13/67 — best SE reasoning per dollar
-//   NEMOTRON:       GPQA 79.4, IFBench 72.3, Arena-Hard 76.1, agentic TauBench 61.1 — best critic
-//   DEEPSEEK_V3:    HumanEval 82.6, MATH-500 90.2, IFEval 86.1 — top practitioner SE, 14.8T pretrain
-//   QWEN3_32B:      function calling, 41K ctx, budget-tier rescue across all stages
-const LLAMA4_SCOUT  = 'meta-llama/Llama-4-Scout-17B-16E-Instruct';   // $0.08/$0.30 — JSON mode, 328K ctx
-const QWEN3_235B    = 'Qwen/Qwen3-235B-A22B-Instruct-2507';          // $0.07/$0.10 — cheapest output
-const STEP_FLASH    = 'stepfun-ai/Step-3.5-Flash';                   // $0.10/$0.30 — SWE-bench 74.4
-const NEMOTRON      = 'nvidia/NVIDIA-Nemotron-3-Super-120B-A12B';    // $0.10/$0.50 — adversarial critic
-const DEEPSEEK_V3   = 'deepseek-ai/DeepSeek-V3-0324';               // $0.20/$0.77 — SE coding depth
-const QWEN3_32B     = 'Qwen/Qwen3-32B';                              // $0.08/$0.28 — budget rescue
+function resolveAggregateWaterfallTimeoutMs(): number {
+  const raw = Number(process.env['BABEL_WATERFALL_TIMEOUT_MS'] ?? `${DEFAULT_WATERFALL_TIMEOUT_MS}`);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_WATERFALL_TIMEOUT_MS;
+}
+
+// Model IDs. Price/capability provenance is stored in model-policy.json.
+const LLAMA4_SCOUT  = 'meta-llama/Llama-4-Scout-17B-16E-Instruct';
+const QWEN3_235B    = 'Qwen/Qwen3-235B-A22B-Instruct-2507';
+const STEP_FLASH    = 'stepfun-ai/Step-3.5-Flash';
+const NEMOTRON      = 'nvidia/NVIDIA-Nemotron-3-Super-120B-A12B';
+const DEEPSEEK_V3   = 'deepseek-ai/DeepSeek-V3-0324';
+const QWEN3_32B     = 'Qwen/Qwen3-32B';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -182,6 +232,378 @@ export interface RunOptions {
    * written to debug files on parse/validation failure when provided.
    */
   evidence?: EvidenceBundle;
+
+  /**
+   * Human-readable schema name for schema-failure evidence. Optional so older
+   * callers remain compatible; stage defaults fill the common pipeline schemas.
+   */
+  schemaName?: string;
+
+  /**
+   * Optional callback for streaming model outputs.
+   * Only supported by API runners (DeepInfra).
+   */
+  onChunk?: (chunk: string) => void;
+
+  /**
+   * Policy to restrict fallback cascading.
+   * 'primary_only' will disallow cascading to backup routes.
+   * @default 'allow_backups'
+   */
+  fallbackPolicy?: 'primary_only' | 'allow_backups';
+
+  /**
+   * Event bus instance for progress logs.
+   */
+  eventBus?: BabelEventBus;
+}
+
+export const RELIABILITY_REPAIR_PROOF_MARKER = '[BABEL_RELIABILITY_AUTONOMOUS_LIVE_FAIL_THEN_PASS]';
+
+function detectPipelineV9OfflineLane(prompt: string): 'frontend' | 'backend' {
+  return /regression frontend verified lane/i.test(prompt) ? 'frontend' : 'backend';
+}
+
+function buildOtelOfflineOrchestratorManifest(mode: 'verified' | 'autonomous', repoRoot: string): Record<string, unknown> {
+  return {
+    orchestrator_version: '9.0',
+    target_project: 'global',
+    target_project_path: repoRoot,
+    analysis: {
+      task_summary: mode === 'autonomous'
+        ? 'OTel regression autonomous lane.'
+        : 'OTel regression verified lane.',
+      task_category: 'Backend',
+      secondary_category: null,
+      complexity_estimate: 'Medium',
+      pipeline_mode: mode,
+      ambiguity_note: null,
+      routing_confidence: 0.95,
+    },
+    platform_profile: {
+      profile_source: 'not_required_for_routing',
+      client_surface: 'unspecified',
+      container_model: null,
+      ingestion_mode: 'none',
+      repo_write_mode: null,
+      output_surface: [],
+      platform_modes: [],
+      execution_trust: null,
+      data_trust: null,
+      freshness_trust: null,
+      action_trust: null,
+      approval_mode: 'none',
+    },
+    worker_configuration: {
+      assigned_model: 'qwen3',
+      rationale: 'OTel regression fixture selects qwen3.',
+    },
+    compilation_state: 'uncompiled',
+    instruction_stack: {
+      behavioral_ids: ['behavioral_core_v10', 'behavioral_cognitive_micro_v7', 'behavioral_guard_v7'],
+      domain_id: 'domain_swe_backend',
+      skill_ids: [],
+      model_adapter_id: 'adapter_codex_balanced',
+      project_overlay_id: null,
+      task_overlay_ids: [],
+      pipeline_stage_ids: [],
+    },
+    resolution_policy: {
+      apply_domain_default_skills: true,
+      expand_skill_dependencies: true,
+      strict_conflict_mode: 'error',
+      task_shape_profile: 'full',
+    },
+    prompt_manifest: [],
+    handoff_payload: {
+      user_request: mode === 'autonomous'
+        ? 'OTEL autonomous lane TELEMETRY_SECRET_TASK_MARKER'
+        : 'OTEL verified lane TELEMETRY_SECRET_TASK_MARKER',
+      system_directive: 'Resolve instruction_stack against prompt_catalog.yaml, expand dependencies, compile prompt_manifest, then load the compiled files in order.',
+    },
+  };
+}
+
+function buildOtelOfflineSwePlan(): Record<string, unknown> {
+  return {
+    plan_version: '1.0',
+    plan_type: 'IMPLEMENTATION_PLAN',
+    task_summary: 'OBJECTIVE: Exercise OTel tracing without leaking prompt contents.',
+    known_facts: [
+      'The orchestrator emitted a typed v9 manifest.',
+      'The tracing test needs a valid QA PASS path.',
+    ],
+    assumptions: [
+      'A single safe read-only step is sufficient for autonomous executor validation.',
+    ],
+    risks: [
+      {
+        risk: 'The executor completion could become schema-invalid without a verified step.',
+        likelihood: 'low',
+        mitigation: 'Emit one file_read step before EXECUTION_COMPLETE.',
+      },
+    ],
+    minimal_action_set: [
+      {
+        step: 1,
+        description: 'Inspect the compiled manifest artifact for trace coverage.',
+        tool: 'file_read',
+        target: 'runs/latest/01_manifest.json',
+        rationale: 'Provides one safe executor step before completion.',
+        reversible: true,
+        verification: 'The manifest shows compilation_state = compiled and a populated prompt_manifest.',
+      },
+    ],
+    root_cause: 'N/A — tracing regression coverage',
+    out_of_scope: [
+      'Repository mutation',
+      'Shell execution',
+    ],
+  };
+}
+
+function buildPipelineV9OfflineSwePlan(lane: 'frontend' | 'backend') {
+  const label = lane === 'frontend' ? 'frontend' : 'backend';
+  return {
+    plan_version: '1.0',
+    plan_type: 'IMPLEMENTATION_PLAN',
+    task_summary: `OBJECTIVE: Validate the v9 compiled ${label} verified lane.`,
+    known_facts: [
+      'The orchestrator emitted a typed v9 manifest in uncompiled form.',
+      'The compiler must populate prompt_manifest before the SWE stage runs.',
+    ],
+    assumptions: [
+      'This regression fixture only needs to verify routing and QA coherence.',
+    ],
+    risks: [
+      {
+        risk: 'The typed stack could fail to compile before the worker runs.',
+        likelihood: 'low',
+        mitigation: 'Assert the written manifest is compiled before checking SWE and QA artifacts.',
+      },
+    ],
+    minimal_action_set: [
+      {
+        step: 1,
+        description: `Inspect the compiled manifest artifact for the resolved ${label} stack.`,
+        tool: 'file_read',
+        target: 'runs/latest/01_manifest.json',
+        rationale: 'Confirms Stage 1 produced a compiled manifest before execution planning proceeds.',
+        reversible: true,
+        verification: 'The manifest shows compilation_state = compiled and a populated prompt_manifest.',
+      },
+    ],
+    root_cause: 'N/A — regression coverage task',
+    out_of_scope: [
+      'Executing CLI tools',
+      'Modifying repository files',
+    ],
+  };
+}
+
+function buildPipelineV9OfflineQaPass(lane: 'frontend' | 'backend') {
+  return {
+    verdict: 'PASS',
+    overall_confidence: 5,
+    notes: lane === 'frontend'
+      ? 'Regression fixture plan is sufficient for the verified frontend worker/QA path.'
+      : 'Regression fixture plan is sufficient for the verified backend worker/QA path.',
+  };
+}
+
+export function buildPipelineV9OfflineFixtureResponse(
+  prompt: string,
+  options: RunOptions,
+): unknown | null {
+  if (process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1') {
+    return null;
+  }
+
+  const stage = options.stage ?? options.mode;
+  const isOtelRegression = /otel regression|otel verified lane|otel autonomous lane/i.test(prompt);
+
+  if (isOtelRegression) {
+    if (
+      stage === 'orchestrator' ||
+      prompt.includes('Analyze the task below and output the orchestration manifest')
+    ) {
+      const mode = /autonomous lane/i.test(prompt) ? 'autonomous' : 'verified';
+      const repoRoot = process.env['BABEL_PROJECT_ROOT']?.trim() || process.cwd();
+      return buildOtelOfflineOrchestratorManifest(mode, repoRoot);
+    }
+    if (stage === 'planning' || prompt.includes('produce the SWE Plan')) {
+      return buildOtelOfflineSwePlan();
+    }
+    if (stage === 'qa' || prompt.includes('produce a QA verdict')) {
+      return {
+        verdict: 'PASS',
+        overall_confidence: 5,
+        notes: 'OTel regression fixture plan is sufficient for trace coverage.',
+      };
+    }
+    if (stage === 'executor') {
+      const historyIndex = prompt.indexOf('EXECUTION HISTORY');
+      const executionHistory = historyIndex >= 0 ? prompt.slice(historyIndex) : '';
+      if (!/\[Step 1\] file_read[^\n]*runs\/latest\/01_manifest\.json\r?\nExit code: 0/.test(executionHistory)) {
+        return {
+          type: 'tool_call',
+          thinking: 'OTel offline fixture: read the compiled manifest before completing.',
+          tool: 'file_read',
+          path: 'runs/latest/01_manifest.json',
+        };
+      }
+      return {
+        type: 'completion',
+        status: 'EXECUTION_COMPLETE',
+      };
+    }
+    return null;
+  }
+
+  const lane = detectPipelineV9OfflineLane(prompt);
+
+  if (stage === 'planning' || prompt.includes('produce the SWE Plan')) {
+    return buildPipelineV9OfflineSwePlan(lane);
+  }
+  if (stage === 'qa' || prompt.includes('produce a QA verdict')) {
+    return buildPipelineV9OfflineQaPass(lane);
+  }
+  if (stage === 'executor') {
+    return {
+      type: 'completion',
+      status: 'EXECUTION_COMPLETE',
+    };
+  }
+
+  return null;
+}
+
+function countMatches(value: string, pattern: RegExp): number {
+  return [...value.matchAll(pattern)].length;
+}
+
+function getReliabilityRepairProofVerifierExitCodes(prompt: string): number[] {
+  const exitCodes: number[] = [];
+  const pattern = /\[Step \d+\] (?:test_run|shell_exec)\s+[^\r\n]*node --test\r?\nExit code: (-?\d+)/g;
+  for (const match of prompt.matchAll(pattern)) {
+    const parsed = Number.parseInt(match[1] ?? '', 10);
+    if (Number.isFinite(parsed)) {
+      exitCodes.push(parsed);
+    }
+  }
+  return exitCodes;
+}
+
+export function buildReliabilityRepairProofExecutorResponse(prompt: string, options: RunOptions): unknown | null {
+  if (
+    options.stage !== 'executor' ||
+    process.env['BABEL_RELIABILITY_REPAIR_PROOF'] !== 'true' ||
+    !prompt.includes(RELIABILITY_REPAIR_PROOF_MARKER) ||
+    !prompt.includes('src/math.js') ||
+    !prompt.includes('node --test')
+  ) {
+    return null;
+  }
+
+  const fileReadCount = countMatches(
+    prompt,
+    /\[Step \d+\] file_read\s+[^\r\n]*src\/math\.js\r?\nExit code: 0/g,
+  );
+  const writeCount = countMatches(
+    prompt,
+    /\[Step \d+\] file_write\s+[^\r\n]*src\/math\.js\r?\nExit code: 0/g,
+  );
+  const verifierExitCodes = getReliabilityRepairProofVerifierExitCodes(prompt);
+  const failedVerifierCount = verifierExitCodes.filter(code => code !== 0).length;
+  const lastVerifierExitCode = verifierExitCodes[verifierExitCodes.length - 1];
+  const hasFailureCapsule = /Failure capsule id:\s*repair_failure_capsule_attempt_\d+/.test(prompt);
+  const forceStillFail = process.env['BABEL_RELIABILITY_REPAIR_PROOF_FORCE_STILL_FAIL'] === 'true';
+
+  if (fileReadCount === 0) {
+    return {
+      type: 'tool_call',
+      thinking:
+        'Deterministic reliability proof model-boundary response: honor the approved preflight read before editing.',
+      tool: 'file_read',
+      path: 'src/math.js',
+    };
+  }
+
+  if (writeCount === 0) {
+    return {
+      type: 'tool_call',
+      thinking:
+        'Deterministic reliability proof model-boundary response: attempt 1 writes the wrong implementation through file_write.',
+      tool: 'file_write',
+      path: 'src/math.js',
+      content: [
+        'export function add(a, b) {',
+        '  return a * b;',
+        '}',
+        '',
+      ].join('\n'),
+    };
+  }
+
+  if (writeCount > verifierExitCodes.length) {
+    return {
+      type: 'tool_call',
+      thinking: 'Run the verifier through the normal test_run path before completing.',
+      tool: 'test_run',
+      command: 'node --test',
+      working_directory: '.',
+      timeout_seconds: 120,
+    };
+  }
+
+  if (lastVerifierExitCode !== undefined && lastVerifierExitCode !== 0) {
+    if (!hasFailureCapsule) {
+      return {
+        type: 'completion',
+        status: 'EXECUTION_HALTED',
+        halt_tag: 'STEP_VERIFICATION_FAIL',
+        condition:
+          'Reliability repair proof cannot continue: verifier failed but no failure capsule was present in the executor prompt.',
+      };
+    }
+
+    return {
+      type: 'tool_call',
+      thinking: [
+        'Deterministic reliability proof model-boundary response:',
+        'consume the real failure capsule from the executor prompt and patch src/math.js before rerunning the same verifier.',
+      ].join(' '),
+      tool: 'file_write',
+      path: 'src/math.js',
+      content: forceStillFail
+        ? [
+            'export function add(a, b) {',
+            `  return a * b; // forced failure retry ${failedVerifierCount + 1}`,
+            '}',
+            '',
+          ].join('\n')
+        : [
+            'export function add(a, b) {',
+            '  return a + b;',
+            '}',
+            '',
+          ].join('\n'),
+    };
+  }
+
+  if (lastVerifierExitCode === 0 && failedVerifierCount > 0) {
+    return {
+      type: 'completion',
+      status: 'EXECUTION_COMPLETE',
+    };
+  }
+
+  return {
+    type: 'completion',
+    status: 'EXECUTION_HALTED',
+    halt_tag: 'STEP_VERIFICATION_FAIL',
+    condition: 'Reliability repair proof reached an unexpected executor prompt state.',
+  };
 }
 
 // ─── Waterfall definitions ────────────────────────────────────────────────────
@@ -204,110 +626,72 @@ interface TierSpec {
 
 /**
  * Stage 1 — Orchestrator
- * Goal: reliable structured JSON output, fast and cheap.
- * Llama-4-Scout leads: only model with confirmed JSON mode on DeepInfra,
- * lowest TTFT (0.48s), 328K context. Qwen3-235B-Instruct backs up with the
- * cheapest output price on the platform ($0.10/M) and IFEval 88.7.
  */
 const ORCHESTRATOR_WATERFALL: TierSpec[] = [
   {
-    kind: 'api', name: 'Llama-4-Scout',
-    factory: () => new DeepInfraApiRunner(LLAMA4_SCOUT),
-  },
-  {
-    kind: 'api', name: 'Qwen3-235B-Instruct-2507',
-    factory: () => new DeepInfraApiRunner(QWEN3_235B),
-  },
-  {
-    kind: 'api', name: 'Step-3.5-Flash',
-    factory: () => new DeepInfraApiRunner(STEP_FLASH),
-  },
-  {
-    kind: 'api', name: 'Qwen3-32B',
+    kind: 'api', name: 'qwen3-32b',
     factory: () => new DeepInfraApiRunner(QWEN3_32B),
+  },
+  {
+    kind: 'api', name: 'scout',
+    factory: () => new DeepInfraApiRunner(LLAMA4_SCOUT),
   },
 ];
 
 /**
  * Stage 2 — Planning (SWE Agent)
- * Goal: deepest SE reasoning for action-set generation.
- * Step-3.5-Flash leads: SWE-bench 74.4 is the highest score at this price
- * bracket — no other sub-$0.50/M model comes close on software engineering.
- * Nemotron backs up with the best long-context agentic scores (TauBench 61.1).
- * DeepSeek-V3-0324 is the top practitioner model for SE at $0.77/M output.
  */
 const PLANNING_WATERFALL: TierSpec[] = [
   {
-    kind: 'api', name: 'Step-3.5-Flash',
-    factory: () => new DeepInfraApiRunner(STEP_FLASH),
-  },
-  {
-    kind: 'api', name: 'Nemotron 3 Super',
-    factory: () => new DeepInfraApiRunner(NEMOTRON),
-  },
-  {
-    kind: 'api', name: 'DeepSeek-V3-0324',
-    factory: () => new DeepInfraApiRunner(DEEPSEEK_V3),
-  },
-  {
-    kind: 'api', name: 'Qwen3-235B-Instruct-2507',
-    factory: () => new DeepInfraApiRunner(QWEN3_235B),
-  },
-  {
-    kind: 'api', name: 'Qwen3-32B',
+    kind: 'api', name: 'qwen3-32b',
     factory: () => new DeepInfraApiRunner(QWEN3_32B),
+  },
+  {
+    kind: 'api', name: 'scout',
+    factory: () => new DeepInfraApiRunner(LLAMA4_SCOUT),
   },
 ];
 
 /**
  * Stage 3 — QA Reviewer
- * Goal: adversarial critique and plan verification.
- * Nemotron leads: GPQA Diamond 79.4, IFBench 72.3, Arena-Hard 76.1 — the
- * strongest critical reasoning scores and explicitly adversarial post-training.
- * DeepSeek-V3-0324 backs up with broad pretraining (14.8T tokens) for factual
- * grounding and IFEval 86.1 for following structured critique schemas.
  */
 const QA_WATERFALL: TierSpec[] = [
   {
-    kind: 'api', name: 'Nemotron 3 Super',
-    factory: () => new DeepInfraApiRunner(NEMOTRON),
-  },
-  {
-    kind: 'api', name: 'DeepSeek-V3-0324',
+    kind: 'api', name: 'deepseek',
     factory: () => new DeepInfraApiRunner(DEEPSEEK_V3),
   },
   {
-    kind: 'api', name: 'Step-3.5-Flash',
+    kind: 'api', name: 'nemotron',
+    factory: () => new DeepInfraApiRunner(NEMOTRON),
+  },
+  {
+    kind: 'api', name: 'step-flash',
     factory: () => new DeepInfraApiRunner(STEP_FLASH),
   },
   {
-    kind: 'api', name: 'Qwen3-32B',
+    kind: 'api', name: 'qwen3-32b',
     factory: () => new DeepInfraApiRunner(QWEN3_32B),
   },
 ];
 
 /**
  * Stage 4 — Executor
- * Goal: cheapest reliable JSON per tool-call turn, lowest latency.
- * Llama-4-Scout leads: confirmed JSON mode, TTFT 0.48s, 144.8 tok/s throughput,
- * 328K context to hold full task history. Qwen3-235B-Instruct backs up at
- * $0.10/M output — cheapest on the platform with no thinking token overhead.
  */
 const EXECUTOR_WATERFALL: TierSpec[] = [
   {
-    kind: 'api', name: 'Llama-4-Scout',
+    kind: 'api', name: 'scout',
     factory: () => new DeepInfraApiRunner(LLAMA4_SCOUT),
   },
   {
-    kind: 'api', name: 'Qwen3-235B-Instruct-2507',
+    kind: 'api', name: 'qwen3',
     factory: () => new DeepInfraApiRunner(QWEN3_235B),
   },
   {
-    kind: 'api', name: 'Qwen3-32B',
+    kind: 'api', name: 'qwen3-32b',
     factory: () => new DeepInfraApiRunner(QWEN3_32B),
   },
   {
-    kind: 'api', name: 'Nemotron 3 Super',
+    kind: 'api', name: 'nemotron',
     factory: () => new DeepInfraApiRunner(NEMOTRON),
   },
 ];
@@ -328,17 +712,23 @@ function resolveEffectiveStage(
 
 function getPolicyDisplayName(entry: ResolvedModelPolicyEntry): string {
   switch (entry.backendKey) {
-    case 'deepinfra:llama-4-scout':
+    case 'deepseek-v4-flash':
+      return 'DeepSeek v4 Flash';
+    case 'deepseek-v4-pro':
+      return 'DeepSeek v4 Pro';
+    case 'scout':
       return 'Llama-4-Scout';
-    case 'deepinfra:qwen3-235b-instruct-2507':
+    case 'qwen3':
       return 'Qwen3-235B-Instruct-2507';
-    case 'deepinfra:step-3.5-flash':
+    case 'step-flash':
       return 'Step-3.5-Flash';
-    case 'deepinfra:nemotron-3-super-120b-a12b':
+    case 'nemotron':
       return 'Nemotron 3 Super';
-    case 'deepinfra:deepseek-v3-0324':
-      return 'DeepSeek-V3-0324';
-    case 'deepinfra:qwen3-32b':
+    case 'deepseek':
+      return 'DeepSeek v4 Pro';
+    case 'deepinfra-deepseek-v3':
+      return 'DeepInfra DeepSeek-V3-0324';
+    case 'qwen3-32b':
       return 'Qwen3-32B';
     default:
       return entry.providerModelId;
@@ -346,6 +736,14 @@ function getPolicyDisplayName(entry: ResolvedModelPolicyEntry): string {
 }
 
 function tierSpecFromPolicyEntry(entry: ResolvedModelPolicyEntry): TierSpec {
+  if (entry.provider === 'deepseek') {
+    return {
+      kind: 'api',
+      name: getPolicyDisplayName(entry),
+      factory: () => new DeepSeekApiRunner(entry.providerModelId),
+    };
+  }
+
   if (entry.provider !== 'deepinfra') {
     throw new Error(
       `Unsupported stage policy provider "${entry.provider}" for backend "${entry.backendKey}".`,
@@ -396,12 +794,156 @@ const SPAWN_ERROR_SIGNALS = [
   'enoent',
 ] as const;
 
+const STRUCTURED_OUTPUT_FAILURE_SIGNALS = [
+  'zod validation failed',
+  'invalid json',
+  'failed to parse api response as json',
+] as const;
+
+const REQUEST_TIMEOUT_SIGNALS = [
+  'request timeout',
+  'aborterror',
+  'aborted',
+] as const;
+
 function isImmediateCascade(err: Error): boolean {
   const msg = err.message.toLowerCase();
   return (
     RATE_LIMIT_SIGNALS.some(s => msg.includes(s)) ||
-    SPAWN_ERROR_SIGNALS.some(s => msg.includes(s))
+    SPAWN_ERROR_SIGNALS.some(s => msg.includes(s)) ||
+    STRUCTURED_OUTPUT_FAILURE_SIGNALS.some(s => msg.includes(s)) ||
+    REQUEST_TIMEOUT_SIGNALS.some(s => msg.includes(s))
   );
+}
+
+export function isStructuredOutputFailure(err: Error): boolean {
+  const msg = err.message.toLowerCase();
+  return STRUCTURED_OUTPUT_FAILURE_SIGNALS.some(s => msg.includes(s));
+}
+
+export interface StructuredOutputRetryPromptOptions {
+  stage?: string;
+  schemaName?: string;
+  shadowHints?: string[];
+}
+
+function inferSchemaNameFromStage(stage: string | undefined, fallback = 'StructuredOutputSchema'): string {
+  switch (stage) {
+    case 'orchestrator':
+      return 'OrchestratorOutputSchema';
+    case 'planning':
+      return 'SwePlanSchema';
+    case 'qa':
+      return 'QaVerdictSchema';
+    case 'executor':
+      return 'ExecutorTurnSchema';
+    default:
+      return fallback;
+  }
+}
+
+function buildStageStructuredOutputGuidance(stage: string | undefined, schemaName: string): string[] {
+  switch (stage) {
+    case 'orchestrator':
+      return [
+        `Schema target: ${schemaName}.`,
+        'If this is not a parallel_swarm task, omit the swarm field entirely.',
+        'Never emit swarm.sub_tasks as an empty array; empty swarm means no swarm field.',
+      ];
+    case 'planning':
+      return [
+        `Schema target: ${schemaName}.`,
+        'Return the complete SWE plan object with every required array present.',
+        'Use [] only for arrays that are allowed to be empty; do not replace arrays with strings or prose.',
+      ];
+    case 'qa':
+      return [
+        `Schema target: ${schemaName}.`,
+        'For PASS, return the exact PASS verdict shape and do not include rejection-only fields.',
+        'For REJECT, include at least one actionable failure with evidence and a concrete fix direction.',
+      ];
+    case 'executor':
+      return [
+        `Schema target: ${schemaName}.`,
+        'Return exactly one executor turn variant: tool_call, completion, or halt.',
+        'For tool_call, include the tool discriminator and only fields valid for that tool.',
+        'For completion or halt, do not mix in tool-call fields.',
+      ];
+    default:
+      return [
+        `Schema target: ${schemaName}.`,
+        'Match the requested schema exactly and keep variant/discriminator fields internally consistent.',
+      ];
+  }
+}
+
+export function buildStructuredOutputRetryPrompt(
+  prompt: string,
+  error: Error,
+  options: StructuredOutputRetryPromptOptions = {},
+): string {
+  const errorSummary = error.message
+    .replace(/\s+/g, ' ')
+    .slice(0, 1200);
+  const schemaName = options.schemaName ?? inferSchemaNameFromStage(options.stage);
+  const stageGuidance = buildStageStructuredOutputGuidance(options.stage, schemaName);
+  const shadowHints = options.shadowHints ?? [];
+  return [
+    prompt,
+    '',
+    '---',
+    'BABEL STRUCTURED OUTPUT RETRY',
+    'Your previous response was rejected by the required JSON schema.',
+    'Return exactly one raw JSON object matching the requested schema.',
+    'Do not omit required arrays or objects. If a required array has no entries, return an empty array unless the schema requires at least one item.',
+    ...stageGuidance,
+    ...(shadowHints.length > 0
+      ? [
+          'Schema shadow hints from previous failures:',
+          ...shadowHints.map((hint, index) => `${index + 1}. ${hint}`),
+        ]
+      : []),
+    'Do not include markdown, prose, comments, or code fences.',
+    `Validation failure: ${errorSummary}`,
+  ].join('\n');
+}
+
+function buildAggregateWaterfallTimeoutError(
+  label: string,
+  timeoutMs: number,
+  startedAtMs: number,
+  phase: string,
+): Error {
+  const elapsedMs = Date.now() - startedAtMs;
+  return new Error(
+    `${AGGREGATE_WATERFALL_TIMEOUT_PREFIX} Aggregate ${label} timeout exceeded after ${elapsedMs}ms ` +
+    `(limit ${timeoutMs}ms) while ${phase}.`,
+  );
+}
+
+function isAggregateWaterfallTimeoutError(error: Error): boolean {
+  return error.message.startsWith(AGGREGATE_WATERFALL_TIMEOUT_PREFIX);
+}
+
+async function raceWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  buildTimeoutError: () => Error,
+): Promise<T> {
+  let timeoutHandle: NodeJS.Timeout | null = null;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(buildTimeoutError()), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
 }
 
 // ─── Internal waterfall runner ────────────────────────────────────────────────
@@ -411,20 +953,153 @@ interface WaterfallRunResult<T> {
   outcome: Omit<WaterfallOutcome, 'stage' | 'ts'>;
 }
 
+function appendSchemaFailureRecoveryIfNeeded(input: {
+  evidence: EvidenceBundle | undefined;
+  pendingEntryIds: string[];
+  label: string;
+  schemaName: string;
+  spec: TierSpec;
+  tier: number;
+  attempt: number;
+  prompt: string;
+  metadata: RunnerInvocationMetadata | null;
+}): SchemaFailureLedgerEntry | null {
+  if (!input.evidence || input.pendingEntryIds.length === 0) return null;
+  return appendSchemaFailureRecovery({
+    evidence: input.evidence,
+    stage: input.label,
+    schemaName: input.schemaName,
+    tierName: input.spec.name,
+    tierIndex: input.spec.originalIndex ?? input.tier,
+    attempt: input.attempt,
+    prompt: input.prompt,
+    metadata: input.metadata,
+    recoveredEntryIds: [...input.pendingEntryIds],
+  });
+}
+
+function cloneInvocationMetadata(
+  metadata: RunnerInvocationMetadata | null | undefined,
+): RunnerInvocationMetadata | null {
+  if (!metadata) {
+    return null;
+  }
+
+  return {
+    provider: metadata.provider,
+    provider_model_id: metadata.provider_model_id,
+    latency_ms: metadata.latency_ms,
+    prompt_tokens: metadata.prompt_tokens,
+    completion_tokens: metadata.completion_tokens,
+    total_tokens: metadata.total_tokens,
+    prompt_cache_hit_tokens: metadata.prompt_cache_hit_tokens ?? null,
+    prompt_cache_miss_tokens: metadata.prompt_cache_miss_tokens ?? null,
+    estimated_cost_usd: metadata.estimated_cost_usd,
+    cost_precision: metadata.cost_precision ?? null,
+    pricing_source_url: metadata.pricing_source_url ?? null,
+    pricing_verified_at: metadata.pricing_verified_at ?? null,
+    input_cost_per_1m: metadata.input_cost_per_1m ?? null,
+    output_cost_per_1m: metadata.output_cost_per_1m ?? null,
+    input_cache_hit_cost_per_1m: metadata.input_cache_hit_cost_per_1m ?? null,
+    input_cache_miss_cost_per_1m: metadata.input_cache_miss_cost_per_1m ?? null,
+    ttft_ms: metadata.ttft_ms ?? null,
+    generation_ms: metadata.generation_ms ?? null,
+    validation_ms: metadata.validation_ms ?? null,
+  };
+}
+
+function getRunnerInvocationMetadata(runner: LlmRunner): RunnerInvocationMetadata | null {
+  return cloneInvocationMetadata(runner.getLastInvocationMetadata?.());
+}
+
+function buildAttemptOutcome(
+  spec: TierSpec,
+  tier: number,
+  attempt: number,
+  succeeded: boolean,
+  metadata: RunnerInvocationMetadata | null,
+  errorSummary: string | null = null,
+  schemaFailureEntryId: string | null = null,
+): WaterfallAttemptOutcome {
+  const canonicalIndex = spec.originalIndex ?? tier;
+  return {
+    tier_name: spec.name,
+    tier_index: canonicalIndex,
+    attempt,
+    succeeded,
+    error_summary: errorSummary,
+    provider: metadata?.provider ?? null,
+    provider_model_id: metadata?.provider_model_id ?? null,
+    latency_ms: metadata?.latency_ms ?? null,
+    prompt_tokens: metadata?.prompt_tokens ?? null,
+    completion_tokens: metadata?.completion_tokens ?? null,
+    total_tokens: metadata?.total_tokens ?? null,
+    prompt_cache_hit_tokens: metadata?.prompt_cache_hit_tokens ?? null,
+    prompt_cache_miss_tokens: metadata?.prompt_cache_miss_tokens ?? null,
+    estimated_cost_usd: metadata?.estimated_cost_usd ?? null,
+    cost_precision: metadata?.cost_precision ?? null,
+    pricing_source_url: metadata?.pricing_source_url ?? null,
+    pricing_verified_at: metadata?.pricing_verified_at ?? null,
+    input_cost_per_1m: metadata?.input_cost_per_1m ?? null,
+    output_cost_per_1m: metadata?.output_cost_per_1m ?? null,
+    input_cache_hit_cost_per_1m: metadata?.input_cache_hit_cost_per_1m ?? null,
+    input_cache_miss_cost_per_1m: metadata?.input_cache_miss_cost_per_1m ?? null,
+    schema_failure_entry_id: schemaFailureEntryId,
+    ttft_ms: metadata?.ttft_ms ?? null,
+    generation_ms: metadata?.generation_ms ?? null,
+    validation_ms: metadata?.validation_ms ?? null,
+  };
+}
+
+function sumAttemptMetric(
+  attempts: WaterfallAttemptOutcome[],
+  selector: (attempt: WaterfallAttemptOutcome) => number | null | undefined,
+): number | null {
+  let total = 0;
+  let seen = false;
+  for (const attempt of attempts) {
+    const value = selector(attempt);
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      total += value;
+      seen = true;
+    }
+  }
+  return seen ? total : null;
+}
+
 async function runWaterfall<T>(
   label:       string,
+  schemaName:  string,
   waterfall:   TierSpec[],
   prompt:      string,
-  schema:      ZodType<T, ZodTypeDef, unknown>,
+  schema:      ZodType<T, unknown>,
   maxAttempts: number,
+  aggregateTimeoutMs: number,
   evidence:    EvidenceBundle | undefined,
+  onChunk?:    (chunk: string) => void,
+  eventBus?:   BabelEventBus,
 ): Promise<WaterfallRunResult<T>> {
+  const verboseFallbackLogs = process.env['BABEL_VERBOSE_WATERFALLS'] === 'true' || !evidence;
+  const startedAtMs = Date.now();
   let lastError:   Error    | null = null;
   const tiersSkipped: string[]    = [];
+  const attemptsDetail: WaterfallAttemptOutcome[] = [];
+  const schemaFailureEntryIds: string[] = [];
+  const pendingSchemaFailureEntryIds: string[] = [];
+  let lastFailureMetadata: RunnerInvocationMetadata | null = null;
+
+  const ensureTimeRemaining = (phase: string): number => {
+    const remainingMs = aggregateTimeoutMs - (Date.now() - startedAtMs);
+    if (remainingMs <= 0) {
+      throw buildAggregateWaterfallTimeoutError(label, aggregateTimeoutMs, startedAtMs, phase);
+    }
+    return remainingMs;
+  };
 
   for (let tier = 0; tier < waterfall.length; tier++) {
     const spec = waterfall[tier]!;
     const next = waterfall[tier + 1];
+    ensureTimeRemaining(`starting tier ${spec.name}`);
 
     // ── Waterfall halt gate ────────────────────────────────────────────────
     // BABEL_DISABLE_API_FALLBACK=true halts the pipeline after the first tier
@@ -444,58 +1119,203 @@ async function runWaterfall<T>(
       lastError = err instanceof Error ? err : new Error(String(err));
       tiersSkipped.push(spec.name);
       if (next) {
-        console.warn(
-          `[babel:${label}] ${spec.name} unavailable — ${lastError.message.slice(0, 120)}`,
-        );
-        console.warn(`[babel:${label}] Cascading to ${next.name}...`);
+        if (eventBus) {
+          eventBus.logLine(`[babel:${label}] Using backup route: cascading to ${next.name}`);
+        }
+        if (verboseFallbackLogs) {
+          console.warn(
+            `[babel:${label}] ${spec.name} unavailable — ${lastError.message.slice(0, 120)}`,
+          );
+          console.warn(`[babel:${label}] Cascading to ${next.name}...`);
+        }
       }
       continue;
     }
 
     // ── Attempt loop ───────────────────────────────────────────────────────
     let cascadeFromTier = false;
+    let promptForTier = prompt;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        const result = await runner.execute(prompt, schema);
+        const remainingMs = ensureTimeRemaining(`running tier ${spec.name} attempt ${attempt}`);
+
+        const runnerCallbacks: RunnerCallbacks = {
+          ...(onChunk ? { onChunk } : {}),
+          onProgress: (event: RunnerProgressEvent) => {
+            if (eventBus) {
+              let logMsg = `[babel:${label}] ${event.state}`;
+              if (event.details) {
+                logMsg += `: ${event.details}`;
+              }
+              eventBus.logLine(logMsg);
+            }
+          },
+        };
+
+        const result = await raceWithTimeout(
+          runner.execute(promptForTier, schema, runnerCallbacks),
+          remainingMs,
+          () => buildAggregateWaterfallTimeoutError(
+              label,
+              aggregateTimeoutMs,
+              startedAtMs,
+              `running tier ${spec.name} attempt ${attempt}`,
+            ),
+        );
+        const invocationMetadata = getRunnerInvocationMetadata(runner);
+
+        if (invocationMetadata?.provider_model_id && invocationMetadata.prompt_tokens !== null && invocationMetadata.completion_tokens !== null) {
+          globalCostTracker.trackUsage(
+            invocationMetadata.provider_model_id,
+            invocationMetadata.prompt_tokens,
+            invocationMetadata.completion_tokens
+          );
+        }
+
+        const recoveryEntry = appendSchemaFailureRecoveryIfNeeded({
+          evidence,
+          pendingEntryIds: pendingSchemaFailureEntryIds,
+          label,
+          schemaName,
+          spec,
+          tier,
+          attempt,
+          prompt: promptForTier,
+          metadata: invocationMetadata,
+        });
+        if (recoveryEntry) {
+          schemaFailureEntryIds.push(recoveryEntry.entry_id);
+          pendingSchemaFailureEntryIds.length = 0;
+        }
+
+        attemptsDetail.push(
+          buildAttemptOutcome(
+            spec,
+            tier,
+            attempt,
+            true,
+            invocationMetadata,
+            null,
+            recoveryEntry?.entry_id ?? null,
+          ),
+        );
 
         // ── Build and emit a structured success log ──────────────────────
         const fallbacks = tiersSkipped.length;
-        const cascadeReason = lastError?.message.slice(0, 100) ?? 'none';
 
-        let suffix: string;
-        if (fallbacks === 0 && attempt === 1) {
-          suffix = '';
-        } else if (fallbacks > 0 && attempt === 1) {
-          suffix =
-            ` — ${fallbacks} fallback${fallbacks > 1 ? 's' : ''}` +
-            ` (last: ${cascadeReason})`;
-        } else if (fallbacks === 0) {
-          suffix = ` (attempt ${attempt})`;
-        } else {
-          suffix =
-            ` (attempt ${attempt}, ${fallbacks} fallback${fallbacks > 1 ? 's' : ''}` +
-            ` — last: ${cascadeReason})`;
+        // Suppress provider/model names in plain human logs unless fallback is triggered,
+        // where we append (Model fallback: backup route used).
+        let logMsg = `[babel:${label}] ✓ success`;
+        if (fallbacks > 0) {
+          logMsg += ` (Model fallback: backup route used)`;
+        } else if (attempt > 1) {
+          logMsg += ` (attempt ${attempt})`;
         }
+        console.log(logMsg);
 
-        // Use the canonical slot if available — dynamic routing can change the
-        // runtime loop counter but must not corrupt telemetry semantics.
+        const cascadeReason = lastError?.message.slice(0, 100) ?? 'none';
         const canonicalIndex = spec.originalIndex ?? tier;
-        console.log(`[babel:${label}] ✓ tier ${canonicalIndex + 1}: ${spec.name}${suffix}`);
-
         return {
           result,
           outcome: {
             tier_succeeded: spec.name,
             tier_index:     canonicalIndex,
             attempts:       attempt,
-            tiers_skipped:  tiersSkipped,
+            tiers_skipped:  [...tiersSkipped],
             cascade_reason: cascadeReason,
+            attempts_detail: attemptsDetail,
+            total_latency_ms: sumAttemptMetric(attemptsDetail, entry => entry.latency_ms),
+            total_prompt_tokens: sumAttemptMetric(attemptsDetail, entry => entry.prompt_tokens),
+            total_completion_tokens: sumAttemptMetric(attemptsDetail, entry => entry.completion_tokens),
+            total_tokens: sumAttemptMetric(attemptsDetail, entry => entry.total_tokens),
+            total_estimated_cost_usd: sumAttemptMetric(attemptsDetail, entry => entry.estimated_cost_usd),
+            schema_failure_entry_ids: schemaFailureEntryIds,
           },
         };
 
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
+        if (isAggregateWaterfallTimeoutError(lastError)) {
+          throw lastError;
+        }
+        const invocationMetadata = getRunnerInvocationMetadata(runner);
+        lastFailureMetadata = invocationMetadata;
+        let schemaFailureEntryId: string | null = null;
+        let schemaRetryPrompt: string | null = null;
+        if (isStructuredOutputFailure(lastError)) {
+          const willRetry = attempt < maxAttempts;
+          const shadowHints = evidence
+            ? readSchemaShadowHints({
+                evidence,
+                stage: label,
+                schemaName,
+              })
+            : [];
+          schemaRetryPrompt = willRetry
+            ? buildStructuredOutputRetryPrompt(prompt, lastError, {
+                stage: label,
+                schemaName,
+                shadowHints,
+              })
+            : null;
+          if (evidence) {
+            const entry = appendSchemaFailureEntry({
+              evidence,
+              stage: label,
+              schemaName,
+              tierName: spec.name,
+              tierIndex: spec.originalIndex ?? tier,
+              attempt,
+              prompt: promptForTier,
+              error: lastError,
+              metadata: invocationMetadata,
+              retryOutcome: willRetry ? 'pending_retry' : 'cascaded',
+              retryPrompt: schemaRetryPrompt,
+            });
+            schemaFailureEntryId = entry.entry_id;
+            schemaFailureEntryIds.push(entry.entry_id);
+            pendingSchemaFailureEntryIds.push(entry.entry_id);
+          }
+        }
+        attemptsDetail.push(
+          buildAttemptOutcome(
+            spec,
+            tier,
+            attempt,
+            false,
+            invocationMetadata,
+            lastError.message.slice(0, 200),
+            schemaFailureEntryId,
+          ),
+        );
+
+        if (isStructuredOutputFailure(lastError) && attempt < maxAttempts) {
+          promptForTier = schemaRetryPrompt ?? buildStructuredOutputRetryPrompt(prompt, lastError, {
+            stage: label,
+            schemaName,
+          });
+          const backoffMs = 750 * attempt;
+          const remainingBeforeBackoff = ensureTimeRemaining(
+            `waiting to retry tier ${spec.name} after schema validation failure`,
+          );
+          if (remainingBeforeBackoff <= backoffMs) {
+            throw buildAggregateWaterfallTimeoutError(
+              label,
+              aggregateTimeoutMs,
+              startedAtMs,
+              `waiting to retry tier ${spec.name} after schema validation failure`,
+            );
+          }
+          if (verboseFallbackLogs) {
+            console.warn(
+              `[babel:${label}] ${spec.name} returned schema-invalid JSON; retrying once with a schema-focused prompt.\n` +
+              `  Reason: ${lastError.message.slice(0, 160)}`,
+            );
+          }
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+          continue;
+        }
 
         if (isImmediateCascade(lastError)) {
           cascadeFromTier = true;
@@ -503,10 +1323,25 @@ async function runWaterfall<T>(
         }
 
         if (attempt < maxAttempts) {
-          console.warn(
-            `[babel:${label}] ${spec.name} attempt ${attempt}/${maxAttempts} failed — retrying.\n` +
-            `  Reason: ${lastError.message.slice(0, 160)}`,
+          const backoffMs = 1500 * attempt;
+          const remainingBeforeBackoff = ensureTimeRemaining(
+            `waiting to retry tier ${spec.name} after attempt ${attempt}`,
           );
+          if (remainingBeforeBackoff <= backoffMs) {
+            throw buildAggregateWaterfallTimeoutError(
+              label,
+              aggregateTimeoutMs,
+              startedAtMs,
+              `waiting to retry tier ${spec.name} after attempt ${attempt}`,
+            );
+          }
+          if (verboseFallbackLogs) {
+            console.warn(
+              `[babel:${label}] ${spec.name} attempt ${attempt}/${maxAttempts} failed — retrying in ${backoffMs}ms.\n` +
+              `  Reason: ${lastError.message.slice(0, 160)}`,
+            );
+          }
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
         } else {
           cascadeFromTier = true;
         }
@@ -516,15 +1351,33 @@ async function runWaterfall<T>(
     if (cascadeFromTier) {
       tiersSkipped.push(spec.name);
       if (next) {
-        console.warn(`[babel:${label}] ${spec.name} failed. Cascading to ${next.name}...`);
+        if (eventBus) {
+          eventBus.logLine(`[babel:${label}] Using backup route: cascading to ${next.name}`);
+        }
+        if (verboseFallbackLogs) {
+          console.warn(`[babel:${label}] ${spec.name} failed. Cascading to ${next.name}...`);
+        }
       }
     }
   }
 
-  throw new Error(
+  const finalMessage =
     `All ${waterfall.length} runner(s) in the waterfall failed. ` +
-    `Last error: ${lastError?.message ?? 'unknown'}`,
-  );
+    `Last error: ${lastError?.message ?? 'unknown'}`;
+  if (evidence && schemaFailureEntryIds.length > 0) {
+    const terminalEntry = appendSchemaFailureTerminal({
+      evidence,
+      stage: label,
+      schemaName,
+      prompt,
+      metadata: lastFailureMetadata,
+      relatedEntryIds: schemaFailureEntryIds,
+      retryOutcome: 'fatal',
+      errorMessage: finalMessage,
+    });
+    schemaFailureEntryIds.push(terminalEntry.entry_id);
+  }
+  throw new Error(finalMessage);
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -547,14 +1400,107 @@ async function runWaterfall<T>(
  */
 export async function runWithFallback<T>(
   prompt:  string,
-  schema:  ZodType<T, ZodTypeDef, unknown>,
+  schema:  ZodType<T, unknown>,
   options: RunOptions = {},
 ): Promise<T> {
   const maxAttempts    = options.maxCliAttempts ?? 2;
   const evidence       = options.evidence;
-  const waterfall      = resolveWaterfall(options.stage, options.mode);
+  let waterfall        = resolveWaterfall(options.stage, options.mode);
+  if (options.fallbackPolicy === 'primary_only') {
+    waterfall = waterfall.slice(0, 1);
+  }
   const label          = options.stage ?? options.mode ?? 'unknown';
   const effectiveStage = resolveEffectiveStage(options.stage, options.mode);
+  const schemaName     = options.schemaName ?? inferSchemaNameFromStage(label);
+  const aggregateTimeoutMs = resolveAggregateWaterfallTimeoutMs();
+  const deterministicReliabilityProofResponse =
+    buildReliabilityRepairProofExecutorResponse(prompt, options);
+  const pipelineV9OfflineFixtureResponse =
+    buildPipelineV9OfflineFixtureResponse(prompt, options);
+
+  if (pipelineV9OfflineFixtureResponse !== null) {
+    const result = schema.parse(pipelineV9OfflineFixtureResponse);
+    if (evidence) {
+      evidence.writeDebugFile(
+        `debug_${label}_pipeline_v9_offline_response.json`,
+        `${JSON.stringify(pipelineV9OfflineFixtureResponse, null, 2)}\n`,
+      );
+      evidence.appendWaterfallLog({
+        stage: label,
+        tier_succeeded: 'pipeline-v9-offline-fixture',
+        tier_index: -1,
+        attempts: 1,
+        tiers_skipped: [],
+        cascade_reason: 'none',
+        ts: new Date().toISOString(),
+        attempts_detail: [
+          {
+            tier_name: 'pipeline-v9-offline-fixture',
+            tier_index: -1,
+            attempt: 1,
+            succeeded: true,
+            error_summary: null,
+            provider: 'local-test-double',
+            provider_model_id: 'babel-pipeline-v9-offline',
+            latency_ms: 0,
+            prompt_tokens: null,
+            completion_tokens: null,
+            total_tokens: null,
+            estimated_cost_usd: null,
+          },
+        ],
+        total_latency_ms: 0,
+        total_prompt_tokens: null,
+        total_completion_tokens: null,
+        total_tokens: null,
+        total_estimated_cost_usd: null,
+      } satisfies WaterfallOutcome);
+    }
+    console.log(`[babel:${label}] ✓ pipeline v9 offline fixture response`);
+    return result;
+  }
+
+  if (deterministicReliabilityProofResponse !== null) {
+    const result = schema.parse(deterministicReliabilityProofResponse);
+    if (evidence) {
+      evidence.writeDebugFile(
+        `debug_${label}_deterministic_repair_proof_response.json`,
+        `${JSON.stringify(deterministicReliabilityProofResponse, null, 2)}\n`,
+      );
+      evidence.appendWaterfallLog({
+        stage: label,
+        tier_succeeded: 'deterministic-repair-proof-model-boundary',
+        tier_index: -1,
+        attempts: 1,
+        tiers_skipped: [],
+        cascade_reason: 'none',
+        ts: new Date().toISOString(),
+        attempts_detail: [
+          {
+            tier_name: 'deterministic-repair-proof-model-boundary',
+            tier_index: -1,
+            attempt: 1,
+            succeeded: true,
+            error_summary: null,
+            provider: 'local-test-double',
+            provider_model_id: 'babel-reliability-repair-proof',
+            latency_ms: 0,
+            prompt_tokens: null,
+            completion_tokens: null,
+            total_tokens: null,
+            estimated_cost_usd: null,
+          },
+        ],
+        total_latency_ms: 0,
+        total_prompt_tokens: null,
+        total_completion_tokens: null,
+        total_tokens: null,
+        total_estimated_cost_usd: null,
+      } satisfies WaterfallOutcome);
+    }
+    console.log(`[babel:${label}] ✓ deterministic repair proof model-boundary response`);
+    return result;
+  }
 
   // ── Dynamic Routing v1 ────────────────────────────────────────────────────
   // Explicit `startTierIndex` from the caller wins; otherwise consult the
@@ -592,18 +1538,71 @@ export async function runWithFallback<T>(
   const stampedWaterfall = waterfall.map((spec, i) => ({ ...spec, originalIndex: i }));
   const orderedWaterfall = reorderWaterfallByStartIndex(stampedWaterfall, startTierIndex);
 
-  const { result, outcome } = await runWaterfall(
-    label, orderedWaterfall, prompt, schema, maxAttempts, evidence,
+  const waterfallResult = await runWaterfall(
+    label,
+    schemaName,
+    orderedWaterfall,
+    prompt,
+    schema,
+    maxAttempts,
+    aggregateTimeoutMs,
+    options.evidence,
+    options.onChunk,
+    options.eventBus,
   );
 
   // Record to evidence bundle for 05_waterfall_telemetry.json.
   if (evidence) {
     evidence.appendWaterfallLog({
-      ...outcome,
+      ...waterfallResult.outcome,
       stage: label,
       ts:    new Date().toISOString(),
     } satisfies WaterfallOutcome);
   }
 
-  return result;
+  return waterfallResult.result as T;
+}
+
+export function runWithPrimaryOnlyFallback<T>(
+  prompt: string,
+  schema: ZodType<T, unknown>,
+  options: Omit<RunOptions, 'fallbackPolicy'> = {},
+): Promise<T> {
+  return runWithFallback(prompt, schema, {
+    ...options,
+    fallbackPolicy: 'primary_only',
+  });
+}
+
+export async function runWaterfallForSchemaFailureTest<T>(input: {
+  prompt: string;
+  schema: ZodType<T, unknown>;
+  stage: string;
+  schemaName: string;
+  evidence: EvidenceBundle;
+  maxAttempts?: number;
+  tiers: Array<{ name: string; runner: LlmRunner }>;
+}): Promise<T> {
+  const waterfall = input.tiers.map((tier, index): TierSpec => ({
+    kind: 'api',
+    name: tier.name,
+    factory: () => tier.runner,
+    originalIndex: index,
+  }));
+  const waterfallResult = await runWaterfall(
+    input.stage,
+    input.schemaName,
+    waterfall,
+    input.prompt,
+    input.schema,
+    input.maxAttempts ?? 2,
+    resolveAggregateWaterfallTimeoutMs(),
+    input.evidence,
+  );
+  input.evidence.appendWaterfallLog({
+    ...waterfallResult.outcome,
+    stage: input.stage,
+    ts: new Date().toISOString(),
+  } satisfies WaterfallOutcome);
+  return waterfallResult.result;
 }

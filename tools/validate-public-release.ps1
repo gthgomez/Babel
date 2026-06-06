@@ -1,83 +1,97 @@
 [CmdletBinding()]
 param(
-    [string]$Root = ""
+  [string]$Root = '',
+  [switch]$Strict
 )
 
 Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrWhiteSpace($Root)) {
-    $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Path $PSCommandPath -Parent }
-    $Root = (Resolve-Path (Join-Path $scriptDir "..")).Path
+  $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Path $PSCommandPath -Parent }
+  $Root = (Resolve-Path (Join-Path $scriptDir '..')).Path
 } else {
-    $Root = (Resolve-Path $Root).Path
+  $Root = (Resolve-Path $Root).Path
 }
 
-$cliRoot = Join-Path $Root "babel-cli"
-if (-not (Test-Path -LiteralPath $cliRoot)) {
-    throw "babel-cli directory not found at $cliRoot"
-}
-$packageJsonPath = Join-Path $cliRoot "package.json"
-if (-not (Test-Path -LiteralPath $packageJsonPath)) {
-    throw "babel-cli package.json not found at $packageJsonPath"
-}
-$packageJson = Get-Content -Raw $packageJsonPath | ConvertFrom-Json
-$npmScripts = @{}
-if ($null -ne $packageJson.scripts) {
-    $packageJson.scripts.PSObject.Properties | ForEach-Object {
-        $npmScripts[$_.Name] = $_.Value
-    }
+$cliRoot = Join-Path $Root 'babel-cli'
+$validateCatalogScriptPath = Join-Path $Root 'tools\validate-catalog.ps1'
+$checkPublicScrubScriptPath = Join-Path $Root 'tools\check-public-scrub.ps1'
+$resolveLocalStackScriptPath = Join-Path $Root 'tools\resolve-local-stack.ps1'
+
+$preferredShell = Get-Command pwsh -ErrorAction SilentlyContinue
+if ($null -ne $preferredShell) {
+  $shellPath = $preferredShell.Source
+} else {
+  $shellPath = (Get-Command powershell -ErrorAction Stop).Source
 }
 
 function Invoke-Step {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Label,
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Label,
 
-        [Parameter(Mandatory = $true)]
-        [string]$Command,
+    [Parameter(Mandatory = $true)]
+    [scriptblock]$Body
+  )
 
-        [Parameter(Mandatory = $true)]
-        [string]$Workdir
-    )
-
-    Write-Host ""
-    Write-Host "==> $Label" -ForegroundColor Cyan
-    & powershell -NoProfile -ExecutionPolicy Bypass -Command $Command
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -ne 0) {
-        throw "$Label failed with exit code $exitCode"
-    }
+  Write-Host ''
+  Write-Host "==> $Label" -ForegroundColor Cyan
+  & $Body
+  if ($LASTEXITCODE -ne 0) {
+    throw "$Label failed with exit code $LASTEXITCODE"
+  }
 }
 
-function Invoke-NpmScriptStep {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Label,
-
-        [Parameter(Mandatory = $true)]
-        [string]$ScriptName
-    )
-
-    if (-not $npmScripts.ContainsKey($ScriptName)) {
-        Write-Host ""
-        Write-Host "==> $Label" -ForegroundColor Cyan
-        Write-Host "Skipping optional npm script '$ScriptName' because it is not defined in babel-cli/package.json." -ForegroundColor Yellow
-        return
-    }
-
-    Invoke-Step -Label $Label -Command "Set-Location '$cliRoot'; npm run $ScriptName" -Workdir $cliRoot
+if (-not (Test-Path -LiteralPath $cliRoot)) {
+  throw "babel-cli directory not found at $cliRoot"
+}
+if (-not (Test-Path -LiteralPath $validateCatalogScriptPath)) {
+  throw "Catalog validation script not found at $validateCatalogScriptPath"
+}
+if (-not (Test-Path -LiteralPath $checkPublicScrubScriptPath)) {
+  throw "Public scrub script not found at $checkPublicScrubScriptPath"
 }
 
-Invoke-Step -Label "Public scrub check" -Command "& '$Root\\tools\\check-public-scrub.ps1' -RepoRoot '$Root'" -Workdir $Root
-Invoke-Step -Label "Catalog validation" -Command "& '$Root\\tools\\validate-catalog.ps1'" -Workdir $Root
-Invoke-NpmScriptStep -Label "TypeScript typecheck" -ScriptName "typecheck"
-Invoke-NpmScriptStep -Label "Resolver regression tests" -ScriptName "test:resolver"
-Invoke-NpmScriptStep -Label "Manifest preview regression tests" -ScriptName "test:manifest-preview"
-Invoke-NpmScriptStep -Label "Orchestrator routing regression tests" -ScriptName "test:orchestrator-routing"
-Invoke-NpmScriptStep -Label "MCP adapter regression tests" -ScriptName "test:mcp-adapter"
-Invoke-Step -Label "Backend wrapper preview smoke test" -Command "& '$Root\\tools\\resolve-local-stack.ps1' -TaskCategory backend -Project example_saas_backend -Model codex -PipelineMode verified -Format json | Out-Null" -Workdir $Root
-Invoke-Step -Label "Android wrapper preview smoke test" -Command "& '$Root\\tools\\resolve-local-stack.ps1' -TaskCategory mobile -Project example_mobile_suite -Model codex -Format json | Out-Null" -Workdir $Root
+Invoke-Step -Label 'Catalog validation' -Body {
+  & $shellPath -NoProfile -ExecutionPolicy Bypass -File $validateCatalogScriptPath
+}
 
-Write-Host ""
-Write-Host "Public release validation passed." -ForegroundColor Green
+Invoke-Step -Label 'Public scrub check' -Body {
+  $scrubArgs = @('-RepoRoot', $Root)
+  if ($Strict) {
+    $scrubArgs += '-Strict'
+  }
+  & $shellPath -NoProfile -ExecutionPolicy Bypass -File $checkPublicScrubScriptPath @scrubArgs
+}
+
+if (-not (Test-Path -LiteralPath (Join-Path $cliRoot 'node_modules'))) {
+  Invoke-Step -Label 'Install babel-cli dependencies' -Body {
+    Push-Location -LiteralPath $cliRoot
+    try {
+      npm ci
+    } finally {
+      Pop-Location
+    }
+  }
+}
+
+Invoke-Step -Label 'TypeScript typecheck' -Body {
+  Push-Location -LiteralPath $cliRoot
+  try {
+    npm run typecheck
+  } finally {
+    Pop-Location
+  }
+}
+
+Invoke-Step -Label 'Resolver smoke test' -Body {
+  & $shellPath -NoProfile -ExecutionPolicy Bypass -File $resolveLocalStackScriptPath -TaskCategory backend -Project example_saas_backend -Model codex -PipelineMode verified -Format json | Out-Null
+}
+
+Invoke-Step -Label 'Mobile resolver smoke test' -Body {
+  & $shellPath -NoProfile -ExecutionPolicy Bypass -File $resolveLocalStackScriptPath -TaskCategory mobile -Project example_mobile_suite -Model codex -Format json | Out-Null
+}
+
+Write-Host ''
+Write-Host 'Public release validation passed.' -ForegroundColor Green

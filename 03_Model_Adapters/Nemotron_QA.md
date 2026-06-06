@@ -7,12 +7,24 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
 -->
 
-# Adapter: Nemotron — QA Pipeline Variant (v1.0)
+# Adapter: Nemotron — QA Pipeline Variant (v2.0)
 
 **Status:** ACTIVE
-**Target Model:** NVIDIA Nemotron (all variants)
+**Target Model:** NVIDIA `NVIDIA-Nemotron-3-Super-120B-A12B` (runtime policy ID; provider quantization may vary)
 **Pipeline Position:** Loaded alongside `pipeline_qa_reviewer`. Not a general-purpose adapter.
 **Layer:** 03_Model_Adapters
+**Contract Anchor:** `00_System_Router/Babel_Runtime_Contracts-v1.0.md`
+**Last Verified:** 2026-04-25
+
+> **Version note:** Babel runtime policy currently pins `nemotron` to
+> `nvidia/NVIDIA-Nemotron-3-Super-120B-A12B`. Do not silently fall back to the older
+> `Llama-3_3-Nemotron-Super-49B` family. If the runtime policy changes, update this adapter and
+> re-run the QA regression suite.
+>
+> **Reasoning mode:** Nemotron 3 Super reasoning is checkpoint-template specific.
+> - Use the provider/runtime chat-template control (`enable_thinking=True/False`) when available.
+> - Do not use the older 49B `/no_think` system-prompt toggle for this checkpoint.
+> - For Nemotron 3 Super, use `temperature: 1.0` and `top_p: 0.95` unless runtime policy overrides them.
 
 **Core Tuning Insight:** Nemotron's primary failure modes in the Babel QA pipeline are output format
 violations — float confidence values, missing required JSON fields, and prose contamination around
@@ -99,18 +111,17 @@ finding is `3.5` in your internal assessment → output `3`.
 
 ---
 
-## 3. COMMON FAILURE MODES TO AVOID
+## 3. KNOWN FAILURE MODES
 
 These are the specific output errors observed from Nemotron in this pipeline:
 
-| Error | Incorrect | Correct |
-|-------|-----------|---------|
-| Float confidence | `"overall_confidence": 4.5` | `"overall_confidence": 4` |
-| Missing plan_version | `{}` (field absent) | `"plan_version": "v2"` |
-| Null failures on PASS | `"failures": null` | `"failures": []` |
-| Omitted failure_count | `{}` (field absent) | `"failure_count": 0` |
-| Prose before JSON | `"My review:\n{...}"` | `{...}` |
-| Verdict with case variation | `"verdict": "pass"` | `"verdict": "PASS"` |
+| Failure | Symptom | Mitigation |
+|---------|---------|------------|
+| Float confidence | Emits `"overall_confidence": 4.5` or another decimal | Round down to an integer from `1` to `5` before output |
+| Missing required fields | Omits `plan_version`, `failures`, or `failure_count` | Populate every required field; use zero values on PASS |
+| Null schema values | Emits `"failures": null` or nullable required fields | Replace `null` with `[]`, `""`, or `0` according to field type |
+| Prose contamination | Adds text before `{` or after `}` | Output exactly one JSON object and nothing else |
+| Verdict casing drift | Emits `"pass"` or `"Pass"` | Emit exactly `"PASS"` or `"REJECT"` |
 
 ---
 

@@ -7,9 +7,32 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
 -->
 
-**OLS v7-Codex — Balanced Execution Variant**
+# Adapter: DeepSeek Balanced — Standard Practitioner Variant (v1.2)
 
-Codex adapter for multi-file refactors, frontend work, and architecture-sensitive edits.
+**Status:** ACTIVE
+**Target Model:** `deepseek-ai/DeepSeek-V3-0324` (configured standard-tier coding and QA lane)
+**Pipeline Position:** Loaded for Planning, QA, and multi-file execution turns.
+**Layer:** 03_Model_Adapters
+**Contract Anchor:** `00_System_Router/Babel_Runtime_Contracts-v1.0.md`
+**Last Verified:** 2026-05-04
+
+> **Single-model scope:** This adapter targets DeepSeek-V3-0324 specifically. It is not an
+> OpenAI Codex model adapter. Qwen3-Instruct-2507 uses `Qwen_Thinking.md`. This adapter is
+> for the Babel-local DeepSeek standard-tier lane only.
+>
+> **JSON format enforcement:** For structured output, set
+> `response_format: {type: "json_object"}` on the API call and explicitly instruct the model to
+> produce JSON in the system or user prompt. For production schemas, prefer DeepInfra
+> `json_schema` where runtime support is enabled.
+>
+> **Few-shot best practice:** For multi-file tasks with complex output shapes, include one
+> clean example in the prompt. DeepSeek V3 replicates examples with high fidelity — provide a
+> correct example to anchor format compliance.
+
+OLS v7 — DeepSeek Balanced Execution Variant
+
+Optimized for multi-file refactors, frontend work, and architecture-sensitive edits.
+
 
 ## Core Behavior
 
@@ -76,3 +99,12 @@ Rules:
    If the change set is larger than the stated target, stop and reduce it.
 4. **If the whole file was re-read and will be re-written, diff it mentally first.** If more than the
    target changed, trim back to only the target change.
+
+## KNOWN FAILURE MODES
+
+| Failure | Symptom | Mitigation |
+|---------|---------|------------|
+| Example over-copying | Replicates few-shot field values instead of only the format | Use neutral examples and explicitly mark sample values as placeholders |
+| JSON wrapper drift | Emits markdown fences or prose around JSON | Set `response_format` and instruct "JSON object only, no markdown" |
+| Over-scoped edits | Turns a targeted change into a broader cleanup | Apply the Targeted-Change Scope Gate before writing |
+| Assumption fill-in | Plans against files or contracts not yet inspected | Trigger the Visibility Rule and request or inspect the missing artifact |

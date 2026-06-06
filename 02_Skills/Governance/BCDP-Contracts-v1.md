@@ -13,6 +13,13 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Status:** Active
 **Pairs with:** `domain_swe_backend`, `domain_swe_frontend`, `domain_devops`
 
+## Package bridge
+
+- **Canonical package:** `skills/bcdp-contracts/` (`SKILL.md`, `skill.yaml`, `contracts/`, `examples/`, `tests/`)
+- **Catalog id:** `skill_bcdp_contracts`
+- **This file:** Babel prompt routing and layer behavior only
+- Do not duplicate schemas or examples here; use the package skill for I/O contracts and fixtures
+
 ---
 
 ## Purpose

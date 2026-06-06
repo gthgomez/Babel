@@ -10,19 +10,20 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 # Skill: Supabase & Postgres (v1.0)
 **Category:** Database
 **Status:** Active
+**Last Verified:** 2026-04-25
 
 ## Relational Truth: Postgres
 - **Single Source of Truth:** Supabase/PostgreSQL is the master record.
-- **Immutable Migrations:** All schema changes must use SQL migration files in `supabase/migrations/`.
-- **Naming:** Snake_case for tables and columns. Plural for tables.
+- **Declarative Schema**: Prefer schema files in `supabase/schemas/` plus generated migrations. Use `supabase db diff -f <migration_name>` to generate migrations, review the SQL, then apply with `supabase migration up` locally and `supabase db push --dry-run` before remote deployment.
+- **Naming**: `snake_case` for tables and columns. Plural for tables (e.g., `audit_logs`).
 
 ## Security: Row Level Security (RLS)
-- **RLS Mandatory:** Enabled on every table.
-- **Policies:** Explicit policies for `anon`, `authenticated`, and `service_role`.
-- **JWT Context:** Use `auth.uid()` for user-level isolation.
-- **Privileged Writes:** Never allow client-side privileged writes. Use Edge Functions with `service_role` if necessary.
+- **RLS Mandatory**: Enabled on every table. Default to `DENY ALL` if no policy exists.
+- **Policy Granularity**: Separate policies for `SELECT`, `INSERT`, `UPDATE`, and `DELETE`.
+- **JWT Context**: Use `auth.uid()` or custom JWT claims via `auth.jwt()`.
+- **Security Definer Functions**: Use `SECURITY DEFINER` only when necessary to bypass RLS for specific logic (e.g., auto-creating profiles on signup). Set `search_path = public`.
 
-## Performance: Set-Based Logic
-- **Efficient Queries:** Pushed to the DB where possible.
-- **RLS Performance:** Avoid complex joins in RLS policies if they can be simplified.
-- **Compute Placement:** Data-heavy logic should reside in PostgreSQL functions.
+## Client Resiliency (2026)
+- **Automatic Retries**: Leverage built-in exponential backoff in the Supabase JS/TS client for transient network/DB errors.
+- **Realtime Invariants**: Ensure every table has a primary key and REPLICA IDENTITY FULL if using Realtime filters.
+- **Stripe Data Access**: Use Supabase's official Stripe Sync Engine or Stripe FDW/wrapper only after verifying project availability and credential storage. Stripe foreign tables are not webhook substitutes for event-driven entitlement changes.

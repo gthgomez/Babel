@@ -12,6 +12,13 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Status:** Active
 **Activation:** Load when a repo is already dirty before release work, when the user asks what should or should not be committed, or when many unrelated changed files must be separated into commit buckets versus no-commit local state.
 
+## Package bridge
+
+- **Canonical package:** `skills/dirty-worktree-triage/` (`SKILL.md`, `skill.yaml`, `contracts/`, `examples/`, `tests/`)
+- **Catalog id:** `skill_dirty_worktree_triage`
+- **This file:** Babel prompt routing and layer behavior only
+- Do not duplicate schemas or examples here; use the package skill for I/O contracts and fixtures
+
 ---
 
 ## Purpose

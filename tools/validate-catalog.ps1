@@ -22,10 +22,36 @@ function New-EntryObject {
         HasTokenBudget  = $false
         TokenBudget     = $null
         TokenBudgetLine = $null
+        KeyLines        = @{}
+        DuplicateKeys   = New-Object System.Collections.Generic.List[object]
         Dependencies    = New-Object System.Collections.Generic.List[string]
         Conflicts       = New-Object System.Collections.Generic.List[string]
         DefaultSkillIds = New-Object System.Collections.Generic.List[string]
     }
+}
+
+function Register-EntryKey {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Entry,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Key,
+
+        [Parameter(Mandatory = $true)]
+        [int]$Line
+    )
+
+    if ($Entry.KeyLines.ContainsKey($Key)) {
+        $Entry.DuplicateKeys.Add([PSCustomObject]@{
+            Key       = $Key
+            FirstLine = [int]$Entry.KeyLines[$Key]
+            Line      = $Line
+        })
+        return
+    }
+
+    $Entry.KeyLines[$Key] = $Line
 }
 
 function Add-Message {
@@ -96,22 +122,26 @@ function Parse-Catalog {
         }
 
         if ($line -match '^\s+layer:\s+(.+)$') {
+            Register-EntryKey -Entry $current -Key "layer" -Line ($i + 1)
             $current.Layer = $matches[1].Trim()
             continue
         }
 
         if ($line -match '^\s+path:\s+(.+)$') {
+            Register-EntryKey -Entry $current -Key "path" -Line ($i + 1)
             $current.Path = $matches[1].Trim().Trim('"')
             $current.PathLine = $i + 1
             continue
         }
 
         if ($line -match '^\s+status:\s+(.+)$') {
+            Register-EntryKey -Entry $current -Key "status" -Line ($i + 1)
             $current.Status = $matches[1].Trim()
             continue
         }
 
         if ($line -match '^\s+token_budget:\s+(.+)$') {
+            Register-EntryKey -Entry $current -Key "token_budget" -Line ($i + 1)
             $rawBudget = $matches[1].Trim()
             $parsedBudget = 0
             if ([int]::TryParse($rawBudget, [ref]$parsedBudget)) {
@@ -124,8 +154,9 @@ function Parse-Catalog {
             continue
         }
 
-        if ($line -match '^\s+(dependencies|conflicts|default_skill_ids):\s*(.*)$') {
+        if ($line -match '^\s+(dependencies|conflicts|default_skill_ids|default_for_domains):\s*(.*)$') {
             $field = $matches[1]
+            Register-EntryKey -Entry $current -Key $field -Line ($i + 1)
             $rawValue = $matches[2]
             $values = Parse-InlineArray -Value $rawValue
 
@@ -146,6 +177,7 @@ function Parse-Catalog {
                 'dependencies'     { Add-ListValues -Target $current.Dependencies -Values $values }
                 'conflicts'        { Add-ListValues -Target $current.Conflicts -Values $values }
                 'default_skill_ids' { Add-ListValues -Target $current.DefaultSkillIds -Values $values }
+                'default_for_domains' { }
             }
 
             continue
@@ -262,6 +294,10 @@ foreach ($entry in $entries) {
 }
 
 foreach ($entry in $entries) {
+    foreach ($duplicateKey in $entry.DuplicateKeys) {
+        Add-Message -Bucket $errors -Message "Entry '$($entry.Id)' repeats key '$($duplicateKey.Key)' at lines $($duplicateKey.FirstLine) and $($duplicateKey.Line)"
+    }
+
     if ($entry.Path) {
         $fullPath = Join-Path $Root $entry.Path
         if (-not (Test-Path $fullPath)) {

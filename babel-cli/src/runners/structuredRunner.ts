@@ -7,22 +7,26 @@
  *      markers to the prompt so JSON extraction is deterministic even in noisy
  *      CLI output (banners, tool-call traces, prose preambles).
  *
- *   2. Repair Loop — If the inner runner throws a CliParseError (JSON parse or
+ *   2. Repair Loop — If the inner runner throws a StructuredOutputError (JSON parse or
  *      Zod validation failure), attempts recovery in two passes:
  *        a. Pass 0 (Sentinel extraction): Extract content between sentinel
  *           markers directly from rawStdout, then re-validate with the schema.
  *        b. Pass 1 (API repair): Send rawStdout to an API repair runner
  *           (Gemini API → Anthropic) with a targeted "extract the JSON" prompt.
- *      If both passes fail, the original CliParseError is re-thrown so the
+ *      If both passes fail, the original StructuredOutputError is re-thrown so the
  *      outer waterfall cascade in execute.ts continues to the next tier.
  *
  * Non-parse errors (spawn failure, rate-limit, timeout) bypass the repair loop
  * entirely — they are re-thrown immediately for the outer waterfall to handle.
  */
 
-import type { ZodType, ZodTypeDef } from 'zod';
-import type { LlmRunner }    from './base.js';
-import { CliParseError }     from './cliBase.js';
+import type { ZodType } from 'zod';
+import {
+  type StructuredOutputError,
+  isStructuredOutputError,
+  type LlmRunner,
+  type RunnerCallbacks,
+} from './base.js';
 import { GeminiApiRunner }   from './geminiApi.js';
 import { extractJson }       from '../utils/extractJson.js';
 
@@ -102,17 +106,21 @@ export class StructuredRunner implements LlmRunner {
     this.label = label ?? inner.constructor.name;
   }
 
-  async execute<T>(prompt: string, schema: ZodType<T, ZodTypeDef, unknown>): Promise<T> {
+  async execute<T>(
+    prompt: string,
+    schema: ZodType<T, unknown>,
+    callbacks?: RunnerCallbacks,
+  ): Promise<T> {
     // ── Step 1: Append sentinel instruction to the prompt. ──────────────────
     const wrappedPrompt = prompt + SENTINEL_INSTRUCTION;
 
     // ── Step 2: Attempt the inner (CLI) runner. ─────────────────────────────
-    let cliErr: CliParseError | null = null;
+    let cliErr: StructuredOutputError | null = null;
 
     try {
-      return await this.inner.execute(wrappedPrompt, schema);
+      return await this.inner.execute(wrappedPrompt, schema, callbacks);
     } catch (err) {
-      if (!(err instanceof CliParseError)) {
+      if (!isStructuredOutputError(err)) {
         // Spawn errors, rate-limits, timeouts — re-throw immediately so the
         // waterfall cascade handles them (sentinel repair is not applicable).
         throw err;
@@ -122,7 +130,7 @@ export class StructuredRunner implements LlmRunner {
 
     // ── Step 3: Sentinel extraction pass. ───────────────────────────────────
     // Try to pull valid JSON from between the sentinel markers in rawStdout.
-    const sentinelContent = extractFromSentinels(cliErr.rawStdout);
+    const sentinelContent = extractFromSentinels(cliErr.raw_output);
     if (sentinelContent) {
       try {
         const parsed = extractJson(sentinelContent);
@@ -140,18 +148,18 @@ export class StructuredRunner implements LlmRunner {
     // Send the raw stdout to a fresh API runner with a targeted repair prompt.
     const repairRunner = createRepairRunner();
     if (!repairRunner) {
-      // No API keys configured — re-throw the original CliParseError so the
+      // No API keys configured — re-throw the original StructuredOutputError so the
       // outer waterfall can cascade to the next tier.
       throw cliErr;
     }
 
     try {
-      const repairPrompt = buildRepairPrompt(cliErr.rawStdout);
+      const repairPrompt = buildRepairPrompt(cliErr.raw_output);
       const result = await repairRunner.execute<T>(repairPrompt, schema);
       console.log(`[structuredRunner] ${this.label} — API repair succeeded.`);
       return result;
     } catch {
-      // Repair also failed — re-throw the original CliParseError so the
+      // Repair also failed — re-throw the original StructuredOutputError so the
       // outer waterfall cascade continues correctly.
       throw cliErr;
     }

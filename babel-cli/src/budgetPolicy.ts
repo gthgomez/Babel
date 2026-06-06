@@ -1,5 +1,7 @@
 import type { BudgetDiagnostic, BudgetDiagnosticSeverity, BudgetPolicy, InstructionStack } from './schemas/agentContracts.js';
 
+export const DEFAULT_TOKEN_DRIFT_WARNING_TOLERANCE = 500;
+
 export const ACTIVE_V9_BUDGET_POLICY: BudgetPolicy = {
   enabled: true,
   scope: {
@@ -47,4 +49,99 @@ export function getHighestBudgetSeverity(
     return 'info';
   }
   return null;
+}
+
+export function resolveBudgetEvaluationTokens(input: {
+  declaredTokenBudgetTotal: number;
+  actualPromptTokens?: number | null | undefined;
+}): { tokenTotal: number; source: 'actual' | 'declared' } {
+  if (typeof input.actualPromptTokens === 'number' && Number.isFinite(input.actualPromptTokens)) {
+    return {
+      tokenTotal: input.actualPromptTokens,
+      source: 'actual',
+    };
+  }
+
+  return {
+    tokenTotal: input.declaredTokenBudgetTotal,
+    source: 'declared',
+  };
+}
+
+export function buildBudgetDiagnostics(input: {
+  declaredTokenBudgetTotal: number;
+  tokenBudgetMissing: string[];
+  policyApplies: boolean;
+  budgetPolicy: BudgetPolicy;
+  actualPromptTokens?: number | null | undefined;
+  actualMinusDeclared?: number | null | undefined;
+  tokenCountWarnings?: string[] | undefined;
+  driftWarningTolerance?: number | undefined;
+}): BudgetDiagnostic[] {
+  const diagnostics: BudgetDiagnostic[] = [];
+  const evaluated = resolveBudgetEvaluationTokens({
+    declaredTokenBudgetTotal: input.declaredTokenBudgetTotal,
+    actualPromptTokens: input.actualPromptTokens,
+  });
+
+  diagnostics.push({
+    severity: 'info',
+    code: 'total_token_budget',
+    message:
+      evaluated.source === 'actual'
+        ? `Total token budget: ${input.declaredTokenBudgetTotal}; actual prompt tokens: ${evaluated.tokenTotal}; policy source: actual.`
+        : `Total token budget: ${input.declaredTokenBudgetTotal}; policy source: declared.`,
+  });
+
+  if (input.tokenBudgetMissing.length > 0) {
+    diagnostics.push({
+      severity: input.policyApplies && input.budgetPolicy.missing_budget_mode === 'severe' ? 'severe' : 'warn',
+      code: 'missing_token_budget',
+      message: `Missing token_budget for: ${input.tokenBudgetMissing.join(', ')}`,
+      entry_ids: [...input.tokenBudgetMissing],
+    });
+  }
+
+  if (input.tokenCountWarnings && input.tokenCountWarnings.length > 0) {
+    diagnostics.push({
+      severity: 'warn',
+      code: 'token_count_unavailable',
+      message: `Actual token count unavailable: ${input.tokenCountWarnings.join('; ')}`,
+    });
+  }
+
+  const driftTolerance = input.driftWarningTolerance ?? DEFAULT_TOKEN_DRIFT_WARNING_TOLERANCE;
+  if (
+    typeof input.actualMinusDeclared === 'number' &&
+    Number.isFinite(input.actualMinusDeclared) &&
+    Math.abs(input.actualMinusDeclared) > driftTolerance
+  ) {
+    diagnostics.push({
+      severity: 'warn',
+      code: 'actual_declared_token_drift',
+      message:
+        `Actual prompt tokens differ from declared token budget by ` +
+        `${input.actualMinusDeclared >= 0 ? '+' : ''}${input.actualMinusDeclared}, exceeding tolerance ${driftTolerance}.`,
+    });
+  }
+
+  if (input.policyApplies && evaluated.tokenTotal >= input.budgetPolicy.severe_warn_threshold) {
+    diagnostics.push({
+      severity: 'severe',
+      code: 'budget_threshold_severe',
+      message:
+        `Compiled stack ${evaluated.source} tokens ${evaluated.tokenTotal} reached the severe threshold ` +
+        `${input.budgetPolicy.severe_warn_threshold}.`,
+    });
+  } else if (input.policyApplies && evaluated.tokenTotal >= input.budgetPolicy.warn_threshold) {
+    diagnostics.push({
+      severity: 'warn',
+      code: 'budget_threshold_warning',
+      message:
+        `Compiled stack ${evaluated.source} tokens ${evaluated.tokenTotal} reached the warning threshold ` +
+        `${input.budgetPolicy.warn_threshold}.`,
+    });
+  }
+
+  return diagnostics;
 }
