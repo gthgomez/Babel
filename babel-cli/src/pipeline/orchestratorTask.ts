@@ -22,7 +22,7 @@ export function buildV9OrchestratorTask(task: string, options: OrchestratorTaskO
     'Required JSON shape (follow the schema defined in OLS-v9-Orchestrator.md exactly):',
     '{',
     '  "orchestrator_version": "9.0",',
-    '  "target_project": "example_saas_backend|example_llm_router|example_web_audit|example_mobile_suite|example_game_suite|example_game_suite|global",',
+    '  "target_project": "example_saas_backend|example_llm_router|example_web_audit|example_mobile_suite|example_game_workspace|example_game_suite|global",',
     '  "target_project_path": "<absolute path or omit>",',
     '  "analysis": {',
     '    "task_summary": "...",',

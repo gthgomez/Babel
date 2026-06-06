@@ -264,7 +264,7 @@ test('deterministic domain route keeps break-filter benchmarks out of game routi
 test('benchmark routing isolation clears unrelated workspace project context', () => {
   const manifest = {
     orchestrator_version: '9.0',
-    target_project: 'example_game_suite',
+    target_project: 'example_game_workspace',
     target_project_path: 'C:\\Workspace\\benchmarks\\runs\\terminal-bench-2\\job\\01-largest-eigenval\\app',
     analysis: {
       task_summary: 'largest-eigenval',
@@ -302,7 +302,7 @@ test('benchmark routing isolation clears unrelated workspace project context', (
       domain_id: 'domain_python_backend',
       skill_ids: [],
       model_adapter_id: 'adapter_codex_balanced',
-      project_overlay_id: 'example_game_suite',
+      project_overlay_id: 'example_game_workspace',
       task_overlay_ids: [],
       pipeline_stage_ids: [],
     },

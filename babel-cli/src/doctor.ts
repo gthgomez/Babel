@@ -103,7 +103,7 @@ const REQUIRED_REPO_KEYS = [
   'example_llm_router',
   'example_web_audit',
   'example_mobile_suite',
-  'example_game_suite',
+  'example_game_workspace',
   'example_game_suite',
   'example_autonomous_agent',
   'example_mobile_finance',
@@ -114,7 +114,7 @@ const CORE_REPO_CASES: RepoResolutionCase[] = [
   { key: 'example_llm_router', project: 'example_llm_router', taskCategory: 'frontend' },
   { key: 'example_web_audit', project: 'example_web_audit', taskCategory: 'backend' },
   { key: 'example_mobile_suite', project: 'example_mobile_suite', taskCategory: 'mobile' },
-  { key: 'example_game_suite', project: 'example_game_suite', taskCategory: 'game' },
+  { key: 'example_game_workspace', project: 'example_game_workspace', taskCategory: 'game' },
   { key: 'example_game_suite', project: 'example_game_suite', taskCategory: 'game' },
   { key: 'example_autonomous_agent', project: 'example_autonomous_agent', taskCategory: 'research' },
   { key: 'example_mobile_finance', project: 'example_mobile_finance', taskCategory: 'research' },
@@ -124,7 +124,7 @@ const DOCUMENTED_EXTERNAL_REPO_PREREQUISITES: Record<string, ExternalRepoPrerequ
   example_game_suite: {
     label: 'ExampleGameProject sample game repo',
     reason: 'Optional external game workspace used by game-routing demos, not required for Babel CLI release readiness.',
-    fixHint: 'Clone or restore example_game_suite\\ExampleGameProject when game demo coverage is required, or keep this warning as an accepted external prerequisite.',
+    fixHint: 'Clone or restore example_game_workspace\\ExampleGameProject when game demo coverage is required, or keep this warning as an accepted external prerequisite.',
   },
 };
 

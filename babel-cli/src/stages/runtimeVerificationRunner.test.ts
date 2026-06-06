@@ -17,7 +17,7 @@ function cleanup(root: string): void {
 function makeWorkspace(): { workspace: string; babelRoot: string; projectRoot: string } {
   const workspace = mkdtempSync(join(tmpdir(), 'babel-runtime-verification-'));
   const babelRoot = join(workspace, 'private source repo');
-  const projectRoot = join(workspace, 'example_game_suite', 'Game');
+  const projectRoot = join(workspace, 'example_game_workspace', 'Game');
   mkdirSync(join(workspace, 'tools', 'Godot'), { recursive: true });
   mkdirSync(babelRoot, { recursive: true });
   mkdirSync(projectRoot, { recursive: true });
@@ -114,7 +114,7 @@ test('Godot runtime runner detects missing Main.tscn output as FAIL', () => {
 test('Godot runtime runner reports tool unavailable when wrapper is missing', () => {
   const workspace = mkdtempSync(join(tmpdir(), 'babel-runtime-verification-no-tool-'));
   const babelRoot = join(workspace, 'private source repo');
-  const projectRoot = join(workspace, 'example_game_suite', 'Game');
+  const projectRoot = join(workspace, 'example_game_workspace', 'Game');
   mkdirSync(babelRoot, { recursive: true });
   mkdirSync(projectRoot, { recursive: true });
   try {

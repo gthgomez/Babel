@@ -271,7 +271,7 @@ test('doctor repo map distinguishes missing mapped repo paths', async () => {
       example_llm_router: join(workspace, 'repos', 'example_llm_router'),
       example_web_audit: join(workspace, 'repos', 'example_web_audit'),
       example_mobile_suite: join(workspace, 'repos', 'example_mobile_suite'),
-      example_game_suite: join(workspace, 'repos', 'example_game_suite'),
+      example_game_workspace: join(workspace, 'repos', 'example_game_workspace'),
       example_game_suite: join(workspace, 'repos', 'example_game_suite'),
       example_autonomous_agent: join(workspace, 'repos', 'example_autonomous_agent'),
       example_mobile_finance: join(workspace, 'repos', 'example_mobile_finance'),
@@ -299,7 +299,7 @@ test('doctor repo map distinguishes missing mapped repo paths', async () => {
 
 test('doctor scope all allows documented external repo-map prerequisite to remain missing without fail', async () => {
   const { root, workspace } = makeDoctorWorkspace({ validCatalog: true, dist: true });
-  const externalGodotPath = join(workspace, 'missing', 'example_game_suite', 'ExampleGameProject');
+  const externalGodotPath = join(workspace, 'missing', 'example_game_workspace', 'ExampleGameProject');
   const expectedRepoPaths = {
     babel_private: root,
     babel_public: join(workspace, 'repos', 'babel_public'),
@@ -307,7 +307,7 @@ test('doctor scope all allows documented external repo-map prerequisite to remai
     example_llm_router: join(workspace, 'repos', 'example_llm_router'),
     example_web_audit: join(workspace, 'repos', 'example_web_audit'),
     example_mobile_suite: join(workspace, 'repos', 'example_mobile_suite'),
-    example_game_suite: join(workspace, 'repos', 'example_game_suite'),
+    example_game_workspace: join(workspace, 'repos', 'example_game_workspace'),
     example_game_suite: externalGodotPath,
     example_autonomous_agent: join(workspace, 'repos', 'example_autonomous_agent'),
     example_mobile_finance: join(workspace, 'repos', 'example_mobile_finance'),
@@ -407,7 +407,7 @@ function makeDoctorWorkspace(options: { validCatalog: boolean; dist: boolean }):
     example_llm_router: join(workspace, 'repos', 'example_llm_router'),
     example_web_audit: join(workspace, 'repos', 'example_web_audit'),
     example_mobile_suite: join(workspace, 'repos', 'example_mobile_suite'),
-    example_game_suite: join(workspace, 'repos', 'example_game_suite'),
+    example_game_workspace: join(workspace, 'repos', 'example_game_workspace'),
     example_game_suite: join(workspace, 'repos', 'example_game_suite'),
     example_autonomous_agent: join(workspace, 'repos', 'example_autonomous_agent'),
     example_mobile_finance: join(workspace, 'repos', 'example_mobile_finance'),

@@ -10,7 +10,7 @@ import { resolveAgentTarget } from './targetResolver.js';
 
 function makeWorkspaceFixture(): { root: string; workspace: string; child: string; outside: string } {
   const root = mkdtempSync(join(tmpdir(), 'babel-target-resolver-'));
-  const workspace = join(root, 'example_game_suite');
+  const workspace = join(root, 'example_game_workspace');
   const child = join(workspace, 'relicRun');
   const outside = join(root, 'OtherProject');
   mkdirSync(child, { recursive: true });
@@ -25,7 +25,7 @@ test('target resolver prefers active child repo over named parent workspace', ()
   const fixture = makeWorkspaceFixture();
   try {
     const target = resolveAgentTarget({
-      project: 'example_game_suite',
+      project: 'example_game_workspace',
       namedProjectRoot: fixture.workspace,
       cwd: fixture.child,
     });
@@ -42,7 +42,7 @@ test('target resolver lets explicit project roots win over cwd and named project
   const fixture = makeWorkspaceFixture();
   try {
     const target = resolveAgentTarget({
-      project: 'example_game_suite',
+      project: 'example_game_workspace',
       projectRoot: fixture.workspace,
       namedProjectRoot: fixture.child,
       cwd: fixture.outside,
@@ -59,7 +59,7 @@ test('target resolver still supports named parent projects outside their workspa
   const fixture = makeWorkspaceFixture();
   try {
     const target = resolveAgentTarget({
-      project: 'example_game_suite',
+      project: 'example_game_workspace',
       namedProjectRoot: fixture.workspace,
       cwd: fixture.outside,
     });
@@ -76,8 +76,8 @@ test('manifest target path is clamped to authoritative project root', () => {
   const fixture = makeWorkspaceFixture();
   try {
     const manifest = normalizeManifestProjectRoot({
-      target_project: 'example_game_suite',
-      target_project_path: '/user-home/example_game_suite',
+      target_project: 'example_game_workspace',
+      target_project_path: '/user-home/example_game_workspace',
     } as any, undefined, {
       authoritativeProjectRoot: fixture.child,
     });

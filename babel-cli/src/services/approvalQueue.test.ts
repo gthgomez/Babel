@@ -100,14 +100,14 @@ test('model escalation approvals are exact to task/model/tier/project', () => {
       task: 'fix hard bug',
       model: 'qwen3',
       modelTier: 'escalation',
-      projectRoot: 'C:\\Workspace\\example_game_suite\\GameOne',
+      projectRoot: 'C:\\Workspace\\example_game_workspace\\GameOne',
     });
 
     assert.equal(isModelEscalationApproved({
       task: 'fix hard bug',
       model: 'qwen3',
       modelTier: 'escalation',
-      projectRoot: 'C:\\Workspace\\example_game_suite\\GameOne',
+      projectRoot: 'C:\\Workspace\\example_game_workspace\\GameOne',
     }), false);
 
     approveApproval(request.record.id, { ttlHours: 1 });
@@ -116,13 +116,13 @@ test('model escalation approvals are exact to task/model/tier/project', () => {
       task: 'fix hard bug',
       model: 'qwen3',
       modelTier: 'escalation',
-      projectRoot: 'C:\\Workspace\\example_game_suite\\GameOne',
+      projectRoot: 'C:\\Workspace\\example_game_workspace\\GameOne',
     }), true);
     assert.equal(isModelEscalationApproved({
       task: 'fix hard bug',
       model: 'qwen3',
       modelTier: 'standard',
-      projectRoot: 'C:\\Workspace\\example_game_suite\\GameOne',
+      projectRoot: 'C:\\Workspace\\example_game_workspace\\GameOne',
     }), false);
     assert.equal(listApprovals({ status: 'approved' }).length, 1);
   });

@@ -17,7 +17,7 @@ export const VALID_PROJECTS = [
   'ExampleFinanceForecast',
   'simlife',
   'example_game_suite',
-  'example_game_suite',
+  'example_game_workspace',
   'AetherlynGameDraft',
   'aetherlyn',
   'example_autonomous_agent',

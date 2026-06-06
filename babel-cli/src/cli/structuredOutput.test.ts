@@ -670,7 +670,7 @@ describe('Babel Lite result output', () => {
       'Babel Ask Ready',
       '',
       'Target:',
-      '/workspace-root/example_game_suite/relicRun',
+      '/workspace-root/example_game_workspace/relicRun',
       '',
       'Answer:',
       'relicRun is not recognized in this workspace.',
@@ -697,7 +697,7 @@ describe('Babel Lite result output', () => {
       'Babel Ask Ready',
       '',
       'Target:',
-      '/workspace-root/example_game_suite/relicRun',
+      '/workspace-root/example_game_workspace/relicRun',
       '',
       'Answer:',
       'This repo contains a game prototype.',
@@ -714,8 +714,8 @@ describe('Babel Lite result output', () => {
       'Next:',
       'Review evidence.',
     ].join('\n'), '', {
-      expectedTargetRoot: '/workspace-root/example_game_suite/relicRun',
-      manifestTargetRoot: '/user-home/example_game_suite',
+      expectedTargetRoot: '/workspace-root/example_game_workspace/relicRun',
+      manifestTargetRoot: '/user-home/example_game_workspace',
     });
 
     assert.equal(review.status, 'needs_attention');
@@ -727,7 +727,7 @@ describe('Babel Lite result output', () => {
       'Babel Run Complete',
       '',
       'Target:',
-      '/workspace-root/example_game_suite/relicRun',
+      '/workspace-root/example_game_workspace/relicRun',
       '',
       'Answer:',
       'Completed the run.',
@@ -744,8 +744,8 @@ describe('Babel Lite result output', () => {
       'Next:',
       'Review evidence.',
     ].join('\n'), '', {
-      expectedTargetRoot: '/workspace-root/example_game_suite/relicRun',
-      executedTargets: ['/user-home/example_game_suite/package.json'],
+      expectedTargetRoot: '/workspace-root/example_game_workspace/relicRun',
+      executedTargets: ['/user-home/example_game_workspace/package.json'],
     });
 
     assert.equal(review.status, 'needs_attention');

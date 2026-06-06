@@ -59,14 +59,14 @@ export function resolveProjectRoot(projectName: string): string | null {
     case 'ExampleFinanceForecast':
       return resolvePath(parent, 'example_mobile_suite', 'ExampleFinanceForecast');
     case 'simlife':
-      return resolvePath(parent, 'example_game_suite', 'SimLife');
+      return resolvePath(parent, 'example_game_workspace', 'SimLife');
     case 'example_game_suite':
-      return resolvePath(parent, 'example_game_suite', 'ExampleGameProject');
-    case 'example_game_suite':
-      return resolvePath(parent, 'example_game_suite');
+      return resolvePath(parent, 'example_game_workspace', 'ExampleGameProject');
+    case 'example_game_workspace':
+      return resolvePath(parent, 'example_game_workspace');
     case 'AetherlynGameDraft':
     case 'aetherlyn':
-      return resolvePath(parent, 'example_game_suite', 'AetherlynGameDraft');
+      return resolvePath(parent, 'example_game_workspace', 'AetherlynGameDraft');
     case 'example_autonomous_agent':
       for (const candidate of ['example_autonomous_agent', 'example_autonomous_agent']) {
         const resolved = resolvePath(parent, candidate);
