@@ -9,7 +9,7 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 ## Purpose
 
-In `Babel-public`, Local Mode means using the public control plane from your own machine without private repo tooling.
+In `Babel-public`, Local Mode means using the public Babel release from your own machine without private repo tooling.
 
 There are two Local Mode surfaces:
 
@@ -29,6 +29,7 @@ The public-first Local Mode workflow is:
 - deterministic resolver preview
 - read-only MCP manifest inspection
 - public examples and proof artifacts
+- CLI typechecking, diagnostics, and public release validation
 
 ## What Is Advanced
 
@@ -82,9 +83,9 @@ node .\dist\index.js doctor
 - `babel plan` / `resume` = manual bridge flow
 - `babel mcp` = read-only integration surface for MCP clients
 
-If you want copy-paste examples for those commands, use [CLI_QUICKSTART.md](./CLI_QUICKSTART.md).
+If you want copy-paste examples for those commands, use [CLI_QUICKSTART.md](../CLI_QUICKSTART.md).
 
-The CLI is real, but it is not the easiest first contact with Babel. The resolver and validator are still the clearest public starting point.
+The CLI is real and public-CI validated, but it is not the easiest first contact with Babel. The resolver and validator are still the clearest public starting point.
 
 ## What Advanced Runtime Usually Requires
 
@@ -117,6 +118,7 @@ Public rule of thumb:
 - Babel chooses the stack.
 - The target repo defines its own ground truth.
 - Repo-local invariants win for repo-specific behavior.
+- Model-backed execution should make network, credential, and mutation boundaries visible.
 
 ## Advanced Wrapper
 
