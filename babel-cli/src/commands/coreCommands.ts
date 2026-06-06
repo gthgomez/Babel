@@ -1540,7 +1540,7 @@ Examples:
   program
     .command('shadow-diff')
     .description('Compare the current dry-run shadow root with the live project')
-    .option('-p, --project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_suite | example_game_suite)')
+    .option('-p, --project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_workspace | example_game_suite)')
     .addHelpText('after', `
 Examples:
   $ babel shadow-diff

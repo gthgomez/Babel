@@ -2599,15 +2599,15 @@ entries:
     layer: project_overlay
     path: 05_Project_Overlays/Example-Game-Workspace-Context.md
     description: >
-      Project context for the example_game_suite workspace family. Keeps generated
+      Project context for the example_game_workspace workspace family. Keeps generated
       prototypes inside the explicit target game root, anchors Godot project
       layout (`project.godot` at root), and requires gameplay-loop plus Android
       export-readiness evidence for mobile Godot prototypes.
     status: active
     token_budget: 260
     load_position: 5
-    project: example_game_suite
-    tags: [framework:godot, platform:android, utility:context, utility:overlay, utility:example_game_suite]
+    project: example_game_workspace
+    tags: [framework:godot, platform:android, utility:context, utility:overlay, utility:example_game_workspace]
 
 
 # ─────────────────────────────────────────────

@@ -137,7 +137,7 @@ export function registerProjectCommands(program: Command): void {
     .addHelpText('after', `
 Examples:
   $ babel verify C:\\Workspace\\SomeRepo --json
-  $ babel verify C:\\Workspace\\example_game_suite\\MyGame --commands "npm test;npm run build" --json
+  $ babel verify C:\\Workspace\\example_game_workspace\\MyGame --commands "npm test;npm run build" --json
 
 Notes:
   - Uses execution profile opencalw_manager.

@@ -57,8 +57,8 @@ Behavioral policy:
 | `example_llm_router` | `...\Project_SaaS\example_llm_router` | example_llm_router, design system, component library, tokens, theming |
 | `example_web_audit` | `...\Project_SaaS\example_web_audit` | example_web_audit, audit, compliance log, report, trail |
 | `example_mobile_suite` | `...\example_mobile_suite` | example_mobile_suite, android, kotlin, jetpack compose, compose, mobile app, play store, google play, billing client, billing library, billing wiring, billing integration, documented android contracts, manifest declarations, policy-sensitive manifest declarations, manifest policy declarations, AAB, APK, bundletool, example_app_one, example_app_two, example_app_three, example_app_four |
-| `example_game_suite` | `...\example_game_suite` | example_game_suite, game workspace, game dev, gameplay, game UI, godot, gdscript, unity, rpg, simlife, aetherlyn, betamonsterrpg, firetv |
-| `example_game_suite` | `...\example_game_suite\ExampleGameProject` | example_game_suite, ExampleGameProject, tower defense, Godot tower defense, towers, waves, enemies, upgrade paths |
+| `example_game_workspace` | `...\example_game_workspace` | example_game_workspace, game workspace, game dev, gameplay, game UI, godot, gdscript, unity, rpg, simlife, aetherlyn, betamonsterrpg, firetv |
+| `example_game_suite` | `...\example_game_workspace\ExampleGameProject` | example_game_suite, ExampleGameProject, tower defense, Godot tower defense, towers, waves, enemies, upgrade paths |
 | `example_autonomous_agent` | `/agent-root/example-autonomous-agent` | example_autonomous_agent, example_autonomous_agent agent, autonomous agent, AGENTS.md, SOUL.md, example_autonomous_agent workspace, example_autonomous_agent config, agent instruction, agent startup, unattended agent |
 
 If a request cannot be matched to any project, set `target_project` to `"global"`.
@@ -364,7 +364,7 @@ You must output **ONLY** valid JSON. No prose. No Markdown outside the JSON obje
 ```json
 {
   "orchestrator_version": "9.0",
-  "target_project": "[example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_suite | example_game_suite | example_autonomous_agent | ExampleFinanceForecast | global]",
+  "target_project": "[example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_workspace | example_game_suite | example_autonomous_agent | ExampleFinanceForecast | global]",
   "target_project_path": "<absolute path — use the known path for this project, e.g. C:\\Workspace\\example_mobile_suite\\ExampleFinanceForecast for ExampleFinanceForecast>",
   "analysis": {
     "task_summary": "One sentence: what the user wants accomplished.",

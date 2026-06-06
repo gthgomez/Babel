@@ -55,9 +55,9 @@ function runtime(status: RuntimeVerificationResult['status']): RuntimeVerificati
   return {
     stage: 'runtime_verification',
     targetType: 'godot',
-    projectPath: '/workspace-root/example_game_suite/Game',
-    command: 'powershell -ExecutionPolicy Bypass -File /workspace-root/tools/Godot/godot.ps1 --headless --path /workspace-root/example_game_suite/Game --quit',
-    cwd: '/workspace-root/example_game_suite/Game',
+    projectPath: '/workspace-root/example_game_workspace/Game',
+    command: 'powershell -ExecutionPolicy Bypass -File /workspace-root/tools/Godot/godot.ps1 --headless --path /workspace-root/example_game_workspace/Game --quit',
+    cwd: '/workspace-root/example_game_workspace/Game',
     exitCode: status === 'PASS' ? 0 : 1,
     stdoutExcerpt: '',
     stderrExcerpt: status === 'PASS' ? '' : 'Parse Error',

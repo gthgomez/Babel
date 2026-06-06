@@ -21,7 +21,7 @@ export type LocalProject =
   | 'example_llm_router'
   | 'example_web_audit'
   | 'example_mobile_suite'
-  | 'example_game_suite'
+  | 'example_game_workspace'
   | 'simlife'
   | 'example_game_suite'
   | 'ExampleFinanceForecast'
@@ -116,7 +116,7 @@ const PROJECT_OVERLAY_ID_MAP: Partial<Record<LocalProject, string>> = {
   example_llm_router: 'overlay_example_llm_router',
   example_web_audit: 'overlay_example_web_audit',
   example_mobile_suite: 'overlay_example_mobile_suite',
-  example_game_suite: 'overlay_example_game_workspace',
+  example_game_workspace: 'overlay_example_game_workspace',
   simlife: 'overlay_example_game_workspace',
   example_game_suite: 'overlay_example_game_suite',
   ExampleFinanceForecast: 'overlay_example_finance_forecast',
@@ -130,7 +130,7 @@ const PROJECT_REPO_KEY_MAP: Partial<Record<LocalProject, string>> = {
   example_llm_router: 'example_llm_router',
   example_web_audit: 'example_web_audit',
   example_mobile_suite: 'example_mobile_suite',
-  example_game_suite: 'example_game_suite',
+  example_game_workspace: 'example_game_workspace',
   simlife: 'simlife',
   example_game_suite: 'example_game_suite',
   ExampleFinanceForecast: 'montecarlo_ledger',
@@ -150,12 +150,12 @@ const LEGACY_FAMILY_MAP: Partial<Record<LocalProject, string>> = {
   example_llm_router: 'Project_SaaS',
   example_web_audit: 'Project_SaaS',
   example_mobile_suite: '',
-  example_game_suite: '',
-  simlife: 'example_game_suite',
-  example_game_suite: 'example_game_suite',
+  example_game_workspace: '',
+  simlife: 'example_game_workspace',
+  example_game_suite: 'example_game_workspace',
   ExampleFinanceForecast: 'example_mobile_suite',
-  AetherlynGameDraft: 'example_game_suite',
-  aetherlyn: 'example_game_suite',
+  AetherlynGameDraft: 'example_game_workspace',
+  aetherlyn: 'example_game_workspace',
   example_autonomous_agent: '',
   example_mobile_finance: '',
 };

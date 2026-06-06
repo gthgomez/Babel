@@ -59,7 +59,7 @@ test('collectTextFiles treats a file path as an empty index root', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-index-file-root-'));
   try {
     const filePath = join(root, 'session-start.json');
-    writeFileSync(filePath, '{"ProjectPath":"/workspace-root/example_game_suite/Demo"}\n', 'utf-8');
+    writeFileSync(filePath, '{"ProjectPath":"/workspace-root/example_game_workspace/Demo"}\n', 'utf-8');
 
     assert.deepEqual(await collectTextFiles(filePath), []);
   } finally {

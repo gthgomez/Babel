@@ -9,7 +9,7 @@ import type { AskAnswer } from '../schemas/agentContracts.js';
 
 function makeRelicRunFixture(): { root: string; workspace: string; target: string } {
   const root = mkdtempSync(join(tmpdir(), 'babel-ask-target-'));
-  const workspace = join(root, 'example_game_suite');
+  const workspace = join(root, 'example_game_workspace');
   const target = join(workspace, 'relicRun');
   mkdirSync(target, { recursive: true });
   writeFileSync(join(target, 'README.md'), '# relicRun\n\nA roguelike extraction prototype built for Godot.\n', 'utf-8');
@@ -35,7 +35,7 @@ test('ask prompt includes target-local evidence and shallow listing', () => {
   try {
     const prompt = buildAskPrompt({
       task: 'what is relicRun?',
-      project: 'example_game_suite',
+      project: 'example_game_workspace',
       projectRoot: fixture.target,
       workspaceRoot: fixture.workspace,
     });
