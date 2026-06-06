@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "id": "sample-readonly",
+  "name": "Sample Read-Only Plugin",
+  "version": "0.1.0",
+  "description": "Demonstrates a safe manifest-only plugin with one executor tool, one slash command, one prompt skill, and one MCP bundle.",
+  "trust_level": "read_only",
+  "tools": [
+    {
+      "kind": "static_json",
+      "name": "plugin_status",
+      "description": "Return sample plugin status metadata.",
+      "trust_level": "read_only",
+      "payload": {
+        "message": "sample read-only plugin is active",
+        "capabilities": [
+          "tool",
+          "slash_command",
+          "prompt_skill",
+          "mcp_bundle"
+        ]
+      }
+    }
+  ],
+  "slash_commands": [
+    {
+      "kind": "static_text",
+      "name": "hello",
+      "description": "Echo a friendly plugin response.",
+      "text": "sample-readonly says hello. Args: {args}"
+    }
+  ],
+  "prompt_skills": [
+    {
+      "id": "sample_readonly_skill",
+      "title": "Sample Read-Only Skill",
+      "description": "A minimal plugin-provided prompt skill for registry and inspection testing.",
+      "content": "Use this sample skill only to verify plugin prompt-skill discovery."
+    }
+  ],
+  "mcp_servers": [
+    {
+      "name": "sample_docs",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ]
+    }
+  ],
+  "hooks": []
+}

@@ -1,10 +1,10 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("frontend", "backend", "mobile", "compliance", "devops", "research")]
+    [ValidateSet("frontend", "backend", "mobile", "game", "compliance", "devops", "research")]
     [string]$TaskCategory,
 
-    [ValidateSet("global", "example_saas_backend", "example_llm_router", "example_web_audit", "example_mobile_suite", "example_autonomous_agent")]
+    [ValidateSet("global", "example_saas_backend", "example_llm_router", "example_web_audit", "example_mobile_suite", "example_game_suite", "example_autonomous_agent")]
     [string]$Project = "global",
 
     [Parameter(Mandatory = $true)]
@@ -17,7 +17,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$TaskPrompt,
 
-    [ValidateSet("v8", "v9")]
+    [ValidateSet("v9")]
     [string]$Orchestrator = "v9",
 
     [string]$SessionId = "",

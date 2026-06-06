@@ -23,18 +23,19 @@
  *   BABEL_CLI_TIMEOUT_MS  - Hard timeout in ms.       Default: 120000
  */
 
-import type { ZodType, ZodTypeDef } from 'zod';
-import type { LlmRunner }              from './base.js';
+import type { ZodType } from 'zod';
+import type { LlmRunner, RunnerCallbacks }              from './base.js';
 import { spawnCliProcess,
          parseAndValidate }            from './cliBase.js';
 import type { CliConfig }              from './cliBase.js';
+import { parseCliArgString }           from './cliArgParser.js';
 
 function buildConfig(model?: string): CliConfig {
   const cmd = process.env['BABEL_GEMINI_CMD'] ?? 'gemini';
 
   // Parse BABEL_GEMINI_ARGS, stripping any --model / --model=<x> entries when
   // the caller is supplying the model via constructor to avoid conflicts.
-  const rawArgs = (process.env['BABEL_GEMINI_ARGS'] ?? '').split(' ').filter(Boolean);
+  const rawArgs = parseCliArgString(process.env['BABEL_GEMINI_ARGS'] ?? '');
   const baseArgs = model
     ? rawArgs.filter((arg, i, arr) => {
         if (arg === '--model' || arg === '-m') return false;          // flag itself
@@ -68,7 +69,11 @@ export class GeminiCliRunner implements LlmRunner {
     this.config = buildConfig(model);
   }
 
-  async execute<T>(prompt: string, schema: ZodType<T, ZodTypeDef, unknown>): Promise<T> {
+  async execute<T>(
+    prompt: string,
+    schema: ZodType<T, unknown>,
+    callbacks?: RunnerCallbacks,
+  ): Promise<T> {
     const output = await spawnCliProcess(prompt, this.config);
     return parseAndValidate(output, schema, this.config.label);
   }

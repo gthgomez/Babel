@@ -12,6 +12,7 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Category:** Governance / Systems
 **Status:** Active
 **Pairs with:** `skill_untrusted_input_guard`, `skill_async_task_delivery`
+**Last Verified:** 2026-04-25
 **Activation:** Load when the agent operates unattended — processing tasks received via async
 channels (Slack, Discord, cron, webhook) without a human present to interactively confirm steps.
 Also load when any task arrives with a blast radius of MEDIUM or higher.
@@ -20,7 +21,7 @@ Also load when any task arrives with a blast radius of MEDIUM or higher.
 
 ## Purpose
 
-`OLS-v7-Core` defines a binary PLAN/ACT state machine for interactive sessions. For unattended
+`OLS-v10-Core-Universal.md` defines the baseline interaction states for interactive sessions. For unattended
 autonomous operation, binary states are insufficient. Without a human present to confirm
 transitions, the agent needs explicit named states, defined transition rules, a protocol for when
 the authorizing human is absent, and a hard HALT path that does not silently hang.
@@ -28,7 +29,7 @@ the authorizing human is absent, and a hard HALT path that does not silently han
 This skill extends Core's two-state model to a six-state machine with explicit transition
 triggers, blast-radius-aware routing, and a timeout-based absent-user protocol.
 
-It does not replace `OLS-v7-Core` or `OLS-v7-Guard`. It adds the states those files leave unnamed.
+It does not replace `OLS-v10-Core-Universal.md` or `OLS-v7-Guard-Auto.md`. It adds the unattended-operation states those files leave unnamed.
 
 ---
 

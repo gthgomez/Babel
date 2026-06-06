@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -17,7 +17,6 @@ const v8Path = join(babelRoot, '00_System_Router', 'OLS-v8-Orchestrator.md');
 const catalogPath = join(babelRoot, 'prompt_catalog.yaml');
 
 const v9Text = readFileSync(v9Path, 'utf-8');
-const v8Text = readFileSync(v8Path, 'utf-8');
 const catalog = parseCatalog(catalogPath);
 const catalogIds = new Set(catalog.map(entry => entry.id));
 
@@ -51,7 +50,7 @@ function assertPromptIdsExist(text: string, label: string): void {
 }
 
 function runV9CoverageChecks(): void {
-  assertContains(v9Text, '`example_mobile_suite`', 'v9 active projects');
+  assertContains(v9Text, '**Mobile / Android**', 'v9 mobile routing table');
   assertContains(v9Text, '`domain_android_kotlin`', 'v9 mobile domain');
 
   for (const id of [
@@ -79,15 +78,14 @@ function runV9CoverageChecks(): void {
   assertPromptIdsExist(v9Text, 'v9 prompt ids');
 }
 
-function runV8GuardrailChecks(): void {
-  assertContains(v8Text, 'Legacy compatibility only — not actively maintained', 'v8 legacy mode');
-  assertContains(v8Text, 'mobile/android routing is not maintained in v8', 'v8 mobile guardrail');
-  assertContains(v8Text, 'Prefer OLS-v9', 'v8 v9 recommendation');
+function runLegacyRemovalChecks(): void {
+  assert(!existsSync(v8Path), 'expected deprecated OLS-v8 orchestrator file to be removed');
+  assert(!catalogIds.has('orchestrator_v8'), 'expected prompt_catalog.yaml to omit deprecated orchestrator_v8');
 }
 
 function main(): void {
   runV9CoverageChecks();
-  runV8GuardrailChecks();
+  runLegacyRemovalChecks();
   console.log('orchestrator routing regression tests passed');
 }
 

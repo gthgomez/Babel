@@ -20,8 +20,8 @@
  *   All other errors are thrown with an "[openAiApi]" prefix.
  */
 
-import type { ZodType, ZodTypeDef } from 'zod';
-import type { LlmRunner } from './base.js';
+import type { ZodType } from 'zod';
+import { type LlmRunner, type RunnerCallbacks, buildStructuredOutputError } from './base.js';
 import { extractJson }    from '../utils/extractJson.js';
 
 // ─── Configuration ────────────────────────────────────────────────────────────
@@ -63,7 +63,11 @@ export class OpenAiApiRunner implements LlmRunner {
     this.apiKey = key;
   }
 
-  async execute<T>(prompt: string, schema: ZodType<T, ZodTypeDef, unknown>): Promise<T> {
+  async execute<T>(
+    prompt: string,
+    schema: ZodType<T, unknown>,
+    callbacks?: RunnerCallbacks,
+  ): Promise<T> {
     // ── HTTP request ─────────────────────────────────────────────────────────
     let response: Response;
     try {
@@ -99,18 +103,31 @@ export class OpenAiApiRunner implements LlmRunner {
     }
 
     // ── Extract text content ─────────────────────────────────────────────────
+    let dataText = '';
     let data: OpenAiResponse;
     try {
-      data = (await response.json()) as OpenAiResponse;
+      dataText = await response.text();
+      data = JSON.parse(dataText) as OpenAiResponse;
     } catch (err) {
-      throw new Error(
-        `[openAiApi] Failed to parse API response as JSON: ${String(err)}`,
-      );
+      throw buildStructuredOutputError({
+        failure_kind: 'failed_to_parse_api_json',
+        provider: 'openai',
+        model: OPENAI_MODEL,
+        message: `[openAiApi] Failed to parse API response as JSON: ${String(err)}`,
+        raw_output: dataText,
+        cause: err instanceof Error ? err : undefined,
+      });
     }
 
     const text = data?.choices?.[0]?.message?.content ?? '';
     if (!text.trim()) {
-      throw new Error('[openAiApi] OpenAI API returned an empty response.');
+      throw buildStructuredOutputError({
+        failure_kind: 'empty_response',
+        provider: 'openai',
+        model: OPENAI_MODEL,
+        message: '[openAiApi] OpenAI API returned an empty response.',
+        raw_output: JSON.stringify(data),
+      });
     }
 
     // ── JSON extraction + Zod validation ─────────────────────────────────────
@@ -118,16 +135,27 @@ export class OpenAiApiRunner implements LlmRunner {
     try {
       parsed = extractJson(text);
     } catch (err) {
-      throw new Error(
-        `[openAiApi] invalid json: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      throw buildStructuredOutputError({
+        failure_kind: 'invalid_json',
+        provider: 'openai',
+        model: OPENAI_MODEL,
+        message: `[openAiApi] invalid json: ${err instanceof Error ? err.message : String(err)}`,
+        raw_output: text,
+        cause: err instanceof Error ? err : undefined,
+      });
     }
 
     const result = schema.safeParse(parsed);
     if (!result.success) {
-      throw new Error(
-        `[openAiApi] Zod validation failed:\n${result.error.toString()}`,
-      );
+      throw buildStructuredOutputError({
+        failure_kind: 'zod_validation_failed',
+        provider: 'openai',
+        model: OPENAI_MODEL,
+        message: `[openAiApi] Zod validation failed:\n${result.error.toString()}`,
+        raw_output: text,
+        parsed_json: parsed,
+        zod_issues: result.error,
+      });
     }
 
     return result.data;

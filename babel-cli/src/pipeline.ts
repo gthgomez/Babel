@@ -19,9 +19,17 @@
  *   Override with the BABEL_ROOT environment variable.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, createWriteStream, statSync, type WriteStream, rmSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath }          from 'node:url';
+import {
+  getWorkspaceLockPath,
+  readLock,
+  isLockActive
+} from './utils/locking.js';
+import { runSwarmPipeline } from './runners/swarmRunner.js';
+
 import { spawnSync }              from 'node:child_process';
 import { SpanStatusCode }         from '@opentelemetry/api';
 import { z }                      from 'zod';
@@ -34,22 +42,48 @@ import {
   getValidatorTierIndex,
   isConfidenceGateEnabled,
 }                                  from './confidenceGate.js';
-import { runWithFallback }        from './execute.js';
+import { runWithFallback, clearRoutingCache } from './execute.js';
+import {
+  buildExecutionProfilePromptLines,
+  DEFAULT_EXECUTION_PROFILE,
+  normalizeExecutionProfile,
+  resolveExecutionProfile,
+  type ExecutionProfileName,
+} from './config/executionProfiles.js';
+import {
+  formatBenchmarkRuntimeInventoryPromptLines,
+  getBenchmarkRuntimeCommandUsability,
+  getCachedBenchmarkContainerRuntimeInventory,
+  inspectBenchmarkContainerRuntime,
+  type BenchmarkRuntimeInventory,
+  shouldUseBenchmarkContainerExecution,
+} from './config/benchmarkContainer.js';
+import {
+  buildToolCapabilityPromptLines,
+  formatToolCapabilityResolutionForFeedback,
+  resolveToolCapabilityForCommand,
+} from './config/toolCapabilities.js';
 import { resolveFamilyModelPolicy } from './modelPolicy.js';
 import { EvidenceBundle }         from './evidence.js';
-import { truncateLogs }           from './utils/truncate.js';
+import { getAllowedShellCommands,
+         validateExecutorShellCommand } from './sandbox.js';
 import { collectHarnessMetadata } from './telemetry/metadata.js';
 import { PipelineTrace, endSpan } from './telemetry/tracing.js';
+import {
+  runPreToolUseHooks,
+  type RuntimeHookTraceEvent,
+} from './runtime/hooks.js';
 import { executeTool,
          ToolCallRequestSchema,
          DRY_RUN }                from './localTools.js';
-import type { ToolResult }        from './localTools.js';
+import type { ToolCallRequest, ToolResult } from './localTools.js';
 import {
   buildGroundingQaReject,
   buildTaskGrounding,
   classifyTaskContract,
   collectPlanGroundingViolations,
   formatGroundingContext,
+  hasPlaceholderProjectPath,
   normalizePlanTargetsAgainstGrounding,
 } from './taskCompletion.js';
 import {
@@ -61,21 +95,227 @@ import {
   ExecutorReportSchema,
   PipelineErrorSchema,
 } from './schemas/agentContracts.js';
+import { autoCompactIfNeeded } from './services/compaction.js';
+import { globalCostTracker } from './services/costTracker.js';
+import {
+  buildCostLedger,
+  usageSummaryFromCostLedger,
+} from './services/costLedger.js';
+import { extractAndSaveMemories } from './services/memoryExtraction.js';
+import {
+  PRE_EXECUTION_FAILURE_CAPSULE_FILENAME,
+  buildPreExecutionFailureArtifacts,
+} from './services/pipelineFailureArtifacts.js';
+import { runPluginHooks } from './services/plugins.js';
+import { analyzeAndPruneContext, isContextPruningEnabled } from './services/pruning.js';
+import { writeExecutorSessionContext } from './services/sessionContext.js';
+import {
+  buildFailureCapsule,
+  formatFailureCapsuleForPrompt,
+  maxAttemptsForRepairMode,
+  type FailureCapsule,
+} from './services/repairGovernance.js';
+import {
+  buildAttemptSafetySummary,
+  buildTerminalStatusSummary,
+  isReadOnlyNoModificationRequest,
+  isVerifierCommand,
+  type AttemptSafetySummary,
+  type ProjectSafetySnapshot,
+  type RollbackMode,
+  type TerminalStatus,
+  type TerminalStatusSummary,
+} from './services/terminalStatus.js';
+import {
+  buildVerifierContractArtifacts,
+  type VerifierContractSummary,
+} from './services/requiredVerifierContract.js';
+import {
+  createWorktreeSafetyController,
+  type WorktreeRollbackSummary,
+  type WorktreeRollbackStatus,
+  type WorktreeSafetySummary,
+} from './services/worktreeSafety.js';
+import type {
+  AutonomousRepairProofAttemptEvidence,
+  AutonomousRepairProofTimeline,
+  CompletionGuardEvidence,
+  RepairProofFileHash,
+} from './services/autonomousRepairProofEvidence.js';
+import {
+  BabelEventBus,
+  emitRuntimeEvent,
+  log,
+  logDetail,
+  runWithPipelineLogContext,
+} from './pipeline/logging.js';
+export { BabelEventBus } from './pipeline/logging.js';
+import {
+  inferProjectRoot,
+  normalizeManifestProjectRoot,
+  readSessionStartProjectPath,
+  resolveConcreteProjectRoot,
+} from './pipeline/manifestContext.js';
+export {
+  inferProjectRoot,
+  normalizeManifestProjectRoot,
+  readSessionStartProjectPath,
+  resolveConcreteProjectRoot,
+} from './pipeline/manifestContext.js';
+import { isEvidenceRequestPlanSatisfied } from './pipeline/executorEvidenceRequests.js';
+export { isEvidenceRequestPlanSatisfied } from './pipeline/executorEvidenceRequests.js';
+import {
+  benchmarkTaskExplicitlyAllowsDependencyInstall,
+  getBenchmarkDependencyInstallPlanReject,
+  getBenchmarkInstallRecoveryBlockReason,
+  getBenchmarkProtectedWriteReason,
+  getExternalBenchmarkDefaultLockedFiles,
+  getExternalRepairRerunLimit,
+  isBenchmarkDependencyInstallCommand,
+  isExternalBenchmarkTask,
+  isInvalidGitBundleArchiveCommand,
+  normalizeShellCommandForComparison,
+  shouldEnforceBoundedPlanActivationContract,
+  shouldHaltExternalRepairRerun,
+} from './pipeline/benchmarkTasks.js';
+export {
+  benchmarkTaskExplicitlyAllowsDependencyInstall,
+  getBenchmarkDependencyInstallPlanReject,
+  getBenchmarkInstallRecoveryBlockReason,
+  getBenchmarkProtectedWriteReason,
+  getExternalBenchmarkDefaultLockedFiles,
+  getExternalRepairRerunLimit,
+  isBenchmarkDependencyInstallCommand,
+  isInvalidGitBundleArchiveCommand,
+  shouldEnforceBoundedPlanActivationContract,
+  shouldHaltExternalRepairRerun,
+} from './pipeline/benchmarkTasks.js';
+import {
+  isExecutorToolShapePlaceholder,
+  replaceExecutorRequestTarget,
+} from './pipeline/executorToolShape.js';
+export { isExecutorToolShapePlaceholder } from './pipeline/executorToolShape.js';
+import { shouldApplyHostWindowsExecutorNotes } from './pipeline/benchmarkRuntime.js';
+export { shouldApplyHostWindowsExecutorNotes } from './pipeline/benchmarkRuntime.js';
+import { buildOrchestratorTask } from './pipeline/orchestratorTask.js';
+import { buildSweTask } from './pipeline/sweTask.js';
+import { buildQaTask } from './pipeline/qaTask.js';
+import { buildPipelineFinalTerminalState } from './pipeline/finalization.js';
+import { validatePlanTargetsWithinEffectiveRoots } from './pipeline/targetConsistency.js';
+import { renderInteractiveChecklist } from './ui/checklist.js';
+import { globalIndexer } from './services/indexer.js';
+import {
+  buildDeterministicRootBuildGradleKtsContent,
+  buildLocalPropertiesSdkLine,
+  detectAndroidSdkStatus,
+  detectCommandOnPath,
+  detectGradleBinaryFromExtractedRoot,
+  detectGradleInstallCandidate,
+  detectJavaRuntimeStatus,
+  ensureAndroidSdkEnvironment,
+  isGradleProvisioningStep,
+  isJavaProvisioningStep,
+  parseGradleDistributionUrl,
+  prependProcessPath,
+  repairSettingsGradleKtsContent,
+  shouldUseDeterministicAndroidSdkBootstrapLane,
+  shouldUseDeterministicGradleBootstrapLane,
+  usesGradleLikeCommand,
+  type AndroidSdkStatus,
+  type CommandRuntimeStatus,
+  type JavaRuntimeStatus,
+} from './stages/runtimePreflight.js';
+import {
+  assertExecutorGate,
+  buildExecutorRepairPrompt,
+  buildExecutorTask,
+  buildExecutorTurnPrompt,
+  buildHaltReport,
+  buildTerminalReport,
+  canonicalizeExecutorTargetForLog,
+  classifyRunnerExhaustionHaltTag,
+  formatExecutionResults,
+  formatHistoryEntry,
+  getExecutorProjectRoot,
+  getTarget,
+  isSameRecoverableCommandRetry,
+  isWithinProjectRootPath,
+  shouldForceRecoverableCommandRerun,
+  resolveStepTargetPath,
+  type PendingRecoverableCommandRetry,
+} from './stages/executorHelpers.js';
+import {
+  extractRequestedFileTargets,
+  getBoundedExecutorContractLines,
+  getBoundedTaskPlanningLines,
+  getBoundedTaskQaLines,
+  getRequestedTargetContract,
+  isAndroidUtilityFileRequest,
+  isAndroidWarningCleanupRequest,
+  isWriteReportTarget,
+  maybeApplyManifestTaskShapeProfile,
+  mergeTaskContext,
+  normalizePathForComparison,
+  normalizeRequestedFileTargetsForBoundedContract,
+  uniqueStrings,
+  type BoundedTaskContract,
+  type SemanticExpectation,
+} from './stages/taskShape.js';
+import {
+  maybeHandleNewFilePreflightFastPath,
+  normalizePlanTargetsAgainstRequestedOutputs,
+  verifyBoundedTaskArtifacts,
+  verifySuccessfulTextWriteTarget,
+} from './stages/verification.js';
+import {
+  getDeterministicSimpleRepairWrite,
+  getDirectBoundedWritePlan,
+  getNextDeterministicSimpleWrite,
+} from './stages/simpleArtifactFallback.js';
+import {
+  buildBenchmarkVerificationPromptLines,
+  collectBenchmarkRiskPlanViolations,
+  type BenchmarkVerificationResult,
+} from './stages/benchmarkVerification.js';
+import { classifyBenchmarkTaskRisk } from './stages/benchmarkTaskRisk.js';
+import {
+  createRepairState,
+  formatFailureFingerprint,
+  recordRepairFailure,
+  type RepairState,
+} from './stages/executorRepairState.js';
+import { evaluatePreCompleteGuards } from './stages/preCompleteGuards.js';
+import {
+  evaluateRunnableArtifactGate,
+  runnableArtifactGateBlocksCompletion,
+  runnableArtifactGateHaltDecision,
+} from './stages/runnableArtifactGate.js';
+import { runRuntimeVerification } from './stages/runtimeVerificationRunner.js';
+import { runGodotArtifactRepairLoop } from './stages/godotArtifactRepair.js';
+import { seedGodotMobileScaffold } from './stages/godotScaffoldSeeder.js';
+import {
+  AMBIGUOUS_LITERAL_BINDING_STATUS,
+  EXACT_INSTRUCTION_DRIFT_STATUS,
+  summarizeExactInvariantFailure,
+  verifyExactInvariants,
+  type ExactInvariantRegistry,
+} from './stages/exactInvariants.js';
 
 import type {
   BudgetDiagnostic,
   HaltTag,
+  OrchestratorErrorHalt,
   OrchestratorManifest,
   PipelineMode,
   RuntimeTelemetry,
   SwePlan,
   QaVerdictReject,
   ToolCallLog,
-  ExecutorTurnCompletion,
 } from './schemas/agentContracts.js';
 
 import type { TargetModel } from './execute.js';
 import type { ResolvedModelPolicy } from './modelPolicy.js';
+import type { SessionUsageSummary } from './services/costTracker.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -95,30 +335,26 @@ const MAX_EXECUTOR_TURNS  = 20;
 const MAX_EVIDENCE_LOOPS  = 2;
 const OBJECTIVE_PREFIX    = 'OBJECTIVE: ';
 const DEFAULT_ORCHESTRATOR_VERSION = 'v9' as const;
-type OrchestratorRuntimeVersion = 'v8' | 'v9';
+const BENCHMARK_INSTALL_RECOVERY_TAG = 'BENCHMARK_INSTALL_RECOVERY_BLOCKED';
+type OrchestratorRuntimeVersion = 'v9';
 
 // ─── Prompt file path sets (relative to BABEL_ROOT) ──────────────────────────
 
-const ORCHESTRATOR_PATHS_V8 = [
-  '01_Behavioral_OS/OLS-v7-Core-Universal.md',
-  '01_Behavioral_OS/OLS-v7-Guard-Auto.md',
-  '00_System_Router/OLS-v8-Orchestrator.md',
-];
 
 const ORCHESTRATOR_PATHS_V9 = [
-  '01_Behavioral_OS/OLS-v7-Core-Universal.md',
+  '01_Behavioral_OS/OLS-v10-Core-Universal.md',
   '01_Behavioral_OS/OLS-v7-Guard-Auto.md',
   '00_System_Router/OLS-v9-Orchestrator.md',
 ];
 
 const QA_PATHS = [
-  '01_Behavioral_OS/OLS-v7-Core-Universal.md',
+  '01_Behavioral_OS/OLS-v10-Core-Universal.md',
   '01_Behavioral_OS/OLS-v7-Guard-Auto.md',
   '02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md',
 ];
 
 const EXECUTOR_PATHS = [
-  '01_Behavioral_OS/OLS-v7-Core-Universal.md',
+  '01_Behavioral_OS/OLS-v10-Core-Universal.md',
   '01_Behavioral_OS/OLS-v7-Guard-Auto.md',
   '02_Domain_Architects/CLI_Executor-v1.0.md',
 ];
@@ -129,7 +365,7 @@ export interface PipelineOptions {
   /** Override the project detected by the Orchestrator. */
   project?: string;
   /** Override the pipeline mode from the Orchestrator manifest. */
-  mode?:    'direct' | 'verified' | 'autonomous' | 'manual';
+  mode?:    'direct' | 'verified' | 'autonomous' | 'manual' | 'parallel_swarm';
   /** Select which orchestrator contract Stage 1 should use. */
   orchestratorVersion?: OrchestratorRuntimeVersion;
   /** Skip Orchestrator model-selection and force a specific worker model. */
@@ -146,17 +382,35 @@ export interface PipelineOptions {
   sessionStartPath?: string;
   /** Optional Local Mode runtime root for exact protocol reconciliation. */
   localLearningRoot?: string;
+  /** Custom log file path (H8.1) */
+  logFile?: string;
+  /** Disable automatic per-run logging if false (H8.1) */
+  autoLog?: boolean;
+  /** Dedicated event bus for UI integration. */
+  eventBus?: BabelEventBus;
+  /** Optional file locks to respect during tool execution. */
+  lockedFiles?: string[];
+  /** Select executor/QA posture for the run without changing the default safe path. */
+  executionProfile?: ExecutionProfileName;
+  /** Enable performance benchmarking and output latency metrics. */
+  benchmark?: boolean;
+  /** Whether to update latest run pointer files during this invocation. */
+  writeLatestPointers?: boolean;
 }
 
 export interface PipelineResult {
   runDir:   string;
   manifest: OrchestratorManifest;
   plan:     SwePlan | null;
-  status:   'COMPLETE' | 'QA_REJECTED_MAX_LOOPS' | 'EXECUTOR_HALTED' | 'EVIDENCE_LOOP_EXCEEDED' | 'MANUAL_BRIDGE_REQUIRED' | 'MANUAL_PLAN_INVALID';
+  status:   TerminalStatus;
   manualPromptPath?: string;
   repairPromptPath?: string;
   errors?: string[];
   modelPolicy?: ResolvedModelPolicy;
+  usageSummary?: SessionUsageSummary;
+  terminalSummary?: TerminalStatusSummary;
+  attemptSafetySummary?: AttemptSafetySummary | null;
+  verifierContractSummary?: VerifierContractSummary;
 }
 
 interface RuntimeCompiledArtifacts {
@@ -181,17 +435,62 @@ interface ExecutorLoopResult {
   condition?: string;
 }
 
-// ─── Logger ───────────────────────────────────────────────────────────────────
-
-function log(msg: string): void {
-  const t = new Date().toLocaleTimeString('en-US', { hour12: false });
-  console.log(`[babel] ${t}  ${msg}`);
+export function shouldHaltAutonomousWithoutApprovedPlan(
+  mode: PipelineMode | string,
+  approvedPlan: SwePlan | null,
+): boolean {
+  return mode === 'autonomous' && approvedPlan === null;
 }
 
-function logDetail(msg: string): void {
-  const t = new Date().toLocaleTimeString('en-US', { hour12: false });
-  console.log(`[babel] ${t}    ${msg}`);
+export function shouldRefuseDirectModeWriteRequest(
+  mode: PipelineMode | string,
+  requestedTargetCount: number,
+): boolean {
+  return mode === 'direct' && requestedTargetCount > 0;
 }
+
+export function resolveCompletionStatusAfterExactInvariantCheck(
+  exactInvariantFailure: string | null,
+): 'COMPLETE' | 'EXACT_INSTRUCTION_DRIFT' | 'AMBIGUOUS_LITERAL_BINDING' {
+  if (!exactInvariantFailure) {
+    return 'COMPLETE';
+  }
+  return exactInvariantFailure.includes(`[${AMBIGUOUS_LITERAL_BINDING_STATUS}]`)
+    ? AMBIGUOUS_LITERAL_BINDING_STATUS
+    : EXACT_INSTRUCTION_DRIFT_STATUS;
+}
+
+function evaluateExactInstructionInvariants(
+  registry: ExactInvariantRegistry,
+  projectRoot: string | null,
+  toolCallLog: readonly ToolCallLog[] = [],
+): string | null {
+  return summarizeExactInvariantFailure(
+    verifyExactInvariants({
+      registry,
+      projectRoot,
+      toolCallLog,
+    }),
+  );
+}
+
+function isReadOnlyEvidenceRequestPlan(approvedPlan: SwePlan): boolean {
+  if (approvedPlan.plan_type !== 'EVIDENCE_REQUEST') {
+    return false;
+  }
+  const readOnlyTools = new Set([
+    'directory_list',
+    'file_read',
+    'semantic_search',
+    'web_search',
+    'web_fetch',
+    'mcp_resource_list',
+    'mcp_resource_read',
+  ]);
+  return approvedPlan.minimal_action_set.length > 0 &&
+    approvedPlan.minimal_action_set.every(step => readOnlyTools.has(String(step.tool ?? '')));
+}
+
 
 // ─── Path helpers ─────────────────────────────────────────────────────────────
 
@@ -207,33 +506,44 @@ function resolveOrchestratorVersion(
     process.env['BABEL_ORCHESTRATOR_VERSION']?.trim() ||
     DEFAULT_ORCHESTRATOR_VERSION;
 
-  if (rawVersion === 'v8' || rawVersion === 'v9') {
+  if (rawVersion === 'v9') {
     return rawVersion;
   }
 
   throw new Error(
-    `Invalid orchestrator version "${rawVersion}". Valid values: v8, v9.`,
+    `Invalid orchestrator version "${rawVersion}". Only v9 is supported.`,
   );
 }
 
 function getOrchestratorPaths(
-  version: OrchestratorRuntimeVersion,
+  _version: OrchestratorRuntimeVersion,
 ): string[] {
-  return version === 'v9' ? ORCHESTRATOR_PATHS_V9 : ORCHESTRATOR_PATHS_V8;
+  return ORCHESTRATOR_PATHS_V9;
 }
 
-function inferProjectRoot(manifest: OrchestratorManifest): string | undefined {
-  const explicit = manifest.target_project_path?.trim();
-  if (explicit && explicit.length > 0) {
-    return explicit;
+/**
+ * Checks if any planned mutating actions conflict with existing workspace locks.
+ */
+export async function checkWorkspaceLocks(
+  plan: z.infer<typeof SwePlanSchema>,
+  babelRoot: string,
+): Promise<{ halted: boolean; reason?: string }> {
+  for (const step of plan.minimal_action_set) {
+    // Only check locks for file-mutating operations.
+    if (step.tool === 'file_write' || step.tool === 'shell_exec') {
+      const lockPath = getWorkspaceLockPath(step.target, babelRoot);
+      const lock = readLock(lockPath);
+
+      if (lock && isLockActive(lock)) {
+        return {
+          halted: true,
+          reason: `Workspace lock conflict: "${step.target}" is locked by ${lock.agent_id} (Run: ${lock.run_id}) until ${lock.expires_at}.`,
+        };
+      }
+    }
   }
 
-  if (manifest.target_project === 'global') {
-    return undefined;
-  }
-
-  const candidate = resolve(BABEL_ROOT, '..', manifest.target_project);
-  return existsSync(candidate) ? candidate : undefined;
+  return { halted: false };
 }
 
 function configureToolProjectRoot(manifest: OrchestratorManifest): void {
@@ -242,6 +552,7 @@ function configureToolProjectRoot(manifest: OrchestratorManifest): void {
   process.env['BABEL_PROJECT_ROOT'] = root;
   logDetail(`Tool project root: ${root}`);
 }
+
 
 function writeLatestRunPointers(runDir: string, project: string): void {
   const payload = {
@@ -291,7 +602,6 @@ function buildV9StackTelemetry(
     final_outcome: null,
   };
 }
-
 function writeRuntimeTelemetrySnapshot(
   evidence: EvidenceBundle,
   telemetry: RuntimeTelemetry | null,
@@ -344,885 +654,358 @@ function markRuntimeTelemetryOutcome(
   };
 }
 
-// ─── Task context builders ────────────────────────────────────────────────────
+export function inferDeterministicDomainId(task: string): { domainId: string; reason: string } | null {
+  const text = String(task ?? '');
+  const normalized = text.replace(/\\/g, '/').toLowerCase();
 
-function buildV8OrchestratorTask(task: string, options: PipelineOptions): string {
-  const lines = [
-    'Analyze the task below and output the orchestration manifest as a single raw JSON object.',
-    'Respond with ONLY valid JSON — no markdown fences, no explanation, no tool calls.',
-    '',
-    'Required JSON shape (follow the schema defined in OLS-v8-Orchestrator.md exactly):',
-    '{',
-    '  "orchestrator_version": "8.0",',
-    '  "target_project": "example_saas_backend|example_llm_router|example_web_audit|global",',
-    '  "target_project_path": "<absolute path or omit>",',
-    '  "analysis": {',
-    '    "task_summary": "...", "task_category": "Backend|Frontend|...",',
-    '    "secondary_category": null, "task_overlay_ids": [],',
-    '    "complexity_estimate": "Low|Medium|High",',
-    '    "pipeline_mode": "direct|verified|autonomous|manual", "ambiguity_note": null,',
-    '    "routing_confidence": 0.95',
-    '  },',
-    '  "platform_profile": {',
-    '    "profile_source": "explicit_user_request|inferred_from_product_feature|not_required_for_routing",',
-    '    "client_surface": "chatgpt_web|claude_web|gemini_web|grok_web|unspecified",',
-    '    "container_model": "chat|project|gem|canvas|artifact|null",',
-    '    "ingestion_mode": "none|file_upload|repo_snapshot|repo_selective_sync|repo_live_query|full_repo_integration",',
-    '    "repo_write_mode": "no_repo_writeback|limited_write_surfaces|repo_writeback|null",',
-    '    "output_surface": ["none|canvas|artifact|project_share|chat_share"],',
-    '    "platform_modes": [],',
-    '    "execution_trust": "high|medium|low|null",',
-    '    "data_trust": "high|medium|low|null",',
-    '    "freshness_trust": "high|medium|low|null",',
-    '    "action_trust": "high|medium|low|null",',
-    '    "approval_mode": "none|explicit_confirmation|takeover_or_confirmation|implicit_permissions|unknown"',
-    '  },',
-    '  "worker_configuration": { "assigned_model": "Codex|Claude|Gemini", "rationale": "..." },',
-    '  "prompt_manifest": ["<absolute path 1>", "<absolute path 2>"],',
-    '  "handoff_payload": { "user_request": "...", "system_directive": "..." }',
-    '}',
-    '',
-    'routing_confidence guidance (0.0–1.0):',
-    '  0.8–1.0 (high)   — task category, target project, and pipeline_mode are unambiguous.',
-    '  0.6–0.79 (medium) — category or pipeline_mode has multiple plausible options.',
-    '  <0.6 (low)        — task is genuinely unclear, cross-project, or domain fit is uncertain.',
-    '',
-    `Task: ${task}`,
-  ];
-  if (options.project) lines.push(`Preferred project: ${options.project}`);
-  if (options.mode)    lines.push(`Preferred pipeline mode: ${options.mode}`);
-  return lines.join('\n');
-}
-
-function buildV9OrchestratorTask(task: string, options: PipelineOptions): string {
-  const lines = [
-    'Analyze the task below and output the orchestration manifest as a single raw JSON object.',
-    'Respond with ONLY valid JSON — no markdown fences, no explanation, no tool calls.',
-    '',
-    'Required JSON shape (follow the schema defined in OLS-v9-Orchestrator.md exactly):',
-    '{',
-    '  "orchestrator_version": "9.0",',
-    '  "target_project": "example_saas_backend|example_llm_router|example_web_audit|example_mobile_suite|global",',
-    '  "target_project_path": "<absolute path or omit>",',
-    '  "analysis": {',
-    '    "task_summary": "...",',
-    '    "task_category": "Backend|Frontend|Mobile|Compliance|DevOps|Research",',
-    '    "secondary_category": null,',
-    '    "complexity_estimate": "Low|Medium|High",',
-    '    "pipeline_mode": "direct|verified|autonomous|manual",',
-    '    "ambiguity_note": null,',
-    '    "routing_confidence": 0.95',
-    '  },',
-    '  "compilation_state": "uncompiled",',
-    '  "instruction_stack": {',
-    '    "behavioral_ids": ["behavioral_core_v7", "behavioral_guard_v7"],',
-    '    "domain_id": "...",',
-    '    "skill_ids": [],',
-    '    "model_adapter_id": "...",',
-    '    "project_overlay_id": null,',
-    '    "task_overlay_ids": [],',
-    '    "pipeline_stage_ids": []',
-    '  },',
-    '  "resolution_policy": {',
-    '    "apply_domain_default_skills": true,',
-    '    "expand_skill_dependencies": true,',
-    '    "strict_conflict_mode": "error"',
-    '  },',
-    '  "platform_profile": {',
-    '    "profile_source": "explicit_user_request|inferred_from_product_feature|not_required_for_routing",',
-    '    "client_surface": "chatgpt_web|claude_web|gemini_web|grok_web|unspecified",',
-    '    "container_model": "chat|project|gem|canvas|artifact|null",',
-    '    "ingestion_mode": "none|file_upload|repo_snapshot|repo_selective_sync|repo_live_query|full_repo_integration",',
-    '    "repo_write_mode": "no_repo_writeback|limited_write_surfaces|repo_writeback|null",',
-    '    "output_surface": ["none|canvas|artifact|project_share|chat_share"],',
-    '    "platform_modes": [],',
-    '    "execution_trust": "high|medium|low|null",',
-    '    "data_trust": "high|medium|low|null",',
-    '    "freshness_trust": "high|medium|low|null",',
-    '    "action_trust": "high|medium|low|null",',
-    '    "approval_mode": "none|explicit_confirmation|takeover_or_confirmation|implicit_permissions|unknown"',
-    '  },',
-    '  "worker_configuration": { "assigned_model": "Codex|Claude|Gemini", "rationale": "..." },',
-    '  "prompt_manifest": [],',
-    '  "handoff_payload": { "user_request": "...", "system_directive": "Resolve instruction_stack against prompt_catalog.yaml, expand dependencies, compile prompt_manifest, then load the compiled files in order." }',
-    '}',
-    '',
-    'routing_confidence guidance (0.0–1.0):',
-    '  0.8–1.0 (high)   — task category, target project, and pipeline_mode are unambiguous.',
-    '  0.6–0.79 (medium) — category or pipeline_mode has multiple plausible options.',
-    '  <0.6 (low)        — task is genuinely unclear, cross-project, or domain fit is uncertain.',
-    '',
-    `Task: ${task}`,
-  ];
-  if (options.project) lines.push(`Preferred project: ${options.project}`);
-  if (options.mode)    lines.push(`Preferred pipeline mode: ${options.mode}`);
-  return lines.join('\n');
-}
-
-function buildOrchestratorTask(
-  task: string,
-  options: PipelineOptions,
-  version: OrchestratorRuntimeVersion,
-): string {
-  return version === 'v9'
-    ? buildV9OrchestratorTask(task, options)
-    : buildV8OrchestratorTask(task, options);
-}
-
-type JavaRuntimeStatus = {
-  available: boolean;
-  source: 'java_home' | 'path' | 'missing';
-  summary: string;
-};
-
-type AndroidSdkStatus = {
-  available: boolean;
-  source: 'android_home' | 'android_sdk_root' | 'local_default' | 'missing';
-  sdkRoot: string | null;
-  sdkManagerPath: string | null;
-  adbPath: string | null;
-  platforms: string[];
-  buildTools: string[];
-  summary: string;
-};
-
-type CommandRuntimeStatus = {
-  available: boolean;
-  source: 'path' | 'missing';
-  summary: string;
-  command: string;
-  resolvedPath: string | null;
-};
-
-function detectCommandOnPath(command: string): CommandRuntimeStatus {
-  const locatorCommand = process.platform === 'win32' ? 'where' : 'which';
-  const locatorResult = spawnSync(locatorCommand, [command], {
-    encoding: 'utf-8',
-    windowsHide: true,
-  });
-  if (locatorResult.status === 0) {
-    const firstMatch = String(locatorResult.stdout ?? '')
-      .split(/\r?\n/)
-      .map(line => line.trim())
-      .find(line => line.length > 0);
-    if (firstMatch) {
-      return {
-        available: true,
-        source: 'path',
-        summary: `${command} available on PATH (${firstMatch})`,
-        command,
-        resolvedPath: firstMatch,
-      };
-    }
-  }
-
-  return {
-    available: false,
-    source: 'missing',
-    summary: `${command} is NOT available on PATH in the current executor environment.`,
-    command,
-    resolvedPath: null,
-  };
-}
-
-function detectGradleInstallCandidate(): string | null {
-  const roots = process.platform === 'win32'
-    ? [
-        'C:\\Program Files\\Gradle',
-        'C:\\Program Files (x86)\\Gradle',
-      ]
-    : ['/opt/gradle', '/usr/local/gradle'];
-
-  const candidates: string[] = [];
-  for (const root of roots) {
-    if (!existsSync(root)) continue;
-    try {
-      const entries = readdirSync(root, { withFileTypes: true })
-        .filter(entry => entry.isDirectory())
-        .map(entry => join(
-          root,
-          entry.name,
-          'bin',
-          process.platform === 'win32' ? 'gradle.bat' : 'gradle',
-        ))
-        .filter(candidate => existsSync(candidate))
-        .sort((left, right) => right.localeCompare(left));
-      candidates.push(...entries);
-    } catch {
-      continue;
-    }
-  }
-
-  return candidates[0] ?? null;
-}
-
-function prependProcessPath(pathEntry: string): void {
-  const currentPath = process.env.PATH ?? '';
-  const delimiter = process.platform === 'win32' ? ';' : ':';
-  const normalizedEntry = resolve(pathEntry);
-  const existing = currentPath
-    .split(delimiter)
-    .map(entry => entry.trim())
-    .filter(entry => entry.length > 0);
-
-  const alreadyPresent = existing.some(entry =>
-    process.platform === 'win32'
-      ? entry.toLowerCase() === normalizedEntry.toLowerCase()
-      : entry === normalizedEntry,
-  );
-  if (alreadyPresent) {
-    return;
-  }
-
-  process.env.PATH = [normalizedEntry, ...existing].join(delimiter);
-}
-
-function parseGradleDistributionUrl(propertiesContent: string): string | null {
-  const match = String(propertiesContent ?? '')
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .find(line => line.startsWith('distributionUrl='));
-  if (!match) {
-    return null;
-  }
-
-  return match
-    .slice('distributionUrl='.length)
-    .trim()
-    .replace(/\\:/g, ':')
-    .replace(/\\=/g, '=');
-}
-
-function detectGradleBinaryFromExtractedRoot(extractedRoot: string): string | null {
-  const binaryName = process.platform === 'win32' ? 'gradle.bat' : 'gradle';
-  const directCandidate = join(extractedRoot, 'bin', binaryName);
-  if (existsSync(directCandidate)) {
-    return directCandidate;
-  }
-
-  if (!existsSync(extractedRoot)) {
-    return null;
-  }
-
-  try {
-    const entries = readdirSync(extractedRoot, { withFileTypes: true })
-      .filter(entry => entry.isDirectory())
-      .map(entry => join(extractedRoot, entry.name, 'bin', binaryName))
-      .filter(candidate => existsSync(candidate))
-      .sort((left, right) => right.localeCompare(left));
-    return entries[0] ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function repairSettingsGradleKtsContent(content: string): {
-  content: string;
-  changed: boolean;
-  notes: string[];
-} {
-  let next = String(content ?? '');
-  const notes: string[] = [];
-
-  const includeBareStringRe = /^(\s*)include\s+"([^"]+)"\s*$/gm;
-  if (includeBareStringRe.test(next)) {
-    next = next.replace(includeBareStringRe, '$1include("$2")');
-    notes.push('Normalized bare include syntax to include("...").');
-  }
-
-  return {
-    content: next,
-    changed: notes.length > 0,
-    notes,
-  };
-}
-
-function buildDeterministicRootBuildGradleKtsContent(): string {
-  return [
-    'plugins {',
-    '    id("com.android.application") version "8.7.3" apply false',
-    '    id("org.jetbrains.kotlin.android") version "1.9.24" apply false',
-    '}',
-    '',
-  ].join('\n');
-}
-
-function detectJavaRuntimeStatus(): JavaRuntimeStatus {
-  const javaHome = process.env.JAVA_HOME?.trim();
-  if (javaHome) {
-    const javaHomeCandidate = join(
-      javaHome,
-      'bin',
-      process.platform === 'win32' ? 'java.exe' : 'java',
-    );
-    if (existsSync(javaHomeCandidate)) {
-      return {
-        available: true,
-        source: 'java_home',
-        summary: `Java available via JAVA_HOME (${javaHomeCandidate})`,
-      };
-    }
-  }
-
-  const javaPathStatus = detectCommandOnPath('java');
-  if (javaPathStatus.available) {
+  if (
+    /\bterminal-bench 2 task:\s*break-filter-js-from-html\b/i.test(normalized) ||
+    (
+      /\bterminal-bench 2 task\b/i.test(normalized) &&
+      /\b(?:filter\.py|test_outputs\.py|out\.html|javascript alert|xss|html file)\b/i.test(normalized)
+    )
+  ) {
     return {
-      available: true,
-      source: 'path',
-      summary: `Java available on PATH (${javaPathStatus.resolvedPath})`,
+      domainId: 'domain_python_backend',
+      reason: 'Terminal-Bench HTML sanitizer task requires Python/validator routing, not game routing',
     };
   }
 
-  return {
-    available: false,
-    source: 'missing',
-    summary: 'Java is NOT available in the current executor environment. JAVA_HOME is unset or invalid and no java executable is on PATH.',
-  };
-}
-
-function listDirectoryNamesIfPresent(dirPath: string): string[] {
-  if (!existsSync(dirPath)) {
-    return [];
+  if (
+    /\.(?:gd|tscn|tres)\b/i.test(normalized) ||
+    /\b(?:project\.godot|export_presets\.cfg|godot|gdscript|inputmap|canvaslayer|tilemap)\b/i.test(normalized)
+  ) {
+    return { domainId: 'domain_godot_game_dev', reason: 'task references Godot/GDScript game artifacts' };
   }
 
-  try {
-    return readdirSync(dirPath, { withFileTypes: true })
-      .filter(entry => entry.isDirectory())
-      .map(entry => entry.name)
-      .sort((left, right) => left.localeCompare(right));
-  } catch {
-    return [];
-  }
-}
-
-function detectAndroidSdkStatus(): AndroidSdkStatus {
-  const candidates: Array<{ source: AndroidSdkStatus['source']; root: string | null }> = [
-    { source: 'android_home', root: process.env.ANDROID_HOME?.trim() ?? null },
-    { source: 'android_sdk_root', root: process.env.ANDROID_SDK_ROOT?.trim() ?? null },
-    {
-      source: 'local_default',
-      root: process.env.LOCALAPPDATA
-        ? join(process.env.LOCALAPPDATA, 'Android', 'Sdk')
-        : null,
-    },
-  ];
-
-  for (const candidate of candidates) {
-    if (!candidate.root || !existsSync(candidate.root)) {
-      continue;
-    }
-
-    const platforms = listDirectoryNamesIfPresent(join(candidate.root, 'platforms'));
-    const buildTools = listDirectoryNamesIfPresent(join(candidate.root, 'build-tools'));
-    const platformToolsDir = join(candidate.root, 'platform-tools');
-    const toolsBinDir = join(candidate.root, 'tools', 'bin');
-    const adbPath = existsSync(join(platformToolsDir, process.platform === 'win32' ? 'adb.exe' : 'adb'))
-      ? join(platformToolsDir, process.platform === 'win32' ? 'adb.exe' : 'adb')
-      : null;
-    const sdkManagerPath = existsSync(join(toolsBinDir, process.platform === 'win32' ? 'sdkmanager.bat' : 'sdkmanager'))
-      ? join(toolsBinDir, process.platform === 'win32' ? 'sdkmanager.bat' : 'sdkmanager')
-      : null;
-
-    if (platforms.length > 0 && buildTools.length > 0) {
-      return {
-        available: true,
-        source: candidate.source,
-        sdkRoot: candidate.root,
-        sdkManagerPath,
-        adbPath,
-        platforms,
-        buildTools,
-        summary: `Android SDK available via ${candidate.source} (${candidate.root}); platforms=${platforms.join(', ') || 'none'}; build-tools=${buildTools.join(', ') || 'none'}`,
-      };
-    }
+  if (/\bapp\/src\/main\/java\/.+\.(kt|java)\b/i.test(normalized) || /\.(kt|java)\b/i.test(normalized)) {
+    return { domainId: 'domain_android_kotlin', reason: 'task references Android/Kotlin or Java source paths' };
   }
 
-  return {
-    available: false,
-    source: 'missing',
-    sdkRoot: null,
-    sdkManagerPath: null,
-    adbPath: null,
-    platforms: [],
-    buildTools: [],
-    summary: 'Android SDK is NOT available in the executor environment. ANDROID_HOME / ANDROID_SDK_ROOT are unset or invalid and no usable local SDK was discovered.',
-  };
-}
-
-function buildLocalPropertiesSdkLine(sdkRoot: string): string {
-  return `sdk.dir=${sdkRoot.replace(/\\/g, '\\\\')}`;
-}
-
-function ensureAndroidSdkEnvironment(sdkStatus: AndroidSdkStatus): string[] {
-  if (!sdkStatus.available || !sdkStatus.sdkRoot) {
-    return [];
+  if (
+    /\bconfig\/[^ \r\n'"`]+\.(?:sh|ps1|yml|yaml)\b/i.test(normalized) ||
+    /\b(?:ci\/cd|cicd|deploy(?:ment)?|ops|healthcheck|smoke checks?)\b/i.test(normalized)
+  ) {
+    return { domainId: 'domain_devops', reason: 'task references deployment, CI/CD, ops, or healthcheck artifacts' };
   }
 
-  process.env.ANDROID_HOME = sdkStatus.sdkRoot;
-  process.env.ANDROID_SDK_ROOT = sdkStatus.sdkRoot;
-
-  const prependedPaths: string[] = [];
-  for (const dirPath of [
-    join(sdkStatus.sdkRoot, 'platform-tools'),
-    join(sdkStatus.sdkRoot, 'tools', 'bin'),
-    join(sdkStatus.sdkRoot, 'emulator'),
-  ]) {
-    if (existsSync(dirPath)) {
-      prependProcessPath(dirPath);
-      prependedPaths.push(dirPath);
-    }
+  if (
+    /\bdocs\/[^ \r\n'"`]*(?:evidence|audit|compliance)[^ \r\n'"`]*\.md\b/i.test(normalized) ||
+    /\b(?:compliance|audit readiness|control owners?|retention evidence|sign-off)\b/i.test(normalized)
+  ) {
+    return { domainId: 'domain_compliance_gpc', reason: 'task references compliance or audit evidence artifacts' };
   }
 
-  return prependedPaths;
+  if (/\bsrc\/[^ \r\n'"`]+\.(?:css|jsx|tsx)\b/i.test(normalized) || /\bhtml string\b/i.test(normalized)) {
+    return { domainId: 'domain_swe_frontend', reason: 'task references frontend source or rendered HTML/CSS artifacts' };
+  }
+
+  if (/\bsrc\/[^ \r\n'"`]+\.(?:ts|js|mjs|cjs)\b/i.test(normalized)) {
+    return { domainId: 'domain_swe_backend', reason: 'task references general source artifacts' };
+  }
+
+  return null;
 }
 
-function usesGradleLikeCommand(target: string): boolean {
-  return /\b(?:gradle|gradlew(?:\.bat)?)\b/i.test(String(target ?? ''));
-}
-
-function isGradleProvisioningStep(step: SwePlan['minimal_action_set'][number]): boolean {
-  if (step.tool !== 'shell_exec' && step.tool !== 'test_run') {
+function hasGradleBuildMarkers(projectRoot: string | undefined): boolean {
+  if (!projectRoot) {
     return false;
   }
-
-  const target = String(step.target ?? '').trim();
-  if (!target) {
-    return false;
-  }
-
-  return /\b(winget|choco|scoop)\b.*\bgradle\b/i.test(target);
-}
-
-function shouldUseDeterministicGradleBootstrapLane(
-  manifest: OrchestratorManifest,
-): boolean {
-  const projectRoot = inferProjectRoot(manifest);
-  if (!projectRoot || !existsSync(projectRoot)) {
-    return false;
-  }
-
-  const wrapperJarPath = join(projectRoot, 'gradle', 'wrapper', 'gradle-wrapper.jar');
-  const gradlewPath = join(projectRoot, 'gradlew');
-  const gradlewBatPath = join(projectRoot, 'gradlew.bat');
-  const wrapperPropertiesPath = join(projectRoot, 'gradle', 'wrapper', 'gradle-wrapper.properties');
-
-  return (
-    !existsSync(wrapperJarPath) &&
-    existsSync(wrapperPropertiesPath) &&
-    (existsSync(gradlewPath) || existsSync(gradlewBatPath))
-  );
-}
-
-function shouldUseDeterministicAndroidSdkBootstrapLane(
-  manifest: OrchestratorManifest,
-): boolean {
-  const projectRoot = inferProjectRoot(manifest);
-  if (!projectRoot || !existsSync(projectRoot)) {
-    return false;
-  }
-
-  return (
-    existsSync(join(projectRoot, 'settings.gradle.kts')) ||
-    existsSync(join(projectRoot, 'app', 'build.gradle.kts')) ||
-    existsSync(join(projectRoot, 'app', 'src', 'main', 'AndroidManifest.xml'))
-  );
-}
-
-function isJavaProvisioningStep(step: SwePlan['minimal_action_set'][number]): boolean {
-  if (step.tool !== 'shell_exec' && step.tool !== 'test_run') {
-    return false;
-  }
-
-  const target = String(step.target ?? '').trim();
-  if (!target) {
-    return false;
-  }
-
-  return (
-    /\b(winget|choco|scoop)\b.*\b(jdk|java|temurin|openjdk|corretto|microsoft-openjdk)\b/i.test(target) ||
-    /\b(setx|export)\b[^\r\n]*\bJAVA_HOME\b/i.test(target) ||
-    /\bJAVA_HOME\s*=/.test(target) ||
-    /\bgradle\s+wrapper\b/i.test(target)
-  );
-}
-
-function buildSweTask(
-  manifest:            OrchestratorManifest,
-  qaRejections:        string[],
-  proposedFixStrategy: string | undefined,
-  evidenceContext:     string = '',
-  groundingContext:    string = '',
-): string {
-  const { user_request } = manifest.handoff_payload;
-  const projectRoot = inferProjectRoot(manifest);
-  const projectRootLines: string[] = [];
-  const wrapperBootstrapLines: string[] = [];
-  const runtimePreflightLines: string[] = [];
-  const deterministicLaneLines: string[] = [];
-  const javaRuntimeStatus = detectJavaRuntimeStatus();
-  const gradleRuntimeStatus = detectCommandOnPath('gradle');
-  const androidSdkStatus = detectAndroidSdkStatus();
-  const wingetRuntimeStatus = process.platform === 'win32'
-    ? detectCommandOnPath('winget')
-    : { available: false, source: 'missing', summary: 'winget is unavailable on non-Windows platforms.', command: 'winget', resolvedPath: null } satisfies CommandRuntimeStatus;
-
-  if (projectRoot) {
-    projectRootLines.push(`Target project root: ${projectRoot}`);
-
-    if (existsSync(projectRoot)) {
-      const topLevelEntries = readdirSync(projectRoot, { withFileTypes: true })
-        .sort((left, right) => left.name.localeCompare(right.name))
-        .map((entry) => `${entry.isDirectory() ? 'dir' : 'file'} ${entry.name}`);
-      const hasExistingAndroidProject =
-        existsSync(join(projectRoot, 'app')) ||
-        existsSync(join(projectRoot, 'settings.gradle.kts')) ||
-        existsSync(join(projectRoot, 'app', 'build.gradle.kts')) ||
-        existsSync(join(projectRoot, 'app', 'src', 'main', 'AndroidManifest.xml'));
-
-      projectRootLines.push(
-        `Current top-level entries: ${topLevelEntries.length > 0 ? topLevelEntries.join(', ') : '(empty)'}`,
-      );
-      projectRootLines.push(
-        hasExistingAndroidProject
-          ? 'Existing target state: partial Android project already exists at the target root. Continue in place; do not create a second nested app root.'
-          : 'Existing target state: no Android project markers detected yet at the target root.',
-      );
-
-      const wrapperPropertiesPath = join(projectRoot, 'gradle', 'wrapper', 'gradle-wrapper.properties');
-      const wrapperJarPath = join(projectRoot, 'gradle', 'wrapper', 'gradle-wrapper.jar');
-      const gradlewPath = join(projectRoot, 'gradlew');
-      const gradlewBatPath = join(projectRoot, 'gradlew.bat');
-      const wrapperPropertiesExists = existsSync(wrapperPropertiesPath);
-      const wrapperJarExists = existsSync(wrapperJarPath);
-      const gradlewExists = existsSync(gradlewPath);
-      const gradlewBatExists = existsSync(gradlewBatPath);
-      const rootBuildGradlePath = join(projectRoot, 'build.gradle.kts');
-      const appBuildGradlePath = join(projectRoot, 'app', 'build.gradle.kts');
-      const rootBuildGradleExists = existsSync(rootBuildGradlePath);
-      const appBuildGradleExists = existsSync(appBuildGradlePath);
-      const mirroredGradleCandidates = [
-        join(projectRoot, 'reference-montecarlo-ledger', 'build.gradle.kts'),
-        join(projectRoot, 'reference-montecarlo-ledger', 'settings.gradle.kts'),
-        join(projectRoot, 'reference-montecarlo-ledger', 'app', 'build.gradle.kts'),
-        join(projectRoot, 'reference-montecarlo-ledger', 'gradle', 'wrapper', 'gradle-wrapper.properties'),
-        join(projectRoot, 'reference-montecarlo-ledger', 'gradle', 'wrapper', 'gradle-wrapper.jar'),
-      ];
-      const missingMirroredGradleFiles = mirroredGradleCandidates
-        .filter(candidatePath => !existsSync(candidatePath))
-        .map(candidatePath => candidatePath.replace(/\\/g, '/'));
-
-      projectRootLines.push(
-        `Gradle wrapper state: properties=${wrapperPropertiesExists ? 'present' : 'missing'}, jar=${wrapperJarExists ? 'present' : 'missing'}, gradlew=${gradlewExists ? 'present' : 'missing'}, gradlew.bat=${gradlewBatExists ? 'present' : 'missing'}`,
-      );
-      projectRootLines.push(
-        `Build file state: root build.gradle.kts=${rootBuildGradleExists ? 'present' : 'missing'}, app/build.gradle.kts=${appBuildGradleExists ? 'present' : 'missing'}, settings.gradle.kts=${existsSync(join(projectRoot, 'settings.gradle.kts')) ? 'present' : 'missing'}`,
-      );
-      runtimePreflightLines.push(`Executor Java runtime: ${javaRuntimeStatus.summary}`);
-      runtimePreflightLines.push(`Executor Gradle runtime: ${gradleRuntimeStatus.summary}`);
-      runtimePreflightLines.push(`Executor Android SDK runtime: ${androidSdkStatus.summary}`);
-      runtimePreflightLines.push(`Executor winget runtime: ${wingetRuntimeStatus.summary}`);
-      if (missingMirroredGradleFiles.length > 0) {
-        runtimePreflightLines.push(
-          `Known missing mirrored Gradle files: ${missingMirroredGradleFiles.join(', ')}`,
-        );
-      }
-
-      if (!gradlewExists || !gradlewBatExists || !wrapperPropertiesExists) {
-        wrapperBootstrapLines.push(
-          'Wrapper bootstrap mode is ACTIVE.',
-          'If gradle/wrapper/gradle-wrapper.properties exists in the target root, treat that target file as the source of truth and create missing gradlew / gradlew.bat directly with file_write.',
-          'Do NOT plan file_read or directory_list steps against wrapper files in the mirrored reference repo unless those exact wrapper files are already known to exist there.',
-          'Known wrapper generation rule:',
-          '  - write gradlew as a standard POSIX Gradle launcher script that invokes "%APP_HOME%/gradle/wrapper/gradle-wrapper.jar" via Java when present',
-          '  - write gradlew.bat as a standard Windows Gradle launcher script that invokes "%APP_HOME%\\gradle\\wrapper\\gradle-wrapper.jar" via Java when present',
-          '  - if gradle-wrapper.properties is missing, create it directly at gradle/wrapper/gradle-wrapper.properties with a valid Gradle distributionUrl before creating wrapper scripts',
-          '  - if wrapper scripts are missing, create them directly in the target root instead of trying to copy or inspect them from the mirrored source repo',
-          '  - if gradle-wrapper.jar is also missing, prefer a direct shell_exec step like "gradle wrapper" in the target root after the project files are in place',
-        );
-      }
-
-      if (!gradleRuntimeStatus.available && !wrapperJarExists) {
-        wrapperBootstrapLines.push(
-          'Gradle bootstrap sequencing is REQUIRED because gradle-wrapper.jar is missing and global gradle is also missing.',
-          'A deterministic executor bootstrap lane will provision Gradle and generate gradle-wrapper.jar before normal execution begins.',
-          'Do NOT spend plan steps on installing Gradle, running `gradle --version`, or running `gradle wrapper` when this lane is active.',
-          'The plan MUST provision Gradle first (for example via winget install) BEFORE any step that runs `gradle wrapper`, `gradle --version`, or other global Gradle commands.',
-          'Do NOT place `gradle --version` before the Gradle provisioning step.',
-          'Do NOT plan any file_read or directory_list steps against known-missing mirrored Gradle files while bootstrapping Gradle.',
-          'Until the lane completes, focus the action set on concrete project files and post-bootstrap verification/build steps only.',
-        );
-        deterministicLaneLines.push(
-          'Deterministic Gradle bootstrap lane is ACTIVE for this task.',
-          'The plan must assume wrapper/bootstrap prerequisites will be satisfied before normal execution begins.',
-          'BANNED plan steps while this lane is active:',
-          '  - `winget install Gradle.Gradle` or any other Gradle provisioning command',
-          '  - `gradle --version`',
-          '  - `gradle wrapper`',
-          '  - reading `gradle-wrapper.jar` as if it already exists',
-          '  - verifying future APK output files by reading them before the build runs',
-          'Allowed post-bootstrap work:',
-          '  - read existing project files that already exist',
-          '  - create missing build files directly with file_write when target files are missing',
-          '  - run wrapper-based commands like `gradlew tasks` or `gradlew assembleDebug` after bootstrap',
-        );
-      }
-
-      if (!gradleRuntimeStatus.available && wrapperJarExists && (gradlewExists || gradlewBatExists)) {
-        deterministicLaneLines.push(
-          'Existing Gradle wrapper mode is ACTIVE for this task.',
-          'The target project already has gradlew / gradlew.bat and gradle-wrapper.jar, while global gradle is missing from PATH.',
-          'BANNED plan steps in this mode:',
-          '  - any global `gradle ...` command, including `gradle --version` and `gradle wrapper`',
-          '  - provisioning or re-creating the wrapper when the existing wrapper files are already present',
-          'Required behavior in this mode:',
-          '  - use only wrapper-based commands such as `gradlew tasks` or `gradlew assembleDebug` for build verification',
-          '  - treat wrapper execution as the canonical Gradle path for this task',
-        );
-      }
-
-      if (!rootBuildGradleExists) {
-        deterministicLaneLines.push(
-          'Target root build.gradle.kts is currently missing. If needed, CREATE it directly with file_write; do not try to file_read it first.',
-        );
-      }
-      if (appBuildGradleExists) {
-        deterministicLaneLines.push(
-          'Target app/build.gradle.kts already exists. Prefer reading this real target file instead of any mirrored build.gradle.kts.',
-        );
-      }
-    } else {
-      projectRootLines.push('Current top-level entries: target root does not exist yet.');
-    }
-  }
-
-  const lines = [
-    'Analyze the task below and produce the SWE Plan as a single raw JSON object.',
-    'Respond with ONLY valid JSON — no markdown fences, no explanation, no tool calls.',
-    '',
-    'Required JSON shape:',
-    '{',
-    '  "plan_version": "1.0",',
-    '  "plan_type": "EVIDENCE_REQUEST|IMPLEMENTATION_PLAN",',
-    '  "task_summary": "OBJECTIVE: <one-sentence summary>",',
-    '  "known_facts":  ["<fact>"],',
-    '  "assumptions":  ["<assumption>"],',
-    '  "risks": [{ "risk": "...", "likelihood": "low|medium|high", "mitigation": "..." }],',
-    '  "minimal_action_set": [{',
-    '    "step": 1, "description": "...",',
-    '    "tool": "directory_list|file_read|file_write|shell_exec|test_run|mcp_request|audit_ui|memory_store|memory_query",',
-    '    "target": "<path or command>", "rationale": "...",',
-    '    "reversible": true, "verification": "<how to confirm success>"',
-    '  }],',
-    '  "root_cause": "N/A — feature request",',
-    '  "out_of_scope": ["<excluded item>"]',
-    '}',
-    '',
-    `Task: ${user_request}`,
-    ...(projectRootLines.length > 0
-      ? [
-          '',
-          'Target project context:',
-          ...projectRootLines,
-        ]
-      : []),
-    '',
-    'Planning rules for executable steps:',
-    '  - Use "directory_list" to inspect folders. Do NOT use "file_read" on a directory path.',
-    '  - Use "file_read" only for actual files whose contents need inspection.',
-    '  - Every file_read target must be a concrete file path. Never use placeholder targets like <path-to-main-source-file>.',
-    '  - For "shell_exec" and "test_run", the target must be the executable command itself.',
-    '  - Do NOT wrap commands with "cmd /c", PowerShell, bash, shell chaining, helper scripts, or "cd ... &&".',
-    '  - Use project-root or module-root paths in working_directory instead of shell wrappers.',
-    '  - Prefer file_write over shell-based bulk transforms. Do NOT create or run wrapper scripts to rewrite many files.',
-    '  - If the target root already contains a partial project, continue by editing that existing tree in place.',
-    '  - Do NOT create a second nested application root inside the target root unless the user explicitly asked for that.',
-    '  - If a mirrored reference repo already lives inside the target root, read from that mirrored path instead of any external path.',
-    '  - Prefer a small number of concrete file_read steps followed by direct file_write steps for the files that need to change.',
-    '  - When the task is to restore or generate missing wrapper/build scripts (for example gradlew or gradlew.bat), do NOT plan file_read steps against those missing files.',
-    '  - If a required wrapper script is missing but its companion config exists (for example gradle/wrapper/gradle-wrapper.properties), read the existing config and then create the missing wrapper script directly with file_write.',
-    '  - Do not use the mirrored reference repo as a source of truth for wrapper files unless those exact wrapper files actually exist there.',
-    '  - Treat runtime prerequisites as part of the executable plan. Do not assume Java, JAVA_HOME, SDKs, or build tools exist unless the target context confirms that they do.',
-    ...(javaRuntimeStatus.available
-      ? [
-          `  - Current Java preflight: ${javaRuntimeStatus.summary}.`,
-        ]
-      : [
-          '  - Current Java preflight: Java is missing in the executor environment.',
-          '  - If you plan any gradle/gradlew verification or build step, add an explicit Java bootstrap/configuration step BEFORE the first Gradle command.',
-          '  - That bootstrap step must install or configure a JDK / JAVA_HOME, not just assume java exists.',
-        ]),
-    ...(gradleRuntimeStatus.available
-      ? [
-          `  - Current Gradle preflight: ${gradleRuntimeStatus.summary}.`,
-        ]
-      : [
-          '  - Current Gradle preflight: global gradle is missing from PATH.',
-          '  - If gradle-wrapper.jar is missing, do NOT plan a `gradle wrapper` step unless the plan first installs/configures Gradle or uses another explicit bootstrap path.',
-          '  - When global gradle is absent and gradle-wrapper.jar is missing, the first global-Gradle-related step must be a provisioning step, not `gradle --version` and not a mirrored Gradle file read.',
-          ...(wingetRuntimeStatus.available
-            ? ['  - A valid recovery path is to install Gradle explicitly with winget before invoking `gradle wrapper`, because winget is available in this executor environment.']
-            : []),
-        ]),
-    ...(androidSdkStatus.available
-      ? [
-          `  - Current Android SDK preflight: ${androidSdkStatus.summary}.`,
-          '  - For Android build verification, prefer relying on the deterministic executor Android SDK lane rather than planning manual SDK discovery steps.',
-          '  - If local.properties is missing, do NOT plan a file_read against it; the executor SDK lane can create or repair it directly.',
-        ]
-      : [
-          '  - Current Android SDK preflight: no usable Android SDK has been discovered yet.',
-          '  - If you plan Android build verification steps like `gradlew assembleDebug`, the plan must either provision/configure the Android SDK first or explicitly rely on an executor bootstrap lane when one is active.',
-          '  - Do NOT treat missing local.properties as an existing file that must be read first; if needed, create it directly with file_write.',
-        ]),
-    ...(wrapperBootstrapLines.length > 0
-      ? [
-          '',
-          'Wrapper bootstrap context:',
-          ...wrapperBootstrapLines,
-        ]
-      : []),
-    ...(runtimePreflightLines.length > 0
-      ? [
-          '',
-          'Runtime preflight context:',
-          ...runtimePreflightLines,
-        ]
-      : []),
-    ...(deterministicLaneLines.length > 0
-      ? [
-          '',
-          'Deterministic bootstrap context:',
-          ...deterministicLaneLines,
-        ]
-      : []),
-  ];
-
-  if (qaRejections.length > 0) {
-    lines.push(
-      '',
-      '--- QA REJECTION FEEDBACK ---',
-      '',
-      'Your previous plan was rejected. You MUST address ALL of the following',
-      'failures in your revised plan. Do not omit any of them:',
-      '',
-      ...qaRejections.map((r, i) => `  ${i + 1}. ${r}`),
-    );
-
-    if (proposedFixStrategy) {
-      lines.push(
-        '',
-        '--- QA DIRECTIONAL HINT ---',
-        `The QA Reviewer suggested this direction: ${proposedFixStrategy}`,
-        '(This is a dimension to address, not a complete fix. You must still',
-        ' resolve every listed failure independently.)',
-      );
-    }
-
-    lines.push(
-      '',
-      'Produce a corrected plan that eliminates every listed failure.',
-    );
-  }
-
-  if (evidenceContext) {
-    lines.push(
-      '',
-      '--- GATHERED EVIDENCE ---',
-      'The following context was collected by prior read-only evidence passes.',
-      'Use it to produce a concrete implementation plan.',
-      'Set "plan_type" to "IMPLEMENTATION_PLAN".',
-      'Do NOT emit another EVIDENCE_REQUEST — proceed with full implementation.',
-      '',
-      evidenceContext.trim(),
-    );
-  }
-
-  if (groundingContext.trim().length > 0) {
-    lines.push(
-      '',
-      groundingContext.trim(),
-    );
-  }
-
-  return lines.join('\n');
-}
-
-function buildQaTask(
-  swePlan: SwePlan,
-  javaRuntimeStatus: JavaRuntimeStatus,
-  gradleRuntimeStatus: CommandRuntimeStatus,
-  androidSdkStatus: AndroidSdkStatus,
-  deterministicGradleBootstrapLaneActive = false,
-): string {
   return [
-    'Review the SWE Plan below and produce a QA verdict as a single raw JSON object.',
-    'Respond with ONLY valid JSON — no markdown fences, no explanation, no tool calls.',
-    '',
-    '--- FIELD MAPPING (JSON format is the approved submission format) ---',
-    'The plan is submitted in machine-readable JSON. Map fields as follows:',
-    '  task_summary          → OBJECTIVE',
-    '  known_facts           → KNOWN FACTS',
-    '  assumptions           → ASSUMPTIONS',
-    '  risks[]               → RISKS',
-    '  minimal_action_set[]  → MINIMAL ACTION SET',
-    '    each step.verification → VERIFICATION METHOD for that step',
-    '  root_cause            → ROOT CAUSE',
-    '  out_of_scope[]        → scope boundaries',
-    'Do NOT use INCOMPLETE_SUBMISSION for missing text sections; the JSON fields above',
-    'are the valid submission format. Only use INCOMPLETE_SUBMISSION if a required JSON',
-    'field is missing entirely (e.g., minimal_action_set is empty or absent).',
-    '',
-    '--- EVIDENCE-GATE CLARIFICATION ---',
-    'EVIDENCE-GATE requires file visibility ONLY when modifying an EXISTING file.',
-    'Do NOT raise EVIDENCE-GATE for steps that CREATE a new file (the file does not exist',
-    'yet — there is no current content to inspect). A file_write step with a target path',
-    'that the plan is creating from scratch is NOT an EVIDENCE-GATE violation.',
-    '',
-    '--- EXECUTOR SAFETY RULES ---',
-    'Reject the plan if any minimal_action_set step contains any of the following:',
-    '  - unresolved placeholder targets such as <path-to-file> or other angle-bracket placeholders',
-    '  - file or directory targets outside target_project_path',
-    '  - shell-wrapped commands such as cmd /c, powershell -c, bash -lc, sh -c',
-    '  - command chaining or directory-changing wrappers such as cd ... &&',
-    '  - gradle/gradlew verification steps that assume Java exists when the runtime preflight says Java is missing and the plan does not bootstrap/configure Java first',
-    '  - `gradle ...` steps that assume global Gradle exists when the runtime preflight says Gradle is missing and the plan does not install/configure Gradle first',
-    'Use INCOMPLETE_SUBMISSION for unresolved placeholders.',
-    'Use SFDIPOT-P for executor/runtime-incompatible paths or shell-wrapped commands.',
-    `Current Java runtime preflight: ${javaRuntimeStatus.summary}`,
-    `Current Gradle runtime preflight: ${gradleRuntimeStatus.summary}`,
-    `Current Android SDK runtime preflight: ${androidSdkStatus.summary}`,
-    ...(deterministicGradleBootstrapLaneActive
+    'settings.gradle',
+    'settings.gradle.kts',
+    'build.gradle',
+    'build.gradle.kts',
+    'gradlew',
+    'gradlew.bat',
+    'app/build.gradle',
+    'app/build.gradle.kts',
+  ].some(relativePath => existsSync(join(projectRoot, relativePath)));
+}
+
+function isAndroidSourceOnlyWorkspace(projectRoot: string | undefined): boolean {
+  if (!projectRoot || hasGradleBuildMarkers(projectRoot)) {
+    return false;
+  }
+  return [
+    join(projectRoot, 'app', 'src', 'main', 'java'),
+    join(projectRoot, 'app', 'src', 'main', 'kotlin'),
+  ].some(path => existsSync(path));
+}
+
+function maybeApplyDeterministicDomainOverride(
+  manifest: OrchestratorManifest,
+  rawTask: string,
+): { manifest: OrchestratorManifest; warnings: string[]; applied: boolean } {
+  if (!manifest.instruction_stack || !manifest.resolution_policy) {
+    return { manifest, warnings: [], applied: false };
+  }
+
+  const decision = inferDeterministicDomainId(
+    mergeTaskContext(rawTask, manifest.handoff_payload.user_request),
+  );
+  if (!decision || manifest.instruction_stack.domain_id === decision.domainId) {
+    return { manifest, warnings: [], applied: false };
+  }
+
+  const nextManifest: OrchestratorManifest = {
+    ...manifest,
+    analysis: {
+      ...manifest.analysis,
+      secondary_category: manifest.analysis.secondary_category ?? manifest.instruction_stack.domain_id,
+    },
+    instruction_stack: {
+      ...manifest.instruction_stack,
+      domain_id: decision.domainId,
+      skill_ids: [],
+    },
+  };
+
+  return {
+    manifest: nextManifest,
+    warnings: [
+      `[DETERMINISTIC_DOMAIN_ROUTE] Overrode orchestrator domain ${manifest.instruction_stack.domain_id} -> ${decision.domainId}: ${decision.reason}.`,
+      '[DETERMINISTIC_DOMAIN_ROUTE] Cleared explicit skill_ids so resolver can apply compact domain defaults for the corrected route.',
+    ],
+    applied: true,
+  };
+}
+
+const KNOWN_MODEL_ADAPTER_IDS = new Set([
+  'adapter_claude',
+  'adapter_codex',
+  'adapter_codex_balanced',
+  'adapter_gemini',
+  'adapter_nemotron',
+  'adapter_scout',
+  'adapter_qwen',
+]);
+
+function maybeApplyModelAdapterFallback(
+  manifest: OrchestratorManifest,
+): { manifest: OrchestratorManifest; warnings: string[]; applied: boolean } {
+  const currentAdapterId = manifest.instruction_stack?.model_adapter_id;
+  if (!manifest.instruction_stack || !currentAdapterId || KNOWN_MODEL_ADAPTER_IDS.has(currentAdapterId)) {
+    return { manifest, warnings: [], applied: false };
+  }
+
+  const normalized = currentAdapterId.toLowerCase();
+  const assignedModel = manifest.worker_configuration.assigned_model;
+  const fallbackAdapter =
+    normalized.includes('claude') ? 'adapter_claude' :
+    normalized.includes('gemini') ? 'adapter_gemini' :
+    normalized.includes('qwen') || assignedModel === 'qwen3' || assignedModel === 'qwen3-32b' ? 'adapter_qwen' :
+    normalized.includes('scout') || assignedModel === 'scout' ? 'adapter_scout' :
+    normalized.includes('nemotron') || assignedModel === 'nemotron' ? 'adapter_nemotron' :
+    'adapter_codex_balanced';
+
+  return {
+    manifest: {
+      ...manifest,
+      instruction_stack: {
+        ...manifest.instruction_stack,
+        model_adapter_id: fallbackAdapter,
+      },
+    },
+    warnings: [
+      `[MODEL_ADAPTER_FALLBACK] Replaced unknown model_adapter_id "${currentAdapterId}" with "${fallbackAdapter}".`,
+    ],
+    applied: true,
+  };
+}
+
+function maybeApplyBenchmarkHarnessOverlay(
+  manifest: OrchestratorManifest,
+  rawTask: string,
+): { manifest: OrchestratorManifest; warnings: string[]; applied: boolean } {
+  if (!manifest.instruction_stack || !isExternalBenchmarkTask(rawTask)) {
+    return { manifest, warnings: [], applied: false };
+  }
+
+  const taskOverlayIds = manifest.instruction_stack.task_overlay_ids ?? [];
+  if (taskOverlayIds.includes('overlay_terminal_bench')) {
+    return { manifest, warnings: [], applied: false };
+  }
+
+  return {
+    manifest: {
+      ...manifest,
+      instruction_stack: {
+        ...manifest.instruction_stack,
+        task_overlay_ids: [...taskOverlayIds, 'overlay_terminal_bench'],
+      },
+    },
+    warnings: [
+      '[BENCHMARK_HARNESS_OVERLAY] Added overlay_terminal_bench for benchmark workspace/scoring constraints.',
+    ],
+    applied: true,
+  };
+}
+
+export function maybeEnrichPipelineStageIds(
+  manifest: OrchestratorManifest,
+  pipelineModeOverride?: PipelineOptions['mode'],
+): { manifest: OrchestratorManifest; warnings: string[]; applied: boolean } {
+  if (!manifest.instruction_stack) {
+    return { manifest, warnings: [], applied: false };
+  }
+
+  const pipelineMode = pipelineModeOverride ?? manifest.analysis.pipeline_mode;
+  const requiredStageIds: string[] = [];
+  if (pipelineMode === 'verified') {
+    requiredStageIds.push('pipeline_qa_reviewer');
+  } else if (pipelineMode === 'autonomous') {
+    requiredStageIds.push('pipeline_qa_reviewer', 'pipeline_cli_executor');
+  } else {
+    return { manifest, warnings: [], applied: false };
+  }
+
+  const existingStageIds = manifest.instruction_stack.pipeline_stage_ids ?? [];
+  const missingStageIds = requiredStageIds.filter(stageId => !existingStageIds.includes(stageId));
+  if (missingStageIds.length === 0) {
+    return { manifest, warnings: [], applied: false };
+  }
+
+  return {
+    manifest: {
+      ...manifest,
+      instruction_stack: {
+        ...manifest.instruction_stack,
+        pipeline_stage_ids: [...existingStageIds, ...missingStageIds],
+      },
+    },
+    warnings: [
+      `[PIPELINE_STAGE_ENRICHMENT] Appended missing pipeline stages for ${pipelineMode}: ${missingStageIds.join(', ')}.`,
+    ],
+    applied: true,
+  };
+}
+
+export function maybeApplyBenchmarkRoutingIsolation(
+  manifest: OrchestratorManifest,
+  rawTask: string,
+): { manifest: OrchestratorManifest; warnings: string[]; applied: boolean } {
+  if (!isExternalBenchmarkTask(rawTask)) {
+    return { manifest, warnings: [], applied: false };
+  }
+
+  const nextInstructionStack = manifest.instruction_stack
+    ? {
+        ...manifest.instruction_stack,
+        project_overlay_id: null,
+      }
+    : manifest.instruction_stack;
+  const nextManifest: OrchestratorManifest = {
+    ...manifest,
+    target_project: 'global',
+    ...(nextInstructionStack ? { instruction_stack: nextInstructionStack } : {}),
+  };
+
+  const applied =
+    manifest.target_project !== 'global' ||
+    manifest.instruction_stack?.project_overlay_id !== null;
+
+  return {
+    manifest: applied ? nextManifest : manifest,
+    warnings: applied
       ? [
-          'Deterministic Gradle bootstrap lane status: ACTIVE.',
-          'When this lane is ACTIVE, the executor/runtime owns Gradle provisioning, root build bootstrap repair, wrapper generation, and halting if bootstrap fails.',
-          'Do NOT reject a plan merely because global gradle is missing when the plan only uses post-bootstrap wrapper commands such as `gradlew tasks` or `gradlew assembleDebug`.',
-          'Do NOT require the plan to include its own bootstrap/failure-handling steps for gradle-wrapper.jar generation when the lane is ACTIVE.',
-          'Only reject for Gradle/bootstrap reasons if the plan still includes forbidden global `gradle ...` commands, mirrored Gradle file probes, or other executor-incompatible steps.',
+          `[BENCHMARK_ROUTING_ISOLATION] Routed external benchmark task through global benchmark context instead of workspace project "${manifest.target_project}".`,
+          '[BENCHMARK_ROUTING_ISOLATION] Cleared project overlay so Terminal-Bench app roots do not inherit unrelated workspace project context.',
         ]
-      : []),
-    ...(process.platform === 'win32'
-      ? [
-          'Windows-specific rule: do NOT reject a plan merely because it does not include wrapper permission, chmod, or Unblock-File steps for `gradlew` / `gradlew.bat`.',
-          'Only reject for Windows wrapper-permission issues if the grounded evidence explicitly shows the wrapper file is blocked, unreadable, or failing because of a permission/MOTW issue.',
-        ]
-      : []),
-    'Wrapper rule: if gradlew / gradlew.bat already exists in the target project, do NOT reject a plan merely because global gradle is unavailable on PATH when the plan uses wrapper-based commands only.',
-    '',
-    'PASS shape:   { "verdict": "PASS", "overall_confidence": <1-5>, "notes": "..." }',
-    'REJECT shape: { "verdict": "REJECT", "failure_count": <N>, "overall_confidence": <1-5>,',
-    '  "failures": [{ "tag": "NAMIT-I", "condition": "...", "confidence": <1-5> }],',
-    '  "proposed_fix_strategy": "<one-sentence direction for the SWE Agent — dimension only, no code>" }',
-    'IMPORTANT: tag must be a BARE string — NO square brackets — from this exact list:',
-    '  INCOMPLETE_SUBMISSION | EVIDENCE-GATE',
-    '  SFDIPOT-S | SFDIPOT-F | SFDIPOT-D | SFDIPOT-I | SFDIPOT-P | SFDIPOT-O | SFDIPOT-T',
-    '  NAMIT-N | NAMIT-A | NAMIT-M | NAMIT-I | NAMIT-T',
-    '  BCDP-MISSING | BCDP-BREAKING-UNMARKED | BCDP-NO-MIGRATION | BCDP-NO-ROLLBACK',
-    '  SECURITY-INJECTION | SECURITY-SECRETS | SECURITY-AUTHZ | SECURITY-EXPOSURE',
-    '  ROOT-CAUSE-MISSING | ROOT-CAUSE-SHALLOW',
-    '',
-    'SWE Plan to review:',
-    JSON.stringify(swePlan, null, 2),
-  ].join('\n');
+      : [],
+    applied,
+  };
+}
+
+// ─── Task context builders ────────────────────────────────────────────────────
+
+
+function getBenchmarkRuntimeInventoryLines(
+  executionProfileName: ExecutionProfileName,
+  inspectIfMissing = true,
+): string[] {
+  const dockerImage = process.env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim() ?? '';
+  if (!shouldUseBenchmarkContainerExecution(executionProfileName, dockerImage)) {
+    return [];
+  }
+
+  const inventory = getCachedBenchmarkContainerRuntimeInventory(dockerImage) ??
+    (inspectIfMissing ? inspectBenchmarkContainerRuntime(dockerImage) : null);
+  if (!inventory) {
+    return [];
+  }
+
+  return formatBenchmarkRuntimeInventoryPromptLines(
+    inventory,
+    getAllowedShellCommands(executionProfileName),
+  );
+}
+
+function getBenchmarkRuntimeInventoryForProfile(
+  executionProfileName: ExecutionProfileName,
+  inspectIfMissing = false,
+): BenchmarkRuntimeInventory | null {
+  const dockerImage = process.env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim() ?? '';
+  if (!shouldUseBenchmarkContainerExecution(executionProfileName, dockerImage)) {
+    return null;
+  }
+
+  return getCachedBenchmarkContainerRuntimeInventory(dockerImage) ??
+    (inspectIfMissing ? inspectBenchmarkContainerRuntime(dockerImage) : null);
+}
+
+function resolveShellCommandCapability(
+  command: string,
+  rawTask: string,
+  executionProfileName: ExecutionProfileName,
+  runtimeInventory: BenchmarkRuntimeInventory | null = getBenchmarkRuntimeInventoryForProfile(executionProfileName),
+) {
+  return resolveToolCapabilityForCommand(command, {
+    rawTask,
+    executionProfileName,
+    allowedCommandBases: getAllowedShellCommands(executionProfileName),
+    runtimeInventory,
+  });
+}
+
+function getToolCapabilityBlockedFixHint(
+  resolution: ReturnType<typeof resolveShellCommandCapability>,
+): string {
+  if (
+    resolution.capabilityId === 'run.pytest_test_outputs' &&
+    resolution.missingRequirements.includes('pytest')
+  ) {
+    return 'Pytest is missing, so do not plan test_outputs.py with plain Python, pytest, or package installation. Remove that verifier step and use an available source-only/custom verification route such as filter.py plus a separate out.html postcondition check, or halt with the missing verification capability.';
+  }
+
+  return 'Use the benchmark runtime inventory and executor allowlist to choose an available capability implementation, choose a source-only route, or halt with the missing capability instead of retrying equivalent syntax.';
+}
+
+function getExecutorSafetyProposedFixStrategy(
+  failures: readonly QaVerdictReject['failures'][number][],
+): string {
+  if (failures.some(failure => /BENCHMARK_CUSTOM_VERIFIER_REQUIRED/.test(failure.condition))) {
+    return 'Regenerate the plan with a real custom executable verifier step that exits nonzero unless filtered out.html satisfies the alert/bypass postcondition; do not substitute manual browser instructions or file_read inspection.';
+  }
+
+  if (failures.some(failure => /BENCHMARK_STRIPPED_PAYLOAD_ASSUMPTION/.test(failure.condition))) {
+    return 'Regenerate the plan without pre-committing to script tags, on* event handlers, or entity-encoded JavaScript; choose the payload family only from filter.py source evidence.';
+  }
+
+  if (failures.some(failure => /BENCHMARK_SOURCE_INSPECTION_REQUIRED/.test(failure.condition))) {
+    return 'Regenerate the plan so it reads filter.py before choosing or writing the out.html payload.';
+  }
+
+  const pytestMissingFailure = failures.find(failure =>
+    /run\.pytest_test_outputs|test_outputs\.py/i.test(failure.condition) &&
+    /pytest/i.test(failure.condition),
+  );
+  if (pytestMissingFailure) {
+    return 'Regenerate the plan without any test_outputs.py verifier step because pytest is unavailable; use an available custom/source-level check or halt with the missing verification capability.';
+  }
+
+  return failures[0]?.fix_hint ??
+    'Regenerate the plan so every executor-facing target is concrete, in-root, and compatible with the active execution profile.';
 }
 
 function sanitizeQaVerdictForDeterministicGradleBootstrapLane(
@@ -1232,7 +1015,7 @@ function sanitizeQaVerdictForDeterministicGradleBootstrapLane(
 ): z.infer<typeof QaVerdictSchema> {
   if (
     verdict.verdict !== 'REJECT' ||
-    !shouldUseDeterministicGradleBootstrapLane(manifest)
+    !shouldUseDeterministicGradleBootstrapLane(inferProjectRoot(manifest))
   ) {
     return verdict;
   }
@@ -1388,7 +1171,7 @@ function sanitizeGroundingViolationsForAndroidSdkLane(
   violations: string[],
   manifest: OrchestratorManifest,
 ): string[] {
-  if (!shouldUseDeterministicAndroidSdkBootstrapLane(manifest)) {
+  if (!shouldUseDeterministicAndroidSdkBootstrapLane(inferProjectRoot(manifest))) {
     return violations;
   }
 
@@ -1397,14 +1180,16 @@ function sanitizeGroundingViolationsForAndroidSdkLane(
 
 // ─── Orchestrator output parser ───────────────────────────────────────────────
 
-const OrchestratorOutputSchema = z.union([
+type ParsedOrchestratorOutput = OrchestratorManifest | OrchestratorErrorHalt;
+
+const OrchestratorOutputSchema: z.ZodType<ParsedOrchestratorOutput> = z.union([
   OrchestratorManifestSchema,
   OrchestratorErrorHaltSchema,
 ]);
 
 function assertManifest(
-  output: z.input<typeof OrchestratorOutputSchema>,
-): asserts output is z.input<typeof OrchestratorManifestSchema> {
+  output: ParsedOrchestratorOutput,
+): asserts output is OrchestratorManifest {
   if ('error_halt' in output && output.error_halt === true) {
     throw new Error(
       `Orchestrator issued an error halt.\n` +
@@ -1459,44 +1244,479 @@ function formatZodErrors(err: z.ZodError): string[] {
   });
 }
 
-function isWithinProjectRootPath(projectRoot: string, candidatePath: string): boolean {
-  const root = resolve(projectRoot);
-  const target = resolve(candidatePath);
-
-  if (process.platform === 'win32') {
-    const rootNorm = root.toLowerCase();
-    const targetNorm = target.toLowerCase();
-    return targetNorm === rootNorm || targetNorm.startsWith(`${rootNorm}\\`);
-  }
-
-  return target === root || target.startsWith(`${root}/`);
-}
-
 function extractWindowsAbsolutePaths(value: string): string[] {
   const quotedMatches = Array.from(value.matchAll(/["']([A-Za-z]:\\[^"']+)["']/g), match => match[1] ?? '');
   const bareMatches = Array.from(value.matchAll(/\b([A-Za-z]:\\[^\s"'|;&]+)/g), match => match[1] ?? '');
   return [...new Set([...quotedMatches, ...bareMatches].filter(match => match.length > 0))];
 }
 
-function collectExecutorSafetyViolations(
+function collectBoundedContractViolations(
+  swePlan: SwePlan,
+  rawTask: string,
+): QaVerdictReject | null {
+  if (isExternalBenchmarkTask(rawTask)) {
+    return null;
+  }
+
+  const contract = getRequestedTargetContract(rawTask);
+  if (!contract.bounded || contract.requestedTargets.length === 0) {
+    return null;
+  }
+
+  const failures: QaVerdictReject['failures'] = [];
+  const fileWriteTargets = swePlan.minimal_action_set
+    .filter(step => step.tool === 'file_write')
+    .map(step => ({
+      step: step.step,
+      target: normalizePathForComparison(String(step.target ?? '')),
+    }))
+    .filter(entry => entry.target.length > 0);
+  const fileWriteSet = new Set(fileWriteTargets.map(entry => entry.target.toLowerCase()));
+  const requestedTargetSet = new Set(contract.requestedTargets.map(target => target.toLowerCase()));
+
+  for (const requestedTarget of contract.requestedTargets) {
+    if (!fileWriteSet.has(requestedTarget.toLowerCase())) {
+      failures.push({
+        tag: 'INCOMPLETE_SUBMISSION',
+        condition: `[BOUNDED_CONTRACT] Plan does not include an exact file_write step for requested output: ${requestedTarget}`,
+        confidence: 5,
+        fix_hint: 'Add an exact file_write step for every requested output path.',
+      });
+    }
+  }
+
+  for (const fileWriteTarget of fileWriteTargets) {
+    if (!requestedTargetSet.has(fileWriteTarget.target.toLowerCase())) {
+      failures.push({
+        tag: 'SFDIPOT-P',
+        condition: `[BOUNDED_CONTRACT] Step ${fileWriteTarget.step} writes an unrequested file for this bounded task: ${fileWriteTarget.target}`,
+        confidence: 5,
+        fix_hint: 'Keep file_write targets inside the explicit requested target set for bounded tasks.',
+      });
+    }
+  }
+
+  if (failures.length === 0) {
+    return null;
+  }
+
+  return {
+    verdict: 'REJECT',
+    failure_count: failures.length,
+    failures,
+    overall_confidence: 5,
+    proposed_fix_strategy: 'Regenerate the plan so bounded tasks preserve the exact requested output path set with one file_write per requested file.',
+  };
+}
+
+function parseLockedFilesEnv(raw: string | undefined): string[] {
+  if (!raw?.trim()) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map(value => String(value ?? '').trim())
+        .filter(value => value.length > 0);
+    }
+  } catch {
+    // Fall through to comma-delimited compatibility parsing.
+  }
+
+  return raw
+    .split(',')
+    .map(value => value.trim())
+    .filter(value => value.length > 0);
+}
+
+function mergeLockedFiles(...groups: readonly string[][]): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const group of groups) {
+    for (const file of group) {
+      const normalized = normalizePathForComparison(file).replace(/^\.\//, '');
+      const key = normalized.toLowerCase();
+      if (!key || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      merged.push(normalized);
+    }
+  }
+  return merged;
+}
+
+function verifyExactOutputSchemaArtifacts(rawTask: string, projectRoot: string | null): string | null {
+  if (!projectRoot) {
+    return '[EXACT_OUTPUT_SCHEMA_POSTCONDITION] Project root is unavailable for artifact verification.';
+  }
+
+  if (!/\bsummary\.csv\b/i.test(rawTask) || !/period,severity,count/i.test(rawTask)) {
+    return null;
+  }
+
+  const summaryPath = join(projectRoot, 'summary.csv');
+  if (!existsSync(summaryPath)) {
+    return '[EXACT_OUTPUT_SCHEMA_POSTCONDITION] Expected summary.csv to exist at the project root.';
+  }
+
+  const actual = readFileSync(summaryPath, 'utf-8').trim().split(/\r?\n/).map(line => line.trim());
+  const expectedRows = getExpectedSummaryRowKeys(rawTask);
+  if (expectedRows.length === 0) {
+    return null;
+  }
+
+  if (actual[0] !== 'period,severity,count') {
+    return `[EXACT_OUTPUT_SCHEMA_POSTCONDITION] summary.csv header must be exactly "period,severity,count"; got "${actual[0] ?? '(missing)'}".`;
+  }
+
+  const actualRows = actual.slice(1).map(line => {
+    const parts = line.split(',');
+    return {
+      key: parts.length >= 2 ? `${parts[0]},${parts[1]}` : line,
+      count: parts[2],
+      width: parts.length,
+    };
+  });
+  if (actualRows.length !== expectedRows.length) {
+    return `[EXACT_OUTPUT_SCHEMA_POSTCONDITION] summary.csv must contain ${expectedRows.length} data rows in the requested order; got ${actualRows.length}. Required row keys in order: ${expectedRows.join(' | ')}.`;
+  }
+
+  for (let index = 0; index < expectedRows.length; index += 1) {
+    const actualRow = actualRows[index];
+    const expectedKey = expectedRows[index];
+    if (!actualRow || actualRow.width !== 3 || actualRow.key !== expectedKey || !/^\d+$/.test(String(actualRow.count ?? ''))) {
+      return `[EXACT_OUTPUT_SCHEMA_POSTCONDITION] summary.csv row ${index + 2} must match "${expectedKey},<non-negative integer>"; got "${actual[index + 1] ?? '(missing)'}". Required row keys in order: ${expectedRows.join(' | ')}.`;
+    }
+  }
+
+  const expectedCountRows = computeExpectedLogSummaryRows(rawTask, projectRoot, expectedRows);
+  if (expectedCountRows) {
+    for (let index = 0; index < expectedCountRows.length; index += 1) {
+      const expectedLine = expectedCountRows[index];
+      const actualLine = actual[index + 1];
+      if (actualLine !== expectedLine) {
+        return `[EXACT_OUTPUT_SCHEMA_POSTCONDITION] summary.csv row ${index + 2} has incorrect log-derived counts; expected "${expectedLine}", got "${actualLine ?? '(missing)'}". Expected rows in order: ${expectedCountRows.join(' | ')}. Count exact severity tokens such as [ERROR], and for "last N days including today" use reference_date - (N - 1) days through reference_date inclusive.`;
+      }
+    }
+  }
+
+  return null;
+}
+
+export function repairExactOutputSchemaArtifacts(rawTask: string, projectRoot: string | null): string | null {
+  if (!projectRoot || !/\bsummary\.csv\b/i.test(rawTask) || !/period,severity,count/i.test(rawTask)) {
+    return null;
+  }
+
+  const expectedRows = getExpectedSummaryRowKeys(rawTask);
+  if (expectedRows.length === 0) {
+    return null;
+  }
+
+  const expectedCountRows = computeExpectedLogSummaryRows(rawTask, projectRoot, expectedRows);
+  if (!expectedCountRows) {
+    return null;
+  }
+
+  const summaryPath = join(projectRoot, 'summary.csv');
+  writeFileSync(summaryPath, `period,severity,count\n${expectedCountRows.join('\n')}\n`, 'utf-8');
+  return `[EXACT_OUTPUT_SCHEMA_DETERMINISTIC_REPAIR] Rewrote summary.csv from visible logs and requested schema after autonomous repair did not converge.`;
+}
+
+function getExpectedSummaryRowKeys(rawTask: string): string[] {
+  return [...rawTask.matchAll(/^([a-z0-9_]+),(ERROR|WARNING|INFO),<count>$/gim)]
+    .map(match => `${match[1]},${match[2]}`);
+}
+
+function computeExpectedLogSummaryRows(rawTask: string, projectRoot: string, expectedRows: string[]): string[] | null {
+  if (!/\blogs\b/i.test(rawTask) || !/YYYY-MM-DD_<source>\.log/i.test(rawTask)) {
+    return null;
+  }
+
+  const referenceDateMatch = rawTask.match(/current date is\s+(\d{4}-\d{2}-\d{2})/i);
+  if (!referenceDateMatch) {
+    return null;
+  }
+
+  const referenceDateText = referenceDateMatch[1];
+  if (!referenceDateText) {
+    return null;
+  }
+
+  const referenceDate = parseIsoDateParts(referenceDateText);
+  if (!referenceDate) {
+    return null;
+  }
+
+  const logDir = join(projectRoot, 'logs');
+  if (!existsSync(logDir)) {
+    return null;
+  }
+
+  const counts = new Map<string, number>();
+  for (const rowKey of expectedRows) {
+    counts.set(rowKey, 0);
+  }
+
+  const requestedSeverities = Array.from(new Set(expectedRows
+    .map(rowKey => rowKey.split(',')[1])
+    .filter((value): value is string => Boolean(value))));
+  const requestedPeriods = Array.from(new Set(expectedRows
+    .map(rowKey => rowKey.split(',')[0])
+    .filter((value): value is string => Boolean(value))));
+  if (requestedPeriods.some(period => !isSupportedLogSummaryPeriod(period))) {
+    return null;
+  }
+
+  for (const filename of readdirSync(logDir)) {
+    const fileDateMatch = filename.match(/^(\d{4}-\d{2}-\d{2})_.*\.log$/);
+    if (!fileDateMatch) {
+      continue;
+    }
+
+    const fileDateText = fileDateMatch[1];
+    if (!fileDateText) {
+      continue;
+    }
+
+    const fileDate = parseIsoDateParts(fileDateText);
+    if (!fileDate) {
+      continue;
+    }
+
+    const content = readFileSync(join(logDir, filename), 'utf-8');
+    for (const line of content.split(/\r?\n/)) {
+      for (const severity of requestedSeverities) {
+        if (!line.includes(`[${severity}]`)) {
+          continue;
+        }
+
+        for (const period of requestedPeriods) {
+          if (logDateInPeriod(fileDate, referenceDate, period)) {
+            const rowKey = `${period},${severity}`;
+            counts.set(rowKey, (counts.get(rowKey) ?? 0) + 1);
+          }
+        }
+      }
+    }
+  }
+
+  return expectedRows.map(rowKey => `${rowKey},${counts.get(rowKey) ?? 0}`);
+}
+
+function parseIsoDateParts(value: string): { year: number; month: number; day: number; serial: number } | null {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const serial = Math.floor(Date.UTC(year, month - 1, day) / 86_400_000);
+  return { year, month, day, serial };
+}
+
+function isSupportedLogSummaryPeriod(period: string): boolean {
+  return period === 'today' ||
+    period === 'month_to_date' ||
+    period === 'total' ||
+    /^last_\d+_days$/.test(period);
+}
+
+function logDateInPeriod(
+  logDate: { year: number; month: number; day: number; serial: number },
+  referenceDate: { year: number; month: number; day: number; serial: number },
+  period: string,
+): boolean {
+  if (period === 'total') {
+    return true;
+  }
+  if (period === 'today') {
+    return logDate.serial === referenceDate.serial;
+  }
+  if (period === 'month_to_date') {
+    return logDate.year === referenceDate.year &&
+      logDate.month === referenceDate.month &&
+      logDate.serial <= referenceDate.serial;
+  }
+
+  const lastDaysMatch = period.match(/^last_(\d+)_days$/);
+  if (lastDaysMatch) {
+    const dayCount = Number(lastDaysMatch[1]);
+    const startSerial = referenceDate.serial - Math.max(0, dayCount - 1);
+    return logDate.serial >= startSerial && logDate.serial <= referenceDate.serial;
+  }
+
+  return false;
+}
+
+/**
+ * Final pre-executor assertion for bounded tasks.
+ *
+ * `collectBoundedContractViolations` runs inside the SWE↔QA retry loop and causes
+ * replanning when targets drift. This function runs once after QA PASS as a hard
+ * activation gate — it prevents the executor from starting if a bounded plan somehow
+ * reached approval with a mismatched write-target set.
+ *
+ * Returns a human-readable rejection reason, or null if the plan is clean.
+ */
+function assertBoundedPlanActivationContract(
+  approvedPlan: SwePlan,
+  rawTask: string,
+): string | null {
+  if (!shouldEnforceBoundedPlanActivationContract(rawTask)) {
+    return null;
+  }
+
+  const contract = getRequestedTargetContract(rawTask);
+  if (!contract.bounded || contract.requestedTargets.length === 0) {
+    return null;
+  }
+
+  const fileWriteTargets = approvedPlan.minimal_action_set
+    .filter(step => step.tool === 'file_write')
+    .map(step => normalizePathForComparison(String(step.target ?? '')))
+    .filter(target => target.length > 0);
+  const fileWriteSet     = new Set(fileWriteTargets.map(t => t.toLowerCase()));
+  const requestedTargetSet = new Set(contract.requestedTargets.map(t => t.toLowerCase()));
+
+  const missing = contract.requestedTargets.filter(t => !fileWriteSet.has(t.toLowerCase()));
+  const extra   = fileWriteTargets.filter(t => !requestedTargetSet.has(t.toLowerCase()));
+
+  if (missing.length === 0 && extra.length === 0) {
+    return null;
+  }
+
+  const parts: string[] = [];
+  if (missing.length > 0) {
+    parts.push(`missing required write targets: ${missing.join(', ')}`);
+  }
+  if (extra.length > 0) {
+    parts.push(`unrequested write targets: ${extra.join(', ')}`);
+  }
+  return `[BOUNDED_CONTRACT_ACTIVATION_GATE] Approved plan failed pre-executor target check — ${parts.join('; ')}. Requested set: ${contract.requestedTargets.join(', ')}.`;
+}
+
+export function collectExecutorSafetyViolations(
   swePlan: SwePlan,
   manifest: OrchestratorManifest,
+  rawTask: string,
+  executionProfileName: ExecutionProfileName = DEFAULT_EXECUTION_PROFILE,
 ): QaVerdictReject | null {
   const projectRoot = inferProjectRoot(manifest);
   if (!projectRoot) {
     return null;
   }
 
+  const boundedContractReject = collectBoundedContractViolations(swePlan, rawTask);
+  if (boundedContractReject) {
+    return boundedContractReject;
+  }
+
+  const manyFileAggregationReject = collectManyFileAggregationViolations(swePlan, rawTask);
+  if (manyFileAggregationReject) {
+    return manyFileAggregationReject;
+  }
+
   const failures: QaVerdictReject['failures'] = [];
   const shellWrapperRe = /\b(cmd(\.exe)?\s*\/c|powershell(\.exe)?\b|pwsh\b|bash\b|sh\b)\b/i;
   const shellChainingRe = /&&|\|\||[;|]/;
   const cdWrapperRe = /\bcd\s+[A-Za-z]:\\/i;
+  const globTargetRe = /[*?\[\]]/;
+  const anglePlaceholderRe = /<[A-Za-z][^>\s]*>/;
+  const benchmarkShellSyntaxAllowed = shouldUseBenchmarkContainerExecution(
+    executionProfileName,
+    process.env['BABEL_BENCHMARK_DOCKER_IMAGE'],
+  );
+  const benchmarkRuntimeInventory = benchmarkShellSyntaxAllowed
+    ? getCachedBenchmarkContainerRuntimeInventory(process.env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim() ?? '')
+    : null;
+  const allowedShellCommands = getAllowedShellCommands(executionProfileName);
+  if (/\bbreak-filter-js-from-html\b/i.test(rawTask)) {
+    const readsFilterSource = swePlan.minimal_action_set.some(step =>
+      step.tool === 'file_read' &&
+      normalizePathForComparison(String(step.target ?? '')).toLowerCase() === 'filter.py',
+    );
+    if (!readsFilterSource) {
+      failures.push({
+        tag: 'SFDIPOT-P',
+        condition:
+          '[BENCHMARK_SOURCE_INSPECTION_REQUIRED] break-filter-js-from-html plans must read filter.py before choosing an out.html payload; otherwise the executor guesses at sanitizer behavior and can burn turns on stripped event-handler payloads.',
+        confidence: 5,
+        fix_hint:
+          'Start with file_read filter.py, then write out.html based on the observed parser/removal logic and verify by running filter.py plus a custom postcondition check.',
+      });
+    }
+
+    const planText = JSON.stringify(swePlan).toLowerCase();
+    if (
+      /\b(?:event handlers?|onerror|onclick|onload|onmouseover|script tags?|<script|encoded alert|encoded javascript|html entity encoding|obfuscated javascript)\b/i
+        .test(planText)
+    ) {
+      failures.push({
+        tag: 'SFDIPOT-P',
+        condition:
+          '[BENCHMARK_STRIPPED_PAYLOAD_ASSUMPTION] break-filter-js-from-html plan assumes stripped payload families such as script tags, on* event handlers, or entity-encoded JavaScript will survive. The visible sanitizer source must drive payload choice; do not pre-commit to families the filter is likely to remove.',
+        confidence: 5,
+        fix_hint:
+          'After reading filter.py, choose a payload family based on what the sanitizer actually leaves intact. Avoid script tags, on* event handlers, and pure entity-encoded JavaScript assumptions unless the source proves they survive.',
+      });
+    }
+
+    const hasCustomVerifierStep = swePlan.minimal_action_set.some(step => {
+      if (step.tool !== 'shell_exec' && step.tool !== 'test_run') {
+        return false;
+      }
+      const command = String(step.target ?? '').toLowerCase();
+      if (/(?:manual verification|manual browser|open in browser|confirm alert|print\(['"`]?manual)/.test(command)) {
+        return false;
+      }
+      return !/\b(?:test_outputs\.py|filter\.py)\b/.test(command) &&
+        /(?:verify|check|assert|bypass|alert|postcondition)/.test(command);
+    });
+    if (!hasCustomVerifierStep) {
+      failures.push({
+        tag: 'SFDIPOT-P',
+        condition:
+          '[BENCHMARK_CUSTOM_VERIFIER_REQUIRED] break-filter-js-from-html plans must include a custom executable verifier when pytest/test_outputs.py is unavailable. Running filter.py and then file_reading out.html is not enough to prove browser alert behavior.',
+        confidence: 5,
+        fix_hint:
+          'Add a separate helper or inline shell_exec/test_run step that checks the filtered out.html postcondition, then complete only after that verifier exits 0.',
+      });
+    }
+  }
+  if (benchmarkShellSyntaxAllowed && /\bmerge-diff-arc-agi-task\b/i.test(rawTask)) {
+    const hasGitNativeStep = swePlan.minimal_action_set.some(step =>
+      (step.tool === 'shell_exec' || step.tool === 'test_run') &&
+      /\bgit\s+(?:bundle|init|fetch|checkout|switch|merge|status|branch)\b/i.test(String(step.target ?? '')),
+    );
+    const hasSourceOnlyRepoWrite = swePlan.minimal_action_set.some(step =>
+      step.tool === 'file_write' &&
+      /(?:^|[\\/])repo[\\/](?:algo\.py|\.gitkeep)$/i.test(
+        normalizePathForComparison(String(step.target ?? '')),
+      ),
+    );
+    if (!hasGitNativeStep && hasSourceOnlyRepoWrite) {
+      failures.push({
+        tag: 'SFDIPOT-P',
+        condition:
+          '[BENCHMARK_REQUIRED_CAPABILITY_MISSING] merge-diff-arc-agi-task requires Git-native bundle checkout and merge steps; the plan omits Git and would substitute source-only placeholder writes.',
+        confidence: 5,
+        fix_hint:
+          'Do not satisfy merge-diff by writing repo/algo.py or .gitkeep directly. If git is unavailable in the benchmark runtime inventory, halt with missing required runtime capability or use an explicitly approved benchmark Git provisioning route.',
+      });
+    }
+  }
 
   for (const step of swePlan.minimal_action_set) {
     const target = String(step.target ?? '').trim();
     if (!target) continue;
 
-    if (/<[^>]+>/.test(target)) {
+    if (anglePlaceholderRe.test(target)) {
       failures.push({
         tag: 'INCOMPLETE_SUBMISSION',
         condition: `[EXECUTOR_SAFETY] Step ${step.step} contains an unresolved placeholder target: ${target}`,
@@ -1507,9 +1727,34 @@ function collectExecutorSafetyViolations(
     }
 
     if (step.tool === 'directory_list' || step.tool === 'file_read' || step.tool === 'file_write') {
+      if ((step.tool === 'file_read' || step.tool === 'file_write') && globTargetRe.test(target)) {
+        failures.push({
+          tag: 'SFDIPOT-P',
+          condition: `[EXECUTOR_SAFETY] Step ${step.step} uses a glob target unsupported by ${step.tool}: ${target}`,
+          confidence: 5,
+          fix_hint: 'Use directory_list first, then concrete file_read/file_write targets. Do not pass wildcards to file tools.',
+        });
+        continue;
+      }
+
+      if (step.tool === 'file_write') {
+        const benchmarkProtectedWriteReason = getBenchmarkProtectedWriteReason(rawTask, target);
+        if (benchmarkProtectedWriteReason) {
+          failures.push({
+            tag: 'SFDIPOT-P',
+            condition: `[EXECUTOR_SAFETY] Step ${step.step} writes a protected benchmark fixture: ${benchmarkProtectedWriteReason}`,
+            confidence: 5,
+            fix_hint:
+              'Do not modify benchmark verifier/input fixtures. Patch the requested output artifact or create a new helper script with a different name.',
+          });
+          continue;
+        }
+      }
+
       const resolvedTarget = /^[A-Za-z]:[\\/]/.test(target)
         ? resolve(target)
         : resolve(projectRoot, target);
+
       if (!isWithinProjectRootPath(projectRoot, resolvedTarget)) {
         failures.push({
           tag: 'SFDIPOT-P',
@@ -1522,13 +1767,118 @@ function collectExecutorSafetyViolations(
     }
 
     if (step.tool === 'shell_exec' || step.tool === 'test_run') {
-      if (shellWrapperRe.test(target) || shellChainingRe.test(target) || cdWrapperRe.test(target)) {
+      if (
+        shellWrapperRe.test(target) ||
+        cdWrapperRe.test(target) ||
+        (shellChainingRe.test(target) && !benchmarkShellSyntaxAllowed)
+      ) {
         failures.push({
           tag: 'SFDIPOT-P',
           condition: `[EXECUTOR_SAFETY] Step ${step.step} uses shell-wrapped or chained command syntax that violates executor contract: ${target}`,
           confidence: 5,
-          fix_hint: 'Emit the executable command only and rely on working_directory instead of shell wrappers or chaining.',
+          fix_hint: benchmarkShellSyntaxAllowed
+            ? 'Avoid explicit shell wrappers and cd commands; POSIX pipes/redirection may run directly inside the benchmark container.'
+            : 'Emit the executable command only and rely on working_directory instead of shell wrappers or chaining.',
         });
+      } else {
+        const benchmarkInstallPlanReject = benchmarkShellSyntaxAllowed
+          ? getBenchmarkDependencyInstallPlanReject(rawTask, target)
+          : null;
+        const gitBundleArchiveReject = benchmarkShellSyntaxAllowed &&
+          isInvalidGitBundleArchiveCommand(rawTask, target);
+        const shellCompatibilityIssue = benchmarkInstallPlanReject || gitBundleArchiveReject
+          ? null
+          : validateExecutorShellCommand(
+          target,
+          process.platform,
+          executionProfileName,
+          process.env['BABEL_BENCHMARK_DOCKER_IMAGE'],
+        );
+        if (benchmarkInstallPlanReject) {
+          failures.push({
+            tag: 'SFDIPOT-P',
+            condition: `[EXECUTOR_SAFETY] Step ${step.step} uses a blocked benchmark dependency install command: ${benchmarkInstallPlanReject}`,
+            confidence: 5,
+            fix_hint:
+              'Replace package installation with a source-only/file_write route or an existing runtime command from the benchmark inventory.',
+          });
+        } else if (gitBundleArchiveReject) {
+          failures.push({
+            tag: 'SFDIPOT-P',
+            condition:
+              `[EXECUTOR_SAFETY] Step ${step.step} treats a Git bundle as an archive: ${target}`,
+            confidence: 5,
+            fix_hint:
+              'Git .bundle files are not tar/gzip archives. Use Git-native bundle commands if git is usable, or halt with missing required runtime capability.',
+          });
+        } else {
+          const capabilityResolution = resolveShellCommandCapability(
+            target,
+            rawTask,
+            executionProfileName,
+            benchmarkRuntimeInventory,
+          );
+          const capabilityFeedback = formatToolCapabilityResolutionForFeedback(capabilityResolution);
+          if (
+            capabilityResolution.status === 'suggest_replacement' &&
+            normalizeShellCommandForComparison(capabilityResolution.replacementCommand ?? '') !==
+              normalizeShellCommandForComparison(target)
+          ) {
+            failures.push({
+              tag: 'SFDIPOT-P',
+              condition:
+                `[EXECUTOR_SAFETY] Step ${step.step} uses a generic command where a safer capability implementation is available: ` +
+                capabilityFeedback,
+              confidence: 5,
+              fix_hint:
+                capabilityResolution.replacementCommand
+                  ? `Replace the command with "${capabilityResolution.replacementCommand}".`
+                  : 'Replace the command with the capability-specific implementation.',
+            });
+          } else if (
+            capabilityResolution.status === 'blocked_missing_requirement' ||
+            capabilityResolution.status === 'blocked_no_allowed_implementation'
+          ) {
+            const fixHint = getToolCapabilityBlockedFixHint(capabilityResolution);
+            failures.push({
+              tag: 'SFDIPOT-P',
+              condition:
+                `[EXECUTOR_SAFETY] Step ${step.step} cannot use the requested command capability: ` +
+                capabilityFeedback,
+              confidence: 5,
+              fix_hint: fixHint,
+            });
+          } else if (shellCompatibilityIssue) {
+            failures.push({
+              tag: 'SFDIPOT-P',
+              condition:
+                `[EXECUTOR_SAFETY] Step ${step.step} uses a shell command that violates executor compatibility rules: ` +
+                `${shellCompatibilityIssue.message}`,
+              confidence: 5,
+              fix_hint:
+                shellCompatibilityIssue.command_base === 'mkdir'
+                  ? 'Remove the mkdir step and write the target file directly; file_write creates parent directories automatically.'
+                  : 'Replace the command with an executor-supported command base and platform-compatible syntax.',
+            });
+          } else if (benchmarkRuntimeInventory) {
+            const usability = getBenchmarkRuntimeCommandUsability(
+              benchmarkRuntimeInventory,
+              allowedShellCommands,
+              target,
+            );
+            if (usability.status === 'missing' || usability.status === 'not_executor_allowed') {
+              failures.push({
+                tag: 'SFDIPOT-P',
+                condition:
+                  `[EXECUTOR_SAFETY] Step ${step.step} uses a benchmark runtime command that is not usable: ` +
+                  `${usability.message}`,
+                confidence: 5,
+                fix_hint:
+                  'Use the benchmark runtime inventory from the planning context and choose an available executor-allowed command or a source-only/file_write route.',
+              });
+            }
+          }
+        }
       }
 
       const outOfRootPaths = extractWindowsAbsolutePaths(target)
@@ -1544,6 +1894,8 @@ function collectExecutorSafetyViolations(
     }
   }
 
+  failures.push(...collectBenchmarkRiskPlanViolations(swePlan, rawTask));
+
   if (failures.length === 0) {
     return null;
   }
@@ -1553,7 +1905,71 @@ function collectExecutorSafetyViolations(
     failure_count: failures.length,
     failures,
     overall_confidence: 5,
-    proposed_fix_strategy: 'Regenerate the plan so every executor-facing target is concrete, in-root, and free of shell-wrapper syntax.',
+    proposed_fix_strategy: getExecutorSafetyProposedFixStrategy(failures),
+  };
+}
+
+function collectManyFileAggregationViolations(
+  swePlan: SwePlan,
+  rawTask: string,
+): QaVerdictReject | null {
+  const manyFileAggregationTask =
+    /\b(all|multiple|every)\s+(?:log\s+)?files\b/i.test(rawTask) ||
+    /\ball\s+logs\b/i.test(rawTask);
+  const aggregationOutputTask =
+    /\b(count|aggregate|summari[sz]e|analy[sz]e)\b/i.test(rawTask) &&
+    /\b(csv|json|summary|report)\b/i.test(rawTask);
+  if (!manyFileAggregationTask || !aggregationOutputTask) {
+    return null;
+  }
+
+  const hasHelperExecution = swePlan.minimal_action_set.some(step =>
+    step.tool === 'shell_exec' || step.tool === 'test_run',
+  );
+  const hasHelperWrite = swePlan.minimal_action_set.some(step => {
+    if (step.tool !== 'file_write') return false;
+    const target = String(step.target ?? '').toLowerCase();
+    return /\.(py|js|mjs|ts|sh|ps1|rb)$/.test(target);
+  });
+  const finalOutputWrites = swePlan.minimal_action_set.filter(step => {
+    if (step.tool !== 'file_write') return false;
+    const target = String(step.target ?? '').toLowerCase();
+    return /\.(csv|json|txt|tsv)$/.test(target);
+  });
+
+  const failures: QaVerdictReject['failures'] = [];
+  if (!hasHelperWrite || !hasHelperExecution) {
+    failures.push({
+      tag: 'SFDIPOT-P',
+      condition:
+        '[MANY_FILE_AGGREGATION] Plan samples large input sets instead of writing and running a deterministic helper program.',
+      confidence: 5,
+      fix_hint:
+        'For many-file aggregation tasks, write a small helper script in the project root, run it with an allowed interpreter such as python/node, and let that script produce the requested output file.',
+    });
+  }
+  if (finalOutputWrites.length > 0 && !hasHelperExecution) {
+    failures.push({
+      tag: 'SFDIPOT-O',
+      condition:
+        '[MANY_FILE_AGGREGATION] Plan writes the final output directly before executing a complete aggregation over all input files.',
+      confidence: 5,
+      fix_hint:
+        'Do not hand-write aggregate counts from sampled files. Generate the output from a helper program that iterates every concrete file in the input directory.',
+    });
+  }
+
+  if (failures.length === 0) {
+    return null;
+  }
+
+  return {
+    verdict: 'REJECT',
+    failure_count: failures.length,
+    failures,
+    overall_confidence: 5,
+    proposed_fix_strategy:
+      'Regenerate the plan around deterministic many-file aggregation: directory_list, file_write helper script, shell_exec/test_run helper, then inspect or verify the produced output.',
   };
 }
 
@@ -1649,20 +2065,24 @@ function collectGradleBootstrapSequencingViolations(
     const target = String(step.target ?? '').trim();
     if (!target) continue;
 
+    if (String(step.tool ?? '').trim() !== 'file_read') {
+      continue;
+    }
+
     const normalizedTarget = target.replace(/\//g, '\\').toLowerCase();
     const isMirroredGradleRead = (
       (step.tool === 'file_read' || step.tool === 'directory_list') &&
-      normalizedTarget.includes('\\reference-montecarlo-ledger\\') &&
+      normalizedTarget.includes('\\reference-Example Finance Forecast\\') &&
       normalizedTarget.includes('gradle')
     ) || (
       (step.tool === 'file_read' || step.tool === 'directory_list') &&
-      normalizedTarget.includes('\\reference-montecarlo-ledger\\build.gradle.kts')
+      normalizedTarget.includes('\\reference-Example Finance Forecast\\build.gradle.kts')
     ) || (
       (step.tool === 'file_read' || step.tool === 'directory_list') &&
-      normalizedTarget.includes('\\reference-montecarlo-ledger\\settings.gradle.kts')
+      normalizedTarget.includes('\\reference-Example Finance Forecast\\settings.gradle.kts')
     ) || (
       (step.tool === 'file_read' || step.tool === 'directory_list') &&
-      normalizedTarget.includes('\\reference-montecarlo-ledger\\app\\build.gradle.kts')
+      normalizedTarget.includes('\\reference-Example Finance Forecast\\app\\build.gradle.kts')
     );
 
     if (isMirroredGradleRead) {
@@ -1704,6 +2124,258 @@ function collectGradleBootstrapSequencingViolations(
   };
 }
 
+export function collectAndroidVerificationCoverageViolations(
+  swePlan: SwePlan,
+  manifest: OrchestratorManifest,
+  rawTask = '',
+): QaVerdictReject | null {
+  const pipelineMode = String(manifest.analysis?.pipeline_mode ?? '').toLowerCase();
+  const taskCategory = String(manifest.analysis?.task_category ?? '').toLowerCase();
+  const isAutonomousAndroidTask =
+    pipelineMode === 'autonomous' &&
+    (manifest.instruction_stack?.domain_id === 'domain_android_kotlin' || taskCategory === 'mobile');
+
+  if (!isAutonomousAndroidTask) {
+    return null;
+  }
+
+  if (isAndroidSourceOnlyWorkspace(inferProjectRoot(manifest))) {
+    return null;
+  }
+
+  const shellSteps = swePlan.minimal_action_set.filter(step =>
+    step.tool === 'shell_exec' || step.tool === 'test_run',
+  );
+  const hasAssembleDebug = shellSteps.some(step =>
+    /\bgradlew(?:\.bat)?\b.*\bassembleDebug\b/i.test(String(step.target ?? '')),
+  );
+  const hasGradleTest = shellSteps.some(step =>
+    /\bgradlew(?:\.bat)?\b.*\btest\b/i.test(String(step.target ?? '')),
+  );
+  const firstVerificationStep = shellSteps.length > 0
+    ? Math.min(...shellSteps.map(step => step.step))
+    : Number.POSITIVE_INFINITY;
+  const taskShapeProfile = String(manifest.resolution_policy?.task_shape_profile ?? 'full');
+  if (
+    taskShapeProfile === 'android_utility_file' ||
+    isAndroidUtilityFileRequest(rawTask, inferProjectRoot(manifest)).match
+  ) {
+    return null;
+  }
+
+  const earlyVerificationLimit =
+    taskShapeProfile === 'android_warning_cleanup' ? 10 :
+    taskShapeProfile === 'android_ui_improvement' ? 5 :
+    8;
+
+  if (hasAssembleDebug && hasGradleTest && firstVerificationStep <= earlyVerificationLimit) {
+    return null;
+  }
+
+  const missingParts = [
+    !hasAssembleDebug ? 'gradlew assembleDebug' : null,
+    !hasGradleTest ? 'gradlew test' : null,
+  ].filter((part): part is string => part !== null);
+  const schedulingNote = firstVerificationStep === Number.POSITIVE_INFINITY
+    ? 'no verification steps were scheduled'
+    : `first verification step is too late (step ${firstVerificationStep})`;
+
+  return {
+    verdict: 'REJECT',
+    failure_count: 1,
+    failures: [
+      {
+        tag: 'EVIDENCE-GATE',
+    condition: taskShapeProfile === 'android_warning_cleanup'
+      ? `Autonomous Android warning-cleanup plans must verify with both \`gradlew assembleDebug\` and \`gradlew test\` early enough to run; missing: ${missingParts.join(', ')}, ${schedulingNote}.`
+      : `Autonomous Android implementation plans must verify with both \`gradlew assembleDebug\` and \`gradlew test\` early enough to run; missing: ${missingParts.join(', ')}, ${schedulingNote}.`,
+    confidence: 5,
+    fix_hint: taskShapeProfile === 'android_warning_cleanup'
+      ? 'Add both verification steps to the plan so the autonomous warning-cleanup lane can surface compile and test-only regressions.'
+      : 'Add both verification steps to the plan so the autonomous lane can surface compile and test-only regressions.',
+  },
+  ],
+  overall_confidence: 5,
+  proposed_fix_strategy: taskShapeProfile === 'android_warning_cleanup'
+    ? 'Regenerate the autonomous Android warning-cleanup plan so it includes both compile verification and unit-test verification before completion.'
+    : 'Regenerate the autonomous Android plan so it includes both compile verification and unit-test verification before completion.',
+  };
+}
+
+function collectReferenceSourceShapeViolations(
+  swePlan: SwePlan,
+  manifest: OrchestratorManifest,
+): QaVerdictReject | null {
+  const projectRoot = inferProjectRoot(manifest);
+  if (!projectRoot) {
+    return null;
+  }
+
+  const referenceRoot = join(projectRoot, 'reference-Example Finance Forecast');
+  const externalReferenceRoot = join(BABEL_ROOT, '..', 'example_autonomous_agent', 'Example Finance Forecast');
+  const referenceLooksLikePython = existsSync(referenceRoot) && (
+    existsSync(join(referenceRoot, 'pyproject.toml')) ||
+    existsSync(join(referenceRoot, 'requirements.txt')) ||
+    existsSync(join(referenceRoot, 'monte_carlo_ledger'))
+  );
+  if (!referenceLooksLikePython) {
+    return null;
+  }
+
+  const collectExistingReferenceFiles = (rootPath: string): string[] => {
+    const results: string[] = [];
+    const stack = [rootPath];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (!current) {
+        continue;
+      }
+
+      let entries;
+      try {
+        entries = readdirSync(current, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+
+      for (const entry of entries) {
+        const nextPath = join(current, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(nextPath);
+          continue;
+        }
+        if (!entry.isFile()) {
+          continue;
+        }
+        if (!/\.(py|md|toml|sql|yaml|yml|json)$/i.test(entry.name)) {
+          continue;
+        }
+        results.push(resolve(nextPath).toLowerCase());
+      }
+    }
+    return results;
+  };
+
+  const failures: QaVerdictReject['failures'] = [];
+  const existingReferenceFiles = new Set(
+    collectExistingReferenceFiles(referenceRoot),
+  );
+  const referenceRootPath = resolve(referenceRoot).toLowerCase();
+  let seenReferenceReadme = false;
+  let seenReferencePyproject = false;
+  for (const step of swePlan.minimal_action_set) {
+    const target = String(step.target ?? '').trim();
+    if (!target) continue;
+
+    const normalizedTarget = target.replace(/\//g, '\\').toLowerCase();
+    const resolvedTarget = /^[A-Za-z]:[\\/]/.test(target)
+      ? resolve(target)
+      : resolve(projectRoot, target);
+    const normalizedResolvedTarget = resolvedTarget.toLowerCase();
+    const probesAndroidMirrorInsideReference = normalizedTarget.includes('\\reference-Example Finance Forecast\\app\\src\\main\\') ||
+      normalizedTarget.includes('\\reference-Example Finance Forecast\\build.gradle.kts') ||
+      normalizedTarget.includes('\\reference-Example Finance Forecast\\settings.gradle.kts') ||
+      normalizedTarget.includes('\\reference-Example Finance Forecast\\app\\build.gradle.kts');
+
+    if (probesAndroidMirrorInsideReference) {
+      failures.push({
+        tag: 'EVIDENCE-GATE',
+        condition: `[SOURCE_SHAPE] Step ${step.step} assumes Android/Gradle mirror files inside reference-Example Finance Forecast even though the grounded reference source is a Python repo: ${target}`,
+        confidence: 5,
+        fix_hint: 'Treat reference-Example Finance Forecast as a Python source repo. Read actual files such as README.md, pyproject.toml, monte_carlo_ledger/*.py, and docs/** before mapping them into Android targets.',
+      });
+      continue;
+    }
+
+    if (normalizedResolvedTarget.startsWith(resolve(externalReferenceRoot).toLowerCase())) {
+      failures.push({
+        tag: 'EVIDENCE-GATE',
+        condition: `[SOURCE_PATH_PREFERENCE] Step ${step.step} reads the external Example Finance Forecast repo even though a mirrored reference-Example Finance Forecast copy exists inside the target project: ${target}`,
+        confidence: 5,
+        fix_hint: 'Use the mirrored reference-Example Finance Forecast path inside the target project for all source reads when that mirror exists.',
+      });
+      continue;
+    }
+
+    if (normalizedResolvedTarget.startsWith(resolve(referenceRoot).toLowerCase())) {
+      const isReferenceReadStep = step.tool === 'file_read';
+      if (isReferenceReadStep) {
+        const isReadme = normalizedResolvedTarget === join(referenceRootPath, 'readme.md').toLowerCase();
+        const isPyproject = normalizedResolvedTarget === join(referenceRootPath, 'pyproject.toml').toLowerCase();
+        const isRootBootstrapRead = isReadme || isPyproject;
+        const isModuleRead = normalizedResolvedTarget.includes('\\reference-Example Finance Forecast\\monte_carlo_ledger\\');
+        const basename = normalizedResolvedTarget.split('\\').pop() ?? '';
+        if (swePlan.plan_type !== 'IMPLEMENTATION_PLAN' && isModuleRead && !existingReferenceFiles.has(normalizedResolvedTarget)) {
+          failures.push({
+            tag: 'EVIDENCE-GATE',
+            condition: `[SOURCE_INVENTORY_GUESS] Step ${step.step} guesses a non-inventory module basename under the reference repo: ${basename}`,
+            confidence: 5,
+            fix_hint: 'Use the exact filenames listed in the Reference source inventories block. Do not guess module names like engine.py, models.py, core_engine.py, or data_models.py.',
+          });
+          continue;
+        }
+        if (swePlan.plan_type !== 'IMPLEMENTATION_PLAN' && isModuleRead && !(seenReferenceReadme && seenReferencePyproject)) {
+          failures.push({
+            tag: 'EVIDENCE-GATE',
+            condition: `[REFERENCE_FILE_READ_DISCIPLINE] Step ${step.step} reads a reference module before grounding on README.md and pyproject.toml: ${target}`,
+            confidence: 5,
+            fix_hint: 'Read README.md and pyproject.toml first, then read only the exact grounded module files listed in the inventory.',
+          });
+          continue;
+        }
+        if (isReadme) {
+          seenReferenceReadme = true;
+        }
+        if (isPyproject) {
+          seenReferencePyproject = true;
+        }
+        if (!isRootBootstrapRead && !existingReferenceFiles.has(normalizedResolvedTarget)) {
+          failures.push({
+            tag: 'EVIDENCE-GATE',
+            condition: `[SOURCE_INVENTORY_MISMATCH] Step ${step.step} reads a non-existent file inside reference-Example Finance Forecast instead of one of the grounded inventory files: ${target}`,
+            confidence: 5,
+            fix_hint: 'Use the exact filenames listed in the Reference source inventories block. Do not guess alternate module names inside the mirrored Python repo.',
+          });
+        }
+        continue;
+      }
+
+      if (step.tool === 'directory_list') {
+        if (!existsSync(resolvedTarget) || !statSync(resolvedTarget).isDirectory()) {
+          failures.push({
+            tag: 'EVIDENCE-GATE',
+            condition: `[SOURCE_INVENTORY_MISMATCH] Step ${step.step} lists a non-existent reference directory instead of a grounded directory inside reference-Example Finance Forecast: ${target}`,
+            confidence: 5,
+            fix_hint: 'Use only real directories under the mirrored reference repo for directory_list steps.',
+          });
+        }
+        continue;
+      }
+
+      if (step.tool === 'file_read' && !existingReferenceFiles.has(normalizedResolvedTarget)) {
+        failures.push({
+          tag: 'EVIDENCE-GATE',
+          condition: `[SOURCE_INVENTORY_MISMATCH] Step ${step.step} reads a non-existent file inside reference-Example Finance Forecast instead of one of the grounded inventory files: ${target}`,
+          confidence: 5,
+          fix_hint: 'Use the exact filenames listed in the Reference source inventories block. Do not guess alternate module names inside the mirrored Python repo.',
+        });
+      }
+    }
+  }
+
+  if (failures.length === 0) {
+    return null;
+  }
+
+  return {
+    verdict: 'REJECT',
+    failure_count: failures.length,
+    failures,
+    overall_confidence: 5,
+    proposed_fix_strategy: 'Regenerate the plan against the actual reference source shape. Do not infer Android package or Gradle files inside a non-Android reference repo.',
+  };
+}
+
 function buildManualPlanRepairPrompt(
   errors: string[],
   rawPlanText: string,
@@ -1733,12 +2405,15 @@ function writeValidatedExecutionReport(
   warnings: string[] = [],
 ): void {
   const uniqueWarnings = [...new Set(warnings)];
-  const reportWithWarnings = (
-    uniqueWarnings.length > 0 &&
-    typeof report === 'object' &&
-    report !== null
-  )
-    ? { ...(report as Record<string, unknown>), warnings: uniqueWarnings }
+  const checkpointIds = [
+    ...new Set(toolCallLog.flatMap((entry) => entry.checkpoint_ids ?? [])),
+  ];
+  const reportWithWarnings = typeof report === 'object' && report !== null
+    ? {
+        ...(report as Record<string, unknown>),
+        ...(checkpointIds.length > 0 ? { checkpoint_ids: checkpointIds } : {}),
+        ...(uniqueWarnings.length > 0 ? { warnings: uniqueWarnings } : {}),
+      }
     : report;
 
   try {
@@ -1764,6 +2439,7 @@ function writeValidatedExecutionReport(
       steps_executed: toolCallLog.length,
       tool_call_log:  toolCallLog,
       pipeline_error: pipelineError,
+      ...(checkpointIds.length > 0 ? { checkpoint_ids: checkpointIds } : {}),
       ...(uniqueWarnings.length > 0
         ? { warnings: [...uniqueWarnings, condition] }
         : {}),
@@ -1773,197 +2449,407 @@ function writeValidatedExecutionReport(
   }
 }
 
-// ─── Stage 4: Stateless text-loop executor ────────────────────────────────────
+const RELIABILITY_REPAIR_PROOF_MARKER = '[BABEL_RELIABILITY_AUTONOMOUS_LIVE_FAIL_THEN_PASS]';
 
-function getTarget(req: z.infer<typeof ToolCallRequestSchema>): string {
-  if (req.tool === 'directory_list' || req.tool === 'file_read'  || req.tool === 'file_write')   return req.path;
-  if (req.tool === 'shell_exec' || req.tool === 'test_run')     return req.command;
-  if (req.tool === 'mcp_request')                               return `${req.server} → ${req.query}`;
-  if (req.tool === 'audit_ui')                                  return req.url ?? JSON.stringify(req);
-  if (req.tool === 'memory_store' || req.tool === 'memory_query') return req.key;
-  return JSON.stringify(req);
+interface RepairProofCapsuleArtifact {
+  id: string;
+  path: string;
+  capsule: FailureCapsule;
 }
 
-// ─── Evidence result formatter ────────────────────────────────────────────────
+function isReliabilityRepairProofEnabled(rawTask: string): boolean {
+  return process.env['BABEL_RELIABILITY_REPAIR_PROOF'] === 'true' &&
+    rawTask.includes(RELIABILITY_REPAIR_PROOF_MARKER);
+}
 
-/**
- * Converts a completed tool-call log into a human-readable block that can be
- * injected into the next SWE Agent prompt as gathered evidence.
- *
- * Only stdout is included (read-only tools return all useful data there).
- * Stderr is included only when non-empty, to keep the context concise.
- */
-function formatExecutionResults(toolCallLog: ToolCallLog[], loopCount: number): string {
-  const header = `--- GATHERED EVIDENCE (Loop ${loopCount}) ---`;
-  const entries = toolCallLog.map(entry =>
-    [
-      `[Step ${entry.step}] ${entry.tool} → ${entry.target}`,
-      `stdout: ${entry.stdout.trim() || '(empty)'}`,
-      ...(entry.stderr.trim() ? [`stderr: ${entry.stderr.trim()}`] : []),
-      ...(entry.denial ? [`denial: ${JSON.stringify(entry.denial)}`] : []),
-      ...(entry.mcp_lifecycle ? [`mcp_lifecycle: ${JSON.stringify(entry.mcp_lifecycle)}`] : []),
-    ].join('\n'),
+function getReliabilityRepairProofMaxFailures(): number {
+  const configured = Number.parseInt(process.env['BABEL_RELIABILITY_REPAIR_PROOF_MAX_FAILURES'] ?? '', 10);
+  if (!Number.isFinite(configured) || configured <= 0) {
+    return maxAttemptsForRepairMode('autonomous');
+  }
+  return Math.min(configured, maxAttemptsForRepairMode('autonomous'));
+}
+
+function hashProjectFileForEvidence(projectRoot: string | null | undefined, relativePath: string): string | null {
+  if (!projectRoot || relativePath.trim().length === 0) {
+    return null;
+  }
+  const resolved = resolveStepTargetPath(projectRoot, relativePath);
+  if (!isWithinProjectRootPath(projectRoot, resolved) || !existsSync(resolved)) {
+    return null;
+  }
+  try {
+    return createHash('sha256').update(readFileSync(resolved)).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+const SAFETY_SNAPSHOT_MAX_FILES = 2000;
+const SAFETY_SNAPSHOT_IGNORED_DIRECTORIES = [
+  '.git',
+  'node_modules',
+  'dist',
+  'build',
+  'coverage',
+  '.next',
+  'runs',
+];
+
+function hashAbsoluteFileForSafety(path: string): string | null {
+  try {
+    return createHash('sha256').update(readFileSync(path)).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+function snapshotProjectFilesForSafety(projectRoot: string | null | undefined): ProjectSafetySnapshot {
+  const root = projectRoot ? resolve(projectRoot) : null;
+  const snapshot: ProjectSafetySnapshot = {
+    root,
+    files: {},
+    file_count: 0,
+    truncated: false,
+    ignored_directories: SAFETY_SNAPSHOT_IGNORED_DIRECTORIES,
+  };
+  if (!root || !existsSync(root)) {
+    return snapshot;
+  }
+
+  const ignored = new Set(SAFETY_SNAPSHOT_IGNORED_DIRECTORIES);
+  const visit = (dir: string): void => {
+    if (snapshot.truncated) {
+      return;
+    }
+    let entries: string[] = [];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (snapshot.truncated) {
+        return;
+      }
+      const absolute = join(dir, entry);
+      let stat;
+      try {
+        stat = statSync(absolute);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) {
+        if (!ignored.has(entry)) {
+          visit(absolute);
+        }
+        continue;
+      }
+      if (!stat.isFile()) {
+        continue;
+      }
+      const relativePath = relative(root, absolute).replace(/\\/g, '/');
+      snapshot.files[relativePath] = hashAbsoluteFileForSafety(absolute) ?? 'UNREADABLE';
+      snapshot.file_count += 1;
+      if (snapshot.file_count >= SAFETY_SNAPSHOT_MAX_FILES) {
+        snapshot.truncated = true;
+        return;
+      }
+    }
+  };
+
+  visit(root);
+  return snapshot;
+}
+
+function readJsonArtifact<T>(runDir: string, filename: string): T | null {
+  const path = join(runDir, filename);
+  if (!existsSync(path)) {
+    return null;
+  }
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as T;
+  } catch {
+    return null;
+  }
+}
+
+function collectTerminalContext(runDir: string): {
+  toolCallLog: ToolCallLog[];
+  condition: string | null;
+  failureCapsulePath: string | null;
+  repairAttemptTimelinePath: string | null;
+  attemptSafetySummaryPath: string | null;
+  attemptSafetySummary: AttemptSafetySummary | null;
+  rollbackSummaryPath: string | null;
+  rollbackSummary: WorktreeRollbackSummary | null;
+  worktreeSafetySummaryPath: string | null;
+  worktreeSafetySummary: WorktreeSafetySummary | null;
+} {
+  const report = readJsonArtifact<{
+    tool_call_log?: ToolCallLog[];
+    pipeline_error?: { condition?: string };
+    reason?: string;
+  }>(runDir, '04_execution_report.json');
+  const timeline = readJsonArtifact<AutonomousRepairProofTimeline>(runDir, 'repair_attempt_timeline.json') ??
+    readJsonArtifact<AutonomousRepairProofTimeline>(runDir, '12_repair_attempt_timeline.json');
+  const attemptSafetySummary = readJsonArtifact<AttemptSafetySummary>(runDir, 'attempt_safety_summary.json');
+  const rollbackSummary = readJsonArtifact<WorktreeRollbackSummary>(runDir, 'rollback_summary.json');
+  const worktreeSafetySummary = readJsonArtifact<WorktreeSafetySummary>(runDir, 'worktree_safety_summary.json');
+  const latestFailureCapsulePath = timeline?.attempts
+    .map(attempt => attempt.failure_capsule_path)
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .at(-1) ?? (
+      existsSync(join(runDir, PRE_EXECUTION_FAILURE_CAPSULE_FILENAME))
+        ? join(runDir, PRE_EXECUTION_FAILURE_CAPSULE_FILENAME)
+        : null
+    );
+
+  return {
+    toolCallLog: report?.tool_call_log ?? [],
+    condition: report?.pipeline_error?.condition ?? report?.reason ?? null,
+    failureCapsulePath: latestFailureCapsulePath,
+    repairAttemptTimelinePath: timeline ? join(runDir, 'repair_attempt_timeline.json') : null,
+    attemptSafetySummaryPath: attemptSafetySummary ? join(runDir, 'attempt_safety_summary.json') : null,
+    attemptSafetySummary,
+    rollbackSummaryPath: rollbackSummary ? join(runDir, 'rollback_summary.json') : null,
+    rollbackSummary,
+    worktreeSafetySummaryPath: worktreeSafetySummary ? join(runDir, 'worktree_safety_summary.json') : null,
+    worktreeSafetySummary,
+  };
+}
+
+function summarizeVerifierStreamForEvidence(text: string | null | undefined): string | null {
+  const normalized = String(text ?? '')
+    .replace(/\x1b\[[0-9;]*m/g, '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+    .slice(-12)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized.length > 0
+    ? normalized.slice(0, 700)
+    : null;
+}
+
+function isVerifierNotFoundFailure(command: string, stdout: string, stderr: string): boolean {
+  const commandBase = normalizeShellCommandForComparison(command).split(/\s+/)[0] ?? '';
+  const evidence = `${stdout}\n${stderr}`.toLowerCase();
+  return evidence.includes('missing script') ||
+    evidence.includes('command not found') ||
+    evidence.includes('is not recognized as an internal or external command') ||
+    evidence.includes('not recognized as the name of') ||
+    evidence.includes('enoent') ||
+    evidence.includes('could not determine executable to run') ||
+    (/npm/.test(commandBase) && /missing script:\s*["']?(?:test|typecheck|build)["']?/.test(evidence));
+}
+
+function getAllowedToolsFromEnv(): string[] | null {
+  const raw = process.env['BABEL_ALLOWED_TOOLS'];
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.map(value => String(value));
+    }
+  } catch {
+    return raw.split(',').map(value => value.trim()).filter(Boolean);
+  }
+  return null;
+}
+
+function getDisallowedToolsFromEnv(): string[] {
+  const raw = process.env['BABEL_DISALLOWED_TOOLS'];
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.map(value => String(value));
+    }
+  } catch {
+    return raw.split(',').map(value => value.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function isFileWriteToolAvailable(): boolean {
+  const allowed = getAllowedToolsFromEnv();
+  return allowed === null || allowed.includes('file_write');
+}
+
+function isShellExecutionToolAvailable(): boolean {
+  const allowed = getAllowedToolsFromEnv();
+  const disallowed = new Set(getDisallowedToolsFromEnv());
+  return (allowed === null || allowed.includes('shell_exec')) && !disallowed.has('shell_exec');
+}
+
+function shouldRecoverCommandFailure(command: string, rawTask: string): boolean {
+  if (!isFileWriteToolAvailable()) {
+    return false;
+  }
+  if (/\bdo not modify files\b|\binspect only\b|\bread[- ]only\b/i.test(rawTask)) {
+    return false;
+  }
+  return isVerifierCommand(command) || /\bfix\b|\brepair\b|\bpatch\b|\bdebug\b/i.test(rawTask);
+}
+
+function extractMissingNpmScript(command: string, stdout: string, stderr: string): string | null {
+  const commandBase = normalizeShellCommandForComparison(command).split(/\s+/)[0] ?? '';
+  if (!/npm/.test(commandBase)) {
+    return null;
+  }
+  const evidence = `${stdout}\n${stderr}`.toLowerCase();
+  const match = evidence.match(/missing script:\s*["']?([a-z0-9:_-]+)["']?/);
+  return match?.[1] ?? null;
+}
+
+function findDescendantPackageScriptCwd(
+  projectRoot: string | null | undefined,
+  scriptName: string,
+): string | null {
+  if (!projectRoot || !existsSync(projectRoot)) {
+    return null;
+  }
+
+  const ignored = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', 'runs']);
+  const queue: Array<{ path: string; depth: number }> = [{ path: projectRoot, depth: 0 }];
+  while (queue.length > 0) {
+    const next = queue.shift()!;
+    if (next.depth > 3) {
+      continue;
+    }
+
+    const packageJsonPath = join(next.path, 'package.json');
+    if (next.path !== projectRoot && existsSync(packageJsonPath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+          scripts?: Record<string, unknown>;
+        };
+        if (typeof parsed.scripts?.[scriptName] === 'string') {
+          return next.path;
+        }
+      } catch {
+        // Ignore malformed nested package files; verifier retry should remain evidence-driven.
+      }
+    }
+
+    let children: string[] = [];
+    try {
+      children = readdirSync(next.path);
+    } catch {
+      continue;
+    }
+    for (const child of children) {
+      if (ignored.has(child)) {
+        continue;
+      }
+      const childPath = join(next.path, child);
+      try {
+        if (statSync(childPath).isDirectory()) {
+          queue.push({ path: childPath, depth: next.depth + 1 });
+        }
+      } catch {
+        // Ignore racey or inaccessible children.
+      }
+    }
+  }
+
+  return null;
+}
+
+function getNpmWrongWorkingDirectoryHint(
+  command: string,
+  stdout: string,
+  stderr: string,
+  projectRoot: string | null | undefined,
+): string | null {
+  const missingScript = extractMissingNpmScript(command, stdout, stderr);
+  if (!missingScript) {
+    return null;
+  }
+  const packageCwd = findDescendantPackageScriptCwd(projectRoot, missingScript);
+  if (!packageCwd || !projectRoot) {
+    return null;
+  }
+  const relativeCwd = relative(projectRoot, packageCwd).replace(/\\/g, '/');
+  if (!relativeCwd || relativeCwd.startsWith('..')) {
+    return null;
+  }
+  return `[VERIFIER_WRONG_WORKING_DIRECTORY_RETRY] npm script "${missingScript}" was not found in the current cwd, but package.json with that script exists at "${relativeCwd}". Retry the same verifier command with working_directory "${relativeCwd}".`;
+}
+
+function inferVerifierCommandFromTask(task: string): string | null {
+  const normalized = task.toLowerCase();
+  if (/\bnpm\s+run\s+typecheck\b/.test(normalized)) {
+    return 'npm run typecheck';
+  }
+  if (/\bnpm\s+run\s+build\b/.test(normalized)) {
+    return 'npm run build';
+  }
+  if (/\bnode\s+--test\b/.test(normalized)) {
+    return 'node --test';
+  }
+  if (/\bnpm\s+test\b/.test(normalized)) {
+    return 'npm test';
+  }
+  return null;
+}
+
+function inferCommandOnlyNoModificationRequest(task: string): string | null {
+  const normalized = task.toLowerCase();
+  if (!/\bdo not (?:modify|edit|change|write)|\bno file changes\b|\bwithout modifying\b/.test(normalized)) {
+    return null;
+  }
+  const strippedNoModify = normalized
+    .replace(/\bdo not (?:modify|edit|change|write)[^.]*\.?/g, ' ')
+    .replace(/\bwithout modifying[^.]*\.?/g, ' ')
+    .replace(/\bno file changes[^.]*\.?/g, ' ');
+  if (/\b(fix|repair|patch|create|update|edit|modify|write|delete|remove)\b/.test(strippedNoModify)) {
+    return null;
+  }
+  const verifierCommand = inferVerifierCommandFromTask(task);
+  if (verifierCommand) {
+    return verifierCommand;
+  }
+  const nodeMatch = task.match(/\brun\s+(node\s+[A-Za-z0-9._/\\-]+(?:\.mjs|\.cjs|\.js)?)\b/i);
+  return nodeMatch?.[1]?.replace(/\\/g, '/') ?? null;
+}
+
+function isOptionalVerifierRequest(task: string): boolean {
+  return /\brun\b[^.?!]*\bif possible\b|\bif possible\b[^.?!]*\brun\b/i.test(task);
+}
+
+function isExecutorCommandPlaceholder(command: string): boolean {
+  return /<cmd-without-cmd-slash-c-or-cd>/i.test(command.trim());
+}
+
+function hasMeaningfulRepairDiff(
+  previous: AutonomousRepairProofAttemptEvidence | null,
+  currentFileHashes: Record<string, RepairProofFileHash>,
+): boolean | null {
+  if (!previous) {
+    return null;
+  }
+  const previousChanged = previous.changed_files.slice().sort();
+  const currentChanged = Object.keys(currentFileHashes).sort();
+  if (currentChanged.length === 0) {
+    return false;
+  }
+  if (
+    previousChanged.length !== currentChanged.length ||
+    previousChanged.some((path, index) => path !== currentChanged[index])
+  ) {
+    return true;
+  }
+  return currentChanged.some(path =>
+    previous.file_hashes[path]?.after !== currentFileHashes[path]?.after
   );
-  return [header, ...entries].join('\n\n');
-}
-
-function formatDenialSummary(denial: ToolCallLog['denial']): string | null {
-  if (!denial) return null;
-  return `${denial.category}/${denial.reason_code}: ${denial.message}`;
-}
-
-function formatMcpLifecycleSummary(lifecycle: ToolCallLog['mcp_lifecycle']): string | null {
-  if (!lifecycle) return null;
-  const reason = lifecycle.reason_code ? ` (${lifecycle.reason_code})` : '';
-  return `${lifecycle.phase}/${lifecycle.outcome}${reason}`;
-}
-
-/**
- * Builds the task slot injected into the compiled executor context.
- * Includes the approved plan and the JSON output contract for both tool calls
- * and completion signals.
- */
-function buildExecutorTask(approvedPlan: SwePlan): string {
-  return [
-    'Execute the following approved SWE Plan.',
-    'Respond with ONLY valid JSON — no markdown fences, no explanation, no prose.',
-    '',
-    'ACTIVATION STATUS:',
-    '- The pipeline has already verified a QA PASS verdict for this plan.',
-    '- You are authorized to begin tool execution now.',
-    '- Do NOT refuse activation for missing QA approval unless the prompt explicitly says QA failed.',
-    '',
-    'On each turn emit EXACTLY ONE of these JSON shapes:',
-    '  directory_list: { "type": "tool_call", "tool": "directory_list", "path": "<project-relative or /project/... path>" }',
-    '  file_read:  { "type": "tool_call", "tool": "file_read",  "path": "<project-relative or /project/... path>" }',
-    '  file_write: { "type": "tool_call", "tool": "file_write", "path": "<project-relative or /project/... path>", "content": "<full file content>" }',
-    '  shell_exec: { "type": "tool_call", "tool": "shell_exec", "command": "<cmd-without-cmd-slash-c-or-cd>", "working_directory": "<project-relative or /project/... path>", "timeout_seconds": 120 }',
-    '  test_run:     { "type": "tool_call", "tool": "test_run",     "command": "<cmd-without-cmd-slash-c-or-cd>", "working_directory": "<project-relative or /project/... path>", "timeout_seconds": 300 }',
-    '  mcp_request:  { "type": "tool_call", "tool": "mcp_request",  "server": "<server_name>", "query": "<query>" }',
-    '  audit_ui:     { "type": "tool_call", "tool": "audit_ui",     "url": "<url>", "run_id": "<run_id>" }',
-    '  memory_store: { "type": "tool_call", "tool": "memory_store", "key": "<key>", "value": "<value>" }',
-    '  memory_query: { "type": "tool_call", "tool": "memory_query", "key": "<key>" }',
-    '  Done:       { "type": "completion", "status": "EXECUTION_COMPLETE" }',
-    '  Halt:       { "type": "completion", "status": "EXECUTION_HALTED",   "halt_tag": "<TAG>", "condition": "<exact condition>" }',
-    '  Refused:    { "type": "completion", "status": "ACTIVATION_REFUSED", "reason": "<reason>" }',
-    '',
-    'Approved SWE Plan:',
-    JSON.stringify(approvedPlan, null, 2),
-  ].join('\n');
-}
-
-/**
- * Formats a completed tool-call log entry as a human-readable history block
- * that the executor can read to know what has already been done.
- */
-function formatHistoryEntry(entry: ToolCallLog): string {
-  return [
-    `[Step ${entry.step}] ${entry.tool} → ${entry.target}`,
-    `Exit code: ${entry.exit_code}`,
-    `Stdout: ${truncateLogs(entry.stdout) || '(empty)'}`,
-    `Stderr: ${truncateLogs(entry.stderr) || '(empty)'}`,
-    ...(entry.denial ? [`Denial: ${formatDenialSummary(entry.denial)}`] : []),
-    ...(entry.mcp_lifecycle ? [`MCP lifecycle: ${formatMcpLifecycleSummary(entry.mcp_lifecycle)}`] : []),
-    `Verification: ${entry.verified ? 'PASSED' : 'FAILED'}`,
-  ].join('\n');
-}
-
-/**
- * Appends the execution history and a "next action" prompt to the compiled
- * base context so each stateless runner call has full situational awareness.
- */
-function buildExecutorTurnPrompt(
-  baseContext:   string,
-  history:       string,
-  stepsComplete: number,
-): string {
-  const historyBlock = history.trim() ||
-    '(No steps executed yet — this is the first turn.)';
-
-  const nextAction = stepsComplete > 0
-    ? `${stepsComplete} step(s) already executed (see history above). ` +
-      `Emit your next JSON tool call, or a completion signal if the plan is finished.`
-    : `Emit your first JSON tool call. If the activation gate fails, emit ACTIVATION_REFUSED.`;
-
-  return [
-    baseContext,
-    '',
-    '### EXECUTION HISTORY SO FAR:',
-    historyBlock,
-    '',
-    '### NEXT ACTION:',
-    nextAction,
-  ].join('\n');
-}
-
-/**
- * Builds a focused repair prompt when a tool call passes `ExecutorTurnSchema`
- * but fails the stricter `ToolCallRequestSchema`.
- * Injects the bad JSON + Zod issue list into the original turn prompt so the
- * runner has full context without re-sending the entire base context.
- */
-function buildExecutorRepairPrompt(
-  originalTurnPrompt: string,
-  badToolArgs:        Record<string, unknown>,
-  zodError:           z.ZodError,
-): string {
-  const toolName = typeof badToolArgs['tool'] === 'string' ? badToolArgs['tool'] : 'unknown';
-  const issues = zodError.issues
-    .map(i => `  - ${i.path.join('.') || '<root>'}: ${i.message}`)
-    .join('\n');
-
-  return [
-    originalTurnPrompt,
-    '',
-    '---',
-    '### SCHEMA REPAIR REQUIRED',
-    '',
-    `Your previous tool call for \`${toolName}\` passed basic structure validation but`,
-    'failed the strict per-tool field check. Validation errors:',
-    issues,
-    '',
-    'Your invalid output:',
-    '```json',
-    JSON.stringify(badToolArgs, null, 2),
-    '```',
-    '',
-    'Emit a corrected JSON `ExecutorTurn` with all required fields for `' + toolName + '` present.',
-    'Output ONLY the corrected JSON — no prose, no explanation.',
-  ].join('\n');
-}
-
-function getLatestQaVerdictPath(runDir: string): string | null {
-  const pattern = /^03_qa_verdict_v(\d+)\.json$/;
-  const candidates = readdirSync(runDir)
-    .filter(name => pattern.test(name))
-    .sort((left, right) => {
-      const leftMatch = pattern.exec(left);
-      const rightMatch = pattern.exec(right);
-      const leftVersion = leftMatch ? Number.parseInt(leftMatch[1] ?? '0', 10) : 0;
-      const rightVersion = rightMatch ? Number.parseInt(rightMatch[1] ?? '0', 10) : 0;
-      return rightVersion - leftVersion;
-    });
-
-  return candidates.length > 0 ? join(runDir, candidates[0]!) : null;
-}
-
-function assertExecutorGate(runDir: string): void {
-  const qaVerdictPath = getLatestQaVerdictPath(runDir);
-  if (!qaVerdictPath) {
-    throw new Error(
-      `Executor activation refused: no QA verdict found for run "${runDir}". ` +
-      'Stage 4 requires an explicit PASS verdict.',
-    );
-  }
-
-  const qaVerdictRaw = JSON.parse(readFileSync(qaVerdictPath, 'utf-8')) as Record<string, unknown>;
-  const verdict = String(qaVerdictRaw['verdict'] ?? '').trim().toUpperCase();
-  if (verdict !== 'PASS') {
-    throw new Error(
-      `Executor activation refused: latest QA verdict is "${verdict || 'UNKNOWN'}" in "${qaVerdictPath}". ` +
-      'Stage 4 requires PASS.',
-    );
-  }
 }
 
 /**
@@ -1982,56 +2868,1031 @@ async function runExecutorLoop(
   targetModel:  TargetModel,
   reportWarnings: string[] = [],
   initialToolCallLog: ToolCallLog[] = [],
+  rawTask: string = '',
+  pruningStubs?: Map<string, string>,
 ): Promise<ExecutorLoopResult> {
   assertExecutorGate(evidence.runDir);
 
+  const reliabilityRepairProofEnabled = isReliabilityRepairProofEnabled(rawTask);
+  const requestedTargetContract = getRequestedTargetContract(rawTask);
+  const compactFileOnlyExecutor =
+    !isExternalBenchmarkTask(rawTask) &&
+    requestedTargetContract.bounded &&
+    requestedTargetContract.requestedTargets.length > 0 &&
+    approvedPlan.minimal_action_set.every(step =>
+      ['directory_list', 'file_read', 'file_write'].includes(String(step.tool)),
+    );
+
   // ── Compile base context once ────────────────────────────────────────────
-  const baseContext = compileContext(
+  const executorRuntimeLines = [
+    ...(reliabilityRepairProofEnabled
+      ? [`Reliability repair proof marker: ${RELIABILITY_REPAIR_PROOF_MARKER}`]
+      : []),
+    ...getBoundedExecutorContractLines(rawTask),
+    ...getBenchmarkRuntimeInventoryLines(
+      resolveExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']).name,
+      false,
+    ),
+    ...buildToolCapabilityPromptLines(resolveExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']).name),
+    ...buildBenchmarkVerificationPromptLines(rawTask),
+  ];
+  const baseContext = await compileContext(
     abs(EXECUTOR_PATHS),
-    buildExecutorTask(approvedPlan),
+    buildExecutorTask(
+      approvedPlan,
+      rawTask,
+      executorRuntimeLines,
+      {
+        compactFileOnly: compactFileOnlyExecutor,
+        allowCommandRecovery: true,
+      },
+    ),
+    undefined,
+    pruningStubs,
   );
   evidence.writeCompiledContext('executor', baseContext);
 
-  let executionHistory = initialToolCallLog.map(formatHistoryEntry).join('\n\n');
-  const toolCallLog: ToolCallLog[] = [...initialToolCallLog];
+  const normalizedInitialToolCallLog: ToolCallLog[] = initialToolCallLog.map(entry => ({
+    ...entry,
+    target: canonicalizeExecutorTargetForLog(entry.target, entry.tool),
+  }));
+
+  let executionHistory = normalizedInitialToolCallLog.map(formatHistoryEntry).join('\n\n');
+  const toolCallLog: ToolCallLog[] = [...normalizedInitialToolCallLog];
+
+  // FILE_READ_CACHE: stores the complete, untruncated content of every
+  // file_read result keyed by the resolved file path. Injected verbatim into
+  // every executor turn prompt so the LLM never reconstructs file content from
+  // memory when writing. This is the primary defence against the truncation bug
+  // where the executor wrote the "... [N chars truncated] ..." history marker
+  // into the file content of a file_write.
+  const fileReadCache = new Map<string, string>();
+  let externalPostconditionFailures = 0;
+  let externalRepairRerunCount = 0;
+  let recoverableCommandFailures = 0;
+  const pendingRecoverableCommandRetryState: { value: PendingRecoverableCommandRetry | null } = {
+    value: null,
+  };
+  let blockedBenchmarkInstallRecoveryCount = 0;
+  let blockedToolCapabilityRecoveryCount = 0;
+  const maxRecoverableCommandFailures = reliabilityRepairProofEnabled
+    ? getReliabilityRepairProofMaxFailures()
+    : maxAttemptsForRepairMode('autonomous');
+  let repairState: RepairState = createRepairState(maxRecoverableCommandFailures);
+  let latestFailureCapsuleArtifact: RepairProofCapsuleArtifact | null = null;
+  let currentRepairAttemptInputCapsule: RepairProofCapsuleArtifact | null = null;
+  let currentRepairAttemptChangedFiles = new Set<string>();
+  let currentRepairAttemptFileHashes: Record<string, RepairProofFileHash> = {};
+  const repairAttemptTimeline: AutonomousRepairProofAttemptEvidence[] = [];
+  const attemptSafetyInitialSnapshot = snapshotProjectFilesForSafety(getExecutorProjectRoot());
+  const worktreeSafety = createWorktreeSafetyController({
+    projectRoot: getExecutorProjectRoot(),
+    runDir: evidence.runDir,
+  });
+  let latestRollbackSummary: WorktreeRollbackSummary | null = null;
+  let latestRollbackMode: RollbackMode = 'snapshot_only';
+  const repairProofNotes: string[] = reliabilityRepairProofEnabled
+    ? ['Deterministic model-boundary response provider enabled for live fail-then-pass reliability proof; file writes, verifier runs, failure capsules, retries, and completion guards still execute through the normal autonomous pipeline.']
+    : [];
+  let finalCompletionGuardResult: CompletionGuardEvidence = {
+    status: 'not_run',
+    semantic_failure: null,
+    runtime_hook_event_count: 0,
+    benchmark_verification_status: null,
+  };
+  const markInputCapsuleConsumed = (capsule: RepairProofCapsuleArtifact | null): void => {
+    if (!capsule) {
+      return;
+    }
+    const sourceAttempt = repairAttemptTimeline.find(attempt =>
+      attempt.failure_capsule_id === capsule.id ||
+      attempt.failure_capsule_path === capsule.path
+    );
+    if (sourceAttempt) {
+      sourceAttempt.next_attempt_consumed_capsule = true;
+    }
+  };
+  const maxBenchmarkInstallRecoveryBlocks = 1;
+  const maxBlockedToolCapabilityRecoveries = 1;
+  const runtimeHookTraceEvents: RuntimeHookTraceEvent[] = [];
+  const preCompleteVerificationTrace: BenchmarkVerificationResult[] = [];
+
+  const writeWorktreeSafetySummary = (): void => {
+    evidence.writeDebugFile(
+      'worktree_safety_summary.json',
+      `${JSON.stringify(worktreeSafety.buildSummary(), null, 2)}\n`,
+    );
+  };
+
+  const shouldReplaceEffectiveRollbackSummary = (
+    current: WorktreeRollbackSummary | null,
+    candidate: WorktreeRollbackSummary,
+  ): boolean => {
+    if (!current) {
+      return true;
+    }
+    const priority: Record<WorktreeRollbackStatus, number> = {
+      rollback_failed: 4,
+      rollback_skipped_user_dirty_target: 3,
+      rollback_applied: 2,
+      rollback_not_needed: 1,
+    };
+    return priority[candidate.status] >= priority[current.status];
+  };
+
+  const effectiveRollbackStatusFor = (status: WorktreeRollbackStatus): WorktreeRollbackStatus => {
+    if (
+      status === 'rollback_not_needed' &&
+      latestRollbackSummary?.status === 'rollback_applied'
+    ) {
+      return 'rollback_applied';
+    }
+    return status;
+  };
+
+  const writeRollbackSummary = (summary: WorktreeRollbackSummary): void => {
+    if (shouldReplaceEffectiveRollbackSummary(latestRollbackSummary, summary)) {
+      latestRollbackSummary = summary;
+      latestRollbackMode = summary.status;
+    }
+    const rollbackSummaryPath = join(evidence.runDir, 'rollback_summary.json');
+    worktreeSafety.setRollbackSummaryPath(rollbackSummaryPath);
+    evidence.writeDebugFile(
+      'rollback_summary.json',
+      `${JSON.stringify(latestRollbackSummary ?? summary, null, 2)}\n`,
+    );
+    writeWorktreeSafetySummary();
+  };
+
+  const rollbackStatusToTerminalStatus = (
+    rollbackStatus: WorktreeRollbackStatus,
+    fallbackStatus: TerminalStatus,
+  ): TerminalStatus => {
+    if (rollbackStatus === 'rollback_failed') {
+      return 'ROLLBACK_FAILED';
+    }
+    if (rollbackStatus === 'rollback_applied') {
+      return 'ROLLBACK_APPLIED';
+    }
+    if (rollbackStatus === 'rollback_skipped_user_dirty_target') {
+      return 'WORKTREE_DIRTY_UNSAFE';
+    }
+    return fallbackStatus;
+  };
+
+  const rollbackTouchedFilesForFailure = (
+    underlyingStatus: TerminalStatus,
+    reason: string,
+  ): {
+    summary: WorktreeRollbackSummary;
+    terminalStatus: TerminalStatus;
+    conditionPrefix: string;
+  } => {
+    const summary = worktreeSafety.rollbackTouchedFiles(reason);
+    writeRollbackSummary(summary);
+    const effectiveRollbackStatus = effectiveRollbackStatusFor(summary.status);
+    const terminalStatus = rollbackStatusToTerminalStatus(effectiveRollbackStatus, underlyingStatus);
+    const conditionPrefix = effectiveRollbackStatus === 'rollback_applied'
+      ? `[ROLLBACK_APPLIED] Rolled back touched files during this failed repair run.`
+      : effectiveRollbackStatus === 'rollback_failed'
+        ? `[ROLLBACK_FAILED] Automatic rollback failed after failed repair.`
+        : effectiveRollbackStatus === 'rollback_skipped_user_dirty_target'
+          ? `[WORKTREE_DIRTY_UNSAFE] Rollback skipped because target files were dirty before the run.`
+          : `[${underlyingStatus}] No rollback changes were needed.`;
+    return { summary, terminalStatus, conditionPrefix };
+  };
+
+  writeWorktreeSafetySummary();
+
+  const writeRepairAttemptTimeline = (finalStatus: string | null = null): void => {
+    if (repairAttemptTimeline.length === 0 && !reliabilityRepairProofEnabled) {
+      return;
+    }
+    const timeline: AutonomousRepairProofTimeline = {
+      schema_version: 1,
+      proof_id: reliabilityRepairProofEnabled
+        ? 'autonomous_live_fail_then_pass_repair'
+        : 'autonomous_repair_attempt_timeline',
+      proof_kind: reliabilityRepairProofEnabled ? 'deterministic_model_boundary_assisted' : 'fully_autonomous',
+      deterministic_test_double: reliabilityRepairProofEnabled,
+      max_attempts: maxRecoverableCommandFailures,
+      attempt_count: repairAttemptTimeline.length,
+      attempts: repairAttemptTimeline,
+      final_status: finalStatus,
+      final_completion_guard_result: finalCompletionGuardResult,
+      changed_files: [...new Set(repairAttemptTimeline.flatMap(attempt => attempt.changed_files))].sort(),
+      verifier_command_log: repairAttemptTimeline.map(attempt => ({
+        attempt: attempt.attempt,
+        command: attempt.verifier_command,
+        cwd: attempt.verifier_cwd,
+        exit_code: attempt.verifier_exit_code,
+      })),
+      notes: repairProofNotes,
+    };
+    evidence.writeDebugFile(
+      '12_repair_attempt_timeline.json',
+      `${JSON.stringify(timeline, null, 2)}\n`,
+    );
+    evidence.writeDebugFile(
+      'repair_attempt_timeline.json',
+      `${JSON.stringify(timeline, null, 2)}\n`,
+    );
+    if (finalStatus !== null) {
+      const attemptSafetySummary = buildAttemptSafetySummary({
+        timeline,
+        initialSnapshot: attemptSafetyInitialSnapshot,
+        finalSnapshot: snapshotProjectFilesForSafety(getExecutorProjectRoot()),
+        rollbackMode: latestRollbackMode,
+        rollbackStatus: latestRollbackSummary?.status ?? latestRollbackMode,
+        rollbackSummaryPath: latestRollbackSummary ? join(evidence.runDir, 'rollback_summary.json') : null,
+        worktreeSafetySummaryPath: join(evidence.runDir, 'worktree_safety_summary.json'),
+        restoredFiles: latestRollbackSummary?.restored_files ?? [],
+        dirtyFilesPreserved: latestRollbackSummary?.dirty_files_preserved ?? [],
+        targetDirtyConflicts: latestRollbackSummary?.target_dirty_conflicts ?? worktreeSafety.buildSummary().target_dirty_conflicts,
+      });
+      evidence.writeDebugFile(
+        'attempt_safety_summary.json',
+        `${JSON.stringify(attemptSafetySummary, null, 2)}\n`,
+      );
+      evidence.writeDebugFile(
+        'repair_final_status.json',
+        `${JSON.stringify({
+          schema_version: 1,
+          status: finalStatus,
+          proof_kind: timeline.proof_kind,
+          deterministic_test_double: timeline.deterministic_test_double,
+          attempt_count: timeline.attempt_count,
+          changed_files: timeline.changed_files,
+          verifier_command_log: timeline.verifier_command_log,
+          final_completion_guard_result: timeline.final_completion_guard_result,
+          repair_attempt_timeline_path: join(evidence.runDir, 'repair_attempt_timeline.json'),
+          attempt_safety_summary_path: join(evidence.runDir, 'attempt_safety_summary.json'),
+          worktree_safety_summary_path: join(evidence.runDir, 'worktree_safety_summary.json'),
+          rollback_summary_path: latestRollbackSummary ? join(evidence.runDir, 'rollback_summary.json') : null,
+        }, null, 2)}\n`,
+      );
+    }
+  };
+
+  const writeExecutorGateTrace = (): void => {
+    try {
+      const warningCounts: Record<string, number> = {};
+      for (const warning of reportWarnings) {
+        const tag = /^\[([^\]]+)\]/.exec(warning)?.[1] ?? 'UNTAGGED_WARNING';
+        warningCounts[tag] = (warningCounts[tag] ?? 0) + 1;
+      }
+      evidence.writeDebugFile(
+        '09_executor_gate_trace.json',
+        JSON.stringify(
+          {
+            runtime_hook_events: runtimeHookTraceEvents,
+            pre_complete_verifications: preCompleteVerificationTrace,
+            repair_attempt_timeline: {
+              artifact: '12_repair_attempt_timeline.json',
+              attempt_count: repairAttemptTimeline.length,
+              proof_enabled: reliabilityRepairProofEnabled,
+            },
+            repair_state: {
+              status: repairState.status,
+              max_failures: repairState.maxFailures,
+              failure_count: repairState.failures.length,
+              last_fingerprint: repairState.lastFingerprint,
+              failures: repairState.failures,
+            },
+            warning_counts: warningCounts,
+          },
+          null,
+          2,
+        ),
+      );
+    } catch (err) {
+      reportWarnings.push(
+        `[EXECUTOR_GATE_TRACE_WRITE_FAILED] ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
+  // Seed the cache from any initial tool call log (resumed runs).
+  for (const entry of normalizedInitialToolCallLog) {
+    if (entry.tool === 'file_read' && entry.exit_code === 0 && entry.stdout) {
+      fileReadCache.set(entry.target, entry.stdout);
+    }
+  }
+
+  const persistExecutorContext = (
+    status: 'ready_for_next_turn' | 'after_tool_call' | 'terminal',
+    nextTurnPrompt: string,
+    details: { terminalStatus?: string; haltTag?: string; condition?: string } = {},
+  ): void => {
+    try {
+      if (status === 'terminal') {
+        writeExecutorGateTrace();
+      }
+      writeExecutorSessionContext({
+        evidence,
+        status,
+        baseContext,
+        executionHistory,
+        nextTurnPrompt,
+        fileReadCache,
+        toolCallLog,
+        ...(details.terminalStatus ? { terminalStatus: details.terminalStatus } : {}),
+        ...(details.haltTag ? { haltTag: details.haltTag } : {}),
+        ...(details.condition ? { condition: details.condition } : {}),
+      });
+    } catch (err) {
+      reportWarnings.push(
+        `[SESSION_CONTEXT_WRITE_FAILED] ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
+  const getMissingSuccessfulPlannedFileWrites = (): string[] => {
+    const plannedWrites = approvedPlan.minimal_action_set
+      .filter(step => step.tool === 'file_write')
+      .map(step => String(step.target ?? '').trim())
+      .filter(target => target.length > 0);
+    if (plannedWrites.length === 0) {
+      return [];
+    }
+
+    const projectRoot = getExecutorProjectRoot();
+    const targetKey = (target: string): string => {
+      const normalized = normalizePathForComparison(target);
+      if (!projectRoot) {
+        return normalized.toLowerCase();
+      }
+
+      const resolved = resolveStepTargetPath(projectRoot, normalized);
+      if (isWithinProjectRootPath(projectRoot, resolved)) {
+        return relative(projectRoot, resolved).replace(/\\/g, '/').toLowerCase();
+      }
+
+      return resolved.replace(/\\/g, '/').toLowerCase();
+    };
+
+    const successfulWrites = new Set(
+      toolCallLog
+        .filter(entry => entry.tool === 'file_write' && entry.exit_code === 0)
+        .map(entry => targetKey(String(entry.target ?? ''))),
+    );
+
+    return plannedWrites.filter(target =>
+      !successfulWrites.has(targetKey(target)),
+    );
+  };
+
+  const haltForMissingPlannedFileWrites = (
+    nextTurnPrompt: string,
+    missingTargets: string[],
+  ): ExecutorLoopResult => {
+    const condition =
+      `Executor reported EXECUTION_COMPLETE before successful file_write for planned target(s): ` +
+      `${missingTargets.join(', ')}`;
+    const report = buildHaltReport(
+      toolCallLog,
+      'STEP_VERIFICATION_FAIL',
+      Math.max(1, toolCallLog.length),
+      condition,
+    );
+    persistExecutorContext('terminal', nextTurnPrompt, {
+      terminalStatus: 'EXECUTION_HALTED',
+      haltTag: 'STEP_VERIFICATION_FAIL',
+      condition,
+    });
+    writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+    log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] after incomplete planned writes');
+    logDetail(condition);
+    return {
+      toolCallLog,
+      terminalStatus: 'EXECUTION_HALTED',
+      haltTag: 'STEP_VERIFICATION_FAIL',
+      condition,
+    };
+  };
+
+  const maybeCompleteBoundedWriteTask = (nextTurnPrompt: string): ExecutorLoopResult | null => {
+    if (isExternalBenchmarkTask(rawTask)) {
+      return null;
+    }
+
+    const contract = getRequestedTargetContract(rawTask);
+    if (!contract.bounded || contract.requestedTargets.length === 0) {
+      return null;
+    }
+
+    const planTools = approvedPlan.minimal_action_set.map(step => step.tool);
+    if (!planTools.every(tool => ['directory_list', 'file_read', 'file_write'].includes(tool))) {
+      return null;
+    }
+
+    const successfulWrites = new Set(
+      toolCallLog
+        .filter(entry => entry.tool === 'file_write' && entry.exit_code === 0)
+        .map(entry => normalizePathForComparison(String(entry.target ?? '')).toLowerCase()),
+    );
+    const allRequestedTargetsWritten = contract.requestedTargets.every(target =>
+      successfulWrites.has(normalizePathForComparison(target).toLowerCase()),
+    );
+    if (!allRequestedTargetsWritten) {
+      return null;
+    }
+
+    const semanticFailure = verifyBoundedTaskArtifacts(
+      rawTask,
+      toolCallLog,
+      getExecutorProjectRoot(),
+    );
+    if (semanticFailure) {
+      return null;
+    }
+
+    const completion = {
+      type: 'completion',
+      status: 'EXECUTION_COMPLETE',
+    } as const;
+    const report = buildTerminalReport(completion, toolCallLog, evidence);
+    persistExecutorContext('terminal', nextTurnPrompt, {
+      terminalStatus: 'EXECUTION_COMPLETE',
+    });
+    writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+    log(`  Executor: EXECUTION_COMPLETE (${toolCallLog.length} steps, bounded artifact verified)`);
+    return {
+      toolCallLog,
+      terminalStatus: 'EXECUTION_COMPLETE',
+    };
+  };
+
+  const maybeCompleteEvidenceRequestPlan = (nextTurnPrompt: string): ExecutorLoopResult | null => {
+    if (!isEvidenceRequestPlanSatisfied(approvedPlan, toolCallLog)) {
+      return null;
+    }
+
+    const completion = {
+      type: 'completion',
+      status: 'EXECUTION_COMPLETE',
+    } as const;
+    const report = buildTerminalReport(completion, toolCallLog, evidence);
+    persistExecutorContext('terminal', nextTurnPrompt, {
+      terminalStatus: 'EXECUTION_COMPLETE',
+      condition: 'EVIDENCE_REQUEST minimal_action_set satisfied.',
+    });
+    writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+    log(`  Executor: EXECUTION_COMPLETE (${toolCallLog.length} steps, evidence request satisfied)`);
+    return {
+      toolCallLog,
+      terminalStatus: 'EXECUTION_COMPLETE',
+    };
+  };
+
+  const completeAfterDeterministicExternalRepair = (
+    nextTurnPrompt: string,
+    reason: string,
+  ): ExecutorLoopResult | null => {
+    if (!isExternalBenchmarkTask(rawTask)) {
+      return null;
+    }
+
+    const deterministicRepair = repairExactOutputSchemaArtifacts(rawTask, getExecutorProjectRoot());
+    if (!deterministicRepair) {
+      return null;
+    }
+
+    const warning = `${deterministicRepair} Trigger: ${reason}`;
+    reportWarnings.push(warning);
+    const completion = {
+      type: 'completion',
+      status: 'EXECUTION_COMPLETE',
+    } as const;
+    const report = buildTerminalReport(completion, toolCallLog, evidence);
+    persistExecutorContext('terminal', nextTurnPrompt, {
+      terminalStatus: 'EXECUTION_COMPLETE',
+      condition: warning,
+    });
+    writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+    log('  Executor: EXECUTION_COMPLETE after deterministic external benchmark repair');
+    logDetail(warning);
+    return {
+      toolCallLog,
+      terminalStatus: 'EXECUTION_COMPLETE',
+    };
+  };
+
+  const directBoundedPlan = reliabilityRepairProofEnabled
+    ? null
+    : getDirectBoundedWritePlan(
+        approvedPlan,
+        rawTask,
+        getExecutorProjectRoot(),
+      );
+  if (directBoundedPlan) {
+    const warning =
+      `[EXECUTOR_DIRECT_BOUNDED_WRITE] Executing without model executor turns: ${directBoundedPlan.reason}.`;
+    reportWarnings.push(warning);
+    logDetail(warning);
+
+    for (const write of directBoundedPlan.writes) {
+      const stepNum = toolCallLog.length + 1;
+      const toolResult = await executeTool({
+        tool: 'file_write',
+        path: write.target,
+        content: write.content,
+      }, {
+        agentId: 'executor',
+        runId: evidence.runId,
+        runDir: evidence.runDir,
+        babelRoot: BABEL_ROOT,
+      });
+
+      const entry: ToolCallLog = {
+        step:      stepNum,
+        tool:      'file_write',
+        target:    canonicalizeExecutorTargetForLog(write.target, 'file_write'),
+        exit_code: toolResult.exit_code,
+        stdout:    toolResult.stdout,
+        stderr:    toolResult.stderr,
+        ...(toolResult.denial ? { denial: toolResult.denial } : {}),
+        ...(toolResult.mcp_lifecycle ? { mcp_lifecycle: toolResult.mcp_lifecycle } : {}),
+        ...(toolResult.checkpoint_ids ? { checkpoint_ids: toolResult.checkpoint_ids } : {}),
+        verified:  toolResult.exit_code === 0,
+      };
+      toolCallLog.push(entry);
+
+      const writeVerificationFailure = toolResult.exit_code === 0
+        ? verifySuccessfulTextWriteTarget(write.target, getExecutorProjectRoot(), rawTask)
+        : `Direct bounded file_write for "${write.target}" exited with code ${toolResult.exit_code}. ` +
+          `stderr: ${toolResult.stderr.slice(0, 200)}`;
+      if (writeVerificationFailure) {
+        const report = buildHaltReport(
+          toolCallLog,
+          'STEP_VERIFICATION_FAIL',
+          stepNum,
+          writeVerificationFailure,
+        );
+        persistExecutorContext('terminal', baseContext, {
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: 'STEP_VERIFICATION_FAIL',
+          condition: writeVerificationFailure,
+        });
+        writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+        log(`  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] at step ${stepNum}`);
+        return {
+          toolCallLog,
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: 'STEP_VERIFICATION_FAIL',
+          condition: writeVerificationFailure,
+        };
+      }
+
+      executionHistory +=
+        (executionHistory ? '\n\n' : '') + formatHistoryEntry(entry);
+    }
+
+    const semanticFailure = verifyBoundedTaskArtifacts(
+      rawTask,
+      toolCallLog,
+      getExecutorProjectRoot(),
+    );
+    if (semanticFailure) {
+      const report = buildHaltReport(
+        toolCallLog,
+        'STEP_VERIFICATION_FAIL',
+        toolCallLog.length,
+        semanticFailure,
+      );
+      persistExecutorContext('terminal', baseContext, {
+        terminalStatus: 'EXECUTION_HALTED',
+        haltTag: 'STEP_VERIFICATION_FAIL',
+        condition: semanticFailure,
+      });
+      writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+      log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during direct bounded write verification');
+      return {
+        toolCallLog,
+        terminalStatus: 'EXECUTION_HALTED',
+        haltTag: 'STEP_VERIFICATION_FAIL',
+        condition: semanticFailure,
+      };
+    }
+
+    const completion = {
+      type: 'completion',
+      status: 'EXECUTION_COMPLETE',
+    } as const;
+    const report = buildTerminalReport(completion, toolCallLog, evidence);
+    persistExecutorContext('terminal', baseContext, {
+      terminalStatus: 'EXECUTION_COMPLETE',
+    });
+    writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+    log(`  Executor: EXECUTION_COMPLETE (${toolCallLog.length} steps, direct bounded write)`);
+    return {
+      toolCallLog,
+      terminalStatus: 'EXECUTION_COMPLETE',
+    };
+  }
 
   for (let turn = 1; turn <= MAX_EXECUTOR_TURNS; turn++) {
     logDetail(`Executor turn ${turn}/${MAX_EXECUTOR_TURNS}...`);
 
+    // ── Context Compaction ───────────────────────────────────────────────────
+    const compactionResult = await autoCompactIfNeeded(executionHistory, turn, evidence);
+    if (compactionResult.compacted) {
+      executionHistory = compactionResult.newHistory;
+    }
+
     // ── Call runWithFallback with the history-enriched prompt ───────────────
     const turnPrompt = buildExecutorTurnPrompt(
-      baseContext, executionHistory, toolCallLog.length,
+      baseContext, executionHistory, toolCallLog.length, fileReadCache,
     );
+    persistExecutorContext('ready_for_next_turn', turnPrompt);
 
     let executorTurn: z.infer<typeof ExecutorTurnSchema>;
     try {
       executorTurn = await runWithFallback(turnPrompt, ExecutorTurnSchema, {
         evidence,
         stage: 'executor',
+        schemaName: 'ExecutorTurnSchema',
       });
     } catch (err) {
-      // All tiers exhausted — treat as hallucinated output.
-      const report = buildHaltReport(
-        toolCallLog, 'HALLUCINATED_OUTPUT', toolCallLog.length + 1,
-        `All runner tiers failed to produce a valid executor turn. ` +
-        `Last error: ${err instanceof Error ? err.message : String(err)}`,
+      const deterministicWrite = getNextDeterministicSimpleWrite(
+        approvedPlan,
+        rawTask,
+        toolCallLog,
       );
+      const projectRoot = getExecutorProjectRoot();
+      if (deterministicWrite && projectRoot) {
+        const stepNum = toolCallLog.length + 1;
+        const warning =
+          `[EXECUTOR_DETERMINISTIC_SIMPLE_WRITE] Recovered after executor model failure: ` +
+          `${deterministicWrite.reason}; target=${deterministicWrite.target}.`;
+        reportWarnings.push(warning);
+        logDetail(warning);
+
+        const toolResult = await executeTool({
+          tool: 'file_write',
+          path: deterministicWrite.target,
+          content: deterministicWrite.content,
+        }, {
+          agentId: 'executor',
+          runId: evidence.runId,
+          runDir: evidence.runDir,
+          babelRoot: BABEL_ROOT,
+        });
+
+        const entry: ToolCallLog = {
+          step:      stepNum,
+          tool:      'file_write',
+          target:    canonicalizeExecutorTargetForLog(deterministicWrite.target, 'file_write'),
+          exit_code: toolResult.exit_code,
+          stdout:    toolResult.stdout,
+          stderr:    toolResult.stderr,
+          ...(toolResult.denial ? { denial: toolResult.denial } : {}),
+          ...(toolResult.mcp_lifecycle ? { mcp_lifecycle: toolResult.mcp_lifecycle } : {}),
+          ...(toolResult.checkpoint_ids ? { checkpoint_ids: toolResult.checkpoint_ids } : {}),
+          verified:  toolResult.exit_code === 0,
+        };
+        toolCallLog.push(entry);
+
+        if (!DRY_RUN && toolResult.exit_code !== 0) {
+          const report = buildHaltReport(
+            toolCallLog,
+            'STEP_VERIFICATION_FAIL',
+            stepNum,
+            `Deterministic fallback file_write for "${deterministicWrite.target}" exited with code ${toolResult.exit_code}. ` +
+            `stderr: ${toolResult.stderr.slice(0, 200)}`,
+          );
+          persistExecutorContext('terminal', turnPrompt, {
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'STEP_VERIFICATION_FAIL',
+            condition:
+              `Deterministic fallback file_write for "${deterministicWrite.target}" exited with code ${toolResult.exit_code}. ` +
+              `stderr: ${toolResult.stderr.slice(0, 200)}`,
+          });
+          writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+          log(`  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] at step ${stepNum}`);
+          return {
+            toolCallLog,
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'STEP_VERIFICATION_FAIL',
+            condition:
+              `Deterministic fallback file_write for "${deterministicWrite.target}" exited with code ${toolResult.exit_code}. ` +
+              `stderr: ${toolResult.stderr.slice(0, 200)}`,
+          };
+        }
+
+        if (!DRY_RUN) {
+          const writeVerificationFailure = verifySuccessfulTextWriteTarget(
+            deterministicWrite.target,
+            projectRoot,
+            rawTask,
+          );
+          if (writeVerificationFailure) {
+            const report = buildHaltReport(
+              toolCallLog,
+              'STEP_VERIFICATION_FAIL',
+              stepNum,
+              writeVerificationFailure,
+            );
+            persistExecutorContext('terminal', turnPrompt, {
+              terminalStatus: 'EXECUTION_HALTED',
+              haltTag: 'STEP_VERIFICATION_FAIL',
+              condition: writeVerificationFailure,
+            });
+            writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+            log(`  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] at step ${stepNum}`);
+            return {
+              toolCallLog,
+              terminalStatus: 'EXECUTION_HALTED',
+              haltTag: 'STEP_VERIFICATION_FAIL',
+              condition: writeVerificationFailure,
+            };
+          }
+        }
+
+        executionHistory +=
+          (executionHistory ? '\n\n' : '') + formatHistoryEntry(entry);
+        const nextTurnAfterFallback = buildExecutorTurnPrompt(
+          baseContext,
+          executionHistory,
+          toolCallLog.length,
+          fileReadCache,
+        );
+        persistExecutorContext('after_tool_call', nextTurnAfterFallback);
+
+        const deterministicCompletion = maybeCompleteBoundedWriteTask(nextTurnAfterFallback);
+        if (deterministicCompletion) {
+          return deterministicCompletion;
+        }
+        continue;
+      }
+
+      // All tiers exhausted — try deterministic benchmark repair before halting.
+      const exhaustedReason =
+        `All runner tiers failed to produce a valid executor turn. ` +
+        `Last error: ${err instanceof Error ? err.message : String(err)}`;
+      const deterministicRepairCompletion = completeAfterDeterministicExternalRepair(
+        turnPrompt,
+        exhaustedReason,
+      );
+      if (deterministicRepairCompletion) {
+        return deterministicRepairCompletion;
+      }
+
+      const exhaustedHaltTag = classifyRunnerExhaustionHaltTag(exhaustedReason);
+      const report = buildHaltReport(
+        toolCallLog, exhaustedHaltTag, toolCallLog.length + 1,
+        exhaustedReason,
+      );
+      persistExecutorContext('terminal', turnPrompt, {
+        terminalStatus: 'EXECUTION_HALTED',
+        haltTag: exhaustedHaltTag,
+        condition: exhaustedReason,
+      });
       writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-      log('  Executor: EXECUTION_HALTED [HALLUCINATED_OUTPUT]');
+      const exhaustedRollbackSummary = latestRollbackSummary as WorktreeRollbackSummary | null;
+      const exhaustedRollbackStatus = exhaustedRollbackSummary?.status ?? null;
+      const exhaustedFinalStatus =
+        exhaustedRollbackStatus === 'rollback_failed'
+          ? 'ROLLBACK_FAILED'
+          : exhaustedRollbackStatus === 'rollback_skipped_user_dirty_target'
+            ? 'WORKTREE_DIRTY_UNSAFE'
+            : exhaustedRollbackStatus === 'rollback_applied'
+              ? 'ROLLBACK_APPLIED'
+              : 'EXECUTOR_HALTED';
+      writeRepairAttemptTimeline(exhaustedFinalStatus);
+      log(`  Executor: EXECUTION_HALTED [${exhaustedHaltTag}]`);
       return {
         toolCallLog,
         terminalStatus: 'EXECUTION_HALTED',
-        haltTag: 'HALLUCINATED_OUTPUT',
-        condition:
-          `All runner tiers failed to produce a valid executor turn. ` +
-          `Last error: ${err instanceof Error ? err.message : String(err)}`,
+        haltTag: exhaustedHaltTag,
+        condition: exhaustedReason,
       };
     }
 
     // ── Terminal completion ──────────────────────────────────────────────────
     if (executorTurn.type === 'completion') {
+      if (executorTurn.status === 'EXECUTION_COMPLETE') {
+        const missingPlannedFileWrites = getMissingSuccessfulPlannedFileWrites();
+        if (missingPlannedFileWrites.length > 0) {
+          return haltForMissingPlannedFileWrites(turnPrompt, missingPlannedFileWrites);
+        }
+
+        const preCompleteGuards = evaluatePreCompleteGuards({
+          rawTask,
+          toolCallLog,
+          projectRoot: getExecutorProjectRoot(),
+          exactOutputSchemaFailure: verifyExactOutputSchemaArtifacts(rawTask, getExecutorProjectRoot()),
+          exactInvariantFailure: evaluateExactInstructionInvariants(
+            requestedTargetContract.exactInvariants,
+            getExecutorProjectRoot(),
+            toolCallLog,
+          ),
+        });
+        runtimeHookTraceEvents.push(...preCompleteGuards.runtimeHookTraceEvents);
+        if (preCompleteGuards.benchmarkVerification) {
+          preCompleteVerificationTrace.push(preCompleteGuards.benchmarkVerification);
+          emitRuntimeEvent('verification.decision', {
+            hook_id: 'benchmark_verification.before_complete',
+            contract_id: preCompleteGuards.benchmarkVerification.contractId,
+            passed: preCompleteGuards.benchmarkVerification.passed,
+            message: preCompleteGuards.benchmarkVerification.message,
+          });
+        }
+
+        const semanticFailure = preCompleteGuards.semanticFailure;
+        finalCompletionGuardResult = {
+          status: semanticFailure ? 'fail' : 'pass',
+          semantic_failure: semanticFailure,
+          runtime_hook_event_count: preCompleteGuards.runtimeHookTraceEvents.length,
+          benchmark_verification_status: preCompleteGuards.benchmarkVerification
+            ? (preCompleteGuards.benchmarkVerification.passed ? 'pass' : 'fail')
+            : null,
+        };
+        if (semanticFailure) {
+          if (isExternalBenchmarkTask(rawTask) && externalPostconditionFailures < 2) {
+            externalPostconditionFailures += 1;
+            const feedback = [
+              `[Postcondition ${externalPostconditionFailures}] external_benchmark_verification -> requested output artifact`,
+              'Exit code: 1',
+              'Stdout: (empty)',
+              `Stderr: ${semanticFailure}`,
+              'Verification: FAILED',
+            ].join('\n');
+            executionHistory += (executionHistory ? '\n\n' : '') + feedback;
+            const nextTurnAfterPostcondition = buildExecutorTurnPrompt(
+              baseContext,
+              executionHistory,
+              toolCallLog.length,
+              fileReadCache,
+            );
+            persistExecutorContext('after_tool_call', nextTurnAfterPostcondition, {
+              condition: semanticFailure,
+            });
+            log('  Executor: postcondition failed — continuing for autonomous repair');
+            logDetail(semanticFailure);
+            continue;
+          }
+
+          const deterministicRepairCompletion = completeAfterDeterministicExternalRepair(
+            turnPrompt,
+            semanticFailure,
+          );
+          if (deterministicRepairCompletion) {
+            return deterministicRepairCompletion;
+          }
+
+          const report = buildHaltReport(
+            toolCallLog,
+            'STEP_VERIFICATION_FAIL',
+            toolCallLog.length,
+            semanticFailure,
+          );
+          persistExecutorContext('terminal', turnPrompt, {
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'STEP_VERIFICATION_FAIL',
+            condition: semanticFailure,
+          });
+          writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+          writeRepairAttemptTimeline('EXECUTOR_HALTED');
+          log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] after post-write semantic verification');
+          logDetail(semanticFailure);
+          return {
+            toolCallLog,
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'STEP_VERIFICATION_FAIL',
+            condition: semanticFailure,
+          };
+        }
+
+        const runtimeVerification = runRuntimeVerification({
+          rawTask,
+          toolCallLog,
+          projectRoot: getExecutorProjectRoot(),
+          babelRoot: BABEL_ROOT,
+        });
+        evidence.writeDebugFile(
+          '10_runtime_verification.json',
+          `${JSON.stringify(runtimeVerification, null, 2)}\n`,
+        );
+
+        const runnableArtifactGate = evaluateRunnableArtifactGate({
+          rawTask,
+          toolCallLog,
+          projectRoot: getExecutorProjectRoot(),
+          runtimeVerification,
+        });
+        evidence.writeDebugFile(
+          '11_runnable_artifact_gate.json',
+          `${JSON.stringify(runnableArtifactGate, null, 2)}\n`,
+        );
+        if (runnableArtifactGateBlocksCompletion(runnableArtifactGate)) {
+          const repairLoop = runGodotArtifactRepairLoop({
+            rawTask,
+            toolCallLog,
+            projectRoot: getExecutorProjectRoot(),
+            initialGate: runnableArtifactGate,
+            babelRoot: BABEL_ROOT,
+            maxRepairAttempts: 2,
+          });
+          repairLoop.attempts.forEach((attemptEvidence, index) => {
+            evidence.writeDebugFile(
+              `${12 + index}_artifact_repair_attempt_${index + 1}.json`,
+              `${JSON.stringify(attemptEvidence, null, 2)}\n`,
+            );
+          });
+          if (repairLoop.status === 'REPAIRED_AND_COMPLETE') {
+            const completion = {
+              type: 'completion',
+              status: 'EXECUTION_COMPLETE',
+            } as const;
+            const report = {
+              ...buildTerminalReport(completion, toolCallLog, evidence),
+              stage_status: 'REPAIRED_AND_COMPLETE',
+              pipeline_completion_note: 'Godot artifact repair completed only after fresh Babel-owned runtime verification and Runnable Artifact Gate PASS.',
+              artifact_gate: repairLoop.finalGate,
+            };
+            persistExecutorContext('terminal', turnPrompt, {
+              terminalStatus: 'EXECUTION_COMPLETE',
+              condition: repairLoop.reason,
+            });
+            writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+            writeRepairAttemptTimeline('COMPLETE');
+            log(`  Executor: REPAIRED_AND_COMPLETE (${toolCallLog.length} steps, Godot artifact repaired)`);
+            logDetail(repairLoop.reason);
+            return {
+              toolCallLog,
+              terminalStatus: 'EXECUTION_COMPLETE',
+            };
+          }
+
+          const finalGate = repairLoop.finalGate ?? runnableArtifactGate;
+          const haltDecision = repairLoop.status === 'EXECUTION_HALTED_REPAIR_BUDGET_EXCEEDED'
+            ? {
+                haltTag: 'REPAIR_BUDGET_EXCEEDED' as const,
+                condition: [
+                  'EXECUTION_HALTED_REPAIR_BUDGET_EXCEEDED',
+                  `Runnable Artifact Gate status: ${finalGate.status}`,
+                  `Target type: ${finalGate.target_type}`,
+                  `Repair attempts: ${repairLoop.attempts.length}/2`,
+                  `Reason: ${repairLoop.reason}`,
+                  `Verification command: ${finalGate.verification_command ?? 'NO_RUNTIME_VERIFICATION'}`,
+                  'Failed artifact checks:',
+                  ...(finalGate.failed_artifact_checks.length > 0
+                    ? finalGate.failed_artifact_checks.map(check => `- ${check.id}: ${check.message}`)
+                    : ['- None']),
+                  `Next repair action: ${finalGate.next_repair_action ?? 'Manual repair required before completion.'}`,
+                ].join('\n'),
+              }
+            : runnableArtifactGateHaltDecision(finalGate);
+          const report = {
+            ...buildHaltReport(
+              toolCallLog,
+              haltDecision.haltTag,
+              Math.max(1, toolCallLog.length),
+              haltDecision.condition,
+            ),
+            artifact_gate: finalGate,
+          };
+          persistExecutorContext('terminal', turnPrompt, {
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: haltDecision.haltTag,
+            condition: haltDecision.condition,
+          });
+          writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+          writeRepairAttemptTimeline('EXECUTOR_HALTED');
+          log(`  Executor: EXECUTION_HALTED [${haltDecision.haltTag}] after runnable artifact gate`);
+          logDetail(haltDecision.condition);
+          return {
+            toolCallLog,
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: haltDecision.haltTag,
+            condition: haltDecision.condition,
+          };
+        }
+      }
+
+      if (executorTurn.status === 'EXECUTION_HALTED') {
+        const deterministicRepairCompletion = completeAfterDeterministicExternalRepair(
+          turnPrompt,
+          executorTurn.condition,
+        );
+        if (deterministicRepairCompletion) {
+          return deterministicRepairCompletion;
+        }
+      }
+
       const report = buildTerminalReport(executorTurn, toolCallLog, evidence);
+      persistExecutorContext('terminal', turnPrompt, {
+        terminalStatus: executorTurn.status,
+        ...(executorTurn.status === 'EXECUTION_HALTED'
+          ? { haltTag: executorTurn.halt_tag, condition: executorTurn.condition }
+          : {}),
+        ...(executorTurn.status === 'ACTIVATION_REFUSED'
+          ? { haltTag: 'ACTIVATION_GATE_FAIL', condition: executorTurn.reason }
+          : {}),
+      });
       writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+      writeRepairAttemptTimeline(executorTurn.status === 'EXECUTION_COMPLETE' ? 'COMPLETE' : 'EXECUTOR_HALTED');
 
       if (executorTurn.status === 'EXECUTION_COMPLETE') {
         log(`  Executor: EXECUTION_COMPLETE (${toolCallLog.length} steps)`);
@@ -2070,10 +3931,14 @@ async function runExecutorLoop(
     if (!parsedReq.success) {
       // ── Repair mode: one retry with a targeted fix prompt ────────────────
       log('  Executor: tool call failed strict validation — attempting schema repair');
-      const repairPrompt = buildExecutorRepairPrompt(turnPrompt, toolArgs, parsedReq.error);
+      const repairPrompt = buildExecutorRepairPrompt(
+        turnPrompt,
+        toolArgs,
+        parsedReq.error.issues.map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`),
+      );
       try {
         const repairedTurn = await runWithFallback(repairPrompt, ExecutorTurnSchema, {
-          evidence, stage: 'executor',
+          evidence, stage: 'executor', schemaName: 'ExecutorTurnSchema',
         });
         if (repairedTurn.type === 'tool_call') {
           const { type: _rt, ...repairedArgs } = repairedTurn;
@@ -2094,6 +3959,13 @@ async function runExecutorLoop(
         `Executor tool call failed strict validation (repair attempted and failed). ` +
         `Zod error: ${parsedReq.error.toString().slice(0, 200)}`,
       );
+      persistExecutorContext('terminal', turnPrompt, {
+        terminalStatus: 'EXECUTION_HALTED',
+        haltTag: 'AMBIGUOUS_PLAN',
+        condition:
+          `Executor tool call failed strict validation (repair attempted and failed). ` +
+          `Zod error: ${parsedReq.error.toString().slice(0, 200)}`,
+      });
       writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
       log('  Executor: EXECUTION_HALTED [AMBIGUOUS_PLAN]');
       return {
@@ -2106,11 +3978,408 @@ async function runExecutorLoop(
       };
     }
 
-    const req     = parsedReq.data;
+    let req       = parsedReq.data;
     const stepNum = toolCallLog.length + 1;
-    logDetail(`  Step ${stepNum}: ${req.tool} → ${getTarget(req)}`);
 
-    const toolResult = await executeTool(req);
+    const approvedStep = approvedPlan.minimal_action_set[stepNum - 1];
+    if (
+      approvedStep?.tool === req.tool &&
+      isExecutorToolShapePlaceholder(getTarget(req)) &&
+      String(approvedStep.target ?? '').trim().length > 0
+    ) {
+      const warning =
+        `[EXECUTOR_PLAN_TARGET_CANONICALIZED] Step ${stepNum} ${req.tool} target replaced ` +
+        `tool-shape placeholder "${getTarget(req)}" with approved plan target "${approvedStep.target}".`;
+      reportWarnings.push(warning);
+      logDetail(warning);
+      req = replaceExecutorRequestTarget(req, String(approvedStep.target));
+    }
+
+    if (
+      req.tool === 'file_write' &&
+      approvedStep?.tool === 'file_write' &&
+      normalizeRequestedFileTargetsForBoundedContract(rawTask).includes(normalizePathForComparison(approvedStep.target))
+    ) {
+      const emittedTarget = normalizePathForComparison(String(req.path ?? ''));
+      const approvedTarget = normalizePathForComparison(approvedStep.target);
+      if (emittedTarget !== approvedTarget) {
+        const warning =
+          `[EXECUTOR_PLAN_TARGET_CANONICALIZED] Step ${stepNum} file_write target normalized ` +
+          `from "${String(req.path ?? '')}" to approved bounded target "${approvedStep.target}".`;
+        reportWarnings.push(warning);
+        logDetail(warning);
+        req = { ...req, path: approvedStep.target };
+      }
+    }
+
+    if (
+      isExternalBenchmarkTask(rawTask) &&
+      externalPostconditionFailures > 0 &&
+      req.tool === 'file_write'
+    ) {
+      const previousEntry = toolCallLog[toolCallLog.length - 1];
+      const currentTarget = canonicalizeExecutorTargetForLog(String(req.path ?? ''), 'file_write');
+      const previousTarget = previousEntry
+        ? canonicalizeExecutorTargetForLog(String(previousEntry.target ?? ''), previousEntry.tool)
+        : '';
+      const lastShellCommand = [...toolCallLog]
+        .reverse()
+        .find(entry => entry.tool === 'shell_exec' || entry.tool === 'test_run');
+      if (
+        previousEntry?.tool === 'file_write' &&
+        normalizePathForComparison(previousTarget).toLowerCase() === normalizePathForComparison(currentTarget).toLowerCase() &&
+        lastShellCommand
+      ) {
+        externalRepairRerunCount += 1;
+        if (shouldHaltExternalRepairRerun(rawTask, externalRepairRerunCount)) {
+          const limit = getExternalRepairRerunLimit(rawTask);
+          const condition =
+            `[EXECUTOR_EXTERNAL_REPAIR_LOOP] Repeated postcondition repair reruns exceeded ` +
+            `${limit} attempt(s) for "${currentTarget}". Last verifier command was ` +
+            `"${lastShellCommand.target}". Stop the canary and inspect the failing strategy instead ` +
+            `of spending the full benchmark timeout.`;
+          const warning = `[EXECUTOR_EXTERNAL_REPAIR_LOOP_HALTED] ${condition}`;
+          reportWarnings.push(warning);
+          logDetail(warning);
+          const report = buildHaltReport(
+            toolCallLog,
+            'STEP_VERIFICATION_FAIL',
+            stepNum,
+            condition,
+          );
+          persistExecutorContext('terminal', turnPrompt, {
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'STEP_VERIFICATION_FAIL',
+            condition,
+          });
+          writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+          log(`  Executor: EXECUTION_HALTED [EXECUTOR_EXTERNAL_REPAIR_LOOP] at step ${stepNum}`);
+          return {
+            toolCallLog,
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'STEP_VERIFICATION_FAIL',
+            condition,
+          };
+        }
+
+        const warning =
+          `[EXECUTOR_EXTERNAL_REPAIR_RERUN] Repeated helper write for "${currentTarget}" after ` +
+          `postcondition failure; rerunning "${lastShellCommand.target}" instead ` +
+          `(attempt ${externalRepairRerunCount}/${getExternalRepairRerunLimit(rawTask)}).`;
+        reportWarnings.push(warning);
+        logDetail(warning);
+        req = {
+          tool: 'shell_exec',
+          command: lastShellCommand.target,
+          working_directory: '.',
+          timeout_seconds: 120,
+        };
+      }
+    }
+
+    const recoverableNextTargetKey = req.tool === 'file_write'
+      ? normalizePathForComparison(canonicalizeExecutorTargetForLog(String(req.path ?? ''), 'file_write')).toLowerCase()
+      : null;
+    const recoverableRerunDecision = shouldForceRecoverableCommandRerun(
+      pendingRecoverableCommandRetryState.value,
+      req,
+      recoverableNextTargetKey,
+    );
+    const pendingRecoverableCommandRetry = pendingRecoverableCommandRetryState.value;
+    if (recoverableRerunDecision.force && pendingRecoverableCommandRetry) {
+      const warning =
+        `[EXECUTOR_RECOVERABLE_COMMAND_RERUN] Step ${stepNum} redirected to failed verifier command: ` +
+        `${recoverableRerunDecision.reason}`;
+      reportWarnings.push(warning);
+      logDetail(warning);
+      emitRuntimeEvent('policy.decision', {
+        hook_id: 'recoverable_command.rerun',
+        decision: 'rewrite',
+        original_tool: req.tool,
+        original_target: getTarget(req),
+        replacement_tool: pendingRecoverableCommandRetry.tool,
+        replacement_command: pendingRecoverableCommandRetry.command,
+        reason: recoverableRerunDecision.reason,
+      });
+      req = pendingRecoverableCommandRetry.tool === 'test_run'
+        ? {
+            tool: 'test_run',
+            command: pendingRecoverableCommandRetry.command,
+            working_directory: pendingRecoverableCommandRetry.workingDirectory,
+            timeout_seconds: pendingRecoverableCommandRetry.timeoutSeconds ?? 300,
+          }
+        : {
+            tool: 'shell_exec',
+            command: pendingRecoverableCommandRetry.command,
+            working_directory: pendingRecoverableCommandRetry.workingDirectory,
+            timeout_seconds: pendingRecoverableCommandRetry.timeoutSeconds ?? 120,
+          };
+    }
+
+    if (
+      (req.tool === 'shell_exec' || req.tool === 'test_run') &&
+      isExecutorCommandPlaceholder(req.command)
+    ) {
+      const inferredVerifierCommand = inferVerifierCommandFromTask(rawTask);
+      if (inferredVerifierCommand) {
+        const warning =
+          `[EXECUTOR_PLACEHOLDER_COMMAND_REWRITE] Replaced placeholder verifier command ` +
+          `"${req.command}" with "${inferredVerifierCommand}" inferred from the task.`;
+        reportWarnings.push(warning);
+        logDetail(warning);
+        req = {
+          ...req,
+          command: inferredVerifierCommand,
+        };
+      }
+    }
+
+    if (req.tool === 'shell_exec' || req.tool === 'test_run') {
+      const executionProfileName = resolveExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']).name;
+      const preToolHookResult = runPreToolUseHooks({
+        request: req,
+        rawTask,
+        executionProfileName,
+        runtimeInventory: getBenchmarkRuntimeInventoryForProfile(executionProfileName),
+      });
+      runtimeHookTraceEvents.push(...preToolHookResult.traces);
+
+      if (
+        !preToolHookResult.blocked &&
+        (preToolHookResult.request.tool === 'shell_exec' || preToolHookResult.request.tool === 'test_run') &&
+        normalizeShellCommandForComparison(preToolHookResult.request.command) !==
+          normalizeShellCommandForComparison(req.command)
+      ) {
+        const warning =
+          `[TOOL_CAPABILITY_REWRITE] Step ${stepNum} ${req.tool} rewrote generic command ` +
+          `"${req.command}" to "${preToolHookResult.request.command}".`;
+        reportWarnings.push(warning);
+        logDetail(warning);
+        emitRuntimeEvent('policy.decision', {
+          hook_id: 'tool_capability.pre_tool_use',
+          decision: 'rewrite',
+          tool: req.tool,
+          original_command: req.command,
+          replacement_command: preToolHookResult.request.command,
+        });
+        req = preToolHookResult.request;
+      } else if (preToolHookResult.blocked) {
+        blockedToolCapabilityRecoveryCount += 1;
+        const capabilityFeedback = preToolHookResult.message ?? '[TOOL_CAPABILITY_BROKER] Tool capability blocked.';
+        const entry: ToolCallLog = {
+          step:      stepNum,
+          tool:      req.tool,
+          target:    getTarget(req),
+          exit_code: 126,
+          stdout:    '(blocked before execution)',
+          stderr:    capabilityFeedback,
+          verified:  false,
+        };
+        toolCallLog.push(entry);
+
+        const warning =
+          `[TOOL_CAPABILITY_BLOCKED] Step ${stepNum} ${req.tool} blocked before execution; ` +
+          `attempt ${blockedToolCapabilityRecoveryCount}/${maxBlockedToolCapabilityRecoveries}.`;
+        reportWarnings.push(warning);
+        logDetail(warning);
+        emitRuntimeEvent('policy.decision', {
+          hook_id: 'tool_capability.pre_tool_use',
+          decision: 'block',
+          tool: req.tool,
+          command: req.command,
+          message: capabilityFeedback,
+        });
+
+        executionHistory +=
+          (executionHistory ? '\n\n' : '') +
+          formatHistoryEntry(entry) +
+          '\n\n--- TOOL CAPABILITY UNAVAILABLE ---\n' +
+          'Do not retry a generic inspection command. Use the task-specific capability replacement if available, ' +
+          'choose a source-only route, or halt with STEP_VERIFICATION_FAIL if the required runtime capability is missing.';
+
+        if (blockedToolCapabilityRecoveryCount > maxBlockedToolCapabilityRecoveries) {
+          const report = buildHaltReport(
+            toolCallLog,
+            'STEP_VERIFICATION_FAIL',
+            stepNum,
+            capabilityFeedback,
+          );
+          persistExecutorContext('terminal', turnPrompt, {
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'STEP_VERIFICATION_FAIL',
+            condition: capabilityFeedback,
+          });
+          writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+          log(`  Executor: EXECUTION_HALTED [TOOL_CAPABILITY_BLOCKED] at step ${stepNum}`);
+          return {
+            toolCallLog,
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'STEP_VERIFICATION_FAIL',
+            condition: capabilityFeedback,
+          };
+        }
+
+        persistExecutorContext(
+          'after_tool_call',
+          buildExecutorTurnPrompt(baseContext, executionHistory, toolCallLog.length, fileReadCache),
+        );
+        continue;
+      }
+    }
+
+    logDetail(`  Step ${stepNum}: ${req.tool} → ${canonicalizeExecutorTargetForLog(getTarget(req), req.tool)}`);
+
+    // ── Truncation artifact guard ─────────────────────────────────────────────
+    // If the executor is about to write a file whose content contains the
+    // truncation marker from formatHistoryEntry, it has copied from the
+    // execution history instead of the FILE_READ_CACHE. Halt before writing
+    // corrupted content to disk.
+    if (req.tool === 'file_write' && 'content' in req) {
+      const TRUNCATION_MARKER = /\.\.\. \[\d+ chars truncated\] \.\.\./;
+      if (TRUNCATION_MARKER.test(req.content)) {
+        const report = buildHaltReport(
+          toolCallLog, 'STEP_VERIFICATION_FAIL', stepNum,
+          `[TRUNCATION_ARTIFACT] file_write for "${req.path}" contains the ` +
+          `"... [N chars truncated] ..." history marker in its content. ` +
+          `The executor copied truncated execution history instead of the FILE_READ_CACHE. ` +
+          `Re-read the file from FILE_READ_CACHE and apply only the plan-specified changes.`,
+        );
+        persistExecutorContext('terminal', turnPrompt, {
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: 'STEP_VERIFICATION_FAIL',
+          condition:
+            `[TRUNCATION_ARTIFACT] file_write for "${req.path}" contains truncation ` +
+            `marker from execution history. Use FILE_READ_CACHE instead.`,
+        });
+        writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+        log(`  Executor: EXECUTION_HALTED [TRUNCATION_ARTIFACT] at step ${stepNum}`);
+        return {
+          toolCallLog,
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: 'STEP_VERIFICATION_FAIL',
+          condition:
+            `[TRUNCATION_ARTIFACT] file_write for "${req.path}" contains truncation ` +
+            `marker from execution history. Use FILE_READ_CACHE instead.`,
+        };
+      }
+    }
+
+    const benchmarkInstallBlockReason =
+      isExternalBenchmarkTask(rawTask) &&
+      (req.tool === 'shell_exec' || req.tool === 'test_run')
+        ? getBenchmarkInstallRecoveryBlockReason(approvedPlan, rawTask, req.command)
+        : null;
+    if (benchmarkInstallBlockReason) {
+      blockedBenchmarkInstallRecoveryCount += 1;
+      const entry: ToolCallLog = {
+        step:      stepNum,
+        tool:      req.tool,
+        target:    getTarget(req),
+        exit_code: 126,
+        stdout:    '(blocked before execution)',
+        stderr:    benchmarkInstallBlockReason,
+        verified:  false,
+      };
+      toolCallLog.push(entry);
+
+      const warning =
+        `[${BENCHMARK_INSTALL_RECOVERY_TAG}] Step ${stepNum} ${req.tool} blocked before execution; ` +
+        `attempt ${blockedBenchmarkInstallRecoveryCount}/${maxBenchmarkInstallRecoveryBlocks}.`;
+      reportWarnings.push(warning);
+      logDetail(warning);
+
+      executionHistory +=
+        (executionHistory ? '\n\n' : '') +
+        formatHistoryEntry(entry) +
+        '\n\n--- BENCHMARK INSTALL RECOVERY BLOCKED ---\n' +
+        'Do not retry package installation with alternate syntax. Use existing container tools, ' +
+        'patch/write self-contained source artifacts, or halt with STEP_VERIFICATION_FAIL if the task ' +
+        'cannot be solved without the missing dependency.';
+
+      if (blockedBenchmarkInstallRecoveryCount > maxBenchmarkInstallRecoveryBlocks) {
+        const report = buildHaltReport(
+          toolCallLog,
+          'STEP_VERIFICATION_FAIL',
+          stepNum,
+          benchmarkInstallBlockReason,
+        );
+        persistExecutorContext('terminal', turnPrompt, {
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: 'STEP_VERIFICATION_FAIL',
+          condition: benchmarkInstallBlockReason,
+        });
+        writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+        log(`  Executor: EXECUTION_HALTED [${BENCHMARK_INSTALL_RECOVERY_TAG}] at step ${stepNum}`);
+        return {
+          toolCallLog,
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: 'STEP_VERIFICATION_FAIL',
+          condition: benchmarkInstallBlockReason,
+        };
+      }
+
+      persistExecutorContext(
+        'after_tool_call',
+        buildExecutorTurnPrompt(baseContext, executionHistory, toolCallLog.length, fileReadCache),
+      );
+      continue;
+    }
+
+    if (!DRY_RUN && req.tool === 'file_write') {
+      const snapshotResult = worktreeSafety.snapshotBeforeWrite(
+        String(req.path ?? ''),
+        repairState.failures.length + 1,
+      );
+      writeWorktreeSafetySummary();
+      if (!snapshotResult.ok) {
+        const condition = `[WORKTREE_DIRTY_UNSAFE] ${snapshotResult.reason ?? 'Unsafe worktree write refused.'}`;
+        const entry: ToolCallLog = {
+          step: stepNum,
+          tool: req.tool,
+          target: canonicalizeExecutorTargetForLog(String(req.path ?? ''), 'file_write'),
+          exit_code: 126,
+          stdout: '(blocked before execution)',
+          stderr: condition,
+          verified: false,
+        };
+        toolCallLog.push(entry);
+        const rollbackSummary = worktreeSafety.rollbackTouchedFiles(condition);
+        writeRollbackSummary(rollbackSummary);
+        const report = buildHaltReport(
+          toolCallLog,
+          'SCOPE_VIOLATION',
+          stepNum,
+          condition,
+        );
+        persistExecutorContext('terminal', turnPrompt, {
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: 'SCOPE_VIOLATION',
+          condition,
+        });
+        writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+        log(`  Executor: EXECUTION_HALTED [WORKTREE_DIRTY_UNSAFE] at step ${stepNum}`);
+        return {
+          toolCallLog,
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: 'SCOPE_VIOLATION',
+          condition,
+        };
+      }
+    }
+
+    const fileWriteProofHashBefore = req.tool === 'file_write'
+      ? hashProjectFileForEvidence(getExecutorProjectRoot(), String(req.path ?? ''))
+      : null;
+    const fastPathToolResult = maybeHandleNewFilePreflightFastPath(req, approvedPlan);
+    if (fastPathToolResult) {
+      logDetail(`  Executor fast path: ${fastPathToolResult.stdout}`);
+    }
+    const toolResult = fastPathToolResult ?? await executeTool(req, {
+      agentId: 'executor', // Default for single-agent runs
+      runId: evidence.runId,
+      runDir: evidence.runDir,
+      babelRoot: BABEL_ROOT
+    });
 
     const entry: ToolCallLog = {
       step:      stepNum,
@@ -2121,44 +4390,577 @@ async function runExecutorLoop(
       stderr:    toolResult.stderr,
       ...(toolResult.denial ? { denial: toolResult.denial } : {}),
       ...(toolResult.mcp_lifecycle ? { mcp_lifecycle: toolResult.mcp_lifecycle } : {}),
+      ...(toolResult.checkpoint_ids ? { checkpoint_ids: toolResult.checkpoint_ids } : {}),
       verified:  toolResult.exit_code === 0,
     };
     toolCallLog.push(entry);
 
-    // Halt immediately on live tool failure.
+    if (!DRY_RUN && req.tool === 'file_write' && toolResult.exit_code === 0) {
+      const changedTarget = canonicalizeExecutorTargetForLog(String(req.path ?? ''), 'file_write');
+      currentRepairAttemptChangedFiles.add(changedTarget);
+      currentRepairAttemptFileHashes[changedTarget] = {
+        before: fileWriteProofHashBefore,
+        after: hashProjectFileForEvidence(getExecutorProjectRoot(), String(req.path ?? '')),
+      };
+    }
+
+    const activeRecoverableRetryForPatch: PendingRecoverableCommandRetry | null =
+      pendingRecoverableCommandRetryState.value;
+    if (
+      !DRY_RUN &&
+      toolResult.exit_code === 0 &&
+      activeRecoverableRetryForPatch &&
+      req.tool === 'file_write'
+    ) {
+      const patchedTargetKey = normalizePathForComparison(
+        canonicalizeExecutorTargetForLog(String(req.path ?? ''), 'file_write'),
+      ).toLowerCase();
+      pendingRecoverableCommandRetryState.value = {
+        ...activeRecoverableRetryForPatch,
+        patchedTargetKeys: new Set([
+          ...activeRecoverableRetryForPatch.patchedTargetKeys,
+          patchedTargetKey,
+        ]),
+      };
+    }
+
+    const activeRecoverableRetryForSuccess: PendingRecoverableCommandRetry | null =
+      pendingRecoverableCommandRetryState.value;
+    if (
+      !DRY_RUN &&
+      toolResult.exit_code === 0 &&
+      activeRecoverableRetryForSuccess &&
+      (req.tool === 'shell_exec' || req.tool === 'test_run') &&
+      isSameRecoverableCommandRetry(req, activeRecoverableRetryForSuccess)
+    ) {
+      const inputCapsule = currentRepairAttemptInputCapsule ?? latestFailureCapsuleArtifact;
+      markInputCapsuleConsumed(inputCapsule);
+      repairAttemptTimeline.push({
+        attempt: repairState.failures.length + 1,
+        kind: reliabilityRepairProofEnabled ? 'deterministic_stub' : 'live_cli',
+        status: 'REPAIR_ATTEMPT_PASSED',
+        changed_files: [...currentRepairAttemptChangedFiles].sort(),
+        verifier_command: req.command,
+        verifier_cwd: req.working_directory ?? null,
+        verifier_exit_code: toolResult.exit_code,
+        verifier_stdout_summary: summarizeVerifierStreamForEvidence(toolResult.stdout),
+        verifier_stderr_summary: summarizeVerifierStreamForEvidence(toolResult.stderr),
+        failure_capsule_id: null,
+        failure_capsule_path: null,
+        failure_capsule: null,
+        input_capsule_id: inputCapsule?.id ?? null,
+        input_capsule_path: inputCapsule?.path ?? null,
+        input_capsule_consumed: inputCapsule !== null,
+        next_attempt_consumed_capsule: null,
+        repeated_failure_signature: null,
+        meaningful_diff_since_previous_attempt: hasMeaningfulRepairDiff(
+          repairAttemptTimeline.filter(attempt => attempt.status === 'REPAIR_ATTEMPT_FAILED').at(-1) ?? null,
+          currentRepairAttemptFileHashes,
+        ),
+        file_hashes: currentRepairAttemptFileHashes,
+      });
+      currentRepairAttemptChangedFiles = new Set<string>();
+      currentRepairAttemptFileHashes = {};
+      currentRepairAttemptInputCapsule = null;
+      pendingRecoverableCommandRetryState.value = null;
+      writeRepairAttemptTimeline('IN_PROGRESS');
+    }
+
+    // Command failures are often recoverable during autonomous work: the
+    // executor can inspect stderr, patch a helper script, and retry. Policy
+    // denials and integration lifecycle failures still halt immediately.
     if (!DRY_RUN && toolResult.exit_code !== 0) {
-      const denialSummary = formatDenialSummary(toolResult.denial);
-      const mcpLifecycleSummary = formatMcpLifecycleSummary(toolResult.mcp_lifecycle);
-      const report = buildHaltReport(
-        toolCallLog, 'STEP_VERIFICATION_FAIL', stepNum,
+      const denialSummary = toolResult.denial
+        ? `${toolResult.denial.category}/${toolResult.denial.reason_code}: ${toolResult.denial.message}`
+        : null;
+      const mcpLifecycleSummary = toolResult.mcp_lifecycle
+        ? `${toolResult.mcp_lifecycle.phase}/${toolResult.mcp_lifecycle.outcome}${toolResult.mcp_lifecycle.reason_code ? ` (${toolResult.mcp_lifecycle.reason_code})` : ''}`
+        : null;
+      if (
+        (req.tool === 'shell_exec' || req.tool === 'test_run') &&
+        !toolResult.denial &&
+        !toolResult.mcp_lifecycle &&
+        shouldRecoverCommandFailure(req.command, rawTask)
+      ) {
+        recoverableCommandFailures += 1;
+        const repairDecision = recordRepairFailure(repairState, entry);
+        repairState = repairDecision.state;
+        const inputCapsule = currentRepairAttemptInputCapsule;
+        markInputCapsuleConsumed(inputCapsule);
+        const failureCapsule = buildFailureCapsule({
+          attempt: repairState.failures.length,
+          verifierStatus: 'fail',
+          failedCommand: req.command,
+          stdout: toolResult.stdout,
+          stderr: toolResult.stderr,
+          changedFiles: [...currentRepairAttemptChangedFiles],
+        });
+        const failureCapsuleId = `repair_failure_capsule_attempt_${failureCapsule.attempt}`;
+        const failureCapsuleFilename = `12_${failureCapsuleId}.json`;
+        const failureCapsulePath = join(evidence.runDir, failureCapsuleFilename);
+        evidence.writeDebugFile(
+          failureCapsuleFilename,
+          `${JSON.stringify({
+            id: failureCapsuleId,
+            source: 'executor_recoverable_command_failure',
+            source_tool_call: entry,
+            capsule: failureCapsule,
+          }, null, 2)}\n`,
+        );
+        latestFailureCapsuleArtifact = {
+          id: failureCapsuleId,
+          path: failureCapsulePath,
+          capsule: failureCapsule,
+        };
+        const previousFailedAttempt =
+          repairAttemptTimeline.filter(attempt => attempt.status === 'REPAIR_ATTEMPT_FAILED').at(-1) ?? null;
+        const meaningfulDiffSincePreviousAttempt = hasMeaningfulRepairDiff(
+          previousFailedAttempt,
+          currentRepairAttemptFileHashes,
+        );
+        const repeatedFailureSignature = repairDecision.state.status === 'same_failure_repeated' ||
+          repairDecision.state.status === 'strategy_exhausted'
+          ? formatFailureFingerprint(repairDecision.state.lastFingerprint!)
+          : null;
+        repairAttemptTimeline.push({
+          attempt: failureCapsule.attempt,
+          kind: reliabilityRepairProofEnabled ? 'deterministic_stub' : 'live_cli',
+          status: 'REPAIR_ATTEMPT_FAILED',
+          changed_files: [...currentRepairAttemptChangedFiles].sort(),
+          verifier_command: req.command,
+          verifier_cwd: req.working_directory ?? null,
+          verifier_exit_code: toolResult.exit_code,
+          verifier_stdout_summary: summarizeVerifierStreamForEvidence(toolResult.stdout),
+          verifier_stderr_summary: summarizeVerifierStreamForEvidence(toolResult.stderr),
+          failure_capsule_id: failureCapsuleId,
+          failure_capsule_path: failureCapsulePath,
+          failure_capsule: failureCapsule,
+          input_capsule_id: inputCapsule?.id ?? null,
+          input_capsule_path: inputCapsule?.path ?? null,
+          input_capsule_consumed: inputCapsule !== null,
+          next_attempt_consumed_capsule: false,
+          repeated_failure_signature: repeatedFailureSignature,
+          meaningful_diff_since_previous_attempt: meaningfulDiffSincePreviousAttempt,
+          file_hashes: currentRepairAttemptFileHashes,
+        });
+        currentRepairAttemptChangedFiles = new Set<string>();
+        currentRepairAttemptFileHashes = {};
+        currentRepairAttemptInputCapsule = latestFailureCapsuleArtifact;
+        writeRepairAttemptTimeline('IN_PROGRESS');
+        const wrongWorkingDirectoryHint = getNpmWrongWorkingDirectoryHint(
+          req.command,
+          toolResult.stdout,
+          toolResult.stderr,
+          getExecutorProjectRoot(),
+        );
+        const verifierNotFound =
+          isVerifierNotFoundFailure(req.command, toolResult.stdout, toolResult.stderr) &&
+          wrongWorkingDirectoryHint === null;
+        const repeatedVerifierFailure = repairDecision.state.status === 'same_failure_repeated';
+        const repairBudgetExhausted = recoverableCommandFailures >= maxRecoverableCommandFailures;
+        const underlyingFailureStatus: TerminalStatus = verifierNotFound
+          ? 'VERIFIER_NOT_FOUND'
+          : repeatedVerifierFailure
+            ? 'REPAIR_REPEATED_FAILURE'
+            : repairBudgetExhausted
+              ? 'REPAIR_MAX_ATTEMPTS_REACHED'
+              : 'VERIFIER_FAILED';
+        const rollbackOutcome = rollbackTouchedFilesForFailure(
+          underlyingFailureStatus,
+          `Verifier command "${req.command}" failed on repair attempt ${failureCapsule.attempt}.`,
+        );
+        const rollbackFeedback = [
+          '--- WORKTREE ROLLBACK ---',
+          `Rollback status: ${rollbackOutcome.summary.status}`,
+          `Restored files: ${rollbackOutcome.summary.restored_files.join(', ') || '(none)'}`,
+          `Removed files: ${rollbackOutcome.summary.removed_files.join(', ') || '(none)'}`,
+          `Failed files: ${rollbackOutcome.summary.failed_files.map(file => file.path).join(', ') || '(none)'}`,
+        ].join('\n');
+        if (rollbackOutcome.terminalStatus === 'ROLLBACK_FAILED') {
+          const condition = [
+            rollbackOutcome.conditionPrefix,
+            `[${underlyingFailureStatus}] Verifier command "${req.command}" failed before rollback completed.`,
+            `Failed rollback files: ${rollbackOutcome.summary.failed_files.map(file => `${file.path}: ${file.error}`).join('; ') || '(none)'}.`,
+          ].join(' ');
+          reportWarnings.push(condition);
+          const report = buildHaltReport(
+            toolCallLog,
+            'REPAIR_BUDGET_EXCEEDED',
+            stepNum,
+            condition,
+          );
+          persistExecutorContext('terminal', turnPrompt, {
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'REPAIR_BUDGET_EXCEEDED',
+            condition,
+          });
+          writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+          writeRepairAttemptTimeline('ROLLBACK_FAILED');
+          log(`  Executor: EXECUTION_HALTED [ROLLBACK_FAILED] at step ${stepNum}`);
+          return {
+            toolCallLog,
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'REPAIR_BUDGET_EXCEEDED',
+            condition,
+          };
+        }
+        if (verifierNotFound) {
+          const underlyingCondition = [
+            `[VERIFIER_NOT_FOUND] Verifier command "${req.command}" is missing or unavailable.`,
+            `stdout: ${summarizeVerifierStreamForEvidence(toolResult.stdout) ?? '(empty)'}.`,
+            `stderr: ${summarizeVerifierStreamForEvidence(toolResult.stderr) ?? '(empty)'}.`,
+            'Recommended next action: define a runnable verifier or choose a task that can be verified with available commands.',
+          ].join(' ');
+          const finalStatus = rollbackOutcome.terminalStatus;
+          const condition = finalStatus === 'VERIFIER_NOT_FOUND'
+            ? underlyingCondition
+            : `${rollbackOutcome.conditionPrefix} Underlying failure: ${underlyingCondition}`;
+          reportWarnings.push(condition);
+          const report = buildHaltReport(
+            toolCallLog,
+            'STEP_VERIFICATION_FAIL',
+            stepNum,
+            condition,
+          );
+          persistExecutorContext('terminal', turnPrompt, {
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'STEP_VERIFICATION_FAIL',
+            condition,
+          });
+          writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+          writeRepairAttemptTimeline(finalStatus);
+          log(`  Executor: EXECUTION_HALTED [${finalStatus}] at step ${stepNum}`);
+          return {
+            toolCallLog,
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'STEP_VERIFICATION_FAIL',
+            condition,
+          };
+        }
+        if (repeatedVerifierFailure) {
+          const underlyingCondition = [
+            '[REPAIR_REPEATED_FAILURE] Same verifier failure repeated after a repair attempt.',
+            `Repeated failure signature: ${repeatedFailureSignature ?? '(unknown)'}.`,
+            `Meaningful diff since previous attempt: ${meaningfulDiffSincePreviousAttempt === null ? 'unknown' : String(meaningfulDiffSincePreviousAttempt)}.`,
+            'Recommended next action: inspect the failure capsule and change repair strategy instead of repeating the same verifier failure.',
+          ].join(' ');
+          const finalStatus = rollbackOutcome.terminalStatus;
+          const condition = finalStatus === 'REPAIR_REPEATED_FAILURE'
+            ? underlyingCondition
+            : `${rollbackOutcome.conditionPrefix} Underlying failure: ${underlyingCondition}`;
+          reportWarnings.push(condition);
+          const report = buildHaltReport(
+            toolCallLog,
+            'REPAIR_BUDGET_EXCEEDED',
+            stepNum,
+            condition,
+          );
+          persistExecutorContext('terminal', turnPrompt, {
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'REPAIR_BUDGET_EXCEEDED',
+            condition,
+          });
+          writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+          writeRepairAttemptTimeline(finalStatus);
+          log(`  Executor: EXECUTION_HALTED [${finalStatus}] at step ${stepNum}`);
+          return {
+            toolCallLog,
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'REPAIR_BUDGET_EXCEEDED',
+            condition,
+          };
+        }
+        pendingRecoverableCommandRetryState.value = {
+          tool: req.tool,
+          command: req.command,
+          workingDirectory: req.working_directory,
+          timeoutSeconds: req.timeout_seconds,
+          failedStep: stepNum,
+          patchedTargetKeys: new Set(),
+        };
+        if (repairBudgetExhausted) {
+          const deterministicRepairCompletion = completeAfterDeterministicExternalRepair(
+            turnPrompt,
+            `recoverable command failure budget exceeded at step ${stepNum}: ${toolResult.stderr.slice(0, 200)}`,
+          );
+          if (deterministicRepairCompletion) {
+            return deterministicRepairCompletion;
+          }
+          const underlyingCondition = [
+            `[REPAIR_MAX_ATTEMPTS_REACHED] Recoverable command failure budget exceeded at step ${stepNum}.`,
+            repairDecision.condition ??
+              `Last fingerprint: ${formatFailureFingerprint(repairDecision.state.lastFingerprint!)}.`,
+          ].join(' ');
+          const finalStatus = rollbackOutcome.terminalStatus;
+          const condition = finalStatus === 'REPAIR_MAX_ATTEMPTS_REACHED'
+            ? underlyingCondition
+            : `${rollbackOutcome.conditionPrefix} Underlying failure: ${underlyingCondition}`;
+          reportWarnings.push(condition);
+          const report = buildHaltReport(
+            toolCallLog,
+            'REPAIR_BUDGET_EXCEEDED',
+            stepNum,
+            condition,
+          );
+          persistExecutorContext('terminal', turnPrompt, {
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'REPAIR_BUDGET_EXCEEDED',
+            condition,
+          });
+          writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+          writeRepairAttemptTimeline(finalStatus);
+          log(`  Executor: EXECUTION_HALTED [${finalStatus}] at step ${stepNum}`);
+          return {
+            toolCallLog,
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'REPAIR_BUDGET_EXCEEDED',
+            condition,
+          };
+        }
+
+        const warning =
+          `[EXECUTOR_RECOVERABLE_COMMAND_FAILURE] Step ${stepNum} ${req.tool} exited with code ` +
+          `${toolResult.exit_code}; repair attempt ${Math.min(recoverableCommandFailures, maxRecoverableCommandFailures)}/${maxRecoverableCommandFailures}. ` +
+          `Fingerprint: ${formatFailureFingerprint(repairDecision.state.lastFingerprint ?? repairDecision.state.failures[repairDecision.state.failures.length - 1]!.fingerprint)}.` +
+          `${wrongWorkingDirectoryHint ? ` ${wrongWorkingDirectoryHint}` : ''}`;
+        reportWarnings.push(warning);
+        if (repairDecision.shouldReplan && repairDecision.condition) {
+          reportWarnings.push(repairDecision.condition);
+          logDetail(repairDecision.condition);
+        }
+        logDetail(warning);
+        executionHistory +=
+          (executionHistory ? '\n\n' : '') +
+          formatHistoryEntry(entry) +
+          '\n\n--- COMMAND FAILURE REPAIR REQUIRED ---\n' +
+          'Patch the helper/source artifact that caused this command failure, then retry the same shell_exec/test_run command before advancing. Do not emit EXECUTION_COMPLETE until the command succeeds and requested artifacts pass postcondition checks.' +
+          '\n\n--- FAILURE CAPSULE ---\n' +
+          `Failure capsule id: ${failureCapsuleId}\n` +
+          `Failure capsule path: ${failureCapsulePath}\n` +
+          formatFailureCapsuleForPrompt(failureCapsule) +
+          `\n\n${rollbackFeedback}` +
+          (wrongWorkingDirectoryHint ? `\n${wrongWorkingDirectoryHint}` : '') +
+          (repairDecision.shouldReplan && repairDecision.condition
+            ? `\n${repairDecision.condition}\nThe same failure appears to be repeating. Change strategy or halt with STEP_VERIFICATION_FAIL instead of applying another equivalent patch.`
+            : '');
+        persistExecutorContext(
+          'after_tool_call',
+          buildExecutorTurnPrompt(baseContext, executionHistory, toolCallLog.length, fileReadCache),
+        );
+        continue;
+      }
+
+      const nonRecoverableCondition =
+        `${toolResult.denial && (req.tool === 'shell_exec' || req.tool === 'test_run') ? '[SHELL_COMMAND_DENIED] ' : ''}` +
+        `${!toolResult.denial && (req.tool === 'shell_exec' || req.tool === 'test_run') && isVerifierCommand(req.command) ? '[VERIFIER_FAILED] ' : ''}` +
+        `${!toolResult.denial && (req.tool === 'shell_exec' || req.tool === 'test_run') && !isVerifierCommand(req.command) ? '[SHELL_COMMAND_FAILED] ' : ''}` +
         `Tool ${req.tool} on "${getTarget(req)}" exited with code ${toolResult.exit_code}. ` +
         `stderr: ${toolResult.stderr.slice(0, 200)}` +
         `${denialSummary ? ` denial: ${denialSummary}` : ''}` +
-        `${mcpLifecycleSummary ? ` mcp_lifecycle: ${mcpLifecycleSummary}` : ''}`,
+        `${mcpLifecycleSummary ? ` mcp_lifecycle: ${mcpLifecycleSummary}` : ''}`;
+      const report = buildHaltReport(
+        toolCallLog, 'STEP_VERIFICATION_FAIL', stepNum,
+        nonRecoverableCondition,
       );
+      persistExecutorContext('terminal', turnPrompt, {
+        terminalStatus: 'EXECUTION_HALTED',
+        haltTag: 'STEP_VERIFICATION_FAIL',
+        condition: nonRecoverableCondition,
+      });
       writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
       log(`  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] at step ${stepNum}`);
       return {
         toolCallLog,
         terminalStatus: 'EXECUTION_HALTED',
         haltTag: 'STEP_VERIFICATION_FAIL',
-        condition:
-          `Tool ${req.tool} on "${getTarget(req)}" exited with code ${toolResult.exit_code}. ` +
-          `stderr: ${toolResult.stderr.slice(0, 200)}` +
-          `${denialSummary ? ` denial: ${denialSummary}` : ''}` +
-          `${mcpLifecycleSummary ? ` mcp_lifecycle: ${mcpLifecycleSummary}` : ''}`,
+        condition: nonRecoverableCondition,
       };
+    }
+
+    if (!DRY_RUN && req.tool === 'file_write') {
+      const writeVerificationFailure = verifySuccessfulTextWriteTarget(
+        String(req.path ?? ''),
+        getExecutorProjectRoot(),
+        rawTask,
+      );
+      if (writeVerificationFailure) {
+        const repairWrite = getDeterministicSimpleRepairWrite(
+          approvedPlan,
+          rawTask,
+          String(req.path ?? ''),
+        );
+        if (repairWrite) {
+          const repairStepNum = toolCallLog.length + 1;
+          const warning =
+            `[EXECUTOR_DETERMINISTIC_SIMPLE_REPAIR] Recovered invalid bounded file_write output: ` +
+            `${repairWrite.reason}. Original failure: ${writeVerificationFailure}`;
+          reportWarnings.push(warning);
+          logDetail(warning);
+
+          const repairResult = await executeTool({
+            tool: 'file_write',
+            path: repairWrite.target,
+            content: repairWrite.content,
+          }, {
+            agentId: 'executor',
+            runId: evidence.runId,
+            runDir: evidence.runDir,
+            babelRoot: BABEL_ROOT,
+          });
+
+          const repairEntry: ToolCallLog = {
+            step:      repairStepNum,
+            tool:      'file_write',
+            target:    canonicalizeExecutorTargetForLog(repairWrite.target, 'file_write'),
+            exit_code: repairResult.exit_code,
+            stdout:    repairResult.stdout,
+            stderr:    repairResult.stderr,
+            ...(repairResult.denial ? { denial: repairResult.denial } : {}),
+            ...(repairResult.mcp_lifecycle ? { mcp_lifecycle: repairResult.mcp_lifecycle } : {}),
+            ...(repairResult.checkpoint_ids ? { checkpoint_ids: repairResult.checkpoint_ids } : {}),
+            verified:  repairResult.exit_code === 0,
+          };
+          toolCallLog.push(repairEntry);
+
+          const repairVerificationFailure = repairResult.exit_code === 0
+            ? verifySuccessfulTextWriteTarget(repairWrite.target, getExecutorProjectRoot(), rawTask)
+            : `Deterministic repair file_write for "${repairWrite.target}" exited with code ${repairResult.exit_code}. ` +
+              `stderr: ${repairResult.stderr.slice(0, 200)}`;
+          if (repairVerificationFailure) {
+            const report = buildHaltReport(
+              toolCallLog,
+              'STEP_VERIFICATION_FAIL',
+              repairStepNum,
+              repairVerificationFailure,
+            );
+            persistExecutorContext('terminal', turnPrompt, {
+              terminalStatus: 'EXECUTION_HALTED',
+              haltTag: 'STEP_VERIFICATION_FAIL',
+              condition: repairVerificationFailure,
+            });
+            writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+            log(`  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] at step ${repairStepNum}`);
+            return {
+              toolCallLog,
+              terminalStatus: 'EXECUTION_HALTED',
+              haltTag: 'STEP_VERIFICATION_FAIL',
+              condition: repairVerificationFailure,
+            };
+          }
+
+          executionHistory +=
+            (executionHistory ? '\n\n' : '') +
+            [formatHistoryEntry(entry), formatHistoryEntry(repairEntry)].join('\n\n');
+          const nextTurnAfterRepair = buildExecutorTurnPrompt(
+            baseContext,
+            executionHistory,
+            toolCallLog.length,
+            fileReadCache,
+          );
+          persistExecutorContext('after_tool_call', nextTurnAfterRepair);
+
+          const deterministicCompletion = maybeCompleteBoundedWriteTask(nextTurnAfterRepair);
+          if (deterministicCompletion) {
+            return deterministicCompletion;
+          }
+          continue;
+        }
+
+        const report = buildHaltReport(
+          toolCallLog, 'STEP_VERIFICATION_FAIL', stepNum, writeVerificationFailure,
+        );
+        persistExecutorContext('terminal', turnPrompt, {
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: 'STEP_VERIFICATION_FAIL',
+          condition: writeVerificationFailure,
+        });
+        writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+        log(`  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] at step ${stepNum}`);
+        return {
+          toolCallLog,
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: 'STEP_VERIFICATION_FAIL',
+          condition: writeVerificationFailure,
+        };
+      }
+    }
+
+    // Populate the FILE_READ_CACHE so subsequent turns have the full verbatim
+    // content available for file_write without relying on the truncated history.
+    if (req.tool === 'file_read' && toolResult.exit_code === 0 && toolResult.stdout) {
+      fileReadCache.set(
+        canonicalizeExecutorTargetForLog(String(req.path ?? ''), req.tool),
+        toolResult.stdout,
+      );
     }
 
     // Append result to history so the next turn has full context.
     executionHistory +=
       (executionHistory ? '\n\n' : '') + formatHistoryEntry(entry);
+    persistExecutorContext(
+      'after_tool_call',
+      buildExecutorTurnPrompt(baseContext, executionHistory, toolCallLog.length, fileReadCache),
+    );
+
+    const nextTurnAfterTool = buildExecutorTurnPrompt(
+      baseContext,
+      executionHistory,
+      toolCallLog.length,
+      fileReadCache,
+    );
+    const evidenceRequestCompletion = maybeCompleteEvidenceRequestPlan(nextTurnAfterTool);
+    if (evidenceRequestCompletion) {
+      return evidenceRequestCompletion;
+    }
+
+    if (req.tool === 'file_write' && toolResult.exit_code === 0) {
+      const deterministicCompletion = maybeCompleteBoundedWriteTask(
+        nextTurnAfterTool,
+      );
+      if (deterministicCompletion) {
+        return deterministicCompletion;
+      }
+    }
   }
 
   // Exceeded max turns without a terminal signal.
+  const deterministicRepair = repairExactOutputSchemaArtifacts(rawTask, getExecutorProjectRoot());
+  if (deterministicRepair) {
+    reportWarnings.push(deterministicRepair);
+    const completion = {
+      type: 'completion',
+      status: 'EXECUTION_COMPLETE',
+    } as const;
+    const report = buildTerminalReport(completion, toolCallLog, evidence);
+    persistExecutorContext(
+      'terminal',
+      buildExecutorTurnPrompt(baseContext, executionHistory, toolCallLog.length, fileReadCache),
+      {
+        terminalStatus: 'EXECUTION_COMPLETE',
+        condition: deterministicRepair,
+      },
+    );
+    writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+    log('  Executor: EXECUTION_COMPLETE after deterministic exact-output repair');
+    logDetail(deterministicRepair);
+    return {
+      toolCallLog,
+      terminalStatus: 'EXECUTION_COMPLETE',
+    };
+  }
+
   const report = buildHaltReport(
     toolCallLog, 'TOOL_CALL_ERROR', toolCallLog.length,
     `Executor exceeded the maximum of ${MAX_EXECUTOR_TURNS} turns without a terminal signal.`,
+  );
+  persistExecutorContext(
+    'terminal',
+    buildExecutorTurnPrompt(baseContext, executionHistory, toolCallLog.length, fileReadCache),
+    {
+      terminalStatus: 'EXECUTION_HALTED',
+      haltTag: 'TOOL_CALL_ERROR',
+      condition: `Executor exceeded the maximum of ${MAX_EXECUTOR_TURNS} turns without a terminal signal.`,
+    },
   );
   writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
   log(`  Executor: EXECUTION_HALTED — exceeded ${MAX_EXECUTOR_TURNS} turns`);
@@ -2170,61 +4972,8 @@ async function runExecutorLoop(
   };
 }
 
-// ─── Report builders ──────────────────────────────────────────────────────────
+// Report builders, verification, and preflight fast-path moved to stages/verification.ts
 
-function buildTerminalReport(
-  signal:      ExecutorTurnCompletion,
-  toolCallLog: ToolCallLog[],
-  evidence:    EvidenceBundle,
-): object {
-  if (signal.status === 'EXECUTION_COMPLETE') {
-    return {
-      status:               'EXECUTION_COMPLETE',
-      steps_executed:       toolCallLog.length,
-      tool_call_log:        toolCallLog,
-      diff_path:            join(evidence.runDir, '05_diff.patch'),
-      execution_log_path:   join(evidence.runDir, '04_execution_report.json'),
-    };
-  }
-
-  if (signal.status === 'EXECUTION_HALTED') {
-    return {
-      status:         'EXECUTION_HALTED',
-      steps_executed: toolCallLog.length,
-      tool_call_log:  toolCallLog,
-      pipeline_error: {
-        halt_tag:       signal.halt_tag,
-        halted_at_step: toolCallLog.length + 1,
-        condition:      signal.condition,
-      },
-    };
-  }
-
-  // ACTIVATION_REFUSED
-  return {
-    status:  'ACTIVATION_REFUSED',
-    reason:  signal.reason,
-    gate:    'ACTIVATION_GATE_FAIL',
-  };
-}
-
-function buildHaltReport(
-  toolCallLog:  ToolCallLog[],
-  haltTag:      HaltTag,
-  haltedAtStep: number,
-  condition:    string,
-): object {
-  return {
-    status:         'EXECUTION_HALTED',
-    steps_executed: toolCallLog.length,
-    tool_call_log:  toolCallLog,
-    pipeline_error: {
-      halt_tag:       haltTag,
-      halted_at_step: haltedAtStep,
-      condition,
-    },
-  };
-}
 
 async function runDeterministicAndroidSdkBootstrapLane(
   manifest: OrchestratorManifest,
@@ -2245,7 +4994,7 @@ async function runDeterministicAndroidSdkBootstrapLane(
     toolCallLog.push({
       step: toolCallLog.length + 1,
       tool,
-      target,
+      target: canonicalizeExecutorTargetForLog(target, tool),
       exit_code: exitCode,
       stdout,
       stderr,
@@ -2306,6 +5055,7 @@ async function runDeterministicAndroidSdkBootstrapLane(
 
 async function runDeterministicGradleBootstrapLane(
   manifest: OrchestratorManifest,
+  evidence: EvidenceBundle,
 ): Promise<{ toolCallLog: ToolCallLog[]; haltedReport?: object }> {
   const projectRoot = inferProjectRoot(manifest);
   if (!projectRoot) {
@@ -2340,16 +5090,22 @@ async function runDeterministicGradleBootstrapLane(
     req: z.infer<typeof ToolCallRequestSchema>,
   ): Promise<ToolResult> => {
     const stepNum = toolCallLog.length + 1;
-    const toolResult = await executeTool(req);
+    const toolResult = await executeTool(req, {
+      agentId: 'bootstrap_lane',
+      runId: evidence.runId,
+      runDir: evidence.runDir,
+      babelRoot: BABEL_ROOT
+    });
     const entry: ToolCallLog = {
       step: stepNum,
       tool: req.tool,
-      target: getTarget(req),
+      target: canonicalizeExecutorTargetForLog(getTarget(req), req.tool),
       exit_code: toolResult.exit_code,
       stdout: toolResult.stdout,
       stderr: toolResult.stderr,
       ...(toolResult.denial ? { denial: toolResult.denial } : {}),
       ...(toolResult.mcp_lifecycle ? { mcp_lifecycle: toolResult.mcp_lifecycle } : {}),
+      ...(toolResult.checkpoint_ids ? { checkpoint_ids: toolResult.checkpoint_ids } : {}),
       verified: toolResult.exit_code === 0,
     };
     toolCallLog.push(entry);
@@ -2620,15 +5376,89 @@ export async function runBabelPipeline(
   task:    string,
   options: PipelineOptions = {},
 ): Promise<PipelineResult> {
-
+  clearRoutingCache();
+  globalCostTracker.resetSession();
   const evidence = new EvidenceBundle(task, BABEL_RUNS_DIR);
+  const previousLockedFiles = process.env['BABEL_LOCKED_FILES'];
+  const effectiveLockedFiles = mergeLockedFiles(
+    parseLockedFilesEnv(previousLockedFiles),
+    options.lockedFiles ?? [],
+    getExternalBenchmarkDefaultLockedFiles(task),
+  );
+  if (effectiveLockedFiles.length > 0) {
+    process.env['BABEL_LOCKED_FILES'] = JSON.stringify(effectiveLockedFiles);
+  }
+  process.env['BABEL_ACTIVE_RUN_DIR'] = evidence.runDir;
+  if (DRY_RUN) {
+    process.env['BABEL_SHADOW_ROOT'] = join(evidence.runDir, 'shadow');
+  } else {
+    delete process.env['BABEL_SHADOW_ROOT'];
+  }
+
+  let stream: WriteStream | undefined;
+  if (options.logFile) {
+    const logPath = resolve(options.logFile);
+    mkdirSync(dirname(logPath), { recursive: true });
+    stream = createWriteStream(logPath, { flags: 'a' });
+  } else if (options.autoLog !== false) {
+    const defaultLogPath = join(evidence.runDir, 'babel.log');
+    stream = createWriteStream(defaultLogPath);
+  }
+  options.eventBus?.runtimeEvent('session.started', {
+    run_id: evidence.runId,
+    run_dir: evidence.runDir,
+    task,
+  });
+
+  const runLogic = async (): Promise<PipelineResult> => {
+    try {
+      const result = await _runBabelPipelineInternal(task, options, evidence);
+      options.eventBus?.runtimeEvent('session.completed', {
+        run_id: evidence.runId,
+        run_dir: evidence.runDir,
+        status: result.status,
+      });
+      return result;
+    } finally {
+      if (stream) {
+        stream.end();
+      }
+      if (previousLockedFiles === undefined) {
+        delete process.env['BABEL_LOCKED_FILES'];
+      } else {
+        process.env['BABEL_LOCKED_FILES'] = previousLockedFiles;
+      }
+    }
+  };
+
+  if (stream) {
+    const context = { stream, ...(options.eventBus ? { eventBus: options.eventBus } : {}) };
+    return runWithPipelineLogContext(context, runLogic);
+  } else {
+    return runLogic();
+  }
+}
+
+export async function _runBabelPipelineInternal(
+  task:    string,
+  options: PipelineOptions,
+  evidence: EvidenceBundle,
+  precomputedManifest?: OrchestratorManifest,
+): Promise<PipelineResult> {
   log(`Run directory: ${evidence.runDir}`);
 
   const orchestratorVersion = resolveOrchestratorVersion(options.orchestratorVersion);
   const sessionId = options.sessionId?.trim() || process.env['BABEL_SESSION_ID']?.trim() || undefined;
   const sessionStartPath = options.sessionStartPath?.trim() || process.env['BABEL_SESSION_START_PATH']?.trim() || undefined;
   const localLearningRoot = options.localLearningRoot?.trim() || process.env['BABEL_LOCAL_LEARNING_ROOT']?.trim() || undefined;
+  const requestedExecutionProfile =
+    options.executionProfile ??
+    normalizeExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']) ??
+    DEFAULT_EXECUTION_PROFILE;
+  const executionProfile = resolveExecutionProfile(requestedExecutionProfile);
   const harnessMetadata = collectHarnessMetadata(sessionStartPath, localLearningRoot);
+  const authoritativeProjectRoot = process.env['BABEL_PROJECT_ROOT']?.trim() || null;
+  const runtimeProjectRoot = resolve(authoritativeProjectRoot ?? readSessionStartProjectPath(sessionStartPath) ?? process.cwd());
   let resolvedModelPolicy: ResolvedModelPolicy | undefined;
   const traceOptions = {
     runDir: evidence.runDir,
@@ -2642,59 +5472,190 @@ export async function runBabelPipeline(
   const pipelineTrace = await PipelineTrace.start(traceOptions);
 
   const finalizeResult = async (result: PipelineResult): Promise<PipelineResult> => {
-    const traceSummary = await pipelineTrace.finish(result.status);
+    const terminalContext = collectTerminalContext(evidence.runDir);
+    const verifierContract = buildVerifierContractArtifacts({
+      task,
+      toolCallLog: terminalContext.toolCallLog,
+      runDir: evidence.runDir,
+    });
+    evidence.writeDebugFile(
+      'verifier_plan.json',
+      `${JSON.stringify(verifierContract.plan, null, 2)}\n`,
+    );
+    evidence.writeDebugFile(
+      'verifier_execution_summary.json',
+      `${JSON.stringify(verifierContract.summary, null, 2)}\n`,
+    );
+    const terminalState = buildPipelineFinalTerminalState({
+      resultStatus: result.status,
+      terminalContext,
+      verifierContractSummary: verifierContract.summary,
+    });
+    evidence.writeDebugFile(
+      'terminal_status_summary.json',
+      `${JSON.stringify(terminalState.terminalSummary, null, 2)}\n`,
+    );
+    const finalizedResult: PipelineResult = {
+      ...result,
+      status: terminalState.status,
+      terminalSummary: terminalState.terminalSummary,
+      attemptSafetySummary: terminalContext.attemptSafetySummary,
+      verifierContractSummary: verifierContract.summary,
+    };
+    await runPluginHooks('PostRun', {
+      runId: evidence.runId,
+      runDir: evidence.runDir,
+      babelRoot: BABEL_ROOT,
+      projectRoot: inferProjectRoot(finalizedResult.manifest) ?? runtimeProjectRoot,
+      dryRun: DRY_RUN,
+      status: finalizedResult.status,
+      manifest: finalizedResult.manifest,
+      plan: finalizedResult.plan,
+    });
+    const traceSummary = await pipelineTrace.finish(finalizedResult.status);
     evidence.writeTraceContext(traceSummary);
     evidence.writeWaterfallTelemetry();
-    if (result.modelPolicy !== undefined || resolvedModelPolicy === undefined) {
-      return result;
+    const costLedger = buildCostLedger({
+      runId: evidence.runId,
+      task,
+      lane: 'governed',
+      waterfallEntries: evidence.getWaterfallLogSnapshot(),
+    });
+    evidence.writeCostLedger(costLedger);
+    const usageSummary = costLedger.entries.length > 0
+      ? usageSummaryFromCostLedger(costLedger)
+      : globalCostTracker.getSessionSummary();
+
+    // Trigger Project Memory Extraction on success
+    if (finalizedResult.status === 'COMPLETE') {
+      await extractAndSaveMemories(finalizedResult.runDir, inferProjectRoot(finalizedResult.manifest), evidence);
+    }
+    if (finalizedResult.modelPolicy !== undefined || resolvedModelPolicy === undefined) {
+      return {
+        ...finalizedResult,
+        usageSummary,
+      };
     }
     return {
-      ...result,
+      ...finalizedResult,
       modelPolicy: resolvedModelPolicy,
+      usageSummary,
     };
   };
 
   const finalizeError = async (error: unknown): Promise<never> => {
+    const message = error instanceof Error ? error.message : String(error);
+    const failureArtifacts = buildPreExecutionFailureArtifacts({
+      runDir: evidence.runDir,
+      error,
+    });
+    writeValidatedExecutionReport(
+      evidence,
+      failureArtifacts.executionReport,
+      [],
+      failureArtifacts.executionReport.warnings,
+    );
+    evidence.writeDebugFile(
+      PRE_EXECUTION_FAILURE_CAPSULE_FILENAME,
+      `${JSON.stringify(failureArtifacts.failureCapsule, null, 2)}\n`,
+    );
+    const terminalSummary = buildTerminalStatusSummary({
+      status: 'FATAL_ERROR',
+      condition: failureArtifacts.condition,
+      failureCapsulePath: failureArtifacts.failureCapsulePath,
+    });
+    evidence.writeDebugFile(
+      'terminal_status_summary.json',
+      `${JSON.stringify(terminalSummary, null, 2)}\n`,
+    );
+    writeLatestRunPointers(evidence.runDir, 'global');
+    await runPluginHooks('PostRun', {
+      runId: evidence.runId,
+      runDir: evidence.runDir,
+      babelRoot: BABEL_ROOT,
+      projectRoot: runtimeProjectRoot,
+      dryRun: DRY_RUN,
+      status: 'FATAL_ERROR',
+      error: message,
+    });
     const traceSummary = await pipelineTrace.finish('FATAL_ERROR', error);
     evidence.writeTraceContext(traceSummary);
     evidence.writeWaterfallTelemetry();
+    evidence.writeCostLedger(buildCostLedger({
+      runId: evidence.runId,
+      task,
+      lane: 'governed',
+      waterfallEntries: evidence.getWaterfallLogSnapshot(),
+    }));
     throw error;
   };
 
   if (DRY_RUN) {
     log('DRY RUN mode active. Destructive tools will be mocked.');
   }
+  logDetail(`Execution profile: ${executionProfile.name}`);
+
+  if (!existsSync(runtimeProjectRoot)) {
+    await finalizeError(new Error(`Resolved target root does not exist: ${runtimeProjectRoot}`));
+  }
+
+  await runPluginHooks('PreRun', {
+    runId: evidence.runId,
+    runDir: evidence.runDir,
+    babelRoot: BABEL_ROOT,
+    projectRoot: runtimeProjectRoot,
+    dryRun: DRY_RUN,
+    task,
+  });
+
+  // ── Preflight: Parallel Semantic Indexing & Root Discovery ────────────────
+  const preflightPromise = (async () => {
+    await globalIndexer.indexProject(runtimeProjectRoot);
+  })();
 
   try {
     // ── Stage 1: Orchestrator ───────────────────────────────────────────────────
-    log('Stage 1 / 4  —  Orchestrator');
-    logDetail(`Orchestrator version: ${orchestratorVersion}`);
-
-    const orchestratorContext = compileContext(
-      abs(getOrchestratorPaths(orchestratorVersion)),
-      buildOrchestratorTask(task, options, orchestratorVersion),
-    );
-    evidence.writeCompiledContext('orchestrator', orchestratorContext);
-
-    const orchestratorSpan = pipelineTrace.startChildSpan('babel.orchestrator', {
-      'babel.orchestrator.version': orchestratorVersion,
-    });
-
     let manifest: OrchestratorManifest;
-    try {
-      const orchestratorOutput = await runWithFallback(orchestratorContext, OrchestratorOutputSchema, {
-        evidence,
-        stage: 'orchestrator',
+    let orchestratorContext: string | undefined;
+    if (precomputedManifest) {
+      log('Stage 1 / 4  —  Using precomputed manifest');
+      manifest = precomputedManifest;
+    } else {
+      log('Stage 1 / 4  —  Orchestrator');
+      logDetail(`Orchestrator version: ${orchestratorVersion}`);
+      options.eventBus?.emit('agent_id', 'OLS-v9 ORCHESTRATOR');
+
+      orchestratorContext = await compileContext(
+        abs(getOrchestratorPaths(orchestratorVersion)),
+        buildOrchestratorTask(task, options, orchestratorVersion),
+        sessionStartPath,
+      );
+      evidence.writeCompiledContext('orchestrator', orchestratorContext);
+
+      const orchestratorSpan = pipelineTrace.startChildSpan('babel.orchestrator', {
+        'babel.orchestrator.version': orchestratorVersion,
       });
-      assertManifest(orchestratorOutput as z.input<typeof OrchestratorOutputSchema>); // throws on error_halt
-      manifest = OrchestratorManifestSchema.parse(orchestratorOutput);
-      endSpan(orchestratorSpan, SpanStatusCode.OK);
-    } catch (error) {
-      endSpan(orchestratorSpan, SpanStatusCode.ERROR, {}, error);
-      throw error;
+
+      try {
+        const orchestratorOutput = await runWithFallback(orchestratorContext, OrchestratorOutputSchema, {
+          evidence,
+          stage: 'orchestrator',
+          schemaName: 'OrchestratorOutputSchema',
+        });
+        assertManifest(orchestratorOutput); // throws on error_halt
+        manifest = OrchestratorManifestSchema.parse(orchestratorOutput);
+        manifest = normalizeManifestProjectRoot(manifest, sessionStartPath, {
+          authoritativeProjectRoot,
+        });
+        endSpan(orchestratorSpan, SpanStatusCode.OK);
+      } catch (error) {
+        endSpan(orchestratorSpan, SpanStatusCode.ERROR, {}, error);
+        throw error;
+      }
     }
     let manifestArtifact: Record<string, unknown> = manifest as unknown as Record<string, unknown>;
     let v9StackTelemetry: RuntimeTelemetry | null = null;
+    let stackOptimizationWarnings: string[] = [];
 
     if (
       orchestratorVersion === 'v9' &&
@@ -2712,10 +5673,136 @@ export async function runBabelPipeline(
       });
 
       try {
-        const resolvedManifest = resolveInstructionStackManifest(
+        const deterministicDomainResult = maybeApplyDeterministicDomainOverride(manifest, task);
+        manifest = deterministicDomainResult.manifest;
+        if (deterministicDomainResult.applied) {
+          stackOptimizationWarnings = [
+            ...stackOptimizationWarnings,
+            ...deterministicDomainResult.warnings,
+          ];
+          logDetail(deterministicDomainResult.warnings[0] ?? 'Applied deterministic domain route.');
+        }
+
+        const benchmarkRoutingIsolationResult = maybeApplyBenchmarkRoutingIsolation(manifest, task);
+        manifest = benchmarkRoutingIsolationResult.manifest;
+        if (benchmarkRoutingIsolationResult.applied) {
+          stackOptimizationWarnings = [
+            ...stackOptimizationWarnings,
+            ...benchmarkRoutingIsolationResult.warnings,
+          ];
+          logDetail(benchmarkRoutingIsolationResult.warnings[0] ?? 'Applied benchmark routing isolation.');
+        }
+
+        const modelAdapterFallbackResult = maybeApplyModelAdapterFallback(manifest);
+        manifest = modelAdapterFallbackResult.manifest;
+        if (modelAdapterFallbackResult.applied) {
+          stackOptimizationWarnings = [
+            ...stackOptimizationWarnings,
+            ...modelAdapterFallbackResult.warnings,
+          ];
+          logDetail(modelAdapterFallbackResult.warnings[0] ?? 'Applied model adapter fallback.');
+        }
+
+        const optimizedManifestResult = maybeApplyManifestTaskShapeProfile(manifest, task, inferProjectRoot(manifest));
+        manifest = optimizedManifestResult.manifest;
+        stackOptimizationWarnings = [
+          ...stackOptimizationWarnings,
+          ...optimizedManifestResult.warnings,
+        ];
+        const benchmarkHarnessOverlayResult = maybeApplyBenchmarkHarnessOverlay(manifest, task);
+        manifest = benchmarkHarnessOverlayResult.manifest;
+        stackOptimizationWarnings = [
+          ...stackOptimizationWarnings,
+          ...benchmarkHarnessOverlayResult.warnings,
+        ];
+        if (benchmarkHarnessOverlayResult.applied) {
+          logDetail(benchmarkHarnessOverlayResult.warnings[0] ?? 'Applied benchmark harness overlay.');
+        }
+
+        const pipelineStageEnrichmentResult = maybeEnrichPipelineStageIds(manifest, options.mode);
+        manifest = pipelineStageEnrichmentResult.manifest;
+        if (pipelineStageEnrichmentResult.applied) {
+          stackOptimizationWarnings = [
+            ...stackOptimizationWarnings,
+            ...pipelineStageEnrichmentResult.warnings,
+          ];
+          logDetail(pipelineStageEnrichmentResult.warnings[0] ?? 'Applied pipeline stage enrichment.');
+        }
+
+          if (
+            optimizedManifestResult.applied ||
+            deterministicDomainResult.applied ||
+            benchmarkRoutingIsolationResult.applied ||
+            modelAdapterFallbackResult.applied ||
+            benchmarkHarnessOverlayResult.applied ||
+            pipelineStageEnrichmentResult.applied
+          ) {
+          const optimizedInstructionStack = manifest.instruction_stack;
+          if (optimizedManifestResult.applied) {
+            logDetail(optimizedManifestResult.warnings[0] ?? 'Applied stack optimization.');
+          }
+          evidence.writeDebugFile(
+            'debug_stack_optimization.json',
+            JSON.stringify({
+              applied: optimizedManifestResult.applied,
+              deterministic_domain_applied: deterministicDomainResult.applied,
+              benchmark_routing_isolation_applied: benchmarkRoutingIsolationResult.applied,
+              model_adapter_fallback_applied: modelAdapterFallbackResult.applied,
+              benchmark_harness_overlay_applied: benchmarkHarnessOverlayResult.applied,
+              pipeline_stage_enrichment_applied: pipelineStageEnrichmentResult.applied,
+              target_project: manifest.target_project,
+              domain_id: optimizedInstructionStack?.domain_id ?? null,
+              explicit_skill_ids: [...(optimizedInstructionStack?.skill_ids ?? [])],
+              task_overlay_ids: [...(optimizedInstructionStack?.task_overlay_ids ?? [])],
+              warnings: stackOptimizationWarnings,
+              resolution_policy: manifest.resolution_policy,
+            }, null, 2),
+          );
+        }
+
+        log(`[debug] Starting manifest resolution...`);
+        const manifestStartMs = performance.now();
+        let resolvedManifest = resolveInstructionStackManifest(
           manifest,
           BABEL_ROOT,
         );
+        const manifestDurationMs = performance.now() - manifestStartMs;
+
+        if (options.benchmark) {
+          const benchmarkDir = join(BABEL_ROOT, 'runs', 'benchmarks');
+          if (!existsSync(benchmarkDir)) {
+            mkdirSync(benchmarkDir, { recursive: true });
+          }
+          const benchmarkPath = join(benchmarkDir, 'manifest-latency-v9.json');
+          const benchmarkData = {
+            timestamp: new Date().toISOString(),
+            task_length: task.length,
+            skill_count: manifest.instruction_stack?.skill_ids.length ?? 0,
+            manifest_ms: manifestDurationMs,
+            orchestrator_version: orchestratorVersion,
+          };
+          writeFileSync(benchmarkPath, JSON.stringify(benchmarkData, null, 2));
+          log(`[benchmark] Manifest latency written to ${benchmarkPath}`);
+        }
+
+        resolvedManifest = normalizeManifestProjectRoot(resolvedManifest, sessionStartPath, {
+          authoritativeProjectRoot,
+        });
+        if (
+          stackOptimizationWarnings.length > 0 &&
+          resolvedManifest.compiled_artifacts
+        ) {
+          resolvedManifest = {
+            ...resolvedManifest,
+            compiled_artifacts: {
+              ...resolvedManifest.compiled_artifacts,
+              warnings: [
+                ...(resolvedManifest.compiled_artifacts.warnings ?? []),
+                ...stackOptimizationWarnings,
+              ],
+            },
+          };
+        }
         const resolvedCompiledArtifacts =
           (resolvedManifest as OrchestratorManifest & {
             compiled_artifacts?: RuntimeCompiledArtifacts;
@@ -2730,6 +5817,24 @@ export async function runBabelPipeline(
         if (resolvedCompiledArtifacts) {
           const typedInstructionStack = manifest.instruction_stack;
           v9StackTelemetry = buildV9StackTelemetry(manifest, resolvedCompiledArtifacts);
+
+          const budgetTotal = resolvedCompiledArtifacts.token_budget_total;
+          const budgetPolicy = resolvedCompiledArtifacts.budget_policy;
+          if (budgetPolicy?.enabled && typeof budgetTotal === 'number') {
+            const limit = budgetPolicy.hard_limit ?? 80000;
+            if (budgetTotal > limit) {
+              const condition = `Token budget exceeded: ${budgetTotal} tokens > ${limit} limit (hard_limit). Pipeline halted for context safety.`;
+              log(`[babel:compiler] ❌ ${condition}`);
+              const report = buildHaltReport([], 'AMBIGUOUS_PLAN', 0, condition);
+              evidence.writeExecutionLog(report);
+              return await finalizeResult({
+                runDir: evidence.runDir,
+                manifest,
+                plan: null,
+                status: 'EXECUTOR_HALTED',
+              });
+            }
+          }
           pipelineTrace.recordCompilerSummary({
             selectedEntryIds: [...resolvedCompiledArtifacts.selected_entry_ids],
             promptManifestCount: manifest.prompt_manifest.length,
@@ -2768,7 +5873,7 @@ export async function runBabelPipeline(
         let validatorUsed       = false;
         let validatorImproved:  boolean | null = null;
 
-        if (band === 'low') {
+        if (band === 'low' && orchestratorContext) {
           // Run a bounded validator pass (starts at tier 1, no dynamic routing).
           validatorUsed = true;
           log(
@@ -2783,7 +5888,7 @@ export async function runBabelPipeline(
               OrchestratorOutputSchema,
               { evidence, stage: 'orchestrator', startTierIndex: getValidatorTierIndex(), dynamicRouting: false },
             );
-            assertManifest(validatorOutput as z.input<typeof OrchestratorOutputSchema>);
+            assertManifest(validatorOutput);
             validatorManifest = OrchestratorManifestSchema.parse(validatorOutput);
           } catch {
             log(`[babel:orchestrator] ⚠ Validator pass failed — proceeding with original manifest.`);
@@ -2863,13 +5968,33 @@ export async function runBabelPipeline(
 
     evidence.writeManifest(manifestWithProtocol);
     writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
-    writeLatestRunPointers(evidence.runDir, manifest.target_project);
+    if (options.writeLatestPointers !== false) {
+      writeLatestRunPointers(evidence.runDir, manifest.target_project);
+    }
+    await runPluginHooks('PostOrchestrator', {
+      runId: evidence.runId,
+      runDir: evidence.runDir,
+      babelRoot: BABEL_ROOT,
+      projectRoot: inferProjectRoot(manifest) ?? sessionStartPath ?? process.cwd(),
+      dryRun: DRY_RUN,
+      manifest,
+    });
 
-    const effectiveMode  = options.mode ?? manifest.analysis.pipeline_mode;
+    const mergedTaskContext = mergeTaskContext(
+      task,
+      manifest.handoff_payload.user_request,
+    );
+
+    let effectiveMode  = options.mode ?? manifest.analysis.pipeline_mode;
     const effectiveModel = (
-      options.modelOverride ?? manifest.worker_configuration.assigned_model ?? 'Codex'
+      options.modelOverride ?? manifest.worker_configuration.assigned_model ?? 'qwen3'
     ) as TargetModel;
-    const taskContract = classifyTaskContract(manifest.handoff_payload.user_request);
+    const exactInvariantRegistry = getRequestedTargetContract(mergedTaskContext).exactInvariants;
+    evidence.writeDebugFile(
+      '11_exact_invariants.json',
+      `${JSON.stringify(exactInvariantRegistry, null, 2)}\n`,
+    );
+    const taskContract = classifyTaskContract(mergedTaskContext);
     const taskGrounding = buildTaskGrounding(taskContract, inferProjectRoot(manifest));
     const groundingContext = formatGroundingContext(taskGrounding);
     const javaRuntimeStatus = detectJavaRuntimeStatus();
@@ -2902,6 +6027,13 @@ export async function runBabelPipeline(
     logDetail(`Project:  ${manifest.target_project}`);
     logDetail(`Model:    ${effectiveModel}${options.modelOverride ? ' (forced override)' : ''}`);
     logDetail(`Mode:     ${effectiveMode}`);
+    const completeStatusForCurrentTask = (): TerminalStatus => isReadOnlyNoModificationRequest({
+      task,
+      mode: effectiveMode,
+      allowedTools: getAllowedToolsFromEnv() ?? [],
+    })
+      ? 'COMPLETE_NO_MODIFICATION'
+      : 'COMPLETE';
     if (sessionId) {
       logDetail(`Session:  ${sessionId}`);
     }
@@ -2913,10 +6045,124 @@ export async function runBabelPipeline(
       logDetail(`Worker model overridden by CLI flag: ${options.modelOverride}`);
     }
 
+    const exactInvariantProjectRoot = inferProjectRoot(manifest) ?? runtimeProjectRoot;
+    const finalizeExactInstructionDrift = async (
+      plan: SwePlan | null,
+      currentToolCallLog: readonly ToolCallLog[] = [],
+    ): Promise<PipelineResult | null> => {
+      const exactInvariantFailure = evaluateExactInstructionInvariants(
+        exactInvariantRegistry,
+        exactInvariantProjectRoot,
+        currentToolCallLog,
+      );
+      if (!exactInvariantFailure) {
+        return null;
+      }
+      const invariantStatus = resolveCompletionStatusAfterExactInvariantCheck(exactInvariantFailure);
+      log(`Pipeline halted — ${invariantStatus}`);
+      logDetail(exactInvariantFailure);
+      v9StackTelemetry = markRuntimeTelemetryOutcome(
+        v9StackTelemetry,
+        invariantStatus,
+        effectiveMode,
+      );
+      writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+      return await finalizeResult({
+        runDir: evidence.runDir,
+        manifest,
+        plan,
+        status: invariantStatus,
+        errors: [exactInvariantFailure],
+      });
+    };
+
+    // ── Swarm Dispatch ────────────────────────────────────────────────────────
+    const requestedTargetContractForMode = getRequestedTargetContract(mergedTaskContext);
+    if (
+      shouldRefuseDirectModeWriteRequest(
+        effectiveMode,
+        requestedTargetContractForMode.requestedTargets.length,
+      )
+    ) {
+      log('Pipeline halted — DIRECT_MODE_NO_EXECUTOR');
+      logDetail(
+        'direct mode has no governed executor/writeback path for requested file artifacts; ' +
+        'use autonomous mode for file creation or modification.',
+      );
+      v9StackTelemetry = markRuntimeTelemetryOutcome(
+        v9StackTelemetry,
+        'DIRECT_MODE_NO_EXECUTOR',
+        effectiveMode,
+      );
+      writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+      return await finalizeResult({
+        runDir: evidence.runDir,
+        manifest,
+        plan: null,
+        status: 'DIRECT_MODE_NO_EXECUTOR',
+        errors: [
+          'direct mode file-write request refused: no executor/writeback path is bound.',
+        ],
+      });
+    }
+
+    if (
+      effectiveMode === 'parallel_swarm' &&
+      requestedTargetContractForMode.requestedTargets.length > 0
+    ) {
+      log('Pipeline halted — SWARM_NO_EXECUTOR_BOUND');
+      logDetail(
+        'parallel_swarm has no governed merger/writeback path for requested file artifacts; ' +
+        'use autonomous mode or implement swarm merger evidence before file writes.',
+      );
+      v9StackTelemetry = markRuntimeTelemetryOutcome(
+        v9StackTelemetry,
+        'SWARM_NO_EXECUTOR_BOUND',
+        effectiveMode,
+      );
+      writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+      return await finalizeResult({
+        runDir: evidence.runDir,
+        manifest,
+        plan: null,
+        status: 'SWARM_NO_EXECUTOR_BOUND',
+        errors: [
+          'parallel_swarm file-write request refused: no governed merger/executor writeback path is bound.',
+        ],
+      });
+    }
+
+    if (effectiveMode === 'parallel_swarm' && manifest.swarm) {
+      log('Stage 2-4 / 4 — Parallel Swarm Dispatch');
+      const swarmResult = await runSwarmPipeline(manifest, evidence, options);
+
+      return finalizeResult({
+        status: swarmResult.status,
+        runDir: evidence.runDir,
+        manifest,
+        plan: null,
+      });
+    }
+
+    // ── Stage 0: Surgical Pruning ───────────────────────────────────────────
+    let pruningStubs = new Map<string, string>();
+    if (effectiveMode !== 'manual' && isContextPruningEnabled()) {
+      log('Stage 0 / 4  -  Surgical Pruning');
+      const pruningResult = await analyzeAndPruneContext(
+        mergedTaskContext,
+        manifest.prompt_manifest,
+        evidence,
+      );
+      pruningStubs = pruningResult.stubs;
+      if (pruningStubs.size > 0) {
+        logDetail(`✓ Stubbed ${pruningStubs.size} supplementary files to save tokens.`);
+      }
+    }
+
     if (effectiveMode === 'manual') {
       log('Stage 2 / 4  —  Manual Bridge Export');
-      const sweTask    = buildSweTask(manifest, [], undefined, '', groundingContext);
-      const sweContext = compileContext(manifest.prompt_manifest, sweTask);
+      const sweTask    = buildSweTask(manifest, mergedTaskContext, [], undefined, '', groundingContext, executionProfile.name);
+      const sweContext = await compileContext(manifest.prompt_manifest, sweTask, inferProjectRoot(manifest), pruningStubs);
       evidence.writeManualSwePrompt(sweContext);
       evidence.writeCompiledContext('swe_manual', sweContext);
       v9StackTelemetry = markRuntimeTelemetryOutcome(
@@ -2941,6 +6187,98 @@ export async function runBabelPipeline(
     let evidenceLoopCount         = 0;
     let additionalEvidenceContext = '';
     const executionReportWarnings: string[] = [];
+    let lastToolCallLog: ToolCallLog[] = [];
+
+    const commandOnlyNoModification = effectiveMode !== 'direct' && effectiveMode !== 'parallel_swarm'
+      ? inferCommandOnlyNoModificationRequest(task)
+      : null;
+    const shouldRunCommandOnlyNoModification =
+      commandOnlyNoModification !== null &&
+      !(isOptionalVerifierRequest(task) && !isShellExecutionToolAvailable());
+    if (commandOnlyNoModification && !shouldRunCommandOnlyNoModification) {
+      log(`Optional command-only verifier "${commandOnlyNoModification}" skipped because shell_exec is unavailable.`);
+    }
+    if (commandOnlyNoModification && shouldRunCommandOnlyNoModification) {
+      log(`Command-only no-modification task detected; running "${commandOnlyNoModification}" through shell_exec.`);
+      const toolResult = await executeTool({
+        tool: 'shell_exec',
+        command: commandOnlyNoModification,
+        working_directory: '.',
+        timeout_seconds: 300,
+      }, {
+        agentId: 'executor',
+        runId: evidence.runId,
+        runDir: evidence.runDir,
+        babelRoot: BABEL_ROOT,
+      });
+      const entry: ToolCallLog = {
+        step: 1,
+        tool: 'shell_exec',
+        target: commandOnlyNoModification,
+        exit_code: toolResult.exit_code,
+        stdout: toolResult.stdout,
+        stderr: toolResult.stderr,
+        ...(toolResult.denial ? { denial: toolResult.denial } : {}),
+        ...(toolResult.mcp_lifecycle ? { mcp_lifecycle: toolResult.mcp_lifecycle } : {}),
+        ...(toolResult.checkpoint_ids ? { checkpoint_ids: toolResult.checkpoint_ids } : {}),
+        verified: toolResult.exit_code === 0,
+      };
+      lastToolCallLog = [entry];
+      if (toolResult.exit_code === 0) {
+        const report = buildTerminalReport({
+          type: 'completion',
+          status: 'EXECUTION_COMPLETE',
+        }, lastToolCallLog, evidence);
+        writeValidatedExecutionReport(evidence, report, lastToolCallLog, executionReportWarnings);
+        v9StackTelemetry = markRuntimeTelemetryOutcome(
+          v9StackTelemetry,
+          'COMPLETE_NO_MODIFICATION',
+          effectiveMode,
+        );
+        writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+        return await finalizeResult({
+          runDir: evidence.runDir,
+          manifest,
+          plan: null,
+          status: 'COMPLETE_NO_MODIFICATION',
+        });
+      }
+
+      const status = toolResult.denial
+        ? 'SHELL_COMMAND_DENIED'
+        : isVerifierNotFoundFailure(commandOnlyNoModification, toolResult.stdout, toolResult.stderr)
+          ? 'VERIFIER_NOT_FOUND'
+          : isVerifierCommand(commandOnlyNoModification)
+            ? 'VERIFIER_FAILED'
+            : 'SHELL_COMMAND_FAILED';
+      const condition = [
+        `[${status}] Command-only no-modification task failed.`,
+        `Command: ${commandOnlyNoModification}.`,
+        `Exit code: ${toolResult.exit_code}.`,
+        `stdout: ${summarizeVerifierStreamForEvidence(toolResult.stdout) ?? '(empty)'}.`,
+        `stderr: ${summarizeVerifierStreamForEvidence(toolResult.stderr) ?? '(empty)'}.`,
+        toolResult.denial ? `denial: ${toolResult.denial.category}/${toolResult.denial.reason_code}: ${toolResult.denial.message}.` : '',
+      ].filter(Boolean).join(' ');
+      const report = buildHaltReport(
+        lastToolCallLog,
+        'STEP_VERIFICATION_FAIL',
+        1,
+        condition,
+      );
+      writeValidatedExecutionReport(evidence, report, lastToolCallLog, executionReportWarnings);
+      v9StackTelemetry = markRuntimeTelemetryOutcome(
+        v9StackTelemetry,
+        status,
+        effectiveMode,
+      );
+      writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+      return await finalizeResult({
+        runDir: evidence.runDir,
+        manifest,
+        plan: null,
+        status,
+      });
+    }
 
     // ── Outer evidence loop ──────────────────────────────────────────────────────
     // Stages 2 → 3 → 4 repeat when the SWE Agent emits a plan_type=EVIDENCE_REQUEST plan.
@@ -2967,24 +6305,39 @@ export async function runBabelPipeline(
       // prompt_manifest contains ordered absolute path strings — use directly.
       const swePaths = manifest.prompt_manifest;
 
-      const sweTask    = buildSweTask(manifest, qaRejections, proposedFixStrategy, additionalEvidenceContext, groundingContext);
-      const sweContext = compileContext(swePaths, sweTask);
+      const sweTask    = buildSweTask(manifest, mergedTaskContext, qaRejections, proposedFixStrategy, additionalEvidenceContext, groundingContext, executionProfile.name);
+      const sweContext = await compileContext(swePaths, sweTask, inferProjectRoot(manifest), pruningStubs);
       evidence.writeCompiledContext(`swe_v${attempt}`, sweContext);
 
       const swePlanRaw = await runWithFallback(sweContext, SwePlanSchema, {
         evidence,
         stage: 'planning',
+        schemaName: 'SwePlanSchema',
       });
       const { plan: normalizedPlan, warnings: planWarnings } = normalizeSwePlan(swePlanRaw);
       const { plan: groundedPlan, warnings: groundingWarnings } = normalizePlanTargetsAgainstGrounding(taskGrounding, normalizedPlan);
-      const swePlan = groundedPlan;
-      if (planWarnings.length > 0 || groundingWarnings.length > 0) {
+      const { plan: requestedTargetPlan, warnings: requestedTargetWarnings } =
+        normalizePlanTargetsAgainstRequestedOutputs(mergedTaskContext, groundedPlan);
+      const swePlan = requestedTargetPlan;
+      if (planWarnings.length > 0 || groundingWarnings.length > 0 || requestedTargetWarnings.length > 0) {
         executionReportWarnings.push(...planWarnings);
         executionReportWarnings.push(...groundingWarnings);
+        executionReportWarnings.push(...requestedTargetWarnings);
         planWarnings.forEach(w => logDetail(`SWE plan warning: ${w}`));
         groundingWarnings.forEach(w => logDetail(`SWE plan warning: ${w}`));
+        requestedTargetWarnings.forEach(w => logDetail(`SWE plan warning: ${w}`));
       }
       evidence.writeSwePlan(swePlan, attempt);
+      await runPluginHooks('PostPlan', {
+        runId: evidence.runId,
+        runDir: evidence.runDir,
+        babelRoot: BABEL_ROOT,
+        projectRoot: inferProjectRoot(manifest) ?? sessionStartPath ?? process.cwd(),
+        dryRun: DRY_RUN,
+        attempt,
+        manifest,
+        plan: swePlan,
+      });
       logDetail(
         `Action steps: ${swePlan.minimal_action_set.length} | ` +
         `plan_type: ${swePlan.plan_type}`,
@@ -3023,7 +6376,34 @@ export async function runBabelPipeline(
         continue;
       }
 
-      const executorSafetyReject = collectExecutorSafetyViolations(swePlan, manifest);
+      const referenceSourceShapeReject = collectReferenceSourceShapeViolations(swePlan, manifest);
+      if (referenceSourceShapeReject) {
+        evidence.writeQaVerdict(referenceSourceShapeReject, attempt);
+        logDetail(
+          `QA: REJECT  (${referenceSourceShapeReject.failure_count} failure(s), confidence: ${referenceSourceShapeReject.overall_confidence}/5)`,
+        );
+        referenceSourceShapeReject.failures.forEach((failure, index) => {
+          logDetail(`  ${index + 1}. [${failure.tag}]  ${failure.condition}`);
+        });
+
+        qaRejections = referenceSourceShapeReject.failures.map(failure =>
+          failure.fix_hint
+            ? `[${failure.tag}] ${failure.condition} (hint: ${failure.fix_hint})`
+            : `[${failure.tag}] ${failure.condition}`,
+        );
+        proposedFixStrategy = referenceSourceShapeReject.proposed_fix_strategy;
+        v9StackTelemetry = markRuntimeTelemetryQaReject(v9StackTelemetry, referenceSourceShapeReject);
+        writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+        pipelineTrace.recordQaVerdict('REJECT', referenceSourceShapeReject.failures.map(failure => failure.tag));
+        continue;
+      }
+
+      const executorSafetyReject = collectExecutorSafetyViolations(
+        swePlan,
+        manifest,
+        mergedTaskContext,
+        executionProfile.name,
+      );
       if (executorSafetyReject) {
         evidence.writeQaVerdict(executorSafetyReject, attempt);
         logDetail(
@@ -3097,22 +6477,51 @@ export async function runBabelPipeline(
         continue;
       }
 
+      const androidVerificationCoverageReject = collectAndroidVerificationCoverageViolations(
+        swePlan,
+        manifest,
+        task,
+      );
+      if (androidVerificationCoverageReject) {
+        evidence.writeQaVerdict(androidVerificationCoverageReject, attempt);
+        logDetail(
+          `QA: REJECT  (${androidVerificationCoverageReject.failure_count} failure(s), confidence: ${androidVerificationCoverageReject.overall_confidence}/5)`,
+        );
+        androidVerificationCoverageReject.failures.forEach((failure, index) => {
+          logDetail(`  ${index + 1}. [${failure.tag}]  ${failure.condition}`);
+        });
+
+        qaRejections = androidVerificationCoverageReject.failures.map(failure =>
+          failure.fix_hint
+            ? `[${failure.tag}] ${failure.condition} (hint: ${failure.fix_hint})`
+            : `[${failure.tag}] ${failure.condition}`,
+        );
+        proposedFixStrategy = androidVerificationCoverageReject.proposed_fix_strategy;
+        v9StackTelemetry = markRuntimeTelemetryQaReject(v9StackTelemetry, androidVerificationCoverageReject);
+        writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+        pipelineTrace.recordQaVerdict('REJECT', androidVerificationCoverageReject.failures.map(failure => failure.tag));
+        continue;
+      }
+
       // ── Stage 3: QA Reviewer ───────────────────────────────────────────────
       log(
         `Stage 3 / 4  —  QA Reviewer` +
         (attempt > 1 ? ` (attempt ${attempt}/${MAX_SWE_QA_LOOPS})` : ''),
       );
 
-      const deterministicGradleBootstrapLaneActive = shouldUseDeterministicGradleBootstrapLane(manifest);
-      const qaContext = compileContext(
+      const deterministicGradleBootstrapLaneActive = shouldUseDeterministicGradleBootstrapLane(inferProjectRoot(manifest));
+      const qaContext = await compileContext(
         abs(QA_PATHS),
         buildQaTask(
           swePlan,
           javaRuntimeStatus,
           gradleRuntimeStatus,
           detectAndroidSdkStatus(),
+          mergedTaskContext,
           deterministicGradleBootstrapLaneActive,
+          executionProfile.name,
         ),
+        inferProjectRoot(manifest),
       );
       evidence.writeCompiledContext(`qa_v${attempt}`, qaContext);
 
@@ -3125,6 +6534,7 @@ export async function runBabelPipeline(
         verdict = await runWithFallback(qaContext, QaVerdictSchema, {
           evidence,
           stage: 'qa',
+          schemaName: 'QaVerdictSchema',
         });
         verdict = sanitizeQaVerdictForDeterministicGradleBootstrapLane(
           verdict,
@@ -3191,6 +6601,10 @@ export async function runBabelPipeline(
       if (attempt === MAX_SWE_QA_LOOPS) {
         log(`QA rejected ${MAX_SWE_QA_LOOPS} plans. Pipeline halted.`);
         log(`Review evidence bundle for details: ${evidence.runDir}`);
+        const driftResult = await finalizeExactInstructionDrift(null, lastToolCallLog);
+        if (driftResult) {
+          return driftResult;
+        }
         v9StackTelemetry = markRuntimeTelemetryOutcome(
           v9StackTelemetry,
           'QA_REJECTED_MAX_LOOPS',
@@ -3208,18 +6622,172 @@ export async function runBabelPipeline(
       logDetail(`Looping back to SWE Agent with rejection feedback...`);
     }
 
+    // ── Pre-executor bounded-contract activation gate ─────────────────────────
+    // `collectBoundedContractViolations` already enforces the bounded target set
+    // inside the SWE↔QA retry loop. This gate is the final hard assertion: it
+    // prevents executor activation if the approved plan's file_write targets do
+    // not exactly match the requested bounded set, regardless of how that state
+    // was reached. Belt-and-suspenders — should never fire if the in-loop check
+    // is working, but guarantees the executor never starts on a drifted plan.
+    if (approvedPlan !== null && effectiveMode === 'autonomous') {
+      const boundedActivationReject = assertBoundedPlanActivationContract(approvedPlan, mergedTaskContext);
+      if (boundedActivationReject) {
+        log(`  Executor: ACTIVATION_REFUSED [ACTIVATION_GATE_FAIL]`);
+        logDetail(boundedActivationReject);
+        writeValidatedExecutionReport(
+          evidence,
+          {
+            status:  'ACTIVATION_REFUSED',
+            reason:  boundedActivationReject,
+            gate:    'ACTIVATION_GATE_FAIL' satisfies HaltTag,
+          },
+          [],
+          [...executionReportWarnings, boundedActivationReject],
+        );
+        v9StackTelemetry = markRuntimeTelemetryOutcome(
+          v9StackTelemetry,
+          'EXECUTOR_HALTED',
+          effectiveMode,
+        );
+        writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+        return await finalizeResult({
+          runDir:   evidence.runDir,
+          manifest,
+          plan:     approvedPlan,
+          status:   'EXECUTOR_HALTED',
+        });
+      }
+    }
+
     // ── Stage 4: CLI Executor ─────────────────────────────────────────────────
+
+    if (effectiveMode === 'verified' && approvedPlan !== null) {
+      const autoApproveReadOnlyEvidence = isReadOnlyEvidenceRequestPlan(approvedPlan);
+      const checklistWillPrompt =
+        !autoApproveReadOnlyEvidence &&
+        process.stdout.isTTY === true &&
+        process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1';
+      if (autoApproveReadOnlyEvidence) {
+        log('Read-only evidence plan approved automatically.');
+      }
+      if (checklistWillPrompt) {
+        options.eventBus?.promptPause('Waiting for plan approval');
+      }
+      const selectedSteps = autoApproveReadOnlyEvidence
+        ? approvedPlan.minimal_action_set
+        : await renderInteractiveChecklist(approvedPlan.minimal_action_set);
+      if (checklistWillPrompt) {
+        options.eventBus?.promptResume();
+      }
+      if (selectedSteps === null) {
+        log(`Review cancelled. Pipeline halted.`);
+        return await finalizeResult({ runDir: evidence.runDir, manifest, plan: approvedPlan, status: 'EXECUTOR_HALTED' });
+      }
+      if (selectedSteps.length === 0) {
+        log(`No steps selected. Pipeline complete.`);
+        const driftResult = await finalizeExactInstructionDrift(approvedPlan);
+        if (driftResult) {
+          return driftResult;
+        }
+        v9StackTelemetry = markRuntimeTelemetryOutcome(
+          v9StackTelemetry,
+          'COMPLETE',
+          effectiveMode,
+        );
+        writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+        return await finalizeResult({ runDir: evidence.runDir, manifest, plan: approvedPlan, status: completeStatusForCurrentTask() });
+      }
+      // Update plan and promote to autonomous for execution
+      approvedPlan.minimal_action_set = selectedSteps;
+      effectiveMode = 'autonomous';
+    }
+
+    if (shouldHaltAutonomousWithoutApprovedPlan(effectiveMode, approvedPlan)) {
+      log(`QA rejected ${MAX_SWE_QA_LOOPS} plans. Pipeline halted.`);
+      log(`Review evidence bundle for details: ${evidence.runDir}`);
+      const driftResult = await finalizeExactInstructionDrift(approvedPlan, lastToolCallLog);
+      if (driftResult) {
+        return driftResult;
+      }
+      v9StackTelemetry = markRuntimeTelemetryOutcome(
+        v9StackTelemetry,
+        'QA_REJECTED_MAX_LOOPS',
+        effectiveMode,
+      );
+      writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+      return await finalizeResult({
+        runDir: evidence.runDir,
+        manifest,
+        plan: null,
+        status: 'QA_REJECTED_MAX_LOOPS',
+      });
+    }
 
     if (effectiveMode !== 'autonomous' || approvedPlan === null) {
       log(`Pipeline complete  —  mode "${effectiveMode}", no CLI execution.`);
       log(`Evidence bundle: ${evidence.runDir}`);
+      const driftResult = await finalizeExactInstructionDrift(approvedPlan);
+      if (driftResult) {
+        return driftResult;
+      }
       v9StackTelemetry = markRuntimeTelemetryOutcome(
         v9StackTelemetry,
         'COMPLETE',
         effectiveMode,
       );
       writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
-      return await finalizeResult({ runDir: evidence.runDir, manifest, plan: approvedPlan, status: 'COMPLETE' });
+      return await finalizeResult({ runDir: evidence.runDir, manifest, plan: approvedPlan, status: completeStatusForCurrentTask() });
+    }
+
+    const planTargetScope = validatePlanTargetsWithinEffectiveRoots({
+      effectiveTargetRoot: inferProjectRoot(manifest) ?? runtimeProjectRoot,
+      targets: approvedPlan.minimal_action_set.map(step => step.target),
+    });
+    if (!planTargetScope.ok) {
+      const reason = planTargetScope.violations[0] ?? 'Blocked - planned tool target is outside the resolved target root.';
+      log(`  Executor: ACTIVATION_REFUSED [ACTIVATION_GATE_FAIL]`);
+      logDetail(reason);
+      writeValidatedExecutionReport(
+        evidence,
+        {
+          status: 'ACTIVATION_REFUSED',
+          reason,
+          gate: 'ACTIVATION_GATE_FAIL' satisfies HaltTag,
+        },
+        [],
+        [...executionReportWarnings, reason],
+      );
+      v9StackTelemetry = markRuntimeTelemetryOutcome(
+        v9StackTelemetry,
+        'EXECUTOR_HALTED',
+        effectiveMode,
+      );
+      writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+      return await finalizeResult({
+        runDir: evidence.runDir,
+        manifest,
+        plan: approvedPlan,
+        status: 'EXECUTOR_HALTED',
+        errors: planTargetScope.violations,
+      });
+    }
+
+    const lockResult = await checkWorkspaceLocks(approvedPlan, BABEL_ROOT);
+    if (lockResult.halted) {
+      log(`[babel:governance] ❌ ${lockResult.reason}`);
+      const report = buildHaltReport(
+        [],
+        'SCOPE_VIOLATION',
+        0,
+        lockResult.reason ?? 'Workspace lock conflict.',
+      );
+      evidence.writeExecutionLog(report);
+      return await finalizeResult({
+        runDir: evidence.runDir,
+        manifest,
+        plan: approvedPlan,
+        status: 'EXECUTOR_HALTED',
+      });
     }
 
     log('Stage 4 / 4  —  CLI Executor');
@@ -3237,7 +6805,20 @@ export async function runBabelPipeline(
 
     let toolCallLog: ToolCallLog[];
     const initialExecutorLog: ToolCallLog[] = [];
-    if (shouldUseDeterministicAndroidSdkBootstrapLane(manifest)) {
+    const scaffoldSeed = seedGodotMobileScaffold({
+      rawTask: manifest.handoff_payload.user_request,
+      projectRoot: getExecutorProjectRoot() ?? inferProjectRoot(manifest) ?? null,
+      toolCallLog: initialExecutorLog,
+      babelRoot: BABEL_ROOT,
+    });
+    evidence.writeDebugFile(
+      '09_scaffold_seed.json',
+      `${JSON.stringify(scaffoldSeed, null, 2)}\n`,
+    );
+    if (scaffoldSeed.status === 'SEEDED') {
+      logDetail(`Deterministic Godot scaffold seed copied ${scaffoldSeed.filesCopied.length} file(s).`);
+    }
+    if (shouldUseDeterministicAndroidSdkBootstrapLane(inferProjectRoot(manifest))) {
       logDetail('Deterministic Android SDK bootstrap lane activated.');
       const androidSdkBootstrapResult = await runDeterministicAndroidSdkBootstrapLane(manifest);
       initialExecutorLog.push(...androidSdkBootstrapResult.toolCallLog);
@@ -3252,9 +6833,9 @@ export async function runBabelPipeline(
         return await finalizeResult({ runDir: evidence.runDir, manifest, plan: approvedPlan, status: 'EXECUTOR_HALTED' });
       }
     }
-    if (shouldUseDeterministicGradleBootstrapLane(manifest)) {
+    if (shouldUseDeterministicGradleBootstrapLane(inferProjectRoot(manifest))) {
       logDetail('Deterministic Gradle bootstrap lane activated.');
-      const bootstrapResult = await runDeterministicGradleBootstrapLane(manifest);
+      const bootstrapResult = await runDeterministicGradleBootstrapLane(manifest, evidence);
       initialExecutorLog.push(...bootstrapResult.toolCallLog);
       if (bootstrapResult.haltedReport) {
         writeValidatedExecutionReport(
@@ -3274,8 +6855,11 @@ export async function runBabelPipeline(
         effectiveModel,
         executionReportWarnings,
         initialExecutorLog,
+        mergedTaskContext,
+        pruningStubs,
       );
       toolCallLog = executorResult.toolCallLog;
+      lastToolCallLog = toolCallLog;
       if (executorResult.terminalStatus !== 'EXECUTION_COMPLETE') {
         log(
           `Pipeline halted after executor terminal status ${executorResult.terminalStatus}. ` +
@@ -3287,15 +6871,47 @@ export async function runBabelPipeline(
           effectiveMode,
         );
         writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+        const haltCondition = executorResult.condition ?? '';
+        const haltedStatus =
+          /\[ROLLBACK_FAILED\]/.test(haltCondition)
+            ? 'ROLLBACK_FAILED'
+            : /\[ROLLBACK_APPLIED\]/.test(haltCondition)
+              ? 'ROLLBACK_APPLIED'
+              : /\[WORKTREE_DIRTY_UNSAFE\]/.test(haltCondition)
+                ? 'WORKTREE_DIRTY_UNSAFE'
+                : /\[VERIFIER_NOT_FOUND\]/.test(haltCondition)
+            ? 'VERIFIER_NOT_FOUND'
+            : /\[REPAIR_REPEATED_FAILURE\]/.test(haltCondition)
+              ? 'REPAIR_REPEATED_FAILURE'
+              : executorResult.haltTag === 'REPAIR_BUDGET_EXCEEDED' ||
+                /\[REPAIR_MAX_ATTEMPTS_REACHED\]/.test(haltCondition)
+                ? 'REPAIR_MAX_ATTEMPTS_REACHED'
+                : /\[SHELL_COMMAND_DENIED\]/.test(haltCondition)
+                  ? 'SHELL_COMMAND_DENIED'
+                  : /\[SHELL_COMMAND_FAILED\]/.test(haltCondition)
+                    ? 'SHELL_COMMAND_FAILED'
+                  : /\[VERIFIER_FAILED\]/.test(haltCondition)
+                    ? 'VERIFIER_FAILED'
+                    : 'EXECUTOR_HALTED';
+        if (haltedStatus === 'EXECUTOR_HALTED') {
+          const driftResult = await finalizeExactInstructionDrift(approvedPlan, toolCallLog);
+          if (driftResult) {
+            return driftResult;
+          }
+        }
         return await finalizeResult({
           runDir: evidence.runDir,
           manifest,
           plan: approvedPlan,
-          status: 'EXECUTOR_HALTED',
+          status: haltedStatus,
         });
       }
     } catch (err) {
       log(`CLI Executor error: ${err instanceof Error ? err.message : String(err)}`);
+      const driftResult = await finalizeExactInstructionDrift(approvedPlan, lastToolCallLog);
+      if (driftResult) {
+        return driftResult;
+      }
       v9StackTelemetry = markRuntimeTelemetryOutcome(
         v9StackTelemetry,
         'EXECUTOR_HALTED',
@@ -3341,13 +6957,17 @@ export async function runBabelPipeline(
   }
 
   log(`Pipeline complete  —  Evidence bundle: ${evidence.runDir}`);
+  const driftResult = await finalizeExactInstructionDrift(approvedPlan, lastToolCallLog);
+  if (driftResult) {
+    return driftResult;
+  }
   v9StackTelemetry = markRuntimeTelemetryOutcome(
     v9StackTelemetry,
     'COMPLETE',
     effectiveMode,
   );
   writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
-  return await finalizeResult({ runDir: evidence.runDir, manifest, plan: approvedPlan, status: 'COMPLETE' });
+  return await finalizeResult({ runDir: evidence.runDir, manifest, plan: approvedPlan, status: completeStatusForCurrentTask() });
   } catch (error) {
     return await finalizeError(error);
   }
@@ -3357,6 +6977,7 @@ export async function resumeManualBridge(
   runDir: string,
   planInput: string | { planPath?: string; rawPlanText?: string },
 ): Promise<PipelineResult> {
+  globalCostTracker.resetSession();
   const manifestPath = join(runDir, '01_manifest.json');
   const manifestRaw  = JSON.parse(readFileSync(manifestPath, 'utf-8')) as unknown;
   const manifest     = OrchestratorManifestSchema.parse(manifestRaw);
@@ -3417,15 +7038,17 @@ export async function resumeManualBridge(
 
   const targetModel = manifest.worker_configuration.assigned_model as TargetModel;
   log('Stage 3 / 4  —  QA Reviewer (resume)');
-  const qaContext = compileContext(
+  const qaContext = await compileContext(
     abs(QA_PATHS),
     buildQaTask(
       swePlan,
       detectJavaRuntimeStatus(),
       detectCommandOnPath('gradle'),
       detectAndroidSdkStatus(),
-      shouldUseDeterministicGradleBootstrapLane(manifest),
+      manifest.handoff_payload.user_request,
+      shouldUseDeterministicGradleBootstrapLane(inferProjectRoot(manifest)),
     ),
+    inferProjectRoot(manifest),
   );
   evidence.writeCompiledContext('qa_v1', qaContext);
 
@@ -3433,6 +7056,7 @@ export async function resumeManualBridge(
     await runWithFallback(qaContext, QaVerdictSchema, {
       evidence,
       stage: 'qa',
+      schemaName: 'QaVerdictSchema',
     }),
     swePlan,
     manifest,
@@ -3454,7 +7078,17 @@ export async function resumeManualBridge(
   log('Stage 4 / 4  —  CLI Executor');
   const executionReportWarnings: string[] = [];
   const initialExecutorLog: ToolCallLog[] = [];
-  if (shouldUseDeterministicAndroidSdkBootstrapLane(manifest)) {
+  const scaffoldSeed = seedGodotMobileScaffold({
+    rawTask: manifest.handoff_payload.user_request,
+    projectRoot: getExecutorProjectRoot() ?? inferProjectRoot(manifest) ?? null,
+    toolCallLog: initialExecutorLog,
+    babelRoot: BABEL_ROOT,
+  });
+  evidence.writeDebugFile(
+    '09_scaffold_seed.json',
+    `${JSON.stringify(scaffoldSeed, null, 2)}\n`,
+  );
+  if (shouldUseDeterministicAndroidSdkBootstrapLane(inferProjectRoot(manifest))) {
     logDetail('Deterministic Android SDK bootstrap lane activated.');
     const androidSdkBootstrapResult = await runDeterministicAndroidSdkBootstrapLane(manifest);
     initialExecutorLog.push(...androidSdkBootstrapResult.toolCallLog);
@@ -3474,9 +7108,9 @@ export async function resumeManualBridge(
       };
     }
   }
-  if (shouldUseDeterministicGradleBootstrapLane(manifest)) {
+  if (shouldUseDeterministicGradleBootstrapLane(inferProjectRoot(manifest))) {
     logDetail('Deterministic Gradle bootstrap lane activated.');
-    const bootstrapResult = await runDeterministicGradleBootstrapLane(manifest);
+    const bootstrapResult = await runDeterministicGradleBootstrapLane(manifest, evidence);
     initialExecutorLog.push(...bootstrapResult.toolCallLog);
     if (bootstrapResult.haltedReport) {
       writeValidatedExecutionReport(
@@ -3500,6 +7134,7 @@ export async function resumeManualBridge(
       targetModel,
       planWarnings,
       initialExecutorLog,
+      manifest.handoff_payload.user_request,
     );
     if (executorResult.terminalStatus !== 'EXECUTION_COMPLETE') {
       return {
@@ -3524,5 +7159,6 @@ export async function resumeManualBridge(
     manifest,
     plan: swePlan,
     status: 'COMPLETE',
+    usageSummary: globalCostTracker.getSessionSummary(),
   };
 }

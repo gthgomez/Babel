@@ -14,6 +14,15 @@
 const DEFAULT_MAX_LENGTH = 1_000;
 
 /**
+ * A higher limit used for file_read results embedded in execution history.
+ * File content must survive in history long enough for the executor to use it
+ * in a subsequent file_write. 32 KB covers most source files without exhausting
+ * context budget. Files larger than this should use the FILE_READ_CACHE injection
+ * mechanism in pipeline.ts instead of the history string.
+ */
+export const FILE_READ_MAX_LENGTH = 32_000;
+
+/**
  * Truncates `text` to at most `maxLength` characters.
  *
  * If no truncation is needed the original string is returned unchanged.

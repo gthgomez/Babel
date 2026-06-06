@@ -124,8 +124,8 @@ The first surface is what the public repo is optimized for. The second is availa
 - [examples/first-success.md](./examples/first-success.md) — the shortest before/after explanation
 - [examples/manifest-previews/backend-verified.json](./examples/manifest-previews/backend-verified.json) — golden backend preview
 - [examples/manifest-previews/mobile-direct.json](./examples/manifest-previews/mobile-direct.json) — golden Android/mobile preview
-- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) — public architecture and product shape
-- [docs/BABEL_LOCAL_MODE.md](./docs/BABEL_LOCAL_MODE.md) — what the public runtime does and does not promise
+- [docs/architecture/ARCHITECTURE.md](./docs/architecture/ARCHITECTURE.md) — public architecture and product shape
+- [docs/architecture/BABEL_LOCAL_MODE.md](./docs/architecture/BABEL_LOCAL_MODE.md) — what the public runtime does and does not promise
 
 ## Useful Commands
 

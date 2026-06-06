@@ -35,6 +35,12 @@ interface McpToolResult {
   isError?: boolean;
 }
 
+interface ExecutorToolMetadata {
+  name?: string;
+  mutating?: boolean;
+  mcp_exposure?: string;
+}
+
 class McpClient {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly stderrChunks: string[] = [];
@@ -215,11 +221,12 @@ async function main(): Promise<void> {
     assert(
       JSON.stringify(toolNames) === JSON.stringify([
         'babel_catalog_inspect',
+        'babel_executor_tools_list',
         'babel_instruction_stack_preview',
         'babel_manifest_preview',
         'babel_stack_resolve',
       ]),
-      `Expected four read-only Phase 1 tools, got ${JSON.stringify(toolNames)}`,
+      `Expected read-only MCP tools, got ${JSON.stringify(toolNames)}`,
     );
 
     const instructionStack = makeInstructionStack();
@@ -301,13 +308,46 @@ async function main(): Promise<void> {
     const catalogEntries = (catalogResult.structuredContent?.['entries'] as Array<{ id?: string }> | undefined) ?? [];
     assert(catalogEntries.length === 1 && catalogEntries[0]?.id === 'meta_mcp_adapter_v1', 'catalog inspection should find the MCP adapter doc entry');
 
-    const mutatingResponse = await client.request('tools/call', {
-      name: 'file_write',
+    const executorToolsResponse = await client.request('tools/call', {
+      name: 'babel_executor_tools_list',
       arguments: {},
     });
-    assert('result' in mutatingResponse, 'mutating tool calls should fail closed with a result payload');
-    const mutatingResult = mutatingResponse.result as McpToolResult;
-    assert(mutatingResult.isError === true, 'mutating tool calls should be rejected');
+    assert('result' in executorToolsResponse, 'babel_executor_tools_list should succeed');
+    const executorToolsResult = executorToolsResponse.result as McpToolResult;
+    assert(executorToolsResult.isError === false, 'babel_executor_tools_list should not report an error');
+    assert(executorToolsResult.structuredContent?.['mode'] === 'read_only_metadata_default', 'executor tool metadata should default to read-only mode');
+    assert(executorToolsResult.structuredContent?.['mutating_metadata_included'] === false, 'default executor metadata should not include mutating tools');
+    const executorTools = (executorToolsResult.structuredContent?.['tools'] as ExecutorToolMetadata[] | undefined) ?? [];
+    assert(executorTools.some(tool => tool.name === 'file_read'), 'executor tool snapshot should include file_read');
+    assert(executorTools.every(tool => tool.mutating === false), 'default executor metadata should filter mutating executor tools');
+    assert(executorTools.every(tool => tool.mcp_exposure === 'metadata_only_read_only_tool'), 'default executor metadata should label read-only metadata');
+
+    const allExecutorToolsResponse = await client.request('tools/call', {
+      name: 'babel_executor_tools_list',
+      arguments: {
+        include_mutating: true,
+      },
+    });
+    assert('result' in allExecutorToolsResponse, 'babel_executor_tools_list include_mutating should succeed');
+    const allExecutorToolsResult = allExecutorToolsResponse.result as McpToolResult;
+    assert(allExecutorToolsResult.isError === false, 'include_mutating metadata listing should not report an error');
+    assert(allExecutorToolsResult.structuredContent?.['mode'] === 'metadata_with_mutating_tools', 'include_mutating should be explicit in structured output');
+    assert(allExecutorToolsResult.structuredContent?.['mutating_metadata_included'] === true, 'include_mutating=true should be reported');
+    const allExecutorTools = (allExecutorToolsResult.structuredContent?.['tools'] as ExecutorToolMetadata[] | undefined) ?? [];
+    const mutatingTool = allExecutorTools.find(tool => tool.name === 'file_write');
+    assert(mutatingTool?.mutating === true, 'include_mutating=true should include mutating metadata');
+    assert(mutatingTool?.mcp_exposure === 'metadata_only_mutating_tool_not_callable', 'mutating metadata should be labeled non-callable');
+
+    for (const name of ['runBabelPipeline', 'file_write', 'shell_exec', 'test_run', 'memory_store', 'mcp_request']) {
+      const mutatingResponse = await client.request('tools/call', {
+        name,
+        arguments: {},
+      });
+      assert('result' in mutatingResponse, `${name} should fail closed with a result payload`);
+      const mutatingResult = mutatingResponse.result as McpToolResult;
+      assert(mutatingResult.isError === true, `${name} should be rejected`);
+      assert(String(mutatingResult.content?.[0]?.text ?? '').includes('not available in Babel MCP Phase 1'), `${name} rejection should explain MCP Phase 1 boundary`);
+    }
 
     const unknownResponse = await client.request('tools/call', {
       name: 'babel_not_real',

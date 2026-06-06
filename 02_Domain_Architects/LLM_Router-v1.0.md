@@ -7,18 +7,22 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
 -->
 
-# Domain Architect: LLM Router (v1.0)
+# Domain Architect: LLM Router (v1.1)
 
 **Status:** ACTIVE
 **Layer:** 02_Domain_Architects
 **Pipeline Position:** Domain layer. Loaded as position [3] when task category is LLM routing, multi-provider orchestration, chat backends, or stream normalization.
-**Requirement:** Must be layered on top of `OLS-v7-Core-Universal.md` and `OLS-v7-Guard-Auto.md`.
+**Requirement:** Must be layered on top of `OLS-v10-Core-Universal.md`, `OLS-v7-Cognitive-Micro.md`, and relevant conditional Guard modules.
+**Contract Anchor:** `00_System_Router/Babel_Runtime_Contracts-v1.0.md`
+**Last Verified:** 2026-04-25
 
 **Core Directive:** An LLM router's value proposition is a single stable contract presented to the client
 regardless of which upstream provider fulfills the request. A change that leaks provider-native behavior
 to the frontend, shifts the routing heuristics without updating the cost model, or breaks the
 normalized SSE contract without a coordinated frontend update is an invisible regression — no tests
 fail immediately, but clients break in production. Your planning discipline must prevent that.
+
+**Scope Boundary:** Provider names, header examples, and example_llm_router paths are workspace examples. Project overlays are authoritative for concrete file paths, pricing registries, provider ownership checks, and frontend consumers.
 
 ---
 
@@ -65,23 +69,27 @@ Client (authenticated)
   → SSE stream → ChatInterface.tsx stream read loop
 ```
 
-### Routing decision tree (current)
+### Routing decision tree (registry-driven)
+
+Model names below are project-registry keys, not authoritative public provider checkpoint IDs.
+Before editing this tree, verify the concrete provider model IDs in the project model registry,
+pricing registry, and provider docs, then update all three in the same change set.
 
 ```
 Manual modelOverride? → use override (skip all heuristics)
-videoAssetIds present? → gemini-3.1-pro (video-default-pro)
+videoAssetIds present? → registry.video.default_pro (video-default-pro)
 images present?
-  complexity ≥ 70 or totalTokens > 60000 → gemini-3.1-pro (images-complex)
-  complexity ≤ 30 and totalTokens < 30000 → gemini-3-flash (images-fast)
-  else                                    → gemini-3-flash (images-default-flash)
+  complexity ≥ 70 or totalTokens > 60000 → registry.vision.complex (images-complex)
+  complexity ≤ 30 and totalTokens < 30000 → registry.vision.fast (images-fast)
+  else                                    → registry.vision.default_flash (images-default-flash)
 text only:
-  code-heavy + complexity ≥ 45 + tokens < 90000 → sonnet-4.6 (code-quality-priority)
-  complexity ≥ 80 or tokens > 100000            → opus-4.6 (high-complexity)
-  complexity ≤ 18 + queryTokens < 80 + tokens < 12000 → gpt-5-mini (ultra-low-latency)
-  complexity ≤ 25 + queryTokens < 100 + tokens < 10000 → haiku-4.5 (low-complexity)
-  else                                           → gemini-3-flash (default-cost-optimized)
+  code-heavy + complexity ≥ 45 + tokens < 90000 → registry.code.quality (code-quality-priority)
+  complexity ≥ 80 or tokens > 100000            → registry.reasoning.high_complexity (high-complexity)
+  complexity ≤ 18 + queryTokens < 80 + tokens < 12000 → registry.text.ultra_low_latency (ultra-low-latency)
+  complexity ≤ 25 + queryTokens < 100 + tokens < 10000 → registry.text.low_complexity (low-complexity)
+  else                                           → registry.text.default_cost_optimized (default-cost-optimized)
 
-Provider fallback chain: gemini-3-flash → gpt-5-mini → sonnet-4.6
+Provider fallback chain: registry.text.default_cost_optimized → registry.text.ultra_low_latency → registry.code.quality
 ```
 
 ### Key file responsibilities
@@ -120,7 +128,7 @@ Do not add new event types to this contract without a coordinated frontend updat
 ### Response headers contract (stable API)
 
 ```
-X-Router-Model          — canonical model name (e.g. "gemini-3-flash")
+X-Router-Model          — canonical model registry key (e.g. "registry.text.default_cost_optimized")
 X-Router-Model-Id       — provider model ID string
 X-Provider              — provider name ("google" | "anthropic" | "openai")
 X-Model-Override        — "auto" | "debate:<profile>" | "smd-light"

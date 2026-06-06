@@ -11,24 +11,35 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 
 **Category:** Mobile
 **Status:** Active
-**Load order:**
+**Default stack note:** `domain_android_kotlin` auto-loads `skill_android_testing_obligation` only.
+Do **not** load this strategy file on every Android task.
+
+**Load order (explicit test authoring / planning only):**
   1. `domain_android_kotlin`
-  2. **`skill_android_testing_strategy`** ← this file (load always, load first among test skills)
+  2. **`skill_android_testing_strategy`** ← this file (first among test skills when tests are in scope)
   3. One or more of: `skill_android_unit_testing`, `skill_android_instrumented_testing`, `skill_android_screenshot_testing`
-  4. `skill_android_test_enforcement` (load last — enforces the selected test surfaces)
+  4. `skill_android_test_enforcement_deep` (explicit opt-in; load last when full CI/blocker enforcement is needed)
 
 **Takes precedence when:** Two leaf skills appear to conflict on test placement or dispatcher strategy — this file's routing table is the tie-breaker.
 
 **Pairs with:** All four Android testing skills. This file routes to them; it does not replace them.
 
-**Activation:** Load for any task that writes, modifies, or plans tests in a example_mobile_suite app.
+**Activation:** Load when the task writes, modifies, or plans tests in a example_mobile_suite app.
+Do not load for general Android implementation that only needs `skill_android_testing_obligation`.
 Load before any leaf testing skill. If only one leaf skill is needed, still load this file first.
+
+## Package bridge
+
+- **Canonical package:** `skills/android-testing-strategy/` (`SKILL.md`, `skill.yaml`, `contracts/`, `examples/`, `tests/`)
+- **Catalog id:** `skill_android_testing_strategy`
+- **This file:** Babel prompt routing and layer behavior only
+- Do not duplicate schemas or examples here; use the package skill for I/O contracts and fixtures
 
 ---
 
 ## Purpose
 
-The four leaf testing skills (`unit`, `instrumented`, `screenshot`, `enforcement`) are strong at
+The leaf testing skills (`unit`, `instrumented`, `screenshot`, `deep enforcement`) are strong at
 the detail level. This file does the job they cannot do for each other: tell you which file applies,
 in what order, and how to resolve the three most common wrong-path choices before they cost a build
 cycle.
@@ -70,8 +81,9 @@ Does the class under test import anything from android.*?
 A ViewModel that takes `Context` as a constructor parameter is an architecture problem, not a reason
 to move the test to `androidTest/`.
 
-**Rule:** Load `skill_android_test_enforcement` after selecting the correct test surface. Enforcement
-applies to whichever surfaces were selected — it is not surface-specific.
+**Rule:** Load `skill_android_test_enforcement_deep` after selecting the correct test surface when
+the task needs full CI or blocker enforcement. Deep enforcement applies to whichever surfaces were
+selected — it is not surface-specific.
 
 ---
 
@@ -204,7 +216,7 @@ domain_android_kotlin
        ├─ skill_android_unit_testing          ← when pure JVM or ViewModel tests are needed
        ├─ skill_android_instrumented_testing  ← when Android framework APIs are under test
        └─ skill_android_screenshot_testing    ← when UI branch or visual regression is in scope
-  └─ skill_android_test_enforcement          ← always last; enforces across all selected surfaces
+  └─ skill_android_test_enforcement_deep     ← explicit, last; enforces across all selected surfaces
 ```
 
 The strategy file resolves routing decisions. The leaf files provide implementation detail.
@@ -214,8 +226,8 @@ The enforcement file applies after surfaces are selected.
 
 ## Step 6 — VERIFICATION OUTPUT STANDARD
 
-Every Android behavior-changing plan must end with this block (from `skill_android_test_enforcement`
-Step 7, included here for co-location):
+Every Android behavior-changing plan must end with an obligation block. For deep enforcement work,
+use this block from `skill_android_test_enforcement_deep` Step 7:
 
 ```text
 TEST ENFORCEMENT
@@ -256,7 +268,7 @@ This block is mandatory. If a verification step is skipped, the reason must be s
    block. Without it, the property is silently ignored.
 5. Never block a plan on instrumented test execution when no device is available. Use the compile
    gate (Step 4) and record the run command explicitly.
-6. Always load `skill_android_test_enforcement` after selecting test surfaces — never before.
-   Enforcement must know which surfaces were selected before it can enforce them.
+6. Load `skill_android_test_enforcement_deep` after selecting test surfaces when full enforcement is
+   needed — never before. Enforcement must know which surfaces were selected before it can enforce them.
 7. Always load this file before any leaf testing skill. Routing decisions made before this file
    is loaded may select the wrong skill.

@@ -1,35 +1,27 @@
 ---
 name: Bug report
-about: Something is broken in the resolver, CLI, or catalog
+about: Report a reproducible problem with Babel
+title: "[Bug]: "
 labels: bug
+assignees: ""
 ---
 
-## Description
+## What happened?
 
-What is broken and where (resolver, CLI command, catalog validation, MCP surface)?
+Describe the problem and what you expected to happen.
+
+## Reproduction
+
+```powershell
+# Commands you ran
+```
 
 ## Environment
 
-- Node.js version: <!-- node --version -->
-- PowerShell version: <!-- $PSVersionTable.PSVersion -->
 - OS:
+- Node version:
+- Babel command:
 
-## Command run
+## Notes
 
-```
-# paste the exact command
-```
-
-## Expected output
-
-What you expected to happen.
-
-## Actual output
-
-```
-# paste the terminal output
-```
-
-## Catalog / prompt file involved (if known)
-
-Which skill, domain, or overlay is affected?
+Add logs, screenshots, or links if they help explain the issue.

@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "policy_name": "Example team enterprise policy",
+  "allowed_tools": [
+    "directory_list",
+    "file_read",
+    "mcp_resource_list",
+    "mcp_resource_read",
+    "web_fetch",
+    "web_search"
+  ],
+  "disallowed_tools": [
+    "shell_exec",
+    "test_run",
+    "file_write"
+  ],
+  "allowed_mcp_servers": [
+    "github"
+  ],
+  "network_allowlist": [
+    "example.com",
+    "*.example.org"
+  ],
+  "model_policy": {
+    "allowed_backends": [
+      "deepinfra"
+    ],
+    "require_explicit_opt_in": [
+      "external_network"
+    ]
+  },
+  "plugin_policy": {
+    "allowed_plugins": [],
+    "disallowed_plugins": [],
+    "max_trust_level": "read_only"
+  },
+  "redaction": {
+    "enabled": true,
+    "extra_patterns": []
+  },
+  "telemetry": {
+    "opt_in": false
+  }
+}

@@ -26,6 +26,8 @@ import { DatabaseSync } from 'node:sqlite';
 import path              from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { BABEL_FACTS_SCHEMA_SQL } from '../src/tools/chronicleStore.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Absolute path to the Chronicle SQLite database file. */
@@ -37,16 +39,7 @@ const db = new DatabaseSync(CHRONICLE_DB_PATH);
 
 // ─── Create table ─────────────────────────────────────────────────────────────
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS babel_facts (
-    id            INTEGER  PRIMARY KEY,
-    project_root  TEXT     NOT NULL,
-    fact_key      TEXT     NOT NULL,
-    fact_value    TEXT,
-    last_verified DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(project_root, fact_key)
-  )
-`);
+db.exec(BABEL_FACTS_SCHEMA_SQL);
 
 db.close();
 

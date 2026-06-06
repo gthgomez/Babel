@@ -1,9 +1,11 @@
 import { Buffer } from 'node:buffer';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 
 import { inspectCatalog } from '../control-plane/stackResolver.js';
 import { previewInstructionStackResolution } from '../control-plane/stackResolver.js';
+import { getExecutorToolRegistrySnapshot } from '../localTools.js';
 import type { CatalogEntry } from '../control-plane/catalog.js';
 import type {
   InstructionStack,
@@ -31,6 +33,10 @@ const CatalogInspectArgsSchema = z.object({
 const StackArgsSchema = z.object({
   instruction_stack: InstructionStackSchema,
   resolution_policy: ResolutionPolicySchema,
+});
+
+const ExecutorToolsListArgsSchema = z.object({
+  include_mutating: z.boolean().optional(),
 });
 
 type ToolHandler = (args: unknown) => Promise<unknown>;
@@ -139,6 +145,29 @@ async function handleManifestPreview(args: unknown): Promise<unknown> {
   };
 }
 
+async function handleExecutorToolsList(args: unknown): Promise<unknown> {
+  const parsed = ExecutorToolsListArgsSchema.parse(args ?? {});
+  const includeMutating = parsed.include_mutating === true;
+  const tools = getExecutorToolRegistrySnapshot()
+    .filter((tool) => includeMutating || !tool.mutating)
+    .map((tool) => ({
+      ...tool,
+      mcp_exposure: tool.mutating
+        ? 'metadata_only_mutating_tool_not_callable'
+        : 'metadata_only_read_only_tool',
+    }));
+
+  return {
+    mode: includeMutating ? 'metadata_with_mutating_tools' : 'read_only_metadata_default',
+    count: tools.length,
+    mutating_metadata_included: includeMutating,
+    note: includeMutating
+      ? 'Mutating executor tools are listed as metadata only. Babel MCP cannot execute them.'
+      : 'Default MCP executor metadata excludes mutating tools.',
+    tools,
+  };
+}
+
 const TOOLS: ToolDefinition[] = [
   {
     name: 'babel_catalog_inspect',
@@ -198,6 +227,36 @@ const TOOLS: ToolDefinition[] = [
     },
     handler: handleManifestPreview,
   },
+  {
+    name: 'babel_executor_tools_list',
+    description: 'List Babel executor tool registry metadata. Read-only and metadata-only; does not execute tools. Mutating metadata is hidden unless include_mutating is true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        include_mutating: { type: 'boolean' },
+      },
+      additionalProperties: false,
+    },
+    handler: handleExecutorToolsList,
+  },
+];
+
+const PROMPTS = [
+  {
+    name: 'babel_catalog_inspection',
+    description: 'Guide a client to inspect Babel catalog entries using bounded filters.',
+    arguments: [
+      { name: 'project', description: 'Optional project filter.', required: false },
+      { name: 'tags', description: 'Optional comma-delimited tags.', required: false },
+    ],
+  },
+  {
+    name: 'babel_stack_resolution',
+    description: 'Guide a client to resolve an instruction stack before running a task.',
+    arguments: [
+      { name: 'domain', description: 'Target domain or project context.', required: false },
+    ],
+  },
 ];
 
 const TOOL_NAMES = new Set(TOOLS.map(tool => tool.name));
@@ -256,11 +315,106 @@ async function handleRequest(request: Record<string, unknown>): Promise<void> {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: {
         tools: {},
+        resources: {},
+        prompts: {},
       },
       serverInfo: {
         name: SERVER_NAME,
         version: SERVER_VERSION,
       },
+    });
+    return;
+  }
+
+  if (method === 'resources/list') {
+    const entries = inspectCatalog(CATALOG_PATH, {});
+    writeResult(id ?? 0, {
+      resources: [
+        {
+          uri: 'babel://catalog/prompt_catalog',
+          name: 'prompt_catalog.yaml',
+          description: 'The Babel prompt catalog source file.',
+          mimeType: 'text/yaml',
+        },
+        ...entries.slice(0, 50).map((entry) => ({
+          uri: `babel://catalog/entry/${encodeURIComponent(entry.id)}`,
+          name: entry.id,
+          description: `${entry.layer} · ${entry.path}`,
+          mimeType: 'application/json',
+        })),
+      ],
+    });
+    return;
+  }
+
+  if (method === 'resources/read') {
+    const params = (request['params'] as Record<string, unknown> | undefined) ?? {};
+    const uri = typeof params['uri'] === 'string' ? params['uri'] : '';
+    if (uri === 'babel://catalog/prompt_catalog') {
+      writeResult(id ?? 0, {
+        contents: [{
+          uri,
+          mimeType: 'text/yaml',
+          text: readFileSync(CATALOG_PATH, 'utf-8'),
+        }],
+      });
+      return;
+    }
+    const entryPrefix = 'babel://catalog/entry/';
+    if (uri.startsWith(entryPrefix)) {
+      const entryId = decodeURIComponent(uri.slice(entryPrefix.length));
+      const entry = inspectCatalog(CATALOG_PATH, { ids: [entryId] })[0];
+      if (!entry) {
+        writeError(id, -32602, `Unknown catalog entry resource '${entryId}'.`);
+        return;
+      }
+      writeResult(id ?? 0, {
+        contents: [{
+          uri,
+          mimeType: 'application/json',
+          text: JSON.stringify(asCatalogOutput(entry), null, 2),
+        }],
+      });
+      return;
+    }
+    writeError(id, -32602, `Unknown resource URI '${uri}'.`);
+    return;
+  }
+
+  if (method === 'prompts/list') {
+    writeResult(id ?? 0, { prompts: PROMPTS });
+    return;
+  }
+
+  if (method === 'prompts/get') {
+    const params = (request['params'] as Record<string, unknown> | undefined) ?? {};
+    const name = typeof params['name'] === 'string' ? params['name'] : '';
+    const args = (params['arguments'] as Record<string, unknown> | undefined) ?? {};
+    if (!PROMPTS.some((prompt) => prompt.name === name)) {
+      writeError(id, -32602, `Unknown prompt '${name}'.`);
+      return;
+    }
+    const text = name === 'babel_catalog_inspection'
+      ? [
+          'Inspect the Babel prompt catalog using bounded filters.',
+          `Project: ${String(args['project'] ?? 'any')}`,
+          `Tags: ${String(args['tags'] ?? 'any')}`,
+          'Use babel_catalog_inspect first; do not load unrelated catalog entries.',
+        ].join('\n')
+      : [
+          'Resolve a Babel instruction stack before execution.',
+          `Domain: ${String(args['domain'] ?? 'unspecified')}`,
+          'Use babel_instruction_stack_preview before babel_stack_resolve when exploring.',
+        ].join('\n');
+    writeResult(id ?? 0, {
+      description: PROMPTS.find((prompt) => prompt.name === name)?.description,
+      messages: [{
+        role: 'user',
+        content: {
+          type: 'text',
+          text,
+        },
+      }],
     });
     return;
   }
@@ -329,7 +483,8 @@ export async function runBabelMcpServer(): Promise<void> {
   let buffer = Buffer.alloc(0);
 
   process.stdin.on('data', async chunk => {
-    buffer = Buffer.concat([buffer, chunk]);
+    const chunkBuffer = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
+    buffer = Buffer.concat([buffer, chunkBuffer]);
 
     while (true) {
       const headerEnd = buffer.indexOf('\r\n\r\n');

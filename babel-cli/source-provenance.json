@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "purpose": "Track source files that remain JavaScript because no TypeScript source existed in the repo snapshot during package normalization.",
+  "allowed_js_source_files": [
+    "src/taskCompletion.js",
+    "src/inspect/loaders.js",
+    "src/runners/groqApi.js",
+    "src/ui/badges.js",
+    "src/ui/inspection.js",
+    "src/ui/progress.js",
+    "src/ui/renderers.js",
+    "src/ui/sections.js",
+    "src/ui/statusLine.js",
+    "src/ui/tables.js",
+    "src/ui/theme.js",
+    "src/ui/timeline.js",
+    "src/ui/tokens.js",
+    "src/ui/waterfall.js"
+  ]
+}

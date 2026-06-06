@@ -20,6 +20,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join }                      from 'node:path';
 
+import { redactEvidenceValue } from './utils/redaction.js';
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function pad(n: number): string {
@@ -55,6 +57,8 @@ function taskToSlug(task: string): string {
 export class EvidenceBundle {
   /** Absolute path to this run's artifact directory. */
   readonly runDir: string;
+  /** Unique identifier for this run. */
+  readonly runId: string;
 
   /** Accumulated waterfall outcomes — flushed to disk by `writeWaterfallTelemetry()`. */
   private readonly _waterfallLog: object[] = [];
@@ -68,6 +72,7 @@ export class EvidenceBundle {
    */
   constructor(task: string, baseDir: string) {
     const dirName  = `${formatTimestamp(new Date())}_${taskToSlug(task)}`;
+    this.runId     = dirName;
     this.runDir    = join(baseDir, dirName);
     mkdirSync(this.runDir, { recursive: true });
   }
@@ -79,6 +84,7 @@ export class EvidenceBundle {
   static fromExistingRun(runDir: string): EvidenceBundle {
     const bundle = Object.create(EvidenceBundle.prototype) as EvidenceBundle;
     (bundle as unknown as { runDir: string }).runDir = runDir;
+    (bundle as unknown as { runId: string }).runId = join(runDir, '..') === '.' ? runDir : runDir.split(/[\\/]/).pop() || runDir;
     (bundle as unknown as { _waterfallLog: object[] })._waterfallLog = [];
     return bundle;
   }
@@ -86,10 +92,11 @@ export class EvidenceBundle {
   // ── Private write helper ──────────────────────────────────────────────────
 
   private write(filename: string, data: unknown): void {
+    const redacted = redactEvidenceValue(data);
     const content =
-      typeof data === 'string'
-        ? data
-        : JSON.stringify(data, null, 2);
+      typeof redacted === 'string'
+        ? redacted
+        : JSON.stringify(redacted, null, 2);
     writeFileSync(join(this.runDir, filename), content, 'utf-8');
   }
 
@@ -168,6 +175,11 @@ export class EvidenceBundle {
     this.write(filename, content);
   }
 
+  /** Canonical per-task cost ledger (`cost_ledger.json`). */
+  writeCostLedger(data: unknown): void {
+    this.write('cost_ledger.json', data);
+  }
+
   /**
    * Appends one `WaterfallOutcome` record to the in-memory log.
    * Called by `execute.ts` after every successful `runWithFallback` call.
@@ -175,6 +187,10 @@ export class EvidenceBundle {
    */
   appendWaterfallLog(entry: object): void {
     this._waterfallLog.push(entry);
+  }
+
+  getWaterfallLogSnapshot(): object[] {
+    return [...this._waterfallLog];
   }
 
   /**

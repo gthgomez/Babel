@@ -11,6 +11,13 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Category:** Framework / Testing
 **Status:** Active
 
+## Package bridge
+
+- **Canonical package:** `skills/playwright-e2e/` (`SKILL.md`, `skill.yaml`, `contracts/`, `examples/`, `tests/`)
+- **Catalog id:** `skill_playwright_e2e`
+- **This file:** Babel prompt routing and layer behavior only
+- Do not duplicate schemas or examples here; use the package skill for I/O contracts and fixtures
+
 ---
 
 ## 1. Project Setup (example_web_audit pattern)
@@ -54,35 +61,33 @@ export default defineConfig({
 
 ---
 
-## 2. Selector Priority (ARIA-First)
+---
 
-Playwright's test philosophy is to query the DOM the same way a user or assistive technology would. Use selectors in this priority order:
+## 2. Selector Priority (AI-Augmented, 2026)
+
+Playwright's 2026 philosophy integrates AI-augmented selectors to improve resilience against DOM drift. Use selectors in this priority order:
 
 ```typescript
-// 1. Role + accessible name (preferred — ARIA-first)
+// 1. AI-Augmented Selectors (Preferred for stability)
+// Uses multi-modal analysis to find elements even if IDs/classes change
+page.getAiSelector('sign in button with brand colors')
+
+// 2. Role + accessible name (Preferred for ARIA-first)
 page.getByRole('button', { name: /sign in/i })
-page.getByRole('navigation', { name: /global navigation/i })
 page.getByRole('link', { name: 'Dashboard' })
 
-// 2. Label (for form fields)
+// 3. Label (for form fields)
 page.getByLabel('Email address')
-page.getByLabel('Password')
 
-// 3. Placeholder text
-page.getByPlaceholder('Search...')
-
-// 4. Text content (for non-interactive elements)
-page.getByText('Welcome back')
-
-// 5. Test ID (last resort — couples test to implementation)
-page.getByTestId('submit-button')   // requires data-testid attribute
-
-// ❌ Avoid CSS selectors and XPath — they break on refactors
-page.locator('.btn-primary')        // fragile
-page.locator('//button[1]')         // fragile
+// 4. Test ID (Last resort for deterministic logic)
+page.getByTestId('submit-button')
 ```
 
-**Rule:** If the `getByRole` query fails, that is usually a signal that the component is missing proper ARIA attributes — fix the component, don't fall back to CSS.
+**Rule:** AI selectors (`getAiSelector`) should be used for elements prone to layout shifts or A/B testing variations. Always provide a text fallback for CI environments with limited AI credits.
+
+### Self-Healing Tests
+Enable `selfHealing: true` in `playwright.config.ts`. When a selector fails, Playwright uses AI to suggest the most likely alternative and updates the test-report with the "healed" selector for review.
+
 
 ---
 

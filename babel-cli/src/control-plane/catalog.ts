@@ -24,6 +24,7 @@ export interface CatalogEntry {
   dependencies: string[];
   conflicts: string[];
   defaultSkillIds: string[];
+  defaultForDomains: string[];
   tags: string[];
   project: string | null;
 }
@@ -53,7 +54,12 @@ export function parseInlineArray(value: string): string[] | null {
     .filter(Boolean);
 }
 
+let catalogCache: { path: string; entries: CatalogEntry[] } | null = null;
+
 export function parseCatalog(catalogPath: string): CatalogEntry[] {
+  if (catalogCache && catalogCache.path === catalogPath) {
+    return catalogCache.entries;
+  }
   const lines = readFileSync(catalogPath, 'utf-8').split(/\r?\n/);
   const entries: CatalogEntry[] = [];
   let current: CatalogEntry | null = null;
@@ -78,6 +84,7 @@ export function parseCatalog(catalogPath: string): CatalogEntry[] {
         dependencies: [],
         conflicts: [],
         defaultSkillIds: [],
+        defaultForDomains: [],
         tags: [],
         project: null,
       };
@@ -119,7 +126,7 @@ export function parseCatalog(catalogPath: string): CatalogEntry[] {
       continue;
     }
 
-    const listMatch = /^\s+(dependencies|conflicts|default_skill_ids|tags):\s*(.*)$/.exec(line);
+    const listMatch = /^\s+(dependencies|conflicts|default_skill_ids|default_for_domains|tags):\s*(.*)$/.exec(line);
     if (!listMatch) {
       continue;
     }
@@ -147,6 +154,8 @@ export function parseCatalog(catalogPath: string): CatalogEntry[] {
       current.conflicts = values;
     } else if (key === 'default_skill_ids') {
       current.defaultSkillIds = values;
+    } else if (key === 'default_for_domains') {
+      current.defaultForDomains = values;
     } else if (key === 'tags') {
       current.tags = values;
     }
@@ -156,6 +165,7 @@ export function parseCatalog(catalogPath: string): CatalogEntry[] {
     entries.push(current);
   }
 
+  catalogCache = { path: catalogPath, entries };
   return entries;
 }
 

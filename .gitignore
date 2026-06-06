@@ -7,18 +7,28 @@
 
 # ─── Evidence bundles (generated at runtime) ──────────────────────────────────
 runs/
+!tests/fixtures/normalize-local-evidence/runs/
+!tests/fixtures/normalize-local-evidence/runs/**
 _patch_backups/
+-DestinationRoot/
+runtime/patch-backups/
+runtime/snapshots/destination-root/
+runtime/cache/
 tools/reports/
+.babel/
+learning/
+
+# ─── Local runtime preferences / generated state ──────────────────────────────
+config/approval-profile.json
+docs/vars.json
 
 # ─── Artifacts with local absolute paths (machine-specific, not portable) ─────
 artifacts/bundle-comparisons/*.json
+artifacts/token-audit/20*/
 04_Meta_Tools/archive/
 
 # ─── Project-specific working guides (internal only, not for public release) ───
-06_Task_Overlays/GPCGuard-Frontend-Professionalism-v1.0.md
-
-# ─── CLI source (pending security audit before public release) ────────────────
-babel-cli/
+06_Task_Overlays/*-Frontend-Professionalism-v1.0.md
 
 # ─── Internal task prompts and planning docs (not for public release) ─────────
 BABEL_PHASE_1_5_TELEMETRY_ACTIVATION.md
@@ -28,6 +38,15 @@ BABEL_PHASE_1_5_TELEMETRY_ACTIVATION.md
 
 # ─── Development test artifacts ───────────────────────────────────────────────
 babel-cli/babel_live_test.js
+babel-cli/babel-benchmark-artifacts/
+babel-cli/--lock
+babel-cli/custom-babel.log
+babel-cli/custom_test.log
+babel-cli/hardening.log
+babel-cli/invalid.log
+babel-cli/debug_out.txt
+babel-cli/scratch/
+scratch/
 
 # ─── Node ─────────────────────────────────────────────────────────────────────
 node_modules/
@@ -35,6 +54,9 @@ npm-debug.log*
 
 # ─── TypeScript build output ───────────────────────────────────────────────────
 babel-cli/dist/
+
+# ─── Local runtime cache (e.g. Gradle distributions — large, machine-specific) ─
+cache/
 
 # ─── OS / editor noise ────────────────────────────────────────────────────────
 .DS_Store

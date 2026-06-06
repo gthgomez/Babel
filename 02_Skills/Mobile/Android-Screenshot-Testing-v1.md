@@ -12,7 +12,7 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Category:** Mobile
 **Status:** Active
 **Load order:** Load after `skill_android_testing_strategy` and after `skill_android_unit_testing` if ViewModel tests are also in scope. Screenshot tests have the highest setup cost and lowest diagnostic value when basic unit and ViewModel tests do not exist yet.
-**Load before:** `skill_android_test_enforcement` — enforcement loads last.
+**Load before:** `skill_android_test_enforcement_deep` when full enforcement is explicitly selected.
 **Takes precedence when:** A UI branch change, paywall state, or visual regression is in scope and the screenshot surface is confirmed.
 
 **Pairs with:** `domain_android_kotlin`, `skill_android_testing_strategy`

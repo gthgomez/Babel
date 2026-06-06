@@ -5,10 +5,22 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "babel": "bin/babel.js"
+    "babel": "bin/babel.js",
+    "babel-lite": "bin/babel-lite.js",
+    "bl": "bin/babel-lite.js"
   },
   "scripts": {
+    "audit:pricing": "tsx --no-warnings=ExperimentalWarning scripts/audit_provider_pricing.ts",
     "audit:token-usage": "tsx --no-warnings=ExperimentalWarning scripts/audit_token_usage.ts",
+    "audit:performance": "tsx --no-warnings=ExperimentalWarning scripts/audit_cli_performance.ts",
+    "benchmark": "tsx --no-warnings=ExperimentalWarning scripts/governance_benchmark.ts",
+    "benchmark:parity": "node dist/index.js benchmark parity --json",
+    "benchmark:production": "node dist/index.js benchmark production --json",
+    "benchmark:product": "node dist/index.js benchmark product --json",
+    "parity:run-babel": "tsx --no-warnings=ExperimentalWarning scripts/parity_run_babel.ts",
+    "benchmark:report": "tsx --no-warnings=ExperimentalWarning scripts/governance_benchmark_report.ts",
+    "test:schema-failures": "npm run test:schema-failures:unit && npm run test:schema-failures:replay",
+    "test:schema-failures:replay": "node --import tsx --no-warnings=ExperimentalWarning scripts/test_schema_failures_replay.ts",
     "build": "npm run clean:dist && tsc",
     "clean:dist": "node scripts/clean_dist.mjs",
     "check:dist": "node scripts/check_dist_clean.mjs",
@@ -19,34 +31,65 @@
     "start": "node dist/index.js",
     "init-chronicle": "tsx --no-warnings=ExperimentalWarning scripts/init_chronicle.ts",
     "report:v9": "tsx --no-warnings=ExperimentalWarning scripts/report_v9_runs.ts",
+    "test:governance-replay": "node --import tsx --no-warnings=ExperimentalWarning scripts/test_governance_proof_replay.ts",
+    "test:live-governance": "node scripts/run_live_governance_tests.mjs",
+    "test:live-governance:required": "node scripts/run_live_governance_tests.mjs --required-deepseek",
+    "test:live-governance:breadth": "tsx --no-warnings=ExperimentalWarning scripts/live_governance_breadth.ts",
+    "test:live-subagents:readonly:required": "tsx --no-warnings=ExperimentalWarning scripts/live_subagents_readonly_required.ts",
+    "test:local-stack-parity": "tsx --no-warnings=ExperimentalWarning scripts/test_local_stack_parity.ts",
+    "reliability:matrix": "tsx --no-warnings=ExperimentalWarning scripts/live_cli_reliability_matrix.ts",
+    "test": "npm run test:unit && npm run test:resolver && npm run test:pipeline-v9 && npm run test:mcp-adapter && npm run test:smoke-fixtures && npm run test:parity-audit && npm run test:otel-tracing && npm run test:android-warning-cleanup && npm run test:bounded-contract && npm run test:orchestrator-routing",
     "test:mcp-adapter": "tsx --no-warnings=ExperimentalWarning scripts/test_mcp_adapter.ts",
     "test:otel-tracing": "tsx --no-warnings=ExperimentalWarning scripts/test_otel_tracing.ts",
+    "test:otel-tracing:live": "tsx --no-warnings=ExperimentalWarning scripts/test_otel_tracing.ts --live",
     "test:orchestrator-routing": "tsx --no-warnings=ExperimentalWarning scripts/test_orchestrator_routing.ts",
-    "test:pipeline-v8": "tsx --no-warnings=ExperimentalWarning scripts/test_pipeline_v8.ts",
+    "test:manifest-preview": "tsx --no-warnings=ExperimentalWarning scripts/test_manifest_preview.ts",
+    "test:android-warning-cleanup": "tsx --no-warnings=ExperimentalWarning scripts/test_android_warning_cleanup.ts",
+    "test:bounded-contract": "tsx --no-warnings=ExperimentalWarning scripts/test_bounded_contract_normalization.ts",
     "test:pipeline-v9": "tsx --no-warnings=ExperimentalWarning scripts/test_pipeline_v9.ts",
+    "test:pipeline-v9:live": "tsx --no-warnings=ExperimentalWarning scripts/test_pipeline_v9.ts --live",
+    "test:lite-gate": "tsx --no-warnings=ExperimentalWarning --test src/agent/**/*.test.ts src/cli/argv.test.ts src/cli/structuredOutput.test.ts src/commands/liteCommands.test.ts src/commands/userCommandSmoke.test.ts src/commands/workflowCommands.test.ts src/services/askAnswer.test.ts src/services/targetResolver.test.ts src/services/liteUsability.test.ts src/services/liteTrustDemo.test.ts src/services/liteRecovery.test.ts src/services/liteWorkerLoop.test.ts src/services/liteParallelReview.test.ts src/services/parityCorpus.test.ts src/services/liteFeatureScorecard.test.ts src/services/smallFix.test.ts src/services/checkpoints.test.ts src/services/ciReview.test.ts",
+    "test:lite-parallel-review": "tsx --no-warnings=ExperimentalWarning scripts/run_lite_parallel_review.ts",
+    "test:lite-worker-loop": "tsx --no-warnings=ExperimentalWarning scripts/run_lite_worker_loop.ts",
     "test:resolver": "tsx --no-warnings=ExperimentalWarning scripts/test_resolver.ts",
+    "test:smoke-fixtures": "tsx --no-warnings=ExperimentalWarning scripts/test_smoke_fixtures.ts",
+    "test:parity-audit": "tsx --no-warnings=ExperimentalWarning scripts/parity_audit_montecarlo.ts",
+    "test:lite-trust-demo": "tsx --no-warnings=ExperimentalWarning scripts/run_lite_trust_demo.ts",
+    "test:live-small-fix:optional": "tsx --no-warnings=ExperimentalWarning scripts/run_live_small_fix_optional.ts",
+    "test:unit": "tsx --no-warnings=ExperimentalWarning --test src/compiler.test.ts src/doctor.test.ts src/execute.reliabilityRepairProof.test.ts src/config/runtimeEnv.test.ts src/config/executionProfiles.test.ts src/config/benchmarkContainer.test.ts src/config/toolCapabilities.test.ts src/runtime/protocol.test.ts src/runtime/hooks.test.ts src/pipeline.autonomousGuards.test.ts src/pipeline/finalization.test.ts src/utils/extractJson.test.ts src/routingEngine.test.ts src/modelPolicy.test.ts src/runners/deepInfraApi.test.ts src/runners/deepSeekApi.test.ts src/services/agentJobs.test.ts src/services/approvalQueue.test.ts src/services/askAnswer.test.ts src/services/targetResolver.test.ts src/services/autonomousRepairProofEvidence.test.ts src/services/babelFull.test.ts src/services/benchmarkAnalysis.test.ts src/services/benchmarkImprovementLoop.test.ts src/services/benchmarkRepair.test.ts src/services/benchmarkRepairLoop.test.ts src/services/costLedger.test.ts src/services/costTracker.test.ts src/services/modelPricingRegistry.test.ts src/services/governanceBenchmark.test.ts src/services/repairGovernance.test.ts src/services/pipelineFailureArtifacts.test.ts src/services/proof.test.ts src/services/learning.test.ts src/services/terminalStatus.test.ts src/services/requiredVerifierContract.test.ts src/services/liveCliReliabilityMatrix.test.ts src/services/liveGovernanceProof.test.ts src/services/worktreeSafety.test.ts src/services/completionVerification.test.ts src/services/eventStream.test.ts src/services/haltDiagnosis.test.ts src/services/ideBridge.test.ts src/services/indexer.test.ts src/services/liteFullRouter.test.ts src/services/modelEscalationRules.test.ts src/services/productBenchmark.test.ts src/services/parityBenchmark.test.ts src/services/productionBenchmark.test.ts src/services/liteUsability.test.ts src/services/liteTrustDemo.test.ts src/services/cliSmokeBenchmark.test.ts src/services/docsFitness.test.ts src/services/maintenanceAudit.test.ts src/agent/lanes/planLane.test.ts src/agent/lanes/proposalLane.test.ts src/agent/session.test.ts src/services/realTaskPilot.test.ts src/services/recovery.test.ts src/services/smallFix.test.ts src/services/pruning.test.ts src/services/projectOnboarding.test.ts src/services/projectScaffold.test.ts src/services/shipWorkflow.test.ts src/services/skillForge.test.ts src/services/workspaceManager.test.ts src/schemas/agentContracts.test.ts src/stages/benchmarkTaskRisk.test.ts src/stages/benchmarkVerification.test.ts src/stages/exactInvariants.test.ts src/stages/executorHelpers.test.ts src/stages/executorRepairState.test.ts src/stages/godotArtifactRepair.test.ts src/stages/godotScaffoldSeeder.test.ts src/stages/preCompleteGuards.test.ts src/stages/runnableArtifactGate.test.ts src/stages/runtimeVerificationRunner.test.ts src/stages/simpleArtifactFallback.test.ts src/stages/taskShape.test.ts src/stages/verification.test.ts src/sandbox.test.ts src/localTools.test.ts src/tools/chronicleMemory.test.ts src/tools/executorRegistry.test.ts src/tools/toolCatalog.test.ts src/tools/mcpTransport.test.ts src/commands/liteCommands.test.ts src/commands/userCommandSmoke.test.ts src/interactive.test.ts src/cli/argv.test.ts src/cli/structuredOutput.test.ts src/ui/waterfall.test.ts",
+    "test:proof-learning": "tsx --no-warnings=ExperimentalWarning --test src/services/proof.test.ts src/services/learning.test.ts src/commands/userCommandSmoke.test.ts",
+    "test:schema-failures:unit": "tsx --no-warnings=ExperimentalWarning --test src/schemas/agentContracts.test.ts src/services/schemaFailureLedger.test.ts src/execute.reliabilityRepairProof.test.ts src/execute.schemaFailureLedger.test.ts src/runners/deepSeekApi.test.ts src/runners/deepInfraApi.test.ts",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run check:source-provenance && npm run check:dist"
+    "prepublishOnly": "npm run check:source-provenance && npm run check:dist",
+    "test:public-release": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../tools/validate-public-release.ps1",
+    "test:public-release:strict": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../tools/validate-public-release.ps1 -Strict",
+    "test:public-release:security": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../tools/run-public-secret-scan.ps1 -RepoRoot .. -Strict -RequireExternalScanner",
+    "test:public-release:security:local": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../tools/run-public-secret-scan.ps1 -RepoRoot .. -Strict"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.37.0",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.213.0",
     "@opentelemetry/resources": "^2.6.0",
     "@opentelemetry/sdk-trace-base": "^2.6.0",
     "@opentelemetry/sdk-trace-node": "^2.6.0",
     "@opentelemetry/semantic-conventions": "^1.40.0",
-    "commander": "^12.1.0",
-    "groq-sdk": "^0.37.0",
-    "zod": "^3.23.8"
+    "commander": "^14.0.3",
+    "dotenv": "^17.4.2",
+    "log-update": "^8.0.0",
+    "minisearch": "^7.2.0",
+    "string-width": "^8.2.0",
+    "wrap-ansi": "^10.0.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@anthropic-ai/sdk": "^0.91.1",
+    "@types/node": "^25.6.0",
+    "groq-sdk": "^0.37.0",
     "js-tiktoken": "^1.0.21",
     "tsx": "^4.19.0",
-    "typescript": "^5.5.4"
+    "typescript": "^6.0.3"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.5.0"
   }
 }
