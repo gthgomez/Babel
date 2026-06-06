@@ -101,8 +101,7 @@ Use these files in this order:
 1. `PROJECT_CONTEXT.md`
 2. `prompt_catalog.yaml`
 3. `00_System_Router/OLS-v9-Orchestrator.md`
-4. `00_System_Router/OLS-v8-Orchestrator.md`
-5. the resolved prompt files selected from the catalog
+4. the resolved prompt files selected from the catalog
 
 In `Babel-public`, manifest selection is governed by the catalog plus the resolver/compiler surfaces included in this repo. If a cataloged file is missing on disk, treat that as a system integrity problem.
 

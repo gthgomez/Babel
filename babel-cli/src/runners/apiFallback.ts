@@ -23,8 +23,8 @@
  */
 
 import Anthropic       from '@anthropic-ai/sdk';
-import type { ZodType, ZodTypeDef } from 'zod';
-import type { LlmRunner } from './base.js';
+import type { ZodType } from 'zod';
+import { type LlmRunner, type RunnerCallbacks, buildStructuredOutputError } from './base.js';
 import { extractJson }    from '../utils/extractJson.js';
 
 // ─── Configuration ────────────────────────────────────────────────────────────
@@ -68,7 +68,11 @@ export class ApiFallbackRunner implements LlmRunner {
    * @throws {Error} On API errors, JSON extraction failure, or Zod validation
    *                 failure — all prefixed with "[apiFallback]".
    */
-  async execute<T>(prompt: string, schema: ZodType<T, ZodTypeDef, unknown>): Promise<T> {
+  async execute<T>(
+    prompt: string,
+    schema: ZodType<T, unknown>,
+    callbacks?: RunnerCallbacks,
+  ): Promise<T> {
     let response: Anthropic.Message;
 
     try {
@@ -92,23 +96,40 @@ export class ApiFallbackRunner implements LlmRunner {
       .join('');
 
     if (!text.trim()) {
-      throw new Error('[apiFallback] API returned an empty response.');
+      throw buildStructuredOutputError({
+        failure_kind: 'empty_response',
+        provider: 'anthropic',
+        model: API_MODEL,
+        message: '[apiFallback] API returned an empty response.',
+        raw_output: text,
+      });
     }
 
     let parsed: unknown;
     try {
       parsed = extractJson(text);
     } catch (err) {
-      throw new Error(
-        `[apiFallback] invalid json: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      throw buildStructuredOutputError({
+        failure_kind: 'invalid_json',
+        provider: 'anthropic',
+        model: API_MODEL,
+        message: `[apiFallback] invalid json: ${err instanceof Error ? err.message : String(err)}`,
+        raw_output: text,
+        cause: err instanceof Error ? err : undefined,
+      });
     }
 
     const result = schema.safeParse(parsed);
     if (!result.success) {
-      throw new Error(
-        `[apiFallback] Zod validation failed:\n${result.error.toString()}`,
-      );
+      throw buildStructuredOutputError({
+        failure_kind: 'zod_validation_failed',
+        provider: 'anthropic',
+        model: API_MODEL,
+        message: `[apiFallback] Zod validation failed:\n${result.error.toString()}`,
+        raw_output: text,
+        parsed_json: parsed,
+        zod_issues: result.error,
+      });
     }
 
     return result.data;

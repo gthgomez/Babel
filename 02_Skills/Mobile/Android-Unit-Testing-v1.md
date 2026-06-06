@@ -12,7 +12,7 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Category:** Mobile
 **Status:** Active
 **Load order:** Load after `skill_android_testing_strategy`. That file routes to this one — do not load this file without the strategy file unless the routing decision is already resolved.
-**Load before:** `skill_android_test_enforcement` — enforcement loads last.
+**Load before:** `skill_android_test_enforcement_deep` when full enforcement is explicitly selected.
 **Takes precedence when:** Pure JVM tests are confirmed as the correct surface (routing already done).
 
 **Pairs with:** `domain_android_kotlin`, `skill_android_testing_strategy`

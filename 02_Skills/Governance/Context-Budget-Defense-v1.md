@@ -12,6 +12,7 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Category:** Governance
 **Status:** Active
 **Pairs with:** `adapter_gemini` (primary), all pipeline stages when operating with large contexts
+**Last Verified:** 2026-04-25
 
 ---
 
@@ -35,7 +36,7 @@ effective window is constrained, apply this priority order. Drop the last-loaded
 
 ```
 NEVER DROP:
-  01 — Behavioral OS (OLS-v7-Core, OLS-v7-Guard)
+  01 — Behavioral OS (OLS-v10-Core-Universal, OLS-v7-Guard-Auto)
   02 — Active BCDP assessment (if a contract is being modified)
   03 — Security audit findings (if a security review is in progress)
   04 — The current stage's output schema contract

@@ -10,39 +10,53 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 # Skill: Deno & Supabase Edge Functions (v1.0)
 **Category:** Framework / Runtime
 **Status:** Active
+**Last Verified:** 2026-04-25
 
 ---
 
 ## 1. Runtime Identity
 
-Supabase Edge Functions run on the **Deno** runtime, not Node.js. The following Node.js patterns do NOT apply:
-- `require()` — use ESM `import` only
-- `process.env` — use `Deno.env.get("KEY")` only
-- `Buffer` — use `Uint8Array` or `TextEncoder`/`TextDecoder`
-- `__dirname`, `__filename` — not available; not needed in edge context
-- `npm install` / `node_modules` — dependencies are URL imports or `esm.sh` proxied npm packages
+Supabase Edge Functions run on the **Supabase Edge Runtime**, a Deno-compatible runtime with
+TypeScript-first semantics. Treat it as edge/serverless TypeScript, not a long-running Node server:
+- Use ESM `import`; do not use CommonJS `require()`.
+- Prefer `Deno.env.get("KEY")` for secrets in Edge Functions.
+- Use Web APIs and Deno APIs first. Node built-ins and `npm:` packages are supported where documented, but must be explicit dependencies.
+- `__dirname` and `__filename` are not available as globals; avoid filesystem-relative runtime assumptions in edge handlers.
 
 ---
 
-## 2. Imports
+---
 
-### Standard import forms
+## 2. Dependency Management (Supabase Edge Runtime / Deno 2-compatible)
 
+### The JSR Shift
+- **Prefer explicit specifiers**: Use `npm:` for npm packages and `jsr:` for JSR packages. Avoid unpinned raw HTTPS imports in business logic files.
+- **Function-local `deno.json`**: Use a function-level `deno.json` for dependencies and Deno settings when deploying isolated functions.
+
+### Standard `deno.json` Structure
+```json
+{
+  "imports": {
+    "@supabase/supabase-js": "npm:@supabase/supabase-js@2",
+    "@std/http": "jsr:@std/http@1",
+    "stripe": "npm:stripe@18"
+  }
+}
+```
+
+### Usage in Logic
 ```typescript
-// Supabase client (npm via esm.sh — the correct form for edge functions)
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-// Deno standard library
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-
-// Third-party (pin the version — unpinned imports break on upstream changes)
-import Stripe from "https://esm.sh/stripe@14.0.0?target=deno";
+// Imports from import map aliases
+import { createClient } from "@supabase/supabase-js";
+import { serve } from "@std/http/server";
+import Stripe from "stripe";
 ```
 
 **Rules:**
-- Always pin dependency versions in URL imports (`@2`, `@14.0.0`). Floating versions (`@latest`) are banned in production edge functions.
-- Use `esm.sh?target=deno` for npm packages that have Deno-incompatible internals (e.g., Stripe).
-- Never commit a `deps.ts` that re-exports pinned versions without a clear version management rationale.
+- Always pin major versions, and pin minor/patch versions when reproducible builds matter.
+- Use `npm:` specifiers only when a JSR native alternative does not exist.
+- Run `deno install` to synchronize the `deno.lock` file.
+
 
 ---
 
@@ -71,7 +85,7 @@ const supabaseUrl = "https://example.com/api"; // ❌
 Every edge function entry point follows this exact pattern:
 
 ```typescript
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { serve } from "@std/http/server";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

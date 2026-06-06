@@ -7,23 +7,25 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
 -->
 
-# Skill: Android Test Enforcement (v1.0)
+# Skill: Android Test Enforcement Deep (v1.0)
 
 **Category:** Mobile
 **Status:** Active
 **Load order:** Load **last** among all Android testing skills. Enforcement must know which test surfaces were selected before it can enforce them. Loading this file before the leaf skills can cause it to enforce against surfaces that were not selected.
-**Load after:** `skill_android_testing_strategy` and whichever of `skill_android_unit_testing`, `skill_android_instrumented_testing`, `skill_android_screenshot_testing` apply to the task.
+**Load after:** `skill_android_testing_obligation`, `skill_android_testing_strategy`, and whichever of `skill_android_unit_testing`, `skill_android_instrumented_testing`, `skill_android_screenshot_testing` apply to the task.
 **Takes precedence when:** A behavior-changing plan is complete and requires a verification block before it can be marked done.
 
-**Pairs with:** `domain_android_kotlin`, `skill_android_testing_strategy`, `skill_android_unit_testing`, `skill_android_instrumented_testing`, `skill_android_screenshot_testing`
-**Activation:** Load for any task that changes behavior, ViewModel state, UI branching, billing,
-platform APIs, or CI expectations.
+**Pairs with:** `domain_android_kotlin`, `skill_android_testing_obligation`, `skill_android_testing_strategy`, `skill_android_unit_testing`, `skill_android_instrumented_testing`, `skill_android_screenshot_testing`
+**Activation:** Explicit opt-in for full Android test enforcement. Load for test planning,
+CI gates, blocker decisions, screenshot/instrumented obligations, or any task that needs the
+complete Android test matrix.
 
 ---
 
 ## Purpose
 
-Having test skills is not enough. Babel must know when tests are merge blockers.
+The lightweight default obligation keeps Android verification honest. This deep skill is the
+explicit enforcement layer for deciding when tests are merge blockers.
 
 This skill converts testing from "nice to have" into explicit release discipline for the Android
 lane.

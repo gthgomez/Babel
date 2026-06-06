@@ -245,7 +245,29 @@ await prisma.run.upsert({
 
 ---
 
-## 9. High-Risk Zones
+## 9. TypedSQL (Safe Raw Queries)
+- **Pattern**: Use Prisma's `TypedSQL` (instead of `$queryRaw`) for complex queries that the ORM doesn't support natively. It generates TypeScript types directly from your `.sql` files in `prisma/sql/`.
+- **Benefit**: Ensures raw SQL remains typesafe and synchronized with the schema.
+
+---
+
+## 10. 2026 Engine & Architecture (Prisma 7.0+)
+
+### Wasm Runtime (Rust-Free)
+- **Engine Selection**: Prisma 7.0+ defaults to a **Wasm-based runtime** for edge and serverless environments. This eliminates the heavy Rust binary, reduces bundle size by ~50%, and fixes cold-start latency.
+- **Client Generation**: The generated client is now fully architecture-agnostic by default. No need for `binaryTargets` in most environments.
+
+### Multi-File Schema Organization
+- **Structure**: For large projects, split the monolithic `schema.prisma` into logical modules using the `prisma/schema/` directory.
+  - `prisma/schema/main.prisma` (Datasource/Generator)
+  - `prisma/schema/user.prisma`
+  - `prisma/schema/billing.prisma`
+- **Compiler**: Prisma automatically merges these during `prisma generate` and `prisma migrate`.
+- **Rules**: Group models by domain, not by developer. Each file should have a clear responsibility.
+
+---
+
+## 11. High-Risk Zones (2026)
 
 | Zone | Risk |
 |------|------|
@@ -256,3 +278,5 @@ await prisma.run.upsert({
 | `new PrismaClient()` in hot-module-reloaded code | Connection pool exhaustion in development |
 | Removing / renaming enum values | Stored data using old values causes runtime errors |
 | Missing `@@index` on FK columns | Silent full-table scans on join queries |
+| Mixing Wasm and Binary engines | Causes runtime mismatches in heterogeneous environments |
+

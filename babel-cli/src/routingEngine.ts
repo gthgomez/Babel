@@ -24,6 +24,11 @@
  *   BABEL_DYNAMIC_ROUTING_MAX_RUNS    — Recent runs to scan.       Default: 50.
  *   BABEL_DYNAMIC_ROUTING_MIN_SAMPLES — Min hits before trusting score. Default: 3.
  *   BABEL_RUNS_DIR                    — Override runs directory (shared with pipeline.ts).
+ *
+ * Caching:
+ *   Telemetry directory scans are cached for the lifetime of the process.
+ *   The cache is keyed on `stage:runsDir`. Call `clearRoutingCache()` between
+ *   top-level pipeline runs if you need fresh telemetry mid-process.
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -86,6 +91,16 @@ function getDefaultRunsDir(): string {
 const MAX_RUNS    = Math.max(1, Number(process.env['BABEL_DYNAMIC_ROUTING_MAX_RUNS']    ?? '50') || 50);
 const MIN_SAMPLES = Math.max(1, Number(process.env['BABEL_DYNAMIC_ROUTING_MIN_SAMPLES'] ?? '3')  || 3);
 
+// ─── Telemetry cache ──────────────────────────────────────────────────────────
+
+type TelemetryCache = { entries: WaterfallTelemetryEntry[]; runsScanned: number };
+const _telemetryCache = new Map<string, TelemetryCache>();
+
+/** Clears the telemetry cache. Call between top-level pipeline runs if needed. */
+export function clearRoutingCache(): void {
+  _telemetryCache.clear();
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function safeMean(values: number[], fallback: number): number {
@@ -115,6 +130,10 @@ function loadStageTelemetry(
   stage:   RoutingStage,
   runsDir: string,
 ): { entries: WaterfallTelemetryEntry[]; runsScanned: number } {
+  const cacheKey = `${stage}:${runsDir}`;
+  const cached = _telemetryCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
   const runDirs = listRecentRunDirs(runsDir);
   const entries: WaterfallTelemetryEntry[] = [];
 
@@ -142,7 +161,9 @@ function loadStageTelemetry(
     }
   }
 
-  return { entries, runsScanned: runDirs.length };
+  const result = { entries, runsScanned: runDirs.length };
+  _telemetryCache.set(cacheKey, result);
+  return result;
 }
 
 // ─── Scoring ──────────────────────────────────────────────────────────────────

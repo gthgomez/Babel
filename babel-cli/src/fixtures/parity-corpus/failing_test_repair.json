@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "fixture_type": "babel_parity_corpus_task",
+  "task_id": "failing_test_repair",
+  "parity_task_id": "failing_test_repair",
+  "title": "Failing test repair",
+  "target_file": "src/math.js",
+  "verifier_command": "npm test",
+  "task": "Repair the failing multiply test. Only edit src/math.js. Run npm test before completing.",
+  "broken_implementation": "export const multiply = (a, b) => a + b;\n",
+  "fixed_implementation": "export const multiply = (a, b) => a * b;\n",
+  "test_source": "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { multiply } from './math.js';\n\ntest('multiply returns product', () => {\n  assert.equal(multiply(3, 4), 12);\n});\n"
+}

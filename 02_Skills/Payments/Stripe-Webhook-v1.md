@@ -236,7 +236,28 @@ supabase functions serve stripe-webhook --env-file .env
 
 ---
 
-## 10. High-Risk Zones
+---
+
+## 10. Stripe Sync Engine (Supabase Integration)
+
+In 2026, many webhook flows are replaced or augmented by the **Stripe Sync Engine**. This tool synchronizes Stripe data (Customers, Subscriptions, Prices) directly into your `stripe` schema in Postgres.
+
+### Sync Engine vs Webhooks
+- **Webhooks**: Use for real-time fulfillment (e.g., granting credits, sending emails) immediately after payment.
+- **Sync Engine**: Use for checking subscription status or billing history via SQL. Avoid complex webhook logic that just copies Stripe data into your DB.
+
+### Implementation Pattern
+```sql
+-- Check subscription status directly in Postgres (no webhook needed for this check)
+SELECT status FROM stripe.subscriptions
+WHERE customer_id = (SELECT stripe_customer_id FROM public.profiles WHERE user_id = auth.uid());
+```
+
+**Rule:** Before implementing a webhook to sync data, check if the **Stripe Sync Engine** can handle it automatically. Use webhooks only for side effects (fulfillment, notifications).
+
+---
+
+## 11. High-Risk Zones (2026)
 
 | Zone | Risk |
 |------|------|
@@ -247,3 +268,5 @@ supabase functions serve stripe-webhook --env-file .env
 | Not storing `stripe_customer_id` | Cancellation events cannot be resolved to app accounts |
 | Missing `createFetchHttpClient()` | Runtime crash in Deno — Node `http` module not available |
 | Unpinned Stripe SDK version | Breaking API shape changes silently in URL imports |
+| Duplicating Sync Engine logic | Conflict between webhook writes and Sync Engine writes causes row locks or stale data |
+

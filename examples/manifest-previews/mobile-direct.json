@@ -24,36 +24,12 @@
   ],
   "SelectedStack": [
     {
-      "Id": "behavioral_core_v7",
-      "Layer": "behavioral_os",
-      "LoadPosition": 1,
-      "RelativePath": "01_Behavioral_OS/OLS-v7-Core-Universal.md",
-      "FullPath": "01_Behavioral_OS/OLS-v7-Core-Universal.md",
-      "OrderIndex": 0
-    },
-    {
-      "Id": "behavioral_cognitive_micro_v7",
-      "Layer": "behavioral_os",
-      "LoadPosition": 2,
-      "RelativePath": "01_Behavioral_OS/OLS-v7-Cognitive-Micro.md",
-      "FullPath": "01_Behavioral_OS/OLS-v7-Cognitive-Micro.md",
-      "OrderIndex": 1
-    },
-    {
-      "Id": "behavioral_guard_v7",
-      "Layer": "behavioral_os",
-      "LoadPosition": 3,
-      "RelativePath": "01_Behavioral_OS/OLS-v7-Guard-Auto.md",
-      "FullPath": "01_Behavioral_OS/OLS-v7-Guard-Auto.md",
-      "OrderIndex": 2
-    },
-    {
       "Id": "domain_android_kotlin",
       "Layer": "domain_architect",
       "LoadPosition": 3,
       "RelativePath": "02_Domain_Architects/Android_Kotlin-v1.0.md",
       "FullPath": "02_Domain_Architects/Android_Kotlin-v1.0.md",
-      "OrderIndex": 3
+      "OrderIndex": 0
     },
     {
       "Id": "skill_android_app_classification",
@@ -61,7 +37,7 @@
       "LoadPosition": null,
       "RelativePath": "02_Skills/Mobile/Android-App-Classification-v1.md",
       "FullPath": "02_Skills/Mobile/Android-App-Classification-v1.md",
-      "OrderIndex": 4
+      "OrderIndex": 1
     },
     {
       "Id": "skill_evidence_gathering",
@@ -69,7 +45,7 @@
       "LoadPosition": null,
       "RelativePath": "02_Skills/Governance/Evidence-Gathering-v1.md",
       "FullPath": "02_Skills/Governance/Evidence-Gathering-v1.md",
-      "OrderIndex": 5
+      "OrderIndex": 2
     },
     {
       "Id": "skill_bcdp_contracts",
@@ -77,15 +53,15 @@
       "LoadPosition": null,
       "RelativePath": "02_Skills/Governance/BCDP-Contracts-v1.md",
       "FullPath": "02_Skills/Governance/BCDP-Contracts-v1.md",
-      "OrderIndex": 6
+      "OrderIndex": 3
     },
     {
       "Id": "adapter_codex_balanced",
       "Layer": "model_adapter",
-      "LoadPosition": 4,
+      "LoadPosition": 8,
       "RelativePath": "03_Model_Adapters/Codex_Balanced.md",
       "FullPath": "03_Model_Adapters/Codex_Balanced.md",
-      "OrderIndex": 7
+      "OrderIndex": 4
     },
     {
       "Id": "overlay_example_mobile_suite",
@@ -93,7 +69,7 @@
       "LoadPosition": 5,
       "RelativePath": "05_Project_Overlays/Example-Mobile-Suite-Context.md",
       "FullPath": "05_Project_Overlays/Example-Mobile-Suite-Context.md",
-      "OrderIndex": 8
+      "OrderIndex": 5
     }
   ],
   "RepoContextFiles": null,

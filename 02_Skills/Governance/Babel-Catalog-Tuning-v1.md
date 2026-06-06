@@ -62,8 +62,9 @@ Minimum validation after catalog changes:
 
 1. `powershell -ExecutionPolicy Bypass -File .\\tools\\sync-skill-catalog.ps1`
 2. `powershell -ExecutionPolicy Bypass -File .\\tools\\validate-catalog.ps1`
-3. if ids or routing behavior changed: `npm --prefix .\\babel-cli run test:orchestrator-routing`
-4. if dependency expansion or catalog structure changed: `npm --prefix .\\babel-cli run test:resolver`
+3. `powershell -ExecutionPolicy Bypass -File .\\tools\\audit-skill-disk-drift.ps1`
+4. if ids or routing behavior changed: `npm --prefix .\\babel-cli run test:orchestrator-routing`
+5. if dependency expansion or catalog structure changed: `npm --prefix .\\babel-cli run test:resolver`
 
 Use stronger validation when the change touches orchestrator outputs, resolver behavior, or public-export surfaces.
 

@@ -13,6 +13,13 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Status:** Active
 **Pairs with:** `domain_swe_backend`, `domain_swe_frontend`, `domain_devops`, `domain_compliance_gpc`
 
+## Package bridge
+
+- **Canonical package:** `skills/evidence-gathering/` (`SKILL.md`, `skill.yaml`, `contracts/`, `examples/`, `tests/`)
+- **Catalog id:** `skill_evidence_gathering`
+- **This file:** Babel prompt routing and layer behavior only
+- Do not duplicate schemas or examples here; use the package skill for I/O contracts and fixtures
+
 ---
 
 ## Purpose
@@ -151,7 +158,24 @@ For operational tasks, include non-code consumers too:
 
 ---
 
-## Evidence Receipt
+---
+
+## Step 2.7 — MCP CONTEXT INDEX (2026)
+
+If the environment supports **MCP (Model Context Protocol)**, prioritize gathering evidence through MCP servers for external or structured data:
+
+| Resource | MCP Server | In Context? | Action |
+|----------|------------|-------------|--------|
+| `[repo-issue / pr]` | `github` | NO | Query `get_issue` or `list_pull_requests`. |
+| `[db schema / logs]` | `sqlite / postgres` | NO | Query `describe_table` or `search_logs`. |
+| `[docs / wiki]` | `mcp-docs` | NO | Query `search_docs` or `get_resource`. |
+| `[tool / script]` | `mcp-tools` | NO | Execute specialized tool for diagnostic evidence. |
+
+**Rule:** Never approximate external state (PR comments, Jira tickets, database row counts) if an MCP server is available to fetch the ground truth.
+
+---
+
+## Evidence Receipt (2026)
 
 When Steps 1–3 complete with no HALT conditions, output exactly this line before writing the plan:
 
@@ -161,9 +185,11 @@ EVIDENCE RECEIPT
 Files confirmed in context:    [n]
 Schemas confirmed in context:  [n]
 Execution surfaces confirmed:  [n]
+MCP Resources gathered:        [n]
 Consumers identified:          [n] (IN_CONTEXT: [n], NOT_VERIFIED: [n], EXTERNAL: [n])
 Status: EVIDENCE COMPLETE — proceeding to plan.
 ```
+
 
 This receipt is machine-parseable. Do not omit it, paraphrase it, or combine it with plan content.
 
@@ -179,3 +205,32 @@ This receipt is machine-parseable. Do not omit it, paraphrase it, or combine it 
    If it is not in context, request it before planning.
 6. A runtime dependency you have not confirmed is evidence missing, not implementation detail.
 7. A live auth or RLS problem is not fully understood until both code intent and remote effective grants/policies are checked.
+8. When porting from one stack to another, never assume the source repo mirrors the target stack's file layout. A Python source repo is not an Android repo; a web repo is not a Kotlin package tree. Read the actual source files first, then map them into target files.
+
+---
+
+## Rule 8 — Hook and Import Contract Reads (Frontend Tasks)
+
+If the plan contains a `file_write` step targeting a React component, page, or hook, the
+following reads are **mandatory before that step** and must appear as earlier steps in the
+`minimal_action_set`:
+
+| Required read | When mandatory |
+|---------------|----------------|
+| Every hook the component calls (`useSites`, `useAccount`, etc.) | Always |
+| `@/lib/api.ts` sections covering interfaces the component uses | When component imports from `@/lib/api` |
+| `@/lib/tier-utils.ts` | When component calls any tier utility function |
+| The component file being rewritten (its current content) | Always — before any `file_write` on an existing file |
+
+**Why this rule exists:** Hook return shapes, interface field names, and utility function
+signatures cannot be safely inferred from task descriptions or general React knowledge.
+Writing a component against an inferred API is the #1 cause of broken builds in this project.
+Prior failures: `useSites()` return shape inferred as `{ sites, loading }` when the real
+return is a TanStack Query result `{ data, isLoading, error }`. Import path inferred as
+`@/lib/utils` when the real path is `@/lib/tier-utils`.
+
+**The plan is invalid if any `file_write` on a component appears before the hook reads
+that component will call.** This is not a style preference — it is a correctness gate.
+
+**Do not treat project overlay API documentation as a substitute for reading the source.**
+Read the actual source file. The overlay may be out of date.

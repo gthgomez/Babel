@@ -65,7 +65,7 @@ Split changed paths into:
 Examples of high-risk investigate/exclude paths:
 
 - `.tmp/`
-- `-DestinationRoot/`
+- `runtime/snapshots/destination-root/`
 - copied export trees
 - local chat extracts
 - accidental repo mirrors

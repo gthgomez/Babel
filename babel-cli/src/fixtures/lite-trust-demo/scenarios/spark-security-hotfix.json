@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "fixture_type": "babel_lite_trust_demo",
+  "visibility": "private",
+  "description": "Trust demo task with repo-wide security phrasing for Spark parallel-review harness.",
+  "target_file": "src/math.js",
+  "verifier_command": "npm test",
+  "task": "Fix the failing Node test for this repo-wide security sandbox. Only edit src/math.js. Run npm test before completing.",
+  "broken_implementation": "export const add = () => 0;\n",
+  "fixed_implementation": "export const add = (a, b) => a + b;\n"
+}

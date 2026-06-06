@@ -12,7 +12,7 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Category:** Mobile
 **Status:** Active
 **Load order:** Load after `skill_android_testing_strategy`. That file confirms whether `androidTest/` is the correct surface — do not load this file without the strategy file unless the routing decision is already resolved.
-**Load before:** `skill_android_test_enforcement` — enforcement loads last.
+**Load before:** `skill_android_test_enforcement_deep` when full enforcement is explicitly selected.
 **Takes precedence when:** The class under test imports `android.*` and instrumented placement is confirmed.
 
 **Pairs with:** `domain_android_kotlin`, `skill_android_testing_strategy`

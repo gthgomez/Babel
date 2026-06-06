@@ -36,10 +36,10 @@ export const TaskCategorySchema = z.enum([
 export type TaskCategory = z.infer<typeof TaskCategorySchema>;
 
 export const ModelAdapterSchema = z.enum([
-  'Claude_AntiEager',
-  'Codex_Balanced',
-  'Codex_UltraTerse',
-  'Gemini_LongContext',
+  'Deepseek_Standard',
+  'Qwen_Balanced',
+  'Qwen_UltraTerse',
+  'StepFlash_LongContext',
 ]);
 export type ModelAdapter = z.infer<typeof ModelAdapterSchema>;
 
@@ -53,19 +53,233 @@ export const PipelineModeSchema = z.enum([
   'direct',     // Orchestrator + Domain only
   'verified',   // + QA Reviewer
   'autonomous', // + QA Reviewer + CLI Executor
+  'parallel_swarm', // + QA Reviewer + Parallel CLI Executors
   'manual',     // Export SWE prompt for human completion and pause
 ]);
 export type PipelineMode = z.infer<typeof PipelineModeSchema>;
 
-export const OrchestratorVersionSchema = z.enum(['8.0', '9.0']);
+export const PurposeModeSchema = z.enum([
+  'execution',
+  'verification',
+  'learning',
+  'exploration',
+  'audit',
+]);
+export type PurposeMode = z.infer<typeof PurposeModeSchema>;
+
+export const PurposeSourceSchema = z.enum([
+  'explicit_user_request',
+  'router_inferred',
+  'fallback_default',
+]);
+export type PurposeSource = z.infer<typeof PurposeSourceSchema>;
+
+export const OrchestratorVersionSchema = z.enum(['9.0']);
 export type OrchestratorVersion = z.infer<typeof OrchestratorVersionSchema>;
 
+function unwrapSingleObjectArray(value: unknown): unknown {
+  return Array.isArray(value) && value.length === 1 && value[0] !== null && typeof value[0] === 'object'
+    ? value[0]
+    : value;
+}
+
+function normalizeOptionalSwarm(value: unknown): unknown {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return value;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (candidate.swarm === null) {
+    const normalized = { ...candidate };
+    delete normalized.swarm;
+    return normalized;
+  }
+
+  const swarm = candidate.swarm;
+  const subTasks = (
+    typeof swarm === 'object' &&
+    swarm !== null &&
+    !Array.isArray(swarm)
+  )
+    ? (swarm as Record<string, unknown>).sub_tasks
+    : undefined;
+  if (
+    Array.isArray(subTasks) &&
+    subTasks.length === 0
+  ) {
+    const normalized = { ...candidate };
+    delete normalized.swarm;
+    return normalized;
+  }
+  return value;
+}
+
+function normalizeTargetModel(value: unknown): unknown {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if ([
+    'codex',
+    'openai',
+    'gpt',
+    'gpt-5',
+    'gpt-5 pro',
+    'gpt-5-pro',
+    'gpt5',
+    'gpt5pro',
+    'openai/gpt-5',
+    'openai/gpt-5-pro',
+    'qwen',
+    'qwen3',
+    'qwen3-235b',
+    'qwen/qwen3-235b-a22b-instruct-2507',
+  ].includes(normalized)) {
+    return 'qwen3';
+  }
+  if (['claude', 'anthropic', 'deepseek', 'deepseek-v3', 'deepseek-ai/deepseek-v3-0324'].includes(normalized)) {
+    return 'deepseek';
+  }
+  if (['gemini', 'google'].includes(normalized)) {
+    return 'qwen3';
+  }
+  if (['llama', 'llama4', 'llama-4-scout', 'scout', 'meta-llama/llama-4-scout-17b-16e-instruct'].includes(normalized)) {
+    return 'scout';
+  }
+  if (['step', 'step-flash', 'stepflash', 'stepfun-ai/step-3.5-flash'].includes(normalized)) {
+    return 'step-flash';
+  }
+  if (['nemotron', 'nvidia/nvidia-nemotron-3-super-120b-a12b'].includes(normalized)) {
+    return 'nemotron';
+  }
+  if (['qwen3-32b', 'qwen/qwen3-32b'].includes(normalized)) {
+    return 'qwen3-32b';
+  }
+
+  return value;
+}
+
+function readAlias(record: Record<string, unknown>, aliases: string[]): unknown {
+  for (const alias of aliases) {
+    if (record[alias] !== undefined) {
+      return record[alias];
+    }
+  }
+  return undefined;
+}
+
+function stringifyLooseValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (value === null || value === undefined) {
+    return '';
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function normalizeAskAnswer(value: unknown): unknown {
+  const unwrapped = unwrapSingleObjectArray(value);
+  if (unwrapped === null || typeof unwrapped !== 'object' || Array.isArray(unwrapped)) {
+    return unwrapped;
+  }
+
+  const record = { ...(unwrapped as Record<string, unknown>) };
+  if (Array.isArray(record['evidence'])) {
+    record['evidence'] = record['evidence'].map((entry) => {
+      if (typeof entry === 'string') {
+        const summary = entry.trim();
+        return summary.length > 0
+          ? { source: 'model_evidence', summary }
+          : { source: 'model_evidence', summary: 'Unspecified evidence.' };
+      }
+      return entry;
+    });
+  }
+  return record;
+}
+
+const LooseStringSchema = z.preprocess(
+  (value) => Array.isArray(value)
+    ? value.map(item => stringifyLooseValue(item)).filter(item => item.length > 0).join('\n')
+    : value,
+  z.string(),
+);
+
+function normalizeExecutorTurn(value: unknown): unknown {
+  const unwrapped = unwrapSingleObjectArray(value);
+  if (unwrapped === null || typeof unwrapped !== 'object' || Array.isArray(unwrapped)) {
+    return unwrapped;
+  }
+
+  const record = { ...(unwrapped as Record<string, unknown>) };
+  if (record['type'] === undefined && record['tool'] !== undefined) {
+    record['type'] = 'tool_call';
+  }
+
+  if (record['type'] !== 'tool_call') {
+    return record;
+  }
+
+  if (record['thinking'] === undefined) {
+    record['thinking'] = '';
+  } else if (Array.isArray(record['thinking'])) {
+    record['thinking'] = record['thinking']
+      .map(item => stringifyLooseValue(item))
+      .filter(item => item.length > 0)
+      .join('\n');
+  }
+
+  const toolAlias = readAlias(record, ['tool_name', 'toolName', 'name']);
+  if (record['tool'] === undefined && typeof toolAlias === 'string') {
+    record['tool'] = toolAlias;
+  }
+
+  const pathAlias = readAlias(record, ['filepath', 'file_path', 'filePath', 'target']);
+  if (record['path'] === undefined && typeof pathAlias === 'string') {
+    record['path'] = pathAlias;
+  }
+
+  const contentAlias = readAlias(record, ['body', 'text', 'file_content', 'fileContent']);
+  if (record['content'] === undefined && typeof contentAlias === 'string') {
+    record['content'] = contentAlias;
+  }
+
+  const commandAlias = readAlias(record, ['cmd', 'shell_command']);
+  if (record['command'] === undefined && typeof commandAlias === 'string') {
+    record['command'] = commandAlias;
+  }
+
+  const argumentAlias = readAlias(record, ['args', 'params', 'input']);
+  if (
+    record['arguments'] === undefined &&
+    argumentAlias !== null &&
+    typeof argumentAlias === 'object' &&
+    !Array.isArray(argumentAlias)
+  ) {
+    record['arguments'] = argumentAlias;
+  }
+
+  return record;
+}
+
 /**
- * The three CLI backends Babel can route to.
- * Stored in `worker_configuration.assigned_model` of the Orchestrator manifest
- * and consumed by `runWithFallback` to select the correct CLI runner.
+ * The model backends Babel can route to.
+ * Stored in `worker_configuration.assigned_model` of the Orchestrator manifest.
+ * External CLI family aliases are normalized because real model outputs often
+ * describe the family ("Codex", "Claude", "Gemini") rather than the backend key.
  */
-export const TargetModelSchema = z.enum(['Claude', 'Codex', 'Gemini']);
+export const TargetModelSchema = z.preprocess(
+  normalizeTargetModel,
+  z.enum(['deepseek', 'qwen3', 'step-flash', 'scout', 'nemotron', 'qwen3-32b']),
+);
 export type TargetModel = z.infer<typeof TargetModelSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -103,6 +317,9 @@ export const OrchestrationAnalysisSchema = z.object({
   task_overlay_ids:    z.array(z.string()).default([]), // Legacy v8 field; v9 overlay selection lives in instruction_stack
   complexity_estimate: z.string().min(1),   // Low | Medium | High
   pipeline_mode:       PipelineModeSchema,
+  purpose_mode:        PurposeModeSchema.default('execution'),
+  purpose_source:      PurposeSourceSchema.default('fallback_default'),
+  purpose_confidence:  z.number().min(0).max(1).default(0.7),
   ambiguity_note:      z.string().nullable(),
   /**
    * Optional 0–1 confidence score for the routing decision emitted by the
@@ -110,6 +327,21 @@ export const OrchestrationAnalysisSchema = z.object({
    * Foundation for future semantic validator cascade (Phase 3).
    */
   routing_confidence:  z.number().min(0).max(1).optional(),
+  /**
+   * Required alongside routing_confidence. One sentence the model must write
+   * explaining WHY it chose that confidence score. Makes "confidently wrong"
+   * routing decisions visible during local log inspection.
+   * Added: Fix A — critique remediation 2026-04-26.
+   */
+  routing_confidence_rationale: z.string().optional(),
+  /**
+   * Populated when 2+ domain keyword families matched the same request.
+   * Comma-separated list of candidate domain IDs, e.g.
+   * "domain_android_kotlin, domain_python_backend".
+   * Null when routing was unambiguous.
+   * Added: Fix B — critique remediation 2026-04-26.
+   */
+  routing_conflict_log: z.string().nullable().optional(),
 });
 export type OrchestrationAnalysis = z.infer<typeof OrchestrationAnalysisSchema>;
 
@@ -218,6 +450,16 @@ export const ResolutionPolicySchema = z.object({
   apply_domain_default_skills: z.boolean().default(true),
   expand_skill_dependencies: z.boolean().default(true),
   strict_conflict_mode: z.enum(['error', 'warn']).default('error'),
+  task_shape_profile: z.enum([
+    'full',
+    'greenfield_file_creation',
+    'synthesis_write',
+    'android_utility_file',
+    'android_ui_improvement',
+    'android_warning_cleanup',
+    'compliance_artifact_write',
+    'audit_verification',
+  ]).default('full'),
 });
 export type ResolutionPolicy = z.infer<typeof ResolutionPolicySchema>;
 
@@ -227,6 +469,8 @@ export type BudgetDiagnosticSeverity = z.infer<typeof BudgetDiagnosticSeveritySc
 export const BudgetDiagnosticCodeSchema = z.enum([
   'total_token_budget',
   'missing_token_budget',
+  'token_count_unavailable',
+  'actual_declared_token_drift',
   'budget_threshold_warning',
   'budget_threshold_severe',
 ]);
@@ -244,6 +488,7 @@ export const BudgetPolicySchema = z.object({
   scope: BudgetPolicyScopeSchema,
   warn_threshold: z.number().int().nonnegative(),
   severe_warn_threshold: z.number().int().nonnegative(),
+  hard_limit: z.number().int().nonnegative().optional(),
   count_layers: z.enum(['all_compiled_layers']),
   missing_budget_mode: z.enum(['warn', 'severe']),
 });
@@ -265,7 +510,13 @@ export const CompiledArtifactsSchema = z.object({
   prompt_manifest: z.array(z.string()).min(1),
   token_budget_total: z.number().int().nonnegative().optional(),
   token_budget_missing: z.array(z.string().min(1)).optional(),
-  token_budget_by_entry: z.record(z.number().int().nonnegative()).optional(),
+  token_budget_by_entry: z.record(z.string(), z.number().int().nonnegative()).optional(),
+  actual_prompt_tokens: z.number().int().nonnegative().nullable().optional(),
+  actual_token_by_entry: z.record(z.string(), z.number().int().nonnegative()).optional(),
+  actual_minus_declared: z.number().int().nullable().optional(),
+  tokenizer_encoding: z.literal('o200k_base').optional(),
+  token_count_source: z.enum(['runtime', 'audit', 'unavailable']).optional(),
+  token_count_warnings: z.array(z.string()).optional(),
   budget_policy: BudgetPolicySchema.optional(),
   budget_diagnostics: z.array(BudgetDiagnosticSchema).optional(),
   warnings: z.array(z.string()).optional(),
@@ -279,6 +530,9 @@ export const RuntimeTelemetrySchema = z.object({
   model_adapter_id: z.string().min(1),
   selected_entry_ids: z.array(z.string().min(1)),
   token_budget_total: z.number().int().nonnegative().nullable(),
+  actual_prompt_tokens: z.number().int().nonnegative().nullable().optional(),
+  actual_minus_declared: z.number().int().nullable().optional(),
+  token_count_source: z.enum(['runtime', 'audit', 'unavailable']).optional(),
   token_budget_missing_count: z.number().int().nonnegative(),
   budget_warning_severity: BudgetDiagnosticSeveritySchema.nullable(),
   budget_policy_enabled: z.boolean(),
@@ -305,6 +559,21 @@ export const InstructionStackSchema = z.object({
 });
 export type InstructionStack = z.infer<typeof InstructionStackSchema>;
 
+export const SubTaskSchema = z.object({
+  sub_task_id: z.string().min(1),
+  instruction_stack: InstructionStackSchema,
+  sector: z.string().optional(), // Recommended directory boundary
+  handoff_payload: HandoffPayloadSchema,
+});
+export type SubTask = z.infer<typeof SubTaskSchema>;
+
+export const SwarmManifestSchema = z.object({
+  parent_run_id: z.string().min(1),
+  sub_tasks: z.array(SubTaskSchema).min(1),
+  coordination_policy: z.enum(['isolated', 'interdependent']).default('isolated'),
+});
+export type SwarmManifest = z.infer<typeof SwarmManifestSchema>;
+
 /**
  * Successful Orchestrator output — the harness advances to Stage 2.
  *
@@ -318,7 +587,7 @@ export type InstructionStack = z.infer<typeof InstructionStackSchema>;
  *   - `compiled_artifacts` captures the resolved stack IDs and mirrored manifest
  *   - `target_project_path` is optional (Windows absolute path to the project root)
  */
-export const OrchestratorManifestSchema = z.object({
+export const OrchestratorManifestSchema = z.preprocess(normalizeOptionalSwarm, z.object({
   orchestrator_version: OrchestratorVersionSchema,
   target_project:       z.string(),                 // example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | global
   target_project_path:  z.string().optional(),      // Absolute Windows path, may be omitted
@@ -338,40 +607,20 @@ export const OrchestratorManifestSchema = z.object({
   runtime_telemetry: RuntimeTelemetrySchema.optional(),
   prompt_manifest:  z.array(z.string()),            // Ordered absolute Windows path strings
   handoff_payload:  HandoffPayloadSchema,
+  swarm:            SwarmManifestSchema.optional(),
 }).superRefine((value, ctx) => {
-  const isV9 = value.orchestrator_version === '9.0';
   const hasInstructionStack = value.instruction_stack !== undefined;
 
-  if (isV9 && !hasInstructionStack) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['instruction_stack'],
-      message: 'instruction_stack is required when orchestrator_version is 9.0',
-    });
+  if (!hasInstructionStack) {
+    // Pipeline will create a minimal default stack if missing
   }
 
   if (hasInstructionStack && value.resolution_policy === undefined) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['resolution_policy'],
-      message: 'resolution_policy is required when instruction_stack is present',
-    });
+    // Pipeline will default to 'full' if missing
   }
 
   if (hasInstructionStack && value.compilation_state === undefined) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['compilation_state'],
-      message: 'compilation_state is required when instruction_stack is present',
-    });
-  }
-
-  if (!hasInstructionStack && value.prompt_manifest.length === 0) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['prompt_manifest'],
-      message: 'legacy manifests must provide a non-empty prompt_manifest',
-    });
+    // Pipeline will default to 'uncompiled' if missing
   }
 
   if (value.compilation_state === 'uncompiled' && value.prompt_manifest.length > 0) {
@@ -417,7 +666,7 @@ export const OrchestratorManifestSchema = z.object({
       }
     }
   }
-});
+}));
 export type OrchestratorManifest = z.infer<typeof OrchestratorManifestSchema>;
 
 /**
@@ -442,10 +691,10 @@ export type OrchestratorErrorHalt = z.infer<typeof OrchestratorErrorHaltSchema>;
 // OrchestratorManifestSchema does not carry an `error_halt` field.
 // The pipeline detects which variant was returned by checking
 // `'error_halt' in output && output.error_halt === true`.
-export const OrchestratorOutputSchema = z.union([
+export const OrchestratorOutputSchema = z.preprocess(unwrapSingleObjectArray, z.union([
   OrchestratorErrorHaltSchema,
   OrchestratorManifestSchema,
-]);
+]));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // § 3  SWE PLAN SCHEMA
@@ -473,7 +722,7 @@ export type BcdpAssessment = z.infer<typeof BcdpAssessmentSchema>;
 export const ActionStepSchema = z.object({
   step:         z.number().int().min(1),
   description:  z.string().min(1),
-  tool:         z.enum(['directory_list', 'file_read', 'file_write', 'shell_exec', 'test_run', 'mcp_request', 'audit_ui', 'memory_store', 'memory_query']),
+  tool:         z.enum(['directory_list', 'file_read', 'file_write', 'shell_exec', 'test_run', 'mcp_request', 'mcp_resource_list', 'mcp_resource_read', 'mcp_prompt_list', 'mcp_prompt_get', 'mcp_tool_search', 'web_search', 'web_fetch', 'plugin_tool', 'audit_ui', 'memory_store', 'memory_query', 'enter_plan_mode', 'exit_plan_mode', 'semantic_search']),
   target:       z.string().min(1),   // File path or shell command
   rationale:    z.string().min(1),   // Why this step is in the minimal set
   reversible:   z.boolean(),
@@ -484,12 +733,13 @@ export type ActionStep = z.infer<typeof ActionStepSchema>;
 /**
  * Full SWE Agent PLAN — must pass QA before CLI Executor activates.
  */
-export const SwePlanSchema = z.object({
+export const SwePlanSchema = z.preprocess(unwrapSingleObjectArray, z.object({
   plan_version:      z.string().catch("1.0"),  // e.g., "1.0"; .catch handles missing/undefined from models
+  thinking:          LooseStringSchema.catch('').describe('Internal reasoning and architectural critique before the final plan.'),
   // Optional for backward compatibility with older plans; pipeline normalizes if missing.
   plan_type:         PlanTypeSchema.optional(),
   task_summary:      z.string().min(1),
-  known_facts:       z.array(z.string()).min(1),
+  known_facts:       z.array(z.string()).default([]),
   assumptions:       z.array(z.string()),
   risks:             z.array(z.object({
     risk:        z.string().min(1),
@@ -500,8 +750,30 @@ export const SwePlanSchema = z.object({
   bcdp_assessment:    BcdpAssessmentSchema.optional(),  // Required if any contract is touched
   root_cause:         z.string().catch("N/A — not provided"),  // For bug fixes; may be "N/A — feature request"; .catch handles missing/undefined from models
   out_of_scope:       z.array(z.string()), // Explicit list of what this plan does NOT do
-});
+}));
 export type SwePlan = z.infer<typeof SwePlanSchema>;
+
+/**
+ * Minimal read-only answer contract for `babel ask` / `bl ask`.
+ *
+ * This is intentionally smaller than `SwePlanSchema`: ask mode answers the
+ * user's question and records lightweight evidence, but it does not emit an
+ * implementation plan or require a `minimal_action_set`.
+ */
+export const AskAnswerSchema = z.preprocess(normalizeAskAnswer, z.object({
+  schema_version: z.literal(1).catch(1),
+  status: z.enum(['ANSWER_READY', 'NEEDS_MORE_CONTEXT']).catch('ANSWER_READY'),
+  summary: z.string().min(1),
+  answer: z.string().min(1),
+  facts: z.array(z.string()).default([]),
+  assumptions: z.array(z.string()).default([]),
+  evidence: z.array(z.object({
+    source: z.string().min(1),
+    summary: z.string().min(1),
+  })).default([]),
+  next: z.array(z.string()).default([]),
+}));
+export type AskAnswer = z.infer<typeof AskAnswerSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // § 4  QA VERDICT SCHEMA
@@ -608,10 +880,10 @@ export type QaVerdictReject = z.infer<typeof QaVerdictRejectSchema>;
  * uses .refine(), which produces ZodEffects rather than a plain ZodObject.
  * discriminatedUnion rejects ZodEffects members; z.union handles them correctly.
  */
-export const QaVerdictSchema = z.union([
+export const QaVerdictSchema = z.preprocess(unwrapSingleObjectArray, z.union([
   QaVerdictPassSchema,
   QaVerdictRejectSchema,
-]);
+]));
 export type QaVerdict = z.infer<typeof QaVerdictSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -632,6 +904,9 @@ export const HaltTagSchema = z.enum([
   'SCOPE_VIOLATION',        // Step touches files/systems outside the plan scope
   'IRREVERSIBLE_DETECTED',  // Non-reversible operation without INFRA_ACT gate
   'TEST_REGRESSION',        // test_run detected a regression
+  'VERIFICATION_TOOL_UNAVAILABLE', // Pipeline-owned verifier could not launch required runtime tool
+  'REPAIR_REQUIRED_ARTIFACT_INVALID', // Post-execution runnable artifact gate failed
+  'REPAIR_BUDGET_EXCEEDED', // Deterministic post-execution artifact repair could not converge
   'ACTIVATION_GATE_FAIL',   // One of the four activation conditions not met
 ]);
 export type HaltTag = z.infer<typeof HaltTagSchema>;
@@ -641,7 +916,7 @@ export type HaltTag = z.infer<typeof HaltTagSchema>;
  * This is additive metadata; raw stdout/stderr/exit_code remain authoritative.
  */
 export const StructuredDenialSchema = z.object({
-  category:      z.enum(['sandbox_policy', 'executor_policy']),
+  category:      z.enum(['sandbox_policy', 'executor_policy', 'planning_restricted']),
   reason_code:   z.string().min(1),
   message:       z.string().min(1),
   tool:          z.string().min(1).nullable(),
@@ -670,13 +945,14 @@ export type McpLifecycle = z.infer<typeof McpLifecycleSchema>;
  */
 export const ToolCallLogSchema = z.object({
   step:       z.number().int().min(1),
-  tool:       z.enum(['directory_list', 'file_read', 'file_write', 'shell_exec', 'test_run', 'mcp_request', 'audit_ui', 'memory_store', 'memory_query']),
+  tool:       z.enum(['directory_list', 'file_read', 'file_write', 'shell_exec', 'test_run', 'mcp_request', 'mcp_resource_list', 'mcp_resource_read', 'mcp_prompt_list', 'mcp_prompt_get', 'mcp_tool_search', 'web_search', 'web_fetch', 'plugin_tool', 'audit_ui', 'memory_store', 'memory_query', 'enter_plan_mode', 'exit_plan_mode', 'semantic_search', 'acquire_lock', 'release_lock']),
   target:     z.string().min(1),
   exit_code:  z.number().int(),
   stdout:     z.string(),
   stderr:     z.string(),
   denial:     StructuredDenialSchema.optional(),
   mcp_lifecycle: McpLifecycleSchema.optional(),
+  checkpoint_ids: z.array(z.string().min(1)).optional(),
   verified:   z.boolean(),  // Did the step's verification check pass?
 });
 export type ToolCallLog = z.infer<typeof ToolCallLogSchema>;
@@ -697,10 +973,14 @@ export type PipelineError = z.infer<typeof PipelineErrorSchema>;
  */
 export const ExecutorReportCompleteSchema = z.object({
   status:           z.literal('EXECUTION_COMPLETE'),
+  stage_status:     z.enum(['TOOL_EXECUTION_COMPLETE', 'FILES_WRITTEN_UNVERIFIED', 'EXECUTION_ATTEMPTED', 'VERIFIER_FAILED', 'REPAIR_ATTEMPT_FAILED', 'REPAIRED_AND_COMPLETE']).optional(),
+  pipeline_completion_note: z.string().optional(),
   steps_executed:   z.number().int().min(1),
   tool_call_log:    z.array(ToolCallLogSchema).min(1),
   diff_path:        z.string().min(1),   // Path to the Evidence Bundle 05_diff.patch
   execution_log_path: z.string().min(1), // Path to 04_execution_report.json
+  artifact_gate:     z.unknown().optional(),
+  checkpoint_ids:    z.array(z.string().min(1)).optional(),
   warnings:         z.array(z.string()).optional(),
 });
 export type ExecutorReportComplete = z.infer<typeof ExecutorReportCompleteSchema>;
@@ -711,9 +991,12 @@ export type ExecutorReportComplete = z.infer<typeof ExecutorReportCompleteSchema
  */
 export const ExecutorReportHaltedSchema = z.object({
   status:         z.literal('EXECUTION_HALTED'),
+  stage_status:   z.enum(['EXECUTION_ATTEMPTED', 'VERIFIER_FAILED', 'REPAIR_ATTEMPT_FAILED']).optional(),
   steps_executed: z.number().int().min(0),
   tool_call_log:  z.array(ToolCallLogSchema),  // May be empty if halt on step 1
   pipeline_error: PipelineErrorSchema,
+  artifact_gate:  z.unknown().optional(),
+  checkpoint_ids: z.array(z.string().min(1)).optional(),
   warnings:       z.array(z.string()).optional(),
 });
 export type ExecutorReportHalted = z.infer<typeof ExecutorReportHaltedSchema>;
@@ -726,6 +1009,7 @@ export const ExecutorReportRefusedSchema = z.object({
   status:  z.literal('ACTIVATION_REFUSED'),
   reason:  z.string().min(1),  // Which activation condition failed
   gate:    HaltTagSchema,      // Always ACTIVATION_GATE_FAIL
+  checkpoint_ids: z.array(z.string().min(1)).optional(),
   warnings: z.array(z.string()).optional(),
 });
 export type ExecutorReportRefused = z.infer<typeof ExecutorReportRefusedSchema>;
@@ -762,7 +1046,8 @@ export type ExecutorReport = z.infer<typeof ExecutorReportSchema>;
  */
 export const ExecutorTurnToolCallSchema = z.object({
   type:              z.literal('tool_call'),
-  tool:              z.enum(['directory_list', 'file_read', 'file_write', 'shell_exec', 'test_run', 'mcp_request', 'audit_ui', 'memory_store', 'memory_query']),
+  thinking:          LooseStringSchema.describe('Internal monologue and verification checks before emitting the tool call.'),
+  tool:              z.enum(['directory_list', 'file_read', 'file_write', 'shell_exec', 'test_run', 'mcp_request', 'mcp_resource_list', 'mcp_resource_read', 'mcp_prompt_list', 'mcp_prompt_get', 'mcp_tool_search', 'web_search', 'web_fetch', 'plugin_tool', 'audit_ui', 'memory_store', 'memory_query', 'enter_plan_mode', 'exit_plan_mode', 'semantic_search']),
   // directory_list / file_read / file_write
   path:              z.string().optional(),
   content:           z.string().optional(),
@@ -773,12 +1058,24 @@ export const ExecutorTurnToolCallSchema = z.object({
   // mcp_request
   server:            z.string().optional(),
   query:             z.string().optional(),
-  // audit_ui
+  uri:               z.string().optional(),
+  name:              z.string().optional(),
+  arguments:         z.record(z.string(), z.unknown()).optional(),
+  schema_limit:      z.number().int().optional(),
+  // web_fetch
   url:               z.string().optional(),
+  max_bytes:         z.number().int().optional(),
+  // plugin_tool
+  plugin:            z.string().optional(),
+  input:             z.record(z.string(), z.unknown()).optional(),
+  // audit_ui
   run_id:            z.string().optional(),
   // memory_store / memory_query
   key:               z.string().optional(),
   value:             z.string().optional(),
+  // semantic_search
+  limit:             z.number().int().optional(),
+  max_results:       z.number().int().optional(),
 });
 export type ExecutorTurnToolCall = z.infer<typeof ExecutorTurnToolCallSchema>;
 
@@ -812,10 +1109,10 @@ export type ExecutorTurnCompletion = z.infer<typeof ExecutorTurnCompletionSchema
  * Union of all valid executor turn shapes.
  * Passed to `runWithFallback` on every iteration of the Stage 4 loop.
  */
-export const ExecutorTurnSchema = z.union([
+export const ExecutorTurnSchema = z.preprocess(normalizeExecutorTurn, z.union([
   ExecutorTurnToolCallSchema,
   ExecutorTurnCompletionSchema,
-]);
+]));
 export type ExecutorTurn = z.infer<typeof ExecutorTurnSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -830,3 +1127,43 @@ export const BabelSchemas = {
   qaVerdict:            QaVerdictSchema,
   executorReport:       ExecutorReportSchema,
 } as const;
+// ─────────────────────────────────────────────────────────────────────────────
+// § 7  UTILITY & MAINTENANCE SCHEMAS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Stage 4 Context Compaction — dense summary of executor history.
+ */
+export const CompactionSummarySchema = z.object({
+  summary_text: z.string().describe('A dense, high-fidelity summary of the tool execution history.'),
+  applied_changes: z.array(z.string()).describe('List of files modified so far.'),
+  current_state: z.string().describe('Current status of the task completion.'),
+});
+export type CompactionSummary = z.infer<typeof CompactionSummarySchema>;
+
+/**
+ * Long-term Project Memory — extracted from successful run logs.
+ */
+export const MemoryExtractionSchema = z.object({
+  memories: z.array(z.object({
+    topic: z.string(),
+    memory_content: z.string(),
+    impact_severity: z.enum(['low', 'medium', 'high']),
+    source_run_id: z.string()
+  })),
+  reasoning: z.string()
+});
+export type MemoryExtraction = z.infer<typeof MemoryExtractionSchema>;
+
+/**
+ * Stage 0 Surgical Pruning — classifies files as critical or supplementary.
+ */
+export const PruningAnalysisSchema = z.object({
+  critical_files: z.array(z.string()).describe('Absolute paths of files required at 100% volume.'),
+  supplementary_files: z.array(z.object({
+    path: z.string(),
+    summary: z.string().describe('1-sentence purpose of the file for the stub.')
+  })).describe('Files to be stubbed to save tokens.'),
+  reasoning: z.string()
+});
+export type PruningAnalysis = z.infer<typeof PruningAnalysisSchema>;

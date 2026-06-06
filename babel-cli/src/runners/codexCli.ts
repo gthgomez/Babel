@@ -34,10 +34,11 @@
 import { mkdtempSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join }                                   from 'node:path';
 import { tmpdir }                                 from 'node:os';
-import type { ZodType, ZodTypeDef } from 'zod';
-import type { LlmRunner }                         from './base.js';
+import type { ZodType } from 'zod';
+import type { LlmRunner, RunnerCallbacks }                         from './base.js';
 import { spawnCliProcess, parseAndValidate }       from './cliBase.js';
 import type { CliConfig }                         from './cliBase.js';
+import { parseCliArgString }                     from './cliArgParser.js';
 
 // BABEL_CODEX_TIMEOUT_MS takes precedence; falls back to the shared CLI timeout.
 const CODEX_TIMEOUT_MS =
@@ -49,7 +50,7 @@ const BASE_CONFIG: CliConfig = {
   // 'exec' subcommand + optional extra flags. Default is '--full-auto' only:
   // --skip-git-repo-check was removed as it causes TTY interaction on some
   // versions; --full-auto alone is sufficient for headless execution.
-  args:       ['exec', ...(process.env['BABEL_CODEX_ARGS'] ?? '--full-auto').split(' ').filter(Boolean)],
+  args:       ['exec', ...parseCliArgString(process.env['BABEL_CODEX_ARGS'] ?? '--full-auto')],
   timeoutMs:  CODEX_TIMEOUT_MS,
   promptFlag: '',        // '' = positional mode — prompt appended bare, no -p flag
   stdinMode:  'ignore',  // prevent TTY approval prompts from blocking the process
@@ -60,7 +61,11 @@ const NEUTER_PREAMBLE =
   'Output ONLY the requested JSON block between sentinels.\n\n';
 
 export class CodexCliRunner implements LlmRunner {
-  async execute<T>(prompt: string, schema: ZodType<T, ZodTypeDef, unknown>): Promise<T> {
+  async execute<T>(
+    prompt: string,
+    schema: ZodType<T, unknown>,
+    callbacks?: RunnerCallbacks,
+  ): Promise<T> {
     const neutralised = NEUTER_PREAMBLE + prompt;
 
     // On Windows, always route through a temp file to avoid two separate

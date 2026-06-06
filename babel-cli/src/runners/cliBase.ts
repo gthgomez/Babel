@@ -12,8 +12,13 @@
  */
 
 import { spawn }        from 'node:child_process';
-import type { ZodType, ZodTypeDef } from 'zod';
+import type { ZodType } from 'zod';
 import { extractJson }  from '../utils/extractJson.js';
+import { getSafeEnv }   from '../utils/safeEnv.js';
+import {
+  StructuredOutputError,
+  buildStructuredOutputError,
+} from './base.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -49,29 +54,31 @@ export interface CliOutput {
   stderr: string;
 }
 
-// ─── CliParseError ────────────────────────────────────────────────────────────
+// ─── Legacy CliParseError compatibility type ─────────────────────────────────
 
-/**
- * Thrown by `parseAndValidate` when the CLI output cannot be parsed as JSON or
- * fails Zod validation. Carries the raw stdout/stderr so `execute.ts` can write
- * them to the Evidence Bundle for debugging.
- */
-export class CliParseError extends Error {
+export class CliParseError extends StructuredOutputError {
   readonly rawStdout: string;
   readonly rawStderr: string;
-  readonly zodError:  unknown;
 
   constructor(
-    message:   string,
-    stdout:    string,
-    stderr:    string,
+    message: string,
+    stdout: string,
+    stderr: string,
+    failureKind: 'invalid_json' | 'zod_validation_failed' = 'invalid_json',
     zodError?: unknown,
   ) {
-    super(message);
-    this.name      = 'CliParseError';
+    super({
+      failure_kind: failureKind,
+      provider: 'cli',
+      model: null,
+      message,
+      raw_output: stdout,
+      parsed_json: null,
+      zod_issues: zodError,
+    });
+    this.name = 'CliParseError';
     this.rawStdout = stdout;
     this.rawStderr = stderr;
-    this.zodError  = zodError;
   }
 }
 
@@ -123,7 +130,7 @@ export function spawnCliProcess(prompt: string, config: CliConfig): Promise<CliO
 
     const proc = spawn(cmd, args, {
       stdio: [stdinFd, 'pipe', 'pipe'],
-      env:   process.env,
+      env:   getSafeEnv(),
       // No `shell` option — cmd.exe handles PATH resolution on Windows.
     });
 
@@ -241,7 +248,7 @@ export function spawnCliProcess(prompt: string, config: CliConfig): Promise<CliO
  */
 export function parseAndValidate<T>(
   output: CliOutput,
-  schema: ZodType<T, ZodTypeDef, unknown>,
+  schema: ZodType<T, unknown>,
   label:  string,
 ): T {
   let parsed: unknown;
@@ -249,21 +256,33 @@ export function parseAndValidate<T>(
   try {
     parsed = extractJson(output.stdout);
   } catch (err) {
-    throw new CliParseError(
-      `[${label}] invalid json: ${err instanceof Error ? err.message : String(err)}`,
-      output.stdout,
-      output.stderr,
-    );
+    const message = `[${label}] invalid json: ${err instanceof Error ? err.message : String(err)}`;
+    throw buildStructuredOutputError({
+      failure_kind: 'invalid_json',
+      provider: 'cli',
+      model: null,
+      message,
+      raw_output: output.stdout,
+      raw_stdout: output.stdout,
+      raw_stderr: output.stderr,
+      cause: err instanceof Error ? err : undefined,
+    });
   }
 
   const result = schema.safeParse(parsed);
   if (!result.success) {
-    throw new CliParseError(
-      `[${label}] Zod validation failed:\n${result.error.toString()}`,
-      output.stdout,
-      output.stderr,
-      result.error,
-    );
+    const message = `[${label}] Zod validation failed:\n${result.error.toString()}`;
+    throw buildStructuredOutputError({
+      failure_kind: 'zod_validation_failed',
+      provider: 'cli',
+      model: null,
+      message,
+      raw_output: output.stdout,
+      raw_stdout: output.stdout,
+      raw_stderr: output.stderr,
+      parsed_json: parsed,
+      zod_issues: result.error,
+    });
   }
 
   return result.data;

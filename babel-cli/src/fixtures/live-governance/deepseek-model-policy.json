@@ -1,0 +1,138 @@
+{
+  "version": 2,
+  "default_tier": "standard",
+  "require_explicit_opt_in_for_expensive": false,
+  "show_preflight_cost_estimate": true,
+  "hard_fail_on_unknown_model": true,
+  "cost_estimation": {
+    "default_input_tokens": 3000,
+    "default_output_tokens": 1000
+  },
+  "policy": {
+    "vendor_mode": false,
+    "blocked_without_explicit_opt_in": [],
+    "allowed_default_tiers": ["cheap", "standard", "triage", "fallback", "escalation"],
+    "max_estimated_cost_per_run_usd": 1.5,
+    "warn_if_estimated_cost_per_run_usd_at_least": 0.25
+  },
+  "selection_policy": {
+    "cheap": {
+      "selection_reason": "Live governance proof routes all stages to direct DeepSeek for provider-backed evidence."
+    },
+    "standard": {
+      "selection_reason": "Direct DeepSeek governance proof lane."
+    },
+    "triage": {
+      "selection_reason": "Direct DeepSeek governance proof lane."
+    },
+    "fallback": {
+      "selection_reason": "Direct DeepSeek governance proof lane."
+    },
+    "escalation": {
+      "selection_reason": "Direct DeepSeek governance proof lane."
+    }
+  },
+  "family_defaults": {
+    "Codex": {
+      "cheap": "deepseek-v4-flash",
+      "standard": "deepseek-v4-flash",
+      "triage": "deepseek-v4-flash",
+      "fallback": "deepseek-v4-flash",
+      "escalation": "deepseek-v4-pro"
+    },
+    "Gemini": {
+      "cheap": "deepseek-v4-flash",
+      "standard": "deepseek-v4-flash",
+      "triage": "deepseek-v4-flash",
+      "fallback": "deepseek-v4-flash",
+      "escalation": "deepseek-v4-pro"
+    },
+    "deepseek": {
+      "cheap": "deepseek-v4-flash",
+      "standard": "deepseek-v4-flash",
+      "triage": "deepseek-v4-flash",
+      "fallback": "deepseek-v4-flash",
+      "escalation": "deepseek-v4-pro"
+    },
+    "qwen3": {
+      "cheap": "deepseek-v4-flash",
+      "standard": "deepseek-v4-flash",
+      "triage": "deepseek-v4-flash",
+      "fallback": "deepseek-v4-flash",
+      "escalation": "deepseek-v4-pro"
+    },
+    "qwen3-32b": {
+      "cheap": "deepseek-v4-flash",
+      "standard": "deepseek-v4-flash",
+      "triage": "deepseek-v4-flash",
+      "fallback": "deepseek-v4-flash",
+      "escalation": "deepseek-v4-pro"
+    },
+    "scout": {
+      "cheap": "deepseek-v4-flash",
+      "standard": "deepseek-v4-flash",
+      "triage": "deepseek-v4-flash",
+      "fallback": "deepseek-v4-flash",
+      "escalation": "deepseek-v4-pro"
+    },
+    "step-flash": {
+      "cheap": "deepseek-v4-flash",
+      "standard": "deepseek-v4-flash",
+      "triage": "deepseek-v4-flash",
+      "fallback": "deepseek-v4-flash",
+      "escalation": "deepseek-v4-pro"
+    },
+    "nemotron": {
+      "cheap": "deepseek-v4-flash",
+      "standard": "deepseek-v4-flash",
+      "triage": "deepseek-v4-flash",
+      "fallback": "deepseek-v4-flash",
+      "escalation": "deepseek-v4-pro"
+    }
+  },
+  "models": {
+    "deepseek-v4-flash": {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-flash",
+      "source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
+      "verified_at": "2026-06-04",
+      "expires_at": "2026-09-04",
+      "tier": "standard",
+      "capabilities": ["json", "planning", "qa", "coding"],
+      "estimated_cost_per_1m_input": 0.14,
+      "estimated_cost_per_1m_output": 0.28,
+      "selection_reason": "Current direct DeepSeek model used to prove the live governance lane without DeepInfra mediation. Input estimate uses cache-miss pricing; runner metadata uses cache-hit/cache-miss splits when reported."
+    },
+    "deepseek-v4-pro": {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-pro",
+      "source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
+      "verified_at": "2026-06-04",
+      "expires_at": "2026-09-04",
+      "tier": "escalation",
+      "capabilities": ["json", "planning", "qa", "coding"],
+      "estimated_cost_per_1m_input": 0.435,
+      "estimated_cost_per_1m_output": 0.87,
+      "selection_reason": "Reserved for the hardest live governance proof stage only; Flash remains the default for lower-judgment stages to control cost."
+    }
+  },
+  "stages": {
+    "orchestrator": {
+      "primary_backend_key": "deepseek-v4-flash",
+      "ordered_backend_keys": ["deepseek-v4-flash"]
+    },
+    "planning": {
+      "primary_backend_key": "deepseek-v4-flash",
+      "ordered_backend_keys": ["deepseek-v4-flash"]
+    },
+    "qa": {
+      "primary_backend_key": "deepseek-v4-pro",
+      "ordered_backend_keys": ["deepseek-v4-pro", "deepseek-v4-flash"],
+      "selection_reason": "Use Pro only for adversarial QA, the hardest judgment stage in the live governance proof."
+    },
+    "executor": {
+      "primary_backend_key": "deepseek-v4-flash",
+      "ordered_backend_keys": ["deepseek-v4-flash"]
+    }
+  }
+}

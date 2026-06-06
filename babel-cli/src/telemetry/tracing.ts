@@ -18,6 +18,7 @@ import {
 import { InMemorySpanExporter, SimpleSpanProcessor, type ReadableSpan, type SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 
+import { evaluateTelemetryPolicy, formatEnterprisePolicyDecision } from '../config/enterprisePolicy.js';
 import { hashOrderedIds, hashText } from './hash.js';
 import type { HarnessMetadata } from './metadata.js';
 
@@ -67,6 +68,9 @@ function buildRuntimeKey(): string {
     enabled: truthyEnv('BABEL_OTEL_ENABLED'),
     serviceName: process.env['BABEL_OTEL_SERVICE_NAME'] ?? TELEMETRY_NAME,
     endpoint: process.env['BABEL_OTEL_EXPORTER_OTLP_ENDPOINT'] ?? '',
+    enterprisePolicyPath: process.env['BABEL_ENTERPRISE_POLICY_PATH'] ?? '',
+    enterprisePolicyUserPath: process.env['BABEL_ENTERPRISE_POLICY_USER_PATH'] ?? '',
+    enterprisePolicyAdminPath: process.env['BABEL_ENTERPRISE_POLICY_ADMIN_PATH'] ?? '',
     inMemoryTestMode,
   });
 }
@@ -126,8 +130,12 @@ async function ensureTelemetryRuntime(): Promise<TelemetryRuntime> {
 
   const enabled = truthyEnv('BABEL_OTEL_ENABLED');
   const serviceName = (process.env['BABEL_OTEL_SERVICE_NAME'] ?? TELEMETRY_NAME).trim() || TELEMETRY_NAME;
+  const telemetryDecision = enabled ? evaluateTelemetryPolicy() : { allowed: true, reason: 'telemetry disabled by env' };
 
-  if (!enabled) {
+  if (!enabled || (!telemetryDecision.allowed && !inMemoryTestMode)) {
+    if (enabled && !telemetryDecision.allowed && !inMemoryTestMode) {
+      console.warn(`[babel:telemetry] BABEL_OTEL_ENABLED=true but ${formatEnterprisePolicyDecision(telemetryDecision)}; tracing disabled.`);
+    }
     activeRuntimeKey = key;
     activeRuntime = {
       enabled: false,
