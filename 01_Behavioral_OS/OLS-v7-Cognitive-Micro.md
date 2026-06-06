@@ -10,8 +10,12 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 # OLS v7-Cognitive Micro — Minimal Cognitive Discipline
 
 **Status:** ACTIVE
+**Layer:** 01_Behavioral_OS
+**Pipeline Position:** Behavioral OS support layer. Loaded after `OLS-v10-Core-Universal.md` and before conditional guard or domain layers when lightweight cognitive discipline is needed.
 **Purpose:** Restore minimal universal cognitive discipline without expanding the stack into a broad reasoning doctrine.
-**Requirement:** Must be layered after `OLS v7-Core` and before any conditional guard or domain layer.
+**Requirement:** Must be layered after `OLS-v10-Core-Universal.md` and before any conditional guard or domain layer.
+**Contract Anchor:** `00_System_Router/Babel_Runtime_Contracts-v1.0.md`
+**Last Verified:** 2026-04-25
 
 ---
 

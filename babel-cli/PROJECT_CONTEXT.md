@@ -1,0 +1,47 @@
+# PROJECT_CONTEXT.md - Babel CLI
+
+## What This Is
+
+Authoritative TypeScript/Node.js CLI package for the private Babel prompt OS runtime. `src/` is source; `dist/` is generated output; `bin/babel.js` launches `dist/index.js`.
+
+This file is the agent-neutral package-local context. Parent `private source repo/PROJECT_CONTEXT.md` and `BABEL_BIBLE.md` remain authoritative for Babel-wide control-plane rules.
+
+## Startup Sequence
+
+1. Read `/workspace-root/ENGINEERING.md`.
+2. Read `/workspace-root/AGENTS.md`.
+3. Read `.\BABEL_BIBLE.md`.
+4. Read `.\PROJECT_CONTEXT.md`.
+5. Read this file.
+6. Read `README.md` for command examples and CLI workflows.
+
+## Architecture & Invariants
+
+- `src/` is the only source tree for active CLI implementation.
+- `dist/` is generated output. Do not hand-edit `dist/`.
+- `runs/` contains runtime evidence and local outputs. Do not clean it without explicit user approval.
+- `source-provenance.json` tracks approved `.js` source provenance debt.
+- Prompt catalog and runtime contract changes can affect the whole Babel system.
+- CLI commands that push, deploy, create PRs, or mutate remote state must remain gated.
+
+## Verification & Commands
+
+Run from `.\babel-cli`.
+
+- Install: `npm ci`
+- Type check: `npm run typecheck`
+- Build: `npm run build`
+- Unit/regression suite: `npm test`
+- Product benchmark: `npm run benchmark:product`
+- Dist cleanliness: `npm run check:dist`
+- Source provenance: `npm run check:source-provenance`
+
+Prefer targeted tests for small changes; full `npm test` can be broader.
+
+## Risk Zones
+
+- `src/pipeline.ts`, executor stages, and checkpoint/recovery logic.
+- `src/compiler.ts`, resolver/catalog handling, and manifest generation.
+- `src/schemas/agentContracts.ts` and runtime artifact contracts.
+- CLI command registration and argument parsing.
+- Runtime plugin, MCP, schedule, git draft, and subagent team surfaces.

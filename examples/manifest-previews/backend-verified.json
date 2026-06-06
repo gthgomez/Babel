@@ -24,36 +24,12 @@
   ],
   "SelectedStack": [
     {
-      "Id": "behavioral_core_v7",
-      "Layer": "behavioral_os",
-      "LoadPosition": 1,
-      "RelativePath": "01_Behavioral_OS/OLS-v7-Core-Universal.md",
-      "FullPath": "01_Behavioral_OS/OLS-v7-Core-Universal.md",
-      "OrderIndex": 0
-    },
-    {
-      "Id": "behavioral_cognitive_micro_v7",
-      "Layer": "behavioral_os",
-      "LoadPosition": 2,
-      "RelativePath": "01_Behavioral_OS/OLS-v7-Cognitive-Micro.md",
-      "FullPath": "01_Behavioral_OS/OLS-v7-Cognitive-Micro.md",
-      "OrderIndex": 1
-    },
-    {
-      "Id": "behavioral_guard_v7",
-      "Layer": "behavioral_os",
-      "LoadPosition": 3,
-      "RelativePath": "01_Behavioral_OS/OLS-v7-Guard-Auto.md",
-      "FullPath": "01_Behavioral_OS/OLS-v7-Guard-Auto.md",
-      "OrderIndex": 2
-    },
-    {
       "Id": "domain_swe_backend",
       "Layer": "domain_architect",
-      "LoadPosition": 3,
+      "LoadPosition": 4,
       "RelativePath": "02_Domain_Architects/Clean_SWE_Backend-v7.md",
       "FullPath": "02_Domain_Architects/Clean_SWE_Backend-v7.md",
-      "OrderIndex": 3
+      "OrderIndex": 0
     },
     {
       "Id": "skill_ts_zod",
@@ -61,7 +37,7 @@
       "LoadPosition": null,
       "RelativePath": "02_Skills/Lang/TS-Zod-v1.md",
       "FullPath": "02_Skills/Lang/TS-Zod-v1.md",
-      "OrderIndex": 4
+      "OrderIndex": 1
     },
     {
       "Id": "skill_supabase_pg",
@@ -69,7 +45,7 @@
       "LoadPosition": null,
       "RelativePath": "02_Skills/DB/Supabase-PG-v1.md",
       "FullPath": "02_Skills/DB/Supabase-PG-v1.md",
-      "OrderIndex": 5
+      "OrderIndex": 2
     },
     {
       "Id": "skill_evidence_gathering",
@@ -77,7 +53,7 @@
       "LoadPosition": null,
       "RelativePath": "02_Skills/Governance/Evidence-Gathering-v1.md",
       "FullPath": "02_Skills/Governance/Evidence-Gathering-v1.md",
-      "OrderIndex": 6
+      "OrderIndex": 3
     },
     {
       "Id": "skill_bcdp_contracts",
@@ -85,31 +61,31 @@
       "LoadPosition": null,
       "RelativePath": "02_Skills/Governance/BCDP-Contracts-v1.md",
       "FullPath": "02_Skills/Governance/BCDP-Contracts-v1.md",
-      "OrderIndex": 7
+      "OrderIndex": 4
     },
     {
       "Id": "adapter_codex_balanced",
       "Layer": "model_adapter",
-      "LoadPosition": 4,
+      "LoadPosition": 8,
       "RelativePath": "03_Model_Adapters/Codex_Balanced.md",
       "FullPath": "03_Model_Adapters/Codex_Balanced.md",
-      "OrderIndex": 8
+      "OrderIndex": 5
     },
     {
       "Id": "overlay_example_saas_backend",
       "Layer": "project_overlay",
-      "LoadPosition": 5,
+      "LoadPosition": 6,
       "RelativePath": "05_Project_Overlays/Example-SaaS-Backend-Context.md",
       "FullPath": "05_Project_Overlays/Example-SaaS-Backend-Context.md",
-      "OrderIndex": 9
+      "OrderIndex": 6
     },
     {
       "Id": "pipeline_qa_reviewer",
       "Layer": "pipeline_stage",
-      "LoadPosition": 7,
+      "LoadPosition": 9,
       "RelativePath": "02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md",
       "FullPath": "02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md",
-      "OrderIndex": 10
+      "OrderIndex": 7
     }
   ],
   "RepoContextFiles": null,

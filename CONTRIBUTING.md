@@ -9,34 +9,6 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 
 # Contributing
 
-## Setup
-
-### Requirements
-
-- Node.js 20+
-- PowerShell 7+
-
-### Install
-
-```bash
-git clone https://github.com/gthgomez/Babel.git
-cd Babel/babel-cli && npm install && cd ..
-```
-
-### Verify the repo works
-
-```powershell
-pwsh -File .\tools\validate-public-release.ps1
-```
-
-### Type check
-
-```bash
-cd babel-cli && npx tsc --noEmit
-```
-
----
-
 ## Scope
 
 Babel is a prompt operating system, not a generic notes folder.
@@ -81,11 +53,10 @@ powershell -ExecutionPolicy Bypass -File .\tools\validate-catalog.ps1
 
 If you touched routing, compiler, or load-order logic, also inspect:
 - [OLS-v9-Orchestrator.md](./00_System_Router/OLS-v9-Orchestrator.md)
-- [OLS-v8-Orchestrator.md](./00_System_Router/OLS-v8-Orchestrator.md)
 - [prompt_catalog.yaml](./prompt_catalog.yaml)
 
 Router state:
-`OLS-v9-Orchestrator.md is the default typed runtime lane in babel-cli; OLS-v8-Orchestrator.md remains callable as the compatibility fallback until migration is explicitly retired.`
+`OLS-v9-Orchestrator.md is the default typed runtime lane in babel-cli; archived pre-v9 router files are historical only.`
 
 Use [README.md](./README.md) for the full validation matrix when your change touches runtime or tooling surfaces beyond the catalog.
 

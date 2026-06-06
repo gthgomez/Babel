@@ -145,23 +145,47 @@ that relies on reflection (including Play Billing and Compose internals) require
 
 ---
 
-## Step 4 — RELEASE BUILD CHECKLIST
+---
 
-Run before every store submission:
+## Step 4 — 16KB PAGE SIZE COMPLIANCE (2026)
 
-| Check | Command / Verification |
-|-------|----------------------|
-| Release build compiles | `./gradlew bundleRelease` (AAB) or `assembleRelease` (APK) |
-| Signing verified | `apksigner verify --verbose app-release.apk` — confirm v1, v2, v3 present |
-| ProGuard rules present | Check `proguard-rules.pro` for billing + coroutines keep rules |
-| Billing works in release | Install signed APK, tap preset chip → billing dialog appears |
-| No debug flags | `BuildConfig.DEBUG == false` in release variant |
-| R8 mapping uploaded | Upload `build/outputs/mapping/release/mapping.txt` to Play/Samsung/Amazon |
-| `local.properties` NOT in APK | Confirm not committed, not included in assets |
+As of November 1, 2025, all apps targeting SDK 35+ must support **16KB page sizes**. This requires aligning native libraries (ELF) to 16KB boundaries.
 
-For AAB vs APK selection, bundletool validation, and store-processing differences, load
-`skill_android_app_bundle`. This skill owns release hardening; the AAB skill owns packaging and
-distribution-path selection.
+**Required in `build.gradle.kts`:**
+```kotlin
+android {
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
+}
+```
+
+**Manual Verification (for NDK/Native libs):**
+If using native C/C++ libraries, verify alignment with `readelf`:
+```bash
+readelf -l <lib_name>.so | grep LOAD
+# Confirm 'Alignment' is 0x4000 (16384 bytes)
+```
+
+**Rule:** Apps with native code must be recompiled with the 16KB alignment flag. Failure causes crashes on modern high-end devices like the Samsung S25 Ultra.
+
+---
+
+## Step 5 — SDK 35/36 BEHAVIORAL COMPLIANCE
+
+### Edge-to-Edge Enforcement
+- **Constraint**: `enableEdgeToEdge()` is no longer optional. Content must handle insets via `Scaffold` or `Modifier.windowInsetsPadding`.
+- **System Bars**: Status and navigation bars are transparent by default. Do not attempt to force opaque backgrounds.
+
+### Predictive Back
+- **Constraint**: Use `BackHandler` (Compose) or `OnBackPressedCallback` (View) correctly. Do not intercept back events unless truly needed for state transitions (e.g., closing a drawer).
+
+---
+
+## Step 6 — RELEASE BUILD CHECKLIST (2026)
+
 
 ---
 

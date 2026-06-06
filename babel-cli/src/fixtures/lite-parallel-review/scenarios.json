@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "fixture_type": "babel_lite_parallel_review",
+  "scenarios": [
+    {
+      "id": "repo_wide_migration_plan",
+      "task": "Plan a repo-wide migration for the authentication module without editing files",
+      "expected_route_lane": "babel_full",
+      "expected_execution_verb": "plan",
+      "expects_spark_review": true,
+      "mutation_policy": "read_only",
+      "repo_fixture": "minimal_plan_repo",
+      "provider": "mock"
+    },
+    {
+      "id": "security_repo_wide_fix",
+      "task": "Fix the failing Node test for this repo-wide security sandbox. Only edit src/math.js. Run npm test before completing.",
+      "expected_route_lane": "babel_full",
+      "expected_execution_verb": "fix",
+      "expects_spark_review": true,
+      "mutation_policy": "may_edit",
+      "repo_fixture": "trust_demo_math",
+      "provider": "mock"
+    }
+  ]
+}

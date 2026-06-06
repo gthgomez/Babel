@@ -158,3 +158,37 @@ Cross-layer payload policy: [IDs only / UI model only / no large objects]
 4. Large domain or binary objects must not be used as ad hoc cross-layer transport.
 5. If state must survive beyond a single composition and matters to business behavior, it does
    not belong in `remember`.
+
+---
+
+## Kotlin `Result<T>` API Reference
+
+When domain or validation functions return `Result<T>`, use only these methods.
+Wrong method selection compiles silently but produces the wrong value at runtime.
+
+| Intent | Correct method | Returns | WRONG alternatives |
+|--------|---------------|---------|-------------------|
+| Get the success value (or null) | `result.getOrNull()` | `T?` | ~~`result.value`~~ |
+| Get the failure message string | `result.exceptionOrNull()?.message` | `String?` | ~~`result.getOrNull()`~~ (returns `T?`), ~~`result.error`~~ |
+| Check if successful | `result.isSuccess` | `Boolean` | ~~`result.isOk`~~ |
+| Check if failed | `result.isFailure` | `Boolean` | ~~`result.isErr`~~ |
+
+**ViewModel error display pattern:**
+```kotlin
+val validation = DomainRules.validateIncomeSign(amountCents)
+if (validation.isFailure) {
+    errorMessage = validation.exceptionOrNull()?.message ?: "Invalid amount"
+    return@Button
+}
+```
+Do NOT write `validation.getOrNull() ?: "Invalid amount"` — that returns the `Int` value on
+success, not the error string.
+
+## Import Path Rules (domain package)
+
+When writing Kotlin files that import from the `domain/` package:
+- Correct: `import com.example.app.domain.DomainRules`
+- WRONG: `import com.example.app.DomainRules` (missing `domain.` segment)
+
+Before writing any import for a newly-created file, verify the `package` declaration of the
+target file and use that exact package path in the import statement.

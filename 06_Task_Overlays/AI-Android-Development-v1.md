@@ -38,7 +38,9 @@ Prepend this block to every AI code-generation session for this monorepo:
 ```
 Stack (do not suggest anything outside these versions):
 - Kotlin 2.3.20, AGP 9.1.0, Compose BOM 2026.03.01, Material3
-- Min SDK 26, Target SDK 35
+- Min SDK 26, Target SDK 36 (Android 16)
+- Billing Library v9.0.0
+- 16KB ELF alignment (mandatory for native libs)
 - Single-Activity, ViewModel + StateFlow, screen enum in AppUiState — NO NavHost
 - Manual constructor injection in MainActivity — NO Hilt, Dagger, Koin
 - NO Room, NO local database — apps are stateless utilities

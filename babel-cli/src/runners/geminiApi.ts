@@ -13,8 +13,8 @@
  *   BABEL_GEMINI_TOKENS   - maxOutputTokens. Default: 8192
  */
 
-import type { ZodType, ZodTypeDef } from 'zod';
-import type { LlmRunner } from './base.js';
+import type { ZodType } from 'zod';
+import { type LlmRunner, type RunnerCallbacks, buildStructuredOutputError } from './base.js';
 import { extractJson }    from '../utils/extractJson.js';
 
 // ─── Configuration ─────────────────────────────────────────────────────────
@@ -40,10 +40,15 @@ export class GeminiApiRunner implements LlmRunner {
     this.apiKey = key;
   }
 
-  async execute<T>(prompt: string, schema: ZodType<T, ZodTypeDef, unknown>): Promise<T> {
+  async execute<T>(
+    prompt: string,
+    schema: ZodType<T, unknown>,
+    callbacks?: RunnerCallbacks,
+  ): Promise<T> {
     const url = `${API_BASE}/${GEMINI_MODEL}:generateContent`;
 
     let res: Response;
+    let rawJsonText = '';
     try {
       res = await fetch(url, {
         method:  'POST',
@@ -89,32 +94,55 @@ export class GeminiApiRunner implements LlmRunner {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let json: any;
     try {
-      json = await res.json();
+      rawJsonText = await res.text();
+      json = JSON.parse(rawJsonText);
     } catch (err) {
-      throw new Error(
-        `[geminiApi] failed to parse API response: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      throw buildStructuredOutputError({
+        failure_kind: 'failed_to_parse_api_json',
+        provider: 'gemini',
+        model: GEMINI_MODEL,
+        message: `[geminiApi] Failed to parse API response as JSON: ${err instanceof Error ? err.message : String(err)}`,
+        raw_output: rawJsonText,
+        cause: err instanceof Error ? err : undefined,
+      });
     }
 
     const text: string = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
     if (!text.trim()) {
-      throw new Error('[geminiApi] Gemini API returned an empty response.');
+      throw buildStructuredOutputError({
+        failure_kind: 'empty_response',
+        provider: 'gemini',
+        model: GEMINI_MODEL,
+        message: '[geminiApi] Gemini API returned an empty response.',
+        raw_output: rawJsonText,
+      });
     }
 
     let parsed: unknown;
     try {
       parsed = extractJson(text);
     } catch (err) {
-      throw new Error(
-        `[geminiApi] invalid json: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      throw buildStructuredOutputError({
+        failure_kind: 'invalid_json',
+        provider: 'gemini',
+        model: GEMINI_MODEL,
+        message: `[geminiApi] invalid json: ${err instanceof Error ? err.message : String(err)}`,
+        raw_output: text,
+        cause: err instanceof Error ? err : undefined,
+      });
     }
 
     const result = schema.safeParse(parsed);
     if (!result.success) {
-      throw new Error(
-        `[geminiApi] Zod validation failed:\n${result.error.toString()}`,
-      );
+      throw buildStructuredOutputError({
+        failure_kind: 'zod_validation_failed',
+        provider: 'gemini',
+        model: GEMINI_MODEL,
+        message: `[geminiApi] Zod validation failed:\n${result.error.toString()}`,
+        raw_output: text,
+        parsed_json: parsed,
+        zod_issues: result.error,
+      });
     }
 
     return result.data;

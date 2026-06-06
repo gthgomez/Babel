@@ -12,6 +12,7 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Category:** Mobile
 **Status:** Active
 **Pairs with:** `domain_android_kotlin`
+**Last Verified:** 2026-04-25
 **Activation:** Load for any task that touches UI, Composables, screen layout, state,
 side effects, or ViewModel-to-UI wiring.
 
@@ -26,6 +27,10 @@ from `Scaffold` clips content on Android 15; and an unstable lambda causes the e
 subtree to recompose on every parent state change.
 
 This skill enforces the patterns that prevent those failures.
+
+**Version context:** Use the Compose BOM rather than pinning individual Compose artifact versions.
+As of this audit, the official BOM example is `androidx.compose:compose-bom:2026.02.01`; project
+overlays may pin a newer BOM after verifying it against AndroidX release notes.
 
 ---
 
@@ -203,18 +208,56 @@ Discarding `paddingValues` is the most common source of content clipping on Andr
 
 ---
 
-## Step 6 — RECOMPOSITION DISCIPLINE
+## Step 6 — SHARED ELEMENT TRANSITIONS (2026)
 
-Unnecessary recomposition is the most common Compose performance problem in non-trivial UIs.
+**SharedTransitionLayout** is the baseline for high-fidelity transitions between list and detail views. Use it to provide visual continuity for icons, images, or cards.
 
-**Rules:**
+```kotlin
+SharedTransitionLayout {
+    AnimatedContent(targetState = screen) { targetScreen ->
+        when (targetScreen) {
+            Screen.List -> ListScreen(
+                sharedTransitionScope = this@SharedTransitionLayout,
+                animatedVisibilityScope = this@AnimatedContent
+            )
+            Screen.Detail -> DetailScreen(
+                sharedTransitionScope = this@SharedTransitionLayout,
+                animatedVisibilityScope = this@AnimatedContent
+            )
+        }
+    }
+}
+```
 
-1. **Avoid reading ViewModel state at the root level unnecessarily.** Only read the state
-   fields a Composable actually uses — the entire Composable recomposes when any read field
-   changes.
+**Rule:** Every screen transition involving a "card-to-detail" or "thumbnail-to-preview" flow must use `SharedTransitionLayout` to eliminate layout jumps.
 
-2. **Use `derivedStateOf` for derived values** that are expensive to compute or that change
-   less often than their inputs:
+---
+
+## Step 7 — ADAPTIVE NAVIGATION & RECOMPOSITION
+
+### WindowSizeClass & Navigation Rails
+For 2026 high-end devices (foldables, tablets), use `WindowSizeClass` to switch between a `NavigationBar` (compact) and `NavigationRail` (medium/expanded).
+
+```kotlin
+val windowSize = currentWindowSizeClass()
+Scaffold(
+    bottomBar = { if (windowSize.widthSizeClass == WindowWidthSizeClass.Compact) BottomNav() }
+) {
+    Row {
+        if (windowSize.widthSizeClass != WindowWidthSizeClass.Compact) NavigationRail()
+        MainContent(it)
+    }
+}
+```
+
+### The Compose Compiler (K2)
+- **Implicit Memoization**: The K2 Compose Compiler automatically memoizes stable lambdas and parameters. Manual `remember { { ... } }` is only required for lambdas that capture unstable variables.
+- **Strong Skipping Mode**: Enabled by default in 2026. Composables with unstable parameters can now be skipped if the parameters haven't changed by reference, significantly reducing recomposition overhead.
+
+### Recomposition Discipline
+1. **Avoid Root Reads**: Don't read the entire `AppUiState` at the root. Pass specific fields or use `derivedStateOf` to throttle updates.
+2. **Keyed Lists**: Always use `items(items, key = { it.id })` in Lazy layouts to maintain identity across reorders.
+
 
    ```kotlin
    // Wrong — recomputes isValid on every keystroke in any field

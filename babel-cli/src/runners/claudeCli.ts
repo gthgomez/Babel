@@ -9,24 +9,29 @@
  *   BABEL_CLI_TIMEOUT_MS - Hard timeout in ms.       Default: 120000
  */
 
-import type { ZodType, ZodTypeDef } from 'zod';
-import type { LlmRunner }              from './base.js';
+import type { ZodType } from 'zod';
+import type { LlmRunner, RunnerCallbacks }              from './base.js';
 import { spawnCliProcess,
          parseAndValidate }            from './cliBase.js';
 import type { CliConfig }              from './cliBase.js';
+import { parseCliArgString }           from './cliArgParser.js';
 
 const config: CliConfig = {
   label:     'claudeCli',
   command:   process.env['BABEL_CLAUDE_CMD']  ?? 'claude',
   // --print  → disable interactive UI, write response to stdout
   // --compact → suppress system prompt / UI chrome for cleaner stdout
-  args:      (process.env['BABEL_CLAUDE_ARGS'] ?? '--print --compact').split(' ').filter(Boolean),
+  args:      parseCliArgString(process.env['BABEL_CLAUDE_ARGS'] ?? '--print --compact'),
   timeoutMs: Number(process.env['BABEL_CLI_TIMEOUT_MS'] ?? '120000'),
   stdinMode: 'pipe',   // pipe prompt to stdin for --print mode
 };
 
 export class ClaudeCliRunner implements LlmRunner {
-  async execute<T>(prompt: string, schema: ZodType<T, ZodTypeDef, unknown>): Promise<T> {
+  async execute<T>(
+    prompt: string,
+    schema: ZodType<T, unknown>,
+    callbacks?: RunnerCallbacks,
+  ): Promise<T> {
     const output = await spawnCliProcess(prompt, config);
     return parseAndValidate(output, schema, config.label);
   }

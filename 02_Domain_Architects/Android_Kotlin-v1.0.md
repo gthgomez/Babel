@@ -12,7 +12,9 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Status:** ACTIVE
 **Layer:** 02_Domain_Architects
 **Pipeline Position:** Domain layer. Loaded as position [3] when task category is Android / Kotlin mobile.
-**Requirement:** Must be layered on top of `OLS-v7-Core-Universal.md` and `OLS-v7-Guard-Auto.md`.
+**Requirement:** Must be layered on top of `OLS-v10-Core-Universal.md`, `OLS-v7-Cognitive-Micro.md`, and relevant conditional Guard modules.
+**Contract Anchor:** `00_System_Router/Babel_Runtime_Contracts-v1.0.md`
+**Last Verified:** 2026-04-25
 
 **Core Directive:** Android development has a unique blast-radius profile. A wrong Manifest entry,
 a mismatched billing product ID, or a misconfigured FileProvider can block the app from the Play
@@ -51,7 +53,23 @@ bugs — they are compliance and security failures. Your planning discipline mus
 
 ---
 
-## 2. ARCHITECTURE
+## 2. ARCHITECTURE & COMPILATION (2026)
+
+### Kotlin 2.2 (K2) Era
+- **K2 Compiler**: Mandatory and stable. Kotlin 2.2 delivers 40–60% faster Android builds via
+  the K2 compiler and KSP improvements. Use `kotlin.compiler.version = "2.2.0"` or higher.
+  Kotlin 2.3 is in active development — do not pin to it in production without explicit testing.
+- **Context Parameters (Beta in 2.2)**: The correct 2026 syntax is Context Parameters, which
+  replace the deprecated Context Receivers (`-Xcontext-receivers` flag). Migration guide:
+  - Old (deprecated, will warn): `context(Dependency) fun foo()` with `-Xcontext-receivers`
+  - New (Beta, Kotlin 2.2+): `context(val dep: Dependency) fun foo()`
+  - IntelliJ IDEA 2025.1+ provides a "Replace context receivers with context parameters"
+    quick-fix. Run it before shipping Kotlin 2.2+ code.
+  - Note: callable references to context-parameter functions are not yet supported in 2.2;
+    that is planned for 2.3. Design around this limitation.
+- **Explicit Backing Fields**: The `field` keyword in property accessors is **experimental**
+  in Kotlin 2.2. Do not use it in production code without explicit opt-in and risk acknowledgment.
+  Prefer standard backing property patterns (`private val _state`) until this stabilizes in 2.3+.
 
 ### Standard App Layer Model (monetized utility apps)
 
@@ -75,11 +93,25 @@ ui/          — AppUiState, MainViewModel, screen Composables, MainActivity
 
 **Isolation invariants:**
 - `domain/` and `processing/` have zero billing imports — structural, not convention.
-- ViewModel exposes only `isProUnlocked: StateFlow<Boolean>` and `buyPro(activity)` to UI.
-- Screen navigation is an enum in `AppUiState`, resolved with `when(state.screen)` in the
-  root Composable. No `NavHost`. No `ByteArray` in routes.
-- No DI framework. Manual constructor injection wired in `MainActivity`.
-- No Room, no persistence layer — apps are stateless utilities.
+- **Context Parameters for DI**: Pass `BillingGateway` or `Engine` via context parameters in composables or viewmodels where appropriate.
+- **SharedTransitionLayout**: Mandatory for high-fidelity screen transitions.
+- **Screen Navigation**: Use a typed state-driven navigation model (no `NavHost`).
+- **No DI framework**: Manual dependency wiring or Context Parameters only.
+- **Room/Persistence**: Use Room only for ledger/data apps with integer-cents precision.
+
+
+### Porting From A Non-Android Source Repo
+
+When the task is an Android port of an existing non-Android project:
+
+- Treat the source repo's real file tree as authoritative. Do not infer Android package paths,
+  `app/src/main/...`, Gradle files, or Kotlin class names inside the source repo unless you have
+  read those exact files.
+- If the source repo is Python, read `README.md`, `pyproject.toml`, the actual package modules,
+  and docs first. Map concepts into Android targets only after reading the real source.
+- A local-first data app is allowed to use Room persistence when the task explicitly requires
+  on-device storage, integer-cents financial state, or a ledger/history model. Do not force the
+  stateless utility-app pattern onto a data-centric port.
 
 ### Service-Based App Pattern (example_app_four)
 
@@ -163,6 +195,13 @@ Verification:
 
 ## 5. DEFAULT SKILLS
 
+**Automatic resolver defaults** (via `domain_android_kotlin.default_skill_ids`):
+`skill_android_app_classification`, `skill_android_testing_obligation`, `skill_evidence_gathering`,
+`skill_bcdp_contracts`, `skill_jetpack_compose`.
+
+The table below adds **explicit opt-in** skills for task shape. UI/a11y/adaptive/form skills and the
+full testing matrix are not auto-loaded on every Android task.
+
 Load based on task type:
 
 | Task type | Skills to load |
@@ -173,14 +212,17 @@ Load based on task type:
 | UI audit, UX critique, screen review, or "suggest changes" planning for existing Compose screens | `skill_android_ui_audit_review` + `skill_jetpack_compose` |
 | Any billing / entitlement work | `skill_google_play_billing` |
 | RevenueCat integration / multi-store billing | `skill_revenuecat_iap` + `skill_amazon_appstore` + `skill_android_dependency_research` |
-| Any UI / Composable / screen work | `skill_jetpack_compose` |
-| Test planning, CI gates, or deciding which Android tests are mandatory | `skill_android_testing_strategy` + `skill_android_test_enforcement` |
+| Any UI / Composable / screen work | `skill_jetpack_compose` + `skill_android_accessibility_semantics` + `skill_android_adaptive_layouts` + `skill_android_form_ux_date_input` |
+| Any behavior-changing Android work | `skill_android_testing_obligation` |
+| Test planning, CI gates, or deciding which Android tests are mandatory | `skill_android_testing_strategy` + `skill_android_test_enforcement_deep` |
 | Manifest, permissions, runtime compliance changes | `skill_android_play_store_compliance` |
 | Photo picking or media import flows | `skill_android_photo_picker` |
 | File import/export, sharing, `ContentResolver`, FileProvider, or temp-file workflows | `skill_android_file_handling` + `skill_android_saf` |
 | Permission prompts, overlay access, usage access, or special app access workflows | `skill_android_permissions` + `skill_android_play_store_compliance` |
 | WorkManager, foreground service, or background execution work | `skill_android_background_work` |
 | Startup optimization, baseline profiles, macrobenchmark, or release performance work | `skill_android_performance_hardening` |
+| Native Android game loops, GameActivity, AGDK, frame pacing, controller input, or game memory work | `skill_android_game_development` |
+| Android TV / Fire TV / Leanback game UX, D-pad focus, 10-foot UI, or remote-first game testing | `skill_android_tv_game_ux` |
 | Google Play submission, policy, deadlines, listing, or Data Safety work | `skill_google_play_store` |
 | Release packaging, AAB generation, bundletool validation, or store artifact selection | `skill_android_app_bundle` + `skill_android_release_build` |
 | Samsung Galaxy Store submission or Samsung-specific distribution | `skill_samsung_galaxy_store` + `skill_android_app_bundle` |
@@ -199,23 +241,13 @@ Load based on task type:
 
 ## 6. SKILL COMPOSITION GUIDE
 
-Android testing work must load in a disciplined order. Do not jump directly from the domain shell
-to a leaf testing skill.
+The default Android stack carries only `skill_android_testing_obligation`: identify whether
+behavior changed, name the smallest adequate verification path, and report skipped paths honestly.
 
-### Correct testing stack order
+Use the full testing stack only when the task actually writes tests, designs CI gates, or decides
+release blockers:
 
-1. `domain_android_kotlin` — establishes Android blast radius, QA expectations, and project-level invariants
-2. Project overlay + app-local context — exact versions, flavor/build quirks, `QA_CHECKLIST.md`, and app-specific constraints
-3. `skill_android_testing_strategy` — first testing skill, always. It decides the correct surface (`src/test/`, `src/androidTest/`, screenshot), resolves state-shape questions (`mutableStateOf` vs `StateFlow`), and checks setup constraints such as AGP / Roborazzi compatibility before leaf guidance loads.
-4. Exactly the needed leaf testing skills:
-   - `skill_android_unit_testing`
-   - `skill_android_instrumented_testing`
-   - `skill_android_screenshot_testing`
-5. `skill_android_test_enforcement` — load last when the task includes planning mandatory coverage, CI gates, or exit criteria
-
-### Routing note
-
-For the current `example_mobile_suite` monetized apps, the main app ViewModels expose UI state through
-`mutableStateOf`, not `StateFlow`. That means the testing strategy layer should route main
-ViewModel tests toward direct state assertions first, and only route to Turbine when the surface
-under test actually exposes `Flow` / `StateFlow`.
+1. `skill_android_testing_strategy`
+2. exactly the needed leaf skills: `skill_android_unit_testing`, `skill_android_instrumented_testing`,
+   and/or `skill_android_screenshot_testing`
+3. `skill_android_test_enforcement_deep` last

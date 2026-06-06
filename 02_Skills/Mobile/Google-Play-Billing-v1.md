@@ -12,6 +12,7 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Category:** Mobile
 **Status:** Active
 **Pairs with:** `domain_android_kotlin`
+**Last Verified:** 2026-04-25
 **Activation:** Load for any task that touches billing, IAP entitlement, product IDs, purchase
 acknowledgment, or the `billing/` layer of any monetized Android app.
 
@@ -29,62 +30,46 @@ This skill converts those silent failure modes into explicit plan requirements.
 
 ---
 
-## Version Context
+## Version Context (2026)
 
 | Version | Status | Notes |
 |---------|--------|-------|
-| v8.3.0 | Latest (Dec 2025) | `queryPurchaseHistory*` removed; "in-app items" renamed to "one-time products"; auto-service reconnection added |
-| v7.x | Deprecated — EOL Aug 31, 2026 (extension to Nov 1, 2026 possible) | `queryPurchaseHistoryAsync` deprecated; still functional |
-| v6.x | End of life | `SkuDetails` replaced by `ProductDetails`; `ProrationMode` replaced by `ReplacementMode` |
+| v8.3.0 | Latest stable (Dec 2025) | Adds external payments APIs and remains the current Play Billing Library line in official release notes. |
+| v8.x | Supported | Last date to use v8 for new apps or updates is Aug 31, 2027; extension requests can run to Nov 1, 2027. |
+| v7.x | Deprecating | Last date to use v7 for new apps or updates is Aug 31, 2026; extension requests can run to Nov 1, 2026. |
 
-**Current in-project version: 7.1.1.** Migration to v8 is required before August 2026.
+**Current in-project version: 7.1.1.** Migration to v8.x is **URGENT** before the August 31, 2026 release cutoff.
 
-**Migration note (v7 → v8) — verified against official migration guide, Feb 2026:**
+**Migration note (v7 → v8) — 2026 Standard:**
 
-Minimal diff for one-time IAP (INAPP-only apps):
+1. **Pending Purchases**: Explicitly opt-in to one-time products.
+2. **Auto-Reconnection**: Use `enableAutoServiceReconnection()`.
+3. **Query Parameters**: Transition from type-only queries to typed `QueryPurchasesParams`.
 
 ```kotlin
-// BEFORE (v7)
-BillingClient.newBuilder(context)
-    .enablePendingPurchases()                     // no-arg overload — removed in v8
-    .setListener(this)
-    .build()
-
-billingClient.queryPurchasesAsync(BillingClient.ProductType.INAPP, listener)
-
-// AFTER (v8)
+// 2026 Standard Initialization
 val pendingParams = PendingPurchasesParams.newBuilder()
-    .enableOneTimeProducts()                       // explicit opt-in required
+    .enableOneTimeProducts()
     .build()
 
 BillingClient.newBuilder(context)
     .enablePendingPurchases(pendingParams)
-    .enableAutoServiceReconnection()               // v8 handles reconnect internally
+    .enableAutoServiceReconnection()
     .setListener(this)
     .build()
 
+// 2026 Standard Query
 val queryParams = QueryPurchasesParams.newBuilder()
     .setProductType(BillingClient.ProductType.INAPP)
     .build()
 billingClient.queryPurchasesAsync(queryParams, listener)
 ```
 
-**What did NOT change:** `acknowledgePurchase` 3-day rule, `queryPurchasesAsync` on-reconnect
-contract, `BillingGateway` interface — all identical in v8.
+**Key Changes in v8.x:**
+- **Use `queryProductDetailsAsync`**: Do not add new `SkuDetails`-based flows.
+- **External payments / alternative billing programs**: v8.2+ and v8.3 add program-specific APIs. Verify regional eligibility and policy requirements before enabling them.
+- **Improved Lifecycle**: `enableAutoServiceReconnection()` handles transient service disconnects. Remove manual reconnect loops in `onBillingServiceDisconnected` when this option is enabled.
 
-**`queryProductDetailsAsync`:** Listener signature is unchanged in v8 for one-time IAP apps.
-No migration work needed there.
-
-**Race condition warning:** When adding `enableAutoServiceReconnection()`, remove any existing
-manual retry loop in `onBillingServiceDisconnected`. Keeping both causes two concurrent
-`queryPurchasesAsync` calls on reconnect, producing duplicate billing state updates in the ViewModel.
-The ViewModel's `onResume → connect()` pattern (Step 1, row 2) is still required — that is
-separate from the `onBillingServiceDisconnected` retry loop.
-
-Additional migration steps:
-- Remove all `queryPurchaseHistoryAsync` calls — removed in v8. Use `queryPurchasesAsync` for
-  active purchases; use the Voided Purchases API or backend records for history.
-- Re-verify ProGuard rules after migration — v8 renamed internal classes.
 
 ---
 

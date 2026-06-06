@@ -1,10 +1,10 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("frontend", "backend", "compliance", "devops", "research", "mobile")]
+    [ValidateSet("frontend", "backend", "compliance", "devops", "research", "mobile", "game")]
     [string]$TaskCategory,
 
-    [ValidateSet("global", "example_saas_backend", "example_llm_router", "example_web_audit", "example_mobile_suite", "example_autonomous_agent")]
+    [ValidateSet("global", "example_saas_backend", "example_llm_router", "example_web_audit", "example_mobile_suite", "example_game_suite", "example_autonomous_agent")]
     [string]$Project = "global",
 
     [string]$ProjectPath = "",
@@ -318,6 +318,78 @@ function Get-AlwaysLoadBehavioralEntries {
             Sort-Object `
                 @{ Expression = { if ($null -eq $_.LoadPosition) { [int]::MaxValue } else { [int]$_.LoadPosition } } }, `
                 @{ Expression = { [string]$_.Id } }
+    )
+}
+
+function Test-GuardShouldLoad {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TaskCategoryValue,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PipelineModeValue,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PurposeModeValue,
+
+        [AllowNull()]
+        [string]$TaskPromptValue
+    )
+
+    if ($PipelineModeValue -eq "verified" -or $PipelineModeValue -eq "autonomous") {
+        return $true
+    }
+
+    if (@("frontend", "backend", "mobile", "devops") -contains $TaskCategoryValue) {
+        return $true
+    }
+
+    $prompt = Normalize-TaskPrompt -Prompt $TaskPromptValue
+    if ([string]::IsNullOrWhiteSpace($prompt)) {
+        return $false
+    }
+
+    if ($prompt -match '(?i)\b(implement|edit|modify|fix|debug|refactor|deploy|migrate|migration|write\s+files?|run\s+tests?|execute|commit)\b') {
+        return $true
+    }
+
+    return $false
+}
+
+function Get-ConditionalGuardBehavioralEntries {
+    param(
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject[]]$Entries,
+
+        [Parameter(Mandatory = $true)]
+        [string]$TaskCategoryValue,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PipelineModeValue,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PurposeModeValue,
+
+        [AllowNull()]
+        [string]$TaskPromptValue
+    )
+
+    if (-not (Test-GuardShouldLoad `
+        -TaskCategoryValue $TaskCategoryValue `
+        -PipelineModeValue $PipelineModeValue `
+        -PurposeModeValue $PurposeModeValue `
+        -TaskPromptValue $TaskPromptValue)) {
+        return @()
+    }
+
+    return @(
+        $Entries |
+            Where-Object {
+                $_.Layer -eq "behavioral_os" -and
+                $_.Status -eq "active" -and
+                $_.Id -eq "behavioral_guard_v7" -and
+                @($_.Tags) -contains "conditional_load"
+            }
     )
 }
 
@@ -750,6 +822,7 @@ $domainIdMap = @{
     devops     = "domain_devops"
     research   = "domain_research"
     mobile     = "domain_android_kotlin"
+    game       = "domain_godot_game_dev"
 }
 
 $projectOverlayIdMap = @{
@@ -757,6 +830,7 @@ $projectOverlayIdMap = @{
     example_llm_router       = "overlay_example_llm_router"
     example_web_audit        = "overlay_example_web_audit"
     example_mobile_suite     = "overlay_example_mobile_suite"
+    example_game_suite       = "overlay_example_game_suite"
     example_autonomous_agent = "overlay_example_autonomous_agent"
 }
 
@@ -765,6 +839,7 @@ $projectRepoKeyMap = @{
     example_llm_router       = "example_llm_router"
     example_web_audit        = "example_web_audit"
     example_mobile_suite     = "example_mobile_suite"
+    example_game_suite       = "example_game_suite"
     example_autonomous_agent = "example_autonomous_agent"
 }
 
@@ -921,6 +996,12 @@ $order = 0
 
 $baseEntries = @(
     @(Get-AlwaysLoadBehavioralEntries -Entries $entries) +
+    @(Get-ConditionalGuardBehavioralEntries `
+        -Entries $entries `
+        -TaskCategoryValue $TaskCategory `
+        -PipelineModeValue $PipelineMode `
+        -PurposeModeValue ([string]$provisionalPurpose.Mode) `
+        -TaskPromptValue $TaskPrompt) +
     @(
         Get-EntryById -Entries $entries -Id $domainIdMap[$TaskCategory]
     ) +
@@ -1041,6 +1122,7 @@ if (-not [string]::IsNullOrWhiteSpace($ProjectPath)) {
             example_llm_router       = ""
             example_web_audit        = ""
             example_mobile_suite     = ""
+            example_game_suite       = ""
             example_autonomous_agent = ""
         }
 

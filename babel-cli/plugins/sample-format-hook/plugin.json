@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "id": "sample-format-hook",
+  "name": "Sample Format Hook Plugin",
+  "version": "0.1.0",
+  "description": "Demonstrates a controlled local-mutating hook that trims trailing whitespace after file_write in live and dry-run shadow roots.",
+  "trust_level": "local_mutating",
+  "tools": [],
+  "slash_commands": [
+    {
+      "kind": "static_text",
+      "name": "format-hook-status",
+      "description": "Describe the sample format hook.",
+      "text": "sample-format-hook trims trailing whitespace after successful file_write calls."
+    }
+  ],
+  "prompt_skills": [],
+  "mcp_servers": [],
+  "hooks": [
+    {
+      "event": "PostToolUse",
+      "tool": "file_write",
+      "action": "trim_trailing_whitespace",
+      "description": "Trim trailing spaces and tabs after successful file_write operations.",
+      "trust_level": "local_mutating",
+      "dry_run_supported": true
+    }
+  ]
+}

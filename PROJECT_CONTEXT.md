@@ -41,7 +41,7 @@ The full multi-agent pipeline harness is present but is an advanced surface, not
 
 ## System Topology
 
-- **00_System_Router:** `OLS-v9-Orchestrator.md` is the public default typed lane. `OLS-v8-Orchestrator.md` remains compatibility-only.
+- **00_System_Router:** `OLS-v9-Orchestrator.md` is the public default typed lane. `OLS-v8-Orchestrator.md` is retained for historical context only and is not part of the active runtime.
 - **01_Behavioral_OS:** Universal execution behavior and evidence discipline.
 - **02_Domain_Architects:** Primary technical strategy shells including backend, frontend, and Android/mobile.
 - **02_Skills:** Reusable technical rules loaded by the resolver.
