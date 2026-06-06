@@ -9,7 +9,7 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 ## Overview
 
-`Babel-public` exposes the control plane of Babel, not the private source repo around it.
+`Babel-public` exposes the public release surface of Babel, not the private source repo around it.
 
 The public repo is intentionally centered on:
 
@@ -18,6 +18,7 @@ The public repo is intentionally centered on:
 - catalog-driven resolver/compiler behavior
 - deterministic manifest preview
 - read-only inspection surfaces
+- public validation and release security gates
 
 That is why the public proof path is validation plus preview, not "trust us, the full pipeline works everywhere."
 
@@ -98,7 +99,7 @@ It is not a shell, execution, or file-mutation surface.
 
 ## Advanced Runtime Harness
 
-The larger `babel-cli` pipeline is still present, but it is an advanced surface.
+The larger `babel-cli` pipeline is present and typechecked in the public repo, but it is an advanced surface.
 
 It may require:
 
@@ -119,6 +120,19 @@ From a new-user standpoint, the product hierarchy should be:
 
 - [examples/manifest-previews/backend-verified.json](../../examples/manifest-previews/backend-verified.json)
 - [examples/manifest-previews/mobile-direct.json](../../examples/manifest-previews/mobile-direct.json)
+- [examples/first-success.md](../../examples/first-success.md)
 - `npm run test:resolver`
 - `npm run test:mcp-adapter`
 - `npm run test:orchestrator-routing`
+
+## Release Safety
+
+The public release is generated from private source through an audited export lane.
+
+That lane is expected to:
+
+- exclude private scratch and generated runtime artifacts
+- preserve reproducible install files while checking lockfiles for private paths
+- scrub private identifiers into community-safe example names
+- validate the exported catalog and exported TypeScript surface
+- run required public secret scanning with pinned Gitleaks in enforced mode

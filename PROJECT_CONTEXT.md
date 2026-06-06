@@ -9,7 +9,7 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 ## Repository Purpose
 
-`Babel-public` is the public-facing, sanitized export of Babel.
+`Babel-public` is the public-facing, sanitized release of Babel.
 
 It packages a public-safe subset that can be used and verified on its own:
 
@@ -17,11 +17,11 @@ It packages a public-safe subset that can be used and verified on its own:
 - the typed `v9` router contract
 - the catalog-driven resolver/compiler
 - a read-only MCP control-plane surface
-- public overlays, examples, and release tooling
+- public overlays, examples, release tooling, and security gates
 
 ## Public Product Shape
 
-This repo should be treated as a **runnable public-safe control-plane subset**.
+This repo should be treated as a **runnable public-safe release surface**.
 
 Canonical public success means a new user can:
 
@@ -30,7 +30,21 @@ Canonical public success means a new user can:
 3. preview a resolved stack/manifest from the public catalog
 4. compare the result to deterministic proof artifacts in the repo
 
-The full multi-agent pipeline harness is present but is an advanced surface, not the primary public claim.
+The full multi-agent pipeline harness is present, typechecked, and available for experimentation. It remains an advanced surface because real task execution depends on local model setup, credentials, and target-repo rules.
+
+## Public Vision
+
+Babel should make AI-assisted software work less mysterious and less brittle.
+
+The public repo exists so contributors can:
+
+- inspect the prompt stack before execution
+- validate the catalog and resolver deterministically
+- reuse or fork prompt layers safely
+- connect external clients through read-only MCP
+- improve task execution behind explicit verification gates
+
+The community direction is preview first, evidence next, execution last.
 
 ## Required Startup Order
 
@@ -58,6 +72,7 @@ The full multi-agent pipeline harness is present but is an advanced surface, not
 - **Compiler Contract:** the public resolver expands domain default skills, expands skill dependencies, checks conflicts, and emits the ordered manifest preview.
 - **Behavioral Contract:** all assembled stacks include `01_Behavioral_OS`.
 - **Release Contract:** `tools/validate-public-release.ps1` is the public integrity gate for this repo.
+- **Security Contract:** `tools/run-public-secret-scan.ps1` and `tools/check-public-scrub.ps1` protect the public release surface.
 
 ## First-Success Surfaces
 
@@ -73,3 +88,4 @@ The full multi-agent pipeline harness is present but is an advanced surface, not
 - `babel-cli/src/control-plane/`
 - public onboarding docs
 - public release tooling
+- public CI and security scanning
