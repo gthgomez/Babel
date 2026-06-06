@@ -36,7 +36,7 @@ Minimum first-read chain:
 
 ## What Babel-public Truthfully Is
 
-`Babel-public` is a runnable public-safe control-plane subset.
+`Babel-public` is a runnable public-safe Babel release.
 
 Its strongest public surfaces are:
 
@@ -44,8 +44,9 @@ Its strongest public surfaces are:
 - deterministic stack/manifest preview
 - read-only MCP inspection of the typed `v9` resolver lane
 - public examples and regression tests
+- public release and secret-scan gates
 
-The larger pipeline harness is included, but it is an advanced surface and may require local model tooling or credentials. Do not treat it as the canonical first success path.
+The larger pipeline harness is included and typechecked, but it is an advanced surface and may require local model tooling or credentials. Do not treat it as the canonical first success path.
 
 ## Canonical Public Workflow
 
@@ -78,6 +79,8 @@ If you want to use the advanced runtime harness:
 - use `tools/run-babel-local-cli.ps1` or invoke `babel-cli` directly
 
 `Babel-public` does **not** assume private lifecycle scripts, private run-artifact trees, or private activation contracts.
+
+The public vision is to make prompt-stack selection inspectable, testable, and safe to integrate before model-backed execution begins.
 
 ## What Babel Is
 

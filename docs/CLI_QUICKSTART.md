@@ -9,6 +9,8 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 This is the shortest path to using the Babel CLI as a new developer.
 
+The safest first experience is still validation and preview. Build the CLI when you want diagnostics, MCP, or task execution.
+
 If you have not done setup yet:
 
 ```powershell
@@ -85,4 +87,11 @@ What it does:
 - use `plan` if you want a manual-bridge workflow
 - use `mcp` if you are integrating Babel into another client
 
-If you are still learning the repo, start with [START_HERE.md](../../START_HERE.md) and [BABEL_LOCAL_MODE.md](./architecture/BABEL_LOCAL_MODE.md) first.
+Current public expectation:
+
+- validation and resolver preview should work from a fresh clone
+- MCP is read-only by default
+- model-backed task execution may need provider credentials, local model tools, and target-repo policy
+- repo-local rules win when Babel is used inside another project
+
+If you are still learning the repo, start with [START_HERE.md](../START_HERE.md) and [BABEL_LOCAL_MODE.md](./architecture/BABEL_LOCAL_MODE.md) first.
