@@ -9,7 +9,8 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 ## Overview
 
-`Babel-public` exposes the public release surface of Babel, not the private source repo around it.
+This repository is the canonical public source of Babel. It does not depend on a
+private parent repository for source authority or generation.
 
 The public repo is intentionally centered on:
 
@@ -74,7 +75,7 @@ This repo includes deterministic tests and golden previews for that path.
 
 ## Android / Mobile
 
-Android is a real first-class routed lane in `Babel-public`.
+Android is a real first-class routed lane in Babel.
 
 Public proof:
 
@@ -125,14 +126,16 @@ From a new-user standpoint, the product hierarchy should be:
 - `npm run test:mcp-adapter`
 - `npm run test:orchestrator-routing`
 
-## Release Safety
+## Source And Release Safety
 
-The public release is generated from private source through an audited export lane.
+Changes to the canonical source land in this repository through reviewed branches.
+Private repositories may consume versioned releases but must not publish or
+overwrite Babel source.
 
-That lane is expected to:
+The release path must:
 
-- exclude private scratch and generated runtime artifacts
+- reject private scratch, generated runtime artifacts, and private identifiers
 - preserve reproducible install files while checking lockfiles for private paths
-- scrub private identifiers into community-safe example names
-- validate the exported catalog and exported TypeScript surface
+- validate the canonical catalog and TypeScript surface
 - run required public secret scanning with pinned Gitleaks in enforced mode
+- produce immutable tags whose exact commit SHA is recorded by consumers

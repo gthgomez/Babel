@@ -25,13 +25,16 @@ Do not present this package as production-ready, as a safe autonomous worker for
 
 Do not hand-edit files in `dist/`. Make source changes in `src/`, then rebuild.
 
-## Product Lab Boundary
+## Source Authority
 
-Treat `private source repo` as the product lab and `Babel-public` as the export target. New CLI behavior should be implemented and benchmarked here first, then exported only after private validation passes.
+This package is developed in the canonical `gthgomez/Babel` repository. Implement,
+benchmark, review, and release CLI behavior here. Private consumer repositories may
+exercise or extend the CLI through documented interfaces, but they do not publish
+generated CLI source back into this package.
 
 ## First Five Minutes
 
-Windows PowerShell from the private source repo repo root:
+Windows PowerShell from the Babel repository root:
 
 ```powershell
 npm --prefix .\babel-cli ci

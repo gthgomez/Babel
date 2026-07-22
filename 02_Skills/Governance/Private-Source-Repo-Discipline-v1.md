@@ -12,6 +12,9 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Status:** Active
 **Activation:** Load when a project has both a private source-of-truth repo and a derived public repo, especially when local folder names, git remotes, or GitHub repo names can be confused.
 
+**Babel boundary:** `gthgomez/Babel` is canonical public source. A private Babel
+consumer is not its source repo and must not publish back into it.
+
 ---
 
 ## Purpose
@@ -41,7 +44,9 @@ Before any commit or push, write a `repo_role_map` with:
    - `all_working_changes`
    - `sanitized_export_only`
 
-If the task touches Babel specifically, start by reading the repo-role and paired-repo workflow docs for the current private/public repo set.
+If the task touches Babel specifically, read
+`docs/adr/ADR-0001-canonical-public-source.md` before assigning roles. Do not infer
+roles from legacy folder names.
 
 If those files and the git remotes disagree, stop and treat it as a repo-configuration bug.
 
@@ -116,3 +121,4 @@ Only `repo_tooling` belongs in normal pushes.
 4. If repo-role docs and git remotes disagree, fix the mapping before continuing.
 5. A paired private/public system must always have an explicit repo-role map before release work.
 6. A helper file is not automatically repo tooling just because it was useful during one session.
+7. Never map a private Babel consumer as the source of canonical `gthgomez/Babel`.

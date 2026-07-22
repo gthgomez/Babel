@@ -2,7 +2,7 @@ version: 3
 catalog_scope: babel_prompt_library
 maintainer: control_plane
 root: "."
-last_updated: "2026-04-30"
+last_updated: "2026-07-22"
 # Pass 35 additions (2026-04-30): HD-2D mobile rendering/JRPG UX skills and mobile-safe Godot HD-2D routing
 # Pass 34 additions (2026-04-29): Android game/TV UX and Godot UI/runtime/testing/export/input/performance skills plus game routing
 # Pass 33 additions (2026-04-25): 2026 Modernization Sweep (Web, Backend, Android, Mobile, Payments, Testing)
@@ -776,9 +776,9 @@ entries:
     layer: skill
     path: 02_Skills/Governance/Public-Export-Hardening-v1.md
     description: >
-      Private-to-public export hardening for Babel repos. Routes work through the
-      existing surface-classification, export, scrub, and validation workflow so
-      private identifiers are replaced intentionally instead of mass-scrubbed.
+      Export hardening for intentionally paired private-source and derived-public
+      repos. Requires an explicit non-Babel repo-role map, declared export tools,
+      scrub validation, and intentional replacement of private identifiers.
     status: active
     tags: [governance:safety, skill, utility:babel, utility:public-export, utility:sanitization, utility:scrub]
     dependencies: []
@@ -937,11 +937,10 @@ entries:
     layer: skill
     path: 02_Skills/Governance/Private-Source-Repo-Discipline-v1.md
     description: >
-      Repo-role discipline for paired private/public systems. Forces an
-      explicit source-of-truth versus derived-public map, correct default push
-      targets, remote-role verification before any GitHub push or release
-      action, and explicit classification of helper files as repo tooling
-      versus private-machine local aids.
+      Repo-role discipline for paired private/public systems. Forces an explicit
+      source-of-truth versus derived-public map, verifies remote roles before
+      GitHub actions, and preserves canonical gthgomez/Babel as a source rather
+      than treating private Babel consumers as publishers.
     status: active
     tags: [governance:safety, skill, utility:git, utility:github, utility:private-repo, utility:public-repo, utility:remote-role]
     dependencies:
@@ -953,9 +952,9 @@ entries:
     layer: skill
     path: 02_Skills/Governance/Derived-Public-Release-Gate-v1.md
     description: >
-      Release gate for derived public repos. Requires surface classification,
-      export/sanitization workflow, scrub validation, and a bias toward
-      under-releasing whenever a private source-of-truth repo exists.
+      Release gate for genuinely derived public repos. Requires surface
+      classification, declared export/sanitization workflow, scrub validation,
+      and an explicit exclusion for canonical gthgomez/Babel.
     status: active
     tags: [governance:safety, skill, utility:export, utility:git, utility:github, utility:public-release, utility:sanitization, utility:secrets]
     dependencies:

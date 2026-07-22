@@ -2,18 +2,28 @@
 
 ## What This Is
 
-Authoritative TypeScript/Node.js CLI package for the private Babel prompt OS runtime. `src/` is source; `dist/` is generated output; `bin/babel.js` launches `dist/index.js`.
+Authoritative TypeScript/Node.js CLI package for the canonical public Babel prompt
+OS runtime. `src/` is source; `dist/` is generated output; `bin/babel.js` launches
+`dist/index.js`.
 
-This file is the agent-neutral package-local context. Parent `private source repo/PROJECT_CONTEXT.md` and `BABEL_BIBLE.md` remain authoritative for Babel-wide control-plane rules.
+This file is the agent-neutral package-local context. The repository-root
+`PROJECT_CONTEXT.md`, `BABEL_BIBLE.md`, and `prompt_catalog.yaml` remain
+authoritative for Babel-wide control-plane rules.
 
 ## Startup Sequence
 
-1. Read `/workspace-root/ENGINEERING.md`.
-2. Read `/workspace-root/AGENTS.md`.
-3. Read `.\BABEL_BIBLE.md`.
-4. Read `.\PROJECT_CONTEXT.md`.
+From `babel-cli/`:
+
+1. Read `..\BABEL_BIBLE.md`.
+2. Read `..\PROJECT_CONTEXT.md`.
+3. Read `..\README.md`.
+4. Read `..\prompt_catalog.yaml`.
 5. Read this file.
-6. Read `README.md` for command examples and CLI workflows.
+6. Read `README.md` for package command examples and CLI workflows.
+
+Consumer repositories may add their own `AGENTS.md`, engineering standards, or
+project context. Those files govern work in that consumer and are not required by
+a clean Babel clone.
 
 ## Architecture & Invariants
 

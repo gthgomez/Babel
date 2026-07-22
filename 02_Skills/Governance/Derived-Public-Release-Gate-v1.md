@@ -12,6 +12,9 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Status:** Active
 **Activation:** Load when the target push is a public-facing repo derived from a private source-of-truth repo, especially when the task involves release prep, scrub checks, or deciding whether a private change is safe to publish.
 
+**Babel boundary:** Do not activate this skill for `gthgomez/Babel`. That
+repository is Babel's canonical public source, not a derived release target.
+
 ---
 
 ## Purpose
@@ -43,9 +46,10 @@ If any touched item is `private_only`, it must not ship to the public repo.
 
 ## Step 2 — ROUTE THROUGH THE DERIVED-REPO WORKFLOW
 
-For Babel, load and follow the paired-repo workflow, release checklist, and public validation path for the current repo set.
+Load and follow the paired-repo workflow, release checklist, and public validation
+path defined by the target repo set.
 
-If the task is “publish Babel,” the default assumption is:
+For a genuinely derived repository, the default sequence is:
 
 - author in the private source repo
 - export or sanitize intentionally
@@ -63,10 +67,9 @@ Before the public push, require:
 3. scrub validation
 4. release validation
 
-For Babel, use:
-
-- `tools/check-public-scrub.ps1`
-- `tools/validate-public-release.ps1`
+Use the scrub and release validators owned by the target repository. Do not assume
+Babel's validators or a Babel private-to-public workflow applies to another
+project.
 
 If those checks are not run on the public tree, the release is not ready.
 
@@ -90,3 +93,4 @@ The failure mode to avoid is publishing too much, not publishing too little.
 3. Never push to the public repo until the content is classified and scrub-validated.
 4. Never let “already in the local tree” count as proof that a file is public-safe.
 5. When unsure, keep it in the private repo and release a smaller public surface.
+6. Never classify canonical `gthgomez/Babel` as `public_derived`.

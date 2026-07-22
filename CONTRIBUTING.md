@@ -19,6 +19,11 @@ Treat changes to Babel like code changes:
 - update the catalog when required
 - validate before opening a PR
 
+This repository is Babel's canonical public source. Contributions merged here
+change the authoritative product; they are not regenerated from a private parent.
+Consumer-specific overlays and operational policy belong in the consumer
+repository or another documented external configuration location.
+
 ## Before You Change Babel
 
 Read:

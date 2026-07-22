@@ -12,9 +12,16 @@ This public repo includes:
 
 It also includes the larger CLI/runtime harness. That surface is real and typechecked in public CI, but model-backed execution can require local tooling, credentials, and workspace-specific policy. The canonical first success path remains deterministic validation and preview.
 
-## Public Identity
+## Canonical Repository
 
-`Babel-public` should be understood as a **runnable, public-safe Babel release**.
+This repository, [`gthgomez/Babel`](https://github.com/gthgomez/Babel), is the
+canonical public source for Babel. A clean clone contains the authoritative prompt
+library, runtime, documentation, and validation tooling.
+
+Private projects consume versioned Babel releases and may provide external,
+repo-local configuration. They do not generate or overwrite this repository. See
+[ADR-0001](./docs/adr/ADR-0001-canonical-public-source.md) for the source-authority
+decision and migration constraints.
 
 What is fully supported from this repo alone:
 
@@ -34,13 +41,13 @@ What is present but not the primary onboarding path:
 
 ## Current State
 
-Babel-public is now generated from a hardened private-to-public export lane. The public repository is intended to be useful to a new community user without private workspace knowledge:
+The canonical repository is designed to work without private workspace knowledge:
 
-- public templates generate community-facing docs, issue templates, and CI
-- `scratch/`, private repo fingerprints, and private-only operator notes are excluded
+- public docs, issue templates, and CI are maintained here
+- private repo fingerprints and operator-only material are prohibited
 - `package-lock.json` is retained for reproducible install, with local-path/private-dependency checks
 - public CI runs typecheck and the required secret scan
-- release publishing goes through a release branch and PR, not direct pushes to `main`
+- changes land through reviewed branches and PRs, not reverse publication from a private repository
 
 ## Vision
 
@@ -224,7 +231,7 @@ Private workspace names, credentials, local paths, and operator-only release not
 ## Repository Structure
 
 ```
-Babel-public/
+Babel/
 ├── START_HERE.md
 ├── BABEL_BIBLE.md
 ├── PROJECT_CONTEXT.md

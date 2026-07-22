@@ -9,7 +9,8 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 ## Purpose
 
-In `Babel-public`, Local Mode means using the public Babel release from your own machine without private repo tooling.
+In Babel, Local Mode means using a canonical public release from your own machine
+without private repo tooling.
 
 There are two Local Mode surfaces:
 
@@ -109,9 +110,10 @@ If you just want to understand Babel, you do not need any of that. Stay on the p
 
 ## Relationship To Other Repos
 
-If you use Babel-public while working inside another codebase, that codebase may have its own repo-local rules or collaboration system.
+If you use Babel while working inside another codebase, that codebase may have its own repo-local rules or collaboration system.
 
-That repo-local system is external to `Babel-public`.
+That repo-local system is an external consumer input. It does not become canonical
+Babel source and is not required by a clean Babel clone.
 
 Public rule of thumb:
 

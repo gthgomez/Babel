@@ -12,20 +12,23 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Status:** Active
 **Activation:** Load when preparing content from a private source repo for a derived public repo, especially when the task includes sanitization, example-overlay replacement, public scrub validation, or release-readiness review.
 
+**Babel boundary:** Do not activate this skill to publish Babel.
+`gthgomez/Babel` is canonical source and must receive reviewed source changes, not
+exports from a private Babel repository.
+
 ---
 
 ## Purpose
 
-Public export is not "delete anything sensitive until it looks clean."
+Public export is not "delete anything sensitive until it looks clean." For a
+project that intentionally maintains a derived public repository:
 
-For Babel, the correct model is:
-
-- private repo stays source-of-truth
-- public repo is a derived export
+- the private repo remains that project's declared source of truth
 - private identifiers are replaced intentionally, not mass-scrubbed blindly
-- public validation is run inside the exported tree before release
+- public validation runs inside the derived tree before release
 
-This skill exists to route that workflow through the existing Babel docs and tools instead of re-inventing the checklist every time.
+This skill supplies a generic safety contract for that paired-repo workflow. The
+target project must own the actual export and validation commands.
 
 It assumes repo targeting has already been checked. If the task is ambiguous about whether the push target is the private source repo or the derived public repo, resolve that first.
 
@@ -35,11 +38,9 @@ It assumes repo targeting has already been checked. If the task is ambiguous abo
 
 Load only the repo-role, export-workflow, release-checklist, and surface-classification docs needed for the current step.
 
-Use these tools, not ad hoc copy/scrub flows:
-
-- `tools/export-babel-public.ps1`
-- `tools/check-public-scrub.ps1`
-- `tools/validate-public-release.ps1`
+Use the paired project's documented exporter, scrub checker, and release validator,
+not ad hoc copy/scrub flows. If those tools do not exist, stop and define the
+release contract before publishing.
 
 ---
 
@@ -62,7 +63,7 @@ Before editing, classify each touched artifact:
 Preferred path:
 
 1. improve the private source intentionally
-2. export through `tools/export-babel-public.ps1`
+2. export through the paired project's declared exporter
 3. let the export pipeline perform the replacement rules
 4. harden the public tree afterward only where needed
 
@@ -98,3 +99,4 @@ If validation is not run, the export is not release-ready.
 4. Never keep private IDs in `prompt_catalog.yaml` examples or public manifest previews.
 5. If a document or tool is dual-use but still private-fingerprinted, classify it as `sanitize_and_export`, not `public_safe`.
 6. Never let a private-source repo keep pushing to a public remote after a repo-role mismatch is discovered.
+7. Never use this workflow to overwrite canonical `gthgomez/Babel` from a private consumer.
