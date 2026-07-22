@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "description": "Live security policy for public Babel scrub and secret scanning. Public project names may appear in docs/examples; the same names remain forbidden as dependency fingerprints.",
+  "allowed_public_project_names": [
+    "GPCGuard",
+    "[REDACTED_PRIVATE_IDENTIFIER]"
+  ],
+  "forbidden_private_identifiers": [
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "C:\\\\Users\\\\",
+    "C:/Users/",
+    "C:\\\\Workspace\\\\",
+    "C:/Workspace/",
+    "\\.supabase\\.co",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "com\\.[REDACTED_PRIVATE_IDENTIFIER]",
+    "com\\.[REDACTED_PRIVATE_IDENTIFIER]",
+    "com\\.[REDACTED_PRIVATE_IDENTIFIER]",
+    "com\\.screenkeeper\\.app",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "\\.[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]"
+  ],
+  "forbidden_dependency_fingerprints": [
+    "GPCGuard",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]",
+    "[REDACTED_PRIVATE_IDENTIFIER]"
+  ],
+  "exclude_directory_names": [
+    ".git",
+    "node_modules",
+    "runs",
+    "dist",
+    "coverage",
+    "artifacts",
+    "scratch",
+    ".compiled",
+    ".cache"
+  ],
+  "exclude_file_names": [
+    "chronicle.sqlite"
+  ],
+  "secret_scan_skip_file_names": [
+    "package-lock.json"
+  ],
+  "lockfile_safety_file_names": [
+    "package-lock.json",
+    "package.json"
+  ],
+  "gitleaks": {
+    "version": "8.30.1",
+    "sha256": {
+      "windows_x64": "d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e",
+      "linux_x64": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    }
+  },
+  "secret_scanner": {
+    "required": {
+      "name": "gitleaks",
+      "version": "8.30.1",
+      "sha256": {
+        "windows_x64": "d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e",
+        "linux_x64": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+      }
+    },
+    "fallback": {
+      "name": "trufflehog",
+      "required_mode": false
+    },
+    "follow_up": "Evaluate Betterleaks as a future fast scanner candidate; do not use it as the public release gate yet."
+  },
+  "generated_public_paths": [
+    ".github/ISSUE_TEMPLATE/bug_report.md",
+    ".github/ISSUE_TEMPLATE/feature_request.md",
+    ".github/workflows/typecheck.yml",
+    "CHANGELOG.md",
+    "STRUCTURE.md"
+  ],
+  "public_only_allowed_paths": []
+}
