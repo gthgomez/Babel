@@ -346,7 +346,7 @@ async function main(): Promise<void> {
       assert('result' in mutatingResponse, `${name} should fail closed with a result payload`);
       const mutatingResult = mutatingResponse.result as McpToolResult;
       assert(mutatingResult.isError === true, `${name} should be rejected`);
-      assert(String(mutatingResult.content?.[0]?.text ?? '').includes('not available in Babel MCP Phase 1'), `${name} rejection should explain MCP Phase 1 boundary`);
+      assert(String(mutatingResult.content?.[0]?.text ?? '').includes('not registered by this read-only Babel MCP server'), `${name} rejection should explain the read-only registration boundary`);
     }
 
     const unknownResponse = await client.request('tools/call', {

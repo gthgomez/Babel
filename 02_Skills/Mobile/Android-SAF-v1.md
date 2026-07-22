@@ -43,7 +43,7 @@ Use the correct `ActivityResultContracts` type for the job:
 | Save/export a file | `CreateDocument(mimeType)` | User chooses filename and location. Returns `Uri?`. |
 | Share via system sheet | `FileProvider.getUriForFile()` + `Intent.ACTION_SEND` | Do NOT use CreateDocument for sharing — CreateDocument requires user interaction. |
 
-**For PDF selection (example_app_two pattern):**
+**For PDF selection:**
 
 ```kotlin
 val compressLauncher = rememberLauncherForActivityResult(
@@ -232,7 +232,7 @@ context.contentResolver.releasePersistableUriPermission(
 context.contentResolver.persistedUriPermissions  // List<UriPermission>
 ```
 
-**Rule:** For single-session workflows (example_app_two pattern), do NOT call
+**Rule:** For single-session workflows, do NOT call
 `takePersistableUriPermission`. The one-time grant is sufficient and persisting it
 unnecessarily accumulates permission entries. Only persist when the app will reopen
 the URI in a future session.

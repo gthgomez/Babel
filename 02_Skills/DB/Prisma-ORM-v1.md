@@ -251,11 +251,11 @@ await prisma.run.upsert({
 
 ---
 
-## 10. 2026 Engine & Architecture (Prisma 7.0+)
+## 10. Engine & Architecture Selection
 
-### Wasm Runtime (Rust-Free)
-- **Engine Selection**: Prisma 7.0+ defaults to a **Wasm-based runtime** for edge and serverless environments. This eliminates the heavy Rust binary, reduces bundle size by ~50%, and fixes cold-start latency.
-- **Client Generation**: The generated client is now fully architecture-agnostic by default. No need for `binaryTargets` in most environments.
+### Runtime Selection
+- **Engine Selection**: Verify the installed Prisma version and deployment target before choosing a runtime or driver adapter. Do not infer bundle-size or cold-start improvements; measure them in the target environment.
+- **Client Generation**: Configure generated-client targets from the installed Prisma documentation and deployment requirements. Retain `binaryTargets` when the selected engine and platform require them.
 
 ### Multi-File Schema Organization
 - **Structure**: For large projects, split the monolithic `schema.prisma` into logical modules using the `prisma/schema/` directory.
@@ -279,4 +279,3 @@ await prisma.run.upsert({
 | Removing / renaming enum values | Stored data using old values causes runtime errors |
 | Missing `@@index` on FK columns | Silent full-table scans on join queries |
 | Mixing Wasm and Binary engines | Causes runtime mismatches in heterogeneous environments |
-

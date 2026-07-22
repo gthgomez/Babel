@@ -265,7 +265,7 @@ test('benchmark routing isolation clears unrelated workspace project context', (
   const manifest = {
     orchestrator_version: '9.0',
     target_project: 'example_game_workspace',
-    target_project_path: 'C:\\Workspace\\benchmarks\\runs\\terminal-bench-2\\job\\01-largest-eigenval\\app',
+    target_project_path: 'C:\\Repos\\benchmarks\\runs\\terminal-bench-2\\job\\01-largest-eigenval\\app',
     analysis: {
       task_summary: 'largest-eigenval',
       task_category: 'Python Backend',

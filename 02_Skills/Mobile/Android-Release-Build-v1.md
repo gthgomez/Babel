@@ -13,7 +13,7 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 **Status:** Active
 **Pairs with:** `domain_android_kotlin`
 **Activation:** Load for any task that touches release builds, signing configuration, ProGuard/R8,
-MaterialTheme setup, or the transition from debug to production-ready build.
+MaterialTheme setup, or the transition from debug to a release-build candidate.
 
 ---
 

@@ -287,7 +287,7 @@ export function dependencyInstallApprovalInput(
     reason: 'Dependency installation can mutate the workspace and download code; example_autonomous_agent manager requires explicit approval.',
     scope: {
       projectRoot: input.projectRoot ?? null,
-      executionProfile: input.executionProfile ?? 'opencalw_manager',
+      executionProfile: input.executionProfile ?? 'workspace_manager',
     },
     payload: {
       command,
@@ -323,7 +323,7 @@ export function modelEscalationApprovalInput(input: ModelEscalationApprovalInput
     reason: 'Model escalation can increase cost and autonomy. Interactive CLI model flags approve one run; queued approvals are for unattended or repeated escalation.',
     scope: {
       projectRoot: input.projectRoot ?? null,
-      executionProfile: 'opencalw_manager',
+      executionProfile: 'workspace_manager',
     },
     payload: {
       task,

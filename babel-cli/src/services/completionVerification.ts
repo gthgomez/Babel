@@ -17,7 +17,7 @@ export function evaluateCompletionVerification(input: {
   verification?: WorkspaceVerifyReport | null;
 }): CompletionVerificationGate {
   const required = input.pipelineStatus === 'COMPLETE' &&
-    input.executionProfile === 'opencalw_manager' &&
+    input.executionProfile === 'workspace_manager' &&
     Boolean(input.projectRoot);
 
   if (!required) {

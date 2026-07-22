@@ -1,7 +1,6 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 
-import { BABEL_ROOT } from '../cli/constants.js';
 import { SafeExecutor, type ToolResult } from '../sandbox.js';
 import { analyzeProjectRoot, type ProjectOnboardingReport } from './projectOnboarding.js';
 
@@ -14,9 +13,9 @@ export interface ApprovedWorkspaceRoot {
 export interface WorkspacePolicyStatus {
   readonly status: 'ok';
   readonly approved_roots: ApprovedWorkspaceRoot[];
-  readonly web_policy: 'denied_for_opencalw_manager';
+  readonly web_policy: 'denied_for_workspace_manager';
   readonly dependency_install_policy: 'ask_first';
-  readonly execution_profile: 'opencalw_manager';
+  readonly execution_profile: 'workspace_manager';
 }
 
 export interface WorkspaceFileEntry {
@@ -53,7 +52,7 @@ export interface WorkspaceCommandResult {
 export interface WorkspaceVerifyReport {
   readonly status: 'pass' | 'fail' | 'no_commands';
   readonly project_root: string;
-  readonly execution_profile: 'opencalw_manager';
+  readonly execution_profile: 'workspace_manager';
   readonly onboarding: ProjectOnboardingReport;
   readonly selected_commands: string[];
   readonly command_results: WorkspaceCommandResult[];
@@ -61,10 +60,23 @@ export interface WorkspaceVerifyReport {
 }
 
 const DEFAULT_WORKSPACE_APPROVED_ROOTS_NOTE =
-  'By default Babel trusts repos under the workspace root. Set BABEL_example_autonomous_agent_APPROVED_ROOTS to a semicolon-separated allowlist for a tighter boundary.';
+  'By default Babel trusts only the explicit or current project root. Set BABEL_WORKSPACE_APPROVED_ROOTS to a semicolon-separated allowlist for broader access.';
+
+const warnedCompatibilityEnvironment = new Set<string>();
+
+function readWorkspaceEnvironment(canonical: string, legacy: string): string | undefined {
+  const canonicalValue = process.env[canonical]?.trim();
+  if (canonicalValue) return canonicalValue;
+  const legacyValue = process.env[legacy]?.trim();
+  if (legacyValue && !warnedCompatibilityEnvironment.has(legacy)) {
+    warnedCompatibilityEnvironment.add(legacy);
+    process.stderr.write(`Warning: ${legacy} is deprecated; use ${canonical}.\n`);
+  }
+  return legacyValue || undefined;
+}
 
 function workspaceRoot(): string {
-  return resolve(process.env['BABEL_WORKSPACE_ROOT']?.trim() || resolve(BABEL_ROOT, '..'));
+  return resolve(process.env['BABEL_WORKSPACE_ROOT']?.trim() || process.cwd());
 }
 
 function normalizeRoot(path: string): string {
@@ -83,23 +95,23 @@ function splitRoots(raw: string): string[] {
     .filter(value => value.length > 0);
 }
 
-export function getexample_autonomous_agentApprovedRoots(): ApprovedWorkspaceRoot[] {
-  const explicitRoots = process.env['BABEL_example_autonomous_agent_APPROVED_ROOTS']?.trim();
+export function getWorkspaceApprovedRoots(projectRoot = process.cwd()): ApprovedWorkspaceRoot[] {
+  const explicitRoots = readWorkspaceEnvironment('BABEL_WORKSPACE_APPROVED_ROOTS', 'BABEL_OPENCALW_APPROVED_ROOTS');
   const roots = explicitRoots && explicitRoots.length > 0
     ? splitRoots(explicitRoots)
-    : [workspaceRoot()];
+    : [projectRoot];
 
   return [...new Set(roots.map(normalizeRoot))]
-    .map(path => ({ path, exists: existsSync(path), aliases: buildexample_autonomous_agentPathAliases(path) }));
+    .map(path => ({ path, exists: existsSync(path), aliases: buildWorkspacePathAliases(path) }));
 }
 
 export function getWorkspacePolicyStatus(): WorkspacePolicyStatus {
   return {
     status: 'ok',
-    approved_roots: getexample_autonomous_agentApprovedRoots(),
-    web_policy: 'denied_for_opencalw_manager',
+    approved_roots: getWorkspaceApprovedRoots(),
+    web_policy: 'denied_for_workspace_manager',
     dependency_install_policy: 'ask_first',
-    execution_profile: 'opencalw_manager',
+    execution_profile: 'workspace_manager',
   };
 }
 
@@ -116,7 +128,7 @@ function isInside(root: string, candidate: string): boolean {
   return resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}${sep}`);
 }
 
-function buildexample_autonomous_agentPathAliases(root: string): string[] {
+function buildWorkspacePathAliases(root: string): string[] {
   const workspace = normalizeRoot(workspaceRoot());
   const relativeFromWorkspace = relative(workspace, root);
   if (
@@ -168,7 +180,7 @@ function mapSandboxRelativePath(pathArg: string): string[] {
   }
 
   const lower = toPosixPath(trimmed).toLowerCase();
-  const sandboxRoot = process.env['BABEL_example_autonomous_agent_SANDBOX_ROOT']?.trim();
+  const sandboxRoot = readWorkspaceEnvironment('BABEL_WORKSPACE_SANDBOX_ROOT', 'BABEL_OPENCALW_SANDBOX_ROOT');
   if (sandboxRoot) {
     const normalizedSandboxRoot = toPosixPath(resolve(sandboxRoot)).replace(/\/+$/, '');
     const normalizedInput = toPosixPath(resolve(trimmed));
@@ -199,14 +211,14 @@ function candidateWorkspacePaths(pathArg: string): string[] {
 }
 
 export function resolveApprovedWorkspacePath(pathArg: string): { path: string; approvedRoots: string[] } {
-  const approvedRoots = getexample_autonomous_agentApprovedRoots().map(root => root.path);
+  const approvedRoots = getWorkspaceApprovedRoots().map(root => root.path);
   const targetPath = candidateWorkspacePaths(pathArg)
     .find(candidate => approvedRoots.some(root => isInside(root, candidate)));
 
   if (!targetPath) {
     const resolvedPath = resolve(pathArg);
     throw new Error(
-      `Path is outside example_autonomous_agent approved workspace roots: ${resolvedPath}. ` +
+      `Path is outside approved workspace roots: ${resolvedPath}. ` +
       `Approved roots: ${approvedRoots.join('; ')}. ${DEFAULT_WORKSPACE_APPROVED_ROOTS_NOTE}`,
     );
   }
@@ -313,7 +325,7 @@ function withManagerEnv<T>(projectRoot: string, approvedRoots: string[], fn: () 
   const previousProjectRoot = process.env['BABEL_PROJECT_ROOT'];
   const previousAllowedRoots = process.env['BABEL_ALLOWED_ROOTS'];
 
-  process.env['BABEL_EXECUTION_PROFILE'] = 'opencalw_manager';
+  process.env['BABEL_EXECUTION_PROFILE'] = 'workspace_manager';
   process.env['BABEL_PROJECT_ROOT'] = projectRoot;
   process.env['BABEL_ALLOWED_ROOTS'] = approvedRoots.join(',');
 
@@ -384,7 +396,7 @@ export function verifyWorkspaceProject(
   return {
     status,
     project_root: resolved.path,
-    execution_profile: 'opencalw_manager',
+    execution_profile: 'workspace_manager',
     onboarding,
     selected_commands: selectedCommands,
     command_results: commandResults,
@@ -394,7 +406,7 @@ export function verifyWorkspaceProject(
 
 export function formatWorkspacePolicyHuman(status: WorkspacePolicyStatus): string {
   return [
-    'example_autonomous_agent workspace manager policy:',
+    'Workspace manager policy:',
     `  Execution profile: ${status.execution_profile}`,
     `  Web: ${status.web_policy}`,
     `  Dependency installs: ${status.dependency_install_policy}`,

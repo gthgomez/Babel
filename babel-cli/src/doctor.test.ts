@@ -104,7 +104,7 @@ test('doctor placeholder project path check inspects run manifests structurally'
   );
   writeFileSync(
     join(contextOnlyRun, '01_manifest.json'),
-    JSON.stringify({ target_project: 'global', target_project_path: 'C:\\Workspace\\private source repo' }),
+    JSON.stringify({ target_project: 'global', target_project_path: 'C:\\Repos\\project repository' }),
     'utf8',
   );
   writeFileSync(
@@ -145,7 +145,7 @@ test('doctor placeholder project path check ignores archived context-only placeh
   );
   writeFileSync(
     join(runDir, '01_manifest.json'),
-    JSON.stringify({ target_project: 'global', target_project_path: 'C:\\Workspace\\private source repo' }),
+    JSON.stringify({ target_project: 'global', target_project_path: 'C:\\Repos\\project repository' }),
     'utf8',
   );
   writeFileSync(
@@ -172,7 +172,7 @@ test('doctor latest run pointer check warns on malformed pointer JSON', async ()
   mkdirSync(runsRoot, { recursive: true });
   writeFileSync(
     join(runsRoot, '.latest.example_autonomous_agent.json'),
-    '{\n  "run_dir": "C:\\Workspace\\\\private source repo\\\\runs\\\\bad"\n}\n',
+    '{\n  "run_dir": "C:\\Repos\\\\project repository\\\\runs\\\\bad"\n}\n',
     'utf8',
   );
 
@@ -274,7 +274,7 @@ test('doctor repo map distinguishes missing mapped repo paths', async () => {
       example_game_workspace: join(workspace, 'repos', 'example_game_workspace'),
       example_game_suite: join(workspace, 'repos', 'example_game_suite'),
       example_autonomous_agent: join(workspace, 'repos', 'example_autonomous_agent'),
-      example_mobile_finance: join(workspace, 'repos', 'example_mobile_finance'),
+      example_mobile_reference: join(workspace, 'repos', 'example_mobile_reference'),
     },
   }), 'utf8');
   mkdirSync(join(workspace, 'Project_Public', 'Babel-public'), { recursive: true });
@@ -297,7 +297,7 @@ test('doctor repo map distinguishes missing mapped repo paths', async () => {
   assert.equal(result.checks.some((check) => check.id === 'repo_map.paths_exist' && check.diagnostic_code === 'REPO_MISSING'), true);
 });
 
-test('doctor scope all allows documented external repo-map prerequisite to remain missing without fail', async () => {
+test('doctor scope all validates the canonical clone without opt-in repository dependencies', async () => {
   const { root, workspace } = makeDoctorWorkspace({ validCatalog: true, dist: true });
   const externalGodotPath = join(workspace, 'missing', 'example_game_workspace', 'ExampleGameProject');
   const expectedRepoPaths = {
@@ -310,7 +310,7 @@ test('doctor scope all allows documented external repo-map prerequisite to remai
     example_game_workspace: join(workspace, 'repos', 'example_game_workspace'),
     example_game_suite: externalGodotPath,
     example_autonomous_agent: join(workspace, 'repos', 'example_autonomous_agent'),
-    example_mobile_finance: join(workspace, 'repos', 'example_mobile_finance'),
+    example_mobile_reference: join(workspace, 'repos', 'example_mobile_reference'),
   };
   writeFileSync(join(workspace, 'config', 'repo-map.json'), JSON.stringify({
     external_prerequisites: ['example_game_suite'],
@@ -357,39 +357,23 @@ test('doctor scope all allows documented external repo-map prerequisite to remai
       };
     },
   });
-  assert.equal(result.status, 'warn');
+  assert.notEqual(result.status, 'fail');
   assert.equal(result.summary.fail, 0);
-  assert.equal(
-    result.checks.some((check) =>
-      check.id === 'repo_map.paths_exist' &&
-      check.status === 'warn' &&
-      check.diagnostic_code === 'EXTERNAL_PREREQUISITE_MISSING'
-    ),
-    true,
-  );
-  assert.equal(result.checks.some((check) => check.id === 'repo_map.paths_exist' && check.diagnostic_code === 'REPO_MISSING'), false);
-  assert.equal(
-    result.checks.some((check) =>
-      check.id === 'repo_map.external_prerequisites' &&
-      check.status === 'pass' &&
-      check.message?.includes('example_game_suite')
-    ),
-    true,
-  );
-  const godotResolution = result.checks.find((check) => check.id === 'resolution.example_game_suite');
-  assert.equal(godotResolution?.status, 'warn');
-  assert.equal(godotResolution?.diagnostic_code, 'EXTERNAL_PREREQUISITE_MISSING');
+  assert.equal(result.checks.some((check) => check.section === 'Repo Map'), false);
+  assert.equal(result.checks.some((check) => check.section === 'Resolution'), false);
+  assert.equal(result.checks.some((check) => check.section === 'Workspace'), false);
 });
 
 function makeDoctorWorkspace(options: { validCatalog: boolean; dist: boolean }): { workspace: string; root: string } {
   const workspace = mkdtempSync(join(tmpdir(), 'babel-doctor-workspace-'));
-  const root = join(workspace, 'private source repo');
+  const root = join(workspace, 'project repository');
   mkdirSync(join(root, 'tools'), { recursive: true });
-  mkdirSync(join(root, 'tools', 'public-export'), { recursive: true });
   mkdirSync(join(workspace, 'config'), { recursive: true });
   writeFileSync(join(root, 'tools', 'resolve-local-stack.ps1'), 'Write-Output "{}"\n', 'utf8');
-  writeFileSync(join(root, 'package.json'), '{}\n', 'utf8');
-  writeFileSync(join(root, 'tools', 'public-export', 'manifest.json'), '{}\n', 'utf8');
+  writeFileSync(join(root, 'tools', 'check-public-content-policy.ps1'), 'Write-Output "{}"\n', 'utf8');
+  writeFileSync(join(root, 'tools', 'check-canonical-independence.ps1'), 'Write-Output "{}"\n', 'utf8');
+  mkdirSync(join(root, 'babel-cli'), { recursive: true });
+  writeFileSync(join(root, 'babel-cli', 'package.json'), '{}\n', 'utf8');
   if (options.validCatalog) {
     writeFileSync(join(root, 'prompt_catalog.yaml'), 'version: 1\nentries:\n  test: {}\n', 'utf8');
   } else {
@@ -410,7 +394,7 @@ function makeDoctorWorkspace(options: { validCatalog: boolean; dist: boolean }):
     example_game_workspace: join(workspace, 'repos', 'example_game_workspace'),
     example_game_suite: join(workspace, 'repos', 'example_game_suite'),
     example_autonomous_agent: join(workspace, 'repos', 'example_autonomous_agent'),
-    example_mobile_finance: join(workspace, 'repos', 'example_mobile_finance'),
+    example_mobile_reference: join(workspace, 'repos', 'example_mobile_reference'),
   };
   for (const repoPath of Object.values(repos)) {
     mkdirSync(repoPath, { recursive: true });

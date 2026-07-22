@@ -413,10 +413,10 @@ entries:
     path: 05_Project_Overlays/Example-Web-Audit-Context.md
     status: active
     load_position: 5
-  - id: overlay_example_mobile_finance
+  - id: overlay_example_mobile_reference
     layer: project_overlay
-    path: 05_Project_Overlays/Example-Mobile-Finance-Context.md
-    project: example_mobile_finance
+    path: 05_Project_Overlays/Example-Mobile-Application-Context.md
+    project: example_mobile_reference
     status: active
     load_position: 5
   - id: task_frontend_professionalism
@@ -436,7 +436,7 @@ entries:
       '02_Domain_Architects/Clean_SWE_Frontend-v6.md',
       '03_Model_Adapters/Codex_Balanced.md',
       '05_Project_Overlays/Example-Web-Audit-Context.md',
-      '05_Project_Overlays/Example-Mobile-Finance-Context.md',
+      '05_Project_Overlays/Example-Mobile-Application-Context.md',
       '06_Task_Overlays/Frontend-Professionalism-v1.0.md',
       '02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md',
     ]) {
@@ -495,7 +495,7 @@ entries:
     );
 
     const unknownProjectOverlayManifest = resolveInstructionStackManifest(makeTypedManifest({
-      target_project: 'example_mobile_finance',
+      target_project: 'example_mobile_reference',
       instruction_stack: {
         behavioral_ids: ['behavioral_core_v7', 'behavioral_guard_v7'],
         domain_id: 'domain_swe_frontend',
@@ -508,11 +508,11 @@ entries:
     }), root);
 
     assert(
-      unknownProjectOverlayManifest.instruction_stack?.project_overlay_id === 'overlay_example_mobile_finance',
+      unknownProjectOverlayManifest.instruction_stack?.project_overlay_id === 'overlay_example_mobile_reference',
       'unknown project overlay test: expected target project overlay to replace unknown project_overlay_id',
     );
     assert(
-      unknownProjectOverlayManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_example_mobile_finance'),
+      unknownProjectOverlayManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_example_mobile_reference'),
       'unknown project overlay test: expected corrected project overlay to compile successfully',
     );
   });

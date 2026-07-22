@@ -439,7 +439,7 @@ async function handleRequest(request: Record<string, unknown>): Promise<void> {
       writeResult(id ?? 0, {
         content: [{
           type: 'text',
-          text: `Tool '${toolName}' is not available in Babel MCP Phase 1.`,
+          text: `Tool '${toolName}' is not registered by this read-only Babel MCP server.`,
         }],
         isError: true,
       });

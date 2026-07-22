@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "fixture_type": "babel_lite_trust_demo",
-  "visibility": "private",
+  "visibility": "public_example",
   "description": "Offline trust loop: one failing test, mock-provider fix, verifier pass, checkpoint undo.",
   "target_file": "src/math.js",
   "verifier_command": "npm test",

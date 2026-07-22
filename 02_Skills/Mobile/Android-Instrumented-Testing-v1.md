@@ -291,7 +291,7 @@ val composeTestRule = createComposeRule()
 fun proUpsellCard_visibleWhenNotPro() {
     val fakeBilling = FakeBillingGateway()
     val vm = MainViewModel(FakePdfEngine(), fakeBilling, context)
-    composeTestRule.setContent { example_app_twoApp(vm) }
+    composeTestRule.setContent { SampleApp(vm) }
 
     composeTestRule.onNodeWithText("Get Pro").assertIsDisplayed()
     fakeBilling.simulatePurchase()

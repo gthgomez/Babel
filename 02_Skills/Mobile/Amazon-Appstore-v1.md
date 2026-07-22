@@ -123,7 +123,7 @@ val pickerAvailable = ActivityResultContracts.isPhotoPickerAvailable(context)
 ```
 
 **Action for Amazon builds:**
-1. Confirm your `androidx.activity` version is 1.7.0+ (current project uses 1.9.3 ✓)
+1. Verify the target project's `androidx.activity` version against current official compatibility guidance
 2. Test image picking on a real Fire device or Fire OS emulator before submission
 3. If the `ACTION_OPEN_DOCUMENT` auto-fallback UX is acceptable, no code change is needed
 4. If the fallback UX is not acceptable, implement `ActivityResultContracts.GetContent("image/*")`
@@ -149,8 +149,8 @@ Google services do not exist on Fire OS. Apps that call them at runtime will cra
 | Play Integrity API | Amazon Device Messaging or custom | Different attestation model |
 
 **Recommendation for utility apps with no Google services dependency:**
-example_app_one, example_app_two, and example_app_three use no Google services beyond Play Billing.
-The only change required is swapping the billing implementation via a product flavor.
+Inventory the target application's runtime and transitive dependencies. If billing is the only
+store-specific integration, isolate it behind a product flavor and verify both artifacts.
 
 ---
 

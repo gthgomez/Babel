@@ -9,13 +9,17 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 
 # Babel MCP Adapter v1
 
-Babel v10 Phase 1 exposes a read-only MCP adapter for the control plane. The adapter runs over stdio via `babel mcp` and is intentionally limited to safe inspection surfaces backed by the compiler and catalog: catalog inspection, typed stack resolution, instruction stack preview, and manifest preview.
+This is the canonical specification for Babel's current read-only MCP adapter.
+The adapter runs over stdio via `babel mcp` and is intentionally limited to
+inspection surfaces backed by the compiler and catalog: catalog inspection,
+typed stack resolution, instruction stack preview, manifest preview, and
+executor-tool metadata.
 
 ## Scope
 
 The adapter is for control-plane introspection only. It exists to let external hosts inspect Babel's prompt catalog and compile typed routing intent into the exact ordered prompt stack Babel would use at runtime, without turning Babel into an execution runtime or code-generation surface.
 
-## Phase 1 Tools
+## Available Tools
 
 - `babel_catalog_inspect`
 - `babel_stack_resolve`

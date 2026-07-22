@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import {
-  getexample_autonomous_agentApprovedRoots,
+  getWorkspaceApprovedRoots,
   listWorkspaceFiles,
   readWorkspaceFile,
   resolveApprovedWorkspacePath,
@@ -13,15 +13,15 @@ import {
 } from './workspaceManager.js';
 
 function withApprovedRoots<T>(roots: string[], run: () => T): T {
-  const previous = process.env['BABEL_example_autonomous_agent_APPROVED_ROOTS'];
-  process.env['BABEL_example_autonomous_agent_APPROVED_ROOTS'] = roots.join(';');
+  const previous = process.env['BABEL_WORKSPACE_APPROVED_ROOTS'];
+  process.env['BABEL_WORKSPACE_APPROVED_ROOTS'] = roots.join(';');
   try {
     return run();
   } finally {
     if (previous === undefined) {
-      delete process.env['BABEL_example_autonomous_agent_APPROVED_ROOTS'];
+      delete process.env['BABEL_WORKSPACE_APPROVED_ROOTS'];
     } else {
-      process.env['BABEL_example_autonomous_agent_APPROVED_ROOTS'] = previous;
+      process.env['BABEL_WORKSPACE_APPROVED_ROOTS'] = previous;
     }
   }
 }
@@ -41,7 +41,7 @@ function withWorkspaceRoot<T>(workspaceRoot: string, run: () => T): T {
 }
 
 function withApprovalQueue<T>(run: () => T): T {
-  const root = mkdtempSync(join(tmpdir(), 'babel-opencalw-approvals-'));
+  const root = mkdtempSync(join(tmpdir(), 'babel-workspace-manager-approvals-'));
   const previous = process.env['BABEL_APPROVAL_QUEUE_PATH'];
   process.env['BABEL_APPROVAL_QUEUE_PATH'] = join(root, 'approval-queue.json');
   try {
@@ -56,11 +56,11 @@ function withApprovalQueue<T>(run: () => T): T {
   }
 }
 
-test('example_autonomous_agent workspace roots can be overridden for tests', () => {
-  const root = mkdtempSync(join(tmpdir(), 'babel-opencalw-roots-'));
+test('workspace manager roots can be overridden for tests', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-workspace-manager-roots-'));
   try {
     withApprovedRoots([root], () => {
-      const roots = getexample_autonomous_agentApprovedRoots();
+      const roots = getWorkspaceApprovedRoots();
       assert.equal(roots.length, 1);
       assert.equal(roots[0]?.path, resolve(root));
       assert.equal(roots[0]?.exists, true);
@@ -70,46 +70,33 @@ test('example_autonomous_agent workspace roots can be overridden for tests', () 
   }
 });
 
-test('example_autonomous_agent workspace roots default to the whole workspace for user-shaped repo access', () => {
-  const workspace = mkdtempSync(join(tmpdir(), 'babel-opencalw-default-workspace-'));
+test('workspace manager roots default to the explicit project root', () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'babel-workspace-manager-default-workspace-'));
   const repo = join(workspace, 'AnyRepo');
-  const outside = mkdtempSync(join(tmpdir(), 'babel-opencalw-default-outside-'));
+  const outside = mkdtempSync(join(tmpdir(), 'babel-workspace-manager-default-outside-'));
   try {
     mkdirSync(repo);
     writeFileSync(join(repo, 'note.txt'), 'hello from any workspace repo\n', 'utf-8');
     writeFileSync(join(outside, 'secret.txt'), 'nope\n', 'utf-8');
-
-    withWorkspaceRoot(workspace, () => {
-      const roots = getexample_autonomous_agentApprovedRoots();
-      assert.equal(roots.length, 1);
-      assert.equal(roots[0]?.path, resolve(workspace));
-
-      const resolved = resolveApprovedWorkspacePath(join(repo, 'note.txt'));
-      assert.equal(resolved.path, resolve(repo, 'note.txt'));
-      assert.deepEqual(resolved.approvedRoots, [resolve(workspace)]);
-
-      const read = readWorkspaceFile('/workspace/AnyRepo/note.txt');
-      assert.equal(read.content, 'hello from any workspace repo\n');
-
-      assert.throws(
-        () => resolveApprovedWorkspacePath(join(outside, 'secret.txt')),
-        /outside example_autonomous_agent approved workspace roots/,
-      );
-    });
+    const roots = getWorkspaceApprovedRoots(repo);
+    assert.equal(roots.length, 1);
+    assert.equal(roots[0]?.path, resolve(repo));
+    assert.notEqual(roots[0]?.path, resolve(workspace));
+    assert.notEqual(roots[0]?.path, resolve(outside));
   } finally {
     rmSync(workspace, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
   }
 });
 
-test('example_autonomous_agent workspace roots expose sandbox mirror aliases', () => {
-  const workspace = mkdtempSync(join(tmpdir(), 'babel-opencalw-workspace-'));
+test('workspace manager roots expose sandbox mirror aliases', () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'babel-workspace-manager-workspace-'));
   const scratch = join(workspace, 'scratch');
   try {
     mkdirSync(scratch);
     withWorkspaceRoot(workspace, () => {
       withApprovedRoots([scratch], () => {
-        const roots = getexample_autonomous_agentApprovedRoots();
+        const roots = getWorkspaceApprovedRoots();
         assert.deepEqual(roots[0]?.aliases, [
           '/workspace/scratch',
           '/workspace/repos/scratch',
@@ -122,8 +109,8 @@ test('example_autonomous_agent workspace roots expose sandbox mirror aliases', (
   }
 });
 
-test('workspace file read accepts example_autonomous_agent sandbox mirror aliases for approved roots', () => {
-  const workspace = mkdtempSync(join(tmpdir(), 'babel-opencalw-alias-'));
+test('workspace file read accepts sandbox mirror aliases for approved roots', () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'babel-workspace-manager-alias-'));
   const scratch = join(workspace, 'scratch');
   try {
     mkdirSync(scratch);
@@ -144,8 +131,8 @@ test('workspace file read accepts example_autonomous_agent sandbox mirror aliase
 });
 
 test('workspace file list/read stay inside approved roots', () => {
-  const root = mkdtempSync(join(tmpdir(), 'babel-opencalw-files-'));
-  const outside = mkdtempSync(join(tmpdir(), 'babel-opencalw-outside-'));
+  const root = mkdtempSync(join(tmpdir(), 'babel-workspace-manager-files-'));
+  const outside = mkdtempSync(join(tmpdir(), 'babel-workspace-manager-outside-'));
   try {
     mkdirSync(join(root, 'src'));
     writeFileSync(join(root, 'src', 'index.js'), 'export const ok = true;\n', 'utf-8');
@@ -160,7 +147,7 @@ test('workspace file list/read stay inside approved roots', () => {
 
       assert.throws(
         () => resolveApprovedWorkspacePath(join(outside, 'secret.txt')),
-        /outside example_autonomous_agent approved workspace roots/,
+        /outside approved workspace roots/,
       );
     });
   } finally {
@@ -169,8 +156,8 @@ test('workspace file list/read stay inside approved roots', () => {
   }
 });
 
-test('workspace verify runs explicit commands through opencalw_manager', () => {
-  const root = mkdtempSync(join(tmpdir(), 'babel-opencalw-verify-'));
+test('workspace verify runs explicit commands through workspace_manager', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-workspace-manager-verify-'));
   try {
     writeFileSync(
       join(root, 'sample.test.js'),
@@ -184,7 +171,7 @@ test('workspace verify runs explicit commands through opencalw_manager', () => {
         timeoutSeconds: 30,
       });
       assert.equal(report.status, 'pass');
-      assert.equal(report.execution_profile, 'opencalw_manager');
+      assert.equal(report.execution_profile, 'workspace_manager');
       assert.equal(report.command_results[0]?.exit_code, 0);
     });
   } finally {
@@ -193,7 +180,7 @@ test('workspace verify runs explicit commands through opencalw_manager', () => {
 });
 
 test('workspace verify blocks dependency install commands', () => {
-  const root = mkdtempSync(join(tmpdir(), 'babel-opencalw-install-'));
+  const root = mkdtempSync(join(tmpdir(), 'babel-workspace-manager-install-'));
   try {
     withApprovedRoots([root], () => {
       withApprovalQueue(() => {

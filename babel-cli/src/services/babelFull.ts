@@ -298,7 +298,7 @@ export function runSparkParallelReview(input: {
     synthesis_path: synthesisPath,
     mutation_subagents: {
       enabled: false,
-      reason: 'Wave 5 proof batch: read-only Spark reviewers only; lead lane owns mutation.',
+      reason: 'Read-only Spark reviewers only; the lead lane owns mutation.',
     },
   });
 

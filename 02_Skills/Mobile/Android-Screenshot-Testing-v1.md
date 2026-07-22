@@ -256,7 +256,7 @@ Use project properties forwarded via the `testOptions.unitTests.all` block from 
 | **Verify** | `./gradlew :app:testDebugUnitTest -Proborazzi.test.verify=true` | CI; routine test runs |
 | **Default** | `./gradlew :app:testDebugUnitTest` | RECORD_IF_MISSING: captures new goldens, compares existing |
 
-For flavored builds (e.g. example_app_one with googlePlay/amazon flavors), replace
+For flavored builds (for example, Google Play and Amazon variants), replace
 `testDebugUnitTest` with the flavor-specific task: `testGooglePlayDebugUnitTest`.
 
 **Golden file storage:** Commit the `src/test/snapshots/` directory to version control.

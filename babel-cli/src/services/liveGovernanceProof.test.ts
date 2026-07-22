@@ -316,7 +316,7 @@ function runScenario(
     assert.equal(
       scenario.provider.mode,
       'recorded',
-      'Phase 1 recorded-provider scenarios must explicitly identify recorded mode.',
+      'Recorded-provider scenarios must explicitly identify recorded mode.',
     );
 
     if (!plannerParse.success) {

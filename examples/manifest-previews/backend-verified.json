@@ -29,7 +29,7 @@
       "LoadPosition": 4,
       "RelativePath": "02_Domain_Architects/Clean_SWE_Backend-v7.md",
       "FullPath": "02_Domain_Architects/Clean_SWE_Backend-v7.md",
-      "OrderIndex": 0
+      "OrderIndex": 1
     },
     {
       "Id": "skill_ts_zod",
@@ -37,7 +37,7 @@
       "LoadPosition": null,
       "RelativePath": "02_Skills/Lang/TS-Zod-v1.md",
       "FullPath": "02_Skills/Lang/TS-Zod-v1.md",
-      "OrderIndex": 1
+      "OrderIndex": 2
     },
     {
       "Id": "skill_supabase_pg",
@@ -45,7 +45,7 @@
       "LoadPosition": null,
       "RelativePath": "02_Skills/DB/Supabase-PG-v1.md",
       "FullPath": "02_Skills/DB/Supabase-PG-v1.md",
-      "OrderIndex": 2
+      "OrderIndex": 3
     },
     {
       "Id": "skill_evidence_gathering",
@@ -53,7 +53,7 @@
       "LoadPosition": null,
       "RelativePath": "02_Skills/Governance/Evidence-Gathering-v1.md",
       "FullPath": "02_Skills/Governance/Evidence-Gathering-v1.md",
-      "OrderIndex": 3
+      "OrderIndex": 4
     },
     {
       "Id": "skill_bcdp_contracts",
@@ -61,14 +61,6 @@
       "LoadPosition": null,
       "RelativePath": "02_Skills/Governance/BCDP-Contracts-v1.md",
       "FullPath": "02_Skills/Governance/BCDP-Contracts-v1.md",
-      "OrderIndex": 4
-    },
-    {
-      "Id": "adapter_codex_balanced",
-      "Layer": "model_adapter",
-      "LoadPosition": 8,
-      "RelativePath": "03_Model_Adapters/Codex_Balanced.md",
-      "FullPath": "03_Model_Adapters/Codex_Balanced.md",
       "OrderIndex": 5
     },
     {
@@ -80,12 +72,20 @@
       "OrderIndex": 6
     },
     {
+      "Id": "adapter_codex_balanced",
+      "Layer": "model_adapter",
+      "LoadPosition": 8,
+      "RelativePath": "03_Model_Adapters/Codex_Balanced.md",
+      "FullPath": "03_Model_Adapters/Codex_Balanced.md",
+      "OrderIndex": 7
+    },
+    {
       "Id": "pipeline_qa_reviewer",
       "Layer": "pipeline_stage",
       "LoadPosition": 9,
       "RelativePath": "02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md",
       "FullPath": "02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md",
-      "OrderIndex": 7
+      "OrderIndex": 8
     }
   ],
   "RepoContextFiles": null,

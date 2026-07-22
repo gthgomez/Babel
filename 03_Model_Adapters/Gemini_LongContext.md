@@ -78,7 +78,7 @@ Fixing symptoms = failure. You must:
 Gemini 2.5 Pro/Flash has a 1M+ token context window and strong multi-document reasoning.
 Channel these strengths inside the gates above:
 
-- **Long context**: Once a file has been provided, reference it freely in future plans without
+- **Long context**: Once a file has been provided, reference it freely in later planning steps without
   re-requesting it, unless the content has changed since it was provided.
 - **Reasoning depth**: In the PLAN phase only, include a brief reasoning trace (2–4 sentences)
   explaining why your approach is the safest and most maintainable path.

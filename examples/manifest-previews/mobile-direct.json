@@ -29,7 +29,7 @@
       "LoadPosition": 3,
       "RelativePath": "02_Domain_Architects/Android_Kotlin-v1.0.md",
       "FullPath": "02_Domain_Architects/Android_Kotlin-v1.0.md",
-      "OrderIndex": 0
+      "OrderIndex": 1
     },
     {
       "Id": "skill_android_app_classification",
@@ -37,7 +37,7 @@
       "LoadPosition": null,
       "RelativePath": "02_Skills/Mobile/Android-App-Classification-v1.md",
       "FullPath": "02_Skills/Mobile/Android-App-Classification-v1.md",
-      "OrderIndex": 1
+      "OrderIndex": 2
     },
     {
       "Id": "skill_evidence_gathering",
@@ -45,7 +45,7 @@
       "LoadPosition": null,
       "RelativePath": "02_Skills/Governance/Evidence-Gathering-v1.md",
       "FullPath": "02_Skills/Governance/Evidence-Gathering-v1.md",
-      "OrderIndex": 2
+      "OrderIndex": 3
     },
     {
       "Id": "skill_bcdp_contracts",
@@ -53,14 +53,6 @@
       "LoadPosition": null,
       "RelativePath": "02_Skills/Governance/BCDP-Contracts-v1.md",
       "FullPath": "02_Skills/Governance/BCDP-Contracts-v1.md",
-      "OrderIndex": 3
-    },
-    {
-      "Id": "adapter_codex_balanced",
-      "Layer": "model_adapter",
-      "LoadPosition": 8,
-      "RelativePath": "03_Model_Adapters/Codex_Balanced.md",
-      "FullPath": "03_Model_Adapters/Codex_Balanced.md",
       "OrderIndex": 4
     },
     {
@@ -70,6 +62,14 @@
       "RelativePath": "05_Project_Overlays/Example-Mobile-Suite-Context.md",
       "FullPath": "05_Project_Overlays/Example-Mobile-Suite-Context.md",
       "OrderIndex": 5
+    },
+    {
+      "Id": "adapter_codex_balanced",
+      "Layer": "model_adapter",
+      "LoadPosition": 8,
+      "RelativePath": "03_Model_Adapters/Codex_Balanced.md",
+      "FullPath": "03_Model_Adapters/Codex_Balanced.md",
+      "OrderIndex": 6
     }
   ],
   "RepoContextFiles": null,

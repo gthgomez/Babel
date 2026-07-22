@@ -1,7 +1,7 @@
 /**
  * Tool executor lane — maps normalized `AgentAction` values to `executeTool` calls.
  *
- * AgentAction → executeTool mapping (stable Wave 1 contract):
+ * AgentAction → executeTool mapping:
  *
  * | AgentAction.type | executeTool                         | Notes |
  * |------------------|-------------------------------------|-------|

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "fixture_set_id": "recorded-provider-governance-proof-v1",
-  "created_for": "Babel Phase 1 live governance proof",
+  "created_for": "recorded live-governance fixture",
   "provider_mode": "recorded_provider_replay",
   "live_provider_unavailable_artifact": "live provider unavailable, recorded replay used when DEEPSEEK_API_KEY and DEEPINFRA_API_KEY are absent",
   "scenarios": [

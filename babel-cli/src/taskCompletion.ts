@@ -35,6 +35,7 @@ export interface TaskGrounding {
   groundingRoots: string[];
   targetGroundingRoots: string[];
   referenceRoots: string[];
+  referenceSources: ReferenceSourceDescriptor[];
   targetFiles: string[];
   referenceFiles: string[];
   files: string[];
@@ -45,6 +46,12 @@ export interface TaskGrounding {
   entitySnippets: string[];
   daoSnippets: string[];
   referenceInventorySnippets: string[];
+}
+
+export interface ReferenceSourceDescriptor {
+  root: string;
+  kind: 'python' | 'android' | 'generic';
+  files: string[];
 }
 
 export interface GroundedEvidenceRegistry {
@@ -256,7 +263,7 @@ function findReferenceSourceRoots(taskText: string, projectRoot: string): string
     const normalizedTask = normalizeTaskText(taskText);
     const taskIdentifier = normalizeIdentifier(taskText);
     const directChildren = listDirectChildDirectories(projectRoot);
-    const mirroredRoot = join(projectRoot, 'reference-Example Finance Forecast');
+    const mirroredRoot = join(projectRoot, 'reference-source');
     const candidates = [
         ...(existsSync(mirroredRoot) ? [mirroredRoot] : []),
         ...directChildren,
@@ -292,10 +299,10 @@ function buildReferenceInventorySnippets(projectRoot: string, referenceRoots: st
         if (rootFiles.length > 0) {
             snippets.push(`// ${pathToPosix(projectRoot, referenceRoot)} authoritative source file_read allowlist (closed; exact paths only)\n${unique(rootFiles).join('\n')}`);
         }
-        const sourceModuleFiles = listGroundedFiles(join(referenceRoot, 'monte_carlo_ledger'), /\.py$/i);
+        const sourceModuleFiles = listGroundedFiles(join(referenceRoot, 'reference_source'), /\.py$/i);
         if (sourceModuleFiles.length > 0) {
             const sourceModuleNames = unique(sourceModuleFiles.map((filePath) => basename(filePath))).sort((a, b) => a.localeCompare(b));
-            snippets.push(`// ${pathToPosix(projectRoot, join(referenceRoot, 'monte_carlo_ledger'))} closed source module inventory (exact basenames)\n// ${sourceModuleNames.join(', ')}\n// Do not invent models.py or engine.py; they are not present in this inventory.`);
+            snippets.push(`// ${pathToPosix(projectRoot, join(referenceRoot, 'reference_source'))} closed source module inventory (exact basenames)\n// ${sourceModuleNames.join(', ')}\n// Do not invent models.py or engine.py; they are not present in this inventory.`);
         }
     }
     return snippets;
@@ -464,13 +471,19 @@ export function buildTaskGrounding(
         : /\.(kt|java|xml)$/i;
     const targetFiles = unique(groundingRoots.flatMap((groundingRoot) => listGroundedFiles(groundingRoot, filePattern)));
     const referenceRoots = findReferenceSourceRoots(rawTask, projectRoot);
-    if (referenceRoots.length === 0 && /Example Finance Forecast|example_autonomous_agent/i.test(rawTask)) {
-        const externalReferenceRoot = resolve(projectRoot, '..', 'example_autonomous_agent', 'Example Finance Forecast');
-        if (existsSync(externalReferenceRoot) && isLikelyPythonReferenceRoot(externalReferenceRoot)) {
-            referenceRoots.push(externalReferenceRoot);
-        }
-    }
     const referenceFiles = unique(referenceRoots.flatMap((referenceRoot) => listGroundedFiles(referenceRoot, /\.(py|md|toml|sql|yaml|yml|json)$/i)));
+    const referenceSources: ReferenceSourceDescriptor[] = referenceRoots.map((referenceRoot) => ({
+        root: referenceRoot,
+        kind: existsSync(join(referenceRoot, 'pyproject.toml')) || existsSync(join(referenceRoot, 'requirements.txt'))
+            ? 'python'
+            : existsSync(join(referenceRoot, 'settings.gradle.kts')) || existsSync(join(referenceRoot, 'build.gradle.kts'))
+                ? 'android'
+                : 'generic',
+        files: referenceFiles.filter((filePath) => {
+            const relativePath = relative(referenceRoot, filePath);
+            return relativePath === '' || !relativePath.startsWith('..');
+        }),
+    }));
     const files = unique([...targetFiles, ...referenceFiles]);
     const classNameMatches = [...new Set((rawTask.match(/\b([A-Z][A-Za-z0-9]+)\b/g) ?? []))];
     const companionSnippets: string[] = [];
@@ -508,6 +521,7 @@ export function buildTaskGrounding(
         groundingRoots: unique([...groundingRoots, ...referenceRoots]),
         targetGroundingRoots: groundingRoots,
         referenceRoots,
+        referenceSources,
         targetFiles,
         referenceFiles,
         files,
@@ -619,59 +633,6 @@ function resolveGroundedTargetMatches(target: unknown, grounding: TaskGrounding)
     return unique([...directMatches, ...basenameMatches]);
 }
 
-function canonicalizeExternalReferenceTarget(target: unknown, grounding: TaskGrounding): string | null {
-    const normalizedTarget = String(target ?? '').trim();
-    if (!normalizedTarget || !grounding?.grounded) {
-        return null;
-    }
-    const externalMarker = 'example_autonomous_agent\\Example Finance Forecast';
-    const normalizedMarker = externalMarker.replace(/\\/g, '/').toLowerCase();
-    const normalizedInput = normalizedTarget.replace(/\\/g, '/');
-    const markerIndex = normalizedInput.toLowerCase().indexOf(normalizedMarker);
-    if (markerIndex < 0) {
-        return null;
-    }
-    const mirrorRoot = (Array.isArray(grounding.referenceRoots) && grounding.referenceRoots.length > 0)
-        ? grounding.referenceRoots[0]!
-        : join(grounding.projectRoot, 'reference-Example Finance Forecast');
-    if (!mirrorRoot || !existsSync(mirrorRoot)) {
-        return null;
-    }
-    const suffix = normalizedInput.slice(markerIndex + normalizedMarker.length).replace(/^\/+/, '');
-    return suffix.length > 0 ? join(mirrorRoot, suffix) : mirrorRoot;
-}
-
-function canonicalizeReferenceModuleGuess(step: StepLike, grounding: TaskGrounding): string | null {
-    const normalizedTarget = String(step?.target ?? '').trim();
-    const normalizedBasename = basename(normalizedTarget).toLowerCase();
-    if (!normalizedBasename || !grounding?.grounded || !Array.isArray(grounding.files)) {
-        return null;
-    }
-    const candidateBasenames: string[] = [];
-    if (normalizedBasename === 'core_engine.py' || normalizedBasename === 'engine.py') {
-        candidateBasenames.push('forecasting.py', 'budget_engine.py');
-    } else if (normalizedBasename === 'models.py') {
-        const haystack = [
-            String(step?.description ?? ''),
-            String(step?.rationale ?? ''),
-        ].join(' ').toLowerCase();
-        if (/\b(schema|sqlite|table|tables|database|model)\b/.test(haystack)) {
-            candidateBasenames.push('schema.sql', 'db_manager.py', 'domain_rules.py');
-        } else {
-            candidateBasenames.push('db_manager.py', 'schema.sql', 'domain_rules.py');
-        }
-    } else {
-        return null;
-    }
-    for (const candidateBasename of candidateBasenames) {
-        const match = grounding.files.find((filePath) => basename(filePath).toLowerCase() === candidateBasename);
-        if (match) {
-            return match;
-        }
-    }
-    return null;
-}
-
 function shouldNormalizeGroundedTargetStep(step: StepLike): boolean {
     const tool = String(step?.tool ?? '').trim();
     if (!['file_read', 'directory_list', 'audit_ui'].includes(tool)) {
@@ -698,18 +659,6 @@ export function normalizePlanTargetsAgainstGrounding(
         if (!shouldNormalizeGroundedTargetStep(normalizedStep)) {
             normalizedSteps.push(normalizedStep);
             continue;
-        }
-        const guessedModuleTarget = canonicalizeReferenceModuleGuess(normalizedStep, grounding);
-        if (guessedModuleTarget && String(normalizedStep.target).trim() !== guessedModuleTarget) {
-            changed = true;
-            warnings.push(`[PLAN_TARGET_CANONICALIZED] Step ${step.step} target normalized to grounded reference module: ${guessedModuleTarget}`);
-            normalizedStep = { ...normalizedStep, target: guessedModuleTarget };
-        }
-        const externalCanonicalTarget = canonicalizeExternalReferenceTarget(normalizedStep.target, grounding);
-        if (externalCanonicalTarget && String(normalizedStep.target).trim() !== externalCanonicalTarget) {
-            changed = true;
-            warnings.push(`[PLAN_TARGET_CANONICALIZED] Step ${step.step} target normalized to mirrored reference root: ${externalCanonicalTarget}`);
-            normalizedStep = { ...normalizedStep, target: externalCanonicalTarget };
         }
         const matches = resolveGroundedTargetMatches(normalizedStep.target, grounding);
         if (matches.length === 0) {

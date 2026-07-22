@@ -158,9 +158,9 @@ export function createAgentJob(options: CreateAgentJobOptions & AgentJobServiceO
     throw new Error(`Job already exists: ${id}`);
   }
 
-  const executionProfile = options.executionProfile ?? 'opencalw_manager';
+  const executionProfile = options.executionProfile ?? 'workspace_manager';
   const resolvedProject = options.projectRoot
-    ? executionProfile === 'opencalw_manager'
+    ? executionProfile === 'workspace_manager'
       ? resolveApprovedWorkspacePath(options.projectRoot)
       : { path: resolve(options.projectRoot), approvedRoots: [] }
     : { path: null, approvedRoots: [] };

@@ -91,8 +91,8 @@ describe('extractJson — balanced-brace extraction', () => {
   });
 
   it('handles embedded strings with backslashes', () => {
-    const raw = '{"path":"C:\\\\Users\\\\icbag"}';
-    assert.deepEqual(parse(raw), { path: 'C:\\Users\\icbag' });
+    const raw = '{"path":"segments\\\\with\\\\backslashes"}';
+    assert.deepEqual(parse(raw), { path: 'segments\\with\\backslashes' });
   });
 
   it('skips unquoted-key object and finds next valid JSON', () => {

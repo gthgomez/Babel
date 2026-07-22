@@ -1,6 +1,7 @@
 # Start Here
 
-`Babel-public` is easiest to understand through one deterministic success path:
+The canonical Babel repository is easiest to understand through one deterministic
+success path:
 
 1. install `babel-cli`
 2. validate the public repo

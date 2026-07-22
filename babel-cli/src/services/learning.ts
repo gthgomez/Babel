@@ -1129,7 +1129,7 @@ export function generateMutationPackage(input: GenerateMutationPackageInput): Le
     throw new Error(`Lesson ${candidate.lesson_id} eval is stale for the current failure record.`);
   }
   if (candidate.scope !== 'project') {
-    throw new Error(`Learning mutation packages are project-scoped in P7; lesson ${candidate.lesson_id} has scope ${candidate.scope}.`);
+    throw new Error(`Learning mutation packages are project-scoped; lesson ${candidate.lesson_id} has scope ${candidate.scope}.`);
   }
 
   const targetPaths = targetPathsForMutation({ target: input.target, failure });
@@ -1192,7 +1192,7 @@ export function generateMutationPackage(input: GenerateMutationPackageInput): Le
     `Eval: ${passingEval.eval_id}`,
     `Target: ${input.target}`,
     '',
-    'This package is review-only. It must not be applied automatically in P7.',
+    'This package is review-only and must not be applied automatically.',
     '',
     'Safety notes:',
     ...reviewerChecklist.map(item => `- ${item}`),
@@ -1207,7 +1207,7 @@ export function generateMutationPackage(input: GenerateMutationPackageInput): Le
     `Lesson: ${candidate.lesson_id}`,
     `Lesson hash: ${currentLessonHash}`,
     '',
-    'Approving this package authorizes review of the proposed patch only. P7 does not apply mutations.',
+    'Approving this package authorizes review of the proposed patch only; it does not apply mutations.',
     '',
   ].join('\n');
 

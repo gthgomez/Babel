@@ -11,7 +11,7 @@ function makeManifest() {
   return OrchestratorManifestSchema.parse({
     orchestrator_version: '9.0',
     target_project: 'example_web_audit',
-    target_project_path: 'C:\\Workspace\\Project_SaaS\\example_web_audit',
+    target_project_path: 'C:\\Repos\\project_family\\example_web_audit',
     analysis: {
       task_summary: 'known script verification regression',
       task_category: 'Frontend',

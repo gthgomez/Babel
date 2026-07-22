@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 
-import { getexample_autonomous_agentApprovedRoots } from '../services/workspaceManager.js';
+import { getWorkspaceApprovedRoots } from '../services/workspaceManager.js';
 
 export interface TargetConsistencyResult {
   ok: boolean;
@@ -108,7 +108,7 @@ export function validatePlanTargetsWithinEffectiveRoots(input: {
   targets?: string[];
 }): TargetConsistencyResult {
   const effectiveTargetRoot = normalizePath(input.effectiveTargetRoot);
-  const approvedRoots = (input.approvedRoots ?? getexample_autonomous_agentApprovedRoots().map(root => root.path))
+  const approvedRoots = (input.approvedRoots ?? getWorkspaceApprovedRoots().map(root => root.path))
     .map(root => normalizePath(root))
     .filter((root): root is string => root !== null);
   const allowedRoots = [

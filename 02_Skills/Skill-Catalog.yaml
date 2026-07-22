@@ -129,9 +129,9 @@ skills:
     path: Governance/Babel-Catalog-Tuning-v1.md
     tags: [governance:safety, skill, utility:babel, utility:catalog, utility:token-budget, utility:tuning, utility:validation]
 
-  - id: skill_public_export_hardening
-    path: Governance/Public-Export-Hardening-v1.md
-    tags: [governance:safety, skill, utility:babel, utility:public-export, utility:sanitization, utility:scrub]
+  - id: skill_publication_sanitization
+    path: Governance/Publication-Sanitization-v1.md
+    tags: [governance:safety, skill, utility:content-policy, utility:publication, utility:sanitization, utility:scrub]
 
   - id: skill_outbound_truth_redlining
     path: Governance/Outbound-Truth-Redlining-v1.md
@@ -173,17 +173,17 @@ skills:
     path: Governance/GitHub-Release-Batching-v1.md
     tags: [governance:safety, skill, utility:batching, utility:commits, utility:deployment, utility:git, utility:github, utility:push]
 
-  - id: skill_private_source_repo_discipline
-    path: Governance/Private-Source-Repo-Discipline-v1.md
-    tags: [governance:safety, skill, utility:git, utility:github, utility:private-repo, utility:public-repo, utility:remote-role]
+  - id: skill_repository_role_discipline
+    path: Governance/Repository-Role-Discipline-v1.md
+    tags: [governance:safety, skill, utility:git, utility:github, utility:publication, utility:remote-role, utility:repository-role]
 
-  - id: skill_derived_public_release_gate
-    path: Governance/Derived-Public-Release-Gate-v1.md
-    tags: [governance:safety, skill, utility:export, utility:git, utility:github, utility:public-release, utility:sanitization, utility:secrets]
+  - id: skill_publication_target_release_gate
+    path: Governance/Publication-Target-Release-Gate-v1.md
+    tags: [governance:safety, skill, utility:git, utility:github, utility:publication, utility:release-gate, utility:sanitization, utility:secrets]
 
   - id: skill_multi_agent_pipeline
     path: Governance/Multi-Agent-Pipeline-v1.md
-    tags: [cognition:exploration, governance:safety, llm, skill, utility:example_saas_backend, utility:multi-agent, utility:pipeline, utility:review]
+    tags: [cognition:exploration, governance:safety, llm, skill, utility:multi-agent, utility:pipeline, utility:review]
 
   - id: skill_workspace_locking
     path: Governance/Workspace-Locking-v1.md

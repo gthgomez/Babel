@@ -3,3 +3,5 @@
 !.env.example
 .cache/
 chronicle.sqlite
+/babel-benchmark-artifacts/
+/*-benchmark-results.jsonl

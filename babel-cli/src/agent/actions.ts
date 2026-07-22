@@ -1,5 +1,5 @@
 /**
- * Normalized agent action protocol — stable Wave 1 contract for Lite agent loop.
+ * Normalized action protocol for the Lite agent loop.
  *
  * Provider models emit JSON; `parseAgentActions()` normalizes aliases and returns
  * `AgentAction[]`. Execution mapping to `executeTool` lives in `toolExecutor.ts`.

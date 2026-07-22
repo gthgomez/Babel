@@ -27,9 +27,9 @@ This skill provides the technical procedures for executing a `parity-audit` betw
     - A set of one-off transactions.
 - Run the Source engine with this vector and capture the output.
 - Run the Target engine with this vector and capture the output.
-- **PASS Criteria:** Bit-identical output for all financial results.
+- **PASS Criteria:** Outputs satisfy the declared money representation and comparison contract. Require bit-identical integer-minor-unit output only when the source contract specifies it.
 
 ## Quality Gates
 - **Gate 1:** No schema drift.
-- **Gate 2:** Bit-parity on financial outputs.
+- **Gate 2:** Contract-defined parity on financial outputs.
 - **Gate 3:** Zero use of `Float` types in money paths.

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { resolve } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -29,7 +30,7 @@ test('benchmark docker command mounts project at /app and preserves project exec
     'run',
     '--rm',
     '-v',
-    '/workspace-root/tmp/app:/app',
+    `${resolve('/workspace-root/tmp/app').replace(/\\/g, '/')}:/app`,
     '-w',
     '/app',
     'example/task:latest',

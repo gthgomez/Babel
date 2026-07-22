@@ -20,5 +20,5 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 ## Semantic HTML & ARIA
 - **Semantic Tags:** Use `<button>`, `<a>`, `<nav>`, `<main>` etc., correctly.
 - **ARIA Labels:** Mandatory `aria-label` on all interactive elements that lack text content.
-- **Keyboard Nav:** 100% navigability via Tab and shortcuts.
+- **Keyboard Nav:** Every interactive control must be reachable and operable with the documented keyboard interaction model; verify with automated and manual checks.
 - **Screen Readers:** Use live regions (`aria-live`) for dynamic content updates.

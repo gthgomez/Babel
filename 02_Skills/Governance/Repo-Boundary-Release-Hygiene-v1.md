@@ -10,7 +10,7 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 # Skill: Repo Boundary Release Hygiene (v1.2)
 **Category:** Governance
 **Status:** Active
-**Activation:** Load when a workspace contains multiple nested repos, temp/export folders, or ambiguous git roots and the task involves committing, batching, releasing, or pushing changes.
+**Activation:** Load when a workspace contains multiple nested repositories, publication staging folders, or ambiguous Git roots and the task involves committing, batching, releasing, or pushing changes.
 
 ---
 
@@ -20,7 +20,7 @@ Prevent the classic multi-repo failure:
 
 - committing from the wrong root
 - sweeping unrelated files into a release
-- staging temp/export artifacts because they happen to be nearby
+- staging temporary or publication-staging artifacts because they happen to be nearby
 - pushing the right change to the wrong remote
 - mistaking path-only churn or local helper files for shippable release work
 
@@ -40,8 +40,8 @@ For every target surface:
 3. capture `git status --short --branch`
 4. note whether the workspace root is itself a real release target or just a container
 5. record the repo role
-   - `private_source`
-   - `public_derived`
+   - `authoritative`
+   - `publication_target`
    - `single_repo`
 
 Do not assume the chat workspace root is the deployable repo.
@@ -56,9 +56,9 @@ Split changed paths into:
 1. `ship`
    - intended product, docs, test, tooling, or skill changes
 2. `investigate`
-   - unclear untracked directories, generated bundles, copied exports, odd temp names
+   - unclear untracked directories, generated bundles, copied publication trees, odd temporary names
 3. `exclude`
-   - scratch files, local notes, temp folders, copied public-export output, chat extracts, debug dumps
+   - scratch files, local notes, temporary folders, copied publication output, chat extracts, debug dumps
 4. `local_helper`
    - launcher scripts, machine-specific wrappers, local env helpers, one-off convenience files
 
@@ -66,7 +66,7 @@ Examples of high-risk investigate/exclude paths:
 
 - `.tmp/`
 - `runtime/snapshots/destination-root/`
-- copied export trees
+- copied publication trees
 - local chat extracts
 - accidental repo mirrors
 - `babel.ps1`
@@ -74,7 +74,7 @@ Examples of high-risk investigate/exclude paths:
 - machine-specific launchers or shortcuts
 
 Do not stage anything from `investigate` until it is explained.
-Do not stage `local_helper` by default unless the task explicitly proves it is a real repo asset.
+Do not stage `local_helper` by default unless repository documentation and review establish it as a maintained asset.
 
 If many files appear related, sample representative diffs before staging:
 
@@ -159,8 +159,8 @@ Before pushing:
 2. confirm target remote URL
 3. confirm target remote role
 4. confirm the push is appropriate for that role
-   - private-source working changes -> private repo
-   - public-derived release artifacts -> public repo
+   - authoritative or standalone working changes -> their configured repository
+   - publication-ready artifacts -> the mapped publication target
 3. confirm local tests/validation for that batch
 4. confirm no intended changes remain unstaged for the same story
 
@@ -194,13 +194,13 @@ Examples of `blocking_product_failure`:
 
 ## Hard Rules
 
-1. Never release from a workspace root until the real repo root is proven.
+1. Do not release from a workspace root until the real repository root is verified.
 2. Never use bulk staging in a dirty multi-repo workspace.
 3. Never include unexplained untracked directories in a push.
-4. Never mix skill/catalog updates, product code, and scratch exports in one commit unless they are one real story.
+4. Do not mix skill/catalog updates, product code, and scratch publication artifacts in one commit unless they form one reviewed change.
 5. A clean release requires an explicit excluded-path list, not just a staged-path list.
-6. In paired private/public systems, never push until repo role and remote role are both explicit.
+6. In multi-repository publication systems, do not push until repository and remote roles are explicit.
 7. Local helper scripts default to excluded, not investigated, unless there is a clear repo-wide maintenance reason to ship them.
-8. Path-only normalization and generated report churn are separate stories until proven otherwise.
+8. Treat path-only normalization and generated-report churn as separate changes unless diff evidence establishes one cohesive purpose.
 9. A hook failure cannot be called advisory unless equivalent product checks were run manually and passed.
 10. A live remote fix that is not committed back into the repo is release debt, not completion.

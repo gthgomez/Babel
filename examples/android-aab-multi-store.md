@@ -14,7 +14,7 @@ Typical result:
 - The model gives generic Android advice.
 - Store policy, packaging, and signing concerns get mixed together.
 - Google Play details may dominate while Amazon or Samsung steps get skipped.
-- The response depends heavily on which model answered.
+- Different model configurations may produce different levels of detail.
 
 ## With Babel
 
@@ -35,7 +35,7 @@ Babel routes the task into a structured stack:
 Why that matters:
 - AAB packaging is handled as a packaging/distribution concern, not buried inside general Android advice.
 - Google Play, Amazon, and Samsung requirements stay distinct.
-- The same task stays consistent across different LLMs because the stack is explicit.
+- The intended task constraints remain inspectable because the stack is explicit.
 
 In the public repo, a mobile manifest preview is now a real first-class helper path. For example:
 
@@ -53,4 +53,6 @@ Reference output:
 
 ## Takeaway
 
-Babel does not make the model smarter by magic. It makes the task boundaries, constraints, and reusable protocols explicit so the model is far more likely to behave correctly on the first pass.
+Babel does not make a model smarter by magic. It makes task boundaries,
+constraints, and reusable protocols explicit so reviewers can inspect the
+selected guidance before a model-backed run.

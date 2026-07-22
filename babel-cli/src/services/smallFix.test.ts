@@ -19,6 +19,11 @@ const originalFetch = globalThis.fetch;
 const originalApiKey = process.env['DEEPINFRA_API_KEY'];
 const originalDeepSeekApiKey = process.env['DEEPSEEK_API_KEY'];
 const originalProjectRoot = process.env['BABEL_PROJECT_ROOT'];
+const originalLive = process.env['BABEL_LIVE'];
+
+test.beforeEach(() => {
+  process.env['BABEL_LIVE'] = 'true';
+});
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -36,6 +41,11 @@ test.afterEach(() => {
     delete process.env['BABEL_PROJECT_ROOT'];
   } else {
     process.env['BABEL_PROJECT_ROOT'] = originalProjectRoot;
+  }
+  if (originalLive === undefined) {
+    delete process.env['BABEL_LIVE'];
+  } else {
+    process.env['BABEL_LIVE'] = originalLive;
   }
 });
 

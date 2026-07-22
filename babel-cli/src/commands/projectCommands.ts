@@ -136,12 +136,12 @@ export function registerProjectCommands(program: Command): void {
     .option('--json', 'Emit structured JSON only')
     .addHelpText('after', `
 Examples:
-  $ babel verify C:\\Workspace\\SomeRepo --json
-  $ babel verify C:\\Workspace\\example_game_workspace\\MyGame --commands "npm test;npm run build" --json
+  $ babel verify ./example-project --json
+  $ babel verify ./example-game --commands "npm test;npm run build" --json
 
 Notes:
-  - Uses execution profile opencalw_manager.
-  - Repos under C:\\Workspace are approved by default; set BABEL_example_autonomous_agent_APPROVED_ROOTS for a tighter allowlist.
+  - Uses execution profile workspace_manager.
+  - Repos under C:\\Workspace are approved by default; set BABEL_WORKSPACE_APPROVED_ROOTS for a tighter allowlist.
   - Dependency installs are blocked unless explicitly approved outside this command.
 `)
     .action((pathArg: string, options: { commands?: string; timeout?: string; json?: boolean }) => {
@@ -205,7 +205,7 @@ Notes:
     .addHelpText('after', `
 Examples:
   $ babel repo-map .
-  $ babel repo-map C:\\Workspace\\SomeRepo --json
+  $ babel repo-map ./example-project --json
   $ babel repo-map . --target src --limit 80 --preview
 `)
     .action(async (
@@ -242,7 +242,7 @@ Examples:
     .addHelpText('after', `
 Examples:
   $ babel onboard-project .
-  $ babel onboard-project C:\\Workspace\\SomeRepo --json
+  $ babel onboard-project ./example-project --json
   $ babel onboard-project . --write-project-context --force
 
 Notes:

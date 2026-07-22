@@ -39,6 +39,7 @@ BABEL_PHASE_1_5_TELEMETRY_ACTIVATION.md
 # ─── Development test artifacts ───────────────────────────────────────────────
 babel-cli/babel_live_test.js
 babel-cli/babel-benchmark-artifacts/
+babel-cli/*-benchmark-results.jsonl
 babel-cli/--lock
 babel-cli/custom-babel.log
 babel-cli/custom_test.log
