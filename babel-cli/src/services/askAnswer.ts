@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 
 import { BABEL_RUNS_DIR, BABEL_ROOT } from '../cli/constants.js';
@@ -221,6 +221,7 @@ export function applyAskGroundingReview(answer: AskAnswer, options: RunAskAnswer
 }
 
 function writeLatestRunPointer(runDir: string, project?: string): void {
+  mkdirSync(BABEL_RUNS_DIR, { recursive: true });
   const payload = `${JSON.stringify({
     run_dir: runDir,
     project: project ?? 'global',
