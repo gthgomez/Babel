@@ -50,7 +50,7 @@ const FULL_ROUTE_PATTERNS: FullRoutePattern[] = [
   },
   {
     code: 'plugin_mcp_public_export',
-    pattern: /\b(plugin|plugins|mcp|public[- ]export|public[- ]release|scrub|claims matrix|production benchmark|production proof|governance)\b/i,
+    pattern: /\b(plugin|plugins|mcp|public[- ]release|scrub|claims matrix|release readiness|governance)\b/i,
     reason: 'The task targets plugin/MCP/public-export or production governance surfaces.',
     complexity: 'high',
   },

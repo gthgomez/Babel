@@ -2917,7 +2917,7 @@ function runArgs(mode: string, root: string, task: string, extraOptions: readonl
     '--mode',
     mode,
     '--project',
-    'example_mobile_finance',
+    'example_mobile_reference',
     '--project-root',
     root,
     ...extraOptions,

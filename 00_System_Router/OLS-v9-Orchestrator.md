@@ -51,25 +51,26 @@ Behavioral policy:
 
 ### Active Projects
 
-| Project | Path | Keywords |
-|---------|------|----------|
-| `example_saas_backend` | `...\Project_SaaS\example_saas_backend` | GPC, privacy, consent, GDPR, CCPA, webhook, Stripe, Supabase, edge function |
-| `example_llm_router` | `...\Project_SaaS\example_llm_router` | example_llm_router, design system, component library, tokens, theming |
-| `example_web_audit` | `...\Project_SaaS\example_web_audit` | example_web_audit, audit, compliance log, report, trail |
-| `example_mobile_suite` | `...\example_mobile_suite` | example_mobile_suite, android, kotlin, jetpack compose, compose, mobile app, play store, google play, billing client, billing library, billing wiring, billing integration, documented android contracts, manifest declarations, policy-sensitive manifest declarations, manifest policy declarations, AAB, APK, bundletool, example_app_one, example_app_two, example_app_three, example_app_four |
-| `example_game_workspace` | `...\example_game_workspace` | example_game_workspace, game workspace, game dev, gameplay, game UI, godot, gdscript, unity, rpg, simlife, aetherlyn, betamonsterrpg, firetv |
-| `example_game_suite` | `...\example_game_workspace\ExampleGameProject` | example_game_suite, ExampleGameProject, tower defense, Godot tower defense, towers, waves, enemies, upgrade paths |
-| `example_autonomous_agent` | `/agent-root/example-autonomous-agent` | example_autonomous_agent, example_autonomous_agent agent, autonomous agent, AGENTS.md, SOUL.md, example_autonomous_agent workspace, example_autonomous_agent config, agent instruction, agent startup, unattended agent |
+| Project | Routing keywords |
+|---------|------------------|
+| `example_saas_backend` | privacy, consent, GPC, webhook, database, edge function |
+| `example_llm_router` | LLM router, design system, component library, tokens, theming |
+| `example_web_audit` | web audit, compliance log, report, evidence trail |
+| `example_mobile_suite` | Android, Kotlin, Compose, mobile app, billing, AAB, APK |
+| `example_game_workspace` | game workspace, game development, gameplay, Godot, GDScript, Unity |
+| `example_game_suite` | tower defense, towers, waves, enemies, upgrade paths |
+| `example_autonomous_agent` | autonomous agent, agent instructions, startup, unattended operation |
 
 If a request cannot be matched to any project, set `target_project` to `"global"`.
+Project IDs are semantic routing labels. Resolve execution roots only from the current repository or an explicit `project_root`; never derive filesystem paths from an ID.
 
 ### Prompt Library Root
 
 All prompt files live under:
-`<YOUR_PROJECT_ROOT>/Babel/`
+`<BABEL_ROOT>/`
 
 The canonical routing registry is:
-`<YOUR_PROJECT_ROOT>/Babel/prompt_catalog.yaml`
+`<BABEL_ROOT>/prompt_catalog.yaml`
 
 Your output is typed selection intent, not a physical file manifest.
 
@@ -98,7 +99,7 @@ Classify the task to determine which single Domain Architect ID to load.
 | **Backend / API** | database, edge function, API route, auth, webhook, Stripe, Supabase, schema, query | `domain_swe_backend` |
 | **Python Backend / CLI / Validator** | Python, pytest, CLI, async agent, validator, scoring, queue, learning pipeline, ci-validator | `domain_python_backend` |
 | **LLM Router / Provider Orchestration** | LLM router, provider, OpenAI, Anthropic, Gemini, SSE, streaming, model routing, cost estimate, fallback | `domain_llm_router` |
-| **Mobile / Android** | android, kotlin, jetpack compose, compose, mobile app, play store, google play, samsung galaxy store, amazon appstore, AAB, APK, bundletool, billing client, billing library, billing wiring, billing integration, documented android contracts, manifest declarations, policy-sensitive manifest declarations, manifest policy declarations, example_app_one, example_app_two, example_app_three, example_app_four | `domain_android_kotlin` |
+| **Mobile / Android** | android, kotlin, jetpack compose, compose, mobile app, play store, google play, samsung galaxy store, amazon appstore, AAB, APK, bundletool, billing client, billing library, billing wiring, billing integration, documented android contracts, manifest declarations, policy-sensitive manifest declarations, manifest policy declarations | `domain_android_kotlin` |
 | **Game / Godot** | godot, gdscript, game dev, gameplay, game UI, HUD, CanvasLayer, InputMap, scene tree, .tscn, export_presets.cfg, Godot Android export, HD-2D, sprite sheet, tilemap, tower defense, JRPG UI, Octopath-style UI | `domain_godot_game_dev` |
 | **Product Audit / Reality Check** | verify claims, truth extraction, marketing vs implementation, product audit, competitive reality, reality check, implementation vs positioning, claims audit, product reality audit | `domain_product_audit` |
 | **Compliance / Legal** | GPC, GDPR, CCPA, consent, privacy policy, terms, regulatory | `domain_compliance_gpc` |
@@ -327,7 +328,7 @@ Select exactly one `analysis.pipeline_mode`.
 | `direct` | Low-risk read-only answer or simple local execution where the selected behavioral stack is sufficient | `[]` |
 | `verified` | Multi-step implementation, debugging, contract-sensitive work, or any task where QA should review the plan before execution | `["pipeline_qa_reviewer"]` |
 | `autonomous` | User explicitly requests autonomous execution or end-to-end implementation with executor handoff | `["pipeline_qa_reviewer","pipeline_cli_executor"]` |
-| `manual` | Export typed stack for human-mediated completion | `[]` |
+| `manual` | Present the typed stack for human-mediated completion | `[]` |
 | `parallel_swarm` | Multi-agent parallel task with independent sectors and collision controls | `["pipeline_qa_reviewer","pipeline_cli_executor"]` |
 
 **LOW Complexity Fast-Path Rule (Fix D1):**
@@ -359,13 +360,13 @@ If `analysis.pipeline_mode = "parallel_swarm"`, you must decompose the `user_req
 
 You must output **ONLY** valid JSON. No prose. No Markdown outside the JSON object.
 
-**All file paths must use the absolute Windows format with double-escaped backslashes.**
+Use project-relative paths unless a runtime API explicitly requires a resolved project root. Never infer a filesystem path from a project identifier.
 
 ```json
 {
   "orchestrator_version": "9.0",
-  "target_project": "[example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_workspace | example_game_suite | example_autonomous_agent | ExampleFinanceForecast | global]",
-  "target_project_path": "<absolute path — use the known path for this project, e.g. C:\\Workspace\\example_mobile_suite\\ExampleFinanceForecast for ExampleFinanceForecast>",
+  "target_project": "[example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_workspace | example_game_suite | example_autonomous_agent | global]",
+  "target_project_path": "<explicit project root or null>",
   "analysis": {
     "task_summary": "One sentence: what the user wants accomplished.",
     "task_category": "[Frontend | Backend | Python Backend | LLM Router | Mobile | Game | Product Audit | Compliance | DevOps | Research]",
@@ -541,7 +542,7 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
 ```json
 {
   "orchestrator_version": "9.0",
-  "target_project": "example_mobile_suite",
+  "target_project": "example_reference_application",
   "target_project_path": "<YOUR_PROJECT_ROOT>/example_mobile_suite",
   "analysis": {
     "task_summary": "Prepare an Android AAB release build and validate the store-ready artifact path.",
@@ -596,15 +597,15 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
 }
 ```
 
-### Example — ExampleFinanceForecast Android Room/ViewModel task
+### Example — Android Room/ViewModel task
 
 ```json
 {
   "orchestrator_version": "9.0",
-  "target_project": "ExampleFinanceForecast",
-  "target_project_path": "C:\\Workspace\\example_mobile_suite\\ExampleFinanceForecast",
+  "target_project": "example_mobile_suite",
+  "target_project_path": "<project-root>",
   "analysis": {
-    "task_summary": "Write MainViewModel.kt wiring LedgerRepository and StateFlow for the Example Finance Forecast Android port.",
+    "task_summary": "Write MainViewModel.kt wiring SampleRepository and StateFlow for an Android application.",
     "task_category": "Mobile",
     "secondary_category": null,
     "complexity_estimate": "High",
@@ -621,7 +622,7 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
     "domain_id": "domain_android_kotlin",
     "skill_ids": ["skill_android_room", "skill_jetpack_compose"],
     "model_adapter_id": "adapter_codex_balanced",
-    "project_overlay_id": "overlay_example_finance_forecast",
+    "project_overlay_id": "overlay_example_reference_application",
     "task_overlay_ids": [],
     "pipeline_stage_ids": ["pipeline_qa_reviewer", "pipeline_cli_executor"]
   },
@@ -650,7 +651,7 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
   },
   "prompt_manifest": [],
   "handoff_payload": {
-    "user_request": "Write MainViewModel.kt wiring LedgerRepository and StateFlow for the Example Finance Forecast Android port.",
+    "user_request": "Write MainViewModel.kt wiring SampleRepository and StateFlow for an Android application.",
     "system_directive": "Resolve instruction_stack against prompt_catalog.yaml, expand dependencies, compile prompt_manifest, then load the compiled files in order."
   }
 }

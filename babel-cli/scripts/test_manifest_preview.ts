@@ -24,8 +24,7 @@ interface ManifestSummary {
 interface PreviewCase {
     label: string;
     taskCategory: string;
-    projectPrivate: string;
-    projectPublic: string;
+    projectId: string;
     pipelineMode: string;
     fixture: string;
     expectedModel?: string;
@@ -36,15 +35,11 @@ const babelRoot = resolve(scriptDir, '..', '..');
 const resolverScript = join(babelRoot, 'tools', 'resolve-local-stack.ps1');
 const previewRoot = join(babelRoot, 'examples', 'manifest-previews');
 
-const hasPrivateBackendProject = existsSync(join(babelRoot, 'Project_SaaS', 'example_saas_backend'));
-const hasPrivateMobileProject = existsSync(join(babelRoot, 'example_mobile_suite'));
-
 const cases: PreviewCase[] = [
     {
         label: 'backend-verified',
         taskCategory: 'backend',
-        projectPrivate: 'example_saas_backend',
-        projectPublic: 'example_saas_backend',
+        projectId: 'example_saas_backend',
         pipelineMode: 'verified',
         fixture: 'backend-verified.json',
         expectedModel: 'codex',
@@ -52,8 +47,7 @@ const cases: PreviewCase[] = [
     {
         label: 'mobile-direct',
         taskCategory: 'mobile',
-        projectPrivate: 'example_mobile_suite',
-        projectPublic: 'example_mobile_suite',
+        projectId: 'example_mobile_suite',
         pipelineMode: 'direct',
         fixture: 'mobile-direct.json',
         expectedModel: 'codex',
@@ -171,25 +165,7 @@ function runResolver(command: {
     return parseManifestOutput(stdout);
 }
 
-function getAvailableProject(caseSpec: PreviewCase): string | null {
-    if (caseSpec.taskCategory === 'backend' && hasPrivateBackendProject) {
-        return caseSpec.projectPrivate;
-    }
-
-    if (caseSpec.taskCategory === 'mobile' && hasPrivateMobileProject) {
-        return caseSpec.projectPrivate;
-    }
-
-    return null;
-}
-
 function assertPreviewCase(caseSpec: PreviewCase): void {
-    const project = getAvailableProject(caseSpec);
-    if (project === null) {
-        console.log(`Skipping ${caseSpec.label} manifest preview regression (project context unavailable in this checkout): ${caseSpec.projectPublic}`);
-        return;
-    }
-
     const fixturePath = join(previewRoot, caseSpec.fixture);
     if (!existsSync(fixturePath)) {
         throw new Error(`Manifest preview fixture not found: ${fixturePath}`);
@@ -198,7 +174,7 @@ function assertPreviewCase(caseSpec: PreviewCase): void {
     const fixture = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
     const actual = runResolver({
         taskCategory: caseSpec.taskCategory,
-        project,
+        project: caseSpec.projectId,
         pipelineMode: caseSpec.pipelineMode,
         model: caseSpec.expectedModel ?? 'codex',
     });

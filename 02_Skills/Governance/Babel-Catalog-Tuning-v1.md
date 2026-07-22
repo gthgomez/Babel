@@ -66,7 +66,7 @@ Minimum validation after catalog changes:
 4. if ids or routing behavior changed: `npm --prefix .\\babel-cli run test:orchestrator-routing`
 5. if dependency expansion or catalog structure changed: `npm --prefix .\\babel-cli run test:resolver`
 
-Use stronger validation when the change touches orchestrator outputs, resolver behavior, or public-export surfaces.
+Use stronger validation when the change touches orchestrator outputs, resolver behavior, or publication surfaces.
 
 ---
 
@@ -87,7 +87,7 @@ Next follow-up:
 - ...
 ```
 
-This keeps Babel improvement iterative instead of one-shot.
+This keeps catalog maintenance iterative and reviewable.
 
 ---
 

@@ -446,22 +446,22 @@ test('read_only_audit execution profile rejects writes and command execution', (
   }
 });
 
-test('opencalw_manager rejects dependency installs until explicitly approved', () => {
-  const installIssue = validateExecutorShellCommand('npm install', process.platform, 'opencalw_manager');
+test('workspace_manager rejects dependency installs until explicitly approved', () => {
+  const installIssue = validateExecutorShellCommand('npm install', process.platform, 'workspace_manager');
   assert.equal(installIssue?.reason_code, 'dependency_install_requires_approval');
 
-  const testIssue = validateExecutorShellCommand('npm test', process.platform, 'opencalw_manager');
+  const testIssue = validateExecutorShellCommand('npm test', process.platform, 'workspace_manager');
   assert.equal(testIssue, null);
 });
 
-test('opencalw_manager allows exact dependency install after approval queue grant', () => {
+test('workspace_manager allows exact dependency install after approval queue grant', () => {
   withApprovalQueue(() => {
     const fixture = makeFixture();
     try {
       const request = requestDependencyInstallApproval({
         command: 'npm install',
         projectRoot: fixture.projectRoot,
-        executionProfile: 'opencalw_manager',
+        executionProfile: 'workspace_manager',
       });
       approveApproval(request.record.id, { ttlHours: 1 });
 
@@ -469,7 +469,7 @@ test('opencalw_manager allows exact dependency install after approval queue gran
         validateExecutorShellCommand(
           'npm install',
           process.platform,
-          'opencalw_manager',
+          'workspace_manager',
           undefined,
           { projectRoot: fixture.projectRoot },
         ),
@@ -479,7 +479,7 @@ test('opencalw_manager allows exact dependency install after approval queue gran
         validateExecutorShellCommand(
           'pip install pytest',
           process.platform,
-          'opencalw_manager',
+          'workspace_manager',
           undefined,
           { projectRoot: fixture.projectRoot },
         )?.reason_code,

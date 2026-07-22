@@ -209,7 +209,7 @@ test('runtime plugins are discovered but inactive until explicitly enabled', asy
   assert.equal(disabledRegistry.config.runtime_plugins_enabled, false);
   assert.equal(disabledRegistry.plugins[0]?.active, false);
 
-  const disabledCommand = await runPluginCommand('sample-readonly', 'hello', ['Jonathan'], { babelRoot: root });
+  const disabledCommand = await runPluginCommand('sample-readonly', 'hello', ['Example User'], { babelRoot: root });
   assert.equal(disabledCommand.exit_code, 1);
   assert.match(disabledCommand.stderr, /plugin_not_active/);
 
@@ -218,9 +218,9 @@ test('runtime plugins are discovered but inactive until explicitly enabled', asy
   assert.equal(enabledRegistry.config.runtime_plugins_enabled, true);
   assert.equal(enabledRegistry.plugins[0]?.active, true);
 
-  const command = await runPluginCommand('sample-readonly', 'hello', ['Jonathan'], { babelRoot: root });
+  const command = await runPluginCommand('sample-readonly', 'hello', ['Example User'], { babelRoot: root });
   assert.equal(command.exit_code, 0);
-  assert.equal(command.stdout, 'hello Jonathan');
+  assert.equal(command.stdout, 'hello Example User');
 
   const tool = await handlePluginTool({
     tool: 'plugin_tool',

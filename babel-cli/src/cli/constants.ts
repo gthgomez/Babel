@@ -14,14 +14,13 @@ export const VALID_PROJECTS = [
   'example_llm_router',
   'example_web_audit',
   'example_mobile_suite',
-  'ExampleFinanceForecast',
-  'simlife',
+  'example_reference_application',
+  'example_simulation',
   'example_game_suite',
   'example_game_workspace',
-  'AetherlynGameDraft',
-  'aetherlyn',
+  'example_game_draft',
   'example_autonomous_agent',
-  'example_mobile_finance',
+  'example_mobile_reference',
 ] as const;
 export type ValidProject = typeof VALID_PROJECTS[number];
 

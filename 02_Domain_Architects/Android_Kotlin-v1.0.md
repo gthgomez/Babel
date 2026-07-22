@@ -113,7 +113,7 @@ When the task is an Android port of an existing non-Android project:
   on-device storage, integer-cents financial state, or a ledger/history model. Do not force the
   stateless utility-app pattern onto a data-centric port.
 
-### Service-Based App Pattern (example_app_four)
+### Service-Based App Pattern
 
 Different architecture: `CoreAccessibilityService`, `KeepAliveService`, `BootReceiver`,
 `PreferencesManager`. No billing. No Compose. Uses ViewBinding.

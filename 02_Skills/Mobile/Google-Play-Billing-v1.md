@@ -30,24 +30,24 @@ This skill converts those silent failure modes into explicit plan requirements.
 
 ---
 
-## Version Context (2026)
+## Version Verification
 
-| Version | Status | Notes |
-|---------|--------|-------|
-| v8.3.0 | Latest stable (Dec 2025) | Adds external payments APIs and remains the current Play Billing Library line in official release notes. |
-| v8.x | Supported | Last date to use v8 for new apps or updates is Aug 31, 2027; extension requests can run to Nov 1, 2027. |
-| v7.x | Deprecating | Last date to use v7 for new apps or updates is Aug 31, 2026; extension requests can run to Nov 1, 2026. |
+Before recommending a Billing Library version or migration deadline:
 
-**Current in-project version: 7.1.1.** Migration to v8.x is **URGENT** before the August 31, 2026 release cutoff.
+1. Read the target project's declared dependency version.
+2. Verify supported versions and release requirements in current official Google
+   Play Billing documentation.
+3. Cite the verification date and source.
+4. Treat missing project evidence as an assumption, not as an inferred migration.
 
-**Migration note (v7 → v8) — 2026 Standard:**
+When the verified target version requires these APIs, check:
 
 1. **Pending Purchases**: Explicitly opt-in to one-time products.
 2. **Auto-Reconnection**: Use `enableAutoServiceReconnection()`.
 3. **Query Parameters**: Transition from type-only queries to typed `QueryPurchasesParams`.
 
 ```kotlin
-// 2026 Standard Initialization
+// Example initialization; verify against the target dependency version.
 val pendingParams = PendingPurchasesParams.newBuilder()
     .enableOneTimeProducts()
     .build()

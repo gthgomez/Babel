@@ -63,13 +63,13 @@ export interface AgentSessionOptions {
   json?: boolean;
   stream?: boolean;
   routeDecision?: LiteFullRouteDecision;
-  /** Run plan→propose→fix→review→undo in one session (Wave 3 worker loop). */
+  /** Run plan→propose→fix→review→undo in one worker-loop session. */
   workerChain?: boolean;
-  /** Linked worker-chain session run dir (Wave 4 continue). */
+  /** Linked worker-chain continuation run directory. */
   workerChainSessionDir?: string;
   /** On verifier failure, auto-restore pre-mutation checkpoint (bl fix only). */
   rollbackOnFail?: boolean;
-  /** Read-only Spark synthesis from parallel review (Wave 5 bl do). */
+  /** Read-only Spark synthesis from parallel review. */
   sparkSynthesis?: SparkSynthesis;
   sparkReview?: SparkParallelReviewResult;
 }

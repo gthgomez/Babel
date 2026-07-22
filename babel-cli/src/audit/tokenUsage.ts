@@ -559,7 +559,7 @@ function createMarkdownReport(result: TokenUsageAuditResult): string {
 
   lines.push('## Rerun');
   lines.push('');
-  lines.push('From `C:\\Workspace\\private source repo`:');
+  lines.push('From the explicit project root:');
   lines.push('');
   lines.push('```powershell');
   lines.push('npm --prefix .\\babel-cli run audit:token-usage');

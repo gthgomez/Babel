@@ -1,56 +1,17 @@
 {
   "version": 1,
-  "description": "Live security policy for public Babel scrub and secret scanning. Public project names may appear in docs/examples; the same names remain forbidden as dependency fingerprints.",
+  "description": "Public-safe baseline security policy. Organization-specific identifiers belong in an external supplemental policy.",
   "allowed_public_project_names": [
-    "GPCGuard",
-    "[REDACTED_PRIVATE_IDENTIFIER]"
+    "GPCGuard"
   ],
   "forbidden_private_identifiers": [
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "C:\\\\Users\\\\",
-    "C:/Users/",
-    "C:\\\\Workspace\\\\",
-    "C:/Workspace/",
-    "\\.supabase\\.co",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "com\\.[REDACTED_PRIVATE_IDENTIFIER]",
-    "com\\.[REDACTED_PRIVATE_IDENTIFIER]",
-    "com\\.[REDACTED_PRIVATE_IDENTIFIER]",
-    "com\\.screenkeeper\\.app",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "\\.[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]"
+    "(?i)[A-Z]:[\\\\/]+(?:Users|Workspace|Projects)[\\\\/]+",
+    "\\.supabase\\.co"
   ],
+  "binary_asset_allowlist": [],
+  "identifier_exceptions": [],
   "forbidden_dependency_fingerprints": [
-    "GPCGuard",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]",
-    "[REDACTED_PRIVATE_IDENTIFIER]"
+    "GPCGuard"
   ],
   "exclude_directory_names": [
     ".git",

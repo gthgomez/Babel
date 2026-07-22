@@ -1,13 +1,12 @@
 import { spawnSync } from 'node:child_process';
-import { type Dirent, existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { type Dirent, existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 
 import { loadEnterprisePolicy } from './config/enterprisePolicy.js';
 
 export type DoctorStatus = 'pass' | 'warn' | 'fail' | 'skip';
 export type DoctorOverallStatus = 'pass' | 'warn' | 'fail';
-export type DoctorScope = 'all' | 'env' | 'workspace' | 'repos' | 'export' | 'enterprise';
+export type DoctorScope = 'all' | 'canonical' | 'release' | 'env' | 'workspace' | 'repos' | 'export' | 'enterprise';
 export type DoctorMode = 'standard' | 'strict' | 'strict-enterprise';
 export type DoctorDiagnosticCode =
   | 'ENV_SHELL_UNAVAILABLE'
@@ -106,7 +105,7 @@ const REQUIRED_REPO_KEYS = [
   'example_game_workspace',
   'example_game_suite',
   'example_autonomous_agent',
-  'example_mobile_finance',
+  'example_mobile_reference',
 ] as const;
 
 const CORE_REPO_CASES: RepoResolutionCase[] = [
@@ -117,7 +116,7 @@ const CORE_REPO_CASES: RepoResolutionCase[] = [
   { key: 'example_game_workspace', project: 'example_game_workspace', taskCategory: 'game' },
   { key: 'example_game_suite', project: 'example_game_suite', taskCategory: 'game' },
   { key: 'example_autonomous_agent', project: 'example_autonomous_agent', taskCategory: 'research' },
-  { key: 'example_mobile_finance', project: 'example_mobile_finance', taskCategory: 'research' },
+  { key: 'example_mobile_reference', project: 'example_mobile_reference', taskCategory: 'research' },
 ];
 
 const DOCUMENTED_EXTERNAL_REPO_PREREQUISITES: Record<string, ExternalRepoPrerequisite> = {
@@ -189,7 +188,9 @@ function createCheck(
 }
 
 function shouldRunSection(scope: DoctorScope, section: string): boolean {
-  if (scope === 'all') return true;
+  if (scope === 'all') return section === 'Runtime';
+  if (scope === 'canonical') return section === 'Runtime';
+  if (scope === 'release' || scope === 'export') return section === 'Release';
   if (scope === 'env') {
     return section === 'Environment';
   }
@@ -202,7 +203,7 @@ function shouldRunSection(scope: DoctorScope, section: string): boolean {
   if (scope === 'enterprise') {
     return section === 'Enterprise Policy';
   }
-  return section === 'Export';
+  return false;
 }
 
 function summarizeChecks(checks: DoctorCheckResult[]): DoctorRunResult['summary'] {
@@ -660,10 +661,11 @@ function runRepoMapChecks(workspaceRoot: string, repoMapPath: string, verbose: b
 function runRuntimeChecks(babelRoot: string, verbose: boolean): DoctorCheckResult[] {
   const checks: DoctorCheckResult[] = [];
   const runtimeTargets = [
-    ['runtime.package_json', 'package.json found', join(babelRoot, 'package.json')],
+    ['runtime.package_json', 'CLI package.json found', join(babelRoot, 'babel-cli', 'package.json')],
     ['runtime.cli_entrypoint', 'CLI entrypoint found', join(babelRoot, 'babel-cli', 'dist', 'index.js')],
     ['runtime.resolver_script', 'Resolver script found', join(babelRoot, 'tools', 'resolve-local-stack.ps1')],
-    ['runtime.export_manifest', 'Export manifest found', join(babelRoot, 'tools', 'public-export', 'manifest.json')],
+    ['runtime.content_policy', 'Public content policy found', join(babelRoot, 'tools', 'check-public-content-policy.ps1')],
+    ['runtime.canonical_policy', 'Canonical independence policy found', join(babelRoot, 'tools', 'check-canonical-independence.ps1')],
   ] as const;
 
   for (const [id, title, targetPath] of runtimeTargets) {
@@ -687,6 +689,7 @@ function runRuntimeChecks(babelRoot: string, verbose: boolean): DoctorCheckResul
 function runResolutionChecks(
   babelRoot: string,
   verbose: boolean,
+  repoMap: Record<string, string> | null,
   externalPrerequisites: Set<string> = new Set<string>(),
   powerShellRunner: PowerShellScriptRunner = runPowerShellScript,
 ): DoctorCheckResult[] {
@@ -723,14 +726,19 @@ function runResolutionChecks(
       continue;
     }
 
-    const result = powerShellRunner(resolverPath, [
+    const mappedPath = repoMap?.[repo.key];
+    const resolverArgs = [
       '-TaskCategory', repo.taskCategory,
       '-Project', repo.project,
       '-Model', 'codex',
       '-PipelineMode', 'verified',
       '-Format', 'json',
       '-Root', babelRoot,
-    ]);
+    ];
+    if (mappedPath) {
+      resolverArgs.push('-ProjectPath', mappedPath);
+    }
+    const result = powerShellRunner(resolverPath, resolverArgs);
 
     if (result.error) {
       if (result.diagnostic_code === 'ENV_SHELL_UNAVAILABLE' ||
@@ -781,7 +789,8 @@ function runResolutionChecks(
     try {
       const parsed = JSON.parse(result.stdout) as { ProjectPath?: string };
       const resolvedProjectPath = parsed.ProjectPath;
-      if (typeof resolvedProjectPath === 'string' && existsSync(resolvedProjectPath)) {
+      if (resolvedProjectPath === '<external-project-root>' ||
+        (typeof resolvedProjectPath === 'string' && existsSync(resolvedProjectPath))) {
         checks.push(createCheck(
           'Resolution',
           `resolution.${repo.key}`,
@@ -1006,120 +1015,37 @@ function runLegacyPathChecks(babelRoot: string, verbose: boolean): DoctorCheckRe
   return checks;
 }
 
-function runExportChecks(
+function runReleaseChecks(
   babelRoot: string,
   verbose: boolean,
   powerShellRunner: PowerShellScriptRunner = runPowerShellScript,
 ): DoctorCheckResult[] {
-  const checks: DoctorCheckResult[] = [];
-  const manifestPath = join(babelRoot, 'tools', 'public-export', 'manifest.json');
-  const exportScriptPath = join(babelRoot, 'tools', 'export-babel-public.ps1');
-
-  checks.push(createCheck(
-    'Export',
-    'export.manifest.exists',
-    'Export manifest valid',
-    existsSync(manifestPath) ? 'pass' : 'fail',
-    existsSync(manifestPath) ? 'Export manifest found' : `Missing export manifest: ${manifestPath}`,
-    verbose ? [manifestPath] : undefined,
-  ));
-
-  if (!existsSync(exportScriptPath)) {
-    checks.push(createCheck(
-      'Export',
-      'export.validation',
-      'Export validation passed',
+  const validatorPath = join(babelRoot, 'tools', 'validate-public-release.ps1');
+  if (!existsSync(validatorPath)) {
+    return [createCheck(
+      'Release',
+      'release.validator.exists',
+      'Release validator available',
       'fail',
-      `Missing public export script: ${exportScriptPath}`,
-    ));
-    return checks;
+      `Missing release validator: ${validatorPath}`,
+    )];
   }
-
-  const exportRoot = mkdtempSync(join(tmpdir(), 'babel-doctor-public-export-'));
-  try {
-    const exportResult = powerShellRunner(exportScriptPath, [
-      '-DestinationRoot', exportRoot,
-      '-SkipChecks',
-    ]);
-    if (exportResult.error) {
-      checks.push(createCheck(
-        'Export',
-        'export.validation',
-        'Export validation passed',
-        'fail',
-        exportResult.error,
-        verbose ? [exportResult.stderr.trim()].filter((line) => line.length > 0) : undefined,
-        exportResult.diagnostic_code ? 'Resolve the environment shell/PowerShell failure before diagnosing export validation.' : undefined,
-        exportResult.diagnostic_code,
-      ));
-      return checks;
-    }
-
-    if (exportResult.exitCode !== 0) {
-      const details = verbose
-        ? [exportResult.stdout.trim(), exportResult.stderr.trim()].filter((line) => line.length > 0)
-        : undefined;
-      checks.push(createCheck(
-        'Export',
-        'export.validation',
-        'Export validation passed',
-        'fail',
-        'Public export generation failed',
-        details,
-      ));
-      return checks;
-    }
-
-    const scrubScriptPath = join(exportRoot, 'tools', 'check-public-scrub.ps1');
-    if (!existsSync(scrubScriptPath)) {
-      checks.push(createCheck(
-        'Export',
-        'export.validation',
-        'Export validation passed',
-        'fail',
-        `Public export scrub script missing from generated tree: ${scrubScriptPath}`,
-      ));
-      return checks;
-    }
-
-    const scrubResult = powerShellRunner(scrubScriptPath, ['-RepoRoot', exportRoot]);
-    if (scrubResult.error) {
-      checks.push(createCheck(
-        'Export',
-        'export.validation',
-        'Export validation passed',
-        'fail',
-        scrubResult.error,
-        verbose ? [scrubResult.stderr.trim()].filter((line) => line.length > 0) : undefined,
-        scrubResult.diagnostic_code ? 'Resolve the environment shell/PowerShell failure before diagnosing export validation.' : undefined,
-        scrubResult.diagnostic_code,
-      ));
-      return checks;
-    }
-
-    const details = verbose
-      ? [
-        exportResult.stdout.trim(),
-        exportResult.stderr.trim(),
-        scrubResult.stdout.trim(),
-        scrubResult.stderr.trim(),
-      ].filter((line) => line.length > 0)
-      : undefined;
-    checks.push(createCheck(
-      'Export',
-      'export.validation',
-      'Export validation passed',
-      scrubResult.exitCode === 0 ? 'pass' : 'fail',
-      scrubResult.exitCode === 0
-        ? 'Public export generation and scrub check passed'
-        : 'Public export scrub check failed',
-      details,
-    ));
-  } finally {
-    rmSync(exportRoot, { recursive: true, force: true });
-  }
-
-  return checks;
+  const result = powerShellRunner(validatorPath, ['-Root', babelRoot]);
+  const details = verbose
+    ? [result.stdout.trim(), result.stderr.trim()].filter((line) => line.length > 0)
+    : undefined;
+  return [createCheck(
+    'Release',
+    'release.validation',
+    'Canonical release validation passed',
+    result.exitCode === 0 && !result.error ? 'pass' : 'fail',
+    result.exitCode === 0 && !result.error
+      ? 'Canonical release validation passed'
+      : result.error ?? 'Canonical release validation failed',
+    details,
+    result.diagnostic_code ? 'Resolve the PowerShell environment failure before diagnosing release validation.' : undefined,
+    result.diagnostic_code,
+  )];
 }
 
 function runEnterprisePolicyChecks(babelRoot: string, strictEnterprise: boolean, verbose: boolean): DoctorCheckResult[] {
@@ -1298,6 +1224,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorRunResult
     checks.push(...runResolutionChecks(
       babelRoot,
       options.verbose,
+      repoMapResult.repoMap,
       repoMapResult.externalPrerequisites,
       options.powerShellRunner,
     ));
@@ -1307,8 +1234,8 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorRunResult
     checks.push(...runLegacyPathChecks(babelRoot, options.verbose));
   }
 
-  if (shouldRunSection(options.scope, 'Export')) {
-    checks.push(...runExportChecks(babelRoot, options.verbose, options.powerShellRunner));
+  if (shouldRunSection(options.scope, 'Release')) {
+    checks.push(...runReleaseChecks(babelRoot, options.verbose, options.powerShellRunner));
   }
 
   if (shouldRunSection(options.scope, 'Enterprise Policy') || options.strictEnterprise === true) {

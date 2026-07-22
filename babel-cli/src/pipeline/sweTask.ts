@@ -149,12 +149,12 @@ Your JSON output MUST include a "thinking" field. Use this field to:
       const appBuildGradlePath = join(projectRoot, 'app', 'build.gradle.kts');
       const rootBuildGradleExists = existsSync(rootBuildGradlePath);
       const appBuildGradleExists = existsSync(appBuildGradlePath);
-      const referenceMonteCarloRoot = join(projectRoot, 'reference-Example Finance Forecast');
-      const referenceMonteCarloExists = existsSync(referenceMonteCarloRoot);
-      const referenceMonteCarloLooksLikePython = referenceMonteCarloExists && (
-        existsSync(join(referenceMonteCarloRoot, 'pyproject.toml')) ||
-        existsSync(join(referenceMonteCarloRoot, 'requirements.txt')) ||
-        existsSync(join(referenceMonteCarloRoot, 'monte_carlo_ledger'))
+      const referenceSourceRoot = join(projectRoot, 'reference-source');
+      const referenceSourceExists = existsSync(referenceSourceRoot);
+      const referenceSourceLooksLikePython = referenceSourceExists && (
+        existsSync(join(referenceSourceRoot, 'pyproject.toml')) ||
+        existsSync(join(referenceSourceRoot, 'requirements.txt')) ||
+        existsSync(join(referenceSourceRoot, 'reference_source'))
       );
 
       projectRootLines.push(
@@ -167,9 +167,9 @@ Your JSON output MUST include a "thinking" field. Use this field to:
       runtimePreflightLines.push(`Executor Gradle runtime: ${gradleRuntimeStatus.summary}`);
       runtimePreflightLines.push(`Executor Android SDK runtime: ${androidSdkStatus.summary}`);
       runtimePreflightLines.push(`Executor winget runtime: ${wingetRuntimeStatus.summary}`);
-      if (referenceMonteCarloLooksLikePython) {
+      if (referenceSourceLooksLikePython) {
         runtimePreflightLines.push(
-          'Reference source shape: reference-Example Finance Forecast is a non-Android Python repo (pyproject/requirements/monte_carlo_ledger present). Do NOT assume Android package paths or Gradle files inside the reference source. Read the actual Python files under reference-Example Finance Forecast/README.md, pyproject.toml, monte_carlo_ledger/*.py, and docs/** first.',
+          'Reference source shape: reference-source is a non-Android Python repo (pyproject/requirements/reference_source present). Do NOT assume Android package paths or Gradle files inside the reference source. Read the actual Python files under reference-source/README.md, pyproject.toml, reference_source/*.py, and docs/** first.',
         );
       }
 

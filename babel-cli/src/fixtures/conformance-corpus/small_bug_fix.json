@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "fixture_type": "babel_conformance_corpus_task",
+  "task_id": "small_bug_fix",
+  "title": "Small bug fix",
+  "target_file": "src/math.js",
+  "verifier_command": "npm test",
+  "task": "Fix the failing Node test. Only edit src/math.js. Run npm test before completing.",
+  "broken_implementation": "export const add = () => 0;\n",
+  "fixed_implementation": "export const add = (a, b) => a + b;\n",
+  "test_source": "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { add } from './math.js';\n\ntest('add sums two numbers', () => {\n  assert.equal(add(1, 2), 3);\n});\n"
+}

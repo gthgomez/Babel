@@ -231,5 +231,5 @@ test('default model policy is direct DeepSeek-first for daily and stage routes',
   assert.equal(routeByStage.get('planning')?.primaryBackendKey, 'deepseek-v4-pro');
   assert.equal(routeByStage.get('qa')?.primaryBackendKey, 'deepseek-v4-pro');
   assert.equal(routeByStage.get('executor')?.primaryBackendKey, 'deepseek-v4-flash');
-  assert.equal(routeByStage.get('qa')?.orderedBackends[1]?.backendKey, 'deepinfra-deepseek-v3');
+  assert.equal(routeByStage.get('qa')?.orderedBackends[1]?.backendKey, 'deepseek-v4-flash');
 });
