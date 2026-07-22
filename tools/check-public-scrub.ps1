@@ -89,7 +89,7 @@ if ($null -ne $supplementalPolicy) {
 }
 
 function Get-PublicScrubFiles {
-  foreach ($record in @($inventory.records)) { Get-Item -LiteralPath $record.full_path }
+  foreach ($record in @($inventory.records)) { Get-Item -Force -LiteralPath $record.full_path }
 }
 
 # Content leak patterns: private identifiers + paths. Allowed public project names

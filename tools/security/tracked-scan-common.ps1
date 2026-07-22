@@ -28,7 +28,7 @@ function Get-TrackedScanInventory {
       $issues.Add([pscustomobject]@{ path = $relative; reason = 'missing-worktree-file' })
       continue
     }
-    $item = Get-Item -LiteralPath $full
+    $item = Get-Item -Force -LiteralPath $full
     if ($item.Length -gt $MaxFileBytes) {
       $issues.Add([pscustomobject]@{ path = $relative; reason = 'file-size-limit' })
       continue
