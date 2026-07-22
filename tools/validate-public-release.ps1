@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
   [string]$Root = '',
-  [switch]$Strict
+  [switch]$Strict,
+  [string]$SupplementalPolicyPath = ''
 )
 
 Set-StrictMode -Version Latest
@@ -17,6 +18,8 @@ if ([string]::IsNullOrWhiteSpace($Root)) {
 $cliRoot = Join-Path $Root 'babel-cli'
 $validateCatalogScriptPath = Join-Path $Root 'tools\validate-catalog.ps1'
 $checkPublicScrubScriptPath = Join-Path $Root 'tools\check-public-scrub.ps1'
+$checkPublicContentPolicyScriptPath = Join-Path $Root 'tools\check-public-content-policy.ps1'
+$checkCanonicalIndependenceScriptPath = Join-Path $Root 'tools\check-canonical-independence.ps1'
 $resolveLocalStackScriptPath = Join-Path $Root 'tools\resolve-local-stack.ps1'
 
 $preferredShell = Get-Command pwsh -ErrorAction SilentlyContinue
@@ -52,17 +55,34 @@ if (-not (Test-Path -LiteralPath $validateCatalogScriptPath)) {
 if (-not (Test-Path -LiteralPath $checkPublicScrubScriptPath)) {
   throw "Public scrub script not found at $checkPublicScrubScriptPath"
 }
+if (-not (Test-Path -LiteralPath $checkPublicContentPolicyScriptPath)) {
+  throw "Public content policy script not found at $checkPublicContentPolicyScriptPath"
+}
+if (-not (Test-Path -LiteralPath $checkCanonicalIndependenceScriptPath)) {
+  throw "Canonical independence script not found at $checkCanonicalIndependenceScriptPath"
+}
 
 Invoke-Step -Label 'Catalog validation' -Body {
   & $shellPath -NoProfile -ExecutionPolicy Bypass -File $validateCatalogScriptPath
 }
 
 Invoke-Step -Label 'Public scrub check' -Body {
-  $scrubArgs = @('-RepoRoot', $Root)
-  if ($Strict) {
-    $scrubArgs += '-Strict'
-  }
+$scrubArgs = @('-RepoRoot', $Root)
+if ($Strict) {
+  $scrubArgs += '-Strict'
+}
+if (-not [string]::IsNullOrWhiteSpace($SupplementalPolicyPath)) {
+  $scrubArgs += @('-SupplementalPolicyPath', $SupplementalPolicyPath)
+}
   & $shellPath -NoProfile -ExecutionPolicy Bypass -File $checkPublicScrubScriptPath @scrubArgs
+}
+
+Invoke-Step -Label 'Public content policy' -Body {
+  & $shellPath -NoProfile -ExecutionPolicy Bypass -File $checkPublicContentPolicyScriptPath -RepoRoot $Root
+}
+
+Invoke-Step -Label 'Canonical repository independence' -Body {
+  & $shellPath -NoProfile -ExecutionPolicy Bypass -File $checkCanonicalIndependenceScriptPath -RepoRoot $Root
 }
 
 if (-not (Test-Path -LiteralPath (Join-Path $cliRoot 'node_modules'))) {

@@ -967,26 +967,17 @@ entries:
     layer: skill
     path: 02_Skills/Governance/Multi-Agent-Pipeline-v1.md
     description: >
-      Multi-agent LLM pipeline patterns from example_saas_backend scanner system. Covers
-      BaseAgent contract (abstract _get_agent_name/_get_system_prompt, review()
-      returns AgentExecutionResult with explicit ExecutionState), timeout chain
-      invariant (AGENT_TIMEOUTS → agent_timeout → api_timeout = agent_timeout - 5s),
-      aggregation weights (must sum 1.0, security highest at 0.25), smart routing
-      via ROUTING_RULES (dispatch only relevant agents per file pattern), context
-      budgeting (CONTEXT_BUDGETS per agent, EXCLUDED_PATTERNS for generated files),
-      learning pipeline guardrails (learning_modifications_enabled and
-      learning_auto_apply always False — locked after prior regression incident),
-      execution state handling (OK/TIMEOUT/PARSE_ERROR/PROVIDER_ERROR/SKIPPED),
-      SLO gates (34% unavailability rate triggers NEEDS_REVISION), quality guards
-      and consolidation thresholds, and new-agent checklist (timeouts, weights,
-      routing, context budget, tests).
+      Reusable multi-agent review-pipeline guidance. Covers typed execution states,
+      validated deadline propagation, project-configured routing and weights,
+      context budgeting, guarded prompt-change proposals, coverage gates,
+      consolidation, and regression testing.
     status: active
-    tags: [cognition:exploration, governance:safety, llm, skill, utility:example_saas_backend, utility:multi-agent, utility:pipeline, utility:review]
+    tags: [cognition:exploration, governance:safety, llm, skill, utility:multi-agent, utility:pipeline, utility:review]
     dependencies: []
     conflicts: []
     default_for_domains:
       - domain_python_backend
-    token_budget: 400
+    token_budget: 325
 
   - id: skill_workspace_locking
     layer: skill
@@ -2181,7 +2172,7 @@ entries:
     description: >
       General research and strategy agent. Uses MPAF/GSA frameworks for
       structured investigation, claim verification, and competitive teardown
-      work. Apex of OLS v4.1 General APEX lineage.
+      work. Current OLS v4.1 general-research lineage.
     status: active
     token_budget: 250
     load_position: 3
@@ -2257,10 +2248,9 @@ entries:
     path: 02_Domain_Architects/Python_Backend-v1.0.md
     description: >
       Senior Python backend engineer for multi-agent pipelines and deterministic
-      validators. Covers example_saas_backend scanner (async agents, learning pipeline, guardrail
-      contracts, CI hooks, pytest suites) and example_web_audit ci-validator (scoring weights,
-      schema checks, deterministic output). Enforces async hygiene, exception propagation,
-      mutable-default-argument prohibition, and learning guardrail lock invariants.
+      validators. Covers async coordination, typed results, guarded learning
+      proposals, schema-first validation, deterministic scoring, exception
+      propagation, and mutable-default prevention.
     status: active
     load_position: 3
     tags: [utility:agents, utility:async, utility:backend, utility:cli, utility:pipeline, utility:pytest, utility:python, utility:scoring, utility:validators]
@@ -2411,8 +2401,8 @@ entries:
     layer: model_adapter
     path: 03_Model_Adapters/Scout_Orchestrator.md
     description: >
-      Structural adapter for Llama 4 Scout. Optimized for 10M+ context windows,
-      high-precision orchestration, and structural triage turns.
+      Structural adapter for Llama 4 Scout orchestration and triage turns.
+      Requires evidence-backed paths and schema validation after JSON generation.
     status: active
     token_budget: 350
     load_position: 4
@@ -2439,7 +2429,7 @@ entries:
     path: 04_Meta_Tools/Prompt_Compiler-v5.0.md
     description: >
       Deterministic meta-prompt compiler. Use for hardening and validating
-      new domain or adapter prompts. Apex of OLS v5.0 Canonical lineage.
+      new domain or adapter prompts in the current canonical lineage.
     status: active
     token_budget: 300
     tags: [utility:authoring, utility:compiler, utility:meta]
@@ -2479,11 +2469,11 @@ entries:
 
   - id: meta_mcp_adapter_v1
     layer: meta_tool
-    path: docs/MCP_Adapter-v1.md
+    path: docs/architecture/MCP_Adapter-v1.md
     description: >
-      Read-only MCP control-plane adapter for Babel v10 Phase 1. Documents the
-      safe stdio interface for catalog inspection, typed stack resolution,
-      instruction stack preview, and manifest preview. No execution tools.
+      Canonical read-only MCP control-plane documentation for catalog inspection,
+      typed stack resolution, instruction-stack preview, manifest preview, and
+      the currently registered tool surface.
     status: active
     token_budget: 275
     tags: [compiler_lane, utility:control_plane, utility:mcp, utility:meta, utility:read_only]
@@ -2704,11 +2694,9 @@ entries:
     layer: project_overlay
     path: 05_Project_Overlays/Example-Autonomous-Agent-Context.md
     description: >
-      Project context for example_autonomous_agent autonomous agent. Covers runtime surface
-      (Step-3.5-Flash/DeepInfra, Slack async, /workspace-root/ execution authority),
-      agent IDs (main, antigravity), and hard constraints: governance triad always
-      required, Babel mandatory for dev tasks, AGENTS.md immutable, startup
-      acknowledgment required, absent-user protocol always active.
+      Public example context for an unattended agent. Covers explicit execution
+      roots, untrusted-input handling, approval-aware state transitions, startup
+      contracts, and structured asynchronous result delivery.
     status: active
     token_budget: 300
     load_position: 5
@@ -2751,12 +2739,10 @@ entries:
     layer: skill
     path: 02_Skills/Governance/Autonomous-Agent-State-Machine-v1.md
     description: >
-      Extends OLS-v7-Core's binary PLAN/ACT model to a six-state machine for unattended
-      autonomous operation: IDLE → PLAN → WAIT_FOR_APPROVAL → ACT → REPORT → IDLE,
-      with HALT reachable from any state. Defines blast-radius-aware absent-user protocol
-      with confidence routing and per-tier approval windows (2h MEDIUM, 24h HIGH).
-      Includes hold message format, halt report format, and session-start acknowledgment.
-      Load for any task received via async channel or any MEDIUM/HIGH blast radius task.
+      State-machine governance for unattended operation. Defines planning,
+      approval, execution, reporting, and halt states with project-configured
+      approval policy, hold/halt reports, and session-start acknowledgment.
+      Load for asynchronous or elevated-risk tasks.
     status: active
     tags: [governance:safety, skill, utility:async, utility:autonomous, utility:halt, utility:hitl, utility:state-machine]
     dependencies:

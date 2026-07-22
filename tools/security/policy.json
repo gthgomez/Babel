@@ -1,56 +1,18 @@
 {
   "version": 1,
-  "description": "Live security policy for public Babel scrub and secret scanning. Public project names may appear in docs/examples; the same names remain forbidden as dependency fingerprints.",
+  "description": "Public-safe baseline security policy. Organization-specific identifiers belong in an external supplemental policy.",
   "allowed_public_project_names": [
-    "GPCGuard",
-    "Prismatix"
+    "GPCGuard"
   ],
   "forbidden_private_identifiers": [
-    "Babel-private",
-    "babel-private",
     "C:\\\\Users\\\\",
     "C:/Users/",
     "C:\\\\Workspace\\\\",
     "C:/Workspace/",
-    "\\.supabase\\.co",
-    "ExactUploadFixer",
-    "PDFFixerPro",
-    "PrivacyScrubber",
-    "ScreenKeepAlive",
-    "exact_upload_fixer_pro",
-    "com\\.exactuploadfixer",
-    "com\\.pdffixerpro",
-    "com\\.privacyscrubber",
-    "com\\.screenkeeper\\.app",
-    "AuditGuard",
-    "Project_Android",
-    "App-Test-Babel",
-    "App-test-Babel",
-    "app_test_babel",
-    "MonteCarloLedger",
-    "ProjectGames",
-    "Openclaw",
-    "openclaw",
-    "\\.openclaw",
-    "scanners/gpcguard_monitor",
-    "PlayBillingGateway"
+    "\\.supabase\\.co"
   ],
   "forbidden_dependency_fingerprints": [
-    "GPCGuard",
-    "Prismatix",
-    "AuditGuard",
-    "Project_Android",
-    "App-Test-Babel",
-    "App-test-Babel",
-    "app_test_babel",
-    "MonteCarloLedger",
-    "ProjectGames",
-    "Openclaw",
-    "Babel-private",
-    "ExactUploadFixer",
-    "PDFFixerPro",
-    "PrivacyScrubber",
-    "ScreenKeepAlive"
+    "GPCGuard"
   ],
   "exclude_directory_names": [
     ".git",

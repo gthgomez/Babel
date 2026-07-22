@@ -51,25 +51,26 @@ Behavioral policy:
 
 ### Active Projects
 
-| Project | Path | Keywords |
-|---------|------|----------|
-| `example_saas_backend` | `...\Project_SaaS\example_saas_backend` | GPC, privacy, consent, GDPR, CCPA, webhook, Stripe, Supabase, edge function |
-| `example_llm_router` | `...\Project_SaaS\example_llm_router` | example_llm_router, design system, component library, tokens, theming |
-| `example_web_audit` | `...\Project_SaaS\example_web_audit` | example_web_audit, audit, compliance log, report, trail |
-| `example_mobile_suite` | `...\example_mobile_suite` | example_mobile_suite, android, kotlin, jetpack compose, compose, mobile app, play store, google play, billing client, billing library, billing wiring, billing integration, documented android contracts, manifest declarations, policy-sensitive manifest declarations, manifest policy declarations, AAB, APK, bundletool, example_app_one, example_app_two, example_app_three, example_app_four |
-| `example_game_workspace` | `...\example_game_workspace` | example_game_workspace, game workspace, game dev, gameplay, game UI, godot, gdscript, unity, rpg, simlife, aetherlyn, betamonsterrpg, firetv |
-| `example_game_suite` | `...\example_game_workspace\ExampleGameProject` | example_game_suite, ExampleGameProject, tower defense, Godot tower defense, towers, waves, enemies, upgrade paths |
-| `example_autonomous_agent` | `/agent-root/example-autonomous-agent` | example_autonomous_agent, example_autonomous_agent agent, autonomous agent, AGENTS.md, SOUL.md, example_autonomous_agent workspace, example_autonomous_agent config, agent instruction, agent startup, unattended agent |
+| Project | Routing keywords |
+|---------|------------------|
+| `example_saas_backend` | privacy, consent, GPC, webhook, database, edge function |
+| `example_llm_router` | LLM router, design system, component library, tokens, theming |
+| `example_web_audit` | web audit, compliance log, report, evidence trail |
+| `example_mobile_suite` | Android, Kotlin, Compose, mobile app, billing, AAB, APK |
+| `example_game_workspace` | game workspace, game development, gameplay, Godot, GDScript, Unity |
+| `example_game_suite` | tower defense, towers, waves, enemies, upgrade paths |
+| `example_autonomous_agent` | autonomous agent, agent instructions, startup, unattended operation |
 
 If a request cannot be matched to any project, set `target_project` to `"global"`.
+Project IDs are semantic routing labels. Resolve execution roots only from the current repository or an explicit `project_root`; never derive filesystem paths from an ID.
 
 ### Prompt Library Root
 
 All prompt files live under:
-`<YOUR_PROJECT_ROOT>/Babel/`
+`<BABEL_ROOT>/`
 
 The canonical routing registry is:
-`<YOUR_PROJECT_ROOT>/Babel/prompt_catalog.yaml`
+`<BABEL_ROOT>/prompt_catalog.yaml`
 
 Your output is typed selection intent, not a physical file manifest.
 

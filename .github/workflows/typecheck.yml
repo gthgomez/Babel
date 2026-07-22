@@ -45,9 +45,21 @@ jobs:
       - name: Run required public secret scan
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/run-public-secret-scan.ps1 -RepoRoot . -Strict -RequireExternalScanner
 
+  public-content-policy:
+    name: public-content-policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test public prevention gates
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/tests/test-public-prevention-gates.ps1
+      - name: Check public content policy
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-content-policy.ps1 -RepoRoot .
+      - name: Check canonical repository independence
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-canonical-independence.ps1 -RepoRoot .
+
   linux-validation:
     name: linux-validation
-    needs: security
+    needs: [security, public-content-policy]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +79,7 @@ jobs:
 
   windows-portability:
     name: windows-portability
-    needs: security
+    needs: [security, public-content-policy]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -86,3 +98,9 @@ jobs:
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/validate-catalog.ps1
       - name: Public scrub (Windows)
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-scrub.ps1 -Strict
+      - name: Public prevention fixtures (Windows)
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/tests/test-public-prevention-gates.ps1
+      - name: Public content policy (Windows)
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-content-policy.ps1 -RepoRoot .
+      - name: Canonical independence (Windows)
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-canonical-independence.ps1 -RepoRoot .

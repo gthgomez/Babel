@@ -6,16 +6,20 @@
 
 Babel CLI is an experimental governance-first Prompt OS / CLI runtime with tested deterministic reliability components. The current evidence supports claims about catalog validation, typed contracts, resolver/compiler behavior, terminal status normalization, rollback/worktree safety, verifier-contract handling, doctor diagnostics, and local tests.
 
-Do not present this package as production-ready, as a safe autonomous worker for arbitrary real repos, or as a mature competitor to Codex CLI, Claude Code, Gemini CLI, Aider, or OpenHands. Live provider-backed governance remains under-proven because provider-backed pipeline tests may require API keys and can be skipped in normal local runs.
+Do not describe this package as ready for unrestricted production use, as a
+safe autonomous worker for arbitrary repositories, or as equivalent to mature
+coding-agent CLIs. Evidence for live provider-backed governance remains limited
+because those pipeline tests can require credentials and may be skipped in
+normal local runs.
 
 ## Known Limitations
 
-- Live provider-backed PLAN -> QA -> ACT governance is under-proven.
+- Evidence for live provider-backed PLAN -> QA -> ACT governance is limited.
 - Provider-backed pipeline tests may require API keys and skipped live tests must be surfaced explicitly.
 - `src/pipeline.ts` remains monolithic and needs decomposition.
 - Verifier-gated completion is scoped to declared or inferred verifier contracts, not universal for every run.
 - `doctor` and the reliability matrix need more cross-environment hardening.
-- No comparative benchmark currently proves parity or superiority against Codex CLI, Claude Code, Gemini CLI, Aider, or OpenHands.
+- No comparative benchmark currently establishes parity or superiority against other coding-agent CLIs.
 
 ## Source of truth
 
@@ -28,7 +32,7 @@ Do not hand-edit files in `dist/`. Make source changes in `src/`, then rebuild.
 ## Source Authority
 
 This package is developed in the canonical `gthgomez/Babel` repository. Implement,
-benchmark, review, and release CLI behavior here. Private consumer repositories may
+benchmark, review, and release CLI behavior here. Downstream consumer repositories may
 exercise or extend the CLI through documented interfaces, but they do not publish
 generated CLI source back into this package.
 
@@ -105,8 +109,8 @@ node dist/index.js benchmark loop --readiness fast --json
 node dist/index.js benchmark analyze latest --json
 ```
 
-`benchmark loop` gates local readiness, reads Terminal-Bench history from
-`/workspace-root/benchmarks\runs\terminal-bench-2`, and emits the next targeted
+`benchmark loop` gates local readiness, reads Terminal-Bench history from a
+configured benchmark results directory, and emits the next targeted
 or full benchmark command. Promotion remains blocked until the latest full
 `pilot10` run reaches at least `5/10`.
 
@@ -195,7 +199,7 @@ node dist/index.js create vite-react ./scratch/hello-web
 
 - `babel schedule create daily-review ci_review --project-root .` creates a local read-only schedule entry.
 - `babel schedule run-now daily-review --json` executes one schedule immediately and writes evidence under `runs/schedules/`.
-- Phase 6C schedules do not start a daemon and do not commit, push, create branches, or open PRs.
+- Local schedules do not start a daemon and do not commit, push, create branches, or open PRs.
 
 ## Runtime Plugins
 

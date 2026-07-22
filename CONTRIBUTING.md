@@ -20,7 +20,7 @@ Treat changes to Babel like code changes:
 - validate before opening a PR
 
 This repository is Babel's canonical public source. Contributions merged here
-change the authoritative product; they are not regenerated from a private parent.
+change the authoritative product; no external repository regenerates this source.
 Consumer-specific overlays and operational policy belong in the consumer
 repository or another documented external configuration location.
 
@@ -54,7 +54,24 @@ From the Babel root:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\validate-catalog.ps1
+pwsh -File .\tools\check-public-content-policy.ps1
+pwsh -File .\tools\check-canonical-independence.ps1
 ```
+
+The content-policy check rejects disclosure-prone wording, machine-specific
+paths, unsupported absolute claims, duplicate active documents, and broken
+relative Markdown links. The canonical-independence check verifies that a clean
+clone does not require a parent workspace, sibling repository, or retired
+publication artifacts.
+
+Maintainer pre-merge checklist:
+
+- [ ] Keep the confidential denylist outside this repository and its Git history.
+- [ ] Set `BABEL_PRIVATE_SCRUB_POLICY_PATH`, or pass the same external file with
+  `-SupplementalPolicyPath`.
+- [ ] Run `pwsh -File .\tools\validate-public-release.ps1 -Strict
+  -SupplementalPolicyPath $env:BABEL_PRIVATE_SCRUB_POLICY_PATH` and require a
+  clean result before merging.
 
 If you touched routing, compiler, or load-order logic, also inspect:
 - [OLS-v9-Orchestrator.md](./00_System_Router/OLS-v9-Orchestrator.md)
@@ -78,7 +95,9 @@ If your change touches `babel-cli/src/` — specifically `agentContracts.ts` or 
 
 **If any box is checked and the prompt file was not updated, the change set is incomplete.**
 
-See [GOVERNANCE.md](./GOVERNANCE.md) — "Prompt / Runtime Contract Co-evolution" for the full rule and trigger list.
+This section is the authoritative prompt/runtime co-evolution rule and trigger
+list for contributors. If a change introduces another model-facing contract
+surface, extend this checklist in the same PR.
 
 ## Pull Request Expectations
 
@@ -88,6 +107,7 @@ A good Babel PR should explain:
 - whether the change is reusable or project-specific
 - whether any router/catalog behavior changed
 - whether any `babel-cli/src/` changes require a corresponding prompt file update (co-evolution check)
+- whether content-policy and canonical-independence checks pass
 
 ## Suggested Commit Style
 

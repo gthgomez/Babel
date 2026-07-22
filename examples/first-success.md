@@ -1,6 +1,6 @@
-# First Success
+# First Verification
 
-This is the shortest proof that Babel is working from the public repo.
+This is the shortest deterministic check of Babel's public resolver path.
 
 ## Before Babel
 
@@ -35,14 +35,14 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
 
 The output shows the resolved instruction stack and ordered manifest preview from `prompt_catalog.yaml`.
 
-## What Success Looks Like
+## What To Verify
 
 You can compare the result to:
 
 - `examples/manifest-previews/backend-verified.json`
 - `examples/manifest-previews/mobile-direct.json`
 
-That proves:
+Matching the checked-in preview verifies, for this fixture and command:
 
 - the catalog is valid
 - the resolver can select public layers
@@ -51,7 +51,7 @@ That proves:
 
 ## Next Step
 
-After this proof, choose one path:
+After this check, choose one path:
 
 - read `docs/VISION.md` to understand the direction
 - read `docs/CLI_QUICKSTART.md` to use the CLI

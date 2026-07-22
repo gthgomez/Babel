@@ -9,8 +9,8 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 ## Overview
 
-This repository is the canonical public source of Babel. It does not depend on a
-private parent repository for source authority or generation.
+This repository is the canonical public source of Babel. No external repository
+provides its source authority or generates its contents.
 
 The public repo is intentionally centered on:
 
@@ -21,7 +21,8 @@ The public repo is intentionally centered on:
 - read-only inspection surfaces
 - public validation and release security gates
 
-That is why the public proof path is validation plus preview, not "trust us, the full pipeline works everywhere."
+That is why the public verification path is validation plus preview, with claims
+scoped to the behavior those checks exercise.
 
 ## The Layers
 
@@ -77,13 +78,13 @@ This repo includes deterministic tests and golden previews for that path.
 
 Android is a real first-class routed lane in Babel.
 
-Public proof:
+Public verification:
 
 - `domain_android_kotlin` is cataloged
 - the mobile skills are cataloged
 - `overlay_example_mobile_suite` is cataloged
 - `tools/resolve-local-stack.ps1` supports `-TaskCategory mobile -Project example_mobile_suite`
-- `examples/manifest-previews/mobile-direct.json` proves the mobile lane resolves end to end
+- `examples/manifest-previews/mobile-direct.json` demonstrates the expected mobile-lane resolution for its checked-in fixture
 
 ## Read-Only MCP Surface
 

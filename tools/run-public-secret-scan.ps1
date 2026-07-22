@@ -2,7 +2,8 @@ param(
   [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
   [switch]$Strict,
   [switch]$RequireExternalScanner,
-  [string]$ReportPath = ''
+  [string]$ReportPath = '',
+  [string]$SupplementalPolicyPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -28,12 +29,6 @@ if ($null -ne $preferredShell) {
 }
 
 $policyPath = Join-Path $RepoRoot 'tools/security/policy.json'
-if (-not (Test-Path -LiteralPath $policyPath)) {
-  $policyPath = Join-Path $RepoRoot 'tools/public-export/sync_policy.json'
-}
-if (-not (Test-Path -LiteralPath $policyPath)) {
-  $policyPath = Join-Path $scriptRoot 'public-export/sync_policy.json'
-}
 if (-not (Test-Path -LiteralPath $policyPath)) {
   $policyPath = Join-Path $scriptRoot 'security/policy.json'
 }
@@ -109,7 +104,7 @@ function Test-RequiredScannerVersion {
 function Invoke-GitleaksScan {
   param([System.Management.Automation.CommandInfo]$Command)
 
-  & $Command.Source detect --no-git --redact --source $RepoRoot
+  & $Command.Source dir --redact --no-banner $RepoRoot
   if ($LASTEXITCODE -ne 0) {
     Write-SecretScanReport -Status 'fail' -Scanner $requiredScannerName -Messages @("$requiredScannerName failed with exit code $LASTEXITCODE.")
     exit 1
@@ -122,6 +117,9 @@ function Invoke-GitleaksScan {
 $scrubArgs = @('-RepoRoot', $RepoRoot)
 if ($Strict) {
   $scrubArgs += '-Strict'
+}
+if (-not [string]::IsNullOrWhiteSpace($SupplementalPolicyPath)) {
+  $scrubArgs += @('-SupplementalPolicyPath', $SupplementalPolicyPath)
 }
 
 & $shellPath -NoProfile -ExecutionPolicy Bypass -File $scrubScriptPath @scrubArgs

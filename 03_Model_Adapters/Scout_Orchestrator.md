@@ -22,8 +22,9 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 >
 > **Chat template:** Scout uses the Llama 4 chat template with `<|start_header_id|>` delimiters.
 > System prompt must be placed in the system header, not injected into the user turn. JSON mode
-> is available via DeepInfra's `response_format: {type: "json_object"}` parameter — use it for
-> all orchestrator turns to guarantee schema compliance.
+> is available through compatible providers' `response_format: {type: "json_object"}` parameter.
+> Use it for orchestrator turns to improve structural conformance, then validate the response
+> against the required schema. JSON mode alone does not establish schema compliance.
 
 ## 1. STRATEGIC CONTEXT (10M Window Support)
 

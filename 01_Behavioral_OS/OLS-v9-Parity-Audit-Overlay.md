@@ -23,11 +23,11 @@ This overlay defines the behavioral rules for **Parity Auditing** — the proces
 ### 1. The Evidence Primacy Rule
 - Never assume a port is correct based on code readability alone.
 - Verification must be grounded in side-by-side execution traces or identical unit-test coverage.
-- If a Source-Target divergence is found, the Source is always correct unless an explicit `Logic-Shift` is documented.
+- Treat the Source as the compatibility baseline, not as infallible. Resolve divergence using requirements, tests, and documented `Logic-Shift` evidence.
 
 ### 2. The Quote-or-Retract Protocol
 - When claiming logic parity, the agent must be able to "Quote" the Source logic (e.g., Python line) and its Target equivalent (e.g., Kotlin line).
-- If a direct equivalent cannot be "Quoted," the parity claim must be "Retracted" until a functional bridge is proven.
+- If a direct equivalent cannot be quoted, retract the parity claim until a functional bridge is demonstrated by evidence.
 
 ### 3. Schema Invariance
 - DB Schemas must maintain naming and type parity unless the platform (e.g., Room vs SQLite) demands a translation.

@@ -10,7 +10,7 @@ This public repo includes:
 - a read-only MCP control-plane surface
 - public examples, golden previews, regression tests, and security/release gates
 
-It also includes the larger CLI/runtime harness. That surface is real and typechecked in public CI, but model-backed execution can require local tooling, credentials, and workspace-specific policy. The canonical first success path remains deterministic validation and preview.
+It also includes the larger CLI/runtime harness. That surface is real and typechecked in public CI, but model-backed execution can require local tooling, credentials, and workspace-specific policy. The canonical first validation path remains deterministic validation and preview.
 
 ## Canonical Repository
 
@@ -18,7 +18,7 @@ This repository, [`gthgomez/Babel`](https://github.com/gthgomez/Babel), is the
 canonical public source for Babel. A clean clone contains the authoritative prompt
 library, runtime, documentation, and validation tooling.
 
-Private projects consume versioned Babel releases and may provide external,
+Consumer projects use versioned Babel releases and may provide external,
 repo-local configuration. They do not generate or overwrite this repository. See
 [ADR-0001](./docs/adr/ADR-0001-canonical-public-source.md) for the source-authority
 decision and migration constraints.
@@ -44,10 +44,10 @@ What is present but not the primary onboarding path:
 The canonical repository is designed to work without private workspace knowledge:
 
 - public docs, issue templates, and CI are maintained here
-- private repo fingerprints and operator-only material are prohibited
-- `package-lock.json` is retained for reproducible install, with local-path/private-dependency checks
+- confidential repository fingerprints and operator-only material are prohibited
+- `package-lock.json` is retained for reproducible install, with local-path and unsafe-dependency checks
 - public CI runs typecheck and the required secret scan
-- changes land through reviewed branches and PRs, not reverse publication from a private repository
+- changes land through reviewed branches and PRs in this repository
 
 ## Vision
 
@@ -150,12 +150,12 @@ There are two practical surfaces in this repo:
 
 The first surface is what the public repo is optimized for. The second is available, but it assumes more local setup.
 
-## Proof Surfaces
+## Verification Surfaces
 
 - [START_HERE.md](./START_HERE.md) — the fastest public onboarding path
 - [docs/VISION.md](./docs/VISION.md) — current state, principles, and roadmap direction
 - [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md) — copy-paste CLI flows for `doctor`, `run`, `plan`, and `mcp`
-- [examples/first-success.md](./examples/first-success.md) — the shortest before/after explanation
+- [examples/first-success.md](./examples/first-success.md) — the shortest validation walkthrough
 - [examples/manifest-previews/backend-verified.json](./examples/manifest-previews/backend-verified.json) — golden backend preview
 - [examples/manifest-previews/mobile-direct.json](./examples/manifest-previews/mobile-direct.json) — golden Android/mobile preview
 - [docs/architecture/ARCHITECTURE.md](./docs/architecture/ARCHITECTURE.md) — public architecture and product shape
@@ -168,6 +168,25 @@ Verify the public repo:
 ```powershell
 pwsh -File .\tools\validate-public-release.ps1
 ```
+
+Run the focused disclosure and repository-independence gates:
+
+```powershell
+pwsh -File .\tools\check-public-content-policy.ps1
+pwsh -File .\tools\check-canonical-independence.ps1
+```
+
+Maintainers must additionally run the strict release validator with the
+confidential supplemental policy stored outside the repository:
+
+```powershell
+pwsh -File .\tools\validate-public-release.ps1 -Strict `
+  -SupplementalPolicyPath $env:BABEL_PRIVATE_SCRUB_POLICY_PATH
+```
+
+The explicit argument takes precedence over the environment variable. A
+configured policy that is missing or malformed fails closed, and findings
+report only category, repository path, and line number.
 
 Preview a manifest directly from the resolver:
 
@@ -226,7 +245,7 @@ Good public contributions usually improve one of these surfaces:
 - more precise skills, domain architects, or adapters
 - stronger validation, scrub, and release checks
 
-Private workspace names, credentials, local paths, and operator-only release notes do not belong in this repo.
+Organization-specific workspace names, credentials, machine-specific paths, and operator-only release notes do not belong in this repo.
 
 ## Repository Structure
 

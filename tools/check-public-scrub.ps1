@@ -2,7 +2,8 @@ param(
   [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
   [switch]$Strict,
   [string]$ReportPath = '',
-  [string]$PolicyPath = ''
+  [string]$PolicyPath = '',
+  [string]$SupplementalPolicyPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,19 +12,34 @@ Set-Location $RepoRoot
 $rgCommand = Get-Command rg -ErrorAction SilentlyContinue
 
 if (-not $PolicyPath) {
-  $livePolicy = Join-Path $RepoRoot 'tools/security/policy.json'
-  $legacyPolicy = Join-Path $RepoRoot 'tools/public-export/sync_policy.json'
-  if (Test-Path -LiteralPath $livePolicy) {
-    $PolicyPath = $livePolicy
-  } else {
-    $PolicyPath = $legacyPolicy
-  }
+  $PolicyPath = Join-Path $RepoRoot 'tools/security/policy.json'
 }
 if (-not (Test-Path -LiteralPath $PolicyPath)) {
   throw "Missing security policy (expected tools/security/policy.json): $PolicyPath"
 }
 
-$syncPolicy = Get-Content -Raw -LiteralPath $PolicyPath | ConvertFrom-Json
+try {
+  $syncPolicy = Get-Content -Raw -LiteralPath $PolicyPath | ConvertFrom-Json
+} catch {
+  throw "Malformed security policy: $PolicyPath"
+}
+
+$supplementalWasConfigured = -not [string]::IsNullOrWhiteSpace($SupplementalPolicyPath)
+if (-not $supplementalWasConfigured -and -not [string]::IsNullOrWhiteSpace($env:BABEL_PRIVATE_SCRUB_POLICY_PATH)) {
+  $SupplementalPolicyPath = $env:BABEL_PRIVATE_SCRUB_POLICY_PATH
+  $supplementalWasConfigured = $true
+}
+$supplementalPolicy = $null
+if ($supplementalWasConfigured) {
+  if (-not (Test-Path -LiteralPath $SupplementalPolicyPath -PathType Leaf)) {
+    throw 'Configured supplemental scrub policy was not found.'
+  }
+  try {
+    $supplementalPolicy = Get-Content -Raw -LiteralPath $SupplementalPolicyPath | ConvertFrom-Json
+  } catch {
+    throw 'Configured supplemental scrub policy is malformed.'
+  }
+}
 $excludeDirectoryNames = @($syncPolicy.exclude_directory_names)
 $excludeFileNames = @($syncPolicy.exclude_file_names)
 $secretScanSkipFileNames = @($syncPolicy.secret_scan_skip_file_names)
@@ -39,6 +55,16 @@ if ($syncPolicy.PSObject.Properties.Name -contains 'forbidden_private_identifier
 $forbiddenDependencyFingerprints = @()
 if ($syncPolicy.PSObject.Properties.Name -contains 'forbidden_dependency_fingerprints') {
   $forbiddenDependencyFingerprints = @($syncPolicy.forbidden_dependency_fingerprints)
+}
+$supplementalPrivateIdentifiers = @()
+$supplementalDependencyFingerprints = @()
+if ($null -ne $supplementalPolicy) {
+  if ($supplementalPolicy.PSObject.Properties.Name -contains 'forbidden_private_identifiers') {
+    $supplementalPrivateIdentifiers = @($supplementalPolicy.forbidden_private_identifiers)
+  }
+  if ($supplementalPolicy.PSObject.Properties.Name -contains 'forbidden_dependency_fingerprints') {
+    $supplementalDependencyFingerprints = @($supplementalPolicy.forbidden_dependency_fingerprints)
+  }
 }
 
 function Get-PublicScrubFiles {
@@ -59,42 +85,19 @@ function Get-PublicScrubFiles {
 }
 
 # Content leak patterns: private identifiers + paths. Allowed public project names
-# (e.g. GPCGuard, Prismatix) may appear in docs/examples and are NOT in this list.
+# (for example, the explicitly public GPCGuard canary) are not in this list.
 # They remain forbidden as dependency fingerprints via lockfile/package rules.
-$legacyHardcodedPatterns = @(
-  'Babel-private',
-  'babel-private',
+$genericHardcodedPatterns = @(
   'C:\\Users\\',
   'C:/Users/',
   'C:\\Workspace\\',
   'C:/Workspace/',
-  '\.supabase\.co',
-  'ExactUploadFixer',
-  'PDFFixerPro',
-  'PrivacyScrubber',
-  'ScreenKeepAlive',
-  'exact_upload_fixer_pro',
-  'com\.exactuploadfixer',
-  'com\.pdffixerpro',
-  'com\.privacyscrubber',
-  'com\.screenkeeper\.app',
-  'AuditGuard',
-  'Project_Android',
-  'App-Test-Babel',
-  'App-test-Babel',
-  'app_test_babel',
-  'MonteCarloLedger',
-  'ProjectGames',
-  'Openclaw',
-  'openclaw',
-  '\.openclaw',
-  'scanners/gpcguard_monitor',
-  'PlayBillingGateway'
+  '\.supabase\.co'
 )
 if ($forbiddenPrivateIdentifiers.Count -gt 0) {
   $patterns = $forbiddenPrivateIdentifiers
 } else {
-  $patterns = $legacyHardcodedPatterns
+  $patterns = $genericHardcodedPatterns
 }
 # Never treat allowed public project names as content-leak findings.
 if ($allowedPublicProjectNames.Count -gt 0) {
@@ -103,6 +106,8 @@ if ($allowedPublicProjectNames.Count -gt 0) {
     -not ($allowedPublicProjectNames | Where-Object { $p -eq $_ -or $p -eq [regex]::Escape($_) })
   })
 }
+$supplementalPatterns = @($supplementalPrivateIdentifiers)
+Write-Verbose ("Loaded {0} public and {1} supplemental identifier patterns." -f $patterns.Count, $supplementalPatterns.Count)
 
 function Is-LegacyPlaceholderFinding {
   param([string]$RelativePath)
@@ -188,8 +193,16 @@ function Test-IsSecretScanSkippedFile {
 }
 
 function Get-LeakSearchResults {
+  param(
+    [string[]]$SearchPatterns,
+    [switch]$IncludePolicyFiles
+  )
+  if ($SearchPatterns.Count -eq 0) {
+    return @{ Results = @(); ExitCode = 1; Engine = 'none' }
+  }
   if ($null -ne $rgCommand) {
-    $joinedPattern = ($patterns -join '|')
+    Write-Verbose ("Scanning {0} identifier patterns with policy-files={1}." -f $SearchPatterns.Count, [bool]$IncludePolicyFiles)
+    $joinedPattern = ($SearchPatterns -join '|')
     $args = @(
       '-n',
       '--ignore-case',
@@ -204,9 +217,15 @@ function Get-LeakSearchResults {
       $args = @('--glob', "!$fileName") + $args
       $args = @('--glob', "!**/$fileName") + $args
     }
-    $args = @('--glob', '!tools/check-public-scrub.ps1') + $args
-    $args = @('--glob', '!tools/security/policy.json') + $args
-    $args = @('--glob', '!tools/run-public-secret-scan.ps1') + $args
+    $args = @('--glob', '!tools/tests/**') + $args
+    if (-not $IncludePolicyFiles) {
+      $args = @('--glob', '!tools/check-public-scrub.ps1') + $args
+      $args = @('--glob', '!tools/security/policy.json') + $args
+      $args = @('--glob', '!tools/run-public-secret-scan.ps1') + $args
+      $args = @('--glob', '!tools/check-public-content-policy.ps1') + $args
+      $args = @('--glob', '!tools/check-canonical-independence.ps1') + $args
+      $args = @('--glob', '!tools/security/public-content-policy.json') + $args
+    }
 
     $results = & $rgCommand.Source @args
     $exitCode = $LASTEXITCODE
@@ -226,13 +245,17 @@ function Get-LeakSearchResults {
   $results = New-Object System.Collections.Generic.List[string]
   foreach ($file in Get-PublicScrubFiles) {
     $relative = $file.FullName.Substring((Get-Location).Path.Length).TrimStart('\', '/').Replace('\', '/')
-    if ($relative -eq 'tools/check-public-scrub.ps1' -or
+    if ($relative.StartsWith('tools/tests/', [StringComparison]::OrdinalIgnoreCase)) { continue }
+    if (-not $IncludePolicyFiles -and ($relative -eq 'tools/check-public-scrub.ps1' -or
         $relative -eq 'tools/security/policy.json' -or
-        $relative -eq 'tools/run-public-secret-scan.ps1') {
+        $relative -eq 'tools/run-public-secret-scan.ps1' -or
+        $relative -eq 'tools/check-public-content-policy.ps1' -or
+        $relative -eq 'tools/check-canonical-independence.ps1' -or
+        $relative -eq 'tools/security/public-content-policy.json')) {
       continue
     }
 
-    $matches = Select-String -LiteralPath $file.FullName -Pattern $patterns -AllMatches -CaseSensitive:$false -ErrorAction SilentlyContinue
+    $matches = Select-String -LiteralPath $file.FullName -Pattern $SearchPatterns -AllMatches -CaseSensitive:$false -ErrorAction SilentlyContinue
     foreach ($match in $matches) {
       $results.Add((".\{0}:{1}:{2}" -f $relative, $match.LineNumber, $match.Line.Trim()))
     }
@@ -244,9 +267,10 @@ function Get-LeakSearchResults {
     Engine = 'select-string'
   }
 }
-$leakScan = Get-LeakSearchResults
-$results = $leakScan.Results
-$exitCode = $leakScan.ExitCode
+$baselineLeakScan = Get-LeakSearchResults -SearchPatterns $patterns
+$supplementalLeakScan = Get-LeakSearchResults -SearchPatterns $supplementalPatterns -IncludePolicyFiles
+$results = @($baselineLeakScan.Results) + @($supplementalLeakScan.Results)
+$exitCode = if ($results.Count -gt 0) { 0 } elseif ($baselineLeakScan.ExitCode -gt 1 -or $supplementalLeakScan.ExitCode -gt 1) { 2 } else { 1 }
 
 $forbiddenFiles = Get-PublicScrubFiles | Where-Object {
   $_.Name -match '^\.(env)(\..+)?$' -and $_.Name -ne '.env.example'
@@ -256,7 +280,7 @@ if ($forbiddenFiles) {
     $relative = $file.FullName.Substring((Get-Location).Path.Length).TrimStart('\', '/').Replace('\', '/')
     $hardFindings.Add($relative);
   }
-  Write-Host 'Forbidden .env* files found in public export:' -ForegroundColor Yellow
+  Write-Host 'Forbidden .env* files found in the public repository:' -ForegroundColor Yellow
   $forbiddenFiles | ForEach-Object {
     $relative = $_.FullName.Substring((Get-Location).Path.Length).TrimStart('\', '/').Replace('\', '/')
     Write-Host $relative
@@ -284,10 +308,11 @@ $keyPatternRules = @(
 
 $secretFindings = New-Object System.Collections.Generic.List[string]
 
-$fingerprintAlternation = if ($forbiddenDependencyFingerprints.Count -gt 0) {
-  ($forbiddenDependencyFingerprints | ForEach-Object { [regex]::Escape($_) }) -join '|'
+$allDependencyFingerprints = @($forbiddenDependencyFingerprints) + @($supplementalDependencyFingerprints)
+$fingerprintAlternation = if ($allDependencyFingerprints.Count -gt 0) {
+  ($allDependencyFingerprints | ForEach-Object { [regex]::Escape($_) }) -join '|'
 } else {
-  'Babel-private|GPCGuard|Prismatix|AuditGuard|ExactUploadFixer|PDFFixerPro|PrivacyScrubber|ScreenKeepAlive|Project_Android|App-Test-Babel|App-test-Babel|app_test_babel|MonteCarloLedger|ProjectGames|Openclaw'
+  'GPCGuard'
 }
 $lockfileSafetyRules = @(
   @{ Label = 'local file dependency'; Pattern = '"(?:resolved|version)"\s*:\s*"file:' },
@@ -371,15 +396,18 @@ foreach ($file in Get-PublicScrubFiles) {
 }
 
 foreach ($line in $results) {
-  $cleanLine = $line -replace '^\./', ''
-  if ($cleanLine -match '^([^:]+):') {
+  $cleanLine = ($line -replace '^\.([\\/])', '').Replace('\', '/')
+  if ($cleanLine -match '^(.+?):(\d+):') {
     $path = $Matches[1]
+    $lineNumber = $Matches[2]
     if (Is-LegacyPlaceholderFinding $path) {
-      $warningFindings.Add($cleanLine)
+      $warningFindings.Add(("identifier: {0}:{1}" -f $path, $lineNumber))
       continue;
     }
+    $hardFindings.Add(("identifier: {0}:{1}" -f $path, $lineNumber))
+    continue
   }
-  $hardFindings.Add($line)
+  $hardFindings.Add('identifier: path unavailable')
 }
 if ($secretFindings.Count -gt 0) {
   $secretFindings | ForEach-Object { $hardFindings.Add($_) }
@@ -390,7 +418,7 @@ if ($Strict -and $warningFindings.Count -gt 0) {
 }
 
 if ($hardFindings.Count -gt 0) {
-  Write-Host 'Potential public-export leaks found:' -ForegroundColor Yellow
+  Write-Host 'Potential public-content leaks found:' -ForegroundColor Yellow
   $hardFindings | ForEach-Object { Write-Host $_ }
   Write-ScrubReport -Status 'fail' -Findings @($hardFindings) -Warnings @($warningFindings)
   exit 1
@@ -410,7 +438,7 @@ if (($exitCode -eq 1) -or ($results.Count -eq 0 -and $secretFindings.Count -eq 0
 }
 
 if ($exitCode -eq 0) {
-  Write-Host 'Potential public-export leaks found:' -ForegroundColor Yellow
+  Write-Host 'Potential public-content leaks found:' -ForegroundColor Yellow
   $results | ForEach-Object { Write-Host $_ }
   Write-ScrubReport -Status 'fail' -Findings @($results) -Warnings @($warningFindings)
   exit 1

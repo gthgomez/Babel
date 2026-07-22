@@ -1,0 +1,167 @@
+{
+  "version": 1,
+  "description": "Deterministic policy for public-facing content and canonical-repository independence.",
+  "active_extensions": [".md", ".yaml", ".yml", ".json", ".ts", ".js", ".ps1"],
+  "claim_extensions": [".md"],
+  "excluded_path_prefixes": ["docs/archive/", "02_Domain_Architects/archive/", "tools/tests/"],
+  "excluded_paths": [
+    "tools/security/public-content-policy.json",
+    "tools/security/policy.json",
+    "tools/check-public-scrub.ps1",
+    "tools/run-public-secret-scan.ps1",
+    "tools/check-public-content-policy.ps1",
+    "tools/check-canonical-independence.ps1"
+  ],
+  "temporary_exceptions": [
+    {
+      "id": "TEMP-RUNTIME-PROFILE-001",
+      "rule_id": "PCONT004",
+      "path": "babel-cli/src/*",
+      "pattern": "(?i)\\bopencalw_manager\\b",
+      "rationale": "The legacy execution-profile spelling remains accepted for one minor release while the runtime canonical-independence migration adds workspace_manager compatibility handling.",
+      "evidence": "Runtime Canonical-Independence PR acceptance: deprecated profile aliases warn once and canonical output uses workspace_manager.",
+      "expires": "2026-09-30",
+      "replacement_pr": "runtime-canonical-independence"
+    }
+  ],
+  "rules": [
+    {
+      "id": "PCONT001",
+      "category": "personal-profile-metadata",
+      "pattern": "(?i)^\\s*(operator|maintainer profile|personal location|education|financial goal)\\s*:"
+    },
+    {
+      "id": "PCONT002",
+      "category": "machine-specific-path",
+      "pattern": "(?i)([A-Z]:[\\\\/](Users|Workspace|Projects)[\\\\/]|/(Users|home)/[^/\\s]+/)"
+    },
+    {
+      "id": "PCONT003",
+      "category": "private-parent-terminology",
+      "pattern": "(?i)(private parent repo|sibling private repo)"
+    },
+    {
+      "id": "PCONT004",
+      "category": "malformed-public-identifier",
+      "pattern": "(?i)\\bopencalw_manager\\b"
+    },
+    {
+      "id": "PCONT005",
+      "category": "stub-placeholder-content",
+      "pattern": "(?i)^\\s*(TODO|TBD|placeholder|stub)(?:\\s*[:.-]|\\s*$)"
+    },
+    {
+      "id": "PCONT006",
+      "category": "internal-incident-metric",
+      "pattern": "(?i)\\b(incident|regression|outage)\\b.{0,80}(\\d+(?:\\.\\d+)?%|\\d+\\s*(seconds?|minutes?|hours?|days?)\\b)"
+    }
+  ],
+  "absolute_claim": {
+    "id": "PCONT007",
+    "category": "unsupported-absolute-claim",
+    "pattern": "(?i)\\b(production[- ]ready|guarantee(?:d|s)?|proves?|always correct|eliminates? layout shift)\\b",
+    "allowlist": [
+      {
+        "path": "02_Skills/Governance/*",
+        "pattern": "(?i)\\b(prove|proves|guarantee|guaranteed|guarantees)\\b",
+        "rationale": "Governance instructions use these terms to request evidence, name a contract property, or reject unsupported promises; they do not claim Babel outcomes.",
+        "evidence": "02_Skills/Governance/Claim-Extraction-Ledger-v1.md"
+      },
+      {
+        "path": "02_Domain_Architects/Android_Kotlin-v1.0.md",
+        "pattern": "(?i)guaranteed.{0,20}release\\(\\).{0,20}path",
+        "rationale": "This is a resource-lifecycle invariant requiring every acquired wake lock to have a release path.",
+        "evidence": "https://developer.android.com/develop/background-work/background-tasks/awake/wakelock/release"
+      },
+      {
+        "path": "02_Domain_Architects/Product-Audit-v1.md",
+        "pattern": "(?i)current repo directly proves",
+        "rationale": "The phrase defines evidence classification rather than promising a product outcome.",
+        "evidence": "02_Domain_Architects/Product-Audit-v1.md"
+      },
+      {
+        "path": "02_Domain_Architects/Python_Backend-v1.0.md",
+        "pattern": "(?i)non-blocking guarantee",
+        "rationale": "The phrase names a property that the audit must verify rather than asserting it exists.",
+        "evidence": "02_Domain_Architects/Python_Backend-v1.0.md"
+      },
+      {
+        "path": "02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md",
+        "pattern": "(?i)validation.*guarantees this failure cannot recur",
+        "rationale": "This is a reviewer question demanding recurrence-prevention evidence, not a claim that prevention already exists.",
+        "evidence": "02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md"
+      },
+      {
+        "path": "02_Skills/Mobile/Android-Release-Build-v1.md",
+        "pattern": "(?i)transition from debug to production-ready build",
+        "rationale": "This describes a task category and does not claim the current repository is production ready.",
+        "evidence": "02_Skills/Mobile/Android-Release-Build-v1.md"
+      },
+      {
+        "path": "02_Skills/Mobile/Android-SAF-v1.md",
+        "pattern": "(?i)not guaranteed to be seekable",
+        "rationale": "This is an explicit limitation, not an outcome guarantee.",
+        "evidence": "https://developer.android.com/reference/android/content/ContentResolver#openFileDescriptor(android.net.Uri,%20java.lang.String)"
+      },
+      {
+        "path": "02_Skills/Mobile/Platform/Android-Background-Work-v1.md",
+        "pattern": "(?i)deferrable guaranteed work",
+        "rationale": "This is Android's documented category for persistent WorkManager work.",
+        "evidence": "https://developer.android.com/develop/background-work/background-tasks/persistent"
+      }
+    ]
+  },
+  "markdown_link": {
+    "id": "PCONT008",
+    "category": "broken-relative-markdown-link"
+  },
+  "duplicate_title": {
+    "id": "PCONT009",
+    "category": "duplicate-active-title-version"
+  },
+  "canonical_independence": {
+    "required_startup_files": ["BABEL_BIBLE.md", "PROJECT_CONTEXT.md", "README.md", "prompt_catalog.yaml"],
+    "scan_extensions": [".md", ".yaml", ".yml", ".json", ".ts", ".js", ".ps1"],
+    "excluded_path_prefixes": ["docs/archive/", "02_Domain_Architects/archive/", "tools/tests/"],
+    "excluded_paths": ["tools/security/public-content-policy.json", "tools/check-canonical-independence.ps1"],
+    "temporary_exceptions": [
+      {
+        "id": "TEMP-RUNTIME-ROOT-001",
+        "rule_id": "CANON001",
+        "path": "babel-cli/src/cli/helpers.ts",
+        "pattern": "(?i)resolvePath\\(parent\\s*,",
+        "rationale": "Legacy catalog preview still maps semantic project IDs through a sibling root until the approved runtime canonical-independence migration separates IDs from execution roots.",
+        "evidence": "Runtime Canonical-Independence PR acceptance: preview uses project IDs only and execution uses current or explicit --project-root.",
+        "expires": "2026-09-30",
+        "replacement_pr": "runtime-canonical-independence"
+      },
+      {
+        "id": "TEMP-RUNTIME-EXPORT-001",
+        "rule_id": "CANON002",
+        "path": "babel-cli/src/doctor.ts",
+        "pattern": "(?i)export_manifest",
+        "rationale": "The legacy doctor diagnostic remains until the approved runtime canonical-independence migration replaces export checks with canonical release checks.",
+        "evidence": "Runtime Canonical-Independence PR acceptance: doctor --scope all no longer requires an export manifest or exporter.",
+        "expires": "2026-09-30",
+        "replacement_pr": "runtime-canonical-independence"
+      }
+    ],
+    "rules": [
+      {
+        "id": "CANON001",
+        "category": "required-parent-or-sibling-dependency",
+        "pattern": "(?i)(private parent repo|sibling private repo|resolvePath\\(parent\\s*,)"
+      },
+      {
+        "id": "CANON002",
+        "category": "removed-export-runtime-dependency",
+        "pattern": "(?i)(tools[\\\\/]public-export[\\\\/]manifest\\.json|tools[\\\\/]export-babel-public\\.ps1|export_manifest)"
+      },
+      {
+        "id": "CANON003",
+        "category": "project-id-implies-private-root",
+        "pattern": "(?i)resolveProjectRoot.{0,120}(parent|sibling)"
+      }
+    ]
+  }
+}
