@@ -204,7 +204,7 @@ export function validateExecutorShellCommand(
   );
 
   if (
-    profile.name === 'opencalw_manager' &&
+    profile.name === 'workspace_manager' &&
     isDependencyInstallCommand(trimmed) &&
     process.env['BABEL_ALLOW_DEPENDENCY_INSTALL'] !== 'true'
   ) {
@@ -238,7 +238,7 @@ export function validateExecutorShellCommand(
         : 'dependency_install_requires_approval',
       message:
         `Command rejected — dependency installation requires explicit approval under ` +
-        `execution profile "opencalw_manager": "${trimmed}".${approvalHint}`,
+        `execution profile "workspace_manager": "${trimmed}".${approvalHint}`,
       evidence: [command, profile.name, ...(queued ? [queued.id, queued.status] : [])],
       command_base: null,
     };

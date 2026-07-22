@@ -324,14 +324,13 @@ export const OrchestrationAnalysisSchema = z.object({
   /**
    * Optional 0–1 confidence score for the routing decision emitted by the
    * orchestrator. Pipeline logs a warning when present and below 0.8.
-   * Foundation for future semantic validator cascade (Phase 3).
+   * Extension point for routing-confidence validation.
    */
   routing_confidence:  z.number().min(0).max(1).optional(),
   /**
    * Required alongside routing_confidence. One sentence the model must write
    * explaining WHY it chose that confidence score. Makes "confidently wrong"
    * routing decisions visible during local log inspection.
-   * Added: Fix A — critique remediation 2026-04-26.
    */
   routing_confidence_rationale: z.string().optional(),
   /**

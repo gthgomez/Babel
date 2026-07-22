@@ -2,6 +2,10 @@
 
 Babel is organized as a prompt operating system plus a local CLI and public validation lane.
 
+This tree is the canonical public source. A clean clone must contain every file
+required by the startup chain and validation path; external consumer configuration
+is optional and must not become a repository prerequisite.
+
 - `00_System_Router/` - runtime contracts and the live v9 orchestrator
 - `01_Behavioral_OS/` - behavioral rules shared by prompt stacks
 - `02_Domain_Architects/` - domain routing shells

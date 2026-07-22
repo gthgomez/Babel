@@ -5,13 +5,14 @@ Licensed under the MIT License
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 -->
 
-# PROJECT_CONTEXT.md - Babel-public
+# PROJECT_CONTEXT.md - Babel
 
 ## Repository Purpose
 
-`Babel-public` is the public-facing, sanitized release of Babel.
+This repository is the canonical public source of Babel.
 
-It packages a public-safe subset that can be used and verified on its own:
+It contains the authoritative public product and can be used and verified on its
+own:
 
 - the layered prompt library
 - the typed `v9` router contract
@@ -53,6 +54,10 @@ The community direction is preview first, evidence next, execution last.
 3. Read `README.md`
 4. Read `prompt_catalog.yaml`
 
+Consumer repositories may provide optional repo-local rules or project overlays.
+Those files are external inputs, not prerequisites for understanding, validating,
+or building a clean Babel clone.
+
 ## System Topology
 
 - **00_System_Router:** `OLS-v9-Orchestrator.md` is the public default typed lane. `OLS-v8-Orchestrator.md` is retained for historical context only and is not part of the active runtime.
@@ -72,7 +77,11 @@ The community direction is preview first, evidence next, execution last.
 - **Compiler Contract:** the public resolver expands domain default skills, expands skill dependencies, checks conflicts, and emits the ordered manifest preview.
 - **Behavioral Contract:** all assembled stacks include `01_Behavioral_OS`.
 - **Release Contract:** `tools/validate-public-release.ps1` is the public integrity gate for this repo.
-- **Security Contract:** `tools/run-public-secret-scan.ps1` and `tools/check-public-scrub.ps1` protect the public release surface.
+- **Security Contract:** `tools/run-public-secret-scan.ps1` and `tools/check-public-scrub.ps1` detect credentials and prohibited private identifiers.
+- **Public Content Contract:** `tools/check-public-content-policy.ps1` rejects personal-profile content, private paths, unsupported absolute claims, broken links, duplicate active documents, and placeholders.
+- **Canonical Independence Contract:** `tools/check-canonical-independence.ps1` verifies that a clean clone has all mandatory startup references and no required parent-workspace, sibling-repository, or removed-export dependencies.
+- Maintainer release validation supplies the private supplemental scrub policy outside this repository and passes `-RequireSupplementalPolicy` so missing or empty configuration fails closed.
+- **Source Authority Contract:** `docs/adr/ADR-0001-canonical-public-source.md` records this repository as the sole canonical source. Private repositories consume versioned releases and must not publish source back into this repository.
 
 ## First-Success Surfaces
 

@@ -624,7 +624,7 @@ export class BabelRepl {
             }
         }
         console.log(muted('\n  Daily path: /doctor -> /status -> type a task. After a run: /inspect -> /checkpoint list -> /session.'));
-        console.log(muted('  CLI parity: babel doctor, babel inspect run latest, babel checkpoint list, babel session resume latest.\n'));
+        console.log(muted('  Equivalent CLI commands: babel doctor, babel inspect run latest, babel checkpoint list, babel session resume latest.\n'));
     }
 
     private handlePermissions(args: string[]): void {

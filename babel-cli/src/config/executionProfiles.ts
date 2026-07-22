@@ -4,7 +4,7 @@ export const EXECUTION_PROFILE_NAMES = [
   'benchmark_container',
   'read_only_audit',
   'scaffold',
-  'opencalw_manager',
+  'workspace_manager',
   'babel_research',
 ] as const;
 
@@ -181,8 +181,8 @@ const PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
       ],
     },
   },
-  opencalw_manager: {
-    name: 'opencalw_manager',
+  workspace_manager: {
+    name: 'workspace_manager',
     description: 'Workspace-manager profile for approved local project maintenance.',
     commandAdditions: [
       ...COMMON_LOCAL_BUILD_COMMANDS,
@@ -197,11 +197,11 @@ const PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
     disallowedTools: WEB_TOOLS,
     promptLines: {
       orchestrator: [
-        'Use opencalw_manager only for approved local workspace project maintenance.',
+        'Use workspace_manager only for approved local workspace project maintenance.',
         'Resolve project roots through the approved workspace path policy before execution.',
       ],
       swe: [
-        'opencalw_manager may use local verification commands for known workspace projects.',
+        'workspace_manager may use local verification commands for known workspace projects.',
         'Dependency installation requires explicit approval unless already granted by the approval queue.',
         'Do not use web_search or web_fetch from this profile; local files and explicit user-provided context are the authority.',
       ],
@@ -258,17 +258,20 @@ const ALIASES: Record<string, ExecutionProfileName> = {
   'read-only-audit': 'read_only_audit',
   scaffold: 'scaffold',
   scaffolding: 'scaffold',
-  opencalw: 'opencalw_manager',
-  opencalw_manager: 'opencalw_manager',
-  'opencalw-manager': 'opencalw_manager',
-  example_autonomous_agent: 'opencalw_manager',
-  example_autonomous_agent_manager: 'opencalw_manager',
-  'example_autonomous_agent-manager': 'opencalw_manager',
+  opencalw: 'workspace_manager',
+  opencalw_manager: 'workspace_manager',
+  workspace_manager: 'workspace_manager',
+  'opencalw-manager': 'workspace_manager',
+  example_autonomous_agent: 'workspace_manager',
+  example_autonomous_agent_manager: 'workspace_manager',
+  'example_autonomous_agent-manager': 'workspace_manager',
   babel: 'babel_research',
   research: 'babel_research',
   babel_research: 'babel_research',
   'babel-research': 'babel_research',
 };
+
+const warnedCompatibilityProfiles = new Set<string>();
 
 function normalizeToken(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, '_');
@@ -282,6 +285,12 @@ export function normalizeExecutionProfile(value: string | null | undefined): Exe
 }
 
 export function resolveExecutionProfile(value: string | null | undefined): ExecutionProfile {
+  const requested = value?.trim().toLowerCase().replace(/\s+/g, '_') ?? '';
+  if (requested && requested !== 'workspace_manager' && ALIASES[requested] === 'workspace_manager' &&
+      !warnedCompatibilityProfiles.has(requested)) {
+    warnedCompatibilityProfiles.add(requested);
+    process.stderr.write(`Warning: execution profile ${value} is deprecated; use workspace_manager.\n`);
+  }
   const normalized = normalizeExecutionProfile(value) ?? DEFAULT_EXECUTION_PROFILE;
   const profile = PROFILES[normalized];
   return {

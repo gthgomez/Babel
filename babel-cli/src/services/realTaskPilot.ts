@@ -109,7 +109,7 @@ function buildCases(projectRoot: string, testCommand: string | null, dirtyFiles:
     },
     {
       id: 'recovery_drill',
-      purpose: 'Prove continue/resume are legible after a real verifier failure or provider interruption.',
+      purpose: 'Evaluate whether continue/resume remain legible after a verifier failure or provider interruption.',
       command: 'babel continue latest && babel resume latest',
       risk: 'read_only',
       success_signal: ['continue explains the next step', 'resume acts only when retryable', 'available artifacts point to real files'],

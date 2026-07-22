@@ -2072,17 +2072,17 @@ function collectGradleBootstrapSequencingViolations(
     const normalizedTarget = target.replace(/\//g, '\\').toLowerCase();
     const isMirroredGradleRead = (
       (step.tool === 'file_read' || step.tool === 'directory_list') &&
-      normalizedTarget.includes('\\reference-Example Finance Forecast\\') &&
+      normalizedTarget.includes('\\reference-source\\') &&
       normalizedTarget.includes('gradle')
     ) || (
       (step.tool === 'file_read' || step.tool === 'directory_list') &&
-      normalizedTarget.includes('\\reference-Example Finance Forecast\\build.gradle.kts')
+      normalizedTarget.includes('\\reference-source\\build.gradle.kts')
     ) || (
       (step.tool === 'file_read' || step.tool === 'directory_list') &&
-      normalizedTarget.includes('\\reference-Example Finance Forecast\\settings.gradle.kts')
+      normalizedTarget.includes('\\reference-source\\settings.gradle.kts')
     ) || (
       (step.tool === 'file_read' || step.tool === 'directory_list') &&
-      normalizedTarget.includes('\\reference-Example Finance Forecast\\app\\build.gradle.kts')
+      normalizedTarget.includes('\\reference-source\\app\\build.gradle.kts')
     );
 
     if (isMirroredGradleRead) {
@@ -2211,12 +2211,11 @@ function collectReferenceSourceShapeViolations(
     return null;
   }
 
-  const referenceRoot = join(projectRoot, 'reference-Example Finance Forecast');
-  const externalReferenceRoot = join(BABEL_ROOT, '..', 'example_autonomous_agent', 'Example Finance Forecast');
+  const referenceRoot = join(projectRoot, 'reference-source');
   const referenceLooksLikePython = existsSync(referenceRoot) && (
     existsSync(join(referenceRoot, 'pyproject.toml')) ||
     existsSync(join(referenceRoot, 'requirements.txt')) ||
-    existsSync(join(referenceRoot, 'monte_carlo_ledger'))
+    existsSync(join(referenceRoot, 'reference_source'))
   );
   if (!referenceLooksLikePython) {
     return null;
@@ -2272,27 +2271,17 @@ function collectReferenceSourceShapeViolations(
       ? resolve(target)
       : resolve(projectRoot, target);
     const normalizedResolvedTarget = resolvedTarget.toLowerCase();
-    const probesAndroidMirrorInsideReference = normalizedTarget.includes('\\reference-Example Finance Forecast\\app\\src\\main\\') ||
-      normalizedTarget.includes('\\reference-Example Finance Forecast\\build.gradle.kts') ||
-      normalizedTarget.includes('\\reference-Example Finance Forecast\\settings.gradle.kts') ||
-      normalizedTarget.includes('\\reference-Example Finance Forecast\\app\\build.gradle.kts');
+    const probesAndroidMirrorInsideReference = normalizedTarget.includes('\\reference-source\\app\\src\\main\\') ||
+      normalizedTarget.includes('\\reference-source\\build.gradle.kts') ||
+      normalizedTarget.includes('\\reference-source\\settings.gradle.kts') ||
+      normalizedTarget.includes('\\reference-source\\app\\build.gradle.kts');
 
     if (probesAndroidMirrorInsideReference) {
       failures.push({
         tag: 'EVIDENCE-GATE',
-        condition: `[SOURCE_SHAPE] Step ${step.step} assumes Android/Gradle mirror files inside reference-Example Finance Forecast even though the grounded reference source is a Python repo: ${target}`,
+        condition: `[SOURCE_SHAPE] Step ${step.step} assumes Android/Gradle mirror files inside reference-source even though the grounded reference source is a Python repo: ${target}`,
         confidence: 5,
-        fix_hint: 'Treat reference-Example Finance Forecast as a Python source repo. Read actual files such as README.md, pyproject.toml, monte_carlo_ledger/*.py, and docs/** before mapping them into Android targets.',
-      });
-      continue;
-    }
-
-    if (normalizedResolvedTarget.startsWith(resolve(externalReferenceRoot).toLowerCase())) {
-      failures.push({
-        tag: 'EVIDENCE-GATE',
-        condition: `[SOURCE_PATH_PREFERENCE] Step ${step.step} reads the external Example Finance Forecast repo even though a mirrored reference-Example Finance Forecast copy exists inside the target project: ${target}`,
-        confidence: 5,
-        fix_hint: 'Use the mirrored reference-Example Finance Forecast path inside the target project for all source reads when that mirror exists.',
+        fix_hint: 'Treat reference-source as a Python source repo. Read actual files such as README.md, pyproject.toml, reference_source/*.py, and docs/** before mapping them into Android targets.',
       });
       continue;
     }
@@ -2303,7 +2292,7 @@ function collectReferenceSourceShapeViolations(
         const isReadme = normalizedResolvedTarget === join(referenceRootPath, 'readme.md').toLowerCase();
         const isPyproject = normalizedResolvedTarget === join(referenceRootPath, 'pyproject.toml').toLowerCase();
         const isRootBootstrapRead = isReadme || isPyproject;
-        const isModuleRead = normalizedResolvedTarget.includes('\\reference-Example Finance Forecast\\monte_carlo_ledger\\');
+        const isModuleRead = normalizedResolvedTarget.includes('\\reference-source\\reference_source\\');
         const basename = normalizedResolvedTarget.split('\\').pop() ?? '';
         if (swePlan.plan_type !== 'IMPLEMENTATION_PLAN' && isModuleRead && !existingReferenceFiles.has(normalizedResolvedTarget)) {
           failures.push({
@@ -2332,7 +2321,7 @@ function collectReferenceSourceShapeViolations(
         if (!isRootBootstrapRead && !existingReferenceFiles.has(normalizedResolvedTarget)) {
           failures.push({
             tag: 'EVIDENCE-GATE',
-            condition: `[SOURCE_INVENTORY_MISMATCH] Step ${step.step} reads a non-existent file inside reference-Example Finance Forecast instead of one of the grounded inventory files: ${target}`,
+            condition: `[SOURCE_INVENTORY_MISMATCH] Step ${step.step} reads a non-existent file inside reference-source instead of one of the grounded inventory files: ${target}`,
             confidence: 5,
             fix_hint: 'Use the exact filenames listed in the Reference source inventories block. Do not guess alternate module names inside the mirrored Python repo.',
           });
@@ -2344,7 +2333,7 @@ function collectReferenceSourceShapeViolations(
         if (!existsSync(resolvedTarget) || !statSync(resolvedTarget).isDirectory()) {
           failures.push({
             tag: 'EVIDENCE-GATE',
-            condition: `[SOURCE_INVENTORY_MISMATCH] Step ${step.step} lists a non-existent reference directory instead of a grounded directory inside reference-Example Finance Forecast: ${target}`,
+            condition: `[SOURCE_INVENTORY_MISMATCH] Step ${step.step} lists a non-existent reference directory instead of a grounded directory inside reference-source: ${target}`,
             confidence: 5,
             fix_hint: 'Use only real directories under the mirrored reference repo for directory_list steps.',
           });
@@ -2355,7 +2344,7 @@ function collectReferenceSourceShapeViolations(
       if (step.tool === 'file_read' && !existingReferenceFiles.has(normalizedResolvedTarget)) {
         failures.push({
           tag: 'EVIDENCE-GATE',
-          condition: `[SOURCE_INVENTORY_MISMATCH] Step ${step.step} reads a non-existent file inside reference-Example Finance Forecast instead of one of the grounded inventory files: ${target}`,
+          condition: `[SOURCE_INVENTORY_MISMATCH] Step ${step.step} reads a non-existent file inside reference-source instead of one of the grounded inventory files: ${target}`,
           confidence: 5,
           fix_hint: 'Use the exact filenames listed in the Reference source inventories block. Do not guess alternate module names inside the mirrored Python repo.',
         });
@@ -6627,8 +6616,8 @@ export async function _runBabelPipelineInternal(
     // inside the SWE↔QA retry loop. This gate is the final hard assertion: it
     // prevents executor activation if the approved plan's file_write targets do
     // not exactly match the requested bounded set, regardless of how that state
-    // was reached. Belt-and-suspenders — should never fire if the in-loop check
-    // is working, but guarantees the executor never starts on a drifted plan.
+    // was reached. It blocks executor activation on this path when a drifted
+    // plan reaches the final gate.
     if (approvedPlan !== null && effectiveMode === 'autonomous') {
       const boundedActivationReject = assertBoundedPlanActivationContract(approvedPlan, mergedTaskContext);
       if (boundedActivationReject) {

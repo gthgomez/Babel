@@ -160,17 +160,9 @@ import {
   summarizeExecutorSessionContext,
 } from '../services/sessionContext.js';
 import {
-  formatProductBenchmarkHuman,
-  runProductBenchmark,
-} from '../services/productBenchmark.js';
-import {
-  formatProductionBenchmarkHuman,
-  runProductionBenchmark,
-} from '../services/productionBenchmark.js';
-import {
-  formatParityBenchmarkHuman,
-  runParityBenchmark,
-} from '../services/parityBenchmark.js';
+  formatReleaseReadinessBenchmarkHuman,
+  runReleaseReadinessBenchmark,
+} from '../services/releaseReadinessBenchmark.js';
 import {
   buildLiteUsabilityReport,
   formatLiteUsabilityReportHuman,
@@ -789,7 +781,7 @@ function printEvidenceStatus(options: { json?: boolean; project?: string }): voi
   }
 
   console.log('Evidence surfaces:');
-  console.log('  doctor          workspace, repo, and export health checks');
+  console.log('  doctor          canonical-clone and release health checks');
   console.log('  inspect run     complete evidence bundle view');
   console.log('  inspect summary concise run summary');
   if (latest) {
@@ -1461,20 +1453,21 @@ export function registerCoreCommands(program: Command): void {
 
   program
     .command('doctor')
-    .description('Everyday diagnostic: run Babel workspace health and integrity checks')
+    .description('Run canonical-clone health checks; workspace and enterprise checks are opt-in')
     .option('--json', 'Emit structured JSON only')
     .option('--strict', 'Treat warnings as fatal in the overall result')
     .option('--strict-enterprise', 'Require explicit managed enterprise policy controls')
     .option('--verbose', 'Include additional diagnostic details')
-    .option('--scope <scope>', 'Check scope: all | env | workspace | repos | export | enterprise', 'all')
+    .option('--scope <scope>', 'Check scope: all | canonical | release | env | workspace | repos | enterprise', 'all')
     .option('--skills', 'Run Skill Forge checks')
     .addHelpText('after', `
 Examples:
   $ babel doctor
+  $ babel doctor --scope canonical
+  $ babel doctor --scope release --strict
   $ babel doctor --scope env --json --verbose
   $ babel doctor --scope repos
   $ babel doctor --scope enterprise --strict-enterprise
-  $ babel doctor --scope export --strict
   $ babel doctor --json
 `)
   .action(async (options: { json?: boolean; strict?: boolean; strictEnterprise?: boolean; verbose?: boolean; scope?: string; skills?: boolean }) => {
@@ -1489,15 +1482,19 @@ Examples:
         return;
       }
 
-      const scope = (options.scope ?? 'all') as DoctorScope;
-      if (!['all', 'env', 'workspace', 'repos', 'export', 'enterprise'].includes(scope)) {
+      const requestedScope = options.scope ?? 'all';
+      const scope = (requestedScope === 'export' ? 'release' : requestedScope) as DoctorScope;
+      if (requestedScope === 'export') {
+        process.stderr.write('Warning: doctor --scope export is deprecated; use doctor --scope release.\n');
+      }
+      if (!['all', 'canonical', 'release', 'env', 'workspace', 'repos', 'export', 'enterprise'].includes(requestedScope)) {
         if (options.json) {
           process.stdout.write(`${JSON.stringify({
             status: 'fail',
-            error: `[babel] Invalid doctor scope "${options.scope}". Valid values: all, env, workspace, repos, export, enterprise`,
+            error: `[babel] Invalid doctor scope "${options.scope}". Valid values: all, canonical, release, env, workspace, repos, enterprise`,
           }, null, 2)}\n`);
         } else {
-          console.error(`[babel] Invalid doctor scope "${options.scope}". Valid values: all, env, workspace, repos, export, enterprise`);
+          console.error(`[babel] Invalid doctor scope "${options.scope}". Valid values: all, canonical, release, env, workspace, repos, enterprise`);
         }
         process.exit(1);
       }
@@ -1643,7 +1640,7 @@ Examples:
   $ babel approvals list --json
   $ babel approvals approve dep-abc123 --json
   $ babel approvals deny model-abc123
-  $ babel approvals request-install --command "npm install" --project-root C:\\Workspace\\scratch\\hello-cli --json
+  $ babel approvals request-install --command "npm install" --project-root ./scratch/hello-cli --json
 
 Notes:
   - example_autonomous_agent manager creates pending install approvals automatically when blocked.
@@ -1725,14 +1722,14 @@ Notes:
     .description('Create or reuse a dependency-install approval request')
     .requiredOption('--command <command>', 'Exact install command to approve, such as "npm install"')
     .option('--project-root <path>', 'Project root scope')
-    .option('--execution-profile <profile>', 'Execution profile scope', 'opencalw_manager')
+    .option('--execution-profile <profile>', 'Execution profile scope', 'workspace_manager')
     .option('--json', 'Emit structured JSON only')
     .action((options: { command?: string; projectRoot?: string; executionProfile?: string; json?: boolean }) => {
       try {
         const request = requestDependencyInstallApproval({
           command: options.command ?? '',
           projectRoot: options.projectRoot ?? null,
-          executionProfile: options.executionProfile ?? 'opencalw_manager',
+          executionProfile: options.executionProfile ?? 'workspace_manager',
         });
         printApprovalRequestRequired(request.created ? 'approval_requested' : 'approval_existing', request.record, options.json === true);
       } catch (err: unknown) {
@@ -1767,7 +1764,7 @@ Notes:
     .description('Manage unattended example_autonomous_agent/Babel workspace jobs')
     .addHelpText('after', `
 Examples:
-  $ babel jobs create "Fix tests" --project-root C:\\Workspace\\scratch\\hello-cli --json
+  $ babel jobs create "Fix tests" --project-root ./scratch/hello-cli --json
   $ babel jobs list --json
   $ babel jobs status job-20260428T010000Z --json
   $ babel jobs approve job-20260428T010000Z --json
@@ -1775,7 +1772,7 @@ Examples:
   $ babel jobs report job-20260428T010000Z
 
 Notes:
-  - Jobs default to execution profile opencalw_manager.
+  - Jobs default to execution profile workspace_manager.
   - Hard-task escalation rules create exact approval requests before expensive model use.
   - Completed example_autonomous_agent manager jobs must pass local verification before they are marked complete.
 `)
@@ -1790,7 +1787,7 @@ Notes:
     .argument('<task...>', 'Task prompt')
     .option('--id <id>', 'Stable job id')
     .option('--project-root <path>', 'Approved project root')
-    .option('--execution-profile <profile>', 'Execution profile', 'opencalw_manager')
+    .option('--execution-profile <profile>', 'Execution profile', 'workspace_manager')
     .option('--mode <mode>', `Pipeline mode: ${VALID_MODES.join(' | ')}`, 'verified')
     .option('--model <model>', 'Optional model family override')
     .option('--model-tier <tier>', 'Optional model tier override')
@@ -1813,7 +1810,7 @@ Notes:
           ...(options.id ? { id: options.id } : {}),
           task: taskParts.join(' '),
           mode: parseValidMode(options.mode),
-          executionProfile: options.executionProfile ?? 'opencalw_manager',
+          executionProfile: options.executionProfile ?? 'workspace_manager',
           ...(options.projectRoot ? { projectRoot: options.projectRoot } : {}),
           ...(options.model ? { model: options.model } : {}),
           ...(options.modelTier ? { modelTier: options.modelTier } : {}),
@@ -2056,8 +2053,8 @@ Examples:
   $ babel learn inspect <artifact-id>
 
 Notes:
-  - P4-P7 propose, test, shadow-promote, and package review artifacts only.
-  - P7 mutation packages are review-only and do not apply patches.
+  - Propose, test, shadow-promote, and package commands create review artifacts only.
+  - Mutation packages are review-only and do not apply patches.
   - It does not mutate prompts, policies, verifier contracts, executor behavior, or tool permissions.
 `)
     .action(() => {
@@ -2143,7 +2140,7 @@ Notes:
     .addHelpText('after', `
 Examples:
   $ babel evidence
-  $ babel evidence --project example_mobile_finance
+  $ babel evidence --project example_mobile_reference
   $ babel evidence --json
 `)
     .action((options: { json?: boolean; project?: string }) => {
@@ -2469,7 +2466,7 @@ Interactive slash command map:
     .addHelpText('after', `
 Examples:
   $ babel mcp list
-  $ babel mcp add filesystem npx -y @modelcontextprotocol/server-filesystem C:/Workspace
+  $ babel mcp add filesystem npx -y @modelcontextprotocol/server-filesystem ./example-project
   $ babel mcp remove filesystem
   $ babel mcp serve
 
@@ -3225,48 +3222,31 @@ Hard stops include secrets, protected branches, generated artifacts, mixed/unrel
       printJsonOrHuman(report, formatRealTaskPilotHuman(report), options.json === true);
     });
 
-  benchmarkCommand
-    .command('product')
-    .description('Run the Babel CLI product-gap benchmark')
+  const registerReadinessBenchmark = (name: 'readiness' | 'product' | 'production', deprecated = false): void => {
+    benchmarkCommand
+    .command(name)
+    .description(deprecated
+      ? `Deprecated alias for benchmark readiness`
+      : 'Run current repository release-readiness checks')
     .option('--json', 'Emit structured JSON only')
     .option('--output-dir <path>', 'Benchmark artifact output directory')
     .action((options: { json?: boolean; outputDir?: string }) => {
-      const report = runProductBenchmark({
+      if (deprecated) {
+        process.stderr.write(`Warning: benchmark ${name} is deprecated; use benchmark readiness.\n`);
+      }
+      const report = runReleaseReadinessBenchmark({
         ...(options.outputDir ? { outputDir: options.outputDir } : {}),
       });
-      printJsonOrHuman(report, formatProductBenchmarkHuman(report), options.json === true);
-      if (report.summary.fail > 0 || report.summary.not_implemented > 0) {
+      printJsonOrHuman(report, formatReleaseReadinessBenchmarkHuman(report), options.json === true);
+      if (report.summary.fail > 0) {
         process.exit(1);
       }
     });
+  };
 
-  benchmarkCommand
-    .command('parity')
-    .description('Create the Phase 12 comparative parity benchmark artifact')
-    .option('--json', 'Emit structured JSON only')
-    .option('--output-dir <path>', 'Benchmark artifact output directory')
-    .option('--fixture <path>', 'Measured parity results fixture JSON')
-    .action((options: { json?: boolean; outputDir?: string; fixture?: string }) => {
-      const report = runParityBenchmark({
-        ...(options.outputDir ? { outputDir: options.outputDir } : {}),
-        ...(options.fixture ? { fixturePath: options.fixture } : {}),
-      });
-      printJsonOrHuman(report, formatParityBenchmarkHuman(report), options.json === true);
-    });
-
-  benchmarkCommand
-    .command('production')
-    .description('Create the scoped production-readiness proof benchmark artifact')
-    .option('--json', 'Emit structured JSON only')
-    .option('--output-dir <path>', 'Benchmark artifact output directory')
-    .option('--proof-root <path>', 'Production proof artifact root')
-    .action((options: { json?: boolean; outputDir?: string; proofRoot?: string }) => {
-      const report = runProductionBenchmark({
-        ...(options.outputDir ? { outputDir: options.outputDir } : {}),
-        ...(options.proofRoot ? { proofRoot: options.proofRoot } : {}),
-      });
-      printJsonOrHuman(report, formatProductionBenchmarkHuman(report), options.json === true);
-    });
+  registerReadinessBenchmark('readiness');
+  registerReadinessBenchmark('product', true);
+  registerReadinessBenchmark('production', true);
 
   benchmarkCommand
     .command('analyze')

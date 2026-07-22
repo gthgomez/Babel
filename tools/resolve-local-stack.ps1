@@ -92,6 +92,7 @@ function Get-BabelCatalogEntries {
                 Tags = @()
                 DefaultSkillIds = @()
                 LoadPosition = $null
+                TokenBudget = $null
                 Status = $null
             }
 
@@ -152,6 +153,11 @@ function Get-BabelCatalogEntries {
             continue
         }
 
+        if ($line -match '^\s+token_budget:\s+(.+)$') {
+            $current.TokenBudget = [int]$matches[1].Trim()
+            continue
+        }
+
         if ($line -match '^\s+status:\s+(.+)$') {
             $current.Status = $matches[1].Trim()
             continue
@@ -163,68 +169,6 @@ function Get-BabelCatalogEntries {
     }
 
     return $entries
-}
-
-function Get-WorkspaceRoot {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$BabelRoot
-    )
-
-    return (Split-Path -Path $BabelRoot -Parent)
-}
-
-function Get-RepoMapPath {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$BabelRoot
-    )
-
-    if (-not [string]::IsNullOrWhiteSpace($env:BABEL_REPO_MAP_PATH)) {
-        return $env:BABEL_REPO_MAP_PATH
-    }
-
-    $workspaceRoot = Get-WorkspaceRoot -BabelRoot $BabelRoot
-    return (Join-Path $workspaceRoot "config\repo-map.json")
-}
-
-function Get-RepoMap {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$BabelRoot
-    )
-
-    $repoMapPath = Get-RepoMapPath -BabelRoot $BabelRoot
-    if (-not (Test-Path -LiteralPath $repoMapPath)) {
-        return $null
-    }
-
-    try {
-        return (Read-JsonFile -Path $repoMapPath)
-    } catch {
-        return $null
-    }
-}
-
-function Get-RepoMapValue {
-    param(
-        [AllowNull()]
-        [object]$RepoMap,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Key
-    )
-
-    if ($null -eq $RepoMap -or $null -eq $RepoMap.repos) {
-        return $null
-    }
-
-    $property = $RepoMap.repos.PSObject.Properties[$Key]
-    if ($null -eq $property) {
-        return $null
-    }
-
-    return [string]$property.Value
 }
 
 function Convert-ToPublicDisplayPath {
@@ -417,9 +361,9 @@ function Get-LayerRank {
         "behavioral_os" { return 1 }
         "domain_architect" { return 2 }
         "skill" { return 3 }
-        "model_adapter" { return 4 }
-        "project_overlay" { return 5 }
-        "task_overlay" { return 6 }
+        "project_overlay" { return 4 }
+        "task_overlay" { return 5 }
+        "model_adapter" { return 6 }
         "pipeline_stage" { return 7 }
         default { return 999 }
     }
@@ -834,15 +778,6 @@ $projectOverlayIdMap = @{
     example_autonomous_agent = "overlay_example_autonomous_agent"
 }
 
-$projectRepoKeyMap = @{
-    example_saas_backend     = "example_saas_backend"
-    example_llm_router       = "example_llm_router"
-    example_web_audit        = "example_web_audit"
-    example_mobile_suite     = "example_mobile_suite"
-    example_game_suite       = "example_game_suite"
-    example_autonomous_agent = "example_autonomous_agent"
-}
-
 $taskOverlayAliasMap = @{
     "frontend-professionalism"                    = "task_frontend_professionalism"
     "example-saas-backend-frontend-professionalism" = "task_example_saas_backend_frontend_professionalism"
@@ -992,7 +927,7 @@ $selectedCognitionSkillIds = @(
 )
 
 $selectedEntries = New-Object System.Collections.Generic.List[object]
-$order = 0
+$order = 1
 
 $baseEntries = @(
     @(Get-AlwaysLoadBehavioralEntries -Entries $entries) +
@@ -1089,14 +1024,26 @@ switch ($PipelineMode) {
     }
 }
 
-$selectedEntries = $selectedEntries |
+$selectedEntries = @($selectedEntries |
     Sort-Object `
         @{ Expression = { Get-LayerRank -Layer ([string]$_.Layer) } }, `
         @{ Expression = { if ($null -eq $_.LoadPosition) { [int]::MaxValue } else { [int]$_.LoadPosition } } }, `
-        @{ Expression = { [int]$_.OrderIndex } }
+        @{ Expression = { [int]$_.OrderIndex } })
 
-$workspaceRoot = Get-WorkspaceRoot -BabelRoot $Root
-$repoMap = Get-RepoMap -BabelRoot $Root
+for ($selectedIndex = 0; $selectedIndex -lt $selectedEntries.Count; $selectedIndex++) {
+    $selected = $selectedEntries[$selectedIndex]
+    $catalogEntry = Get-EntryById -Entries $entries -Id ([string]$selected.Id)
+    $selectedEntries[$selectedIndex] = [PSCustomObject]@{
+        Id = $selected.Id
+        Layer = $selected.Layer
+        LoadPosition = $selected.LoadPosition
+        TokenBudget = $catalogEntry.TokenBudget
+        RelativePath = $selected.RelativePath
+        FullPath = $selected.FullPath
+        OrderIndex = $selectedIndex + 1
+    }
+}
+
 $resolvedProjectPath = $null
 
 if (-not [string]::IsNullOrWhiteSpace($ProjectPath)) {
@@ -1105,37 +1052,6 @@ if (-not [string]::IsNullOrWhiteSpace($ProjectPath)) {
     } else {
         Write-Error "Provided project path does not exist: $ProjectPath"
         exit 1
-    }
-} elseif ($Project -ne "global") {
-    $repoMapKey = $projectRepoKeyMap[$Project]
-    $mappedProjectPath = if ([string]::IsNullOrWhiteSpace($repoMapKey)) {
-        $null
-    } else {
-        Get-RepoMapValue -RepoMap $repoMap -Key $repoMapKey
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($mappedProjectPath) -and (Test-Path -LiteralPath $mappedProjectPath)) {
-        $resolvedProjectPath = (Resolve-Path $mappedProjectPath).Path
-    } else {
-        $legacyFamilyMap = @{
-            example_saas_backend     = ""
-            example_llm_router       = ""
-            example_web_audit        = ""
-            example_mobile_suite     = ""
-            example_game_suite       = ""
-            example_autonomous_agent = ""
-        }
-
-        $family = $legacyFamilyMap[$Project]
-        $inferredProjectPath = if ([string]::IsNullOrWhiteSpace($family)) {
-            Join-Path $workspaceRoot $Project
-        } else {
-            Join-Path (Join-Path $workspaceRoot $family) $Project
-        }
-
-        if (Test-Path $inferredProjectPath) {
-            $resolvedProjectPath = (Resolve-Path $inferredProjectPath).Path
-        }
     }
 }
 
@@ -1188,10 +1104,12 @@ if ($verificationHints.Count -gt 0) {
 
 $displayProjectPath = Convert-ToPublicDisplayPath -Path $resolvedProjectPath -RepoRoot $Root -ExternalBasePath $resolvedProjectPath -ExternalPlaceholder "<external-project-root>"
 $displayRepoContextFiles = @(
-    foreach ($path in $repoContextFiles) {
-        Convert-ToPublicDisplayPath -Path ([string]$path) -RepoRoot $Root -ExternalBasePath $resolvedProjectPath -ExternalPlaceholder "<external-project-root>"
-    }
-) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    @(
+        foreach ($path in $repoContextFiles) {
+            Convert-ToPublicDisplayPath -Path ([string]$path) -RepoRoot $Root -ExternalBasePath $resolvedProjectPath -ExternalPlaceholder "<external-project-root>"
+        }
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+)
 
 $result = [PSCustomObject]@{
     BabelRoot = "."

@@ -11,12 +11,12 @@ import type { WorkspaceVerifyReport } from './workspaceManager.js';
 function report(status: WorkspaceVerifyReport['status']): WorkspaceVerifyReport {
   return {
     status,
-    project_root: 'C:\\Workspace\\scratch\\demo',
-    execution_profile: 'opencalw_manager',
+    project_root: 'C:\\Repos\\scratch\\demo',
+    execution_profile: 'workspace_manager',
     onboarding: {
       schema_version: 1,
       generated_at: '2026-04-28T00:00:00.000Z',
-      project_root: 'C:\\Workspace\\scratch\\demo',
+      project_root: 'C:\\Repos\\scratch\\demo',
       project_name: 'demo',
       markers: [],
       detected_stacks: [],
@@ -27,15 +27,15 @@ function report(status: WorkspaceVerifyReport['status']): WorkspaceVerifyReport 
     },
     selected_commands: [],
     command_results: [],
-    approved_roots: ['C:\\Workspace\\scratch'],
+    approved_roots: ['C:\\Repos\\scratch'],
   };
 }
 
 test('completion verification is required for completed example_autonomous_agent manager jobs', () => {
   const gate = evaluateCompletionVerification({
     pipelineStatus: 'COMPLETE',
-    executionProfile: 'opencalw_manager',
-    projectRoot: 'C:\\Workspace\\scratch\\demo',
+    executionProfile: 'workspace_manager',
+    projectRoot: 'C:\\Repos\\scratch\\demo',
     verification: report('pass'),
   });
 
@@ -46,8 +46,8 @@ test('completion verification is required for completed example_autonomous_agent
 test('completion verification fails when no commands are available', () => {
   const gate = evaluateCompletionVerification({
     pipelineStatus: 'COMPLETE',
-    executionProfile: 'opencalw_manager',
-    projectRoot: 'C:\\Workspace\\scratch\\demo',
+    executionProfile: 'workspace_manager',
+    projectRoot: 'C:\\Repos\\scratch\\demo',
     verification: report('no_commands'),
   });
 

@@ -33,7 +33,7 @@ node .\dist\index.js doctor
 What it does:
 
 - checks Babel workspace health
-- surfaces repo/export issues early
+- surfaces repository and release-readiness issues early
 - gives you the safest first CLI signal before a real run
 
 ## 2. Run

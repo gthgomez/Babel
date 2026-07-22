@@ -94,7 +94,8 @@ voice control). Google is actively auditing and removing apps that use it for ot
 | Automation, monitoring, keep-awake features | **NOT PERMITTED** — must use narrower API |
 | Content scraping or UI interaction automation | **NEVER PERMITTED** |
 
-**example_app_four has two separate problems that need two separate API migrations:**
+When an application uses an accessibility service for both foreground detection and
+screen-awake behavior, assess those capabilities separately:
 
 **Problem A — Foreground app detection (which app is in front):**
 
@@ -156,7 +157,7 @@ This approach:
 - Avoids battery-drain WakeLock penalties
 - Requires user to grant the overlay permission once
 
-**Rule:** Any plan for example_app_four that retains `BIND_ACCESSIBILITY_SERVICE` for foreground
+**Rule:** Any plan that retains `BIND_ACCESSIBILITY_SERVICE` for foreground
 detection must include an explicit policy-risk acknowledgment in RISKS. The preferred direction
 is migration to `UsageStatsManager` (foreground detection) + overlay `FLAG_KEEP_SCREEN_ON`
 (screen-sleep prevention).

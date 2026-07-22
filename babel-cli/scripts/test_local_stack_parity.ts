@@ -187,15 +187,15 @@ function main(): void {
     compareResults(`${label} in-process vs CLI`, inProcess, cli);
     compareResults(`${label} CLI vs PS wrapper`, cli, ps);
 
-    const expectedBible = join(BABEL_ROOT, 'BABEL_BIBLE.md').replace(/\//g, '\\');
+    const expectedBible = 'BABEL_BIBLE.md';
     const kickoffNorm = cli.KickoffPrompt.replace(/\//g, '\\');
     assert(
       cli.BabelEntrypoint.replace(/\//g, '\\') === expectedBible,
-      `${label}: BabelEntrypoint must be under babel root (${expectedBible})`,
+      `${label}: BabelEntrypoint must use the canonical repository-relative path (${expectedBible})`,
     );
     assert(
       kickoffNorm.includes(expectedBible),
-      `${label}: KickoffPrompt must reference bible path under babel root (${expectedBible})`,
+      `${label}: KickoffPrompt must reference the canonical repository-relative path (${expectedBible})`,
     );
 
     console.log(`[local-stack-parity] pass ${label}`);

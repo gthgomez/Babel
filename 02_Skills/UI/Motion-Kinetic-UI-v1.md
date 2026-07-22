@@ -23,12 +23,12 @@ Guidelines for implementing "alive" and immersive user interfaces using modern M
 
 Every dynamic or interactive UI animation must adhere to these strict conditional rules:
 
-- `[Shared Elements Transition]: Apply the layout and layoutId props from motion/react when elements scale or animate across different positions — To guarantee smooth visual continuity and eliminate layout shifting.`
+- `[Shared Elements Transition]: Apply layout and layoutId from motion/react when elements scale or animate across positions — To support smooth visual continuity; verify layout stability in the target browser and device matrix.`
 - `[Tactile Gestures]: Prioritize whileHover, whileTap, and whileDrag gestures from motion/react for button and card interactions — To provide immediate, high-fidelity tactile feedback that makes the interface feel alive.`
 - `[Scroll-Based Parallax]: Leverage the useScroll and useTransform hooks from motion/react for progress bars or narrative parallax effects — To synchronize interactive animations directly with the user's scroll progression.`
 - `[Unmounting Elements]: Wrap conditional elements in <AnimatePresence> from motion/react and set exit animations — To allow elements to animate gracefully out of the DOM before they are unmounted.`
 - `[Accessibility Constraints]: Enforce useReducedMotion hook from motion/react or CSS media queries for heavy animations — To respect prefers-reduced-motion settings and support users with motion sensitivities.`
-- `[Performance Optimization]: Target only GPU-accelerated composited properties like scale, translate, and opacity for animations while avoiding animating layout properties like width, height, and top — To prevent expensive browser reflows and guarantee 60/120fps rendering.`
+- `[Performance Optimization]: Prefer composited properties such as scale, translate, and opacity while avoiding unnecessary layout-property animation — To reduce browser reflow risk; measure frame pacing on representative devices.`
 - `[Animation Timing]: Limit UI feedback animations to 100ms-300ms and restrict longer narrative sequences to <=500ms — To maintain snappy responsiveness and prevent user flow fatigue.`
 - `[Kinetic Physics Dynamics]: Configure type: "spring" with precise stiffness and damping coefficients rather than static cubic-bezier easings — To produce organic, physical responses that mimic realistic inertia.`
 - `[Grid and List Entrances]: Apply staggered animation variants with staggerChildren from motion/react — To produce structured, rhythmic cascading transitions across child items.`

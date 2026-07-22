@@ -245,7 +245,7 @@ test('append-only transcript records stripped audit output without duplicate act
   const transcript = stripAnsi(renderer?.getTranscript() ?? '');
   assert.match(transcript, /Babel started: inspect repo/);
   assert.match(transcript, /Target: example_game_workspace/);
-  assert.match(transcript, /Target root: C:\/Workspace\/example_game_workspace/);
+  assert.match(transcript, /Target root: \/workspace-root\/example_game_workspace/);
   assert.equal((transcript.match(/Planning change/g) ?? []).length, 1);
   assert.equal((transcript.match(/Prepared plan/g) ?? []).length, 1);
   assert.equal((transcript.match(/Reviewing plan/g) ?? []).length, 1);

@@ -10,13 +10,17 @@ import {
   createGitPullRequest,
   type GitMutationReport,
 } from './gitMutations.js';
-import { runProductBenchmark, type ProductBenchmarkReport } from './productBenchmark.js';
+import {
+  runReleaseReadinessBenchmark,
+  type ReleaseReadinessReport,
+} from './releaseReadinessBenchmark.js';
 
 export type ScheduleJobType =
   | 'ci_review'
   | 'git_diff_summary'
   | 'git_commit_draft'
   | 'git_pr_draft'
+  | 'benchmark_readiness'
   | 'benchmark_product'
   | 'git_branch_create'
   | 'git_commit_create'
@@ -52,7 +56,7 @@ export interface ScheduleRunRecord {
   status: 'ok' | 'fail';
   artifact_path: string;
   nested_artifact_path: string | null;
-  result: CiReviewReport | GitDraftReport | ProductBenchmarkReport | GitMutationReport | null;
+  result: CiReviewReport | GitDraftReport | ReleaseReadinessReport | GitMutationReport | null;
   error: string | null;
 }
 
@@ -81,6 +85,7 @@ const JOB_TYPES: ScheduleJobType[] = [
   'git_diff_summary',
   'git_commit_draft',
   'git_pr_draft',
+  'benchmark_readiness',
   'benchmark_product',
   'git_branch_create',
   'git_commit_create',
@@ -265,7 +270,7 @@ function runScheduleJob(
   schedule: ScheduleDefinition,
   runDir: string,
   allowMutate: boolean,
-): CiReviewReport | GitDraftReport | ProductBenchmarkReport | GitMutationReport {
+): CiReviewReport | GitDraftReport | ReleaseReadinessReport | GitMutationReport {
   if (MUTATING_JOB_TYPES.has(schedule.job_type)) {
     return runMutatingScheduleJob(schedule, runDir, allowMutate);
   }
@@ -278,9 +283,9 @@ function runScheduleJob(
       ...(schedule.base_ref ? { baseRef: schedule.base_ref } : {}),
     });
   }
-  if (schedule.job_type === 'benchmark_product') {
-    return runProductBenchmark({
-      outputDir: join(runDir, 'benchmark-product'),
+  if (schedule.job_type === 'benchmark_readiness' || schedule.job_type === 'benchmark_product') {
+    return runReleaseReadinessBenchmark({
+      outputDir: join(runDir, 'benchmark-readiness'),
     });
   }
   return runGitDraft(gitKindForJob(schedule.job_type), {

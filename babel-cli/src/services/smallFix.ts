@@ -495,7 +495,7 @@ const PARITY_CORPUS_FIXTURE_DIR = join(
   'babel-cli',
   'src',
   'fixtures',
-  'parity-corpus',
+  'conformance-corpus',
 );
 
 function listLiteTrustDemoFixturePaths(): string[] {
@@ -533,7 +533,7 @@ function offlineDemoAnswerFromFixture(
   options: SmallFixOptions,
   detected: { targetFile: string },
   fixturePath: string,
-  expectedFixtureType: 'babel_lite_trust_demo' | 'babel_parity_corpus_task',
+  expectedFixtureType: 'babel_lite_trust_demo' | 'babel_conformance_corpus_task',
 ): SmallFixAnswer | null {
   try {
     const parsed = JSON.parse(readFileSync(fixturePath, 'utf-8')) as {
@@ -559,8 +559,8 @@ function offlineDemoAnswerFromFixture(
       : parsed.fixed_implementation;
     return {
       schema_version: 1,
-      summary: expectedFixtureType === 'babel_parity_corpus_task'
-        ? 'Updated parity corpus implementation (offline demo).'
+      summary: expectedFixtureType === 'babel_conformance_corpus_task'
+        ? 'Updated conformance fixture implementation (offline demo).'
         : 'Updated math implementation (offline demo).',
       replacement_content: replacement,
       confidence: 'high',
@@ -581,7 +581,7 @@ function tryOfflineDemoAnswer(
     }
   }
   for (const fixturePath of listParityCorpusFixturePaths()) {
-    const answer = offlineDemoAnswerFromFixture(options, detected, fixturePath, 'babel_parity_corpus_task');
+    const answer = offlineDemoAnswerFromFixture(options, detected, fixturePath, 'babel_conformance_corpus_task');
     if (answer) {
       return answer;
     }
@@ -667,7 +667,7 @@ async function runSmallFixModel(
     const offlineAnswer = tryOfflineDemoAnswer(options, detected);
     if (!offlineAnswer) {
       throw new Error(
-        'Offline demo fix (--provider mock / BABEL_LITE_OFFLINE=1) is only supported for lite-trust-demo and parity-corpus fixture tasks.',
+        'Offline demo fix (--provider mock / BABEL_LITE_OFFLINE=1) is only supported for lite-trust-demo and conformance-corpus fixture tasks.',
       );
     }
     appendDirectSmallFixTelemetry({

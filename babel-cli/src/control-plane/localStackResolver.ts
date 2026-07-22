@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 
 import { filterCatalogEntries, parseCatalog } from './catalog.js';
 import { previewInstructionStackResolution } from './stackResolver.js';
@@ -22,13 +22,12 @@ export type LocalProject =
   | 'example_web_audit'
   | 'example_mobile_suite'
   | 'example_game_workspace'
-  | 'simlife'
+  | 'example_simulation'
   | 'example_game_suite'
-  | 'ExampleFinanceForecast'
+  | 'example_reference_application'
   | 'example_autonomous_agent'
-  | 'example_mobile_finance'
-  | 'AetherlynGameDraft'
-  | 'aetherlyn';
+  | 'example_mobile_reference'
+  | 'example_game_draft';
 
 export type LocalModel = 'codex' | 'claude' | 'gemini';
 
@@ -117,47 +116,16 @@ const PROJECT_OVERLAY_ID_MAP: Partial<Record<LocalProject, string>> = {
   example_web_audit: 'overlay_example_web_audit',
   example_mobile_suite: 'overlay_example_mobile_suite',
   example_game_workspace: 'overlay_example_game_workspace',
-  simlife: 'overlay_example_game_workspace',
+  example_simulation: 'overlay_example_game_workspace',
   example_game_suite: 'overlay_example_game_suite',
-  ExampleFinanceForecast: 'overlay_example_finance_forecast',
-  AetherlynGameDraft: 'overlay_example_game_workspace',
-  aetherlyn: 'overlay_example_game_workspace',
-  example_mobile_finance: 'overlay_example_finance_forecast',
-};
-
-const PROJECT_REPO_KEY_MAP: Partial<Record<LocalProject, string>> = {
-  example_saas_backend: 'example_saas_backend',
-  example_llm_router: 'example_llm_router',
-  example_web_audit: 'example_web_audit',
-  example_mobile_suite: 'example_mobile_suite',
-  example_game_workspace: 'example_game_workspace',
-  simlife: 'simlife',
-  example_game_suite: 'example_game_suite',
-  ExampleFinanceForecast: 'montecarlo_ledger',
-  AetherlynGameDraft: 'aetherlyn',
-  aetherlyn: 'aetherlyn',
-  example_autonomous_agent: 'example_autonomous_agent',
-  example_mobile_finance: 'example_mobile_finance',
+  example_reference_application: 'overlay_example_reference_application',
+  example_game_draft: 'overlay_example_game_workspace',
+  example_mobile_reference: 'overlay_example_mobile_reference',
 };
 
 const TASK_OVERLAY_ALIAS_MAP: Record<string, string> = {
   'frontend-professionalism': 'task_frontend_professionalism',
   'example_saas_backend-frontend-professionalism': 'task_example_saas_backend_frontend_professionalism',
-};
-
-const LEGACY_FAMILY_MAP: Partial<Record<LocalProject, string>> = {
-  example_saas_backend: 'Project_SaaS',
-  example_llm_router: 'Project_SaaS',
-  example_web_audit: 'Project_SaaS',
-  example_mobile_suite: '',
-  example_game_workspace: '',
-  simlife: 'example_game_workspace',
-  example_game_suite: 'example_game_workspace',
-  ExampleFinanceForecast: 'example_mobile_suite',
-  AetherlynGameDraft: 'example_game_workspace',
-  aetherlyn: 'example_game_workspace',
-  example_autonomous_agent: '',
-  example_mobile_finance: '',
 };
 
 interface ActivePolicy {
@@ -221,17 +189,6 @@ function resolveDefaultClientSurface(model: LocalModel): string {
   }
 }
 
-function getWorkspaceRoot(babelRoot: string): string {
-  return dirname(babelRoot);
-}
-
-function getRepoMapPath(babelRoot: string): string {
-  if (process.env['BABEL_REPO_MAP_PATH']) {
-    return process.env['BABEL_REPO_MAP_PATH'];
-  }
-  return join(getWorkspaceRoot(babelRoot), 'config', 'repo-map.json');
-}
-
 function readJsonFile<T>(path: string): T | null {
   if (!existsSync(path)) {
     return null;
@@ -241,11 +198,6 @@ function readJsonFile<T>(path: string): T | null {
   } catch {
     return null;
   }
-}
-
-function getRepoMapValue(repoMap: { repos?: Record<string, string> } | null, key: string): string | null {
-  const value = repoMap?.repos?.[key];
-  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 function getAlwaysLoadBehavioralEntries(entries: CatalogEntry[]): CatalogEntry[] {
@@ -521,7 +473,7 @@ function convertChecklistToHintText(checklist: string[] | undefined): string[] {
 }
 
 function resolveProjectPath(
-  babelRoot: string,
+  _babelRoot: string,
   project: LocalProject,
   projectPathArg: string | undefined,
 ): string | null {
@@ -535,40 +487,8 @@ function resolveProjectPath(
   if (project === 'global') {
     return null;
   }
-
-  const workspaceRoot = getWorkspaceRoot(babelRoot);
-  const repoMap = readJsonFile<{ repos?: Record<string, string> }>(getRepoMapPath(babelRoot));
-  const repoMapKey = PROJECT_REPO_KEY_MAP[project];
-  const mappedProjectPath = repoMapKey ? getRepoMapValue(repoMap, repoMapKey) : null;
-  if (mappedProjectPath && existsSync(mappedProjectPath)) {
-    return mappedProjectPath;
-  }
-
-  const family = LEGACY_FAMILY_MAP[project] ?? '';
-  let projectFolderCandidates: string[];
-  if (project === 'simlife') {
-    projectFolderCandidates = ['SimLife'];
-  } else if (project === 'AetherlynGameDraft' || project === 'aetherlyn') {
-    projectFolderCandidates = ['AetherlynGameDraft'];
-  } else if (project === 'ExampleFinanceForecast') {
-    projectFolderCandidates = ['ExampleFinanceForecast'];
-  } else if (project === 'example_mobile_finance') {
-    projectFolderCandidates = ['Example-Mobile-Finance', 'Example Finance Forecast-app'];
-  } else if (project === 'example_autonomous_agent') {
-    projectFolderCandidates = ['example_autonomous_agent', 'example_autonomous_agent'];
-  } else {
-    projectFolderCandidates = [project];
-  }
-
-  for (const projectFolderName of projectFolderCandidates) {
-    const inferredProjectPath = family
-      ? join(workspaceRoot, family, projectFolderName)
-      : join(workspaceRoot, projectFolderName);
-    if (existsSync(inferredProjectPath)) {
-      return inferredProjectPath;
-    }
-  }
-
+  // Project identifiers select overlays only. Repository access requires an
+  // explicit path so a catalog preview cannot escape the canonical clone.
   return null;
 }
 
@@ -592,7 +512,6 @@ function detectImplicitSkillIds(projectPath: string | null, entriesById: Map<str
 }
 
 function buildKickoffPrompt(
-  babelRoot: string,
   repoContextFiles: string[],
   repoLocalSystemPresent: boolean,
   kickoffPolicy: ActivePolicy | null,
@@ -605,22 +524,22 @@ function buildKickoffPrompt(
   if (compactKickoffActive) {
     if (repoLocalSystemPresent) {
       kickoffPrompt =
-        `Read ${join(babelRoot, 'BABEL_BIBLE.md')}, then this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM before planning or coding.`;
+        `Read BABEL_BIBLE.md, then this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM before planning or coding.`;
     } else if (repoContextFiles.length > 0) {
       kickoffPrompt =
-        `Read ${join(babelRoot, 'BABEL_BIBLE.md')}, then this repo's PROJECT_CONTEXT.md before planning or coding.`;
+        `Read BABEL_BIBLE.md, then this repo's PROJECT_CONTEXT.md before planning or coding.`;
     } else {
-      kickoffPrompt = `Read ${join(babelRoot, 'BABEL_BIBLE.md')} before planning or coding.`;
+      kickoffPrompt = 'Read BABEL_BIBLE.md before planning or coding.';
     }
   } else if (repoLocalSystemPresent) {
     kickoffPrompt =
-      `Read Babel's ${join(babelRoot, 'BABEL_BIBLE.md')} first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM/README_FOR_HUMANS_AND_LLMS.md before planning or coding.`;
+      `Read Babel's BABEL_BIBLE.md first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM/README_FOR_HUMANS_AND_LLMS.md before planning or coding.`;
   } else if (repoContextFiles.length > 0) {
     kickoffPrompt =
-      `Read Babel's ${join(babelRoot, 'BABEL_BIBLE.md')} first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md before planning or coding.`;
+      `Read Babel's BABEL_BIBLE.md first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md before planning or coding.`;
   } else {
     kickoffPrompt =
-      `Read Babel's ${join(babelRoot, 'BABEL_BIBLE.md')} first and use Babel to select the right instruction stack for this task before planning or coding.`;
+      `Read Babel's BABEL_BIBLE.md first and use Babel to select the right instruction stack for this task before planning or coding.`;
   }
 
   if (verificationHints.length > 0) {
@@ -791,7 +710,7 @@ export function resolveLocalStack(options: LocalStackResolveOptions): LocalStack
     LoadPosition: entry.load_position,
     TokenBudget: entry.token_budget,
     RelativePath: entry.relative_path,
-    FullPath: entry.absolute_path,
+    FullPath: entry.relative_path,
     OrderIndex: entry.order_index,
   }));
 
@@ -814,7 +733,6 @@ export function resolveLocalStack(options: LocalStackResolveOptions): LocalStack
   }
 
   const kickoffPrompt = buildKickoffPrompt(
-    babelRoot,
     repoContextFiles,
     repoLocalSystemPresent,
     appliedPoliciesBySurface.get('kickoff_prompt_preset') ?? null,
@@ -822,10 +740,10 @@ export function resolveLocalStack(options: LocalStackResolveOptions): LocalStack
   );
 
   return {
-    BabelRoot: babelRoot,
-    LocalLearningRoot: localLearningRoot,
+    BabelRoot: '.',
+    LocalLearningRoot: options.localLearningRoot ? '<local-learning-root>' : 'runs/local-learning',
     Project: project,
-    ProjectPath: resolvedProjectPath,
+    ProjectPath: resolvedProjectPath ? '<external-project-root>' : null,
     TaskCategory: options.taskCategory,
     Model: model,
     ClientSurface: resolvedClientSurface,
@@ -840,13 +758,16 @@ export function resolveLocalStack(options: LocalStackResolveOptions): LocalStack
     SelectedCodexAdapter: model === 'codex' ? selectedCodexAdapterName : null,
     RecommendedTaskOverlayIds: selectedTaskOverlayIds,
     RecommendedSkillIds: selectedCognitionSkillIds,
-    BabelEntrypoint: join(babelRoot, 'BABEL_BIBLE.md'),
+    BabelEntrypoint: 'BABEL_BIBLE.md',
     BabelReferenceFiles: [
-      join(babelRoot, 'PROJECT_CONTEXT.md'),
-      join(babelRoot, 'prompt_catalog.yaml'),
+      'PROJECT_CONTEXT.md',
+      'prompt_catalog.yaml',
     ],
     SelectedStack: selectedStack,
-    RepoContextFiles: repoContextFiles,
+    RepoContextFiles: repoContextFiles.map(path => {
+      const relativePath = path.slice(resolvedProjectPath?.length ?? 0).replace(/^[\\/]+/, '').replace(/\\/g, '/');
+      return `<external-project-root>/${relativePath}`;
+    }),
     RepoLocalSystemPresent: repoLocalSystemPresent,
     PrecedenceRules: [
       'Babel chooses the cross-project stack and operating mode.',

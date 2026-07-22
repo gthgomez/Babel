@@ -9,7 +9,8 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 ## Purpose
 
-This is the model-facing and integration-facing entrypoint for `Babel-public`.
+This is the model-facing and integration-facing entrypoint for the canonical
+public Babel repository.
 
 When a user says:
 
@@ -34,9 +35,10 @@ Minimum first-read chain:
 3. `README.md`
 4. `prompt_catalog.yaml`
 
-## What Babel-public Truthfully Is
+## What This Repository Truthfully Is
 
-`Babel-public` is a runnable public-safe Babel release.
+`gthgomez/Babel` is Babel's canonical public source and a runnable public-safe
+release surface.
 
 Its strongest public surfaces are:
 
@@ -50,7 +52,7 @@ The larger pipeline harness is included and typechecked, but it is an advanced s
 
 ## Canonical Public Workflow
 
-When using Babel-public, do this:
+When using this repository, do this:
 
 1. Read `PROJECT_CONTEXT.md`.
 2. Read `prompt_catalog.yaml`.
@@ -78,7 +80,9 @@ If you want to use the advanced runtime harness:
 - build `babel-cli` if you want the compiled `node dist` command path
 - use `tools/run-babel-local-cli.ps1` or invoke `babel-cli` directly
 
-`Babel-public` does **not** assume private lifecycle scripts, private run-artifact trees, or private activation contracts.
+The canonical repository does **not** assume private lifecycle scripts, private
+run-artifact trees, private activation contracts, or files from a parent
+workspace. Consumer-specific rules and overlays are optional external inputs.
 
 The public vision is to make prompt-stack selection inspectable, testable, and safe to integrate before model-backed execution begins.
 
@@ -106,7 +110,9 @@ Use these files in this order:
 3. `00_System_Router/OLS-v9-Orchestrator.md`
 4. the resolved prompt files selected from the catalog
 
-In `Babel-public`, manifest selection is governed by the catalog plus the resolver/compiler surfaces included in this repo. If a cataloged file is missing on disk, treat that as a system integrity problem.
+In this repository, manifest selection is governed by the catalog plus the
+resolver/compiler surfaces included here. If a cataloged file is missing on disk,
+treat that as a system integrity problem.
 
 ## Layer Model
 

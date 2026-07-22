@@ -17,8 +17,8 @@ function pickProjectRoot(): string {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
   const workspaceRoot = resolve(repoRoot, '..');
   const candidates = [
-    join(workspaceRoot, 'Example Finance Forecast-app'),
-    join(workspaceRoot, 'Example-Mobile-Finance'),
+    join(workspaceRoot, 'reference source-app'),
+    join(workspaceRoot, 'Example-Mobile-Application'),
     join(workspaceRoot, 'private source repo'),
     repoRoot,
   ];

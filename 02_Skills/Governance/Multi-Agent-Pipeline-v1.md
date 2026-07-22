@@ -15,7 +15,7 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 
 ## 1. What This Covers
 
-This skill covers the patterns used in example_saas_backend's multi-agent code review pipeline (`internal_monitoring_module/`). It applies whenever building or modifying:
+This skill covers reusable patterns for multi-agent code-review pipelines. Project overlays supply implementation-specific modules, providers, thresholds, and policy. It applies whenever building or modifying:
 
 - Multi-agent review systems (parallel LLM agent dispatch, result aggregation)
 - Learning pipelines with approval gates (prompt modification lifecycle)
@@ -32,9 +32,9 @@ Every agent inherits from a shared abstract base that enforces the timeout chain
 class BaseAgent(ABC):
     def __init__(self):
         self.name = self._get_agent_name()
-        self.model_tier = AGENT_MODELS.get(self.name, "flash")
-        self.model_id = MODELS[self.model_tier]
-        self.client = GeminiClient(self.model_id)
+        self.model_id = model_policy.for_agent(self.name)
+        self.client = ProviderClient(self.model_id)
+        self.deadlines = deadline_policy.for_agent(self.name)
 
     @abstractmethod
     def _get_agent_name(self) -> str: ...
@@ -43,12 +43,15 @@ class BaseAgent(ABC):
     def _get_system_prompt(self) -> str: ...
 
     async def review(self, diff: str, context: dict) -> AgentExecutionResult:
-        # Timeout chain: config → agent → api (always -5s buffer)
-        agent_timeout = AGENT_TIMEOUTS.get(self.name, AGENT_TIMEOUT)
-        api_timeout = agent_timeout - 5  # 5s buffer for retry overhead
+        # Provider and outer deadlines come from one validated policy.
+        provider_timeout = self.deadlines.provider
+        outer_timeout = self.deadlines.outer
 
         try:
-            response = await self.client.review(prompt=..., timeout=api_timeout)
+            response = await asyncio.wait_for(
+                self.client.review(prompt=..., timeout=provider_timeout),
+                timeout=outer_timeout,
+            )
             report = AgentReport(**response)  # Pydantic validation
             return AgentExecutionResult(state=ExecutionState.OK, report=report.model_dump(), ...)
 
@@ -62,77 +65,54 @@ class BaseAgent(ABC):
 
 **Rules:**
 - Every agent must inherit `BaseAgent`. Never implement `review()` from scratch in a subclass — only override `_get_agent_name()` and `_get_system_prompt()`.
-- `api_timeout = agent_timeout - 5` is the invariant. If you add a new agent and set its timeout in `AGENT_TIMEOUTS`, the 5s buffer is applied automatically — do not re-apply it manually in the client call.
+- The outer deadline must exceed the provider deadline by a configured cleanup margin. Validate this relationship at startup.
 - Return `AgentExecutionResult` with explicit `ExecutionState` — never return raw dicts, never raise from `review()`. Callers aggregate results by state; an unhandled exception breaks the aggregation.
 - Validate all agent output through the Pydantic `AgentReport` model before returning `OK` state.
 
 ---
 
-## 3. Timeout Chain (The Prior Incident Rule)
+## 3. Deadline Propagation
 
-The original incident: agents had a default timeout hardcoded in the API client, but the orchestrator set a different timeout in config. The two values got out of sync — the API timed out first but the agent timeout hadn't fired, leaving the system in a hung state for 40% of reviews.
-
-**The fix — a propagation chain with validation:**
+Use one validated policy for the provider deadline, outer deadline, and cleanup margin:
 
 ```
-config.py (AGENT_TIMEOUTS)
-    → BaseAgent.review() (agent_timeout = AGENT_TIMEOUTS[name])
-        → api_timeout = agent_timeout - 5
-            → GeminiClient.review(timeout=api_timeout)
-```
-
-```python
-# config.py — AGENT_TIMEOUTS is the single source of truth
-AGENT_TIMEOUTS = {
-    "security":    90,   # Gemini Pro + comprehensive review
-    "backend":     60,   # Flash, complex Edge Function analysis
-    "frontend":   120,   # Flash, large React/Next.js diffs frequently exceed 70s
-    "performance": 90,
-    "ui_ux":       70,
-    "devops":      60,
-}
-AGENT_TIMEOUT = 60  # Default for any agent not in AGENT_TIMEOUTS
+deadline policy
+    → BaseAgent.review()
+        → provider request deadline
+        → outer cancellation deadline
 ```
 
 **Rules:**
-- Minimum timeout: 10s (raise `ValueError` if lower). Maximum: 180s (log warning).
-- Base timeouts on **observed p95 latency + ≥20s margin**. Never guess.
-- Adding a new agent requires adding its timeout to `AGENT_TIMEOUTS` before it goes to production. A new agent that uses the default 60s timeout may time out under realistic diff sizes.
-- Never hardcode `timeout=30` in a GeminiClient call. Always propagate from config.
+- Derive deadlines from measured latency and payload size; do not publish or copy environment-specific values into this skill.
+- Reject invalid or missing deadline relationships during configuration validation.
+- Adding an agent requires a measured deadline policy before release.
+- Never hardcode a provider deadline at a call site.
 
 ---
 
 ## 4. Aggregation Weights
 
 ```python
-# config.py — weights must sum to 1.0
-WEIGHTS = {
-    "security":    0.25,  # Highest — privacy compliance product
-    "backend":     0.20,
-    "frontend":    0.15,
-    "performance": 0.15,
-    "devops":      0.15,
-    "ui_ux":       0.10,
-}
+weights = weight_policy.for_enabled_agents()
+assert math.isclose(sum(weights.values()), 1.0)
 ```
 
 **Rules:**
-- Weights must sum exactly to 1.0. The aggregator normalizes dynamically based on which agents are active (skipped/unavailable agents have their weight redistributed), but the base weights must sum to 1.0 in config.
-- Security agent is always the highest weight — this is a compliance product. Do not reduce it below the second-highest weight without explicit product approval.
-- Any weight change requires updating this config AND updating the comment documentation explaining the rationale.
+- Configured weights must sum to 1.0 before dispatch.
+- Normalize only across enabled, successful agents.
+- Weight priority is a project policy backed by risk analysis, tests, and approval; this generic skill does not prescribe product-specific values.
 
 ---
 
 ## 5. Smart Routing — Only Dispatch Relevant Agents
 
 ```python
-# config.py — ROUTING_RULES determines which agents see which diffs
 ROUTING_RULES = {
-    "example_saas_backend-dashboard/src/components/**": ["frontend", "ui_ux", "performance"],
-    "supabase/functions/**":               ["backend", "security", "devops"],
-    "supabase/migrations/**":              ["backend", "devops", "security"],
-    "*.env*":                              ["security", "devops"],
-    "**":                                  ["backend", "frontend", "ui_ux", "security", "performance", "devops"],
+    "web/components/**": ["frontend", "accessibility", "performance"],
+    "service/**":        ["backend", "security"],
+    "migrations/**":     ["backend", "security", "operations"],
+    "*.env*":            ["security", "operations"],
+    "**":                enabled_agents,
 }
 ```
 
@@ -145,34 +125,18 @@ ROUTING_RULES = {
 
 ## 6. Context Budgeting
 
-Large diffs cause API timeouts. The system truncates diffs per-agent based on observed limits:
-
-```python
-# config.py
-CONTEXT_BUDGETS = {
-    "security":    {"max_diff_bytes": 100_000, "max_hunks": 50},
-    "frontend":    {"max_diff_bytes": 120_000, "max_hunks": 60},  # large React diffs
-    "backend":     {"max_diff_bytes":  80_000, "max_hunks": 40},
-    "devops":      {"max_diff_bytes":  60_000, "max_hunks": 30},
-}
-
-# Excluded from all diffs — no review value, bloats payload
-EXCLUDED_PATTERNS = [
-    "*lock*", "*.min.js", "*.min.css", "dist/*", "build/*",
-    ".next/*", "node_modules/*", "__pycache__/*", "*.pyc", "*.map",
-]
-```
+Large diffs can exceed provider limits. Define per-agent context budgets from observed payload tolerance and exclude generated artifacts through project configuration.
 
 **Rules:**
 - Always exclude generated/build artifacts before sending a diff to agents. Lock files and minified bundles add tokens but zero review signal.
 - When an agent's diff is truncated, inject a `CONTEXT BUDGET NOTICE` section into the prompt explaining what was omitted and why.
-- If an agent keeps timing out on realistic diffs, the first diagnostic step is checking whether its `max_diff_bytes` limit is correctly set.
+- If an agent repeatedly times out, compare its configured context budget with measured provider latency and payload limits.
 
 ---
 
-## 7. Learning Pipeline Guardrails (Always Locked)
+## 7. Learning Pipeline Guardrails
 
-The learning pipeline (Phase 3c) allows agents to propose modifications to their own prompts based on build failure patterns. These guardrails are **always locked in production**:
+If a project allows agents to propose prompt changes, proposal generation and automatic application must be separate, independently governed capabilities:
 
 ```python
 # config.py — these must remain False unless explicitly authorized
@@ -183,13 +147,11 @@ FEATURE_FLAGS = {
 }
 ```
 
-**Why they are locked:** Prior to the guardrails, an experimental run auto-applied a security agent prompt modification that changed severity classification behavior. The modification passed approval but caused the security agent to downgrade real vulnerabilities for two weeks before the regression was caught via the regression test suite.
-
 **Rules:**
 - Never flip `learning_modifications_enabled` or `learning_auto_apply` to `True` without explicit authorization and a regression test gate passing clean.
-- The CI learning hook (`ci_learning_hook_mode`) must be `dry_run` or `off` — never `enabled` in production without a formal rollout plan.
+- Keep CI learning hooks non-mutating unless a reviewed rollout explicitly authorizes another mode.
 - `prompt_regression_tests_enabled` must remain `True`. It is the safety net that catches behavioral regressions before they reach production.
-- Any code that touches these flags is HIGH blast radius — treat like a production config change.
+- Treat changes to these controls as high blast radius.
 
 ---
 
@@ -211,30 +173,15 @@ class ExecutionState(str, Enum):
 - `PARSE_ERROR` — logged with the raw response; weight redistributed
 - `SKIPPED` — routing determined this agent is irrelevant; excluded from aggregation
 
-**SLO gates:** If any agent's unavailability rate across a consensus run exceeds 34%, the aggregator emits `NEEDS_REVISION` rather than approving. This prevents approving code when the review was fundamentally incomplete.
+**Coverage gate:** Emit `NEEDS_REVISION` when successful reviewer coverage falls below the project-configured, evidence-backed minimum.
 
 ---
 
 ## 9. Quality Guards and Consolidation
 
-```python
-# config.py
-QUALITY_GUARDS = {
-    "downgrade_without_evidence_min_severity": "MEDIUM",
-    "downgrade_confidence_threshold":          0.85,
-    "warn_on_medium_issue_count":              2,
-}
-
-CONSOLIDATION_THRESHOLDS = {
-    "same_location_similarity": 0.23,  # same file + same line dedup threshold
-    "same_type_similarity":     0.78,
-    "max_line_distance":         2,
-}
-```
-
 **Rules:**
-- MEDIUM/HIGH/CRITICAL findings below 0.85 confidence with no supporting evidence are automatically downgraded to LOW. This suppresses speculative warnings without removing high-confidence findings.
-- Duplicate detection uses similarity thresholds, not exact matching. Two agents flagging the same line with slightly different wording are merged into one consolidated finding.
+- Require evidence before retaining elevated severity; derive confidence policy from calibrated project tests.
+- Consolidate overlapping findings with a tested, project-configured policy.
 - Never remove the consolidation step — without it, six agents produce six reports with significant overlap, overwhelming the consumer.
 
 ---
@@ -244,10 +191,10 @@ CONSOLIDATION_THRESHOLDS = {
 Before submitting a new agent:
 
 - [ ] File: `agents/{name}_agent.py` inheriting `BaseAgent`
-- [ ] `AGENT_MODELS["{name}"]` set in `config.py` (flash/pro/lite)
-- [ ] `AGENT_TIMEOUTS["{name}"]` set in `config.py` (based on p95 test, not a guess)
+- [ ] Model policy configured through the project provider abstraction
+- [ ] Deadline policy based on measured latency
 - [ ] `WEIGHTS["{name}"]` added and all weights re-normalized to sum 1.0
 - [ ] `ROUTING_RULES` updated with relevant path patterns for the new agent
 - [ ] `CONTEXT_BUDGETS["{name}"]` set if the agent has different payload tolerance
-- [ ] Pytest test in `scanners/tests/` covering at least: OK result, TIMEOUT result, output schema validation
+- [ ] Tests cover at least: OK result, timeout result, and output-schema validation
 - [ ] Regression test golden diff added covering the new agent's domain
