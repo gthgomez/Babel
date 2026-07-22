@@ -40,5 +40,5 @@ This overlay defines the behavioral rules for **Parity Auditing** — the proces
 ## Verification Gates
 
 - **Gate A (Structural):** Do the file boundaries and symbol exports match the Parity Map?
-- **Gate B (Logic):** Does feeding the same inputs into both engines yield bit-identical outputs?
+- **Gate B (Logic):** Do both engines satisfy the Parity Map's declared observable outputs and tolerances? Require bit-identical output only where the contract explicitly requires it.
 - **Gate C (Security):** Does the Target port maintain the same adversarial protections (e.g., LRU vs FIFO) as the Source?

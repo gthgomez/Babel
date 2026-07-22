@@ -2,7 +2,7 @@
  * apiFallback.ts — Anthropic API Fallback Runner
  *
  * Implements `LlmRunner` using the official `@anthropic-ai/sdk`. This runner
- * is the guaranteed completion path — it activates when the Claude CLI runner
+ * is a fallback execution path — it activates when the Claude CLI runner
  * is unavailable, rate-limited, or produces unparseable output.
  *
  * Configuration (environment variables):

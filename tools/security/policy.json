@@ -5,12 +5,11 @@
     "GPCGuard"
   ],
   "forbidden_private_identifiers": [
-    "C:\\\\Users\\\\",
-    "C:/Users/",
-    "C:\\\\Workspace\\\\",
-    "C:/Workspace/",
+    "(?i)[A-Z]:[\\\\/]+(?:Users|Workspace|Projects)[\\\\/]+",
     "\\.supabase\\.co"
   ],
+  "binary_asset_allowlist": [],
+  "identifier_exceptions": [],
   "forbidden_dependency_fingerprints": [
     "GPCGuard"
   ],

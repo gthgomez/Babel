@@ -2,7 +2,8 @@
 param(
   [string]$Root = '',
   [switch]$Strict,
-  [string]$SupplementalPolicyPath = ''
+  [string]$SupplementalPolicyPath = '',
+  [switch]$RequireSupplementalPolicy
 )
 
 Set-StrictMode -Version Latest
@@ -74,6 +75,7 @@ if ($Strict) {
 if (-not [string]::IsNullOrWhiteSpace($SupplementalPolicyPath)) {
   $scrubArgs += @('-SupplementalPolicyPath', $SupplementalPolicyPath)
 }
+if ($RequireSupplementalPolicy) { $scrubArgs += '-RequireSupplementalPolicy' }
   & $shellPath -NoProfile -ExecutionPolicy Bypass -File $checkPublicScrubScriptPath @scrubArgs
 }
 

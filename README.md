@@ -153,7 +153,7 @@ The first surface is what the public repo is optimized for. The second is availa
 ## Verification Surfaces
 
 - [START_HERE.md](./START_HERE.md) — the fastest public onboarding path
-- [docs/VISION.md](./docs/VISION.md) — current state, principles, and roadmap direction
+- [docs/VISION.md](./docs/VISION.md) — current state, principles, and public scope
 - [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md) — copy-paste CLI flows for `doctor`, `run`, `plan`, and `mcp`
 - [examples/first-success.md](./examples/first-success.md) — the shortest validation walkthrough
 - [examples/manifest-previews/backend-verified.json](./examples/manifest-previews/backend-verified.json) — golden backend preview
@@ -181,6 +181,7 @@ confidential supplemental policy stored outside the repository:
 
 ```powershell
 pwsh -File .\tools\validate-public-release.ps1 -Strict `
+  -RequireSupplementalPolicy `
   -SupplementalPolicyPath $env:BABEL_PRIVATE_SCRUB_POLICY_PATH
 ```
 

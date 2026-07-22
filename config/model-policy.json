@@ -1,0 +1,153 @@
+{
+  "version": 2,
+  "default_tier": "standard",
+  "require_explicit_opt_in_for_expensive": false,
+  "show_preflight_cost_estimate": true,
+  "hard_fail_on_unknown_model": true,
+  "cost_estimation": {
+    "default_input_tokens": 3000,
+    "default_output_tokens": 1000
+  },
+  "policy": {
+    "blocked_without_explicit_opt_in": [],
+    "allowed_default_tiers": [
+      "cheap",
+      "standard",
+      "triage",
+      "fallback",
+      "escalation"
+    ],
+    "warn_if_estimated_cost_per_run_usd_at_least": 0.25
+  },
+  "selection_policy": {
+    "cheap": {
+      "selection_reason": "Lower-cost default for lightweight routing and execution."
+    },
+    "standard": {
+      "selection_reason": "Default reasoning tier for planning and implementation."
+    },
+    "triage": {
+      "selection_reason": "Lower-cost classification and diagnosis tier."
+    },
+    "fallback": {
+      "selection_reason": "Fallback tier used when the preferred route is unavailable."
+    },
+    "escalation": {
+      "selection_reason": "Higher-reasoning tier for explicit review and escalation."
+    }
+  },
+  "family_defaults": {
+    "Codex": {
+      "cheap": "deepseek-v4-flash",
+      "standard": "deepseek-v4-pro",
+      "triage": "deepseek-v4-flash",
+      "fallback": "deepseek-v4-flash",
+      "escalation": "deepseek-v4-pro"
+    },
+    "Gemini": {
+      "cheap": "deepseek-v4-flash",
+      "standard": "deepseek-v4-pro",
+      "triage": "deepseek-v4-flash",
+      "fallback": "deepseek-v4-flash",
+      "escalation": "deepseek-v4-pro"
+    },
+    "Claude": {
+      "cheap": "deepseek-v4-flash",
+      "standard": "deepseek-v4-pro",
+      "triage": "deepseek-v4-flash",
+      "fallback": "deepseek-v4-flash",
+      "escalation": "deepseek-v4-pro"
+    },
+    "DeepSeek": {
+      "cheap": "deepseek-v4-flash",
+      "standard": "deepseek-v4-pro",
+      "triage": "deepseek-v4-flash",
+      "fallback": "deepseek-v4-flash",
+      "escalation": "deepseek-v4-pro"
+    }
+  },
+  "vendor_aliases": {
+    "claude": {
+      "maps_to": "deepseek-v4-flash",
+      "notes": "Compatibility alias."
+    },
+    "codex": {
+      "maps_to": "deepseek-v4-flash",
+      "notes": "Compatibility alias."
+    },
+    "gemini": {
+      "maps_to": "deepseek-v4-flash",
+      "notes": "Compatibility alias."
+    }
+  },
+  "models": {
+    "qwen3": {
+      "provider": "deepinfra",
+      "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+      "tier": "standard",
+      "enabled": true,
+      "selection_reason": "Backend mapping for the documented Qwen runner."
+    },
+    "deepseek": {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-pro",
+      "tier": "standard",
+      "enabled": true,
+      "selection_reason": "Compatibility alias for the documented reasoning model."
+    },
+    "deepseek-v4-flash": {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-flash",
+      "tier": "cheap",
+      "enabled": true,
+      "estimated_cost_per_1m_input": 0.14,
+      "estimated_cost_per_1m_output": 0.28,
+      "source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
+      "verified_at": "2026-07-22",
+      "expires_at": "2026-10-22",
+      "selection_reason": "Documented lower-cost API model."
+    },
+    "deepseek-v4-pro": {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-pro",
+      "tier": "standard",
+      "enabled": true,
+      "estimated_cost_per_1m_input": 0.435,
+      "estimated_cost_per_1m_output": 0.87,
+      "source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
+      "verified_at": "2026-07-22",
+      "expires_at": "2026-10-22",
+      "selection_reason": "Documented reasoning API model."
+    }
+  },
+  "stages": {
+    "orchestrator": {
+      "primary_backend_key": "deepseek-v4-flash",
+      "ordered_backend_keys": [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro"
+      ]
+    },
+    "planning": {
+      "primary_backend_key": "deepseek-v4-pro",
+      "ordered_backend_keys": [
+        "deepseek-v4-pro",
+        "deepseek-v4-flash"
+      ]
+    },
+    "qa": {
+      "primary_backend_key": "deepseek-v4-pro",
+      "ordered_backend_keys": [
+        "deepseek-v4-pro",
+        "deepseek-v4-flash"
+      ]
+    },
+    "executor": {
+      "primary_backend_key": "deepseek-v4-flash",
+      "ordered_backend_keys": [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro"
+      ]
+    }
+  }
+}

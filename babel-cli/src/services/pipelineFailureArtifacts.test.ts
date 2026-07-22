@@ -8,7 +8,7 @@ import {
 
 test('pre-execution provider schema failures produce resumable artifacts', () => {
   const artifacts = buildPreExecutionFailureArtifacts({
-    runDir: 'C:\\Workspace\\private source repo\\runs\\example',
+    runDir: 'C:\\Repos\\project repository\\runs\\example',
     error: new Error('[deepInfraApi] Zod validation failed: missing minimal_action_set'),
   });
 

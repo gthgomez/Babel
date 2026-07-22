@@ -1,5 +1,5 @@
 /**
- * Local Mode session lifecycle + inspect session-id resolution (P0-5).
+ * Local Mode session lifecycle and inspect session-id resolution.
  */
 import assert from 'node:assert/strict';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';

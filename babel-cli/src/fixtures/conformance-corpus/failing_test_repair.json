@@ -1,8 +1,7 @@
 {
   "schema_version": 1,
-  "fixture_type": "babel_parity_corpus_task",
+  "fixture_type": "babel_conformance_corpus_task",
   "task_id": "failing_test_repair",
-  "parity_task_id": "failing_test_repair",
   "title": "Failing test repair",
   "target_file": "src/math.js",
   "verifier_command": "npm test",

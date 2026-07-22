@@ -29,10 +29,10 @@ function writeTrustDemoRepo(root: string, implementation: string): void {
   ].join('\n'), 'utf-8');
 }
 
-test('lite trust demo fixture describes the private fix-verifier-undo loop', () => {
+test('lite trust demo fixture describes the public fix-verifier-undo loop', () => {
   const fixture = readLiteTrustDemoFixture(resolveLiteTrustDemoFixturePath());
   assert.equal(fixture.fixture_type, 'babel_lite_trust_demo');
-  assert.equal(fixture.visibility, 'private');
+  assert.equal(fixture.visibility, 'public_example');
   assert.equal(fixture.target_file, 'src/math.js');
   assert.equal(fixture.verifier_command, 'npm test');
 });

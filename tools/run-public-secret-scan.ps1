@@ -3,7 +3,8 @@ param(
   [switch]$Strict,
   [switch]$RequireExternalScanner,
   [string]$ReportPath = '',
-  [string]$SupplementalPolicyPath = ''
+  [string]$SupplementalPolicyPath = '',
+  [switch]$RequireSupplementalPolicy
 )
 
 $ErrorActionPreference = 'Stop'
@@ -121,6 +122,7 @@ if ($Strict) {
 if (-not [string]::IsNullOrWhiteSpace($SupplementalPolicyPath)) {
   $scrubArgs += @('-SupplementalPolicyPath', $SupplementalPolicyPath)
 }
+if ($RequireSupplementalPolicy) { $scrubArgs += '-RequireSupplementalPolicy' }
 
 & $shellPath -NoProfile -ExecutionPolicy Bypass -File $scrubScriptPath @scrubArgs
 $scrubExitCode = $LASTEXITCODE

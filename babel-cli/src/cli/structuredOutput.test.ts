@@ -446,7 +446,7 @@ describe('Babel Lite result output', () => {
     assert.doesNotMatch(human, /selected_lane|schema_retries|support_path/);
   });
 
-  it('caps changed files and keeps absolute paths under Evidence', () => {
+  it('caps changed files and keeps public paths repository-relative', () => {
     const payload = buildRunResultPayload(makePipelineResult(), {
       task: 'touch many files',
       mode: 'verified',
@@ -456,10 +456,10 @@ describe('Babel Lite result output', () => {
     const human = stripAnsi(formatRunResultHuman(payload));
     const changedSection = human.match(/\nChanged:\n(?<section>[\s\S]*?)\n\nVerified:/)?.groups?.['section'] ?? '';
 
-    assert.match(changedSection, /- src\/file-0\.ts/);
+    assert.match(changedSection, /- \.\/src\/file-0\.ts/);
     assert.match(changedSection, /\+2 more/);
-    assert.doesNotMatch(changedSection, /C:\/Workspace\/private source repo/);
-    assert.match(human, /Evidence:\n- Run: C:\/Workspace\/private source repo\/runs\/run-001/);
+    assert.doesNotMatch(changedSection, /[A-Z]:\//i);
+    assert.match(human, /Evidence:\n- Run: \.\/runs\/run-001/);
   });
 
   it('renders ask targets before answers without changing machine payload fields', () => {
@@ -481,7 +481,7 @@ describe('Babel Lite result output', () => {
     };
 
     const human = stripAnsi(formatRunResultHuman(payload));
-    assert.match(human, /^Babel Ask Ready\n\nTarget:\nC:\/Workspace\/private source repo\n\nAnswer:\nBabel is a prompt operating system/);
+    assert.match(human, /^Babel Ask Ready\n\nTarget:\n\.\n\nAnswer:\nBabel is a prompt operating system/);
     assert.deepEqual(payload['scope'], {
       project_root: '.',
       allowed_write_paths: [],

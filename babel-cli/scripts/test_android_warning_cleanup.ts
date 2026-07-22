@@ -11,7 +11,7 @@ function assert(condition: unknown, message: string): asserts condition {
 function buildManifest() {
   return OrchestratorManifestSchema.parse({
     orchestrator_version: '9.0',
-    target_project: 'example_mobile_finance',
+    target_project: 'example_mobile_reference',
     analysis: {
       task_summary: 'warning cleanup regression',
       task_category: 'Mobile',
@@ -48,7 +48,7 @@ function buildManifest() {
       domain_id: 'domain_android_kotlin',
       skill_ids: ['skill_android_app_bundle', 'skill_android_release_build'],
       model_adapter_id: 'adapter_codex_balanced',
-      project_overlay_id: 'overlay_example_mobile_finance',
+      project_overlay_id: 'overlay_example_mobile_reference',
       task_overlay_ids: [],
       pipeline_stage_ids: ['pipeline_qa_reviewer', 'pipeline_cli_executor'],
     },
@@ -58,10 +58,10 @@ function buildManifest() {
       strict_conflict_mode: 'error',
       task_shape_profile: 'full',
     },
-    prompt_manifest: ['C:\\Workspace\\private source repo\\BABEL_BIBLE.md'],
+    prompt_manifest: ['C:\\Repos\\project repository\\BABEL_BIBLE.md'],
     compiled_artifacts: {
       selected_entry_ids: ['behavioral_core_v7'],
-      prompt_manifest: ['C:\\Workspace\\private source repo\\BABEL_BIBLE.md'],
+      prompt_manifest: ['C:\\Repos\\project repository\\BABEL_BIBLE.md'],
       token_budget_total: 1,
       token_budget_missing: [],
       token_budget_by_entry: { behavioral_core_v7: 1 },
@@ -69,12 +69,12 @@ function buildManifest() {
     },
     handoff_payload: {
       user_request: [
-        'Warning cleanup only for the Example Finance Forecast Android port in C:\\Workspace\\Example-Mobile-Finance.',
+        'Warning cleanup only for the reference source Android port in C:\\Repos\\Example-Mobile-Application.',
         'Fix these compiler warnings without changing behavior, using the exact files and exact paths:',
-        'C:\\Workspace\\Example-Mobile-Finance\\app\\src\\main\\java\\com\\example\\app\\MainActivity.kt,',
-        'C:\\Workspace\\Example-Mobile-Finance\\app\\src\\main\\java\\com\\example\\app\\data\\AppDatabase.kt,',
-        'C:\\Workspace\\Example-Mobile-Finance\\app\\src\\main\\java\\com\\example\\app\\domain\\DomainRules.kt,',
-        'and C:\\Workspace\\Example-Mobile-Finance\\app\\src\\main\\java\\com\\example\\app\\ui\\AddTransactionScreen.kt.',
+        'C:\\Repos\\Example-Mobile-Application\\app\\src\\main\\java\\com\\example\\app\\MainActivity.kt,',
+        'C:\\Repos\\Example-Mobile-Application\\app\\src\\main\\java\\com\\example\\app\\data\\AppDatabase.kt,',
+        'C:\\Repos\\Example-Mobile-Application\\app\\src\\main\\java\\com\\example\\app\\domain\\DomainRules.kt,',
+        'and C:\\Repos\\Example-Mobile-Application\\app\\src\\main\\java\\com\\example\\app\\ui\\AddTransactionScreen.kt.',
       ].join(' '),
       system_directive: 'Resolve instruction_stack against prompt_catalog.yaml, expand dependencies, compile prompt_manifest, then load the compiled files in order.',
     },

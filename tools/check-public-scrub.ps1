@@ -3,7 +3,8 @@ param(
   [switch]$Strict,
   [string]$ReportPath = '',
   [string]$PolicyPath = '',
-  [string]$SupplementalPolicyPath = ''
+  [string]$SupplementalPolicyPath = '',
+  [switch]$RequireSupplementalPolicy
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,11 +24,23 @@ try {
 } catch {
   throw "Malformed security policy: $PolicyPath"
 }
+function Test-ValidRegexList {
+  param([object[]]$Values)
+  foreach ($value in @($Values)) {
+    if ($value -isnot [string] -or [string]::IsNullOrWhiteSpace([string]$value)) { return $false }
+    try { [regex]::new([string]$value) | Out-Null } catch { return $false }
+  }
+  return $true
+}
+if (-not (Test-ValidRegexList @($syncPolicy.forbidden_private_identifiers))) { throw 'The public scrub policy contains an invalid identifier rule.' }
 
 $supplementalWasConfigured = -not [string]::IsNullOrWhiteSpace($SupplementalPolicyPath)
 if (-not $supplementalWasConfigured -and -not [string]::IsNullOrWhiteSpace($env:BABEL_PRIVATE_SCRUB_POLICY_PATH)) {
   $SupplementalPolicyPath = $env:BABEL_PRIVATE_SCRUB_POLICY_PATH
   $supplementalWasConfigured = $true
+}
+if ($RequireSupplementalPolicy -and -not $supplementalWasConfigured) {
+  throw 'A supplemental scrub policy is required but was not configured.'
 }
 $supplementalPolicy = $null
 if ($supplementalWasConfigured) {
@@ -38,6 +51,14 @@ if ($supplementalWasConfigured) {
     $supplementalPolicy = Get-Content -Raw -LiteralPath $SupplementalPolicyPath | ConvertFrom-Json
   } catch {
     throw 'Configured supplemental scrub policy is malformed.'
+  }
+  if (-not (Test-ValidRegexList @($supplementalPolicy.forbidden_private_identifiers))) {
+    throw 'Configured supplemental scrub policy has an invalid identifier schema.'
+  }
+  if ($RequireSupplementalPolicy -and
+      @($supplementalPolicy.forbidden_private_identifiers).Count -eq 0 -and
+      @($supplementalPolicy.forbidden_dependency_fingerprints).Count -eq 0) {
+    throw 'The required supplemental scrub policy contains no denylist entries.'
   }
 }
 $excludeDirectoryNames = @($syncPolicy.exclude_directory_names)
@@ -68,30 +89,14 @@ if ($null -ne $supplementalPolicy) {
 }
 
 function Get-PublicScrubFiles {
-  Get-ChildItem -LiteralPath . -Recurse -Force -File | Where-Object {
-    $relative = $_.FullName.Substring((Get-Location).Path.Length).TrimStart('\', '/')
-    if (-not $relative) {
-      return $false
-    }
-    if ($excludeFileNames -contains $_.Name) {
-      return $false
-    }
-    $segments = $relative -split '[\\/]'
-    if ($segments | Where-Object { $excludeDirectoryNames -contains $_ }) {
-      return $false
-    }
-    return $true
-  }
+  foreach ($record in @($inventory.records)) { Get-Item -LiteralPath $record.full_path }
 }
 
 # Content leak patterns: private identifiers + paths. Allowed public project names
 # (for example, the explicitly public GPCGuard canary) are not in this list.
 # They remain forbidden as dependency fingerprints via lockfile/package rules.
 $genericHardcodedPatterns = @(
-  'C:\\Users\\',
-  'C:/Users/',
-  'C:\\Workspace\\',
-  'C:/Workspace/',
+  '(?i)[A-Z]:[\\/]+(?:Users|Workspace|Projects)[\\/]+',
   '\.supabase\.co'
 )
 if ($forbiddenPrivateIdentifiers.Count -gt 0) {
@@ -108,6 +113,10 @@ if ($allowedPublicProjectNames.Count -gt 0) {
 }
 $supplementalPatterns = @($supplementalPrivateIdentifiers)
 Write-Verbose ("Loaded {0} public and {1} supplemental identifier patterns." -f $patterns.Count, $supplementalPatterns.Count)
+$commonModule = Join-Path $RepoRoot 'tools/security/tracked-scan-common.ps1'
+if (-not (Test-Path -LiteralPath $commonModule -PathType Leaf)) { throw "Tracked scan module not found: $commonModule" }
+. $commonModule
+$inventory = Get-TrackedScanInventory -RepoRoot $RepoRoot -BinaryAllowlist @($syncPolicy.binary_asset_allowlist)
 
 function Is-LegacyPlaceholderFinding {
   param([string]$RelativePath)
@@ -137,6 +146,9 @@ function Get-ShannonEntropy {
 
 $hardFindings = New-Object System.Collections.Generic.List[string]
 $warningFindings = New-Object System.Collections.Generic.List[string]
+foreach ($issue in @($inventory.issues)) {
+  $hardFindings.Add(("unscannable-tracked-file: {0}:0 ({1})" -f $issue.path, $issue.reason))
+}
 
 function Write-ScrubReport {
   param(
@@ -200,71 +212,21 @@ function Get-LeakSearchResults {
   if ($SearchPatterns.Count -eq 0) {
     return @{ Results = @(); ExitCode = 1; Engine = 'none' }
   }
-  if ($null -ne $rgCommand) {
-    Write-Verbose ("Scanning {0} identifier patterns with policy-files={1}." -f $SearchPatterns.Count, [bool]$IncludePolicyFiles)
-    $joinedPattern = ($SearchPatterns -join '|')
-    $args = @(
-      '-n',
-      '--ignore-case',
-      '-e', $joinedPattern,
-      '.'
-    )
-    foreach ($directoryName in $excludeDirectoryNames) {
-      $args = @('--glob', "!$directoryName/**") + $args
-      $args = @('--glob', "!**/$directoryName/**") + $args
-    }
-    foreach ($fileName in $excludeFileNames) {
-      $args = @('--glob', "!$fileName") + $args
-      $args = @('--glob', "!**/$fileName") + $args
-    }
-    $args = @('--glob', '!tools/tests/**') + $args
-    if (-not $IncludePolicyFiles) {
-      $args = @('--glob', '!tools/check-public-scrub.ps1') + $args
-      $args = @('--glob', '!tools/security/policy.json') + $args
-      $args = @('--glob', '!tools/run-public-secret-scan.ps1') + $args
-      $args = @('--glob', '!tools/check-public-content-policy.ps1') + $args
-      $args = @('--glob', '!tools/check-canonical-independence.ps1') + $args
-      $args = @('--glob', '!tools/security/public-content-policy.json') + $args
-    }
-
-    $results = & $rgCommand.Source @args
-    $exitCode = $LASTEXITCODE
-
-    if ($exitCode -gt 1) {
-      Write-Error "ripgrep failed with exit code $exitCode"
-    }
-
-    return @{
-      Results = @($results)
-      ExitCode = $exitCode
-      Engine = 'rg'
-    }
-  }
-
-  Write-Host 'ripgrep (rg) not found; falling back to Select-String for scrub scan.' -ForegroundColor Yellow
   $results = New-Object System.Collections.Generic.List[string]
-  foreach ($file in Get-PublicScrubFiles) {
-    $relative = $file.FullName.Substring((Get-Location).Path.Length).TrimStart('\', '/').Replace('\', '/')
-    if ($relative.StartsWith('tools/tests/', [StringComparison]::OrdinalIgnoreCase)) { continue }
-    if (-not $IncludePolicyFiles -and ($relative -eq 'tools/check-public-scrub.ps1' -or
-        $relative -eq 'tools/security/policy.json' -or
-        $relative -eq 'tools/run-public-secret-scan.ps1' -or
-        $relative -eq 'tools/check-public-content-policy.ps1' -or
-        $relative -eq 'tools/check-canonical-independence.ps1' -or
-        $relative -eq 'tools/security/public-content-policy.json')) {
-      continue
-    }
-
-    $matches = Select-String -LiteralPath $file.FullName -Pattern $SearchPatterns -AllMatches -CaseSensitive:$false -ErrorAction SilentlyContinue
-    foreach ($match in $matches) {
-      $results.Add((".\{0}:{1}:{2}" -f $relative, $match.LineNumber, $match.Line.Trim()))
+  foreach ($record in @($inventory.records)) {
+    for ($index = 0; $index -lt $record.lines.Count; $index++) {
+      $line = [string]$record.lines[$index]
+      if ($line -match ($SearchPatterns -join '|')) {
+        $excepted = Test-PolicyException -Exceptions @($syncPolicy.identifier_exceptions) -RuleId 'identifier' -Path $record.path -Line $line
+        if (-not $excepted) { $results.Add(("{0}:{1}:" -f $record.path, ($index + 1))) }
+      }
     }
   }
 
   return @{
     Results = @($results)
     ExitCode = $(if ($results.Count -gt 0) { 0 } else { 1 })
-    Engine = 'select-string'
+    Engine = 'tracked-inventory'
   }
 }
 $baselineLeakScan = Get-LeakSearchResults -SearchPatterns $patterns

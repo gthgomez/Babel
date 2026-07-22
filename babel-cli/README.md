@@ -19,7 +19,7 @@ normal local runs.
 - `src/pipeline.ts` remains monolithic and needs decomposition.
 - Verifier-gated completion is scoped to declared or inferred verifier contracts, not universal for every run.
 - `doctor` and the reliability matrix need more cross-environment hardening.
-- No comparative benchmark currently establishes parity or superiority against other coding-agent CLIs.
+- No public evidence supports comparative claims about other coding tools.
 
 ## Source of truth
 
@@ -63,7 +63,7 @@ Autonomous dry-run smoke should keep mutations shadowed and avoid optional pruni
 ```powershell
 $env:BABEL_DRY_RUN='true'
 $env:BABEL_DEEPINFRA_REQUEST_TIMEOUT_MS='120000'
-node --env-file=.\babel-cli\.env .\babel-cli\dist\index.js run --project example_mobile_finance --mode autonomous --json "Read PROJECT_CONTEXT.md and create a new file named babel-autonomous-smoke.txt containing one sentence that says the smoke test passed."
+node --env-file=.\babel-cli\.env .\babel-cli\dist\index.js run --project example_mobile_reference --mode autonomous --json "Read PROJECT_CONTEXT.md and create a new file named babel-autonomous-smoke.txt containing one sentence that says the smoke test passed."
 ```
 
 - `BABEL_DEEPINFRA_REQUEST_TIMEOUT_MS` is a per-request abort timeout; timed-out model calls cascade to the next configured backend. The default is `120000`.
@@ -90,14 +90,14 @@ Inside the REPL, the short path is:
 npm ci
 npm run typecheck
 npm run build
-npm run benchmark:product
+npm run benchmark:readiness
 ```
 
-`npm run benchmark:product` writes a dated product-gap artifact under
-`../runs/benchmarks/`. The same harness is available from the compiled CLI as:
+`npm run benchmark:readiness` writes a local readiness report under the ignored
+runtime-results directory. The same harness is available from the compiled CLI as:
 
 ```bash
-node dist/index.js benchmark product --json
+node dist/index.js benchmark readiness --json
 ```
 
 The automated reliability loop is available from the compiled CLI:
@@ -109,27 +109,25 @@ node dist/index.js benchmark loop --readiness fast --json
 node dist/index.js benchmark analyze latest --json
 ```
 
-`benchmark loop` gates local readiness, reads Terminal-Bench history from a
-configured benchmark results directory, and emits the next targeted
-or full benchmark command. Promotion remains blocked until the latest full
-`pilot10` run reaches at least `5/10`.
+`benchmark loop` evaluates local readiness, reads benchmark history from a
+configured results directory, and recommends the next targeted or full
+benchmark command. Suite selection and promotion thresholds belong to the
+calling environment rather than the public package documentation.
 
 `--readiness fast|full|release` controls the local gate. Fast runs typecheck,
-unit tests, and build. Full adds dist, doctor, Docker, and product benchmark.
+unit tests, and build. Full adds dist, doctor, Docker, and release-readiness checks.
 Release adds source provenance.
 
 `benchmark analyze` classifies the latest run or a provided run directory and
-emits a repair work packet with failure class, focus task, likely owner,
-evidence paths, and suggested verification commands.
+emits a repair report with the failure class, focus task, evidence paths, and
+suggested verification commands.
 
-`benchmark loop` writes persistent state to `../runs/benchmarks/loop-state.json`
-and `../runs/benchmarks/loop-events.jsonl`. Use `--deadline <iso>` and
-`--min-remaining-ms <n>` to generate deadline-aware benchmark commands.
+Generated benchmark reports, state, event logs, and raw run output are local
+runtime artifacts. They are ignored by Git and are not public release evidence
+unless a maintainer deliberately publishes a sanitized, reproducible report.
 
-The command is intentionally a gate, not a self-editing daemon. In the current
-workflow Codex manages the outer loop: run the generated benchmark command,
-inspect artifacts after it finishes, patch `src/`, verify locally, run the
-targeted canary, and continue to a full pilot only when the gate says to.
+The command is a readiness aid, not a self-editing daemon. Review its output and
+verification evidence before changing source or making release decisions.
 
 ## Daily Agent Profiles
 

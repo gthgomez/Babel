@@ -21,6 +21,9 @@ try {
 } catch {
   throw "Public content policy is malformed: $PolicyPath"
 }
+$commonModule = Join-Path $RepoRoot 'tools/security/tracked-scan-common.ps1'
+if (-not (Test-Path -LiteralPath $commonModule -PathType Leaf)) { throw "Tracked scan module not found: $commonModule" }
+. $commonModule
 
 function Convert-ToRelativePath {
   param([string]$Path)
@@ -41,17 +44,8 @@ function Test-IsExcluded {
 }
 
 function Get-TrackedActiveFiles {
-  $paths = @(& git -C $RepoRoot ls-files)
-  if ($LASTEXITCODE -ne 0) { throw 'git ls-files failed; the content policy requires a Git worktree.' }
-  foreach ($relative in $paths) {
-    $normalized = $relative.Replace('\', '/')
-    if (Test-IsExcluded $normalized) { continue }
-    $extension = [IO.Path]::GetExtension($normalized).ToLowerInvariant()
-    if (-not (@($policy.active_extensions) -contains $extension)) { continue }
-    $fullPath = Join-Path $RepoRoot $normalized
-    if (Test-Path -LiteralPath $fullPath -PathType Leaf) {
-      [pscustomobject]@{ Relative = $normalized; Full = $fullPath; Extension = $extension }
-    }
+  foreach ($record in @($inventory.records)) {
+    [pscustomobject]@{ Relative = $record.path; Full = $record.full_path; Extension = $record.extension; Lines = $record.lines }
   }
 }
 
@@ -59,6 +53,36 @@ $findings = [Collections.Generic.List[object]]::new()
 function Add-Finding {
   param([string]$Id, [string]$Category, [string]$Path, [int]$Line)
   $findings.Add([pscustomobject]@{ id = $Id; category = $Category; path = $Path; line = $Line })
+}
+$validBinaryAllowlist = [Collections.Generic.List[object]]::new()
+foreach ($entry in @($policy.binary_asset_allowlist)) {
+  if (($entry.PSObject.Properties.Name -contains 'path') -and ($entry.PSObject.Properties.Name -contains 'sha256') -and
+      ($entry.PSObject.Properties.Name -contains 'rationale') -and -not [string]::IsNullOrWhiteSpace([string]$entry.path) -and [string]$entry.sha256 -match '^[0-9a-fA-F]{64}$' -and
+      -not [string]::IsNullOrWhiteSpace([string]$entry.rationale)) { $validBinaryAllowlist.Add($entry) }
+  else { Add-Finding -Id 'PCFG003' -Category 'invalid-binary-asset-allowlist' -Path 'tools/security/public-content-policy.json' -Line 0 }
+}
+$validGeneratedAllowlist = [Collections.Generic.List[object]]::new()
+foreach ($entry in @($policy.generated_artifact_allowlist)) {
+  if (@('path','producer','sanitization','regeneration','rationale' | Where-Object { $entry.PSObject.Properties.Name -notcontains $_ }).Count -eq 0 -and
+      -not [string]::IsNullOrWhiteSpace([string]$entry.path) -and -not [string]::IsNullOrWhiteSpace([string]$entry.producer) -and
+      -not [string]::IsNullOrWhiteSpace([string]$entry.sanitization) -and -not [string]::IsNullOrWhiteSpace([string]$entry.regeneration) -and
+      -not [string]::IsNullOrWhiteSpace([string]$entry.rationale)) { $validGeneratedAllowlist.Add($entry) }
+  else { Add-Finding -Id 'PCFG004' -Category 'invalid-generated-artifact-allowlist' -Path 'tools/security/public-content-policy.json' -Line 0 }
+}
+$inventory = Get-TrackedScanInventory -RepoRoot $RepoRoot -BinaryAllowlist @($validBinaryAllowlist)
+foreach ($issue in @($inventory.issues)) { Add-Finding -Id 'PCONT010' -Category ("unscannable-tracked-file:{0}" -f $issue.reason) -Path $issue.path -Line 0 }
+foreach ($record in @($inventory.records)) {
+  foreach ($pattern in @($policy.forbidden_generated_path_patterns)) {
+    if ($record.path -match [string]$pattern) {
+      $allowed = @($validGeneratedAllowlist | Where-Object {
+        $_.path -eq $record.path -and -not [string]::IsNullOrWhiteSpace([string]$_.producer) -and
+        -not [string]::IsNullOrWhiteSpace([string]$_.sanitization) -and -not [string]::IsNullOrWhiteSpace([string]$_.regeneration) -and
+        -not [string]::IsNullOrWhiteSpace([string]$_.rationale)
+      }).Count -gt 0
+      if (-not $allowed) { Add-Finding -Id 'PCONT011' -Category 'forbidden-or-undeclared-generated-artifact' -Path $record.path -Line 0 }
+      break
+    }
+  }
 }
 
 $validTemporaryExceptions = [Collections.Generic.List[object]]::new()
@@ -83,21 +107,31 @@ function Test-IsTemporarilyExcepted {
   }
   return $false
 }
+$validFixtureExceptions = [Collections.Generic.List[object]]::new()
+foreach ($entry in @($policy.fixture_exceptions)) {
+  if (-not [string]::IsNullOrWhiteSpace([string]$entry.id) -and -not [string]::IsNullOrWhiteSpace([string]$entry.rule_id) -and
+      -not [string]::IsNullOrWhiteSpace([string]$entry.path) -and -not [string]::IsNullOrWhiteSpace([string]$entry.pattern) -and
+      -not [string]::IsNullOrWhiteSpace([string]$entry.rationale)) { $validFixtureExceptions.Add($entry) }
+  else { Add-Finding -Id 'PCFG002' -Category 'invalid-fixture-exception' -Path 'tools/security/public-content-policy.json' -Line 0 }
+}
 
 $titles = @{}
 foreach ($file in @(Get-TrackedActiveFiles)) {
-  $lines = @(Get-Content -LiteralPath $file.Full -ErrorAction Stop)
+  $lines = @($file.Lines)
+  $isHistorical = Test-IsExcluded $file.Relative
   $hasTitle = $false
   for ($index = 0; $index -lt $lines.Count; $index++) {
     $line = [string]$lines[$index]
     $lineNumber = $index + 1
     foreach ($rule in @($policy.rules)) {
-      if ($line -match [string]$rule.pattern -and -not (Test-IsTemporarilyExcepted -RuleId ([string]$rule.id) -Path $file.Relative -Line $line)) {
+      $excepted = (Test-IsTemporarilyExcepted -RuleId ([string]$rule.id) -Path $file.Relative -Line $line) -or
+        (Test-PolicyException -Exceptions @($validFixtureExceptions) -RuleId ([string]$rule.id) -Path $file.Relative -Line $line)
+      if (-not $isHistorical -and $line -match [string]$rule.pattern -and -not $excepted) {
         Add-Finding -Id ([string]$rule.id) -Category ([string]$rule.category) -Path $file.Relative -Line $lineNumber
       }
     }
 
-    if (@($policy.claim_extensions) -contains $file.Extension -and $line -match [string]$policy.absolute_claim.pattern) {
+    if (-not $isHistorical -and @($policy.claim_extensions) -contains $file.Extension -and $line -match [string]$policy.absolute_claim.pattern) {
       $allowed = $false
       foreach ($entry in @($policy.absolute_claim.allowlist)) {
         if ([string]::IsNullOrWhiteSpace([string]$entry.rationale) -or [string]::IsNullOrWhiteSpace([string]$entry.evidence)) { continue }
@@ -108,7 +142,7 @@ foreach ($file in @(Get-TrackedActiveFiles)) {
       }
     }
 
-    if ($file.Extension -eq '.md') {
+    if (-not $isHistorical -and $file.Extension -eq '.md') {
       if (-not $hasTitle -and $line -match '^#\s+(.+?)\s*$') {
         $titleKey = $Matches[1].Trim().ToLowerInvariant() -replace '\s+', ' '
         if (-not $titles.ContainsKey($titleKey)) { $titles[$titleKey] = [Collections.Generic.List[object]]::new() }

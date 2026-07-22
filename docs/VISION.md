@@ -33,20 +33,20 @@ What is available but more advanced:
 5. **Integration before mutation.** Read-only inspection surfaces should come before write-capable automation.
 6. **Public-safe by default.** Community docs and examples must not depend on private paths, names, credentials, or local operator notes.
 
-## Near-Term Direction
+## Maintenance Priorities
 
-The canonical Babel repository should keep improving in four lanes:
+Public contributions are evaluated against four ongoing priorities:
 
 - **Onboarding:** clearer first-success flows, less setup ambiguity, better examples.
 - **Resolver quality:** stronger stack selection, fewer accidental layers, better conflict explanations.
 - **CLI usability:** shorter commands, clearer diagnostics, stronger `doctor` output.
 - **Release safety:** stronger source-integrity checks, scanner enforcement, and reproducible releases.
 
-## Longer-Term Direction
+## Compatibility Principles
 
-The long-term shape is a community prompt layer that can plug into editors, CLIs, MCP clients, coding agents, and local workflows.
+Babel is designed as a community prompt layer that can integrate with editors, CLIs, MCP clients, coding agents, and local workflows.
 
-That means Babel should become:
+Public interfaces should remain:
 
 - understandable enough for a new user
 - strict enough for a maintainer

@@ -118,7 +118,7 @@ From a new-user standpoint, the product hierarchy should be:
 3. inspect
 4. run
 
-## Public Proof Artifacts
+## Public Verification Surfaces
 
 - [examples/manifest-previews/backend-verified.json](../../examples/manifest-previews/backend-verified.json)
 - [examples/manifest-previews/mobile-direct.json](../../examples/manifest-previews/mobile-direct.json)

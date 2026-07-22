@@ -200,10 +200,10 @@ const CHECK_DEFINITIONS: Record<string, {
     command: ['docker', 'info', '--format', '{{json .ServerVersion}}'],
     timeoutMs: 30_000,
   },
-  product_benchmark: {
-    id: 'product_benchmark',
-    title: 'Product benchmark with readiness gate',
-    command: npmRunCommand('benchmark:product'),
+  release_readiness: {
+    id: 'release_readiness',
+    title: 'Release-readiness benchmark',
+    command: npmRunCommand('benchmark:readiness'),
     timeoutMs: 180_000,
   },
   source_provenance: {
@@ -216,8 +216,8 @@ const CHECK_DEFINITIONS: Record<string, {
 
 const READINESS_PROFILES: Record<BenchmarkLoopReadinessProfile, string[]> = {
   fast: ['source_typecheck', 'unit_tests', 'build'],
-  full: ['source_typecheck', 'unit_tests', 'build', 'dist_check', 'cli_doctor', 'terminal_bench_docker', 'product_benchmark'],
-  release: ['source_typecheck', 'unit_tests', 'build', 'dist_check', 'source_provenance', 'cli_doctor', 'terminal_bench_docker', 'product_benchmark'],
+  full: ['source_typecheck', 'unit_tests', 'build', 'dist_check', 'cli_doctor', 'terminal_bench_docker', 'release_readiness'],
+  release: ['source_typecheck', 'unit_tests', 'build', 'dist_check', 'source_provenance', 'cli_doctor', 'terminal_bench_docker', 'release_readiness'],
 };
 
 export function buildBenchmarkImprovementLoopReport(

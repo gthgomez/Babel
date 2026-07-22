@@ -3,44 +3,9 @@ catalog_scope: babel_prompt_library
 maintainer: control_plane
 root: "."
 last_updated: "2026-07-22"
-# Pass 35 additions (2026-04-30): HD-2D mobile rendering/JRPG UX skills and mobile-safe Godot HD-2D routing
-# Pass 34 additions (2026-04-29): Android game/TV UX and Godot UI/runtime/testing/export/input/performance skills plus game routing
-# Pass 33 additions (2026-04-25): 2026 Modernization Sweep (Web, Backend, Android, Mobile, Payments, Testing)
-# Pass 32 additions (2026-04-25): domain_godot_game_dev, Godot skills, Tailwind v4, Framer Motion, Fluid Typography, Agent Coordination triad, overlay_example_game_suite
-# Pass 1 additions (2026-03-28): domain_python_backend, skill_deno_edge_functions, skill_sse_streaming
-# Pass 2 additions (2026-03-28): domain_llm_router, skill_prisma_orm, skill_stripe_webhook
-# Pass 3 additions (2026-03-28): skill_playwright_e2e, skill_vite_react, skill_multi_agent_pipeline
-# Pass 4 additions (2026-03-28): skill_android_app_bundle, android mobile routing cleanup
-# Pass 5 additions (2026-03-29): skill_android_saf, skill_android_instrumented_testing, skill_android_pdf_processing
-# Pass 6 additions (2026-03-29): claim-audit governance skills, adversarial claims audit overlays, corrected example_saas_backend overlay
-# Pass 7 additions (2026-03-29): domain_product_audit first-class routing for claim/reality work
-# Pass 8 additions (2026-03-30): skill_nodejs_cli — Node.js CLI tool patterns (ESM path resolution, arg parsing, exit codes, stdout/stderr, graceful error handling)
-# Pass 9 additions (2026-03-29): skill_npm_oss_release, skill_skill_authoring, skill_capability_gap_review, skill_babel_catalog_tuning
-# Pass 10 additions (2026-03-30): skill_public_export_hardening, sync-skill-catalog tool, skill-catalog sync workflow
-# Pass 11 additions (2026-03-30): skill_outbound_truth_redlining, skill_prompt_runtime_continuity
-# Pass 12 additions (2026-03-30): skill_in_app_truth_sweep for app-wide user-facing scope cleanup after product truth is verified
-# Pass 13 additions (2026-03-30): skill_repo_boundary_release_hygiene, skill_github_release_batching for safe multi-repo GitHub release batching
-# Pass 14 additions (2026-03-30): skill_private_source_repo_discipline, skill_derived_public_release_gate for paired private/public repo targeting
-# Pass 15 additions (2026-03-30): android lane hardening skills for classification, navigation, state, test enforcement, platform APIs, performance, and AI-android task overlay
-# Pass 16 additions (2026-03-31): skill_untrusted_input_guard, skill_autonomous_agent_state_machine, skill_async_task_delivery — autonomous agent governance triad for example_autonomous_agent hardening
-# Pass 17 additions (2026-03-31): skill_android_testing_strategy — thin orchestration layer above the four Android testing skills; routes test surface, resolves ViewModel/dispatcher/AGP ambiguity, defines load order
-# Pass 18 additions (2026-04-01): skill_run_artifact_inspection — read-only protocol for Babel evidence bundle inspection, stack review, manifest inventory, and honest summary-artifact handling
-# Pass 19 additions (2026-04-01): skill_android_ui_audit_review — grounded Android Compose UI audit/review skill for findings-first critique and prioritized change plans
-# Pass 20 additions (2026-04-02): cognition skills for adaptive depth, epistemic calibration, and compact exploration outside domain_research
-# Pass 21 additions (2026-04-02): skill_dirty_worktree_triage plus tighter release-hygiene guidance for dirty repos, local helpers, and advisory hook failures
-# Pass 22 additions (2026-04-03): skill_supabase_rls_drift_audit plus governance hardening for live DB drift, partition grants, remote verification, and remote-only state debt
-# Pass 23 additions (2026-04-03): skill_evidence_field_consistency_audit for response→DB→RPC→UI mismatch tracing on live events
-# Pass 24 additions (2026-04-03): session-model reality audit, exposed-schema hardening, auth enumeration resistance, and security release gating skills
-# Pass 25 additions (2026-04-07): skill_gradle_wrapper for wrapper bootstrap and launcher restoration
-# Pass 26 additions (2026-04-13): skill_android_room — Room database patterns (entities, DAOs, migrations, repository, integer-cents rule)
-# Pass 27 additions (2026-04-20): skill_x_marketing_manager — X-native launch sequencing, attachment strategy, and marketing-manager voice
-# Pass 28 additions (2026-04-20): skill_x_thread_reply_strategy — X-native thread and reply-chain sequencing companion
-# Pass 29 additions (2026-04-20): skill_x_engagement_reply_strategy — X reply intent selection for engagement vs technical support
-# Pass 30 additions (2026-04-20): skill_x_category_clarity — X cold-reader clarity and plain-English category framing
-# Pass 31 additions (2026-04-24): skill_memory_extraction — durable memory extraction from run evidence and retrospectives
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SKILL BOUNDARY MAP  (Fix F1 — critique remediation 2026-04-26)
+# SKILL BOUNDARY MAP
 # When two skills overlap in purpose, use this table to pick the right one.
 # Loading both is never wrong on safety grounds, but wastes token budget.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -772,15 +737,15 @@ entries:
     conflicts: []
     token_budget: 350
 
-  - id: skill_public_export_hardening
+  - id: skill_publication_sanitization
     layer: skill
-    path: 02_Skills/Governance/Public-Export-Hardening-v1.md
+    path: 02_Skills/Governance/Publication-Sanitization-v1.md
     description: >
-      Export hardening for intentionally paired private-source and derived-public
-      repos. Requires an explicit non-Babel repo-role map, declared export tools,
-      scrub validation, and intentional replacement of private identifiers.
+      Controlled sanitization for a separately managed publication target.
+      Classifies publication surfaces, uses target-owned transformation rules,
+      and requires scrub, content-policy, and release validation evidence.
     status: active
-    tags: [governance:safety, skill, utility:babel, utility:public-export, utility:sanitization, utility:scrub]
+    tags: [governance:safety, skill, utility:content-policy, utility:publication, utility:sanitization, utility:scrub]
     dependencies: []
     conflicts: []
     token_budget: 325
@@ -933,33 +898,32 @@ entries:
     conflicts: []
     token_budget: 325
 
-  - id: skill_private_source_repo_discipline
+  - id: skill_repository_role_discipline
     layer: skill
-    path: 02_Skills/Governance/Private-Source-Repo-Discipline-v1.md
+    path: 02_Skills/Governance/Repository-Role-Discipline-v1.md
     description: >
-      Repo-role discipline for paired private/public systems. Forces an explicit
-      source-of-truth versus derived-public map, verifies remote roles before
-      GitHub actions, and preserves canonical gthgomez/Babel as a source rather
-      than treating private Babel consumers as publishers.
+      Repository-role discipline for multi-repository workspaces. Maps
+      authoritative, publication-target, and standalone repositories and
+      verifies content policy and remote role before Git operations.
     status: active
-    tags: [governance:safety, skill, utility:git, utility:github, utility:private-repo, utility:public-repo, utility:remote-role]
+    tags: [governance:safety, skill, utility:git, utility:github, utility:publication, utility:remote-role, utility:repository-role]
     dependencies:
       - skill_repo_boundary_release_hygiene
     conflicts: []
     token_budget: 325
 
-  - id: skill_derived_public_release_gate
+  - id: skill_publication_target_release_gate
     layer: skill
-    path: 02_Skills/Governance/Derived-Public-Release-Gate-v1.md
+    path: 02_Skills/Governance/Publication-Target-Release-Gate-v1.md
     description: >
-      Release gate for genuinely derived public repos. Requires surface
-      classification, declared export/sanitization workflow, scrub validation,
-      and an explicit exclusion for canonical gthgomez/Babel.
+      Release gate for repositories explicitly mapped as publication targets.
+      Requires surface classification, target-owned validation, exact staged
+      paths, and an explicit excluded-path record before remote mutation.
     status: active
-    tags: [governance:safety, skill, utility:export, utility:git, utility:github, utility:public-release, utility:sanitization, utility:secrets]
+    tags: [governance:safety, skill, utility:git, utility:github, utility:publication, utility:release-gate, utility:sanitization, utility:secrets]
     dependencies:
-      - skill_private_source_repo_discipline
-      - skill_public_export_hardening
+      - skill_repository_role_discipline
+      - skill_publication_sanitization
     conflicts: []
     token_budget: 325
 
@@ -1170,11 +1134,8 @@ entries:
     layer: skill
     path: 02_Skills/Mobile/Google-Play-Billing-v1.md
     description: >
-      Google Play Billing contract enforcement for Android IAP. Covers the full billing
-      lifecycle (connect → queryPurchasesAsync → acknowledge), billing isolation contract
-      (zero billing imports in domain/processing layers), PRO_PRODUCT_ID contract rules,
-      required ProGuard rules for release builds, entitlement model classification
-      (client-side vs server-side), and v7→v8 migration guidance (v7 EOL Aug 2026).
+      Google Play Billing lifecycle, entitlement, isolation, and current-source
+      verification guidance for Android applications.
     status: active
     jit_activation_rules:
       - 'google\\s+play\\s+billing'
@@ -1699,15 +1660,9 @@ entries:
     layer: skill
     path: 02_Skills/Mobile/Google-Play-Store-v1.md
     description: >
-      Google Play Store submission requirements and policy compliance (verified March 2026).
-      Covers all enforced 2025-2026 deadlines: targetSdk 35 mandate (Aug 31 2025), AAB
-      mandatory, Billing Library v7 minimum (Aug 31 2025) with v8 migration required before
-      Aug 2026, Photo Picker enforcement (May 28 2025), AccessibilityService non-disability
-      ban (Jan 28 2026), US billing exclusivity ended (Sep 12 2025 Epic injunction), SafetyNet
-      shutdown (May 20 2025) → Play Integrity API, IARC rating re-review (Jan 31 2026), 16KB
-      page size (Nov 1 2025), exact asset specs, and Data Safety section requirements.
-      Policy/deadline layer only; pair with Android Play Store Compliance for implementation
-      changes and Android App Bundle for packaging execution.
+      Google Play submission and policy-review framework grounded in current official
+      sources and target-project evidence. Pair with Android Play Store Compliance for
+      implementation changes and Android App Bundle for packaging execution.
     status: active
     tags: [governance:audit, platform:android, skill, utility:billing, utility:google-play, utility:mobile, utility:permissions, utility:store]
     dependencies: []
@@ -2434,24 +2389,13 @@ entries:
     token_budget: 300
     tags: [utility:authoring, utility:compiler, utility:meta]
 
-  - id: meta_research_optimizer
-    layer: meta_tool
-    path: 04_Meta_Tools/Research_Optimizer.md
-    description: >
-      Prompt improvement research plan. Guides structured investigation of
-      whether a prompt change is grounded in evidence before adopting it.
-    status: active
-    token_budget: 275
-    tags: [utility:meta, utility:optimization, utility:research]
-
   - id: meta_namit_critique
     layer: meta_tool
     path: 04_Meta_Tools/NAMIT-Research-Critique.md
     description: >
-      Research critique of the NAMIT edge-case framework and confidence scoring
-      protocol. Confirms NAMIT is a proprietary OLS mnemonic (not industry-
-      standard). Recommends Hybrid approach: SFDIPOT for test planning + NAMIT
-      for code-level checks. Reference when authoring QA_Adversarial_Reviewer.
+      Reference critique of NAMIT and confidence scoring. Treats NAMIT as a
+      Babel-local mnemonic, not an industry standard, and compares it with
+      established test-planning heuristics for bounded prompt authoring.
     status: active
     token_budget: 275
     tags: [utility:meta, utility:namit, utility:reference, utility:research]
@@ -2498,11 +2442,7 @@ entries:
     layer: project_overlay
     path: 05_Project_Overlays/Example-SaaS-Backend-Context.md
     description: >
-      Project context for example_saas_backend. Covers the verified implementation surfaces:
-      GPC signal-processing endpoint, customer API, browser SDK / loader,
-      dashboard evidence views, and internal scanner tooling, plus hard
-      constraints around scoped enforcement claims, evidence-schema reality,
-      multi-tenant isolation, and evidence-first copy.
+      Routing context for a public-safe multi-tenant SaaS backend example.
     status: active
     token_budget: 325
     load_position: 6
@@ -2513,10 +2453,7 @@ entries:
     layer: project_overlay
     path: 05_Project_Overlays/Example-LLM-Router-Context.md
     description: >
-      Project context for example_llm_router. Covers tech stack (Supabase router, React/
-      Vite, multi-provider LLM, SSE), core invariants (normalized SSE contract,
-      server-side ownership checks, AbortError→504 mapping), and primary
-      objects (router manifests, conversation records).
+      Routing context for a public-safe streaming request-router example.
     status: active
     token_budget: 325
     load_position: 5
@@ -2527,10 +2464,7 @@ entries:
     layer: project_overlay
     path: 05_Project_Overlays/Example-Web-Audit-Context.md
     description: >
-      Project context for example_web_audit. Covers tech stack (Next.js, Prisma,
-      Supabase, TanStack React Query), hard constraints (append-only audit
-      records, CI validator gating), and primary objects (audit entries,
-      evidence artifacts, compliance reports).
+      Routing context for a public-safe web audit and evidence example.
     status: active
     token_budget: 325
     load_position: 6
@@ -2541,48 +2475,35 @@ entries:
     layer: project_overlay
     path: 05_Project_Overlays/Example-Mobile-Suite-Context.md
     description: >
-      Project context for example_mobile_suite monorepo. Four Kotlin utility apps:
-      example_app_one, example_app_two, example_app_three (all IAP-monetized, Compose),
-      and example_app_four (accessibility service, ViewBinding). Current billing
-      version 7.1.1 (v7 EOL Aug 2026 — migration to v8 required). Compose BOM
-      2026.03.01, targetSdk 35. Encodes hard invariants: billing isolation, FileProvider
-      security, screen-enum navigation, no NavHost, EXIF-before-crop rule, JPEG quality
-      floor 35, and example_app_four policy risk flag.
+      Routing context for a public-safe Kotlin mobile application suite example.
     status: active
     token_budget: 350
     load_position: 5
     project: example_mobile_suite
     tags: [language:kotlin, platform:android, utility:billing, utility:compose, utility:mobile, utility:overlay]
 
-  - id: overlay_example_mobile_finance
+  - id: overlay_example_mobile_reference
     layer: project_overlay
-    path: 05_Project_Overlays/Example-Mobile-Finance-Context.md
+    path: 05_Project_Overlays/Example-Mobile-Reference-Context.md
     description: >
-      Project context for example_mobile_finance. Covers the Example Finance Forecast Android
-      port, a local-first personal finance forecasting app in Kotlin +
-      Jetpack Compose with Room, integer-cents precision, and MVVM StateFlow
-      architecture.
+      Routing context for the example mobile reference application.
     status: active
     token_budget: 325
     load_position: 5
-    project: example_mobile_finance
-    tags: [language:kotlin, platform:android, utility:example_mobile_finance, utility:compose, utility:context, utility:overlay, utility:room]
+    project: example_mobile_reference
+    tags: [language:kotlin, platform:android, utility:example_mobile_reference, utility:compose, utility:context, utility:overlay, utility:room]
 
-  - id: overlay_example_finance_forecast
+  - id: overlay_example_reference_application
     layer: project_overlay
-    path: 05_Project_Overlays/Example-Finance-Forecast-Context.md
+    path: 05_Project_Overlays/Example-Reference-Application-Context.md
     description: >
-      Project context for ExampleFinanceForecast. Covers tech stack (Kotlin, Room,
-      Compose, Haze, Google Play Billing), core invariants (integer cents,
-      MVVM StateFlow, Room migrations, queryPurchasesAsync entitlement checks),
-      and primary objects (IncomeEntity, PaymentEntity, TransactionEntity,
-      GoalEntity).
+      Routing context for a generic persisted-data reference application.
     status: active
     selection_scope: discoverable
     token_budget: 1300
     load_position: 6
-    project: ExampleFinanceForecast
-    tags: [android, compose, kotlin, ledger, montecarlo, overlay, room]
+    project: example_reference_application
+    tags: [android, compose, kotlin, overlay, reference, room]
 
   - id: overlay_example_game_workspace
     layer: project_overlay
@@ -2655,10 +2576,7 @@ entries:
     layer: task_overlay
     path: 06_Task_Overlays/Example-SaaS-Backend-Adversarial-Claims-Audit-v1.0.md
     description: >
-      example_saas_backend-specific delta overlay for adversarial claim audits. Forces
-      careful scoping around endpoint-level enforcement, evidence-schema reality,
-      pricing parity, legal/docs drift, and internal scanner versus
-      customer-facing scanner claims.
+      Example SaaS delta for evidence-scoped public claim audits.
     status: active
     token_budget: 275
     load_position: 6
@@ -2669,9 +2587,7 @@ entries:
     layer: task_overlay
     path: 06_Task_Overlays/AI-Android-Development-v1.md
     description: >
-      Android-specific task overlay for AI-assisted coding and review sessions.
-      Injects exact stack anchors, bans stale Android defaults, and adds review
-      gates for Compose, billing, processing, permissions, and test-order discipline.
+      Android task overlay for repository-grounded generation and review.
     status: active
     token_budget: 325
     load_position: 6
@@ -2717,7 +2633,6 @@ entries:
 
 # ─────────────────────────────────────────────
 # AUTONOMOUS AGENT GOVERNANCE SKILLS
-# Pass 16 additions (2026-03-31): untrusted_input_guard, autonomous_agent_state_machine, async_task_delivery
 # ─────────────────────────────────────────────
 
   - id: skill_untrusted_input_guard

@@ -13,6 +13,9 @@ if ([string]::IsNullOrWhiteSpace($PolicyPath)) { $PolicyPath = Join-Path $RepoRo
 if (-not (Test-Path -LiteralPath $PolicyPath -PathType Leaf)) { throw "Canonical independence policy not found: $PolicyPath" }
 try { $policy = Get-Content -Raw -LiteralPath $PolicyPath | ConvertFrom-Json } catch { throw "Canonical independence policy is malformed: $PolicyPath" }
 $config = $policy.canonical_independence
+$commonModule = Join-Path $RepoRoot 'tools/security/tracked-scan-common.ps1'
+if (-not (Test-Path -LiteralPath $commonModule -PathType Leaf)) { throw "Tracked scan module not found: $commonModule" }
+. $commonModule
 
 $findings = [Collections.Generic.List[object]]::new()
 function Add-Finding([string]$Id, [string]$Category, [string]$Path, [int]$Line) {
@@ -39,6 +42,20 @@ function Test-IsTemporarilyExcepted([string]$RuleId, [string]$Path, [string]$Lin
   }
   return $false
 }
+$validFixtureExceptions = [Collections.Generic.List[object]]::new()
+foreach ($entry in @($config.fixture_exceptions)) {
+  if (-not [string]::IsNullOrWhiteSpace([string]$entry.id) -and -not [string]::IsNullOrWhiteSpace([string]$entry.rule_id) -and
+      -not [string]::IsNullOrWhiteSpace([string]$entry.path) -and -not [string]::IsNullOrWhiteSpace([string]$entry.pattern) -and
+      -not [string]::IsNullOrWhiteSpace([string]$entry.rationale)) { $validFixtureExceptions.Add($entry) }
+  else { Add-Finding 'CCFG002' 'invalid-fixture-exception' 'tools/security/public-content-policy.json' 0 }
+}
+$validBinaryAllowlist = [Collections.Generic.List[object]]::new()
+foreach ($entry in @($config.binary_asset_allowlist)) {
+  if (($entry.PSObject.Properties.Name -contains 'path') -and ($entry.PSObject.Properties.Name -contains 'sha256') -and
+      ($entry.PSObject.Properties.Name -contains 'rationale') -and -not [string]::IsNullOrWhiteSpace([string]$entry.path) -and [string]$entry.sha256 -match '^[0-9a-fA-F]{64}$' -and
+      -not [string]::IsNullOrWhiteSpace([string]$entry.rationale)) { $validBinaryAllowlist.Add($entry) }
+  else { Add-Finding 'CCFG003' 'invalid-binary-asset-allowlist' 'tools/security/public-content-policy.json' 0 }
+}
 function Test-IsExcluded([string]$Path) {
   $normalized = $Path.Replace('\', '/')
   if (@($config.excluded_paths) -contains $normalized) { return $true }
@@ -54,19 +71,18 @@ foreach ($required in @($config.required_startup_files)) {
   }
 }
 
-$tracked = @(& git -C $RepoRoot ls-files)
-if ($LASTEXITCODE -ne 0) { throw 'git ls-files failed; canonical independence requires a Git worktree.' }
-foreach ($relativePath in $tracked) {
-  $relative = $relativePath.Replace('\', '/')
+$inventory = Get-TrackedScanInventory -RepoRoot $RepoRoot -BinaryAllowlist @($validBinaryAllowlist)
+foreach ($issue in @($inventory.issues)) { Add-Finding 'CANON004' ("unscannable-tracked-file:{0}" -f $issue.reason) $issue.path 0 }
+foreach ($record in @($inventory.records)) {
+  $relative = $record.path
   if (Test-IsExcluded $relative) { continue }
-  if (-not (@($config.scan_extensions) -contains [IO.Path]::GetExtension($relative).ToLowerInvariant())) { continue }
-  $full = Join-Path $RepoRoot $relative
-  if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }
   $lineNumber = 0
-  foreach ($line in Get-Content -LiteralPath $full) {
+  foreach ($line in @($record.lines)) {
     $lineNumber++
     foreach ($rule in @($config.rules)) {
-      if ([string]$line -match [string]$rule.pattern -and -not (Test-IsTemporarilyExcepted ([string]$rule.id) $relative ([string]$line))) {
+      $excepted = (Test-IsTemporarilyExcepted ([string]$rule.id) $relative ([string]$line)) -or
+        (Test-PolicyException -Exceptions @($validFixtureExceptions) -RuleId ([string]$rule.id) -Path $relative -Line ([string]$line))
+      if ([string]$line -match [string]$rule.pattern -and -not $excepted) {
         Add-Finding ([string]$rule.id) ([string]$rule.category) $relative $lineNumber
       }
     }

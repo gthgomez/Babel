@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, lstatSync, openSync, closeSync, constants as fsConstants } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { dirname, isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
+import { dirname, join, resolve as resolvePath } from 'node:path';
 
 import { renderDryRunSummary } from '../ui/renderers.js';
 import { BABEL_ROOT, BABEL_RUNS_DIR, VALID_PROJECTS, type ValidProject } from './constants.js';
@@ -45,69 +45,19 @@ export function parseCommaSeparatedFiles(value: string | undefined): string[] {
 }
 
 export function resolveProjectRoot(projectName: string): string | null {
-  const parent = dirname(BABEL_ROOT);
-
-  switch (projectName) {
-    case 'example_saas_backend':
-      return resolvePath(parent, 'Project_SaaS', 'example_saas_backend');
-    case 'example_llm_router':
-      return resolvePath(parent, 'Project_SaaS', 'example_llm_router');
-    case 'example_web_audit':
-      return resolvePath(parent, 'Project_SaaS', 'example_web_audit');
-    case 'example_mobile_suite':
-      return resolvePath(parent, 'example_mobile_suite');
-    case 'ExampleFinanceForecast':
-      return resolvePath(parent, 'example_mobile_suite', 'ExampleFinanceForecast');
-    case 'simlife':
-      return resolvePath(parent, 'example_game_workspace', 'SimLife');
-    case 'example_game_suite':
-      return resolvePath(parent, 'example_game_workspace', 'ExampleGameProject');
-    case 'example_game_workspace':
-      return resolvePath(parent, 'example_game_workspace');
-    case 'AetherlynGameDraft':
-    case 'aetherlyn':
-      return resolvePath(parent, 'example_game_workspace', 'AetherlynGameDraft');
-    case 'example_autonomous_agent':
-      for (const candidate of ['example_autonomous_agent', 'example_autonomous_agent']) {
-        const resolved = resolvePath(parent, candidate);
-        if (existsSync(resolved)) {
-          return resolved;
-        }
-      }
-      return resolvePath(parent, 'example_autonomous_agent');
-    case 'example_mobile_finance':
-      for (const candidate of [
-        join('example_mobile_suite', 'ExampleFinanceForecast'),
-        'Example-Mobile-Finance',
-        'Example Finance Forecast-app',
-      ]) {
-        const resolved = resolvePath(parent, candidate);
-        if (existsSync(resolved)) {
-          return resolved;
-        }
-      }
-      return null;
-    default:
-      return null;
+  if (!VALID_PROJECTS.includes(projectName as ValidProject)) {
+    return null;
   }
+  const configuredRoot = process.env['BABEL_PROJECT_ROOT']?.trim();
+  return resolvePath(configuredRoot || process.cwd());
 }
 
 export function detectProjectFromCwd(cwd = process.cwd()): ValidProject | null {
-  const resolvedCwd = resolvePath(cwd);
-
-  for (const project of VALID_PROJECTS) {
-    const projectRoot = resolveProjectRoot(project);
-    if (!projectRoot || !existsSync(projectRoot)) {
-      continue;
-    }
-
-    const rel = relative(projectRoot, resolvedCwd);
-    if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) {
-      return project;
-    }
-  }
-
-  return null;
+  void cwd;
+  const configuredProject = process.env['BABEL_PROJECT_ID']?.trim();
+  return configuredProject && VALID_PROJECTS.includes(configuredProject as ValidProject)
+    ? configuredProject as ValidProject
+    : null;
 }
 
 export function resolveLogFilePath(value: string | undefined): string | undefined {

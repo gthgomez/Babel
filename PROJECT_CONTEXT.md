@@ -80,7 +80,7 @@ or building a clean Babel clone.
 - **Security Contract:** `tools/run-public-secret-scan.ps1` and `tools/check-public-scrub.ps1` detect credentials and prohibited private identifiers.
 - **Public Content Contract:** `tools/check-public-content-policy.ps1` rejects personal-profile content, private paths, unsupported absolute claims, broken links, duplicate active documents, and placeholders.
 - **Canonical Independence Contract:** `tools/check-canonical-independence.ps1` verifies that a clean clone has all mandatory startup references and no required parent-workspace, sibling-repository, or removed-export dependencies.
-- Maintainer release validation supplies the private supplemental scrub policy outside this repository.
+- Maintainer release validation supplies the private supplemental scrub policy outside this repository and passes `-RequireSupplementalPolicy` so missing or empty configuration fails closed.
 - **Source Authority Contract:** `docs/adr/ADR-0001-canonical-public-source.md` records this repository as the sole canonical source. Private repositories consume versioned releases and must not publish source back into this repository.
 
 ## First-Success Surfaces

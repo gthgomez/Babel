@@ -9,7 +9,7 @@ export interface LiteTrustDemoFixture {
   schema_version: 1;
   fixture_type: 'babel_lite_trust_demo';
   scenario_id?: string;
-  visibility: 'private';
+  visibility: 'public_example';
   description: string;
   target_file: string;
   verifier_command: string;
@@ -119,6 +119,7 @@ export function runBabelCli(
     BABEL_PROJECT_ROOT: options.projectRoot,
     BABEL_LITE_OFFLINE: '1',
     BABEL_SMALL_FIX_PROVIDER: 'mock',
+    BABEL_LIVE: 'true',
   };
   const result = spawnSync(process.execPath, [cliEntry, ...args], {
     cwd: options.projectRoot,

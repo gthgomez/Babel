@@ -202,7 +202,7 @@ function buildCompletionVerificationForRun(input: {
   projectRoot?: string;
 }) {
   const verification = input.pipelineStatus === 'COMPLETE' &&
-    input.executionProfile === 'opencalw_manager' &&
+    input.executionProfile === 'workspace_manager' &&
     input.projectRoot
     ? verifyWorkspaceProject(input.projectRoot)
     : null;
@@ -765,7 +765,7 @@ async function runLiteCommand(
   let resolvedWorkspaceRoot: string | null = null;
   let resolvedAllowedRoots: string[] = [];
   if (options.projectRoot !== undefined) {
-    if (executionProfile === 'opencalw_manager') {
+    if (executionProfile === 'workspace_manager') {
       const resolved = resolveApprovedWorkspacePath(options.projectRoot);
       resolvedProjectRoot = resolved.path;
       resolvedAllowedRoots = resolved.approvedRoots;
@@ -1391,7 +1391,7 @@ Notes:
     .addHelpText('after', `
 Examples:
   $ babel ask "Why is this failing?"
-  $ babel ask "Summarize this repo" --project-root C:\\Workspace\\MyRepo
+  $ babel ask "Summarize this repo" --project-root ./example-project
 
 Notes:
   - This is the same user-shaped lane as bl ask.
@@ -1496,7 +1496,7 @@ Notes:
     .addHelpText('after', `
 Examples:
   $ babel continue latest
-  $ babel continue C:\\Workspace\\private source repo\\runs\\20260601_010101_task
+  $ babel continue ./example-project/runs/<run-id>
   $ bl continue latest
 
 Notes:
@@ -1523,7 +1523,7 @@ Notes:
     .command('run')
     .argument('<task>', 'task prompt')
     .description('Advanced pipeline lane for explicit modes, audit, output, and tool/model controls')
-    .option('-p, --project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_workspace | example_game_suite | example_autonomous_agent | example_mobile_finance)')
+    .option('-p, --project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_workspace | example_game_suite | example_autonomous_agent | example_mobile_reference)')
     .option('--mode <mode>', `Pipeline mode: ${VALID_MODES.join(' | ')} (manual emits Manual Bridge handoff JSON)`, 'verified')
     .option('-m, --model <model>', 'Override the Orchestrator and force a specific model family (qwen3|deepseek|step-flash|scout|nemotron|qwen3-32b, case-insensitive)')
     .option('--model-tier <tier>', `Model policy tier: ${VALID_MODEL_TIERS.join(' | ')} (defaults to configured policy tier)`)
@@ -1561,7 +1561,7 @@ Examples:
   $ babel run "Fix lint" --output-format headless
   $ babel run "Audit only" --allowed-tools directory_list,file_read,semantic_search
   $ babel run "Fix tests" --execution-profile dev_local
-  $ babel run "Fix tests" --execution-profile opencalw_manager --project-root C:\\Workspace\\example_game_workspace\\MyGame
+  $ babel run "Fix tests" --execution-profile workspace_manager --project-root ./example-game
   $ babel run "Solve task" --execution-profile benchmark_container --mode autonomous
 
 Notes:
@@ -1659,7 +1659,7 @@ Notes:
 
       if (options.projectRoot !== undefined) {
         try {
-          if (executionProfile === 'opencalw_manager') {
+          if (executionProfile === 'workspace_manager') {
             const resolved = resolveApprovedWorkspacePath(options.projectRoot);
             resolvedProjectRoot = resolved.path;
             resolvedAllowedRoots = resolved.approvedRoots;
@@ -2321,7 +2321,7 @@ Notes:
   program
     .command('smoke')
     .description('Advanced diagnostic: run Manual Bridge smoke suite and summarize executor outcomes')
-    .requiredOption('--project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_workspace | example_game_suite | example_autonomous_agent | example_mobile_finance)')
+    .requiredOption('--project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_workspace | example_game_suite | example_autonomous_agent | example_mobile_reference)')
     .addHelpText('after', `
 Examples:
   $ babel smoke --project example_saas_backend
@@ -2336,7 +2336,7 @@ Notes:
   program
     .command('test')
     .description('Legacy alias for smoke diagnostic; not a general project test runner')
-    .option('--project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_workspace | example_game_suite | example_autonomous_agent | example_mobile_finance)')
+    .option('--project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_workspace | example_game_suite | example_autonomous_agent | example_mobile_reference)')
     .argument('[project]', 'Target project')
     .addHelpText('after', `
 Notes:

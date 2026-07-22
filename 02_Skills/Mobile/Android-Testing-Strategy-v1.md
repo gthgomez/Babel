@@ -177,7 +177,7 @@ android {
 | Verify goldens | `./gradlew :app:testDebugUnitTest -Proborazzi.test.verify=true` |
 | Default (record-if-missing) | `./gradlew :app:testDebugUnitTest` |
 
-For example_app_one (dual-flavor), replace `testDebugUnitTest` with `testGooglePlayDebugUnitTest`.
+For a dual-flavor project, replace `testDebugUnitTest` with the applicable flavor-specific test task.
 
 **Never record goldens in CI.** Record is a developer action. CI runs verify only.
 

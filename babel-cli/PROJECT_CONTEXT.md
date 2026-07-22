@@ -42,7 +42,7 @@ Run from `.\babel-cli`.
 - Type check: `npm run typecheck`
 - Build: `npm run build`
 - Unit/regression suite: `npm test`
-- Product benchmark: `npm run benchmark:product`
+- Release-readiness benchmark: `npm run benchmark:readiness`
 - Dist cleanliness: `npm run check:dist`
 - Source provenance: `npm run check:source-provenance`
 

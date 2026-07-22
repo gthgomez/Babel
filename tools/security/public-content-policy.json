@@ -3,15 +3,14 @@
   "description": "Deterministic policy for public-facing content and canonical-repository independence.",
   "active_extensions": [".md", ".yaml", ".yml", ".json", ".ts", ".js", ".ps1"],
   "claim_extensions": [".md"],
-  "excluded_path_prefixes": ["docs/archive/", "02_Domain_Architects/archive/", "tools/tests/"],
-  "excluded_paths": [
-    "tools/security/public-content-policy.json",
-    "tools/security/policy.json",
-    "tools/check-public-scrub.ps1",
-    "tools/run-public-secret-scan.ps1",
-    "tools/check-public-content-policy.ps1",
-    "tools/check-canonical-independence.ps1"
+  "binary_asset_allowlist": [],
+  "forbidden_generated_path_patterns": [
+    "(?i)(^|/)(dist|runs|artifacts|coverage|scratch|\\.compiled|\\.cache)/",
+    "(?i)(^|/)babel-benchmark-results\\.jsonl$"
   ],
+  "generated_artifact_allowlist": [],
+  "excluded_path_prefixes": ["docs/archive/", "02_Domain_Architects/archive/"],
+  "excluded_paths": [],
   "temporary_exceptions": [
     {
       "id": "TEMP-RUNTIME-PROFILE-001",
@@ -24,6 +23,78 @@
       "replacement_pr": "runtime-canonical-independence"
     }
   ],
+  "fixture_exceptions": [
+    {
+      "id": "FIXTURE-CONTENT-POLICY-ESCAPED-PATH",
+      "rule_id": "PCONT002",
+      "path": "tools/security/public-content-policy.json",
+      "pattern": "C:[\\\\/]+Users[\\\\/]+someone",
+      "rationale": "The policy contains an exact negative-fixture pattern, not a machine path used by the product."
+    },
+    {
+      "id": "FIXTURE-CONTENT-POLICY-IDENTIFIER",
+      "rule_id": "PCONT004",
+      "path": "tools/security/public-content-policy.json",
+      "pattern": "opencalw_manager|example_app_\\(\\?:one\\|two\\|three\\|four\\)",
+      "rationale": "The policy declares exact compatibility and fixture patterns for the legacy identifier."
+    },
+    {
+      "id": "FIXTURE-CONTENT-POLICY-INCIDENT",
+      "rule_id": "PCONT006",
+      "path": "tools/security/public-content-policy.json",
+      "pattern": "incident caused a 37% regression",
+      "rationale": "The policy contains an exact negative-fixture pattern, not incident history."
+    },
+    {
+      "id": "FIXTURE-CONTENT-POLICY-001",
+      "rule_id": "PCONT003",
+      "path": "tools/security/public-content-policy.json",
+      "pattern": "private parent repo|sibling private repo",
+      "rationale": "The machine-readable rule definition is scanned, but its regex literal is not public content."
+    },
+    {
+      "id": "FIXTURE-PREVENTION-001",
+      "rule_id": "PCONT001",
+      "path": "tools/tests/test-public-prevention-gates.ps1",
+      "pattern": "Operator: named maintainer",
+      "rationale": "Negative fixture for personal-profile detection."
+    },
+    {
+      "id": "FIXTURE-PREVENTION-002",
+      "rule_id": "PCONT002",
+      "path": "tools/tests/test-public-prevention-gates.ps1",
+      "pattern": "[A-Z]:[\\\\/]+(?:Users|Workspace|Projects)[\\\\/]+",
+      "rationale": "Negative fixture for escaped machine-path detection."
+    },
+    {
+      "id": "FIXTURE-PREVENTION-003",
+      "rule_id": "PCONT003",
+      "path": "tools/tests/test-public-prevention-gates.ps1",
+      "pattern": "private parent repo",
+      "rationale": "Negative fixture for private-parent detection."
+    },
+    {
+      "id": "FIXTURE-PREVENTION-004",
+      "rule_id": "PCONT004",
+      "path": "tools/tests/test-public-prevention-gates.ps1",
+      "pattern": "opencalw_manager|example_app_one",
+      "rationale": "Negative fixture for malformed identifier detection."
+    },
+    {
+      "id": "FIXTURE-PREVENTION-005",
+      "rule_id": "PCONT005",
+      "path": "tools/tests/test-public-prevention-gates.ps1",
+      "pattern": "TODO: replace this stub",
+      "rationale": "Negative fixture for placeholder detection."
+    },
+    {
+      "id": "FIXTURE-PREVENTION-006",
+      "rule_id": "PCONT006",
+      "path": "tools/tests/test-public-prevention-gates.ps1",
+      "pattern": "incident caused a 37% regression",
+      "rationale": "Negative fixture for internal incident metrics."
+    }
+  ],
   "rules": [
     {
       "id": "PCONT001",
@@ -33,7 +104,7 @@
     {
       "id": "PCONT002",
       "category": "machine-specific-path",
-      "pattern": "(?i)([A-Z]:[\\\\/](Users|Workspace|Projects)[\\\\/]|/(Users|home)/[^/\\s]+/)"
+      "pattern": "(?i)([A-Z]:[\\\\/]+(Users|Workspace|Projects)[\\\\/]+|/(Users|home)/[^/\\s]+/)"
     },
     {
       "id": "PCONT003",
@@ -43,12 +114,12 @@
     {
       "id": "PCONT004",
       "category": "malformed-public-identifier",
-      "pattern": "(?i)\\bopencalw_manager\\b"
+      "pattern": "(?i)\\b(opencalw_manager|example_app_(?:one|two|three|four))\\b"
     },
     {
       "id": "PCONT005",
       "category": "stub-placeholder-content",
-      "pattern": "(?i)^\\s*(TODO|TBD|placeholder|stub)(?:\\s*[:.-]|\\s*$)"
+      "pattern": "(?i)^\\s*(?:(TODO|TBD|placeholder|stub)(?:\\s*[:.-]|\\s*$)|Updated\\s+[A-Za-z0-9_-]+\\s+SKILL\\.md\\s*$)"
     },
     {
       "id": "PCONT006",
@@ -122,8 +193,53 @@
   "canonical_independence": {
     "required_startup_files": ["BABEL_BIBLE.md", "PROJECT_CONTEXT.md", "README.md", "prompt_catalog.yaml"],
     "scan_extensions": [".md", ".yaml", ".yml", ".json", ".ts", ".js", ".ps1"],
-    "excluded_path_prefixes": ["docs/archive/", "02_Domain_Architects/archive/", "tools/tests/"],
-    "excluded_paths": ["tools/security/public-content-policy.json", "tools/check-canonical-independence.ps1"],
+    "excluded_path_prefixes": ["docs/archive/", "02_Domain_Architects/archive/"],
+    "excluded_paths": [],
+    "binary_asset_allowlist": [],
+    "fixture_exceptions": [
+      {
+        "id": "FIXTURE-CANONICAL-POLICY-EXPORT",
+        "rule_id": "CANON002",
+        "path": "tools/security/public-content-policy.json",
+        "pattern": "public-export|export-babel-public|export_manifest",
+        "rationale": "The policy contains canonical rule and fixture definitions, not a runtime export dependency."
+      },
+      {
+        "id": "FIXTURE-CANONICAL-POLICY-ROOT",
+        "rule_id": "CANON003",
+        "path": "tools/security/public-content-policy.json",
+        "pattern": "resolveProjectRoot|workspaceRoot",
+        "rationale": "The policy contains canonical rule and fixture definitions, not project-root inference."
+      },
+      {
+        "id": "FIXTURE-CANONICAL-POLICY-001",
+        "rule_id": "CANON001",
+        "path": "tools/security/public-content-policy.json",
+        "pattern": "private parent repo|sibling private repo|resolvePath",
+        "rationale": "The canonical rule definition is data rather than a runtime dependency."
+      },
+      {
+        "id": "FIXTURE-CANONICAL-TEST-001",
+        "rule_id": "CANON001",
+        "path": "tools/tests/test-public-prevention-gates.ps1",
+        "pattern": "resolvePath\\(parent",
+        "rationale": "Negative canonical-independence fixture."
+      },
+      {
+        "id": "FIXTURE-CANONICAL-TEST-002",
+        "rule_id": "CANON002",
+        "path": "tools/tests/test-public-prevention-gates.ps1",
+        "pattern": "tools/public-export/manifest\\.json",
+        "rationale": "Negative removed-export fixture."
+      },
+      {
+      "id": "FIXTURE-CANONICAL-TEST-003",
+        "rule_id": "CANON003",
+        "path": "tools/tests/test-public-prevention-gates.ps1",
+        "pattern": "resolveProjectRoot\\(projectId, parent\\)|join\\(workspaceRoot, family, projectFolderName\\)",
+        "rationale": "Negative project-root-inference fixture."
+      }
+    ],
     "temporary_exceptions": [
       {
         "id": "TEMP-RUNTIME-ROOT-001",
@@ -160,7 +276,7 @@
       {
         "id": "CANON003",
         "category": "project-id-implies-private-root",
-        "pattern": "(?i)resolveProjectRoot.{0,120}(parent|sibling)"
+        "pattern": "(?i)(resolveProjectRoot.{0,120}(parent|sibling)|join\\(\\s*workspaceRoot\\s*,\\s*family\\s*,)"
       }
     ]
   }

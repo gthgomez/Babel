@@ -30,8 +30,8 @@ Before writing a single line of architecture code, classify the app using this t
 
 | App Type | Definition | Examples in this monorepo |
 |----------|-----------|--------------------------|
-| `utility_stateless` | Single-purpose tool, no persistence, no user accounts. Processes input -> emits output. | example_app_one, example_app_three, example_app_two |
-| `utility_stateful` | Single-purpose tool with user preferences or history stored locally. No server sync. | example_app_four (settings only), a timer app |
+| `utility_stateless` | Single-purpose tool, no persistence, no user accounts. Processes input -> emits output. | a format converter or calculator |
+| `utility_stateful` | Single-purpose tool with user preferences or history stored locally. No server sync. | a timer or note utility |
 | `content_data_driven` | Browses or displays a corpus of data; persistence required; may have search and filters. | Recipe app, news reader, catalog browser |
 | `multi_feature` | Multiple distinct feature areas; separate navigation graphs; team ownership boundaries. | Google Keep, Spotify, large SaaS mobile client |
 
@@ -72,7 +72,7 @@ All apps in example_mobile_suite classify as utility_stateless.
 The correct architecture is:
   - Manual constructor injection — NO Hilt, Koin, or Dagger
   - Enum navigation in AppUiState — NO NavHost, NavController
-  - No persistence layer — NO Room, no SQLite, no DataStore beyond example_app_four prefs
+  - No persistence layer — NO Room, SQLite, or DataStore unless project evidence requires it
   - One MainViewModel — NOT one ViewModel per screen
   - collectAsStateWithLifecycle() — NOT collectAsState()
 ```

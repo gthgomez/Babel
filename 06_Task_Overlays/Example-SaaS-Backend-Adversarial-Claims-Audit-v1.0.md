@@ -5,44 +5,25 @@ Licensed under the MIT License
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 -->
 
-# Example SaaS Backend Adversarial Claims Audit Overlay v1.0
+# Example SaaS Backend Claims Audit Overlay
 
 ## Purpose
 
-Public-safe project delta for adversarial claim audits inside `example_saas_backend`.
+Public-safe example delta for evidence-scoped claims about a multi-tenant backend.
+Use after the generic adversarial claims-audit overlay.
 
-Use after the generic claims-audit overlay when `domain_product_audit` is already selected and the task touches:
-- request gateway or policy enforcement paths
-- customer API or ingestion services
-- browser SDK / loader
-- pricing, docs, privacy, DPA, or homepage copy
-- dashboard logs / evidence views
-- internal review or monitoring tools
+## Rules
 
-## Example SaaS Backend Rules
+1. Scope each enforcement claim to the verified request path and control point.
+2. Distinguish client signals, transmitted data, server decisions, and persisted
+   evidence; one layer does not establish the behavior of the others.
+3. Match audit and decision-record claims to the implemented schema and retrieval
+   path rather than examples or mock payloads.
+4. Name the specific guard and failure behavior behind any fail-closed claim.
+5. Verify public limits, retention, legal, and documentation claims against current
+   implementation and primary sources.
+6. Describe internal review tools as public capabilities only when a documented
+   user workflow exists.
 
-1. Do not treat client-side signal detection as whole-system enforcement unless the server control point is verified.
-2. Do not call a browser-only header or flag "server-side" unless transmission and persistence are both evidenced.
-3. Decision-record claims must match the real schema and retrieval path, not mock JSON.
-4. "Fail-closed" must name the specific guard and request path.
-5. Pricing, retention, export, and enterprise claims must match backend limits and real routes.
-6. Treat internal review tooling as customer-facing only when a public workflow is actually implemented.
-
-Keep this overlay project-bounded. The core adversarial audit posture belongs to the domain, not this file.
-
-## High-Risk Claim Families
-
-- "before any data flows"
-- "every request"
-- "immutable"
-- "edge-native enforcement"
-- "server-side detection on every inbound request"
-- "exportable regulator-ready proof"
-- "scanner / leak detection"
-
-## Preferred Outcome
-
-Leave the audit with:
-- verified truths that are safe to market
-- narrowed claims that need scope qualifiers
-- false / dangerous claims that must be removed or built
+Return verified claims, claims that require narrower wording, and unsupported
+claims that must be removed or implemented.

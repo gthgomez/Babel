@@ -1,6 +1,6 @@
-# Example Finance Forecast Context
+# Example Reference Application Context
 
-Use this project overlay for a public-safe finance forecasting example. It covers a simple ledger, forecast inputs, and result review without naming private apps, local roots, or deployment surfaces.
+Use this project overlay for a public-safe reference application with persisted records, computed outputs, and result review.
 
 Public expectations:
 - Keep amounts represented in integer cents.

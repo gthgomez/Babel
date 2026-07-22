@@ -70,6 +70,7 @@ Maintainer pre-merge checklist:
 - [ ] Set `BABEL_PRIVATE_SCRUB_POLICY_PATH`, or pass the same external file with
   `-SupplementalPolicyPath`.
 - [ ] Run `pwsh -File .\tools\validate-public-release.ps1 -Strict
+  -RequireSupplementalPolicy
   -SupplementalPolicyPath $env:BABEL_PRIVATE_SCRUB_POLICY_PATH` and require a
   clean result before merging.
 
