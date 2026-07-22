@@ -11,10 +11,16 @@ Set-Location $RepoRoot
 $rgCommand = Get-Command rg -ErrorAction SilentlyContinue
 
 if (-not $PolicyPath) {
-  $PolicyPath = Join-Path $RepoRoot 'tools/public-export/sync_policy.json'
+  $livePolicy = Join-Path $RepoRoot 'tools/security/policy.json'
+  $legacyPolicy = Join-Path $RepoRoot 'tools/public-export/sync_policy.json'
+  if (Test-Path -LiteralPath $livePolicy) {
+    $PolicyPath = $livePolicy
+  } else {
+    $PolicyPath = $legacyPolicy
+  }
 }
 if (-not (Test-Path -LiteralPath $PolicyPath)) {
-  throw "Missing public export sync policy: $PolicyPath"
+  throw "Missing security policy (expected tools/security/policy.json): $PolicyPath"
 }
 
 $syncPolicy = Get-Content -Raw -LiteralPath $PolicyPath | ConvertFrom-Json
@@ -22,6 +28,18 @@ $excludeDirectoryNames = @($syncPolicy.exclude_directory_names)
 $excludeFileNames = @($syncPolicy.exclude_file_names)
 $secretScanSkipFileNames = @($syncPolicy.secret_scan_skip_file_names)
 $lockfileSafetyFileNames = @($syncPolicy.lockfile_safety_file_names)
+$allowedPublicProjectNames = @()
+if ($syncPolicy.PSObject.Properties.Name -contains 'allowed_public_project_names') {
+  $allowedPublicProjectNames = @($syncPolicy.allowed_public_project_names)
+}
+$forbiddenPrivateIdentifiers = @()
+if ($syncPolicy.PSObject.Properties.Name -contains 'forbidden_private_identifiers') {
+  $forbiddenPrivateIdentifiers = @($syncPolicy.forbidden_private_identifiers)
+}
+$forbiddenDependencyFingerprints = @()
+if ($syncPolicy.PSObject.Properties.Name -contains 'forbidden_dependency_fingerprints') {
+  $forbiddenDependencyFingerprints = @($syncPolicy.forbidden_dependency_fingerprints)
+}
 
 function Get-PublicScrubFiles {
   Get-ChildItem -LiteralPath . -Recurse -Force -File | Where-Object {
@@ -40,8 +58,10 @@ function Get-PublicScrubFiles {
   }
 }
 
-# Run this in Babel-public before release. It is expected to fail in Babel-private.
-$patterns = @(
+# Content leak patterns: private identifiers + paths. Allowed public project names
+# (e.g. GPCGuard, Prismatix) may appear in docs/examples and are NOT in this list.
+# They remain forbidden as dependency fingerprints via lockfile/package rules.
+$legacyHardcodedPatterns = @(
   'Babel-private',
   'babel-private',
   'C:\\Users\\',
@@ -58,8 +78,6 @@ $patterns = @(
   'com\.pdffixerpro',
   'com\.privacyscrubber',
   'com\.screenkeeper\.app',
-  'GPCGuard',
-  'Prismatix',
   'AuditGuard',
   'Project_Android',
   'App-Test-Babel',
@@ -73,6 +91,18 @@ $patterns = @(
   'scanners/gpcguard_monitor',
   'PlayBillingGateway'
 )
+if ($forbiddenPrivateIdentifiers.Count -gt 0) {
+  $patterns = $forbiddenPrivateIdentifiers
+} else {
+  $patterns = $legacyHardcodedPatterns
+}
+# Never treat allowed public project names as content-leak findings.
+if ($allowedPublicProjectNames.Count -gt 0) {
+  $patterns = @($patterns | Where-Object {
+    $p = $_
+    -not ($allowedPublicProjectNames | Where-Object { $p -eq $_ -or $p -eq [regex]::Escape($_) })
+  })
+}
 
 function Is-LegacyPlaceholderFinding {
   param([string]$RelativePath)
@@ -87,7 +117,9 @@ function Get-ShannonEntropy {
   $length = $String.Length
   $charCounts = @{}
   foreach ($char in $String.ToCharArray()) {
-    $charCounts[$char] = ($charCounts[$char] ?? 0) + 1
+    $prior = 0
+    if ($charCounts.ContainsKey($char)) { $prior = [int]$charCounts[$char] }
+    $charCounts[$char] = $prior + 1
   }
   $entropy = 0.0
   foreach ($count in $charCounts.Values) {
@@ -173,6 +205,8 @@ function Get-LeakSearchResults {
       $args = @('--glob', "!**/$fileName") + $args
     }
     $args = @('--glob', '!tools/check-public-scrub.ps1') + $args
+    $args = @('--glob', '!tools/security/policy.json') + $args
+    $args = @('--glob', '!tools/run-public-secret-scan.ps1') + $args
 
     $results = & $rgCommand.Source @args
     $exitCode = $LASTEXITCODE
@@ -192,7 +226,9 @@ function Get-LeakSearchResults {
   $results = New-Object System.Collections.Generic.List[string]
   foreach ($file in Get-PublicScrubFiles) {
     $relative = $file.FullName.Substring((Get-Location).Path.Length).TrimStart('\', '/').Replace('\', '/')
-    if ($relative -eq 'tools/check-public-scrub.ps1') {
+    if ($relative -eq 'tools/check-public-scrub.ps1' -or
+        $relative -eq 'tools/security/policy.json' -or
+        $relative -eq 'tools/run-public-secret-scan.ps1') {
       continue
     }
 
@@ -248,12 +284,17 @@ $keyPatternRules = @(
 
 $secretFindings = New-Object System.Collections.Generic.List[string]
 
+$fingerprintAlternation = if ($forbiddenDependencyFingerprints.Count -gt 0) {
+  ($forbiddenDependencyFingerprints | ForEach-Object { [regex]::Escape($_) }) -join '|'
+} else {
+  'Babel-private|GPCGuard|Prismatix|AuditGuard|ExactUploadFixer|PDFFixerPro|PrivacyScrubber|ScreenKeepAlive|Project_Android|App-Test-Babel|App-test-Babel|app_test_babel|MonteCarloLedger|ProjectGames|Openclaw'
+}
 $lockfileSafetyRules = @(
   @{ Label = 'local file dependency'; Pattern = '"(?:resolved|version)"\s*:\s*"file:' },
   @{ Label = 'local Windows path'; Pattern = '[A-Za-z]:[\\/](?:Users|Workspace|Projects)[\\/]' },
   @{ Label = 'local Unix path'; Pattern = '/(?:Users|home|workspace|projects)/[^"''\s]+' },
-  @{ Label = 'private dependency fingerprint'; Pattern = '(?i)(Babel-private|GPCGuard|Prismatix|AuditGuard|ExactUploadFixer|PDFFixerPro|PrivacyScrubber|ScreenKeepAlive|Project_Android|App-Test-Babel|App-test-Babel|app_test_babel|MonteCarloLedger|ProjectGames|Openclaw)' },
-  @{ Label = 'private repository URL'; Pattern = '(?i)https?://[^"''\s]*(Babel-private|GPCGuard|Prismatix|AuditGuard|Project_Android|App-Test-Babel|App-test-Babel|app_test_babel|MonteCarloLedger|ProjectGames|Openclaw)[^"''\s]*' }
+  @{ Label = 'private dependency fingerprint'; Pattern = "(?i)($fingerprintAlternation)" },
+  @{ Label = 'private repository URL'; Pattern = "(?i)https?://[^`"'\s]*($fingerprintAlternation)[^`"'\s]*" }
 )
 
 foreach ($file in Get-PublicScrubFiles) {

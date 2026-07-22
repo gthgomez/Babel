@@ -27,9 +27,15 @@ if ($null -ne $preferredShell) {
   $shellPath = (Get-Command powershell -ErrorAction Stop).Source
 }
 
-$policyPath = Join-Path $RepoRoot 'tools/public-export/sync_policy.json'
+$policyPath = Join-Path $RepoRoot 'tools/security/policy.json'
+if (-not (Test-Path -LiteralPath $policyPath)) {
+  $policyPath = Join-Path $RepoRoot 'tools/public-export/sync_policy.json'
+}
 if (-not (Test-Path -LiteralPath $policyPath)) {
   $policyPath = Join-Path $scriptRoot 'public-export/sync_policy.json'
+}
+if (-not (Test-Path -LiteralPath $policyPath)) {
+  $policyPath = Join-Path $scriptRoot 'security/policy.json'
 }
 
 $requiredScannerName = 'gitleaks'
