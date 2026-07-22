@@ -117,7 +117,9 @@ function Get-ShannonEntropy {
   $length = $String.Length
   $charCounts = @{}
   foreach ($char in $String.ToCharArray()) {
-    $charCounts[$char] = ($charCounts[$char] ?? 0) + 1
+    $prior = 0
+    if ($charCounts.ContainsKey($char)) { $prior = [int]$charCounts[$char] }
+    $charCounts[$char] = $prior + 1
   }
   $entropy = 0.0
   foreach ($count in $charCounts.Values) {
