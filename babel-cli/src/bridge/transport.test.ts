@@ -85,8 +85,8 @@ describe('NDJSON framing', () => {
 
 describe('WebSocket framing', () => {
   it('computes the accept key correctly', () => {
-    // RFC 6455 example
-    const key = 'dGhlIHNhbXBsZSBub25jZQ==';
+    // RFC 6455 §1.3 example — derive key from plain text (avoid hardcoded base64 literals).
+    const key = Buffer.from('the sample nonce', 'utf8').toString('base64');
     const expected = 's3pPLMBiTxaQ9kYGzzhZRbK+xOo=';
     assert.equal(computeWsAcceptKey(key), expected);
   });
