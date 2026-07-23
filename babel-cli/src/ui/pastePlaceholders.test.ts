@@ -39,10 +39,10 @@ describe('pastePlaceholders', () => {
   });
 
   it('expand replaces placeholders with stored content', () => {
-    const placeholder = formatPastePlaceholder(50);
+    const pasteToken = formatPastePlaceholder(50);
     const content = 'line1\nline2';
-    const expanded = expandPastePlaceholders(`before ${placeholder} after`, [
-      { placeholder, content },
+    const expanded = expandPastePlaceholders(`before ${pasteToken} after`, [
+      { pasteToken, content },
     ]);
     assert.equal(expanded, `before ${content} after`);
   });
