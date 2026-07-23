@@ -4,17 +4,12 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
-import {
-  delimiter,
-  dirname,
-  join,
-  relative,
-  resolve,
-} from 'node:path';
+import { delimiter, dirname, join, relative, resolve, sep } from 'node:path';
 
 import { z } from 'zod';
 
@@ -29,7 +24,10 @@ import {
 import type { McpServerConfig } from '../config/mcpServers.js';
 import type { ToolResult } from '../sandbox.js';
 
-const PluginIdSchema = z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/);
+const PluginIdSchema = z
+  .string()
+  .min(1)
+  .regex(/^[a-zA-Z0-9_-]+$/);
 const TrustLevelSchema = z.enum(['metadata', 'read_only', 'local_mutating', 'external_network']);
 const HookEventSchema = z.enum([
   'PreRun',
@@ -45,14 +43,20 @@ const HookEventSchema = z.enum([
 const PluginToolSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('static_json'),
-    name: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
+    name: z
+      .string()
+      .min(1)
+      .regex(/^[a-zA-Z0-9_-]+$/),
     description: z.string().min(1),
     trust_level: TrustLevelSchema.default('read_only'),
     payload: z.unknown().optional(),
   }),
   z.object({
     kind: z.literal('static_text'),
-    name: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
+    name: z
+      .string()
+      .min(1)
+      .regex(/^[a-zA-Z0-9_-]+$/),
     description: z.string().min(1),
     trust_level: TrustLevelSchema.default('read_only'),
     text: z.string(),
@@ -62,27 +66,39 @@ const PluginToolSchema = z.discriminatedUnion('kind', [
 const PluginSlashCommandSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('static_text'),
-    name: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
+    name: z
+      .string()
+      .min(1)
+      .regex(/^[a-zA-Z0-9_-]+$/),
     description: z.string().min(1),
     text: z.string(),
   }),
   z.object({
     kind: z.literal('static_json'),
-    name: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
+    name: z
+      .string()
+      .min(1)
+      .regex(/^[a-zA-Z0-9_-]+$/),
     description: z.string().min(1),
     payload: z.unknown(),
   }),
 ]);
 
 const PluginPromptSkillSchema = z.object({
-  id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
+  id: z
+    .string()
+    .min(1)
+    .regex(/^[a-zA-Z0-9_-]+$/),
   title: z.string().min(1),
   description: z.string().min(1),
   content: z.string().min(1),
 });
 
 const PluginMcpServerSchema = z.object({
-  name: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
+  name: z
+    .string()
+    .min(1)
+    .regex(/^[a-zA-Z0-9_-]+$/),
   command: z.string().min(1),
   args: z.array(z.string()).default([]),
 });
@@ -205,14 +221,20 @@ function evaluatePluginPolicyForRoot(
     };
   }
   const decision = evaluatePluginPolicy(pluginId, trustLevel, loaded.policy);
-  return decision.allowed ? decision : {
-    ...decision,
-    policy_source: describeEnterprisePolicySource(loaded),
-  };
+  return decision.allowed
+    ? decision
+    : {
+        ...decision,
+        policy_source: describeEnterprisePolicySource(loaded),
+      };
 }
 
 export function getPluginConfigPath(options: PluginRuntimeOptions = {}): string {
-  return options.configPath ?? process.env['BABEL_PLUGINS_CONFIG'] ?? join(getBabelRoot(options), 'babel-cli', 'config', 'plugins.json');
+  return (
+    options.configPath ??
+    process.env['BABEL_PLUGINS_CONFIG'] ??
+    join(getBabelRoot(options), 'babel-cli', 'config', 'plugins.json')
+  );
 }
 
 function getDefaultPluginRoot(options: PluginRuntimeOptions = {}): string {
@@ -248,7 +270,10 @@ export function readPluginConfig(options: PluginRuntimeOptions = {}): PluginConf
   }
 }
 
-export function writePluginConfig(config: PluginConfig, options: PluginRuntimeOptions = {}): PluginConfig {
+export function writePluginConfig(
+  config: PluginConfig,
+  options: PluginRuntimeOptions = {},
+): PluginConfig {
   const configPath = getPluginConfigPath(options);
   const parsed = PluginConfigSchema.parse(config);
   mkdirSync(dirname(configPath), { recursive: true });
@@ -261,9 +286,7 @@ function getPluginRoots(config: PluginConfig, options: PluginRuntimeOptions = {}
     ? process.env['BABEL_PLUGIN_ROOTS'].split(delimiter).filter(Boolean)
     : [];
   const explicitRoots = options.pluginRoots ?? [];
-  const configRoots = config.plugin_roots.map((root) =>
-    resolve(getBabelRoot(options), root),
-  );
+  const configRoots = config.plugin_roots.map((root) => resolve(getBabelRoot(options), root));
   return uniqueValues([
     getDefaultPluginRoot(options),
     ...configRoots,
@@ -344,7 +367,9 @@ export function loadPluginRegistry(options: PluginRuntimeOptions = {}): PluginRe
           diagnostics.push({
             severity: 'fail',
             code: 'invalid_manifest',
-            message: parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; '),
+            message: parsed.error.issues
+              .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+              .join('; '),
             path: manifestPath,
           });
           continue;
@@ -379,7 +404,11 @@ export function loadPluginRegistry(options: PluginRuntimeOptions = {}): PluginRe
           });
         }
         if (active) {
-          const enterpriseDecision = evaluatePluginPolicyForRoot(manifest.id, manifest.trust_level, options);
+          const enterpriseDecision = evaluatePluginPolicyForRoot(
+            manifest.id,
+            manifest.trust_level,
+            options,
+          );
           if (!enterpriseDecision.allowed) {
             active = false;
             blockedReason = formatEnterprisePolicyDecision(enterpriseDecision);
@@ -445,7 +474,11 @@ export function enablePlugin(
     throw new Error(`Plugin "${id}" was not found.`);
   }
 
-  const enterpriseDecision = evaluatePluginPolicyForRoot(plugin.manifest.id, plugin.manifest.trust_level, options);
+  const enterpriseDecision = evaluatePluginPolicyForRoot(
+    plugin.manifest.id,
+    plugin.manifest.trust_level,
+    options,
+  );
   if (!enterpriseDecision.allowed) {
     throw new Error(`[ENTERPRISE_POLICY] ${formatEnterprisePolicyDecision(enterpriseDecision)}`);
   }
@@ -455,26 +488,32 @@ export function enablePlugin(
     if (options.allowTrust !== plugin.manifest.trust_level) {
       throw new Error(
         `Plugin "${id}" requires trust_level "${plugin.manifest.trust_level}". ` +
-        `Re-run with --allow-trust ${plugin.manifest.trust_level}.`,
+          `Re-run with --allow-trust ${plugin.manifest.trust_level}.`,
       );
     }
     allowedTrust.add(plugin.manifest.trust_level);
   }
 
-  return writePluginConfig({
-    ...registry.config,
-    runtime_plugins_enabled: true,
-    enabled_plugin_ids: [...new Set([...registry.config.enabled_plugin_ids, id])],
-    allowed_trust_levels: [...allowedTrust],
-  }, options);
+  return writePluginConfig(
+    {
+      ...registry.config,
+      runtime_plugins_enabled: true,
+      enabled_plugin_ids: [...new Set([...registry.config.enabled_plugin_ids, id])],
+      allowed_trust_levels: [...allowedTrust],
+    },
+    options,
+  );
 }
 
 export function disablePlugin(id: string, options: PluginRuntimeOptions = {}): PluginConfig {
   const config = readPluginConfig(options);
-  return writePluginConfig({
-    ...config,
-    enabled_plugin_ids: config.enabled_plugin_ids.filter((candidate) => candidate !== id),
-  }, options);
+  return writePluginConfig(
+    {
+      ...config,
+      enabled_plugin_ids: config.enabled_plugin_ids.filter((candidate) => candidate !== id),
+    },
+    options,
+  );
 }
 
 function pluginErrorResult(code: string, message: string, pluginId?: string): ToolResult {
@@ -491,13 +530,15 @@ function pluginErrorResult(code: string, message: string, pluginId?: string): To
 }
 
 function renderTemplate(text: string, args: string[] = []): string {
-  return text
-    .replace(/\{args\}/g, args.join(' '))
-    .replace(/\{arg_count\}/g, String(args.length));
+  return text.replace(/\{args\}/g, args.join(' ')).replace(/\{arg_count\}/g, String(args.length));
 }
 
 function findActivePlugin(id: string, options: PluginRuntimeOptions = {}): LoadedPlugin | null {
-  return loadPluginRegistry(options).plugins.find((plugin) => plugin.manifest.id === id && plugin.active) ?? null;
+  return (
+    loadPluginRegistry(options).plugins.find(
+      (plugin) => plugin.manifest.id === id && plugin.active,
+    ) ?? null
+  );
 }
 
 export async function handlePluginTool(
@@ -506,12 +547,20 @@ export async function handlePluginTool(
 ): Promise<ToolResult> {
   const plugin = findActivePlugin(req.plugin, options);
   if (!plugin) {
-    return pluginErrorResult('plugin_not_active', `Plugin "${req.plugin}" is not active.`, req.plugin);
+    return pluginErrorResult(
+      'plugin_not_active',
+      `Plugin "${req.plugin}" is not active.`,
+      req.plugin,
+    );
   }
 
   const tool = plugin.manifest.tools.find((candidate) => candidate.name === req.name);
   if (!tool) {
-    return pluginErrorResult('plugin_tool_not_found', `Plugin tool "${req.name}" was not found.`, req.plugin);
+    return pluginErrorResult(
+      'plugin_tool_not_found',
+      `Plugin tool "${req.name}" was not found.`,
+      req.plugin,
+    );
   }
 
   if (tool.kind === 'static_text') {
@@ -524,13 +573,17 @@ export async function handlePluginTool(
 
   return {
     exit_code: 0,
-    stdout: JSON.stringify({
-      status: 'success',
-      plugin_id: plugin.manifest.id,
-      tool: tool.name,
-      input: req.input ?? {},
-      output: tool.payload ?? null,
-    }, null, 2),
+    stdout: JSON.stringify(
+      {
+        status: 'success',
+        plugin_id: plugin.manifest.id,
+        tool: tool.name,
+        input: req.input ?? {},
+        output: tool.payload ?? null,
+      },
+      null,
+      2,
+    ),
     stderr: '',
   };
 }
@@ -546,9 +599,15 @@ export async function runPluginCommand(
     return pluginErrorResult('plugin_not_active', `Plugin "${pluginId}" is not active.`, pluginId);
   }
 
-  const command = plugin.manifest.slash_commands.find((candidate) => candidate.name === commandName);
+  const command = plugin.manifest.slash_commands.find(
+    (candidate) => candidate.name === commandName,
+  );
   if (!command) {
-    return pluginErrorResult('plugin_command_not_found', `Plugin command "${commandName}" was not found.`, pluginId);
+    return pluginErrorResult(
+      'plugin_command_not_found',
+      `Plugin command "${commandName}" was not found.`,
+      pluginId,
+    );
   }
 
   if (command.kind === 'static_text') {
@@ -561,13 +620,17 @@ export async function runPluginCommand(
 
   return {
     exit_code: 0,
-    stdout: JSON.stringify({
-      status: 'success',
-      plugin_id: plugin.manifest.id,
-      command: command.name,
-      args,
-      output: command.payload,
-    }, null, 2),
+    stdout: JSON.stringify(
+      {
+        status: 'success',
+        plugin_id: plugin.manifest.id,
+        command: command.name,
+        args,
+        output: command.payload,
+      },
+      null,
+      2,
+    ),
     stderr: '',
   };
 }
@@ -646,7 +709,30 @@ function runTrimTrailingWhitespaceHook(context: PluginHookContext): Record<strin
       changed_bytes: 0,
     };
   }
-  writeFileSync(targetPath, formatted.content, 'utf-8');
+  // Phase 3d: Resolve symlinks and verify containment before writing.
+  // Previously writeFileSync bypassed SafeExecutor entirely — a symlink
+  // could redirect the write outside the project root.
+  let resolvedTarget: string;
+  try {
+    resolvedTarget = realpathSync(targetPath);
+  } catch {
+    // File doesn't exist or can't be resolved — use the original path.
+    // The existence check above guarantees the file is present, so
+    // realpathSync failure means a broken symlink or permission issue.
+    resolvedTarget = targetPath;
+  }
+  // Use shadow root as containment boundary when set (dry-run mode);
+  // otherwise use project root.
+  const containmentRoot = resolve(context.shadowRoot ?? context.projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? process.cwd());
+  if (!resolvedTarget.startsWith(containmentRoot + sep) && resolvedTarget !== containmentRoot) {
+    return {
+      status: 'skipped',
+      reason: 'path_containment_violation',
+      target_path: targetPath,
+    };
+  }
+
+  writeFileSync(resolvedTarget, formatted.content, 'utf-8');
   return {
     status: 'changed',
     target_path: targetPath,
@@ -690,9 +776,10 @@ export async function runPluginHooks(
       };
 
       try {
-        const outcome = hook.action === 'trim_trailing_whitespace'
-          ? runTrimTrailingWhitespaceHook(context)
-          : { status: 'skipped', reason: 'unsupported_action' };
+        const outcome =
+          hook.action === 'trim_trailing_whitespace'
+            ? runTrimTrailingWhitespaceHook(context)
+            : { status: 'skipped', reason: 'unsupported_action' };
         const record = {
           ...baseRecord,
           outcome,
@@ -724,7 +811,9 @@ export async function runPluginHooks(
   return { event, diagnostics, records };
 }
 
-export function readActivePluginMcpServers(options: PluginRuntimeOptions = {}): Record<string, McpServerConfig> {
+export function readActivePluginMcpServers(
+  options: PluginRuntimeOptions = {},
+): Record<string, McpServerConfig> {
   const registry = loadPluginRegistry(options);
   const servers: Record<string, McpServerConfig> = {};
   if (!registry.config.runtime_plugins_enabled) {
@@ -753,7 +842,9 @@ export function formatPluginListHuman(registry: PluginRegistry): string {
 
   for (const plugin of registry.plugins) {
     const state = plugin.active ? 'active' : plugin.enabled ? 'enabled-blocked' : 'disabled';
-    lines.push(`${plugin.manifest.id.padEnd(24)} ${state.padEnd(15)} ${plugin.manifest.trust_level}  ${plugin.manifest.name}`);
+    lines.push(
+      `${plugin.manifest.id.padEnd(24)} ${state.padEnd(15)} ${plugin.manifest.trust_level}  ${plugin.manifest.name}`,
+    );
     if (plugin.blocked_reason) {
       lines.push(`  - ${plugin.blocked_reason}`);
     }
@@ -779,7 +870,9 @@ export function formatPluginInspectHuman(plugin: LoadedPlugin): string {
     `Prompt skills: ${manifest.prompt_skills.map((skill) => skill.id).join(', ') || '(none)'}`,
     `MCP bundles: ${manifest.mcp_servers.map((server) => server.name).join(', ') || '(none)'}`,
     `Hooks: ${manifest.hooks.map((hook) => `${hook.event}:${hook.action}`).join(', ') || '(none)'}`,
-  ].filter((line): line is string => line !== null).join('\n');
+  ]
+    .filter((line): line is string => line !== null)
+    .join('\n');
 }
 
 export function formatPluginDoctorHuman(registry: PluginRegistry): string {

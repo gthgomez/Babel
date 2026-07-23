@@ -35,10 +35,7 @@ test('validateRuntimeEnv accepts supported Babel startup env vars', () => {
 });
 
 test('validateRuntimeEnv rejects invalid numeric values with clear variable names', () => {
-  assert.throws(
-    () => validateRuntimeEnv({ BABEL_CLI_TIMEOUT_MS: 'abc' }),
-    /BABEL_CLI_TIMEOUT_MS/,
-  );
+  assert.throws(() => validateRuntimeEnv({ BABEL_CLI_TIMEOUT_MS: 'abc' }), /BABEL_CLI_TIMEOUT_MS/);
 });
 
 test('validateRuntimeEnv rejects unsupported orchestrator versions', () => {

@@ -221,13 +221,9 @@ const RISK_RULES: readonly RiskRule[] = [
       'Use existing benchmark runtime capabilities first.',
       'Avoid dependency installation unless the task explicitly permits it.',
     ],
-    requiredLocalVerifier: [
-      'Runtime inventory-compatible command.',
-    ],
+    requiredLocalVerifier: ['Runtime inventory-compatible command.'],
     recommendedModelTier: 'standard',
-    qaRejectionRules: [
-      'Reject unapproved package installation recovery paths.',
-    ],
+    qaRejectionRules: ['Reject unapproved package installation recovery paths.'],
   },
   {
     label: 'many_file_aggregation',
@@ -245,14 +241,9 @@ const RISK_RULES: readonly RiskRule[] = [
       'Use a helper program for many-file aggregation.',
       'Preserve exact requested labels and row order.',
     ],
-    requiredLocalVerifier: [
-      'Schema/header check.',
-      'Row-count and label-order check.',
-    ],
+    requiredLocalVerifier: ['Schema/header check.', 'Row-count and label-order check.'],
     recommendedModelTier: 'default',
-    qaRejectionRules: [
-      'Reject manual sampling as proof for many-file aggregation.',
-    ],
+    qaRejectionRules: ['Reject manual sampling as proof for many-file aggregation.'],
   },
   {
     label: 'exact_output_schema',
@@ -273,9 +264,7 @@ const RISK_RULES: readonly RiskRule[] = [
       'Preserve exact schema, delimiter, labels, and row order.',
       'Run a postcondition check after final mutation.',
     ],
-    requiredLocalVerifier: [
-      'Exact schema and content-shape check.',
-    ],
+    requiredLocalVerifier: ['Exact schema and content-shape check.'],
     recommendedModelTier: 'default',
     qaRejectionRules: [
       'Reject schema-altering label synonyms.',
@@ -301,13 +290,17 @@ export function extractBenchmarkTaskName(rawTask: string): string | null {
     'winning-avg-corewars',
     'llm-inference-batching-scheduler',
   ];
-  return known.find(task => new RegExp(`\\b${escapeRegExp(task)}\\b`, 'i').test(normalized)) ?? null;
+  return (
+    known.find((task) => new RegExp(`\\b${escapeRegExp(task)}\\b`, 'i').test(normalized)) ?? null
+  );
 }
 
 export function isBenchmarkTask(rawTask: string): boolean {
-  return /\bTerminal-Bench 2 task\b/i.test(rawTask) ||
+  return (
+    /\bTerminal-Bench 2 task\b/i.test(rawTask) ||
     /\bSWE-rebench\b/i.test(rawTask) ||
-    extractBenchmarkTaskName(rawTask) !== null;
+    extractBenchmarkTaskName(rawTask) !== null
+  );
 }
 
 export function classifyBenchmarkTaskRisk(rawTask: string): BenchmarkTaskRiskReport {
@@ -324,28 +317,26 @@ export function classifyBenchmarkTaskRisk(rawTask: string): BenchmarkTaskRiskRep
     };
   }
 
-  const labels = RISK_RULES
-    .map(rule => {
-      const matchedTerms = rule.patterns
-        .filter(pattern => pattern.test(text))
-        .map(pattern => pattern.source);
-      return matchedTerms.length > 0
-        ? {
-            label: rule.label,
-            confidence: rule.confidence,
-            matched_terms: matchedTerms,
-            required_plan_properties: [...rule.requiredPlanProperties],
-            required_local_verifier: [...rule.requiredLocalVerifier],
-            recommended_model_tier: rule.recommendedModelTier,
-            qa_rejection_rules: [...rule.qaRejectionRules],
-          }
-        : null;
-    })
-    .filter((label): label is BenchmarkRiskLabelReport => label !== null);
+  const labels = RISK_RULES.map((rule) => {
+    const matchedTerms = rule.patterns
+      .filter((pattern) => pattern.test(text))
+      .map((pattern) => pattern.source);
+    return matchedTerms.length > 0
+      ? {
+          label: rule.label,
+          confidence: rule.confidence,
+          matched_terms: matchedTerms,
+          required_plan_properties: [...rule.requiredPlanProperties],
+          required_local_verifier: [...rule.requiredLocalVerifier],
+          recommended_model_tier: rule.recommendedModelTier,
+          qa_rejection_rules: [...rule.qaRejectionRules],
+        }
+      : null;
+  }).filter((label): label is BenchmarkRiskLabelReport => label !== null);
 
-  const recommended = labels.some(label => label.recommended_model_tier === 'escalation')
+  const recommended = labels.some((label) => label.recommended_model_tier === 'escalation')
     ? 'escalation'
-    : labels.some(label => label.recommended_model_tier === 'standard')
+    : labels.some((label) => label.recommended_model_tier === 'standard')
       ? 'standard'
       : 'default';
 
@@ -373,7 +364,7 @@ function buildBenchmarkRiskPromptLinesFromLabels(
   const lines = [
     'Benchmark task risk profile:',
     `  - Task: ${taskName ?? '(unknown external benchmark task)'}`,
-    `  - Risk labels: ${labels.map(label => label.label).join(', ')}`,
+    `  - Risk labels: ${labels.map((label) => label.label).join(', ')}`,
   ];
   for (const label of labels) {
     lines.push(

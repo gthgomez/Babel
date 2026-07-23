@@ -95,7 +95,10 @@ test('dirty target detection refuses tracked user changes', { skip: !gitAvailabl
     spawnSync('git', ['commit', '-m', 'baseline'], { cwd: root, encoding: 'utf8' });
     writeFileSync(join(root, 'src', 'math.js'), 'user dirty\n', 'utf8');
 
-    const safety = createWorktreeSafetyController({ projectRoot: root, runDir: join(root, '.run') });
+    const safety = createWorktreeSafetyController({
+      projectRoot: root,
+      runDir: join(root, '.run'),
+    });
     const result = safety.snapshotBeforeWrite('src/math.js', 1);
     assert.equal(result.ok, false);
     assert.equal(result.status, 'WORKTREE_DIRTY_UNSAFE');
@@ -112,7 +115,10 @@ test('rollback preserves unrelated tracked and untracked files', () => {
     mkdirSync(join(root, 'src'), { recursive: true });
     writeFileSync(join(root, 'src', 'math.js'), 'before\n', 'utf8');
     writeFileSync(join(root, 'src', 'dirty.txt'), 'do not touch\n', 'utf8');
-    const safety = createWorktreeSafetyController({ projectRoot: root, runDir: join(root, '.run') });
+    const safety = createWorktreeSafetyController({
+      projectRoot: root,
+      runDir: join(root, '.run'),
+    });
 
     assert.equal(safety.snapshotBeforeWrite('src/math.js', 1).ok, true);
     writeFileSync(join(root, 'src', 'math.js'), 'bad patch\n', 'utf8');
@@ -136,7 +142,10 @@ test('rollback failure status is specific and leaves evidence', () => {
   try {
     mkdirSync(join(root, 'src'), { recursive: true });
     writeFileSync(join(root, 'src', 'math.js'), 'before\n', 'utf8');
-    const safety = createWorktreeSafetyController({ projectRoot: root, runDir: join(root, '.run') });
+    const safety = createWorktreeSafetyController({
+      projectRoot: root,
+      runDir: join(root, '.run'),
+    });
     assert.equal(safety.snapshotBeforeWrite('src/math.js', 1).ok, true);
     writeFileSync(join(root, 'src', 'math.js'), 'bad patch\n', 'utf8');
 
@@ -158,7 +167,10 @@ test('rollback failure status is specific and leaves evidence', () => {
 test('protected paths are refused before snapshot', () => {
   const root = tempRoot();
   try {
-    const safety = createWorktreeSafetyController({ projectRoot: root, runDir: join(root, '.run') });
+    const safety = createWorktreeSafetyController({
+      projectRoot: root,
+      runDir: join(root, '.run'),
+    });
     const result = safety.snapshotBeforeWrite('.git/config', 1);
     assert.equal(result.ok, false);
     assert.equal(result.status, 'WORKTREE_DIRTY_UNSAFE');

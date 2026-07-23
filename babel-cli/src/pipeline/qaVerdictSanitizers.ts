@@ -1,11 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type {
-  OrchestratorManifest,
-  QaVerdict,
-  SwePlan,
-} from '../schemas/agentContracts.js';
+import type { OrchestratorManifest, QaVerdict, SwePlan } from '../schemas/agentContracts.js';
 import {
   shouldUseDeterministicAndroidSdkBootstrapLane,
   shouldUseDeterministicGradleBootstrapLane,
@@ -24,18 +20,19 @@ export function sanitizeQaVerdictForDeterministicGradleBootstrapLane(
     return verdict;
   }
 
-  const usesForbiddenGlobalGradle = swePlan.minimal_action_set.some(step =>
-    (step.tool === 'shell_exec' || step.tool === 'test_run') &&
-    /\bgradle\b/i.test(String(step.target ?? '')) &&
-    !/\bgradlew(?:\.bat)?\b/i.test(String(step.target ?? '')) &&
-    !/\b(winget|choco|scoop)\b/i.test(String(step.target ?? '')),
+  const usesForbiddenGlobalGradle = swePlan.minimal_action_set.some(
+    (step) =>
+      (step.tool === 'shell_exec' || step.tool === 'test_run') &&
+      /\bgradle\b/i.test(String(step.target ?? '')) &&
+      !/\bgradlew(?:\.bat)?\b/i.test(String(step.target ?? '')) &&
+      !/\b(winget|choco|scoop)\b/i.test(String(step.target ?? '')),
   );
 
   if (usesForbiddenGlobalGradle) {
     return verdict;
   }
 
-  const filteredFailures = verdict.failures.filter(failure => {
+  const filteredFailures = verdict.failures.filter((failure) => {
     const condition = String(failure.condition ?? '');
     if (
       failure.tag === 'SFDIPOT-P' &&
@@ -63,7 +60,8 @@ export function sanitizeQaVerdictForDeterministicGradleBootstrapLane(
     return {
       verdict: 'PASS',
       overall_confidence: Math.max(3, verdict.overall_confidence),
-      notes: 'Deterministic Gradle bootstrap lane owns Gradle provisioning and wrapper-generation failure handling for this plan.',
+      notes:
+        'Deterministic Gradle bootstrap lane owns Gradle provisioning and wrapper-generation failure handling for this plan.',
     };
   }
 
@@ -84,17 +82,15 @@ export function sanitizeWindowsGradlewPermissionQaVerdict(
     return verdict;
   }
 
-  const filteredFailures = verdict.failures.filter(failure => {
+  const filteredFailures = verdict.failures.filter((failure) => {
     const condition = String(failure.condition ?? '');
     return !(
       failure.tag === 'SFDIPOT-P' &&
       /\bgradlew(?:\.bat)?\b/i.test(condition) &&
-      (
-        /permission/i.test(condition) ||
+      (/permission/i.test(condition) ||
         /mark of the web/i.test(condition) ||
         /unblock-file/i.test(condition) ||
-        /executable permissions/i.test(condition)
-      )
+        /executable permissions/i.test(condition))
     );
   });
 
@@ -106,7 +102,8 @@ export function sanitizeWindowsGradlewPermissionQaVerdict(
     return {
       verdict: 'PASS',
       overall_confidence: Math.max(3, verdict.overall_confidence),
-      notes: 'Windows wrapper-permission rejection removed because no grounded evidence showed gradlew / gradlew.bat was blocked.',
+      notes:
+        'Windows wrapper-permission rejection removed because no grounded evidence showed gradlew / gradlew.bat was blocked.',
     };
   }
 
@@ -132,20 +129,20 @@ export function sanitizeExistingWrapperQaVerdict(
   }
 
   const wrapperExists =
-    existsSync(join(projectRoot, 'gradlew')) ||
-    existsSync(join(projectRoot, 'gradlew.bat'));
-  const usesGlobalGradle = swePlan.minimal_action_set.some(step =>
-    (step.tool === 'shell_exec' || step.tool === 'test_run') &&
-    /\bgradle\b/i.test(String(step.target ?? '')) &&
-    !/\bgradlew(?:\.bat)?\b/i.test(String(step.target ?? '')) &&
-    !/\b(winget|choco|scoop)\b/i.test(String(step.target ?? '')),
+    existsSync(join(projectRoot, 'gradlew')) || existsSync(join(projectRoot, 'gradlew.bat'));
+  const usesGlobalGradle = swePlan.minimal_action_set.some(
+    (step) =>
+      (step.tool === 'shell_exec' || step.tool === 'test_run') &&
+      /\bgradle\b/i.test(String(step.target ?? '')) &&
+      !/\bgradlew(?:\.bat)?\b/i.test(String(step.target ?? '')) &&
+      !/\b(winget|choco|scoop)\b/i.test(String(step.target ?? '')),
   );
 
   if (!wrapperExists || usesGlobalGradle) {
     return verdict;
   }
 
-  const filteredFailures = verdict.failures.filter(failure => {
+  const filteredFailures = verdict.failures.filter((failure) => {
     const condition = String(failure.condition ?? '');
     return !(
       failure.tag === 'SFDIPOT-P' &&
@@ -162,7 +159,8 @@ export function sanitizeExistingWrapperQaVerdict(
     return {
       verdict: 'PASS',
       overall_confidence: Math.max(3, verdict.overall_confidence),
-      notes: 'Existing gradlew / gradlew.bat wrapper allows wrapper-based execution without requiring global gradle on PATH.',
+      notes:
+        'Existing gradlew / gradlew.bat wrapper allows wrapper-based execution without requiring global gradle on PATH.',
     };
   }
 
@@ -181,5 +179,7 @@ export function sanitizeGroundingViolationsForAndroidSdkLane(
     return violations;
   }
 
-  return violations.filter(condition => !/references missing path: .*local\.properties/i.test(condition));
+  return violations.filter(
+    (condition) => !/references missing path: .*local\.properties/i.test(condition),
+  );
 }

@@ -1,11 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  TOKENIZER_ENCODING,
-  countPromptManifestTokens,
-  countTextTokens,
-} from './tokenCounter.js';
+import { TOKENIZER_ENCODING, countPromptManifestTokens, countTextTokens } from './tokenCounter.js';
 
 test('tokenCounter uses deterministic o200k_base text counts', () => {
   const sample = 'Babel token accounting is deterministic.';
@@ -19,7 +15,10 @@ test('tokenCounter uses deterministic o200k_base text counts', () => {
 });
 
 test('countPromptManifestTokens reports unavailable counts with warnings for missing paths', () => {
-  const measurement = countPromptManifestTokens(['Z:\\definitely\\missing\\babel-token-counter.md'], 'runtime');
+  const measurement = countPromptManifestTokens(
+    ['Z:\\definitely\\missing\\babel-token-counter.md'],
+    'runtime',
+  );
 
   assert.equal(measurement.actualPromptTokens, null);
   assert.equal(measurement.tokenCountSource, 'unavailable');

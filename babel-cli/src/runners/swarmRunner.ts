@@ -1,7 +1,7 @@
 import { OrchestratorManifest, SubTask } from '../schemas/agentContracts.js';
 import { _runBabelPipelineInternal, PipelineOptions, PipelineResult } from '../pipeline.js';
 import { EvidenceBundle } from '../evidence.js';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface SwarmResult {
@@ -26,7 +26,14 @@ function readSwarmConcurrency(total: number): number {
   return Math.max(1, Math.min(total, fallback));
 }
 
-async function runWithConcurrency<T, R>(
+/**
+ * Execute async worker functions over an array with a concurrency limit.
+ *
+ * Results are returned in input order — the result at index `i` corresponds
+ * to the item at index `i` in the input array. Callers that pair results
+ * back to input items by index rely on this ordering contract.
+ */
+export async function runWithConcurrency<T, R>(
   items: T[],
   limit: number,
   worker: (item: T, index: number) => Promise<R>,
@@ -59,22 +66,28 @@ async function runWithConcurrency<T, R>(
 export async function runSwarmPipeline(
   manifest: OrchestratorManifest,
   parentEvidence: EvidenceBundle,
-  options: PipelineOptions
+  options: PipelineOptions,
 ): Promise<SwarmResult> {
   if (!manifest.swarm || manifest.swarm.sub_tasks.length === 0) {
-    throw new Error("SwarmManifest is missing or empty.");
+    throw new Error('SwarmManifest is missing or empty.');
   }
 
   const subTasks = manifest.swarm.sub_tasks;
   const concurrency = readSwarmConcurrency(subTasks.length);
   console.log(`[SWARM] Launching ${subTasks.length} agents with concurrency ${concurrency}...`);
 
-  const results = await runWithConcurrency(
-    subTasks,
-    concurrency,
-    async (subTask) => runSubTaskAgent(subTask, manifest, parentEvidence, options),
-  );
-  
+  // Fail-fast: AbortController signals remaining workers to bail out when
+  // the first failure is detected, preventing further writes.
+  const controller = new AbortController();
+  let failureDetected = false;
+
+  const results = await runWithConcurrency(subTasks, concurrency, async (subTask, index) => {
+    if (controller.signal.aborted) {
+      throw new Error(`[SWARM] Sub-task ${subTask.sub_task_id} aborted — prior failure detected.`);
+    }
+    return runSubTaskAgent(subTask, manifest, parentEvidence, options);
+  });
+
   const subResults: { sub_task_id: string; result: PipelineResult }[] = [];
   let successCount = 0;
 
@@ -82,14 +95,21 @@ export async function runSwarmPipeline(
     const res = results[i];
     const subTask = subTasks[i];
     if (!res || !subTask) continue;
-    
+
     const subTaskId = subTask.sub_task_id;
+    const subRunDir = join(parentEvidence.runDir, 'swarm', subTaskId);
+
     if (res.status === 'fulfilled') {
       const pipelineResult = res.value;
       subResults.push({ sub_task_id: subTaskId, result: pipelineResult });
       if (pipelineResult.status === 'COMPLETE') successCount++;
     } else {
       const errorReason = String(res.reason);
+      // Signal remaining workers to abort on first failure (fail-fast).
+      if (!failureDetected) {
+        failureDetected = true;
+        controller.abort();
+      }
       const fallbackManifest: OrchestratorManifest = {
         ...manifest,
         instruction_stack: subTask.instruction_stack,
@@ -97,24 +117,36 @@ export async function runSwarmPipeline(
         swarm: undefined,
       };
       console.error(`[SWARM] Agent ${subTaskId} failed with error:`, errorReason);
-      subResults.push({ 
-        sub_task_id: subTaskId, 
-        result: { 
-          status: 'FATAL_ERROR', 
-          runDir: join(parentEvidence.runDir, 'swarm', subTaskId),
+      subResults.push({
+        sub_task_id: subTaskId,
+        result: {
+          status: 'FATAL_ERROR',
+          runDir: subRunDir,
           manifest: fallbackManifest,
           plan: null,
-          errors: [errorReason]
-        } 
+          errors: [errorReason],
+        },
       });
     }
   }
 
-  const status = successCount === subTasks.length ? 'COMPLETE' : (successCount === 0 ? 'FAILED' : 'PARTIAL');
-  
+  // Clean up sub-run directories for failed/rejected tasks.
+  for (const subResult of subResults) {
+    if (subResult.result.status === 'FATAL_ERROR') {
+      try {
+        rmSync(subResult.result.runDir, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup — don't block the parent result.
+      }
+    }
+  }
+
+  const status =
+    successCount === subTasks.length ? 'COMPLETE' : successCount === 0 ? 'FAILED' : 'PARTIAL';
+
   return {
     status,
-    sub_results: subResults
+    sub_results: subResults,
   };
 }
 
@@ -122,31 +154,36 @@ async function runSubTaskAgent(
   subTask: SubTask,
   parentManifest: OrchestratorManifest,
   parentEvidence: EvidenceBundle,
-  options: PipelineOptions
+  options: PipelineOptions,
 ): Promise<PipelineResult> {
   const subRunDir = join(parentEvidence.runDir, 'swarm', subTask.sub_task_id);
   mkdirSync(subRunDir, { recursive: true });
   const subEvidence = EvidenceBundle.fromExistingRun(subRunDir);
-  
+
   // Create a specialized manifest for this sub-task
   const subManifest: OrchestratorManifest = {
     ...parentManifest,
     instruction_stack: subTask.instruction_stack,
     handoff_payload: subTask.handoff_payload,
     // Clear swarm field to prevent recursive swarming (unless we want deep swarms later)
-    swarm: undefined 
+    swarm: undefined,
   };
 
   // Update options for the sub-task
   const subOptions: PipelineOptions = {
     ...options,
-    mode: subTask.instruction_stack.pipeline_stage_ids.includes('pipeline_cli_executor') ? 'autonomous' : 'verified',
+    mode: 'deep',
     sessionId: `${parentManifest.session_id ?? 'swarm'}_${subTask.sub_task_id}`,
     writeLatestPointers: false,
   };
 
   try {
-    return await _runBabelPipelineInternal(subTask.handoff_payload.user_request, subOptions, subEvidence, subManifest);
+    return await _runBabelPipelineInternal(
+      subTask.handoff_payload.user_request,
+      subOptions,
+      subEvidence,
+      subManifest,
+    );
   } catch (error: unknown) {
     return {
       status: 'FATAL_ERROR',

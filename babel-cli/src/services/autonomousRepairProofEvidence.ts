@@ -74,17 +74,33 @@ export interface RepairProofValidationResult {
 export function parseJsonObjectStdout(stdout: string): {
   parsed: Record<string, unknown> | null;
   parseError: string | null;
+  truncated: boolean;
 } {
+  const trimmed = stdout.trim();
+  // Detect truncated output: starts like JSON but doesn't close properly.
+  // Common with spawnSync ETIMEDOUT — process killed mid-write.
+  const truncated =
+    trimmed.length > 0 && trimmed.startsWith('{') && !trimmed.endsWith('}') && trimmed.length < 50; // Too short to be valid complete JSON
+
+  if (truncated) {
+    return {
+      parsed: null,
+      parseError: `Truncated output (${trimmed.length} chars) — stdout was cut off before JSON closed`,
+      truncated: true,
+    };
+  }
+
   try {
-    const value = JSON.parse(stdout.trim()) as unknown;
+    const value = JSON.parse(trimmed) as unknown;
     if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-      return { parsed: value as Record<string, unknown>, parseError: null };
+      return { parsed: value as Record<string, unknown>, parseError: null, truncated: false };
     }
-    return { parsed: null, parseError: 'stdout JSON root was not an object' };
+    return { parsed: null, parseError: 'stdout JSON root was not an object', truncated: false };
   } catch (error) {
     return {
       parsed: null,
       parseError: error instanceof Error ? error.message : String(error),
+      truncated: false,
     };
   }
 }
@@ -95,8 +111,7 @@ export function validateAutonomousLiveFailThenPassTimeline(
   const first = timeline.attempts[0];
   const second = timeline.attempts[1];
   const sameVerifier =
-    first?.verifier_command !== null &&
-    first?.verifier_command === second?.verifier_command;
+    first?.verifier_command !== null && first?.verifier_command === second?.verifier_command;
   const secondConsumedFirstCapsule =
     first?.failure_capsule_path !== null &&
     first?.failure_capsule_path === second?.input_capsule_path;
@@ -106,16 +121,18 @@ export function validateAutonomousLiveFailThenPassTimeline(
 
   const checks: Array<{ pass: boolean; note: string }> = [
     {
-      pass: timeline.proof_kind === 'deterministic_model_boundary_assisted' ||
+      pass:
+        timeline.proof_kind === 'deterministic_model_boundary_assisted' ||
         timeline.proof_kind === 'deterministic_stub_assisted' ||
         timeline.proof_kind === 'fully_autonomous',
       note: `proof_kind=${timeline.proof_kind}`,
     },
     {
       pass: timeline.proof_kind !== 'harness_injected',
-      note: timeline.proof_kind === 'harness_injected'
-        ? 'proof is still harness-injected'
-        : 'proof is not harness-injected',
+      note:
+        timeline.proof_kind === 'harness_injected'
+          ? 'proof is still harness-injected'
+          : 'proof is not harness-injected',
     },
     {
       pass: timeline.attempt_count >= 2 && timeline.attempts.length >= 2,
@@ -152,7 +169,8 @@ export function validateAutonomousLiveFailThenPassTimeline(
         : 'attempt_2_capsule_input_mismatch',
     },
     {
-      pass: first?.next_attempt_consumed_capsule === true && second?.input_capsule_consumed === true,
+      pass:
+        first?.next_attempt_consumed_capsule === true && second?.input_capsule_consumed === true,
       note: `capsule_consumption_flag=${first?.next_attempt_consumed_capsule === true && second?.input_capsule_consumed === true ? 'pass' : 'fail'}`,
     },
     {
@@ -176,7 +194,7 @@ export function validateAutonomousLiveFailThenPassTimeline(
   ];
 
   return {
-    pass: checks.every(check => check.pass),
-    notes: checks.map(check => check.note),
+    pass: checks.every((check) => check.pass),
+    notes: checks.map((check) => check.note),
   };
 }

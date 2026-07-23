@@ -1,13 +1,9 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 
-export const PROJECT_TEMPLATE_NAMES = [
-  'node-cli',
-  'python-cli',
-  'vite-react',
-] as const;
+export const PROJECT_TEMPLATE_NAMES = ['node-cli', 'python-cli', 'vite-react'] as const;
 
-export type ProjectTemplateName = typeof PROJECT_TEMPLATE_NAMES[number];
+export type ProjectTemplateName = (typeof PROJECT_TEMPLATE_NAMES)[number];
 
 export interface ScaffoldFile {
   path: string;
@@ -22,10 +18,14 @@ export interface ScaffoldResult {
   next_commands: string[];
 }
 
-export function normalizeProjectTemplate(value: string | null | undefined): ProjectTemplateName | null {
-  const normalized = String(value ?? '').trim().toLowerCase();
+export function normalizeProjectTemplate(
+  value: string | null | undefined,
+): ProjectTemplateName | null {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase();
   return (PROJECT_TEMPLATE_NAMES as readonly string[]).includes(normalized)
-    ? normalized as ProjectTemplateName
+    ? (normalized as ProjectTemplateName)
     : null;
 }
 
@@ -34,11 +34,13 @@ export function listProjectTemplates(): ProjectTemplateName[] {
 }
 
 function packageNameFromTarget(targetRoot: string): string {
-  return basename(targetRoot)
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'babel-project';
+  return (
+    basename(targetRoot)
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'babel-project'
+  );
 }
 
 function pythonPackageName(targetRoot: string): string {
@@ -52,16 +54,20 @@ function nodeCliFiles(targetRoot: string): { files: ScaffoldFile[]; nextCommands
     files: [
       {
         path: 'package.json',
-        content: `${JSON.stringify({
-          name,
-          version: '0.1.0',
-          type: 'module',
-          private: true,
-          scripts: {
-            start: 'node src/index.js',
-            test: 'node --test',
+        content: `${JSON.stringify(
+          {
+            name,
+            version: '0.1.0',
+            type: 'module',
+            private: true,
+            scripts: {
+              start: 'node src/index.js',
+              test: 'node --test',
+            },
           },
-        }, null, 2)}\n`,
+          null,
+          2,
+        )}\n`,
       },
       {
         path: 'src/index.js',
@@ -124,24 +130,28 @@ function viteReactFiles(targetRoot: string): { files: ScaffoldFile[]; nextComman
     files: [
       {
         path: 'package.json',
-        content: `${JSON.stringify({
-          name,
-          version: '0.1.0',
-          private: true,
-          type: 'module',
-          scripts: {
-            dev: 'vite',
-            build: 'vite build',
-            preview: 'vite preview',
+        content: `${JSON.stringify(
+          {
+            name,
+            version: '0.1.0',
+            private: true,
+            type: 'module',
+            scripts: {
+              dev: 'vite',
+              build: 'vite build',
+              preview: 'vite preview',
+            },
+            dependencies: {
+              '@vitejs/plugin-react': '^5.0.0',
+              vite: '^7.0.0',
+              react: '^19.0.0',
+              'react-dom': '^19.0.0',
+            },
+            devDependencies: {},
           },
-          dependencies: {
-            '@vitejs/plugin-react': '^5.0.0',
-            vite: '^7.0.0',
-            react: '^19.0.0',
-            'react-dom': '^19.0.0',
-          },
-          devDependencies: {},
-        }, null, 2)}\n`,
+          null,
+          2,
+        )}\n`,
       },
       {
         path: 'index.html',
@@ -186,7 +196,9 @@ export function scaffoldProject(options: {
   const { files, nextCommands } = getTemplateFiles(options.template, targetRoot);
 
   if (existsSync(targetRoot) && readdirSync(targetRoot).length > 0 && !force) {
-    throw new Error(`Target directory is not empty: ${targetRoot}. Use --force to overwrite scaffold files.`);
+    throw new Error(
+      `Target directory is not empty: ${targetRoot}. Use --force to overwrite scaffold files.`,
+    );
   }
 
   mkdirSync(targetRoot, { recursive: true });
@@ -195,7 +207,9 @@ export function scaffoldProject(options: {
   for (const file of files) {
     const fullPath = join(targetRoot, file.path);
     if (existsSync(fullPath) && !force) {
-      throw new Error(`Refusing to overwrite existing file: ${fullPath}. Use --force to overwrite scaffold files.`);
+      throw new Error(
+        `Refusing to overwrite existing file: ${fullPath}. Use --force to overwrite scaffold files.`,
+      );
     }
     mkdirSync(dirname(fullPath), { recursive: true });
     writeFileSync(fullPath, file.content, 'utf-8');

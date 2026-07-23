@@ -27,7 +27,10 @@ export interface EvidenceValidationResult {
   issues: EvidenceValidationIssue[];
 }
 
-function readJsonArtifact(runDir: string, artifact: string): { exists: boolean; parseable: boolean; data: unknown | null } {
+function readJsonArtifact(
+  runDir: string,
+  artifact: string,
+): { exists: boolean; parseable: boolean; data: unknown | null } {
   const path = join(runDir, artifact);
   if (!existsSync(path)) {
     return { exists: false, parseable: false, data: null };
@@ -115,29 +118,83 @@ export function validateEvidenceBundleRun(runDir: string): EvidenceValidationRes
   }
 
   const manifest = readJsonArtifact(runDir, '01_manifest.json');
-  addArtifact(artifacts, '01_manifest.json', true, manifest.exists, manifest.exists ? manifest.parseable : null);
+  addArtifact(
+    artifacts,
+    '01_manifest.json',
+    true,
+    manifest.exists,
+    manifest.exists ? manifest.parseable : null,
+  );
   if (!manifest.exists) {
-    addIssue(issues, 'error', 'manifest_missing', 'Completion evidence requires 01_manifest.json.', '01_manifest.json');
+    addIssue(
+      issues,
+      'error',
+      'manifest_missing',
+      'Completion evidence requires 01_manifest.json.',
+      '01_manifest.json',
+    );
   } else if (!manifest.parseable) {
-    addIssue(issues, 'error', 'manifest_unparseable', '01_manifest.json is not valid JSON.', '01_manifest.json');
+    addIssue(
+      issues,
+      'error',
+      'manifest_unparseable',
+      '01_manifest.json is not valid JSON.',
+      '01_manifest.json',
+    );
   }
 
   const runtimeTelemetry = readJsonArtifact(runDir, '06_runtime_telemetry.json');
-  addArtifact(artifacts, '06_runtime_telemetry.json', false, runtimeTelemetry.exists, runtimeTelemetry.exists ? runtimeTelemetry.parseable : null);
+  addArtifact(
+    artifacts,
+    '06_runtime_telemetry.json',
+    false,
+    runtimeTelemetry.exists,
+    runtimeTelemetry.exists ? runtimeTelemetry.parseable : null,
+  );
   if (runtimeTelemetry.exists && !runtimeTelemetry.parseable) {
-    addIssue(issues, 'warning', 'runtime_telemetry_unparseable', '06_runtime_telemetry.json is not valid JSON.', '06_runtime_telemetry.json');
+    addIssue(
+      issues,
+      'warning',
+      'runtime_telemetry_unparseable',
+      '06_runtime_telemetry.json is not valid JSON.',
+      '06_runtime_telemetry.json',
+    );
   }
 
   const executionReport = readJsonArtifact(runDir, '04_execution_report.json');
-  addArtifact(artifacts, '04_execution_report.json', false, executionReport.exists, executionReport.exists ? executionReport.parseable : null);
+  addArtifact(
+    artifacts,
+    '04_execution_report.json',
+    false,
+    executionReport.exists,
+    executionReport.exists ? executionReport.parseable : null,
+  );
   if (executionReport.exists && !executionReport.parseable) {
-    addIssue(issues, 'error', 'execution_report_unparseable', '04_execution_report.json is not valid JSON.', '04_execution_report.json');
+    addIssue(
+      issues,
+      'error',
+      'execution_report_unparseable',
+      '04_execution_report.json is not valid JSON.',
+      '04_execution_report.json',
+    );
   }
 
   const swePlans = listVersionedArtifacts(runDir, '02_swe_plan_v');
   const qaVerdicts = listVersionedArtifacts(runDir, '03_qa_verdict_v');
-  addArtifact(artifacts, '02_swe_plan_v*.json', false, swePlans.length > 0, swePlans.length > 0 ? true : null);
-  addArtifact(artifacts, '03_qa_verdict_v*.json', false, qaVerdicts.length > 0, qaVerdicts.length > 0 ? true : null);
+  addArtifact(
+    artifacts,
+    '02_swe_plan_v*.json',
+    false,
+    swePlans.length > 0,
+    swePlans.length > 0 ? true : null,
+  );
+  addArtifact(
+    artifacts,
+    '03_qa_verdict_v*.json',
+    false,
+    qaVerdicts.length > 0,
+    qaVerdicts.length > 0 ? true : null,
+  );
 
   const pipelineMode =
     nestedStringValue(manifest.data, ['analysis', 'pipeline_mode']) ??
@@ -151,21 +208,45 @@ export function validateEvidenceBundleRun(runDir: string): EvidenceValidationRes
 
   if (completionClaimed) {
     if (swePlans.length === 0) {
-      addIssue(issues, 'error', 'swe_plan_missing_for_completion', 'Completed runs require at least one 02_swe_plan_v*.json artifact.', '02_swe_plan_v*.json');
+      addIssue(
+        issues,
+        'error',
+        'swe_plan_missing_for_completion',
+        'Completed runs require at least one 02_swe_plan_v*.json artifact.',
+        '02_swe_plan_v*.json',
+      );
     }
 
-    if (pipelineMode !== 'direct' && pipelineMode !== 'manual' && qaVerdicts.length === 0) {
-      addIssue(issues, 'error', 'qa_verdict_missing_for_completion', 'Completed verified/autonomous runs require at least one 03_qa_verdict_v*.json artifact.', '03_qa_verdict_v*.json');
+    if (pipelineMode !== 'chat' && pipelineMode !== 'plan' && qaVerdicts.length === 0) {
+      addIssue(
+        issues,
+        'error',
+        'qa_verdict_missing_for_completion',
+        'Completed verified/autonomous runs require at least one 03_qa_verdict_v*.json artifact.',
+        '03_qa_verdict_v*.json',
+      );
     }
 
-    if (pipelineMode === 'autonomous' && !executionReport.exists) {
-      addIssue(issues, 'error', 'execution_report_missing_for_autonomous_completion', 'Completed autonomous runs require 04_execution_report.json.', '04_execution_report.json');
+    if (pipelineMode === 'deep' && !executionReport.exists) {
+      addIssue(
+        issues,
+        'error',
+        'execution_report_missing_for_autonomous_completion',
+        'Completed autonomous runs require 04_execution_report.json.',
+        '04_execution_report.json',
+      );
     }
 
     if (executionStatus === 'EXECUTION_COMPLETE') {
       const toolCallLog = objectValue(executionReport.data, 'tool_call_log');
       if (!Array.isArray(toolCallLog) || toolCallLog.length === 0) {
-        addIssue(issues, 'error', 'execution_log_empty_for_completion', 'EXECUTION_COMPLETE requires a non-empty tool_call_log.', '04_execution_report.json');
+        addIssue(
+          issues,
+          'error',
+          'execution_log_empty_for_completion',
+          'EXECUTION_COMPLETE requires a non-empty tool_call_log.',
+          '04_execution_report.json',
+        );
       }
     }
   }

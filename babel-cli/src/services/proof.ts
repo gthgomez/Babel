@@ -84,7 +84,7 @@ function readJson(path: string): unknown | null {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : {};
 }
 
@@ -97,10 +97,17 @@ function asString(value: unknown): string | null {
 }
 
 function unique(values: Array<string | null | undefined>): string[] {
-  return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0))];
+  return [
+    ...new Set(
+      values.filter((value): value is string => typeof value === 'string' && value.length > 0),
+    ),
+  ];
 }
 
-function readArtifact(runDir: string, filename: string): { path: string; data: Record<string, unknown> | null } {
+function readArtifact(
+  runDir: string,
+  filename: string,
+): { path: string; data: Record<string, unknown> | null } {
   const path = join(runDir, filename);
   return {
     path,
@@ -124,12 +131,15 @@ function assertWritableRunEvidenceDir(runDir: string): void {
   if (!hasRunEvidence) {
     throw new Error(
       `Refusing to write proof artifacts because target is not a Babel run evidence directory: ${runDir}. ` +
-      `Expected at least one of: ${RUN_EVIDENCE_MARKERS.join(', ')}.`,
+        `Expected at least one of: ${RUN_EVIDENCE_MARKERS.join(', ')}.`,
     );
   }
 }
 
-function latestNumberedJson(runDir: string, prefix: string): { path: string; data: Record<string, unknown> | null } | null {
+function latestNumberedJson(
+  runDir: string,
+  prefix: string,
+): { path: string; data: Record<string, unknown> | null } | null {
   if (!existsSync(runDir)) {
     return null;
   }
@@ -156,8 +166,9 @@ function getNestedString(record: Record<string, unknown>, keys: string[]): strin
 }
 
 function collectToolCalls(executionReport: Record<string, unknown> | null): ToolCallLike[] {
-  return asArray(executionReport?.['tool_call_log'])
-    .map((entry) => asRecord(entry) as ToolCallLike);
+  return asArray(executionReport?.['tool_call_log']).map(
+    (entry) => asRecord(entry) as ToolCallLike,
+  );
 }
 
 function commandFromToolCall(entry: ToolCallLike): string | null {
@@ -181,9 +192,11 @@ function didToolCallPass(entry: ToolCallLike): boolean | null {
   return null;
 }
 
-function deriveChangedFiles(terminal: Record<string, unknown> | null, toolCalls: ToolCallLike[]): string[] {
-  const terminalChanged = asArray(terminal?.['changed_files'])
-    .map((value) => asString(value));
+function deriveChangedFiles(
+  terminal: Record<string, unknown> | null,
+  toolCalls: ToolCallLike[],
+): string[] {
+  const terminalChanged = asArray(terminal?.['changed_files']).map((value) => asString(value));
   const writeTargets = toolCalls
     .filter((entry) => asString(entry.tool) === 'file_write')
     .map((entry) => asString(entry.target));
@@ -200,7 +213,10 @@ function deriveRequiredVerifiers(terminal: Record<string, unknown> | null): stri
   return unique(commands.map((value) => asString(value)));
 }
 
-function deriveUnrelatedChanges(worktreeSafety: Record<string, unknown> | null, attemptSafety: Record<string, unknown> | null): boolean | null {
+function deriveUnrelatedChanges(
+  worktreeSafety: Record<string, unknown> | null,
+  attemptSafety: Record<string, unknown> | null,
+): boolean | null {
   const attemptRepo = asRecord(attemptSafety?.['final_repository_cleanliness_summary']);
   const attemptStatus = asString(attemptRepo['status']);
   if (attemptStatus === 'unrelated_changes_detected') {
@@ -222,9 +238,13 @@ function deriveUnrelatedChanges(worktreeSafety: Record<string, unknown> | null, 
   return null;
 }
 
-function deriveUnsafeToolAttempts(terminal: Record<string, unknown> | null, executionReport: Record<string, unknown> | null): string[] {
+function deriveUnsafeToolAttempts(
+  terminal: Record<string, unknown> | null,
+  executionReport: Record<string, unknown> | null,
+): string[] {
   const terminalStatus = asString(terminal?.['status']);
-  const denied = terminalStatus && /DENIED|UNSAFE|REFUSED/.test(terminalStatus) ? [terminalStatus] : [];
+  const denied =
+    terminalStatus && /DENIED|UNSAFE|REFUSED/.test(terminalStatus) ? [terminalStatus] : [];
   const toolCalls = collectToolCalls(executionReport)
     .filter((entry) => {
       const status = asString(entry.status);
@@ -251,13 +271,24 @@ function determineProofStatus(input: {
   const claimed = input.claimedStatus ?? '';
   const evidence = `${observed}\n${claimed}`.toUpperCase();
 
-  if (input.unsafeToolAttempts.length > 0 || /DENIED|UNSAFE|REFUSED|WORKTREE_DIRTY_UNSAFE/.test(evidence)) {
+  if (
+    input.unsafeToolAttempts.length > 0 ||
+    /DENIED|UNSAFE|REFUSED|WORKTREE_DIRTY_UNSAFE/.test(evidence)
+  ) {
     reasons.push('A safety, policy, or tool refusal is present in run evidence.');
     return { status: 'REFUSED_UNSAFE', reasons };
   }
 
-  if (/MANUAL_BRIDGE_REQUIRED|DIRECT_MODE_NO_EXECUTOR|READ_ONLY_NO_MODIFICATION/.test(evidence) || input.mode === 'manual' || input.mode === 'direct') {
-    reasons.push(`Run mode/status did not perform autonomous mutation (${input.mode ?? (observed || 'unknown')}).`);
+  if (
+    /MANUAL_BRIDGE_REQUIRED|READ_ONLY_MODE_NO_EXECUTOR|DIRECT_MODE_NO_EXECUTOR|READ_ONLY_NO_MODIFICATION/.test(
+      evidence,
+    ) ||
+    input.mode === 'plan' ||
+    input.mode === 'chat'
+  ) {
+    reasons.push(
+      `Run mode/status did not perform autonomous mutation (${input.mode ?? (observed || 'unknown')}).`,
+    );
     return { status: 'PLANNED_ONLY', reasons };
   }
 
@@ -304,9 +335,11 @@ function determineProofStatus(input: {
       reasons.push('Files changed, but passing verifier evidence is unavailable.');
       return { status: 'COMPLETE_UNVERIFIED', reasons };
     }
-    reasons.push(input.changedFiles.length > 0
-      ? 'Completion claim is supported by execution and passing verifier evidence.'
-      : 'Completion/no-modification claim is supported by available run evidence.');
+    reasons.push(
+      input.changedFiles.length > 0
+        ? 'Completion claim is supported by execution and passing verifier evidence.'
+        : 'Completion/no-modification claim is supported by available run evidence.',
+    );
     return { status: 'COMPLETE_VERIFIED', reasons };
   }
 
@@ -351,17 +384,25 @@ export function buildProofStatus(runDir: string): ProofStatusArtifact {
     return tool === 'test_run' || isVerifierCommand(command);
   });
   const testsRun = testCalls.length > 0;
-  const testResults = testCalls.map(didToolCallPass).filter((value): value is boolean => value !== null);
+  const testResults = testCalls
+    .map(didToolCallPass)
+    .filter((value): value is boolean => value !== null);
   const testsPassed = testsRun ? testResults.length > 0 && testResults.every(Boolean) : null;
   const requiredVerifiers = deriveRequiredVerifiers(terminal.data);
-  const missingVerifiers = requiredVerifiers.filter((required) => !verifierCommands.some((actual) => actual.includes(required) || required.includes(actual)));
-  const executionHappened = Boolean(executionReport.data && (
-    toolCalls.length > 0 ||
-    typeof executionReport.data['steps_executed'] === 'number' && executionReport.data['steps_executed'] > 0 ||
-    asString(executionReport.data['status']) === 'EXECUTION_COMPLETE' ||
-    asString(executionReport.data['status']) === 'EXECUTION_HALTED'
-  ));
-  const qaVerdict = asString(runtimeTelemetry.data?.['qa_verdict']) ?? asString(latestQa?.data?.['verdict']);
+  const missingVerifiers = requiredVerifiers.filter(
+    (required) =>
+      !verifierCommands.some((actual) => actual.includes(required) || required.includes(actual)),
+  );
+  const executionHappened = Boolean(
+    executionReport.data &&
+    (toolCalls.length > 0 ||
+      (typeof executionReport.data['steps_executed'] === 'number' &&
+        executionReport.data['steps_executed'] > 0) ||
+      asString(executionReport.data['status']) === 'EXECUTION_COMPLETE' ||
+      asString(executionReport.data['status']) === 'EXECUTION_HALTED'),
+  );
+  const qaVerdict =
+    asString(runtimeTelemetry.data?.['qa_verdict']) ?? asString(latestQa?.data?.['verdict']);
   const qaPassed = qaVerdict ? qaVerdict === 'PASS' : null;
   const mode =
     asString(runtimeTelemetry.data?.['pipeline_mode']) ??
@@ -494,7 +535,10 @@ export function formatRunReportMarkdown(proof: ProofStatusArtifact): string {
     '',
     '## Evidence Paths',
     '',
-    markdownList(Object.entries(proof.evidence_paths).map(([key, path]) => `${key}: ${path}`), 'No supporting evidence artifacts found.'),
+    markdownList(
+      Object.entries(proof.evidence_paths).map(([key, path]) => `${key}: ${path}`),
+      'No supporting evidence artifacts found.',
+    ),
     '',
     '## Next Commands',
     '',

@@ -7,14 +7,12 @@ import { join } from 'node:path';
 import { Command } from 'commander';
 
 import { BABEL_ROOT } from '../cli/constants.js';
-import { applyUserFocusedHelpTiers, buildApprovalProfilePayload, resolveBenchmarkAnalyzeRun } from './coreCommands.js';
 import {
-  READ_ONLY_LITE_TOOLS,
-  classifyDoTask,
-  registerWorkflowCommands,
-  resolveLiteAllowedTools,
-  resolveLitePipelineMode,
-} from './workflowCommands.js';
+  applyUserFocusedHelpTiers,
+  buildApprovalProfilePayload,
+  resolveBenchmarkAnalyzeRun,
+} from './coreCommands.js';
+import { classifyDoTask, registerWorkflowCommands } from './workflowCommands.js';
 
 function makeProgram(): Command {
   const program = new Command();
@@ -23,81 +21,65 @@ function makeProgram(): Command {
   return program;
 }
 
-describe('Babel Lite command registration', () => {
-  it('registers lite ask, plan, do, fix, and visible proposal-only patch commands', () => {
+describe('Babel CLI command registration', () => {
+  it('registers plan and deep commands, and verifies removed Lite commands are not registered', () => {
     const program = makeProgram();
-    const lite = program.commands.find(command => command.name() === 'lite');
-    assert.ok(lite);
-    assert.equal(lite.alias(), 'l');
-    assert.deepEqual(
-      lite.commands.map(command => command.name()).sort(),
-      ['ask', 'continue', 'diff', 'do', 'fix', 'patch', 'plan', 'propose', 'resume', 'review', 'undo'],
+    const plan = program.commands.find((command) => command.name() === 'plan');
+    const deep = program.commands.find((command) => command.name() === 'deep');
+    assert.ok(plan);
+    assert.ok(deep);
+    assert.equal(
+      program.commands.some((command) => command.name() === 'daily'),
+      false,
     );
-    const fix = lite.commands.find(command => command.name() === 'fix');
-    assert.ok(fix);
-    assert.deepEqual(fix.aliases(), []);
-    const patch = lite.commands.find(command => command.name() === 'patch');
-    assert.ok(patch);
-    assert.notEqual((patch as unknown as { _hidden?: boolean })._hidden, true);
-    assert.match(patch.description(), /proposal-only diff/i);
-  });
-
-  it('teaches bl examples before the full Babel path', () => {
-    const program = makeProgram();
-    const lite = program.commands.find(command => command.name() === 'lite');
-    assert.ok(lite);
-    let help = '';
-    lite.configureOutput({
-      writeOut: (value) => {
-        help += value;
-      },
-      writeErr: (value) => {
-        help += value;
-      },
-    });
-
-    assert.throws(() => lite.parse(['node', 'lite', '--help']));
-    assert.match(help, /bl ask "Why is this failing\?"/);
-    assert.match(help, /bl fix "Fix failing tests"/);
-    assert.match(help, /Use babel run for advanced audit/);
+    assert.equal(
+      program.commands.some((command) => command.name() === 'undo'),
+      true,
+    );
+    assert.equal(
+      program.commands.some((command) => command.name() === 'review'),
+      false,
+    );
+    assert.equal(
+      program.commands.some((command) => command.name() === 'lite'),
+      false,
+    );
+    assert.equal(deep.aliases().includes('full'), false);
   });
 
   it('tells fresh clones the repo-root build command when dist output is missing', () => {
     const liteBin = readFileSync(join(BABEL_ROOT, 'babel-cli', 'bin', 'babel-lite.js'), 'utf-8');
     const fullBin = readFileSync(join(BABEL_ROOT, 'babel-cli', 'bin', 'babel.js'), 'utf-8');
 
-    assert.equal(liteBin.includes('npm --prefix .\\\\babel-cli run build'), true);
+    assert.equal(liteBin.includes('was removed'), true);
     assert.equal(fullBin.includes('npm --prefix .\\\\babel-cli run build'), true);
   });
 
-  it('registers top-level ask, plan, fix, do, and full user verbs', () => {
+  it('keeps deep and plan user-facing without execution-profile', () => {
     const program = makeProgram();
-    for (const name of ['ask', 'plan', 'propose', 'fix', 'review', 'undo', 'do', 'full']) {
-      assert.ok(program.commands.find(command => command.name() === name), `${name} command missing`);
-    }
+    const topLevelDeep = program.commands.find((command) => command.name() === 'deep');
+    const topLevelPlan = program.commands.find((command) => command.name() === 'plan');
+    assert.ok(topLevelDeep);
+    assert.ok(topLevelPlan);
+    assert.ok(topLevelDeep.options.some((option) => option.long === '--project-root'));
+    assert.ok(topLevelDeep.options.some((option) => option.long === '--json'));
+    assert.equal(
+      topLevelDeep.options.some((option) => option.long === '--execution-profile'),
+      false,
+    );
+    assert.equal(
+      topLevelPlan.options.some((option) => option.long === '--execution-profile'),
+      false,
+    );
   });
 
-  it('exposes full-lane execution options on the new full command', () => {
+  it('registers undo with project scoping options', () => {
     const program = makeProgram();
-    const topLevelFull = program.commands.find(command => command.name() === 'full');
-    assert.ok(topLevelFull);
-    assert.ok(topLevelFull.options.some(option => option.long === '--agents'));
-    assert.ok(topLevelFull.options.some(option => option.long === '--project-root'));
-    assert.ok(topLevelFull.options.some(option => option.long === '--json'));
-  });
-
-  it('exposes visible automatic routing controls on the do lane', () => {
-    const program = makeProgram();
-    const topLevelDo = program.commands.find(command => command.name() === 'do');
-    const lite = program.commands.find(command => command.name() === 'lite');
-    const liteDo = lite?.commands.find(command => command.name() === 'do');
-
-    assert.ok(topLevelDo);
-    assert.ok(liteDo);
-    assert.ok(topLevelDo.options.some(option => option.long === '--lite-only'));
-    assert.ok(topLevelDo.options.some(option => option.long === '--agents'));
-    assert.ok(liteDo.options.some(option => option.long === '--lite-only'));
-    assert.ok(liteDo.options.some(option => option.long === '--agents'));
+    const undo = program.commands.find((command) => command.name() === 'undo');
+    assert.ok(undo);
+    assert.ok(undo.options.some((option) => option.long === '--project'));
+    assert.ok(undo.options.some((option) => option.long === '--project-root'));
+    assert.ok(undo.options.some((option) => option.long === '--json'));
   });
 
   it('keeps default help focused while exposing advanced tiers', () => {
@@ -115,25 +97,17 @@ describe('Babel Lite command registration', () => {
     });
 
     assert.throws(() => program.parse(['node', 'babel', '--help']));
-    assert.match(help, /ask .*without editing/i);
-    assert.match(help, /fix .*focused safe edit/i);
+    assert.match(help, /plan .*Prepare a plan/i);
+    assert.match(help, /deep .*governed apply-and-verify path/i);
     assert.match(help, /advanced .*advanced Babel command groups/i);
+    assert.doesNotMatch(help, /\blite\b/i);
+    assert.doesNotMatch(help, /\bask\b.*without editing/i);
+    assert.doesNotMatch(help, /\bfix\b.*focused safe edit/i);
     assert.doesNotMatch(help, /\bmcp\s+Manage MCP/);
-    assert.doesNotMatch(help, /\bdirect\b|\bverified\b|\bmanual\b|\bautonomous\b|\bparallel_swarm\b/);
-  });
-
-  it('routes Lite verbs through the simplest mode that fits the user intent', () => {
-    assert.equal(resolveLitePipelineMode('ask'), 'direct');
-    assert.equal(resolveLitePipelineMode('plan'), 'direct');
-    assert.equal(resolveLitePipelineMode('fix'), 'verified');
-    assert.equal(resolveLitePipelineMode('patch'), 'direct');
-    assert.equal(resolveLitePipelineMode('propose'), 'direct');
-    assert.equal(resolveLitePipelineMode('do'), 'verified');
-    assert.deepEqual(resolveLiteAllowedTools('ask'), READ_ONLY_LITE_TOOLS);
-    assert.deepEqual(resolveLiteAllowedTools('plan'), READ_ONLY_LITE_TOOLS);
-    assert.deepEqual(resolveLiteAllowedTools('patch'), READ_ONLY_LITE_TOOLS);
-    assert.deepEqual(resolveLiteAllowedTools('fix'), []);
-    assert.deepEqual(resolveLiteAllowedTools('do'), []);
+    assert.doesNotMatch(
+      help,
+      /\bdirect\b|\bverified\b|\bmanual\b|\bautonomous\b|\bparallel_swarm\b/,
+    );
   });
 
   it('classifies do requests into ask, plan, patch, or fix lanes', () => {
@@ -145,7 +119,12 @@ describe('Babel Lite command registration', () => {
     assert.equal(classifyDoTask('Compare these implementation approaches.'), 'plan');
     assert.equal(classifyDoTask('Propose a patch for the Lite help text.'), 'patch');
     assert.equal(classifyDoTask('Generate a diff proposal for the Lite help text.'), 'patch');
-    assert.equal(classifyDoTask('Fix the failing test. Only edit src/math.js. Run npm test before completing.'), 'fix');
+    assert.equal(
+      classifyDoTask(
+        'Fix the failing test. Only edit src/math.js. Run npm test before completing.',
+      ),
+      'fix',
+    );
     assert.equal(classifyDoTask('Update the Lite help text.'), 'fix');
     assert.equal(classifyDoTask('Implement the Lite help text update.'), 'fix');
     assert.equal(classifyDoTask('Look at the Lite help text.'), 'plan');
@@ -171,7 +150,10 @@ describe('Babel Lite command registration', () => {
       'run local verifiers such as npm test',
       'write recovery evidence for failures',
     ]);
-    assert.match(String(payload['approval']), /Trusted workspace work should not ask redundant approvals/i);
+    assert.match(
+      String(payload['approval']),
+      /Trusted workspace work should not ask redundant approvals/i,
+    );
     assert.equal(payload['profile'], 'auto-edit');
   });
 

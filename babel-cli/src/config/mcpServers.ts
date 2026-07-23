@@ -11,8 +11,8 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { resolve, dirname }         from 'node:path';
-import { fileURLToPath }            from 'node:url';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { readActivePluginMcpServers } from '../services/plugins.js';
 import { evaluateMcpServerPolicy, formatEnterprisePolicyDecision } from './enterprisePolicy.js';
@@ -29,15 +29,15 @@ export interface McpServerConfig {
 const FALLBACK_SERVERS: Record<string, McpServerConfig> = {
   github: {
     command: 'npx',
-    args:    ['-y', '@modelcontextprotocol/server-github'],
+    args: ['-y', '@github/mcp-server@latest'],
   },
   postgres: {
     command: 'npx',
-    args:    ['-y', '@modelcontextprotocol/server-postgres', 'postgresql://localhost/postgres'],
+    args: ['-y', '@modelcontextprotocol/server-postgres', 'postgresql://localhost/postgres'],
   },
   sqlite: {
     command: 'npx',
-    args:    ['-y', '@modelcontextprotocol/server-sqlite', '--db', './database.sqlite'],
+    args: ['-y', '@modelcontextprotocol/server-sqlite', '--db', './database.sqlite'],
   },
 };
 
@@ -79,7 +79,9 @@ export function isAllowedMcpServerCommand(command: string): boolean {
   return ALLOWED_MCP_SERVER_COMMANDS.has(normalized);
 }
 
-export function filterAllowedMcpServers(servers: Record<string, McpServerConfig>): Record<string, McpServerConfig> {
+export function filterAllowedMcpServers(
+  servers: Record<string, McpServerConfig>,
+): Record<string, McpServerConfig> {
   const allowed: Record<string, McpServerConfig> = {};
   for (const [name, config] of Object.entries(servers)) {
     if (!isAllowedMcpServerCommand(config.command)) {
@@ -94,12 +96,16 @@ export function filterAllowedMcpServers(servers: Record<string, McpServerConfig>
   return allowed;
 }
 
-export function filterEnterpriseMcpServers(servers: Record<string, McpServerConfig>): Record<string, McpServerConfig> {
+export function filterEnterpriseMcpServers(
+  servers: Record<string, McpServerConfig>,
+): Record<string, McpServerConfig> {
   const allowed: Record<string, McpServerConfig> = {};
   for (const [name, config] of Object.entries(servers)) {
     const decision = evaluateMcpServerPolicy(name);
     if (!decision.allowed) {
-      process.stderr.write(`[babel] mcp server "${name}": ${formatEnterprisePolicyDecision(decision)}, skipping\n`);
+      process.stderr.write(
+        `[babel] mcp server "${name}": ${formatEnterprisePolicyDecision(decision)}, skipping\n`,
+      );
       continue;
     }
     allowed[name] = config;
@@ -147,10 +153,12 @@ export function readMcpServers(): Record<string, McpServerConfig> {
     }
   }
 
-  return filterEnterpriseMcpServers(filterAllowedMcpServers({
-    ...servers,
-    ...readActivePluginMcpServers(),
-  }));
+  return filterEnterpriseMcpServers(
+    filterAllowedMcpServers({
+      ...servers,
+      ...readActivePluginMcpServers(),
+    }),
+  );
 }
 
 function assertValidMcpServerName(name: string): void {
@@ -164,13 +172,17 @@ export function writeMcpServers(servers: Record<string, McpServerConfig>): void 
   mkdirSync(dirname(configPath), { recursive: true });
   const payload: McpServersJson = {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
-    description: 'MCP server registry. Add entries here to make new servers available to the Babel executor without code changes. Each key is the logical server name used in mcp_request.server.',
+    description:
+      'MCP server registry. Add entries here to make new servers available to the Babel executor without code changes. Each key is the logical server name used in mcp_request.server.',
     servers,
   };
   writeFileSync(configPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf-8');
 }
 
-export function upsertMcpServer(name: string, config: McpServerConfig): Record<string, McpServerConfig> {
+export function upsertMcpServer(
+  name: string,
+  config: McpServerConfig,
+): Record<string, McpServerConfig> {
   assertValidMcpServerName(name);
   if (!isAllowedMcpServerCommand(config.command)) {
     throw new Error(`MCP server command "${config.command}" is not allowlisted.`);

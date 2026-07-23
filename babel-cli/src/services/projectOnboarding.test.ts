@@ -19,13 +19,17 @@ function makeTempProject(): { root: string; cleanup: () => void } {
 test('analyzeProjectRoot detects Node and TypeScript commands', () => {
   const fixture = makeTempProject();
   try {
-    writeFileSync(join(fixture.root, 'package.json'), JSON.stringify({
-      scripts: {
-        build: 'tsc',
-        test: 'node --test',
-        lint: 'eslint .',
-      },
-    }), 'utf-8');
+    writeFileSync(
+      join(fixture.root, 'package.json'),
+      JSON.stringify({
+        scripts: {
+          build: 'tsc',
+          test: 'node --test',
+          lint: 'eslint .',
+        },
+      }),
+      'utf-8',
+    );
     writeFileSync(join(fixture.root, 'tsconfig.json'), '{}\n', 'utf-8');
 
     const report = analyzeProjectRoot(fixture.root, new Date('2026-04-26T00:00:00.000Z'));
@@ -70,9 +74,17 @@ test('analyzeProjectRoot detects Python pytest projects', () => {
 test('analyzeProjectRoot detects Godot projects and verification commands', () => {
   const fixture = makeTempProject();
   try {
-    writeFileSync(join(fixture.root, 'project.godot'), '[application]\nrun/main_scene="res://Main.tscn"\n', 'utf-8');
+    writeFileSync(
+      join(fixture.root, 'project.godot'),
+      '[application]\nrun/main_scene="res://Main.tscn"\n',
+      'utf-8',
+    );
     writeFileSync(join(fixture.root, 'Main.tscn'), '[gd_scene]\n', 'utf-8');
-    writeFileSync(join(fixture.root, 'export_presets.cfg'), '[preset.0]\nplatform="Android"\n', 'utf-8');
+    writeFileSync(
+      join(fixture.root, 'export_presets.cfg'),
+      '[preset.0]\nplatform="Android"\n',
+      'utf-8',
+    );
 
     const report = analyzeProjectRoot(fixture.root, new Date('2026-04-26T00:00:00.000Z'));
 

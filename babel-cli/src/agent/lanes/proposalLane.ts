@@ -35,7 +35,11 @@ export async function runProposalLane(
   });
   if (context.sparkSynthesis) {
     writeLiteJsonArtifact(
-      { runId: result.artifacts.run_id, runDir: result.artifacts.run_dir, files: result.artifacts.files },
+      {
+        runId: result.artifacts.run_id,
+        runDir: result.artifacts.run_dir,
+        files: result.artifacts.files,
+      },
       'spark_synthesis.json',
       context.sparkSynthesis,
     );
@@ -53,7 +57,7 @@ export async function runProposalLane(
     executionPath: 'proposal_lane',
     next: [
       'Review proposal.diff; this lane never applies changes.',
-      'Run bl fix when you want a verified mutation.',
+      'Run babel "<task>" when you want Babel to apply a verified mutation.',
     ],
   });
 
@@ -77,19 +81,23 @@ export async function runProposalLane(
       assumptions: [],
       read_only_steps: [],
     },
-    ...(context.routeDecision ? {
-      route_reason: context.routeDecision.route_reason,
-      complexity: context.routeDecision.complexity,
-      risk_signals: context.routeDecision.risk_signals,
-      model_tier_recommendation: context.routeDecision.model_tier_recommendation,
-      full_babel_equivalent: context.routeDecision.full_babel_equivalent,
-    } : {}),
+    ...(context.routeDecision
+      ? {
+          route_reason: context.routeDecision.route_reason,
+          complexity: context.routeDecision.complexity,
+          risk_signals: context.routeDecision.risk_signals,
+          model_tier_recommendation: context.routeDecision.model_tier_recommendation,
+          full_babel_equivalent: context.routeDecision.full_babel_equivalent,
+        }
+      : {}),
     ...(context.sparkSynthesis ? { spark_synthesis: context.sparkSynthesis } : {}),
-    ...(context.sparkReview ? {
-      spark_agents: context.sparkReview.spark_agents,
-      spark_run_dir: context.sparkReview.run_dir,
-      spark_synthesis_path: context.sparkReview.synthesis_path,
-    } : {}),
+    ...(context.sparkReview
+      ? {
+          spark_agents: context.sparkReview.spark_agents,
+          spark_run_dir: context.sparkReview.run_dir,
+          spark_synthesis_path: context.sparkReview.synthesis_path,
+        }
+      : {}),
   } as LiteResultPayload;
 
   return {

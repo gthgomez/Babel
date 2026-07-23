@@ -10,16 +10,13 @@ import {
   restoreLiteOfflineEnv,
   snapshotLiteOfflineEnv,
 } from '../agent/provider/textProviderLane.js';
-import {
-  readLiteTrustDemoFixture,
-  resolveLiteTrustDemoFixturePath,
-} from './liteTrustDemo.js';
+import { readLiteTrustDemoFixture, resolveLiteTrustDemoFixturePath } from './liteTrustDemo.js';
 import { inferDoExecutionVerb, routeLiteOrFull, shouldSpawnSparkReview } from './liteFullRouter.js';
 
 export interface LiteParallelReviewScenario {
   id: string;
   task: string;
-  expected_route_lane: 'babel_full';
+  expected_route_lane: 'deep_lane' | 'lite_plan';
   expected_execution_verb: 'plan' | 'fix' | 'ask' | 'patch';
   expects_spark_review: boolean;
   mutation_policy: 'read_only' | 'may_edit';
@@ -84,31 +81,51 @@ function initGitRepo(root: string): void {
 function writeMinimalPlanRepo(root: string): void {
   mkdirSync(root, { recursive: true });
   writeFileSync(join(root, 'README.md'), '# Auth module\n\nMigration target.\n', 'utf-8');
-  writeFileSync(join(root, 'package.json'), JSON.stringify({
-    name: 'auth-module-fixture',
-    scripts: { test: 'node -e "process.exit(0)"' },
-  }, null, 2), 'utf-8');
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify(
+      {
+        name: 'auth-module-fixture',
+        scripts: { test: 'node -e "process.exit(0)"' },
+      },
+      null,
+      2,
+    ),
+    'utf-8',
+  );
   initGitRepo(root);
 }
 
 function writeTrustDemoMathRepo(root: string): void {
   const fixture = readLiteTrustDemoFixture(resolveLiteTrustDemoFixturePath());
   mkdirSync(join(root, 'src'), { recursive: true });
-  writeFileSync(join(root, 'package.json'), JSON.stringify({
-    type: 'module',
-    scripts: { test: 'node src/math.test.js' },
-  }, null, 2), 'utf-8');
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify(
+      {
+        type: 'module',
+        scripts: { test: 'node src/math.test.js' },
+      },
+      null,
+      2,
+    ),
+    'utf-8',
+  );
   writeFileSync(join(root, fixture.target_file), fixture.broken_implementation, 'utf-8');
-  writeFileSync(join(root, 'src', 'math.test.js'), [
-    "import test from 'node:test';",
-    "import assert from 'node:assert/strict';",
-    "import { add } from './math.js';",
-    '',
-    "test('add sums two numbers', () => {",
-    '  assert.equal(add(1, 2), 3);',
-    '});',
-    '',
-  ].join('\n'), 'utf-8');
+  writeFileSync(
+    join(root, 'src', 'math.test.js'),
+    [
+      "import test from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import { add } from './math.js';",
+      '',
+      "test('add sums two numbers', () => {",
+      '  assert.equal(add(1, 2), 3);',
+      '});',
+      '',
+    ].join('\n'),
+    'utf-8',
+  );
   initGitRepo(root);
 }
 
@@ -138,7 +155,10 @@ export async function runLiteParallelReviewScenario(
   options: { projectRoot: string },
 ): Promise<LiteParallelReviewScenarioResult> {
   const routeDecision = routeLiteOrFull(scenario.task, { requestedVerb: 'do' });
-  const spawnSpark = shouldSpawnSparkReview(routeDecision, { requestedVerb: 'do', agentsMode: 'read-only' });
+  const spawnSpark = shouldSpawnSparkReview(routeDecision, {
+    requestedVerb: 'do',
+    agentsMode: 'read-only',
+  });
   const inferredVerb = inferDoExecutionVerb(scenario.task);
 
   if (routeDecision.selected_lane !== scenario.expected_route_lane) {
@@ -185,18 +205,22 @@ export async function runLiteParallelReviewScenario(
   const payload = result.payload as Record<string, unknown>;
   const sparkAgents = Array.isArray(payload['spark_agents']) ? payload['spark_agents'] : [];
   const synthesis = payload['spark_synthesis'];
-  const reviewersReadOnly = sparkAgents.length === 0 ||
-    sparkAgents.every(agent =>
-      typeof agent === 'object' &&
-      agent !== null &&
-      (agent as { mode?: string }).mode === 'read_only',
+  const reviewersReadOnly =
+    sparkAgents.length === 0 ||
+    sparkAgents.every(
+      (agent) =>
+        typeof agent === 'object' &&
+        agent !== null &&
+        (agent as { mode?: string }).mode === 'read_only',
     );
 
-  let passed = result.exitCode === 0 || (scenario.mutation_policy === 'read_only' && result.exitCode === 0);
+  let passed =
+    result.exitCode === 0 || (scenario.mutation_policy === 'read_only' && result.exitCode === 0);
   let detail = `exit=${result.exitCode}, status=${String(payload['status'])}`;
 
   if (scenario.expects_spark_review) {
-    passed = passed &&
+    passed =
+      passed &&
       sparkAgents.length >= 4 &&
       synthesis !== undefined &&
       reviewersReadOnly &&
@@ -207,7 +231,8 @@ export async function runLiteParallelReviewScenario(
   }
 
   if (scenario.mutation_policy === 'may_edit' && scenario.expected_execution_verb === 'fix') {
-    passed = passed && (payload['status'] === 'DO_COMPLETE' || payload['status'] === 'FIX_COMPLETE');
+    passed =
+      passed && (payload['status'] === 'DO_COMPLETE' || payload['status'] === 'FIX_COMPLETE');
     if (!passed) {
       detail = `Expected fix completion after spark review; got status=${String(payload['status'])}.`;
     }
@@ -258,7 +283,7 @@ export async function runLiteParallelReviewHarness(
 
   return {
     fixture_type: 'babel_lite_parallel_review',
-    status: results.every(result => result.status === 'pass') ? 'pass' : 'fail',
+    status: results.every((result) => result.status === 'pass') ? 'pass' : 'fail',
     scenarios: results,
   };
 }

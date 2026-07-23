@@ -1,4 +1,11 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 import type { ToolCallLog } from '../schemas/agentContracts.js';
@@ -17,11 +24,7 @@ import {
   defaultGodotMobileScaffoldTemplate,
 } from './godotScaffoldSeeder.js';
 
-export type GodotArtifactRepairStatus =
-  | 'REPAIRED'
-  | 'NOOP'
-  | 'UNSUPPORTED'
-  | 'FAILED';
+export type GodotArtifactRepairStatus = 'REPAIRED' | 'NOOP' | 'UNSUPPORTED' | 'FAILED';
 
 export type GodotArtifactRepairLoopStatus =
   | 'REPAIRED_AND_COMPLETE'
@@ -81,7 +84,13 @@ function readText(path: string): string | null {
   return readFileSync(path, 'utf-8');
 }
 
-function copyTemplateFile(templateRoot: string, targetRoot: string, relativePath: string, filesCopied: string[], filesSkipped: string[]): void {
+function copyTemplateFile(
+  templateRoot: string,
+  targetRoot: string,
+  relativePath: string,
+  filesCopied: string[],
+  filesSkipped: string[],
+): void {
   const source = join(templateRoot, relativePath);
   const destination = join(targetRoot, relativePath);
   if (existsSync(destination)) {
@@ -114,7 +123,9 @@ function safeToReplaceProjectGodot(projectText: string | null): boolean {
     return true;
   }
   const trimmed = projectText.trim();
-  return trimmed.length === 0 || !hasSectionHeaders(projectText) || hasUnquotedMainScene(projectText);
+  return (
+    trimmed.length === 0 || !hasSectionHeaders(projectText) || hasUnquotedMainScene(projectText)
+  );
 }
 
 function ensureMainSceneConfig(projectText: string): string {
@@ -134,7 +145,11 @@ function ensureMainSceneConfig(projectText: string): string {
   return `${projectText}${separator}[application]\n${desired}\n`;
 }
 
-function writeTemplateProjectGodot(templateRoot: string, targetRoot: string, filesModified: string[]): boolean {
+function writeTemplateProjectGodot(
+  templateRoot: string,
+  targetRoot: string,
+  filesModified: string[],
+): boolean {
   const source = join(templateRoot, 'project.godot');
   const destination = join(targetRoot, 'project.godot');
   if (!existsSync(source) || !statSync(source).isFile()) {
@@ -158,7 +173,10 @@ function collectRepairClasses(gate: RunnableArtifactGateResult): string[] {
     if (check.id === 'GODOT_MAIN_SCENE_DEFINED') {
       classes.add('missing_main_scene_config');
     }
-    if (check.id === 'GODOT_CONFIGURED_MAIN_SCENE_EXISTS' || check.id === 'GODOT_MOBILE_MAIN_SCENE_EXISTS') {
+    if (
+      check.id === 'GODOT_CONFIGURED_MAIN_SCENE_EXISTS' ||
+      check.id === 'GODOT_MOBILE_MAIN_SCENE_EXISTS'
+    ) {
       classes.add('missing_main_scene');
     }
     if (check.id === 'GODOT_HEADLESS_VERIFICATION_FAILED') {
@@ -179,7 +197,9 @@ export function repairGodotBootstrapArtifacts(input: {
   const timestamp = (input.now ?? (() => new Date()))().toISOString();
   const repairClasses = collectRepairClasses(input.gate);
   const targetRoot = input.projectRoot ? resolve(input.projectRoot) : null;
-  const scaffoldTemplate = resolve(input.scaffoldTemplate ?? defaultGodotMobileScaffoldTemplate(input.babelRoot));
+  const scaffoldTemplate = resolve(
+    input.scaffoldTemplate ?? defaultGodotMobileScaffoldTemplate(input.babelRoot),
+  );
   const base = {
     stage: 'godot_artifact_repair' as const,
     attempt: input.attempt,
@@ -221,13 +241,25 @@ export function repairGodotBootstrapArtifacts(input: {
     if (relativePath === 'project.godot') {
       continue;
     }
-    copyTemplateFile(scaffoldTemplate, targetRoot, relativePath, base.filesCopied, base.filesSkipped);
+    copyTemplateFile(
+      scaffoldTemplate,
+      targetRoot,
+      relativePath,
+      base.filesCopied,
+      base.filesSkipped,
+    );
   }
 
   const projectPath = join(targetRoot, 'project.godot');
   const projectText = readText(projectPath);
   if (projectText === null) {
-    copyTemplateFile(scaffoldTemplate, targetRoot, 'project.godot', base.filesCopied, base.filesSkipped);
+    copyTemplateFile(
+      scaffoldTemplate,
+      targetRoot,
+      'project.godot',
+      base.filesCopied,
+      base.filesSkipped,
+    );
   } else if (safeToReplaceProjectGodot(projectText)) {
     if (!writeTemplateProjectGodot(scaffoldTemplate, targetRoot, base.filesModified)) {
       base.filesSkipped.push('project.godot');
@@ -248,13 +280,16 @@ export function repairGodotBootstrapArtifacts(input: {
   return {
     ...base,
     status: changed > 0 ? 'REPAIRED' : 'NOOP',
-    reason: changed > 0
-      ? 'Known Godot bootstrap files were repaired from the deterministic scaffold.'
-      : 'No deterministic Godot bootstrap repair was available.',
+    reason:
+      changed > 0
+        ? 'Known Godot bootstrap files were repaired from the deterministic scaffold.'
+        : 'No deterministic Godot bootstrap repair was available.',
   };
 }
 
-export function runGodotArtifactRepairLoop(input: GodotArtifactRepairInput): GodotArtifactRepairLoopResult {
+export function runGodotArtifactRepairLoop(
+  input: GodotArtifactRepairInput,
+): GodotArtifactRepairLoopResult {
   const maxRepairAttempts = input.maxRepairAttempts ?? DEFAULT_MAX_REPAIR_ATTEMPTS;
   const runVerification = input.runVerification ?? runRuntimeVerification;
   const evaluateGate = input.evaluateGate ?? evaluateRunnableArtifactGate;
@@ -275,7 +310,10 @@ export function runGodotArtifactRepairLoop(input: GodotArtifactRepairInput): God
   for (let attempt = 1; attempt <= maxRepairAttempts; attempt += 1) {
     if (!runnableArtifactGateBlocksCompletion(finalGate)) {
       return {
-        status: finalRuntimeVerification?.status === 'PASS' ? 'REPAIRED_AND_COMPLETE' : 'REPAIR_REQUIRED_ARTIFACT_INVALID',
+        status:
+          finalRuntimeVerification?.status === 'PASS'
+            ? 'REPAIRED_AND_COMPLETE'
+            : 'REPAIR_REQUIRED_ARTIFACT_INVALID',
         attempts,
         finalRuntimeVerification,
         finalGate,
@@ -283,13 +321,16 @@ export function runGodotArtifactRepairLoop(input: GodotArtifactRepairInput): God
       };
     }
 
-    if (finalGate.failed_artifact_checks.some(check => check.id === 'VERIFICATION_TOOL_UNAVAILABLE')) {
+    if (
+      finalGate.failed_artifact_checks.some((check) => check.id === 'VERIFICATION_TOOL_UNAVAILABLE')
+    ) {
       return {
         status: 'EXECUTION_HALTED_VERIFICATION_TOOL_UNAVAILABLE',
         attempts,
         finalRuntimeVerification,
         finalGate,
-        reason: 'Godot verification tool is unavailable; deterministic artifact repair cannot prove runtime validity.',
+        reason:
+          'Godot verification tool is unavailable; deterministic artifact repair cannot prove runtime validity.',
       };
     }
 
@@ -308,9 +349,10 @@ export function runGodotArtifactRepairLoop(input: GodotArtifactRepairInput): God
     const repair = repairGodotBootstrapArtifacts(repairInput);
     if (repair.status !== 'REPAIRED') {
       return {
-        status: finalGate.status === 'FAIL_UNREPAIRABLE'
-          ? 'EXECUTION_HALTED_ARTIFACT_INVALID'
-          : 'REPAIR_REQUIRED_ARTIFACT_INVALID',
+        status:
+          finalGate.status === 'FAIL_UNREPAIRABLE'
+            ? 'EXECUTION_HALTED_ARTIFACT_INVALID'
+            : 'REPAIR_REQUIRED_ARTIFACT_INVALID',
         attempts,
         finalRuntimeVerification,
         finalGate,
@@ -330,7 +372,11 @@ export function runGodotArtifactRepairLoop(input: GodotArtifactRepairInput): God
       toolCallLog: input.toolCallLog,
       runtimeVerification: finalRuntimeVerification,
     });
-    attempts.push({ repair, runtimeVerification: finalRuntimeVerification, runnableArtifactGate: finalGate });
+    attempts.push({
+      repair,
+      runtimeVerification: finalRuntimeVerification,
+      runnableArtifactGate: finalGate,
+    });
 
     if (finalRuntimeVerification.status === 'TOOL_UNAVAILABLE') {
       return {
@@ -348,7 +394,8 @@ export function runGodotArtifactRepairLoop(input: GodotArtifactRepairInput): God
         attempts,
         finalRuntimeVerification,
         finalGate,
-        reason: 'Godot artifact repair passed fresh runtime verification and the Runnable Artifact Gate.',
+        reason:
+          'Godot artifact repair passed fresh runtime verification and the Runnable Artifact Gate.',
       };
     }
   }

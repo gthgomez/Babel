@@ -21,7 +21,10 @@ function safeSlug(value: string): string {
 }
 
 function timestampSlug(now: Date): string {
-  return now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  return now
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}Z$/, 'Z');
 }
 
 function shortId(): string {
@@ -51,6 +54,7 @@ function assertBabelLiteArtifactRoot(root: string, repoPath: string): void {
 export type LiteArtifactCommand =
   | 'ask'
   | 'plan'
+  | 'report'
   | 'patch'
   | 'propose'
   | 'diff'
@@ -66,7 +70,9 @@ export function createLiteArtifactRun(options: {
   now?: Date;
   shortId?: string;
 }): LiteArtifactRun {
-  const root = resolve(options.artifactRoot ?? join(resolve(options.repoPath), 'runs', 'babel-lite'));
+  const root = resolve(
+    options.artifactRoot ?? join(resolve(options.repoPath), 'runs', 'babel-lite'),
+  );
   assertBabelLiteArtifactRoot(root, options.repoPath);
   const runId = `${timestampSlug(options.now ?? new Date())}-${options.command}-${safeSlug(options.shortId ?? shortId())}`;
   const runDir = join(root, runId);
@@ -102,7 +108,11 @@ export function writeLiteTextArtifact(run: LiteArtifactRun, name: string, conten
   return path;
 }
 
-export function writeLiteJsonArtifact(run: LiteArtifactRun, name: string, content: unknown): string {
+export function writeLiteJsonArtifact(
+  run: LiteArtifactRun,
+  name: string,
+  content: unknown,
+): string {
   assertPlainArtifactName(name);
   const path = join(run.runDir, name);
   try {

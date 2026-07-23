@@ -1,11 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import {
-  AgentActionParseError,
-  agentActionParser,
-  parseAgentActions,
-} from './actions.js';
+import { AgentActionParseError, agentActionParser, parseAgentActions } from './actions.js';
 
 describe('parseAgentActions', () => {
   it('parses a fenced JSON actions array', () => {
@@ -38,6 +34,8 @@ describe('parseAgentActions', () => {
         { tool: 'file_read', path: 'README.md' },
         { tool: 'directory_list', path: 'src' },
         { tool: 'semantic_search', query: 'checkpoint restore' },
+        { tool: 'grep', pattern: 'session_loop', path: 'src' },
+        { tool: 'glob', pattern: 'src/**/*.ts' },
         { tool: 'file_write', path: 'out.txt', content: 'hello' },
         { tool: 'shell_exec', command: 'npm test', working_directory: 'babel-cli' },
       ],
@@ -47,6 +45,8 @@ describe('parseAgentActions', () => {
       { type: 'read_file', path: 'README.md' },
       { type: 'list_dir', path: 'src' },
       { type: 'search', query: 'checkpoint restore' },
+      { type: 'grep', pattern: 'session_loop', path: 'src' },
+      { type: 'glob', pattern: 'src/**/*.ts' },
       { type: 'write_file', path: 'out.txt', content: 'hello' },
       {
         type: 'run_command',

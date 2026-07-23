@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "fixture_type": "babel_parity_corpus_task",
+  "task_id": "failing_test_repair",
+  "parity_task_id": "failing_test_repair",
+  "title": "Failing test repair",
+  "target_file": "src/math.js",
+  "verifier_command": "npm test",
+  "task": "Repair the failing multiply test. Only edit src/math.js.",
+  "broken_implementation": "export const add = (a, b) => a + b;\nexport const subtract = (a, b) => a - b;\nexport const multiply = (a, b) => a + b;\n",
+  "fixed_implementation": "export const add = (a, b) => a + b;\nexport const subtract = (a, b) => a - b;\nexport const multiply = (a, b) => a * b;\n",
+  "test_source": "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { add, subtract, multiply } from './math.js';\n\ntest('add sums two numbers', () => {\n  assert.equal(add(1, 2), 3);\n});\n\ntest('subtract returns difference', () => {\n  assert.equal(subtract(9, 5), 4);\n});\n\ntest('multiply returns product', () => {\n  assert.equal(multiply(3, 4), 12);\n});\n"
+}

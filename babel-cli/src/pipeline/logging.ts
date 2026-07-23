@@ -13,11 +13,14 @@ interface PipelineLogContext {
   eventBus?: BabelEventBus;
 }
 
-const logContext = new AsyncLocalStorage<PipelineLogContext>();
+export const logContext = new AsyncLocalStorage<PipelineLogContext>();
 
 function stripAnsi(text: string): string {
   // eslint-disable-next-line no-control-regex
-  return text.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
+  return text.replace(
+    /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g,
+    '',
+  );
 }
 
 /**
@@ -44,6 +47,12 @@ export class BabelEventBus extends EventEmitter {
   }
   promptResume(): void {
     this.emit('prompt_resume');
+  }
+  assistantChunk(chunk: string, turnId?: number): void {
+    this.emit('assistant_chunk', { chunk, ...(turnId !== undefined ? { turn_id: turnId } : {}) });
+  }
+  assistantThought(thought: string): void {
+    this.emit('assistant_thought', thought);
   }
 }
 
@@ -75,7 +84,10 @@ export function logDetail(msg: string): void {
   }
 }
 
-export function emitRuntimeEvent(eventType: BabelRuntimeEventType, payload: Record<string, unknown> = {}): void {
+export function emitRuntimeEvent(
+  eventType: BabelRuntimeEventType,
+  payload: Record<string, unknown> = {},
+): void {
   logContext.getStore()?.eventBus?.runtimeEvent(eventType, payload);
 }
 

@@ -4,12 +4,16 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
+  openSync,
+  closeSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, basename } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 import type { ToolCallRequest } from '../localTools.js';
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
@@ -227,11 +231,22 @@ function readCheckpointIndex(runDir: string, runId: string): CheckpointIndex {
 function writeCheckpointRecord(record: CheckpointRecord): void {
   const checkpointDir = getCheckpointDir(record.run_dir, record.id);
   mkdirSync(checkpointDir, { recursive: true });
-  writeFileSync(
-    getCheckpointMetadataPath(record.run_dir, record.id),
-    `${JSON.stringify(record, null, 2)}\n`,
-    'utf-8',
-  );
+  // Phase 5c: Atomic write via temp-file + rename to prevent corruption on crash.
+  // A crash during direct writeFileSync would leave a truncated metadata.json.
+  const targetPath = getCheckpointMetadataPath(record.run_dir, record.id);
+  const tmpPath = `${targetPath}.tmp`;
+  writeFileSync(tmpPath, `${JSON.stringify(record, null, 2)}\n`, 'utf-8');
+  try {
+    renameSync(tmpPath, targetPath);
+  } catch {
+    // Fallback: if rename fails (cross-device), write directly
+    writeFileSync(targetPath, `${JSON.stringify(record, null, 2)}\n`, 'utf-8');
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      /* best effort */
+    }
+  }
 }
 
 function upsertCheckpointIndex(record: CheckpointRecord): void {
@@ -247,9 +262,10 @@ function upsertCheckpointIndex(record: CheckpointRecord): void {
     file_count: record.files.length,
   };
   const existing = index.checkpoints.findIndex((item) => item.id === record.id);
-  const checkpoints = existing >= 0
-    ? index.checkpoints.map((item, i) => i === existing ? entry : item)
-    : [...index.checkpoints, entry];
+  const checkpoints =
+    existing >= 0
+      ? index.checkpoints.map((item, i) => (i === existing ? entry : item))
+      : [...index.checkpoints, entry];
 
   const next: CheckpointIndex = {
     schema_version: 1,
@@ -258,7 +274,11 @@ function upsertCheckpointIndex(record: CheckpointRecord): void {
     updated_at: record.updated_at,
     checkpoints,
   };
-  writeFileSync(getCheckpointIndexPath(record.run_dir), `${JSON.stringify(next, null, 2)}\n`, 'utf-8');
+  writeFileSync(
+    getCheckpointIndexPath(record.run_dir),
+    `${JSON.stringify(next, null, 2)}\n`,
+    'utf-8',
+  );
 }
 
 function isWithinRoot(rootPath: string, candidatePath: string): boolean {
@@ -267,7 +287,10 @@ function isWithinRoot(rootPath: string, candidatePath: string): boolean {
   if (process.platform === 'win32') {
     const normalizedRoot = root.toLowerCase();
     const normalizedCandidate = candidate.toLowerCase();
-    return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(`${normalizedRoot}\\`);
+    return (
+      normalizedCandidate === normalizedRoot ||
+      normalizedCandidate.startsWith(`${normalizedRoot}\\`)
+    );
   }
   return candidate === root || candidate.startsWith(`${root}/`);
 }
@@ -284,9 +307,10 @@ function captureFile(
   if (!existsSync(path)) {
     return {
       path,
-      project_relative_path: projectRoot && isWithinRoot(projectRoot, path)
-        ? relative(projectRoot, path).replace(/\\/g, '/')
-        : null,
+      project_relative_path:
+        projectRoot && isWithinRoot(projectRoot, path)
+          ? relative(projectRoot, path).replace(/\\/g, '/')
+          : null,
       existed: false,
       size_bytes: 0,
       sha256: null,
@@ -298,9 +322,10 @@ function captureFile(
   if (!stats.isFile()) {
     return {
       path,
-      project_relative_path: projectRoot && isWithinRoot(projectRoot, path)
-        ? relative(projectRoot, path).replace(/\\/g, '/')
-        : null,
+      project_relative_path:
+        projectRoot && isWithinRoot(projectRoot, path)
+          ? relative(projectRoot, path).replace(/\\/g, '/')
+          : null,
       existed: true,
       size_bytes: stats.size,
       sha256: null,
@@ -326,9 +351,10 @@ function captureFile(
   if (skippedReasons.length > 0) {
     return {
       path,
-      project_relative_path: projectRoot && isWithinRoot(projectRoot, path)
-        ? relative(projectRoot, path).replace(/\\/g, '/')
-        : null,
+      project_relative_path:
+        projectRoot && isWithinRoot(projectRoot, path)
+          ? relative(projectRoot, path).replace(/\\/g, '/')
+          : null,
       existed: true,
       size_bytes: stats.size,
       sha256: null,
@@ -344,9 +370,10 @@ function captureFile(
   }
   return {
     path,
-    project_relative_path: projectRoot && isWithinRoot(projectRoot, path)
-      ? relative(projectRoot, path).replace(/\\/g, '/')
-      : null,
+    project_relative_path:
+      projectRoot && isWithinRoot(projectRoot, path)
+        ? relative(projectRoot, path).replace(/\\/g, '/')
+        : null,
     existed: true,
     size_bytes: stats.size,
     sha256: hashBuffer(content),
@@ -394,7 +421,10 @@ function isSensitiveSnapshotFile(relativePath: string): boolean {
   return CHECKPOINT_SENSITIVE_FILE_RE.test(relativePath.replace(/\\/g, '/'));
 }
 
-function collectSnapshotFilePaths(root: string, maxFiles: number): { files: string[]; overflow: boolean; notes: string[] } {
+function collectSnapshotFilePaths(
+  root: string,
+  maxFiles: number,
+): { files: string[]; overflow: boolean; notes: string[] } {
   const files: string[] = [];
   const notes: string[] = [];
   let overflow = false;
@@ -409,7 +439,9 @@ function collectSnapshotFilePaths(root: string, maxFiles: number): { files: stri
     try {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch (err) {
-      notes.push(`Unable to read checkpoint snapshot directory "${dir}": ${err instanceof Error ? err.message : String(err)}`);
+      notes.push(
+        `Unable to read checkpoint snapshot directory "${dir}": ${err instanceof Error ? err.message : String(err)}`,
+      );
       return;
     }
 
@@ -425,7 +457,9 @@ function collectSnapshotFilePaths(root: string, maxFiles: number): { files: stri
       try {
         stats = lstatSync(fullPath);
       } catch (err) {
-        notes.push(`Unable to stat checkpoint snapshot path "${relativePath}": ${err instanceof Error ? err.message : String(err)}`);
+        notes.push(
+          `Unable to stat checkpoint snapshot path "${relativePath}": ${err instanceof Error ? err.message : String(err)}`,
+        );
         continue;
       }
 
@@ -464,7 +498,9 @@ function collectSnapshotFilePaths(root: string, maxFiles: number): { files: stri
 
   walk(root);
   if (overflow) {
-    notes.push(`Checkpoint snapshot reached the ${maxFiles} file limit; restore coverage is partial.`);
+    notes.push(
+      `Checkpoint snapshot reached the ${maxFiles} file limit; restore coverage is partial.`,
+    );
   }
   return { files, overflow, notes };
 }
@@ -472,18 +508,27 @@ function collectSnapshotFilePaths(root: string, maxFiles: number): { files: stri
 function createFilesystemSnapshotArtifact(root: string): FilesystemSnapshotArtifact {
   const maxFiles = readPositiveIntegerEnv('BABEL_CHECKPOINT_MAX_FILES', 5000);
   const maxFileBytes = readPositiveIntegerEnv('BABEL_CHECKPOINT_MAX_FILE_BYTES', 1024 * 1024);
-  const maxTotalBytes = readPositiveIntegerEnv('BABEL_CHECKPOINT_MAX_TOTAL_BYTES', 20 * 1024 * 1024);
+  const maxTotalBytes = readPositiveIntegerEnv(
+    'BABEL_CHECKPOINT_MAX_TOTAL_BYTES',
+    20 * 1024 * 1024,
+  );
   const collected = collectSnapshotFilePaths(root, maxFiles);
   const budget: CaptureBudget = { remainingTotalBytes: maxTotalBytes };
-  const files = collected.files.map((filePath) => captureFile(filePath, root, {
-    includeContent: true,
-    maxFileBytes,
-    budget,
-  }));
-  const contentSkipped = files.filter((file) => file.existed && file.content_base64 === null).length;
+  const files = collected.files.map((filePath) =>
+    captureFile(filePath, root, {
+      includeContent: true,
+      maxFileBytes,
+      budget,
+    }),
+  );
+  const contentSkipped = files.filter(
+    (file) => file.existed && file.content_base64 === null,
+  ).length;
   const notes = [...collected.notes];
   if (contentSkipped > 0) {
-    notes.push(`${contentSkipped} file(s) were tracked as metadata-only because of checkpoint snapshot limits.`);
+    notes.push(
+      `${contentSkipped} file(s) were tracked as metadata-only because of checkpoint snapshot limits.`,
+    );
   }
 
   return {
@@ -500,13 +545,20 @@ function createFilesystemSnapshotArtifact(root: string): FilesystemSnapshotArtif
   };
 }
 
-function writeCheckpointJsonArtifact(runDir: string, checkpointId: string, filename: string, data: unknown): void {
+function writeCheckpointJsonArtifact(
+  runDir: string,
+  checkpointId: string,
+  filename: string,
+  data: unknown,
+): void {
   const path = getCheckpointArtifactPath(runDir, checkpointId, filename);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, 'utf-8');
 }
 
-function readFilesystemSnapshotArtifact(record: CheckpointRecord): FilesystemSnapshotArtifact | null {
+function readFilesystemSnapshotArtifact(
+  record: CheckpointRecord,
+): FilesystemSnapshotArtifact | null {
   const artifact = record.filesystem_snapshot?.before_artifact;
   if (!artifact) {
     return null;
@@ -518,7 +570,10 @@ function readFilesystemSnapshotArtifact(record: CheckpointRecord): FilesystemSna
   return JSON.parse(readFileSync(path, 'utf-8')) as FilesystemSnapshotArtifact;
 }
 
-function postStateMatchesSnapshot(snapshot: CheckpointFileSnapshot, postState: CheckpointFilePostState): boolean {
+function postStateMatchesSnapshot(
+  snapshot: CheckpointFileSnapshot,
+  postState: CheckpointFilePostState,
+): boolean {
   if (snapshot.existed !== postState.existed) {
     return false;
   }
@@ -582,7 +637,9 @@ function finalizeFilesystemDiff(record: CheckpointRecord): {
   notes.push(...before.notes);
   const afterCollected = collectSnapshotFilePaths(before.root, before.max_files);
   notes.push(...afterCollected.notes);
-  const afterMap = new Map(afterCollected.files.map((filePath) => [resolve(filePath), capturePostState(filePath)]));
+  const afterMap = new Map(
+    afterCollected.files.map((filePath) => [resolve(filePath), capturePostState(filePath)]),
+  );
   const beforeMap = new Map(before.files.map((file) => [resolve(file.path), file]));
   const restoreFiles: CheckpointFileSnapshot[] = [];
   let modifiedFiles = 0;
@@ -614,7 +671,9 @@ function finalizeFilesystemDiff(record: CheckpointRecord): {
   if (restoreFiles.length === 0) {
     notes.push('Filesystem checkpoint detected no restorable file changes.');
   } else if (overflow) {
-    notes.push('Filesystem checkpoint restore coverage is partial because the snapshot file limit was reached.');
+    notes.push(
+      'Filesystem checkpoint restore coverage is partial because the snapshot file limit was reached.',
+    );
   }
 
   return {
@@ -632,7 +691,11 @@ function finalizeFilesystemDiff(record: CheckpointRecord): {
   };
 }
 
-function resolveFileWriteTarget(inputPath: string, projectRoot: string, shadowRoot: string | null): string | null {
+function resolveFileWriteTarget(
+  inputPath: string,
+  projectRoot: string,
+  shadowRoot: string | null,
+): string | null {
   const projectTarget = isAbsolute(inputPath)
     ? resolve(inputPath)
     : resolve(projectRoot, inputPath);
@@ -690,18 +753,27 @@ export function createPreMutationCheckpoint(
     if (targetPath) {
       files.push(captureFile(targetPath, shadowRoot ?? options.projectRoot));
     } else {
-      notes.push('file_write target did not resolve inside the project root; checkpoint is metadata-only because sandbox rejection is expected.');
+      notes.push(
+        'file_write target did not resolve inside the project root; checkpoint is metadata-only because sandbox rejection is expected.',
+      );
     }
 
     if (options.dryRun && !shadowRoot) {
-      notes.push('dry-run without a shadow root does not mutate the filesystem; checkpoint is metadata-only unless prior file state was captured for audit.');
+      notes.push(
+        'dry-run without a shadow root does not mutate the filesystem; checkpoint is metadata-only unless prior file state was captured for audit.',
+      );
     }
   } else {
     if (options.dryRun) {
-      notes.push(`${req.tool} ran in dry-run mode; Babel records the triggering command, but no filesystem diff snapshot is needed.`);
+      notes.push(
+        `${req.tool} ran in dry-run mode; Babel records the triggering command, but no filesystem diff snapshot is needed.`,
+      );
     } else {
       const snapshot = createFilesystemSnapshotArtifact(options.projectRoot);
-      const beforeArtifact = getCheckpointRelativeArtifactPath(checkpointId, 'filesystem-before.json');
+      const beforeArtifact = getCheckpointRelativeArtifactPath(
+        checkpointId,
+        'filesystem-before.json',
+      );
       writeCheckpointJsonArtifact(runDir, checkpointId, 'filesystem-before.json', snapshot);
       filesystemSnapshot = {
         strategy: 'bounded_project_snapshot',
@@ -713,7 +785,9 @@ export function createPreMutationCheckpoint(
         max_file_bytes: snapshot.max_file_bytes,
         max_total_bytes: snapshot.max_total_bytes,
       };
-      notes.push(`${req.tool} captured a bounded filesystem snapshot for post-command diff restore.`);
+      notes.push(
+        `${req.tool} captured a bounded filesystem snapshot for post-command diff restore.`,
+      );
       if (snapshot.overflow) {
         notes.push('Filesystem snapshot reached its file limit; restore coverage is partial.');
       }
@@ -763,9 +837,10 @@ export function finalizeCheckpointAfterToolCall(
 
   const record = JSON.parse(readFileSync(metadataPath, 'utf-8')) as CheckpointRecord;
   const now = new Date().toISOString();
-  const filesystemResult = record.filesystem_snapshot && (record.tool === 'shell_exec' || record.tool === 'test_run')
-    ? finalizeFilesystemDiff(record)
-    : null;
+  const filesystemResult =
+    record.filesystem_snapshot && (record.tool === 'shell_exec' || record.tool === 'test_run')
+      ? finalizeFilesystemDiff(record)
+      : null;
   const files = filesystemResult ? filesystemResult.files : record.files;
   const postStates = files.map((file) => capturePostState(file.path));
   const restoreStatus = computeRestoreStatus(files);
@@ -776,7 +851,9 @@ export function finalizeCheckpointAfterToolCall(
     files,
     post_states: postStates,
     ...(filesystemResult ? { filesystem_diff: filesystemResult.filesystemDiff } : {}),
-    notes: filesystemResult ? [...new Set([...record.notes, ...filesystemResult.notes])] : record.notes,
+    notes: filesystemResult
+      ? [...new Set([...record.notes, ...filesystemResult.notes])]
+      : record.notes,
   };
 
   writeCheckpointRecord(next);
@@ -837,9 +914,55 @@ export function findCheckpoint(
 
 function currentFileStateMatchesPostState(postState: CheckpointFilePostState): boolean {
   const current = capturePostState(postState.path);
-  return current.existed === postState.existed &&
+  return (
+    current.existed === postState.existed &&
     current.sha256 === postState.sha256 &&
-    current.size_bytes === postState.size_bytes;
+    current.size_bytes === postState.size_bytes
+  );
+}
+
+function testFileWritability(filePath: string): { writable: boolean; error?: string } {
+  try {
+    if (existsSync(filePath)) {
+      const fd = openSync(filePath, 'r+');
+      closeSync(fd);
+    }
+    return { writable: true };
+  } catch (err: any) {
+    return { writable: false, error: err.code || String(err) };
+  }
+}
+
+function findLockingProcesses(filePath: string): string[] {
+  if (process.platform !== 'win32') return [];
+  try {
+    const fileBasename = basename(filePath);
+    // Phase 2b: Use escapePowerShellSingleQuoted to prevent injection.
+    // A filename like "test' -or '1'" could inject arbitrary PowerShell.
+    const escaped = fileBasename.replace(/'/g, "''");
+    const script = `Get-Process | Where-Object { $_.Path -and (Split-Path $_.Path -Leaf) -eq '${escaped}' } | Select-Object -Property Id, ProcessName, Path | ConvertTo-Json`;
+    const res = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf-8',
+    });
+    if (res.status === 0 && res.stdout.trim()) {
+      try {
+        const parsed = JSON.parse(res.stdout);
+        const processes = Array.isArray(parsed) ? parsed : [parsed];
+        return processes.map((p: any) => `PID ${p.Id} (${p.ProcessName})`);
+      } catch {
+        return [res.stdout.trim()];
+      }
+    }
+  } catch (err) {
+    // Phase 2b: Log the spawn failure instead of silently swallowing.
+    // PowerShell not available, permissions, or corrupted file names should be visible.
+    if (process.env['BABEL_DEBUG']) {
+      console.warn(
+        `[checkpoints] findLockingProcesses failed for "${filePath}": ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  return [];
 }
 
 export function restoreCheckpoint(
@@ -856,11 +979,47 @@ export function restoreCheckpoint(
       checkpoint_id: record.id,
       run_dir: record.run_dir,
       restored_files: [],
-      refused_files: [{
-        path: record.target,
-        reason: 'Checkpoint has no file snapshots to restore.',
-      }],
+      refused_files: [
+        {
+          path: record.target,
+          reason: 'Checkpoint has no file snapshots to restore.',
+        },
+      ],
       notes,
+    };
+  }
+
+  // Phase 1 (Verification): Test writability on all target files in the patchset before modifying
+  const lockedFiles: string[] = [];
+  const lockDiagnostics: string[] = [];
+  for (const file of record.files) {
+    const postState = record.post_states.find((candidate) => candidate.path === file.path);
+    if (!options.force && postState && !currentFileStateMatchesPostState(postState)) {
+      continue;
+    }
+
+    const testRes = testFileWritability(file.path);
+    if (!testRes.writable) {
+      lockedFiles.push(file.path);
+      const lockingProcs = findLockingProcesses(file.path);
+      const procInfo =
+        lockingProcs.length > 0 ? ` (Locking process: ${lockingProcs.join(', ')})` : '';
+      lockDiagnostics.push(`${file.path} is locked/unwritable: ${testRes.error}${procInfo}`);
+    }
+  }
+
+  if (lockedFiles.length > 0) {
+    const refused = record.files.map((file) => ({
+      path: file.path,
+      reason: `Checkpoint restore transaction aborted because target file(s) are locked or unwritable: ${lockDiagnostics.join('; ')}`,
+    }));
+    return {
+      status: 'refused',
+      checkpoint_id: record.id,
+      run_dir: record.run_dir,
+      restored_files: [],
+      refused_files: refused,
+      notes: [...notes, ...lockDiagnostics],
     };
   }
 
@@ -869,7 +1028,8 @@ export function restoreCheckpoint(
     if (!options.force && postState && !currentFileStateMatchesPostState(postState)) {
       refusedFiles.push({
         path: file.path,
-        reason: 'Current file state differs from Babel post-write state. Use --force only after reviewing the diff.',
+        reason:
+          'Current file state differs from Babel post-write state. Use --force only after reviewing the diff.',
       });
       continue;
     }
@@ -926,7 +1086,9 @@ export function formatCheckpointList(index: CheckpointIndex): string {
   }
 
   for (const checkpoint of index.checkpoints) {
-    lines.push(`${checkpoint.id}  ${checkpoint.tool}  ${checkpoint.restore_status}  ${checkpoint.target}`);
+    lines.push(
+      `${checkpoint.id}  ${checkpoint.tool}  ${checkpoint.restore_status}  ${checkpoint.target}`,
+    );
   }
 
   return lines.join('\n');

@@ -1,0 +1,8 @@
+{
+  "AppendOnlyRenderer: full lifecycle with events": "[00:00] Babel started: snapshot test\n[00:00] Analyzing your request\n[00:00] Analyzing request\n[00:00] Planning\n[00:00] Reviewing\n[00:00] Applying changes\n[00:00] Writing the fix\n",
+  "ConversationalRenderer: TTY tool call interaction": "\u001b[?25l\r  ◐ Thinking…  (0s)\n  ○ Reading src/main.ts\n  ○ Running npm run build\r  ✓ Reading src/main.ts (1.5 KB)\n\r  ✓ Running npm run build (exit 0)\n\r\n  · 00:00  · 2 tool calls\n\n  [Esc] cancel  [Ctrl+C] stop\n\n\u001b[?25h",
+  "ConversationalRenderer: TTY file change notification": "\u001b[?25l\r  ◐ Thinking…  (0s)  └ src/utils/helper.ts +3 -1\n      --- a/src/utils/helper.ts\n      +++ b/src/utils/helper.ts\n      @@ -10,7 +10,9 @@\n  10 │  export function helper() {\n  11 │    return 42;\n  12 │ +  // new logic\n  13 │ +  return 43;\n  14 │  }\n\r\n  · 00:00\n\n\u001b[?25h",
+  "AppendOnlyRenderer: error log lines and runtime events": "[00:00] Babel started: error snapshot\n[00:00] Error: network timeout\n[00:00] [FAIL] test assertion failed on line 42\n[00:00] shell_exec: npm install\n[00:00] shell_exec ✗ (1) (install failed)\n",
+  "TtyHudRenderer: final snapshot": "── Run Complete ──\nDuration 00:00  Cost $0.0000  Tools 0\n\nStages:\n  ● Analyze  ● Plan  ● Review  ◐ Apply\n\nActivity (7):\n  Planning\n  Plan ready\n  Reviewing\n  Applying changes\n  Writing changes to src/index.ts\n\nFiles touched:\n  changes",
+  "ConversationalRenderer: subagent failed overlay": "\u001b[?25l\r  ◐ Thinking…  (0s)\r\n  · 00:00\n\n\u001b[?25h"
+}

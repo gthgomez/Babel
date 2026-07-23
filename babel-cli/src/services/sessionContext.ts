@@ -1,14 +1,12 @@
-import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { hashText } from '../telemetry/hash.js';
 
 import type { EvidenceBundle } from '../evidence.js';
 import type { ToolCallLog } from '../schemas/agentContracts.js';
 
-export type ExecutorSessionContextStatus =
-  | 'ready_for_next_turn'
-  | 'after_tool_call'
-  | 'terminal';
+export type ExecutorSessionContextStatus = 'ready_for_next_turn' | 'after_tool_call' | 'terminal';
 
 export interface ExecutorSessionContextSnapshot {
   schema_version: 1;
@@ -48,10 +46,6 @@ export function getSessionContextPath(runDir: string): string {
   return join(runDir, '10_session_context.json');
 }
 
-function hashText(value: string): string {
-  return createHash('sha256').update(value).digest('hex');
-}
-
 function findLatestQaVerdict(runDir: string): { verdict: string | null; path: string | null } {
   if (!existsSync(runDir)) {
     return { verdict: null, path: null };
@@ -82,7 +76,7 @@ function findLatestQaVerdict(runDir: string): { verdict: string | null; path: st
   return { verdict: null, path: null };
 }
 
-export function writeExecutorSessionContext(options: {
+export async function writeExecutorSessionContext(options: {
   evidence: EvidenceBundle;
   status: ExecutorSessionContextStatus;
   baseContext: string;
@@ -93,7 +87,7 @@ export function writeExecutorSessionContext(options: {
   terminalStatus?: string;
   haltTag?: string;
   condition?: string;
-}): ExecutorSessionContextSnapshot {
+}): Promise<ExecutorSessionContextSnapshot> {
   const qa = findLatestQaVerdict(options.evidence.runDir);
   const snapshot: ExecutorSessionContextSnapshot = {
     schema_version: 1,
@@ -117,7 +111,10 @@ export function writeExecutorSessionContext(options: {
       base_context: options.baseContext,
       execution_history: options.executionHistory,
       next_turn_prompt: options.nextTurnPrompt,
-      file_read_cache: [...options.fileReadCache.entries()].map(([path, content]) => ({ path, content })),
+      file_read_cache: [...options.fileReadCache.entries()].map(([path, content]) => ({
+        path,
+        content,
+      })),
       tool_call_log: options.toolCallLog,
     },
     restore: {
@@ -126,7 +123,11 @@ export function writeExecutorSessionContext(options: {
     },
   };
 
-  writeFileSync(getSessionContextPath(options.evidence.runDir), `${JSON.stringify(snapshot, null, 2)}\n`, 'utf-8');
+  await writeFile(
+    getSessionContextPath(options.evidence.runDir),
+    `${JSON.stringify(snapshot, null, 2)}\n`,
+    'utf-8',
+  );
   return snapshot;
 }
 
@@ -167,5 +168,27 @@ export function summarizeExecutorSessionContext(snapshot: ExecutorSessionContext
     steps_complete: snapshot.steps_complete,
     context_fingerprint: snapshot.context_fingerprint,
     approval_state: snapshot.approval_state,
+  };
+}
+
+/**
+ * Compare a stored context fingerprint against a fresh hash of the current
+ * next-turn prompt. Returns diagnostic information about any detected divergence.
+ *
+ * Used by resume/recovery paths to surface context drift to users.
+ */
+export function detectContextFingerprintDrift(
+  storedFingerprint: string,
+  currentNextTurnPrompt: string,
+): { drifted: boolean; stored: string; current: string; message: string } {
+  const current = hashText(currentNextTurnPrompt);
+  const drifted = storedFingerprint !== current;
+  return {
+    drifted,
+    stored: storedFingerprint,
+    current,
+    message: drifted
+      ? `Context fingerprint mismatch: stored ${storedFingerprint.slice(0, 12)}... ≠ current ${current.slice(0, 12)}...`
+      : 'Context fingerprint matches — no drift detected.',
   };
 }

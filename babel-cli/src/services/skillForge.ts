@@ -120,7 +120,11 @@ function codexSkillsRoot(): string {
 }
 
 function normalizeSkillId(name: string): string {
-  const normalized = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const normalized = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
   if (!normalized) {
     throw new Error('Skill name must contain at least one letter or number.');
   }
@@ -128,7 +132,10 @@ function normalizeSkillId(name: string): string {
 }
 
 function stripQuotes(value: string): string {
-  return value.trim().replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1');
+  return value
+    .trim()
+    .replace(/^"(.*)"$/, '$1')
+    .replace(/^'(.*)'$/, '$1');
 }
 
 function parseInlineArray(value: string): string[] | null {
@@ -140,7 +147,10 @@ function parseInlineArray(value: string): string[] | null {
   if (!inner) {
     return [];
   }
-  return inner.split(',').map(item => stripQuotes(item)).filter(item => item.length > 0);
+  return inner
+    .split(',')
+    .map((item) => stripQuotes(item))
+    .filter((item) => item.length > 0);
 }
 
 function parseSimpleYaml(content: string): Record<string, string | string[] | undefined> {
@@ -191,7 +201,10 @@ function directoryHasEntries(path: string): boolean {
   return existsSync(path) && statSync(path).isDirectory() && readdirSync(path).length > 0;
 }
 
-function readManifest(manifestPath: string, issues: SkillIssue[]): Record<string, string | string[] | undefined> | null {
+function readManifest(
+  manifestPath: string,
+  issues: SkillIssue[],
+): Record<string, string | string[] | undefined> | null {
   if (!existsSync(manifestPath)) {
     return null;
   }
@@ -226,10 +239,10 @@ function validateJsonFile(path: string, issues: SkillIssue[]): void {
 }
 
 function verdictFromIssues(issues: SkillIssue[]): SkillValidationVerdict {
-  if (issues.some(issue => issue.severity === 'RED')) {
+  if (issues.some((issue) => issue.severity === 'RED')) {
     return 'RED';
   }
-  if (issues.some(issue => issue.severity === 'YELLOW')) {
+  if (issues.some((issue) => issue.severity === 'YELLOW')) {
     return 'YELLOW';
   }
   return 'GREEN';
@@ -314,7 +327,12 @@ export function validateSkillPath(pathArg: string): SkillValidationResult {
       manifest: null,
       issues,
       verdict,
-      evidence_report: evidenceReport([], verdict, ['not run (static validation only)'], nextActionForVerdict(verdict)),
+      evidence_report: evidenceReport(
+        [],
+        verdict,
+        ['not run (static validation only)'],
+        nextActionForVerdict(verdict),
+      ),
     };
   }
 
@@ -323,7 +341,9 @@ export function validateSkillPath(pathArg: string): SkillValidationResult {
     if (!existsSync(requiredPath)) {
       issues.push({
         severity: 'RED',
-        code: required.startsWith('contracts/') ? 'skill.missing_contracts' : `skill.missing_${required.replace(/[/.]/g, '_')}`,
+        code: required.startsWith('contracts/')
+          ? 'skill.missing_contracts'
+          : `skill.missing_${required.replace(/[/.]/g, '_')}`,
         message: `Missing required skill file or directory: ${required}`,
         path: requiredPath,
       });
@@ -373,7 +393,12 @@ export function validateSkillPath(pathArg: string): SkillValidationResult {
     manifest,
     issues,
     verdict,
-    evidence_report: evidenceReport([], verdict, ['not run (static validation only)'], nextActionForVerdict(verdict)),
+    evidence_report: evidenceReport(
+      [],
+      verdict,
+      ['not run (static validation only)'],
+      nextActionForVerdict(verdict),
+    ),
   };
 }
 
@@ -388,7 +413,12 @@ export function createSkill(name: string, babelRoot: string): SkillCreateReport 
       status: 'fail',
       skill_path: target,
       validation,
-      evidence_report: evidenceReport([], validation.verdict, ['not run (skill already exists)'], 'Choose a new skill name or validate the existing skill.'),
+      evidence_report: evidenceReport(
+        [],
+        validation.verdict,
+        ['not run (skill already exists)'],
+        'Choose a new skill name or validate the existing skill.',
+      ),
     };
   }
 
@@ -405,7 +435,7 @@ export function createSkill(name: string, babelRoot: string): SkillCreateReport 
         `name: ${name}`,
         'version: 0.1.0',
         'status: experimental',
-        'description: TODO: describe this skill.',
+        'description: (describe this skill)',
         'entrypoint: SKILL.md',
         'allowed_tools: []',
         'denied_tools: []',
@@ -420,19 +450,27 @@ export function createSkill(name: string, babelRoot: string): SkillCreateReport 
     },
     {
       path: join(target, 'contracts', 'input.schema.json'),
-      content: `${JSON.stringify({
-        $schema: 'https://json-schema.org/draft/2020-12/schema',
-        type: 'object',
-        additionalProperties: true,
-      }, null, 2)}\n`,
+      content: `${JSON.stringify(
+        {
+          $schema: 'https://json-schema.org/draft/2020-12/schema',
+          type: 'object',
+          additionalProperties: true,
+        },
+        null,
+        2,
+      )}\n`,
     },
     {
       path: join(target, 'contracts', 'output.schema.json'),
-      content: `${JSON.stringify({
-        $schema: 'https://json-schema.org/draft/2020-12/schema',
-        type: 'object',
-        additionalProperties: true,
-      }, null, 2)}\n`,
+      content: `${JSON.stringify(
+        {
+          $schema: 'https://json-schema.org/draft/2020-12/schema',
+          type: 'object',
+          additionalProperties: true,
+        },
+        null,
+        2,
+      )}\n`,
     },
     {
       path: join(target, 'README.md'),
@@ -460,14 +498,20 @@ export function createSkill(name: string, babelRoot: string): SkillCreateReport 
     status: validation.status,
     skill_path: target,
     validation,
-    evidence_report: evidenceReport(changed, validation.verdict, ['not run (scaffold only)'], nextActionForVerdict(validation.verdict)),
+    evidence_report: evidenceReport(
+      changed,
+      validation.verdict,
+      ['not run (scaffold only)'],
+      nextActionForVerdict(validation.verdict),
+    ),
   };
 }
 
 export function auditSkillPath(pathArg: string): SkillAuditReport {
   const validation = validateSkillPath(pathArg);
   const status = validation.manifest ? scalarValue(validation.manifest, 'status') : '';
-  const exportEligible = validation.verdict !== 'RED' && (status === 'reviewed' || status === 'trusted');
+  const exportEligible =
+    validation.verdict !== 'RED' && (status === 'reviewed' || status === 'trusted');
   const next = exportEligible
     ? 'Skill is eligible for default Codex export.'
     : validation.verdict === 'RED'
@@ -487,22 +531,41 @@ export function listSkills(babelRoot: string): SkillListReport {
   const root = skillRoot(babelRoot);
   const skills = existsSync(root)
     ? readdirSync(root, { withFileTypes: true })
-      .filter(entry => entry.isDirectory())
-      .map(entry => validateSkillPath(join(root, entry.name)))
-      .map((result): SkillListEntry => ({
-        id: result.manifest ? scalarValue(result.manifest, 'id') || basename(result.skill_path) : basename(result.skill_path),
-        name: result.manifest ? scalarValue(result.manifest, 'name') || basename(result.skill_path) : basename(result.skill_path),
-        path: result.skill_path,
-        status: result.manifest ? scalarValue(result.manifest, 'status') || 'unknown' : 'unknown',
-        verdict: result.verdict,
-      }))
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => validateSkillPath(join(root, entry.name)))
+        .map(
+          (result): SkillListEntry => ({
+            id: result.manifest
+              ? scalarValue(result.manifest, 'id') || basename(result.skill_path)
+              : basename(result.skill_path),
+            name: result.manifest
+              ? scalarValue(result.manifest, 'name') || basename(result.skill_path)
+              : basename(result.skill_path),
+            path: result.skill_path,
+            status: result.manifest
+              ? scalarValue(result.manifest, 'status') || 'unknown'
+              : 'unknown',
+            verdict: result.verdict,
+          }),
+        )
     : [];
 
   return {
     status: 'ok',
     skills_root: root,
     skills,
-    evidence_report: evidenceReport([], skills.some(skill => skill.verdict === 'RED') ? 'RED' : skills.some(skill => skill.verdict === 'YELLOW') ? 'YELLOW' : 'GREEN', ['not run (list performs static validation only)'], skills.length === 0 ? 'Create a skill with babel skill new <name>.' : 'Validate or audit a skill before review/export.'),
+    evidence_report: evidenceReport(
+      [],
+      skills.some((skill) => skill.verdict === 'RED')
+        ? 'RED'
+        : skills.some((skill) => skill.verdict === 'YELLOW')
+          ? 'YELLOW'
+          : 'GREEN',
+      ['not run (list performs static validation only)'],
+      skills.length === 0
+        ? 'Create a skill with babel skill new <name>.'
+        : 'Validate or audit a skill before review/export.',
+    ),
   };
 }
 
@@ -561,7 +624,12 @@ export function exportSkillToCodex(
       skill_path: null,
       destination_path: destinationRoot,
       validation: null,
-      evidence_report: evidenceReport([], verdict, ['not run (skill lookup failed)'], 'Create or list skills before exporting.'),
+      evidence_report: evidenceReport(
+        [],
+        verdict,
+        ['not run (skill lookup failed)'],
+        'Create or list skills before exporting.',
+      ),
     };
   }
 
@@ -573,7 +641,12 @@ export function exportSkillToCodex(
       skill_path: source,
       destination_path: destinationRoot,
       validation,
-      evidence_report: evidenceReport([], validation.verdict, ['not run (export blocked by validation)'], nextActionForVerdict(validation.verdict)),
+      evidence_report: evidenceReport(
+        [],
+        validation.verdict,
+        ['not run (export blocked by validation)'],
+        nextActionForVerdict(validation.verdict),
+      ),
     };
   }
 
@@ -583,7 +656,12 @@ export function exportSkillToCodex(
       skill_path: source,
       destination_path: destinationRoot,
       validation,
-      evidence_report: evidenceReport([], validation.verdict, ['not run (export blocked by experimental status)'], 'Re-run with --allow-experimental or promote the skill to reviewed/trusted.'),
+      evidence_report: evidenceReport(
+        [],
+        validation.verdict,
+        ['not run (export blocked by experimental status)'],
+        'Re-run with --allow-experimental or promote the skill to reviewed/trusted.',
+      ),
     };
   }
 
@@ -593,7 +671,12 @@ export function exportSkillToCodex(
       skill_path: source,
       destination_path: destinationRoot,
       validation,
-      evidence_report: evidenceReport([], validation.verdict, ['not run (export blocked by status)'], 'Only reviewed or trusted skills export by default.'),
+      evidence_report: evidenceReport(
+        [],
+        validation.verdict,
+        ['not run (export blocked by status)'],
+        'Only reviewed or trusted skills export by default.',
+      ),
     };
   }
 
@@ -606,7 +689,12 @@ export function exportSkillToCodex(
     skill_path: source,
     destination_path: target,
     validation,
-    evidence_report: evidenceReport(changed, validation.verdict, ['not run (copy/export only)'], 'Run babel skill audit on the exported skill if you need a second evidence pass.'),
+    evidence_report: evidenceReport(
+      changed,
+      validation.verdict,
+      ['not run (copy/export only)'],
+      'Run babel skill audit on the exported skill if you need a second evidence pass.',
+    ),
   };
 }
 
@@ -614,12 +702,12 @@ export function runSkillDoctor(babelRoot: string): SkillDoctorReport {
   const root = skillRoot(babelRoot);
   const results = existsSync(root)
     ? readdirSync(root, { withFileTypes: true })
-      .filter(entry => entry.isDirectory())
-      .map(entry => validateSkillPath(join(root, entry.name)))
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => validateSkillPath(join(root, entry.name)))
     : [];
-  const verdict: SkillValidationVerdict = results.some(result => result.verdict === 'RED')
+  const verdict: SkillValidationVerdict = results.some((result) => result.verdict === 'RED')
     ? 'RED'
-    : results.some(result => result.verdict === 'YELLOW') || results.length === 0
+    : results.some((result) => result.verdict === 'YELLOW') || results.length === 0
       ? 'YELLOW'
       : 'GREEN';
 
@@ -628,7 +716,14 @@ export function runSkillDoctor(babelRoot: string): SkillDoctorReport {
     skills_root: root,
     skills_checked: results.length,
     results,
-    evidence_report: evidenceReport([], verdict, ['not run (doctor performs static validation only)'], results.length === 0 ? 'Create a skill with babel skill new <name>.' : nextActionForVerdict(verdict)),
+    evidence_report: evidenceReport(
+      [],
+      verdict,
+      ['not run (doctor performs static validation only)'],
+      results.length === 0
+        ? 'Create a skill with babel skill new <name>.'
+        : nextActionForVerdict(verdict),
+    ),
   };
 }
 
@@ -643,10 +738,7 @@ export function formatEvidenceReport(report: SkillEvidenceReport): string {
 }
 
 export function formatValidationHuman(result: SkillValidationResult): string {
-  const lines = [
-    `Skill validation: ${result.verdict}`,
-    `Path: ${result.skill_path}`,
-  ];
+  const lines = [`Skill validation: ${result.verdict}`, `Path: ${result.skill_path}`];
   if (result.issues.length === 0) {
     lines.push('Issues: none');
   } else {
@@ -660,10 +752,7 @@ export function formatValidationHuman(result: SkillValidationResult): string {
 }
 
 export function formatSkillListHuman(report: SkillListReport): string {
-  const lines = [
-    `Babel skills: ${report.skills.length}`,
-    `Root: ${report.skills_root}`,
-  ];
+  const lines = [`Babel skills: ${report.skills.length}`, `Root: ${report.skills_root}`];
   for (const skill of report.skills) {
     lines.push(`- ${skill.id} (${skill.status}) ${skill.verdict} :: ${skill.path}`);
   }
@@ -673,7 +762,9 @@ export function formatSkillListHuman(report: SkillListReport): string {
 
 export function formatSkillCreateHuman(report: SkillCreateReport): string {
   return [
-    report.status === 'ok' ? `Created skill: ${report.skill_path}` : `Skill not created: ${report.skill_path}`,
+    report.status === 'ok'
+      ? `Created skill: ${report.skill_path}`
+      : `Skill not created: ${report.skill_path}`,
     formatValidationHuman(report.validation),
     formatEvidenceReport(report.evidence_report),
   ].join('\n');

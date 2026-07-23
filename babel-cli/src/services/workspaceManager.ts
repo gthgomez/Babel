@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 
+import { BABEL_ROOT } from '../cli/constants.js';
 import { SafeExecutor, type ToolResult } from '../sandbox.js';
 import { analyzeProjectRoot, type ProjectOnboardingReport } from './projectOnboarding.js';
 
@@ -13,9 +14,9 @@ export interface ApprovedWorkspaceRoot {
 export interface WorkspacePolicyStatus {
   readonly status: 'ok';
   readonly approved_roots: ApprovedWorkspaceRoot[];
-  readonly web_policy: 'denied_for_workspace_manager';
+  readonly web_policy: 'denied_for_opencalw_manager';
   readonly dependency_install_policy: 'ask_first';
-  readonly execution_profile: 'workspace_manager';
+  readonly execution_profile: 'opencalw_manager';
 }
 
 export interface WorkspaceFileEntry {
@@ -52,7 +53,7 @@ export interface WorkspaceCommandResult {
 export interface WorkspaceVerifyReport {
   readonly status: 'pass' | 'fail' | 'no_commands';
   readonly project_root: string;
-  readonly execution_profile: 'workspace_manager';
+  readonly execution_profile: 'opencalw_manager';
   readonly onboarding: ProjectOnboardingReport;
   readonly selected_commands: string[];
   readonly command_results: WorkspaceCommandResult[];
@@ -60,23 +61,10 @@ export interface WorkspaceVerifyReport {
 }
 
 const DEFAULT_WORKSPACE_APPROVED_ROOTS_NOTE =
-  'By default Babel trusts only the explicit or current project root. Set BABEL_WORKSPACE_APPROVED_ROOTS to a semicolon-separated allowlist for broader access.';
-
-const warnedCompatibilityEnvironment = new Set<string>();
-
-function readWorkspaceEnvironment(canonical: string, legacy: string): string | undefined {
-  const canonicalValue = process.env[canonical]?.trim();
-  if (canonicalValue) return canonicalValue;
-  const legacyValue = process.env[legacy]?.trim();
-  if (legacyValue && !warnedCompatibilityEnvironment.has(legacy)) {
-    warnedCompatibilityEnvironment.add(legacy);
-    process.stderr.write(`Warning: ${legacy} is deprecated; use ${canonical}.\n`);
-  }
-  return legacyValue || undefined;
-}
+  'By default Babel trusts repos under the workspace root. Set BABEL_OPENCLAW_APPROVED_ROOTS to a semicolon-separated allowlist for a tighter boundary.';
 
 function workspaceRoot(): string {
-  return resolve(process.env['BABEL_WORKSPACE_ROOT']?.trim() || process.cwd());
+  return resolve(process.env['BABEL_WORKSPACE_ROOT']?.trim() || resolve(BABEL_ROOT, '..'));
 }
 
 function normalizeRoot(path: string): string {
@@ -91,27 +79,29 @@ function toPosixPath(path: string): string {
 function splitRoots(raw: string): string[] {
   return raw
     .split(/[;\n]+/)
-    .map(value => value.trim())
-    .filter(value => value.length > 0);
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
 }
 
-export function getWorkspaceApprovedRoots(projectRoot = process.cwd()): ApprovedWorkspaceRoot[] {
-  const explicitRoots = readWorkspaceEnvironment('BABEL_WORKSPACE_APPROVED_ROOTS', 'BABEL_OPENCALW_APPROVED_ROOTS');
-  const roots = explicitRoots && explicitRoots.length > 0
-    ? splitRoots(explicitRoots)
-    : [projectRoot];
+export function getOpenClawApprovedRoots(): ApprovedWorkspaceRoot[] {
+  const explicitRoots = process.env['BABEL_OPENCLAW_APPROVED_ROOTS']?.trim();
+  const roots =
+    explicitRoots && explicitRoots.length > 0 ? splitRoots(explicitRoots) : [workspaceRoot()];
 
-  return [...new Set(roots.map(normalizeRoot))]
-    .map(path => ({ path, exists: existsSync(path), aliases: buildWorkspacePathAliases(path) }));
+  return [...new Set(roots.map(normalizeRoot))].map((path) => ({
+    path,
+    exists: existsSync(path),
+    aliases: buildOpenClawPathAliases(path),
+  }));
 }
 
 export function getWorkspacePolicyStatus(): WorkspacePolicyStatus {
   return {
     status: 'ok',
-    approved_roots: getWorkspaceApprovedRoots(),
-    web_policy: 'denied_for_workspace_manager',
+    approved_roots: getOpenClawApprovedRoots(),
+    web_policy: 'denied_for_opencalw_manager',
     dependency_install_policy: 'ask_first',
-    execution_profile: 'workspace_manager',
+    execution_profile: 'opencalw_manager',
   };
 }
 
@@ -125,10 +115,12 @@ function isInside(root: string, candidate: string): boolean {
     return candidateNorm === rootNorm || candidateNorm.startsWith(`${rootNorm}${sep}`);
   }
 
-  return resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}${sep}`);
+  return (
+    resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}${sep}`)
+  );
 }
 
-function buildWorkspacePathAliases(root: string): string[] {
+function buildOpenClawPathAliases(root: string): string[] {
   const workspace = normalizeRoot(workspaceRoot());
   const relativeFromWorkspace = relative(workspace, root);
   if (
@@ -180,7 +172,7 @@ function mapSandboxRelativePath(pathArg: string): string[] {
   }
 
   const lower = toPosixPath(trimmed).toLowerCase();
-  const sandboxRoot = readWorkspaceEnvironment('BABEL_WORKSPACE_SANDBOX_ROOT', 'BABEL_OPENCALW_SANDBOX_ROOT');
+  const sandboxRoot = process.env['BABEL_OPENCLAW_SANDBOX_ROOT']?.trim();
   if (sandboxRoot) {
     const normalizedSandboxRoot = toPosixPath(resolve(sandboxRoot)).replace(/\/+$/, '');
     const normalizedInput = toPosixPath(resolve(trimmed));
@@ -203,23 +195,24 @@ function mapSandboxRelativePath(pathArg: string): string[] {
 }
 
 function candidateWorkspacePaths(pathArg: string): string[] {
-  const candidates = [
-    ...mapSandboxRelativePath(pathArg),
-    resolve(pathArg),
-  ];
-  return [...new Set(candidates.map(candidate => resolve(candidate)))];
+  const candidates = [...mapSandboxRelativePath(pathArg), resolve(pathArg)];
+  return [...new Set(candidates.map((candidate) => resolve(candidate)))];
 }
 
-export function resolveApprovedWorkspacePath(pathArg: string): { path: string; approvedRoots: string[] } {
-  const approvedRoots = getWorkspaceApprovedRoots().map(root => root.path);
-  const targetPath = candidateWorkspacePaths(pathArg)
-    .find(candidate => approvedRoots.some(root => isInside(root, candidate)));
+export function resolveApprovedWorkspacePath(pathArg: string): {
+  path: string;
+  approvedRoots: string[];
+} {
+  const approvedRoots = getOpenClawApprovedRoots().map((root) => root.path);
+  const targetPath = candidateWorkspacePaths(pathArg).find((candidate) =>
+    approvedRoots.some((root) => isInside(root, candidate)),
+  );
 
   if (!targetPath) {
     const resolvedPath = resolve(pathArg);
     throw new Error(
-      `Path is outside approved workspace roots: ${resolvedPath}. ` +
-      `Approved roots: ${approvedRoots.join('; ')}. ${DEFAULT_WORKSPACE_APPROVED_ROOTS_NOTE}`,
+      `Path is outside OpenClaw approved workspace roots: ${resolvedPath}. ` +
+        `Approved roots: ${approvedRoots.join('; ')}. ${DEFAULT_WORKSPACE_APPROVED_ROOTS_NOTE}`,
     );
   }
 
@@ -230,12 +223,14 @@ export function resolveApprovedWorkspacePath(pathArg: string): { path: string; a
 }
 
 function shouldSkipEntry(name: string): boolean {
-  return name === '.git' ||
+  return (
+    name === '.git' ||
     name === 'node_modules' ||
     name === '.venv' ||
     name === 'dist' ||
     name === 'build' ||
-    name === '.pytest_cache';
+    name === '.pytest_cache'
+  );
 }
 
 export function listWorkspaceFiles(
@@ -300,7 +295,9 @@ export function readWorkspaceFile(
   const size = statSync(resolved.path).size;
   const maxBytes = Math.max(1, options.maxBytes ?? 200_000);
   if (size > maxBytes) {
-    throw new Error(`Workspace read target is too large: ${size} bytes exceeds ${maxBytes} byte limit.`);
+    throw new Error(
+      `Workspace read target is too large: ${size} bytes exceeds ${maxBytes} byte limit.`,
+    );
   }
 
   return {
@@ -325,7 +322,7 @@ function withManagerEnv<T>(projectRoot: string, approvedRoots: string[], fn: () 
   const previousProjectRoot = process.env['BABEL_PROJECT_ROOT'];
   const previousAllowedRoots = process.env['BABEL_ALLOWED_ROOTS'];
 
-  process.env['BABEL_EXECUTION_PROFILE'] = 'workspace_manager';
+  process.env['BABEL_EXECUTION_PROFILE'] = 'opencalw_manager';
   process.env['BABEL_PROJECT_ROOT'] = projectRoot;
   process.env['BABEL_ALLOWED_ROOTS'] = approvedRoots.join(',');
 
@@ -362,15 +359,17 @@ export function verifyWorkspaceProject(
   }
 
   const onboarding = analyzeProjectRoot(resolved.path);
-  const selectedCommands = (options.commands && options.commands.length > 0
-    ? options.commands
-    : defaultVerifyCommands(onboarding))
-    .map(command => command.trim())
-    .filter(command => command.length > 0);
+  const selectedCommands = (
+    options.commands && options.commands.length > 0
+      ? options.commands
+      : defaultVerifyCommands(onboarding)
+  )
+    .map((command) => command.trim())
+    .filter((command) => command.length > 0);
 
   const commandResults = withManagerEnv(resolved.path, resolved.approvedRoots, () => {
     const executor = new SafeExecutor(resolved.path);
-    return selectedCommands.map(command => {
+    return selectedCommands.map((command) => {
       const startedAt = Date.now();
       const result: ToolResult = executor.testRun(
         command,
@@ -387,16 +386,17 @@ export function verifyWorkspaceProject(
     });
   });
 
-  const status = selectedCommands.length === 0
-    ? 'no_commands'
-    : commandResults.every(result => result.exit_code === 0)
-      ? 'pass'
-      : 'fail';
+  const status =
+    selectedCommands.length === 0
+      ? 'no_commands'
+      : commandResults.every((result) => result.exit_code === 0)
+        ? 'pass'
+        : 'fail';
 
   return {
     status,
     project_root: resolved.path,
-    execution_profile: 'workspace_manager',
+    execution_profile: 'opencalw_manager',
     onboarding,
     selected_commands: selectedCommands,
     command_results: commandResults,
@@ -406,12 +406,12 @@ export function verifyWorkspaceProject(
 
 export function formatWorkspacePolicyHuman(status: WorkspacePolicyStatus): string {
   return [
-    'Workspace manager policy:',
+    'OpenClaw workspace manager policy:',
     `  Execution profile: ${status.execution_profile}`,
     `  Web: ${status.web_policy}`,
     `  Dependency installs: ${status.dependency_install_policy}`,
     '  Approved roots:',
-    ...status.approved_roots.map(root => `    - ${root.path}${root.exists ? '' : ' (missing)'}`),
+    ...status.approved_roots.map((root) => `    - ${root.path}${root.exists ? '' : ' (missing)'}`),
     `  Note: ${DEFAULT_WORKSPACE_APPROVED_ROOTS_NOTE}`,
   ].join('\n');
 }
@@ -419,8 +419,9 @@ export function formatWorkspacePolicyHuman(status: WorkspacePolicyStatus): strin
 export function formatWorkspaceFileListHuman(list: WorkspaceFileList): string {
   return [
     `Workspace files: ${list.root}`,
-    ...list.entries.map(entry =>
-      `  ${entry.type === 'directory' ? 'dir ' : 'file'} ${entry.relative_path}${entry.size_bytes === null ? '' : ` (${entry.size_bytes} bytes)`}`,
+    ...list.entries.map(
+      (entry) =>
+        `  ${entry.type === 'directory' ? 'dir ' : 'file'} ${entry.relative_path}${entry.size_bytes === null ? '' : ` (${entry.size_bytes} bytes)`}`,
     ),
     ...(list.truncated ? ['  ... truncated'] : []),
   ].join('\n');
@@ -432,8 +433,9 @@ export function formatWorkspaceVerifyHuman(report: WorkspaceVerifyReport): strin
     `Status: ${report.status}`,
     `Execution profile: ${report.execution_profile}`,
     `Commands: ${report.selected_commands.length > 0 ? report.selected_commands.join('; ') : '(none detected)'}`,
-    ...report.command_results.map(result =>
-      `  [${result.exit_code === 0 ? 'pass' : 'fail'}] ${result.command} (${result.duration_ms}ms)`,
+    ...report.command_results.map(
+      (result) =>
+        `  [${result.exit_code === 0 ? 'pass' : 'fail'}] ${result.command} (${result.duration_ms}ms)`,
     ),
   ].join('\n');
 }

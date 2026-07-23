@@ -24,7 +24,9 @@ test('injects @file context into the task and evidence payload', () => {
   assert.equal(result.attachments.length, 1);
   assert.equal(result.attachments[0]?.status, 'included');
   assert.equal(result.attachments[0]?.files[0]?.path, 'README.md');
-  assert.match(result.task, /BABEL ATTACHED CONTEXT/);
+  assert.match(result.task, /ATTACHED_CONTEXT/);
+  assert.match(result.task, /BEGIN_UNTRUSTED_FILE_README_MD/);
+  assert.match(result.task, /END_UNTRUSTED_FILE_README_MD/);
   assert.match(result.task, /hello context/);
 });
 
@@ -35,8 +37,12 @@ test('injects @directory context with git-aware filtering', () => {
     maxFilesPerDirectory: 10,
   });
 
-  const includedPaths = result.attachments.flatMap((attachment) => attachment.files.map((file) => file.path));
-  const skippedPaths = result.attachments.flatMap((attachment) => attachment.skipped.map((file) => `${file.path}:${file.reason}`));
+  const includedPaths = result.attachments.flatMap((attachment) =>
+    attachment.files.map((file) => file.path),
+  );
+  const skippedPaths = result.attachments.flatMap((attachment) =>
+    attachment.skipped.map((file) => `${file.path}:${file.reason}`),
+  );
   assert.ok(includedPaths.includes('README.md'));
   assert.ok(includedPaths.includes('src/a.ts'));
   assert.ok(skippedPaths.includes('ignored.txt:git_ignored'));

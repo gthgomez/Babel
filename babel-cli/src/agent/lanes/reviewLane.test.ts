@@ -9,14 +9,14 @@ import { describe, it } from 'node:test';
 import { runReviewLane } from './reviewLane.js';
 
 describe('runReviewLane', () => {
-  it('writes review artifacts under runs/babel-lite without mutating repo source files', () => {
+  it('writes review artifacts under runs/babel-lite without mutating repo source files', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'babel-review-lane-'));
     assert.equal(spawnSync('git', ['init'], { cwd: repo, encoding: 'utf-8' }).status, 0);
     const source = join(repo, 'sample.txt');
     writeFileSync(source, 'before\n', 'utf-8');
     const beforeHash = createHash('sha256').update(readFileSync(source)).digest('hex');
     try {
-      const result = runReviewLane({
+      const result = await runReviewLane({
         task: 'Review current diff',
         projectRoot: repo,
       });

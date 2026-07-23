@@ -62,22 +62,31 @@ test('evidence request satisfaction normalizes file paths and shell whitespace',
 });
 
 test('evidence request satisfaction requires every planned verified step', () => {
-  assert.equal(isEvidenceRequestPlanSatisfied(baseEvidencePlan, [
-    {
-      step: 1,
-      tool: 'file_read',
-      target: 'src/input.ts',
-      exit_code: 0,
-      stdout: 'content',
-      stderr: '',
-      verified: true,
-    },
-  ]), false);
+  assert.equal(
+    isEvidenceRequestPlanSatisfied(baseEvidencePlan, [
+      {
+        step: 1,
+        tool: 'file_read',
+        target: 'src/input.ts',
+        exit_code: 0,
+        stdout: 'content',
+        stderr: '',
+        verified: true,
+      },
+    ]),
+    false,
+  );
 });
 
 test('non-evidence plans are not treated as evidence-satisfied', () => {
-  assert.equal(isEvidenceRequestPlanSatisfied({
-    ...baseEvidencePlan,
-    plan_type: 'IMPLEMENTATION_PLAN',
-  }, []), false);
+  assert.equal(
+    isEvidenceRequestPlanSatisfied(
+      {
+        ...baseEvidencePlan,
+        plan_type: 'IMPLEMENTATION_PLAN',
+      },
+      [],
+    ),
+    false,
+  );
 });

@@ -108,10 +108,7 @@ export interface BenchmarkRunAnalysis {
   };
 }
 
-export function analyzeTerminalBenchRun(input: {
-  run: string;
-  now?: Date;
-}): BenchmarkRunAnalysis {
+export function analyzeTerminalBenchRun(input: { run: string; now?: Date }): BenchmarkRunAnalysis {
   const resultPath = resolveResultPath(input.run);
   const runDir = dirname(resultPath);
   const parsed = readJsonRecord(resultPath);
@@ -203,7 +200,8 @@ function analyzeTrial(
       : null;
   const trialResult = trialDir ? readJsonRecordOrNull(join(trialDir, 'result.json')) : null;
   const merged = mergeTrialRow(row, trialResult);
-  const taskName = stringValue(merged['task_name']) ?? stringValue(merged['task']) ?? 'unknown-task';
+  const taskName =
+    stringValue(merged['task_name']) ?? stringValue(merged['task']) ?? 'unknown-task';
   const trialName = stringValue(merged['trial_name']) ?? rowTrialName ?? taskName;
   const babel = asRecord(merged['babel']);
   const verifier = asRecord(merged['verifier']);
@@ -211,8 +209,12 @@ function analyzeTrial(
   const reward = numberValue(merged['reward']) ?? numberValue(verifier['reward']);
   const passed = merged['passed'] === true || verifier['passed'] === true || reward === 1;
   const babelStatus = stringValue(merged['babel_status']) ?? stringValue(babel['status']);
-  const babelResultStatus = stringValue(merged['babel_result_status']) ?? stringValue(babel['result_status']);
-  const verifierStatus = stringValue(merged['verifier_status']) ?? stringValue(verifier['status']) ?? numberValue(verifier['status']);
+  const babelResultStatus =
+    stringValue(merged['babel_result_status']) ?? stringValue(babel['result_status']);
+  const verifierStatus =
+    stringValue(merged['verifier_status']) ??
+    stringValue(verifier['status']) ??
+    numberValue(verifier['status']);
   const verifierExitCode = numberValue(verifier['exit_code']);
   const babelRunDir = stringValue(merged['babel_run_dir']) ?? stringValue(babel['run_dir']);
   const keyArtifacts = collectArtifacts(trialDir, babelRunDir);
@@ -247,8 +249,15 @@ function analyzeTrial(
     verifier_status: verifierStatus,
     verifier_exit_code: verifierExitCode,
     key_artifacts: keyArtifacts,
-    notes: trialNotes(failureClass, babelStatus, babelResultStatus, verifierStatus, repairLoop, failureFingerprint),
-    risk_labels: riskReport.labels.map(label => label.label),
+    notes: trialNotes(
+      failureClass,
+      babelStatus,
+      babelResultStatus,
+      verifierStatus,
+      repairLoop,
+      failureFingerprint,
+    ),
+    risk_labels: riskReport.labels.map((label) => label.label),
     failure_fingerprint: failureFingerprint,
     partial_pass: partialPass,
     repair_loop: repairLoop,
@@ -279,7 +288,8 @@ function classifyTrial(input: {
   if (input.babelExitCode !== null && input.babelExitCode !== 0) return 'agent_failed';
   if (lower(input.babelStatus) === 'failed') return 'agent_failed';
   if (input.verifierTimedOut) return 'verifier_timeout';
-  if (typeof input.verifierStatus === 'number' && input.verifierStatus !== 0) return 'verifier_failed';
+  if (typeof input.verifierStatus === 'number' && input.verifierStatus !== 0)
+    return 'verifier_failed';
   if (typeof input.verifierStatus === 'string') {
     const status = lower(input.verifierStatus);
     if (status === 'timeout') return 'verifier_timeout';
@@ -307,10 +317,10 @@ function buildWorkPacket(
       best_candidate_checkpoint: null,
       best_candidate: null,
       evidence_paths: [join(runDir, 'result.json')],
-      suggested_commands: [
-        'node .\\dist\\index.js benchmark loop --json',
+      suggested_commands: ['node .\\dist\\index.js benchmark loop --json'],
+      notes: [
+        'This run is non-countable; rerun with enough wall-clock budget before selecting a source fix.',
       ],
-      notes: ['This run is non-countable; rerun with enough wall-clock budget before selecting a source fix.'],
     };
   }
   if (!selected) {
@@ -324,9 +334,7 @@ function buildWorkPacket(
       best_candidate_checkpoint: null,
       best_candidate: null,
       evidence_paths: [join(runDir, 'result.json')],
-      suggested_commands: [
-        'node .\\dist\\index.js benchmark loop --json',
-      ],
+      suggested_commands: ['node .\\dist\\index.js benchmark loop --json'],
       notes: ['No repair packet was generated because every visible trial passed.'],
     };
   }
@@ -341,7 +349,8 @@ function buildWorkPacket(
     partial_pass: selected.partial_pass,
     best_candidate_checkpoint: bestCandidate?.checkpoint_id ?? null,
     best_candidate: bestCandidate,
-    evidence_paths: selected.key_artifacts.length > 0 ? selected.key_artifacts : [join(runDir, 'result.json')],
+    evidence_paths:
+      selected.key_artifacts.length > 0 ? selected.key_artifacts : [join(runDir, 'result.json')],
     suggested_commands: [
       'npm run typecheck',
       'npm run test:unit',
@@ -350,19 +359,30 @@ function buildWorkPacket(
     ],
     notes: [
       `Score before fix: ${passed}/${trials}.`,
-      ...(selected.risk_labels.length > 0 ? [`Risk labels: ${selected.risk_labels.join(', ')}.`] : []),
-      ...(selected.failure_fingerprint ? [`Failure fingerprint: ${selected.failure_fingerprint}.`] : []),
-      ...(selected.partial_pass ? [
-        `Partial verifier pass: ${selected.partial_pass.passed}/${selected.partial_pass.total} tests passed; blocking category ${selected.partial_pass.blocking_category ?? 'unknown'}.`,
-      ] : []),
-      ...(bestCandidate ? [`Best candidate checkpoint: ${bestCandidate.checkpoint_id} (${bestCandidate.reason}).`] : []),
+      ...(selected.risk_labels.length > 0
+        ? [`Risk labels: ${selected.risk_labels.join(', ')}.`]
+        : []),
+      ...(selected.failure_fingerprint
+        ? [`Failure fingerprint: ${selected.failure_fingerprint}.`]
+        : []),
+      ...(selected.partial_pass
+        ? [
+            `Partial verifier pass: ${selected.partial_pass.passed}/${selected.partial_pass.total} tests passed; blocking category ${selected.partial_pass.blocking_category ?? 'unknown'}.`,
+          ]
+        : []),
+      ...(bestCandidate
+        ? [`Best candidate checkpoint: ${bestCandidate.checkpoint_id} (${bestCandidate.reason}).`]
+        : []),
       ...buildBestCandidateRegressionNotes(selected.babel_run_dir, bestCandidate),
       ...selected.notes,
     ],
   };
 }
 
-function likelyOwner(failureClass: BenchmarkFailureClass, selected?: BenchmarkTrialAnalysis): string {
+function likelyOwner(
+  failureClass: BenchmarkFailureClass,
+  selected?: BenchmarkTrialAnalysis,
+): string {
   if (selected?.repair_loop.repeated || selected?.repair_loop.status === 'strategy_exhausted') {
     return 'Babel executor repair convergence';
   }
@@ -411,16 +431,24 @@ function trialNotes(
     `Verifier status: ${verifierStatus ?? '(unknown)'}.`,
   ];
   if (failureClass === 'false_complete') {
-    notes.push('Babel reported completion but verifier reward was not 1; tighten artifact postconditions before COMPLETE.');
+    notes.push(
+      'Babel reported completion but verifier reward was not 1; tighten artifact postconditions before COMPLETE.',
+    );
   }
   if (failureClass === 'agent_timeout') {
-    notes.push('The agent exceeded its task budget; inspect executor repair loops and bounded retry behavior.');
+    notes.push(
+      'The agent exceeded its task budget; inspect executor repair loops and bounded retry behavior.',
+    );
   }
   if (repairLoop.status) {
-    notes.push(`Repair loop status: ${repairLoop.status} (${repairLoop.failure_count ?? 0} failure(s)).`);
+    notes.push(
+      `Repair loop status: ${repairLoop.status} (${repairLoop.failure_count ?? 0} failure(s)).`,
+    );
   }
   if (repairLoop.repeated) {
-    notes.push('Repeated recoverable failure fingerprint detected; fix repair convergence before another broad run.');
+    notes.push(
+      'Repeated recoverable failure fingerprint detected; fix repair convergence before another broad run.',
+    );
   }
   if (failureFingerprint) {
     notes.push(`Failure fingerprint: ${failureFingerprint}.`);
@@ -463,14 +491,19 @@ function readExecutorGateTrace(babelRunDir: string | null): Record<string, unkno
   return readJsonRecordOrNull(join(babelRunDir, '09_executor_gate_trace.json'));
 }
 
-function extractRepairLoop(trace: Record<string, unknown> | null): BenchmarkTrialAnalysis['repair_loop'] {
+function extractRepairLoop(
+  trace: Record<string, unknown> | null,
+): BenchmarkTrialAnalysis['repair_loop'] {
   const repairState = asRecord(trace?.['repair_state']);
   const status = stringValue(repairState['status']);
   const failureCount = numberValue(repairState['failure_count']);
-  const failures = Array.isArray(repairState['failures']) ? repairState['failures'].filter(isRecord) : [];
-  const repeated = status === 'same_failure_repeated' ||
+  const failures = Array.isArray(repairState['failures'])
+    ? repairState['failures'].filter(isRecord)
+    : [];
+  const repeated =
+    status === 'same_failure_repeated' ||
     status === 'strategy_exhausted' ||
-    failures.some(failure => (numberValue(failure['repeatedCount']) ?? 0) >= 2);
+    failures.some((failure) => (numberValue(failure['repeatedCount']) ?? 0) >= 2);
   return {
     status,
     failure_count: failureCount,
@@ -494,31 +527,35 @@ function extractFailureFingerprint(
       testId ? `test=${testId}` : null,
       stderr ? `stderr=${stderr}` : null,
       !stderr && stdout ? `stdout=${stdout}` : null,
-    ].filter(Boolean).join(' ');
+    ]
+      .filter(Boolean)
+      .join(' ');
   }
 
   if (!trialDir) return null;
   const ctrf = readJsonRecordOrNull(join(trialDir, 'logs', 'verifier', 'ctrf.json'));
   const tests = Array.isArray(asRecord(ctrf?.['results'])['tests'])
-    ? asRecord(ctrf?.['results'])['tests'] as unknown[]
+    ? (asRecord(ctrf?.['results'])['tests'] as unknown[])
     : [];
-  const firstFailed = tests.filter(isRecord).find(test => stringValue(test['status']) === 'failed');
+  const firstFailed = tests
+    .filter(isRecord)
+    .find((test) => stringValue(test['status']) === 'failed');
   if (!firstFailed) return null;
   const name = stringValue(firstFailed['name']);
   const traceText = stringValue(firstFailed['trace']) ?? stringValue(firstFailed['message']);
   return [
     name ? `test=${name}` : null,
     traceText ? `trace=${traceText.slice(0, 240).replace(/\s+/g, ' ')}` : null,
-  ].filter(Boolean).join(' ');
+  ]
+    .filter(Boolean)
+    .join(' ');
 }
 
 function extractPartialPassSummary(trialDir: string | null): BenchmarkPartialPassSummary | null {
   if (!trialDir) return null;
   const ctrf = readJsonRecordOrNull(join(trialDir, 'logs', 'verifier', 'ctrf.json'));
   const rawTests = asRecord(ctrf?.['results'])['tests'];
-  const tests = Array.isArray(rawTests)
-    ? rawTests.filter(isRecord)
-    : [];
+  const tests = Array.isArray(rawTests) ? rawTests.filter(isRecord) : [];
   if (tests.length === 0) return null;
 
   let passed = 0;
@@ -532,9 +569,14 @@ function extractPartialPassSummary(trialDir: string | null): BenchmarkPartialPas
       passed += 1;
       continue;
     }
-    if (normalizedStatus === 'failed' || normalizedStatus === 'fail' || normalizedStatus === 'error') {
+    if (
+      normalizedStatus === 'failed' ||
+      normalizedStatus === 'fail' ||
+      normalizedStatus === 'error'
+    ) {
       failed += 1;
-      const name = stringValue(test['name']) ?? stringValue(test['fullName']) ?? 'unnamed verifier test';
+      const name =
+        stringValue(test['name']) ?? stringValue(test['fullName']) ?? 'unnamed verifier test';
       const message = stringValue(test['message']);
       const trace = stringValue(test['trace']);
       const category = categorizeVerifierFailure([name, message, trace].filter(Boolean).join('\n'));
@@ -555,7 +597,9 @@ function extractPartialPassSummary(trialDir: string | null): BenchmarkPartialPas
   }
 
   const failureCategories = Object.fromEntries(
-    [...categoryCounts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0])),
+    [...categoryCounts.entries()].sort(
+      (left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
+    ),
   );
   const blockingCategory = Object.keys(failureCategories)[0] ?? null;
   return {
@@ -572,17 +616,25 @@ function extractPartialPassSummary(trialDir: string | null): BenchmarkPartialPas
 function categorizeVerifierFailure(text: string): string {
   const normalized = text.toLowerCase();
   if (
-    /filenotfounderror|no such file|does not exist|missing|required output|output_data|plan_b[12]|not found/.test(normalized)
+    /filenotfounderror|no such file|does not exist|missing|required output|output_data|plan_b[12]|not found/.test(
+      normalized,
+    )
   ) {
     return 'missing_output_artifact';
   }
   if (/request_id|coverage|duplicate|all requests|covered/.test(normalized)) {
     return 'coverage';
   }
-  if (/seq_align|heads_align|hidden_align|shape|schema|json decode|jsonl|malformed/.test(normalized)) {
+  if (
+    /seq_align|heads_align|hidden_align|shape|schema|json decode|jsonl|malformed/.test(normalized)
+  ) {
     return 'shape_schema';
   }
-  if (/cost|pad_ratio|latency|sequential_timecost|threshold|too slow|performance|runtime/.test(normalized)) {
+  if (
+    /cost|pad_ratio|latency|sequential_timecost|threshold|too slow|performance|runtime/.test(
+      normalized,
+    )
+  ) {
     return 'performance_threshold';
   }
   if (/traceback|syntaxerror|typeerror|nameerror|importerror|exception/.test(normalized)) {
@@ -619,8 +671,8 @@ function selectBestCandidateCheckpoint(
       ? entry['checkpoint_ids'].map(stringValue).filter((value): value is string => value !== null)
       : [];
     if (tool === 'file_write' && numberValue(entry['exit_code']) === 0) {
-      const restorableId = checkpointIds.find(id =>
-        stringValue(checkpointsById.get(id)?.['restore_status']) !== 'metadata_only'
+      const restorableId = checkpointIds.find(
+        (id) => stringValue(checkpointsById.get(id)?.['restore_status']) !== 'metadata_only',
       );
       if (restorableId) lastRestorableCheckpoint = restorableId;
       continue;
@@ -654,8 +706,8 @@ function selectBestCandidateCheckpoint(
 
   if (candidates.length === 0) {
     const fallback = checkpointEntries
-      .filter(entry => stringValue(entry['restore_status']) !== 'metadata_only')
-      .map(entry => checkpointId(entry))
+      .filter((entry) => stringValue(entry['restore_status']) !== 'metadata_only')
+      .map((entry) => checkpointId(entry))
       .filter((value): value is string => value !== null)
       .at(-1);
     return fallback
@@ -675,7 +727,7 @@ function selectBestCandidateCheckpoint(
   }
 
   const best = candidates.reduce((currentBest, candidate) =>
-    candidate.score > currentBest.score ? candidate : currentBest
+    candidate.score > currentBest.score ? candidate : currentBest,
   );
   return {
     checkpoint_id: best.checkpoint_id,
@@ -697,8 +749,8 @@ function buildBestCandidateRegressionNotes(
 ): string[] {
   if (!babelRunDir || !bestCandidate) return [];
   const latestRestorable = readCheckpointEntries(babelRunDir)
-    .filter(entry => stringValue(entry['restore_status']) !== 'metadata_only')
-    .map(entry => checkpointId(entry))
+    .filter((entry) => stringValue(entry['restore_status']) !== 'metadata_only')
+    .map((entry) => checkpointId(entry))
     .filter((value): value is string => value !== null)
     .at(-1);
   if (!latestRestorable || latestRestorable === bestCandidate.checkpoint_id) {
@@ -719,10 +771,15 @@ function readCheckpointEntries(babelRunDir: string): Record<string, unknown>[] {
 }
 
 function checkpointId(entry: Record<string, unknown>): string | null {
-  return stringValue(entry['id']) ?? stringValue(entry['checkpoint_id']) ?? stringValue(entry['path']);
+  return (
+    stringValue(entry['id']) ?? stringValue(entry['checkpoint_id']) ?? stringValue(entry['path'])
+  );
 }
 
-function inferVisibleTestCounts(stdout: string, stderr: string): {
+function inferVisibleTestCounts(
+  stdout: string,
+  stderr: string,
+): {
   total: number | null;
   passed: number | null;
   failed: number | null;
@@ -810,9 +867,10 @@ function describeBestCandidate(
     return 'local verifier/test command exited successfully';
   }
   if ((candidate.passed_tests ?? 0) > 0) {
-    const runtime = riskLabels.includes('numerical_performance') && candidate.runtime_seconds !== null
-      ? ` with ${candidate.runtime_seconds.toFixed(6)}s visible runtime`
-      : '';
+    const runtime =
+      riskLabels.includes('numerical_performance') && candidate.runtime_seconds !== null
+        ? ` with ${candidate.runtime_seconds.toFixed(6)}s visible runtime`
+        : '';
     return `${candidate.passed_tests}/${candidate.total_tests ?? '?'} visible checks passed${runtime}`;
   }
   if (candidate.failure_classes.length > 0) {
@@ -835,7 +893,10 @@ function resultRows(parsed: Record<string, unknown>): Record<string, unknown>[] 
   return rows.filter(isRecord);
 }
 
-function mergeTrialRow(row: Record<string, unknown>, trialResult: Record<string, unknown> | null): Record<string, unknown> {
+function mergeTrialRow(
+  row: Record<string, unknown>,
+  trialResult: Record<string, unknown> | null,
+): Record<string, unknown> {
   if (!trialResult) return row;
   return {
     ...trialResult,
@@ -917,5 +978,7 @@ function lower(value: string | null): string | null {
 }
 
 function pickDefined(values: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined && value !== null));
+  return Object.fromEntries(
+    Object.entries(values).filter(([, value]) => value !== undefined && value !== null),
+  );
 }

@@ -28,7 +28,7 @@ function readLedger(runDir: string): Array<Record<string, unknown>> {
     .trim()
     .split(/\r?\n/)
     .filter(Boolean)
-    .map(line => JSON.parse(line) as Record<string, unknown>);
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 test('schema failure ledger stores raw local artifacts and shadow hints by default', () => {
@@ -37,7 +37,9 @@ test('schema failure ledger stores raw local artifacts and shadow hints by defau
   const { evidence, cleanup } = tempEvidence();
   try {
     const error = Object.assign(
-      new Error('[deepSeekApi] Zod validation failed (deepseek-v4-flash): swarm.sub_tasks too small'),
+      new Error(
+        '[deepSeekApi] Zod validation failed (deepseek-v4-flash): swarm.sub_tasks too small',
+      ),
       {
         structuredOutputFailure: true,
         failure_kind: 'zod_validation_failed',
@@ -111,16 +113,13 @@ test('schema failure ledger redacted mode keeps hashes without raw side artifact
   process.env['BABEL_SCHEMA_FAILURE_STORAGE'] = 'redacted';
   const { evidence, cleanup } = tempEvidence();
   try {
-    const error = Object.assign(
-      new Error('[deepInfraApi] invalid json (model): no valid JSON'),
-      {
-        structuredOutputFailure: true,
-        failure_kind: 'invalid_json',
-        provider: 'deepinfra',
-        model: 'model',
-        raw_output: 'not json',
-      },
-    );
+    const error = Object.assign(new Error('[deepInfraApi] invalid json (model): no valid JSON'), {
+      structuredOutputFailure: true,
+      failure_kind: 'invalid_json',
+      provider: 'deepinfra',
+      model: 'model',
+      raw_output: 'not json',
+    });
 
     const entry = appendSchemaFailureEntry({
       evidence,

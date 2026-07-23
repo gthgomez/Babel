@@ -15,12 +15,18 @@ test('executor tool-shape placeholder detection accepts known placeholders only'
 
 test('executor request target replacement preserves tool-specific target fields', () => {
   assert.deepEqual(
-    replaceExecutorRequestTarget({ tool: 'file_read', path: '<project-relative-path>' }, 'src/index.ts'),
+    replaceExecutorRequestTarget(
+      { tool: 'file_read', path: '<project-relative-path>' },
+      'src/index.ts',
+    ),
     { tool: 'file_read', path: 'src/index.ts' },
   );
 
   assert.deepEqual(
-    replaceExecutorRequestTarget({ tool: 'shell_exec', command: '<cmd-without-cmd-slash-c-or-cd>' }, 'npm test'),
+    replaceExecutorRequestTarget(
+      { tool: 'shell_exec', command: '<cmd-without-cmd-slash-c-or-cd>' },
+      'npm test',
+    ),
     { tool: 'shell_exec', command: 'npm test' },
   );
 

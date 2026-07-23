@@ -50,7 +50,7 @@ function assertPromptIdsExist(text: string, label: string): void {
 }
 
 function runV9CoverageChecks(): void {
-  assertContains(v9Text, '**Mobile / Android**', 'v9 mobile routing table');
+  assertContains(v9Text, 'Mobile/Android', 'v9 mobile routing table');
   assertContains(v9Text, '`domain_android_kotlin`', 'v9 mobile domain');
 
   for (const id of [
@@ -65,15 +65,11 @@ function runV9CoverageChecks(): void {
     assertCatalogIdExists(id);
   }
 
-  assertContains(v9Text, 'Example — Android AAB release build', 'v9 AAB example heading');
-  assertContains(v9Text, '"domain_id": "domain_android_kotlin"', 'v9 AAB example domain');
-  assertContains(v9Text, '"skill_ids": ["skill_android_app_bundle", "skill_android_release_build"]', 'v9 AAB example skills');
-
-  assertContains(v9Text, 'Example — Google Play listing/compliance task', 'v9 Play listing example heading');
-  assertContains(v9Text, '"skill_ids": ["skill_google_play_store"]', 'v9 Play listing example skills');
-
-  assertContains(v9Text, 'Example — Amazon + Samsung multi-store distribution', 'v9 multi-store example heading');
-  assertContains(v9Text, '"skill_ids": ["skill_android_app_bundle", "skill_amazon_appstore", "skill_samsung_galaxy_store"]', 'v9 multi-store example skills');
+  // Verify the canonical example block exists with expected structure
+  assertContains(v9Text, 'EXAMPLE — Backend API Fix', 'v9 example heading');
+  assertContains(v9Text, '"domain_id": "domain_swe_backend"', 'v9 example domain');
+  assertContains(v9Text, '"skill_ids": ["skill_ts_zod", "skill_supabase_pg"]', 'v9 example skills');
+  assertContains(v9Text, '"model_adapter_id": "adapter_codex_balanced"', 'v9 example model adapter');
 
   assertPromptIdsExist(v9Text, 'v9 prompt ids');
 }

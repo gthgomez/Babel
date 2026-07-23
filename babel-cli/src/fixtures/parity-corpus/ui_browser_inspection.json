@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "fixture_type": "babel_parity_corpus_task",
+  "task_id": "ui_browser_inspection",
+  "parity_task_id": "ui_browser_inspection",
+  "title": "UI/browser inspection task",
+  "repo_kind": "static_ui_report",
+  "target_file": "index.html",
+  "verifier_command": "npm test",
+  "task": "Diagnose why the primary button is not styled as primary in index.html. Compare index.html and styles.css and report the mismatch without editing files.",
+  "broken_implementation": "<!DOCTYPE html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"UTF-8\" />\n    <title>Widget</title>\n    <link rel=\"stylesheet\" href=\"styles.css\" />\n  </head>\n  <body>\n    <button class=\"secondary\">Save</button>\n  </body>\n</html>\n",
+  "fixed_implementation": "<!DOCTYPE html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"UTF-8\" />\n    <title>Widget</title>\n    <link rel=\"stylesheet\" href=\"styles.css\" />\n  </head>\n  <body>\n    <button class=\"primary\">Save</button>\n  </body>\n</html>\n",
+  "test_source": "",
+  "files": {
+    "styles.css": {
+      "broken": ".primary { background: #2563eb; color: white; }\n.secondary { background: #e5e7eb; }\n"
+    },
+    "scripts/verify-layout.js": {
+      "broken": "import { readFileSync } from 'node:fs';\nconst html = readFileSync('index.html', 'utf8');\nif (!html.includes('class=\"primary\"')) {\n  process.exit(1);\n}\n"
+    }
+  },
+  "package_json": {
+    "type": "module",
+    "scripts": {
+      "test": "node scripts/verify-layout.js"
+    }
+  }
+}

@@ -29,9 +29,11 @@ try {
     ...(args.outputDir ? { outputDir: args.outputDir } : {}),
     ...(args.caseFilter.length > 0 ? { caseFilter: args.caseFilter } : {}),
     ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
+    ...(args.timeoutMultiplier !== undefined ? { timeoutMultiplier: args.timeoutMultiplier } : {}),
     ...(args.resumeDir ? { resumeDir: args.resumeDir } : {}),
     ...(args.onlyFailed ? { onlyFailed: true } : {}),
     ...(args.fromCase ? { fromCase: args.fromCase } : {}),
+    profile: args.profile,
   });
 
   process.stdout.write(args.json

@@ -2,17 +2,27 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { evaluateModelBackendPolicy, formatEnterprisePolicyDecision } from './config/enterprisePolicy.js';
+import {
+  evaluateModelBackendPolicy,
+  formatEnterprisePolicyDecision,
+} from './config/enterprisePolicy.js';
 
-export const MODEL_POLICY_TIERS = ['cheap', 'standard', 'triage', 'fallback', 'escalation'] as const;
-export type ModelPolicyTier = typeof MODEL_POLICY_TIERS[number];
+export const MODEL_POLICY_TIERS = [
+  'cheap',
+  'standard',
+  'triage',
+  'fallback',
+  'escalation',
+] as const;
+export type ModelPolicyTier = (typeof MODEL_POLICY_TIERS)[number];
 export const MODEL_POLICY_STAGES = ['orchestrator', 'planning', 'qa', 'executor'] as const;
-export type ModelPolicyStage = typeof MODEL_POLICY_STAGES[number];
+export type ModelPolicyStage = (typeof MODEL_POLICY_STAGES)[number];
 
 export interface ModelPolicyModelEntry {
   provider: string;
   model_id: string;
   tier: ModelPolicyTier;
+  context_window?: number;
   estimated_cost_per_1m_input?: number;
   estimated_cost_per_1m_output?: number;
   source_url?: string;
@@ -23,6 +33,12 @@ export interface ModelPolicyModelEntry {
   experimental?: boolean;
   selection_reason?: string;
   notes?: string[];
+  /** Model's native context window in tokens (e.g. 1000000 for DeepSeek v4). */
+  context_limit?: number;
+  /** Whether the model supports native function calling via tools/tool_choice API. */
+  native_tool_use?: boolean;
+  /** Capability tags for routing decisions (e.g. coding, reasoning, fast). */
+  capabilities?: string[];
 }
 
 export interface ModelPolicyTierSelection {
@@ -53,6 +69,7 @@ export interface ResolvedModelPolicyEntry {
   provider: string;
   providerModelId: string;
   tier: ModelPolicyTier;
+  contextWindow?: number;
   expensive: boolean;
   enabled: boolean;
   experimental: boolean;
@@ -63,6 +80,9 @@ export interface ResolvedModelPolicyEntry {
   sourceUrl?: string;
   verifiedAt?: string;
   expiresAt?: string;
+  contextLimit?: number;
+  nativeToolUse?: boolean;
+  capabilities?: string[];
 }
 
 export interface ModelMetadataFreshnessResult {
@@ -113,6 +133,9 @@ export interface ResolvedModelPolicy {
   waterfall: ResolvedModelPolicyEntry[];
   stagePolicies: ResolvedModelPolicyStageRoute[];
   experimentRecommendation?: ResolvedModelPolicyExperiment | null;
+  contextLimit?: number;
+  nativeToolUse?: boolean;
+  capabilities?: string[];
 }
 
 interface ModelPolicyConfig {
@@ -142,7 +165,22 @@ interface ModelPolicyConfig {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const DEFAULT_BABEL_ROOT = process.env['BABEL_ROOT'] ?? resolve(__dirname, '../..');
+
+/** Walk up from startDir until config/model-policy.json is found.
+ *  Handles the case where dist/ is one level deeper than src/ and
+ *  the policy file lives at the repo root rather than in babel-cli/. */
+function findBabelRoot(startDir: string): string {
+  let dir = resolve(startDir);
+  for (let i = 0; i < 5; i++) {
+    if (existsSync(join(dir, 'config', 'model-policy.json'))) return dir;
+    const parent = resolve(dir, '..');
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return resolve(startDir); // fallback to original
+}
+
+const DEFAULT_BABEL_ROOT = process.env['BABEL_ROOT'] ?? findBabelRoot(resolve(__dirname, '../..'));
 
 function isKnownTier(value: string): value is ModelPolicyTier {
   return (MODEL_POLICY_TIERS as readonly string[]).includes(value);
@@ -156,7 +194,9 @@ function normalizeTier(value: string | undefined, fallback: ModelPolicyTier): Mo
   if (!value) return fallback;
   const normalized = value.trim().toLowerCase();
   if (!isKnownTier(normalized)) {
-    throw new Error(`Invalid model tier "${value}". Valid values: ${MODEL_POLICY_TIERS.join(', ')}`);
+    throw new Error(
+      `Invalid model tier "${value}". Valid values: ${MODEL_POLICY_TIERS.join(', ')}`,
+    );
   }
   return normalized;
 }
@@ -165,7 +205,9 @@ function normalizeStage(value: string | undefined): ModelPolicyStage | undefined
   if (!value) return undefined;
   const normalized = value.trim().toLowerCase();
   if (!isKnownStage(normalized)) {
-    throw new Error(`Invalid model stage "${value}". Valid values: ${MODEL_POLICY_STAGES.join(', ')}`);
+    throw new Error(
+      `Invalid model stage "${value}". Valid values: ${MODEL_POLICY_STAGES.join(', ')}`,
+    );
   }
   return normalized;
 }
@@ -189,7 +231,9 @@ function resolveFamilyDefaults(
     return lowerMatch;
   }
 
-  return Object.entries(familyDefaults).find(([key]) => key.toLowerCase() === normalizedFamily)?.[1];
+  return Object.entries(familyDefaults).find(
+    ([key]) => key.toLowerCase() === normalizedFamily,
+  )?.[1];
 }
 
 function getVendorAlias(
@@ -204,8 +248,10 @@ function getVendorAlias(
     return directMatch;
   }
   const normalizedKey = key.trim().toLowerCase();
-  return aliases[normalizedKey]
-    ?? Object.entries(aliases).find(([aliasKey]) => aliasKey.toLowerCase() === normalizedKey)?.[1];
+  return (
+    aliases[normalizedKey] ??
+    Object.entries(aliases).find(([aliasKey]) => aliasKey.toLowerCase() === normalizedKey)?.[1]
+  );
 }
 
 function resolveVendorAliasKey(config: ModelPolicyConfig, key: string): string {
@@ -225,10 +271,15 @@ function resolveVendorAliasKey(config: ModelPolicyConfig, key: string): string {
 
 function getPolicyPath(babelRoot = DEFAULT_BABEL_ROOT): string {
   const explicit = process.env['BABEL_MODEL_POLICY_PATH']?.trim();
-  return explicit && explicit.length > 0 ? resolve(explicit) : join(babelRoot, 'config', 'model-policy.json');
+  return explicit && explicit.length > 0
+    ? resolve(explicit)
+    : join(babelRoot, 'config', 'model-policy.json');
 }
 
-export function loadModelPolicyConfig(babelRoot = DEFAULT_BABEL_ROOT): { path: string; config: ModelPolicyConfig } {
+export function loadModelPolicyConfig(babelRoot = DEFAULT_BABEL_ROOT): {
+  path: string;
+  config: ModelPolicyConfig;
+} {
   const policyPath = getPolicyPath(babelRoot);
   if (!existsSync(policyPath)) {
     throw new Error(`Model policy config not found at ${policyPath}`);
@@ -238,7 +289,9 @@ export function loadModelPolicyConfig(babelRoot = DEFAULT_BABEL_ROOT): { path: s
   try {
     parsed = JSON.parse(readFileSync(policyPath, 'utf-8'));
   } catch (error: unknown) {
-    throw new Error(`Failed to parse model policy config at ${policyPath}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `Failed to parse model policy config at ${policyPath}: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 
   if (parsed === null || typeof parsed !== 'object') {
@@ -248,17 +301,30 @@ export function loadModelPolicyConfig(babelRoot = DEFAULT_BABEL_ROOT): { path: s
   return { path: policyPath, config: parsed as ModelPolicyConfig };
 }
 
-function getCostEstimationDefaults(config: ModelPolicyConfig): { inputTokens: number; outputTokens: number } {
+function getCostEstimationDefaults(config: ModelPolicyConfig): {
+  inputTokens: number;
+  outputTokens: number;
+} {
   const inputTokens = config.cost_estimation?.default_input_tokens;
   const outputTokens = config.cost_estimation?.default_output_tokens;
 
   return {
-    inputTokens: typeof inputTokens === 'number' && Number.isFinite(inputTokens) && inputTokens > 0 ? inputTokens : 3000,
-    outputTokens: typeof outputTokens === 'number' && Number.isFinite(outputTokens) && outputTokens > 0 ? outputTokens : 1000,
+    inputTokens:
+      typeof inputTokens === 'number' && Number.isFinite(inputTokens) && inputTokens > 0
+        ? inputTokens
+        : 3000,
+    outputTokens:
+      typeof outputTokens === 'number' && Number.isFinite(outputTokens) && outputTokens > 0
+        ? outputTokens
+        : 1000,
   };
 }
 
-function getResolvedEntry(config: ModelPolicyConfig, backendKey: string, hardFail: boolean): ResolvedModelPolicyEntry | null {
+function getResolvedEntry(
+  config: ModelPolicyConfig,
+  backendKey: string,
+  hardFail: boolean,
+): ResolvedModelPolicyEntry | null {
   const entry = config.models?.[backendKey];
   if (!entry) {
     if (hardFail) {
@@ -272,16 +338,24 @@ function getResolvedEntry(config: ModelPolicyConfig, backendKey: string, hardFai
     provider: entry.provider,
     providerModelId: entry.model_id,
     tier: entry.tier,
+    ...(entry.context_window !== undefined ? { contextWindow: entry.context_window } : {}),
     expensive: entry.expensive === true,
     enabled: entry.enabled !== false,
     experimental: entry.experimental === true,
     ...(entry.selection_reason !== undefined ? { selectionReason: entry.selection_reason } : {}),
     ...(Array.isArray(entry.notes) ? { notes: [...entry.notes] } : {}),
-    ...(entry.estimated_cost_per_1m_input !== undefined ? { estimatedCostPer1MInput: entry.estimated_cost_per_1m_input } : {}),
-    ...(entry.estimated_cost_per_1m_output !== undefined ? { estimatedCostPer1MOutput: entry.estimated_cost_per_1m_output } : {}),
+    ...(entry.estimated_cost_per_1m_input !== undefined
+      ? { estimatedCostPer1MInput: entry.estimated_cost_per_1m_input }
+      : {}),
+    ...(entry.estimated_cost_per_1m_output !== undefined
+      ? { estimatedCostPer1MOutput: entry.estimated_cost_per_1m_output }
+      : {}),
     ...(entry.source_url !== undefined ? { sourceUrl: entry.source_url } : {}),
     ...(entry.verified_at !== undefined ? { verifiedAt: entry.verified_at } : {}),
     ...(entry.expires_at !== undefined ? { expiresAt: entry.expires_at } : {}),
+    ...(entry.context_limit !== undefined ? { contextLimit: entry.context_limit } : {}),
+    ...(entry.native_tool_use !== undefined ? { nativeToolUse: entry.native_tool_use } : {}),
+    ...(Array.isArray(entry.capabilities) ? { capabilities: [...entry.capabilities] } : {}),
   };
 }
 
@@ -338,26 +412,38 @@ export function validateModelPolicyMetadataFreshness(options?: {
   };
 }
 
-function assertEnterpriseModelAllowed(entry: ResolvedModelPolicyEntry, explicitOptIn = false): void {
-  const decision = evaluateModelBackendPolicy({
-    backendKey: entry.backendKey,
-    provider: entry.provider,
-    providerModelId: entry.providerModelId,
-  }, { explicitOptIn });
+function assertEnterpriseModelAllowed(
+  entry: ResolvedModelPolicyEntry,
+  explicitOptIn = false,
+): void {
+  const decision = evaluateModelBackendPolicy(
+    {
+      backendKey: entry.backendKey,
+      provider: entry.provider,
+      providerModelId: entry.providerModelId,
+    },
+    { explicitOptIn },
+  );
   if (!decision.allowed) {
     throw new Error(`[ENTERPRISE_POLICY] ${formatEnterprisePolicyDecision(decision)}`);
   }
 }
 
 function isEnterpriseModelAllowed(entry: ResolvedModelPolicyEntry, explicitOptIn = false): boolean {
-  return evaluateModelBackendPolicy({
-    backendKey: entry.backendKey,
-    provider: entry.provider,
-    providerModelId: entry.providerModelId,
-  }, { explicitOptIn }).allowed;
+  return evaluateModelBackendPolicy(
+    {
+      backendKey: entry.backendKey,
+      provider: entry.provider,
+      providerModelId: entry.providerModelId,
+    },
+    { explicitOptIn },
+  ).allowed;
 }
 
-function getExperimentRecommendation(config: ModelPolicyConfig, selectedTier: ModelPolicyTier): ResolvedModelPolicyExperiment | null {
+function getExperimentRecommendation(
+  config: ModelPolicyConfig,
+  selectedTier: ModelPolicyTier,
+): ResolvedModelPolicyExperiment | null {
   if (selectedTier !== 'standard') {
     return null;
   }
@@ -371,7 +457,9 @@ function getExperimentRecommendation(config: ModelPolicyConfig, selectedTier: Mo
     name: 'standard_alt',
     backendKey: standardAlt.backend_key,
     ...(standardAlt.status !== undefined ? { status: standardAlt.status } : {}),
-    ...(standardAlt.selection_reason !== undefined ? { selectionReason: standardAlt.selection_reason } : {}),
+    ...(standardAlt.selection_reason !== undefined
+      ? { selectionReason: standardAlt.selection_reason }
+      : {}),
     ...(Array.isArray(standardAlt.gates) ? { gates: [...standardAlt.gates] } : {}),
   };
 }
@@ -388,7 +476,9 @@ function resolveStagePolicies(
 
     const primaryEntry = getResolvedEntry(config, stageConfig.primary_backend_key, hardFail);
     if (!primaryEntry) {
-      throw new Error(`Unable to resolve primary stage backend "${stageConfig.primary_backend_key}" for stage "${stage}".`);
+      throw new Error(
+        `Unable to resolve primary stage backend "${stageConfig.primary_backend_key}" for stage "${stage}".`,
+      );
     }
 
     const orderedBackends: ResolvedModelPolicyEntry[] = [];
@@ -405,9 +495,13 @@ function resolveStagePolicies(
       orderedBackends.unshift(primaryEntry);
     }
 
-    const enterpriseAllowedBackends = orderedBackends.filter((entry) => isEnterpriseModelAllowed(entry));
+    const enterpriseAllowedBackends = orderedBackends.filter((entry) =>
+      isEnterpriseModelAllowed(entry),
+    );
     if (enterpriseAllowedBackends.length === 0) {
-      throw new Error(`[ENTERPRISE_POLICY] No enterprise-allowed model backends remain for stage "${stage}".`);
+      throw new Error(
+        `[ENTERPRISE_POLICY] No enterprise-allowed model backends remain for stage "${stage}".`,
+      );
     }
     const enterprisePrimary = enterpriseAllowedBackends[0]!;
 
@@ -417,7 +511,9 @@ function resolveStagePolicies(
       primaryProvider: enterprisePrimary.provider,
       primaryProviderModelId: enterprisePrimary.providerModelId,
       orderedBackends: enterpriseAllowedBackends,
-      ...(stageConfig.selection_reason !== undefined ? { selectionReason: stageConfig.selection_reason } : {}),
+      ...(stageConfig.selection_reason !== undefined
+        ? { selectionReason: stageConfig.selection_reason }
+        : {}),
       ...(Array.isArray(stageConfig.notes) ? { notes: [...stageConfig.notes] } : {}),
     });
   }
@@ -439,11 +535,14 @@ export function getAvailableModels(options?: {
   const { config } = loadModelPolicyConfig(options?.babelRoot);
   return Object.entries(config.models ?? {})
     .map(([key, entry]) => ({ key, entry }))
-    .filter(({ key, entry }) => evaluateModelBackendPolicy({
-      backendKey: key,
-      provider: entry.provider,
-      providerModelId: entry.model_id,
-    }).allowed);
+    .filter(
+      ({ key, entry }) =>
+        evaluateModelBackendPolicy({
+          backendKey: key,
+          provider: entry.provider,
+          providerModelId: entry.model_id,
+        }).allowed,
+    );
 }
 
 export function resolveModelByKey(options: {
@@ -477,7 +576,9 @@ export function resolveModelByKey(options: {
     (resolvedBackend.expensive || blockedByPolicy);
 
   if (expensiveRequiresOptIn && !allowExpensive) {
-    throw new Error(`Model policy backend "${modelKey}" is expensive or blocked by policy. Re-run with --allow-expensive to opt in explicitly.`);
+    throw new Error(
+      `Model policy backend "${modelKey}" is expensive or blocked by policy. Re-run with --allow-expensive to opt in explicitly.`,
+    );
   }
 
   const { inputTokens, outputTokens } = getCostEstimationDefaults(config);
@@ -488,7 +589,9 @@ export function resolveModelByKey(options: {
   const warnings: string[] = [];
   const warnThreshold = config.policy?.warn_if_estimated_cost_per_run_usd_at_least;
   if (typeof warnThreshold === 'number' && approximateCostPerRunUsd >= warnThreshold) {
-    warnings.push(`Approximate per-run cost $${approximateCostPerRunUsd.toFixed(4)} meets or exceeds warning threshold $${warnThreshold.toFixed(2)}.`);
+    warnings.push(
+      `Approximate per-run cost $${approximateCostPerRunUsd.toFixed(4)} meets or exceeds warning threshold $${warnThreshold.toFixed(2)}.`,
+    );
   }
 
   const stagePolicies = resolveStagePolicies(config, hardFail);
@@ -503,11 +606,17 @@ export function resolveModelByKey(options: {
     expensive: resolvedBackend.expensive,
     enabled: resolvedBackend.enabled,
     experimental: resolvedBackend.experimental,
-    ...(resolvedBackend.selectionReason !== undefined ? { selectionReason: resolvedBackend.selectionReason } : {}),
+    ...(resolvedBackend.selectionReason !== undefined
+      ? { selectionReason: resolvedBackend.selectionReason }
+      : {}),
     ...(resolvedBackend.notes !== undefined ? { notes: resolvedBackend.notes } : {}),
     blockedWithoutExplicitOptIn: blockedByPolicy,
-    ...(resolvedBackend.estimatedCostPer1MInput !== undefined ? { estimatedCostPer1MInput: resolvedBackend.estimatedCostPer1MInput } : {}),
-    ...(resolvedBackend.estimatedCostPer1MOutput !== undefined ? { estimatedCostPer1MOutput: resolvedBackend.estimatedCostPer1MOutput } : {}),
+    ...(resolvedBackend.estimatedCostPer1MInput !== undefined
+      ? { estimatedCostPer1MInput: resolvedBackend.estimatedCostPer1MInput }
+      : {}),
+    ...(resolvedBackend.estimatedCostPer1MOutput !== undefined
+      ? { estimatedCostPer1MOutput: resolvedBackend.estimatedCostPer1MOutput }
+      : {}),
     approximateCostPerRunUsd,
     approximateInputTokens: inputTokens,
     approximateOutputTokens: outputTokens,
@@ -527,14 +636,14 @@ export function resolveFamilyModelPolicy(options: {
 }): ResolvedModelPolicy {
   const { path: policyPath, config } = loadModelPolicyConfig(options.babelRoot);
   const familyDefaults = resolveFamilyDefaults(config.family_defaults, options.family);
-  
+
   if (!familyDefaults) {
     // If family is not configured, try to resolve as a direct key as fallback
     try {
-      return resolveModelByKey({ 
+      return resolveModelByKey({
         key: resolveVendorAliasKey(config, options.family),
-        ...(options.allowExpensive !== undefined ? { allowExpensive: options.allowExpensive } : {}), 
-        ...(options.babelRoot !== undefined ? { babelRoot: options.babelRoot } : {})
+        ...(options.allowExpensive !== undefined ? { allowExpensive: options.allowExpensive } : {}),
+        ...(options.babelRoot !== undefined ? { babelRoot: options.babelRoot } : {}),
       });
     } catch {
       throw new Error(`Model policy family "${options.family}" is not configured.`);
@@ -546,7 +655,9 @@ export function resolveFamilyModelPolicy(options: {
   const effectiveTier = normalizeTier(options.requestedTier, selectedTier);
   const backendKey = familyDefaults[effectiveTier];
   if (!backendKey) {
-    throw new Error(`Model policy family "${options.family}" has no backend configured for tier "${effectiveTier}".`);
+    throw new Error(
+      `Model policy family "${options.family}" has no backend configured for tier "${effectiveTier}".`,
+    );
   }
 
   const blockedWithoutOptIn = new Set(config.policy?.blocked_without_explicit_opt_in ?? []);
@@ -571,7 +682,9 @@ export function resolveFamilyModelPolicy(options: {
     (resolvedBackend.expensive || blockedByPolicy);
 
   if (expensiveRequiresOptIn && !allowExpensive) {
-    throw new Error(`Model policy backend "${backendKey}" is expensive or blocked by policy. Re-run with --allow-expensive to opt in explicitly.`);
+    throw new Error(
+      `Model policy backend "${backendKey}" is expensive or blocked by policy. Re-run with --allow-expensive to opt in explicitly.`,
+    );
   }
 
   const { inputTokens, outputTokens } = getCostEstimationDefaults(config);
@@ -582,15 +695,22 @@ export function resolveFamilyModelPolicy(options: {
   const warnings: string[] = [];
   const warnThreshold = config.policy?.warn_if_estimated_cost_per_run_usd_at_least;
   if (typeof warnThreshold === 'number' && approximateCostPerRunUsd >= warnThreshold) {
-    warnings.push(`Approximate per-run cost $${approximateCostPerRunUsd.toFixed(4)} meets or exceeds warning threshold $${warnThreshold.toFixed(2)}.`);
+    warnings.push(
+      `Approximate per-run cost $${approximateCostPerRunUsd.toFixed(4)} meets or exceeds warning threshold $${warnThreshold.toFixed(2)}.`,
+    );
   }
 
   const maxThreshold = config.policy?.max_estimated_cost_per_run_usd;
   if (typeof maxThreshold === 'number' && approximateCostPerRunUsd > maxThreshold) {
-    throw new Error(`Model policy backend "${backendKey}" exceeds the approximate per-run cost ceiling ($${approximateCostPerRunUsd.toFixed(4)} > $${maxThreshold.toFixed(2)}).`);
+    throw new Error(
+      `Model policy backend "${backendKey}" exceeds the approximate per-run cost ceiling ($${approximateCostPerRunUsd.toFixed(4)} > $${maxThreshold.toFixed(2)}).`,
+    );
   }
 
-  const orderedTiers = [effectiveTier, ...allowedDefaultTiers.filter((tier) => tier !== effectiveTier)];
+  const orderedTiers = [
+    effectiveTier,
+    ...allowedDefaultTiers.filter((tier) => tier !== effectiveTier),
+  ];
   const waterfall: ResolvedModelPolicyEntry[] = [];
   const seenBackendKeys = new Set<string>();
 
@@ -607,7 +727,10 @@ export function resolveFamilyModelPolicy(options: {
     if (!resolvedTierEntry.enabled) {
       continue;
     }
-    if ((resolvedTierEntry.expensive || blockedWithoutOptIn.has(tierBackendKey)) && !allowExpensive) {
+    if (
+      (resolvedTierEntry.expensive || blockedWithoutOptIn.has(tierBackendKey)) &&
+      !allowExpensive
+    ) {
       continue;
     }
     if (!isEnterpriseModelAllowed(resolvedTierEntry, allowExpensive)) {
@@ -638,11 +761,17 @@ export function resolveFamilyModelPolicy(options: {
     expensive: resolvedBackend.expensive,
     enabled: resolvedBackend.enabled,
     experimental: resolvedBackend.experimental,
-    ...(resolvedBackend.selectionReason !== undefined ? { selectionReason: resolvedBackend.selectionReason } : {}),
+    ...(resolvedBackend.selectionReason !== undefined
+      ? { selectionReason: resolvedBackend.selectionReason }
+      : {}),
     ...(resolvedBackend.notes !== undefined ? { notes: resolvedBackend.notes } : {}),
     blockedWithoutExplicitOptIn: blockedByPolicy,
-    ...(resolvedBackend.estimatedCostPer1MInput !== undefined ? { estimatedCostPer1MInput: resolvedBackend.estimatedCostPer1MInput } : {}),
-    ...(resolvedBackend.estimatedCostPer1MOutput !== undefined ? { estimatedCostPer1MOutput: resolvedBackend.estimatedCostPer1MOutput } : {}),
+    ...(resolvedBackend.estimatedCostPer1MInput !== undefined
+      ? { estimatedCostPer1MInput: resolvedBackend.estimatedCostPer1MInput }
+      : {}),
+    ...(resolvedBackend.estimatedCostPer1MOutput !== undefined
+      ? { estimatedCostPer1MOutput: resolvedBackend.estimatedCostPer1MOutput }
+      : {}),
     approximateCostPerRunUsd,
     approximateInputTokens: inputTokens,
     approximateOutputTokens: outputTokens,
@@ -652,5 +781,34 @@ export function resolveFamilyModelPolicy(options: {
     ...(getExperimentRecommendation(config, effectiveTier) !== null
       ? { experimentRecommendation: getExperimentRecommendation(config, effectiveTier) }
       : { experimentRecommendation: null }),
+    ...(resolvedBackend.contextLimit !== undefined
+      ? { contextLimit: resolvedBackend.contextLimit }
+      : {}),
+    ...(resolvedBackend.nativeToolUse !== undefined
+      ? { nativeToolUse: resolvedBackend.nativeToolUse }
+      : {}),
+    ...(resolvedBackend.capabilities !== undefined
+      ? { capabilities: resolvedBackend.capabilities }
+      : {}),
   };
+}
+
+/**
+ * Look up a model's context window size from the model policy config.
+ *
+ * Checks the `models.{modelId}.context_window` field in model-policy.json.
+ * Returns `undefined` when the model is not listed or has no context_window set.
+ * This allows callers to fall back to a hardcoded map for models not in the policy.
+ */
+export function getModelContextWindow(
+  modelId: string,
+  babelRoot?: string,
+): number | undefined {
+  try {
+    const { config } = loadModelPolicyConfig(babelRoot);
+    const entry = config.models?.[modelId];
+    return entry?.context_window;
+  } catch {
+    return undefined;
+  }
 }

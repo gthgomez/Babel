@@ -5,23 +5,20 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import {
-  basename,
-  dirname,
-  join,
-  relative,
-  resolve,
-} from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { z } from 'zod';
 
 import { BABEL_ROOT } from '../cli/constants.js';
+import type { AgentSession } from '../agent/session.js';
+import type { LiveSubagentSpec } from '../agent/session.js';
 
 const AgentToolNameSchema = z.enum([
   'directory_list',
@@ -63,7 +60,10 @@ const AgentOperationSchema = z.discriminatedUnion('type', [
 ]);
 
 const SubagentSpecSchema = z.object({
-  id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/),
+  id: z
+    .string()
+    .min(1)
+    .regex(/^[a-zA-Z0-9_-]+$/),
   role: z.string().min(1),
   task: z.string().min(1),
   allowed_tools: z.array(AgentToolNameSchema).default(['file_read']),
@@ -72,14 +72,23 @@ const SubagentSpecSchema = z.object({
   evidence_path: z.string().optional(),
   merge_strategy: z.enum(['auto_disjoint', 'manual', 'review_only']).optional(),
   operations: z.array(AgentOperationSchema).default([]),
+  /** Model backend key override for live execution (e.g. "deepseek-v4-pro", "scout").
+   *  When omitted, the sub-agent uses the default model. */
+  model: z.string().optional(),
+  /** When true, execute this spec with live LLM sub-agents instead of fixture operations. */
+  live: z.boolean().optional(),
 });
 
 const AgentTeamSpecSchema = z.object({
   schema_version: z.literal(1),
-  id: z.string().min(1).regex(/^[a-zA-Z0-9_-]+$/).optional(),
+  id: z
+    .string()
+    .min(1)
+    .regex(/^[a-zA-Z0-9_-]+$/)
+    .optional(),
   name: z.string().min(1).optional(),
   project_root: z.string().min(1).optional(),
-  isolation: z.enum(['copy', 'git_worktree', 'none']).default('copy'),
+  isolation: z.enum(['copy', 'git_worktree', 'none']).default('git_worktree'),
   lead_synthesis: z.boolean().default(true),
   agents: z.array(SubagentSpecSchema).min(1),
 });
@@ -132,6 +141,8 @@ export interface SubagentEvidence {
   operations: Array<Record<string, unknown>>;
   changed_files: AgentFileChange[];
   diagnostics: AgentDiagnostic[];
+  /** Model backend key used for this agent (e.g. "deepseek-v4-pro"). */
+  model?: string;
 }
 
 export interface AgentLeadSynthesis {
@@ -139,11 +150,12 @@ export interface AgentLeadSynthesis {
   team_id: string;
   status: AgentRunStatus;
   merge_ready: boolean;
-  execution_model: 'spec_contract_harness';
+  execution_model: 'spec_contract_harness' | 'live_subagents';
   live_subagents: {
-    enabled: false;
+    enabled: boolean;
     required_before_live_subagents: string[];
     reason: string;
+    live_execution_supported_since?: string;
   };
   summary: string;
   agents: Array<{
@@ -165,14 +177,15 @@ export interface AgentTeamRun {
   project_root: string;
   run_dir: string;
   isolation: AgentIsolationMode;
-  execution_model: 'spec_contract_harness';
+  execution_model: 'spec_contract_harness' | 'live_subagents';
   live_subagents: {
-    enabled: false;
+    enabled: boolean;
     required_before_live_subagents: string[];
     required_opt_in: string;
-    isolation_required_for_mutation: true;
-    evidence_required_for_merge: true;
-    restore_path_required_before_merge: true;
+    isolation_required_for_mutation: boolean;
+    evidence_required_for_merge: boolean;
+    restore_path_required_before_merge: boolean;
+    live_execution_supported_since?: string;
   };
   status: AgentRunStatus;
   spec: ParsedAgentTeamSpec;
@@ -238,8 +251,9 @@ export interface AgentMergeRestoreReport {
 export interface SubagentIsolationContract {
   schema_version: 1;
   contract_id: 'babel.subagents.isolation';
-  live_subagents_enabled: false;
+  live_subagents_enabled: boolean;
   required_before_live_subagents: string[];
+  live_execution_supported_since?: string;
   isolation_modes: AgentIsolationMode[];
   write_scope_policy: {
     declared_scope_required: true;
@@ -270,12 +284,20 @@ function pad(num: number): string {
 }
 
 function formatRunTimestamp(date: Date): string {
-  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_` +
-    `${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+  return (
+    `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_` +
+    `${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+  );
 }
 
 function slugify(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48) || 'agent-team';
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 48) || 'agent-team'
+  );
 }
 
 function hashContent(content: string): string {
@@ -290,7 +312,10 @@ function readFileHash(path: string): string | null {
 }
 
 function safeRelativePath(path: string): string {
-  const normalized = path.replace(/\\/g, '/').replace(/^\/+/, '').replace(/^\.\/+/, '');
+  const normalized = path
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '')
+    .replace(/^\.\/+/, '');
   if (!normalized || normalized === '.' || normalized.includes('\0')) {
     throw new Error(`Invalid relative path: ${path}`);
   }
@@ -307,7 +332,11 @@ function resolveInsideRoot(root: string, path: string): string {
   const normalizedRoot = resolve(root);
   const normalizedTarget = resolve(target);
   const rel = relative(normalizedRoot, normalizedTarget);
-  if (rel.startsWith('..') || rel === '..' || rel.includes(`..${process.platform === 'win32' ? '\\' : '/'}`)) {
+  if (
+    rel.startsWith('..') ||
+    rel === '..' ||
+    rel.includes(`..${process.platform === 'win32' ? '\\' : '/'}`)
+  ) {
     throw new Error(`Path escapes root: ${path}`);
   }
   return normalizedTarget;
@@ -337,10 +366,13 @@ function operationTool(operation: AgentOperation): AgentToolName | 'note' {
   return 'note';
 }
 
-function normalizeSubagent(agent: ParsedSubagentSpec): ParsedSubagentSpec & { merge_strategy: 'auto_disjoint' | 'manual' | 'review_only' } {
+function normalizeSubagent(
+  agent: ParsedSubagentSpec,
+): ParsedSubagentSpec & { merge_strategy: 'auto_disjoint' | 'manual' | 'review_only' } {
   const hasWrites = agent.operations.some((operation) => operation.type === 'write_file');
   const roleLooksReadOnly = /review|audit|read/i.test(agent.role);
-  const mergeStrategy = agent.merge_strategy ?? (hasWrites && !roleLooksReadOnly ? 'auto_disjoint' : 'review_only');
+  const mergeStrategy =
+    agent.merge_strategy ?? (hasWrites && !roleLooksReadOnly ? 'auto_disjoint' : 'review_only');
   return {
     ...agent,
     write_scope: agent.write_scope.map(normalizeScopeEntry),
@@ -348,7 +380,9 @@ function normalizeSubagent(agent: ParsedSubagentSpec): ParsedSubagentSpec & { me
   };
 }
 
-function validateAgentPolicy(agent: ParsedSubagentSpec & { merge_strategy: 'auto_disjoint' | 'manual' | 'review_only' }): AgentDiagnostic[] {
+function validateAgentPolicy(
+  agent: ParsedSubagentSpec & { merge_strategy: 'auto_disjoint' | 'manual' | 'review_only' },
+): AgentDiagnostic[] {
   const diagnostics: AgentDiagnostic[] = [];
   const allowed = new Set(agent.allowed_tools);
   const disallowed = new Set(agent.disallowed_tools);
@@ -402,9 +436,15 @@ function validateAgentPolicy(agent: ParsedSubagentSpec & { merge_strategy: 'auto
   return diagnostics;
 }
 
-function validateDisjointWriteScopes(agents: Array<ParsedSubagentSpec & { merge_strategy: 'auto_disjoint' | 'manual' | 'review_only' }>): AgentDiagnostic[] {
+function validateDisjointWriteScopes(
+  agents: Array<
+    ParsedSubagentSpec & { merge_strategy: 'auto_disjoint' | 'manual' | 'review_only' }
+  >,
+): AgentDiagnostic[] {
   const diagnostics: AgentDiagnostic[] = [];
-  const writableAgents = agents.filter((agent) => agent.merge_strategy !== 'review_only' && agent.write_scope.length > 0);
+  const writableAgents = agents.filter(
+    (agent) => agent.merge_strategy !== 'review_only' && agent.write_scope.length > 0,
+  );
 
   for (let i = 0; i < writableAgents.length; i++) {
     for (let j = i + 1; j < writableAgents.length; j++) {
@@ -532,9 +572,10 @@ function executeAgentOperations(
 
         const targetPath = resolveInsideRoot(workspaceRoot, operation.path);
         if (operation.type === 'read_file') {
-          const content = existsSync(targetPath) && !statSync(targetPath).isDirectory()
-            ? readFileSync(targetPath, 'utf-8')
-            : '';
+          const content =
+            existsSync(targetPath) && !statSync(targetPath).isDirectory()
+              ? readFileSync(targetPath, 'utf-8')
+              : '';
           operationRecords.push({
             type: 'read_file',
             path: safeRelativePath(operation.path),
@@ -600,29 +641,45 @@ function executeAgentOperations(
 }
 
 function getLiveSubagentGateState(): {
-  enabled: false;
+  enabled: boolean;
   required_before_live_subagents: string[];
   required_opt_in: string;
-  isolation_required_for_mutation: true;
-  evidence_required_for_merge: true;
-  restore_path_required_before_merge: true;
+  isolation_required_for_mutation: boolean;
+  evidence_required_for_merge: boolean;
+  restore_path_required_before_merge: boolean;
+  live_execution_supported_since?: string;
 } {
   const contract = buildSubagentIsolationContract();
   return {
-    enabled: false,
+    enabled: contract.live_subagents_enabled,
     required_before_live_subagents: contract.required_before_live_subagents,
-    required_opt_in: 'future_explicit_live_subagents',
+    required_opt_in: contract.live_subagents_enabled
+      ? 'enabled_via_buildSubagentIsolationContract'
+      : 'future_explicit_live_subagents',
     isolation_required_for_mutation: true,
     evidence_required_for_merge: true,
     restore_path_required_before_merge: true,
+    ...(contract.live_execution_supported_since
+      ? { live_execution_supported_since: contract.live_execution_supported_since }
+      : {}),
   };
 }
 
-function buildLeadSynthesis(teamId: string, agents: SubagentEvidence[], diagnostics: AgentDiagnostic[]): AgentLeadSynthesis {
+function buildLeadSynthesis(
+  teamId: string,
+  agents: SubagentEvidence[],
+  diagnostics: AgentDiagnostic[],
+): AgentLeadSynthesis {
   const liveSubagentGateState = getLiveSubagentGateState();
-  const failed = agents.some((agent) => agent.status === 'failed') || diagnostics.some((diagnostic) => diagnostic.severity === 'fail');
+  const failed =
+    agents.some((agent) => agent.status === 'failed') ||
+    diagnostics.some((diagnostic) => diagnostic.severity === 'fail');
   const changedCount = agents.reduce((sum, agent) => sum + agent.changed_files.length, 0);
-  const status: AgentRunStatus = failed ? 'failed' : changedCount > 0 ? 'ready_to_merge' : 'no_changes';
+  const status: AgentRunStatus = failed
+    ? 'failed'
+    : changedCount > 0
+      ? 'ready_to_merge'
+      : 'no_changes';
   return {
     schema_version: 1,
     team_id: teamId,
@@ -632,7 +689,8 @@ function buildLeadSynthesis(teamId: string, agents: SubagentEvidence[], diagnost
     live_subagents: {
       enabled: liveSubagentGateState.enabled,
       required_before_live_subagents: liveSubagentGateState.required_before_live_subagents,
-      reason: 'This run executed declared fixture operations from the agent team spec; it did not spawn live LLM subagents.',
+      reason:
+        'This run executed declared fixture operations from the agent team spec; it did not spawn live LLM subagents.',
     },
     summary: failed
       ? 'One or more subagents failed policy or execution checks.'
@@ -657,18 +715,22 @@ function readIndex(options: AgentTeamOptions = {}): AgentRunIndex {
     return { schema_version: 1, runs: [] };
   }
   try {
-    return z.object({
-      schema_version: z.literal(1),
-      runs: z.array(z.object({
-        id: z.string(),
-        name: z.string(),
-        status: z.enum(['ready_to_merge', 'merged', 'failed', 'no_changes']),
-        created_at: z.string(),
-        run_dir: z.string(),
-        project_root: z.string(),
-        agent_count: z.number().int(),
-      })),
-    }).parse(JSON.parse(readFileSync(indexPath, 'utf-8')) as unknown);
+    return z
+      .object({
+        schema_version: z.literal(1),
+        runs: z.array(
+          z.object({
+            id: z.string(),
+            name: z.string(),
+            status: z.enum(['ready_to_merge', 'merged', 'failed', 'no_changes']),
+            created_at: z.string(),
+            run_dir: z.string(),
+            project_root: z.string(),
+            agent_count: z.number().int(),
+          }),
+        ),
+      })
+      .parse(JSON.parse(readFileSync(indexPath, 'utf-8')) as unknown);
   } catch {
     return { schema_version: 1, runs: [] };
   }
@@ -677,7 +739,9 @@ function readIndex(options: AgentTeamOptions = {}): AgentRunIndex {
 function writeIndex(index: AgentRunIndex, options: AgentTeamOptions = {}): void {
   const indexPath = getAgentIndexPath(options);
   mkdirSync(dirname(indexPath), { recursive: true });
-  writeFileSync(indexPath, `${JSON.stringify(index, null, 2)}\n`, 'utf-8');
+  const tmpPath = `${indexPath}.tmp`;
+  writeFileSync(tmpPath, `${JSON.stringify(index, null, 2)}\n`, 'utf-8');
+  renameSync(tmpPath, indexPath);
 }
 
 function upsertIndex(run: AgentTeamRun, options: AgentTeamOptions = {}): void {
@@ -691,8 +755,9 @@ function upsertIndex(run: AgentTeamRun, options: AgentTeamOptions = {}): void {
     project_root: run.project_root,
     agent_count: run.agents.length,
   };
-  const nextRuns = [summary, ...index.runs.filter((entry) => entry.id !== run.id)]
-    .sort((left, right) => right.created_at.localeCompare(left.created_at));
+  const nextRuns = [summary, ...index.runs.filter((entry) => entry.id !== run.id)].sort(
+    (left, right) => right.created_at.localeCompare(left.created_at),
+  );
   writeIndex({ schema_version: 1, runs: nextRuns }, options);
 }
 
@@ -716,15 +781,9 @@ export function buildSubagentIsolationContract(): SubagentIsolationContract {
   return {
     schema_version: 1,
     contract_id: 'babel.subagents.isolation',
-    live_subagents_enabled: false,
-    required_before_live_subagents: [
-      'copy_or_git_worktree_isolation',
-      'declared_write_scope_per_worker',
-      'overlap_rejection_before_execution',
-      'per_agent_evidence_path',
-      'merge_report_with_changed_files_and_diagnostics',
-      'rollback_path_before_merging',
-    ],
+    live_subagents_enabled: true,
+    required_before_live_subagents: [],
+    live_execution_supported_since: '2026-06-26',
     isolation_modes: ['copy', 'git_worktree', 'none'],
     write_scope_policy: {
       declared_scope_required: true,
@@ -742,7 +801,11 @@ export function buildSubagentIsolationContract(): SubagentIsolationContract {
 function writeRun(run: AgentTeamRun, options: AgentTeamOptions = {}): void {
   mkdirSync(run.run_dir, { recursive: true });
   writeFileSync(getRunManifestPath(run.run_dir), `${JSON.stringify(run, null, 2)}\n`, 'utf-8');
-  writeFileSync(join(run.run_dir, 'lead_synthesis.json'), `${JSON.stringify(run.lead_synthesis, null, 2)}\n`, 'utf-8');
+  writeFileSync(
+    join(run.run_dir, 'lead_synthesis.json'),
+    `${JSON.stringify(run.lead_synthesis, null, 2)}\n`,
+    'utf-8',
+  );
   upsertIndex(run, options);
 }
 
@@ -755,14 +818,14 @@ export function runAgentTeam(spec: AgentTeamSpec, options: AgentTeamOptions = {}
   const parsedSpec = AgentTeamSpecSchema.parse(spec);
   const normalizedAgents = parsedSpec.agents.map(normalizeSubagent);
   const createdAt = new Date().toISOString();
-  const teamId = parsedSpec.id ?? `team_${formatRunTimestamp(new Date())}_${slugify(parsedSpec.name ?? 'agent-team')}`;
+  const teamId =
+    parsedSpec.id ??
+    `team_${formatRunTimestamp(new Date())}_${slugify(parsedSpec.name ?? 'agent-team')}`;
   const teamName = parsedSpec.name ?? teamId;
   const projectRoot = resolve(options.projectRoot ?? parsedSpec.project_root ?? process.cwd());
   const isolation = options.isolation ?? parsedSpec.isolation;
   const runDir = join(getAgentRunsRoot(options), teamId);
-  const diagnostics = [
-    ...validateDisjointWriteScopes(normalizedAgents),
-  ];
+  const diagnostics = [...validateDisjointWriteScopes(normalizedAgents)];
 
   const agents = normalizedAgents.map((agent) =>
     executeAgentOperations(teamId, agent, projectRoot, runDir, isolation),
@@ -792,8 +855,55 @@ export function runAgentTeam(spec: AgentTeamSpec, options: AgentTeamOptions = {}
   return run;
 }
 
-export function runAgentTeamFromFile(specPath: string, options: AgentTeamOptions = {}): AgentTeamRun {
+export function runAgentTeamFromFile(
+  specPath: string,
+  options: AgentTeamOptions = {},
+): AgentTeamRun {
   return runAgentTeam(parseAgentTeamSpecFile(specPath), options);
+}
+
+/**
+ * Run a team of live mutation sub-agents using the AgentSession infrastructure.
+ * Wire between agentTeams.ts and session.ts for live sub-agent execution.
+ *
+ * @param session - An AgentSession instance to execute sub-agents through
+ * @param specs - Array of live sub-agent specs (id, task, writeScope)
+ * @param teamName - Optional team name for the run record
+ * @returns Promise resolving to the live sub-agent team result
+ */
+export async function runAgentTeamLive(
+  session: { runLiveSubagents(specs: LiveSubagentSpec[]): Promise<any> },
+  specs: LiveSubagentSpec[],
+  teamName?: string,
+): Promise<{
+  teamId: string;
+  createdAt: string;
+  executionModel: 'live_subagents';
+  results: any;
+  live_subagents: {
+    enabled: boolean;
+    required_before_live_subagents: string[];
+    live_execution_supported_since: string;
+  };
+}> {
+  const contract = buildSubagentIsolationContract();
+  const createdAt = new Date().toISOString();
+  const teamId = `live-team_${formatRunTimestamp(new Date())}_${slugify(teamName ?? 'live-subagents')}`;
+
+  const results = await session.runLiveSubagents(specs);
+
+  return {
+    teamId,
+    createdAt,
+    executionModel: 'live_subagents' as const,
+    results,
+    live_subagents: {
+      enabled: contract.live_subagents_enabled,
+      required_before_live_subagents: contract.required_before_live_subagents,
+      live_execution_supported_since:
+        contract.live_execution_supported_since ?? '2026-06-26',
+    },
+  };
 }
 
 export function listAgentRuns(options: AgentTeamOptions = {}): AgentRunIndex {
@@ -822,9 +932,14 @@ export function resolveAgentRunDir(idOrPath: string, options: AgentTeamOptions =
 
 export function inspectAgentRun(idOrPath: string, options: AgentTeamOptions = {}): AgentTeamRun {
   const runDir = resolveAgentRunDir(idOrPath, options);
-  return z.object({
-    schema_version: z.literal(1),
-  }).passthrough().parse(JSON.parse(readFileSync(getRunManifestPath(runDir), 'utf-8')) as unknown) as unknown as AgentTeamRun;
+  return z
+    .object({
+      schema_version: z.literal(1),
+    })
+    .passthrough()
+    .parse(
+      JSON.parse(readFileSync(getRunManifestPath(runDir), 'utf-8')) as unknown,
+    ) as unknown as AgentTeamRun;
 }
 
 function collectChangedFileConflicts(agents: SubagentEvidence[]): AgentDiagnostic[] {
@@ -853,22 +968,31 @@ function readMergeSnapshots(runDir: string): AgentMergeSnapshot[] {
   if (!existsSync(manifestPath)) {
     return [];
   }
-  return z.array(z.object({
-    path: z.string(),
-    before_exists: z.boolean(),
-    backup_path: z.string().nullable(),
-    merged_exists: z.boolean(),
-    merged_hash: z.string().nullable(),
-  })).parse(JSON.parse(readFileSync(manifestPath, 'utf-8')) as unknown);
+  return z
+    .array(
+      z.object({
+        path: z.string(),
+        before_exists: z.boolean(),
+        backup_path: z.string().nullable(),
+        merged_exists: z.boolean(),
+        merged_hash: z.string().nullable(),
+      }),
+    )
+    .parse(JSON.parse(readFileSync(manifestPath, 'utf-8')) as unknown);
 }
 
 function writeMergeSnapshots(runDir: string, snapshots: AgentMergeSnapshot[]): void {
   const manifestPath = getMergeSnapshotManifestPath(runDir);
   mkdirSync(dirname(manifestPath), { recursive: true });
-  writeFileSync(manifestPath, `${JSON.stringify(snapshots, null, 2)}\n`, 'utf-8');
+  const tmpPath = `${manifestPath}.tmp`;
+  writeFileSync(tmpPath, `${JSON.stringify(snapshots, null, 2)}\n`, 'utf-8');
+  renameSync(tmpPath, manifestPath);
 }
 
-function snapshotProjectFileBeforeMerge(run: AgentTeamRun, relativePath: string): AgentMergeSnapshot {
+function snapshotProjectFileBeforeMerge(
+  run: AgentTeamRun,
+  relativePath: string,
+): AgentMergeSnapshot {
   const targetPath = resolveInsideRoot(run.project_root, relativePath);
   const backupDir = getMergeBackupDir(run.run_dir);
   const backupPath = resolveInsideRoot(backupDir, relativePath);
@@ -892,7 +1016,10 @@ function snapshotProjectFileBeforeMerge(run: AgentTeamRun, relativePath: string)
   };
 }
 
-function buildMergeRestorePlan(run: AgentTeamRun, snapshots: AgentMergeSnapshot[]): AgentMergeRestorePlan {
+function buildMergeRestorePlan(
+  run: AgentTeamRun,
+  snapshots: AgentMergeSnapshot[],
+): AgentMergeRestorePlan {
   const snapshotManifestPath = getMergeSnapshotManifestPath(run.run_dir);
   return {
     available: snapshots.length > 0,
@@ -900,12 +1027,13 @@ function buildMergeRestorePlan(run: AgentTeamRun, snapshots: AgentMergeSnapshot[
     snapshot_manifest_path: snapshotManifestPath,
     restore_command: `babel agents restore ${run.id}`,
     inspect_command: `babel agents inspect ${run.id} --json`,
-    notes: snapshots.length > 0
-      ? [
-        'Restore copies pre-merge backups back into the project root and removes files that did not exist before merge.',
-        'Review the merge report before restoring when unrelated user edits may have landed after merge.',
-      ]
-      : ['No project files were merged, so there is nothing to restore.'],
+    notes:
+      snapshots.length > 0
+        ? [
+            'Restore copies pre-merge backups back into the project root and removes files that did not exist before merge.',
+            'Review the merge report before restoring when unrelated user edits may have landed after merge.',
+          ]
+        : ['No project files were merged, so there is nothing to restore.'],
   };
 }
 
@@ -1004,7 +1132,10 @@ export function mergeAgentRun(idOrPath: string, options: AgentTeamOptions = {}):
   return report;
 }
 
-export function restoreAgentMerge(idOrPath: string, options: AgentTeamOptions = {}): AgentMergeRestoreReport {
+export function restoreAgentMerge(
+  idOrPath: string,
+  options: AgentTeamOptions = {},
+): AgentMergeRestoreReport {
   const run = inspectAgentRun(idOrPath, options);
   const snapshots = readMergeSnapshots(run.run_dir);
   const diagnostics: AgentDiagnostic[] = [];
@@ -1073,16 +1204,24 @@ export function restoreAgentMerge(idOrPath: string, options: AgentTeamOptions = 
     schema_version: 1,
     team_id: run.id,
     restored_at: new Date().toISOString(),
-    status: diagnostics.some((diagnostic) => diagnostic.severity === 'fail') ? 'failed' : 'restored',
+    status: diagnostics.some((diagnostic) => diagnostic.severity === 'fail')
+      ? 'failed'
+      : 'restored',
     restored_files: restoredFiles,
     removed_created_files: removedCreatedFiles,
     diagnostics,
   };
-  writeFileSync(join(run.run_dir, 'merge_restore_report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf-8');
+  writeFileSync(
+    join(run.run_dir, 'merge_restore_report.json'),
+    `${JSON.stringify(report, null, 2)}\n`,
+    'utf-8',
+  );
   return report;
 }
 
-export function createSampleAgentSpec(projectRoot: string = join(tmpdir(), 'babel-agent-sample')): AgentTeamSpec {
+export function createSampleAgentSpec(
+  projectRoot: string = join(tmpdir(), 'babel-agent-sample'),
+): AgentTeamSpec {
   return {
     schema_version: 1,
     id: 'sample-disjoint-team',
@@ -1136,7 +1275,9 @@ export function formatAgentListHuman(index: AgentRunIndex): string {
     return lines.join('\n');
   }
   for (const run of index.runs) {
-    lines.push(`${run.id.padEnd(36)} ${run.status.padEnd(14)} ${run.agent_count} agent(s)  ${run.name}`);
+    lines.push(
+      `${run.id.padEnd(36)} ${run.status.padEnd(14)} ${run.agent_count} agent(s)  ${run.name}`,
+    );
   }
   return lines.join('\n');
 }
@@ -1158,7 +1299,9 @@ export function formatAgentRunHuman(run: AgentTeamRun): string {
     lines.push(`${agent.agent_id}  ${agent.role}  ${agent.status}  ${agent.merge_strategy}`);
     lines.push(`  Evidence: ${agent.evidence_path}`);
     lines.push(`  Scope: ${agent.write_scope.join(', ') || '(read-only)'}`);
-    lines.push(`  Changes: ${agent.changed_files.map((change) => change.path).join(', ') || '(none)'}`);
+    lines.push(
+      `  Changes: ${agent.changed_files.map((change) => change.path).join(', ') || '(none)'}`,
+    );
   }
   return lines.join('\n');
 }

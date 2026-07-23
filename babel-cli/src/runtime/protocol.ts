@@ -11,7 +11,7 @@ export const BABEL_RUNTIME_EVENT_TYPES = [
   'verification.decision',
 ] as const;
 
-export type BabelRuntimeEventType = typeof BABEL_RUNTIME_EVENT_TYPES[number];
+export type BabelRuntimeEventType = (typeof BABEL_RUNTIME_EVENT_TYPES)[number];
 
 export interface BabelRuntimeEvent {
   protocol_version: typeof BABEL_RUNTIME_PROTOCOL_VERSION;

@@ -8,3 +8,6 @@ const packageRoot = resolve(__dirname, '..');
 const distDir = resolve(packageRoot, 'dist');
 
 rmSync(distDir, { recursive: true, force: true });
+// Remove the incremental build cache so tsc always re-emits after a clean.
+const tsBuildInfoFile = resolve(packageRoot, '.tsbuildinfo');
+try { rmSync(tsBuildInfoFile, { force: true }); } catch { /* ok if missing */ }

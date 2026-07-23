@@ -31,8 +31,8 @@ test('tool catalog explains run-level allowed and denied tools', () => {
     disallowedTools: ['file_write'],
   });
 
-  assert.equal(catalog.find(entry => entry.name === 'file_read')?.policy.status, 'allowed');
-  const writePolicy = catalog.find(entry => entry.name === 'file_write')?.policy;
+  assert.equal(catalog.find((entry) => entry.name === 'file_read')?.policy.status, 'allowed');
+  const writePolicy = catalog.find((entry) => entry.name === 'file_write')?.policy;
   assert.equal(writePolicy?.status, 'disabled');
   assert.match(writePolicy?.reasons.join('\n') ?? '', /disallowed_tools/);
 });
@@ -43,7 +43,7 @@ test('tool catalog can include profile-scoped capabilities', () => {
     includeCapabilities: true,
   });
 
-  const capability = catalog.find(entry => entry.name === 'inspect.git_bundle');
+  const capability = catalog.find((entry) => entry.name === 'inspect.git_bundle');
   assert.equal(capability?.kind, 'capability');
   assert.equal(capability?.policy.status, 'advisory');
   assert.deepEqual(capability?.requirements, ['git']);

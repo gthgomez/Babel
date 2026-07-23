@@ -1,5 +1,14 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+  chmodSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
@@ -12,10 +21,15 @@ import {
   restoreCheckpoint,
 } from './checkpoints.js';
 
-function makeFixture(): { base: string; projectRoot: string; runDir: string; context: { runId: string; runDir: string; babelRoot: string } } {
+function makeFixture(): {
+  base: string;
+  projectRoot: string;
+  runDir: string;
+  context: { runId: string; runDir: string; babelRoot: string };
+} {
   const base = mkdtempSync(join(tmpdir(), 'babel-checkpoints-'));
   const projectRoot = join(base, 'project');
-  const babelRoot = join(base, 'private source repo');
+  const babelRoot = join(base, 'babel-repo');
   const runDir = join(babelRoot, 'runs', '20260424_120000_checkpoint-fixture');
   mkdirSync(join(projectRoot, 'src'), { recursive: true });
   mkdirSync(runDir, { recursive: true });
@@ -37,14 +51,18 @@ test('file_write checkpoint restores prior file content', () => {
     const target = join(fixture.projectRoot, 'src', 'example.txt');
     writeFileSync(target, 'before\n', 'utf-8');
 
-    const checkpoint = createPreMutationCheckpoint({
-      tool: 'file_write',
-      path: 'src/example.txt',
-      content: 'after\n',
-    }, fixture.context, {
-      dryRun: false,
-      projectRoot: fixture.projectRoot,
-    });
+    const checkpoint = createPreMutationCheckpoint(
+      {
+        tool: 'file_write',
+        path: 'src/example.txt',
+        content: 'after\n',
+      },
+      fixture.context,
+      {
+        dryRun: false,
+        projectRoot: fixture.projectRoot,
+      },
+    );
     assert.ok(checkpoint);
     writeFileSync(target, 'after\n', 'utf-8');
     finalizeCheckpointAfterToolCall(checkpoint.id, fixture.context);
@@ -67,14 +85,18 @@ test('file_write checkpoint refuses to overwrite later user edits without force'
     const target = join(fixture.projectRoot, 'src', 'example.txt');
     writeFileSync(target, 'before\n', 'utf-8');
 
-    const checkpoint = createPreMutationCheckpoint({
-      tool: 'file_write',
-      path: 'src/example.txt',
-      content: 'after\n',
-    }, fixture.context, {
-      dryRun: false,
-      projectRoot: fixture.projectRoot,
-    });
+    const checkpoint = createPreMutationCheckpoint(
+      {
+        tool: 'file_write',
+        path: 'src/example.txt',
+        content: 'after\n',
+      },
+      fixture.context,
+      {
+        dryRun: false,
+        projectRoot: fixture.projectRoot,
+      },
+    );
     assert.ok(checkpoint);
     writeFileSync(target, 'after\n', 'utf-8');
     const finalized = finalizeCheckpointAfterToolCall(checkpoint.id, fixture.context);
@@ -97,14 +119,18 @@ test('new-file checkpoint removes a file Babel created', () => {
   const fixture = makeFixture();
   try {
     const target = join(fixture.projectRoot, 'src', 'created.txt');
-    const checkpoint = createPreMutationCheckpoint({
-      tool: 'file_write',
-      path: 'src/created.txt',
-      content: 'created\n',
-    }, fixture.context, {
-      dryRun: false,
-      projectRoot: fixture.projectRoot,
-    });
+    const checkpoint = createPreMutationCheckpoint(
+      {
+        tool: 'file_write',
+        path: 'src/created.txt',
+        content: 'created\n',
+      },
+      fixture.context,
+      {
+        dryRun: false,
+        projectRoot: fixture.projectRoot,
+      },
+    );
     assert.ok(checkpoint);
     writeFileSync(target, 'created\n', 'utf-8');
     const finalized = finalizeCheckpointAfterToolCall(checkpoint.id, fixture.context);
@@ -124,15 +150,19 @@ test('shell_exec checkpoint restores modified files from filesystem diff', () =>
     const target = join(fixture.projectRoot, 'src', 'example.txt');
     writeFileSync(target, 'before\n', 'utf-8');
 
-    const checkpoint = createPreMutationCheckpoint({
-      tool: 'shell_exec',
-      command: 'node mutate.js',
-      working_directory: fixture.projectRoot,
-      timeout_seconds: 30,
-    }, fixture.context, {
-      dryRun: false,
-      projectRoot: fixture.projectRoot,
-    });
+    const checkpoint = createPreMutationCheckpoint(
+      {
+        tool: 'shell_exec',
+        command: 'node mutate.js',
+        working_directory: fixture.projectRoot,
+        timeout_seconds: 30,
+      },
+      fixture.context,
+      {
+        dryRun: false,
+        projectRoot: fixture.projectRoot,
+      },
+    );
     assert.ok(checkpoint);
     assert.equal(checkpoint.restore_status, 'metadata_only');
 
@@ -158,15 +188,19 @@ test('checkpoint inspect output includes restore command and coverage warnings',
     const target = join(fixture.projectRoot, 'src', 'example.txt');
     writeFileSync(target, 'before\n', 'utf-8');
 
-    const checkpoint = createPreMutationCheckpoint({
-      tool: 'shell_exec',
-      command: 'node mutate.js',
-      working_directory: fixture.projectRoot,
-      timeout_seconds: 30,
-    }, fixture.context, {
-      dryRun: false,
-      projectRoot: fixture.projectRoot,
-    });
+    const checkpoint = createPreMutationCheckpoint(
+      {
+        tool: 'shell_exec',
+        command: 'node mutate.js',
+        working_directory: fixture.projectRoot,
+        timeout_seconds: 30,
+      },
+      fixture.context,
+      {
+        dryRun: false,
+        projectRoot: fixture.projectRoot,
+      },
+    );
     assert.ok(checkpoint);
 
     writeFileSync(target, 'after\n', 'utf-8');
@@ -190,15 +224,19 @@ test('shell_exec checkpoint removes files created by command diff', () => {
   const fixture = makeFixture();
   try {
     const target = join(fixture.projectRoot, 'src', 'created-by-command.txt');
-    const checkpoint = createPreMutationCheckpoint({
-      tool: 'shell_exec',
-      command: 'node mutate.js',
-      working_directory: fixture.projectRoot,
-      timeout_seconds: 30,
-    }, fixture.context, {
-      dryRun: false,
-      projectRoot: fixture.projectRoot,
-    });
+    const checkpoint = createPreMutationCheckpoint(
+      {
+        tool: 'shell_exec',
+        command: 'node mutate.js',
+        working_directory: fixture.projectRoot,
+        timeout_seconds: 30,
+      },
+      fixture.context,
+      {
+        dryRun: false,
+        projectRoot: fixture.projectRoot,
+      },
+    );
     assert.ok(checkpoint);
 
     writeFileSync(target, 'created\n', 'utf-8');
@@ -221,15 +259,19 @@ test('test_run checkpoint restores deleted files from filesystem diff', () => {
     const target = join(fixture.projectRoot, 'src', 'deleted-by-test.txt');
     writeFileSync(target, 'before\n', 'utf-8');
 
-    const checkpoint = createPreMutationCheckpoint({
-      tool: 'test_run',
-      command: 'npm test',
-      working_directory: fixture.projectRoot,
-      timeout_seconds: 30,
-    }, fixture.context, {
-      dryRun: false,
-      projectRoot: fixture.projectRoot,
-    });
+    const checkpoint = createPreMutationCheckpoint(
+      {
+        tool: 'test_run',
+        command: 'npm test',
+        working_directory: fixture.projectRoot,
+        timeout_seconds: 30,
+      },
+      fixture.context,
+      {
+        dryRun: false,
+        projectRoot: fixture.projectRoot,
+      },
+    );
     assert.ok(checkpoint);
 
     unlinkSync(target);
@@ -242,6 +284,54 @@ test('test_run checkpoint restores deleted files from filesystem diff', () => {
     assert.equal(result.status, 'restored');
     assert.equal(readFileSync(target, 'utf-8'), 'before\n');
   } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
+test('transactional restore aborts completely if any target file is locked or read-only', () => {
+  const fixture = makeFixture();
+  const target = join(fixture.projectRoot, 'src', 'locked-file.txt');
+  try {
+    writeFileSync(target, 'before\n', 'utf-8');
+
+    const checkpoint = createPreMutationCheckpoint(
+      {
+        tool: 'file_write',
+        path: 'src/locked-file.txt',
+        content: 'after\n',
+      },
+      fixture.context,
+      {
+        dryRun: false,
+        projectRoot: fixture.projectRoot,
+      },
+    );
+    assert.ok(checkpoint);
+
+    writeFileSync(target, 'after\n', 'utf-8');
+    const finalized = finalizeCheckpointAfterToolCall(checkpoint.id, fixture.context);
+    assert.ok(finalized);
+
+    // Make the file read-only to simulate a lock/permission error
+    chmodSync(target, 0o400);
+
+    const result = restoreCheckpoint(finalized);
+    assert.equal(result.status, 'refused');
+    assert.ok(
+      result.refused_files.some(
+        (f) => f.path === target && f.reason.includes('locked or unwritable'),
+      ),
+    );
+
+    // Make it writable again to inspect and cleanup
+    chmodSync(target, 0o666);
+    assert.equal(readFileSync(target, 'utf-8'), 'after\n'); // should NOT have been rolled back
+  } finally {
+    try {
+      chmodSync(target, 0o666);
+    } catch {
+      /* intentional: chmod may fail but we still want rmSync */
+    }
     rmSync(fixture.base, { recursive: true, force: true });
   }
 });

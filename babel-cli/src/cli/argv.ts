@@ -1,4 +1,5 @@
-import { VALID_PROJECTS, type ValidProject } from './constants.js';
+import { resolveProjectRoot } from './helpers.js';
+import { DEPRECATED_SURFACE_COMMANDS } from './deprecation.js';
 
 const KNOWN_TOP_LEVEL_COMMANDS = new Set([
   'setup',
@@ -43,17 +44,8 @@ const KNOWN_TOP_LEVEL_COMMANDS = new Set([
   'repo-map',
   'onboard-project',
   'create',
-  'lite',
-  'l',
-  'ask',
   'plan',
-  'fix',
-  'propose',
-  'diff',
-  'review',
-  'undo',
-  'do',
-  'full',
+  'deep',
   'run',
   'resolve',
   'continue',
@@ -65,12 +57,17 @@ const KNOWN_TOP_LEVEL_COMMANDS = new Set([
   'internals',
   'text-provider',
   'help',
+  'undo',
+  'review',
+  ...DEPRECATED_SURFACE_COMMANDS,
 ]);
 
 const VALUE_OPTIONS = new Set([
-  '-p', '--project',
+  '-p',
+  '--project',
   '--mode',
-  '-m', '--model',
+  '-m',
+  '--model',
   '--model-tier',
   '--output-format',
   '--session-id',
@@ -83,44 +80,41 @@ const VALUE_OPTIONS = new Set([
   '--lock',
   '--allowed-tools',
   '--disallowed-tools',
+  '--budget',
 ]);
 
 function isTopLevelMetaToken(token: string): boolean {
-  return token === 'help' ||
+  return (
+    token === 'help' ||
     token === '-h' ||
     token === '--help' ||
     token === '-V' ||
-    token === '--version';
-}
-
-function getCommandBasename(value: string | undefined): string {
-  return String(value ?? '')
-    .replace(/\\/g, '/')
-    .split('/')
-    .pop()
-    ?.toLowerCase() ?? '';
-}
-
-function isLiteEntrypoint(argv: string[]): boolean {
-  const commandName = getCommandBasename(argv[1]);
-  return commandName === 'bl' ||
-    commandName === 'bl.js' ||
-    commandName === 'babel-lite' ||
-    commandName === 'babel-lite.js';
+    token === '--version'
+  );
 }
 
 function rewriteRunArgs(argsAfterRun: string[]): string[] {
   const passthrough: string[] = [];
   const taskParts: string[] = [];
+  let headlessFlag = false;
+  let modeValue: string | null = null;
 
   for (let i = 0; i < argsAfterRun.length; i++) {
     const token = argsAfterRun[i]!;
+
+    if (token === '--headless') {
+      headlessFlag = true;
+      continue;
+    }
 
     if (VALUE_OPTIONS.has(token)) {
       passthrough.push(token);
       const value = argsAfterRun[i + 1];
       if (value !== undefined) {
         passthrough.push(value);
+        if (token === '--mode') {
+          modeValue = value.toLowerCase();
+        }
         i++;
       }
       continue;
@@ -134,50 +128,37 @@ function rewriteRunArgs(argsAfterRun: string[]): string[] {
     taskParts.push(token);
   }
 
+  // Hybrid: --headless with chat (or default) upgrades to chat-headless mode.
+  if (headlessFlag) {
+    const effective = modeValue ?? 'chat';
+    if (effective === 'chat' || effective === 'chat-headless') {
+      const withoutMode: string[] = [];
+      for (let i = 0; i < passthrough.length; i++) {
+        if (passthrough[i] === '--mode') {
+          i++; // skip value
+          continue;
+        }
+        withoutMode.push(passthrough[i]!);
+      }
+      passthrough.length = 0;
+      passthrough.push(...withoutMode, '--mode', 'chat-headless');
+    } else {
+      // Non-chat modes ignore --headless for mode identity (still set env later if desired)
+      passthrough.push('--headless');
+    }
+  }
+
   if (taskParts.length === 0) {
-    return ['run', ...argsAfterRun];
+    return ['run', ...passthrough];
   }
 
   return ['run', ...passthrough, taskParts.join(' ')];
 }
 
-const LITE_SUBCOMMANDS = new Set([
-  'ask',
-  'plan',
-  'fix',
-  'patch',
-  'propose',
-  'diff',
-  'review',
-  'undo',
-  'do',
-  'continue',
-  'resume',
-  'help',
-  '-h',
-  '--help',
-]);
-
-function rewriteLiteArgs(argsAfterLite: string[]): string[] {
-  if (argsAfterLite.length === 0) {
-    return ['lite', '--help'];
-  }
-
-  const first = argsAfterLite[0]!;
-  if (isTopLevelMetaToken(first)) {
-    return ['lite', '--help'];
-  }
-
-  if (!LITE_SUBCOMMANDS.has(first) && !first.startsWith('-')) {
-    return ['lite', 'do', ...argsAfterLite];
-  }
-
-  return ['lite', ...argsAfterLite];
-}
-
 function rewriteDefaultTaskArgs(args: string[]): string[] {
   const rewritten = rewriteRunArgs(args);
-  return rewritten[0] === 'run' ? ['do', ...rewritten.slice(1)] : rewritten;
+  // Route bare tasks to chat mode — the default fast capable agent
+  return rewritten[0] === 'run' ? ['run', '--mode', 'chat', ...rewritten.slice(1)] : rewritten;
 }
 
 export function rewriteArgv(argv: string[]): string[] {
@@ -185,16 +166,20 @@ export function rewriteArgv(argv: string[]): string[] {
   const tail = argv.slice(2);
 
   if (tail.length === 0) {
-    if (isLiteEntrypoint(argv)) {
-      return [...head, ...rewriteLiteArgs([])];
-    }
     return [...head, 'interactive'];
   }
 
   const first = tail[0]!;
 
-  if (isLiteEntrypoint(argv)) {
-    return [...head, ...rewriteLiteArgs(tail)];
+  if (first === 'chat' || first === 'chat-headless') {
+    // Hybrid (product lock): chat-headless remains a stable mode alias.
+    // Preferred long-term form: `babel chat --headless` → same as chat-headless.
+    const rest = tail.slice(1);
+    if (first === 'chat' && rest.includes('--headless')) {
+      const filtered = rest.filter((a) => a !== '--headless');
+      return [...head, 'run', '--mode', 'chat-headless', ...filtered];
+    }
+    return [...head, 'run', '--mode', first, ...rest];
   }
 
   if (first === 'run') {
@@ -205,16 +190,18 @@ export function rewriteArgv(argv: string[]): string[] {
     return argv;
   }
 
-  if (VALID_PROJECTS.includes(first as ValidProject)) {
+  // Known commands take priority over project name detection
+  if (KNOWN_TOP_LEVEL_COMMANDS.has(first)) {
+    return argv;
+  }
+
+  // Dynamic project detection via workspace scanner
+  if (resolveProjectRoot(first) !== null) {
     if (tail.length === 1) {
       return [...head, 'interactive', '--project', first];
     }
     return [...head, ...rewriteRunArgs(['--project', first, ...tail.slice(1)])];
   }
 
-  if (!KNOWN_TOP_LEVEL_COMMANDS.has(first)) {
-    return [...head, ...rewriteDefaultTaskArgs(tail)];
-  }
-
-  return argv;
+  return [...head, ...rewriteDefaultTaskArgs(tail)];
 }

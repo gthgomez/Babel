@@ -10,8 +10,14 @@ test('model escalation rules flag benchmark and performance-heavy tasks', () => 
 
   assert.equal(recommendation.should_escalate, true);
   assert.equal(recommendation.recommended_tier, 'escalation');
-  assert.equal(recommendation.signals.some(signal => signal.code === 'performance_optimization'), true);
-  assert.equal(recommendation.signals.some(signal => signal.code === 'benchmark_risk_numerical_performance'), true);
+  assert.equal(
+    recommendation.signals.some((signal) => signal.code === 'performance_optimization'),
+    true,
+  );
+  assert.equal(
+    recommendation.signals.some((signal) => signal.code === 'benchmark_risk_numerical_performance'),
+    true,
+  );
 });
 
 test('model escalation rules use benchmark risk labels for git and security canaries', () => {
@@ -22,8 +28,16 @@ test('model escalation rules use benchmark risk labels for git and security cana
     task: 'Terminal-Bench 2 task: break-filter-js-from-html inspect filter.py and build an alert bypass',
   });
 
-  assert.equal(merge.signals.some(signal => signal.code === 'benchmark_risk_git_stateful_merge'), true);
-  assert.equal(security.signals.some(signal => signal.code === 'benchmark_risk_browser_or_security_adversarial'), true);
+  assert.equal(
+    merge.signals.some((signal) => signal.code === 'benchmark_risk_git_stateful_merge'),
+    true,
+  );
+  assert.equal(
+    security.signals.some(
+      (signal) => signal.code === 'benchmark_risk_browser_or_security_adversarial',
+    ),
+    true,
+  );
 });
 
 test('model escalation rules leave simple local edits on default tier', () => {

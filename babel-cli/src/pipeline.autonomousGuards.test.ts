@@ -4,6 +4,11 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+import { setDockerAvailableForTest } from './config/benchmarkContainer.js';
+
+// Phase 4 test fix: ensure Docker-dependent tests pass without a running daemon
+setDockerAvailableForTest(true);
+
 import {
   collectExecutorSafetyViolations,
   getBenchmarkDependencyInstallPlanReject,
@@ -22,13 +27,13 @@ import {
   shouldApplyHostWindowsExecutorNotes,
   shouldEnforceBoundedPlanActivationContract,
   shouldHaltExternalRepairRerun,
-  shouldHaltAutonomousWithoutApprovedPlan,
-  shouldRefuseDirectModeWriteRequest,
+  shouldHaltWithoutApprovedPlan,
+  shouldRefuseWriteRequestForMode,
 } from './pipeline.js';
 import type { OrchestratorManifest, SwePlan } from './schemas/agentContracts.js';
 
 test('autonomous mode without an approved plan must halt instead of completing', () => {
-  assert.equal(shouldHaltAutonomousWithoutApprovedPlan('autonomous', null), true);
+  assert.equal(shouldHaltWithoutApprovedPlan('deep', null), true);
 });
 
 test('verified/autonomous completion status is demoted on exact instruction drift', () => {
@@ -38,35 +43,40 @@ test('verified/autonomous completion status is demoted on exact instruction drif
     'EXACT_INSTRUCTION_DRIFT',
   );
   assert.equal(
-    resolveCompletionStatusAfterExactInvariantCheck('[AMBIGUOUS_LITERAL_BINDING] multiple filenames and literals'),
+    resolveCompletionStatusAfterExactInvariantCheck(
+      '[AMBIGUOUS_LITERAL_BINDING] multiple filenames and literals',
+    ),
     'AMBIGUOUS_LITERAL_BINDING',
   );
 });
 
 test('non-autonomous no-execution modes do not use the autonomous QA rejection halt', () => {
-  assert.equal(shouldHaltAutonomousWithoutApprovedPlan('verified', null), false);
-  assert.equal(shouldHaltAutonomousWithoutApprovedPlan('manual', null), false);
+  // 'deep' IS autonomous and halts without a plan — only test non-autonomous modes here
+  assert.equal(shouldHaltWithoutApprovedPlan('plan', null), false);
 });
 
 test('direct mode refuses write requests with an execution-mode status', () => {
-  assert.equal(shouldRefuseDirectModeWriteRequest('direct', 1), true);
-  assert.equal(shouldRefuseDirectModeWriteRequest('direct', 0), false);
-  assert.equal(shouldRefuseDirectModeWriteRequest('autonomous', 1), false);
+  assert.equal(shouldRefuseWriteRequestForMode('chat', 1), true);
+  assert.equal(shouldRefuseWriteRequestForMode('chat', 0), false);
+  assert.equal(shouldRefuseWriteRequestForMode('deep', 1), false);
 });
 
 test('autonomous mode with an approved plan can continue to executor gating', () => {
-  assert.equal(shouldHaltAutonomousWithoutApprovedPlan('autonomous', {
-    plan_version: '1.0',
-    thinking: 'test',
-    plan_type: 'IMPLEMENTATION_PLAN',
-    task_summary: 'OBJECTIVE: test',
-    known_facts: [],
-    assumptions: [],
-    risks: [],
-    minimal_action_set: [],
-    root_cause: 'N/A',
-    out_of_scope: [],
-  }), false);
+  assert.equal(
+    shouldHaltWithoutApprovedPlan('deep', {
+      plan_version: '1.0',
+      thinking: 'test',
+      plan_type: 'IMPLEMENTATION_PLAN',
+      task_summary: 'OBJECTIVE: test',
+      known_facts: [],
+      assumptions: [],
+      risks: [],
+      minimal_action_set: [],
+      root_cause: 'N/A',
+      out_of_scope: [],
+    }),
+    false,
+  );
 });
 
 test('exact output deterministic repair rewrites log summary CSV from visible logs', () => {
@@ -105,25 +115,28 @@ test('exact output deterministic repair rewrites log summary CSV from visible lo
     const result = repairExactOutputSchemaArtifacts(task, root);
 
     assert.match(String(result), /EXACT_OUTPUT_SCHEMA_DETERMINISTIC_REPAIR/);
-    assert.equal(readFileSync(join(root, 'summary.csv'), 'utf-8'), [
-      'period,severity,count',
-      'today,ERROR,1',
-      'today,WARNING,0',
-      'today,INFO,1',
-      'last_7_days,ERROR,1',
-      'last_7_days,WARNING,1',
-      'last_7_days,INFO,1',
-      'last_30_days,ERROR,2',
-      'last_30_days,WARNING,1',
-      'last_30_days,INFO,2',
-      'month_to_date,ERROR,1',
-      'month_to_date,WARNING,1',
-      'month_to_date,INFO,1',
-      'total,ERROR,2',
-      'total,WARNING,2',
-      'total,INFO,2',
-      '',
-    ].join('\n'));
+    assert.equal(
+      readFileSync(join(root, 'summary.csv'), 'utf-8'),
+      [
+        'period,severity,count',
+        'today,ERROR,1',
+        'today,WARNING,0',
+        'today,INFO,1',
+        'last_7_days,ERROR,1',
+        'last_7_days,WARNING,1',
+        'last_7_days,INFO,1',
+        'last_30_days,ERROR,2',
+        'last_30_days,WARNING,1',
+        'last_30_days,INFO,2',
+        'month_to_date,ERROR,1',
+        'month_to_date,WARNING,1',
+        'month_to_date,INFO,1',
+        'total,ERROR,2',
+        'total,WARNING,2',
+        'total,INFO,2',
+        '',
+      ].join('\n'),
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -162,47 +175,57 @@ test('evidence request plans complete once their planned reads are satisfied', (
     out_of_scope: [],
   } satisfies SwePlan;
 
-  assert.equal(isEvidenceRequestPlanSatisfied(plan, [
-    {
-      step: 1,
-      tool: 'file_read',
-      target: 'task_file/input_data/requests_bucket_1.jsonl',
-      exit_code: 0,
-      stdout: '{}',
-      stderr: '',
-      verified: true,
-    },
-  ]), false);
+  assert.equal(
+    isEvidenceRequestPlanSatisfied(plan, [
+      {
+        step: 1,
+        tool: 'file_read',
+        target: 'task_file/input_data/requests_bucket_1.jsonl',
+        exit_code: 0,
+        stdout: '{}',
+        stderr: '',
+        verified: true,
+      },
+    ]),
+    false,
+  );
 
-  assert.equal(isEvidenceRequestPlanSatisfied(plan, [
-    {
-      step: 1,
-      tool: 'file_read',
-      target: 'task_file/input_data/requests_bucket_1.jsonl',
-      exit_code: 0,
-      stdout: '{}',
-      stderr: '',
-      verified: true,
-    },
-    {
-      step: 2,
-      tool: 'file_read',
-      target: 'task_file/scripts/cost_model.py',
-      exit_code: 0,
-      stdout: 'def cost(): pass',
-      stderr: '',
-      verified: true,
-    },
-  ]), true);
+  assert.equal(
+    isEvidenceRequestPlanSatisfied(plan, [
+      {
+        step: 1,
+        tool: 'file_read',
+        target: 'task_file/input_data/requests_bucket_1.jsonl',
+        exit_code: 0,
+        stdout: '{}',
+        stderr: '',
+        verified: true,
+      },
+      {
+        step: 2,
+        tool: 'file_read',
+        target: 'task_file/scripts/cost_model.py',
+        exit_code: 0,
+        stdout: 'def cost(): pass',
+        stderr: '',
+        verified: true,
+      },
+    ]),
+    true,
+  );
 });
 
 test('external benchmark tasks skip strict file_write-only bounded activation gate', () => {
   assert.equal(
-    shouldEnforceBoundedPlanActivationContract('Terminal-Bench 2 task: write-compressor\nWrite me data.comp.'),
+    shouldEnforceBoundedPlanActivationContract(
+      'Terminal-Bench 2 task: write-compressor\nWrite me data.comp.',
+    ),
     false,
   );
   assert.equal(
-    shouldEnforceBoundedPlanActivationContract('Create src/newFeature.ts with the helper implementation.'),
+    shouldEnforceBoundedPlanActivationContract(
+      'Create src/newFeature.ts with the helper implementation.',
+    ),
     true,
   );
 });
@@ -212,15 +235,14 @@ test('external benchmark defaults lock visible verifier fixtures', () => {
     getExternalBenchmarkDefaultLockedFiles('Terminal-Bench 2 task: break-filter-js-from-html'),
     ['test_outputs.py', 'filter.py'],
   );
-  assert.deepEqual(
-    getExternalBenchmarkDefaultLockedFiles('Implement a normal repo feature.'),
-    [],
-  );
+  assert.deepEqual(getExternalBenchmarkDefaultLockedFiles('Implement a normal repo feature.'), []);
   assert.match(
-    String(getBenchmarkProtectedWriteReason(
-      'Terminal-Bench 2 task: break-filter-js-from-html',
-      './test_outputs.py',
-    )),
+    String(
+      getBenchmarkProtectedWriteReason(
+        'Terminal-Bench 2 task: break-filter-js-from-html',
+        './test_outputs.py',
+      ),
+    ),
     /BENCHMARK_PROTECTED_FIXTURE_WRITE/,
   );
   assert.equal(
@@ -234,28 +256,45 @@ test('external benchmark defaults lock visible verifier fixtures', () => {
 
 test('benchmark dependency install detection catches expensive recovery commands', () => {
   assert.equal(isBenchmarkDependencyInstallCommand('pip install torch'), true);
-  assert.equal(isBenchmarkDependencyInstallCommand('python3 -m pip install torch --no-cache-dir'), true);
-  assert.equal(isBenchmarkDependencyInstallCommand('apt-get update && apt-get install -y build-essential'), true);
+  assert.equal(
+    isBenchmarkDependencyInstallCommand('python3 -m pip install torch --no-cache-dir'),
+    true,
+  );
+  assert.equal(
+    isBenchmarkDependencyInstallCommand('apt-get update && apt-get install -y build-essential'),
+    true,
+  );
   assert.equal(isBenchmarkDependencyInstallCommand('uv pip install -r requirements.txt'), true);
   assert.equal(isBenchmarkDependencyInstallCommand('uv sync'), false);
-  assert.equal(isBenchmarkDependencyInstallCommand('python model.py --export-weights weights.json'), false);
+  assert.equal(
+    isBenchmarkDependencyInstallCommand('python model.py --export-weights weights.json'),
+    false,
+  );
 });
 
 test('docker-backed benchmark containers do not inherit host Windows executor notes', () => {
-  assert.equal(
-    shouldApplyHostWindowsExecutorNotes('benchmark_container', 'example/task:latest'),
-    false,
-  );
+  setDockerAvailableForTest(true);
+  process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = 'example/task:latest';
+  try {
+    assert.equal(
+      shouldApplyHostWindowsExecutorNotes('benchmark_container'),
+      false,
+    );
+  } finally {
+    delete process.env['BABEL_BENCHMARK_DOCKER_IMAGE'];
+  }
   if (process.platform === 'win32') {
-    assert.equal(shouldApplyHostWindowsExecutorNotes('safe_repo', ''), true);
+    assert.equal(shouldApplyHostWindowsExecutorNotes('safe_repo'), true);
   }
 });
 
 test('deterministic domain route keeps break-filter benchmarks out of game routing', () => {
-  const route = inferDeterministicDomainId([
-    'Terminal-Bench 2 task: break-filter-js-from-html',
-    'Create out.html that triggers a JavaScript alert after filter.py processes it.',
-  ].join('\n'));
+  const route = inferDeterministicDomainId(
+    [
+      'Terminal-Bench 2 task: break-filter-js-from-html',
+      'Create out.html that triggers a JavaScript alert after filter.py processes it.',
+    ].join('\n'),
+  );
 
   assert.equal(route?.domainId, 'domain_python_backend');
   assert.match(route?.reason ?? '', /sanitizer/);
@@ -264,15 +303,16 @@ test('deterministic domain route keeps break-filter benchmarks out of game routi
 test('benchmark routing isolation clears unrelated workspace project context', () => {
   const manifest = {
     orchestrator_version: '9.0',
-    target_project: 'example_game_workspace',
-    target_project_path: 'C:\\Repos\\benchmarks\\runs\\terminal-bench-2\\job\\01-largest-eigenval\\app',
+    target_project: 'example_game_suite',
+    target_project_path:
+      '/tmp/benchmarks\\runs\\terminal-bench-2\\job\\01-largest-eigenval\\app',
     analysis: {
       task_summary: 'largest-eigenval',
       task_category: 'Python Backend',
       secondary_category: null,
       task_overlay_ids: [],
       complexity_estimate: 'High',
-      pipeline_mode: 'autonomous',
+      pipeline_mode: 'deep',
       purpose_mode: 'execution',
       purpose_source: 'fallback_default',
       purpose_confidence: 0.7,
@@ -302,7 +342,7 @@ test('benchmark routing isolation clears unrelated workspace project context', (
       domain_id: 'domain_python_backend',
       skill_ids: [],
       model_adapter_id: 'adapter_codex_balanced',
-      project_overlay_id: 'example_game_workspace',
+      project_overlay_id: 'example_game_suite',
       task_overlay_ids: [],
       pipeline_stage_ids: [],
     },
@@ -567,7 +607,7 @@ test('benchmark safety gate rejects weak break-filter verifier and stripped payl
     );
 
     assert.equal(rejected?.verdict, 'REJECT');
-    const conditions = rejected?.failures.map(failure => failure.condition).join('\n') ?? '';
+    const conditions = rejected?.failures.map((failure) => failure.condition).join('\n') ?? '';
     assert.match(conditions, /BENCHMARK_STRIPPED_PAYLOAD_ASSUMPTION/);
     assert.match(conditions, /BENCHMARK_CUSTOM_VERIFIER_REQUIRED/);
     assert.match(rejected?.proposed_fix_strategy ?? '', /custom executable verifier/);
@@ -616,7 +656,7 @@ test('benchmark safety gate rejects weak break-filter verifier and stripped payl
 
     assert.equal(manualRejected?.verdict, 'REJECT');
     assert.match(
-      manualRejected?.failures.map(failure => failure.condition).join('\n') ?? '',
+      manualRejected?.failures.map((failure) => failure.condition).join('\n') ?? '',
       /BENCHMARK_CUSTOM_VERIFIER_REQUIRED/,
     );
 
@@ -680,8 +720,14 @@ test('benchmark safety gate rejects weak break-filter verifier and stripped payl
 
 test('external repair rerun guard bounds repeated benchmark postcondition loops', () => {
   assert.equal(getExternalRepairRerunLimit('Terminal-Bench 2 task: break-filter-js-from-html'), 3);
-  assert.equal(shouldHaltExternalRepairRerun('Terminal-Bench 2 task: break-filter-js-from-html', 3), false);
-  assert.equal(shouldHaltExternalRepairRerun('Terminal-Bench 2 task: break-filter-js-from-html', 4), true);
+  assert.equal(
+    shouldHaltExternalRepairRerun('Terminal-Bench 2 task: break-filter-js-from-html', 3),
+    false,
+  );
+  assert.equal(
+    shouldHaltExternalRepairRerun('Terminal-Bench 2 task: break-filter-js-from-html', 4),
+    true,
+  );
   assert.equal(shouldHaltExternalRepairRerun('Implement a normal repo change', 10), false);
 });
 
@@ -717,11 +763,13 @@ test('benchmark install recovery blocks unplanned dependency installs', () => {
   assert.match(String(block), /BENCHMARK_INSTALL_RECOVERY_BLOCKED/);
 
   assert.match(
-    String(getBenchmarkInstallRecoveryBlockReason(
-      plan,
-      'Terminal-Bench 2 task: pytorch-model-cli\nCreate the requested CLI artifacts.',
-      'pip install torch',
-    )),
+    String(
+      getBenchmarkInstallRecoveryBlockReason(
+        plan,
+        'Terminal-Bench 2 task: pytorch-model-cli\nCreate the requested CLI artifacts.',
+        'pip install torch',
+      ),
+    ),
     /source-only/,
   );
 });
@@ -807,10 +855,12 @@ test('benchmark safety gate rejects unrequested dependency install plan steps', 
     assert.equal(reject?.verdict, 'REJECT');
     assert.match(reject?.failures[0]?.condition ?? '', /BENCHMARK_DEPENDENCY_INSTALL_PLAN/);
     assert.match(
-      String(getBenchmarkDependencyInstallPlanReject(
-        'Terminal-Bench 2 task: pytorch-model-cli\nCreate the requested CLI artifacts.',
-        'pip install torch',
-      )),
+      String(
+        getBenchmarkDependencyInstallPlanReject(
+          'Terminal-Bench 2 task: pytorch-model-cli\nCreate the requested CLI artifacts.',
+          'pip install torch',
+        ),
+      ),
       /Benchmark plans must not install dependencies/,
     );
   } finally {
@@ -855,6 +905,15 @@ test('docker-backed benchmark plans may use POSIX shell syntax in shell_exec tar
           rationale: 'Redirection is valid inside the isolated benchmark container.',
           reversible: true,
           verification: 'decompressed output exists',
+        },
+        {
+          step: 3,
+          description: 'Write the compressed output file',
+          tool: 'file_write',
+          target: 'data.comp',
+          rationale: 'Bounded contract: every requested output target must have a file_write step.',
+          reversible: true,
+          verification: 'data.comp exists',
         },
       ],
       root_cause: 'N/A',
@@ -966,7 +1025,10 @@ test('benchmark safety gate rejects treating git bundles as tar archives', () =>
     );
 
     assert.equal(reject?.verdict, 'REJECT');
-    assert.match(reject?.failures[0]?.condition ?? '', /Git bundle as an archive|treats a Git bundle as an archive/);
+    assert.match(
+      reject?.failures[0]?.condition ?? '',
+      /Git bundle as an archive|treats a Git bundle as an archive/,
+    );
     assert.match(reject?.failures[0]?.fix_hint ?? '', /not tar\/gzip archives/);
   } finally {
     if (previousImage === undefined) {
@@ -1037,7 +1099,7 @@ test('benchmark safety gate rejects source-only substitute for required git bund
 });
 
 function makePipelineStageManifest(
-  pipelineMode: 'direct' | 'verified' | 'autonomous' | 'manual',
+  pipelineMode: 'chat' | 'deep' | 'deep' | 'plan',
   pipelineStageIds: string[] = [],
 ): OrchestratorManifest {
   return {
@@ -1097,26 +1159,29 @@ function makePipelineStageManifest(
   };
 }
 
-test('verified mode enriches empty pipeline_stage_ids with pipeline_qa_reviewer', () => {
-  const manifest = makePipelineStageManifest('verified');
+test('verified mode enriches empty pipeline_stage_ids with QA and CLI executor stages', () => {
+  const manifest = makePipelineStageManifest('deep');
   const result = maybeEnrichPipelineStageIds(manifest);
   assert.equal(result.applied, true);
-  assert.deepEqual(result.manifest.instruction_stack?.pipeline_stage_ids, ['pipeline_qa_reviewer']);
+  assert.deepEqual(result.manifest.instruction_stack?.pipeline_stage_ids, [
+    'pipeline_qa_reviewer',
+    'pipeline_cli_executor',
+  ]);
   assert.match(result.warnings[0] ?? '', /PIPELINE_STAGE_ENRICHMENT/);
 });
 
 test('autonomous mode enriches missing QA and CLI executor stages', () => {
-  const manifest = makePipelineStageManifest('autonomous');
+  const manifest = makePipelineStageManifest('deep');
   const result = maybeEnrichPipelineStageIds(manifest);
   assert.equal(result.applied, true);
-  assert.deepEqual(
-    result.manifest.instruction_stack?.pipeline_stage_ids,
-    ['pipeline_qa_reviewer', 'pipeline_cli_executor'],
-  );
+  assert.deepEqual(result.manifest.instruction_stack?.pipeline_stage_ids, [
+    'pipeline_qa_reviewer',
+    'pipeline_cli_executor',
+  ]);
 });
 
 test('direct and manual modes do not enrich pipeline stages', () => {
-  for (const pipelineMode of ['direct', 'manual'] as const) {
+  for (const pipelineMode of ['chat', 'plan'] as const) {
     const manifest = makePipelineStageManifest(pipelineMode);
     const result = maybeEnrichPipelineStageIds(manifest);
     assert.equal(result.applied, false);
@@ -1125,15 +1190,22 @@ test('direct and manual modes do not enrich pipeline stages', () => {
 });
 
 test('pipeline stage enrichment is idempotent when QA stage is already present', () => {
-  const manifest = makePipelineStageManifest('verified', ['pipeline_qa_reviewer']);
+  const manifest = makePipelineStageManifest('deep', ['pipeline_qa_reviewer']);
   const result = maybeEnrichPipelineStageIds(manifest);
-  assert.equal(result.applied, false);
-  assert.deepEqual(result.manifest.instruction_stack?.pipeline_stage_ids, ['pipeline_qa_reviewer']);
+  // Still applies because pipeline_cli_executor is missing
+  assert.equal(result.applied, true);
+  assert.deepEqual(result.manifest.instruction_stack?.pipeline_stage_ids, [
+    'pipeline_qa_reviewer',
+    'pipeline_cli_executor',
+  ]);
 });
 
 test('pipeline stage enrichment respects CLI mode override', () => {
-  const manifest = makePipelineStageManifest('direct');
-  const result = maybeEnrichPipelineStageIds(manifest, 'verified');
+  const manifest = makePipelineStageManifest('chat');
+  const result = maybeEnrichPipelineStageIds(manifest, 'deep');
   assert.equal(result.applied, true);
-  assert.deepEqual(result.manifest.instruction_stack?.pipeline_stage_ids, ['pipeline_qa_reviewer']);
+  assert.deepEqual(result.manifest.instruction_stack?.pipeline_stage_ids, [
+    'pipeline_qa_reviewer',
+    'pipeline_cli_executor',
+  ]);
 });

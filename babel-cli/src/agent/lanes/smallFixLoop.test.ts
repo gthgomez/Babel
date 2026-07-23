@@ -16,21 +16,33 @@ const context: ToolContext = {
 
 function writeNodeFixture(root: string, implementation: string): void {
   mkdirSync(join(root, 'src'));
-  writeFileSync(join(root, 'package.json'), JSON.stringify({
-    type: 'module',
-    scripts: { test: 'node src/math.test.js' },
-  }, null, 2), 'utf-8');
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify(
+      {
+        type: 'module',
+        scripts: { test: 'node src/math.test.js' },
+      },
+      null,
+      2,
+    ),
+    'utf-8',
+  );
   writeFileSync(join(root, 'src', 'math.js'), implementation, 'utf-8');
-  writeFileSync(join(root, 'src', 'math.test.js'), [
-    "import test from 'node:test';",
-    "import assert from 'node:assert/strict';",
-    "import { add } from './math.js';",
-    '',
-    "test('add sums two numbers', () => {",
-    '  assert.equal(add(1, 2), 3);',
-    '});',
-    '',
-  ].join('\n'), 'utf-8');
+  writeFileSync(
+    join(root, 'src', 'math.test.js'),
+    [
+      "import test from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import { add } from './math.js';",
+      '',
+      "test('add sums two numbers', () => {",
+      '  assert.equal(add(1, 2), 3);',
+      '});',
+      '',
+    ].join('\n'),
+    'utf-8',
+  );
 }
 
 describe('runSmallFixMutationLoop', () => {
@@ -58,8 +70,10 @@ describe('runSmallFixMutationLoop', () => {
       );
       assert.deepEqual(
         result.steps.map((step) => step.phase),
-        ['observe', 'act', 'verify'],
+        ['observe', 'act', 'verify', 'finish'],
       );
+      assert.ok(result.sessionLoopSteps.length >= 2);
+      assert.equal(result.sessionLoopSteps.at(-1)?.phase, 'finish');
       assert.equal(result.steps[1]?.policyDecision, 'allow');
       assert.equal(result.steps[2]?.policyDecision, 'allow');
     } finally {
@@ -95,6 +109,7 @@ describe('runSmallFixMutationLoop', () => {
       assert.equal(result.policyBlocked, true);
       assert.equal(invoked, false);
       assert.match(result.blockedReason ?? '', /Policy denied write_file/);
+      assert.equal(result.sessionLoopSteps.at(-1)?.phase, 'blocked');
       assert.equal(
         readFileSync(join(root, 'src', 'math.js'), 'utf-8'),
         'export const add = () => 0;\n',

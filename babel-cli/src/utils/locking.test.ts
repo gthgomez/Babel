@@ -37,7 +37,10 @@ test('acquireLock blocks competing owners and lets the owner extend', () => {
 test('releaseLock refuses to release another run owner', () => {
   const fixture = makeRoot();
   try {
-    assert.equal(acquireLock('src/file.ts', fixture.root, 'agent-a', 'run-a', 'first', 60).success, true);
+    assert.equal(
+      acquireLock('src/file.ts', fixture.root, 'agent-a', 'run-a', 'first', 60).success,
+      true,
+    );
 
     const release = releaseLock('src/file.ts', fixture.root, 'run-b');
     assert.equal(release.success, false);

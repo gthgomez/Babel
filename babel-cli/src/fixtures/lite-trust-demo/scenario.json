@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "fixture_type": "babel_lite_trust_demo",
-  "visibility": "public_example",
+  "visibility": "private",
   "description": "Offline trust loop: one failing test, mock-provider fix, verifier pass, checkpoint undo.",
   "target_file": "src/math.js",
   "verifier_command": "npm test",
   "task": "Fix the failing Node test. Only edit src/math.js. Run npm test before completing.",
-  "broken_implementation": "export const add = () => 0;\n",
-  "fixed_implementation": "export const add = (a, b) => a + b;\n"
+  "broken_implementation": "export const add = () => 0;\nexport const subtract = () => 0;\n",
+  "fixed_implementation": "export const add = (a, b) => a + b;\nexport const subtract = (a, b) => a - b;\n"
 }

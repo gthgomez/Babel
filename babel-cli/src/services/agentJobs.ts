@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 import { BABEL_RUNS_DIR, type ValidMode } from '../cli/constants.js';
@@ -25,7 +25,7 @@ export const JOB_STATUSES = [
   'failed',
   'verification_failed',
 ] as const;
-export type AgentJobStatus = typeof JOB_STATUSES[number];
+export type AgentJobStatus = (typeof JOB_STATUSES)[number];
 
 export interface AgentJob {
   schema_version: 1;
@@ -49,6 +49,16 @@ export interface AgentJob {
   escalation: ModelEscalationRecommendation;
   report_path: string | null;
   error: string | null;
+  /** Lower = higher priority. Default 0. */
+  priority?: number;
+  /** Maximum retry attempts after failure. Default 0 (no retry). */
+  max_retries?: number;
+  /** Number of retries already attempted. */
+  retry_count?: number;
+  /** User-defined tags for routing/filtering. */
+  tags?: string[];
+  /** ISO timestamp for delayed re-enqueue after backoff. */
+  retry_after?: string;
 }
 
 export interface AgentJobRegistry {
@@ -67,6 +77,9 @@ export interface CreateAgentJobOptions {
   verifyCommands?: string[];
   autoEscalate?: boolean;
   now?: Date;
+  priority?: number;
+  maxRetries?: number;
+  tags?: string[];
 }
 
 export interface AgentJobServiceOptions {
@@ -90,40 +103,50 @@ function readRegistry(path: string): AgentJobRegistry {
   return {
     schema_version: 1,
     jobs: Array.isArray(parsed.jobs)
-      ? parsed.jobs.filter((job): job is AgentJob =>
-          job !== null &&
-          typeof job === 'object' &&
-          typeof (job as AgentJob).id === 'string' &&
-          typeof (job as AgentJob).task === 'string')
+      ? parsed.jobs.filter(
+          (job): job is AgentJob =>
+            job !== null &&
+            typeof job === 'object' &&
+            typeof (job as AgentJob).id === 'string' &&
+            typeof (job as AgentJob).task === 'string',
+        )
       : [],
   };
 }
 
 function writeRegistry(path: string, registry: AgentJobRegistry): void {
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(registry, null, 2)}\n`, 'utf-8');
+  // Atomic write: temp file → rename prevents partial writes on crash.
+  const tmpPath = `${path}.tmp`;
+  writeFileSync(tmpPath, `${JSON.stringify(registry, null, 2)}\n`, 'utf-8');
+  renameSync(tmpPath, path);
 }
 
 function assertJobId(id: string): void {
   if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id)) {
-    throw new Error('Job id must be 1-80 characters and contain only letters, numbers, underscore, or hyphen.');
+    throw new Error(
+      'Job id must be 1-80 characters and contain only letters, numbers, underscore, or hyphen.',
+    );
   }
 }
 
 function makeJobId(date: Date): string {
-  return `job-${date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')}`;
+  return `job-${date
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}Z$/, 'Z')}`;
 }
 
 function normalizeVerifyCommands(commands: string[] | undefined): string[] {
-  return [...new Set((commands ?? []).map(command => command.trim()).filter(Boolean))];
+  return [...new Set((commands ?? []).map((command) => command.trim()).filter(Boolean))];
 }
 
 function pendingApprovalIds(job: AgentJob): string[] {
-  return job.approval_ids.filter(id => inspectApproval(id)?.status === 'pending');
+  return job.approval_ids.filter((id) => inspectApproval(id)?.status === 'pending');
 }
 
 function allApprovalsGranted(job: AgentJob): boolean {
-  return job.approval_ids.every(id => inspectApproval(id)?.status === 'approved');
+  return job.approval_ids.every((id) => inspectApproval(id)?.status === 'approved');
 }
 
 export function listAgentJobs(options: AgentJobServiceOptions = {}): {
@@ -133,12 +156,14 @@ export function listAgentJobs(options: AgentJobServiceOptions = {}): {
   const registryPath = resolveRegistryPath(options);
   return {
     registry_path: registryPath,
-    jobs: readRegistry(registryPath).jobs.sort((left, right) => right.updated_at.localeCompare(left.updated_at)),
+    jobs: readRegistry(registryPath).jobs.sort((left, right) =>
+      right.updated_at.localeCompare(left.updated_at),
+    ),
   };
 }
 
 export function getAgentJob(id: string, options: AgentJobServiceOptions = {}): AgentJob | null {
-  return readRegistry(resolveRegistryPath(options)).jobs.find(job => job.id === id) ?? null;
+  return readRegistry(resolveRegistryPath(options)).jobs.find((job) => job.id === id) ?? null;
 }
 
 export function createAgentJob(options: CreateAgentJobOptions & AgentJobServiceOptions): AgentJob {
@@ -154,13 +179,13 @@ export function createAgentJob(options: CreateAgentJobOptions & AgentJobServiceO
 
   const registryPath = resolveRegistryPath(options);
   const registry = readRegistry(registryPath);
-  if (registry.jobs.some(job => job.id === id)) {
+  if (registry.jobs.some((job) => job.id === id)) {
     throw new Error(`Job already exists: ${id}`);
   }
 
-  const executionProfile = options.executionProfile ?? 'workspace_manager';
+  const executionProfile = options.executionProfile ?? 'opencalw_manager';
   const resolvedProject = options.projectRoot
-    ? executionProfile === 'workspace_manager'
+    ? executionProfile === 'opencalw_manager'
       ? resolveApprovedWorkspacePath(options.projectRoot)
       : { path: resolve(options.projectRoot), approvedRoots: [] }
     : { path: null, approvedRoots: [] };
@@ -186,7 +211,7 @@ export function createAgentJob(options: CreateAgentJobOptions & AgentJobServiceO
     created_at: now,
     updated_at: now,
     status: approvalIds.length > 0 ? 'waiting_approval' : 'queued',
-    mode: options.mode ?? 'verified',
+    mode: options.mode ?? 'deep',
     execution_profile: executionProfile,
     project_root: resolvedProject.path,
     approved_roots: resolvedProject.approvedRoots,
@@ -201,6 +226,10 @@ export function createAgentJob(options: CreateAgentJobOptions & AgentJobServiceO
     escalation,
     report_path: null,
     error: null,
+    priority: options.priority ?? 0,
+    max_retries: options.maxRetries ?? 0,
+    retry_count: 0,
+    tags: options.tags ?? [],
   };
 
   registry.jobs.push(job);
@@ -215,7 +244,7 @@ export function updateAgentJob(
 ): AgentJob {
   const registryPath = resolveRegistryPath(options);
   const registry = readRegistry(registryPath);
-  const index = registry.jobs.findIndex(job => job.id === id);
+  const index = registry.jobs.findIndex((job) => job.id === id);
   if (index < 0) {
     throw new Error(`Job not found: ${id}`);
   }
@@ -245,7 +274,10 @@ export function resumeAgentJob(id: string, options: AgentJobServiceOptions = {})
   return updateAgentJob(id, { status: 'queued', error: null }, options);
 }
 
-export function approveAgentJob(id: string, options: { ttlHours?: number } & AgentJobServiceOptions = {}): {
+export function approveAgentJob(
+  id: string,
+  options: { ttlHours?: number } & AgentJobServiceOptions = {},
+): {
   job: AgentJob;
   approvals: ApprovalRecord[];
 } {
@@ -255,14 +287,25 @@ export function approveAgentJob(id: string, options: { ttlHours?: number } & Age
   }
 
   const approvals = job.approval_ids
-    .map(approvalId => inspectApproval(approvalId))
+    .map((approvalId) => inspectApproval(approvalId))
     .filter((record): record is ApprovalRecord => record !== null)
-    .map(record => record.status === 'pending'
-      ? approveApproval(record.id, options.ttlHours !== undefined ? { ttlHours: options.ttlHours } : {})
-      : record);
-  const updated = updateAgentJob(id, {
-    status: allApprovalsGranted({ ...job, approval_ids: approvals.map(record => record.id) }) ? 'queued' : 'waiting_approval',
-  }, options);
+    .map((record) =>
+      record.status === 'pending'
+        ? approveApproval(
+            record.id,
+            options.ttlHours !== undefined ? { ttlHours: options.ttlHours } : {},
+          )
+        : record,
+    );
+  const updated = updateAgentJob(
+    id,
+    {
+      status: allApprovalsGranted({ ...job, approval_ids: approvals.map((record) => record.id) })
+        ? 'queued'
+        : 'waiting_approval',
+    },
+    options,
+  );
   return { job: updated, approvals };
 }
 
@@ -272,12 +315,12 @@ export function getAgentJobApprovalState(job: AgentJob): {
   denied: string[];
 } {
   const records = job.approval_ids
-    .map(id => inspectApproval(id))
+    .map((id) => inspectApproval(id))
     .filter((record): record is ApprovalRecord => record !== null);
   return {
-    pending: records.filter(record => record.status === 'pending').map(record => record.id),
-    approved: records.filter(record => record.status === 'approved').map(record => record.id),
-    denied: records.filter(record => record.status === 'denied').map(record => record.id),
+    pending: records.filter((record) => record.status === 'pending').map((record) => record.id),
+    approved: records.filter((record) => record.status === 'approved').map((record) => record.id),
+    denied: records.filter((record) => record.status === 'denied').map((record) => record.id),
   };
 }
 
@@ -316,6 +359,8 @@ export function formatAgentJobListHuman(payload: ReturnType<typeof listAgentJobs
     'Babel Jobs',
     `Registry: ${payload.registry_path}`,
     '',
-    ...payload.jobs.map(job => `${job.id}: ${job.status} ${job.project_root ?? '(no project)'} :: ${job.task}`),
+    ...payload.jobs.map(
+      (job) => `${job.id}: ${job.status} ${job.project_root ?? '(no project)'} :: ${job.task}`,
+    ),
   ].join('\n');
 }

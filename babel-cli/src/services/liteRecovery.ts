@@ -2,11 +2,15 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from '
 import { join, resolve } from 'node:path';
 
 import { AgentSession } from '../agent/session.js';
-import type { AgentSessionResult, AgentWorkerLoopStep, LiteSessionVerb } from '../agent/contracts.js';
+import type {
+  AgentSessionResult,
+  AgentWorkerLoopStep,
+  LiteSessionVerb,
+} from '../agent/contracts.js';
 import { defaultArtifactRoot } from '../agent/liteArtifacts.js';
 import { buildRecoveryAssessment, type RecoveryAssessment } from './recovery.js';
 
-export const WORKER_CHAIN_VERBS: readonly LiteSessionVerb[] = ['plan', 'propose', 'fix', 'review', 'undo'];
+export const WORKER_CHAIN_VERBS: readonly LiteSessionVerb[] = ['plan', 'propose', 'fix'];
 
 export interface WorkerChainManifest {
   schema_version: 1;
@@ -54,7 +58,7 @@ function readJson(path: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf-8')) as unknown;
     return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
+      ? (parsed as Record<string, unknown>)
       : null;
   } catch {
     return null;
@@ -71,19 +75,21 @@ export function parseWorkerChainManifest(raw: Record<string, unknown>): WorkerCh
   }
   const steps = Array.isArray(raw['steps'])
     ? raw['steps'].filter((step): step is AgentWorkerLoopStep => {
-      if (step === null || typeof step !== 'object' || Array.isArray(step)) {
-        return false;
-      }
-      const record = step as Record<string, unknown>;
-      return typeof record['verb'] === 'string' && typeof record['status'] === 'string';
-    })
+        if (step === null || typeof step !== 'object' || Array.isArray(step)) {
+          return false;
+        }
+        const record = step as Record<string, unknown>;
+        return typeof record['verb'] === 'string' && typeof record['status'] === 'string';
+      })
     : [];
-  const nextVerb = typeof raw['next_verb'] === 'string' && isLiteSessionVerb(raw['next_verb'])
-    ? raw['next_verb']
-    : null;
-  const failedStep = typeof raw['failed_step'] === 'string' && isLiteSessionVerb(raw['failed_step'])
-    ? raw['failed_step']
-    : undefined;
+  const nextVerb =
+    typeof raw['next_verb'] === 'string' && isLiteSessionVerb(raw['next_verb'])
+      ? raw['next_verb']
+      : null;
+  const failedStep =
+    typeof raw['failed_step'] === 'string' && isLiteSessionVerb(raw['failed_step'])
+      ? raw['failed_step']
+      : undefined;
   const chainStatus = raw['chain_status'];
   if (chainStatus !== 'in_progress' && chainStatus !== 'complete' && chainStatus !== 'failed') {
     return null;
@@ -109,7 +115,8 @@ export function parseWorkerChainManifest(raw: Record<string, unknown>): WorkerCh
     steps,
     next_verb: nextVerb,
     ...(failedStep !== undefined ? { failed_step: failedStep } : {}),
-    updated_at: typeof raw['updated_at'] === 'string' ? raw['updated_at'] : new Date().toISOString(),
+    updated_at:
+      typeof raw['updated_at'] === 'string' ? raw['updated_at'] : new Date().toISOString(),
   };
 }
 
@@ -117,7 +124,10 @@ export function workerChainManifestPath(sessionRunDir: string): string {
   return join(sessionRunDir, 'worker_chain_manifest.json');
 }
 
-export function writeWorkerChainManifest(sessionRunDir: string, manifest: WorkerChainManifest): string {
+export function writeWorkerChainManifest(
+  sessionRunDir: string,
+  manifest: WorkerChainManifest,
+): string {
   const path = workerChainManifestPath(sessionRunDir);
   writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
   return path;
@@ -172,8 +182,12 @@ export function nextWorkerChainVerb(manifest: WorkerChainManifest): LiteSessionV
   return manifest.next_verb;
 }
 
-export function buildLiteContinueAssessment(options: LiteContinueOptions = {}): LiteContinueAssessment {
-  const projectRoot = resolve(options.projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? process.cwd());
+export function buildLiteContinueAssessment(
+  options: LiteContinueOptions = {},
+): LiteContinueAssessment {
+  const projectRoot = resolve(
+    options.projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? process.cwd(),
+  );
   const manifest = findLatestWorkerChainManifest(projectRoot, options.run ?? 'latest');
   if (manifest) {
     const resumeVerb = nextWorkerChainVerb(manifest);
@@ -202,9 +216,10 @@ export function buildLiteContinueAssessment(options: LiteContinueOptions = {}): 
       chain_status: manifest.chain_status,
       next_verb: resumeVerb,
       failed_step: manifest.failed_step ?? null,
-      reason: manifest.chain_status === 'failed'
-        ? `Worker chain paused at ${manifest.failed_step ?? resumeVerb}; resume will retry ${resumeVerb}.`
-        : `Worker chain ready for ${resumeVerb} (linked session ${manifest.session_run_id}).`,
+      reason:
+        manifest.chain_status === 'failed'
+          ? `Worker chain paused at ${manifest.failed_step ?? resumeVerb}; resume will retry ${resumeVerb}.`
+          : `Worker chain ready for ${resumeVerb} (linked session ${manifest.session_run_id}).`,
       next_action: `Resume ${resumeVerb} from linked worker-chain manifest.`,
       next_command: nextCommand,
       manifest,
@@ -217,9 +232,10 @@ export function buildLiteContinueAssessment(options: LiteContinueOptions = {}): 
     ...(options.project !== undefined ? { project: options.project } : {}),
   });
   return {
-    status: recovery.status === 'CONTINUE_READY' && recovery.classification === null
-      ? 'CHAIN_COMPLETE'
-      : recovery.status,
+    status:
+      recovery.status === 'CONTINUE_READY' && recovery.classification === null
+        ? 'CHAIN_COMPLETE'
+        : recovery.status,
     source: 'babel_run',
     run_dir: recovery.run_dir,
     session_run_dir: null,
@@ -259,9 +275,15 @@ export function formatLiteContinueAssessmentHuman(assessment: LiteContinueAssess
   return lines.join('\n');
 }
 
-export async function resumeLiteWorkerChain(options: LiteContinueOptions = {}): Promise<AgentSessionResult | null> {
+export async function resumeLiteWorkerChain(
+  options: LiteContinueOptions = {},
+): Promise<AgentSessionResult | null> {
   const assessment = buildLiteContinueAssessment(options);
-  if (assessment.source !== 'worker_chain' || assessment.status !== 'CONTINUE_READY' || !assessment.next_verb) {
+  if (
+    assessment.source !== 'worker_chain' ||
+    assessment.status !== 'CONTINUE_READY' ||
+    !assessment.next_verb
+  ) {
     return null;
   }
   const manifest = assessment.manifest;
@@ -289,14 +311,14 @@ export async function resumeLiteWorkerChain(options: LiteContinueOptions = {}): 
     run_dir: typeof result.payload['run_dir'] === 'string' ? result.payload['run_dir'] : null,
   } satisfies AgentWorkerLoopStep;
 
-  const priorSteps = manifest.steps.filter(existing => existing.verb !== assessment.next_verb);
+  const priorSteps = manifest.steps.filter((existing) => existing.verb !== assessment.next_verb);
   const updatedSteps = [...priorSteps, step];
   const failed = result.exitCode !== 0;
   const nextIndex = WORKER_CHAIN_VERBS.indexOf(assessment.next_verb) + 1;
   const nextVerb = failed
     ? assessment.next_verb
     : nextIndex < WORKER_CHAIN_VERBS.length
-      ? WORKER_CHAIN_VERBS[nextIndex] ?? null
+      ? (WORKER_CHAIN_VERBS[nextIndex] ?? null)
       : null;
   const updatedManifest: WorkerChainManifest = {
     ...manifest,

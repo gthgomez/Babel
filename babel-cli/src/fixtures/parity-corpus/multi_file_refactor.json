@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "fixture_type": "babel_parity_corpus_task",
+  "task_id": "multi_file_refactor",
+  "parity_task_id": "multi_file_refactor",
+  "title": "Multi-file refactor",
+  "repo_kind": "multi_file_fix",
+  "target_file": "src/math.js",
+  "verifier_command": "npm test",
+  "task": "Fix the failing add and format tests. Only edit src/math.js and src/format.js.",
+  "broken_implementation": "export const add = (a, b) => a - b;\n",
+  "fixed_implementation": "export const add = (a, b) => a + b;\n",
+  "test_source": "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { add } from './math.js';\nimport { formatNumber } from './format.js';\n\ntest('add sums two numbers', () => {\n  assert.equal(add(1, 2), 3);\n});\n\ntest('formatNumber renders integers', () => {\n  assert.equal(formatNumber(7), '7');\n});\n",
+  "files": {
+    "src/format.js": {
+      "broken": "export const formatNumber = (value) => `n=${value}`;\n",
+      "fixed": "export const formatNumber = (value) => String(value);\n"
+    }
+  }
+}

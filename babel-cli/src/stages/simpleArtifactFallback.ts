@@ -12,14 +12,8 @@ import {
   isWriteReportTarget,
   normalizePathForComparison,
 } from './taskShape.js';
-import {
-  isWithinProjectRootPath,
-  resolveStepTargetPath,
-} from './executorHelpers.js';
-import {
-  resolveFileLiteralBinding,
-  type FileLiteralBindingResolution,
-} from './exactInvariants.js';
+import { isWithinProjectRootPath, resolveStepTargetPath } from './executorHelpers.js';
+import { resolveFileLiteralBinding, type FileLiteralBindingResolution } from './exactInvariants.js';
 
 export interface DeterministicSimpleWrite {
   target: string;
@@ -36,13 +30,13 @@ const DIRECT_BOUNDED_WRITE_TOOLS = new Set(['directory_list', 'file_read', 'file
 
 function getBoundedSimpleWritePlanTargets(approvedPlan: SwePlan): string[] {
   return approvedPlan.minimal_action_set
-    .filter(step => step.tool === 'file_write')
-    .map(step => normalizePathForComparison(String(step.target ?? '')))
-    .filter(target => target.length > 0);
+    .filter((step) => step.tool === 'file_write')
+    .map((step) => normalizePathForComparison(String(step.target ?? '')))
+    .filter((target) => target.length > 0);
 }
 
 function isBoundedSimpleWritePlan(approvedPlan: SwePlan): boolean {
-  return approvedPlan.minimal_action_set.every(step =>
+  return approvedPlan.minimal_action_set.every((step) =>
     DIRECT_BOUNDED_WRITE_TOOLS.has(String(step.tool)),
   );
 }
@@ -53,8 +47,8 @@ function escapeHtmlExpression(valueExpression: string): string {
 
 function buildWriteReportContent(targets: string[]): string {
   const artifactLines = targets
-    .filter(target => !isWriteReportTarget(target))
-    .map(target => `- \`${target}\`: created as requested.`)
+    .filter((target) => !isWriteReportTarget(target))
+    .map((target) => `- \`${target}\`: created as requested.`)
     .join('\n');
 
   return [
@@ -112,7 +106,9 @@ function buildMarkdownContent(target: string): string {
   }
 
   return [
-    `# ${getPathBasename(target).replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ')}`,
+    `# ${getPathBasename(target)
+      .replace(/\.[^.]+$/, '')
+      .replace(/[-_]+/g, ' ')}`,
     '',
     'This file was created for the requested bounded task.',
     '',
@@ -143,7 +139,9 @@ function buildScriptContent(target: string): string {
 
 function buildKotlinContent(target: string): string {
   const basename = getPathBasename(target).replace(/\.[^.]+$/, '');
-  const packageMatch = normalizePathForComparison(target).match(/app\/src\/main\/java\/(.+)\/[^/]+\.kt$/i);
+  const packageMatch = normalizePathForComparison(target).match(
+    /app\/src\/main\/java\/(.+)\/[^/]+\.kt$/i,
+  );
   const packageName = packageMatch?.[1]?.replace(/\//g, '.');
 
   if (basename === 'SanitizeFilename') {
@@ -220,12 +218,9 @@ function buildJsContent(symbolName: string): string {
     ].join('\n');
   }
 
-  return [
-    `export function ${symbolName}(...args) {`,
-    '  return args.join(" ");',
-    '}',
-    '',
-  ].join('\n');
+  return [`export function ${symbolName}(...args) {`, '  return args.join(" ");', '}', ''].join(
+    '\n',
+  );
 }
 
 function buildTsContent(symbolName: string): string {
@@ -309,10 +304,7 @@ function getLiteralBindingContent(binding: FileLiteralBindingResolution): string
   return binding.constraint.literal;
 }
 
-export function buildDeterministicSimpleFileContent(
-  target: string,
-  rawTask: string,
-): string {
+export function buildDeterministicSimpleFileContent(target: string, rawTask: string): string {
   const contract = getRequestedTargetContract(rawTask);
   const normalizedTarget = normalizePathForComparison(target);
   const boundLiteral = getLiteralBindingContent(
@@ -322,13 +314,17 @@ export function buildDeterministicSimpleFileContent(
     return boundLiteral;
   }
   const expectations = contract.expectationsByTarget.get(normalizedTarget) ?? [];
-  const taskSymbol =
-    /\brenderToggle\s*\(/i.test(rawTask) ? 'renderToggle' :
-    /\bformatDisplayName\s*\(/i.test(rawTask) ? 'formatDisplayName' :
-    null;
-  const exportedSymbol = expectations.find(expectation => expectation.kind === 'exported_symbol')?.symbolName
-    ?? taskSymbol
-    ?? getPathBasename(normalizedTarget).replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9_$]/g, '');
+  const taskSymbol = /\brenderToggle\s*\(/i.test(rawTask)
+    ? 'renderToggle'
+    : /\bformatDisplayName\s*\(/i.test(rawTask)
+      ? 'formatDisplayName'
+      : null;
+  const exportedSymbol =
+    expectations.find((expectation) => expectation.kind === 'exported_symbol')?.symbolName ??
+    taskSymbol ??
+    getPathBasename(normalizedTarget)
+      .replace(/\.[^.]+$/, '')
+      .replace(/[^A-Za-z0-9_$]/g, '');
 
   if (isWriteReportTarget(normalizedTarget)) {
     return buildWriteReportContent(contract.requestedTargets);
@@ -355,7 +351,10 @@ export function buildDeterministicSimpleFileContent(
   return 'Created for the requested bounded task.\n';
 }
 
-function getAmbiguousLiteralBindingReasonForTargets(rawTask: string, targets: readonly string[]): string | null {
+function getAmbiguousLiteralBindingReasonForTargets(
+  rawTask: string,
+  targets: readonly string[],
+): string | null {
   const registry = getRequestedTargetContract(rawTask).exactInvariants;
   for (const target of targets) {
     const binding = resolveFileLiteralBinding(registry, target);
@@ -372,7 +371,11 @@ export function getNextDeterministicSimpleWrite(
   toolCallLog: ToolCallLog[],
 ): DeterministicSimpleWrite | null {
   const contract = getRequestedTargetContract(rawTask);
-  if (!contract.bounded || contract.requestedTargets.length === 0 || contract.requestedTargets.length > 6) {
+  if (
+    !contract.bounded ||
+    contract.requestedTargets.length === 0 ||
+    contract.requestedTargets.length > 6
+  ) {
     return null;
   }
 
@@ -380,18 +383,21 @@ export function getNextDeterministicSimpleWrite(
     return null;
   }
 
-  const requestedTargets = new Set(contract.requestedTargets.map(target => target.toLowerCase()));
-  const ambiguousLiteralBinding = getAmbiguousLiteralBindingReasonForTargets(rawTask, contract.requestedTargets);
+  const requestedTargets = new Set(contract.requestedTargets.map((target) => target.toLowerCase()));
+  const ambiguousLiteralBinding = getAmbiguousLiteralBindingReasonForTargets(
+    rawTask,
+    contract.requestedTargets,
+  );
   if (ambiguousLiteralBinding) {
     return null;
   }
   const writtenTargets = new Set(
     toolCallLog
-      .filter(entry => entry.tool === 'file_write' && entry.exit_code === 0)
-      .map(entry => normalizePathForComparison(String(entry.target ?? '')).toLowerCase()),
+      .filter((entry) => entry.tool === 'file_write' && entry.exit_code === 0)
+      .map((entry) => normalizePathForComparison(String(entry.target ?? '')).toLowerCase()),
   );
 
-  const nextWrite = approvedPlan.minimal_action_set.find(step => {
+  const nextWrite = approvedPlan.minimal_action_set.find((step) => {
     if (step.tool !== 'file_write') {
       return false;
     }
@@ -417,7 +423,11 @@ export function getDeterministicSimpleRepairWrite(
   failedTarget: string,
 ): DeterministicSimpleWrite | null {
   const contract = getRequestedTargetContract(rawTask);
-  if (!contract.bounded || contract.requestedTargets.length === 0 || contract.requestedTargets.length > 6) {
+  if (
+    !contract.bounded ||
+    contract.requestedTargets.length === 0 ||
+    contract.requestedTargets.length > 6
+  ) {
     return null;
   }
 
@@ -426,14 +436,19 @@ export function getDeterministicSimpleRepairWrite(
   }
 
   const normalizedTarget = normalizePathForComparison(failedTarget);
-  const requestedTargets = new Set(contract.requestedTargets.map(target => target.toLowerCase()));
-  const ambiguousLiteralBinding = getAmbiguousLiteralBindingReasonForTargets(rawTask, contract.requestedTargets);
+  const requestedTargets = new Set(contract.requestedTargets.map((target) => target.toLowerCase()));
+  const ambiguousLiteralBinding = getAmbiguousLiteralBindingReasonForTargets(
+    rawTask,
+    contract.requestedTargets,
+  );
   if (ambiguousLiteralBinding) {
     return null;
   }
-  const isPlannedWrite = approvedPlan.minimal_action_set.some(step =>
-    step.tool === 'file_write' &&
-    normalizePathForComparison(String(step.target ?? '')).toLowerCase() === normalizedTarget.toLowerCase(),
+  const isPlannedWrite = approvedPlan.minimal_action_set.some(
+    (step) =>
+      step.tool === 'file_write' &&
+      normalizePathForComparison(String(step.target ?? '')).toLowerCase() ===
+        normalizedTarget.toLowerCase(),
   );
 
   if (!isPlannedWrite || !requestedTargets.has(normalizedTarget.toLowerCase())) {
@@ -457,28 +472,37 @@ export function getDirectBoundedWritePlan(
   }
 
   const contract = getRequestedTargetContract(rawTask);
-  if (!contract.bounded || contract.requestedTargets.length === 0 || contract.requestedTargets.length > 6) {
+  if (
+    !contract.bounded ||
+    contract.requestedTargets.length === 0 ||
+    contract.requestedTargets.length > 6
+  ) {
     return null;
   }
 
-  const requestedTargets = contract.requestedTargets.map(target => normalizePathForComparison(target));
-  const ambiguousLiteralBinding = getAmbiguousLiteralBindingReasonForTargets(rawTask, requestedTargets);
+  const requestedTargets = contract.requestedTargets.map((target) =>
+    normalizePathForComparison(target),
+  );
+  const ambiguousLiteralBinding = getAmbiguousLiteralBindingReasonForTargets(
+    rawTask,
+    requestedTargets,
+  );
   if (ambiguousLiteralBinding) {
     return null;
   }
-  const requestedTargetSet = new Set(requestedTargets.map(target => target.toLowerCase()));
+  const requestedTargetSet = new Set(requestedTargets.map((target) => target.toLowerCase()));
   const plannedWriteTargets = getBoundedSimpleWritePlanTargets(approvedPlan);
-  const plannedWriteTargetSet = new Set(plannedWriteTargets.map(target => target.toLowerCase()));
+  const plannedWriteTargetSet = new Set(plannedWriteTargets.map((target) => target.toLowerCase()));
 
   if (plannedWriteTargets.length === 0) {
     return null;
   }
 
-  if (!requestedTargets.every(target => plannedWriteTargetSet.has(target.toLowerCase()))) {
+  if (!requestedTargets.every((target) => plannedWriteTargetSet.has(target.toLowerCase()))) {
     return null;
   }
 
-  if (!plannedWriteTargets.every(target => requestedTargetSet.has(target.toLowerCase()))) {
+  if (!plannedWriteTargets.every((target) => requestedTargetSet.has(target.toLowerCase()))) {
     return null;
   }
 
@@ -489,8 +513,7 @@ export function getDirectBoundedWritePlan(
     }
     const binding = resolveFileLiteralBinding(contract.exactInvariants, target);
     const exactEntireFileUpdate =
-      binding.status === 'matched' &&
-      binding.constraint.relation === 'entire_file_equals';
+      binding.status === 'matched' && binding.constraint.relation === 'entire_file_equals';
     if (existsSync(resolvedTarget) && !exactEntireFileUpdate) {
       return null;
     }
@@ -498,7 +521,7 @@ export function getDirectBoundedWritePlan(
 
   return {
     reason: 'bounded greenfield file-write plan with exact requested targets',
-    writes: requestedTargets.map(target => ({
+    writes: requestedTargets.map((target) => ({
       target,
       content: buildDeterministicSimpleFileContent(target, rawTask),
       reason: 'direct deterministic bounded execution',

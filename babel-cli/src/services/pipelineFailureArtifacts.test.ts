@@ -8,7 +8,7 @@ import {
 
 test('pre-execution provider schema failures produce resumable artifacts', () => {
   const artifacts = buildPreExecutionFailureArtifacts({
-    runDir: 'C:\\Repos\\project repository\\runs\\example',
+    runDir: '/tmp/babel-repo\\runs\\example',
     error: new Error('[deepInfraApi] Zod validation failed: missing minimal_action_set'),
   });
 
@@ -19,5 +19,8 @@ test('pre-execution provider schema failures produce resumable artifacts', () =>
   assert.equal(artifacts.failureCapsule.failure_code, 'PROVIDER_SCHEMA_INVALID');
   assert.equal(artifacts.failureCapsule.retryable, true);
   assert.equal(artifacts.failureCapsule.changed_files.length, 0);
-  assert.match(artifacts.failureCapsulePath, new RegExp(`${PRE_EXECUTION_FAILURE_CAPSULE_FILENAME.replace('.', '\\.')}$`));
+  assert.match(
+    artifacts.failureCapsulePath,
+    new RegExp(`${PRE_EXECUTION_FAILURE_CAPSULE_FILENAME.replace('.', '\\.')}$`),
+  );
 });

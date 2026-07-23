@@ -1,0 +1,11 @@
+{
+  "id": "single-file",
+  "description": "Single-file bug fix on Python repos — all SWE-A tier tasks",
+  "select": { "skills": ["single_file", "python"] },
+  "phaseGuidance": {
+    "explore": "LOCALIZATION LADDER (required before any mutate — stay narrow like a 2–3 read path): 1) Open FAIL_TO_PASS / issue-named test files FIRST (test file headers name the API under test). 2) Grep ONLY the issue's API/symbols (backticks or Foo.bar) — do not broad-glob the repo. 3) Read ONLY a tight region (~20 lines) around the grep match (read_range preferred). Expand once if needed; never full-file first reads. 4) Prefer ONE targeted str_replace as soon as the symbol is clear. Do NOT edit a related helper (e.g. reset) when the issue names a different API (e.g. clear).",
+    "diagnose": "Root cause = named API in the issue/tests, not a cousin method. Read FAIL_TO_PASS / issue tests before production code when both exist. Single-file bugs are usually a few lines of incorrect logic on the correct symbol.",
+    "fix": "MUTATE BEFORE VERIFY: localize → one str_replace → then targeted pytest. Do NOT run pytest or any test suite before your first str_replace — mutate first, verify after. ONE file, ONE targeted str_replace, prefer under ~10 lines total. Match the symbols named in the issue (add def clear / route clear call sites — do not only rewrite a cousin method). Read only ~5–10 surrounding lines for old_str. If str_replace fails, re-read that exact region FIRST, then retry.",
+    "verify": "Run targeted pytest ONLY after your str_replace (python -m pytest path::test -q, optionally with 2>&1). Fallback: python -m unittest or python -c under BABEL_ALLOW_INTERPRETER_EVAL. Do NOT run the full suite. Do NOT invent _verify*.py as sole proof. If the test environment is broken (import errors, missing packages), report BLOCKED / patch-ready — do NOT install packages or shell-thrash to fix the environment. A green local test is NOT enough if you edited the wrong method — re-check symbol coverage vs the issue."
+  }
+}

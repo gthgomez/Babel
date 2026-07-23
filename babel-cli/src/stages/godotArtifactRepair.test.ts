@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import type { ToolCallLog } from '../schemas/agentContracts.js';
-import { evaluateRunnableArtifactGate, type RunnableArtifactGateResult } from './runnableArtifactGate.js';
+import {
+  evaluateRunnableArtifactGate,
+  type RunnableArtifactGateResult,
+} from './runnableArtifactGate.js';
 import type { RuntimeVerificationResult } from './runtimeVerificationRunner.js';
 import {
   repairGodotBootstrapArtifacts,
@@ -22,42 +25,60 @@ function writeTemplate(babelRoot: string): string {
   const template = join(babelRoot, 'templates', 'godot-mobile-2d');
   mkdirSync(join(template, 'scenes'), { recursive: true });
   mkdirSync(join(template, 'scripts'), { recursive: true });
-  writeFileSync(join(template, 'project.godot'), 'config_version=5\n\n[application]\nrun/main_scene="res://scenes/Main.tscn"\n', 'utf-8');
-  writeFileSync(join(template, 'scenes', 'Main.tscn'), '[gd_scene load_steps=2 format=3]\n[ext_resource type="Script" path="res://scripts/Main.gd" id="1_main"]\n[node name="Main" type="Node2D"]\nscript = ExtResource("1_main")\n', 'utf-8');
+  writeFileSync(
+    join(template, 'project.godot'),
+    'config_version=5\n\n[application]\nrun/main_scene="res://scenes/Main.tscn"\n',
+    'utf-8',
+  );
+  writeFileSync(
+    join(template, 'scenes', 'Main.tscn'),
+    '[gd_scene load_steps=2 format=3]\n[ext_resource type="Script" path="res://scripts/Main.gd" id="1_main"]\n[node name="Main" type="Node2D"]\nscript = ExtResource("1_main")\n',
+    'utf-8',
+  );
   writeFileSync(join(template, 'scripts', 'Main.gd'), 'extends Node2D\n', 'utf-8');
   writeFileSync(join(template, 'export_presets.cfg'), '[preset.0]\nplatform="Android"\n', 'utf-8');
   writeFileSync(join(template, 'README.md'), '# Scaffold\n', 'utf-8');
   return template;
 }
 
-function writeProject(root: string, content = 'config_version=5\n\n[application]\nrun/main_scene="res://scenes/Main.tscn"\n'): void {
+function writeProject(
+  root: string,
+  content = 'config_version=5\n\n[application]\nrun/main_scene="res://scenes/Main.tscn"\n',
+): void {
   writeFileSync(join(root, 'project.godot'), content, 'utf-8');
 }
 
 function writeMainScene(root: string): void {
   mkdirSync(join(root, 'scenes'), { recursive: true });
-  writeFileSync(join(root, 'scenes', 'Main.tscn'), '[gd_scene load_steps=2 format=3]\n[ext_resource type="Script" path="res://scripts/Main.gd" id="1_main"]\n[node name="Main" type="Node2D"]\nscript = ExtResource("1_main")\n', 'utf-8');
+  writeFileSync(
+    join(root, 'scenes', 'Main.tscn'),
+    '[gd_scene load_steps=2 format=3]\n[ext_resource type="Script" path="res://scripts/Main.gd" id="1_main"]\n[node name="Main" type="Node2D"]\nscript = ExtResource("1_main")\n',
+    'utf-8',
+  );
 }
 
 function toolLog(): ToolCallLog[] {
-  return [{
-    step: 1,
-    tool: 'file_write',
-    target: 'project.godot',
-    exit_code: 0,
-    stdout: 'written',
-    stderr: '',
-    verified: true,
-  }];
+  return [
+    {
+      step: 1,
+      tool: 'file_write',
+      target: 'project.godot',
+      exit_code: 0,
+      stdout: 'written',
+      stderr: '',
+      verified: true,
+    },
+  ];
 }
 
 function runtime(status: RuntimeVerificationResult['status']): RuntimeVerificationResult {
   return {
     stage: 'runtime_verification',
     targetType: 'godot',
-    projectPath: '/workspace-root/example_game_workspace/Game',
-    command: 'powershell -ExecutionPolicy Bypass -File /workspace-root/tools/Godot/godot.ps1 --headless --path /workspace-root/example_game_workspace/Game --quit',
-    cwd: '/workspace-root/example_game_workspace/Game',
+    projectPath: '/tmp/example_game_suite/Game',
+    command:
+      'powershell -ExecutionPolicy Bypass -File /tmp/tools/Godot/godot.ps1 --headless --path /tmp/example_game_suite/Game --quit',
+    cwd: '/tmp/example_game_suite/Game',
     exitCode: status === 'PASS' ? 0 : 1,
     stdoutExcerpt: '',
     stderrExcerpt: status === 'PASS' ? '' : 'Parse Error',
@@ -69,7 +90,10 @@ function runtime(status: RuntimeVerificationResult['status']): RuntimeVerificati
   };
 }
 
-function gate(root: string, verification: RuntimeVerificationResult = runtime('FAIL')): RunnableArtifactGateResult {
+function gate(
+  root: string,
+  verification: RuntimeVerificationResult = runtime('FAIL'),
+): RunnableArtifactGateResult {
   return evaluateRunnableArtifactGate({
     rawTask: GODOT_TASK,
     projectRoot: root,
@@ -121,7 +145,10 @@ test('missing main scene config is repaired', () => {
 
     assert.equal(result.status, 'REPAIRED');
     assert.equal(result.filesModified.includes('project.godot'), true);
-    assert.match(readFileSync(join(projectRoot, 'project.godot'), 'utf-8'), /run\/main_scene="res:\/\/scenes\/Main\.tscn"/);
+    assert.match(
+      readFileSync(join(projectRoot, 'project.godot'), 'utf-8'),
+      /run\/main_scene="res:\/\/scenes\/Main\.tscn"/,
+    );
   } finally {
     cleanup(root);
   }
@@ -147,7 +174,10 @@ test('malformed project.godot is repaired only when safe', () => {
     assert.equal(result.status, 'REPAIRED');
     assert.equal(result.filesModified.includes('project.godot'), true);
     assert.match(readFileSync(join(projectRoot, 'project.godot'), 'utf-8'), /config_version=5/);
-    assert.match(readFileSync(join(projectRoot, 'project.godot'), 'utf-8'), /run\/main_scene="res:\/\/scenes\/Main\.tscn"/);
+    assert.match(
+      readFileSync(join(projectRoot, 'project.godot'), 'utf-8'),
+      /run\/main_scene="res:\/\/scenes\/Main\.tscn"/,
+    );
   } finally {
     cleanup(root);
   }

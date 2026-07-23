@@ -42,7 +42,7 @@ function makeTypedManifest(overrides: Partial<ReturnType<typeof OrchestratorMani
       secondary_category: null,
       task_overlay_ids: [],
       complexity_estimate: 'Medium',
-      pipeline_mode: 'verified',
+      pipeline_mode: 'deep',
       purpose_mode: 'execution',
       purpose_source: 'fallback_default',
       purpose_confidence: 0.7,
@@ -56,7 +56,7 @@ function makeTypedManifest(overrides: Partial<ReturnType<typeof OrchestratorMani
     },
     compilation_state: 'uncompiled',
     instruction_stack: {
-      behavioral_ids: ['behavioral_core_v7', 'behavioral_guard_v7'],
+      behavioral_ids: ['behavioral_core_v11'],
       domain_id: 'domain_swe_backend',
       skill_ids: [],
       model_adapter_id: 'adapter_codex_balanced',
@@ -124,6 +124,11 @@ catalog_scope: babel_prompt_library
 maintainer: control_plane
 root: "TEMP"
 entries:
+  - id: behavioral_core_v11
+    layer: behavioral_os
+    path: 01_Behavioral_OS/OLS-v11-Core-Unified.md
+    status: active
+    load_position: 1
   - id: behavioral_core_v7
     layer: behavioral_os
     path: 01_Behavioral_OS/OLS-v7-Core-Universal.md
@@ -162,7 +167,7 @@ entries:
     token_budget: 200
   - id: adapter_codex_balanced
     layer: model_adapter
-    path: 03_Model_Adapters/Codex_Balanced.md
+    path: 03_Model_Adapters/DeepSeek_Balanced.md
     status: active
     load_position: 4
   - id: pipeline_qa_reviewer
@@ -173,11 +178,12 @@ entries:
 `, root => {
     for (const path of [
       '01_Behavioral_OS/OLS-v7-Core-Universal.md',
+      '01_Behavioral_OS/OLS-v11-Core-Unified.md',
       '01_Behavioral_OS/OLS-v7-Guard-Auto.md',
       '02_Domain_Architects/Clean_SWE_Backend-v7.md',
       '02_Skills/Lang/Primary.md',
       '02_Skills/Lang/Conflicting.md',
-      '03_Model_Adapters/Codex_Balanced.md',
+      '03_Model_Adapters/DeepSeek_Balanced.md',
       '02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md',
     ]) {
       writePromptFile(root, path);
@@ -185,7 +191,7 @@ entries:
 
     const manifest = makeTypedManifest({
       instruction_stack: {
-        behavioral_ids: ['behavioral_core_v7', 'behavioral_guard_v7'],
+        behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_backend',
         skill_ids: ['skill_conflicting'],
         model_adapter_id: 'adapter_codex_balanced',
@@ -211,6 +217,11 @@ catalog_scope: babel_prompt_library
 maintainer: control_plane
 root: "TEMP"
 entries:
+  - id: behavioral_core_v11
+    layer: behavioral_os
+    path: 01_Behavioral_OS/OLS-v11-Core-Unified.md
+    status: active
+    load_position: 1
   - id: behavioral_core_v7
     layer: behavioral_os
     path: 01_Behavioral_OS/OLS-v7-Core-Universal.md
@@ -232,7 +243,7 @@ entries:
     default_skill_ids: []
   - id: adapter_codex_balanced
     layer: model_adapter
-    path: 03_Model_Adapters/Codex_Balanced.md
+    path: 03_Model_Adapters/DeepSeek_Balanced.md
     status: active
     load_position: 4
   - id: pipeline_qa_reviewer
@@ -243,9 +254,10 @@ entries:
 `, root => {
     for (const path of [
       '01_Behavioral_OS/OLS-v7-Core-Universal.md',
+      '01_Behavioral_OS/OLS-v11-Core-Unified.md',
       '01_Behavioral_OS/OLS-v7-Guard-Auto.md',
       '02_Domain_Architects/Clean_SWE_Backend-v7.md',
-      '03_Model_Adapters/Codex_Balanced.md',
+      '03_Model_Adapters/DeepSeek_Balanced.md',
       '02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md',
     ]) {
       writePromptFile(root, path);
@@ -255,7 +267,7 @@ entries:
       'missing id test',
       makeTypedManifest({
         instruction_stack: {
-          behavioral_ids: ['behavioral_core_v7', 'behavioral_guard_v7'],
+          behavioral_ids: ['behavioral_core_v11'],
           domain_id: 'domain_swe_backend',
           skill_ids: ['skill_missing'],
           model_adapter_id: 'adapter_codex_balanced',
@@ -272,7 +284,7 @@ entries:
       'wrong layer test',
       makeTypedManifest({
         instruction_stack: {
-          behavioral_ids: ['behavioral_core_v7', 'behavioral_guard_v7'],
+          behavioral_ids: ['behavioral_core_v11'],
           domain_id: 'adapter_codex_balanced',
           skill_ids: [],
           model_adapter_id: 'adapter_codex_balanced',
@@ -294,6 +306,11 @@ catalog_scope: babel_prompt_library
 maintainer: control_plane
 root: "TEMP"
 entries:
+  - id: behavioral_core_v11
+    layer: behavioral_os
+    path: 01_Behavioral_OS/OLS-v11-Core-Unified.md
+    status: active
+    load_position: 1
   - id: behavioral_core_v7
     layer: behavioral_os
     path: 01_Behavioral_OS/OLS-v7-Core-Universal.md
@@ -330,7 +347,7 @@ entries:
     token_budget: 100
   - id: adapter_codex_balanced
     layer: model_adapter
-    path: 03_Model_Adapters/Codex_Balanced.md
+    path: 03_Model_Adapters/DeepSeek_Balanced.md
     status: active
     load_position: 4
   - id: pipeline_qa_reviewer
@@ -341,12 +358,13 @@ entries:
 `, root => {
     for (const path of [
       '01_Behavioral_OS/OLS-v7-Core-Universal.md',
+      '01_Behavioral_OS/OLS-v11-Core-Unified.md',
       '01_Behavioral_OS/OLS-v7-Guard-Auto.md',
       '02_Domain_Architects/Android_Kotlin-v1.md',
       '02_Skills/Framework/Unix-Shell-v1.md',
       '02_Skills/Framework/NodeJS-CLI-v1.md',
       '02_Skills/Lang/Python-Backend-v1.md',
-      '03_Model_Adapters/Codex_Balanced.md',
+      '03_Model_Adapters/DeepSeek_Balanced.md',
       '02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md',
     ]) {
       writePromptFile(root, path);
@@ -354,7 +372,7 @@ entries:
 
     const manifest = resolveInstructionStackManifest(makeTypedManifest({
       instruction_stack: {
-        behavioral_ids: ['behavioral_core_v7', 'behavioral_guard_v7'],
+        behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_mobile_suite',
         skill_ids: ['skill_git_operations', 'skill_cli_tooling', 'skill_python_scripting'],
         model_adapter_id: 'adapter_codex_balanced',
@@ -384,6 +402,11 @@ catalog_scope: babel_prompt_library
 maintainer: control_plane
 root: "TEMP"
 entries:
+  - id: behavioral_core_v11
+    layer: behavioral_os
+    path: 01_Behavioral_OS/OLS-v11-Core-Unified.md
+    status: active
+    load_position: 1
   - id: behavioral_core_v7
     layer: behavioral_os
     path: 01_Behavioral_OS/OLS-v7-Core-Universal.md
@@ -405,18 +428,18 @@ entries:
     default_skill_ids: []
   - id: adapter_codex_balanced
     layer: model_adapter
-    path: 03_Model_Adapters/Codex_Balanced.md
+    path: 03_Model_Adapters/DeepSeek_Balanced.md
     status: active
     load_position: 4
-  - id: overlay_example_web_audit
+  - id: overlay_auditguard
     layer: project_overlay
-    path: 05_Project_Overlays/Example-Web-Audit-Context.md
+    path: 05_Project_Overlays/AuditGuard-Context.md
     status: active
     load_position: 5
-  - id: overlay_example_mobile_reference
+  - id: overlay_app_test_babel
     layer: project_overlay
-    path: 05_Project_Overlays/Example-Mobile-Application-Context.md
-    project: example_mobile_reference
+    path: 05_Project_Overlays/App-Test-Babel-Context.md
+    project: app_test_babel
     status: active
     load_position: 5
   - id: task_frontend_professionalism
@@ -432,11 +455,12 @@ entries:
 `, root => {
     for (const path of [
       '01_Behavioral_OS/OLS-v7-Core-Universal.md',
+      '01_Behavioral_OS/OLS-v11-Core-Unified.md',
       '01_Behavioral_OS/OLS-v7-Guard-Auto.md',
       '02_Domain_Architects/Clean_SWE_Frontend-v6.md',
-      '03_Model_Adapters/Codex_Balanced.md',
-      '05_Project_Overlays/Example-Web-Audit-Context.md',
-      '05_Project_Overlays/Example-Mobile-Application-Context.md',
+      '03_Model_Adapters/DeepSeek_Balanced.md',
+      '05_Project_Overlays/AuditGuard-Context.md',
+      '05_Project_Overlays/App-Test-Babel-Context.md',
       '06_Task_Overlays/Frontend-Professionalism-v1.0.md',
       '02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md',
     ]) {
@@ -445,7 +469,7 @@ entries:
 
     const wrongSlotManifest = resolveInstructionStackManifest(makeTypedManifest({
       instruction_stack: {
-        behavioral_ids: ['behavioral_core_v7', 'behavioral_guard_v7'],
+        behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_frontend',
         skill_ids: [],
         model_adapter_id: 'adapter_codex_balanced',
@@ -470,34 +494,34 @@ entries:
 
     const hallucinatedCompositeManifest = resolveInstructionStackManifest(makeTypedManifest({
       instruction_stack: {
-        behavioral_ids: ['behavioral_core_v7', 'behavioral_guard_v7'],
+        behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_frontend',
         skill_ids: [],
         model_adapter_id: 'adapter_codex_balanced',
-        project_overlay_id: 'overlay_example_web_audit_frontend_professionalism',
+        project_overlay_id: 'overlay_auditguard_frontend_professionalism',
         task_overlay_ids: [],
         pipeline_stage_ids: ['pipeline_qa_reviewer'],
       },
     }), root);
 
     assert(
-      hallucinatedCompositeManifest.instruction_stack?.project_overlay_id === 'overlay_example_web_audit',
-      'hallucinated composite overlay test: expected project overlay to normalize to overlay_example_web_audit',
+      hallucinatedCompositeManifest.instruction_stack?.project_overlay_id === 'overlay_auditguard',
+      'hallucinated composite overlay test: expected project overlay to normalize to overlay_auditguard',
     );
     assert(
       hallucinatedCompositeManifest.instruction_stack?.task_overlay_ids.includes('task_frontend_professionalism'),
       'hallucinated composite overlay test: expected frontend professionalism task overlay to be injected',
     );
     assert(
-      hallucinatedCompositeManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_example_web_audit') &&
+      hallucinatedCompositeManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_auditguard') &&
       hallucinatedCompositeManifest.compiled_artifacts?.selected_entry_ids.includes('task_frontend_professionalism'),
       'hallucinated composite overlay test: expected normalized project/task overlays to compile successfully',
     );
 
     const unknownProjectOverlayManifest = resolveInstructionStackManifest(makeTypedManifest({
-      target_project: 'example_mobile_reference',
+      target_project: 'app_test_babel',
       instruction_stack: {
-        behavioral_ids: ['behavioral_core_v7', 'behavioral_guard_v7'],
+        behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_frontend',
         skill_ids: [],
         model_adapter_id: 'adapter_codex_balanced',
@@ -508,11 +532,11 @@ entries:
     }), root);
 
     assert(
-      unknownProjectOverlayManifest.instruction_stack?.project_overlay_id === 'overlay_example_mobile_reference',
+      unknownProjectOverlayManifest.instruction_stack?.project_overlay_id === 'overlay_app_test_babel',
       'unknown project overlay test: expected target project overlay to replace unknown project_overlay_id',
     );
     assert(
-      unknownProjectOverlayManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_example_mobile_reference'),
+      unknownProjectOverlayManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_app_test_babel'),
       'unknown project overlay test: expected corrected project overlay to compile successfully',
     );
   });
@@ -525,6 +549,11 @@ catalog_scope: babel_prompt_library
 maintainer: control_plane
 root: "TEMP"
 entries:
+  - id: behavioral_core_v11
+    layer: behavioral_os
+    path: 01_Behavioral_OS/OLS-v11-Core-Unified.md
+    status: active
+    load_position: 1
   - id: behavioral_core_v7
     layer: behavioral_os
     path: 01_Behavioral_OS/OLS-v7-Core-Universal.md
@@ -546,18 +575,18 @@ entries:
     default_skill_ids: []
   - id: adapter_codex_balanced
     layer: model_adapter
-    path: 03_Model_Adapters/Codex_Balanced.md
+    path: 03_Model_Adapters/DeepSeek_Balanced.md
     status: active
     load_position: 4
-  - id: overlay_example_web_audit
+  - id: overlay_auditguard
     layer: project_overlay
-    path: 05_Project_Overlays/Example-Web-Audit-Context.md
+    path: 05_Project_Overlays/AuditGuard-Context.md
     status: active
     load_position: 5
-    project: example_web_audit
+    project: AuditGuard
   - id: overlay_example_saas_backend
     layer: project_overlay
-    path: 05_Project_Overlays/Example-SaaS-Backend-Context.md
+    path: 05_Project_Overlays/example_saas_backend-Context.md
     status: active
     load_position: 5
     project: example_saas_backend
@@ -568,7 +597,7 @@ entries:
     load_position: 6
   - id: task_example_saas_backend_frontend_professionalism
     layer: task_overlay
-    path: 06_Task_Overlays/Example-SaaS-Backend-Frontend-Professionalism-v1.0.md
+    path: 06_Task_Overlays/example_saas_backend-Frontend-Professionalism-v1.0.md
     status: active
     load_position: 6
     project: example_saas_backend
@@ -580,22 +609,23 @@ entries:
 `, root => {
     for (const path of [
       '01_Behavioral_OS/OLS-v7-Core-Universal.md',
+      '01_Behavioral_OS/OLS-v11-Core-Unified.md',
       '01_Behavioral_OS/OLS-v7-Guard-Auto.md',
       '02_Domain_Architects/Clean_SWE_Frontend-v6.md',
-      '03_Model_Adapters/Codex_Balanced.md',
-      '05_Project_Overlays/Example-Web-Audit-Context.md',
-      '05_Project_Overlays/Example-SaaS-Backend-Context.md',
+      '03_Model_Adapters/DeepSeek_Balanced.md',
+      '05_Project_Overlays/AuditGuard-Context.md',
+      '05_Project_Overlays/example_saas_backend-Context.md',
       '06_Task_Overlays/Frontend-Professionalism-v1.0.md',
-      '06_Task_Overlays/Example-SaaS-Backend-Frontend-Professionalism-v1.0.md',
+      '06_Task_Overlays/example_saas_backend-Frontend-Professionalism-v1.0.md',
       '02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md',
     ]) {
       writePromptFile(root, path);
     }
 
     const mismatchedProjectTaskOverlayManifest = resolveInstructionStackManifest(makeTypedManifest({
-      target_project: 'example_web_audit',
+      target_project: 'AuditGuard',
       instruction_stack: {
-        behavioral_ids: ['behavioral_core_v7', 'behavioral_guard_v7'],
+        behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_frontend',
         skill_ids: [],
         model_adapter_id: 'adapter_codex_balanced',
@@ -606,16 +636,16 @@ entries:
     }), root);
 
     assert(
-      mismatchedProjectTaskOverlayManifest.instruction_stack?.project_overlay_id === 'overlay_example_web_audit',
+      mismatchedProjectTaskOverlayManifest.instruction_stack?.project_overlay_id === 'overlay_auditguard',
       'project-scoped overlay test: expected missing project overlay to be inferred from target_project',
     );
     assert(
       JSON.stringify(mismatchedProjectTaskOverlayManifest.instruction_stack?.task_overlay_ids ?? []) ===
       JSON.stringify(['task_frontend_professionalism']),
-      'project-scoped overlay test: expected example_saas_backend-specific frontend overlay to fall back to generic frontend overlay for example_web_audit',
+      'project-scoped overlay test: expected example_saas_backend-specific frontend overlay to fall back to generic frontend overlay for AuditGuard',
     );
     assert(
-      mismatchedProjectTaskOverlayManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_example_web_audit') &&
+      mismatchedProjectTaskOverlayManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_auditguard') &&
       mismatchedProjectTaskOverlayManifest.compiled_artifacts?.selected_entry_ids.includes('task_frontend_professionalism') &&
       !mismatchedProjectTaskOverlayManifest.compiled_artifacts?.selected_entry_ids.includes('task_example_saas_backend_frontend_professionalism'),
       'project-scoped overlay test: expected compiled stack to exclude the mismatched example_saas_backend-specific overlay',
@@ -630,6 +660,11 @@ catalog_scope: babel_prompt_library
 maintainer: control_plane
 root: "TEMP"
 entries:
+  - id: behavioral_core_v11
+    layer: behavioral_os
+    path: 01_Behavioral_OS/OLS-v11-Core-Unified.md
+    status: active
+    load_position: 1
   - id: behavioral_core_v7
     layer: behavioral_os
     path: 01_Behavioral_OS/OLS-v7-Core-Universal.md
@@ -651,15 +686,15 @@ entries:
     default_skill_ids: []
   - id: adapter_codex_balanced
     layer: model_adapter
-    path: 03_Model_Adapters/Codex_Balanced.md
+    path: 03_Model_Adapters/DeepSeek_Balanced.md
     status: active
     load_position: 4
-  - id: overlay_example_web_audit
+  - id: overlay_auditguard
     layer: project_overlay
-    path: 05_Project_Overlays/Example-Web-Audit-Context.md
+    path: 05_Project_Overlays/AuditGuard-Context.md
     status: active
     load_position: 5
-    project: example_web_audit
+    project: AuditGuard
   - id: task_frontend_professionalism
     layer: task_overlay
     path: 06_Task_Overlays/Frontend-Professionalism-v1.0.md
@@ -673,10 +708,11 @@ entries:
 `, root => {
     for (const path of [
       '01_Behavioral_OS/OLS-v7-Core-Universal.md',
+      '01_Behavioral_OS/OLS-v11-Core-Unified.md',
       '01_Behavioral_OS/OLS-v7-Guard-Auto.md',
       '02_Domain_Architects/Clean_SWE_Frontend-v6.md',
-      '03_Model_Adapters/Codex_Balanced.md',
-      '05_Project_Overlays/Example-Web-Audit-Context.md',
+      '03_Model_Adapters/DeepSeek_Balanced.md',
+      '05_Project_Overlays/AuditGuard-Context.md',
       '06_Task_Overlays/Frontend-Professionalism-v1.0.md',
       '02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md',
     ]) {
@@ -684,9 +720,9 @@ entries:
     }
 
     const hallucinatedSlugManifest = resolveInstructionStackManifest(makeTypedManifest({
-      target_project: 'example_web_audit',
+      target_project: 'AuditGuard',
       instruction_stack: {
-        behavioral_ids: ['behavioral_core_v7', 'behavioral_guard_v7'],
+        behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_frontend',
         skill_ids: [],
         model_adapter_id: 'adapter_codex_balanced',
@@ -697,7 +733,7 @@ entries:
     }), root);
 
     assert(
-      hallucinatedSlugManifest.instruction_stack?.project_overlay_id === 'overlay_example_web_audit',
+      hallucinatedSlugManifest.instruction_stack?.project_overlay_id === 'overlay_auditguard',
       'hallucinated project slug fallback test: expected target project overlay to be recovered from target_project',
     );
     assert(
@@ -706,7 +742,7 @@ entries:
       'hallucinated project slug fallback test: expected generic frontend professionalism overlay to be injected',
     );
     assert(
-      hallucinatedSlugManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_example_web_audit') &&
+      hallucinatedSlugManifest.compiled_artifacts?.selected_entry_ids.includes('overlay_auditguard') &&
       hallucinatedSlugManifest.compiled_artifacts?.selected_entry_ids.includes('task_frontend_professionalism'),
       'hallucinated project slug fallback test: expected normalized overlays to compile successfully',
     );
@@ -721,7 +757,7 @@ function runTokenBudgetFoundationTest(): void {
       target_project: 'global',
       target_project_path: process.env['BABEL_PROJECT_ROOT'] ?? process.cwd(),
       instruction_stack: {
-        behavioral_ids: ['behavioral_core_v7', 'behavioral_guard_v7'],
+        behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_backend',
         skill_ids: [],
         model_adapter_id: 'adapter_codex_balanced',
@@ -787,6 +823,11 @@ catalog_scope: babel_prompt_library
 maintainer: control_plane
 root: "TEMP"
 entries:
+  - id: behavioral_core_v11
+    layer: behavioral_os
+    path: 01_Behavioral_OS/OLS-v11-Core-Unified.md
+    status: active
+    load_position: 1
   - id: behavioral_core_v7
     layer: behavioral_os
     path: 01_Behavioral_OS/OLS-v7-Core-Universal.md
@@ -812,19 +853,19 @@ entries:
     load_position: 5
     dependencies: []
     conflicts: []
-  - id: overlay_example_web_audit
+  - id: overlay_auditguard
     layer: project_overlay
-    path: 05_Project_Overlays/Example-Web-Audit-Context.md
+    path: 05_Project_Overlays/AuditGuard-Context.md
     status: active
     load_position: 6
+  - id: adapter_codex_balanced
+    layer: model_adapter
+    path: 03_Model_Adapters/DeepSeek_Balanced.md
+    status: active
+    load_position: 7
   - id: task_frontend_professionalism
     layer: task_overlay
     path: 06_Task_Overlays/Frontend-Professionalism-v1.0.md
-    status: active
-    load_position: 7
-  - id: adapter_codex_balanced
-    layer: model_adapter
-    path: 03_Model_Adapters/Codex_Balanced.md
     status: active
     load_position: 8
   - id: pipeline_qa_reviewer
@@ -835,12 +876,13 @@ entries:
 `, root => {
     for (const path of [
       '01_Behavioral_OS/OLS-v7-Core-Universal.md',
+      '01_Behavioral_OS/OLS-v11-Core-Unified.md',
       '01_Behavioral_OS/OLS-v7-Guard-Auto.md',
       '02_Domain_Architects/Clean_SWE_Frontend-v6.md',
       '02_Skills/UI/A11y-Design-v1.md',
-      '05_Project_Overlays/Example-Web-Audit-Context.md',
+      '05_Project_Overlays/AuditGuard-Context.md',
       '06_Task_Overlays/Frontend-Professionalism-v1.0.md',
-      '03_Model_Adapters/Codex_Balanced.md',
+      '03_Model_Adapters/DeepSeek_Balanced.md',
       '02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md',
     ]) {
       writePromptFile(root, path);
@@ -848,11 +890,11 @@ entries:
 
     const manifest = resolveInstructionStackManifest(makeTypedManifest({
       instruction_stack: {
-        behavioral_ids: ['behavioral_core_v7', 'behavioral_guard_v7'],
+        behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_frontend',
         skill_ids: ['skill_ui'],
         model_adapter_id: 'adapter_codex_balanced',
-        project_overlay_id: 'overlay_example_web_audit',
+        project_overlay_id: 'overlay_auditguard',
         task_overlay_ids: ['task_frontend_professionalism'],
         pipeline_stage_ids: ['pipeline_qa_reviewer'],
       },
@@ -860,16 +902,15 @@ entries:
 
     assert(
       JSON.stringify(manifest.compiled_artifacts?.selected_entry_ids ?? []) === JSON.stringify([
-        'behavioral_core_v7',
-        'behavioral_guard_v7',
+        'behavioral_core_v11',
         'domain_swe_frontend',
         'skill_ui',
-        'overlay_example_web_audit',
-        'task_frontend_professionalism',
+        'overlay_auditguard',
         'adapter_codex_balanced',
+        'task_frontend_professionalism',
         'pipeline_qa_reviewer',
       ]),
-      'canonical load order test: expected model adapter after project/task overlays and before pipeline stages',
+      'canonical load order test: expected behavioral_core_v11 then domain/skill/overlay/adapter/task/pipeline',
     );
   });
 }
@@ -885,8 +926,8 @@ function runCatalogRuntimeAlignmentTest(): void {
     ['EXECUTOR_PATHS', EXECUTOR_PATHS],
   ] as const) {
     assert(
-      runtimePaths.includes('01_Behavioral_OS/OLS-v7-Cognitive-Micro.md'),
-      `catalog/runtime alignment test: expected ${constantName} to load cognitive micro`,
+      runtimePaths.includes('01_Behavioral_OS/OLS-v11-Core-Unified.md'),
+      `catalog/runtime alignment test: expected ${constantName} to load behavioral_core_v11`,
     );
   }
 
@@ -897,7 +938,7 @@ function runCatalogRuntimeAlignmentTest(): void {
   for (const [id, position] of [
     ['domain_swe_backend', '4'],
     ['skill_adaptive_depth', '5'],
-    ['overlay_example_web_audit', '6'],
+    ['overlay_auditguard', '6'],
     ['task_frontend_professionalism', '7'],
     ['adapter_codex_balanced', '8'],
     ['pipeline_qa_reviewer', '9'],

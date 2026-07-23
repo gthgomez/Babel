@@ -40,15 +40,24 @@ function commandLooksExecutable(config: McpServerConfig): boolean {
   return isAllowedMcpServerCommand(config.command);
 }
 
-function authCheck(server: string, config: McpServerConfig): { status: 'pass' | 'warn'; message: string } {
+function authCheck(
+  server: string,
+  config: McpServerConfig,
+): { status: 'pass' | 'warn'; message: string } {
   const haystack = [server, config.command, ...config.args].join(' ').toLowerCase();
   if (haystack.includes('github')) {
     return process.env['GITHUB_TOKEN'] || process.env['GH_TOKEN']
       ? { status: 'pass', message: 'GitHub token environment variable is present.' }
-      : { status: 'warn', message: 'GitHub MCP usually needs GITHUB_TOKEN or GH_TOKEN for authenticated API calls.' };
+      : {
+          status: 'warn',
+          message: 'GitHub MCP usually needs GITHUB_TOKEN or GH_TOKEN for authenticated API calls.',
+        };
   }
   if (haystack.includes('postgres') || haystack.includes('sqlite')) {
-    return { status: 'pass', message: 'Database auth is carried by server arguments or local filesystem permissions.' };
+    return {
+      status: 'pass',
+      message: 'Database auth is carried by server arguments or local filesystem permissions.',
+    };
   }
   return { status: 'pass', message: 'No known auth hint required by Babel static doctor.' };
 }
@@ -89,7 +98,8 @@ export function runMcpDoctor(): McpDoctorReport {
       {
         id: 'tool_schema',
         status: 'pass',
-        message: 'Executor uses mcp_tool_search with bounded lazy schema loading before specific tool calls.',
+        message:
+          'Executor uses mcp_tool_search with bounded lazy schema loading before specific tool calls.',
       },
     ];
     const status = checks.some((check) => check.status === 'fail')

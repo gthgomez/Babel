@@ -15,14 +15,16 @@
 
 import type { ZodType } from 'zod';
 import { type LlmRunner, type RunnerCallbacks, buildStructuredOutputError } from './base.js';
-import { extractJson }    from '../utils/extractJson.js';
+import { extractJson } from '../utils/extractJson.js';
+import { parseRateLimitHeaders } from '../ui/rateLimitWidget.js';
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 
-const GEMINI_MODEL  = process.env['BABEL_GEMINI_MODEL']  ?? 'gemini-2.5-flash-lite';
+const GEMINI_MODEL = process.env['BABEL_GEMINI_MODEL'] ?? 'gemini-2.5-flash-lite';
 const _rawGeminiTokens = Number(process.env['BABEL_GEMINI_TOKENS'] ?? '8192');
-const MAX_TOKENS    = Number.isFinite(_rawGeminiTokens) && _rawGeminiTokens > 0 ? _rawGeminiTokens : 8192;
-const API_BASE      = 'https://generativelanguage.googleapis.com/v1beta/models';
+const MAX_TOKENS =
+  Number.isFinite(_rawGeminiTokens) && _rawGeminiTokens > 0 ? _rawGeminiTokens : 8192;
+const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 // ─── Runner implementation ──────────────────────────────────────────────────
 
@@ -34,7 +36,7 @@ export class GeminiApiRunner implements LlmRunner {
     if (!key) {
       throw new Error(
         '[geminiApi] GEMINI_API_KEY is not set. ' +
-        'Add it to your .env file to enable the Gemini API runner.',
+          'Add it to your .env file to enable the Gemini API runner.',
       );
     }
     this.apiKey = key;
@@ -51,26 +53,28 @@ export class GeminiApiRunner implements LlmRunner {
     let rawJsonText = '';
     try {
       res = await fetch(url, {
-        method:  'POST',
+        method: 'POST',
         headers: {
-          'Content-Type':    'application/json',
-          'x-goog-api-key':  this.apiKey,
+          'Content-Type': 'application/json',
+          'x-goog-api-key': this.apiKey,
         },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
-            temperature:      0,
-            maxOutputTokens:  MAX_TOKENS,
+            temperature: 0,
+            maxOutputTokens: MAX_TOKENS,
           },
           systemInstruction: {
-            parts: [{
-              text:
-                'You are executing a Babel pipeline agent. ' +
-                'Follow all instructions in the user message exactly. ' +
-                'Your response MUST be a single valid JSON object only — ' +
-                'no markdown, no explanation, no code fences. ' +
-                'Output only raw JSON.',
-            }],
+            parts: [
+              {
+                text:
+                  'You are executing a Babel pipeline agent. ' +
+                  'Follow all instructions in the user message exactly. ' +
+                  'Your response MUST be a single valid JSON object only — ' +
+                  'no markdown, no explanation, no code fences. ' +
+                  'Output only raw JSON.',
+              },
+            ],
           },
         }),
       });
@@ -86,10 +90,9 @@ export class GeminiApiRunner implements LlmRunner {
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(
-        `[geminiApi] HTTP ${String(res.status)}: ${body.slice(0, 200)}`,
-      );
+      throw new Error(`[geminiApi] HTTP ${String(res.status)}: ${body.slice(0, 200)}`);
     }
+    parseRateLimitHeaders(res.headers, 'gemini');
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let json: any;

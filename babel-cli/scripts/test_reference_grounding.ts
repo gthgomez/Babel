@@ -16,11 +16,11 @@ function assert(condition: unknown, message: string): asserts condition {
 
 async function main(): Promise<void> {
   const tempRoot = mkdtempSync(join(tmpdir(), 'babel-reference-grounding-'));
-  const projectRoot = join(tempRoot, 'BabelReferenceGroundingTest');
+  const projectRoot = join(tempRoot, 'BabelMonteCarloAutonomousTest');
 
   try {
     mkdirSync(join(projectRoot, 'app', 'src', 'main', 'java', 'com', 'example', 'app'), { recursive: true });
-    mkdirSync(join(projectRoot, 'reference-source', 'reference_source'), { recursive: true });
+    mkdirSync(join(projectRoot, 'reference-montecarlo-ledger', 'monte_carlo_ledger'), { recursive: true });
 
     writeFileSync(
       join(projectRoot, 'app', 'src', 'main', 'java', 'com', 'example', 'app', 'MainActivity.kt'),
@@ -28,28 +28,28 @@ async function main(): Promise<void> {
       'utf-8',
     );
     writeFileSync(
-      join(projectRoot, 'reference-source', 'README.md'),
-      '# Reference Source\n',
+      join(projectRoot, 'reference-montecarlo-ledger', 'README.md'),
+      '# Monte Carlo Ledger\n',
       'utf-8',
     );
     writeFileSync(
-      join(projectRoot, 'reference-source', 'pyproject.toml'),
-      '[project]\nname = "reference-source"\n',
+      join(projectRoot, 'reference-montecarlo-ledger', 'pyproject.toml'),
+      '[project]\nname = "monte-carlo-ledger"\n',
       'utf-8',
     );
     writeFileSync(
-      join(projectRoot, 'reference-source', 'reference_source', 'processing.py'),
-      'def process_records():\n    return []\n',
+      join(projectRoot, 'reference-montecarlo-ledger', 'monte_carlo_ledger', 'forecasting.py'),
+      'def project_cashflow():\n    return []\n',
       'utf-8',
     );
     writeFileSync(
-      join(projectRoot, 'reference-source', 'reference_source', 'validation.py'),
-      'def validate_records():\n    return {}\n',
+      join(projectRoot, 'reference-montecarlo-ledger', 'monte_carlo_ledger', 'risk.py'),
+      'def calculate_risk():\n    return {}\n',
       'utf-8',
     );
 
     const taskContract = classifyTaskContract(
-      'Inside this Android project, port the source app from ./reference-source into a release-build Android mobile app.',
+      'Inside this Android project, port the source app from ./reference-montecarlo-ledger into a production-ready Android mobile app.',
     );
     const grounding = buildTaskGrounding(taskContract, projectRoot);
     const groundingContext = formatGroundingContext(grounding);
@@ -57,24 +57,24 @@ async function main(): Promise<void> {
     assert(grounding !== null, 'expected reference grounding to be created');
     assert(grounding.grounded === true, 'expected reference grounding to mark files as grounded');
     assert(
-      grounding.files.some((filePath: string) => filePath.endsWith('reference-source\\README.md')),
+      grounding.files.some((filePath: string) => filePath.endsWith('reference-montecarlo-ledger\\README.md')),
       'expected grounded files to include reference README.md',
     );
     assert(
-      grounding.files.some((filePath: string) => filePath.endsWith('reference-source\\pyproject.toml')),
+      grounding.files.some((filePath: string) => filePath.endsWith('reference-montecarlo-ledger\\pyproject.toml')),
       'expected grounded files to include reference pyproject.toml',
     );
     assert(
-      grounding.files.some((filePath: string) => filePath.endsWith('reference-source\\reference_source\\processing.py')),
-      'expected grounded files to include reference processing.py',
+      grounding.files.some((filePath: string) => filePath.endsWith('reference-montecarlo-ledger\\monte_carlo_ledger\\forecasting.py')),
+      'expected grounded files to include reference forecasting.py',
     );
     assert(
-      grounding.files.some((filePath: string) => filePath.endsWith('reference-source\\reference_source\\validation.py')),
-      'expected grounded files to include reference validation.py',
+      grounding.files.some((filePath: string) => filePath.endsWith('reference-montecarlo-ledger\\monte_carlo_ledger\\risk.py')),
+      'expected grounded files to include reference risk.py',
     );
     assert(
-      groundingContext.includes('reference-source/reference_source/processing.py') &&
-      groundingContext.includes('Reference source file_read allowlist (closed; use only these exact paths instead of guessing module names):'),
+      groundingContext.includes('reference-montecarlo-ledger/monte_carlo_ledger/forecasting.py') &&
+      groundingContext.includes('Reference source inventories (use these real filenames instead of guessing module names):'),
       'expected grounding context to surface the authoritative Python source inventory',
     );
 

@@ -8,11 +8,7 @@ export function buildUntrustedContentBlock(label: string, content: string): stri
 
   const endMarker = `END_UNTRUSTED_${normalizedLabel}`;
   const sanitized = content.replaceAll(endMarker, `${endMarker}_ESCAPED`);
-  return [
-    `BEGIN_UNTRUSTED_${normalizedLabel}`,
-    sanitized,
-    endMarker,
-  ].join('\n');
+  return [`BEGIN_UNTRUSTED_${normalizedLabel}`, sanitized, endMarker].join('\n');
 }
 
 export function untrustedContentInstruction(label: string): string {

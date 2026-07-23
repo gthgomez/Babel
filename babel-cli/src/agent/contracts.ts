@@ -1,13 +1,20 @@
 import type { ExecutionProfileName } from '../config/executionProfiles.js';
-import type { LiteRouteMetadata, LiteResultPayload, UserFacingStatus } from '../cli/structuredOutput.js';
+import type {
+  LiteRouteMetadata,
+  LiteResultPayload,
+  UserFacingStatus,
+} from '../cli/structuredOutput.js';
 import type { SparkParallelReviewResult, SparkSynthesis } from '../services/babelFull.js';
 import type { LiteFullRouteDecision } from '../services/liteFullRouter.js';
 import type { SmallFixProvider } from '../services/smallFix.js';
+import type { LiteFixProgressReporter } from '../ui/liteFixProgress.js';
+import type { LiteToolStreamSink } from '../ui/liteToolStream.js';
 
 /** Canonical Lite session verbs — single source of truth for agent dispatch. */
 export type LiteSessionVerb =
   | 'ask'
   | 'plan'
+  | 'report'
   | 'propose'
   | 'diff'
   | 'patch'
@@ -26,6 +33,7 @@ export const BABEL_LITE_ARTIFACT_FILES = [
   'manifest.json',
   'request.json',
   'response.md',
+  'report.md',
   'plan.md',
   'proposal.diff',
   'patch.diff',
@@ -36,7 +44,7 @@ export const BABEL_LITE_ARTIFACT_FILES = [
   'failure.json',
 ] as const;
 
-export type BabelLiteArtifactFile = typeof BABEL_LITE_ARTIFACT_FILES[number];
+export type BabelLiteArtifactFile = (typeof BABEL_LITE_ARTIFACT_FILES)[number];
 
 export interface BabelLiteArtifactLayout {
   root: typeof BABEL_LITE_ARTIFACT_ROOT;
@@ -51,6 +59,17 @@ export interface AgentSessionOptions {
   project?: string;
   projectRoot?: string;
   workspaceRoot?: string | null;
+  /**
+   * VCS: The absolute path to the directory Babel was started from (or the
+   * fuzzy-resolved target directory). Used as the write anchor for mutating
+   * tools without polluting process.cwd().
+   */
+  anchorPath?: string;
+  /**
+   * VCS: Permission preset shortcut — 'read-only' | 'ask' | 'auto'.
+   * Overrides per-tool policy for the duration of this session.
+   */
+  preset?: 'read-only' | 'ask' | 'auto';
   model?: string;
   modelTier?: string;
   allowExpensive?: boolean;
@@ -59,19 +78,42 @@ export interface AgentSessionOptions {
   provider?: SmallFixProvider;
   executionProfile?: ExecutionProfileName;
   liteOnly?: boolean;
-  agentsMode?: 'off' | 'read-only';
+  agentsMode?: 'off' | 'read-only' | 'live';
   json?: boolean;
   stream?: boolean;
+  /** Chat mode: callback for each natural-language answer chunk during streaming.
+   *  When set, raw text chunks are routed to the ConversationalRenderer for
+   *  real-time markdown display (no JSON extraction). */
+  onAnswerChunk?: (chunk: string) => void;
+  /** Chat mode: tool execution callbacks for ConversationalRenderer visibility.
+   *  Wired through from interactive.ts → AgentSession → ChatEngine. */
+  onToolStart?: (tool: string, target: string) => number;
+  onToolComplete?: (id: number, detail?: string) => void;
+  onFileChanged?: (path: string, additions: number, deletions: number, content?: string) => void;
+  onThought?: (thought: string) => void;
+  /** System-level context injected at session start (e.g. CLAUDE.md + AGENTS.md content).
+   *  Persists across all turns in the session — read once at startup, not per-turn. */
+  systemContext?: string;
+  /** Event bus for routing log messages and streaming chunks to the renderer. */
+  eventBus?: import('../pipeline.js').BabelEventBus;
   routeDecision?: LiteFullRouteDecision;
-  /** Run plan→propose→fix→review→undo in one worker-loop session. */
+  /** Run plan→propose→fix in one session (Wave 3 worker loop). */
   workerChain?: boolean;
-  /** Linked worker-chain continuation run directory. */
+  /** Linked worker-chain session run dir (Wave 4 continue). */
   workerChainSessionDir?: string;
   /** On verifier failure, auto-restore pre-mutation checkpoint (bl fix only). */
   rollbackOnFail?: boolean;
-  /** Read-only Spark synthesis from parallel review. */
+  /** Read-only Spark synthesis from parallel review (Wave 5 bl do). */
   sparkSynthesis?: SparkSynthesis;
   sparkReview?: SparkParallelReviewResult;
+  /** Live progress reporter for small-fix human output. */
+  progress?: LiteFixProgressReporter;
+  /** Optional live tool stream for read-only discovery tool cards. */
+  toolStream?: LiteToolStreamSink;
+  /** Write human_summary.txt even when --json is set. */
+  humanSummary?: boolean;
+  /** Run an independent plan review subagent after plan generation (P1.1). */
+  planReview?: boolean;
 }
 
 export interface AgentSessionResult {
@@ -107,6 +149,8 @@ export interface AgentLaneContext {
   project?: string;
   projectRoot?: string;
   workspaceRoot?: string | null;
+  /** VCS: Write anchor path (absolute), set at session boot. */
+  anchorPath?: string;
   model?: string;
   modelTier?: string;
   allowExpensive?: boolean;
@@ -116,6 +160,9 @@ export interface AgentLaneContext {
   routeDecision?: LiteRouteMetadata;
   sparkSynthesis?: SparkSynthesis;
   sparkReview?: SparkParallelReviewResult;
+  toolStream?: LiteToolStreamSink;
+  /** Run an independent plan review subagent after plan generation (P1.1). */
+  planReview?: boolean;
 }
 
 export function isProposalVerb(verb: LiteSessionVerb): verb is ProposalSessionVerb {
@@ -138,7 +185,7 @@ export function emptyLiteUsage(): LiteResultPayload['usage'] {
 }
 
 export function baseReadOnlyLitePayload(input: {
-  command: LiteSessionVerb;
+  command: string;
   task: string;
   project: string | null;
   runDir: string | null;
@@ -190,7 +237,7 @@ export function baseReadOnlyLitePayload(input: {
     support_path: input.runDir,
     details: {
       support_path: input.runDir,
-      full_babel_equivalent: `babel run "${input.task.replace(/"/g, '\\"')}" --mode verified`,
+      full_babel_equivalent: `babel run "${input.task.replace(/"/g, '\\"')}" --mode deep`,
     },
   };
 }

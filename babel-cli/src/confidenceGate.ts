@@ -5,7 +5,7 @@
  *
  * Bands (thresholds configurable via env vars):
  *   high   >= HIGH_THRESHOLD  (default 0.80) — accept as-is
- *   medium  [MED_THRESHOLD, HIGH_THRESHOLD)  — downgrade pipeline_mode direct → verified
+ *   medium  [MED_THRESHOLD, HIGH_THRESHOLD)  — downgrade pipeline_mode deep → plan
  *   low    <  MED_THRESHOLD  (default 0.60)  — run validator pass; proceed with warning if still low
  *
  * Gate is enabled via BABEL_ROUTING_CONFIDENCE_ENABLE=true.
@@ -14,8 +14,8 @@
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type ConfidenceBand  = 'high' | 'medium' | 'low';
-export type RoutingAction   = 'accepted' | 'downgraded' | 'validated' | 'validator_still_low';
+export type ConfidenceBand = 'high' | 'medium' | 'low';
+export type RoutingAction = 'accepted' | 'downgraded' | 'validated' | 'validator_still_low';
 
 // ─── Threshold helpers ────────────────────────────────────────────────────────
 
@@ -40,12 +40,12 @@ export function isConfidenceGateEnabled(): boolean {
 
 /** High-band threshold (default 0.80). Read at call time so tests can patch env. */
 export function getHighThreshold(): number {
-  return readEnvFloat('BABEL_ROUTING_CONFIDENCE_HIGH', 0.80);
+  return readEnvFloat('BABEL_ROUTING_CONFIDENCE_HIGH', 0.8);
 }
 
 /** Medium-band lower bound (default 0.60). Read at call time so tests can patch env. */
 export function getMediumThreshold(): number {
-  return readEnvFloat('BABEL_ROUTING_CONFIDENCE_MEDIUM', 0.60);
+  return readEnvFloat('BABEL_ROUTING_CONFIDENCE_MEDIUM', 0.6);
 }
 
 /**

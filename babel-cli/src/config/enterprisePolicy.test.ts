@@ -32,7 +32,10 @@ function withPolicyEnv<T>(policyPath: string | undefined, fn: () => T): T {
   } else {
     delete process.env['BABEL_ENTERPRISE_POLICY_PATH'];
   }
-  process.env['BABEL_ENTERPRISE_POLICY_USER_PATH'] = join(tmpdir(), 'babel-missing-user-policy.json');
+  process.env['BABEL_ENTERPRISE_POLICY_USER_PATH'] = join(
+    tmpdir(),
+    'babel-missing-user-policy.json',
+  );
   delete process.env['BABEL_ENTERPRISE_POLICY_ADMIN_PATH'];
   delete process.env['USERPROFILE'];
   delete process.env['HOME'];
@@ -70,18 +73,22 @@ test('loadEnterprisePolicy uses permissive redacting defaults when no files exis
 test('loadEnterprisePolicy merges explicit policy controls', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-policy-root-'));
   const policyPath = join(root, 'policy.json');
-  writeFileSync(policyPath, JSON.stringify({
-    schema_version: 1,
-    policy_name: 'test enterprise',
-    allowed_tools: ['file_read', 'web_fetch'],
-    disallowed_tools: ['shell_exec'],
-    allowed_mcp_servers: ['github'],
-    network_allowlist: ['example.com', '*.example.org'],
-    redaction: {
-      enabled: true,
-      extra_patterns: ['CUSTOM-[0-9]+'],
-    },
-  }), 'utf8');
+  writeFileSync(
+    policyPath,
+    JSON.stringify({
+      schema_version: 1,
+      policy_name: 'test enterprise',
+      allowed_tools: ['file_read', 'web_fetch'],
+      disallowed_tools: ['shell_exec'],
+      allowed_mcp_servers: ['github'],
+      network_allowlist: ['example.com', '*.example.org'],
+      redaction: {
+        enabled: true,
+        extra_patterns: ['CUSTOM-[0-9]+'],
+      },
+    }),
+    'utf8',
+  );
 
   const result = withPolicyEnv(policyPath, () => loadEnterprisePolicy(root));
 
@@ -131,22 +138,26 @@ test('enterprise policy decisions are deny-first and allowlist aware', () => {
 test('enterprise policy denials include source and fix hints', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-policy-root-'));
   const policyPath = join(root, 'policy.json');
-  writeFileSync(policyPath, JSON.stringify({
-    schema_version: 1,
-    allowed_tools: ['file_read'],
-    allowed_mcp_servers: ['github'],
-    network_allowlist: ['example.com'],
-    model_policy: {
-      allowed_backends: ['deepinfra'],
-    },
-    plugin_policy: {
-      allowed_plugins: ['sample-readonly'],
-      max_trust_level: 'read_only',
-    },
-    telemetry: {
-      opt_in: false,
-    },
-  }), 'utf8');
+  writeFileSync(
+    policyPath,
+    JSON.stringify({
+      schema_version: 1,
+      allowed_tools: ['file_read'],
+      allowed_mcp_servers: ['github'],
+      network_allowlist: ['example.com'],
+      model_policy: {
+        allowed_backends: ['deepinfra'],
+      },
+      plugin_policy: {
+        allowed_plugins: ['sample-readonly'],
+        max_trust_level: 'read_only',
+      },
+      telemetry: {
+        opt_in: false,
+      },
+    }),
+    'utf8',
+  );
 
   withPolicyEnv(policyPath, () => {
     const toolDecision = evaluateToolPolicy('shell_exec');

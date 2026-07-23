@@ -37,18 +37,19 @@ export interface UsageCostEstimate {
 }
 
 export const DEEPSEEK_PRICING_SOURCE_URL = 'https://api-docs.deepseek.com/quick_start/pricing/';
-export const DEEPINFRA_PRICING_SOURCE_URL = 'https://docs.deepinfra.com/api-reference/models/models-list';
+export const DEEPINFRA_PRICING_SOURCE_URL =
+  'https://docs.deepinfra.com/api-reference/models/models-list';
 export const MODEL_PRICING_VERIFIED_AT = '2026-06-04';
 
 export const DEEPSEEK_SUPPORTED_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro'] as const;
-export type DeepSeekModelId = typeof DEEPSEEK_SUPPORTED_MODELS[number];
+export type DeepSeekModelId = (typeof DEEPSEEK_SUPPORTED_MODELS)[number];
 
 export const MODEL_PRICING_REGISTRY: Record<string, ModelPricingEntry> = {
   'deepinfra:meta-llama/Llama-4-Scout-17B-16E-Instruct': {
     provider: 'deepinfra',
     modelId: 'meta-llama/Llama-4-Scout-17B-16E-Instruct',
     inputCostPer1M: 0.08,
-    outputCostPer1M: 0.30,
+    outputCostPer1M: 0.3,
     sourceUrl: DEEPINFRA_PRICING_SOURCE_URL,
     verifiedAt: MODEL_PRICING_VERIFIED_AT,
   },
@@ -56,7 +57,7 @@ export const MODEL_PRICING_REGISTRY: Record<string, ModelPricingEntry> = {
     provider: 'deepinfra',
     modelId: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
     inputCostPer1M: 0.071,
-    outputCostPer1M: 0.10,
+    outputCostPer1M: 0.1,
     sourceUrl: DEEPINFRA_PRICING_SOURCE_URL,
     verifiedAt: MODEL_PRICING_VERIFIED_AT,
   },
@@ -64,7 +65,7 @@ export const MODEL_PRICING_REGISTRY: Record<string, ModelPricingEntry> = {
     provider: 'deepinfra',
     modelId: 'stepfun-ai/Step-3.5-Flash',
     inputCostPer1M: 0.09,
-    outputCostPer1M: 0.30,
+    outputCostPer1M: 0.3,
     sourceUrl: DEEPINFRA_PRICING_SOURCE_URL,
     verifiedAt: MODEL_PRICING_VERIFIED_AT,
     cacheInputDiscountAvailable: true,
@@ -72,15 +73,15 @@ export const MODEL_PRICING_REGISTRY: Record<string, ModelPricingEntry> = {
   'deepinfra:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B': {
     provider: 'deepinfra',
     modelId: 'nvidia/NVIDIA-Nemotron-3-Super-120B-A12B',
-    inputCostPer1M: 0.10,
-    outputCostPer1M: 0.50,
+    inputCostPer1M: 0.1,
+    outputCostPer1M: 0.5,
     sourceUrl: DEEPINFRA_PRICING_SOURCE_URL,
     verifiedAt: MODEL_PRICING_VERIFIED_AT,
   },
   'deepinfra:deepseek-ai/DeepSeek-V3-0324': {
     provider: 'deepinfra',
     modelId: 'deepseek-ai/DeepSeek-V3-0324',
-    inputCostPer1M: 0.20,
+    inputCostPer1M: 0.2,
     outputCostPer1M: 0.77,
     sourceUrl: DEEPINFRA_PRICING_SOURCE_URL,
     verifiedAt: MODEL_PRICING_VERIFIED_AT,
@@ -118,7 +119,10 @@ export const MODEL_PRICING_REGISTRY: Record<string, ModelPricingEntry> = {
   },
 };
 
-function registryKey(provider: string | null | undefined, modelId: string | null | undefined): string | null {
+function registryKey(
+  provider: string | null | undefined,
+  modelId: string | null | undefined,
+): string | null {
   if (!provider || !modelId) {
     return null;
   }
@@ -129,17 +133,20 @@ function normalizeTokenCount(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-export function getModelPricing(provider: string | null | undefined, modelId: string | null | undefined): ModelPricingEntry | null {
+export function getModelPricing(
+  provider: string | null | undefined,
+  modelId: string | null | undefined,
+): ModelPricingEntry | null {
   const key = registryKey(provider, modelId);
-  return key ? MODEL_PRICING_REGISTRY[key] ?? null : null;
+  return key ? (MODEL_PRICING_REGISTRY[key] ?? null) : null;
 }
 
 export function getModelPricingByModelId(modelId: string): ModelPricingEntry | null {
-  return Object.values(MODEL_PRICING_REGISTRY).find(entry => entry.modelId === modelId) ?? null;
+  return Object.values(MODEL_PRICING_REGISTRY).find((entry) => entry.modelId === modelId) ?? null;
 }
 
 export function getDeepInfraPricingEntries(): ModelPricingEntry[] {
-  return Object.values(MODEL_PRICING_REGISTRY).filter(entry => entry.provider === 'deepinfra');
+  return Object.values(MODEL_PRICING_REGISTRY).filter((entry) => entry.provider === 'deepinfra');
 }
 
 export function isSupportedDeepSeekModel(model: string): model is DeepSeekModelId {
@@ -173,7 +180,9 @@ export function estimateProviderUsageCost(input: UsageCostInput): UsageCostEstim
       outputCostPer1M: null,
       inputCacheHitCostPer1M: null,
       inputCacheMissCostPer1M: null,
-      warning: input.modelId ? `No pinned pricing is registered for ${input.provider ?? 'unknown'}:${input.modelId}.` : 'No model id was provided for pricing.',
+      warning: input.modelId
+        ? `No pinned pricing is registered for ${input.provider ?? 'unknown'}:${input.modelId}.`
+        : 'No model id was provided for pricing.',
     };
   }
 
@@ -188,8 +197,8 @@ export function estimateProviderUsageCost(input: UsageCostInput): UsageCostEstim
 
   if (cacheHitTokens !== null || cacheMissTokens !== null) {
     const hitTokens = cacheHitTokens ?? 0;
-    const missTokens = cacheMissTokens
-      ?? (promptTokens !== null ? Math.max(promptTokens - hitTokens, 0) : 0);
+    const missTokens =
+      cacheMissTokens ?? (promptTokens !== null ? Math.max(promptTokens - hitTokens, 0) : 0);
     const hitRate = pricing.inputCacheHitCostPer1M ?? pricing.inputCostPer1M;
     const missRate = pricing.inputCacheMissCostPer1M ?? pricing.inputCostPer1M;
     inputCostUsd = (hitTokens / 1_000_000) * hitRate + (missTokens / 1_000_000) * missRate;
@@ -197,7 +206,8 @@ export function estimateProviderUsageCost(input: UsageCostInput): UsageCostEstim
     inputCostUsd = (promptTokens / 1_000_000) * pricing.inputCostPer1M;
     if (pricing.cacheInputDiscountAvailable) {
       precision = 'conservative';
-      warning = 'Input cache discounts may apply, but cache-hit/cache-miss token counts were not available.';
+      warning =
+        'Input cache discounts may apply, but cache-hit/cache-miss token counts were not available.';
     }
   }
 

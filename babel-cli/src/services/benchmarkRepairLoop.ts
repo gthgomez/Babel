@@ -13,7 +13,10 @@ import {
 import { dirname, join, relative, resolve } from 'node:path';
 
 import { BABEL_ROOT } from '../cli/constants.js';
-import { normalizeExecutionProfile, type ExecutionProfileName } from '../config/executionProfiles.js';
+import {
+  normalizeExecutionProfile,
+  type ExecutionProfileName,
+} from '../config/executionProfiles.js';
 import { runBabelPipeline, type PipelineResult } from '../pipeline.js';
 import { findCheckpoint, type CheckpointRecord } from './checkpoints.js';
 import { analyzeTerminalBenchRun, type BenchmarkPartialPassSummary } from './benchmarkAnalysis.js';
@@ -237,14 +240,22 @@ export async function runBenchmarkRepairLoop(
   const modelTier = options.modelTier ?? DEFAULT_MODEL_TIER;
   const executionProfile = normalizeRepairExecutionProfile(options.executionProfile);
   const deepInfraTimeoutMs = positiveInt(options.deepInfraTimeoutMs, DEFAULT_DEEPINFRA_TIMEOUT_MS);
-  const waterfallTimeoutMs = positiveInt(options.waterfallTimeoutMs, Math.max(DEFAULT_WATERFALL_TIMEOUT_MS, deepInfraTimeoutMs * 3));
+  const waterfallTimeoutMs = positiveInt(
+    options.waterfallTimeoutMs,
+    Math.max(DEFAULT_WATERFALL_TIMEOUT_MS, deepInfraTimeoutMs * 3),
+  );
   const verifierTimeoutMs = positiveInt(options.verifierTimeoutMs, DEFAULT_VERIFIER_TIMEOUT_MS);
   const targetedTimeoutMs = positiveInt(options.targetedTimeoutMs, DEFAULT_TARGETED_TIMEOUT_MS);
   const dryRun = options.dryRun !== false;
   const workspaceRoot = dirname(BABEL_ROOT);
   const benchmarksRoot = resolve(options.benchmarksRoot ?? join(workspaceRoot, 'benchmarks'));
-  const loopRoot = resolve(options.outputDir ?? join(BABEL_ROOT, 'runs', 'benchmarks', 'repair-loops'));
-  const loopDir = join(loopRoot, `benchmark-repair-loop-${formatTimestampForFile(now)}-${sanitizeSlug(resolve(options.run).split(/[\\/]/).pop() ?? 'run')}`);
+  const loopRoot = resolve(
+    options.outputDir ?? join(BABEL_ROOT, 'runs', 'benchmarks', 'repair-loops'),
+  );
+  const loopDir = join(
+    loopRoot,
+    `benchmark-repair-loop-${formatTimestampForFile(now)}-${sanitizeSlug(resolve(options.run).split(/[\\/]/).pop() ?? 'run')}`,
+  );
   const repairArtifactsDir = join(loopDir, 'packets');
   mkdirSync(repairArtifactsDir, { recursive: true });
 
@@ -300,7 +311,8 @@ export async function runBenchmarkRepairLoop(
 
   if (!baselineReport.task_name || !baselineReport.trial_dir) {
     report.status = dryRun ? 'planned' : 'blocked';
-    report.final.recommendation = 'No failing trial was selected; run benchmark analyze on a failed countable run first.';
+    report.final.recommendation =
+      'No failing trial was selected; run benchmark analyze on a failed countable run first.';
     writeLoopReport(report);
     return report;
   }
@@ -355,7 +367,9 @@ export async function runBenchmarkRepairLoop(
         break;
       }
     } else {
-      notes.push('Reused repair workspace to preserve partial work from the previous failed verifier attempt.');
+      notes.push(
+        'Reused repair workspace to preserve partial work from the previous failed verifier attempt.',
+      );
     }
 
     const iterationPrepared = prepared;
@@ -375,30 +389,34 @@ export async function runBenchmarkRepairLoop(
     writeFileSync(promptPath, `${repairPrompt}\n`, 'utf8');
 
     const beforeRepairSnapshot = snapshotWorkspaceFiles(iterationPrepared.workspace_dir);
-    const repairExecution = dryRun || options.skipBabelRepair === true
-      ? makeSkippedOrPlannedRepairExecution(dryRun, options.skipBabelRepair === true)
-      : await executeRepairPrompt({
-          prompt: repairPrompt,
-          workspaceDir: iterationPrepared.workspace_dir,
-          iterationDir,
-          executionProfile,
-          modelTier,
-          model: options.model ?? null,
-          dockerImage: iterationPrepared.docker_image,
-          deepInfraTimeoutMs,
-          waterfallTimeoutMs,
-        });
+    const repairExecution =
+      dryRun || options.skipBabelRepair === true
+        ? makeSkippedOrPlannedRepairExecution(dryRun, options.skipBabelRepair === true)
+        : await executeRepairPrompt({
+            prompt: repairPrompt,
+            workspaceDir: iterationPrepared.workspace_dir,
+            iterationDir,
+            executionProfile,
+            modelTier,
+            model: options.model ?? null,
+            dockerImage: iterationPrepared.docker_image,
+            deepInfraTimeoutMs,
+            waterfallTimeoutMs,
+          });
     const afterRepairSnapshot = snapshotWorkspaceFiles(iterationPrepared.workspace_dir);
-    const changedFiles = dryRun || options.skipBabelRepair === true
-      ? []
-      : diffWorkspaceSnapshots(beforeRepairSnapshot, afterRepairSnapshot);
+    const changedFiles =
+      dryRun || options.skipBabelRepair === true
+        ? []
+        : diffWorkspaceSnapshots(beforeRepairSnapshot, afterRepairSnapshot);
     const snapshotMetadata: RepairSnapshotMetadata = {
       before_file_count: beforeRepairSnapshot.size,
       after_file_count: afterRepairSnapshot.size,
       changed_files: changedFiles,
       rollback: {
         status: dryRun ? 'skipped' : 'not_needed',
-        reason: dryRun ? 'Dry run did not mutate the repair workspace.' : 'No failed retry decision has been made.',
+        reason: dryRun
+          ? 'Dry run did not mutate the repair workspace.'
+          : 'No failed retry decision has been made.',
         files_restored: [],
         files_removed: [],
         refused_files: [],
@@ -413,7 +431,9 @@ export async function runBenchmarkRepairLoop(
     latestLocalReward = verifier.reward;
     previousVerifier = verifier;
 
-    let targeted = makeSkippedTargetedBenchmark('Targeted benchmark waits for a local verifier pass.');
+    let targeted = makeSkippedTargetedBenchmark(
+      'Targeted benchmark waits for a local verifier pass.',
+    );
     if (dryRun) {
       targeted = planTargetedBenchmark({
         benchmarksRoot,
@@ -464,9 +484,10 @@ export async function runBenchmarkRepairLoop(
       terminalStatus = 'blocked';
     }
 
-    const partialAfter = targeted.result_path && existsSync(targeted.result_path)
-      ? safeAnalyzePartialPass(targeted.result_path)
-      : null;
+    const partialAfter =
+      targeted.result_path && existsSync(targeted.result_path)
+        ? safeAnalyzePartialPass(targeted.result_path)
+        : null;
 
     const failureCapsule = buildIterationFailureCapsule({
       iterationNumber,
@@ -504,7 +525,8 @@ export async function runBenchmarkRepairLoop(
     report.final.next_run = currentRun;
     report.final.best_iteration = selectBestIteration(report.iterations);
     report.final.last_failure_capsule = failureCapsule;
-    report.final.manual_bridge_prompt_path = failureCapsule && !failureCapsule.retryable ? promptPath : null;
+    report.final.manual_bridge_prompt_path =
+      failureCapsule && !failureCapsule.retryable ? promptPath : null;
     report.final.recommendation = recommendationForStatus(report.status, currentRun);
 
     const willRetry =
@@ -528,9 +550,10 @@ export async function runBenchmarkRepairLoop(
     } else if (willRetry) {
       iteration.snapshot.rollback = {
         status: 'carried_forward',
-        reason: report.status === 'targeted_failed' && targeted.result_path
-          ? 'Targeted rerun produced a new failed benchmark result; the next iteration re-prepares from that run instead of mutating this workspace.'
-          : 'Retry will carry the failed diff forward because it may contain useful partial work and no local rollback point was selected.',
+        reason:
+          report.status === 'targeted_failed' && targeted.result_path
+            ? 'Targeted rerun produced a new failed benchmark result; the next iteration re-prepares from that run instead of mutating this workspace.'
+            : 'Retry will carry the failed diff forward because it may contain useful partial work and no local rollback point was selected.',
         files_restored: [],
         files_removed: [],
         refused_files: [],
@@ -562,12 +585,23 @@ export async function runBenchmarkRepairLoop(
       break;
     }
 
-    if (dryRun || terminalStatus === 'targeted_passed' || terminalStatus === 'passed_local' || terminalStatus === 'blocked') {
+    if (
+      dryRun ||
+      terminalStatus === 'targeted_passed' ||
+      terminalStatus === 'passed_local' ||
+      terminalStatus === 'blocked'
+    ) {
       break;
     }
   }
 
-  if (!dryRun && report.iterations.length >= maxIterations && report.status !== 'targeted_passed' && report.status !== 'passed_local' && report.status !== 'blocked') {
+  if (
+    !dryRun &&
+    report.iterations.length >= maxIterations &&
+    report.status !== 'targeted_passed' &&
+    report.status !== 'passed_local' &&
+    report.status !== 'blocked'
+  ) {
     report.status = 'max_iterations_reached';
     report.final.recommendation = recommendationForStatus(report.status, currentRun);
   }
@@ -598,10 +632,7 @@ export function formatBenchmarkRepairLoopHuman(report: BenchmarkRepairLoopReport
       lines.push(`  targeted reward: ${iteration.targeted_benchmark.reward}`);
     }
   }
-  lines.push(
-    '',
-    `Recommendation: ${report.final.recommendation}`,
-  );
+  lines.push('', `Recommendation: ${report.final.recommendation}`);
   if (report.final.targeted_result_path) {
     lines.push(`Targeted result: ${report.final.targeted_result_path}`);
   }
@@ -616,10 +647,15 @@ function prepareRepairWorkspace(input: {
 }): PreparedRepairWorkspace {
   const runtime = resolveTrialRuntime(input.repairReport, input.benchmarksRoot);
   if (!runtime.source_app_dir || !existsSync(runtime.source_app_dir)) {
-    throw new Error(`Falling trial app directory was not found: ${runtime.source_app_dir ?? '(unknown)'}`);
+    throw new Error(
+      `Falling trial app directory was not found: ${runtime.source_app_dir ?? '(unknown)'}`,
+    );
   }
 
-  const workspaceDir = join(input.loopDir, `workspace-${String(input.iterationNumber).padStart(2, '0')}`);
+  const workspaceDir = join(
+    input.loopDir,
+    `workspace-${String(input.iterationNumber).padStart(2, '0')}`,
+  );
   mkdirSync(dirname(workspaceDir), { recursive: true });
   cpSync(runtime.source_app_dir, workspaceDir, {
     recursive: true,
@@ -641,18 +677,28 @@ function prepareRepairWorkspace(input: {
   };
 }
 
-function resolveTrialRuntime(report: BenchmarkRepairReport, benchmarksRoot: string): TrialRuntimeInfo {
+function resolveTrialRuntime(
+  report: BenchmarkRepairReport,
+  benchmarksRoot: string,
+): TrialRuntimeInfo {
   const trialDir = report.trial_dir;
   const trialResult = trialDir ? readJsonRecordOrNull(join(trialDir, 'result.json')) : null;
   const taskName = report.task_name;
   const taskDir = taskName ? join(benchmarksRoot, 'terminal-bench-2', taskName) : null;
-  const taskTomlPath = taskDir && existsSync(join(taskDir, 'task.toml')) ? join(taskDir, 'task.toml') : null;
+  const taskTomlPath =
+    taskDir && existsSync(join(taskDir, 'task.toml')) ? join(taskDir, 'task.toml') : null;
   const taskToml = taskTomlPath ? readFileSync(taskTomlPath, 'utf8') : '';
-  const dockerImage = stringValue(trialResult?.['docker_image']) ?? readTomlString(taskToml, 'docker_image');
-  const sourceAppDir = stringValue(trialResult?.['app_dir']) ?? (trialDir ? join(trialDir, 'app') : null);
+  const dockerImage =
+    stringValue(trialResult?.['docker_image']) ?? readTomlString(taskToml, 'docker_image');
+  const sourceAppDir =
+    stringValue(trialResult?.['app_dir']) ?? (trialDir ? join(trialDir, 'app') : null);
   const testsDir = taskDir && existsSync(join(taskDir, 'tests')) ? join(taskDir, 'tests') : null;
-  const instructionPath = taskDir && existsSync(join(taskDir, 'instruction.md')) ? join(taskDir, 'instruction.md') : null;
-  const trialTaskPromptPath = trialDir && existsSync(join(trialDir, 'babel-task.md')) ? join(trialDir, 'babel-task.md') : null;
+  const instructionPath =
+    taskDir && existsSync(join(taskDir, 'instruction.md')) ? join(taskDir, 'instruction.md') : null;
+  const trialTaskPromptPath =
+    trialDir && existsSync(join(trialDir, 'babel-task.md'))
+      ? join(trialDir, 'babel-task.md')
+      : null;
   return {
     source_app_dir: sourceAppDir,
     docker_image: dockerImage,
@@ -663,7 +709,10 @@ function resolveTrialRuntime(report: BenchmarkRepairReport, benchmarksRoot: stri
   };
 }
 
-function replayCheckpointIntoWorkspace(report: BenchmarkRepairReport, workspaceDir: string): CheckpointReplayResult {
+function replayCheckpointIntoWorkspace(
+  report: BenchmarkRepairReport,
+  workspaceDir: string,
+): CheckpointReplayResult {
   const checkpointId = report.best_candidate_checkpoint;
   if (!checkpointId || !report.babel_run_dir) {
     return {
@@ -685,10 +734,12 @@ function replayCheckpointIntoWorkspace(report: BenchmarkRepairReport, workspaceD
       checkpoint_id: checkpointId,
       source_run_dir: report.babel_run_dir,
       restored_files: [],
-      refused_files: [{
-        path: checkpointId,
-        reason: error instanceof Error ? error.message : String(error),
-      }],
+      refused_files: [
+        {
+          path: checkpointId,
+          reason: error instanceof Error ? error.message : String(error),
+        },
+      ],
       notes: ['Candidate checkpoint metadata could not be read.'],
     };
   }
@@ -699,10 +750,12 @@ function replayCheckpointIntoWorkspace(report: BenchmarkRepairReport, workspaceD
       checkpoint_id: checkpointId,
       source_run_dir: report.babel_run_dir,
       restored_files: [],
-      refused_files: [{
-        path: record.target,
-        reason: 'Checkpoint has no restorable file snapshots.',
-      }],
+      refused_files: [
+        {
+          path: record.target,
+          reason: 'Checkpoint has no restorable file snapshots.',
+        },
+      ],
       notes: record.notes,
     };
   }
@@ -757,7 +810,8 @@ function replayCheckpointIntoWorkspace(report: BenchmarkRepairReport, workspaceD
   }
 
   return {
-    status: refusedFiles.length === 0 ? 'restored' : restoredFiles.length > 0 ? 'partial' : 'refused',
+    status:
+      refusedFiles.length === 0 ? 'restored' : restoredFiles.length > 0 ? 'partial' : 'refused',
     checkpoint_id: checkpointId,
     source_run_dir: report.babel_run_dir,
     restored_files: restoredFiles,
@@ -790,47 +844,87 @@ function buildExecutableRepairPrompt(input: {
     'Checkpoint replay:',
     `- status: ${input.prepared.checkpoint_replay.status}`,
     `- checkpoint: ${input.prepared.checkpoint_replay.checkpoint_id ?? '(none)'}`,
-    ...input.prepared.checkpoint_replay.restored_files.slice(0, 12).map(file => `- restored: ${relative(input.prepared.workspace_dir, file).replace(/\\/g, '/')}`),
-    ...input.prepared.checkpoint_replay.refused_files.slice(0, 8).map(file => `- refused: ${file.path} - ${file.reason}`),
+    ...input.prepared.checkpoint_replay.restored_files
+      .slice(0, 12)
+      .map(
+        (file) => `- restored: ${relative(input.prepared.workspace_dir, file).replace(/\\/g, '/')}`,
+      ),
+    ...input.prepared.checkpoint_replay.refused_files
+      .slice(0, 8)
+      .map((file) => `- refused: ${file.path} - ${file.reason}`),
     '',
     'Packet evidence:',
     input.repairReport.repair_prompt,
     '',
     'Current workspace summary:',
-    ...workspaceSummary.map(line => `- ${line}`),
+    ...workspaceSummary.map((line) => `- ${line}`),
     '',
-    ...(previous ? [
-      'Previous local verifier attempt:',
-      `- status: ${previous.status}`,
-      `- reward: ${previous.reward ?? '(unknown)'}`,
-      `- exit code: ${previous.exit_code ?? '(unknown)'}`,
-      `- stdout: ${previous.stdout_excerpt ?? '(none)'}`,
-      `- stderr: ${previous.stderr_excerpt ?? '(none)'}`,
-      '',
-    ] : []),
-    ...(input.previousFailureCapsule ? [
-      'Previous failure capsule:',
-      '```json',
-      formatFailureCapsuleForPrompt(input.previousFailureCapsule),
-      '```',
-      '',
-      'Repair-loop rule: do not repeat the same failed patch pattern described in the capsule.',
-      '',
-    ] : []),
-    ...(instruction ? [
-      'Official task instruction:',
-      '```text',
-      normalizeAppPaths(instruction, input.prepared.workspace_dir),
-      '```',
-      '',
-    ] : []),
-    ...(!instruction && trialPrompt ? [
-      'Original Babel task prompt:',
-      '```text',
-      normalizeAppPaths(trialPrompt, input.prepared.workspace_dir),
-      '```',
-      '',
-    ] : []),
+    ...(previous
+      ? [
+          'Previous local verifier attempt:',
+          `- status: ${previous.status}`,
+          `- reward: ${previous.reward ?? '(unknown)'}`,
+          `- exit code: ${previous.exit_code ?? '(unknown)'}`,
+          `- stdout: ${previous.stdout_excerpt ?? '(none)'}`,
+          `- stderr: ${previous.stderr_excerpt ?? '(none)'}`,
+          '',
+        ]
+      : []),
+    ...(input.previousFailureCapsule
+      ? [
+          'Previous failure capsule:',
+          '```json',
+          formatFailureCapsuleForPrompt(input.previousFailureCapsule),
+          '```',
+          '',
+          'Repair-loop rule: do not repeat the same failed patch pattern described in the capsule.',
+          ...(input.iterationNumber >= 2
+            ? [
+                '',
+                '--- STRATEGY DIVERSIFICATION REQUIRED (iteration >= 2) ---',
+                'You have already attempted at least one repair that did not resolve the failure.',
+                'Before proposing another patch, explicitly identify:',
+                '  1. What specific approach did the previous attempt(s) use?',
+                '  2. Why did that approach fail to satisfy the verifier?',
+                '  3. What DIFFERENT strategy will you use this time?',
+                '',
+                'Rules for strategy selection:',
+                '  - If the previous approach was a targeted fix (editing the failing file),',
+                '    consider a broader rewrite or a fundamentally different algorithm.',
+                '  - If the previous approach was a broad rewrite, try the smallest possible',
+                '    targeted fix that passes the verifier.',
+                '  - If the verifier reports a test assertion failure, do NOT just tweak',
+                '    the expected output — fix the underlying logic.',
+                '  - If the verifier reports a timeout/performance failure, consider',
+                '    algorithmic changes (caching, better complexity) not superficial tweaks.',
+                '  - If you have tried the same class of fix twice, ABANDON that approach',
+                '    and choose one from a different category.',
+                '',
+                'Repeated same-strategy failures cause QA_REJECTED_MAX_LOOPS termination.',
+                '',
+              ]
+            : []),
+          '',
+        ]
+      : []),
+    ...(instruction
+      ? [
+          'Official task instruction:',
+          '```text',
+          normalizeAppPaths(instruction, input.prepared.workspace_dir),
+          '```',
+          '',
+        ]
+      : []),
+    ...(!instruction && trialPrompt
+      ? [
+          'Original Babel task prompt:',
+          '```text',
+          normalizeAppPaths(trialPrompt, input.prepared.workspace_dir),
+          '```',
+          '',
+        ]
+      : []),
     'Verifier command:',
     input.prepared.docker_image && input.prepared.tests_dir
       ? `docker run --rm -v ${dockerPath(input.prepared.workspace_dir)}:/app -v ${dockerPath(input.prepared.tests_dir)}:/tests:ro -v <logs>:/logs -w /app ${input.prepared.docker_image} bash /tests/test.sh`
@@ -874,7 +968,7 @@ async function executeRepairPrompt(input: {
 
   try {
     const result: PipelineResult = await runBabelPipeline(input.prompt, {
-      mode: 'autonomous',
+      mode: 'deep',
       executionProfile: input.executionProfile,
       modelTier: input.modelTier,
       ...(input.model ? { modelOverride: input.model } : {}),
@@ -904,12 +998,18 @@ async function executeRepairPrompt(input: {
   }
 }
 
-function runLocalVerifier(prepared: PreparedRepairWorkspace, iterationDir: string, timeoutMs: number): VerifierRunResult {
+function runLocalVerifier(
+  prepared: PreparedRepairWorkspace,
+  iterationDir: string,
+  timeoutMs: number,
+): VerifierRunResult {
   if (!prepared.docker_image) {
     return makeErrorVerifier('No docker_image was available for the failed task.');
   }
   if (!prepared.tests_dir || !existsSync(prepared.tests_dir)) {
-    return makeErrorVerifier(`Verifier tests directory not found: ${prepared.tests_dir ?? '(unknown)'}`);
+    return makeErrorVerifier(
+      `Verifier tests directory not found: ${prepared.tests_dir ?? '(unknown)'}`,
+    );
   }
   const logsDir = join(iterationDir, 'verifier-logs');
   mkdirSync(join(logsDir, 'verifier'), { recursive: true });
@@ -1015,7 +1115,10 @@ function runTargetedBenchmark(input: {
   };
 }
 
-function buildVerifierCommand(prepared: PreparedRepairWorkspace, logsDir: string): { args: string[]; display: string } {
+function buildVerifierCommand(
+  prepared: PreparedRepairWorkspace,
+  logsDir: string,
+): { args: string[]; display: string } {
   const args = [
     'run',
     '--rm',
@@ -1028,9 +1131,10 @@ function buildVerifierCommand(prepared: PreparedRepairWorkspace, logsDir: string
     '-w',
     '/app',
   ];
-  const taskToml = prepared.task_toml_path && existsSync(prepared.task_toml_path)
-    ? readFileSync(prepared.task_toml_path, 'utf8')
-    : '';
+  const taskToml =
+    prepared.task_toml_path && existsSync(prepared.task_toml_path)
+      ? readFileSync(prepared.task_toml_path, 'utf8')
+      : '';
   const cpus = readTomlNumber(taskToml, 'cpus');
   const memory = readTomlMemory(taskToml);
   if (cpus !== null) args.push('--cpus', String(cpus));
@@ -1153,7 +1257,10 @@ function planTargetedBenchmark(input: {
   };
 }
 
-function makeSkippedOrPlannedRepairExecution(dryRun: boolean, skipped: boolean): RepairExecutionResult {
+function makeSkippedOrPlannedRepairExecution(
+  dryRun: boolean,
+  skipped: boolean,
+): RepairExecutionResult {
   return {
     status: dryRun ? 'planned' : 'skipped',
     run_dir: null,
@@ -1278,16 +1385,18 @@ function buildIterationFailureCapsule(input: {
   return buildFailureCapsule({
     attempt: input.iterationNumber,
     pipelineStatus: input.repairExecution.pipeline_status,
-    verifierStatus: input.targeted.status !== 'skipped' ? input.targeted.status : input.verifier.status,
+    verifierStatus:
+      input.targeted.status !== 'skipped' ? input.targeted.status : input.verifier.status,
     failedCommand,
     stdout: input.targeted.stdout_excerpt ?? input.verifier.stdout_excerpt,
     stderr: input.targeted.stderr_excerpt ?? input.verifier.stderr_excerpt,
     error: input.targeted.error ?? input.verifier.error ?? input.repairExecution.error,
     changedFiles: input.changedFiles,
-    exactInvariantStatus: input.repairExecution.pipeline_status === 'EXACT_INSTRUCTION_DRIFT' ||
+    exactInvariantStatus:
+      input.repairExecution.pipeline_status === 'EXACT_INSTRUCTION_DRIFT' ||
       input.repairExecution.pipeline_status === 'AMBIGUOUS_LITERAL_BINDING'
-      ? 'fail'
-      : 'unknown',
+        ? 'fail'
+        : 'unknown',
   });
 }
 
@@ -1335,9 +1444,10 @@ function snapshotWorkspaceFiles(root: string): WorkspaceSnapshot {
         snapshot.set(relativePath.replace(/\\/g, '/'), {
           size: stats.size,
           mtimeMs: Math.round(stats.mtimeMs),
-          contentBase64: stats.size <= SNAPSHOT_CONTENT_LIMIT_BYTES
-            ? readFileSync(fullPath).toString('base64')
-            : null,
+          contentBase64:
+            stats.size <= SNAPSHOT_CONTENT_LIMIT_BYTES
+              ? readFileSync(fullPath).toString('base64')
+              : null,
         });
       } catch {
         // Ignore files that disappear while an external verifier is writing.
@@ -1452,9 +1562,10 @@ export function restoreWorkspaceSnapshot(
 
   return {
     status: filesRestored.length > 0 || filesRemoved.length > 0 ? 'rolled_back' : 'not_needed',
-    reason: filesRestored.length > 0 || filesRemoved.length > 0
-      ? 'Failed repair changes were rolled back before the next attempt.'
-      : 'Workspace already matched the pre-attempt snapshot.',
+    reason:
+      filesRestored.length > 0 || filesRemoved.length > 0
+        ? 'Failed repair changes were rolled back before the next attempt.'
+        : 'Workspace already matched the pre-attempt snapshot.',
     files_restored: filesRestored,
     files_removed: filesRemoved,
     refused_files: [],
@@ -1465,7 +1576,10 @@ export function snapshotWorkspaceFilesForRepairTest(root: string): WorkspaceSnap
   return snapshotWorkspaceFiles(root);
 }
 
-export function diffWorkspaceSnapshotsForRepairTest(before: WorkspaceSnapshot, after: WorkspaceSnapshot): string[] {
+export function diffWorkspaceSnapshotsForRepairTest(
+  before: WorkspaceSnapshot,
+  after: WorkspaceSnapshot,
+): string[] {
   return diffWorkspaceSnapshots(before, after);
 }
 
@@ -1500,7 +1614,11 @@ function readReward(logsDir: string): number | null {
   return text === '1' ? 1 : text === '0' ? 0 : null;
 }
 
-function checkpointRelativePath(record: CheckpointRecord, path: string, relativePath: string | null): string | null {
+function checkpointRelativePath(
+  record: CheckpointRecord,
+  path: string,
+  relativePath: string | null,
+): string | null {
   if (relativePath && relativePath.trim().length > 0) {
     return relativePath.replace(/\\/g, '/');
   }
@@ -1517,14 +1635,16 @@ function summarizeWorkspace(workspaceDir: string): string[] {
   const entries = readdirSync(workspaceDir, { withFileTypes: true })
     .sort((left, right) => left.name.localeCompare(right.name))
     .slice(0, 30)
-    .map(entry => `${entry.isDirectory() ? 'dir ' : 'file'} ${entry.name}`);
+    .map((entry) => `${entry.isDirectory() ? 'dir ' : 'file'} ${entry.name}`);
   return entries.length > 0 ? entries : ['workspace is empty'];
 }
 
 function readBoundedText(path: string | null, limit: number): string | null {
   if (!path || !existsSync(path)) return null;
   const text = readFileSync(path, 'utf8');
-  return text.length > limit ? `${text.slice(0, limit)}\n...[truncated ${text.length - limit} chars]` : text;
+  return text.length > limit
+    ? `${text.slice(0, limit)}\n...[truncated ${text.length - limit} chars]`
+    : text;
 }
 
 function normalizeAppPaths(text: string, workspaceDir: string): string {
@@ -1534,7 +1654,10 @@ function normalizeAppPaths(text: string, workspaceDir: string): string {
     .replace(/Target project root: .+/g, `Target project root: ${workspaceDir}`);
 }
 
-function recommendationForStatus(status: BenchmarkRepairLoopStatus, nextRun: string | null): string {
+function recommendationForStatus(
+  status: BenchmarkRepairLoopStatus,
+  nextRun: string | null,
+): string {
   switch (status) {
     case 'planned':
       return 'Dry run complete. Re-run without --dry-run to execute repair mode.';
@@ -1567,7 +1690,7 @@ function normalizeRepairExecutionProfile(value: string | undefined): ExecutionPr
 }
 
 function snapshotEnv(keys: string[]): Map<string, string | undefined> {
-  return new Map(keys.map(key => [key, process.env[key]]));
+  return new Map(keys.map((key) => [key, process.env[key]]));
 }
 
 function restoreEnv(snapshot: Map<string, string | undefined>): void {
@@ -1586,14 +1709,22 @@ function isWithinRoot(rootPath: string, candidatePath: string): boolean {
   if (process.platform === 'win32') {
     const normalizedRoot = root.toLowerCase();
     const normalizedCandidate = candidate.toLowerCase();
-    return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(`${normalizedRoot}\\`);
+    return (
+      normalizedCandidate === normalizedRoot ||
+      normalizedCandidate.startsWith(`${normalizedRoot}\\`)
+    );
   }
   return candidate === root || candidate.startsWith(`${root}/`);
 }
 
 function isSafeRelativePath(path: string): boolean {
   const normalized = path.replace(/\\/g, '/');
-  return normalized.length > 0 && !normalized.startsWith('/') && !/^[A-Za-z]:/.test(normalized) && !normalized.split('/').includes('..');
+  return (
+    normalized.length > 0 &&
+    !normalized.startsWith('/') &&
+    !/^[A-Za-z]:/.test(normalized) &&
+    !normalized.split('/').includes('..')
+  );
 }
 
 function readTomlString(toml: string, key: string): string | null {
@@ -1627,11 +1758,20 @@ function positiveInt(value: unknown, fallback: number): number {
 }
 
 function sanitizeSlug(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'repair';
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'repair'
+  );
 }
 
 function formatTimestampForFile(date: Date): string {
-  return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  return date
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}Z$/, 'Z');
 }
 
 function quoteArg(arg: string): string {
@@ -1642,7 +1782,9 @@ function quoteArg(arg: string): string {
 function excerpt(text: string): string | null {
   const normalized = text.trim().replace(/\s+/g, ' ');
   if (!normalized) return null;
-  return normalized.length > EXCERPT_LIMIT ? `${normalized.slice(0, EXCERPT_LIMIT)}...` : normalized;
+  return normalized.length > EXCERPT_LIMIT
+    ? `${normalized.slice(0, EXCERPT_LIMIT)}...`
+    : normalized;
 }
 
 function readJsonRecordOrNull(path: string): Record<string, unknown> | null {

@@ -36,7 +36,7 @@ interface RuntimeTelemetryRecord {
   token_budget_missing_count: number;
   budget_warning_severity: 'info' | 'warn' | 'severe' | null;
   budget_policy_enabled: boolean;
-  pipeline_mode: 'direct' | 'verified' | 'autonomous' | 'manual';
+  pipeline_mode: 'chat' | 'plan' | 'deep';
   qa_verdict: QaVerdict | null;
   qa_failure_tags: string[];
   final_outcome: string | null;
@@ -202,7 +202,7 @@ function buildOrchestratorManifest(scenario) {
       task_category: isFrontend ? 'Frontend' : 'Backend',
       secondary_category: null,
       complexity_estimate: 'Medium',
-      pipeline_mode: 'verified',
+      pipeline_mode: 'deep',
       ambiguity_note: null,
     },
     platform_profile: {
@@ -474,7 +474,7 @@ async function main(): Promise<void> {
               const task = buildTaskPrompt(laneConfig.lane, variant, fixture);
               const result = await runBabelPipeline(task, {
                 orchestratorVersion: 'v9',
-                mode: 'verified',
+                mode: 'deep',
               });
 
               const runtimeTelemetryPath = join(result.runDir, '06_runtime_telemetry.json');

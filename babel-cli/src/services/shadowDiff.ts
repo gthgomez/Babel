@@ -21,13 +21,11 @@ export function getShadowDiff(shadowRoot: string, projectRoot: string): ShadowDi
 
   // Use git diff --no-index to compare directories.
   // --no-index is a standalone mode that compares two paths on the filesystem.
-  const result = spawnSync('git', [
-    'diff',
-    '--no-index',
-    '--color=always',
-    projectRoot,
-    shadowRoot
-  ], { encoding: 'utf-8' });
+  const result = spawnSync(
+    'git',
+    ['diff', '--no-index', '--color=always', projectRoot, shadowRoot],
+    { encoding: 'utf-8' },
+  );
 
   // git diff --no-index status codes:
   // 0: no changes
