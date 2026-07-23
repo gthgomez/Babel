@@ -49,10 +49,14 @@ test('filterEnterpriseMcpServers applies configured server allowlist', () => {
   const previousAdminPolicyPath = process.env['BABEL_ENTERPRISE_POLICY_ADMIN_PATH'];
   const root = mkdtempSync(join(tmpdir(), 'babel-mcp-policy-'));
   const policyPath = join(root, 'enterprise-policy.json');
-  writeFileSync(policyPath, JSON.stringify({
-    schema_version: 1,
-    allowed_mcp_servers: ['github'],
-  }), 'utf8');
+  writeFileSync(
+    policyPath,
+    JSON.stringify({
+      schema_version: 1,
+      allowed_mcp_servers: ['github'],
+    }),
+    'utf8',
+  );
 
   process.env['BABEL_ENTERPRISE_POLICY_PATH'] = policyPath;
   process.env['BABEL_ENTERPRISE_POLICY_USER_PATH'] = join(root, 'missing-user-policy.json');
@@ -70,9 +74,11 @@ test('filterEnterpriseMcpServers applies configured server allowlist', () => {
   } finally {
     if (previousPolicyPath === undefined) delete process.env['BABEL_ENTERPRISE_POLICY_PATH'];
     else process.env['BABEL_ENTERPRISE_POLICY_PATH'] = previousPolicyPath;
-    if (previousUserPolicyPath === undefined) delete process.env['BABEL_ENTERPRISE_POLICY_USER_PATH'];
+    if (previousUserPolicyPath === undefined)
+      delete process.env['BABEL_ENTERPRISE_POLICY_USER_PATH'];
     else process.env['BABEL_ENTERPRISE_POLICY_USER_PATH'] = previousUserPolicyPath;
-    if (previousAdminPolicyPath === undefined) delete process.env['BABEL_ENTERPRISE_POLICY_ADMIN_PATH'];
+    if (previousAdminPolicyPath === undefined)
+      delete process.env['BABEL_ENTERPRISE_POLICY_ADMIN_PATH'];
     else process.env['BABEL_ENTERPRISE_POLICY_ADMIN_PATH'] = previousAdminPolicyPath;
   }
 });

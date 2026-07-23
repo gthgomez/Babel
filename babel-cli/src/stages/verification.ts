@@ -5,10 +5,10 @@
  */
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { z }                        from 'zod';
+import { z } from 'zod';
 
-import { ToolCallRequestSchema }    from '../localTools.js';
-import type { ToolResult }          from '../localTools.js';
+import { ToolCallRequestSchema } from '../localTools.js';
+import type { ToolResult } from '../localTools.js';
 import type { SwePlan, ToolCallLog } from '../schemas/agentContracts.js';
 import {
   collectPlannedNewFileWrites,
@@ -52,21 +52,27 @@ function resolveVerificationTargets(
   rawTask: string,
   toolCallLog: ToolCallLog[],
 ): { explicitTargets: string[]; candidateTargets: string[] } {
-  const rawExplicitTargets = extractRequestedFileTargets(rawTask).map(target => normalizePathForComparison(target));
+  const rawExplicitTargets = extractRequestedFileTargets(rawTask).map((target) =>
+    normalizePathForComparison(target),
+  );
   const writtenTargets = uniqueStrings(
     toolCallLog
-      .filter(entry => entry.tool === 'file_write' && entry.exit_code === 0)
-      .map(entry => normalizePathForComparison(String(entry.target ?? '')))
-      .filter(target => target.length > 0),
+      .filter((entry) => entry.tool === 'file_write' && entry.exit_code === 0)
+      .map((entry) => normalizePathForComparison(String(entry.target ?? '')))
+      .filter((target) => target.length > 0),
   );
-  const explicitTargets = uniqueStrings(rawExplicitTargets.map(target => {
-    if (writtenTargets.includes(target)) {
-      return target;
-    }
-    const basename = getPathBasename(target).toLowerCase();
-    const basenameMatches = writtenTargets.filter(written => getPathBasename(written).toLowerCase() === basename);
-    return basenameMatches.length === 1 ? basenameMatches[0]! : target;
-  }));
+  const explicitTargets = uniqueStrings(
+    rawExplicitTargets.map((target) => {
+      if (writtenTargets.includes(target)) {
+        return target;
+      }
+      const basename = getPathBasename(target).toLowerCase();
+      const basenameMatches = writtenTargets.filter(
+        (written) => getPathBasename(written).toLowerCase() === basename,
+      );
+      return basenameMatches.length === 1 ? basenameMatches[0]! : target;
+    }),
+  );
 
   return {
     explicitTargets,
@@ -77,7 +83,9 @@ function resolveVerificationTargets(
 // ─── Semantic satisfaction ────────────────────────────────────────────────────
 
 function isTextLikeVerificationTarget(target: string): boolean {
-  return /\.(?:ts|tsx|js|jsx|mjs|cjs|kt|java|py|rb|go|rs|sh|ps1|md|txt|json|yaml|yml|css|html)$/i.test(target);
+  return /\.(?:ts|tsx|js|jsx|mjs|cjs|kt|java|py|rb|go|rs|sh|ps1|md|txt|json|yaml|yml|css|html)$/i.test(
+    target,
+  );
 }
 
 function extractNamedOutputArtifacts(rawTask: string): string[] {
@@ -94,20 +102,40 @@ function extractNamedOutputArtifacts(rawTask: string): string[] {
   for (const pattern of patterns) {
     for (const match of task.matchAll(pattern)) {
       const artifact = match[1]?.trim();
-      if (artifact && !artifact.includes('*') && artifact !== '.' && artifact !== '..') {
+      // Filter out artifacts that start with '-' or '.' (regex backtrack artifacts
+      // from hyphenated filenames like "exact-status.txt" → "-status.txt")
+      if (
+        artifact &&
+        !artifact.includes('*') &&
+        artifact !== '.' &&
+        artifact !== '..' &&
+        !artifact.startsWith('-') &&
+        !artifact.startsWith('.')
+      ) {
         artifacts.push(artifact);
       }
     }
   }
 
-  return uniqueStrings(artifacts.map(normalizePathForComparison));
+  const normalized = uniqueStrings(artifacts.map(normalizePathForComparison));
+
+  // Filter out artifacts that are proper substrings of another artifact's basename.
+  // Example: "exact-status.txt" → regex backtrack captures "status.txt" as a ghost.
+  // "status.txt" is a substring of "exact-status.txt" → remove it.
+  return normalized.filter((artifact) => {
+    const lower = artifact.toLowerCase();
+    return !normalized.some((other) => {
+      const otherLower = other.toLowerCase();
+      return otherLower !== lower && otherLower.includes(lower);
+    });
+  });
 }
 
 export function extractRequestedOutputArtifacts(rawTask: string): string[] {
-  return uniqueStrings([
+  const merged = uniqueStrings([
     ...normalizeRequestedFileTargetsForBoundedContract(rawTask),
     ...extractNamedOutputArtifacts(rawTask),
-  ]).filter(target => {
+  ]).filter((target) => {
     const normalized = normalizePathForComparison(target).toLowerCase();
     if (!normalized || normalized.includes('*') || normalized.includes('<')) {
       return false;
@@ -116,6 +144,17 @@ export function extractRequestedOutputArtifacts(rawTask: string): string[] {
       return false;
     }
     return true;
+  });
+
+  // Filter out artifacts that are proper substrings of another artifact's basename.
+  // Both extraction paths (file targets + named artifacts) can produce ghost captures
+  // from hyphenated filenames like "exact-status.txt" → "status.txt".
+  return merged.filter((artifact) => {
+    const lower = artifact.toLowerCase();
+    return !merged.some((other) => {
+      const otherLower = other.toLowerCase();
+      return otherLower !== lower && otherLower.includes(lower);
+    });
   });
 }
 
@@ -130,20 +169,27 @@ function findExpectationTarget(
         ? /\.(?:ts|tsx|js|jsx|mjs|cjs)$/i
         : /\.(?:kt|java)$/i;
 
-  return candidateTargets.find(target => preferredPattern.test(target))
-    ?? candidateTargets.find(target => !isWriteReportTarget(target))
-    ?? candidateTargets[0]
-    ?? null;
+  return (
+    candidateTargets.find((target) => preferredPattern.test(target)) ??
+    candidateTargets.find((target) => !isWriteReportTarget(target)) ??
+    candidateTargets[0] ??
+    null
+  );
 }
 
 function semanticExpectationLabel(expectation: SemanticExpectation): string {
+  if (expectation.kind === 'exact_literal') return `exact "${expectation.expectedLiteral}"`;
   return expectation.kind === 'body_pattern' ? expectation.name : expectation.symbolName;
 }
 
-function satisfiesSemanticExpectation(
-  expectation: SemanticExpectation,
-  content: string,
-): boolean {
+function satisfiesSemanticExpectation(expectation: SemanticExpectation, content: string): boolean {
+  if (expectation.kind === 'exact_literal') {
+    // The file content must contain the exact literal string anywhere in the file.
+    // This catches EXACT_INSTRUCTION_DRIFT failures where the model wrote a file
+    // but the content doesn't match what the task required.
+    return content.includes(expectation.expectedLiteral);
+  }
+
   if (expectation.kind === 'body_pattern') {
     if (expectation.name === 'blank_input_default' && expectation.expectedLiteral) {
       return hasBlankDefaultLiteral(content, expectation.expectedLiteral);
@@ -165,7 +211,7 @@ function satisfiesSemanticExpectation(
       new RegExp(`\\bexports\\.${escaped}\\s*=`),
       new RegExp(`\\bexports\\[['"]${escaped}['"]\\]\\s*=`),
     ];
-    return patterns.some(pattern => pattern.test(content));
+    return patterns.some((pattern) => pattern.test(content));
   }
 
   if (expectation.kind === 'kotlin_object') {
@@ -181,8 +227,7 @@ function hasCssSelectorBlock(content: string): boolean {
 }
 
 function isExternalBenchmarkRequest(rawTask: string): boolean {
-  return /\bTerminal-Bench 2 task\b/i.test(rawTask) ||
-    /\bSWE-rebench\b/i.test(rawTask);
+  return /\bTerminal-Bench 2 task\b/i.test(rawTask) || /\bSWE-rebench\b/i.test(rawTask);
 }
 
 // ─── Verification entry points ────────────────────────────────────────────────
@@ -210,8 +255,8 @@ export function verifyBoundedTaskArtifacts(
       if (!existsSync(resolvedTarget)) {
         const successfulWrites = uniqueStrings(
           toolCallLog
-            .filter(entry => entry.tool === 'file_write' && entry.exit_code === 0)
-            .map(entry => String(entry.target ?? '').trim()),
+            .filter((entry) => entry.tool === 'file_write' && entry.exit_code === 0)
+            .map((entry) => String(entry.target ?? '').trim()),
         );
         return `Post-write verification failed: requested output "${target}" was not created. Successful file_write targets: ${successfulWrites.join(', ') || 'none'}.`;
       }
@@ -295,7 +340,9 @@ export function verifySuccessfulTextWriteTarget(
     contract.bounded &&
     !isExternalBenchmarkRequest(rawTask) &&
     contract.requestedTargets.length > 0 &&
-    !contract.requestedTargets.some(requestedTarget => requestedTarget.toLowerCase() === normalizedTarget.toLowerCase())
+    !contract.requestedTargets.some(
+      (requestedTarget) => requestedTarget.toLowerCase() === normalizedTarget.toLowerCase(),
+    )
   ) {
     return `Post-write verification failed: output "${target}" is outside the bounded requested target set (${contract.requestedTargets.join(', ')}).`;
   }
@@ -310,7 +357,12 @@ export function verifySuccessfulTextWriteTarget(
     return `Post-write verification failed: output "${target}" is empty or whitespace-only.`;
   }
 
-  if (/\.css$/i.test(normalizedTarget) && contract.contentTargets.some(requestedTarget => requestedTarget.toLowerCase() === normalizedTarget.toLowerCase())) {
+  if (
+    /\.css$/i.test(normalizedTarget) &&
+    contract.contentTargets.some(
+      (requestedTarget) => requestedTarget.toLowerCase() === normalizedTarget.toLowerCase(),
+    )
+  ) {
     if (!hasCssSelectorBlock(content)) {
       return `Post-write verification failed: output "${target}" does not contain a concrete CSS selector block.`;
     }
@@ -351,7 +403,10 @@ export function maybeHandleNewFilePreflightFastPath(
   }
 
   const resolvedTarget = resolveStepTargetPath(projectRoot, target);
-  const { newFilePaths, missingParentDirs } = collectPlannedNewFileWrites(approvedPlan, projectRoot);
+  const { newFilePaths, missingParentDirs } = collectPlannedNewFileWrites(
+    approvedPlan,
+    projectRoot,
+  );
 
   if (
     req.tool === 'directory_list' &&
@@ -367,11 +422,7 @@ export function maybeHandleNewFilePreflightFastPath(
     };
   }
 
-  if (
-    req.tool === 'file_read' &&
-    newFilePaths.has(resolvedTarget) &&
-    !existsSync(resolvedTarget)
-  ) {
+  if (req.tool === 'file_read' && newFilePaths.has(resolvedTarget) && !existsSync(resolvedTarget)) {
     return {
       exit_code: 0,
       stdout:
@@ -392,7 +443,9 @@ function looksLikeReportStep(step: SwePlan['minimal_action_set'][number]): boole
     String(step.target ?? ''),
     String(step.verification ?? ''),
     String(step.rationale ?? ''),
-  ].join(' ').toLowerCase();
+  ]
+    .join(' ')
+    .toLowerCase();
   return /\b(report|summary|write[_ -]?report|documentation|document)\b/.test(haystack);
 }
 
@@ -409,8 +462,8 @@ export function normalizePlanTargetsAgainstRequestedOutputs(
     return { plan: swePlan, warnings: [] };
   }
 
-  const reportTarget = requestedTargets.find(target => isWriteReportTarget(target)) ?? null;
-  const contentTargets = requestedTargets.filter(target => !isWriteReportTarget(target));
+  const reportTarget = requestedTargets.find((target) => isWriteReportTarget(target)) ?? null;
+  const contentTargets = requestedTargets.filter((target) => !isWriteReportTarget(target));
   const contentTargetsByBasename = new Map<string, string[]>();
   const contentTargetsByExtension = new Map<string, string[]>();
 
@@ -427,7 +480,7 @@ export function normalizePlanTargetsAgainstRequestedOutputs(
 
   let changed = false;
   const warnings: string[] = [];
-  const normalizedSteps = swePlan.minimal_action_set.map(step => {
+  const normalizedSteps = swePlan.minimal_action_set.map((step) => {
     const toolName = String(step.tool ?? '');
     if (!['file_write', 'directory_list'].includes(toolName)) {
       return step;
@@ -464,9 +517,8 @@ export function normalizePlanTargetsAgainstRequestedOutputs(
       return step;
     }
 
-    const normalizedTarget = step.tool === 'directory_list'
-      ? getPathDirname(canonicalTarget)
-      : canonicalTarget;
+    const normalizedTarget =
+      step.tool === 'directory_list' ? getPathDirname(canonicalTarget) : canonicalTarget;
 
     if (normalizedTarget === currentTarget) {
       return step;

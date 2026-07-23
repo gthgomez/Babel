@@ -44,7 +44,7 @@ function readPackageJson(root: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
+      ? (parsed as Record<string, unknown>)
       : null;
   } catch {
     return null;
@@ -95,15 +95,15 @@ function topLevelHasExtension(root: string, extension: string): boolean {
   if (!existsSync(root)) {
     return false;
   }
-  return readdirSync(root).some(entry => extname(entry).toLowerCase() === extension);
+  return readdirSync(root).some((entry) => extname(entry).toLowerCase() === extension);
 }
 
 function buildContextDraft(report: Omit<ProjectOnboardingReport, 'context_draft'>): string {
   const commandLines = [
-    ...report.recommended_commands.install.map(command => `- Install: \`${command}\``),
-    ...report.recommended_commands.build.map(command => `- Build: \`${command}\``),
-    ...report.recommended_commands.test.map(command => `- Test: \`${command}\``),
-    ...report.recommended_commands.lint.map(command => `- Lint: \`${command}\``),
+    ...report.recommended_commands.install.map((command) => `- Install: \`${command}\``),
+    ...report.recommended_commands.build.map((command) => `- Build: \`${command}\``),
+    ...report.recommended_commands.test.map((command) => `- Test: \`${command}\``),
+    ...report.recommended_commands.lint.map((command) => `- Lint: \`${command}\``),
   ];
 
   return [
@@ -113,12 +113,16 @@ function buildContextDraft(report: Omit<ProjectOnboardingReport, 'context_draft'
     '',
     `- Project root: \`${report.project_root}\``,
     `- Recommended execution profile: \`${report.recommended_execution_profile}\``,
-    `- Detected stacks: ${report.detected_stacks.length > 0 ? report.detected_stacks.map(stack => `\`${stack}\``).join(', ') : 'Unknown'}`,
-    `- Markers: ${report.markers.length > 0 ? report.markers.map(marker => `\`${marker}\``).join(', ') : 'None detected'}`,
+    `- Detected stacks: ${report.detected_stacks.length > 0 ? report.detected_stacks.map((stack) => `\`${stack}\``).join(', ') : 'Unknown'}`,
+    `- Markers: ${report.markers.length > 0 ? report.markers.map((marker) => `\`${marker}\``).join(', ') : 'None detected'}`,
     '',
     '## Commands',
     '',
-    ...(commandLines.length > 0 ? commandLines : ['- No deterministic commands detected yet. Add them after the first successful local run.']),
+    ...(commandLines.length > 0
+      ? commandLines
+      : [
+          '- No deterministic commands detected yet. Add them after the first successful local run.',
+        ]),
     '',
     '## Notes',
     '',
@@ -186,8 +190,10 @@ export function analyzeProjectRoot(
     addStack(stacks, 'node');
     commands.install.push(manager === 'npm' ? 'npm install' : `${manager} install`);
     if (fileExists(projectRoot, 'tsconfig.json')) addStack(stacks, 'typescript');
-    if (fileExists(projectRoot, 'vite.config.ts') || fileExists(projectRoot, 'vite.config.js')) addStack(stacks, 'vite');
-    if (fileExists(projectRoot, 'next.config.js') || fileExists(projectRoot, 'next.config.mjs')) addStack(stacks, 'nextjs');
+    if (fileExists(projectRoot, 'vite.config.ts') || fileExists(projectRoot, 'vite.config.js'))
+      addStack(stacks, 'vite');
+    if (fileExists(projectRoot, 'next.config.js') || fileExists(projectRoot, 'next.config.mjs'))
+      addStack(stacks, 'nextjs');
     if (scripts['build']) commands.build.push(commandForScript(manager, 'build'));
     if (scripts['test']) commands.test.push(commandForScript(manager, 'test'));
     if (scripts['lint']) commands.lint.push(commandForScript(manager, 'lint'));
@@ -201,7 +207,10 @@ export function analyzeProjectRoot(
     } else if (fileExists(projectRoot, 'requirements.txt')) {
       commands.install.push('python -m pip install -r requirements.txt');
     }
-    if (fileExists(projectRoot, 'tests') || readTextIfExists(projectRoot, 'pyproject.toml').includes('pytest')) {
+    if (
+      fileExists(projectRoot, 'tests') ||
+      readTextIfExists(projectRoot, 'pyproject.toml').includes('pytest')
+    ) {
       commands.test.push('pytest');
     }
   }
@@ -229,9 +238,12 @@ export function analyzeProjectRoot(
     fileExists(projectRoot, 'settings.gradle.kts')
   ) {
     addStack(stacks, 'gradle');
-    const wrapper = process.platform === 'win32' && fileExists(projectRoot, 'gradlew.bat')
-      ? 'gradlew.bat'
-      : (fileExists(projectRoot, 'gradlew') ? 'gradlew' : 'gradle');
+    const wrapper =
+      process.platform === 'win32' && fileExists(projectRoot, 'gradlew.bat')
+        ? 'gradlew.bat'
+        : fileExists(projectRoot, 'gradlew')
+          ? 'gradlew'
+          : 'gradle';
     commands.build.push(`${wrapper} build`);
     commands.test.push(`${wrapper} test`);
   }
@@ -259,9 +271,7 @@ export function analyzeProjectRoot(
   }
 
   const recommendedProfile: ExecutionProfileName =
-    stacks.length === 0 && readdirSync(projectRoot).length === 0
-      ? 'scaffold'
-      : 'dev_local';
+    stacks.length === 0 && readdirSync(projectRoot).length === 0 ? 'scaffold' : 'dev_local';
 
   const baseReport = {
     schema_version: 1 as const,
@@ -287,11 +297,13 @@ export function analyzeProjectRoot(
 }
 
 function slugify(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'project';
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'project'
+  );
 }
 
 export function writeOnboardingReport(

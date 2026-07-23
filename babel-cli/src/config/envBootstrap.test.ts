@@ -21,12 +21,11 @@ const distIndex = join(babelCliRoot, 'dist/index.js');
 test('parseEnvFileKeys ignores comments and empty values', () => {
   const dir = mkdtempSync(join(tmpdir(), 'babel-env-bootstrap-'));
   const envPath = join(dir, '.env');
-  writeFileSync(envPath, [
-    '# comment',
-    'BABEL_ROOT=/tmp/babel',
-    'EMPTY=',
-    'BABEL_ENV=test',
-  ].join('\n'), 'utf8');
+  writeFileSync(
+    envPath,
+    ['# comment', 'BABEL_ROOT=/tmp/babel', 'EMPTY=', 'BABEL_ENV=test'].join('\n'),
+    'utf8',
+  );
 
   try {
     assert.deepEqual(parseEnvFileKeys(envPath).sort(), ['BABEL_ENV', 'BABEL_ROOT']);
@@ -68,23 +67,10 @@ test('getEnvFileKeysNotActiveInProcess reports keys missing from process env', (
 });
 
 test('isStrictEnvMode honors argv and CI env', () => {
-  assert.equal(isStrictEnvMode(['node', 'babel', 'run', '--strict-env', 'task']), true);
-  assert.equal(isStrictEnvMode(['node', 'babel', 'run', 'task']), false);
-  assert.equal(
-    isStrictEnvMode(['node', 'babel', 'run', 'task']),
-    false,
-  );
-  const previousCi = process.env['CI'];
-  process.env['CI'] = 'true';
-  try {
-    assert.equal(isStrictEnvMode(['node', 'babel', 'run', 'task']), true);
-  } finally {
-    if (previousCi === undefined) {
-      delete process.env['CI'];
-    } else {
-      process.env['CI'] = previousCi;
-    }
-  }
+  assert.equal(isStrictEnvMode(['node', 'babel', 'run', '--strict-env', 'task'], {}), true);
+  assert.equal(isStrictEnvMode(['node', 'babel', 'run', 'task'], {}), false);
+  assert.equal(isStrictEnvMode(['node', 'babel', 'run', 'task'], { CI: 'true' }), true);
+  assert.equal(isStrictEnvMode(['node', 'babel', 'run', 'task'], { BABEL_STRICT_ENV: '1' }), true);
 });
 
 test('formatEnvFileInactiveMessage includes canonical invocation hints', () => {
@@ -129,16 +115,12 @@ test('spawned CLI auto-loads babel-cli/.env without node --env-file', (t) => {
     }
   }
 
-  const result = spawnSync(
-    process.execPath,
-    [distIndex, 'doctor', '--scope', 'env', '--json'],
-    {
-      cwd: babelCliRoot,
-      env: cleanEnv,
-      encoding: 'utf8',
-      timeout: 120_000,
-    },
-  );
+  const result = spawnSync(process.execPath, [distIndex, 'doctor', '--scope', 'env', '--json'], {
+    cwd: babelCliRoot,
+    env: cleanEnv,
+    encoding: 'utf8',
+    timeout: 120_000,
+  });
 
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.equal(cleanEnv[sampleKey], undefined);

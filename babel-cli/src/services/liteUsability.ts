@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 
 import { BABEL_ROOT, BABEL_RUNS_DIR } from '../cli/constants.js';
 import { rewriteArgv } from '../cli/argv.js';
+import { classifyDoTask } from '../commands/workflowCommands.js';
 
 export type LiteUsabilityStatus = 'pass' | 'fail';
 
@@ -11,6 +12,7 @@ export interface LiteUsabilityFixture {
   user_goal: string;
   lite_command: string[];
   full_command: string[];
+  expected_route: 'daily' | 'plan' | 'undo';
   expected_verb: 'ask' | 'plan' | 'patch' | 'propose' | 'diff' | 'fix' | 'review' | 'undo' | 'do';
   mutation_policy: 'read_only' | 'plan_only' | 'may_edit';
   expected_output_contract: string[];
@@ -71,27 +73,58 @@ function tokenCount(command: string[]): number {
   return command.join(' ').split(/\s+/).filter(Boolean).length;
 }
 
+function taskTextFromRewrittenArgv(rewritten: string[]): string {
+  const route = rewritten[2];
+  if (route === 'daily' || route === 'plan') {
+    return rewritten
+      .slice(3)
+      .filter((token) => !token.startsWith('-'))
+      .join(' ');
+  }
+  return '';
+}
+
+function inferredSessionVerb(route: string, taskText: string): string {
+  if (route === 'plan') {
+    return 'plan';
+  }
+  if (route === 'undo') {
+    return 'undo';
+  }
+  if (route === 'daily') {
+    return classifyDoTask(taskText);
+  }
+  return route;
+}
+
 function evaluateFixture(fixture: LiteUsabilityFixture): LiteUsabilityScenarioResult {
   const rewritten = rewriteArgv(commandToArgv(fixture.lite_command));
   const checks: LiteUsabilityScenarioResult['checks'] = [];
+  const route = rewritten[2] ?? '';
 
-  const laneOk = rewritten[2] === 'lite' || rewritten[2] === 'l';
+  const routeOk = route === fixture.expected_route;
   checks.push({
-    name: 'routes_to_lite_lane',
-    status: laneOk ? 'pass' : 'fail',
-    detail: laneOk ? 'Command stays on the dedicated Lite command group.' : `Expected lite/l at argv[2], got ${String(rewritten[2])}.`,
+    name: 'routes_to_session_lane',
+    status: routeOk ? 'pass' : 'fail',
+    detail: routeOk
+      ? `Command routes to ${fixture.expected_route}.`
+      : `Expected ${fixture.expected_route} at argv[2], got ${String(route)}.`,
   });
 
-  const verbOk = rewritten[3] === fixture.expected_verb;
+  const taskText = taskTextFromRewrittenArgv(rewritten);
+  const inferredVerb = inferredSessionVerb(route, taskText);
+  const verbOk = inferredVerb === fixture.expected_verb;
   checks.push({
-    name: 'preserves_user_verb',
+    name: 'preserves_user_intent',
     status: verbOk ? 'pass' : 'fail',
-    detail: verbOk ? `Verb is ${fixture.expected_verb}.` : `Expected ${fixture.expected_verb}, got ${String(rewritten[3])}.`,
+    detail: verbOk
+      ? `Intent is ${fixture.expected_verb}.`
+      : `Expected ${fixture.expected_verb}, got ${String(inferredVerb)}.`,
   });
 
-  const taskText = rewritten.slice(4).filter(token => !token.startsWith('-')).join(' ');
-  const taskOk = fixture.expected_verb === 'review' ||
+  const taskOk =
     fixture.expected_verb === 'undo' ||
+    fixture.expected_route === 'plan' ||
     taskText.includes(fixture.user_goal);
   checks.push({
     name: 'preserves_natural_task_text',
@@ -99,12 +132,15 @@ function evaluateFixture(fixture: LiteUsabilityFixture): LiteUsabilityScenarioRe
     detail: taskOk ? 'Natural task text is preserved.' : `Task text was not preserved: ${taskText}`,
   });
 
-  const outputContractOk = fixture.expected_output_contract.length >= 2 &&
+  const outputContractOk =
+    fixture.expected_output_contract.length >= 2 &&
     fixture.expected_output_contract.includes('status');
   checks.push({
     name: 'has_user_output_contract',
     status: outputContractOk ? 'pass' : 'fail',
-    detail: outputContractOk ? 'Fixture declares a minimum user-facing output contract.' : 'Output contract is too thin.',
+    detail: outputContractOk
+      ? 'Fixture declares a minimum user-facing output contract.'
+      : 'Output contract is too thin.',
   });
 
   const liteTokens = tokenCount(fixture.lite_command);
@@ -113,12 +149,12 @@ function evaluateFixture(fixture: LiteUsabilityFixture): LiteUsabilityScenarioRe
   checks.push({
     name: 'shorter_than_full_babel',
     status: shorter ? 'pass' : 'fail',
-    detail: `${liteTokens} Lite tokens vs ${fullTokens} full Babel tokens.`,
+    detail: `${liteTokens} daily tokens vs ${fullTokens} full Babel tokens.`,
   });
 
   return {
     ...fixture,
-    status: checks.every(check => check.status === 'pass') ? 'pass' : 'fail',
+    status: checks.every((check) => check.status === 'pass') ? 'pass' : 'fail',
     rewritten_lite_argv: rewritten,
     checks,
     comparison: {
@@ -129,10 +165,12 @@ function evaluateFixture(fixture: LiteUsabilityFixture): LiteUsabilityScenarioRe
   };
 }
 
-export function buildLiteUsabilityReport(options: {
-  fixturePath?: string;
-  outputDir?: string;
-} = {}): LiteUsabilityReport {
+export function buildLiteUsabilityReport(
+  options: {
+    fixturePath?: string;
+    outputDir?: string;
+  } = {},
+): LiteUsabilityReport {
   const scenarios = readFixtures(options.fixturePath).map(evaluateFixture);
   const artifactPath = defaultOutputPath(options.outputDir);
   const report: LiteUsabilityReport = {
@@ -141,8 +179,8 @@ export function buildLiteUsabilityReport(options: {
     artifact_path: artifactPath,
     summary: {
       scenarios: scenarios.length,
-      pass: scenarios.filter(scenario => scenario.status === 'pass').length,
-      fail: scenarios.filter(scenario => scenario.status === 'fail').length,
+      pass: scenarios.filter((scenario) => scenario.status === 'pass').length,
+      fail: scenarios.filter((scenario) => scenario.status === 'fail').length,
     },
     scenarios,
   };
@@ -159,7 +197,7 @@ export function formatLiteUsabilityReportHuman(report: LiteUsabilityReport): str
   ];
   for (const scenario of report.scenarios) {
     lines.push(`${scenario.status.toUpperCase().padEnd(5)} ${scenario.id}`);
-    lines.push(`  lite: ${scenario.lite_command.join(' ')}`);
+    lines.push(`  daily: ${scenario.lite_command.join(' ')}`);
     lines.push(`  full: ${scenario.full_command.join(' ')}`);
   }
   return lines.join('\n');

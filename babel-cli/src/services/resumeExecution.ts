@@ -7,7 +7,12 @@ import { buildRecoveryAssessment, type RecoveryAssessment } from './recovery.js'
 import { runSmallFixPath } from './smallFix.js';
 
 export interface ResumeExecutionResult {
-  status: 'RESUME_COMPLETE' | 'RESUME_FAILED' | 'RESUME_NOT_RESUMABLE' | 'NO_LATEST_RUN' | 'RUN_NOT_FOUND';
+  status:
+    | 'RESUME_COMPLETE'
+    | 'RESUME_FAILED'
+    | 'RESUME_NOT_RESUMABLE'
+    | 'NO_LATEST_RUN'
+    | 'RUN_NOT_FOUND';
   run_dir: string | null;
   classification: string | null;
   reason: string;
@@ -36,18 +41,27 @@ function getString(value: unknown): string | null {
 }
 
 function writeResumeSummary(runDir: string, result: ResumeExecutionResult): void {
-  writeFileSync(join(runDir, 'resume_execution_summary.json'), `${JSON.stringify({
-    schema_version: 1,
-    generated_at: new Date().toISOString(),
-    ...result,
-  }, null, 2)}\n`, 'utf-8');
+  writeFileSync(
+    join(runDir, 'resume_execution_summary.json'),
+    `${JSON.stringify(
+      {
+        schema_version: 1,
+        generated_at: new Date().toISOString(),
+        ...result,
+      },
+      null,
+      2,
+    )}\n`,
+    'utf-8',
+  );
 }
 
 function nonResumable(assessment: RecoveryAssessment, reason: string): ResumeExecutionResult {
   return {
-    status: assessment.status === 'NO_LATEST_RUN' || assessment.status === 'RUN_NOT_FOUND'
-      ? assessment.status
-      : 'RESUME_NOT_RESUMABLE',
+    status:
+      assessment.status === 'NO_LATEST_RUN' || assessment.status === 'RUN_NOT_FOUND'
+        ? assessment.status
+        : 'RESUME_NOT_RESUMABLE',
     run_dir: assessment.run_dir,
     classification: assessment.classification,
     reason,
@@ -63,12 +77,18 @@ function nonResumable(assessment: RecoveryAssessment, reason: string): ResumeExe
   };
 }
 
-async function resumeVerifierFailure(assessment: RecoveryAssessment): Promise<ResumeExecutionResult> {
+async function resumeVerifierFailure(
+  assessment: RecoveryAssessment,
+): Promise<ResumeExecutionResult> {
   const runDir = assessment.run_dir;
   const command = assessment.failed_command;
   const projectRoot =
     getString(assessment.failure_capsule?.['project_root']) ??
-    getString((assessment.execution_report?.['small_fix'] as Record<string, unknown> | undefined)?.['project_root']);
+    getString(
+      (assessment.execution_report?.['small_fix'] as Record<string, unknown> | undefined)?.[
+        'project_root'
+      ],
+    );
 
   if (!runDir || !command || !projectRoot || !existsSync(projectRoot)) {
     return nonResumable(assessment, 'Verifier rerun needs a saved command and project root.');
@@ -78,17 +98,20 @@ async function resumeVerifierFailure(assessment: RecoveryAssessment): Promise<Re
   process.env['BABEL_PROJECT_ROOT'] = projectRoot;
   let result;
   try {
-    result = await executeTool({
-      tool: 'test_run',
-      command,
-      working_directory: projectRoot,
-      timeout_seconds: 120,
-    }, {
-      agentId: 'resume',
-      runId: `resume_${Date.now()}`,
-      runDir,
-      babelRoot: projectRoot,
-    });
+    result = await executeTool(
+      {
+        tool: 'test_run',
+        command,
+        working_directory: projectRoot,
+        timeout_seconds: 120,
+      },
+      {
+        agentId: 'resume',
+        runId: `resume_${Date.now()}`,
+        runDir,
+        babelRoot: projectRoot,
+      },
+    );
   } finally {
     if (previousProjectRoot === undefined) {
       delete process.env['BABEL_PROJECT_ROOT'];
@@ -101,10 +124,13 @@ async function resumeVerifierFailure(assessment: RecoveryAssessment): Promise<Re
     status: result.exit_code === 0 ? 'RESUME_COMPLETE' : 'RESUME_FAILED',
     run_dir: runDir,
     classification: assessment.classification,
-    reason: result.exit_code === 0 ? 'Verifier passed on resume.' : 'Verifier still fails on resume.',
+    reason:
+      result.exit_code === 0 ? 'Verifier passed on resume.' : 'Verifier still fails on resume.',
     action: 'rerun_verifier',
     changed_files: Array.isArray(assessment.terminal_status_summary?.['changed_files'])
-      ? (assessment.terminal_status_summary?.['changed_files'] as unknown[]).filter((item): item is string => typeof item === 'string')
+      ? (assessment.terminal_status_summary?.['changed_files'] as unknown[]).filter(
+          (item): item is string => typeof item === 'string',
+        )
       : [],
     checks: [`${command}: ${result.exit_code === 0 ? 'passed' : 'failed'}`],
     recovery: {
@@ -181,7 +207,11 @@ async function retrySavedDirectPath(
     };
   }
 
-  if (commandKind === 'ask' || assessment.classification === 'retry_same_command' || assessment.classification === 'retry_with_schema_repair') {
+  if (
+    commandKind === 'ask' ||
+    assessment.classification === 'retry_same_command' ||
+    assessment.classification === 'retry_with_schema_repair'
+  ) {
     let result;
     try {
       result = await runAskAnswerPath({
@@ -227,11 +257,19 @@ async function retrySavedDirectPath(
     };
   }
 
-  return nonResumable(assessment, 'Saved run does not identify a supported action-taking resume path.');
+  return nonResumable(
+    assessment,
+    'Saved run does not identify a supported action-taking resume path.',
+  );
 }
 
-export async function resumeExecution(options: ResumeExecutionOptions = {}): Promise<ResumeExecutionResult> {
-  const assessment = buildRecoveryAssessment({ run: options.run ?? 'latest', ...(options.project ? { project: options.project } : {}) });
+export async function resumeExecution(
+  options: ResumeExecutionOptions = {},
+): Promise<ResumeExecutionResult> {
+  const assessment = buildRecoveryAssessment({
+    run: options.run ?? 'latest',
+    ...(options.project ? { project: options.project } : {}),
+  });
   if (assessment.status !== 'CONTINUE_READY') {
     return nonResumable(assessment, assessment.reason);
   }
@@ -244,17 +282,20 @@ export async function resumeExecution(options: ResumeExecutionOptions = {}): Pro
   if (assessment.classification === 'rerun_verifier') {
     return resumeVerifierFailure(assessment);
   }
-  if (assessment.classification === 'retry_same_command' || assessment.classification === 'retry_with_schema_repair') {
+  if (
+    assessment.classification === 'retry_same_command' ||
+    assessment.classification === 'retry_with_schema_repair'
+  ) {
     return retrySavedDirectPath(assessment, options);
   }
-  return nonResumable(assessment, `No action-taking resume path exists for ${assessment.classification}.`);
+  return nonResumable(
+    assessment,
+    `No action-taking resume path exists for ${assessment.classification}.`,
+  );
 }
 
 export function formatResumeExecutionHuman(result: ResumeExecutionResult): string {
-  const lines = [
-    'Babel Resume',
-    `Status: ${result.status}`,
-  ];
+  const lines = ['Babel Resume', `Status: ${result.status}`];
   if (result.run_dir) {
     lines.push(`Run: ${result.run_dir}`);
   }

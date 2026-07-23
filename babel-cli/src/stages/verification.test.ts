@@ -129,9 +129,33 @@ test('bounded artifact verification accepts a unique successful write when a mod
     const failure = verifyBoundedTaskArtifacts(
       'Add src/formatDisplayName.ts exporting formatDisplayName(firstName: string, lastName: string, email: string): string. Then update existing user.ts so userDisplayName(user) imports and uses formatDisplayName. Also update WRITE_REPORT.md.',
       [
-        { step: 1, tool: 'file_write', target: 'src/formatDisplayName.ts', exit_code: 0, stdout: '', stderr: '', verified: true },
-        { step: 2, tool: 'file_write', target: 'src/user.ts', exit_code: 0, stdout: '', stderr: '', verified: true },
-        { step: 3, tool: 'file_write', target: 'WRITE_REPORT.md', exit_code: 0, stdout: '', stderr: '', verified: true },
+        {
+          step: 1,
+          tool: 'file_write',
+          target: 'src/formatDisplayName.ts',
+          exit_code: 0,
+          stdout: '',
+          stderr: '',
+          verified: true,
+        },
+        {
+          step: 2,
+          tool: 'file_write',
+          target: 'src/user.ts',
+          exit_code: 0,
+          stdout: '',
+          stderr: '',
+          verified: true,
+        },
+        {
+          step: 3,
+          tool: 'file_write',
+          target: 'WRITE_REPORT.md',
+          exit_code: 0,
+          stdout: '',
+          stderr: '',
+          verified: true,
+        },
       ],
       root,
     );
@@ -217,10 +241,7 @@ test('requested output artifact verification rejects missing requested files', (
   const root = mkdtempSync(join(tmpdir(), 'babel-requested-artifacts-'));
   try {
     const task = 'Write a CSV file summary.csv with the requested rows.';
-    assert.match(
-      verifyRequestedOutputArtifacts(task, root) ?? '',
-      /summary\.csv.*does not exist/,
-    );
+    assert.match(verifyRequestedOutputArtifacts(task, root) ?? '', /summary\.csv.*does not exist/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

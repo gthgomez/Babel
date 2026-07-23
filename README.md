@@ -11,7 +11,8 @@ For each task it loads a **small, explicit instruction stack**—behavioral rule
 
 | | |
 |---|---|
-| **Product** | Local coding agent (`babel-cli`) |
+| **Product** | Local coding agent — TUI/REPL + chat / plan / deep |
+| **Primary UI** | Interactive terminal session (`babel`) |
 | **Release** | [**v0.1.0**](https://github.com/gthgomez/Babel/releases/tag/v0.1.0) · pre-1.0 |
 | **Source of truth** | This repo — [`gthgomez/Babel`](https://github.com/gthgomez/Babel) |
 | **Edge** | Inspectable stacks, domain routing, plan → review → execute |
@@ -24,7 +25,7 @@ Pin consumers with a **release tag + commit SHA**. See [ADR-0001](./docs/adr/ADR
 | You need to… | Babel |
 |--------------|--------|
 | Ship a feature or fix | Plan the work, then run an implementation session |
-| Stay safe on risky changes | Prefer verified / review-gated modes before execution |
+| Stay safe on risky changes | Prefer **plan** or **deep** when you want stronger gates before or during execution |
 | Work across domains | Route backend, frontend, mobile, and more to the right expertise—not one generic prompt |
 | Reuse hard-won workflows | Skills for testing, review, governance, release hygiene, and more |
 | Trust the agent’s “brain” | Preview the exact stack from the catalog before the model runs |
@@ -55,7 +56,7 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
   -TaskCategory backend `
   -Project example_saas_backend `
   -Model codex `
-  -PipelineMode verified `
+  -PipelineMode chat `
   -Format json
 ```
 
@@ -73,23 +74,13 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
 
 Golden: [examples/manifest-previews/mobile-direct.json](./examples/manifest-previews/mobile-direct.json)
 
-With local provider credentials configured, start an agent session:
+With local provider credentials configured:
 
 ```powershell
-# see docs/CLI_QUICKSTART.md for plan / run
-node .\babel-cli\dist\index.js plan --help
-node .\babel-cli\dist\index.js run --help
-```
-
-Or:
-
-```powershell
-pwsh -File .\tools\run-babel-local-cli.ps1 `
-  -TaskCategory backend `
-  -Project example_saas_backend `
-  -Model codex `
-  -Mode verified `
-  -TaskPrompt "Plan a safe backend refactor"
+cd .\babel-cli
+node .\dist\index.js                 # interactive TUI (chat)
+node .\dist\index.js plan "..."      # plan mode
+node .\dist\index.js deep "..."      # governed deep path
 ```
 
 Full onboarding: [START_HERE.md](./START_HERE.md) · CLI reference: [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md)
@@ -107,21 +98,23 @@ Before the model acts, Babel resolves an ordered stack from `prompt_catalog.yaml
 
 That is the product idea: **a coding agent whose instructions are engineered, not improvised.**
 
-### Run modes
+### Product modes
 
 | Mode | When to use |
 |------|-------------|
-| `direct` | Fastest path, fewest gates |
-| `verified` | Add QA review before execution |
-| `manual` | Handoff JSON for external / bridge flows |
-| `autonomous` | Highest-risk lane; more tool use and setup |
+| `chat` | Default conversational agent (TUI and one-shot tasks) |
+| `chat-headless` | Same engine for scripts / CI |
+| `plan` | Plan first, then apply with approval |
+| `deep` | Full governed pipeline for higher-risk work |
+
+Legacy aliases (`verified`→`deep`, `manual`→`plan`, `direct`→`chat`) still work with deprecation warnings.
 
 ### Inspect vs execute
 
 | Mode | Purpose |
 |------|---------|
 | **Inspect** | Validate catalog, preview stack, compare goldens, MCP — no model required |
-| **Execute** | `babel plan` / `babel run` — model-backed coding sessions |
+| **Execute** | `babel` (TUI), `babel plan`, `babel deep` — model-backed sessions |
 
 **Pre-1.0 honesty:** model-backed runs are real and typechecked, but need local credentials and workspace setup. You can still validate and preview stacks from a clean clone with no API keys.
 
@@ -131,7 +124,7 @@ That is the product idea: **a coding agent whose instructions are engineered, no
 |------|------|
 | `00_`–`06_` prompt layers | Router, behavior, domains, skills, adapters, overlays |
 | `prompt_catalog.yaml` | Routable stack contract |
-| `babel-cli/` | Coding agent runtime (`doctor`, `plan`, `run`, `mcp`) |
+| `babel-cli/` | Coding agent runtime (TUI + chat / plan / deep) |
 | `examples/` | Golden stack previews and first-success walkthroughs |
 | `tools/` | Validate, scrub, content policy, release gates |
 | `docs/` | Architecture, vision, CLI guides |
@@ -202,7 +195,7 @@ node .\dist\index.js mcp
 ## Docs
 
 - [START_HERE.md](./START_HERE.md) — first success  
-- [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md) — `doctor` / `plan` / `run` / `mcp`  
+- [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md) — TUI, chat / plan / deep, doctor, MCP  
 - [docs/VISION.md](./docs/VISION.md) — product direction  
 - [docs/architecture/ARCHITECTURE.md](./docs/architecture/ARCHITECTURE.md) — system shape  
 - [BABEL_BIBLE.md](./BABEL_BIBLE.md) — invocation contract for models and wrappers  

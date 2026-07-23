@@ -1,9 +1,4 @@
-import {
-  existsSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-} from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
 export type DocsFindingSeverity = 'error' | 'warn' | 'info';
@@ -106,7 +101,9 @@ function asRelative(root: string, path: string): string {
 function isInside(root: string, candidate: string): boolean {
   const resolvedRoot = resolve(root);
   const resolvedCandidate = resolve(candidate);
-  return resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}${sep}`);
+  return (
+    resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}${sep}`)
+  );
 }
 
 function addFinding(findings: DocsAuditFinding[], finding: DocsAuditFinding): void {
@@ -170,21 +167,29 @@ function readTrustedCommands(value: unknown): Array<string | TrustedCommandObjec
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.filter((entry): entry is string | TrustedCommandObject => {
-    if (typeof entry === 'string') {
-      return true;
-    }
-    return Boolean(entry && typeof entry === 'object' && !Array.isArray(entry) && typeof (entry as Record<string, unknown>)['command'] === 'string');
-  }).map((entry) => {
-    if (typeof entry === 'string') {
-      return entry;
-    }
-    const record = entry as unknown as Record<string, unknown>;
-    const output: TrustedCommandObject = { command: String(record['command']) };
-    if (typeof record['source'] === 'string') output.source = record['source'];
-    if (typeof record['justification'] === 'string') output.justification = record['justification'];
-    return output;
-  });
+  return value
+    .filter((entry): entry is string | TrustedCommandObject => {
+      if (typeof entry === 'string') {
+        return true;
+      }
+      return Boolean(
+        entry &&
+        typeof entry === 'object' &&
+        !Array.isArray(entry) &&
+        typeof (entry as Record<string, unknown>)['command'] === 'string',
+      );
+    })
+    .map((entry) => {
+      if (typeof entry === 'string') {
+        return entry;
+      }
+      const record = entry as unknown as Record<string, unknown>;
+      const output: TrustedCommandObject = { command: String(record['command']) };
+      if (typeof record['source'] === 'string') output.source = record['source'];
+      if (typeof record['justification'] === 'string')
+        output.justification = record['justification'];
+      return output;
+    });
 }
 
 function readLineBudgets(value: unknown): Record<string, number> {
@@ -200,7 +205,11 @@ function readLineBudgets(value: unknown): Record<string, number> {
   return budgets;
 }
 
-function validateManifestShape(manifest: DocsManifest, manifestPath: string, findings: DocsAuditFinding[]): void {
+function validateManifestShape(
+  manifest: DocsManifest,
+  manifestPath: string,
+  findings: DocsAuditFinding[],
+): void {
   if (manifest.schemaVersion !== undefined && manifest.schemaVersion !== 1) {
     addFinding(findings, {
       severity: 'error',
@@ -225,12 +234,16 @@ function pathFromRepo(root: string, relPath: string): string {
   return resolve(root, normalizeRelative(relPath));
 }
 
-function validateManifestPaths(root: string, manifest: DocsManifest, findings: DocsAuditFinding[]): void {
+function validateManifestPaths(
+  root: string,
+  manifest: DocsManifest,
+  findings: DocsAuditFinding[],
+): void {
   const paths = [
     ...manifest.maintainedDocs,
     ...manifest.historicalDocs,
-    ...manifest.generatedEvidence.filter(path => !path.includes('*')),
-    ...manifest.highRiskPaths.filter(path => !path.includes('*')),
+    ...manifest.generatedEvidence.filter((path) => !path.includes('*')),
+    ...manifest.highRiskPaths.filter((path) => !path.includes('*')),
   ];
   for (const relPath of paths) {
     const fullPath = pathFromRepo(root, relPath);
@@ -324,7 +337,8 @@ function checkLineBudgets(
     if (content === null) {
       continue;
     }
-    const maxLines = manifest?.maxLineBudgets[normalizeRelative(relPath)] ?? defaultBudgetFor(relPath);
+    const maxLines =
+      manifest?.maxLineBudgets[normalizeRelative(relPath)] ?? defaultBudgetFor(relPath);
     if (maxLines === null || maxLines === undefined) {
       continue;
     }
@@ -352,17 +366,28 @@ function checkLineBudgets(
 
 function classifyDoc(relPath: string, manifest: DocsManifest | null): string {
   const normalized = normalizeRelative(relPath);
-  if (manifest?.maintainedDocs.map(normalizeRelative).includes(normalized)) return 'CURRENT_AUTHORITY';
+  if (manifest?.maintainedDocs.map(normalizeRelative).includes(normalized))
+    return 'CURRENT_AUTHORITY';
   if (manifest?.historicalDocs.map(normalizeRelative).includes(normalized)) return 'HISTORICAL';
-  if (manifest?.generatedEvidence.some(pattern => matchesGlob(normalized, pattern))) return 'GENERATED_EVIDENCE';
-  if (manifest?.doNotUseAsAuthorityGlobs.some(pattern => matchesGlob(normalized, pattern))) return 'DO_NOT_USE_AS_AUTHORITY';
+  if (manifest?.generatedEvidence.some((pattern) => matchesGlob(normalized, pattern)))
+    return 'GENERATED_EVIDENCE';
+  if (manifest?.doNotUseAsAuthorityGlobs.some((pattern) => matchesGlob(normalized, pattern)))
+    return 'DO_NOT_USE_AS_AUTHORITY';
   if (normalized.includes('/archive/') || normalized.startsWith('archive/')) return 'ARCHIVE';
   if (/deprecated/i.test(normalized)) return 'DEPRECATED';
-  if (KNOWN_DOCS.includes(normalized as typeof KNOWN_DOCS[number]) || normalized.endsWith('/AGENTS.md')) return 'CURRENT_AUTHORITY';
+  if (
+    KNOWN_DOCS.includes(normalized as (typeof KNOWN_DOCS)[number]) ||
+    normalized.endsWith('/AGENTS.md')
+  )
+    return 'CURRENT_AUTHORITY';
   return 'UNCLASSIFIED';
 }
 
-function checkManifestDocExistence(root: string, manifest: DocsManifest | null, findings: DocsAuditFinding[]): void {
+function checkManifestDocExistence(
+  root: string,
+  manifest: DocsManifest | null,
+  findings: DocsAuditFinding[],
+): void {
   if (!manifest) {
     return;
   }
@@ -390,7 +415,11 @@ function checkManifestDocExistence(root: string, manifest: DocsManifest | null, 
   }
 }
 
-function checkHistoricalHeaders(root: string, manifest: DocsManifest | null, findings: DocsAuditFinding[]): void {
+function checkHistoricalHeaders(
+  root: string,
+  manifest: DocsManifest | null,
+  findings: DocsAuditFinding[],
+): void {
   if (!manifest) {
     return;
   }
@@ -411,14 +440,17 @@ function checkHistoricalHeaders(root: string, manifest: DocsManifest | null, fin
   }
 }
 
-function checkGeneratedAuthority(manifest: DocsManifest | null, findings: DocsAuditFinding[]): void {
+function checkGeneratedAuthority(
+  manifest: DocsManifest | null,
+  findings: DocsAuditFinding[],
+): void {
   if (!manifest) {
     return;
   }
   for (const relPath of manifest.maintainedDocs) {
     if (
-      manifest.generatedEvidence.some(pattern => matchesGlob(relPath, pattern)) ||
-      manifest.doNotUseAsAuthorityGlobs.some(pattern => matchesGlob(relPath, pattern))
+      manifest.generatedEvidence.some((pattern) => matchesGlob(relPath, pattern)) ||
+      manifest.doNotUseAsAuthorityGlobs.some((pattern) => matchesGlob(relPath, pattern))
     ) {
       addFinding(findings, {
         severity: 'error',
@@ -473,7 +505,12 @@ function shouldCheckLinks(relPath: string, manifest: DocsManifest | null): boole
   return classification !== 'GENERATED_EVIDENCE' && classification !== 'DO_NOT_USE_AS_AUTHORITY';
 }
 
-function checkLinks(root: string, docs: string[], manifest: DocsManifest | null, findings: DocsAuditFinding[]): void {
+function checkLinks(
+  root: string,
+  docs: string[],
+  manifest: DocsManifest | null,
+  findings: DocsAuditFinding[],
+): void {
   for (const relPath of docs) {
     if (!shouldCheckLinks(relPath, manifest)) {
       continue;
@@ -495,9 +532,10 @@ function checkLinks(root: string, docs: string[], manifest: DocsManifest | null,
         decoded = cleaned;
       }
       const normalizedAbsolute = /^\/[A-Za-z]:[\\/]/.test(decoded) ? decoded.slice(1) : decoded;
-      const targetPath = /^[A-Za-z]:[\\/]/.test(normalizedAbsolute) || normalizedAbsolute.startsWith('/')
-        ? resolve(normalizedAbsolute)
-        : resolve(dirname(fullPath), normalizedAbsolute);
+      const targetPath =
+        /^[A-Za-z]:[\\/]/.test(normalizedAbsolute) || normalizedAbsolute.startsWith('/')
+          ? resolve(normalizedAbsolute)
+          : resolve(dirname(fullPath), normalizedAbsolute);
       if (!isInside(root, targetPath)) {
         addFinding(findings, {
           severity: 'error',
@@ -526,10 +564,14 @@ function commandText(command: string | TrustedCommandObject): string {
 }
 
 function commandSource(command: string | TrustedCommandObject): string {
-  return typeof command === 'string' ? 'doc' : command.source ?? 'doc';
+  return typeof command === 'string' ? 'doc' : (command.source ?? 'doc');
 }
 
-function checkTrustedCommands(root: string, manifest: DocsManifest | null, findings: DocsAuditFinding[]): void {
+function checkTrustedCommands(
+  root: string,
+  manifest: DocsManifest | null,
+  findings: DocsAuditFinding[],
+): void {
   if (!manifest) {
     return;
   }
@@ -562,11 +604,16 @@ function readPackageJson(root: string): Record<string, unknown> | null {
   }
 }
 
-function trustedCommandExists(root: string, command: string, packageJson: Record<string, unknown> | null): boolean {
+function trustedCommandExists(
+  root: string,
+  command: string,
+  packageJson: Record<string, unknown> | null,
+): boolean {
   const normalized = command.trim();
-  const scripts = packageJson && typeof packageJson['scripts'] === 'object' && packageJson['scripts'] !== null
-    ? packageJson['scripts'] as Record<string, unknown>
-    : {};
+  const scripts =
+    packageJson && typeof packageJson['scripts'] === 'object' && packageJson['scripts'] !== null
+      ? (packageJson['scripts'] as Record<string, unknown>)
+      : {};
   if (normalized === 'npm test') {
     return typeof scripts['test'] === 'string';
   }
@@ -578,13 +625,22 @@ function trustedCommandExists(root: string, command: string, packageJson: Record
     return existsSync(join(root, 'gradlew')) || existsSync(join(root, 'gradlew.bat'));
   }
   if (/^pytest\b/.test(normalized)) {
-    return existsSync(join(root, 'pyproject.toml')) || existsSync(join(root, 'pytest.ini')) || existsSync(join(root, 'tests'));
+    return (
+      existsSync(join(root, 'pyproject.toml')) ||
+      existsSync(join(root, 'pytest.ini')) ||
+      existsSync(join(root, 'tests'))
+    );
   }
   return false;
 }
 
-function checkDocsMap(docs: string[], manifest: DocsManifest | null, findings: DocsAuditFinding[]): void {
-  const hasComplexDocs = docs.filter(path => path.startsWith('docs/') && path.endsWith('.md')).length >= 5;
+function checkDocsMap(
+  docs: string[],
+  manifest: DocsManifest | null,
+  findings: DocsAuditFinding[],
+): void {
+  const hasComplexDocs =
+    docs.filter((path) => path.startsWith('docs/') && path.endsWith('.md')).length >= 5;
   if (!manifest && hasComplexDocs && !docs.includes('docs/README.md')) {
     addFinding(findings, {
       severity: 'warn',
@@ -595,13 +651,15 @@ function checkDocsMap(docs: string[], manifest: DocsManifest | null, findings: D
   }
   if (manifest) {
     const hasCurrent = manifest.maintainedDocs.length > 0;
-    const hasHistorical = manifest.historicalDocs.length > 0 || manifest.doNotUseAsAuthorityGlobs.length > 0;
+    const hasHistorical =
+      manifest.historicalDocs.length > 0 || manifest.doNotUseAsAuthorityGlobs.length > 0;
     const hasGenerated = manifest.generatedEvidence.length > 0;
     if (!hasCurrent || !hasHistorical || !hasGenerated) {
       addFinding(findings, {
         severity: 'info',
         code: 'docs_map.incomplete_classification',
-        message: 'manifest should distinguish current, historical/do-not-use, and generated docs when those classes exist',
+        message:
+          'manifest should distinguish current, historical/do-not-use, and generated docs when those classes exist',
       });
     }
   }
@@ -641,7 +699,10 @@ function checkSecrets(root: string, docs: string[], findings: DocsAuditFinding[]
       if (inFence) {
         continue;
       }
-      const assignment = /\b(password|passwd|secret|token|api[_-]?key|private[_-]?key|keystore[_-]?password)\b\s*[:=]\s*["']?([^"'\s`]{10,})/i.exec(line);
+      const assignment =
+        /\b(password|passwd|secret|token|api[_-]?key|private[_-]?key|keystore[_-]?password)\b\s*[:=]\s*["']?([^"'\s`]{10,})/i.exec(
+          line,
+        );
       if (assignment?.[2] && !isPlaceholderSecret(assignment[2])) {
         addFinding(findings, {
           severity: 'error',
@@ -659,17 +720,23 @@ function isPlaceholderSecret(value: string): boolean {
   return /^(example|placeholder|changeme|redacted|xxxx+|your[-_].*|<.+>)$/i.test(value);
 }
 
-function buildCheckedDocs(root: string, docs: string[], manifest: DocsManifest | null): CheckedDoc[] {
+function buildCheckedDocs(
+  root: string,
+  docs: string[],
+  manifest: DocsManifest | null,
+): CheckedDoc[] {
   return docs.map((relPath) => {
     const content = readText(pathFromRepo(root, relPath)) ?? '';
     return {
       path: relPath,
       classification: classifyDoc(relPath, manifest),
-      source: manifest && (
-        manifest.maintainedDocs.map(normalizeRelative).includes(relPath) ||
-        manifest.historicalDocs.map(normalizeRelative).includes(relPath) ||
-        manifest.generatedEvidence.some(pattern => matchesGlob(relPath, pattern))
-      ) ? 'manifest' : 'discovered',
+      source:
+        manifest &&
+        (manifest.maintainedDocs.map(normalizeRelative).includes(relPath) ||
+          manifest.historicalDocs.map(normalizeRelative).includes(relPath) ||
+          manifest.generatedEvidence.some((pattern) => matchesGlob(relPath, pattern)))
+          ? 'manifest'
+          : 'discovered',
       lineCount: lineCount(content),
     };
   });
@@ -685,13 +752,22 @@ export function runDocsAudit(options: { root: string }): DocsAuditReport {
       message: `repo root is missing or is not a directory: ${repoRoot}`,
       path: repoRoot,
     });
-    return buildReport(repoRoot, 'missing', join(repoRoot, '.babel', 'docs-manifest.json'), findings, [], []);
+    return buildReport(
+      repoRoot,
+      'missing',
+      join(repoRoot, '.babel', 'docs-manifest.json'),
+      findings,
+      [],
+      [],
+    );
   }
 
   const manifestPath = join(repoRoot, '.babel', 'docs-manifest.json');
   const manifest = existsSync(manifestPath) ? parseJsonManifest(manifestPath, findings) : null;
   const manifestState: ManifestState = existsSync(manifestPath)
-    ? findings.some(finding => finding.path === manifestPath && finding.severity === 'error') ? 'invalid' : 'present'
+    ? findings.some((finding) => finding.path === manifestPath && finding.severity === 'error')
+      ? 'invalid'
+      : 'present'
     : 'missing';
 
   if (manifest) {
@@ -705,7 +781,11 @@ export function runDocsAudit(options: { root: string }): DocsAuditReport {
     }
   }
   const existingDocs = Array.from(docs)
-    .filter(relPath => existsSync(pathFromRepo(repoRoot, relPath)) && statSync(pathFromRepo(repoRoot, relPath)).isFile())
+    .filter(
+      (relPath) =>
+        existsSync(pathFromRepo(repoRoot, relPath)) &&
+        statSync(pathFromRepo(repoRoot, relPath)).isFile(),
+    )
     .sort();
 
   checkManifestDocExistence(repoRoot, manifest, findings);
@@ -717,7 +797,14 @@ export function runDocsAudit(options: { root: string }): DocsAuditReport {
   checkSecrets(repoRoot, existingDocs, findings);
   const lineBudgetSummary = checkLineBudgets(repoRoot, existingDocs, manifest, findings);
 
-  return buildReport(repoRoot, manifestState, manifestPath, findings, buildCheckedDocs(repoRoot, existingDocs, manifest), lineBudgetSummary);
+  return buildReport(
+    repoRoot,
+    manifestState,
+    manifestPath,
+    findings,
+    buildCheckedDocs(repoRoot, existingDocs, manifest),
+    lineBudgetSummary,
+  );
 }
 
 function buildReport(
@@ -728,9 +815,9 @@ function buildReport(
   checkedDocs: CheckedDoc[],
   lineBudgetSummary: LineBudgetEntry[],
 ): DocsAuditReport {
-  const errors = findings.filter(finding => finding.severity === 'error').length;
-  const warnings = findings.filter(finding => finding.severity === 'warn').length;
-  const info = findings.filter(finding => finding.severity === 'info').length;
+  const errors = findings.filter((finding) => finding.severity === 'error').length;
+  const warnings = findings.filter((finding) => finding.severity === 'warn').length;
+  const info = findings.filter((finding) => finding.severity === 'info').length;
   return {
     status: errors > 0 ? 'fail' : warnings > 0 ? 'warn' : 'pass',
     repoRoot,
@@ -764,8 +851,12 @@ export function formatDocsAuditHuman(report: DocsAuditReport): string {
   if (report.findings.length > 0) {
     lines.push('', 'Findings:');
     for (const finding of report.findings) {
-      const location = finding.path ? ` ${finding.path}${finding.line ? `:${finding.line}` : ''}` : '';
-      lines.push(`- ${finding.severity.toUpperCase()} ${finding.code}:${location} ${finding.message}`);
+      const location = finding.path
+        ? ` ${finding.path}${finding.line ? `:${finding.line}` : ''}`
+        : '';
+      lines.push(
+        `- ${finding.severity.toUpperCase()} ${finding.code}:${location} ${finding.message}`,
+      );
     }
   }
   lines.push('', 'Cold-start readiness: manual eval still required');

@@ -45,14 +45,21 @@ test('repair state fingerprints failing test ids', () => {
 
 test('repair state requests replan on repeated same failure', () => {
   let state = createRepairState(3);
-  let decision = recordRepairFailure(state, failedEntry(4, 'FAILED test_outputs.py::test_speedup[8] slow'));
+  let decision = recordRepairFailure(
+    state,
+    failedEntry(4, 'FAILED test_outputs.py::test_speedup[8] slow'),
+  );
   state = decision.state;
-  decision = recordRepairFailure(state, failedEntry(6, 'FAILED test_outputs.py::test_speedup[8] slow'));
+  decision = recordRepairFailure(
+    state,
+    failedEntry(6, 'FAILED test_outputs.py::test_speedup[8] slow'),
+  );
 
   assert.equal(decision.shouldHalt, false);
   assert.equal(decision.shouldReplan, true);
-  assert.equal(decision.state.status, 'same_failure_repeated');
-  assert.match(decision.condition ?? '', /Same recoverable failure repeated/);
+  assert.equal(decision.state.status, 'replan_requested');
+  assert.equal(decision.state.replanCount, 1);
+  assert.match(decision.condition ?? '', /EXECUTOR_REPLAN_REQUESTED/);
 });
 
 test('repair state halts when budget is exhausted', () => {

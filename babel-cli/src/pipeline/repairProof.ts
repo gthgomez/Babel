@@ -6,16 +6,9 @@ import type {
   AutonomousRepairProofAttemptEvidence,
   RepairProofFileHash,
 } from '../services/autonomousRepairProofEvidence.js';
-import {
-  maxAttemptsForRepairMode,
-  type FailureCapsule,
-} from '../services/repairGovernance.js';
+import { maxAttemptsForRepairMode, type FailureCapsule } from '../services/repairGovernance.js';
 import type { ProjectSafetySnapshot } from '../services/terminalStatus.js';
-import {
-  isWithinProjectRootPath,
-  resolveStepTargetPath,
-} from '../stages/executorHelpers.js';
-
+import { isWithinProjectRootPath, resolveStepTargetPath } from '../stages/executorHelpers.js';
 
 export const RELIABILITY_REPAIR_PROOF_MARKER = '[BABEL_RELIABILITY_AUTONOMOUS_LIVE_FAIL_THEN_PASS]';
 
@@ -26,19 +19,27 @@ export interface RepairProofCapsuleArtifact {
 }
 
 export function isReliabilityRepairProofEnabled(rawTask: string): boolean {
-  return process.env['BABEL_RELIABILITY_REPAIR_PROOF'] === 'true' &&
-    rawTask.includes(RELIABILITY_REPAIR_PROOF_MARKER);
+  return (
+    process.env['BABEL_RELIABILITY_REPAIR_PROOF'] === 'true' &&
+    rawTask.includes(RELIABILITY_REPAIR_PROOF_MARKER)
+  );
 }
 
 export function getReliabilityRepairProofMaxFailures(): number {
-  const configured = Number.parseInt(process.env['BABEL_RELIABILITY_REPAIR_PROOF_MAX_FAILURES'] ?? '', 10);
+  const configured = Number.parseInt(
+    process.env['BABEL_RELIABILITY_REPAIR_PROOF_MAX_FAILURES'] ?? '',
+    10,
+  );
   if (!Number.isFinite(configured) || configured <= 0) {
-    return maxAttemptsForRepairMode('autonomous');
+    return maxAttemptsForRepairMode('deep');
   }
-  return Math.min(configured, maxAttemptsForRepairMode('autonomous'));
+  return Math.min(configured, maxAttemptsForRepairMode('deep'));
 }
 
-export function hashProjectFileForEvidence(projectRoot: string | null | undefined, relativePath: string): string | null {
+export function hashProjectFileForEvidence(
+  projectRoot: string | null | undefined,
+  relativePath: string,
+): string | null {
   if (!projectRoot || relativePath.trim().length === 0) {
     return null;
   }
@@ -72,7 +73,9 @@ function hashAbsoluteFileForSafety(path: string): string | null {
   }
 }
 
-export function snapshotProjectFilesForSafety(projectRoot: string | null | undefined): ProjectSafetySnapshot {
+export function snapshotProjectFilesForSafety(
+  projectRoot: string | null | undefined,
+): ProjectSafetySnapshot {
   const root = projectRoot ? resolve(projectRoot) : null;
   const snapshot: ProjectSafetySnapshot = {
     root,
@@ -134,15 +137,13 @@ export function summarizeVerifierStreamForEvidence(text: string | null | undefin
   const normalized = String(text ?? '')
     .replace(/\x1b\[[0-9;]*m/g, '')
     .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(line => line.length > 0)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
     .slice(-12)
     .join(' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return normalized.length > 0
-    ? normalized.slice(0, 700)
-    : null;
+  return normalized.length > 0 ? normalized.slice(0, 700) : null;
 }
 
 export function hasMeaningfulRepairDiff(
@@ -163,7 +164,7 @@ export function hasMeaningfulRepairDiff(
   ) {
     return true;
   }
-  return currentChanged.some(path =>
-    previous.file_hashes[path]?.after !== currentFileHashes[path]?.after
+  return currentChanged.some(
+    (path) => previous.file_hashes[path]?.after !== currentFileHashes[path]?.after,
   );
 }

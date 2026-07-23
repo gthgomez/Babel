@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "fixture_type": "babel_parity_corpus_task",
+  "task_id": "read_only_subagent_review",
+  "parity_task_id": "read_only_subagent_review",
+  "title": "Read-only subagent review task",
+  "repo_kind": "read_only_review",
+  "target_file": "README.md",
+  "verifier_command": "npm test",
+  "task": "Compare the error-handling options in docs/option-a.md and docs/option-b.md. Report tradeoffs and verification steps without editing source files.",
+  "broken_implementation": "# Error Handling Demo\n\nTwo candidate approaches are documented under docs/.\n",
+  "fixed_implementation": "# Error Handling Demo\n\nTwo candidate approaches are documented under docs/.\n",
+  "test_source": "",
+  "files": {
+    "docs/option-a.md": {
+      "broken": "# Option A\n\nThrow typed errors at boundaries and let callers decide recovery.\n"
+    },
+    "docs/option-b.md": {
+      "broken": "# Option B\n\nReturn result objects with `{ ok, value, error }` and avoid throws in hot paths.\n"
+    }
+  },
+  "package_json": {
+    "type": "module",
+    "scripts": {
+      "test": "node -e \"process.exit(0)\""
+    }
+  }
+}

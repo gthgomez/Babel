@@ -27,32 +27,42 @@ function getDefaultBabelRoot(): string {
   return process.env['BABEL_ROOT'] ?? resolve(__dirname, '../../..');
 }
 
-export const EnterprisePolicyFileSchema = z.object({
-  schema_version: z.literal(1).default(1),
-  policy_name: z.string().min(1).optional(),
-  allowed_tools: z.array(z.string().min(1)).optional(),
-  disallowed_tools: z.array(z.string().min(1)).optional(),
-  allowed_mcp_servers: z.array(z.string().min(1)).optional(),
-  disallowed_mcp_servers: z.array(z.string().min(1)).optional(),
-  network_allowlist: z.array(z.string().min(1)).optional(),
-  model_policy: z.object({
-    allowed_backends: z.array(z.string().min(1)).optional(),
-    disallowed_backends: z.array(z.string().min(1)).optional(),
-    require_explicit_opt_in: z.array(z.string().min(1)).optional(),
-  }).optional(),
-  plugin_policy: z.object({
-    allowed_plugins: z.array(z.string().min(1)).optional(),
-    disallowed_plugins: z.array(z.string().min(1)).optional(),
-    max_trust_level: TrustLevelSchema.optional(),
-  }).optional(),
-  redaction: z.object({
-    enabled: z.boolean().default(true),
-    extra_patterns: z.array(z.string().min(1)).optional(),
-  }).default({ enabled: true }),
-  telemetry: z.object({
-    opt_in: z.boolean().optional(),
-  }).optional(),
-}).passthrough();
+export const EnterprisePolicyFileSchema = z
+  .object({
+    schema_version: z.literal(1).default(1),
+    policy_name: z.string().min(1).optional(),
+    allowed_tools: z.array(z.string().min(1)).optional(),
+    disallowed_tools: z.array(z.string().min(1)).optional(),
+    allowed_mcp_servers: z.array(z.string().min(1)).optional(),
+    disallowed_mcp_servers: z.array(z.string().min(1)).optional(),
+    network_allowlist: z.array(z.string().min(1)).optional(),
+    model_policy: z
+      .object({
+        allowed_backends: z.array(z.string().min(1)).optional(),
+        disallowed_backends: z.array(z.string().min(1)).optional(),
+        require_explicit_opt_in: z.array(z.string().min(1)).optional(),
+      })
+      .optional(),
+    plugin_policy: z
+      .object({
+        allowed_plugins: z.array(z.string().min(1)).optional(),
+        disallowed_plugins: z.array(z.string().min(1)).optional(),
+        max_trust_level: TrustLevelSchema.optional(),
+      })
+      .optional(),
+    redaction: z
+      .object({
+        enabled: z.boolean().default(true),
+        extra_patterns: z.array(z.string().min(1)).optional(),
+      })
+      .default({ enabled: true }),
+    telemetry: z
+      .object({
+        opt_in: z.boolean().optional(),
+      })
+      .optional(),
+  })
+  .passthrough();
 
 export type EnterprisePolicyFile = z.infer<typeof EnterprisePolicyFileSchema>;
 
@@ -171,15 +181,33 @@ function mergePolicy(base: EnterprisePolicy, next: EnterprisePolicyFile): Enterp
     disallowed_mcp_servers: mergeArrays(base.disallowed_mcp_servers, next.disallowed_mcp_servers),
     network_allowlist: mergeArrays(base.network_allowlist, next.network_allowlist),
     model_policy: {
-      allowed_backends: mergeArrays(base.model_policy.allowed_backends, next.model_policy?.allowed_backends),
-      disallowed_backends: mergeArrays(base.model_policy.disallowed_backends, next.model_policy?.disallowed_backends),
-      require_explicit_opt_in: mergeArrays(base.model_policy.require_explicit_opt_in, next.model_policy?.require_explicit_opt_in),
+      allowed_backends: mergeArrays(
+        base.model_policy.allowed_backends,
+        next.model_policy?.allowed_backends,
+      ),
+      disallowed_backends: mergeArrays(
+        base.model_policy.disallowed_backends,
+        next.model_policy?.disallowed_backends,
+      ),
+      require_explicit_opt_in: mergeArrays(
+        base.model_policy.require_explicit_opt_in,
+        next.model_policy?.require_explicit_opt_in,
+      ),
     },
     plugin_policy: {
-      allowed_plugins: mergeArrays(base.plugin_policy.allowed_plugins, next.plugin_policy?.allowed_plugins),
-      disallowed_plugins: mergeArrays(base.plugin_policy.disallowed_plugins, next.plugin_policy?.disallowed_plugins),
-      ...(next.plugin_policy?.max_trust_level ?? base.plugin_policy.max_trust_level
-        ? { max_trust_level: next.plugin_policy?.max_trust_level ?? base.plugin_policy.max_trust_level }
+      allowed_plugins: mergeArrays(
+        base.plugin_policy.allowed_plugins,
+        next.plugin_policy?.allowed_plugins,
+      ),
+      disallowed_plugins: mergeArrays(
+        base.plugin_policy.disallowed_plugins,
+        next.plugin_policy?.disallowed_plugins,
+      ),
+      ...((next.plugin_policy?.max_trust_level ?? base.plugin_policy.max_trust_level)
+        ? {
+            max_trust_level:
+              next.plugin_policy?.max_trust_level ?? base.plugin_policy.max_trust_level,
+          }
         : {}),
     },
     redaction: {
@@ -206,23 +234,35 @@ function splitEnvList(name: string): string[] {
     .filter((value) => value.length > 0);
 }
 
-export function getEnterprisePolicyPaths(babelRoot = getDefaultBabelRoot()): Array<{ label: EnterprisePolicyLoadSource['label']; path: string }> {
+export function getEnterprisePolicyPaths(
+  babelRoot = getDefaultBabelRoot(),
+): Array<{ label: EnterprisePolicyLoadSource['label']; path: string }> {
   const workspaceRoot = dirname(resolve(babelRoot));
   const userProfile = process.env['USERPROFILE'] ?? process.env['HOME'] ?? '';
   const paths: Array<{ label: EnterprisePolicyLoadSource['label']; path: string | undefined }> = [
     { label: 'repo', path: join(resolve(babelRoot), 'config', 'enterprise-policy.json') },
     { label: 'workspace', path: join(workspaceRoot, 'config', 'babel-enterprise-policy.json') },
-    { label: 'user', path: process.env['BABEL_ENTERPRISE_POLICY_USER_PATH'] ?? (userProfile ? join(userProfile, '.babel', 'enterprise-policy.json') : undefined) },
+    {
+      label: 'user',
+      path:
+        process.env['BABEL_ENTERPRISE_POLICY_USER_PATH'] ??
+        (userProfile ? join(userProfile, '.babel', 'enterprise-policy.json') : undefined),
+    },
     { label: 'admin', path: process.env['BABEL_ENTERPRISE_POLICY_ADMIN_PATH'] },
     { label: 'explicit', path: process.env['BABEL_ENTERPRISE_POLICY_PATH'] },
   ];
 
   return paths
-    .filter((entry): entry is { label: EnterprisePolicyLoadSource['label']; path: string } => typeof entry.path === 'string' && entry.path.trim().length > 0)
+    .filter(
+      (entry): entry is { label: EnterprisePolicyLoadSource['label']; path: string } =>
+        typeof entry.path === 'string' && entry.path.trim().length > 0,
+    )
     .map((entry) => ({ label: entry.label, path: resolve(entry.path) }));
 }
 
-export function loadEnterprisePolicy(babelRoot = getDefaultBabelRoot()): EnterprisePolicyLoadResult {
+export function loadEnterprisePolicy(
+  babelRoot = getDefaultBabelRoot(),
+): EnterprisePolicyLoadResult {
   let policy = cloneDefaultPolicy();
   const sources: EnterprisePolicyLoadSource[] = [];
   const errors: string[] = [];
@@ -257,7 +297,9 @@ export function loadEnterprisePolicy(babelRoot = getDefaultBabelRoot()): Enterpr
   return { policy, sources, errors, loaded };
 }
 
-export function describeEnterprisePolicySource(result: EnterprisePolicyLoadResult | null | undefined): string {
+export function describeEnterprisePolicySource(
+  result: EnterprisePolicyLoadResult | null | undefined,
+): string {
   if (!result) {
     return 'provided policy object';
   }
@@ -307,7 +349,10 @@ export function formatEnterprisePolicyDecision(decision: EnterprisePolicyDecisio
   return details.length > 0 ? `${decision.reason} (${details.join('; ')})` : decision.reason;
 }
 
-export function evaluateToolPolicy(toolName: string, policy?: EnterprisePolicy): EnterprisePolicyDecision {
+export function evaluateToolPolicy(
+  toolName: string,
+  policy?: EnterprisePolicy,
+): EnterprisePolicyDecision {
   const loaded = policy ? null : loadEnterprisePolicy();
   if (loaded && loaded.errors.length > 0) {
     return denyEnterprisePolicy(
@@ -335,7 +380,10 @@ export function evaluateToolPolicy(toolName: string, policy?: EnterprisePolicy):
   return { allowed: true, reason: `tool "${toolName}" allowed` };
 }
 
-export function evaluateMcpServerPolicy(serverName: string, policy?: EnterprisePolicy): EnterprisePolicyDecision {
+export function evaluateMcpServerPolicy(
+  serverName: string,
+  policy?: EnterprisePolicy,
+): EnterprisePolicyDecision {
   const loaded = policy ? null : loadEnterprisePolicy();
   if (loaded && loaded.errors.length > 0) {
     return denyEnterprisePolicy(
@@ -364,7 +412,10 @@ export function evaluateMcpServerPolicy(serverName: string, policy?: EnterpriseP
 }
 
 function normalizeHost(value: string): string {
-  return value.trim().replace(/^\[|\]$/g, '').toLowerCase();
+  return value
+    .trim()
+    .replace(/^\[|\]$/g, '')
+    .toLowerCase();
 }
 
 function hostMatchesRule(hostname: string, rule: string): boolean {
@@ -377,7 +428,10 @@ function hostMatchesRule(hostname: string, rule: string): boolean {
   return host === normalizedRule;
 }
 
-export function evaluateNetworkHostPolicy(hostname: string, policy?: EnterprisePolicy): EnterprisePolicyDecision {
+export function evaluateNetworkHostPolicy(
+  hostname: string,
+  policy?: EnterprisePolicy,
+): EnterprisePolicyDecision {
   const loaded = policy ? null : loadEnterprisePolicy();
   if (loaded && loaded.errors.length > 0) {
     return denyEnterprisePolicy(
@@ -449,7 +503,8 @@ export function evaluateModelBackendPolicy(
   }
   if (policyListMatches(policy.model_policy.require_explicit_opt_in, candidates)) {
     const envOptIns = splitEnvList('BABEL_ENTERPRISE_MODEL_OPT_IN');
-    const envAllows = envOptIns.includes('*') || candidates.some((candidate) => envOptIns.includes(candidate));
+    const envAllows =
+      envOptIns.includes('*') || candidates.some((candidate) => envOptIns.includes(candidate));
     if (options.explicitOptIn !== true && !envAllows) {
       return {
         allowed: false,
@@ -485,7 +540,10 @@ export function evaluatePluginPolicy(
       `Remove "${pluginId}" from plugin_policy.disallowed_plugins or choose an approved plugin.`,
     );
   }
-  if (policy.plugin_policy.allowed_plugins.length > 0 && !policy.plugin_policy.allowed_plugins.includes(pluginId)) {
+  if (
+    policy.plugin_policy.allowed_plugins.length > 0 &&
+    !policy.plugin_policy.allowed_plugins.includes(pluginId)
+  ) {
     return denyEnterprisePolicy(
       `plugin "${pluginId}" is not in enterprise allowed_plugins`,
       loaded,
@@ -517,7 +575,10 @@ export function evaluateTelemetryPolicy(policy?: EnterprisePolicy): EnterprisePo
   policy ??= loaded!.policy;
 
   if (loaded && !loaded.loaded) {
-    return { allowed: true, reason: 'no enterprise policy loaded; telemetry follows local env configuration' };
+    return {
+      allowed: true,
+      reason: 'no enterprise policy loaded; telemetry follows local env configuration',
+    };
   }
   if (policy.telemetry.opt_in !== true) {
     return denyEnterprisePolicy(

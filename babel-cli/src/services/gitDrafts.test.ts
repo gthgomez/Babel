@@ -68,6 +68,11 @@ test('runGitDraft produces commit and PR draft metadata only', () => {
   assert.equal(commit.commit_draft?.subject, 'docs(README.md): draft 1 file change');
   assert.equal(commit.delivery_policy.draft_first, true);
   assert.equal(commit.pr_draft, null);
-  assert.equal(pr.pr_draft?.review_notes.some((note) => note.includes('no commit, push, branch, or PR side effect')), true);
+  assert.equal(
+    pr.pr_draft?.review_notes.some((note) =>
+      note.includes('no commit, push, branch, or PR side effect'),
+    ),
+    true,
+  );
   assert.equal(git(root, ['log', '--oneline']).split(/\r?\n/).length, 1);
 });

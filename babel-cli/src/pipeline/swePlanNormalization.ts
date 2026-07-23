@@ -40,7 +40,7 @@ export function normalizeSwePlan(swePlan: SwePlan): {
 }
 
 export function formatZodErrors(err: z.ZodError): string[] {
-  return err.issues.map(issue => {
+  return err.issues.map((issue) => {
     const path = issue.path.length > 0 ? issue.path.join('.') : '(root)';
     return `${path}: ${issue.message}`;
   });

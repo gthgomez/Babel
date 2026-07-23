@@ -27,6 +27,7 @@ export interface CatalogEntry {
   defaultForDomains: string[];
   tags: string[];
   project: string | null;
+  fileExtensionGate?: string[];
 }
 
 export interface CatalogInspectionFilters {
@@ -50,17 +51,53 @@ export function parseInlineArray(value: string): string[] | null {
 
   return inner
     .split(',')
-    .map(item => item.trim().replace(/^"(.*)"$/, '$1'))
+    .map((item) => item.trim().replace(/^"(.*)"$/, '$1'))
     .filter(Boolean);
 }
 
 let catalogCache: { path: string; entries: CatalogEntry[] } | null = null;
 
+/**
+ * Strip YAML comments from a single line, protecting `#` inside
+ * double-quoted strings.  Returns the line with the comment removed,
+ * or an empty string if the line was entirely a comment.
+ */
+function stripYamlComment(line: string): string {
+  const trimmed = line.trimStart();
+  // Full-line comment — return empty
+  if (trimmed.startsWith('#')) {
+    return '';
+  }
+  // Walk character-by-character so we can track quote state and
+  // only treat `#` preceded by whitespace as an inline comment start.
+  let inDoubleQuote = false;
+  let commentStart = -1;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      inDoubleQuote = !inDoubleQuote;
+    } else if (
+      !inDoubleQuote &&
+      ch === '#' &&
+      (i === 0 || line[i - 1] === ' ' || line[i - 1] === '\t')
+    ) {
+      commentStart = i;
+      break;
+    }
+  }
+  if (commentStart >= 0) {
+    return line.slice(0, commentStart).replace(/\s+$/, '');
+  }
+  return line;
+}
+
 export function parseCatalog(catalogPath: string): CatalogEntry[] {
   if (catalogCache && catalogCache.path === catalogPath) {
     return catalogCache.entries;
   }
-  const lines = readFileSync(catalogPath, 'utf-8').split(/\r?\n/);
+  const rawLines = readFileSync(catalogPath, 'utf-8').split(/\r?\n/);
+  // Pre-pass: strip YAML comments (full-line and inline) before parsing
+  const lines = rawLines.map(stripYamlComment).filter((line) => line !== '');
   const entries: CatalogEntry[] = [];
   let current: CatalogEntry | null = null;
 
@@ -87,6 +124,7 @@ export function parseCatalog(catalogPath: string): CatalogEntry[] {
         defaultForDomains: [],
         tags: [],
         project: null,
+        fileExtensionGate: [],
       };
       continue;
     }
@@ -99,14 +137,39 @@ export function parseCatalog(catalogPath: string): CatalogEntry[] {
       regex: RegExp;
       apply: (value: string) => void;
     }> = [
-      { regex: /^\s+layer:\s+(.+)$/, apply: value => { current!.layer = value.trim(); } },
-      { regex: /^\s+path:\s+(.+)$/, apply: value => { current!.path = value.trim().replace(/^"|"$/g, ''); } },
-      { regex: /^\s+status:\s+(.+)$/, apply: value => { current!.status = value.trim(); } },
-      { regex: /^\s+load_position:\s+(.+)$/, apply: value => { current!.loadPosition = Number.parseInt(value.trim(), 10); } },
-      { regex: /^\s+project:\s+(.+)$/, apply: value => { current!.project = value.trim().replace(/^"|"$/g, ''); } },
+      {
+        regex: /^\s+layer:\s+(.+)$/,
+        apply: (value) => {
+          current!.layer = value.trim();
+        },
+      },
+      {
+        regex: /^\s+path:\s+(.+)$/,
+        apply: (value) => {
+          current!.path = value.trim().replace(/^"|"$/g, '');
+        },
+      },
+      {
+        regex: /^\s+status:\s+(.+)$/,
+        apply: (value) => {
+          current!.status = value.trim();
+        },
+      },
+      {
+        regex: /^\s+load_position:\s+(.+)$/,
+        apply: (value) => {
+          current!.loadPosition = Number.parseInt(value.trim(), 10);
+        },
+      },
+      {
+        regex: /^\s+project:\s+(.+)$/,
+        apply: (value) => {
+          current!.project = value.trim().replace(/^"|"$/g, '');
+        },
+      },
       {
         regex: /^\s+token_budget:\s+(.+)$/,
-        apply: value => {
+        apply: (value) => {
           const parsedBudget = Number.parseInt(value.trim(), 10);
           current!.tokenBudget = Number.isFinite(parsedBudget) ? parsedBudget : null;
         },
@@ -126,7 +189,8 @@ export function parseCatalog(catalogPath: string): CatalogEntry[] {
       continue;
     }
 
-    const listMatch = /^\s+(dependencies|conflicts|default_skill_ids|default_for_domains|tags):\s*(.*)$/.exec(line);
+    const listMatch =
+      /^\s+(dependencies|conflicts|default_skill_ids|default_for_domains|tags|file_extension_gate):\s*(.*)$/.exec(line);
     if (!listMatch) {
       continue;
     }
@@ -158,6 +222,8 @@ export function parseCatalog(catalogPath: string): CatalogEntry[] {
       current.defaultForDomains = values;
     } else if (key === 'tags') {
       current.tags = values;
+    } else if (key === 'file_extension_gate') {
+      current.fileExtensionGate = values;
     }
   }
 
@@ -173,7 +239,7 @@ export function filterCatalogEntries(
   entries: CatalogEntry[],
   filters: CatalogInspectionFilters = {},
 ): CatalogEntry[] {
-  return entries.filter(entry => {
+  return entries.filter((entry) => {
     if (filters.ids && filters.ids.length > 0 && !filters.ids.includes(entry.id)) {
       return false;
     }

@@ -5,10 +5,10 @@ import { dirname, join, resolve } from 'node:path';
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
 
 export const APPROVAL_KINDS = ['dependency_install', 'model_escalation'] as const;
-export type ApprovalKind = typeof APPROVAL_KINDS[number];
+export type ApprovalKind = (typeof APPROVAL_KINDS)[number];
 
 export const APPROVAL_STATUSES = ['pending', 'approved', 'denied', 'expired'] as const;
-export type ApprovalStatus = typeof APPROVAL_STATUSES[number];
+export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
 
 export interface ApprovalRecord {
   schema_version: 1;
@@ -142,12 +142,13 @@ export function readApprovalQueue(): ApprovalQueueFile & { path: string } {
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf-8')) as Partial<ApprovalQueueFile>;
     const records = Array.isArray(parsed.records)
-      ? parsed.records.filter((record): record is ApprovalRecord =>
-          record !== null &&
-          typeof record === 'object' &&
-          typeof (record as ApprovalRecord).id === 'string' &&
-          APPROVAL_KINDS.includes((record as ApprovalRecord).kind) &&
-          APPROVAL_STATUSES.includes((record as ApprovalRecord).status),
+      ? parsed.records.filter(
+          (record): record is ApprovalRecord =>
+            record !== null &&
+            typeof record === 'object' &&
+            typeof (record as ApprovalRecord).id === 'string' &&
+            APPROVAL_KINDS.includes((record as ApprovalRecord).kind) &&
+            APPROVAL_STATUSES.includes((record as ApprovalRecord).status),
         )
       : [];
     return {
@@ -173,21 +174,21 @@ function writeApprovalQueue(records: ApprovalRecord[]): ApprovalQueueFile & { pa
 
 export function listApprovals(options: { status?: ApprovalStatus | 'all' } = {}): ApprovalRecord[] {
   const status = options.status ?? 'all';
-  return readApprovalQueue().records
-    .map(normalizeRecord)
-    .filter(record => status === 'all' || record.status === status)
+  return readApprovalQueue()
+    .records.map(normalizeRecord)
+    .filter((record) => status === 'all' || record.status === status)
     .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
 }
 
 export function inspectApproval(id: string): ApprovalRecord | null {
-  return readApprovalQueue().records.find(record => record.id === id) ?? null;
+  return readApprovalQueue().records.find((record) => record.id === id) ?? null;
 }
 
 export function createOrReuseApprovalRequest(input: ApprovalRequestInput): ApprovalRequestResult {
   const now = new Date().toISOString();
   const queue = readApprovalQueue();
   const fingerprint = fingerprintApproval(input);
-  const existing = queue.records.find(record => record.fingerprint === fingerprint);
+  const existing = queue.records.find((record) => record.fingerprint === fingerprint);
   if (existing && existing.status !== 'expired') {
     return { record: existing, created: false };
   }
@@ -212,7 +213,7 @@ export function createOrReuseApprovalRequest(input: ApprovalRequestInput): Appro
   };
 
   const nextRecords = [
-    ...queue.records.filter(candidate => candidate.fingerprint !== fingerprint),
+    ...queue.records.filter((candidate) => candidate.fingerprint !== fingerprint),
     record,
   ];
   writeApprovalQueue(nextRecords);
@@ -221,7 +222,7 @@ export function createOrReuseApprovalRequest(input: ApprovalRequestInput): Appro
 
 export function approveApproval(id: string, options: { ttlHours?: number } = {}): ApprovalRecord {
   const queue = readApprovalQueue();
-  const index = queue.records.findIndex(record => record.id === id);
+  const index = queue.records.findIndex((record) => record.id === id);
   if (index < 0) {
     throw new Error(`Approval request not found: ${id}`);
   }
@@ -243,7 +244,7 @@ export function approveApproval(id: string, options: { ttlHours?: number } = {})
 
 export function denyApproval(id: string): ApprovalRecord {
   const queue = readApprovalQueue();
-  const index = queue.records.findIndex(record => record.id === id);
+  const index = queue.records.findIndex((record) => record.id === id);
   if (index < 0) {
     throw new Error(`Approval request not found: ${id}`);
   }
@@ -264,9 +265,11 @@ export function denyApproval(id: string): ApprovalRecord {
 
 export function getApprovalDecision(input: ApprovalRequestInput): ApprovalRecord | null {
   const fingerprint = fingerprintApproval(input);
-  return readApprovalQueue().records
-    .map(normalizeRecord)
-    .find(record => record.fingerprint === fingerprint) ?? null;
+  return (
+    readApprovalQueue()
+      .records.map(normalizeRecord)
+      .find((record) => record.fingerprint === fingerprint) ?? null
+  );
 }
 
 export function isApprovalGranted(input: ApprovalRequestInput): boolean {
@@ -284,10 +287,11 @@ export function dependencyInstallApprovalInput(
   return {
     kind: 'dependency_install',
     summary: `Approve dependency install: ${command}`,
-    reason: 'Dependency installation can mutate the workspace and download code; example_autonomous_agent manager requires explicit approval.',
+    reason:
+      'Dependency installation can mutate the workspace and download code; OpenClaw manager requires explicit approval.',
     scope: {
       projectRoot: input.projectRoot ?? null,
-      executionProfile: input.executionProfile ?? 'workspace_manager',
+      executionProfile: input.executionProfile ?? 'opencalw_manager',
     },
     payload: {
       command,
@@ -305,11 +309,15 @@ export function isDependencyInstallApproved(input: DependencyInstallApprovalInpu
   return isApprovalGranted(dependencyInstallApprovalInput(input));
 }
 
-export function getDependencyInstallApprovalDecision(input: DependencyInstallApprovalInput): ApprovalRecord | null {
+export function getDependencyInstallApprovalDecision(
+  input: DependencyInstallApprovalInput,
+): ApprovalRecord | null {
   return getApprovalDecision(dependencyInstallApprovalInput(input));
 }
 
-export function modelEscalationApprovalInput(input: ModelEscalationApprovalInput): ApprovalRequestInput {
+export function modelEscalationApprovalInput(
+  input: ModelEscalationApprovalInput,
+): ApprovalRequestInput {
   const task = input.task.trim();
   if (!task) {
     throw new Error('Model escalation approval requires non-empty task text.');
@@ -320,10 +328,11 @@ export function modelEscalationApprovalInput(input: ModelEscalationApprovalInput
   return {
     kind: 'model_escalation',
     summary: `Approve model escalation: ${model} / ${modelTier}`,
-    reason: 'Model escalation can increase cost and autonomy. Interactive CLI model flags approve one run; queued approvals are for unattended or repeated escalation.',
+    reason:
+      'Model escalation can increase cost and autonomy. Interactive CLI model flags approve one run; queued approvals are for unattended or repeated escalation.',
     scope: {
       projectRoot: input.projectRoot ?? null,
-      executionProfile: 'workspace_manager',
+      executionProfile: 'opencalw_manager',
     },
     payload: {
       task,
@@ -333,7 +342,9 @@ export function modelEscalationApprovalInput(input: ModelEscalationApprovalInput
   };
 }
 
-export function requestModelEscalationApproval(input: ModelEscalationApprovalInput): ApprovalRequestResult {
+export function requestModelEscalationApproval(
+  input: ModelEscalationApprovalInput,
+): ApprovalRequestResult {
   return createOrReuseApprovalRequest(modelEscalationApprovalInput(input));
 }
 

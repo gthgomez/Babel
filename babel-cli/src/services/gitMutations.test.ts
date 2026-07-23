@@ -5,11 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import {
-  createGitBranch,
-  createGitCommit,
-  createGitPullRequest,
-} from './gitMutations.js';
+import { createGitBranch, createGitCommit, createGitPullRequest } from './gitMutations.js';
 
 function git(cwd: string, args: string[]): string {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' });

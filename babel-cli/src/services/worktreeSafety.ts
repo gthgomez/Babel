@@ -1,12 +1,5 @@
 import { createHash } from 'node:crypto';
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-} from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
@@ -98,6 +91,29 @@ export class WorktreeSafetyController {
   private readonly refusedProtectedPathConflicts = new Set<string>();
   private rollbackSummaryPath: string | null = null;
 
+  // ── TOCTOU protection: periodic git status re-scan ─────────────────────────
+  private lastScanTime: number = Date.now();
+  private static readonly SCAN_STALE_MS = 5000; // 5 seconds
+
+  private rescanIfStale(): void {
+    const now = Date.now();
+    if (now - this.lastScanTime <= WorktreeSafetyController.SCAN_STALE_MS) return;
+    const fresh = scanGitSummary(this.projectRoot);
+    // Merge newly-dirty files into the existing set. Files that were already
+    // dirty at construction stay flagged; only new additions are appended.
+    for (const f of fresh.dirty_files_before_run) {
+      if (!this.git.dirty_files_before_run.includes(f)) {
+        this.git.dirty_files_before_run.push(f);
+      }
+    }
+    for (const f of fresh.untracked_files_before_run) {
+      if (!this.git.untracked_files_before_run.includes(f)) {
+        this.git.untracked_files_before_run.push(f);
+      }
+    }
+    this.lastScanTime = now;
+  }
+
   constructor(input: {
     projectRoot: string | null | undefined;
     runDir: string;
@@ -106,13 +122,15 @@ export class WorktreeSafetyController {
     this.projectRoot = input.projectRoot ? resolve(input.projectRoot) : null;
     this.backupRoot = join(input.runDir, 'worktree-safety-backups');
     this.protectedPaths = [...new Set([...(input.protectedPaths ?? DEFAULT_PROTECTED_PATHS)])]
-      .map(path => normalizeRelativePath(path).replace(/\/+$/, ''))
+      .map((path) => normalizeRelativePath(path).replace(/\/+$/, ''))
       .filter(Boolean);
     this.git = scanGitSummary(this.projectRoot);
+    this.lastScanTime = Date.now();
     mkdirSync(this.backupRoot, { recursive: true });
   }
 
   snapshotBeforeWrite(target: string, attempt: number | null = null): SnapshotBeforeWriteResult {
+    this.rescanIfStale();
     const resolved = resolveTargetPath(this.projectRoot, target);
     if (!resolved) {
       return {
@@ -145,14 +163,17 @@ export class WorktreeSafetyController {
       };
     }
     if (!this.snapshots.has(relativePath)) {
-      this.snapshots.set(relativePath, createSnapshotRecord({
-        absolutePath,
+      this.snapshots.set(
         relativePath,
-        backupRoot: this.backupRoot,
-        dirtyBeforeRun,
-        protectedPath,
-        attempt,
-      }));
+        createSnapshotRecord({
+          absolutePath,
+          relativePath,
+          backupRoot: this.backupRoot,
+          dirtyBeforeRun,
+          protectedPath,
+          attempt,
+        }),
+      );
     }
     return { ok: true, relativePath };
   }
@@ -206,7 +227,10 @@ export class WorktreeSafetyController {
         }
         if (snapshot.existed_before) {
           if (!snapshot.backup_path || !existsSync(snapshot.backup_path)) {
-            failedFiles.push({ path: snapshot.relative_path, error: 'Snapshot backup is missing.' });
+            failedFiles.push({
+              path: snapshot.relative_path,
+              error: 'Snapshot backup is missing.',
+            });
             continue;
           }
           mkdirSync(dirname(absolutePath), { recursive: true });
@@ -226,11 +250,12 @@ export class WorktreeSafetyController {
       }
     }
 
-    const status: WorktreeRollbackStatus = failedFiles.length > 0
-      ? 'rollback_failed'
-      : restoredFiles.length > 0 || removedFiles.length > 0
-        ? 'rollback_applied'
-        : 'rollback_not_needed';
+    const status: WorktreeRollbackStatus =
+      failedFiles.length > 0
+        ? 'rollback_failed'
+        : restoredFiles.length > 0 || removedFiles.length > 0
+          ? 'rollback_applied'
+          : 'rollback_not_needed';
 
     return this.finishRollbackSummary({
       status,
@@ -258,15 +283,18 @@ export class WorktreeSafetyController {
       protected_paths: this.protectedPaths,
       touched_files: [...this.snapshots.keys()].sort(),
       snapshot_count: this.snapshots.size,
-      snapshots: [...this.snapshots.values()].sort((a, b) => a.relative_path.localeCompare(b.relative_path)),
+      snapshots: [...this.snapshots.values()].sort((a, b) =>
+        a.relative_path.localeCompare(b.relative_path),
+      ),
       target_dirty_conflicts: targetDirtyConflicts,
       protected_path_conflicts: protectedPathConflicts,
       rollback_summary_path: this.rollbackSummaryPath,
-      next_recommended_operator_action: targetDirtyConflicts.length > 0
-        ? 'Commit, stash, or move dirty target files before rerunning Babel.'
-        : protectedPathConflicts.length > 0
-          ? 'Choose non-protected source targets or explicitly handle generated/protected paths outside autonomous mode.'
-          : 'Review rollback_summary.json after failed repair runs; no operator action is needed for clean successful runs.',
+      next_recommended_operator_action:
+        targetDirtyConflicts.length > 0
+          ? 'Commit, stash, or move dirty target files before rerunning Babel.'
+          : protectedPathConflicts.length > 0
+            ? 'Choose non-protected source targets or explicitly handle generated/protected paths outside autonomous mode.'
+            : 'Review rollback_summary.json after failed repair runs; no operator action is needed for clean successful runs.',
     };
   }
 
@@ -320,21 +348,25 @@ export class WorktreeSafetyController {
   }
 
   private targetDirtyConflicts(): string[] {
-    return [...new Set([
-      ...this.refusedTargetDirtyConflicts,
-      ...[...this.snapshots.values()]
-      .filter(snapshot => snapshot.dirty_before_run)
-      .map(snapshot => snapshot.relative_path),
-    ])].sort();
+    return [
+      ...new Set([
+        ...this.refusedTargetDirtyConflicts,
+        ...[...this.snapshots.values()]
+          .filter((snapshot) => snapshot.dirty_before_run)
+          .map((snapshot) => snapshot.relative_path),
+      ]),
+    ].sort();
   }
 
   private protectedPathConflicts(): string[] {
-    return [...new Set([
-      ...this.refusedProtectedPathConflicts,
-      ...[...this.snapshots.values()]
-      .filter(snapshot => snapshot.protected_path)
-      .map(snapshot => snapshot.relative_path),
-    ])].sort();
+    return [
+      ...new Set([
+        ...this.refusedProtectedPathConflicts,
+        ...[...this.snapshots.values()]
+          .filter((snapshot) => snapshot.protected_path)
+          .map((snapshot) => snapshot.relative_path),
+      ]),
+    ].sort();
   }
 
   private absolutePathFor(relativePath: string): string | null {
@@ -346,8 +378,10 @@ export class WorktreeSafetyController {
   }
 
   private isDirtyBeforeRun(relativePath: string): boolean {
-    return this.git.dirty_files_before_run.includes(relativePath) ||
-      this.git.untracked_files_before_run.includes(relativePath);
+    return (
+      this.git.dirty_files_before_run.includes(relativePath) ||
+      this.git.untracked_files_before_run.includes(relativePath)
+    );
   }
 }
 
@@ -422,12 +456,18 @@ function scanGitSummary(projectRoot: string | null): WorktreeGitSummary {
     encoding: 'utf8',
     timeout: 10_000,
   });
-  const projectPrefix = normalizeRelativePath(String(prefixResult.stdout ?? '').trim())
-    .replace(/\/+$/, '');
-  const branchResult = spawnSync('git', ['-C', projectRoot, 'symbolic-ref', '--short', '-q', 'HEAD'], {
-    encoding: 'utf8',
-    timeout: 10_000,
-  });
+  const projectPrefix = normalizeRelativePath(String(prefixResult.stdout ?? '').trim()).replace(
+    /\/+$/,
+    '',
+  );
+  const branchResult = spawnSync(
+    'git',
+    ['-C', projectRoot, 'symbolic-ref', '--short', '-q', 'HEAD'],
+    {
+      encoding: 'utf8',
+      timeout: 10_000,
+    },
+  );
   const branch = String(branchResult.stdout ?? '').trim() || null;
   const statusResult = spawnSync('git', ['-C', projectRoot, 'status', '--porcelain=v1'], {
     encoding: 'utf8',
@@ -435,7 +475,7 @@ function scanGitSummary(projectRoot: string | null): WorktreeGitSummary {
   });
   const statusLines = String(statusResult.stdout ?? '')
     .split(/\r?\n/)
-    .map(line => line.trimEnd())
+    .map((line) => line.trimEnd())
     .filter(Boolean);
   const dirtyFiles: string[] = [];
   const untrackedFiles: string[] = [];
@@ -479,11 +519,14 @@ function gitStatusPathToProjectRelative(rawPath: string, projectPrefix: string):
 }
 
 function normalizeGitStatusPath(raw: string): string {
-  const renamed = raw.includes(' -> ') ? raw.split(' -> ').at(-1) ?? raw : raw;
+  const renamed = raw.includes(' -> ') ? (raw.split(' -> ').at(-1) ?? raw) : raw;
   return renamed.replace(/^"|"$/g, '').replace(/\\/g, '/');
 }
 
-function resolveTargetPath(projectRoot: string | null, target: string): {
+function resolveTargetPath(
+  projectRoot: string | null,
+  target: string,
+): {
   absolutePath: string;
   relativePath: string;
 } | null {
@@ -510,17 +553,19 @@ function resolveTargetPath(projectRoot: string | null, target: string): {
 
 function isProtectedRelativePath(relativePath: string, protectedPaths: readonly string[]): boolean {
   const normalized = normalizeRelativePath(relativePath);
-  return protectedPaths.some(protectedPath =>
-    normalized === protectedPath || normalized.startsWith(`${protectedPath}/`)
+  return protectedPaths.some(
+    (protectedPath) => normalized === protectedPath || normalized.startsWith(`${protectedPath}/`),
   );
 }
 
 function isWithinRoot(root: string, candidate: string): boolean {
   const normalizedRoot = resolve(root);
   const normalizedCandidate = resolve(candidate);
-  return normalizedCandidate === normalizedRoot ||
+  return (
+    normalizedCandidate === normalizedRoot ||
     normalizedCandidate.startsWith(`${normalizedRoot}\\`) ||
-    normalizedCandidate.startsWith(`${normalizedRoot}/`);
+    normalizedCandidate.startsWith(`${normalizedRoot}/`)
+  );
 }
 
 function normalizeRelativePath(path: string): string {
@@ -539,14 +584,16 @@ function hashFileIfExists(path: string): string | null {
 }
 
 function shouldSimulateRollbackFailure(relativePath: string): boolean {
-  const raw = process.env['BABEL_SIMULATE_ROLLBACK_FAILURE_FOR'] ??
+  const raw =
+    process.env['BABEL_SIMULATE_ROLLBACK_FAILURE_FOR'] ??
     (process.env['BABEL_SIMULATE_ROLLBACK_FAILURE'] === 'true' ? relativePath : '');
   if (!raw) {
     return false;
   }
-  return raw.split(',').map(value => normalizeRelativePath(value.trim())).some(value =>
-    value === '*' || value === normalizeRelativePath(relativePath)
-  );
+  return raw
+    .split(',')
+    .map((value) => normalizeRelativePath(value.trim()))
+    .some((value) => value === '*' || value === normalizeRelativePath(relativePath));
 }
 
 function nextActionForRollbackStatus(status: WorktreeRollbackStatus): string {

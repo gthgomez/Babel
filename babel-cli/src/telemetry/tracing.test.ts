@@ -34,12 +34,16 @@ async function withTelemetryPolicy<T>(optIn: boolean, fn: () => Promise<T>): Pro
   };
   const root = mkdtempSync(join(tmpdir(), 'babel-telemetry-policy-'));
   const policyPath = join(root, 'enterprise-policy.json');
-  writeFileSync(policyPath, JSON.stringify({
-    schema_version: 1,
-    telemetry: {
-      opt_in: optIn,
-    },
-  }), 'utf-8');
+  writeFileSync(
+    policyPath,
+    JSON.stringify({
+      schema_version: 1,
+      telemetry: {
+        opt_in: optIn,
+      },
+    }),
+    'utf-8',
+  );
   process.env['BABEL_OTEL_ENABLED'] = 'true';
   process.env['BABEL_OTEL_SERVICE_NAME'] = 'babel-cli-test';
   delete process.env['BABEL_OTEL_EXPORTER_OTLP_ENDPOINT'];

@@ -15,10 +15,7 @@ export interface ParsedCliArgsOptions {
  * This parser is intentionally lightweight and only aims to be safe for env-var
  * flag strings, not a full POSIX/Windows shell interpreter.
  */
-export function parseCliArgString(
-  value: string,
-  options: ParsedCliArgsOptions = {},
-): string[] {
+export function parseCliArgString(value: string, options: ParsedCliArgsOptions = {}): string[] {
   if (!value.trim()) {
     return [];
   }

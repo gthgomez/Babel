@@ -17,9 +17,9 @@ function pickProjectRoot(): string {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
   const workspaceRoot = resolve(repoRoot, '..');
   const candidates = [
-    join(workspaceRoot, 'reference source-app'),
-    join(workspaceRoot, 'Example-Mobile-Application'),
-    join(workspaceRoot, 'private source repo'),
+    join(workspaceRoot, 'MonteCarlo-Ledger-app'),
+    join(workspaceRoot, 'App-test-Babel'),
+    join(workspaceRoot, 'Babel'),
     repoRoot,
   ];
 
@@ -55,7 +55,7 @@ async function assertCheckpointRestoreSmoke(): Promise<void> {
   const packageRoot = resolve(scriptDir, '..');
   const base = mkdtempSync(join(tmpdir(), 'babel-checkpoint-smoke-'));
   const projectRoot = join(base, 'project');
-  const babelRoot = join(base, 'private source repo');
+  const babelRoot = join(base, 'Babel');
   const runsDir = join(babelRoot, 'runs');
   const runId = '20260424_120000_checkpoint-smoke';
   const runDir = join(runsDir, runId);

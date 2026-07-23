@@ -16,13 +16,13 @@ import { redactSecrets } from '../utils/redaction.js';
 
 const LITE_COMMAND_HELP = `
 Examples:
-  $ babel lite providers
-  $ babel lite plan --repo . --task "Add a focused test"
-  $ babel lite ask --provider deepseek --model deepseek-v4-flash --privacy redacted --task "Explain the failure"
-  $ babel lite patch --provider deepseek --model deepseek-v4-flash --privacy redacted --task "Propose a diff only"
+  $ babel advanced text-provider providers
+  $ babel advanced text-provider plan --repo . --task "Add a focused test"
+  $ babel advanced text-provider ask --provider mock --task "Explain the failure"
+  $ babel advanced text-provider patch --provider mock --task "Propose a diff only"
 
 Notes:
-  - Babel Lite is not an autonomous executor, Codex replacement, or full Governed Mode runtime.
+  - Internal text-provider lane only. Daily work uses babel "<task>", babel plan, and babel deep.
   - plan performs no API call.
   - ask and patch save artifacts under runs/babel-lite by default.
   - patch never applies changes automatically.
@@ -30,13 +30,13 @@ Notes:
 
 const LITE_ROOT_HELP = `
 Examples:
-  $ babel-lite providers
-  $ babel-lite plan --repo . --task "Add a focused test"
-  $ babel-lite ask --provider deepseek --model deepseek-v4-flash --privacy redacted --task "Explain the failure"
-  $ babel-lite patch --provider deepseek --model deepseek-v4-flash --privacy redacted --task "Propose a diff only"
+  $ babel advanced text-provider providers
+  $ babel advanced text-provider plan --repo . --task "Add a focused test"
+  $ babel advanced text-provider ask --provider mock --task "Explain the failure"
+  $ babel advanced text-provider patch --provider mock --task "Propose a diff only"
 
 Notes:
-  - Babel Lite is not an autonomous executor, Codex replacement, or full Governed Mode runtime.
+  - Internal text-provider lane only. Daily work uses babel "<task>", babel plan, and babel deep.
   - plan performs no API call.
   - ask and patch save artifacts under runs/babel-lite by default.
   - patch never applies changes automatically.
@@ -59,19 +59,20 @@ function printLiteError(error: unknown, json: boolean): never {
   const payload = {
     schema_version: 1,
     status: 'failed',
-    error: error instanceof LiteError
-      ? {
-          code: error.code,
-          message,
-          provider: error.providerId,
-          env_key: error.envKeyName,
-          env_keys: error.envKeyNames,
-          status_code: error.statusCode,
-        }
-      : {
-          code: 'PROVIDER_REQUEST_FAILED',
-          message,
-        },
+    error:
+      error instanceof LiteError
+        ? {
+            code: error.code,
+            message,
+            provider: error.providerId,
+            env_key: error.envKeyName,
+            env_keys: error.envKeyNames,
+            status_code: error.statusCode,
+          }
+        : {
+            code: 'PROVIDER_REQUEST_FAILED',
+            message,
+          },
   };
 
   if (json) {
@@ -124,44 +125,47 @@ function registerLiteSubcommands(command: Command): void {
     .option('--privacy <mode>', 'Provider payload privacy: redacted | full', 'redacted')
     .option('--json', 'Emit structured JSON only')
     .option('--stream', 'Stream answer content in real time')
-    .action(async (options: {
-      task?: string;
-      repo?: string;
-      provider?: string;
-      model?: string;
-      privacy?: LitePrivacyMode;
-      json?: boolean;
-      stream?: boolean;
-    }) => {
-      try {
-        const onChunk = options.stream && !options.json
-          ? (chunk: string) => process.stdout.write(chunk)
-          : undefined;
+    .action(
+      async (options: {
+        task?: string;
+        repo?: string;
+        provider?: string;
+        model?: string;
+        privacy?: LitePrivacyMode;
+        json?: boolean;
+        stream?: boolean;
+      }) => {
+        try {
+          const onChunk =
+            options.stream && !options.json
+              ? (chunk: string) => process.stdout.write(chunk)
+              : undefined;
 
-        const result = await runLiteAsk({
-          repoPath: options.repo ?? '.',
-          task: options.task ?? '',
-          provider: options.provider ?? 'auto',
-          ...(options.model ? { model: options.model } : {}),
-          ...(options.privacy ? { privacy: options.privacy } : {}),
-          ...(onChunk ? { onChunk } : {}),
-        });
+          const result = await runLiteAsk({
+            repoPath: options.repo ?? '.',
+            task: options.task ?? '',
+            provider: options.provider ?? 'auto',
+            ...(options.model ? { model: options.model } : {}),
+            ...(options.privacy ? { privacy: options.privacy } : {}),
+            ...(onChunk ? { onChunk } : {}),
+          });
 
-        if (options.stream && !options.json) {
-          process.stdout.write('\n'); // ensure clean line at end
-          const metadata = [
-            `Babel Lite ask: ${result.provider.id} (${result.provider.model})`,
-            `Artifacts: ${result.artifacts.run_dir}`,
-            '',
-          ].join('\n');
-          process.stdout.write(metadata);
-        } else {
-          printJsonOrText(result, formatLiteAskText(result), options.json === true);
+          if (options.stream && !options.json) {
+            process.stdout.write('\n'); // ensure clean line at end
+            const metadata = [
+              `Babel Lite ask: ${result.provider.id} (${result.provider.model})`,
+              `Artifacts: ${result.artifacts.run_dir}`,
+              '',
+            ].join('\n');
+            process.stdout.write(metadata);
+          } else {
+            printJsonOrText(result, formatLiteAskText(result), options.json === true);
+          }
+        } catch (error: unknown) {
+          printLiteError(error, options.json === true);
         }
-      } catch (error: unknown) {
-        printLiteError(error, options.json === true);
-      }
-    });
+      },
+    );
 
   command
     .command('patch')
@@ -172,27 +176,29 @@ function registerLiteSubcommands(command: Command): void {
     .option('--model <model>', 'Provider model override')
     .option('--privacy <mode>', 'Provider payload privacy: redacted | full', 'redacted')
     .option('--json', 'Emit structured JSON only')
-    .action(async (options: {
-      task?: string;
-      repo?: string;
-      provider?: string;
-      model?: string;
-      privacy?: LitePrivacyMode;
-      json?: boolean;
-    }) => {
-      try {
-        const result = await runLitePatch({
-          repoPath: options.repo ?? '.',
-          task: options.task ?? '',
-          provider: options.provider ?? 'auto',
-          ...(options.model ? { model: options.model } : {}),
-          ...(options.privacy ? { privacy: options.privacy } : {}),
-        });
-        printJsonOrText(result, formatLitePatchText(result), options.json === true);
-      } catch (error: unknown) {
-        printLiteError(error, options.json === true);
-      }
-    });
+    .action(
+      async (options: {
+        task?: string;
+        repo?: string;
+        provider?: string;
+        model?: string;
+        privacy?: LitePrivacyMode;
+        json?: boolean;
+      }) => {
+        try {
+          const result = await runLitePatch({
+            repoPath: options.repo ?? '.',
+            task: options.task ?? '',
+            provider: options.provider ?? 'auto',
+            ...(options.model ? { model: options.model } : {}),
+            ...(options.privacy ? { privacy: options.privacy } : {}),
+          });
+          printJsonOrText(result, formatLitePatchText(result), options.json === true);
+        } catch (error: unknown) {
+          printLiteError(error, options.json === true);
+        }
+      },
+    );
 }
 
 export function registerLiteCommands(program: Command): void {
@@ -204,16 +210,19 @@ export function registerLiteCommands(program: Command): void {
   registerLiteSubcommands(liteCommand);
 }
 
-/** Internal provider-contract lane — not the daily bl workflow surface. */
+/** Internal provider-contract lane — not the daily CLI workflow surface. */
 export function registerInternalTextProviderCommands(program: Command): void {
   const command = program
     .command('text-provider')
     .description('Internal text-provider lane (ask/plan/patch with --task/--repo flags)')
-    .addHelpText('after', `
+    .addHelpText(
+      'after',
+      `
 Notes:
   - This is an internal provider-contract lane, not the product definition of Babel Lite.
-  - Daily work should use bl ask, bl plan, bl propose, bl fix, bl review, and bl undo.
-`);
+  - Daily work should use babel "<task>", babel plan, babel deep, and babel undo.
+`,
+    );
   registerLiteSubcommands(command);
   (command as unknown as { _hidden: boolean })._hidden = true;
 }

@@ -20,11 +20,11 @@
  *
  * API Runners:
  *   DEEPINFRA_API_KEY         Required for DeepInfra tiers (Nemotron, Qwen3).
- *   BABEL_DEEPINFRA_TOKENS    max_tokens for DeepInfra responses.  Default: 8096
+ *   BABEL_DEEPINFRA_TOKENS    max_tokens for DeepInfra responses.  Default: 32000
  *   BABEL_DEEPINFRA_REQUEST_TIMEOUT_MS - per-request abort timeout. Default: 120000
  *   BABEL_DEEPINFRA_REQUEST_MAX_RETRIES - transport/5xx retry attempts. Default: 4
  *   DEEPSEEK_API_KEY          Required for direct DeepSeek tiers.
- *   BABEL_DEEPSEEK_TOKENS     max_tokens for DeepSeek responses. Default: 4096
+ *   BABEL_DEEPSEEK_TOKENS     max_tokens for DeepSeek responses. Default: 32000
  *   BABEL_DEEPSEEK_REQUEST_TIMEOUT_MS - per-request abort timeout. Default: 120000
  *   BABEL_DEEPSEEK_REQUEST_MAX_RETRIES - transport/5xx retry attempts. Default: 3
  *   GEMINI_API_KEY            Required for Gemini API repair runner (structuredRunner).
@@ -90,7 +90,9 @@ export function isStructuredOutputError(error: unknown): error is StructuredOutp
   return error instanceof StructuredOutputError;
 }
 
-export function buildStructuredOutputError(params: StructuredOutputErrorParams): StructuredOutputError {
+export function buildStructuredOutputError(
+  params: StructuredOutputErrorParams,
+): StructuredOutputError {
   return new StructuredOutputError(params);
 }
 
@@ -103,6 +105,7 @@ export interface RunnerInvocationMetadata {
   total_tokens: number | null;
   prompt_cache_hit_tokens?: number | null;
   prompt_cache_miss_tokens?: number | null;
+  cache_hit_rate?: number | null;
   estimated_cost_usd: number | null;
   cost_precision?: CostPrecision | null;
   pricing_source_url?: string | null;
@@ -129,9 +132,76 @@ export interface RunnerProgressEvent {
 }
 
 export interface RunnerCallbacks {
-  onChunk?: (chunk: string) => void;
+  onChunk?: (chunk: string) => void | Promise<void>;
   onProgress?: (event: RunnerProgressEvent) => void;
+  onThought?: (thought: string) => void;
 }
+
+// ─── Native Function-Calling Types ───────────────────────────────────────────
+
+// ─── Provider-Neutral Structured Messages (P0-B) ────────────────────────────
+// ProviderMessage replaces the legacy flat-Markdown prompt string with
+// a protocol-faithful message array. Provider adapters may transform syntax
+// but must not flatten roles into prose.
+
+/** A single structured message in the provider-neutral conversation format. */
+export interface ProviderMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string;
+  /** For tool role: matches the assistant's tool call id. */
+  tool_call_id?: string;
+  /** For assistant role: native tool calls requested by the model. */
+  tool_calls?: ProviderToolCall[];
+  /** Display name / purpose tag (e.g. "tool_calls", "sub_agent"). */
+  name?: string;
+}
+
+/** A single native tool call within an assistant ProviderMessage. */
+export interface ProviderToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+/** Provider capability matrix (P0-B / P1-E). One canonical record per model. */
+export interface ProviderCapabilities {
+  contextWindow: number;
+  maxOutputTokens: number;
+  supportsThinking: boolean;
+  supportsToolChoice: boolean;
+  supportsParallelToolCalls: boolean;
+  supportsStreaming: boolean;
+  /** Whether the provider supports thinking/reasoning while tools are active. */
+  thinkingWithTools: 'supported' | 'unsupported' | 'without_tool_choice' | 'unknown';
+}
+
+/**
+ * OpenAI-compatible tool definition for function calling (tools API).
+ * Describes a function the model may call, with a JSON Schema for its parameters.
+ */
+export interface ToolDefinition {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+}
+
+/**
+ * Events yielded by executeWithToolsStream() — the native function-calling
+ * streaming path. These mirror the events in chatEngine.ts but are defined
+ * here so runners don't need to import from the agent layer.
+ */
+export type ToolStreamEvent =
+  | { type: 'text_delta'; text: string }
+  | { type: 'thought_delta'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+  | { type: 'done'; finishReason: string }
+  | { type: 'error'; message: string };
 
 export interface LlmRunner {
   /**
@@ -148,6 +218,8 @@ export interface LlmRunner {
     prompt: string,
     schema: ZodType<T, unknown>,
     callbacks?: RunnerCallbacks,
+    systemPrompt?: string,
+    signal?: AbortSignal,
   ): Promise<T>;
 
   /**
@@ -156,32 +228,71 @@ export interface LlmRunner {
    * can persist cost and token metrics alongside waterfall telemetry.
    */
   getLastInvocationMetadata?(): RunnerInvocationMetadata | null;
+
+  /**
+   * Execute with native tool definitions (OpenAI-compatible function calling
+   * via the `tools` API parameter) and stream results as typed events.
+   *
+   * Yields `ToolStreamEvent` values as SSE chunks arrive: `text_delta` for
+   * content tokens, `tool_use` when a complete native tool call is received,
+   * `done` with the finish reason, or `error` for failures.
+   *
+   * Providers that do not support native function calling should omit this
+   * method; callers must check for its presence at runtime.
+   *
+   * @param messages    - Structured provider-neutral conversation messages
+   *                       (system, user, assistant with tool_calls, tool with results).
+   * @param tools       - Array of ToolDefinition objects describing available tools.
+   * @param systemPrompt - Optional system prompt override (append or replace).
+   * @param signal      - Optional AbortSignal for cancellation.
+   * @param toolChoice  - Optional tool_choice mode. 'required' forces at least
+   *                       one tool call; 'auto' (default) lets the model choose.
+   */
+  executeWithToolsStream?(
+    messages: ProviderMessage[],
+    tools: ToolDefinition[],
+    systemPrompt?: string,
+    signal?: AbortSignal,
+    toolChoice?: 'auto' | 'required',
+  ): AsyncGenerator<ToolStreamEvent, void, undefined>;
 }
 
-export class StreamedAnswerExtractor {
+/**
+ * Multi-field JSON stream extractor. Watches for specific top-level string fields
+ * in a streaming JSON object and routes their values to registered callbacks.
+ *
+ * Replacement for StreamedAnswerExtractor — supports extracting multiple fields
+ * (answer, plan, summary, tool_calls) from a single stream.
+ */
+export class MultiFieldStreamExtractor {
   private inString = false;
   private escaped = false;
   private currentKey = '';
   private isKey = true;
   private lastKey = '';
-  private captureValue = false;
+  private activeCallback: ((chunk: string) => void) | null = null;
   private braceDepth = 0;
-  private onAnswerChunk: (chunk: string) => void;
+  private readonly fieldCallbacks: Map<string, (chunk: string) => void>;
 
-  constructor(onAnswerChunk: (chunk: string) => void) {
-    this.onAnswerChunk = onAnswerChunk;
+  constructor(fieldCallbacks: Map<string, (chunk: string) => void>) {
+    this.fieldCallbacks = fieldCallbacks;
+  }
+
+  /** Convenience: create from a simple key→callback record. */
+  static fromRecord(record: Record<string, (chunk: string) => void>): MultiFieldStreamExtractor {
+    return new MultiFieldStreamExtractor(new Map(Object.entries(record)));
   }
 
   feed(char: string): void {
     if (this.escaped) {
       this.escaped = false;
-      if (this.captureValue) {
-        if (char === 'n') this.onAnswerChunk('\n');
-        else if (char === 't') this.onAnswerChunk('\t');
-        else if (char === 'r') this.onAnswerChunk('\r');
-        else if (char === 'b') this.onAnswerChunk('\b');
-        else if (char === 'f') this.onAnswerChunk('\f');
-        else this.onAnswerChunk(char);
+      if (this.activeCallback) {
+        if (char === 'n') this.activeCallback('\n');
+        else if (char === 't') this.activeCallback('\t');
+        else if (char === 'r') this.activeCallback('\r');
+        else if (char === 'b') this.activeCallback('\b');
+        else if (char === 'f') this.activeCallback('\f');
+        else this.activeCallback(char);
       }
       return;
     }
@@ -198,9 +309,7 @@ export class StreamedAnswerExtractor {
           this.lastKey = this.currentKey;
           this.currentKey = '';
         } else {
-          if (this.captureValue) {
-            this.captureValue = false;
-          }
+          this.activeCallback = null;
         }
       }
       return;
@@ -209,25 +318,29 @@ export class StreamedAnswerExtractor {
     if (this.inString) {
       if (this.isKey) {
         this.currentKey += char;
-      } else if (this.captureValue) {
-        this.onAnswerChunk(char);
+      } else if (this.activeCallback) {
+        this.activeCallback(char);
       }
       return;
     }
 
     if (char === ':') {
       this.isKey = false;
-      if (this.braceDepth === 1 && this.lastKey === 'answer') {
-        this.captureValue = true;
+      if (this.braceDepth === 1 && this.lastKey) {
+        const cb = this.fieldCallbacks.get(this.lastKey);
+        if (cb) this.activeCallback = cb;
       }
-    } else if (char === ',' || char === '}') {
+    } else if (char === ',') {
       this.isKey = true;
+      this.activeCallback = null;
+      this.lastKey = '';
+    } else if (char === '}') {
+      this.braceDepth--;
+      this.isKey = true;
+      this.activeCallback = null;
       this.lastKey = '';
     } else if (char === '{') {
       this.braceDepth++;
-      this.isKey = true;
-    } else if (char === '}') {
-      this.braceDepth--;
       this.isKey = true;
     }
   }
@@ -236,5 +349,15 @@ export class StreamedAnswerExtractor {
     for (let i = 0; i < text.length; i++) {
       this.feed(text[i]!);
     }
+  }
+}
+
+/**
+ * @deprecated Use MultiFieldStreamExtractor.fromRecord({ answer: callback }) instead.
+ * Kept for backward compatibility with existing callers.
+ */
+export class StreamedAnswerExtractor extends MultiFieldStreamExtractor {
+  constructor(onAnswerChunk: (chunk: string) => void) {
+    super(new Map([['answer', onAnswerChunk]]));
   }
 }

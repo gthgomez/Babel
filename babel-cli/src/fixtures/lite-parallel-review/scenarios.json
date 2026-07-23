@@ -5,7 +5,7 @@
     {
       "id": "repo_wide_migration_plan",
       "task": "Plan a repo-wide migration for the authentication module without editing files",
-      "expected_route_lane": "babel_full",
+      "expected_route_lane": "lite_plan",
       "expected_execution_verb": "plan",
       "expects_spark_review": true,
       "mutation_policy": "read_only",
@@ -15,7 +15,7 @@
     {
       "id": "security_repo_wide_fix",
       "task": "Fix the failing Node test for this repo-wide security sandbox. Only edit src/math.js. Run npm test before completing.",
-      "expected_route_lane": "babel_full",
+      "expected_route_lane": "deep_lane",
       "expected_execution_verb": "fix",
       "expects_spark_review": true,
       "mutation_policy": "may_edit",

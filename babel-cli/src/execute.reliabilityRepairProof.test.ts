@@ -34,10 +34,13 @@ test('deterministic repair proof provider requires explicit env and task marker'
       null,
     );
 
-    const response = buildReliabilityRepairProofExecutorResponse(executorPrompt, { stage: 'executor' });
+    const response = buildReliabilityRepairProofExecutorResponse(executorPrompt, {
+      stage: 'executor',
+    });
     assert.deepEqual(response, {
       type: 'tool_call',
-      thinking: 'Deterministic reliability proof model-boundary response: honor the approved preflight read before editing.',
+      thinking:
+        'Deterministic reliability proof model-boundary response: honor the approved preflight read before editing.',
       tool: 'file_read',
       path: 'src/math.js',
     });

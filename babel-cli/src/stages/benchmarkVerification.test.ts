@@ -24,7 +24,8 @@ function successfulCommand(target: string, stdout = ''): ToolCallLog {
 test('write-compressor contract requires decompressor comparison before completion', () => {
   const rawTask = 'Terminal-Bench 2 task: write-compressor\nWrite data.comp.';
   assert.match(
-    verifyBenchmarkPreCompleteContract(rawTask, [successfulCommand('gzip data.txt')])?.message ?? '',
+    verifyBenchmarkPreCompleteContract(rawTask, [successfulCommand('gzip data.txt')])?.message ??
+      '',
     /decompressor/,
   );
 
@@ -66,9 +67,9 @@ test('gpt2-codegolf contract requires running the real checkpoint inputs', () =>
 });
 
 test('gpt2-codegolf prompt warns against toy checkpoint handling', () => {
-  const lines = buildBenchmarkVerificationPromptLines(
-    'Terminal-Bench 2 task: gpt2-codegolf',
-  ).join('\n');
+  const lines = buildBenchmarkVerificationPromptLines('Terminal-Bench 2 task: gpt2-codegolf').join(
+    '\n',
+  );
 
   assert.match(lines, /hundreds of megabytes/);
   assert.match(lines, /token_0\/token_1/);
@@ -140,7 +141,9 @@ test('break-filter prompt warns that plain Python does not run pytest-style test
 
 test('benchmark verification prompt lines are task-specific', () => {
   assert.match(
-    buildBenchmarkVerificationPromptLines('Terminal-Bench 2 task: log-summary-date-ranges').join('\n'),
+    buildBenchmarkVerificationPromptLines('Terminal-Bench 2 task: log-summary-date-ranges').join(
+      '\n',
+    ),
     /Generic external benchmark/,
   );
   assert.match(
@@ -152,11 +155,15 @@ test('benchmark verification prompt lines are task-specific', () => {
     /pmars -b -r 100 -f my_warrior\.red/,
   );
   assert.match(
-    buildBenchmarkVerificationPromptLines('Terminal-Bench 2 task: llm-inference-batching-scheduler').join('\n'),
+    buildBenchmarkVerificationPromptLines(
+      'Terminal-Bench 2 task: llm-inference-batching-scheduler',
+    ).join('\n'),
     /plan_b1\.jsonl/,
   );
   assert.match(
-    buildBenchmarkVerificationPromptLines('Terminal-Bench 2 task: llm-inference-batching-scheduler').join('\n'),
+    buildBenchmarkVerificationPromptLines(
+      'Terminal-Bench 2 task: llm-inference-batching-scheduler',
+    ).join('\n'),
     /optimized_packer\.py` with no arguments/,
   );
 });
@@ -200,72 +207,100 @@ function plan(steps: SwePlan['minimal_action_set']): SwePlan {
 
 test('benchmark risk QA rejects weak largest-eigenval plan', () => {
   const rawTask = 'Terminal-Bench 2 task: largest-eigenval';
-  const failures = collectBenchmarkRiskPlanViolations(plan([
-    {
-      step: 1,
-      description: 'Patch eigen.py with power iteration',
-      tool: 'file_write',
-      target: 'eigen.py',
-      rationale: 'Use power iteration and Rayleigh quotient',
-      reversible: true,
-      verification: 'Run python eval.py',
-    },
-    {
-      step: 2,
-      description: 'Run eval',
-      tool: 'shell_exec',
-      target: 'python eval.py',
-      rationale: 'Check result',
-      reversible: true,
-      verification: 'Exit 0',
-    },
-  ]), rawTask);
+  const failures = collectBenchmarkRiskPlanViolations(
+    plan([
+      {
+        step: 1,
+        description: 'Patch eigen.py with power iteration',
+        tool: 'file_write',
+        target: 'eigen.py',
+        rationale: 'Use power iteration and Rayleigh quotient',
+        reversible: true,
+        verification: 'Run python eval.py',
+      },
+      {
+        step: 2,
+        description: 'Run eval',
+        tool: 'shell_exec',
+        target: 'python eval.py',
+        rationale: 'Check result',
+        reversible: true,
+        verification: 'Exit 0',
+      },
+    ]),
+    rawTask,
+  );
 
-  assert.equal(failures.some(failure => failure.condition.includes('BENCHMARK_WEAK_NUMERICAL_STRATEGY')), true);
+  assert.equal(
+    failures.some((failure) => failure.condition.includes('BENCHMARK_WEAK_NUMERICAL_STRATEGY')),
+    true,
+  );
 });
 
 test('benchmark risk QA rejects artifact plans without round-trip or executable checks', () => {
-  const compressorFailures = collectBenchmarkRiskPlanViolations(plan([
-    {
-      step: 1,
-      description: 'Write compressed data',
-      tool: 'file_write',
-      target: 'data.comp',
-      rationale: 'Create artifact',
-      reversible: true,
-      verification: 'File exists',
-    },
-  ]), 'Terminal-Bench 2 task: write-compressor');
-  const pytorchFailures = collectBenchmarkRiskPlanViolations(plan([
-    {
-      step: 1,
-      description: 'Write files',
-      tool: 'file_write',
-      target: 'prediction.txt',
-      rationale: 'Create prediction',
-      reversible: true,
-      verification: 'File exists',
-    },
-  ]), 'Terminal-Bench 2 task: pytorch-model-cli');
+  const compressorFailures = collectBenchmarkRiskPlanViolations(
+    plan([
+      {
+        step: 1,
+        description: 'Write compressed data',
+        tool: 'file_write',
+        target: 'data.comp',
+        rationale: 'Create artifact',
+        reversible: true,
+        verification: 'File exists',
+      },
+    ]),
+    'Terminal-Bench 2 task: write-compressor',
+  );
+  const pytorchFailures = collectBenchmarkRiskPlanViolations(
+    plan([
+      {
+        step: 1,
+        description: 'Write files',
+        tool: 'file_write',
+        target: 'prediction.txt',
+        rationale: 'Create prediction',
+        reversible: true,
+        verification: 'File exists',
+      },
+    ]),
+    'Terminal-Bench 2 task: pytorch-model-cli',
+  );
 
-  assert.equal(compressorFailures.some(failure => failure.condition.includes('BENCHMARK_ARTIFACT_ROUNDTRIP_REQUIRED')), true);
-  assert.equal(pytorchFailures.some(failure => failure.condition.includes('BENCHMARK_CLI_ARTIFACT_VERIFIER_REQUIRED')), true);
+  assert.equal(
+    compressorFailures.some((failure) =>
+      failure.condition.includes('BENCHMARK_ARTIFACT_ROUNDTRIP_REQUIRED'),
+    ),
+    true,
+  );
+  assert.equal(
+    pytorchFailures.some((failure) =>
+      failure.condition.includes('BENCHMARK_CLI_ARTIFACT_VERIFIER_REQUIRED'),
+    ),
+    true,
+  );
 });
 
 test('benchmark risk QA rejects merge-diff source-only git bypass', () => {
-  const failures = collectBenchmarkRiskPlanViolations(plan([
-    {
-      step: 1,
-      description: 'Write algo directly',
-      tool: 'file_write',
-      target: 'repo/algo.py',
-      rationale: 'Create solution',
-      reversible: true,
-      verification: 'Run examples',
-    },
-  ]), 'Terminal-Bench 2 task: merge-diff-arc-agi-task');
+  const failures = collectBenchmarkRiskPlanViolations(
+    plan([
+      {
+        step: 1,
+        description: 'Write algo directly',
+        tool: 'file_write',
+        target: 'repo/algo.py',
+        rationale: 'Create solution',
+        reversible: true,
+        verification: 'Run examples',
+      },
+    ]),
+    'Terminal-Bench 2 task: merge-diff-arc-agi-task',
+  );
 
-  assert.equal(failures.some(failure => failure.condition.includes('BENCHMARK_GIT_NATIVE_PLAN_REQUIRED')), true);
+  assert.equal(
+    failures.some((failure) => failure.condition.includes('BENCHMARK_GIT_NATIVE_PLAN_REQUIRED')),
+    true,
+  );
 });
 
 test('llm batching contract requires both output plans and cost verification', () => {
@@ -287,106 +322,131 @@ test('llm batching contract requires both output plans and cost verification', (
 });
 
 test('llm batching QA rejects no-arg helper plan that omits final artifacts', () => {
-  const failures = collectBenchmarkRiskPlanViolations(plan([
-    {
-      step: 1,
-      description: 'Write helper',
-      tool: 'file_write',
-      target: 'task_file/scripts/optimized_packer.py',
-      rationale: 'Create helper',
-      reversible: true,
-      verification: 'Helper exists',
-    },
-    {
-      step: 2,
-      description: 'Run helper',
-      tool: 'shell_exec',
-      target: 'python task_file/scripts/optimized_packer.py',
-      rationale: 'Generate plans',
-      reversible: true,
-      verification: 'Exit 0',
-    },
-    {
-      step: 3,
-      description: 'Run cost model',
-      tool: 'shell_exec',
-      target: 'python task_file/scripts/cost_model.py',
-      rationale: 'Validate cost',
-      reversible: true,
-      verification: 'Exit 0',
-    },
-  ]), 'Terminal-Bench 2 task: llm-inference-batching-scheduler');
-
-  assert.equal(failures.some(failure => failure.condition.includes('BENCHMARK_LLM_BATCHING_OUTPUTS_REQUIRED')), true);
-});
-
-test('benchmark QA rejects evidence requests that contain final artifact mutation', () => {
-  const failures = collectBenchmarkRiskPlanViolations({
-    ...plan([
+  const failures = collectBenchmarkRiskPlanViolations(
+    plan([
       {
         step: 1,
-        description: 'Read bucket 1',
-        tool: 'file_read',
-        target: 'task_file/input_data/requests_bucket_1.jsonl',
-        rationale: 'Gather evidence',
+        description: 'Write helper',
+        tool: 'file_write',
+        target: 'task_file/scripts/optimized_packer.py',
+        rationale: 'Create helper',
         reversible: true,
-        verification: 'Read succeeds',
+        verification: 'Helper exists',
       },
       {
         step: 2,
-        description: 'Write final output during evidence request',
-        tool: 'file_write',
-        target: 'task_file/output_data/plan_b1.jsonl',
-        rationale: 'Create artifact',
+        description: 'Run helper',
+        tool: 'shell_exec',
+        target: 'python task_file/scripts/optimized_packer.py',
+        rationale: 'Generate plans',
         reversible: true,
-        verification: 'File exists',
+        verification: 'Exit 0',
+      },
+      {
+        step: 3,
+        description: 'Run cost model',
+        tool: 'shell_exec',
+        target: 'python task_file/scripts/cost_model.py',
+        rationale: 'Validate cost',
+        reversible: true,
+        verification: 'Exit 0',
       },
     ]),
-    plan_type: 'EVIDENCE_REQUEST',
-  }, 'Terminal-Bench 2 task: llm-inference-batching-scheduler');
+    'Terminal-Bench 2 task: llm-inference-batching-scheduler',
+  );
 
-  assert.equal(failures.some(failure => failure.condition.includes('BENCHMARK_EVIDENCE_REQUEST_MUTATION')), true);
+  assert.equal(
+    failures.some((failure) =>
+      failure.condition.includes('BENCHMARK_LLM_BATCHING_OUTPUTS_REQUIRED'),
+    ),
+    true,
+  );
+});
+
+test('benchmark QA rejects evidence requests that contain final artifact mutation', () => {
+  const failures = collectBenchmarkRiskPlanViolations(
+    {
+      ...plan([
+        {
+          step: 1,
+          description: 'Read bucket 1',
+          tool: 'file_read',
+          target: 'task_file/input_data/requests_bucket_1.jsonl',
+          rationale: 'Gather evidence',
+          reversible: true,
+          verification: 'Read succeeds',
+        },
+        {
+          step: 2,
+          description: 'Write final output during evidence request',
+          tool: 'file_write',
+          target: 'task_file/output_data/plan_b1.jsonl',
+          rationale: 'Create artifact',
+          reversible: true,
+          verification: 'File exists',
+        },
+      ]),
+      plan_type: 'EVIDENCE_REQUEST',
+    },
+    'Terminal-Bench 2 task: llm-inference-batching-scheduler',
+  );
+
+  assert.equal(
+    failures.some((failure) => failure.condition.includes('BENCHMARK_EVIDENCE_REQUEST_MUTATION')),
+    true,
+  );
 });
 
 test('llm batching QA accepts explicit bucket generation and verifier plan', () => {
-  const failures = collectBenchmarkRiskPlanViolations(plan([
-    {
-      step: 1,
-      description: 'Write helper',
-      tool: 'file_write',
-      target: 'task_file/scripts/optimized_packer.py',
-      rationale: 'Create helper',
-      reversible: true,
-      verification: 'Helper exists',
-    },
-    {
-      step: 2,
-      description: 'Generate bucket 1 plan',
-      tool: 'shell_exec',
-      target: 'python task_file/scripts/optimized_packer.py task_file/input_data/requests_bucket_1.jsonl task_file/output_data/plan_b1.jsonl',
-      rationale: 'Generate plan_b1.jsonl',
-      reversible: true,
-      verification: 'plan_b1.jsonl exists',
-    },
-    {
-      step: 3,
-      description: 'Generate bucket 2 plan',
-      tool: 'shell_exec',
-      target: 'python task_file/scripts/optimized_packer.py task_file/input_data/requests_bucket_2.jsonl task_file/output_data/plan_b2.jsonl',
-      rationale: 'Generate plan_b2.jsonl',
-      reversible: true,
-      verification: 'plan_b2.jsonl exists',
-    },
-    {
-      step: 4,
-      description: 'Validate both plans',
-      tool: 'shell_exec',
-      target: 'python verify_llm_batching_plan.py task_file/output_data/plan_b1.jsonl task_file/output_data/plan_b2.jsonl',
-      rationale: 'Check coverage, shape, and cost thresholds',
-      reversible: true,
-      verification: 'Verifier exits 0',
-    },
-  ]), 'Terminal-Bench 2 task: llm-inference-batching-scheduler');
+  const failures = collectBenchmarkRiskPlanViolations(
+    plan([
+      {
+        step: 1,
+        description: 'Write helper',
+        tool: 'file_write',
+        target: 'task_file/scripts/optimized_packer.py',
+        rationale: 'Create helper',
+        reversible: true,
+        verification: 'Helper exists',
+      },
+      {
+        step: 2,
+        description: 'Generate bucket 1 plan',
+        tool: 'shell_exec',
+        target:
+          'python task_file/scripts/optimized_packer.py task_file/input_data/requests_bucket_1.jsonl task_file/output_data/plan_b1.jsonl',
+        rationale: 'Generate plan_b1.jsonl',
+        reversible: true,
+        verification: 'plan_b1.jsonl exists',
+      },
+      {
+        step: 3,
+        description: 'Generate bucket 2 plan',
+        tool: 'shell_exec',
+        target:
+          'python task_file/scripts/optimized_packer.py task_file/input_data/requests_bucket_2.jsonl task_file/output_data/plan_b2.jsonl',
+        rationale: 'Generate plan_b2.jsonl',
+        reversible: true,
+        verification: 'plan_b2.jsonl exists',
+      },
+      {
+        step: 4,
+        description: 'Validate both plans',
+        tool: 'shell_exec',
+        target:
+          'python verify_llm_batching_plan.py task_file/output_data/plan_b1.jsonl task_file/output_data/plan_b2.jsonl',
+        rationale: 'Check coverage, shape, and cost thresholds',
+        reversible: true,
+        verification: 'Verifier exits 0',
+      },
+    ]),
+    'Terminal-Bench 2 task: llm-inference-batching-scheduler',
+  );
 
-  assert.equal(failures.some(failure => failure.condition.includes('BENCHMARK_LLM_BATCHING_OUTPUTS_REQUIRED')), false);
+  assert.equal(
+    failures.some((failure) =>
+      failure.condition.includes('BENCHMARK_LLM_BATCHING_OUTPUTS_REQUIRED'),
+    ),
+    false,
+  );
 });

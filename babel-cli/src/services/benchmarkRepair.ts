@@ -65,7 +65,9 @@ export interface BuildBenchmarkRepairReportOptions {
   now?: Date;
 }
 
-export function buildBenchmarkRepairReport(options: BuildBenchmarkRepairReportOptions): BenchmarkRepairReport {
+export function buildBenchmarkRepairReport(
+  options: BuildBenchmarkRepairReportOptions,
+): BenchmarkRepairReport {
   const now = options.now ?? new Date();
   const suite = options.suite ?? 'pilot10';
   const maxTasks = positiveInt(options.maxTasks, 10);
@@ -144,10 +146,14 @@ export function formatBenchmarkRepairHuman(report: BenchmarkRepairReport): strin
     ...report.repair_strategy.steps.map((step, index) => `${index + 1}. ${step}`),
     '',
     'Commands:',
-    ...(report.commands.restore_checkpoint ? [`- restore: ${report.commands.restore_checkpoint}`] : []),
+    ...(report.commands.restore_checkpoint
+      ? [`- restore: ${report.commands.restore_checkpoint}`]
+      : []),
     `- local gate: ${report.commands.local_gate}`,
     `- analyze: ${report.commands.analyze}`,
-    ...(report.commands.targeted_benchmark ? [`- targeted: ${report.commands.targeted_benchmark}`] : []),
+    ...(report.commands.targeted_benchmark
+      ? [`- targeted: ${report.commands.targeted_benchmark}`]
+      : []),
     `- full: ${report.commands.full_benchmark}`,
   ].join('\n');
 }
@@ -164,9 +170,7 @@ function buildRepairStrategy(
         : 'No failing trial was visible in this run.',
       restore_first: null,
       target_artifacts: [],
-      stop_conditions: [
-        'Stop after producing a fresh countable Terminal-Bench result.',
-      ],
+      stop_conditions: ['Stop after producing a fresh countable Terminal-Bench result.'],
       steps: [
         'Run the local readiness gate.',
         'Run the full pilot or latest targeted command emitted by benchmark loop.',
@@ -178,7 +182,11 @@ function buildRepairStrategy(
   const checkpoint = analysis.work_packet.best_candidate_checkpoint;
   const partial = selected.partial_pass;
   const category = partial?.blocking_category ?? categoryFromFailureClass(selected.failure_class);
-  const targetArtifacts = targetArtifactsFor(selected.task_name, category, selected.failure_fingerprint);
+  const targetArtifacts = targetArtifactsFor(
+    selected.task_name,
+    category,
+    selected.failure_fingerprint,
+  );
   const taskSpecific = taskSpecificSteps(selected.task_name, category);
   return {
     mode: 'partial_repair',
@@ -192,8 +200,12 @@ function buildRepairStrategy(
     ],
     steps: [
       ...(checkpoint
-        ? [`Restore checkpoint ${checkpoint} first, then inspect only the delta required by the verifier failure.`]
-        : ['Inspect the failing trial artifacts and identify the smallest repair surface before editing.']),
+        ? [
+            `Restore checkpoint ${checkpoint} first, then inspect only the delta required by the verifier failure.`,
+          ]
+        : [
+            'Inspect the failing trial artifacts and identify the smallest repair surface before editing.',
+          ]),
       'Use the partial verifier summary as the repair target; preserve any tests that already passed.',
       ...taskSpecific,
       'Run source readiness: npm run typecheck, focused unit tests, npm run build, npm run check:dist.',
@@ -275,13 +287,15 @@ function buildRepairPrompt(input: {
       ? `- ${partial.passed}/${partial.total} tests passed; blocking category ${partial.blocking_category ?? 'unknown'}`
       : '- none available',
     ...(partial
-      ? partial.failed_tests.map((test) =>
-        `- ${test.name}: ${test.category}${test.message ? ` - ${test.message}` : ''}`,
-      )
+      ? partial.failed_tests.map(
+          (test) => `- ${test.name}: ${test.category}${test.message ? ` - ${test.message}` : ''}`,
+        )
       : []),
     '',
     'Target artifacts:',
-    ...(input.strategy.target_artifacts.length > 0 ? input.strategy.target_artifacts.map((artifact) => `- ${artifact}`) : ['- infer from verifier evidence']),
+    ...(input.strategy.target_artifacts.length > 0
+      ? input.strategy.target_artifacts.map((artifact) => `- ${artifact}`)
+      : ['- infer from verifier evidence']),
     '',
     'Required repair behavior:',
     ...input.strategy.steps.map((step) => `- ${step}`),
@@ -336,21 +350,26 @@ function buildRepairCommands(input: {
         taskName,
         '--job',
         `babel-repair-${input.suite}-${stamp}-${sanitizeSlug(taskName)}`,
-      ].map(quoteArg).join(' ')
+      ]
+        .map(quoteArg)
+        .join(' ')
     : null;
   return {
-    restore_checkpoint: input.strategy.restore_first && input.selected?.babel_run_dir
-      ? [
-          'node',
-          '.\\dist\\index.js',
-          'checkpoint',
-          'restore',
-          input.strategy.restore_first,
-          '--run',
-          input.selected.babel_run_dir,
-          '--json',
-        ].map(quoteArg).join(' ')
-      : null,
+    restore_checkpoint:
+      input.strategy.restore_first && input.selected?.babel_run_dir
+        ? [
+            'node',
+            '.\\dist\\index.js',
+            'checkpoint',
+            'restore',
+            input.strategy.restore_first,
+            '--run',
+            input.selected.babel_run_dir,
+            '--json',
+          ]
+            .map(quoteArg)
+            .join(' ')
+        : null,
     local_gate: 'node .\\dist\\index.js benchmark loop --readiness fast --json',
     analyze: `node .\\dist\\index.js benchmark analyze ${quoteArg(input.analysis.result_path)} --json`,
     targeted_benchmark: targeted,
@@ -360,16 +379,24 @@ function buildRepairCommands(input: {
       String(input.maxTasks),
       '--job',
       `babel-repair-${input.suite}-${stamp}-full`,
-    ].map(quoteArg).join(' '),
+    ]
+      .map(quoteArg)
+      .join(' '),
   };
 }
 
-function targetArtifactsFor(taskName: string, category: string, fingerprint: string | null): string[] {
+function targetArtifactsFor(
+  taskName: string,
+  category: string,
+  fingerprint: string | null,
+): string[] {
   if (taskName === 'llm-inference-batching-scheduler') {
     return ['/output_data/plan_b1.jsonl', '/output_data/plan_b2.jsonl'];
   }
   const artifacts = new Set<string>();
-  for (const match of String(fingerprint ?? '').matchAll(/(?:\/output_data\/|output_data\/)[^\s'")]+/g)) {
+  for (const match of String(fingerprint ?? '').matchAll(
+    /(?:\/output_data\/|output_data\/)[^\s'")]+/g,
+  )) {
     artifacts.add(match[0]!.startsWith('/') ? match[0]! : `/${match[0]!}`);
   }
   if (category === 'missing_output_artifact' && artifacts.size === 0) {
@@ -379,7 +406,8 @@ function targetArtifactsFor(taskName: string, category: string, fingerprint: str
 }
 
 function categoryFromFailureClass(failureClass: string): string {
-  if (failureClass === 'missing_artifact' || failureClass === 'false_complete') return 'missing_output_artifact';
+  if (failureClass === 'missing_artifact' || failureClass === 'false_complete')
+    return 'missing_output_artifact';
   if (failureClass === 'agent_timeout') return 'performance_threshold';
   if (failureClass === 'agent_failed') return 'compile_or_runtime';
   return 'assertion';
@@ -392,11 +420,20 @@ function positiveInt(value: unknown, fallback: number): number {
 }
 
 function sanitizeSlug(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'repair';
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'repair'
+  );
 }
 
 function formatTimestampForFile(date: Date): string {
-  return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  return date
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}Z$/, 'Z');
 }
 
 function formatTimestampForJob(date: Date): string {

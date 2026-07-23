@@ -3,8 +3,9 @@
     {
       "id": "ask_repo_failure",
       "user_goal": "why is typecheck failing?",
-      "lite_command": ["bl", "ask", "why is typecheck failing?"],
+      "lite_command": ["babel", "why is typecheck failing?"],
       "full_command": ["babel", "run", "Inspect why typecheck is failing without modifying files", "--allowed-tools", "directory_list,file_read,semantic_search"],
+      "expected_route": "daily",
       "expected_verb": "ask",
       "mutation_policy": "read_only",
       "expected_output_contract": ["status", "usage", "changed_files", "next"]
@@ -12,8 +13,9 @@
     {
       "id": "plan_feature_split",
       "user_goal": "separate Babel and Lite output",
-      "lite_command": ["bl", "plan", "separate Babel and Lite output"],
+      "lite_command": ["babel", "plan", "separate Babel and Lite output"],
       "full_command": ["babel", "run", "Plan how to separate Babel and Lite output", "--mode", "manual", "--show-model-policy"],
+      "expected_route": "plan",
       "expected_verb": "plan",
       "mutation_policy": "plan_only",
       "expected_output_contract": ["status", "usage", "run_dir", "next"]
@@ -21,8 +23,9 @@
     {
       "id": "fix_small_cli_fix",
       "user_goal": "fix the Lite command help",
-      "lite_command": ["bl", "fix", "fix the Lite command help"],
+      "lite_command": ["babel", "fix the Lite command help"],
       "full_command": ["babel", "run", "fix the Lite command help", "--mode", "verified", "--execution-profile", "safe_repo"],
+      "expected_route": "daily",
       "expected_verb": "fix",
       "mutation_policy": "may_edit",
       "expected_output_contract": ["status", "usage", "changed_files", "next"]
@@ -30,44 +33,49 @@
     {
       "id": "patch_proposal_cli_fix",
       "user_goal": "propose the Lite command help diff",
-      "lite_command": ["bl", "patch", "propose the Lite command help diff"],
+      "lite_command": ["babel", "propose the Lite command help diff"],
       "full_command": ["babel", "run", "propose the Lite command help diff without applying changes", "--mode", "manual", "--allowed-tools", "directory_list,file_read,semantic_search"],
+      "expected_route": "daily",
       "expected_verb": "patch",
       "mutation_policy": "plan_only",
       "expected_output_contract": ["status", "usage", "changed_files", "next"]
     },
     {
-      "id": "bare_bl_task_routes_do",
+      "id": "bare_task_routes_daily",
       "user_goal": "fix failing tests",
-      "lite_command": ["bl", "fix failing tests"],
+      "lite_command": ["babel", "fix failing tests"],
       "full_command": ["babel", "run", "fix failing tests", "--mode", "verified", "--execution-profile", "safe_repo"],
-      "expected_verb": "do",
+      "expected_route": "daily",
+      "expected_verb": "fix",
       "mutation_policy": "may_edit",
       "expected_output_contract": ["status", "usage", "next"]
     },
     {
       "id": "propose_alias",
       "user_goal": "propose smallest diff",
-      "lite_command": ["bl", "propose", "propose smallest diff"],
+      "lite_command": ["babel", "propose smallest diff"],
       "full_command": ["babel", "run", "propose smallest diff without applying changes", "--mode", "manual"],
-      "expected_verb": "propose",
+      "expected_route": "daily",
+      "expected_verb": "patch",
       "mutation_policy": "plan_only",
       "expected_output_contract": ["status", "usage", "changed_files", "next"]
     },
     {
-      "id": "review_argv",
+      "id": "plan_review_path",
       "user_goal": "review current diff",
-      "lite_command": ["bl", "review"],
-      "full_command": ["babel", "ci", "review"],
-      "expected_verb": "review",
+      "lite_command": ["babel", "review current diff"],
+      "full_command": ["babel", "run", "review current diff", "--mode", "manual", "--allowed-tools", "directory_list,file_read"],
+      "expected_route": "daily",
+      "expected_verb": "patch",
       "mutation_policy": "read_only",
       "expected_output_contract": ["status", "changed_files", "next"]
     },
     {
       "id": "undo_argv",
       "user_goal": "undo last change",
-      "lite_command": ["bl", "undo"],
+      "lite_command": ["babel", "undo"],
       "full_command": ["babel", "checkpoint", "restore"],
+      "expected_route": "undo",
       "expected_verb": "undo",
       "mutation_policy": "read_only",
       "expected_output_contract": ["status", "checkpoint", "next"]

@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import {
   formatLiveCliReliabilityCaseListHuman,
+  isLiveHeavyReliabilityCase,
   listLiveCliReliabilityCases,
   runLiveCliReliabilityMatrix,
 } from './liveCliReliabilityMatrix.js';
@@ -36,13 +37,46 @@ test('reliability matrix help and CLI aliases are stable', () => {
   assert.equal(parsed.timeoutMs, 5000);
 });
 
+test('fast profile skips live_heavy cases and can pass release gate', () => {
+  const fakeRoot = makeFakeCliRoot(`
+console.log(JSON.stringify({ status: 'COMPLETE', run_dir: process.cwd() }));
+`);
+  const outputDir = mkdtempSync(join(tmpdir(), 'babel-matrix-fast-profile-'));
+  const report = runLiveCliReliabilityMatrix({
+    babelCliRoot: fakeRoot,
+    outputDir,
+    profile: 'fast',
+    caseFilter: ['required_verifier_all_pass_complete', 'failing_unit_test_repair'],
+    timeoutMs: 2_000,
+    now: new Date('2026-06-11T00:00:00.000Z'),
+  });
+
+  assert.equal(report.profile, 'fast');
+  assert.equal(report.releaseGate, 'PASSED');
+  assert.deepEqual(report.live_heavy_skipped_cases, ['failing_unit_test_repair']);
+  const heavy = report.cases.find((testCase) => testCase.id === 'failing_unit_test_repair');
+  assert.equal(heavy?.status, 'skipped');
+  assert.equal(heavy?.pass, true);
+});
+
+test('live_heavy tagging covers autonomous repair cases', () => {
+  assert.equal(isLiveHeavyReliabilityCase('failing_unit_test_repair'), true);
+  assert.equal(isLiveHeavyReliabilityCase('required_verifier_all_pass_complete'), false);
+});
+
 test('reliability matrix case listing is parseable and includes stable case IDs', () => {
   const listing = listLiveCliReliabilityCases(new Date('2026-05-04T00:00:00.000Z'));
   assert.equal(listing.schema_version, 1);
   assert.equal(listing.report_type, 'babel_live_cli_reliability_case_list');
   assert.equal(listing.generated_at, '2026-05-04T00:00:00.000Z');
-  assert.equal(listing.cases.some((testCase) => testCase.id === 'autonomous_exact_file_create'), true);
-  assert.equal(listing.cases.some((testCase) => testCase.id === 'required_verifier_missing_blocks_complete'), true);
+  assert.equal(
+    listing.cases.some((testCase) => testCase.id === 'autonomous_exact_file_create'),
+    true,
+  );
+  assert.equal(
+    listing.cases.some((testCase) => testCase.id === 'required_verifier_missing_blocks_complete'),
+    true,
+  );
   assert.doesNotThrow(() => JSON.parse(JSON.stringify(listing)));
   assert.match(formatLiveCliReliabilityCaseListHuman(listing), /autonomous_exact_file_create/);
 });
@@ -83,7 +117,9 @@ test('resume only-failed reruns timed-out case and preserves parseable report', 
     now: new Date('2026-05-02T00:01:00.000Z'),
   });
 
-  writeFakeDistIndex(fakeRoot, `
+  writeFakeDistIndex(
+    fakeRoot,
+    `
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 const rootIndex = process.argv.indexOf('--project-root');
@@ -91,7 +127,8 @@ const root = rootIndex >= 0 ? process.argv[rootIndex + 1] : process.cwd();
 mkdirSync(root, { recursive: true });
 writeFileSync(join(root, 'exact-status.txt'), 'autonomous exact ok', 'utf8');
 console.log(JSON.stringify({ status: 'COMPLETE', run_dir: join(root, '.babel-run') }));
-`);
+`,
+  );
 
   const resumed = runLiveCliReliabilityMatrix({
     babelCliRoot: fakeRoot,

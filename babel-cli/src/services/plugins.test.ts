@@ -14,10 +14,22 @@ import {
 } from './plugins.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const THIRD_PARTY_FIXTURE_ROOT = join(__dirname, '..', '..', '..', 'tests', 'fixtures', 'plugin-proofs', 'third-party-plugin-corpus');
+const THIRD_PARTY_FIXTURE_ROOT = join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'tests',
+  'fixtures',
+  'plugin-proofs',
+  'third-party-plugin-corpus',
+);
 
 function createTempBabelRoot(): string {
-  const root = join(tmpdir(), `babel-plugin-test-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const root = join(
+    tmpdir(),
+    `babel-plugin-test-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
   mkdirSync(join(root, 'babel-cli', 'config'), { recursive: true });
   mkdirSync(join(root, 'babel-cli', 'plugins'), { recursive: true });
   return root;
@@ -93,8 +105,13 @@ function writeFormatHookPlugin(root: string): void {
   });
 }
 
-function writeThirdPartyCorpusFixture(root: string, fixtureId: 'readonly' | 'local-mutating' | 'enterprise-blocked'): void {
-  const manifest = JSON.parse(readFileSync(join(THIRD_PARTY_FIXTURE_ROOT, fixtureId, 'plugin.json'), 'utf-8')) as Record<string, unknown>;
+function writeThirdPartyCorpusFixture(
+  root: string,
+  fixtureId: 'readonly' | 'local-mutating' | 'enterprise-blocked',
+): void {
+  const manifest = JSON.parse(
+    readFileSync(join(THIRD_PARTY_FIXTURE_ROOT, fixtureId, 'plugin.json'), 'utf-8'),
+  ) as Record<string, unknown>;
   const pluginId = manifest.id;
   if (typeof pluginId !== 'string') {
     throw new Error('Third-party fixture plugin.id must be a string.');
@@ -137,15 +154,19 @@ test('third-party plugin corpus supports hook diff evidence for changed outputs'
   mkdirSync(projectRoot, { recursive: true });
   writeFileSync(join(projectRoot, 'source.txt'), 'value  \nline\t\r\n', 'utf-8');
 
-  const result = await runPluginHooks('PostToolUse', {
-    runId: 'plugin-hook-third-party',
-    runDir,
-    babelRoot: root,
-    projectRoot,
-    dryRun: false,
-    tool: { tool: 'file_write', path: 'source.txt' },
-    toolResult: { exit_code: 0, stdout: 'ok', stderr: '' },
-  }, { babelRoot: root });
+  const result = await runPluginHooks(
+    'PostToolUse',
+    {
+      runId: 'plugin-hook-third-party',
+      runDir,
+      babelRoot: root,
+      projectRoot,
+      dryRun: false,
+      tool: { tool: 'file_write', path: 'source.txt' },
+      toolResult: { exit_code: 0, stdout: 'ok', stderr: '' },
+    },
+    { babelRoot: root },
+  );
 
   assert.equal(result.records.length, 1);
   const record = result.records[0] as {
@@ -174,31 +195,49 @@ test('third-party plugin corpora are blocked by enterprise policy when trust exc
   const root = createTempBabelRoot();
   writeThirdPartyCorpusFixture(root, 'enterprise-blocked');
 
-  withEnterprisePolicy(root, {
-    schema_version: 1,
-    plugin_policy: {
-      allowed_plugins: ['third-party-enterprise-blocked'],
-      max_trust_level: 'read_only',
-    },
-  }, () => {
-    writeFileSync(join(root, 'babel-cli', 'config', 'plugins.json'), JSON.stringify({
+  withEnterprisePolicy(
+    root,
+    {
       schema_version: 1,
-      runtime_plugins_enabled: true,
-      enabled_plugin_ids: ['third-party-enterprise-blocked'],
-      allowed_trust_levels: ['metadata', 'read_only', 'local_mutating', 'external_network'],
-      plugin_roots: [],
-    }, null, 2));
+      plugin_policy: {
+        allowed_plugins: ['third-party-enterprise-blocked'],
+        max_trust_level: 'read_only',
+      },
+    },
+    () => {
+      writeFileSync(
+        join(root, 'babel-cli', 'config', 'plugins.json'),
+        JSON.stringify(
+          {
+            schema_version: 1,
+            runtime_plugins_enabled: true,
+            enabled_plugin_ids: ['third-party-enterprise-blocked'],
+            allowed_trust_levels: ['metadata', 'read_only', 'local_mutating', 'external_network'],
+            plugin_roots: [],
+          },
+          null,
+          2,
+        ),
+      );
 
-    assert.throws(
-      () => enablePlugin('third-party-enterprise-blocked', { babelRoot: root }),
-      /\[ENTERPRISE_POLICY\]/,
-    );
+      assert.throws(
+        () => enablePlugin('third-party-enterprise-blocked', { babelRoot: root }),
+        /\[ENTERPRISE_POLICY\]/,
+      );
 
-    const registry = loadPluginRegistry({ babelRoot: root });
-    const plugin = registry.plugins.find((candidate) => candidate.manifest.id === 'third-party-enterprise-blocked');
-    assert.equal(plugin?.active, false);
-    assert.equal(registry.diagnostics.some((diagnostic) => diagnostic.code === 'plugin_enterprise_policy_blocked'), true);
-  });
+      const registry = loadPluginRegistry({ babelRoot: root });
+      const plugin = registry.plugins.find(
+        (candidate) => candidate.manifest.id === 'third-party-enterprise-blocked',
+      );
+      assert.equal(plugin?.active, false);
+      assert.equal(
+        registry.diagnostics.some(
+          (diagnostic) => diagnostic.code === 'plugin_enterprise_policy_blocked',
+        ),
+        true,
+      );
+    },
+  );
 });
 
 test('runtime plugins are discovered but inactive until explicitly enabled', async () => {
@@ -209,7 +248,9 @@ test('runtime plugins are discovered but inactive until explicitly enabled', asy
   assert.equal(disabledRegistry.config.runtime_plugins_enabled, false);
   assert.equal(disabledRegistry.plugins[0]?.active, false);
 
-  const disabledCommand = await runPluginCommand('sample-readonly', 'hello', ['Example User'], { babelRoot: root });
+  const disabledCommand = await runPluginCommand('sample-readonly', 'hello', ['Jonathan'], {
+    babelRoot: root,
+  });
   assert.equal(disabledCommand.exit_code, 1);
   assert.match(disabledCommand.stderr, /plugin_not_active/);
 
@@ -218,16 +259,21 @@ test('runtime plugins are discovered but inactive until explicitly enabled', asy
   assert.equal(enabledRegistry.config.runtime_plugins_enabled, true);
   assert.equal(enabledRegistry.plugins[0]?.active, true);
 
-  const command = await runPluginCommand('sample-readonly', 'hello', ['Example User'], { babelRoot: root });
+  const command = await runPluginCommand('sample-readonly', 'hello', ['Jonathan'], {
+    babelRoot: root,
+  });
   assert.equal(command.exit_code, 0);
-  assert.equal(command.stdout, 'hello Example User');
+  assert.equal(command.stdout, 'hello Jonathan');
 
-  const tool = await handlePluginTool({
-    tool: 'plugin_tool',
-    plugin: 'sample-readonly',
-    name: 'plugin_status',
-    input: { probe: true },
-  }, { babelRoot: root });
+  const tool = await handlePluginTool(
+    {
+      tool: 'plugin_tool',
+      plugin: 'sample-readonly',
+      name: 'plugin_status',
+      input: { probe: true },
+    },
+    { babelRoot: root },
+  );
   assert.equal(tool.exit_code, 0);
   assert.equal(JSON.parse(tool.stdout).output.ok, true);
 });
@@ -247,15 +293,19 @@ test('local-mutating hook plugins require explicit trust and can format live wri
   mkdirSync(projectRoot, { recursive: true });
   writeFileSync(join(projectRoot, 'file.txt'), 'alpha  \n beta\t\n', 'utf-8');
 
-  const result = await runPluginHooks('PostToolUse', {
-    runId: 'plugin-hook-live',
-    runDir,
-    babelRoot: root,
-    projectRoot,
-    dryRun: false,
-    tool: { tool: 'file_write', path: 'file.txt' },
-    toolResult: { exit_code: 0, stdout: 'Written: file.txt', stderr: '' },
-  }, { babelRoot: root });
+  const result = await runPluginHooks(
+    'PostToolUse',
+    {
+      runId: 'plugin-hook-live',
+      runDir,
+      babelRoot: root,
+      projectRoot,
+      dryRun: false,
+      tool: { tool: 'file_write', path: 'file.txt' },
+      toolResult: { exit_code: 0, stdout: 'Written: file.txt', stderr: '' },
+    },
+    { babelRoot: root },
+  );
 
   assert.equal(result.records.length, 1);
   assert.equal(readFileSync(join(projectRoot, 'file.txt'), 'utf-8'), 'alpha\n beta\n');
@@ -274,16 +324,20 @@ test('format hook supports dry-run shadow roots without changing live files', as
   writeFileSync(join(projectRoot, 'file.txt'), 'live  \n', 'utf-8');
   writeFileSync(join(shadowRoot, 'file.txt'), 'shadow  \n', 'utf-8');
 
-  await runPluginHooks('PostToolUse', {
-    runId: 'plugin-hook-dry',
-    runDir: join(root, 'runs', 'plugin-hook-dry'),
-    babelRoot: root,
-    projectRoot,
-    shadowRoot,
-    dryRun: true,
-    tool: { tool: 'file_write', path: 'file.txt' },
-    toolResult: { exit_code: 0, stdout: 'Written: file.txt (shadowed)', stderr: '' },
-  }, { babelRoot: root });
+  await runPluginHooks(
+    'PostToolUse',
+    {
+      runId: 'plugin-hook-dry',
+      runDir: join(root, 'runs', 'plugin-hook-dry'),
+      babelRoot: root,
+      projectRoot,
+      shadowRoot,
+      dryRun: true,
+      tool: { tool: 'file_write', path: 'file.txt' },
+      toolResult: { exit_code: 0, stdout: 'Written: file.txt (shadowed)', stderr: '' },
+    },
+    { babelRoot: root },
+  );
 
   assert.equal(readFileSync(join(projectRoot, 'file.txt'), 'utf-8'), 'live  \n');
   assert.equal(readFileSync(join(shadowRoot, 'file.txt'), 'utf-8'), 'shadow\n');
@@ -342,11 +396,19 @@ test('plugin doctor warns on duplicate manifest surface names', () => {
   });
 
   const registry = loadPluginRegistry({ babelRoot: root });
-  const duplicates = registry.diagnostics.filter((diagnostic) => diagnostic.code === 'duplicate_plugin_surface');
+  const duplicates = registry.diagnostics.filter(
+    (diagnostic) => diagnostic.code === 'duplicate_plugin_surface',
+  );
   assert.equal(registry.status, 'warn');
   assert.equal(duplicates.length, 2);
-  assert.match(duplicates.map((diagnostic) => diagnostic.message).join('\n'), /duplicate tool name "status"/);
-  assert.match(duplicates.map((diagnostic) => diagnostic.message).join('\n'), /duplicate slash_command name "hello"/);
+  assert.match(
+    duplicates.map((diagnostic) => diagnostic.message).join('\n'),
+    /duplicate tool name "status"/,
+  );
+  assert.match(
+    duplicates.map((diagnostic) => diagnostic.message).join('\n'),
+    /duplicate slash_command name "hello"/,
+  );
 });
 
 test('enterprise plugin policy blocks disallowed trust levels and activation', () => {
@@ -354,30 +416,49 @@ test('enterprise plugin policy blocks disallowed trust levels and activation', (
   writeReadonlyPlugin(root);
   writeFormatHookPlugin(root);
 
-  withEnterprisePolicy(root, {
-    schema_version: 1,
-    plugin_policy: {
-      allowed_plugins: ['sample-readonly', 'sample-format-hook'],
-      max_trust_level: 'read_only',
-    },
-  }, () => {
-    enablePlugin('sample-readonly', { babelRoot: root });
-    assert.throws(
-      () => enablePlugin('sample-format-hook', { babelRoot: root, allowTrust: 'local_mutating' }),
-      /ENTERPRISE_POLICY/,
-    );
-
-    writeFileSync(join(root, 'babel-cli', 'config', 'plugins.json'), JSON.stringify({
+  withEnterprisePolicy(
+    root,
+    {
       schema_version: 1,
-      runtime_plugins_enabled: true,
-      enabled_plugin_ids: ['sample-format-hook'],
-      allowed_trust_levels: ['metadata', 'read_only', 'local_mutating'],
-      plugin_roots: [],
-    }, null, 2), 'utf-8');
+      plugin_policy: {
+        allowed_plugins: ['sample-readonly', 'sample-format-hook'],
+        max_trust_level: 'read_only',
+      },
+    },
+    () => {
+      enablePlugin('sample-readonly', { babelRoot: root });
+      assert.throws(
+        () => enablePlugin('sample-format-hook', { babelRoot: root, allowTrust: 'local_mutating' }),
+        /ENTERPRISE_POLICY/,
+      );
 
-    const registry = loadPluginRegistry({ babelRoot: root });
-    const plugin = registry.plugins.find((candidate) => candidate.manifest.id === 'sample-format-hook');
-    assert.equal(plugin?.active, false);
-    assert.equal(registry.diagnostics.some((diagnostic) => diagnostic.code === 'plugin_enterprise_policy_blocked'), true);
-  });
+      writeFileSync(
+        join(root, 'babel-cli', 'config', 'plugins.json'),
+        JSON.stringify(
+          {
+            schema_version: 1,
+            runtime_plugins_enabled: true,
+            enabled_plugin_ids: ['sample-format-hook'],
+            allowed_trust_levels: ['metadata', 'read_only', 'local_mutating'],
+            plugin_roots: [],
+          },
+          null,
+          2,
+        ),
+        'utf-8',
+      );
+
+      const registry = loadPluginRegistry({ babelRoot: root });
+      const plugin = registry.plugins.find(
+        (candidate) => candidate.manifest.id === 'sample-format-hook',
+      );
+      assert.equal(plugin?.active, false);
+      assert.equal(
+        registry.diagnostics.some(
+          (diagnostic) => diagnostic.code === 'plugin_enterprise_policy_blocked',
+        ),
+        true,
+      );
+    },
+  );
 });

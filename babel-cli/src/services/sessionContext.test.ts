@@ -12,31 +12,37 @@ import {
   writeExecutorSessionContext,
 } from './sessionContext.js';
 
-test('executor session context persists model prompt, history, cache, and approval state', () => {
+test('executor session context persists model prompt, history, cache, and approval state', async () => {
   const base = mkdtempSync(join(tmpdir(), 'babel-session-context-'));
   const runDir = join(base, 'runs', '20260424_120000_session-context');
   mkdirSync(runDir, { recursive: true });
-  writeFileSync(join(runDir, '03_qa_verdict_v1.json'), JSON.stringify({ verdict: 'PASS' }), 'utf-8');
+  writeFileSync(
+    join(runDir, '03_qa_verdict_v1.json'),
+    JSON.stringify({ verdict: 'PASS' }),
+    'utf-8',
+  );
 
   try {
     const evidence = EvidenceBundle.fromExistingRun(runDir);
     const cache = new Map([['src/example.txt', 'file body\n']]);
-    const snapshot = writeExecutorSessionContext({
+    const snapshot = await writeExecutorSessionContext({
       evidence,
       status: 'ready_for_next_turn',
       baseContext: 'base context',
       executionHistory: '[Step 1] file_read',
       nextTurnPrompt: 'next prompt',
       fileReadCache: cache,
-      toolCallLog: [{
-        step: 1,
-        tool: 'file_read',
-        target: 'src/example.txt',
-        exit_code: 0,
-        stdout: 'file body\n',
-        stderr: '',
-        verified: true,
-      }],
+      toolCallLog: [
+        {
+          step: 1,
+          tool: 'file_read',
+          target: 'src/example.txt',
+          exit_code: 0,
+          stdout: 'file body\n',
+          stderr: '',
+          verified: true,
+        },
+      ],
     });
 
     assert.equal(snapshot.approval_state.executor_gate, 'PASS');

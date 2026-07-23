@@ -14,7 +14,7 @@ export function hasGradleBuildMarkers(projectRoot: string | undefined): boolean 
     'gradlew.bat',
     'app/build.gradle',
     'app/build.gradle.kts',
-  ].some(relativePath => existsSync(join(projectRoot, relativePath)));
+  ].some((relativePath) => existsSync(join(projectRoot, relativePath)));
 }
 
 export function isAndroidSourceOnlyWorkspace(projectRoot: string | undefined): boolean {
@@ -24,5 +24,5 @@ export function isAndroidSourceOnlyWorkspace(projectRoot: string | undefined): b
   return [
     join(projectRoot, 'app', 'src', 'main', 'java'),
     join(projectRoot, 'app', 'src', 'main', 'kotlin'),
-  ].some(path => existsSync(path));
+  ].some((path) => existsSync(path));
 }

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 
-import { getWorkspaceApprovedRoots } from '../services/workspaceManager.js';
+import { getOpenClawApprovedRoots } from '../services/workspaceManager.js';
 
 export interface TargetConsistencyResult {
   ok: boolean;
@@ -15,6 +15,8 @@ export interface HumanOutputReviewContext {
   executedTargets?: string[];
   terminalStatus?: string | null;
   shellBadge?: string | null;
+  task?: string | null;
+  runStatus?: string | null;
 }
 
 function normalizePath(path: string | null | undefined): string | null {
@@ -25,9 +27,7 @@ function normalizePath(path: string | null | undefined): string | null {
 function samePath(a: string, b: string): boolean {
   const left = resolve(a);
   const right = resolve(b);
-  return process.platform === 'win32'
-    ? left.toLowerCase() === right.toLowerCase()
-    : left === right;
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
 function isInsideRoot(root: string, candidate: string): boolean {
@@ -48,7 +48,9 @@ function parseJsonFile(path: string): Record<string, unknown> | null {
   }
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf-8'));
-    return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : null;
+    return typeof parsed === 'object' && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : null;
   } catch {
     return null;
   }
@@ -86,7 +88,9 @@ export function validateEffectiveTargetRoot(input: {
   const warnings: string[] = [];
 
   if (expected && manifest && !samePath(expected, manifest)) {
-    violations.push(`Target mismatch: summary/effective target "${expected}" differs from manifest target "${manifest}".`);
+    violations.push(
+      `Target mismatch: summary/effective target "${expected}" differs from manifest target "${manifest}".`,
+    );
   }
   if (expected && !existsSync(expected)) {
     violations.push(`Resolved target root does not exist: ${expected}.`);
@@ -108,23 +112,29 @@ export function validatePlanTargetsWithinEffectiveRoots(input: {
   targets?: string[];
 }): TargetConsistencyResult {
   const effectiveTargetRoot = normalizePath(input.effectiveTargetRoot);
-  const approvedRoots = (input.approvedRoots ?? getWorkspaceApprovedRoots().map(root => root.path))
-    .map(root => normalizePath(root))
+  const approvedRoots = (input.approvedRoots ?? getOpenClawApprovedRoots().map((root) => root.path))
+    .map((root) => normalizePath(root))
     .filter((root): root is string => root !== null);
-  const allowedRoots = [
-    ...(effectiveTargetRoot ? [effectiveTargetRoot] : []),
-    ...approvedRoots,
-  ];
+  const allowedRoots = [...(effectiveTargetRoot ? [effectiveTargetRoot] : []), ...approvedRoots];
   const violations: string[] = [];
 
   for (const rawTarget of input.targets ?? []) {
     const target = rawTarget.trim();
-    if (!target || !isAbsolute(target)) {
+    if (!target) {
       continue;
     }
-    const resolvedTarget = resolve(target);
-    if (!allowedRoots.some(root => isInsideRoot(root, resolvedTarget))) {
-      violations.push(`Blocked - planned tool target is outside the resolved target root: ${resolvedTarget}.`);
+    const resolvedTarget = isAbsolute(target)
+      ? resolve(target)
+      : effectiveTargetRoot
+        ? resolve(effectiveTargetRoot, target)
+        : null;
+    if (!resolvedTarget) {
+      continue;
+    }
+    if (!allowedRoots.some((root) => isInsideRoot(root, resolvedTarget))) {
+      violations.push(
+        `Blocked - planned tool target is outside the resolved target root: ${resolvedTarget}.`,
+      );
     }
   }
 
@@ -148,13 +158,24 @@ export function collectHumanOutputReviewContext(
   }
 
   const manifest = parseJsonFile(resolve(runDir, '01_manifest.json'));
+  const liteManifest = parseJsonFile(resolve(runDir, 'manifest.json'));
+  const request = parseJsonFile(resolve(runDir, 'request.json'));
   const executionReport = parseJsonFile(resolve(runDir, '04_execution_report.json'));
   const terminalSummary = parseJsonFile(resolve(runDir, 'terminal_status_summary.json'));
 
   return {
     expectedTargetRoot: summaryTarget,
-    manifestTargetRoot: stringValue(manifest?.['target_project_path']),
+    manifestTargetRoot:
+      stringValue(manifest?.['target_project_path']) ?? stringValue(liteManifest?.['project_root']),
     executedTargets: collectToolTargets(executionReport),
     terminalStatus: stringValue(terminalSummary?.['status']),
+    task:
+      stringValue(liteManifest?.['task']) ??
+      stringValue(manifest?.['task']) ??
+      stringValue(request?.['task']),
+    runStatus:
+      stringValue(liteManifest?.['status']) ??
+      stringValue(manifest?.['status']) ??
+      stringValue(terminalSummary?.['status']),
   };
 }

@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { AskAnswerSchema, ExecutorTurnSchema, OrchestratorManifestSchema, SwePlanSchema } from './agentContracts.js';
+import {
+  AskAnswerSchema,
+  ExecutorTurnSchema,
+  normalizePipelineMode,
+  OrchestratorManifestSchema,
+  PipelineModeSchema,
+  SwePlanSchema,
+} from './agentContracts.js';
 
 test('executor turn schema normalizes near-miss file_write payloads', () => {
   const parsed = ExecutorTurnSchema.parse({
@@ -144,7 +151,10 @@ test('Ask answer schema normalizes string evidence from live providers', () => {
     status: 'ANSWER_READY',
     summary: 'Babel can answer from summary files.',
     answer: 'This repo exposes Babel CLI commands and project metadata.',
-    evidence: ['README.md was available in the provided context.', 'package.json was available in the provided context.'],
+    evidence: [
+      'README.md was available in the provided context.',
+      'package.json was available in the provided context.',
+    ],
   });
 
   assert.deepEqual(parsed.evidence, [
@@ -153,12 +163,37 @@ test('Ask answer schema normalizes string evidence from live providers', () => {
   ]);
 });
 
-test('Ask answer schema rejects missing answer text', () => {
-  assert.throws(() => AskAnswerSchema.parse({
+test('Ask answer schema gracefully handles missing answer text (deduced from summary)', () => {
+  const parsed = AskAnswerSchema.parse({
     schema_version: 1,
     status: 'ANSWER_READY',
-    summary: 'Missing answer.',
-  }));
+    summary: 'This summary becomes the answer when answer is missing.',
+  });
+  assert.equal(parsed.summary, 'This summary becomes the answer when answer is missing.');
+  assert.equal(parsed.answer, 'This summary becomes the answer when answer is missing.');
+});
+
+test('Ask answer schema gracefully handles missing summary text (deduced from answer)', () => {
+  const parsed = AskAnswerSchema.parse({
+    schema_version: 1,
+    status: 'ANSWER_READY',
+    answer:
+      'This is a full answer. It has multiple sentences. The summary will be the first sentence.',
+  });
+  assert.ok(parsed.summary.length > 0);
+  assert.equal(
+    parsed.answer,
+    'This is a full answer. It has multiple sentences. The summary will be the first sentence.',
+  );
+});
+
+test('Ask answer schema tolerates both summary and answer missing', () => {
+  const parsed = AskAnswerSchema.parse({
+    schema_version: 1,
+    status: 'ANSWER_READY',
+  });
+  assert.equal(parsed.summary, '');
+  assert.equal(parsed.answer, '');
 });
 
 test('orchestrator manifest schema normalizes GPT-5 worker aliases', () => {
@@ -170,7 +205,7 @@ test('orchestrator manifest schema normalizes GPT-5 worker aliases', () => {
       task_category: 'Backend',
       secondary_category: null,
       complexity_estimate: 'Low',
-      pipeline_mode: 'autonomous',
+      pipeline_mode: 'deep',
       ambiguity_note: null,
     },
     worker_configuration: {
@@ -212,7 +247,7 @@ test('orchestrator manifest schema treats null swarm as no swarm', () => {
       task_category: 'Backend',
       secondary_category: null,
       complexity_estimate: 'Low',
-      pipeline_mode: 'verified',
+      pipeline_mode: 'deep',
       ambiguity_note: null,
     },
     worker_configuration: {
@@ -255,7 +290,7 @@ test('orchestrator manifest schema treats empty swarm as absent', () => {
       task_category: 'Backend',
       secondary_category: null,
       complexity_estimate: 'Low',
-      pipeline_mode: 'verified',
+      pipeline_mode: 'deep',
       ambiguity_note: null,
     },
     worker_configuration: {
@@ -301,7 +336,7 @@ test('orchestrator manifest schema validates a real non-empty swarm', () => {
       task_category: 'Backend',
       secondary_category: null,
       complexity_estimate: 'Low',
-      pipeline_mode: 'verified',
+      pipeline_mode: 'deep',
       ambiguity_note: null,
     },
     worker_configuration: {
@@ -379,4 +414,23 @@ test('executor turn schema normalizes command and MCP argument aliases', () => {
 
   assert.equal(shell.type, 'tool_call');
   assert.equal(shell.command, 'npm test');
+});
+
+test('PipelineModeSchema hard-cuts to live modes only (P3.3)', () => {
+  assert.equal(PipelineModeSchema.parse('chat'), 'chat');
+  assert.equal(PipelineModeSchema.parse('chat-headless'), 'chat-headless');
+  assert.equal(PipelineModeSchema.parse('plan'), 'plan');
+  assert.equal(PipelineModeSchema.parse('deep'), 'deep');
+  assert.throws(() => PipelineModeSchema.parse('autonomous'));
+  assert.throws(() => PipelineModeSchema.parse('manual'));
+  assert.throws(() => PipelineModeSchema.parse('verified'));
+});
+
+test('normalizePipelineMode maps legacy names at ingest only', () => {
+  assert.equal(normalizePipelineMode('autonomous'), 'deep');
+  assert.equal(normalizePipelineMode('manual'), 'plan');
+  assert.equal(normalizePipelineMode('verified'), 'deep');
+  assert.equal(normalizePipelineMode('direct'), 'chat');
+  assert.equal(normalizePipelineMode('chat'), 'chat');
+  assert.equal(normalizePipelineMode('nope'), null);
 });

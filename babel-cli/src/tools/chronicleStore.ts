@@ -10,7 +10,7 @@ export const BABEL_FACTS_SCHEMA_SQL = `
 `;
 
 export const CHRONICLE_BACKENDS = ['auto', 'sqlite', 'json'] as const;
-export type ChronicleBackend = typeof CHRONICLE_BACKENDS[number];
+export type ChronicleBackend = (typeof CHRONICLE_BACKENDS)[number];
 
 export interface ChronicleFactRow {
   fact_key: string;

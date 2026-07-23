@@ -47,33 +47,38 @@ import type { ZodType } from 'zod';
 // Note: Legacy API runners (ClaudeCliRunner, CodexCliRunner, etc.) have been kept
 // in the `runners/` directory for public-use fallback capabilities, but the internal
 // Babel system uses API runners across all stages.
-import { DeepInfraApiRunner }    from './runners/deepInfraApi.js';
-import { DeepSeekApiRunner }     from './runners/deepSeekApi.js';
-import type { LlmRunner, RunnerInvocationMetadata, RunnerCallbacks, RunnerProgressEvent } from './runners/base.js';
-import type { EvidenceBundle }   from './evidence.js';
-import type { TargetModel }      from './schemas/agentContracts.js';
+import { DeepInfraApiRunner } from './runners/deepInfraApi.js';
+import { DeepSeekApiRunner } from './runners/deepSeekApi.js';
+import type {
+  LlmRunner,
+  RunnerInvocationMetadata,
+  RunnerCallbacks,
+  RunnerProgressEvent,
+} from './runners/base.js';
+import { EvidenceBundle } from './evidence.js';
+import type { TargetModel } from './schemas/agentContracts.js';
+import { JitDenialError } from './ui/incrementalToolDetector.js';
 import {
   selectBestTierForStage,
   reorderWaterfallByStartIndex,
   clearRoutingCache,
   type RoutingStage,
-}                                from './routingEngine.js';
-import { BabelEventBus }         from './pipeline/logging.js';
+} from './routingEngine.js';
+import { BabelEventBus } from './pipeline/logging.js';
 
 export { clearRoutingCache };
-import {
-  resolveStagePolicyRoutes,
-  type ResolvedModelPolicyEntry,
-}                                from './modelPolicy.js';
-import { globalCostTracker }      from './services/costTracker.js';
-import type { CostPrecision }     from './services/modelPricingRegistry.js';
+import { resolveStagePolicyRoutes, type ResolvedModelPolicyEntry } from './modelPolicy.js';
+import { loadModelPolicyConfig } from './modelPolicy.js';
+import { globalCostTracker } from './services/costTracker.js';
+import type { CostPrecision } from './services/modelPricingRegistry.js';
 import {
   appendSchemaFailureEntry,
   appendSchemaFailureRecovery,
   appendSchemaFailureTerminal,
   readSchemaShadowHints,
   type SchemaFailureLedgerEntry,
-}                                from './services/schemaFailureLedger.js';
+} from './services/schemaFailureLedger.js';
+import { redactSecrets } from './utils/redaction.js';
 
 export type { TargetModel };
 
@@ -86,19 +91,19 @@ export type { TargetModel };
  */
 export interface WaterfallOutcome {
   /** Which pipeline stage produced this call. */
-  stage:          string;
+  stage: string;
   /** Human-readable name of the tier that ultimately succeeded. */
   tier_succeeded: string;
   /** 0-based index of the winning tier (0 = first try, >0 = fallback). */
-  tier_index:     number;
+  tier_index: number;
   /** Attempt count within the winning tier (>1 = retry inside that tier). */
-  attempts:       number;
+  attempts: number;
   /** Names of tiers that were tried and failed before the winner. */
-  tiers_skipped:  string[];
+  tiers_skipped: string[];
   /** Brief reason for the last cascade (or "none" if first try succeeded). */
   cascade_reason: string;
   /** ISO 8601 timestamp of when this call completed. */
-  ts:             string;
+  ts: string;
   /** Successful and failed attempts observed during this waterfall call. */
   attempts_detail?: WaterfallAttemptOutcome[];
   /** Schema-failure ledger entry ids observed during this waterfall call. */
@@ -145,23 +150,38 @@ export interface WaterfallAttemptOutcome {
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
-const DISABLE_API_FALLBACK =
-  process.env['BABEL_DISABLE_API_FALLBACK'] === 'true';
+const DISABLE_API_FALLBACK = process.env['BABEL_DISABLE_API_FALLBACK'] === 'true';
 const DEFAULT_WATERFALL_TIMEOUT_MS = 180_000;
 const AGGREGATE_WATERFALL_TIMEOUT_PREFIX = '[waterfall-timeout]';
 
 function resolveAggregateWaterfallTimeoutMs(): number {
-  const raw = Number(process.env['BABEL_WATERFALL_TIMEOUT_MS'] ?? `${DEFAULT_WATERFALL_TIMEOUT_MS}`);
+  const raw = Number(
+    process.env['BABEL_WATERFALL_TIMEOUT_MS'] ?? `${DEFAULT_WATERFALL_TIMEOUT_MS}`,
+  );
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_WATERFALL_TIMEOUT_MS;
 }
 
+// Heartbeat-aware timeout extension: when the runner is actively streaming
+// content (onChunk fires), the waterfall deadline extends by this amount.
+// Only triggers when within 30s of the current deadline — idle streams don't
+// get extensions.
+const HEARTBEAT_EXTENSION_MS = (() => {
+  const raw = Number(process.env['BABEL_WATERFALL_HEARTBEAT_EXTENSION_MS'] ?? '60000');
+  return Number.isFinite(raw) && raw > 0 ? raw : 60000;
+})();
+// Hard cap on the extended deadline, measured from the waterfall start time.
+const MAX_EXTENDED_TIMEOUT_MS = (() => {
+  const raw = Number(process.env['BABEL_WATERFALL_MAX_EXTENDED_MS'] ?? '600000');
+  return Number.isFinite(raw) && raw > 0 ? raw : 600000;
+})();
+
 // Model IDs. Price/capability provenance is stored in model-policy.json.
-const LLAMA4_SCOUT  = 'meta-llama/Llama-4-Scout-17B-16E-Instruct';
-const QWEN3_235B    = 'Qwen/Qwen3-235B-A22B-Instruct-2507';
-const STEP_FLASH    = 'stepfun-ai/Step-3.5-Flash';
-const NEMOTRON      = 'nvidia/NVIDIA-Nemotron-3-Super-120B-A12B';
-const DEEPSEEK_V3   = 'deepseek-ai/DeepSeek-V3-0324';
-const QWEN3_32B     = 'Qwen/Qwen3-32B';
+const LLAMA4_SCOUT = 'meta-llama/Llama-4-Scout-17B-16E-Instruct';
+const QWEN3_235B = 'Qwen/Qwen3-235B-A22B-Instruct-2507';
+const STEP_FLASH = 'stepfun-ai/Step-3.5-Flash';
+const NEMOTRON = 'nvidia/NVIDIA-Nemotron-3-Super-120B-A12B';
+const DEEPSEEK_V3 = 'deepseek-ai/DeepSeek-V3-0324';
+const QWEN3_32B = 'Qwen/Qwen3-32B';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -256,27 +276,83 @@ export interface RunOptions {
    * Event bus instance for progress logs.
    */
   eventBus?: BabelEventBus;
+
+  /**
+   * Optional system prompt override. When provided, the runner sends this as
+   * the system message (cached by the provider across turns). When omitted,
+   * the runner uses its default system prompt.
+   *
+   * Use this to move the static compiled prompt stack (Core+Guard+Domain)
+   * into the system message so it's cached across executor loop turns,
+   * saving ~50% of per-turn input tokens via KV cache hits.
+   */
+  systemPrompt?: string;
+
+  /**
+   * Backend keys (matching model-policy.json) to exclude from the waterfall.
+   * Applied AFTER dynamic routing reordering and startTierIndex adjustment.
+   * Use this to skip weak models (scout, qwen3-32b) for hard tasks where
+   * the Smart Planner has determined they would waste attempts.
+   *
+   * Throws if all tiers would be skipped — at least one model must remain.
+   */
+  skipTierNames?: string[];
+
+  /**
+   * Explicit model backend key override (e.g. "deepseek-v4-pro", "scout").
+   * When set, bypasses the stage-based waterfall and creates a direct runner
+   * for the specified model. Used by sub-agents for per-agent model selection.
+   *
+   * The key must exist in model-policy.json's "models" section.
+   * When omitted (default), the stage waterfall resolves normally.
+   */
+  model?: string;
 }
 
 export const RELIABILITY_REPAIR_PROOF_MARKER = '[BABEL_RELIABILITY_AUTONOMOUS_LIVE_FAIL_THEN_PASS]';
+
+/**
+ * Offline fixture scenario selector.
+ * Set BABEL_PIPELINE_V9_OFFLINE_SCENARIO to one of:
+ *   - "happy_path" (default): orchestrator → SWE → QA PASS → executor COMPLETE
+ *   - "qa_reject_once": QA rejects on first call, passes on second call
+ *   - "qa_reject_max": QA always rejects (pipeline halts after MAX_SWE_QA_LOOPS)
+ *   - "evidence_loop": SWE emits EVIDENCE_REQUEST, then replans after evidence
+ */
+function getOfflineScenario(): string {
+  return process.env['BABEL_PIPELINE_V9_OFFLINE_SCENARIO']?.trim() || 'happy_path';
+}
+
+/** Module-level counter for tracking QA calls across the pipeline lifecycle. */
+let qaCallCount = 0;
+function incrementQaCallCount(): number {
+  qaCallCount++;
+  return qaCallCount;
+}
+
+/** Reset the QA call counter (for integration tests using offline fixture scenarios). */
+export function resetOfflineQaCallCount(): void {
+  qaCallCount = 0;
+}
 
 function detectPipelineV9OfflineLane(prompt: string): 'frontend' | 'backend' {
   return /regression frontend verified lane/i.test(prompt) ? 'frontend' : 'backend';
 }
 
-function buildOtelOfflineOrchestratorManifest(mode: 'verified' | 'autonomous', repoRoot: string): Record<string, unknown> {
+function buildOtelOfflineOrchestratorManifest(
+  mode: 'deep',
+  repoRoot: string,
+): Record<string, unknown> {
   return {
     orchestrator_version: '9.0',
     target_project: 'global',
     target_project_path: repoRoot,
     analysis: {
-      task_summary: mode === 'autonomous'
-        ? 'OTel regression autonomous lane.'
-        : 'OTel regression verified lane.',
+      task_summary: 'OTel regression deep lane.',
       task_category: 'Backend',
       secondary_category: null,
       complexity_estimate: 'Medium',
-      pipeline_mode: mode,
+      pipeline_mode: 'deep',
       ambiguity_note: null,
       routing_confidence: 0.95,
     },
@@ -300,7 +376,11 @@ function buildOtelOfflineOrchestratorManifest(mode: 'verified' | 'autonomous', r
     },
     compilation_state: 'uncompiled',
     instruction_stack: {
-      behavioral_ids: ['behavioral_core_v10', 'behavioral_cognitive_micro_v7', 'behavioral_guard_v7'],
+      behavioral_ids: [
+        'behavioral_core_v10',
+        'behavioral_cognitive_micro_v7',
+        'behavioral_guard_v7',
+      ],
       domain_id: 'domain_swe_backend',
       skill_ids: [],
       model_adapter_id: 'adapter_codex_balanced',
@@ -316,10 +396,9 @@ function buildOtelOfflineOrchestratorManifest(mode: 'verified' | 'autonomous', r
     },
     prompt_manifest: [],
     handoff_payload: {
-      user_request: mode === 'autonomous'
-        ? 'OTEL autonomous lane TELEMETRY_SECRET_TASK_MARKER'
-        : 'OTEL verified lane TELEMETRY_SECRET_TASK_MARKER',
-      system_directive: 'Resolve instruction_stack against prompt_catalog.yaml, expand dependencies, compile prompt_manifest, then load the compiled files in order.',
+      user_request: 'OTEL deep lane TELEMETRY_SECRET_TASK_MARKER',
+      system_directive:
+        'Resolve instruction_stack against prompt_catalog.yaml, expand dependencies, compile prompt_manifest, then load the compiled files in order.',
     },
   };
 }
@@ -333,9 +412,7 @@ function buildOtelOfflineSwePlan(): Record<string, unknown> {
       'The orchestrator emitted a typed v9 manifest.',
       'The tracing test needs a valid QA PASS path.',
     ],
-    assumptions: [
-      'A single safe read-only step is sufficient for autonomous executor validation.',
-    ],
+    assumptions: ['A single safe read-only step is sufficient for autonomous executor validation.'],
     risks: [
       {
         risk: 'The executor completion could become schema-invalid without a verified step.',
@@ -351,14 +428,12 @@ function buildOtelOfflineSwePlan(): Record<string, unknown> {
         target: 'runs/latest/01_manifest.json',
         rationale: 'Provides one safe executor step before completion.',
         reversible: true,
-        verification: 'The manifest shows compilation_state = compiled and a populated prompt_manifest.',
+        verification:
+          'The manifest shows compilation_state = compiled and a populated prompt_manifest.',
       },
     ],
     root_cause: 'N/A — tracing regression coverage',
-    out_of_scope: [
-      'Repository mutation',
-      'Shell execution',
-    ],
+    out_of_scope: ['Repository mutation', 'Shell execution'],
   };
 }
 
@@ -372,9 +447,7 @@ function buildPipelineV9OfflineSwePlan(lane: 'frontend' | 'backend') {
       'The orchestrator emitted a typed v9 manifest in uncompiled form.',
       'The compiler must populate prompt_manifest before the SWE stage runs.',
     ],
-    assumptions: [
-      'This regression fixture only needs to verify routing and QA coherence.',
-    ],
+    assumptions: ['This regression fixture only needs to verify routing and QA coherence.'],
     risks: [
       {
         risk: 'The typed stack could fail to compile before the worker runs.',
@@ -388,16 +461,15 @@ function buildPipelineV9OfflineSwePlan(lane: 'frontend' | 'backend') {
         description: `Inspect the compiled manifest artifact for the resolved ${label} stack.`,
         tool: 'file_read',
         target: 'runs/latest/01_manifest.json',
-        rationale: 'Confirms Stage 1 produced a compiled manifest before execution planning proceeds.',
+        rationale:
+          'Confirms Stage 1 produced a compiled manifest before execution planning proceeds.',
         reversible: true,
-        verification: 'The manifest shows compilation_state = compiled and a populated prompt_manifest.',
+        verification:
+          'The manifest shows compilation_state = compiled and a populated prompt_manifest.',
       },
     ],
     root_cause: 'N/A — regression coverage task',
-    out_of_scope: [
-      'Executing CLI tools',
-      'Modifying repository files',
-    ],
+    out_of_scope: ['Executing CLI tools', 'Modifying repository files'],
   };
 }
 
@@ -405,9 +477,51 @@ function buildPipelineV9OfflineQaPass(lane: 'frontend' | 'backend') {
   return {
     verdict: 'PASS',
     overall_confidence: 5,
-    notes: lane === 'frontend'
-      ? 'Regression fixture plan is sufficient for the verified frontend worker/QA path.'
-      : 'Regression fixture plan is sufficient for the verified backend worker/QA path.',
+    notes:
+      lane === 'frontend'
+        ? 'Regression fixture plan is sufficient for the verified frontend worker/QA path.'
+        : 'Regression fixture plan is sufficient for the verified backend worker/QA path.',
+  };
+}
+
+function buildPipelineV9OfflineQaReject(lane: 'frontend' | 'backend') {
+  return {
+    verdict: 'REJECT',
+    overall_confidence: 2,
+    failures: [
+      {
+        tag: 'AMBIGUOUS_PLAN',
+        severity: 'blocker',
+        description: 'Offline fixture: simulated QA rejection for integration test.',
+        step_index: 0,
+      },
+    ],
+    notes: `Simulated QA rejection for ${lane} lane integration test.`,
+  };
+}
+
+function buildPipelineV9OfflineEvidencePlan(lane: 'frontend' | 'backend') {
+  const label = lane === 'frontend' ? 'frontend' : 'backend';
+  return {
+    plan_version: '1.0',
+    plan_type: 'EVIDENCE_REQUEST',
+    task_summary: `OBJECTIVE: Gather evidence for the v9 ${label} lane before replanning.`,
+    known_facts: ['Evidence is needed before execution can proceed.'],
+    assumptions: ['Evidence will be gathered and fed back to the pipeline.'],
+    risks: [],
+    minimal_action_set: [
+      {
+        step: 1,
+        description: 'Read relevant configuration files.',
+        tool: 'file_read',
+        target: 'runs/latest/01_manifest.json',
+        rationale: 'Gather context before replanning.',
+        reversible: true,
+        verification: 'File content is non-empty.',
+      },
+    ],
+    root_cause: 'Insufficient context for implementation plan.',
+    out_of_scope: ['Modifying files'],
   };
 }
 
@@ -427,7 +541,7 @@ export function buildPipelineV9OfflineFixtureResponse(
       stage === 'orchestrator' ||
       prompt.includes('Analyze the task below and output the orchestration manifest')
     ) {
-      const mode = /autonomous lane/i.test(prompt) ? 'autonomous' : 'verified';
+      const mode = 'deep';
       const repoRoot = process.env['BABEL_PROJECT_ROOT']?.trim() || process.cwd();
       return buildOtelOfflineOrchestratorManifest(mode, repoRoot);
     }
@@ -444,7 +558,11 @@ export function buildPipelineV9OfflineFixtureResponse(
     if (stage === 'executor') {
       const historyIndex = prompt.indexOf('EXECUTION HISTORY');
       const executionHistory = historyIndex >= 0 ? prompt.slice(historyIndex) : '';
-      if (!/\[Step 1\] file_read[^\n]*runs\/latest\/01_manifest\.json\r?\nExit code: 0/.test(executionHistory)) {
+      if (
+        !/\[Step 1\] file_read[^\n]*runs\/latest\/01_manifest\.json\r?\nExit code: 0/.test(
+          executionHistory,
+        )
+      ) {
         return {
           type: 'tool_call',
           thinking: 'OTel offline fixture: read the compiled manifest before completing.',
@@ -461,11 +579,29 @@ export function buildPipelineV9OfflineFixtureResponse(
   }
 
   const lane = detectPipelineV9OfflineLane(prompt);
+  const scenario = getOfflineScenario();
 
   if (stage === 'planning' || prompt.includes('produce the SWE Plan')) {
+    if (scenario === 'evidence_loop') {
+      // Check if this is a replan after evidence gathering
+      if (prompt.includes('EVIDENCE_REQUEST') || prompt.includes('evidence gathered')) {
+        return buildPipelineV9OfflineSwePlan(lane);
+      }
+      return buildPipelineV9OfflineEvidencePlan(lane);
+    }
     return buildPipelineV9OfflineSwePlan(lane);
   }
   if (stage === 'qa' || prompt.includes('produce a QA verdict')) {
+    const callNum = incrementQaCallCount();
+    if (scenario === 'qa_reject_once') {
+      // First call: REJECT, subsequent calls: PASS
+      return callNum === 1
+        ? buildPipelineV9OfflineQaReject(lane)
+        : buildPipelineV9OfflineQaPass(lane);
+    }
+    if (scenario === 'qa_reject_max') {
+      return buildPipelineV9OfflineQaReject(lane);
+    }
     return buildPipelineV9OfflineQaPass(lane);
   }
   if (stage === 'executor') {
@@ -484,7 +620,8 @@ function countMatches(value: string, pattern: RegExp): number {
 
 function getReliabilityRepairProofVerifierExitCodes(prompt: string): number[] {
   const exitCodes: number[] = [];
-  const pattern = /\[Step \d+\] (?:test_run|shell_exec)\s+[^\r\n]*node --test\r?\nExit code: (-?\d+)/g;
+  const pattern =
+    /\[Step \d+\] (?:test_run|shell_exec)\s+[^\r\n]*?node --test[^\r\n]*\r?\nExit code: (-?\d+)/g;
   for (const match of prompt.matchAll(pattern)) {
     const parsed = Number.parseInt(match[1] ?? '', 10);
     if (Number.isFinite(parsed)) {
@@ -494,7 +631,10 @@ function getReliabilityRepairProofVerifierExitCodes(prompt: string): number[] {
   return exitCodes;
 }
 
-export function buildReliabilityRepairProofExecutorResponse(prompt: string, options: RunOptions): unknown | null {
+export function buildReliabilityRepairProofExecutorResponse(
+  prompt: string,
+  options: RunOptions,
+): unknown | null {
   if (
     options.stage !== 'executor' ||
     process.env['BABEL_RELIABILITY_REPAIR_PROOF'] !== 'true' ||
@@ -514,7 +654,7 @@ export function buildReliabilityRepairProofExecutorResponse(prompt: string, opti
     /\[Step \d+\] file_write\s+[^\r\n]*src\/math\.js\r?\nExit code: 0/g,
   );
   const verifierExitCodes = getReliabilityRepairProofVerifierExitCodes(prompt);
-  const failedVerifierCount = verifierExitCodes.filter(code => code !== 0).length;
+  const failedVerifierCount = verifierExitCodes.filter((code) => code !== 0).length;
   const lastVerifierExitCode = verifierExitCodes[verifierExitCodes.length - 1];
   const hasFailureCapsule = /Failure capsule id:\s*repair_failure_capsule_attempt_\d+/.test(prompt);
   const forceStillFail = process.env['BABEL_RELIABILITY_REPAIR_PROOF_FORCE_STILL_FAIL'] === 'true';
@@ -536,12 +676,7 @@ export function buildReliabilityRepairProofExecutorResponse(prompt: string, opti
         'Deterministic reliability proof model-boundary response: attempt 1 writes the wrong implementation through file_write.',
       tool: 'file_write',
       path: 'src/math.js',
-      content: [
-        'export function add(a, b) {',
-        '  return a * b;',
-        '}',
-        '',
-      ].join('\n'),
+      content: ['export function add(a, b) {', '  return a * b;', '}', ''].join('\n'),
     };
   }
 
@@ -582,12 +717,7 @@ export function buildReliabilityRepairProofExecutorResponse(prompt: string, opti
             '}',
             '',
           ].join('\n')
-        : [
-            'export function add(a, b) {',
-            '  return a + b;',
-            '}',
-            '',
-          ].join('\n'),
+        : ['export function add(a, b) {', '  return a + b;', '}', ''].join('\n'),
     };
   }
 
@@ -611,8 +741,10 @@ export function buildReliabilityRepairProofExecutorResponse(prompt: string, opti
 type TierKind = 'cli' | 'api';
 
 interface TierSpec {
-  kind:    TierKind;
-  name:    string;
+  kind: TierKind;
+  name: string;
+  /** Canonical backend key from model-policy.json (e.g. "scout", "deepseek-v4-pro"). */
+  backendKey?: string;
   factory: () => LlmRunner;
   /**
    * Canonical 0-based position in the stage's fixed waterfall definition.
@@ -629,11 +761,13 @@ interface TierSpec {
  */
 const ORCHESTRATOR_WATERFALL: TierSpec[] = [
   {
-    kind: 'api', name: 'qwen3-32b',
+    kind: 'api',
+    name: 'qwen3-32b',
     factory: () => new DeepInfraApiRunner(QWEN3_32B),
   },
   {
-    kind: 'api', name: 'scout',
+    kind: 'api',
+    name: 'scout',
     factory: () => new DeepInfraApiRunner(LLAMA4_SCOUT),
   },
 ];
@@ -643,11 +777,13 @@ const ORCHESTRATOR_WATERFALL: TierSpec[] = [
  */
 const PLANNING_WATERFALL: TierSpec[] = [
   {
-    kind: 'api', name: 'qwen3-32b',
+    kind: 'api',
+    name: 'qwen3-32b',
     factory: () => new DeepInfraApiRunner(QWEN3_32B),
   },
   {
-    kind: 'api', name: 'scout',
+    kind: 'api',
+    name: 'scout',
     factory: () => new DeepInfraApiRunner(LLAMA4_SCOUT),
   },
 ];
@@ -657,19 +793,23 @@ const PLANNING_WATERFALL: TierSpec[] = [
  */
 const QA_WATERFALL: TierSpec[] = [
   {
-    kind: 'api', name: 'deepseek',
+    kind: 'api',
+    name: 'deepseek',
     factory: () => new DeepInfraApiRunner(DEEPSEEK_V3),
   },
   {
-    kind: 'api', name: 'nemotron',
+    kind: 'api',
+    name: 'nemotron',
     factory: () => new DeepInfraApiRunner(NEMOTRON),
   },
   {
-    kind: 'api', name: 'step-flash',
+    kind: 'api',
+    name: 'step-flash',
     factory: () => new DeepInfraApiRunner(STEP_FLASH),
   },
   {
-    kind: 'api', name: 'qwen3-32b',
+    kind: 'api',
+    name: 'qwen3-32b',
     factory: () => new DeepInfraApiRunner(QWEN3_32B),
   },
 ];
@@ -679,19 +819,23 @@ const QA_WATERFALL: TierSpec[] = [
  */
 const EXECUTOR_WATERFALL: TierSpec[] = [
   {
-    kind: 'api', name: 'scout',
+    kind: 'api',
+    name: 'scout',
     factory: () => new DeepInfraApiRunner(LLAMA4_SCOUT),
   },
   {
-    kind: 'api', name: 'qwen3',
+    kind: 'api',
+    name: 'qwen3',
     factory: () => new DeepInfraApiRunner(QWEN3_235B),
   },
   {
-    kind: 'api', name: 'qwen3-32b',
+    kind: 'api',
+    name: 'qwen3-32b',
     factory: () => new DeepInfraApiRunner(QWEN3_32B),
   },
   {
-    kind: 'api', name: 'nemotron',
+    kind: 'api',
+    name: 'nemotron',
     factory: () => new DeepInfraApiRunner(NEMOTRON),
   },
 ];
@@ -703,9 +847,9 @@ const EXECUTOR_WATERFALL: TierSpec[] = [
  */
 function resolveEffectiveStage(
   stage: PipelineStage | undefined,
-  mode:  RunMode | undefined,
+  mode: RunMode | undefined,
 ): RoutingStage {
-  if (stage !== undefined) return stage;        // PipelineStage ⊂ RoutingStage
+  if (stage !== undefined) return stage; // PipelineStage ⊂ RoutingStage
   if (mode === 'reasoning') return 'planning';
   return 'orchestrator';
 }
@@ -740,6 +884,7 @@ function tierSpecFromPolicyEntry(entry: ResolvedModelPolicyEntry): TierSpec {
     return {
       kind: 'api',
       name: getPolicyDisplayName(entry),
+      backendKey: entry.backendKey,
       factory: () => new DeepSeekApiRunner(entry.providerModelId),
     };
   }
@@ -753,6 +898,7 @@ function tierSpecFromPolicyEntry(entry: ResolvedModelPolicyEntry): TierSpec {
   return {
     kind: 'api',
     name: getPolicyDisplayName(entry),
+    backendKey: entry.backendKey,
     factory: () => new DeepInfraApiRunner(entry.providerModelId),
   };
 }
@@ -773,7 +919,7 @@ function resolveWaterfall(stage: PipelineStage | undefined, mode: RunMode | unde
   }
 
   if (effectiveStage === 'planning') return PLANNING_WATERFALL;
-  if (effectiveStage === 'qa')       return QA_WATERFALL;
+  if (effectiveStage === 'qa') return QA_WATERFALL;
   if (effectiveStage === 'executor') return EXECUTOR_WATERFALL;
   return ORCHESTRATOR_WATERFALL;
 }
@@ -788,11 +934,7 @@ const RATE_LIMIT_SIGNALS = [
   'too many requests',
 ] as const;
 
-const SPAWN_ERROR_SIGNALS = [
-  'not found in path',
-  'is not recognized as an',
-  'enoent',
-] as const;
+const SPAWN_ERROR_SIGNALS = ['not found in path', 'is not recognized as an', 'enoent'] as const;
 
 const STRUCTURED_OUTPUT_FAILURE_SIGNALS = [
   'zod validation failed',
@@ -800,25 +942,21 @@ const STRUCTURED_OUTPUT_FAILURE_SIGNALS = [
   'failed to parse api response as json',
 ] as const;
 
-const REQUEST_TIMEOUT_SIGNALS = [
-  'request timeout',
-  'aborterror',
-  'aborted',
-] as const;
+const REQUEST_TIMEOUT_SIGNALS = ['request timeout', 'aborterror', 'aborted'] as const;
 
 function isImmediateCascade(err: Error): boolean {
   const msg = err.message.toLowerCase();
   return (
-    RATE_LIMIT_SIGNALS.some(s => msg.includes(s)) ||
-    SPAWN_ERROR_SIGNALS.some(s => msg.includes(s)) ||
-    STRUCTURED_OUTPUT_FAILURE_SIGNALS.some(s => msg.includes(s)) ||
-    REQUEST_TIMEOUT_SIGNALS.some(s => msg.includes(s))
+    RATE_LIMIT_SIGNALS.some((s) => msg.includes(s)) ||
+    SPAWN_ERROR_SIGNALS.some((s) => msg.includes(s)) ||
+    STRUCTURED_OUTPUT_FAILURE_SIGNALS.some((s) => msg.includes(s)) ||
+    REQUEST_TIMEOUT_SIGNALS.some((s) => msg.includes(s))
   );
 }
 
 export function isStructuredOutputFailure(err: Error): boolean {
   const msg = err.message.toLowerCase();
-  return STRUCTURED_OUTPUT_FAILURE_SIGNALS.some(s => msg.includes(s));
+  return STRUCTURED_OUTPUT_FAILURE_SIGNALS.some((s) => msg.includes(s));
 }
 
 export interface StructuredOutputRetryPromptOptions {
@@ -827,7 +965,10 @@ export interface StructuredOutputRetryPromptOptions {
   shadowHints?: string[];
 }
 
-function inferSchemaNameFromStage(stage: string | undefined, fallback = 'StructuredOutputSchema'): string {
+function inferSchemaNameFromStage(
+  stage: string | undefined,
+  fallback = 'StructuredOutputSchema',
+): string {
   switch (stage) {
     case 'orchestrator':
       return 'OrchestratorOutputSchema';
@@ -842,7 +983,10 @@ function inferSchemaNameFromStage(stage: string | undefined, fallback = 'Structu
   }
 }
 
-function buildStageStructuredOutputGuidance(stage: string | undefined, schemaName: string): string[] {
+function buildStageStructuredOutputGuidance(
+  stage: string | undefined,
+  schemaName: string,
+): string[] {
   switch (stage) {
     case 'orchestrator':
       return [
@@ -882,9 +1026,7 @@ export function buildStructuredOutputRetryPrompt(
   error: Error,
   options: StructuredOutputRetryPromptOptions = {},
 ): string {
-  const errorSummary = error.message
-    .replace(/\s+/g, ' ')
-    .slice(0, 1200);
+  const errorSummary = redactSecrets(error.message.replace(/\s+/g, ' ').slice(0, 1200));
   const schemaName = options.schemaName ?? inferSchemaNameFromStage(options.stage);
   const stageGuidance = buildStageStructuredOutputGuidance(options.stage, schemaName);
   const shadowHints = options.shadowHints ?? [];
@@ -917,7 +1059,7 @@ function buildAggregateWaterfallTimeoutError(
   const elapsedMs = Date.now() - startedAtMs;
   return new Error(
     `${AGGREGATE_WATERFALL_TIMEOUT_PREFIX} Aggregate ${label} timeout exceeded after ${elapsedMs}ms ` +
-    `(limit ${timeoutMs}ms) while ${phase}.`,
+      `(limit ${timeoutMs}ms) while ${phase}.`,
   );
 }
 
@@ -949,13 +1091,14 @@ async function raceWithTimeout<T>(
 // ─── Internal waterfall runner ────────────────────────────────────────────────
 
 interface WaterfallRunResult<T> {
-  result:  T;
+  result: T;
   outcome: Omit<WaterfallOutcome, 'stage' | 'ts'>;
 }
 
 function appendSchemaFailureRecoveryIfNeeded(input: {
   evidence: EvidenceBundle | undefined;
   pendingEntryIds: string[];
+  pendingEntries: SchemaFailureLedgerEntry[];
   label: string;
   schemaName: string;
   spec: TierSpec;
@@ -975,6 +1118,7 @@ function appendSchemaFailureRecoveryIfNeeded(input: {
     prompt: input.prompt,
     metadata: input.metadata,
     recoveredEntryIds: [...input.pendingEntryIds],
+    recoveredEntries: [...input.pendingEntries],
   });
 }
 
@@ -1068,28 +1212,50 @@ function sumAttemptMetric(
 }
 
 async function runWaterfall<T>(
-  label:       string,
-  schemaName:  string,
-  waterfall:   TierSpec[],
-  prompt:      string,
-  schema:      ZodType<T, unknown>,
+  label: string,
+  schemaName: string,
+  waterfall: TierSpec[],
+  prompt: string,
+  schema: ZodType<T, unknown>,
   maxAttempts: number,
   aggregateTimeoutMs: number,
-  evidence:    EvidenceBundle | undefined,
-  onChunk?:    (chunk: string) => void,
-  eventBus?:   BabelEventBus,
+  evidence: EvidenceBundle | undefined,
+  onChunk?: (chunk: string) => void,
+  eventBus?: BabelEventBus,
+  systemPrompt?: string,
+  signal?: AbortSignal,
 ): Promise<WaterfallRunResult<T>> {
   const verboseFallbackLogs = process.env['BABEL_VERBOSE_WATERFALLS'] === 'true' || !evidence;
   const startedAtMs = Date.now();
-  let lastError:   Error    | null = null;
-  const tiersSkipped: string[]    = [];
+  let lastError: Error | null = null;
+  const tiersSkipped: string[] = [];
   const attemptsDetail: WaterfallAttemptOutcome[] = [];
   const schemaFailureEntryIds: string[] = [];
   const pendingSchemaFailureEntryIds: string[] = [];
+  const pendingSchemaFailureEntries: SchemaFailureLedgerEntry[] = [];
   let lastFailureMetadata: RunnerInvocationMetadata | null = null;
 
+  // Dynamic deadline: starts at startedAtMs + aggregateTimeoutMs, but can be
+  // extended when the runner is actively producing output (onChunk fires).
+  // This prevents hard-killing a model that's mid-generation and making progress.
+  // Idle streams don't get extensions — the deadline only extends when content
+  // chunks are actually arriving. Capped at MAX_EXTENDED_TIMEOUT_MS from start.
+  let deadline = startedAtMs + aggregateTimeoutMs;
+
+  const extendDeadlineIfActive = (): void => {
+    const now = Date.now();
+    const withinExtensionWindow = deadline - now < 30_000; // only extend when near deadline
+    if (withinExtensionWindow) {
+      const newDeadline = now + HEARTBEAT_EXTENSION_MS;
+      const maxDeadline = startedAtMs + MAX_EXTENDED_TIMEOUT_MS;
+      if (newDeadline > deadline) {
+        deadline = Math.min(newDeadline, maxDeadline);
+      }
+    }
+  };
+
   const ensureTimeRemaining = (phase: string): number => {
-    const remainingMs = aggregateTimeoutMs - (Date.now() - startedAtMs);
+    const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
       throw buildAggregateWaterfallTimeoutError(label, aggregateTimeoutMs, startedAtMs, phase);
     }
@@ -1099,6 +1265,8 @@ async function runWaterfall<T>(
   for (let tier = 0; tier < waterfall.length; tier++) {
     const spec = waterfall[tier]!;
     const next = waterfall[tier + 1];
+    // Soft-landing: check deadline before starting a new tier, but allow
+    // in-flight requests to complete naturally instead of raceWithTimeout.
     ensureTimeRemaining(`starting tier ${spec.name}`);
 
     // ── Waterfall halt gate ────────────────────────────────────────────────
@@ -1107,7 +1275,7 @@ async function runWaterfall<T>(
     if (DISABLE_API_FALLBACK && tiersSkipped.length > 0) {
       throw new Error(
         `First tier failed and BABEL_DISABLE_API_FALLBACK=true. Halting pipeline. ` +
-        `Last error: ${lastError?.message ?? 'unknown'}`,
+          `Last error: ${lastError?.message ?? 'unknown'}`,
       );
     }
 
@@ -1141,7 +1309,19 @@ async function runWaterfall<T>(
         const remainingMs = ensureTimeRemaining(`running tier ${spec.name} attempt ${attempt}`);
 
         const runnerCallbacks: RunnerCallbacks = {
-          ...(onChunk ? { onChunk } : {}),
+          onChunk: (chunk: string) => {
+            // Heartbeat: each content chunk extends the waterfall deadline so
+            // actively-streaming models aren't hard-killed mid-generation.
+            extendDeadlineIfActive();
+            if (onChunk) onChunk(chunk);
+          },
+          onThought: (thought: string) => {
+            // Reasoning content also counts as activity — the model is working.
+            extendDeadlineIfActive();
+            if (eventBus && typeof eventBus.assistantThought === 'function') {
+              eventBus.assistantThought(thought);
+            }
+          },
           onProgress: (event: RunnerProgressEvent) => {
             if (eventBus) {
               let logMsg = `[babel:${label}] ${event.state}`;
@@ -1153,29 +1333,38 @@ async function runWaterfall<T>(
           },
         };
 
-        const result = await raceWithTimeout(
-          runner.execute(promptForTier, schema, runnerCallbacks),
-          remainingMs,
-          () => buildAggregateWaterfallTimeoutError(
-              label,
-              aggregateTimeoutMs,
-              startedAtMs,
-              `running tier ${spec.name} attempt ${attempt}`,
-            ),
+        // Soft-landing: once an attempt has started, let it finish naturally.
+        // The deadline is checked before starting each tier/attempt but is NOT
+        // enforced mid-flight via Promise.race — killing a model mid-generation
+        // discards partial output and wastes tokens. Activity heartbeats extend
+        // the deadline while the model is actively producing content.
+        const result = await runner.execute(
+          promptForTier,
+          schema,
+          runnerCallbacks,
+          systemPrompt,
+          signal,
         );
         const invocationMetadata = getRunnerInvocationMetadata(runner);
 
-        if (invocationMetadata?.provider_model_id && invocationMetadata.prompt_tokens !== null && invocationMetadata.completion_tokens !== null) {
+        if (
+          invocationMetadata?.provider_model_id &&
+          invocationMetadata.prompt_tokens !== null &&
+          invocationMetadata.completion_tokens !== null
+        ) {
           globalCostTracker.trackUsage(
             invocationMetadata.provider_model_id,
             invocationMetadata.prompt_tokens,
-            invocationMetadata.completion_tokens
+            invocationMetadata.completion_tokens,
+            invocationMetadata.prompt_cache_hit_tokens,
+            invocationMetadata.prompt_cache_miss_tokens,
           );
         }
 
         const recoveryEntry = appendSchemaFailureRecoveryIfNeeded({
           evidence,
           pendingEntryIds: pendingSchemaFailureEntryIds,
+          pendingEntries: pendingSchemaFailureEntries,
           label,
           schemaName,
           spec,
@@ -1187,6 +1376,7 @@ async function runWaterfall<T>(
         if (recoveryEntry) {
           schemaFailureEntryIds.push(recoveryEntry.entry_id);
           pendingSchemaFailureEntryIds.length = 0;
+          pendingSchemaFailureEntries.length = 0;
         }
 
         attemptsDetail.push(
@@ -1220,21 +1410,29 @@ async function runWaterfall<T>(
           result,
           outcome: {
             tier_succeeded: spec.name,
-            tier_index:     canonicalIndex,
-            attempts:       attempt,
-            tiers_skipped:  [...tiersSkipped],
+            tier_index: canonicalIndex,
+            attempts: attempt,
+            tiers_skipped: [...tiersSkipped],
             cascade_reason: cascadeReason,
             attempts_detail: attemptsDetail,
-            total_latency_ms: sumAttemptMetric(attemptsDetail, entry => entry.latency_ms),
-            total_prompt_tokens: sumAttemptMetric(attemptsDetail, entry => entry.prompt_tokens),
-            total_completion_tokens: sumAttemptMetric(attemptsDetail, entry => entry.completion_tokens),
-            total_tokens: sumAttemptMetric(attemptsDetail, entry => entry.total_tokens),
-            total_estimated_cost_usd: sumAttemptMetric(attemptsDetail, entry => entry.estimated_cost_usd),
+            total_latency_ms: sumAttemptMetric(attemptsDetail, (entry) => entry.latency_ms),
+            total_prompt_tokens: sumAttemptMetric(attemptsDetail, (entry) => entry.prompt_tokens),
+            total_completion_tokens: sumAttemptMetric(
+              attemptsDetail,
+              (entry) => entry.completion_tokens,
+            ),
+            total_tokens: sumAttemptMetric(attemptsDetail, (entry) => entry.total_tokens),
+            total_estimated_cost_usd: sumAttemptMetric(
+              attemptsDetail,
+              (entry) => entry.estimated_cost_usd,
+            ),
             schema_failure_entry_ids: schemaFailureEntryIds,
           },
         };
-
       } catch (err) {
+        if (err instanceof JitDenialError) {
+          throw err;
+        }
         lastError = err instanceof Error ? err : new Error(String(err));
         if (isAggregateWaterfallTimeoutError(lastError)) {
           throw lastError;
@@ -1276,6 +1474,7 @@ async function runWaterfall<T>(
             schemaFailureEntryId = entry.entry_id;
             schemaFailureEntryIds.push(entry.entry_id);
             pendingSchemaFailureEntryIds.push(entry.entry_id);
+            pendingSchemaFailureEntries.push(entry);
           }
         }
         attemptsDetail.push(
@@ -1291,10 +1490,12 @@ async function runWaterfall<T>(
         );
 
         if (isStructuredOutputFailure(lastError) && attempt < maxAttempts) {
-          promptForTier = schemaRetryPrompt ?? buildStructuredOutputRetryPrompt(prompt, lastError, {
-            stage: label,
-            schemaName,
-          });
+          promptForTier =
+            schemaRetryPrompt ??
+            buildStructuredOutputRetryPrompt(prompt, lastError, {
+              stage: label,
+              schemaName,
+            });
           const backoffMs = 750 * attempt;
           const remainingBeforeBackoff = ensureTimeRemaining(
             `waiting to retry tier ${spec.name} after schema validation failure`,
@@ -1310,10 +1511,10 @@ async function runWaterfall<T>(
           if (verboseFallbackLogs) {
             console.warn(
               `[babel:${label}] ${spec.name} returned schema-invalid JSON; retrying once with a schema-focused prompt.\n` +
-              `  Reason: ${lastError.message.slice(0, 160)}`,
+                `  Reason: ${lastError.message.slice(0, 160)}`,
             );
           }
-          await new Promise(resolve => setTimeout(resolve, backoffMs));
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
           continue;
         }
 
@@ -1338,10 +1539,10 @@ async function runWaterfall<T>(
           if (verboseFallbackLogs) {
             console.warn(
               `[babel:${label}] ${spec.name} attempt ${attempt}/${maxAttempts} failed — retrying in ${backoffMs}ms.\n` +
-              `  Reason: ${lastError.message.slice(0, 160)}`,
+                `  Reason: ${lastError.message.slice(0, 160)}`,
             );
           }
-          await new Promise(resolve => setTimeout(resolve, backoffMs));
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
         } else {
           cascadeFromTier = true;
         }
@@ -1399,24 +1600,48 @@ async function runWaterfall<T>(
  *                `BABEL_DISABLE_API_FALLBACK=true` and all CLI tiers are exhausted.
  */
 export async function runWithFallback<T>(
-  prompt:  string,
-  schema:  ZodType<T, unknown>,
+  prompt: string,
+  schema: ZodType<T, unknown>,
   options: RunOptions = {},
 ): Promise<T> {
-  const maxAttempts    = options.maxCliAttempts ?? 2;
-  const evidence       = options.evidence;
-  let waterfall        = resolveWaterfall(options.stage, options.mode);
+  const maxAttempts = options.maxCliAttempts ?? 2;
+  // Always have a bundle for schema failure telemetry — when the caller
+  // doesn't provide one, use a lightweight in-memory bundle that writes to
+  // a deterministic per-session directory so failures are never silent.
+  const evidence =
+    options.evidence ?? EvidenceBundle.inMemory(options.schemaName ?? 'schema-failure');
+  let waterfall = resolveWaterfall(options.stage, options.mode);
   if (options.fallbackPolicy === 'primary_only') {
     waterfall = waterfall.slice(0, 1);
   }
-  const label          = options.stage ?? options.mode ?? 'unknown';
+
+  // Per-agent model override: when an explicit backend key is provided,
+  // bypass the stage-based waterfall and create a single-tier waterfall
+  // with a direct runner for that model.
+  if (options.model) {
+    const { config } = loadModelPolicyConfig();
+    const backend = config.models?.[options.model];
+    if (backend) {
+      const factory =
+        backend.provider === 'deepseek'
+          ? () => new DeepSeekApiRunner(backend.model_id)
+          : () => new DeepInfraApiRunner(backend.model_id);
+      waterfall = [
+        { kind: 'api', name: options.model, backendKey: options.model, factory },
+      ];
+    }
+    // If the model key is unknown, fall through to the normal waterfall.
+    // The caller should validate the key before invoking runWithFallback.
+  }
+  const label = options.stage ?? options.mode ?? 'unknown';
   const effectiveStage = resolveEffectiveStage(options.stage, options.mode);
-  const schemaName     = options.schemaName ?? inferSchemaNameFromStage(label);
+  const schemaName = options.schemaName ?? inferSchemaNameFromStage(label);
   const aggregateTimeoutMs = resolveAggregateWaterfallTimeoutMs();
-  const deterministicReliabilityProofResponse =
-    buildReliabilityRepairProofExecutorResponse(prompt, options);
-  const pipelineV9OfflineFixtureResponse =
-    buildPipelineV9OfflineFixtureResponse(prompt, options);
+  const deterministicReliabilityProofResponse = buildReliabilityRepairProofExecutorResponse(
+    prompt,
+    options,
+  );
+  const pipelineV9OfflineFixtureResponse = buildPipelineV9OfflineFixtureResponse(prompt, options);
 
   if (pipelineV9OfflineFixtureResponse !== null) {
     const result = schema.parse(pipelineV9OfflineFixtureResponse);
@@ -1508,13 +1733,12 @@ export async function runWithFallback<T>(
   let startTierIndex = options.startTierIndex;
 
   if (startTierIndex === undefined) {
-    const routingOpts = options.dynamicRouting !== undefined
-      ? { enabled: options.dynamicRouting }
-      : undefined;
+    const routingOpts =
+      options.dynamicRouting !== undefined ? { enabled: options.dynamicRouting } : undefined;
 
     const decision = selectBestTierForStage(
       effectiveStage,
-      waterfall.map(spec => spec.name),
+      waterfall.map((spec) => spec.name),
       routingOpts,
     );
 
@@ -1522,7 +1746,7 @@ export async function runWithFallback<T>(
       startTierIndex = decision.selectedIndex;
       console.log(
         `[babel:${label}] Dynamic Routing v1 → tier ${decision.selectedIndex + 1}: ` +
-        `${decision.selectedName}`,
+          `${decision.selectedName}`,
       );
       if (evidence) {
         evidence.writeDebugFile(
@@ -1536,7 +1760,35 @@ export async function runWithFallback<T>(
   // Stamp canonical indices before reordering so runWaterfall can always
   // report the original tier slot in logs and telemetry.
   const stampedWaterfall = waterfall.map((spec, i) => ({ ...spec, originalIndex: i }));
-  const orderedWaterfall = reorderWaterfallByStartIndex(stampedWaterfall, startTierIndex);
+  let orderedWaterfall = reorderWaterfallByStartIndex(stampedWaterfall, startTierIndex);
+
+  // ── Smart Planner tier skipping ──────────────────────────────────────────
+  // Remove tiers whose backend key matches a skip entry. This runs AFTER
+  // dynamic routing reordering and startTierIndex adjustment so it can
+  // strip weak tiers regardless of where they ended up in the order.
+  if (options.skipTierNames && options.skipTierNames.length > 0) {
+    const skipSet = new Set(options.skipTierNames.map((n) => n.toLowerCase().trim()));
+    const filtered = orderedWaterfall.filter((spec) => {
+      const key = (spec.backendKey ?? spec.name).toLowerCase().trim();
+      return !skipSet.has(key);
+    });
+    if (filtered.length === 0) {
+      throw new Error(
+        `[babel:${label}] All tiers skipped by skipTierNames="${options.skipTierNames.join(', ')}". ` +
+          `Cannot proceed — at least one model tier must remain in the waterfall.`,
+      );
+    }
+    if (filtered.length < orderedWaterfall.length) {
+      const skipped = orderedWaterfall
+        .filter((spec) => skipSet.has((spec.backendKey ?? spec.name).toLowerCase().trim()))
+        .map((s) => s.name)
+        .join(', ');
+      if (options.eventBus) {
+        options.eventBus.logLine(`Smart Planner: skipping tiers [${skipped}]`);
+      }
+    }
+    orderedWaterfall = filtered;
+  }
 
   const waterfallResult = await runWaterfall(
     label,
@@ -1549,6 +1801,7 @@ export async function runWithFallback<T>(
     options.evidence,
     options.onChunk,
     options.eventBus,
+    options.systemPrompt,
   );
 
   // Record to evidence bundle for 05_waterfall_telemetry.json.
@@ -1556,7 +1809,7 @@ export async function runWithFallback<T>(
     evidence.appendWaterfallLog({
       ...waterfallResult.outcome,
       stage: label,
-      ts:    new Date().toISOString(),
+      ts: new Date().toISOString(),
     } satisfies WaterfallOutcome);
   }
 
@@ -1574,6 +1827,51 @@ export function runWithPrimaryOnlyFallback<T>(
   });
 }
 
+/**
+ * Direct model call that bypasses the waterfall machinery entirely.
+ *
+ * Creates a single DeepInfraApiRunner with the default chat model (QWEN3_32B)
+ * and executes the prompt directly. Includes a simple retry loop for transient
+ * failures but no tier management, no heartbeat, no timeout extension, and no
+ * fixture detection.
+ *
+ * Use this for simple ask prompts where the full waterfall (~600 lines of tier
+ * management, dynamic routing, timeout extension, heartbeat, retry logic, and
+ * fixture detection) would be unnecessary overhead.
+ *
+ * @param prompt  - The prompt to send to the model.
+ * @param schema  - Zod schema to validate and type the model's JSON output.
+ * @param options - Optional callbacks and retry configuration.
+ * @returns       Validated result of type `T`.
+ */
+export async function runDirectAsk<T>(
+  prompt: string,
+  schema: ZodType<T, unknown>,
+  options: {
+    onChunk?: (chunk: string) => void;
+    maxAttempts?: number;
+    signal?: AbortSignal;
+  } = {},
+): Promise<T> {
+  const runner = new DeepSeekApiRunner('deepseek-v4-flash');
+
+  let lastError: Error | null = null;
+  const maxAttempts = options.maxAttempts ?? 2;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const callbacks = options.onChunk ? { onChunk: options.onChunk } : undefined;
+      const result = await runner.execute(prompt, schema, callbacks, undefined, options.signal);
+      return result;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+  }
+  throw lastError ?? new Error('runDirectAsk failed');
+}
+
 export async function runWaterfallForSchemaFailureTest<T>(input: {
   prompt: string;
   schema: ZodType<T, unknown>;
@@ -1583,12 +1881,14 @@ export async function runWaterfallForSchemaFailureTest<T>(input: {
   maxAttempts?: number;
   tiers: Array<{ name: string; runner: LlmRunner }>;
 }): Promise<T> {
-  const waterfall = input.tiers.map((tier, index): TierSpec => ({
-    kind: 'api',
-    name: tier.name,
-    factory: () => tier.runner,
-    originalIndex: index,
-  }));
+  const waterfall = input.tiers.map(
+    (tier, index): TierSpec => ({
+      kind: 'api',
+      name: tier.name,
+      factory: () => tier.runner,
+      originalIndex: index,
+    }),
+  );
   const waterfallResult = await runWaterfall(
     input.stage,
     input.schemaName,

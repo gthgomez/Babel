@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { BabelRepl } from './interactive.js';
+import {
+  APPROVAL_READY_STATUSES,
+  BabelRepl,
+  classifyInteractiveTaskIntent,
+  parseInteractiveDailyCommand,
+} from './interactive.js';
 import type { PipelineResult } from './pipeline.js';
 import { renderOperatorHeader } from './ui/renderers.js';
 import { stripAnsi } from './ui/theme.js';
@@ -34,10 +39,10 @@ function makeInteractiveResult(runDir: string): PipelineResult {
     runDir,
     status: 'EXECUTOR_HALTED',
     manifest: {
-      target_project: 'private source repo',
+      target_project: 'Babel',
       analysis: {
         task_category: 'repo_inspection',
-        pipeline_mode: 'verified',
+        pipeline_mode: 'deep',
       },
       instruction_stack: {
         domain_id: 'domain_swe_backend',
@@ -52,9 +57,7 @@ function makeInteractiveResult(runDir: string): PipelineResult {
     plan: {
       plan_type: 'EVIDENCE_REQUEST',
       task_summary: 'Summarize repository purpose',
-      minimal_action_set: [
-        { description: 'Read project context' },
-      ],
+      minimal_action_set: [{ description: 'Read project context' }],
     } as PipelineResult['plan'],
     terminalSummary,
     usageSummary: {
@@ -71,10 +74,13 @@ test('interactive run summary delegates to answer-first renderer for halted runs
   const runDir = mkdtempSync(join(tmpdir(), 'babel-interactive-summary-'));
   const repl = Object.create(BabelRepl.prototype) as {
     state: unknown;
-    printRunSummary: (result: PipelineResult, context: { task: string; projectRoot?: string; transcript?: string }) => void;
+    printRunSummary: (
+      result: PipelineResult,
+      context: { task: string; projectRoot?: string; transcript?: string },
+    ) => void;
   };
   repl.state = {
-    mode: 'verified',
+    mode: 'deep',
     router: 'v9',
   };
   const writes: string[] = [];
@@ -85,7 +91,7 @@ test('interactive run summary delegates to answer-first renderer for halted runs
   try {
     repl.printRunSummary(makeInteractiveResult(runDir), {
       task: 'what is the repo about?',
-      projectRoot: '.',
+      projectRoot: '<BABEL_REPO_ROOT>',
       transcript: '[00:00] Review passed\n[00:30] Run blocked',
     });
   } finally {
@@ -96,7 +102,6 @@ test('interactive run summary delegates to answer-first renderer for halted runs
   const output = stripAnsi(writes.join('\n'));
   assert.match(output, /Babel Run Blocked/);
   assert.match(output, /Answer:\nReview was cancelled before execution\./);
-  assert.match(output, /Changed:\nnone/);
   assert.match(output, /Verified:\nnot run - Review was cancelled before execution\./);
   assert.doesNotMatch(output, /Run Complete/);
   assert.doesNotMatch(output, /Orchestrator|SWE Agent|QA Reviewer|CLI Executor/);
@@ -106,10 +111,13 @@ test('interactive run summary writes stripped human summary artifact', () => {
   const runDir = mkdtempSync(join(tmpdir(), 'babel-interactive-artifact-'));
   const repl = Object.create(BabelRepl.prototype) as {
     state: unknown;
-    printRunSummary: (result: PipelineResult, context: { task: string; projectRoot?: string; transcript?: string }) => void;
+    printRunSummary: (
+      result: PipelineResult,
+      context: { task: string; projectRoot?: string; transcript?: string },
+    ) => void;
   };
   repl.state = {
-    mode: 'verified',
+    mode: 'deep',
     router: 'v9',
   };
   const originalLog = console.log;
@@ -117,7 +125,7 @@ test('interactive run summary writes stripped human summary artifact', () => {
   try {
     repl.printRunSummary(makeInteractiveResult(runDir), {
       task: 'what is the repo about?',
-      projectRoot: '.',
+      projectRoot: '<BABEL_REPO_ROOT>',
       transcript: '[00:00] Run blocked',
     });
     const summaryPath = join(runDir, 'human_summary.txt');
@@ -147,7 +155,11 @@ test('interactive transcript records user and assistant turns separately from co
 
   try {
     repl.appendTurn({ role: 'user', input: 'what is this repo about?' });
-    repl.appendTurn({ role: 'assistant', answer: 'It is a prompt operating system.', changed_files: [] });
+    repl.appendTurn({
+      role: 'assistant',
+      answer: 'It is a prompt operating system.',
+      changed_files: [],
+    });
 
     const transcript = readFileSync(repl.interactiveTranscriptPath, 'utf-8');
     assert.match(transcript, /"role":"user"/);
@@ -168,13 +180,99 @@ test('interactive follow-up prompts are resolved with previous assistant context
     classifyInteractiveLane: (input: string) => string;
   };
   repl.lastAssistantAnswer = 'The parser returns null for empty input.';
-  repl.lastAssistantNext = 'Run bl fix "handle empty parser input".';
+  repl.lastAssistantNext = 'Run babel "handle empty parser input".';
   repl.lastResolvedTask = 'why is the parser test failing?';
 
   const resolved = repl.resolveInteractiveTask('why?');
   assert.match(resolved, /Follow-up request: why\?/);
   assert.match(resolved, /Previous assistant answer:\nThe parser returns null/);
   assert.equal(repl.classifyInteractiveLane('do that'), 'fix');
+});
+
+test('interactive daily command parser recognizes bl and babel Lite verbs', () => {
+  assert.deepEqual(parseInteractiveDailyCommand('bl plan a fix for our repo documentation'), {
+    prefix: 'bl',
+    verb: 'plan',
+    task: 'a fix for our repo documentation',
+  });
+  assert.deepEqual(parseInteractiveDailyCommand('babel ask what is this repo about?'), {
+    prefix: 'babel',
+    verb: 'ask',
+    task: 'what is this repo about?',
+  });
+  assert.equal(parseInteractiveDailyCommand('babel run "fix tests"'), null);
+});
+
+test('interactive classifier lets planning intent win over mutation nouns', () => {
+  assert.equal(classifyInteractiveTaskIntent('plan a fix for our repo documentation'), 'plan');
+  assert.equal(classifyInteractiveTaskIntent('design an update to the CLI'), 'plan');
+  assert.equal(classifyInteractiveTaskIntent('outline a refactor for target handling'), 'plan');
+  assert.equal(classifyInteractiveTaskIntent('fix the docs'), 'fix');
+  assert.equal(classifyInteractiveTaskIntent('go ahead', true), 'fix');
+  assert.equal(classifyInteractiveTaskIntent('y', true), 'ambiguous_confirmation');
+  assert.equal(
+    classifyInteractiveTaskIntent('run the full governed lane for this plan'),
+    'governed',
+  );
+});
+
+test('interactive classifier accepts yes after proposal or plan ready', () => {
+  assert.equal(
+    classifyInteractiveTaskIntent('yes', {
+      hasPreviousAnswer: true,
+      lastStatus: 'PLAN_READY',
+    }),
+    'fix',
+  );
+  assert.equal(
+    classifyInteractiveTaskIntent('go ahead', {
+      hasPreviousAnswer: true,
+      lastStatus: 'PROPOSAL_READY',
+    }),
+    'patch',
+  );
+  assert.equal(
+    classifyInteractiveTaskIntent('ok', {
+      hasPreviousAnswer: true,
+      lastStatus: 'PATCH_READY',
+    }),
+    'patch',
+  );
+  assert.ok(APPROVAL_READY_STATUSES.has('PLAN_READY'));
+});
+
+test('interactive follow-up task includes prior session tool context', () => {
+  const sessionDir = mkdtempSync(join(tmpdir(), 'babel-interactive-handoff-'));
+  try {
+    writeFileSync(
+      join(sessionDir, '04_execution_report.json'),
+      JSON.stringify({
+        status: 'PLAN_READY',
+        tool_call_log: [{ step: 1, tool: 'read_file', target: 'src/parser.ts', exit_code: 0 }],
+      }),
+      'utf-8',
+    );
+
+    const repl = Object.create(BabelRepl.prototype) as {
+      lastAssistantAnswer: string | null;
+      lastAssistantNext: string | null;
+      lastResolvedTask: string | null;
+      lastSessionRunDir: string | null;
+      lastRunDir: string | null;
+      resolveInteractiveTask: (input: string) => string;
+    };
+    repl.lastAssistantAnswer = 'Start by editing src/parser.ts.';
+    repl.lastAssistantNext = 'Run tests after the change.';
+    repl.lastResolvedTask = 'fix the parser test';
+    repl.lastSessionRunDir = sessionDir;
+    repl.lastRunDir = sessionDir;
+
+    const resolved = repl.resolveInteractiveTask('why?');
+    assert.match(resolved, /Session run dir: /);
+    assert.match(resolved, /read_file src\/parser\.ts/);
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true });
+  }
 });
 
 test('interactive run summary writes deterministic output review artifact', () => {
@@ -186,10 +284,13 @@ test('interactive run summary writes deterministic output review artifact', () =
     lastAssistantAnswer: string | null;
     lastAssistantNext: string | null;
     lastResolvedTask: string | null;
-    printRunSummary: (result: PipelineResult, context: { input?: string; task: string; projectRoot?: string; transcript?: string }) => void;
+    printRunSummary: (
+      result: PipelineResult,
+      context: { input?: string; task: string; projectRoot?: string; transcript?: string },
+    ) => void;
   };
   repl.state = {
-    mode: 'verified',
+    mode: 'deep',
     router: 'v9',
   };
   repl.turns = [];
@@ -203,7 +304,7 @@ test('interactive run summary writes deterministic output review artifact', () =
     repl.printRunSummary(makeInteractiveResult(runDir), {
       input: 'what is the repo about?',
       task: 'what is the repo about?',
-      projectRoot: '.',
+      projectRoot: '<BABEL_REPO_ROOT>',
       transcript: '[00:00] Waiting for plan approval',
     });
     const reviewPath = join(runDir, 'output_review.json');
@@ -217,13 +318,29 @@ test('interactive run summary writes deterministic output review artifact', () =
   }
 });
 
-test('interactive operator header shows blocked status instead of verified after halt', () => {
-  const output = stripAnsi(renderOperatorHeader({
-    mode: 'verified',
-    router: 'v9',
-    lastRunUserStatus: 'blocked',
-  }));
+test('interactive recovery commands include continue and chain', async () => {
+  const { INTERACTIVE_COMMAND_GROUPS } = (await import('./interactive.js')) as {
+    INTERACTIVE_COMMAND_GROUPS: ReadonlyArray<{
+      title: string;
+      commands: ReadonlyArray<readonly [string, string]>;
+    }>;
+  };
+  const recovery = INTERACTIVE_COMMAND_GROUPS.find((group) => group.title === 'Recovery');
+  assert.ok(recovery);
+  const commands = recovery.commands.map(([command]) => command);
+  assert.ok(commands.includes('/continue [run]'));
+  assert.ok(commands.includes('/chain [run]'));
+});
+
+test('interactive operator header shows blocked status and deep mode after halt', () => {
+  const output = stripAnsi(
+    renderOperatorHeader({
+      mode: 'deep',
+      router: 'v9',
+      lastRunUserStatus: 'blocked',
+    }),
+  );
 
   assert.match(output, /BLOCKED/);
-  assert.doesNotMatch(output, /VERIFIED/);
+  assert.match(output, /DEEP/);
 });

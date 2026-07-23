@@ -12,7 +12,7 @@ import {
 test('execution profile names normalize common spelling variants', () => {
   assert.equal(normalizeExecutionProfile('dev-local'), 'dev_local');
   assert.equal(normalizeExecutionProfile('BENCHMARK_CONTAINER'), 'benchmark_container');
-  assert.equal(normalizeExecutionProfile('opencalw-manager'), 'workspace_manager');
+  assert.equal(normalizeExecutionProfile('opencalw-manager'), 'opencalw_manager');
   assert.equal(normalizeExecutionProfile('nope'), null);
 });
 
@@ -43,13 +43,13 @@ test('read_only_audit constrains mutating executor tools', () => {
   assert.ok(policy.disallowedTools.includes('test_run'));
 });
 
-test('workspace_manager allows local verification commands and denies web tools', () => {
-  const additions = getExecutionProfileCommandAdditions('workspace_manager');
+test('opencalw_manager allows local verification commands and denies web tools', () => {
+  const additions = getExecutionProfileCommandAdditions('opencalw_manager');
   assert.ok(additions.includes('cargo'));
   assert.ok(additions.includes('dotnet'));
   assert.ok(additions.includes('go'));
   assert.ok(additions.includes('mvn'));
-  const policy = getExecutionProfileToolPolicy('workspace_manager');
+  const policy = getExecutionProfileToolPolicy('opencalw_manager');
   assert.ok(policy.disallowedTools.includes('web_search'));
   assert.ok(policy.disallowedTools.includes('web_fetch'));
 });

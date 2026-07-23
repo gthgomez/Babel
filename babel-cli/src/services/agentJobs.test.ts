@@ -14,18 +14,20 @@ import {
   writeAgentJobReport,
 } from './agentJobs.js';
 
-function withJobState<T>(run: (state: { workspace: string; scratch: string; registryPath: string }) => T): T {
+function withJobState<T>(
+  run: (state: { workspace: string; scratch: string; registryPath: string }) => T,
+): T {
   const root = mkdtempSync(join(tmpdir(), 'babel-jobs-'));
   const workspace = join(root, 'workspace');
   const scratch = join(workspace, 'scratch');
   mkdirSync(scratch, { recursive: true });
 
   const previousWorkspace = process.env['BABEL_WORKSPACE_ROOT'];
-  const previousRoots = process.env['BABEL_WORKSPACE_APPROVED_ROOTS'];
+  const previousRoots = process.env['BABEL_OPENCLAW_APPROVED_ROOTS'];
   const previousApprovals = process.env['BABEL_APPROVAL_QUEUE_PATH'];
   const previousJobs = process.env['BABEL_JOBS_REGISTRY_PATH'];
   process.env['BABEL_WORKSPACE_ROOT'] = workspace;
-  process.env['BABEL_WORKSPACE_APPROVED_ROOTS'] = scratch;
+  process.env['BABEL_OPENCLAW_APPROVED_ROOTS'] = scratch;
   process.env['BABEL_APPROVAL_QUEUE_PATH'] = join(root, 'approvals.json');
   process.env['BABEL_JOBS_REGISTRY_PATH'] = join(root, 'jobs.json');
 
@@ -38,8 +40,8 @@ function withJobState<T>(run: (state: { workspace: string; scratch: string; regi
   } finally {
     if (previousWorkspace === undefined) delete process.env['BABEL_WORKSPACE_ROOT'];
     else process.env['BABEL_WORKSPACE_ROOT'] = previousWorkspace;
-    if (previousRoots === undefined) delete process.env['BABEL_WORKSPACE_APPROVED_ROOTS'];
-    else process.env['BABEL_WORKSPACE_APPROVED_ROOTS'] = previousRoots;
+    if (previousRoots === undefined) delete process.env['BABEL_OPENCLAW_APPROVED_ROOTS'];
+    else process.env['BABEL_OPENCLAW_APPROVED_ROOTS'] = previousRoots;
     if (previousApprovals === undefined) delete process.env['BABEL_APPROVAL_QUEUE_PATH'];
     else process.env['BABEL_APPROVAL_QUEUE_PATH'] = previousApprovals;
     if (previousJobs === undefined) delete process.env['BABEL_JOBS_REGISTRY_PATH'];

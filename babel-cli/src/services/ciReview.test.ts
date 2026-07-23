@@ -43,8 +43,18 @@ test('runCiReview writes deterministic evidence and flags source changes without
   assert.equal(report.delivery_policy.read_only, true);
   assert.equal(report.delivery_policy.remote_side_effects, false);
   assert.equal(report.summary.changed_file_count, 2);
-  assert.equal(report.changed_files.some((file) => file.path === 'README.md' && file.sources.includes('unstaged')), true);
-  assert.equal(report.changed_files.some((file) => file.path === 'src/feature.ts' && file.sources.includes('untracked')), true);
+  assert.equal(
+    report.changed_files.some(
+      (file) => file.path === 'README.md' && file.sources.includes('unstaged'),
+    ),
+    true,
+  );
+  assert.equal(
+    report.changed_files.some(
+      (file) => file.path === 'src/feature.ts' && file.sources.includes('untracked'),
+    ),
+    true,
+  );
   assert.equal(report.test_signals[0]?.code, 'source_without_test_change');
   assert.match(report.artifact_path, /ci-review-20260424T120000Z\.json$/);
 });

@@ -38,8 +38,8 @@ export function detectCommandOnPath(command: string): CommandRuntimeStatus {
   if (locatorResult.status === 0) {
     const firstMatch = String(locatorResult.stdout ?? '')
       .split(/\r?\n/)
-      .map(line => line.trim())
-      .find(line => line.length > 0);
+      .map((line) => line.trim())
+      .find((line) => line.length > 0);
     if (firstMatch) {
       return {
         available: true,
@@ -61,12 +61,10 @@ export function detectCommandOnPath(command: string): CommandRuntimeStatus {
 }
 
 export function detectGradleInstallCandidate(): string | null {
-  const roots = process.platform === 'win32'
-    ? [
-        'C:\\Program Files\\Gradle',
-        'C:\\Program Files (x86)\\Gradle',
-      ]
-    : ['/opt/gradle', '/usr/local/gradle'];
+  const roots =
+    process.platform === 'win32'
+      ? ['C:\\Program Files\\Gradle', 'C:\\Program Files (x86)\\Gradle']
+      : ['/opt/gradle', '/usr/local/gradle'];
 
   const candidates: string[] = [];
   for (const root of roots) {
@@ -75,14 +73,11 @@ export function detectGradleInstallCandidate(): string | null {
     }
     try {
       const entries = readdirSync(root, { withFileTypes: true })
-        .filter(entry => entry.isDirectory())
-        .map(entry => join(
-          root,
-          entry.name,
-          'bin',
-          process.platform === 'win32' ? 'gradle.bat' : 'gradle',
-        ))
-        .filter(candidate => existsSync(candidate))
+        .filter((entry) => entry.isDirectory())
+        .map((entry) =>
+          join(root, entry.name, 'bin', process.platform === 'win32' ? 'gradle.bat' : 'gradle'),
+        )
+        .filter((candidate) => existsSync(candidate))
         .sort((left, right) => right.localeCompare(left));
       candidates.push(...entries);
     } catch {
@@ -99,10 +94,10 @@ export function prependProcessPath(pathEntry: string): void {
   const normalizedEntry = resolve(pathEntry);
   const existing = currentPath
     .split(delimiter)
-    .map(entry => entry.trim())
-    .filter(entry => entry.length > 0);
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
 
-  const alreadyPresent = existing.some(entry =>
+  const alreadyPresent = existing.some((entry) =>
     process.platform === 'win32'
       ? entry.toLowerCase() === normalizedEntry.toLowerCase()
       : entry === normalizedEntry,
@@ -117,17 +112,13 @@ export function prependProcessPath(pathEntry: string): void {
 export function parseGradleDistributionUrl(propertiesContent: string): string | null {
   const match = String(propertiesContent ?? '')
     .split(/\r?\n/)
-    .map(line => line.trim())
-    .find(line => line.startsWith('distributionUrl='));
+    .map((line) => line.trim())
+    .find((line) => line.startsWith('distributionUrl='));
   if (!match) {
     return null;
   }
 
-  return match
-    .slice('distributionUrl='.length)
-    .trim()
-    .replace(/\\:/g, ':')
-    .replace(/\\=/g, '=');
+  return match.slice('distributionUrl='.length).trim().replace(/\\:/g, ':').replace(/\\=/g, '=');
 }
 
 export function detectGradleBinaryFromExtractedRoot(extractedRoot: string): string | null {
@@ -143,9 +134,9 @@ export function detectGradleBinaryFromExtractedRoot(extractedRoot: string): stri
 
   try {
     const entries = readdirSync(extractedRoot, { withFileTypes: true })
-      .filter(entry => entry.isDirectory())
-      .map(entry => join(extractedRoot, entry.name, 'bin', binaryName))
-      .filter(candidate => existsSync(candidate))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(extractedRoot, entry.name, 'bin', binaryName))
+      .filter((candidate) => existsSync(candidate))
       .sort((left, right) => right.localeCompare(left));
     return entries[0] ?? null;
   } catch {
@@ -213,7 +204,8 @@ export function detectJavaRuntimeStatus(): JavaRuntimeStatus {
   return {
     available: false,
     source: 'missing',
-    summary: 'Java is NOT available in the current executor environment. JAVA_HOME is unset or invalid and no java executable is on PATH.',
+    summary:
+      'Java is NOT available in the current executor environment. JAVA_HOME is unset or invalid and no java executable is on PATH.',
   };
 }
 
@@ -224,8 +216,8 @@ function listDirectoryNamesIfPresent(dirPath: string): string[] {
 
   try {
     return readdirSync(dirPath, { withFileTypes: true })
-      .filter(entry => entry.isDirectory())
-      .map(entry => entry.name)
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
       .sort((left, right) => left.localeCompare(right));
   } catch {
     return [];
@@ -238,9 +230,7 @@ export function detectAndroidSdkStatus(): AndroidSdkStatus {
     { source: 'android_sdk_root', root: process.env.ANDROID_SDK_ROOT?.trim() ?? null },
     {
       source: 'local_default',
-      root: process.env.LOCALAPPDATA
-        ? join(process.env.LOCALAPPDATA, 'Android', 'Sdk')
-        : null,
+      root: process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'Android', 'Sdk') : null,
     },
   ];
 
@@ -253,10 +243,14 @@ export function detectAndroidSdkStatus(): AndroidSdkStatus {
     const buildTools = listDirectoryNamesIfPresent(join(candidate.root, 'build-tools'));
     const platformToolsDir = join(candidate.root, 'platform-tools');
     const toolsBinDir = join(candidate.root, 'tools', 'bin');
-    const adbPath = existsSync(join(platformToolsDir, process.platform === 'win32' ? 'adb.exe' : 'adb'))
+    const adbPath = existsSync(
+      join(platformToolsDir, process.platform === 'win32' ? 'adb.exe' : 'adb'),
+    )
       ? join(platformToolsDir, process.platform === 'win32' ? 'adb.exe' : 'adb')
       : null;
-    const sdkManagerPath = existsSync(join(toolsBinDir, process.platform === 'win32' ? 'sdkmanager.bat' : 'sdkmanager'))
+    const sdkManagerPath = existsSync(
+      join(toolsBinDir, process.platform === 'win32' ? 'sdkmanager.bat' : 'sdkmanager'),
+    )
       ? join(toolsBinDir, process.platform === 'win32' ? 'sdkmanager.bat' : 'sdkmanager')
       : null;
 
@@ -282,7 +276,8 @@ export function detectAndroidSdkStatus(): AndroidSdkStatus {
     adbPath: null,
     platforms: [],
     buildTools: [],
-    summary: 'Android SDK is NOT available in the executor environment. ANDROID_HOME / ANDROID_SDK_ROOT are unset or invalid and no usable local SDK was discovered.',
+    summary:
+      'Android SDK is NOT available in the executor environment. ANDROID_HOME / ANDROID_SDK_ROOT are unset or invalid and no usable local SDK was discovered.',
   };
 }
 
@@ -330,7 +325,9 @@ export function isGradleProvisioningStep(step: SwePlan['minimal_action_set'][num
   return /\b(winget|choco|scoop)\b.*\bgradle\b/i.test(target);
 }
 
-export function shouldUseDeterministicGradleBootstrapLane(projectRoot: string | undefined): boolean {
+export function shouldUseDeterministicGradleBootstrapLane(
+  projectRoot: string | undefined,
+): boolean {
   if (!projectRoot || !existsSync(projectRoot)) {
     return false;
   }
@@ -347,7 +344,9 @@ export function shouldUseDeterministicGradleBootstrapLane(projectRoot: string | 
   );
 }
 
-export function shouldUseDeterministicAndroidSdkBootstrapLane(projectRoot: string | undefined): boolean {
+export function shouldUseDeterministicAndroidSdkBootstrapLane(
+  projectRoot: string | undefined,
+): boolean {
   if (!projectRoot || !existsSync(projectRoot)) {
     return false;
   }
@@ -370,7 +369,9 @@ export function isJavaProvisioningStep(step: SwePlan['minimal_action_set'][numbe
   }
 
   return (
-    /\b(winget|choco|scoop)\b.*\b(jdk|java|temurin|openjdk|corretto|microsoft-openjdk)\b/i.test(target) ||
+    /\b(winget|choco|scoop)\b.*\b(jdk|java|temurin|openjdk|corretto|microsoft-openjdk)\b/i.test(
+      target,
+    ) ||
     /\b(setx|export)\b[^\r\n]*\bJAVA_HOME\b/i.test(target) ||
     /\bJAVA_HOME\s*=/.test(target) ||
     /\bgradle\s+wrapper\b/i.test(target)

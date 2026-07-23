@@ -1,9 +1,5 @@
 import type { SwePlan } from '../schemas/agentContracts.js';
-import {
-  getWorkspaceLockPath,
-  isLockActive,
-  readLock,
-} from '../utils/locking.js';
+import { getWorkspaceLockPath, isLockActive, readLock } from '../utils/locking.js';
 
 /**
  * Checks if any planned mutating actions conflict with existing workspace locks.

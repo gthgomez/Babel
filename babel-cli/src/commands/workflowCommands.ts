@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import * as readline from 'node:readline/promises';
 
 import { Command } from 'commander';
 
@@ -14,7 +15,10 @@ import {
   type ExecutionProfileName,
 } from '../config/executionProfiles.js';
 import { buildSmokeFixtures } from '../services/smokeFixtures.js';
-import { resolveApprovedWorkspacePath, verifyWorkspaceProject } from '../services/workspaceManager.js';
+import {
+  resolveApprovedWorkspacePath,
+  verifyWorkspaceProject,
+} from '../services/workspaceManager.js';
 import {
   isModelEscalationApproved,
   requestModelEscalationApproval,
@@ -27,7 +31,6 @@ import {
 } from '../services/terminalStatus.js';
 import {
   BABEL_ROOT,
-  VALID_PROJECTS,
   VALID_MODEL_TIERS,
   VALID_MODES,
   VALID_ORCHESTRATORS,
@@ -54,6 +57,7 @@ import {
   buildAskResultPayload,
   buildLiteResultPayload,
   buildRunResultPayload,
+  formatHumanOutputReviewNote,
   formatLiteResultHuman,
   formatRunResultHuman,
   getSchemaRetrySummary,
@@ -65,7 +69,16 @@ import {
   writeJson,
   writeNdjson,
 } from '../cli/structuredOutput.js';
-import { printBanner, validateRuntimeEnvForCommand } from './coreCommands.js';
+import { validateRuntimeEnvForCommand } from './coreCommands.js';
+import { applyRunCommandEnvFlags } from './runCommandEnv.js';
+import {
+  assertEnvFileActiveForPipelineCommand,
+  formatEnvFileInactiveMessage,
+  getEnvFileKeysNotActiveInProcess,
+  isStrictEnvMode,
+} from '../config/envBootstrap.js';
+import { writeTextRunPrelude } from '../ui/runPrelude.js';
+import { runCliChatTask } from '../interactive/execution/chatCore.js';
 import { runAskAnswerPath } from '../services/askAnswer.js';
 import { buildRecoveryAssessment, formatRecoveryAssessmentHuman } from '../services/recovery.js';
 import {
@@ -82,6 +95,7 @@ import {
 import { formatBabelFullHuman, runBabelFullPlan } from '../services/babelFull.js';
 import {
   liteVerbForSelectedLane,
+  resolveDailyProfile,
   routeLiteOrFull,
   type LiteFullAgentsMode,
   type LiteFullRouteDecision,
@@ -97,9 +111,290 @@ import {
   snapshotLiteOfflineEnv,
 } from '../agent/provider/textProviderLane.js';
 import { resolveAgentTarget } from '../services/targetResolver.js';
+import { createLiteFixProgress } from '../ui/liteFixProgress.js';
+import { runLiteSessionWithSchemaRecovery } from '../services/liteSessionRunner.js';
+import { registerDogfoodCommands } from './dogfoodCommands.js';
+import { loadPlanHandoff } from '../agent/planHandoff.js';
+import { runPlanReviewLane } from '../agent/lanes/planReviewLane.js';
+import { resolveFuzzyWorkspaceDirectory } from '../services/pathScanner.js';
 
 export { buildSmallFixLitePayload, normalizeSmallFixProvider, resolveSmallFixProviderForCommand };
-export const READ_ONLY_LITE_TOOLS = ['directory_list', 'file_read', 'semantic_search', 'web_search', 'web_fetch'];
+export const READ_ONLY_LITE_TOOLS = [
+  'directory_list',
+  'file_read',
+  'semantic_search',
+  'grep',
+  'glob',
+  'web_search',
+  'web_fetch',
+];
+
+interface DeepCommandOptions {
+  project?: string;
+  projectRoot?: string;
+  model?: string;
+  modelTier?: string;
+  allowExpensive?: boolean;
+  showModelPolicy?: boolean;
+  executionProfile?: string;
+  json?: boolean;
+  ask?: boolean;
+}
+
+async function promptPlanApproval(task: string, autoApprove = false): Promise<boolean> {
+  if (autoApprove) {
+    process.stderr.write(`Auto-approved via --approve: ${task}\n`);
+    return true;
+  }
+  if (!process.stdin.isTTY || !process.stderr.isTTY) {
+    return false;
+  }
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stderr,
+  });
+  try {
+    process.stderr.write('\n');
+    process.stderr.write('Approve this plan and apply it now? [y/N] ');
+    const answer = (await rl.question('')).trim().toLowerCase();
+    if (/^(?:y|yes|approve|approved|apply|go)$/i.test(answer)) {
+      process.stderr.write(`Applying approved task: ${task}\n`);
+      return true;
+    }
+    process.stderr.write('Kept as plan-only. No files were changed.\n');
+    return false;
+  } finally {
+    rl.close();
+  }
+}
+
+async function runDeepCommand(taskParts: string[], options: DeepCommandOptions): Promise<void> {
+  const task = normalizeLiteTask(taskParts);
+  if (!task) {
+    throw new Error('babel deep requires task text.');
+  }
+
+  if (options.ask === true) {
+    process.env['BABEL_ASK'] = 'true';
+  }
+
+  validateRuntimeEnvForCommand({ json: options.json === true });
+  const normalizedModel = normalizeModelName(options.model);
+  const normalizedModelTier =
+    options.modelTier !== undefined ? options.modelTier.trim().toLowerCase() : undefined;
+  const executionProfile = normalizeExecutionProfile(options.executionProfile ?? 'safe_repo');
+  const resolvedProject = options.project ?? detectProjectFromCwd() ?? undefined;
+
+  if (executionProfile === null) {
+    throw new Error(
+      `Invalid execution profile "${options.executionProfile}". Valid values: ${getExecutionProfileHelpText().replace(/ \| /g, ', ')}`,
+    );
+  }
+  if (options.model !== undefined && normalizedModel === undefined) {
+    throw new Error(
+      `Invalid model "${options.model}". Valid values: ${getAvailableModels()
+        .map((m) => m.key)
+        .join(', ')} (case-insensitive)`,
+    );
+  }
+  if (
+    normalizedModelTier !== undefined &&
+    !VALID_MODEL_TIERS.includes(normalizedModelTier as (typeof VALID_MODEL_TIERS)[number])
+  ) {
+    throw new Error(
+      `Invalid model tier "${options.modelTier}". Valid values: ${VALID_MODEL_TIERS.join(', ')}`,
+    );
+  }
+
+  let resolvedProjectRoot: string | undefined;
+  let resolvedWorkspaceRoot: string | null = null;
+  let resolvedAllowedRoots: string[] = [];
+  if (options.projectRoot !== undefined) {
+    const resolved = resolveApprovedWorkspacePath(options.projectRoot);
+    resolvedProjectRoot = resolved.path;
+    resolvedAllowedRoots = resolved.approvedRoots;
+  } else {
+    const target = resolveAgentTarget({
+      ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
+    });
+    resolvedProjectRoot = target.targetRoot;
+    resolvedWorkspaceRoot = target.workspaceRoot;
+  }
+
+  if (resolvedProjectRoot !== undefined && !existsSync(resolvedProjectRoot)) {
+    const message = `Resolved target root does not exist: ${resolvedProjectRoot}`;
+    if (options.json === true) {
+      writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+    } else {
+      process.stdout.write(
+        `${formatRunResultHuman({
+          ...buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
+          command: 'deep',
+          task,
+          project: resolvedProject ?? null,
+          run_dir: null,
+          changed_files: [],
+          verification: {
+            status: 'failed',
+            commands: [],
+            skipped_reason: message,
+          },
+          scope: {
+            project_root: resolvedProjectRoot,
+            allowed_write_paths: [],
+            refused_paths: [resolvedProjectRoot],
+          },
+          checkpoint: {
+            required: false,
+            available: false,
+            restore_command: null,
+            inspect_command: null,
+          },
+          evidence: {
+            run_dir: null,
+            support_path: null,
+            artifacts: [],
+          },
+        })}\n`,
+      );
+    }
+    process.exitCode = 1;
+    return;
+  }
+
+  const effectiveAllowExpensive = resolveEffectiveAllowExpensive({
+    task,
+    ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
+    ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
+    ...(resolvedProjectRoot !== undefined ? { projectRoot: resolvedProjectRoot } : {}),
+    allowExpensive: options.allowExpensive === true,
+    outputFormat: options.json === true ? 'json' : 'text',
+    manual: false,
+  });
+
+  if (options.json !== true) {
+    writeTextRunPrelude({
+      task,
+      mode: 'deep',
+      ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
+      ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
+      ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
+      orchestrator: process.env['BABEL_ORCHESTRATOR_VERSION'] ?? 'v9',
+      executionProfile,
+      ...(resolvedProjectRoot !== undefined ? { projectRoot: resolvedProjectRoot } : {}),
+    });
+  }
+
+  const eventBus = new BabelEventBus();
+  const runOutputContext = {
+    task,
+    mode: 'deep' as ValidMode,
+    ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
+    ...(normalizedModel !== undefined ? { requestedModel: normalizedModel } : {}),
+    ...(normalizedModelTier !== undefined ? { requestedModelTier: normalizedModelTier } : {}),
+    orchestrator: process.env['BABEL_ORCHESTRATOR_VERSION'] ?? 'v9',
+    allowedTools: [],
+    disallowedTools: [],
+    executionProfile,
+    ...(resolvedProjectRoot !== undefined ? { projectRoot: resolvedProjectRoot } : {}),
+  };
+  const liveRenderer =
+    options.json === true ? null : createLiveRunRenderer(eventBus, runOutputContext);
+  liveRenderer?.start();
+
+  try {
+    const result = await withExecutionProfileEnv(executionProfile, [], [], () =>
+      withProjectRootEnv(resolvedProjectRoot, resolvedAllowedRoots, () =>
+        withMutedConsole(() =>
+          runBabelPipeline(task, {
+            ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
+            ...(normalizedModel !== undefined ? { modelOverride: normalizedModel } : {}),
+            ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
+            ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
+            ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
+            mode: 'deep',
+            executionProfile,
+            eventBus,
+          }),
+        ),
+      ),
+    );
+    liveRenderer?.stop();
+
+    const completionVerification = buildCompletionVerificationForRun({
+      pipelineStatus: result.status,
+      executionProfile,
+      ...(resolvedProjectRoot !== undefined ? { projectRoot: resolvedProjectRoot } : {}),
+    });
+    const payload = buildRunResultPayload(result, runOutputContext);
+    payload['command'] = 'deep';
+    payload['completion_verification'] = completionVerification;
+    if (completionVerification.status === 'fail') {
+      payload['status'] = 'VERIFIER_FAILED';
+    }
+
+    if (options.json === true) {
+      writeJson(payload);
+    } else {
+      const human = formatRunResultHuman(payload);
+      const review = writeHumanSummaryArtifact(
+        result.runDir,
+        human,
+        [
+          typeof liveRenderer?.getTranscript === 'function' ? liveRenderer.getTranscript() : '',
+          human,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      );
+      process.stdout.write(`${human}\n`);
+      const note = formatHumanOutputReviewNote(review);
+      if (note) {
+        process.stdout.write(`\n${note}\n`);
+      }
+    }
+
+    if (!isSuccessfulRunStatus(result.status) || completionVerification.status === 'fail') {
+      process.exitCode = 1;
+    }
+  } catch (err: unknown) {
+    liveRenderer?.fail(err);
+    const message = err instanceof Error ? err.message : String(err);
+    if (options.json === true) {
+      writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+    } else {
+      process.stdout.write(
+        `${formatRunResultHuman({
+          ...buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
+          command: 'deep',
+          task,
+          project: resolvedProject ?? null,
+          run_dir: null,
+          changed_files: [],
+          verification: {
+            status: 'failed',
+            commands: [],
+            skipped_reason: null,
+          },
+          checkpoint: {
+            required: false,
+            available: false,
+            restore_command: null,
+            inspect_command: null,
+          },
+          evidence: {
+            run_dir: null,
+            support_path: null,
+            artifacts: [],
+          },
+        })}\n`,
+      );
+    }
+    process.exitCode = 1;
+  }
+}
+
+export { shouldRecoverLitePlanSchemaFailure } from '../services/liteSessionRunner.js';
 
 function preflightRequestedModelPolicy(
   model: string,
@@ -114,7 +409,9 @@ function preflightRequestedModelPolicy(
 }
 
 function isModelEscalationPolicyError(message: string): boolean {
-  return /expensive or blocked by policy|blocked by policy|explicit opt-in|\[ENTERPRISE_POLICY\]/i.test(message);
+  return /expensive or blocked by policy|blocked by policy|explicit opt-in|\[ENTERPRISE_POLICY\]/i.test(
+    message,
+  );
 }
 
 function printModelEscalationApprovalRequired(options: {
@@ -140,7 +437,8 @@ function printModelEscalationApprovalRequired(options: {
       model: options.model ?? null,
       model_tier: options.modelTier ?? null,
     },
-    boundary: 'This selected model route is expensive or blocked by policy, so Babel needs one explicit approval before it runs.',
+    boundary:
+      'This selected model route is expensive or blocked by policy, so Babel needs one explicit approval before it runs.',
     may_send: [
       'task text',
       'selected Babel prompt layers',
@@ -184,12 +482,14 @@ function resolveEffectiveAllowExpensive(options: {
     return true;
   }
 
-  if (isModelEscalationApproved({
-    task: options.task,
-    model: options.model ?? null,
-    modelTier: options.modelTier ?? null,
-    projectRoot: options.projectRoot ?? null,
-  })) {
+  if (
+    isModelEscalationApproved({
+      task: options.task,
+      model: options.model ?? null,
+      modelTier: options.modelTier ?? null,
+      projectRoot: options.projectRoot ?? null,
+    })
+  ) {
     return true;
   }
 
@@ -201,11 +501,12 @@ function buildCompletionVerificationForRun(input: {
   executionProfile: ExecutionProfileName;
   projectRoot?: string;
 }) {
-  const verification = input.pipelineStatus === 'COMPLETE' &&
-    input.executionProfile === 'workspace_manager' &&
+  const verification =
+    input.pipelineStatus === 'COMPLETE' &&
+    input.executionProfile === 'opencalw_manager' &&
     input.projectRoot
-    ? verifyWorkspaceProject(input.projectRoot)
-    : null;
+      ? verifyWorkspaceProject(input.projectRoot)
+      : null;
 
   return evaluateCompletionVerification({
     pipelineStatus: input.pipelineStatus,
@@ -220,8 +521,12 @@ function buildRunCommandFailurePayload(input: {
   message: string;
 }): Record<string, unknown> {
   const recovery = buildRecoveryAssessment({ run: 'latest' });
-  const executionReport = recovery.available_artifacts.find(artifact => artifact.key === 'execution_report')?.path ?? null;
-  const failureCapsule = recovery.available_artifacts.find(artifact => artifact.key === 'failure_capsule')?.path ?? null;
+  const executionReport =
+    recovery.available_artifacts.find((artifact) => artifact.key === 'execution_report')?.path ??
+    null;
+  const failureCapsule =
+    recovery.available_artifacts.find((artifact) => artifact.key === 'failure_capsule')?.path ??
+    null;
   const payload: Record<string, unknown> = {
     status: input.status,
     error: input.message,
@@ -241,7 +546,12 @@ function buildRunCommandFailurePayload(input: {
       missing_artifacts: recovery.missing_artifacts,
     },
   };
-  if (recovery.status === 'CONTINUE_READY' && recovery.run_dir && recovery.classification !== null && (executionReport || failureCapsule)) {
+  if (
+    recovery.status === 'CONTINUE_READY' &&
+    recovery.run_dir &&
+    recovery.classification !== null &&
+    (executionReport || failureCapsule)
+  ) {
     payload['status'] = recovery.retryable ? 'FAILED_RETRYABLE' : input.status;
     payload['reason'] = recovery.reason;
     payload['retryable'] = recovery.retryable;
@@ -255,25 +565,34 @@ function buildRunCommandFailurePayload(input: {
 }
 
 function isSuccessfulRunStatus(status: string): boolean {
-  return status === 'COMPLETE' ||
+  return (
+    status === 'COMPLETE' ||
     status === 'COMPLETE_NO_MODIFICATION' ||
-    status === 'READ_ONLY_NO_MODIFICATION';
+    status === 'READ_ONLY_NO_MODIFICATION'
+  );
 }
 
-const READ_ONLY_RUN_TOOLS = ['directory_list', 'file_read', 'semantic_search', 'web_search', 'web_fetch'];
+const READ_ONLY_RUN_TOOLS = [
+  'directory_list',
+  'file_read',
+  'semantic_search',
+  'grep',
+  'glob',
+  'web_search',
+  'web_fetch',
+];
 
 function isExplicitModeArg(): boolean {
-  return process.argv.some(arg => arg === '--mode' || arg.startsWith('--mode='));
+  return process.argv.some((arg) => arg === '--mode' || arg.startsWith('--mode='));
 }
 
 function isSimpleReadOnlyQuestion(task: string): boolean {
-  return /\?/.test(task) ||
-    /\b(what is|what's|explain|summarize|describe|where is|why is|how does|list|show me|inspect|audit)\b/i.test(task);
-}
-
-function isProviderSchemaFailure(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /zod validation|invalid json|schema|parse/i.test(message);
+  return (
+    /\?/.test(task) ||
+    /\b(what is|what's|explain|summarize|describe|where is|why is|how does|list|show me|inspect|audit)\b/i.test(
+      task,
+    )
+  );
 }
 
 export function shouldUseReadOnlyRunQuestionPath(input: {
@@ -283,11 +602,13 @@ export function shouldUseReadOnlyRunQuestionPath(input: {
   hasDisallowedTools: boolean;
   hasLock: boolean;
 }): boolean {
-  return !input.explicitMode &&
+  return (
+    !input.explicitMode &&
     isSimpleReadOnlyQuestion(input.task) &&
     !input.hasAllowedTools &&
     !input.hasDisallowedTools &&
-    !input.hasLock;
+    !input.hasLock
+  );
 }
 
 async function runReadOnlyQuestionAsRun(input: {
@@ -317,9 +638,10 @@ async function runReadOnlyQuestionAsRun(input: {
     projectRoot: input.projectRoot,
     runDir: ask.runDir,
     usageSummary: ask.usageSummary,
+    sessionLoopSteps: ask.sessionLoopSteps,
   }) as unknown as Record<string, unknown>;
   payload['command'] = 'run';
-  payload['mode'] = 'direct';
+  payload['mode'] = 'chat';
   payload['checks'] = ['read-only answer path'];
   payload['tool_policy'] = {
     allowed_tools: READ_ONLY_RUN_TOOLS,
@@ -331,7 +653,7 @@ async function runReadOnlyQuestionAsRun(input: {
     requested_model_tier: input.modelTier ?? null,
     target_project: input.project ?? null,
     task_category: 'Research',
-    pipeline_mode: 'direct',
+    pipeline_mode: 'chat',
     domain_id: null,
     model_adapter_id: null,
     selected_entry_ids: [],
@@ -344,6 +666,22 @@ async function runReadOnlyQuestionAsRun(input: {
     required: false,
     verification: null,
   };
+  return payload;
+}
+
+async function runChatEngineAsRun(input: {
+  task: string;
+  project?: string;
+  projectRoot: string;
+  workspaceRoot?: string | null;
+  model?: string;
+  modelTier?: string;
+  allowExpensive?: boolean;
+  showModelPolicy?: boolean;
+  outputFormat?: 'text' | 'json' | 'stream-json';
+  onStreamEvent?: (event: { type: 'assistant_chunk'; chunk: string } | { type: 'thought'; text: string }) => void;
+}): Promise<Record<string, unknown>> {
+  const { payload } = await runCliChatTask(input);
   return payload;
 }
 
@@ -385,7 +723,7 @@ async function withToolPolicyEnv<T>(
 }
 
 function uniqueTools(values: string[]): string[] {
-  return [...new Set(values.map(value => value.trim().toLowerCase()).filter(Boolean))];
+  return [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))];
 }
 
 function mergeAllowedTools(userAllowed: string[], profileAllowed: string[]): string[] {
@@ -397,7 +735,7 @@ function mergeAllowedTools(userAllowed: string[], profileAllowed: string[]): str
   if (normalizedUserAllowed.length === 0) {
     return normalizedProfileAllowed;
   }
-  return normalizedUserAllowed.filter(tool => normalizedProfileAllowed.includes(tool));
+  return normalizedUserAllowed.filter((tool) => normalizedProfileAllowed.includes(tool));
 }
 
 async function withExecutionProfileEnv<T>(
@@ -474,21 +812,35 @@ async function runManualBridgeStart(
 ): Promise<void> {
   validateRuntimeEnvForCommand({ json: true });
 
-  const executionProfile = options.executionProfile ?? resolveExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']).name;
-  const result = await withExecutionProfileEnv(executionProfile, [], [], () => withMutedConsole(() => runBabelPipeline(task, {
-    ...(options.project !== undefined ? { project: options.project } : {}),
-    ...(options.model !== undefined ? { modelOverride: options.model } : {}),
-    ...(options.orchestratorVersion !== undefined ? { orchestratorVersion: options.orchestratorVersion as ValidOrchestrator } : {}),
-    ...(options.modelTier !== undefined ? { modelTier: options.modelTier } : {}),
-    ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
-    ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
-    ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
-    ...(options.sessionStartPath !== undefined ? { sessionStartPath: options.sessionStartPath } : {}),
-    ...(options.localLearningRoot !== undefined ? { localLearningRoot: options.localLearningRoot } : {}),
-    ...(options.lockedFiles !== undefined && options.lockedFiles.length > 0 ? { lockedFiles: options.lockedFiles } : {}),
-    executionProfile,
-    mode: 'manual',
-  })));
+  const executionProfile =
+    options.executionProfile ??
+    resolveExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']).name;
+  const result = await withExecutionProfileEnv(executionProfile, [], [], () =>
+    withMutedConsole(() =>
+      runBabelPipeline(task, {
+        ...(options.project !== undefined ? { project: options.project } : {}),
+        ...(options.model !== undefined ? { modelOverride: options.model } : {}),
+        ...(options.orchestratorVersion !== undefined
+          ? { orchestratorVersion: options.orchestratorVersion as ValidOrchestrator }
+          : {}),
+        ...(options.modelTier !== undefined ? { modelTier: options.modelTier } : {}),
+        ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+        ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
+        ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+        ...(options.sessionStartPath !== undefined
+          ? { sessionStartPath: options.sessionStartPath }
+          : {}),
+        ...(options.localLearningRoot !== undefined
+          ? { localLearningRoot: options.localLearningRoot }
+          : {}),
+        ...(options.lockedFiles !== undefined && options.lockedFiles.length > 0
+          ? { lockedFiles: options.lockedFiles }
+          : {}),
+        executionProfile,
+        mode: 'plan',
+      }),
+    ),
+  );
 
   if (result.status !== 'MANUAL_BRIDGE_REQUIRED' || !result.manualPromptPath) {
     throw new Error(`Manual bridge expected MANUAL_BRIDGE_REQUIRED, got ${result.status}`);
@@ -539,17 +891,27 @@ type LiteCommandOptions = {
   rollbackOnFail?: boolean;
   json?: boolean;
   stream?: boolean;
+  finalOnly?: boolean;
+  humanSummary?: boolean;
+  ask?: boolean;
 };
 
 async function handleLiteContinueCommand(
   run: string,
-  options: { project?: string; projectRoot?: string; provider?: string; json?: boolean; resume?: boolean },
+  options: {
+    project?: string;
+    projectRoot?: string;
+    provider?: string;
+    json?: boolean;
+    resume?: boolean;
+  },
 ): Promise<void> {
-  const resolvedProjectRoot = options.projectRoot !== undefined
-    ? resolve(options.projectRoot)
-    : process.env['BABEL_PROJECT_ROOT'] !== undefined
-      ? resolve(process.env['BABEL_PROJECT_ROOT'])
-      : undefined;
+  const resolvedProjectRoot =
+    options.projectRoot !== undefined
+      ? resolve(options.projectRoot)
+      : process.env['BABEL_PROJECT_ROOT'] !== undefined
+        ? resolve(process.env['BABEL_PROJECT_ROOT'])
+        : undefined;
   const continueOptions = {
     run,
     ...(options.project !== undefined ? { project: options.project } : {}),
@@ -597,36 +959,26 @@ function buildLiteTask(verb: LiteVerb, task: string): string {
   return task;
 }
 
-export function resolveLitePipelineMode(verb: LiteVerb): ValidMode {
-  if (verb === 'ask' || verb === 'plan' || verb === 'patch' || verb === 'propose' || verb === 'diff' || verb === 'review' || verb === 'undo') {
-    return 'direct';
-  }
-  return 'verified';
-}
-
-export function resolveLiteAllowedTools(verb: LiteVerb): string[] {
-  return verb === 'ask' || verb === 'plan' || verb === 'patch' || verb === 'propose' || verb === 'diff' || verb === 'review' || verb === 'undo'
-    ? READ_ONLY_LITE_TOOLS
-    : [];
-}
-
 function toSessionVerb(verb: LiteVerb): LiteSessionVerb {
   return verb;
 }
 
-function printLiteResult(result: Awaited<ReturnType<typeof runBabelPipeline>>, context: {
-  verb: LiteVerb;
-  task: string;
-  mode: ValidMode;
-  project?: string;
-  projectRoot?: string;
-  requestedModel?: string;
-  requestedModelTier?: string;
-  allowedTools?: string[];
-  selectedLane?: Exclude<LiteVerb, 'do'>;
-  routeDecision?: LiteFullRouteDecision;
-  json?: boolean;
-}): void {
+function printLiteResult(
+  result: Awaited<ReturnType<typeof runBabelPipeline>>,
+  context: {
+    verb: LiteVerb;
+    task: string;
+    mode: ValidMode;
+    project?: string;
+    projectRoot?: string;
+    requestedModel?: string;
+    requestedModelTier?: string;
+    allowedTools?: string[];
+    selectedLane?: Exclude<LiteVerb, 'do'>;
+    routeDecision?: LiteFullRouteDecision;
+    json?: boolean;
+  },
+): void {
   const payload = buildLiteResultPayload(result, {
     verb: context.verb,
     task: context.task,
@@ -634,7 +986,9 @@ function printLiteResult(result: Awaited<ReturnType<typeof runBabelPipeline>>, c
     ...(context.project !== undefined ? { project: context.project } : {}),
     ...(context.projectRoot !== undefined ? { projectRoot: context.projectRoot } : {}),
     ...(context.requestedModel !== undefined ? { requestedModel: context.requestedModel } : {}),
-    ...(context.requestedModelTier !== undefined ? { requestedModelTier: context.requestedModelTier } : {}),
+    ...(context.requestedModelTier !== undefined
+      ? { requestedModelTier: context.requestedModelTier }
+      : {}),
     orchestrator: process.env['BABEL_ORCHESTRATOR_VERSION'] ?? 'v9',
     ...(context.allowedTools !== undefined ? { allowedTools: context.allowedTools } : {}),
     ...(context.selectedLane !== undefined ? { selectedLane: context.selectedLane } : {}),
@@ -698,22 +1052,58 @@ function getRecoverableErrorFields(error: unknown): Record<string, unknown> {
     run_dir: runDir,
     support_path: typeof record['supportPath'] === 'string' ? record['supportPath'] : runDir,
     recoverable: true,
-    next: [typeof record['nextCommand'] === 'string' ? record['nextCommand'] : 'babel continue latest'],
-    next_command: typeof record['nextCommand'] === 'string' ? record['nextCommand'] : 'babel continue latest',
+    next: [
+      typeof record['nextCommand'] === 'string' ? record['nextCommand'] : 'babel continue latest',
+    ],
+    next_command:
+      typeof record['nextCommand'] === 'string' ? record['nextCommand'] : 'babel continue latest',
     recovery: buildRecoveryAssessment({ run: runDir }),
   };
 }
 
 export function classifyDoTask(task: string): Exclude<LiteVerb, 'do'> {
   const normalized = task.toLowerCase();
-  const hasMutationIntent = /\b(fix|repair|apply|update|edit|modify|change|implement|write|create|delete|remove)\b/.test(normalized);
-  if (/\b(explain|summarize|what|why|how|read[- ]only|do not edit|do not modify|without editing|without changes)\b/.test(normalized) && !hasMutationIntent) {
-    return 'ask';
-  }
-  if (/\b(plan|design|approach|compare|implementation path)\b/.test(normalized) && !hasMutationIntent) {
+  const hasMutationIntent =
+    /\b(fix|repair|apply|update|edit|modify|change|implement|write|create|delete|remove)\b/.test(
+      normalized,
+    );
+  const startsWithPlanningIntent =
+    /^\s*(plan|design|approach|compare|outline)\b/.test(normalized) ||
+    /\b(implementation path|migration plan)\b/.test(normalized);
+  if (
+    startsWithPlanningIntent &&
+    !/^\s*(apply|fix|repair|write|create|delete|remove)\b/.test(normalized)
+  ) {
     return 'plan';
   }
-  if (/\b(patch|diff|propose|proposal)\b/.test(normalized) && !/\b(apply|edit|modify|change|fix|repair|implement|write|create|delete|remove)\b/.test(normalized)) {
+  if (
+    /\b(explain|summarize|what|why|how|read[- ]only|do not edit|do not modify|without editing|without changes)\b/.test(
+      normalized,
+    ) &&
+    !hasMutationIntent
+  ) {
+    return 'ask';
+  }
+  if (
+    /\b(plan|design|approach|compare|implementation path)\b/.test(normalized) &&
+    !hasMutationIntent
+  ) {
+    return 'plan';
+  }
+  if (
+    /\b(investigate|analy[sz]e|audit|diagnose|diagnostic|assess|report|findings?|evaluate)\b/.test(
+      normalized,
+    ) &&
+    !hasMutationIntent
+  ) {
+    return 'report';
+  }
+  if (
+    /\b(patch|diff|propose|proposal)\b/.test(normalized) &&
+    !/\b(apply|edit|modify|change|fix|repair|implement|write|create|delete|remove)\b/.test(
+      normalized,
+    )
+  ) {
     return 'patch';
   }
   if (hasMutationIntent) {
@@ -729,43 +1119,66 @@ async function runLiteCommand(
 ): Promise<void> {
   let task = normalizeLiteTask(taskParts);
   if (!task) {
-    if (verb === 'review') {
-      task = 'Review current diff';
-    } else if (verb === 'undo') {
+    if (verb === 'undo') {
       task = 'Restore last checkpoint';
     } else {
-      throw new Error(`bl ${verb} requires task text.`);
+      throw new Error(`babel ${verb} requires task text.`);
     }
+  }
+
+  if (options.ask === true) {
+    process.env['BABEL_ASK'] = 'true';
   }
 
   validateRuntimeEnvForCommand({ json: options.json === true });
 
+  // Capture the working directory at boot for consumers that need a directory
+  // anchor. BABEL_SESSION_START_PATH is intentionally NOT set here — it should
+  // only contain a session-start JSON file path set by the launch scripts.
+  // Setting it to process.cwd() would cause downstream consumers like
+  // readSessionStartProjectPath to attempt readFileSync on a directory.
+  const cwdAtBoot = process.cwd();
+  process.env['BABEL_TASK'] = task;
+
   const normalizedModel = normalizeModelName(options.model);
-  const normalizedModelTier = options.modelTier !== undefined ? options.modelTier.trim().toLowerCase() : undefined;
+  const normalizedModelTier =
+    options.modelTier !== undefined ? options.modelTier.trim().toLowerCase() : undefined;
   const executionProfile = normalizeExecutionProfile(options.executionProfile ?? 'safe_repo');
   const resolvedProject = options.project ?? detectProjectFromCwd() ?? undefined;
   const routeDecision = routeLiteOrFull(task, {
-    requestedVerb: verb,
+    requestedVerb: verb === 'report' ? 'do' : verb,
     forceLiteOnly: options.liteOnly === true,
+    dailyProfile: resolveDailyProfile(),
   });
 
   if (executionProfile === null) {
-    throw new Error(`Invalid execution profile "${options.executionProfile}". Valid values: ${getExecutionProfileHelpText().replace(/ \| /g, ', ')}`);
+    throw new Error(
+      `Invalid execution profile "${options.executionProfile}". Valid values: ${getExecutionProfileHelpText().replace(/ \| /g, ', ')}`,
+    );
   }
 
   if (options.model !== undefined && normalizedModel === undefined) {
-    throw new Error(`Invalid model "${options.model}". Valid values: ${getAvailableModels().map(m => m.key).join(', ')} (case-insensitive)`);
+    throw new Error(
+      `Invalid model "${options.model}". Valid values: ${getAvailableModels()
+        .map((m) => m.key)
+        .join(', ')} (case-insensitive)`,
+    );
   }
 
-  if (normalizedModelTier !== undefined && !VALID_MODEL_TIERS.includes(normalizedModelTier as typeof VALID_MODEL_TIERS[number])) {
-    throw new Error(`Invalid model tier "${options.modelTier}". Valid values: ${VALID_MODEL_TIERS.join(', ')}`);
+  if (
+    normalizedModelTier !== undefined &&
+    !VALID_MODEL_TIERS.includes(normalizedModelTier as (typeof VALID_MODEL_TIERS)[number])
+  ) {
+    throw new Error(
+      `Invalid model tier "${options.modelTier}". Valid values: ${VALID_MODEL_TIERS.join(', ')}`,
+    );
   }
 
   let resolvedProjectRoot: string | undefined;
   let resolvedWorkspaceRoot: string | null = null;
   let resolvedAllowedRoots: string[] = [];
   if (options.projectRoot !== undefined) {
-    if (executionProfile === 'workspace_manager') {
+    if (executionProfile === 'opencalw_manager') {
       const resolved = resolveApprovedWorkspacePath(options.projectRoot);
       resolvedProjectRoot = resolved.path;
       resolvedAllowedRoots = resolved.approvedRoots;
@@ -773,7 +1186,8 @@ async function runLiteCommand(
       resolvedProjectRoot = resolve(options.projectRoot);
     }
   } else if (resolvedProject !== undefined) {
-    resolvedProjectRoot = resolveProjectRoot(resolvedProject) ?? (verb === 'ask' ? process.cwd() : undefined);
+    resolvedProjectRoot =
+      resolveProjectRoot(resolvedProject) ?? (verb === 'ask' ? process.cwd() : undefined);
   } else if (verb === 'ask') {
     resolvedProjectRoot = process.cwd();
   }
@@ -783,8 +1197,6 @@ async function runLiteCommand(
     verb === 'patch' ||
     verb === 'propose' ||
     verb === 'diff' ||
-    verb === 'review' ||
-    verb === 'undo' ||
     (verb === 'do' && routeDecision.selected_lane === 'lite_ask')
   ) {
     const target = resolveAgentTarget({
@@ -830,6 +1242,7 @@ async function runLiteCommand(
       },
       checks: [],
       tests_or_checks: [],
+      errors: [message],
       usage: {
         totalCostUSD: 0,
         totalInputTokens: 0,
@@ -846,7 +1259,7 @@ async function runLiteCommand(
       },
       schema_retries: 0,
       recovered_after_schema_retry: false,
-    };
+    } as LiteResultPayload;
     if (options.json === true || options.stream === true) {
       writeJson(payload);
     } else {
@@ -867,8 +1280,16 @@ async function runLiteCommand(
   });
 
   const resolvedProvider = resolveSmallFixProviderForCommand(options);
-  const useWorkerChain = options.workerChain === true ||
+  const useWorkerChain =
+    options.workerChain === true ||
     (verb === 'do' && process.env['BABEL_LITE_WORKER_CHAIN'] === '1');
+  const usesSmallFixProgress = verb === 'fix' || verb === 'do';
+  const fixProgress = usesSmallFixProgress
+    ? createLiteFixProgress({
+        json: options.json === true,
+        stream: options.stream === true,
+      })
+    : undefined;
   const sessionOptions: ConstructorParameters<typeof AgentSession>[0] = {
     task,
     verb: toSessionVerb(verb),
@@ -879,19 +1300,54 @@ async function runLiteCommand(
     ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
     ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
     ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
-    ...(verb === 'fix' || verb === 'do' || verb === 'propose' || verb === 'patch' || verb === 'diff' || useWorkerChain
+    ...(verb === 'fix' ||
+    verb === 'do' ||
+    verb === 'propose' ||
+    verb === 'patch' ||
+    verb === 'diff' ||
+    useWorkerChain
       ? { provider: resolvedProvider }
       : {}),
     ...(useWorkerChain ? { workerChain: true } : {}),
-    ...(verb === 'fix' && options.rollbackOnFail === true ? { rollbackOnFail: true } : {}),
+    ...((verb === 'fix' || verb === 'do') && options.rollbackOnFail === true
+      ? { rollbackOnFail: true }
+      : {}),
     executionProfile,
     liteOnly: options.liteOnly === true,
     agentsMode: normalizeAgentsMode(options.agents),
     json: options.json === true,
     stream: options.stream === true,
     routeDecision,
+    ...(fixProgress !== undefined ? { progress: fixProgress } : {}),
+    ...(options.humanSummary === true ? { humanSummary: true } : {}),
+    // anchorPath is patched in below after pre-flight scanner runs
   };
-  const session = new AgentSession(sessionOptions);
+
+  // VCS: Pre-flight scanner — resolve anchor path from task text before
+  // constructing the session. Only fires for mutating verbs (fix/do) where
+  // directory anchoring is most critical.
+  let resolvedAnchorPath: string | undefined;
+  if ((verb === 'fix' || verb === 'do') && options.projectRoot === undefined) {
+    try {
+      const scanResult = await resolveFuzzyWorkspaceDirectory(task, cwdAtBoot);
+      if (scanResult.anchorPath !== null) {
+        resolvedAnchorPath = scanResult.anchorPath;
+        // If we resolved a better anchor and projectRoot wasn't explicitly set,
+        // also update resolvedProjectRoot so the sandbox uses the right root.
+        if (resolvedProjectRoot === undefined) {
+          resolvedProjectRoot = resolvedAnchorPath;
+        }
+      }
+    } catch {
+      // Pre-flight scanner failures are non-fatal — continue with current dir
+    }
+  }
+
+  // Patch anchorPath into sessionOptions now that the scanner has resolved it
+  if (resolvedAnchorPath !== undefined) {
+    (sessionOptions as unknown as Record<string, unknown>)['anchorPath'] = resolvedAnchorPath;
+    process.env['BABEL_ANCHOR_PATH'] = resolvedAnchorPath;
+  }
 
   const offlineEnvSnapshot = snapshotLiteOfflineEnv();
   if (providerUsesOfflineEnv(verb) || useWorkerChain) {
@@ -900,91 +1356,99 @@ async function runLiteCommand(
 
   const allowedToolsVerb = useWorkerChain
     ? 'fix'
-    : (verb === 'do' ? liteVerbForSelectedLane(routeDecision.selected_lane) : verb);
+    : verb === 'do'
+      ? liteVerbForSelectedLane(routeDecision.selected_lane)
+      : verb;
 
-  const runSession = (activeSession: AgentSession) => withExecutionProfileEnv(
-    executionProfile,
-    resolveLiteAllowedTools(allowedToolsVerb),
-    [],
-    () => withProjectRootEnv(
-      resolvedProjectRoot,
-      resolvedAllowedRoots,
-      () => withMutedConsole(() => activeSession.run()),
-    ),
-  );
+  const runSession = (activeSession: AgentSession) =>
+    withExecutionProfileEnv(
+      executionProfile,
+      [], // tool allowlist no longer needed — sandbox gates handle chat mode
+      [],
+      () =>
+        withProjectRootEnv(resolvedProjectRoot, resolvedAllowedRoots, () =>
+          withMutedConsole(() => activeSession.run()),
+        ),
+    );
 
   let result;
   try {
-    try {
-      result = await runSession(session);
-    } catch (error: unknown) {
-      if (verb !== 'plan' || !isProviderSchemaFailure(error)) {
-        throw error;
-      }
-      const fallbackSession = new AgentSession({
-        ...sessionOptions,
-        provider: 'mock',
-      });
-      result = await runSession(fallbackSession);
-      const payload = result.payload as LiteResultPayload;
-      payload.schema_retries = (payload.schema_retries ?? 0) + 1;
-      payload.recovered_after_schema_retry = true;
-      payload.route_reason = payload.route_reason
-        ? `${payload.route_reason} Recovered from provider schema failure with the local read-only planner.`
-        : 'Recovered from provider schema failure with the local read-only planner.';
-      result.humanText = formatLiteResultHuman(payload);
+    if (options.finalOnly === true && options.json !== true && options.stream !== true) {
+      process.stderr.write(`Babel: running ${verb}\n`);
     }
+    result = await runLiteSessionWithSchemaRecovery(runSession, sessionOptions, {
+      verb,
+      selectedLane: routeDecision.selected_lane,
+      workerChain: useWorkerChain,
+    });
   } finally {
     restoreLiteOfflineEnv(offlineEnvSnapshot);
   }
 
+  const humanText =
+    result.humanText ??
+    ('status' in result.payload
+      ? formatLiteResultHuman(result.payload as LiteResultPayload)
+      : null);
+  const payloadRecord = result.payload as Record<string, unknown>;
+  const runDir = typeof payloadRecord['run_dir'] === 'string' ? payloadRecord['run_dir'] : null;
+  const progressTranscript =
+    fixProgress !== undefined ? fixProgress.getTranscript().join('\n') : '';
+
   if (options.json === true) {
     writeJson(result.payload);
+    if (humanText && runDir && (options.humanSummary === true || usesSmallFixProgress)) {
+      writeHumanSummaryArtifact(runDir, humanText, progressTranscript);
+    }
   } else if (options.stream === true && verb === 'ask') {
-    const humanText = result.humanText
-      ?? ('status' in result.payload ? formatLiteResultHuman(result.payload as LiteResultPayload) : null);
+    const humanText =
+      result.humanText ??
+      ('status' in result.payload
+        ? formatLiteResultHuman(result.payload as LiteResultPayload)
+        : null);
     const payloadRecord = result.payload as Record<string, unknown>;
     const runDir = typeof payloadRecord['run_dir'] === 'string' ? payloadRecord['run_dir'] : null;
     if (humanText && runDir) {
       writeHumanSummaryArtifact(runDir, humanText);
     }
   } else {
-    const humanText = result.humanText
-      ?? ('status' in result.payload ? formatLiteResultHuman(result.payload as LiteResultPayload) : null);
     if (humanText) {
       process.stdout.write(`${humanText}\n`);
-      const payloadRecord = result.payload as Record<string, unknown>;
-      const runDir = typeof payloadRecord['run_dir'] === 'string' ? payloadRecord['run_dir'] : null;
       if (runDir) {
-        const review = writeHumanSummaryArtifact(runDir, humanText);
-        if (review?.status === 'needs_attention') {
-          process.stdout.write('Output review: target mismatch detected\n');
+        const review = writeHumanSummaryArtifact(runDir, humanText, progressTranscript);
+        const note = formatHumanOutputReviewNote(review);
+        if (note) {
+          process.stdout.write(`${note}\n`);
         }
       }
     }
   }
-
   if (result.exitCode !== 0) {
     process.exitCode = result.exitCode;
   }
 }
 
-async function handleResumeCommand(
-  options: { run?: string; plan?: string; project?: string },
-): Promise<void> {
+async function handleResumeCommand(options: {
+  run?: string;
+  plan?: string;
+  project?: string;
+}): Promise<void> {
   validateRuntimeEnvForCommand({ json: true });
 
   let resolvedRun = options.run;
   if (!resolvedRun) {
     const latest = readLatestRunPointer(options.project);
     if (!latest) {
-      process.stdout.write(`${JSON.stringify({
-        status: 'NO_LATEST_RUN',
-        how_to: [
-          'babel plan example_llm_router "..."',
-          'babel run --project example_llm_router "..."',
-        ],
-      }, null, 2)}\n`);
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            status: 'NO_LATEST_RUN',
+            how_to: ['babel plan example_llm_router "..."', 'babel run --project example_llm_router "..."'],
+          },
+          null,
+          2,
+        )}\n`,
+      );
       process.exit(1);
     }
     resolvedRun = latest.run_dir;
@@ -1002,14 +1466,20 @@ async function handleResumeCommand(
         const rawPlanText = readFileSync(autoDiscoveredPath, 'utf-8');
         result = await withMutedConsole(() => resumeManualBridge(resolvedRun, { rawPlanText }));
         if (result.status === 'MANUAL_PLAN_INVALID') {
-          process.stdout.write(`${JSON.stringify({
-            status: 'MANUAL_PLAN_INVALID',
-            run_dir: result.runDir,
-            plan_path: autoDiscoveredPath,
-            editor: editor.editor,
-            repair_prompt_path: result.repairPromptPath,
-            errors: result.errors ?? [],
-          }, null, 2)}\n`);
+          process.stdout.write(
+            `${JSON.stringify(
+              {
+                status: 'MANUAL_PLAN_INVALID',
+                run_dir: result.runDir,
+                plan_path: autoDiscoveredPath,
+                editor: editor.editor,
+                repair_prompt_path: result.repairPromptPath,
+                errors: result.errors ?? [],
+              },
+              null,
+              2,
+            )}\n`,
+          );
           process.exit(1);
         }
       } else {
@@ -1030,45 +1500,72 @@ async function handleResumeCommand(
     }
 
     if (result.status === 'MANUAL_PLAN_INVALID') {
-      process.stdout.write(`${JSON.stringify({
-        status: 'MANUAL_PLAN_INVALID',
-        run_dir: result.runDir,
-        repair_prompt_path: result.repairPromptPath,
-        errors: result.errors ?? [],
-      }, null, 2)}\n`);
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            status: 'MANUAL_PLAN_INVALID',
+            run_dir: result.runDir,
+            repair_prompt_path: result.repairPromptPath,
+            errors: result.errors ?? [],
+          },
+          null,
+          2,
+        )}\n`,
+      );
       process.exit(1);
     }
 
-    process.stdout.write(`${JSON.stringify({
-      status: result.status,
-      run_dir: result.runDir,
-    }, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          status: result.status,
+          run_dir: result.runDir,
+        },
+        null,
+        2,
+      )}\n`,
+    );
 
     if (result.status !== 'COMPLETE') {
       process.exit(1);
     }
   } catch (err: unknown) {
-    process.stdout.write(`${JSON.stringify({
-      status: 'MANUAL_RESUME_FAILED',
-      run_dir: resolvedRun,
-      error: err instanceof Error ? err.message : String(err),
-    }, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          status: 'MANUAL_RESUME_FAILED',
+          run_dir: resolvedRun,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        null,
+        2,
+      )}\n`,
+    );
     process.exit(1);
   }
 }
 
 async function handleActionResumeCommand(
   run: string,
-  options: { project?: string; model?: string; modelTier?: string; allowExpensive?: boolean; json?: boolean },
+  options: {
+    project?: string;
+    model?: string;
+    modelTier?: string;
+    allowExpensive?: boolean;
+    json?: boolean;
+  },
 ): Promise<void> {
-  const normalizedModel = options.model !== undefined ? normalizeModelName(options.model) : undefined;
-  const result = await withMutedConsole(() => resumeExecution({
-    run,
-    ...(options.project !== undefined ? { project: options.project } : {}),
-    ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
-    ...(options.modelTier !== undefined ? { modelTier: options.modelTier } : {}),
-    ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
-  }));
+  const normalizedModel =
+    options.model !== undefined ? normalizeModelName(options.model) : undefined;
+  const result = await withMutedConsole(() =>
+    resumeExecution({
+      run,
+      ...(options.project !== undefined ? { project: options.project } : {}),
+      ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
+      ...(options.modelTier !== undefined ? { modelTier: options.modelTier } : {}),
+      ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+    }),
+  );
   if (options.json === true) {
     writeJson(result);
   } else {
@@ -1083,12 +1580,14 @@ async function handleSmokeCommand(options: { project: string }): Promise<void> {
   validateRuntimeEnvForCommand({ json: true });
 
   try {
-    const task = 'Manual Bridge smoke test: validate executor robustness with fixture plans.';
+    const task = 'Plan mode smoke test: validate executor robustness with fixture plans.';
 
-    const manualResult = await withMutedConsole(() => runBabelPipeline(task, {
-      project: options.project,
-      mode: 'manual',
-    }));
+    const manualResult = await withMutedConsole(() =>
+      runBabelPipeline(task, {
+        project: options.project,
+        mode: 'plan',
+      }),
+    );
 
     if (manualResult.status !== 'MANUAL_BRIDGE_REQUIRED' || !manualResult.manualPromptPath) {
       throw new Error(`Manual start failed with status ${manualResult.status}`);
@@ -1096,9 +1595,10 @@ async function handleSmokeCommand(options: { project: string }): Promise<void> {
 
     const runDir = manualResult.runDir;
     const manifestProjectRoot = manualResult.manifest.target_project_path?.trim();
-    const resolvedProjectRoot = manifestProjectRoot && existsSync(manifestProjectRoot)
-      ? manifestProjectRoot
-      : resolveProjectRoot(options.project) ?? process.env['BABEL_PROJECT_ROOT'];
+    const resolvedProjectRoot =
+      manifestProjectRoot && existsSync(manifestProjectRoot)
+        ? manifestProjectRoot
+        : (resolveProjectRoot(options.project) ?? process.env['BABEL_PROJECT_ROOT']);
     if (!resolvedProjectRoot) {
       throw new Error('Unable to resolve project root for smoke fixtures.');
     }
@@ -1116,9 +1616,7 @@ async function handleSmokeCommand(options: { project: string }): Promise<void> {
 
     for (const fixture of fixtures) {
       const maxAttempts =
-        fixture.name === 'sandbox_rejection' || fixture.name === 'mcp_unknown_server'
-          ? 1
-          : 3;
+        fixture.name === 'sandbox_rejection' || fixture.name === 'mcp_unknown_server' ? 1 : 3;
       let resumed = await withMutedConsole(() => resumeManualBridge(runDir, fixture.path));
       let haltTag = extractHaltTagFromExecutionReport(runDir);
       let denial = extractStructuredDenialFromExecutionReport(runDir);
@@ -1127,8 +1625,9 @@ async function handleSmokeCommand(options: { project: string }): Promise<void> {
       if (fixture.name !== 'sandbox_rejection' && fixture.name !== 'mcp_unknown_server') {
         for (let attempt = 2; attempt <= maxAttempts; attempt++) {
           const shouldRetry =
-            (resumed.status === 'QA_REJECTED_MAX_LOOPS') ||
-            (resumed.status === 'COMPLETE' && (haltTag === 'ACTIVATION_GATE_FAIL' || haltTag === 'UNKNOWN'));
+            resumed.status === 'QA_REJECTED_MAX_LOOPS' ||
+            (resumed.status === 'COMPLETE' &&
+              (haltTag === 'ACTIVATION_GATE_FAIL' || haltTag === 'UNKNOWN'));
           if (!shouldRetry) {
             break;
           }
@@ -1144,8 +1643,10 @@ async function handleSmokeCommand(options: { project: string }): Promise<void> {
           cases.push({ name: fixture.name, status: 'PASS', halt_tag: 'QA_REJECTED_EXPECTED' });
           continue;
         }
-        const denialCategory = typeof denial?.['category'] === 'string' ? String(denial['category']) : null;
-        const denialReasonCode = typeof denial?.['reason_code'] === 'string' ? String(denial['reason_code']) : null;
+        const denialCategory =
+          typeof denial?.['category'] === 'string' ? String(denial['category']) : null;
+        const denialReasonCode =
+          typeof denial?.['reason_code'] === 'string' ? String(denial['reason_code']) : null;
         if (
           resumed.status === 'COMPLETE' &&
           haltTag === 'STEP_VERIFICATION_FAIL' &&
@@ -1176,9 +1677,14 @@ async function handleSmokeCommand(options: { project: string }): Promise<void> {
       }
 
       if (fixture.name === 'mcp_unknown_server') {
-        const lifecyclePhase = typeof mcpLifecycle?.['phase'] === 'string' ? String(mcpLifecycle['phase']) : null;
-        const lifecycleOutcome = typeof mcpLifecycle?.['outcome'] === 'string' ? String(mcpLifecycle['outcome']) : null;
-        const lifecycleReasonCode = typeof mcpLifecycle?.['reason_code'] === 'string' ? String(mcpLifecycle['reason_code']) : null;
+        const lifecyclePhase =
+          typeof mcpLifecycle?.['phase'] === 'string' ? String(mcpLifecycle['phase']) : null;
+        const lifecycleOutcome =
+          typeof mcpLifecycle?.['outcome'] === 'string' ? String(mcpLifecycle['outcome']) : null;
+        const lifecycleReasonCode =
+          typeof mcpLifecycle?.['reason_code'] === 'string'
+            ? String(mcpLifecycle['reason_code'])
+            : null;
         if (
           resumed.status === 'COMPLETE' &&
           haltTag === 'STEP_VERIFICATION_FAIL' &&
@@ -1220,269 +1726,156 @@ async function handleSmokeCommand(options: { project: string }): Promise<void> {
       }
     }
 
-    process.stdout.write(`${JSON.stringify({
-      status: 'SMOKE_COMPLETE',
-      project: options.project,
-      run_dir: runDir,
-      manual_prompt_path: manualResult.manualPromptPath,
-      cases,
-    }, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          status: 'SMOKE_COMPLETE',
+          project: options.project,
+          run_dir: runDir,
+          manual_prompt_path: manualResult.manualPromptPath,
+          cases,
+        },
+        null,
+        2,
+      )}\n`,
+    );
 
     if (cases.some((item) => item.status === 'HALT')) {
       process.exit(1);
     }
   } catch (err: unknown) {
-    process.stdout.write(`${JSON.stringify({
-      status: 'SMOKE_FAILED',
-      error: err instanceof Error ? err.message : String(err),
-    }, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          status: 'SMOKE_FAILED',
+          error: err instanceof Error ? err.message : String(err),
+        },
+        null,
+        2,
+      )}\n`,
+    );
     process.exit(1);
   }
 }
 
 export function registerWorkflowCommands(program: Command): void {
-  const liteCommand = program
-    .command('lite')
-    .alias('l')
-    .description('Babel Lite: short ask, plan, fix, and do commands for everyday work')
-    .addHelpText('after', `
-Examples:
-  $ bl "Fix failing tests"
-  $ bl ask "Why is this failing?"
-  $ bl plan "Compare the implementation options"
-  $ bl propose "Propose the smallest safe diff"
-  $ bl fix "Fix failing tests"
-  $ bl review
-  $ bl undo
+  const addSessionOptions = (command: Command): Command =>
+    command
+      .option('-p, --project <name>', 'Target project')
+      .option('-m, --model <model>', 'Override the model family')
+      .option('--model-tier <tier>', `Model policy tier: ${VALID_MODEL_TIERS.join(' | ')}`)
+      .option('--allow-expensive', 'Approve an expensive or policy-blocked model for this run')
+      .option('--show-model-policy', 'Include model policy metadata where available')
+      .option(
+        '--project-root <path>',
+        'Explicit project root for arbitrary approved workspace repos',
+      )
+      .option('--lite-only', 'Refuse instead of escalating to babel deep')
+      .option('--agents <mode>', 'Agent mode for complex routes: off | read-only', 'read-only')
+      .option('--provider <provider>', 'Provider: live | mock (mock = offline demo)')
+      .option('--rollback-on-fail', 'Restore the pre-mutation checkpoint when verification fails')
+      .option('--stream', 'Stream conversational LLM answers in real time (read-only routes)')
+      .option('--final-only', 'Send progress to stderr and the final answer to stdout')
+      .option('--human-summary', 'With --json, also write human_summary.txt to the run dir')
+      .option('--json', 'Emit structured JSON only')
+      .option('--ask', 'Ask for approval before executing any mutating tool');
 
-Notes:
-  - Bare bl "<task>" routes through the daily do lane.
-  - ask/plan/propose/diff/review are read-only; fix is the default mutation lane.
-  - patch is a compatibility alias for propose.
-  - undo restores the latest checkpoint from the latest fix run.
-  - Use babel run for advanced audit flags, JSON event streams, or explicit governed modes.
-`);
+  /**
+   * Shared fatal error handler for Lite commands.
+   * Prints or writes JSON error details, then exits the process.
+   */
+  function handleLiteFatalError(err: unknown, command: string, options: { json?: boolean }): never {
+    const message = err instanceof Error ? err.message : String(err);
+    const recovery = getRecoverableErrorFields(err);
+    if (options.json === true) {
+      writeJson({
+        status: 'LITE_FAILED',
+        command,
+        user_status: 'failed',
+        error: message,
+        recoverable: recovery['recoverable'] === true,
+        next: Array.isArray(recovery['next']) ? recovery['next'] : [],
+        ...recovery,
+      });
+    } else {
+      console.error(`Babel: ${message}`);
+      if (typeof recovery['support_path'] === 'string') {
+        console.error(`Support: ${recovery['support_path']}`);
+      }
+      if (Array.isArray(recovery['next']) && recovery['next'].length > 0) {
+        for (const step of recovery['next']) {
+          console.error(`Next: ${step}`);
+        }
+      } else if (typeof recovery['next_command'] === 'string') {
+        console.error(`Next: ${recovery['next_command']}`);
+      }
+    }
+    process.exit(1);
+  }
 
-  const addLiteOptions = (command: Command): Command => command
+  const runSessionAction = (verb: LiteVerb) => async (taskParts: string[], options: LiteCommandOptions) => {
+    try {
+      await runLiteCommand(verb, taskParts, options);
+    } catch (err: unknown) {
+      handleLiteFatalError(err, verb, options);
+    }
+  };
+
+
+  program
+    .command('deep')
+    .argument('<task...>', 'Task text')
+    .description('Run the governed apply-and-verify path for harder or higher-risk work')
     .option('-p, --project <name>', 'Target project')
+    .option('--project-root <path>', 'Explicit project root for arbitrary approved workspace repos')
     .option('-m, --model <model>', 'Override the model family')
     .option('--model-tier <tier>', `Model policy tier: ${VALID_MODEL_TIERS.join(' | ')}`)
     .option('--allow-expensive', 'Approve an expensive or policy-blocked model for this run')
     .option('--show-model-policy', 'Include model policy metadata where available')
-    .option('--project-root <path>', 'Explicit project root for arbitrary approved workspace repos')
-    .option('--execution-profile <profile>', `Execution profile: ${getExecutionProfileHelpText()}`, 'safe_repo')
-    .option('--lite-only', 'Refuse instead of escalating from Lite to Babel Full')
-    .option('--agents <mode>', 'Full lane agent mode: off | read-only', 'read-only')
-    .option('--provider <provider>', 'Provider: live | mock (mock = offline demo; fix, propose, patch, diff)')
-    .option('--worker-chain', 'Run plan→propose→fix→review→undo in one linked session (bl do)')
-    .option('--stream', 'Stream conversational LLM answers in real time (ask only)')
-    .option('--json', 'Emit structured JSON only');
+    .option('--json', 'Emit structured JSON only')
+    .option('--ask', 'Ask for approval before executing any mutating tool')
+    .addHelpText(
+      'after',
+      `
+Examples:
+  $ babel deep "Harden the implementation plan for this repo-wide migration"
+  $ babel deep "Apply the bounded migration and verify it" --project-root /tmp/example_game_suite\\MyGame
 
-  const runLiteAction = (verb: LiteVerb) => async (taskParts: string[], options: LiteCommandOptions) => {
-    try {
-      await runLiteCommand(verb, taskParts, options);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      const recovery = getRecoverableErrorFields(err);
-      if (options.json === true) {
-        writeJson({
-          status: 'LITE_FAILED',
-          command: verb,
-          user_status: 'failed',
-          error: message,
-          recoverable: recovery['recoverable'] === true,
-          next: Array.isArray(recovery['next']) ? recovery['next'] : [],
-          ...recovery,
-        });
-      } else {
-        console.error(`[babel-lite] ${message}`);
-        if (typeof recovery['support_path'] === 'string') {
-          console.error(`[babel-lite] support: ${recovery['support_path']}`);
+Notes:
+  - babel deep runs the governed pipeline with planning, review, execution, and verification.
+  - Use babel run only when you need explicit low-level mode or stream output controls.
+`,
+    )
+    .action(async (taskParts: string[], options: DeepCommandOptions) => {
+      await runDeepCommand(taskParts, options);
+    });
+
+  addSessionOptions(
+    program
+      .command('undo')
+      .description('Restore the latest checkpoint from the most recent recoverable run')
+      .addHelpText(
+        'after',
+        `
+Examples:
+  $ babel undo
+  $ babel undo --project example_saas_backend
+  $ babel undo --project-root /tmp/my-repo
+
+Notes:
+  - Restores files captured before the last mutating Babel run.
+  - If undo refuses (files changed since the checkpoint), use babel checkpoint restore <id> --force.
+  - In the REPL, /restore <id> and /checkpoint list are equivalent recovery surfaces.
+`,
+      )
+      .action(async (_taskParts: string[], options: LiteCommandOptions) => {
+        try {
+          await runLiteCommand('undo', [], options);
+        } catch (err: unknown) {
+          handleLiteFatalError(err, 'undo', options);
         }
-        if (Array.isArray(recovery['next']) && recovery['next'].length > 0) {
-          for (const step of recovery['next']) {
-            console.error(`[babel-lite] next: ${step}`);
-          }
-        } else if (typeof recovery['next_command'] === 'string') {
-          console.error(`[babel-lite] next: ${recovery['next_command']}`);
-        }
-      }
-      process.exit(1);
-    }
-  };
-
-  const registerLiteVerb = (verb: LiteVerb, description: string, options: { hidden?: boolean } = {}): void => {
-    const command = addLiteOptions(liteCommand
-      .command(verb)
-      .argument('<task...>', 'Task text')
-      .description(description));
-    if (options.hidden === true) {
-      (command as unknown as { _hidden: boolean })._hidden = true;
-    }
-    command.action(runLiteAction(verb));
-  };
-
-  registerLiteVerb('ask', 'Inspect and explain without editing files');
-  registerLiteVerb('plan', 'Prepare a read-only implementation plan artifact');
-  registerLiteVerb('propose', 'Produce a proposal-only diff without applying changes');
-  registerLiteVerb('diff', 'Produce a proposal-only diff without applying changes');
-  addLiteOptions(liteCommand
-    .command('fix')
-    .argument('<task...>', 'Task text')
-    .description('Apply a focused fix, using the small-fix fast path when safe'))
-    .option('--rollback-on-fail', 'On verifier failure, auto-restore the pre-mutation checkpoint')
-    .action(runLiteAction('fix'));
-  registerLiteVerb('do', 'Let Babel choose the daily work lane for the task');
-  registerLiteVerb('patch', 'Compatibility alias for proposal-only diff behavior', { hidden: false });
-  addLiteOptions(liteCommand
-    .command('review')
-    .argument('[task...]', 'Optional review focus')
-    .description('Review the current diff without mutating source'))
-    .action(runLiteAction('review'));
-
-  addLiteOptions(liteCommand
-    .command('undo')
-    .argument('[task...]', 'Optional undo note')
-    .description('Restore the last checkpoint from the latest Lite fix run'))
-    .action(runLiteAction('undo'));
-
-  liteCommand
-    .command('continue')
-    .argument('[run]', 'latest or a run directory', 'latest')
-    .description('Resume a linked Lite worker chain or inspect the latest recovery step')
-    .option('-p, --project <name>', 'Use latest run pointer for this project')
-    .option('--project-root <path>', 'Repo root for worker-chain manifest lookup')
-    .option('--provider <provider>', 'Provider override when resuming fix/propose steps: live | mock')
-    .option('--inspect-only', 'Inspect recovery state without resuming worker-chain steps')
-    .option('--json', 'Emit structured JSON only')
-    .action(async (run: string, options: {
-      project?: string;
-      projectRoot?: string;
-      provider?: string;
-      inspectOnly?: boolean;
-      json?: boolean;
-    }) => {
-      await handleLiteContinueCommand(run, {
-        ...(options.project !== undefined ? { project: options.project } : {}),
-        ...(options.projectRoot !== undefined ? { projectRoot: options.projectRoot } : {}),
-        ...(options.provider !== undefined ? { provider: options.provider } : {}),
-        json: options.json === true,
-        resume: options.inspectOnly !== true,
-      });
-    });
-
-  liteCommand
-    .command('resume')
-    .argument('[run]', 'latest or a run directory', 'latest')
-    .description('Resume a retryable Lite/Babel run and take the next action')
-    .option('-p, --project <name>', 'Use latest run pointer for this project')
-    .option('-m, --model <model>', 'Override the model family for provider retries')
-    .option('--model-tier <tier>', `Model policy tier: ${VALID_MODEL_TIERS.join(' | ')}`)
-    .option('--allow-expensive', 'Approve an expensive or policy-blocked model for this run')
-    .option('--json', 'Emit structured JSON only')
-    .action(async (run: string, options: { project?: string; model?: string; modelTier?: string; allowExpensive?: boolean; json?: boolean }) => {
-      await handleActionResumeCommand(run, options);
-    });
-
-  addLiteOptions(program
-    .command('ask')
-    .argument('<task...>', 'Task text')
-    .description('Ask Babel to inspect and explain without editing files'))
-    .addHelpText('after', `
-Examples:
-  $ babel ask "Why is this failing?"
-  $ babel ask "Summarize this repo" --project-root ./example-project
-
-Notes:
-  - This is the same user-shaped lane as bl ask.
-  - It uses read-only tools and skips the plan/QA loop by default.
-`)
-    .action(runLiteAction('ask'));
-
-  addLiteOptions(program
-    .command('propose')
-    .argument('<task...>', 'Task text')
-    .description('Produce a proposal-only diff without applying changes'))
-    .action(runLiteAction('propose'));
-
-  addLiteOptions(program
-    .command('review')
-    .argument('[task...]', 'Optional review focus')
-    .description('Review the current diff without mutating source'))
-    .action(runLiteAction('review'));
-
-  addLiteOptions(program
-    .command('undo')
-    .argument('[task...]', 'Optional undo note')
-    .description('Restore the last checkpoint from the latest Lite fix run'))
-    .action(runLiteAction('undo'));
-
-  addLiteOptions(program
-    .command('fix')
-    .argument('<task...>', 'Task text')
-    .description('Ask Babel to make a focused safe edit'))
-    .option('--rollback-on-fail', 'On verifier failure, auto-restore the pre-mutation checkpoint')
-    .addHelpText('after', `
-Examples:
-  $ babel fix "Fix failing tests"
-  $ babel fix "Repair the CLI help"
-
-Notes:
-  - This is the same user-shaped lane as bl fix.
-  - Use babel run when you need full audit flags or JSON event streams.
-`)
-    .action(runLiteAction('fix'));
-
-  addLiteOptions(program
-    .command('do')
-    .argument('<task...>', 'Task text')
-    .description('Ask Babel to choose the daily work lane and do the task'))
-    .addHelpText('after', `
-Examples:
-  $ babel do "Fix failing tests"
-  $ babel do "Explain this failure without editing"
-
-Notes:
-  - do chooses ask, plan, small-fix, or verified fallback from the task shape.
-  - Use --json to see the selected lane.
-`)
-    .action(runLiteAction('do'));
-
-  program
-    .command('full')
-    .argument('<task...>', 'Task text')
-    .description('Use Babel Full with read-only Spark plan hardening before governed execution')
-    .option('-p, --project <name>', 'Target project')
-    .option('--project-root <path>', 'Explicit project root for arbitrary approved workspace repos')
-    .option('--agents <mode>', 'Full lane agent mode: off | read-only', 'read-only')
-    .option('--json', 'Emit structured JSON only')
-    .addHelpText('after', `
-Examples:
-  $ babel full "Harden the implementation plan for this repo-wide migration"
-  $ babel full "Audit plugin/public proof closure" --agents read-only --json
-
-Notes:
-  - Babel Full writes route, read-only Spark evidence, hardened plan, QA review, and cost artifacts under runs/babel-full.
-  - Mutating live subagents remain disabled in this proof batch.
-`)
-    .action((taskParts: string[], options: { project?: string; projectRoot?: string; agents?: string; json?: boolean }) => {
-      const task = normalizeLiteTask(taskParts);
-      if (!task) {
-        throw new Error('babel full requires task text.');
-      }
-      validateRuntimeEnvForCommand({ json: options.json === true });
-      const routeDecision = routeLiteOrFull(task, { requestedVerb: 'full' });
-      const resolvedProjectRoot = options.projectRoot !== undefined
-        ? resolve(options.projectRoot)
-        : undefined;
-      printFullRouteResult({
-        task,
-        routeDecision,
-        ...(resolvedProjectRoot !== undefined ? { projectRoot: resolvedProjectRoot } : {}),
-        agentsMode: normalizeAgentsMode(options.agents),
-        json: options.json === true,
-      });
-    });
+      }),
+  );
 
   program
     .command('continue')
@@ -1490,231 +1883,917 @@ Notes:
     .description('Resume a linked Lite worker chain or inspect the latest recovery step')
     .option('-p, --project <name>', 'Use latest run pointer for this project')
     .option('--project-root <path>', 'Repo root for worker-chain manifest lookup')
-    .option('--provider <provider>', 'Provider override when resuming fix/propose steps: live | mock')
+    .option(
+      '--provider <provider>',
+      'Provider override when resuming fix/propose steps: live | mock',
+    )
     .option('--inspect-only', 'Inspect recovery state without resuming worker-chain steps')
     .option('--json', 'Emit structured JSON only')
-    .addHelpText('after', `
+    .addHelpText(
+      'after',
+      `
 Examples:
   $ babel continue latest
-  $ babel continue ./example-project/runs/<run-id>
-  $ bl continue latest
+  $ babel continue <BABEL_REPO_ROOT>\\runs\\20260601_010101_task
+  $ babel continue latest --inspect-only
 
 Notes:
-  - continue resumes linked Lite worker-chain steps when a manifest exists.
+  - continue resumes linked worker-chain steps when a manifest exists.
   - Use --inspect-only to classify recovery without executing the next step.
-`)
-    .action(async (run: string, options: {
-      project?: string;
-      projectRoot?: string;
-      provider?: string;
-      inspectOnly?: boolean;
-      json?: boolean;
-    }) => {
-      await handleLiteContinueCommand(run, {
-        ...(options.project !== undefined ? { project: options.project } : {}),
-        ...(options.projectRoot !== undefined ? { projectRoot: options.projectRoot } : {}),
-        ...(options.provider !== undefined ? { provider: options.provider } : {}),
-        json: options.json === true,
-        resume: options.inspectOnly !== true,
-      });
-    });
+`,
+    )
+    .action(
+      async (
+        run: string,
+        options: {
+          project?: string;
+          projectRoot?: string;
+          provider?: string;
+          inspectOnly?: boolean;
+          json?: boolean;
+        },
+      ) => {
+        await handleLiteContinueCommand(run, {
+          ...(options.project !== undefined ? { project: options.project } : {}),
+          ...(options.projectRoot !== undefined ? { projectRoot: options.projectRoot } : {}),
+          ...(options.provider !== undefined ? { provider: options.provider } : {}),
+          json: options.json === true,
+          resume: options.inspectOnly !== true,
+        });
+      },
+    );
 
   program
     .command('run')
     .argument('<task>', 'task prompt')
-    .description('Advanced pipeline lane for explicit modes, audit, output, and tool/model controls')
-    .option('-p, --project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_workspace | example_game_suite | example_autonomous_agent | example_mobile_reference)')
-    .option('--mode <mode>', `Pipeline mode: ${VALID_MODES.join(' | ')} (manual emits Manual Bridge handoff JSON)`, 'verified')
-    .option('-m, --model <model>', 'Override the Orchestrator and force a specific model family (qwen3|deepseek|step-flash|scout|nemotron|qwen3-32b, case-insensitive)')
-    .option('--model-tier <tier>', `Model policy tier: ${VALID_MODEL_TIERS.join(' | ')} (defaults to configured policy tier)`)
+    .description(
+      'Advanced pipeline lane for explicit modes, audit, output, and tool/model controls',
+    )
+    .option(
+      '-p, --project <name>',
+      'Target project (example_saas_backend | example_llm_router | AuditGuard | example_mobile_suite | example_game_suite | godot_td | app_test_babel)',
+    )
+    .option('--mode <mode>', `Pipeline mode: ${VALID_MODES.join(' | ')}`, 'chat')
+    .option(
+      '-m, --model <model>',
+      'Override the Orchestrator and force a specific model family (qwen3|deepseek|step-flash|scout|nemotron|qwen3-32b, case-insensitive)',
+    )
+    .option(
+      '--model-tier <tier>',
+      `Model policy tier: ${VALID_MODEL_TIERS.join(' | ')} (defaults to configured policy tier)`,
+    )
     .option('--allow-expensive', 'Approve an expensive or policy-blocked model for this run')
-    .option('--show-model-policy', 'Print the resolved backend model, provider ID, and approximate cost metadata')
+    .option(
+      '--show-model-policy',
+      'Print the resolved backend model, provider ID, and approximate cost metadata',
+    )
     .option('--session-id <id>', 'Associate this raw evidence bundle with a Local Mode session ID')
-    .option('--session-start-path <path>', 'Attach this run to an exact Local Mode session-start artifact')
-    .option('--local-learning-root <path>', 'Attach this run to a specific Local Mode learning root')
+    .option(
+      '--session-start-path <path>',
+      'Attach this run to an exact Local Mode session-start artifact',
+    )
+    .option(
+      '--local-learning-root <path>',
+      'Attach this run to a specific Local Mode learning root',
+    )
     .option('--project-root <path>', 'Explicit project root for arbitrary approved workspace repos')
-    .option('--orchestrator <version>', 'Advanced: override orchestrator contract version (default v9)')
+    .option(
+      '--orchestrator <version>',
+      'Advanced: override orchestrator contract version (default v9)',
+    )
     .option('--log-file <path>', 'Override the default per-run log with a custom log file path')
-    .option('--no-auto-log', 'Disable the default automatic per-run terminal transcript (babel.log)')
-    .option('--lock <files>', 'Comma-separated list of project-relative file paths the executor must not write')
-    .option('--allowed-tools <tools>', 'Comma-separated executor tool allowlist; when set, all other tools are denied')
-    .option('--disallowed-tools <tools>', 'Comma-separated executor tool denylist; deny rules take precedence')
-    .option('--execution-profile <profile>', `Execution profile: ${getExecutionProfileHelpText()}`, 'safe_repo')
+    .option(
+      '--no-auto-log',
+      'Disable the default automatic per-run terminal transcript (babel.log)',
+    )
+    .option(
+      '--lock <files>',
+      'Comma-separated list of project-relative file paths the executor must not write',
+    )
+    .option(
+      '--allowed-tools <tools>',
+      'Comma-separated executor tool allowlist; when set, all other tools are denied',
+    )
+    .option(
+      '--disallowed-tools <tools>',
+      'Comma-separated executor tool denylist; deny rules take precedence',
+    )
+    .option(
+      '--execution-profile <profile>',
+      `Execution profile: ${getExecutionProfileHelpText()}`,
+      'safe_repo',
+    )
     .option('--benchmark', 'Enable performance benchmarking and output manifest resolution latency')
     .option('--json', 'Emit final run result as structured JSON only')
-    .option('--output-format <format>', 'Output format: text | json | stream-json | headless | jsonl | ndjson', 'text')
-    .addHelpText('after', `
+    .option(
+      '--output-format <format>',
+      'Output format: text | json | stream-json | jsonl | ndjson',
+      'text',
+    )
+    .option('--ask', 'Ask for approval before executing any mutating tool')
+    .option('--yes', 'Auto-approve all standard operations (headless/CI mode)')
+    .option('--read-only', 'Auto-deny all mutating file writes (read-only audit mode)')
+    .option('--strict-env', 'Fail when .env keys stay inactive after bootstrap')
+    .option('--budget <tokens>', 'Hard token budget ceiling; pipeline halts if exceeded')
+    .option('--reasoning-effort <level>', 'Model reasoning effort: low | medium | high')
+    .option('--cost-optimize', 'Enable automated cost-aware model selection')
+    .option('--offline', 'Use local models only (requires Ollama on localhost:11434)')
+    .option(
+      '--use-chat-pipeline',
+      'Use legacy runChatPipeline instead of ChatEngine for --mode chat',
+    )
+    .addHelpText(
+      'after',
+      `
 Examples:
-  $ bl ask "Why is this failing?"
-  $ bl fix "Fix failing tests"
-  $ bl plan "Compare the implementation options"
   $ babel "Fix failing tests"
-  $ babel ask "Why is this failing?"
-  $ babel fix "Fix failing tests"
-  $ babel run "Fix failing tests"
-  $ babel run "Add dark mode toggle" --mode verified
-  $ babel run "Fan out investigation" --mode parallel_swarm
-  $ babel run "Prepare rollout plan" --mode manual --show-model-policy
+  $ babel plan "Compare the implementation options"
+  $ babel deep "Harden the migration path"
+  $ babel run "Add dark mode toggle" --mode deep
+  $ babel run "Fan out investigation" --mode deep
+  $ babel run "Prepare rollout plan" --mode plan --show-model-policy
   $ babel run "Refine ingestion worker" --model deepseek --model-tier standard
   $ babel run "Inspect catalog" --json
   $ babel run "Fix lint" --output-format stream-json
-  $ babel run "Fix lint" --output-format headless
   $ babel run "Audit only" --allowed-tools directory_list,file_read,semantic_search
   $ babel run "Fix tests" --execution-profile dev_local
-  $ babel run "Fix tests" --execution-profile workspace_manager --project-root ./example-game
-  $ babel run "Solve task" --execution-profile benchmark_container --mode autonomous
+  $ babel run "Fix tests" --execution-profile opencalw_manager --project-root /tmp/example_game_suite\\MyGame
+  $ babel run "Solve task" --execution-profile benchmark_container --mode deep
 
 Notes:
-  - Use bl for daily work; babel run is the advanced pipeline lane under "babel advanced".
-  - bl ask|fix|plan maps to user-shaped defaults.
-  - babel ask|fix|plan are the same user-shaped lanes from the main CLI.
-  - babel lite ask|fix|patch|plan and babel l ask|fix|patch|plan are compatibility shorthands for the same Lite path.
-  - --mode manual switches run into the Manual Bridge start flow and emits handoff JSON instead of the standard banner/status output.
-  - --json emits one final JSON object; --output-format stream-json/headless/jsonl/ndjson emits newline-delimited JSON events plus a final run_complete event.
+  - Prefer babel "<task>", babel plan, and babel deep for the user-facing CLI.
+  - --json emits one final JSON object; --output-format stream-json/jsonl/ndjson emits newline-delimited JSON events plus a final run_complete event.
   - If --project is omitted, Babel auto-detects the current repo when run from a known workspace project.
   - --model-tier selects the backend model tier under the current family route; default is loaded from config/model-policy.json.
   - Remote provider calls are normal when credentials are configured; Babel should show the boundary without blocking everyday use.
   - Explicit --model-tier escalation or --allow-expensive is treated as consent for that one interactive run.
   - Shorthand is supported: babel <Project> "<task...>" maps to babel run --project <Project> "<task...>".
-`)
-  .action(async (
-      task: string,
-      options: {
-        project?: string;
-        mode?: string;
-        model?: string;
-        modelTier?: string;
-        allowExpensive?: boolean;
-        showModelPolicy?: boolean;
-        sessionId?: string;
-        sessionStartPath?: string;
-        localLearningRoot?: string;
-        projectRoot?: string;
-        orchestrator?: string;
-        logFile?: string;
-        autoLog?: boolean;
-        lock?: string;
-        allowedTools?: string;
-        disallowedTools?: string;
-        executionProfile?: string;
-        benchmark?: boolean;
-        json?: boolean;
-        outputFormat?: string;
-      },
-    ) => {
-      const isManualMode = options.mode === 'manual';
-      const requestedMode = options.mode ?? 'verified';
-      const outputFormat = parseRunOutputFormat(options.outputFormat, options.json);
-      if (outputFormat === null) {
-        const message = `Invalid output format "${options.outputFormat}". Valid values: text, json, stream-json, headless, jsonl, ndjson`;
-        if (options.json === true) {
-          writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
-        } else {
-          console.error(`[babel] ${message}`);
-        }
-        process.exit(1);
-      }
+`,
+    )
+    .action(
+      async (
+        task: string,
+        options: {
+          project?: string;
+          mode?: string;
+          model?: string;
+          modelTier?: string;
+          allowExpensive?: boolean;
+          showModelPolicy?: boolean;
+          sessionId?: string;
+          sessionStartPath?: string;
+          localLearningRoot?: string;
+          projectRoot?: string;
+          orchestrator?: string;
+          logFile?: string;
+          autoLog?: boolean;
+          lock?: string;
+          allowedTools?: string;
+          disallowedTools?: string;
+          executionProfile?: string;
+          benchmark?: boolean;
+          json?: boolean;
+          outputFormat?: string;
+          ask?: boolean;
+          yes?: boolean;
+          readOnly?: boolean;
+          strictEnv?: boolean;
+          budget?: string;
+          reasoningEffort?: string;
+          costOptimize?: boolean;
+          offline?: boolean;
+          useChatPipeline?: boolean;
+        },
+      ) => {
+        if (process.env['BABEL_LITE_WORKER_CHAIN'] === '1') {
+          try {
+            const liteOptions: LiteCommandOptions = {};
+            if (options.project !== undefined) liteOptions.project = options.project;
+            if (options.model !== undefined) liteOptions.model = options.model;
+            if (options.modelTier !== undefined) liteOptions.modelTier = options.modelTier;
+            if (options.allowExpensive !== undefined) liteOptions.allowExpensive = options.allowExpensive;
+            if (options.showModelPolicy !== undefined) liteOptions.showModelPolicy = options.showModelPolicy;
+            if (options.projectRoot !== undefined) liteOptions.projectRoot = options.projectRoot;
+            if (options.executionProfile !== undefined) liteOptions.executionProfile = options.executionProfile;
+            if (options.json !== undefined) liteOptions.json = options.json;
+            if (options.ask !== undefined) liteOptions.ask = options.ask;
+            liteOptions.workerChain = true;
 
-      const isStructuredOutput = outputFormat !== 'text';
-      const resolvedProject = options.project ?? detectProjectFromCwd() ?? undefined;
-      validateRuntimeEnvForCommand({ json: isManualMode || isStructuredOutput });
-      const shouldUseReadOnlyQuestionPath = shouldUseReadOnlyRunQuestionPath({
-        task,
-        explicitMode: isExplicitModeArg(),
-        hasAllowedTools: options.allowedTools !== undefined,
-        hasDisallowedTools: options.disallowedTools !== undefined,
-        hasLock: options.lock !== undefined,
-      });
-      const mode = shouldUseReadOnlyQuestionPath ? 'direct' : requestedMode;
-
-      const normalizedModel = normalizeModelName(options.model);
-      const normalizedModelTier = options.modelTier !== undefined ? options.modelTier.trim().toLowerCase() : undefined;
-      const lockedFiles = parseCommaSeparatedFiles(options.lock);
-      const allowedTools = shouldUseReadOnlyQuestionPath ? READ_ONLY_RUN_TOOLS : parseCommaSeparatedFiles(options.allowedTools);
-      const disallowedTools = parseCommaSeparatedFiles(options.disallowedTools);
-      const executionProfile = normalizeExecutionProfile(options.executionProfile);
-      let resolvedProjectRoot: string | undefined;
-      let resolvedWorkspaceRoot: string | null = null;
-      let resolvedAllowedRoots: string[] = [];
-
-      if (!VALID_MODES.includes(mode as ValidMode)) {
-        const message = `Invalid mode "${mode}". Valid values: ${VALID_MODES.join(', ')}`;
-        if (isStructuredOutput) {
-          writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
-        } else {
-          console.error(`[babel] ${message}`);
-        }
-        process.exit(1);
-      }
-
-      if (executionProfile === null) {
-        const message = `Invalid execution profile "${options.executionProfile}". Valid values: ${getExecutionProfileHelpText().replace(/ \| /g, ', ')}`;
-        if (isStructuredOutput) {
-          writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
-        } else {
-          console.error(`[babel] ${message}`);
-        }
-        process.exit(1);
-      }
-
-      if (options.projectRoot !== undefined) {
-        try {
-          if (executionProfile === 'workspace_manager') {
-            const resolved = resolveApprovedWorkspacePath(options.projectRoot);
-            resolvedProjectRoot = resolved.path;
-            resolvedAllowedRoots = resolved.approvedRoots;
-          } else {
-            resolvedProjectRoot = resolve(options.projectRoot);
+            await runLiteCommand('do', [task], liteOptions);
+            return;
+          } catch (err: unknown) {
+            handleLiteFatalError(err, 'do', options);
           }
-        } catch (error: unknown) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (isStructuredOutput) {
+        }
+
+        applyRunCommandEnvFlags(options);
+        assertEnvFileActiveForPipelineCommand();
+        const isManualMode = options.mode === 'manual';
+        const requestedMode = options.mode ?? 'chat';
+        const outputFormat = parseRunOutputFormat(options.outputFormat, options.json);
+        if (outputFormat === null) {
+          const message = `Invalid output format "${options.outputFormat}". Valid values: text, json, stream-json, jsonl, ndjson`;
+          if (options.json === true) {
             writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
           } else {
-            console.error(`[babel] ${message}`);
+            console.error(`Babel: ${message}`);
           }
           process.exit(1);
         }
-      }
 
-      if (resolvedProjectRoot === undefined) {
-        const target = resolveAgentTarget({
-          ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
+        const isStructuredOutput = outputFormat !== 'text';
+        const resolvedProject = options.project ?? detectProjectFromCwd() ?? undefined;
+        validateRuntimeEnvForCommand({ json: isManualMode || isStructuredOutput });
+        const shouldUseReadOnlyQuestionPath = shouldUseReadOnlyRunQuestionPath({
+          task,
+          explicitMode: isExplicitModeArg(),
+          hasAllowedTools: options.allowedTools !== undefined,
+          hasDisallowedTools: options.disallowedTools !== undefined,
+          hasLock: options.lock !== undefined,
         });
-        resolvedProjectRoot = target.targetRoot;
-        resolvedWorkspaceRoot = target.workspaceRoot;
-      }
+        const mode = shouldUseReadOnlyQuestionPath ? 'chat' : requestedMode;
 
-      if (!existsSync(resolvedProjectRoot)) {
-        const message = `Resolved target root does not exist: ${resolvedProjectRoot}`;
-        if (isStructuredOutput) {
-          if (outputFormat === 'stream-json') {
-            writeNdjson(makeRunStreamEvent('run_error', {
-              error: message,
-              status: 'EXECUTOR_HALTED',
-              result: buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
-            }));
-          } else {
+        const normalizedModel = normalizeModelName(options.model);
+        const normalizedModelTier =
+          options.modelTier !== undefined ? options.modelTier.trim().toLowerCase() : undefined;
+        const lockedFiles = parseCommaSeparatedFiles(options.lock);
+        const allowedTools = shouldUseReadOnlyQuestionPath
+          ? READ_ONLY_RUN_TOOLS
+          : parseCommaSeparatedFiles(options.allowedTools);
+        const disallowedTools = parseCommaSeparatedFiles(options.disallowedTools);
+        const executionProfile = normalizeExecutionProfile(options.executionProfile);
+        let resolvedProjectRoot: string | undefined;
+        let resolvedWorkspaceRoot: string | null = null;
+        let resolvedAllowedRoots: string[] = [];
+
+        if (!VALID_MODES.includes(mode as ValidMode)) {
+          const message = `Invalid mode "${mode}". Valid values: ${VALID_MODES.join(', ')}`;
+          if (isStructuredOutput) {
             writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+          } else {
+            console.error(`Babel: ${message}`);
           }
-        } else {
-          process.stdout.write(`${formatRunResultHuman({
-            status: 'EXECUTOR_HALTED',
-            user_status: 'blocked',
+          process.exit(1);
+        }
+
+        if (executionProfile === null) {
+          const message = `Invalid execution profile "${options.executionProfile}". Valid values: ${getExecutionProfileHelpText().replace(/ \| /g, ', ')}`;
+          if (isStructuredOutput) {
+            writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+          } else {
+            console.error(`Babel: ${message}`);
+          }
+          process.exit(1);
+        }
+
+        if (options.projectRoot !== undefined) {
+          try {
+            if (executionProfile === 'opencalw_manager') {
+              const resolved = resolveApprovedWorkspacePath(options.projectRoot);
+              resolvedProjectRoot = resolved.path;
+              resolvedAllowedRoots = resolved.approvedRoots;
+            } else {
+              resolvedProjectRoot = resolve(options.projectRoot);
+            }
+          } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (isStructuredOutput) {
+              writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+            } else {
+              console.error(`Babel: ${message}`);
+            }
+            process.exit(1);
+          }
+        }
+
+        if (resolvedProjectRoot === undefined) {
+          const target = resolveAgentTarget({
+            ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
+          });
+          resolvedProjectRoot = target.targetRoot;
+          resolvedWorkspaceRoot = target.workspaceRoot;
+        }
+
+        if (!existsSync(resolvedProjectRoot)) {
+          const message = `Resolved target root does not exist: ${resolvedProjectRoot}`;
+          if (isStructuredOutput) {
+            if (outputFormat === 'stream-json') {
+              writeNdjson(
+                makeRunStreamEvent('run_error', {
+                  error: message,
+                  status: 'EXECUTOR_HALTED',
+                  result: buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
+                }),
+              );
+            } else {
+              writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+            }
+          } else {
+            process.stdout.write(
+              `${formatRunResultHuman({
+                status: 'EXECUTOR_HALTED',
+                user_status: 'blocked',
+                command: 'run',
+                task,
+                project: resolvedProject ?? null,
+                run_dir: null,
+                scope: {
+                  project_root: resolvedProjectRoot,
+                  allowed_write_paths: [],
+                  refused_paths: [resolvedProjectRoot],
+                },
+                changed_files: [],
+                verification: {
+                  status: 'skipped',
+                  commands: [],
+                  skipped_reason: message,
+                },
+                checkpoint: {
+                  required: false,
+                  available: false,
+                  restore_command: null,
+                  inspect_command: null,
+                },
+                evidence: {
+                  run_dir: null,
+                  support_path: null,
+                  artifacts: [],
+                },
+                terminal_status: buildTerminalStatusSummary({
+                  status: 'EXECUTOR_HALTED',
+                  condition: message,
+                }),
+                errors: [message],
+                next: ['Choose an existing project root and retry.'],
+              })}\n`,
+            );
+          }
+          process.exitCode = 1;
+          return;
+        }
+
+        if (options.model !== undefined && normalizedModel === undefined) {
+          const message = `Invalid model "${options.model}". Valid values: ${getAvailableModels()
+            .map((m) => m.key)
+            .join(', ')} (case-insensitive)`;
+          if (isStructuredOutput) {
+            writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+          } else {
+            console.error(`Babel: ${message}`);
+          }
+          process.exit(1);
+        }
+
+        if (
+          normalizedModelTier !== undefined &&
+          !VALID_MODEL_TIERS.includes(normalizedModelTier as (typeof VALID_MODEL_TIERS)[number])
+        ) {
+          const message = `Invalid model tier "${options.modelTier}". Valid values: ${VALID_MODEL_TIERS.join(', ')}`;
+          if (isStructuredOutput) {
+            writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+          } else {
+            console.error(`Babel: ${message}`);
+          }
+          process.exit(1);
+        }
+
+        if (
+          options.orchestrator !== undefined &&
+          !VALID_ORCHESTRATORS.includes(options.orchestrator as ValidOrchestrator)
+        ) {
+          const message = `Invalid orchestrator "${options.orchestrator}". Valid values: ${VALID_ORCHESTRATORS.join(', ')}`;
+          if (isStructuredOutput) {
+            writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+          } else {
+            console.error(`Babel: ${message}`);
+          }
+          process.exit(1);
+        }
+
+        const effectiveAllowExpensive = resolveEffectiveAllowExpensive({
+          task,
+          ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
+          ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
+          ...(resolvedProjectRoot !== undefined ? { projectRoot: resolvedProjectRoot } : {}),
+          allowExpensive: options.allowExpensive === true,
+          outputFormat,
+          manual: mode === 'manual',
+        });
+
+        if (normalizedModel !== undefined) {
+          try {
+            preflightRequestedModelPolicy(normalizedModel, {
+              ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
+              ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
+            });
+          } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (isModelEscalationPolicyError(message)) {
+              printModelEscalationApprovalRequired({
+                task,
+                ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
+                ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
+                ...(resolvedProjectRoot !== undefined ? { projectRoot: resolvedProjectRoot } : {}),
+                outputFormat,
+                manual: mode === 'manual',
+              });
+            }
+            if (mode === 'manual') {
+              process.stdout.write(
+                `${JSON.stringify(
+                  {
+                    status: 'MANUAL_BRIDGE_FAILED',
+                    error: message,
+                  },
+                  null,
+                  2,
+                )}\n`,
+              );
+              process.exit(1);
+            }
+            if (isStructuredOutput) {
+              writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+            } else {
+              console.error(`Babel: ${message}`);
+            }
+            process.exit(1);
+          }
+        }
+
+        if (mode === 'manual') {
+          try {
+            await withProjectRootEnv(resolvedProjectRoot, resolvedAllowedRoots, () =>
+              runManualBridgeStart(task, {
+                ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
+                ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
+                ...(options.orchestrator !== undefined
+                  ? { orchestratorVersion: options.orchestrator }
+                  : {}),
+                ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
+                ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
+                ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
+                ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+                ...(options.sessionStartPath !== undefined
+                  ? { sessionStartPath: options.sessionStartPath }
+                  : {}),
+                ...(options.localLearningRoot !== undefined
+                  ? { localLearningRoot: options.localLearningRoot }
+                  : {}),
+                ...(lockedFiles.length > 0 ? { lockedFiles } : {}),
+                executionProfile,
+              }),
+            );
+            return;
+          } catch (err: unknown) {
+            process.stdout.write(
+              `${JSON.stringify(
+                {
+                  status: 'MANUAL_BRIDGE_FAILED',
+                  error: err instanceof Error ? err.message : String(err),
+                },
+                null,
+                2,
+              )}\n`,
+            );
+            process.exit(1);
+          }
+        }
+
+        const runOutputContext = {
+          task,
+          mode: mode as ValidMode,
+          ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
+          ...(normalizedModel !== undefined ? { requestedModel: normalizedModel } : {}),
+          ...(normalizedModelTier !== undefined ? { requestedModelTier: normalizedModelTier } : {}),
+          orchestrator: options.orchestrator ?? process.env['BABEL_ORCHESTRATOR_VERSION'] ?? 'v9',
+          allowedTools,
+          disallowedTools,
+          executionProfile,
+          ...(resolvedProjectRoot !== undefined ? { projectRoot: resolvedProjectRoot } : {}),
+        };
+
+        const useChatEnginePath =
+          (mode === 'chat' || mode === 'chat-headless') && !shouldUseReadOnlyQuestionPath && options.useChatPipeline !== true;
+
+        if (!isStructuredOutput && !isManualMode && !useChatEnginePath) {
+          writeTextRunPrelude({
+            task,
+            mode: mode as ValidMode,
+            ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
+            ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
+            ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
+            orchestrator: options.orchestrator ?? process.env['BABEL_ORCHESTRATOR_VERSION'] ?? 'v9',
+            executionProfile,
+            ...(resolvedProjectRoot !== undefined ? { projectRoot: resolvedProjectRoot } : {}),
+          });
+        }
+
+        if (shouldUseReadOnlyQuestionPath) {
+          if (outputFormat === 'stream-json') {
+            writeNdjson(
+              makeRunStreamEvent('run_start', {
+                task,
+                mode: mode as ValidMode,
+                project: resolvedProject ?? null,
+              }),
+            );
+          }
+          try {
+            const payload = await withExecutionProfileEnv(
+              executionProfile,
+              allowedTools,
+              disallowedTools,
+              () =>
+                withProjectRootEnv(resolvedProjectRoot, resolvedAllowedRoots, () =>
+                  withMutedConsole(() =>
+                    runReadOnlyQuestionAsRun({
+                      task,
+                      ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
+                      projectRoot: resolvedProjectRoot!,
+                      ...(resolvedWorkspaceRoot !== null
+                        ? { workspaceRoot: resolvedWorkspaceRoot }
+                        : {}),
+                      ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
+                      ...(normalizedModelTier !== undefined
+                        ? { modelTier: normalizedModelTier }
+                        : {}),
+                      ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
+                      ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
+                    }),
+                  ),
+                ),
+            );
+            if (outputFormat === 'stream-json') {
+              writeNdjson(makeRunStreamEvent('run_complete', { result: payload }));
+            } else if (outputFormat === 'json') {
+              writeJson(payload);
+            } else {
+              const human = formatRunResultHuman(payload);
+              const runDir = typeof payload['run_dir'] === 'string' ? payload['run_dir'] : null;
+              const review = writeHumanSummaryArtifact(runDir, human);
+              process.stdout.write(`${human}\n`);
+              const note = formatHumanOutputReviewNote(review);
+              if (note) {
+                process.stdout.write(`\n${note}\n`);
+              }
+            }
+            if (payload['status'] !== 'ANSWER_READY') {
+              process.exitCode = 1;
+            }
+            return;
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (outputFormat === 'stream-json') {
+              writeNdjson(
+                makeRunStreamEvent('run_error', {
+                  error: message,
+                  status: 'EXECUTOR_HALTED',
+                  result: buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
+                }),
+              );
+            } else if (outputFormat === 'json') {
+              writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+            } else {
+              process.stdout.write(
+                `${formatRunResultHuman({
+                  ...buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
+                  command: 'run',
+                  task,
+                  project: resolvedProject ?? null,
+                  run_dir: null,
+                  changed_files: [],
+                  verification: {
+                    status: 'failed',
+                    commands: ['read-only answer path'],
+                    skipped_reason: null,
+                  },
+                  scope: {
+                    project_root: resolvedProjectRoot,
+                    allowed_write_paths: [],
+                    refused_paths: [],
+                  },
+                  checkpoint: {
+                    required: false,
+                    available: false,
+                    restore_command: null,
+                    inspect_command: null,
+                  },
+                  evidence: {
+                    run_dir: null,
+                    support_path: null,
+                    artifacts: [],
+                  },
+                })}\n`,
+              );
+            }
+            process.exitCode = 1;
+            return;
+          }
+        }
+
+        if (useChatEnginePath) {
+          if (outputFormat === 'stream-json') {
+            writeNdjson(
+              makeRunStreamEvent('run_start', {
+                task,
+                mode: mode as ValidMode,
+                project: resolvedProject ?? null,
+              }),
+            );
+          }
+          try {
+            const { payload, exitCode } = await withExecutionProfileEnv(
+              executionProfile,
+              allowedTools,
+              disallowedTools,
+              () =>
+                withProjectRootEnv(resolvedProjectRoot, resolvedAllowedRoots, () =>
+                  withMutedConsole(() =>
+                    runCliChatTask({
+                      task,
+                      ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
+                      projectRoot: resolvedProjectRoot!,
+                      ...(resolvedWorkspaceRoot !== null
+                        ? { workspaceRoot: resolvedWorkspaceRoot }
+                        : {}),
+                      ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
+                      ...(normalizedModelTier !== undefined
+                        ? { modelTier: normalizedModelTier }
+                        : {}),
+                      ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
+                      ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
+                      outputFormat: isStructuredOutput
+                        ? (outputFormat as 'json' | 'stream-json')
+                        : 'text',
+                      ...(outputFormat === 'stream-json'
+                        ? {
+                            onStreamEvent: (event) => {
+                              if (event.type === 'assistant_chunk') {
+                                writeNdjson(
+                                  makeRunStreamEvent('assistant_chunk', { chunk: event.chunk }),
+                                );
+                              }
+                            },
+                          }
+                        : {}),
+                    }),
+                  ),
+                ),
+            );
+            if (outputFormat === 'stream-json') {
+              writeNdjson(makeRunStreamEvent('run_complete', { result: payload }));
+            } else if (outputFormat === 'json') {
+              writeJson(payload);
+            } else {
+              const usedConversational =
+                process.stdout.isTTY && !process.env['CI'] && !process.env['NO_COLOR'];
+              if (!usedConversational) {
+                const human = formatRunResultHuman(payload);
+                process.stdout.write(`${human}\n`);
+              }
+            }
+            process.exitCode = exitCode;
+            return;
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (outputFormat === 'stream-json') {
+              writeNdjson(
+                makeRunStreamEvent('run_error', {
+                  error: message,
+                  status: 'EXECUTOR_HALTED',
+                  result: buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
+                }),
+              );
+            } else if (outputFormat === 'json') {
+              writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+            } else {
+              process.stdout.write(
+                `${formatRunResultHuman({
+                  ...buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
+                  command: 'run',
+                  task,
+                  project: resolvedProject ?? null,
+                  run_dir: null,
+                  changed_files: [],
+                  verification: {
+                    status: 'failed',
+                    commands: ['chat engine path'],
+                    skipped_reason: null,
+                  },
+                  scope: {
+                    project_root: resolvedProjectRoot,
+                    allowed_write_paths: [],
+                    refused_paths: [],
+                  },
+                  checkpoint: {
+                    required: false,
+                    available: false,
+                    restore_command: null,
+                    inspect_command: null,
+                  },
+                  evidence: {
+                    run_dir: null,
+                    support_path: null,
+                    artifacts: [],
+                  },
+                })}\n`,
+              );
+            }
+            process.exitCode = 1;
+            return;
+          }
+        }
+
+        if (isStructuredOutput) {
+          const eventBus = new BabelEventBus();
+          if (outputFormat === 'stream-json') {
+            attachRunEventStream(eventBus, runOutputContext);
+          }
+
+          try {
+            const result = await withExecutionProfileEnv(
+              executionProfile,
+              allowedTools,
+              disallowedTools,
+              () =>
+                withProjectRootEnv(resolvedProjectRoot, resolvedAllowedRoots, () =>
+                  withMutedConsole(() =>
+                    runBabelPipeline(task, {
+                      ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
+                      ...(normalizedModel !== undefined ? { modelOverride: normalizedModel } : {}),
+                      ...(options.orchestrator !== undefined
+                        ? { orchestratorVersion: options.orchestrator as ValidOrchestrator }
+                        : {}),
+                      ...(normalizedModelTier !== undefined
+                        ? { modelTier: normalizedModelTier }
+                        : {}),
+                      ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
+                      ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
+                      ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+                      ...(options.sessionStartPath !== undefined
+                        ? { sessionStartPath: options.sessionStartPath }
+                        : {}),
+                      ...(options.localLearningRoot !== undefined
+                        ? { localLearningRoot: options.localLearningRoot }
+                        : {}),
+                      ...(lockedFiles.length > 0 ? { lockedFiles } : {}),
+                      mode: mode as ValidMode,
+                      executionProfile,
+                      ...(options.logFile !== undefined ? { logFile: options.logFile } : {}),
+                      ...(options.autoLog !== undefined ? { autoLog: options.autoLog } : {}),
+                      ...(options.benchmark === true ? { benchmark: true } : {}),
+                      eventBus,
+                    }),
+                  ),
+                ),
+            );
+
+            const completionVerification = buildCompletionVerificationForRun({
+              pipelineStatus: result.status,
+              executionProfile,
+              ...(resolvedProjectRoot !== undefined ? { projectRoot: resolvedProjectRoot } : {}),
+            });
+            const payload = buildRunResultPayload(result, runOutputContext);
+            payload['completion_verification'] = completionVerification;
+            if (completionVerification.status === 'fail') {
+              payload['status'] = 'VERIFIER_FAILED';
+            }
+            if (outputFormat === 'stream-json') {
+              writeNdjson(makeRunStreamEvent('run_complete', { result: payload }));
+            } else {
+              writeJson(payload);
+            }
+
+            if (!isSuccessfulRunStatus(result.status) || completionVerification.status === 'fail') {
+              process.exitCode = 1;
+            }
+            return;
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            const readOnlyNoModification = isReadOnlyNoModificationRequest({
+              task,
+              mode,
+              allowedTools,
+            });
+            const failureStatus = readOnlyNoModification
+              ? 'READ_ONLY_NO_MODIFICATION'
+              : 'EXECUTOR_HALTED';
+            if (outputFormat === 'stream-json') {
+              writeNdjson(
+                makeRunStreamEvent('run_error', {
+                  error: message,
+                  status: failureStatus,
+                  result: buildRunCommandFailurePayload({ status: failureStatus, message }),
+                }),
+              );
+            } else {
+              writeJson(buildRunCommandFailurePayload({ status: failureStatus, message }));
+            }
+            process.exitCode = readOnlyNoModification ? 0 : 1;
+            return;
+          }
+        }
+
+        const eventBus = new BabelEventBus();
+        const liveRenderer = createLiveRunRenderer(eventBus, runOutputContext);
+        liveRenderer.start();
+
+        try {
+          const result = await withExecutionProfileEnv(
+            executionProfile,
+            allowedTools,
+            disallowedTools,
+            () =>
+              withProjectRootEnv(resolvedProjectRoot, resolvedAllowedRoots, () =>
+                withMutedConsole(() =>
+                  runBabelPipeline(task, {
+                    ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
+                    ...(normalizedModel !== undefined ? { modelOverride: normalizedModel } : {}),
+                    ...(options.orchestrator !== undefined
+                      ? { orchestratorVersion: options.orchestrator as ValidOrchestrator }
+                      : {}),
+                    ...(normalizedModelTier !== undefined
+                      ? { modelTier: normalizedModelTier }
+                      : {}),
+                    ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
+                    ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
+                    ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+                    ...(options.sessionStartPath !== undefined
+                      ? { sessionStartPath: options.sessionStartPath }
+                      : {}),
+                    ...(options.localLearningRoot !== undefined
+                      ? { localLearningRoot: options.localLearningRoot }
+                      : {}),
+                    ...(lockedFiles.length > 0 ? { lockedFiles } : {}),
+                    mode: mode as ValidMode,
+                    executionProfile,
+                    ...(options.logFile !== undefined ? { logFile: options.logFile } : {}),
+                    ...(options.autoLog !== undefined ? { autoLog: options.autoLog } : {}),
+                    ...(options.benchmark === true ? { benchmark: true } : {}),
+                    eventBus,
+                  }),
+                ),
+              ),
+          );
+
+          liveRenderer.stop();
+          const completionVerification = buildCompletionVerificationForRun({
+            pipelineStatus: result.status,
+            executionProfile,
+            ...(resolvedProjectRoot !== undefined ? { projectRoot: resolvedProjectRoot } : {}),
+          });
+          const payload = buildRunResultPayload(result, runOutputContext);
+          payload['completion_verification'] = completionVerification;
+          if (completionVerification.status === 'fail') {
+            payload['status'] = 'VERIFIER_FAILED';
+          }
+          const human = formatRunResultHuman(payload);
+          const review = writeHumanSummaryArtifact(
+            result.runDir,
+            human,
+            [
+              typeof liveRenderer.getTranscript === 'function' ? liveRenderer.getTranscript() : '',
+              human,
+            ]
+              .filter(Boolean)
+              .join('\n'),
+          );
+          process.stdout.write(`${human}\n`);
+          const note = formatHumanOutputReviewNote(review);
+          if (note) {
+            process.stdout.write(`\n${note}\n`);
+          }
+          if (completionVerification.required) {
+            process.stdout.write(
+              `\nCompletion verification: ${completionVerification.status} — ${completionVerification.reason}\n`,
+            );
+          }
+
+          if (!isSuccessfulRunStatus(result.status) || completionVerification.status === 'fail') {
+            process.exitCode = 1;
+          }
+        } catch (err: unknown) {
+          liveRenderer.fail(err);
+          const message = err instanceof Error ? err.message : String(err);
+          const readOnlyNoModification = isReadOnlyNoModificationRequest({
+            task,
+            mode,
+            allowedTools,
+          });
+          const failureStatus = readOnlyNoModification
+            ? 'READ_ONLY_NO_MODIFICATION'
+            : 'EXECUTOR_HALTED';
+          const payload = {
+            ...buildRunCommandFailurePayload({ status: failureStatus, message }),
             command: 'run',
             task,
             project: resolvedProject ?? null,
             run_dir: null,
-            scope: {
-              project_root: resolvedProjectRoot,
-              allowed_write_paths: [],
-              refused_paths: [resolvedProjectRoot],
-            },
             changed_files: [],
             verification: {
-              status: 'skipped',
-              commands: [],
-              skipped_reason: message,
+              status: readOnlyNoModification ? 'not_required' : 'failed',
+              commands: readOnlyNoModification ? ['read-only run path'] : [],
+              skipped_reason: null,
             },
             checkpoint: {
               required: false,
@@ -1727,548 +2806,346 @@ Notes:
               support_path: null,
               artifacts: [],
             },
-            terminal_status: buildTerminalStatusSummary({
-              status: 'EXECUTOR_HALTED',
-              condition: message,
-            }),
-            errors: [message],
-            next: ['Choose an existing project root and retry.'],
-          })}\n`);
-        }
-        process.exitCode = 1;
-        return;
-      }
-
-      if (options.model !== undefined && normalizedModel === undefined) {
-        const message = `Invalid model "${options.model}". Valid values: ${getAvailableModels().map(m => m.key).join(', ')} (case-insensitive)`;
-        if (isStructuredOutput) {
-          writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
-        } else {
-          console.error(`[babel] ${message}`);
-        }
-        process.exit(1);
-      }
-
-      if (normalizedModelTier !== undefined && !VALID_MODEL_TIERS.includes(normalizedModelTier as typeof VALID_MODEL_TIERS[number])) {
-        const message = `Invalid model tier "${options.modelTier}". Valid values: ${VALID_MODEL_TIERS.join(', ')}`;
-        if (isStructuredOutput) {
-          writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
-        } else {
-          console.error(`[babel] ${message}`);
-        }
-        process.exit(1);
-      }
-
-      if (options.orchestrator !== undefined && !VALID_ORCHESTRATORS.includes(options.orchestrator as ValidOrchestrator)) {
-        const message = `Invalid orchestrator "${options.orchestrator}". Valid values: ${VALID_ORCHESTRATORS.join(', ')}`;
-        if (isStructuredOutput) {
-          writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
-        } else {
-          console.error(`[babel] ${message}`);
-        }
-        process.exit(1);
-      }
-
-      const effectiveAllowExpensive = resolveEffectiveAllowExpensive({
-        task,
-        ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
-        ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
-        ...(resolvedProjectRoot !== undefined ? { projectRoot: resolvedProjectRoot } : {}),
-        allowExpensive: options.allowExpensive === true,
-        outputFormat,
-        manual: mode === 'manual',
-      });
-
-      if (normalizedModel !== undefined) {
-        try {
-          preflightRequestedModelPolicy(normalizedModel, {
-            ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
-            ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
-          });
-        } catch (error: unknown) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (isModelEscalationPolicyError(message)) {
-            printModelEscalationApprovalRequired({
-              task,
-              ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
-              ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
-              ...(resolvedProjectRoot !== undefined ? { projectRoot: resolvedProjectRoot } : {}),
-              outputFormat,
-              manual: mode === 'manual',
-            });
-          }
-          if (mode === 'manual') {
-            process.stdout.write(`${JSON.stringify({
-              status: 'MANUAL_BRIDGE_FAILED',
-              error: message,
-            }, null, 2)}\n`);
-            process.exit(1);
-          }
-          if (isStructuredOutput) {
-            writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
-          } else {
-            console.error(`[babel] Fatal: ${message}`);
-          }
-          process.exit(1);
-        }
-      }
-
-      if (mode === 'manual') {
-        try {
-          await withProjectRootEnv(resolvedProjectRoot, resolvedAllowedRoots, () => runManualBridgeStart(task, {
-            ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
-            ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
-            ...(options.orchestrator !== undefined ? { orchestratorVersion: options.orchestrator } : {}),
-            ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
-            ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
-            ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
-            ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
-            ...(options.sessionStartPath !== undefined ? { sessionStartPath: options.sessionStartPath } : {}),
-            ...(options.localLearningRoot !== undefined ? { localLearningRoot: options.localLearningRoot } : {}),
-            ...(lockedFiles.length > 0 ? { lockedFiles } : {}),
-            executionProfile,
-          }));
-          return;
-        } catch (err: unknown) {
-          process.stdout.write(`${JSON.stringify({
-            status: 'MANUAL_BRIDGE_FAILED',
-            error: err instanceof Error ? err.message : String(err),
-          }, null, 2)}\n`);
-          process.exit(1);
-        }
-      }
-
-      const runOutputContext = {
-        task,
-        mode: mode as ValidMode,
-        ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
-        ...(normalizedModel !== undefined ? { requestedModel: normalizedModel } : {}),
-        ...(normalizedModelTier !== undefined ? { requestedModelTier: normalizedModelTier } : {}),
-        orchestrator: options.orchestrator ?? process.env['BABEL_ORCHESTRATOR_VERSION'] ?? 'v9',
-        allowedTools,
-        disallowedTools,
-        executionProfile,
-        ...(resolvedProjectRoot !== undefined ? { projectRoot: resolvedProjectRoot } : {}),
-      };
-
-      if (shouldUseReadOnlyQuestionPath) {
-        if (outputFormat === 'stream-json') {
-          writeNdjson(makeRunStreamEvent('run_start', {
-            task,
-            mode: mode as ValidMode,
-            project: resolvedProject ?? null,
-          }));
-        }
-        try {
-          const payload = await withExecutionProfileEnv(
-            executionProfile,
-            allowedTools,
-            disallowedTools,
-            () => withProjectRootEnv(
-              resolvedProjectRoot,
-              resolvedAllowedRoots,
-              () => withMutedConsole(() => runReadOnlyQuestionAsRun({
-                task,
-                ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
-                projectRoot: resolvedProjectRoot!,
-                ...(resolvedWorkspaceRoot !== null ? { workspaceRoot: resolvedWorkspaceRoot } : {}),
-                ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
-                ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
-                ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
-                ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
-              })),
-            ),
-          );
-          if (outputFormat === 'stream-json') {
-            writeNdjson(makeRunStreamEvent('run_complete', { result: payload }));
-          } else if (outputFormat === 'json') {
-            writeJson(payload);
-          } else {
-            const human = formatRunResultHuman(payload);
-            const runDir = typeof payload['run_dir'] === 'string' ? payload['run_dir'] : null;
-            const review = writeHumanSummaryArtifact(runDir, human);
-            process.stdout.write(`${human}\n`);
-            if (review?.status === 'needs_attention') {
-              process.stdout.write('\nOutput review: target mismatch detected\n');
-            }
-          }
-          if (payload['status'] !== 'ANSWER_READY') {
-            process.exitCode = 1;
-          }
-          return;
-        } catch (err: unknown) {
-          const message = err instanceof Error ? err.message : String(err);
-          if (outputFormat === 'stream-json') {
-            writeNdjson(makeRunStreamEvent('run_error', {
-              error: message,
-              status: 'EXECUTOR_HALTED',
-              result: buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
-            }));
-          } else if (outputFormat === 'json') {
-            writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
-          } else {
-            process.stdout.write(`${formatRunResultHuman({
-              ...buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
-              command: 'run',
-              task,
-              project: resolvedProject ?? null,
-              run_dir: null,
-              changed_files: [],
-              verification: {
-                status: 'failed',
-                commands: ['read-only answer path'],
-                skipped_reason: null,
-              },
-              scope: {
-                project_root: resolvedProjectRoot,
-                allowed_write_paths: [],
-                refused_paths: [],
-              },
-              checkpoint: {
-                required: false,
-                available: false,
-                restore_command: null,
-                inspect_command: null,
-              },
-              evidence: {
-                run_dir: null,
-                support_path: null,
-                artifacts: [],
-              },
-            })}\n`);
-          }
-          process.exitCode = 1;
-          return;
-        }
-      }
-
-      if (isStructuredOutput) {
-        const eventBus = new BabelEventBus();
-        if (outputFormat === 'stream-json') {
-          attachRunEventStream(eventBus, runOutputContext);
-        }
-
-        try {
-          const result = await withExecutionProfileEnv(executionProfile, allowedTools, disallowedTools, () => withProjectRootEnv(resolvedProjectRoot, resolvedAllowedRoots, () => withMutedConsole(() => runBabelPipeline(task, {
-            ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
-            ...(normalizedModel !== undefined ? { modelOverride: normalizedModel } : {}),
-            ...(options.orchestrator !== undefined ? { orchestratorVersion: options.orchestrator as ValidOrchestrator } : {}),
-            ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
-            ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
-            ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
-            ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
-            ...(options.sessionStartPath !== undefined ? { sessionStartPath: options.sessionStartPath } : {}),
-            ...(options.localLearningRoot !== undefined ? { localLearningRoot: options.localLearningRoot } : {}),
-            ...(lockedFiles.length > 0 ? { lockedFiles } : {}),
-            mode: mode as ValidMode,
-            executionProfile,
-            ...(options.logFile !== undefined ? { logFile: options.logFile } : {}),
-            ...(options.autoLog !== undefined ? { autoLog: options.autoLog } : {}),
-            ...(options.benchmark === true ? { benchmark: true } : {}),
-            eventBus,
-          }))));
-
-          const completionVerification = buildCompletionVerificationForRun({
-            pipelineStatus: result.status,
-            executionProfile,
-            ...(resolvedProjectRoot !== undefined ? { projectRoot: resolvedProjectRoot } : {}),
-          });
-          const payload = buildRunResultPayload(result, runOutputContext);
-          payload['completion_verification'] = completionVerification;
-          if (completionVerification.status === 'fail') {
-            payload['status'] = 'VERIFIER_FAILED';
-          }
-          if (outputFormat === 'stream-json') {
-            writeNdjson(makeRunStreamEvent('run_complete', { result: payload }));
-          } else {
-            writeJson(payload);
-          }
-
-          if (!isSuccessfulRunStatus(result.status) || completionVerification.status === 'fail') {
-            process.exitCode = 1;
-          }
-          return;
-        } catch (err: unknown) {
-          const message = err instanceof Error ? err.message : String(err);
-          const readOnlyNoModification = isReadOnlyNoModificationRequest({
-            task,
-            mode,
-            allowedTools,
-          });
-          const failureStatus = readOnlyNoModification
-            ? 'READ_ONLY_NO_MODIFICATION'
-            : 'EXECUTOR_HALTED';
-          if (outputFormat === 'stream-json') {
-            writeNdjson(makeRunStreamEvent('run_error', {
-              error: message,
-              status: failureStatus,
-              result: buildRunCommandFailurePayload({ status: failureStatus, message }),
-            }));
-          } else {
-            writeJson(buildRunCommandFailurePayload({ status: failureStatus, message }));
-          }
+            next: readOnlyNoModification
+              ? [
+                  'Review the read-only result and rerun with an applying command if changes are needed.',
+                ]
+              : ['Run babel continue latest to inspect recovery state and the next command.'],
+          };
+          process.stdout.write(`${formatRunResultHuman(payload)}\n`);
           process.exitCode = readOnlyNoModification ? 0 : 1;
-          return;
         }
-      }
-
-      const eventBus = new BabelEventBus();
-      const liveRenderer = createLiveRunRenderer(eventBus, runOutputContext);
-      liveRenderer.start();
-
-      try {
-        const result = await withExecutionProfileEnv(executionProfile, allowedTools, disallowedTools, () => withProjectRootEnv(resolvedProjectRoot, resolvedAllowedRoots, () => withMutedConsole(() => runBabelPipeline(task, {
-          ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
-          ...(normalizedModel !== undefined ? { modelOverride: normalizedModel } : {}),
-          ...(options.orchestrator !== undefined ? { orchestratorVersion: options.orchestrator as ValidOrchestrator } : {}),
-          ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
-          ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
-          ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
-          ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
-          ...(options.sessionStartPath !== undefined ? { sessionStartPath: options.sessionStartPath } : {}),
-          ...(options.localLearningRoot !== undefined ? { localLearningRoot: options.localLearningRoot } : {}),
-          ...(lockedFiles.length > 0 ? { lockedFiles } : {}),
-          mode: mode as ValidMode,
-          executionProfile,
-          ...(options.logFile !== undefined ? { logFile: options.logFile } : {}),
-          ...(options.autoLog !== undefined ? { autoLog: options.autoLog } : {}),
-          ...(options.benchmark === true ? { benchmark: true } : {}),
-          eventBus,
-        }))));
-
-        liveRenderer.stop();
-        const completionVerification = buildCompletionVerificationForRun({
-          pipelineStatus: result.status,
-          executionProfile,
-          ...(resolvedProjectRoot !== undefined ? { projectRoot: resolvedProjectRoot } : {}),
-        });
-        const payload = buildRunResultPayload(result, runOutputContext);
-        payload['completion_verification'] = completionVerification;
-        if (completionVerification.status === 'fail') {
-          payload['status'] = 'VERIFIER_FAILED';
-        }
-        const human = formatRunResultHuman(payload);
-        const review = writeHumanSummaryArtifact(
-          result.runDir,
-          human,
-          [typeof liveRenderer.getTranscript === 'function' ? liveRenderer.getTranscript() : '', human].filter(Boolean).join('\n'),
-        );
-        process.stdout.write(`${human}\n`);
-        if (review?.status === 'needs_attention') {
-          process.stdout.write('\nOutput review: target mismatch detected\n');
-        }
-        if (completionVerification.required) {
-          process.stdout.write(`\nCompletion verification: ${completionVerification.status} — ${completionVerification.reason}\n`);
-        }
-
-        if (!isSuccessfulRunStatus(result.status) || completionVerification.status === 'fail') {
-          process.exitCode = 1;
-        }
-      } catch (err: unknown) {
-        liveRenderer.fail(err);
-        const message = err instanceof Error ? err.message : String(err);
-        const readOnlyNoModification = isReadOnlyNoModificationRequest({
-          task,
-          mode,
-          allowedTools,
-        });
-        const failureStatus = readOnlyNoModification
-          ? 'READ_ONLY_NO_MODIFICATION'
-          : 'EXECUTOR_HALTED';
-        const payload = {
-          ...buildRunCommandFailurePayload({ status: failureStatus, message }),
-          command: 'run',
-          task,
-          project: resolvedProject ?? null,
-          run_dir: null,
-          changed_files: [],
-          verification: {
-            status: readOnlyNoModification ? 'not_required' : 'failed',
-            commands: readOnlyNoModification ? ['read-only run path'] : [],
-            skipped_reason: null,
-          },
-          checkpoint: {
-            required: false,
-            available: false,
-            restore_command: null,
-            inspect_command: null,
-          },
-          evidence: {
-            run_dir: null,
-            support_path: null,
-            artifacts: [],
-          },
-          next: readOnlyNoModification
-            ? ['Review the read-only result and rerun with an applying command if changes are needed.']
-            : ['Run babel continue latest to inspect recovery state and the next command.'],
-        };
-        process.stdout.write(`${formatRunResultHuman(payload)}\n`);
-        process.exitCode = readOnlyNoModification ? 0 : 1;
-      }
-    });
+      },
+    );
 
   program
     .command('plan')
-    .description('Plan work without editing files')
+    .description('Prepare a plan, ask for approval, then apply it in the same terminal flow')
     .argument('<intent...>', 'Task text, or legacy: <project> <task...>')
     .option('-p, --project <name>', 'Target project for the user-facing plan lane')
-    .option('-m, --model <model>', 'Force a specific model family for the manual-bridge worker (qwen3|deepseek|step-flash|scout|nemotron|qwen3-32b, case-insensitive)')
-    .option('--model-tier <tier>', `Model policy tier: ${VALID_MODEL_TIERS.join(' | ')} (defaults to configured policy tier)`)
+    .option(
+      '-m, --model <model>',
+      'Force a specific model family for the manual-bridge worker (qwen3|deepseek|step-flash|scout|nemotron|qwen3-32b, case-insensitive)',
+    )
+    .option(
+      '--model-tier <tier>',
+      `Model policy tier: ${VALID_MODEL_TIERS.join(' | ')} (defaults to configured policy tier)`,
+    )
     .option('--allow-expensive', 'Approve an expensive or policy-blocked model for this run')
-    .option('--show-model-policy', 'Include resolved backend model policy details in the manual-bridge JSON output')
+    .option(
+      '--show-model-policy',
+      'Include resolved backend model policy details in the manual-bridge JSON output',
+    )
     .option('--project-root <path>', 'Explicit project root for arbitrary approved workspace repos')
     .option('--session-id <id>', 'Associate this manual-bridge run with a Local Mode session ID')
-    .option('--session-start-path <path>', 'Attach this manual-bridge run to an exact Local Mode session-start artifact')
-    .option('--local-learning-root <path>', 'Attach this manual-bridge run to a specific Local Mode learning root')
-    .option('--orchestrator <version>', 'Advanced: override orchestrator contract version (default v9)')
-    .option('--execution-profile <profile>', `Execution profile: ${getExecutionProfileHelpText()}`, 'safe_repo')
+    .option(
+      '--session-start-path <path>',
+      'Attach this manual-bridge run to an exact Local Mode session-start artifact',
+    )
+    .option(
+      '--local-learning-root <path>',
+      'Attach this manual-bridge run to a specific Local Mode learning root',
+    )
+    .option(
+      '--orchestrator <version>',
+      'Advanced: override orchestrator contract version (default v9)',
+    )
+    .option('--final-only', 'Send progress to stderr and the final answer to stdout')
+    .option('--approve', 'Auto-approve apply in non-TTY environments (explicit opt-in)')
+    .option('--shadow', 'Apply to shadow root only (dry-run preview before live apply)')
     .option('--json', 'Emit structured JSON only')
-    .addHelpText('after', `
+    .addHelpText(
+      'after',
+      `
 Examples:
   $ babel plan "Prepare rollout plan"
   $ babel plan "Compare the implementation options"
   $ babel plan example_saas_backend "Prepare rollout plan"
   $ babel plan example_llm_router "Draft migration plan" --model deepseek --model-tier standard --show-model-policy
-  $ babel plan example_llm_router "Draft migration plan" --session-id launch-demo-001
-  $ babel plan example_saas_backend "Audit risk only" --execution-profile read_only_audit
 
 Notes:
-  - babel plan "<task>" is the user-facing no-edit plan lane.
+  - babel plan runs a planner, a separate review agent, then asks whether to apply it now.
+  - --json keeps the read-only plan artifact contract for automation.
   - babel plan <known-project> "<task>" is kept as the legacy Manual Bridge JSON flow.
-  - Use babel run "<task>" --mode manual when you explicitly need Manual Bridge internals.
-`)
-    .action(async (
-      intent: string[],
-      options: {
-        project?: string;
-        model?: string;
-        modelTier?: string;
-        allowExpensive?: boolean;
-        showModelPolicy?: boolean;
-        projectRoot?: string;
-        sessionId?: string;
-        sessionStartPath?: string;
-        localLearningRoot?: string;
-        orchestrator?: string;
-        executionProfile?: string;
-        json?: boolean;
-      },
-    ) => {
-      const legacyProject = VALID_PROJECTS.includes(intent[0] as typeof VALID_PROJECTS[number]) && intent.length > 1
-        ? intent[0]
-        : undefined;
+`,
+    )
+    .action(
+      async (
+        intent: string[],
+        options: {
+          project?: string;
+          model?: string;
+          modelTier?: string;
+          allowExpensive?: boolean;
+          showModelPolicy?: boolean;
+          projectRoot?: string;
+          sessionId?: string;
+          sessionStartPath?: string;
+          localLearningRoot?: string;
+          orchestrator?: string;
+          finalOnly?: boolean;
+          approve?: boolean;
+          shadow?: boolean;
+          json?: boolean;
+        },
+      ) => {
+        const firstToken = intent[0] ?? '';
+        const legacyProject =
+          firstToken !== '' && resolveProjectRoot(firstToken) !== null && intent.length > 1
+            ? firstToken
+            : undefined;
 
-      if (legacyProject === undefined) {
-        try {
-          await runLiteCommand('plan', intent, options);
-        } catch (err: unknown) {
-          const message = err instanceof Error ? err.message : String(err);
-          if (options.json === true) {
-            writeJson({ status: 'LITE_FAILED', command: 'plan', error: message });
-          } else {
-            console.error(`[babel] ${message}`);
+        if (legacyProject === undefined) {
+          try {
+            await runLiteCommand('plan', intent, options);
+            if (options.json === true || options.finalOnly === true) {
+              return;
+            }
+            const task = normalizeLiteTask(intent);
+            if (!task) {
+              return;
+            }
+            const projectRoot =
+              options.projectRoot !== undefined
+                ? resolve(options.projectRoot)
+                : process.env['BABEL_PROJECT_ROOT'] !== undefined
+                  ? resolve(process.env['BABEL_PROJECT_ROOT'])
+                  : process.cwd();
+            const handoff = loadPlanHandoff({ repoPath: projectRoot, task });
+            if (handoff !== null) {
+              const review = await runPlanReviewLane({
+                task,
+                planRunDir: handoff.planRunDir,
+                projectRoot,
+              });
+              process.stderr.write(`${review.humanText}\n`);
+            }
+            const routeDecision = routeLiteOrFull(task, {
+              requestedVerb: 'do',
+              dailyProfile: resolveDailyProfile(),
+            });
+            if (!routeDecision.intent.mutation_allowed) {
+              process.stderr.write(
+                'Plan is ready. This task remains no-write until you ask Babel to apply a concrete change.\n',
+              );
+              return;
+            }
+            const approved = await promptPlanApproval(task, options.approve === true);
+            if (!approved) {
+              return;
+            }
+            const previousDryRun = process.env['BABEL_DRY_RUN'];
+            const previousDryRunSource = process.env['BABEL_DRY_RUN_SOURCE'];
+            if (options.shadow === true) {
+              process.env['BABEL_DRY_RUN'] = 'true';
+              process.env['BABEL_DRY_RUN_SOURCE'] = 'cli';
+            }
+            if (routeDecision.selected_lane === 'deep_lane') {
+              await runDeepCommand(intent, {
+                ...(options.project !== undefined ? { project: options.project } : {}),
+                ...(options.projectRoot !== undefined ? { projectRoot: options.projectRoot } : {}),
+                ...(options.model !== undefined ? { model: options.model } : {}),
+                ...(options.modelTier !== undefined ? { modelTier: options.modelTier } : {}),
+                ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+                ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
+                ...(((options as { json?: boolean }).json ?? false) ? { json: true } : {}),
+              });
+              if (options.shadow === true) {
+                if (previousDryRun === undefined) {
+                  delete process.env['BABEL_DRY_RUN'];
+                } else {
+                  process.env['BABEL_DRY_RUN'] = previousDryRun;
+                }
+                if (previousDryRunSource === undefined) {
+                  delete process.env['BABEL_DRY_RUN_SOURCE'];
+                } else {
+                  process.env['BABEL_DRY_RUN_SOURCE'] = previousDryRunSource;
+                }
+              }
+              return;
+            }
+            try {
+              await runLiteCommand('do', intent, options);
+            } finally {
+              if (options.shadow === true) {
+                if (previousDryRun === undefined) {
+                  delete process.env['BABEL_DRY_RUN'];
+                } else {
+                  process.env['BABEL_DRY_RUN'] = previousDryRun;
+                }
+                if (previousDryRunSource === undefined) {
+                  delete process.env['BABEL_DRY_RUN_SOURCE'];
+                } else {
+                  process.env['BABEL_DRY_RUN_SOURCE'] = previousDryRunSource;
+                }
+              }
+            }
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (options.json === true) {
+              writeJson({ status: 'LITE_FAILED', command: 'plan', error: message });
+            } else {
+              console.error(`Babel: ${message}`);
+            }
+            process.exit(1);
           }
+          return;
+        }
+
+        validateRuntimeEnvForCommand({ json: true });
+
+        const project = legacyProject;
+        const task = intent.slice(1).join(' ').trim();
+        const normalizedModel = normalizeModelName(options.model);
+        const normalizedModelTier =
+          options.modelTier !== undefined ? options.modelTier.trim().toLowerCase() : undefined;
+        const executionProfile = normalizeExecutionProfile('safe_repo');
+
+        if (!task) {
+          process.stdout.write(
+            `${JSON.stringify(
+              {
+                status: 'PLAN_ALIAS_FAILED',
+                error: 'Intent is required.',
+              },
+              null,
+              2,
+            )}\n`,
+          );
           process.exit(1);
         }
-        return;
-      }
-
-      validateRuntimeEnvForCommand({ json: true });
-
-      const project = legacyProject;
-      const task = intent.slice(1).join(' ').trim();
-      const normalizedModel = normalizeModelName(options.model);
-      const normalizedModelTier = options.modelTier !== undefined ? options.modelTier.trim().toLowerCase() : undefined;
-      const executionProfile = normalizeExecutionProfile(options.executionProfile);
-
-      if (!task) {
-        process.stdout.write(`${JSON.stringify({
-          status: 'PLAN_ALIAS_FAILED',
-          error: 'Intent is required.',
-        }, null, 2)}\n`);
-        process.exit(1);
-      }
-      if (options.model !== undefined && normalizedModel === undefined) {
-        process.stdout.write(`${JSON.stringify({
-          status: 'PLAN_ALIAS_FAILED',
-          error: `Invalid model "${options.model}". Valid values: ${getAvailableModels().map(m => m.key).join(', ')} (case-insensitive)`,
-        }, null, 2)}\n`);
-        process.exit(1);
-      }
-      if (normalizedModelTier !== undefined && !VALID_MODEL_TIERS.includes(normalizedModelTier as typeof VALID_MODEL_TIERS[number])) {
-        process.stdout.write(`${JSON.stringify({
-          status: 'PLAN_ALIAS_FAILED',
-          error: `Invalid model tier "${options.modelTier}". Valid values: ${VALID_MODEL_TIERS.join(', ')}`,
-        }, null, 2)}\n`);
-        process.exit(1);
-      }
-      if (options.orchestrator !== undefined && !VALID_ORCHESTRATORS.includes(options.orchestrator as ValidOrchestrator)) {
-        process.stdout.write(`${JSON.stringify({
-          status: 'PLAN_ALIAS_FAILED',
-          error: `Invalid orchestrator "${options.orchestrator}". Valid values: ${VALID_ORCHESTRATORS.join(', ')}`,
-        }, null, 2)}\n`);
-        process.exit(1);
-      }
-      if (executionProfile === null) {
-        process.stdout.write(`${JSON.stringify({
-          status: 'PLAN_ALIAS_FAILED',
-          error: `Invalid execution profile "${options.executionProfile}". Valid values: ${getExecutionProfileHelpText().replace(/ \| /g, ', ')}`,
-        }, null, 2)}\n`);
-        process.exit(1);
-      }
-      const effectiveAllowExpensive = resolveEffectiveAllowExpensive({
-        task,
-        ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
-        ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
-        allowExpensive: options.allowExpensive === true,
-        outputFormat: 'json',
-        manual: true,
-      });
-      if (normalizedModel !== undefined) {
+        if (options.model !== undefined && normalizedModel === undefined) {
+          process.stdout.write(
+            `${JSON.stringify(
+              {
+                status: 'PLAN_ALIAS_FAILED',
+                error: `Invalid model "${options.model}". Valid values: ${getAvailableModels()
+                  .map((m) => m.key)
+                  .join(', ')} (case-insensitive)`,
+              },
+              null,
+              2,
+            )}\n`,
+          );
+          process.exit(1);
+        }
+        if (
+          normalizedModelTier !== undefined &&
+          !VALID_MODEL_TIERS.includes(normalizedModelTier as (typeof VALID_MODEL_TIERS)[number])
+        ) {
+          process.stdout.write(
+            `${JSON.stringify(
+              {
+                status: 'PLAN_ALIAS_FAILED',
+                error: `Invalid model tier "${options.modelTier}". Valid values: ${VALID_MODEL_TIERS.join(', ')}`,
+              },
+              null,
+              2,
+            )}\n`,
+          );
+          process.exit(1);
+        }
+        if (
+          options.orchestrator !== undefined &&
+          !VALID_ORCHESTRATORS.includes(options.orchestrator as ValidOrchestrator)
+        ) {
+          process.stdout.write(
+            `${JSON.stringify(
+              {
+                status: 'PLAN_ALIAS_FAILED',
+                error: `Invalid orchestrator "${options.orchestrator}". Valid values: ${VALID_ORCHESTRATORS.join(', ')}`,
+              },
+              null,
+              2,
+            )}\n`,
+          );
+          process.exit(1);
+        }
+        if (executionProfile === null) {
+          process.stdout.write(
+            `${JSON.stringify(
+              {
+                status: 'PLAN_ALIAS_FAILED',
+                error: `Invalid execution profile "safe_repo". Valid values: ${getExecutionProfileHelpText().replace(/ \| /g, ', ')}`,
+              },
+              null,
+              2,
+            )}\n`,
+          );
+          process.exit(1);
+        }
+        const effectiveAllowExpensive = resolveEffectiveAllowExpensive({
+          task,
+          ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
+          ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
+          allowExpensive: options.allowExpensive === true,
+          outputFormat: 'json',
+          manual: true,
+        });
+        if (normalizedModel !== undefined) {
+          try {
+            preflightRequestedModelPolicy(normalizedModel, {
+              ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
+              ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
+            });
+          } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (isModelEscalationPolicyError(message)) {
+              printModelEscalationApprovalRequired({
+                task,
+                ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
+                ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
+                outputFormat: 'json',
+                manual: true,
+              });
+            }
+            process.stdout.write(
+              `${JSON.stringify(
+                {
+                  status: 'PLAN_ALIAS_FAILED',
+                  error: message,
+                },
+                null,
+                2,
+              )}\n`,
+            );
+            process.exit(1);
+          }
+        }
         try {
-          preflightRequestedModelPolicy(normalizedModel, {
+          await runManualBridgeStart(task, {
+            project,
+            ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
+            ...(options.orchestrator !== undefined
+              ? { orchestratorVersion: options.orchestrator }
+              : {}),
             ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
             ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
+            ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
+            ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+            ...(options.sessionStartPath !== undefined
+              ? { sessionStartPath: options.sessionStartPath }
+              : {}),
+            ...(options.localLearningRoot !== undefined
+              ? { localLearningRoot: options.localLearningRoot }
+              : {}),
+            executionProfile,
           });
-        } catch (error: unknown) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (isModelEscalationPolicyError(message)) {
-            printModelEscalationApprovalRequired({
-              task,
-              ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
-              ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
-              outputFormat: 'json',
-              manual: true,
-            });
-          }
-          process.stdout.write(`${JSON.stringify({
-            status: 'PLAN_ALIAS_FAILED',
-            error: message,
-          }, null, 2)}\n`);
+        } catch (err: unknown) {
+          process.stdout.write(
+            `${JSON.stringify(
+              {
+                status: 'PLAN_ALIAS_FAILED',
+                error: err instanceof Error ? err.message : String(err),
+              },
+              null,
+              2,
+            )}\n`,
+          );
           process.exit(1);
         }
-      }
-      try {
-        await runManualBridgeStart(task, {
-          project,
-          ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
-          ...(options.orchestrator !== undefined ? { orchestratorVersion: options.orchestrator } : {}),
-          ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
-          ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
-          ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
-          ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
-          ...(options.sessionStartPath !== undefined ? { sessionStartPath: options.sessionStartPath } : {}),
-          ...(options.localLearningRoot !== undefined ? { localLearningRoot: options.localLearningRoot } : {}),
-          executionProfile,
-        });
-      } catch (err: unknown) {
-        process.stdout.write(`${JSON.stringify({
-          status: 'PLAN_ALIAS_FAILED',
-          error: err instanceof Error ? err.message : String(err),
-        }, null, 2)}\n`);
-        process.exit(1);
-      }
-    });
+      },
+    );
 
   program
     .command('resume')
@@ -2276,12 +3153,17 @@ Notes:
     .description('Resume a retryable run and take the next action')
     .option('--run <run_dir>', 'Existing Babel run directory path')
     .option('--project <name>', 'Use latest run pointer for this project when --run is omitted')
-    .option('--plan <path>', 'Path to manual plan.json, "-" for stdin, or "clipboard"; when omitted, resume uses <run_dir>/manual/plan.json')
+    .option(
+      '--plan <path>',
+      'Path to manual plan.json, "-" for stdin, or "clipboard"; when omitted, resume uses <run_dir>/manual/plan.json',
+    )
     .option('-m, --model <model>', 'Override the model family for provider retries')
     .option('--model-tier <tier>', `Model policy tier: ${VALID_MODEL_TIERS.join(' | ')}`)
     .option('--allow-expensive', 'Approve an expensive or policy-blocked model for this run')
     .option('--json', 'Emit structured JSON only')
-    .addHelpText('after', `
+    .addHelpText(
+      'after',
+      `
 Examples:
   $ babel resume latest
   $ bl resume latest
@@ -2293,42 +3175,70 @@ Important:
   - babel resume latest retries actionable saved runs; babel continue latest only inspects them.
   - If --run is omitted, Babel may fall back to the latest run pointer for the selected project or the global latest run.
   - If --plan is omitted, Babel uses <run_dir>/manual/plan.json and may create/open that file for editing first.
-`)
-    .action(async (run: string | undefined, options: { run?: string; plan?: string; project?: string; model?: string; modelTier?: string; allowExpensive?: boolean; json?: boolean }) => {
-      if (options.run !== undefined || options.plan !== undefined) {
-        await handleResumeCommand(options);
-        return;
-      }
-      await handleActionResumeCommand(run ?? 'latest', options);
-    });
+`,
+    )
+    .action(
+      async (
+        run: string | undefined,
+        options: {
+          run?: string;
+          plan?: string;
+          project?: string;
+          model?: string;
+          modelTier?: string;
+          allowExpensive?: boolean;
+          json?: boolean;
+        },
+      ) => {
+        if (options.run !== undefined || options.plan !== undefined) {
+          await handleResumeCommand(options);
+          return;
+        }
+        await handleActionResumeCommand(run ?? 'latest', options);
+      },
+    );
 
   program
     .command('apply')
     .description('Legacy alias for resume (Manual Bridge resume flow)')
     .option('--run <run_dir>', 'Existing Babel run directory path')
     .option('--project <name>', 'Use latest run pointer for this project when --run is omitted')
-    .option('--plan <path>', 'Path to manual plan.json, "-" for stdin, or "clipboard"; when omitted, apply uses <run_dir>/manual/plan.json')
-    .addHelpText('after', `
+    .option(
+      '--plan <path>',
+      'Path to manual plan.json, "-" for stdin, or "clipboard"; when omitted, apply uses <run_dir>/manual/plan.json',
+    )
+    .addHelpText(
+      'after',
+      `
 Notes:
   - apply is kept for compatibility. Prefer resume in new docs and examples.
   - If --run is omitted, Babel may fall back to the latest run pointer for the selected project or the global latest run.
   - If --plan is omitted, Babel uses <run_dir>/manual/plan.json and may create/open that file for editing first.
-`)
+`,
+    )
     .action(async (options: { run?: string; plan?: string; project?: string }) => {
       await handleResumeCommand(options);
     });
 
   program
     .command('smoke')
-    .description('Advanced diagnostic: run Manual Bridge smoke suite and summarize executor outcomes')
-    .requiredOption('--project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_workspace | example_game_suite | example_autonomous_agent | example_mobile_reference)')
-    .addHelpText('after', `
+    .description(
+      'Advanced diagnostic: run Manual Bridge smoke suite and summarize executor outcomes',
+    )
+    .requiredOption(
+      '--project <name>',
+      'Target project (example_saas_backend | example_llm_router | AuditGuard | example_mobile_suite | example_game_suite | godot_td | app_test_babel)',
+    )
+    .addHelpText(
+      'after',
+      `
 Examples:
   $ babel smoke --project example_saas_backend
 
 Notes:
   - This is a diagnostic harness for Manual Bridge executor behavior, not a normal product test runner.
-`)
+`,
+    )
     .action(async (options: { project: string }) => {
       await handleSmokeCommand(options);
     });
@@ -2336,22 +3246,134 @@ Notes:
   program
     .command('test')
     .description('Legacy alias for smoke diagnostic; not a general project test runner')
-    .option('--project <name>', 'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_workspace | example_game_suite | example_autonomous_agent | example_mobile_reference)')
+    .option(
+      '--project <name>',
+      'Target project (example_saas_backend | example_llm_router | AuditGuard | example_mobile_suite | example_game_suite | godot_td | app_test_babel)',
+    )
     .argument('[project]', 'Target project')
-    .addHelpText('after', `
+    .addHelpText(
+      'after',
+      `
 Notes:
   - test is kept for compatibility. Prefer smoke for this diagnostic command.
   - This command does not run a repo's normal unit/integration test suite.
-`)
+`,
+    )
     .action(async (projectArg: string | undefined, options: { project?: string }) => {
       const project = options.project ?? projectArg;
       if (!project) {
-        process.stdout.write(`${JSON.stringify({
-          status: 'TEST_ALIAS_FAILED',
-          error: 'Project is required. Use --project <name> or positional project.',
-        }, null, 2)}\n`);
+        process.stdout.write(
+          `${JSON.stringify(
+            {
+              status: 'TEST_ALIAS_FAILED',
+              error: 'Project is required. Use --project <name> or positional project.',
+            },
+            null,
+            2,
+          )}\n`,
+        );
         process.exit(1);
       }
       await handleSmokeCommand({ project });
     });
+
+  registerDogfoodCommands(program);
+
+  // ── Worktree isolation commands ───────────────────────────────────────
+  program
+    .command('worktree')
+    .description('Manage git worktree isolation for safe parallel work')
+    .addCommand(
+      new Command('create')
+        .description('Create an isolated git worktree')
+        .argument('<name>', 'Worktree name')
+        .option('--project-root <path>', 'Project root', process.cwd())
+        .option('--branch <name>', 'Branch name (default: babel-worktree-<name>)')
+        .option('--detach', 'Detach HEAD (no branch)')
+        .action(async (name, options) => {
+          const { createWorktree } = await import('../services/worktreeIsolation.js');
+          try {
+            const info = createWorktree(name, {
+              projectRoot: options.projectRoot,
+              branch: options.branch,
+              detach: options.detach,
+            });
+            console.log(JSON.stringify(info, null, 2));
+          } catch (error: any) {
+            console.error(`Worktree create failed: ${error.message}`);
+            process.exit(1);
+          }
+        }),
+    )
+    .addCommand(
+      new Command('enter')
+        .description('Enter an existing worktree (sets BABEL_WORKTREE_ROOT)')
+        .argument('<name>', 'Worktree name')
+        .option('--project-root <path>', 'Project root', process.cwd())
+        .action(async (name, options) => {
+          const { enterWorktree } = await import('../services/worktreeIsolation.js');
+          try {
+            enterWorktree(name, options.projectRoot);
+            const root = process.env['BABEL_WORKTREE_ROOT'];
+            console.log(`Entered worktree "${name}" at ${root}`);
+          } catch (error: any) {
+            console.error(`Worktree enter failed: ${error.message}`);
+            process.exit(1);
+          }
+        }),
+    )
+    .addCommand(
+      new Command('exit')
+        .description('Exit the active worktree (clears BABEL_WORKTREE_ROOT)')
+        .action(async () => {
+          const { exitWorktree, getActiveWorktreeRoot } =
+            await import('../services/worktreeIsolation.js');
+          const root = getActiveWorktreeRoot();
+          exitWorktree();
+          console.log(root ? `Exited worktree at ${root}` : 'No active worktree.');
+        }),
+    )
+    .addCommand(
+      new Command('list')
+        .description('List all git worktrees')
+        .option('--project-root <path>', 'Project root', process.cwd())
+        .action(async (options) => {
+          const { listWorktrees, getActiveWorktreeRoot } =
+            await import('../services/worktreeIsolation.js');
+          const entries = listWorktrees(options.projectRoot);
+          if (entries.length === 0) {
+            console.log('No worktrees found.');
+            return;
+          }
+          const active = getActiveWorktreeRoot();
+          for (const entry of entries) {
+            const marker = entry.active ? ' *' : '  ';
+            const head = entry.detached ? `(detached: ${entry.branch.slice(0, 8)})` : entry.branch;
+            console.log(`${marker} ${entry.name}  ${head}  ${entry.path}`);
+          }
+          if (!active) {
+            console.log('\n  No active worktree session.');
+          }
+        }),
+    )
+    .addCommand(
+      new Command('remove')
+        .description('Remove a worktree and its branch')
+        .argument('<name>', 'Worktree name')
+        .option('--project-root <path>', 'Project root', process.cwd())
+        .option('--force', 'Force removal of dirty worktree')
+        .action(async (name, options) => {
+          const { removeWorktree } = await import('../services/worktreeIsolation.js');
+          try {
+            removeWorktree(name, {
+              projectRoot: options.projectRoot,
+              force: options.force,
+            });
+            console.log(`Removed worktree "${name}".`);
+          } catch (error: any) {
+            console.error(`Worktree remove failed: ${error.message}`);
+            process.exit(1);
+          }
+        }),
+    );
 }

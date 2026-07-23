@@ -59,6 +59,7 @@ export function toArtifactLayout(run: LiteArtifactRun): BabelLiteArtifactLayout 
       name === 'manifest.json' ||
       name === 'request.json' ||
       name === 'response.md' ||
+      name === 'report.md' ||
       name === 'plan.md' ||
       name === 'proposal.diff' ||
       name === 'patch.diff' ||
@@ -85,4 +86,44 @@ export function listArtifactPaths(run: LiteArtifactRun): string[] {
 
 export function defaultArtifactRoot(repoPath: string): string {
   return join(resolve(repoPath), 'runs', 'babel-lite');
+}
+
+/**
+ * Lazy evidence session -- creates the run directory only when first written to.
+ * In the chat fast path a successful answer never touches the filesystem.
+ */
+export function beginLiteEvidenceSessionLazy(options: { task: string; projectRoot?: string }): {
+  getRunDir: () => string;
+  writeOnError: (error: Error) => void;
+  writeFinal: (result: Record<string, unknown>) => void;
+} {
+  let liteRun: LiteArtifactRun | null = null;
+
+  const getOrCreateRun = (): LiteArtifactRun => {
+    if (!liteRun) {
+      const repoPath = resolveLiteRepoRoot(options.projectRoot);
+      liteRun = createLiteArtifactRun({ command: 'ask', repoPath });
+    }
+    return liteRun;
+  };
+
+  return {
+    getRunDir: () => getOrCreateRun().runDir,
+    writeOnError: (error: Error) => {
+      const run = getOrCreateRun();
+      writeLiteManifest(run, { schema_version: 1, command: 'ask', task: options.task });
+      writeLiteRequest(run, {
+        schema_version: 1,
+        command: 'ask',
+        task: options.task,
+      });
+      writeLiteJsonArtifact(run, 'error.json', {
+        message: error.message,
+        stack: error.stack,
+      });
+    },
+    writeFinal: (_result: Record<string, unknown>) => {
+      // No-op for simple successful chat answers
+    },
+  };
 }

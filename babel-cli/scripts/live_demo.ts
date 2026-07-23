@@ -10,7 +10,7 @@ import { muted, primary, getTerminalWidth } from '../src/ui/theme.js';
 
 // Mock context for the demo
 const context = {
-    mode: 'verified',
+    mode: 'deep',
     router: 'v9',
     task: 'Optimize cross-domain routing policy',
     project: 'Babel Core',

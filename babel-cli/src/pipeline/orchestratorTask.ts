@@ -6,15 +6,19 @@ import {
 import { readSessionStartProjectPath } from './manifestContext.js';
 import type { OrchestratorRuntimeVersion } from './paths.js';
 
+import type { ValidMode } from '../cli/constants.js';
+
 export interface OrchestratorTaskOptions {
   project?: string;
-  mode?: 'direct' | 'verified' | 'autonomous' | 'manual' | 'parallel_swarm';
+  mode?: ValidMode;
   executionProfile?: ExecutionProfileName;
   sessionStartPath?: string;
 }
 
 export function buildV9OrchestratorTask(task: string, options: OrchestratorTaskOptions): string {
-  const executionProfile = resolveExecutionProfile(options.executionProfile ?? process.env['BABEL_EXECUTION_PROFILE']);
+  const executionProfile = resolveExecutionProfile(
+    options.executionProfile ?? process.env['BABEL_EXECUTION_PROFILE'],
+  );
   const lines = [
     'Analyze the task below and output the orchestration manifest as a single raw JSON object.',
     'Respond with ONLY valid JSON — no markdown fences, no explanation, no tool calls.',
@@ -22,21 +26,21 @@ export function buildV9OrchestratorTask(task: string, options: OrchestratorTaskO
     'Required JSON shape (follow the schema defined in OLS-v9-Orchestrator.md exactly):',
     '{',
     '  "orchestrator_version": "9.0",',
-    '  "target_project": "example_saas_backend|example_llm_router|example_web_audit|example_mobile_suite|example_game_workspace|example_game_suite|global",',
+    '  "target_project": "example_saas_backend|example_llm_router|example_web_audit|example_mobile_suite|example_game_suite|godot_td|global",',
     '  "target_project_path": "<absolute path or omit>",',
     '  "analysis": {',
     '    "task_summary": "...",',
     '    "task_category": "Backend|Frontend|Mobile|Game|Compliance|DevOps|Research",',
     '    "secondary_category": null,',
     '    "complexity_estimate": "Low|Medium|High",',
-    '    "pipeline_mode": "direct|verified|autonomous|manual",',
+    '    "pipeline_mode": "chat|plan|deep",',
     '    "ambiguity_note": null,',
     '    "routing_confidence": 0.95',
     '  },',
     '  "compilation_state": "uncompiled",',
     '  "instruction_stack": {',
     '    "behavioral_ids": ["behavioral_core_v10", "behavioral_cognitive_micro_v7", "behavioral_guard_v7"],',
-    '    "domain_id": "...",',
+    '    "domain_id": "domain_swe_backend|domain_swe_frontend|domain_devops|domain_godot_game_dev|domain_research|domain_mobile|domain_llm_router|domain_web|domain_game",',
     '    "skill_ids": [],',
     '    "model_adapter_id": "...",',
     '    "project_overlay_id": null,',
@@ -72,7 +76,7 @@ export function buildV9OrchestratorTask(task: string, options: OrchestratorTaskO
     '  0.6–0.79 (medium) — category or pipeline_mode has multiple plausible options.',
     '  <0.6 (low)        — task is genuinely unclear, cross-project, or domain fit is uncertain.',
     '',
-    'pipeline_stage_ids rule: for pipeline_mode verified, always include ["pipeline_qa_reviewer"]; for autonomous, include pipeline_qa_reviewer and pipeline_cli_executor.',
+    'pipeline_stage_ids rule: for pipeline_mode deep, always include ["pipeline_qa_reviewer", "pipeline_cli_executor"]; for plan, include ["pipeline_qa_reviewer"]; for chat, omit executors.',
     '',
     `Task: ${task}`,
   ];
@@ -82,10 +86,13 @@ export function buildV9OrchestratorTask(task: string, options: OrchestratorTaskO
   lines.push(...buildExecutionProfilePromptLines(executionProfile.name, 'orchestrator'));
   const sessionProjectRoot = readSessionStartProjectPath(options.sessionStartPath);
   const envProjectRoot = process.env['BABEL_PROJECT_ROOT']?.trim();
-  const preferredProjectRoot = sessionProjectRoot ?? (envProjectRoot && envProjectRoot.length > 0 ? envProjectRoot : null);
+  const preferredProjectRoot =
+    sessionProjectRoot ?? (envProjectRoot && envProjectRoot.length > 0 ? envProjectRoot : null);
   if (preferredProjectRoot) {
     lines.push(`Preferred target project path: ${preferredProjectRoot}`);
-    lines.push('When a Preferred target project path is provided, preserve it exactly in target_project_path.');
+    lines.push(
+      'When a Preferred target project path is provided, preserve it exactly in target_project_path.',
+    );
   }
   return lines.join('\n');
 }

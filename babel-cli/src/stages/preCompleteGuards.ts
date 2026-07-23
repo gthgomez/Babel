@@ -4,10 +4,9 @@ import { resolve } from 'node:path';
 import { runBeforeCompleteHooks, type RuntimeHookTraceEvent } from '../runtime/hooks.js';
 import type { ToolCallLog } from '../schemas/agentContracts.js';
 import type { BenchmarkVerificationResult } from './benchmarkVerification.js';
-import {
-  verifyBoundedTaskArtifacts,
-  verifyRequestedOutputArtifacts,
-} from './verification.js';
+import { verifyBoundedTaskArtifacts, verifyRequestedOutputArtifacts } from './verification.js';
+// Phase 4c: Import canonical isExternalBenchmarkTask instead of private copy.
+import { isExternalBenchmarkTask } from '../pipeline/benchmarkTasks.js';
 
 export interface PreCompleteGuardInput {
   rawTask: string;
@@ -23,26 +22,28 @@ export interface PreCompleteGuardResult {
   benchmarkVerification: BenchmarkVerificationResult | null;
 }
 
-function isExternalBenchmarkTask(rawTask: string): boolean {
-  return /\bTerminal-Bench 2 task\b/i.test(rawTask) ||
-    /\bSWE-rebench\b/i.test(rawTask);
-}
-
 function taskRequestsRoiResearchNote(rawTask: string): boolean {
   return /\bROI\b/i.test(rawTask) && /\bresearch note\b/i.test(rawTask);
 }
 
-function verifyRoiResearchNote(rawTask: string, toolCallLog: readonly ToolCallLog[], projectRoot: string | null): string | null {
+function verifyRoiResearchNote(
+  rawTask: string,
+  toolCallLog: readonly ToolCallLog[],
+  projectRoot: string | null,
+): string | null {
   if (!projectRoot || !taskRequestsRoiResearchNote(rawTask)) {
     return null;
   }
 
-  const roiWrite = [...toolCallLog].reverse().find(entry =>
-    entry.tool === 'file_write' &&
-    entry.exit_code === 0 &&
-    /roi/i.test(String(entry.target ?? '')) &&
-    /\.(?:md|txt)$/i.test(String(entry.target ?? '')),
-  );
+  const roiWrite = [...toolCallLog]
+    .reverse()
+    .find(
+      (entry) =>
+        entry.tool === 'file_write' &&
+        entry.exit_code === 0 &&
+        /roi/i.test(String(entry.target ?? '')) &&
+        /\.(?:md|txt)$/i.test(String(entry.target ?? '')),
+    );
   if (!roiWrite) {
     return 'ROI research postcondition failed: no ROI research note file was written.';
   }
@@ -57,10 +58,14 @@ function verifyRoiResearchNote(rawTask: string, toolCallLog: readonly ToolCallLo
   }
 
   const content = readFileSync(resolvedTarget, 'utf-8');
-  const includesMarketMetrics = /\b(?:ARPDAU|retention|CPI|CPM|downloads?|revenue|LTV|ROAS)\b/i.test(content) ||
+  const includesMarketMetrics =
+    /\b(?:ARPDAU|retention|CPI|CPM|downloads?|revenue|LTV|ROAS)\b/i.test(content) ||
     /\$\d/.test(content) ||
     /\b\d+(?:\.\d+)?%\b/.test(content);
-  const hasEvidenceQualifier = /\b(?:source|citation|cited|https?:\/\/|unverified|model-prior|model prior|unknown)\b/i.test(content);
+  const hasEvidenceQualifier =
+    /\b(?:source|citation|cited|https?:\/\/|unverified|model-prior|model prior|unknown)\b/i.test(
+      content,
+    );
 
   if (includesMarketMetrics && !hasEvidenceQualifier) {
     return 'ROI research postcondition failed: market metrics require citations/sources or an explicit unverified/model-prior label.';
@@ -83,11 +88,7 @@ export function evaluatePreCompleteGuards(input: PreCompleteGuardInput): PreComp
     beforeCompleteHooks.message ??
     (isExternalBenchmarkTask(input.rawTask)
       ? null
-      : verifyBoundedTaskArtifacts(
-        input.rawTask,
-        [...input.toolCallLog],
-        input.projectRoot,
-      ));
+      : verifyBoundedTaskArtifacts(input.rawTask, [...input.toolCallLog], input.projectRoot));
 
   return {
     semanticFailure,

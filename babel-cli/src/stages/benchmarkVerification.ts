@@ -15,7 +15,10 @@ export interface BenchmarkVerificationResult {
   readonly contractId: string;
   readonly passed: boolean;
   readonly message: string;
-  readonly failureCategory?: 'false_complete_risk' | 'missing_verifier_evidence' | 'task_specific_contract';
+  readonly failureCategory?:
+    | 'false_complete_risk'
+    | 'missing_verifier_evidence'
+    | 'task_specific_contract';
 }
 
 const BENCHMARK_VERIFICATION_CONTRACTS: readonly BenchmarkVerificationContract[] = [
@@ -29,11 +32,13 @@ const BENCHMARK_VERIFICATION_CONTRACTS: readonly BenchmarkVerificationContract[]
       'write-compressor verification: gzip compatibility is not enough.',
       'Before EXECUTION_COMPLETE, compile/use the provided decomp or decomp2 program and run a command equivalent to `cat data.comp | ./decomp` or `./decomp < data.comp`, then compare the decompressed output to data.txt.',
     ],
-    acceptsCommand: command => {
+    acceptsCommand: (command) => {
       const normalized = command.toLowerCase();
-      return /\bdata\.comp\b/.test(normalized) &&
+      return (
+        /\bdata\.comp\b/.test(normalized) &&
         /\b(?:decomp|decomp2)\b/.test(normalized) &&
-        /\b(?:diff|cmp|sha256sum|python|node|perl)\b/.test(normalized);
+        /\b(?:diff|cmp|sha256sum|python|node|perl)\b/.test(normalized)
+      );
     },
   },
   {
@@ -51,12 +56,14 @@ const BENCHMARK_VERIFICATION_CONTRACTS: readonly BenchmarkVerificationContract[]
     acceptsCommand: (command, entry) => {
       const normalized = command.toLowerCase();
       const stdout = String(entry.stdout ?? '').toLowerCase();
-      return /(?:^|\s)(?:\.\/|\/app\/)?a\.out\b/.test(normalized) &&
+      return (
+        /(?:^|\s)(?:\.\/|\/app\/)?a\.out\b/.test(normalized) &&
         /\bgpt2-124m\.ckpt\b/.test(normalized) &&
         /\bvocab\.bpe\b/.test(normalized) &&
         stdout.trim().length > 0 &&
         !/\btoken_\d+\b/.test(stdout) &&
-        !/\bplaceholder\b/.test(stdout);
+        !/\bplaceholder\b/.test(stdout)
+      );
     },
   },
   {
@@ -81,8 +88,7 @@ const BENCHMARK_VERIFICATION_CONTRACTS: readonly BenchmarkVerificationContract[]
         /(?:^|\s)(?:python3?|py)\s+-m\s+pytest\b/.test(normalized) &&
         /\btest_outputs\.py\b/.test(normalized);
       const directPytestTestOutputs =
-        /(?:^|\s)pytest\b/.test(normalized) &&
-        /\btest_outputs\.py\b/.test(normalized);
+        /(?:^|\s)pytest\b/.test(normalized) && /\btest_outputs\.py\b/.test(normalized);
       const customFilterBypassCheck =
         /\bfilter\.py\b/.test(normalized) &&
         /\b(?:alert|selenium|webdriver|switch_to\.alert|bypass)\b/.test(normalized) &&
@@ -100,10 +106,13 @@ const BENCHMARK_VERIFICATION_CONTRACTS: readonly BenchmarkVerificationContract[]
       'largest-eigenval verification: correctness alone is insufficient.',
       'Before EXECUTION_COMPLETE, run a local correctness check and a timing/performance check, using the task verifier command if it is visible.',
     ],
-    acceptsCommand: command => {
+    acceptsCommand: (command) => {
       const normalized = command.toLowerCase();
-      return /\b(?:time|timeout|hyperfine|benchmark|perf|speed|seconds|largest|eigen)\b/.test(normalized) &&
-        /\b(?:test|check|verify|run|python3?|node|make|\.[/\\])\b/.test(normalized);
+      return (
+        /\b(?:time|timeout|hyperfine|benchmark|perf|speed|seconds|largest|eigen)\b/.test(
+          normalized,
+        ) && /\b(?:test|check|verify|run|python3?|node|make|\.[/\\])\b/.test(normalized)
+      );
     },
   },
   {
@@ -117,7 +126,7 @@ const BENCHMARK_VERIFICATION_CONTRACTS: readonly BenchmarkVerificationContract[]
       'Before EXECUTION_COMPLETE, run `git bundle verify <bundle>` or `git bundle list-heads <bundle>` for visible bundle artifacts when git is available.',
       'Git .bundle files are not tar/gzip archives. Do not use tar/cp extraction as a substitute; if git is unavailable, halt with missing required runtime capability instead of completing.',
     ],
-    acceptsCommand: command => /\bgit\s+bundle\s+(?:verify|list-heads)\b/i.test(command),
+    acceptsCommand: (command) => /\bgit\s+bundle\s+(?:verify|list-heads)\b/i.test(command),
   },
   {
     id: 'verify.winning_avg_corewars.pmars_batch',
@@ -130,12 +139,14 @@ const BENCHMARK_VERIFICATION_CONTRACTS: readonly BenchmarkVerificationContract[]
       'Before EXECUTION_COMPLETE, run a command equivalent to `pmars -b -r 100 -f my_warrior.red warriors/<opponent>.red` against visible opponents and use the observed win rates to repair weak strategies.',
       'If pMARS is unavailable, halt with a missing runtime capability instead of completing.',
     ],
-    acceptsCommand: command => {
+    acceptsCommand: (command) => {
       const normalized = command.toLowerCase();
-      return /\bpmars\b/.test(normalized) &&
+      return (
+        /\bpmars\b/.test(normalized) &&
         /\bmy_warrior\.red\b/.test(normalized) &&
         /\bwarriors[/\\][a-z0-9_.-]+\.red\b/.test(normalized) &&
-        /(?:^|\s)(?:-b|--batch)(?:\s|$)/.test(normalized);
+        /(?:^|\s)(?:-b|--batch)(?:\s|$)/.test(normalized)
+      );
     },
   },
   {
@@ -153,8 +164,8 @@ const BENCHMARK_VERIFICATION_CONTRACTS: readonly BenchmarkVerificationContract[]
     acceptsCommand: (command, entry) => {
       const normalized = command.toLowerCase();
       const stdout = String(entry.stdout ?? '').toLowerCase();
-      const mentionsBothPlans = /\bplan_b1\.jsonl\b/.test(normalized) &&
-        /\bplan_b2\.jsonl\b/.test(normalized);
+      const mentionsBothPlans =
+        /\bplan_b1\.jsonl\b/.test(normalized) && /\bplan_b2\.jsonl\b/.test(normalized);
       const validatesWithCostOrTests =
         /\bcost_model\.py\b/.test(normalized) ||
         /\btest_outputs\.py\b/.test(normalized) ||
@@ -170,16 +181,16 @@ const BENCHMARK_VERIFICATION_CONTRACTS: readonly BenchmarkVerificationContract[]
   },
 ];
 
-function isExternalBenchmarkTask(rawTask: string): boolean {
-  return /\bTerminal-Bench 2 task\b/i.test(rawTask) ||
-    /\bSWE-rebench\b/i.test(rawTask);
-}
+// Phase 4c: Import canonical isExternalBenchmarkTask instead of private copy.
+import { isExternalBenchmarkTask } from '../pipeline/benchmarkTasks.js';
 
 function getBenchmarkVerificationContract(rawTask: string): BenchmarkVerificationContract | null {
   if (!isExternalBenchmarkTask(rawTask)) {
     return null;
   }
-  return BENCHMARK_VERIFICATION_CONTRACTS.find(contract => contract.taskPattern.test(rawTask)) ?? null;
+  return (
+    BENCHMARK_VERIFICATION_CONTRACTS.find((contract) => contract.taskPattern.test(rawTask)) ?? null
+  );
 }
 
 export function buildBenchmarkVerificationPromptLines(rawTask: string): string[] {
@@ -204,14 +215,11 @@ export function buildBenchmarkVerificationPromptLines(rawTask: string): string[]
     ...verifierSpecLines,
     'Benchmark pre-completion verification contract:',
     `  - ${contract.title}: ${contract.completionRequirement}`,
-    ...contract.promptLines.map(line => `  - ${line}`),
+    ...contract.promptLines.map((line) => `  - ${line}`),
   ];
 }
 
-export function collectBenchmarkRiskPlanViolations(
-  swePlan: SwePlan,
-  rawTask: string,
-): QaFailure[] {
+export function collectBenchmarkRiskPlanViolations(swePlan: SwePlan, rawTask: string): QaFailure[] {
   if (!isExternalBenchmarkTask(rawTask)) {
     return [];
   }
@@ -219,20 +227,26 @@ export function collectBenchmarkRiskPlanViolations(
   const failures: QaFailure[] = [];
   const planText = JSON.stringify(swePlan).toLowerCase();
   const shellSteps = swePlan.minimal_action_set
-    .filter(step => step.tool === 'shell_exec' || step.tool === 'test_run')
-    .map(step => String(step.target ?? '').toLowerCase());
+    .filter((step) => step.tool === 'shell_exec' || step.tool === 'test_run')
+    .map((step) => String(step.target ?? '').toLowerCase());
   const fileWrites = swePlan.minimal_action_set
-    .filter(step => step.tool === 'file_write')
-    .map(step => String(step.target ?? '').replace(/\\/g, '/').toLowerCase());
+    .filter((step) => step.tool === 'file_write')
+    .map((step) =>
+      String(step.target ?? '')
+        .replace(/\\/g, '/')
+        .toLowerCase(),
+    );
 
   if (swePlan.plan_type === 'EVIDENCE_REQUEST') {
-    const mutatingEvidenceSteps = swePlan.minimal_action_set.filter(step => {
-      const target = String(step.target ?? '').replace(/\\/g, '/').toLowerCase();
-      return step.tool === 'file_write' ||
-        (
-          (step.tool === 'shell_exec' || step.tool === 'test_run') &&
-          /\b(?:output_data|plan_b[12]\.jsonl|optimized_packer\.py|cost_model\.py)\b/.test(target)
-        );
+    const mutatingEvidenceSteps = swePlan.minimal_action_set.filter((step) => {
+      const target = String(step.target ?? '')
+        .replace(/\\/g, '/')
+        .toLowerCase();
+      return (
+        step.tool === 'file_write' ||
+        ((step.tool === 'shell_exec' || step.tool === 'test_run') &&
+          /\b(?:output_data|plan_b[12]\.jsonl|optimized_packer\.py|cost_model\.py)\b/.test(target))
+      );
     });
     if (mutatingEvidenceSteps.length > 0) {
       failures.push({
@@ -257,9 +271,10 @@ export function collectBenchmarkRiskPlanViolations(
           'Regenerate with a strategy that handles complex non-symmetric eigenpairs and proves correctness against a reference before optimizing speed.',
       });
     }
-    const hasCorrectnessAndTimingVerifier = shellSteps.some(command =>
-      /\b(?:eval\.py|pytest|verify|check|test)\b/.test(command) &&
-      /\b(?:time|timing|speed|benchmark|perf|median|eval\.py)\b/.test(command),
+    const hasCorrectnessAndTimingVerifier = shellSteps.some(
+      (command) =>
+        /\b(?:eval\.py|pytest|verify|check|test)\b/.test(command) &&
+        /\b(?:time|timing|speed|benchmark|perf|median|eval\.py)\b/.test(command),
     );
     if (!hasCorrectnessAndTimingVerifier) {
       failures.push({
@@ -274,10 +289,11 @@ export function collectBenchmarkRiskPlanViolations(
   }
 
   if (/\bwrite-compressor\b/i.test(rawTask)) {
-    const hasRoundTripVerifier = shellSteps.some(command =>
-      /\bdata\.comp\b/.test(command) &&
-      /\b(?:decomp|decomp2)\b/.test(command) &&
-      /\b(?:diff|cmp|sha256sum|python|node|perl)\b/.test(command),
+    const hasRoundTripVerifier = shellSteps.some(
+      (command) =>
+        /\bdata\.comp\b/.test(command) &&
+        /\b(?:decomp|decomp2)\b/.test(command) &&
+        /\b(?:diff|cmp|sha256sum|python|node|perl)\b/.test(command),
     );
     if (!hasRoundTripVerifier) {
       failures.push({
@@ -285,14 +301,13 @@ export function collectBenchmarkRiskPlanViolations(
         condition:
           '[BENCHMARK_ARTIFACT_ROUNDTRIP_REQUIRED] write-compressor plan must verify data.comp by running the provided decompressor and comparing output to data.txt.',
         confidence: 5,
-        fix_hint:
-          'Add a decompressor round-trip command and size check before completion.',
+        fix_hint: 'Add a decompressor round-trip command and size check before completion.',
       });
     }
   }
 
   if (/\bmerge-diff-arc-agi-task\b/i.test(rawTask)) {
-    const hasGitNativeSteps = shellSteps.some(command =>
+    const hasGitNativeSteps = shellSteps.some((command) =>
       /\bgit\s+(?:init|bundle|fetch|checkout|switch|merge|status|branch)\b/.test(command),
     );
     if (!hasGitNativeSteps) {
@@ -305,7 +320,7 @@ export function collectBenchmarkRiskPlanViolations(
           'Regenerate with git init, git bundle/fetch, branch1/branch2 checkout, merge, and examples verification steps.',
       });
     }
-    const writesRepoAlgo = fileWrites.some(target => /(?:^|\/)repo\/algo\.py$/.test(target));
+    const writesRepoAlgo = fileWrites.some((target) => /(?:^|\/)repo\/algo\.py$/.test(target));
     if (writesRepoAlgo && !hasGitNativeSteps) {
       failures.push({
         tag: 'SFDIPOT-P',
@@ -320,11 +335,12 @@ export function collectBenchmarkRiskPlanViolations(
 
   if (/\bpytorch-model-cli\b/i.test(rawTask)) {
     const requiredArtifacts = ['cli_tool', 'weights.json', 'prediction.txt'];
-    const mentionsArtifacts = requiredArtifacts.every(artifact => planText.includes(artifact));
-    const runsCliTool = shellSteps.some(command =>
-      /\b(?:\.\/)?cli_tool\b/.test(command) &&
-      /\bweights\.json\b/.test(command) &&
-      /\bimage\.png\b/.test(command),
+    const mentionsArtifacts = requiredArtifacts.every((artifact) => planText.includes(artifact));
+    const runsCliTool = shellSteps.some(
+      (command) =>
+        /\b(?:\.\/)?cli_tool\b/.test(command) &&
+        /\bweights\.json\b/.test(command) &&
+        /\bimage\.png\b/.test(command),
     );
     if (!mentionsArtifacts || !runsCliTool) {
       failures.push({
@@ -340,38 +356,50 @@ export function collectBenchmarkRiskPlanViolations(
 
   if (/\bllm-inference-batching-scheduler\b/i.test(rawTask)) {
     const requiredOutputs = ['plan_b1.jsonl', 'plan_b2.jsonl'];
-    const mentionsBothOutputs = requiredOutputs.every(output => planText.includes(output));
-    const writesBothOutputs = requiredOutputs.every(output =>
-      fileWrites.some(target => target.endsWith(`/output_data/${output}`) || target.endsWith(`/${output}`)),
+    const mentionsBothOutputs = requiredOutputs.every((output) => planText.includes(output));
+    const writesBothOutputs = requiredOutputs.every((output) =>
+      fileWrites.some(
+        (target) => target.endsWith(`/output_data/${output}`) || target.endsWith(`/${output}`),
+      ),
     );
-    const invokesNoArgPacker = shellSteps.some(command =>
-      /\boptimized_packer\.py\b/.test(command) &&
-      !/\brequests_bucket_1\.jsonl\b/.test(command) &&
-      !/\brequests_bucket_2\.jsonl\b/.test(command) &&
-      !/\bplan_b1\.jsonl\b/.test(command) &&
-      !/\bplan_b2\.jsonl\b/.test(command),
+    const invokesNoArgPacker = shellSteps.some(
+      (command) =>
+        /\boptimized_packer\.py\b/.test(command) &&
+        !/\brequests_bucket_1\.jsonl\b/.test(command) &&
+        !/\brequests_bucket_2\.jsonl\b/.test(command) &&
+        !/\bplan_b1\.jsonl\b/.test(command) &&
+        !/\bplan_b2\.jsonl\b/.test(command),
     );
-    const hasBucket1Generation = shellSteps.some(command =>
-      /\boptimized_packer\.py\b/.test(command) &&
-      /\brequests_bucket_1\.jsonl\b/.test(command) &&
-      /\bplan_b1\.jsonl\b/.test(command),
+    const hasBucket1Generation = shellSteps.some(
+      (command) =>
+        /\boptimized_packer\.py\b/.test(command) &&
+        /\brequests_bucket_1\.jsonl\b/.test(command) &&
+        /\bplan_b1\.jsonl\b/.test(command),
     );
-    const hasBucket2Generation = shellSteps.some(command =>
-      /\boptimized_packer\.py\b/.test(command) &&
-      /\brequests_bucket_2\.jsonl\b/.test(command) &&
-      /\bplan_b2\.jsonl\b/.test(command),
+    const hasBucket2Generation = shellSteps.some(
+      (command) =>
+        /\boptimized_packer\.py\b/.test(command) &&
+        /\brequests_bucket_2\.jsonl\b/.test(command) &&
+        /\bplan_b2\.jsonl\b/.test(command),
     );
-    const hasPlanGenerationStep = (hasBucket1Generation && hasBucket2Generation) || writesBothOutputs;
-    const hasCostOrVerifier = shellSteps.some(command =>
-      (
-        /\b(?:cost_model\.py|test_outputs\.py|pytest|verify_llm_batching_plan\.py)\b/.test(command) ||
-        /\b(?:coverage|shape|pad_ratio|latency|sequential_timecost)\b/.test(command)
-      ) &&
-      /\bplan_b1\.jsonl\b/.test(command) &&
-      /\bplan_b2\.jsonl\b/.test(command),
+    const hasPlanGenerationStep =
+      (hasBucket1Generation && hasBucket2Generation) || writesBothOutputs;
+    const hasCostOrVerifier = shellSteps.some(
+      (command) =>
+        (/\b(?:cost_model\.py|test_outputs\.py|pytest|verify_llm_batching_plan\.py)\b/.test(
+          command,
+        ) ||
+          /\b(?:coverage|shape|pad_ratio|latency|sequential_timecost)\b/.test(command)) &&
+        /\bplan_b1\.jsonl\b/.test(command) &&
+        /\bplan_b2\.jsonl\b/.test(command),
     );
 
-    if (!mentionsBothOutputs || !hasPlanGenerationStep || !hasCostOrVerifier || invokesNoArgPacker) {
+    if (
+      !mentionsBothOutputs ||
+      !hasPlanGenerationStep ||
+      !hasCostOrVerifier ||
+      invokesNoArgPacker
+    ) {
       failures.push({
         tag: 'SFDIPOT-F',
         condition:
@@ -396,10 +424,11 @@ export function verifyBenchmarkPreCompleteContract(
       return null;
     }
 
-    const successfulVerifier = toolCallLog.find(entry =>
-      (entry.tool === 'shell_exec' || entry.tool === 'test_run') &&
-      entry.exit_code === 0 &&
-      entry.verified,
+    const successfulVerifier = toolCallLog.find(
+      (entry) =>
+        (entry.tool === 'shell_exec' || entry.tool === 'test_run') &&
+        entry.exit_code === 0 &&
+        entry.verified,
     );
     if (successfulVerifier) {
       return {
@@ -423,12 +452,13 @@ export function verifyBenchmarkPreCompleteContract(
   }
 
   const successfulCommand = toolCallLog
-    .filter(entry =>
-      (entry.tool === 'shell_exec' || entry.tool === 'test_run') &&
-      entry.exit_code === 0 &&
-      entry.verified,
+    .filter(
+      (entry) =>
+        (entry.tool === 'shell_exec' || entry.tool === 'test_run') &&
+        entry.exit_code === 0 &&
+        entry.verified,
     )
-    .find(entry => contract.acceptsCommand(String(entry.target ?? ''), entry));
+    .find((entry) => contract.acceptsCommand(String(entry.target ?? ''), entry));
 
   if (successfulCommand) {
     return {

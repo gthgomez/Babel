@@ -14,11 +14,14 @@ describe('runProposalLane', () => {
     writeFileSync(source, 'before\n', 'utf-8');
     const beforeHash = createHash('sha256').update(readFileSync(source)).digest('hex');
     try {
-      const result = await runProposalLane({
-        task: 'Propose a safe README tweak',
-        projectRoot: repo,
-        provider: 'mock',
-      }, 'propose');
+      const result = await runProposalLane(
+        {
+          task: 'Propose a safe README tweak',
+          projectRoot: repo,
+          provider: 'mock',
+        },
+        'propose',
+      );
       assert.equal(result.exitCode, 0);
       assert.equal(result.payload.status, 'PROPOSAL_READY');
       assert.equal(result.payload.execution_mode, 'offline_demo');

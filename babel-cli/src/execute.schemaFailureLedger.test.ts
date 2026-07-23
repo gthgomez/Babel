@@ -16,7 +16,7 @@ function readJsonl(path: string): Array<Record<string, unknown>> {
     .trim()
     .split(/\r?\n/)
     .filter(Boolean)
-    .map(line => JSON.parse(line) as Record<string, unknown>);
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 test('waterfall writes schema failure ledger entries and recovery evidence', async () => {
@@ -81,13 +81,21 @@ test('waterfall writes schema failure ledger entries and recovery evidence', asy
     assert.equal(ledger[1]?.['retry_outcome'], 'recovered');
     assert.deepEqual(ledger[1]?.['recovered_schema_failure_entry_ids'], [ledger[0]?.['entry_id']]);
 
-    const telemetry = JSON.parse(readFileSync(join(evidence.runDir, '05_waterfall_telemetry.json'), 'utf-8')) as Array<{
+    const telemetry = JSON.parse(
+      readFileSync(join(evidence.runDir, '05_waterfall_telemetry.json'), 'utf-8'),
+    ) as Array<{
       schema_failure_entry_ids?: string[];
       attempts_detail?: Array<{ schema_failure_entry_id?: string | null }>;
     }>;
     assert.equal(telemetry[0]?.schema_failure_entry_ids?.length, 2);
-    assert.equal(telemetry[0]?.attempts_detail?.[0]?.schema_failure_entry_id, ledger[0]?.['entry_id']);
-    assert.equal(telemetry[0]?.attempts_detail?.[1]?.schema_failure_entry_id, ledger[1]?.['entry_id']);
+    assert.equal(
+      telemetry[0]?.attempts_detail?.[0]?.schema_failure_entry_id,
+      ledger[0]?.['entry_id'],
+    );
+    assert.equal(
+      telemetry[0]?.attempts_detail?.[1]?.schema_failure_entry_id,
+      ledger[1]?.['entry_id'],
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -122,15 +130,16 @@ test('waterfall records fatal schema exhaustion when no tier recovers', async ()
 
   try {
     await assert.rejects(
-      () => runWaterfallForSchemaFailureTest({
-        prompt: 'Return ok JSON.',
-        schema,
-        stage: 'qa',
-        schemaName: 'QaVerdictSchema',
-        evidence,
-        maxAttempts: 1,
-        tiers: [{ name: 'test-tier', runner }],
-      }),
+      () =>
+        runWaterfallForSchemaFailureTest({
+          prompt: 'Return ok JSON.',
+          schema,
+          stage: 'qa',
+          schemaName: 'QaVerdictSchema',
+          evidence,
+          maxAttempts: 1,
+          tiers: [{ name: 'test-tier', runner }],
+        }),
       /All 1 runner\(s\) in the waterfall failed/,
     );
 

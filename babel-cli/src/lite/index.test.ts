@@ -12,20 +12,9 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import test from 'node:test';
 
-import {
-  LiteError,
-  loadLiteRuntimeConfig,
-  selectLiteProviderConfig,
-} from './config.js';
-import {
-  buildLiteTaskContract,
-} from './contract.js';
-import {
-  runLiteAsk,
-  runLitePatch,
-  runLitePlan,
-  runLiteProviders,
-} from './commands.js';
+import { LiteError, loadLiteRuntimeConfig, selectLiteProviderConfig } from './config.js';
+import { buildLiteTaskContract } from './contract.js';
+import { runLiteAsk, runLitePatch, runLitePlan, runLiteProviders } from './commands.js';
 
 function createFixtureRepo(): string {
   const root = mkdtempSync(join(tmpdir(), 'babel-lite-repo-'));
@@ -34,17 +23,29 @@ function createFixtureRepo(): string {
   writeFileSync(join(root, 'AGENTS.md'), '# Agent rules\n', 'utf-8');
   writeFileSync(join(root, 'PROJECT_CONTEXT.md'), '# Project context\n', 'utf-8');
   writeFileSync(join(root, 'README.md'), '# Fixture\n', 'utf-8');
-  writeFileSync(join(root, 'src', 'lite', 'provider.ts'), 'export const provider = true;\n', 'utf-8');
+  writeFileSync(
+    join(root, 'src', 'lite', 'provider.ts'),
+    'export const provider = true;\n',
+    'utf-8',
+  );
   writeFileSync(join(root, 'src', 'privacyish-note.ts'), 'export const note = true;\n', 'utf-8');
   writeFileSync(join(root, 'src', 'unrelated.ts'), 'export const unrelated = true;\n', 'utf-8');
   writeFileSync(join(root, 'config', 'model-policy.json'), '{}\n', 'utf-8');
-  writeFileSync(join(root, 'package.json'), JSON.stringify({
-    scripts: {
-      typecheck: 'tsc --noEmit',
-      test: 'node --test',
-      build: 'tsc',
-    },
-  }, null, 2), 'utf-8');
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify(
+      {
+        scripts: {
+          typecheck: 'tsc --noEmit',
+          test: 'node --test',
+          build: 'tsc',
+        },
+      },
+      null,
+      2,
+    ),
+    'utf-8',
+  );
   return root;
 }
 
@@ -107,29 +108,37 @@ test('lite provider config uses requested env keys, model overrides, and auto re
 
 test('lite direct DeepSeek config rejects unsupported model overrides', async () => {
   assert.throws(
-    () => loadLiteRuntimeConfig({
-      DEEPSEEK_API_KEY: 'deepseek-secret',
-      BABEL_LITE_DEEPSEEK_MODEL: 'deepseek-chat',
-    }),
-    (error: unknown) => error instanceof LiteError
-      && error.code === 'PROVIDER_UNKNOWN'
-      && error.message.includes('deepseek-v4-flash'),
+    () =>
+      loadLiteRuntimeConfig({
+        DEEPSEEK_API_KEY: 'deepseek-secret',
+        BABEL_LITE_DEEPSEEK_MODEL: 'deepseek-chat',
+      }),
+    (error: unknown) =>
+      error instanceof LiteError &&
+      error.code === 'PROVIDER_UNKNOWN' &&
+      error.message.includes('deepseek-v4-flash'),
   );
 
   await assert.rejects(
-    () => runLiteAsk({
-      repoPath: createFixtureRepo(),
-      task: 'Explain provider model validation',
-      provider: 'deepseek',
-      model: 'deepseek-reasoner',
-      env: { DEEPSEEK_API_KEY: 'deepseek-secret' },
-      fetchImpl: async () => new Response(JSON.stringify({
-        choices: [{ message: { content: 'should not call provider' } }],
-      }), { status: 200 }),
-    }),
-    (error: unknown) => error instanceof LiteError
-      && error.code === 'PROVIDER_UNKNOWN'
-      && error.message.includes('deepseek-v4-pro'),
+    () =>
+      runLiteAsk({
+        repoPath: createFixtureRepo(),
+        task: 'Explain provider model validation',
+        provider: 'deepseek',
+        model: 'deepseek-reasoner',
+        env: { DEEPSEEK_API_KEY: 'deepseek-secret' },
+        fetchImpl: async () =>
+          new Response(
+            JSON.stringify({
+              choices: [{ message: { content: 'should not call provider' } }],
+            }),
+            { status: 200 },
+          ),
+      }),
+    (error: unknown) =>
+      error instanceof LiteError &&
+      error.code === 'PROVIDER_UNKNOWN' &&
+      error.message.includes('deepseek-v4-pro'),
   );
 });
 
@@ -138,7 +147,7 @@ test('providers status reports key presence without secret values and exposes st
     DEEPSEEK_API_KEY: 'secret-value',
   });
 
-  const deepseek = result.providers.find(provider => provider.id === 'deepseek');
+  const deepseek = result.providers.find((provider) => provider.id === 'deepseek');
   assert.equal(result.schema_version, 1);
   assert.equal(result.command, 'providers');
   assert.equal(deepseek?.configured, true);
@@ -151,7 +160,7 @@ test('plan produces compact contract with likely and suspected files separated',
   const before = snapshotRepoFiles(repoPath);
   const result = runLitePlan({
     repoPath,
-    task: 'Update lite provider config and typecheck script handling',
+    task: 'Lite provider config model',
     now: new Date('2026-05-25T12:00:00.000Z'),
     env: {},
   });
@@ -215,7 +224,7 @@ test('weak file-name matches are suspected, not likely, and truncated scans emit
   });
 
   assert.equal(truncated.repo.scanTruncated, true);
-  assert.ok(truncated.warnings.some(warning => warning.includes('Repo scan truncated')));
+  assert.ok(truncated.warnings.some((warning) => warning.includes('Repo scan truncated')));
 });
 
 test('broad governance terms do not promote loosely related files to likely files', () => {
@@ -223,8 +232,16 @@ test('broad governance terms do not promote loosely related files to likely file
   mkdirSync(join(repoPath, '03_Model_Adapters'), { recursive: true });
   mkdirSync(join(repoPath, '02_Skills', 'Governance'), { recursive: true });
   writeFileSync(join(repoPath, '03_Model_Adapters', 'Codex_Balanced.md'), '# Codex\n', 'utf-8');
-  writeFileSync(join(repoPath, '02_Skills', 'Governance', 'Public-Export-Hardening-v1.md'), '# Hardening\n', 'utf-8');
-  writeFileSync(join(repoPath, 'src', 'lite', 'redaction.ts'), 'export const redaction = true;\n', 'utf-8');
+  writeFileSync(
+    join(repoPath, '02_Skills', 'Governance', 'Public-Export-Hardening-v1.md'),
+    '# Hardening\n',
+    'utf-8',
+  );
+  writeFileSync(
+    join(repoPath, 'src', 'lite', 'redaction.ts'),
+    'export const redaction = true;\n',
+    'utf-8',
+  );
 
   const result = runLitePlan({
     repoPath,
@@ -234,50 +251,62 @@ test('broad governance terms do not promote loosely related files to likely file
   });
 
   assert.ok(result.contract.likely_files.includes('src/lite/redaction.ts'));
-  assert.equal(result.contract.likely_files.includes('03_Model_Adapters/Codex_Balanced.md'), false);
-  assert.equal(result.contract.likely_files.includes('02_Skills/Governance/Public-Export-Hardening-v1.md'), false);
+  assert.equal(
+    result.contract.likely_files.includes('03_Model_Adapters/Codex_Balanced.md'),
+    false,
+  );
+  assert.equal(
+    result.contract.likely_files.includes('02_Skills/Governance/Public-Export-Hardening-v1.md'),
+    false,
+  );
   assert.ok(result.contract.suspected_files.includes('03_Model_Adapters/Codex_Balanced.md'));
-  assert.ok(result.contract.suspected_files.includes('02_Skills/Governance/Public-Export-Hardening-v1.md'));
+  assert.ok(
+    result.contract.suspected_files.includes('02_Skills/Governance/Public-Export-Hardening-v1.md'),
+  );
 });
 
 test('prompt budget enforcement fails closed when the cap is impossible', () => {
   const repoPath = createFixtureRepo();
 
   assert.throws(
-    () => buildLiteTaskContract({
-      repoPath,
-      task: 'Explain a small task',
-      maxPromptTokens: 25,
-      now: new Date('2026-05-25T12:00:00.000Z'),
-    }),
+    () =>
+      buildLiteTaskContract({
+        repoPath,
+        task: 'Explain a small task',
+        maxPromptTokens: 25,
+        now: new Date('2026-05-25T12:00:00.000Z'),
+      }),
     (error: unknown) => error instanceof LiteError && error.code === 'PROMPT_BUDGET_EXCEEDED',
   );
 });
 
 test('repo and task validation use stable failure codes', async () => {
   assert.throws(
-    () => runLitePlan({
-      repoPath: join(tmpdir(), 'missing-babel-lite-repo'),
-      task: 'Explain the test strategy',
-      env: {},
-    }),
+    () =>
+      runLitePlan({
+        repoPath: join(tmpdir(), 'missing-babel-lite-repo'),
+        task: 'Explain the test strategy',
+        env: {},
+      }),
     (error: unknown) => error instanceof LiteError && error.code === 'REPO_NOT_FOUND',
   );
   assert.throws(
-    () => runLitePlan({
-      repoPath: createFixtureRepo(),
-      task: '   ',
-      env: {},
-    }),
+    () =>
+      runLitePlan({
+        repoPath: createFixtureRepo(),
+        task: '   ',
+        env: {},
+      }),
     (error: unknown) => error instanceof LiteError && error.code === 'TASK_REQUIRED',
   );
   await assert.rejects(
-    () => runLiteAsk({
-      repoPath: createFixtureRepo(),
-      task: 'Explain provider selection',
-      provider: 'missing',
-      env: {},
-    }),
+    () =>
+      runLiteAsk({
+        repoPath: createFixtureRepo(),
+        task: 'Explain provider selection',
+        provider: 'missing',
+        env: {},
+      }),
     (error: unknown) => error instanceof LiteError && error.code === 'PROVIDER_UNKNOWN',
   );
 });
@@ -304,19 +333,29 @@ test('ask uses mock provider, supports model override, and saves required artifa
   assert.equal(result.provider.privacy, 'redacted');
   assert.match(result.response, /MOCK ASK RESPONSE/);
   assert.match(result.artifacts.run_id, /^20260525T120000Z-ask-[a-z0-9-]+$/);
-  assert.equal(relative(repoPath, result.artifacts.run_dir).replace(/\\/g, '/').startsWith('runs/babel-lite/'), true);
-  for (const name of ['contract.json', 'prompt.md', 'response.md', 'provider.json', 'cost_ledger.json']) {
+  assert.equal(
+    relative(repoPath, result.artifacts.run_dir).replace(/\\/g, '/').startsWith('runs/babel-lite/'),
+    true,
+  );
+  for (const name of [
+    'contract.json',
+    'prompt.md',
+    'response.md',
+    'provider.json',
+    'cost_ledger.json',
+  ]) {
     assert.ok(existsSync(result.artifacts.files[name] ?? ''), `${name} should exist`);
   }
 
   await assert.rejects(
-    () => runLiteAsk({
-      repoPath,
-      task: 'Try to write outside the repo artifact root',
-      provider: 'mock',
-      artifactRoot: join(tmpdir(), 'runs', 'babel-lite'),
-      env: {},
-    }),
+    () =>
+      runLiteAsk({
+        repoPath,
+        task: 'Try to write outside the repo artifact root',
+        provider: 'mock',
+        artifactRoot: join(tmpdir(), 'runs', 'babel-lite'),
+        env: {},
+      }),
     (error: unknown) => error instanceof LiteError && error.code === 'ARTIFACT_WRITE_FAILED',
   );
 });
@@ -326,10 +365,15 @@ test('external provider payload privacy defaults to redacted and full mode is ex
   const bodies: string[] = [];
   const fetchImpl = async (_input: string | URL, init?: RequestInit): Promise<Response> => {
     bodies.push(String(init?.body ?? ''));
-    return new Response(JSON.stringify({
-      choices: [{ message: { content: 'provider response with DEEPSEEK_API_KEY=response-secret' } }],
-      usage: { prompt_tokens: 11, completion_tokens: 2, total_tokens: 13 },
-    }), { status: 200 });
+    return new Response(
+      JSON.stringify({
+        choices: [
+          { message: { content: 'provider response with DEEPSEEK_API_KEY=response-secret' } },
+        ],
+        usage: { prompt_tokens: 11, completion_tokens: 2, total_tokens: 13 },
+      }),
+      { status: 200 },
+    );
   };
 
   const redacted = await runLiteAsk({
@@ -343,7 +387,9 @@ test('external provider payload privacy defaults to redacted and full mode is ex
   assert.equal(redacted.provider.privacy, 'redacted');
   assert.doesNotMatch(redacted.response, /response-secret/);
   assert.doesNotMatch(bodies[0] ?? '', /task-secret/);
-  const redactedLedger = JSON.parse(readFileSync(redacted.artifacts.files['cost_ledger.json'] ?? '', 'utf-8')) as {
+  const redactedLedger = JSON.parse(
+    readFileSync(redacted.artifacts.files['cost_ledger.json'] ?? '', 'utf-8'),
+  ) as {
     artifact_type?: string;
     schema_version?: number;
     pricing_mode?: string;
@@ -380,58 +426,70 @@ test('provider failures map to stable Lite failure codes without live API calls'
   const repoPath = createFixtureRepo();
 
   await assert.rejects(
-    () => runLiteAsk({
-      repoPath,
-      task: 'Explain rate limit behavior',
-      provider: 'deepseek',
-      artifactRoot: join(repoPath, 'runs', 'babel-lite'),
-      env: { DEEPSEEK_API_KEY: 'provider-key' },
-      fetchImpl: async () => new Response('slow down DEEPSEEK_API_KEY=rate-secret', { status: 429 }),
-    }),
-    (error: unknown) => error instanceof LiteError
-      && error.code === 'PROVIDER_RATE_LIMITED'
-      && !error.message.includes('rate-secret'),
+    () =>
+      runLiteAsk({
+        repoPath,
+        task: 'Explain rate limit behavior',
+        provider: 'deepseek',
+        artifactRoot: join(repoPath, 'runs', 'babel-lite'),
+        env: { DEEPSEEK_API_KEY: 'provider-key' },
+        fetchImpl: async () =>
+          new Response('slow down DEEPSEEK_API_KEY=rate-secret', { status: 429 }),
+      }),
+    (error: unknown) =>
+      error instanceof LiteError &&
+      error.code === 'PROVIDER_RATE_LIMITED' &&
+      !error.message.includes('rate-secret'),
   );
 
   await assert.rejects(
-    () => runLiteAsk({
-      repoPath,
-      task: 'Explain http error behavior',
-      provider: 'deepseek',
-      artifactRoot: join(repoPath, 'runs', 'babel-lite'),
-      env: { DEEPSEEK_API_KEY: 'provider-key' },
-      fetchImpl: async () => new Response('bad gateway DEEPSEEK_API_KEY=http-secret', { status: 502 }),
-    }),
-    (error: unknown) => error instanceof LiteError
-      && error.code === 'PROVIDER_HTTP_ERROR'
-      && !error.message.includes('http-secret'),
+    () =>
+      runLiteAsk({
+        repoPath,
+        task: 'Explain http error behavior',
+        provider: 'deepseek',
+        artifactRoot: join(repoPath, 'runs', 'babel-lite'),
+        env: { DEEPSEEK_API_KEY: 'provider-key' },
+        fetchImpl: async () =>
+          new Response('bad gateway DEEPSEEK_API_KEY=http-secret', { status: 502 }),
+      }),
+    (error: unknown) =>
+      error instanceof LiteError &&
+      error.code === 'PROVIDER_HTTP_ERROR' &&
+      !error.message.includes('http-secret'),
   );
 
   await assert.rejects(
-    () => runLiteAsk({
-      repoPath,
-      task: 'Explain request error behavior',
-      provider: 'deepseek',
-      artifactRoot: join(repoPath, 'runs', 'babel-lite'),
-      env: { DEEPSEEK_API_KEY: 'provider-key' },
-      fetchImpl: async () => {
-        throw new Error('network failed DEEPSEEK_API_KEY=request-secret');
-      },
-    }),
-    (error: unknown) => error instanceof LiteError
-      && error.code === 'PROVIDER_REQUEST_FAILED'
-      && !error.message.includes('request-secret'),
+    () =>
+      runLiteAsk({
+        repoPath,
+        task: 'Explain request error behavior',
+        provider: 'deepseek',
+        artifactRoot: join(repoPath, 'runs', 'babel-lite'),
+        env: { DEEPSEEK_API_KEY: 'provider-key' },
+        fetchImpl: async () => {
+          throw new Error('network failed DEEPSEEK_API_KEY=request-secret');
+        },
+      }),
+    (error: unknown) =>
+      error instanceof LiteError &&
+      error.code === 'PROVIDER_REQUEST_FAILED' &&
+      !error.message.includes('request-secret'),
   );
 
   await assert.rejects(
-    () => runLiteAsk({
-      repoPath,
-      task: 'Explain empty response behavior',
-      provider: 'deepseek',
-      artifactRoot: join(repoPath, 'runs', 'babel-lite'),
-      env: { DEEPSEEK_API_KEY: 'provider-key' },
-      fetchImpl: async () => new Response(JSON.stringify({ choices: [{ message: { content: '' } }] }), { status: 200 }),
-    }),
+    () =>
+      runLiteAsk({
+        repoPath,
+        task: 'Explain empty response behavior',
+        provider: 'deepseek',
+        artifactRoot: join(repoPath, 'runs', 'babel-lite'),
+        env: { DEEPSEEK_API_KEY: 'provider-key' },
+        fetchImpl: async () =>
+          new Response(JSON.stringify({ choices: [{ message: { content: '' } }] }), {
+            status: 200,
+          }),
+      }),
     (error: unknown) => error instanceof LiteError && error.code === 'PROVIDER_EMPTY_RESPONSE',
   );
 });
@@ -459,13 +517,14 @@ test('patch uses mock provider, writes diff artifact, refuses auto-apply, and le
   assert.match(readFileSync(patchPath, 'utf-8'), /not applied/i);
 
   await assert.rejects(
-    () => runLitePatch({
-      repoPath,
-      task: 'Try to apply a patch',
-      provider: 'mock',
-      autoApply: true,
-      env: {},
-    }),
+    () =>
+      runLitePatch({
+        repoPath,
+        task: 'Try to apply a patch',
+        provider: 'mock',
+        autoApply: true,
+        env: {},
+      }),
     (error: unknown) => error instanceof LiteError && error.code === 'PATCH_AUTO_APPLY_REFUSED',
   );
 });

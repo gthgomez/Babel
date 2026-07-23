@@ -11,12 +11,12 @@ import type { WorkspaceVerifyReport } from './workspaceManager.js';
 function report(status: WorkspaceVerifyReport['status']): WorkspaceVerifyReport {
   return {
     status,
-    project_root: 'C:\\Repos\\scratch\\demo',
-    execution_profile: 'workspace_manager',
+    project_root: '/tmp/scratch\\demo',
+    execution_profile: 'opencalw_manager',
     onboarding: {
       schema_version: 1,
       generated_at: '2026-04-28T00:00:00.000Z',
-      project_root: 'C:\\Repos\\scratch\\demo',
+      project_root: '/tmp/scratch\\demo',
       project_name: 'demo',
       markers: [],
       detected_stacks: [],
@@ -27,15 +27,15 @@ function report(status: WorkspaceVerifyReport['status']): WorkspaceVerifyReport 
     },
     selected_commands: [],
     command_results: [],
-    approved_roots: ['C:\\Repos\\scratch'],
+    approved_roots: ['/tmp/scratch'],
   };
 }
 
-test('completion verification is required for completed example_autonomous_agent manager jobs', () => {
+test('completion verification is required for completed OpenClaw manager jobs', () => {
   const gate = evaluateCompletionVerification({
     pipelineStatus: 'COMPLETE',
-    executionProfile: 'workspace_manager',
-    projectRoot: 'C:\\Repos\\scratch\\demo',
+    executionProfile: 'opencalw_manager',
+    projectRoot: '/tmp/scratch\\demo',
     verification: report('pass'),
   });
 
@@ -46,8 +46,8 @@ test('completion verification is required for completed example_autonomous_agent
 test('completion verification fails when no commands are available', () => {
   const gate = evaluateCompletionVerification({
     pipelineStatus: 'COMPLETE',
-    executionProfile: 'workspace_manager',
-    projectRoot: 'C:\\Repos\\scratch\\demo',
+    executionProfile: 'opencalw_manager',
+    projectRoot: '/tmp/scratch\\demo',
     verification: report('no_commands'),
   });
 
@@ -72,14 +72,22 @@ function writeJson(runDir: string, name: string, value: unknown): void {
 test('evidence validation accepts complete autonomous evidence bundles', () => {
   const runDir = mkdtempSync(join(tmpdir(), 'babel-evidence-complete-'));
   writeJson(runDir, '01_manifest.json', {
-    analysis: { pipeline_mode: 'autonomous' },
+    analysis: { pipeline_mode: 'deep' },
   });
   writeJson(runDir, '02_swe_plan_v1.json', { plan_version: '1.0' });
   writeJson(runDir, '03_qa_verdict_v1.json', { verdict: 'PASS' });
   writeJson(runDir, '04_execution_report.json', {
     status: 'EXECUTION_COMPLETE',
     tool_call_log: [
-      { step: 1, tool: 'file_write', target: 'out.txt', exit_code: 0, stdout: '', stderr: '', verified: true },
+      {
+        step: 1,
+        tool: 'file_write',
+        target: 'out.txt',
+        exit_code: 0,
+        stdout: '',
+        stderr: '',
+        verified: true,
+      },
     ],
   });
   writeJson(runDir, '06_runtime_telemetry.json', {
@@ -95,26 +103,37 @@ test('evidence validation accepts complete autonomous evidence bundles', () => {
 test('evidence validation rejects missing QA verdict for completed verified/autonomous runs', () => {
   const runDir = mkdtempSync(join(tmpdir(), 'babel-evidence-missing-qa-'));
   writeJson(runDir, '01_manifest.json', {
-    analysis: { pipeline_mode: 'autonomous' },
+    analysis: { pipeline_mode: 'deep' },
   });
   writeJson(runDir, '02_swe_plan_v1.json', { plan_version: '1.0' });
   writeJson(runDir, '04_execution_report.json', {
     status: 'EXECUTION_COMPLETE',
     tool_call_log: [
-      { step: 1, tool: 'file_write', target: 'out.txt', exit_code: 0, stdout: '', stderr: '', verified: true },
+      {
+        step: 1,
+        tool: 'file_write',
+        target: 'out.txt',
+        exit_code: 0,
+        stdout: '',
+        stderr: '',
+        verified: true,
+      },
     ],
   });
 
   const result = validateEvidenceBundleRun(runDir);
 
   assert.equal(result.status, 'fail');
-  assert.match(result.issues.map(issue => issue.code).join('\n'), /qa_verdict_missing_for_completion/);
+  assert.match(
+    result.issues.map((issue) => issue.code).join('\n'),
+    /qa_verdict_missing_for_completion/,
+  );
 });
 
 test('evidence validation rejects conflicting completion and halted execution statuses', () => {
   const runDir = mkdtempSync(join(tmpdir(), 'babel-evidence-conflict-'));
   writeJson(runDir, '01_manifest.json', {
-    analysis: { pipeline_mode: 'autonomous' },
+    analysis: { pipeline_mode: 'deep' },
   });
   writeJson(runDir, '02_swe_plan_v1.json', { plan_version: '1.0' });
   writeJson(runDir, '03_qa_verdict_v1.json', { verdict: 'PASS' });
@@ -129,5 +148,5 @@ test('evidence validation rejects conflicting completion and halted execution st
   const result = validateEvidenceBundleRun(runDir);
 
   assert.equal(result.status, 'fail');
-  assert.match(result.issues.map(issue => issue.code).join('\n'), /terminal_status_conflict/);
+  assert.match(result.issues.map((issue) => issue.code).join('\n'), /terminal_status_conflict/);
 });

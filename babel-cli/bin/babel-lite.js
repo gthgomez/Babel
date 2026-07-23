@@ -1,18 +1,12 @@
 #!/usr/bin/env node
 
-import { existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+const invoked = process.argv[1]?.replace(/\\/g, '/').split('/').pop()?.toLowerCase() ?? 'bl';
+const label = invoked === 'babel-lite.js' || invoked === 'babel-lite' ? 'babel-lite' : 'bl';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const distEntry = resolve(__dirname, '../dist/index.js');
-
-if (!existsSync(distEntry)) {
-  console.error(
-    `[babel-lite] Missing build output at "${distEntry}". Run "npm --prefix .\\babel-cli run build" from the repo root first.`,
-  );
-  process.exit(1);
-}
-
-await import(pathToFileURL(distEntry).href);
+process.stderr.write(
+  `[babel] ${label} was removed. Use:\n` +
+  '  babel "<task>"\n' +
+  '  babel plan "<task>"\n' +
+  '  babel deep "<task>"\n',
+);
+process.exit(1);

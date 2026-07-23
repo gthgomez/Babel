@@ -12,13 +12,20 @@ import {
 } from '@opentelemetry/api';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { resourceFromAttributes } from '@opentelemetry/resources';
+import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
 import {
-  ATTR_SERVICE_NAME,
-} from '@opentelemetry/semantic-conventions';
-import { InMemorySpanExporter, SimpleSpanProcessor, type ReadableSpan, type SpanExporter } from '@opentelemetry/sdk-trace-base';
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+  type ReadableSpan,
+  type SpanExporter,
+} from '@opentelemetry/sdk-trace-base';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 
-import { evaluateTelemetryPolicy, formatEnterprisePolicyDecision } from '../config/enterprisePolicy.js';
+import {
+  evaluateTelemetryPolicy,
+  formatEnterprisePolicyDecision,
+} from '../config/enterprisePolicy.js';
+import { readLangfuseConfig, createLangfuseExporter } from '../services/langfuseExporter.js';
 import { hashOrderedIds, hashText } from './hash.js';
 import type { HarnessMetadata } from './metadata.js';
 
@@ -94,25 +101,21 @@ function normalizeAttributes(attributes: Attributes): Attributes {
     }
 
     if (Array.isArray(value)) {
-      if (value.every(item => typeof item === 'string')) {
+      if (value.every((item) => typeof item === 'string')) {
         normalized[key] = value;
         continue;
       }
-      if (value.every(item => typeof item === 'number')) {
+      if (value.every((item) => typeof item === 'number')) {
         normalized[key] = value;
         continue;
       }
-      if (value.every(item => typeof item === 'boolean')) {
+      if (value.every((item) => typeof item === 'boolean')) {
         normalized[key] = value;
       }
       continue;
     }
 
-    if (
-      typeof value === 'string' ||
-      typeof value === 'number' ||
-      typeof value === 'boolean'
-    ) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
       normalized[key] = value;
     }
   }
@@ -129,12 +132,23 @@ async function ensureTelemetryRuntime(): Promise<TelemetryRuntime> {
   await shutdownActiveRuntime();
 
   const enabled = truthyEnv('BABEL_OTEL_ENABLED');
-  const serviceName = (process.env['BABEL_OTEL_SERVICE_NAME'] ?? TELEMETRY_NAME).trim() || TELEMETRY_NAME;
-  const telemetryDecision = enabled ? evaluateTelemetryPolicy() : { allowed: true, reason: 'telemetry disabled by env' };
+  const serviceName =
+    (process.env['BABEL_OTEL_SERVICE_NAME'] ?? TELEMETRY_NAME).trim() || TELEMETRY_NAME;
+  const telemetryDecision = enabled
+    ? evaluateTelemetryPolicy()
+    : { allowed: true, reason: 'telemetry disabled by env' };
 
-  if (!enabled || (!telemetryDecision.allowed && !inMemoryTestMode)) {
-    if (enabled && !telemetryDecision.allowed && !inMemoryTestMode) {
-      console.warn(`[babel:telemetry] BABEL_OTEL_ENABLED=true but ${formatEnterprisePolicyDecision(telemetryDecision)}; tracing disabled.`);
+  // In test mode, always set up the in-memory exporter so tests can inspect spans
+  // regardless of the policy decision.
+  if (inMemoryTestMode) {
+    activeInMemoryExporter = new InMemorySpanExporter();
+  }
+
+  if (!enabled || !telemetryDecision.allowed) {
+    if (enabled && !telemetryDecision.allowed) {
+      console.warn(
+        `[babel:telemetry] BABEL_OTEL_ENABLED=true but ${formatEnterprisePolicyDecision(telemetryDecision)}; tracing disabled.`,
+      );
     }
     activeRuntimeKey = key;
     activeRuntime = {
@@ -151,16 +165,29 @@ async function ensureTelemetryRuntime(): Promise<TelemetryRuntime> {
   if (exporterEndpoint) {
     const exporter = new OTLPTraceExporter({ url: exporterEndpoint });
     spanProcessors.push(new SimpleSpanProcessor(exporter));
-  } else if (!inMemoryTestMode) {
-    console.warn(
-      '[babel:telemetry] BABEL_OTEL_ENABLED=true but BABEL_OTEL_EXPORTER_OTLP_ENDPOINT is not set' +
-      ' — no spans will be exported. Set the endpoint or disable tracing.',
-    );
   }
 
-  if (inMemoryTestMode) {
-    activeInMemoryExporter = new InMemorySpanExporter();
+  // Also export to Langfuse if configured (additive — Babel can export to
+  // multiple backends simultaneously)
+  const langfuseConfig = readLangfuseConfig();
+  if (langfuseConfig) {
+    const langfuseExporter = createLangfuseExporter(langfuseConfig);
+    spanProcessors.push(new SimpleSpanProcessor(langfuseExporter));
+    console.log(`[babel] Langfuse tracing enabled → ${langfuseConfig.host}`);
+  } else {
+    // Only log when OTel is otherwise enabled (avoid noise in default config)
+    if (exporterEndpoint) {
+      console.log('[babel] Langfuse tracing disabled (set LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY to enable)');
+    }
+  }
+
+  if (inMemoryTestMode && activeInMemoryExporter) {
     spanProcessors.push(new SimpleSpanProcessor(activeInMemoryExporter));
+  } else if (!exporterEndpoint && !inMemoryTestMode) {
+    console.warn(
+      '[babel:telemetry] BABEL_OTEL_ENABLED=true but BABEL_OTEL_EXPORTER_OTLP_ENDPOINT is not set' +
+        ' — no spans will be exported. Set the endpoint or disable tracing.',
+    );
   }
 
   const provider = new NodeTracerProvider({
@@ -218,6 +245,24 @@ function buildInitialBaggage(
 function buildRootAttributes(options: StartRunTraceOptions): Attributes {
   const runId = options.runDir.split(/[\\/]/).pop() ?? options.runDir;
 
+  // Phase 5b: Redact CI/VCS metadata from span attributes when an external
+  // OTLP endpoint is configured. Local telemetry keeps the full set.
+  const hasExternalEndpoint = Boolean(process.env['BABEL_OTEL_EXPORTER_OTLP_ENDPOINT']?.trim());
+  const ciAttributes = hasExternalEndpoint
+    ? {}
+    : {
+        'ci.provider': options.metadata.ciProvider,
+        'ci.run_id': options.metadata.ciRunId,
+        'ci.run_url': options.metadata.ciRunUrl,
+        'vcs.repository': options.metadata.vcsRepository,
+        'vcs.ref': options.metadata.vcsRef,
+        'vcs.sha': options.metadata.vcsSha,
+        'pull_request.number': options.metadata.pullRequestNumber,
+        'deploy.environment': options.metadata.deployEnvironment,
+        'deploy.id': options.metadata.deployId,
+        'deploy.trigger': options.metadata.deployTrigger,
+      };
+
   return normalizeAttributes({
     'babel.run.id': runId,
     'babel.run.mode.requested': options.requestedMode ?? 'unspecified',
@@ -225,16 +270,7 @@ function buildRootAttributes(options: StartRunTraceOptions): Attributes {
     'babel.session.id': options.sessionId,
     'babel.session.has_local_learning_root': options.metadata.hasLocalLearningRoot,
     'babel.trace.schema_version': TRACE_SCHEMA_VERSION,
-    'ci.provider': options.metadata.ciProvider,
-    'ci.run_id': options.metadata.ciRunId,
-    'ci.run_url': options.metadata.ciRunUrl,
-    'vcs.repository': options.metadata.vcsRepository,
-    'vcs.ref': options.metadata.vcsRef,
-    'vcs.sha': options.metadata.vcsSha,
-    'pull_request.number': options.metadata.pullRequestNumber,
-    'deploy.environment': options.metadata.deployEnvironment,
-    'deploy.id': options.metadata.deployId,
-    'deploy.trigger': options.metadata.deployTrigger,
+    ...ciAttributes,
     'babel.policy.version': options.metadata.policyVersionApplied,
     'babel.active_policy_ids_hash': options.metadata.activePolicyIdsHash,
     'babel.recommended_stack_ids_hash': options.metadata.recommendedStackIdsHash,
@@ -347,25 +383,31 @@ export class PipelineTrace {
     budgetWarningSeverity?: string | null;
     budgetPolicyEnabled?: boolean;
   }): void {
-    this.setRootAttributes(normalizeAttributes({
-      'babel.stack.domain_id': summary.domainId,
-      'babel.stack.model_adapter_id': summary.modelAdapterId,
-      'babel.stack.selected_entry_count': summary.selectedEntryIds?.length,
-      'babel.stack.selected_entry_ids_hash': summary.selectedEntryIds ? hashOrderedIds(summary.selectedEntryIds) : undefined,
-      'babel.stack.prompt_manifest_count': summary.promptManifestCount,
-      'babel.stack.skill_count': summary.skillCount,
-      'babel.stack.token_budget_total': summary.tokenBudgetTotal ?? undefined,
-      'babel.stack.token_budget_missing_count': summary.tokenBudgetMissingCount,
-      'babel.stack.budget_warning_severity': summary.budgetWarningSeverity ?? undefined,
-      'babel.stack.budget_policy_enabled': summary.budgetPolicyEnabled,
-    }));
+    this.setRootAttributes(
+      normalizeAttributes({
+        'babel.stack.domain_id': summary.domainId,
+        'babel.stack.model_adapter_id': summary.modelAdapterId,
+        'babel.stack.selected_entry_count': summary.selectedEntryIds?.length,
+        'babel.stack.selected_entry_ids_hash': summary.selectedEntryIds
+          ? hashOrderedIds(summary.selectedEntryIds)
+          : undefined,
+        'babel.stack.prompt_manifest_count': summary.promptManifestCount,
+        'babel.stack.skill_count': summary.skillCount,
+        'babel.stack.token_budget_total': summary.tokenBudgetTotal ?? undefined,
+        'babel.stack.token_budget_missing_count': summary.tokenBudgetMissingCount,
+        'babel.stack.budget_warning_severity': summary.budgetWarningSeverity ?? undefined,
+        'babel.stack.budget_policy_enabled': summary.budgetPolicyEnabled,
+      }),
+    );
   }
 
   recordQaVerdict(verdict: 'PASS' | 'REJECT', failureTags: string[]): void {
     const evidenceGateStatus =
       verdict === 'PASS'
         ? 'satisfied'
-        : (failureTags.includes('EVIDENCE-GATE') ? 'violated' : EVIDENCE_GATE_UNKNOWN);
+        : failureTags.includes('EVIDENCE-GATE')
+          ? 'violated'
+          : EVIDENCE_GATE_UNKNOWN;
 
     this.updateBaggage({
       'babel.evidence_gate.status': evidenceGateStatus,
@@ -374,7 +416,8 @@ export class PipelineTrace {
     this.setRootAttributes({
       'babel.qa.verdict': verdict,
       'babel.qa.failure_count': failureTags.length,
-      'babel.qa.failure_tags_hash': failureTags.length > 0 ? hashOrderedIds(failureTags) : undefined,
+      'babel.qa.failure_tags_hash':
+        failureTags.length > 0 ? hashOrderedIds(failureTags) : undefined,
       'babel.evidence_gate.status': evidenceGateStatus,
     });
   }

@@ -5,12 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import {
-  createSchedule,
-  deleteSchedule,
-  listSchedules,
-  runScheduleNow,
-} from './schedules.js';
+import { createSchedule, deleteSchedule, listSchedules, runScheduleNow } from './schedules.js';
 
 function git(cwd: string, args: string[]): string {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -65,11 +60,15 @@ test('schedule registry create, list, run-now, and delete stay local and read-on
 
 test('schedule creation rejects mutating or unknown job types', () => {
   const stateRoot = mkdtempSync(join(tmpdir(), 'babel-schedules-state-'));
-  assert.throws(() => createSchedule({
-    id: 'bad',
-    jobType: 'git_push' as never,
-    registryPath: join(stateRoot, 'registry.json'),
-  }), /Invalid schedule job type/);
+  assert.throws(
+    () =>
+      createSchedule({
+        id: 'bad',
+        jobType: 'git_push' as never,
+        registryPath: join(stateRoot, 'registry.json'),
+      }),
+    /Invalid schedule job type/,
+  );
 });
 
 test('mutating schedules require run-now opt-in and use an isolated project copy', () => {
@@ -99,9 +98,6 @@ test('mutating schedules require run-now opt-in and use an isolated project copy
   assert.equal(applied.result?.schema_version, 1);
   assert.equal('mutation_type' in (applied.result ?? {}), true);
   assert.equal(git(repo, ['rev-parse', '--short', 'HEAD']), beforeHead);
-  assert.throws(
-    () => git(repo, ['rev-parse', '--verify', 'codex/scheduled-branch']),
-    /fatal/i,
-  );
+  assert.throws(() => git(repo, ['rev-parse', '--verify', 'codex/scheduled-branch']), /fatal/i);
   assert.equal(existsSync(applied.nested_artifact_path ?? ''), true);
 });

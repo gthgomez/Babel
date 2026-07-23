@@ -43,7 +43,10 @@ describe('liteProviderAdapter', () => {
     const adapter = createLiteProviderAdapter({ BABEL_LITE_OFFLINE: '1' });
     assert.equal(adapter.resolveFixProvider(), 'mock');
     assert.equal(adapter.resolveTextProviderId(), 'mock');
-    assert.equal(resolveSmallFixProviderForCommand({ provider: 'live' }, { BABEL_LITE_OFFLINE: '1' }), 'live');
+    assert.equal(
+      resolveSmallFixProviderForCommand({ provider: 'live' }, { BABEL_LITE_OFFLINE: '1' }),
+      'live',
+    );
   });
 
   it('flags provider-aware verbs', () => {

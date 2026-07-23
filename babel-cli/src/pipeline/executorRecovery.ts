@@ -4,17 +4,23 @@ import { join, relative } from 'node:path';
 import { isVerifierCommand } from '../services/terminalStatus.js';
 import { normalizeShellCommandForComparison } from './benchmarkTasks.js';
 
-
-export function isVerifierNotFoundFailure(command: string, stdout: string, stderr: string): boolean {
+export function isVerifierNotFoundFailure(
+  command: string,
+  stdout: string,
+  stderr: string,
+): boolean {
   const commandBase = normalizeShellCommandForComparison(command).split(/\s+/)[0] ?? '';
   const evidence = `${stdout}\n${stderr}`.toLowerCase();
-  return evidence.includes('missing script') ||
+  return (
+    evidence.includes('missing script') ||
     evidence.includes('command not found') ||
     evidence.includes('is not recognized as an internal or external command') ||
     evidence.includes('not recognized as the name of') ||
     evidence.includes('enoent') ||
     evidence.includes('could not determine executable to run') ||
-    (/npm/.test(commandBase) && /missing script:\s*["']?(?:test|typecheck|build)["']?/.test(evidence));
+    (/npm/.test(commandBase) &&
+      /missing script:\s*["']?(?:test|typecheck|build)["']?/.test(evidence))
+  );
 }
 
 export function getAllowedToolsFromEnv(): string[] | null {
@@ -25,15 +31,18 @@ export function getAllowedToolsFromEnv(): string[] | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (Array.isArray(parsed)) {
-      return parsed.map(value => String(value));
+      return parsed.map((value) => String(value));
     }
   } catch {
-    return raw.split(',').map(value => value.trim()).filter(Boolean);
+    return raw
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
   }
   return null;
 }
 
-function getDisallowedToolsFromEnv(): string[] {
+export function getDisallowedToolsFromEnv(): string[] {
   const raw = process.env['BABEL_DISALLOWED_TOOLS'];
   if (!raw) {
     return [];
@@ -41,15 +50,18 @@ function getDisallowedToolsFromEnv(): string[] {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (Array.isArray(parsed)) {
-      return parsed.map(value => String(value));
+      return parsed.map((value) => String(value));
     }
   } catch {
-    return raw.split(',').map(value => value.trim()).filter(Boolean);
+    return raw
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
   }
   return [];
 }
 
-function isFileWriteToolAvailable(): boolean {
+export function isFileWriteToolAvailable(): boolean {
   const allowed = getAllowedToolsFromEnv();
   return allowed === null || allowed.includes('file_write');
 }
@@ -70,7 +82,11 @@ export function shouldRecoverCommandFailure(command: string, rawTask: string): b
   return isVerifierCommand(command) || /\bfix\b|\brepair\b|\bpatch\b|\bdebug\b/i.test(rawTask);
 }
 
-function extractMissingNpmScript(command: string, stdout: string, stderr: string): string | null {
+export function extractMissingNpmScript(
+  command: string,
+  stdout: string,
+  stderr: string,
+): string | null {
   const commandBase = normalizeShellCommandForComparison(command).split(/\s+/)[0] ?? '';
   if (!/npm/.test(commandBase)) {
     return null;
@@ -80,7 +96,7 @@ function extractMissingNpmScript(command: string, stdout: string, stderr: string
   return match?.[1] ?? null;
 }
 
-function findDescendantPackageScriptCwd(
+export function findDescendantPackageScriptCwd(
   projectRoot: string | null | undefined,
   scriptName: string,
 ): string | null {
@@ -174,14 +190,20 @@ export function inferVerifierCommandFromTask(task: string): string | null {
 
 export function inferCommandOnlyNoModificationRequest(task: string): string | null {
   const normalized = task.toLowerCase();
-  if (!/\bdo not (?:modify|edit|change|write)|\bno file changes\b|\bwithout modifying\b/.test(normalized)) {
+  if (
+    !/\bdo not (?:modify|edit|change|write)|\bno file changes\b|\bwithout modifying\b/.test(
+      normalized,
+    )
+  ) {
     return null;
   }
   const strippedNoModify = normalized
     .replace(/\bdo not (?:modify|edit|change|write)[^.]*\.?/g, ' ')
     .replace(/\bwithout modifying[^.]*\.?/g, ' ')
     .replace(/\bno file changes[^.]*\.?/g, ' ');
-  if (/\b(fix|repair|patch|create|update|edit|modify|write|delete|remove)\b/.test(strippedNoModify)) {
+  if (
+    /\b(fix|repair|patch|create|update|edit|modify|write|delete|remove)\b/.test(strippedNoModify)
+  ) {
     return null;
   }
   const verifierCommand = inferVerifierCommandFromTask(task);
@@ -198,4 +220,22 @@ export function isOptionalVerifierRequest(task: string): boolean {
 
 export function isExecutorCommandPlaceholder(command: string): boolean {
   return /<cmd-without-cmd-slash-c-or-cd>/i.test(command.trim());
+}
+
+/**
+ * Marker prefix injected into stderr by the sandbox layer when a spawn-level
+ * transient error has exhausted all retries. The executor loop uses this to
+ * distinguish infrastructure failures from command logic failures so that the
+ * LLM repair budget is not consumed by transient infrastructure issues.
+ */
+export const TRANSIENT_SPAWN_STDERR_MARKER = '[sandbox] Transient spawn error (retries exhausted):';
+
+/**
+ * Returns true when `stderr` contains the transient spawn error marker,
+ * indicating that the sandbox layer exhausted its retries for a transient
+ * infrastructure error (Docker daemon down, network timeout, ENOENT race, etc.)
+ * and that this failure should NOT consume the LLM repair budget.
+ */
+export function isTransientSpawnFailure(stderr: string): boolean {
+  return typeof stderr === 'string' && stderr.startsWith(TRANSIENT_SPAWN_STDERR_MARKER);
 }

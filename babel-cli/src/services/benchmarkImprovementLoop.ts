@@ -1,10 +1,22 @@
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 import { BABEL_ROOT } from '../cli/constants.js';
 import { getSafeEnv } from '../utils/safeEnv.js';
-import { analyzeTerminalBenchRun, type BenchmarkFailureClass, type BenchmarkRunAnalysis } from './benchmarkAnalysis.js';
+import {
+  analyzeTerminalBenchRun,
+  type BenchmarkFailureClass,
+  type BenchmarkRunAnalysis,
+} from './benchmarkAnalysis.js';
 
 export type BenchmarkLoopLocalStatus = 'pass' | 'warn' | 'fail' | 'skip';
 export type BenchmarkLoopGateStatus = 'pass' | 'fail';
@@ -158,12 +170,15 @@ const DEFAULT_WATERFALL_TIMEOUT_MS = 720_000;
 const DEFAULT_JOB_SLUG = 'improvement-loop';
 const COMMAND_OUTPUT_LIMIT = 1200;
 
-const CHECK_DEFINITIONS: Record<string, {
-  id: string;
-  title: string;
-  command: string[];
-  timeoutMs: number;
-}> = {
+const CHECK_DEFINITIONS: Record<
+  string,
+  {
+    id: string;
+    title: string;
+    command: string[];
+    timeoutMs: number;
+  }
+> = {
   source_typecheck: {
     id: 'source_typecheck',
     title: 'Source typecheck',
@@ -200,10 +215,10 @@ const CHECK_DEFINITIONS: Record<string, {
     command: ['docker', 'info', '--format', '{{json .ServerVersion}}'],
     timeoutMs: 30_000,
   },
-  release_readiness: {
-    id: 'release_readiness',
-    title: 'Release-readiness benchmark',
-    command: npmRunCommand('benchmark:readiness'),
+  product_benchmark: {
+    id: 'product_benchmark',
+    title: 'Product benchmark with readiness gate',
+    command: npmRunCommand('benchmark:product'),
     timeoutMs: 180_000,
   },
   source_provenance: {
@@ -216,8 +231,25 @@ const CHECK_DEFINITIONS: Record<string, {
 
 const READINESS_PROFILES: Record<BenchmarkLoopReadinessProfile, string[]> = {
   fast: ['source_typecheck', 'unit_tests', 'build'],
-  full: ['source_typecheck', 'unit_tests', 'build', 'dist_check', 'cli_doctor', 'terminal_bench_docker', 'release_readiness'],
-  release: ['source_typecheck', 'unit_tests', 'build', 'dist_check', 'source_provenance', 'cli_doctor', 'terminal_bench_docker', 'release_readiness'],
+  full: [
+    'source_typecheck',
+    'unit_tests',
+    'build',
+    'dist_check',
+    'cli_doctor',
+    'terminal_bench_docker',
+    'product_benchmark',
+  ],
+  release: [
+    'source_typecheck',
+    'unit_tests',
+    'build',
+    'dist_check',
+    'source_provenance',
+    'cli_doctor',
+    'terminal_bench_docker',
+    'product_benchmark',
+  ],
 };
 
 export function buildBenchmarkImprovementLoopReport(
@@ -232,7 +264,10 @@ export function buildBenchmarkImprovementLoopReport(
   const minFullPasses = positiveInt(options.minFullPasses, DEFAULT_MIN_FULL_PASSES);
   const modelTier = options.modelTier ?? DEFAULT_MODEL_TIER;
   const deepInfraTimeoutMs = positiveInt(options.deepInfraTimeoutMs, DEFAULT_DEEPINFRA_TIMEOUT_MS);
-  const waterfallTimeoutMs = positiveInt(options.waterfallTimeoutMs, Math.max(DEFAULT_WATERFALL_TIMEOUT_MS, deepInfraTimeoutMs * 3));
+  const waterfallTimeoutMs = positiveInt(
+    options.waterfallTimeoutMs,
+    Math.max(DEFAULT_WATERFALL_TIMEOUT_MS, deepInfraTimeoutMs * 3),
+  );
   const readinessProfile = normalizeReadinessProfile(options.readinessProfile);
   const deadlineAt = normalizeDeadlineAt(options.deadlineAt);
   const minRemainingMs = positiveInt(options.minRemainingMs, 0);
@@ -242,19 +277,24 @@ export function buildBenchmarkImprovementLoopReport(
   const outputDir = resolve(options.outputDir ?? join(babelRoot, 'runs', 'benchmarks'));
   mkdirSync(outputDir, { recursive: true });
 
-  const localChecks = options.runLocalChecks === false
-    ? readinessChecksForProfile(readinessProfile).map((check): BenchmarkLoopCheck => ({
-      id: check.id,
-      title: check.title,
-      status: 'skip',
-      command: check.command.join(' '),
-      duration_ms: null,
-      exit_code: null,
-      message: `Skipped by --skip-local-checks for ${readinessProfile} readiness.`,
-    }))
-    : runLocalReadinessChecks(cliRoot, readinessProfile);
+  const localChecks =
+    options.runLocalChecks === false
+      ? readinessChecksForProfile(readinessProfile).map(
+          (check): BenchmarkLoopCheck => ({
+            id: check.id,
+            title: check.title,
+            status: 'skip',
+            command: check.command.join(' '),
+            duration_ms: null,
+            exit_code: null,
+            message: `Skipped by --skip-local-checks for ${readinessProfile} readiness.`,
+          }),
+        )
+      : runLocalReadinessChecks(cliRoot, readinessProfile);
 
-  const localStatus: BenchmarkLoopGateStatus = localChecks.some((check) => check.status === 'fail') ? 'fail' : 'pass';
+  const localStatus: BenchmarkLoopGateStatus = localChecks.some((check) => check.status === 'fail')
+    ? 'fail'
+    : 'pass';
   const runnerPath = join(benchmarksRoot, 'scripts', 'run_babel_terminal_bench_pilot.mjs');
   const resultRoot = join(benchmarksRoot, 'runs', 'terminal-bench-2');
   const runSummaries = listTerminalBenchRuns(resultRoot, suite);
@@ -265,7 +305,7 @@ export function buildBenchmarkImprovementLoopReport(
   const targetSelection = scoreTargetTasks(latestFull, recentTargeted, latestFullAnalysis);
   const selectedTask = options.targetTask ?? targetSelection.selected?.task ?? null;
   const selectedTaskScore = selectedTask
-    ? targetSelection.scores.find((score) => score.task === selectedTask) ?? null
+    ? (targetSelection.scores.find((score) => score.task === selectedTask) ?? null)
     : null;
   const commands = buildLoopCommands({
     runnerPath,
@@ -295,7 +335,7 @@ export function buildBenchmarkImprovementLoopReport(
   });
 
   const readinessGate = {
-    status: nextAction.kind === 'promote' ? 'pass' as const : 'fail' as const,
+    status: nextAction.kind === 'promote' ? ('pass' as const) : ('fail' as const),
     reason: nextAction.rationale,
     promotion_ready: nextAction.kind === 'promote',
   };
@@ -360,7 +400,9 @@ export function buildBenchmarkImprovementLoopReport(
   return report;
 }
 
-export function formatBenchmarkImprovementLoopHuman(report: BenchmarkImprovementLoopReport): string {
+export function formatBenchmarkImprovementLoopHuman(
+  report: BenchmarkImprovementLoopReport,
+): string {
   const latestFull = report.terminal_bench.latest_full;
   const latestTargeted = report.terminal_bench.latest_targeted;
   const lines = [
@@ -401,7 +443,10 @@ export function formatBenchmarkImprovementLoopHuman(report: BenchmarkImprovement
   return lines.join('\n');
 }
 
-function runLocalReadinessChecks(cliRoot: string, profile: BenchmarkLoopReadinessProfile): BenchmarkLoopCheck[] {
+function runLocalReadinessChecks(
+  cliRoot: string,
+  profile: BenchmarkLoopReadinessProfile,
+): BenchmarkLoopCheck[] {
   return readinessChecksForProfile(profile).map((check) => {
     const result = runCommand(check.command, cliRoot, check.timeoutMs);
     const status: BenchmarkLoopLocalStatus = result.exitCode === 0 ? 'pass' : 'fail';
@@ -412,9 +457,7 @@ function runLocalReadinessChecks(cliRoot: string, profile: BenchmarkLoopReadines
       command: check.command.join(' '),
       duration_ms: result.durationMs,
       exit_code: result.exitCode,
-      message: status === 'pass'
-        ? `${check.title} passed.`
-        : summarizeCommandFailure(result),
+      message: status === 'pass' ? `${check.title} passed.` : summarizeCommandFailure(result),
     };
   });
 }
@@ -449,8 +492,9 @@ function runCommand(command: string[], cwd: string, timeoutMs: number): CommandR
 
 function listTerminalBenchRuns(resultRoot: string, suite: string): TerminalBenchRunSummary[] {
   if (!existsSync(resultRoot)) return [];
-  const resultPaths = collectResultJsonFiles(resultRoot)
-    .filter((file) => dirname(file) !== resultRoot);
+  const resultPaths = collectResultJsonFiles(resultRoot).filter(
+    (file) => dirname(file) !== resultRoot,
+  );
   const summaries = resultPaths
     .map((file) => readTerminalBenchRun(file, suite))
     .filter((summary): summary is TerminalBenchRunSummary => summary !== null);
@@ -502,13 +546,17 @@ function readTerminalBenchRun(file: string, suite: string): TerminalBenchRunSumm
   const babelCompleted = numberValue(summary.babel_completed);
   return {
     path: file,
-    job_name: typeof parsed.job_name === 'string' ? parsed.job_name : dirname(file).split(/[\\/]/).pop() ?? 'unknown',
+    job_name:
+      typeof parsed.job_name === 'string'
+        ? parsed.job_name
+        : (dirname(file).split(/[\\/]/).pop() ?? 'unknown'),
     suite: configSuite,
-    generated_at: typeof parsed.finished_at === 'string'
-      ? parsed.finished_at
-      : typeof parsed.started_at === 'string'
-        ? parsed.started_at
-        : null,
+    generated_at:
+      typeof parsed.finished_at === 'string'
+        ? parsed.finished_at
+        : typeof parsed.started_at === 'string'
+          ? parsed.started_at
+          : null,
     trials: trialCount,
     passed,
     failed,
@@ -538,7 +586,8 @@ function chooseNextAction(options: {
     return {
       kind: 'fix_local_readiness',
       command: options.commands.local_gate,
-      rationale: 'Local source/readiness checks must pass before benchmark iteration is meaningful.',
+      rationale:
+        'Local source/readiness checks must pass before benchmark iteration is meaningful.',
     };
   }
   if (!options.runnerExists) {
@@ -576,7 +625,8 @@ function chooseNextAction(options: {
     return {
       kind: 'fix_target_task',
       command: null,
-      rationale: 'Full pilot is below target, but no failed task could be selected from the latest result.',
+      rationale:
+        'Full pilot is below target, but no failed task could be selected from the latest result.',
     };
   }
   if (
@@ -638,17 +688,21 @@ function buildLoopCommands(options: {
     String(options.maxTasks),
     '--job',
     `babel-autonomous-${options.suite}-${stamp}-${options.jobSlug}-full`,
-  ].map(quoteArg).join(' ');
+  ]
+    .map(quoteArg)
+    .join(' ');
   const targeted = options.selectedTask
     ? [
-      ...base,
-      '--max-tasks',
-      '1',
-      '--tasks',
-      options.selectedTask,
-      '--job',
-      `babel-autonomous-${options.suite}-${stamp}-${options.jobSlug}-${sanitizeSlug(options.selectedTask)}`,
-    ].map(quoteArg).join(' ')
+        ...base,
+        '--max-tasks',
+        '1',
+        '--tasks',
+        options.selectedTask,
+        '--job',
+        `babel-autonomous-${options.suite}-${stamp}-${options.jobSlug}-${sanitizeSlug(options.selectedTask)}`,
+      ]
+        .map(quoteArg)
+        .join(' ')
     : null;
   return {
     local_gate: 'node .\\dist\\index.js benchmark loop --json',
@@ -665,7 +719,7 @@ function scoreTargetTasks(
 ): { selected: BenchmarkLoopTargetScore | null; scores: BenchmarkLoopTargetScore[] } {
   const candidates = latestFull?.failed_tasks.length
     ? latestFull.failed_tasks
-    : recentTargeted[0]?.failed_tasks ?? [];
+    : (recentTargeted[0]?.failed_tasks ?? []);
   const latestTargeted = recentTargeted[0] ?? null;
   const analysisByTask = new Map<string, BenchmarkFailureClass>();
   if (latestFullAnalysis) {
@@ -674,46 +728,54 @@ function scoreTargetTasks(
     }
   }
   const uniqueCandidates = [...new Set(candidates)];
-  const scores = uniqueCandidates.map((task): BenchmarkLoopTargetScore => {
-    const failureClass = analysisByTask.get(task) ?? null;
-    const recentFailures = recentTargeted
-      .filter((run) => run.passed === 0 && run.failed_tasks.includes(task))
-      .length;
-    const staleTargetedPass = recentTargeted.some((run) =>
-      run.passed === run.trials &&
-      run.passed_tasks.includes(task) &&
-      latestFull !== null &&
-      !isRunNewerThan(run, latestFull));
-    const rationale: string[] = [];
-    let score = 100;
-    score += failureClassWeight(failureClass);
-    if (latestTargeted && isRunNewerThan(latestTargeted, latestFull) && latestTargeted.failed_tasks.includes(task)) {
-      score -= 20;
-      rationale.push('latest targeted canary already failed this task');
-    }
-    if (recentFailures > 0) {
-      score -= recentFailures * 12;
-      rationale.push(`${recentFailures} recent targeted failure(s)`);
-    }
-    if (staleTargetedPass) {
-      score -= 10;
-      rationale.push('has a stale targeted pass before the latest full run');
-    }
-    if (failureClass) {
-      rationale.push(`latest full failure class: ${failureClass}`);
-    }
-    if (rationale.length === 0) {
-      rationale.push('failed in latest broad run with no newer targeted evidence');
-    }
-    return {
-      task,
-      score,
-      failure_class: failureClass,
-      stale_targeted_pass: staleTargetedPass,
-      recent_targeted_failures: recentFailures,
-      rationale,
-    };
-  }).sort((left, right) => right.score - left.score || left.task.localeCompare(right.task));
+  const scores = uniqueCandidates
+    .map((task): BenchmarkLoopTargetScore => {
+      const failureClass = analysisByTask.get(task) ?? null;
+      const recentFailures = recentTargeted.filter(
+        (run) => run.passed === 0 && run.failed_tasks.includes(task),
+      ).length;
+      const staleTargetedPass = recentTargeted.some(
+        (run) =>
+          run.passed === run.trials &&
+          run.passed_tasks.includes(task) &&
+          latestFull !== null &&
+          !isRunNewerThan(run, latestFull),
+      );
+      const rationale: string[] = [];
+      let score = 100;
+      score += failureClassWeight(failureClass);
+      if (
+        latestTargeted &&
+        isRunNewerThan(latestTargeted, latestFull) &&
+        latestTargeted.failed_tasks.includes(task)
+      ) {
+        score -= 20;
+        rationale.push('latest targeted canary already failed this task');
+      }
+      if (recentFailures > 0) {
+        score -= recentFailures * 12;
+        rationale.push(`${recentFailures} recent targeted failure(s)`);
+      }
+      if (staleTargetedPass) {
+        score -= 10;
+        rationale.push('has a stale targeted pass before the latest full run');
+      }
+      if (failureClass) {
+        rationale.push(`latest full failure class: ${failureClass}`);
+      }
+      if (rationale.length === 0) {
+        rationale.push('failed in latest broad run with no newer targeted evidence');
+      }
+      return {
+        task,
+        score,
+        failure_class: failureClass,
+        stale_targeted_pass: staleTargetedPass,
+        recent_targeted_failures: recentFailures,
+        rationale,
+      };
+    })
+    .sort((left, right) => right.score - left.score || left.task.localeCompare(right.task));
   return {
     selected: scores[0] ?? null,
     scores,
@@ -764,7 +826,7 @@ function selectTargetTask(
 
   const candidates = latestFull?.failed_tasks.length
     ? latestFull.failed_tasks
-    : latestTargeted?.failed_tasks ?? [];
+    : (latestTargeted?.failed_tasks ?? []);
   if (candidates.length === 0) {
     return null;
   }
@@ -780,7 +842,7 @@ function selectTargetTask(
   }
 
   let selected = candidates[0] ?? null;
-  let selectedFailures = selected ? failureCounts.get(selected) ?? 0 : Number.POSITIVE_INFINITY;
+  let selectedFailures = selected ? (failureCounts.get(selected) ?? 0) : Number.POSITIVE_INFINITY;
   for (const candidate of candidates) {
     const failures = failureCounts.get(candidate) ?? 0;
     if (failures < selectedFailures) {
@@ -791,7 +853,10 @@ function selectTargetTask(
   return selected;
 }
 
-function isRunNewerThan(candidate: TerminalBenchRunSummary, baseline: TerminalBenchRunSummary | null): boolean {
+function isRunNewerThan(
+  candidate: TerminalBenchRunSummary,
+  baseline: TerminalBenchRunSummary | null,
+): boolean {
   if (!baseline) return true;
   const candidateMs = timestampMs(candidate.generated_at);
   const baselineMs = timestampMs(baseline.generated_at);
@@ -842,17 +907,21 @@ function writeLoopState(input: {
     last_artifact_path: input.artifactPath,
   };
   writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
-  appendFileSync(eventLogPath, `${JSON.stringify({
-    type: 'benchmark_loop_iteration',
-    iteration,
-    generated_at: input.now.toISOString(),
-    artifact_path: input.artifactPath,
-    latest_full_path: input.latestFull?.path ?? null,
-    latest_targeted_path: input.latestTargeted?.path ?? null,
-    selected_task: input.selectedTask,
-    next_action: input.nextActionKind,
-    readiness_profile: input.readinessProfile,
-  })}\n`, 'utf8');
+  appendFileSync(
+    eventLogPath,
+    `${JSON.stringify({
+      type: 'benchmark_loop_iteration',
+      iteration,
+      generated_at: input.now.toISOString(),
+      artifact_path: input.artifactPath,
+      latest_full_path: input.latestFull?.path ?? null,
+      latest_targeted_path: input.latestTargeted?.path ?? null,
+      selected_task: input.selectedTask,
+      next_action: input.nextActionKind,
+      readiness_profile: input.readinessProfile,
+    })}\n`,
+    'utf8',
+  );
   return state;
 }
 
@@ -860,7 +929,9 @@ function readLoopState(path: string): BenchmarkLoopState | null {
   if (!existsSync(path)) return null;
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
-    return isRecord(parsed) && parsed.schema_version === 1 ? parsed as unknown as BenchmarkLoopState : null;
+    return isRecord(parsed) && parsed.schema_version === 1
+      ? (parsed as unknown as BenchmarkLoopState)
+      : null;
   } catch {
     return null;
   }
@@ -878,9 +949,8 @@ function summarizeCommandFailure(result: CommandResult): string {
     .filter((text): text is string => typeof text === 'string' && text.trim().length > 0)
     .join('\n')
     .trim();
-  const preview = output.length > COMMAND_OUTPUT_LIMIT
-    ? `${output.slice(0, COMMAND_OUTPUT_LIMIT)}...`
-    : output;
+  const preview =
+    output.length > COMMAND_OUTPUT_LIMIT ? `${output.slice(0, COMMAND_OUTPUT_LIMIT)}...` : output;
   return preview || 'Command failed without output.';
 }
 
@@ -960,11 +1030,20 @@ function quoteCmdArg(arg: string): string {
 }
 
 function sanitizeSlug(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'loop';
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'loop'
+  );
 }
 
 function formatTimestampForFile(date: Date): string {
-  return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  return date
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}Z$/, 'Z');
 }
 
 function formatTimestampForJob(date: Date): string {

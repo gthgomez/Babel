@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 
 import { hashOrderedIds, hashText } from './hash.js';
 
@@ -33,6 +33,17 @@ function readSessionStartRecord(sessionStartPath?: string): SessionStartRecord |
     return null;
   }
 
+  // If the path is a directory (e.g. a fallback set to process.cwd() rather
+  // than a session-start JSON file), bail early — readFileSync on a directory
+  // throws EISDIR.
+  try {
+    if (statSync(sessionStartPath).isDirectory()) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+
   try {
     return JSON.parse(readFileSync(sessionStartPath, 'utf-8')) as SessionStartRecord;
   } catch {
@@ -57,7 +68,10 @@ function buildGitHubRunUrl(): string | undefined {
   return `${server}/${repo}/actions/runs/${runId}`;
 }
 
-export function collectHarnessMetadata(sessionStartPath?: string, localLearningRoot?: string): HarnessMetadata {
+export function collectHarnessMetadata(
+  sessionStartPath?: string,
+  localLearningRoot?: string,
+): HarnessMetadata {
   const sessionStartRecord = readSessionStartRecord(sessionStartPath);
   const isGitHubActions = process.env['GITHUB_ACTIONS'] === 'true';
 
@@ -71,7 +85,8 @@ export function collectHarnessMetadata(sessionStartPath?: string, localLearningR
     hasLocalLearningRoot: Boolean(nonBlank(localLearningRoot)),
   };
 
-  const ciRunId = nonBlank(process.env['BABEL_CI_RUN_ID']) ?? nonBlank(process.env['GITHUB_RUN_ID']);
+  const ciRunId =
+    nonBlank(process.env['BABEL_CI_RUN_ID']) ?? nonBlank(process.env['GITHUB_RUN_ID']);
   const ciRunUrl = nonBlank(process.env['BABEL_CI_RUN_URL']) ?? buildGitHubRunUrl();
   const vcsRepository = nonBlank(process.env['GITHUB_REPOSITORY']);
   const vcsRef = nonBlank(process.env['BABEL_GIT_BRANCH']) ?? nonBlank(process.env['GITHUB_REF']);
@@ -79,12 +94,19 @@ export function collectHarnessMetadata(sessionStartPath?: string, localLearningR
   const pullRequestNumber = nonBlank(process.env['BABEL_PR_NUMBER']);
   const deployEnvironment = nonBlank(process.env['BABEL_DEPLOY_ENV']);
   const deployId = nonBlank(process.env['BABEL_DEPLOY_ID']);
-  const deployTrigger = nonBlank(process.env['BABEL_DEPLOY_TRIGGER']) ?? nonBlank(process.env['GITHUB_EVENT_NAME']);
+  const deployTrigger =
+    nonBlank(process.env['BABEL_DEPLOY_TRIGGER']) ?? nonBlank(process.env['GITHUB_EVENT_NAME']);
   const policyVersionApplied = nonBlank(sessionStartRecord?.PolicyVersionApplied ?? undefined);
-  const activePolicyIdsHash = sessionStartRecord?.ActivePolicyIds ? hashOrderedIds(sessionStartRecord.ActivePolicyIds) : undefined;
-  const recommendedStackIdsHash = sessionStartRecord?.RecommendedStackIds ? hashOrderedIds(sessionStartRecord.RecommendedStackIds) : undefined;
+  const activePolicyIdsHash = sessionStartRecord?.ActivePolicyIds
+    ? hashOrderedIds(sessionStartRecord.ActivePolicyIds)
+    : undefined;
+  const recommendedStackIdsHash = sessionStartRecord?.RecommendedStackIds
+    ? hashOrderedIds(sessionStartRecord.RecommendedStackIds)
+    : undefined;
   const sessionStartPathHash = nonBlank(sessionStartPath) ? hashText(sessionStartPath!) : undefined;
-  const localLearningRootHash = nonBlank(localLearningRoot) ? hashText(localLearningRoot!) : undefined;
+  const localLearningRootHash = nonBlank(localLearningRoot)
+    ? hashText(localLearningRoot!)
+    : undefined;
 
   if (ciProvider) metadata.ciProvider = ciProvider;
   if (ciRunId) metadata.ciRunId = ciRunId;

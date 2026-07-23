@@ -1,10 +1,12 @@
 import type { ToolCallLog } from '../schemas/agentContracts.js';
+import { MAX_REPLAN_ATTEMPTS } from '../pipeline/paths.js';
 
 export type RepairStateStatus =
   | 'new_failure'
   | 'patch_pending'
   | 'rerun_required'
   | 'same_failure_repeated'
+  | 'replan_requested'
   | 'strategy_exhausted';
 
 export interface FailureFingerprint {
@@ -27,6 +29,7 @@ export interface RepairState {
   readonly failures: RepairFailureRecord[];
   readonly status: RepairStateStatus;
   readonly lastFingerprint: FailureFingerprint | null;
+  readonly replanCount: number;
 }
 
 export interface RepairStateDecision {
@@ -42,6 +45,7 @@ export function createRepairState(maxFailures: number): RepairState {
     failures: [],
     status: 'new_failure',
     lastFingerprint: null,
+    replanCount: 0,
   };
 }
 
@@ -50,12 +54,7 @@ export function fingerprintToolFailure(entry: ToolCallLog): FailureFingerprint {
   const stdoutSummary = normalizeDiagnostic(entry.stdout);
   const testId = extractTestId(`${entry.stderr}\n${entry.stdout}`);
   const command = normalizeCommand(entry.target);
-  const key = [
-    command,
-    entry.exit_code,
-    testId ?? '',
-    stderrSummary || stdoutSummary,
-  ].join('|');
+  const key = [command, entry.exit_code, testId ?? '', stderrSummary || stdoutSummary].join('|');
   return {
     command,
     exitCode: entry.exit_code,
@@ -66,15 +65,11 @@ export function fingerprintToolFailure(entry: ToolCallLog): FailureFingerprint {
   };
 }
 
-export function recordRepairFailure(
-  state: RepairState,
-  entry: ToolCallLog,
-): RepairStateDecision {
+export function recordRepairFailure(state: RepairState, entry: ToolCallLog): RepairStateDecision {
   const fingerprint = fingerprintToolFailure(entry);
   const previous = state.failures[state.failures.length - 1] ?? null;
-  const repeatedCount = previous && previous.fingerprint.key === fingerprint.key
-    ? previous.repeatedCount + 1
-    : 1;
+  const repeatedCount =
+    previous && previous.fingerprint.key === fingerprint.key ? previous.repeatedCount + 1 : 1;
   const failures = [
     ...state.failures,
     {
@@ -86,17 +81,21 @@ export function recordRepairFailure(
 
   const exhausted = failures.length >= state.maxFailures;
   const sameFailureRepeated = repeatedCount >= 2;
+  const replanAvailable = state.replanCount < MAX_REPLAN_ATTEMPTS;
   const nextStatus: RepairStateStatus = exhausted
     ? 'strategy_exhausted'
-    : sameFailureRepeated
-      ? 'same_failure_repeated'
-      : 'patch_pending';
+    : sameFailureRepeated && replanAvailable
+      ? 'replan_requested'
+      : sameFailureRepeated
+        ? 'same_failure_repeated'
+        : 'patch_pending';
 
   const nextState: RepairState = {
     ...state,
     failures,
     status: nextStatus,
     lastFingerprint: fingerprint,
+    replanCount: nextStatus === 'replan_requested' ? state.replanCount + 1 : state.replanCount,
   };
 
   if (exhausted) {
@@ -111,13 +110,25 @@ export function recordRepairFailure(
   }
 
   if (sameFailureRepeated) {
+    if (replanAvailable) {
+      return {
+        state: nextState,
+        shouldHalt: false,
+        shouldReplan: true,
+        condition:
+          `[EXECUTOR_REPLAN_REQUESTED] Same recoverable failure repeated ` +
+          `${repeatedCount} time(s): ${formatFailureFingerprint(fingerprint)}. ` +
+          `Replan attempt ${nextState.replanCount}/${MAX_REPLAN_ATTEMPTS}.`,
+      };
+    }
     return {
       state: nextState,
       shouldHalt: false,
-      shouldReplan: true,
+      shouldReplan: false,
       condition:
         `[EXECUTOR_REPEATED_FAILURE_FINGERPRINT] Same recoverable failure repeated ` +
-        `${repeatedCount} time(s): ${formatFailureFingerprint(fingerprint)}.`,
+        `${repeatedCount} time(s) after ${state.replanCount} replan(s): ${formatFailureFingerprint(fingerprint)}. ` +
+        `Replan budget exhausted.`,
     };
   }
 
@@ -143,16 +154,19 @@ export function formatFailureFingerprint(fingerprint: FailureFingerprint): strin
 }
 
 function normalizeCommand(value: string): string {
-  return String(value ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+  return String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 }
 
 function normalizeDiagnostic(value: string): string {
   return String(value ?? '')
     .replace(/\x1b\[[0-9;]*m/g, '')
     .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(line => line.length > 0)
-    .filter(line => !/^=+\s*(?:warnings|passes|short test summary)/i.test(line))
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => !/^=+\s*(?:warnings|passes|short test summary)/i.test(line))
     .slice(-8)
     .join(' ')
     .replace(/\s+/g, ' ')
@@ -161,7 +175,9 @@ function normalizeDiagnostic(value: string): string {
 
 function extractTestId(value: string): string | null {
   const text = String(value ?? '');
-  return /(?:FAILED\s+)?(?:\.\.\/)?tests?\/([^\s:]+::[^\s:]+)/i.exec(text)?.[1] ??
+  return (
+    /(?:FAILED\s+)?(?:\.\.\/)?tests?\/([^\s:]+::[^\s:]+)/i.exec(text)?.[1] ??
     /(?:FAILED\s+)?([A-Za-z0-9_.-]+\.py::[^\s:]+)/i.exec(text)?.[1] ??
-    null;
+    null
+  );
 }

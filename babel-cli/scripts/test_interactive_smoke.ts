@@ -18,7 +18,7 @@ const tsxBin = join(cliRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
 const child = spawn(
   process.execPath,
-  [tsxBin, '--no-warnings=ExperimentalWarning', join(cliRoot, 'src', 'index.ts'), 'interactive', '--mode', 'verified'],
+  [tsxBin, '--no-warnings=ExperimentalWarning', join(cliRoot, 'src', 'index.ts'), 'interactive', '--mode', 'deep'],
   {
     cwd: smokeRoot,
     env: {

@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'node:fs';
+
 export const DEFAULT_AUTONOMOUS_REPAIR_ATTEMPTS = 3;
 export const DEFAULT_REPAIR_RUN_ATTEMPTS = 5;
 
@@ -15,7 +17,7 @@ export const REPAIR_FAILURE_CODES = [
   'VERIFIER_FAILED',
 ] as const;
 
-export type RepairFailureCode = typeof REPAIR_FAILURE_CODES[number];
+export type RepairFailureCode = (typeof REPAIR_FAILURE_CODES)[number];
 
 export type ExactInvariantAttemptStatus = 'pass' | 'fail' | 'unknown';
 
@@ -46,7 +48,7 @@ export interface FailureCapsuleInput extends FailureClassificationInput {
   attempt: number;
 }
 
-export function maxAttemptsForRepairMode(mode: 'autonomous' | 'repair-run'): number {
+export function maxAttemptsForRepairMode(mode: 'deep' | 'repair-run'): number {
   return mode === 'repair-run' ? DEFAULT_REPAIR_RUN_ATTEMPTS : DEFAULT_AUTONOMOUS_REPAIR_ATTEMPTS;
 }
 
@@ -54,16 +56,23 @@ export function classifyRepairFailure(input: FailureClassificationInput): Repair
   const pipelineStatus = normalize(input.pipelineStatus);
   const verifierStatus = normalize(input.verifierStatus);
   const command = normalize(input.failedCommand);
-  const evidence = normalize([
-    input.pipelineStatus,
-    input.verifierStatus,
-    input.failedCommand,
-    input.stdout,
-    input.stderr,
-    input.error,
-  ].filter((value): value is string => typeof value === 'string').join('\n'));
+  const evidence = normalize(
+    [
+      input.pipelineStatus,
+      input.verifierStatus,
+      input.failedCommand,
+      input.stdout,
+      input.stderr,
+      input.error,
+    ]
+      .filter((value): value is string => typeof value === 'string')
+      .join('\n'),
+  );
 
-  if (pipelineStatus.includes('ambiguous_literal_binding') || evidence.includes('ambiguous_literal_binding')) {
+  if (
+    pipelineStatus.includes('ambiguous_literal_binding') ||
+    evidence.includes('ambiguous_literal_binding')
+  ) {
     return 'AMBIGUOUS_LITERAL_BINDING';
   }
   if (
@@ -83,7 +92,10 @@ export function classifyRepairFailure(input: FailureClassificationInput): Repair
   ) {
     return 'PROVIDER_UNAVAILABLE';
   }
-  if (pipelineStatus.includes('exact_instruction_drift') || evidence.includes('exact_instruction_drift')) {
+  if (
+    pipelineStatus.includes('exact_instruction_drift') ||
+    evidence.includes('exact_instruction_drift')
+  ) {
     return 'EXACT_INSTRUCTION_DRIFT';
   }
   if (pipelineStatus.includes('qa_rejected') || evidence.includes('qa rejected')) {
@@ -108,10 +120,19 @@ export function classifyRepairFailure(input: FailureClassificationInput): Repair
   if (command.includes('build') || evidence.includes('build failed')) {
     return 'BUILD_FAILED';
   }
-  if (command.includes('test') || command.includes('pytest') || command.includes('vitest') || evidence.includes('test failed')) {
+  if (
+    command.includes('test') ||
+    command.includes('pytest') ||
+    command.includes('vitest') ||
+    evidence.includes('test failed')
+  ) {
     return 'TEST_FAILED';
   }
-  if (verifierStatus.includes('fail') || verifierStatus.includes('error') || evidence.includes('verifier')) {
+  if (
+    verifierStatus.includes('fail') ||
+    verifierStatus.includes('error') ||
+    evidence.includes('verifier')
+  ) {
     return 'VERIFIER_FAILED';
   }
   if ((input.changedFiles?.length ?? 0) === 0) {
@@ -135,8 +156,7 @@ export function isRetryableRepairFailure(input: {
   }
 
   const hasActionableEvidence =
-    (input.failedCommand?.trim().length ?? 0) > 0 ||
-    (input.summary?.trim().length ?? 0) > 0;
+    (input.failedCommand?.trim().length ?? 0) > 0 || (input.summary?.trim().length ?? 0) > 0;
   if (!hasActionableEvidence) {
     return false;
   }
@@ -149,16 +169,20 @@ export function isRetryableRepairFailure(input: {
     return true;
   }
 
-  return (input.changedFiles?.length ?? 0) > 0 ||
+  return (
+    (input.changedFiles?.length ?? 0) > 0 ||
     input.code === 'EXACT_INSTRUCTION_DRIFT' ||
     input.code === 'TEST_FAILED' ||
     input.code === 'BUILD_FAILED' ||
     input.code === 'TYPECHECK_FAILED' ||
-    input.code === 'VERIFIER_FAILED';
+    input.code === 'VERIFIER_FAILED'
+  );
 }
 
 export function buildFailureCapsule(input: FailureCapsuleInput): FailureCapsule {
-  const changedFiles = [...new Set((input.changedFiles ?? []).map(normalizePath).filter(Boolean))].sort();
+  const changedFiles = [
+    ...new Set((input.changedFiles ?? []).map(normalizePath).filter(Boolean)),
+  ].sort();
   const failureCode = classifyRepairFailure({ ...input, changedFiles });
   const summary = summarizeFailure(input, failureCode);
   const failedCommand = emptyToNull(input.failedCommand);
@@ -214,13 +238,9 @@ function buildRepairHypothesis(code: RepairFailureCode, summary: string): string
 }
 
 function summarizeFailure(input: FailureClassificationInput, code: RepairFailureCode): string {
-  const excerpts = [
-    input.error,
-    input.stderr,
-    input.stdout,
-  ]
+  const excerpts = [input.error, input.stderr, input.stdout]
     .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-    .map(value => value.trim().replace(/\s+/g, ' '))
+    .map((value) => value.trim().replace(/\s+/g, ' '))
     .filter(Boolean);
   const excerpt = excerpts[0]?.slice(0, 700);
   if (excerpt) {
@@ -236,20 +256,24 @@ function summarizeFailure(input: FailureClassificationInput, code: RepairFailure
 }
 
 function inferExactInvariantStatus(input: FailureClassificationInput): ExactInvariantAttemptStatus {
-  const evidence = normalize([
-    input.pipelineStatus,
-    input.stdout,
-    input.stderr,
-    input.error,
-  ].filter((value): value is string => typeof value === 'string').join('\n'));
-  if (evidence.includes('exact_instruction_drift') || evidence.includes('ambiguous_literal_binding')) {
+  const evidence = normalize(
+    [input.pipelineStatus, input.stdout, input.stderr, input.error]
+      .filter((value): value is string => typeof value === 'string')
+      .join('\n'),
+  );
+  if (
+    evidence.includes('exact_instruction_drift') ||
+    evidence.includes('ambiguous_literal_binding')
+  ) {
     return 'fail';
   }
   return 'unknown';
 }
 
 function normalize(value: unknown): string {
-  return String(value ?? '').trim().toLowerCase();
+  return String(value ?? '')
+    .trim()
+    .toLowerCase();
 }
 
 function normalizePath(value: string): string {
@@ -259,4 +283,55 @@ function normalizePath(value: string): string {
 function emptyToNull(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+// ─── Capsule chain validation ──────────────────────────────────────────────────
+
+export interface CapsuleChainCheck {
+  ok: boolean;
+  reason: string | null;
+}
+
+/**
+ * Validates that the failure capsule from the previous repair attempt exists
+ * and is readable before starting the next attempt. A broken capsule chain
+ * (missing or unreadable capsule) causes the "retry consumed capsule" and
+ * "same verifier rerun" checks to fail in the reliability matrix.
+ *
+ * Call this before launching repair attempt N (N > 1).
+ */
+export function validateRepairCapsuleChain(input: {
+  attemptNumber: number;
+  previousCapsulePath: string | null;
+  expectedVerifierCommand?: string | null;
+}): CapsuleChainCheck {
+  if (input.attemptNumber <= 1) {
+    return { ok: true, reason: null };
+  }
+
+  if (!input.previousCapsulePath || input.previousCapsulePath.trim().length === 0) {
+    return {
+      ok: false,
+      reason: `Cannot start repair attempt ${input.attemptNumber}: no failure capsule path from attempt ${input.attemptNumber - 1}. The capsule chain is broken — the retry will have no context about what failed.`,
+    };
+  }
+
+  if (!existsSync(input.previousCapsulePath)) {
+    return {
+      ok: false,
+      reason: `Cannot start repair attempt ${input.attemptNumber}: failure capsule from attempt ${input.attemptNumber - 1} not found at "${input.previousCapsulePath}". The capsule was either not written, deleted, or moved.`,
+    };
+  }
+
+  try {
+    const raw = readFileSync(input.previousCapsulePath, 'utf8');
+    JSON.parse(raw); // verify it's valid JSON
+  } catch {
+    return {
+      ok: false,
+      reason: `Cannot start repair attempt ${input.attemptNumber}: failure capsule at "${input.previousCapsulePath}" exists but is not valid JSON.`,
+    };
+  }
+
+  return { ok: true, reason: null };
 }

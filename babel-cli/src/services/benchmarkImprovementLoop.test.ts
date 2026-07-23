@@ -91,9 +91,7 @@ test('benchmark loop gate escalates to full pilot after selected targeted canary
     JSON.stringify({
       suite: 'pilot10',
       summary: { trials: 1, passed: 1, failed: 0, mean_reward: 1, babel_completed: 1 },
-      trials: [
-        { task: 'gpt2-codegolf', passed: true, reward: 1 },
-      ],
+      trials: [{ task: 'gpt2-codegolf', passed: true, reward: 1 }],
     }),
     'utf8',
   );
@@ -114,7 +112,9 @@ test('benchmark loop gate ignores stale targeted pass after a newer failed full 
   const root = mkdtempSync(join(tmpdir(), 'babel-loop-'));
   const benchmarksRoot = join(root, 'benchmarks');
   mkdirSync(join(benchmarksRoot, 'scripts'), { recursive: true });
-  mkdirSync(join(benchmarksRoot, 'runs', 'terminal-bench-2', 'job-targeted-old'), { recursive: true });
+  mkdirSync(join(benchmarksRoot, 'runs', 'terminal-bench-2', 'job-targeted-old'), {
+    recursive: true,
+  });
   mkdirSync(join(benchmarksRoot, 'runs', 'terminal-bench-2', 'job-full-new'), { recursive: true });
   writeFileSync(join(benchmarksRoot, 'scripts', 'run_babel_terminal_bench_pilot.mjs'), '', 'utf8');
   writeFileSync(
@@ -123,9 +123,7 @@ test('benchmark loop gate ignores stale targeted pass after a newer failed full 
       suite: 'pilot10',
       finished_at: '2026-04-29T01:00:00.000Z',
       summary: { trials: 1, passed: 1, failed: 0, mean_reward: 1, babel_completed: 1 },
-      trials: [
-        { task: 'log-summary-date-ranges', passed: true, reward: 1 },
-      ],
+      trials: [{ task: 'log-summary-date-ranges', passed: true, reward: 1 }],
     }),
     'utf8',
   );
@@ -181,9 +179,7 @@ test('benchmark loop gate rotates away from repeated failed targeted canaries', 
     JSON.stringify({
       suite: 'pilot10',
       summary: { trials: 1, passed: 0, failed: 1, mean_reward: 0, babel_completed: 0 },
-      trials: [
-        { task: 'gpt2-codegolf', passed: false, reward: 0 },
-      ],
+      trials: [{ task: 'gpt2-codegolf', passed: false, reward: 0 }],
     }),
     'utf8',
   );
@@ -197,7 +193,10 @@ test('benchmark loop gate rotates away from repeated failed targeted canaries', 
   });
 
   assert.equal(report.terminal_bench.selected_task, 'llm-inference-batching-scheduler');
-  assert.match(report.commands.targeted_benchmark ?? '', /--tasks llm-inference-batching-scheduler/);
+  assert.match(
+    report.commands.targeted_benchmark ?? '',
+    /--tasks llm-inference-batching-scheduler/,
+  );
 });
 
 test('benchmark loop supports fast readiness profile and persistent loop state', () => {

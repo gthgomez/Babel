@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "fixture_type": "babel_parity_corpus_task",
+  "task_id": "docs_grounded_dependency_update",
+  "parity_task_id": "docs_grounded_dependency_update",
+  "title": "Docs-grounded dependency update",
+  "repo_kind": "dependency_update",
+  "target_file": "package.json",
+  "verifier_command": "npm test",
+  "task": "Update the chalk dependency to ^5.3.0 per README.md and keep the smoke script passing. Only edit package.json.",
+  "broken_implementation": "{\n  \"type\": \"module\",\n  \"dependencies\": {\n    \"chalk\": \"4.1.2\"\n  },\n  \"scripts\": {\n    \"test\": \"node scripts/smoke.js\"\n  }\n}\n",
+  "fixed_implementation": "{\n  \"type\": \"module\",\n  \"dependencies\": {\n    \"chalk\": \"^5.3.0\"\n  },\n  \"scripts\": {\n    \"test\": \"node scripts/smoke.js\"\n  }\n}\n",
+  "test_source": "",
+  "files": {
+    "README.md": {
+      "broken": "# Dep Update\n\nUpgrade chalk to ^5.3.0 for ESM compatibility.\n"
+    },
+    "scripts/smoke.js": {
+      "broken": "import { readFileSync } from 'node:fs';\nimport chalk from 'chalk';\n\nconst pkg = JSON.parse(readFileSync('package.json', 'utf8'));\nconst chalkSpec = pkg.dependencies?.chalk ?? '';\nif (!/^\\^5\\./.test(chalkSpec)) {\n  process.exit(1);\n}\nconsole.log(chalk.green('ok'));\n"
+    }
+  }
+}

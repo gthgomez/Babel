@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import type { OrchestratorManifest } from '../schemas/agentContracts.js';
@@ -32,15 +32,48 @@ export function readSessionStartProjectPath(sessionStartPath?: string): string |
     return null;
   }
 
+  // If the path is a directory (e.g. a fallback set process.cwd() rather than
+  // a session-start JSON file), bail early — readFileSync on a directory throws
+  // EISDIR and the old catch-all handler would silently swallow the error.
   try {
-    const parsed = JSON.parse(readFileSync(candidate, 'utf-8')) as { ProjectPath?: unknown };
+    if (statSync(candidate).isDirectory()) {
+      logDetail(
+        `Session start path is a directory, expected a session-start JSON file: ${candidate}`,
+      );
+      return null;
+    }
+  } catch (statErr) {
+    logDetail(
+      `Could not stat session start path "${candidate}": ${
+        statErr instanceof Error ? statErr.message : String(statErr)
+      }`,
+    );
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(candidate, 'utf-8')) as {
+      ProjectPath?: unknown;
+    };
     if (typeof parsed.ProjectPath !== 'string' || parsed.ProjectPath.trim().length === 0) {
+      logDetail(`Session start file "${candidate}" is missing a valid ProjectPath field`);
       return null;
     }
 
     const resolved = resolve(parsed.ProjectPath.trim());
-    return existsSync(resolved) ? resolved : null;
-  } catch {
+    if (existsSync(resolved)) {
+      return resolved;
+    }
+    logDetail(
+      `Session start ProjectPath resolved to "${resolved}" but that path does not exist on disk`,
+    );
+    return null;
+  } catch (err) {
+    logDetail(
+      `Failed to read/parse session start path "${candidate}": ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
     return null;
   }
 }
@@ -57,11 +90,12 @@ export function normalizeManifestProjectRoot(
   if (authoritativeRoot) {
     const normalizedAuthoritativeRoot = resolve(authoritativeRoot);
     const explicit = manifest.target_project_path?.trim();
-    const normalizedExplicitRoot = explicit && !hasPlaceholderProjectPath(explicit)
-      ? resolve(explicit)
-      : null;
+    const normalizedExplicitRoot =
+      explicit && !hasPlaceholderProjectPath(explicit) ? resolve(explicit) : null;
     if (normalizedExplicitRoot && normalizedExplicitRoot !== normalizedAuthoritativeRoot) {
-      logDetail(`Manifest target clamped to authoritative project root: ${normalizedAuthoritativeRoot}`);
+      logDetail(
+        `Manifest target clamped to authoritative project root: ${normalizedAuthoritativeRoot}`,
+      );
     }
     return {
       ...manifest,
@@ -91,9 +125,10 @@ export function normalizeManifestProjectRoot(
     };
   }
 
-  const canonicalProjectFamilyRoot = manifest.target_project === 'global'
-    ? null
-    : resolve(BABEL_ROOT, '..', manifest.target_project);
+  const canonicalProjectFamilyRoot =
+    manifest.target_project === 'global'
+      ? null
+      : resolve(BABEL_ROOT, '..', manifest.target_project);
 
   if (
     (canonicalProjectFamilyRoot && normalizedExplicitRoot === canonicalProjectFamilyRoot) ||

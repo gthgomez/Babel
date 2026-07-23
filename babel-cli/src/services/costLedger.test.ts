@@ -16,33 +16,37 @@ test('buildCostLedger flattens waterfall attempts into costed ledger entries', (
     waterfallEntries: [
       {
         stage: 'orchestrator',
-        attempts_detail: [{
-          tier_name: 'deepseek-direct',
-          tier_index: 0,
-          attempt: 1,
-          succeeded: true,
-          provider: 'deepseek',
-          provider_model_id: 'deepseek-v4-flash',
-          prompt_tokens: 1000,
-          completion_tokens: 2000,
-          total_tokens: 3000,
-          prompt_cache_hit_tokens: 400,
-          prompt_cache_miss_tokens: 600,
-        }],
+        attempts_detail: [
+          {
+            tier_name: 'deepseek-direct',
+            tier_index: 0,
+            attempt: 1,
+            succeeded: true,
+            provider: 'deepseek',
+            provider_model_id: 'deepseek-v4-flash',
+            prompt_tokens: 1000,
+            completion_tokens: 2000,
+            total_tokens: 3000,
+            prompt_cache_hit_tokens: 400,
+            prompt_cache_miss_tokens: 600,
+          },
+        ],
       },
       {
         stage: 'executor',
-        attempts_detail: [{
-          tier_name: 'step-flash',
-          tier_index: 1,
-          attempt: 1,
-          succeeded: true,
-          provider: 'deepinfra',
-          provider_model_id: 'stepfun-ai/Step-3.5-Flash',
-          prompt_tokens: 1000,
-          completion_tokens: 500,
-          total_tokens: 1500,
-        }],
+        attempts_detail: [
+          {
+            tier_name: 'step-flash',
+            tier_index: 1,
+            attempt: 1,
+            succeeded: true,
+            provider: 'deepinfra',
+            provider_model_id: 'stepfun-ai/Step-3.5-Flash',
+            prompt_tokens: 1000,
+            completion_tokens: 500,
+            total_tokens: 1500,
+          },
+        ],
       },
     ],
   });
@@ -93,18 +97,20 @@ test('buildCostLedger preserves stage totals when attempt details are absent', (
     task: 'fallback totals',
     lane: 'governed',
     createdAt: new Date('2026-06-04T12:00:00.000Z'),
-    waterfallEntries: [{
-      stage: 'planner',
-      total_latency_ms: 25,
-      total_prompt_tokens: 10,
-      total_completion_tokens: 20,
-      total_tokens: 30,
-      total_estimated_cost_usd: 0.001,
-    }],
+    waterfallEntries: [
+      {
+        stage: 'planner',
+        total_latency_ms: 25,
+        total_prompt_tokens: 10,
+        total_completion_tokens: 20,
+        total_tokens: 30,
+        total_estimated_cost_usd: 0.001,
+      },
+    ],
   });
 
   assert.equal(ledger.entries.length, 1);
-  assert.equal(ledger.entries[0]?.entry_id, 'planner-1');
+  assert.match(ledger.entries[0]?.entry_id ?? '', /^planner-[a-f0-9]{8}$/);
   assert.equal(ledger.entries[0]?.stage, 'planner');
   assert.equal(ledger.entries[0]?.succeeded, null);
   assert.equal(ledger.entries[0]?.estimated_cost_usd, 0.001);
@@ -117,17 +123,21 @@ test('buildCostLedger records unknown pricing warnings for unregistered models',
     task: 'unknown pricing',
     lane: 'governed',
     createdAt: new Date('2026-06-04T12:00:00.000Z'),
-    waterfallEntries: [{
-      stage: 'executor',
-      attempts_detail: [{
-        tier_name: 'unknown',
-        provider: 'deepinfra',
-        provider_model_id: 'unknown/model',
-        prompt_tokens: 10,
-        completion_tokens: 20,
-        total_tokens: 30,
-      }],
-    }],
+    waterfallEntries: [
+      {
+        stage: 'executor',
+        attempts_detail: [
+          {
+            tier_name: 'unknown',
+            provider: 'deepinfra',
+            provider_model_id: 'unknown/model',
+            prompt_tokens: 10,
+            completion_tokens: 20,
+            total_tokens: 30,
+          },
+        ],
+      },
+    ],
   });
 
   assert.equal(ledger.entries[0]?.cost_precision, 'unknown');
@@ -142,23 +152,30 @@ test('buildCostLedger normalizes invalid precision values to unknown', () => {
     task: 'bad precision',
     lane: 'governed',
     createdAt: new Date('2026-06-04T12:00:00.000Z'),
-    waterfallEntries: [{
-      stage: 'qa',
-      attempts_detail: [{
-        tier_name: 'bad-runner',
-        provider: 'deepseek',
-        provider_model_id: 'deepseek-v4-flash',
-        prompt_tokens: 1000,
-        completion_tokens: 1000,
-        total_tokens: 2000,
-        estimated_cost_usd: 0.001,
-        cost_precision: 'rough-estimate',
-      }],
-    }],
+    waterfallEntries: [
+      {
+        stage: 'qa',
+        attempts_detail: [
+          {
+            tier_name: 'bad-runner',
+            provider: 'deepseek',
+            provider_model_id: 'deepseek-v4-flash',
+            prompt_tokens: 1000,
+            completion_tokens: 1000,
+            total_tokens: 2000,
+            estimated_cost_usd: 0.001,
+            cost_precision: 'rough-estimate',
+          },
+        ],
+      },
+    ],
   });
 
   assert.equal(ledger.entries[0]?.cost_precision, 'unknown');
-  assert.equal(Object.keys(ledger.totals.by_precision).sort().join(','), 'conservative,exact,unknown');
+  assert.equal(
+    Object.keys(ledger.totals.by_precision).sort().join(','),
+    'conservative,exact,unknown',
+  );
   assert.equal(ledger.totals.by_precision.unknown, 0.001);
   assert.match(ledger.warnings.join('\n'), /Invalid cost precision/);
 });

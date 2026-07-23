@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { extractBlankDefaultLiteral, normalizeRequestedFileTargetsForBoundedContract } from './taskShape.js';
+import {
+  extractBlankDefaultLiteral,
+  normalizeRequestedFileTargetsForBoundedContract,
+} from './taskShape.js';
 
 test('bounded target normalization separates read inputs from write outputs', () => {
   assert.deepEqual(
@@ -14,7 +17,9 @@ test('bounded target normalization separates read inputs from write outputs', ()
 
 test('bounded target normalization preserves explicit update targets', () => {
   assert.deepEqual(
-    normalizeRequestedFileTargetsForBoundedContract('Read README.md, then update docs/guide.md with the corrected setup step.'),
+    normalizeRequestedFileTargetsForBoundedContract(
+      'Read README.md, then update docs/guide.md with the corrected setup step.',
+    ),
     ['docs/guide.md'],
   );
 });

@@ -37,7 +37,7 @@ function readJson(path: string): unknown | null {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : {};
 }
 
@@ -73,11 +73,19 @@ function statusFromInputs(input: {
 }): HaltDiagnosis['status'] {
   if (input.approvalRequired === true) return 'approval_required';
   if (input.verification?.status === 'fail') return 'verification_failed';
-  if (input.pipelineStatus === 'COMPLETE' && input.verification?.status === 'pass') return 'complete_verified';
+  if (input.pipelineStatus === 'COMPLETE' && input.verification?.status === 'pass')
+    return 'complete_verified';
   if (input.pipelineStatus === 'COMPLETE') return 'complete_unverified';
   if (input.pipelineStatus === 'QA_REJECTED_MAX_LOOPS') return 'qa_rejected';
-  if (input.pipelineStatus === 'EXECUTOR_HALTED' || input.executionStatus === 'EXECUTION_HALTED' || input.haltTag) return 'executor_halted';
+  // FATAL_ERROR / FAILED must take priority over EXECUTOR_HALTED — a fatal
+  // crash is more severe than a normal halt and must not be downgraded.
   if (input.pipelineStatus === 'FATAL_ERROR' || input.pipelineStatus === 'FAILED') return 'failed';
+  if (
+    input.pipelineStatus === 'EXECUTOR_HALTED' ||
+    input.executionStatus === 'EXECUTION_HALTED' ||
+    input.haltTag
+  )
+    return 'executor_halted';
   return 'unknown';
 }
 
@@ -109,19 +117,27 @@ function nextActionsFor(input: {
 }): string[] {
   const actions: string[] = [];
   if (input.status === 'approval_required') {
-    actions.push('Run `babel approvals list --status pending --json`, approve or deny the relevant request, then resume the job.');
+    actions.push(
+      'Run `babel approvals list --status pending --json`, approve or deny the relevant request, then resume the job.',
+    );
   }
   if (input.status === 'verification_failed' || input.status === 'complete_unverified') {
-    actions.push('Run `babel verify <project-root> --json` or provide explicit verification commands before accepting COMPLETE.');
+    actions.push(
+      'Run `babel verify <project-root> --json` or provide explicit verification commands before accepting COMPLETE.',
+    );
   }
   if (input.status === 'qa_rejected') {
     actions.push('Reduce the plan to concrete file edits plus verifier commands, then rerun.');
   }
   if (input.denialReasonCodes.includes('dependency_install_requires_approval')) {
-    actions.push('Approve the exact install request or choose a source-only route that avoids dependency installation.');
+    actions.push(
+      'Approve the exact install request or choose a source-only route that avoids dependency installation.',
+    );
   }
   if (input.denialReasonCodes.includes('command_allowlist_rejected')) {
-    actions.push('Use a profile-supported command or add a narrowly scoped benchmark/local capability with tests.');
+    actions.push(
+      'Use a profile-supported command or add a narrowly scoped benchmark/local capability with tests.',
+    );
   }
   if (input.escalation?.should_escalate === true) {
     actions.push('Request/approve model escalation for the exact task before retrying.');
@@ -139,14 +155,20 @@ export function diagnoseRun(input: {
   verification?: CompletionVerificationGate | null;
   escalation?: ModelEscalationRecommendation | null;
 }): HaltDiagnosis {
-  const executionReport = input.runDir ? readJson(join(input.runDir, '04_execution_report.json')) : null;
-  const runtimeTelemetry = input.runDir ? readJson(join(input.runDir, '06_runtime_telemetry.json')) : null;
+  const executionReport = input.runDir
+    ? readJson(join(input.runDir, '04_execution_report.json'))
+    : null;
+  const runtimeTelemetry = input.runDir
+    ? readJson(join(input.runDir, '06_runtime_telemetry.json'))
+    : null;
   const executionStatus = asRecord(executionReport)['status'];
   const pipelineError = asRecord(asRecord(executionReport)['pipeline_error']);
   const haltTag =
-    typeof pipelineError['halt_tag'] === 'string' ? pipelineError['halt_tag'] :
-    typeof asRecord(runtimeTelemetry)['halt_tag'] === 'string' ? String(asRecord(runtimeTelemetry)['halt_tag']) :
-    null;
+    typeof pipelineError['halt_tag'] === 'string'
+      ? pipelineError['halt_tag']
+      : typeof asRecord(runtimeTelemetry)['halt_tag'] === 'string'
+        ? String(asRecord(runtimeTelemetry)['halt_tag'])
+        : null;
   const denialReasonCodes = unique([
     ...collectStringsByKey(executionReport, 'reason_code'),
     ...collectStringsByKey(runtimeTelemetry, 'reason_code'),
@@ -157,9 +179,11 @@ export function diagnoseRun(input: {
     ...collectStringsByKey(runtimeTelemetry, 'tag'),
   ]);
   const statusInput: Parameters<typeof statusFromInputs>[0] = {
-    pipelineStatus: input.pipelineStatus ?? (typeof asRecord(runtimeTelemetry)['final_outcome'] === 'string'
-      ? String(asRecord(runtimeTelemetry)['final_outcome'])
-      : null),
+    pipelineStatus:
+      input.pipelineStatus ??
+      (typeof asRecord(runtimeTelemetry)['final_outcome'] === 'string'
+        ? String(asRecord(runtimeTelemetry)['final_outcome'])
+        : null),
     verification: input.verification ?? null,
     executionStatus: typeof executionStatus === 'string' ? executionStatus : null,
     haltTag,
@@ -177,7 +201,11 @@ export function diagnoseRun(input: {
     halt_tag: haltTag,
     denial_reason_codes: denialReasonCodes,
     warning_tags: warningTags,
-    next_actions: nextActionsFor({ status, denialReasonCodes, escalation: input.escalation ?? null }),
+    next_actions: nextActionsFor({
+      status,
+      denialReasonCodes,
+      escalation: input.escalation ?? null,
+    }),
     escalation: input.escalation ?? null,
   };
 }
@@ -192,6 +220,6 @@ export function formatHaltDiagnosisHuman(diagnosis: HaltDiagnosis): string {
     `Denials: ${diagnosis.denial_reason_codes.join(', ') || '(none)'}`,
     `Warnings: ${diagnosis.warning_tags.join(', ') || '(none)'}`,
     'Next actions:',
-    ...diagnosis.next_actions.map(action => `  - ${action}`),
+    ...diagnosis.next_actions.map((action) => `  - ${action}`),
   ].join('\n');
 }

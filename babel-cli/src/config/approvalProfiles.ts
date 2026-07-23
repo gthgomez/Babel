@@ -2,16 +2,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { BABEL_ROOT } from '../cli/constants.js';
-import {
-  readDryRunState,
-  type DryRunState,
-  writeDryRunState,
-} from '../cli/helpers.js';
+import { readDryRunState, type DryRunState, writeDryRunState } from '../cli/helpers.js';
 import { readRuntimeMode, writeRuntimeMode } from './runtimeMode.js';
 import type { ExecutorMode } from '../sandbox.js';
 
 export const APPROVAL_PROFILES = ['suggest', 'auto-edit', 'full-auto'] as const;
-export type ApprovalProfile = typeof APPROVAL_PROFILES[number];
+export type ApprovalProfile = (typeof APPROVAL_PROFILES)[number];
 
 export interface ApprovalProfileDefinition {
   profile: ApprovalProfile;
@@ -38,7 +34,8 @@ export const APPROVAL_PROFILE_DEFINITIONS: Record<ApprovalProfile, ApprovalProfi
     profile: 'suggest',
     runtimeMode: 'plan',
     dryRun: true,
-    description: 'Planning-first mode: mutating tools stay dry-run and executor writes are blocked.',
+    description:
+      'Planning-first mode: mutating tools stay dry-run and executor writes are blocked.',
   },
   'auto-edit': {
     profile: 'auto-edit',
@@ -50,7 +47,8 @@ export const APPROVAL_PROFILE_DEFINITIONS: Record<ApprovalProfile, ApprovalProfi
     profile: 'full-auto',
     runtimeMode: 'act',
     dryRun: false,
-    description: 'Highest autonomy profile: live edits are allowed; sandbox and policy gates still apply.',
+    description:
+      'Highest autonomy profile: live edits are allowed; sandbox and policy gates still apply.',
   },
 };
 
@@ -64,7 +62,7 @@ function normalizeApprovalProfile(value: string | undefined): ApprovalProfile | 
   }
   const normalized = value.trim().toLowerCase();
   return APPROVAL_PROFILES.includes(normalized as ApprovalProfile)
-    ? normalized as ApprovalProfile
+    ? (normalized as ApprovalProfile)
     : null;
 }
 
@@ -117,11 +115,15 @@ export function writeApprovalProfile(profile: ApprovalProfile): ApprovalProfileS
   mkdirSync(dirname(profilePath), { recursive: true });
   writeFileSync(
     profilePath,
-    `${JSON.stringify({
-      schemaVersion: 1,
-      profile,
-      updatedAt: new Date().toISOString(),
-    }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        profile,
+        updatedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    )}\n`,
     'utf-8',
   );
   writeRuntimeMode(definition.runtimeMode);

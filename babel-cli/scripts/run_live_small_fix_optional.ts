@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { runSmallFixPath } from '../src/services/smallFix.js';
+import { runSmallFixPath, SmallFixRecoverableError } from '../src/services/smallFix.js';
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 dotenvConfig({
@@ -12,6 +12,13 @@ dotenvConfig({
   override: false,
   quiet: true,
 });
+
+function hasLiveProviderCredentials(): boolean {
+  return Boolean(
+    process.env['DEEPINFRA_API_KEY']?.trim() ||
+    process.env['DEEPSEEK_API_KEY']?.trim(),
+  );
+}
 
 function writeNodeFixture(root: string): void {
   mkdirSync(join(root, 'src'), { recursive: true });
@@ -33,8 +40,8 @@ function writeNodeFixture(root: string): void {
 }
 
 async function main(): Promise<void> {
-  if (!process.env['DEEPINFRA_API_KEY']?.trim()) {
-    console.log('[test:live-small-fix:optional] skipped — DEEPINFRA_API_KEY is not set');
+  if (!hasLiveProviderCredentials()) {
+    console.log('[test:live-small-fix:optional] skipped — set DEEPINFRA_API_KEY or DEEPSEEK_API_KEY');
     return;
   }
 
@@ -52,13 +59,35 @@ async function main(): Promise<void> {
     });
 
     console.log('[test:live-small-fix:optional] status:', result.status);
-    console.log('[test:live-small-fix:optional] execution_mode:', result.executionMode ?? '<none>');
-    console.log('[test:live-small-fix:optional] run_dir:', result.runDir);
+    if ('executionMode' in result) {
+      console.log('[test:live-small-fix:optional] execution_mode:', result.executionMode ?? '<none>');
+    }
+    if ('runDir' in result) {
+      console.log('[test:live-small-fix:optional] run_dir:', result.runDir);
+    }
+    if ('sessionLoopSteps' in result && Array.isArray(result.sessionLoopSteps)) {
+      console.log('[test:live-small-fix:optional] session_loop_steps:', result.sessionLoopSteps.length);
+    }
 
     if (result.status !== 'SMALL_FIX_COMPLETE') {
       console.error('[test:live-small-fix:optional] failed — live small fix did not complete');
+      if ('reason' in result) {
+        console.error('[test:live-small-fix:optional] reason:', result.reason);
+      }
       process.exitCode = 1;
     }
+  } catch (error: unknown) {
+    if (error instanceof SmallFixRecoverableError) {
+      console.error('[test:live-small-fix:optional] recoverable failure:', error.message);
+      console.error('[test:live-small-fix:optional] failure_code:', error.failureCode);
+      for (const step of error.next) {
+        console.error(`[test:live-small-fix:optional] next: ${step}`);
+      }
+      process.exitCode = 1;
+      return;
+    }
+    console.error('[test:live-small-fix:optional] failed —', error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -118,7 +118,10 @@ function normalizePath(path: string): string {
 }
 
 function toArtifactTimestamp(date: Date): string {
-  return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  return date
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}Z$/, 'Z');
 }
 
 function statusDirty(repoRoot: string): boolean {
@@ -127,7 +130,9 @@ function statusDirty(repoRoot: string): boolean {
 
 function assertValidBranchName(name: string): void {
   if (name.trim() !== name || name.length === 0) {
-    throw new Error('Branch name must be non-empty and must not include leading or trailing whitespace.');
+    throw new Error(
+      'Branch name must be non-empty and must not include leading or trailing whitespace.',
+    );
   }
   const result = runGit(['check-ref-format', '--branch', name], process.cwd());
   if (result.status !== 0 || name.startsWith('-')) {
@@ -157,7 +162,11 @@ function makeBaseReport(
   if (!existsSync(projectRoot)) {
     throw new Error(`Project root does not exist: ${projectRoot}`);
   }
-  const repoRoot = requireGitOutput(['rev-parse', '--show-toplevel'], projectRoot, 'git repo discovery');
+  const repoRoot = requireGitOutput(
+    ['rev-parse', '--show-toplevel'],
+    projectRoot,
+    'git repo discovery',
+  );
   const generatedAt = (options.now ?? new Date()).toISOString();
   const outputDir = resolve(options.outputDir ?? defaultOutputDir());
   const branchBefore = nullOnGitFailure(['branch', '--show-current'], repoRoot);
@@ -251,7 +260,11 @@ export function createGitCommit(options: GitCommitCreateOptions = {}): GitMutati
     if (addTracked.status !== 0) {
       report.action.command = ['git', 'add', '-u'];
       report.action.status = 'failed';
-      report.action.message = (addTracked.stderr || addTracked.stdout || 'git add -u failed').trim();
+      report.action.message = (
+        addTracked.stderr ||
+        addTracked.stdout ||
+        'git add -u failed'
+      ).trim();
       refreshGitState(report, repoRoot);
       return writeReport(report);
     }
@@ -270,7 +283,8 @@ export function createGitCommit(options: GitCommitCreateOptions = {}): GitMutati
   if (staged.status !== 0 || staged.stdout.trim().length === 0) {
     report.action.command = ['git', 'commit', '-m', message];
     report.action.status = 'failed';
-    report.action.message = 'No staged changes to commit. Use --stage tracked or --stage all to stage changes explicitly.';
+    report.action.message =
+      'No staged changes to commit. Use --stage tracked or --stage all to stage changes explicitly.';
     refreshGitState(report, repoRoot);
     return writeReport(report);
   }
@@ -303,12 +317,14 @@ export function createGitPullRequest(options: GitPrCreateOptions = {}): GitMutat
     ...(options.now ? { now: options.now } : {}),
   });
   const title = options.title?.trim() || draft.pr_draft?.title || 'Babel generated PR';
-  const body = options.body?.trim() || [
-    ...(draft.pr_draft?.summary ?? []),
-    '',
-    'Test plan:',
-    ...(draft.pr_draft?.test_plan ?? []).map((line) => `- ${line}`),
-  ].join('\n');
+  const body =
+    options.body?.trim() ||
+    [
+      ...(draft.pr_draft?.summary ?? []),
+      '',
+      'Test plan:',
+      ...(draft.pr_draft?.test_plan ?? []).map((line) => `- ${line}`),
+    ].join('\n');
   const command = [
     'gh',
     'pr',
@@ -332,7 +348,8 @@ export function createGitPullRequest(options: GitPrCreateOptions = {}): GitMutat
 
   if (options.allowRemote !== true) {
     report.action.status = 'planned';
-    report.action.message = 'Remote PR creation is gated. Re-run with --allow-remote to execute gh pr create.';
+    report.action.message =
+      'Remote PR creation is gated. Re-run with --allow-remote to execute gh pr create.';
     refreshGitState(report, repoRoot);
     return writeReport(report);
   }
@@ -366,10 +383,18 @@ export function formatGitMutationHuman(report: GitMutationReport): string {
     lines.push('', `Branch: ${report.branch.name}`, `From: ${report.branch.from_ref}`);
   }
   if (report.commit) {
-    lines.push('', `Commit: ${report.commit.hash ?? 'not created'}`, `Message: ${report.commit.message ?? ''}`);
+    lines.push(
+      '',
+      `Commit: ${report.commit.hash ?? 'not created'}`,
+      `Message: ${report.commit.message ?? ''}`,
+    );
   }
   if (report.pull_request) {
-    lines.push('', `PR title: ${report.pull_request.title}`, `PR URL: ${report.pull_request.url ?? '(not created)'}`);
+    lines.push(
+      '',
+      `PR title: ${report.pull_request.title}`,
+      `PR URL: ${report.pull_request.url ?? '(not created)'}`,
+    );
   }
   return lines.join('\n');
 }

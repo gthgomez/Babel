@@ -1,7 +1,10 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-export function verifyExactOutputSchemaArtifacts(rawTask: string, projectRoot: string | null): string | null {
+export function verifyExactOutputSchemaArtifacts(
+  rawTask: string,
+  projectRoot: string | null,
+): string | null {
   if (!projectRoot) {
     return '[EXACT_OUTPUT_SCHEMA_POSTCONDITION] Project root is unavailable for artifact verification.';
   }
@@ -15,7 +18,10 @@ export function verifyExactOutputSchemaArtifacts(rawTask: string, projectRoot: s
     return '[EXACT_OUTPUT_SCHEMA_POSTCONDITION] Expected summary.csv to exist at the project root.';
   }
 
-  const actual = readFileSync(summaryPath, 'utf-8').trim().split(/\r?\n/).map(line => line.trim());
+  const actual = readFileSync(summaryPath, 'utf-8')
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim());
   const expectedRows = getExpectedSummaryRowKeys(rawTask);
   if (expectedRows.length === 0) {
     return null;
@@ -25,7 +31,7 @@ export function verifyExactOutputSchemaArtifacts(rawTask: string, projectRoot: s
     return `[EXACT_OUTPUT_SCHEMA_POSTCONDITION] summary.csv header must be exactly "period,severity,count"; got "${actual[0] ?? '(missing)'}".`;
   }
 
-  const actualRows = actual.slice(1).map(line => {
+  const actualRows = actual.slice(1).map((line) => {
     const parts = line.split(',');
     return {
       key: parts.length >= 2 ? `${parts[0]},${parts[1]}` : line,
@@ -40,7 +46,12 @@ export function verifyExactOutputSchemaArtifacts(rawTask: string, projectRoot: s
   for (let index = 0; index < expectedRows.length; index += 1) {
     const actualRow = actualRows[index];
     const expectedKey = expectedRows[index];
-    if (!actualRow || actualRow.width !== 3 || actualRow.key !== expectedKey || !/^\d+$/.test(String(actualRow.count ?? ''))) {
+    if (
+      !actualRow ||
+      actualRow.width !== 3 ||
+      actualRow.key !== expectedKey ||
+      !/^\d+$/.test(String(actualRow.count ?? ''))
+    ) {
       return `[EXACT_OUTPUT_SCHEMA_POSTCONDITION] summary.csv row ${index + 2} must match "${expectedKey},<non-negative integer>"; got "${actual[index + 1] ?? '(missing)'}". Required row keys in order: ${expectedRows.join(' | ')}.`;
     }
   }
@@ -59,8 +70,15 @@ export function verifyExactOutputSchemaArtifacts(rawTask: string, projectRoot: s
   return null;
 }
 
-export function repairExactOutputSchemaArtifacts(rawTask: string, projectRoot: string | null): string | null {
-  if (!projectRoot || !/\bsummary\.csv\b/i.test(rawTask) || !/period,severity,count/i.test(rawTask)) {
+export function repairExactOutputSchemaArtifacts(
+  rawTask: string,
+  projectRoot: string | null,
+): string | null {
+  if (
+    !projectRoot ||
+    !/\bsummary\.csv\b/i.test(rawTask) ||
+    !/period,severity,count/i.test(rawTask)
+  ) {
     return null;
   }
 
@@ -80,11 +98,16 @@ export function repairExactOutputSchemaArtifacts(rawTask: string, projectRoot: s
 }
 
 function getExpectedSummaryRowKeys(rawTask: string): string[] {
-  return [...rawTask.matchAll(/^([a-z0-9_]+),(ERROR|WARNING|INFO),<count>$/gim)]
-    .map(match => `${match[1]},${match[2]}`);
+  return [...rawTask.matchAll(/^([a-z0-9_]+),(ERROR|WARNING|INFO),<count>$/gim)].map(
+    (match) => `${match[1]},${match[2]}`,
+  );
 }
 
-function computeExpectedLogSummaryRows(rawTask: string, projectRoot: string, expectedRows: string[]): string[] | null {
+function computeExpectedLogSummaryRows(
+  rawTask: string,
+  projectRoot: string,
+  expectedRows: string[],
+): string[] | null {
   if (!/\blogs\b/i.test(rawTask) || !/YYYY-MM-DD_<source>\.log/i.test(rawTask)) {
     return null;
   }
@@ -114,13 +137,21 @@ function computeExpectedLogSummaryRows(rawTask: string, projectRoot: string, exp
     counts.set(rowKey, 0);
   }
 
-  const requestedSeverities = Array.from(new Set(expectedRows
-    .map(rowKey => rowKey.split(',')[1])
-    .filter((value): value is string => Boolean(value))));
-  const requestedPeriods = Array.from(new Set(expectedRows
-    .map(rowKey => rowKey.split(',')[0])
-    .filter((value): value is string => Boolean(value))));
-  if (requestedPeriods.some(period => !isSupportedLogSummaryPeriod(period))) {
+  const requestedSeverities = Array.from(
+    new Set(
+      expectedRows
+        .map((rowKey) => rowKey.split(',')[1])
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+  const requestedPeriods = Array.from(
+    new Set(
+      expectedRows
+        .map((rowKey) => rowKey.split(',')[0])
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+  if (requestedPeriods.some((period) => !isSupportedLogSummaryPeriod(period))) {
     return null;
   }
 
@@ -157,10 +188,12 @@ function computeExpectedLogSummaryRows(rawTask: string, projectRoot: string, exp
     }
   }
 
-  return expectedRows.map(rowKey => `${rowKey},${counts.get(rowKey) ?? 0}`);
+  return expectedRows.map((rowKey) => `${rowKey},${counts.get(rowKey) ?? 0}`);
 }
 
-function parseIsoDateParts(value: string): { year: number; month: number; day: number; serial: number } | null {
+function parseIsoDateParts(
+  value: string,
+): { year: number; month: number; day: number; serial: number } | null {
   const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) {
     return null;
@@ -174,10 +207,12 @@ function parseIsoDateParts(value: string): { year: number; month: number; day: n
 }
 
 function isSupportedLogSummaryPeriod(period: string): boolean {
-  return period === 'today' ||
+  return (
+    period === 'today' ||
     period === 'month_to_date' ||
     period === 'total' ||
-    /^last_\d+_days$/.test(period);
+    /^last_\d+_days$/.test(period)
+  );
 }
 
 function logDateInPeriod(
@@ -192,9 +227,11 @@ function logDateInPeriod(
     return logDate.serial === referenceDate.serial;
   }
   if (period === 'month_to_date') {
-    return logDate.year === referenceDate.year &&
+    return (
+      logDate.year === referenceDate.year &&
       logDate.month === referenceDate.month &&
-      logDate.serial <= referenceDate.serial;
+      logDate.serial <= referenceDate.serial
+    );
   }
 
   const lastDaysMatch = period.match(/^last_(\d+)_days$/);

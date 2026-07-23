@@ -1,0 +1,17 @@
+{
+  "user short": "  You    what is this repo?",
+  "user multiline": "  You    line one\n         line two",
+  "user long wrap": "  You    Please audit the entire babel-cli package for streaming regressions and\n         report any gaps in the competitive reference document.",
+  "assistant short": "  Babel  A prompt operating system.",
+  "assistant markdown": "  Babel  Use chat mode for conversational work.",
+  "assistant code fence": "  Babel  const x = 1;",
+  "tool running": "  … Reading src/index.ts",
+  "tool completed": "  ✓ Reading src/index.ts (1.2 KB)",
+  "tool failed": "  ✗ Running npm test (exit 1)",
+  "thinking active": "  Thinking…",
+  "separator turn": "  ────────────────────────────────────────",
+  "separator unseen": "  ─  ↓ 3 new messages  ─  ",
+  "plain notice": "Note: compaction truncated older turns.",
+  "session header": "Babel Chat\n  mode=chat · model=auto · feat/dag-workflow-engine",
+  "composite exchange": "  You    explain chatCore.ts\n\n  Babel  It unifies CLI and REPL chat through ChatEngine."
+}

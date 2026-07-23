@@ -1,19 +1,10 @@
 import { dirname, join, resolve } from 'node:path';
-import {
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { compileContextSync } from '../compiler.js';
-import {
-  parseCatalog,
-  type CatalogEntry,
-} from '../control-plane/catalog.js';
-import {
-  previewInstructionStackResolution,
-} from '../control-plane/stackResolver.js';
+import { parseCatalog, type CatalogEntry } from '../control-plane/catalog.js';
+import { previewInstructionStackResolution } from '../control-plane/stackResolver.js';
 import type {
   BudgetPolicy,
   InstructionStack,
@@ -219,12 +210,13 @@ function parseCatalogSupplements(catalogPath: string): Map<string, CatalogSupple
     const trimmed = rawValue.trim();
     if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
       const inner = trimmed.slice(1, -1).trim();
-      defaultForDomains = inner.length === 0
-        ? []
-        : inner
-          .split(',')
-          .map(item => item.trim().replace(/^"(.*)"$/, '$1'))
-          .filter(Boolean);
+      defaultForDomains =
+        inner.length === 0
+          ? []
+          : inner
+              .split(',')
+              .map((item) => item.trim().replace(/^"(.*)"$/, '$1'))
+              .filter(Boolean);
       continue;
     }
 
@@ -246,11 +238,7 @@ function parseCatalogSupplements(catalogPath: string): Map<string, CatalogSupple
 }
 
 function inferFallbackDomain(skill: CatalogEntry, availableDomainIds: Set<string>): string {
-  const signal = [
-    skill.id,
-    skill.path ?? '',
-    ...skill.tags,
-  ].join(' ').toLowerCase();
+  const signal = [skill.id, skill.path ?? '', ...skill.tags].join(' ').toLowerCase();
 
   const candidates: string[] = [];
 
@@ -349,14 +337,13 @@ function createDomainScenario(
     domainId,
     explicitSkillIds: [],
     applyDomainDefaultSkills,
-    taskPrompt: buildTaskPrompt(`${domainId} ${applyDomainDefaultSkills ? 'default bundle' : 'minimal bundle'}`),
+    taskPrompt: buildTaskPrompt(
+      `${domainId} ${applyDomainDefaultSkills ? 'default bundle' : 'minimal bundle'}`,
+    ),
   };
 }
 
-function createSkillScenario(
-  skill: CatalogEntry,
-  domainId: string,
-): TokenAuditScenario {
+function createSkillScenario(skill: CatalogEntry, domainId: string): TokenAuditScenario {
   return {
     id: `skill-${safeFileSlug(skill.id)}-${safeFileSlug(domainId)}`,
     label: `${skill.id} on ${domainId}`,
@@ -380,9 +367,7 @@ function buildInstructionStack(scenario: TokenAuditScenario): InstructionStack {
   };
 }
 
-function analyzeScenario(
-  scenario: TokenAuditScenario,
-): ScenarioResult {
+function analyzeScenario(scenario: TokenAuditScenario): ScenarioResult {
   const preview = previewInstructionStackResolution(
     buildInstructionStack(scenario),
     {
@@ -397,12 +382,17 @@ function analyzeScenario(
   );
 
   const promptOnly = buildPromptOnlyFromManifestPaths(preview.compiledArtifacts.prompt_manifest);
-  const fullContext = compileContextSync(preview.compiledArtifacts.prompt_manifest, scenario.taskPrompt);
+  const fullContext = compileContextSync(
+    preview.compiledArtifacts.prompt_manifest,
+    scenario.taskPrompt,
+  );
   const actualPromptOnlyTokens = countTextTokens(promptOnly);
   const actualTotalTokens = countTextTokens(fullContext);
   const taskSectionTokens = actualTotalTokens - actualPromptOnlyTokens;
   const declaredTokenBudgetTotal = preview.compiledArtifacts.token_budget_total;
-  const resolvedSkillIds = preview.compiledArtifacts.selected_entry_ids.filter(entryId => entryId.startsWith('skill_'));
+  const resolvedSkillIds = preview.compiledArtifacts.selected_entry_ids.filter((entryId) =>
+    entryId.startsWith('skill_'),
+  );
 
   return {
     id: scenario.id,
@@ -427,7 +417,9 @@ function analyzeScenario(
       preview.compiledArtifacts.budget_policy,
     ),
     budgetPolicyEnabled: preview.compiledArtifacts.budget_policy.enabled,
-    budgetWarningCodes: (preview.compiledArtifacts.budget_diagnostics ?? []).map(diagnostic => diagnostic.code),
+    budgetWarningCodes: (preview.compiledArtifacts.budget_diagnostics ?? []).map(
+      (diagnostic) => diagnostic.code,
+    ),
     missingBudgetEntryIds: [...preview.compiledArtifacts.token_budget_missing],
     warnings: [...preview.compiledArtifacts.warnings],
   };
@@ -438,11 +430,13 @@ function createMarkdownReport(result: TokenUsageAuditResult): string {
   const topHeaviest = result.heaviestScenarios.slice(0, 15);
   const topDrift = result.largestDriftScenarios.slice(0, 20);
   const topEntryDrift = result.entryMeasurements
-    .filter(entry => entry.deltaFromDeclared !== null)
-    .sort((left, right) => compareNumbersDescending(left.deltaFromDeclared ?? 0, right.deltaFromDeclared ?? 0))
+    .filter((entry) => entry.deltaFromDeclared !== null)
+    .sort((left, right) =>
+      compareNumbersDescending(left.deltaFromDeclared ?? 0, right.deltaFromDeclared ?? 0),
+    )
     .slice(0, 20);
   const topEntryOverestimates = result.entryMeasurements
-    .filter(entry => entry.deltaFromDeclared !== null)
+    .filter((entry) => entry.deltaFromDeclared !== null)
     .sort((left, right) => (left.deltaFromDeclared ?? 0) - (right.deltaFromDeclared ?? 0))
     .slice(0, 10);
   const topDomainDelta = [...result.domainBundleDeltas]
@@ -461,8 +455,12 @@ function createMarkdownReport(result: TokenUsageAuditResult): string {
   lines.push(`- Scenarios attempted: ${result.summary.scenarioCount}`);
   lines.push(`- Successful scenarios: ${result.summary.successCount}`);
   lines.push(`- Failed scenarios: ${result.summary.failureCount}`);
-  lines.push(`- Scenarios with missing token budgets: ${result.summary.missingBudgetScenarioCount}`);
-  lines.push(`- Scenarios where actual tokens crossed a stricter policy tier than declared budgets: ${result.summary.actualPolicyMissCount}`);
+  lines.push(
+    `- Scenarios with missing token budgets: ${result.summary.missingBudgetScenarioCount}`,
+  );
+  lines.push(
+    `- Scenarios where actual tokens crossed a stricter policy tier than declared budgets: ${result.summary.actualPolicyMissCount}`,
+  );
   lines.push('');
 
   lines.push('## Findings');
@@ -480,14 +478,16 @@ function createMarkdownReport(result: TokenUsageAuditResult): string {
   }
 
   if (result.actualPolicyMisses.length === 0) {
-    lines.push('- No scenario silently crossed a higher budget-policy tier after real tokenization.');
+    lines.push(
+      '- No scenario silently crossed a higher budget-policy tier after real tokenization.',
+    );
   } else {
     lines.push('### Policy Misses');
     lines.push('');
     for (const miss of result.actualPolicyMisses) {
       lines.push(
         `- \`${miss.id}\` moved from declared \`${miss.declaredBudgetSeverity}\` to actual \`${miss.actualBudgetSeverity}\` ` +
-        `(${miss.declaredTokenBudgetTotal} declared vs ${miss.actualPromptOnlyTokens} actual prompt-only tokens).`,
+          `(${miss.declaredTokenBudgetTotal} declared vs ${miss.actualPromptOnlyTokens} actual prompt-only tokens).`,
       );
     }
     lines.push('');
@@ -498,8 +498,8 @@ function createMarkdownReport(result: TokenUsageAuditResult): string {
   for (const scenario of topHeaviest) {
     lines.push(
       `- \`${scenario.id}\`: ${scenario.actualPromptOnlyTokens} prompt-only tokens, ` +
-      `${scenario.actualMinusDeclared >= 0 ? '+' : ''}${scenario.actualMinusDeclared} vs declared ` +
-      `${scenario.declaredTokenBudgetTotal}.`,
+        `${scenario.actualMinusDeclared >= 0 ? '+' : ''}${scenario.actualMinusDeclared} vs declared ` +
+        `${scenario.declaredTokenBudgetTotal}.`,
     );
   }
   lines.push('');
@@ -509,7 +509,7 @@ function createMarkdownReport(result: TokenUsageAuditResult): string {
   for (const scenario of topDrift) {
     lines.push(
       `- \`${scenario.id}\`: actual prompt-only ${scenario.actualPromptOnlyTokens}, declared ${scenario.declaredTokenBudgetTotal}, ` +
-      `drift ${scenario.actualMinusDeclared >= 0 ? '+' : ''}${scenario.actualMinusDeclared}.`,
+        `drift ${scenario.actualMinusDeclared >= 0 ? '+' : ''}${scenario.actualMinusDeclared}.`,
     );
   }
   lines.push('');
@@ -519,8 +519,8 @@ function createMarkdownReport(result: TokenUsageAuditResult): string {
   for (const delta of topDomainDelta) {
     lines.push(
       `- \`${delta.domainId}\`: default bundle adds ${delta.actualDelta >= 0 ? '+' : ''}${delta.actualDelta} actual prompt-only tokens ` +
-      `(${delta.minimalActualPromptOnlyTokens} -> ${delta.defaultActualPromptOnlyTokens}); declared delta ` +
-      `${delta.declaredDelta >= 0 ? '+' : ''}${delta.declaredDelta}.`,
+        `(${delta.minimalActualPromptOnlyTokens} -> ${delta.defaultActualPromptOnlyTokens}); declared delta ` +
+        `${delta.declaredDelta >= 0 ? '+' : ''}${delta.declaredDelta}.`,
     );
   }
   lines.push('');
@@ -530,7 +530,7 @@ function createMarkdownReport(result: TokenUsageAuditResult): string {
   for (const entry of topEntryDrift) {
     lines.push(
       `- \`${entry.id}\`: actual ${entry.actualCompiledTokens}, declared ${entry.declaredTokenBudget}, ` +
-      `drift ${entry.deltaFromDeclared !== null && entry.deltaFromDeclared >= 0 ? '+' : ''}${entry.deltaFromDeclared}.`,
+        `drift ${entry.deltaFromDeclared !== null && entry.deltaFromDeclared >= 0 ? '+' : ''}${entry.deltaFromDeclared}.`,
     );
   }
   lines.push('');
@@ -540,26 +540,30 @@ function createMarkdownReport(result: TokenUsageAuditResult): string {
   for (const entry of topEntryOverestimates) {
     lines.push(
       `- \`${entry.id}\`: actual ${entry.actualCompiledTokens}, declared ${entry.declaredTokenBudget}, ` +
-      `drift ${entry.deltaFromDeclared !== null && entry.deltaFromDeclared >= 0 ? '+' : ''}${entry.deltaFromDeclared}.`,
+        `drift ${entry.deltaFromDeclared !== null && entry.deltaFromDeclared >= 0 ? '+' : ''}${entry.deltaFromDeclared}.`,
     );
   }
   lines.push('');
 
   const missingBudgetEntries = result.entryMeasurements
-    .filter(entry => entry.declaredTokenBudget === null)
-    .sort((left, right) => compareNumbersDescending(left.actualCompiledTokens, right.actualCompiledTokens));
+    .filter((entry) => entry.declaredTokenBudget === null)
+    .sort((left, right) =>
+      compareNumbersDescending(left.actualCompiledTokens, right.actualCompiledTokens),
+    );
   if (missingBudgetEntries.length > 0) {
     lines.push('### Entries Missing Declared Token Budgets');
     lines.push('');
     for (const entry of missingBudgetEntries) {
-      lines.push(`- \`${entry.id}\`: actual compiled contribution ${entry.actualCompiledTokens} tokens.`);
+      lines.push(
+        `- \`${entry.id}\`: actual compiled contribution ${entry.actualCompiledTokens} tokens.`,
+      );
     }
     lines.push('');
   }
 
   lines.push('## Rerun');
   lines.push('');
-  lines.push('From the explicit project root:');
+  lines.push('From `<BABEL_REPO_ROOT>`:');
   lines.push('');
   lines.push('```powershell');
   lines.push('npm --prefix .\\babel-cli run audit:token-usage');
@@ -580,14 +584,20 @@ function createMarkdownReport(result: TokenUsageAuditResult): string {
 export function runTokenUsageAudit(options: RunTokenUsageAuditOptions = {}): TokenUsageAuditResult {
   const catalogEntries = parseCatalog(CATALOG_PATH);
   const supplements = parseCatalogSupplements(CATALOG_PATH);
-  const activeSkills = catalogEntries.filter(entry => entry.layer === 'skill' && entry.status === 'active');
-  const activeDomains = catalogEntries.filter(entry => entry.layer === 'domain_architect' && entry.status === 'active');
-  const availableDomainIds = new Set(activeDomains.map(entry => entry.id));
+  const activeSkills = catalogEntries.filter(
+    (entry) => entry.layer === 'skill' && entry.status === 'active',
+  );
+  const activeDomains = catalogEntries.filter(
+    (entry) => entry.layer === 'domain_architect' && entry.status === 'active',
+  );
+  const availableDomainIds = new Set(activeDomains.map((entry) => entry.id));
 
   const entryMeasurements = catalogEntries
-    .filter(entry => entry.status === 'active' && entry.path)
-    .map(entry => countEntryTokens(entry, BABEL_ROOT))
-    .sort((left, right) => compareNumbersDescending(left.actualCompiledTokens, right.actualCompiledTokens));
+    .filter((entry) => entry.status === 'active' && entry.path)
+    .map((entry) => countEntryTokens(entry, BABEL_ROOT))
+    .sort((left, right) =>
+      compareNumbersDescending(left.actualCompiledTokens, right.actualCompiledTokens),
+    );
 
   const scenarios: TokenAuditScenario[] = [];
   for (const domain of activeDomains) {
@@ -600,7 +610,9 @@ export function runTokenUsageAudit(options: RunTokenUsageAuditOptions = {}): Tok
   for (const skill of activeSkills) {
     const supplement = supplements.get(skill.id);
     const preferredDomains = unique([
-      ...(supplement?.defaultForDomains ?? []).filter(domainId => availableDomainIds.has(domainId)),
+      ...(supplement?.defaultForDomains ?? []).filter((domainId) =>
+        availableDomainIds.has(domainId),
+      ),
       inferFallbackDomain(skill, availableDomainIds),
     ]);
 
@@ -626,9 +638,9 @@ export function runTokenUsageAudit(options: RunTokenUsageAuditOptions = {}): Tok
     }
   }
 
-  const resultsById = new Map(scenarioResults.map(result => [result.id, result]));
+  const resultsById = new Map(scenarioResults.map((result) => [result.id, result]));
   const domainBundleDeltas: DomainBundleDelta[] = activeDomains
-    .map(domain => {
+    .map((domain) => {
       const minimal = resultsById.get(`domain-${safeFileSlug(domain.id)}-minimal`);
       const defaults = resultsById.get(`domain-${safeFileSlug(domain.id)}-default`);
       if (!minimal || !defaults) {
@@ -648,12 +660,15 @@ export function runTokenUsageAudit(options: RunTokenUsageAuditOptions = {}): Tok
     })
     .filter((value): value is DomainBundleDelta => value !== null);
 
-  const heaviestScenarios = [...scenarioResults]
-    .sort((left, right) => compareNumbersDescending(left.actualPromptOnlyTokens, right.actualPromptOnlyTokens));
-  const largestDriftScenarios = [...scenarioResults]
-    .sort((left, right) => compareNumbersDescending(left.actualMinusDeclared, right.actualMinusDeclared));
-  const actualPolicyMisses = scenarioResults.filter(result =>
-    severityRank(result.actualBudgetSeverity) > severityRank(result.declaredBudgetSeverity),
+  const heaviestScenarios = [...scenarioResults].sort((left, right) =>
+    compareNumbersDescending(left.actualPromptOnlyTokens, right.actualPromptOnlyTokens),
+  );
+  const largestDriftScenarios = [...scenarioResults].sort((left, right) =>
+    compareNumbersDescending(left.actualMinusDeclared, right.actualMinusDeclared),
+  );
+  const actualPolicyMisses = scenarioResults.filter(
+    (result) =>
+      severityRank(result.actualBudgetSeverity) > severityRank(result.declaredBudgetSeverity),
   );
 
   const generatedAt = options.generatedAt ?? new Date().toISOString();
@@ -666,7 +681,9 @@ export function runTokenUsageAudit(options: RunTokenUsageAuditOptions = {}): Tok
     successCount: scenarioResults.length,
     failureCount: scenarioFailures.length,
     actualPolicyMissCount: actualPolicyMisses.length,
-    missingBudgetScenarioCount: scenarioResults.filter(result => result.missingBudgetEntryIds.length > 0).length,
+    missingBudgetScenarioCount: scenarioResults.filter(
+      (result) => result.missingBudgetEntryIds.length > 0,
+    ).length,
   };
 
   const timestampSlug = generatedAt.replace(/[:.]/g, '-');

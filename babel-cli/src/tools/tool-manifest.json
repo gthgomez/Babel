@@ -1,0 +1,800 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "manifestVersion": "1.0.0",
+  "generatedFrom": "babel-cli/src/localTools.ts:EXECUTOR_TOOL_DEFINITIONS",
+  "generatedAt": "2026-06-19",
+  "outputSchema": {
+    "ToolResult": {
+      "type": "object",
+      "required": ["exit_code", "stdout", "stderr"],
+      "properties": {
+        "exit_code": { "type": "integer", "description": "0 for success, non-zero for failure" },
+        "stdout": { "type": "string", "description": "Standard output from the tool" },
+        "stderr": { "type": "string", "description": "Standard error or error message" },
+        "denial": {
+          "type": "object",
+          "description": "Present only when the tool call was denied by policy",
+          "properties": {
+            "category": { "type": "string", "enum": ["executor_policy", "sandbox_policy", "planning_restricted"] },
+            "reason_code": { "type": "string" },
+            "message": { "type": "string" },
+            "tool": { "type": ["string", "null"] },
+            "evidence": { "type": ["array", "null"], "items": { "type": "string" } }
+          }
+        }
+      }
+    }
+  },
+  "categories": {
+    "filesystem": "File system read/write operations within the project root",
+    "process": "Shell command and test execution with sandbox enforcement",
+    "mcp": "Model Context Protocol server interaction (read-only)",
+    "web": "Web search and fetch with cache and safety labels",
+    "plugin": "Plugin system invocation",
+    "ui": "UI audit and inspection helpers",
+    "memory": "Chronicle memory store and query for project-scoped facts",
+    "mode": "Runtime mode switching (plan/act)",
+    "search": "Code and workspace search/discovery operations",
+    "coordination": "Workspace coordination locks for concurrent access",
+    "vcs": "Version control system operations (Git)",
+    "knowledge-graph": "Knowledge graph code intelligence (call paths, impact analysis, architecture)"
+  },
+  "tools": [
+    {
+      "name": "directory_list",
+      "category": "filesystem",
+      "description": "List files and directories inside the active project root.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["read", "filesystem"],
+      "input": {
+        "required": [
+          { "name": "path", "type": "string", "description": "Project-relative or /project/... path to list" }
+        ],
+        "optional": []
+      },
+      "examples": [
+        { "tool": "directory_list", "path": "src/" },
+        { "tool": "directory_list", "path": "/project/lib" }
+      ]
+    },
+    {
+      "name": "file_read",
+      "category": "filesystem",
+      "description": "Read a file inside the active project root.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["read", "filesystem"],
+      "input": {
+        "required": [
+          { "name": "path", "type": "string", "description": "Project-relative or /project/... path to the file" }
+        ],
+        "optional": []
+      },
+      "examples": [
+        { "tool": "file_read", "path": "src/index.ts" }
+      ]
+    },
+    {
+      "name": "file_write",
+      "category": "filesystem",
+      "description": "Write a file inside the active project root, subject to locks and runtime mode. Shadow-written in dry-run.",
+      "mutating": true,
+      "dryRunBehavior": "shadow_write",
+      "policyTags": ["write", "filesystem"],
+      "input": {
+        "required": [
+          { "name": "path", "type": "string", "description": "Project-relative or /project/... path to write" },
+          { "name": "content", "type": "string", "description": "Full file content to write" }
+        ],
+        "optional": []
+      },
+      "jitApproval": true,
+      "jitApprovalTriggers": ["control-plane files", "files outside anchor path", "recovery/rollback modes"],
+      "examples": [
+        { "tool": "file_write", "path": "src/utils.ts", "content": "export function add(a: number, b: number): number { return a + b; }" }
+      ]
+    },
+    {
+      "name": "file_delete",
+      "category": "filesystem",
+      "description": "Delete a file inside the active project root (soft-delete to .babel-trash/).",
+      "mutating": true,
+      "dryRunBehavior": "mocked",
+      "policyTags": ["write", "filesystem", "destructive"],
+      "input": {
+        "required": [
+          { "name": "path", "type": "string", "description": "Project-relative path to delete" }
+        ],
+        "optional": []
+      },
+      "examples": [
+        { "tool": "file_delete", "path": "temp.txt" }
+      ]
+    },
+    {
+      "name": "shell_exec",
+      "category": "process",
+      "description": "Execute an allowlisted shell command inside the active project root. Mocked in dry-run. Subject to command allowlist (35 commands), shell operator blocking, and path traversal prevention.",
+      "mutating": true,
+      "dryRunBehavior": "mocked",
+      "policyTags": ["execute", "shell"],
+      "input": {
+        "required": [
+          { "name": "command", "type": "string", "description": "Shell command (no cmd /c prefix, no cd). Must use allowlisted commands only." }
+        ],
+        "optional": [
+          { "name": "working_directory", "type": "string", "description": "Project-relative working directory for the command" },
+          { "name": "timeout_seconds", "type": "integer", "description": "Command timeout in seconds (default: 120)" }
+        ]
+      },
+      "jitApproval": true,
+      "jitApprovalTriggers": ["recovery/rollback modes", "control-plane file commands"],
+      "examples": [
+        { "tool": "shell_exec", "command": "npm test", "working_directory": "packages/core" },
+        { "tool": "shell_exec", "command": "git diff --name-only HEAD~1", "timeout_seconds": 30 }
+      ]
+    },
+    {
+      "name": "test_run",
+      "category": "process",
+      "description": "Run an allowlisted test command with a longer default timeout (300s). Same sandbox rules as shell_exec.",
+      "mutating": true,
+      "dryRunBehavior": "mocked",
+      "policyTags": ["execute", "test"],
+      "input": {
+        "required": [
+          { "name": "command", "type": "string", "description": "Test command (no cmd /c prefix). Must use allowlisted commands." }
+        ],
+        "optional": [
+          { "name": "working_directory", "type": "string", "description": "Project-relative working directory" },
+          { "name": "timeout_seconds", "type": "integer", "description": "Command timeout in seconds (default: 300)" }
+        ]
+      },
+      "jitApproval": true,
+      "jitApprovalTriggers": ["recovery/rollback modes", "control-plane file commands"],
+      "examples": [
+        { "tool": "test_run", "command": "npm run test:lite-gate" }
+      ]
+    },
+    {
+      "name": "mcp_request",
+      "category": "mcp",
+      "description": "Send a read-oriented JSON-RPC request to a configured MCP server. Live even in dry-run (read-only).",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["mcp", "external"],
+      "input": {
+        "required": [
+          { "name": "server", "type": "string", "description": "Name of the configured MCP server" },
+          { "name": "query", "type": "string", "description": "Query or tool name to invoke on the MCP server" }
+        ],
+        "optional": []
+      },
+      "examples": [
+        { "tool": "mcp_request", "server": "discord", "query": "fetch_messages channel=general limit=10" }
+      ]
+    },
+    {
+      "name": "mcp_resource_list",
+      "category": "mcp",
+      "description": "List resources exposed by a configured MCP server. Read-only, live in dry-run.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["mcp", "external", "read"],
+      "input": {
+        "required": [
+          { "name": "server", "type": "string", "description": "Name of the configured MCP server" }
+        ],
+        "optional": []
+      },
+      "examples": [
+        { "tool": "mcp_resource_list", "server": "filesystem" }
+      ]
+    },
+    {
+      "name": "mcp_resource_read",
+      "category": "mcp",
+      "description": "Read a resource exposed by a configured MCP server. Read-only, live in dry-run.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["mcp", "external", "read"],
+      "input": {
+        "required": [
+          { "name": "server", "type": "string", "description": "Name of the configured MCP server" },
+          { "name": "uri", "type": "string", "description": "Resource URI to read" }
+        ],
+        "optional": []
+      },
+      "examples": [
+        { "tool": "mcp_resource_read", "server": "filesystem", "uri": "file:///docs/readme.md" }
+      ]
+    },
+    {
+      "name": "mcp_prompt_list",
+      "category": "mcp",
+      "description": "List prompts exposed by a configured MCP server. Read-only, live in dry-run.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["mcp", "external", "read"],
+      "input": {
+        "required": [
+          { "name": "server", "type": "string", "description": "Name of the configured MCP server" }
+        ],
+        "optional": []
+      },
+      "examples": [
+        { "tool": "mcp_prompt_list", "server": "discord" }
+      ]
+    },
+    {
+      "name": "mcp_prompt_get",
+      "category": "mcp",
+      "description": "Fetch a prompt from a configured MCP server by name. Read-only, live in dry-run.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["mcp", "external", "read"],
+      "input": {
+        "required": [
+          { "name": "server", "type": "string", "description": "Name of the configured MCP server" },
+          { "name": "name", "type": "string", "description": "Name of the prompt to fetch" }
+        ],
+        "optional": [
+          { "name": "arguments", "type": "object", "description": "Optional arguments for the prompt template" }
+        ]
+      },
+      "examples": [
+        { "tool": "mcp_prompt_get", "server": "discord", "name": "summarize_chat" }
+      ]
+    },
+    {
+      "name": "mcp_tool_search",
+      "category": "mcp",
+      "description": "Search tools exposed by a configured MCP server. Read-only, live in dry-run.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["mcp", "external", "read"],
+      "input": {
+        "required": [
+          { "name": "server", "type": "string", "description": "Name of the configured MCP server" }
+        ],
+        "optional": [
+          { "name": "query", "type": "string", "description": "Optional search query to filter tools" },
+          { "name": "limit", "type": "integer", "description": "Max tools to return (default: 20)" },
+          { "name": "schema_limit", "type": "integer", "description": "Max schemas to include (default: 10)" }
+        ]
+      },
+      "examples": [
+        { "tool": "mcp_tool_search", "server": "discord", "query": "message" }
+      ]
+    },
+    {
+      "name": "web_search",
+      "category": "web",
+      "description": "Search the web with cache and public-network safeguards. Read-only, live in dry-run.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["web", "external", "read"],
+      "input": {
+        "required": [
+          { "name": "query", "type": "string", "description": "Search query string" }
+        ],
+        "optional": [
+          { "name": "max_results", "type": "integer", "description": "Maximum number of results (default: 5)" }
+        ]
+      },
+      "examples": [
+        { "tool": "web_search", "query": "TypeScript 5.6 release notes", "max_results": 3 }
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "category": "web",
+      "description": "Fetch a public web URL with cache and content safety labels. Read-only, live in dry-run. HTTP upgraded to HTTPS.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["web", "external", "read"],
+      "input": {
+        "required": [
+          { "name": "url", "type": "string", "description": "Public HTTPS URL to fetch" }
+        ],
+        "optional": [
+          { "name": "max_bytes", "type": "integer", "description": "Maximum bytes to download (default: 200000)" }
+        ]
+      },
+      "examples": [
+        { "tool": "web_fetch", "url": "https://example.com/docs/api", "max_bytes": 50000 }
+      ]
+    },
+    {
+      "name": "plugin_tool",
+      "category": "plugin",
+      "description": "Invoke an active read-only plugin tool. Live in dry-run.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["plugin", "external"],
+      "input": {
+        "required": [
+          { "name": "plugin", "type": "string", "description": "Plugin identifier" },
+          { "name": "name", "type": "string", "description": "Name of the tool within the plugin" }
+        ],
+        "optional": [
+          { "name": "arguments", "type": "object", "description": "Optional arguments for the plugin tool" }
+        ]
+      },
+      "examples": [
+        { "tool": "plugin_tool", "plugin": "discord", "name": "fetch_messages", "arguments": { "channel": "general", "limit": 10 } }
+      ]
+    },
+    {
+      "name": "audit_ui",
+      "category": "ui",
+      "description": "Run the UI audit helper against a URL for a Babel run. Read-only, live in dry-run.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["ui", "audit"],
+      "input": {
+        "required": [
+          { "name": "url", "type": "string", "description": "URL to audit" },
+          { "name": "run_id", "type": "string", "description": "Babel run ID for evidence tracking" }
+        ],
+        "optional": []
+      },
+      "examples": [
+        { "tool": "audit_ui", "url": "http://localhost:3000", "run_id": "20260619_120000_swe-task" }
+      ]
+    },
+    {
+      "name": "memory_store",
+      "category": "memory",
+      "description": "Store a project-scoped Chronicle memory fact. Mocked in dry-run.",
+      "mutating": true,
+      "dryRunBehavior": "mocked",
+      "policyTags": ["memory", "write"],
+      "input": {
+        "required": [
+          { "name": "key", "type": "string", "description": "Memory key (unique identifier for the fact)" },
+          { "name": "value", "type": "string", "description": "Memory value (the fact content to store)" }
+        ],
+        "optional": []
+      },
+      "examples": [
+        { "tool": "memory_store", "key": "deploy_checklist", "value": "1. Run tests 2. Build 3. Deploy to staging" }
+      ]
+    },
+    {
+      "name": "memory_query",
+      "category": "memory",
+      "description": "Query a project-scoped Chronicle memory fact by key, or list ALL facts. Read-only, live in dry-run.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["memory", "read"],
+      "input": {
+        "required": [
+          { "name": "key", "type": "string", "description": "Memory key to query, or 'ALL' to list all facts" }
+        ],
+        "optional": []
+      },
+      "examples": [
+        { "tool": "memory_query", "key": "deploy_checklist" },
+        { "tool": "memory_query", "key": "ALL" }
+      ]
+    },
+    {
+      "name": "enter_plan_mode",
+      "category": "mode",
+      "description": "Switch the local executor runtime into plan mode. Mutating tools are restricted in plan mode. Stateful in dry-run.",
+      "mutating": true,
+      "dryRunBehavior": "stateful",
+      "policyTags": ["mode", "safety"],
+      "input": {
+        "required": [],
+        "optional": []
+      },
+      "examples": [
+        { "tool": "enter_plan_mode" }
+      ]
+    },
+    {
+      "name": "exit_plan_mode",
+      "category": "mode",
+      "description": "Switch the local executor runtime into act mode, re-enabling mutating tools. Stateful in dry-run.",
+      "mutating": true,
+      "dryRunBehavior": "stateful",
+      "policyTags": ["mode", "safety"],
+      "input": {
+        "required": [],
+        "optional": []
+      },
+      "examples": [
+        { "tool": "exit_plan_mode" }
+      ]
+    },
+    {
+      "name": "semantic_search",
+      "category": "search",
+      "description": "Search the local semantic index for relevant indexed context. Read-only, live in dry-run.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["search", "read"],
+      "input": {
+        "required": [
+          { "name": "query", "type": "string", "description": "Semantic search query" }
+        ],
+        "optional": [
+          { "name": "limit", "type": "integer", "description": "Maximum results to return" }
+        ]
+      },
+      "examples": [
+        { "tool": "semantic_search", "query": "authentication middleware pattern", "limit": 5 }
+      ]
+    },
+    {
+      "name": "grep",
+      "category": "search",
+      "description": "Search text files under the active project root for a regex pattern. Read-only, live in dry-run. Respects approved read roots.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["search", "read", "filesystem"],
+      "input": {
+        "required": [
+          { "name": "pattern", "type": "string", "description": "Regular expression pattern to search for" }
+        ],
+        "optional": [
+          { "name": "path", "type": "string", "description": "Subdirectory or file path to restrict search to" },
+          { "name": "ignore_case", "type": "boolean", "description": "Case-insensitive search (default: false)" },
+          { "name": "max_matches", "type": "integer", "description": "Maximum number of matches to return" },
+          { "name": "output_format", "type": "string", "enum": ["text", "json"], "description": "Output format (default: text)" }
+        ]
+      },
+      "examples": [
+        { "tool": "grep", "pattern": "TODO|FIXME", "path": "src/", "ignore_case": false },
+        { "tool": "grep", "pattern": "export.*function", "output_format": "json", "max_matches": 20 }
+      ]
+    },
+    {
+      "name": "glob",
+      "category": "search",
+      "description": "List project-relative file paths that match a bounded glob pattern. Read-only, live in dry-run.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["search", "read", "filesystem"],
+      "input": {
+        "required": [
+          { "name": "pattern", "type": "string", "description": "Glob pattern (e.g., 'src/**/*.ts', '**/*.test.*')" }
+        ],
+        "optional": [
+          { "name": "max_paths", "type": "integer", "description": "Maximum number of paths to return" },
+          { "name": "output_format", "type": "string", "enum": ["text", "json"], "description": "Output format (default: text)" }
+        ]
+      },
+      "examples": [
+        { "tool": "glob", "pattern": "src/**/*.ts" },
+        { "tool": "glob", "pattern": "**/*.test.ts", "max_paths": 50, "output_format": "json" }
+      ]
+    },
+    {
+      "name": "workspace_symbol_search",
+      "category": "search",
+      "description": "Search project code files for symbol definitions matching a query. Read-only, live in dry-run.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["search", "read", "filesystem"],
+      "input": {
+        "required": [
+          { "name": "query", "type": "string", "description": "Symbol name or partial name to search for" }
+        ],
+        "optional": [
+          { "name": "max_matches", "type": "integer", "description": "Maximum number of symbol matches to return" }
+        ]
+      },
+      "examples": [
+        { "tool": "workspace_symbol_search", "query": "executeTool" }
+      ]
+    },
+    {
+      "name": "get_code_outline",
+      "category": "search",
+      "description": "Reads a code file and returns a list of its classes, functions, methods, and interfaces with their line numbers. Read-only.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["search", "read", "filesystem"],
+      "input": {
+        "required": [
+          { "name": "path", "type": "string", "description": "Absolute path to the file to outline" }
+        ],
+        "optional": []
+      },
+      "examples": [
+        { "tool": "get_code_outline", "path": "src/interactive/BabelRepl.ts" }
+      ]
+    },
+    {
+      "name": "find_code_definition",
+      "category": "search",
+      "description": "Search the codebase for the declaration and full body/block of a code symbol (class, function, interface, method). Read-only.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["search", "read", "filesystem"],
+      "input": {
+        "required": [
+          { "name": "symbol", "type": "string", "description": "Name of the symbol definition to find" }
+        ],
+        "optional": []
+      },
+      "examples": [
+        { "tool": "find_code_definition", "symbol": "BabelRepl" }
+      ]
+    },
+    {
+      "name": "find_code_references",
+      "category": "search",
+      "description": "Locate references and usage occurrences of a symbol across codebase code files, excluding its definition. Read-only.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["search", "read", "filesystem"],
+      "input": {
+        "required": [
+          { "name": "symbol", "type": "string", "description": "Name of the symbol references to search for" }
+        ],
+        "optional": [
+          { "name": "max_matches", "type": "integer", "description": "Maximum reference matches to return" }
+        ]
+      },
+      "examples": [
+        { "tool": "find_code_references", "symbol": "BabelRepl" }
+      ]
+    },
+    {
+      "name": "load_skill_manifest",
+      "category": "search",
+      "description": "Retrieve the complete detailed instruction manual and system rules for a specific technical skill from the prompt catalog.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["read", "search"],
+      "input": {
+        "required": [
+          { "name": "skill_id", "type": "string", "description": "Catalog ID of the skill to load (e.g. skill_ts_zod)" }
+        ],
+        "optional": []
+      },
+      "examples": [
+        { "tool": "load_skill_manifest", "skill_id": "skill_ts_zod" }
+      ]
+    },
+    {
+      "name": "workspace_map",
+      "category": "search",
+      "description": "Get a recursive directory tree of the workspace, respecting .gitignore. Read-only, live in dry-run.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["search", "read"],
+      "input": {
+        "required": [],
+        "optional": [
+          { "name": "max_depth", "type": "integer", "description": "Maximum directory depth to traverse" },
+          { "name": "max_files", "type": "integer", "description": "Maximum number of files to include" },
+          { "name": "output_format", "type": "string", "enum": ["text", "json"], "description": "Output format (default: text)" }
+        ]
+      },
+      "examples": [
+        { "tool": "workspace_map", "max_depth": 3 },
+        { "tool": "workspace_map", "output_format": "json" }
+      ]
+    },
+    {
+      "name": "git_context",
+      "category": "search",
+      "description": "Show git status, diff, and uncommitted changes for the current repo. Non-mutating. Read-only, live in dry-run.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["search", "read", "git"],
+      "input": {
+        "required": [],
+        "optional": [
+          { "name": "format", "type": "string", "enum": ["summary", "files", "diff"], "description": "Output detail level (default: summary)" },
+          { "name": "path", "type": "string", "description": "Restrict to a specific path within the repo" },
+          { "name": "max_lines", "type": "integer", "description": "Maximum lines of output" },
+          { "name": "output_format", "type": "string", "enum": ["text", "json"], "description": "Output format (default: text)" }
+        ]
+      },
+      "examples": [
+        { "tool": "git_context", "format": "summary" },
+        { "tool": "git_context", "format": "diff", "path": "src/tools/", "max_lines": 200 }
+      ]
+    },
+    {
+      "name": "git_reset",
+      "category": "vcs",
+      "description": "Reset git state (working tree, index, or specific ref).",
+      "mutating": true,
+      "dryRunBehavior": "mocked",
+      "policyTags": ["execute", "vcs", "destructive"],
+      "input": {
+        "required": [],
+        "optional": [
+          { "name": "target", "type": "string", "description": "Git ref or target commit" },
+          { "name": "hard", "type": "boolean", "description": "Perform a hard reset if true" }
+        ]
+      },
+      "examples": [
+        { "tool": "git_reset" },
+        { "tool": "git_reset", "target": "HEAD~1", "hard": true }
+      ]
+    },
+    {
+      "name": "git_push",
+      "category": "vcs",
+      "description": "Push commits to a remote repository.",
+      "mutating": true,
+      "dryRunBehavior": "mocked",
+      "policyTags": ["execute", "vcs", "destructive", "network"],
+      "input": {
+        "required": [],
+        "optional": [
+          { "name": "remote", "type": "string", "description": "Remote name (e.g. origin)" },
+          { "name": "branch", "type": "string", "description": "Branch name to push" },
+          { "name": "force", "type": "boolean", "description": "Force push if true" }
+        ]
+      },
+      "examples": [
+        { "tool": "git_push" },
+        { "tool": "git_push", "remote": "origin", "branch": "main", "force": false }
+      ]
+    },
+    {
+      "name": "acquire_lock",
+      "category": "coordination",
+      "description": "Acquire a workspace coordination lock for a path. Used for multi-agent concurrency control. Stateful in dry-run.",
+      "mutating": true,
+      "dryRunBehavior": "stateful",
+      "policyTags": ["lock", "coordination"],
+      "input": {
+        "required": [
+          { "name": "path", "type": "string", "description": "Path to lock within the workspace" },
+          { "name": "reason", "type": "string", "description": "Human-readable reason for acquiring the lock" }
+        ],
+        "optional": [
+          { "name": "ttl_sec", "type": "integer", "description": "Time-to-live in seconds before automatic release" }
+        ]
+      },
+      "examples": [
+        { "tool": "acquire_lock", "path": "src/database/schema.ts", "reason": "Migrating user table schema" }
+      ]
+    },
+    {
+      "name": "release_lock",
+      "category": "coordination",
+      "description": "Release a workspace coordination lock for a path. Stateful in dry-run.",
+      "mutating": true,
+      "dryRunBehavior": "stateful",
+      "policyTags": ["lock", "coordination"],
+      "input": {
+        "required": [
+          { "name": "path", "type": "string", "description": "Path to unlock within the workspace" }
+        ],
+        "optional": []
+      },
+      "examples": [
+        { "tool": "release_lock", "path": "src/database/schema.ts" }
+      ]
+    },
+    {
+      "name": "tool_catalog",
+      "category": "search",
+      "description": "List all available executor tools with their input contracts, descriptions, and policy metadata. Read-only, live in dry-run. Supports optional category and mutating filters.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["read", "meta", "search"],
+      "input": {
+        "required": [],
+        "optional": [
+          { "name": "category", "type": "string", "description": "Filter by tool category (filesystem, process, mcp, web, plugin, ui, memory, mode, search, coordination)" },
+          { "name": "mutating", "type": "boolean", "description": "Filter: true = mutating only, false = read-only only" },
+          { "name": "format", "type": "string", "enum": ["summary", "full"], "description": "Output detail level (default: summary)" }
+        ]
+      },
+      "examples": [
+        { "tool": "tool_catalog" },
+        { "tool": "tool_catalog", "category": "filesystem", "format": "full" },
+        { "tool": "tool_catalog", "mutating": true }
+      ]
+    },
+    {
+      "name": "kg_trace_path",
+      "category": "knowledge-graph",
+      "description": "Trace call paths for a symbol in the knowledge graph (inbound, outbound, or both). Shows callers and callees with file locations.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["search", "read"],
+      "input": {
+        "required": [
+          { "name": "symbol", "type": "string", "description": "Symbol name to trace (function, method, class)" }
+        ],
+        "optional": [
+          { "name": "direction", "type": "string", "enum": ["inbound", "outbound", "both"], "description": "Call direction: inbound (callers), outbound (callees), or both (default: both)" },
+          { "name": "max_depth", "type": "integer", "description": "Maximum call depth to traverse (1-10)" }
+        ]
+      },
+      "examples": [
+        { "tool": "kg_trace_path", "symbol": "executeTool", "direction": "both" },
+        { "tool": "kg_trace_path", "symbol": "handleMcpRequest", "direction": "inbound", "max_depth": 3 }
+      ]
+    },
+    {
+      "name": "kg_search_graph",
+      "category": "knowledge-graph",
+      "description": "Search the knowledge graph for code symbols matching a query by name, kind, or pattern.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["search", "read"],
+      "input": {
+        "required": [
+          { "name": "query", "type": "string", "description": "Search query for symbol name or pattern" }
+        ],
+        "optional": [
+          { "name": "kind", "type": "string", "description": "Filter by symbol kind (function, class, method, interface, etc.)" },
+          { "name": "limit", "type": "integer", "description": "Maximum number of results to return" }
+        ]
+      },
+      "examples": [
+        { "tool": "kg_search_graph", "query": "executeTool" },
+        { "tool": "kg_search_graph", "query": "handleMcp", "kind": "function", "limit": 10 }
+      ]
+    },
+    {
+      "name": "kg_impact_analysis",
+      "category": "knowledge-graph",
+      "description": "Analyze the impact of changes to files or symbols with risk classification (HIGH/MEDIUM/LOW). Returns affected callers and callees grouped by hop distance.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["search", "read"],
+      "input": {
+        "required": [],
+        "optional": [
+          { "name": "files", "type": "array", "items": { "type": "string" }, "description": "Files to analyze for change impact" },
+          { "name": "symbol", "type": "string", "description": "Symbol to analyze for change impact" },
+          { "name": "depth", "type": "integer", "description": "Maximum hop depth for impact traversal" }
+        ]
+      },
+      "examples": [
+        { "tool": "kg_impact_analysis", "files": ["src/tools/mcpTransport.ts"] },
+        { "tool": "kg_impact_analysis", "symbol": "executeTool", "depth": 3 }
+      ]
+    },
+    {
+      "name": "kg_architecture",
+      "category": "knowledge-graph",
+      "description": "Get a high-level architecture overview of the codebase: language breakdown, hotspot functions, and package structure.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["search", "read"],
+      "input": {
+        "required": [],
+        "optional": [
+          { "name": "scope", "type": "string", "description": "Scope of analysis (directory path or module)" },
+          { "name": "detail", "type": "string", "enum": ["summary", "full"], "description": "Detail level (default: summary)" }
+        ]
+      },
+      "examples": [
+        { "tool": "kg_architecture" },
+        { "tool": "kg_architecture", "detail": "full" }
+      ]
+    },
+    {
+      "name": "kg_index_status",
+      "category": "knowledge-graph",
+      "description": "Check whether the knowledge graph has been indexed and is ready for structural queries. Returns node/edge counts when indexed.",
+      "mutating": false,
+      "dryRunBehavior": "live",
+      "policyTags": ["search", "read"],
+      "input": {
+        "required": [],
+        "optional": []
+      },
+      "examples": [
+        { "tool": "kg_index_status" }
+      ]
+    }
+  ]
+}

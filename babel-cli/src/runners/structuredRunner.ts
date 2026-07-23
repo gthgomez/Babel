@@ -27,13 +27,13 @@ import {
   type LlmRunner,
   type RunnerCallbacks,
 } from './base.js';
-import { GeminiApiRunner }   from './geminiApi.js';
-import { extractJson }       from '../utils/extractJson.js';
+import { GeminiApiRunner } from './geminiApi.js';
+import { extractJson } from '../utils/extractJson.js';
 
 // ─── Sentinel constants ────────────────────────────────────────────────────────
 
 const SENTINEL_BEGIN = '<<BABEL_JSON_BEGIN>>';
-const SENTINEL_END   = '<<BABEL_JSON_END>>';
+const SENTINEL_END = '<<BABEL_JSON_END>>';
 
 // ─── Sentinel instruction appended to every prompt ────────────────────────────
 
@@ -58,7 +58,7 @@ const SENTINEL_INSTRUCTION = [
 /** Extracts content between sentinel markers, or returns null if not found. */
 function extractFromSentinels(rawStdout: string): string | null {
   const start = rawStdout.indexOf(SENTINEL_BEGIN);
-  const end   = rawStdout.indexOf(SENTINEL_END);
+  const end = rawStdout.indexOf(SENTINEL_END);
   if (start === -1 || end === -1 || end <= start) return null;
   return rawStdout.slice(start + SENTINEL_BEGIN.length, end).trim();
 }
@@ -86,7 +86,11 @@ function buildRepairPrompt(rawStdout: string): string {
  * Returns null if GEMINI_API_KEY is not configured.
  */
 function createRepairRunner(): LlmRunner | null {
-  try { return new GeminiApiRunner(); } catch { /* GEMINI_API_KEY not set */ }
+  try {
+    return new GeminiApiRunner();
+  } catch {
+    /* GEMINI_API_KEY not set */
+  }
   return null;
 }
 

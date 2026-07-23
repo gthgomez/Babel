@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { shouldHaltAutonomousWithoutApprovedPlan } from '../pipeline.js';
+import { shouldHaltWithoutApprovedPlan } from '../pipeline.js';
 import type { VerifierContractSummary } from '../services/requiredVerifierContract.js';
 import type { WorktreeRollbackSummary } from '../services/worktreeSafety.js';
 import { buildPipelineFinalTerminalState, type PipelineTerminalContext } from './finalization.js';
 
 test('characterization: autonomous execution halts without an approved plan', () => {
-  assert.equal(shouldHaltAutonomousWithoutApprovedPlan('autonomous', null), true);
-  assert.equal(shouldHaltAutonomousWithoutApprovedPlan('verified', null), false);
+  assert.equal(shouldHaltWithoutApprovedPlan('deep', null), true);
+  assert.equal(shouldHaltWithoutApprovedPlan('plan', null), false);
 });
 
 test('characterization: QA rejection remains non-executing terminal status', () => {
@@ -87,7 +87,9 @@ test('characterization: exact-instruction drift maps correctly', () => {
   assert.equal(state.terminalSummary.reason_category, 'exact_contract_failure');
 });
 
-function emptyTerminalContext(overrides: Partial<PipelineTerminalContext> = {}): PipelineTerminalContext {
+function emptyTerminalContext(
+  overrides: Partial<PipelineTerminalContext> = {},
+): PipelineTerminalContext {
   return {
     toolCallLog: [],
     condition: null,

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "fixture_type": "babel_lite_trust_demo",
-  "visibility": "public_example",
+  "visibility": "private",
   "description": "Trust demo task with repo-wide security phrasing for Spark parallel-review harness.",
   "target_file": "src/math.js",
   "verifier_command": "npm test",

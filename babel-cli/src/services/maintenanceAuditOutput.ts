@@ -26,10 +26,18 @@ function section(lines: string[], title: string, findings: MaintenanceFinding[])
 }
 
 export function formatMaintenanceAuditHuman(report: MaintenanceAuditReport): string {
-  const hotspotFindings = report.findings.filter(finding => finding.category === 'oversized_file' || finding.category === 'high_coupling');
-  const safeFindings = report.findings.filter(finding => finding.safe_to_apply);
-  const refactorFindings = report.findings.filter(finding => !finding.safe_to_apply && (finding.category === 'oversized_file' || finding.category === 'high_coupling'));
-  const docsFindings = report.findings.filter(finding => finding.category === 'broken_link' || finding.category === 'stale_doc');
+  const hotspotFindings = report.findings.filter(
+    (finding) => finding.category === 'oversized_file' || finding.category === 'high_coupling',
+  );
+  const safeFindings = report.findings.filter((finding) => finding.safe_to_apply);
+  const refactorFindings = report.findings.filter(
+    (finding) =>
+      !finding.safe_to_apply &&
+      (finding.category === 'oversized_file' || finding.category === 'high_coupling'),
+  );
+  const docsFindings = report.findings.filter(
+    (finding) => finding.category === 'broken_link' || finding.category === 'stale_doc',
+  );
   const lines = [
     'Babel Simplify Audit',
     '',
@@ -69,14 +77,17 @@ export function writeMaintenanceAuditReport(
   report: MaintenanceAuditReport,
   options: WriteMaintenanceAuditOptions,
 ): MaintenanceAuditReport {
-  const outputPath = typeof options.outputPath === 'string' && options.outputPath.trim().length > 0
-    ? resolve(options.outputPath)
-    : defaultReportDirectory(options.repoRoot);
+  const outputPath =
+    typeof options.outputPath === 'string' && options.outputPath.trim().length > 0
+      ? resolve(options.outputPath)
+      : defaultReportDirectory(options.repoRoot);
   const isJsonFile = outputPath.endsWith('.json');
   const dir = isJsonFile ? dirname(outputPath) : outputPath;
   mkdirSync(dir, { recursive: true });
   const jsonPath = isJsonFile ? outputPath : join(dir, 'maintenance_audit.json');
-  const markdownPath = isJsonFile ? join(dirname(outputPath), 'maintenance_audit.md') : join(dir, 'maintenance_audit.md');
+  const markdownPath = isJsonFile
+    ? join(dirname(outputPath), 'maintenance_audit.md')
+    : join(dir, 'maintenance_audit.md');
   const nextReport: MaintenanceAuditReport = {
     ...report,
     artifacts: {
