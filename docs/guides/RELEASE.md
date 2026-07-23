@@ -77,9 +77,10 @@ The following will be implemented as part of Option A Phase 4:
 3. Clean-clone proof — a fresh clone of `gthgomez/Babel` at the release tag
    passes all validation without a parent workspace or sibling repo
 
-**First canonical release is gated on Option A Phase 4 acceptance:**
-GPCGuard (or equivalent first consumer) pins the release tag + commit SHA in
-its own private product repo and confirms it works.
+**First public tag (`v0.1.0` and later) may ship without a consumer pin.**
+Shipping a tag makes the tree pinable. **Canonical cutover complete** (Option A)
+still requires a real external consumer to pin the tag + commit SHA and confirm
+it works. That pin is deferred until a product has used Babel substantially.
 
 ## Security Releases
 
