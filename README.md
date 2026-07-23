@@ -1,67 +1,74 @@
 # Babel
 
-**Babel is a prompt operating system for software work: it chooses a small, explicit instruction stack for a task, shows you exactly what it selected, and gives you local tools to validate, inspect, and run that stack.**
+[![Release](https://img.shields.io/github/v/release/gthgomez/Babel?display_name=tag&sort=semver)](https://github.com/gthgomez/Babel/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/gthgomez/Babel/typecheck.yml?branch=main&label=Public%20Release%20Gate)](https://github.com/gthgomez/Babel/actions)
 
-This public repo includes:
+**Babel is a prompt operating system for software work.**  
+It chooses a small, explicit instruction stack for a task (behavioral rules, domain knowledge, skills, model adapters, and overlays), shows you exactly what it selected, and gives you local tools to validate, inspect, and run that stack.
 
-- the layered prompt library
-- the typed `v9` router contract
-- the catalog-driven resolver/compiler
-- a read-only MCP control-plane surface
-- public examples, golden previews, regression tests, and security/release gates
+| | |
+|---|---|
+| **Canonical source** | This repo — [`gthgomez/Babel`](https://github.com/gthgomez/Babel) |
+| **Current release** | [**v0.1.0**](https://github.com/gthgomez/Babel/releases/tag/v0.1.0) (pre-1.0; public API still stabilizing) |
+| **Primary product** | Catalog-driven stack selection + deterministic preview |
+| **Also included** | Typed `babel-cli` harness, read-only MCP surface, security/release gates |
 
-It also includes the larger CLI/runtime harness. That surface is real and typechecked in public CI, but model-backed execution can require local tooling, credentials, and workspace-specific policy. The canonical first validation path remains deterministic validation and preview.
+Day-to-day Babel development happens **here**. Consumer projects pin a **release tag + commit SHA**; they do not generate or overwrite this repository. See [ADR-0001](./docs/adr/ADR-0001-canonical-public-source.md) and [docs/guides/RELEASE.md](./docs/guides/RELEASE.md).
 
-## Canonical Repository
+## What this repository is
 
-This repository, [`gthgomez/Babel`](https://github.com/gthgomez/Babel), is the
-canonical public source for Babel. A clean clone contains the authoritative prompt
-library, runtime, documentation, and validation tooling.
+A clean clone is the full public product surface:
 
-Consumer projects use versioned Babel releases and may provide external,
-repo-local configuration. They do not generate or overwrite this repository. See
-[ADR-0001](./docs/adr/ADR-0001-canonical-public-source.md) for the source-authority
-decision and migration constraints.
+| Surface | Status |
+|---------|--------|
+| Layered prompt library (`00_`–`06_`, catalog) | Canonical |
+| Typed v9 router / catalog resolver | Canonical |
+| Deterministic stack + manifest preview | **Primary onboarding path** |
+| Public examples + golden previews | Supported |
+| Security gates (scrub, content policy, secret scan) | Required on every PR |
+| `babel-cli` typecheck + public validation | Supported in CI |
+| Read-only MCP control-plane inspection | Supported |
+| `babel run` / model-backed pipeline | Present (advanced; may need local credentials) |
 
-What is fully supported from this repo alone:
+**Preview and validation are the default product.**  
+The task-running CLI is real and typechecked, but it is the advanced lane—not the first success path.
 
-- catalog validation
-- deterministic stack selection preview
-- deterministic manifest preview from `prompt_catalog.yaml`
-- read-only MCP manifest/stack inspection
-- CLI typechecking and public release validation
-- secret scanning and public scrub gates
-- regression tests proving the public surfaces behave predictably
+## Current state (v0.1.0)
 
-What is present but not the primary onboarding path:
+As of the first public pre-1.0 release:
 
-- `babel-cli run`
-- manual bridge / pipeline harness commands
-- model-execution flows that depend on local model setup or credentials
+- **This repo is the sole canonical public source** for Babel prompts, CLI, docs, and validation tooling
+- A clean clone works without private workspace knowledge or a parent monorepo
+- **CI (Public Release Gate)** on every PR: `security` → `public-content-policy` → `linux-validation` (+ `windows-portability`)
+- **`main` is PR-only** with branch protection; `v*` tags are protected
+- Secret scanning and push protection are enabled
+- Optional local pre-commit hooks exist; **CI is authoritative** (see [CONTRIBUTING.md](./CONTRIBUTING.md))
+- Operator-only material, machine paths, and private dependency fingerprints are blocked by policy
+- Consumers should pin when ready:
 
-## Current State
+```json
+{
+  "babel": {
+    "tag": "v0.1.0",
+    "sha": "8184bbbbfa818001382fdeaf8e9d51ba8bf6003d"
+  }
+}
+```
 
-The canonical repository is designed to work without private workspace knowledge:
-
-- public docs, issue templates, and CI are maintained here
-- confidential repository fingerprints and operator-only material are prohibited
-- `package-lock.json` is retained for reproducible install, with local-path and unsafe-dependency checks
-- public CI runs typecheck and the required secret scan
-- changes land through reviewed branches and PRs in this repository
+Pre-1.0 note: breaking changes to the v9 orchestrator contract, agent output schemas, or catalog format may still occur before `1.0.0`.
 
 ## Vision
 
 Babel is meant to become the community prompt layer for reliable AI-assisted software work.
 
-The direction is:
+1. Make stack selection understandable **before** a model acts  
+2. Keep prompts modular, inspectable, and testable  
+3. Integrate tools through read-only control-plane surfaces first  
+4. Make task execution progressively safer with evidence and verification  
+5. Keep this public repo clean enough to fork, learn from, and build on  
 
-1. make stack selection understandable before a model acts
-2. keep prompts modular, inspectable, and testable
-3. let tools integrate through read-only control-plane surfaces first
-4. make task execution progressively safer with evidence, verification, and repo-local rules
-5. keep the public repo clean enough that anyone can fork it, learn from it, and build on it
-
-For the longer product direction, see [docs/VISION.md](./docs/VISION.md).
+Longer product direction: [docs/VISION.md](./docs/VISION.md).
 
 ## Choose Your Path
 
@@ -71,12 +78,6 @@ If you are new here, pick one lane:
 - **See what Babel would choose for a task:** run `pwsh -File .\tools\resolve-local-stack.ps1 ...`
 - **Inspect the control plane from another tool:** use `babel mcp` after building the CLI
 - **Run a real task through Babel:** use `babel doctor` first, then `babel run ...`
-
-Public rule of thumb:
-
-- preview and validation are the default product
-- the task-running CLI is real, but it is the advanced lane
-- MCP is an integration surface, not the everyday starting point
 
 ## Quick Start
 

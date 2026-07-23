@@ -5,8 +5,9 @@ status: ACTIVE
 last_verified: 2026-07-22
 -->
 
-**This is a policy stub — intent, not automation.** The first canonical release
-tag and automated release workflow are deferred to Option A Phase 4.
+**Policy intent, not full automation.** The first public pre-1.0 tag is
+[**v0.1.0**](https://github.com/gthgomez/Babel/releases/tag/v0.1.0). Automated
+release scripts remain optional future work; tagging is currently manual.
 
 ## Versioning
 
