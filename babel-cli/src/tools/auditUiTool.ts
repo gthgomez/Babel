@@ -9,7 +9,10 @@ import { isDryRunEnabled } from '../config/dryRun.js';
 /** example_web_audit project root - configure via EXAMPLE_WEB_AUDIT_ROOT env var. */
 const EXAMPLE_WEB_AUDIT_ROOT = process.env['EXAMPLE_WEB_AUDIT_ROOT'] ?? process.cwd();
 
-function buildSpawnInvocation(command: string, args: string[]): { command: string; args: string[] } {
+function buildSpawnInvocation(
+  command: string,
+  args: string[],
+): { command: string; args: string[] } {
   if (process.platform === 'win32') {
     return {
       command: 'cmd.exe',
@@ -72,10 +75,7 @@ export async function handleAuditUi(
   req: Extract<ToolCallRequest, { tool: 'audit_ui' }>,
 ): Promise<ToolResult> {
   if (isDryRunEnabled()) {
-    console.log(
-      `  [DRY RUN] audit_ui -> url=${req.url} run_id=${req.run_id}` +
-      ` (not executed)`,
-    );
+    console.log(`  [DRY RUN] audit_ui -> url=${req.url} run_id=${req.run_id}` + ` (not executed)`);
     return {
       exit_code: 0,
       stdout: `[DRY RUN] Would run example_web_audit orchestrator: url=${req.url} run_id=${req.run_id}`,
@@ -83,9 +83,7 @@ export async function handleAuditUi(
     };
   }
 
-  console.log(
-    `  [AUDIT_UI] audit_ui -> url="${req.url}" run_id="${req.run_id}"`,
-  );
+  console.log(`  [AUDIT_UI] audit_ui -> url="${req.url}" run_id="${req.run_id}"`);
 
   const validationError = validateAuditUiRequest(req);
   if (validationError) {
@@ -115,19 +113,17 @@ export async function handleAuditUi(
   return new Promise<ToolResult>((resolve) => {
     let stdoutBuf = '';
     let stderrBuf = '';
-    const invocation = buildSpawnInvocation(
-      'npx',
-      ['tsx', 'audit-frontend/tooling/orchestrator.ts', req.url, req.run_id],
-    );
+    const invocation = buildSpawnInvocation('npx', [
+      'tsx',
+      'audit-frontend/tooling/orchestrator.ts',
+      req.url,
+      req.run_id,
+    ]);
 
-    const child = spawn(
-      invocation.command,
-      invocation.args,
-      {
-        cwd: EXAMPLE_WEB_AUDIT_ROOT,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    );
+    const child = spawn(invocation.command, invocation.args, {
+      cwd: EXAMPLE_WEB_AUDIT_ROOT,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdoutBuf += chunk.toString('utf8');
@@ -140,8 +136,7 @@ export async function handleAuditUi(
       resolve({
         exit_code: 1,
         stdout: '',
-        stderr:
-          `[AUDIT_UI_SPAWN_ERROR] Failed to start orchestrator: ${err.message}`,
+        stderr: `[AUDIT_UI_SPAWN_ERROR] Failed to start orchestrator: ${err.message}`,
       });
     });
 

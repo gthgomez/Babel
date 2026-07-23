@@ -33,7 +33,7 @@ const TARGET_MARKERS = [
 ];
 
 function hasTargetMarker(dir: string): boolean {
-  return TARGET_MARKERS.some(marker => existsSync(join(dir, marker)));
+  return TARGET_MARKERS.some((marker) => existsSync(join(dir, marker)));
 }
 
 function parentOf(path: string): string {
@@ -75,7 +75,9 @@ export function resolveAgentTarget(options: ResolveAgentTargetOptions = {}): Age
     const targetRoot = resolve(options.projectRoot);
     const namedRoot = options.namedProjectRoot
       ? resolve(options.namedProjectRoot)
-      : options.project ? resolveProjectRoot(options.project) : null;
+      : options.project
+        ? resolveProjectRoot(options.project)
+        : null;
     return {
       targetRoot,
       workspaceRoot: namedRoot && isPathInside(namedRoot, targetRoot) ? namedRoot : null,
@@ -88,7 +90,9 @@ export function resolveAgentTarget(options: ResolveAgentTargetOptions = {}): Age
   const currentRoot = findNearestAgentTargetRoot(cwd);
   const namedRoot = options.namedProjectRoot
     ? resolve(options.namedProjectRoot)
-    : options.project ? resolveProjectRoot(options.project) : null;
+    : options.project
+      ? resolveProjectRoot(options.project)
+      : null;
   if (namedRoot) {
     if (isPathInside(namedRoot, currentRoot) && resolve(currentRoot) !== resolve(namedRoot)) {
       return {
@@ -122,9 +126,9 @@ export function resolveAgentTarget(options: ResolveAgentTargetOptions = {}): Age
 export function readShallowTargetListing(targetRoot: string, limit = 32): string[] {
   try {
     return readdirSync(targetRoot, { withFileTypes: true })
-      .filter(entry => !entry.name.startsWith('.git') && entry.name !== 'node_modules')
+      .filter((entry) => !entry.name.startsWith('.git') && entry.name !== 'node_modules')
       .slice(0, limit)
-      .map(entry => `${entry.isDirectory() ? '[dir]' : '[file]'} ${entry.name}`);
+      .map((entry) => `${entry.isDirectory() ? '[dir]' : '[file]'} ${entry.name}`);
   } catch {
     return [];
   }

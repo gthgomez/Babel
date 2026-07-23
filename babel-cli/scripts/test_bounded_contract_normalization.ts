@@ -12,7 +12,7 @@ function assert(condition: unknown, message: string): asserts condition {
 async function main(): Promise<void> {
   const task = [
     'Replace the placeholder file at',
-    'C:\\MockWorkspace\\Example-Mobile-Application\\app\\src\\main\\java\\com\\example\\app\\processing\\MissingFeature.kt',
+    'C:\\MockWorkspace\\App-test-Babel\\app\\src\\main\\java\\com\\example\\app\\processing\\MissingFeature.kt',
     'and keep MissingFeature.kt as a real Kotlin source file.',
   ].join(' ');
 
@@ -22,7 +22,7 @@ async function main(): Promise<void> {
   const normalizedTargets = normalizeRequestedFileTargetsForBoundedContract(task);
   assert(normalizedTargets.length === 1, 'expected bounded-contract normalization to collapse basename duplicates');
   assert(
-    normalizedTargets[0] === 'C:/MockWorkspace/Example-Mobile-Application/app/src/main/java/com/example/app/processing/MissingFeature.kt',
+    normalizedTargets[0] === 'C:/MockWorkspace/App-test-Babel/app/src/main/java/com/example/app/processing/MissingFeature.kt',
     'expected the canonical requested target to be the full file path',
   );
 

@@ -53,53 +53,59 @@ describe('Chronicle memory backends', () => {
     const projectRoot = path.join(tempRoot, 'project');
 
     try {
-      await withChronicleEnv({
-        BABEL_CHRONICLE_BACKEND: 'json',
-        BABEL_CHRONICLE_JSON_PATH: jsonPath,
-        BABEL_PROJECT_ROOT: projectRoot,
-        BABEL_LIVE: 'true',
-      }, async () => {
-        const storeResult = await handleMemoryStore({
-          tool: 'memory_store',
-          key: 'phase',
-          value: 'json backend active',
-        });
+      await withChronicleEnv(
+        {
+          BABEL_CHRONICLE_BACKEND: 'json',
+          BABEL_CHRONICLE_JSON_PATH: jsonPath,
+          BABEL_PROJECT_ROOT: projectRoot,
+          BABEL_LIVE: 'true',
+        },
+        async () => {
+          const storeResult = await handleMemoryStore({
+            tool: 'memory_store',
+            key: 'phase',
+            value: 'json backend active',
+          });
 
-        assert.equal(storeResult.exit_code, 0);
+          assert.equal(storeResult.exit_code, 0);
 
-        const queryResult = await handleMemoryQuery({
-          tool: 'memory_query',
-          key: 'phase',
-        });
+          const queryResult = await handleMemoryQuery({
+            tool: 'memory_query',
+            key: 'phase',
+          });
 
-        assert.equal(queryResult.exit_code, 0);
-        assert.equal(queryResult.stdout, 'json backend active');
+          assert.equal(queryResult.exit_code, 0);
+          assert.equal(queryResult.stdout, 'json backend active');
 
-        const allResult = await handleMemoryQuery({
-          tool: 'memory_query',
-          key: 'ALL',
-        });
-        const rows = JSON.parse(allResult.stdout) as Array<Record<string, unknown>>;
-        assert.equal(rows.length, 1);
-        assert.equal(rows[0]?.['fact_key'], 'phase');
-        assert.equal(rows[0]?.['fact_value'], 'json backend active');
-      });
+          const allResult = await handleMemoryQuery({
+            tool: 'memory_query',
+            key: 'ALL',
+          });
+          const rows = JSON.parse(allResult.stdout) as Array<Record<string, unknown>>;
+          assert.equal(rows.length, 1);
+          assert.equal(rows[0]?.['fact_key'], 'phase');
+          assert.equal(rows[0]?.['fact_value'], 'json backend active');
+        },
+      );
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 
   it('returns a Chronicle error for invalid backend configuration', async () => {
-    await withChronicleEnv({
-      BABEL_CHRONICLE_BACKEND: 'bogus',
-    }, async () => {
-      const result = await handleMemoryQuery({
-        tool: 'memory_query',
-        key: 'ALL',
-      });
+    await withChronicleEnv(
+      {
+        BABEL_CHRONICLE_BACKEND: 'bogus',
+      },
+      async () => {
+        const result = await handleMemoryQuery({
+          tool: 'memory_query',
+          key: 'ALL',
+        });
 
-      assert.equal(result.exit_code, 1);
-      assert.match(result.stderr, /Invalid BABEL_CHRONICLE_BACKEND/);
-    });
+        assert.equal(result.exit_code, 1);
+        assert.match(result.stderr, /Invalid BABEL_CHRONICLE_BACKEND/);
+      },
+    );
   });
 });

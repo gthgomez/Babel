@@ -11,10 +11,7 @@ import {
   resolveInstructionStackManifest,
 } from './compiler.js';
 
-function withCompilerEnv<T>(
-  cachePath: string,
-  run: () => Promise<T>,
-): Promise<T> {
+function withCompilerEnv<T>(cachePath: string, run: () => Promise<T>): Promise<T> {
   const previous = process.env['BABEL_CONTEXT_CACHE_PATH'];
   process.env['BABEL_CONTEXT_CACHE_PATH'] = cachePath;
   clearCompilerCacheForTests();

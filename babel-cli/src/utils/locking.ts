@@ -50,7 +50,7 @@ export function acquireLock(
   agentId: string,
   runId: string,
   reason: string,
-  ttlSec: number = 300
+  ttlSec: number = 300,
 ): { success: boolean; message: string } {
   const lockDir = join(babelRoot, '.babel', 'locks');
   if (!existsSync(lockDir)) {
@@ -62,11 +62,11 @@ export function acquireLock(
 
   if (existing && isLockActive(existing)) {
     if (existing.run_id === runId && existing.agent_id === agentId) {
-       // Extend lease
+      // Extend lease
     } else {
-      return { 
-        success: false, 
-        message: `Resource is already locked by ${existing.agent_id} (Run: ${existing.run_id}) until ${existing.expires_at}.` 
+      return {
+        success: false,
+        message: `Resource is already locked by ${existing.agent_id} (Run: ${existing.run_id}) until ${existing.expires_at}.`,
       };
     }
   }
@@ -77,42 +77,74 @@ export function acquireLock(
     acquired_at: new Date().toISOString(),
     expires_at: new Date(Date.now() + ttlSec * 1000).toISOString(),
     scope: 'file',
-    reason
+    reason,
   };
 
-  if (existing && isLockActive(existing) && existing.run_id === runId && existing.agent_id === agentId) {
+  if (
+    existing &&
+    isLockActive(existing) &&
+    existing.run_id === runId &&
+    existing.agent_id === agentId
+  ) {
     writeFileSync(lockPath, JSON.stringify(lock, null, 2), 'utf8');
-    return { success: true, message: `Lock extended for ${targetPath}. Expires at ${lock.expires_at}.` };
+    return {
+      success: true,
+      message: `Lock extended for ${targetPath}. Expires at ${lock.expires_at}.`,
+    };
   }
 
+  // Phase 2d: Atomic compare-and-swap lock acquisition.
+  // Previous code had a TOCTOU race: rmSync(old_lock) then writeFileSync(new_lock)
+  // allowed another process to acquire the lock between removal and creation.
+  // Now: try 'wx' first. Only clean up an expired lock when 'wx' fails with EEXIST,
+  // then immediately retry 'wx'. This minimizes the race window to a tight loop.
+  if (tryCreateLockFile(lockPath, lock)) {
+    return {
+      success: true,
+      message: `Lock acquired for ${targetPath}. Expires at ${lock.expires_at}.`,
+    };
+  }
+
+  // 'wx' failed — check if the existing lock is expired
   if (existing && !isLockActive(existing)) {
     rmSync(lockPath, { force: true });
-  }
-
-  if (!tryCreateLockFile(lockPath, lock)) {
-    const winner = readLock(lockPath);
-    if (winner && isLockActive(winner)) {
+    // Retry immediately after cleanup
+    if (tryCreateLockFile(lockPath, lock)) {
       return {
-        success: false,
-        message: `Resource is already locked by ${winner.agent_id} (Run: ${winner.run_id}) until ${winner.expires_at}.`
+        success: true,
+        message: `Lock acquired for ${targetPath} (replaced expired lock). Expires at ${lock.expires_at}.`,
       };
     }
-    return { success: false, message: "Race condition detected: Lock acquisition lost to another writer." };
   }
 
-  return { success: true, message: `Lock acquired for ${targetPath}. Expires at ${lock.expires_at}.` };
+  // Could not acquire — report the current lock holder
+  const winner = readLock(lockPath);
+  if (winner && isLockActive(winner)) {
+    return {
+      success: false,
+      message: `Resource is already locked by ${winner.agent_id} (Run: ${winner.run_id}) until ${winner.expires_at}.`,
+    };
+  }
+  return { success: false, message: 'Lock acquisition failed: unable to create lock file.' };
 }
 
-export function releaseLock(targetPath: string, babelRoot: string, runId: string): { success: boolean; message: string } {
+export function releaseLock(
+  targetPath: string,
+  babelRoot: string,
+  runId: string,
+): { success: boolean; message: string } {
   const lockPath = getWorkspaceLockPath(targetPath, babelRoot);
   const existing = readLock(lockPath);
 
   if (!existing) {
-    return { success: true, message: "No lock existed for this path." };
+    return { success: true, message: 'No lock existed for this path.' };
   }
 
   if (existing.run_id !== runId) {
-    return { success: false, message: `Refusing to release lock owned by Run: ${existing.run_id}.` };
+    return {
+      success: false,
+      message: `Refusing to release lock owned by Run: ${existing.run_id}.`,
+    };
   }
 
   rmSync(lockPath, { force: true });

@@ -31,18 +31,17 @@ const SCENARIOS: Scenario[] = [
     taskCategory: 'Backend',
     domainId: 'domain_swe_backend',
     expectedSelectedIds: [
-      'behavioral_core_v10',
-      'behavioral_cognitive_micro_v7',
-      'behavioral_guard_v7',
+      'behavioral_core_v11',
       'domain_swe_backend',
-      'skill_ts_zod',
       'skill_supabase_pg',
+      'skill_ts_zod',
       'skill_evidence_gathering',
       'skill_bcdp_contracts',
       'adapter_codex_balanced',
       'pipeline_qa_reviewer',
+      'pipeline_cli_executor',
     ],
-    expectedTokenBudgetTotal: 3225,
+    expectedTokenBudgetTotal: 3090,
     expectedBudgetWarningSeverity: 'severe',
   },
   {
@@ -51,16 +50,15 @@ const SCENARIOS: Scenario[] = [
     taskCategory: 'Frontend',
     domainId: 'domain_swe_frontend',
     expectedSelectedIds: [
-      'behavioral_core_v10',
-      'behavioral_cognitive_micro_v7',
-      'behavioral_guard_v7',
+      'behavioral_core_v11',
       'domain_swe_frontend',
       'skill_evidence_gathering',
       'skill_bcdp_contracts',
       'adapter_codex_balanced',
       'pipeline_qa_reviewer',
+      'pipeline_cli_executor',
     ],
-    expectedTokenBudgetTotal: 2575,
+    expectedTokenBudgetTotal: 2440,
     expectedBudgetWarningSeverity: 'severe',
   },
 ];
@@ -160,7 +158,7 @@ function buildOrchestratorManifest(lane) {
       task_category: isFrontend ? 'Frontend' : 'Backend',
       secondary_category: null,
       complexity_estimate: 'Medium',
-      pipeline_mode: 'verified',
+      pipeline_mode: 'deep',
       ambiguity_note: null,
     },
     platform_profile: {
@@ -185,7 +183,7 @@ function buildOrchestratorManifest(lane) {
     },
     compilation_state: 'uncompiled',
     instruction_stack: {
-      behavioral_ids: ['behavioral_core_v10', 'behavioral_cognitive_micro_v7', 'behavioral_guard_v7'],
+      behavioral_ids: ['behavioral_core_v11'],
       domain_id: isFrontend ? 'domain_swe_frontend' : 'domain_swe_backend',
       skill_ids: [],
       model_adapter_id: 'adapter_codex_balanced',
@@ -620,7 +618,7 @@ function assertScenarioArtifacts(
   if (!isDirectDeepSeekLiveGovernance() || writtenTraceContext.enabled === true) {
     assert(typeof writtenTraceContext.trace_id === 'string' && writtenTraceContext.trace_id.length > 0, `${scenario.name}: expected trace_id`);
     assert(typeof writtenTraceContext.root_span_id === 'string' && writtenTraceContext.root_span_id.length > 0, `${scenario.name}: expected root_span_id`);
-    assert(writtenTraceContext.baggage?.['babel.lane.id'] === '9.0:verified', `${scenario.name}: expected babel.lane.id baggage to match verified v9 lane`);
+    assert(writtenTraceContext.baggage?.['babel.lane.id'] === '9.0:deep', `${scenario.name}: expected babel.lane.id baggage to match deep v9 lane`);
   }
   if (isDirectDeepSeekLiveGovernance()) {
     assert(
@@ -637,6 +635,7 @@ function buildPrecomputedManifest(scenario: Scenario) {
   return {
     orchestrator_version: '9.0',
     target_project: 'global',
+    target_project_path: process.cwd(),
     analysis: {
       task_summary: isFrontend
         ? 'Pipeline regression: typed v9 frontend verified lane.'
@@ -645,7 +644,7 @@ function buildPrecomputedManifest(scenario: Scenario) {
       secondary_category: null,
       task_overlay_ids: [],
       complexity_estimate: 'Medium',
-      pipeline_mode: 'verified',
+      pipeline_mode: 'deep',
       purpose_mode: 'execution',
       purpose_source: 'fallback_default',
       purpose_confidence: 0.7,
@@ -674,7 +673,7 @@ function buildPrecomputedManifest(scenario: Scenario) {
     },
     compilation_state: 'uncompiled',
     instruction_stack: {
-      behavioral_ids: ['behavioral_core_v10', 'behavioral_cognitive_micro_v7', 'behavioral_guard_v7'],
+      behavioral_ids: ['behavioral_core_v11'],
       domain_id: scenario.domainId,
       skill_ids: [],
       model_adapter_id: 'adapter_codex_balanced',
@@ -699,6 +698,7 @@ function buildPrecomputedManifest(scenario: Scenario) {
 }
 
 async function runOfflineRegression(): Promise<void> {
+  const tempRunsDir = mkdtempSync(join(tmpdir(), 'babel-pipeline-v9-runs-'));
   try {
     await withPatchedEnv(
       {
@@ -716,7 +716,7 @@ async function runOfflineRegression(): Promise<void> {
         const { _runBabelPipelineInternal } = await import('../src/pipeline.js');
         const { EvidenceBundle } = await import('../src/evidence.js');
         const { OrchestratorManifestSchema } = await import('../src/schemas/agentContracts.js');
-        const runsRoot = join(packageRoot, '..', 'runs');
+        const runsRoot = tempRunsDir;
 
         for (const scenario of SCENARIOS) {
           const evidence = new EvidenceBundle(scenario.task, runsRoot);
@@ -724,7 +724,7 @@ async function runOfflineRegression(): Promise<void> {
             scenario.task,
             {
               orchestratorVersion: 'v9',
-              mode: 'verified',
+              mode: 'deep',
             },
             evidence,
             OrchestratorManifestSchema.parse(buildPrecomputedManifest(scenario)),
@@ -737,6 +737,9 @@ async function runOfflineRegression(): Promise<void> {
     console.log('[test:pipeline-v9] offline regression passed');
   } finally {
     await resetTelemetryForTests();
+    try {
+      rmSync(tempRunsDir, { recursive: true, force: true });
+    } catch {}
   }
 }
 
@@ -772,7 +775,7 @@ async function runLiveRegression(): Promise<void> {
       for (const scenario of SCENARIOS) {
         const result = await runBabelPipeline(scenario.task, {
           orchestratorVersion: 'v9',
-          mode: 'verified',
+          mode: 'deep',
         });
         assertScenarioArtifacts(scenario, result);
       }

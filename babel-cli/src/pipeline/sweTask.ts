@@ -6,7 +6,7 @@ import {
   buildExecutionProfilePromptLines,
   type ExecutionProfileName,
 } from '../config/executionProfiles.js';
-import { shouldUseBenchmarkContainerExecution } from '../config/benchmarkContainer.js';
+import { shouldUseDockerSandbox } from '../config/benchmarkContainer.js';
 import { buildToolCapabilityPromptLines } from '../config/toolCapabilities.js';
 import { getAllowedShellCommands } from '../sandbox.js';
 import type { OrchestratorManifest } from '../schemas/agentContracts.js';
@@ -16,12 +16,10 @@ import {
   detectJavaRuntimeStatus,
   type CommandRuntimeStatus,
 } from '../stages/runtimePreflight.js';
-import {
-  getBoundedTaskPlanningLines,
-  mergeTaskContext,
-} from '../stages/taskShape.js';
+import { getBoundedTaskPlanningLines, mergeTaskContext } from '../stages/taskShape.js';
 import { buildBenchmarkVerificationPromptLines } from '../stages/benchmarkVerification.js';
 import { EXECUTOR_TOOL_NAMES } from '../tools/toolContracts.js';
+import { getDiscoverySummary } from './prePlanningDiscovery.js';
 import {
   getBenchmarkRuntimeInventoryLines,
   shouldApplyHostWindowsExecutorNotes,
@@ -45,8 +43,7 @@ function getBenchmarkHarnessPlanningLines(rawTask: string): string[] {
 
 function getManyFileAggregationPlanningLines(rawTask: string): string[] {
   const manyFileAggregationTask =
-    /\b(all|multiple|every)\s+(?:log\s+)?files\b/i.test(rawTask) ||
-    /\ball\s+logs\b/i.test(rawTask);
+    /\b(all|multiple|every)\s+(?:log\s+)?files\b/i.test(rawTask) || /\ball\s+logs\b/i.test(rawTask);
   const aggregationOutputTask =
     /\b(count|aggregate|summari[sz]e|analy[sz]e)\b/i.test(rawTask) &&
     /\b(csv|json|summary|report)\b/i.test(rawTask);
@@ -72,16 +69,10 @@ export function buildSweTask(
   groundingContext: string = '',
   executionProfileName: ExecutionProfileName = DEFAULT_EXECUTION_PROFILE,
 ): string {
-  const userRequest = mergeTaskContext(
-    originalTaskContext,
-    manifest.handoff_payload.user_request,
-  );
+  const userRequest = mergeTaskContext(originalTaskContext, manifest.handoff_payload.user_request);
   const allowedShellCommands = getAllowedShellCommands(executionProfileName);
   const executionProfileLines = buildExecutionProfilePromptLines(executionProfileName, 'swe');
-  const benchmarkShellSyntaxAllowed = shouldUseBenchmarkContainerExecution(
-    executionProfileName,
-    process.env['BABEL_BENCHMARK_DOCKER_IMAGE'],
-  );
+  const benchmarkShellSyntaxAllowed = shouldUseDockerSandbox(executionProfileName);
   const projectRoot = inferProjectRoot(manifest);
   const boundedPlanningLines = getBoundedTaskPlanningLines(userRequest);
   const benchmarkHarnessPlanningLines = getBenchmarkHarnessPlanningLines(userRequest);
@@ -89,6 +80,9 @@ export function buildSweTask(
   const benchmarkRuntimeInventoryLines = getBenchmarkRuntimeInventoryLines(executionProfileName);
   const toolCapabilityLines = buildToolCapabilityPromptLines(executionProfileName);
   const benchmarkVerificationLines = buildBenchmarkVerificationPromptLines(userRequest);
+  // Pre-planning discovery: scan the project root for files and config so the
+  // planner can use real paths instead of guessing from task text alone.
+  const discoveryContext = projectRoot ? getDiscoverySummary(projectRoot) : null;
   const projectRootLines: string[] = [];
   const wrapperBootstrapLines: string[] = [];
   const runtimePreflightLines: string[] = [];
@@ -96,9 +90,16 @@ export function buildSweTask(
   const javaRuntimeStatus = detectJavaRuntimeStatus();
   const gradleRuntimeStatus = detectCommandOnPath('gradle');
   const androidSdkStatus = detectAndroidSdkStatus();
-  const wingetRuntimeStatus = process.platform === 'win32'
-    ? detectCommandOnPath('winget')
-    : { available: false, source: 'missing', summary: 'winget is unavailable on non-Windows platforms.', command: 'winget', resolvedPath: null } satisfies CommandRuntimeStatus;
+  const wingetRuntimeStatus =
+    process.platform === 'win32'
+      ? detectCommandOnPath('winget')
+      : ({
+          available: false,
+          source: 'missing',
+          summary: 'winget is unavailable on non-Windows platforms.',
+          command: 'winget',
+          resolvedPath: null,
+        } satisfies CommandRuntimeStatus);
 
   const thinkingRequirement = `
 ### IMPORTANT: INTERNAL MONOLOGUE (THINKING LAYER)
@@ -137,7 +138,12 @@ Your JSON output MUST include a "thinking" field. Use this field to:
         );
       }
 
-      const wrapperPropertiesPath = join(projectRoot, 'gradle', 'wrapper', 'gradle-wrapper.properties');
+      const wrapperPropertiesPath = join(
+        projectRoot,
+        'gradle',
+        'wrapper',
+        'gradle-wrapper.properties',
+      );
       const wrapperJarPath = join(projectRoot, 'gradle', 'wrapper', 'gradle-wrapper.jar');
       const gradlewPath = join(projectRoot, 'gradlew');
       const gradlewBatPath = join(projectRoot, 'gradlew.bat');
@@ -149,13 +155,13 @@ Your JSON output MUST include a "thinking" field. Use this field to:
       const appBuildGradlePath = join(projectRoot, 'app', 'build.gradle.kts');
       const rootBuildGradleExists = existsSync(rootBuildGradlePath);
       const appBuildGradleExists = existsSync(appBuildGradlePath);
-      const referenceSourceRoot = join(projectRoot, 'reference-source');
-      const referenceSourceExists = existsSync(referenceSourceRoot);
-      const referenceSourceLooksLikePython = referenceSourceExists && (
-        existsSync(join(referenceSourceRoot, 'pyproject.toml')) ||
-        existsSync(join(referenceSourceRoot, 'requirements.txt')) ||
-        existsSync(join(referenceSourceRoot, 'reference_source'))
-      );
+      const referenceMonteCarloRoot = join(projectRoot, 'reference-montecarlo-ledger');
+      const referenceMonteCarloExists = existsSync(referenceMonteCarloRoot);
+      const referenceMonteCarloLooksLikePython =
+        referenceMonteCarloExists &&
+        (existsSync(join(referenceMonteCarloRoot, 'pyproject.toml')) ||
+          existsSync(join(referenceMonteCarloRoot, 'requirements.txt')) ||
+          existsSync(join(referenceMonteCarloRoot, 'monte_carlo_ledger')));
 
       projectRootLines.push(
         `Gradle wrapper state: properties=${wrapperPropertiesExists ? 'present' : 'missing'}, jar=${wrapperJarExists ? 'present' : 'missing'}, gradlew=${gradlewExists ? 'present' : 'missing'}, gradlew.bat=${gradlewBatExists ? 'present' : 'missing'}`,
@@ -167,13 +173,16 @@ Your JSON output MUST include a "thinking" field. Use this field to:
       runtimePreflightLines.push(`Executor Gradle runtime: ${gradleRuntimeStatus.summary}`);
       runtimePreflightLines.push(`Executor Android SDK runtime: ${androidSdkStatus.summary}`);
       runtimePreflightLines.push(`Executor winget runtime: ${wingetRuntimeStatus.summary}`);
-      if (referenceSourceLooksLikePython) {
+      if (referenceMonteCarloLooksLikePython) {
         runtimePreflightLines.push(
-          'Reference source shape: reference-source is a non-Android Python repo (pyproject/requirements/reference_source present). Do NOT assume Android package paths or Gradle files inside the reference source. Read the actual Python files under reference-source/README.md, pyproject.toml, reference_source/*.py, and docs/** first.',
+          'Reference source shape: reference-montecarlo-ledger is a non-Android Python repo (pyproject/requirements/monte_carlo_ledger present). Do NOT assume Android package paths or Gradle files inside the reference source. Read the actual Python files under reference-montecarlo-ledger/README.md, pyproject.toml, monte_carlo_ledger/*.py, and docs/** first.',
         );
       }
 
-      if (!androidSourceOnlyWorkspace && (!gradlewExists || !gradlewBatExists || !wrapperPropertiesExists)) {
+      if (
+        !androidSourceOnlyWorkspace &&
+        (!gradlewExists || !gradlewBatExists || !wrapperPropertiesExists)
+      ) {
         wrapperBootstrapLines.push(
           'Wrapper bootstrap mode is ACTIVE.',
           'If gradle/wrapper/gradle-wrapper.properties exists in the target root, treat that target file as the source of truth and create missing gradlew / gradlew.bat directly with file_write.',
@@ -213,7 +222,12 @@ Your JSON output MUST include a "thinking" field. Use this field to:
         );
       }
 
-      if (!androidSourceOnlyWorkspace && !gradleRuntimeStatus.available && wrapperJarExists && (gradlewExists || gradlewBatExists)) {
+      if (
+        !androidSourceOnlyWorkspace &&
+        !gradleRuntimeStatus.available &&
+        wrapperJarExists &&
+        (gradlewExists || gradlewBatExists)
+      ) {
         deterministicLaneLines.push(
           'Existing Gradle wrapper mode is ACTIVE for this task.',
           'The target project already has gradlew / gradlew.bat and gradle-wrapper.jar, while global gradle is missing from PATH.',
@@ -264,24 +278,63 @@ Your JSON output MUST include a "thinking" field. Use this field to:
     '}',
     '',
     `Task: ${userRequest}`,
-    ...(boundedPlanningLines.length > 0
-      ? [
-          '',
-          ...boundedPlanningLines,
-        ]
-      : []),
-    ...(projectRootLines.length > 0
-      ? [
-          '',
-          'Target project context:',
-          ...projectRootLines,
-        ]
-      : []),
+    ...(boundedPlanningLines.length > 0 ? ['', ...boundedPlanningLines] : []),
+    ...(projectRootLines.length > 0 ? ['', 'Target project context:', ...projectRootLines] : []),
+    ...(discoveryContext ? [discoveryContext] : []),
     '',
     'Execution profile guidance:',
-    ...executionProfileLines.map(line => `  - ${line}`),
+    ...executionProfileLines.map((line) => `  - ${line}`),
     '',
     'Planning rules for executable steps:',
+    '',
+    '  --- VERIFICATION RULE (NON-NEGOTIABLE — plans are BLOCKED without this) ---',
+    '  This is the #1 reason plans are rejected by the executor safety gate.',
+    '  Every IMPLEMENTATION_PLAN with file_write steps MUST include at least one',
+    '  verification command in a test_run or shell_exec step.',
+    '  The verification step MUST appear BEFORE any file_write step in the action set.',
+    '',
+    '  HOW TO PICK A VERIFICATION COMMAND:',
+    '  1. If the task text names a verifier command (e.g. "Run npm test before completing"),',
+    '     use that exact command verbatim as a test_run step.',
+    '  2. If the project has a package.json with a "test" script, use test_run: npm test.',
+    '  3. If the project has a package.json with a "typecheck" script, add test_run: npm run typecheck.',
+    '  4. For text-file tasks (create/update .txt, .md, .js, .ts, .py files), add:',
+    '     shell_exec: type "<filepath>" (Windows) or shell_exec: cat "<filepath>" (Linux/Mac)',
+    '     for every file the plan will write — do this BEFORE the file_write step.',
+    '  5. For code fixes without a test command, use: shell_exec: node --test (if .test.js files exist)',
+    '     or shell_exec: npx tsc --noEmit (if .ts files exist).',
+    '',
+    '  CONCRETE EXAMPLES of valid plans:',
+    '    Task: "Create hello.txt containing the string world."',
+    '      Step 1: shell_exec  target: type "hello.txt"      ← verifier BEFORE write',
+    '      Step 2: file_write  target: hello.txt              ← write after verification',
+    '',
+    '    Task: "Create exact-status.txt containing the exact string autonomous exact ok."',
+    '      Step 1: shell_exec  target: type "exact-status.txt"  ← verifier step',
+    '      Step 2: file_write  target: exact-status.txt',
+    '',
+    '    Task: "Fix src/math.js. Run npm test before completing."',
+    '      Step 1: file_read   target: src/math.js',
+    '      Step 2: test_run    target: npm test              ← verifier from task text',
+    '      Step 3: file_write  target: src/math.js',
+    '',
+    '    Task: "Create a new TypeScript file src/answer.ts with export const answer = 42."',
+    '      Step 1: shell_exec  target: npx tsc --noEmit     ← verifier BEFORE write',
+    '      Step 2: file_write  target: src/answer.ts',
+    '',
+    '  NEGATIVE EXAMPLES — these plans WILL be rejected:',
+    '    WRONG: Step 1: file_write target: hello.txt  (no verification before write!)',
+    '    WRONG: Step 1: shell_exec target: dir         (dir is not a verifier for file content)',
+    '    WRONG: Step 1: file_write target: hello.txt, Step 2: file_read target: hello.txt',
+    '           (verification AFTER write does not count — must be BEFORE)',
+    '',
+    '  If you are unsure which verifier to use, include a test_run: npm test step.',
+    '  If you cannot determine ANY verifier, set plan_type to EVIDENCE_REQUEST instead.',
+    '  Do NOT skip this rule even for trivial single-file tasks.',
+    '  Plans without a verification step will be REJECTED by the executor safety gate.',
+    '  If your plan is rejected, you will be asked to replan — save time by getting it right the first time.',
+    '',
+    '  --- TOOL USAGE RULES ---',
     '  - Use "directory_list" to inspect folders. Do NOT use "file_read" on a directory path.',
     '  - Use "file_read" only for actual files whose contents need inspection.',
     '  - Every file_read target must be a concrete file path. Never use placeholder targets like <path-to-main-source-file>.',
@@ -300,10 +353,10 @@ Your JSON output MUST include a "thinking" field. Use this field to:
     '  - file_write creates missing parent directories automatically. Do NOT add mkdir or mkdir -p steps just to prepare for a later file_write.',
     '  - Prefer file_write over shell-based bulk transforms. Do NOT create or run wrapper scripts to rewrite many files.',
     ...(benchmarkHarnessPlanningLines.length > 0
-      ? benchmarkHarnessPlanningLines.map(line => `  - ${line}`)
+      ? benchmarkHarnessPlanningLines.map((line) => `  - ${line}`)
       : []),
     ...(manyFileAggregationPlanningLines.length > 0
-      ? manyFileAggregationPlanningLines.map(line => `  - ${line}`)
+      ? manyFileAggregationPlanningLines.map((line) => `  - ${line}`)
       : []),
     '  - If the target root already contains a partial project, continue by editing that existing tree in place.',
     '  - Do NOT create a second nested application root inside the target root unless the user explicitly asked for that.',
@@ -318,24 +371,22 @@ Your JSON output MUST include a "thinking" field. Use this field to:
     '  - Do not use the mirrored reference repo as a source of truth for wrapper files unless those exact wrapper files actually exist there.',
     '  - Treat runtime prerequisites as part of the executable plan. Do not assume Java, JAVA_HOME, SDKs, or build tools exist unless the target context confirms that they do.',
     ...(javaRuntimeStatus.available
-      ? [
-          `  - Current Java preflight: ${javaRuntimeStatus.summary}.`,
-        ]
+      ? [`  - Current Java preflight: ${javaRuntimeStatus.summary}.`]
       : [
           '  - Current Java preflight: Java is missing in the executor environment.',
           '  - If you plan any gradle/gradlew verification or build step, add an explicit Java bootstrap/configuration step BEFORE the first Gradle command.',
           '  - That bootstrap step must install or configure a JDK / JAVA_HOME, not just assume java exists.',
         ]),
     ...(gradleRuntimeStatus.available
-      ? [
-          `  - Current Gradle preflight: ${gradleRuntimeStatus.summary}.`,
-        ]
+      ? [`  - Current Gradle preflight: ${gradleRuntimeStatus.summary}.`]
       : [
           '  - Current Gradle preflight: global gradle is missing from PATH.',
           '  - If gradle-wrapper.jar is missing, do NOT plan a `gradle wrapper` step unless the plan first installs/configures Gradle or uses another explicit bootstrap path.',
           '  - When global gradle is absent and gradle-wrapper.jar is missing, the first global-Gradle-related step must be a provisioning step, not `gradle --version` and not a mirrored Gradle file read.',
           ...(wingetRuntimeStatus.available
-            ? ['  - A valid recovery path is to install Gradle explicitly with winget before invoking `gradle wrapper`, because winget is available in this executor environment.']
+            ? [
+                '  - A valid recovery path is to install Gradle explicitly with winget before invoking `gradle wrapper`, because winget is available in this executor environment.',
+              ]
             : []),
         ]),
     ...(isAndroidSourceOnlyWorkspace(projectRoot)
@@ -344,19 +395,19 @@ Your JSON output MUST include a "thinking" field. Use this field to:
         ]
       : androidSdkStatus.available
         ? [
-          `  - Current Android SDK preflight: ${androidSdkStatus.summary}.`,
-          '  - For Android build verification, prefer relying on the deterministic executor Android SDK lane rather than planning manual SDK discovery steps.',
-          '  - If local.properties is missing, do NOT plan a file_read against it; the executor SDK lane can create or repair it directly.',
-          '  - Autonomous Android port verification must include both `gradlew assembleDebug` and `gradlew test` before completion.',
-          '  - Treat `gradlew assembleDebug` as the compile gate and `gradlew test` as the deeper correctness gate; do not stop after a green compile alone.',
-          '  - Do not add `gradlew clean` to routine verification unless the task explicitly asks for a clean build or the prompt says the build artifacts are stale.',
-          '  - For Android UI-improvement tasks, make verification-first planning the default: place `gradlew assembleDebug` and `gradlew test` in the first two executable steps, then inspect and edit the smallest UI surface needed.',
-        ]
+            `  - Current Android SDK preflight: ${androidSdkStatus.summary}.`,
+            '  - For Android build verification, prefer relying on the deterministic executor Android SDK lane rather than planning manual SDK discovery steps.',
+            '  - If local.properties is missing, do NOT plan a file_read against it; the executor SDK lane can create or repair it directly.',
+            '  - Autonomous Android port verification must include both `gradlew assembleDebug` and `gradlew test` before completion.',
+            '  - Treat `gradlew assembleDebug` as the compile gate and `gradlew test` as the deeper correctness gate; do not stop after a green compile alone.',
+            '  - Do not add `gradlew clean` to routine verification unless the task explicitly asks for a clean build or the prompt says the build artifacts are stale.',
+            '  - For Android UI-improvement tasks, make verification-first planning the default: place `gradlew assembleDebug` and `gradlew test` in the first two executable steps, then inspect and edit the smallest UI surface needed.',
+          ]
         : [
-          '  - Current Android SDK preflight: no usable Android SDK has been discovered yet.',
-          '  - If you plan Android build verification steps like `gradlew assembleDebug`, the plan must either provision/configure the Android SDK first or explicitly rely on an executor bootstrap lane when one is active.',
-          '  - Do NOT treat missing local.properties as an existing file that must be read first; if needed, create it directly with file_write.',
-        ]),
+            '  - Current Android SDK preflight: no usable Android SDK has been discovered yet.',
+            '  - If you plan Android build verification steps like `gradlew assembleDebug`, the plan must either provision/configure the Android SDK first or explicitly rely on an executor bootstrap lane when one is active.',
+            '  - Do NOT treat missing local.properties as an existing file that must be read first; if needed, create it directly with file_write.',
+          ]),
     ...(shouldApplyHostWindowsExecutorNotes(executionProfileName)
       ? [
           '  - Windows executor note: do NOT plan POSIX-only commands such as chmod, sh, or bash.',
@@ -364,44 +415,18 @@ Your JSON output MUST include a "thinking" field. Use this field to:
         ]
       : []),
     ...(wrapperBootstrapLines.length > 0
-      ? [
-          '',
-          'Wrapper bootstrap context:',
-          ...wrapperBootstrapLines,
-        ]
+      ? ['', 'Wrapper bootstrap context:', ...wrapperBootstrapLines]
       : []),
     ...(runtimePreflightLines.length > 0
-      ? [
-          '',
-          'Runtime preflight context:',
-          ...runtimePreflightLines,
-        ]
+      ? ['', 'Runtime preflight context:', ...runtimePreflightLines]
       : []),
     ...(benchmarkRuntimeInventoryLines.length > 0
-      ? [
-          '',
-          'Benchmark container runtime inventory:',
-          ...benchmarkRuntimeInventoryLines,
-        ]
+      ? ['', 'Benchmark container runtime inventory:', ...benchmarkRuntimeInventoryLines]
       : []),
-    ...(toolCapabilityLines.length > 0
-      ? [
-          '',
-          ...toolCapabilityLines,
-        ]
-      : []),
-    ...(benchmarkVerificationLines.length > 0
-      ? [
-          '',
-          ...benchmarkVerificationLines,
-        ]
-      : []),
+    ...(toolCapabilityLines.length > 0 ? ['', ...toolCapabilityLines] : []),
+    ...(benchmarkVerificationLines.length > 0 ? ['', ...benchmarkVerificationLines] : []),
     ...(deterministicLaneLines.length > 0
-      ? [
-          '',
-          'Deterministic bootstrap context:',
-          ...deterministicLaneLines,
-        ]
+      ? ['', 'Deterministic bootstrap context:', ...deterministicLaneLines]
       : []),
   ];
 
@@ -426,10 +451,7 @@ Your JSON output MUST include a "thinking" field. Use this field to:
       );
     }
 
-    lines.push(
-      '',
-      'Produce a corrected plan that eliminates every listed failure.',
-    );
+    lines.push('', 'Produce a corrected plan that eliminates every listed failure.');
   }
 
   if (evidenceContext) {
@@ -439,6 +461,10 @@ Your JSON output MUST include a "thinking" field. Use this field to:
       'The following context was collected by prior read-only evidence passes.',
       'Use it to produce a concrete implementation plan.',
       'Set "plan_type" to "IMPLEMENTATION_PLAN".',
+      'Every IMPLEMENTATION_PLAN must include at least one post-edit verification step using shell_exec or test_run before any file_write step.',
+      'Prefer verifier commands copied from the task text (for example "Run npm test before completing").',
+      'If the task does not name a verifier, use npm test or npm run typecheck when package.json scripts exist.',
+      'When no package.json scripts exist, synthesize a content-read verifier: shell_exec with "type <file>" (Windows) or "cat <file>" (Linux/Mac) for each text file the plan will write.',
       'Do NOT emit another EVIDENCE_REQUEST — proceed with full implementation.',
       '',
       evidenceContext.trim(),
@@ -446,10 +472,7 @@ Your JSON output MUST include a "thinking" field. Use this field to:
   }
 
   if (groundingContext.trim().length > 0) {
-    lines.push(
-      '',
-      groundingContext.trim(),
-    );
+    lines.push('', groundingContext.trim());
   }
 
   if (groundingContext.includes('Reference source inventories')) {

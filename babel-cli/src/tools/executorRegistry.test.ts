@@ -2,10 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import type { ToolCallRequest, ToolContext } from '../localTools.js';
-import {
-  createExecutorToolRegistry,
-  type ExecutorToolDefinition,
-} from './executorRegistry.js';
+import { createExecutorToolRegistry, type ExecutorToolDefinition } from './executorRegistry.js';
 
 const context: ToolContext = {
   agentId: 'test-agent',
@@ -45,10 +42,13 @@ describe('executor tool registry', () => {
 
   it('dispatches through registered handlers and exposes handler-free snapshots', async () => {
     const registry = createExecutorToolRegistry([makeDefinition('file_read')]);
-    const result = await registry.dispatch({
-      tool: 'file_read',
-      path: 'README.md',
-    }, context);
+    const result = await registry.dispatch(
+      {
+        tool: 'file_read',
+        path: 'README.md',
+      },
+      context,
+    );
 
     assert.equal(result.exit_code, 0);
     assert.equal(result.stdout, 'file_read');

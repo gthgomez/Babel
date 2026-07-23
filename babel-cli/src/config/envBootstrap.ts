@@ -80,11 +80,15 @@ export function wasBabelCliEnvFileLoadAttempted(): boolean {
   return envFileLoadAttempted;
 }
 
-export function isStrictEnvMode(argv: string[] = process.argv): boolean {
+export function isStrictEnvMode(
+  argv: string[] = process.argv,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   return (
     argv.includes('--strict-env') ||
-    envTruthy(process.env['BABEL_STRICT_ENV']) ||
-    envTruthy(process.env['CI'])
+    (Object.prototype.hasOwnProperty.call(env, 'BABEL_STRICT_ENV') &&
+      envTruthy(env['BABEL_STRICT_ENV'])) ||
+    (Object.prototype.hasOwnProperty.call(env, 'CI') && envTruthy(env['CI']))
   );
 }
 
@@ -131,13 +135,19 @@ export function assertEnvFileActiveForPipelineCommand(
   const message = formatEnvFileInactiveMessage(missingKeys, BABEL_CLI_ENV_FILE_PATH);
 
   if (options.json === true) {
-    process.stdout.write(`${JSON.stringify({
-      status: 'fail',
-      error: message,
-      missing_env_keys: missingKeys,
-      env_file: BABEL_CLI_ENV_FILE_PATH,
-      env_file_loaded: wasBabelCliEnvFileLoaded(),
-    }, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          status: 'fail',
+          error: message,
+          missing_env_keys: missingKeys,
+          env_file: BABEL_CLI_ENV_FILE_PATH,
+          env_file_loaded: wasBabelCliEnvFileLoaded(),
+        },
+        null,
+        2,
+      )}\n`,
+    );
   } else {
     console.error(`[babel] ${message}`);
   }
@@ -147,4 +157,9 @@ export function assertEnvFileActiveForPipelineCommand(
   }
 }
 
-loadBabelCliEnv();
+// Phase 5a: Guard the module-level side-effect so tests and consumers that
+// import from envBootstrap don't trigger env loading as a side effect.
+// If the entry point (index.ts) already loaded .env, skip the auto-load.
+if (!process.env['BABEL_ENV_LOADED']) {
+  loadBabelCliEnv();
+}

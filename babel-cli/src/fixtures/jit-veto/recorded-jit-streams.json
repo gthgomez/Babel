@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "fixture_set_id": "recorded-jit-veto-proof-v1",
+  "created_for": "Babel P0.1/P0.2 JIT veto end-to-end verification",
+  "description": "Synthetic but realistic streaming chunks with <|tool_start|>/<|tool_end|> fences, exercising the full IncrementalToolDetector + human JIT veto flow including denial, fingerprint tracking, PolicyBlockedDuplicateError, and double-veto halt.",
+  "scenarios": [
+    {
+      "id": "single-chunk-approve",
+      "description": "Complete fence in one chunk, user approves — tool proceeds",
+      "chunks": [
+        "<|tool_start|>{\"type\": \"tool_call\", \"tool\": \"file_read\", \"path\": \"src/index.ts\"}<|tool_end|>"
+      ],
+      "stdin_input": "y\n",
+      "setup": { "deniedFingerprints": [] },
+      "expected": {
+        "intent_fired": true,
+        "tool": "file_read",
+        "target": "src/index.ts",
+        "outcome": "approve",
+        "deniedFingerprints_count_after": 0,
+        "session_state_fingerprints": 0
+      },
+      "fingerprint_seed": {
+        "tool": "file_read",
+        "target": "src/index.ts",
+        "args": { "type": "tool_call", "tool": "file_read", "path": "src/index.ts" }
+      }
+    },
+    {
+      "id": "multi-chunk-approve",
+      "description": "Fence split across chunks, user approves — tests incremental scanner at every split boundary",
+      "chunks": [
+        "Some model prose before the fence.\n<|tool_start|>{\"type\": \"tool_call\", \"tool\": \"shell_exec\",",
+        " \"command\": \"npm test\", \"cwd\": \"/home/project\"}<|tool_end|>\nProse after."
+      ],
+      "stdin_input": "yes\n",
+      "setup": { "deniedFingerprints": [] },
+      "expected": {
+        "intent_fired": true,
+        "tool": "shell_exec",
+        "target": "npm test",
+        "outcome": "approve",
+        "deniedFingerprints_count_after": 0,
+        "session_state_fingerprints": 0
+      },
+      "fingerprint_seed": {
+        "tool": "shell_exec",
+        "target": "npm test",
+        "args": { "type": "tool_call", "tool": "shell_exec", "command": "npm test", "cwd": "/home/project" }
+      }
+    },
+    {
+      "id": "single-chunk-deny",
+      "description": "Complete fence for file_write, user denies — JitDenialError thrown, fingerprint saved, HUMAN_REJECTED entry produced",
+      "chunks": [
+        "<|tool_start|>{\"type\": \"tool_call\", \"tool\": \"file_write\", \"path\": \"src/output.ts\", \"content\": \"console.log(42);\"}<|tool_end|>"
+      ],
+      "stdin_input": "n\n",
+      "setup": { "deniedFingerprints": [] },
+      "expected": {
+        "intent_fired": true,
+        "tool": "file_write",
+        "target": "src/output.ts",
+        "outcome": "deny",
+        "error_type": "JitDenialError",
+        "deniedFingerprints_count_after": 1,
+        "session_state_fingerprints": 1,
+        "double_veto_reached": false
+      },
+      "fingerprint_seed": {
+        "tool": "file_write",
+        "target": "src/output.ts",
+        "args": { "type": "tool_call", "tool": "file_write", "path": "src/output.ts", "content": "console.log(42);" }
+      }
+    },
+    {
+      "id": "policy-blocked-duplicate",
+      "description": "Already-vetoed fingerprint re-emitted by model — PolicyBlockedDuplicateError thrown BEFORE any user prompt appears",
+      "chunks": [
+        "<|tool_start|>{\"type\": \"tool_call\", \"tool\": \"file_write\", \"path\": \"src/output.ts\", \"content\": \"console.log(42);\"}<|tool_end|>"
+      ],
+      "stdin_input": "y\n",
+      "setup": {
+        "deniedFingerprints": [
+          { "note": "Pre-seeded with the fingerprint_computed from the fingerprint_seed below — the test computes the fingerprint at load time and populates this entry" }
+        ]
+      },
+      "expected": {
+        "intent_fired": true,
+        "tool": "file_write",
+        "target": "src/output.ts",
+        "outcome": "blocked",
+        "error_type": "PolicyBlockedDuplicateError",
+        "deniedFingerprints_count_after": 1,
+        "session_state_fingerprints": 1,
+        "no_prompt_shown": true
+      },
+      "fingerprint_seed": {
+        "tool": "file_write",
+        "target": "src/output.ts",
+        "args": { "type": "tool_call", "tool": "file_write", "path": "src/output.ts", "content": "console.log(42);" }
+      }
+    },
+    {
+      "id": "double-veto-halt",
+      "description": "Same tool manually denied in two adjacent turns — second denial increments count to 2 and triggers EXECUTION_HALTED",
+      "turns": [
+        {
+          "turn": 1,
+          "chunks": [
+            "<|tool_start|>{\"type\": \"tool_call\", \"tool\": \"shell_exec\", \"command\": \"rm -rf /tmp/build\"}<|tool_end|>"
+          ],
+          "stdin_input": "n\n",
+          "expected_after": {
+            "deniedFingerprints_count": 1,
+            "fingerprint_count_value": 1,
+            "halted": false
+          }
+        },
+        {
+          "turn": 2,
+          "chunks": [
+            "<|tool_start|>{\"type\": \"tool_call\", \"tool\": \"shell_exec\", \"command\": \"rm -rf /tmp/build\"}<|tool_end|>"
+          ],
+          "stdin_input": "y\n",
+          "expected_after": {
+            "deniedFingerprints_count": 1,
+            "fingerprint_count_value": 1,
+            "blocked": true,
+            "block_reason": "policy_duplicate",
+            "note": "On turn 2 the model re-emits same tool; onIntent finds fingerprint in map, throws PolicyBlockedDuplicateError BEFORE user prompt. User input 'y' is never consumed because no prompt is shown."
+          }
+        }
+      ],
+      "fingerprint_seed": {
+        "tool": "shell_exec",
+        "target": "rm -rf /tmp/build",
+        "args": { "type": "tool_call", "tool": "shell_exec", "command": "rm -rf /tmp/build" }
+      }
+    }
+  ]
+}

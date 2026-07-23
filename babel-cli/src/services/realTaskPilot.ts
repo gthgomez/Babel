@@ -44,7 +44,9 @@ function readPackageTestCommand(projectRoot: string): string | null {
     return null;
   }
   try {
-    const parsed = JSON.parse(readFileSync(packageJson, 'utf-8')) as { scripts?: Record<string, unknown> };
+    const parsed = JSON.parse(readFileSync(packageJson, 'utf-8')) as {
+      scripts?: Record<string, unknown>;
+    };
     return typeof parsed.scripts?.['test'] === 'string' ? 'npm test' : null;
   } catch {
     return null;
@@ -62,7 +64,7 @@ function readDirtyFiles(projectRoot: string): string[] {
   }
   return result.stdout
     .split(/\r?\n/)
-    .map(line => line.trim())
+    .map((line) => line.trim())
     .filter(Boolean)
     .slice(0, 40);
 }
@@ -71,27 +73,40 @@ function quote(value: string): string {
   return `"${value.replace(/"/g, '\\"')}"`;
 }
 
-function buildCases(projectRoot: string, testCommand: string | null, dirtyFiles: string[]): RealTaskPilotCase[] {
+function buildCases(
+  projectRoot: string,
+  testCommand: string | null,
+  dirtyFiles: string[],
+): RealTaskPilotCase[] {
   const rootArg = `--project-root ${quote(projectRoot)}`;
   const verifier = testCommand ?? 'your normal test command';
-  const dirtyNote = dirtyFiles.length > 0
-    ? 'Confirm Babel preserves existing dirty files and only changes files named by the task.'
-    : 'Confirm Babel does not create unrelated dirty files.';
+  const dirtyNote =
+    dirtyFiles.length > 0
+      ? 'Confirm Babel preserves existing dirty files and only changes files named by the task.'
+      : 'Confirm Babel does not create unrelated dirty files.';
 
   return [
     {
       id: 'read_only_failure_explanation',
-      purpose: 'Check whether the daily ask lane can inspect real project context without leaking internal run language.',
+      purpose:
+        'Check whether the daily ask lane can inspect real project context without leaking internal run language.',
       command: `babel ask ${quote('Explain the most likely local test command and any obvious setup risks without editing.')} ${rootArg}`,
       risk: 'read_only',
-      success_signal: ['No files changed', 'Answer names concrete repo evidence', 'Output is understandable without JSON'],
+      success_signal: [
+        'No files changed',
+        'Answer names concrete repo evidence',
+        'Output is understandable without JSON',
+      ],
     },
     {
       id: 'ambiguous_task_triage',
       purpose: 'Check whether do chooses ask/plan/fix sensibly when the user request is fuzzy.',
       command: `babel do ${quote('Why is this project hard to test locally? Do not edit files.')} ${rootArg}`,
       risk: 'read_only',
-      success_signal: ['selected path is read-only in JSON, or human output clearly says no edits', 'No files changed'],
+      success_signal: [
+        'selected path is read-only in JSON, or human output clearly says no edits',
+        'No files changed',
+      ],
     },
     {
       id: 'one_file_real_fix',
@@ -103,16 +118,25 @@ function buildCases(projectRoot: string, testCommand: string | null, dirtyFiles:
     {
       id: 'multi_file_verified_stress',
       purpose: 'Exercise the broader verified pipeline on a bounded two-to-three-file change.',
-      command: `babel run ${quote(`Make a bounded two-file cleanup. Name the files explicitly. Run ${verifier} before completing.`)} ${rootArg} --mode verified --execution-profile dev_local`,
+      command: `babel run ${quote(`Make a bounded two-file cleanup. Name the files explicitly. Run ${verifier} before completing.`)} ${rootArg} --mode deep --execution-profile dev_local`,
       risk: 'medium',
-      success_signal: ['Plan names exact files before writes', 'No unrelated files changed', `${verifier} or explicit verifier result recorded`],
+      success_signal: [
+        'Plan names exact files before writes',
+        'No unrelated files changed',
+        `${verifier} or explicit verifier result recorded`,
+      ],
     },
     {
       id: 'recovery_drill',
-      purpose: 'Evaluate whether continue/resume remain legible after a verifier failure or provider interruption.',
+      purpose:
+        'Prove continue/resume are legible after a real verifier failure or provider interruption.',
       command: 'babel continue latest && babel resume latest',
       risk: 'read_only',
-      success_signal: ['continue explains the next step', 'resume acts only when retryable', 'available artifacts point to real files'],
+      success_signal: [
+        'continue explains the next step',
+        'resume acts only when retryable',
+        'available artifacts point to real files',
+      ],
     },
   ];
 }
@@ -120,7 +144,10 @@ function buildCases(projectRoot: string, testCommand: string | null, dirtyFiles:
 export function buildRealTaskPilotReport(options: RealTaskPilotOptions = {}): RealTaskPilotReport {
   const projectRoot = resolve(options.projectRoot ?? process.cwd());
   const now = options.now ?? new Date();
-  const outputDir = resolve(options.outputDir ?? join(BABEL_RUNS_DIR, 'benchmarks', `real-task-pilot-${formatTimestamp(now)}`));
+  const outputDir = resolve(
+    options.outputDir ??
+      join(BABEL_RUNS_DIR, 'benchmarks', `real-task-pilot-${formatTimestamp(now)}`),
+  );
   mkdirSync(outputDir, { recursive: true });
   const testCommand = readPackageTestCommand(projectRoot);
   const dirtyFiles = readDirtyFiles(projectRoot);

@@ -8,7 +8,7 @@ import type { VerifierContractSummary } from './requiredVerifierContract.js';
 export const TERMINAL_STATUSES = [
   'COMPLETE',
   'COMPLETE_NO_MODIFICATION',
-  'DIRECT_MODE_NO_EXECUTOR',
+  'READ_ONLY_MODE_NO_EXECUTOR',
   'SWARM_NO_EXECUTOR_BOUND',
   'EXACT_INSTRUCTION_DRIFT',
   'AMBIGUOUS_LITERAL_BINDING',
@@ -38,7 +38,7 @@ export const TERMINAL_STATUSES = [
   'FAILED',
 ] as const;
 
-export type TerminalStatus = typeof TERMINAL_STATUSES[number];
+export type TerminalStatus = (typeof TERMINAL_STATUSES)[number];
 
 export type TerminalReasonCategory =
   | 'complete'
@@ -178,18 +178,25 @@ export function isReadOnlyNoModificationRequest(input: {
   const allowedTools = input.allowedTools ?? [];
   const explicitReadOnlyTools =
     allowedTools.length > 0 &&
-    allowedTools.every(tool => ['directory_list', 'file_read', 'semantic_search', 'web_search', 'web_fetch'].includes(tool));
-  const asksNoModification = /\b(do not modify|inspect only|read[- ]only|do not edit|no changes)\b/.test(task);
-  const asksInspection = /\b(inspect|read|determine|audit|review|summarize|check whether)\b/.test(task);
+    allowedTools.every((tool) =>
+      ['directory_list', 'file_read', 'semantic_search', 'web_search', 'web_fetch'].includes(tool),
+    );
+  const asksNoModification =
+    /\b(do not modify|inspect only|read[- ]only|do not edit|no changes)\b/.test(task);
+  const asksInspection = /\b(inspect|read|determine|audit|review|summarize|check whether)\b/.test(
+    task,
+  );
   const asksWrite =
     /\b(create|write|update|edit|modify|patch|fix|repair|delete|remove)\b/.test(task) &&
     !asksNoModification;
 
-  return input.mode !== 'manual' &&
+  return (
+    input.mode !== 'manual' &&
     explicitReadOnlyTools &&
     asksNoModification &&
     asksInspection &&
-    !asksWrite;
+    !asksWrite
+  );
 }
 
 interface ParsedVerifierCommand {
@@ -201,7 +208,9 @@ export function isVerifierCommand(command: string | null | undefined): boolean {
   return verifierCommandMatch(parseVerifierCommand(command));
 }
 
-export function parseVerifierCommand(command: string | null | undefined): ParsedVerifierCommand | null {
+export function parseVerifierCommand(
+  command: string | null | undefined,
+): ParsedVerifierCommand | null {
   const normalized = String(command ?? '').trim();
   if (!normalized) {
     return null;
@@ -264,7 +273,10 @@ function normalizeCommandExecutable(token: string): string {
 }
 
 function normalizeCommandArg(token: string): string {
-  return token.replace(/^['"]|['"]$/g, '').trim().toLowerCase();
+  return token
+    .replace(/^['"]|['"]$/g, '')
+    .trim()
+    .toLowerCase();
 }
 
 function skipLeadingOptions(args: readonly string[]): string[] {
@@ -290,7 +302,12 @@ function verifierCommandMatch(command: ParsedVerifierCommand | null): boolean {
       return true;
     }
     if (trimmed[0] === 'run') {
-      return trimmed[1] === 'typecheck' || trimmed[1] === 'build' || trimmed[1] === 'test' || trimmed[1] === 'lint';
+      return (
+        trimmed[1] === 'typecheck' ||
+        trimmed[1] === 'build' ||
+        trimmed[1] === 'test' ||
+        trimmed[1] === 'lint'
+      );
     }
     return false;
   }
@@ -338,7 +355,7 @@ export function resolveTerminalStatus(input: TerminalStatusInput): TerminalStatu
   if (status === 'REQUIRED_VERIFIER_FAILED') return 'REQUIRED_VERIFIER_FAILED';
   if (status === 'VERIFIER_CONTRACT_UNSATISFIED') return 'VERIFIER_CONTRACT_UNSATISFIED';
   if (status === 'READ_ONLY_NO_MODIFICATION') return 'READ_ONLY_NO_MODIFICATION';
-  if (status === 'DIRECT_MODE_NO_EXECUTOR') return 'DIRECT_MODE_NO_EXECUTOR';
+  if (status === 'READ_ONLY_MODE_NO_EXECUTOR') return 'READ_ONLY_MODE_NO_EXECUTOR';
   if (status === 'SWARM_NO_EXECUTOR_BOUND') return 'SWARM_NO_EXECUTOR_BOUND';
   if (input.rollbackMode === 'rollback_failed') {
     return 'ROLLBACK_FAILED';
@@ -375,13 +392,26 @@ export function resolveTerminalStatus(input: TerminalStatusInput): TerminalStatu
   if (status === 'REPAIR_REPEATED_FAILURE' || evidence.includes('repair_repeated_failure')) {
     return 'REPAIR_REPEATED_FAILURE';
   }
-  if (status === 'REPAIR_MAX_ATTEMPTS_REACHED' || evidence.includes('repair_max_attempts_reached')) {
+  if (
+    status === 'REPAIR_MAX_ATTEMPTS_REACHED' ||
+    evidence.includes('repair_max_attempts_reached')
+  ) {
     return 'REPAIR_MAX_ATTEMPTS_REACHED';
   }
-  if (status === 'VERIFIER_FAILED' || evidence.includes('verifier_failed') || isVerifierCommand(failedCommand)) {
+  if (
+    status === 'VERIFIER_FAILED' ||
+    evidence.includes('verifier_failed') ||
+    isVerifierCommand(failedCommand)
+  ) {
     return 'VERIFIER_FAILED';
   }
-  if (status === 'SHELL_COMMAND_FAILED' || failedCommand) {
+  // Only surface SHELL_COMMAND_FAILED when the status itself indicates a
+  // command failure — a non-zero exit from a cleanup command in a
+  // COMPLETE run should not override the success status.
+  if (status === 'SHELL_COMMAND_FAILED') {
+    return 'SHELL_COMMAND_FAILED';
+  }
+  if (failedCommand && status !== 'COMPLETE' && status !== 'COMPLETE_NO_MODIFICATION') {
     return 'SHELL_COMMAND_FAILED';
   }
   if (status === 'QA_REJECTED_MAX_LOOPS') return 'QA_REJECTED_MAX_LOOPS';
@@ -438,19 +468,32 @@ export function buildAttemptSafetySummary(input: {
   dirtyFilesPreserved?: readonly string[];
   targetDirtyConflicts?: readonly string[];
 }): AttemptSafetySummary {
-  const touchedFiles = uniqueStrings(input.timeline.attempts.flatMap(attempt => attempt.changed_files));
+  const touchedFiles = uniqueStrings(
+    input.timeline.attempts.flatMap((attempt) => attempt.changed_files),
+  );
   const preRunFileHashes = Object.fromEntries(
-    touchedFiles.map(path => [path, input.initialSnapshot?.files[path] ?? firstRecordedBeforeHash(input.timeline, path)]),
+    touchedFiles.map((path) => [
+      path,
+      input.initialSnapshot?.files[path] ?? firstRecordedBeforeHash(input.timeline, path),
+    ]),
   );
   const finalFileHashes = Object.fromEntries(
-    touchedFiles.map(path => [path, input.finalSnapshot?.files[path] ?? lastRecordedAfterHash(input.timeline, path)]),
+    touchedFiles.map((path) => [
+      path,
+      input.finalSnapshot?.files[path] ?? lastRecordedAfterHash(input.timeline, path),
+    ]),
   );
-  const unrelatedChangedFiles = diffSnapshots(input.initialSnapshot, input.finalSnapshot)
-    .filter(path => !touchedFiles.includes(path));
+  const unrelatedChangedFiles = diffSnapshots(input.initialSnapshot, input.finalSnapshot).filter(
+    (path) => !touchedFiles.includes(path),
+  );
   const snapshotsEvaluated = Boolean(input.initialSnapshot && input.finalSnapshot);
-  const snapshotTruncated = Boolean(input.initialSnapshot?.truncated || input.finalSnapshot?.truncated);
+  const snapshotTruncated = Boolean(
+    input.initialSnapshot?.truncated || input.finalSnapshot?.truncated,
+  );
   const unrelatedStatus = snapshotsEvaluated
-    ? unrelatedChangedFiles.length === 0 ? 'preserved' : 'changed'
+    ? unrelatedChangedFiles.length === 0
+      ? 'preserved'
+      : 'changed'
     : 'not_evaluated';
 
   return {
@@ -468,13 +511,13 @@ export function buildAttemptSafetySummary(input: {
     dirty_files_preserved: [...(input.dirtyFilesPreserved ?? [])],
     target_dirty_conflicts: [...(input.targetDirtyConflicts ?? [])],
     touched_files: touchedFiles,
-    changed_files_by_attempt: input.timeline.attempts.map(attempt => ({
+    changed_files_by_attempt: input.timeline.attempts.map((attempt) => ({
       attempt: attempt.attempt,
       status: attempt.status,
       changed_files: attempt.changed_files,
     })),
     pre_run_file_hashes: preRunFileHashes,
-    post_attempt_file_hashes: input.timeline.attempts.map(attempt => ({
+    post_attempt_file_hashes: input.timeline.attempts.map((attempt) => ({
       attempt: attempt.attempt,
       status: attempt.status,
       file_hashes: attempt.file_hashes,
@@ -487,7 +530,9 @@ export function buildAttemptSafetySummary(input: {
     },
     final_repository_cleanliness_summary: {
       status: snapshotsEvaluated
-        ? unrelatedChangedFiles.length === 0 ? 'clean_relative_to_touched_files' : 'unrelated_changes_detected'
+        ? unrelatedChangedFiles.length === 0
+          ? 'clean_relative_to_touched_files'
+          : 'unrelated_changes_detected'
         : 'not_evaluated',
       touched_file_count: touchedFiles.length,
       unrelated_changed_file_count: unrelatedChangedFiles.length,
@@ -503,35 +548,55 @@ export function buildAttemptSafetySummary(input: {
 
 function reasonCategoryForStatus(status: TerminalStatus): TerminalReasonCategory {
   switch (status) {
-    case 'COMPLETE': return 'complete';
-    case 'COMPLETE_NO_MODIFICATION': return 'complete_no_modification';
-    case 'READ_ONLY_NO_MODIFICATION': return 'read_only_no_modification';
-    case 'DIRECT_MODE_NO_EXECUTOR':
-    case 'SWARM_NO_EXECUTOR_BOUND': return 'execution_mode_refused';
+    case 'COMPLETE':
+      return 'complete';
+    case 'COMPLETE_NO_MODIFICATION':
+      return 'complete_no_modification';
+    case 'READ_ONLY_NO_MODIFICATION':
+      return 'read_only_no_modification';
+    case 'READ_ONLY_MODE_NO_EXECUTOR':
+    case 'SWARM_NO_EXECUTOR_BOUND':
+      return 'execution_mode_refused';
     case 'EXACT_INSTRUCTION_DRIFT':
-    case 'AMBIGUOUS_LITERAL_BINDING': return 'exact_contract_failure';
-    case 'VERIFIER_FAILED': return 'verifier_failure';
-    case 'VERIFIER_NOT_FOUND': return 'verifier_not_found';
-    case 'SMALL_FIX_COMPLETE': return 'small_fix_complete';
-    case 'SMALL_FIX_FAILED': return 'small_fix_failed';
+    case 'AMBIGUOUS_LITERAL_BINDING':
+      return 'exact_contract_failure';
+    case 'VERIFIER_FAILED':
+      return 'verifier_failure';
+    case 'VERIFIER_NOT_FOUND':
+      return 'verifier_not_found';
+    case 'SMALL_FIX_COMPLETE':
+      return 'small_fix_complete';
+    case 'SMALL_FIX_FAILED':
+      return 'small_fix_failed';
     case 'REQUIRED_VERIFIER_MISSING':
     case 'REQUIRED_VERIFIER_SKIPPED':
     case 'REQUIRED_VERIFIER_FAILED':
     case 'VERIFIER_CONTRACT_UNSATISFIED':
       return 'verifier_contract';
-    case 'REPAIR_REPEATED_FAILURE': return 'repair_repeated_failure';
-    case 'REPAIR_MAX_ATTEMPTS_REACHED': return 'repair_budget_exhausted';
-    case 'SHELL_COMMAND_DENIED': return 'shell_command_denied';
-    case 'SHELL_COMMAND_FAILED': return 'shell_command_failed';
-    case 'WORKTREE_DIRTY_UNSAFE': return 'worktree_safety';
+    case 'REPAIR_REPEATED_FAILURE':
+      return 'repair_repeated_failure';
+    case 'REPAIR_MAX_ATTEMPTS_REACHED':
+      return 'repair_budget_exhausted';
+    case 'SHELL_COMMAND_DENIED':
+      return 'shell_command_denied';
+    case 'SHELL_COMMAND_FAILED':
+      return 'shell_command_failed';
+    case 'WORKTREE_DIRTY_UNSAFE':
+      return 'worktree_safety';
     case 'ROLLBACK_APPLIED':
-    case 'ROLLBACK_FAILED': return 'rollback';
-    case 'QA_REJECTED_MAX_LOOPS': return 'qa_rejected';
+    case 'ROLLBACK_FAILED':
+      return 'rollback';
+    case 'QA_REJECTED_MAX_LOOPS':
+      return 'qa_rejected';
     case 'MANUAL_BRIDGE_REQUIRED':
-    case 'MANUAL_PLAN_INVALID': return 'manual_bridge';
-    case 'FATAL_ERROR': return 'fatal_error';
-    case 'PARTIAL': return 'partial';
-    case 'FAILED': return 'unknown_failure';
+    case 'MANUAL_PLAN_INVALID':
+      return 'manual_bridge';
+    case 'FATAL_ERROR':
+      return 'fatal_error';
+    case 'PARTIAL':
+      return 'partial';
+    case 'FAILED':
+      return 'unknown_failure';
     case 'EVIDENCE_LOOP_EXCEEDED':
     case 'EXECUTOR_HALTED':
       return 'executor_halted';
@@ -541,59 +606,59 @@ function reasonCategoryForStatus(status: TerminalStatus): TerminalReasonCategory
 function nextActionForStatus(status: TerminalStatus): string {
   switch (status) {
     case 'COMPLETE':
-      return 'No operator action required; requested completion criteria passed.';
+      return 'All done — nothing else needed.';
     case 'COMPLETE_NO_MODIFICATION':
     case 'READ_ONLY_NO_MODIFICATION':
-      return 'No file changes were needed; review the read-only findings or rerun with a write-capable mode if edits are required.';
-    case 'DIRECT_MODE_NO_EXECUTOR':
-      return 'Rerun in autonomous mode or provide an executor-capable workflow for write requests.';
+      return 'No changes needed. Review what was found, or re-run with `babel deep` if you want to make edits.';
+    case 'READ_ONLY_MODE_NO_EXECUTOR':
+      return 'Use `babel deep` to make changes — chat and plan modes are read-only.';
     case 'SWARM_NO_EXECUTOR_BOUND':
-      return 'Use autonomous mode for write tasks until swarm executor ownership is implemented.';
+      return 'Use `babel deep` for write tasks — swarm execution is not wired up yet.';
     case 'EXACT_INSTRUCTION_DRIFT':
     case 'AMBIGUOUS_LITERAL_BINDING':
-      return 'Clarify or correct the exact instruction contract before retrying.';
+      return 'The request was too vague or drifted from what was asked. Try being more specific.';
     case 'VERIFIER_FAILED':
-      return 'Inspect the failed verifier output, patch the cause, and rerun the same verifier.';
+      return 'A check failed. Fix the issue and run the same check again.';
     case 'VERIFIER_NOT_FOUND':
-      return 'Add or select a runnable verifier command before retrying.';
+      return 'No check command was found. Add a test or verification command first.';
     case 'REQUIRED_VERIFIER_MISSING':
-      return 'Run every required verifier before completing, or halt with a non-complete status.';
+      return 'A required check has not run yet. Run it before completing.';
     case 'REQUIRED_VERIFIER_SKIPPED':
-      return 'Inspect the prior required verifier failure and rerun the skipped required verifier after repair.';
+      return 'A required check was skipped. Fix the issue and re-run it.';
     case 'REQUIRED_VERIFIER_FAILED':
-      return 'Inspect the failed required verifier output, patch the cause, and rerun all required verifiers.';
+      return 'A required check failed. Fix the problem and re-run all checks.';
     case 'VERIFIER_CONTRACT_UNSATISFIED':
-      return 'Inspect verifier_plan.json and verifier_execution_summary.json before retrying.';
+      return 'Not all required checks passed. Run `babel inspect` for details.';
     case 'SMALL_FIX_COMPLETE':
-      return 'Review the changed file and commit when ready.';
+      return 'Done — review the change and commit when ready.';
     case 'SMALL_FIX_FAILED':
-      return 'Inspect verifier output and rerun with the verified pipeline if needed.';
+      return "The fix didn't pass checks. Review the output and try a different approach.";
     case 'REPAIR_REPEATED_FAILURE':
-      return 'Inspect failure capsules and change repair strategy; do not repeat the same patch loop.';
+      return 'The same fix failed repeatedly. Try a different approach rather than repeating the same patch.';
     case 'REPAIR_MAX_ATTEMPTS_REACHED':
-      return 'Review the attempt timeline and failure capsules before starting a new repair run.';
+      return 'Ran out of repair attempts. Review what happened before trying again.';
     case 'SHELL_COMMAND_DENIED':
-      return 'Adjust allowed tools or choose a permitted command; retrying the denied command will not help.';
+      return 'That command is not allowed. Try a different approach or adjust your permissions.';
     case 'SHELL_COMMAND_FAILED':
-      return 'Inspect the command stderr/stdout and rerun after addressing the command failure.';
+      return 'The command failed. Check the output and fix the issue before retrying.';
     case 'WORKTREE_DIRTY_UNSAFE':
-      return 'Review dirty worktree files and preserve or isolate user changes before retrying.';
+      return 'You have uncommitted changes. Save or stash them before retrying.';
     case 'ROLLBACK_APPLIED':
-      return 'Rollback was applied; inspect the safety summary before rerunning.';
+      return 'Changes were rolled back. Review the safety summary before retrying.';
     case 'ROLLBACK_FAILED':
-      return 'Stop and manually inspect the worktree; automatic rollback did not complete.';
+      return 'Automatic rollback failed. Check the worktree manually.';
     case 'QA_REJECTED_MAX_LOOPS':
-      return 'Revise the plan to satisfy QA before execution.';
+      return 'The plan needs revision before it can run. Address the flagged issues.';
     case 'EVIDENCE_LOOP_EXCEEDED':
-      return 'Use the collected evidence to narrow the task before retrying.';
+      return 'Refine your request with what we learned, then try again.';
     case 'MANUAL_BRIDGE_REQUIRED':
     case 'MANUAL_PLAN_INVALID':
-      return 'Provide or repair the manual bridge plan.';
+      return 'The plan needs fixing. Check the error details and update it.';
     case 'FATAL_ERROR':
     case 'FAILED':
     case 'EXECUTOR_HALTED':
     case 'PARTIAL':
-      return 'Inspect terminal_status_summary.json, 04_execution_report.json, and logs for the next manual action.';
+      return 'Something went wrong. Run `babel inspect` for details, or check the run directory.';
   }
 }
 
@@ -614,21 +679,24 @@ function changeDispositionForStatus(
 function getLastFailedCommand(toolCallLog: readonly ToolCallLog[] | undefined): string | null {
   const entry = [...(toolCallLog ?? [])]
     .reverse()
-    .find(item =>
-      (item.tool === 'shell_exec' || item.tool === 'test_run') &&
-      item.exit_code !== 0
+    .find(
+      (item) => (item.tool === 'shell_exec' || item.tool === 'test_run') && item.exit_code !== 0,
     );
   return entry?.target ?? null;
 }
 
 function changedFilesFromToolLog(toolCallLog: readonly ToolCallLog[]): string[] {
-  return uniqueStrings(toolCallLog
-    .filter(entry => entry.tool === 'file_write' && entry.exit_code === 0)
-    .map(entry => entry.target));
+  return uniqueStrings(
+    toolCallLog
+      .filter((entry) => entry.tool === 'file_write' && entry.exit_code === 0)
+      .map((entry) => entry.target),
+  );
 }
 
 function summarizeCondition(condition: string | null | undefined): string | null {
-  const normalized = String(condition ?? '').trim().replace(/\s+/g, ' ');
+  const normalized = String(condition ?? '')
+    .trim()
+    .replace(/\s+/g, ' ');
   return normalized.length > 0 ? normalized.slice(0, 700) : null;
 }
 
@@ -640,12 +708,13 @@ function diffSnapshots(
     return [];
   }
   const paths = new Set([...Object.keys(before.files), ...Object.keys(after.files)]);
-  return [...paths]
-    .filter(path => before.files[path] !== after.files[path])
-    .sort();
+  return [...paths].filter((path) => before.files[path] !== after.files[path]).sort();
 }
 
-function firstRecordedBeforeHash(timeline: AutonomousRepairProofTimeline, path: string): string | null {
+function firstRecordedBeforeHash(
+  timeline: AutonomousRepairProofTimeline,
+  path: string,
+): string | null {
   for (const attempt of timeline.attempts) {
     const before = attempt.file_hashes[path]?.before;
     if (before !== undefined) {
@@ -655,7 +724,10 @@ function firstRecordedBeforeHash(timeline: AutonomousRepairProofTimeline, path: 
   return null;
 }
 
-function lastRecordedAfterHash(timeline: AutonomousRepairProofTimeline, path: string): string | null {
+function lastRecordedAfterHash(
+  timeline: AutonomousRepairProofTimeline,
+  path: string,
+): string | null {
   for (const attempt of [...timeline.attempts].reverse()) {
     const after = attempt.file_hashes[path]?.after;
     if (after !== undefined) {
@@ -665,7 +737,10 @@ function lastRecordedAfterHash(timeline: AutonomousRepairProofTimeline, path: st
   return null;
 }
 
-function userChangeSummary(status: 'preserved' | 'changed' | 'not_evaluated', files: readonly string[]): string {
+function userChangeSummary(
+  status: 'preserved' | 'changed' | 'not_evaluated',
+  files: readonly string[],
+): string {
   if (status === 'preserved') {
     return 'No unrelated file changes were detected relative to the safety snapshot.';
   }
@@ -676,5 +751,5 @@ function userChangeSummary(status: 'preserved' | 'changed' | 'not_evaluated', fi
 }
 
 function uniqueStrings(values: readonly string[]): string[] {
-  return [...new Set(values.map(value => value.trim()).filter(Boolean))].sort();
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort();
 }

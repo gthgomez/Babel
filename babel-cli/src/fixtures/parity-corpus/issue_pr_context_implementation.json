@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "fixture_type": "babel_parity_corpus_task",
+  "task_id": "issue_pr_context_implementation",
+  "parity_task_id": "issue_pr_context_implementation",
+  "title": "Issue/PR-context implementation",
+  "repo_kind": "issue_context_fix",
+  "target_file": "src/counter.js",
+  "verifier_command": "npm test",
+  "task": "Implement issue #42: increment should add the step value. Only edit src/counter.js.",
+  "broken_implementation": "export const increment = (value) => value;\n",
+  "fixed_implementation": "export const increment = (value, step = 1) => value + step;\n",
+  "test_source": "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { increment } from './counter.js';\n\ntest('increment adds step', () => {\n  assert.equal(increment(2, 3), 5);\n});\n",
+  "files": {
+    "issue.md": {
+      "broken": "# Issue 42\n\n`increment` ignores the step argument. Expected `increment(2, 3) === 5`.\n"
+    }
+  }
+}

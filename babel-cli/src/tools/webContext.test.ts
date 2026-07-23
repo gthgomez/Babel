@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  isPrivateNetworkAddress,
-  parseDuckDuckGoHtml,
-} from './webContext.js';
+import { isPrivateNetworkAddress, parseDuckDuckGoHtml } from './webContext.js';
 
 test('parseDuckDuckGoHtml extracts result links and decodes redirect targets', () => {
   const html = [
@@ -28,9 +25,7 @@ test('parseDuckDuckGoHtml respects max result limit', () => {
 
   const results = parseDuckDuckGoHtml(html, 1);
 
-  assert.deepEqual(results, [
-    { title: 'One', url: 'https://one.example/' },
-  ]);
+  assert.deepEqual(results, [{ title: 'One', url: 'https://one.example/' }]);
 });
 
 test('isPrivateNetworkAddress blocks localhost and private ranges', () => {

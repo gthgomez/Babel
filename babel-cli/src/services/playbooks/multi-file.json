@@ -1,0 +1,13 @@
+{
+  "id": "multi-file",
+  "description": "Multi-file coordinated bug fix — all HUNK-B tier tasks",
+  "select": { "skills": ["multi_file", "multi_hunk"] },
+  "requireTodoPlan": true,
+  "planFirstWarning": "⚠️ This is a multi-file task. You MUST use todo_write FIRST to list every file you plan to change AND the purpose of each change. Do NOT call str_replace or write_file until your todo plan is complete.",
+  "phaseGuidance": {
+    "explore": "Start from FAIL_TO_PASS / failing test files (headers name modules under test), then grep the affected function/class with a tight pattern — not repo-wide glob thrash. Read callers and callees only after the test file points at them. Prefer 2–4 targeted reads over broad directory walks.",
+    "diagnose": "Decide: API/interface change (callers must update) vs contained module fix (other files are tests). That choice sets edit order. Keep a short todo of files+purpose before mutating.",
+    "fix": "MUTATE BEFORE VERIFY: edit in dependency order — root cause first, then callers, then tests. One str_replace per file when possible. Do NOT run the full test suite before your first str_replace — mutate first, then verify each file. Verify intermediate state after each file change (targeted pytest).",
+    "verify": "Run the specific failing tests after each file change (pytest path::test preferred). Do NOT run the full suite until all targeted per-file tests pass. If the test environment is broken (import errors, missing packages), report BLOCKED / patch-ready — do NOT install packages or shell-thrash to fix the environment. After all edits pass targeted tests, run the related suite only. Prefer project/dataset tests over ad-hoc _verify scripts."
+  }
+}

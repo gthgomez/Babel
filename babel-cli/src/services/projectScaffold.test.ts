@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { listProjectTemplates, normalizeProjectTemplate, scaffoldProject } from './projectScaffold.js';
+import {
+  listProjectTemplates,
+  normalizeProjectTemplate,
+  scaffoldProject,
+} from './projectScaffold.js';
 
 function makeTempParent(): { root: string; cleanup: () => void } {
   const root = mkdtempSync(join(tmpdir(), 'babel-scaffold-test-'));
@@ -44,10 +48,7 @@ test('scaffold refuses nonempty target unless force is set', () => {
     scaffoldProject({ template: 'node-cli', targetRoot });
     writeFileSync(join(targetRoot, 'custom.txt'), 'keep\n', 'utf-8');
 
-    assert.throws(
-      () => scaffoldProject({ template: 'python-cli', targetRoot }),
-      /not empty/,
-    );
+    assert.throws(() => scaffoldProject({ template: 'python-cli', targetRoot }), /not empty/);
     const forced = scaffoldProject({ template: 'python-cli', targetRoot, force: true });
     assert.equal(forced.template, 'python-cli');
     assert.ok(existsSync(join(targetRoot, 'pyproject.toml')));

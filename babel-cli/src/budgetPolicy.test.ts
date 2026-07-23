@@ -36,8 +36,14 @@ test('budget diagnostics use actual prompt tokens for hard threshold severity', 
     driftWarningTolerance: 500,
   });
 
-  assert.equal(diagnostics.some(diagnostic => diagnostic.code === 'budget_threshold_severe'), true);
-  assert.equal(diagnostics.some(diagnostic => /policy source: actual/.test(diagnostic.message)), true);
+  assert.equal(
+    diagnostics.some((diagnostic) => diagnostic.code === 'budget_threshold_severe'),
+    true,
+  );
+  assert.equal(
+    diagnostics.some((diagnostic) => /policy source: actual/.test(diagnostic.message)),
+    true,
+  );
 });
 
 test('budget diagnostics use declared tokens when actual counts are unavailable', () => {
@@ -49,8 +55,14 @@ test('budget diagnostics use declared tokens when actual counts are unavailable'
     actualPromptTokens: null,
   });
 
-  assert.equal(diagnostics.some(diagnostic => diagnostic.code === 'budget_threshold_warning'), true);
-  assert.equal(diagnostics.some(diagnostic => /policy source: declared/.test(diagnostic.message)), true);
+  assert.equal(
+    diagnostics.some((diagnostic) => diagnostic.code === 'budget_threshold_warning'),
+    true,
+  );
+  assert.equal(
+    diagnostics.some((diagnostic) => /policy source: declared/.test(diagnostic.message)),
+    true,
+  );
 });
 
 test('budget diagnostics warn when actual-vs-declared drift exceeds tolerance', () => {
@@ -64,5 +76,8 @@ test('budget diagnostics warn when actual-vs-declared drift exceeds tolerance', 
     driftWarningTolerance: 100,
   });
 
-  assert.equal(diagnostics.some(diagnostic => diagnostic.code === 'actual_declared_token_drift'), true);
+  assert.equal(
+    diagnostics.some((diagnostic) => diagnostic.code === 'actual_declared_token_drift'),
+    true,
+  );
 });

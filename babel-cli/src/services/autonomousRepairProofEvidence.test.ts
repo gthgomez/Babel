@@ -14,10 +14,12 @@ function baseTimeline(): AutonomousRepairProofTimeline {
     attempt: 1,
     failure_code: 'TEST_FAILED' as const,
     failed_command: 'node --test',
-    concise_failure_summary: 'TEST_FAILED: AssertionError [ERR_ASSERTION]: Expected values to be strictly equal',
+    concise_failure_summary:
+      'TEST_FAILED: AssertionError [ERR_ASSERTION]: Expected values to be strictly equal',
     changed_files: ['src/math.js'],
     exact_invariant_status: 'unknown' as const,
-    next_repair_hypothesis: 'Use the failing test output to make the smallest source patch, then rerun the same test command before advancing.',
+    next_repair_hypothesis:
+      'Use the failing test output to make the smallest source patch, then rerun the same test command before advancing.',
     retryable: true,
   };
   return {
@@ -83,7 +85,9 @@ function baseTimeline(): AutonomousRepairProofTimeline {
       { attempt: 1, command: 'node --test', cwd: '.', exit_code: 1 },
       { attempt: 2, command: 'node --test', cwd: '.', exit_code: 0 },
     ],
-    notes: ['Deterministic model-boundary response provider enabled for live fail-then-pass reliability proof.'],
+    notes: [
+      'Deterministic model-boundary response provider enabled for live fail-then-pass reliability proof.',
+    ],
   };
 }
 
@@ -120,7 +124,7 @@ test('autonomous repair proof evidence blocks COMPLETE if final verifier still f
 
 test('autonomous repair proof evidence keeps the autonomous max-attempt cap visible', () => {
   const timeline = baseTimeline();
-  timeline.max_attempts = maxAttemptsForRepairMode('autonomous');
+  timeline.max_attempts = maxAttemptsForRepairMode('deep');
   assert.equal(timeline.max_attempts, 3);
 });
 
@@ -136,10 +140,12 @@ test('repair proof JSON stdout parsing accepts success and non-complete JSON obj
   assert.deepEqual(parseJsonObjectStdout('{"status":"COMPLETE"}\n'), {
     parsed: { status: 'COMPLETE' },
     parseError: null,
+    truncated: false,
   });
   assert.deepEqual(parseJsonObjectStdout('{"status":"REPAIR_MAX_ATTEMPTS_REACHED"}\n'), {
     parsed: { status: 'REPAIR_MAX_ATTEMPTS_REACHED' },
     parseError: null,
+    truncated: false,
   });
   assert.equal(parseJsonObjectStdout('npm banner\n{"status":"COMPLETE"}').parsed, null);
 });

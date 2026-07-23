@@ -35,36 +35,45 @@ test('dependency install approvals are exact to command, project root, and profi
   withQueue(() => {
     const first = requestDependencyInstallApproval({
       command: 'npm install',
-      projectRoot: 'C:\\Repos\\scratch\\hello-cli',
-      executionProfile: 'workspace_manager',
+      projectRoot: '/tmp/scratch\\hello-cli',
+      executionProfile: 'opencalw_manager',
     });
     const second = requestDependencyInstallApproval({
       command: 'npm install',
-      projectRoot: 'C:\\Repos\\scratch\\hello-cli',
-      executionProfile: 'workspace_manager',
+      projectRoot: '/tmp/scratch\\hello-cli',
+      executionProfile: 'opencalw_manager',
     });
 
     assert.equal(first.created, true);
     assert.equal(second.created, false);
     assert.equal(first.record.id, second.record.id);
-    assert.equal(isDependencyInstallApproved({
-      command: 'npm install',
-      projectRoot: 'C:\\Repos\\scratch\\hello-cli',
-      executionProfile: 'workspace_manager',
-    }), false);
+    assert.equal(
+      isDependencyInstallApproved({
+        command: 'npm install',
+        projectRoot: '/tmp/scratch\\hello-cli',
+        executionProfile: 'opencalw_manager',
+      }),
+      false,
+    );
 
     approveApproval(first.record.id, { ttlHours: 1 });
 
-    assert.equal(isDependencyInstallApproved({
-      command: 'npm install',
-      projectRoot: 'C:\\Repos\\scratch\\hello-cli',
-      executionProfile: 'workspace_manager',
-    }), true);
-    assert.equal(isDependencyInstallApproved({
-      command: 'pip install pytest',
-      projectRoot: 'C:\\Repos\\scratch\\hello-cli',
-      executionProfile: 'workspace_manager',
-    }), false);
+    assert.equal(
+      isDependencyInstallApproved({
+        command: 'npm install',
+        projectRoot: '/tmp/scratch\\hello-cli',
+        executionProfile: 'opencalw_manager',
+      }),
+      true,
+    );
+    assert.equal(
+      isDependencyInstallApproved({
+        command: 'pip install pytest',
+        projectRoot: '/tmp/scratch\\hello-cli',
+        executionProfile: 'opencalw_manager',
+      }),
+      false,
+    );
   });
 });
 
@@ -72,20 +81,20 @@ test('denied approvals remain visible and do not auto-grant on repeated request'
   withQueue(() => {
     const request = requestDependencyInstallApproval({
       command: 'npm install',
-      projectRoot: 'C:\\Repos\\scratch\\hello-cli',
-      executionProfile: 'workspace_manager',
+      projectRoot: '/tmp/scratch\\hello-cli',
+      executionProfile: 'opencalw_manager',
     });
     denyApproval(request.record.id);
 
     const repeated = requestDependencyInstallApproval({
       command: 'npm install',
-      projectRoot: 'C:\\Repos\\scratch\\hello-cli',
-      executionProfile: 'workspace_manager',
+      projectRoot: '/tmp/scratch\\hello-cli',
+      executionProfile: 'opencalw_manager',
     });
     const decision = getDependencyInstallApprovalDecision({
       command: 'npm install',
-      projectRoot: 'C:\\Repos\\scratch\\hello-cli',
-      executionProfile: 'workspace_manager',
+      projectRoot: '/tmp/scratch\\hello-cli',
+      executionProfile: 'opencalw_manager',
     });
 
     assert.equal(repeated.created, false);
@@ -100,30 +109,39 @@ test('model escalation approvals are exact to task/model/tier/project', () => {
       task: 'fix hard bug',
       model: 'qwen3',
       modelTier: 'escalation',
-      projectRoot: 'C:\\Repos\\example_game_workspace\\GameOne',
+      projectRoot: '/tmp/example_game_suite\\GameOne',
     });
 
-    assert.equal(isModelEscalationApproved({
-      task: 'fix hard bug',
-      model: 'qwen3',
-      modelTier: 'escalation',
-      projectRoot: 'C:\\Repos\\example_game_workspace\\GameOne',
-    }), false);
+    assert.equal(
+      isModelEscalationApproved({
+        task: 'fix hard bug',
+        model: 'qwen3',
+        modelTier: 'escalation',
+        projectRoot: '/tmp/example_game_suite\\GameOne',
+      }),
+      false,
+    );
 
     approveApproval(request.record.id, { ttlHours: 1 });
 
-    assert.equal(isModelEscalationApproved({
-      task: 'fix hard bug',
-      model: 'qwen3',
-      modelTier: 'escalation',
-      projectRoot: 'C:\\Repos\\example_game_workspace\\GameOne',
-    }), true);
-    assert.equal(isModelEscalationApproved({
-      task: 'fix hard bug',
-      model: 'qwen3',
-      modelTier: 'standard',
-      projectRoot: 'C:\\Repos\\example_game_workspace\\GameOne',
-    }), false);
+    assert.equal(
+      isModelEscalationApproved({
+        task: 'fix hard bug',
+        model: 'qwen3',
+        modelTier: 'escalation',
+        projectRoot: '/tmp/example_game_suite\\GameOne',
+      }),
+      true,
+    );
+    assert.equal(
+      isModelEscalationApproved({
+        task: 'fix hard bug',
+        model: 'qwen3',
+        modelTier: 'standard',
+        projectRoot: '/tmp/example_game_suite\\GameOne',
+      }),
+      false,
+    );
     assert.equal(listApprovals({ status: 'approved' }).length, 1);
   });
 });

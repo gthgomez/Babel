@@ -19,7 +19,7 @@ function assert(condition: unknown, message: string): asserts condition {
 function makeManifest(targetProjectPath?: string) {
   return OrchestratorManifestSchema.parse({
     orchestrator_version: '9.0',
-    target_project: 'example_web_audit',
+    target_project: 'AuditGuard',
     ...(targetProjectPath !== undefined ? { target_project_path: targetProjectPath } : {}),
     analysis: {
       task_summary: 'project root normalization regression',
@@ -27,7 +27,7 @@ function makeManifest(targetProjectPath?: string) {
       secondary_category: null,
       task_overlay_ids: [],
       complexity_estimate: 'Medium',
-      pipeline_mode: 'verified',
+      pipeline_mode: 'deep',
       ambiguity_note: null,
     },
     platform_profile: {
@@ -54,7 +54,7 @@ function makeManifest(targetProjectPath?: string) {
       domain_id: 'domain_swe_frontend',
       skill_ids: [],
       model_adapter_id: 'adapter_codex_balanced',
-      project_overlay_id: 'overlay_example_web_audit',
+      project_overlay_id: 'overlay_auditguard',
       task_overlay_ids: ['task_frontend_professionalism'],
       pipeline_stage_ids: ['pipeline_qa_reviewer'],
     },
@@ -73,17 +73,17 @@ function makeManifest(targetProjectPath?: string) {
 
 async function main(): Promise<void> {
   const tempDir = mkdtempSync(join(tmpdir(), 'babel-project-root-test-'));
-  const tempProjectRoot = join(tempDir, 'example_web_audit');
+  const tempProjectRoot = join(tempDir, 'AuditGuard');
   const sessionStartPath = join(tempDir, 'session-start.json');
 
   mkdirSync(tempProjectRoot, { recursive: true });
-  writeFileSync(join(tempProjectRoot, 'package.json'), '{ "name": "example_web_audit-test" }\n', 'utf-8');
+  writeFileSync(join(tempProjectRoot, 'package.json'), '{ "name": "auditguard-test" }\n', 'utf-8');
   writeFileSync(
     sessionStartPath,
     `${JSON.stringify({
       SchemaVersion: 1,
       SessionId: 'test-session',
-      Project: 'example_web_audit',
+      Project: 'AuditGuard',
       ProjectPath: tempProjectRoot,
     }, null, 2)}\n`,
     'utf-8',
@@ -93,7 +93,7 @@ async function main(): Promise<void> {
   delete process.env['BABEL_PROJECT_ROOT'];
 
   try {
-    const manifestWithPlaceholder = makeManifest('<YOUR_PROJECT_ROOT>/example_web_audit');
+    const manifestWithPlaceholder = makeManifest('<YOUR_PROJECT_ROOT>/AuditGuard');
 
     const sessionRoot = readSessionStartProjectPath(sessionStartPath);
     assert(sessionRoot === tempProjectRoot, `expected session root ${tempProjectRoot}, got ${sessionRoot}`);

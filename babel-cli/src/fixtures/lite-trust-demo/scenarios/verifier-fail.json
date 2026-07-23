@@ -2,7 +2,7 @@
   "schema_version": 1,
   "fixture_type": "babel_lite_trust_demo",
   "scenario_id": "verifier_fail",
-  "visibility": "public_example",
+  "visibility": "private",
   "description": "Offline trust loop: mock fix applies a wrong answer, verifier fails; optional rollback-on-fail restores checkpoint.",
   "target_file": "src/math.js",
   "verifier_command": "npm test",

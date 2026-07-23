@@ -1,20 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import {
-  existsSync,
-  mkdtempSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 
-import { shouldHaltAutonomousWithoutApprovedPlan } from '../pipeline.js';
+import { shouldHaltWithoutApprovedPlan } from '../pipeline.js';
 import {
   ExecutorReportSchema,
   ExecutorTurnSchema,
@@ -28,10 +21,7 @@ import {
   buildVerifierContractArtifacts,
   type VerifierContractSummary,
 } from './requiredVerifierContract.js';
-import {
-  buildTerminalStatusSummary,
-  type TerminalStatus,
-} from './terminalStatus.js';
+import { buildTerminalStatusSummary, type TerminalStatus } from './terminalStatus.js';
 import { createWorktreeSafetyController } from './worktreeSafety.js';
 
 interface RecordedScenario {
@@ -70,8 +60,15 @@ interface RecordedFixtureSet {
 const thisFile = fileURLToPath(import.meta.url);
 const babelCliRoot = resolve(dirname(thisFile), '..', '..');
 const babelRoot = resolve(babelCliRoot, '..');
-const fixturePath = join(dirname(thisFile), '..', 'fixtures', 'live-governance', 'recorded-provider-scenarios.json');
-const proofRoot = process.env['BABEL_LIVE_GOVERNANCE_PROOF_ROOT'] ??
+const fixturePath = join(
+  dirname(thisFile),
+  '..',
+  'fixtures',
+  'live-governance',
+  'recorded-provider-scenarios.json',
+);
+const proofRoot =
+  process.env['BABEL_LIVE_GOVERNANCE_PROOF_ROOT'] ??
   join(babelRoot, 'runs', 'reports', 'babel-live-governance-proof-artifacts');
 
 function liveProviderKeyState(): {
@@ -121,20 +118,22 @@ function selectScenarios(fixtures: RecordedFixtureSet, scenarioIds: string[]): R
   }
 
   const normalized = new Set(scenarioIds.map((id) => id.toLowerCase()));
-  const selected = fixtures.scenarios.filter((scenario) => normalized.has(scenario.id.toLowerCase()));
+  const selected = fixtures.scenarios.filter((scenario) =>
+    normalized.has(scenario.id.toLowerCase()),
+  );
   if (selected.length === 0) {
     throw new Error(
       `No scenario matched BABEL_SCHEMA_FAILURE_SCENARIOS=[${scenarioIds.join(', ')}]. ` +
-      `Available scenarios: ${fixtures.scenarios.map((scenario) => scenario.id).join(', ')}`,
+        `Available scenarios: ${fixtures.scenarios.map((scenario) => scenario.id).join(', ')}`,
     );
   }
   return selected;
 }
 
 function sha256(input: unknown): string {
-  return createHash('sha256').update(
-    typeof input === 'string' ? input : JSON.stringify(input),
-  ).digest('hex');
+  return createHash('sha256')
+    .update(typeof input === 'string' ? input : JSON.stringify(input))
+    .digest('hex');
 }
 
 function writeJson(path: string, value: unknown): void {
@@ -142,7 +141,10 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
-function writeRepoFiles(root: string, files: readonly { path: string; content: string }[] = []): void {
+function writeRepoFiles(
+  root: string,
+  files: readonly { path: string; content: string }[] = [],
+): void {
   for (const file of files) {
     const target = join(root, file.path);
     mkdirSync(dirname(target), { recursive: true });
@@ -155,11 +157,7 @@ function runGit(root: string, args: readonly string[]): void {
     encoding: 'utf8',
     timeout: 10_000,
   });
-  assert.equal(
-    result.status,
-    0,
-    `git ${args.join(' ')} failed: ${result.stderr || result.stdout}`,
-  );
+  assert.equal(result.status, 0, `git ${args.join(' ')} failed: ${result.stderr || result.stdout}`);
 }
 
 function runGitStatus(root: string): string[] {
@@ -167,14 +165,10 @@ function runGitStatus(root: string): string[] {
     encoding: 'utf8',
     timeout: 10_000,
   });
-  assert.equal(
-    result.status,
-    0,
-    `git status failed: ${result.stderr || result.stdout}`,
-  );
+  assert.equal(result.status, 0, `git status failed: ${result.stderr || result.stdout}`);
   return String(result.stdout ?? '')
     .split(/\r?\n/)
-    .map(line => line.trim())
+    .map((line) => line.trim())
     .filter(Boolean);
 }
 
@@ -196,20 +190,20 @@ function makeProjectRoot(scenario: RecordedScenario): string {
 
 function commandsAttempted(toolLog: readonly ToolCallLog[]): string[] {
   return toolLog
-    .filter(entry => entry.tool === 'shell_exec' || entry.tool === 'test_run')
-    .map(entry => entry.target);
+    .filter((entry) => entry.tool === 'shell_exec' || entry.tool === 'test_run')
+    .map((entry) => entry.target);
 }
 
 function touchedFiles(toolLog: readonly ToolCallLog[]): string[] {
   return toolLog
-    .filter(entry => entry.tool === 'file_write' && entry.exit_code === 0)
-    .map(entry => entry.target)
+    .filter((entry) => entry.tool === 'file_write' && entry.exit_code === 0)
+    .map((entry) => entry.target)
     .sort();
 }
 
 function parseToolLog(raw: unknown): ToolCallLog[] {
   if (!Array.isArray(raw)) return [];
-  return raw.map(entry => ToolCallLogSchema.parse(entry));
+  return raw.map((entry) => ToolCallLogSchema.parse(entry));
 }
 
 function makeExecutionReport(input: {
@@ -236,21 +230,24 @@ function makeExecutionReport(input: {
       tool_call_log: input.toolLog,
       diff_path: join(input.runDir, 'recorded-provider-diff.patch'),
       execution_log_path: join(input.runDir, '04_execution_report.json'),
-      warnings: input.scenario.expected_terminal_status === 'COMPLETE' && input.toolLog.length === 0
-        ? ['No tool calls were recorded despite COMPLETE terminal status.']
-        : [],
+      warnings:
+        input.scenario.expected_terminal_status === 'COMPLETE' && input.toolLog.length === 0
+          ? ['No tool calls were recorded despite COMPLETE terminal status.']
+          : [],
     });
   }
 
-  const haltTag = input.status === 'REQUIRED_VERIFIER_FAILED' ||
+  const haltTag =
+    input.status === 'REQUIRED_VERIFIER_FAILED' ||
     input.status === 'REQUIRED_VERIFIER_MISSING' ||
     input.status === 'REQUIRED_VERIFIER_SKIPPED'
-    ? 'STEP_VERIFICATION_FAIL'
-    : 'ACTIVATION_GATE_FAIL';
+      ? 'STEP_VERIFICATION_FAIL'
+      : 'ACTIVATION_GATE_FAIL';
 
   return ExecutorReportSchema.parse({
     status: 'EXECUTION_HALTED',
-    stage_status: input.status === 'REQUIRED_VERIFIER_FAILED' ? 'VERIFIER_FAILED' : 'EXECUTION_ATTEMPTED',
+    stage_status:
+      input.status === 'REQUIRED_VERIFIER_FAILED' ? 'VERIFIER_FAILED' : 'EXECUTION_ATTEMPTED',
     steps_executed: input.toolLog.length,
     tool_call_log: input.toolLog,
     pipeline_error: {
@@ -283,10 +280,7 @@ function verifierArtifactsFor(
   };
 }
 
-function runScenario(
-  fixtureSet: RecordedFixtureSet,
-  scenario: RecordedScenario,
-): void {
+function runScenario(fixtureSet: RecordedFixtureSet, scenario: RecordedScenario): void {
   const scenarioArtifactRoot = join(proofRoot, scenario.id);
   const runDir = join(scenarioArtifactRoot, 'run');
   const projectRoot = makeProjectRoot(scenario);
@@ -300,12 +294,12 @@ function runScenario(
     };
 
     const plannerParse = SwePlanSchema.safeParse(scenario.planner_output);
-    const qaParse = scenario.qa_output === null
-      ? null
-      : QaVerdictSchema.safeParse(scenario.qa_output);
-    const executorParse = scenario.executor_output === null
-      ? null
-      : ExecutorTurnSchema.safeParse(scenario.executor_output);
+    const qaParse =
+      scenario.qa_output === null ? null : QaVerdictSchema.safeParse(scenario.qa_output);
+    const executorParse =
+      scenario.executor_output === null
+        ? null
+        : ExecutorTurnSchema.safeParse(scenario.executor_output);
 
     let toolLog = parseToolLog(scenario.tool_call_log);
     let condition = '';
@@ -316,17 +310,21 @@ function runScenario(
     assert.equal(
       scenario.provider.mode,
       'recorded',
-      'Recorded-provider scenarios must explicitly identify recorded mode.',
+      'Phase 1 recorded-provider scenarios must explicitly identify recorded mode.',
     );
 
     if (!plannerParse.success) {
-      condition = `Planner output failed SwePlanSchema validation: ${plannerParse.error.issues.map(issue => issue.message).join('; ')}`;
-      assert.equal(shouldHaltAutonomousWithoutApprovedPlan('autonomous', null), true);
+      condition = `Planner output failed SwePlanSchema validation: ${plannerParse.error.issues.map((issue) => issue.message).join('; ')}`;
+      assert.equal(shouldHaltWithoutApprovedPlan('deep', null), true);
     } else if (qaParse && qaParse.success && qaParse.data.verdict === 'REJECT') {
-      condition = qaParse.data.failures.map(failure => failure.condition).join('; ');
-      assert.equal(shouldHaltAutonomousWithoutApprovedPlan('autonomous', null), true);
+      condition = qaParse.data.failures.map((failure) => failure.condition).join('; ');
+      assert.equal(shouldHaltWithoutApprovedPlan('deep', null), true);
       for (const file of scenario.expected_no_files ?? []) {
-        assert.equal(existsSync(join(projectRoot, file)), false, `${file} must not be created after QA rejection`);
+        assert.equal(
+          existsSync(join(projectRoot, file)),
+          false,
+          `${file} must not be created after QA rejection`,
+        );
       }
     } else {
       assert.equal(plannerParse.success, true);
@@ -345,9 +343,14 @@ function runScenario(
         const snapshot = safety.snapshotBeforeWrite(attemptedPath, 1);
         assert.equal(snapshot.ok, false);
         assert.equal(snapshot.status, 'WORKTREE_DIRTY_UNSAFE');
-        assert.equal(readFileSync(join(projectRoot, attemptedPath), 'utf8'), scenario.dirty_file.content);
+        assert.equal(
+          readFileSync(join(projectRoot, attemptedPath), 'utf8'),
+          scenario.dirty_file.content,
+        );
 
-        const rollback = safety.rollbackTouchedFiles('recorded provider attempted to write dirty target');
+        const rollback = safety.rollbackTouchedFiles(
+          'recorded provider attempted to write dirty target',
+        );
         const safetySummary = safety.buildSummary();
         writeJson(join(runDir, 'rollback_summary.json'), rollback);
         writeJson(join(runDir, 'worktree_safety_summary.json'), safetySummary);
@@ -369,7 +372,7 @@ function runScenario(
               reason_code: 'WORKTREE_DIRTY_UNSAFE',
               message: snapshot.reason ?? 'Dirty target refused.',
               tool: 'file_write',
-              active_mode: 'autonomous',
+              active_mode: 'deep',
               required_mode: null,
               evidence: targetDirtyConflicts,
             },
@@ -378,7 +381,10 @@ function runScenario(
         condition = snapshot.reason ?? 'Dirty target refused.';
         assert.equal(statusAfter.length, 1);
         assert.equal(statusAfter[0], `M ${attemptedPath}`);
-        assert.equal(readFileSync(join(projectRoot, attemptedPath), 'utf8'), scenario.dirty_file.content);
+        assert.equal(
+          readFileSync(join(projectRoot, attemptedPath), 'utf8'),
+          scenario.dirty_file.content,
+        );
       } else {
         const verifier = verifierArtifactsFor(scenario, toolLog, runDir);
         verifierSummary = verifier.summary;
@@ -416,7 +422,7 @@ function runScenario(
       status: terminalStatus.status,
       toolLog,
       condition,
-      lastToolOutput: [...toolLog].reverse().find(entry => entry.exit_code !== 0) ?? null,
+      lastToolOutput: [...toolLog].reverse().find((entry) => entry.exit_code !== 0) ?? null,
     });
 
     const proofArtifact = {
@@ -438,19 +444,21 @@ function runScenario(
       planner_output: scenario.planner_output,
       planner_parse: plannerParse.success
         ? { status: 'pass' }
-        : { status: 'fail', issues: plannerParse.error.issues.map(issue => issue.message) },
+        : { status: 'fail', issues: plannerParse.error.issues.map((issue) => issue.message) },
       qa_output: scenario.qa_output,
-      qa_parse: qaParse === null
-        ? { status: 'not_run' }
-        : qaParse.success
-          ? { status: 'pass', verdict: qaParse.data.verdict }
-          : { status: 'fail', issues: qaParse.error.issues.map(issue => issue.message) },
+      qa_parse:
+        qaParse === null
+          ? { status: 'not_run' }
+          : qaParse.success
+            ? { status: 'pass', verdict: qaParse.data.verdict }
+            : { status: 'fail', issues: qaParse.error.issues.map((issue) => issue.message) },
       executor_output: scenario.executor_output,
-      executor_parse: executorParse === null
-        ? { status: 'not_invoked' }
-        : executorParse.success
-          ? { status: 'pass', output_type: executorParse.data.type }
-          : { status: 'fail', issues: executorParse.error.issues.map(issue => issue.message) },
+      executor_parse:
+        executorParse === null
+          ? { status: 'not_invoked' }
+          : executorParse.success
+            ? { status: 'pass', output_type: executorParse.data.type }
+            : { status: 'fail', issues: executorParse.error.issues.map((issue) => issue.message) },
       commands_attempted: commandsAttempted(toolLog),
       verifier_declaration: scenario.task.match(/\bVerifier commands?\s*:.+$/im)?.[0] ?? null,
       verifier_output: verifierSummary,
@@ -485,7 +493,9 @@ test('recorded-provider governance proof scenarios', async (t) => {
     selected_live_provider: liveProvider.provider,
     deepseek_api_key_present: Boolean(process.env['DEEPSEEK_API_KEY']),
     deepinfra_api_key_present: Boolean(process.env['DEEPINFRA_API_KEY']),
-    mode_used: liveProvider.keyPresent ? liveProvider.modeWithKey : 'recorded_replay_live_provider_unavailable',
+    mode_used: liveProvider.keyPresent
+      ? liveProvider.modeWithKey
+      : 'recorded_replay_live_provider_unavailable',
     note: liveProvider.keyPresent
       ? 'A live provider key is present, but this deterministic regression suite still uses recorded provider outputs.'
       : fixtures.live_provider_unavailable_artifact,
@@ -502,7 +512,7 @@ test('recorded-provider governance proof scenarios', async (t) => {
     artifact_type: 'babel_live_governance_proof_summary',
     fixture_set_id: fixtures.fixture_set_id,
     scenario_count: selectedScenarios.length,
-    scenario_ids: selectedScenarios.map(scenario => scenario.id),
+    scenario_ids: selectedScenarios.map((scenario) => scenario.id),
     selected_scenario_filter: scenarioFilter,
     provider_mode: liveProvider.keyPresent
       ? liveProvider.modeWithKey

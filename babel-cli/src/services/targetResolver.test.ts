@@ -8,14 +8,23 @@ import { normalizeManifestProjectRoot } from '../pipeline/manifestContext.js';
 import { validatePlanTargetsWithinEffectiveRoots } from '../pipeline/targetConsistency.js';
 import { resolveAgentTarget } from './targetResolver.js';
 
-function makeWorkspaceFixture(): { root: string; workspace: string; child: string; outside: string } {
+function makeWorkspaceFixture(): {
+  root: string;
+  workspace: string;
+  child: string;
+  outside: string;
+} {
   const root = mkdtempSync(join(tmpdir(), 'babel-target-resolver-'));
-  const workspace = join(root, 'example_game_workspace');
+  const workspace = join(root, 'example_game_suite');
   const child = join(workspace, 'relicRun');
   const outside = join(root, 'OtherProject');
   mkdirSync(child, { recursive: true });
   mkdirSync(outside, { recursive: true });
-  writeFileSync(join(workspace, 'README.md'), '# Project Games\n\nWorkspace for game projects.\n', 'utf-8');
+  writeFileSync(
+    join(workspace, 'README.md'),
+    '# Project Games\n\nWorkspace for game projects.\n',
+    'utf-8',
+  );
   writeFileSync(join(child, 'package.json'), '{"name":"relic-run"}\n', 'utf-8');
   writeFileSync(join(outside, 'README.md'), '# Other\n', 'utf-8');
   return { root, workspace, child, outside };
@@ -25,7 +34,7 @@ test('target resolver prefers active child repo over named parent workspace', ()
   const fixture = makeWorkspaceFixture();
   try {
     const target = resolveAgentTarget({
-      project: 'example_game_workspace',
+      project: 'example_game_suite',
       namedProjectRoot: fixture.workspace,
       cwd: fixture.child,
     });
@@ -42,7 +51,7 @@ test('target resolver lets explicit project roots win over cwd and named project
   const fixture = makeWorkspaceFixture();
   try {
     const target = resolveAgentTarget({
-      project: 'example_game_workspace',
+      project: 'example_game_suite',
       projectRoot: fixture.workspace,
       namedProjectRoot: fixture.child,
       cwd: fixture.outside,
@@ -59,7 +68,7 @@ test('target resolver still supports named parent projects outside their workspa
   const fixture = makeWorkspaceFixture();
   try {
     const target = resolveAgentTarget({
-      project: 'example_game_workspace',
+      project: 'example_game_suite',
       namedProjectRoot: fixture.workspace,
       cwd: fixture.outside,
     });
@@ -75,12 +84,16 @@ test('target resolver still supports named parent projects outside their workspa
 test('manifest target path is clamped to authoritative project root', () => {
   const fixture = makeWorkspaceFixture();
   try {
-    const manifest = normalizeManifestProjectRoot({
-      target_project: 'example_game_workspace',
-      target_project_path: '/user-home/example_game_workspace',
-    } as any, undefined, {
-      authoritativeProjectRoot: fixture.child,
-    });
+    const manifest = normalizeManifestProjectRoot(
+      {
+        target_project: 'example_game_suite',
+        target_project_path: '/tmp/example_game_suite',
+      } as any,
+      undefined,
+      {
+        authoritativeProjectRoot: fixture.child,
+      },
+    );
 
     assert.equal(manifest.target_project_path, fixture.child);
   } finally {
@@ -94,14 +107,32 @@ test('target consistency blocks absolute planned tool targets outside effective 
     const result = validatePlanTargetsWithinEffectiveRoots({
       effectiveTargetRoot: fixture.child,
       approvedRoots: [fixture.workspace],
-      targets: [
-        join(fixture.child, 'package.json'),
-        join(fixture.root, 'outside.txt'),
-      ],
+      targets: [join(fixture.child, 'package.json'), join(fixture.root, 'outside.txt')],
     });
 
     assert.equal(result.ok, false);
     assert.match(result.violations[0] ?? '', /outside the resolved target root/);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('target consistency resolves relative tool targets against effective root', () => {
+  const fixture = makeWorkspaceFixture();
+  try {
+    const inside = validatePlanTargetsWithinEffectiveRoots({
+      effectiveTargetRoot: fixture.child,
+      approvedRoots: [],
+      targets: ['README.md'],
+    });
+    assert.equal(inside.ok, true);
+
+    const outside = validatePlanTargetsWithinEffectiveRoots({
+      effectiveTargetRoot: fixture.child,
+      approvedRoots: [],
+      targets: ['..\\README.md'],
+    });
+    assert.equal(outside.ok, false);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

@@ -4,6 +4,11 @@ import { basename, dirname, join, resolve } from 'node:path';
 
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
 import type { LiteFullAgentsMode, LiteFullRouteDecision } from './liteFullRouter.js';
+import {
+  runReadOnlyAgentLoop,
+  buildReadOnlyToolContext,
+} from '../agent/lanes/readOnlyAgentLoop.js';
+import type { EvidenceBundle } from '../evidence.js';
 
 export interface BabelFullSparkEvidence {
   id: string;
@@ -18,7 +23,7 @@ export interface BabelFullSparkEvidence {
 export interface BabelFullRunResult {
   schema_version: 1;
   status: 'FULL_PLAN_READY';
-  selected_lane: 'babel_full';
+  selected_lane: 'deep_lane';
   run_id: string;
   run_dir: string;
   task: string;
@@ -76,9 +81,15 @@ function pad(value: number): string {
 }
 
 function formatRunId(date: Date, task: string): string {
-  const stamp = `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}T` +
+  const stamp =
+    `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}T` +
     `${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}Z`;
-  const slug = task.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48) || 'task';
+  const slug =
+    task
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 48) || 'task';
   const hash = createHash('sha256').update(task).digest('hex').slice(0, 8);
   return `${stamp}-${slug}-${hash}`;
 }
@@ -107,8 +118,24 @@ interface RepoCartography {
   readme_preview_chars: number;
 }
 
-const CARTography_DIR_NAMES = ['src', 'lib', 'test', 'tests', 'docs', 'babel-cli', 'packages', 'apps'] as const;
-const CARTography_FILE_NAMES = ['README.md', 'package.json', 'AGENTS.md', 'PROJECT.md', 'tsconfig.json', 'pyproject.toml'] as const;
+const CARTography_DIR_NAMES = [
+  'src',
+  'lib',
+  'test',
+  'tests',
+  'docs',
+  'babel-cli',
+  'packages',
+  'apps',
+] as const;
+const CARTography_FILE_NAMES = [
+  'README.md',
+  'package.json',
+  'AGENTS.md',
+  'PROJECT.md',
+  'tsconfig.json',
+  'pyproject.toml',
+] as const;
 
 function buildRepoCartography(projectRoot: string | undefined): RepoCartography {
   const empty: RepoCartography = {
@@ -126,14 +153,14 @@ function buildRepoCartography(projectRoot: string | undefined): RepoCartography 
   let rootEntries: string[] = [];
   try {
     rootEntries = readdirSync(root, { withFileTypes: true })
-      .filter(entry => !entry.name.startsWith('.') && entry.name !== 'node_modules')
-      .map(entry => entry.name)
+      .filter((entry) => !entry.name.startsWith('.') && entry.name !== 'node_modules')
+      .map((entry) => entry.name)
       .sort();
   } catch {
     return empty;
   }
 
-  const topLevelDirs = rootEntries.filter(name => {
+  const topLevelDirs = rootEntries.filter((name) => {
     try {
       return statSync(join(root, name)).isDirectory();
     } catch {
@@ -158,7 +185,9 @@ function buildRepoCartography(projectRoot: string | undefined): RepoCartography 
       packageName = typeof parsed['name'] === 'string' ? parsed['name'] : null;
       const scripts = parsed['scripts'];
       if (scripts && typeof scripts === 'object' && !Array.isArray(scripts)) {
-        packageScripts = Object.keys(scripts as Record<string, unknown>).sort().slice(0, 12);
+        packageScripts = Object.keys(scripts as Record<string, unknown>)
+          .sort()
+          .slice(0, 12);
       }
     } catch {
       packageScripts = [];
@@ -166,20 +195,20 @@ function buildRepoCartography(projectRoot: string | undefined): RepoCartography 
   }
 
   const readmePreview = safeReadPreview(join(root, 'README.md'));
-  const dirSamples = CARTography_DIR_NAMES
-    .filter(name => topLevelDirs.includes(name))
-    .map(name => {
+  const dirSamples = CARTography_DIR_NAMES.filter((name) => topLevelDirs.includes(name)).map(
+    (name) => {
       try {
         const entries = readdirSync(join(root, name), { withFileTypes: true })
-          .filter(entry => !entry.name.startsWith('.'))
-          .map(entry => entry.name)
+          .filter((entry) => !entry.name.startsWith('.'))
+          .map((entry) => entry.name)
           .sort()
           .slice(0, 6);
         return `${name}/ (${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}: ${entries.join(', ') || 'empty'})`;
       } catch {
         return `${name}/ (unreadable)`;
       }
-    });
+    },
+  );
 
   return {
     root_entries: rootEntries.slice(0, 16),
@@ -192,14 +221,17 @@ function buildRepoCartography(projectRoot: string | undefined): RepoCartography 
   };
 }
 
-function listReadableFiles(projectRoot: string | undefined, cartography: RepoCartography): string[] {
+function listReadableFiles(
+  projectRoot: string | undefined,
+  cartography: RepoCartography,
+): string[] {
   if (!projectRoot || !existsSync(projectRoot)) return [];
   const root = resolve(projectRoot);
-  const files = cartography.notable_files.map(name => join(root, name));
+  const files = cartography.notable_files.map((name) => join(root, name));
   try {
     const rootFiles = readdirSync(root, { withFileTypes: true })
-      .filter(entry => entry.isFile() && !entry.name.startsWith('.'))
-      .map(entry => join(root, entry.name))
+      .filter((entry) => entry.isFile() && !entry.name.startsWith('.'))
+      .map((entry) => join(root, entry.name))
       .slice(0, 8);
     return [...new Set([...files, ...rootFiles])].slice(0, 12);
   } catch {
@@ -214,18 +246,18 @@ export function synthesizeSparkFindings(input: {
   runDir: string;
 }): SparkSynthesis {
   const scopeHints = input.sparkAgents
-    .filter(agent => agent.id === 'repo-cartographer')
-    .flatMap(agent => agent.findings)
+    .filter((agent) => agent.id === 'repo-cartographer')
+    .flatMap((agent) => agent.findings)
     .slice(0, 4);
   const riskNotes = input.sparkAgents
-    .filter(agent => agent.id === 'risk-contract-reviewer')
-    .flatMap(agent => agent.findings);
+    .filter((agent) => agent.id === 'risk-contract-reviewer')
+    .flatMap((agent) => agent.findings);
   const verifierHints = input.sparkAgents
-    .filter(agent => agent.id === 'test-verifier-scout')
-    .flatMap(agent => agent.findings);
+    .filter((agent) => agent.id === 'test-verifier-scout')
+    .flatMap((agent) => agent.findings);
   const implementationNotes = input.sparkAgents
-    .filter(agent => agent.id === 'implementation-plan-critic')
-    .flatMap(agent => agent.findings);
+    .filter((agent) => agent.id === 'implementation-plan-critic')
+    .flatMap((agent) => agent.findings);
   const summary = [
     `Read-only Spark synthesis for: ${input.task}`,
     scopeHints[0] ?? 'Scope grounded from repo cartography.',
@@ -243,8 +275,8 @@ export function synthesizeSparkFindings(input: {
     verifier_hints: verifierHints,
     implementation_notes: implementationNotes,
     spark_run_dir: input.runDir,
-    evidence_paths: input.sparkAgents.map(agent => agent.evidence_path),
-    agent_ids: input.sparkAgents.map(agent => agent.id),
+    evidence_paths: input.sparkAgents.map((agent) => agent.evidence_path),
+    agent_ids: input.sparkAgents.map((agent) => agent.id),
   };
 }
 
@@ -256,9 +288,15 @@ export function enrichTaskWithSparkSynthesis(task: string, synthesis: SparkSynth
     synthesis.summary,
     synthesis.scope_hints.length > 0 ? `Scope hints: ${synthesis.scope_hints.join(' ')}` : '',
     synthesis.risk_notes.length > 0 ? `Risk notes: ${synthesis.risk_notes.join(' ')}` : '',
-    synthesis.verifier_hints.length > 0 ? `Verifier hints: ${synthesis.verifier_hints.join(' ')}` : '',
-    synthesis.implementation_notes.length > 0 ? `Implementation notes: ${synthesis.implementation_notes.join(' ')}` : '',
-  ].filter(Boolean).join('\n');
+    synthesis.verifier_hints.length > 0
+      ? `Verifier hints: ${synthesis.verifier_hints.join(' ')}`
+      : '',
+    synthesis.implementation_notes.length > 0
+      ? `Implementation notes: ${synthesis.implementation_notes.join(' ')}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 export function runSparkParallelReview(input: {
@@ -294,11 +332,11 @@ export function runSparkParallelReview(input: {
     task: input.task,
     run_id: runId,
     run_dir: runDir,
-    spark_agent_ids: sparkAgents.map(agent => agent.id),
+    spark_agent_ids: sparkAgents.map((agent) => agent.id),
     synthesis_path: synthesisPath,
     mutation_subagents: {
       enabled: false,
-      reason: 'Read-only Spark reviewers only; the lead lane owns mutation.',
+      reason: 'Wave 5 proof batch: read-only Spark reviewers only; lead lane owns mutation.',
     },
   });
 
@@ -319,11 +357,12 @@ function buildSparkEvidence(input: {
 }): BabelFullSparkEvidence[] {
   const cartography = buildRepoCartography(input.projectRoot);
   const readableFiles = listReadableFiles(input.projectRoot, cartography);
-  const previewFileNames = readableFiles.map(file => basename(file));
+  const previewFileNames = readableFiles.map((file) => basename(file));
   const firstPreview = readableFiles[0] ? safeReadPreview(readableFiles[0]) : '';
-  const layoutSummary = cartography.root_entries.length > 0
-    ? `Root entries: ${cartography.root_entries.join(', ')}.`
-    : 'No root entries were readable.';
+  const layoutSummary =
+    cartography.root_entries.length > 0
+      ? `Root entries: ${cartography.root_entries.join(', ')}.`
+      : 'No root entries were readable.';
   const packageSummary = cartography.package_name
     ? `Package "${cartography.package_name}" with scripts: ${cartography.package_scripts.join(', ') || 'none'}.`
     : 'No package.json metadata was captured.';
@@ -364,7 +403,7 @@ function buildSparkEvidence(input: {
       files_read: [],
       findings: [
         `Route reason: ${input.routeDecision.route_reason}`,
-        `Risk signals: ${input.routeDecision.risk_signals.map(signal => signal.code).join(', ') || 'none'}.`,
+        `Risk signals: ${input.routeDecision.risk_signals.map((signal) => signal.code).join(', ') || 'none'}.`,
       ],
     },
     {
@@ -372,7 +411,9 @@ function buildSparkEvidence(input: {
       role: 'test/verifier scout',
       status: 'success',
       mode: 'read_only',
-      files_read: previewFileNames.filter(name => /package|README|AGENTS|PROJECT|tsconfig|pyproject/i.test(name)),
+      files_read: previewFileNames.filter((name) =>
+        /package|README|AGENTS|PROJECT|tsconfig|pyproject/i.test(name),
+      ),
       findings: [
         cartography.package_scripts.length > 0
           ? `Candidate verifiers from package scripts: ${cartography.package_scripts.slice(0, 6).join(', ')}.`
@@ -394,7 +435,7 @@ function buildSparkEvidence(input: {
     },
   ];
 
-  return agents.map(agent => {
+  return agents.map((agent) => {
     const evidencePath = join(input.runDir, 'spark', 'read-only', `${agent.id}.json`);
     const evidence = {
       schema_version: 1,
@@ -422,14 +463,15 @@ export function runBabelFullPlan(task: string, options: BabelFullRunOptions): Ba
 
   const routeDecisionPath = join(runDir, 'route_decision.json');
   writeJson(routeDecisionPath, options.routeDecision);
-  const sparkAgents = agentsMode === 'off'
-    ? []
-    : buildSparkEvidence({
-      runDir,
-      task,
-      ...(projectRoot ? { projectRoot } : {}),
-      routeDecision: options.routeDecision,
-    });
+  const sparkAgents =
+    agentsMode === 'off'
+      ? []
+      : buildSparkEvidence({
+          runDir,
+          task,
+          ...(projectRoot ? { projectRoot } : {}),
+          routeDecision: options.routeDecision,
+        });
 
   const hardenedPlanPath = join(runDir, 'hardened_plan.md');
   const hardenedPlanJsonPath = join(runDir, 'hardened_plan.json');
@@ -452,7 +494,7 @@ export function runBabelFullPlan(task: string, options: BabelFullRunOptions): Ba
     schema_version: 1,
     task,
     route_decision: options.routeDecision,
-    spark_agent_ids: sparkAgents.map(agent => agent.id),
+    spark_agent_ids: sparkAgents.map((agent) => agent.id),
     mutation_owner: 'governed_babel_executor',
     mutating_subagents_enabled: false,
   });
@@ -467,7 +509,8 @@ export function runBabelFullPlan(task: string, options: BabelFullRunOptions): Ba
       pro_only_for_hardest_task: true,
     },
     verdict: 'PASS',
-    reason: 'Deterministic Full lane proof confirms read-only Spark synthesis before governed execution.',
+    reason:
+      'Deterministic Full lane proof confirms read-only Spark synthesis before governed execution.',
   });
 
   const costLedgerPath = join(runDir, 'cost_ledger.json');
@@ -482,7 +525,7 @@ export function runBabelFullPlan(task: string, options: BabelFullRunOptions): Ba
   const result: BabelFullRunResult = {
     schema_version: 1,
     status: 'FULL_PLAN_READY',
-    selected_lane: 'babel_full',
+    selected_lane: 'deep_lane',
     run_id: runId,
     run_dir: runDir,
     task,
@@ -498,10 +541,11 @@ export function runBabelFullPlan(task: string, options: BabelFullRunOptions): Ba
     hardened_plan_path: hardenedPlanPath,
     qa_review_path: qaReviewPath,
     cost_ledger_path: costLedgerPath,
-    next_command: `babel run "${task.replace(/"/g, '\\"')}" --mode verified`,
+    next_command: `babel run "${task.replace(/"/g, '\\"')}" --mode deep`,
     mutation_subagents: {
       enabled: false,
-      reason: 'This proof batch allows read-only Spark agents only; governed execution remains lead-owned.',
+      reason:
+        'This proof batch allows read-only Spark agents only; governed execution remains lead-owned.',
     },
   };
   writeJson(join(runDir, 'full_result.json'), result);
@@ -509,7 +553,7 @@ export function runBabelFullPlan(task: string, options: BabelFullRunOptions): Ba
 }
 
 export function formatBabelFullHuman(result: BabelFullRunResult): string {
-  const riskSignals = result.route_decision.risk_signals.map(signal => signal.code).join(', ');
+  const riskSignals = result.route_decision.risk_signals.map((signal) => signal.code).join(', ');
   return [
     'Babel Full',
     `Status: ${result.status}`,
@@ -525,4 +569,132 @@ export function formatBabelFullHuman(result: BabelFullRunResult): string {
     `Next: ${result.next_command}`,
     `Mutating subagents: disabled (${result.mutation_subagents.reason})`,
   ].join('\n');
+}
+
+// ── Live Spark Enrichment (P1.1) ──────────────────────────────────────────────
+
+export interface LiveSparkEnrichmentOptions {
+  task: string;
+  projectRoot: string;
+  cartography: ReturnType<typeof buildRepoCartography>;
+  routeDecision: LiteFullRouteDecision;
+  /** Provider mode: 'mock' | 'live'. Defaults to 'mock' when offline. */
+  provider?: string;
+  /** Evidence bundle for writing live findings artifacts */
+  evidence?: EvidenceBundle;
+}
+
+export interface LiveSparkEnrichmentResult {
+  /** Enhanced risk findings from live LLM review */
+  riskFindings: string[];
+  /** Whether live enrichment was used (vs synthetic fallback) */
+  live: boolean;
+  /** Any error message if the live call failed */
+  error?: string;
+}
+
+/**
+ * Run a live LLM-powered risk review as a Spark enrichment subagent.
+ *
+ * When live provider is available, runs a read-only agent loop that explores
+ * the repo and produces enhanced risk findings. Falls back to synthetic
+ * findings when offline or on error.
+ *
+ * This is a pre-subagent: it runs BEFORE the lead lane, providing richer
+ * context for plan/fix decisions.
+ */
+export async function runLiveSparkRiskReview(
+  options: LiveSparkEnrichmentOptions,
+): Promise<LiveSparkEnrichmentResult> {
+  const isOffline =
+    options.provider === 'mock' ||
+    process.env['BABEL_LITE_OFFLINE'] === '1' ||
+    !process.env['DEEPSEEK_API_KEY'];
+
+  if (isOffline) {
+    // Synthetic fallback — same quality as existing Spark findings
+    return {
+      riskFindings: [
+        `Route reason: ${options.routeDecision.route_reason}`,
+        `Risk signals: ${options.routeDecision.risk_signals.map((s) => s.code).join(', ') || 'none'}.`,
+        `Complexity: ${options.routeDecision.complexity}.`,
+      ],
+      live: false,
+    };
+  }
+
+  try {
+    const readableFiles: string[] = [];
+    if (options.projectRoot && existsSync(options.projectRoot)) {
+      try {
+        const root = resolve(options.projectRoot);
+        const entries = readdirSync(root, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isFile() && !entry.name.startsWith('.') && readableFiles.length < 8) {
+            readableFiles.push(join(root, entry.name));
+          }
+        }
+      } catch {
+        /* best effort */
+      }
+    }
+
+    const evidence = options.evidence;
+    const toolContext = buildReadOnlyToolContext({
+      verb: 'plan' as const,
+      ...(evidence
+        ? { runId: evidence.runId, runDir: evidence.runDir }
+        : {
+            runId: `spark-${Date.now()}`,
+            runDir: join(BABEL_RUNS_DIR, 'spark-live'),
+          }),
+    });
+
+    const discovery = await runReadOnlyAgentLoop({
+      verb: 'plan' as const,
+      task: `Risk review: ${options.task}`,
+      projectRoot: options.projectRoot,
+      seedPaths: readableFiles.slice(0, 6),
+      toolContext,
+      ...(evidence ? { evidence } : ({} as any)),
+      provider: options.provider as any,
+      useDeterministicMock: false,
+      maxRounds: 3, // Shorter than a full plan discovery
+    });
+
+    const observations = discovery.observations ?? '';
+
+    // Extract risk-relevant findings from the observations
+    const riskLines = observations
+      .split('\n')
+      .filter((line) =>
+        /\b(?:risk|warning|error|breaking|security|vulnerability|deprecated|unsafe|missing|broken|failing)\b/i.test(
+          line,
+        ),
+      )
+      .slice(0, 5);
+
+    const findings =
+      riskLines.length > 0
+        ? riskLines.map((line) => line.trim().replace(/^[-*]\s*/, ''))
+        : [
+            `Route reason: ${options.routeDecision.route_reason}`,
+            `Risk signals: ${options.routeDecision.risk_signals.map((s) => s.code).join(', ') || 'none'}.`,
+            `Live review did not identify additional risks beyond route signals.`,
+          ];
+
+    return {
+      riskFindings: findings,
+      live: true,
+    };
+  } catch (err: any) {
+    return {
+      riskFindings: [
+        `Route reason: ${options.routeDecision.route_reason}`,
+        `Risk signals: ${options.routeDecision.risk_signals.map((s) => s.code).join(', ') || 'none'}.`,
+      ],
+      live: false,
+      error: err?.message ?? 'Live Spark enrichment failed',
+    };
+  }
 }

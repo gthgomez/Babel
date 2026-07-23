@@ -66,7 +66,7 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(text) as unknown;
     return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
+      ? (parsed as Record<string, unknown>)
       : null;
   } catch {
     const match = text.match(/\{[\s\S]*\}/);
@@ -76,7 +76,7 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
     try {
       const parsed = JSON.parse(match[0]) as unknown;
       return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-        ? parsed as Record<string, unknown>
+        ? (parsed as Record<string, unknown>)
         : null;
     } catch {
       return null;
@@ -85,15 +85,25 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
 }
 
 function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
 }
 
 function prepareNodeFixture(root: string, source: string, testFile: string): void {
   mkdirSync(join(root, 'src'), { recursive: true });
-  writeFileSync(join(root, 'package.json'), `${JSON.stringify({
-    scripts: { test: 'node --test' },
-    type: 'module',
-  }, null, 2)}\n`, 'utf-8');
+  writeFileSync(
+    join(root, 'package.json'),
+    `${JSON.stringify(
+      {
+        scripts: { test: 'node --test' },
+        type: 'module',
+      },
+      null,
+      2,
+    )}\n`,
+    'utf-8',
+  );
   writeFileSync(join(root, 'src', 'math.js'), source, 'utf-8');
   writeFileSync(join(root, 'src', 'math.test.js'), testFile, 'utf-8');
 }
@@ -103,122 +113,202 @@ function prepareFixFixture(root: string): void {
     root,
     'export function add(a, b) {\n  return a - b;\n}\n',
     [
-    "import assert from 'node:assert/strict';",
-    "import test from 'node:test';",
-    "import { add } from './math.js';",
-    '',
-    "test('add sums two numbers', () => {",
-    '  assert.equal(add(2, 3), 5);',
-    '});',
-    '',
+      "import assert from 'node:assert/strict';",
+      "import test from 'node:test';",
+      "import { add } from './math.js';",
+      '',
+      "test('add sums two numbers', () => {",
+      '  assert.equal(add(2, 3), 5);',
+      '});',
+      '',
     ].join('\n'),
   );
 }
 
 function prepareReadOnlyRepoFixture(root: string): void {
   mkdirSync(join(root, 'src'), { recursive: true });
-  writeFileSync(join(root, 'README.md'), '# Smoke Fixture\n\nUse this repo for read-only CLI questions.\n', 'utf-8');
-  writeFileSync(join(root, 'package.json'), `${JSON.stringify({ type: 'module' }, null, 2)}\n`, 'utf-8');
+  writeFileSync(
+    join(root, 'README.md'),
+    '# Smoke Fixture\n\nUse this repo for read-only CLI questions.\n',
+    'utf-8',
+  );
+  writeFileSync(
+    join(root, 'package.json'),
+    `${JSON.stringify({ type: 'module' }, null, 2)}\n`,
+    'utf-8',
+  );
   writeFileSync(join(root, 'src', 'index.js'), 'export const answer = 42;\n', 'utf-8');
 }
 
 function prepareSmallRefactorFixture(root: string): void {
   mkdirSync(join(root, 'src'), { recursive: true });
-  writeFileSync(join(root, 'package.json'), `${JSON.stringify({
-    scripts: { test: 'node --test' },
-    type: 'module',
-  }, null, 2)}\n`, 'utf-8');
-  writeFileSync(join(root, 'src', 'messages.js'), [
-    'export function greeting(name) {',
-    "  const cleaned = String(name || '').trim();",
-    "  return 'Hello, ' + cleaned + '!';",
-    '}',
-    '',
-  ].join('\n'), 'utf-8');
-  writeFileSync(join(root, 'src', 'messages.test.js'), [
-    "import assert from 'node:assert/strict';",
-    "import test from 'node:test';",
-    "import { greeting } from './messages.js';",
-    '',
-    "test('greeting trims names', () => {",
-    "  assert.equal(greeting(' Ada '), 'Hello, Ada!');",
-    '});',
-    '',
-  ].join('\n'), 'utf-8');
+  writeFileSync(
+    join(root, 'package.json'),
+    `${JSON.stringify(
+      {
+        scripts: { test: 'node --test' },
+        type: 'module',
+      },
+      null,
+      2,
+    )}\n`,
+    'utf-8',
+  );
+  writeFileSync(
+    join(root, 'src', 'messages.js'),
+    [
+      'export function greeting(name) {',
+      "  const cleaned = String(name || '').trim();",
+      "  return 'Hello, ' + cleaned + '!';",
+      '}',
+      '',
+    ].join('\n'),
+    'utf-8',
+  );
+  writeFileSync(
+    join(root, 'src', 'messages.test.js'),
+    [
+      "import assert from 'node:assert/strict';",
+      "import test from 'node:test';",
+      "import { greeting } from './messages.js';",
+      '',
+      "test('greeting trims names', () => {",
+      "  assert.equal(greeting(' Ada '), 'Hello, Ada!');",
+      '});',
+      '',
+    ].join('\n'),
+    'utf-8',
+  );
 }
 
 function prepareProviderSchemaRecoveryRun(root: string, projectRoot: string): string {
   const runDir = join(root, 'fixtures', 'provider-schema-run');
   mkdirSync(runDir, { recursive: true });
   const capsulePath = join(runDir, '12_pre_execution_failure_capsule.json');
-  writeFileSync(join(runDir, 'terminal_status_summary.json'), `${JSON.stringify({
-    schema_version: 1,
-    artifact_type: 'babel_terminal_status_summary',
-    status: 'FATAL_ERROR',
-    reason_category: 'fatal_error',
-    failed_command: null,
-    changed_files: [],
-    change_disposition: 'none',
-    rollback_mode: 'none',
-    failure_capsule_path: capsulePath,
-    next_recommended_operator_action: 'Inspect schema failure and retry.',
-    parseable_json_stdout_required: true,
-    attempt_safety_summary_path: null,
-    repair_attempt_timeline_path: null,
-    condition_summary: 'PROVIDER_SCHEMA_INVALID: Zod validation failed',
-    verifier_contract: null,
-  }, null, 2)}\n`, 'utf-8');
-  writeFileSync(join(runDir, '04_execution_report.json'), `${JSON.stringify({
-    status: 'EXECUTION_HALTED',
-    pipeline_error: { condition: 'PROVIDER_SCHEMA_INVALID: Zod validation failed' },
-    tool_call_log: [],
-  }, null, 2)}\n`, 'utf-8');
-  writeFileSync(capsulePath, `${JSON.stringify({
-    category: 'provider_schema_invalid',
-    failure_code: 'PROVIDER_SCHEMA_INVALID',
-    task: 'In one sentence, summarize this repo.',
-    project_root: projectRoot,
-    retryable: true,
-  }, null, 2)}\n`, 'utf-8');
+  writeFileSync(
+    join(runDir, 'terminal_status_summary.json'),
+    `${JSON.stringify(
+      {
+        schema_version: 1,
+        artifact_type: 'babel_terminal_status_summary',
+        status: 'FATAL_ERROR',
+        reason_category: 'fatal_error',
+        failed_command: null,
+        changed_files: [],
+        change_disposition: 'none',
+        rollback_mode: 'none',
+        failure_capsule_path: capsulePath,
+        next_recommended_operator_action: 'Inspect schema failure and retry.',
+        parseable_json_stdout_required: true,
+        attempt_safety_summary_path: null,
+        repair_attempt_timeline_path: null,
+        condition_summary: 'PROVIDER_SCHEMA_INVALID: Zod validation failed',
+        verifier_contract: null,
+      },
+      null,
+      2,
+    )}\n`,
+    'utf-8',
+  );
+  writeFileSync(
+    join(runDir, '04_execution_report.json'),
+    `${JSON.stringify(
+      {
+        status: 'EXECUTION_HALTED',
+        pipeline_error: { condition: 'PROVIDER_SCHEMA_INVALID: Zod validation failed' },
+        tool_call_log: [],
+      },
+      null,
+      2,
+    )}\n`,
+    'utf-8',
+  );
+  writeFileSync(
+    capsulePath,
+    `${JSON.stringify(
+      {
+        category: 'provider_schema_invalid',
+        failure_code: 'PROVIDER_SCHEMA_INVALID',
+        task: 'In one sentence, summarize this repo.',
+        project_root: projectRoot,
+        retryable: true,
+      },
+      null,
+      2,
+    )}\n`,
+    'utf-8',
+  );
   return runDir;
 }
 
 function prepareVerifierFailureResumeRun(root: string): string {
   const projectRoot = join(root, 'fixtures', 'verifier-resume-project');
   mkdirSync(projectRoot, { recursive: true });
-  writeFileSync(join(projectRoot, 'package.json'), `${JSON.stringify({
-    type: 'module',
-    scripts: { test: 'node check.js' },
-  }, null, 2)}\n`, 'utf-8');
+  writeFileSync(
+    join(projectRoot, 'package.json'),
+    `${JSON.stringify(
+      {
+        type: 'module',
+        scripts: { test: 'node check.js' },
+      },
+      null,
+      2,
+    )}\n`,
+    'utf-8',
+  );
   writeFileSync(join(projectRoot, 'check.js'), 'process.exit(0);\n', 'utf-8');
   const runDir = join(root, 'fixtures', 'verifier-failure-run');
   mkdirSync(runDir, { recursive: true });
   const capsulePath = join(runDir, 'small_fix_failure_capsule.json');
-  writeFileSync(join(runDir, 'terminal_status_summary.json'), `${JSON.stringify({
-    schema_version: 1,
-    artifact_type: 'babel_terminal_status_summary',
-    status: 'SMALL_FIX_FAILED',
-    reason_category: 'small_fix_failed',
-    failed_command: 'npm test',
-    changed_files: ['src/math.js'],
-    failure_capsule_path: capsulePath,
-    condition_summary: 'npm test failed',
-  }, null, 2)}\n`, 'utf-8');
-  writeFileSync(join(runDir, '04_execution_report.json'), `${JSON.stringify({
-    status: 'EXECUTION_HALTED',
-    small_fix: {
-      target_file: 'src/math.js',
-      verifier_command: 'npm test',
-      project_root: projectRoot,
-    },
-    tool_call_log: [{ tool: 'test_run', target: 'npm test', exit_code: 1 }],
-  }, null, 2)}\n`, 'utf-8');
-  writeFileSync(capsulePath, `${JSON.stringify({
-    failure_code: 'verifier_failed',
-    failed_command: 'npm test',
-    project_root: projectRoot,
-    retryable: true,
-  }, null, 2)}\n`, 'utf-8');
+  writeFileSync(
+    join(runDir, 'terminal_status_summary.json'),
+    `${JSON.stringify(
+      {
+        schema_version: 1,
+        artifact_type: 'babel_terminal_status_summary',
+        status: 'SMALL_FIX_FAILED',
+        reason_category: 'small_fix_failed',
+        failed_command: 'npm test',
+        changed_files: ['src/math.js'],
+        failure_capsule_path: capsulePath,
+        condition_summary: 'npm test failed',
+      },
+      null,
+      2,
+    )}\n`,
+    'utf-8',
+  );
+  writeFileSync(
+    join(runDir, '04_execution_report.json'),
+    `${JSON.stringify(
+      {
+        status: 'EXECUTION_HALTED',
+        small_fix: {
+          target_file: 'src/math.js',
+          verifier_command: 'npm test',
+          project_root: projectRoot,
+        },
+        tool_call_log: [{ tool: 'test_run', target: 'npm test', exit_code: 1 }],
+      },
+      null,
+      2,
+    )}\n`,
+    'utf-8',
+  );
+  writeFileSync(
+    capsulePath,
+    `${JSON.stringify(
+      {
+        failure_code: 'verifier_failed',
+        failed_command: 'npm test',
+        project_root: projectRoot,
+        retryable: true,
+      },
+      null,
+      2,
+    )}\n`,
+    'utf-8',
+  );
   return runDir;
 }
 
@@ -256,10 +346,35 @@ function buildCases(input: {
   prepareReadOnlyRepoFixture(readOnlyRoot);
   const schemaRun = prepareProviderSchemaRecoveryRun(input.benchmarkRoot, readOnlyRoot);
   const verifierRun = prepareVerifierFailureResumeRun(input.benchmarkRoot);
-  const answerFields = ['status', 'task', 'run_dir', 'changed_files', 'checks', 'usage.totalTokens', 'schema_retries', 'support_path'];
-  const fixFields = ['status', 'run_dir', 'changed_files', 'checks', 'usage.totalTokens', 'schema_retries', 'support_path'];
+  const answerFields = [
+    'status',
+    'task',
+    'run_dir',
+    'changed_files',
+    'checks',
+    'usage.totalTokens',
+    'schema_retries',
+    'support_path',
+  ];
+  const fixFields = [
+    'status',
+    'run_dir',
+    'changed_files',
+    'checks',
+    'usage.totalTokens',
+    'schema_retries',
+    'support_path',
+  ];
   const doFields = [...fixFields, 'selected_lane'];
-  const resumeFields = ['status', 'run_dir', 'classification', 'changed_files', 'checks', 'recovery.available_artifacts', 'recovery.missing_artifacts'];
+  const resumeFields = [
+    'status',
+    'run_dir',
+    'classification',
+    'changed_files',
+    'checks',
+    'recovery.available_artifacts',
+    'recovery.missing_artifacts',
+  ];
   if (input.modes.includes('babel')) {
     const fixRoot = join(input.benchmarkRoot, 'fixtures', 'babel-fix');
     const refactorRoot = join(input.benchmarkRoot, 'fixtures', 'babel-refactor');
@@ -272,7 +387,16 @@ function buildCases(input: {
       mode: 'babel',
       surface: 'babel',
       scenario_id: 'read_only_repo_question',
-      command: [process.execPath, distIndex, 'ask', 'In one sentence, summarize this repo.', '--project-root', readOnlyRoot, ...modelArgs, '--json'],
+      command: [
+        process.execPath,
+        distIndex,
+        'ask',
+        'In one sentence, summarize this repo.',
+        '--project-root',
+        readOnlyRoot,
+        ...modelArgs,
+        '--json',
+      ],
       expected_statuses: ['ANSWER_READY', 'NEEDS_MORE_CONTEXT'],
       required_fields: answerFields,
     });
@@ -281,7 +405,15 @@ function buildCases(input: {
       mode: 'babel',
       surface: 'babel',
       scenario_id: 'read_only_repo_question',
-      command: [process.execPath, distIndex, 'Explain this repo without editing.', '--project-root', readOnlyRoot, ...modelArgs, '--json'],
+      command: [
+        process.execPath,
+        distIndex,
+        'Explain this repo without editing.',
+        '--project-root',
+        readOnlyRoot,
+        ...modelArgs,
+        '--json',
+      ],
       expected_statuses: ['ANSWER_READY', 'NEEDS_MORE_CONTEXT'],
       required_fields: [...answerFields, 'selected_lane'],
     });
@@ -292,7 +424,17 @@ function buildCases(input: {
       mode: 'babel',
       surface: 'babel',
       scenario_id: 'inferred_one_file_bug_fix',
-      command: [process.execPath, distIndex, 'fix the failing math test', '--project-root', inferredRoot, '--execution-profile', 'dev_local', ...modelArgs, '--json'],
+      command: [
+        process.execPath,
+        distIndex,
+        'fix the failing math test',
+        '--project-root',
+        inferredRoot,
+        '--execution-profile',
+        'dev_local',
+        ...modelArgs,
+        '--json',
+      ],
       expected_statuses: ['DO_COMPLETE'],
       required_fields: doFields,
     });
@@ -321,7 +463,18 @@ function buildCases(input: {
       mode: 'babel',
       surface: 'babel',
       scenario_id: 'small_refactor',
-      command: [process.execPath, distIndex, 'fix', 'Refactor the greeting implementation for readability. Only edit src/messages.js. Run npm test before completing.', '--project-root', refactorRoot, '--execution-profile', 'dev_local', ...modelArgs, '--json'],
+      command: [
+        process.execPath,
+        distIndex,
+        'fix',
+        'Refactor the greeting implementation for readability. Only edit src/messages.js. Run npm test before completing.',
+        '--project-root',
+        refactorRoot,
+        '--execution-profile',
+        'dev_local',
+        ...modelArgs,
+        '--json',
+      ],
       expected_statuses: ['FIX_COMPLETE'],
       required_fields: fixFields,
     });
@@ -330,7 +483,18 @@ function buildCases(input: {
       mode: 'babel',
       surface: 'babel',
       scenario_id: 'failing_test_repair',
-      command: [process.execPath, distIndex, 'fix', 'Fix the failing Node test. Only edit src/math.js. Run npm test before completing.', '--project-root', repairRoot, '--execution-profile', 'dev_local', ...modelArgs, '--json'],
+      command: [
+        process.execPath,
+        distIndex,
+        'fix',
+        'Fix the failing Node test. Only edit src/math.js. Run npm test before completing.',
+        '--project-root',
+        repairRoot,
+        '--execution-profile',
+        'dev_local',
+        ...modelArgs,
+        '--json',
+      ],
       expected_statuses: ['FIX_COMPLETE'],
       required_fields: fixFields,
     });
@@ -367,7 +531,16 @@ function buildCases(input: {
       mode: 'bl',
       surface: 'bl',
       scenario_id: 'read_only_repo_question',
-      command: [process.execPath, liteBin, 'ask', 'In one sentence, summarize this repo.', '--project-root', readOnlyRoot, ...modelArgs, '--json'],
+      command: [
+        process.execPath,
+        liteBin,
+        'ask',
+        'In one sentence, summarize this repo.',
+        '--project-root',
+        readOnlyRoot,
+        ...modelArgs,
+        '--json',
+      ],
       expected_statuses: ['ANSWER_READY', 'NEEDS_MORE_CONTEXT'],
       required_fields: answerFields,
     });
@@ -376,7 +549,16 @@ function buildCases(input: {
       mode: 'bl',
       surface: 'bl',
       scenario_id: 'bl_do_read_only_repo_question',
-      command: [process.execPath, liteBin, 'do', 'Explain this repo without editing.', '--project-root', readOnlyRoot, ...modelArgs, '--json'],
+      command: [
+        process.execPath,
+        liteBin,
+        'do',
+        'Explain this repo without editing.',
+        '--project-root',
+        readOnlyRoot,
+        ...modelArgs,
+        '--json',
+      ],
       expected_statuses: ['ANSWER_READY', 'NEEDS_MORE_CONTEXT'],
       required_fields: [...answerFields, 'selected_lane'],
     });
@@ -425,7 +607,18 @@ function buildCases(input: {
       mode: 'bl',
       surface: 'bl',
       scenario_id: 'small_refactor',
-      command: [process.execPath, liteBin, 'fix', 'Refactor the greeting implementation for readability. Only edit src/messages.js. Run npm test before completing.', '--project-root', refactorRoot, '--execution-profile', 'dev_local', ...modelArgs, '--json'],
+      command: [
+        process.execPath,
+        liteBin,
+        'fix',
+        'Refactor the greeting implementation for readability. Only edit src/messages.js. Run npm test before completing.',
+        '--project-root',
+        refactorRoot,
+        '--execution-profile',
+        'dev_local',
+        ...modelArgs,
+        '--json',
+      ],
       expected_statuses: ['FIX_COMPLETE'],
       required_fields: fixFields,
     });
@@ -434,7 +627,18 @@ function buildCases(input: {
       mode: 'bl',
       surface: 'bl',
       scenario_id: 'failing_test_repair',
-      command: [process.execPath, liteBin, 'fix', 'Fix the failing Node test. Only edit src/math.js. Run npm test before completing.', '--project-root', repairRoot, '--execution-profile', 'dev_local', ...modelArgs, '--json'],
+      command: [
+        process.execPath,
+        liteBin,
+        'fix',
+        'Fix the failing Node test. Only edit src/math.js. Run npm test before completing.',
+        '--project-root',
+        repairRoot,
+        '--execution-profile',
+        'dev_local',
+        ...modelArgs,
+        '--json',
+      ],
       expected_statuses: ['FIX_COMPLETE'],
       required_fields: fixFields,
     });
@@ -469,7 +673,16 @@ function buildCases(input: {
       mode: 'do',
       surface: 'do',
       scenario_id: 'read_only_repo_question',
-      command: [process.execPath, distIndex, 'do', 'Explain this repo without editing.', '--project-root', readOnlyRoot, ...modelArgs, '--json'],
+      command: [
+        process.execPath,
+        distIndex,
+        'do',
+        'Explain this repo without editing.',
+        '--project-root',
+        readOnlyRoot,
+        ...modelArgs,
+        '--json',
+      ],
       expected_statuses: ['ANSWER_READY', 'NEEDS_MORE_CONTEXT'],
       required_fields: [...answerFields, 'selected_lane'],
     });
@@ -478,7 +691,18 @@ function buildCases(input: {
       mode: 'do',
       surface: 'do',
       scenario_id: 'one_file_bug_fix',
-      command: [process.execPath, distIndex, 'do', 'Fix the failing Node test. Only edit src/math.js. Run npm test before completing.', '--project-root', fixRoot, '--execution-profile', 'dev_local', ...modelArgs, '--json'],
+      command: [
+        process.execPath,
+        distIndex,
+        'do',
+        'Fix the failing Node test. Only edit src/math.js. Run npm test before completing.',
+        '--project-root',
+        fixRoot,
+        '--execution-profile',
+        'dev_local',
+        ...modelArgs,
+        '--json',
+      ],
       expected_statuses: ['DO_COMPLETE'],
       required_fields: doFields,
     });
@@ -487,7 +711,18 @@ function buildCases(input: {
       mode: 'do',
       surface: 'do',
       scenario_id: 'small_refactor',
-      command: [process.execPath, distIndex, 'do', 'Refactor the greeting implementation for readability. Only edit src/messages.js. Run npm test before completing.', '--project-root', refactorRoot, '--execution-profile', 'dev_local', ...modelArgs, '--json'],
+      command: [
+        process.execPath,
+        distIndex,
+        'do',
+        'Refactor the greeting implementation for readability. Only edit src/messages.js. Run npm test before completing.',
+        '--project-root',
+        refactorRoot,
+        '--execution-profile',
+        'dev_local',
+        ...modelArgs,
+        '--json',
+      ],
       expected_statuses: ['DO_COMPLETE'],
       required_fields: doFields,
     });
@@ -496,7 +731,18 @@ function buildCases(input: {
       mode: 'do',
       surface: 'do',
       scenario_id: 'failing_test_repair',
-      command: [process.execPath, distIndex, 'do', 'Fix the failing Node test. Only edit src/math.js. Run npm test before completing.', '--project-root', repairRoot, '--execution-profile', 'dev_local', ...modelArgs, '--json'],
+      command: [
+        process.execPath,
+        distIndex,
+        'do',
+        'Fix the failing Node test. Only edit src/math.js. Run npm test before completing.',
+        '--project-root',
+        repairRoot,
+        '--execution-profile',
+        'dev_local',
+        ...modelArgs,
+        '--json',
+      ],
       expected_statuses: ['DO_COMPLETE'],
       required_fields: doFields,
     });
@@ -528,7 +774,12 @@ function hasField(value: Record<string, unknown> | null, path: string): boolean 
   }
   let current: unknown = value;
   for (const part of path.split('.')) {
-    if (current === null || typeof current !== 'object' || Array.isArray(current) || !(part in current)) {
+    if (
+      current === null ||
+      typeof current !== 'object' ||
+      Array.isArray(current) ||
+      !(part in current)
+    ) {
       return false;
     }
     current = (current as Record<string, unknown>)[part];
@@ -536,13 +787,17 @@ function hasField(value: Record<string, unknown> | null, path: string): boolean 
   return current !== undefined && current !== null;
 }
 
-export function runCliSmokeBenchmark(options: CliSmokeBenchmarkOptions = {}): CliSmokeBenchmarkReport {
+export function runCliSmokeBenchmark(
+  options: CliSmokeBenchmarkOptions = {},
+): CliSmokeBenchmarkReport {
   const now = options.now ?? new Date();
-  const benchmarkRoot = resolve(options.outputDir ?? join(BABEL_RUNS_DIR, 'benchmarks', `cli-smoke-${formatTimestamp(now)}`));
+  const benchmarkRoot = resolve(
+    options.outputDir ?? join(BABEL_RUNS_DIR, 'benchmarks', `cli-smoke-${formatTimestamp(now)}`),
+  );
   mkdirSync(benchmarkRoot, { recursive: true });
   const modes = (options.modes && options.modes.length > 0 ? options.modes : ['babel', 'bl', 'do'])
-    .map(mode => mode.trim().toLowerCase())
-    .filter(mode => mode === 'babel' || mode === 'bl' || mode === 'do');
+    .map((mode) => mode.trim().toLowerCase())
+    .filter((mode) => mode === 'babel' || mode === 'bl' || mode === 'do');
   const prepared = buildCases({
     modes: modes.length > 0 ? modes : ['babel', 'bl', 'do'],
     benchmarkRoot,
@@ -550,7 +805,7 @@ export function runCliSmokeBenchmark(options: CliSmokeBenchmarkOptions = {}): Cl
     ...(options.modelTier ? { modelTier: options.modelTier } : {}),
   });
 
-  const cases: CliSmokeBenchmarkCase[] = prepared.map(testCase => {
+  const cases: CliSmokeBenchmarkCase[] = prepared.map((testCase) => {
     if (options.live !== true) {
       return {
         ...testCase,
@@ -586,14 +841,21 @@ export function runCliSmokeBenchmark(options: CliSmokeBenchmarkOptions = {}): Cl
     writeFileSync(stderrPath, result.stderr ?? '', 'utf-8');
     const parsed = parseJsonObject(result.stdout ?? '');
     const usage = parsed?.['usage'];
-    const totalTokens = usage !== null && typeof usage === 'object' && !Array.isArray(usage) && typeof (usage as { totalTokens?: unknown }).totalTokens === 'number'
-      ? (usage as { totalTokens: number }).totalTokens
-      : null;
-    const schemaRetries = typeof parsed?.['schema_retries'] === 'number' ? parsed['schema_retries'] : null;
+    const totalTokens =
+      usage !== null &&
+      typeof usage === 'object' &&
+      !Array.isArray(usage) &&
+      typeof (usage as { totalTokens?: unknown }).totalTokens === 'number'
+        ? (usage as { totalTokens: number }).totalTokens
+        : null;
+    const schemaRetries =
+      typeof parsed?.['schema_retries'] === 'number' ? parsed['schema_retries'] : null;
     const reportedStatus = typeof parsed?.['status'] === 'string' ? parsed['status'] : null;
-    const selectedLane = typeof parsed?.['selected_lane'] === 'string' ? parsed['selected_lane'] : null;
-    const missingFields = testCase.required_fields.filter(field => !hasField(parsed, field));
-    const expectedOk = reportedStatus !== null && testCase.expected_statuses.includes(reportedStatus);
+    const selectedLane =
+      typeof parsed?.['selected_lane'] === 'string' ? parsed['selected_lane'] : null;
+    const missingFields = testCase.required_fields.filter((field) => !hasField(parsed, field));
+    const expectedOk =
+      reportedStatus !== null && testCase.expected_statuses.includes(reportedStatus);
     const pass = result.status === 0 && expectedOk && missingFields.length === 0;
     return {
       ...testCase,
@@ -608,9 +870,12 @@ export function runCliSmokeBenchmark(options: CliSmokeBenchmarkOptions = {}): Cl
       changed_files: stringArray(parsed?.['changed_files']),
       checks: stringArray(parsed?.['checks']),
       run_dir: typeof parsed?.['run_dir'] === 'string' ? parsed['run_dir'] : null,
-      recovery: parsed?.['recovery'] !== null && typeof parsed?.['recovery'] === 'object' && !Array.isArray(parsed?.['recovery'])
-        ? parsed['recovery'] as Record<string, unknown>
-        : null,
+      recovery:
+        parsed?.['recovery'] !== null &&
+        typeof parsed?.['recovery'] === 'object' &&
+        !Array.isArray(parsed?.['recovery'])
+          ? (parsed['recovery'] as Record<string, unknown>)
+          : null,
       resume: reportedStatus?.startsWith('RESUME') === true ? parsed : null,
       stdout_path: stdoutPath,
       stderr_path: stderrPath,
@@ -631,9 +896,9 @@ export function runCliSmokeBenchmark(options: CliSmokeBenchmarkOptions = {}): Cl
     artifact_path: join(benchmarkRoot, 'report.json'),
     summary: {
       total: cases.length,
-      passed: cases.filter(testCase => testCase.status === 'passed').length,
-      failed: cases.filter(testCase => testCase.status === 'failed').length,
-      skipped: cases.filter(testCase => testCase.status === 'skipped').length,
+      passed: cases.filter((testCase) => testCase.status === 'passed').length,
+      failed: cases.filter((testCase) => testCase.status === 'failed').length,
+      skipped: cases.filter((testCase) => testCase.status === 'skipped').length,
       total_tokens: cases.reduce((sum, testCase) => sum + (testCase.total_tokens ?? 0), 0),
       schema_retries: cases.reduce((sum, testCase) => sum + (testCase.schema_retries ?? 0), 0),
     },
@@ -655,7 +920,9 @@ export function formatCliSmokeBenchmarkHuman(report: CliSmokeBenchmarkReport): s
   for (const testCase of report.cases) {
     const path = testCase.selected_lane ? ` path=${testCase.selected_lane}` : '';
     const tokens = testCase.total_tokens !== null ? ` tokens=${testCase.total_tokens}` : '';
-    lines.push(`- ${testCase.id}: ${testCase.status} status=${testCase.reported_status ?? '(none)'}${path}${tokens}`);
+    lines.push(
+      `- ${testCase.id}: ${testCase.status} status=${testCase.reported_status ?? '(none)'}${path}${tokens}`,
+    );
   }
   lines.push('');
   lines.push(`Report: ${report.artifact_path}`);

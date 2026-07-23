@@ -1,11 +1,7 @@
-import type {
-  LiteProviderConfig,
-  LiteProviderId,
-} from './config.js';
-import {
-  LiteError,
-} from './config.js';
+import type { LiteProviderConfig, LiteProviderId } from './config.js';
+import { LiteError } from './config.js';
 import { redactSecrets } from '../utils/redaction.js';
+import { parseRateLimitHeaders } from '../ui/rateLimitWidget.js';
 
 export interface LiteProviderRequest {
   mode: 'ask' | 'patch';
@@ -71,8 +67,9 @@ function usageFromResponse(response: ChatResponse): LiteProviderUsage | null {
   }
   const promptTokens = normalizeToken(response.usage.prompt_tokens);
   const completionTokens = normalizeToken(response.usage.completion_tokens);
-  const totalTokens = normalizeToken(response.usage.total_tokens)
-    ?? (promptTokens !== null && completionTokens !== null ? promptTokens + completionTokens : null);
+  const totalTokens =
+    normalizeToken(response.usage.total_tokens) ??
+    (promptTokens !== null && completionTokens !== null ? promptTokens + completionTokens : null);
   return {
     promptTokens,
     completionTokens,
@@ -167,24 +164,27 @@ class OpenAiCompatibleLiteProvider implements LiteProvider {
     let response: Response;
 
     try {
-      response = await this.fetchImpl(joinUrl(this.config.baseUrl, this.config.chatCompletionsPath), {
-        method: 'POST',
-        signal: controller.signal,
-        headers: {
-          Authorization: `Bearer ${this.config.apiKey}`,
-          'Content-Type': 'application/json',
+      response = await this.fetchImpl(
+        joinUrl(this.config.baseUrl, this.config.chatCompletionsPath),
+        {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            Authorization: `Bearer ${this.config.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: input.model ?? this.config.defaultModel,
+            max_tokens: input.maxTokens,
+            temperature: input.temperature,
+            stream: !!input.onChunk,
+            messages: [
+              { role: 'system', content: input.systemPrompt },
+              { role: 'user', content: input.userPrompt },
+            ],
+          }),
         },
-        body: JSON.stringify({
-          model: input.model ?? this.config.defaultModel,
-          max_tokens: input.maxTokens,
-          temperature: input.temperature,
-          stream: !!input.onChunk,
-          messages: [
-            { role: 'system', content: input.systemPrompt },
-            { role: 'user', content: input.userPrompt },
-          ],
-        }),
-      });
+      );
     } catch (error: unknown) {
       const aborted = controller.signal.aborted;
       throw new LiteError(
@@ -214,6 +214,9 @@ class OpenAiCompatibleLiteProvider implements LiteProvider {
       );
     }
 
+    // Feed rate-limit headers into the TUI widget so the user sees remaining quota
+    parseRateLimitHeaders(response.headers, this.config.id);
+
     if (input.onChunk && response.body) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -238,7 +241,9 @@ class OpenAiCompatibleLiteProvider implements LiteProvider {
               continue;
             }
             try {
-              const json = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> };
+              const json = JSON.parse(data) as {
+                choices?: Array<{ delta?: { content?: string } }>;
+              };
               const delta = json.choices?.[0]?.delta?.content || '';
               if (delta) {
                 text += delta;

@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  runBeforeCompleteHooks,
-  runPreToolUseHooks,
-} from './hooks.js';
+import { runBeforeCompleteHooks, runPreToolUseHooks } from './hooks.js';
 import type { ToolCallLog } from '../schemas/agentContracts.js';
 
 function successfulCommand(target: string): ToolCallLog {

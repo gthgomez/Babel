@@ -16,8 +16,16 @@ function writeTemplate(babelRoot: string): string {
   const template = join(babelRoot, 'templates', 'godot-mobile-2d');
   mkdirSync(join(template, 'scenes'), { recursive: true });
   mkdirSync(join(template, 'scripts'), { recursive: true });
-  writeFileSync(join(template, 'project.godot'), 'config_version=5\n\n[application]\nrun/main_scene="res://scenes/Main.tscn"\n', 'utf-8');
-  writeFileSync(join(template, 'scenes', 'Main.tscn'), '[gd_scene load_steps=2 format=3]\n[node name="Main" type="Node2D"]\n', 'utf-8');
+  writeFileSync(
+    join(template, 'project.godot'),
+    'config_version=5\n\n[application]\nrun/main_scene="res://scenes/Main.tscn"\n',
+    'utf-8',
+  );
+  writeFileSync(
+    join(template, 'scenes', 'Main.tscn'),
+    '[gd_scene load_steps=2 format=3]\n[node name="Main" type="Node2D"]\n',
+    'utf-8',
+  );
   writeFileSync(join(template, 'scripts', 'Main.gd'), 'extends Node2D\n', 'utf-8');
   writeFileSync(join(template, 'export_presets.cfg'), '[preset.0]\nplatform="Android"\n', 'utf-8');
   writeFileSync(join(template, 'README.md'), '# Scaffold\n', 'utf-8');
@@ -39,13 +47,16 @@ test('empty Godot target root receives scaffold files', () => {
     });
 
     assert.equal(result.status, 'SEEDED');
-    assert.deepEqual(result.filesCopied.sort(), [
-      'README.md',
-      'export_presets.cfg',
-      'project.godot',
-      'scenes/Main.tscn',
-      'scripts/Main.gd',
-    ].sort());
+    assert.deepEqual(
+      result.filesCopied.sort(),
+      [
+        'README.md',
+        'export_presets.cfg',
+        'project.godot',
+        'scenes/Main.tscn',
+        'scripts/Main.gd',
+      ].sort(),
+    );
     assert.equal(existsSync(join(targetRoot, 'project.godot')), true);
     assert.equal(existsSync(join(targetRoot, 'scenes', 'Main.tscn')), true);
     assert.equal(existsSync(join(targetRoot, 'scripts', 'Main.gd')), true);

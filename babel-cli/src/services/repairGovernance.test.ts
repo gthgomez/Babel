@@ -9,7 +9,7 @@ import {
 } from './repairGovernance.js';
 
 test('repair governance exposes autonomous and repair-run attempt limits', () => {
-  assert.equal(maxAttemptsForRepairMode('autonomous'), 3);
+  assert.equal(maxAttemptsForRepairMode('deep'), 3);
   assert.equal(maxAttemptsForRepairMode('repair-run'), 5);
 });
 
@@ -35,7 +35,10 @@ test('repair governance blocks ambiguous and no-effect retries', () => {
     }),
     'AMBIGUOUS_LITERAL_BINDING',
   );
-  assert.equal(isRetryableRepairFailure({ code: 'AMBIGUOUS_LITERAL_BINDING', summary: 'ambiguous' }), false);
+  assert.equal(
+    isRetryableRepairFailure({ code: 'AMBIGUOUS_LITERAL_BINDING', summary: 'ambiguous' }),
+    false,
+  );
 
   const noEffects = buildFailureCapsule({
     attempt: 2,

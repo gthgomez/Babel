@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "fixture_type": "babel_workspace_discovery_repos",
+  "workspace_root": "C:\\Workspace",
+  "repos": [
+    {
+      "id": "relic_run",
+      "path": "example_game_suite\\relicRun",
+      "display_name": "Relic Run",
+      "slug": "relicRun",
+      "stack": "vite/react",
+      "required": false,
+      "anchor_files": ["PROJECT_CONTEXT.md", "package.json", "README.md", "docs/MVP_STATUS.md"]
+    },
+    {
+      "id": "simlife",
+      "path": "example_game_suite\\SimLife",
+      "display_name": "SimLife",
+      "slug": "SimLife",
+      "stack": "godot",
+      "required": false,
+      "anchor_files": ["PROJECT_CONTEXT.md", "project.godot", "README.md"]
+    },
+    {
+      "id": "aetherlyn",
+      "path": "example_game_suite\\AetherlynGameDraft",
+      "display_name": "Aetherlyn",
+      "slug": "AetherlynGameDraft",
+      "stack": "godot/web",
+      "required": false,
+      "anchor_files": ["PROJECT_CONTEXT.md", "project.godot", "README.md"]
+    },
+    {
+      "id": "webrpg",
+      "path": "example_game_suite\\WebRPG",
+      "display_name": "WebRPG",
+      "slug": "WebRPG",
+      "stack": "phaser/ts",
+      "required": false,
+      "anchor_files": ["PROJECT_CONTEXT.md", "package.json", "README.md"]
+    },
+    {
+      "id": "exact_upload_fixer",
+      "path": "example_mobile_suite\\ExactUploadFixer",
+      "display_name": "ExactUploadFixer",
+      "slug": "ExactUploadFixer",
+      "stack": "kotlin/compose",
+      "required": false,
+      "anchor_files": ["PROJECT_CONTEXT.md", "build.gradle.kts", "settings.gradle.kts"]
+    },
+    {
+      "id": "monte_carlo_ledger",
+      "path": "example_mobile_suite\\example_finance_forecast",
+      "display_name": "Monte Carlo Ledger",
+      "slug": "example_finance_forecast",
+      "stack": "kotlin/room",
+      "required": false,
+      "anchor_files": ["PROJECT_CONTEXT.md", "build.gradle.kts", "settings.gradle.kts"]
+    },
+    {
+      "id": "careerforge_mobile",
+      "path": "example_mobile_suite\\CareerForgeMobile",
+      "display_name": "CareerForge Mobile",
+      "slug": "CareerForgeMobile",
+      "stack": "expo/rn",
+      "required": false,
+      "anchor_files": ["package.json", "README.md", "app.json"]
+    },
+    {
+      "id": "llm_host_android",
+      "path": "example_mobile_suite\\LLMHostAndroid",
+      "display_name": "LLM Host Android",
+      "slug": "LLMHostAndroid",
+      "stack": "kotlin/native",
+      "required": false,
+      "anchor_files": ["PROJECT_CONTEXT.md", "build.gradle.kts", "settings.gradle.kts"]
+    }
+  ]
+}

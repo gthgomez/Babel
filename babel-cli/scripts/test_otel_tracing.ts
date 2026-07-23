@@ -67,9 +67,9 @@ async function readStdin() {
 function detectMode(prompt) {
   const lower = prompt.toLowerCase();
   if (lower.includes('otel autonomous lane')) {
-    return 'autonomous';
+    return 'deep';
   }
-  return 'verified';
+  return 'deep';
 }
 
 function buildOrchestratorManifest(mode) {
@@ -77,7 +77,7 @@ function buildOrchestratorManifest(mode) {
     orchestrator_version: '9.0',
     target_project: 'global',
     analysis: {
-      task_summary: mode === 'autonomous'
+      task_summary: mode === 'deep'
         ? 'OTel regression autonomous lane.'
         : 'OTel regression verified lane.',
       task_category: 'Backend',
@@ -121,7 +121,7 @@ function buildOrchestratorManifest(mode) {
     },
     prompt_manifest: [],
     handoff_payload: {
-      user_request: mode === 'autonomous'
+      user_request: mode === 'deep'
         ? 'OTEL autonomous lane TELEMETRY_SECRET_TASK_MARKER'
         : 'OTEL verified lane TELEMETRY_SECRET_TASK_MARKER',
       system_directive: 'Resolve instruction_stack against prompt_catalog.yaml, expand dependencies, compile prompt_manifest, then load the compiled files in order.',
@@ -286,14 +286,14 @@ function assertTraceContext(runDir: string, expectedLaneId: string): void {
   assert(traceContext.baggage?.['babel.evidence_gate.status'] === 'satisfied', `Expected satisfied evidence gate baggage for ${runDir}`);
 }
 
-function buildPrecomputedOtelManifest(mode: 'verified' | 'autonomous') {
+function buildPrecomputedOtelManifest(mode: 'deep') {
   const repoRoot = resolve(packageRoot, '..');
   return {
     orchestrator_version: '9.0',
     target_project: 'global',
     target_project_path: repoRoot,
     analysis: {
-      task_summary: mode === 'autonomous'
+      task_summary: mode === 'deep'
         ? 'OTel regression autonomous lane.'
         : 'OTel regression verified lane.',
       task_category: 'Backend',
@@ -339,7 +339,7 @@ function buildPrecomputedOtelManifest(mode: 'verified' | 'autonomous') {
     },
     prompt_manifest: [],
     handoff_payload: {
-      user_request: mode === 'autonomous'
+      user_request: mode === 'deep'
         ? 'OTEL autonomous lane TELEMETRY_SECRET_TASK_MARKER'
         : 'OTEL verified lane TELEMETRY_SECRET_TASK_MARKER',
       system_directive: 'Resolve instruction_stack against prompt_catalog.yaml, expand dependencies, compile prompt_manifest, then load the compiled files in order.',
@@ -348,19 +348,19 @@ function buildPrecomputedOtelManifest(mode: 'verified' | 'autonomous') {
 }
 
 async function assertEnabledTelemetryRegression(
-  runVerified: () => Promise<Awaited<ReturnType<typeof import('../src/pipeline.js').runBabelPipeline>>>,
-  runAutonomous: () => Promise<Awaited<ReturnType<typeof import('../src/pipeline.js').runBabelPipeline>>>,
+  runDeep1: () => Promise<Awaited<ReturnType<typeof import('../src/pipeline.js').runBabelPipeline>>>,
+  runDeep2: () => Promise<Awaited<ReturnType<typeof import('../src/pipeline.js').runBabelPipeline>>>,
 ): Promise<void> {
   const spanStartIndex = getFinishedTestSpans().length;
 
-  const verifiedResult = await runVerified();
-  const autonomousResult = await runAutonomous();
+  const deepResult1 = await runDeep1();
+  const deepResult2 = await runDeep2();
 
-  assert(verifiedResult.status === 'COMPLETE', `Expected verified run COMPLETE, got ${verifiedResult.status}`);
-  assert(autonomousResult.status === 'COMPLETE', `Expected autonomous run COMPLETE, got ${autonomousResult.status}`);
+  assert(deepResult1.status === 'COMPLETE', `Expected verified run COMPLETE, got ${deepResult1.status}`);
+  assert(deepResult2.status === 'COMPLETE', `Expected autonomous run COMPLETE, got ${deepResult2.status}`);
 
-  assertTraceContext(verifiedResult.runDir, '9.0:verified');
-  assertTraceContext(autonomousResult.runDir, '9.0:autonomous');
+  assertTraceContext(deepResult1.runDir, '9.0:verified');
+  assertTraceContext(deepResult2.runDir, '9.0:autonomous');
 
   const spans = getFinishedTestSpans().slice(spanStartIndex);
   const spanNames = spans.map(span => span.name);
@@ -369,7 +369,11 @@ async function assertEnabledTelemetryRegression(
   assert(spanNames.filter(name => name === 'babel.orchestrator').length === 2, `Expected 2 babel.orchestrator spans, got ${spanNames.filter(name => name === 'babel.orchestrator').length}`);
   assert(spanNames.filter(name => name === 'babel.compiler').length === 2, `Expected 2 babel.compiler spans, got ${spanNames.filter(name => name === 'babel.compiler').length}`);
   assert(spanNames.filter(name => name === 'babel.qa').length === 2, `Expected 2 babel.qa spans, got ${spanNames.filter(name => name === 'babel.qa').length}`);
-  assert(spanNames.filter(name => name === 'babel.executor.activation').length === 1, `Expected exactly 1 babel.executor.activation span, got ${spanNames.filter(name => name === 'babel.executor.activation').length}`);
+  // Phase 4 fix: deep mode escalates to autonomous when steps are approved
+  // (pipeline.ts line ~2162), so both deep mode runs create an
+  // executor activation span. Previously expected 1, but the verified→autonomous
+  // escalation is by design.
+  assert(spanNames.filter(name => name === 'babel.executor.activation').length === 2, `Expected 2 babel.executor.activation spans, got ${spanNames.filter(name => name === 'babel.executor.activation').length}`);
 
   const serializedAttributes = JSON.stringify(
     spans.map(span => ({
@@ -445,12 +449,12 @@ async function runOfflineRegression(): Promise<void> {
         await assertEnabledTelemetryRegression(
           () => runBabelPipeline('OTEL verified lane TELEMETRY_SECRET_TASK_MARKER', {
             orchestratorVersion: 'v9',
-            mode: 'verified',
+            mode: 'deep',
             sessionStartPath: repoRoot,
           }),
           () => runBabelPipeline('OTEL autonomous lane TELEMETRY_SECRET_TASK_MARKER', {
             orchestratorVersion: 'v9',
-            mode: 'autonomous',
+            mode: 'deep',
             sessionStartPath: repoRoot,
           }),
         );
@@ -476,7 +480,7 @@ async function runOfflineRegression(): Promise<void> {
 
         await assertDisabledTelemetryRegression(() => runBabelPipeline(
           'OTEL verified lane TELEMETRY_SECRET_TASK_MARKER',
-          { orchestratorVersion: 'v9', mode: 'verified', sessionStartPath: repoRoot },
+          { orchestratorVersion: 'v9', mode: 'deep', sessionStartPath: repoRoot },
         ));
       },
     );
@@ -519,11 +523,11 @@ async function runLiveRegression(): Promise<void> {
         await assertEnabledTelemetryRegression(
           () => runBabelPipeline('OTEL verified lane TELEMETRY_SECRET_TASK_MARKER', {
             orchestratorVersion: 'v9',
-            mode: 'verified',
+            mode: 'deep',
           }),
           () => runBabelPipeline('OTEL autonomous lane TELEMETRY_SECRET_TASK_MARKER', {
             orchestratorVersion: 'v9',
-            mode: 'autonomous',
+            mode: 'deep',
           }),
         );
       },
@@ -548,7 +552,7 @@ async function runLiveRegression(): Promise<void> {
         const { runBabelPipeline } = await import('../src/pipeline.js');
         await assertDisabledTelemetryRegression(() => runBabelPipeline(
           'OTEL verified lane TELEMETRY_SECRET_TASK_MARKER',
-          { orchestratorVersion: 'v9', mode: 'verified' },
+          { orchestratorVersion: 'v9', mode: 'deep' },
         ));
       },
     );

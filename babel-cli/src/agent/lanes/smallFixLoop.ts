@@ -1,14 +1,17 @@
 /**
- * Small-fix observe→act loop MVP — policy-gated mutation steps for `bl fix`.
+ * Small-fix observe→act loop — policy-gated mutation steps for daily fix intent.
  *
- * Single-turn loop: observe file state → write_file (policy) → observe result
- * → run_command verifier (policy) → return tool results for checkpoint/verify UX.
+ * Bounded loop: observe file state → write_file (policy) → run_command verifier (policy)
+ * → terminal finish or blocked step for session-shaped JSON output.
  */
 
 import type { ToolContext, ToolResult } from '../../localTools.js';
 import type { AgentAction } from '../actions.js';
 import { decideAction, presetForVerb } from '../policy.js';
-import type { PermissionDecision, PermissionPreset } from '../policy.js';
+import type { PermissionPreset } from '../policy.js';
+import type { SessionLoopPhase, SessionLoopStepPayload } from '../sessionLoop.js';
+
+export type { SessionLoopPhase, SessionLoopStepPayload };
 import {
   defaultToolExecutor,
   executeActionWithPolicy,
@@ -16,12 +19,12 @@ import {
   type ToolExecutor,
 } from '../toolExecutor.js';
 
-export type SmallFixLoopPhase = 'observe' | 'act' | 'verify';
+export type SmallFixLoopPhase = SessionLoopPhase;
 
 export interface SmallFixLoopStep {
   phase: SmallFixLoopPhase;
   action: AgentAction;
-  policyDecision: PermissionDecision;
+  policyDecision: SessionLoopStepPayload['policy_decision'];
   policyBlocked: boolean;
   toolResults: ToolResult[];
 }
@@ -40,10 +43,51 @@ export interface SmallFixMutationLoopInput {
 
 export interface SmallFixMutationLoopResult {
   steps: SmallFixLoopStep[];
+  sessionLoopSteps: SessionLoopStepPayload[];
   writeResult: ToolResult | null;
   testResult: ToolResult | null;
   policyBlocked: boolean;
   blockedReason: string | null;
+}
+
+export function buildSessionLoopSteps(steps: SmallFixLoopStep[]): SessionLoopStepPayload[] {
+  const payloads = steps
+    .filter((step) => step.phase === 'observe' || step.phase === 'act' || step.phase === 'verify')
+    .map((step) => ({
+      phase: step.phase,
+      status: step.policyBlocked
+        ? ('blocked' as const)
+        : step.toolResults.some((result) => result.exit_code !== 0)
+          ? ('fail' as const)
+          : ('pass' as const),
+      policy_decision: step.policyDecision,
+    }));
+  const terminal = steps.find((step) => step.phase === 'finish' || step.phase === 'blocked');
+  if (terminal) {
+    payloads.push({
+      phase: terminal.phase,
+      status: terminal.phase === 'finish' ? 'pass' : 'blocked',
+      policy_decision: terminal.policyDecision,
+    });
+  }
+  return payloads;
+}
+
+function appendTerminalStep(steps: SmallFixLoopStep[], blocked: boolean, reason: string): void {
+  const blockedAction: AgentAction = {
+    type: 'ask_approval',
+    reason,
+    requested_action: { type: 'read_file', path: '.' },
+  };
+  steps.push({
+    phase: blocked ? 'blocked' : 'finish',
+    action: blocked
+      ? blockedAction
+      : { type: 'finish', summary: 'Small-fix session loop complete', verification: [] },
+    policyDecision: 'allow',
+    policyBlocked: false,
+    toolResults: [],
+  });
 }
 
 function primaryToolResult(execution: PolicyGatedExecutionResult): ToolResult | null {
@@ -96,19 +140,28 @@ export async function runSmallFixMutationLoop(
   steps.push(stepFromExecution('act', writeExecution));
 
   if (writeExecution.policyBlocked) {
+    const blockedReason = primaryToolResult(writeExecution)?.stderr ?? 'Policy blocked file write';
+    appendTerminalStep(steps, true, blockedReason);
     return {
       steps,
+      sessionLoopSteps: buildSessionLoopSteps(steps),
       writeResult: primaryToolResult(writeExecution),
       testResult: null,
       policyBlocked: true,
-      blockedReason: primaryToolResult(writeExecution)?.stderr ?? 'Policy blocked file write',
+      blockedReason,
     };
   }
 
   const writeResult = primaryToolResult(writeExecution);
   if (!writeResult || writeResult.exit_code !== 0) {
+    appendTerminalStep(
+      steps,
+      true,
+      writeResult?.stderr || writeResult?.stdout || 'File write failed',
+    );
     return {
       steps,
+      sessionLoopSteps: buildSessionLoopSteps(steps),
       writeResult,
       testResult: null,
       policyBlocked: false,
@@ -130,19 +183,31 @@ export async function runSmallFixMutationLoop(
   steps.push(stepFromExecution('verify', verifyExecution));
 
   if (verifyExecution.policyBlocked) {
+    const blockedReason = primaryToolResult(verifyExecution)?.stderr ?? 'Policy blocked verifier';
+    appendTerminalStep(steps, true, blockedReason);
     return {
       steps,
+      sessionLoopSteps: buildSessionLoopSteps(steps),
       writeResult,
       testResult: primaryToolResult(verifyExecution),
       policyBlocked: true,
-      blockedReason: primaryToolResult(verifyExecution)?.stderr ?? 'Policy blocked verifier',
+      blockedReason,
     };
   }
 
+  const testResult = primaryToolResult(verifyExecution);
+  const verifyFailed = !testResult || testResult.exit_code !== 0;
+  appendTerminalStep(
+    steps,
+    verifyFailed,
+    verifyFailed ? `${input.verifierCommand} failed` : 'Verifier passed',
+  );
+
   return {
     steps,
+    sessionLoopSteps: buildSessionLoopSteps(steps),
     writeResult,
-    testResult: primaryToolResult(verifyExecution),
+    testResult,
     policyBlocked: false,
     blockedReason: null,
   };

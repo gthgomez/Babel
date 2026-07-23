@@ -1,8 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import type { SessionUsageSummary } from './costTracker.js';
-import {
-  estimateProviderUsageCost,
-  type CostPrecision,
-} from './modelPricingRegistry.js';
+import { estimateProviderUsageCost, type CostPrecision } from './modelPricingRegistry.js';
 
 export const COST_LEDGER_FILENAME = 'cost_ledger.json';
 
@@ -46,9 +44,33 @@ export interface CostLedger {
     total_tokens: number;
     estimated_cost_usd: number;
     by_precision: Record<CostPrecision, number>;
-    by_provider: Record<string, { prompt_tokens: number; completion_tokens: number; total_tokens: number; estimated_cost_usd: number }>;
-    by_model: Record<string, { prompt_tokens: number; completion_tokens: number; total_tokens: number; estimated_cost_usd: number }>;
-    by_stage: Record<string, { prompt_tokens: number; completion_tokens: number; total_tokens: number; estimated_cost_usd: number }>;
+    by_provider: Record<
+      string,
+      {
+        prompt_tokens: number;
+        completion_tokens: number;
+        total_tokens: number;
+        estimated_cost_usd: number;
+      }
+    >;
+    by_model: Record<
+      string,
+      {
+        prompt_tokens: number;
+        completion_tokens: number;
+        total_tokens: number;
+        estimated_cost_usd: number;
+      }
+    >;
+    by_stage: Record<
+      string,
+      {
+        prompt_tokens: number;
+        completion_tokens: number;
+        total_tokens: number;
+        estimated_cost_usd: number;
+      }
+    >;
   };
   entries: CostLedgerEntry[];
   warnings: string[];
@@ -97,7 +119,12 @@ function roundCost(value: number): number {
   return Number(value.toFixed(12));
 }
 
-function emptyBucket(): { prompt_tokens: number; completion_tokens: number; total_tokens: number; estimated_cost_usd: number } {
+function emptyBucket(): {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+} {
   return {
     prompt_tokens: 0,
     completion_tokens: 0,
@@ -118,7 +145,9 @@ function addToBucket(
   bucket.prompt_tokens += entry.prompt_tokens ?? 0;
   bucket.completion_tokens += entry.completion_tokens ?? 0;
   bucket.total_tokens += entry.total_tokens ?? 0;
-  bucket.estimated_cost_usd = roundCost(bucket.estimated_cost_usd + (entry.estimated_cost_usd ?? 0));
+  bucket.estimated_cost_usd = roundCost(
+    bucket.estimated_cost_usd + (entry.estimated_cost_usd ?? 0),
+  );
   buckets[key] = bucket;
 }
 
@@ -139,19 +168,26 @@ function toLedgerEntry(stage: string, attempt: WaterfallAttempt, index: number):
   });
   const promptTokens = asNumber(attempt.prompt_tokens);
   const completionTokens = asNumber(attempt.completion_tokens);
-  const totalTokens = asNumber(attempt.total_tokens)
-    ?? (promptTokens !== null && completionTokens !== null ? promptTokens + completionTokens : null);
+  const totalTokens =
+    asNumber(attempt.total_tokens) ??
+    (promptTokens !== null && completionTokens !== null ? promptTokens + completionTokens : null);
   const cost = asNumber(attempt.estimated_cost_usd) ?? estimate.estimatedCostUsd;
   const rawPrecision = attempt.cost_precision;
   const normalizedPrecision = normalizeCostPrecision(rawPrecision);
-  const precision = normalizedPrecision ?? (rawPrecision === null || rawPrecision === undefined ? estimate.precision : 'unknown');
-  const precisionWarning = rawPrecision !== null && rawPrecision !== undefined && normalizedPrecision === null
-    ? `Invalid cost precision "${String(rawPrecision)}" was normalized to unknown.`
-    : null;
-  const warning = [precisionWarning, estimate.warning].filter((item): item is string => typeof item === 'string').join(' ') || null;
+  const precision =
+    normalizedPrecision ??
+    (rawPrecision === null || rawPrecision === undefined ? estimate.precision : 'unknown');
+  const precisionWarning =
+    rawPrecision !== null && rawPrecision !== undefined && normalizedPrecision === null
+      ? `Invalid cost precision "${String(rawPrecision)}" was normalized to unknown.`
+      : null;
+  const warning =
+    [precisionWarning, estimate.warning]
+      .filter((item): item is string => typeof item === 'string')
+      .join(' ') || null;
 
   return {
-    entry_id: `${stage}-${index + 1}`,
+    entry_id: `${stage}-${randomUUID().slice(0, 8)}`,
     stage,
     tier_name: attempt.tier_name ?? null,
     tier_index: asNumber(attempt.tier_index),
@@ -167,8 +203,10 @@ function toLedgerEntry(stage: string, attempt: WaterfallAttempt, index: number):
     prompt_cache_miss_tokens: asNumber(attempt.prompt_cache_miss_tokens),
     input_cost_per_1m: asNumber(attempt.input_cost_per_1m) ?? estimate.inputCostPer1M,
     output_cost_per_1m: asNumber(attempt.output_cost_per_1m) ?? estimate.outputCostPer1M,
-    input_cache_hit_cost_per_1m: asNumber(attempt.input_cache_hit_cost_per_1m) ?? estimate.inputCacheHitCostPer1M,
-    input_cache_miss_cost_per_1m: asNumber(attempt.input_cache_miss_cost_per_1m) ?? estimate.inputCacheMissCostPer1M,
+    input_cache_hit_cost_per_1m:
+      asNumber(attempt.input_cache_hit_cost_per_1m) ?? estimate.inputCacheHitCostPer1M,
+    input_cache_miss_cost_per_1m:
+      asNumber(attempt.input_cache_miss_cost_per_1m) ?? estimate.inputCacheMissCostPer1M,
     estimated_cost_usd: cost !== null ? roundCost(cost) : null,
     cost_precision: precision,
     pricing_source_url: attempt.pricing_source_url ?? estimate.pricingSourceUrl,
@@ -189,25 +227,30 @@ export function buildCostLedger(options: {
 
   for (const waterfall of options.waterfallEntries as WaterfallEntry[]) {
     const stage = waterfall.stage ?? 'unknown';
-    const attempts = Array.isArray(waterfall.attempts_detail) && waterfall.attempts_detail.length > 0
-      ? waterfall.attempts_detail
-      : [{
-          tier_name: waterfall.tier_succeeded ?? null,
-          tier_index: waterfall.tier_index ?? null,
-          attempt: 1,
-          succeeded: waterfall.tier_succeeded ? true : null,
-          latency_ms: waterfall.total_latency_ms ?? null,
-          prompt_tokens: waterfall.total_prompt_tokens ?? null,
-          completion_tokens: waterfall.total_completion_tokens ?? null,
-          total_tokens: waterfall.total_tokens ?? null,
-          estimated_cost_usd: waterfall.total_estimated_cost_usd ?? null,
-        }];
+    const attempts =
+      Array.isArray(waterfall.attempts_detail) && waterfall.attempts_detail.length > 0
+        ? waterfall.attempts_detail
+        : [
+            {
+              tier_name: waterfall.tier_succeeded ?? null,
+              tier_index: waterfall.tier_index ?? null,
+              attempt: 1,
+              succeeded: waterfall.tier_succeeded ? true : null,
+              latency_ms: waterfall.total_latency_ms ?? null,
+              prompt_tokens: waterfall.total_prompt_tokens ?? null,
+              completion_tokens: waterfall.total_completion_tokens ?? null,
+              total_tokens: waterfall.total_tokens ?? null,
+              estimated_cost_usd: waterfall.total_estimated_cost_usd ?? null,
+            },
+          ];
 
     for (const attempt of attempts) {
       const entry = toLedgerEntry(stage, attempt, entries.length);
       entries.push(entry);
       if (entry.cost_precision !== 'exact') {
-        warnings.add(`${entry.entry_id}: ${entry.cost_precision} pricing for ${entry.provider ?? 'unknown'}:${entry.model_id ?? 'unknown'}.`);
+        warnings.add(
+          `${entry.entry_id}: ${entry.cost_precision} pricing for ${entry.provider ?? 'unknown'}:${entry.model_id ?? 'unknown'}.`,
+        );
       }
       if (entry.warning) {
         warnings.add(`${entry.entry_id}: ${entry.warning}`);
@@ -230,8 +273,12 @@ export function buildCostLedger(options: {
     totals.prompt_tokens += entry.prompt_tokens ?? 0;
     totals.completion_tokens += entry.completion_tokens ?? 0;
     totals.total_tokens += entry.total_tokens ?? 0;
-    totals.estimated_cost_usd = roundCost(totals.estimated_cost_usd + (entry.estimated_cost_usd ?? 0));
-    totals.by_precision[entry.cost_precision] = roundCost(totals.by_precision[entry.cost_precision] + (entry.estimated_cost_usd ?? 0));
+    totals.estimated_cost_usd = roundCost(
+      totals.estimated_cost_usd + (entry.estimated_cost_usd ?? 0),
+    );
+    totals.by_precision[entry.cost_precision] = roundCost(
+      totals.by_precision[entry.cost_precision] + (entry.estimated_cost_usd ?? 0),
+    );
     addToBucket(totals.by_provider, entry.provider, entry);
     addToBucket(totals.by_model, entry.model_id, entry);
     addToBucket(totals.by_stage, entry.stage, entry);
@@ -287,21 +334,25 @@ export function buildSingleCallCostLedger(options: {
     runId: options.runId,
     task: options.task,
     lane: options.lane,
-    waterfallEntries: [{
-      stage: options.stage,
-      attempts_detail: [{
-        tier_name: `${options.stage}-direct`,
-        tier_index: 0,
-        attempt: 1,
-        succeeded: true,
-        provider: options.provider,
-        provider_model_id: options.modelId,
-        latency_ms: options.latencyMs ?? null,
-        prompt_tokens: options.promptTokens ?? null,
-        completion_tokens: options.completionTokens ?? null,
-        total_tokens: options.totalTokens ?? null,
-      }],
-    }],
+    waterfallEntries: [
+      {
+        stage: options.stage,
+        attempts_detail: [
+          {
+            tier_name: `${options.stage}-direct`,
+            tier_index: 0,
+            attempt: 1,
+            succeeded: true,
+            provider: options.provider,
+            provider_model_id: options.modelId,
+            latency_ms: options.latencyMs ?? null,
+            prompt_tokens: options.promptTokens ?? null,
+            completion_tokens: options.completionTokens ?? null,
+            total_tokens: options.totalTokens ?? null,
+          },
+        ],
+      },
+    ],
     ...(options.createdAt ? { createdAt: options.createdAt } : {}),
   });
 }

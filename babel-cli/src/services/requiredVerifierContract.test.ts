@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildVerifierContractArtifacts,
   buildVerifierPlan,
   reconcileVerifierPlan,
   summarizeVerifierContract,
@@ -21,14 +22,18 @@ function command(command: string, exitCode: number, step = 1): ToolCallLog {
 }
 
 test('verifier plan creation extracts declared required commands', () => {
-  const plan = buildVerifierPlan('Verifier commands: npm run typecheck && npm test -- --run src/a.test.ts && npm run build');
+  const plan = buildVerifierPlan(
+    'Verifier commands: npm run typecheck && npm test -- --run src/a.test.ts && npm run build',
+  );
 
-  assert.deepEqual(plan.map(item => item.command), [
-    'npm run typecheck',
-    'npm test -- --run src/a.test.ts',
-    'npm run build',
-  ]);
-  assert.equal(plan.every(item => item.required), true);
+  assert.deepEqual(
+    plan.map((item) => item.command),
+    ['npm run typecheck', 'npm test -- --run src/a.test.ts', 'npm run build'],
+  );
+  assert.equal(
+    plan.every((item) => item.required),
+    true,
+  );
   assert.equal(plan[0]?.source, 'user_required');
 });
 
@@ -37,11 +42,10 @@ test('verifier plan creation extracts inline labeled commands from app tasks', (
     'AWEH-009. Verifier commands: npm run typecheck && npm test -- --run && npm run build. Expected outcome: component remains unchanged.',
   );
 
-  assert.deepEqual(plan.map(item => item.command), [
-    'npm run typecheck',
-    'npm test -- --run',
-    'npm run build',
-  ]);
+  assert.deepEqual(
+    plan.map((item) => item.command),
+    ['npm run typecheck', 'npm test -- --run', 'npm run build'],
+  );
 });
 
 test('verifier command path variants normalize to canonical command keys', () => {
@@ -73,20 +77,18 @@ test('required verifier command-path matrix supports common path-encoded executa
   const summary = summarizeVerifierContract(reconciled);
 
   assert.equal(summary.requiredVerifierCount, 6);
-  assert.deepEqual(reconciled.map(entry => entry.state), [
-    'passed',
-    'passed',
-    'passed',
-    'passed',
-    'passed',
-    'passed',
-  ]);
+  assert.deepEqual(
+    reconciled.map((entry) => entry.state),
+    ['passed', 'passed', 'passed', 'passed', 'passed', 'passed'],
+  );
   assert.equal(summary.verifierCompletionSatisfied, true);
   assert.equal(summary.completionBlockingStatus, null);
 });
 
 test('command-path variants from plan and execution dedupe identical verifier keys', () => {
-  const plan = buildVerifierPlan('Verifier commands: npm test && ./node_modules/.bin/npm run test && npm test');
+  const plan = buildVerifierPlan(
+    'Verifier commands: npm test && ./node_modules/.bin/npm run test && npm test',
+  );
 
   assert.equal(plan.length, 2);
   assert.equal(plan[0]?.command, 'npm test');
@@ -94,9 +96,14 @@ test('command-path variants from plan and execution dedupe identical verifier ke
 });
 
 test('verifier plan creation trims human cwd phrase from command text', () => {
-  const plan = buildVerifierPlan('The Node project is in app. Run npm test from app before completing.');
+  const plan = buildVerifierPlan(
+    'The Node project is in app. Run npm test from app before completing.',
+  );
 
-  assert.deepEqual(plan.map(item => item.command), ['npm test']);
+  assert.deepEqual(
+    plan.map((item) => item.command),
+    ['npm test'],
+  );
 });
 
 test('required verifier all pass satisfies completion', () => {
@@ -120,10 +127,13 @@ test('required verifier final pass after prior failure satisfies completion', ()
   assert.equal(reconciled[0]?.state, 'passed');
   assert.equal(reconciled[0]?.exitCode, 0);
   assert.equal(reconciled[0]?.executionHistory.length, 2);
-  assert.deepEqual(reconciled[0]?.executionHistory.map(item => [item.step, item.state, item.selected]), [
-    [3, 'failed', false],
-    [5, 'passed', true],
-  ]);
+  assert.deepEqual(
+    reconciled[0]?.executionHistory.map((item) => [item.step, item.state, item.selected]),
+    [
+      [3, 'failed', false],
+      [5, 'passed', true],
+    ],
+  );
   assert.equal(summary.verifierCompletionSatisfied, true);
   assert.equal(summary.completionBlockingStatus, null);
 });
@@ -147,7 +157,9 @@ test('failed required verifier blocks completion', () => {
 });
 
 test('skipped required verifier after prior failure blocks completion', () => {
-  const plan = buildVerifierPlan('Verifier commands: npm run typecheck && npm test && npm run build');
+  const plan = buildVerifierPlan(
+    'Verifier commands: npm run typecheck && npm test && npm run build',
+  );
   const reconciled = reconcileVerifierPlan(plan, [command('npm run typecheck', 1)]);
   const summary = summarizeVerifierContract(reconciled);
 
@@ -164,12 +176,37 @@ test('optional skipped verifier does not block completion', () => {
   assert.equal(summary.requiredVerifierCount, 1);
   assert.equal(summary.requiredVerifierPassedCount, 1);
   assert.equal(summary.verifierCompletionSatisfied, true);
-  assert.equal(summary.verifiers.find(item => item.command === 'npm run lint')?.state, 'skipped_optional');
+  assert.equal(
+    summary.verifiers.find((item) => item.command === 'npm run lint')?.state,
+    'skipped_optional',
+  );
 });
 
 test('no required verifier reports explicit zero count', () => {
-  const summary = summarizeVerifierContract(reconcileVerifierPlan(buildVerifierPlan('Create a file.'), []));
+  const summary = summarizeVerifierContract(
+    reconcileVerifierPlan(buildVerifierPlan('Create a file.'), []),
+  );
 
   assert.equal(summary.requiredVerifierCount, 0);
   assert.equal(summary.verifierCompletionSatisfied, true);
+});
+
+test('buildVerifierPlan merges additional required verifiers from scope resolution', () => {
+  const plan = buildVerifierPlan('Fix src/math.js only.', ['npm test']);
+  assert.deepEqual(
+    plan.map((item) => item.command),
+    ['npm test'],
+  );
+  assert.equal(plan[0]?.source, 'user_required');
+});
+
+test('buildVerifierContractArtifacts honors additional required verifiers', () => {
+  const artifacts = buildVerifierContractArtifacts({
+    task: 'Fix src/math.js only.',
+    toolCallLog: [command('npm test', 0)],
+    runDir: '/tmp/run',
+    additionalRequiredVerifiers: ['npm test'],
+  });
+  assert.equal(artifacts.summary.verifierCompletionSatisfied, true);
+  assert.equal(artifacts.summary.requiredVerifierCount, 1);
 });

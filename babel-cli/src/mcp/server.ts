@@ -7,14 +7,8 @@ import { inspectCatalog } from '../control-plane/stackResolver.js';
 import { previewInstructionStackResolution } from '../control-plane/stackResolver.js';
 import { getExecutorToolRegistrySnapshot } from '../localTools.js';
 import type { CatalogEntry } from '../control-plane/catalog.js';
-import type {
-  InstructionStack,
-  ResolutionPolicy,
-} from '../schemas/agentContracts.js';
-import {
-  InstructionStackSchema,
-  ResolutionPolicySchema,
-} from '../schemas/agentContracts.js';
+import type { InstructionStack, ResolutionPolicy } from '../schemas/agentContracts.js';
+import { InstructionStackSchema, ResolutionPolicySchema } from '../schemas/agentContracts.js';
 
 const BABEL_ROOT = process.env['BABEL_ROOT'] ?? resolve(import.meta.dirname, '..', '..', '..');
 const CATALOG_PATH = resolve(BABEL_ROOT, 'prompt_catalog.yaml');
@@ -187,7 +181,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'babel_stack_resolve',
-    description: 'Resolve a typed instruction stack into compiled_artifacts and prompt_manifest. Read-only.',
+    description:
+      'Resolve a typed instruction stack into compiled_artifacts and prompt_manifest. Read-only.',
     inputSchema: {
       type: 'object',
       required: ['instruction_stack', 'resolution_policy'],
@@ -201,7 +196,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'babel_instruction_stack_preview',
-    description: 'Preview the ordered entries and budget summary for a typed instruction stack. Read-only.',
+    description:
+      'Preview the ordered entries and budget summary for a typed instruction stack. Read-only.',
     inputSchema: {
       type: 'object',
       required: ['instruction_stack', 'resolution_policy'],
@@ -215,7 +211,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'babel_manifest_preview',
-    description: 'Preview the compiled manifest shape Babel would use for a typed instruction stack. Read-only.',
+    description:
+      'Preview the compiled manifest shape Babel would use for a typed instruction stack. Read-only.',
     inputSchema: {
       type: 'object',
       required: ['instruction_stack', 'resolution_policy'],
@@ -229,7 +226,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'babel_executor_tools_list',
-    description: 'List Babel executor tool registry metadata. Read-only and metadata-only; does not execute tools. Mutating metadata is hidden unless include_mutating is true.',
+    description:
+      'List Babel executor tool registry metadata. Read-only and metadata-only; does not execute tools. Mutating metadata is hidden unless include_mutating is true.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -259,7 +257,7 @@ const PROMPTS = [
   },
 ];
 
-const TOOL_NAMES = new Set(TOOLS.map(tool => tool.name));
+const TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name));
 const EXPLICITLY_DISALLOWED_TOOLS = new Set([
   'runBabelPipeline',
   'file_write',
@@ -296,9 +294,8 @@ function writeError(id: string | number | null, code: number, message: string): 
 }
 
 async function handleRequest(request: Record<string, unknown>): Promise<void> {
-  const id = (typeof request['id'] === 'string' || typeof request['id'] === 'number')
-    ? request['id']
-    : null;
+  const id =
+    typeof request['id'] === 'string' || typeof request['id'] === 'number' ? request['id'] : null;
   const method = typeof request['method'] === 'string' ? request['method'] : '';
 
   if (!method) {
@@ -352,11 +349,13 @@ async function handleRequest(request: Record<string, unknown>): Promise<void> {
     const uri = typeof params['uri'] === 'string' ? params['uri'] : '';
     if (uri === 'babel://catalog/prompt_catalog') {
       writeResult(id ?? 0, {
-        contents: [{
-          uri,
-          mimeType: 'text/yaml',
-          text: readFileSync(CATALOG_PATH, 'utf-8'),
-        }],
+        contents: [
+          {
+            uri,
+            mimeType: 'text/yaml',
+            text: readFileSync(CATALOG_PATH, 'utf-8'),
+          },
+        ],
       });
       return;
     }
@@ -369,11 +368,13 @@ async function handleRequest(request: Record<string, unknown>): Promise<void> {
         return;
       }
       writeResult(id ?? 0, {
-        contents: [{
-          uri,
-          mimeType: 'application/json',
-          text: JSON.stringify(asCatalogOutput(entry), null, 2),
-        }],
+        contents: [
+          {
+            uri,
+            mimeType: 'application/json',
+            text: JSON.stringify(asCatalogOutput(entry), null, 2),
+          },
+        ],
       });
       return;
     }
@@ -394,34 +395,37 @@ async function handleRequest(request: Record<string, unknown>): Promise<void> {
       writeError(id, -32602, `Unknown prompt '${name}'.`);
       return;
     }
-    const text = name === 'babel_catalog_inspection'
-      ? [
-          'Inspect the Babel prompt catalog using bounded filters.',
-          `Project: ${String(args['project'] ?? 'any')}`,
-          `Tags: ${String(args['tags'] ?? 'any')}`,
-          'Use babel_catalog_inspect first; do not load unrelated catalog entries.',
-        ].join('\n')
-      : [
-          'Resolve a Babel instruction stack before execution.',
-          `Domain: ${String(args['domain'] ?? 'unspecified')}`,
-          'Use babel_instruction_stack_preview before babel_stack_resolve when exploring.',
-        ].join('\n');
+    const text =
+      name === 'babel_catalog_inspection'
+        ? [
+            'Inspect the Babel prompt catalog using bounded filters.',
+            `Project: ${String(args['project'] ?? 'any')}`,
+            `Tags: ${String(args['tags'] ?? 'any')}`,
+            'Use babel_catalog_inspect first; do not load unrelated catalog entries.',
+          ].join('\n')
+        : [
+            'Resolve a Babel instruction stack before execution.',
+            `Domain: ${String(args['domain'] ?? 'unspecified')}`,
+            'Use babel_instruction_stack_preview before babel_stack_resolve when exploring.',
+          ].join('\n');
     writeResult(id ?? 0, {
       description: PROMPTS.find((prompt) => prompt.name === name)?.description,
-      messages: [{
-        role: 'user',
-        content: {
-          type: 'text',
-          text,
+      messages: [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text,
+          },
         },
-      }],
+      ],
     });
     return;
   }
 
   if (method === 'tools/list') {
     writeResult(id ?? 0, {
-      tools: TOOLS.map(tool => ({
+      tools: TOOLS.map((tool) => ({
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
@@ -437,10 +441,12 @@ async function handleRequest(request: Record<string, unknown>): Promise<void> {
 
     if (EXPLICITLY_DISALLOWED_TOOLS.has(toolName)) {
       writeResult(id ?? 0, {
-        content: [{
-          type: 'text',
-          text: `Tool '${toolName}' is not registered by this read-only Babel MCP server.`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Tool '${toolName}' is not available in Babel MCP Phase 1.`,
+          },
+        ],
         isError: true,
       });
       return;
@@ -451,24 +457,28 @@ async function handleRequest(request: Record<string, unknown>): Promise<void> {
       return;
     }
 
-    const tool = TOOLS.find(candidate => candidate.name === toolName)!;
+    const tool = TOOLS.find((candidate) => candidate.name === toolName)!;
     try {
       const result = await tool.handler(toolArgs);
       writeResult(id ?? 0, {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(result, null, 2),
-        }],
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
         structuredContent: result,
         isError: false,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       writeResult(id ?? 0, {
-        content: [{
-          type: 'text',
-          text: message,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: message,
+          },
+        ],
         isError: true,
       });
     }
@@ -482,7 +492,7 @@ export async function runBabelMcpServer(): Promise<void> {
   process.stdin.resume();
   let buffer = Buffer.alloc(0);
 
-  process.stdin.on('data', async chunk => {
+  process.stdin.on('data', async (chunk) => {
     const chunkBuffer = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
     buffer = Buffer.concat([buffer, chunkBuffer]);
 

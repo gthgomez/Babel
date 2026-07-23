@@ -47,7 +47,9 @@ export function getDeepSeekPricing(model: string): DeepSeekTokenPricing | null {
   };
 }
 
-export function getConservativeDeepSeekTokenPricing(model: string): { input: number; output: number } | null {
+export function getConservativeDeepSeekTokenPricing(
+  model: string,
+): { input: number; output: number } | null {
   const pricing = getDeepSeekPricing(model);
   if (!pricing) {
     return null;
@@ -58,7 +60,10 @@ export function getConservativeDeepSeekTokenPricing(model: string): { input: num
   };
 }
 
-export function estimateDeepSeekCostUsd(model: string, usage?: DeepSeekUsageForPricing): number | null {
+export function estimateDeepSeekCostUsd(
+  model: string,
+  usage?: DeepSeekUsageForPricing,
+): number | null {
   if (!usage) {
     return null;
   }

@@ -1,4 +1,6 @@
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 
 import { z } from 'zod';
 
@@ -8,11 +10,31 @@ import { resolveExecutionProfile } from '../config/executionProfiles.js';
 import { EvidenceBundle } from '../evidence.js';
 import { runWithFallback, type TargetModel } from '../execute.js';
 import {
+  executeTool,
   DRY_RUN,
+  promptUserJit,
   ToolCallRequestSchema,
+  type ToolCallRequest,
+  type ToolResult,
 } from '../localTools.js';
-import { runPreToolUseHooks, type RuntimeHookTraceEvent } from '../runtime/hooks.js';
+import { type RuntimeHookTraceEvent } from '../runtime/hooks.js';
+import { applyPreToolUseHooks } from './executorPreToolHooks.js';
+import {
+  IncrementalToolDetector,
+  computeFingerprint,
+  JitDenialError,
+  PolicyBlockedDuplicateError,
+} from '../ui/incrementalToolDetector.js';
+import {
+  InputCoordinator,
+  promptPermissionDialog,
+  type PermissionAction,
+} from '../ui/inputCoordinator.js';
+import { getActiveRenderer } from '../ui/waterfall.js';
 import { autoCompactIfNeeded } from '../services/compaction.js';
+import { resolveBudgetLimit, type BudgetEnforcementResult } from '../services/tokenBudgetEnforcer.js';
+import { enforceTokenBudget } from './executorTokenBudget.js';
+import { verifyAndRepairFileWrite } from './executorPostWriteVerification.js';
 import type {
   AutonomousRepairProofAttemptEvidence,
   AutonomousRepairProofTimeline,
@@ -23,21 +45,25 @@ import {
   buildFailureCapsule,
   formatFailureCapsuleForPrompt,
   maxAttemptsForRepairMode,
+  validateRepairCapsuleChain,
 } from '../services/repairGovernance.js';
 import { writeExecutorSessionContext } from '../services/sessionContext.js';
 import {
   buildAttemptSafetySummary,
   buildTerminalStatusSummary,
+  isVerifierCommand,
   type RollbackMode,
   type TerminalStatus,
 } from '../services/terminalStatus.js';
 import {
+  WorktreeSafetyController,
   createWorktreeSafetyController,
   type WorktreeRollbackStatus,
   type WorktreeRollbackSummary,
 } from '../services/worktreeSafety.js';
 import {
   ExecutorTurnSchema,
+  type HaltTag,
   type SwePlan,
   type ToolCallLog,
 } from '../schemas/agentContracts.js';
@@ -49,15 +75,26 @@ import {
   assertExecutorGate,
   buildExecutorRepairPrompt,
   buildExecutorTask,
-  buildExecutorTurnPrompt,
+  buildExecutorTurnPromptLegacy,
   buildHaltReport,
   buildTerminalReport,
   canonicalizeExecutorTargetForLog,
   classifyRunnerExhaustionHaltTag,
+  collectTerminalContext,
   formatHistoryEntry,
   getExecutorProjectRoot,
   getTarget,
+  isReliabilityRepairProofEnabled,
   isSameRecoverableCommandRetry,
+  isWithinProjectRootPath,
+  getReliabilityRepairProofMaxFailures,
+  hashProjectFileForEvidence,
+  readJsonArtifact,
+  RELIABILITY_REPAIR_PROOF_MARKER,
+  resolveStepTargetPath,
+  saveSessionState,
+  snapshotProjectFilesForSafety,
+  summarizeVerifierStreamForEvidence,
   shouldForceRecoverableCommandRerun,
   type PendingRecoverableCommandRetry,
 } from '../stages/executorHelpers.js';
@@ -99,10 +136,7 @@ import {
   verifyBoundedTaskArtifacts,
   verifySuccessfulTextWriteTarget,
 } from '../stages/verification.js';
-import {
-  getBenchmarkRuntimeInventoryForProfile,
-  getBenchmarkRuntimeInventoryLines,
-} from './benchmarkRuntime.js';
+import { getBenchmarkRuntimeInventoryLines } from './benchmarkRuntime.js';
 import {
   BABEL_ROOT,
   BENCHMARK_INSTALL_RECOVERY_TAG,
@@ -115,7 +149,6 @@ import {
   getExternalRepairRerunLimit,
   isBenchmarkDependencyInstallCommand,
   isExternalBenchmarkTask,
-  normalizeShellCommandForComparison,
   shouldHaltExternalRepairRerun,
 } from './benchmarkTasks.js';
 import {
@@ -158,17 +191,8 @@ import {
   verifyExactOutputSchemaArtifacts,
 } from './exactOutputArtifacts.js';
 import { emitRuntimeEvent, log, logDetail } from './logging.js';
-import {
-  RELIABILITY_REPAIR_PROOF_MARKER,
-  getReliabilityRepairProofMaxFailures,
-  hashProjectFileForEvidence,
-  hasMeaningfulRepairDiff,
-  isReliabilityRepairProofEnabled,
-  snapshotProjectFilesForSafety,
-  summarizeVerifierStreamForEvidence,
-  type RepairProofCapsuleArtifact,
-} from './repairProof.js';
-
+import { hasMeaningfulRepairDiff, type RepairProofCapsuleArtifact } from './repairProof.js';
+import { TurnHistory, type TurnRecord } from './turnHistory.js';
 
 /**
  * Stage 4: runs the CLI Executor in a stateless text-loop via `runWithFallback`.
@@ -180,10 +204,1151 @@ import {
  *
  * No Anthropic SDK — all LLM calls go through the same waterfall as Stages 1-3.
  */
+
+// ── Extracted helper result types ──────────────────────────────────────────
+
+type CompletionHandlerResult =
+  | { kind: 'return'; result: ExecutorLoopResult }
+  | {
+      kind: 'continue';
+      executionHistory: string;
+      externalPostconditionFailures: number;
+      nextTurnPrompt: string;
+      condition: string;
+    }
+  | { kind: 'ok' };
+
+type ToolFailureResult =
+  | { kind: 'return'; result: ExecutorLoopResult }
+  | {
+      kind: 'continue';
+      executionHistory: string;
+      nextTurnPrompt: string;
+      recoverableCommandFailures: number;
+      currentRepairAttemptChangedFiles: Set<string>;
+      currentRepairAttemptFileHashes: Record<string, RepairProofFileHash>;
+      currentRepairAttemptInputCapsule: RepairProofCapsuleArtifact | null;
+      latestFailureCapsuleArtifact: RepairProofCapsuleArtifact | null;
+    }
+  | { kind: 'ok' };
+
+/**
+ * Evict stale file read cache entries (stale if turn - lastUsed > 5),
+ * then if cache still exceeds maxBytes, evict oldest entries until under budget.
+ * Mutates the Maps in place and returns the updated byte counter.
+ */
+function evictFileReadCache(
+  turn: number,
+  fileReadCache: Map<string, string>,
+  fileReadCacheUsedTurn: Map<string, number>,
+  fileReadCacheTotalBytes: number,
+  maxBytes: number,
+): { fileReadCacheTotalBytes: number } {
+  // Evict stale entries (stale if turn - lastUsed > 5)
+  const toEvict: string[] = [];
+  for (const [filePath, lastUsed] of fileReadCacheUsedTurn.entries()) {
+    if (turn - lastUsed > 5) {
+      toEvict.push(filePath);
+    }
+  }
+  for (const filePath of toEvict) {
+    const evictedSize = Buffer.byteLength(fileReadCache.get(filePath) ?? '', 'utf8');
+    fileReadCacheTotalBytes -= evictedSize;
+    fileReadCache.delete(filePath);
+    fileReadCacheUsedTurn.delete(filePath);
+  }
+
+  // ── Size-bounded LRU eviction (10 MB ceiling) ────────────────────────
+  // After turn-based eviction, if the cache still exceeds the byte budget,
+  // evict additional entries in ascending lastUsed-turn order (oldest first).
+  if (fileReadCacheTotalBytes > maxBytes) {
+    const sortedByAge = [...fileReadCacheUsedTurn.entries()].sort((a, b) => a[1] - b[1]);
+    for (const [filePath] of sortedByAge) {
+      if (fileReadCacheTotalBytes <= maxBytes) break;
+      const evictedSize = Buffer.byteLength(fileReadCache.get(filePath) ?? '', 'utf8');
+      fileReadCacheTotalBytes -= evictedSize;
+      fileReadCache.delete(filePath);
+      fileReadCacheUsedTurn.delete(filePath);
+    }
+  }
+
+  return { fileReadCacheTotalBytes };
+}
+
+/**
+ * Extracted: executes a direct bounded write plan without LLM calls, if one exists.
+ * Returns null if no direct bounded plan is available (normal execution path).
+ */
+async function runDirectBoundedWritePlan(
+  reliabilityRepairProofEnabled: boolean,
+  approvedPlan: SwePlan,
+  rawTask: string,
+  toolCallLog: ToolCallLog[],
+  evidence: EvidenceBundle,
+  baseContext: string,
+  reportWarnings: string[],
+  executionHistory: string,
+  persistExecutorContext: (
+    status: 'ready_for_next_turn' | 'after_tool_call' | 'terminal',
+    nextTurnPrompt: string,
+    details?: { terminalStatus?: string; haltTag?: string; condition?: string },
+  ) => Promise<void>,
+): Promise<ExecutorLoopResult | null> {
+  const directBoundedPlan = reliabilityRepairProofEnabled
+    ? null
+    : getDirectBoundedWritePlan(approvedPlan, rawTask, getExecutorProjectRoot());
+  if (!directBoundedPlan) {
+    return null;
+  }
+  const warning = `[EXECUTOR_DIRECT_BOUNDED_WRITE] Executing without model executor turns: ${directBoundedPlan.reason}.`;
+  reportWarnings.push(warning);
+  logDetail(warning);
+
+  for (const write of directBoundedPlan.writes) {
+    const stepNum = toolCallLog.length + 1;
+    const toolResult = await executeTool(
+      {
+        tool: 'file_write',
+        path: write.target,
+        content: write.content,
+      },
+      {
+        agentId: 'executor',
+        runId: evidence.runId,
+        runDir: evidence.runDir,
+        babelRoot: BABEL_ROOT,
+      },
+    );
+
+    const entry: ToolCallLog = {
+      step: stepNum,
+      tool: 'file_write',
+      target: canonicalizeExecutorTargetForLog(write.target, 'file_write'),
+      exit_code: toolResult.exit_code,
+      stdout: toolResult.stdout,
+      stderr: toolResult.stderr,
+      ...(toolResult.denial ? { denial: toolResult.denial } : {}),
+      ...(toolResult.mcp_lifecycle ? { mcp_lifecycle: toolResult.mcp_lifecycle } : {}),
+      ...(toolResult.checkpoint_ids ? { checkpoint_ids: toolResult.checkpoint_ids } : {}),
+      verified: toolResult.exit_code === 0,
+    };
+    toolCallLog.push(entry);
+
+    const writeVerificationFailure =
+      toolResult.exit_code === 0
+        ? verifySuccessfulTextWriteTarget(write.target, getExecutorProjectRoot(), rawTask)
+        : `Direct bounded file_write for "${write.target}" exited with code ${toolResult.exit_code}. ` +
+          `stderr: ${toolResult.stderr.slice(0, 200)}`;
+    if (writeVerificationFailure) {
+      const report = buildHaltReport(
+        toolCallLog,
+        'STEP_VERIFICATION_FAIL',
+        stepNum,
+        writeVerificationFailure,
+      );
+      await persistExecutorContext('terminal', baseContext, {
+        terminalStatus: 'EXECUTION_HALTED',
+        haltTag: 'STEP_VERIFICATION_FAIL',
+        condition: writeVerificationFailure,
+      });
+      writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+      log(`  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] at step ${stepNum}`);
+      return {
+        toolCallLog,
+        terminalStatus: 'EXECUTION_HALTED',
+        haltTag: 'STEP_VERIFICATION_FAIL',
+        condition: writeVerificationFailure,
+      };
+    }
+
+    executionHistory += (executionHistory ? '\n\n' : '') + formatHistoryEntry(entry);
+  }
+
+  const semanticFailure = verifyBoundedTaskArtifacts(
+    rawTask,
+    toolCallLog,
+    getExecutorProjectRoot(),
+  );
+  if (semanticFailure) {
+    const report = buildHaltReport(
+      toolCallLog,
+      'STEP_VERIFICATION_FAIL',
+      toolCallLog.length,
+      semanticFailure,
+    );
+    await persistExecutorContext('terminal', baseContext, {
+      terminalStatus: 'EXECUTION_HALTED',
+      haltTag: 'STEP_VERIFICATION_FAIL',
+      condition: semanticFailure,
+    });
+    writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+    log(
+      '  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during direct bounded write verification',
+    );
+    return {
+      toolCallLog,
+      terminalStatus: 'EXECUTION_HALTED',
+      haltTag: 'STEP_VERIFICATION_FAIL',
+      condition: semanticFailure,
+    };
+  }
+
+  const completion = {
+    type: 'completion',
+    status: 'EXECUTION_COMPLETE',
+  } as const;
+  const report = buildTerminalReport(completion, toolCallLog, evidence);
+  await persistExecutorContext('terminal', baseContext, {
+    terminalStatus: 'EXECUTION_COMPLETE',
+  });
+  writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+  log(`  Executor: EXECUTION_COMPLETE (${toolCallLog.length} steps, direct bounded write)`);
+  return {
+    toolCallLog,
+    terminalStatus: 'EXECUTION_COMPLETE',
+  };
+}
+
+/**
+ * Extracted: handles terminal completion from the executor (EXECUTION_COMPLETE, EXECUTION_HALTED,
+ * PARTIAL, ACTIVATION_REFUSED). Returns a discriminated union for the caller to dispatch on.
+ */
+async function handleExecutorCompletion(
+  executorTurn: z.infer<typeof ExecutorTurnSchema>,
+  rawTask: string,
+  toolCallLog: ToolCallLog[],
+  baseContext: string,
+  executionHistory: string,
+  fileReadCache: Map<string, string>,
+  turnPrompt: string,
+  evidence: EvidenceBundle,
+  reportWarnings: string[],
+  externalPostconditionFailures: number,
+  finalCompletionGuardResult: { current: CompletionGuardEvidence },
+  requestedTargetContract: ReturnType<typeof getRequestedTargetContract>,
+  preCompleteVerificationTrace: BenchmarkVerificationResult[],
+  runtimeHookTraceEvents: RuntimeHookTraceEvent[],
+  repairAttemptTimeline: AutonomousRepairProofAttemptEvidence[],
+  reliabilityRepairProofEnabled: boolean,
+  totalJitLatencyMs: number,
+  totalStreamPauseDurationMs: number,
+  totalLockWaitMs: number,
+  peakBufferBytes: number,
+  getMissingSuccessfulPlannedFileWrites: () => string[],
+  haltForMissingPlannedFileWrites: (
+    nextTurnPrompt: string,
+    missingTargets: string[],
+  ) => Promise<ExecutorLoopResult>,
+  completeAfterDeterministicExternalRepair: (
+    nextTurnPrompt: string,
+    reason: string,
+  ) => Promise<ExecutorLoopResult | null>,
+  persistExecutorContext: (
+    status: 'ready_for_next_turn' | 'after_tool_call' | 'terminal',
+    nextTurnPrompt: string,
+    details?: { terminalStatus?: string; haltTag?: string; condition?: string },
+  ) => Promise<void>,
+  writeRepairAttemptTimeline: (finalStatus?: string | null) => void,
+): Promise<CompletionHandlerResult> {
+  // ── Terminal completion ──────────────────────────────────────────────────
+  if (executorTurn.type === 'completion') {
+    if (executorTurn.status === 'EXECUTION_COMPLETE') {
+      const missingPlannedFileWrites = getMissingSuccessfulPlannedFileWrites();
+      if (missingPlannedFileWrites.length > 0) {
+        return {
+          kind: 'return',
+          result: await haltForMissingPlannedFileWrites(turnPrompt, missingPlannedFileWrites),
+        };
+      }
+
+      const preCompleteGuards = evaluatePreCompleteGuards({
+        rawTask,
+        toolCallLog,
+        projectRoot: getExecutorProjectRoot(),
+        exactOutputSchemaFailure: verifyExactOutputSchemaArtifacts(
+          rawTask,
+          getExecutorProjectRoot(),
+        ),
+        exactInvariantFailure: evaluateExactInstructionInvariants(
+          requestedTargetContract.exactInvariants,
+          getExecutorProjectRoot(),
+          toolCallLog,
+        ),
+      });
+      runtimeHookTraceEvents.push(...preCompleteGuards.runtimeHookTraceEvents);
+      if (preCompleteGuards.benchmarkVerification) {
+        preCompleteVerificationTrace.push(preCompleteGuards.benchmarkVerification);
+        emitRuntimeEvent('verification.decision', {
+          hook_id: 'benchmark_verification.before_complete',
+          contract_id: preCompleteGuards.benchmarkVerification.contractId,
+          passed: preCompleteGuards.benchmarkVerification.passed,
+          message: preCompleteGuards.benchmarkVerification.message,
+        });
+      }
+
+      const semanticFailure = preCompleteGuards.semanticFailure;
+      finalCompletionGuardResult.current = {
+        status: semanticFailure ? 'fail' : 'pass',
+        semantic_failure: semanticFailure,
+        runtime_hook_event_count: preCompleteGuards.runtimeHookTraceEvents.length,
+        benchmark_verification_status: preCompleteGuards.benchmarkVerification
+          ? preCompleteGuards.benchmarkVerification.passed
+            ? 'pass'
+            : 'fail'
+          : null,
+      };
+      if (semanticFailure) {
+        if (isExternalBenchmarkTask(rawTask) && externalPostconditionFailures < 2) {
+          externalPostconditionFailures += 1;
+          const feedback = [
+            `[Postcondition ${externalPostconditionFailures}] external_benchmark_verification -> requested output artifact`,
+            'Exit code: 1',
+            'Stdout: (empty)',
+            `Stderr: ${semanticFailure}`,
+            'Verification: FAILED',
+          ].join('\n');
+          executionHistory += (executionHistory ? '\n\n' : '') + feedback;
+          const nextTurnAfterPostcondition = buildExecutorTurnPromptLegacy(
+            baseContext,
+            executionHistory,
+            toolCallLog.length,
+            fileReadCache,
+          );
+          log('  Executor: postcondition failed — continuing for autonomous repair');
+          logDetail(semanticFailure);
+          return {
+            kind: 'continue',
+            executionHistory,
+            externalPostconditionFailures,
+            nextTurnPrompt: nextTurnAfterPostcondition,
+            condition: semanticFailure,
+          };
+        }
+
+        const deterministicRepairCompletion = await completeAfterDeterministicExternalRepair(
+          turnPrompt,
+          semanticFailure,
+        );
+        if (deterministicRepairCompletion) {
+          return { kind: 'return', result: deterministicRepairCompletion };
+        }
+
+        const report = buildHaltReport(
+          toolCallLog,
+          'STEP_VERIFICATION_FAIL',
+          toolCallLog.length,
+          semanticFailure,
+        );
+        await persistExecutorContext('terminal', turnPrompt, {
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: 'STEP_VERIFICATION_FAIL',
+          condition: semanticFailure,
+        });
+        writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+        writeRepairAttemptTimeline('EXECUTOR_HALTED');
+        log(
+          '  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] after post-write semantic verification',
+        );
+        logDetail(semanticFailure);
+        return {
+          kind: 'return',
+          result: {
+            toolCallLog,
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'STEP_VERIFICATION_FAIL',
+            condition: semanticFailure,
+          },
+        };
+      }
+
+      const runtimeVerification = runRuntimeVerification({
+        rawTask,
+        toolCallLog,
+        projectRoot: getExecutorProjectRoot(),
+        babelRoot: BABEL_ROOT,
+      });
+      evidence.writeDebugFile(
+        '10_runtime_verification.json',
+        `${JSON.stringify(runtimeVerification, null, 2)}\n`,
+      );
+
+      const runnableArtifactGate = evaluateRunnableArtifactGate({
+        rawTask,
+        toolCallLog,
+        projectRoot: getExecutorProjectRoot(),
+        runtimeVerification,
+      });
+      evidence.writeDebugFile(
+        '11_runnable_artifact_gate.json',
+        `${JSON.stringify(runnableArtifactGate, null, 2)}\n`,
+      );
+      if (runnableArtifactGateBlocksCompletion(runnableArtifactGate)) {
+        const repairLoop = runGodotArtifactRepairLoop({
+          rawTask,
+          toolCallLog,
+          projectRoot: getExecutorProjectRoot(),
+          initialGate: runnableArtifactGate,
+          babelRoot: BABEL_ROOT,
+          maxRepairAttempts: 2,
+        });
+        repairLoop.attempts.forEach((attemptEvidence, index) => {
+          evidence.writeDebugFile(
+            `${12 + index}_artifact_repair_attempt_${index + 1}.json`,
+            `${JSON.stringify(attemptEvidence, null, 2)}\n`,
+          );
+        });
+        if (repairLoop.status === 'REPAIRED_AND_COMPLETE') {
+          const completion = {
+            type: 'completion',
+            status: 'EXECUTION_COMPLETE',
+          } as const;
+          const report = {
+            ...buildTerminalReport(completion, toolCallLog, evidence),
+            stage_status: 'REPAIRED_AND_COMPLETE',
+            pipeline_completion_note:
+              'Godot artifact repair completed only after fresh Babel-owned runtime verification and Runnable Artifact Gate PASS.',
+            artifact_gate: repairLoop.finalGate,
+          };
+          await persistExecutorContext('terminal', turnPrompt, {
+            terminalStatus: 'EXECUTION_COMPLETE',
+            condition: repairLoop.reason,
+          });
+          writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+          writeRepairAttemptTimeline('COMPLETE');
+          log(
+            `  Executor: REPAIRED_AND_COMPLETE (${toolCallLog.length} steps, Godot artifact repaired)`,
+          );
+          logDetail(repairLoop.reason);
+          return {
+            kind: 'return',
+            result: {
+              toolCallLog,
+              terminalStatus: 'EXECUTION_COMPLETE',
+            },
+          };
+        }
+
+        const finalGate = repairLoop.finalGate ?? runnableArtifactGate;
+        const haltDecision =
+          repairLoop.status === 'EXECUTION_HALTED_REPAIR_BUDGET_EXCEEDED'
+            ? {
+                haltTag: 'REPAIR_BUDGET_EXCEEDED' as const,
+                condition: [
+                  'EXECUTION_HALTED_REPAIR_BUDGET_EXCEEDED',
+                  `Runnable Artifact Gate status: ${finalGate.status}`,
+                  `Target type: ${finalGate.target_type}`,
+                  `Repair attempts: ${repairLoop.attempts.length}/2`,
+                  `Reason: ${repairLoop.reason}`,
+                  `Verification command: ${finalGate.verification_command ?? 'NO_RUNTIME_VERIFICATION'}`,
+                  'Failed artifact checks:',
+                  ...(finalGate.failed_artifact_checks.length > 0
+                    ? finalGate.failed_artifact_checks.map(
+                        (check) => `- ${check.id}: ${check.message}`,
+                      )
+                    : ['- None']),
+                  `Next repair action: ${finalGate.next_repair_action ?? 'Manual repair required before completion.'}`,
+                ].join('\n'),
+              }
+            : runnableArtifactGateHaltDecision(finalGate);
+        const report = {
+          ...buildHaltReport(
+            toolCallLog,
+            haltDecision.haltTag,
+            Math.max(1, toolCallLog.length),
+            haltDecision.condition,
+          ),
+          artifact_gate: finalGate,
+        };
+        await persistExecutorContext('terminal', turnPrompt, {
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: haltDecision.haltTag,
+          condition: haltDecision.condition,
+        });
+        writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+        writeRepairAttemptTimeline('EXECUTOR_HALTED');
+        log(`  Executor: EXECUTION_HALTED [${haltDecision.haltTag}] after runnable artifact gate`);
+        logDetail(haltDecision.condition);
+        return {
+          kind: 'return',
+          result: {
+            toolCallLog,
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: haltDecision.haltTag,
+            condition: haltDecision.condition,
+          },
+        };
+      }
+    }
+
+    if (executorTurn.status === 'EXECUTION_HALTED') {
+      const deterministicRepairCompletion = await completeAfterDeterministicExternalRepair(
+        turnPrompt,
+        executorTurn.condition,
+      );
+      if (deterministicRepairCompletion) {
+        return { kind: 'return', result: deterministicRepairCompletion };
+      }
+    }
+
+    const report = buildTerminalReport(executorTurn, toolCallLog, evidence);
+    await persistExecutorContext('terminal', turnPrompt, {
+      terminalStatus: executorTurn.status,
+      ...(executorTurn.status === 'EXECUTION_HALTED'
+        ? { haltTag: executorTurn.halt_tag, condition: executorTurn.condition }
+        : {}),
+      ...(executorTurn.status === 'ACTIVATION_REFUSED'
+        ? { haltTag: 'ACTIVATION_GATE_FAIL', condition: executorTurn.reason }
+        : {}),
+    });
+    writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+    writeRepairAttemptTimeline(
+      executorTurn.status === 'EXECUTION_COMPLETE' ? 'COMPLETE' : 'EXECUTOR_HALTED',
+    );
+
+    if (executorTurn.status === 'EXECUTION_COMPLETE') {
+      log(`  Executor: EXECUTION_COMPLETE (${toolCallLog.length} steps)`);
+      return {
+        kind: 'return',
+        result: {
+          toolCallLog,
+          terminalStatus: 'EXECUTION_COMPLETE',
+          jitLatencyMs: totalJitLatencyMs,
+          streamPauseDurationMs: totalStreamPauseDurationMs,
+          lockWaitMs: totalLockWaitMs,
+          bufferPeakBytes: peakBufferBytes,
+        },
+      };
+    }
+    if (executorTurn.status === 'EXECUTION_HALTED') {
+      log(`  Executor: EXECUTION_HALTED [${executorTurn.halt_tag}]`);
+      logDetail(executorTurn.condition);
+      return {
+        kind: 'return',
+        result: {
+          toolCallLog,
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: executorTurn.halt_tag,
+          condition: executorTurn.condition,
+        },
+      };
+    }
+    if (executorTurn.status === 'PARTIAL') {
+      log(`  Executor: PARTIAL (repaired but not verified)`);
+      return {
+        kind: 'return',
+        result: {
+          toolCallLog,
+          terminalStatus: 'PARTIAL',
+        },
+      };
+    }
+    log(`  Executor: ACTIVATION_REFUSED — ${executorTurn.reason}`);
+    return {
+      kind: 'return',
+      result: {
+        toolCallLog,
+        terminalStatus: 'ACTIVATION_REFUSED',
+        condition: executorTurn.reason,
+      },
+    };
+  }
+  return { kind: 'ok' };
+}
+
+/**
+ * Extracted: handles tool failure (exit_code !== 0) with recoverable failure repair loops,
+ * non-recoverable halts, and rollback. Returns a discriminated union for the caller.
+ */
+async function handleToolFailure(
+  toolResult: ToolResult,
+  req: ToolCallRequest,
+  stepNum: number,
+  entry: ToolCallLog,
+  toolCallLog: ToolCallLog[],
+  repairState: { current: RepairState },
+  repairAttemptTimeline: AutonomousRepairProofAttemptEvidence[],
+  currentRepairAttemptChangedFiles: Set<string>,
+  currentRepairAttemptFileHashes: Record<string, RepairProofFileHash>,
+  latestFailureCapsuleArtifact: RepairProofCapsuleArtifact | null,
+  currentRepairAttemptInputCapsule: RepairProofCapsuleArtifact | null,
+  pendingRecoverableCommandRetryState: { value: PendingRecoverableCommandRetry | null },
+  maxRecoverableCommandFailures: number,
+  recoverableCommandFailures: number,
+  evidence: EvidenceBundle,
+  turnPrompt: string,
+  executionHistory: string,
+  baseContext: string,
+  fileReadCache: Map<string, string>,
+  reportWarnings: string[],
+  repairProofNotes: string[],
+  reliabilityRepairProofEnabled: boolean,
+  rawTask: string,
+  approvedPlan: SwePlan,
+  completeAfterDeterministicExternalRepair: (
+    nextTurnPrompt: string,
+    reason: string,
+  ) => Promise<ExecutorLoopResult | null>,
+  persistExecutorContext: (
+    status: 'ready_for_next_turn' | 'after_tool_call' | 'terminal',
+    nextTurnPrompt: string,
+    details?: { terminalStatus?: string; haltTag?: string; condition?: string },
+  ) => Promise<void>,
+  writeRepairAttemptTimeline: (finalStatus?: string | null) => void,
+  rollbackTouchedFilesForFailure: (
+    underlyingStatus: TerminalStatus,
+    reason: string,
+  ) => {
+    summary: WorktreeRollbackSummary;
+    terminalStatus: TerminalStatus;
+    conditionPrefix: string;
+  },
+  markInputCapsuleConsumed: (capsule: RepairProofCapsuleArtifact | null) => void,
+): Promise<ToolFailureResult> {
+  // Command failures are often recoverable during autonomous work: the
+  // executor can inspect stderr, patch a helper script, and retry. Policy
+  // denials and integration lifecycle failures still halt immediately.
+  if (!DRY_RUN && toolResult.exit_code !== 0) {
+    const denialSummary = toolResult.denial
+      ? `${toolResult.denial.category}/${toolResult.denial.reason_code}: ${toolResult.denial.message}`
+      : null;
+    const mcpLifecycleSummary = toolResult.mcp_lifecycle
+      ? `${toolResult.mcp_lifecycle.phase}/${toolResult.mcp_lifecycle.outcome}${toolResult.mcp_lifecycle.reason_code ? ` (${toolResult.mcp_lifecycle.reason_code})` : ''}`
+      : null;
+    if (
+      (req.tool === 'shell_exec' || req.tool === 'test_run') &&
+      !toolResult.denial &&
+      !toolResult.mcp_lifecycle &&
+      shouldRecoverCommandFailure(req.command, rawTask)
+    ) {
+      recoverableCommandFailures += 1;
+      const repairDecision = recordRepairFailure(repairState.current, entry);
+      repairState.current = repairDecision.state;
+      const inputCapsule = currentRepairAttemptInputCapsule;
+      markInputCapsuleConsumed(inputCapsule);
+      const failureCapsule = buildFailureCapsule({
+        attempt: repairState.current.failures.length,
+        verifierStatus: 'fail',
+        failedCommand: req.command,
+        stdout: toolResult.stdout,
+        stderr: toolResult.stderr,
+        changedFiles: [...currentRepairAttemptChangedFiles],
+      });
+      const failureCapsuleId = `repair_failure_capsule_attempt_${failureCapsule.attempt}`;
+      const failureCapsuleFilename = `12_${failureCapsuleId}.json`;
+      const failureCapsulePath = join(evidence.runDir, failureCapsuleFilename);
+      evidence.writeDebugFile(
+        failureCapsuleFilename,
+        `${JSON.stringify(
+          {
+            id: failureCapsuleId,
+            source: 'executor_recoverable_command_failure',
+            source_tool_call: entry,
+            capsule: failureCapsule,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      latestFailureCapsuleArtifact = {
+        id: failureCapsuleId,
+        path: failureCapsulePath,
+        capsule: failureCapsule,
+      };
+      const previousFailedAttempt =
+        repairAttemptTimeline
+          .filter((attempt) => attempt.status === 'REPAIR_ATTEMPT_FAILED')
+          .at(-1) ?? null;
+      const meaningfulDiffSincePreviousAttempt = hasMeaningfulRepairDiff(
+        previousFailedAttempt,
+        currentRepairAttemptFileHashes,
+      );
+      const repeatedFailureSignature =
+        repairDecision.state.status === 'same_failure_repeated' ||
+        repairDecision.state.status === 'strategy_exhausted'
+          ? formatFailureFingerprint(repairDecision.state.lastFingerprint!)
+          : null;
+      repairAttemptTimeline.push({
+        attempt: failureCapsule.attempt,
+        kind: reliabilityRepairProofEnabled ? 'deterministic_stub' : 'live_cli',
+        status: 'REPAIR_ATTEMPT_FAILED',
+        changed_files: [...currentRepairAttemptChangedFiles].sort(),
+        verifier_command: req.command,
+        verifier_cwd: req.working_directory ?? null,
+        verifier_exit_code: toolResult.exit_code,
+        verifier_stdout_summary: summarizeVerifierStreamForEvidence(toolResult.stdout),
+        verifier_stderr_summary: summarizeVerifierStreamForEvidence(toolResult.stderr),
+        failure_capsule_id: failureCapsuleId,
+        failure_capsule_path: failureCapsulePath,
+        failure_capsule: failureCapsule,
+        input_capsule_id: inputCapsule?.id ?? null,
+        input_capsule_path: inputCapsule?.path ?? null,
+        input_capsule_consumed: inputCapsule !== null,
+        next_attempt_consumed_capsule: false,
+        repeated_failure_signature: repeatedFailureSignature,
+        meaningful_diff_since_previous_attempt: meaningfulDiffSincePreviousAttempt,
+        file_hashes: currentRepairAttemptFileHashes,
+      });
+      currentRepairAttemptChangedFiles = new Set<string>();
+      currentRepairAttemptFileHashes = {};
+      currentRepairAttemptInputCapsule = latestFailureCapsuleArtifact;
+      writeRepairAttemptTimeline('IN_PROGRESS');
+      const wrongWorkingDirectoryHint = getNpmWrongWorkingDirectoryHint(
+        req.command,
+        toolResult.stdout,
+        toolResult.stderr,
+        getExecutorProjectRoot(),
+      );
+      const verifierNotFound =
+        isVerifierNotFoundFailure(req.command, toolResult.stdout, toolResult.stderr) &&
+        wrongWorkingDirectoryHint === null;
+      const repeatedVerifierFailure = repairDecision.state.status === 'same_failure_repeated';
+      const repairBudgetExhausted = recoverableCommandFailures >= maxRecoverableCommandFailures;
+      const underlyingFailureStatus: TerminalStatus = verifierNotFound
+        ? 'VERIFIER_NOT_FOUND'
+        : repeatedVerifierFailure
+          ? 'REPAIR_REPEATED_FAILURE'
+          : repairBudgetExhausted
+            ? 'REPAIR_MAX_ATTEMPTS_REACHED'
+            : 'VERIFIER_FAILED';
+      const rollbackOutcome = rollbackTouchedFilesForFailure(
+        underlyingFailureStatus,
+        `Verifier command "${req.command}" failed on repair attempt ${failureCapsule.attempt}.`,
+      );
+      const rollbackFeedback = [
+        '--- WORKTREE ROLLBACK ---',
+        `Rollback status: ${rollbackOutcome.summary.status}`,
+        `Restored files: ${rollbackOutcome.summary.restored_files.join(', ') || '(none)'}`,
+        `Removed files: ${rollbackOutcome.summary.removed_files.join(', ') || '(none)'}`,
+        `Failed files: ${rollbackOutcome.summary.failed_files.map((file) => file.path).join(', ') || '(none)'}`,
+      ].join('\n');
+      if (rollbackOutcome.terminalStatus === 'ROLLBACK_FAILED') {
+        const condition = [
+          rollbackOutcome.conditionPrefix,
+          `[${underlyingFailureStatus}] Verifier command "${req.command}" failed before rollback completed.`,
+          `Failed rollback files: ${rollbackOutcome.summary.failed_files.map((file) => `${file.path}: ${file.error}`).join('; ') || '(none)'}.`,
+        ].join(' ');
+        reportWarnings.push(condition);
+        const report = buildHaltReport(toolCallLog, 'REPAIR_BUDGET_EXCEEDED', stepNum, condition);
+        await persistExecutorContext('terminal', turnPrompt, {
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: 'REPAIR_BUDGET_EXCEEDED',
+          condition,
+        });
+        writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+        writeRepairAttemptTimeline('ROLLBACK_FAILED');
+        log(`  Executor: EXECUTION_HALTED [ROLLBACK_FAILED] at step ${stepNum}`);
+        return {
+          kind: 'return',
+          result: {
+            toolCallLog,
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'REPAIR_BUDGET_EXCEEDED',
+            condition,
+          },
+        };
+      }
+      if (verifierNotFound) {
+        const underlyingCondition = [
+          `[VERIFIER_NOT_FOUND] Verifier command "${req.command}" is missing or unavailable.`,
+          `stdout: ${summarizeVerifierStreamForEvidence(toolResult.stdout) ?? '(empty)'}.`,
+          `stderr: ${summarizeVerifierStreamForEvidence(toolResult.stderr) ?? '(empty)'}.`,
+          'Recommended next action: define a runnable verifier or choose a task that can be verified with available commands.',
+        ].join(' ');
+        const finalStatus = rollbackOutcome.terminalStatus;
+        const condition =
+          finalStatus === 'VERIFIER_NOT_FOUND'
+            ? underlyingCondition
+            : `${rollbackOutcome.conditionPrefix} Underlying failure: ${underlyingCondition}`;
+        reportWarnings.push(condition);
+        const report = buildHaltReport(toolCallLog, 'STEP_VERIFICATION_FAIL', stepNum, condition);
+        await persistExecutorContext('terminal', turnPrompt, {
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: 'STEP_VERIFICATION_FAIL',
+          condition,
+        });
+        writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+        writeRepairAttemptTimeline(finalStatus);
+        log(`  Executor: EXECUTION_HALTED [${finalStatus}] at step ${stepNum}`);
+        return {
+          kind: 'return',
+          result: {
+            toolCallLog,
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'STEP_VERIFICATION_FAIL',
+            condition,
+          },
+        };
+      }
+      if (repeatedVerifierFailure) {
+        const underlyingCondition = [
+          '[REPAIR_REPEATED_FAILURE] Same verifier failure repeated after a repair attempt.',
+          `Repeated failure signature: ${repeatedFailureSignature ?? '(unknown)'}.`,
+          `Meaningful diff since previous attempt: ${meaningfulDiffSincePreviousAttempt === null ? 'unknown' : String(meaningfulDiffSincePreviousAttempt)}.`,
+          'Recommended next action: inspect the failure capsule and change repair strategy instead of repeating the same verifier failure.',
+        ].join(' ');
+        const finalStatus = rollbackOutcome.terminalStatus;
+        const condition =
+          finalStatus === 'REPAIR_REPEATED_FAILURE'
+            ? underlyingCondition
+            : `${rollbackOutcome.conditionPrefix} Underlying failure: ${underlyingCondition}`;
+        reportWarnings.push(condition);
+        const report = buildHaltReport(toolCallLog, 'REPAIR_BUDGET_EXCEEDED', stepNum, condition);
+        await persistExecutorContext('terminal', turnPrompt, {
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: 'REPAIR_BUDGET_EXCEEDED',
+          condition,
+        });
+        writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+        writeRepairAttemptTimeline(finalStatus);
+        log(`  Executor: EXECUTION_HALTED [${finalStatus}] at step ${stepNum}`);
+        return {
+          kind: 'return',
+          result: {
+            toolCallLog,
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'REPAIR_BUDGET_EXCEEDED',
+            condition,
+          },
+        };
+      }
+      pendingRecoverableCommandRetryState.value = {
+        tool: req.tool,
+        command: req.command,
+        workingDirectory: req.working_directory,
+        timeoutSeconds: req.timeout_seconds,
+        failedStep: stepNum,
+        patchedTargetKeys: new Set(),
+      };
+      if (repairBudgetExhausted) {
+        const deterministicRepairCompletion = await completeAfterDeterministicExternalRepair(
+          turnPrompt,
+          `recoverable command failure budget exceeded at step ${stepNum}: ${toolResult.stderr.slice(0, 200)}`,
+        );
+        if (deterministicRepairCompletion) {
+          return { kind: 'return', result: deterministicRepairCompletion };
+        }
+        const underlyingCondition = [
+          `[REPAIR_MAX_ATTEMPTS_REACHED] Recoverable command failure budget exceeded at step ${stepNum}.`,
+          repairDecision.condition ??
+            `Last fingerprint: ${formatFailureFingerprint(repairDecision.state.lastFingerprint!)}.`,
+        ].join(' ');
+        const finalStatus = rollbackOutcome.terminalStatus;
+        const condition =
+          finalStatus === 'REPAIR_MAX_ATTEMPTS_REACHED'
+            ? underlyingCondition
+            : `${rollbackOutcome.conditionPrefix} Underlying failure: ${underlyingCondition}`;
+        reportWarnings.push(condition);
+        const report = buildHaltReport(toolCallLog, 'REPAIR_BUDGET_EXCEEDED', stepNum, condition);
+        await persistExecutorContext('terminal', turnPrompt, {
+          terminalStatus: 'EXECUTION_HALTED',
+          haltTag: 'REPAIR_BUDGET_EXCEEDED',
+          condition,
+        });
+        writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+        writeRepairAttemptTimeline(finalStatus);
+        log(`  Executor: EXECUTION_HALTED [${finalStatus}] at step ${stepNum}`);
+        return {
+          kind: 'return',
+          result: {
+            toolCallLog,
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'REPAIR_BUDGET_EXCEEDED',
+            condition,
+          },
+        };
+      }
+
+      const warning =
+        `[EXECUTOR_RECOVERABLE_COMMAND_FAILURE] Step ${stepNum} ${req.tool} exited with code ` +
+        `${toolResult.exit_code}; repair attempt ${Math.min(recoverableCommandFailures, maxRecoverableCommandFailures)}/${maxRecoverableCommandFailures}. ` +
+        `Fingerprint: ${formatFailureFingerprint(repairDecision.state.lastFingerprint ?? repairDecision.state.failures[repairDecision.state.failures.length - 1]!.fingerprint)}.` +
+        `${wrongWorkingDirectoryHint ? ` ${wrongWorkingDirectoryHint}` : ''}`;
+      reportWarnings.push(warning);
+      if (repairDecision.shouldReplan && repairDecision.condition) {
+        reportWarnings.push(repairDecision.condition);
+        logDetail(repairDecision.condition);
+      }
+      logDetail(warning);
+      executionHistory +=
+        (executionHistory ? '\n\n' : '') +
+        formatHistoryEntry(entry) +
+        '\n\n--- COMMAND FAILURE REPAIR REQUIRED ---\n' +
+        'Patch the helper/source artifact that caused this command failure, then retry the same shell_exec/test_run command before advancing. Do not emit EXECUTION_COMPLETE until the command succeeds and requested artifacts pass postcondition checks.' +
+        '\n\n--- FAILURE CAPSULE ---\n' +
+        `Failure capsule id: ${failureCapsuleId}\n` +
+        `Failure capsule path: ${failureCapsulePath}\n` +
+        formatFailureCapsuleForPrompt(failureCapsule) +
+        `\n\n${rollbackFeedback}` +
+        (wrongWorkingDirectoryHint ? `\n${wrongWorkingDirectoryHint}` : '') +
+        (repairDecision.shouldReplan && repairDecision.condition
+          ? `\n${repairDecision.condition}\nThe same failure appears to be repeating. Change strategy or halt with STEP_VERIFICATION_FAIL instead of applying another equivalent patch.`
+          : '');
+      return {
+        kind: 'continue',
+        executionHistory,
+        recoverableCommandFailures,
+        currentRepairAttemptChangedFiles,
+        currentRepairAttemptFileHashes,
+        currentRepairAttemptInputCapsule,
+        latestFailureCapsuleArtifact,
+        nextTurnPrompt: buildExecutorTurnPromptLegacy(
+          baseContext,
+          executionHistory,
+          toolCallLog.length,
+          fileReadCache,
+        ),
+      };
+    }
+
+    const nonRecoverableCondition =
+      `${toolResult.denial && (req.tool === 'shell_exec' || req.tool === 'test_run') ? '[SHELL_COMMAND_DENIED] ' : ''}` +
+      `${!toolResult.denial && (req.tool === 'shell_exec' || req.tool === 'test_run') && isVerifierCommand(req.command) ? '[VERIFIER_FAILED] ' : ''}` +
+      `${!toolResult.denial && (req.tool === 'shell_exec' || req.tool === 'test_run') && !isVerifierCommand(req.command) ? '[SHELL_COMMAND_FAILED] ' : ''}` +
+      `Tool ${req.tool} on "${getTarget(req)}" exited with code ${toolResult.exit_code}. ` +
+      `stderr: ${toolResult.stderr.slice(0, 200)}` +
+      `${denialSummary ? ` denial: ${denialSummary}` : ''}` +
+      `${mcpLifecycleSummary ? ` mcp_lifecycle: ${mcpLifecycleSummary}` : ''}`;
+    const report = buildHaltReport(
+      toolCallLog,
+      'STEP_VERIFICATION_FAIL',
+      stepNum,
+      nonRecoverableCondition,
+    );
+    await persistExecutorContext('terminal', turnPrompt, {
+      terminalStatus: 'EXECUTION_HALTED',
+      haltTag: 'STEP_VERIFICATION_FAIL',
+      condition: nonRecoverableCondition,
+    });
+    writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+    log(`  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] at step ${stepNum}`);
+    return {
+      kind: 'return',
+      result: {
+        toolCallLog,
+        terminalStatus: 'EXECUTION_HALTED',
+        haltTag: 'STEP_VERIFICATION_FAIL',
+        condition: nonRecoverableCondition,
+      },
+    };
+  }
+  return { kind: 'ok' };
+}
+
+/**
+ * Extracted: replaces placeholder tool-call targets with approved plan targets
+ * and normalizes file_write paths against bounded contract targets.
+ * Mutates reportWarnings in place and returns the (possibly modified) request.
+ */
+function canonicalizeRequestTargets(
+  req: ToolCallRequest,
+  approvedPlan: SwePlan,
+  stepNum: number,
+  rawTask: string,
+  reportWarnings: string[],
+): { req: ToolCallRequest } {
+  const approvedStep = approvedPlan.minimal_action_set[stepNum - 1];
+  if (
+    approvedStep?.tool === req.tool &&
+    isExecutorToolShapePlaceholder(getTarget(req)) &&
+    String(approvedStep.target ?? '').trim().length > 0
+  ) {
+    const warning =
+      `[EXECUTOR_PLAN_TARGET_CANONICALIZED] Step ${stepNum} ${req.tool} target replaced ` +
+      `tool-shape placeholder "${getTarget(req)}" with approved plan target "${approvedStep.target}".`;
+    reportWarnings.push(warning);
+    logDetail(warning);
+    req = replaceExecutorRequestTarget(req, String(approvedStep.target));
+  }
+
+  if (
+    req.tool === 'file_write' &&
+    approvedStep?.tool === 'file_write' &&
+    normalizeRequestedFileTargetsForBoundedContract(rawTask).includes(
+      normalizePathForComparison(approvedStep.target),
+    )
+  ) {
+    const emittedTarget = normalizePathForComparison(String(req.path ?? ''));
+    const approvedTarget = normalizePathForComparison(approvedStep.target);
+    if (emittedTarget !== approvedTarget) {
+      const warning =
+        `[EXECUTOR_PLAN_TARGET_CANONICALIZED] Step ${stepNum} file_write target normalized ` +
+        `from "${String(req.path ?? '')}" to approved bounded target "${approvedStep.target}".`;
+      reportWarnings.push(warning);
+      logDetail(warning);
+      req = { ...req, path: approvedStep.target };
+    }
+  }
+
+  return { req };
+}
+
+/**
+ * Extracted: applies worktree safety snapshot before a file_write tool call.
+ * Returns { kind: 'ok' } for fall-through (snapshot ok), or { kind: 'return' }
+ * with a terminal ExecutorLoopResult for the halt path.
+ * The caller must have already ensured !DRY_RUN && req.tool === 'file_write'.
+ */
+async function applyWorktreeSafetySnapshot(
+  req: Extract<ToolCallRequest, { tool: 'file_write' }>,
+  stepNum: number,
+  turnPrompt: string,
+  repairState: { current: RepairState },
+  toolCallLog: ToolCallLog[],
+  reportWarnings: string[],
+  evidence: EvidenceBundle,
+  worktreeSafety: WorktreeSafetyController,
+  writeWSSummary: () => void,
+  writeRBSummary: (summary: WorktreeRollbackSummary) => void,
+  persistExecutorContext: (
+    status: 'ready_for_next_turn' | 'after_tool_call' | 'terminal',
+    nextTurnPrompt: string,
+    details?: { terminalStatus?: string; haltTag?: string; condition?: string },
+  ) => Promise<void>,
+): Promise<{ kind: 'ok' } | { kind: 'return'; result: ExecutorLoopResult }> {
+  const snapshotResult = worktreeSafety.snapshotBeforeWrite(
+    String(req.path ?? ''),
+    repairState.current.failures.length + 1,
+  );
+  writeWSSummary();
+  if (!snapshotResult.ok) {
+    const condition = `[WORKTREE_DIRTY_UNSAFE] ${snapshotResult.reason ?? 'Unsafe worktree write refused.'}`;
+    const entry: ToolCallLog = {
+      step: stepNum,
+      tool: req.tool,
+      target: canonicalizeExecutorTargetForLog(String(req.path ?? ''), 'file_write'),
+      exit_code: 126,
+      stdout: '(blocked before execution)',
+      stderr: condition,
+      verified: false,
+    };
+    toolCallLog.push(entry);
+    const rollbackSummary = worktreeSafety.rollbackTouchedFiles(condition);
+    writeRBSummary(rollbackSummary);
+    const report = buildHaltReport(toolCallLog, 'SCOPE_VIOLATION', stepNum, condition);
+    await persistExecutorContext('terminal', turnPrompt, {
+      terminalStatus: 'EXECUTION_HALTED',
+      haltTag: 'SCOPE_VIOLATION',
+      condition,
+    });
+    writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+    log(`  Executor: EXECUTION_HALTED [WORKTREE_DIRTY_UNSAFE] at step ${stepNum}`);
+    return {
+      kind: 'return',
+      result: {
+        toolCallLog,
+        terminalStatus: 'EXECUTION_HALTED',
+        haltTag: 'SCOPE_VIOLATION',
+        condition,
+      },
+    };
+  }
+  return { kind: 'ok' };
+}
+
+/**
+ * Extracted: handles benchmark dependency install command recovery blocks.
+ * When a benchmark dependency install command is blocked, creates a ToolCallLog entry
+ * (exit_code: 126), increments the recovery counter, appends to execution history,
+ * and either continues the loop (if under the limit) or returns a terminal halt result.
+ */
+async function handleBenchmarkInstallRecovery(
+  req: ToolCallRequest,
+  rawTask: string,
+  approvedPlan: SwePlan,
+  stepNum: number,
+  turnPrompt: string,
+  baseContext: string,
+  executionHistory: string,
+  fileReadCache: Map<string, string>,
+  toolCallLog: ToolCallLog[],
+  reportWarnings: string[],
+  blockedBenchmarkInstallRecoveryCount: number,
+  maxBenchmarkInstallRecoveryBlocks: number,
+  evidence: EvidenceBundle,
+  persistExecutorContext: (
+    status: 'ready_for_next_turn' | 'after_tool_call' | 'terminal',
+    prompt: string,
+    details?: { terminalStatus?: string; haltTag?: string; condition?: string },
+  ) => void,
+): Promise<
+  | { kind: 'continue'; executionHistory: string; blockedBenchmarkInstallRecoveryCount: number }
+  | { kind: 'return'; result: ExecutorLoopResult }
+  | { kind: 'ok' }
+> {
+  const benchmarkInstallBlockReason =
+    isExternalBenchmarkTask(rawTask) && (req.tool === 'shell_exec' || req.tool === 'test_run')
+      ? getBenchmarkInstallRecoveryBlockReason(approvedPlan, rawTask, req.command)
+      : null;
+  if (!benchmarkInstallBlockReason) {
+    return { kind: 'ok' };
+  }
+
+  blockedBenchmarkInstallRecoveryCount += 1;
+  const entry: ToolCallLog = {
+    step: stepNum,
+    tool: req.tool,
+    target: getTarget(req),
+    exit_code: 126,
+    stdout: '(blocked before execution)',
+    stderr: benchmarkInstallBlockReason,
+    verified: false,
+  };
+  toolCallLog.push(entry);
+
+  const warning =
+    `[${BENCHMARK_INSTALL_RECOVERY_TAG}] Step ${stepNum} ${req.tool} blocked before execution; ` +
+    `attempt ${blockedBenchmarkInstallRecoveryCount}/${maxBenchmarkInstallRecoveryBlocks}.`;
+  reportWarnings.push(warning);
+  logDetail(warning);
+
+  executionHistory +=
+    (executionHistory ? '\n\n' : '') +
+    formatHistoryEntry(entry) +
+    '\n\n--- BENCHMARK INSTALL RECOVERY BLOCKED ---\n' +
+    'Do not retry package installation with alternate syntax. Use existing container tools, ' +
+    'patch/write self-contained source artifacts, or halt with STEP_VERIFICATION_FAIL if the task ' +
+    'cannot be solved without the missing dependency.';
+
+  if (blockedBenchmarkInstallRecoveryCount > maxBenchmarkInstallRecoveryBlocks) {
+    const report = buildHaltReport(
+      toolCallLog,
+      'STEP_VERIFICATION_FAIL',
+      stepNum,
+      benchmarkInstallBlockReason,
+    );
+    await persistExecutorContext('terminal', turnPrompt, {
+      terminalStatus: 'EXECUTION_HALTED',
+      haltTag: 'STEP_VERIFICATION_FAIL',
+      condition: benchmarkInstallBlockReason,
+    });
+    writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
+    log(`  Executor: EXECUTION_HALTED [${BENCHMARK_INSTALL_RECOVERY_TAG}] at step ${stepNum}`);
+    return {
+      kind: 'return',
+      result: {
+        toolCallLog,
+        terminalStatus: 'EXECUTION_HALTED',
+        haltTag: 'STEP_VERIFICATION_FAIL',
+        condition: benchmarkInstallBlockReason,
+      },
+    };
+  }
+
+  await persistExecutorContext(
+    'after_tool_call',
+    buildExecutorTurnPromptLegacy(baseContext, executionHistory, toolCallLog.length, fileReadCache),
+  );
+  return {
+    kind: 'continue',
+    executionHistory,
+    blockedBenchmarkInstallRecoveryCount,
+  };
+}
+
 export async function runExecutorLoop(
   approvedPlan: SwePlan,
-  evidence:     EvidenceBundle,
-  targetModel:  TargetModel,
+  evidence: EvidenceBundle,
+  targetModel: TargetModel,
   reportWarnings: string[] = [],
   initialToolCallLog: ToolCallLog[] = [],
   rawTask: string = '',
@@ -191,13 +1356,18 @@ export async function runExecutorLoop(
 ): Promise<ExecutorLoopResult> {
   assertExecutorGate(evidence.runDir);
 
+  let totalJitLatencyMs = 0;
+  let totalStreamPauseDurationMs = 0;
+  let totalLockWaitMs = 0;
+  let peakBufferBytes = 0;
+
   const reliabilityRepairProofEnabled = isReliabilityRepairProofEnabled(rawTask);
   const requestedTargetContract = getRequestedTargetContract(rawTask);
   const compactFileOnlyExecutor =
     !isExternalBenchmarkTask(rawTask) &&
     requestedTargetContract.bounded &&
     requestedTargetContract.requestedTargets.length > 0 &&
-    approvedPlan.minimal_action_set.every(step =>
+    approvedPlan.minimal_action_set.every((step) =>
       ['directory_list', 'file_read', 'file_write'].includes(String(step.tool)),
     );
 
@@ -211,26 +1381,23 @@ export async function runExecutorLoop(
       resolveExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']).name,
       false,
     ),
-    ...buildToolCapabilityPromptLines(resolveExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']).name),
+    ...buildToolCapabilityPromptLines(
+      resolveExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']).name,
+    ),
     ...buildBenchmarkVerificationPromptLines(rawTask),
   ];
   const baseContext = await compileContext(
     abs(EXECUTOR_PATHS),
-    buildExecutorTask(
-      approvedPlan,
-      rawTask,
-      executorRuntimeLines,
-      {
-        compactFileOnly: compactFileOnlyExecutor,
-        allowCommandRecovery: true,
-      },
-    ),
+    buildExecutorTask(approvedPlan, rawTask, executorRuntimeLines, {
+      compactFileOnly: compactFileOnlyExecutor,
+      allowCommandRecovery: true,
+    }),
     undefined,
     pruningStubs,
   );
   evidence.writeCompiledContext('executor', baseContext);
 
-  const normalizedInitialToolCallLog: ToolCallLog[] = initialToolCallLog.map(entry => ({
+  const normalizedInitialToolCallLog: ToolCallLog[] = initialToolCallLog.map((entry) => ({
     ...entry,
     target: canonicalizeExecutorTargetForLog(entry.target, entry.tool),
   }));
@@ -245,6 +1412,10 @@ export async function runExecutorLoop(
   // where the executor wrote the "... [N chars truncated] ..." history marker
   // into the file content of a file_write.
   const fileReadCache = new Map<string, string>();
+  const fileReadCacheUsedTurn = new Map<string, number>();
+  /** Running total of UTF-16 char count of all cached file contents (≈ byte estimate). */
+  let fileReadCacheTotalBytes = 0;
+  const FILE_READ_CACHE_MAX_BYTES = 10 * 1024 * 1024; // 10 MB soft ceiling
   let externalPostconditionFailures = 0;
   let externalRepairRerunCount = 0;
   let recoverableCommandFailures = 0;
@@ -255,8 +1426,10 @@ export async function runExecutorLoop(
   let blockedToolCapabilityRecoveryCount = 0;
   const maxRecoverableCommandFailures = reliabilityRepairProofEnabled
     ? getReliabilityRepairProofMaxFailures()
-    : maxAttemptsForRepairMode('autonomous');
-  let repairState: RepairState = createRepairState(maxRecoverableCommandFailures);
+    : maxAttemptsForRepairMode('deep');
+  const repairState: { current: RepairState } = {
+    current: createRepairState(maxRecoverableCommandFailures),
+  };
   let latestFailureCapsuleArtifact: RepairProofCapsuleArtifact | null = null;
   let currentRepairAttemptInputCapsule: RepairProofCapsuleArtifact | null = null;
   let currentRepairAttemptChangedFiles = new Set<string>();
@@ -270,21 +1443,25 @@ export async function runExecutorLoop(
   let latestRollbackSummary: WorktreeRollbackSummary | null = null;
   let latestRollbackMode: RollbackMode = 'snapshot_only';
   const repairProofNotes: string[] = reliabilityRepairProofEnabled
-    ? ['Deterministic model-boundary response provider enabled for live fail-then-pass reliability proof; file writes, verifier runs, failure capsules, retries, and completion guards still execute through the normal autonomous pipeline.']
+    ? [
+        'Deterministic model-boundary response provider enabled for live fail-then-pass reliability proof; file writes, verifier runs, failure capsules, retries, and completion guards still execute through the normal autonomous pipeline.',
+      ]
     : [];
-  let finalCompletionGuardResult: CompletionGuardEvidence = {
-    status: 'not_run',
-    semantic_failure: null,
-    runtime_hook_event_count: 0,
-    benchmark_verification_status: null,
+  const finalCompletionGuardResult: { current: CompletionGuardEvidence } = {
+    current: {
+      status: 'not_run',
+      semantic_failure: null,
+      runtime_hook_event_count: 0,
+      benchmark_verification_status: null,
+    },
   };
   const markInputCapsuleConsumed = (capsule: RepairProofCapsuleArtifact | null): void => {
     if (!capsule) {
       return;
     }
-    const sourceAttempt = repairAttemptTimeline.find(attempt =>
-      attempt.failure_capsule_id === capsule.id ||
-      attempt.failure_capsule_path === capsule.path
+    const sourceAttempt = repairAttemptTimeline.find(
+      (attempt) =>
+        attempt.failure_capsule_id === capsule.id || attempt.failure_capsule_path === capsule.path,
     );
     if (sourceAttempt) {
       sourceAttempt.next_attempt_consumed_capsule = true;
@@ -319,10 +1496,7 @@ export async function runExecutorLoop(
   };
 
   const effectiveRollbackStatusFor = (status: WorktreeRollbackStatus): WorktreeRollbackStatus => {
-    if (
-      status === 'rollback_not_needed' &&
-      latestRollbackSummary?.status === 'rollback_applied'
-    ) {
+    if (status === 'rollback_not_needed' && latestRollbackSummary?.status === 'rollback_applied') {
       return 'rollback_applied';
     }
     return status;
@@ -369,14 +1543,18 @@ export async function runExecutorLoop(
     const summary = worktreeSafety.rollbackTouchedFiles(reason);
     writeRollbackSummary(summary);
     const effectiveRollbackStatus = effectiveRollbackStatusFor(summary.status);
-    const terminalStatus = rollbackStatusToTerminalStatus(effectiveRollbackStatus, underlyingStatus);
-    const conditionPrefix = effectiveRollbackStatus === 'rollback_applied'
-      ? `[ROLLBACK_APPLIED] Rolled back touched files during this failed repair run.`
-      : effectiveRollbackStatus === 'rollback_failed'
-        ? `[ROLLBACK_FAILED] Automatic rollback failed after failed repair.`
-        : effectiveRollbackStatus === 'rollback_skipped_user_dirty_target'
-          ? `[WORKTREE_DIRTY_UNSAFE] Rollback skipped because target files were dirty before the run.`
-          : `[${underlyingStatus}] No rollback changes were needed.`;
+    const terminalStatus = rollbackStatusToTerminalStatus(
+      effectiveRollbackStatus,
+      underlyingStatus,
+    );
+    const conditionPrefix =
+      effectiveRollbackStatus === 'rollback_applied'
+        ? `[ROLLBACK_APPLIED] Rolled back touched files during this failed repair run.`
+        : effectiveRollbackStatus === 'rollback_failed'
+          ? `[ROLLBACK_FAILED] Automatic rollback failed after failed repair.`
+          : effectiveRollbackStatus === 'rollback_skipped_user_dirty_target'
+            ? `[WORKTREE_DIRTY_UNSAFE] Rollback skipped because target files were dirty before the run.`
+            : `[${underlyingStatus}] No rollback changes were needed.`;
     return { summary, terminalStatus, conditionPrefix };
   };
 
@@ -391,15 +1569,19 @@ export async function runExecutorLoop(
       proof_id: reliabilityRepairProofEnabled
         ? 'autonomous_live_fail_then_pass_repair'
         : 'autonomous_repair_attempt_timeline',
-      proof_kind: reliabilityRepairProofEnabled ? 'deterministic_model_boundary_assisted' : 'fully_autonomous',
+      proof_kind: reliabilityRepairProofEnabled
+        ? 'deterministic_model_boundary_assisted'
+        : 'fully_autonomous',
       deterministic_test_double: reliabilityRepairProofEnabled,
       max_attempts: maxRecoverableCommandFailures,
       attempt_count: repairAttemptTimeline.length,
       attempts: repairAttemptTimeline,
       final_status: finalStatus,
-      final_completion_guard_result: finalCompletionGuardResult,
-      changed_files: [...new Set(repairAttemptTimeline.flatMap(attempt => attempt.changed_files))].sort(),
-      verifier_command_log: repairAttemptTimeline.map(attempt => ({
+      final_completion_guard_result: finalCompletionGuardResult.current,
+      changed_files: [
+        ...new Set(repairAttemptTimeline.flatMap((attempt) => attempt.changed_files)),
+      ].sort(),
+      verifier_command_log: repairAttemptTimeline.map((attempt) => ({
         attempt: attempt.attempt,
         command: attempt.verifier_command,
         cwd: attempt.verifier_cwd,
@@ -422,11 +1604,15 @@ export async function runExecutorLoop(
         finalSnapshot: snapshotProjectFilesForSafety(getExecutorProjectRoot()),
         rollbackMode: latestRollbackMode,
         rollbackStatus: latestRollbackSummary?.status ?? latestRollbackMode,
-        rollbackSummaryPath: latestRollbackSummary ? join(evidence.runDir, 'rollback_summary.json') : null,
+        rollbackSummaryPath: latestRollbackSummary
+          ? join(evidence.runDir, 'rollback_summary.json')
+          : null,
         worktreeSafetySummaryPath: join(evidence.runDir, 'worktree_safety_summary.json'),
         restoredFiles: latestRollbackSummary?.restored_files ?? [],
         dirtyFilesPreserved: latestRollbackSummary?.dirty_files_preserved ?? [],
-        targetDirtyConflicts: latestRollbackSummary?.target_dirty_conflicts ?? worktreeSafety.buildSummary().target_dirty_conflicts,
+        targetDirtyConflicts:
+          latestRollbackSummary?.target_dirty_conflicts ??
+          worktreeSafety.buildSummary().target_dirty_conflicts,
       });
       evidence.writeDebugFile(
         'attempt_safety_summary.json',
@@ -434,20 +1620,26 @@ export async function runExecutorLoop(
       );
       evidence.writeDebugFile(
         'repair_final_status.json',
-        `${JSON.stringify({
-          schema_version: 1,
-          status: finalStatus,
-          proof_kind: timeline.proof_kind,
-          deterministic_test_double: timeline.deterministic_test_double,
-          attempt_count: timeline.attempt_count,
-          changed_files: timeline.changed_files,
-          verifier_command_log: timeline.verifier_command_log,
-          final_completion_guard_result: timeline.final_completion_guard_result,
-          repair_attempt_timeline_path: join(evidence.runDir, 'repair_attempt_timeline.json'),
-          attempt_safety_summary_path: join(evidence.runDir, 'attempt_safety_summary.json'),
-          worktree_safety_summary_path: join(evidence.runDir, 'worktree_safety_summary.json'),
-          rollback_summary_path: latestRollbackSummary ? join(evidence.runDir, 'rollback_summary.json') : null,
-        }, null, 2)}\n`,
+        `${JSON.stringify(
+          {
+            schema_version: 1,
+            status: finalStatus,
+            proof_kind: timeline.proof_kind,
+            deterministic_test_double: timeline.deterministic_test_double,
+            attempt_count: timeline.attempt_count,
+            changed_files: timeline.changed_files,
+            verifier_command_log: timeline.verifier_command_log,
+            final_completion_guard_result: timeline.final_completion_guard_result,
+            repair_attempt_timeline_path: join(evidence.runDir, 'repair_attempt_timeline.json'),
+            attempt_safety_summary_path: join(evidence.runDir, 'attempt_safety_summary.json'),
+            worktree_safety_summary_path: join(evidence.runDir, 'worktree_safety_summary.json'),
+            rollback_summary_path: latestRollbackSummary
+              ? join(evidence.runDir, 'rollback_summary.json')
+              : null,
+          },
+          null,
+          2,
+        )}\n`,
       );
     }
   };
@@ -471,11 +1663,11 @@ export async function runExecutorLoop(
               proof_enabled: reliabilityRepairProofEnabled,
             },
             repair_state: {
-              status: repairState.status,
-              max_failures: repairState.maxFailures,
-              failure_count: repairState.failures.length,
-              last_fingerprint: repairState.lastFingerprint,
-              failures: repairState.failures,
+              status: repairState.current.status,
+              max_failures: repairState.current.maxFailures,
+              failure_count: repairState.current.failures.length,
+              last_fingerprint: repairState.current.lastFingerprint,
+              failures: repairState.current.failures,
             },
             warning_counts: warningCounts,
           },
@@ -493,20 +1685,22 @@ export async function runExecutorLoop(
   // Seed the cache from any initial tool call log (resumed runs).
   for (const entry of normalizedInitialToolCallLog) {
     if (entry.tool === 'file_read' && entry.exit_code === 0 && entry.stdout) {
+      fileReadCacheTotalBytes += Buffer.byteLength(entry.stdout, 'utf8');
       fileReadCache.set(entry.target, entry.stdout);
+      fileReadCacheUsedTurn.set(entry.target, 0);
     }
   }
 
-  const persistExecutorContext = (
+  const persistExecutorContext = async (
     status: 'ready_for_next_turn' | 'after_tool_call' | 'terminal',
     nextTurnPrompt: string,
     details: { terminalStatus?: string; haltTag?: string; condition?: string } = {},
-  ): void => {
+  ): Promise<void> => {
     try {
       if (status === 'terminal') {
         writeExecutorGateTrace();
       }
-      writeExecutorSessionContext({
+      await writeExecutorSessionContext({
         evidence,
         status,
         baseContext,
@@ -525,18 +1719,53 @@ export async function runExecutorLoop(
     }
   };
 
-  const haltForMissingPlannedFileWrites = (
+  const getMissingSuccessfulPlannedFileWrites = (): string[] => {
+    const plannedWrites = approvedPlan.minimal_action_set
+      .filter((step) => step.tool === 'file_write')
+      .map((step) => String(step.target ?? '').trim())
+      .filter((target) => target.length > 0);
+    if (plannedWrites.length === 0) {
+      return [];
+    }
+
+    const projectRoot = getExecutorProjectRoot();
+    const targetKey = (target: string): string => {
+      const normalized = normalizePathForComparison(target);
+      if (!projectRoot) {
+        return normalized.toLowerCase();
+      }
+
+      const resolved = resolveStepTargetPath(projectRoot, normalized);
+      if (isWithinProjectRootPath(projectRoot, resolved)) {
+        return relative(projectRoot, resolved).replace(/\\/g, '/').toLowerCase();
+      }
+
+      return resolved.replace(/\\/g, '/').toLowerCase();
+    };
+
+    const successfulWrites = new Set(
+      toolCallLog
+        .filter((entry) => entry.tool === 'file_write' && entry.exit_code === 0)
+        .map((entry) => targetKey(String(entry.target ?? ''))),
+    );
+
+    return plannedWrites.filter((target) => !successfulWrites.has(targetKey(target)));
+  };
+
+  const haltForMissingPlannedFileWrites = async (
     nextTurnPrompt: string,
     missingTargets: string[],
-  ): ExecutorLoopResult => {
-    const condition = buildMissingPlannedFileWritesCondition(missingTargets);
+  ): Promise<ExecutorLoopResult> => {
+    const condition =
+      `Executor reported EXECUTION_COMPLETE before successful file_write for planned target(s): ` +
+      `${missingTargets.join(', ')}`;
     const report = buildHaltReport(
       toolCallLog,
       'STEP_VERIFICATION_FAIL',
       Math.max(1, toolCallLog.length),
       condition,
     );
-    persistExecutorContext('terminal', nextTurnPrompt, {
+    await persistExecutorContext('terminal', nextTurnPrompt, {
       terminalStatus: 'EXECUTION_HALTED',
       haltTag: 'STEP_VERIFICATION_FAIL',
       condition,
@@ -552,13 +1781,39 @@ export async function runExecutorLoop(
     };
   };
 
-  const maybeCompleteBoundedWriteTask = (nextTurnPrompt: string): ExecutorLoopResult | null => {
-    if (!shouldCompleteBoundedWriteTask({
-      approvedPlan,
+  const maybeCompleteBoundedWriteTask = async (nextTurnPrompt: string): Promise<ExecutorLoopResult | null> => {
+    if (isExternalBenchmarkTask(rawTask)) {
+      return null;
+    }
+
+    const contract = getRequestedTargetContract(rawTask);
+    if (!contract.bounded || contract.requestedTargets.length === 0) {
+      return null;
+    }
+
+    const planTools = approvedPlan.minimal_action_set.map((step) => step.tool);
+    if (!planTools.every((tool) => ['directory_list', 'file_read', 'file_write'].includes(tool))) {
+      return null;
+    }
+
+    const successfulWrites = new Set(
+      toolCallLog
+        .filter((entry) => entry.tool === 'file_write' && entry.exit_code === 0)
+        .map((entry) => normalizePathForComparison(String(entry.target ?? '')).toLowerCase()),
+    );
+    const allRequestedTargetsWritten = contract.requestedTargets.every((target) =>
+      successfulWrites.has(normalizePathForComparison(target).toLowerCase()),
+    );
+    if (!allRequestedTargetsWritten) {
+      return null;
+    }
+
+    const semanticFailure = verifyBoundedTaskArtifacts(
       rawTask,
       toolCallLog,
-      projectRoot: getExecutorProjectRoot(),
-    })) {
+      getExecutorProjectRoot(),
+    );
+    if (semanticFailure) {
       return null;
     }
 
@@ -567,7 +1822,7 @@ export async function runExecutorLoop(
       status: 'EXECUTION_COMPLETE',
     } as const;
     const report = buildTerminalReport(completion, toolCallLog, evidence);
-    persistExecutorContext('terminal', nextTurnPrompt, {
+    await persistExecutorContext('terminal', nextTurnPrompt, {
       terminalStatus: 'EXECUTION_COMPLETE',
     });
     writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
@@ -578,7 +1833,7 @@ export async function runExecutorLoop(
     };
   };
 
-  const maybeCompleteEvidenceRequestPlan = (nextTurnPrompt: string): ExecutorLoopResult | null => {
+  const maybeCompleteEvidenceRequestPlan = async (nextTurnPrompt: string): Promise<ExecutorLoopResult | null> => {
     if (!isEvidenceRequestPlanSatisfied(approvedPlan, toolCallLog)) {
       return null;
     }
@@ -588,9 +1843,9 @@ export async function runExecutorLoop(
       status: 'EXECUTION_COMPLETE',
     } as const;
     const report = buildTerminalReport(completion, toolCallLog, evidence);
-    persistExecutorContext('terminal', nextTurnPrompt, {
+    await persistExecutorContext('terminal', nextTurnPrompt, {
       terminalStatus: 'EXECUTION_COMPLETE',
-      condition: buildEvidenceRequestCompletionCondition(),
+      condition: 'EVIDENCE_REQUEST minimal_action_set satisfied.',
     });
     writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
     log(`  Executor: EXECUTION_COMPLETE (${toolCallLog.length} steps, evidence request satisfied)`);
@@ -600,10 +1855,10 @@ export async function runExecutorLoop(
     };
   };
 
-  const completeAfterDeterministicExternalRepair = (
+  const completeAfterDeterministicExternalRepair = async (
     nextTurnPrompt: string,
     reason: string,
-  ): ExecutorLoopResult | null => {
+  ): Promise<ExecutorLoopResult | null> => {
     if (!isExternalBenchmarkTask(rawTask)) {
       return null;
     }
@@ -620,7 +1875,7 @@ export async function runExecutorLoop(
       status: 'EXECUTION_COMPLETE',
     } as const;
     const report = buildTerminalReport(completion, toolCallLog, evidence);
-    persistExecutorContext('terminal', nextTurnPrompt, {
+    await persistExecutorContext('terminal', nextTurnPrompt, {
       terminalStatus: 'EXECUTION_COMPLETE',
       condition: warning,
     });
@@ -633,123 +1888,175 @@ export async function runExecutorLoop(
     };
   };
 
-  const directBoundedPlan = reliabilityRepairProofEnabled
-    ? null
-    : getDirectBoundedWritePlan(
-        approvedPlan,
-        rawTask,
-        getExecutorProjectRoot(),
-      );
-  if (directBoundedPlan) {
-    const warning =
-      `[EXECUTOR_DIRECT_BOUNDED_WRITE] Executing without model executor turns: ${directBoundedPlan.reason}.`;
-    reportWarnings.push(warning);
-    logDetail(warning);
-
-    for (const write of directBoundedPlan.writes) {
-      const stepNum = toolCallLog.length + 1;
-      const writeReq = {
-        tool: 'file_write',
-        path: write.target,
-        content: write.content,
-      } as const;
-      const toolResult = await executeExecutorTool(writeReq, evidence);
-
-      const entry = buildExecutorToolCallEntry({
-        step: stepNum,
-        req: writeReq,
-        toolResult,
-        target: canonicalizeExecutorTargetForLog(write.target, 'file_write'),
-      });
-      toolCallLog.push(entry);
-
-      const writeVerificationFailure = toolResult.exit_code === 0
-        ? verifySuccessfulTextWriteTarget(write.target, getExecutorProjectRoot(), rawTask)
-        : `Direct bounded file_write for "${write.target}" exited with code ${toolResult.exit_code}. ` +
-          `stderr: ${toolResult.stderr.slice(0, 200)}`;
-      if (writeVerificationFailure) {
-        const report = buildHaltReport(
-          toolCallLog,
-          'STEP_VERIFICATION_FAIL',
-          stepNum,
-          writeVerificationFailure,
-        );
-        persistExecutorContext('terminal', baseContext, {
-          terminalStatus: 'EXECUTION_HALTED',
-          haltTag: 'STEP_VERIFICATION_FAIL',
-          condition: writeVerificationFailure,
-        });
-        writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-        log(`  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] at step ${stepNum}`);
-        return {
-          toolCallLog,
-          terminalStatus: 'EXECUTION_HALTED',
-          haltTag: 'STEP_VERIFICATION_FAIL',
-          condition: writeVerificationFailure,
-        };
-      }
-
-      executionHistory +=
-        (executionHistory ? '\n\n' : '') + formatHistoryEntry(entry);
-    }
-
-    const semanticFailure = verifyBoundedTaskArtifacts(
-      rawTask,
-      toolCallLog,
-      getExecutorProjectRoot(),
-    );
-    if (semanticFailure) {
-      const report = buildHaltReport(
-        toolCallLog,
-        'STEP_VERIFICATION_FAIL',
-        toolCallLog.length,
-        semanticFailure,
-      );
-      persistExecutorContext('terminal', baseContext, {
-        terminalStatus: 'EXECUTION_HALTED',
-        haltTag: 'STEP_VERIFICATION_FAIL',
-        condition: semanticFailure,
-      });
-      writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-      log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during direct bounded write verification');
-      return {
-        toolCallLog,
-        terminalStatus: 'EXECUTION_HALTED',
-        haltTag: 'STEP_VERIFICATION_FAIL',
-        condition: semanticFailure,
-      };
-    }
-
-    const completion = {
-      type: 'completion',
-      status: 'EXECUTION_COMPLETE',
-    } as const;
-    const report = buildTerminalReport(completion, toolCallLog, evidence);
-    persistExecutorContext('terminal', baseContext, {
-      terminalStatus: 'EXECUTION_COMPLETE',
-    });
-    writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-    log(`  Executor: EXECUTION_COMPLETE (${toolCallLog.length} steps, direct bounded write)`);
-    return {
-      toolCallLog,
-      terminalStatus: 'EXECUTION_COMPLETE',
-    };
+  const directBoundedResult = await runDirectBoundedWritePlan(
+    reliabilityRepairProofEnabled,
+    approvedPlan,
+    rawTask,
+    toolCallLog,
+    evidence,
+    baseContext,
+    reportWarnings,
+    executionHistory,
+    persistExecutorContext,
+  );
+  if (directBoundedResult) {
+    return directBoundedResult;
   }
+
+  const deniedFingerprints = (() => {
+    const map = new Map<string, { count: number; turn: number }>();
+    const sessionStatePath = join(evidence.runDir, 'session_state.json');
+    if (existsSync(sessionStatePath)) {
+      try {
+        const data = JSON.parse(readFileSync(sessionStatePath, 'utf8'));
+        if (data && Array.isArray(data.deniedFingerprints)) {
+          for (const entry of data.deniedFingerprints) {
+            map.set(entry.fingerprint, { count: entry.count, turn: entry.turn });
+          }
+        }
+      } catch (err) {
+        logDetail(`Failed to load session state from ${sessionStatePath}: ${err}`);
+      }
+    }
+    return map;
+  })();
+
+  // ── Phase 5: Structured Turn History (dual-write alongside legacy string) ──
+  const turnHistory = new TurnHistory();
 
   for (let turn = 1; turn <= MAX_EXECUTOR_TURNS; turn++) {
     logDetail(`Executor turn ${turn}/${MAX_EXECUTOR_TURNS}...`);
 
+    // ── Phase 1d: Token budget enforcement ──────────────────────────────
+    const budgetResult = await enforceTokenBudget(
+      toolCallLog, reportWarnings, evidence, persistExecutorContext,
+      totalJitLatencyMs, totalStreamPauseDurationMs, totalLockWaitMs, peakBufferBytes,
+    );
+    if (budgetResult.kind === 'return') return budgetResult.result;
+
+    // Evict stale file read cache entries (stale if turn - lastUsed > 5)
+    const evictionResult = evictFileReadCache(
+      turn,
+      fileReadCache,
+      fileReadCacheUsedTurn,
+      fileReadCacheTotalBytes,
+      FILE_READ_CACHE_MAX_BYTES,
+    );
+    fileReadCacheTotalBytes = evictionResult.fileReadCacheTotalBytes;
+
     // ── Context Compaction ───────────────────────────────────────────────────
-    const compactionResult = await autoCompactIfNeeded(executionHistory, turn, evidence);
+    const compactionResult = await autoCompactIfNeeded(
+      executionHistory,
+      turn,
+      toolCallLog,
+      evidence,
+    );
     if (compactionResult.compacted) {
       executionHistory = compactionResult.newHistory;
     }
 
+    // Phase 5: compact structured turn history alongside legacy string compaction
+    if (turn > 5) {
+      turnHistory.compact({ keepRecent: 5, maxFullTurns: 20 });
+    }
+
     // ── Call runWithFallback with the history-enriched prompt ───────────────
-    const turnPrompt = buildExecutorTurnPrompt(
-      baseContext, executionHistory, toolCallLog.length, fileReadCache,
+    let turnPrompt = buildExecutorTurnPromptLegacy(
+      baseContext,
+      executionHistory,
+      toolCallLog.length,
+      fileReadCache,
     );
-    persistExecutorContext('ready_for_next_turn', turnPrompt);
+
+    if (deniedFingerprints.size > 0) {
+      const reminders: string[] = [];
+      const listStr = Array.from(deniedFingerprints.keys()).join(', ');
+      for (const [fp, val] of deniedFingerprints.entries()) {
+        reminders.push(`- Fingerprint: ${fp} ( Vetoed ${val.count} time(s) )`);
+      }
+      turnPrompt += `\n\nactive_denials: [${listStr}]`;
+      turnPrompt +=
+        '\n\n### ACTIVE VETOED FINGERPRINTS RULES:\nThe following tool executions have been VETOED by the human operator. Repeating them is a hard policy violation. Propose alternative paths instead:\n' +
+        reminders.join('\n');
+    }
+
+    await persistExecutorContext('ready_for_next_turn', turnPrompt);
+
+    const detector = new IncrementalToolDetector(async (intent) => {
+      const fingerprint = computeFingerprint(intent.tool, intent.target, intent.args);
+      const denied = deniedFingerprints.get(fingerprint);
+      if (denied) {
+        throw new PolicyBlockedDuplicateError(intent.tool, intent.target, fingerprint);
+      }
+      // Build a PermissionAction from the intent for the dialog-based permission flow.
+      // All tool types now use PermissionDialog; the raw y/n fallback is removed.
+      let action: PermissionAction | null = null;
+      if (intent.tool === 'file_write' && typeof intent.args?.content === 'string') {
+        action = {
+          type: 'write_file' as const,
+          path: intent.target,
+          content: intent.args.content,
+        };
+      } else if (intent.tool === 'apply_patch' && typeof intent.args?.patch === 'string') {
+        action = {
+          type: 'apply_patch' as const,
+          patch: intent.args.patch,
+        };
+      } else if (
+        (intent.tool === 'shell_exec' || intent.tool === 'test_run') &&
+        typeof intent.args?.command === 'string'
+      ) {
+        action = {
+          type: 'shell_exec' as const,
+          command: intent.args.command,
+        };
+      } else if (intent.tool === 'delete_file' || intent.tool === 'file_delete') {
+        action = {
+          type: 'delete_file' as const,
+          path: intent.target,
+        };
+      } else if (intent.tool.startsWith('mcp_')) {
+        action = {
+          type: 'mcp_call' as const,
+          toolName: intent.args?.server ?? intent.target,
+          arguments: JSON.stringify(intent.args ?? {}, null, 2),
+        };
+      } else {
+        // Generic fallback for any unrecognized tool
+        action = {
+          type: 'generic' as const,
+          description: `Tool "${intent.tool}" on target "${intent.target}"`,
+        };
+      }
+
+      const lockStart = Date.now();
+      const coordinator = InputCoordinator.getInstance();
+
+      const approved = await coordinator.withLock('jit', async () => {
+        const lockWait = Date.now() - lockStart;
+        totalLockWaitMs += lockWait;
+
+        const pauseStart = Date.now();
+        const renderer = getActiveRenderer();
+        renderer?.pauseTicks();
+        coordinator.startBuffering();
+        try {
+          return await promptPermissionDialog(action!);
+        } finally {
+          const flushed = coordinator.stopBuffering();
+          if (flushed) {
+            process.stdout.write(flushed);
+          }
+          renderer?.resumeTicks();
+          totalStreamPauseDurationMs += Date.now() - pauseStart;
+        }
+      });
+
+      totalJitLatencyMs += detector.jitLatencyMs;
+      peakBufferBytes = Math.max(peakBufferBytes, detector.peakBufferBytes);
+
+      return approved ? 'approve' : 'deny';
+    });
 
     let executorTurn: z.infer<typeof ExecutorTurnSchema>;
     try {
@@ -757,8 +2064,66 @@ export async function runExecutorLoop(
         evidence,
         stage: 'executor',
         schemaName: 'ExecutorTurnSchema',
+        onChunk: async (chunk) => {
+          await detector.feed(chunk);
+        },
       });
     } catch (err) {
+      if (err instanceof JitDenialError) {
+        const fingerprint = computeFingerprint(err.tool, err.target, err.args);
+        const val = deniedFingerprints.get(fingerprint) || { count: 0, turn };
+        val.count++;
+        val.turn = turn;
+        deniedFingerprints.set(fingerprint, val);
+        await saveSessionState(evidence.runDir, deniedFingerprints);
+
+        if (val.count >= 2) {
+          log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] due to double-veto');
+          return {
+            toolCallLog,
+            terminalStatus: 'EXECUTION_HALTED',
+            haltTag: 'STEP_VERIFICATION_FAIL',
+            condition: `Operator vetoed operation twice: tool=${err.tool}, target=${err.target}. Clarification required.`,
+          };
+        }
+
+        const stepNum = toolCallLog.length + 1;
+        const entry: ToolCallLog = {
+          step: stepNum,
+          tool: err.tool as ToolCallLog['tool'],
+          target: err.target,
+          exit_code: 1,
+          stdout: '',
+          stderr: 'Tool execution denied by operator.',
+          verified: false,
+          status: 'HUMAN_REJECTED',
+          fingerprint,
+          retry_forbidden: true,
+        };
+        toolCallLog.push(entry);
+        executionHistory += (executionHistory ? '\n\n' : '') + formatHistoryEntry(entry);
+        continue;
+      }
+
+      if (err instanceof PolicyBlockedDuplicateError) {
+        const stepNum = toolCallLog.length + 1;
+        const entry: ToolCallLog = {
+          step: stepNum,
+          tool: err.tool as ToolCallLog['tool'],
+          target: err.target,
+          exit_code: 1,
+          stdout: 'Operation blocked by session denial registry ([POLICY_BLOCKED_DUPLICATE]).',
+          stderr: '',
+          verified: false,
+          status: 'HUMAN_REJECTED',
+          fingerprint: err.fingerprint,
+          retry_forbidden: true,
+        };
+        toolCallLog.push(entry);
+        executionHistory += (executionHistory ? '\n\n' : '') + formatHistoryEntry(entry);
+        continue;
+      }
+
       const deterministicWrite = getNextDeterministicSimpleWrite(
         approvedPlan,
         rawTask,
@@ -773,19 +2138,32 @@ export async function runExecutorLoop(
         reportWarnings.push(warning);
         logDetail(warning);
 
-        const deterministicReq = {
-          tool: 'file_write',
-          path: deterministicWrite.target,
-          content: deterministicWrite.content,
-        } as const;
-        const toolResult = await executeExecutorTool(deterministicReq, evidence);
+        const toolResult = await executeTool(
+          {
+            tool: 'file_write',
+            path: deterministicWrite.target,
+            content: deterministicWrite.content,
+          },
+          {
+            agentId: 'executor',
+            runId: evidence.runId,
+            runDir: evidence.runDir,
+            babelRoot: BABEL_ROOT,
+          },
+        );
 
-        const entry = buildExecutorToolCallEntry({
+        const entry: ToolCallLog = {
           step: stepNum,
-          req: deterministicReq,
-          toolResult,
+          tool: 'file_write',
           target: canonicalizeExecutorTargetForLog(deterministicWrite.target, 'file_write'),
-        });
+          exit_code: toolResult.exit_code,
+          stdout: toolResult.stdout,
+          stderr: toolResult.stderr,
+          ...(toolResult.denial ? { denial: toolResult.denial } : {}),
+          ...(toolResult.mcp_lifecycle ? { mcp_lifecycle: toolResult.mcp_lifecycle } : {}),
+          ...(toolResult.checkpoint_ids ? { checkpoint_ids: toolResult.checkpoint_ids } : {}),
+          verified: toolResult.exit_code === 0,
+        };
         toolCallLog.push(entry);
 
         if (!DRY_RUN && toolResult.exit_code !== 0) {
@@ -794,9 +2172,9 @@ export async function runExecutorLoop(
             'STEP_VERIFICATION_FAIL',
             stepNum,
             `Deterministic fallback file_write for "${deterministicWrite.target}" exited with code ${toolResult.exit_code}. ` +
-            `stderr: ${toolResult.stderr.slice(0, 200)}`,
+              `stderr: ${toolResult.stderr.slice(0, 200)}`,
           );
-          persistExecutorContext('terminal', turnPrompt, {
+          await persistExecutorContext('terminal', turnPrompt, {
             terminalStatus: 'EXECUTION_HALTED',
             haltTag: 'STEP_VERIFICATION_FAIL',
             condition:
@@ -828,7 +2206,7 @@ export async function runExecutorLoop(
               stepNum,
               writeVerificationFailure,
             );
-            persistExecutorContext('terminal', turnPrompt, {
+            await persistExecutorContext('terminal', turnPrompt, {
               terminalStatus: 'EXECUTION_HALTED',
               haltTag: 'STEP_VERIFICATION_FAIL',
               condition: writeVerificationFailure,
@@ -844,17 +2222,16 @@ export async function runExecutorLoop(
           }
         }
 
-        executionHistory +=
-          (executionHistory ? '\n\n' : '') + formatHistoryEntry(entry);
-        const nextTurnAfterFallback = buildExecutorTurnPrompt(
+        executionHistory += (executionHistory ? '\n\n' : '') + formatHistoryEntry(entry);
+        const nextTurnAfterFallback = buildExecutorTurnPromptLegacy(
           baseContext,
           executionHistory,
           toolCallLog.length,
           fileReadCache,
         );
-        persistExecutorContext('after_tool_call', nextTurnAfterFallback);
+        await persistExecutorContext('after_tool_call', nextTurnAfterFallback);
 
-        const deterministicCompletion = maybeCompleteBoundedWriteTask(nextTurnAfterFallback);
+        const deterministicCompletion = await maybeCompleteBoundedWriteTask(nextTurnAfterFallback);
         if (deterministicCompletion) {
           return deterministicCompletion;
         }
@@ -865,7 +2242,7 @@ export async function runExecutorLoop(
       const exhaustedReason =
         `All runner tiers failed to produce a valid executor turn. ` +
         `Last error: ${err instanceof Error ? err.message : String(err)}`;
-      const deterministicRepairCompletion = completeAfterDeterministicExternalRepair(
+      const deterministicRepairCompletion = await completeAfterDeterministicExternalRepair(
         turnPrompt,
         exhaustedReason,
       );
@@ -875,10 +2252,12 @@ export async function runExecutorLoop(
 
       const exhaustedHaltTag = classifyRunnerExhaustionHaltTag(exhaustedReason);
       const report = buildHaltReport(
-        toolCallLog, exhaustedHaltTag, toolCallLog.length + 1,
+        toolCallLog,
+        exhaustedHaltTag,
+        toolCallLog.length + 1,
         exhaustedReason,
       );
-      persistExecutorContext('terminal', turnPrompt, {
+      await persistExecutorContext('terminal', turnPrompt, {
         terminalStatus: 'EXECUTION_HALTED',
         haltTag: exhaustedHaltTag,
         condition: exhaustedReason,
@@ -904,262 +2283,55 @@ export async function runExecutorLoop(
       };
     }
 
-    // ── Terminal completion ──────────────────────────────────────────────────
-    if (executorTurn.type === 'completion') {
-      if (executorTurn.status === 'EXECUTION_COMPLETE') {
-        const missingPlannedFileWrites = getMissingSuccessfulPlannedFileWrites({
-          approvedPlan,
-          toolCallLog,
-          projectRoot: getExecutorProjectRoot(),
-        });
-        if (missingPlannedFileWrites.length > 0) {
-          return haltForMissingPlannedFileWrites(turnPrompt, missingPlannedFileWrites);
-        }
+    // Phase 5: record structured turn for completion signal
+    turnHistory.append({
+      turn,
+      startedAt: new Date().toISOString(),
+      response: executorTurn,
+      toolResult: null,
+    });
 
-        const preCompleteGuards = evaluatePreCompleteGuards({
-          rawTask,
-          toolCallLog,
-          projectRoot: getExecutorProjectRoot(),
-          exactOutputSchemaFailure: verifyExactOutputSchemaArtifacts(rawTask, getExecutorProjectRoot()),
-          exactInvariantFailure: evaluateExactInstructionInvariants(
-            requestedTargetContract.exactInvariants,
-            getExecutorProjectRoot(),
-            toolCallLog,
-          ),
-        });
-        runtimeHookTraceEvents.push(...preCompleteGuards.runtimeHookTraceEvents);
-        if (preCompleteGuards.benchmarkVerification) {
-          preCompleteVerificationTrace.push(preCompleteGuards.benchmarkVerification);
-          emitRuntimeEvent('verification.decision', {
-            hook_id: 'benchmark_verification.before_complete',
-            contract_id: preCompleteGuards.benchmarkVerification.contractId,
-            passed: preCompleteGuards.benchmarkVerification.passed,
-            message: preCompleteGuards.benchmarkVerification.message,
-          });
-        }
-
-        const semanticFailure = preCompleteGuards.semanticFailure;
-        finalCompletionGuardResult = {
-          status: semanticFailure ? 'fail' : 'pass',
-          semantic_failure: semanticFailure,
-          runtime_hook_event_count: preCompleteGuards.runtimeHookTraceEvents.length,
-          benchmark_verification_status: preCompleteGuards.benchmarkVerification
-            ? (preCompleteGuards.benchmarkVerification.passed ? 'pass' : 'fail')
-            : null,
-        };
-        if (semanticFailure) {
-          if (isExternalBenchmarkTask(rawTask) && externalPostconditionFailures < 2) {
-            externalPostconditionFailures += 1;
-            const feedback = buildExternalPostconditionFeedback(
-              externalPostconditionFailures,
-              semanticFailure,
-            );
-            executionHistory += (executionHistory ? '\n\n' : '') + feedback;
-            const nextTurnAfterPostcondition = buildExecutorTurnPrompt(
-              baseContext,
-              executionHistory,
-              toolCallLog.length,
-              fileReadCache,
-            );
-            persistExecutorContext('after_tool_call', nextTurnAfterPostcondition, {
-              condition: semanticFailure,
-            });
-            log('  Executor: postcondition failed — continuing for autonomous repair');
-            logDetail(semanticFailure);
-            continue;
-          }
-
-          const deterministicRepairCompletion = completeAfterDeterministicExternalRepair(
-            turnPrompt,
-            semanticFailure,
-          );
-          if (deterministicRepairCompletion) {
-            return deterministicRepairCompletion;
-          }
-
-          const report = buildHaltReport(
-            toolCallLog,
-            'STEP_VERIFICATION_FAIL',
-            toolCallLog.length,
-            semanticFailure,
-          );
-          persistExecutorContext('terminal', turnPrompt, {
-            terminalStatus: 'EXECUTION_HALTED',
-            haltTag: 'STEP_VERIFICATION_FAIL',
-            condition: semanticFailure,
-          });
-          writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-          writeRepairAttemptTimeline('EXECUTOR_HALTED');
-          log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] after post-write semantic verification');
-          logDetail(semanticFailure);
-          return {
-            toolCallLog,
-            terminalStatus: 'EXECUTION_HALTED',
-            haltTag: 'STEP_VERIFICATION_FAIL',
-            condition: semanticFailure,
-          };
-        }
-
-        const runtimeVerification = runRuntimeVerification({
-          rawTask,
-          toolCallLog,
-          projectRoot: getExecutorProjectRoot(),
-          babelRoot: BABEL_ROOT,
-        });
-        evidence.writeDebugFile(
-          '10_runtime_verification.json',
-          `${JSON.stringify(runtimeVerification, null, 2)}\n`,
-        );
-
-        const runnableArtifactGate = evaluateRunnableArtifactGate({
-          rawTask,
-          toolCallLog,
-          projectRoot: getExecutorProjectRoot(),
-          runtimeVerification,
-        });
-        evidence.writeDebugFile(
-          '11_runnable_artifact_gate.json',
-          `${JSON.stringify(runnableArtifactGate, null, 2)}\n`,
-        );
-        if (runnableArtifactGateBlocksCompletion(runnableArtifactGate)) {
-          const repairLoop = runGodotArtifactRepairLoop({
-            rawTask,
-            toolCallLog,
-            projectRoot: getExecutorProjectRoot(),
-            initialGate: runnableArtifactGate,
-            babelRoot: BABEL_ROOT,
-            maxRepairAttempts: 2,
-          });
-          repairLoop.attempts.forEach((attemptEvidence, index) => {
-            evidence.writeDebugFile(
-              `${12 + index}_artifact_repair_attempt_${index + 1}.json`,
-              `${JSON.stringify(attemptEvidence, null, 2)}\n`,
-            );
-          });
-          if (repairLoop.status === 'REPAIRED_AND_COMPLETE') {
-            const completion = {
-              type: 'completion',
-              status: 'EXECUTION_COMPLETE',
-            } as const;
-            const report = {
-              ...buildTerminalReport(completion, toolCallLog, evidence),
-              stage_status: 'REPAIRED_AND_COMPLETE',
-              pipeline_completion_note: 'Godot artifact repair completed only after fresh Babel-owned runtime verification and Runnable Artifact Gate PASS.',
-              artifact_gate: repairLoop.finalGate,
-            };
-            persistExecutorContext('terminal', turnPrompt, {
-              terminalStatus: 'EXECUTION_COMPLETE',
-              condition: repairLoop.reason,
-            });
-            writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-            writeRepairAttemptTimeline('COMPLETE');
-            log(`  Executor: REPAIRED_AND_COMPLETE (${toolCallLog.length} steps, Godot artifact repaired)`);
-            logDetail(repairLoop.reason);
-            return {
-              toolCallLog,
-              terminalStatus: 'EXECUTION_COMPLETE',
-            };
-          }
-
-          const finalGate = repairLoop.finalGate ?? runnableArtifactGate;
-          const haltDecision = repairLoop.status === 'EXECUTION_HALTED_REPAIR_BUDGET_EXCEEDED'
-            ? {
-                haltTag: 'REPAIR_BUDGET_EXCEEDED' as const,
-                condition: [
-                  'EXECUTION_HALTED_REPAIR_BUDGET_EXCEEDED',
-                  `Runnable Artifact Gate status: ${finalGate.status}`,
-                  `Target type: ${finalGate.target_type}`,
-                  `Repair attempts: ${repairLoop.attempts.length}/2`,
-                  `Reason: ${repairLoop.reason}`,
-                  `Verification command: ${finalGate.verification_command ?? 'NO_RUNTIME_VERIFICATION'}`,
-                  'Failed artifact checks:',
-                  ...(finalGate.failed_artifact_checks.length > 0
-                    ? finalGate.failed_artifact_checks.map(check => `- ${check.id}: ${check.message}`)
-                    : ['- None']),
-                  `Next repair action: ${finalGate.next_repair_action ?? 'Manual repair required before completion.'}`,
-                ].join('\n'),
-              }
-            : runnableArtifactGateHaltDecision(finalGate);
-          const report = {
-            ...buildHaltReport(
-              toolCallLog,
-              haltDecision.haltTag,
-              Math.max(1, toolCallLog.length),
-              haltDecision.condition,
-            ),
-            artifact_gate: finalGate,
-          };
-          persistExecutorContext('terminal', turnPrompt, {
-            terminalStatus: 'EXECUTION_HALTED',
-            haltTag: haltDecision.haltTag,
-            condition: haltDecision.condition,
-          });
-          writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-          writeRepairAttemptTimeline('EXECUTOR_HALTED');
-          log(`  Executor: EXECUTION_HALTED [${haltDecision.haltTag}] after runnable artifact gate`);
-          logDetail(haltDecision.condition);
-          return {
-            toolCallLog,
-            terminalStatus: 'EXECUTION_HALTED',
-            haltTag: haltDecision.haltTag,
-            condition: haltDecision.condition,
-          };
-        }
-      }
-
-      if (executorTurn.status === 'EXECUTION_HALTED') {
-        const deterministicRepairCompletion = completeAfterDeterministicExternalRepair(
-          turnPrompt,
-          executorTurn.condition,
-        );
-        if (deterministicRepairCompletion) {
-          return deterministicRepairCompletion;
-        }
-      }
-
-      const report = buildTerminalReport(executorTurn, toolCallLog, evidence);
-      persistExecutorContext('terminal', turnPrompt, {
-        terminalStatus: executorTurn.status,
-        ...(executorTurn.status === 'EXECUTION_HALTED'
-          ? { haltTag: executorTurn.halt_tag, condition: executorTurn.condition }
-          : {}),
-        ...(executorTurn.status === 'ACTIVATION_REFUSED'
-          ? { haltTag: 'ACTIVATION_GATE_FAIL', condition: executorTurn.reason }
-          : {}),
+    const completionResult = await handleExecutorCompletion(
+      executorTurn,
+      rawTask,
+      toolCallLog,
+      baseContext,
+      executionHistory,
+      fileReadCache,
+      turnPrompt,
+      evidence,
+      reportWarnings,
+      externalPostconditionFailures,
+      finalCompletionGuardResult,
+      requestedTargetContract,
+      preCompleteVerificationTrace,
+      runtimeHookTraceEvents,
+      repairAttemptTimeline,
+      reliabilityRepairProofEnabled,
+      totalJitLatencyMs,
+      totalStreamPauseDurationMs,
+      totalLockWaitMs,
+      peakBufferBytes,
+      getMissingSuccessfulPlannedFileWrites,
+      haltForMissingPlannedFileWrites,
+      completeAfterDeterministicExternalRepair,
+      persistExecutorContext,
+      writeRepairAttemptTimeline,
+    );
+    if (completionResult.kind === 'continue') {
+      executionHistory = completionResult.executionHistory;
+      externalPostconditionFailures = completionResult.externalPostconditionFailures;
+      await persistExecutorContext('after_tool_call', completionResult.nextTurnPrompt, {
+        condition: completionResult.condition,
       });
-      writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-      writeRepairAttemptTimeline(executorTurn.status === 'EXECUTION_COMPLETE' ? 'COMPLETE' : 'EXECUTOR_HALTED');
-
-      if (executorTurn.status === 'EXECUTION_COMPLETE') {
-        log(`  Executor: EXECUTION_COMPLETE (${toolCallLog.length} steps)`);
-      } else if (executorTurn.status === 'EXECUTION_HALTED') {
-        log(`  Executor: EXECUTION_HALTED [${executorTurn.halt_tag}]`);
-        logDetail(executorTurn.condition);
-      } else {
-        log(`  Executor: ACTIVATION_REFUSED — ${executorTurn.reason}`);
-      }
-      if (executorTurn.status === 'EXECUTION_COMPLETE') {
-        return {
-          toolCallLog,
-          terminalStatus: 'EXECUTION_COMPLETE',
-        };
-      }
-      if (executorTurn.status === 'EXECUTION_HALTED') {
-        return {
-          toolCallLog,
-          terminalStatus: 'EXECUTION_HALTED',
-          haltTag: executorTurn.halt_tag,
-          condition: executorTurn.condition,
-        };
-      }
-      return {
-        toolCallLog,
-        terminalStatus: 'ACTIVATION_REFUSED',
-        condition: executorTurn.reason,
-      };
+      continue;
     }
+    if (completionResult.kind === 'return') {
+      return completionResult.result;
+    }
+    // kind === 'ok' — fall through to tool call handler
 
-    // ── Tool call ────────────────────────────────────────────────────────────
+    // ── Tool call ───────────────────────────────────────────────────────    // ── Tool call ────────────────────────────────────────────────────────────
     // Re-validate with strict ToolCallRequestSchema (enforces per-tool required fields).
     const { type: _type, ...toolArgs } = executorTurn;
     let parsedReq = ToolCallRequestSchema.safeParse(toolArgs);
@@ -1170,11 +2342,15 @@ export async function runExecutorLoop(
       const repairPrompt = buildExecutorRepairPrompt(
         turnPrompt,
         toolArgs,
-        parsedReq.error.issues.map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`),
+        parsedReq.error.issues.map(
+          (issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`,
+        ),
       );
       try {
         const repairedTurn = await runWithFallback(repairPrompt, ExecutorTurnSchema, {
-          evidence, stage: 'executor', schemaName: 'ExecutorTurnSchema',
+          evidence,
+          stage: 'executor',
+          schemaName: 'ExecutorTurnSchema',
         });
         if (repairedTurn.type === 'tool_call') {
           const { type: _rt, ...repairedArgs } = repairedTurn;
@@ -1191,11 +2367,13 @@ export async function runExecutorLoop(
 
     if (!parsedReq.success) {
       const report = buildHaltReport(
-        toolCallLog, 'AMBIGUOUS_PLAN', toolCallLog.length + 1,
+        toolCallLog,
+        'AMBIGUOUS_PLAN',
+        toolCallLog.length + 1,
         `Executor tool call failed strict validation (repair attempted and failed). ` +
-        `Zod error: ${parsedReq.error.toString().slice(0, 200)}`,
+          `Zod error: ${parsedReq.error.toString().slice(0, 200)}`,
       );
-      persistExecutorContext('terminal', turnPrompt, {
+      await persistExecutorContext('terminal', turnPrompt, {
         terminalStatus: 'EXECUTION_HALTED',
         haltTag: 'AMBIGUOUS_PLAN',
         condition:
@@ -1214,39 +2392,17 @@ export async function runExecutorLoop(
       };
     }
 
-    let req       = parsedReq.data;
+    let req = parsedReq.data;
     const stepNum = toolCallLog.length + 1;
 
-    const approvedStep = approvedPlan.minimal_action_set[stepNum - 1];
-    if (
-      approvedStep?.tool === req.tool &&
-      isExecutorToolShapePlaceholder(getTarget(req)) &&
-      String(approvedStep.target ?? '').trim().length > 0
-    ) {
-      const warning =
-        `[EXECUTOR_PLAN_TARGET_CANONICALIZED] Step ${stepNum} ${req.tool} target replaced ` +
-        `tool-shape placeholder "${getTarget(req)}" with approved plan target "${approvedStep.target}".`;
-      reportWarnings.push(warning);
-      logDetail(warning);
-      req = replaceExecutorRequestTarget(req, String(approvedStep.target));
-    }
-
-    if (
-      req.tool === 'file_write' &&
-      approvedStep?.tool === 'file_write' &&
-      normalizeRequestedFileTargetsForBoundedContract(rawTask).includes(normalizePathForComparison(approvedStep.target))
-    ) {
-      const emittedTarget = normalizePathForComparison(String(req.path ?? ''));
-      const approvedTarget = normalizePathForComparison(approvedStep.target);
-      if (emittedTarget !== approvedTarget) {
-        const warning =
-          `[EXECUTOR_PLAN_TARGET_CANONICALIZED] Step ${stepNum} file_write target normalized ` +
-          `from "${String(req.path ?? '')}" to approved bounded target "${approvedStep.target}".`;
-        reportWarnings.push(warning);
-        logDetail(warning);
-        req = { ...req, path: approvedStep.target };
-      }
-    }
+    const canonicalized = canonicalizeRequestTargets(
+      req,
+      approvedPlan,
+      stepNum,
+      rawTask,
+      reportWarnings,
+    );
+    req = canonicalized.req;
 
     if (
       isExternalBenchmarkTask(rawTask) &&
@@ -1260,10 +2416,11 @@ export async function runExecutorLoop(
         : '';
       const lastShellCommand = [...toolCallLog]
         .reverse()
-        .find(entry => entry.tool === 'shell_exec' || entry.tool === 'test_run');
+        .find((entry) => entry.tool === 'shell_exec' || entry.tool === 'test_run');
       if (
         previousEntry?.tool === 'file_write' &&
-        normalizePathForComparison(previousTarget).toLowerCase() === normalizePathForComparison(currentTarget).toLowerCase() &&
+        normalizePathForComparison(previousTarget).toLowerCase() ===
+          normalizePathForComparison(currentTarget).toLowerCase() &&
         lastShellCommand
       ) {
         externalRepairRerunCount += 1;
@@ -1277,13 +2434,8 @@ export async function runExecutorLoop(
           const warning = `[EXECUTOR_EXTERNAL_REPAIR_LOOP_HALTED] ${condition}`;
           reportWarnings.push(warning);
           logDetail(warning);
-          const report = buildHaltReport(
-            toolCallLog,
-            'STEP_VERIFICATION_FAIL',
-            stepNum,
-            condition,
-          );
-          persistExecutorContext('terminal', turnPrompt, {
+          const report = buildHaltReport(toolCallLog, 'STEP_VERIFICATION_FAIL', stepNum, condition);
+          await persistExecutorContext('terminal', turnPrompt, {
             terminalStatus: 'EXECUTION_HALTED',
             haltTag: 'STEP_VERIFICATION_FAIL',
             condition,
@@ -1313,9 +2465,12 @@ export async function runExecutorLoop(
       }
     }
 
-    const recoverableNextTargetKey = req.tool === 'file_write'
-      ? normalizePathForComparison(canonicalizeExecutorTargetForLog(String(req.path ?? ''), 'file_write')).toLowerCase()
-      : null;
+    const recoverableNextTargetKey =
+      req.tool === 'file_write'
+        ? normalizePathForComparison(
+            canonicalizeExecutorTargetForLog(String(req.path ?? ''), 'file_write'),
+          ).toLowerCase()
+        : null;
     const recoverableRerunDecision = shouldForceRecoverableCommandRerun(
       pendingRecoverableCommandRetryState.value,
       req,
@@ -1337,19 +2492,20 @@ export async function runExecutorLoop(
         replacement_command: pendingRecoverableCommandRetry.command,
         reason: recoverableRerunDecision.reason,
       });
-      req = pendingRecoverableCommandRetry.tool === 'test_run'
-        ? {
-            tool: 'test_run',
-            command: pendingRecoverableCommandRetry.command,
-            working_directory: pendingRecoverableCommandRetry.workingDirectory,
-            timeout_seconds: pendingRecoverableCommandRetry.timeoutSeconds ?? 300,
-          }
-        : {
-            tool: 'shell_exec',
-            command: pendingRecoverableCommandRetry.command,
-            working_directory: pendingRecoverableCommandRetry.workingDirectory,
-            timeout_seconds: pendingRecoverableCommandRetry.timeoutSeconds ?? 120,
-          };
+      req =
+        pendingRecoverableCommandRetry.tool === 'test_run'
+          ? {
+              tool: 'test_run',
+              command: pendingRecoverableCommandRetry.command,
+              working_directory: pendingRecoverableCommandRetry.workingDirectory,
+              timeout_seconds: pendingRecoverableCommandRetry.timeoutSeconds ?? 300,
+            }
+          : {
+              tool: 'shell_exec',
+              command: pendingRecoverableCommandRetry.command,
+              working_directory: pendingRecoverableCommandRetry.workingDirectory,
+              timeout_seconds: pendingRecoverableCommandRetry.timeoutSeconds ?? 120,
+            };
     }
 
     if (
@@ -1370,96 +2526,28 @@ export async function runExecutorLoop(
       }
     }
 
-    if (req.tool === 'shell_exec' || req.tool === 'test_run') {
-      const executionProfileName = resolveExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']).name;
-      const preToolHookResult = runPreToolUseHooks({
-        request: req,
-        rawTask,
-        executionProfileName,
-        runtimeInventory: getBenchmarkRuntimeInventoryForProfile(executionProfileName),
-      });
-      runtimeHookTraceEvents.push(...preToolHookResult.traces);
-
-      if (
-        !preToolHookResult.blocked &&
-        (preToolHookResult.request.tool === 'shell_exec' || preToolHookResult.request.tool === 'test_run') &&
-        normalizeShellCommandForComparison(preToolHookResult.request.command) !==
-          normalizeShellCommandForComparison(req.command)
-      ) {
-        const warning =
-          `[TOOL_CAPABILITY_REWRITE] Step ${stepNum} ${req.tool} rewrote generic command ` +
-          `"${req.command}" to "${preToolHookResult.request.command}".`;
-        reportWarnings.push(warning);
-        logDetail(warning);
-        emitRuntimeEvent('policy.decision', {
-          hook_id: 'tool_capability.pre_tool_use',
-          decision: 'rewrite',
-          tool: req.tool,
-          original_command: req.command,
-          replacement_command: preToolHookResult.request.command,
-        });
-        req = preToolHookResult.request;
-      } else if (preToolHookResult.blocked) {
-        blockedToolCapabilityRecoveryCount += 1;
-        const capabilityFeedback = preToolHookResult.message ?? '[TOOL_CAPABILITY_BROKER] Tool capability blocked.';
-        const entry = buildBlockedExecutorToolCallEntry({
-          step: stepNum,
-          req,
-          stderr: capabilityFeedback,
-        });
-        toolCallLog.push(entry);
-
-        const warning =
-          `[TOOL_CAPABILITY_BLOCKED] Step ${stepNum} ${req.tool} blocked before execution; ` +
-          `attempt ${blockedToolCapabilityRecoveryCount}/${maxBlockedToolCapabilityRecoveries}.`;
-        reportWarnings.push(warning);
-        logDetail(warning);
-        emitRuntimeEvent('policy.decision', {
-          hook_id: 'tool_capability.pre_tool_use',
-          decision: 'block',
-          tool: req.tool,
-          command: req.command,
-          message: capabilityFeedback,
-        });
-
-        executionHistory +=
-          (executionHistory ? '\n\n' : '') +
-          formatHistoryEntry(entry) +
-          '\n\n--- TOOL CAPABILITY UNAVAILABLE ---\n' +
-          'Do not retry a generic inspection command. Use the task-specific capability replacement if available, ' +
-          'choose a source-only route, or halt with STEP_VERIFICATION_FAIL if the required runtime capability is missing.';
-
-        if (blockedToolCapabilityRecoveryCount > maxBlockedToolCapabilityRecoveries) {
-          const report = buildHaltReport(
-            toolCallLog,
-            'STEP_VERIFICATION_FAIL',
-            stepNum,
-            capabilityFeedback,
-          );
-          persistExecutorContext('terminal', turnPrompt, {
-            terminalStatus: 'EXECUTION_HALTED',
-            haltTag: 'STEP_VERIFICATION_FAIL',
-            condition: capabilityFeedback,
-          });
-          writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-          log(`  Executor: EXECUTION_HALTED [TOOL_CAPABILITY_BLOCKED] at step ${stepNum}`);
-          return {
-            toolCallLog,
-            terminalStatus: 'EXECUTION_HALTED',
-            haltTag: 'STEP_VERIFICATION_FAIL',
-            condition: capabilityFeedback,
-          };
-        }
-
-        persistExecutorContext(
-          'after_tool_call',
-          buildExecutorTurnPrompt(baseContext, executionHistory, toolCallLog.length, fileReadCache),
-        );
-        continue;
-      }
+    const hookResult = applyPreToolUseHooks(
+      req, stepNum, rawTask, executionHistory, baseContext, fileReadCache,
+      toolCallLog, reportWarnings, runtimeHookTraceEvents,
+      blockedToolCapabilityRecoveryCount, maxBlockedToolCapabilityRecoveries,
+      evidence, turnPrompt, persistExecutorContext,
+    );
+    if (hookResult.kind === 'return') return hookResult.result;
+    if (hookResult.kind === 'continue') {
+      executionHistory = hookResult.executionHistory;
+      blockedToolCapabilityRecoveryCount = hookResult.blockedToolCapabilityRecoveryCount;
+      await persistExecutorContext(
+        'after_tool_call',
+        buildExecutorTurnPromptLegacy(baseContext, executionHistory, toolCallLog.length, fileReadCache),
+      );
+      continue;
     }
+    // kind === 'ok' — req may have been rewritten
+    req = hookResult.req;
 
-    logDetail(`  Step ${stepNum}: ${req.tool} → ${canonicalizeExecutorTargetForLog(getTarget(req), req.tool)}`);
+    logDetail(
+      `  Step ${stepNum}: ${req.tool} → ${canonicalizeExecutorTargetForLog(getTarget(req), req.tool)}`,
+    );
 
     // ── Truncation artifact guard ─────────────────────────────────────────────
     // If the executor is about to write a file whose content contains the
@@ -1469,15 +2557,21 @@ export async function runExecutorLoop(
     if (req.tool === 'file_write' && 'content' in req) {
       const TRUNCATION_MARKER = /\.\.\. \[\d+ chars truncated\] \.\.\./;
       if (TRUNCATION_MARKER.test(req.content)) {
-        const truncationConditions = buildTruncationArtifactConditions(String(req.path ?? ''));
         const report = buildHaltReport(
-          toolCallLog, 'STEP_VERIFICATION_FAIL', stepNum,
-          truncationConditions.reportCondition,
+          toolCallLog,
+          'STEP_VERIFICATION_FAIL',
+          stepNum,
+          `[TRUNCATION_ARTIFACT] file_write for "${req.path}" contains the ` +
+            `"... [N chars truncated] ..." history marker in its content. ` +
+            `The executor copied truncated execution history instead of the FILE_READ_CACHE. ` +
+            `Re-read the file from FILE_READ_CACHE and apply only the plan-specified changes.`,
         );
-        persistExecutorContext('terminal', turnPrompt, {
+        await persistExecutorContext('terminal', turnPrompt, {
           terminalStatus: 'EXECUTION_HALTED',
           haltTag: 'STEP_VERIFICATION_FAIL',
-          condition: truncationConditions.resultCondition,
+          condition:
+            `[TRUNCATION_ARTIFACT] file_write for "${req.path}" contains truncation ` +
+            `marker from execution history. Use FILE_READ_CACHE instead.`,
         });
         writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
         log(`  Executor: EXECUTION_HALTED [TRUNCATION_ARTIFACT] at step ${stepNum}`);
@@ -1485,121 +2579,88 @@ export async function runExecutorLoop(
           toolCallLog,
           terminalStatus: 'EXECUTION_HALTED',
           haltTag: 'STEP_VERIFICATION_FAIL',
-          condition: truncationConditions.resultCondition,
+          condition:
+            `[TRUNCATION_ARTIFACT] file_write for "${req.path}" contains truncation ` +
+            `marker from execution history. Use FILE_READ_CACHE instead.`,
         };
       }
     }
 
-    const benchmarkInstallBlockReason =
-      isExternalBenchmarkTask(rawTask) &&
-      (req.tool === 'shell_exec' || req.tool === 'test_run')
-        ? getBenchmarkInstallRecoveryBlockReason(approvedPlan, rawTask, req.command)
-        : null;
-    if (benchmarkInstallBlockReason) {
-      blockedBenchmarkInstallRecoveryCount += 1;
-      const entry = buildBlockedExecutorToolCallEntry({
-        step: stepNum,
-        req,
-        stderr: benchmarkInstallBlockReason,
-      });
-      toolCallLog.push(entry);
-
-      const warning =
-        `[${BENCHMARK_INSTALL_RECOVERY_TAG}] Step ${stepNum} ${req.tool} blocked before execution; ` +
-        `attempt ${blockedBenchmarkInstallRecoveryCount}/${maxBenchmarkInstallRecoveryBlocks}.`;
-      reportWarnings.push(warning);
-      logDetail(warning);
-
-      executionHistory +=
-        (executionHistory ? '\n\n' : '') +
-        formatHistoryEntry(entry) +
-        '\n\n--- BENCHMARK INSTALL RECOVERY BLOCKED ---\n' +
-        'Do not retry package installation with alternate syntax. Use existing container tools, ' +
-        'patch/write self-contained source artifacts, or halt with STEP_VERIFICATION_FAIL if the task ' +
-        'cannot be solved without the missing dependency.';
-
-      if (blockedBenchmarkInstallRecoveryCount > maxBenchmarkInstallRecoveryBlocks) {
-        const report = buildHaltReport(
-          toolCallLog,
-          'STEP_VERIFICATION_FAIL',
-          stepNum,
-          benchmarkInstallBlockReason,
-        );
-        persistExecutorContext('terminal', turnPrompt, {
-          terminalStatus: 'EXECUTION_HALTED',
-          haltTag: 'STEP_VERIFICATION_FAIL',
-          condition: benchmarkInstallBlockReason,
-        });
-        writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-        log(`  Executor: EXECUTION_HALTED [${BENCHMARK_INSTALL_RECOVERY_TAG}] at step ${stepNum}`);
-        return {
-          toolCallLog,
-          terminalStatus: 'EXECUTION_HALTED',
-          haltTag: 'STEP_VERIFICATION_FAIL',
-          condition: benchmarkInstallBlockReason,
-        };
-      }
-
-      persistExecutorContext(
-        'after_tool_call',
-        buildExecutorTurnPrompt(baseContext, executionHistory, toolCallLog.length, fileReadCache),
-      );
+    const benchmarkRecoveryResult = await handleBenchmarkInstallRecovery(
+      req,
+      rawTask,
+      approvedPlan,
+      stepNum,
+      turnPrompt,
+      baseContext,
+      executionHistory,
+      fileReadCache,
+      toolCallLog,
+      reportWarnings,
+      blockedBenchmarkInstallRecoveryCount,
+      maxBenchmarkInstallRecoveryBlocks,
+      evidence,
+      persistExecutorContext,
+    );
+    if (benchmarkRecoveryResult.kind === 'continue') {
+      executionHistory = benchmarkRecoveryResult.executionHistory;
+      blockedBenchmarkInstallRecoveryCount =
+        benchmarkRecoveryResult.blockedBenchmarkInstallRecoveryCount;
       continue;
     }
+    if (benchmarkRecoveryResult.kind === 'return') {
+      return benchmarkRecoveryResult.result;
+    }
+    // kind === 'ok' — fall through to normal tool execution
 
     if (!DRY_RUN && req.tool === 'file_write') {
-      const snapshotResult = worktreeSafety.snapshotBeforeWrite(
-        String(req.path ?? ''),
-        repairState.failures.length + 1,
+      const wssResult = await applyWorktreeSafetySnapshot(
+        req,
+        stepNum,
+        turnPrompt,
+        repairState,
+        toolCallLog,
+        reportWarnings,
+        evidence,
+        worktreeSafety,
+        writeWorktreeSafetySummary,
+        writeRollbackSummary,
+        persistExecutorContext,
       );
-      writeWorktreeSafetySummary();
-      if (!snapshotResult.ok) {
-        const condition = `[WORKTREE_DIRTY_UNSAFE] ${snapshotResult.reason ?? 'Unsafe worktree write refused.'}`;
-        const entry = buildBlockedExecutorToolCallEntry({
-          step: stepNum,
-          req,
-          stderr: condition,
-          target: canonicalizeExecutorTargetForLog(String(req.path ?? ''), 'file_write'),
-        });
-        toolCallLog.push(entry);
-        const rollbackSummary = worktreeSafety.rollbackTouchedFiles(condition);
-        writeRollbackSummary(rollbackSummary);
-        const report = buildHaltReport(
-          toolCallLog,
-          'SCOPE_VIOLATION',
-          stepNum,
-          condition,
-        );
-        persistExecutorContext('terminal', turnPrompt, {
-          terminalStatus: 'EXECUTION_HALTED',
-          haltTag: 'SCOPE_VIOLATION',
-          condition,
-        });
-        writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-        log(`  Executor: EXECUTION_HALTED [WORKTREE_DIRTY_UNSAFE] at step ${stepNum}`);
-        return {
-          toolCallLog,
-          terminalStatus: 'EXECUTION_HALTED',
-          haltTag: 'SCOPE_VIOLATION',
-          condition,
-        };
+      if (wssResult.kind === 'return') {
+        return wssResult.result;
       }
     }
 
-    const fileWriteProofHashBefore = req.tool === 'file_write'
-      ? hashProjectFileForEvidence(getExecutorProjectRoot(), String(req.path ?? ''))
-      : null;
+    const fileWriteProofHashBefore =
+      req.tool === 'file_write'
+        ? hashProjectFileForEvidence(getExecutorProjectRoot(), String(req.path ?? ''))
+        : null;
     const fastPathToolResult = maybeHandleNewFilePreflightFastPath(req, approvedPlan);
     if (fastPathToolResult) {
       logDetail(`  Executor fast path: ${fastPathToolResult.stdout}`);
     }
-    const toolResult = fastPathToolResult ?? await executeExecutorTool(req, evidence);
+    const toolResult =
+      fastPathToolResult ??
+      (await executeTool(req, {
+        agentId: 'executor', // Default for single-agent runs
+        runId: evidence.runId,
+        runDir: evidence.runDir,
+        babelRoot: BABEL_ROOT,
+      }));
 
-    const entry = buildExecutorToolCallEntry({
+    const entry: ToolCallLog = {
       step: stepNum,
-      req,
-      toolResult,
-    });
+      tool: req.tool,
+      target: getTarget(req),
+      exit_code: toolResult.exit_code,
+      stdout: toolResult.stdout,
+      stderr: toolResult.stderr,
+      ...(toolResult.denial ? { denial: toolResult.denial } : {}),
+      ...(toolResult.mcp_lifecycle ? { mcp_lifecycle: toolResult.mcp_lifecycle } : {}),
+      ...(toolResult.checkpoint_ids ? { checkpoint_ids: toolResult.checkpoint_ids } : {}),
+      verified: toolResult.exit_code === 0,
+    };
     toolCallLog.push(entry);
 
     if (!DRY_RUN && req.tool === 'file_write' && toolResult.exit_code === 0) {
@@ -1643,7 +2704,7 @@ export async function runExecutorLoop(
       const inputCapsule = currentRepairAttemptInputCapsule ?? latestFailureCapsuleArtifact;
       markInputCapsuleConsumed(inputCapsule);
       repairAttemptTimeline.push({
-        attempt: repairState.failures.length + 1,
+        attempt: repairState.current.failures.length + 1,
         kind: reliabilityRepairProofEnabled ? 'deterministic_stub' : 'live_cli',
         status: 'REPAIR_ATTEMPT_PASSED',
         changed_files: [...currentRepairAttemptChangedFiles].sort(),
@@ -1661,7 +2722,9 @@ export async function runExecutorLoop(
         next_attempt_consumed_capsule: null,
         repeated_failure_signature: null,
         meaningful_diff_since_previous_attempt: hasMeaningfulRepairDiff(
-          repairAttemptTimeline.filter(attempt => attempt.status === 'REPAIR_ATTEMPT_FAILED').at(-1) ?? null,
+          repairAttemptTimeline
+            .filter((attempt) => attempt.status === 'REPAIR_ATTEMPT_FAILED')
+            .at(-1) ?? null,
           currentRepairAttemptFileHashes,
         ),
         file_hashes: currentRepairAttemptFileHashes,
@@ -1673,432 +2736,107 @@ export async function runExecutorLoop(
       writeRepairAttemptTimeline('IN_PROGRESS');
     }
 
-    // Command failures are often recoverable during autonomous work: the
-    // executor can inspect stderr, patch a helper script, and retry. Policy
-    // denials and integration lifecycle failures still halt immediately.
-    if (!DRY_RUN && toolResult.exit_code !== 0) {
-      if (
-        (req.tool === 'shell_exec' || req.tool === 'test_run') &&
-        !toolResult.denial &&
-        !toolResult.mcp_lifecycle &&
-        shouldRecoverCommandFailure(req.command, rawTask)
-      ) {
-        recoverableCommandFailures += 1;
-        const repairDecision = recordRepairFailure(repairState, entry);
-        repairState = repairDecision.state;
-        const inputCapsule = currentRepairAttemptInputCapsule;
-        markInputCapsuleConsumed(inputCapsule);
-        const failureCapsule = buildFailureCapsule({
-          attempt: repairState.failures.length,
-          verifierStatus: 'fail',
-          failedCommand: req.command,
-          stdout: toolResult.stdout,
-          stderr: toolResult.stderr,
-          changedFiles: [...currentRepairAttemptChangedFiles],
-        });
-        const failureCapsuleId = `repair_failure_capsule_attempt_${failureCapsule.attempt}`;
-        const failureCapsuleFilename = `12_${failureCapsuleId}.json`;
-        const failureCapsulePath = join(evidence.runDir, failureCapsuleFilename);
-        evidence.writeDebugFile(
-          failureCapsuleFilename,
-          `${JSON.stringify({
-            id: failureCapsuleId,
-            source: 'executor_recoverable_command_failure',
-            source_tool_call: entry,
-            capsule: failureCapsule,
-          }, null, 2)}\n`,
-        );
-        latestFailureCapsuleArtifact = {
-          id: failureCapsuleId,
-          path: failureCapsulePath,
-          capsule: failureCapsule,
-        };
-        const previousFailedAttempt =
-          repairAttemptTimeline.filter(attempt => attempt.status === 'REPAIR_ATTEMPT_FAILED').at(-1) ?? null;
-        const meaningfulDiffSincePreviousAttempt = hasMeaningfulRepairDiff(
-          previousFailedAttempt,
-          currentRepairAttemptFileHashes,
-        );
-        const repeatedFailureSignature = repairDecision.state.status === 'same_failure_repeated' ||
-          repairDecision.state.status === 'strategy_exhausted'
-          ? formatFailureFingerprint(repairDecision.state.lastFingerprint!)
-          : null;
-        repairAttemptTimeline.push({
-          attempt: failureCapsule.attempt,
-          kind: reliabilityRepairProofEnabled ? 'deterministic_stub' : 'live_cli',
-          status: 'REPAIR_ATTEMPT_FAILED',
-          changed_files: [...currentRepairAttemptChangedFiles].sort(),
-          verifier_command: req.command,
-          verifier_cwd: req.working_directory ?? null,
-          verifier_exit_code: toolResult.exit_code,
-          verifier_stdout_summary: summarizeVerifierStreamForEvidence(toolResult.stdout),
-          verifier_stderr_summary: summarizeVerifierStreamForEvidence(toolResult.stderr),
-          failure_capsule_id: failureCapsuleId,
-          failure_capsule_path: failureCapsulePath,
-          failure_capsule: failureCapsule,
-          input_capsule_id: inputCapsule?.id ?? null,
-          input_capsule_path: inputCapsule?.path ?? null,
-          input_capsule_consumed: inputCapsule !== null,
-          next_attempt_consumed_capsule: false,
-          repeated_failure_signature: repeatedFailureSignature,
-          meaningful_diff_since_previous_attempt: meaningfulDiffSincePreviousAttempt,
-          file_hashes: currentRepairAttemptFileHashes,
-        });
-        currentRepairAttemptChangedFiles = new Set<string>();
-        currentRepairAttemptFileHashes = {};
-        currentRepairAttemptInputCapsule = latestFailureCapsuleArtifact;
-        writeRepairAttemptTimeline('IN_PROGRESS');
-        const wrongWorkingDirectoryHint = getNpmWrongWorkingDirectoryHint(
-          req.command,
-          toolResult.stdout,
-          toolResult.stderr,
-          getExecutorProjectRoot(),
-        );
-        const verifierNotFound =
-          isVerifierNotFoundFailure(req.command, toolResult.stdout, toolResult.stderr) &&
-          wrongWorkingDirectoryHint === null;
-        const repeatedVerifierFailure = repairDecision.state.status === 'same_failure_repeated';
-        const repairBudgetExhausted = recoverableCommandFailures >= maxRecoverableCommandFailures;
-        const underlyingFailureStatus: TerminalStatus = verifierNotFound
-          ? 'VERIFIER_NOT_FOUND'
-          : repeatedVerifierFailure
-            ? 'REPAIR_REPEATED_FAILURE'
-            : repairBudgetExhausted
-              ? 'REPAIR_MAX_ATTEMPTS_REACHED'
-              : 'VERIFIER_FAILED';
-        const rollbackOutcome = rollbackTouchedFilesForFailure(
-          underlyingFailureStatus,
-          `Verifier command "${req.command}" failed on repair attempt ${failureCapsule.attempt}.`,
-        );
-        const rollbackFeedback = [
-          '--- WORKTREE ROLLBACK ---',
-          `Rollback status: ${rollbackOutcome.summary.status}`,
-          `Restored files: ${rollbackOutcome.summary.restored_files.join(', ') || '(none)'}`,
-          `Removed files: ${rollbackOutcome.summary.removed_files.join(', ') || '(none)'}`,
-          `Failed files: ${rollbackOutcome.summary.failed_files.map(file => file.path).join(', ') || '(none)'}`,
-        ].join('\n');
-        if (rollbackOutcome.terminalStatus === 'ROLLBACK_FAILED') {
-          const condition = [
-            rollbackOutcome.conditionPrefix,
-            `[${underlyingFailureStatus}] Verifier command "${req.command}" failed before rollback completed.`,
-            `Failed rollback files: ${rollbackOutcome.summary.failed_files.map(file => `${file.path}: ${file.error}`).join('; ') || '(none)'}.`,
-          ].join(' ');
-          reportWarnings.push(condition);
-          const report = buildHaltReport(
-            toolCallLog,
-            'REPAIR_BUDGET_EXCEEDED',
-            stepNum,
-            condition,
-          );
-          persistExecutorContext('terminal', turnPrompt, {
-            terminalStatus: 'EXECUTION_HALTED',
-            haltTag: 'REPAIR_BUDGET_EXCEEDED',
-            condition,
-          });
-          writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-          writeRepairAttemptTimeline('ROLLBACK_FAILED');
-          log(`  Executor: EXECUTION_HALTED [ROLLBACK_FAILED] at step ${stepNum}`);
-          return {
-            toolCallLog,
-            terminalStatus: 'EXECUTION_HALTED',
-            haltTag: 'REPAIR_BUDGET_EXCEEDED',
-            condition,
-          };
-        }
-        if (verifierNotFound) {
-          const underlyingCondition = [
-            `[VERIFIER_NOT_FOUND] Verifier command "${req.command}" is missing or unavailable.`,
-            `stdout: ${summarizeVerifierStreamForEvidence(toolResult.stdout) ?? '(empty)'}.`,
-            `stderr: ${summarizeVerifierStreamForEvidence(toolResult.stderr) ?? '(empty)'}.`,
-            'Recommended next action: define a runnable verifier or choose a task that can be verified with available commands.',
-          ].join(' ');
-          const finalStatus = rollbackOutcome.terminalStatus;
-          const condition = finalStatus === 'VERIFIER_NOT_FOUND'
-            ? underlyingCondition
-            : `${rollbackOutcome.conditionPrefix} Underlying failure: ${underlyingCondition}`;
-          reportWarnings.push(condition);
-          const report = buildHaltReport(
-            toolCallLog,
-            'STEP_VERIFICATION_FAIL',
-            stepNum,
-            condition,
-          );
-          persistExecutorContext('terminal', turnPrompt, {
-            terminalStatus: 'EXECUTION_HALTED',
-            haltTag: 'STEP_VERIFICATION_FAIL',
-            condition,
-          });
-          writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-          writeRepairAttemptTimeline(finalStatus);
-          log(`  Executor: EXECUTION_HALTED [${finalStatus}] at step ${stepNum}`);
-          return {
-            toolCallLog,
-            terminalStatus: 'EXECUTION_HALTED',
-            haltTag: 'STEP_VERIFICATION_FAIL',
-            condition,
-          };
-        }
-        if (repeatedVerifierFailure) {
-          const underlyingCondition = [
-            '[REPAIR_REPEATED_FAILURE] Same verifier failure repeated after a repair attempt.',
-            `Repeated failure signature: ${repeatedFailureSignature ?? '(unknown)'}.`,
-            `Meaningful diff since previous attempt: ${meaningfulDiffSincePreviousAttempt === null ? 'unknown' : String(meaningfulDiffSincePreviousAttempt)}.`,
-            'Recommended next action: inspect the failure capsule and change repair strategy instead of repeating the same verifier failure.',
-          ].join(' ');
-          const finalStatus = rollbackOutcome.terminalStatus;
-          const condition = finalStatus === 'REPAIR_REPEATED_FAILURE'
-            ? underlyingCondition
-            : `${rollbackOutcome.conditionPrefix} Underlying failure: ${underlyingCondition}`;
-          reportWarnings.push(condition);
-          const report = buildHaltReport(
-            toolCallLog,
-            'REPAIR_BUDGET_EXCEEDED',
-            stepNum,
-            condition,
-          );
-          persistExecutorContext('terminal', turnPrompt, {
-            terminalStatus: 'EXECUTION_HALTED',
-            haltTag: 'REPAIR_BUDGET_EXCEEDED',
-            condition,
-          });
-          writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-          writeRepairAttemptTimeline(finalStatus);
-          log(`  Executor: EXECUTION_HALTED [${finalStatus}] at step ${stepNum}`);
-          return {
-            toolCallLog,
-            terminalStatus: 'EXECUTION_HALTED',
-            haltTag: 'REPAIR_BUDGET_EXCEEDED',
-            condition,
-          };
-        }
-        pendingRecoverableCommandRetryState.value = {
-          tool: req.tool,
-          command: req.command,
-          workingDirectory: req.working_directory,
-          timeoutSeconds: req.timeout_seconds,
-          failedStep: stepNum,
-          patchedTargetKeys: new Set(),
-        };
-        if (repairBudgetExhausted) {
-          const deterministicRepairCompletion = completeAfterDeterministicExternalRepair(
-            turnPrompt,
-            `recoverable command failure budget exceeded at step ${stepNum}: ${toolResult.stderr.slice(0, 200)}`,
-          );
-          if (deterministicRepairCompletion) {
-            return deterministicRepairCompletion;
-          }
-          const underlyingCondition = [
-            `[REPAIR_MAX_ATTEMPTS_REACHED] Recoverable command failure budget exceeded at step ${stepNum}.`,
-            repairDecision.condition ??
-              `Last fingerprint: ${formatFailureFingerprint(repairDecision.state.lastFingerprint!)}.`,
-          ].join(' ');
-          const finalStatus = rollbackOutcome.terminalStatus;
-          const condition = finalStatus === 'REPAIR_MAX_ATTEMPTS_REACHED'
-            ? underlyingCondition
-            : `${rollbackOutcome.conditionPrefix} Underlying failure: ${underlyingCondition}`;
-          reportWarnings.push(condition);
-          const report = buildHaltReport(
-            toolCallLog,
-            'REPAIR_BUDGET_EXCEEDED',
-            stepNum,
-            condition,
-          );
-          persistExecutorContext('terminal', turnPrompt, {
-            terminalStatus: 'EXECUTION_HALTED',
-            haltTag: 'REPAIR_BUDGET_EXCEEDED',
-            condition,
-          });
-          writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-          writeRepairAttemptTimeline(finalStatus);
-          log(`  Executor: EXECUTION_HALTED [${finalStatus}] at step ${stepNum}`);
-          return {
-            toolCallLog,
-            terminalStatus: 'EXECUTION_HALTED',
-            haltTag: 'REPAIR_BUDGET_EXCEEDED',
-            condition,
-          };
-        }
-
-        const warning =
-          `[EXECUTOR_RECOVERABLE_COMMAND_FAILURE] Step ${stepNum} ${req.tool} exited with code ` +
-          `${toolResult.exit_code}; repair attempt ${Math.min(recoverableCommandFailures, maxRecoverableCommandFailures)}/${maxRecoverableCommandFailures}. ` +
-          `Fingerprint: ${formatFailureFingerprint(repairDecision.state.lastFingerprint ?? repairDecision.state.failures[repairDecision.state.failures.length - 1]!.fingerprint)}.` +
-          `${wrongWorkingDirectoryHint ? ` ${wrongWorkingDirectoryHint}` : ''}`;
-        reportWarnings.push(warning);
-        if (repairDecision.shouldReplan && repairDecision.condition) {
-          reportWarnings.push(repairDecision.condition);
-          logDetail(repairDecision.condition);
-        }
-        logDetail(warning);
-        executionHistory +=
-          (executionHistory ? '\n\n' : '') +
-          formatHistoryEntry(entry) +
-          '\n\n--- COMMAND FAILURE REPAIR REQUIRED ---\n' +
-          'Patch the helper/source artifact that caused this command failure, then retry the same shell_exec/test_run command before advancing. Do not emit EXECUTION_COMPLETE until the command succeeds and requested artifacts pass postcondition checks.' +
-          '\n\n--- FAILURE CAPSULE ---\n' +
-          `Failure capsule id: ${failureCapsuleId}\n` +
-          `Failure capsule path: ${failureCapsulePath}\n` +
-          formatFailureCapsuleForPrompt(failureCapsule) +
-          `\n\n${rollbackFeedback}` +
-          (wrongWorkingDirectoryHint ? `\n${wrongWorkingDirectoryHint}` : '') +
-          (repairDecision.shouldReplan && repairDecision.condition
-            ? `\n${repairDecision.condition}\nThe same failure appears to be repeating. Change strategy or halt with STEP_VERIFICATION_FAIL instead of applying another equivalent patch.`
-            : '');
-        persistExecutorContext(
-          'after_tool_call',
-          buildExecutorTurnPrompt(baseContext, executionHistory, toolCallLog.length, fileReadCache),
-        );
-        continue;
-      }
-
-      const nonRecoverableCondition = buildNonRecoverableToolFailureCondition(req, toolResult);
-      const report = buildHaltReport(
-        toolCallLog, 'STEP_VERIFICATION_FAIL', stepNum,
-        nonRecoverableCondition,
-      );
-      persistExecutorContext('terminal', turnPrompt, {
-        terminalStatus: 'EXECUTION_HALTED',
-        haltTag: 'STEP_VERIFICATION_FAIL',
-        condition: nonRecoverableCondition,
-      });
-      writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-      log(`  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] at step ${stepNum}`);
-      return {
-        toolCallLog,
-        terminalStatus: 'EXECUTION_HALTED',
-        haltTag: 'STEP_VERIFICATION_FAIL',
-        condition: nonRecoverableCondition,
-      };
+    const failureResult = await handleToolFailure(
+      toolResult,
+      req,
+      stepNum,
+      entry,
+      toolCallLog,
+      repairState,
+      repairAttemptTimeline,
+      currentRepairAttemptChangedFiles,
+      currentRepairAttemptFileHashes,
+      latestFailureCapsuleArtifact,
+      currentRepairAttemptInputCapsule,
+      pendingRecoverableCommandRetryState,
+      maxRecoverableCommandFailures,
+      recoverableCommandFailures,
+      evidence,
+      turnPrompt,
+      executionHistory,
+      baseContext,
+      fileReadCache,
+      reportWarnings,
+      repairProofNotes,
+      reliabilityRepairProofEnabled,
+      rawTask,
+      approvedPlan,
+      completeAfterDeterministicExternalRepair,
+      persistExecutorContext,
+      writeRepairAttemptTimeline,
+      rollbackTouchedFilesForFailure,
+      markInputCapsuleConsumed,
+    );
+    if (failureResult.kind === 'continue') {
+      executionHistory = failureResult.executionHistory;
+      recoverableCommandFailures = failureResult.recoverableCommandFailures;
+      currentRepairAttemptChangedFiles = failureResult.currentRepairAttemptChangedFiles;
+      currentRepairAttemptFileHashes = failureResult.currentRepairAttemptFileHashes;
+      currentRepairAttemptInputCapsule = failureResult.currentRepairAttemptInputCapsule;
+      latestFailureCapsuleArtifact = failureResult.latestFailureCapsuleArtifact;
+      await persistExecutorContext('after_tool_call', failureResult.nextTurnPrompt);
+      continue;
     }
-
-    if (!DRY_RUN && req.tool === 'file_write') {
-      const writeVerificationFailure = verifySuccessfulTextWriteTarget(
-        String(req.path ?? ''),
-        getExecutorProjectRoot(),
-        rawTask,
-      );
-      if (writeVerificationFailure) {
-        const repairWrite = getDeterministicSimpleRepairWrite(
-          approvedPlan,
-          rawTask,
-          String(req.path ?? ''),
-        );
-        if (repairWrite) {
-          const repairStepNum = toolCallLog.length + 1;
-          const warning =
-            `[EXECUTOR_DETERMINISTIC_SIMPLE_REPAIR] Recovered invalid bounded file_write output: ` +
-            `${repairWrite.reason}. Original failure: ${writeVerificationFailure}`;
-          reportWarnings.push(warning);
-          logDetail(warning);
-
-          const repairReq = {
-            tool: 'file_write',
-            path: repairWrite.target,
-            content: repairWrite.content,
-          } as const;
-          const repairResult = await executeExecutorTool(repairReq, evidence);
-
-          const repairEntry = buildExecutorToolCallEntry({
-            step: repairStepNum,
-            req: repairReq,
-            toolResult: repairResult,
-            target: canonicalizeExecutorTargetForLog(repairWrite.target, 'file_write'),
-          });
-          toolCallLog.push(repairEntry);
-
-          const repairVerificationFailure = repairResult.exit_code === 0
-            ? verifySuccessfulTextWriteTarget(repairWrite.target, getExecutorProjectRoot(), rawTask)
-            : `Deterministic repair file_write for "${repairWrite.target}" exited with code ${repairResult.exit_code}. ` +
-              `stderr: ${repairResult.stderr.slice(0, 200)}`;
-          if (repairVerificationFailure) {
-            const report = buildHaltReport(
-              toolCallLog,
-              'STEP_VERIFICATION_FAIL',
-              repairStepNum,
-              repairVerificationFailure,
-            );
-            persistExecutorContext('terminal', turnPrompt, {
-              terminalStatus: 'EXECUTION_HALTED',
-              haltTag: 'STEP_VERIFICATION_FAIL',
-              condition: repairVerificationFailure,
-            });
-            writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-            log(`  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] at step ${repairStepNum}`);
-            return {
-              toolCallLog,
-              terminalStatus: 'EXECUTION_HALTED',
-              haltTag: 'STEP_VERIFICATION_FAIL',
-              condition: repairVerificationFailure,
-            };
-          }
-
-          executionHistory +=
-            (executionHistory ? '\n\n' : '') +
-            [formatHistoryEntry(entry), formatHistoryEntry(repairEntry)].join('\n\n');
-          const nextTurnAfterRepair = buildExecutorTurnPrompt(
-            baseContext,
-            executionHistory,
-            toolCallLog.length,
-            fileReadCache,
-          );
-          persistExecutorContext('after_tool_call', nextTurnAfterRepair);
-
-          const deterministicCompletion = maybeCompleteBoundedWriteTask(nextTurnAfterRepair);
-          if (deterministicCompletion) {
-            return deterministicCompletion;
-          }
-          continue;
-        }
-
-        const report = buildHaltReport(
-          toolCallLog, 'STEP_VERIFICATION_FAIL', stepNum, writeVerificationFailure,
-        );
-        persistExecutorContext('terminal', turnPrompt, {
-          terminalStatus: 'EXECUTION_HALTED',
-          haltTag: 'STEP_VERIFICATION_FAIL',
-          condition: writeVerificationFailure,
-        });
-        writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-        log(`  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] at step ${stepNum}`);
-        return {
-          toolCallLog,
-          terminalStatus: 'EXECUTION_HALTED',
-          haltTag: 'STEP_VERIFICATION_FAIL',
-          condition: writeVerificationFailure,
-        };
-      }
+    if (failureResult.kind === 'return') {
+      return failureResult.result;
+    }
+    // kind === "ok" — continue normally
+    const writeResult = await verifyAndRepairFileWrite(
+      req, entry, stepNum, approvedPlan, rawTask, toolCallLog,
+      reportWarnings, turnPrompt, evidence, executionHistory, baseContext,
+      fileReadCache, persistExecutorContext, maybeCompleteBoundedWriteTask,
+    );
+    if (writeResult.kind === 'return') return writeResult.result;
+    if (writeResult.kind === 'continue') {
+      executionHistory = writeResult.executionHistory;
+      continue;
     }
 
     // Populate the FILE_READ_CACHE so subsequent turns have the full verbatim
     // content available for file_write without relying on the truncated history.
-    const fileReadCacheEntry = getSuccessfulFileReadCacheEntry(req, toolResult);
-    if (fileReadCacheEntry) {
-      fileReadCache.set(fileReadCacheEntry.key, fileReadCacheEntry.stdout);
+    if (req.tool === 'file_read' && toolResult.exit_code === 0 && toolResult.stdout) {
+      const canonicalTarget = canonicalizeExecutorTargetForLog(String(req.path ?? ''), req.tool);
+      fileReadCacheTotalBytes += Buffer.byteLength(toolResult.stdout, 'utf8');
+      fileReadCache.set(canonicalTarget, toolResult.stdout);
+      fileReadCacheUsedTurn.set(canonicalTarget, turn);
     }
 
     // Append result to history so the next turn has full context.
-    executionHistory +=
-      (executionHistory ? '\n\n' : '') + formatHistoryEntry(entry);
-    persistExecutorContext(
+    executionHistory += (executionHistory ? '\n\n' : '') + formatHistoryEntry(entry);
+
+    // Phase 5: dual-write structured turn record for future prompt building / compaction
+    turnHistory.append({
+      turn,
+      startedAt: new Date().toISOString(),
+      response: executorTurn,
+      toolResult: entry,
+      promptTokens: undefined, // token counts not available at this layer
+      completionTokens: undefined,
+    });
+
+    await persistExecutorContext(
       'after_tool_call',
-      buildExecutorTurnPrompt(baseContext, executionHistory, toolCallLog.length, fileReadCache),
+      buildExecutorTurnPromptLegacy(
+        baseContext,
+        executionHistory,
+        toolCallLog.length,
+        fileReadCache,
+      ),
     );
 
-    const nextTurnAfterTool = buildExecutorTurnPrompt(
+    const nextTurnAfterTool = buildExecutorTurnPromptLegacy(
       baseContext,
       executionHistory,
       toolCallLog.length,
       fileReadCache,
     );
-    const evidenceRequestCompletion = maybeCompleteEvidenceRequestPlan(nextTurnAfterTool);
+    const evidenceRequestCompletion = await maybeCompleteEvidenceRequestPlan(nextTurnAfterTool);
     if (evidenceRequestCompletion) {
       return evidenceRequestCompletion;
     }
 
     if (req.tool === 'file_write' && toolResult.exit_code === 0) {
-      const deterministicCompletion = maybeCompleteBoundedWriteTask(
-        nextTurnAfterTool,
-      );
+      const deterministicCompletion = await maybeCompleteBoundedWriteTask(nextTurnAfterTool);
       if (deterministicCompletion) {
         return deterministicCompletion;
       }
@@ -2114,9 +2852,14 @@ export async function runExecutorLoop(
       status: 'EXECUTION_COMPLETE',
     } as const;
     const report = buildTerminalReport(completion, toolCallLog, evidence);
-    persistExecutorContext(
+    await persistExecutorContext(
       'terminal',
-      buildExecutorTurnPrompt(baseContext, executionHistory, toolCallLog.length, fileReadCache),
+      buildExecutorTurnPromptLegacy(
+        baseContext,
+        executionHistory,
+        toolCallLog.length,
+        fileReadCache,
+      ),
       {
         terminalStatus: 'EXECUTION_COMPLETE',
         condition: deterministicRepair,
@@ -2131,18 +2874,19 @@ export async function runExecutorLoop(
     };
   }
 
-  const maxTurnsCondition = buildMaxTurnsExceededCondition(MAX_EXECUTOR_TURNS);
   const report = buildHaltReport(
-    toolCallLog, 'TOOL_CALL_ERROR', toolCallLog.length,
-    maxTurnsCondition,
+    toolCallLog,
+    'TOOL_CALL_ERROR',
+    toolCallLog.length,
+    `Executor exceeded the maximum of ${MAX_EXECUTOR_TURNS} turns without a terminal signal.`,
   );
-  persistExecutorContext(
+  await persistExecutorContext(
     'terminal',
-    buildExecutorTurnPrompt(baseContext, executionHistory, toolCallLog.length, fileReadCache),
+    buildExecutorTurnPromptLegacy(baseContext, executionHistory, toolCallLog.length, fileReadCache),
     {
       terminalStatus: 'EXECUTION_HALTED',
       haltTag: 'TOOL_CALL_ERROR',
-      condition: maxTurnsCondition,
+      condition: `Executor exceeded the maximum of ${MAX_EXECUTOR_TURNS} turns without a terminal signal.`,
     },
   );
   writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
@@ -2151,6 +2895,17 @@ export async function runExecutorLoop(
     toolCallLog,
     terminalStatus: 'EXECUTION_HALTED',
     haltTag: 'TOOL_CALL_ERROR',
-    condition: maxTurnsCondition,
+    condition: `Executor exceeded the maximum of ${MAX_EXECUTOR_TURNS} turns without a terminal signal.`,
   };
 }
+
+// Report builders, verification, and preflight fast-path moved to stages/verification.ts
+// ─── Main pipeline ────────────────────────────────────────────────────────────
+
+/**
+ * Runs the full Babel pipeline for a given task string.
+ *
+ * @param task    - Raw task description from the user.
+ * @param options - Optional overrides for project and pipeline mode.
+ * @returns       `PipelineResult` with the run directory and final state.
+ */

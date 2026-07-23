@@ -10,17 +10,13 @@ import {
   createGitPullRequest,
   type GitMutationReport,
 } from './gitMutations.js';
-import {
-  runReleaseReadinessBenchmark,
-  type ReleaseReadinessReport,
-} from './releaseReadinessBenchmark.js';
+import { runProductBenchmark, type ProductBenchmarkReport } from './productBenchmark.js';
 
 export type ScheduleJobType =
   | 'ci_review'
   | 'git_diff_summary'
   | 'git_commit_draft'
   | 'git_pr_draft'
-  | 'benchmark_readiness'
   | 'benchmark_product'
   | 'git_branch_create'
   | 'git_commit_create'
@@ -39,6 +35,16 @@ export interface ScheduleDefinition {
   pr_title: string | null;
   pr_body: string | null;
   enabled: boolean;
+  /** Cron expression (5-field: minute hour dom month dow). e.g. "0 9 * * 1-5" */
+  cron_expression?: string | null;
+  /** ISO timestamp of last cron trigger */
+  last_triggered_at?: string | null;
+  /** ISO timestamp of next scheduled trigger */
+  next_trigger_at?: string | null;
+  /** Freeform task text for daemon job creation */
+  schedule_task?: string | null;
+  /** Pipeline mode for daemon job (default 'deep') */
+  schedule_mode?: string | null;
 }
 
 export interface ScheduleRegistry {
@@ -56,7 +62,7 @@ export interface ScheduleRunRecord {
   status: 'ok' | 'fail';
   artifact_path: string;
   nested_artifact_path: string | null;
-  result: CiReviewReport | GitDraftReport | ReleaseReadinessReport | GitMutationReport | null;
+  result: CiReviewReport | GitDraftReport | ProductBenchmarkReport | GitMutationReport | null;
   error: string | null;
 }
 
@@ -85,7 +91,6 @@ const JOB_TYPES: ScheduleJobType[] = [
   'git_diff_summary',
   'git_commit_draft',
   'git_pr_draft',
-  'benchmark_readiness',
   'benchmark_product',
   'git_branch_create',
   'git_commit_create',
@@ -107,7 +112,10 @@ function defaultRunsRoot(): string {
 }
 
 function toArtifactTimestamp(date: Date): string {
-  return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  return date
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}Z$/, 'Z');
 }
 
 function readRegistry(path: string): ScheduleRegistry {
@@ -117,10 +125,12 @@ function readRegistry(path: string): ScheduleRegistry {
   const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<ScheduleRegistry>;
   const schedules = Array.isArray(parsed.schedules)
     ? parsed.schedules.filter((entry): entry is ScheduleDefinition => {
-      const candidate = entry as Partial<ScheduleDefinition>;
-      return typeof candidate.id === 'string' &&
-        JOB_TYPES.includes(candidate.job_type as ScheduleJobType);
-    })
+        const candidate = entry as Partial<ScheduleDefinition>;
+        return (
+          typeof candidate.id === 'string' &&
+          JOB_TYPES.includes(candidate.job_type as ScheduleJobType)
+        );
+      })
     : [];
   return { schema_version: 1, schedules };
 }
@@ -132,13 +142,17 @@ function writeRegistry(path: string, registry: ScheduleRegistry): void {
 
 function assertValidScheduleId(id: string): void {
   if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id)) {
-    throw new Error('Schedule id must be 1-80 characters and contain only letters, numbers, underscore, or hyphen.');
+    throw new Error(
+      'Schedule id must be 1-80 characters and contain only letters, numbers, underscore, or hyphen.',
+    );
   }
 }
 
 function assertJobType(jobType: string): asserts jobType is ScheduleJobType {
   if (!JOB_TYPES.includes(jobType as ScheduleJobType)) {
-    throw new Error(`Invalid schedule job type "${jobType}". Valid values: ${JOB_TYPES.join(', ')}`);
+    throw new Error(
+      `Invalid schedule job type "${jobType}". Valid values: ${JOB_TYPES.join(', ')}`,
+    );
   }
 }
 
@@ -161,7 +175,9 @@ export function listSchedules(options: ScheduleServiceOptions = {}): {
   };
 }
 
-export function createSchedule(options: ScheduleCreateOptions & ScheduleServiceOptions): ScheduleDefinition {
+export function createSchedule(
+  options: ScheduleCreateOptions & ScheduleServiceOptions,
+): ScheduleDefinition {
   assertValidScheduleId(options.id);
   assertJobType(options.jobType);
   const registryPath = resolveRegistryPath(options);
@@ -190,7 +206,29 @@ export function createSchedule(options: ScheduleCreateOptions & ScheduleServiceO
   return schedule;
 }
 
-export function deleteSchedule(id: string, options: ScheduleServiceOptions = {}): {
+export function updateSchedule(
+  id: string,
+  patch: Partial<Omit<ScheduleDefinition, 'id' | 'created_at'>>,
+  options: ScheduleServiceOptions = {},
+): ScheduleDefinition {
+  const registryPath = resolveRegistryPath(options);
+  const registry = readRegistry(registryPath);
+  const index = registry.schedules.findIndex((s) => s.id === id);
+  if (index < 0) throw new Error(`Schedule not found: ${id}`);
+  const updated: ScheduleDefinition = {
+    ...registry.schedules[index]!,
+    ...patch,
+    updated_at: new Date().toISOString(),
+  };
+  registry.schedules[index] = updated;
+  writeRegistry(registryPath, registry);
+  return updated;
+}
+
+export function deleteSchedule(
+  id: string,
+  options: ScheduleServiceOptions = {},
+): {
   deleted: boolean;
   registry_path: string;
 } {
@@ -212,9 +250,20 @@ function createIsolatedProjectCopy(projectRoot: string, runDir: string): string 
   const isolatedRoot = join(runDir, 'isolated-project-copy');
   const gitPath = join(projectRoot, '.git');
   if (!existsSync(gitPath) || !statSync(gitPath).isDirectory()) {
-    throw new Error('Mutating scheduled jobs require a standalone Git working tree with a .git directory for safe project-copy isolation.');
+    throw new Error(
+      'Mutating scheduled jobs require a standalone Git working tree with a .git directory for safe project-copy isolation.',
+    );
   }
-  const skipNames = new Set(['node_modules', 'dist', 'build', '.gradle', '.next', 'runs', 'runtime', 'babel_sandbox_runs']);
+  const skipNames = new Set([
+    'node_modules',
+    'dist',
+    'build',
+    '.gradle',
+    '.next',
+    'runs',
+    'runtime',
+    'babel_sandbox_runs',
+  ]);
   cpSync(projectRoot, isolatedRoot, {
     recursive: true,
     force: true,
@@ -226,9 +275,15 @@ function createIsolatedProjectCopy(projectRoot: string, runDir: string): string 
   return isolatedRoot;
 }
 
-function runMutatingScheduleJob(schedule: ScheduleDefinition, runDir: string, allowMutate: boolean): GitMutationReport {
+function runMutatingScheduleJob(
+  schedule: ScheduleDefinition,
+  runDir: string,
+  allowMutate: boolean,
+): GitMutationReport {
   if (!allowMutate) {
-    throw new Error(`Schedule job "${schedule.job_type}" is mutating and requires --allow-mutate. It will run inside an isolated project copy.`);
+    throw new Error(
+      `Schedule job "${schedule.job_type}" is mutating and requires --allow-mutate. It will run inside an isolated project copy.`,
+    );
   }
   const sourceProjectRoot = schedule.project_root ?? process.cwd();
   const isolatedProjectRoot = createIsolatedProjectCopy(sourceProjectRoot, runDir);
@@ -270,7 +325,7 @@ function runScheduleJob(
   schedule: ScheduleDefinition,
   runDir: string,
   allowMutate: boolean,
-): CiReviewReport | GitDraftReport | ReleaseReadinessReport | GitMutationReport {
+): CiReviewReport | GitDraftReport | ProductBenchmarkReport | GitMutationReport {
   if (MUTATING_JOB_TYPES.has(schedule.job_type)) {
     return runMutatingScheduleJob(schedule, runDir, allowMutate);
   }
@@ -283,9 +338,9 @@ function runScheduleJob(
       ...(schedule.base_ref ? { baseRef: schedule.base_ref } : {}),
     });
   }
-  if (schedule.job_type === 'benchmark_readiness' || schedule.job_type === 'benchmark_product') {
-    return runReleaseReadinessBenchmark({
-      outputDir: join(runDir, 'benchmark-readiness'),
+  if (schedule.job_type === 'benchmark_product') {
+    return runProductBenchmark({
+      outputDir: join(runDir, 'benchmark-product'),
     });
   }
   return runGitDraft(gitKindForJob(schedule.job_type), {
@@ -295,7 +350,10 @@ function runScheduleJob(
   });
 }
 
-export function runScheduleNow(id: string, options: ScheduleServiceOptions = {}): ScheduleRunRecord {
+export function runScheduleNow(
+  id: string,
+  options: ScheduleServiceOptions = {},
+): ScheduleRunRecord {
   const registryPath = resolveRegistryPath(options);
   const registry = readRegistry(registryPath);
   const schedule = registry.schedules.find((entry) => entry.id === id);
@@ -312,9 +370,10 @@ export function runScheduleNow(id: string, options: ScheduleServiceOptions = {})
   try {
     const result = runScheduleJob(schedule, runDir, options.allowMutate === true);
     const completedAt = new Date().toISOString();
-    const nested = typeof result === 'object' && result !== null && 'artifact_path' in result
-      ? String(result.artifact_path)
-      : null;
+    const nested =
+      typeof result === 'object' && result !== null && 'artifact_path' in result
+        ? String(result.artifact_path)
+        : null;
     const record: ScheduleRunRecord = {
       schema_version: 1,
       run_type: 'schedule_run_now',

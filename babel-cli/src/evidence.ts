@@ -17,10 +17,12 @@
  *     00_ctx_<stage>.md         ← Compiled context snapshots (debug)
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join }                      from 'node:path';
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { join } from 'node:path';
 
 import { redactEvidenceValue } from './utils/redaction.js';
+import { sanitizePathComponent } from './cli/constants.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -45,7 +47,7 @@ function formatTimestamp(date: Date): string {
  * Max 48 chars so the directory name stays readable in a terminal.
  */
 function taskToSlug(task: string): string {
-  return task
+  return sanitizePathComponent(task)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
@@ -71,9 +73,10 @@ export class EvidenceBundle {
    * @param baseDir - Parent directory for all runs (e.g., `<BABEL_ROOT>/runs`).
    */
   constructor(task: string, baseDir: string) {
-    const dirName  = `${formatTimestamp(new Date())}_${taskToSlug(task)}`;
-    this.runId     = dirName;
-    this.runDir    = join(baseDir, dirName);
+    const suffix = randomBytes(2).toString('hex');
+    const dirName = `${formatTimestamp(new Date())}_${suffix}_${taskToSlug(task)}`;
+    this.runId = dirName;
+    this.runDir = join(baseDir, dirName);
     mkdirSync(this.runDir, { recursive: true });
   }
 
@@ -84,20 +87,57 @@ export class EvidenceBundle {
   static fromExistingRun(runDir: string): EvidenceBundle {
     const bundle = Object.create(EvidenceBundle.prototype) as EvidenceBundle;
     (bundle as unknown as { runDir: string }).runDir = runDir;
-    (bundle as unknown as { runId: string }).runId = join(runDir, '..') === '.' ? runDir : runDir.split(/[\\/]/).pop() || runDir;
+    (bundle as unknown as { runId: string }).runId =
+      join(runDir, '..') === '.' ? runDir : runDir.split(/[\\/]/).pop() || runDir;
+    (bundle as unknown as { _waterfallLog: object[] })._waterfallLog = [];
+    return bundle;
+  }
+
+  /**
+   * Creates a lightweight EvidenceBundle for recording schema failures and
+   * other telemetry when no explicit bundle was provided. Writes to a
+   * deterministic per-session directory so repeated calls share the same
+   * ledger (no data loss between stages).
+   *
+   * Used by `runWithFallback` when `options.evidence` is undefined so schema
+   * failure telemetry is never silently dropped.
+   */
+  static inMemory(task: string): EvidenceBundle {
+    const sessionId = process.env['BABEL_SESSION_ID'] ?? `schema-fail-${Date.now()}`;
+    const baseDir = process.env['BABEL_RUNS_DIR'] ?? join(process.cwd(), 'runs');
+    const runDir = join(baseDir, 'schema-failures', sessionId);
+    mkdirSync(runDir, { recursive: true });
+    const bundle = Object.create(EvidenceBundle.prototype) as EvidenceBundle;
+    (bundle as unknown as { runDir: string }).runDir = runDir;
+    (bundle as unknown as { runId: string }).runId = sessionId;
     (bundle as unknown as { _waterfallLog: object[] })._waterfallLog = [];
     return bundle;
   }
 
   // ── Private write helper ──────────────────────────────────────────────────
 
+  /** Max bytes for debug/telemetry files before truncation (50 MB). */
+  private static readonly MAX_DEBUG_FILE_BYTES = 50 * 1024 * 1024;
+
   private write(filename: string, data: unknown): void {
     const redacted = redactEvidenceValue(data);
-    const content =
-      typeof redacted === 'string'
-        ? redacted
-        : JSON.stringify(redacted, null, 2);
+    const content = typeof redacted === 'string' ? redacted : JSON.stringify(redacted, null, 2);
     writeFileSync(join(this.runDir, filename), content, 'utf-8');
+  }
+
+  /**
+   * Atomic write via temp-file rename.
+   * Writes to `<filename>.tmp` first, then renames to `<filename>`.
+   * On POSIX the rename is atomic; on Windows it is crash-safer than a
+   * direct overwrite because a partial write never lands on the target path.
+   */
+  private writeAtomic(filename: string, data: unknown): void {
+    const redacted = redactEvidenceValue(data);
+    const content = typeof redacted === 'string' ? redacted : JSON.stringify(redacted, null, 2);
+    const target = join(this.runDir, filename);
+    const tmp = `${target}.tmp`;
+    writeFileSync(tmp, content, 'utf-8');
+    renameSync(tmp, target);
   }
 
   // ── Public artifact writers ───────────────────────────────────────────────
@@ -169,15 +209,33 @@ export class EvidenceBundle {
    * Used by `execute.ts` to persist raw CLI stdout/stderr and Zod errors
    * when JSON extraction or schema validation fails.
    *
+   * Content is capped at MAX_DEBUG_FILE_BYTES (50 MB) to prevent disk
+   * exhaustion from unbounded tool output (e.g. multi-GB test runs).
+   *
    * e.g., `debug_cli_raw_stdout.log`, `debug_zod_error.json`.
    */
   writeDebugFile(filename: string, content: string): void {
+    const byteLength = Buffer.byteLength(content, 'utf-8');
+    if (byteLength > EvidenceBundle.MAX_DEBUG_FILE_BYTES) {
+      const buf = Buffer.from(content, 'utf-8');
+      let truncateAt = EvidenceBundle.MAX_DEBUG_FILE_BYTES;
+      // Phase 5a: Prevent splitting multi-byte UTF-8 characters.
+      // Continuation bytes have the form 10xxxxxx (0x80-0xBF).
+      // Walk back until we land on a start byte or ASCII char.
+      while (truncateAt > 0 && (buf[truncateAt - 1]! & 0xc0) === 0x80) {
+        truncateAt--;
+      }
+      const truncated = buf.subarray(0, truncateAt).toString('utf-8');
+      content = `${truncated}\n\n[TRUNCATED] Debug file exceeded ${EvidenceBundle.MAX_DEBUG_FILE_BYTES / (1024 * 1024)} MB cap — ${byteLength - truncateAt} bytes dropped.`;
+    }
     this.write(filename, content);
   }
 
-  /** Canonical per-task cost ledger (`cost_ledger.json`). */
+  /** Canonical per-task cost ledger (`cost_ledger.json`).
+   *  Written via atomic temp-and-rename to prevent partial corruption on crash.
+   */
   writeCostLedger(data: unknown): void {
-    this.write('cost_ledger.json', data);
+    this.writeAtomic('cost_ledger.json', data);
   }
 
   /**

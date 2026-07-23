@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import type { ToolCallRequest } from '../localTools.js';
 import {
-  buildExecutorTurnPrompt,
+  buildExecutorTurnPromptLegacy,
   classifyRunnerExhaustionHaltTag,
   shouldForceRecoverableCommandRerun,
   summarizeFileReadForExecutor,
@@ -24,10 +24,10 @@ function pendingRetry(
 test('recoverable command rerun guard allows inspection after a patch', () => {
   const req: ToolCallRequest = { tool: 'file_read', path: 'compress.c' };
 
-  assert.deepEqual(
-    shouldForceRecoverableCommandRerun(pendingRetry(), req, null),
-    { force: false, reason: null },
-  );
+  assert.deepEqual(shouldForceRecoverableCommandRerun(pendingRetry(), req, null), {
+    force: false,
+    reason: null,
+  });
 });
 
 test('recoverable command rerun guard forces verifier before repeated patch writes', () => {
@@ -58,10 +58,7 @@ test('recoverable command rerun guard allows new patch target and exact retry', 
     tool: 'shell_exec',
     command: 'cat data.comp | ./decomp > output.txt && diff output.txt data.txt',
   };
-  assert.equal(
-    shouldForceRecoverableCommandRerun(pendingRetry(), retry, null).force,
-    false,
-  );
+  assert.equal(shouldForceRecoverableCommandRerun(pendingRetry(), retry, null).force, false);
 });
 
 test('runner exhaustion classifier separates provider failures from hallucinated output', () => {
@@ -108,7 +105,7 @@ test('small files stay verbatim while large JSONL cache entries are compressed',
   const jsonl = Array.from({ length: 90 }, (_, index) =>
     JSON.stringify({ request_id: `req-${index}`, prompt_len: index + 1, gen_len: 2 }),
   ).join('\n');
-  const prompt = buildExecutorTurnPrompt(
+  const prompt = buildExecutorTurnPromptLegacy(
     'base',
     '',
     0,

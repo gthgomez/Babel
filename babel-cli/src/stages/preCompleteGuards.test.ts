@@ -81,7 +81,8 @@ test('pre-complete guards block COMPLETE on exact instruction drift', () => {
       rawTask: 'Return the exact string verified live ok from the verified mode helper.',
       toolCallLog: [successfulWrite(1, 'src/verifiedMode.js')],
       projectRoot: root,
-      exactInvariantFailure: '[EXACT_INSTRUCTION_DRIFT] literal_string "verified live ok": literal invariant missing',
+      exactInvariantFailure:
+        '[EXACT_INSTRUCTION_DRIFT] literal_string "verified live ok": literal invariant missing',
     });
 
     assert.match(result.semanticFailure ?? '', /EXACT_INSTRUCTION_DRIFT/);

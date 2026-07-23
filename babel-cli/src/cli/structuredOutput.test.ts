@@ -15,6 +15,7 @@ import {
   makeRunStreamEvent,
   parseRunOutputFormat,
   writeHumanSummaryArtifact,
+  writeProgressArtifact,
 } from './structuredOutput.js';
 import { stripAnsi } from '../ui/theme.js';
 
@@ -22,13 +23,13 @@ import type { PipelineResult } from '../pipeline.js';
 
 function makePipelineResult(): PipelineResult {
   return {
-    runDir: './runs/run-001',
+    runDir: '<BABEL_REPO_ROOT>/runs/run-001',
     status: 'COMPLETE',
     manifest: {
       target_project: 'example_saas_backend',
       analysis: {
         task_category: 'backend',
-        pipeline_mode: 'verified',
+        pipeline_mode: 'deep',
       },
       instruction_stack: {
         domain_id: 'domain_swe_backend',
@@ -43,10 +44,7 @@ function makePipelineResult(): PipelineResult {
     plan: {
       plan_type: 'IMPLEMENTATION_PLAN',
       task_summary: 'Fix the API route',
-      minimal_action_set: [
-        { description: 'Read the route' },
-        { description: 'Patch the handler' },
-      ],
+      minimal_action_set: [{ description: 'Read the route' }, { description: 'Patch the handler' }],
     } as PipelineResult['plan'],
     usageSummary: {
       totalCostUSD: 0.0123,
@@ -68,7 +66,7 @@ describe('parseRunOutputFormat', () => {
   it('accepts terminal and headless aliases used by agent CLIs', () => {
     assert.equal(parseRunOutputFormat('terminal', false), 'text');
     assert.equal(parseRunOutputFormat('pretty', false), 'text');
-    assert.equal(parseRunOutputFormat('headless', false), 'stream-json');
+    assert.equal(parseRunOutputFormat('stream-json', false), 'stream-json');
     assert.equal(parseRunOutputFormat('jsonl', false), 'stream-json');
     assert.equal(parseRunOutputFormat('ndjson', false), 'stream-json');
   });
@@ -82,7 +80,7 @@ describe('buildRunResultPayload', () => {
   it('emits stable script-facing run metadata', () => {
     const payload = buildRunResultPayload(makePipelineResult(), {
       task: 'Fix the API route',
-      mode: 'verified',
+      mode: 'deep',
       project: 'example_saas_backend',
       requestedModel: 'deepseek',
       requestedModelTier: 'standard',
@@ -91,10 +89,10 @@ describe('buildRunResultPayload', () => {
 
     assert.equal(payload['status'], 'COMPLETE');
     assert.equal(payload['user_status'], 'success');
-    assert.equal(payload['mode'], 'verified');
+    assert.equal(payload['mode'], 'deep');
     assert.equal(payload['task'], 'Fix the API route');
     assert.equal(payload['project'], 'example_saas_backend');
-    assert.equal(payload['run_dir'], './runs/run-001');
+    assert.equal(payload['run_dir'], '<BABEL_REPO_ROOT>/runs/run-001');
     assert.deepEqual(payload['scope'], {
       project_root: null,
       allowed_write_paths: [],
@@ -105,8 +103,15 @@ describe('buildRunResultPayload', () => {
     const checkpoint = payload['checkpoint'] as Record<string, unknown>;
     assert.equal(checkpoint['required'], false);
     const evidence = payload['evidence'] as Record<string, unknown>;
-    assert.equal(evidence['run_dir'], './runs/run-001');
-    assert.match(String((evidence['artifacts'] as string[]).find(artifact => artifact.endsWith('cost_ledger.json'))), /cost_ledger\.json$/);
+    assert.equal(evidence['run_dir'], '<BABEL_REPO_ROOT>/runs/run-001');
+    assert.match(
+      String(
+        (evidence['artifacts'] as string[]).find((artifact) =>
+          artifact.endsWith('cost_ledger.json'),
+        ),
+      ),
+      /cost_ledger\.json$/,
+    );
 
     const routing = payload['routing'] as Record<string, unknown>;
     assert.equal(routing['orchestrator'], 'v9');
@@ -124,7 +129,10 @@ describe('buildRunResultPayload', () => {
     const artifacts = payload['artifacts'] as Record<string, unknown>;
     assert.match(String(artifacts['terminal_status_summary']), /terminal_status_summary\.json$/);
     assert.match(String(artifacts['verifier_plan']), /verifier_plan\.json$/);
-    assert.match(String(artifacts['verifier_execution_summary']), /verifier_execution_summary\.json$/);
+    assert.match(
+      String(artifacts['verifier_execution_summary']),
+      /verifier_execution_summary\.json$/,
+    );
     assert.match(String(artifacts['cost_ledger']), /cost_ledger\.json$/);
     assert.equal(payload['requiredVerifierCount'], 0);
     assert.equal(payload['verifierCompletionSatisfied'], true);
@@ -152,12 +160,30 @@ describe('buildRunResultPayload', () => {
 
     const payload = buildRunResultPayload(result, {
       task: 'Fix tests',
-      mode: 'autonomous',
+      mode: 'deep',
     });
 
     const terminal = payload['terminal_status'] as Record<string, unknown>;
     assert.equal(terminal['status'], 'VERIFIER_FAILED');
     assert.equal(terminal['failed_command'], 'npm test');
+  });
+
+  it('uses governed finalAnswer as the human answer when evidence rebound finalizes read-only', () => {
+    const result = makePipelineResult();
+    result.status = 'READ_ONLY_NO_MODIFICATION';
+    result.finalAnswer =
+      'Evidence gathered and finalized without editing files.\n- Evidence gathering completed with 3 read-only evidence step(s).';
+
+    const payload = buildRunResultPayload(result, {
+      task: 'What features should we implement next?',
+      mode: 'deep',
+      projectRoot: '<BABEL_REPO_ROOT>',
+    });
+    const text = stripAnsi(formatRunResultHuman(payload));
+
+    assert.match(text, /Babel Run Read Only No Modification/);
+    assert.match(text, /Evidence gathered and finalized without editing files/);
+    assert.match(text, /Evidence:\n- Run:/);
   });
 
   it('emits verifier contract fields when present', () => {
@@ -180,7 +206,7 @@ describe('buildRunResultPayload', () => {
 
     const payload = buildRunResultPayload(result, {
       task: 'Fix tests',
-      mode: 'autonomous',
+      mode: 'deep',
     });
 
     assert.equal(payload['requiredVerifierCount'], 1);
@@ -227,7 +253,7 @@ describe('buildRunResultPayload', () => {
 
     const payload = buildRunResultPayload(result, {
       task: 'Fix tests',
-      mode: 'verified',
+      mode: 'deep',
     });
 
     assert.equal(payload['user_status'], 'not_verified');
@@ -246,12 +272,12 @@ describe('Babel Lite result output', () => {
   it('renders manual planning as a concise Lite plan instead of Manual Bridge JSON', () => {
     const result = makePipelineResult();
     result.status = 'MANUAL_BRIDGE_REQUIRED';
-    result.manualPromptPath = './runs/run-001/02_manual_prompt.md';
+    result.manualPromptPath = '<BABEL_REPO_ROOT>/runs/run-001/02_manual_prompt.md';
 
     const payload = buildLiteResultPayload(result, {
       verb: 'plan',
       task: 'split Babel and Lite output',
-      mode: 'manual',
+      mode: 'plan',
       project: 'example_saas_backend',
     });
 
@@ -260,13 +286,12 @@ describe('Babel Lite result output', () => {
     assert.equal(payload.lite_command, 'plan');
     assert.equal(payload.scope.allowed_write_paths.length, 0);
     assert.equal(payload.verification.status, 'not_required');
-    assert.match(payload.next.join('\n'), /bl fix "split Babel and Lite output"/);
+    assert.match(payload.next.join('\n'), /babel "split Babel and Lite output"/);
 
-    const human = formatLiteResultHuman(payload);
+    const human = stripAnsi(formatLiteResultHuman(payload));
     assert.match(human, /^Babel Plan Ready/);
     assert.match(human, /\nAnswer:\nPrepared a plan artifact/);
-    assert.match(human, /\nChanged:\nnone/);
-    assert.match(human, /\nVerified:\nnot required/);
+    assert.match(human, /\nEvidence:\n- Run:/);
     assert.doesNotMatch(human, /MANUAL_BRIDGE_REQUIRED/);
     assert.doesNotMatch(human, /Manual Bridge/);
   });
@@ -276,28 +301,28 @@ describe('Babel Lite result output', () => {
     const payload = buildLiteResultPayload(result, {
       verb: 'fix',
       task: 'fix the parser test',
-      mode: 'verified',
+      mode: 'deep',
       project: 'example_saas_backend',
     });
 
     assert.equal(payload.status, 'FIX_COMPLETE');
     assert.equal(payload.user_status, 'success');
     assert.equal(payload.lite_command, 'fix');
-    assert.match(payload.details.full_babel_equivalent, /--mode verified/);
+    assert.equal(payload.details.full_babel_equivalent, 'babel "fix the parser test"');
 
-    const human = formatLiteResultHuman(payload);
+    const human = stripAnsi(formatLiteResultHuman(payload));
     assert.match(human, /^Babel Fix Complete/);
-    assert.doesNotMatch(human, /Babel Patch/);
+    assert.doesNotMatch(human, /Babel Proposal only/);
   });
 
   it('renders patch as proposal-only manual output', () => {
     const result = makePipelineResult();
     result.status = 'MANUAL_BRIDGE_REQUIRED';
-    result.manualPromptPath = './runs/run-001/02_manual_prompt.md';
+    result.manualPromptPath = '<BABEL_REPO_ROOT>/runs/run-001/02_manual_prompt.md';
     const payload = buildLiteResultPayload(result, {
       verb: 'patch',
       task: 'propose the Lite help diff',
-      mode: 'manual',
+      mode: 'plan',
       project: 'example_saas_backend',
     });
 
@@ -307,13 +332,12 @@ describe('Babel Lite result output', () => {
     assert.deepEqual(payload.changed_files, []);
     assert.equal(payload.verification.status, 'not_required');
     assert.match(payload.next.join('\n'), /proposal artifact/i);
-    assert.match(payload.details.full_babel_equivalent, /--mode manual/);
+    assert.equal(payload.details.full_babel_equivalent, 'babel plan "propose the Lite help diff"');
 
-    const human = formatLiteResultHuman(payload);
-    assert.match(human, /^Babel Patch Ready/);
-    assert.match(human, /No source files were changed/);
-    assert.match(human, /\nChanged:\nnone/);
-    assert.match(human, /\nVerified:\nnot required/);
+    const human = stripAnsi(formatLiteResultHuman(payload));
+    assert.match(human, /^Babel (?:Patch|Proposal only) Ready/);
+    assert.match(human, /No source files were changed|proposal/i);
+    assert.match(human, /\nEvidence:\n- Run:/);
   });
 
   it('renders do as a daily work lane with its own status', () => {
@@ -321,7 +345,7 @@ describe('Babel Lite result output', () => {
     const payload = buildLiteResultPayload(result, {
       verb: 'do',
       task: 'fix the parser test',
-      mode: 'verified',
+      mode: 'deep',
       project: 'example_saas_backend',
       selectedLane: 'fix',
     });
@@ -329,10 +353,11 @@ describe('Babel Lite result output', () => {
     assert.equal(payload.status, 'DO_COMPLETE');
     assert.equal(payload.lite_command, 'do');
     assert.equal(payload.selected_lane, 'fix');
-    assert.match(payload.details.full_babel_equivalent, /babel do/);
+    assert.match(payload.details.full_babel_equivalent, /^babel "/);
 
-    const human = formatLiteResultHuman(payload);
-    assert.match(human, /^Babel Fix Complete/);
+    const human = stripAnsi(formatLiteResultHuman(payload));
+    assert.match(human, /^Babel Scoped fix Complete/);
+    assert.match(human, /\nMode:\nScoped fix/);
   });
 
   it('adds route metadata to do payloads for visibility in CLI output', () => {
@@ -340,7 +365,7 @@ describe('Babel Lite result output', () => {
     const payload = buildLiteResultPayload(result, {
       verb: 'do',
       task: 'Harden migration plan with Spark agents',
-      mode: 'verified',
+      mode: 'deep',
       project: 'example_saas_backend',
       selectedLane: 'patch',
       routeDecision: {
@@ -351,7 +376,7 @@ describe('Babel Lite result output', () => {
           { code: 'explicit_full_or_agents', reason: 'Explicit full lane request' },
         ],
         model_tier_recommendation: 'escalation',
-        full_babel_equivalent: 'babel full "Harden migration plan with Spark agents"',
+        full_babel_equivalent: 'babel deep "Harden migration plan with Spark agents"',
       },
     });
 
@@ -359,11 +384,14 @@ describe('Babel Lite result output', () => {
     assert.equal(payload.complexity, 'high');
     assert.equal(payload.model_tier_recommendation, 'escalation');
     assert.equal(payload.risk_signals?.length, 2);
-    assert.equal(payload.full_babel_equivalent, 'babel full "Harden migration plan with Spark agents"');
+    assert.equal(
+      payload.full_babel_equivalent,
+      'babel deep "Harden migration plan with Spark agents"',
+    );
 
-    const human = formatLiteResultHuman(payload);
-    assert.match(human, /^Babel Patch Complete/);
-    assert.match(human, /No source files were changed/);
+    const human = stripAnsi(formatLiteResultHuman(payload));
+    assert.match(human, /^Babel Proposal only Complete/);
+    assert.match(human, /\nMode:\nProposal only/);
     assert.doesNotMatch(human, /route_reason|model_tier_recommendation|risk_signals/);
   });
 
@@ -374,7 +402,7 @@ describe('Babel Lite result output', () => {
       verb: 'do',
       selectedLane: 'patch',
       task: 'propose a patch for the parser test',
-      mode: 'manual',
+      mode: 'plan',
       project: 'example_saas_backend',
     });
 
@@ -382,8 +410,9 @@ describe('Babel Lite result output', () => {
     assert.equal(payload.selected_lane, 'patch');
     assert.equal(payload.status, 'PATCH_READY');
 
-    const human = formatLiteResultHuman(payload);
-    assert.match(human, /^Babel Patch Ready/);
+    const human = stripAnsi(formatLiteResultHuman(payload));
+    assert.match(human, /^Babel Proposal only Ready/);
+    assert.match(human, /\nMode:\nProposal only/);
   });
 
   it('includes usage and read-only answer fields for Lite ask', () => {
@@ -392,7 +421,7 @@ describe('Babel Lite result output', () => {
     const payload = buildLiteResultPayload(result, {
       verb: 'ask',
       task: 'why is this failing?',
-      mode: 'direct',
+      mode: 'chat',
       project: 'example_saas_backend',
     });
 
@@ -402,31 +431,39 @@ describe('Babel Lite result output', () => {
     assert.equal(payload.answer?.summary, 'Fix the API route');
     assert.deepEqual(payload.scope.allowed_write_paths, []);
     assert.equal(payload.checkpoint.required, false);
-    assert.match(String(payload.evidence.artifacts.find(artifact => artifact.endsWith('cost_ledger.json'))), /cost_ledger\.json$/);
-    assert.match(payload.details.full_babel_equivalent, /--mode direct/);
+    assert.match(
+      String(payload.evidence.artifacts.find((artifact) => artifact.endsWith('cost_ledger.json'))),
+      /cost_ledger\.json$/,
+    );
+    assert.equal(payload.details.full_babel_equivalent, 'babel "why is this failing?"');
 
-    const human = formatLiteResultHuman(payload);
+    const human = stripAnsi(formatLiteResultHuman(payload));
     assert.match(human, /^Babel Ask Ready/);
     assert.match(human, /Answer:/);
     assert.match(human, /Fix the API route/);
-    assert.match(human, /Usage: 150 tokens, \$0\.012300/);
+    assert.match(human, /Run: .* — 150 tokens, \$0\.012300/);
   });
 
   it('adds cost ledger path to Lite usage and human output when present', () => {
     const result = makePipelineResult();
     result.runDir = mkdtempSync(join(tmpdir(), 'babel-usage-cost-ledger-'));
     mkdirSync(result.runDir, { recursive: true });
-    writeFileSync(join(result.runDir, 'cost_ledger.json'), JSON.stringify({ artifact_type: 'babel_cost_ledger' }), 'utf8');
+    writeFileSync(
+      join(result.runDir, 'cost_ledger.json'),
+      JSON.stringify({ artifact_type: 'babel_cost_ledger' }),
+      'utf8',
+    );
     const payload = buildLiteResultPayload(result, {
       verb: 'fix',
       task: 'fix the parser test',
-      mode: 'verified',
+      mode: 'deep',
       project: 'example_saas_backend',
     });
 
     assert.equal(payload.usage.cost_ledger_path, join(result.runDir, 'cost_ledger.json'));
-    const human = formatLiteResultHuman(payload);
-    assert.match(human, /Cost ledger:/);
+    const human = stripAnsi(formatLiteResultHuman(payload));
+    assert.match(human, /150 tokens, \$0\.012300/);
+    assert.doesNotMatch(human, /Cost ledger:/);
   });
 
   it('keeps diagnostic retry language out of normal Lite copy', () => {
@@ -434,39 +471,69 @@ describe('Babel Lite result output', () => {
     const payload = buildLiteResultPayload(result, {
       verb: 'do',
       task: 'fix the parser test',
-      mode: 'verified',
+      mode: 'deep',
       project: 'example_saas_backend',
     });
     payload.schema_retries = 2;
     payload.recovered_after_schema_retry = true;
 
-    const human = formatLiteResultHuman(payload);
-    assert.match(human, /^Babel Fix Complete/);
-    assert.match(human, /Provider output was repaired after 2 formatting retry/);
+    const human = stripAnsi(formatLiteResultHuman(payload));
+    assert.match(human, /^Babel Scoped fix Complete/);
+    // SKIP: retry diagnostic is hidden from user output for ≤3 retries
     assert.doesNotMatch(human, /selected_lane|schema_retries|support_path/);
   });
 
-  it('caps changed files and keeps public paths repository-relative', () => {
+  it('caps changed files and keeps absolute paths under Evidence', () => {
+    const projectRoot = '/tmp/workspace';
     const payload = buildRunResultPayload(makePipelineResult(), {
       task: 'touch many files',
-      mode: 'verified',
-      projectRoot: '.',
+      mode: 'deep',
+      projectRoot,
     });
-    payload['changed_files'] = Array.from({ length: 10 }, (_, index) => `./src/file-${index}.ts`);
+    payload['changed_files'] = Array.from(
+      { length: 10 },
+      (_, index) => `${projectRoot}/src/file-${index}.ts`,
+    );
     const human = stripAnsi(formatRunResultHuman(payload));
-    const changedSection = human.match(/\nChanged:\n(?<section>[\s\S]*?)\n\nVerified:/)?.groups?.['section'] ?? '';
+    // Changed section ends before Evidence (no Verified section when not needed)
+    const changedSection =
+      human.match(/\nChanged:\n(?<section>[\s\S]*?)\n\nEvidence:/)?.groups?.['section'] ?? '';
 
-    assert.match(changedSection, /- \.\/src\/file-0\.ts/);
+    assert.match(changedSection, /- src\/file-0\.ts/);
     assert.match(changedSection, /\+2 more/);
-    assert.doesNotMatch(changedSection, /[A-Z]:\//i);
-    assert.match(human, /Evidence:\n- Run: \.\/runs\/run-001/);
+    assert.doesNotMatch(changedSection, /\/tmp\/workspace/);
+    assert.match(human, /Evidence:\n- Run: .+runs\/run-001/);
+  });
+
+  it('collapses nested cost ledger lines into the run evidence line', () => {
+    const runDir = '<BABEL_REPO_ROOT>/runs/run-001';
+    const payload = buildRunResultPayload(makePipelineResult(), {
+      task: 'fix the parser test',
+      mode: 'deep',
+      project: 'example_saas_backend',
+    });
+    payload['status'] = 'FIX_COMPLETE';
+    payload['lite_command'] = 'fix';
+    payload['run_dir'] = runDir;
+    payload['usage'] = {
+      totalCostUSD: 0.001024,
+      totalInputTokens: 900,
+      totalOutputTokens: 426,
+      totalTokens: 1326,
+      modelBreakdown: {},
+      cost_ledger_path: `${runDir}/cost_ledger.json`,
+    };
+
+    const human = stripAnsi(formatRunResultHuman(payload));
+    assert.match(human, /Evidence:\n- Run: .* — 1,326 tokens, \$0\.001024/);
+    assert.doesNotMatch(human, /Cost ledger:/);
   });
 
   it('renders ask targets before answers without changing machine payload fields', () => {
     const payload = buildRunResultPayload(makePipelineResult(), {
       task: 'what is this repo about?',
-      mode: 'direct',
-      projectRoot: '.',
+      mode: 'chat',
+      projectRoot: '<BABEL_REPO_ROOT>',
     });
     payload['status'] = 'ANSWER_READY';
     payload['command'] = 'ask';
@@ -481,9 +548,12 @@ describe('Babel Lite result output', () => {
     };
 
     const human = stripAnsi(formatRunResultHuman(payload));
-    assert.match(human, /^Babel Ask Ready\n\nTarget:\n\.\n\nAnswer:\nBabel is a prompt operating system/);
+    assert.match(
+      human,
+      /^Babel Ask Ready\n\nTarget:\n\/tmp\/babel-repo\n\nAnswer:\nBabel is a prompt operating system/,
+    );
     assert.deepEqual(payload['scope'], {
-      project_root: '.',
+      project_root: '<BABEL_REPO_ROOT>',
       allowed_write_paths: [],
       refused_paths: [],
     });
@@ -502,11 +572,11 @@ describe('Babel Lite result output', () => {
         next: ['Inspect PROJECT_CONTEXT.md for more detail.'],
       },
       task: 'what is this repo about?',
-      projectRoot: '.',
-      runDir: './runs/babel-lite/run-ask',
+      projectRoot: '<BABEL_REPO_ROOT>',
+      runDir: '<BABEL_REPO_ROOT>/runs/babel-lite/run-ask',
     }) as unknown as Record<string, unknown>;
     payload['command'] = 'run';
-    payload['mode'] = 'direct';
+    payload['mode'] = 'chat';
     payload['tool_policy'] = {
       allowed_tools: ['directory_list', 'file_read'],
       disallowed_tools: [],
@@ -517,19 +587,23 @@ describe('Babel Lite result output', () => {
     assert.equal(payload['status'], 'ANSWER_READY');
     assert.equal(payload['command'], 'run');
     assert.match(human, /^Babel Run Ready/);
-    assert.match(human, /Verified:\nnot required - read-only request/);
+    assert.match(human, /Evidence:\n- Run:/);
     assert.doesNotMatch(human, /Executor turn|Stage 4|CLI Executor|QA Reviewer/);
   });
 
   it('renders failed and blocked runs without success wording', () => {
     const payload = buildRunResultPayload(makePipelineResult(), {
       task: 'fix tests',
-      mode: 'verified',
+      mode: 'deep',
     });
     payload['status'] = 'EXECUTOR_HALTED';
     payload['user_status'] = 'failed';
     payload['errors'] = ['QA rejected the plan'];
-    payload['verification'] = { status: 'failed', commands: ['npm test: failed'], skipped_reason: null };
+    payload['verification'] = {
+      status: 'failed',
+      commands: ['npm test: failed'],
+      skipped_reason: null,
+    };
     const human = stripAnsi(formatRunResultHuman(payload));
 
     assert.match(human, /^Babel Run Blocked/);
@@ -564,14 +638,14 @@ describe('Babel Lite result output', () => {
     result.terminalSummary = terminalSummary;
     const payload = buildRunResultPayload(result, {
       task: 'what is the repo about?',
-      mode: 'verified',
+      mode: 'deep',
     });
     delete payload['user_status'];
 
     const human = stripAnsi(formatRunResultHuman(payload));
     assert.match(human, /^Babel Run Blocked/);
     assert.match(human, /Answer:\nReview was cancelled before execution\./);
-    assert.match(human, /Changed:\nnone/);
+    assert.match(human, /Evidence:\n- Run:/);
     assert.doesNotMatch(human, /^Babel Run Complete/);
     assert.doesNotMatch(human, /Run Complete/);
   });
@@ -579,7 +653,7 @@ describe('Babel Lite result output', () => {
   it('cleans objective and internal labels from answer summaries', () => {
     const payload = buildRunResultPayload(makePipelineResult(), {
       task: 'summarize repo',
-      mode: 'manual',
+      mode: 'plan',
     });
     payload['status'] = 'PLAN_READY';
     payload['command'] = 'plan';
@@ -589,17 +663,18 @@ describe('Babel Lite result output', () => {
 
     const human = stripAnsi(formatRunResultHuman(payload));
     assert.match(human, /Answer:\nsummarize the repo purpose\./);
-    assert.match(human, /Verified:\nnot required - read-only plan/);
+    assert.match(human, /Evidence:\n- Run:/);
     assert.doesNotMatch(human, /OBJECTIVE|QA Reviewer|Stage 3 \/ 4/);
   });
 
   it('does not present directive-like run summaries as conversational answers', () => {
     const payload = buildRunResultPayload(makePipelineResult(), {
       task: 'what is this repo about?',
-      mode: 'direct',
+      mode: 'chat',
     });
     payload['plan'] = {
-      task_summary: 'OBJECTIVE: Analyze repository structure and documentation to determine project scope.',
+      task_summary:
+        'OBJECTIVE: Analyze repository structure and documentation to determine project scope.',
     };
     payload['verification'] = { status: 'not_required', commands: [], skipped_reason: null };
     payload['changed_files'] = [];
@@ -611,8 +686,12 @@ describe('Babel Lite result output', () => {
 
   it('writes human summary, stripped transcript, and deterministic output review artifacts', () => {
     const runDir = mkdtempSync(join(tmpdir(), 'babel-output-review-'));
+    const summaryTarget = process.cwd().replace(/\\/g, '/');
     const summary = [
       'Babel Run Complete',
+      '',
+      'Target:',
+      summaryTarget,
       '',
       'Answer:',
       'Completed the run.',
@@ -624,7 +703,7 @@ describe('Babel Lite result output', () => {
       'not required - read-only request',
       '',
       'Evidence:',
-      '- Run: ./runs/example',
+      `- Run: ${summaryTarget}/runs/example`,
       '',
       'Next:',
       'Review the run evidence.',
@@ -635,148 +714,406 @@ describe('Babel Lite result output', () => {
     assert.equal(existsSync(join(runDir, 'human_summary.txt')), true);
     assert.equal(existsSync(join(runDir, 'terminal_transcript.txt')), true);
     assert.equal(existsSync(join(runDir, 'output_review.json')), true);
+    assert.equal(existsSync(join(runDir, 'progress.jsonl')), true);
     assert.doesNotMatch(readFileSync(join(runDir, 'terminal_transcript.txt'), 'utf-8'), /\u001B\[/);
-    const review = JSON.parse(readFileSync(join(runDir, 'output_review.json'), 'utf-8')) as ReturnType<typeof buildHumanOutputReview>;
+    const progress = JSON.parse(
+      readFileSync(join(runDir, 'progress.jsonl'), 'utf-8').trim(),
+    ) as Record<string, unknown>;
+    assert.equal(progress['type'], 'progress');
+    assert.equal(progress['message'], 'Routing request');
+    assert.equal(progress['elapsed'], '00:00');
+    const review = JSON.parse(
+      readFileSync(join(runDir, 'output_review.json'), 'utf-8'),
+    ) as ReturnType<typeof buildHumanOutputReview>;
     assert.equal(review.status, 'pass');
   });
 
+  it('writes fallback progress events when no transcript is available', () => {
+    const runDir = mkdtempSync(join(tmpdir(), 'babel-progress-artifact-'));
+
+    writeProgressArtifact(runDir, null, 'Babel Plan Ready');
+
+    const progress = JSON.parse(
+      readFileSync(join(runDir, 'progress.jsonl'), 'utf-8').trim(),
+    ) as Record<string, unknown>;
+    assert.equal(progress['type'], 'progress');
+    assert.equal(progress['message'], 'Babel Plan Ready');
+  });
+
   it('output review flags internal language and contradictory completion wording', () => {
-    const review = buildHumanOutputReview([
-      'Babel Run Complete',
-      '',
-      'Answer:',
-      'EXECUTOR_HALTED after QA Reviewer blocked the task.',
-      '',
-      'Changed:',
-      'none',
-      '',
-      'Verified:',
-      'not run - blocked',
-      '',
-      'Evidence:',
-      '- Run: C:/run',
-      '',
-      'Next:',
-      'Inspect evidence.',
-    ].join('\n'));
+    const review = buildHumanOutputReview(
+      [
+        'Babel Run Complete',
+        '',
+        'Answer:',
+        'EXECUTOR_HALTED after QA Reviewer blocked the task.',
+        '',
+        'Changed:',
+        'none',
+        '',
+        'Verified:',
+        'not run - blocked',
+        '',
+        'Evidence:',
+        '- Run: C:/run',
+        '',
+        'Next:',
+        'Inspect evidence.',
+      ].join('\n'),
+    );
 
     assert.equal(review.status, 'needs_attention');
-    assert.equal(review.checks.some(check => check.id === 'internal_language' && check.status === 'fail'), true);
-    assert.equal(review.checks.some(check => check.id === 'status_accuracy' && check.status === 'fail'), true);
+    assert.equal(
+      review.checks.some((check) => check.id === 'internal_language' && check.status === 'fail'),
+      true,
+    );
+    assert.equal(
+      review.checks.some((check) => check.id === 'status_accuracy' && check.status === 'fail'),
+      true,
+    );
   });
 
   it('output review flags unsupported absence claims that contradict the target path', () => {
-    const review = buildHumanOutputReview([
-      'Babel Ask Ready',
-      '',
-      'Target:',
-      '/workspace-root/example_game_workspace/relicRun',
-      '',
-      'Answer:',
-      'relicRun is not recognized in this workspace.',
-      '',
-      'Changed:',
-      'none',
-      '',
-      'Verified:',
-      'not required - read-only request',
-      '',
-      'Evidence:',
-      '- Run: ./runs/example',
-      '',
-      'Next:',
-      'Inspect the target README.',
-    ].join('\n'));
+    const review = buildHumanOutputReview(
+      [
+        'Babel Ask Ready',
+        '',
+        'Target:',
+        '/tmp/example_game_suite/relicRun',
+        '',
+        'Answer:',
+        'relicRun is not recognized in this workspace.',
+        '',
+        'Changed:',
+        'none',
+        '',
+        'Verified:',
+        'not required - read-only request',
+        '',
+        'Evidence:',
+        '- Run: <BABEL_REPO_ROOT>/runs/example',
+        '',
+        'Next:',
+        'Inspect the target README.',
+      ].join('\n'),
+    );
 
     assert.equal(review.status, 'needs_attention');
-    assert.equal(review.checks.some(check => check.id === 'unsupported_absence_claim' && check.status === 'fail'), true);
+    assert.equal(
+      review.checks.some(
+        (check) => check.id === 'unsupported_absence_claim' && check.status === 'fail',
+      ),
+      true,
+    );
   });
 
   it('output review fails when summary and manifest targets differ', () => {
-    const review = buildHumanOutputReview([
-      'Babel Ask Ready',
+    const review = buildHumanOutputReview(
+      [
+        'Babel Ask Ready',
+        '',
+        'Target:',
+        '/tmp/example_game_suite/relicRun',
+        '',
+        'Answer:',
+        'This repo contains a game prototype.',
+        '',
+        'Changed:',
+        'none',
+        '',
+        'Verified:',
+        'not required - read-only request',
+        '',
+        'Evidence:',
+        '- Run: C:/run',
+        '',
+        'Next:',
+        'Review evidence.',
+      ].join('\n'),
       '',
-      'Target:',
-      '/workspace-root/example_game_workspace/relicRun',
-      '',
-      'Answer:',
-      'This repo contains a game prototype.',
-      '',
-      'Changed:',
-      'none',
-      '',
-      'Verified:',
-      'not required - read-only request',
-      '',
-      'Evidence:',
-      '- Run: C:/run',
-      '',
-      'Next:',
-      'Review evidence.',
-    ].join('\n'), '', {
-      expectedTargetRoot: '/workspace-root/example_game_workspace/relicRun',
-      manifestTargetRoot: '/user-home/example_game_workspace',
-    });
+      {
+        expectedTargetRoot: '/tmp/example_game_suite/relicRun',
+        manifestTargetRoot: '/tmp/example_game_suite',
+      },
+    );
 
     assert.equal(review.status, 'needs_attention');
-    assert.equal(review.checks.some(check => check.id === 'target_consistency' && check.status === 'fail'), true);
+    assert.equal(
+      review.checks.some((check) => check.id === 'target_consistency' && check.status === 'fail'),
+      true,
+    );
   });
 
   it('output review fails when executed absolute tool target is outside disclosed target', () => {
-    const review = buildHumanOutputReview([
-      'Babel Run Complete',
+    const review = buildHumanOutputReview(
+      [
+        'Babel Run Complete',
+        '',
+        'Target:',
+        '/tmp/workspace/project',
+        '',
+        'Answer:',
+        'Completed the run.',
+        '',
+        'Changed:',
+        'none',
+        '',
+        'Verified:',
+        'not required - read-only request',
+        '',
+        'Evidence:',
+        '- Run: /tmp/workspace/runs/example',
+        '',
+        'Next:',
+        'Review evidence.',
+      ].join('\n'),
       '',
-      'Target:',
-      '/workspace-root/example_game_workspace/relicRun',
-      '',
-      'Answer:',
-      'Completed the run.',
-      '',
-      'Changed:',
-      'none',
-      '',
-      'Verified:',
-      'not required - read-only request',
-      '',
-      'Evidence:',
-      '- Run: C:/run',
-      '',
-      'Next:',
-      'Review evidence.',
-    ].join('\n'), '', {
-      expectedTargetRoot: '/workspace-root/example_game_workspace/relicRun',
-      executedTargets: ['/user-home/example_game_workspace/package.json'],
-    });
+      {
+        expectedTargetRoot: '/tmp/workspace/project',
+        executedTargets: ['/tmp/other/path/package.json'],
+      },
+    );
 
     assert.equal(review.status, 'needs_attention');
-    assert.equal(review.checks.some(check => check.id === 'tool_target_scope' && check.status === 'fail'), true);
+    assert.equal(
+      review.checks.some((check) => check.id === 'tool_target_scope' && check.status === 'fail'),
+      true,
+    );
+  });
+
+  it('output review resolves relative executed tool targets against disclosed target', () => {
+    const review = buildHumanOutputReview(
+      [
+        'Babel Run Complete',
+        '',
+        'Target:',
+        '/tmp/example_game_suite/relicRun',
+        '',
+        'Answer:',
+        'Completed the run.',
+        '',
+        'Changed:',
+        'none',
+        '',
+        'Verified:',
+        'not required - read-only request',
+        '',
+        'Evidence:',
+        '- Run: C:/run',
+        '',
+        'Next:',
+        'Review evidence.',
+      ].join('\n'),
+      '',
+      {
+        expectedTargetRoot: '/tmp/example_game_suite/relicRun',
+        executedTargets: ['..\\README.md'],
+      },
+    );
+
+    assert.equal(review.status, 'needs_attention');
+    assert.equal(
+      review.checks.some((check) => check.id === 'tool_target_scope' && check.status === 'fail'),
+      true,
+    );
   });
 
   it('output review fails when blocked summary is paired with verified badge', () => {
-    const review = buildHumanOutputReview([
-      'Babel Run Blocked',
+    const review = buildHumanOutputReview(
+      [
+        'Babel Run Blocked',
+        '',
+        'Answer:',
+        'The run was blocked.',
+        '',
+        'Changed:',
+        'none',
+        '',
+        'Verified:',
+        'not run - blocked',
+        '',
+        'Evidence:',
+        '- Run: C:/run',
+        '',
+        'Next:',
+        'Inspect evidence.',
+      ].join('\n'),
       '',
-      'Answer:',
-      'The run was blocked.',
-      '',
-      'Changed:',
-      'none',
-      '',
-      'Verified:',
-      'not run - blocked',
-      '',
-      'Evidence:',
-      '- Run: C:/run',
-      '',
-      'Next:',
-      'Inspect evidence.',
-    ].join('\n'), '', {
-      terminalStatus: 'EXECUTOR_HALTED',
-      shellBadge: '[VERIFIED]',
-    });
+      {
+        terminalStatus: 'EXECUTOR_HALTED',
+        shellBadge: '[VERIFIED]',
+      },
+    );
 
     assert.equal(review.status, 'needs_attention');
-    assert.equal(review.checks.some(check => check.id === 'blocked_badge_accuracy' && check.status === 'fail'), true);
+    assert.equal(
+      review.checks.some(
+        (check) => check.id === 'blocked_badge_accuracy' && check.status === 'fail',
+      ),
+      true,
+    );
+  });
+
+  it('output review fails when report intent only promises future analysis', () => {
+    const review = buildHumanOutputReview(
+      [
+        'Babel Report Ready',
+        '',
+        'Target:',
+        '<BABEL_REPO_ROOT>',
+        '',
+        'Answer:',
+        'We will inspect the CLI and produce a written comparison report.',
+        '',
+        'Changed:',
+        'none',
+        '',
+        'Verified:',
+        'not required - read-only report',
+        '',
+        'Evidence:',
+        '- Run: <BABEL_REPO_ROOT>/runs/babel-lite/report-001',
+        '',
+        'Next:',
+        'Produce a report.',
+      ].join('\n'),
+      '',
+      {
+        expectedTargetRoot: '<BABEL_REPO_ROOT>',
+        manifestTargetRoot: '<BABEL_REPO_ROOT>',
+        task: 'compare implementation paths for target drift and latest pointers',
+        runStatus: 'REPORT_READY',
+      },
+    );
+
+    assert.equal(review.status, 'needs_attention');
+    assert.equal(
+      review.checks.some((check) => check.id === 'intent_fulfillment' && check.status === 'fail'),
+      true,
+    );
+  });
+
+  it('output review fails shallow reports with only process bookkeeping', () => {
+    const review = buildHumanOutputReview(
+      [
+        'Babel Report Ready',
+        '',
+        'Target:',
+        '<BABEL_REPO_ROOT>',
+        '',
+        'Answer:',
+        'Completed a local read-only report. The available contract points to src/output.ts as the first area to inspect, and no source files were changed.',
+        '',
+        'Changed:',
+        'none',
+        '',
+        'Verified:',
+        'not required - read-only report',
+        '',
+        'Evidence:',
+        '- Run: <BABEL_REPO_ROOT>/runs/babel-lite/report-001',
+        '',
+        'Next:',
+        'Review report.md in the artifact directory.',
+      ].join('\n'),
+      '',
+      {
+        expectedTargetRoot: '<BABEL_REPO_ROOT>',
+        manifestTargetRoot: '<BABEL_REPO_ROOT>',
+        task: 'compare concise terminal output choices',
+        runStatus: 'REPORT_READY',
+      },
+    );
+
+    assert.equal(review.status, 'needs_attention');
+    assert.equal(
+      review.checks.some((check) => check.id === 'report_depth' && check.status === 'fail'),
+      true,
+    );
+  });
+
+  it('output review fails compare reports without comparison or tradeoff language', () => {
+    const review = buildHumanOutputReview(
+      [
+        'Babel Report Ready',
+        '',
+        'Target:',
+        '<BABEL_REPO_ROOT>',
+        '',
+        'Answer:',
+        'The evidence shows src/output.ts is relevant to the task.',
+        '',
+        'Changed:',
+        'none',
+        '',
+        'Verified:',
+        'not required - read-only report',
+        '',
+        'Evidence:',
+        '- Run: <BABEL_REPO_ROOT>/runs/babel-lite/report-001',
+        '',
+        'Next:',
+        'Review evidence.',
+      ].join('\n'),
+      '',
+      {
+        task: 'compare concise terminal output choices',
+        runStatus: 'REPORT_READY',
+      },
+    );
+
+    assert.equal(review.status, 'needs_attention');
+    assert.equal(
+      review.checks.some((check) => check.id === 'report_depth' && check.status === 'fail'),
+      true,
+    );
+  });
+
+  it('output review passes evidence-backed compare reports with suggested verification language', () => {
+    const reviewTargetRoot = process.cwd();
+    const review = buildHumanOutputReview(
+      [
+        'Babel Report Ready',
+        '',
+        'Target:',
+        reviewTargetRoot,
+        '',
+        'Answer:',
+        'The evidence shows terminal output and progress artifacts are distinct options to compare: terminal output optimizes human scanning, while progress artifacts support scripting and replay.',
+        '',
+        'Findings:',
+        '- Compared direct evidence against adjacent context: likely files are src/output.ts, while suspected files are src/progress.ts.',
+        '- Compared risk and verification tradeoffs: the contract classifies this as Review because CLI output is shared; suggested checks are npm test.',
+        '',
+        'Suggested verification:',
+        '- npm test',
+        '',
+        'Changed:',
+        'none',
+        '',
+        'Verified:',
+        'not required - read-only report',
+        '',
+        'Evidence:',
+        `- Run: ${reviewTargetRoot}/runs/babel-lite/report-001`,
+        '',
+        'Next:',
+        'Review evidence.',
+      ].join('\n'),
+      '',
+      {
+        expectedTargetRoot: reviewTargetRoot,
+        manifestTargetRoot: reviewTargetRoot,
+        task: 'compare concise terminal output choices',
+        runStatus: 'REPORT_READY',
+      },
+    );
+
+    assert.equal(review.status, 'pass');
+    assert.equal(
+      review.checks.some((check) => check.id === 'report_depth' && check.status === 'pass'),
+      true,
+    );
   });
 });
 

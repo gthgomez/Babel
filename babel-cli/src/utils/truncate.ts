@@ -36,12 +36,8 @@ export const FILE_READ_MAX_LENGTH = 32_000;
 export function truncateLogs(text: string, maxLength = DEFAULT_MAX_LENGTH): string {
   if (text.length <= maxLength) return text;
 
-  const half    = Math.floor(maxLength / 2);
-  const elided  = text.length - maxLength;
+  const half = Math.floor(maxLength / 2);
+  const elided = text.length - maxLength;
 
-  return (
-    text.slice(0, half) +
-    `\n... [${elided} chars truncated] ...\n` +
-    text.slice(-half)
-  );
+  return text.slice(0, half) + `\n... [${elided} chars truncated] ...\n` + text.slice(-half);
 }

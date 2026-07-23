@@ -1,8 +1,13 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
 import { readLatestRunPointer } from '../cli/helpers.js';
+import {
+  SCHEMA_FAILURE_LEDGER_FILENAME,
+  SCHEMA_LEARNING_DIR,
+  SCHEMA_SHADOW_HINTS_FILENAME,
+} from './schemaFailureLedger.js';
 
 export type RecoveryClassification =
   | 'retry_same_command'
@@ -70,16 +75,23 @@ function readJson(path: string): Record<string, unknown> | null {
     return null;
   }
   try {
+    // Lightweight integrity check: reject empty or trivially small files
+    // as corrupt rather than silently consuming them.
+    if (statSync(path).size < 10) {
+      return null;
+    }
     const parsed = JSON.parse(readFileSync(path, 'utf-8')) as unknown;
     return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
+      ? (parsed as Record<string, unknown>)
       : null;
   } catch {
     return null;
   }
 }
 
-function unwrapFailureCapsule(capsule: Record<string, unknown> | null): Record<string, unknown> | null {
+function unwrapFailureCapsule(
+  capsule: Record<string, unknown> | null,
+): Record<string, unknown> | null {
   if (!capsule) {
     return null;
   }
@@ -98,17 +110,19 @@ function resolveLatestByMtime(): string | null {
     return null;
   }
   const candidates = readdirSync(BABEL_RUNS_DIR, { withFileTypes: true })
-    .filter(entry => entry.isDirectory())
-    .map(entry => join(BABEL_RUNS_DIR, entry.name))
-    .filter(path => existsSync(path))
-    .map(path => ({ path, mtimeMs: statSync(path).mtimeMs }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(BABEL_RUNS_DIR, entry.name))
+    .filter((path) => existsSync(path))
+    .map((path) => ({ path, mtimeMs: statSync(path).mtimeMs }))
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
   return candidates[0]?.path ?? null;
 }
 
 function readLatestPointerFromRunsDir(runsDir: string, project?: string): string | null {
   const scoped = project ? join(runsDir, `.latest.${project}.json`) : null;
-  const candidates = scoped ? [scoped, join(runsDir, '.latest.json')] : [join(runsDir, '.latest.json')];
+  const candidates = scoped
+    ? [scoped, join(runsDir, '.latest.json')]
+    : [join(runsDir, '.latest.json')];
   for (const candidate of candidates) {
     const parsed = readJson(candidate);
     const runDir = parsed?.['run_dir'];
@@ -126,10 +140,14 @@ export function resolveRecoveryRunDir(reference: string, project?: string): stri
   return isAbsolute(reference) ? reference : resolve(reference);
 }
 
-function findFailureCapsule(runDir: string, terminal: Record<string, unknown> | null): string | null {
-  const terminalPath = typeof terminal?.['failure_capsule_path'] === 'string'
-    ? terminal['failure_capsule_path']
-    : null;
+function findFailureCapsule(
+  runDir: string,
+  terminal: Record<string, unknown> | null,
+): string | null {
+  const terminalPath =
+    typeof terminal?.['failure_capsule_path'] === 'string'
+      ? terminal['failure_capsule_path']
+      : null;
   if (terminalPath && existsSync(terminalPath)) {
     return terminalPath;
   }
@@ -148,8 +166,8 @@ function findFailureCapsule(runDir: string, terminal: Record<string, unknown> | 
     return null;
   }
   const dynamic = readdirSync(runDir)
-    .filter(name => /failure_capsule.*\.json$/i.test(name))
-    .map(name => join(runDir, name));
+    .filter((name) => /failure_capsule.*\.json$/i.test(name))
+    .map((name) => join(runDir, name));
   return dynamic[0] ?? null;
 }
 
@@ -171,29 +189,68 @@ function classifyRecovery(input: {
   execution: Record<string, unknown> | null;
   capsule: Record<string, unknown> | null;
   hasManualPlan: boolean;
-}): { classification: RecoveryClassification; reason: string; retryable: boolean; nextCommand: string } {
+}): {
+  classification: RecoveryClassification;
+  reason: string;
+  retryable: boolean;
+  nextCommand: string;
+} {
   const terminalStatus = String(input.terminal?.['status'] ?? '');
   const executionStatus = String(input.execution?.['status'] ?? '');
-  const capsuleCategory = String(input.capsule?.['category'] ?? input.capsule?.['reason_category'] ?? '');
+  const capsuleCategory = String(
+    input.capsule?.['category'] ?? input.capsule?.['reason_category'] ?? '',
+  );
   const capsuleFailureCode = String(input.capsule?.['failure_code'] ?? '');
-  const terminalReason = String(input.terminal?.['reason_category'] ?? input.terminal?.['condition_summary'] ?? '');
+  const terminalReason = String(
+    input.terminal?.['reason_category'] ?? input.terminal?.['condition_summary'] ?? '',
+  );
   const executionCondition = JSON.stringify(input.execution?.['pipeline_error'] ?? '');
-  const capsuleRetryable = typeof input.capsule?.['retryable'] === 'boolean'
-    ? input.capsule['retryable'] as boolean
-    : null;
-  const combined = `${terminalStatus} ${executionStatus} ${capsuleCategory} ${capsuleFailureCode} ${terminalReason} ${executionCondition}`;
+  const capsuleRetryable =
+    typeof input.capsule?.['retryable'] === 'boolean'
+      ? (input.capsule['retryable'] as boolean)
+      : null;
+  // Match patterns against specific structured fields instead of a
+  // concatenated blob. Narrow regexes prevent false positives where
+  // unrelated fields coincidentally contain substrings like "test" or
+  // "manual" (e.g., in serialized error messages or stack traces).
+  const fieldHas = (pattern: RegExp, ...fs: (string | undefined | null)[]): boolean =>
+    fs.some((f) => typeof f === 'string' && pattern.test(f));
 
-  if (/APPROVAL_REQUIRED|permission|blocked|requires_user|AMBIGUOUS|exact_contract_failure|dependency installation requires explicit approval/i.test(combined)) {
+  // (1) User-decision checks — approval, permission, ambiguous contracts
+  if (
+    fieldHas(
+      /APPROVAL_REQUIRED|permission|blocked|requires_user|AMBIGUOUS|exact_contract_failure|dependency installation requires explicit approval/i,
+      terminalStatus,
+      terminalReason,
+      capsuleCategory,
+      capsuleFailureCode,
+      executionStatus,
+    )
+  ) {
     return {
       classification: 'requires_user_decision',
-      reason: 'The next step needs a user decision such as approval, credentials, or a policy choice.',
+      reason:
+        'The next step needs a user decision such as approval, credentials, or a policy choice.',
       retryable: false,
-      nextCommand: /approval|dependency installation/i.test(combined)
+      nextCommand: fieldHas(
+        /approval|dependency installation/i,
+        terminalStatus,
+        terminalReason,
+        capsuleFailureCode,
+      )
         ? 'babel approvals list --status pending'
         : 'babel continue latest',
     };
   }
-  if (/schema|PROVIDER_SCHEMA_INVALID|invalid json|zod/i.test(combined)) {
+  // (2) Schema/provider failures — Zod, JSON, invalid schema
+  if (
+    fieldHas(
+      /schema|PROVIDER_SCHEMA_INVALID|invalid json|zod/i,
+      terminalStatus,
+      capsuleFailureCode,
+      executionStatus,
+    )
+  ) {
     return {
       classification: 'retry_with_schema_repair',
       reason: 'Provider output failed a structured schema before the task could finish.',
@@ -201,15 +258,27 @@ function classifyRecovery(input: {
       nextCommand: 'babel continue latest',
     };
   }
-  if (/provider_timeout|request timeout|network error|fetch failed|HTTP 408|HTTP 429|HTTP 5\d\d/i.test(combined)) {
+  // (3) Network/provider timeouts and transient errors — keep narrow
+  if (
+    fieldHas(
+      /provider_timeout|request timeout|network error|fetch failed|HTTP 408|HTTP 429|HTTP 5\d\d/i,
+      capsuleFailureCode,
+      executionCondition,
+    )
+  ) {
     return {
       classification: 'retry_same_command',
-      reason: 'The provider or network failed before the task could finish; retry the same command or choose another model tier.',
+      reason:
+        'The provider or network failed before the task could finish; retry the same command or choose another model tier.',
       retryable: capsuleRetryable ?? true,
       nextCommand: 'babel continue latest',
     };
   }
-  if (/MANUAL_BRIDGE_REQUIRED|manual/i.test(combined) || input.hasManualPlan) {
+  // (4) Manual bridge / plan continuation — match only terminal/manual fields
+  if (
+    fieldHas(/MANUAL_BRIDGE_REQUIRED|manual/i, terminalStatus, executionStatus) ||
+    input.hasManualPlan
+  ) {
     return {
       classification: 'continue_from_plan',
       reason: 'A plan artifact is available or the run paused for plan continuation.',
@@ -217,7 +286,15 @@ function classifyRecovery(input: {
       nextCommand: 'babel resume --run "<run_dir>"',
     };
   }
-  if (/VERIFIER_FAILED|REQUIRED_VERIFIER|test|verifier/i.test(combined)) {
+  // (5) Verifier failure — match verifier-specific fields only, not generic "test"
+  if (
+    fieldHas(
+      /VERIFIER_FAILED|REQUIRED_VERIFIER|verifier/i,
+      terminalStatus,
+      terminalReason,
+      capsuleFailureCode,
+    )
+  ) {
     return {
       classification: 'rerun_verifier',
       reason: 'The run reached verification and needs the verifier result addressed or rerun.',
@@ -227,7 +304,8 @@ function classifyRecovery(input: {
   }
   return {
     classification: 'retry_same_command',
-    reason: 'No specialized recovery path was detected; retrying the same user command is the safest next action.',
+    reason:
+      'No specialized recovery path was detected; retrying the same user command is the safest next action.',
     retryable: capsuleRetryable ?? true,
     nextCommand: 'babel continue latest',
   };
@@ -248,6 +326,15 @@ function addArtifact(
   return false;
 }
 
+function addOptionalArtifact(available: RecoveryArtifactRef[], key: string, path: string): boolean {
+  if (!existsSync(path)) {
+    return false;
+  }
+  const filename = path.split(/[\\/]/).pop() ?? path;
+  available.push({ key, filename, path });
+  return true;
+}
+
 function resolveAssessmentRunDir(options: RecoveryAssessmentOptions): {
   runDir: string | null;
   resolvedFrom: RecoveryAssessment['resolved_from'];
@@ -258,7 +345,10 @@ function resolveAssessmentRunDir(options: RecoveryAssessmentOptions): {
     return { runDir: isAbsolute(direct) ? direct : resolve(direct), resolvedFrom: 'run_dir' };
   }
   if (options.run && options.run !== 'latest') {
-    return { runDir: isAbsolute(options.run) ? options.run : resolve(options.run), resolvedFrom: 'run' };
+    return {
+      runDir: isAbsolute(options.run) ? options.run : resolve(options.run),
+      resolvedFrom: 'run',
+    };
   }
   const latest = readLatestPointerFromRunsDir(runsDir, options.project);
   if (latest) {
@@ -268,7 +358,9 @@ function resolveAssessmentRunDir(options: RecoveryAssessmentOptions): {
   return { runDir: newest, resolvedFrom: newest ? 'latest' : 'none' };
 }
 
-export function buildRecoveryAssessment(options: RecoveryAssessmentOptions = {}): RecoveryAssessment {
+export function buildRecoveryAssessment(
+  options: RecoveryAssessmentOptions = {},
+): RecoveryAssessment {
   const { runDir, resolvedFrom } = resolveAssessmentRunDir(options);
   if (!runDir) {
     return {
@@ -320,12 +412,20 @@ export function buildRecoveryAssessment(options: RecoveryAssessmentOptions = {})
   const manualPlanPath = join(runDir, 'manual', 'plan.json');
   addArtifact(available, missing, 'terminal_status_summary', terminalPath);
   addArtifact(available, missing, 'execution_report', executionPath);
+  const schemaFailureLedgerPath = join(runDir, SCHEMA_FAILURE_LEDGER_FILENAME);
+  const shadowHintsPath = join(dirname(runDir), SCHEMA_LEARNING_DIR, SCHEMA_SHADOW_HINTS_FILENAME);
+  addOptionalArtifact(available, 'schema_failure_ledger', schemaFailureLedgerPath);
+  addOptionalArtifact(available, 'schema_shadow_hints', shadowHintsPath);
   const terminal = readJson(terminalPath);
   const execution = readJson(executionPath);
   const capsulePath = findFailureCapsule(runDir, terminal);
   const capsule = unwrapFailureCapsule(capsulePath ? readJson(capsulePath) : null);
   if (capsulePath && capsule) {
-    available.push({ key: 'failure_capsule', filename: capsulePath.split(/[\\/]/).pop() ?? capsulePath, path: capsulePath });
+    available.push({
+      key: 'failure_capsule',
+      filename: capsulePath.split(/[\\/]/).pop() ?? capsulePath,
+      path: capsulePath,
+    });
   } else if (
     (terminal !== null || execution !== null) &&
     terminal?.['status'] !== 'COMPLETE' &&
@@ -350,12 +450,16 @@ export function buildRecoveryAssessment(options: RecoveryAssessmentOptions = {})
     capsule,
     hasManualPlan: hasPlan,
   });
-  const failureCode = typeof capsule?.['failure_code'] === 'string' ? capsule['failure_code'] : null;
+  const failureCode =
+    typeof capsule?.['failure_code'] === 'string' ? capsule['failure_code'] : null;
   const failedCommand =
-    typeof terminal?.['failed_command'] === 'string' ? terminal['failed_command'] :
-    typeof capsule?.['failed_command'] === 'string' ? capsule['failed_command'] :
-    null;
-  const completeStatus = terminal?.['status'] === 'COMPLETE' ||
+    typeof terminal?.['failed_command'] === 'string'
+      ? terminal['failed_command']
+      : typeof capsule?.['failed_command'] === 'string'
+        ? capsule['failed_command']
+        : null;
+  const completeStatus =
+    terminal?.['status'] === 'COMPLETE' ||
     terminal?.['status'] === 'COMPLETE_NO_MODIFICATION' ||
     terminal?.['status'] === 'READ_ONLY_NO_MODIFICATION' ||
     terminal?.['status'] === 'ANSWER_READY' ||
@@ -388,13 +492,17 @@ export function buildRecoveryAssessment(options: RecoveryAssessmentOptions = {})
     classification: recovery.classification,
     retryable: recovery.retryable,
     reason: recovery.reason,
-    next_action: recovery.classification === 'requires_user_decision'
-      ? 'operator review required before continuing'
-      : nextCommand,
+    next_action:
+      recovery.classification === 'requires_user_decision'
+        ? 'operator review required before continuing'
+        : nextCommand,
     next_command: nextCommand,
     available_artifacts: available,
     missing_artifacts: missing,
-    terminal_status_summary: sanitizeTerminalSummary(terminal, capsulePath && capsule ? capsulePath : null),
+    terminal_status_summary: sanitizeTerminalSummary(
+      terminal,
+      capsulePath && capsule ? capsulePath : null,
+    ),
     execution_report: execution,
     failure_capsule: capsule,
     failure_code: failureCode,
@@ -403,10 +511,7 @@ export function buildRecoveryAssessment(options: RecoveryAssessmentOptions = {})
 }
 
 export function formatRecoveryAssessmentHuman(assessment: RecoveryAssessment): string {
-  const lines = [
-    'Babel Continue',
-    `Status: ${assessment.status}`,
-  ];
+  const lines = ['Babel Continue', `Status: ${assessment.status}`];
   if (assessment.run_dir) {
     lines.push(`Run: ${assessment.run_dir}`);
   }
@@ -434,7 +539,10 @@ export function formatRecoveryAssessmentHuman(assessment: RecoveryAssessment): s
   return lines.join('\n');
 }
 
-export function buildRecoverySummary(reference = 'latest', options: { project?: string } = {}): RecoverySummary {
+export function buildRecoverySummary(
+  reference = 'latest',
+  options: { project?: string } = {},
+): RecoverySummary {
   const runDir = resolveRecoveryRunDir(reference, options.project);
   if (!runDir) {
     return {
@@ -445,9 +553,13 @@ export function buildRecoverySummary(reference = 'latest', options: { project?: 
       reason: 'No latest Babel run pointer or run directory was found.',
       next_command: null,
       available_artifacts: {},
-      missing_artifacts: ['terminal_status_summary.json', '04_execution_report.json', 'failure capsule'],
+      missing_artifacts: [
+        'terminal_status_summary.json',
+        '04_execution_report.json',
+        'failure capsule',
+      ],
       evidence: { terminal_status: null, execution_status: null, failure_capsule_id: null },
-      next: ['Run bl ask, bl plan, or bl fix first, then retry babel continue latest.'],
+      next: ['Run babel "<task>" or babel plan first, then retry babel continue latest.'],
     };
   }
   if (!existsSync(runDir)) {
@@ -514,11 +626,12 @@ export function buildRecoverySummary(reference = 'latest', options: { project?: 
     evidence: {
       terminal_status: typeof terminal?.['status'] === 'string' ? terminal['status'] : null,
       execution_status: typeof execution?.['status'] === 'string' ? execution['status'] : null,
-      failure_capsule_id: typeof capsule?.['failure_capsule_id'] === 'string'
-        ? capsule['failure_capsule_id']
-        : typeof capsule?.['capsule_id'] === 'string'
-          ? capsule['capsule_id']
-          : null,
+      failure_capsule_id:
+        typeof capsule?.['failure_capsule_id'] === 'string'
+          ? capsule['failure_capsule_id']
+          : typeof capsule?.['capsule_id'] === 'string'
+            ? capsule['capsule_id']
+            : null,
     },
     next: [
       nextCommand,
@@ -530,10 +643,7 @@ export function buildRecoverySummary(reference = 'latest', options: { project?: 
 }
 
 export function formatRecoverySummaryHuman(summary: RecoverySummary): string {
-  const lines = [
-    'Babel Continue',
-    `Status: ${summary.status}`,
-  ];
+  const lines = ['Babel Continue', `Status: ${summary.status}`];
   if (summary.run_dir) {
     lines.push(`Run: ${summary.run_dir}`);
   }

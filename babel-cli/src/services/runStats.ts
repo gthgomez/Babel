@@ -93,7 +93,7 @@ function asArray(value: unknown): unknown[] {
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
 }
 
 function numberValue(value: unknown): number {
@@ -101,8 +101,9 @@ function numberValue(value: unknown): number {
 }
 
 function collectToolLogs(executionReport: unknown): ToolLogEntry[] {
-  return asArray(asRecord(executionReport)['tool_call_log'])
-    .map((entry) => asRecord(entry) as ToolLogEntry);
+  return asArray(asRecord(executionReport)['tool_call_log']).map(
+    (entry) => asRecord(entry) as ToolLogEntry,
+  );
 }
 
 function parseCacheFlag(stdout: string | undefined): boolean | null {
@@ -124,16 +125,21 @@ export function buildRunStats(runDir: string): RunStatsSummary {
   const costLedger = asRecord(readJson(costLedgerPath)) as CostLedgerFile;
   const costLedgerTotals = asRecord(costLedger.totals);
   const hasCostLedgerTotals = Object.keys(costLedgerTotals).length > 0;
-  const waterfallEntries = asArray(readJson(join(runDir, '05_waterfall_telemetry.json'))) as WaterfallEntry[];
+  const waterfallEntries = asArray(
+    readJson(join(runDir, '05_waterfall_telemetry.json')),
+  ) as WaterfallEntry[];
   const executionReport = readJson(join(runDir, '04_execution_report.json'));
   const sessionContext = asRecord(readJson(join(runDir, '10_session_context.json')));
   const toolLogs = collectToolLogs(executionReport);
-  const stageMap = new Map<string, {
-    stage: string;
-    call_count: number;
-    total_latency_ms: number;
-    winning_tiers: Set<string>;
-  }>();
+  const stageMap = new Map<
+    string,
+    {
+      stage: string;
+      call_count: number;
+      total_latency_ms: number;
+      winning_tiers: Set<string>;
+    }
+  >();
 
   let totalLatency = 0;
   let promptTokens = 0;
@@ -215,9 +221,16 @@ export function buildRunStats(runDir: string): RunStatsSummary {
     },
     tokens: {
       prompt: hasCostLedgerTotals ? numberValue(costLedgerTotals['prompt_tokens']) : promptTokens,
-      completion: hasCostLedgerTotals ? numberValue(costLedgerTotals['completion_tokens']) : completionTokens,
+      completion: hasCostLedgerTotals
+        ? numberValue(costLedgerTotals['completion_tokens'])
+        : completionTokens,
       total: hasCostLedgerTotals ? numberValue(costLedgerTotals['total_tokens']) : totalTokens,
-      estimated_cost_usd: Number((hasCostLedgerTotals ? numberValue(costLedgerTotals['estimated_cost_usd']) : estimatedCost).toFixed(8)),
+      estimated_cost_usd: Number(
+        (hasCostLedgerTotals
+          ? numberValue(costLedgerTotals['estimated_cost_usd'])
+          : estimatedCost
+        ).toFixed(8),
+      ),
       source: hasCostLedgerTotals ? 'cost_ledger' : 'waterfall_telemetry',
       cost_ledger_path: costLedgerExists ? costLedgerPath : null,
       by_precision: asRecord(costLedgerTotals['by_precision']) as Record<string, number>,
@@ -225,9 +238,10 @@ export function buildRunStats(runDir: string): RunStatsSummary {
     session: {
       context_available: Object.keys(sessionContext).length > 0,
       steps_complete: numberValue(sessionContext['steps_complete']),
-      context_fingerprint: typeof sessionContext['context_fingerprint'] === 'string'
-        ? sessionContext['context_fingerprint']
-        : null,
+      context_fingerprint:
+        typeof sessionContext['context_fingerprint'] === 'string'
+          ? sessionContext['context_fingerprint']
+          : null,
       approval_state: sessionContext['approval_state'] ?? null,
     },
   };
@@ -253,7 +267,9 @@ export function formatRunStatsHuman(stats: RunStatsSummary): string {
   if (stats.waterfall.stages.length > 0) {
     lines.push('', 'Stages:');
     for (const stage of stats.waterfall.stages) {
-      lines.push(`  ${stage.stage}: ${stage.call_count} call(s), ${stage.total_latency_ms} ms, tiers ${stage.winning_tiers.join(', ') || '(none)'}`);
+      lines.push(
+        `  ${stage.stage}: ${stage.call_count} call(s), ${stage.total_latency_ms} ms, tiers ${stage.winning_tiers.join(', ') || '(none)'}`,
+      );
     }
   }
   return lines.join('\n');

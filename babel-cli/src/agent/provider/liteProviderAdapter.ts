@@ -25,7 +25,9 @@ export interface LiteProviderAdapter {
   resolveFixProvider(options?: LiteProviderAdapterOptions): LiteWorkflowProvider;
 }
 
-export function normalizeLiteWorkflowProvider(value: string | undefined): LiteWorkflowProvider | undefined {
+export function normalizeLiteWorkflowProvider(
+  value: string | undefined,
+): LiteWorkflowProvider | undefined {
   if (value === undefined) {
     return undefined;
   }
@@ -73,7 +75,9 @@ export function resolveSmallFixProviderForCommand(
   return resolveLiteProviders(options, env).fixProvider;
 }
 
-export function createLiteProviderAdapter(env: NodeJS.ProcessEnv = process.env): LiteProviderAdapter {
+export function createLiteProviderAdapter(
+  env: NodeJS.ProcessEnv = process.env,
+): LiteProviderAdapter {
   return {
     resolve(options) {
       return resolveLiteProviders(
@@ -95,7 +99,9 @@ export interface LiteOfflineEnvSnapshot {
   previousLiteOffline: string | undefined;
 }
 
-export function snapshotLiteOfflineEnv(env: NodeJS.ProcessEnv = process.env): LiteOfflineEnvSnapshot {
+export function snapshotLiteOfflineEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): LiteOfflineEnvSnapshot {
   return {
     previousSmallFixProvider: env['BABEL_SMALL_FIX_PROVIDER'],
     previousLiteOffline: env['BABEL_LITE_OFFLINE'],

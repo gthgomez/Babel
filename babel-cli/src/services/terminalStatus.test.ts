@@ -25,32 +25,47 @@ function failedShell(command: string): ToolCallLog {
 }
 
 test('terminal status precedence keeps exact and ambiguous failures specific', () => {
-  assert.equal(resolveTerminalStatus({
-    status: 'EXECUTOR_HALTED',
-    condition: '[EXACT_INSTRUCTION_DRIFT] missing exact literal',
-  }), 'EXACT_INSTRUCTION_DRIFT');
+  assert.equal(
+    resolveTerminalStatus({
+      status: 'EXECUTOR_HALTED',
+      condition: '[EXACT_INSTRUCTION_DRIFT] missing exact literal',
+    }),
+    'EXACT_INSTRUCTION_DRIFT',
+  );
 
-  assert.equal(resolveTerminalStatus({
-    status: 'EXECUTOR_HALTED',
-    condition: '[AMBIGUOUS_LITERAL_BINDING] a.txt and b.txt both possible',
-  }), 'AMBIGUOUS_LITERAL_BINDING');
+  assert.equal(
+    resolveTerminalStatus({
+      status: 'EXECUTOR_HALTED',
+      condition: '[AMBIGUOUS_LITERAL_BINDING] a.txt and b.txt both possible',
+    }),
+    'AMBIGUOUS_LITERAL_BINDING',
+  );
 });
 
 test('RUN_FAILED replacement mapping uses verifier and shell evidence', () => {
-  assert.equal(resolveTerminalStatus({
-    status: 'RUN_FAILED',
-    toolCallLog: [failedShell('npm test')],
-  }), 'VERIFIER_FAILED');
+  assert.equal(
+    resolveTerminalStatus({
+      status: 'RUN_FAILED',
+      toolCallLog: [failedShell('npm test')],
+    }),
+    'VERIFIER_FAILED',
+  );
 
-  assert.equal(resolveTerminalStatus({
-    status: 'RUN_FAILED',
-    toolCallLog: [failedShell('node scripts/fail.mjs')],
-  }), 'SHELL_COMMAND_FAILED');
+  assert.equal(
+    resolveTerminalStatus({
+      status: 'RUN_FAILED',
+      toolCallLog: [failedShell('node scripts/fail.mjs')],
+    }),
+    'SHELL_COMMAND_FAILED',
+  );
 
-  assert.equal(resolveTerminalStatus({
-    status: 'RUN_FAILED',
-    condition: 'planner failed before execution',
-  }), 'EXECUTOR_HALTED');
+  assert.equal(
+    resolveTerminalStatus({
+      status: 'RUN_FAILED',
+      condition: 'planner failed before execution',
+    }),
+    'EXECUTOR_HALTED',
+  );
 });
 
 test('verifier command-path canonicalization for terminal status', () => {
@@ -66,16 +81,22 @@ test('verifier command-path canonicalization for terminal status', () => {
 });
 
 test('read-only no-modification requests get a useful terminal status', () => {
-  assert.equal(isReadOnlyNoModificationRequest({
-    task: 'Inspect src/info.txt and determine whether it mentions ready. Do not modify files.',
-    mode: 'verified',
-    allowedTools: ['directory_list', 'file_read'],
-  }), true);
+  assert.equal(
+    isReadOnlyNoModificationRequest({
+      task: 'Inspect src/info.txt and determine whether it mentions ready. Do not modify files.',
+      mode: 'deep',
+      allowedTools: ['directory_list', 'file_read'],
+    }),
+    true,
+  );
 
-  assert.equal(resolveTerminalStatus({
-    status: 'RUN_FAILED',
-    readOnlyNoModification: true,
-  }), 'READ_ONLY_NO_MODIFICATION');
+  assert.equal(
+    resolveTerminalStatus({
+      status: 'RUN_FAILED',
+      readOnlyNoModification: true,
+    }),
+    'READ_ONLY_NO_MODIFICATION',
+  );
 });
 
 test('terminal summary carries status, failed command, and operator action', () => {
@@ -88,7 +109,7 @@ test('terminal summary carries status, failed command, and operator action', () 
   assert.equal(summary.status, 'SHELL_COMMAND_DENIED');
   assert.equal(summary.reason_category, 'shell_command_denied');
   assert.equal(summary.failed_command, 'npm install');
-  assert.match(summary.next_recommended_operator_action, /allowed tools|permitted command/i);
+  assert.match(summary.next_recommended_operator_action, /That command is not allowed/i);
 });
 
 test('terminal status resolves small-fix outcomes and next actions', () => {
@@ -97,24 +118,36 @@ test('terminal status resolves small-fix outcomes and next actions', () => {
 });
 
 test('repair repeated failure status stays specific', () => {
-  assert.equal(resolveTerminalStatus({
-    status: 'EXECUTOR_HALTED',
-    condition: '[REPAIR_REPEATED_FAILURE] same verifier failed again',
-  }), 'REPAIR_REPEATED_FAILURE');
+  assert.equal(
+    resolveTerminalStatus({
+      status: 'EXECUTOR_HALTED',
+      condition: '[REPAIR_REPEATED_FAILURE] same verifier failed again',
+    }),
+    'REPAIR_REPEATED_FAILURE',
+  );
 });
 
 test('required verifier contract statuses stay specific', () => {
-  assert.equal(resolveTerminalStatus({
-    status: 'REQUIRED_VERIFIER_MISSING',
-  }), 'REQUIRED_VERIFIER_MISSING');
+  assert.equal(
+    resolveTerminalStatus({
+      status: 'REQUIRED_VERIFIER_MISSING',
+    }),
+    'REQUIRED_VERIFIER_MISSING',
+  );
 
-  assert.equal(resolveTerminalStatus({
-    status: 'REQUIRED_VERIFIER_SKIPPED',
-  }), 'REQUIRED_VERIFIER_SKIPPED');
+  assert.equal(
+    resolveTerminalStatus({
+      status: 'REQUIRED_VERIFIER_SKIPPED',
+    }),
+    'REQUIRED_VERIFIER_SKIPPED',
+  );
 
-  assert.equal(resolveTerminalStatus({
-    status: 'REQUIRED_VERIFIER_FAILED',
-  }), 'REQUIRED_VERIFIER_FAILED');
+  assert.equal(
+    resolveTerminalStatus({
+      status: 'REQUIRED_VERIFIER_FAILED',
+    }),
+    'REQUIRED_VERIFIER_FAILED',
+  );
 });
 
 test('terminal summary carries verifier contract details', () => {
@@ -149,25 +182,34 @@ test('terminal summary carries small-fix completion category and action', () => 
 
   assert.equal(summary.status, 'SMALL_FIX_FAILED');
   assert.equal(summary.reason_category, 'small_fix_failed');
-  assert.match(summary.next_recommended_operator_action, /rerun with the verified pipeline/i);
+  assert.match(summary.next_recommended_operator_action, /The fix didn't pass checks/i);
 });
 
 test('rollback and worktree safety statuses take precedence over exact drift', () => {
-  assert.equal(resolveTerminalStatus({
-    status: 'EXACT_INSTRUCTION_DRIFT',
-    condition: '[ROLLBACK_APPLIED] restored touched files after [EXACT_INSTRUCTION_DRIFT]',
-  }), 'ROLLBACK_APPLIED');
+  assert.equal(
+    resolveTerminalStatus({
+      status: 'EXACT_INSTRUCTION_DRIFT',
+      condition: '[ROLLBACK_APPLIED] restored touched files after [EXACT_INSTRUCTION_DRIFT]',
+    }),
+    'ROLLBACK_APPLIED',
+  );
 
-  assert.equal(resolveTerminalStatus({
-    status: 'EXACT_INSTRUCTION_DRIFT',
-    condition: 'later executor halt without rollback marker',
-    rollbackMode: 'rollback_applied',
-  }), 'ROLLBACK_APPLIED');
+  assert.equal(
+    resolveTerminalStatus({
+      status: 'EXACT_INSTRUCTION_DRIFT',
+      condition: 'later executor halt without rollback marker',
+      rollbackMode: 'rollback_applied',
+    }),
+    'ROLLBACK_APPLIED',
+  );
 
-  assert.equal(resolveTerminalStatus({
-    status: 'EXACT_INSTRUCTION_DRIFT',
-    condition: '[WORKTREE_DIRTY_UNSAFE] target already dirty before [EXACT_INSTRUCTION_DRIFT]',
-  }), 'WORKTREE_DIRTY_UNSAFE');
+  assert.equal(
+    resolveTerminalStatus({
+      status: 'EXACT_INSTRUCTION_DRIFT',
+      condition: '[WORKTREE_DIRTY_UNSAFE] target already dirty before [EXACT_INSTRUCTION_DRIFT]',
+    }),
+    'WORKTREE_DIRTY_UNSAFE',
+  );
 });
 
 test('attempt safety summary records snapshots and unrelated preservation', () => {
@@ -186,9 +228,7 @@ test('attempt safety summary records snapshots and unrelated preservation', () =
       benchmark_verification_status: null,
     },
     changed_files: ['src/math.js'],
-    verifier_command_log: [
-      { attempt: 1, command: 'npm test', cwd: '.', exit_code: 1 },
-    ],
+    verifier_command_log: [{ attempt: 1, command: 'npm test', cwd: '.', exit_code: 1 }],
     notes: [],
     attempts: [
       {

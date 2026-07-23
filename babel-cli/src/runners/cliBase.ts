@@ -11,24 +11,21 @@
  *   .cmd shims in PATH resolve correctly, while keeping the args array clean.
  */
 
-import { spawn }        from 'node:child_process';
+import { spawn } from 'node:child_process';
 import type { ZodType } from 'zod';
-import { extractJson }  from '../utils/extractJson.js';
-import { getSafeEnv }   from '../utils/safeEnv.js';
-import {
-  StructuredOutputError,
-  buildStructuredOutputError,
-} from './base.js';
+import { extractJson } from '../utils/extractJson.js';
+import { getSafeEnv } from '../utils/safeEnv.js';
+import { StructuredOutputError, buildStructuredOutputError } from './base.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface CliConfig {
   /** Short label used in error messages and debug output, e.g. "claudeCli". */
-  label:     string;
+  label: string;
   /** Executable name, e.g. "claude", "codex", "gemini". */
-  command:   string;
+  command: string;
   /** Flags to pass after the command, e.g. ["--print"]. */
-  args:      string[];
+  args: string[];
   /** Hard timeout in milliseconds before the child process is killed. */
   timeoutMs: number;
   /**
@@ -94,7 +91,7 @@ const RATE_LIMIT_SIGNALS = [
 
 function containsRateLimitSignal(text: string): boolean {
   const lower = text.toLowerCase();
-  return RATE_LIMIT_SIGNALS.some(s => lower.includes(s));
+  return RATE_LIMIT_SIGNALS.some((s) => lower.includes(s));
 }
 
 // ─── Windows-safe spawn ───────────────────────────────────────────────────────
@@ -118,19 +115,21 @@ export function spawnCliProcess(prompt: string, config: CliConfig): Promise<CliO
     //   promptFlag === ''         → positional arg appended bare (codex exec)
     //   promptFlag === '-p' etc.  → flag+value pair appended (Gemini, etc.)
     const trailingArgs =
-      config.promptFlag === undefined ? [] :
-      config.promptFlag === ''        ? [prompt] :
-                                        [config.promptFlag, prompt];
+      config.promptFlag === undefined
+        ? []
+        : config.promptFlag === ''
+          ? [prompt]
+          : [config.promptFlag, prompt];
     const cliArgs = [...config.args, ...trailingArgs];
 
-    const cmd  = isWin ? 'cmd.exe' : config.command;
+    const cmd = isWin ? 'cmd.exe' : config.command;
     const args = isWin ? ['/c', config.command, ...cliArgs] : cliArgs;
 
     const stdinFd = config.stdinMode === 'ignore' ? 'ignore' : 'pipe';
 
     const proc = spawn(cmd, args, {
       stdio: [stdinFd, 'pipe', 'pipe'],
-      env:   getSafeEnv(),
+      env: getSafeEnv(),
       // No `shell` option — cmd.exe handles PATH resolution on Windows.
     });
 
@@ -141,56 +140,61 @@ export function spawnCliProcess(prompt: string, config: CliConfig): Promise<CliO
     // Records the last time stdout or stderr produced bytes. Used to distinguish
     // an "active timeout" (process was generating output, just too slow) from a
     // "silent hang" (no bytes received for a long time — more likely a true lock-up).
-    const startTime     = Date.now();
-    let lastActivityAt  = startTime;
-    let bytesStdout     = 0;
-    let bytesStderr     = 0;
+    const startTime = Date.now();
+    let lastActivityAt = startTime;
+    let bytesStdout = 0;
+    let bytesStderr = 0;
 
     // Heartbeat: every 15 s, log a one-liner so the user can see Codex is alive.
     const HEARTBEAT_INTERVAL_MS = 15_000;
     const heartbeat = setInterval(() => {
-      const elapsedS = Math.round((Date.now() - startTime)      / 1000);
-      const idleS    = Math.round((Date.now() - lastActivityAt) / 1000);
+      const elapsedS = Math.round((Date.now() - startTime) / 1000);
+      const idleS = Math.round((Date.now() - lastActivityAt) / 1000);
       process.stderr.write(
         `[${config.label}] running — ${bytesStdout}b stdout  ${bytesStderr}b stderr  ` +
-        `${elapsedS}s elapsed  ${idleS}s since last output\n`,
+          `${elapsedS}s elapsed  ${idleS}s since last output\n`,
       );
     }, HEARTBEAT_INTERVAL_MS);
 
     const timer = setTimeout(() => {
       clearInterval(heartbeat);
       proc.kill('SIGTERM');
-      const elapsedS = Math.round((Date.now() - startTime)      / 1000);
-      const idleS    = Math.round((Date.now() - lastActivityAt) / 1000);
+      const elapsedS = Math.round((Date.now() - startTime) / 1000);
+      const idleS = Math.round((Date.now() - lastActivityAt) / 1000);
       // Classify: "active" if output arrived in the last 30 s; "silent" otherwise.
-      const classification = idleS < 30
-        ? `ACTIVE (last byte ${idleS}s ago — process was running; consider raising BABEL_CODEX_TIMEOUT_MS or BABEL_CLI_TIMEOUT_MS)`
-        : `SILENT (no output for ${idleS}s — likely a true hang)`;
-      reject(new Error(
-        `[${config.label}] Timed out after ${elapsedS}s ` +
-        `(${bytesStdout}b received). Status: ${classification}.`,
-      ));
+      const classification =
+        idleS < 30
+          ? `ACTIVE (last byte ${idleS}s ago — process was running; consider raising BABEL_CODEX_TIMEOUT_MS or BABEL_CLI_TIMEOUT_MS)`
+          : `SILENT (no output for ${idleS}s — likely a true hang)`;
+      reject(
+        new Error(
+          `[${config.label}] Timed out after ${elapsedS}s ` +
+            `(${bytesStdout}b received). Status: ${classification}.`,
+        ),
+      );
     }, config.timeoutMs);
 
     proc.stdout?.on('data', (chunk: Buffer) => {
-      stdout          += chunk.toString('utf-8');
-      bytesStdout     += chunk.length;
-      lastActivityAt   = Date.now();
+      stdout += chunk.toString('utf-8');
+      bytesStdout += chunk.length;
+      lastActivityAt = Date.now();
     });
     proc.stderr?.on('data', (chunk: Buffer) => {
-      stderr          += chunk.toString('utf-8');
-      bytesStderr     += chunk.length;
-      lastActivityAt   = Date.now();
+      stderr += chunk.toString('utf-8');
+      bytesStderr += chunk.length;
+      lastActivityAt = Date.now();
     });
 
     proc.on('error', (err: NodeJS.ErrnoException) => {
       clearTimeout(timer);
       clearInterval(heartbeat);
       if (err.code === 'ENOENT') {
-        reject(new Error(
-          `[${config.label}] Binary "${config.command}" not found in PATH. ` +
-          `Install the CLI or set the corresponding BABEL_*_CMD env var.`,
-        ));
+        reject(
+          new Error(
+            `[${config.label}] Binary "${config.command}" not found in PATH. ` +
+              `Install the CLI or set the corresponding BABEL_*_CMD env var.`,
+          ),
+        );
       } else {
         reject(new Error(`[${config.label}] Spawn error: ${err.message}`));
       }
@@ -201,18 +205,22 @@ export function spawnCliProcess(prompt: string, config: CliConfig): Promise<CliO
       clearInterval(heartbeat);
 
       if (containsRateLimitSignal(stderr) || containsRateLimitSignal(stdout)) {
-        reject(new Error(
-          `rate limit: ${config.label} subscription limit reached. ` +
-          `stderr: ${stderr.slice(0, 200)}`,
-        ));
+        reject(
+          new Error(
+            `rate limit: ${config.label} subscription limit reached. ` +
+              `stderr: ${stderr.slice(0, 200)}`,
+          ),
+        );
         return;
       }
 
       if (code !== 0) {
-        reject(new Error(
-          `[${config.label}] Process exited with code ${String(code)}. ` +
-          `stderr: ${stderr.slice(0, 300)}`,
-        ));
+        reject(
+          new Error(
+            `[${config.label}] Process exited with code ${String(code)}. ` +
+              `stderr: ${stderr.slice(0, 300)}`,
+          ),
+        );
         return;
       }
 
@@ -249,7 +257,7 @@ export function spawnCliProcess(prompt: string, config: CliConfig): Promise<CliO
 export function parseAndValidate<T>(
   output: CliOutput,
   schema: ZodType<T, unknown>,
-  label:  string,
+  label: string,
 ): T {
   let parsed: unknown;
 

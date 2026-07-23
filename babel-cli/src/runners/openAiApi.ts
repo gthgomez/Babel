@@ -22,13 +22,14 @@
 
 import type { ZodType } from 'zod';
 import { type LlmRunner, type RunnerCallbacks, buildStructuredOutputError } from './base.js';
-import { extractJson }    from '../utils/extractJson.js';
+import { extractJson } from '../utils/extractJson.js';
+import { parseRateLimitHeaders } from '../ui/rateLimitWidget.js';
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
-const OPENAI_MODEL = process.env['BABEL_OPENAI_MODEL']  ?? 'o3-mini';
-const MAX_TOKENS   = Number(process.env['BABEL_OPENAI_TOKENS'] ?? '8096');
-const API_URL      = 'https://api.openai.com/v1/chat/completions';
+const OPENAI_MODEL = process.env['BABEL_OPENAI_MODEL'] ?? 'o3-mini';
+const MAX_TOKENS = Number(process.env['BABEL_OPENAI_TOKENS'] ?? '8096');
+const API_URL = 'https://api.openai.com/v1/chat/completions';
 
 const SYSTEM_PROMPT =
   'You are executing a Babel pipeline agent. ' +
@@ -57,7 +58,7 @@ export class OpenAiApiRunner implements LlmRunner {
     if (!key) {
       throw new Error(
         '[openAiApi] OPENAI_API_KEY is not set. ' +
-        'Add it to your .env file to enable the OpenAI API runner.',
+          'Add it to your .env file to enable the OpenAI API runner.',
       );
     }
     this.apiKey = key;
@@ -72,24 +73,23 @@ export class OpenAiApiRunner implements LlmRunner {
     let response: Response;
     try {
       response = await fetch(API_URL, {
-        method:  'POST',
+        method: 'POST',
         headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type':  'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model:                 OPENAI_MODEL,
+          model: OPENAI_MODEL,
           max_completion_tokens: MAX_TOKENS,
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
-            { role: 'user',   content: prompt },
+            { role: 'user', content: prompt },
           ],
         }),
       });
     } catch (err) {
       throw new Error(
-        `[openAiApi] Network error: ` +
-        `${err instanceof Error ? err.message : String(err)}`,
+        `[openAiApi] Network error: ` + `${err instanceof Error ? err.message : String(err)}`,
       );
     }
 
@@ -101,6 +101,7 @@ export class OpenAiApiRunner implements LlmRunner {
       }
       throw new Error(`[openAiApi] HTTP ${response.status}: ${body.slice(0, 200)}`);
     }
+    parseRateLimitHeaders(response.headers, 'openai');
 
     // ── Extract text content ─────────────────────────────────────────────────
     let dataText = '';

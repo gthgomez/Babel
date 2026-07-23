@@ -95,7 +95,10 @@ function requireGitOutput(args: string[], cwd: string, label: string): string {
 }
 
 function toArtifactTimestamp(date: Date): string {
-  return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  return date
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}Z$/, 'Z');
 }
 
 function normalizePath(path: string): string {
@@ -115,7 +118,9 @@ function parseNameStatus(stdout: string, source: CiReviewChangeSource): ParsedSt
       const [status, ...pathParts] = line.split(/\s+/);
       const rawPath = pathParts.join(' ');
       return {
-        path: normalizePath(rawPath.includes('\t') ? rawPath.split('\t').at(-1) ?? rawPath : rawPath),
+        path: normalizePath(
+          rawPath.includes('\t') ? (rawPath.split('\t').at(-1) ?? rawPath) : rawPath,
+        ),
         status: status ?? 'M',
         sources: [source],
       };
@@ -129,7 +134,9 @@ function parsePorcelainStatus(stdout: string): ParsedStatusLine[] {
     const x = line[0] ?? ' ';
     const y = line[1] ?? ' ';
     const rawPath = line.slice(3).trim();
-    const path = normalizePath(rawPath.includes(' -> ') ? rawPath.split(' -> ').at(-1) ?? rawPath : rawPath);
+    const path = normalizePath(
+      rawPath.includes(' -> ') ? (rawPath.split(' -> ').at(-1) ?? rawPath) : rawPath,
+    );
     const sources: CiReviewChangeSource[] = [];
     if (x === '?' && y === '?') {
       sources.push('untracked');
@@ -182,7 +189,8 @@ function collectRisks(files: CiReviewChangedFile[]): CiReviewFinding[] {
         severity: 'high',
         code: 'ci_workflow_changed',
         path,
-        message: 'CI workflow changed; review runner permissions, triggers, and secret exposure before merge.',
+        message:
+          'CI workflow changed; review runner permissions, triggers, and secret exposure before merge.',
       });
     }
     if (pathMatches(path, /(^|\/)(prisma\/)?migrations?\//i)) {
@@ -203,18 +211,28 @@ function collectRisks(files: CiReviewChangedFile[]): CiReviewFinding[] {
         severity: 'high',
         code: 'secret_candidate_changed',
         path,
-        message: 'Secret-like file changed; verify it is ignored, redacted, or intentionally test-only.',
+        message:
+          'Secret-like file changed; verify it is ignored, redacted, or intentionally test-only.',
       });
     }
-    if (/^(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|Cargo\.lock|poetry\.lock|uv\.lock|Pipfile\.lock)$/i.test(name)) {
+    if (
+      /^(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|Cargo\.lock|poetry\.lock|uv\.lock|Pipfile\.lock)$/i.test(
+        name,
+      )
+    ) {
       risks.push({
         severity: 'medium',
         code: 'lockfile_changed',
         path,
-        message: 'Dependency lockfile changed; review package provenance and install reproducibility.',
+        message:
+          'Dependency lockfile changed; review package provenance and install reproducibility.',
       });
     }
-    if (/^(package\.json|pyproject\.toml|Cargo\.toml|build\.gradle|build\.gradle\.kts|settings\.gradle|settings\.gradle\.kts)$/i.test(name)) {
+    if (
+      /^(package\.json|pyproject\.toml|Cargo\.toml|build\.gradle|build\.gradle\.kts|settings\.gradle|settings\.gradle\.kts)$/i.test(
+        name,
+      )
+    ) {
       risks.push({
         severity: 'medium',
         code: 'build_or_dependency_manifest_changed',
@@ -227,16 +245,20 @@ function collectRisks(files: CiReviewChangedFile[]): CiReviewFinding[] {
 }
 
 function isTestPath(path: string): boolean {
-  return /(^|\/)(__tests__|tests?|specs?)\//i.test(path) ||
+  return (
+    /(^|\/)(__tests__|tests?|specs?)\//i.test(path) ||
     /\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/i.test(path) ||
     /^tools\/test-/i.test(path) ||
-    /^babel-cli\/scripts\/test_/i.test(path);
+    /^babel-cli\/scripts\/test_/i.test(path)
+  );
 }
 
 function isSourcePath(path: string): boolean {
-  return /\.(ts|tsx|js|jsx|mjs|cjs|py|kt|java|go|rs)$/i.test(path) &&
+  return (
+    /\.(ts|tsx|js|jsx|mjs|cjs|py|kt|java|go|rs)$/i.test(path) &&
     !isTestPath(path) &&
-    !pathMatches(path, /(^|\/)(dist|node_modules|build|coverage)\//);
+    !pathMatches(path, /(^|\/)(dist|node_modules|build|coverage)\//)
+  );
 }
 
 function collectTestSignals(files: CiReviewChangedFile[]): CiReviewFinding[] {
@@ -248,35 +270,50 @@ function collectTestSignals(files: CiReviewChangedFile[]): CiReviewFinding[] {
     signals.push({
       severity: 'medium',
       code: 'source_without_test_change',
-      message: 'Source files changed without an accompanying test or smoke harness change in this diff.',
+      message:
+        'Source files changed without an accompanying test or smoke harness change in this diff.',
     });
   }
-  if (paths.some((path) => path === 'babel-cli/package.json') && !paths.some((path) => path === 'babel-cli/package-lock.json')) {
+  if (
+    paths.some((path) => path === 'babel-cli/package.json') &&
+    !paths.some((path) => path === 'babel-cli/package-lock.json')
+  ) {
     signals.push({
       severity: 'info',
       code: 'package_manifest_without_lockfile',
-      message: 'babel-cli/package.json changed without package-lock.json; confirm dependency graph did not change.',
+      message:
+        'babel-cli/package.json changed without package-lock.json; confirm dependency graph did not change.',
     });
   }
   return signals;
 }
 
-function buildPrDraft(files: CiReviewChangedFile[], risks: CiReviewFinding[], testSignals: CiReviewFinding[]): CiReviewReport['pr_draft'] {
+function buildPrDraft(
+  files: CiReviewChangedFile[],
+  risks: CiReviewFinding[],
+  testSignals: CiReviewFinding[],
+): CiReviewReport['pr_draft'] {
   const changed = files.length;
-  const title = changed === 0
-    ? 'No code changes detected'
-    : `Review ${changed} changed file${changed === 1 ? '' : 's'}`;
-  const summary = changed === 0
-    ? ['No tracked, untracked, staged, or base-ref changes were detected.']
-    : [
-      `Changed files: ${changed}`,
-      `Risk flags: ${risks.length}`,
-      `Test signals: ${testSignals.length}`,
-    ];
+  const title =
+    changed === 0
+      ? 'No code changes detected'
+      : `Review ${changed} changed file${changed === 1 ? '' : 's'}`;
+  const summary =
+    changed === 0
+      ? ['No tracked, untracked, staged, or base-ref changes were detected.']
+      : [
+          `Changed files: ${changed}`,
+          `Risk flags: ${risks.length}`,
+          `Test signals: ${testSignals.length}`,
+        ];
   const testPlan = [
     'Review this deterministic CI report.',
-    risks.length > 0 ? 'Manually inspect high/medium risk files before merge.' : 'No risk flags were detected by the deterministic scan.',
-    testSignals.length > 0 ? 'Run or document targeted tests for changed source paths.' : 'No missing-test signals were detected by the deterministic scan.',
+    risks.length > 0
+      ? 'Manually inspect high/medium risk files before merge.'
+      : 'No risk flags were detected by the deterministic scan.',
+    testSignals.length > 0
+      ? 'Run or document targeted tests for changed source paths.'
+      : 'No missing-test signals were detected by the deterministic scan.',
   ];
   return { title, summary, test_plan: testPlan };
 }
@@ -302,7 +339,11 @@ export function runCiReview(options: CiReviewOptions = {}): CiReviewReport {
     throw new Error(`Project root does not exist: ${projectRoot}`);
   }
 
-  const repoRoot = requireGitOutput(['rev-parse', '--show-toplevel'], projectRoot, 'git repo discovery');
+  const repoRoot = requireGitOutput(
+    ['rev-parse', '--show-toplevel'],
+    projectRoot,
+    'git repo discovery',
+  );
   const statusResult = runGit(['status', '--porcelain=v1', '-uall'], repoRoot);
   if (statusResult.status !== 0) {
     const detail = (statusResult.stderr || statusResult.stdout || 'unknown git error').trim();
@@ -314,7 +355,10 @@ export function runCiReview(options: CiReviewOptions = {}): CiReviewReport {
   const diagnostics: CiReviewFinding[] = [];
 
   if (baseRef) {
-    const baseDiff = runGit(['diff', '--name-status', '--no-renames', `${baseRef}...HEAD`], repoRoot);
+    const baseDiff = runGit(
+      ['diff', '--name-status', '--no-renames', `${baseRef}...HEAD`],
+      repoRoot,
+    );
     if (baseDiff.status === 0) {
       entries.push(...parseNameStatus(baseDiff.stdout, 'base'));
     } else {
@@ -326,16 +370,23 @@ export function runCiReview(options: CiReviewOptions = {}): CiReviewReport {
     }
   }
 
-  const changedFiles = mergeChangedFiles(entries.map((entry) => ({
-    ...entry,
-    path: entry.path.startsWith(repoRoot) ? relativeGitPath(repoRoot, entry.path) : normalizePath(entry.path),
-  })));
+  const changedFiles = mergeChangedFiles(
+    entries.map((entry) => ({
+      ...entry,
+      path: entry.path.startsWith(repoRoot)
+        ? relativeGitPath(repoRoot, entry.path)
+        : normalizePath(entry.path),
+    })),
+  );
   const risks = collectRisks(changedFiles);
   const testSignals = collectTestSignals(changedFiles);
   const highRiskCount = risks.filter((risk) => risk.severity === 'high').length;
   const generatedAt = (options.now ?? new Date()).toISOString();
   const outputDir = resolve(options.outputDir ?? join(BABEL_RUNS_DIR, 'ci-review'));
-  const artifactPath = join(outputDir, `ci-review-${toArtifactTimestamp(new Date(generatedAt))}.json`);
+  const artifactPath = join(
+    outputDir,
+    `ci-review-${toArtifactTimestamp(new Date(generatedAt))}.json`,
+  );
   const stagedCount = changedFiles.filter((file) => file.sources.includes('staged')).length;
   const unstagedCount = changedFiles.filter((file) => file.sources.includes('unstaged')).length;
   const untrackedCount = changedFiles.filter((file) => file.sources.includes('untracked')).length;
@@ -344,7 +395,12 @@ export function runCiReview(options: CiReviewOptions = {}): CiReviewReport {
     review_type: 'babel_ci_review',
     generated_at: generatedAt,
     artifact_path: artifactPath,
-    status: risks.length > 0 || testSignals.some((signal) => signal.severity !== 'info') || diagnostics.length > 0 ? 'warn' : 'pass',
+    status:
+      risks.length > 0 ||
+      testSignals.some((signal) => signal.severity !== 'info') ||
+      diagnostics.length > 0
+        ? 'warn'
+        : 'pass',
     project_root: projectRoot,
     delivery_policy: {
       read_only: true,
@@ -398,7 +454,9 @@ export function formatCiReviewHuman(report: CiReviewReport): string {
   if (report.risks.length > 0) {
     lines.push('', 'Risks:');
     for (const risk of report.risks) {
-      lines.push(`  [${risk.severity}] ${risk.code}${risk.path ? ` ${risk.path}` : ''}: ${risk.message}`);
+      lines.push(
+        `  [${risk.severity}] ${risk.code}${risk.path ? ` ${risk.path}` : ''}: ${risk.message}`,
+      );
     }
   }
   if (report.test_signals.length > 0) {

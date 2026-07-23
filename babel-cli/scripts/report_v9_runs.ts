@@ -12,7 +12,7 @@ interface RuntimeTelemetryRecord {
   token_budget_missing_count: number;
   budget_warning_severity: 'info' | 'warn' | 'severe' | null;
   budget_policy_enabled: boolean;
-  pipeline_mode: 'direct' | 'verified' | 'autonomous' | 'manual';
+  pipeline_mode: 'chat' | 'plan' | 'deep';
   qa_verdict: 'PASS' | 'REJECT' | null;
   qa_failure_tags: string[];
   final_outcome: string | null;

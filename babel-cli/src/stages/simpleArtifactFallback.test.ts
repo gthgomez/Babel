@@ -51,15 +51,17 @@ test('deterministic fallback selects the next unwritten bounded file_write targe
   const first = getNextDeterministicSimpleWrite(basePlan, rawTask, []);
   assert.equal(first?.target, 'notes/prompt-budget-observations.md');
 
-  const second = getNextDeterministicSimpleWrite(basePlan, rawTask, [{
-    step: 1,
-    tool: 'file_write',
-    target: 'notes/prompt-budget-observations.md',
-    exit_code: 0,
-    stdout: 'Written',
-    stderr: '',
-    verified: true,
-  }]);
+  const second = getNextDeterministicSimpleWrite(basePlan, rawTask, [
+    {
+      step: 1,
+      tool: 'file_write',
+      target: 'notes/prompt-budget-observations.md',
+      exit_code: 0,
+      stdout: 'Written',
+      stderr: '',
+      verified: true,
+    },
+  ]);
   assert.equal(second?.target, 'WRITE_REPORT.md');
 });
 
@@ -81,7 +83,10 @@ test('deterministic fallback emits display-name helper content for exact signatu
     'Add src/formatDisplayName.ts exporting formatDisplayName(firstName: string, lastName: string, email: string): string. It should trim names and fall back to email when both names are blank.',
   );
 
-  assert.match(content, /formatDisplayName\(firstName: string, lastName: string, email: string\): string/);
+  assert.match(
+    content,
+    /formatDisplayName\(firstName: string, lastName: string, email: string\): string/,
+  );
   assert.match(content, /firstName\.trim\(\)/);
   assert.match(content, /lastName\.trim\(\)/);
   assert.match(content, /email/);
@@ -141,13 +146,11 @@ test('deterministic repair only rewrites planned bounded targets', () => {
     'Create notes/prompt-budget-observations.md summarizing likely causes of prompt bloat. Also create WRITE_REPORT.md summarizing what was created.';
 
   assert.equal(
-    getDeterministicSimpleRepairWrite(basePlan, rawTask, 'notes/prompt-budget-observations.md')?.target,
+    getDeterministicSimpleRepairWrite(basePlan, rawTask, 'notes/prompt-budget-observations.md')
+      ?.target,
     'notes/prompt-budget-observations.md',
   );
-  assert.equal(
-    getDeterministicSimpleRepairWrite(basePlan, rawTask, 'notes/unrequested.md'),
-    null,
-  );
+  assert.equal(getDeterministicSimpleRepairWrite(basePlan, rawTask, 'notes/unrequested.md'), null);
 });
 
 test('direct bounded write plan accepts greenfield file-only bounded work', () => {
@@ -158,10 +161,10 @@ test('direct bounded write plan accepts greenfield file-only bounded work', () =
     const directPlan = getDirectBoundedWritePlan(basePlan, rawTask, root);
 
     assert.equal(directPlan?.writes.length, 2);
-    assert.deepEqual(directPlan?.writes.map(write => write.target), [
-      'notes/prompt-budget-observations.md',
-      'WRITE_REPORT.md',
-    ]);
+    assert.deepEqual(
+      directPlan?.writes.map((write) => write.target),
+      ['notes/prompt-budget-observations.md', 'WRITE_REPORT.md'],
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -244,8 +247,7 @@ test('direct bounded write plan refuses existing-file overwrites', () => {
 test('direct bounded write plan refuses ambiguous file/literal bindings', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-direct-plan-ambiguous-'));
   try {
-    const rawTask =
-      'Create a.txt and b.txt containing the exact strings alpha and beta.';
+    const rawTask = 'Create a.txt and b.txt containing the exact strings alpha and beta.';
     const ambiguousPlan: SwePlan = {
       ...basePlan,
       minimal_action_set: [

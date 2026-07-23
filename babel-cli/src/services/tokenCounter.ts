@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 import { getEncoding } from 'js-tiktoken';
@@ -37,6 +37,13 @@ export interface TokenCountEntryInput {
 
 const encoder = getEncoding(TOKENIZER_ENCODING);
 
+/** Cache of token counts keyed on `${resolvedFilePath}:${mtimeMs}`. */
+const tokenCountCache = new Map<string, number>();
+
+export function clearTokenCountCache(): void {
+  tokenCountCache.clear();
+}
+
 export function countTextTokens(text: string): number {
   return encoder.encode(text).length;
 }
@@ -48,7 +55,7 @@ export function buildWrappedPromptEntry(filePath: string): string {
 }
 
 export function buildPromptOnlyFromManifestPaths(paths: string[]): string {
-  return paths.map(filePath => buildWrappedPromptEntry(filePath)).join('');
+  return paths.map((filePath) => buildWrappedPromptEntry(filePath)).join('');
 }
 
 export function countPromptManifestTokens(
@@ -57,15 +64,23 @@ export function countPromptManifestTokens(
 ): ActualTokenMeasurement {
   const actualTokenByEntry: Record<string, number> = {};
   const warnings: string[] = [];
-  let actualPromptTokens = 0;
+  let actualPromptTokens: number | null = null;
 
   for (const filePath of paths) {
     try {
       if (!existsSync(filePath)) {
         throw new Error(`Prompt manifest path does not exist: ${filePath}`);
       }
-      const tokenCount = countTextTokens(buildWrappedPromptEntry(filePath));
+      const cacheKey = `${filePath}:${statSync(filePath).mtimeMs}`;
+      let tokenCount = tokenCountCache.get(cacheKey);
+      if (tokenCount === undefined) {
+        tokenCount = countTextTokens(buildWrappedPromptEntry(filePath));
+        tokenCountCache.set(cacheKey, tokenCount);
+      }
       actualTokenByEntry[filePath] = tokenCount;
+      if (actualPromptTokens === null) {
+        actualPromptTokens = 0;
+      }
       actualPromptTokens += tokenCount;
     } catch (error: unknown) {
       warnings.push(error instanceof Error ? error.message : String(error));
@@ -73,10 +88,10 @@ export function countPromptManifestTokens(
   }
 
   return {
-    actualPromptTokens: warnings.length > 0 ? null : actualPromptTokens,
-    actualTokenByEntry: warnings.length > 0 ? {} : actualTokenByEntry,
+    actualPromptTokens,
+    actualTokenByEntry,
     tokenizerEncoding: TOKENIZER_ENCODING,
-    tokenCountSource: warnings.length > 0 ? 'unavailable' : source,
+    tokenCountSource: actualPromptTokens === null ? 'unavailable' : source,
     warnings,
   };
 }
@@ -92,9 +107,16 @@ export function countSelectedEntryTokens(
   for (const entry of entries) {
     try {
       if (!existsSync(entry.absolutePath)) {
-        throw new Error(`Prompt manifest path does not exist for ${entry.id}: ${entry.absolutePath}`);
+        throw new Error(
+          `Prompt manifest path does not exist for ${entry.id}: ${entry.absolutePath}`,
+        );
       }
-      const tokenCount = countTextTokens(buildWrappedPromptEntry(entry.absolutePath));
+      const cacheKey = `${entry.absolutePath}:${statSync(entry.absolutePath).mtimeMs}`;
+      let tokenCount = tokenCountCache.get(cacheKey);
+      if (tokenCount === undefined) {
+        tokenCount = countTextTokens(buildWrappedPromptEntry(entry.absolutePath));
+        tokenCountCache.set(cacheKey, tokenCount);
+      }
       actualTokenByEntry[entry.id] = tokenCount;
       actualPromptTokens += tokenCount;
     } catch (error: unknown) {
@@ -103,24 +125,26 @@ export function countSelectedEntryTokens(
   }
 
   return {
-    actualPromptTokens: warnings.length > 0 ? null : actualPromptTokens,
-    actualTokenByEntry: warnings.length > 0 ? {} : actualTokenByEntry,
+    actualPromptTokens,
+    actualTokenByEntry,
     tokenizerEncoding: TOKENIZER_ENCODING,
-    tokenCountSource: warnings.length > 0 ? 'unavailable' : source,
+    tokenCountSource: source,
     warnings,
   };
 }
 
-export function countEntryTokens(
-  entry: CatalogEntry,
-  babelRoot: string,
-): EntryTokenMeasurement {
+export function countEntryTokens(entry: CatalogEntry, babelRoot: string): EntryTokenMeasurement {
   const absolutePath = join(babelRoot, entry.path ?? '');
   if (!entry.path || !existsSync(absolutePath)) {
     throw new Error(`Cannot measure entry ${entry.id}; resolved path missing: ${absolutePath}`);
   }
 
-  const actualCompiledTokens = countTextTokens(buildWrappedPromptEntry(absolutePath));
+  const cacheKey = `${absolutePath}:${statSync(absolutePath).mtimeMs}`;
+  let actualCompiledTokens = tokenCountCache.get(cacheKey);
+  if (actualCompiledTokens === undefined) {
+    actualCompiledTokens = countTextTokens(buildWrappedPromptEntry(absolutePath));
+    tokenCountCache.set(cacheKey, actualCompiledTokens);
+  }
   return {
     id: entry.id,
     layer: entry.layer,

@@ -108,7 +108,8 @@ const KNOWN_STANDALONE_FILE_EXTENSIONS = new Set([
   'yml',
 ]);
 
-const TEXT_FILE_EXTENSION_PATTERN = /\.(?:c|cc|cpp|cs|css|csv|gd|go|h|hpp|html|java|js|jsx|json|kt|md|mjs|py|rb|rs|sh|sql|ts|tsx|txt|xml|yaml|yml)$/i;
+const TEXT_FILE_EXTENSION_PATTERN =
+  /\.(?:c|cc|cpp|cs|css|csv|gd|go|h|hpp|html|java|js|jsx|json|kt|md|mjs|py|rb|rs|sh|sql|ts|tsx|txt|xml|yaml|yml)$/i;
 
 const SKIPPED_SEARCH_DIRS = new Set([
   '.git',
@@ -131,11 +132,16 @@ const MAX_SEARCH_FILES = 500;
 const MAX_SEARCH_FILE_BYTES = 512_000;
 
 function normalizePathForComparison(value: string): string {
-  return String(value ?? '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+  return String(value ?? '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '');
 }
 
 function cleanQuotedLiteral(value: string): string {
-  return String(value ?? '').replace(/\r\n/g, '\n').trim();
+  return String(value ?? '')
+    .replace(/\r\n/g, '\n')
+    .trim();
 }
 
 function cleanUnquotedLiteral(value: string): string {
@@ -154,7 +160,12 @@ function cleanBoundLiteral(value: string): string {
 
 function isLikelyFilePath(value: string): boolean {
   const normalized = normalizePathForComparison(value);
-  if (!normalized || normalized.includes('*') || normalized.includes('<') || normalized.includes('>')) {
+  if (
+    !normalized ||
+    normalized.includes('*') ||
+    normalized.includes('<') ||
+    normalized.includes('>')
+  ) {
     return false;
   }
   if (NON_FILE_DOTTED_TOKENS.has(normalized.toLowerCase())) {
@@ -176,22 +187,21 @@ function isLikelyCommand(value: string): boolean {
   if (!trimmed || /[\r\n]/.test(trimmed)) {
     return false;
   }
-  return /^(?:\.\/)?(?:npm|npx|pnpm|yarn|node|tsx|tsc|python|python3|pytest|jest|vitest|gradle|gradlew|git|docker|go|cargo|make|java|kotlinc|babel)\b/i.test(trimmed) ||
-    /\s--[a-z0-9][a-z0-9-]*/i.test(trimmed);
+  return (
+    /^(?:\.\/)?(?:npm|npx|pnpm|yarn|node|tsx|tsc|python|python3|pytest|jest|vitest|gradle|gradlew|git|docker|go|cargo|make|java|kotlinc|babel)\b/i.test(
+      trimmed,
+    ) || /\s--[a-z0-9][a-z0-9-]*/i.test(trimmed)
+  );
 }
 
-function addInvariant(
-  invariants: AddInvariantInput[],
-  input: AddInvariantInput,
-): void {
-  const value = input.kind === 'filename'
-    ? normalizePathForComparison(input.value)
-    : input.value.trim();
+function addInvariant(invariants: AddInvariantInput[], input: AddInvariantInput): void {
+  const value =
+    input.kind === 'filename' ? normalizePathForComparison(input.value) : input.value.trim();
   if (!value) {
     return;
   }
   const key = `${input.kind}\0${value}`;
-  if (invariants.some(existing => `${existing.kind}\0${existing.value}` === key)) {
+  if (invariants.some((existing) => `${existing.kind}\0${existing.value}` === key)) {
     return;
   }
   invariants.push({ ...input, value });
@@ -207,7 +217,11 @@ function addFileLiteralConstraint(
     return;
   }
   const key = `${path}\0${literal}\0${input.relation}`;
-  if (constraints.some(existing => `${existing.path}\0${existing.literal}\0${existing.relation}` === key)) {
+  if (
+    constraints.some(
+      (existing) => `${existing.path}\0${existing.literal}\0${existing.relation}` === key,
+    )
+  ) {
     return;
   }
   constraints.push({
@@ -225,22 +239,26 @@ function addFileLiteralConstraint(
 function extractQuotedExactLiterals(task: string, invariants: AddInvariantInput[]): void {
   const patterns: Array<{ pattern: RegExp; kind: ExactInvariantKind; reason: string }> = [
     {
-      pattern: /\b(?:exact|literal|verbatim)\s+(?:string|text|output|snippet|value|contents?)\b\s*(?:of|as|:)?\s*["'`]([^"'`\r\n]+)["'`]/gi,
+      pattern:
+        /\b(?:exact|literal|verbatim)\s+(?:string|text|output|snippet|value|contents?)\b\s*(?:of|as|:)?\s*["'`]([^"'`\r\n]+)["'`]/gi,
       kind: 'literal_string',
       reason: 'quoted literal following exact/literal/verbatim instruction',
     },
     {
-      pattern: /\b(?:returns?|prints?|outputs?|emits?|says?|contain(?:s|ing)?|writes?)\b[^.\r\n]{0,100}\b(?:exact|literal|verbatim)\b[^"'`\r\n]{0,60}["'`]([^"'`\r\n]+)["'`]/gi,
+      pattern:
+        /\b(?:returns?|prints?|outputs?|emits?|says?|contain(?:s|ing)?|writes?)\b[^.\r\n]{0,100}\b(?:exact|literal|verbatim)\b[^"'`\r\n]{0,60}["'`]([^"'`\r\n]+)["'`]/gi,
       kind: 'literal_string',
       reason: 'quoted exact output literal',
     },
     {
-      pattern: /\b(?:value|status|final\s+status|label|message|output|text|string|constant)\b[^.\r\n]{0,100}\b(?:must|should|is|be|equal|equals?|set\s+to)\b[^"'`\r\n]{0,60}["'`]([^"'`\r\n]+)["'`]/gi,
+      pattern:
+        /\b(?:value|status|final\s+status|label|message|output|text|string|constant)\b[^.\r\n]{0,100}\b(?:must|should|is|be|equal|equals?|set\s+to)\b[^"'`\r\n]{0,60}["'`]([^"'`\r\n]+)["'`]/gi,
       kind: 'required_value',
       reason: 'quoted required value',
     },
     {
-      pattern: /\b(?:returns?|prints?|outputs?|emits?|says?|contain(?:s|ing)?|writes?)\s+["']([^"'\r\n]+)["']/gi,
+      pattern:
+        /\b(?:returns?|prints?|outputs?|emits?|says?|contain(?:s|ing)?|writes?)\s+["']([^"'\r\n]+)["']/gi,
       kind: 'output_snippet',
       reason: 'quoted requested output snippet',
     },
@@ -302,15 +320,22 @@ function extractUnquotedExactLiterals(task: string, invariants: AddInvariantInpu
 function extractFileLiteralConstraints(task: string): ExactFileLiteralConstraint[] {
   const constraints: ExactFileLiteralConstraint[] = [];
   const filePattern = String.raw`((?:[A-Za-z]:[\\/])?[A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)*\.[A-Za-z0-9_-]{1,12})`;
-  const literalPattern = String.raw`(?:"([^"\r\n]+)"|'([^'\r\n]+)'|` + '`([^`\\r\\n]+)`' + String.raw`|([^.\r\n;]+))`;
+  const literalPattern =
+    String.raw`(?:"([^"\r\n]+)"|'([^'\r\n]+)'|` + '`([^`\\r\\n]+)`' + String.raw`|([^.\r\n;]+))`;
   const patterns: Array<{ pattern: RegExp; relation: ExactFileLiteralRelation; reason: string }> = [
     {
-      pattern: new RegExp(`${filePattern}\\b[^.\\r\\n;]{0,160}\\b(?:entire\\s+(?:file\\s+)?contents?|whole\\s+(?:file\\s+)?contents?|full\\s+contents?)\\s+(?:are|is|equals?|equal|be)\\s+(?:the\\s+)?exact\\s+(?:(?:string|text|literal)\\b)?\\s*${literalPattern}`, 'gi'),
+      pattern: new RegExp(
+        `${filePattern}\\b[^.\\r\\n;]{0,160}\\b(?:entire\\s+(?:file\\s+)?contents?|whole\\s+(?:file\\s+)?contents?|full\\s+contents?)\\s+(?:are|is|equals?|equal|be)\\s+(?:the\\s+)?exact\\s+(?:(?:string|text|literal)\\b)?\\s*${literalPattern}`,
+        'gi',
+      ),
       relation: 'entire_file_equals',
       reason: 'file path bound to exact entire-file content literal',
     },
     {
-      pattern: new RegExp(`${filePattern}\\b[^.\\r\\n;]{0,120}\\b(?:contain(?:s|ing)?|with|include(?:s|ing)?)\\b[^.\\r\\n;]{0,80}\\bexact\\s+(?:string|text|literal)\\b\\s*${literalPattern}`, 'gi'),
+      pattern: new RegExp(
+        `${filePattern}\\b[^.\\r\\n;]{0,120}\\b(?:contain(?:s|ing)?|with|include(?:s|ing)?)\\b[^.\\r\\n;]{0,80}\\bexact\\s+(?:string|text|literal)\\b\\s*${literalPattern}`,
+        'gi',
+      ),
       relation: 'contains',
       reason: 'file path bound to contained exact literal',
     },
@@ -337,7 +362,10 @@ function extractFileLiteralConstraints(task: string): ExactFileLiteralConstraint
 }
 
 function extractFilenameInvariants(task: string, invariants: AddInvariantInput[]): void {
-  const pathMatches = task.match(/(?:[A-Za-z]:[\\/])?[A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)*\.[A-Za-z0-9_-]{1,12}/g) ?? [];
+  const pathMatches =
+    task.match(
+      /(?:[A-Za-z]:[\\/])?[A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)*\.[A-Za-z0-9_-]{1,12}/g,
+    ) ?? [];
   for (const match of pathMatches) {
     if (isLikelyFilePath(match)) {
       addInvariant(invariants, {
@@ -420,15 +448,28 @@ function extractCommandAndFlagInvariants(task: string, invariants: AddInvariantI
   }
 }
 
-export function extractExactInvariants(rawTask: string): ExactInvariantRegistry {
-  const task = String(rawTask ?? '');
-  const invariants: AddInvariantInput[] = [];
-  const fileLiteralConstraints = extractFileLiteralConstraints(task);
+// Task metadata lines injected by the orchestrator. These describe pipeline
+// configuration, not user-facing requirements, and must be excluded from exact
+// invariant extraction to avoid false-positive literal constraints.
+const ORCHESTRATOR_METADATA_PATTERN =
+  /\b(?:Preferred project|Preferred pipeline mode|Preferred execution profile|Execution profile)\s*:.*$/gim;
 
-  extractFilenameInvariants(task, invariants);
-  extractQuotedExactLiterals(task, invariants);
-  extractUnquotedExactLiterals(task, invariants);
-  extractCommandAndFlagInvariants(task, invariants);
+export function extractExactInvariants(rawTask: string): ExactInvariantRegistry {
+  // Strip orchestrator metadata before extracting invariants — metadata is not
+  // part of the user's task and should not generate exact literal constraints.
+  const task = String(rawTask ?? '')
+    .replace(ORCHESTRATOR_METADATA_PATTERN, '')
+    .trim();
+  // Also strip trailing metadata that follows the form "Execution profile <name>"
+  // which appears without the "Preferred" prefix on a separate line.
+  const cleanTask = task.replace(/^\s*Execution profile\s*[^\n]*$/gim, '').trim();
+  const invariants: AddInvariantInput[] = [];
+  const fileLiteralConstraints = extractFileLiteralConstraints(cleanTask);
+
+  extractFilenameInvariants(cleanTask, invariants);
+  extractQuotedExactLiterals(cleanTask, invariants);
+  extractUnquotedExactLiterals(cleanTask, invariants);
+  extractCommandAndFlagInvariants(cleanTask, invariants);
 
   return {
     schema_version: 1,
@@ -453,25 +494,28 @@ export function formatExactInvariantPromptLines(
     return [];
   }
 
-  const heading = audience === 'qa'
-    ? '--- EXACT INSTRUCTION INVARIANT REVIEW ---'
-    : audience === 'executor'
-      ? 'Exact instruction invariant execution contract:'
-      : 'Exact instruction invariant registry:';
-  const rule = audience === 'qa'
-    ? 'Reject the plan if any invariant is omitted, paraphrased, renamed, relocated, or treated semantically instead of literally.'
-    : audience === 'executor'
-      ? 'Do NOT emit EXECUTION_COMPLETE unless every invariant below is present exactly as written; semantic paraphrases fail.'
-      : 'Preserve every invariant below exactly as written; semantic paraphrases fail.';
+  const heading =
+    audience === 'qa'
+      ? '--- EXACT INSTRUCTION INVARIANT REVIEW ---'
+      : audience === 'executor'
+        ? 'Exact instruction invariant execution contract:'
+        : 'Exact instruction invariant registry:';
+  const rule =
+    audience === 'qa'
+      ? 'Reject the plan if any invariant is omitted, paraphrased, renamed, relocated, or treated semantically instead of literally.'
+      : audience === 'executor'
+        ? 'Do NOT emit EXECUTION_COMPLETE unless every invariant below is present exactly as written; semantic paraphrases fail.'
+        : 'Preserve every invariant below exactly as written; semantic paraphrases fail.';
 
   return [
     heading,
     rule,
-    ...registry.file_literal_constraints.map(constraint =>
-      `  - file_literal_constraint: ${constraint.path} ${constraint.relation} "${constraint.literal}" (${constraint.reason})`,
+    ...registry.file_literal_constraints.map(
+      (constraint) =>
+        `  - file_literal_constraint: ${constraint.path} ${constraint.relation} "${constraint.literal}" (${constraint.reason})`,
     ),
-    ...registry.invariants.map(invariant =>
-      `  - ${invariant.kind}: "${invariant.value}" (${invariant.reason})`,
+    ...registry.invariants.map(
+      (invariant) => `  - ${invariant.kind}: "${invariant.value}" (${invariant.reason})`,
     ),
   ];
 }
@@ -481,9 +525,10 @@ export function resolveFileLiteralBinding(
   target: string,
 ): FileLiteralBindingResolution {
   const normalizedTarget = normalizePathForComparison(target).toLowerCase();
-  const directMatches = registry.file_literal_constraints.filter(constraint =>
-    constraint.path.toLowerCase() === normalizedTarget ||
-    constraint.path.split('/').at(-1)?.toLowerCase() === normalizedTarget.split('/').at(-1),
+  const directMatches = registry.file_literal_constraints.filter(
+    (constraint) =>
+      constraint.path.toLowerCase() === normalizedTarget ||
+      constraint.path.split('/').at(-1)?.toLowerCase() === normalizedTarget.split('/').at(-1),
   );
   if (directMatches.length === 1) {
     return { status: 'matched', constraint: directMatches[0]! };
@@ -495,16 +540,20 @@ export function resolveFileLiteralBinding(
     };
   }
 
-  const filenameCount = registry.invariants.filter(invariant => invariant.kind === 'filename').length;
-  const literalInvariants = registry.invariants.filter(invariant =>
-    invariant.kind === 'literal_string' ||
-    invariant.kind === 'output_snippet' ||
-    invariant.kind === 'required_value',
+  const filenameCount = registry.invariants.filter(
+    (invariant) => invariant.kind === 'filename',
+  ).length;
+  const literalInvariants = registry.invariants.filter(
+    (invariant) =>
+      invariant.kind === 'literal_string' ||
+      invariant.kind === 'output_snippet' ||
+      invariant.kind === 'required_value',
   );
   if (filenameCount > 1 && literalInvariants.length > 1) {
     return {
       status: 'ambiguous',
-      reason: 'multiple filenames and multiple exact literals were requested without a one-to-one binding',
+      reason:
+        'multiple filenames and multiple exact literals were requested without a one-to-one binding',
     };
   }
 
@@ -516,9 +565,14 @@ function isWithinProjectRoot(projectRoot: string, candidatePath: string): boolea
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
-function resolveInvariantFile(projectRoot: string, invariant: ExactInvariant): CandidateFile | null {
+function resolveInvariantFile(
+  projectRoot: string,
+  invariant: ExactInvariant,
+): CandidateFile | null {
   const normalized = normalizePathForComparison(invariant.value);
-  const directPath = isAbsolute(normalized) ? resolve(normalized) : resolve(projectRoot, normalized);
+  const directPath = isAbsolute(normalized)
+    ? resolve(normalized)
+    : resolve(projectRoot, normalized);
   if (!isWithinProjectRoot(projectRoot, directPath)) {
     return null;
   }
@@ -529,8 +583,9 @@ function resolveInvariantFile(projectRoot: string, invariant: ExactInvariant): C
     };
   }
   if (!normalized.includes('/')) {
-    const match = listProjectTextFiles(projectRoot, true)
-      .find(file => file.relativePath.split('/').at(-1) === normalized);
+    const match = listProjectTextFiles(projectRoot, true).find(
+      (file) => file.relativePath.split('/').at(-1) === normalized,
+    );
     return match ?? null;
   }
   return null;
@@ -592,28 +647,33 @@ function readCandidateFile(file: CandidateFile): string | null {
 }
 
 function toolLogsContainExactValue(toolCallLog: readonly ToolCallLog[], value: string): boolean {
-  return toolCallLog.some(entry =>
-    String(entry.target ?? '').includes(value) ||
-    String(entry.stdout ?? '').includes(value) ||
-    String(entry.stderr ?? '').includes(value),
+  return toolCallLog.some(
+    (entry) =>
+      String(entry.target ?? '').includes(value) ||
+      String(entry.stdout ?? '').includes(value) ||
+      String(entry.stderr ?? '').includes(value),
   );
 }
 
 function commandWasExecuted(toolCallLog: readonly ToolCallLog[], command: string): boolean {
   const expected = command.replace(/\s+/g, ' ').trim();
-  return toolCallLog.some(entry => {
+  return toolCallLog.some((entry) => {
     if (entry.tool !== 'shell_exec' && entry.tool !== 'test_run') {
       return false;
     }
-    const actual = String(entry.target ?? '').replace(/\s+/g, ' ').trim();
+    const actual = String(entry.target ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
     return actual === expected || actual.includes(expected);
   });
 }
 
-function projectFilesContainExactValue(projectRoot: string, value: string, preferredFiles: CandidateFile[]): string | null {
-  const candidates = preferredFiles.length > 0
-    ? preferredFiles
-    : listProjectTextFiles(projectRoot);
+function projectFilesContainExactValue(
+  projectRoot: string,
+  value: string,
+  preferredFiles: CandidateFile[],
+): string | null {
+  const candidates = preferredFiles.length > 0 ? preferredFiles : listProjectTextFiles(projectRoot);
 
   for (const file of candidates) {
     if (!TEXT_FILE_EXTENSION_PATTERN.test(file.relativePath)) {
@@ -633,11 +693,13 @@ export function verifyExactInvariants(input: {
   toolCallLog?: readonly ToolCallLog[];
 }): ExactInvariantCheckResult {
   const toolCallLog = input.toolCallLog ?? [];
-  const filenameInvariants = input.registry.invariants.filter(invariant => invariant.kind === 'filename');
+  const filenameInvariants = input.registry.invariants.filter(
+    (invariant) => invariant.kind === 'filename',
+  );
   const resolvedFilenameFiles = input.projectRoot
     ? filenameInvariants
-      .map(invariant => resolveInvariantFile(input.projectRoot as string, invariant))
-      .filter((file): file is CandidateFile => file !== null)
+        .map((invariant) => resolveInvariantFile(input.projectRoot as string, invariant))
+        .filter((file): file is CandidateFile => file !== null)
     : [];
   const failures: ExactInvariantFailure[] = [];
 
@@ -693,15 +755,17 @@ export function verifyExactInvariants(input: {
       });
       continue;
     }
-    const passed = constraint.relation === 'entire_file_equals'
-      ? content === constraint.literal
-      : content.includes(constraint.literal);
+    const passed =
+      constraint.relation === 'entire_file_equals'
+        ? content === constraint.literal
+        : content.includes(constraint.literal);
     if (!passed) {
       failures.push({
         invariant,
-        reason: constraint.relation === 'entire_file_equals'
-          ? `file "${constraint.path}" entire content does not exactly equal "${constraint.literal}"`
-          : `file "${constraint.path}" does not contain exact literal "${constraint.literal}"`,
+        reason:
+          constraint.relation === 'entire_file_equals'
+            ? `file "${constraint.path}" entire content does not exactly equal "${constraint.literal}"`
+            : `file "${constraint.path}" does not contain exact literal "${constraint.literal}"`,
         evidence: [resolved.relativePath],
       });
     }
@@ -729,16 +793,22 @@ export function verifyExactInvariants(input: {
     }
 
     if (invariant.kind === 'command') {
-      if (commandWasExecuted(toolCallLog, invariant.value) || toolLogsContainExactValue(toolCallLog, invariant.value)) {
+      if (
+        commandWasExecuted(toolCallLog, invariant.value) ||
+        toolLogsContainExactValue(toolCallLog, invariant.value)
+      ) {
         continue;
       }
-      if (input.projectRoot && projectFilesContainExactValue(input.projectRoot, invariant.value, [])) {
+      if (
+        input.projectRoot &&
+        projectFilesContainExactValue(input.projectRoot, invariant.value, [])
+      ) {
         continue;
       }
       failures.push({
         invariant,
         reason: `requested command "${invariant.value}" was not executed or preserved literally`,
-        evidence: toolCallLog.map(entry => `${entry.tool}:${entry.target}`).slice(0, 8),
+        evidence: toolCallLog.map((entry) => `${entry.tool}:${entry.target}`).slice(0, 8),
       });
       continue;
     }
@@ -747,7 +817,10 @@ export function verifyExactInvariants(input: {
       if (toolLogsContainExactValue(toolCallLog, invariant.value)) {
         continue;
       }
-      if (input.projectRoot && projectFilesContainExactValue(input.projectRoot, invariant.value, [])) {
+      if (
+        input.projectRoot &&
+        projectFilesContainExactValue(input.projectRoot, invariant.value, [])
+      ) {
         continue;
       }
       failures.push({
@@ -763,8 +836,14 @@ export function verifyExactInvariants(input: {
     }
 
     if (input.projectRoot) {
-      const preferredFiles = resolvedFilenameFiles.filter(file => TEXT_FILE_EXTENSION_PATTERN.test(file.relativePath));
-      const match = projectFilesContainExactValue(input.projectRoot, invariant.value, preferredFiles);
+      const preferredFiles = resolvedFilenameFiles.filter((file) =>
+        TEXT_FILE_EXTENSION_PATTERN.test(file.relativePath),
+      );
+      const match = projectFilesContainExactValue(
+        input.projectRoot,
+        invariant.value,
+        preferredFiles,
+      );
       if (match) {
         continue;
       }
@@ -773,7 +852,7 @@ export function verifyExactInvariants(input: {
     failures.push({
       invariant,
       reason: `literal invariant "${invariant.value}" is missing; semantic paraphrase is not accepted`,
-      evidence: resolvedFilenameFiles.map(file => file.relativePath),
+      evidence: resolvedFilenameFiles.map((file) => file.relativePath),
     });
   }
 
@@ -788,12 +867,14 @@ export function summarizeExactInvariantFailure(result: ExactInvariantCheckResult
   if (result.passed) {
     return null;
   }
-  const hasAmbiguousBinding = result.failures.some(failure =>
+  const hasAmbiguousBinding = result.failures.some((failure) =>
     failure.reason.includes(`[${AMBIGUOUS_LITERAL_BINDING_STATUS}]`),
   );
-  const details = result.failures.map(failure =>
-    `${failure.invariant.kind} "${failure.invariant.value}": ${failure.reason}`,
+  const details = result.failures.map(
+    (failure) => `${failure.invariant.kind} "${failure.invariant.value}": ${failure.reason}`,
   );
-  const status = hasAmbiguousBinding ? AMBIGUOUS_LITERAL_BINDING_STATUS : EXACT_INSTRUCTION_DRIFT_STATUS;
+  const status = hasAmbiguousBinding
+    ? AMBIGUOUS_LITERAL_BINDING_STATUS
+    : EXACT_INSTRUCTION_DRIFT_STATUS;
   return `[${status}] ${details.join('; ')}`;
 }

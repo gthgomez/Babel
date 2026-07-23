@@ -4,10 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import {
-  buildRecoveryAssessment,
-  formatRecoveryAssessmentHuman,
-} from './recovery.js';
+import { buildRecoveryAssessment, formatRecoveryAssessmentHuman } from './recovery.js';
 import { resumeExecution } from './resumeExecution.js';
 
 const originalFetch = globalThis.fetch;
@@ -65,9 +62,7 @@ test('recovery resolves latest and classifies verifier failures without missing 
     });
     writeJson(join(runDir, '04_execution_report.json'), {
       status: 'EXECUTION_HALTED',
-      tool_call_log: [
-        { tool: 'test_run', target: 'npm test', exit_code: 1 },
-      ],
+      tool_call_log: [{ tool: 'test_run', target: 'npm test', exit_code: 1 }],
     });
     writeJson(capsulePath, {
       schema_version: 1,
@@ -89,8 +84,14 @@ test('recovery resolves latest and classifies verifier failures without missing 
     assert.equal(assessment.failure_code, 'TEST_FAILED');
     assert.equal(assessment.failed_command, 'npm test');
     assert.equal(assessment.missing_artifacts.length, 0);
-    assert.equal(assessment.available_artifacts.every(artifact => artifact.path && artifact.path.length > 0), true);
-    assert.equal(assessment.available_artifacts.every(artifact => !artifact.path.includes('does-not-exist')), true);
+    assert.equal(
+      assessment.available_artifacts.every((artifact) => artifact.path && artifact.path.length > 0),
+      true,
+    );
+    assert.equal(
+      assessment.available_artifacts.every((artifact) => !artifact.path.includes('does-not-exist')),
+      true,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -179,7 +180,10 @@ test('resume returns parseable failure when a provider retry fails', async () =>
     assert.equal(result.status, 'RESUME_FAILED');
     assert.equal(result.action, 'retry_ask');
     assert.equal(result.run_dir, runDir);
-    assert.equal(result.recovery.available_artifacts.every(artifact => existsSync(artifact.path)), true);
+    assert.equal(
+      result.recovery.available_artifacts.every((artifact) => existsSync(artifact.path)),
+      true,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -267,7 +271,10 @@ test('recovery treats completed small-fix runs as complete with no missing failu
 
     assert.equal(assessment.classification, null);
     assert.equal(assessment.retryable, false);
-    assert.equal(assessment.missing_artifacts.some(artifact => artifact.key === 'failure_capsule'), false);
+    assert.equal(
+      assessment.missing_artifacts.some((artifact) => artifact.key === 'failure_capsule'),
+      false,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -290,13 +297,16 @@ test('recovery continues from plan when execution artifacts are absent but a pla
     const assessment = buildRecoveryAssessment({ run: 'latest', runsDir: root });
 
     assert.equal(assessment.classification, 'continue_from_plan');
-    assert.deepEqual(
-      assessment.missing_artifacts.map(artifact => artifact.filename).sort(),
-      ['04_execution_report.json', 'terminal_status_summary.json'],
-    );
-    assert.equal(assessment.available_artifacts.some(artifact => artifact.filename === '02_swe_plan.json'), true);
+    assert.deepEqual(assessment.missing_artifacts.map((artifact) => artifact.filename).sort(), [
+      '04_execution_report.json',
+      'terminal_status_summary.json',
+    ]);
     assert.equal(
-      assessment.missing_artifacts.every(artifact => !Object.hasOwn(artifact, 'path')),
+      assessment.available_artifacts.some((artifact) => artifact.filename === '02_swe_plan.json'),
+      true,
+    );
+    assert.equal(
+      assessment.missing_artifacts.every((artifact) => !Object.hasOwn(artifact, 'path')),
       true,
     );
   } finally {
@@ -327,9 +337,7 @@ test('recovery reports referenced missing failure capsules without pointing to m
     });
     writeJson(join(runDir, '04_execution_report.json'), {
       status: 'EXECUTION_HALTED',
-      tool_call_log: [
-        { tool: 'shell_exec', target: 'node ./scripts/check.js', exit_code: 1 },
-      ],
+      tool_call_log: [{ tool: 'shell_exec', target: 'node ./scripts/check.js', exit_code: 1 }],
     });
 
     const assessment = buildRecoveryAssessment({ runDir });
@@ -338,8 +346,16 @@ test('recovery reports referenced missing failure capsules without pointing to m
     assert.equal(assessment.classification, 'retry_same_command');
     assert.equal(assessment.failure_capsule, null);
     assert.equal(assessment.terminal_status_summary?.failure_capsule_path, null);
-    assert.equal(assessment.available_artifacts.some(artifact => artifact.path.endsWith('does-not-exist.json')), false);
-    assert.equal(assessment.missing_artifacts.some(artifact => artifact.key === 'failure_capsule'), true);
+    assert.equal(
+      assessment.available_artifacts.some((artifact) =>
+        artifact.path.endsWith('does-not-exist.json'),
+      ),
+      false,
+    );
+    assert.equal(
+      assessment.missing_artifacts.some((artifact) => artifact.key === 'failure_capsule'),
+      true,
+    );
     assert.match(human, /Missing artifacts:/);
   } finally {
     rmSync(root, { recursive: true, force: true });

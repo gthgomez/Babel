@@ -110,7 +110,10 @@ function normalizePath(path: string): string {
 }
 
 function toArtifactTimestamp(date: Date): string {
-  return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  return date
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}Z$/, 'Z');
 }
 
 function parsePorcelainStatus(stdout: string): ParsedChange[] {
@@ -120,7 +123,9 @@ function parsePorcelainStatus(stdout: string): ParsedChange[] {
     const x = line[0] ?? ' ';
     const y = line[1] ?? ' ';
     const rawPath = line.slice(3).trim();
-    const path = normalizePath(rawPath.includes(' -> ') ? rawPath.split(' -> ').at(-1) ?? rawPath : rawPath);
+    const path = normalizePath(
+      rawPath.includes(' -> ') ? (rawPath.split(' -> ').at(-1) ?? rawPath) : rawPath,
+    );
     const sources: ChangeSource[] = [];
     if (x === '?' && y === '?') {
       sources.push('untracked');
@@ -169,7 +174,11 @@ function parseNumstat(stdout: string): NumstatEntry[] {
     });
 }
 
-function collectNumstats(repoRoot: string, baseRef: string | null, diagnostics: GitDraftDiagnostic[]): NumstatEntry[] {
+function collectNumstats(
+  repoRoot: string,
+  baseRef: string | null,
+  diagnostics: GitDraftDiagnostic[],
+): NumstatEntry[] {
   const entries: NumstatEntry[] = [];
   const specs: string[][] = [
     ['diff', '--numstat'],
@@ -217,12 +226,14 @@ function mergeChanges(changes: ParsedChange[], numstats: NumstatEntry[]): GitDra
     const current = statMap.get(stat.path);
     statMap.set(stat.path, {
       path: stat.path,
-      additions: current?.additions === null || stat.additions === null
-        ? null
-        : (current?.additions ?? 0) + stat.additions,
-      deletions: current?.deletions === null || stat.deletions === null
-        ? null
-        : (current?.deletions ?? 0) + stat.deletions,
+      additions:
+        current?.additions === null || stat.additions === null
+          ? null
+          : (current?.additions ?? 0) + stat.additions,
+      deletions:
+        current?.deletions === null || stat.deletions === null
+          ? null
+          : (current?.deletions ?? 0) + stat.deletions,
     });
   }
 
@@ -264,37 +275,49 @@ function makeScope(files: GitDraftChangedFile[]): string {
 function makeSubject(files: GitDraftChangedFile[]): string {
   if (files.length === 0) return 'chore(repo): no changes detected';
   const scope = makeScope(files);
-  const hasDocsOnly = files.every((file) => file.path.startsWith('docs/') || /\.(md|txt)$/i.test(file.path));
-  const hasTests = files.some((file) => /\.(test|spec)\.(ts|tsx|js|jsx)$/i.test(file.path) || file.path.includes('/test_'));
-  const hasImplementation = files.some((file) => /\.(ts|tsx|js|jsx|mjs|cjs|py|kt|java|go|rs)$/i.test(file.path) &&
-    !/\.(test|spec)\.(ts|tsx|js|jsx)$/i.test(file.path) &&
-    !file.path.includes('/test_'));
+  const hasDocsOnly = files.every(
+    (file) => file.path.startsWith('docs/') || /\.(md|txt)$/i.test(file.path),
+  );
+  const hasTests = files.some(
+    (file) => /\.(test|spec)\.(ts|tsx|js|jsx)$/i.test(file.path) || file.path.includes('/test_'),
+  );
+  const hasImplementation = files.some(
+    (file) =>
+      /\.(ts|tsx|js|jsx|mjs|cjs|py|kt|java|go|rs)$/i.test(file.path) &&
+      !/\.(test|spec)\.(ts|tsx|js|jsx)$/i.test(file.path) &&
+      !file.path.includes('/test_'),
+  );
   const type = hasDocsOnly ? 'docs' : hasImplementation ? 'feat' : hasTests ? 'test' : 'chore';
   return `${type}(${scope}): draft ${files.length} file change${files.length === 1 ? '' : 's'}`;
 }
 
 function buildCommitDraft(files: GitDraftChangedFile[]): GitDraftReport['commit_draft'] {
   const subject = makeSubject(files);
-  const body = files.length === 0
-    ? ['No changes detected.']
-    : [
-      `Changed files: ${files.length}`,
-      ...files.slice(0, 12).map((file) => `- ${file.path}`),
-      ...(files.length > 12 ? [`- ... ${files.length - 12} more`] : []),
-    ];
+  const body =
+    files.length === 0
+      ? ['No changes detected.']
+      : [
+          `Changed files: ${files.length}`,
+          ...files.slice(0, 12).map((file) => `- ${file.path}`),
+          ...(files.length > 12 ? [`- ... ${files.length - 12} more`] : []),
+        ];
   return { subject, body };
 }
 
-function buildPrDraft(files: GitDraftChangedFile[], commitDraft: NonNullable<GitDraftReport['commit_draft']>): GitDraftReport['pr_draft'] {
+function buildPrDraft(
+  files: GitDraftChangedFile[],
+  commitDraft: NonNullable<GitDraftReport['commit_draft']>,
+): GitDraftReport['pr_draft'] {
   return {
     title: commitDraft.subject.replace(/^[a-z]+(?:\([^)]+\))?:\s*/, ''),
-    summary: files.length === 0
-      ? ['No changes detected.']
-      : [
-        `Changed files: ${files.length}`,
-        `Primary scope: ${makeScope(files)}`,
-        `Draft commit: ${commitDraft.subject}`,
-      ],
+    summary:
+      files.length === 0
+        ? ['No changes detected.']
+        : [
+            `Changed files: ${files.length}`,
+            `Primary scope: ${makeScope(files)}`,
+            `Draft commit: ${commitDraft.subject}`,
+          ],
     test_plan: [
       'Run targeted tests for changed areas.',
       'Run `babel ci review --json` before merge.',
@@ -309,8 +332,10 @@ function buildPrDraft(files: GitDraftChangedFile[], commitDraft: NonNullable<Git
 
 function recommendedNextAction(kind: GitDraftKind, changedCount: number): string {
   if (changedCount === 0) return 'No changes detected; no draft action needed.';
-  if (kind === 'diff_summary') return 'Review diff summary, then generate commit/PR drafts if the scope is coherent.';
-  if (kind === 'commit_draft') return 'Review the commit draft before running any git commit command manually.';
+  if (kind === 'diff_summary')
+    return 'Review diff summary, then generate commit/PR drafts if the scope is coherent.';
+  if (kind === 'commit_draft')
+    return 'Review the commit draft before running any git commit command manually.';
   return 'Review PR metadata and CI evidence before opening a PR manually.';
 }
 
@@ -319,7 +344,11 @@ export function runGitDraft(kind: GitDraftKind, options: GitDraftOptions = {}): 
   if (!existsSync(projectRoot)) {
     throw new Error(`Project root does not exist: ${projectRoot}`);
   }
-  const repoRoot = requireGitOutput(['rev-parse', '--show-toplevel'], projectRoot, 'git repo discovery');
+  const repoRoot = requireGitOutput(
+    ['rev-parse', '--show-toplevel'],
+    projectRoot,
+    'git repo discovery',
+  );
   const statusResult = runGit(['status', '--porcelain=v1', '-uall'], repoRoot);
   if (statusResult.status !== 0) {
     const detail = (statusResult.stderr || statusResult.stdout || 'unknown git error').trim();
@@ -330,7 +359,10 @@ export function runGitDraft(kind: GitDraftKind, options: GitDraftOptions = {}): 
   const diagnostics: GitDraftDiagnostic[] = [];
   const changes = parsePorcelainStatus(statusOutput);
   if (baseRef) {
-    const baseDiff = runGit(['diff', '--name-status', '--no-renames', `${baseRef}...HEAD`], repoRoot);
+    const baseDiff = runGit(
+      ['diff', '--name-status', '--no-renames', `${baseRef}...HEAD`],
+      repoRoot,
+    );
     if (baseDiff.status === 0) {
       changes.push(...parseNameStatus(baseDiff.stdout, 'base'));
     } else {
@@ -349,16 +381,19 @@ export function runGitDraft(kind: GitDraftKind, options: GitDraftOptions = {}): 
   const changedFiles = mergeChanges(changes, numstats);
   const insertions = changedFiles.reduce((sum, file) => sum + (file.additions ?? 0), 0);
   const deletions = changedFiles.reduce((sum, file) => sum + (file.deletions ?? 0), 0);
-  const filesWithStats = changedFiles.filter((file) => file.additions !== null && file.deletions !== null).length;
-  const commitDraft = kind === 'commit_draft' || kind === 'pr_draft'
-    ? buildCommitDraft(changedFiles)
-    : null;
-  const prDraft = kind === 'pr_draft' && commitDraft
-    ? buildPrDraft(changedFiles, commitDraft)
-    : null;
+  const filesWithStats = changedFiles.filter(
+    (file) => file.additions !== null && file.deletions !== null,
+  ).length;
+  const commitDraft =
+    kind === 'commit_draft' || kind === 'pr_draft' ? buildCommitDraft(changedFiles) : null;
+  const prDraft =
+    kind === 'pr_draft' && commitDraft ? buildPrDraft(changedFiles, commitDraft) : null;
   const generatedAt = (options.now ?? new Date()).toISOString();
   const outputDir = resolve(options.outputDir ?? join(BABEL_RUNS_DIR, 'git-drafts'));
-  const artifactPath = join(outputDir, `git-${kind.replace('_', '-')}-${toArtifactTimestamp(new Date(generatedAt))}.json`);
+  const artifactPath = join(
+    outputDir,
+    `git-${kind.replace('_', '-')}-${toArtifactTimestamp(new Date(generatedAt))}.json`,
+  );
   const report: GitDraftReport = {
     schema_version: 1,
     draft_type: kind,
@@ -387,9 +422,10 @@ export function runGitDraft(kind: GitDraftKind, options: GitDraftOptions = {}): 
     },
     changed_files: changedFiles,
     diffstat: changedFiles.map((file) => {
-      const stats = file.additions === null || file.deletions === null
-        ? 'binary/unknown'
-        : `+${file.additions}/-${file.deletions}`;
+      const stats =
+        file.additions === null || file.deletions === null
+          ? 'binary/unknown'
+          : `+${file.additions}/-${file.deletions}`;
       return `${file.path} ${file.status} ${stats}`;
     }),
     commit_draft: commitDraft,

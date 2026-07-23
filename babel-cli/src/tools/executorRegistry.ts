@@ -12,9 +12,11 @@ export const EXECUTOR_TOOL_CATEGORIES = [
   'web',
   'plugin',
   'coordination',
+  'vcs',
+  'knowledge-graph',
 ] as const;
 
-export type ExecutorToolCategory = typeof EXECUTOR_TOOL_CATEGORIES[number];
+export type ExecutorToolCategory = (typeof EXECUTOR_TOOL_CATEGORIES)[number];
 export type ExecutorToolName = ToolCallRequest['tool'];
 export type ExecutorToolDryRunBehavior = 'live' | 'mocked' | 'shadow_write' | 'stateful';
 export type ExecutorToolHandler = (

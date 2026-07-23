@@ -16,7 +16,10 @@ function cleanup(root: string): void {
   rmSync(root, { recursive: true, force: true });
 }
 
-function writeProject(root: string, content = 'config_version=5\n\n[application]\nconfig/name="GateTest"\nrun/main_scene="res://scenes/Main.tscn"\n'): void {
+function writeProject(
+  root: string,
+  content = 'config_version=5\n\n[application]\nconfig/name="GateTest"\nrun/main_scene="res://scenes/Main.tscn"\n',
+): void {
   writeFileSync(join(root, 'project.godot'), content, 'utf-8');
 }
 
@@ -41,7 +44,11 @@ function successfulWrite(step: number, target: string): ToolCallLog {
   };
 }
 
-function godotVerification(stdout = 'Godot Engine v4.6.2.stable\n', stderr = '', exitCode = 0): ToolCallLog {
+function godotVerification(
+  stdout = 'Godot Engine v4.6.2.stable\n',
+  stderr = '',
+  exitCode = 0,
+): ToolCallLog {
   return {
     step: 99,
     tool: 'shell_exec',
@@ -53,20 +60,25 @@ function godotVerification(stdout = 'Godot Engine v4.6.2.stable\n', stderr = '',
   };
 }
 
-function runtimeVerification(status: RuntimeVerificationResult['status'], detectedErrors: string[] = []): RuntimeVerificationResult {
+function runtimeVerification(
+  status: RuntimeVerificationResult['status'],
+  detectedErrors: string[] = [],
+): RuntimeVerificationResult {
   return {
     stage: 'runtime_verification',
     targetType: 'godot',
-    projectPath: '/workspace-root/example_game_workspace/Game',
-    command: 'powershell -ExecutionPolicy Bypass -File /workspace-root/tools/Godot/godot.ps1 --headless --path /workspace-root/example_game_workspace/Game --quit',
-    cwd: '/workspace-root/example_game_workspace/Game',
+    projectPath: '/tmp/example_game_suite/Game',
+    command:
+      'powershell -ExecutionPolicy Bypass -File /tmp/tools/Godot/godot.ps1 --headless --path /tmp/example_game_suite/Game --quit',
+    cwd: '/tmp/example_game_suite/Game',
     exitCode: status === 'PASS' ? 0 : status === 'TOOL_UNAVAILABLE' ? null : 1,
     stdoutExcerpt: status === 'PASS' ? 'Godot Engine v4.6.2.stable\n' : '',
     stderrExcerpt: detectedErrors.join('\n'),
     durationMs: 42,
     detectedErrors,
     status,
-    reason: status === 'PASS' ? 'Godot headless verification passed.' : 'Godot verification failed.',
+    reason:
+      status === 'PASS' ? 'Godot headless verification passed.' : 'Godot verification failed.',
     timestamp: '2026-04-30T19:30:00.000Z',
   };
 }
@@ -84,7 +96,10 @@ test('runnable artifact gate fails Godot project missing project.godot', () => {
     });
 
     assert.equal(result.status, 'FAIL_REPAIRABLE');
-    assert.equal(result.failed_artifact_checks.some(check => check.id === 'GODOT_PROJECT_MISSING'), true);
+    assert.equal(
+      result.failed_artifact_checks.some((check) => check.id === 'GODOT_PROJECT_MISSING'),
+      true,
+    );
   } finally {
     cleanup(root);
   }
@@ -101,7 +116,10 @@ test('runnable artifact gate fails Godot project missing scenes/Main.tscn', () =
     });
 
     assert.equal(result.status, 'FAIL_REPAIRABLE');
-    assert.equal(result.failed_artifact_checks.some(check => check.id === 'GODOT_MOBILE_MAIN_SCENE_EXISTS'), true);
+    assert.equal(
+      result.failed_artifact_checks.some((check) => check.id === 'GODOT_MOBILE_MAIN_SCENE_EXISTS'),
+      true,
+    );
   } finally {
     cleanup(root);
   }
@@ -126,8 +144,16 @@ test('runnable artifact gate fails on project.godot parse error evidence', () =>
     });
 
     assert.equal(result.status, 'FAIL_REPAIRABLE');
-    assert.equal(result.failed_artifact_checks.some(check => check.id === 'GODOT_PROJECT_WELL_FORMED'), true);
-    assert.equal(result.failed_artifact_checks.some(check => check.id === 'GODOT_HEADLESS_VERIFICATION_FAILED'), true);
+    assert.equal(
+      result.failed_artifact_checks.some((check) => check.id === 'GODOT_PROJECT_WELL_FORMED'),
+      true,
+    );
+    assert.equal(
+      result.failed_artifact_checks.some(
+        (check) => check.id === 'GODOT_HEADLESS_VERIFICATION_FAILED',
+      ),
+      true,
+    );
     assert.match(result.evidence_lines.join('\n'), /Error parsing/);
   } finally {
     cleanup(root);
@@ -140,7 +166,11 @@ test('runnable artifact gate passes valid minimal Godot scaffold', () => {
     mkdirSync(join(root, 'scripts'), { recursive: true });
     writeProject(root);
     writeMainScene(root);
-    writeFileSync(join(root, 'scripts', 'main.gd'), 'extends Node2D\nfunc _ready() -> void:\n\tpass\n', 'utf-8');
+    writeFileSync(
+      join(root, 'scripts', 'main.gd'),
+      'extends Node2D\nfunc _ready() -> void:\n\tpass\n',
+      'utf-8',
+    );
 
     const result = evaluateRunnableArtifactGate({
       rawTask: GODOT_TASK,
@@ -166,7 +196,11 @@ test('runnable artifact gate consumes Babel-owned runtime verification evidence'
     mkdirSync(join(root, 'scripts'), { recursive: true });
     writeProject(root);
     writeMainScene(root);
-    writeFileSync(join(root, 'scripts', 'main.gd'), 'extends Node2D\nfunc _ready() -> void:\n\tpass\n', 'utf-8');
+    writeFileSync(
+      join(root, 'scripts', 'main.gd'),
+      'extends Node2D\nfunc _ready() -> void:\n\tpass\n',
+      'utf-8',
+    );
 
     const result = evaluateRunnableArtifactGate({
       rawTask: GODOT_TASK,
@@ -180,7 +214,10 @@ test('runnable artifact gate consumes Babel-owned runtime verification evidence'
     });
 
     assert.equal(result.status, 'PASS');
-    assert.equal(result.checks.some(check => check.id === 'GODOT_HEADLESS_VERIFICATION_PASSED'), true);
+    assert.equal(
+      result.checks.some((check) => check.id === 'GODOT_HEADLESS_VERIFICATION_PASSED'),
+      true,
+    );
   } finally {
     cleanup(root);
   }

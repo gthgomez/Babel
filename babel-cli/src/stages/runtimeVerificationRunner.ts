@@ -35,7 +35,11 @@ export interface RuntimeVerificationRunnerInput {
   toolCallLog: readonly ToolCallLog[];
   babelRoot?: string;
   now?: () => Date;
-  commandRunner?: (command: string, args: string[], options: { cwd: string; timeoutMs: number }) => SpawnSyncReturns<string>;
+  commandRunner?: (
+    command: string,
+    args: string[],
+    options: { cwd: string; timeoutMs: number },
+  ) => SpawnSyncReturns<string>;
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -67,20 +71,26 @@ function excerpt(text: string): string {
 }
 
 function hasGodotTaskSignal(rawTask: string): boolean {
-  return /\bgodot\b/i.test(rawTask) &&
-    /\b(?:game|mobile|android|prototype|app|gdscript|project\.godot)\b/i.test(rawTask);
+  return (
+    /\bgodot\b/i.test(rawTask) &&
+    /\b(?:game|mobile|android|prototype|app|gdscript|project\.godot)\b/i.test(rawTask)
+  );
 }
 
 function hasGodotToolEvidence(toolCallLog: readonly ToolCallLog[]): boolean {
-  return toolCallLog.some(entry => {
+  return toolCallLog.some((entry) => {
     const target = String(entry.target ?? '');
-    return /(?:^|[\\/])project\.godot$/i.test(target) ||
+    return (
+      /(?:^|[\\/])project\.godot$/i.test(target) ||
       /\.(?:tscn|gd)$/i.test(target) ||
-      /export_presets\.cfg$/i.test(target);
+      /export_presets\.cfg$/i.test(target)
+    );
   });
 }
 
-export function detectRuntimeVerificationTargetType(input: Pick<RuntimeVerificationRunnerInput, 'rawTask' | 'projectRoot' | 'toolCallLog'>): RuntimeVerificationTargetType {
+export function detectRuntimeVerificationTargetType(
+  input: Pick<RuntimeVerificationRunnerInput, 'rawTask' | 'projectRoot' | 'toolCallLog'>,
+): RuntimeVerificationTargetType {
   if (hasGodotTaskSignal(input.rawTask)) {
     return 'godot';
   }
@@ -112,7 +122,10 @@ function resolveGodotWrapperPath(babelRoot: string): string | null {
   return null;
 }
 
-function buildGodotCommand(wrapperPath: string, projectPath: string): { command: string; args: string[]; display: string } {
+function buildGodotCommand(
+  wrapperPath: string,
+  projectPath: string,
+): { command: string; args: string[]; display: string } {
   const command = process.env['BABEL_GODOT_POWERSHELL']?.trim() || 'powershell';
   const args = [
     '-ExecutionPolicy',
@@ -127,16 +140,16 @@ function buildGodotCommand(wrapperPath: string, projectPath: string): { command:
   return {
     command,
     args,
-    display: `${command} ${args.map(arg => arg.includes(' ') ? `"${arg}"` : arg).join(' ')}`,
+    display: `${command} ${args.map((arg) => (arg.includes(' ') ? `"${arg}"` : arg)).join(' ')}`,
   };
 }
 
 export function detectGodotFailureLines(output: string): string[] {
   return output
     .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(line => line.length > 0)
-    .filter(line => GODOT_FAILURE_PATTERNS.some(pattern => pattern.test(line)))
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => GODOT_FAILURE_PATTERNS.some((pattern) => pattern.test(line)))
     .slice(0, 16);
 }
 
@@ -181,7 +194,9 @@ function toolUnavailableResult(
   };
 }
 
-export function runRuntimeVerification(input: RuntimeVerificationRunnerInput): RuntimeVerificationResult {
+export function runRuntimeVerification(
+  input: RuntimeVerificationRunnerInput,
+): RuntimeVerificationResult {
   const timestamp = (input.now ?? (() => new Date()))().toISOString();
   const targetType = detectRuntimeVerificationTargetType(input);
   if (targetType === 'unknown') {
@@ -211,12 +226,15 @@ export function runRuntimeVerification(input: RuntimeVerificationRunnerInput): R
 
   const command = buildGodotCommand(wrapperPath, projectPath);
   const started = Date.now();
-  const runner = input.commandRunner ?? ((cmd, args, options) => spawnSync(cmd, args, {
-    cwd: options.cwd,
-    timeout: options.timeoutMs,
-    encoding: 'utf-8',
-    windowsHide: true,
-  }));
+  const runner =
+    input.commandRunner ??
+    ((cmd, args, options) =>
+      spawnSync(cmd, args, {
+        cwd: options.cwd,
+        timeout: options.timeoutMs,
+        encoding: 'utf-8',
+        windowsHide: true,
+      }));
 
   const result = runner(command.command, command.args, {
     cwd: projectPath,
@@ -247,13 +265,14 @@ export function runRuntimeVerification(input: RuntimeVerificationRunnerInput): R
     durationMs,
     detectedErrors,
     status,
-    reason: status === 'PASS'
-      ? 'Godot headless verification passed.'
-      : status === 'TOOL_UNAVAILABLE'
-        ? `Godot verification tool failed to launch: ${spawnError || 'unknown launch error'}`
-        : detectedErrors.length > 0
-          ? 'Godot headless verification output contained failure indicators.'
-          : `Godot headless verification exited with code ${exitCode ?? 'unknown'}.`,
+    reason:
+      status === 'PASS'
+        ? 'Godot headless verification passed.'
+        : status === 'TOOL_UNAVAILABLE'
+          ? `Godot verification tool failed to launch: ${spawnError || 'unknown launch error'}`
+          : detectedErrors.length > 0
+            ? 'Godot headless verification output contained failure indicators.'
+            : `Godot headless verification exited with code ${exitCode ?? 'unknown'}.`,
     timestamp,
   };
 }
