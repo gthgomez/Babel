@@ -1,0 +1,12 @@
+#!/bin/bash
+# Babel pre-commit hook — delegates to PowerShell script.
+# CI is the authoritative gate; this hook is optional convenience.
+# Install: pwsh tools/install-hooks.ps1
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if ! command -v pwsh &>/dev/null; then
+  echo "pwsh not found — skipping pre-commit hook (install PowerShell 7+ for fast local feedback)" >&2
+  exit 0
+fi
+pwsh -NoProfile -ExecutionPolicy Bypass -File "$SCRIPT_DIR/pre-commit.ps1"
+exit $?
