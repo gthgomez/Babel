@@ -21,11 +21,11 @@ export const PASTE_PLACEHOLDER_TEST = /\[Pasted Content \d+ chars(?: #\d+)?\]/;
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface PendingPaste {
-  pasteToken: string;
+  placeholder: string;
   content: string;
 }
 
-export type PendingPastePair = [pasteToken: string, content: string];
+export type PendingPastePair = [placeholder: string, content: string];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -66,7 +66,7 @@ export function collectPlaceholderLabels(
   pending: readonly PendingPaste[],
 ): string[] {
   const labels = new Set<string>();
-  for (const entry of pending) labels.add(entry.pasteToken);
+  for (const entry of pending) labels.add(entry.placeholder);
   for (const match of bufferText.matchAll(PASTE_PLACEHOLDER_PATTERN)) {
     if (match[0]) labels.add(match[0]);
   }
@@ -100,7 +100,7 @@ export class PastePlaceholderStore {
   }
 
   toPairs(): PendingPastePair[] {
-    return this.pending.map((p) => [p.pasteToken, p.content]);
+    return this.pending.map((p) => [p.placeholder, p.content]);
   }
 
   restoreFromPairs(pairs: readonly PendingPastePair[]): void {
@@ -131,7 +131,7 @@ export class PastePlaceholderStore {
 
   /** Drop pending entries whose placeholder no longer appears in the buffer. */
   syncWithBuffer(bufferText: string): void {
-    this.pending = this.pending.filter((p) => bufferText.includes(p.pasteToken));
+    this.pending = this.pending.filter((p) => bufferText.includes(p.placeholder));
   }
 
   expand(bufferText: string): string {
