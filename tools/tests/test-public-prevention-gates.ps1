@@ -54,6 +54,36 @@ try {
   Assert-True (@((ConvertFrom-Json $invalidConfig.Text).findings.id) -contains 'PCFG001') 'invalid temporary exception did not produce PCFG001'
   Copy-Item -LiteralPath $contentPolicy -Destination $fixturePolicyPath -Force
 
+  # GPCGuard allowed-in-docs test: per OSS Foundation Q3, product names (e.g. GPCGuard)
+  # may appear in public docs/examples but remain forbidden as dependency fingerprints.
+  # Positive case: GPCGuard in prose documentation only
+  $gpguardDocs = Initialize-Fixture 'gpguard-docs'
+  Copy-Item -LiteralPath $scrubScript -Destination (Join-Path $gpguardDocs 'tools/check-public-scrub.ps1')
+  Copy-Item -LiteralPath $scrubPolicy -Destination (Join-Path $gpguardDocs 'tools/security/policy.json')
+  Set-Content -LiteralPath (Join-Path $gpguardDocs 'gpcguard-guide.md') -Value "# GPCGuard Integration`nBabel is used by GPCGuard for autonomous agent orchestration.`nRefer to the GPCGuard integration guide for setup steps.`n[GPCGuard docs](https://example.com)`n"
+  Set-Content -LiteralPath (Join-Path $gpguardDocs 'package.json') -Value '{ "name": "fixture", "private": true }'
+  & git -C $gpguardDocs add .
+  $gpguardContent = Invoke-Gate (Join-Path $gpguardDocs 'tools/check-public-content-policy.ps1') $gpguardDocs
+  Assert-True ($gpguardContent.ExitCode -eq 0) "GPCGuard in doc unexpectedly failed content-policy: $($gpguardContent.Text)"
+  $gpguardCanonical = Invoke-Gate (Join-Path $gpguardDocs 'tools/check-canonical-independence.ps1') $gpguardDocs
+  Assert-True ($gpguardCanonical.ExitCode -eq 0) "GPCGuard in doc unexpectedly failed canonical-independence: $($gpguardCanonical.Text)"
+  $gpguardScrub = Invoke-Gate (Join-Path $gpguardDocs 'tools/check-public-scrub.ps1') $gpguardDocs
+  Assert-True ($gpguardScrub.ExitCode -eq 0) "GPCGuard allowed in docs: scrub should pass (doc mention NOT a leak) but exit $($gpguardScrub.ExitCode): $($gpguardScrub.Text)"
+  Assert-True ($gpguardScrub.Text -notmatch 'GPCGuard') 'GPCGuard in doc was flagged as a leak (scrub output exposed the project name)'
+
+  # Negative case: GPCGuard as a file: dependency fingerprint in lockfile must be caught
+  $gpguardLockfile = Initialize-Fixture 'gpguard-lockfile'
+  Copy-Item -LiteralPath $scrubScript -Destination (Join-Path $gpguardLockfile 'tools/check-public-scrub.ps1')
+  Copy-Item -LiteralPath $scrubPolicy -Destination (Join-Path $gpguardLockfile 'tools/security/policy.json')
+  Set-Content -LiteralPath (Join-Path $gpguardLockfile 'package.json') -Value '{ "name": "fixture", "private": true }'
+  Set-Content -LiteralPath (Join-Path $gpguardLockfile 'package-lock.json') -Value '{ "name": "fixture", "lockfileVersion": 3, "packages": { "node_modules/gpcguard": { "resolved": "file:../GPCGuard", "integrity": "sha512-fake" } } }'
+  & git -C $gpguardLockfile add .
+  $gpguardLockfileScrub = @(& $shell -NoProfile -File (Join-Path $gpguardLockfile 'tools/check-public-scrub.ps1') -RepoRoot $gpguardLockfile 2>&1)
+  Assert-True ($LASTEXITCODE -eq 1) "GPCGuard in lockfile: scrub should FAIL on file: dependency fingerprint but exited 0"
+  $gpguardLockfileText = $gpguardLockfileScrub -join "`n"
+  Assert-True ($gpguardLockfileText -match 'local file dependency') "GPCGuard in lockfile: 'file:' pattern not reported"
+  Assert-True ($gpguardLockfileText -match 'private dependency fingerprint') "GPCGuard in lockfile: forbidden dependency fingerprint not reported"
+
   $negative = Initialize-Fixture 'negative'
   $machinePath = 'C:' + '\Users\someone\project'
   $privateParent = 'private ' + 'parent repo'
