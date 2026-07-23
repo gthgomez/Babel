@@ -4,48 +4,57 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/gthgomez/Babel/typecheck.yml?branch=main&label=Public%20Release%20Gate)](https://github.com/gthgomez/Babel/actions)
 
-**Babel is a prompt operating system for software work.**  
-It chooses a small, explicit instruction stack for a task (behavioral rules, domain knowledge, skills, model adapters, and overlays), shows you exactly what it selected, and gives you local tools to validate, inspect, and run that stack.
+**Babel is a coding agent for real software work.**
+
+It plans and executes engineering tasks with a **small, explicit instruction stack**—behavioral rules, domain knowledge, skills, model adapters, and project overlays—so you can see *how* the agent will work before (and while) it acts.
+
+Most “AI coding” tools hide the system prompt. Babel treats the agent’s operating instructions as a **catalogued, inspectable product**: modular, testable, and versioned in git.
 
 | | |
 |---|---|
+| **What it is** | A coding agent + the prompt/control stack that drives it |
 | **Canonical source** | This repo — [`gthgomez/Babel`](https://github.com/gthgomez/Babel) |
-| **Current release** | [**v0.1.0**](https://github.com/gthgomez/Babel/releases/tag/v0.1.0) (pre-1.0; public API still stabilizing) |
-| **Primary product** | Catalog-driven stack selection + deterministic preview |
-| **Also included** | Typed `babel-cli` harness, read-only MCP surface, security/release gates |
+| **Current release** | [**v0.1.0**](https://github.com/gthgomez/Babel/releases/tag/v0.1.0) (pre-1.0) |
+| **Runtime** | Typed local `babel-cli` (plan / run / doctor / MCP) |
+| **Differentiator** | Explicit stack selection you can preview, validate, and improve |
 
-Day-to-day Babel development happens **here**. Consumer projects pin a **release tag + commit SHA**; they do not generate or overwrite this repository. See [ADR-0001](./docs/adr/ADR-0001-canonical-public-source.md) and [docs/guides/RELEASE.md](./docs/guides/RELEASE.md).
+Day-to-day Babel development happens **here**. Other products and workspaces pin a **release tag + commit SHA**; they do not generate or overwrite this repository. See [ADR-0001](./docs/adr/ADR-0001-canonical-public-source.md) and [docs/guides/RELEASE.md](./docs/guides/RELEASE.md).
 
-## What this repository is
+## Why Babel (as a coding agent)
 
-A clean clone is the full public product surface:
+| Goal | How Babel approaches it |
+|------|-------------------------|
+| Ship code safely | Plan → review → execute discipline in the behavioral layers |
+| Stay domain-correct | Domain architects (backend, frontend, mobile, …) instead of one generic prompt |
+| Reuse real workflows | Skills for testing, governance, review, release hygiene, and more |
+| Fit the model | Model adapters tune the same agent for different LLMs |
+| Stay inspectable | Catalog + resolver show the exact stack for a task *before* the model runs |
+| Stay local-first | CLI and gates run from a clean clone; secrets stay out of the public tree |
 
-| Surface | Status |
-|---------|--------|
-| Layered prompt library (`00_`–`06_`, catalog) | Canonical |
-| Typed v9 router / catalog resolver | Canonical |
-| Deterministic stack + manifest preview | **Primary onboarding path** |
-| Public examples + golden previews | Supported |
-| Security gates (scrub, content policy, secret scan) | Required on every PR |
-| `babel-cli` typecheck + public validation | Supported in CI |
-| Read-only MCP control-plane inspection | Supported |
-| `babel run` / model-backed pipeline | Present (advanced; may need local credentials) |
+Babel is **not** “just a prompt dump.” It is an **agent runtime and instruction system** aimed at software engineering.
 
-**Preview and validation are the default product.**  
-The task-running CLI is real and typechecked, but it is the advanced lane—not the first success path.
+## What ships in this repo
+
+| Surface | Role for the coding agent |
+|---------|---------------------------|
+| Layered prompt library (`00_`–`06_`) | The agent’s mind: router, behavior, domain, skills, adapters, overlays |
+| `prompt_catalog.yaml` | Contract for what can be routed and versioned |
+| Typed v9 resolver | Picks the smallest correct stack for a task category |
+| `babel-cli` | Local coding-agent harness: `doctor`, `plan`, `run`, `mcp` |
+| Manifest preview / golden examples | Check stack selection before you trust a run |
+| Security + content policy gates | Keep the public agent surface clean and merge-safe |
+| Read-only MCP | Inspect stacks/manifests from other tools |
+
+**Honest pre-1.0 boundary:** model-backed `babel run` is real and typechecked, but it may need local provider credentials and workspace setup. You can always validate the catalog and **preview the agent’s stack** without calling a model.
 
 ## Current state (v0.1.0)
 
-As of the first public pre-1.0 release:
-
-- **This repo is the sole canonical public source** for Babel prompts, CLI, docs, and validation tooling
-- A clean clone works without private workspace knowledge or a parent monorepo
-- **CI (Public Release Gate)** on every PR: `security` → `public-content-policy` → `linux-validation` (+ `windows-portability`)
-- **`main` is PR-only** with branch protection; `v*` tags are protected
-- Secret scanning and push protection are enabled
-- Optional local pre-commit hooks exist; **CI is authoritative** (see [CONTRIBUTING.md](./CONTRIBUTING.md))
-- Operator-only material, machine paths, and private dependency fingerprints are blocked by policy
-- Consumers should pin when ready:
+- Sole **canonical public source** for the Babel coding agent, prompt layers, CLI, and gates
+- Clean clone works **without** a private monorepo or export pipeline
+- **Public Release Gate** on every PR: `security` → `public-content-policy` → `linux-validation` (+ `windows-portability`)
+- **`main` is PR-only**; `v*` tags protected; secret scanning + push protection on
+- Optional pre-commit hooks; **CI is authoritative** ([CONTRIBUTING.md](./CONTRIBUTING.md))
+- Pin when a product is ready to depend on Babel:
 
 ```json
 {
@@ -56,30 +65,20 @@ As of the first public pre-1.0 release:
 }
 ```
 
-Pre-1.0 note: breaking changes to the v9 orchestrator contract, agent output schemas, or catalog format may still occur before `1.0.0`.
+Pre-1.0: agent contracts, catalog shape, and CLI surfaces may still change before `1.0.0`.
 
-## Vision
+## Choose your path
 
-Babel is meant to become the community prompt layer for reliable AI-assisted software work.
+| You want to… | Start here |
+|--------------|------------|
+| Confirm the agent repo is healthy | `pwsh -File .\tools\validate-public-release.ps1` |
+| See what stack the agent would use | `pwsh -File .\tools\resolve-local-stack.ps1 ...` |
+| Run the local coding agent | Build `babel-cli` → `babel doctor` → `babel plan` / `babel run` |
+| Wire another tool into Babel | `babel mcp` (read-only control plane) |
 
-1. Make stack selection understandable **before** a model acts  
-2. Keep prompts modular, inspectable, and testable  
-3. Integrate tools through read-only control-plane surfaces first  
-4. Make task execution progressively safer with evidence and verification  
-5. Keep this public repo clean enough to fork, learn from, and build on  
+Fastest human onboarding: [START_HERE.md](./START_HERE.md) · CLI flows: [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md)
 
-Longer product direction: [docs/VISION.md](./docs/VISION.md).
-
-## Choose Your Path
-
-If you are new here, pick one lane:
-
-- **Verify the repo works:** run `pwsh -File .\tools\validate-public-release.ps1`
-- **See what Babel would choose for a task:** run `pwsh -File .\tools\resolve-local-stack.ps1 ...`
-- **Inspect the control plane from another tool:** use `babel mcp` after building the CLI
-- **Run a real task through Babel:** use `babel doctor` first, then `babel run ...`
-
-## Quick Start
+## Quick start
 
 1. Install CLI dependencies:
 
@@ -89,13 +88,13 @@ npm install
 cd ..
 ```
 
-2. Run the public validation suite:
+2. Validate the public agent surface:
 
 ```powershell
 pwsh -File .\tools\validate-public-release.ps1
 ```
 
-3. Preview a backend manifest from the public catalog:
+3. Preview the stack the agent would load for a backend task:
 
 ```powershell
 pwsh -File .\tools\resolve-local-stack.ps1 `
@@ -106,11 +105,11 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
   -Format json
 ```
 
-4. Compare the output to the checked-in golden preview:
+Compare to the golden preview:
 
 - [examples/manifest-previews/backend-verified.json](./examples/manifest-previews/backend-verified.json)
 
-5. Try the Android/mobile lane too:
+4. Mobile/Android lane:
 
 ```powershell
 pwsh -File .\tools\resolve-local-stack.ps1 `
@@ -122,7 +121,7 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
 
 - [examples/manifest-previews/mobile-direct.json](./examples/manifest-previews/mobile-direct.json)
 
-6. If you want the compiled CLI commands, build `babel-cli`:
+5. Build the coding-agent CLI:
 
 ```powershell
 cd .\babel-cli
@@ -131,95 +130,36 @@ node .\dist\index.js doctor
 cd ..
 ```
 
-## What Babel Does
+With provider credentials configured locally, use `plan` / `run` for live agent sessions (see [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md)).
 
-Babel makes the stack explicit before the model starts working:
+## How the agent builds its stack
 
-1. pick the right behavioral rules
-2. choose one domain architect
-3. expand default skills and skill dependencies
-4. attach the model adapter
-5. attach the relevant project/task overlays
-6. compile the ordered manifest preview from the catalog
+Before the model works a task, Babel resolves an ordered stack:
 
-## What Babel Local Means
+1. Behavioral rules (how the agent plans, acts, and stays safe)
+2. One domain architect (what kind of software work this is)
+3. Skills and skill dependencies (reusable workflows)
+4. Model adapter (how to talk to the chosen model well)
+5. Project / task overlays (repo- or task-specific context)
+6. Compiled manifest from `prompt_catalog.yaml` (what actually loads)
 
-There are two practical surfaces in this repo:
+That is the core product idea: **a coding agent whose “system instructions” are engineered, not improvised.**
 
-- **Preview-first Local Mode:** validate the repo, preview the manifest, compare to golden examples, inspect the MCP surface
-- **Advanced runtime harness:** run tasks through the pipeline with `babel run` or `tools/run-babel-local-cli.ps1`
+## Running the agent locally
 
-The first surface is what the public repo is optimized for. The second is available, but it assumes more local setup.
+Two complementary modes:
 
-## Verification Surfaces
+| Mode | Purpose |
+|------|---------|
+| **Inspect** | Validate catalog, preview stack, compare goldens, MCP inspect — no model required |
+| **Execute** | `babel plan` / `babel run` (or `tools/run-babel-local-cli.ps1`) — model-backed coding sessions |
 
-- [START_HERE.md](./START_HERE.md) — the fastest public onboarding path
-- [docs/VISION.md](./docs/VISION.md) — current state, principles, and public scope
-- [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md) — copy-paste CLI flows for `doctor`, `run`, `plan`, and `mcp`
-- [examples/first-success.md](./examples/first-success.md) — the shortest validation walkthrough
-- [examples/manifest-previews/backend-verified.json](./examples/manifest-previews/backend-verified.json) — golden backend preview
-- [examples/manifest-previews/mobile-direct.json](./examples/manifest-previews/mobile-direct.json) — golden Android/mobile preview
-- [docs/architecture/ARCHITECTURE.md](./docs/architecture/ARCHITECTURE.md) — public architecture and product shape
-- [docs/architecture/BABEL_LOCAL_MODE.md](./docs/architecture/BABEL_LOCAL_MODE.md) — what the public runtime does and does not promise
+`babel run` modes:
 
-## Useful Commands
-
-Verify the public repo:
-
-```powershell
-pwsh -File .\tools\validate-public-release.ps1
-```
-
-Run the focused disclosure and repository-independence gates:
-
-```powershell
-pwsh -File .\tools\check-public-content-policy.ps1
-pwsh -File .\tools\check-canonical-independence.ps1
-```
-
-Maintainers must additionally run the strict release validator with the
-confidential supplemental policy stored outside the repository:
-
-```powershell
-pwsh -File .\tools\validate-public-release.ps1 -Strict `
-  -RequireSupplementalPolicy `
-  -SupplementalPolicyPath $env:BABEL_PRIVATE_SCRUB_POLICY_PATH
-```
-
-The explicit argument takes precedence over the environment variable. A
-configured policy that is missing or malformed fails closed, and findings
-report only category, repository path, and line number.
-
-Preview a manifest directly from the resolver:
-
-```powershell
-pwsh -File .\tools\resolve-local-stack.ps1 `
-  -TaskCategory backend `
-  -Project example_saas_backend `
-  -Model codex `
-  -PipelineMode verified `
-  -Format json
-```
-
-Build the compiled CLI and run diagnostics:
-
-```powershell
-cd .\babel-cli
-npm run build
-node .\dist\index.js doctor
-```
-
-For the shortest CLI command guide, see [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md).
-
-Run the read-only MCP server:
-
-```powershell
-cd .\babel-cli
-npm run build
-node .\dist\index.js mcp
-```
-
-Use the advanced runtime wrapper:
+- `direct` — fastest path, fewest gates  
+- `verified` — adds QA review before execution  
+- `manual` — handoff JSON for external/manual bridge flows  
+- `autonomous` — highest-risk lane; more tool execution and setup  
 
 ```powershell
 pwsh -File .\tools\run-babel-local-cli.ps1 `
@@ -230,45 +170,73 @@ pwsh -File .\tools\run-babel-local-cli.ps1 `
   -TaskPrompt "Plan a safe backend refactor"
 ```
 
-`babel run` modes in plain English:
+## Verification & safety surfaces
 
-- `direct` = fastest path with the fewest gates
-- `verified` = adds QA review before execution
-- `manual` = emits manual-bridge handoff JSON instead of normal run output
-- `autonomous` = highest-risk lane; may use more tool execution and runtime setup
+```powershell
+pwsh -File .\tools\validate-public-release.ps1
+pwsh -File .\tools\check-public-content-policy.ps1
+pwsh -File .\tools\check-canonical-independence.ps1
+```
 
-## Contributing Direction
+Maintainers may run the strict release validator with a confidential supplemental policy stored **outside** this repo:
 
-Good public contributions usually improve one of these surfaces:
+```powershell
+pwsh -File .\tools\validate-public-release.ps1 -Strict `
+  -RequireSupplementalPolicy `
+  -SupplementalPolicyPath $env:BABEL_PRIVATE_SCRUB_POLICY_PATH
+```
 
-- clearer onboarding docs
-- safer or more deterministic resolver behavior
-- better public examples and golden previews
-- more precise skills, domain architects, or adapters
-- stronger validation, scrub, and release checks
+Read-only MCP after build:
 
-Organization-specific workspace names, credentials, machine-specific paths, and operator-only release notes do not belong in this repo.
+```powershell
+cd .\babel-cli
+npm run build
+node .\dist\index.js mcp
+```
 
-## Repository Structure
+## Docs map
+
+- [START_HERE.md](./START_HERE.md) — first success path  
+- [docs/VISION.md](./docs/VISION.md) — product direction  
+- [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md) — `doctor` / `plan` / `run` / `mcp`  
+- [examples/first-success.md](./examples/first-success.md) — shortest validation walkthrough  
+- [docs/architecture/ARCHITECTURE.md](./docs/architecture/ARCHITECTURE.md) — system shape  
+- [docs/architecture/BABEL_LOCAL_MODE.md](./docs/architecture/BABEL_LOCAL_MODE.md) — what local runtime promises  
+- [BABEL_BIBLE.md](./BABEL_BIBLE.md) — model/integration invocation contract  
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — how to contribute  
+
+## Contributing
+
+Improvements that help most:
+
+- better agent behavior (skills, domain architects, adapters)
+- clearer stack selection and diagnostics
+- stronger plan/run UX and `doctor` output
+- examples that show real coding tasks end-to-end
+- validation, scrub, and release safety
+
+Keep out: private product names as dependencies, credentials, machine paths, and operator-only notes.
+
+## Repository structure
 
 ```
 Babel/
-├── START_HERE.md
-├── BABEL_BIBLE.md
+├── START_HERE.md          # human first success
+├── BABEL_BIBLE.md         # agent/integration entry
 ├── PROJECT_CONTEXT.md
-├── prompt_catalog.yaml
-├── 00_System_Router/
-├── 01_Behavioral_OS/
-├── 02_Domain_Architects/
-├── 02_Skills/
-├── 03_Model_Adapters/
+├── prompt_catalog.yaml    # routable agent stack contract
+├── 00_System_Router/      # how tasks route
+├── 01_Behavioral_OS/      # how the agent behaves
+├── 02_Domain_Architects/  # domain expertise
+├── 02_Skills/             # reusable workflows
+├── 03_Model_Adapters/     # model-specific tuning
 ├── 04_Meta_Tools/
 ├── 05_Project_Overlays/
 ├── 06_Task_Overlays/
-├── babel-cli/
+├── babel-cli/             # coding agent runtime
 ├── examples/
 ├── docs/
-└── tools/
+└── tools/                 # validate, preview, release gates
 ```
 
 ## License
