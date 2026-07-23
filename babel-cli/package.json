@@ -1,6 +1,6 @@
 {
   "name": "babel-cli",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Local TypeScript/Node.js runtime harness for the Babel Multi-Agent OS",
   "type": "module",
   "main": "dist/index.js",
