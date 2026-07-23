@@ -84,6 +84,20 @@ try {
   Assert-True ($gpguardLockfileText -match 'local file dependency') "GPCGuard in lockfile: 'file:' pattern not reported"
   Assert-True ($gpguardLockfileText -match 'private dependency fingerprint') "GPCGuard in lockfile: forbidden dependency fingerprint not reported"
 
+  # PCONT012: unprofessional tone is a warning, not a hard error.
+  # Warnings are surfaced but do not block. -WarningsAsErrors promotes them.
+  $vibe = Initialize-Fixture 'vibe'
+  $vibeTerm = "vibe" + "coding"
+  Set-Content -LiteralPath (Join-Path $vibe 'notes.md') -Value "# Design Notes`nWe adopted $vibeTerm practices during prototyping.`n"
+  & git -C $vibe add .
+  $vibeWarn = Invoke-Gate (Join-Path $vibe 'tools/check-public-content-policy.ps1') $vibe
+  Assert-True ($vibeWarn.ExitCode -eq 0) "PCONT012 warning should exit 0 but got $($vibeWarn.ExitCode)"
+  Assert-True (($vibeWarn.Text -join "`n") -match 'PCONT012') "PCONT012 warning not reported in output: $($vibeWarn.Text)"
+  Assert-True (($vibeWarn.Text -join "`n") -match 'warn') 'PCONT012 output missing warning indicator'
+  $vibeError = @(& $shell -NoProfile -File (Join-Path $vibe 'tools/check-public-content-policy.ps1') -RepoRoot $vibe -WarningsAsErrors -OutputFormat json 2>&1)
+  Assert-True ($LASTEXITCODE -eq 1) 'PCONT012 -WarningsAsErrors should exit 1 but got 0'
+  Assert-True (($vibeError -join "`n") -match 'PCONT012') 'PCONT012 not in -WarningsAsErrors findings'
+
   $negative = Initialize-Fixture 'negative'
   $machinePath = 'C:' + '\Users\someone\project'
   $privateParent = 'private ' + 'parent repo'
