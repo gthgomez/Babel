@@ -41,7 +41,7 @@ Babel is **not** “just a prompt dump.” It is an **agent runtime and instruct
 | `prompt_catalog.yaml` | Contract for what can be routed and versioned |
 | Typed v9 resolver | Picks the smallest correct stack for a task category |
 | `babel-cli` | Local coding-agent harness: `doctor`, `plan`, `run`, `mcp` |
-| Manifest preview / golden examples | Prove stack selection before you trust a run |
+| Manifest preview / golden examples | Check stack selection before you trust a run |
 | Security + content policy gates | Keep the public agent surface clean and merge-safe |
 | Read-only MCP | Inspect stacks/manifests from other tools |
 
