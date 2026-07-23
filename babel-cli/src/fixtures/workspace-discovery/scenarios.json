@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "fixture_type": "babel_workspace_discovery_scenarios",
+  "smoke_scenario_ids": ["disc_plan_named_features", "disc_project_identity"],
+  "smoke_repo_ids": ["relic_run", "simlife", "exact_upload_fixer", "monte_carlo_ledger"],
+  "scenarios": [
+    {
+      "id": "disc_plan_named_features",
+      "category": "plan",
+      "description": "Named-repo feature plan (user names slug explicitly)",
+      "task_template": "make a plan for adding new features to {slug}",
+      "command_verb": "plan",
+      "acceptable_statuses": ["PLAN_READY", "NEEDS_MORE_CONTEXT"],
+      "allow_blocked": true,
+      "acceptable_lanes": ["lite_plan", "plan"],
+      "expect_tools": true,
+      "expect_plan_artifact": true,
+      "read_only": true
+    },
+    {
+      "id": "disc_plan_next_work",
+      "category": "plan",
+      "description": "Display-name scoped next-work plan",
+      "task_template": "help me plan what to work on next in {display_name}",
+      "command_verb": "plan",
+      "acceptable_statuses": ["PLAN_READY", "NEEDS_MORE_CONTEXT"],
+      "allow_blocked": true,
+      "acceptable_lanes": ["lite_plan", "plan"],
+      "expect_tools": true,
+      "expect_plan_artifact": true,
+      "read_only": true
+    },
+    {
+      "id": "disc_docs_gaps",
+      "category": "explore",
+      "description": "Documentation gap discovery without mutation",
+      "task_template": "what documentation should we add or improve here? do not edit files",
+      "command_verb": "daily",
+      "acceptable_statuses": ["REPORT_READY", "ANSWER_READY", "PLAN_READY", "NEEDS_MORE_CONTEXT"],
+      "allow_blocked": true,
+      "acceptable_lanes": ["lite_report", "lite_ask", "lite_plan", "report", "ask", "plan"],
+      "expect_tools": true,
+      "expect_review": true,
+      "read_only": true
+    },
+    {
+      "id": "disc_suggest_priorities",
+      "category": "explore",
+      "description": "Priority suggestions from repo discovery",
+      "task_template": "suggest the highest-impact things to build next without editing",
+      "command_verb": "daily",
+      "acceptable_statuses": ["REPORT_READY", "ANSWER_READY", "PLAN_READY", "NEEDS_MORE_CONTEXT"],
+      "allow_blocked": true,
+      "acceptable_lanes": ["lite_report", "lite_ask", "lite_plan", "report", "ask", "plan"],
+      "expect_tools": true,
+      "expect_review": true,
+      "read_only": true
+    },
+    {
+      "id": "disc_project_identity",
+      "category": "ask",
+      "description": "Bare project identity from repo root",
+      "task_template": "what is this project?",
+      "command_verb": "daily",
+      "acceptable_statuses": ["ANSWER_READY", "REPORT_READY", "NEEDS_MORE_CONTEXT"],
+      "allow_blocked": true,
+      "acceptable_lanes": ["lite_ask", "lite_report", "ask", "report"],
+      "expect_tools": true,
+      "read_only": true
+    },
+    {
+      "id": "disc_roadmap_vague",
+      "category": "plan",
+      "description": "Generic roadmap plan anchored only by project root",
+      "task_template": "help me plan next features",
+      "command_verb": "plan",
+      "acceptable_statuses": ["PLAN_READY", "NEEDS_MORE_CONTEXT"],
+      "allow_blocked": true,
+      "acceptable_lanes": ["lite_plan", "plan"],
+      "expect_tools": true,
+      "expect_plan_artifact": true,
+      "read_only": true
+    }
+  ]
+}

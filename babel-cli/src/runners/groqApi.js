@@ -27,54 +27,58 @@ import { extractJson } from '../utils/extractJson.js';
 const GROQ_MODEL = process.env['BABEL_GROQ_MODEL'] ?? 'llama-3.3-70b-versatile';
 const _rawGroqTokens = Number(process.env['BABEL_GROQ_TOKENS'] ?? '8096');
 const MAX_TOKENS = Number.isFinite(_rawGroqTokens) && _rawGroqTokens > 0 ? _rawGroqTokens : 8096;
-const SYSTEM_PROMPT = 'You are executing a Babel pipeline agent. ' +
-    'Follow all instructions in the user message exactly. ' +
-    'Your response MUST be a single valid JSON object only — ' +
-    'no markdown, no explanation, no code fences. ' +
-    'Output only raw JSON.';
+const SYSTEM_PROMPT =
+  'You are executing a Babel pipeline agent. ' +
+  'Follow all instructions in the user message exactly. ' +
+  'Your response MUST be a single valid JSON object only — ' +
+  'no markdown, no explanation, no code fences. ' +
+  'Output only raw JSON.';
 // ─── Runner implementation ────────────────────────────────────────────────────
 export class GroqApiRunner {
-    client;
-    constructor() {
-        if (!process.env['GROQ_API_KEY']) {
-            throw new Error('[groqApi] GROQ_API_KEY is not set. ' +
-                'Add it to your .env file to enable the Groq API runner.');
-        }
-        this.client = new Groq({ apiKey: process.env['GROQ_API_KEY'] });
+  client;
+  constructor() {
+    if (!process.env['GROQ_API_KEY']) {
+      throw new Error(
+        '[groqApi] GROQ_API_KEY is not set. ' +
+          'Add it to your .env file to enable the Groq API runner.',
+      );
     }
-    async execute(prompt, schema) {
-        let completion;
-        try {
-            completion = await this.client.chat.completions.create({
-                model: GROQ_MODEL,
-                max_tokens: MAX_TOKENS,
-                temperature: 0,
-                messages: [
-                    { role: 'system', content: SYSTEM_PROMPT },
-                    { role: 'user', content: prompt },
-                ],
-            });
-        }
-        catch (err) {
-            throw new Error(`[groqApi] Groq API call failed: ` +
-                `${err instanceof Error ? err.message : String(err)}`);
-        }
-        const text = completion.choices[0]?.message?.content ?? '';
-        if (!text.trim()) {
-            throw new Error('[groqApi] Groq API returned an empty response.');
-        }
-        let parsed;
-        try {
-            parsed = extractJson(text);
-        }
-        catch (err) {
-            throw new Error(`[groqApi] invalid json: ${err instanceof Error ? err.message : String(err)}`);
-        }
-        const result = schema.safeParse(parsed);
-        if (!result.success) {
-            throw new Error(`[groqApi] Zod validation failed:\n${result.error.toString()}`);
-        }
-        return result.data;
+    this.client = new Groq({ apiKey: process.env['GROQ_API_KEY'] });
+  }
+  async execute(prompt, schema) {
+    let completion;
+    try {
+      completion = await this.client.chat.completions.create({
+        model: GROQ_MODEL,
+        max_tokens: MAX_TOKENS,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: prompt },
+        ],
+      });
+    } catch (err) {
+      throw new Error(
+        `[groqApi] Groq API call failed: ` + `${err instanceof Error ? err.message : String(err)}`,
+      );
     }
+    const text = completion.choices[0]?.message?.content ?? '';
+    if (!text.trim()) {
+      throw new Error('[groqApi] Groq API returned an empty response.');
+    }
+    let parsed;
+    try {
+      parsed = extractJson(text);
+    } catch (err) {
+      throw new Error(
+        `[groqApi] invalid json: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    const result = schema.safeParse(parsed);
+    if (!result.success) {
+      throw new Error(`[groqApi] Zod validation failed:\n${result.error.toString()}`);
+    }
+    return result.data;
+  }
 }
 //# sourceMappingURL=groqApi.js.map

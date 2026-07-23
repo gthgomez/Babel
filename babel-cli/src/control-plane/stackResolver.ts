@@ -1,25 +1,19 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
   ACTIVE_V9_BUDGET_POLICY,
   buildBudgetDiagnostics,
   budgetPolicyAppliesToInstructionStack,
+  getEffectiveBudgetLimit,
 } from '../budgetPolicy.js';
 import {
   TOKENIZER_ENCODING,
   countSelectedEntryTokens,
   type TokenCountSource,
 } from '../services/tokenCounter.js';
-import {
-  filterCatalogEntries,
-  parseCatalog,
-} from './catalog.js';
-import type {
-  CatalogEntry,
-  CatalogInspectionFilters,
-  CatalogLayer,
-} from './catalog.js';
+import { filterCatalogEntries, parseCatalog } from './catalog.js';
+import type { CatalogEntry, CatalogInspectionFilters, CatalogLayer } from './catalog.js';
 import type {
   BudgetDiagnostic,
   BudgetPolicy,
@@ -87,17 +81,187 @@ export interface ResolvedStackPreview {
   orderedEntries: PreviewEntry[];
 }
 
-const LAYER_ORDER: Record<Extract<CatalogLayer,
-  'behavioral_os' | 'domain_architect' | 'skill' | 'model_adapter' | 'project_overlay' | 'task_overlay' | 'pipeline_stage'
->, number> = {
+const LAYER_ORDER: Record<
+  Extract<
+    CatalogLayer,
+    | 'behavioral_os'
+    | 'domain_architect'
+    | 'skill'
+    | 'model_adapter'
+    | 'project_overlay'
+    | 'task_overlay'
+    | 'pipeline_stage'
+  >,
+  number
+> = {
   behavioral_os: 1,
   domain_architect: 2,
   skill: 3,
   project_overlay: 4,
-  task_overlay: 5,
-  model_adapter: 6,
+  model_adapter: 5,
+  task_overlay: 6,
   pipeline_stage: 7,
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// § 1A  BUDGET-AWARE MANIFEST PRUNING (Item 3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ManifestEntryForPruning {
+  id: string;
+  layer: string;
+  filePath: string;
+  tokenBudget: number | null;
+}
+
+export interface BudgetPruneResult {
+  pruned: ManifestEntryForPruning[];
+  dropped: string[];
+  dropped_entry_ids: string[];
+  warnings: string[];
+}
+
+/**
+ * Pruning priority by layer — lower number = higher priority (kept first).
+ * Priority 0 entries are never dropped.
+ */
+const LAYER_PRUNING_PRIORITY: Record<string, number> = {
+  behavioral_os: 0,
+  model_adapter: 0,
+  pipeline_stage: 0,
+  domain_architect: 1,
+  skill: 2,
+  project_overlay: 3,
+  task_overlay: 4,
+};
+
+const DEFAULT_SAFETY_PATTERN = /Behavioral_OS|RULES_CORE|RULES_GUARD|BABEL_BIBLE|Evidence_Gathering|BCDP|Untrusted_Input|Security_Release|Compliance_Evidence|Autonomous_Agent|Prompt_Injection|governance/i;
+
+/**
+ * Prune a prompt manifest to stay within a token budget hard limit.
+ * Drops lowest-priority entries first, preserving safety-critical and
+ * priority-0 entries (behavioral_os, model_adapter, pipeline_stage).
+ *
+ * @param manifest - Array of manifest entries to potentially prune.
+ * @param hardLimit - Maximum allowed token budget (default 3200).
+ * @param safetyCriticalPatterns - RegExp; entries whose `filePath` or `id`
+ *   match are never dropped (default matches Behavioral OS / RULES files).
+ * @returns Pruned manifest, dropped entry IDs, and human-readable warnings.
+ */
+export function budgetAwareManifestPrune(
+  manifest: ManifestEntryForPruning[],
+  hardLimit: number = 3200,
+  safetyCriticalPatterns?: RegExp,
+): BudgetPruneResult {
+  const safetyPattern = safetyCriticalPatterns ?? DEFAULT_SAFETY_PATTERN;
+  const dropped: string[] = [];
+  const warnings: string[] = [];
+
+  // Calculate total declared budget
+  let totalBudget = 0;
+  for (const entry of manifest) {
+    if (entry.tokenBudget !== null) {
+      totalBudget += entry.tokenBudget;
+    }
+  }
+
+  // Under budget — return unchanged
+  if (totalBudget <= hardLimit) {
+    return { pruned: [...manifest], dropped: [], dropped_entry_ids: [], warnings: [] };
+  }
+
+  const isSafetyCritical = (entry: ManifestEntryForPruning): boolean =>
+    safetyPattern.test(entry.filePath) || safetyPattern.test(entry.id);
+
+  // Governance/safety entries are never dropped (gap 2)
+  const governanceSafetyPattern = /governance|security|safety|guard|evidence|bcdp|untrusted/i;
+
+  // Score each entry for droppability
+  const scored = manifest.map((entry) => ({
+    entry,
+    priority: governanceSafetyPattern.test(entry.id) ? 0 : (LAYER_PRUNING_PRIORITY[entry.layer] ?? 99),
+    budget: entry.tokenBudget ?? 0,
+    mustKeep: isSafetyCritical(entry) || LAYER_PRUNING_PRIORITY[entry.layer] === 0 || governanceSafetyPattern.test(entry.id),
+  }));
+
+  // Sort by priority ascending (highest priority first = least droppable)
+  scored.sort((a, b) => a.priority - b.priority);
+
+  const kept: ManifestEntryForPruning[] = [];
+  let runningBudget = 0;
+
+  for (const item of scored) {
+    if (item.mustKeep) {
+      // Safety-critical or priority-0 entries are always kept
+      kept.push(item.entry);
+      runningBudget += item.budget;
+    } else if (runningBudget + item.budget <= hardLimit) {
+      // Budget allows it — keep
+      kept.push(item.entry);
+      runningBudget += item.budget;
+    } else {
+      // Budget exceeded and not safety-critical — drop
+      dropped.push(item.entry.id);
+      warnings.push(
+        `[budget-prune] Dropped "${item.entry.id}" (layer: ${item.entry.layer}, ` +
+          `budget: ${item.budget}) to stay within ${hardLimit} token budget.`,
+      );
+    }
+  }
+
+  // Restore original order
+  const originalOrder = new Map(manifest.map((e, i) => [e.id, i]));
+  kept.sort((a, b) => (originalOrder.get(a.id) ?? 0) - (originalOrder.get(b.id) ?? 0));
+
+  if (dropped.length > 0) {
+    warnings.unshift(
+      `[budget-prune] Total declared budget ${totalBudget} exceeded limit ${hardLimit}. ` +
+        `Dropped ${dropped.length} entry(s) to fit within budget.`,
+    );
+  }
+
+  return { pruned: kept, dropped, dropped_entry_ids: [...dropped], warnings };
+}
+
+/**
+ * Check if a directory (recursively) contains files with any of the given extensions.
+ * Skips node_modules, .git, build, .gradle, and bin directories.
+ */
+function hasFileWithExtension(dir: string, extensions: string[]): boolean {
+  try {
+    const files = readdirSync(dir);
+    for (const file of files) {
+      const fullPath = join(dir, file);
+      try {
+        const stat = statSync(fullPath);
+        if (stat.isDirectory()) {
+          if (
+            file === 'node_modules' ||
+            file === '.git' ||
+            file === 'build' ||
+            file === '.gradle' ||
+            file === 'bin'
+          ) {
+            continue;
+          }
+          if (hasFileWithExtension(fullPath, extensions)) {
+            return true;
+          }
+        } else {
+          const ext = '.' + file.split('.').pop();
+          if (extensions.includes(ext.toLowerCase())) {
+            return true;
+          }
+        }
+      } catch {
+        // Ignore individual file read errors
+      }
+    }
+  } catch {
+    // Ignore dir read errors
+  }
+  return false;
+}
 
 const CATALOG_ID_ALIASES: Record<string, string> = {
   skill_gradle: 'skill_gradle_wrapper',
@@ -129,6 +293,9 @@ const CATALOG_ID_ALIASES: Record<string, string> = {
   skill_godot_performance: 'skill_godot_performance_mobile',
   skill_android_tv_game: 'skill_android_tv_game_ux',
   overlay_terminal_bench_2: 'overlay_terminal_bench',
+  behavioral_core_v10: 'behavioral_core_v11',
+  behavioral_cognitive_micro_v7: 'behavioral_core_v11',
+  behavioral_guard_v7: 'behavioral_core_v11',
 };
 
 interface NormalizedInstructionStackResult {
@@ -157,15 +324,15 @@ function appendUnique(values: string[], nextValue: string): void {
 let purposeSeedMapCache: { babelRoot: string; seeds: Record<string, string | null> } | null = null;
 
 function isPurposeAnalysisInput(value: unknown): value is PurposeAnalysisInput {
-  return value !== null &&
+  return (
+    value !== null &&
     typeof value === 'object' &&
     !Array.isArray(value) &&
-    (
-      'purpose_mode' in value ||
+    ('purpose_mode' in value ||
       'pipeline_mode' in value ||
       'purpose_source' in value ||
-      'purpose_confidence' in value
-    );
+      'purpose_confidence' in value)
+  );
 }
 
 function loadPurposeSeedMap(babelRoot: string): Record<string, string | null> {
@@ -183,9 +350,8 @@ function loadPurposeSeedMap(babelRoot: string): Record<string, string | null> {
   const parsed = JSON.parse(readFileSync(mapPath, 'utf-8')) as Record<string, unknown>;
   const seeds: Record<string, string | null> = {};
   for (const [purposeMode, seedValue] of Object.entries(parsed)) {
-    seeds[purposeMode] = typeof seedValue === 'string' && seedValue.trim().length > 0
-      ? seedValue.trim()
-      : null;
+    seeds[purposeMode] =
+      typeof seedValue === 'string' && seedValue.trim().length > 0 ? seedValue.trim() : null;
   }
   purposeSeedMapCache = { babelRoot, seeds };
   return seeds;
@@ -234,7 +400,8 @@ function getPurposeDiagnostics(
 
   const pipelineMode = typeof analysis?.pipeline_mode === 'string' ? analysis.pipeline_mode : null;
   const autonomousContext =
-    pipelineMode === 'autonomous' ||
+    pipelineMode === 'deep' ||
+    pipelineMode === 'autonomous' || // legacy ingest string before normalize
     pipelineStageIds.includes('pipeline_cli_executor');
   if (autonomousContext && (purposeMode === 'learning' || purposeMode === 'exploration')) {
     return {
@@ -268,7 +435,9 @@ function getPurposeDiagnostics(
 }
 
 function normalizeProjectName(value: string | null | undefined): string | null {
-  const normalized = String(value ?? '').trim().toLowerCase();
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase();
   return normalized.length > 0 ? normalized : null;
 }
 
@@ -383,7 +552,7 @@ function normalizeInstructionStackOverlays(
       appendUnique(taskOverlayIds, projectSlotEntry.id);
       warnings.push(
         `[resolver] Moved task overlay "${projectSlotEntry.id}" from project_overlay_id ` +
-        'into task_overlay_ids because task overlays cannot occupy the project overlay slot.',
+          'into task_overlay_ids because task overlays cannot occupy the project overlay slot.',
       );
       projectOverlayId = null;
     } else if (!projectSlotEntry) {
@@ -417,7 +586,7 @@ function normalizeInstructionStackOverlays(
       }
       warnings.push(
         `[resolver] Moved project overlay "${taskSlotEntry.id}" from task_overlay_ids ` +
-        'into project_overlay_id because project overlays cannot occupy task overlay slots.',
+          'into project_overlay_id because project overlays cannot occupy task overlay slots.',
       );
       continue;
     }
@@ -445,7 +614,7 @@ function normalizeInstructionStackOverlays(
         appendUnique(taskOverlayIds, taskAliasRepair);
         warnings.push(
           `[resolver] Normalized hallucinated task overlay "${normalizedTaskOverlayId}" ` +
-          `to generic task overlay "${taskAliasRepair}".`,
+            `to generic task overlay "${taskAliasRepair}".`,
         );
         continue;
       }
@@ -455,15 +624,18 @@ function normalizeInstructionStackOverlays(
   }
 
   const desiredProject = normalizeProjectName(targetProject);
-  const effectiveProject = desiredProject ?? normalizeProjectName(
-    projectOverlayId
-      ? getCatalogEntry(entriesById, projectOverlayId)?.project
-      : null,
-  );
+  const effectiveProject =
+    desiredProject ??
+    normalizeProjectName(
+      projectOverlayId ? getCatalogEntry(entriesById, projectOverlayId)?.project : null,
+    );
 
   if (effectiveProject) {
     if (!projectOverlayId) {
-      const inferredProjectOverlayId = findProjectOverlayIdByProjectName(entriesById, effectiveProject);
+      const inferredProjectOverlayId = findProjectOverlayIdByProjectName(
+        entriesById,
+        effectiveProject,
+      );
       if (inferredProjectOverlayId) {
         projectOverlayId = inferredProjectOverlayId;
         warnings.push(
@@ -473,28 +645,34 @@ function normalizeInstructionStackOverlays(
     } else {
       const currentProjectOverlay = getCatalogEntry(entriesById, projectOverlayId);
       if (!currentProjectOverlay) {
-        const correctedProjectOverlayId = findProjectOverlayIdByProjectName(entriesById, effectiveProject);
+        const correctedProjectOverlayId = findProjectOverlayIdByProjectName(
+          entriesById,
+          effectiveProject,
+        );
         if (correctedProjectOverlayId) {
           warnings.push(
             `[resolver] Replaced unknown project overlay "${projectOverlayId}" with ` +
-            `"${correctedProjectOverlayId}" to match target project "${effectiveProject}".`,
+              `"${correctedProjectOverlayId}" to match target project "${effectiveProject}".`,
           );
           projectOverlayId = correctedProjectOverlayId;
         } else {
           warnings.push(
             `[resolver] Dropped unknown project overlay "${projectOverlayId}" because no project overlay ` +
-            `matched target project "${effectiveProject}".`,
+              `matched target project "${effectiveProject}".`,
           );
           projectOverlayId = null;
         }
       }
       const currentProjectName = normalizeProjectName(currentProjectOverlay?.project);
       if (currentProjectName && currentProjectName !== effectiveProject) {
-        const correctedProjectOverlayId = findProjectOverlayIdByProjectName(entriesById, effectiveProject);
+        const correctedProjectOverlayId = findProjectOverlayIdByProjectName(
+          entriesById,
+          effectiveProject,
+        );
         if (correctedProjectOverlayId) {
           warnings.push(
             `[resolver] Replaced project overlay "${projectOverlayId}" with "${correctedProjectOverlayId}" ` +
-            `to match target project "${effectiveProject}".`,
+              `to match target project "${effectiveProject}".`,
           );
           projectOverlayId = correctedProjectOverlayId;
         }
@@ -521,14 +699,14 @@ function normalizeInstructionStackOverlays(
       appendUnique(projectConsistentTaskOverlayIds, genericFallback.id);
       warnings.push(
         `[resolver] Replaced project-specific task overlay "${taskOverlayEntry.id}" with generic overlay ` +
-        `"${genericFallback.id}" because the active project is "${effectiveProject}", not "${taskOverlayProject}".`,
+          `"${genericFallback.id}" because the active project is "${effectiveProject}", not "${taskOverlayProject}".`,
       );
       continue;
     }
 
     warnings.push(
       `[resolver] Dropped project-specific task overlay "${taskOverlayEntry.id}" because it targets ` +
-      `"${taskOverlayProject}" while the active project is "${effectiveProject}".`,
+        `"${taskOverlayProject}" while the active project is "${effectiveProject}".`,
     );
   }
 
@@ -553,11 +731,22 @@ function requireEntry(
   expectedLayer?: string,
 ): CatalogEntry {
   const normalizedId = normalizeCatalogId(entryId);
-  const compatibilityId = normalizedId === 'behavioral_core_v7' && entriesById.has('behavioral_core_v10')
-    ? 'behavioral_core_v10'
-    : normalizedId;
+  const compatibilityId =
+    normalizedId === 'behavioral_core_v7' && entriesById.has('behavioral_core_v11')
+      ? 'behavioral_core_v11'
+      : normalizedId;
   const entry = entriesById.get(compatibilityId);
   if (!entry) {
+    // Defense-in-depth: if the LLM emits an invalid domain_id (e.g., "global"
+    // leaked from the target_project field), fall back to the catch-all research
+    // domain instead of crashing the pipeline.
+    if (expectedLayer === 'domain_architect' && normalizedId !== 'domain_research') {
+      const fallback = entriesById.get('domain_research');
+      if (fallback) {
+        console.warn(`[resolver] Unknown domain "${entryId}" — falling back to domain_research`);
+        return fallback;
+      }
+    }
     throw new Error(`[resolver] Unknown catalog id: ${entryId}`);
   }
   if (entry.status && entry.status !== 'active') {
@@ -691,27 +880,43 @@ export function previewInstructionStackResolution(
   options: StackResolutionPreviewOptions = {},
 ): ResolvedStackPreview {
   const catalogEntries = parseCatalog(catalogPath);
-  const entriesById = new Map(catalogEntries.map(entry => [entry.id, entry]));
-  const analysis = analysisOverride ?? (isPurposeAnalysisInput(targetProjectOrAnalysis) ? targetProjectOrAnalysis : null);
-  const targetProject = isPurposeAnalysisInput(targetProjectOrAnalysis) ? null : targetProjectOrAnalysis;
-  const normalizedStackResult = normalizeInstructionStackOverlays(instructionStack, entriesById, targetProject);
+  const entriesById = new Map(catalogEntries.map((entry) => [entry.id, entry]));
+  const analysis =
+    analysisOverride ??
+    (isPurposeAnalysisInput(targetProjectOrAnalysis) ? targetProjectOrAnalysis : null);
+  const targetProject = isPurposeAnalysisInput(targetProjectOrAnalysis)
+    ? null
+    : targetProjectOrAnalysis;
+  const normalizedStackResult = normalizeInstructionStackOverlays(
+    instructionStack,
+    entriesById,
+    targetProject,
+  );
   const normalizedInstructionStack = normalizedStackResult.instructionStack;
 
-  const behavioralIds = normalizedInstructionStack.behavioral_ids.map(entryId => {
+  const behavioralIds = normalizedInstructionStack.behavioral_ids.map((entryId) => {
     requireEntry(entriesById, entryId, 'behavioral_os');
     return entryId;
   });
 
-  const domainEntry = requireEntry(entriesById, normalizedInstructionStack.domain_id, 'domain_architect');
-  const modelAdapterId = requireEntry(entriesById, normalizedInstructionStack.model_adapter_id, 'model_adapter').id;
+  const domainEntry = requireEntry(
+    entriesById,
+    normalizedInstructionStack.domain_id,
+    'domain_architect',
+  );
+  const modelAdapterId = requireEntry(
+    entriesById,
+    normalizedInstructionStack.model_adapter_id,
+    'model_adapter',
+  ).id;
   const projectOverlayId = normalizedInstructionStack.project_overlay_id
     ? requireEntry(entriesById, normalizedInstructionStack.project_overlay_id, 'project_overlay').id
     : null;
-  const taskOverlayIds = normalizedInstructionStack.task_overlay_ids.map(entryId => {
+  const taskOverlayIds = normalizedInstructionStack.task_overlay_ids.map((entryId) => {
     requireEntry(entriesById, entryId, 'task_overlay');
     return entryId;
   });
-  const pipelineStageIds = normalizedInstructionStack.pipeline_stage_ids.map(entryId => {
+  const pipelineStageIds = normalizedInstructionStack.pipeline_stage_ids.map((entryId) => {
     requireEntry(entriesById, entryId, 'pipeline_stage');
     return entryId;
   });
@@ -742,10 +947,29 @@ export function previewInstructionStackResolution(
   }
 
   const skillIds = expandSkillIds(seedSkills, resolutionPolicy, entriesById);
+
+  // Fix 3: File extension gate — skip skills whose fileExtensionGate has no matches in the project root
+  const fileExtensionWarnings: string[] = [];
+  const checkProjectRoot = process.cwd();
+  const fileGateFilteredSkillIds: string[] = [];
+  for (const skillId of skillIds) {
+    const skillEntry = entriesById.get(skillId);
+    if (skillEntry?.fileExtensionGate && skillEntry.fileExtensionGate.length > 0) {
+      if (!hasFileWithExtension(checkProjectRoot, skillEntry.fileExtensionGate)) {
+        fileExtensionWarnings.push(
+          `[gate-skip] Skipped skill "${skillId}" because no files matching extensions ` +
+          `[${skillEntry.fileExtensionGate.join(', ')}] found in project root "${checkProjectRoot}".`,
+        );
+        continue;
+      }
+    }
+    fileGateFilteredSkillIds.push(skillId);
+  }
+
   const selectedIdsRaw = [
     ...behavioralIds,
     domainEntry.id,
-    ...skillIds,
+    ...fileGateFilteredSkillIds,
     modelAdapterId,
     ...(projectOverlayId ? [projectOverlayId] : []),
     ...taskOverlayIds,
@@ -767,11 +991,21 @@ export function previewInstructionStackResolution(
     resolutionPolicy.strict_conflict_mode,
   );
 
-  const selectedEntries = selectedIds.map((entryId, index) => {
+  let selectedEntries = selectedIds.map((entryId, index) => {
     const entry = requireEntry(entriesById, entryId);
-    const absolutePath = join(babelRoot, entry.path!);
-    if (!existsSync(absolutePath)) {
-      throw new Error(`[resolver] Resolved path does not exist for ${entryId}: ${absolutePath}`);
+    let resolvedPath = join(babelRoot, entry.path!);
+
+    // P0 token reduction: prefer pre-compiled/minified skill files.
+    // Compiled versions are typically 32% smaller (stripped comments, whitespace, verbose examples).
+    if (entry.layer === 'skill' && entryId.startsWith('skill_')) {
+      const compiledPath = join(babelRoot, '02_Skills', '.compiled', `${entryId}.min.md`);
+      if (existsSync(compiledPath)) {
+        resolvedPath = compiledPath;
+      }
+    }
+
+    if (!existsSync(resolvedPath)) {
+      throw new Error(`[resolver] Resolved path does not exist for ${entryId}: ${resolvedPath}`);
     }
 
     const layerRank = LAYER_ORDER[entry.layer as keyof typeof LAYER_ORDER];
@@ -781,17 +1015,103 @@ export function previewInstructionStackResolution(
 
     return {
       entry,
-      absolutePath,
+      absolutePath: resolvedPath,
       layerRank,
       sourceOrder: index,
     };
   });
 
-  selectedEntries.sort((left, right) =>
-    left.layerRank - right.layerRank ||
-    (left.entry.loadPosition ?? Number.MAX_SAFE_INTEGER) - (right.entry.loadPosition ?? Number.MAX_SAFE_INTEGER) ||
-    left.sourceOrder - right.sourceOrder,
+  selectedEntries.sort(
+    (left, right) =>
+      left.layerRank - right.layerRank ||
+      (left.entry.loadPosition ?? Number.MAX_SAFE_INTEGER) -
+        (right.entry.loadPosition ?? Number.MAX_SAFE_INTEGER) ||
+      left.sourceOrder - right.sourceOrder,
   );
+
+  // Budget-Aware Manifest Pruning (Item 3): drop low-priority entries when total declared budget exceeds hard limit
+  let budgetPruneWarnings: string[] = [];
+  {
+    const effectiveHardLimit = getEffectiveBudgetLimit(process.env, undefined);
+    const manifestForPruning: ManifestEntryForPruning[] = selectedEntries.map((se) => ({
+      id: se.entry.id,
+      layer: se.entry.layer,
+      filePath: se.absolutePath,
+      tokenBudget: se.entry.tokenBudget,
+    }));
+    const pruneResult = budgetAwareManifestPrune(manifestForPruning, effectiveHardLimit);
+    if (pruneResult.dropped.length > 0) {
+      const keptIds = new Set(pruneResult.pruned.map((e) => e.id));
+      selectedEntries = selectedEntries.filter((se) => keptIds.has(se.entry.id));
+    }
+    budgetPruneWarnings = pruneResult.warnings;
+  }
+
+  // Guard-presence assertion — ensure behavioral_core_v11 (which includes guard rules) is loaded when pipeline stages exist
+  const guardMissingWarnings: string[] = [];
+  if (pipelineStageIds.length > 0) {
+    const hasGuard = selectedEntries.some(se => se.entry.id === 'behavioral_core_v11');
+    if (!hasGuard) {
+      try {
+        const guardEntry = requireEntry(entriesById, 'behavioral_core_v11', 'behavioral_os');
+        const guardPath = join(babelRoot, guardEntry.path!);
+        selectedEntries.push({
+          entry: guardEntry,
+          absolutePath: guardPath,
+          layerRank: LAYER_ORDER[guardEntry.layer as keyof typeof LAYER_ORDER] ?? 0,
+          sourceOrder: selectedEntries.length,
+        });
+        guardMissingWarnings.push(
+          `[guard-missing] behavioral_core_v11 was not in the instruction stack but pipelineStageIds includes ` +
+          `${pipelineStageIds.length} stage(s) — force-added behavioral_core_v11.`,
+        );
+      } catch {
+        guardMissingWarnings.push(
+          `[guard-missing] Pipeline stage(s) present but behavioral_core_v11 not found in catalog — cannot force-add.`,
+        );
+      }
+    }
+  }
+
+  // Fix 7: Position-aware skill ordering (gap 7) — sort skills by relevance descending within the skill layer
+  {
+    const domainTags = new Set(domainEntry.tags ?? []);
+    // Compute set of all dependency IDs across selected entries
+    const dependencyIds = new Set<string>();
+    for (const se of selectedEntries) {
+      if (se.entry.dependencies) {
+        for (const depId of se.entry.dependencies) {
+          dependencyIds.add(normalizeCatalogId(depId));
+        }
+      }
+    }
+
+    // Find skill range (skills are contiguous after layer sort)
+    let skillStart = -1;
+    let skillEnd = -1;
+    for (let i = 0; i < selectedEntries.length; i++) {
+      const se = selectedEntries[i]!;
+      if (se.entry.layer === 'skill') {
+        if (skillStart < 0) skillStart = i;
+        skillEnd = i;
+      }
+    }
+
+    if (skillStart >= 0 && skillEnd >= skillStart) {
+      const skillSlice = selectedEntries.slice(skillStart, skillEnd + 1);
+      // Score: +10 if skill tags overlap with domain tags, +5 if in dependency chain
+      skillSlice.sort((a, b) => {
+        const scoreA =
+          (a.entry.tags?.some(tag => domainTags.has(tag)) ? 10 : 0) +
+          (dependencyIds.has(a.entry.id) ? 5 : 0);
+        const scoreB =
+          (b.entry.tags?.some(tag => domainTags.has(tag)) ? 10 : 0) +
+          (dependencyIds.has(b.entry.id) ? 5 : 0);
+        return scoreB - scoreA; // descending = higher relevance = closer to end = recency effect
+      });
+      selectedEntries.splice(skillStart, skillSlice.length, ...skillSlice);
+    }
+  }
 
   let tokenBudgetTotal = 0;
   const tokenBudgetMissing: string[] = [];
@@ -811,14 +1131,16 @@ export function previewInstructionStackResolution(
     instructionStack,
     ACTIVE_V9_BUDGET_POLICY,
   );
+  const effectiveBudgetLimit = getEffectiveBudgetLimit(process.env, undefined);
   const budgetPolicy: BudgetPolicy = {
     ...ACTIVE_V9_BUDGET_POLICY,
     enabled: policyApplies,
+    hard_limit: effectiveBudgetLimit,
   };
 
   const tokenMeasurement = options.countActualTokens
     ? countSelectedEntryTokens(
-        selectedEntries.map(selectedEntry => ({
+        selectedEntries.map((selectedEntry) => ({
           id: selectedEntry.entry.id,
           absolutePath: selectedEntry.absolutePath,
         })),
@@ -847,8 +1169,8 @@ export function previewInstructionStackResolution(
   });
 
   const compiledArtifacts: RuntimeCompiledArtifacts = {
-    selected_entry_ids: selectedEntries.map(selectedEntry => selectedEntry.entry.id),
-    prompt_manifest: selectedEntries.map(selectedEntry => selectedEntry.absolutePath),
+    selected_entry_ids: selectedEntries.map((selectedEntry) => selectedEntry.entry.id),
+    prompt_manifest: selectedEntries.map((selectedEntry) => selectedEntry.absolutePath),
     purpose_resolution_mode: purposeDiagnostics.purpose_resolution_mode,
     purpose_seed_skill_id: purposeDiagnostics.purpose_seed_skill_id,
     purpose_suppression_reason: purposeDiagnostics.purpose_suppression_reason,
@@ -866,8 +1188,11 @@ export function previewInstructionStackResolution(
     warnings: [
       ...normalizedStackResult.warnings,
       ...conflictWarnings,
+      ...budgetPruneWarnings,
+      ...guardMissingWarnings,
+      ...fileExtensionWarnings,
       `Total token budget: ${tokenBudgetTotal}`,
-      ...budgetDiagnostics.map(diagnostic => diagnostic.message),
+      ...budgetDiagnostics.map((diagnostic) => diagnostic.message),
     ],
   };
 
@@ -910,7 +1235,7 @@ export function resolveInstructionStackManifest(
     { countActualTokens: true, tokenCountSource: 'runtime' },
   );
   const catalogEntries = parseCatalog(join(babelRoot, 'prompt_catalog.yaml'));
-  const entriesById = new Map(catalogEntries.map(entry => [entry.id, entry]));
+  const entriesById = new Map(catalogEntries.map((entry) => [entry.id, entry]));
   const normalizedStackResult = normalizeInstructionStackOverlays(
     manifest.instruction_stack,
     entriesById,

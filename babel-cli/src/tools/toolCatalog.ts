@@ -38,9 +38,7 @@ export interface ToolCatalogOptions {
 
 function normalizeToolSet(values: readonly string[] | undefined): Set<string> {
   return new Set(
-    (values ?? [])
-      .map(value => value.trim().toLowerCase())
-      .filter(value => value.length > 0),
+    (values ?? []).map((value) => value.trim().toLowerCase()).filter((value) => value.length > 0),
   );
 }
 
@@ -99,57 +97,61 @@ function executorToolCatalogEntry(
 function capabilityCatalogEntries(options: ToolCatalogOptions): ToolCatalogEntry[] {
   const profileName = resolveProfileName(options.executionProfile);
   const allowedCommands = new Set(getAllowedShellCommands(profileName));
-  return getToolCapabilityRegistrySnapshot()
-    .map(capability => {
-      const profileSupported = capability.profiles.includes(profileName);
-      const requirements = [
-        ...new Set(capability.implementations.flatMap(implementation => implementation.requires)),
-      ];
-      const missingAllowedRequirements = requirements.filter(requirement => !allowedCommands.has(requirement));
-      const reasons = profileSupported
-        ? missingAllowedRequirements.length > 0
-          ? [`advisory only: missing allowlisted command base(s) ${missingAllowedRequirements.join(', ')}`]
-          : ['available as a planning/executor rewrite capability']
-        : [`not active for execution profile ${profileName}`];
+  return getToolCapabilityRegistrySnapshot().map((capability) => {
+    const profileSupported = capability.profiles.includes(profileName);
+    const requirements = [
+      ...new Set(capability.implementations.flatMap((implementation) => implementation.requires)),
+    ];
+    const missingAllowedRequirements = requirements.filter(
+      (requirement) => !allowedCommands.has(requirement),
+    );
+    const reasons = profileSupported
+      ? missingAllowedRequirements.length > 0
+        ? [
+            `advisory only: missing allowlisted command base(s) ${missingAllowedRequirements.join(', ')}`,
+          ]
+        : ['available as a planning/executor rewrite capability']
+      : [`not active for execution profile ${profileName}`];
 
-      return {
-        kind: 'capability' as const,
-        name: capability.id,
-        category: 'capability',
-        description: capability.intent,
-        mutating: capability.risk === 'mutation',
-        risk: capability.risk,
-        policy: {
-          status: profileSupported ? 'advisory' as const : 'disabled' as const,
-          reasons,
-        },
-        profiles: [...capability.profiles],
-        command_bases: [...capability.blockedCommandBases],
-        requirements,
-      };
-    });
+    return {
+      kind: 'capability' as const,
+      name: capability.id,
+      category: 'capability',
+      description: capability.intent,
+      mutating: capability.risk === 'mutation',
+      risk: capability.risk,
+      policy: {
+        status: profileSupported ? ('advisory' as const) : ('disabled' as const),
+        reasons,
+      },
+      profiles: [...capability.profiles],
+      command_bases: [...capability.blockedCommandBases],
+      requirements,
+    };
+  });
 }
 
 export function buildToolCatalog(
   executorTools: readonly ExecutorToolSnapshot[],
   options: ToolCatalogOptions = {},
 ): ToolCatalogEntry[] {
-  const entries = executorTools.map(tool => executorToolCatalogEntry(tool, options));
+  const entries = executorTools.map((tool) => executorToolCatalogEntry(tool, options));
   if (options.includeCapabilities === true) {
     entries.push(...capabilityCatalogEntries(options));
   }
-  return entries.sort((left, right) =>
-    left.kind.localeCompare(right.kind) || left.name.localeCompare(right.name),
+  return entries.sort(
+    (left, right) => left.kind.localeCompare(right.kind) || left.name.localeCompare(right.name),
   );
 }
 
 export function formatToolCatalogHuman(entries: readonly ToolCatalogEntry[]): string {
   return [
     'Tool catalog:',
-    ...entries.map(entry => {
-      const policy = entry.policy.status === 'allowed'
-        ? 'allowed'
-        : `${entry.policy.status}: ${entry.policy.reasons.join('; ')}`;
+    ...entries.map((entry) => {
+      const policy =
+        entry.policy.status === 'allowed'
+          ? 'allowed'
+          : `${entry.policy.status}: ${entry.policy.reasons.join('; ')}`;
       return `  ${entry.name.padEnd(24)} ${entry.kind.padEnd(13)} ${entry.risk.padEnd(10)} ${policy}`;
     }),
   ].join('\n');

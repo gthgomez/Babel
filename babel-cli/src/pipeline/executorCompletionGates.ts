@@ -1,14 +1,8 @@
 import { relative } from 'node:path';
 
 import type { SwePlan, ToolCallLog } from '../schemas/agentContracts.js';
-import {
-  isWithinProjectRootPath,
-  resolveStepTargetPath,
-} from '../stages/executorHelpers.js';
-import {
-  getRequestedTargetContract,
-  normalizePathForComparison,
-} from '../stages/taskShape.js';
+import { isWithinProjectRootPath, resolveStepTargetPath } from '../stages/executorHelpers.js';
+import { getRequestedTargetContract, normalizePathForComparison } from '../stages/taskShape.js';
 import { verifyBoundedTaskArtifacts } from '../stages/verification.js';
 import { isExternalBenchmarkTask } from './benchmarkTasks.js';
 
@@ -27,7 +21,10 @@ export function buildMaxTurnsExceededCondition(maxTurns: number): string {
   return `Executor exceeded the maximum of ${maxTurns} turns without a terminal signal.`;
 }
 
-export function buildExternalPostconditionFeedback(attempt: number, semanticFailure: string): string {
+export function buildExternalPostconditionFeedback(
+  attempt: number,
+  semanticFailure: string,
+): string {
   return [
     `[Postcondition ${attempt}] external_benchmark_verification -> requested output artifact`,
     'Exit code: 1',
@@ -43,9 +40,9 @@ export function getMissingSuccessfulPlannedFileWrites(params: {
   projectRoot: string | null;
 }): string[] {
   const plannedWrites = params.approvedPlan.minimal_action_set
-    .filter(step => step.tool === 'file_write')
-    .map(step => String(step.target ?? '').trim())
-    .filter(target => target.length > 0);
+    .filter((step) => step.tool === 'file_write')
+    .map((step) => String(step.target ?? '').trim())
+    .filter((target) => target.length > 0);
   if (plannedWrites.length === 0) {
     return [];
   }
@@ -66,13 +63,11 @@ export function getMissingSuccessfulPlannedFileWrites(params: {
 
   const successfulWrites = new Set(
     params.toolCallLog
-      .filter(entry => entry.tool === 'file_write' && entry.exit_code === 0)
-      .map(entry => targetKey(String(entry.target ?? ''))),
+      .filter((entry) => entry.tool === 'file_write' && entry.exit_code === 0)
+      .map((entry) => targetKey(String(entry.target ?? ''))),
   );
 
-  return plannedWrites.filter(target =>
-    !successfulWrites.has(targetKey(target)),
-  );
+  return plannedWrites.filter((target) => !successfulWrites.has(targetKey(target)));
 }
 
 export function shouldCompleteBoundedWriteTask(params: {
@@ -81,35 +76,29 @@ export function shouldCompleteBoundedWriteTask(params: {
   toolCallLog: readonly ToolCallLog[];
   projectRoot: string | null;
 }): boolean {
-  if (isExternalBenchmarkTask(params.rawTask)) {
-    return false;
-  }
-
+  // Previously returned false for benchmark tasks, skipping the bounded
+  // write completion shortcut. Benchmark tasks now use the same contract path.
   const contract = getRequestedTargetContract(params.rawTask);
   if (!contract.bounded || contract.requestedTargets.length === 0) {
     return false;
   }
 
-  const planTools = params.approvedPlan.minimal_action_set.map(step => step.tool);
-  if (!planTools.every(tool => ['directory_list', 'file_read', 'file_write'].includes(tool))) {
+  const planTools = params.approvedPlan.minimal_action_set.map((step) => step.tool);
+  if (!planTools.every((tool) => ['directory_list', 'file_read', 'file_write'].includes(tool))) {
     return false;
   }
 
   const successfulWrites = new Set(
     params.toolCallLog
-      .filter(entry => entry.tool === 'file_write' && entry.exit_code === 0)
-      .map(entry => normalizePathForComparison(String(entry.target ?? '')).toLowerCase()),
+      .filter((entry) => entry.tool === 'file_write' && entry.exit_code === 0)
+      .map((entry) => normalizePathForComparison(String(entry.target ?? '')).toLowerCase()),
   );
-  const allRequestedTargetsWritten = contract.requestedTargets.every(target =>
+  const allRequestedTargetsWritten = contract.requestedTargets.every((target) =>
     successfulWrites.has(normalizePathForComparison(target).toLowerCase()),
   );
   if (!allRequestedTargetsWritten) {
     return false;
   }
 
-  return !verifyBoundedTaskArtifacts(
-    params.rawTask,
-    [...params.toolCallLog],
-    params.projectRoot,
-  );
+  return !verifyBoundedTaskArtifacts(params.rawTask, [...params.toolCallLog], params.projectRoot);
 }

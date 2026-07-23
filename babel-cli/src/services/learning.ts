@@ -3,11 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, normalize, resolve } from 'node:path';
 
-import {
-  buildProofStatus,
-  type ProofStatus,
-  type ProofStatusArtifact,
-} from './proof.js';
+import { buildProofStatus, type ProofStatus, type ProofStatusArtifact } from './proof.js';
 
 export type LearningFailureType =
   | 'NO_FAILURE_DETECTED'
@@ -64,7 +60,14 @@ export interface LearningFailureRecord {
   observed_status: string | null;
   root_cause_summary: string;
   recommended_next_step: string;
-  candidate_fix_type: 'none' | 'verifier_contract' | 'safety_policy' | 'mode_routing' | 'project_context' | 'prompt_instruction' | 'evidence_collection';
+  candidate_fix_type:
+    | 'none'
+    | 'verifier_contract'
+    | 'safety_policy'
+    | 'mode_routing'
+    | 'project_context'
+    | 'prompt_instruction'
+    | 'evidence_collection';
   observed_evidence: {
     execution_happened: boolean;
     qa_passed: boolean | null;
@@ -312,13 +315,15 @@ export function failureRecordHash(record: LearningFailureRecord): string {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : {};
 }
 
 function readExistingProof(runDir: string): ProofStatusArtifact | null {
   const proof = asRecord(readJson(join(runDir, 'proof_status.json')));
-  return proof.artifact_type === 'babel_proof_status' ? proof as unknown as ProofStatusArtifact : null;
+  return proof.artifact_type === 'babel_proof_status'
+    ? (proof as unknown as ProofStatusArtifact)
+    : null;
 }
 
 function resolveFailureRecordPath(input: { failureId: string; learningRoot: string }): string {
@@ -366,7 +371,10 @@ function resolveMutationPackagePath(input: { mutationId: string; learningRoot: s
 }
 
 function slugPart(value: string): string {
-  const slug = value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
   return slug.length > 0 ? slug : 'lesson';
 }
 
@@ -375,18 +383,26 @@ function lessonIdForFailure(record: LearningFailureRecord): string {
 }
 
 function evalIdForLesson(lessonId: string): string {
-  return `${slugPart(lessonId)}_eval_${new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 17)}`;
+  return `${slugPart(lessonId)}_eval_${new Date()
+    .toISOString()
+    .replace(/[^0-9]/g, '')
+    .slice(0, 17)}`;
 }
 
 function mutationIdForLesson(lessonId: string, lessonHash: string): string {
-  const timestamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 17);
+  const timestamp = new Date()
+    .toISOString()
+    .replace(/[^0-9]/g, '')
+    .slice(0, 17);
   const nonce = randomUUID().replace(/-/g, '').slice(0, 8);
   return `mutation_${slugPart(lessonId)}_${lessonHash.slice(0, 12)}_${timestamp}_${nonce}`;
 }
 
 function assertMutationTarget(value: string): asserts value is LearningMutationTarget {
   if (value !== 'project-verifier-contract' && value !== 'project-overlay') {
-    throw new Error(`Unsupported learning mutation target "${value}". Supported targets: project-verifier-contract, project-overlay.`);
+    throw new Error(
+      `Unsupported learning mutation target "${value}". Supported targets: project-verifier-contract, project-overlay.`,
+    );
   }
 }
 
@@ -407,7 +423,12 @@ function targetPathsForMutation(input: {
 
 function assertSafeLearningRelativePath(path: string): void {
   const normalized = normalize(path).replace(/\\/g, '/');
-  if (normalized.startsWith('../') || normalized.includes('/../') || normalized.startsWith('/') || /^[a-zA-Z]:/.test(path)) {
+  if (
+    normalized.startsWith('../') ||
+    normalized.includes('/../') ||
+    normalized.startsWith('/') ||
+    /^[a-zA-Z]:/.test(path)
+  ) {
     throw new Error(`Unsafe learning mutation path: ${path}`);
   }
 }
@@ -421,10 +442,14 @@ function isGitDirtyTarget(repoRoot: string, relativePath: string): boolean {
     return false;
   }
   try {
-    const output = execFileSync('git', ['-C', repoRoot, 'status', '--porcelain', '--', relativePath], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
+    const output = execFileSync(
+      'git',
+      ['-C', repoRoot, 'status', '--porcelain', '--', relativePath],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      },
+    );
     return output.trim().length > 0;
   } catch {
     throw new Error(`Cannot verify dirty target state for ${relativePath}.`);
@@ -459,21 +484,22 @@ function buildAppendPatch(input: {
 }): string {
   const appendLines = patchLines(input.appendContent);
   const existingLines = input.existingContent === null ? [] : patchLines(input.existingContent);
-  const header = input.existingContent === null
-    ? [
-        `diff --git a/${input.relativePath} b/${input.relativePath}`,
-        'new file mode 100644',
-        '--- /dev/null',
-        `+++ b/${input.relativePath}`,
-        `@@ -0,0 +1,${appendLines.length} @@`,
-      ]
-    : [
-        `diff --git a/${input.relativePath} b/${input.relativePath}`,
-        `--- a/${input.relativePath}`,
-        `+++ b/${input.relativePath}`,
-        `@@ -${existingLines.length},0 +${existingLines.length + 1},${appendLines.length} @@`,
-      ];
-  return `${[...header, ...appendLines.map(line => `+${line}`)].join('\n')}\n`;
+  const header =
+    input.existingContent === null
+      ? [
+          `diff --git a/${input.relativePath} b/${input.relativePath}`,
+          'new file mode 100644',
+          '--- /dev/null',
+          `+++ b/${input.relativePath}`,
+          `@@ -0,0 +1,${appendLines.length} @@`,
+        ]
+      : [
+          `diff --git a/${input.relativePath} b/${input.relativePath}`,
+          `--- a/${input.relativePath}`,
+          `+++ b/${input.relativePath}`,
+          `@@ -${existingLines.length},0 +${existingLines.length + 1},${appendLines.length} @@`,
+        ];
+  return `${[...header, ...appendLines.map((line) => `+${line}`)].join('\n')}\n`;
 }
 
 function buildRollbackPatch(input: {
@@ -483,25 +509,29 @@ function buildRollbackPatch(input: {
 }): string {
   const appendLines = patchLines(input.appendContent);
   const existingLines = input.existingContent === null ? [] : patchLines(input.existingContent);
-  const header = input.existingContent === null
-    ? [
-        `diff --git a/${input.relativePath} b/${input.relativePath}`,
-        'deleted file mode 100644',
-        `--- a/${input.relativePath}`,
-        '+++ /dev/null',
-        `@@ -1,${appendLines.length} +0,0 @@`,
-      ]
-    : [
-        `diff --git a/${input.relativePath} b/${input.relativePath}`,
-        `--- a/${input.relativePath}`,
-        `+++ b/${input.relativePath}`,
-        `@@ -${existingLines.length + 1},${appendLines.length} +${existingLines.length},0 @@`,
-      ];
-  return `${[...header, ...appendLines.map(line => `-${line}`)].join('\n')}\n`;
+  const header =
+    input.existingContent === null
+      ? [
+          `diff --git a/${input.relativePath} b/${input.relativePath}`,
+          'deleted file mode 100644',
+          `--- a/${input.relativePath}`,
+          '+++ /dev/null',
+          `@@ -1,${appendLines.length} +0,0 @@`,
+        ]
+      : [
+          `diff --git a/${input.relativePath} b/${input.relativePath}`,
+          `--- a/${input.relativePath}`,
+          `+++ b/${input.relativePath}`,
+          `@@ -${existingLines.length + 1},${appendLines.length} +${existingLines.length},0 @@`,
+        ];
+  return `${[...header, ...appendLines.map((line) => `-${line}`)].join('\n')}\n`;
 }
 
 function riskForFailure(record: LearningFailureRecord): LessonRisk {
-  if (record.failure_type === 'UNSAFE_COMMAND_ATTEMPTED' || record.failure_type === 'UNRELATED_FILE_EDIT') {
+  if (
+    record.failure_type === 'UNSAFE_COMMAND_ATTEMPTED' ||
+    record.failure_type === 'UNRELATED_FILE_EDIT'
+  ) {
     return 'high';
   }
   if (record.severity === 'low') {
@@ -515,7 +545,10 @@ function riskForFailure(record: LearningFailureRecord): LessonRisk {
 
 function evalRequirementsForFailure(record: LearningFailureRecord): string[] {
   const requirements = ['no_false_completion', 'no_safety_policy_regression'];
-  if (record.candidate_fix_type === 'verifier_contract' || record.failure_type === 'TYPECHECK_NOT_RUN') {
+  if (
+    record.candidate_fix_type === 'verifier_contract' ||
+    record.failure_type === 'TYPECHECK_NOT_RUN'
+  ) {
     requirements.push('verifier_contract_preserved');
   }
   if (record.candidate_fix_type === 'evidence_collection') {
@@ -636,7 +669,10 @@ function replayLessonProofDecision(input: {
   if (!input.failure.is_failure) {
     return input.failure.proof_status;
   }
-  if (input.candidate.failure_type === 'UNRELATED_FILE_EDIT' && input.failure.proof_status === 'COMPLETE_VERIFIED') {
+  if (
+    input.candidate.failure_type === 'UNRELATED_FILE_EDIT' &&
+    input.failure.proof_status === 'COMPLETE_VERIFIED'
+  ) {
     return 'CLAIMED_BUT_NOT_PROVEN';
   }
   if (input.candidate.failure_type === 'NO_FAILURE_DETECTED') {
@@ -681,7 +717,8 @@ function classifyFailure(proof: ProofStatusArtifact): {
       lessonCandidateRecommended: true,
       candidateFixType: 'safety_policy',
       rootCauseSummary: 'Run evidence indicates unrelated changes were detected.',
-      recommendedNextStep: 'Propose a scoped safety lesson requiring unrelated-change checks before completion.',
+      recommendedNextStep:
+        'Propose a scoped safety lesson requiring unrelated-change checks before completion.',
     };
   }
 
@@ -707,20 +744,26 @@ function classifyFailure(proof: ProofStatusArtifact): {
         instructionGap: true,
         lessonCandidateRecommended: true,
         candidateFixType: 'verifier_contract',
-        rootCauseSummary: 'Run may be complete, but passing verifier evidence is missing or not required.',
-        recommendedNextStep: 'Propose a verifier contract that defines required proof before COMPLETE_VERIFIED.',
+        rootCauseSummary:
+          'Run may be complete, but passing verifier evidence is missing or not required.',
+        recommendedNextStep:
+          'Propose a verifier contract that defines required proof before COMPLETE_VERIFIED.',
       };
     case 'CLAIMED_BUT_NOT_PROVEN':
       return {
-        failureType: proof.execution_happened ? 'CLAIMED_BUT_NOT_PROVEN' : 'CLAIMED_BUT_NOT_EXECUTED',
+        failureType: proof.execution_happened
+          ? 'CLAIMED_BUT_NOT_PROVEN'
+          : 'CLAIMED_BUT_NOT_EXECUTED',
         severity: 'high',
         agentFault: true,
         systemFault: false,
         instructionGap: true,
         lessonCandidateRecommended: true,
         candidateFixType: proof.tests_run ? 'evidence_collection' : 'verifier_contract',
-        rootCauseSummary: 'Agent completion claim is not supported by required execution/verifier evidence.',
-        recommendedNextStep: 'Generate a lesson candidate that blocks completion claims without proof.',
+        rootCauseSummary:
+          'Agent completion claim is not supported by required execution/verifier evidence.',
+        recommendedNextStep:
+          'Generate a lesson candidate that blocks completion claims without proof.',
       };
     case 'FAILED_TESTS':
       return {
@@ -732,11 +775,14 @@ function classifyFailure(proof: ProofStatusArtifact): {
         lessonCandidateRecommended: true,
         candidateFixType: 'verifier_contract',
         rootCauseSummary: 'A verifier or test command ran and failed.',
-        recommendedNextStep: 'Generate a lesson candidate that preserves failed verifier context for repair planning.',
+        recommendedNextStep:
+          'Generate a lesson candidate that preserves failed verifier context for repair planning.',
       };
     case 'TESTS_NOT_RUN':
       return {
-        failureType: proof.changed_files.some((file) => /\.(?:ts|tsx|mts|cts)$/.test(file)) ? 'TYPECHECK_NOT_RUN' : 'TESTS_NOT_RUN',
+        failureType: proof.changed_files.some((file) => /\.(?:ts|tsx|mts|cts)$/.test(file))
+          ? 'TYPECHECK_NOT_RUN'
+          : 'TESTS_NOT_RUN',
         severity: 'high',
         agentFault: true,
         systemFault: false,
@@ -744,11 +790,13 @@ function classifyFailure(proof: ProofStatusArtifact): {
         lessonCandidateRecommended: true,
         candidateFixType: 'verifier_contract',
         rootCauseSummary: 'Mutation evidence exists, but no verifier/test command was observed.',
-        recommendedNextStep: 'Propose a verifier rule requiring targeted checks after source edits.',
+        recommendedNextStep:
+          'Propose a verifier rule requiring targeted checks after source edits.',
       };
     case 'REFUSED_UNSAFE':
       return {
-        failureType: proof.unsafe_tool_attempts.length > 0 ? 'UNSAFE_COMMAND_ATTEMPTED' : 'DIRTY_TREE_RISK',
+        failureType:
+          proof.unsafe_tool_attempts.length > 0 ? 'UNSAFE_COMMAND_ATTEMPTED' : 'DIRTY_TREE_RISK',
         severity: 'high',
         agentFault: true,
         systemFault: false,
@@ -756,7 +804,8 @@ function classifyFailure(proof: ProofStatusArtifact): {
         lessonCandidateRecommended: true,
         candidateFixType: 'safety_policy',
         rootCauseSummary: 'Safety policy refused the run or tool attempt.',
-        recommendedNextStep: 'Preserve the refusal as a safety lesson candidate; do not auto-promote behavior changes.',
+        recommendedNextStep:
+          'Preserve the refusal as a safety lesson candidate; do not auto-promote behavior changes.',
       };
     case 'NEEDS_HUMAN_APPROVAL':
       return {
@@ -779,10 +828,14 @@ function classifyFailure(proof: ProofStatusArtifact): {
         instructionGap: proof.qa_passed === false,
         lessonCandidateRecommended: proof.qa_passed === false,
         candidateFixType: proof.qa_passed === false ? 'prompt_instruction' : 'none',
-        rootCauseSummary: proof.qa_passed === false ? 'QA rejected the plan or completion path.' : 'Run stopped because human input is needed.',
-        recommendedNextStep: proof.qa_passed === false
-          ? 'Propose a planning lesson from the QA rejection reasons.'
-          : 'Resolve the human-input blocker before learning from this run.',
+        rootCauseSummary:
+          proof.qa_passed === false
+            ? 'QA rejected the plan or completion path.'
+            : 'Run stopped because human input is needed.',
+        recommendedNextStep:
+          proof.qa_passed === false
+            ? 'Propose a planning lesson from the QA rejection reasons.'
+            : 'Resolve the human-input blocker before learning from this run.',
       };
     case 'REPAIR_LIMIT_REACHED':
       return {
@@ -1013,9 +1066,10 @@ export function testLessonCandidate(input: {
     {
       name: 'failure_signature_match',
       pass: candidate.failure_type === failure.failure_type,
-      note: candidate.failure_type === failure.failure_type
-        ? `Failure signature ${candidate.failure_type} matches source run record.`
-        : `Failure signature mismatch: lesson ${candidate.failure_type} vs ${failure.failure_type}.`,
+      note:
+        candidate.failure_type === failure.failure_type
+          ? `Failure signature ${candidate.failure_type} matches source run record.`
+          : `Failure signature mismatch: lesson ${candidate.failure_type} vs ${failure.failure_type}.`,
     },
     {
       name: 'no_safety_policy_regression',
@@ -1077,7 +1131,9 @@ export function promoteLessonToShadow(input: {
     lessonContentSha256: currentLessonHash,
   });
   if (!passingEval) {
-    throw new Error(`Lesson ${candidate.lesson_id} needs a passing static eval for the current lesson content before shadow promotion.`);
+    throw new Error(
+      `Lesson ${candidate.lesson_id} needs a passing static eval for the current lesson content before shadow promotion.`,
+    );
   }
   const activeLessonPath = resolveActiveLessonPath({
     lessonId: candidate.lesson_id,
@@ -1091,24 +1147,34 @@ export function promoteLessonToShadow(input: {
     lesson_candidate_path: activeLessonPath,
   };
   mkdirSync(join(input.learningRoot, 'lessons', 'active'), { recursive: true });
-  writeFileSync(activeLessonPath, `${JSON.stringify({
-    ...activeLesson,
-    promotion: {
-      promotion_level: 'shadow',
-      promoted_at: activeLesson.generated_at,
-      eval_record_path: passingEval.eval_record_path,
-      eval_id: passingEval.eval_id,
-      lesson_content_sha256: currentLessonHash,
-      advisory_only: true,
-    },
-  }, null, 2)}\n`, 'utf-8');
+  writeFileSync(
+    activeLessonPath,
+    `${JSON.stringify(
+      {
+        ...activeLesson,
+        promotion: {
+          promotion_level: 'shadow',
+          promoted_at: activeLesson.generated_at,
+          eval_record_path: passingEval.eval_record_path,
+          eval_id: passingEval.eval_id,
+          lesson_content_sha256: currentLessonHash,
+          advisory_only: true,
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    'utf-8',
+  );
   return {
     lesson: activeLesson,
     activeLessonPath,
   };
 }
 
-export function generateMutationPackage(input: GenerateMutationPackageInput): LearningMutationPackageArtifacts {
+export function generateMutationPackage(
+  input: GenerateMutationPackageInput,
+): LearningMutationPackageArtifacts {
   assertMutationTarget(input.target);
   const candidate = readLessonCandidate(input).lesson;
   const failure = readLearningFailureRecord({
@@ -1123,13 +1189,17 @@ export function generateMutationPackage(input: GenerateMutationPackageInput): Le
     lessonContentSha256: currentLessonHash,
   });
   if (!passingEval) {
-    throw new Error(`Lesson ${candidate.lesson_id} needs a passing static eval for the current lesson content before mutation packaging.`);
+    throw new Error(
+      `Lesson ${candidate.lesson_id} needs a passing static eval for the current lesson content before mutation packaging.`,
+    );
   }
   if (passingEval.failure_record_sha256 !== currentFailureHash) {
     throw new Error(`Lesson ${candidate.lesson_id} eval is stale for the current failure record.`);
   }
   if (candidate.scope !== 'project') {
-    throw new Error(`Learning mutation packages are project-scoped; lesson ${candidate.lesson_id} has scope ${candidate.scope}.`);
+    throw new Error(
+      `Learning mutation packages are project-scoped in P7; lesson ${candidate.lesson_id} has scope ${candidate.scope}.`,
+    );
   }
 
   const targetPaths = targetPathsForMutation({ target: input.target, failure });
@@ -1192,10 +1262,10 @@ export function generateMutationPackage(input: GenerateMutationPackageInput): Le
     `Eval: ${passingEval.eval_id}`,
     `Target: ${input.target}`,
     '',
-    'This package is review-only and must not be applied automatically.',
+    'This package is review-only. It must not be applied automatically in P7.',
     '',
     'Safety notes:',
-    ...reviewerChecklist.map(item => `- ${item}`),
+    ...reviewerChecklist.map((item) => `- ${item}`),
     '',
   ].join('\n');
   const approval = [
@@ -1207,7 +1277,7 @@ export function generateMutationPackage(input: GenerateMutationPackageInput): Le
     `Lesson: ${candidate.lesson_id}`,
     `Lesson hash: ${currentLessonHash}`,
     '',
-    'Approving this package authorizes review of the proposed patch only; it does not apply mutations.',
+    'Approving this package authorizes review of the proposed patch only. P7 does not apply mutations.',
     '',
   ].join('\n');
 
@@ -1223,7 +1293,8 @@ export function generateMutationPackage(input: GenerateMutationPackageInput): Le
     eval_id: passingEval.eval_id,
     eval_record_path: passingEval.eval_record_path,
     eval_policy_version: LESSON_EVAL_POLICY_VERSION as typeof LESSON_EVAL_POLICY_VERSION,
-    package_policy_version: MUTATION_PACKAGE_POLICY_VERSION as typeof MUTATION_PACKAGE_POLICY_VERSION,
+    package_policy_version:
+      MUTATION_PACKAGE_POLICY_VERSION as typeof MUTATION_PACKAGE_POLICY_VERSION,
     target_type: input.target,
     target_paths: targetPaths,
     risk: candidate.risk,
@@ -1242,21 +1313,25 @@ export function generateMutationPackage(input: GenerateMutationPackageInput): Le
       rollback_patch: rollbackPatchPath,
     },
   };
-  const packageContentSha256 = sha256(stableJson({
-    ...packageDraft,
-    proposed_patch_sha256: sha256(proposedPatch),
-    self_review_sha256: sha256(selfReview),
-    approval_sha256: sha256(approval),
-    rollback_patch_sha256: sha256(rollbackPatch),
-  }));
+  const packageContentSha256 = sha256(
+    stableJson({
+      ...packageDraft,
+      proposed_patch_sha256: sha256(proposedPatch),
+      self_review_sha256: sha256(selfReview),
+      approval_sha256: sha256(approval),
+      rollback_patch_sha256: sha256(rollbackPatch),
+    }),
+  );
   const mutationPackage: LearningMutationPackageRecord = {
     ...packageDraft,
-    approval_identity_sha256: sha256(stableJson({
-      mutation_id: mutationId,
-      package_content_sha256: packageContentSha256,
-      lesson_content_sha256: currentLessonHash,
-      eval_id: passingEval.eval_id,
-    })),
+    approval_identity_sha256: sha256(
+      stableJson({
+        mutation_id: mutationId,
+        package_content_sha256: packageContentSha256,
+        lesson_content_sha256: currentLessonHash,
+        eval_id: passingEval.eval_id,
+      }),
+    ),
     package_content_sha256: packageContentSha256,
   };
 
@@ -1285,40 +1360,83 @@ export function readLearningArtifact(input: {
   if (direct && existsSync(direct)) {
     const record = asRecord(readJson(direct));
     if (record.artifact_type === 'babel_learning_failure') {
-      return { artifact: { kind: 'failure', record: record as unknown as LearningFailureRecord, path: direct } };
+      return {
+        artifact: {
+          kind: 'failure',
+          record: record as unknown as LearningFailureRecord,
+          path: direct,
+        },
+      };
     }
     if (record.artifact_type === 'babel_lesson_candidate') {
-      return { artifact: { kind: 'lesson', record: record as unknown as LearningLessonCandidate, path: direct } };
+      return {
+        artifact: {
+          kind: 'lesson',
+          record: record as unknown as LearningLessonCandidate,
+          path: direct,
+        },
+      };
     }
     if (record.artifact_type === 'babel_lesson_eval') {
-      return { artifact: { kind: 'eval', record: record as unknown as LessonEvalRecord, path: direct } };
+      return {
+        artifact: { kind: 'eval', record: record as unknown as LessonEvalRecord, path: direct },
+      };
     }
     if (record.artifact_type === 'babel_mutation_package') {
-      return { artifact: { kind: 'mutation', record: record as unknown as LearningMutationPackageRecord, path: direct } };
+      return {
+        artifact: {
+          kind: 'mutation',
+          record: record as unknown as LearningMutationPackageRecord,
+          path: direct,
+        },
+      };
     }
   }
 
-  const failurePath = resolveFailureRecordPath({ failureId: input.id, learningRoot: input.learningRoot });
+  const failurePath = resolveFailureRecordPath({
+    failureId: input.id,
+    learningRoot: input.learningRoot,
+  });
   if (existsSync(failurePath)) {
-    const result = readLearningFailureRecord({ failureId: input.id, learningRoot: input.learningRoot });
+    const result = readLearningFailureRecord({
+      failureId: input.id,
+      learningRoot: input.learningRoot,
+    });
     return { artifact: { kind: 'failure', record: result.record, path: result.failureRecordPath } };
   }
-  const activePath = resolveActiveLessonPath({ lessonId: input.id, learningRoot: input.learningRoot });
+  const activePath = resolveActiveLessonPath({
+    lessonId: input.id,
+    learningRoot: input.learningRoot,
+  });
   if (existsSync(activePath)) {
     const lesson = readLessonCandidatePath(activePath);
     return { artifact: { kind: 'lesson', record: lesson, path: activePath } };
   }
-  const mutationPath = resolveMutationPackagePath({ mutationId: input.id, learningRoot: input.learningRoot });
+  const mutationPath = resolveMutationPackagePath({
+    mutationId: input.id,
+    learningRoot: input.learningRoot,
+  });
   if (existsSync(mutationPath)) {
     const record = asRecord(readJson(mutationPath));
     if (record.artifact_type === 'babel_mutation_package') {
-      return { artifact: { kind: 'mutation', record: record as unknown as LearningMutationPackageRecord, path: mutationPath } };
+      return {
+        artifact: {
+          kind: 'mutation',
+          record: record as unknown as LearningMutationPackageRecord,
+          path: mutationPath,
+        },
+      };
     }
   }
-  const candidatePath = resolveLessonCandidatePath({ lessonId: input.id, learningRoot: input.learningRoot });
+  const candidatePath = resolveLessonCandidatePath({
+    lessonId: input.id,
+    learningRoot: input.learningRoot,
+  });
   if (existsSync(candidatePath)) {
     const result = readLessonCandidate({ lessonId: input.id, learningRoot: input.learningRoot });
-    return { artifact: { kind: 'lesson', record: result.lesson, path: result.lessonCandidatePath } };
+    return {
+      artifact: { kind: 'lesson', record: result.lesson, path: result.lessonCandidatePath },
+    };
   }
   throw new Error(`Learning artifact not found: ${input.id}`);
 }
@@ -1368,7 +1486,9 @@ export function formatLessonEvalHuman(record: LessonEvalRecord): string {
     `After expected: ${record.after_expected_status}`,
     `Impact: ${record.decision_impact}`,
     '',
-    ...record.checks.map((check) => `- ${check.pass ? 'PASS' : 'FAIL'} ${check.name}: ${check.note}`),
+    ...record.checks.map(
+      (check) => `- ${check.pass ? 'PASS' : 'FAIL'} ${check.name}: ${check.note}`,
+    ),
     '',
     `Record: ${record.eval_record_path}`,
   ].join('\n');

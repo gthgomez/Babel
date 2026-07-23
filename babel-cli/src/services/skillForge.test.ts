@@ -4,11 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import {
-  createSkill,
-  exportSkillToCodex,
-  validateSkillPath,
-} from './skillForge.js';
+import { createSkill, exportSkillToCodex, validateSkillPath } from './skillForge.js';
 
 test('createSkill scaffolds a GREEN experimental skill with required files', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-skill-forge-'));
@@ -31,30 +27,40 @@ test('validateSkillPath reports RED for missing required contracts and tests', (
   try {
     mkdirSync(skill, { recursive: true });
     writeFileSync(join(skill, 'SKILL.md'), '# Broken\n', 'utf8');
-    writeFileSync(join(skill, 'skill.yaml'), [
-      'id: broken-skill',
-      'name: Broken Skill',
-      'version: 0.1.0',
-      'status: reviewed',
-      'description: Broken on purpose.',
-      'entrypoint: SKILL.md',
-      'allowed_tools: []',
-      'denied_tools: []',
-      'inputs: contracts/input.schema.json',
-      'outputs: contracts/output.schema.json',
-      'tests: tests/',
-      'owner: test',
-      'created_at: 2026-04-29T00:00:00.000Z',
-      'updated_at: 2026-04-29T00:00:00.000Z',
-      '',
-    ].join('\n'), 'utf8');
+    writeFileSync(
+      join(skill, 'skill.yaml'),
+      [
+        'id: broken-skill',
+        'name: Broken Skill',
+        'version: 0.1.0',
+        'status: reviewed',
+        'description: Broken on purpose.',
+        'entrypoint: SKILL.md',
+        'allowed_tools: []',
+        'denied_tools: []',
+        'inputs: contracts/input.schema.json',
+        'outputs: contracts/output.schema.json',
+        'tests: tests/',
+        'owner: test',
+        'created_at: 2026-04-29T00:00:00.000Z',
+        'updated_at: 2026-04-29T00:00:00.000Z',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
 
     const result = validateSkillPath(skill);
 
     assert.equal(result.status, 'fail');
     assert.equal(result.verdict, 'RED');
-    assert.equal(result.issues.some(issue => issue.code === 'skill.missing_contracts'), true);
-    assert.equal(result.issues.some(issue => issue.code === 'skill.missing_tests'), true);
+    assert.equal(
+      result.issues.some((issue) => issue.code === 'skill.missing_contracts'),
+      true,
+    );
+    assert.equal(
+      result.issues.some((issue) => issue.code === 'skill.missing_tests'),
+      true,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -65,30 +71,40 @@ test('validateSkillPath reports RED for invalid status and YELLOW for empty exam
   try {
     const report = createSkill('Needs Review', root);
     const skill = report.skill_path;
-    writeFileSync(join(skill, 'skill.yaml'), [
-      'id: needs-review',
-      'name: Needs Review',
-      'version: 0.1.0',
-      'status: draft',
-      'description: Invalid status on purpose.',
-      'entrypoint: SKILL.md',
-      'allowed_tools: []',
-      'denied_tools: []',
-      'inputs: contracts/input.schema.json',
-      'outputs: contracts/output.schema.json',
-      'tests: tests/',
-      'owner: test',
-      'created_at: 2026-04-29T00:00:00.000Z',
-      'updated_at: 2026-04-29T00:00:00.000Z',
-      '',
-    ].join('\n'), 'utf8');
+    writeFileSync(
+      join(skill, 'skill.yaml'),
+      [
+        'id: needs-review',
+        'name: Needs Review',
+        'version: 0.1.0',
+        'status: draft',
+        'description: Invalid status on purpose.',
+        'entrypoint: SKILL.md',
+        'allowed_tools: []',
+        'denied_tools: []',
+        'inputs: contracts/input.schema.json',
+        'outputs: contracts/output.schema.json',
+        'tests: tests/',
+        'owner: test',
+        'created_at: 2026-04-29T00:00:00.000Z',
+        'updated_at: 2026-04-29T00:00:00.000Z',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
     rmSync(join(skill, 'examples'), { recursive: true, force: true });
 
     const result = validateSkillPath(skill);
 
     assert.equal(result.verdict, 'RED');
-    assert.equal(result.issues.some(issue => issue.code === 'manifest.invalid_status'), true);
-    assert.equal(result.issues.some(issue => issue.code === 'skill.no_examples'), true);
+    assert.equal(
+      result.issues.some((issue) => issue.code === 'manifest.invalid_status'),
+      true,
+    );
+    assert.equal(
+      result.issues.some((issue) => issue.code === 'skill.no_examples'),
+      true,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

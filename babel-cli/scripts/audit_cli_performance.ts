@@ -73,7 +73,7 @@ async function main(): Promise<void> {
       task_category: 'DevOps',
       secondary_category: null,
       complexity_estimate: 'Low',
-      pipeline_mode: 'verified',
+      pipeline_mode: 'deep',
       ambiguity_note: null,
       routing_confidence: 1,
     },

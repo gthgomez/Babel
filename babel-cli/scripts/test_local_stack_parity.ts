@@ -32,13 +32,13 @@ interface Fixture {
 }
 
 const FIXTURES: Fixture[] = [
-  { taskCategory: 'frontend', project: 'global', model: 'codex', pipelineMode: 'direct' },
-  { taskCategory: 'backend', project: 'example_saas_backend', model: 'codex', pipelineMode: 'verified' },
-  { taskCategory: 'compliance', project: 'example_web_audit', model: 'claude', pipelineMode: 'direct' },
-  { taskCategory: 'mobile', project: 'example_mobile_suite', model: 'gemini', pipelineMode: 'autonomous' },
-  { taskCategory: 'game', project: 'example_game_suite', model: 'codex', pipelineMode: 'direct' },
-  { taskCategory: 'research', project: 'global', model: 'codex', pipelineMode: 'verified' },
-  { taskCategory: 'frontend', project: 'global', model: 'CODEX', pipelineMode: 'direct' },
+  { taskCategory: 'frontend', project: 'global', model: 'codex', pipelineMode: 'chat' },
+  { taskCategory: 'backend', project: 'example_saas_backend', model: 'codex', pipelineMode: 'deep' },
+  { taskCategory: 'compliance', project: 'AuditGuard', model: 'claude', pipelineMode: 'chat' },
+  { taskCategory: 'mobile', project: 'Project_Android', model: 'gemini', pipelineMode: 'deep' },
+  { taskCategory: 'game', project: 'godot_td', model: 'codex', pipelineMode: 'chat' },
+  { taskCategory: 'research', project: 'global', model: 'codex', pipelineMode: 'deep' },
+  { taskCategory: 'frontend', project: 'global', model: 'CODEX', pipelineMode: 'chat' },
 ];
 
 function normalizeModel(model: string): LocalModel {
@@ -59,7 +59,7 @@ function normalizeResult(value: LocalStackResolveResult): LocalStackResolveResul
   return {
     ...value,
     ProjectPath: value.ProjectPath ? value.ProjectPath.replace(/\//g, '\\') : null,
-    SelectedStack: value.SelectedStack.map(entry => ({
+    SelectedStack: value.SelectedStack.map(({ OrderIndex: _, ...entry }) => ({
       ...entry,
       FullPath: entry.FullPath.replace(/\//g, '\\'),
     })),
@@ -187,15 +187,15 @@ function main(): void {
     compareResults(`${label} in-process vs CLI`, inProcess, cli);
     compareResults(`${label} CLI vs PS wrapper`, cli, ps);
 
-    const expectedBible = 'BABEL_BIBLE.md';
+    const expectedBible = join(BABEL_ROOT, 'BABEL_BIBLE.md').replace(/\//g, '\\');
     const kickoffNorm = cli.KickoffPrompt.replace(/\//g, '\\');
     assert(
       cli.BabelEntrypoint.replace(/\//g, '\\') === expectedBible,
-      `${label}: BabelEntrypoint must use the canonical repository-relative path (${expectedBible})`,
+      `${label}: BabelEntrypoint must be under babel root (${expectedBible})`,
     );
     assert(
       kickoffNorm.includes(expectedBible),
-      `${label}: KickoffPrompt must reference the canonical repository-relative path (${expectedBible})`,
+      `${label}: KickoffPrompt must reference bible path under babel root (${expectedBible})`,
     );
 
     console.log(`[local-stack-parity] pass ${label}`);

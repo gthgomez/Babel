@@ -41,14 +41,16 @@ export class JsonChronicleStore implements ChronicleStore {
   }
 
   getFact(projectRoot: string, key: string): string | null {
-    return this.readFile().facts.find(
-      (fact) => fact.project_root === projectRoot && fact.fact_key === key,
-    )?.fact_value ?? null;
+    return (
+      this.readFile().facts.find(
+        (fact) => fact.project_root === projectRoot && fact.fact_key === key,
+      )?.fact_value ?? null
+    );
   }
 
   listFacts(projectRoot: string): ChronicleFactRow[] {
-    return this.readFile().facts
-      .filter((fact) => fact.project_root === projectRoot)
+    return this.readFile()
+      .facts.filter((fact) => fact.project_root === projectRoot)
       .map((fact) => ({
         fact_key: fact.fact_key,
         fact_value: fact.fact_value,
@@ -77,12 +79,14 @@ export class JsonChronicleStore implements ChronicleStore {
 
     return {
       schemaVersion: 1,
-      facts: candidate.facts.map((fact) => ({
-        project_root: String((fact as Partial<ChronicleJsonFact>).project_root ?? ''),
-        fact_key: String((fact as Partial<ChronicleJsonFact>).fact_key ?? ''),
-        fact_value: String((fact as Partial<ChronicleJsonFact>).fact_value ?? ''),
-        last_verified: String((fact as Partial<ChronicleJsonFact>).last_verified ?? ''),
-      })).filter((fact) => fact.project_root.length > 0 && fact.fact_key.length > 0),
+      facts: candidate.facts
+        .map((fact) => ({
+          project_root: String((fact as Partial<ChronicleJsonFact>).project_root ?? ''),
+          fact_key: String((fact as Partial<ChronicleJsonFact>).fact_key ?? ''),
+          fact_value: String((fact as Partial<ChronicleJsonFact>).fact_value ?? ''),
+          last_verified: String((fact as Partial<ChronicleJsonFact>).last_verified ?? ''),
+        }))
+        .filter((fact) => fact.project_root.length > 0 && fact.fact_key.length > 0),
     };
   }
 

@@ -24,11 +24,10 @@
  */
 
 import type { ZodType } from 'zod';
-import type { LlmRunner, RunnerCallbacks }              from './base.js';
-import { spawnCliProcess,
-         parseAndValidate }            from './cliBase.js';
-import type { CliConfig }              from './cliBase.js';
-import { parseCliArgString }           from './cliArgParser.js';
+import type { LlmRunner, RunnerCallbacks } from './base.js';
+import { spawnCliProcess, parseAndValidate } from './cliBase.js';
+import type { CliConfig } from './cliBase.js';
+import { parseCliArgString } from './cliArgParser.js';
 
 function buildConfig(model?: string): CliConfig {
   const cmd = process.env['BABEL_GEMINI_CMD'] ?? 'gemini';
@@ -38,7 +37,7 @@ function buildConfig(model?: string): CliConfig {
   const rawArgs = parseCliArgString(process.env['BABEL_GEMINI_ARGS'] ?? '');
   const baseArgs = model
     ? rawArgs.filter((arg, i, arr) => {
-        if (arg === '--model' || arg === '-m') return false;          // flag itself
+        if (arg === '--model' || arg === '-m') return false; // flag itself
         if (i > 0 && (arr[i - 1] === '--model' || arr[i - 1] === '-m')) return false; // its value
         if (arg.startsWith('--model=') || arg.startsWith('-m=')) return false;
         return true;
@@ -48,9 +47,9 @@ function buildConfig(model?: string): CliConfig {
   const modelArgs = model ? ['--model', model] : [];
 
   return {
-    label:     model ? `geminiCli(${model})` : 'geminiCli',
-    command:   cmd,
-    args:      [...modelArgs, ...baseArgs],
+    label: model ? `geminiCli(${model})` : 'geminiCli',
+    command: cmd,
+    args: [...modelArgs, ...baseArgs],
     timeoutMs: Number(process.env['BABEL_CLI_TIMEOUT_MS'] ?? '120000'),
     // promptFlag left undefined → stdin mode (avoids Windows ENAMETOOLONG
     // when the compiled context exceeds the CreateProcess command-line limit).

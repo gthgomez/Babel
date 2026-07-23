@@ -8,10 +8,7 @@ import {
   type TerminalStatusSummary,
 } from '../services/terminalStatus.js';
 import type { VerifierContractSummary } from '../services/requiredVerifierContract.js';
-import type {
-  WorktreeRollbackSummary,
-  WorktreeSafetySummary,
-} from '../services/worktreeSafety.js';
+import type { WorktreeRollbackSummary, WorktreeSafetySummary } from '../services/worktreeSafety.js';
 
 export interface PipelineTerminalContext {
   toolCallLog: ToolCallLog[];
@@ -38,13 +35,14 @@ export function buildPipelineFinalTerminalState(input: {
   terminalContext: PipelineTerminalContext;
   verifierContractSummary: VerifierContractSummary;
 }): PipelineFinalTerminalState {
-  const rollbackMode = input.terminalContext.rollbackSummary?.status ??
+  const rollbackMode =
+    input.terminalContext.rollbackSummary?.status ??
     input.terminalContext.attemptSafetySummary?.rollback_mode ??
     'none';
   const contractStatus =
     (input.resultStatus === 'COMPLETE' || input.resultStatus === 'COMPLETE_NO_MODIFICATION') &&
     !input.verifierContractSummary.verifierCompletionSatisfied
-      ? input.verifierContractSummary.completionBlockingStatus ?? 'VERIFIER_CONTRACT_UNSATISFIED'
+      ? (input.verifierContractSummary.completionBlockingStatus ?? 'VERIFIER_CONTRACT_UNSATISFIED')
       : input.resultStatus;
   const status = resolveTerminalStatus({
     status: contractStatus,

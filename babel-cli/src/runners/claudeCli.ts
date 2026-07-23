@@ -10,20 +10,19 @@
  */
 
 import type { ZodType } from 'zod';
-import type { LlmRunner, RunnerCallbacks }              from './base.js';
-import { spawnCliProcess,
-         parseAndValidate }            from './cliBase.js';
-import type { CliConfig }              from './cliBase.js';
-import { parseCliArgString }           from './cliArgParser.js';
+import type { LlmRunner, RunnerCallbacks } from './base.js';
+import { spawnCliProcess, parseAndValidate } from './cliBase.js';
+import type { CliConfig } from './cliBase.js';
+import { parseCliArgString } from './cliArgParser.js';
 
 const config: CliConfig = {
-  label:     'claudeCli',
-  command:   process.env['BABEL_CLAUDE_CMD']  ?? 'claude',
+  label: 'claudeCli',
+  command: process.env['BABEL_CLAUDE_CMD'] ?? 'claude',
   // --print  → disable interactive UI, write response to stdout
   // --compact → suppress system prompt / UI chrome for cleaner stdout
-  args:      parseCliArgString(process.env['BABEL_CLAUDE_ARGS'] ?? '--print --compact'),
+  args: parseCliArgString(process.env['BABEL_CLAUDE_ARGS'] ?? '--print --compact'),
   timeoutMs: Number(process.env['BABEL_CLI_TIMEOUT_MS'] ?? '120000'),
-  stdinMode: 'pipe',   // pipe prompt to stdin for --print mode
+  stdinMode: 'pipe', // pipe prompt to stdin for --print mode
 };
 
 export class ClaudeCliRunner implements LlmRunner {

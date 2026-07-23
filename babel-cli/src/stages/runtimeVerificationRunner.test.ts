@@ -16,8 +16,8 @@ function cleanup(root: string): void {
 
 function makeWorkspace(): { workspace: string; babelRoot: string; projectRoot: string } {
   const workspace = mkdtempSync(join(tmpdir(), 'babel-runtime-verification-'));
-  const babelRoot = join(workspace, 'private source repo');
-  const projectRoot = join(workspace, 'example_game_workspace', 'Game');
+  const babelRoot = join(workspace, 'Babel');
+  const projectRoot = join(workspace, 'example_game_suite', 'Game');
   mkdirSync(join(workspace, 'tools', 'Godot'), { recursive: true });
   mkdirSync(babelRoot, { recursive: true });
   mkdirSync(projectRoot, { recursive: true });
@@ -49,7 +49,12 @@ test('Godot runtime runner creates PASS evidence for valid command output', () =
       now: () => new Date('2026-04-30T19:30:00.000Z'),
       commandRunner: (command, args, options) => {
         assert.equal(command, 'powershell');
-        assert.deepEqual(args.slice(0, 4), ['-ExecutionPolicy', 'Bypass', '-File', join(fixture.workspace, 'tools', 'Godot', 'godot.ps1')]);
+        assert.deepEqual(args.slice(0, 4), [
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          join(fixture.workspace, 'tools', 'Godot', 'godot.ps1'),
+        ]);
         assert.equal(options.cwd, fixture.projectRoot);
         return spawnResult('Godot Engine v4.6.2.stable\n');
       },
@@ -74,10 +79,11 @@ test('Godot runtime runner detects parse error output as FAIL', () => {
       projectRoot: fixture.projectRoot,
       toolCallLog: [],
       babelRoot: fixture.babelRoot,
-      commandRunner: () => spawnResult(
-        'Godot Engine v4.6.2.stable\n',
-        "ERROR: Error parsing 'project.godot' at line 1: Unexpected identifier 'res' File might be corrupted.\n",
-      ),
+      commandRunner: () =>
+        spawnResult(
+          'Godot Engine v4.6.2.stable\n',
+          "ERROR: Error parsing 'project.godot' at line 1: Unexpected identifier 'res' File might be corrupted.\n",
+        ),
     });
 
     assert.equal(result.status, 'FAIL');
@@ -96,11 +102,12 @@ test('Godot runtime runner detects missing Main.tscn output as FAIL', () => {
       projectRoot: fixture.projectRoot,
       toolCallLog: [],
       babelRoot: fixture.babelRoot,
-      commandRunner: () => spawnResult(
-        '',
-        "ERROR: Failed loading resource: res://scenes/Main.tscn. Resource not found.\n",
-        1,
-      ),
+      commandRunner: () =>
+        spawnResult(
+          '',
+          'ERROR: Failed loading resource: res://scenes/Main.tscn. Resource not found.\n',
+          1,
+        ),
     });
 
     assert.equal(result.status, 'FAIL');
@@ -113,8 +120,8 @@ test('Godot runtime runner detects missing Main.tscn output as FAIL', () => {
 
 test('Godot runtime runner reports tool unavailable when wrapper is missing', () => {
   const workspace = mkdtempSync(join(tmpdir(), 'babel-runtime-verification-no-tool-'));
-  const babelRoot = join(workspace, 'private source repo');
-  const projectRoot = join(workspace, 'example_game_workspace', 'Game');
+  const babelRoot = join(workspace, 'Babel');
+  const projectRoot = join(workspace, 'example_game_suite', 'Game');
   mkdirSync(babelRoot, { recursive: true });
   mkdirSync(projectRoot, { recursive: true });
   try {
@@ -150,7 +157,15 @@ test('runtime verification target detection treats Godot file writes as known', 
     rawTask: 'Create a mobile game prototype.',
     projectRoot: null,
     toolCallLog: [
-      { step: 1, tool: 'file_write', target: 'project.godot', exit_code: 0, stdout: '', stderr: '', verified: true },
+      {
+        step: 1,
+        tool: 'file_write',
+        target: 'project.godot',
+        exit_code: 0,
+        stdout: '',
+        stderr: '',
+        verified: true,
+      },
     ],
   });
 

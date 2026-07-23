@@ -15,7 +15,9 @@ test('Babel Full writes read-only Spark evidence and hardened plan artifacts', (
   writeFileSync(join(projectRoot, 'README.md'), '# Example\n', 'utf-8');
   writeFileSync(join(projectRoot, 'package.json'), '{"scripts":{}}\n', 'utf-8');
 
-  const routeDecision = routeLiteOrFull('Use Spark agents to harden the repo-wide implementation plan');
+  const routeDecision = routeLiteOrFull(
+    'Use Spark agents to harden the repo-wide implementation plan',
+  );
   const result = runBabelFullPlan('Use Spark agents to harden the repo-wide implementation plan', {
     routeDecision,
     projectRoot,
@@ -24,15 +26,21 @@ test('Babel Full writes read-only Spark evidence and hardened plan artifacts', (
   });
 
   assert.equal(result.status, 'FULL_PLAN_READY');
-  assert.equal(result.selected_lane, 'babel_full');
+  assert.equal(result.selected_lane, 'deep_lane');
   assert.equal(result.spark_agents.length, 4);
   assert.equal(result.mutation_subagents.enabled, false);
   assert.equal(existsSync(join(result.run_dir, 'route_decision.json')), true);
   assert.equal(existsSync(result.hardened_plan_path), true);
   assert.equal(existsSync(result.qa_review_path), true);
   assert.equal(existsSync(result.cost_ledger_path), true);
-  assert.equal(result.spark_agents.every(agent => agent.mode === 'read_only'), true);
-  assert.equal(result.spark_agents.every(agent => /[\\\/]spark[\\\/]/.test(agent.evidence_path)), true);
+  assert.equal(
+    result.spark_agents.every((agent) => agent.mode === 'read_only'),
+    true,
+  );
+  assert.equal(
+    result.spark_agents.every((agent) => /[\\\/]spark[\\\/]/.test(agent.evidence_path)),
+    true,
+  );
   assert.match(readFileSync(result.hardened_plan_path, 'utf-8'), /governed Babel executor/i);
 
   const cartographerEvidence = JSON.parse(
@@ -50,7 +58,9 @@ test('Spark parallel review writes synthesis without mutating reviewers', () => 
   mkdirSync(projectRoot, { recursive: true });
   writeFileSync(join(projectRoot, 'README.md'), '# Example\n', 'utf-8');
 
-  const routeDecision = routeLiteOrFull('Audit plugin/public-export security across the whole repo');
+  const routeDecision = routeLiteOrFull(
+    'Audit plugin/public-export security across the whole repo',
+  );
   const result = runSparkParallelReview({
     task: 'Audit plugin/public-export security across the whole repo',
     routeDecision,
@@ -60,16 +70,23 @@ test('Spark parallel review writes synthesis without mutating reviewers', () => 
   });
 
   assert.equal(result.spark_agents.length, 4);
-  assert.equal(result.spark_agents.every(agent => agent.mode === 'read_only'), true);
+  assert.equal(
+    result.spark_agents.every((agent) => agent.mode === 'read_only'),
+    true,
+  );
   assert.equal(existsSync(result.synthesis_path), true);
   assert.equal(existsSync(join(result.run_dir, 'spark_parallel_review.json')), true);
-  const synthesis = JSON.parse(readFileSync(result.synthesis_path, 'utf-8')) as { mutation_allowed: boolean };
+  const synthesis = JSON.parse(readFileSync(result.synthesis_path, 'utf-8')) as {
+    mutation_allowed: boolean;
+  };
   assert.equal(synthesis.mutation_allowed, false);
 });
 
 test('Babel Full can disable read-only agents while preserving route artifacts', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-full-no-agents-'));
-  const routeDecision = routeLiteOrFull('Run the full lane for this architecture task', { requestedVerb: 'full' });
+  const routeDecision = routeLiteOrFull('Run the full lane for this architecture task', {
+    requestedVerb: 'full',
+  });
   const result = runBabelFullPlan('Run the full lane for this architecture task', {
     routeDecision,
     runsRoot: join(root, 'runs'),

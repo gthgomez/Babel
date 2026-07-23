@@ -20,12 +20,13 @@ export function isEvidenceRequestPlanSatisfied(
     return false;
   }
 
-  return approvedPlan.minimal_action_set.every(step => {
+  return approvedPlan.minimal_action_set.every((step) => {
     const expectedTarget = normalizeEvidenceStepTarget(step.tool, step.target);
-    return toolCallLog.some(entry =>
-      entry.verified === true &&
-      entry.tool === step.tool &&
-      normalizeEvidenceStepTarget(entry.tool, entry.target) === expectedTarget,
+    return toolCallLog.some(
+      (entry) =>
+        entry.verified === true &&
+        entry.tool === step.tool &&
+        normalizeEvidenceStepTarget(entry.tool, entry.target) === expectedTarget,
     );
   });
 }

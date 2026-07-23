@@ -19,42 +19,58 @@ test('tool dispatch builds canonical log entries from executor tool results', ()
     checkpoint_ids: ['cp-1'],
   } satisfies ToolResult;
 
-  assert.deepEqual(buildExecutorToolCallEntry({
-    step: 4,
-    req,
-    toolResult: result,
-  }), {
-    step: 4,
-    tool: 'file_read',
-    target: 'src/input.ts',
-    exit_code: 0,
-    stdout: 'content',
-    stderr: '',
-    checkpoint_ids: ['cp-1'],
-    verified: true,
-  });
+  assert.deepEqual(
+    buildExecutorToolCallEntry({
+      step: 4,
+      req,
+      toolResult: result,
+    }),
+    {
+      step: 4,
+      tool: 'file_read',
+      target: 'src/input.ts',
+      exit_code: 0,
+      stdout: 'content',
+      stderr: '',
+      checkpoint_ids: ['cp-1'],
+      verified: true,
+    },
+  );
 });
 
 test('tool dispatch builds blocked entries without executing tools', () => {
-  const req = { tool: 'shell_exec', command: 'npm test', working_directory: '.', timeout_seconds: 120 } satisfies ToolCallRequest;
-
-  assert.deepEqual(buildBlockedExecutorToolCallEntry({
-    step: 2,
-    req,
-    stderr: 'blocked',
-  }), {
-    step: 2,
+  const req = {
     tool: 'shell_exec',
-    target: 'npm test',
-    exit_code: 126,
-    stdout: '(blocked before execution)',
-    stderr: 'blocked',
-    verified: false,
-  });
+    command: 'npm test',
+    working_directory: '.',
+    timeout_seconds: 120,
+  } satisfies ToolCallRequest;
+
+  assert.deepEqual(
+    buildBlockedExecutorToolCallEntry({
+      step: 2,
+      req,
+      stderr: 'blocked',
+    }),
+    {
+      step: 2,
+      tool: 'shell_exec',
+      target: 'npm test',
+      exit_code: 126,
+      stdout: '(blocked before execution)',
+      stderr: 'blocked',
+      verified: false,
+    },
+  );
 });
 
 test('tool dispatch formats non-recoverable shell failures with verifier context', () => {
-  const req = { tool: 'shell_exec', command: 'npm test', working_directory: '.', timeout_seconds: 120 } satisfies ToolCallRequest;
+  const req = {
+    tool: 'shell_exec',
+    command: 'npm test',
+    working_directory: '.',
+    timeout_seconds: 120,
+  } satisfies ToolCallRequest;
   const result = {
     exit_code: 1,
     stdout: '',

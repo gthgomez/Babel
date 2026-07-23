@@ -1,9 +1,20 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, lstatSync, openSync, closeSync, constants as fsConstants } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+  lstatSync,
+  openSync,
+  closeSync,
+  constants as fsConstants,
+} from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { dirname, join, resolve as resolvePath } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
 
 import { renderDryRunSummary } from '../ui/renderers.js';
-import { BABEL_ROOT, BABEL_RUNS_DIR, VALID_PROJECTS, type ValidProject } from './constants.js';
+import { BABEL_ROOT, BABEL_RUNS_DIR, type ValidProject } from './constants.js';
 
 export interface RuntimeFlagsFile {
   schemaVersion?: number;
@@ -23,9 +34,15 @@ export interface LatestRunPointer {
   run_dir: string;
   project: string;
   created_at: string;
+  status?: string;
+  target_root?: string;
+  command?: string;
+  evidence_complete?: boolean;
 }
 
 let stdoutTeeInstalled = false;
+
+// ── Public API ───────────────────────────────────────────────────────────────
 
 export function normalizeModelName(value: string | undefined): string | undefined {
   if (!value) {
@@ -44,20 +61,175 @@ export function parseCommaSeparatedFiles(value: string | undefined): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-export function resolveProjectRoot(projectName: string): string | null {
-  if (!VALID_PROJECTS.includes(projectName as ValidProject)) {
-    return null;
+// ── Project discovery (dynamic, convention-based) ────────────────────────────
+
+const PROJECT_MARKERS = [
+  '.git',
+  'package.json',
+  'CLAUDE.md',
+  'AGENTS.md',
+  'PROJECT_CONTEXT.md',
+  'prompt_catalog.yaml',
+  'Cargo.toml',
+  'go.mod',
+  'pyproject.toml',
+  'project.godot',
+];
+
+const FAMILY_DIRECTORIES = ['Project_SaaS', 'example_mobile_suite', 'example_game_suite'];
+
+const PROJECT_NAME_ALIASES: Record<string, string> = {
+  simlife: 'SimLife',
+  godot_td: 'TowerDefenseGodot',
+  aetherlyn: 'AetherlynGameDraft',
+  app_test_babel: 'App-test-Babel',
+};
+
+function hasProjectMarker(dir: string): boolean {
+  try {
+    return PROJECT_MARKERS.some((marker) => existsSync(join(dir, marker)));
+  } catch {
+    return false;
   }
-  const configuredRoot = process.env['BABEL_PROJECT_ROOT']?.trim();
-  return resolvePath(configuredRoot || process.cwd());
 }
 
+function resolveCanonicalDirName(name: string): string {
+  const lower = name.toLowerCase();
+  for (const [alias, canonical] of Object.entries(PROJECT_NAME_ALIASES)) {
+    if (alias.toLowerCase() === lower) return canonical;
+  }
+  return name;
+}
+
+/**
+ * Scan workspace roots for a directory matching the given project name.
+ * Replaces the old switch/case hardcoded map with dynamic filesystem scanning.
+ */
+export function resolveProjectRoot(projectName: string): string | null {
+  if (!projectName || projectName.length === 0) return null;
+
+  // If it's already an absolute path that exists, return it directly
+  if (isAbsolute(projectName) && existsSync(projectName)) {
+    return projectName;
+  }
+
+  const parent = dirname(BABEL_ROOT);
+  const canonicalName = resolveCanonicalDirName(projectName);
+
+  // Build scan list: family directories + workspace root
+  const scanRoots: string[] = [];
+  for (const family of FAMILY_DIRECTORIES) {
+    const familyPath = join(parent, family);
+    if (existsSync(familyPath)) {
+      scanRoots.push(familyPath);
+    }
+  }
+  scanRoots.push(parent);
+
+  // Search for matching directory (case-insensitive)
+  for (const scanRoot of scanRoots) {
+    try {
+      const entries = readdirSync(scanRoot, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+
+        const nameMatch =
+          entry.name.toLowerCase() === projectName.toLowerCase() ||
+          entry.name.toLowerCase() === canonicalName.toLowerCase();
+
+        if (nameMatch) {
+          const entryPath = join(scanRoot, entry.name);
+          if (hasProjectMarker(entryPath) || existsSync(entryPath)) {
+            return entryPath;
+          }
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  // Special case: app_test_babel has multiple fallback candidates
+  if (projectName === 'app_test_babel') {
+    for (const candidate of [
+      join('example_mobile_suite', 'example_finance_forecast'),
+      'App-test-Babel',
+      'MonteCarlo-Ledger-app',
+    ]) {
+      const resolved = resolvePath(parent, candidate);
+      if (existsSync(resolved)) return resolved;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Detect which workspace project the current working directory belongs to.
+ * Walks up from cwd looking for project markers, then matches against
+ * known workspace directories. Falls back to scanning parent directories.
+ */
 export function detectProjectFromCwd(cwd = process.cwd()): ValidProject | null {
-  void cwd;
-  const configuredProject = process.env['BABEL_PROJECT_ID']?.trim();
-  return configuredProject && VALID_PROJECTS.includes(configuredProject as ValidProject)
-    ? configuredProject as ValidProject
-    : null;
+  const resolvedCwd = resolvePath(cwd);
+
+  // Strategy 1: Walk up looking for project markers
+  let current = resolvedCwd;
+  const st = (() => {
+    try {
+      return lstatSync(current);
+    } catch {
+      return null;
+    }
+  })();
+  if (st !== null && !st.isDirectory()) {
+    current = dirname(current);
+  }
+
+  while (true) {
+    if (hasProjectMarker(current)) {
+      return basename(current) as ValidProject;
+    }
+
+    const parentDir = dirname(current);
+    if (parentDir === current) break; // Reached filesystem root
+
+    // Stop at workspace root
+    if (resolvePath(parentDir) === resolvePath(dirname(BABEL_ROOT))) {
+      if (hasProjectMarker(parentDir)) {
+        return basename(parentDir) as ValidProject;
+      }
+      break;
+    }
+
+    current = parentDir;
+  }
+
+  // Strategy 2: Scan workspace directories and check containment
+  const workspaceRoot = dirname(BABEL_ROOT);
+  const scanDirs = [
+    workspaceRoot,
+    ...FAMILY_DIRECTORIES.map((f) => join(workspaceRoot, f)).filter((d) => existsSync(d)),
+  ];
+
+  for (const scanDir of scanDirs) {
+    try {
+      const entries = readdirSync(scanDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules')
+          continue;
+        const entryPath = join(scanDir, entry.name);
+        const rel = relative(entryPath, resolvedCwd);
+        if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) {
+          return entry.name as ValidProject;
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
 }
 
 export function resolveLogFilePath(value: string | undefined): string | undefined {
@@ -85,12 +257,11 @@ export function installStdoutTee(logFilePath: string): void {
     appendFileSync(logFilePath, content);
   };
 
-  const teeWrite = (
-    originalWrite: typeof process.stdout.write,
-  ): typeof process.stdout.write => ((chunk: unknown, ...args: unknown[]) => {
-    appendChunk(chunk);
-    return originalWrite(chunk as never, ...(args as []));
-  }) as typeof process.stdout.write;
+  const teeWrite = (originalWrite: typeof process.stdout.write): typeof process.stdout.write =>
+    ((chunk: unknown, ...args: unknown[]) => {
+      appendChunk(chunk);
+      return originalWrite(chunk as never, ...(args as []));
+    }) as typeof process.stdout.write;
 
   process.stdout.write = teeWrite(originalStdoutWrite);
   process.stderr.write = teeWrite(originalStderrWrite);
@@ -129,11 +300,9 @@ export function readClipboardPlanText(): string {
     throw new Error('Clipboard mode is only supported on Windows.');
   }
 
-  const result = spawnSync(
-    'powershell',
-    ['-NoProfile', '-Command', 'Get-Clipboard -Raw'],
-    { encoding: 'utf8' },
-  );
+  const result = spawnSync('powershell', ['-NoProfile', '-Command', 'Get-Clipboard -Raw'], {
+    encoding: 'utf8',
+  });
 
   if (result.error) {
     throw new Error(`Clipboard read failed: ${result.error.message}`);
@@ -184,7 +353,12 @@ export function readDryRunState(): DryRunState {
     sessionOverride: sessionOverride ?? liveOverride,
     effective: sessionOverride ?? liveOverride ?? persisted ?? true,
     runtimeFlagsPath,
-    source: sessionOverride !== null || liveOverride !== null ? 'session' : persisted !== null ? 'persisted' : 'default',
+    source:
+      sessionOverride !== null || liveOverride !== null
+        ? 'session'
+        : persisted !== null
+          ? 'persisted'
+          : 'default',
   };
 }
 
@@ -193,11 +367,15 @@ export function writeDryRunState(dryRun: boolean): DryRunState {
   mkdirSync(dirname(runtimeFlagsPath), { recursive: true });
   writeFileSync(
     runtimeFlagsPath,
-    `${JSON.stringify({
-      schemaVersion: 1,
-      dryRun,
-      updatedAt: new Date().toISOString(),
-    }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        dryRun,
+        updatedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    )}\n`,
     'utf-8',
   );
   return readDryRunState();
@@ -223,7 +401,11 @@ export function readLatestRunPointer(project?: string): LatestRunPointer | null 
     }
     try {
       const parsed = JSON.parse(readFileSync(candidate, 'utf-8')) as LatestRunPointer;
-      if (typeof parsed.run_dir === 'string' && parsed.run_dir.length > 0) {
+      if (
+        typeof parsed.run_dir === 'string' &&
+        parsed.run_dir.length > 0 &&
+        existsSync(parsed.run_dir)
+      ) {
         return parsed;
       }
     } catch {
@@ -243,13 +425,10 @@ export function copyFileToClipboard(promptPath: string): { ok: boolean; warning?
     return { ok: false, warning: 'Clipboard auto-copy is only supported on Windows.' };
   }
 
-  const psCommand =
-    `Set-Clipboard -Value (Get-Content -Raw '${escapePowerShellSingleQuoted(promptPath)}')`;
-  const result = spawnSync(
-    'powershell.exe',
-    ['-NoProfile', '-Command', psCommand],
-    { encoding: 'utf8' },
-  );
+  const psCommand = `Set-Clipboard -Value (Get-Content -Raw '${escapePowerShellSingleQuoted(promptPath)}')`;
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', psCommand], {
+    encoding: 'utf8',
+  });
   if (result.error) {
     return { ok: false, warning: `Clipboard copy failed: ${result.error.message}` };
   }
@@ -260,25 +439,20 @@ export function copyFileToClipboard(promptPath: string): { ok: boolean; warning?
 }
 
 export function openPlanEditor(planPath: string): { editor: 'code' | 'notepad' } {
-  const codeResult = spawnSync(
-    'code',
-    ['--wait', planPath],
-    { stdio: 'inherit', windowsHide: true },
-  );
+  const codeResult = spawnSync('code', ['--wait', planPath], {
+    stdio: 'inherit',
+    windowsHide: true,
+  });
   if (!codeResult.error && (codeResult.status ?? 1) === 0) {
     return { editor: 'code' };
   }
 
-  const notepadResult = spawnSync(
-    'notepad',
-    [planPath],
-    { stdio: 'inherit', windowsHide: true },
-  );
+  const notepadResult = spawnSync('notepad', [planPath], { stdio: 'inherit', windowsHide: true });
   if (notepadResult.error || (notepadResult.status ?? 0) !== 0) {
     throw new Error(
       `Editor launch failed. ` +
-      `code error: ${codeResult.error?.message ?? codeResult.stderr?.toString() ?? 'unknown'}; ` +
-      `notepad error: ${notepadResult.error?.message ?? notepadResult.stderr?.toString() ?? 'unknown'}`,
+        `code error: ${codeResult.error?.message ?? codeResult.stderr?.toString() ?? 'unknown'}; ` +
+        `notepad error: ${notepadResult.error?.message ?? notepadResult.stderr?.toString() ?? 'unknown'}`,
     );
   }
   return { editor: 'notepad' };
@@ -316,15 +490,12 @@ export function extractStructuredDenialFromExecutionReport(
     return null;
   }
   const toolCallLog = Array.isArray(report['tool_call_log'])
-    ? report['tool_call_log'] as Array<Record<string, unknown>>
+    ? (report['tool_call_log'] as Array<Record<string, unknown>>)
     : [];
   const lastToolOutput = toolCallLog.length > 0 ? toolCallLog[toolCallLog.length - 1] : null;
-  const denial = lastToolOutput && typeof lastToolOutput === 'object'
-    ? lastToolOutput['denial']
-    : null;
-  return denial && typeof denial === 'object'
-    ? denial as Record<string, unknown>
-    : null;
+  const denial =
+    lastToolOutput && typeof lastToolOutput === 'object' ? lastToolOutput['denial'] : null;
+  return denial && typeof denial === 'object' ? (denial as Record<string, unknown>) : null;
 }
 
 export function extractMcpLifecycleFromExecutionReport(
@@ -335,13 +506,10 @@ export function extractMcpLifecycleFromExecutionReport(
     return null;
   }
   const toolCallLog = Array.isArray(report['tool_call_log'])
-    ? report['tool_call_log'] as Array<Record<string, unknown>>
+    ? (report['tool_call_log'] as Array<Record<string, unknown>>)
     : [];
   const lastToolOutput = toolCallLog.length > 0 ? toolCallLog[toolCallLog.length - 1] : null;
-  const lifecycle = lastToolOutput && typeof lastToolOutput === 'object'
-    ? lastToolOutput['mcp_lifecycle']
-    : null;
-  return lifecycle && typeof lifecycle === 'object'
-    ? lifecycle as Record<string, unknown>
-    : null;
+  const lifecycle =
+    lastToolOutput && typeof lastToolOutput === 'object' ? lastToolOutput['mcp_lifecycle'] : null;
+  return lifecycle && typeof lifecycle === 'object' ? (lifecycle as Record<string, unknown>) : null;
 }

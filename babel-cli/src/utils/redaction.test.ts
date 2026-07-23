@@ -28,7 +28,8 @@ const TEST_POLICY: EnterprisePolicy = {
 };
 
 test('redactSecrets masks common provider environment assignments', () => {
-  const text = 'DEEPSEEK_API_KEY=deepseek-secret DEEPINFRA_API_KEY=abc123 OPENAI_API_KEY="sk-live-value" safe=value';
+  const text =
+    'DEEPSEEK_API_KEY=deepseek-secret DEEPINFRA_API_KEY=abc123 OPENAI_API_KEY="sk-your_XXXXXXXXXXXXXXXXXXXX" safe=value';
   const redacted = redactSecrets(text, TEST_POLICY);
 
   assert.match(redacted, /DEEPSEEK_API_KEY= \[REDACTED\]/);
@@ -37,11 +38,14 @@ test('redactSecrets masks common provider environment assignments', () => {
   assert.match(redacted, /safe=value/);
   assert.doesNotMatch(redacted, /deepseek-secret/);
   assert.doesNotMatch(redacted, /abc123/);
-  assert.doesNotMatch(redacted, /sk-live-value/);
+  assert.doesNotMatch(redacted, /sk-your_XXXXXXXXXXXXXXXXXXXX/);
 });
 
 test('redactSecrets masks bearer tokens and extra enterprise patterns', () => {
-  const redacted = redactSecrets('Authorization: Bearer abc.def.ghi and CUSTOM-SECRET-12345', TEST_POLICY);
+  const redacted = redactSecrets(
+    'Authorization: Bearer abc.def.ghi and CUSTOM-SECRET-12345',
+    TEST_POLICY,
+  );
 
   assert.doesNotMatch(redacted, /abc\.def\.ghi/);
   assert.doesNotMatch(redacted, /CUSTOM-SECRET-12345/);
@@ -49,16 +53,19 @@ test('redactSecrets masks bearer tokens and extra enterprise patterns', () => {
 });
 
 test('redactEvidenceValue recursively masks secret-bearing fields', () => {
-  const redacted = redactEvidenceValue({
-    ok: true,
-    nested: {
-      api_key: 'deepinfra-secret',
-      access_token: 'access-secret',
-      promptTokens: 123,
-      totalTokens: 456,
-      output: 'password: swordfish',
+  const redacted = redactEvidenceValue(
+    {
+      ok: true,
+      nested: {
+        api_key: 'deepinfra-secret',
+        access_token: 'access-secret',
+        promptTokens: 123,
+        totalTokens: 456,
+        output: 'password: swordfish',
+      },
     },
-  }, TEST_POLICY);
+    TEST_POLICY,
+  );
 
   assert.deepEqual(redacted, {
     ok: true,

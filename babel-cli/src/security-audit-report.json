@@ -1,0 +1,268 @@
+{
+  "reviewer": "security",
+  "scorecard": {
+    "overall": 3,
+    "subDimensions": {
+      "stdin_raw_mode_safety": {
+        "score": 4,
+        "justification": "withRawStdinPrompt uses try/finally to restore raw mode on all normal paths. emergencyRestore() is called from SIGINT/SIGTERM/SIGHUP/uncaughtException/unhandledRejection handlers. However, the reference-counted pause/resume (runDepth) in stdinCoordinatorPauseForRun/ResumeAfterRun has no try/finally at call sites — a thrown exception between pause and resume leaves stdin paused permanently. Additionally, readline.emitKeypressEvents() (called in planView.ts:140 and checklist.ts:105) internally interacts with raw mode and has no 'undo' API, creating potential mode-conflict with withRawStdinPrompt."
+      },
+      "ansi_injection": {
+        "score": 2,
+        "justification": "No sanitization of LLM-produced content for embedded terminal escape sequences. renderMarkdown in highlight.ts passes text tokens through verbatim (line 385: `return (token as any).text`). highlightLine adds its own ANSI codes but does not strip existing escape sequences from the input. theme.js stripAnsi() only strips CSI sequences ending in `m` (SGR codes), leaving OSC sequences (ESC ], DCS sequences (ESC P), screen-control sequences (ESC [2J, ESC [?1049h), cursor-hide (ESC [?25l), and hyperlinks (ESC ]8;;...) intact. A compromised or adversarial LLM could inject arbitrary terminal control sequences into the user's terminal."
+      },
+      "signal_cleanup": {
+        "score": 3,
+        "justification": "SIGINT, SIGTERM, SIGHUP, uncaughtException, and unhandledRejection all call emergencyRestore() which disables raw mode, restores cursor, disables mouse tracking, exits alt screen, and restores stdout/stderr. However, SIGTERM and SIGHUP are not supported on Windows (the target platform). On Windows, only SIGINT and the 'exit' event reliably fire. The 'exit' handler does call emergencyRestore() but cannot safely perform async I/O in the exit phase. A forced termination (taskkill /F, end task) bypasses all handlers and leaves the terminal in raw/no-cursor/alt-screen state."
+      },
+      "stdout_hijack_safety": {
+        "score": 4,
+        "justification": "startBuffering() guards against double-hijack with isBuffering flag. stopBuffering() restores originals and is also guarded. emergencyRestore() also restores stdout/stderr write functions. The only edge case: if an unhandled 'error' event on process.stdout fires (e.g., from the EPIPE guard in waterfall.js:60-61 which throws for non-broken-pipe errors) before InputCoordinator is constructed or after it's destroyed, the exception path may not have an emergencyRestore available. But in practice, InputCoordinator is a singleton constructed at import time."
+      },
+      "escape_sequence_parsing": {
+        "score": 3,
+        "justification": "CSI parser correctly validates finalByte range (0x40-0x7E) and parameter byte ranges. SS3 parser has a fixed lookup map and returns null for unknown keys. Bare-escape disambiguation uses a 50ms timeout and correctly clears it on new data. However: (1) the keyInput buffer (line 283) grows unboundedly via Buffer.concat — no max-size cap. A fast stdin stream could cause O(n²) memory operations. (2) pasteContent (line 351) accumulates all pasted data without a size limit during bracketed paste — a malicious client sending ESC [200~ without ESC [201~ could exhaust memory. (3) tryConsumeMouseSequence rescans from buffer start on every processBuffer call, producing O(n²) scans for partial mouse sequences in large buffers."
+      },
+      "data_exfiltration": {
+        "score": 4,
+        "justification": "eventStream.ts writes JSONL records to a user-specified path (--events-jsonl flag). Data includes full LLM assistant chunks (babel.assistant.chunk), run directories (babel.run.result), error details (babel.run.error), and log lines (babel.log.line). This is opt-in (the user must pass the flag). However, if the event stream path is ever derived from untrusted config input rather than a CLI flag, path traversal could redirect output. The assistant.chunk payload contains the full LLM response text verbatim, which could include sensitive data the user types into prompts."
+    }
+  },
+  "keyFindings": [
+    {
+      "severity": "high",
+      "area": "No ANSI sanitization on LLM output",
+      "babelPattern": "renderMarkdown in highlight.ts passes LLM text tokens directly to stdout without stripping embedded terminal escapes (line 385). highlightLine (line 108) also passes unsanitized content through. theme.js stripAnsi() only strips CSI SGR (ESC [Nm) sequences (line 143).",
+      "counterpartPattern": "Run all LLM output through a comprehensive ANSI/terminal-escape sanitizer before display. Use a library like ansi-escape-sequences or strip-ansi, or implement a proper filter that removes ESC (0x1B) sequences entirely before embedding in ANSI-wrapped output. Consider replacing stripAnsi with a function that also strips OSC, DCS, SOS, PM, APC sequences and CSI sequences beyond SGR.",
+      "recommendation": "Add an ANSI sanitizer that runs on text tokens in renderMarkdown before output. Extend stripAnsi() to cover all CSI final bytes (not just 'm'), plus OSC (ESC ]), DCS (ESC P), SOS (ESC X), PM (ESC ^), and APC (ESC _) sequences. Apply it to all LLM-produced text that reaches stdout.",
+      "effort": "small",
+      "impact": "high",
+      "fileReferences": [
+        "babel-cli/src/ui/highlight.ts:245",
+        "babel-cli/src/ui/highlight.ts:108",
+        "babel-cli/src/ui/highlight.ts:385",
+        "babel-cli/src/ui/theme.js:143"
+      ]
+    },
+    {
+      "severity": "high",
+      "area": "Unbounded buffer growth in keyInput parser",
+      "babelPattern": "installKeyHandler buffer (keyInput.ts:283) grows via Buffer.concat([buffer, data]) with no max-size enforcement. pasteContent (keyInput.ts:351) accumulates all data inside bracketed paste without a size cap. If a malicious stdin client sends a paste-start prefix (ESC [200~) without the end marker (ESC [201~), pasteContent grows unboundedly until OOM.",
+      "counterpartPattern": "Cap the internal buffer and pasteContent at a reasonable limit (e.g., 100KB or 1MB). When the limit is exceeded, either force-emit the paste event or discard excess bytes. At minimum, bail out of paste mode after the cap is reached by treating the accumulated content as the payload and exiting paste mode.",
+      "recommendation": "Add byte-size caps to both the rearmable buffer (keyInput.ts:283) and pasteContent (keyInput.ts:351). For paste mode, set a maximum of 1MB. When exceeded, emit the current paste content and exit paste mode rather than continuing to accumulate.",
+      "effort": "small",
+      "impact": "high",
+      "fileReferences": [
+        "babel-cli/src/ui/keyInput.ts:283",
+        "babel-cli/src/ui/keyInput.ts:351",
+        "babel-cli/src/ui/keyInput.ts:364",
+        "babel-cli/src/ui/keyInput.ts:410"
+      ]
+    },
+    {
+      "severity": "medium",
+      "area": "readline.emitKeypressEvents has no undo, conflicts with raw mode management",
+      "babelPattern": "planView.ts:140 and checklist.ts:105 call readline.emitKeypressEvents(stdin) inside withRawStdinPrompt. emitKeypressEvents internally interacts with stdin's raw mode. There is no API to 'unregister' keypress event emission — once called, Node.js continues internal tracking on the stream. The cleanup in planView.ts (line 111-113) and checklist.ts (line 99-101) only removes the 'keypress' listener, not the underlying emitKeypressEvents infrastructure.",
+      "counterpartPattern": "Use the explicit raw-mode management in withRawStdinPrompt with direct 'data' event listeners instead of readline.emitKeypressEvents. Alternatively, create a fresh readline.Interface and use rl.question() for simple prompts rather than combining emitKeypressEvents with manual raw mode.",
+      "recommendation": "Replace readline.emitKeypressEvents + manual keypress listener with direct 'data' event parsing (using the parseKeypress function from keyInput.ts) inside withRawStdinPrompt. This eliminates the raw mode conflict and makes cleanup deterministic.",
+      "effort": "medium",
+      "impact": "medium",
+      "fileReferences": [
+        "babel-cli/src/ui/planView.ts:140",
+        "babel-cli/src/ui/checklist.ts:105"
+      ]
+    },
+    {
+      "severity": "medium",
+      "area": "stdinCoordinatorPauseForRun/ResumeAfterRun lacks try/finally protection",
+      "babelPattern": "stdinCoordinatorPauseForRun (inputCoordinator.ts:17) and stdinCoordinatorResumeAfterRun (line 25) use a reference-counted runDepth mechanism. If an exception or early return occurs between pause and resume, runDepth stays elevated and stdin remains paused. There is no try/finally wrapping at call sites. The Math.max(0, runDepth - 1) guard prevents negative depth but cannot fix unbalanced calls.",
+      "counterpartPattern": "Wrap all stdinCoordinatorPauseForRun/stdinCoordinatorResumeAfterRun pairs in try/finally blocks at every call site. Alternatively, use a resource-management pattern (e.g., a disposable scope) that guarantees resume on all exit paths.",
+      "recommendation": "Audit all call sites of stdinCoordinatorPauseForRun for try/finally coverage. Add a wrapper function that takes a callback and manages the pause/resume lifecycle with guaranteed cleanup.",
+      "effort": "small",
+      "impact": "medium",
+      "fileReferences": [
+        "babel-cli/src/ui/inputCoordinator.ts:17",
+        "babel-cli/src/ui/inputCoordinator.ts:25"
+      ]
+    },
+    {
+      "severity": "medium",
+      "area": "BABEL_TEST_FORCE_NON_TTY bypass not gated to test environments",
+      "babelPattern": "inputCoordinator.ts:62 checks process.env['BABEL_TEST_FORCE_NON_TTY'] !== 'true' to decide whether to use raw mode. This env var is not gated — any user or process that sets this env var can bypass raw-mode stdin protections at runtime. Similarly, BABEL_PIPELINE_V9_OFFLINE (planView.ts:65, checklist.ts:14) allows bypassing interactive plan review.",
+      "counterpartPattern": "Gate test-only env vars behind NODE_ENV=test or a similar guard. For offline plan approval, use an explicit CLI flag (--offline) instead of an env var so accidental settings leakage is reduced.",
+      "recommendation": "Add a `process.env['NODE_ENV'] === 'test'` guard to BABEL_TEST_FORCE_NON_TTY. Document BABEL_PIPELINE_V9_OFFLINE as a production bypass so operators are aware.",
+      "effort": "small",
+      "impact": "medium",
+      "fileReferences": [
+        "babel-cli/src/ui/inputCoordinator.ts:62",
+        "babel-cli/src/ui/planView.ts:65",
+        "babel-cli/src/ui/checklist.ts:14"
+      ]
+    },
+    {
+      "severity": "medium",
+      "area": "Windows signal limitations leave terminal dirty on forced termination",
+      "babelPattern": "SIGTERM and SIGHUP listeners (inputCoordinator.ts:154-161) are registered but neither signal exists as a native Windows mechanism. On Windows, process.kill(pid, 'SIGTERM') is emulated but taskkill /F, end task, or crash-dialog-close bypasses all signal handlers entirely. The 'exit' handler (line 151) fires for graceful shutdown but cannot safely write escape sequences (cursor restore, alt-screen exit) during the exit phase.",
+      "counterpartPattern": "On Windows, register a Win32 console control handler via the 'error' event or use child-process monitoring. For the 'exit' handler, queue synchronous cleanup work. Document that user-terminal reset (reset/tput) may be needed after a forced kill.",
+      "recommendation": "Add a note in documentation that forced termination on Windows may leave the terminal in an altered state. Consider using addons like win32ctrl or a native module to handle CTRL_CLOSE_EVENT/CTRL_SHUTDOWN_EVENT on Windows.",
+      "effort": "medium",
+      "impact": "medium",
+      "fileReferences": [
+        "babel-cli/src/ui/inputCoordinator.ts:154",
+        "babel-cli/src/ui/inputCoordinator.ts:158",
+        "babel-cli/src/ui/inputCoordinator.ts:151"
+      ]
+    },
+    {
+      "severity": "low",
+      "area": "tryConsumeMouseSequence scans from buffer start each time (O(n^2))",
+      "babelPattern": "tryConsumeMouseSequence (keyInput.ts:311) starts scanning for the mouse sequence terminator from buffer index 3 each call. If the buffer contains large amounts of non-mouse data followed by a partial mouse prefix, processBuffer calls tryConsumeMouseSequence repeatedly on the full buffer, rescanning from the prefix each time.",
+      "counterpartPattern": "Track the scan start offset so re-scans only check new data, or strip the prefix bytes once confirmed partial.",
+      "recommendation": "Add a tracking pointer for where the mouse-suffix scan left off, or move the scan state into a closure variable to avoid rescanning.",
+      "effort": "small",
+      "impact": "low",
+      "fileReferences": [
+        "babel-cli/src/ui/keyInput.ts:311"
+      ]
+    },
+    {
+      "severity": "low",
+      "area": "InputCoordinator lock queue unbounded",
+      "babelPattern": "InputCoordinator.queue (inputCoordinator.ts:137) is an array that grows without limit when many owners queue waiting for the lock. While unlikely to overflow in normal operation, a pathological scenario (e.g., rapid acquire/acquire-wait cycles) could grow the queue unboundedly.",
+      "counterpartPattern": "Set a maximum queue depth (e.g., 10). Reject or time-out new acquisitions beyond the limit.",
+      "recommendation": "Add a maximum queue depth to InputCoordinator and reject/warn on overflow.",
+      "effort": "small",
+      "impact": "low",
+      "fileReferences": [
+        "babel-cli/src/ui/inputCoordinator.ts:137",
+        "babel-cli/src/ui/inputCoordinator.ts:264"
+      ]
+    },
+    {
+      "severity": "low",
+      "area": "captureRawKeypress has unthrottled input during raw mode",
+      "babelPattern": "captureRawKeypress (inputCoordinator.ts:60) enters raw mode and listens for data events. All unexpected bytes are silently ignored but the data listener processes every byte. A flood of noise bytes resets the watchdog timer (which triggers after each byte, but only the y/n check advances progress). The process remains in raw mode until the watchdog timeout (30s) or a valid keypress.",
+      "counterpartPattern": "Add a byte counter per call — if too many unrecognized bytes arrive, bail out and restore normal mode with a fallback.",
+      "recommendation": "Add an input flood limit to captureRawKeypress: if more than 1024 unrecognized bytes arrive, exit raw mode and prompt via readline.question() instead.",
+      "effort": "small",
+      "impact": "low",
+      "fileReferences": [
+        "babel-cli/src/ui/inputCoordinator.ts:60"
+      ]
+    },
+    {
+      "severity": "info",
+      "area": "EPIPE guard in waterfall.js throws for non-EPIPE errors on process.stdout",
+      "babelPattern": "installStdoutErrorGuard (waterfall.js:54-66) and spinner.ts installErrorGuard (line 122-135) register error handlers on process.stdout/stderr. If a non-broken-pipe error fires (e.g., EBADF, EIO), the handler throws (waterfall.js:60-61) or leaves it unhandled (spinner.ts). An 'error' event on a stream that is not handled by the listener causes Node.js to throw, which terminates the process. The uncaughtException handler (InputCoordinator line 162) will fire and call emergencyRestore, but the throw inside the event handler may not always propagate cleanly.",
+      "counterpartPattern": "Instead of throwing from within the error event handler, forward the error to a global error handler or emit it on a different channel. Document that the error handler is only for broken-stream conditions.",
+      "recommendation": "Replace the throw in waterfall.js:61 with a call to a shared error handler. Add an error handler in spinner.ts for non-broken-stream errors that doesn't silently swallow. Consider using process.on('uncaughtExceptionMonitor') for diagnostics instead of throwing from event handlers.",
+      "effort": "small",
+      "impact": "low",
+      "fileReferences": [
+        "babel-cli/src/ui/waterfall.js:54",
+        "babel-cli/src/ui/waterfall.js:60",
+        "babel-cli/src/ui/spinner.ts:122"
+      ]
+    }
+  ],
+  "codeCallouts": [
+    {
+      "file": "babel-cli/src/ui/highlight.ts",
+      "lines": "245-256",
+      "pattern": "renderMarkdown produces ANSI output that includes raw text from LLM without escape-sequence sanitization",
+      "assessment": "at-risk"
+    },
+    {
+      "file": "babel-cli/src/ui/highlight.ts",
+      "lines": "383-397",
+      "pattern": "renderInlineToken returns raw token text in 'text' case — no strip/clean of embedded escapes",
+      "assessment": "at-risk"
+    },
+    {
+      "file": "babel-cli/src/ui/theme.js",
+      "lines": "143-145",
+      "pattern": "stripAnsi only strips CSI SGR (ESC [Nm) sequences — misses OSC, DCS, SOS, PM, APC, and non-SGR CSI",
+      "assessment": "needs-improvement"
+    },
+    {
+      "file": "babel-cli/src/ui/keyInput.ts",
+      "lines": "270-435",
+      "pattern": "installKeyHandler uses unbounded buffer and pasteContent with no size caps",
+      "assessment": "at-risk"
+    },
+    {
+      "file": "babel-cli/src/ui/inputCoordinator.ts",
+      "lines": "17-31",
+      "pattern": "stdinCoordinatorPauseForRun/ResumeAfterRun reference counting has no try/finally at call sites",
+      "assessment": "needs-improvement"
+    },
+    {
+      "file": "babel-cli/src/ui/inputCoordinator.ts",
+      "lines": "146-171",
+      "pattern": "Signal handler registration covers all main signals; emergencyRestore is thorough and idempotent",
+      "assessment": "good"
+    },
+    {
+      "file": "babel-cli/src/ui/inputCoordinator.ts",
+      "lines": "174-203",
+      "pattern": "emergencyRestore properly resets raw mode, cursor, alt screen, mouse tracking, and stdout/stderr",
+      "assessment": "good"
+    },
+    {
+      "file": "babel-cli/src/ui/inputCoordinator.ts",
+      "lines": "299-323",
+      "pattern": "startBuffering uses isBuffering guard to prevent double-hijack; restores originals in stopBuffering",
+      "assessment": "good"
+    },
+    {
+      "file": "babel-cli/src/ui/planView.ts",
+      "lines": "139-142",
+      "pattern": "readline.emitKeypressEvents called inside withRawStdinPrompt — raw mode conflict potential",
+      "assessment": "needs-improvement"
+    },
+    {
+      "file": "babel-cli/src/ui/checklist.ts",
+      "lines": "104-107",
+      "pattern": "readline.emitKeypressEvents called inside withRawStdinPrompt — same pattern as planView",
+      "assessment": "needs-improvement"
+    },
+    {
+      "file": "babel-cli/src/ui/waterfall.js",
+      "lines": "54-66",
+      "pattern": "installStdoutErrorGuard throws for non-EPIPE errors inside an event handler on process.stdout",
+      "assessment": "needs-improvement"
+    },
+    {
+      "file": "babel-cli/src/ui/spinner.ts",
+      "lines": "122-135",
+      "pattern": "installErrorGuard silently drops non-broken-stream errors on stderr (no throw, but also no logging)",
+      "assessment": "needs-improvement"
+    },
+    {
+      "file": "babel-cli/src/ui/keyInput.ts",
+      "lines": "311-330",
+      "pattern": "tryConsumeMouseSequence rescans from buffer start on every call, producing O(n^2) scans",
+      "assessment": "at-risk"
+    },
+    {
+      "file": "babel-cli/src/ui/inputCoordinator.ts",
+      "lines": "62",
+      "pattern": "BABEL_TEST_FORCE_NON_TTY bypass not gated to test environments",
+      "assessment": "needs-improvement"
+    },
+    {
+      "file": "babel-cli/src/services/eventStream.ts",
+      "lines": "95-157",
+      "pattern": "JSONL event stream writes LLM chunks and log lines to disk; path is user-controlled via CLI flag",
+      "assessment": "good"
+    }
+  ],
+  "openQuestions": [
+    "Does the 'error' event listener on process.stdout in waterfall.js (line 54-66) continue to fire when InputCoordinator.startBuffering() has hijacked process.stdout.write? The hijack replaces the write function, but the error event listener is on the stream object itself. A broken stdout would still emit 'error' events even when writes are buffered.",
+    "Is there any path where uncaughtException is blocked BEFORE InputCoordinator is constructed? InputCoordinator is a singleton created on first getInstance() call. If something throws during module loading before getInstance() is called, handlers aren't registered.",
+    "readlineInterface.pause() and .resume() in stdinCoordinatorPauseForRun — does pausing a readline interface while a question() prompt is active cause a leak? The readline 'line' event and internal listeners may not be cleaned up properly on resume+re-pause cycles.",
+    "The `pasteContent` string (keyInput.ts:351) is a regular JavaScript string decoded from the buffer via .toString('utf8'). If the input contains malformed UTF-8 sequences (e.g., overlong encodings, surrogate halves), toString() silently replaces them with U+FFFD. Could this replacement change the semantic meaning of the pasted content in a security-relevant way?",
+    "Is there a scenario where both the waterfall.js stdin error guard and the InputCoordinator emergencyRestore fire simultaneously, causing a double-free or race on the stdin raw mode? Both operate on the same event loop so there is no interleaving, but logically redundant restores should be audited.",
+    "The SGR mouse prefix check at keyInput.ts:312-316 uses hardcoded byte values referencing the SGR_MOUSE_PREFIX constant defined at line 249 (ESC [ <). If a CSI sequence begins with ESC [ and the parameter portion starts with < (0x3C), it could be spuriously consumed as a mouse sequence even if it is a valid CSI sequence with different semantics. Are there any real terminal sequences that start with ESC [ < that would be lost?"
+  ]
+}

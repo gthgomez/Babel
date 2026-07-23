@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "fixture_type": "babel_lite_plan_apply",
+  "description": "Stale-pointer plan handoff should route to dual-file small fix on runPointers.ts + runEvidence.test.ts.",
+  "plan_run_id": "20260610T180000Z-plan-staleptr01",
+  "source_file": "babel-cli/src/pipeline/runPointers.ts",
+  "test_file": "babel-cli/src/evidence/runEvidence.test.ts",
+  "hallucinated_file": "babel-cli/src/run-latest.js",
+  "verifier_command": "npm --prefix ./babel-cli run typecheck",
+  "task": "Implement approved plan 20260610T180000Z-plan-staleptr01. Edit babel-cli/src/pipeline/runPointers.ts and babel-cli/src/evidence/runEvidence.test.ts. Run npm --prefix ./babel-cli run typecheck before completing."
+}

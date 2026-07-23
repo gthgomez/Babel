@@ -43,6 +43,8 @@ const RuntimeEnvSchema = z.object({
   BABEL_OPENAI_TOKENS: OptionalPositiveIntegerString,
   BABEL_GROQ_TOKENS: OptionalPositiveIntegerString,
   BABEL_API_TOKENS: OptionalPositiveIntegerString,
+  /** Status line format string. Tokens: {model}, {mode}, {project}, {elapsed}, {cost}, {tokens}, {turn} */
+  BABEL_STATUS_FORMAT: OptionalNonEmptyString,
 });
 
 function formatEnvIssues(error: z.ZodError): string {
@@ -59,9 +61,7 @@ export function validateRuntimeEnv(
 ): z.infer<typeof RuntimeEnvSchema> {
   const parsed = RuntimeEnvSchema.safeParse(env);
   if (!parsed.success) {
-    throw new Error(
-      `Invalid Babel environment configuration:\n${formatEnvIssues(parsed.error)}`,
-    );
+    throw new Error(`Invalid Babel environment configuration:\n${formatEnvIssues(parsed.error)}`);
   }
 
   return parsed.data;

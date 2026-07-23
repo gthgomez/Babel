@@ -3,8 +3,8 @@ import {
   supportedDeepSeekModelsText,
 } from '../services/deepSeekPricing.js';
 
-export const LITE_PROVIDER_IDS = ['auto', 'deepseek', 'deepinfra', 'mock'] as const;
-export type LiteProviderId = typeof LITE_PROVIDER_IDS[number];
+export const LITE_PROVIDER_IDS = ['auto', 'deepseek', 'deepinfra', 'ollama', 'mock'] as const;
+export type LiteProviderId = (typeof LITE_PROVIDER_IDS)[number];
 export type ConcreteLiteProviderId = Exclude<LiteProviderId, 'auto'>;
 
 export type LiteProviderKind = 'openai_compatible' | 'mock';
@@ -23,7 +23,7 @@ export const LITE_FAILURE_CODES = [
   'ARTIFACT_WRITE_FAILED',
   'PATCH_AUTO_APPLY_REFUSED',
 ] as const;
-export type LiteErrorCode = typeof LITE_FAILURE_CODES[number];
+export type LiteErrorCode = (typeof LITE_FAILURE_CODES)[number];
 
 export class LiteError extends Error {
   readonly code: LiteErrorCode;
@@ -118,6 +118,16 @@ const PROVIDER_DEFINITIONS: Record<
     primaryEnvKeyName: 'DEEPINFRA_TOKEN',
     fallbackEnvKeyNames: ['DEEPINFRA_API_KEY'],
   },
+  ollama: {
+    id: 'ollama',
+    displayName: 'Ollama local',
+    kind: 'openai_compatible',
+    baseUrl: 'http://localhost:11434/v1',
+    chatCompletionsPath: '/chat/completions',
+    defaultModel: 'gemma3:4b-babel',
+    primaryEnvKeyName: null,
+    fallbackEnvKeyNames: [],
+  },
   mock: {
     id: 'mock',
     displayName: 'Mock provider',
@@ -143,7 +153,10 @@ function temperatureFromEnv(raw: string | undefined): number {
   return Math.min(1, Math.max(0, parsed));
 }
 
-function modelOverrideForProvider(providerId: ConcreteLiteProviderId, env: NodeJS.ProcessEnv): string | null {
+function modelOverrideForProvider(
+  providerId: ConcreteLiteProviderId,
+  env: NodeJS.ProcessEnv,
+): string | null {
   if (providerId === 'deepseek') {
     return env['BABEL_LITE_DEEPSEEK_MODEL']?.trim() || null;
   }
@@ -173,10 +186,14 @@ function loadProviderConfig(
     ...(definition.primaryEnvKeyName ? [definition.primaryEnvKeyName] : []),
     ...definition.fallbackEnvKeyNames,
   ];
-  const activeEnvKeyName = envKeyNames.find(envKeyName => Boolean(env[envKeyName]?.trim())) ?? null;
+  const activeEnvKeyName =
+    envKeyNames.find((envKeyName) => Boolean(env[envKeyName]?.trim())) ?? null;
   const rawKey = activeEnvKeyName ? env[activeEnvKeyName]?.trim() : undefined;
   const modelOverride = modelOverrideForProvider(providerId, env);
-  const defaultModel = assertLiteProviderModel(providerId, modelOverride ?? definition.defaultModel);
+  const defaultModel = assertLiteProviderModel(
+    providerId,
+    modelOverride ?? definition.defaultModel,
+  );
 
   return {
     ...definition,
@@ -188,24 +205,31 @@ function loadProviderConfig(
   };
 }
 
-export function loadLiteRuntimeConfig(
-  env: NodeJS.ProcessEnv = process.env,
-): LiteRuntimeConfig {
+export function loadLiteRuntimeConfig(env: NodeJS.ProcessEnv = process.env): LiteRuntimeConfig {
   return {
-    maxPromptTokens: positiveIntFromEnv(env['BABEL_LITE_MAX_PROMPT_TOKENS'], DEFAULT_MAX_PROMPT_TOKENS),
-    maxResponseTokens: positiveIntFromEnv(env['BABEL_LITE_MAX_RESPONSE_TOKENS'], DEFAULT_MAX_RESPONSE_TOKENS),
+    maxPromptTokens: positiveIntFromEnv(
+      env['BABEL_LITE_MAX_PROMPT_TOKENS'],
+      DEFAULT_MAX_PROMPT_TOKENS,
+    ),
+    maxResponseTokens: positiveIntFromEnv(
+      env['BABEL_LITE_MAX_RESPONSE_TOKENS'],
+      DEFAULT_MAX_RESPONSE_TOKENS,
+    ),
     temperature: temperatureFromEnv(env['BABEL_LITE_TEMPERATURE']),
     timeoutMs: positiveIntFromEnv(env['BABEL_LITE_TIMEOUT_MS'], DEFAULT_TIMEOUT_MS),
     providers: {
       deepseek: loadProviderConfig('deepseek', env),
       deepinfra: loadProviderConfig('deepinfra', env),
+      ollama: loadProviderConfig('ollama', env),
       mock: loadProviderConfig('mock', env),
     },
   };
 }
 
 export function normalizeLiteProviderId(value: string | undefined): LiteProviderId {
-  const normalized = String(value ?? 'auto').trim().toLowerCase();
+  const normalized = String(value ?? 'auto')
+    .trim()
+    .toLowerCase();
   if ((LITE_PROVIDER_IDS as readonly string[]).includes(normalized)) {
     return normalized as LiteProviderId;
   }
@@ -237,7 +261,14 @@ export function selectLiteProviderConfig(
     return provider;
   }
 
-  for (const providerId of ['deepseek', 'deepinfra'] as const) {
+  // Offline mode: prefer local Ollama, then fall through to cloud
+  const isOffline =
+    process.env['BABEL_OFFLINE'] === '1' || process.env['BABEL_OFFLINE'] === 'true';
+  const cloudOrder = isOffline
+    ? (['ollama', 'deepseek', 'deepinfra'] as const)
+    : (['deepseek', 'deepinfra'] as const);
+
+  for (const providerId of cloudOrder) {
     const provider = config.providers[providerId];
     if (provider.configured) {
       return provider;
@@ -252,7 +283,7 @@ export function selectLiteProviderConfig(
 }
 
 export function getLiteProviderStatuses(config: LiteRuntimeConfig): LiteProviderStatus[] {
-  return (['deepseek', 'deepinfra', 'mock'] as const).map((providerId) => {
+  return (['deepseek', 'deepinfra', 'ollama', 'mock'] as const).map((providerId) => {
     const provider = config.providers[providerId];
     return {
       id: provider.id,

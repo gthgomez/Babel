@@ -21,8 +21,8 @@ test('exact invariant extraction preserves exact strings', () => {
   );
 
   assert.equal(
-    registry.invariants.some(invariant =>
-      invariant.kind === 'literal_string' && invariant.value === 'verified live ok',
+    registry.invariants.some(
+      (invariant) => invariant.kind === 'literal_string' && invariant.value === 'verified live ok',
     ),
     true,
   );
@@ -136,7 +136,10 @@ test('file-literal constraints reject paraphrase and pass exact entire-file cont
 
     const failed = verifyExactInvariants({ registry, projectRoot: root });
     assert.equal(failed.passed, false);
-    assert.match(summarizeExactInvariantFailure(failed) ?? '', /entire content does not exactly equal/);
+    assert.match(
+      summarizeExactInvariantFailure(failed) ?? '',
+      /entire content does not exactly equal/,
+    );
 
     writeFileSync(join(root, 'exact-status.txt'), 'autonomous exact ok', 'utf-8');
     const passed = verifyExactInvariants({ registry, projectRoot: root });

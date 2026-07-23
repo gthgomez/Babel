@@ -32,8 +32,8 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, join, resolve }                 from 'node:path';
-import { fileURLToPath }                          from 'node:url';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -41,42 +41,42 @@ import { fileURLToPath }                          from 'node:url';
 export type RoutingStage = 'orchestrator' | 'planning' | 'qa' | 'executor';
 
 interface WaterfallTelemetryEntry {
-  stage:          string;
+  stage: string;
   tier_succeeded: string;
-  tier_index:     number;
-  attempts:       number;
-  tiers_skipped:  string[];
+  tier_index: number;
+  attempts: number;
+  tiers_skipped: string[];
   cascade_reason: string;
-  ts:             string;
+  ts: string;
 }
 
 /** Per-tier scoring breakdown. */
 export interface TierScore {
-  name:                 string;
-  originalIndex:        number;
+  name: string;
+  originalIndex: number;
   /** Total events where this tier was involved (wins + skipped failures). */
-  observed:             number;
-  wins:                 number;
-  skippedFailures:      number;
-  winRate:              number;
-  avgAttempts:          number;
+  observed: number;
+  wins: number;
+  skippedFailures: number;
+  winRate: number;
+  avgAttempts: number;
   avgFallbacksBeforeWin: number;
-  score:                number;
+  score: number;
 }
 
 /** Full routing decision returned to execute.ts. */
 export interface RoutingDecision {
-  stage:                RoutingStage;
-  selectedIndex:        number;
-  selectedName:         string;
+  stage: RoutingStage;
+  selectedIndex: number;
+  selectedName: string;
   telemetryRunsScanned: number;
-  scoredTiers:          TierScore[];
-  reason:               string;
+  scoredTiers: TierScore[];
+  reason: string;
 }
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
-const __filename      = fileURLToPath(import.meta.url);
+const __filename = fileURLToPath(import.meta.url);
 const __dirname_local = dirname(__filename);
 
 // Base path formula: dist/routingEngine.js → up two levels → Babel/ → + runs
@@ -88,8 +88,11 @@ function getDefaultRunsDir(): string {
   return process.env['BABEL_RUNS_DIR'] ?? join(BABEL_ROOT_PATH, 'runs');
 }
 
-const MAX_RUNS    = Math.max(1, Number(process.env['BABEL_DYNAMIC_ROUTING_MAX_RUNS']    ?? '50') || 50);
-const MIN_SAMPLES = Math.max(1, Number(process.env['BABEL_DYNAMIC_ROUTING_MIN_SAMPLES'] ?? '3')  || 3);
+const MAX_RUNS = Math.max(1, Number(process.env['BABEL_DYNAMIC_ROUTING_MAX_RUNS'] ?? '50') || 50);
+const MIN_SAMPLES = Math.max(
+  1,
+  Number(process.env['BABEL_DYNAMIC_ROUTING_MIN_SAMPLES'] ?? '3') || 3,
+);
 
 // ─── Telemetry cache ──────────────────────────────────────────────────────────
 
@@ -104,14 +107,14 @@ export function clearRoutingCache(): void {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function safeMean(values: number[], fallback: number): number {
-  return values.length === 0
-    ? fallback
-    : values.reduce((acc, v) => acc + v, 0) / values.length;
+  return values.length === 0 ? fallback : values.reduce((acc, v) => acc + v, 0) / values.length;
 }
 
 function isDynamicRoutingEnabled(explicit: boolean | undefined): boolean {
   if (explicit !== undefined) return explicit;
-  return process.env['BABEL_DYNAMIC_ROUTING'] === 'true';
+  // Opt-out via BABEL_DYNAMIC_ROUTING=false; enabled by default when telemetry exists.
+  if (process.env['BABEL_DYNAMIC_ROUTING'] === 'false') return false;
+  return true;
 }
 
 // ─── Telemetry loading ────────────────────────────────────────────────────────
@@ -119,15 +122,15 @@ function isDynamicRoutingEnabled(explicit: boolean | undefined): boolean {
 function listRecentRunDirs(runsDir: string): string[] {
   if (!existsSync(runsDir)) return [];
   return readdirSync(runsDir, { withFileTypes: true })
-    .filter(e => e.isDirectory())
-    .map(e => e.name)
-    .sort((a, b) => b.localeCompare(a))   // lexicographic descending → newest first
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort((a, b) => b.localeCompare(a)) // lexicographic descending → newest first
     .slice(0, MAX_RUNS)
-    .map(name => join(runsDir, name));
+    .map((name) => join(runsDir, name));
 }
 
 function loadStageTelemetry(
-  stage:   RoutingStage,
+  stage: RoutingStage,
   runsDir: string,
 ): { entries: WaterfallTelemetryEntry[]; runsScanned: number } {
   const cacheKey = `${stage}:${runsDir}`;
@@ -169,30 +172,36 @@ function loadStageTelemetry(
 // ─── Scoring ──────────────────────────────────────────────────────────────────
 
 function scoreTier(
-  name:          string,
+  name: string,
   originalIndex: number,
-  stageEntries:  WaterfallTelemetryEntry[],
-  tierCount:     number,
+  stageEntries: WaterfallTelemetryEntry[],
+  tierCount: number,
 ): TierScore {
-  const wins            = stageEntries.filter(e => e.tier_succeeded === name);
-  const skippedFailures = stageEntries.filter(e => e.tiers_skipped.includes(name));
+  const wins = stageEntries.filter((e) => e.tier_succeeded === name);
+  const skippedFailures = stageEntries.filter((e) => e.tiers_skipped.includes(name));
 
   const observed = wins.length + skippedFailures.length;
-  const winRate  = observed > 0 ? wins.length / observed : 0;
+  const winRate = observed > 0 ? wins.length / observed : 0;
 
-  const avgAttempts           = safeMean(wins.map(e => e.attempts), 2);
-  const avgFallbacksBeforeWin = safeMean(wins.map(e => e.tiers_skipped.length), 0);
+  const avgAttempts = safeMean(
+    wins.map((e) => e.attempts),
+    2,
+  );
+  const avgFallbacksBeforeWin = safeMean(
+    wins.map((e) => e.tiers_skipped.length),
+    0,
+  );
 
   // priorBias: higher index = newer in original order = lower bias.
   // Ensures original ordering survives when telemetry data is thin.
-  const priorBias   = (tierCount - originalIndex) * 4;
+  const priorBias = (tierCount - originalIndex) * 4;
   const sampleBonus = Math.min(observed, 10);
 
   const score =
     (observed > 0 ? winRate * 100 : 35) +
     priorBias +
     sampleBonus -
-    avgAttempts          * 10 -
+    avgAttempts * 10 -
     avgFallbacksBeforeWin * 5 -
     skippedFailures.length * 4;
 
@@ -200,8 +209,8 @@ function scoreTier(
     name,
     originalIndex,
     observed,
-    wins:                 wins.length,
-    skippedFailures:      skippedFailures.length,
+    wins: wins.length,
+    skippedFailures: skippedFailures.length,
     winRate,
     avgAttempts,
     avgFallbacksBeforeWin,
@@ -223,7 +232,7 @@ function scoreTier(
  * (see `reorderWaterfallByStartIndex`).
  */
 export function selectBestTierForStage(
-  stage:          RoutingStage,
+  stage: RoutingStage,
   waterfallNames: string[],
   options?: { enabled?: boolean; runsDir?: string },
 ): RoutingDecision | null {
@@ -243,12 +252,11 @@ export function selectBestTierForStage(
 
   return {
     stage,
-    selectedIndex:        winner.originalIndex,
-    selectedName:         winner.name,
+    selectedIndex: winner.originalIndex,
+    selectedName: winner.name,
     telemetryRunsScanned: runsScanned,
     scoredTiers,
-    reason:
-      `Dynamic Routing v1 — scored ${entries.length} entries across ${runsScanned} runs.`,
+    reason: `Dynamic Routing v1 — scored ${entries.length} entries across ${runsScanned} runs.`,
   };
 }
 

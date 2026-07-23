@@ -67,7 +67,8 @@ export interface ToolCapabilitySnapshot {
 const TOOL_CAPABILITIES: readonly ToolCapability[] = [
   {
     id: 'run.pytest_test_outputs',
-    intent: 'Run a pytest-style benchmark test_outputs.py file through pytest instead of plain Python.',
+    intent:
+      'Run a pytest-style benchmark test_outputs.py file through pytest instead of plain Python.',
     profiles: ['benchmark_container'],
     risk: 'verification',
     blockedCommandBases: ['python', 'python3', 'py'],
@@ -75,7 +76,8 @@ const TOOL_CAPABILITIES: readonly ToolCapability[] = [
       {
         commandTemplate: 'python -m pytest -q {target}',
         requires: ['python', 'pytest'],
-        description: 'Execute pytest-style test functions that plain `python test_outputs.py` would not run.',
+        description:
+          'Execute pytest-style test functions that plain `python test_outputs.py` would not run.',
       },
     ],
   },
@@ -135,7 +137,7 @@ function snapshotCapability(capability: ToolCapability): ToolCapabilitySnapshot 
     profiles: [...capability.profiles],
     risk: capability.risk,
     blockedCommandBases: [...capability.blockedCommandBases],
-    implementations: capability.implementations.map(implementation => ({
+    implementations: capability.implementations.map((implementation) => ({
       commandTemplate: implementation.commandTemplate,
       requires: [...implementation.requires],
       description: implementation.description,
@@ -146,11 +148,9 @@ function snapshotCapability(capability: ToolCapability): ToolCapabilitySnapshot 
 export function getToolCapabilityRegistrySnapshot(
   executionProfileName?: ExecutionProfileName,
 ): ToolCapabilitySnapshot[] {
-  return TOOL_CAPABILITIES
-    .filter(capability =>
-      executionProfileName ? capability.profiles.includes(executionProfileName) : true,
-    )
-    .map(snapshotCapability);
+  return TOOL_CAPABILITIES.filter((capability) =>
+    executionProfileName ? capability.profiles.includes(executionProfileName) : true,
+  ).map(snapshotCapability);
 }
 
 function getCommandBase(rawCommand: string): string | null {
@@ -158,7 +158,9 @@ function getCommandBase(rawCommand: string): string | null {
   if (!rawBase) {
     return null;
   }
-  return basename(rawBase.replace(/\\/g, '/')).replace(/\.(cmd|exe|bat)$/i, '').toLowerCase();
+  return basename(rawBase.replace(/\\/g, '/'))
+    .replace(/\.(cmd|exe|bat)$/i, '')
+    .toLowerCase();
 }
 
 function getFirstCommandArgument(rawCommand: string): string | null {
@@ -167,10 +169,12 @@ function getFirstCommandArgument(rawCommand: string): string | null {
 }
 
 function taskOrCommandMentionsGitBundle(rawTask: string, rawCommand: string): boolean {
-  return /\bmerge-diff-arc-agi-task\b/i.test(rawTask) ||
+  return (
+    /\bmerge-diff-arc-agi-task\b/i.test(rawTask) ||
     /\bgit\s+bundle\b/i.test(rawTask) ||
     /\.bundle\b/i.test(rawTask) ||
-    /\.bundle\b/i.test(rawCommand);
+    /\.bundle\b/i.test(rawCommand)
+  );
 }
 
 function getPytestStyleTestOutputsTarget(
@@ -198,8 +202,10 @@ function getPytestStyleTestOutputsTarget(
   }
 
   const target = candidates
-    .map(candidate => candidate.replace(/^["']|["']$/g, ''))
-    .find(candidate => basename(candidate.replace(/\\/g, '/')).toLowerCase() === 'test_outputs.py');
+    .map((candidate) => candidate.replace(/^["']|["']$/g, ''))
+    .find(
+      (candidate) => basename(candidate.replace(/\\/g, '/')).toLowerCase() === 'test_outputs.py',
+    );
   return target ?? null;
 }
 
@@ -220,9 +226,10 @@ function matchCapability(
       continue;
     }
 
-    const pytestTarget = capability.id === 'run.pytest_test_outputs'
-      ? getPytestStyleTestOutputsTarget(context.rawTask, rawCommand, commandBase)
-      : null;
+    const pytestTarget =
+      capability.id === 'run.pytest_test_outputs'
+        ? getPytestStyleTestOutputsTarget(context.rawTask, rawCommand, commandBase)
+        : null;
     if (pytestTarget) {
       return {
         capability,
@@ -260,7 +267,7 @@ function getInventoryEntry(
   if (!inventory || inventory.status !== 'available') {
     return null;
   }
-  return inventory.commands.find(entry => entry.command === commandBase) ?? null;
+  return inventory.commands.find((entry) => entry.command === commandBase) ?? null;
 }
 
 function requirementIsUsable(
@@ -283,7 +290,9 @@ function missingRequirementsForImplementation(
   implementation: ToolCapabilityImplementation,
   context: ToolCapabilityResolutionContext,
 ): string[] {
-  return implementation.requires.filter(requirement => !requirementIsUsable(requirement, context));
+  return implementation.requires.filter(
+    (requirement) => !requirementIsUsable(requirement, context),
+  );
 }
 
 function applyCommandTemplate(template: string, target: string): string {
@@ -293,7 +302,7 @@ function applyCommandTemplate(template: string, target: string): string {
 export function buildToolCapabilityPromptLines(
   executionProfileName: ExecutionProfileName,
 ): string[] {
-  const profileCapabilities = TOOL_CAPABILITIES.filter(capability =>
+  const profileCapabilities = TOOL_CAPABILITIES.filter((capability) =>
     capability.profiles.includes(executionProfileName),
   );
   if (profileCapabilities.length === 0) {
@@ -305,9 +314,9 @@ export function buildToolCapabilityPromptLines(
     '  - Plan in terms of capabilities first, raw commands second.',
     '  - If a generic inspection command is blocked, use the capability-specific replacement below instead of retrying alternate generic probes.',
     '  - If every implementation for a required capability is missing from the runtime inventory, halt or replan around the true missing capability. Do not copy unavailable replacement commands, install missing packages, or retry equivalent syntax. Do not substitute a different file format or unrelated command.',
-    ...profileCapabilities.map(capability => {
+    ...profileCapabilities.map((capability) => {
       const implementations = capability.implementations
-        .map(implementation => implementation.commandTemplate)
+        .map((implementation) => implementation.commandTemplate)
         .join(' OR ');
       return `  - ${capability.id}: ${capability.intent} Preferred command(s): ${implementations}.`;
     }),
@@ -333,8 +342,9 @@ export function resolveToolCapabilityForCommand(
   }
 
   const { capability, target } = matched;
-  const suggestions = capability.implementations.map(implementation =>
-    `${applyCommandTemplate(implementation.commandTemplate, target)} - ${implementation.description}`,
+  const suggestions = capability.implementations.map(
+    (implementation) =>
+      `${applyCommandTemplate(implementation.commandTemplate, target)} - ${implementation.description}`,
   );
 
   for (const implementation of capability.implementations) {
@@ -357,14 +367,17 @@ export function resolveToolCapabilityForCommand(
   }
 
   const missingRequirements = [
-    ...new Set(capability.implementations.flatMap(implementation =>
-      missingRequirementsForImplementation(implementation, context),
-    )),
+    ...new Set(
+      capability.implementations.flatMap((implementation) =>
+        missingRequirementsForImplementation(implementation, context),
+      ),
+    ),
   ];
   return {
-    status: missingRequirements.length > 0
-      ? 'blocked_missing_requirement'
-      : 'blocked_no_allowed_implementation',
+    status:
+      missingRequirements.length > 0
+        ? 'blocked_missing_requirement'
+        : 'blocked_no_allowed_implementation',
     capabilityId: capability.id,
     capabilityIntent: capability.intent,
     originalCommand: rawCommand,
@@ -385,12 +398,14 @@ export function formatToolCapabilityResolutionForFeedback(
     return '';
   }
 
-  const suggestions = resolution.status === 'suggest_replacement' && resolution.suggestions.length > 0
-    ? ` Suggestions: ${resolution.suggestions.join(' | ')}`
-    : '';
-  const missing = resolution.missingRequirements.length > 0
-    ? ` Missing requirements: ${resolution.missingRequirements.join(', ')}.`
-    : '';
+  const suggestions =
+    resolution.status === 'suggest_replacement' && resolution.suggestions.length > 0
+      ? ` Suggestions: ${resolution.suggestions.join(' | ')}`
+      : '';
+  const missing =
+    resolution.missingRequirements.length > 0
+      ? ` Missing requirements: ${resolution.missingRequirements.join(', ')}.`
+      : '';
   const blockedGuidance =
     resolution.status === 'blocked_missing_requirement' ||
     resolution.status === 'blocked_no_allowed_implementation'

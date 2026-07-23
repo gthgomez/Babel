@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "fixture_type": "babel_parity_corpus",
+  "visibility": "private",
+  "description": "Repeatable Babel parity corpus fixtures for Phase 12 tasks 1-8.",
+  "tasks": [
+    "small_bug_fix",
+    "failing_test_repair",
+    "multi_file_refactor",
+    "docs_grounded_dependency_update",
+    "issue_pr_context_implementation",
+    "ui_browser_inspection",
+    "checkpoint_restore_recovery",
+    "read_only_subagent_review"
+  ]
+}

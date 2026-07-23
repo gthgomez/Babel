@@ -31,17 +31,20 @@ test('parseFramedMessages leaves partial frames in the remainder', () => {
 });
 
 test('buildMcpToolCallParams prefers query-like schema fields', () => {
-  const params = buildMcpToolCallParams([
-    {
-      name: 'search',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          query: { type: 'string' },
+  const params = buildMcpToolCallParams(
+    [
+      {
+        name: 'search',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string' },
+          },
         },
       },
-    },
-  ], 'find this');
+    ],
+    'find this',
+  );
 
   assert.deepEqual(params, {
     name: 'search',
@@ -59,26 +62,33 @@ test('buildMcpToolCallParams defaults to text argument when schema is opaque', (
 });
 
 test('buildMcpToolSearchPayload filters tools and bounds schemas', () => {
-  const payload = buildMcpToolSearchPayload([
-    {
-      name: 'issue_search',
-      description: 'Search issues',
-      inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
-    },
-    {
-      name: 'pull_request_get',
-      description: 'Fetch PRs',
-      inputSchema: { type: 'object', properties: { id: { type: 'string' } } },
-    },
-  ], 'issue', 10, 0);
+  const payload = buildMcpToolSearchPayload(
+    [
+      {
+        name: 'issue_search',
+        description: 'Search issues',
+        inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
+      },
+      {
+        name: 'pull_request_get',
+        description: 'Fetch PRs',
+        inputSchema: { type: 'object', properties: { id: { type: 'string' } } },
+      },
+    ],
+    'issue',
+    10,
+    0,
+  );
 
   const contentPolicy = payload.content_policy as Record<string, unknown>;
   assert.equal(contentPolicy.untrusted_external_content, true);
   assert.match(String(contentPolicy.prompt_injection_label), /UNTRUSTED_MCP_CONTENT/);
   assert.equal(payload.total_matched, 1);
-  assert.deepEqual(payload.tools, [{
-    name: 'issue_search',
-    description: 'Search issues',
-    inputSchema_omitted: true,
-  }]);
+  assert.deepEqual(payload.tools, [
+    {
+      name: 'issue_search',
+      description: 'Search issues',
+      inputSchema_omitted: true,
+    },
+  ]);
 });

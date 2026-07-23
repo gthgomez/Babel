@@ -1,12 +1,27 @@
 import { spawnSync } from 'node:child_process';
-import { type Dirent, existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
+import {
+  type Dirent,
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 
 import { loadEnterprisePolicy } from './config/enterprisePolicy.js';
+import {
+  isStaleLatestPointer,
+  listLatestPointerFiles,
+  repairStaleLatestPointers,
+  type LatestPointerRepairReport,
+} from './evidence/runEvidence.js';
 
 export type DoctorStatus = 'pass' | 'warn' | 'fail' | 'skip';
 export type DoctorOverallStatus = 'pass' | 'warn' | 'fail';
-export type DoctorScope = 'all' | 'canonical' | 'release' | 'env' | 'workspace' | 'repos' | 'export' | 'enterprise';
+export type DoctorScope = 'all' | 'env' | 'workspace' | 'repos' | 'export' | 'enterprise';
 export type DoctorMode = 'standard' | 'strict' | 'strict-enterprise';
 export type DoctorDiagnosticCode =
   | 'ENV_SHELL_UNAVAILABLE'
@@ -50,6 +65,7 @@ export interface DoctorOptions {
   strictEnterprise?: boolean;
   verbose: boolean;
   scope: DoctorScope;
+  repairPointers?: boolean;
   env?: NodeJS.ProcessEnv;
   shellProbe?: ShellProbeRunner;
   powerShellProbe?: ShellProbeRunner;
@@ -99,31 +115,31 @@ const REQUIRED_REPO_KEYS = [
   'babel_private',
   'babel_public',
   'example_saas_backend',
-  'example_llm_router',
-  'example_web_audit',
-  'example_mobile_suite',
-  'example_game_workspace',
-  'example_game_suite',
-  'example_autonomous_agent',
-  'example_mobile_reference',
+  'prismatix',
+  'auditguard',
+  'project_android',
+  'project_games',
+  'godot_td',
+  'app_test_babel',
 ] as const;
 
 const CORE_REPO_CASES: RepoResolutionCase[] = [
   { key: 'example_saas_backend', project: 'example_saas_backend', taskCategory: 'frontend' },
-  { key: 'example_llm_router', project: 'example_llm_router', taskCategory: 'frontend' },
-  { key: 'example_web_audit', project: 'example_web_audit', taskCategory: 'backend' },
-  { key: 'example_mobile_suite', project: 'example_mobile_suite', taskCategory: 'mobile' },
-  { key: 'example_game_workspace', project: 'example_game_workspace', taskCategory: 'game' },
-  { key: 'example_game_suite', project: 'example_game_suite', taskCategory: 'game' },
-  { key: 'example_autonomous_agent', project: 'example_autonomous_agent', taskCategory: 'research' },
-  { key: 'example_mobile_reference', project: 'example_mobile_reference', taskCategory: 'research' },
+  { key: 'prismatix', project: 'example_llm_router', taskCategory: 'frontend' },
+  { key: 'auditguard', project: 'AuditGuard', taskCategory: 'backend' },
+  { key: 'project_android', project: 'example_mobile_suite', taskCategory: 'mobile' },
+  { key: 'project_games', project: 'example_game_suite', taskCategory: 'game' },
+  { key: 'godot_td', project: 'godot_td', taskCategory: 'game' },
+  { key: 'app_test_babel', project: 'app_test_babel', taskCategory: 'research' },
 ];
 
 const DOCUMENTED_EXTERNAL_REPO_PREREQUISITES: Record<string, ExternalRepoPrerequisite> = {
-  example_game_suite: {
-    label: 'ExampleGameProject sample game repo',
-    reason: 'Optional external game workspace used by game-routing demos, not required for Babel CLI release readiness.',
-    fixHint: 'Clone or restore example_game_workspace\\ExampleGameProject when game demo coverage is required, or keep this warning as an accepted external prerequisite.',
+  godot_td: {
+    label: 'TowerDefenseGodot sample game repo',
+    reason:
+      'Optional external game workspace used by game-routing demos, not required for Babel CLI release readiness.',
+    fixHint:
+      'Clone or restore example_game_suite\\TowerDefenseGodot when game demo coverage is required, or keep this warning as an accepted external prerequisite.',
   },
 };
 
@@ -188,9 +204,7 @@ function createCheck(
 }
 
 function shouldRunSection(scope: DoctorScope, section: string): boolean {
-  if (scope === 'all') return section === 'Runtime';
-  if (scope === 'canonical') return section === 'Runtime';
-  if (scope === 'release' || scope === 'export') return section === 'Release';
+  if (scope === 'all') return true;
   if (scope === 'env') {
     return section === 'Environment';
   }
@@ -203,14 +217,17 @@ function shouldRunSection(scope: DoctorScope, section: string): boolean {
   if (scope === 'enterprise') {
     return section === 'Enterprise Policy';
   }
-  return false;
+  return section === 'Export';
 }
 
 function summarizeChecks(checks: DoctorCheckResult[]): DoctorRunResult['summary'] {
-  return checks.reduce<DoctorRunResult['summary']>((acc, check) => {
-    acc[check.status] += 1;
-    return acc;
-  }, { pass: 0, warn: 0, fail: 0, skip: 0 });
+  return checks.reduce<DoctorRunResult['summary']>(
+    (acc, check) => {
+      acc[check.status] += 1;
+      return acc;
+    },
+    { pass: 0, warn: 0, fail: 0, skip: 0 },
+  );
 }
 
 function determineOverallStatus(checks: DoctorCheckResult[], strict: boolean): DoctorOverallStatus {
@@ -272,7 +289,8 @@ function runPowerShellScript(scriptPath: string, args: string[]): PowerShellScri
 
     if (result.error) {
       const error = result.error as NodeJS.ErrnoException;
-      blockedByEnvironment = blockedByEnvironment || error.code === 'EPERM' || error.code === 'EACCES';
+      blockedByEnvironment =
+        blockedByEnvironment || error.code === 'EPERM' || error.code === 'EACCES';
       spawnErrors.push(`${shell}: ${error.code ?? error.name}: ${error.message}`);
       continue;
     }
@@ -304,30 +322,46 @@ function runEnvironmentChecks(
 ): DoctorCheckResult[] {
   const checks: DoctorCheckResult[] = [];
   const shell = shellProbe();
-  checks.push(createCheck(
-    'Environment',
-    'env.shell.available',
-    'Environment shell can spawn commands',
-    shell.exitCode === 0 ? 'pass' : 'fail',
-    shell.exitCode === 0 ? 'Environment shell probe passed' : (shell.error ?? 'Environment shell probe failed'),
-    verbose ? [shell.stdout.trim(), shell.stderr.trim()].filter((line) => line.length > 0) : undefined,
-    shell.exitCode === 0 ? undefined : 'Check shell availability and process-spawn restrictions before diagnosing repo failures.',
-    shell.exitCode === 0 ? undefined : (shell.diagnostic_code ?? 'ENV_SHELL_UNAVAILABLE'),
-  ));
+  checks.push(
+    createCheck(
+      'Environment',
+      'env.shell.available',
+      'Environment shell can spawn commands',
+      shell.exitCode === 0 ? 'pass' : 'fail',
+      shell.exitCode === 0
+        ? 'Environment shell probe passed'
+        : (shell.error ?? 'Environment shell probe failed'),
+      verbose
+        ? [shell.stdout.trim(), shell.stderr.trim()].filter((line) => line.length > 0)
+        : undefined,
+      shell.exitCode === 0
+        ? undefined
+        : 'Check shell availability and process-spawn restrictions before diagnosing repo failures.',
+      shell.exitCode === 0 ? undefined : (shell.diagnostic_code ?? 'ENV_SHELL_UNAVAILABLE'),
+    ),
+  );
 
   const powerShell = powerShellProbe();
-  checks.push(createCheck(
-    'Environment',
-    'env.powershell.available',
-    'PowerShell runtime available',
-    powerShell.exitCode === 0 ? 'pass' : 'fail',
-    powerShell.exitCode === 0
-      ? `PowerShell probe passed${powerShell.stdout.trim() ? ` (${powerShell.stdout.trim()})` : ''}`
-      : (powerShell.error ?? 'PowerShell probe failed'),
-    verbose ? [powerShell.stdout.trim(), powerShell.stderr.trim()].filter((line) => line.length > 0) : undefined,
-    powerShell.exitCode === 0 ? undefined : 'Install PowerShell 7+ (`pwsh`) or Windows PowerShell, then rerun doctor.',
-    powerShell.exitCode === 0 ? undefined : (powerShell.diagnostic_code ?? 'POWERSHELL_UNAVAILABLE'),
-  ));
+  checks.push(
+    createCheck(
+      'Environment',
+      'env.powershell.available',
+      'PowerShell runtime available',
+      powerShell.exitCode === 0 ? 'pass' : 'fail',
+      powerShell.exitCode === 0
+        ? `PowerShell probe passed${powerShell.stdout.trim() ? ` (${powerShell.stdout.trim()})` : ''}`
+        : (powerShell.error ?? 'PowerShell probe failed'),
+      verbose
+        ? [powerShell.stdout.trim(), powerShell.stderr.trim()].filter((line) => line.length > 0)
+        : undefined,
+      powerShell.exitCode === 0
+        ? undefined
+        : 'Install PowerShell 7+ (`pwsh`) or Windows PowerShell, then rerun doctor.',
+      powerShell.exitCode === 0
+        ? undefined
+        : (powerShell.diagnostic_code ?? 'POWERSHELL_UNAVAILABLE'),
+    ),
+  );
 
   const providerKeys = [
     ['DEEPINFRA_API_KEY', env['DEEPINFRA_API_KEY']],
@@ -335,30 +369,40 @@ function runEnvironmentChecks(
     ['GROQ_API_KEY', env['GROQ_API_KEY']],
     ['OPENAI_API_KEY', env['OPENAI_API_KEY']],
   ] as const;
-  const presentProviders = providerKeys.filter(([, value]) => typeof value === 'string' && value.trim().length > 0);
-  checks.push(createCheck(
-    'Environment',
-    'env.provider.any_key_present',
-    'Provider environment key present',
-    presentProviders.length > 0 ? 'pass' : 'warn',
-    presentProviders.length > 0
-      ? `Provider env key(s) present: ${presentProviders.map(([key]) => key).join(', ')}`
-      : 'No provider API key detected; live provider-backed governance tests will be unavailable.',
-    verbose ? providerKeys.map(([key, value]) => `${key}=${typeof value === 'string' && value.trim().length > 0 ? '<set>' : '<missing>'}`) : undefined,
-    presentProviders.length > 0 ? undefined : 'Set a provider API key or use recorded-provider replay fixtures for governance proof.',
-    presentProviders.length > 0 ? undefined : 'PROVIDER_ENV_MISSING',
-  ));
+  const presentProviders = providerKeys.filter(
+    ([, value]) => typeof value === 'string' && value.trim().length > 0,
+  );
+  checks.push(
+    createCheck(
+      'Environment',
+      'env.provider.any_key_present',
+      'Provider environment key present',
+      presentProviders.length > 0 ? 'pass' : 'warn',
+      presentProviders.length > 0
+        ? `Provider env key(s) present: ${presentProviders.map(([key]) => key).join(', ')}`
+        : 'No provider API key detected; live provider-backed governance tests will be unavailable.',
+      verbose
+        ? providerKeys.map(
+            ([key, value]) =>
+              `${key}=${typeof value === 'string' && value.trim().length > 0 ? '<set>' : '<missing>'}`,
+          )
+        : undefined,
+      presentProviders.length > 0
+        ? undefined
+        : 'Set a provider API key or use recorded-provider replay fixtures for governance proof.',
+      presentProviders.length > 0 ? undefined : 'PROVIDER_ENV_MISSING',
+    ),
+  );
 
   return checks;
 }
 
 function probeEnvironmentShell(): ShellProbeResult {
-  const command = process.platform === 'win32'
-    ? (process.env['ComSpec'] ?? 'cmd.exe')
-    : '/bin/sh';
-  const args = process.platform === 'win32'
-    ? ['/d', '/s', '/c', 'echo babel-doctor-shell-ok']
-    : ['-c', 'echo babel-doctor-shell-ok'];
+  const command = process.platform === 'win32' ? (process.env['ComSpec'] ?? 'cmd.exe') : '/bin/sh';
+  const args =
+    process.platform === 'win32'
+      ? ['/d', '/s', '/c', 'echo babel-doctor-shell-ok']
+      : ['-c', 'echo babel-doctor-shell-ok'];
   const result = spawnSync(command, args, {
     encoding: 'utf8',
     timeout: 15_000,
@@ -377,10 +421,12 @@ function probeEnvironmentShell(): ShellProbeResult {
     exitCode: result.status ?? 1,
     stdout: result.stdout ?? '',
     stderr: result.stderr ?? '',
-    ...(result.status === 0 ? {} : {
-      error: `Shell exited with code ${result.status ?? 1}`,
-      diagnostic_code: 'ENV_SHELL_UNAVAILABLE' as const,
-    }),
+    ...(result.status === 0
+      ? {}
+      : {
+          error: `Shell exited with code ${result.status ?? 1}`,
+          diagnostic_code: 'ENV_SHELL_UNAVAILABLE' as const,
+        }),
   };
 }
 
@@ -391,12 +437,19 @@ function probePowerShellRuntime(): ShellProbeResult {
   for (const shell of getPreferredPowerShellShells()) {
     const result = spawnSync(
       shell,
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '$PSVersionTable.PSVersion.ToString()'],
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        '$PSVersionTable.PSVersion.ToString()',
+      ],
       { encoding: 'utf8', timeout: 15_000 },
     );
     if (result.error) {
       const error = result.error as NodeJS.ErrnoException;
-      blockedByEnvironment = blockedByEnvironment || error.code === 'EPERM' || error.code === 'EACCES';
+      blockedByEnvironment =
+        blockedByEnvironment || error.code === 'EPERM' || error.code === 'EACCES';
       errors.push(`${shell}: ${error.code ?? error.name}: ${error.message}`);
       continue;
     }
@@ -413,51 +466,71 @@ function probePowerShellRuntime(): ShellProbeResult {
 
   const diagnosticCode: DoctorDiagnosticCode = blockedByEnvironment
     ? 'ENV_SHELL_UNAVAILABLE'
-    : incompatible ? 'POWERSHELL_INCOMPATIBLE' : 'POWERSHELL_UNAVAILABLE';
+    : incompatible
+      ? 'POWERSHELL_INCOMPATIBLE'
+      : 'POWERSHELL_UNAVAILABLE';
   return {
     exitCode: 1,
     stdout: '',
     stderr: errors.join('\n'),
-    error: diagnosticCode === 'ENV_SHELL_UNAVAILABLE'
-      ? 'Environment blocked PowerShell process creation.'
-      : diagnosticCode === 'POWERSHELL_INCOMPATIBLE'
-        ? 'PowerShell was found but did not run a compatibility probe successfully.'
-        : 'No compatible PowerShell runtime found.',
+    error:
+      diagnosticCode === 'ENV_SHELL_UNAVAILABLE'
+        ? 'Environment blocked PowerShell process creation.'
+        : diagnosticCode === 'POWERSHELL_INCOMPATIBLE'
+          ? 'PowerShell was found but did not run a compatibility probe successfully.'
+          : 'No compatible PowerShell runtime found.',
     diagnostic_code: diagnosticCode,
   };
 }
 
-function runWorkspaceChecks(babelRoot: string, workspaceRoot: string, repoMapPath: string, verbose: boolean): DoctorCheckResult[] {
+function runWorkspaceChecks(
+  babelRoot: string,
+  workspaceRoot: string,
+  repoMapPath: string,
+  verbose: boolean,
+): DoctorCheckResult[] {
   const checks: DoctorCheckResult[] = [];
   const workspaceFile = join(workspaceRoot, 'Workspace.code-workspace');
   const catalogPath = join(babelRoot, 'prompt_catalog.yaml');
-  const babelPublicPath = [
-    join(workspaceRoot, 'Project_Public', 'Babel-public'),
-    join(workspaceRoot, 'Babel-public'),
-  ].find((candidate) => existsSync(candidate)) ?? join(workspaceRoot, 'Project_Public', 'Babel-public');
+  const babelPublicPath =
+    [
+      join(workspaceRoot, 'Project_Public', 'Babel-public'),
+      join(workspaceRoot, 'Babel-public'),
+    ].find((candidate) => existsSync(candidate)) ??
+    join(workspaceRoot, 'Project_Public', 'Babel-public');
 
-  checks.push(createCheck(
-    'Workspace',
-    'workspace.root.exists',
-    'Workspace root exists',
-    existsSync(workspaceRoot) ? 'pass' : 'fail',
-    existsSync(workspaceRoot) ? `Workspace root exists at ${workspaceRoot}` : `Workspace root missing: ${workspaceRoot}`,
-    verbose ? [workspaceRoot] : undefined,
-  ));
+  checks.push(
+    createCheck(
+      'Workspace',
+      'workspace.root.exists',
+      'Workspace root exists',
+      existsSync(workspaceRoot) ? 'pass' : 'fail',
+      existsSync(workspaceRoot)
+        ? `Workspace root exists at ${workspaceRoot}`
+        : `Workspace root missing: ${workspaceRoot}`,
+      verbose ? [workspaceRoot] : undefined,
+    ),
+  );
 
   for (const [id, title, path] of [
-    ['workspace.babel_private.exists', 'private source repo exists', join(workspaceRoot, 'private source repo')],
+    [
+      'workspace.babel_private.exists',
+      'Babel exists',
+      join(workspaceRoot, 'Babel'),
+    ],
     ['workspace.babel_public.exists', 'Babel-public exists', babelPublicPath],
     ['workspace.repo_map.exists', 'Repo map exists', repoMapPath],
   ] as const) {
-    checks.push(createCheck(
-      'Workspace',
-      id,
-      title,
-      existsSync(path) ? 'pass' : 'fail',
-      existsSync(path) ? title : `Missing required path: ${path}`,
-      verbose ? [path] : undefined,
-    ));
+    checks.push(
+      createCheck(
+        'Workspace',
+        id,
+        title,
+        existsSync(path) ? 'pass' : 'fail',
+        existsSync(path) ? title : `Missing required path: ${path}`,
+        verbose ? [path] : undefined,
+      ),
+    );
   }
 
   let catalogMessage = 'prompt_catalog.yaml has required version and entries keys';
@@ -479,77 +552,102 @@ function runWorkspaceChecks(babelRoot: string, workspaceRoot: string, repoMapPat
     }
   }
 
-  checks.push(createCheck(
-    'Workspace',
-    'catalog.prompt_catalog.valid',
-    'Prompt catalog has minimal valid shape',
-    catalogStatus,
-    catalogMessage,
-    catalogDetails,
-    catalogStatus === 'pass' ? undefined : 'Run tools/validate-catalog.ps1 and repair prompt_catalog.yaml.',
-    catalogStatus === 'pass' ? undefined : 'CATALOG_INVALID',
-  ));
+  checks.push(
+    createCheck(
+      'Workspace',
+      'catalog.prompt_catalog.valid',
+      'Prompt catalog has minimal valid shape',
+      catalogStatus,
+      catalogMessage,
+      catalogDetails,
+      catalogStatus === 'pass'
+        ? undefined
+        : 'Run tools/validate-catalog.ps1 and repair prompt_catalog.yaml.',
+      catalogStatus === 'pass' ? undefined : 'CATALOG_INVALID',
+    ),
+  );
 
-  checks.push(createCheck(
-    'Workspace',
-    'workspace.code_workspace.exists',
-    'Workspace file presence',
-    existsSync(workspaceFile) ? 'pass' : 'warn',
-    existsSync(workspaceFile) ? 'Workspace.code-workspace found' : 'Workspace.code-workspace not found',
-    verbose ? [workspaceFile] : undefined,
-  ));
+  checks.push(
+    createCheck(
+      'Workspace',
+      'workspace.code_workspace.exists',
+      'Workspace file presence',
+      existsSync(workspaceFile) ? 'pass' : 'warn',
+      existsSync(workspaceFile)
+        ? 'Workspace.code-workspace found'
+        : 'Workspace.code-workspace not found',
+      verbose ? [workspaceFile] : undefined,
+    ),
+  );
 
   return checks;
 }
 
-function runRepoMapChecks(workspaceRoot: string, repoMapPath: string, verbose: boolean): RepoMapResult {
+function runRepoMapChecks(
+  workspaceRoot: string,
+  repoMapPath: string,
+  verbose: boolean,
+): RepoMapResult {
   const checks: DoctorCheckResult[] = [];
-  const emptyResult: RepoMapResult = { checks, repoMap: null, externalPrerequisites: new Set<string>() };
+  const emptyResult: RepoMapResult = {
+    checks,
+    repoMap: null,
+    externalPrerequisites: new Set<string>(),
+  };
 
   if (!existsSync(repoMapPath)) {
-    checks.push(createCheck(
-      'Repo Map',
-      'repo_map.parse',
-      'repo-map.json parsed successfully',
-      'fail',
-      `repo-map.json missing at ${repoMapPath}`,
-      verbose ? [repoMapPath] : undefined,
-    ));
+    checks.push(
+      createCheck(
+        'Repo Map',
+        'repo_map.parse',
+        'repo-map.json parsed successfully',
+        'warn',
+        `repo-map.json not found at ${repoMapPath} — project discovery is now dynamic (WorkspaceScanner); repo-map.json is optional`,
+        verbose ? [repoMapPath] : undefined,
+        'repo-map.json is optional since Phase 2 dynamic discovery. Projects are found by scanning workspace directories for marker files (.git, package.json, CLAUDE.md, etc.).',
+      ),
+    );
     return emptyResult;
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(repoMapPath, 'utf8'));
-    checks.push(createCheck(
-      'Repo Map',
-      'repo_map.parse',
-      'repo-map.json parsed successfully',
-      'pass',
-      'repo-map.json parsed successfully',
-      verbose ? [repoMapPath] : undefined,
-    ));
+    checks.push(
+      createCheck(
+        'Repo Map',
+        'repo_map.parse',
+        'repo-map.json parsed successfully',
+        'pass',
+        'repo-map.json parsed successfully',
+        verbose ? [repoMapPath] : undefined,
+      ),
+    );
   } catch (error: unknown) {
-    checks.push(createCheck(
-      'Repo Map',
-      'repo_map.parse',
-      'repo-map.json parsed successfully',
-      'fail',
-      `repo-map.json is malformed: ${error instanceof Error ? error.message : String(error)}`,
-      verbose ? [repoMapPath] : undefined,
-    ));
+    checks.push(
+      createCheck(
+        'Repo Map',
+        'repo_map.parse',
+        'repo-map.json parsed successfully',
+        'fail',
+        `repo-map.json is malformed: ${error instanceof Error ? error.message : String(error)}`,
+        verbose ? [repoMapPath] : undefined,
+      ),
+    );
     return emptyResult;
   }
 
   const repoMap = (parsed as { repos?: Record<string, unknown> }).repos;
   if (!repoMap || typeof repoMap !== 'object') {
-    checks.push(createCheck(
-      'Repo Map',
-      'repo_map.shape',
-      'repo-map.json has repos object',
-      'fail',
-      'repo-map.json must contain a top-level "repos" object',
-    ));
+    checks.push(
+      createCheck(
+        'Repo Map',
+        'repo_map.shape',
+        'repo-map.json has repos object',
+        'fail',
+        'repo-map.json must contain a top-level "repos" object',
+      ),
+    );
     return emptyResult;
   }
 
@@ -557,16 +655,18 @@ function runRepoMapChecks(workspaceRoot: string, repoMapPath: string, verbose: b
   const missingExternalPrerequisites = new Set<string>();
 
   const missingKeys = REQUIRED_REPO_KEYS.filter((key) => typeof repoMap[key] !== 'string');
-  checks.push(createCheck(
-    'Repo Map',
-    'repo_map.required_keys',
-    'Required keys present',
-    missingKeys.length === 0 ? 'pass' : 'fail',
-    missingKeys.length === 0
-      ? 'Required repo-map keys are present'
-      : `Missing required repo-map keys: ${missingKeys.join(', ')}`,
-    verbose && missingKeys.length > 0 ? missingKeys : undefined,
-  ));
+  checks.push(
+    createCheck(
+      'Repo Map',
+      'repo_map.required_keys',
+      'Legacy repo-map keys present',
+      missingKeys.length === 0 ? 'pass' : 'warn',
+      missingKeys.length === 0
+        ? 'Legacy repo-map keys are present'
+        : `Legacy repo-map keys not configured: ${missingKeys.join(', ')} — dynamic discovery handles these at runtime`,
+      verbose && missingKeys.length > 0 ? missingKeys : undefined,
+    ),
+  );
 
   const missingPaths: string[] = [];
   const externalMissingPaths: string[] = [];
@@ -593,95 +693,253 @@ function runRepoMapChecks(workspaceRoot: string, repoMapPath: string, verbose: b
     }
   }
 
-  checks.push(createCheck(
-    'Repo Map',
-    'repo_map.paths_exist',
-    'All mapped paths exist',
-    missingPaths.length === 0 && externalMissingPaths.length === 0
-      ? 'pass'
-      : externalMissingPaths.length > 0 && missingPaths.length === 0
-        ? 'warn'
-        : 'fail',
-    missingPaths.length === 0 && externalMissingPaths.length === 0
-      ? 'All mapped repo paths exist'
-      : missingPaths.length > 0
-        ? `Missing mapped repo paths: ${missingPaths.join('; ')}`
-        : `Missing mapped repo paths are documented as external prerequisites: ${externalMissingPaths.join('; ')}`,
-    verbose
-      ? [
-        ...missingPaths,
-        ...externalMissingPaths.map((value) => `external prerequisite: ${value}`),
-      ].filter((value) => value.length > 0)
-      : undefined,
-    externalMissingPaths.length > 0 && missingPaths.length === 0
-      ? 'These repo-map entries are documented external prerequisites; restore if you need local resolver coverage.'
-      : missingPaths.length > 0
-        ? 'Repair config/repo-map.json or restore the missing repo path.'
+  checks.push(
+    createCheck(
+      'Repo Map',
+      'repo_map.paths_exist',
+      'All mapped paths exist',
+      missingPaths.length === 0 && externalMissingPaths.length === 0
+        ? 'pass'
+        : externalMissingPaths.length > 0 && missingPaths.length === 0
+          ? 'warn'
+          : 'fail',
+      missingPaths.length === 0 && externalMissingPaths.length === 0
+        ? 'All mapped repo paths exist'
+        : missingPaths.length > 0
+          ? `Missing mapped repo paths: ${missingPaths.join('; ')}`
+          : `Missing mapped repo paths are documented as external prerequisites: ${externalMissingPaths.join('; ')}`,
+      verbose
+        ? [
+            ...missingPaths,
+            ...externalMissingPaths.map((value) => `external prerequisite: ${value}`),
+          ].filter((value) => value.length > 0)
         : undefined,
-    missingPaths.length > 0
-      ? 'REPO_MISSING'
-      : externalMissingPaths.length > 0 ? 'EXTERNAL_PREREQUISITE_MISSING' : undefined,
-  ));
+      externalMissingPaths.length > 0 && missingPaths.length === 0
+        ? 'These repo-map entries are documented external prerequisites; restore if you need local resolver coverage.'
+        : missingPaths.length > 0
+          ? 'Repair config/repo-map.json or restore the missing repo path.'
+          : undefined,
+      missingPaths.length > 0
+        ? 'REPO_MISSING'
+        : externalMissingPaths.length > 0
+          ? 'EXTERNAL_PREREQUISITE_MISSING'
+          : undefined,
+    ),
+  );
 
   const knownExternalPrerequisites = new Set([
     ...configuredExternalPrerequisites,
     ...missingExternalPrerequisites,
   ]);
 
-  checks.push(createCheck(
-    'Repo Map',
-    'repo_map.external_prerequisites',
-    'External prerequisites are documented',
-    'pass',
-    knownExternalPrerequisites.size === 0
-      ? 'No repo-map external prerequisites are configured'
-      : `Known repo-map external prerequisites: ${[...knownExternalPrerequisites].join(', ')}`,
-    verbose && knownExternalPrerequisites.size > 0
-      ? [...knownExternalPrerequisites].map((key) => {
-        const prerequisite = getDocumentedExternalPrerequisite(key);
-        return prerequisite ? `${key}: ${prerequisite.reason}` : key;
-      })
-      : undefined,
-  ));
+  checks.push(
+    createCheck(
+      'Repo Map',
+      'repo_map.external_prerequisites',
+      'External prerequisites are documented',
+      'pass',
+      knownExternalPrerequisites.size === 0
+        ? 'No repo-map external prerequisites are configured'
+        : `Known repo-map external prerequisites: ${[...knownExternalPrerequisites].join(', ')}`,
+      verbose && knownExternalPrerequisites.size > 0
+        ? [...knownExternalPrerequisites].map((key) => {
+            const prerequisite = getDocumentedExternalPrerequisite(key);
+            return prerequisite ? `${key}: ${prerequisite.reason}` : key;
+          })
+        : undefined,
+    ),
+  );
 
-  checks.push(createCheck(
-    'Repo Map',
-    'repo_map.workspace_consistency',
-    'Mapped paths stay inside workspace root',
-    outsideWorkspace.length === 0 ? 'pass' : 'warn',
-    outsideWorkspace.length === 0
-      ? 'All mapped paths resolve inside the workspace root'
-      : 'Some mapped paths resolve outside the workspace root',
-    verbose && outsideWorkspace.length > 0 ? outsideWorkspace : undefined,
-  ));
+  checks.push(
+    createCheck(
+      'Repo Map',
+      'repo_map.workspace_consistency',
+      'Mapped paths stay inside workspace root',
+      outsideWorkspace.length === 0 ? 'pass' : 'warn',
+      outsideWorkspace.length === 0
+        ? 'All mapped paths resolve inside the workspace root'
+        : 'Some mapped paths resolve outside the workspace root',
+      verbose && outsideWorkspace.length > 0 ? outsideWorkspace : undefined,
+    ),
+  );
 
   return { checks, repoMap: normalized, externalPrerequisites: missingExternalPrerequisites };
 }
 
-function runRuntimeChecks(babelRoot: string, verbose: boolean): DoctorCheckResult[] {
+function runRuntimeChecks(
+  babelRoot: string,
+  verbose: boolean,
+  repairPointers: boolean,
+): DoctorCheckResult[] {
   const checks: DoctorCheckResult[] = [];
   const runtimeTargets = [
-    ['runtime.package_json', 'CLI package.json found', join(babelRoot, 'babel-cli', 'package.json')],
-    ['runtime.cli_entrypoint', 'CLI entrypoint found', join(babelRoot, 'babel-cli', 'dist', 'index.js')],
-    ['runtime.resolver_script', 'Resolver script found', join(babelRoot, 'tools', 'resolve-local-stack.ps1')],
-    ['runtime.content_policy', 'Public content policy found', join(babelRoot, 'tools', 'check-public-content-policy.ps1')],
-    ['runtime.canonical_policy', 'Canonical independence policy found', join(babelRoot, 'tools', 'check-canonical-independence.ps1')],
+    ['runtime.package_json', 'package.json found', join(babelRoot, 'package.json')],
+    [
+      'runtime.cli_entrypoint',
+      'CLI entrypoint found',
+      join(babelRoot, 'babel-cli', 'dist', 'index.js'),
+    ],
+    [
+      'runtime.resolver_script',
+      'Resolver script found',
+      join(babelRoot, 'tools', 'resolve-local-stack.ps1'),
+    ],
+    [
+      'runtime.export_manifest',
+      'Export manifest found',
+      join(babelRoot, 'tools', 'public-export', 'manifest.json'),
+    ],
   ] as const;
 
   for (const [id, title, targetPath] of runtimeTargets) {
     const exists = existsSync(targetPath);
     const diagnosticCode = !exists && id === 'runtime.cli_entrypoint' ? 'DIST_MISSING' : undefined;
-    checks.push(createCheck(
-      'Runtime',
-      id,
-      title,
-      exists ? 'pass' : 'fail',
-      exists ? title : `Missing required runtime surface: ${targetPath}`,
-      verbose ? [targetPath] : undefined,
-      diagnosticCode ? 'Run npm --prefix .\\babel-cli run build before invoking dist-first CLI checks.' : undefined,
-      diagnosticCode,
-    ));
+    checks.push(
+      createCheck(
+        'Runtime',
+        id,
+        title,
+        exists ? 'pass' : 'fail',
+        exists ? title : `Missing required runtime surface: ${targetPath}`,
+        verbose ? [targetPath] : undefined,
+        diagnosticCode
+          ? 'Run npm --prefix .\\babel-cli run build before invoking dist-first CLI checks.'
+          : undefined,
+        diagnosticCode,
+      ),
+    );
   }
+
+  checks.push(...runLatestEvidenceChecks(babelRoot, verbose, repairPointers));
+  return checks;
+}
+
+function safeParseJsonFile(filePath: string): Record<string, unknown> | null {
+  if (!existsSync(filePath)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function collectInteractiveTargetDrift(runsDir: string, limit = 12): string[] {
+  const sessionsDir = join(runsDir, 'interactive-sessions');
+  if (!existsSync(sessionsDir)) {
+    return [];
+  }
+  const sessionDirs = readdirSync(sessionsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(sessionsDir, entry.name))
+    .sort((left, right) => lstatSync(right).mtimeMs - lstatSync(left).mtimeMs)
+    .slice(0, limit);
+  const drifts: string[] = [];
+  for (const sessionDir of sessionDirs) {
+    const transcriptPath = join(sessionDir, 'transcript.jsonl');
+    if (!existsSync(transcriptPath)) {
+      continue;
+    }
+    const lines = readFileSync(transcriptPath, 'utf8').split(/\r?\n/).filter(Boolean);
+    for (const line of lines) {
+      const turn = (() => {
+        try {
+          return JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      })();
+      if (!turn || typeof turn['run_dir'] !== 'string' || typeof turn['target_root'] !== 'string') {
+        continue;
+      }
+      const manifest = safeParseJsonFile(join(turn['run_dir'], '01_manifest.json'));
+      const manifestTarget =
+        typeof manifest?.['target_project_path'] === 'string'
+          ? resolve(manifest['target_project_path'])
+          : null;
+      const transcriptTarget = resolve(turn['target_root']);
+      if (manifestTarget && manifestTarget.toLowerCase() !== transcriptTarget.toLowerCase()) {
+        drifts.push(`${turn['run_dir']} transcript=${transcriptTarget} manifest=${manifestTarget}`);
+      }
+    }
+  }
+  return drifts;
+}
+
+function runLatestEvidenceChecks(
+  babelRoot: string,
+  verbose: boolean,
+  repairPointers: boolean,
+): DoctorCheckResult[] {
+  const checks: DoctorCheckResult[] = [];
+  const runsDir = join(babelRoot, 'runs');
+  let repairReport: LatestPointerRepairReport | null = null;
+  if (repairPointers) {
+    repairReport = repairStaleLatestPointers(runsDir);
+  }
+  const pointerProblems: string[] = [];
+  for (const pointerPath of listLatestPointerFiles(runsDir)) {
+    const parsed = safeParseJsonFile(pointerPath);
+    const runDir = typeof parsed?.['run_dir'] === 'string' ? parsed['run_dir'] : null;
+    if (!runDir) {
+      continue;
+    }
+    if (!existsSync(runDir)) {
+      pointerProblems.push(`${pointerPath}: missing run directory ${runDir}`);
+      continue;
+    }
+    if (isStaleLatestPointer(parsed, runDir)) {
+      pointerProblems.push(`${pointerPath}: run evidence is incomplete for ${runDir}`);
+    }
+  }
+  if (repairReport && repairReport.repaired.length > 0) {
+    checks.push(
+      createCheck(
+        'Runtime',
+        'runtime.latest_run_pointer_repair',
+        'Stale latest run pointers repaired',
+        'pass',
+        `Removed ${repairReport.repaired.length} stale latest run pointer(s)`,
+        verbose ? repairReport.repaired : undefined,
+      ),
+    );
+  }
+  checks.push(
+    createCheck(
+      'Runtime',
+      'runtime.latest_run_evidence',
+      'Latest run pointers resolve to complete evidence',
+      pointerProblems.length === 0 ? 'pass' : 'warn',
+      pointerProblems.length === 0
+        ? 'Latest run pointers resolve to existing evidence bundles'
+        : 'Some latest run pointers are stale or point at incomplete evidence',
+      verbose && pointerProblems.length > 0 ? pointerProblems : undefined,
+      pointerProblems.length > 0
+        ? 'Run a new Babel command or inspect the pointer file before using latest.'
+        : undefined,
+    ),
+  );
+
+  const targetDrifts = collectInteractiveTargetDrift(runsDir);
+  checks.push(
+    createCheck(
+      'Runtime',
+      'runtime.interactive_target_consistency',
+      'Interactive run targets match manifest targets',
+      targetDrifts.length === 0 ? 'pass' : 'warn',
+      targetDrifts.length === 0
+        ? 'Recent interactive runs have consistent transcript and manifest targets'
+        : 'Recent interactive runs contain transcript/manifest target drift',
+      verbose && targetDrifts.length > 0 ? targetDrifts : undefined,
+      targetDrifts.length > 0
+        ? 'Inspect the run evidence and rerun from the intended target root.'
+        : undefined,
+    ),
+  );
 
   return checks;
 }
@@ -689,7 +947,6 @@ function runRuntimeChecks(babelRoot: string, verbose: boolean): DoctorCheckResul
 function runResolutionChecks(
   babelRoot: string,
   verbose: boolean,
-  repoMap: Record<string, string> | null,
   externalPrerequisites: Set<string> = new Set<string>(),
   powerShellRunner: PowerShellScriptRunner = runPowerShellScript,
 ): DoctorCheckResult[] {
@@ -713,59 +970,70 @@ function runResolutionChecks(
 
   for (const repo of CORE_REPO_CASES) {
     if (externalPrerequisites.has(repo.key)) {
-      checks.push(createCheck(
-        'Resolution',
-        `resolution.${repo.key}`,
-        `Resolved ${repo.key}`,
-        'warn',
-        `Resolver validation is skipped for documented external prerequisite: ${repo.key}`,
-        verbose ? [`Mapped path is documented as external prerequisite in repo-map.json`] : undefined,
-        'Resolver is intentionally skipped while this repository remains external in this workspace.',
-        'EXTERNAL_PREREQUISITE_MISSING',
-      ));
+      checks.push(
+        createCheck(
+          'Resolution',
+          `resolution.${repo.key}`,
+          `Resolved ${repo.key}`,
+          'warn',
+          `Resolver validation is skipped for documented external prerequisite: ${repo.key}`,
+          verbose
+            ? [`Mapped path is documented as external prerequisite in repo-map.json`]
+            : undefined,
+          'Resolver is intentionally skipped while this repository remains external in this workspace.',
+          'EXTERNAL_PREREQUISITE_MISSING',
+        ),
+      );
       continue;
     }
 
-    const mappedPath = repoMap?.[repo.key];
-    const resolverArgs = [
-      '-TaskCategory', repo.taskCategory,
-      '-Project', repo.project,
-      '-Model', 'codex',
-      '-PipelineMode', 'verified',
-      '-Format', 'json',
-      '-Root', babelRoot,
-    ];
-    if (mappedPath) {
-      resolverArgs.push('-ProjectPath', mappedPath);
-    }
-    const result = powerShellRunner(resolverPath, resolverArgs);
+    const result = powerShellRunner(resolverPath, [
+      '-TaskCategory',
+      repo.taskCategory,
+      '-Project',
+      repo.project,
+      '-Model',
+      'codex',
+      '-PipelineMode',
+      'deep',
+      '-Format',
+      'json',
+      '-Root',
+      babelRoot,
+    ]);
 
     if (result.error) {
-      if (result.diagnostic_code === 'ENV_SHELL_UNAVAILABLE' ||
+      if (
+        result.diagnostic_code === 'ENV_SHELL_UNAVAILABLE' ||
         result.diagnostic_code === 'POWERSHELL_UNAVAILABLE' ||
-        result.diagnostic_code === 'POWERSHELL_INCOMPATIBLE') {
-        checks.push(createCheck(
+        result.diagnostic_code === 'POWERSHELL_INCOMPATIBLE'
+      ) {
+        checks.push(
+          createCheck(
+            'Resolution',
+            'resolution.environment_powershell',
+            'PowerShell runtime available for resolver',
+            'fail',
+            result.error,
+            verbose ? [result.stderr.trim()].filter((line) => line.length > 0) : undefined,
+            'Resolve the environment shell/PowerShell failure before treating repo resolution as broken.',
+            result.diagnostic_code,
+          ),
+        );
+        return checks;
+      }
+      checks.push(
+        createCheck(
           'Resolution',
-          'resolution.environment_powershell',
-          'PowerShell runtime available for resolver',
+          `resolution.${repo.key}`,
+          `Resolved ${repo.key}`,
           'fail',
           result.error,
           verbose ? [result.stderr.trim()].filter((line) => line.length > 0) : undefined,
-          'Resolve the environment shell/PowerShell failure before treating repo resolution as broken.',
-          result.diagnostic_code,
-        ));
-        return checks;
-      }
-      checks.push(createCheck(
-        'Resolution',
-        `resolution.${repo.key}`,
-        `Resolved ${repo.key}`,
-        'fail',
-        result.error,
-        verbose ? [result.stderr.trim()].filter((line) => line.length > 0) : undefined,
-        undefined,
-        'RESOLVER_INVALID',
-      ));
+          undefined,
+          'RESOLVER_INVALID',
+        ),
+      );
       continue;
     }
 
@@ -773,55 +1041,62 @@ function runResolutionChecks(
       const details = verbose
         ? [result.stdout.trim(), result.stderr.trim()].filter((line) => line.length > 0)
         : undefined;
-      checks.push(createCheck(
-        'Resolution',
-        `resolution.${repo.key}`,
-        `Resolved ${repo.key}`,
-        'fail',
-        `Resolver failed for ${repo.project}`,
-        details,
-        undefined,
-        'RESOLVER_INVALID',
-      ));
+      checks.push(
+        createCheck(
+          'Resolution',
+          `resolution.${repo.key}`,
+          `Resolved ${repo.key}`,
+          'fail',
+          `Resolver failed for ${repo.project}`,
+          details,
+          undefined,
+          'RESOLVER_INVALID',
+        ),
+      );
       continue;
     }
 
     try {
       const parsed = JSON.parse(result.stdout) as { ProjectPath?: string };
       const resolvedProjectPath = parsed.ProjectPath;
-      if (resolvedProjectPath === '<external-project-root>' ||
-        (typeof resolvedProjectPath === 'string' && existsSync(resolvedProjectPath))) {
-        checks.push(createCheck(
-          'Resolution',
-          `resolution.${repo.key}`,
-          `Resolved ${repo.key}`,
-          'pass',
-          `Resolved ${repo.key}`,
-          verbose ? [resolvedProjectPath] : undefined,
-        ));
+      if (typeof resolvedProjectPath === 'string' && existsSync(resolvedProjectPath)) {
+        checks.push(
+          createCheck(
+            'Resolution',
+            `resolution.${repo.key}`,
+            `Resolved ${repo.key}`,
+            'pass',
+            `Resolved ${repo.key}`,
+            verbose ? [resolvedProjectPath] : undefined,
+          ),
+        );
       } else {
-        checks.push(createCheck(
+        checks.push(
+          createCheck(
+            'Resolution',
+            `resolution.${repo.key}`,
+            `Resolved ${repo.key}`,
+            'fail',
+            `Resolver returned no usable ProjectPath for ${repo.project}`,
+            verbose ? [result.stdout.trim()] : undefined,
+            undefined,
+            'RESOLVER_INVALID',
+          ),
+        );
+      }
+    } catch (error: unknown) {
+      checks.push(
+        createCheck(
           'Resolution',
           `resolution.${repo.key}`,
           `Resolved ${repo.key}`,
           'fail',
-          `Resolver returned no usable ProjectPath for ${repo.project}`,
-          verbose ? [result.stdout.trim()] : undefined,
+          `Resolver output was not valid JSON for ${repo.project}`,
+          verbose ? [result.stdout.trim(), String(error)] : undefined,
           undefined,
           'RESOLVER_INVALID',
-        ));
-      }
-    } catch (error: unknown) {
-      checks.push(createCheck(
-        'Resolution',
-        `resolution.${repo.key}`,
-        `Resolved ${repo.key}`,
-        'fail',
-        `Resolver output was not valid JSON for ${repo.project}`,
-        verbose ? [result.stdout.trim(), String(error)] : undefined,
-        undefined,
-        'RESOLVER_INVALID',
-      ));
+        ),
+      );
     }
   }
 
@@ -852,7 +1127,11 @@ function collectTextFiles(rootPath: string, includeRuns = false): string[] {
     for (const entry of entries) {
       const nextPath = join(current, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name === '.git' || entry.name === 'node_modules' || (!includeRuns && entry.name === 'runs')) {
+        if (
+          entry.name === '.git' ||
+          entry.name === 'node_modules' ||
+          (!includeRuns && entry.name === 'runs')
+        ) {
           continue;
         }
         stack.push(nextPath);
@@ -874,7 +1153,10 @@ interface LiveRunManifestCollection {
   pointerWarnings: string[];
 }
 
-function collectLiveRunManifestFiles(runsRoot: string, babelRoot: string): LiveRunManifestCollection {
+function collectLiveRunManifestFiles(
+  runsRoot: string,
+  babelRoot: string,
+): LiveRunManifestCollection {
   if (!existsSync(runsRoot)) return { manifestFiles: [], pointerWarnings: [] };
 
   let entries: Dirent<string>[];
@@ -896,7 +1178,9 @@ function collectLiveRunManifestFiles(runsRoot: string, babelRoot: string): LiveR
     try {
       pointer = JSON.parse(readFileSync(pointerPath, 'utf8')) as { run_dir?: unknown };
     } catch (error) {
-      pointerWarnings.push(`${relative(babelRoot, pointerPath)} :: invalid JSON${error instanceof Error ? ` (${error.message})` : ''}`);
+      pointerWarnings.push(
+        `${relative(babelRoot, pointerPath)} :: invalid JSON${error instanceof Error ? ` (${error.message})` : ''}`,
+      );
       continue;
     }
 
@@ -915,7 +1199,10 @@ function collectLiveRunManifestFiles(runsRoot: string, babelRoot: string): LiveR
 }
 
 function hasPlaceholderProjectPathValue(value: unknown): value is string {
-  return typeof value === 'string' && PLACEHOLDER_PROJECT_PATTERNS.some((pattern) => value.includes(pattern));
+  return (
+    typeof value === 'string' &&
+    PLACEHOLDER_PROJECT_PATTERNS.some((pattern) => value.includes(pattern))
+  );
 }
 
 function runPlaceholderPathChecks(babelRoot: string, verbose: boolean): DoctorCheckResult[] {
@@ -933,7 +1220,9 @@ function runPlaceholderPathChecks(babelRoot: string, verbose: boolean): DoctorCh
 
     if (!hasPlaceholderProjectPathValue(manifest.target_project_path)) continue;
 
-    hits.push(`${relative(babelRoot, filePath)} :: target_project_path=${manifest.target_project_path}`);
+    hits.push(
+      `${relative(babelRoot, filePath)} :: target_project_path=${manifest.target_project_path}`,
+    );
   }
 
   return [
@@ -978,7 +1267,9 @@ function runLegacyPathChecks(babelRoot: string, verbose: boolean): DoctorCheckRe
       if (matchedPatterns.length === 0) continue;
 
       const relativePath = relative(babelRoot, filePath);
-      const isArtifactPath = relativePath.startsWith(`tools${sep}reports${sep}`) || relativePath.startsWith(`tools${sep}test-`);
+      const isArtifactPath =
+        relativePath.startsWith(`tools${sep}reports${sep}`) ||
+        relativePath.startsWith(`tools${sep}test-`);
       const detail = `${relativePath} :: ${matchedPatterns.join(', ')}`;
       if (isArtifactPath) {
         artifactHits.push(detail);
@@ -990,205 +1281,361 @@ function runLegacyPathChecks(babelRoot: string, verbose: boolean): DoctorCheckRe
 
   const checks: DoctorCheckResult[] = [];
 
-  checks.push(createCheck(
-    'Legacy Path Drift',
-    'legacy_paths.runtime',
-    'No legacy Desktop paths found in runtime surfaces',
-    runtimeHits.length === 0 ? 'pass' : 'fail',
-    runtimeHits.length === 0
-      ? 'No legacy Desktop paths found in active runtime surfaces'
-      : `Found ${runtimeHits.length} legacy Desktop path reference(s) in active runtime surfaces`,
-    verbose && runtimeHits.length > 0 ? runtimeHits : undefined,
-  ));
+  checks.push(
+    createCheck(
+      'Legacy Path Drift',
+      'legacy_paths.runtime',
+      'No legacy Desktop paths found in runtime surfaces',
+      runtimeHits.length === 0 ? 'pass' : 'fail',
+      runtimeHits.length === 0
+        ? 'No legacy Desktop paths found in active runtime surfaces'
+        : `Found ${runtimeHits.length} legacy Desktop path reference(s) in active runtime surfaces`,
+      verbose && runtimeHits.length > 0 ? runtimeHits : undefined,
+    ),
+  );
 
-  checks.push(createCheck(
-    'Legacy Path Drift',
-    'legacy_paths.artifacts',
-    'Legacy Desktop path references in report artifacts',
-    artifactHits.length === 0 ? 'pass' : 'warn',
-    artifactHits.length === 0
-      ? 'No legacy Desktop paths found in report artifacts'
-      : 'Legacy Desktop path references found in report artifacts only',
-    verbose && artifactHits.length > 0 ? artifactHits : undefined,
-  ));
+  checks.push(
+    createCheck(
+      'Legacy Path Drift',
+      'legacy_paths.artifacts',
+      'Legacy Desktop path references in report artifacts',
+      artifactHits.length === 0 ? 'pass' : 'warn',
+      artifactHits.length === 0
+        ? 'No legacy Desktop paths found in report artifacts'
+        : 'Legacy Desktop path references found in report artifacts only',
+      verbose && artifactHits.length > 0 ? artifactHits : undefined,
+    ),
+  );
 
   return checks;
 }
 
-function runReleaseChecks(
+function runExportChecks(
   babelRoot: string,
   verbose: boolean,
   powerShellRunner: PowerShellScriptRunner = runPowerShellScript,
 ): DoctorCheckResult[] {
-  const validatorPath = join(babelRoot, 'tools', 'validate-public-release.ps1');
-  if (!existsSync(validatorPath)) {
-    return [createCheck(
-      'Release',
-      'release.validator.exists',
-      'Release validator available',
-      'fail',
-      `Missing release validator: ${validatorPath}`,
-    )];
+  const checks: DoctorCheckResult[] = [];
+  const manifestPath = join(babelRoot, 'tools', 'public-export', 'manifest.json');
+  const exportScriptPath = join(babelRoot, 'tools', 'export-babel-public.ps1');
+
+  checks.push(
+    createCheck(
+      'Export',
+      'export.manifest.exists',
+      'Export manifest valid',
+      existsSync(manifestPath) ? 'pass' : 'fail',
+      existsSync(manifestPath)
+        ? 'Export manifest found'
+        : `Missing export manifest: ${manifestPath}`,
+      verbose ? [manifestPath] : undefined,
+    ),
+  );
+
+  if (!existsSync(exportScriptPath)) {
+    checks.push(
+      createCheck(
+        'Export',
+        'export.validation',
+        'Export validation passed',
+        'fail',
+        `Missing public export script: ${exportScriptPath}`,
+      ),
+    );
+    return checks;
   }
-  const result = powerShellRunner(validatorPath, ['-Root', babelRoot]);
-  const details = verbose
-    ? [result.stdout.trim(), result.stderr.trim()].filter((line) => line.length > 0)
-    : undefined;
-  return [createCheck(
-    'Release',
-    'release.validation',
-    'Canonical release validation passed',
-    result.exitCode === 0 && !result.error ? 'pass' : 'fail',
-    result.exitCode === 0 && !result.error
-      ? 'Canonical release validation passed'
-      : result.error ?? 'Canonical release validation failed',
-    details,
-    result.diagnostic_code ? 'Resolve the PowerShell environment failure before diagnosing release validation.' : undefined,
-    result.diagnostic_code,
-  )];
+
+  const exportRoot = mkdtempSync(join(tmpdir(), 'babel-doctor-public-export-'));
+  try {
+    const exportResult = powerShellRunner(exportScriptPath, [
+      '-DestinationRoot',
+      exportRoot,
+      '-SkipChecks',
+    ]);
+    if (exportResult.error) {
+      checks.push(
+        createCheck(
+          'Export',
+          'export.validation',
+          'Export validation passed',
+          'fail',
+          exportResult.error,
+          verbose ? [exportResult.stderr.trim()].filter((line) => line.length > 0) : undefined,
+          exportResult.diagnostic_code
+            ? 'Resolve the environment shell/PowerShell failure before diagnosing export validation.'
+            : undefined,
+          exportResult.diagnostic_code,
+        ),
+      );
+      return checks;
+    }
+
+    if (exportResult.exitCode !== 0) {
+      const details = verbose
+        ? [exportResult.stdout.trim(), exportResult.stderr.trim()].filter((line) => line.length > 0)
+        : undefined;
+      checks.push(
+        createCheck(
+          'Export',
+          'export.validation',
+          'Export validation passed',
+          'fail',
+          'Public export generation failed',
+          details,
+        ),
+      );
+      return checks;
+    }
+
+    const scrubScriptPath = join(exportRoot, 'tools', 'check-public-scrub.ps1');
+    if (!existsSync(scrubScriptPath)) {
+      checks.push(
+        createCheck(
+          'Export',
+          'export.validation',
+          'Export validation passed',
+          'fail',
+          `Public export scrub script missing from generated tree: ${scrubScriptPath}`,
+        ),
+      );
+      return checks;
+    }
+
+    const scrubResult = powerShellRunner(scrubScriptPath, ['-RepoRoot', exportRoot]);
+    if (scrubResult.error) {
+      checks.push(
+        createCheck(
+          'Export',
+          'export.validation',
+          'Export validation passed',
+          'fail',
+          scrubResult.error,
+          verbose ? [scrubResult.stderr.trim()].filter((line) => line.length > 0) : undefined,
+          scrubResult.diagnostic_code
+            ? 'Resolve the environment shell/PowerShell failure before diagnosing export validation.'
+            : undefined,
+          scrubResult.diagnostic_code,
+        ),
+      );
+      return checks;
+    }
+
+    const details = verbose
+      ? [
+          exportResult.stdout.trim(),
+          exportResult.stderr.trim(),
+          scrubResult.stdout.trim(),
+          scrubResult.stderr.trim(),
+        ].filter((line) => line.length > 0)
+      : undefined;
+    checks.push(
+      createCheck(
+        'Export',
+        'export.validation',
+        'Export validation passed',
+        scrubResult.exitCode === 0 ? 'pass' : 'fail',
+        scrubResult.exitCode === 0
+          ? 'Public export generation and scrub check passed'
+          : 'Public export scrub check failed',
+        details,
+      ),
+    );
+  } finally {
+    rmSync(exportRoot, { recursive: true, force: true });
+  }
+
+  return checks;
 }
 
-function runEnterprisePolicyChecks(babelRoot: string, strictEnterprise: boolean, verbose: boolean): DoctorCheckResult[] {
+function runEnterprisePolicyChecks(
+  babelRoot: string,
+  strictEnterprise: boolean,
+  verbose: boolean,
+): DoctorCheckResult[] {
   const result = loadEnterprisePolicy(babelRoot);
   const checks: DoctorCheckResult[] = [];
   const loadedSources = result.sources.filter((source) => source.loaded);
   const existingSources = result.sources.filter((source) => source.exists);
   const hasStrictPolicy = !strictEnterprise || loadedSources.length > 0;
 
-  checks.push(createCheck(
-    'Enterprise Policy',
-    'enterprise_policy.parse',
-    'Enterprise policy files parse successfully',
-    result.errors.length === 0 ? 'pass' : 'fail',
-    result.errors.length === 0
-      ? loadedSources.length > 0
-        ? `Loaded ${loadedSources.length} enterprise policy file(s)`
-        : 'No enterprise policy files found; permissive defaults are active'
-      : `Found ${result.errors.length} enterprise policy parse error(s)`,
-    verbose ? result.sources.map((source) => {
-      const state = source.loaded ? 'loaded' : source.exists ? 'exists' : 'missing';
-      return `${source.label}: ${state} :: ${source.path}${source.error ? ` :: ${source.error}` : ''}`;
-    }) : undefined,
-  ));
+  checks.push(
+    createCheck(
+      'Enterprise Policy',
+      'enterprise_policy.parse',
+      'Enterprise policy files parse successfully',
+      result.errors.length === 0 ? 'pass' : 'fail',
+      result.errors.length === 0
+        ? loadedSources.length > 0
+          ? `Loaded ${loadedSources.length} enterprise policy file(s)`
+          : 'No enterprise policy files found; permissive defaults are active'
+        : `Found ${result.errors.length} enterprise policy parse error(s)`,
+      verbose
+        ? result.sources.map((source) => {
+            const state = source.loaded ? 'loaded' : source.exists ? 'exists' : 'missing';
+            return `${source.label}: ${state} :: ${source.path}${source.error ? ` :: ${source.error}` : ''}`;
+          })
+        : undefined,
+    ),
+  );
 
-  checks.push(createCheck(
-    'Enterprise Policy',
-    'enterprise_policy.present_for_strict',
-    'Strict enterprise policy is present',
-    hasStrictPolicy ? 'pass' : 'fail',
-    hasStrictPolicy
-      ? 'Strict enterprise mode has at least one managed policy source or is not requested'
-      : 'Strict enterprise mode requires at least one enterprise policy file',
-    verbose ? existingSources.map((source) => source.path) : undefined,
-    hasStrictPolicy ? undefined : 'Create config/enterprise-policy.json or set BABEL_ENTERPRISE_POLICY_PATH.',
-  ));
+  checks.push(
+    createCheck(
+      'Enterprise Policy',
+      'enterprise_policy.present_for_strict',
+      'Strict enterprise policy is present',
+      hasStrictPolicy ? 'pass' : 'fail',
+      hasStrictPolicy
+        ? 'Strict enterprise mode has at least one managed policy source or is not requested'
+        : 'Strict enterprise mode requires at least one enterprise policy file',
+      verbose ? existingSources.map((source) => source.path) : undefined,
+      hasStrictPolicy
+        ? undefined
+        : 'Create config/enterprise-policy.json or set BABEL_ENTERPRISE_POLICY_PATH.',
+    ),
+  );
 
-  checks.push(createCheck(
-    'Enterprise Policy',
-    'enterprise_policy.tool_controls',
-    'Tool allow/deny controls configured',
-    result.policy.allowed_tools.length > 0 || result.policy.disallowed_tools.length > 0
-      ? 'pass'
-      : strictEnterprise ? 'warn' : 'skip',
-    result.policy.allowed_tools.length > 0 || result.policy.disallowed_tools.length > 0
-      ? `Tool controls active (${result.policy.allowed_tools.length} allowed, ${result.policy.disallowed_tools.length} disallowed)`
-      : 'No enterprise tool allow/deny controls configured',
-    verbose ? [
-      `allowed_tools=${result.policy.allowed_tools.join(', ') || '<none>'}`,
-      `disallowed_tools=${result.policy.disallowed_tools.join(', ') || '<none>'}`,
-    ] : undefined,
-  ));
+  checks.push(
+    createCheck(
+      'Enterprise Policy',
+      'enterprise_policy.tool_controls',
+      'Tool allow/deny controls configured',
+      result.policy.allowed_tools.length > 0 || result.policy.disallowed_tools.length > 0
+        ? 'pass'
+        : strictEnterprise
+          ? 'warn'
+          : 'skip',
+      result.policy.allowed_tools.length > 0 || result.policy.disallowed_tools.length > 0
+        ? `Tool controls active (${result.policy.allowed_tools.length} allowed, ${result.policy.disallowed_tools.length} disallowed)`
+        : 'No enterprise tool allow/deny controls configured',
+      verbose
+        ? [
+            `allowed_tools=${result.policy.allowed_tools.join(', ') || '<none>'}`,
+            `disallowed_tools=${result.policy.disallowed_tools.join(', ') || '<none>'}`,
+          ]
+        : undefined,
+    ),
+  );
 
-  checks.push(createCheck(
-    'Enterprise Policy',
-    'enterprise_policy.mcp_controls',
-    'MCP server controls configured',
-    result.policy.allowed_mcp_servers.length > 0 || result.policy.disallowed_mcp_servers.length > 0
-      ? 'pass'
-      : strictEnterprise ? 'warn' : 'skip',
-    result.policy.allowed_mcp_servers.length > 0 || result.policy.disallowed_mcp_servers.length > 0
-      ? `MCP controls active (${result.policy.allowed_mcp_servers.length} allowed, ${result.policy.disallowed_mcp_servers.length} disallowed)`
-      : 'No enterprise MCP server allow/deny controls configured',
-    verbose ? [
-      `allowed_mcp_servers=${result.policy.allowed_mcp_servers.join(', ') || '<none>'}`,
-      `disallowed_mcp_servers=${result.policy.disallowed_mcp_servers.join(', ') || '<none>'}`,
-    ] : undefined,
-  ));
+  checks.push(
+    createCheck(
+      'Enterprise Policy',
+      'enterprise_policy.mcp_controls',
+      'MCP server controls configured',
+      result.policy.allowed_mcp_servers.length > 0 ||
+        result.policy.disallowed_mcp_servers.length > 0
+        ? 'pass'
+        : strictEnterprise
+          ? 'warn'
+          : 'skip',
+      result.policy.allowed_mcp_servers.length > 0 ||
+        result.policy.disallowed_mcp_servers.length > 0
+        ? `MCP controls active (${result.policy.allowed_mcp_servers.length} allowed, ${result.policy.disallowed_mcp_servers.length} disallowed)`
+        : 'No enterprise MCP server allow/deny controls configured',
+      verbose
+        ? [
+            `allowed_mcp_servers=${result.policy.allowed_mcp_servers.join(', ') || '<none>'}`,
+            `disallowed_mcp_servers=${result.policy.disallowed_mcp_servers.join(', ') || '<none>'}`,
+          ]
+        : undefined,
+    ),
+  );
 
-  checks.push(createCheck(
-    'Enterprise Policy',
-    'enterprise_policy.network_controls',
-    'Network allowlist configured',
-    result.policy.network_allowlist.length > 0 ? 'pass' : strictEnterprise ? 'warn' : 'skip',
-    result.policy.network_allowlist.length > 0
-      ? `Network allowlist active (${result.policy.network_allowlist.length} host rule(s))`
-      : 'No enterprise network allowlist configured',
-    verbose ? result.policy.network_allowlist : undefined,
-  ));
+  checks.push(
+    createCheck(
+      'Enterprise Policy',
+      'enterprise_policy.network_controls',
+      'Network allowlist configured',
+      result.policy.network_allowlist.length > 0 ? 'pass' : strictEnterprise ? 'warn' : 'skip',
+      result.policy.network_allowlist.length > 0
+        ? `Network allowlist active (${result.policy.network_allowlist.length} host rule(s))`
+        : 'No enterprise network allowlist configured',
+      verbose ? result.policy.network_allowlist : undefined,
+    ),
+  );
 
-  checks.push(createCheck(
-    'Enterprise Policy',
-    'enterprise_policy.model_controls',
-    'Model backend controls configured',
-    result.policy.model_policy.allowed_backends.length > 0 ||
-      result.policy.model_policy.disallowed_backends.length > 0 ||
-      result.policy.model_policy.require_explicit_opt_in.length > 0
-      ? 'pass'
-      : strictEnterprise ? 'warn' : 'skip',
-    result.policy.model_policy.allowed_backends.length > 0 ||
-      result.policy.model_policy.disallowed_backends.length > 0 ||
-      result.policy.model_policy.require_explicit_opt_in.length > 0
-      ? `Model controls active (${result.policy.model_policy.allowed_backends.length} allowed, ${result.policy.model_policy.disallowed_backends.length} disallowed, ${result.policy.model_policy.require_explicit_opt_in.length} opt-in)`
-      : 'No enterprise model backend controls configured',
-    verbose ? [
-      `allowed_backends=${result.policy.model_policy.allowed_backends.join(', ') || '<none>'}`,
-      `disallowed_backends=${result.policy.model_policy.disallowed_backends.join(', ') || '<none>'}`,
-      `require_explicit_opt_in=${result.policy.model_policy.require_explicit_opt_in.join(', ') || '<none>'}`,
-    ] : undefined,
-  ));
+  checks.push(
+    createCheck(
+      'Enterprise Policy',
+      'enterprise_policy.model_controls',
+      'Model backend controls configured',
+      result.policy.model_policy.allowed_backends.length > 0 ||
+        result.policy.model_policy.disallowed_backends.length > 0 ||
+        result.policy.model_policy.require_explicit_opt_in.length > 0
+        ? 'pass'
+        : strictEnterprise
+          ? 'warn'
+          : 'skip',
+      result.policy.model_policy.allowed_backends.length > 0 ||
+        result.policy.model_policy.disallowed_backends.length > 0 ||
+        result.policy.model_policy.require_explicit_opt_in.length > 0
+        ? `Model controls active (${result.policy.model_policy.allowed_backends.length} allowed, ${result.policy.model_policy.disallowed_backends.length} disallowed, ${result.policy.model_policy.require_explicit_opt_in.length} opt-in)`
+        : 'No enterprise model backend controls configured',
+      verbose
+        ? [
+            `allowed_backends=${result.policy.model_policy.allowed_backends.join(', ') || '<none>'}`,
+            `disallowed_backends=${result.policy.model_policy.disallowed_backends.join(', ') || '<none>'}`,
+            `require_explicit_opt_in=${result.policy.model_policy.require_explicit_opt_in.join(', ') || '<none>'}`,
+          ]
+        : undefined,
+    ),
+  );
 
-  checks.push(createCheck(
-    'Enterprise Policy',
-    'enterprise_policy.plugin_controls',
-    'Plugin controls configured',
-    result.policy.plugin_policy.allowed_plugins.length > 0 ||
-      result.policy.plugin_policy.disallowed_plugins.length > 0 ||
-      result.policy.plugin_policy.max_trust_level !== undefined
-      ? 'pass'
-      : strictEnterprise ? 'warn' : 'skip',
-    result.policy.plugin_policy.allowed_plugins.length > 0 ||
-      result.policy.plugin_policy.disallowed_plugins.length > 0 ||
-      result.policy.plugin_policy.max_trust_level !== undefined
-      ? `Plugin controls active (${result.policy.plugin_policy.allowed_plugins.length} allowed, ${result.policy.plugin_policy.disallowed_plugins.length} disallowed, max trust ${result.policy.plugin_policy.max_trust_level ?? '<none>'})`
-      : 'No enterprise plugin controls configured',
-    verbose ? [
-      `allowed_plugins=${result.policy.plugin_policy.allowed_plugins.join(', ') || '<none>'}`,
-      `disallowed_plugins=${result.policy.plugin_policy.disallowed_plugins.join(', ') || '<none>'}`,
-      `max_trust_level=${result.policy.plugin_policy.max_trust_level ?? '<none>'}`,
-    ] : undefined,
-  ));
+  checks.push(
+    createCheck(
+      'Enterprise Policy',
+      'enterprise_policy.plugin_controls',
+      'Plugin controls configured',
+      result.policy.plugin_policy.allowed_plugins.length > 0 ||
+        result.policy.plugin_policy.disallowed_plugins.length > 0 ||
+        result.policy.plugin_policy.max_trust_level !== undefined
+        ? 'pass'
+        : strictEnterprise
+          ? 'warn'
+          : 'skip',
+      result.policy.plugin_policy.allowed_plugins.length > 0 ||
+        result.policy.plugin_policy.disallowed_plugins.length > 0 ||
+        result.policy.plugin_policy.max_trust_level !== undefined
+        ? `Plugin controls active (${result.policy.plugin_policy.allowed_plugins.length} allowed, ${result.policy.plugin_policy.disallowed_plugins.length} disallowed, max trust ${result.policy.plugin_policy.max_trust_level ?? '<none>'})`
+        : 'No enterprise plugin controls configured',
+      verbose
+        ? [
+            `allowed_plugins=${result.policy.plugin_policy.allowed_plugins.join(', ') || '<none>'}`,
+            `disallowed_plugins=${result.policy.plugin_policy.disallowed_plugins.join(', ') || '<none>'}`,
+            `max_trust_level=${result.policy.plugin_policy.max_trust_level ?? '<none>'}`,
+          ]
+        : undefined,
+    ),
+  );
 
-  checks.push(createCheck(
-    'Enterprise Policy',
-    'enterprise_policy.telemetry_opt_in',
-    'Telemetry opt-in is explicit',
-    typeof result.policy.telemetry.opt_in === 'boolean' ? 'pass' : strictEnterprise ? 'warn' : 'skip',
-    typeof result.policy.telemetry.opt_in === 'boolean'
-      ? `Telemetry opt-in explicitly set to ${result.policy.telemetry.opt_in}`
-      : 'Enterprise telemetry opt-in is not explicit',
-    verbose ? [`telemetry.opt_in=${String(result.policy.telemetry.opt_in)}`] : undefined,
-  ));
+  checks.push(
+    createCheck(
+      'Enterprise Policy',
+      'enterprise_policy.telemetry_opt_in',
+      'Telemetry opt-in is explicit',
+      typeof result.policy.telemetry.opt_in === 'boolean'
+        ? 'pass'
+        : strictEnterprise
+          ? 'warn'
+          : 'skip',
+      typeof result.policy.telemetry.opt_in === 'boolean'
+        ? `Telemetry opt-in explicitly set to ${result.policy.telemetry.opt_in}`
+        : 'Enterprise telemetry opt-in is not explicit',
+      verbose ? [`telemetry.opt_in=${String(result.policy.telemetry.opt_in)}`] : undefined,
+    ),
+  );
 
-  checks.push(createCheck(
-    'Enterprise Policy',
-    'enterprise_policy.redaction',
-    'Evidence redaction enabled',
-    result.policy.redaction.enabled ? 'pass' : 'fail',
-    result.policy.redaction.enabled
-      ? `Evidence redaction enabled (${result.policy.redaction.extra_patterns.length} extra pattern(s))`
-      : 'Evidence redaction is disabled',
-    verbose ? result.policy.redaction.extra_patterns : undefined,
-  ));
+  checks.push(
+    createCheck(
+      'Enterprise Policy',
+      'enterprise_policy.redaction',
+      'Evidence redaction enabled',
+      result.policy.redaction.enabled ? 'pass' : 'fail',
+      result.policy.redaction.enabled
+        ? `Evidence redaction enabled (${result.policy.redaction.extra_patterns.length} extra pattern(s))`
+        : 'Evidence redaction is disabled',
+      verbose ? result.policy.redaction.extra_patterns : undefined,
+    ),
+  );
 
   return checks;
 }
@@ -1204,7 +1651,9 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorRunResult
     : { checks: [], repoMap: null, externalPrerequisites: new Set<string>() };
 
   if (shouldRunSection(options.scope, 'Environment')) {
-    checks.push(...runEnvironmentChecks(env, options.verbose, options.shellProbe, options.powerShellProbe));
+    checks.push(
+      ...runEnvironmentChecks(env, options.verbose, options.shellProbe, options.powerShellProbe),
+    );
   }
 
   if (shouldRunSection(options.scope, 'Workspace')) {
@@ -1216,39 +1665,50 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorRunResult
   }
 
   if (shouldRunSection(options.scope, 'Runtime')) {
-    checks.push(...runRuntimeChecks(babelRoot, options.verbose));
+    checks.push(...runRuntimeChecks(babelRoot, options.verbose, options.repairPointers === true));
     checks.push(...runPlaceholderPathChecks(babelRoot, options.verbose));
   }
 
   if (shouldRunSection(options.scope, 'Resolution')) {
-    checks.push(...runResolutionChecks(
-      babelRoot,
-      options.verbose,
-      repoMapResult.repoMap,
-      repoMapResult.externalPrerequisites,
-      options.powerShellRunner,
-    ));
+    checks.push(
+      ...runResolutionChecks(
+        babelRoot,
+        options.verbose,
+        repoMapResult.externalPrerequisites,
+        options.powerShellRunner,
+      ),
+    );
   }
 
   if (shouldRunSection(options.scope, 'Legacy Path Drift')) {
     checks.push(...runLegacyPathChecks(babelRoot, options.verbose));
   }
 
-  if (shouldRunSection(options.scope, 'Release')) {
-    checks.push(...runReleaseChecks(babelRoot, options.verbose, options.powerShellRunner));
+  if (shouldRunSection(options.scope, 'Export')) {
+    checks.push(...runExportChecks(babelRoot, options.verbose, options.powerShellRunner));
   }
 
   if (shouldRunSection(options.scope, 'Enterprise Policy') || options.strictEnterprise === true) {
-    checks.push(...runEnterprisePolicyChecks(babelRoot, options.strictEnterprise === true, options.verbose));
+    checks.push(
+      ...runEnterprisePolicyChecks(babelRoot, options.strictEnterprise === true, options.verbose),
+    );
   }
 
   const summary = summarizeChecks(checks);
-  const status = determineOverallStatus(checks, options.strict || options.strictEnterprise === true);
+  const status = determineOverallStatus(
+    checks,
+    options.strict || options.strictEnterprise === true,
+  );
 
   return {
     status,
     workspaceRoot,
-    mode: options.strictEnterprise === true ? 'strict-enterprise' : options.strict ? 'strict' : 'standard',
+    mode:
+      options.strictEnterprise === true
+        ? 'strict-enterprise'
+        : options.strict
+          ? 'strict'
+          : 'standard',
     scope: options.scope,
     checks,
     summary,
@@ -1263,7 +1723,16 @@ export function formatDoctorHuman(result: DoctorRunResult, verbose: boolean): st
   lines.push(`Scope: ${result.scope}`);
   lines.push('');
 
-  const sectionOrder = ['Environment', 'Workspace', 'Repo Map', 'Runtime', 'Resolution', 'Legacy Path Drift', 'Export', 'Enterprise Policy'];
+  const sectionOrder = [
+    'Environment',
+    'Workspace',
+    'Repo Map',
+    'Runtime',
+    'Resolution',
+    'Legacy Path Drift',
+    'Export',
+    'Enterprise Policy',
+  ];
   for (const section of sectionOrder) {
     const sectionChecks = result.checks.filter((check) => check.section === section);
     if (sectionChecks.length === 0) continue;

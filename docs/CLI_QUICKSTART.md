@@ -1,5 +1,5 @@
 <!--
-Babel — Prompt Operating System
+Babel — Coding Agent
 Copyright © 2025–2026 Jonathan Gomez Aguilar
 Licensed under the MIT License
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
@@ -7,11 +7,10 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 # Babel CLI Quickstart
 
-This is the shortest path to using the Babel CLI as a new developer.
+Babel is a **local coding agent**. The primary interface is the interactive **TUI/REPL**.
+Daily work uses three product modes: **chat**, **plan**, and **deep**.
 
-The safest first experience is still validation and preview. Build the CLI when you want diagnostics, MCP, or task execution.
-
-If you have not done setup yet:
+## Setup
 
 ```powershell
 cd .\babel-cli
@@ -19,79 +18,112 @@ npm install
 npm run build
 ```
 
-After that, these are the four most useful copy-paste flows.
-
-## 1. Doctor
-
-Use this first when you want to verify the local Babel environment and workspace shape.
+Optional health check:
 
 ```powershell
-cd .\babel-cli
 node .\dist\index.js doctor
 ```
 
-What it does:
+Model-backed sessions need a configured provider (API keys in your environment, never committed).
 
-- checks Babel workspace health
-- surfaces repository and release-readiness issues early
-- gives you the safest first CLI signal before a real run
-
-## 2. Run
-
-Use this when you want Babel to run a real task through the pipeline.
+## 1. Interactive TUI / REPL (default)
 
 ```powershell
 cd .\babel-cli
-node .\dist\index.js run "Fix webhook retry handling" --project example_saas_backend --mode verified
+node .\dist\index.js
+# same as:
+node .\dist\index.js interactive
 ```
 
-Good defaults:
+What you get:
 
-- start with `--mode verified`
-- use `--project` explicitly
-- treat `autonomous` as an advanced path, not the default first run
+- multi-turn coding session in the terminal
+- default mode: **chat**
+- slash commands (see `/help` inside the session), including mode/model switches
+- session resume via `babel resume`
+
+## 2. Chat (default one-shot path)
+
+Conversational agent loop — multi-turn tool use when interactive; one-shot when given a task:
+
+```powershell
+node .\dist\index.js "Fix webhook retry handling"
+# explicit:
+node .\dist\index.js run "Fix webhook retry handling" --mode chat
+```
+
+Headless / CI-friendly chat output:
+
+```powershell
+node .\dist\index.js run "Summarize the failing test" --mode chat-headless
+# or: babel chat --headless "..."
+```
 
 ## 3. Plan
 
-Use this when you want a manual bridge handoff instead of a normal execution flow.
+Plan first, approve, then apply:
 
 ```powershell
-cd .\babel-cli
-node .\dist\index.js plan example_llm_router "Prepare rollout plan"
+node .\dist\index.js plan "Split the auth module safely"
 ```
 
-What it does:
+Use when you want an explicit plan gate before mutations.
 
-- starts the Manual Bridge flow
-- gives you a structured handoff instead of a normal task run
-- is useful when you want more control than `run`
+## 4. Deep
 
-## 4. MCP
-
-Use this when another client or tool wants to inspect Babel through MCP.
+Governed pipeline with extra critique and execution rigor:
 
 ```powershell
-cd .\babel-cli
+node .\dist\index.js deep "Harden the migration path and verify it"
+```
+
+Use for higher-risk changes when you want more structure than chat.
+
+## Mode map
+
+| Mode | Engine | Best for |
+|------|--------|----------|
+| **chat** | ChatEngine (TUI / conversational loop) | Daily coding, exploration, iteration |
+| **chat-headless** | Same engine, non-interactive output | Scripts, CI, automation |
+| **plan** | Governed plan path | Reviewable plan before apply |
+| **deep** | Full governed pipeline | Higher-risk implementation + verification |
+
+Legacy names still accepted as aliases with deprecation warnings:
+
+| Legacy | Maps to |
+|--------|---------|
+| `verified`, `autonomous` | `deep` |
+| `manual` | `plan` |
+| `direct`, `default` | `chat` |
+
+Prefer the modern names in docs and new scripts.
+
+## 5. MCP (integrations)
+
+```powershell
 node .\dist\index.js mcp
 ```
 
-What it does:
+Read-only control-plane server for other tools — not the everyday coding entrypoint.
 
-- runs the read-only Babel MCP control-plane server over stdio
-- is meant for integrations, not as the normal day-to-day starting point
+## 6. Stack preview (no model)
 
-## What To Use First
+From the repo root, still useful without credentials:
 
-- use `doctor` if you want to confirm the CLI is healthy
-- use `run` if you want Babel to execute a task
-- use `plan` if you want a manual-bridge workflow
-- use `mcp` if you are integrating Babel into another client
+```powershell
+pwsh -File .\tools\resolve-local-stack.ps1 `
+  -TaskCategory backend `
+  -Project example_saas_backend `
+  -Model codex `
+  -Format json
+```
 
-Current public expectation:
+## What to use first
 
-- validation and resolver preview should work from a fresh clone
-- MCP is read-only by default
-- model-backed task execution may need provider credentials, local model tools, and target-repo policy
-- repo-local rules win when Babel is used inside another project
+1. `babel` — open the TUI  
+2. `babel plan "..."` — when you want a gated plan  
+3. `babel deep "..."` — when you want the heavy governed path  
+4. `babel doctor` — environment health  
+5. `babel mcp` — integrations  
 
-If you are still learning the repo, start with [START_HERE.md](../START_HERE.md) and [BABEL_LOCAL_MODE.md](./architecture/BABEL_LOCAL_MODE.md) first.
+Further reading: [START_HERE.md](../START_HERE.md) · [README.md](../README.md)

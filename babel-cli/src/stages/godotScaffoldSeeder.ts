@@ -4,11 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import type { ToolCallLog } from '../schemas/agentContracts.js';
 import { detectRuntimeVerificationTargetType } from './runtimeVerificationRunner.js';
 
-export type GodotScaffoldSeedStatus =
-  | 'SEEDED'
-  | 'NOOP'
-  | 'FAILED'
-  | 'SKIPPED_WITH_REASON';
+export type GodotScaffoldSeedStatus = 'SEEDED' | 'NOOP' | 'FAILED' | 'SKIPPED_WITH_REASON';
 
 export interface GodotScaffoldSeedResult {
   stage: 'godot_scaffold_seed';
@@ -51,7 +47,9 @@ function isDirectoryEmpty(path: string): boolean {
 }
 
 function missingBootFiles(targetRoot: string): string[] {
-  return GODOT_MOBILE_SCAFFOLD_FILES.filter(relativePath => !existsSync(join(targetRoot, relativePath)));
+  return GODOT_MOBILE_SCAFFOLD_FILES.filter(
+    (relativePath) => !existsSync(join(targetRoot, relativePath)),
+  );
 }
 
 export function seedGodotMobileScaffold(input: GodotScaffoldSeedInput): GodotScaffoldSeedResult {
@@ -91,7 +89,9 @@ export function seedGodotMobileScaffold(input: GodotScaffoldSeedInput): GodotSca
   }
 
   const targetRoot = resolve(input.projectRoot);
-  const scaffoldTemplate = resolve(input.scaffoldTemplate ?? defaultGodotMobileScaffoldTemplate(input.babelRoot ?? resolve('..')));
+  const scaffoldTemplate = resolve(
+    input.scaffoldTemplate ?? defaultGodotMobileScaffoldTemplate(input.babelRoot ?? resolve('..')),
+  );
   if (!existsSync(scaffoldTemplate) || !statSync(scaffoldTemplate).isDirectory()) {
     return {
       stage: 'godot_scaffold_seed',
@@ -148,9 +148,10 @@ export function seedGodotMobileScaffold(input: GodotScaffoldSeedInput): GodotSca
     filesCopied,
     filesSkipped,
     status: filesCopied.length > 0 ? 'SEEDED' : 'NOOP',
-    reason: filesCopied.length > 0
-      ? 'Missing Godot mobile scaffold files were copied without overwriting existing files.'
-      : 'No scaffold files were copied.',
+    reason:
+      filesCopied.length > 0
+        ? 'Missing Godot mobile scaffold files were copied without overwriting existing files.'
+        : 'No scaffold files were copied.',
     timestamp,
   };
 }

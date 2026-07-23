@@ -16,20 +16,24 @@ export class SqliteChronicleStore implements ChronicleStore {
 
   storeFact(projectRoot: string, key: string, value: string): void {
     this.db
-      .prepare(`
+      .prepare(
+        `
         INSERT OR REPLACE INTO babel_facts (project_root, fact_key, fact_value, last_verified)
         VALUES (?, ?, ?, datetime('now'))
-      `)
+      `,
+      )
       .run(projectRoot, key, value);
   }
 
   getFact(projectRoot: string, key: string): string | null {
     const row = this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT fact_value
           FROM babel_facts
          WHERE fact_key = ? AND project_root = ?
-      `)
+      `,
+      )
       .get(key, projectRoot) as { fact_value: string | null } | undefined;
 
     return row?.fact_value ?? null;
@@ -37,11 +41,13 @@ export class SqliteChronicleStore implements ChronicleStore {
 
   listFacts(projectRoot: string): ChronicleFactRow[] {
     const rows = this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT fact_key, fact_value, last_verified
           FROM babel_facts
          WHERE project_root = ?
-      `)
+      `,
+      )
       .all(projectRoot) as Array<Record<string, unknown>>;
 
     return rows.map((row) => ({

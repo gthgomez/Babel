@@ -15,8 +15,8 @@ param(
     [ValidateSet("codex_extension", "claude_code", "gemini_cli", "chatgpt_web", "claude_web", "gemini_web", "vscode_chat", "other")]
     [string]$ClientSurface = "",
 
-    [ValidateSet("direct", "verified", "autonomous")]
-    [string]$PipelineMode = "direct",
+    [ValidateSet("chat", "plan", "deep", "direct", "verified", "autonomous")]
+    [string]$PipelineMode = "chat",
 
     [ValidateSet("auto", "balanced", "ultra")]
     [string]$CodexAdapter = "auto",
@@ -280,7 +280,7 @@ function Test-GuardShouldLoad {
         [string]$TaskPromptValue
     )
 
-    if ($PipelineModeValue -eq "verified" -or $PipelineModeValue -eq "autonomous") {
+    if ($PipelineModeValue -eq "deep" -or $PipelineModeValue -eq "verified" -or ($PipelineModeValue -eq "deep" -or $PipelineModeValue -eq "autonomous")) {
         return $true
     }
 
@@ -588,7 +588,7 @@ function Get-PurposeDiagnostics {
         }
     }
 
-    if ($PipelineModeValue -eq "autonomous" -and ($PurposeModeValue -eq "learning" -or $PurposeModeValue -eq "exploration")) {
+    if (($PipelineModeValue -eq "deep" -or $PipelineModeValue -eq "autonomous") -and ($PurposeModeValue -eq "learning" -or $PurposeModeValue -eq "exploration")) {
         return [PSCustomObject]@{
             PurposeSeedSkillId = $null
             PurposeSuppressionReason = "suppressed_by_autonomous_context"

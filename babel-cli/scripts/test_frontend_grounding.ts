@@ -16,7 +16,7 @@ function assert(condition: unknown, message: string): asserts condition {
 
 async function main(): Promise<void> {
   const tempRoot = mkdtempSync(join(tmpdir(), 'babel-frontend-grounding-'));
-  const projectRoot = join(tempRoot, 'example_web_audit');
+  const projectRoot = join(tempRoot, 'AuditGuard');
 
   try {
     mkdirSync(join(projectRoot, 'audit-frontend', 'src', 'app', 'dashboard'), { recursive: true });

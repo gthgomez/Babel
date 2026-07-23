@@ -23,17 +23,23 @@ import {
 function makeRunDir(name: string): string {
   const runDir = mkdtempSync(join(tmpdir(), `babel-learning-${name}-`));
   mkdirSync(runDir, { recursive: true });
-  writeFileSync(join(runDir, '01_manifest.json'), JSON.stringify({
-    target_project: 'test_project',
-    analysis: {
-      pipeline_mode: 'autonomous',
-      task_summary: 'Fix the learning test',
-    },
-  }), 'utf-8');
+  writeFileSync(
+    join(runDir, '01_manifest.json'),
+    JSON.stringify({
+      target_project: 'test_project',
+      analysis: {
+        pipeline_mode: 'deep',
+        task_summary: 'Fix the learning test',
+      },
+    }),
+    'utf-8',
+  );
   return runDir;
 }
 
-function proofFixture(overrides: Partial<ProofStatusArtifact> & { proof_status: ProofStatus }): ProofStatusArtifact {
+function proofFixture(
+  overrides: Partial<ProofStatusArtifact> & { proof_status: ProofStatus },
+): ProofStatusArtifact {
   const runDir = mkdtempSync(join(tmpdir(), 'babel-learning-proof-'));
   return {
     schema_version: 1,
@@ -43,7 +49,7 @@ function proofFixture(overrides: Partial<ProofStatusArtifact> & { proof_status: 
     run_id: runDir.split(/[\\/]/).pop() ?? 'run',
     task: 'Classify proof',
     project: 'test_project',
-    mode: 'autonomous',
+    mode: 'deep',
     claimed_status: overrides.proof_status,
     observed_status: overrides.proof_status,
     execution_happened: false,
@@ -67,19 +73,27 @@ function proofFixture(overrides: Partial<ProofStatusArtifact> & { proof_status: 
 test('buildLearningFailureRecord classifies failed verifier evidence as TESTS_FAILED', () => {
   const runDir = makeRunDir('failed-tests');
   const learningRoot = mkdtempSync(join(tmpdir(), 'babel-learning-root-'));
-  writeFileSync(join(runDir, '06_runtime_telemetry.json'), JSON.stringify({
-    final_outcome: 'FAILED',
-    pipeline_mode: 'autonomous',
-    qa_verdict: 'PASS',
-  }), 'utf-8');
-  writeFileSync(join(runDir, '04_execution_report.json'), JSON.stringify({
-    status: 'EXECUTION_HALTED',
-    steps_executed: 2,
-    tool_call_log: [
-      { tool: 'file_write', target: 'src/auth.ts', exit_code: 0 },
-      { tool: 'test_run', target: 'npm test -- auth', exit_code: 1, verified: false },
-    ],
-  }), 'utf-8');
+  writeFileSync(
+    join(runDir, '06_runtime_telemetry.json'),
+    JSON.stringify({
+      final_outcome: 'FAILED',
+      pipeline_mode: 'deep',
+      qa_verdict: 'PASS',
+    }),
+    'utf-8',
+  );
+  writeFileSync(
+    join(runDir, '04_execution_report.json'),
+    JSON.stringify({
+      status: 'EXECUTION_HALTED',
+      steps_executed: 2,
+      tool_call_log: [
+        { tool: 'file_write', target: 'src/auth.ts', exit_code: 0 },
+        { tool: 'test_run', target: 'npm test -- auth', exit_code: 1, verified: false },
+      ],
+    }),
+    'utf-8',
+  );
 
   const record = buildLearningFailureRecord({
     runDir,
@@ -97,18 +111,24 @@ test('buildLearningFailureRecord classifies failed verifier evidence as TESTS_FA
 test('writeLearningFailureRecord writes learning/failures artifact', () => {
   const runDir = makeRunDir('missing-tests');
   const learningRoot = mkdtempSync(join(tmpdir(), 'babel-learning-root-'));
-  writeFileSync(join(runDir, '06_runtime_telemetry.json'), JSON.stringify({
-    final_outcome: 'COMPLETE',
-    pipeline_mode: 'autonomous',
-    qa_verdict: 'PASS',
-  }), 'utf-8');
-  writeFileSync(join(runDir, '04_execution_report.json'), JSON.stringify({
-    status: 'EXECUTION_COMPLETE',
-    steps_executed: 1,
-    tool_call_log: [
-      { tool: 'file_write', target: 'src/auth.ts', exit_code: 0 },
-    ],
-  }), 'utf-8');
+  writeFileSync(
+    join(runDir, '06_runtime_telemetry.json'),
+    JSON.stringify({
+      final_outcome: 'COMPLETE',
+      pipeline_mode: 'deep',
+      qa_verdict: 'PASS',
+    }),
+    'utf-8',
+  );
+  writeFileSync(
+    join(runDir, '04_execution_report.json'),
+    JSON.stringify({
+      status: 'EXECUTION_COMPLETE',
+      steps_executed: 1,
+      tool_call_log: [{ tool: 'file_write', target: 'src/auth.ts', exit_code: 0 }],
+    }),
+    'utf-8',
+  );
 
   const artifacts = writeLearningFailureRecord({ runDir, learningRoot });
 
@@ -120,17 +140,23 @@ test('writeLearningFailureRecord writes learning/failures artifact', () => {
 test('readLearningFailureRecord loads records by failure id and direct path', () => {
   const runDir = makeRunDir('inspect');
   const learningRoot = mkdtempSync(join(tmpdir(), 'babel-learning-root-'));
-  writeFileSync(join(runDir, '06_runtime_telemetry.json'), JSON.stringify({
-    final_outcome: 'FAILED',
-    pipeline_mode: 'autonomous',
-    qa_verdict: 'PASS',
-  }), 'utf-8');
-  writeFileSync(join(runDir, '04_execution_report.json'), JSON.stringify({
-    status: 'EXECUTION_HALTED',
-    tool_call_log: [
-      { tool: 'test_run', target: 'npm test -- auth', exit_code: 1 },
-    ],
-  }), 'utf-8');
+  writeFileSync(
+    join(runDir, '06_runtime_telemetry.json'),
+    JSON.stringify({
+      final_outcome: 'FAILED',
+      pipeline_mode: 'deep',
+      qa_verdict: 'PASS',
+    }),
+    'utf-8',
+  );
+  writeFileSync(
+    join(runDir, '04_execution_report.json'),
+    JSON.stringify({
+      status: 'EXECUTION_HALTED',
+      tool_call_log: [{ tool: 'test_run', target: 'npm test -- auth', exit_code: 1 }],
+    }),
+    'utf-8',
+  );
 
   const written = writeLearningFailureRecord({ runDir, learningRoot });
   const byId = readLearningFailureRecord({
@@ -158,19 +184,27 @@ test('readLearningFailureRecord rejects missing failure records', () => {
 test('buildLearningFailureRecord records no failure for complete verified runs', () => {
   const runDir = makeRunDir('verified');
   const learningRoot = mkdtempSync(join(tmpdir(), 'babel-learning-root-'));
-  writeFileSync(join(runDir, '06_runtime_telemetry.json'), JSON.stringify({
-    final_outcome: 'COMPLETE',
-    pipeline_mode: 'autonomous',
-    qa_verdict: 'PASS',
-  }), 'utf-8');
-  writeFileSync(join(runDir, '04_execution_report.json'), JSON.stringify({
-    status: 'EXECUTION_COMPLETE',
-    steps_executed: 2,
-    tool_call_log: [
-      { tool: 'file_write', target: 'src/auth.ts', exit_code: 0 },
-      { tool: 'test_run', target: 'npm test -- auth', exit_code: 0, verified: true },
-    ],
-  }), 'utf-8');
+  writeFileSync(
+    join(runDir, '06_runtime_telemetry.json'),
+    JSON.stringify({
+      final_outcome: 'COMPLETE',
+      pipeline_mode: 'deep',
+      qa_verdict: 'PASS',
+    }),
+    'utf-8',
+  );
+  writeFileSync(
+    join(runDir, '04_execution_report.json'),
+    JSON.stringify({
+      status: 'EXECUTION_COMPLETE',
+      steps_executed: 2,
+      tool_call_log: [
+        { tool: 'file_write', target: 'src/auth.ts', exit_code: 0 },
+        { tool: 'test_run', target: 'npm test -- auth', exit_code: 0, verified: true },
+      ],
+    }),
+    'utf-8',
+  );
 
   const record = buildLearningFailureRecord({ runDir, learningRoot });
 
@@ -191,7 +225,7 @@ test('buildLearningFailureRecord maps dry-run and planned-only proof to low-seve
   const planned = buildLearningFailureRecord({
     runDir: 'unused',
     learningRoot,
-    proof: proofFixture({ proof_status: 'PLANNED_ONLY', mode: 'manual' }),
+    proof: proofFixture({ proof_status: 'PLANNED_ONLY', mode: 'plan' }),
   });
 
   assert.equal(dryRun.failure_type, 'DRY_RUN_ONLY');
@@ -213,7 +247,10 @@ test('buildLearningFailureRecord maps verifier gaps and unsafe refusals to actio
   const unsafe = buildLearningFailureRecord({
     runDir: 'unused',
     learningRoot,
-    proof: proofFixture({ proof_status: 'REFUSED_UNSAFE', unsafe_tool_attempts: ['SHELL_COMMAND_DENIED'] }),
+    proof: proofFixture({
+      proof_status: 'REFUSED_UNSAFE',
+      unsafe_tool_attempts: ['SHELL_COMMAND_DENIED'],
+    }),
   });
 
   assert.equal(missingVerifier.failure_type, 'MISSING_VERIFIER_CONTRACT');
@@ -277,7 +314,7 @@ test('writeLessonCandidate creates scoped candidate artifacts from existing fail
       run_dir: runDir,
       run_id: runDir.split(/[\\/]/).pop() ?? 'run',
       project: 'test_project',
-      mode: 'autonomous',
+      mode: 'deep',
       changed_files: ['src/auth.ts'],
     }),
   });
@@ -303,7 +340,10 @@ test('writeLessonCandidate creates scoped candidate artifacts from existing fail
   assert.equal(candidateArtifact.lesson.source_run_id, failure.record.run_id);
   assert.equal(candidateArtifact.lesson.failure_type, 'TYPECHECK_NOT_RUN');
   assert.equal(candidateArtifact.lesson.scope, 'project');
-  assert.equal(candidateArtifact.lesson.proposed_instruction, candidate.lesson.proposed_instruction);
+  assert.equal(
+    candidateArtifact.lesson.proposed_instruction,
+    candidate.lesson.proposed_instruction,
+  );
   assert.equal(typeof candidateArtifact.lesson.risk, 'string');
   assert.equal(candidateArtifact.lesson.requires_human_approval, true);
   assert.equal(candidateArtifact.lesson.auto_promote_allowed, false);
@@ -414,10 +454,7 @@ test('testLessonCandidate writes static eval artifacts without changing proof st
   assert.equal(evaluated.evalRecord.before_proof_status, 'FAILED_TESTS');
   assert.equal(evaluated.evalRecord.after_expected_status, 'FAILED_TESTS');
   assert.equal(existsSync(evaluated.evalRecordPath), true);
-  assert.equal(
-    evaluated.evalRecord.decision_impact,
-    'Static replay keeps proof at FAILED_TESTS.',
-  );
+  assert.equal(evaluated.evalRecord.decision_impact, 'Static replay keeps proof at FAILED_TESTS.');
   assert.match(readFileSync(evaluated.evalRecordPath, 'utf-8'), /after_expected_status/);
 });
 
@@ -436,23 +473,27 @@ test('testLessonCandidate rejects replay that turns missing-evidence proof into 
   const lessonId = 'lesson-missing-proof-upgrade';
   const lessonPath = join(learningRoot, 'lessons', 'candidates', `${lessonId}.json`);
   mkdirSync(join(learningRoot, 'lessons', 'candidates'), { recursive: true });
-  writeFileSync(lessonPath, JSON.stringify({
-    schema_version: 1,
-    artifact_type: 'babel_lesson_candidate',
-    generated_at: '2026-06-04T00:00:00.000Z',
-    lesson_id: lessonId,
-    source_run_id: failure.record.run_id,
-    source_failure_record_path: failure.record.failure_record_path,
-    failure_type: 'NO_FAILURE_DETECTED',
-    scope: 'local',
-    proposed_instruction: 'Do not let this run auto verify without evidence.',
-    risk: 'high',
-    requires_human_approval: true,
-    auto_promote_allowed: false,
-    eval_requirements: ['no_false_completion'],
-    status: 'candidate',
-    lesson_candidate_path: lessonPath,
-  }), 'utf-8');
+  writeFileSync(
+    lessonPath,
+    JSON.stringify({
+      schema_version: 1,
+      artifact_type: 'babel_lesson_candidate',
+      generated_at: '2026-06-04T00:00:00.000Z',
+      lesson_id: lessonId,
+      source_run_id: failure.record.run_id,
+      source_failure_record_path: failure.record.failure_record_path,
+      failure_type: 'NO_FAILURE_DETECTED',
+      scope: 'local',
+      proposed_instruction: 'Do not let this run auto verify without evidence.',
+      risk: 'high',
+      requires_human_approval: true,
+      auto_promote_allowed: false,
+      eval_requirements: ['no_false_completion'],
+      status: 'candidate',
+      lesson_candidate_path: lessonPath,
+    }),
+    'utf-8',
+  );
 
   const evaluated = testLessonCandidate({
     lessonId,
@@ -462,12 +503,18 @@ test('testLessonCandidate rejects replay that turns missing-evidence proof into 
   assert.equal(evaluated.evalRecord.status, 'failed');
   assert.equal(evaluated.evalRecord.before_proof_status, 'UNKNOWN_INSUFFICIENT_EVIDENCE');
   assert.equal(evaluated.evalRecord.after_expected_status, 'COMPLETE_VERIFIED');
-  assert.equal(evaluated.evalRecord.checks.find((check) => check.name === 'no_false_completion')?.pass, false);
+  assert.equal(
+    evaluated.evalRecord.checks.find((check) => check.name === 'no_false_completion')?.pass,
+    false,
+  );
   assert.equal(
     evaluated.evalRecord.decision_impact,
     'Static replay regressed proof from UNKNOWN_INSUFFICIENT_EVIDENCE to COMPLETE_VERIFIED.',
   );
-  assert.equal(readLearningArtifact({ id: evaluated.evalRecordPath, learningRoot }).artifact.kind, 'eval');
+  assert.equal(
+    readLearningArtifact({ id: evaluated.evalRecordPath, learningRoot }).artifact.kind,
+    'eval',
+  );
 });
 
 test('promoteLessonToShadow requires passing eval and writes advisory active lesson', () => {
@@ -534,9 +581,18 @@ test('readLearningArtifact inspects failure, candidate, eval, and shadow lesson 
     learningRoot,
   });
 
-  assert.equal(readLearningArtifact({ id: failure.record.run_id, learningRoot }).artifact.kind, 'failure');
-  assert.equal(readLearningArtifact({ id: candidate.lesson.lesson_id, learningRoot }).artifact.kind, 'lesson');
-  assert.equal(readLearningArtifact({ id: evalRecord.evalRecordPath, learningRoot }).artifact.kind, 'eval');
+  assert.equal(
+    readLearningArtifact({ id: failure.record.run_id, learningRoot }).artifact.kind,
+    'failure',
+  );
+  assert.equal(
+    readLearningArtifact({ id: candidate.lesson.lesson_id, learningRoot }).artifact.kind,
+    'lesson',
+  );
+  assert.equal(
+    readLearningArtifact({ id: evalRecord.evalRecordPath, learningRoot }).artifact.kind,
+    'eval',
+  );
 });
 
 test('lesson candidate hash is stable and eval records bind to candidate content', () => {
@@ -595,22 +651,31 @@ test('shadow promotion and mutation packaging reject stale evals after candidate
     lessonId: candidate.lesson.lesson_id,
     learningRoot,
   });
-  writeFileSync(candidate.lessonCandidatePath, JSON.stringify({
-    ...candidate.lesson,
-    proposed_instruction: `${candidate.lesson.proposed_instruction} Edited after eval.`,
-  }, null, 2), 'utf-8');
+  writeFileSync(
+    candidate.lessonCandidatePath,
+    JSON.stringify(
+      {
+        ...candidate.lesson,
+        proposed_instruction: `${candidate.lesson.proposed_instruction} Edited after eval.`,
+      },
+      null,
+      2,
+    ),
+    'utf-8',
+  );
 
   assert.throws(
     () => promoteLessonToShadow({ lessonId: candidate.lesson.lesson_id, learningRoot }),
     /current lesson content/i,
   );
   assert.throws(
-    () => generateMutationPackage({
-      lessonId: candidate.lesson.lesson_id,
-      learningRoot,
-      target: 'project-verifier-contract',
-      repoRoot,
-    }),
+    () =>
+      generateMutationPackage({
+        lessonId: candidate.lesson.lesson_id,
+        learningRoot,
+        target: 'project-verifier-contract',
+        repoRoot,
+      }),
     /current lesson content/i,
   );
 });
@@ -650,7 +715,10 @@ test('generateMutationPackage writes review-only package files with approval ide
   assert.equal(pkg.mutationPackage.artifact_type, 'babel_mutation_package');
   assert.equal(pkg.mutationPackage.approval_required, true);
   assert.equal(pkg.mutationPackage.target_type, 'project-verifier-contract');
-  assert.equal(pkg.mutationPackage.target_paths[0], '05_Project_Overlays/test-project/verifier-contract.md');
+  assert.equal(
+    pkg.mutationPackage.target_paths[0],
+    '05_Project_Overlays/test-project/verifier-contract.md',
+  );
   assert.equal(pkg.mutationPackage.rollback_available, true);
   assert.equal(pkg.mutationPackage.lesson_content_sha256, candidate.lesson.lesson_content_sha256);
   assert.equal(existsSync(pkg.mutationPackagePath), true);
@@ -659,7 +727,10 @@ test('generateMutationPackage writes review-only package files with approval ide
   assert.equal(existsSync(pkg.approvalPath), true);
   assert.equal(existsSync(pkg.rollbackPatchPath), true);
   assert.match(readFileSync(pkg.rollbackPatchPath, 'utf-8'), /Babel learning mutation package/);
-  assert.equal(readLearningArtifact({ id: pkg.mutationPackage.mutation_id, learningRoot }).artifact.kind, 'mutation');
+  assert.equal(
+    readLearningArtifact({ id: pkg.mutationPackage.mutation_id, learningRoot }).artifact.kind,
+    'mutation',
+  );
 });
 
 test('generateMutationPackage refuses unsupported targets and dirty target files', () => {
@@ -668,7 +739,11 @@ test('generateMutationPackage refuses unsupported targets and dirty target files
   const repoRoot = mkdtempSync(join(tmpdir(), 'babel-learning-repo-'));
   execFileSync('git', ['init'], { cwd: repoRoot, stdio: 'ignore' });
   mkdirSync(join(repoRoot, '05_Project_Overlays', 'test-project'), { recursive: true });
-  writeFileSync(join(repoRoot, '05_Project_Overlays', 'test-project', 'verifier-contract.md'), 'dirty target\n', 'utf-8');
+  writeFileSync(
+    join(repoRoot, '05_Project_Overlays', 'test-project', 'verifier-contract.md'),
+    'dirty target\n',
+    'utf-8',
+  );
   const failure = writeLearningFailureRecord({
     runDir,
     learningRoot,
@@ -691,21 +766,23 @@ test('generateMutationPackage refuses unsupported targets and dirty target files
   });
 
   assert.throws(
-    () => generateMutationPackage({
-      lessonId: candidate.lesson.lesson_id,
-      learningRoot,
-      target: 'behavioral-os',
-      repoRoot,
-    }),
+    () =>
+      generateMutationPackage({
+        lessonId: candidate.lesson.lesson_id,
+        learningRoot,
+        target: 'behavioral-os',
+        repoRoot,
+      }),
     /Unsupported learning mutation target/i,
   );
   assert.throws(
-    () => generateMutationPackage({
-      lessonId: candidate.lesson.lesson_id,
-      learningRoot,
-      target: 'project-verifier-contract',
-      repoRoot,
-    }),
+    () =>
+      generateMutationPackage({
+        lessonId: candidate.lesson.lesson_id,
+        learningRoot,
+        target: 'project-verifier-contract',
+        repoRoot,
+      }),
     /uncommitted changes/i,
   );
 });

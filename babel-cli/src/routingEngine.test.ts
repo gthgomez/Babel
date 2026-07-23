@@ -13,7 +13,10 @@ import {
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
 function makeTmpRunsDir(): string {
-  const dir = join(tmpdir(), `babel-routing-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const dir = join(
+    tmpdir(),
+    `babel-routing-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
   mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -37,7 +40,6 @@ function writeTelemetry(runsDir: string, runId: string, entries: TelemetryEntry[
 // ─── reorderWaterfallByStartIndex ─────────────────────────────────────────────
 
 describe('reorderWaterfallByStartIndex', () => {
-
   it('returns original array when startIndex is 0', () => {
     const arr = ['a', 'b', 'c'];
     assert.deepEqual(reorderWaterfallByStartIndex(arr, 0), ['a', 'b', 'c']);
@@ -79,7 +81,6 @@ describe('reorderWaterfallByStartIndex', () => {
     assert.equal(result[1]!.n, 0);
     assert.equal(result[2]!.n, 1);
   });
-
 });
 
 // ─── selectBestTierForStage — disabled / thin data ───────────────────────────
@@ -98,7 +99,10 @@ describe('selectBestTierForStage — disabled or insufficient data', () => {
   });
 
   it('returns null when dynamic routing is not enabled', () => {
-    const result = selectBestTierForStage('orchestrator', ['TierA', 'TierB'], { enabled: false, runsDir });
+    const result = selectBestTierForStage('orchestrator', ['TierA', 'TierB'], {
+      enabled: false,
+      runsDir,
+    });
     assert.equal(result, null);
   });
 
@@ -108,21 +112,33 @@ describe('selectBestTierForStage — disabled or insufficient data', () => {
   });
 
   it('returns null when no telemetry files exist', () => {
-    const result = selectBestTierForStage('orchestrator', ['TierA', 'TierB'], { enabled: true, runsDir });
+    const result = selectBestTierForStage('orchestrator', ['TierA', 'TierB'], {
+      enabled: true,
+      runsDir,
+    });
     assert.equal(result, null);
   });
 
   it('returns null when fewer than MIN_SAMPLES entries exist', () => {
     // Write only 1 entry (default MIN_SAMPLES is 3)
-    writeTelemetry(runsDir, 'run-thin-001', [{
-      stage: 'orchestrator', tier_succeeded: 'TierA', tier_index: 0,
-      attempts: 1, tiers_skipped: [], cascade_reason: 'none', ts: new Date().toISOString(),
-    }]);
+    writeTelemetry(runsDir, 'run-thin-001', [
+      {
+        stage: 'orchestrator',
+        tier_succeeded: 'TierA',
+        tier_index: 0,
+        attempts: 1,
+        tiers_skipped: [],
+        cascade_reason: 'none',
+        ts: new Date().toISOString(),
+      },
+    ]);
     clearRoutingCache();
-    const result = selectBestTierForStage('orchestrator', ['TierA', 'TierB'], { enabled: true, runsDir });
+    const result = selectBestTierForStage('orchestrator', ['TierA', 'TierB'], {
+      enabled: true,
+      runsDir,
+    });
     assert.equal(result, null);
   });
-
 });
 
 // ─── selectBestTierForStage — scoring logic ───────────────────────────────────
@@ -143,21 +159,34 @@ describe('selectBestTierForStage — scoring selects best tier', () => {
   it('selects TierB when TierA always fails and TierB always wins', () => {
     // 5 runs: TierA skipped, TierB wins
     for (let i = 0; i < 5; i++) {
-      writeTelemetry(runsDir, `run-wins-${i}`, [{
-        stage: 'orchestrator', tier_succeeded: 'TierB', tier_index: 1,
-        attempts: 1, tiers_skipped: ['TierA'], cascade_reason: 'TierA failed', ts: new Date().toISOString(),
-      }]);
+      writeTelemetry(runsDir, `run-wins-${i}`, [
+        {
+          stage: 'orchestrator',
+          tier_succeeded: 'TierB',
+          tier_index: 1,
+          attempts: 1,
+          tiers_skipped: ['TierA'],
+          cascade_reason: 'TierA failed',
+          ts: new Date().toISOString(),
+        },
+      ]);
     }
     clearRoutingCache();
 
-    const result = selectBestTierForStage('orchestrator', ['TierA', 'TierB'], { enabled: true, runsDir });
+    const result = selectBestTierForStage('orchestrator', ['TierA', 'TierB'], {
+      enabled: true,
+      runsDir,
+    });
     assert.notEqual(result, null);
     assert.equal(result!.selectedName, 'TierB');
     assert.equal(result!.selectedIndex, 1);
   });
 
   it('returns a RoutingDecision with all expected fields', () => {
-    const result = selectBestTierForStage('orchestrator', ['TierA', 'TierB'], { enabled: true, runsDir });
+    const result = selectBestTierForStage('orchestrator', ['TierA', 'TierB'], {
+      enabled: true,
+      runsDir,
+    });
     assert.notEqual(result, null);
     assert.equal(typeof result!.stage, 'string');
     assert.equal(typeof result!.selectedIndex, 'number');
@@ -169,7 +198,10 @@ describe('selectBestTierForStage — scoring selects best tier', () => {
   });
 
   it('scoredTiers contains both tiers with valid fields', () => {
-    const result = selectBestTierForStage('orchestrator', ['TierA', 'TierB'], { enabled: true, runsDir });
+    const result = selectBestTierForStage('orchestrator', ['TierA', 'TierB'], {
+      enabled: true,
+      runsDir,
+    });
     assert.notEqual(result, null);
     const tiers: TierScore[] = result!.scoredTiers;
     assert.equal(tiers.length, 2);
@@ -187,13 +219,23 @@ describe('selectBestTierForStage — scoring selects best tier', () => {
     try {
       // 4 runs: TierA always skipped, TierC always wins
       for (let i = 0; i < 4; i++) {
-        writeTelemetry(altDir, `run-alt-${i}`, [{
-          stage: 'planning', tier_succeeded: 'TierC', tier_index: 2,
-          attempts: 1, tiers_skipped: ['TierA', 'TierB'], cascade_reason: 'cascaded', ts: new Date().toISOString(),
-        }]);
+        writeTelemetry(altDir, `run-alt-${i}`, [
+          {
+            stage: 'planning',
+            tier_succeeded: 'TierC',
+            tier_index: 2,
+            attempts: 1,
+            tiers_skipped: ['TierA', 'TierB'],
+            cascade_reason: 'cascaded',
+            ts: new Date().toISOString(),
+          },
+        ]);
       }
 
-      const result = selectBestTierForStage('planning', ['TierA', 'TierB', 'TierC'], { enabled: true, runsDir: altDir });
+      const result = selectBestTierForStage('planning', ['TierA', 'TierB', 'TierC'], {
+        enabled: true,
+        runsDir: altDir,
+      });
       assert.notEqual(result, null);
       assert.equal(result!.selectedName, 'TierC');
     } finally {
@@ -206,13 +248,23 @@ describe('selectBestTierForStage — scoring selects best tier', () => {
     try {
       // Write 5 entries for 'qa' stage — should not affect 'orchestrator' decision
       for (let i = 0; i < 5; i++) {
-        writeTelemetry(altDir, `run-qa-${i}`, [{
-          stage: 'qa', tier_succeeded: 'TierB', tier_index: 1,
-          attempts: 1, tiers_skipped: ['TierA'], cascade_reason: 'none', ts: new Date().toISOString(),
-        }]);
+        writeTelemetry(altDir, `run-qa-${i}`, [
+          {
+            stage: 'qa',
+            tier_succeeded: 'TierB',
+            tier_index: 1,
+            attempts: 1,
+            tiers_skipped: ['TierA'],
+            cascade_reason: 'none',
+            ts: new Date().toISOString(),
+          },
+        ]);
       }
 
-      const result = selectBestTierForStage('orchestrator', ['TierA', 'TierB'], { enabled: true, runsDir: altDir });
+      const result = selectBestTierForStage('orchestrator', ['TierA', 'TierB'], {
+        enabled: true,
+        runsDir: altDir,
+      });
       // orchestrator has no data — should return null (MIN_SAMPLES not met)
       assert.equal(result, null);
     } finally {
@@ -229,50 +281,71 @@ describe('selectBestTierForStage — scoring selects best tier', () => {
 
       // Add enough valid entries to meet MIN_SAMPLES
       for (let i = 0; i < 3; i++) {
-        writeTelemetry(altDir, `run-valid-${i}`, [{
-          stage: 'executor', tier_succeeded: 'TierA', tier_index: 0,
-          attempts: 1, tiers_skipped: [], cascade_reason: 'none', ts: new Date().toISOString(),
-        }]);
+        writeTelemetry(altDir, `run-valid-${i}`, [
+          {
+            stage: 'executor',
+            tier_succeeded: 'TierA',
+            tier_index: 0,
+            attempts: 1,
+            tiers_skipped: [],
+            cascade_reason: 'none',
+            ts: new Date().toISOString(),
+          },
+        ]);
       }
 
       // Should not throw — corrupt file is skipped silently
       assert.doesNotThrow(() =>
-        selectBestTierForStage('executor', ['TierA', 'TierB'], { enabled: true, runsDir: altDir })
+        selectBestTierForStage('executor', ['TierA', 'TierB'], { enabled: true, runsDir: altDir }),
       );
     } finally {
       rmSync(altDir, { recursive: true, force: true });
     }
   });
-
 });
 
 // ─── clearRoutingCache ────────────────────────────────────────────────────────
 
 describe('clearRoutingCache', () => {
-
   it('forces a fresh directory scan after clearing', () => {
     const altDir = makeTmpRunsDir();
     try {
       // First call: no data → null
       clearRoutingCache();
-      const r1 = selectBestTierForStage('orchestrator', ['X', 'Y'], { enabled: true, runsDir: altDir });
+      const r1 = selectBestTierForStage('orchestrator', ['X', 'Y'], {
+        enabled: true,
+        runsDir: altDir,
+      });
       assert.equal(r1, null);
 
       // Add enough telemetry
       for (let i = 0; i < 4; i++) {
-        writeTelemetry(altDir, `run-fresh-${i}`, [{
-          stage: 'orchestrator', tier_succeeded: 'Y', tier_index: 1,
-          attempts: 1, tiers_skipped: ['X'], cascade_reason: 'failed', ts: new Date().toISOString(),
-        }]);
+        writeTelemetry(altDir, `run-fresh-${i}`, [
+          {
+            stage: 'orchestrator',
+            tier_succeeded: 'Y',
+            tier_index: 1,
+            attempts: 1,
+            tiers_skipped: ['X'],
+            cascade_reason: 'failed',
+            ts: new Date().toISOString(),
+          },
+        ]);
       }
 
       // Without clearing, cache still returns null (stale)
-      const r2 = selectBestTierForStage('orchestrator', ['X', 'Y'], { enabled: true, runsDir: altDir });
+      const r2 = selectBestTierForStage('orchestrator', ['X', 'Y'], {
+        enabled: true,
+        runsDir: altDir,
+      });
       assert.equal(r2, null);
 
       // After clearing, picks up new data
       clearRoutingCache();
-      const r3 = selectBestTierForStage('orchestrator', ['X', 'Y'], { enabled: true, runsDir: altDir });
+      const r3 = selectBestTierForStage('orchestrator', ['X', 'Y'], {
+        enabled: true,
+        runsDir: altDir,
+      });
       assert.notEqual(r3, null);
       assert.equal(r3!.selectedName, 'Y');
     } finally {
@@ -280,5 +353,4 @@ describe('clearRoutingCache', () => {
       clearRoutingCache();
     }
   });
-
 });

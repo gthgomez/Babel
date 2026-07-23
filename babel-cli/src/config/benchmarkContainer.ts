@@ -1,5 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { basename, relative, resolve } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { resolveExecutionProfile } from './executionProfiles.js';
 
 export interface BenchmarkContainerCommandOptions {
   dockerImage: string;
@@ -103,9 +105,7 @@ function normalizeContainerExecutable(rawCommand: string, projectRoot: string): 
 }
 
 function normalizeContainerShellCommand(command: string): string {
-  return command
-    .replace(/\\/g, '/')
-    .replace(/(^|[\s'"`])\/project(?=\/|\s|$)/g, '$1/app');
+  return command.replace(/\\/g, '/').replace(/(^|[\s'"`])\/project(?=\/|\s|$)/g, '$1/app');
 }
 
 function containerWorkingDirectory(projectRoot: string, cwd: string): string {
@@ -119,32 +119,146 @@ function containerWorkingDirectory(projectRoot: string, cwd: string): string {
   return `/app/${relativeToProject}`;
 }
 
+/**
+ * @deprecated Use {@link shouldUseDockerSandbox} instead.
+ * This function is profile-gated to 'benchmark_container' only.
+ * shouldUseDockerSandbox activates Docker for any profile with dockerSandbox: true.
+ */
 export function shouldUseBenchmarkContainerExecution(
   executionProfile: string | null | undefined,
   dockerImage: string | null | undefined,
 ): boolean {
-  return String(executionProfile ?? '').trim() === 'benchmark_container' &&
-    String(dockerImage ?? '').trim().length > 0;
+  // Phase 3b: Require Docker to actually be available before allowing
+  // shell operators. Previously only checked that the profile name matches
+  // and a docker image env var is set — Docker could be missing entirely.
+  return (
+    String(executionProfile ?? '').trim() === 'benchmark_container' &&
+    String(dockerImage ?? '').trim().length > 0 &&
+    isDockerAvailable()
+  );
+}
+
+// ── H4: Docker as default execution environment ──────────────────────────────
+
+let dockerAvailableCache: { available: boolean; checked: boolean } = {
+  available: false,
+  checked: false,
+};
+
+let dockerUnavailableReason = '';
+
+function checkWindowsDockerDesktop(): boolean {
+  const programFiles = process.env['ProgramFiles'] ?? 'C:\\Program Files';
+  const dockerExe = join(programFiles, 'Docker', 'Docker', 'resources', 'bin', 'docker.exe');
+  if (!existsSync(dockerExe)) return false;
+  try {
+    const result = spawnSync(dockerExe, ['info', '--format', '{{.ServerVersion}}'], {
+      timeout: 5000, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return result.status === 0 && result.stdout!.trim().length > 0;
+  } catch { return false; }
+}
+
+/** One-time Docker availability preflight (cached after first call). */
+export function isDockerAvailable(): boolean {
+  if (dockerAvailableCache.checked) return dockerAvailableCache.available;
+
+  try {
+    const result = spawnSync('docker', ['info', '--format', '{{.ServerVersion}}'], {
+      timeout: 5000,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    dockerAvailableCache.available = result.status === 0 && result.stdout!.trim().length > 0;
+    if (dockerAvailableCache.available) {
+      dockerUnavailableReason = '';
+    }
+  } catch {
+    dockerAvailableCache.available = false;
+  }
+
+  if (!dockerAvailableCache.available) {
+    if (process.platform === 'win32') {
+      if (checkWindowsDockerDesktop()) {
+        // Docker Desktop is available at the explicit path
+        dockerAvailableCache.available = true;
+        dockerUnavailableReason = '';
+      } else {
+        dockerUnavailableReason = 'Docker Desktop not found. Install from https://docs.docker.com/desktop/setup/install/windows-install/';
+      }
+    } else {
+      dockerUnavailableReason = 'Docker is not available. Install Docker for kernel-level isolation.';
+    }
+  }
+
+  dockerAvailableCache.checked = true;
+  return dockerAvailableCache.available;
+}
+
+/** Returns a human-readable reason why Docker is unavailable, or empty string if it is available. */
+export function getDockerUnavailableReason(): string {
+  return dockerUnavailableReason;
+}
+
+/** Reset Docker availability cache (for tests). */
+export function resetDockerAvailabilityCache(): void {
+  dockerAvailableCache = { available: false, checked: false };
+  dockerUnavailableReason = '';
+}
+
+/** Force Docker availability for tests that need it (Phase 4 test fix). */
+export function setDockerAvailableForTest(available: boolean): void {
+  dockerAvailableCache = { available, checked: true };
+  dockerUnavailableReason = '';
+}
+
+/**
+ * Determine whether to use Docker sandbox for command execution (H4 hardening).
+ *
+ * Docker is used when:
+ *   1. BABEL_DOCKER_DISABLE is NOT set to 'true'
+ *   2. The profile's dockerSandbox field is true
+ *   3. Docker is available (preflight passed)
+ *
+ * Falls back to direct execution with elevated security posture if
+ * Docker is configured but unavailable.
+ */
+export function shouldUseDockerSandbox(
+  executionProfile?: string | null | undefined,
+  dockerImage?: string | null | undefined,
+): boolean {
+  // Explicit opt-out via env var
+  if (process.env['BABEL_DOCKER_DISABLE'] === 'true') {
+    return false;
+  }
+
+  // Load profile and check dockerSandbox field
+  const profile = executionProfile
+    ? resolveExecutionProfile(executionProfile)
+    : resolveExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']);
+  if (!profile.dockerSandbox) {
+    return false;
+  }
+
+  // Docker must be available
+  if (!isDockerAvailable()) return false;
+
+  // Require a Docker image to be configured for sandbox activation
+  const image = dockerImage ?? process.env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim();
+  if (!image) return false;
+
+  return true;
 }
 
 export function buildBenchmarkContainerCommand(
   options: BenchmarkContainerCommandOptions,
 ): BenchmarkContainerCommand {
+  const commonArgs = buildDockerRunCommonArgs(options);
+
   if (CONTAINER_SHELL_SYNTAX_RE.test(options.command)) {
     return {
       executable: 'docker',
-      args: [
-        'run',
-        '--rm',
-        '-v',
-        `${dockerPath(options.projectRoot)}:/app`,
-        '-w',
-        containerWorkingDirectory(options.projectRoot, options.cwd),
-        options.dockerImage,
-        '/bin/sh',
-        '-lc',
-        normalizeContainerShellCommand(options.command),
-      ],
+      args: [...commonArgs, '/bin/sh', '-lc', normalizeContainerShellCommand(options.command)],
     };
   }
 
@@ -157,25 +271,56 @@ export function buildBenchmarkContainerCommand(
   const executable = normalizeContainerExecutable(rawExecutable!, options.projectRoot);
   return {
     executable: 'docker',
-    args: [
-      'run',
-      '--rm',
-      '-v',
-      `${dockerPath(options.projectRoot)}:/app`,
-      '-w',
-      containerWorkingDirectory(options.projectRoot, options.cwd),
-      options.dockerImage,
-      executable,
-      ...rawArgs,
-    ],
+    args: [...commonArgs, executable, ...rawArgs],
   };
+}
+
+/**
+ * Builds the shared Docker `run` argument prefix used by both the direct-
+ * executable and shell-syntax paths.
+ *
+ * Default security posture:
+ *   --rm              Auto-remove container after exit
+ *   --network none    No network access (blocks exfiltration)
+ *   --cap-drop=ALL    Drop all Linux capabilities
+ *   --security-opt=no-new-privileges  Block setuid escalation
+ *
+ * Operators can append extra flags via BABEL_BENCHMARK_DOCKER_EXTRA_ARGS
+ * (space-separated, e.g. "--read-only --user 1000:1000 --memory=4g").
+ */
+function buildDockerRunCommonArgs(options: BenchmarkContainerCommandOptions): string[] {
+  const args = [
+    'run',
+    '--rm',
+    '--network',
+    'none',
+    '--cap-drop=ALL',
+    '--security-opt=no-new-privileges',
+  ];
+
+  const extraArgs = process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']?.trim();
+  if (extraArgs) {
+    args.push(...extraArgs.split(/\s+/).filter(Boolean));
+  }
+
+  args.push(
+    '-v',
+    `${dockerPath(options.projectRoot)}:/app`,
+    '-w',
+    containerWorkingDirectory(options.projectRoot, options.cwd),
+    options.dockerImage,
+  );
+
+  return args;
 }
 
 export function isBenchmarkProjectExecutableCommand(rawCommand: string): boolean {
   const normalized = rawCommand.trim().replace(/\\/g, '/');
-  return normalized.startsWith('./') ||
+  return (
+    normalized.startsWith('./') ||
     normalized.startsWith('/project/') ||
-    normalized.startsWith('/app/');
+    normalized.startsWith('/app/')
+  );
 }
 
 function shellQuote(value: string): string {
@@ -213,11 +358,14 @@ export function parseBenchmarkRuntimeInventoryOutput(
   return {
     dockerImage,
     status: exitCode === 0 ? 'available' : 'unavailable',
-    commands: commands.map(command => byCommand.get(command) ?? {
-      command,
-      available: false,
-      resolvedPath: null,
-    }),
+    commands: commands.map(
+      (command) =>
+        byCommand.get(command) ?? {
+          command,
+          available: false,
+          resolvedPath: null,
+        },
+    ),
     stdout,
     stderr,
     exitCode,
@@ -233,11 +381,28 @@ export function inspectBenchmarkContainerRuntime(
     return {
       dockerImage: image,
       status: 'unavailable',
-      commands: commands.map(command => ({ command, available: false, resolvedPath: null })),
+      commands: commands.map((command) => ({ command, available: false, resolvedPath: null })),
       stdout: '',
       stderr: 'No benchmark Docker image was provided.',
       exitCode: null,
     };
+  }
+
+  // Defense-in-depth: validate every command name before passing it to
+  // /bin/sh -lc.  The list is currently hardcoded, but this guard prevents
+  // injection if it ever becomes dynamic.
+  const COMMAND_NAME_RE = /^[a-zA-Z0-9._-]+$/;
+  for (const cmd of commands) {
+    if (!COMMAND_NAME_RE.test(cmd)) {
+      return {
+        dockerImage: image,
+        status: 'unavailable',
+        commands: commands.map((c) => ({ command: c, available: false, resolvedPath: null })),
+        stdout: '',
+        stderr: `Rejected command "${cmd}": does not match allowed pattern ${COMMAND_NAME_RE.source}.`,
+        exitCode: null,
+      };
+    }
   }
 
   const cacheKey = inventoryCacheKey(image, commands);
@@ -258,28 +423,34 @@ export function inspectBenchmarkContainerRuntime(
     'done',
   ].join(' ');
 
-  const result = spawnSync('docker', ['run', '--rm', image, '/bin/sh', '-lc', script], {
-    encoding: 'utf-8',
-    timeout: 120_000,
-    maxBuffer: 1024 * 1024,
-  });
+  const result = spawnSync(
+    'docker',
+    ['run', '--rm', '--network', 'none', image, '/bin/sh', '-lc', script],
+    {
+      encoding: 'utf-8',
+      timeout: 120_000,
+      maxBuffer: 1024 * 1024,
+    },
+  );
 
-  const inventory = result.status === 0
-    ? parseBenchmarkRuntimeInventoryOutput(
-        image,
-        result.stdout ?? '',
-        result.stderr ?? '',
-        result.status,
-        commands,
-      )
-    : {
-        dockerImage: image,
-        status: 'unavailable' as const,
-        commands: commands.map(command => ({ command, available: false, resolvedPath: null })),
-        stdout: result.stdout ?? '',
-        stderr: result.error?.message ?? result.stderr ?? 'Benchmark runtime inventory command failed.',
-        exitCode: result.status,
-      };
+  const inventory =
+    result.status === 0
+      ? parseBenchmarkRuntimeInventoryOutput(
+          image,
+          result.stdout ?? '',
+          result.stderr ?? '',
+          result.status,
+          commands,
+        )
+      : {
+          dockerImage: image,
+          status: 'unavailable' as const,
+          commands: commands.map((command) => ({ command, available: false, resolvedPath: null })),
+          stdout: result.stdout ?? '',
+          stderr:
+            result.error?.message ?? result.stderr ?? 'Benchmark runtime inventory command failed.',
+          exitCode: result.status,
+        };
   runtimeInventoryCache.set(cacheKey, inventory);
   return inventory;
 }
@@ -296,7 +467,9 @@ export function getBenchmarkCommandBase(rawCommand: string): string | null {
   if (!rawBase) {
     return null;
   }
-  return basename(rawBase.replace(/\\/g, '/')).replace(/\.(cmd|exe|bat)$/i, '').toLowerCase();
+  return basename(rawBase.replace(/\\/g, '/'))
+    .replace(/\.(cmd|exe|bat)$/i, '')
+    .toLowerCase();
 }
 
 export function getBenchmarkRuntimeCommandUsability(
@@ -322,7 +495,7 @@ export function getBenchmarkRuntimeCommandUsability(
     };
   }
 
-  const entry = inventory.commands.find(candidate => candidate.command === commandBase);
+  const entry = inventory.commands.find((candidate) => candidate.command === commandBase);
   if (!entry) {
     return {
       status: 'unknown',
@@ -368,14 +541,14 @@ export function formatBenchmarkRuntimeInventoryPromptLines(
 
   const allowed = new Set(allowedCommandBases);
   const usable = inventory.commands
-    .filter(entry => entry.available && allowed.has(entry.command))
-    .map(entry => entry.command);
+    .filter((entry) => entry.available && allowed.has(entry.command))
+    .map((entry) => entry.command);
   const missing = inventory.commands
-    .filter(entry => !entry.available)
-    .map(entry => entry.command);
+    .filter((entry) => !entry.available)
+    .map((entry) => entry.command);
   const blocked = inventory.commands
-    .filter(entry => entry.available && !allowed.has(entry.command))
-    .map(entry => entry.command);
+    .filter((entry) => entry.available && !allowed.has(entry.command))
+    .map((entry) => entry.command);
 
   return [
     `Benchmark runtime inventory for Docker image ${inventory.dockerImage}:`,

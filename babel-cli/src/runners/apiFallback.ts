@@ -2,7 +2,7 @@
  * apiFallback.ts — Anthropic API Fallback Runner
  *
  * Implements `LlmRunner` using the official `@anthropic-ai/sdk`. This runner
- * is a fallback execution path — it activates when the Claude CLI runner
+ * is the guaranteed completion path — it activates when the Claude CLI runner
  * is unavailable, rate-limited, or produces unparseable output.
  *
  * Configuration (environment variables):
@@ -22,14 +22,14 @@
  *   the error propagate to the caller.
  */
 
-import Anthropic       from '@anthropic-ai/sdk';
+import Anthropic from '@anthropic-ai/sdk';
 import type { ZodType } from 'zod';
 import { type LlmRunner, type RunnerCallbacks, buildStructuredOutputError } from './base.js';
-import { extractJson }    from '../utils/extractJson.js';
+import { extractJson } from '../utils/extractJson.js';
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
-const API_MODEL  = process.env['BABEL_API_MODEL']  ?? 'claude-sonnet-4-6';
+const API_MODEL = process.env['BABEL_API_MODEL'] ?? 'claude-sonnet-4-6';
 const MAX_TOKENS = Number(process.env['BABEL_API_TOKENS'] ?? '8096');
 
 /**
@@ -53,7 +53,7 @@ export class ApiFallbackRunner implements LlmRunner {
     if (!process.env['ANTHROPIC_API_KEY']) {
       throw new Error(
         '[apiFallback] ANTHROPIC_API_KEY is not set. ' +
-        'Add it to your .env file to enable the API fallback runner.',
+          'Add it to your .env file to enable the API fallback runner.',
       );
     }
     this.client = new Anthropic({
@@ -77,22 +77,22 @@ export class ApiFallbackRunner implements LlmRunner {
 
     try {
       response = await this.client.messages.create({
-        model:      API_MODEL,
+        model: API_MODEL,
         max_tokens: MAX_TOKENS,
-        system:     SYSTEM_PROMPT,
-        messages:   [{ role: 'user', content: prompt }],
+        system: SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: prompt }],
       });
     } catch (err) {
       throw new Error(
         `[apiFallback] Anthropic API call failed: ` +
-        `${err instanceof Error ? err.message : String(err)}`,
+          `${err instanceof Error ? err.message : String(err)}`,
       );
     }
 
     // Collect all text blocks from the response content array.
     const text = response.content
       .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-      .map(block => block.text)
+      .map((block) => block.text)
       .join('');
 
     if (!text.trim()) {

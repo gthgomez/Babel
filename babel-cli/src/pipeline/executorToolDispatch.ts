@@ -1,15 +1,8 @@
 import type { EvidenceBundle } from '../evidence.js';
-import {
-  executeTool,
-  type ToolCallRequest,
-  type ToolResult,
-} from '../localTools.js';
+import { executeTool, type ToolCallRequest, type ToolResult } from '../localTools.js';
 import type { ToolCallLog } from '../schemas/agentContracts.js';
 import { isVerifierCommand } from '../services/terminalStatus.js';
-import {
-  canonicalizeExecutorTargetForLog,
-  getTarget,
-} from '../stages/executorHelpers.js';
+import { canonicalizeExecutorTargetForLog, getTarget } from '../stages/executorHelpers.js';
 import { BABEL_ROOT } from './paths.js';
 
 export async function executeExecutorTool(
@@ -31,16 +24,18 @@ export function buildExecutorToolCallEntry(params: {
   target?: string;
 }): ToolCallLog {
   return {
-    step:      params.step,
-    tool:      params.req.tool,
-    target:    params.target ?? getTarget(params.req),
+    step: params.step,
+    tool: params.req.tool,
+    target: params.target ?? getTarget(params.req),
     exit_code: params.toolResult.exit_code,
-    stdout:    params.toolResult.stdout,
-    stderr:    params.toolResult.stderr,
+    stdout: params.toolResult.stdout,
+    stderr: params.toolResult.stderr,
     ...(params.toolResult.denial ? { denial: params.toolResult.denial } : {}),
     ...(params.toolResult.mcp_lifecycle ? { mcp_lifecycle: params.toolResult.mcp_lifecycle } : {}),
-    ...(params.toolResult.checkpoint_ids ? { checkpoint_ids: params.toolResult.checkpoint_ids } : {}),
-    verified:  params.toolResult.exit_code === 0,
+    ...(params.toolResult.checkpoint_ids
+      ? { checkpoint_ids: params.toolResult.checkpoint_ids }
+      : {}),
+    verified: params.toolResult.exit_code === 0,
   };
 }
 
@@ -52,13 +47,13 @@ export function buildBlockedExecutorToolCallEntry(params: {
   target?: string;
 }): ToolCallLog {
   return {
-    step:      params.step,
-    tool:      params.req.tool,
-    target:    params.target ?? getTarget(params.req),
+    step: params.step,
+    tool: params.req.tool,
+    target: params.target ?? getTarget(params.req),
     exit_code: 126,
-    stdout:    params.stdout ?? '(blocked before execution)',
-    stderr:    params.stderr,
-    verified:  false,
+    stdout: params.stdout ?? '(blocked before execution)',
+    stderr: params.stderr,
+    verified: false,
   };
 }
 

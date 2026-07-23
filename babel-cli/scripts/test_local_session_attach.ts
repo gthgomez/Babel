@@ -1,5 +1,5 @@
 /**
- * Local Mode session lifecycle and inspect session-id resolution.
+ * Local Mode session lifecycle + inspect session-id resolution (P0-5).
  */
 import assert from 'node:assert/strict';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -88,7 +88,7 @@ function seedRunBundleForSession(runsRoot: string, sessionId: string): string {
     `${JSON.stringify({
       session_id: sessionId,
       target_project: 'global',
-      analysis: { pipeline_mode: 'verified', task_summary: 'dry-run attach test' },
+      analysis: { pipeline_mode: 'deep', task_summary: 'dry-run attach test' },
       instruction_stack: { domain_id: 'backend' },
       runtime_telemetry: { final_outcome: 'COMPLETE', qa_verdict: 'PASS' },
     }, null, 2)}\n`,
@@ -97,7 +97,7 @@ function seedRunBundleForSession(runsRoot: string, sessionId: string): string {
   writeFileSync(
     join(runDir, '06_runtime_telemetry.json'),
     `${JSON.stringify({
-      pipeline_mode: 'verified',
+      pipeline_mode: 'deep',
       final_outcome: 'COMPLETE',
       qa_verdict: 'PASS',
       domain_id: 'backend',

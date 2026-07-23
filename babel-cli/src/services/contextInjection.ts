@@ -1,19 +1,19 @@
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import {
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-} from 'node:path';
+  buildUntrustedContentBlock,
+  untrustedContentInstruction,
+} from '../utils/untrustedContent.js';
+import { redactSecrets } from '../utils/redaction.js';
 
 export type ContextRefKind = 'file' | 'directory';
 
@@ -170,10 +170,11 @@ function readTextFile(
   }
   const truncated = buffer.byteLength > maxFileBytes;
   const limited = truncated ? buffer.subarray(0, maxFileBytes) : buffer;
+  const rawContent = limited.toString('utf8');
   return {
     path: normalizeForDisplay(relative(projectRoot, filePath)),
     bytes: buffer.byteLength,
-    content: limited.toString('utf8'),
+    content: redactSecrets(rawContent),
     truncated,
   };
 }
@@ -190,10 +191,15 @@ function collectDirectoryFiles(
     }
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const fullPath = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (!EXCLUDED_DIRS.has(entry.name)) {
+      if (lstatSync(fullPath).isDirectory()) {
+        // Case-insensitive exclusion for cross-platform safety.
+        if (!EXCLUDED_DIRS.has(entry.name.toLowerCase())) {
           walk(fullPath);
         }
+        continue;
+      }
+      // Skip symbolic links / junctions to prevent traversal outside the project root.
+      if (entry.isSymbolicLink()) {
         continue;
       }
       if (entry.isFile()) {
@@ -213,27 +219,32 @@ function buildPromptBlock(attachments: ContextAttachment[]): string {
   if (attachments.length === 0) {
     return '';
   }
-  const lines = [
-    '',
-    '',
-    'BABEL ATTACHED CONTEXT',
-    'Treat this context as user-selected local repository material. Preserve normal security and project constraints.',
-  ];
+  const parts: string[] = [];
+  parts.push('');
+  parts.push(untrustedContentInstruction('ATTACHED_CONTEXT'));
+
   for (const attachment of attachments) {
-    lines.push('');
-    lines.push(`Source: ${attachment.ref} -> ${attachment.project_relative_path}`);
+    const header = `Source: ${attachment.ref} -> ${attachment.project_relative_path}`;
+    const fileBlocks: string[] = [];
+
     for (const file of attachment.files) {
-      lines.push('');
-      lines.push(`File: ${file.path}${file.truncated ? ' (truncated)' : ''}`);
-      lines.push('```');
-      lines.push(file.content);
-      lines.push('```');
+      const label = `FILE_${file.path.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}`;
+      const prefix = file.truncated ? `${file.path} (truncated)\n` : `${file.path}\n`;
+      // Escape triple-backtick sequences that could prematurely close the
+      // untrusted content block delimiter in downstream rendering.
+      const escapedContent = file.content.replace(/```/g, '\\`\\`\\`');
+      fileBlocks.push(prefix + buildUntrustedContentBlock(label, escapedContent));
     }
     for (const skipped of attachment.skipped) {
-      lines.push(`Skipped: ${skipped.path} (${skipped.reason})`);
+      fileBlocks.push(`Skipped: ${skipped.path} (${skipped.reason})`);
+    }
+
+    if (fileBlocks.length > 0) {
+      parts.push(header + '\n' + fileBlocks.join('\n'));
     }
   }
-  return lines.join('\n');
+
+  return parts.join('\n');
 }
 
 export function prepareContextInjection(
@@ -268,11 +279,12 @@ export function prepareContextInjection(
     }
 
     const stats = statSync(resolvedPath);
-    const candidates = ref.kind === 'file'
-      ? [{ path: resolvedPath }]
-      : stats.isDirectory()
-        ? collectDirectoryFiles(resolvedPath, maxFilesPerDirectory)
-        : [{ path: resolvedPath, skipped: 'not_directory' }];
+    const candidates =
+      ref.kind === 'file'
+        ? [{ path: resolvedPath }]
+        : stats.isDirectory()
+          ? collectDirectoryFiles(resolvedPath, maxFilesPerDirectory)
+          : [{ path: resolvedPath, skipped: 'not_directory' }];
 
     for (const candidate of candidates) {
       const candidateRel = normalizeForDisplay(relative(projectRoot, candidate.path));
@@ -284,7 +296,11 @@ export function prepareContextInjection(
         base.skipped.push({ path: candidateRel, reason: 'context_total_byte_limit' });
         continue;
       }
-      const file = readTextFile(projectRoot, candidate.path, Math.min(maxFileBytes, maxTotalBytes - totalBytes));
+      const file = readTextFile(
+        projectRoot,
+        candidate.path,
+        Math.min(maxFileBytes, maxTotalBytes - totalBytes),
+      );
       if ('skipped' in file) {
         base.skipped.push({ path: candidateRel, reason: file.skipped });
         continue;
@@ -294,16 +310,19 @@ export function prepareContextInjection(
       base.files.push(file);
     }
 
-    base.status = base.files.length > 0 && base.skipped.length > 0
-      ? 'partial'
-      : base.files.length > 0
-        ? 'included'
-        : 'skipped';
+    base.status =
+      base.files.length > 0 && base.skipped.length > 0
+        ? 'partial'
+        : base.files.length > 0
+          ? 'included'
+          : 'skipped';
     return base;
   });
 
   if (attachments.some((attachment) => attachment.status === 'partial')) {
-    notes.push('Some context attachments were partially included because filtering or size limits applied.');
+    notes.push(
+      'Some context attachments were partially included because filtering or size limits applied.',
+    );
   }
 
   return {
@@ -317,7 +336,10 @@ export function prepareContextInjection(
   };
 }
 
-export function writeContextInjectionEvidence(runDir: string, result: ContextInjectionResult): void {
+export function writeContextInjectionEvidence(
+  runDir: string,
+  result: ContextInjectionResult,
+): void {
   if (result.attachments.length === 0) {
     return;
   }
@@ -327,7 +349,13 @@ export function writeContextInjectionEvidence(runDir: string, result: ContextInj
 }
 
 export function summarizeContextInjection(result: ContextInjectionResult): string {
-  const includedFiles = result.attachments.reduce((sum, attachment) => sum + attachment.files.length, 0);
-  const skippedFiles = result.attachments.reduce((sum, attachment) => sum + attachment.skipped.length, 0);
+  const includedFiles = result.attachments.reduce(
+    (sum, attachment) => sum + attachment.files.length,
+    0,
+  );
+  const skippedFiles = result.attachments.reduce(
+    (sum, attachment) => sum + attachment.skipped.length,
+    0,
+  );
   return `${result.attachments.length} attachment(s), ${includedFiles} file(s) included, ${skippedFiles} skipped`;
 }

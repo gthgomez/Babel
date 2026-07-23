@@ -7,7 +7,9 @@ export interface IdeBridgeContract {
   read_only: true;
   intended_consumers: ['vscode_extension', 'local_webview'];
   views: Array<'run_timeline' | 'plan_review' | 'diffs' | 'checkpoint_list' | 'evidence_browser'>;
-  approval_actions: 'not_supported';
+  approval_actions: 'session_only';
+  host_mode: 'enhanced_repl';
+  approval_semantics: string;
   mutation_policy: {
     mutates_workspace: false;
     mutates_git: false;
@@ -52,7 +54,10 @@ export function buildIdeBridgeContract(): IdeBridgeContract {
     read_only: true,
     intended_consumers: ['vscode_extension', 'local_webview'],
     views: ['run_timeline', 'plan_review', 'diffs', 'checkpoint_list', 'evidence_browser'],
-    approval_actions: 'not_supported',
+    approval_actions: 'session_only',
+    host_mode: 'enhanced_repl',
+    approval_semantics:
+      'Approve/deny is available only inside the interactive REPL via the stdin coordinator and checklist pause-resume flow. IDE bridge snapshots remain read-only.',
     mutation_policy: {
       mutates_workspace: false,
       mutates_git: false,
@@ -66,8 +71,8 @@ function listFiles(dir: string): IdeBridgeEvidenceFile[] {
     return [];
   }
   return readdirSync(dir, { withFileTypes: true })
-    .filter(entry => entry.isFile())
-    .map(entry => {
+    .filter((entry) => entry.isFile())
+    .map((entry) => {
       const path = join(dir, entry.name);
       return {
         name: entry.name,
@@ -79,11 +84,8 @@ function listFiles(dir: string): IdeBridgeEvidenceFile[] {
 }
 
 function findCheckpointDir(runDir: string): string | null {
-  const candidates = [
-    join(runDir, 'checkpoints'),
-    join(runDir, '04_checkpoints'),
-  ];
-  return candidates.find(candidate => existsSync(candidate)) ?? null;
+  const candidates = [join(runDir, 'checkpoints'), join(runDir, '04_checkpoints')];
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
 export function buildIdeBridgeSnapshot(runDir: string): IdeBridgeSnapshot {
@@ -127,7 +129,7 @@ export function formatIdeBridgeSnapshotHuman(snapshot: IdeBridgeSnapshot): strin
     `Checkpoints: ${snapshot.checkpoint_list.length}`,
     `Plan: ${snapshot.plan_review.plan_path ? basename(snapshot.plan_review.plan_path) : '(missing)'}`,
     `QA: ${snapshot.plan_review.qa_path ? basename(snapshot.plan_review.qa_path) : '(missing)'}`,
-    'Policy: read-only; no approval actions; no workspace, git, or remote mutation.',
+    `Policy: read-only bridge; approval_actions=${snapshot.contract.approval_actions}; host_mode=${snapshot.contract.host_mode}; no workspace, git, or remote mutation.`,
   ].join('\n');
 }
 

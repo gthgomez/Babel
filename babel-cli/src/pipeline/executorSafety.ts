@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import {
   getBenchmarkRuntimeCommandUsability,
   getCachedBenchmarkContainerRuntimeInventory,
-  shouldUseBenchmarkContainerExecution,
+  shouldUseDockerSandbox,
 } from '../config/benchmarkContainer.js';
 import {
   DEFAULT_EXECUTION_PROFILE,
@@ -12,11 +12,7 @@ import {
 } from '../config/executionProfiles.js';
 import { formatToolCapabilityResolutionForFeedback } from '../config/toolCapabilities.js';
 import { getAllowedShellCommands, validateExecutorShellCommand } from '../sandbox.js';
-import type {
-  OrchestratorManifest,
-  QaVerdictReject,
-  SwePlan,
-} from '../schemas/agentContracts.js';
+import type { OrchestratorManifest, QaVerdictReject, SwePlan } from '../schemas/agentContracts.js';
 import { collectBenchmarkRiskPlanViolations } from '../stages/benchmarkVerification.js';
 import { isWithinProjectRootPath } from '../stages/executorHelpers.js';
 import {
@@ -44,7 +40,6 @@ import {
 import { inferProjectRoot } from './manifestContext.js';
 import { BABEL_ROOT } from './paths.js';
 
-
 function getToolCapabilityBlockedFixHint(
   resolution: ReturnType<typeof resolveShellCommandCapability>,
 ): string {
@@ -61,34 +56,43 @@ function getToolCapabilityBlockedFixHint(
 function getExecutorSafetyProposedFixStrategy(
   failures: readonly QaVerdictReject['failures'][number][],
 ): string {
-  if (failures.some(failure => /BENCHMARK_CUSTOM_VERIFIER_REQUIRED/.test(failure.condition))) {
+  if (failures.some((failure) => /BENCHMARK_CUSTOM_VERIFIER_REQUIRED/.test(failure.condition))) {
     return 'Regenerate the plan with a real custom executable verifier step that exits nonzero unless filtered out.html satisfies the alert/bypass postcondition; do not substitute manual browser instructions or file_read inspection.';
   }
 
-  if (failures.some(failure => /BENCHMARK_STRIPPED_PAYLOAD_ASSUMPTION/.test(failure.condition))) {
+  if (failures.some((failure) => /BENCHMARK_STRIPPED_PAYLOAD_ASSUMPTION/.test(failure.condition))) {
     return 'Regenerate the plan without pre-committing to script tags, on* event handlers, or entity-encoded JavaScript; choose the payload family only from filter.py source evidence.';
   }
 
-  if (failures.some(failure => /BENCHMARK_SOURCE_INSPECTION_REQUIRED/.test(failure.condition))) {
+  if (failures.some((failure) => /BENCHMARK_SOURCE_INSPECTION_REQUIRED/.test(failure.condition))) {
     return 'Regenerate the plan so it reads filter.py before choosing or writing the out.html payload.';
   }
 
-  const pytestMissingFailure = failures.find(failure =>
-    /run\.pytest_test_outputs|test_outputs\.py/i.test(failure.condition) &&
-    /pytest/i.test(failure.condition),
+  const pytestMissingFailure = failures.find(
+    (failure) =>
+      /run\.pytest_test_outputs|test_outputs\.py/i.test(failure.condition) &&
+      /pytest/i.test(failure.condition),
   );
   if (pytestMissingFailure) {
     return 'Regenerate the plan without any test_outputs.py verifier step because pytest is unavailable; use an available custom/source-level check or halt with the missing verification capability.';
   }
 
-  return failures[0]?.fix_hint ??
-    'Regenerate the plan so every executor-facing target is concrete, in-root, and compatible with the active execution profile.';
+  return (
+    failures[0]?.fix_hint ??
+    'Regenerate the plan so every executor-facing target is concrete, in-root, and compatible with the active execution profile.'
+  );
 }
 
 function extractWindowsAbsolutePaths(value: string): string[] {
-  const quotedMatches = Array.from(value.matchAll(/["']([A-Za-z]:\\[^"']+)["']/g), match => match[1] ?? '');
-  const bareMatches = Array.from(value.matchAll(/\b([A-Za-z]:\\[^\s"'|;&]+)/g), match => match[1] ?? '');
-  return [...new Set([...quotedMatches, ...bareMatches].filter(match => match.length > 0))];
+  const quotedMatches = Array.from(
+    value.matchAll(/["']([A-Za-z]:\\[^"']+)["']/g),
+    (match) => match[1] ?? '',
+  );
+  const bareMatches = Array.from(
+    value.matchAll(/\b([A-Za-z]:\\[^\s"'|;&]+)/g),
+    (match) => match[1] ?? '',
+  );
+  return [...new Set([...quotedMatches, ...bareMatches].filter((match) => match.length > 0))];
 }
 
 function collectBoundedContractViolations(
@@ -106,14 +110,16 @@ function collectBoundedContractViolations(
 
   const failures: QaVerdictReject['failures'] = [];
   const fileWriteTargets = swePlan.minimal_action_set
-    .filter(step => step.tool === 'file_write')
-    .map(step => ({
+    .filter((step) => step.tool === 'file_write')
+    .map((step) => ({
       step: step.step,
       target: normalizePathForComparison(String(step.target ?? '')),
     }))
-    .filter(entry => entry.target.length > 0);
-  const fileWriteSet = new Set(fileWriteTargets.map(entry => entry.target.toLowerCase()));
-  const requestedTargetSet = new Set(contract.requestedTargets.map(target => target.toLowerCase()));
+    .filter((entry) => entry.target.length > 0);
+  const fileWriteSet = new Set(fileWriteTargets.map((entry) => entry.target.toLowerCase()));
+  const requestedTargetSet = new Set(
+    contract.requestedTargets.map((target) => target.toLowerCase()),
+  );
 
   for (const requestedTarget of contract.requestedTargets) {
     if (!fileWriteSet.has(requestedTarget.toLowerCase())) {
@@ -132,7 +138,8 @@ function collectBoundedContractViolations(
         tag: 'SFDIPOT-P',
         condition: `[BOUNDED_CONTRACT] Step ${fileWriteTarget.step} writes an unrequested file for this bounded task: ${fileWriteTarget.target}`,
         confidence: 5,
-        fix_hint: 'Keep file_write targets inside the explicit requested target set for bounded tasks.',
+        fix_hint:
+          'Keep file_write targets inside the explicit requested target set for bounded tasks.',
       });
     }
   }
@@ -146,7 +153,8 @@ function collectBoundedContractViolations(
     failure_count: failures.length,
     failures,
     overall_confidence: 5,
-    proposed_fix_strategy: 'Regenerate the plan so bounded tasks preserve the exact requested output path set with one file_write per requested file.',
+    proposed_fix_strategy:
+      'Regenerate the plan so bounded tasks preserve the exact requested output path set with one file_write per requested file.',
   };
 }
 
@@ -174,14 +182,14 @@ export function assertBoundedPlanActivationContract(
   }
 
   const fileWriteTargets = approvedPlan.minimal_action_set
-    .filter(step => step.tool === 'file_write')
-    .map(step => normalizePathForComparison(String(step.target ?? '')))
-    .filter(target => target.length > 0);
-  const fileWriteSet     = new Set(fileWriteTargets.map(t => t.toLowerCase()));
-  const requestedTargetSet = new Set(contract.requestedTargets.map(t => t.toLowerCase()));
+    .filter((step) => step.tool === 'file_write')
+    .map((step) => normalizePathForComparison(String(step.target ?? '')))
+    .filter((target) => target.length > 0);
+  const fileWriteSet = new Set(fileWriteTargets.map((t) => t.toLowerCase()));
+  const requestedTargetSet = new Set(contract.requestedTargets.map((t) => t.toLowerCase()));
 
-  const missing = contract.requestedTargets.filter(t => !fileWriteSet.has(t.toLowerCase()));
-  const extra   = fileWriteTargets.filter(t => !requestedTargetSet.has(t.toLowerCase()));
+  const missing = contract.requestedTargets.filter((t) => !fileWriteSet.has(t.toLowerCase()));
+  const extra = fileWriteTargets.filter((t) => !requestedTargetSet.has(t.toLowerCase()));
 
   if (missing.length === 0 && extra.length === 0) {
     return null;
@@ -224,18 +232,18 @@ export function collectExecutorSafetyViolations(
   const cdWrapperRe = /\bcd\s+[A-Za-z]:\\/i;
   const globTargetRe = /[*?\[\]]/;
   const anglePlaceholderRe = /<[A-Za-z][^>\s]*>/;
-  const benchmarkShellSyntaxAllowed = shouldUseBenchmarkContainerExecution(
-    executionProfileName,
-    process.env['BABEL_BENCHMARK_DOCKER_IMAGE'],
-  );
+  const benchmarkShellSyntaxAllowed = shouldUseDockerSandbox(executionProfileName);
   const benchmarkRuntimeInventory = benchmarkShellSyntaxAllowed
-    ? getCachedBenchmarkContainerRuntimeInventory(process.env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim() ?? '')
+    ? getCachedBenchmarkContainerRuntimeInventory(
+        process.env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim() ?? '',
+      )
     : null;
   const allowedShellCommands = getAllowedShellCommands(executionProfileName);
   if (/\bbreak-filter-js-from-html\b/i.test(rawTask)) {
-    const readsFilterSource = swePlan.minimal_action_set.some(step =>
-      step.tool === 'file_read' &&
-      normalizePathForComparison(String(step.target ?? '')).toLowerCase() === 'filter.py',
+    const readsFilterSource = swePlan.minimal_action_set.some(
+      (step) =>
+        step.tool === 'file_read' &&
+        normalizePathForComparison(String(step.target ?? '')).toLowerCase() === 'filter.py',
     );
     if (!readsFilterSource) {
       failures.push({
@@ -250,8 +258,9 @@ export function collectExecutorSafetyViolations(
 
     const planText = JSON.stringify(swePlan).toLowerCase();
     if (
-      /\b(?:event handlers?|onerror|onclick|onload|onmouseover|script tags?|<script|encoded alert|encoded javascript|html entity encoding|obfuscated javascript)\b/i
-        .test(planText)
+      /\b(?:event handlers?|onerror|onclick|onload|onmouseover|script tags?|<script|encoded alert|encoded javascript|html entity encoding|obfuscated javascript)\b/i.test(
+        planText,
+      )
     ) {
       failures.push({
         tag: 'SFDIPOT-P',
@@ -263,16 +272,22 @@ export function collectExecutorSafetyViolations(
       });
     }
 
-    const hasCustomVerifierStep = swePlan.minimal_action_set.some(step => {
+    const hasCustomVerifierStep = swePlan.minimal_action_set.some((step) => {
       if (step.tool !== 'shell_exec' && step.tool !== 'test_run') {
         return false;
       }
       const command = String(step.target ?? '').toLowerCase();
-      if (/(?:manual verification|manual browser|open in browser|confirm alert|print\(['"`]?manual)/.test(command)) {
+      if (
+        /(?:manual verification|manual browser|open in browser|confirm alert|print\(['"`]?manual)/.test(
+          command,
+        )
+      ) {
         return false;
       }
-      return !/\b(?:test_outputs\.py|filter\.py)\b/.test(command) &&
-        /(?:verify|check|assert|bypass|alert|postcondition)/.test(command);
+      return (
+        !/\b(?:test_outputs\.py|filter\.py)\b/.test(command) &&
+        /(?:verify|check|assert|bypass|alert|postcondition)/.test(command)
+      );
     });
     if (!hasCustomVerifierStep) {
       failures.push({
@@ -286,15 +301,19 @@ export function collectExecutorSafetyViolations(
     }
   }
   if (benchmarkShellSyntaxAllowed && /\bmerge-diff-arc-agi-task\b/i.test(rawTask)) {
-    const hasGitNativeStep = swePlan.minimal_action_set.some(step =>
-      (step.tool === 'shell_exec' || step.tool === 'test_run') &&
-      /\bgit\s+(?:bundle|init|fetch|checkout|switch|merge|status|branch)\b/i.test(String(step.target ?? '')),
+    const hasGitNativeStep = swePlan.minimal_action_set.some(
+      (step) =>
+        (step.tool === 'shell_exec' || step.tool === 'test_run') &&
+        /\bgit\s+(?:bundle|init|fetch|checkout|switch|merge|status|branch)\b/i.test(
+          String(step.target ?? ''),
+        ),
     );
-    const hasSourceOnlyRepoWrite = swePlan.minimal_action_set.some(step =>
-      step.tool === 'file_write' &&
-      /(?:^|[\\/])repo[\\/](?:algo\.py|\.gitkeep)$/i.test(
-        normalizePathForComparison(String(step.target ?? '')),
-      ),
+    const hasSourceOnlyRepoWrite = swePlan.minimal_action_set.some(
+      (step) =>
+        step.tool === 'file_write' &&
+        /(?:^|[\\/])repo[\\/](?:algo\.py|\.gitkeep)$/i.test(
+          normalizePathForComparison(String(step.target ?? '')),
+        ),
     );
     if (!hasGitNativeStep && hasSourceOnlyRepoWrite) {
       failures.push({
@@ -317,7 +336,8 @@ export function collectExecutorSafetyViolations(
         tag: 'INCOMPLETE_SUBMISSION',
         condition: `[EXECUTOR_SAFETY] Step ${step.step} contains an unresolved placeholder target: ${target}`,
         confidence: 5,
-        fix_hint: 'Replace placeholders with a concrete in-project path or command before sending the plan to executor.',
+        fix_hint:
+          'Replace placeholders with a concrete in-project path or command before sending the plan to executor.',
       });
       continue;
     }
@@ -328,7 +348,8 @@ export function collectExecutorSafetyViolations(
           tag: 'SFDIPOT-P',
           condition: `[EXECUTOR_SAFETY] Step ${step.step} uses a glob target unsupported by ${step.tool}: ${target}`,
           confidence: 5,
-          fix_hint: 'Use directory_list first, then concrete file_read/file_write targets. Do not pass wildcards to file tools.',
+          fix_hint:
+            'Use directory_list first, then concrete file_read/file_write targets. Do not pass wildcards to file tools.',
         });
         continue;
       }
@@ -356,7 +377,8 @@ export function collectExecutorSafetyViolations(
           tag: 'SFDIPOT-P',
           condition: `[EXECUTOR_SAFETY] Step ${step.step} targets a path outside target_project_path: ${target}`,
           confidence: 5,
-          fix_hint: 'Use only project-root-relative paths or mirrored in-root references for executor-accessible files.',
+          fix_hint:
+            'Use only project-root-relative paths or mirrored in-root references for executor-accessible files.',
         });
       }
       continue;
@@ -380,16 +402,16 @@ export function collectExecutorSafetyViolations(
         const benchmarkInstallPlanReject = benchmarkShellSyntaxAllowed
           ? getBenchmarkDependencyInstallPlanReject(rawTask, target)
           : null;
-        const gitBundleArchiveReject = benchmarkShellSyntaxAllowed &&
-          isInvalidGitBundleArchiveCommand(rawTask, target);
-        const shellCompatibilityIssue = benchmarkInstallPlanReject || gitBundleArchiveReject
-          ? null
-          : validateExecutorShellCommand(
-          target,
-          process.platform,
-          executionProfileName,
-          process.env['BABEL_BENCHMARK_DOCKER_IMAGE'],
-        );
+        const gitBundleArchiveReject =
+          benchmarkShellSyntaxAllowed && isInvalidGitBundleArchiveCommand(rawTask, target);
+        const shellCompatibilityIssue =
+          benchmarkInstallPlanReject || gitBundleArchiveReject
+            ? null
+            : validateExecutorShellCommand(
+                target,
+                process.platform,
+                executionProfileName,
+              );
         if (benchmarkInstallPlanReject) {
           failures.push({
             tag: 'SFDIPOT-P',
@@ -401,8 +423,7 @@ export function collectExecutorSafetyViolations(
         } else if (gitBundleArchiveReject) {
           failures.push({
             tag: 'SFDIPOT-P',
-            condition:
-              `[EXECUTOR_SAFETY] Step ${step.step} treats a Git bundle as an archive: ${target}`,
+            condition: `[EXECUTOR_SAFETY] Step ${step.step} treats a Git bundle as an archive: ${target}`,
             confidence: 5,
             fix_hint:
               'Git .bundle files are not tar/gzip archives. Use Git-native bundle commands if git is usable, or halt with missing required runtime capability.',
@@ -414,7 +435,8 @@ export function collectExecutorSafetyViolations(
             executionProfileName,
             benchmarkRuntimeInventory,
           );
-          const capabilityFeedback = formatToolCapabilityResolutionForFeedback(capabilityResolution);
+          const capabilityFeedback =
+            formatToolCapabilityResolutionForFeedback(capabilityResolution);
           if (
             capabilityResolution.status === 'suggest_replacement' &&
             normalizeShellCommandForComparison(capabilityResolution.replacementCommand ?? '') !==
@@ -426,10 +448,9 @@ export function collectExecutorSafetyViolations(
                 `[EXECUTOR_SAFETY] Step ${step.step} uses a generic command where a safer capability implementation is available: ` +
                 capabilityFeedback,
               confidence: 5,
-              fix_hint:
-                capabilityResolution.replacementCommand
-                  ? `Replace the command with "${capabilityResolution.replacementCommand}".`
-                  : 'Replace the command with the capability-specific implementation.',
+              fix_hint: capabilityResolution.replacementCommand
+                ? `Replace the command with "${capabilityResolution.replacementCommand}".`
+                : 'Replace the command with the capability-specific implementation.',
             });
           } else if (
             capabilityResolution.status === 'blocked_missing_requirement' ||
@@ -477,14 +498,16 @@ export function collectExecutorSafetyViolations(
         }
       }
 
-      const outOfRootPaths = extractWindowsAbsolutePaths(target)
-        .filter(candidatePath => !isWithinProjectRootPath(projectRoot, candidatePath));
+      const outOfRootPaths = extractWindowsAbsolutePaths(target).filter(
+        (candidatePath) => !isWithinProjectRootPath(projectRoot, candidatePath),
+      );
       if (outOfRootPaths.length > 0) {
         failures.push({
           tag: 'SFDIPOT-P',
           condition: `[EXECUTOR_SAFETY] Step ${step.step} references out-of-root path(s) in command target: ${outOfRootPaths.join(', ')}`,
           confidence: 5,
-          fix_hint: 'Use only paths rooted under target_project_path or stage mirrored references inside the project root first.',
+          fix_hint:
+            'Use only paths rooted under target_project_path or stage mirrored references inside the project root first.',
         });
       }
     }
@@ -510,8 +533,7 @@ function collectManyFileAggregationViolations(
   rawTask: string,
 ): QaVerdictReject | null {
   const manyFileAggregationTask =
-    /\b(all|multiple|every)\s+(?:log\s+)?files\b/i.test(rawTask) ||
-    /\ball\s+logs\b/i.test(rawTask);
+    /\b(all|multiple|every)\s+(?:log\s+)?files\b/i.test(rawTask) || /\ball\s+logs\b/i.test(rawTask);
   const aggregationOutputTask =
     /\b(count|aggregate|summari[sz]e|analy[sz]e)\b/i.test(rawTask) &&
     /\b(csv|json|summary|report)\b/i.test(rawTask);
@@ -519,15 +541,15 @@ function collectManyFileAggregationViolations(
     return null;
   }
 
-  const hasHelperExecution = swePlan.minimal_action_set.some(step =>
-    step.tool === 'shell_exec' || step.tool === 'test_run',
+  const hasHelperExecution = swePlan.minimal_action_set.some(
+    (step) => step.tool === 'shell_exec' || step.tool === 'test_run',
   );
-  const hasHelperWrite = swePlan.minimal_action_set.some(step => {
+  const hasHelperWrite = swePlan.minimal_action_set.some((step) => {
     if (step.tool !== 'file_write') return false;
     const target = String(step.target ?? '').toLowerCase();
     return /\.(py|js|mjs|ts|sh|ps1|rb)$/.test(target);
   });
-  const finalOutputWrites = swePlan.minimal_action_set.filter(step => {
+  const finalOutputWrites = swePlan.minimal_action_set.filter((step) => {
     if (step.tool !== 'file_write') return false;
     const target = String(step.target ?? '').toLowerCase();
     return /\.(csv|json|txt|tsv)$/.test(target);
@@ -576,48 +598,55 @@ export function collectRuntimePrerequisiteViolations(
 ): QaVerdictReject | null {
   const failures: QaVerdictReject['failures'] = [];
 
-  const firstGradleLikeStep = swePlan.minimal_action_set.find(step =>
-    (step.tool === 'shell_exec' || step.tool === 'test_run') &&
-    usesGradleLikeCommand(String(step.target ?? '')),
+  const firstGradleLikeStep = swePlan.minimal_action_set.find(
+    (step) =>
+      (step.tool === 'shell_exec' || step.tool === 'test_run') &&
+      usesGradleLikeCommand(String(step.target ?? '')),
   );
 
   if (!firstGradleLikeStep) {
     return null;
   }
 
-  const priorSteps = swePlan.minimal_action_set.filter(step => step.step < firstGradleLikeStep.step);
-  const hasJavaProvisioning = priorSteps.some(step => isJavaProvisioningStep(step));
-  const hasGradleProvisioning = priorSteps.some(step => isGradleProvisioningStep(step));
+  const priorSteps = swePlan.minimal_action_set.filter(
+    (step) => step.step < firstGradleLikeStep.step,
+  );
+  const hasJavaProvisioning = priorSteps.some((step) => isJavaProvisioningStep(step));
+  const hasGradleProvisioning = priorSteps.some((step) => isGradleProvisioningStep(step));
 
   if (!javaRuntimeStatus.available && !hasJavaProvisioning) {
     failures.push({
       tag: 'SFDIPOT-P',
       condition: `[RUNTIME_PREFLIGHT] Step ${firstGradleLikeStep.step} invokes Gradle (${firstGradleLikeStep.target}) but Java is currently unavailable in the executor environment.`,
       confidence: 5,
-      fix_hint: 'Add an earlier step that installs or configures Java/JDK and JAVA_HOME before the first gradle/gradlew command.',
+      fix_hint:
+        'Add an earlier step that installs or configures Java/JDK and JAVA_HOME before the first gradle/gradlew command.',
     });
   }
 
-  const usesGlobalGradle = swePlan.minimal_action_set.some(step =>
-    (step.tool === 'shell_exec' || step.tool === 'test_run') &&
-    /\bgradle\b/i.test(String(step.target ?? '')) &&
-    !/\b(winget|choco|scoop)\b/i.test(String(step.target ?? '')) &&
-    !/\bgradlew(?:\.bat)?\b/i.test(String(step.target ?? '')),
-  );
-
-  if (usesGlobalGradle && !gradleRuntimeStatus.available && !hasGradleProvisioning) {
-    const firstGlobalGradleStep = swePlan.minimal_action_set.find(step =>
+  const usesGlobalGradle = swePlan.minimal_action_set.some(
+    (step) =>
       (step.tool === 'shell_exec' || step.tool === 'test_run') &&
       /\bgradle\b/i.test(String(step.target ?? '')) &&
       !/\b(winget|choco|scoop)\b/i.test(String(step.target ?? '')) &&
       !/\bgradlew(?:\.bat)?\b/i.test(String(step.target ?? '')),
+  );
+
+  if (usesGlobalGradle && !gradleRuntimeStatus.available && !hasGradleProvisioning) {
+    const firstGlobalGradleStep = swePlan.minimal_action_set.find(
+      (step) =>
+        (step.tool === 'shell_exec' || step.tool === 'test_run') &&
+        /\bgradle\b/i.test(String(step.target ?? '')) &&
+        !/\b(winget|choco|scoop)\b/i.test(String(step.target ?? '')) &&
+        !/\bgradlew(?:\.bat)?\b/i.test(String(step.target ?? '')),
     );
     if (firstGlobalGradleStep) {
       failures.push({
         tag: 'SFDIPOT-P',
         condition: `[RUNTIME_PREFLIGHT] Step ${firstGlobalGradleStep.step} invokes global Gradle (${firstGlobalGradleStep.target}) but gradle is not available on PATH in the executor environment.`,
         confidence: 5,
-        fix_hint: 'Install or configure Gradle before the first global `gradle` command, or switch to a wrapper-based path that does not assume global Gradle already exists.',
+        fix_hint:
+          'Install or configure Gradle before the first global `gradle` command, or switch to a wrapper-based path that does not assume global Gradle already exists.',
       });
     }
   }
@@ -631,7 +660,8 @@ export function collectRuntimePrerequisiteViolations(
     failure_count: failures.length,
     failures,
     overall_confidence: 5,
-    proposed_fix_strategy: 'Regenerate the plan so runtime prerequisites are satisfied first: bootstrap the missing Java/Gradle dependency, then run Gradle verification or builds.',
+    proposed_fix_strategy:
+      'Regenerate the plan so runtime prerequisites are satisfied first: bootstrap the missing Java/Gradle dependency, then run Gradle verification or builds.',
   };
 }
 
@@ -652,10 +682,11 @@ export function collectGradleBootstrapSequencingViolations(
   }
 
   const failures: QaVerdictReject['failures'] = [];
-  const provisioningIndex = swePlan.minimal_action_set.findIndex(step => isGradleProvisioningStep(step));
-  const provisioningStepNumber = provisioningIndex >= 0
-    ? swePlan.minimal_action_set[provisioningIndex]?.step ?? null
-    : null;
+  const provisioningIndex = swePlan.minimal_action_set.findIndex((step) =>
+    isGradleProvisioningStep(step),
+  );
+  const provisioningStepNumber =
+    provisioningIndex >= 0 ? (swePlan.minimal_action_set[provisioningIndex]?.step ?? null) : null;
 
   for (const step of swePlan.minimal_action_set) {
     const target = String(step.target ?? '').trim();
@@ -666,34 +697,32 @@ export function collectGradleBootstrapSequencingViolations(
     }
 
     const normalizedTarget = target.replace(/\//g, '\\').toLowerCase();
-    const isMirroredGradleRead = (
-      (step.tool === 'file_read' || step.tool === 'directory_list') &&
-      normalizedTarget.includes('\\reference-source\\') &&
-      normalizedTarget.includes('gradle')
-    ) || (
-      (step.tool === 'file_read' || step.tool === 'directory_list') &&
-      normalizedTarget.includes('\\reference-source\\build.gradle.kts')
-    ) || (
-      (step.tool === 'file_read' || step.tool === 'directory_list') &&
-      normalizedTarget.includes('\\reference-source\\settings.gradle.kts')
-    ) || (
-      (step.tool === 'file_read' || step.tool === 'directory_list') &&
-      normalizedTarget.includes('\\reference-source\\app\\build.gradle.kts')
-    );
+    const isMirroredGradleRead =
+      ((step.tool === 'file_read' || step.tool === 'directory_list') &&
+        normalizedTarget.includes('\\reference-montecarlo-ledger\\') &&
+        normalizedTarget.includes('gradle')) ||
+      ((step.tool === 'file_read' || step.tool === 'directory_list') &&
+        normalizedTarget.includes('\\reference-montecarlo-ledger\\build.gradle.kts')) ||
+      ((step.tool === 'file_read' || step.tool === 'directory_list') &&
+        normalizedTarget.includes('\\reference-montecarlo-ledger\\settings.gradle.kts')) ||
+      ((step.tool === 'file_read' || step.tool === 'directory_list') &&
+        normalizedTarget.includes('\\reference-montecarlo-ledger\\app\\build.gradle.kts'));
 
     if (isMirroredGradleRead) {
       failures.push({
         tag: 'SFDIPOT-P',
         condition: `[GRADLE_BOOTSTRAP] Step ${step.step} probes mirrored Gradle files during bootstrap even though global gradle is absent and gradle-wrapper.jar is missing: ${target}`,
         confidence: 5,
-        fix_hint: 'Provision Gradle first, then generate/verify gradle-wrapper.jar. Do not read mirrored Gradle files during bootstrap unless they are already confirmed to exist.',
+        fix_hint:
+          'Provision Gradle first, then generate/verify gradle-wrapper.jar. Do not read mirrored Gradle files during bootstrap unless they are already confirmed to exist.',
       });
     }
 
-    const usesGlobalGradle = (step.tool === 'shell_exec' || step.tool === 'test_run')
-      && /\bgradle\b/i.test(target)
-      && !/\b(winget|choco|scoop)\b/i.test(target)
-      && !/\bgradlew(?:\.bat)?\b/i.test(target);
+    const usesGlobalGradle =
+      (step.tool === 'shell_exec' || step.tool === 'test_run') &&
+      /\bgradle\b/i.test(target) &&
+      !/\b(winget|choco|scoop)\b/i.test(target) &&
+      !/\bgradlew(?:\.bat)?\b/i.test(target);
     if (
       usesGlobalGradle &&
       (provisioningStepNumber === null || step.step < provisioningStepNumber)
@@ -702,7 +731,8 @@ export function collectGradleBootstrapSequencingViolations(
         tag: 'SFDIPOT-P',
         condition: `[GRADLE_BOOTSTRAP] Step ${step.step} uses global Gradle before any concrete provisioning step while gradle is absent and gradle-wrapper.jar is missing: ${target}`,
         confidence: 5,
-        fix_hint: 'Make the first global-Gradle-related step a concrete provisioning step such as winget install Gradle.Gradle, then verify gradle, then run gradle wrapper.',
+        fix_hint:
+          'Make the first global-Gradle-related step a concrete provisioning step such as winget install Gradle.Gradle, then verify gradle, then run gradle wrapper.',
       });
     }
   }
@@ -716,7 +746,8 @@ export function collectGradleBootstrapSequencingViolations(
     failure_count: failures.length,
     failures,
     overall_confidence: 5,
-    proposed_fix_strategy: 'Regenerate the Gradle bootstrap portion so it provisions Gradle first, avoids mirrored Gradle file reads during bootstrap, and only then generates/verifies gradle-wrapper.jar.',
+    proposed_fix_strategy:
+      'Regenerate the Gradle bootstrap portion so it provisions Gradle first, avoids mirrored Gradle file reads during bootstrap, and only then generates/verifies gradle-wrapper.jar.',
   };
 }
 
@@ -728,8 +759,9 @@ export function collectAndroidVerificationCoverageViolations(
   const pipelineMode = String(manifest.analysis?.pipeline_mode ?? '').toLowerCase();
   const taskCategory = String(manifest.analysis?.task_category ?? '').toLowerCase();
   const isAutonomousAndroidTask =
-    pipelineMode === 'autonomous' &&
-    (manifest.instruction_stack?.domain_id === 'domain_android_kotlin' || taskCategory === 'mobile');
+    pipelineMode === 'deep' &&
+    (manifest.instruction_stack?.domain_id === 'domain_android_kotlin' ||
+      taskCategory === 'mobile');
 
   if (!isAutonomousAndroidTask) {
     return null;
@@ -739,18 +771,19 @@ export function collectAndroidVerificationCoverageViolations(
     return null;
   }
 
-  const shellSteps = swePlan.minimal_action_set.filter(step =>
-    step.tool === 'shell_exec' || step.tool === 'test_run',
+  const shellSteps = swePlan.minimal_action_set.filter(
+    (step) => step.tool === 'shell_exec' || step.tool === 'test_run',
   );
-  const hasAssembleDebug = shellSteps.some(step =>
+  const hasAssembleDebug = shellSteps.some((step) =>
     /\bgradlew(?:\.bat)?\b.*\bassembleDebug\b/i.test(String(step.target ?? '')),
   );
-  const hasGradleTest = shellSteps.some(step =>
+  const hasGradleTest = shellSteps.some((step) =>
     /\bgradlew(?:\.bat)?\b.*\btest\b/i.test(String(step.target ?? '')),
   );
-  const firstVerificationStep = shellSteps.length > 0
-    ? Math.min(...shellSteps.map(step => step.step))
-    : Number.POSITIVE_INFINITY;
+  const firstVerificationStep =
+    shellSteps.length > 0
+      ? Math.min(...shellSteps.map((step) => step.step))
+      : Number.POSITIVE_INFINITY;
   const taskShapeProfile = String(manifest.resolution_policy?.task_shape_profile ?? 'full');
   if (
     taskShapeProfile === 'android_utility_file' ||
@@ -760,9 +793,11 @@ export function collectAndroidVerificationCoverageViolations(
   }
 
   const earlyVerificationLimit =
-    taskShapeProfile === 'android_warning_cleanup' ? 10 :
-    taskShapeProfile === 'android_ui_improvement' ? 5 :
-    8;
+    taskShapeProfile === 'android_warning_cleanup'
+      ? 10
+      : taskShapeProfile === 'android_ui_improvement'
+        ? 5
+        : 8;
 
   if (hasAssembleDebug && hasGradleTest && firstVerificationStep <= earlyVerificationLimit) {
     return null;
@@ -772,9 +807,10 @@ export function collectAndroidVerificationCoverageViolations(
     !hasAssembleDebug ? 'gradlew assembleDebug' : null,
     !hasGradleTest ? 'gradlew test' : null,
   ].filter((part): part is string => part !== null);
-  const schedulingNote = firstVerificationStep === Number.POSITIVE_INFINITY
-    ? 'no verification steps were scheduled'
-    : `first verification step is too late (step ${firstVerificationStep})`;
+  const schedulingNote =
+    firstVerificationStep === Number.POSITIVE_INFINITY
+      ? 'no verification steps were scheduled'
+      : `first verification step is too late (step ${firstVerificationStep})`;
 
   return {
     verdict: 'REJECT',
@@ -782,19 +818,22 @@ export function collectAndroidVerificationCoverageViolations(
     failures: [
       {
         tag: 'EVIDENCE-GATE',
-    condition: taskShapeProfile === 'android_warning_cleanup'
-      ? `Autonomous Android warning-cleanup plans must verify with both \`gradlew assembleDebug\` and \`gradlew test\` early enough to run; missing: ${missingParts.join(', ')}, ${schedulingNote}.`
-      : `Autonomous Android implementation plans must verify with both \`gradlew assembleDebug\` and \`gradlew test\` early enough to run; missing: ${missingParts.join(', ')}, ${schedulingNote}.`,
-    confidence: 5,
-    fix_hint: taskShapeProfile === 'android_warning_cleanup'
-      ? 'Add both verification steps to the plan so the autonomous warning-cleanup lane can surface compile and test-only regressions.'
-      : 'Add both verification steps to the plan so the autonomous lane can surface compile and test-only regressions.',
-  },
-  ],
-  overall_confidence: 5,
-  proposed_fix_strategy: taskShapeProfile === 'android_warning_cleanup'
-    ? 'Regenerate the autonomous Android warning-cleanup plan so it includes both compile verification and unit-test verification before completion.'
-    : 'Regenerate the autonomous Android plan so it includes both compile verification and unit-test verification before completion.',
+        condition:
+          taskShapeProfile === 'android_warning_cleanup'
+            ? `Autonomous Android warning-cleanup plans must verify with both \`gradlew assembleDebug\` and \`gradlew test\` early enough to run; missing: ${missingParts.join(', ')}, ${schedulingNote}.`
+            : `Autonomous Android implementation plans must verify with both \`gradlew assembleDebug\` and \`gradlew test\` early enough to run; missing: ${missingParts.join(', ')}, ${schedulingNote}.`,
+        confidence: 5,
+        fix_hint:
+          taskShapeProfile === 'android_warning_cleanup'
+            ? 'Add both verification steps to the plan so the autonomous warning-cleanup lane can surface compile and test-only regressions.'
+            : 'Add both verification steps to the plan so the autonomous lane can surface compile and test-only regressions.',
+      },
+    ],
+    overall_confidence: 5,
+    proposed_fix_strategy:
+      taskShapeProfile === 'android_warning_cleanup'
+        ? 'Regenerate the autonomous Android warning-cleanup plan so it includes both compile verification and unit-test verification before completion.'
+        : 'Regenerate the autonomous Android plan so it includes both compile verification and unit-test verification before completion.',
   };
 }
 
@@ -807,12 +846,13 @@ export function collectReferenceSourceShapeViolations(
     return null;
   }
 
-  const referenceRoot = join(projectRoot, 'reference-source');
-  const referenceLooksLikePython = existsSync(referenceRoot) && (
-    existsSync(join(referenceRoot, 'pyproject.toml')) ||
-    existsSync(join(referenceRoot, 'requirements.txt')) ||
-    existsSync(join(referenceRoot, 'reference_source'))
-  );
+  const referenceRoot = join(projectRoot, 'reference-montecarlo-ledger');
+  const externalReferenceRoot = join(BABEL_ROOT, '..', 'Antigavity_Projects', 'MonteCarlo-Ledger');
+  const referenceLooksLikePython =
+    existsSync(referenceRoot) &&
+    (existsSync(join(referenceRoot, 'pyproject.toml')) ||
+      existsSync(join(referenceRoot, 'requirements.txt')) ||
+      existsSync(join(referenceRoot, 'monte_carlo_ledger')));
   if (!referenceLooksLikePython) {
     return null;
   }
@@ -852,9 +892,7 @@ export function collectReferenceSourceShapeViolations(
   };
 
   const failures: QaVerdictReject['failures'] = [];
-  const existingReferenceFiles = new Set(
-    collectExistingReferenceFiles(referenceRoot),
-  );
+  const existingReferenceFiles = new Set(collectExistingReferenceFiles(referenceRoot));
   const referenceRootPath = resolve(referenceRoot).toLowerCase();
   let seenReferenceReadme = false;
   let seenReferencePyproject = false;
@@ -867,17 +905,30 @@ export function collectReferenceSourceShapeViolations(
       ? resolve(target)
       : resolve(projectRoot, target);
     const normalizedResolvedTarget = resolvedTarget.toLowerCase();
-    const probesAndroidMirrorInsideReference = normalizedTarget.includes('\\reference-source\\app\\src\\main\\') ||
-      normalizedTarget.includes('\\reference-source\\build.gradle.kts') ||
-      normalizedTarget.includes('\\reference-source\\settings.gradle.kts') ||
-      normalizedTarget.includes('\\reference-source\\app\\build.gradle.kts');
+    const probesAndroidMirrorInsideReference =
+      normalizedTarget.includes('\\reference-montecarlo-ledger\\app\\src\\main\\') ||
+      normalizedTarget.includes('\\reference-montecarlo-ledger\\build.gradle.kts') ||
+      normalizedTarget.includes('\\reference-montecarlo-ledger\\settings.gradle.kts') ||
+      normalizedTarget.includes('\\reference-montecarlo-ledger\\app\\build.gradle.kts');
 
     if (probesAndroidMirrorInsideReference) {
       failures.push({
         tag: 'EVIDENCE-GATE',
-        condition: `[SOURCE_SHAPE] Step ${step.step} assumes Android/Gradle mirror files inside reference-source even though the grounded reference source is a Python repo: ${target}`,
+        condition: `[SOURCE_SHAPE] Step ${step.step} assumes Android/Gradle mirror files inside reference-montecarlo-ledger even though the grounded reference source is a Python repo: ${target}`,
         confidence: 5,
-        fix_hint: 'Treat reference-source as a Python source repo. Read actual files such as README.md, pyproject.toml, reference_source/*.py, and docs/** before mapping them into Android targets.',
+        fix_hint:
+          'Treat reference-montecarlo-ledger as a Python source repo. Read actual files such as README.md, pyproject.toml, monte_carlo_ledger/*.py, and docs/** before mapping them into Android targets.',
+      });
+      continue;
+    }
+
+    if (normalizedResolvedTarget.startsWith(resolve(externalReferenceRoot).toLowerCase())) {
+      failures.push({
+        tag: 'EVIDENCE-GATE',
+        condition: `[SOURCE_PATH_PREFERENCE] Step ${step.step} reads the external MonteCarlo-Ledger repo even though a mirrored reference-montecarlo-ledger copy exists inside the target project: ${target}`,
+        confidence: 5,
+        fix_hint:
+          'Use the mirrored reference-montecarlo-ledger path inside the target project for all source reads when that mirror exists.',
       });
       continue;
     }
@@ -885,26 +936,40 @@ export function collectReferenceSourceShapeViolations(
     if (normalizedResolvedTarget.startsWith(resolve(referenceRoot).toLowerCase())) {
       const isReferenceReadStep = step.tool === 'file_read';
       if (isReferenceReadStep) {
-        const isReadme = normalizedResolvedTarget === join(referenceRootPath, 'readme.md').toLowerCase();
-        const isPyproject = normalizedResolvedTarget === join(referenceRootPath, 'pyproject.toml').toLowerCase();
+        const isReadme =
+          normalizedResolvedTarget === join(referenceRootPath, 'readme.md').toLowerCase();
+        const isPyproject =
+          normalizedResolvedTarget === join(referenceRootPath, 'pyproject.toml').toLowerCase();
         const isRootBootstrapRead = isReadme || isPyproject;
-        const isModuleRead = normalizedResolvedTarget.includes('\\reference-source\\reference_source\\');
+        const isModuleRead = normalizedResolvedTarget
+            .replace(/\//g, '\\')
+            .includes('\\reference-montecarlo-ledger\\monte_carlo_ledger\\');
         const basename = normalizedResolvedTarget.split('\\').pop() ?? '';
-        if (swePlan.plan_type !== 'IMPLEMENTATION_PLAN' && isModuleRead && !existingReferenceFiles.has(normalizedResolvedTarget)) {
+        if (
+          swePlan.plan_type !== 'IMPLEMENTATION_PLAN' &&
+          isModuleRead &&
+          !existingReferenceFiles.has(normalizedResolvedTarget)
+        ) {
           failures.push({
             tag: 'EVIDENCE-GATE',
             condition: `[SOURCE_INVENTORY_GUESS] Step ${step.step} guesses a non-inventory module basename under the reference repo: ${basename}`,
             confidence: 5,
-            fix_hint: 'Use the exact filenames listed in the Reference source inventories block. Do not guess module names like engine.py, models.py, core_engine.py, or data_models.py.',
+            fix_hint:
+              'Use the exact filenames listed in the Reference source inventories block. Do not guess module names like engine.py, models.py, core_engine.py, or data_models.py.',
           });
           continue;
         }
-        if (swePlan.plan_type !== 'IMPLEMENTATION_PLAN' && isModuleRead && !(seenReferenceReadme && seenReferencePyproject)) {
+        if (
+          swePlan.plan_type !== 'IMPLEMENTATION_PLAN' &&
+          isModuleRead &&
+          !(seenReferenceReadme && seenReferencePyproject)
+        ) {
           failures.push({
             tag: 'EVIDENCE-GATE',
             condition: `[REFERENCE_FILE_READ_DISCIPLINE] Step ${step.step} reads a reference module before grounding on README.md and pyproject.toml: ${target}`,
             confidence: 5,
-            fix_hint: 'Read README.md and pyproject.toml first, then read only the exact grounded module files listed in the inventory.',
+            fix_hint:
+              'Read README.md and pyproject.toml first, then read only the exact grounded module files listed in the inventory.',
           });
           continue;
         }
@@ -917,9 +982,10 @@ export function collectReferenceSourceShapeViolations(
         if (!isRootBootstrapRead && !existingReferenceFiles.has(normalizedResolvedTarget)) {
           failures.push({
             tag: 'EVIDENCE-GATE',
-            condition: `[SOURCE_INVENTORY_MISMATCH] Step ${step.step} reads a non-existent file inside reference-source instead of one of the grounded inventory files: ${target}`,
+            condition: `[SOURCE_INVENTORY_MISMATCH] Step ${step.step} reads a non-existent file inside reference-montecarlo-ledger instead of one of the grounded inventory files: ${target}`,
             confidence: 5,
-            fix_hint: 'Use the exact filenames listed in the Reference source inventories block. Do not guess alternate module names inside the mirrored Python repo.',
+            fix_hint:
+              'Use the exact filenames listed in the Reference source inventories block. Do not guess alternate module names inside the mirrored Python repo.',
           });
         }
         continue;
@@ -929,9 +995,10 @@ export function collectReferenceSourceShapeViolations(
         if (!existsSync(resolvedTarget) || !statSync(resolvedTarget).isDirectory()) {
           failures.push({
             tag: 'EVIDENCE-GATE',
-            condition: `[SOURCE_INVENTORY_MISMATCH] Step ${step.step} lists a non-existent reference directory instead of a grounded directory inside reference-source: ${target}`,
+            condition: `[SOURCE_INVENTORY_MISMATCH] Step ${step.step} lists a non-existent reference directory instead of a grounded directory inside reference-montecarlo-ledger: ${target}`,
             confidence: 5,
-            fix_hint: 'Use only real directories under the mirrored reference repo for directory_list steps.',
+            fix_hint:
+              'Use only real directories under the mirrored reference repo for directory_list steps.',
           });
         }
         continue;
@@ -940,9 +1007,10 @@ export function collectReferenceSourceShapeViolations(
       if (step.tool === 'file_read' && !existingReferenceFiles.has(normalizedResolvedTarget)) {
         failures.push({
           tag: 'EVIDENCE-GATE',
-          condition: `[SOURCE_INVENTORY_MISMATCH] Step ${step.step} reads a non-existent file inside reference-source instead of one of the grounded inventory files: ${target}`,
+          condition: `[SOURCE_INVENTORY_MISMATCH] Step ${step.step} reads a non-existent file inside reference-montecarlo-ledger instead of one of the grounded inventory files: ${target}`,
           confidence: 5,
-          fix_hint: 'Use the exact filenames listed in the Reference source inventories block. Do not guess alternate module names inside the mirrored Python repo.',
+          fix_hint:
+            'Use the exact filenames listed in the Reference source inventories block. Do not guess alternate module names inside the mirrored Python repo.',
         });
       }
     }
@@ -957,6 +1025,7 @@ export function collectReferenceSourceShapeViolations(
     failure_count: failures.length,
     failures,
     overall_confidence: 5,
-    proposed_fix_strategy: 'Regenerate the plan against the actual reference source shape. Do not infer Android package or Gradle files inside a non-Android reference repo.',
+    proposed_fix_strategy:
+      'Regenerate the plan against the actual reference source shape. Do not infer Android package or Gradle files inside a non-Android reference repo.',
   };
 }

@@ -12,7 +12,12 @@ import {
 import type { ToolCallLog } from '../schemas/agentContracts.js';
 import { getAllowedShellCommands } from '../sandbox.js';
 
-export type RuntimeHookEvent = 'PreToolUse' | 'BeforeComplete';
+export type RuntimeHookEvent =
+  | 'SessionStart'
+  | 'PreToolUse'
+  | 'PostToolUse'
+  | 'BeforeComplete'
+  | 'SessionEnd';
 export type RuntimeHookDecision = 'allow' | 'rewrite' | 'block';
 
 export interface RuntimeHookTraceEvent {
@@ -149,5 +154,101 @@ export function runBeforeCompleteHooks(input: BeforeCompleteHookInput): BeforeCo
     blocked: !benchmarkVerification.passed,
     message: benchmarkVerification.passed ? null : benchmarkVerification.message,
     benchmarkVerification,
+  };
+}
+
+// ─── Session-level hooks (Phase 3A) ──────────────────────────────────────
+
+export interface SessionStartHookInput {
+  rawTask: string;
+  projectRoot?: string;
+  executionProfileName?: ExecutionProfileName;
+}
+
+export interface SessionStartHookResult {
+  traces: RuntimeHookTraceEvent[];
+  blocked: boolean;
+  message: string | null;
+  injectedContext?: string;
+}
+
+export function runSessionStartHooks(input: SessionStartHookInput): SessionStartHookResult {
+  // Intentional no-op placeholder for the future plugin system.
+  // This is a designed extension point -- not forgotten -- for registering
+  // SessionStart hooks to inject context or set policies before the
+  // pipeline begins.
+  return {
+    traces: [],
+    blocked: false,
+    message: null,
+  };
+}
+
+export interface PostToolUseHookInput {
+  request: ToolCallRequest;
+  result: { exit_code: number; stdout: string; stderr: string };
+  rawTask: string;
+  executionProfileName?: ExecutionProfileName;
+}
+
+export interface PostToolUseHookResult {
+  traces: RuntimeHookTraceEvent[];
+  blocked: boolean;
+  message: string | null;
+}
+
+export function runPostToolUseHooks(input: PostToolUseHookInput): PostToolUseHookResult {
+  // PostToolUse hooks run after a tool completes.
+  // They can audit results, trigger side effects (e.g., memory extraction),
+  // or block further execution based on tool output patterns.
+  const traces: RuntimeHookTraceEvent[] = [];
+
+  // Detect policy-significant tool outcomes
+  if (
+    input.result.exit_code !== 0 &&
+    (input.request.tool === 'shell_exec' || input.request.tool === 'test_run')
+  ) {
+    traces.push({
+      hook_id: 'post_tool_use.command_failure',
+      event: 'PostToolUse',
+      decision: 'allow',
+      message: `Command failed with exit code ${input.result.exit_code}: ${String(input.request.command ?? '').slice(0, 80)}`,
+      details: {
+        tool: input.request.tool,
+        exit_code: input.result.exit_code,
+      },
+    });
+  }
+
+  return {
+    traces,
+    blocked: false,
+    message: null,
+  };
+}
+
+export interface SessionEndHookInput {
+  rawTask: string;
+  terminalStatus: string;
+  runDir: string;
+}
+
+export interface SessionEndHookResult {
+  traces: RuntimeHookTraceEvent[];
+}
+
+export function runSessionEndHooks(input: SessionEndHookInput): SessionEndHookResult {
+  // SessionEnd hooks run after pipeline completion.
+  // They can trigger cleanup, memory extraction, or post-run notifications.
+  return {
+    traces: [
+      {
+        hook_id: 'session_end',
+        event: 'SessionEnd',
+        decision: 'allow',
+        message: `Run completed with status: ${input.terminalStatus}`,
+        details: { runDir: input.runDir },
+      },
+    ],
   };
 }

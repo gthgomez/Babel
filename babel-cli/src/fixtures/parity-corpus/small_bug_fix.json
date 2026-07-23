@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "fixture_type": "babel_parity_corpus_task",
+  "task_id": "small_bug_fix",
+  "parity_task_id": "small_bug_fix",
+  "title": "Small bug fix",
+  "target_file": "src/math.js",
+  "verifier_command": "npm test",
+  "task": "Fix the failing Node test. Only edit src/math.js.",
+  "broken_implementation": "export const add = () => 0;\nexport const subtract = () => 0;\n",
+  "fixed_implementation": "export const add = (a, b) => a + b;\nexport const subtract = (a, b) => a - b;\n",
+  "test_source": "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { add, subtract } from './math.js';\n\ntest('add sums two numbers', () => {\n  assert.equal(add(1, 2), 3);\n});\n\ntest('subtract returns difference', () => {\n  assert.equal(subtract(9, 5), 4);\n});\n"
+}

@@ -31,29 +31,30 @@
  *   OPENAI_API_KEY          - API key auth (alternative to codex login).
  */
 
-import { mkdtempSync, writeFileSync, unlinkSync } from 'node:fs';
-import { join }                                   from 'node:path';
-import { tmpdir }                                 from 'node:os';
+import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { ZodType } from 'zod';
-import type { LlmRunner, RunnerCallbacks }                         from './base.js';
-import { spawnCliProcess, parseAndValidate }       from './cliBase.js';
-import type { CliConfig }                         from './cliBase.js';
-import { parseCliArgString }                     from './cliArgParser.js';
+import type { LlmRunner, RunnerCallbacks } from './base.js';
+import { spawnCliProcess, parseAndValidate } from './cliBase.js';
+import type { CliConfig } from './cliBase.js';
+import { parseCliArgString } from './cliArgParser.js';
 
 // BABEL_CODEX_TIMEOUT_MS takes precedence; falls back to the shared CLI timeout.
-const CODEX_TIMEOUT_MS =
-  Number(process.env['BABEL_CODEX_TIMEOUT_MS'] ?? process.env['BABEL_CLI_TIMEOUT_MS'] ?? '120000');
+const CODEX_TIMEOUT_MS = Number(
+  process.env['BABEL_CODEX_TIMEOUT_MS'] ?? process.env['BABEL_CLI_TIMEOUT_MS'] ?? '120000',
+);
 
 const BASE_CONFIG: CliConfig = {
-  label:      'codexCli',
-  command:    process.env['BABEL_CODEX_CMD']  ?? 'codex',
+  label: 'codexCli',
+  command: process.env['BABEL_CODEX_CMD'] ?? 'codex',
   // 'exec' subcommand + optional extra flags. Default is '--full-auto' only:
   // --skip-git-repo-check was removed as it causes TTY interaction on some
   // versions; --full-auto alone is sufficient for headless execution.
-  args:       ['exec', ...parseCliArgString(process.env['BABEL_CODEX_ARGS'] ?? '--full-auto')],
-  timeoutMs:  CODEX_TIMEOUT_MS,
-  promptFlag: '',        // '' = positional mode — prompt appended bare, no -p flag
-  stdinMode:  'ignore',  // prevent TTY approval prompts from blocking the process
+  args: ['exec', ...parseCliArgString(process.env['BABEL_CODEX_ARGS'] ?? '--full-auto')],
+  timeoutMs: CODEX_TIMEOUT_MS,
+  promptFlag: '', // '' = positional mode — prompt appended bare, no -p flag
+  stdinMode: 'ignore', // prevent TTY approval prompts from blocking the process
 };
 
 const NEUTER_PREAMBLE =
@@ -74,14 +75,23 @@ export class CodexCliRunner implements LlmRunner {
     // compiled Babel contexts. The file path passed to codex contains no
     // special characters, so cmd.exe handles it without escaping problems.
     if (process.platform === 'win32') {
-      const dir      = mkdtempSync(join(tmpdir(), 'babel-codex-'));
+      const dir = mkdtempSync(join(tmpdir(), 'babel-codex-'));
       const filePath = join(dir, 'prompt.txt');
       writeFileSync(filePath, neutralised, 'utf-8');
       try {
         const output = await spawnCliProcess(filePath, BASE_CONFIG);
         return parseAndValidate(output, schema, BASE_CONFIG.label);
       } finally {
-        try { unlinkSync(filePath); } catch { /* ignore cleanup errors */ }
+        try {
+          unlinkSync(filePath);
+        } catch {
+          /* ignore cleanup errors */
+        }
+        try {
+          rmSync(dir, { recursive: true, force: true });
+        } catch {
+          /* ignore cleanup errors */
+        }
       }
     }
 

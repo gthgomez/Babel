@@ -9,52 +9,64 @@ import { buildRunStats } from './runStats.js';
 test('buildRunStats derives waterfall, tool, cache, and session stats', () => {
   const runDir = mkdtempSync(join(tmpdir(), 'babel-run-stats-'));
   mkdirSync(runDir, { recursive: true });
-  writeFileSync(join(runDir, '05_waterfall_telemetry.json'), JSON.stringify([
-    {
-      stage: 'orchestrator',
-      tier_succeeded: 'qwen',
-      total_latency_ms: 120,
-      total_prompt_tokens: 10,
-      total_completion_tokens: 20,
-      total_tokens: 30,
-      total_estimated_cost_usd: 0.001,
-    },
-    {
-      stage: 'executor',
-      tier_succeeded: 'codex',
-      total_latency_ms: 80,
-      total_prompt_tokens: 5,
-      total_completion_tokens: 5,
-      total_tokens: 10,
-      total_estimated_cost_usd: 0.002,
-    },
-  ]), 'utf8');
-  writeFileSync(join(runDir, '04_execution_report.json'), JSON.stringify({
-    status: 'EXECUTION_COMPLETE',
-    tool_call_log: [
+  writeFileSync(
+    join(runDir, '05_waterfall_telemetry.json'),
+    JSON.stringify([
       {
-        tool: 'web_fetch',
-        exit_code: 0,
-        stdout: JSON.stringify({ cache: { from_cache: true } }),
-        verified: true,
-        checkpoint_ids: ['cp_1'],
+        stage: 'orchestrator',
+        tier_succeeded: 'qwen',
+        total_latency_ms: 120,
+        total_prompt_tokens: 10,
+        total_completion_tokens: 20,
+        total_tokens: 30,
+        total_estimated_cost_usd: 0.001,
       },
       {
-        tool: 'file_read',
-        exit_code: 1,
-        stdout: '',
-        verified: false,
+        stage: 'executor',
+        tier_succeeded: 'codex',
+        total_latency_ms: 80,
+        total_prompt_tokens: 5,
+        total_completion_tokens: 5,
+        total_tokens: 10,
+        total_estimated_cost_usd: 0.002,
       },
-    ],
-  }), 'utf8');
-  writeFileSync(join(runDir, '10_session_context.json'), JSON.stringify({
-    steps_complete: 2,
-    context_fingerprint: 'abc123',
-    approval_state: { executor_gate: 'PASS' },
-    model_context: {
-      file_read_cache: [{ path: 'a.txt', content: 'A' }],
-    },
-  }), 'utf8');
+    ]),
+    'utf8',
+  );
+  writeFileSync(
+    join(runDir, '04_execution_report.json'),
+    JSON.stringify({
+      status: 'EXECUTION_COMPLETE',
+      tool_call_log: [
+        {
+          tool: 'web_fetch',
+          exit_code: 0,
+          stdout: JSON.stringify({ cache: { from_cache: true } }),
+          verified: true,
+          checkpoint_ids: ['cp_1'],
+        },
+        {
+          tool: 'file_read',
+          exit_code: 1,
+          stdout: '',
+          verified: false,
+        },
+      ],
+    }),
+    'utf8',
+  );
+  writeFileSync(
+    join(runDir, '10_session_context.json'),
+    JSON.stringify({
+      steps_complete: 2,
+      context_fingerprint: 'abc123',
+      approval_state: { executor_gate: 'PASS' },
+      model_context: {
+        file_read_cache: [{ path: 'a.txt', content: 'A' }],
+      },
+    }),
+    'utf8',
+  );
 
   const stats = buildRunStats(runDir);
   assert.equal(stats.waterfall.total_latency_ms, 200);
@@ -72,27 +84,35 @@ test('buildRunStats derives waterfall, tool, cache, and session stats', () => {
 test('buildRunStats prefers cost_ledger totals when available', () => {
   const runDir = mkdtempSync(join(tmpdir(), 'babel-run-stats-ledger-'));
   mkdirSync(runDir, { recursive: true });
-  writeFileSync(join(runDir, '05_waterfall_telemetry.json'), JSON.stringify([
-    {
-      stage: 'orchestrator',
-      tier_succeeded: 'qwen',
-      total_latency_ms: 120,
-      total_prompt_tokens: 10,
-      total_completion_tokens: 20,
-      total_tokens: 30,
-      total_estimated_cost_usd: 0.001,
-    },
-  ]), 'utf8');
-  writeFileSync(join(runDir, 'cost_ledger.json'), JSON.stringify({
-    artifact_type: 'babel_cost_ledger',
-    totals: {
-      prompt_tokens: 100,
-      completion_tokens: 50,
-      total_tokens: 150,
-      estimated_cost_usd: 0.0123,
-      by_precision: { exact: 0.0123, conservative: 0, unknown: 0 },
-    },
-  }), 'utf8');
+  writeFileSync(
+    join(runDir, '05_waterfall_telemetry.json'),
+    JSON.stringify([
+      {
+        stage: 'orchestrator',
+        tier_succeeded: 'qwen',
+        total_latency_ms: 120,
+        total_prompt_tokens: 10,
+        total_completion_tokens: 20,
+        total_tokens: 30,
+        total_estimated_cost_usd: 0.001,
+      },
+    ]),
+    'utf8',
+  );
+  writeFileSync(
+    join(runDir, 'cost_ledger.json'),
+    JSON.stringify({
+      artifact_type: 'babel_cost_ledger',
+      totals: {
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        total_tokens: 150,
+        estimated_cost_usd: 0.0123,
+        by_precision: { exact: 0.0123, conservative: 0, unknown: 0 },
+      },
+    }),
+    'utf8',
+  );
 
   const stats = buildRunStats(runDir);
   assert.equal(stats.waterfall.total_latency_ms, 120);
@@ -106,16 +126,24 @@ test('buildRunStats prefers cost_ledger totals when available', () => {
 test('buildRunStats falls back to waterfall telemetry when cost_ledger has no totals', () => {
   const runDir = mkdtempSync(join(tmpdir(), 'babel-run-stats-ledger-empty-'));
   mkdirSync(runDir, { recursive: true });
-  writeFileSync(join(runDir, '05_waterfall_telemetry.json'), JSON.stringify([
-    {
-      stage: 'orchestrator',
-      total_prompt_tokens: 10,
-      total_completion_tokens: 20,
-      total_tokens: 30,
-      total_estimated_cost_usd: 0.001,
-    },
-  ]), 'utf8');
-  writeFileSync(join(runDir, 'cost_ledger.json'), JSON.stringify({ artifact_type: 'babel_cost_ledger' }), 'utf8');
+  writeFileSync(
+    join(runDir, '05_waterfall_telemetry.json'),
+    JSON.stringify([
+      {
+        stage: 'orchestrator',
+        total_prompt_tokens: 10,
+        total_completion_tokens: 20,
+        total_tokens: 30,
+        total_estimated_cost_usd: 0.001,
+      },
+    ]),
+    'utf8',
+  );
+  writeFileSync(
+    join(runDir, 'cost_ledger.json'),
+    JSON.stringify({ artifact_type: 'babel_cost_ledger' }),
+    'utf8',
+  );
 
   const stats = buildRunStats(runDir);
   assert.equal(stats.tokens.total, 30);

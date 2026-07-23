@@ -8,6 +8,7 @@ import {
   buildMaxTurnsExceededCondition,
   buildMissingPlannedFileWritesCondition,
   getMissingSuccessfulPlannedFileWrites,
+  shouldCompleteBoundedWriteTask,
 } from './executorCompletionGates.js';
 
 const fileWritePlan = {
@@ -47,7 +48,7 @@ test('planned file-write completion gate normalizes successful project-root writ
     {
       step: 1,
       tool: 'file_write',
-      target: 'C:\\repo\\src\\output.ts',
+      target: '/tmp/repo/src/output.ts',
       exit_code: 0,
       stdout: 'ok',
       stderr: '',
@@ -55,11 +56,14 @@ test('planned file-write completion gate normalizes successful project-root writ
     },
   ];
 
-  assert.deepEqual(getMissingSuccessfulPlannedFileWrites({
-    approvedPlan: fileWritePlan,
-    toolCallLog,
-    projectRoot: 'C:\\repo',
-  }), ['reports/summary.md']);
+  assert.deepEqual(
+    getMissingSuccessfulPlannedFileWrites({
+      approvedPlan: fileWritePlan,
+      toolCallLog,
+      projectRoot: '/tmp/repo',
+    }),
+    ['reports/summary.md'],
+  );
 });
 
 test('completion gate condition strings stay stable for terminal reports', () => {
@@ -87,5 +91,122 @@ test('external postcondition feedback preserves executor history shape', () => {
       'Stderr: missing output.txt',
       'Verification: FAILED',
     ].join('\n'),
+  );
+});
+
+test('shouldCompleteBoundedWriteTask returns false for shell_exec plans', () => {
+  const plan = {
+    plan_version: '1.0',
+    thinking: 'test',
+    plan_type: 'IMPLEMENTATION_PLAN',
+    task_summary: 'OBJECTIVE: test',
+    known_facts: [],
+    assumptions: [],
+    risks: [],
+    minimal_action_set: [
+      {
+        step: 1,
+        description: 'Run tests',
+        tool: 'shell_exec' as const,
+        target: 'npm test',
+        rationale: 'Execute tests',
+        reversible: true,
+        verification: 'test pass',
+      },
+    ],
+    root_cause: 'N/A',
+    out_of_scope: [],
+  } satisfies SwePlan;
+
+  assert.equal(
+    shouldCompleteBoundedWriteTask({
+      approvedPlan: plan,
+      rawTask: 'Write src/output.ts',
+      toolCallLog: [],
+      projectRoot: null,
+    }),
+    false,
+  );
+});
+
+test('shouldCompleteBoundedWriteTask returns false when file_write target is missing', () => {
+  const plan = {
+    plan_version: '1.0',
+    thinking: 'test',
+    plan_type: 'IMPLEMENTATION_PLAN',
+    task_summary: 'OBJECTIVE: test',
+    known_facts: [],
+    assumptions: [],
+    risks: [],
+    minimal_action_set: [
+      {
+        step: 1,
+        description: 'Write output',
+        tool: 'file_write' as const,
+        target: 'src/output.ts',
+        rationale: 'Requested artifact.',
+        reversible: true,
+        verification: 'file exists',
+      },
+    ],
+    root_cause: 'N/A',
+    out_of_scope: [],
+  } satisfies SwePlan;
+
+  const toolCallLog: ToolCallLog[] = [
+    {
+      step: 1,
+      tool: 'file_write',
+      target: 'src/other.ts',
+      exit_code: 0,
+      stdout: 'ok',
+      stderr: '',
+      verified: true,
+    },
+  ];
+
+  assert.equal(
+    shouldCompleteBoundedWriteTask({
+      approvedPlan: plan,
+      rawTask: 'Write the file src/output.ts',
+      toolCallLog,
+      projectRoot: null,
+    }),
+    false,
+  );
+});
+
+test('shouldCompleteBoundedWriteTask handles empty tool call log', () => {
+  const plan = {
+    plan_version: '1.0',
+    thinking: 'test',
+    plan_type: 'IMPLEMENTATION_PLAN',
+    task_summary: 'OBJECTIVE: test',
+    known_facts: [],
+    assumptions: [],
+    risks: [],
+    minimal_action_set: [
+      {
+        step: 1,
+        description: 'Write output',
+        tool: 'file_write' as const,
+        target: 'src/output.ts',
+        rationale: 'Requested artifact.',
+        reversible: true,
+        verification: 'file exists',
+      },
+    ],
+    root_cause: 'N/A',
+    out_of_scope: [],
+  } satisfies SwePlan;
+
+  assert.equal(
+    shouldCompleteBoundedWriteTask({
+      approvedPlan: plan,
+      rawTask: 'Write the file src/output.ts',
+      toolCallLog: [],
+      projectRoot: null,
+    }),
+    false,
   );
 });

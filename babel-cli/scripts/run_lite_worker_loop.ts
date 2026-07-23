@@ -1,11 +1,11 @@
 import {
-  resolveBabelCliEntry,
+  resolveLiteWorkerLoopCliEntry,
   runLiteWorkerLoopHarness,
 } from '../src/services/liteWorkerLoop.js';
 
 async function main(): Promise<void> {
   const result = await runLiteWorkerLoopHarness({
-    cliEntry: resolveBabelCliEntry(),
+    cliEntry: resolveLiteWorkerLoopCliEntry(),
   });
   const lines = [
     'Babel Lite Worker Loop (CLI path)',

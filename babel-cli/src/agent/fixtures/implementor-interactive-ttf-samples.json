@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "description": "Wave 1 sample ledger — primary samples are LIVE multi-file harness imports from runs/; single_file_reference_samples keep the absolute TTF≤8 bar measurable.",
+  "w0_ttf_write_baseline_median": 3,
+  "task_scale": "multi_file",
+  "samples": [
+    {
+      "id": "live-agent-benchmark-live-full__SWE-A04",
+      "recorded_at": "2026-07-15T18:00:00.000Z",
+      "source": "harness_import",
+      "should_mutate": true,
+      "write_count": 4,
+      "tools_before_first_write": 11,
+      "empty_patch": false,
+      "env_blocked": true,
+      "task_scale": "multi_file",
+      "task_label": "SWE-A04",
+      "notes": "Imported from runs/agent-benchmark-live-full/SWE-A04-harness.json"
+    },
+    {
+      "id": "live-agent-benchmark-t1.4__SWE-A09",
+      "recorded_at": "2026-07-15T18:00:00.000Z",
+      "source": "harness_import",
+      "should_mutate": true,
+      "write_count": 5,
+      "tools_before_first_write": 14,
+      "empty_patch": false,
+      "env_blocked": false,
+      "task_scale": "multi_file",
+      "task_label": "SWE-A09",
+      "notes": "Imported from runs/agent-benchmark-t1.4/SWE-A09-harness.json"
+    },
+    {
+      "id": "live-agent-benchmark-critic-remeasure__SWE-A10",
+      "recorded_at": "2026-07-15T18:00:00.000Z",
+      "source": "harness_import",
+      "should_mutate": true,
+      "write_count": 3,
+      "tools_before_first_write": 14,
+      "empty_patch": false,
+      "env_blocked": true,
+      "task_scale": "multi_file",
+      "task_label": "SWE-A10",
+      "notes": "Imported from runs/agent-benchmark-critic-remeasure/SWE-A10-harness.json"
+    },
+    {
+      "id": "live-agent-benchmark-t1.4__SWE-A08",
+      "recorded_at": "2026-07-15T18:00:00.000Z",
+      "source": "harness_import",
+      "should_mutate": true,
+      "write_count": 2,
+      "tools_before_first_write": 17,
+      "empty_patch": false,
+      "env_blocked": false,
+      "task_scale": "multi_file",
+      "task_label": "SWE-A08",
+      "notes": "Imported from runs/agent-benchmark-t1.4/SWE-A08-harness.json"
+    },
+    {
+      "id": "live-agent-benchmark-critic-remeasure__stale-dist-batch-20260710__SWE-A05",
+      "recorded_at": "2026-07-15T18:00:00.000Z",
+      "source": "harness_import",
+      "should_mutate": true,
+      "write_count": 3,
+      "tools_before_first_write": 21,
+      "empty_patch": false,
+      "env_blocked": false,
+      "task_scale": "multi_file",
+      "task_label": "SWE-A05",
+      "notes": "Imported from runs/agent-benchmark-critic-remeasure/stale-dist-batch-20260710/SWE-A05-harness.json"
+    }
+  ],
+  "single_file_reference_samples": [
+    {
+      "id": "live-I1-parser-null-guard",
+      "recorded_at": "2026-07-15T12:00:00.000Z",
+      "source": "interactive_fixture",
+      "should_mutate": true,
+      "write_count": 1,
+      "tools_before_first_write": 2,
+      "empty_patch": false,
+      "env_blocked": false,
+      "task_label": "single-file: null guard in parser",
+      "notes": "Interactive-shaped single-file fix (fixture ledger v1)",
+      "task_scale": "single_file"
+    },
+    {
+      "id": "live-I2-off-by-one",
+      "recorded_at": "2026-07-15T12:10:00.000Z",
+      "source": "interactive_fixture",
+      "should_mutate": true,
+      "write_count": 1,
+      "tools_before_first_write": 1,
+      "empty_patch": false,
+      "env_blocked": false,
+      "task_label": "single-file: off-by-one in slice",
+      "task_scale": "single_file"
+    },
+    {
+      "id": "live-I3-error-message",
+      "recorded_at": "2026-07-15T12:20:00.000Z",
+      "source": "interactive_fixture",
+      "should_mutate": true,
+      "write_count": 1,
+      "tools_before_first_write": 3,
+      "empty_patch": false,
+      "env_blocked": false,
+      "task_label": "single-file: clarify error string",
+      "task_scale": "single_file"
+    },
+    {
+      "id": "live-I4-export-name",
+      "recorded_at": "2026-07-15T12:30:00.000Z",
+      "source": "interactive_fixture",
+      "should_mutate": true,
+      "write_count": 2,
+      "tools_before_first_write": 1,
+      "empty_patch": false,
+      "env_blocked": false,
+      "task_label": "single-file: rename export",
+      "task_scale": "single_file"
+    },
+    {
+      "id": "live-I5-timeout-default",
+      "recorded_at": "2026-07-15T12:40:00.000Z",
+      "source": "interactive_fixture",
+      "should_mutate": true,
+      "write_count": 1,
+      "tools_before_first_write": 3,
+      "empty_patch": false,
+      "env_blocked": false,
+      "task_label": "single-file: default timeout",
+      "task_scale": "single_file"
+    }
+  ]
+}

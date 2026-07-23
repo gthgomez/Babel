@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "fixture_id": "a09-pytest-10051",
+  "description": "SWE-A09 class incorrect_patch: wrong localization of caplog.clear vs reset",
+  "instance_id": "pytest-dev__pytest-10051",
+  "task_id": "SWE-A09",
+  "source": {
+    "wrong_patch": "runs/agent-benchmark-t1.4/SWE-A09-preds.jsonl",
+    "investigation": "docs/audit/BABEL_CODING_AGENT_STATE_2026-07-08.md §6.2b"
+  },
+  "expected_critic": {
+    "wrong_patch_verdict": "reject",
+    "goldish_patch_verdict": "pass"
+  },
+  "notes": [
+    "Local verifier (pytest testing/logging/test_fixture.py) can exit 0 on the wrong patch.",
+    "Gold requires LogCaptureHandler.clear() + LogCaptureFixture.clear → handler.clear().",
+    "Agent incorrectly changed reset() to use records.clear() in place."
+  ]
+}

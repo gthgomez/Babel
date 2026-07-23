@@ -26,12 +26,14 @@ test('buildLiteContinueAssessment resumes linked worker chain from manifest', ()
       project_root: root,
       provider: 'mock',
       chain_status: 'failed',
-      steps: [{
-        verb: 'plan',
-        status: 'PLAN_READY',
-        exit_code: 0,
-        run_dir: join(sessionRunDir, 'plan'),
-      }],
+      steps: [
+        {
+          verb: 'plan',
+          status: 'PLAN_READY',
+          exit_code: 0,
+          run_dir: join(sessionRunDir, 'plan'),
+        },
+      ],
       next_verb: 'propose',
       failed_step: 'propose',
       updated_at: new Date().toISOString(),
@@ -79,7 +81,10 @@ test('buildLiteContinueAssessment reports complete worker chains', () => {
 test('buildLiteContinueAssessment falls back to babel run recovery without manifest', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-lite-recovery-fallback-'));
   try {
-    const assessment = buildLiteContinueAssessment({ projectRoot: root, run: join(root, 'missing-run') });
+    const assessment = buildLiteContinueAssessment({
+      projectRoot: root,
+      run: join(root, 'missing-run'),
+    });
     assert.equal(assessment.source, 'babel_run');
     assert.equal(assessment.status, 'RUN_NOT_FOUND');
   } finally {

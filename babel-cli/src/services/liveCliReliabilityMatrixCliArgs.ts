@@ -1,3 +1,5 @@
+import type { LiveCliReliabilityProfile } from './liveCliReliabilityMatrix.js';
+
 export interface LiveCliReliabilityMatrixCliArgs {
   help: boolean;
   list: boolean;
@@ -5,9 +7,11 @@ export interface LiveCliReliabilityMatrixCliArgs {
   outputDir?: string;
   caseFilter: string[];
   timeoutMs?: number;
+  timeoutMultiplier?: number;
   resumeDir?: string;
   onlyFailed: boolean;
   fromCase?: string;
+  profile: LiveCliReliabilityProfile;
 }
 
 const VALUE_FLAGS = new Set([
@@ -16,17 +20,22 @@ const VALUE_FLAGS = new Set([
   '--artifact-dir',
   '--case',
   '--timeout-ms',
+  '--timeout-multiplier',
   '--resume',
   '--from-case',
+  '--profile',
 ]);
 
-export function parseLiveCliReliabilityMatrixArgs(argv: readonly string[]): LiveCliReliabilityMatrixCliArgs {
+export function parseLiveCliReliabilityMatrixArgs(
+  argv: readonly string[],
+): LiveCliReliabilityMatrixCliArgs {
   const parsed: LiveCliReliabilityMatrixCliArgs = {
     help: false,
     list: false,
     json: false,
     caseFilter: [],
     onlyFailed: false,
+    profile: 'full',
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -68,6 +77,15 @@ export function parseLiveCliReliabilityMatrixArgs(argv: readonly string[]): Live
       parsed.timeoutMs = timeout;
       continue;
     }
+    if (flag === '--timeout-multiplier') {
+      const raw = requireValue(value, flag);
+      const multiplier = Number.parseFloat(raw);
+      if (!Number.isFinite(multiplier) || multiplier <= 0) {
+        throw new Error(`Invalid --timeout-multiplier value: ${raw}`);
+      }
+      parsed.timeoutMultiplier = multiplier;
+      continue;
+    }
     if (flag === '--resume') {
       parsed.resumeDir = requireValue(value, flag);
       continue;
@@ -78,6 +96,14 @@ export function parseLiveCliReliabilityMatrixArgs(argv: readonly string[]): Live
     }
     if (flag === '--from-case') {
       parsed.fromCase = requireValue(value, flag);
+      continue;
+    }
+    if (flag === '--profile') {
+      const profile = requireValue(value, flag);
+      if (profile !== 'fast' && profile !== 'full') {
+        throw new Error('--profile must be fast or full');
+      }
+      parsed.profile = profile;
       continue;
     }
     throw new Error(`Unknown argument: ${rawArg}`);
@@ -102,9 +128,11 @@ export function formatLiveCliReliabilityMatrixHelp(): string {
     '  --output-dir <path>        Alias for --output.',
     '  --artifact-dir <path>      Alias for --output.',
     '  --timeout-ms <ms>          Override per-case timeout.',
+    '  --timeout-multiplier <n>   Multiply all timeouts by this factor (default 1.0).',
     '  --resume <matrix-root>     Resume an existing matrix root.',
     '  --only-failed              With --resume, rerun only non-passing cases.',
     '  --from-case <id>           Start at a stable case ID or name.',
+    '  --profile <fast|full>      fast skips live_heavy cases; full runs the complete matrix.',
     '',
     'Examples:',
     '  npm run reliability:matrix -- --help',

@@ -3,16 +3,9 @@ import { join } from 'node:path';
 
 import { readLatestRunPointer } from '../../cli/helpers.js';
 import type { LiteResultPayload } from '../../cli/structuredOutput.js';
-import {
-  findCheckpoint,
-  listCheckpoints,
-  restoreCheckpoint,
-} from '../../services/checkpoints.js';
+import { findCheckpoint, listCheckpoints, restoreCheckpoint } from '../../services/checkpoints.js';
 import { buildRecoveryAssessment } from '../../services/recovery.js';
-import {
-  baseReadOnlyLitePayload,
-  type AgentLaneContext,
-} from '../contracts.js';
+import { baseReadOnlyLitePayload, type AgentLaneContext } from '../contracts.js';
 import {
   beginLiteArtifactRun,
   defaultArtifactRoot,
@@ -54,19 +47,21 @@ function resolveUndoRunDir(project?: string, projectRoot?: string): string | nul
   const repoScopedRuns = listRepoLiteFixRuns(projectRoot);
   candidates.push(...repoScopedRuns);
 
-  if (!scopedPointer?.run_dir) {
-    const latestPointer = readLatestRunPointer();
-    if (latestPointer?.run_dir) {
-      candidates.push(latestPointer.run_dir);
+  if (!projectRoot) {
+    if (!scopedPointer?.run_dir) {
+      const latestPointer = readLatestRunPointer();
+      if (latestPointer?.run_dir) {
+        candidates.push(latestPointer.run_dir);
+      }
     }
-  }
 
-  const assessment = buildRecoveryAssessment({
-    run: 'latest',
-    ...(project !== undefined ? { project } : {}),
-  });
-  if (assessment.run_dir) {
-    candidates.push(assessment.run_dir);
+    const assessment = buildRecoveryAssessment({
+      run: 'latest',
+      ...(project !== undefined ? { project } : {}),
+    });
+    if (assessment.run_dir) {
+      candidates.push(assessment.run_dir);
+    }
   }
 
   for (const runDir of [...new Set(candidates)]) {
@@ -98,12 +93,16 @@ export function runUndoLane(context: AgentLaneContext): UndoLaneResult {
   const repoPath = resolveLiteRepoRoot(context.projectRoot);
   const runDir = resolveUndoRunDir(context.project, repoPath);
   if (!runDir) {
-    throw new Error('No recoverable run found for bl undo. Run bl fix first or pass --project.');
+    throw new Error(
+      'No recoverable run found for babel undo. Run babel "<task>" first or pass --project.',
+    );
   }
 
   const checkpointId = resolveLatestCheckpointId(runDir);
   if (!checkpointId) {
-    throw new Error(`No checkpoint found for run ${runDir}. Mutation lanes create checkpoints before writes.`);
+    throw new Error(
+      `No checkpoint found for run ${runDir}. Mutation lanes create checkpoints before writes.`,
+    );
   }
 
   const { record } = findCheckpoint(checkpointId, { runDir });
@@ -127,14 +126,18 @@ export function runUndoLane(context: AgentLaneContext): UndoLaneResult {
     checkpoint_id: checkpointId,
     restore,
   });
-  writeLiteTextArtifact(artifacts, 'response.md', [
-    `Undo ${restore.status}`,
-    `Checkpoint: ${checkpointId}`,
-    `Source run: ${runDir}`,
-    restore.restored_files.length > 0
-      ? `Restored: ${restore.restored_files.join(', ')}`
-      : 'No files restored.',
-  ].join('\n'));
+  writeLiteTextArtifact(
+    artifacts,
+    'response.md',
+    [
+      `Undo ${restore.status}`,
+      `Checkpoint: ${checkpointId}`,
+      `Source run: ${runDir}`,
+      restore.restored_files.length > 0
+        ? `Restored: ${restore.restored_files.join(', ')}`
+        : 'No files restored.',
+    ].join('\n'),
+  );
 
   const base = baseReadOnlyLitePayload({
     command: 'undo',
@@ -146,9 +149,13 @@ export function runUndoLane(context: AgentLaneContext): UndoLaneResult {
     userStatus: restore.status === 'restored' ? 'success' : 'failed',
     selectedLane: 'lite_undo',
     executionPath: 'undo_lane',
-    next: restore.status === 'restored'
-      ? ['Verify the workspace state.', 'Re-run your normal project checks.']
-      : ['Inspect checkpoint metadata.', `babel checkpoint restore ${checkpointId} --run "${runDir}" --force`],
+    next:
+      restore.status === 'restored'
+        ? ['Verify the workspace state.', 'Re-run your normal project checks.']
+        : [
+            'Inspect checkpoint metadata.',
+            `babel checkpoint restore ${checkpointId} --run "${runDir}" --force`,
+          ],
   });
 
   const payload: LiteResultPayload = {
@@ -159,7 +166,7 @@ export function runUndoLane(context: AgentLaneContext): UndoLaneResult {
     checkpoint: {
       required: true,
       available: true,
-      restore_command: `bl undo`,
+      restore_command: `babel undo`,
       inspect_command: `babel checkpoint list --run "${runDir}"`,
     },
     evidence: {
@@ -174,8 +181,10 @@ export function runUndoLane(context: AgentLaneContext): UndoLaneResult {
     `Checkpoint: ${checkpointId}`,
     `Source run: ${runDir}`,
     restore.restored_files.length > 0 ? `Restored files: ${restore.restored_files.join(', ')}` : '',
-    `Rollback: bl undo`,
-  ].filter(Boolean).join('\n');
+    `Rollback: babel undo`,
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   return {
     payload,

@@ -2,6 +2,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { globalIndexer } from '../services/indexer.js';
+import { createEmbeddingProvider } from '../services/embeddingProvider.js';
+import { formatSemanticSearchHits } from './repoSearch.js';
 import type { ToolResult } from '../sandbox.js';
 import type { ToolCallRequest } from '../localTools.js';
 import { isDryRunEnabled } from '../config/dryRun.js';
@@ -27,11 +29,15 @@ interface LoadedChronicleStore {
 let loadedChronicleStore: LoadedChronicleStore | undefined;
 
 function resolveChronicleSqlitePath(): string {
-  return process.env['BABEL_CHRONICLE_DB_PATH']?.trim() || path.join(CHRONICLE_ROOT, 'chronicle.sqlite');
+  return (
+    process.env['BABEL_CHRONICLE_DB_PATH']?.trim() || path.join(CHRONICLE_ROOT, 'chronicle.sqlite')
+  );
 }
 
 function resolveChronicleJsonPath(): string {
-  return process.env['BABEL_CHRONICLE_JSON_PATH']?.trim() || path.join(CHRONICLE_ROOT, 'chronicle.json');
+  return (
+    process.env['BABEL_CHRONICLE_JSON_PATH']?.trim() || path.join(CHRONICLE_ROOT, 'chronicle.json')
+  );
 }
 
 function getJsonChronicleStore(cacheKey: string): LoadedChronicleStore {
@@ -92,7 +98,7 @@ export async function handleMemoryStore(
   if (isDryRunEnabled()) {
     console.log(
       `  [DRY RUN] memory_store -> key="${req.key}" ` +
-      `value="${req.value.slice(0, 80)}${req.value.length > 80 ? '...' : ''}"`,
+        `value="${req.value.slice(0, 80)}${req.value.length > 80 ? '...' : ''}"`,
     );
     return {
       exit_code: 0,
@@ -157,15 +163,42 @@ export async function handleMemoryQuery(
   }
 }
 
+export async function ensureSemanticIndexForProject(
+  projectRoot: string,
+  onProgress?: (indexed: number, total: number) => void,
+): Promise<void> {
+  const root = path.resolve(projectRoot);
+  if (globalIndexer.indexedProjectRoot === root && globalIndexer.count > 0) {
+    return;
+  }
+  await globalIndexer.indexProject(root, onProgress ? { onProgress } : undefined);
+}
+
+let embeddingRegistered = false;
+
 export async function handleSemanticSearch(
   req: Extract<ToolCallRequest, { tool: 'semantic_search' }>,
 ): Promise<ToolResult> {
   try {
-    const hits = globalIndexer.search(req.query, req.limit ?? 5);
-    const formatted = hits.map(h => `[${h.score.toFixed(2)}] ${h.id}`).join('\n');
+    // ── R2.5: Lazily register embedding function on first semantic search ──
+    if (!embeddingRegistered) {
+      embeddingRegistered = true;
+      const provider = createEmbeddingProvider();
+      if (provider) {
+        globalIndexer.setEmbeddingFunction((text) =>
+          provider.embedTexts([text]).then((vs) => vs[0]!),
+        );
+      }
+    }
+
+    const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
+    await ensureSemanticIndexForProject(projectRoot);
+
+    const hits = await globalIndexer.searchWithEmbedding(req.query, req.limit ?? 5);
+
     return {
       exit_code: 0,
-      stdout: formatted || 'No matches found.',
+      stdout: formatSemanticSearchHits(hits),
       stderr: '',
     };
   } catch (err: unknown) {

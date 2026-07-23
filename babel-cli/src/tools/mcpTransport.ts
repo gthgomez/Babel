@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process';
 
+import { trace, SpanStatusCode, type Span } from '@opentelemetry/api';
 import { z } from 'zod';
 
+import { endSpan } from '../telemetry/tracing.js';
 import { readMcpServers } from '../config/mcpServers.js';
 import type { ToolResult } from '../sandbox.js';
 import type { ToolCallRequest } from '../localTools.js';
@@ -12,7 +14,13 @@ const MCP_TIMEOUT_MS = 15_000;
 
 function buildMcpLifecycle(
   server: string,
-  phase: 'server_lookup' | 'spawn' | 'write_request' | 'await_response' | 'response_parse' | 'complete',
+  phase:
+    | 'server_lookup'
+    | 'spawn'
+    | 'write_request'
+    | 'await_response'
+    | 'response_parse'
+    | 'complete',
   outcome: 'success' | 'failure',
   reasonCode: string | null = null,
   evidence: string[] | null = null,
@@ -28,7 +36,13 @@ function buildMcpLifecycle(
 
 function buildMcpResult(
   server: string,
-  phase: 'server_lookup' | 'spawn' | 'write_request' | 'await_response' | 'response_parse' | 'complete',
+  phase:
+    | 'server_lookup'
+    | 'spawn'
+    | 'write_request'
+    | 'await_response'
+    | 'response_parse'
+    | 'complete',
   outcome: 'success' | 'failure',
   exitCode: number,
   stdout: string,
@@ -71,10 +85,12 @@ const JsonRpcToolsCallRequestSchema = z.object({
   method: z.literal('tools/call'),
   params: z.object({
     name: z.string().min(1),
-    arguments: z.record(z.string(), z.unknown()).refine(
-      (value) => Object.keys(value).length > 0,
-      'tools/call arguments must include at least one field.',
-    ),
+    arguments: z
+      .record(z.string(), z.unknown())
+      .refine(
+        (value) => Object.keys(value).length > 0,
+        'tools/call arguments must include at least one field.',
+      ),
   }),
 });
 
@@ -85,7 +101,10 @@ const JsonRpcGenericRequestSchema = z.object({
   params: z.record(z.string(), z.unknown()).optional(),
 });
 
-function buildSpawnInvocation(command: string, args: string[]): { command: string; args: string[] } {
+export function buildSpawnInvocation(
+  command: string,
+  args: string[],
+): { command: string; args: string[] } {
   if (process.platform === 'win32') {
     return {
       command: 'cmd.exe',
@@ -115,7 +134,10 @@ export function frameJsonRpcMessage(messageBody: string): string {
   return `Content-Length: ${Buffer.byteLength(messageBody, 'utf8')}\r\n\r\n${messageBody}`;
 }
 
-export function parseFramedMessages(buffer: Uint8Array): { messages: Array<Record<string, unknown>>; remainder: Buffer } {
+export function parseFramedMessages(buffer: Uint8Array): {
+  messages: Array<Record<string, unknown>>;
+  remainder: Buffer;
+} {
   const messages: Array<Record<string, unknown>> = [];
   let remainder = Buffer.from(buffer);
 
@@ -158,7 +180,7 @@ export function buildMcpToolCallParams(
   tools: McpAdvertisedTool[],
   query: string,
 ): { name: string; arguments: Record<string, unknown> } | null {
-  const namedQueryTool = tools.find(tool => tool.name === 'query');
+  const namedQueryTool = tools.find((tool) => tool.name === 'query');
   const selectedTool = namedQueryTool ?? tools[0];
   if (!selectedTool) {
     return null;
@@ -194,10 +216,45 @@ function externalContentPolicy(): Record<string, unknown> {
   };
 }
 
-async function executeMcpMethod(
+/**
+ * Execute a JSON-RPC method on an MCP server with OTel tracing.
+ *
+ * Wraps executeMcpMethodImpl with a span that captures the MCP server
+ * name and (when applicable) the MCP tool being invoked. The attributes
+ * `babel.mcp.server` and `babel.mcp.tool` are set at span creation time so
+ * they are available in exported OTLP payloads immediately.
+ */
+export async function executeMcpMethod(
   server: string,
   method: string,
   params: Record<string, unknown> | undefined,
+  timeoutMs?: number,
+): Promise<ToolResult> {
+  const _tracer = trace.getTracer('babel-cli', '1.0.0');
+  const _span = _tracer.startSpan('babel.mcp.request', {
+    attributes: {
+      'babel.mcp.server': server,
+      ...(method === 'tools/call' && params?.name !== undefined
+        ? { 'babel.mcp.tool': String(params.name) }
+        : {}),
+    },
+  });
+
+  try {
+    const _result = await executeMcpMethodImpl(server, method, params, timeoutMs);
+    endSpan(_span, _result.exit_code === 0 ? SpanStatusCode.OK : SpanStatusCode.ERROR);
+    return _result;
+  } catch (_err) {
+    endSpan(_span, SpanStatusCode.ERROR, {}, _err);
+    throw _err;
+  }
+}
+
+async function executeMcpMethodImpl(
+  server: string,
+  method: string,
+  params: Record<string, unknown> | undefined,
+  timeoutMs?: number,
 ): Promise<ToolResult> {
   const servers = readMcpServers();
   const config = servers[server];
@@ -219,28 +276,40 @@ async function executeMcpMethod(
   let initializedPayload: string;
   let requestPayload: string;
   try {
-    initializePayload = serializeValidatedJsonRpcMessage({
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: {
-        protocolVersion: '2024-11-05',
-        capabilities: {},
-        clientInfo: { name: 'Babel', version: '1.0' },
+    initializePayload = serializeValidatedJsonRpcMessage(
+      {
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'Babel', version: '1.0' },
+        },
       },
-    }, JsonRpcInitializeRequestSchema, 'initialize payload');
+      JsonRpcInitializeRequestSchema,
+      'initialize payload',
+    );
 
-    initializedPayload = serializeValidatedJsonRpcMessage({
-      jsonrpc: '2.0',
-      method: 'notifications/initialized',
-    }, JsonRpcNotificationSchema, 'initialized notification');
+    initializedPayload = serializeValidatedJsonRpcMessage(
+      {
+        jsonrpc: '2.0',
+        method: 'notifications/initialized',
+      },
+      JsonRpcNotificationSchema,
+      'initialized notification',
+    );
 
-    requestPayload = serializeValidatedJsonRpcMessage({
-      jsonrpc: '2.0',
-      id: 1,
-      method,
-      ...(params ? { params } : {}),
-    }, JsonRpcGenericRequestSchema, `${method} payload`);
+    requestPayload = serializeValidatedJsonRpcMessage(
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method,
+        ...(params ? { params } : {}),
+      },
+      JsonRpcGenericRequestSchema,
+      `${method} payload`,
+    );
   } catch (error: unknown) {
     return buildMcpResult(
       server,
@@ -268,22 +337,29 @@ async function executeMcpMethod(
       if (settled) return;
       settled = true;
       clearTimeout(timeoutHandle);
-      try { child.kill(); } catch { /* already dead - ignore */ }
+      try {
+        child.kill();
+      } catch {
+        /* already dead - ignore */
+      }
       resolve(result);
     }
 
+    const effectiveTimeout = timeoutMs ?? MCP_TIMEOUT_MS;
     const timeoutHandle = setTimeout(() => {
-      settle(buildMcpResult(
-        server,
-        'await_response',
-        'failure',
-        1,
-        '',
-        `[MCP_TIMEOUT] Server '${server}' did not respond within ${MCP_TIMEOUT_MS / 1000}s for ${method}.`,
-        'response_timeout',
-        [`timeout_ms:${MCP_TIMEOUT_MS}`, `method:${method}`],
-      ));
-    }, MCP_TIMEOUT_MS);
+      settle(
+        buildMcpResult(
+          server,
+          'await_response',
+          'failure',
+          1,
+          '',
+          `[MCP_TIMEOUT] Server '${server}' did not respond within ${effectiveTimeout / 1000}s for ${method}.`,
+          'response_timeout',
+          [`timeout_ms:${effectiveTimeout}`, `method:${method}`],
+        ),
+      );
+    }, effectiveTimeout);
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdoutBuf = Buffer.concat([Buffer.from(stdoutBuf), chunk]);
@@ -294,16 +370,18 @@ async function executeMcpMethod(
         parsedMessages = parsed.messages;
         stdoutBuf = parsed.remainder;
       } catch (error: unknown) {
-        settle(buildMcpResult(
-          server,
-          'response_parse',
-          'failure',
-          1,
-          '',
-          `[MCP_PARSE_ERROR] ${error instanceof Error ? error.message : String(error)}`,
-          'response_parse_error',
-          [`method:${method}`],
-        ));
+        settle(
+          buildMcpResult(
+            server,
+            'response_parse',
+            'failure',
+            1,
+            '',
+            `[MCP_PARSE_ERROR] ${error instanceof Error ? error.message : String(error)}`,
+            'response_parse_error',
+            [`method:${method}`],
+          ),
+        );
         return;
       }
 
@@ -315,16 +393,18 @@ async function executeMcpMethod(
 
         if (id === 0) {
           if ('error' in response) {
-            settle(buildMcpResult(
-              server,
-              'response_parse',
-              'failure',
-              1,
-              '',
-              `[MCP_INIT_ERROR] Server initialization failed: ${JSON.stringify(response['error'])}`,
-              'init_error',
-              [`method:${method}`],
-            ));
+            settle(
+              buildMcpResult(
+                server,
+                'response_parse',
+                'failure',
+                1,
+                '',
+                `[MCP_INIT_ERROR] Server initialization failed: ${JSON.stringify(response['error'])}`,
+                'init_error',
+                [`method:${method}`],
+              ),
+            );
             return;
           }
           if (child.stdin) {
@@ -337,87 +417,98 @@ async function executeMcpMethod(
 
         if (id === 1) {
           if ('error' in response) {
-            settle(buildMcpResult(
-              server,
-              'response_parse',
-              'failure',
-              1,
-              '',
-              JSON.stringify({
-                source: 'mcp_rpc_error',
+            settle(
+              buildMcpResult(
                 server,
-                method,
-                error: response['error'],
-              }),
-              'rpc_error',
-              [`method:${method}`],
-            ));
+                'response_parse',
+                'failure',
+                1,
+                '',
+                JSON.stringify({
+                  source: 'mcp_rpc_error',
+                  server,
+                  method,
+                  error: response['error'],
+                }),
+                'rpc_error',
+                [`method:${method}`],
+              ),
+            );
             return;
           }
 
-          settle(buildMcpResult(
-            server,
-            'complete',
-            'success',
-            0,
-            JSON.stringify({
-              status: 'success',
+          settle(
+            buildMcpResult(
               server,
-              method,
-              result: response['result'] ?? null,
-              content_policy: method.startsWith('resources/') || method.startsWith('prompts/')
-                ? externalContentPolicy()
-                : undefined,
-            }),
-            '',
-            'response_received',
-            [`command:${config.command}`, `method:${method}`],
-          ));
+              'complete',
+              'success',
+              0,
+              JSON.stringify({
+                status: 'success',
+                server,
+                method,
+                result: response['result'] ?? null,
+                content_policy:
+                  method.startsWith('resources/') || method.startsWith('prompts/')
+                    ? externalContentPolicy()
+                    : undefined,
+              }),
+              '',
+              'response_received',
+              [`command:${config.command}`, `method:${method}`],
+            ),
+          );
         }
       }
     });
 
     child.on('error', (err: Error) => {
-      settle(buildMcpResult(
-        server,
-        'spawn',
-        'failure',
-        1,
-        '',
-        `[MCP_SPAWN_ERROR] Failed to start '${config.command}' for server '${server}': ${err.message}`,
-        'spawn_error',
-        [`command:${config.command}`, `method:${method}`],
-      ));
+      settle(
+        buildMcpResult(
+          server,
+          'spawn',
+          'failure',
+          1,
+          '',
+          `[MCP_SPAWN_ERROR] Failed to start '${config.command}' for server '${server}': ${err.message}`,
+          'spawn_error',
+          [`command:${config.command}`, `method:${method}`],
+        ),
+      );
     });
 
     child.on('close', (code: number | null) => {
       if (!settled) {
-        settle(buildMcpResult(
-          server,
-          'await_response',
-          'failure',
-          code ?? 1,
-          '',
-          `[MCP_CLOSED] Server '${server}' exited (code ${code ?? 'null'}) before returning ${method}.`,
-          'closed_before_response',
-          [`exit_code:${code ?? 'null'}`, `method:${method}`],
-        ));
+        settle(
+          buildMcpResult(
+            server,
+            'await_response',
+            'failure',
+            code ?? 1,
+            '',
+            `[MCP_CLOSED] Server '${server}' exited (code ${code ?? 'null'}) before returning ${method}.`,
+            'closed_before_response',
+            [`exit_code:${code ?? 'null'}`, `method:${method}`],
+          ),
+        );
       }
     });
 
     if (child.stdin) {
       child.stdin.write(frameJsonRpcMessage(initializePayload), 'utf8', (err?: Error | null) => {
         if (err && !settled) {
-          settle(buildMcpResult(
-            server,
-            'write_request',
-            'failure',
-            1,
-            '',
-            `[MCP_WRITE_ERROR] Could not write to '${server}' stdin: ${err.message}`,
-            'write_error',
-            [`command:${config.command}`, `method:${method}`],
-          ));
+          settle(
+            buildMcpResult(
+              server,
+              'write_request',
+              'failure',
+              1,
+              '',
+              `[MCP_WRITE_ERROR] Could not write to '${server}' stdin: ${err.message}`,
+              'write_error',
+              [`command:${config.command}`, `method:${method}`],
+            ),
+          );
         }
       });
     }
@@ -435,7 +526,9 @@ export function buildMcpToolSearchPayload(
     .filter((tool) => {
       const name = String(tool['name'] ?? '').toLowerCase();
       const description = String(tool['description'] ?? '').toLowerCase();
-      return !normalizedQuery || name.includes(normalizedQuery) || description.includes(normalizedQuery);
+      return (
+        !normalizedQuery || name.includes(normalizedQuery) || description.includes(normalizedQuery)
+      );
     })
     .slice(0, limit);
 
@@ -496,7 +589,9 @@ export async function handleMcpToolSearch(
     const parsed = JSON.parse(listResult.stdout) as Record<string, unknown>;
     const result = parsed['result'] as Record<string, unknown> | null;
     const tools = Array.isArray(result?.['tools'])
-      ? result['tools'].filter((tool): tool is Record<string, unknown> => typeof tool === 'object' && tool !== null)
+      ? result['tools'].filter(
+          (tool): tool is Record<string, unknown> => typeof tool === 'object' && tool !== null,
+        )
       : [];
     const limit = Math.min(Math.max(req.limit ?? 20, 1), 50);
     const schemaLimit = Math.min(Math.max(req.schema_limit ?? 10, 0), limit);
@@ -535,10 +630,18 @@ export async function handleMcpToolSearch(
 export async function handleMcpRequest(
   req: Extract<ToolCallRequest, { tool: 'mcp_request' }>,
 ): Promise<ToolResult> {
+  const _tracer = trace.getTracer('babel-cli', '1.0.0');
+  const _span = _tracer.startSpan('babel.mcp.request', {
+    attributes: {
+      'babel.mcp.server': req.server,
+    },
+  });
+
   const servers = readMcpServers();
   const config = servers[req.server];
   if (config === undefined) {
     const available = Object.keys(servers).join(', ');
+    endSpan(_span, SpanStatusCode.ERROR);
     return buildMcpResult(
       req.server,
       'server_lookup',
@@ -557,21 +660,29 @@ export async function handleMcpRequest(
   let initializedPayload: string;
   let toolListPayload: string;
   try {
-    initializePayload = serializeValidatedJsonRpcMessage({
-      jsonrpc: '2.0',
-      id: 0,
-      method: 'initialize',
-      params: {
-        protocolVersion: '2024-11-05',
-        capabilities: {},
-        clientInfo: { name: 'Babel', version: '1.0' },
+    initializePayload = serializeValidatedJsonRpcMessage(
+      {
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'Babel', version: '1.0' },
+        },
       },
-    }, JsonRpcInitializeRequestSchema, 'initialize payload');
+      JsonRpcInitializeRequestSchema,
+      'initialize payload',
+    );
 
-    initializedPayload = serializeValidatedJsonRpcMessage({
-      jsonrpc: '2.0',
-      method: 'notifications/initialized',
-    }, JsonRpcNotificationSchema, 'initialized notification');
+    initializedPayload = serializeValidatedJsonRpcMessage(
+      {
+        jsonrpc: '2.0',
+        method: 'notifications/initialized',
+      },
+      JsonRpcNotificationSchema,
+      'initialized notification',
+    );
 
     toolListPayload = JSON.stringify({
       jsonrpc: '2.0',
@@ -579,6 +690,7 @@ export async function handleMcpRequest(
       method: 'tools/list',
     });
   } catch (error: unknown) {
+    endSpan(_span, SpanStatusCode.ERROR);
     return buildMcpResult(
       req.server,
       'write_request',
@@ -605,22 +717,29 @@ export async function handleMcpRequest(
       if (settled) return;
       settled = true;
       clearTimeout(timeoutHandle);
-      try { child.kill(); } catch { /* already dead - ignore */ }
+      try {
+        child.kill();
+      } catch {
+        /* already dead - ignore */
+      }
+      endSpan(_span, result.exit_code === 0 ? SpanStatusCode.OK : SpanStatusCode.ERROR);
       resolve(result);
     }
 
     const timeoutHandle = setTimeout(() => {
-      settle(buildMcpResult(
-        req.server,
-        'await_response',
-        'failure',
-        1,
-        '',
-        `[MCP_TIMEOUT] Server '${req.server}' did not respond within ` +
-        `${MCP_TIMEOUT_MS / 1000}s during the JSON-RPC handshake or tool call.`,
-        'response_timeout',
-        [`timeout_ms:${MCP_TIMEOUT_MS}`],
-      ));
+      settle(
+        buildMcpResult(
+          req.server,
+          'await_response',
+          'failure',
+          1,
+          '',
+          `[MCP_TIMEOUT] Server '${req.server}' did not respond within ` +
+            `${MCP_TIMEOUT_MS / 1000}s during the JSON-RPC handshake or tool call.`,
+          'response_timeout',
+          [`timeout_ms:${MCP_TIMEOUT_MS}`],
+        ),
+      );
     }, MCP_TIMEOUT_MS);
 
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -632,16 +751,18 @@ export async function handleMcpRequest(
         parsedMessages = parsed.messages;
         stdoutBuf = parsed.remainder;
       } catch (error: unknown) {
-        settle(buildMcpResult(
-          req.server,
-          'response_parse',
-          'failure',
-          1,
-          '',
-          `[MCP_PARSE_ERROR] ${error instanceof Error ? error.message : String(error)}`,
-          'response_parse_error',
-          [],
-        ));
+        settle(
+          buildMcpResult(
+            req.server,
+            'response_parse',
+            'failure',
+            1,
+            '',
+            `[MCP_PARSE_ERROR] ${error instanceof Error ? error.message : String(error)}`,
+            'response_parse_error',
+            [],
+          ),
+        );
         return;
       }
 
@@ -653,16 +774,18 @@ export async function handleMcpRequest(
 
         if (id === 0) {
           if ('error' in response) {
-            settle(buildMcpResult(
-              req.server,
-              'response_parse',
-              'failure',
-              1,
-              '',
-              `[MCP_INIT_ERROR] Server initialization failed: ${JSON.stringify(response['error'])}`,
-              'init_error',
-              [],
-            ));
+            settle(
+              buildMcpResult(
+                req.server,
+                'response_parse',
+                'failure',
+                1,
+                '',
+                `[MCP_INIT_ERROR] Server initialization failed: ${JSON.stringify(response['error'])}`,
+                'init_error',
+                [],
+              ),
+            );
             return;
           }
           if (child.stdin) {
@@ -674,66 +797,80 @@ export async function handleMcpRequest(
 
         if (id === 1) {
           if ('error' in response) {
-            settle(buildMcpResult(
-              req.server,
-              'response_parse',
-              'failure',
-              1,
-              '',
-              `[MCP_TOOLS_LIST_ERROR] ${JSON.stringify(response['error'])}`,
-              'tools_list_error',
-              [],
-            ));
+            settle(
+              buildMcpResult(
+                req.server,
+                'response_parse',
+                'failure',
+                1,
+                '',
+                `[MCP_TOOLS_LIST_ERROR] ${JSON.stringify(response['error'])}`,
+                'tools_list_error',
+                [],
+              ),
+            );
             return;
           }
 
           const result = response['result'] as Record<string, unknown> | undefined;
           const tools = Array.isArray(result?.['tools'])
             ? result?.['tools']
-                .filter((tool): tool is McpAdvertisedTool => typeof tool === 'object' && tool !== null && typeof (tool as Record<string, unknown>)['name'] === 'string')
+                .filter(
+                  (tool): tool is McpAdvertisedTool =>
+                    typeof tool === 'object' &&
+                    tool !== null &&
+                    typeof (tool as Record<string, unknown>)['name'] === 'string',
+                )
                 .map((tool) => {
-                  const inputSchema = typeof tool.inputSchema === 'object' && tool.inputSchema !== null
-                    ? tool.inputSchema
-                    : null;
-                  return inputSchema
-                    ? { name: tool.name, inputSchema }
-                    : { name: tool.name };
+                  const inputSchema =
+                    typeof tool.inputSchema === 'object' && tool.inputSchema !== null
+                      ? tool.inputSchema
+                      : null;
+                  return inputSchema ? { name: tool.name, inputSchema } : { name: tool.name };
                 })
             : [];
           const toolParams = buildMcpToolCallParams(tools, req.query);
           if (!toolParams) {
-            settle(buildMcpResult(
-              req.server,
-              'response_parse',
-              'failure',
-              1,
-              '',
-              `[MCP_NO_TOOLS] Server '${req.server}' advertised no callable tools.`,
-              'no_tools_available',
-              [],
-            ));
+            settle(
+              buildMcpResult(
+                req.server,
+                'response_parse',
+                'failure',
+                1,
+                '',
+                `[MCP_NO_TOOLS] Server '${req.server}' advertised no callable tools.`,
+                'no_tools_available',
+                [],
+              ),
+            );
             return;
           }
 
           let toolCallPayload: string;
           try {
-            toolCallPayload = serializeValidatedJsonRpcMessage({
-              jsonrpc: '2.0',
-              id: 2,
-              method: 'tools/call',
-              params: toolParams,
-            }, JsonRpcToolsCallRequestSchema, 'tools/call payload');
+            toolCallPayload = serializeValidatedJsonRpcMessage(
+              {
+                jsonrpc: '2.0',
+                id: 2,
+                method: 'tools/call',
+                params: toolParams,
+              },
+              JsonRpcToolsCallRequestSchema,
+              'tools/call payload',
+            );
           } catch (error: unknown) {
-            settle(buildMcpResult(
-              req.server,
-              'write_request',
-              'failure',
-              1,
-              '',
-              `[MCP_PAYLOAD_INVALID] ${error instanceof Error ? error.message : String(error)}`,
-              'invalid_tool_call_payload',
-              [],
-            ));
+            settle(
+              buildMcpResult(
+                req.server,
+                'write_request',
+                'failure',
+                1,
+                '',
+                `[MCP_PAYLOAD_INVALID] ${error instanceof Error ? error.message : String(error)}`,
+                'invalid_tool_call_payload',
+                [],
+              ),
+            );
             return;
           }
 
@@ -746,86 +883,159 @@ export async function handleMcpRequest(
 
         if (id === 2) {
           if ('error' in response) {
-            settle(buildMcpResult(
-              req.server,
-              'response_parse',
-              'failure',
-              1,
-              '',
-              JSON.stringify({
-                source: 'mcp_rpc_error',
-                server: req.server,
-                error: response['error'],
-              }),
-              'rpc_error',
-              [`rpc_error_code:${String((response['error'] as Record<string, unknown> | undefined)?.['code'] ?? 'unknown')}`],
-            ));
+            settle(
+              buildMcpResult(
+                req.server,
+                'response_parse',
+                'failure',
+                1,
+                '',
+                JSON.stringify({
+                  source: 'mcp_rpc_error',
+                  server: req.server,
+                  error: response['error'],
+                }),
+                'rpc_error',
+                [
+                  `rpc_error_code:${String((response['error'] as Record<string, unknown> | undefined)?.['code'] ?? 'unknown')}`,
+                ],
+              ),
+            );
           } else {
-            settle(buildMcpResult(
-              req.server,
-              'complete',
-              'success',
-              0,
-              JSON.stringify({
-                status: 'success',
-                server: req.server,
-                result: response['result'] ?? null,
-              }),
-              '',
-              'response_received',
-              [`command:${config.command}`],
-            ));
+            settle(
+              buildMcpResult(
+                req.server,
+                'complete',
+                'success',
+                0,
+                JSON.stringify({
+                  status: 'success',
+                  server: req.server,
+                  result: response['result'] ?? null,
+                }),
+                '',
+                'response_received',
+                [`command:${config.command}`],
+              ),
+            );
           }
         }
       }
     });
 
     child.on('error', (err: Error) => {
-      settle(buildMcpResult(
-        req.server,
-        'spawn',
-        'failure',
-        1,
-        '',
-        `[MCP_SPAWN_ERROR] Failed to start '${config.command}' for server ` +
-        `'${req.server}': ${err.message}`,
-        'spawn_error',
-        [`command:${config.command}`],
-      ));
+      settle(
+        buildMcpResult(
+          req.server,
+          'spawn',
+          'failure',
+          1,
+          '',
+          `[MCP_SPAWN_ERROR] Failed to start '${config.command}' for server ` +
+            `'${req.server}': ${err.message}`,
+          'spawn_error',
+          [`command:${config.command}`],
+        ),
+      );
     });
 
     child.on('close', (code: number | null) => {
       if (!settled) {
-        settle(buildMcpResult(
-          req.server,
-          'await_response',
-          'failure',
-          code ?? 1,
-          '',
-          `[MCP_CLOSED] Server '${req.server}' exited (code ${code ?? 'null'}) ` +
-          `before returning a response.`,
-          'closed_before_response',
-          [`exit_code:${code ?? 'null'}`],
-        ));
+        settle(
+          buildMcpResult(
+            req.server,
+            'await_response',
+            'failure',
+            code ?? 1,
+            '',
+            `[MCP_CLOSED] Server '${req.server}' exited (code ${code ?? 'null'}) ` +
+              `before returning a response.`,
+            'closed_before_response',
+            [`exit_code:${code ?? 'null'}`],
+          ),
+        );
       }
     });
 
     if (child.stdin) {
       child.stdin.write(frameJsonRpcMessage(initializePayload), 'utf8', (err?: Error | null) => {
         if (err && !settled) {
-          settle(buildMcpResult(
-            req.server,
-            'write_request',
-            'failure',
-            1,
-            '',
-            `[MCP_WRITE_ERROR] Could not write to '${req.server}' stdin: ` +
-            `${err.message}`,
-            'write_error',
-            [`command:${config.command}`],
-          ));
+          settle(
+            buildMcpResult(
+              req.server,
+              'write_request',
+              'failure',
+              1,
+              '',
+              `[MCP_WRITE_ERROR] Could not write to '${req.server}' stdin: ` + `${err.message}`,
+              'write_error',
+              [`command:${config.command}`],
+            ),
+          );
         }
       });
     }
   });
+}
+
+/**
+ * Call a specific MCP tool by name with explicit arguments on a configured server.
+ *
+ * Performs a single JSON-RPC handshake (initialize → tools/call) and returns
+ * the parsed result. This is a direct tool invocation — no `tools/list`
+ * discovery step, unlike {@link handleMcpRequest}.
+ *
+ * @param server - Logical server name from mcp_servers.json
+ * @param tool - MCP tool name to invoke (e.g. 'trace_path')
+ * @param args - Arguments object for the tool
+ * @param timeoutMs - Optional timeout override (default: 15s)
+ * @returns ToolResult with MCP response content extracted into stdout
+ */
+export async function handleMcpToolCall(
+  server: string,
+  tool: string,
+  args: Record<string, unknown>,
+  timeoutMs?: number,
+): Promise<ToolResult> {
+  const raw = await executeMcpMethod(
+    server,
+    'tools/call',
+    { name: tool, arguments: args },
+    timeoutMs,
+  );
+
+  if (raw.exit_code !== 0) return raw;
+
+  try {
+    const parsed = JSON.parse(raw.stdout) as Record<string, unknown>;
+    const mcpResult = parsed['result'] as Record<string, unknown> | undefined;
+    const content = Array.isArray(mcpResult?.['content'])
+      ? (mcpResult?.['content'] as Array<Record<string, unknown>>)
+      : [];
+
+    // Check for MCP tool-level errors (isError flag on the result)
+    const isError = mcpResult?.['isError'] === true;
+
+    const textContent = content
+      .filter((c) => c['type'] === 'text' && typeof c['text'] === 'string')
+      .map((c) => c['text'] as string)
+      .join('\n');
+
+    const result: ToolResult = {
+      exit_code: isError ? 1 : 0,
+      stdout: isError ? '' : textContent,
+      stderr: isError ? textContent : '',
+    };
+    if (raw.mcp_lifecycle) {
+      result.mcp_lifecycle = raw.mcp_lifecycle;
+    }
+    return result;
+  } catch (err) {
+    // If we can't parse the MCP envelope, surface the parse error
+    return {
+      exit_code: 1,
+      stdout: '',
+      stderr: `Failed to parse MCP response for tool '${tool}': ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 }

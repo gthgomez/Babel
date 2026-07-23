@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "fixture_type": "babel_vagueness_repos",
+  "workspace_root": "C:\\Workspace",
+  "repos": [
+    {
+      "id": "babel_private",
+      "path": "Babel",
+      "required": true,
+      "description": "Babel prompt OS lab and CLI harness"
+    },
+    {
+      "id": "relic_run",
+      "path": "example_game_suite\\relicRun",
+      "required": false,
+      "description": "Optional Godot game project for cross-repo vague plan/report tasks"
+    }
+  ]
+}

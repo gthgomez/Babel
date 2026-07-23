@@ -5,15 +5,8 @@ import { dirname, join } from 'node:path';
 import { z } from 'zod';
 
 import { EvidenceBundle } from '../evidence.js';
-import {
-  executeTool,
-  ToolCallRequestSchema,
-  type ToolResult,
-} from '../localTools.js';
-import type {
-  OrchestratorManifest,
-  ToolCallLog,
-} from '../schemas/agentContracts.js';
+import { executeTool, ToolCallRequestSchema, type ToolResult } from '../localTools.js';
+import type { OrchestratorManifest, ToolCallLog } from '../schemas/agentContracts.js';
 import {
   buildHaltReport,
   canonicalizeExecutorTargetForLog,
@@ -33,7 +26,6 @@ import {
 } from '../stages/runtimePreflight.js';
 import { inferProjectRoot } from './manifestContext.js';
 import { BABEL_ROOT, GRADLE_CACHE_DIR } from './paths.js';
-
 
 export async function runDeterministicAndroidSdkBootstrapLane(
   manifest: OrchestratorManifest,
@@ -90,7 +82,7 @@ export async function runDeterministicAndroidSdkBootstrapLane(
     : '';
   const existingLines = existingLocalProperties
     .split(/\r?\n/)
-    .filter(line => line.trim().length > 0 && !line.trim().startsWith('sdk.dir='));
+    .filter((line) => line.trim().length > 0 && !line.trim().startsWith('sdk.dir='));
   const nextLocalProperties = `${[desiredSdkLine, ...existingLines].join('\n')}\n`;
 
   if (existingLocalProperties !== nextLocalProperties) {
@@ -154,7 +146,7 @@ export async function runDeterministicGradleBootstrapLane(
       agentId: 'bootstrap_lane',
       runId: evidence.runId,
       runDir: evidence.runDir,
-      babelRoot: BABEL_ROOT
+      babelRoot: BABEL_ROOT,
     });
     const entry: ToolCallLog = {
       step: stepNum,
@@ -219,11 +211,7 @@ export async function runDeterministicGradleBootstrapLane(
 
   const rootBuildGradlePath = join(projectRoot, 'build.gradle.kts');
   if (!existsSync(rootBuildGradlePath)) {
-    writeFileSync(
-      rootBuildGradlePath,
-      buildDeterministicRootBuildGradleKtsContent(),
-      'utf-8',
-    );
+    writeFileSync(rootBuildGradlePath, buildDeterministicRootBuildGradleKtsContent(), 'utf-8');
     recordSyntheticStep(
       'file_write',
       rootBuildGradlePath,
@@ -266,10 +254,7 @@ export async function runDeterministicGradleBootstrapLane(
     mkdirSync(GRADLE_CACHE_DIR, { recursive: true });
     const archiveName = distributionUrl.split('/').pop() ?? 'gradle-distribution.zip';
     const archivePath = join(GRADLE_CACHE_DIR, archiveName);
-    const extractedRoot = join(
-      GRADLE_CACHE_DIR,
-      archiveName.replace(/\.zip$/i, ''),
-    );
+    const extractedRoot = join(GRADLE_CACHE_DIR, archiveName.replace(/\.zip$/i, ''));
 
     if (!existsSync(archivePath)) {
       const response = await fetch(distributionUrl);
@@ -312,11 +297,10 @@ export async function runDeterministicGradleBootstrapLane(
     let gradleCandidate = detectGradleBinaryFromExtractedRoot(extractedRoot);
     if (!gradleCandidate) {
       mkdirSync(extractedRoot, { recursive: true });
-      const tarResult = spawnSync(
-        'tar',
-        ['-xf', archivePath, '-C', extractedRoot],
-        { encoding: 'utf-8', windowsHide: true },
-      );
+      const tarResult = spawnSync('tar', ['-xf', archivePath, '-C', extractedRoot], {
+        encoding: 'utf-8',
+        windowsHide: true,
+      });
       recordSyntheticStep(
         'shell_exec',
         `tar -xf ${archivePath} -C ${extractedRoot}`,
@@ -405,10 +389,7 @@ export async function runDeterministicGradleBootstrapLane(
     tool: 'directory_list',
     path: join(projectRoot, 'gradle', 'wrapper'),
   });
-  if (
-    wrapperListing.exit_code !== 0 ||
-    !existsSync(wrapperJarPath)
-  ) {
+  if (wrapperListing.exit_code !== 0 || !existsSync(wrapperJarPath)) {
     return {
       toolCallLog,
       haltedReport: buildHaltReport(

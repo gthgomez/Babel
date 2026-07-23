@@ -13,12 +13,7 @@ function writeJsonFile(path: string, data: unknown): void {
 }
 
 function findGuaranteedReadTarget(projectRoot: string): string {
-  const candidateFiles = [
-    'README.md',
-    'package.json',
-    'build.gradle.kts',
-    'app/build.gradle.kts',
-  ];
+  const candidateFiles = ['README.md', 'package.json', 'build.gradle.kts', 'app/build.gradle.kts'];
 
   for (const relative of candidateFiles) {
     const full = join(projectRoot, relative);
@@ -28,9 +23,9 @@ function findGuaranteedReadTarget(projectRoot: string): string {
   }
 
   const entries = readdirSync(projectRoot, { withFileTypes: true })
-    .filter(entry => entry.isFile())
-    .map(entry => entry.name)
-    .filter(name => name.toLowerCase().endsWith('.md') || name.toLowerCase().endsWith('.json'))
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter((name) => name.toLowerCase().endsWith('.md') || name.toLowerCase().endsWith('.json'))
     .sort((a, b) => a.localeCompare(b));
 
   if (entries.length > 0) {
@@ -55,15 +50,14 @@ export function buildSmokeFixtures(runDir: string, projectRoot: string): SmokePl
     plan_version: '1.0',
     thinking: 'Smoke test fixture designed to validate in-root read access and memory persistence.',
     plan_type: 'IMPLEMENTATION_PLAN',
-    task_summary: 'OBJECTIVE: Verify manual-bridge executor can read a guaranteed in-root file and persist memory.',
+    task_summary:
+      'OBJECTIVE: Verify manual-bridge executor can read a guaranteed in-root file and persist memory.',
     known_facts: [
       `Target project root is ${projectRoot}`,
       `Read target for this smoke run is ${readTarget}`,
       'Chronicle memory_store tool is available in executor contract',
     ],
-    assumptions: [
-      'Path jail allows read-only access inside the target project root',
-    ],
+    assumptions: ['Path jail allows read-only access inside the target project root'],
     risks: [
       {
         risk: 'Chosen read target could be unavailable at runtime',
@@ -91,25 +85,24 @@ export function buildSmokeFixtures(runDir: string, projectRoot: string): SmokePl
         verification: 'Exit code is 0 and stdout confirms storage',
       },
     ],
-    root_cause: 'Previous smoke failures showed /project path mapping and project-root derivation drift; this case verifies the corrected in-root read path.',
-    out_of_scope: [
-      'Mutating application source code',
-    ],
+    root_cause:
+      'Previous smoke failures showed /project path mapping and project-root derivation drift; this case verifies the corrected in-root read path.',
+    out_of_scope: ['Mutating application source code'],
   });
 
   writeJsonFile(safeWritePath, {
     plan_version: '1.0',
-    thinking: 'Smoke test fixture designed to validate write/read round-trips inside the project mount.',
+    thinking:
+      'Smoke test fixture designed to validate write/read round-trips inside the project mount.',
     plan_type: 'IMPLEMENTATION_PLAN',
-    task_summary: 'OBJECTIVE: Verify manual-bridge executor can write and re-read a temp file inside the target project root.',
+    task_summary:
+      'OBJECTIVE: Verify manual-bridge executor can write and re-read a temp file inside the target project root.',
     known_facts: [
       `Target project root is ${projectRoot}`,
       `Write target for this smoke run is ${safeWriteTarget}`,
       'Executor contract includes file_write and file_read',
     ],
-    assumptions: [
-      'Writing temp file under project root is permitted',
-    ],
+    assumptions: ['Writing temp file under project root is permitted'],
     risks: [
       {
         risk: 'Unexpected file permissions',
@@ -146,17 +139,17 @@ export function buildSmokeFixtures(runDir: string, projectRoot: string): SmokePl
         verification: 'Exit code is 0 and stdout confirms storage',
       },
     ],
-    root_cause: 'Previous smoke failures halted on /project path mapping; this case validates corrected in-root write semantics.',
-    out_of_scope: [
-      'Editing existing application source files',
-    ],
+    root_cause:
+      'Previous smoke failures halted on /project path mapping; this case validates corrected in-root write semantics.',
+    out_of_scope: ['Editing existing application source files'],
   });
 
   writeJsonFile(rejectionPath, {
     plan_version: '1.0',
     thinking: 'Negative smoke case for an explicitly disallowed shell command.',
     plan_type: 'IMPLEMENTATION_PLAN',
-    task_summary: 'OBJECTIVE: Confirm safety controls reject a disallowed shell_exec command in manual bridge flow.',
+    task_summary:
+      'OBJECTIVE: Confirm safety controls reject a disallowed shell_exec command in manual bridge flow.',
     known_facts: [
       'SafeExecutor enforces an explicit command allowlist',
       'shell_exec should reject commands not present in the allowlist',
@@ -179,20 +172,21 @@ export function buildSmokeFixtures(runDir: string, projectRoot: string): SmokePl
         target: 'echo smoke-sandbox-rejection',
         rationale: 'Intentional negative test for sandbox rejection',
         reversible: true,
-        verification: 'Either QA rejects for safety OR executor halts with sandbox rejection and structured denial metadata',
+        verification:
+          'Either QA rejects for safety OR executor halts with sandbox rejection and structured denial metadata',
       },
     ],
-    root_cause: 'The failure mode under test is unsafe command execution; robust behavior is explicit rejection before mutation.',
-    out_of_scope: [
-      'Any successful code modification',
-    ],
+    root_cause:
+      'The failure mode under test is unsafe command execution; robust behavior is explicit rejection before mutation.',
+    out_of_scope: ['Any successful code modification'],
   });
 
   writeJsonFile(mcpUnknownServerPath, {
     plan_version: '1.0',
     thinking: 'Negative smoke case for an unknown MCP server request.',
     plan_type: 'IMPLEMENTATION_PLAN',
-    task_summary: 'OBJECTIVE: Confirm manual bridge surfaces structured MCP lifecycle metadata for an unknown MCP server request.',
+    task_summary:
+      'OBJECTIVE: Confirm manual bridge surfaces structured MCP lifecycle metadata for an unknown MCP server request.',
     known_facts: [
       'mcp_request is a read-only executor tool',
       'Babel validates the MCP server name before spawning a child process',
@@ -213,15 +207,16 @@ export function buildSmokeFixtures(runDir: string, projectRoot: string): SmokePl
         description: 'Call an unconfigured MCP server to trigger lifecycle evidence',
         tool: 'mcp_request',
         target: 'missing-server → smoke lifecycle probe',
-        rationale: 'Intentional negative test for MCP lifecycle visibility on governed read-only requests',
+        rationale:
+          'Intentional negative test for MCP lifecycle visibility on governed read-only requests',
         reversible: true,
-        verification: 'Executor halts with unknown-server lifecycle metadata captured in the execution report',
+        verification:
+          'Executor halts with unknown-server lifecycle metadata captured in the execution report',
       },
     ],
-    root_cause: 'The failure mode under test is MCP control-plane misconfiguration; robust behavior is explicit lifecycle evidence at the validation boundary.',
-    out_of_scope: [
-      'Any successful MCP request execution',
-    ],
+    root_cause:
+      'The failure mode under test is MCP control-plane misconfiguration; robust behavior is explicit lifecycle evidence at the validation boundary.',
+    out_of_scope: ['Any successful MCP request execution'],
   });
 
   return [

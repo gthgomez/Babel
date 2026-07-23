@@ -68,11 +68,7 @@ const TASK_SPECS: Record<string, Omit<BenchmarkVerifierSpec, 'taskName' | 'riskL
       'stdout matches /^[0-9]$/',
       'prediction.txt matches stdout',
     ],
-    failureFingerprintHints: [
-      'build error',
-      'cli exit code',
-      'stdout/stderr digit mismatch',
-    ],
+    failureFingerprintHints: ['build error', 'cli exit code', 'stdout/stderr digit mismatch'],
   },
   'merge-diff-arc-agi-task': {
     requiredChecks: [
@@ -104,10 +100,7 @@ const TASK_SPECS: Record<string, Omit<BenchmarkVerifierSpec, 'taskName' | 'riskL
     ],
     suggestedHelperName: 'verify_filter_bypass.py',
     command: 'python verify_filter_bypass.py',
-    successCriteria: [
-      'filter exits 0',
-      'filtered output preserves the required bypass trigger',
-    ],
+    successCriteria: ['filter exits 0', 'filtered output preserves the required bypass trigger'],
     failureFingerprintHints: [
       'payload family stripped by sanitizer',
       'missing alert/bypass marker',
@@ -128,11 +121,7 @@ const TASK_SPECS: Record<string, Omit<BenchmarkVerifierSpec, 'taskName' | 'riskL
       'all required rows are present',
       'counts are nonnegative integers',
     ],
-    failureFingerprintHints: [
-      'missing period label',
-      'wrong header',
-      'count mismatch',
-    ],
+    failureFingerprintHints: ['missing period label', 'wrong header', 'count mismatch'],
   },
   'llm-inference-batching-scheduler': {
     requiredChecks: [
@@ -163,7 +152,7 @@ const TASK_SPECS: Record<string, Omit<BenchmarkVerifierSpec, 'taskName' | 'riskL
 export function buildBenchmarkVerifierSpec(rawTask: string): BenchmarkVerifierSpec | null {
   const taskName = extractBenchmarkTaskName(rawTask);
   const risk = classifyBenchmarkTaskRisk(rawTask);
-  const riskLabels = risk.labels.map(label => label.label);
+  const riskLabels = risk.labels.map((label) => label.label);
   if (taskName && TASK_SPECS[taskName]) {
     return {
       taskName,

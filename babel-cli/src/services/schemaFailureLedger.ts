@@ -20,11 +20,7 @@ export type SchemaFailureKind =
 
 export type SchemaFailureStorageMode = 'raw_local' | 'redacted';
 
-export type SchemaFailureRetryOutcome =
-  | 'pending_retry'
-  | 'recovered'
-  | 'cascaded'
-  | 'fatal';
+export type SchemaFailureRetryOutcome = 'pending_retry' | 'recovered' | 'cascaded' | 'fatal';
 
 export interface SchemaIssueSummary {
   path: Array<string | number>;
@@ -123,6 +119,7 @@ export interface AppendSchemaFailureRecoveryInput {
   prompt: string;
   metadata: RunnerInvocationMetadata | null;
   recoveredEntryIds: string[];
+  recoveredEntries?: SchemaFailureLedgerEntry[];
 }
 
 export interface AppendSchemaFailureTerminalInput {
@@ -201,8 +198,8 @@ function issueFromUnknown(value: unknown): SchemaIssueSummary | null {
   const record = value as Record<string, unknown>;
   const rawPath = Array.isArray(record['path']) ? record['path'] : [];
   return {
-    path: rawPath.filter((entry): entry is string | number =>
-      typeof entry === 'string' || typeof entry === 'number',
+    path: rawPath.filter(
+      (entry): entry is string | number => typeof entry === 'string' || typeof entry === 'number',
     ),
     code: typeof record['code'] === 'string' ? record['code'] : 'unknown',
     message: typeof record['message'] === 'string' ? record['message'] : String(value),
@@ -213,19 +210,27 @@ function getZodIssues(error: Error): SchemaIssueSummary[] {
   const candidate = structuredError(error);
   const rawIssues = candidate.zod_issues ?? candidate.zodIssues;
   if (Array.isArray(rawIssues)) {
-    return rawIssues.map(issueFromUnknown).filter((issue): issue is SchemaIssueSummary => issue !== null);
+    return rawIssues
+      .map(issueFromUnknown)
+      .filter((issue): issue is SchemaIssueSummary => issue !== null);
   }
-  if (rawIssues && typeof rawIssues === 'object' && Array.isArray((rawIssues as { issues?: unknown }).issues)) {
+  if (
+    rawIssues &&
+    typeof rawIssues === 'object' &&
+    Array.isArray((rawIssues as { issues?: unknown }).issues)
+  ) {
     return (rawIssues as { issues: unknown[] }).issues
       .map(issueFromUnknown)
       .filter((issue): issue is SchemaIssueSummary => issue !== null);
   }
 
-  const pathMatches = [...error.message.matchAll(/"path":\s*\[([^\]]*)\][\s\S]*?"message":\s*"([^"]+)"/g)];
+  const pathMatches = [
+    ...error.message.matchAll(/"path":\s*\[([^\]]*)\][\s\S]*?"message":\s*"([^"]+)"/g),
+  ];
   return pathMatches.map((match) => ({
     path: (match[1] ?? '')
       .split(',')
-      .map(part => part.trim().replace(/^"|"$/g, ''))
+      .map((part) => part.trim().replace(/^"|"$/g, ''))
       .filter(Boolean),
     code: 'unknown',
     message: match[2] ?? 'Zod validation failed',
@@ -245,7 +250,7 @@ function getModel(error: Error, metadata: RunnerInvocationMetadata | null): stri
 function issueSignature(issues: SchemaIssueSummary[]): string {
   if (issues.length === 0) return 'no_zod_issue_path';
   return issues
-    .map(issue => `${issue.path.join('.') || '<root>'}:${issue.code}:${issue.message}`)
+    .map((issue) => `${issue.path.join('.') || '<root>'}:${issue.code}:${issue.message}`)
     .sort()
     .join('|');
 }
@@ -256,12 +261,9 @@ export function buildSchemaFailureSignature(input: {
   failureKind: SchemaFailureKind;
   zodIssues: SchemaIssueSummary[];
 }): string {
-  return [
-    input.stage,
-    input.schemaName,
-    input.failureKind,
-    issueSignature(input.zodIssues),
-  ].join('::');
+  return [input.stage, input.schemaName, input.failureKind, issueSignature(input.zodIssues)].join(
+    '::',
+  );
 }
 
 export function recommendSchemaFailureAction(input: {
@@ -270,7 +272,7 @@ export function recommendSchemaFailureAction(input: {
   failureKind: SchemaFailureKind;
   zodIssues: SchemaIssueSummary[];
 }): string {
-  const paths = input.zodIssues.map(issue => issue.path.join('.'));
+  const paths = input.zodIssues.map((issue) => issue.path.join('.'));
   if (input.stage === 'orchestrator' && paths.includes('swarm.sub_tasks')) {
     return 'Omit swarm unless pipeline_mode is parallel_swarm; empty swarm.sub_tasks is normalized to absent swarm.';
   }
@@ -344,8 +346,9 @@ function readHintFile(path: string): SchemaShadowHintFile {
     return {
       schema_version: 1,
       artifact_type: 'babel_schema_shadow_hints',
-      generated_at: typeof parsed.generated_at === 'string' ? parsed.generated_at : new Date().toISOString(),
-      hints: Array.isArray(parsed.hints) ? parsed.hints as SchemaShadowHint[] : [],
+      generated_at:
+        typeof parsed.generated_at === 'string' ? parsed.generated_at : new Date().toISOString(),
+      hints: Array.isArray(parsed.hints) ? (parsed.hints as SchemaShadowHint[]) : [],
     };
   } catch {
     return {
@@ -364,13 +367,15 @@ function writeHintFile(path: string, file: SchemaShadowHintFile): void {
 
 export function recordSchemaShadowHint(
   evidence: EvidenceBundle,
-  entry: Pick<SchemaFailureLedgerEntry,
-    'entry_id' | 'signature' | 'stage' | 'schema_name' | 'failure_kind' | 'recommended_next_action'>,
+  entry: Pick<
+    SchemaFailureLedgerEntry,
+    'entry_id' | 'signature' | 'stage' | 'schema_name' | 'failure_kind' | 'recommended_next_action'
+  >,
 ): SchemaShadowHint {
   const path = hintsPathForEvidence(evidence);
   const file = readHintFile(path);
   const now = new Date().toISOString();
-  const existing = file.hints.find(hint => hint.signature === entry.signature);
+  const existing = file.hints.find((hint) => hint.signature === entry.signature);
 
   if (existing) {
     existing.count += 1;
@@ -414,17 +419,23 @@ export function readSchemaShadowHints(input: {
   const file = readHintFile(hintsPathForEvidence(input.evidence));
   const limit = input.limit ?? 3;
   return file.hints
-    .filter(hint =>
-      hint.status === 'shadow' &&
-      hint.stage === input.stage &&
-      hint.schema_name === input.schemaName,
+    .filter(
+      (hint) =>
+        hint.status === 'shadow' &&
+        hint.stage === input.stage &&
+        hint.schema_name === input.schemaName,
     )
-    .sort((left, right) => right.count - left.count || right.last_seen_at.localeCompare(left.last_seen_at))
+    .sort(
+      (left, right) =>
+        right.count - left.count || right.last_seen_at.localeCompare(left.last_seen_at),
+    )
     .slice(0, limit)
-    .map(hint => hint.hint);
+    .map((hint) => hint.hint);
 }
 
-export function appendSchemaFailureEntry(input: AppendSchemaFailureInput): SchemaFailureLedgerEntry {
+export function appendSchemaFailureEntry(
+  input: AppendSchemaFailureInput,
+): SchemaFailureLedgerEntry {
   const failureKind = getFailureKind(input.error);
   const zodIssues = getZodIssues(input.error);
   const signature = buildSchemaFailureSignature({
@@ -433,14 +444,16 @@ export function appendSchemaFailureEntry(input: AppendSchemaFailureInput): Schem
     failureKind,
     zodIssues,
   });
-  const entryId = `schema_failure_${Date.now()}_${shortHash([
-    input.evidence.runId,
-    input.stage,
-    input.schemaName,
-    input.tierName,
-    String(input.attempt),
-    signature,
-  ].join('|'))}`;
+  const entryId = `schema_failure_${Date.now()}_${shortHash(
+    [
+      input.evidence.runId,
+      input.stage,
+      input.schemaName,
+      input.tierName,
+      String(input.attempt),
+      signature,
+    ].join('|'),
+  )}`;
   const storageMode = getSchemaFailureStorageMode();
   const rawOutput = getRawOutput(input.error);
   const parsedOutput = getParsedOutput(input.error);
@@ -505,12 +518,17 @@ export function appendSchemaFailureEntry(input: AppendSchemaFailureInput): Schem
   return entry;
 }
 
-export function appendSchemaFailureRecovery(input: AppendSchemaFailureRecoveryInput): SchemaFailureLedgerEntry {
+export function appendSchemaFailureRecovery(
+  input: AppendSchemaFailureRecoveryInput,
+): SchemaFailureLedgerEntry {
+  const firstEntry = input.recoveredEntries?.[0];
+  const failureKind = firstEntry?.failure_kind ?? 'unknown_structured_output_failure';
+  const zodIssues = firstEntry?.zod_issues ?? [];
   const signature = buildSchemaFailureSignature({
     stage: input.stage,
     schemaName: input.schemaName,
-    failureKind: 'unknown_structured_output_failure',
-    zodIssues: [],
+    failureKind,
+    zodIssues,
   });
   const entryId = `schema_failure_recovery_${Date.now()}_${shortHash(input.recoveredEntryIds.join('|'))}`;
   const entry: SchemaFailureLedgerEntry = {
@@ -527,9 +545,9 @@ export function appendSchemaFailureRecovery(input: AppendSchemaFailureRecoveryIn
     tier_name: input.tierName,
     tier_index: input.tierIndex,
     attempt: input.attempt,
-    failure_kind: 'unknown_structured_output_failure',
+    failure_kind: failureKind,
     retry_outcome: 'recovered',
-    zod_issues: [],
+    zod_issues: zodIssues,
     signature,
     prompt_sha256: sha256(input.prompt),
     raw_output_sha256: null,
@@ -537,7 +555,8 @@ export function appendSchemaFailureRecovery(input: AppendSchemaFailureRecoveryIn
     raw_output_path: null,
     parsed_output_path: null,
     retry_prompt_path: null,
-    recommended_next_action: 'Recovered after structured-output retry or fallback; compare recovered entry ids for the effective repair path.',
+    recommended_next_action:
+      'Recovered after structured-output retry or fallback; compare recovered entry ids for the effective repair path.',
     error_message: 'Recovered after prior structured-output failure.',
     metadata: input.metadata,
     recovered_schema_failure_entry_ids: input.recoveredEntryIds,
@@ -547,7 +566,9 @@ export function appendSchemaFailureRecovery(input: AppendSchemaFailureRecoveryIn
   return entry;
 }
 
-export function appendSchemaFailureTerminal(input: AppendSchemaFailureTerminalInput): SchemaFailureLedgerEntry {
+export function appendSchemaFailureTerminal(
+  input: AppendSchemaFailureTerminalInput,
+): SchemaFailureLedgerEntry {
   const signature = buildSchemaFailureSignature({
     stage: input.stage,
     schemaName: input.schemaName,
@@ -579,7 +600,8 @@ export function appendSchemaFailureTerminal(input: AppendSchemaFailureTerminalIn
     raw_output_path: null,
     parsed_output_path: null,
     retry_prompt_path: null,
-    recommended_next_action: 'Structured-output failures exhausted retry/fallback; inspect related entry ids and add a schema normalizer, stricter retry hint, or provider-specific output repair.',
+    recommended_next_action:
+      'Structured-output failures exhausted retry/fallback; inspect related entry ids and add a schema normalizer, stricter retry hint, or provider-specific output repair.',
     error_message: input.errorMessage,
     metadata: input.metadata,
     recovered_schema_failure_entry_ids: input.relatedEntryIds,
@@ -587,4 +609,25 @@ export function appendSchemaFailureTerminal(input: AppendSchemaFailureTerminalIn
 
   appendLedgerEntry(input.evidence, entry);
   return entry;
+}
+
+export function recordSchemaNormalizationHints(
+  evidence: EvidenceBundle,
+  input: { stage: string; schemaName: string; normalizations: string[] },
+): SchemaShadowHint[] {
+  const hints: SchemaShadowHint[] = [];
+  for (const normalization of input.normalizations) {
+    const signature = shortHash(`lite_normalization|${input.schemaName}|${normalization}`);
+    hints.push(
+      recordSchemaShadowHint(evidence, {
+        entry_id: `lite_norm_${Date.now()}_${shortHash(normalization)}`,
+        signature,
+        stage: input.stage,
+        schema_name: input.schemaName,
+        failure_kind: 'zod_validation_failed',
+        recommended_next_action: `Lite schema normalizer: ${normalization}`,
+      }),
+    );
+  }
+  return hints;
 }

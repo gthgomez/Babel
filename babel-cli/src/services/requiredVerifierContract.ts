@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 
+import { extractRequiredVerifierCommandsFromTask } from '../pipeline/planVerifierInjection.js';
 import type { ToolCallLog } from '../schemas/agentContracts.js';
 import { isVerifierCommand, type TerminalStatus } from './terminalStatus.js';
 
@@ -13,11 +14,7 @@ export type VerifierState =
   | 'skipped_forbidden'
   | 'missing';
 
-export type VerifierSource =
-  | 'user_required'
-  | 'discovered'
-  | 'default_project'
-  | 'optional';
+export type VerifierSource = 'user_required' | 'discovered' | 'default_project' | 'optional';
 
 interface ParsedVerifierCommand {
   executable: string;
@@ -28,7 +25,10 @@ export interface VerifierExecutionRecord {
   step: number;
   tool: 'shell_exec' | 'test_run';
   command: string;
-  state: Exclude<VerifierState, 'planned' | 'running' | 'skipped_optional' | 'skipped_due_to_prior_required_failure' | 'missing'>;
+  state: Exclude<
+    VerifierState,
+    'planned' | 'running' | 'skipped_optional' | 'skipped_due_to_prior_required_failure' | 'missing'
+  >;
   exitCode: number;
   stdoutSummary: string | null;
   stderrSummary: string | null;
@@ -84,8 +84,10 @@ export function buildVerifierContractArtifacts(input: {
   task: string;
   toolCallLog?: readonly ToolCallLog[];
   runDir: string;
+  /** Scope-resolved verifiers (e.g. small-fix lane) not spelled out in task text. */
+  additionalRequiredVerifiers?: readonly string[];
 }): VerifierContractArtifacts {
-  const planned = buildVerifierPlan(input.task);
+  const planned = buildVerifierPlan(input.task, input.additionalRequiredVerifiers ?? []);
   const executed = reconcileVerifierPlan(planned, input.toolCallLog ?? []);
   const summary = summarizeVerifierContract(executed);
   return {
@@ -102,13 +104,24 @@ export function buildVerifierContractArtifacts(input: {
   };
 }
 
-export function buildVerifierPlan(task: string): VerifierContractEntry[] {
-  const required = extractRequiredVerifierCommands(task);
-  const optional = extractOptionalVerifierCommands(task)
-    .filter(command => !required.some(item => sameCommand(item, command)));
+export function buildVerifierPlan(
+  task: string,
+  additionalRequiredVerifiers: readonly string[] = [],
+): VerifierContractEntry[] {
+  const required = uniqueCommands([
+    ...extractRequiredVerifierCommandsFromTask(task),
+    ...additionalRequiredVerifiers.filter((command) => isVerifierCommand(command)),
+  ]);
+  const optional = extractOptionalVerifierCommands(task).filter(
+    (command) => !required.some((item) => sameCommand(item, command)),
+  );
   return [
-    ...required.map((command, index) => makePlannedEntry(command, index + 1, true, 'user_required')),
-    ...optional.map((command, index) => makePlannedEntry(command, required.length + index + 1, false, 'optional')),
+    ...required.map((command, index) =>
+      makePlannedEntry(command, index + 1, true, 'user_required'),
+    ),
+    ...optional.map((command, index) =>
+      makePlannedEntry(command, required.length + index + 1, false, 'optional'),
+    ),
   ];
 }
 
@@ -116,13 +129,13 @@ export function reconcileVerifierPlan(
   plan: readonly VerifierContractEntry[],
   toolCallLog: readonly ToolCallLog[],
 ): VerifierContractEntry[] {
-  const commandEntries = toolCallLog.filter(entry =>
-    (entry.tool === 'shell_exec' || entry.tool === 'test_run') &&
-    isVerifierCommand(entry.target)
+  const commandEntries = toolCallLog.filter(
+    (entry) =>
+      (entry.tool === 'shell_exec' || entry.tool === 'test_run') && isVerifierCommand(entry.target),
   );
   let priorRequiredFailed = false;
-  return plan.map(entry => {
-    const matches = commandEntries.filter(item => sameCommand(item.target, entry.command));
+  return plan.map((entry) => {
+    const matches = commandEntries.filter((item) => sameCommand(item.target, entry.command));
     const finalMatch = matches.at(-1);
     if (!finalMatch) {
       if (!entry.required) {
@@ -150,11 +163,7 @@ export function reconcileVerifierPlan(
 
     const forbidden = finalMatch.exit_code === 126 && Boolean(finalMatch.denial);
     const failed = finalMatch.exit_code !== 0;
-    const state: VerifierState = forbidden
-      ? 'skipped_forbidden'
-      : failed
-        ? 'failed'
-        : 'passed';
+    const state: VerifierState = forbidden ? 'skipped_forbidden' : failed ? 'failed' : 'passed';
     if (entry.required && state !== 'passed') {
       priorRequiredFailed = true;
     }
@@ -168,10 +177,10 @@ export function reconcileVerifierPlan(
       startedAt: null,
       endedAt: null,
       skipReason: forbidden
-        ? finalMatch.denial?.message ?? 'Required verifier was forbidden by tool policy.'
+        ? (finalMatch.denial?.message ?? 'Required verifier was forbidden by tool policy.')
         : null,
       blocksComplete: entry.required && state !== 'passed',
-      executionHistory: matches.map(match => {
+      executionHistory: matches.map((match) => {
         const matchForbidden = match.exit_code === 126 && Boolean(match.denial);
         const matchState: VerifierExecutionRecord['state'] = matchForbidden
           ? 'skipped_forbidden'
@@ -193,17 +202,24 @@ export function reconcileVerifierPlan(
   });
 }
 
-export function summarizeVerifierContract(verifiers: readonly VerifierContractEntry[]): VerifierContractSummary {
-  const required = verifiers.filter(entry => entry.required);
-  const missing = required.filter(entry => entry.state === 'missing').map(entry => entry.command);
+export function summarizeVerifierContract(
+  verifiers: readonly VerifierContractEntry[],
+): VerifierContractSummary {
+  const required = verifiers.filter((entry) => entry.required);
+  const missing = required
+    .filter((entry) => entry.state === 'missing')
+    .map((entry) => entry.command);
   const skipped = required
-    .filter(entry => entry.state === 'skipped_due_to_prior_required_failure' || entry.state === 'skipped_forbidden')
-    .map(entry => entry.command);
-  const failed = required.filter(entry => entry.state === 'failed').map(entry => entry.command);
-  const requiredPassed = required.filter(entry => entry.state === 'passed').length;
+    .filter(
+      (entry) =>
+        entry.state === 'skipped_due_to_prior_required_failure' ||
+        entry.state === 'skipped_forbidden',
+    )
+    .map((entry) => entry.command);
+  const failed = required.filter((entry) => entry.state === 'failed').map((entry) => entry.command);
+  const requiredPassed = required.filter((entry) => entry.state === 'passed').length;
   const verifierCompletionSatisfied =
-    required.length === 0 ||
-    required.every(entry => entry.state === 'passed');
+    required.length === 0 || required.every((entry) => entry.state === 'passed');
   return {
     schema_version: 1,
     artifact_type: 'babel_verifier_execution_summary',
@@ -252,32 +268,13 @@ function makePlannedEntry(
   };
 }
 
-function extractRequiredVerifierCommands(task: string): string[] {
-  const commands: string[] = [];
-  for (const line of task.split(/\r?\n/)) {
-    const match = line.match(/\bVerifier commands?\s*:\s*(.+)$/i);
-    if (match?.[1]) {
-      commands.push(...splitCommandList(trimTrailingTaskLabels(match[1])));
-    }
-  }
-  const runBeforePattern = /\bRun\s+([^\n.;]+?)\s+before\s+completing\b/gi;
-  for (const match of task.matchAll(runBeforePattern)) {
-    if (match[1]) commands.push(cleanCommand(match[1]));
-  }
-  const verifierIsPattern = /\bverifier\s+(?:is|:)\s*([^\n.;]+)/gi;
-  for (const match of task.matchAll(verifierIsPattern)) {
-    if (match[1]) commands.push(cleanCommand(match[1]));
-  }
-  return uniqueCommands(commands.filter(command => isVerifierCommand(command)));
-}
-
 function extractOptionalVerifierCommands(task: string): string[] {
   const commands: string[] = [];
   const optionalPattern = /\bRun\s+([^\n.;]+?)\s+if\s+possible\b/gi;
   for (const match of task.matchAll(optionalPattern)) {
     if (match[1]) commands.push(cleanCommand(match[1]));
   }
-  return uniqueCommands(commands.filter(command => isVerifierCommand(command)));
+  return uniqueCommands(commands.filter((command) => isVerifierCommand(command)));
 }
 
 function splitCommandList(raw: string): string[] {
@@ -297,7 +294,10 @@ function trimTrailingTaskLabels(raw: string): string {
 function cleanCommand(raw: string): string {
   return raw
     .replace(/\s+/g, ' ')
-    .replace(/\s+from\s+(?:the\s+)?[A-Za-z0-9_.\\/-]+(?:\s+(?:directory|folder|subdirectory))?$/i, '')
+    .replace(
+      /\s+from\s+(?:the\s+)?[A-Za-z0-9_.\\/-]+(?:\s+(?:directory|folder|subdirectory))?$/i,
+      '',
+    )
     .replace(/[.。]\s*$/, '')
     .trim();
 }
@@ -378,7 +378,7 @@ function parseCanonicalVerifierCommand(command: string): ParsedVerifierCommand |
   }
   return {
     executable,
-    args: tokens.slice(1).map(token => normalizeCommandArg(token)),
+    args: tokens.slice(1).map((token) => normalizeCommandArg(token)),
   };
 }
 
@@ -422,7 +422,10 @@ function normalizeCommandExecutable(token: string): string {
 }
 
 function normalizeCommandArg(token: string): string {
-  return token.replace(/^['"]|['"]$/g, '').trim().toLowerCase();
+  return token
+    .replace(/^['"]|['"]$/g, '')
+    .trim()
+    .toLowerCase();
 }
 
 function skipLeadingOptions(args: readonly string[]): string[] {
@@ -450,13 +453,11 @@ function summarizeVerifierStream(text: string | null | undefined): string | null
   const normalized = String(text ?? '')
     .replace(/\x1b\[[0-9;]*m/g, '')
     .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(line => line.length > 0)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
     .slice(-12)
     .join(' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return normalized.length > 0
-    ? normalized.slice(0, 700)
-    : null;
+  return normalized.length > 0 ? normalized.slice(0, 700) : null;
 }

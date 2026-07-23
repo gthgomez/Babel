@@ -22,11 +22,7 @@ import {
   writeLiteTextArtifact,
   type LiteArtifactRun,
 } from './artifacts.js';
-import {
-  createLiteProvider,
-  type LiteFetch,
-  type LiteProviderResponse,
-} from './provider.js';
+import { createLiteProvider, type LiteFetch, type LiteProviderResponse } from './provider.js';
 import { buildCostLedger, buildSingleCallCostLedger } from '../services/costLedger.js';
 import { redactSecrets } from '../utils/redaction.js';
 
@@ -105,7 +101,10 @@ function artifactSummary(artifacts: LiteArtifactRun): LiteArtifactSummary {
   };
 }
 
-function providerSummary(response: LiteProviderResponse, privacy: LitePrivacyMode): LiteProviderSummary {
+function providerSummary(
+  response: LiteProviderResponse,
+  privacy: LitePrivacyMode,
+): LiteProviderSummary {
   return {
     id: assertConcreteProvider(response.providerId),
     model: response.providerModelId,
@@ -134,10 +133,13 @@ function buildSystemPrompt(command: 'ask' | 'patch'): string {
 }
 
 function assertConcreteProvider(providerId: string): ConcreteLiteProviderId {
-  if (providerId === 'deepseek' || providerId === 'deepinfra' || providerId === 'mock') {
+  if (providerId === 'deepseek' || providerId === 'deepinfra' || providerId === 'ollama' || providerId === 'mock') {
     return providerId;
   }
-  throw new LiteError('PROVIDER_UNKNOWN', `Provider "${providerId}" did not resolve to a concrete provider.`);
+  throw new LiteError(
+    'PROVIDER_UNKNOWN',
+    `Provider "${providerId}" did not resolve to a concrete provider.`,
+  );
 }
 
 function normalizePrivacyMode(value: LitePrivacyMode | undefined): LitePrivacyMode {
@@ -288,18 +290,22 @@ export async function runLiteAsk(options: LiteProviderCallOptions): Promise<Lite
       supported_env_keys: prepared.providerConfig.envKeyNames,
       artifacts: prepared.artifacts.files,
     });
-    writeLiteJsonArtifact(prepared.artifacts, 'cost_ledger.json', buildSingleCallCostLedger({
-      runId: prepared.artifacts.runId,
-      task: prepared.contract.task,
-      lane: 'lite_ask',
-      stage: 'ask',
-      provider: response.providerId,
-      modelId: response.providerModelId,
-      latencyMs: response.latencyMs,
-      promptTokens: response.usage?.promptTokens ?? null,
-      completionTokens: response.usage?.completionTokens ?? null,
-      totalTokens: response.usage?.totalTokens ?? null,
-    }));
+    writeLiteJsonArtifact(
+      prepared.artifacts,
+      'cost_ledger.json',
+      buildSingleCallCostLedger({
+        runId: prepared.artifacts.runId,
+        task: prepared.contract.task,
+        lane: 'lite_ask',
+        stage: 'ask',
+        provider: response.providerId,
+        modelId: response.providerModelId,
+        latencyMs: response.latencyMs,
+        promptTokens: response.usage?.promptTokens ?? null,
+        completionTokens: response.usage?.completionTokens ?? null,
+        totalTokens: response.usage?.totalTokens ?? null,
+      }),
+    );
 
     return {
       schema_version: 1,
@@ -310,13 +316,21 @@ export async function runLiteAsk(options: LiteProviderCallOptions): Promise<Lite
       artifacts: artifactSummary(prepared.artifacts),
     };
   } catch (error: unknown) {
-    writeLiteTextArtifact(prepared.artifacts, 'response.md', `Babel Lite ask failed: ${error instanceof Error ? error.message : String(error)}`);
-    writeLiteJsonArtifact(prepared.artifacts, 'cost_ledger.json', buildCostLedger({
-      runId: prepared.artifacts.runId,
-      task: prepared.contract.task,
-      lane: 'lite_ask',
-      waterfallEntries: [],
-    }));
+    writeLiteTextArtifact(
+      prepared.artifacts,
+      'response.md',
+      `Babel Lite ask failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    writeLiteJsonArtifact(
+      prepared.artifacts,
+      'cost_ledger.json',
+      buildCostLedger({
+        runId: prepared.artifacts.runId,
+        task: prepared.contract.task,
+        lane: 'lite_ask',
+        waterfallEntries: [],
+      }),
+    );
     writeLiteJsonArtifact(prepared.artifacts, 'error.json', {
       command: 'ask',
       error: error instanceof Error ? error.message : String(error),
@@ -365,18 +379,22 @@ export async function runLitePatch(options: LiteProviderCallOptions): Promise<Li
       auto_apply: false,
       artifacts: prepared.artifacts.files,
     });
-    writeLiteJsonArtifact(prepared.artifacts, 'cost_ledger.json', buildSingleCallCostLedger({
-      runId: prepared.artifacts.runId,
-      task: prepared.contract.task,
-      lane: 'lite_patch',
-      stage: 'patch',
-      provider: response.providerId,
-      modelId: response.providerModelId,
-      latencyMs: response.latencyMs,
-      promptTokens: response.usage?.promptTokens ?? null,
-      completionTokens: response.usage?.completionTokens ?? null,
-      totalTokens: response.usage?.totalTokens ?? null,
-    }));
+    writeLiteJsonArtifact(
+      prepared.artifacts,
+      'cost_ledger.json',
+      buildSingleCallCostLedger({
+        runId: prepared.artifacts.runId,
+        task: prepared.contract.task,
+        lane: 'lite_patch',
+        stage: 'patch',
+        provider: response.providerId,
+        modelId: response.providerModelId,
+        latencyMs: response.latencyMs,
+        promptTokens: response.usage?.promptTokens ?? null,
+        completionTokens: response.usage?.completionTokens ?? null,
+        totalTokens: response.usage?.totalTokens ?? null,
+      }),
+    );
 
     return {
       schema_version: 1,
@@ -388,13 +406,21 @@ export async function runLitePatch(options: LiteProviderCallOptions): Promise<Li
       artifacts: artifactSummary(prepared.artifacts),
     };
   } catch (error: unknown) {
-    writeLiteTextArtifact(prepared.artifacts, 'response.md', `Babel Lite patch failed: ${error instanceof Error ? error.message : String(error)}`);
-    writeLiteJsonArtifact(prepared.artifacts, 'cost_ledger.json', buildCostLedger({
-      runId: prepared.artifacts.runId,
-      task: prepared.contract.task,
-      lane: 'lite_patch',
-      waterfallEntries: [],
-    }));
+    writeLiteTextArtifact(
+      prepared.artifacts,
+      'response.md',
+      `Babel Lite patch failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    writeLiteJsonArtifact(
+      prepared.artifacts,
+      'cost_ledger.json',
+      buildCostLedger({
+        runId: prepared.artifacts.runId,
+        task: prepared.contract.task,
+        lane: 'lite_patch',
+        waterfallEntries: [],
+      }),
+    );
     writeLiteJsonArtifact(prepared.artifacts, 'error.json', {
       command: 'patch',
       error: error instanceof Error ? error.message : String(error),
@@ -408,9 +434,10 @@ export async function runLitePatch(options: LiteProviderCallOptions): Promise<Li
 export function formatLiteProvidersText(result: LiteProvidersResult): string {
   return [
     'Babel Lite providers',
-    ...result.providers.map(provider =>
-      `  ${provider.id.padEnd(9)} ${provider.configured ? 'configured' : 'missing key'} ` +
-      `${provider.defaultModel} (${provider.envKeyNames.length > 0 ? provider.envKeyNames.join(' or ') : 'no key'})`,
+    ...result.providers.map(
+      (provider) =>
+        `  ${provider.id.padEnd(9)} ${provider.configured ? 'configured' : 'missing key'} ` +
+        `${provider.defaultModel} (${provider.envKeyNames.length > 0 ? provider.envKeyNames.join(' or ') : 'no key'})`,
     ),
     `Selection order: ${result.selection_order.join(' -> ')}`,
     result.secret_policy,

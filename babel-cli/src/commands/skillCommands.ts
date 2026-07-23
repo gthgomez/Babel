@@ -37,7 +37,10 @@ export function registerSkillCommands(program: Command): void {
           process.exit(1);
         }
       } catch (err: unknown) {
-        printJsonErrorAndExit(err instanceof Error ? err.message : String(err), options.json === true);
+        printJsonErrorAndExit(
+          err instanceof Error ? err.message : String(err),
+          options.json === true,
+        );
       }
     });
 
@@ -90,18 +93,26 @@ export function registerSkillCommands(program: Command): void {
     .option('--allow-experimental', 'Allow exporting experimental skills')
     .option('--destination <path>', 'Override the Codex skills destination root')
     .option('--json', 'Emit structured JSON only')
-    .action((name: string, options: { allowExperimental?: boolean; destination?: string; json?: boolean }) => {
-      try {
-        const report = exportSkillToCodex(name, BABEL_ROOT, {
-          allowExperimental: options.allowExperimental === true,
-          ...(options.destination ? { destinationRoot: options.destination } : {}),
-        });
-        printJsonOrHuman(report, formatSkillExportHuman(report), options.json === true);
-        if (report.status === 'fail') {
-          process.exit(1);
+    .action(
+      (
+        name: string,
+        options: { allowExperimental?: boolean; destination?: string; json?: boolean },
+      ) => {
+        try {
+          const report = exportSkillToCodex(name, BABEL_ROOT, {
+            allowExperimental: options.allowExperimental === true,
+            ...(options.destination ? { destinationRoot: options.destination } : {}),
+          });
+          printJsonOrHuman(report, formatSkillExportHuman(report), options.json === true);
+          if (report.status === 'fail') {
+            process.exit(1);
+          }
+        } catch (err: unknown) {
+          printJsonErrorAndExit(
+            err instanceof Error ? err.message : String(err),
+            options.json === true,
+          );
         }
-      } catch (err: unknown) {
-        printJsonErrorAndExit(err instanceof Error ? err.message : String(err), options.json === true);
-      }
-    });
+      },
+    );
 }
