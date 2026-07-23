@@ -100,6 +100,43 @@ This section is the authoritative prompt/runtime co-evolution rule and trigger
 list for contributors. If a change introduces another model-facing contract
 surface, extend this checklist in the same PR.
 
+## Pre-Commit Hooks (Optional)
+
+Fast local feedback before you push. CI is the authoritative gate — hooks are
+never mandatory, and you can always `git commit --no-verify` to bypass them.
+
+**What the hook catches:**
+
+- `.env` files (except `.env.example`)
+- Secrets and API keys detected by gitleaks (if installed)
+- Machine-specific paths (Windows drive-letter user paths, Unix home directories)
+- Forbidden dependency fingerprints in lockfiles (e.g. private `file:` references)
+
+**Setup (one command):**
+
+```powershell
+pwsh tools/install-hooks.ps1
+```
+
+This sets `core.hooksPath` to `.githooks/` for this repository. Remove with:
+
+```powershell
+git config --unset core.hooksPath
+```
+
+**Testing the hook:**
+
+```powershell
+# Should block: staged .env file
+echo "SECRET=abc" > .env && git add .env && git commit -m "test"
+# Reset after test: git reset HEAD .env && rm .env
+
+# Should pass: staged .env.example
+echo "PORT=3000" > .env.example && git add .env.example && git commit -m "test"
+```
+
+The **same classes of leak will fail CI**. The hook just tells you faster.
+
 ## Pull Request Expectations
 
 A good Babel PR should explain:
