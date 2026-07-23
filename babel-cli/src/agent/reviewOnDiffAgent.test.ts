@@ -42,7 +42,7 @@ describe('reviewDiffHeuristically', () => {
   it('flags possible secrets', () => {
     const comments = reviewDiffHeuristically({
       task: 'add config',
-      patch: '+++ b/cfg.ts\n+const api_key = "sk-abcdefghijklmnopqrstuvwxyz1234"\n',
+      patch: '+++ b/cfg.ts\n+const api_key = "sk-UNITTEST_ONLY_FAKE_KEY_ZZZZZZ"\n',
       changedFiles: ['cfg.ts'],
     });
     assert.ok(comments.some((c) => c.category === 'risk' && c.severity === 'error'));
