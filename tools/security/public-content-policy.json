@@ -93,38 +93,57 @@
       "path": "tools/tests/test-public-prevention-gates.ps1",
       "pattern": "incident caused a 37% regression",
       "rationale": "Negative fixture for internal incident metrics."
+    },
+    {
+      "id": "FIXTURE-POLICY-PCONT012",
+      "rule_id": "PCONT012",
+      "path": "tools/security/public-content-policy.json",
+      "pattern": "vibecoding",
+      "rationale": "The policy contains PCONT012 rule patterns, not unprofessional documentation prose."
     }
   ],
   "rules": [
     {
       "id": "PCONT001",
       "category": "personal-profile-metadata",
+      "severity": "error",
       "pattern": "(?i)^\\s*(operator|maintainer profile|personal location|education|financial goal)\\s*:"
     },
     {
       "id": "PCONT002",
       "category": "machine-specific-path",
+      "severity": "error",
       "pattern": "(?i)([A-Z]:[\\\\/]+(Users|Workspace|Projects)[\\\\/]+|/(Users|home)/[^/\\s]+/)"
     },
     {
       "id": "PCONT003",
       "category": "private-parent-terminology",
+      "severity": "error",
       "pattern": "(?i)(private parent repo|sibling private repo)"
     },
     {
       "id": "PCONT004",
       "category": "malformed-public-identifier",
+      "severity": "error",
       "pattern": "(?i)\\b(opencalw_manager|example_app_(?:one|two|three|four))\\b"
     },
     {
       "id": "PCONT005",
       "category": "stub-placeholder-content",
+      "severity": "error",
       "pattern": "(?i)^\\s*(?:(TODO|TBD|placeholder|stub)(?:\\s*[:.-]|\\s*$)|Updated\\s+[A-Za-z0-9_-]+\\s+SKILL\\.md\\s*$)"
     },
     {
       "id": "PCONT006",
       "category": "internal-incident-metric",
+      "severity": "error",
       "pattern": "(?i)\\b(incident|regression|outage)\\b.{0,80}(\\d+(?:\\.\\d+)?%|\\d+\\s*(seconds?|minutes?|hours?|days?)\\b)"
+    },
+    {
+      "id": "PCONT012",
+      "category": "unprofessional-tone",
+      "severity": "warning",
+      "pattern": "(?i)\\b(vibecoding|vibe coding|vibe.coded|vibe code|vibe.coding)\\b"
     }
   ],
   "absolute_claim": {

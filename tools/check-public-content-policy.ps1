@@ -3,7 +3,8 @@ param(
   [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
   [string]$PolicyPath = '',
   [ValidateSet('human', 'json')]
-  [string]$OutputFormat = 'human'
+  [string]$OutputFormat = 'human',
+  [switch]$WarningsAsErrors
 )
 
 Set-StrictMode -Version Latest
@@ -50,9 +51,15 @@ function Get-TrackedActiveFiles {
 }
 
 $findings = [Collections.Generic.List[object]]::new()
+$warnings = [Collections.Generic.List[object]]::new()
 function Add-Finding {
-  param([string]$Id, [string]$Category, [string]$Path, [int]$Line)
-  $findings.Add([pscustomobject]@{ id = $Id; category = $Category; path = $Path; line = $Line })
+  param([string]$Id, [string]$Category, [string]$Path, [int]$Line, [string]$Severity = 'error')
+  $entry = [pscustomobject]@{ id = $Id; category = $Category; path = $Path; line = $Line; severity = $Severity }
+  if ($WarningsAsErrors -or $Severity -eq 'error') {
+    $findings.Add($entry)
+  } else {
+    $warnings.Add($entry)
+  }
 }
 $validBinaryAllowlist = [Collections.Generic.List[object]]::new()
 foreach ($entry in @($policy.binary_asset_allowlist)) {
@@ -124,10 +131,11 @@ foreach ($file in @(Get-TrackedActiveFiles)) {
     $line = [string]$lines[$index]
     $lineNumber = $index + 1
     foreach ($rule in @($policy.rules)) {
+      $severity = if ($rule.PSObject.Properties.Name -contains 'severity' -and [string]$rule.severity -eq 'warning') { 'warning' } else { 'error' }
       $excepted = (Test-IsTemporarilyExcepted -RuleId ([string]$rule.id) -Path $file.Relative -Line $line) -or
         (Test-PolicyException -Exceptions @($validFixtureExceptions) -RuleId ([string]$rule.id) -Path $file.Relative -Line $line)
       if (-not $isHistorical -and $line -match [string]$rule.pattern -and -not $excepted) {
-        Add-Finding -Id ([string]$rule.id) -Category ([string]$rule.category) -Path $file.Relative -Line $lineNumber
+        Add-Finding -Id ([string]$rule.id) -Category ([string]$rule.category) -Path $file.Relative -Line $lineNumber -Severity $severity
       }
     }
 
@@ -175,15 +183,25 @@ foreach ($entry in $titles.GetEnumerator()) {
   }
 }
 
-$ordered = @($findings | Sort-Object path, line, id -Unique)
-$result = [ordered]@{ status = $(if ($ordered.Count -eq 0) { 'pass' } else { 'fail' }); findings = $ordered }
+$errors = @($findings | Sort-Object path, line, id -Unique)
+$warnOrdered = @($warnings | Sort-Object path, line, id -Unique)
+$allOrdered = @($errors + $warnOrdered | Sort-Object severity, path, line, id)
+$resultStatus = if ($errors.Count -eq 0 -and $warnOrdered.Count -eq 0) { 'pass' } elseif ($errors.Count -eq 0) { 'warn' } else { 'fail' }
+$result = [ordered]@{ status = $resultStatus; findings = $allOrdered }
 if ($OutputFormat -eq 'json') {
   $result | ConvertTo-Json -Depth 8
-} elseif ($ordered.Count -eq 0) {
-  Write-Host 'Public content policy passed.' -ForegroundColor Green
 } else {
-  Write-Host 'Public content policy findings:' -ForegroundColor Yellow
-  $ordered | ForEach-Object { Write-Host ("{0} [{1}] {2}:{3}" -f $_.id, $_.category, $_.path, $_.line) }
+  if ($errors.Count -gt 0) {
+    Write-Host 'Public content policy errors:' -ForegroundColor Red
+    $errors | ForEach-Object { Write-Host ("  {0} [{1}] {2}:{3}" -f $_.id, $_.category, $_.path, $_.line) }
+  }
+  if ($warnOrdered.Count -gt 0) {
+    Write-Host 'Public content policy warnings:' -ForegroundColor Yellow
+    $warnOrdered | ForEach-Object { Write-Host ("  {0} [{1}] {2}:{3}" -f $_.id, $_.category, $_.path, $_.line) }
+  }
+  if ($errors.Count -eq 0 -and $warnOrdered.Count -eq 0) {
+    Write-Host 'Public content policy passed.' -ForegroundColor Green
+  }
 }
-if ($ordered.Count -gt 0) { exit 1 }
+if ($errors.Count -gt 0) { exit 1 }
 exit 0
