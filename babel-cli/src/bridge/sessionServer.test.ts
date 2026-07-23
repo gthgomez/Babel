@@ -369,7 +369,8 @@ describe('BridgeServer', () => {
   it('rejects WebSocket upgrade without authentication', async () => {
     // Connect without auth header — should get 401 before upgrade
     const client = connect(TEST_PORT, '127.0.0.1', () => {
-      const key = 'dGhlIHNhbXBsZSBub25jZQ==';
+      // Any 16-byte base64 client key is fine; this test only checks auth rejection.
+      const key = Buffer.from('ws-upgrade-test-key').toString('base64');
       const upgradeReq = [
         'GET /ws?sessionId=test HTTP/1.1',
         'Host: 127.0.0.1',
