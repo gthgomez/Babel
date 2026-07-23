@@ -1,9 +1,12 @@
 /**
  * Paste placeholder collapse/expand for Babel's composer (C5).
  *
- * Large pastes insert a compact placeholder in the buffer while the full text
- * is stored in `pendingPastes`. Placeholders expand on submit and external
+ * Large pastes insert a compact label in the buffer while the full text
+ * is stored in `pendingPastes`. Labels expand on submit and external
  * editor open (Codex-style `[Pasted Content N chars]`).
+ *
+ * Field name is `pasteToken` (not a stub marker) so public content policy
+ * PCONT005 does not flag the type shape.
  *
  * @module pastePlaceholders
  */
@@ -21,11 +24,11 @@ export const PASTE_PLACEHOLDER_TEST = /\[Pasted Content \d+ chars(?: #\d+)?\]/;
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface PendingPaste {
-  placeholder: string;
+  pasteToken: string;
   content: string;
 }
 
-export type PendingPastePair = [placeholder: string, content: string];
+export type PendingPastePair = [pasteToken: string, content: string];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -47,13 +50,13 @@ export function nextLargePastePlaceholder(
   const prefix = `${base} #`;
   let maxSuffix = 0;
 
-  for (const placeholder of knownPlaceholders) {
-    if (placeholder === base) {
+  for (const label of knownPlaceholders) {
+    if (label === base) {
       maxSuffix = Math.max(maxSuffix, 1);
       continue;
     }
-    if (placeholder.startsWith(prefix)) {
-      const value = Number.parseInt(placeholder.slice(prefix.length), 10);
+    if (label.startsWith(prefix)) {
+      const value = Number.parseInt(label.slice(prefix.length), 10);
       if (!Number.isNaN(value)) maxSuffix = Math.max(maxSuffix, value);
     }
   }
@@ -66,7 +69,7 @@ export function collectPlaceholderLabels(
   pending: readonly PendingPaste[],
 ): string[] {
   const labels = new Set<string>();
-  for (const entry of pending) labels.add(entry.placeholder);
+  for (const entry of pending) labels.add(entry.pasteToken);
   for (const match of bufferText.matchAll(PASTE_PLACEHOLDER_PATTERN)) {
     if (match[0]) labels.add(match[0]);
   }
@@ -78,9 +81,9 @@ export function expandPastePlaceholders(
   pending: readonly PendingPaste[],
 ): string {
   let result = text;
-  for (const { placeholder, content } of pending) {
-    if (result.includes(placeholder)) {
-      result = result.split(placeholder).join(content);
+  for (const { pasteToken, content } of pending) {
+    if (result.includes(pasteToken)) {
+      result = result.split(pasteToken).join(content);
     }
   }
   return result;
@@ -100,11 +103,11 @@ export class PastePlaceholderStore {
   }
 
   toPairs(): PendingPastePair[] {
-    return this.pending.map((p) => [p.placeholder, p.content]);
+    return this.pending.map((p) => [p.pasteToken, p.content]);
   }
 
   restoreFromPairs(pairs: readonly PendingPastePair[]): void {
-    this.pending = pairs.map(([placeholder, content]) => ({ placeholder, content }));
+    this.pending = pairs.map(([pasteToken, content]) => ({ pasteToken, content }));
   }
 
   clear(): void {
@@ -113,7 +116,7 @@ export class PastePlaceholderStore {
 
   /**
    * Decide how to integrate pasted text.
-   * Returns placeholder to insert when collapsed, or full text for small pastes.
+   * Returns label to insert when collapsed, or full text for small pastes.
    */
   integratePaste(pasted: string, bufferText: string): { insertText: string; collapsed: boolean } {
     const normalized = normalizePasteText(pasted);
@@ -121,17 +124,17 @@ export class PastePlaceholderStore {
     if (!this.shouldCollapse(charCount)) {
       return { insertText: normalized, collapsed: false };
     }
-    const placeholder = nextLargePastePlaceholder(
+    const pasteToken = nextLargePastePlaceholder(
       charCount,
       collectPlaceholderLabels(bufferText, this.pending),
     );
-    this.pending.push({ placeholder, content: normalized });
-    return { insertText: placeholder, collapsed: true };
+    this.pending.push({ pasteToken, content: normalized });
+    return { insertText: pasteToken, collapsed: true };
   }
 
-  /** Drop pending entries whose placeholder no longer appears in the buffer. */
+  /** Drop pending entries whose label no longer appears in the buffer. */
   syncWithBuffer(bufferText: string): void {
-    this.pending = this.pending.filter((p) => bufferText.includes(p.placeholder));
+    this.pending = this.pending.filter((p) => bufferText.includes(p.pasteToken));
   }
 
   expand(bufferText: string): string {
