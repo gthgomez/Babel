@@ -1728,7 +1728,7 @@ Examples:
     .description('Compare the current dry-run shadow root with the live project')
     .option(
       '-p, --project <name>',
-      'Target project (example_saas_backend | example_llm_router | AuditGuard | example_mobile_suite | example_game_suite | godot_td)',
+      'Target project (example_saas_backend | Prismatix | AuditGuard | Project_Android | example_game_suite | godot_td)',
     )
     .addHelpText(
       'after',
@@ -2896,7 +2896,7 @@ Interactive slash command map:
       `
 Examples:
   $ babel mcp list
-  $ babel mcp add filesystem npx -y @modelcontextprotocol/server-filesystem /tmp
+  $ babel mcp add filesystem npx -y @modelcontextprotocol/server-filesystem C:/Workspace
   $ babel mcp remove filesystem
   $ babel mcp serve
 

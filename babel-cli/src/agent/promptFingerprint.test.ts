@@ -51,7 +51,7 @@ describe('promptFingerprint', () => {
   // ── isSecretLookingValue ───────────────────────────────────────────────
 
   test('isSecretLookingValue catches known prefixes', () => {
-    assert.equal(isSecretLookingValue('sk-abc123def456'), true);
+    assert.equal(isSecretLookingValue('sk-your_XXXXXXXXXXXXXXXXXXXX'), true);
     assert.equal(isSecretLookingValue('api-xyz789'), true);
     assert.equal(isSecretLookingValue('dsk-abcdef'), true);
     assert.equal(isSecretLookingValue('ghp_1234567890abcdef'), true);
@@ -181,7 +181,7 @@ describe('promptFingerprint', () => {
   test('no API keys in fingerprint object', () => {
     const env = fakeEnv({
       BABEL_CHAT_MODEL: 'deepseek-v4-pro',
-      BABEL_CHAT_API_KEY: 'sk-very-secret-key-value',
+      BABEL_CHAT_API_KEY: 'sk-your_XXXXXXXXXXXXXXXXXXXX',
       BABEL_CHAT_TOKEN: 'secret-jwt-token-here',
     });
     const fp = buildPromptFingerprint({
@@ -197,7 +197,7 @@ describe('promptFingerprint', () => {
 
     // No value in the fingerprint should contain the actual secret
     const fpJson = JSON.stringify(fp);
-    assert.equal(fpJson.includes('sk-very-secret-key-value'), false);
+    assert.equal(fpJson.includes('sk-your_XXXXXXXXXXXXXXXXXXXX'), false);
     assert.equal(fpJson.includes('secret-jwt-token-here'), false);
   });
 

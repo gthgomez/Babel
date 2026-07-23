@@ -67,21 +67,21 @@ describe('projectMemory (P-4.2 / T3.2)', () => {
   });
 
   it('sanitizeMemoryText strips control chars and redacts secret-shaped tokens', () => {
-    const raw = 'Fix auth\u0000 with sk-abc12345deadbeef and more';
+    const raw = 'Fix auth\u0000 with sk-your_XXXXXXXXXXXXXXXXXXXX and more';
     const cleaned = sanitizeMemoryText(raw, 200);
     assert.ok(!cleaned.includes('\u0000'));
     assert.ok(cleaned.includes('[redacted]'));
-    assert.ok(!cleaned.includes('sk-abc12345deadbeef'));
+    assert.ok(!cleaned.includes('sk-your_XXXXXXXXXXXXXXXXXXXX'));
   });
 
   it('buildMemoryCandidates sanitizes task summary', () => {
     const lines = buildMemoryCandidates({
       projectRoot: dir,
-      taskSummary: 'Use token sk-supersecretkey999 please',
+      taskSummary: 'Use token sk-your_XXXXXXXXXXXXXXXXXXXX please',
       changedFiles: ['a.ts'],
     });
     const joined = lines.join('\n');
     assert.ok(joined.includes('[redacted]'));
-    assert.ok(!joined.includes('sk-supersecretkey999'));
+    assert.ok(!joined.includes('sk-your_XXXXXXXXXXXXXXXXXXXX'));
   });
 });

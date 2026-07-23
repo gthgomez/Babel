@@ -28,7 +28,7 @@ import * as readline from 'node:readline/promises';
 /**
  * Returns the list of approved workspace roots from the environment variable
  * `BABEL_OPENCLAW_APPROVED_ROOTS` (comma-separated), falling back to the
- * default `C:\Workspace` on Windows.
+ * default `/tmp` on Windows.
  */
 function getApprovedRoots(): string[] {
   const fromEnv = process.env['BABEL_OPENCLAW_APPROVED_ROOTS']?.trim();

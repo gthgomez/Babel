@@ -17,7 +17,7 @@ describe('resolveProjectPath', () => {
 
   test('strips file:// prefix', () => {
     const resolved = resolveProjectPath(root, 'file:////tmp/proj/src/a.ts');
-    assert.match(resolved.replace(/\\/g, '/'), /C:\/Workspace\/proj\/src\/a\.ts$/i);
+    assert.match(resolved.replace(/\\/g, '/'), /\/tmp\/proj\/src\/a\.ts$/i);
   });
 
   test('empty path returns projectRoot', () => {
