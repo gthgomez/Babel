@@ -29,7 +29,7 @@ const TEST_POLICY: EnterprisePolicy = {
 
 test('redactSecrets masks common provider environment assignments', () => {
   const text =
-    'DEEPSEEK_API_KEY=deepseek-secret DEEPINFRA_API_KEY=abc123 OPENAI_API_KEY="sk-live-value" safe=value';
+    'DEEPSEEK_API_KEY=deepseek-secret DEEPINFRA_API_KEY=abc123 OPENAI_API_KEY="sk-your_XXXXXXXXXXXXXXXXXXXX" safe=value';
   const redacted = redactSecrets(text, TEST_POLICY);
 
   assert.match(redacted, /DEEPSEEK_API_KEY= \[REDACTED\]/);
@@ -38,7 +38,7 @@ test('redactSecrets masks common provider environment assignments', () => {
   assert.match(redacted, /safe=value/);
   assert.doesNotMatch(redacted, /deepseek-secret/);
   assert.doesNotMatch(redacted, /abc123/);
-  assert.doesNotMatch(redacted, /sk-live-value/);
+  assert.doesNotMatch(redacted, /sk-your_XXXXXXXXXXXXXXXXXXXX/);
 });
 
 test('redactSecrets masks bearer tokens and extra enterprise patterns', () => {

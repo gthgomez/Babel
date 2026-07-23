@@ -8,7 +8,7 @@ import { buildRealTaskPilotReport, formatRealTaskPilotHuman } from './realTaskPi
 
 test('real-task pilot writes a concrete non-mutating pilot plan', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-real-task-pilot-'));
-  const outputDir = mkdtempSync(join(tmpdir(), 'babel-real-task-pilot-report-'));
+  const outputDir = mkdtempSync(join(tmpdir(), 'babel-real-task-your_XXXXXXXXXXXXXXXXXXXX'));
   try {
     mkdirSync(join(root, 'src'));
     writeFileSync(

@@ -1,5 +1,5 @@
 param(
-  [string]$EvidenceDir = "C:\Workspace\Babel\runs\agent-benchmark-live-deepseek-v6",
+  [string]$EvidenceDir = "/tmp\Babel\runs\agent-benchmark-live-deepseek-v6",
   [int]$IntervalMinutes = 15,
   [int]$BenchmarkPid = 0
 )

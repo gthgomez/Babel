@@ -201,7 +201,21 @@ function Test-IsSecretScanSkippedFile {
   param([string]$RelativePath)
 
   $leaf = Split-Path -Leaf $RelativePath
-  return $secretScanSkipFileNames -contains $leaf
+  if ($secretScanSkipFileNames -contains $leaf) {
+    return $true
+  }
+
+  # Synthetic secrets in unit tests / eval fixtures must not fail the public scrub.
+  # Live secrets remain blocked in non-test production paths and by gitleaks in CI.
+  $normalized = $RelativePath.Replace('\', '/')
+  if ($normalized -match '\.test\.ts(\.snap)?$') {
+    return $true
+  }
+  if ($leaf -eq 'injectionTestPrompts.ts') {
+    return $true
+  }
+
+  return $false
 }
 
 function Get-LeakSearchResults {

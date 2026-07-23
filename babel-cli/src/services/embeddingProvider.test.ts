@@ -97,14 +97,14 @@ test('createEmbeddingProvider returns null when OPENAI_API_KEY is placeholder', 
 });
 
 test('createEmbeddingProvider returns null when BABEL_EMBEDDING_DISABLE=1', () => {
-  setEnv('OPENAI_API_KEY', 'sk-valid-looking-key');
+  setEnv('OPENAI_API_KEY', 'sk-your_XXXXXXXXXXXXXXXXXXXX');
   setEnv('BABEL_EMBEDDING_DISABLE', '1');
   const provider = createEmbeddingProvider();
   assert.equal(provider, null);
 });
 
 test('createEmbeddingProvider returns null when BABEL_EMBEDDING_DISABLE=true', () => {
-  setEnv('OPENAI_API_KEY', 'sk-valid-looking-key');
+  setEnv('OPENAI_API_KEY', 'sk-your_XXXXXXXXXXXXXXXXXXXX');
   setEnv('BABEL_EMBEDDING_DISABLE', 'true');
   const provider = createEmbeddingProvider();
   assert.equal(provider, null);
@@ -113,7 +113,7 @@ test('createEmbeddingProvider returns null when BABEL_EMBEDDING_DISABLE=true', (
 // ── Section 2: Provider creation ─────────────────────────────────────────────
 
 test('createEmbeddingProvider succeeds with valid OPENAI_API_KEY', () => {
-  setEnv('OPENAI_API_KEY', 'sk-test-key-12345');
+  setEnv('OPENAI_API_KEY', 'sk-your_XXXXXXXXXXXXXXXXXXXX');
   const provider = createEmbeddingProvider();
   assert.ok(provider !== null);
 });

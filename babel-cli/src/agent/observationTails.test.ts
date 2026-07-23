@@ -42,11 +42,11 @@ describe('ObservationTailBuffer', () => {
 
   test('secret patterns are redacted', () => {
     const buf = new ObservationTailBuffer();
-    const fakeKey = 'sk-abc123xyz456def789ghi012jkl345';
+    const fakeKey = 'sk-your_XXXXXXXXXXXXXXXXXXXXXXXXX';
     buf.record('run_command', 'echo key', `output: ${fakeKey}`, 0);
 
     const entry = buf.all()[0]!;
-    assert.doesNotMatch(entry.tail, /sk-abc123xyz456def789ghi012jkl345/);
+    assert.doesNotMatch(entry.tail, /sk-your_XXXXXXXXXXXXXXXXXXXXXXXXX/);
     assert.match(entry.tail, /\[REDACTED_API_KEY\]/);
   });
 

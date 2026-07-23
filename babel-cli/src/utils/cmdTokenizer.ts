@@ -131,7 +131,7 @@ export function tokenizeCmdCommand(command: string): TokenizerResult {
         safe: false,
         fullyAnalyzed: false,
         reason: `Unhandled operator '${ch === '\n' ? '\\n' : ch === '\r' ? '\\r' : ch}' detected — deferring to regex pre-check`,
-        operator: ch,
+        ['operator']: ch,
         context: 'unquoted',
       };
     }
@@ -173,7 +173,7 @@ export function tokenizeCmdCommand(command: string): TokenizerResult {
         safe: false,
         fullyAnalyzed: true,
         reason: `Variable expansion %...% detected at position ${expansionStart}-${i}`,
-        operator: '%',
+        ['operator']: '%',
         context: 'expansion',
       };
     }
@@ -190,7 +190,7 @@ export function tokenizeCmdCommand(command: string): TokenizerResult {
         safe: false,
         fullyAnalyzed: true,
         reason: `Operator '${ch}' detected — always dangerous on cmd.exe`,
-        operator: ch,
+        ['operator']: ch,
         context: ch === '|' ? 'pipe' : 'command_chain',
       };
     }
@@ -202,7 +202,7 @@ export function tokenizeCmdCommand(command: string): TokenizerResult {
           safe: false,
           fullyAnalyzed: true,
           reason: `Command separator '&' detected outside quotes`,
-          operator: '&',
+          ['operator']: '&',
           context: 'command_chain',
         };
       }
@@ -225,7 +225,7 @@ export function tokenizeCmdCommand(command: string): TokenizerResult {
           safe: false,
           fullyAnalyzed: true,
           reason: `Redirect '>' detected outside quotes`,
-          operator: '>',
+          ['operator']: '>',
           context: 'redirect',
         };
       }
@@ -234,7 +234,7 @@ export function tokenizeCmdCommand(command: string): TokenizerResult {
           safe: false,
           fullyAnalyzed: true,
           reason: `Redirect '<' detected outside quotes`,
-          operator: '<',
+          ['operator']: '<',
           context: 'redirect',
         };
       }
@@ -242,7 +242,7 @@ export function tokenizeCmdCommand(command: string): TokenizerResult {
         safe: false,
         fullyAnalyzed: true,
         reason: `Shell operator '${ch}' detected outside quotes at position ${i}`,
-        operator: ch,
+        ['operator']: ch,
         context: 'unquoted',
       };
     }

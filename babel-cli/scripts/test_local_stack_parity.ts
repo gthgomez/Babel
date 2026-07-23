@@ -35,7 +35,7 @@ const FIXTURES: Fixture[] = [
   { taskCategory: 'frontend', project: 'global', model: 'codex', pipelineMode: 'chat' },
   { taskCategory: 'backend', project: 'example_saas_backend', model: 'codex', pipelineMode: 'deep' },
   { taskCategory: 'compliance', project: 'AuditGuard', model: 'claude', pipelineMode: 'chat' },
-  { taskCategory: 'mobile', project: 'example_mobile_suite', model: 'gemini', pipelineMode: 'deep' },
+  { taskCategory: 'mobile', project: 'Project_Android', model: 'gemini', pipelineMode: 'deep' },
   { taskCategory: 'game', project: 'godot_td', model: 'codex', pipelineMode: 'chat' },
   { taskCategory: 'research', project: 'global', model: 'codex', pipelineMode: 'deep' },
   { taskCategory: 'frontend', project: 'global', model: 'CODEX', pipelineMode: 'chat' },

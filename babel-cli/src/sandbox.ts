@@ -894,7 +894,7 @@ export class SafeExecutor {
         return existsSync(p) ? realpathSync(p) : resolve(p);
       });
     } else {
-      // Default: the workspace parent (one level above projectRoot), capped at C:\Workspace
+      // Default: the workspace parent (one level above projectRoot), capped at /tmp
       const defaultReadRoot =
         process.platform === 'win32' ? '/tmp' : (process.env['HOME'] ?? '/');
       this.approvedReadRoots = [

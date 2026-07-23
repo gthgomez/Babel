@@ -6,7 +6,7 @@ import { redactSecrets, redactSecretsDeep, containsSecrets } from './secretRedac
 // Fixtures must exercise redaction patterns without looking like live provider keys
 // (GitHub push protection blocks realistic sk- tokens).
 
-const FAKE_SK = 'sk-UNITTEST_ONLY_FAKE_KEY_XXXXXX';
+const FAKE_SK = 'sk-your_XXXXXXXXXXXXXXXXXXXX';
 const FAKE_ENV_VALUE = 'fixture_secret_value_for_redaction_tests_only';
 
 test('redactSecrets masks sk- prefixed API keys', () => {
