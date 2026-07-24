@@ -1,5 +1,5 @@
 /**
- * T5.1 — Verified-completion contract.
+ * Verified-completion contract.
  *
  * Normalizes chat/benchmark completion evidence into a publishable artifact
  * and structurally validates it (no external JSON Schema engine required).

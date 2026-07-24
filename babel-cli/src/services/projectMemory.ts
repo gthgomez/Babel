@@ -1,11 +1,11 @@
-// ─── P-4.2 / T3.2 / Gap-2: BABEL.md Project Memory ──────────────────────────
+// ─── P-4.2 / Gap-2: BABEL.md Project Memory ──────────────────────────
 //
 // BABEL.md is the Babel analogue of Claude Code's CLAUDE.md — a persistent
 // per-repo file that records build/test commands, conventions, and known
 // pitfalls. Read once at engine construction and injected into the system
 // prompt so the model has project-specific context before the first turn.
 //
-// T3.2: after successful runs with writes, propose candidate learnings in
+// After successful runs with writes, propose candidate learnings in
 // BABEL.md.proposed (user-reviewable — never auto-merge into BABEL.md).
 //
 // Gap 2: structured memory directory (~/.babel/projects/{sanitized-git-root}/memory/)

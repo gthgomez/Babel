@@ -1414,7 +1414,7 @@ export function highlightCodeBlocks(text: string): string {
  *
  * When NO_COLOR is set, returns text unchanged.
  */
-/** Batch 3 #8: Quick check for markdown syntax characters before invoking
+/** Quick check for markdown syntax characters before invoking
  *  the full lexer. Returns false for plain text with no formatting. */
 const MARKDOWN_SYNTAX_RE =
   /[`*_~#>\[\]|\\<!]|^ {0,3}\d+\.|^ {0,3}[-*+] |^ {0,3}(-{3,}|\*{3,}|_{3,})\s*$/m;
@@ -1442,7 +1442,7 @@ export function renderMarkdown(text: string): string {
   // Sanitize LLM-produced text against terminal escape injection
   const safe = sanitizeLlmOutput(text);
 
-  // Batch 3 #8: Fast-path — skip lexer for text with no markdown syntax
+  // Fast-path — skip lexer for text with no markdown syntax
   if (!hasMarkdownSyntax(safe)) {
     mdRenderCache.set(text, safe);
     return safe;
@@ -1645,7 +1645,7 @@ function renderInlineToken(token: InlineToken): string {
     case 'link': {
       const link = token as any;
       const text = renderInlineTokens(link.tokens);
-      // Batch 3 #7: OSC 8 hyperlinks — Ctrl+Click in supporting terminals
+      // OSC 8 hyperlinks — Ctrl+Click in supporting terminals
       if (HAS_COLOR) {
         return `\x1b]8;;${link.href}\x1b\\${text}\x1b]8;;\x1b\\ ${dim('(' + link.href + ')')}`;
       }

@@ -681,8 +681,8 @@ export function validateExecutorShellCommand(
     }
   }
 
-  // P2.1: `cd|chdir|pushd <path> && <cmd>` is operator-safe on Windows, but the
-  // allowlist still saw command base `cd` and rejected (T1.4 thrash). Validate
+  // `cd|chdir|pushd <path> && <cmd>` is operator-safe on Windows, but the
+  // allowlist still saw command base `cd` and rejected. Validate
   // the right-hand command only — same policy as the tokenizer prefix strip.
   const cdPrefixMatch = trimmed.match(/^\s*(cd|chdir|pushd)\s+(.+?)\s*&&\s*(.+)$/is);
   if (cdPrefixMatch) {

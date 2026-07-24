@@ -11,7 +11,7 @@ import {
 
 const REPO_ROOT = join(process.cwd(), '..');
 
-describe('govDCanaryMetric (T5.3)', () => {
+describe('govDCanaryMetric', () => {
   it('loads GOV-D suite from agent manifest', () => {
     const { manifestPath } = defaultGovDPaths(REPO_ROOT);
     const suite = loadGovDSuiteFromManifest(manifestPath);

@@ -8,7 +8,7 @@ import {
 } from './planThenExecute.js';
 import type { PlaybookDefinition } from '../services/playbooks/playbookService.js';
 
-describe('planThenExecute (T3.3)', () => {
+describe('planThenExecute', () => {
   const prev = {
     require: process.env['BABEL_REQUIRE_TODO_PLAN'],
     threshold: process.env['BABEL_TODO_PLAN_WORD_THRESHOLD'],

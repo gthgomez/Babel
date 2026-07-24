@@ -127,7 +127,7 @@ function installMockRunner(engine: ChatEngine, runner: ReturnType<typeof makeMoc
 
 // ─── (a) monomorphic loop: submitMessage === stream outcome ─────────────────
 
-describe('Live P1-A monomorphic ChatEngine loop', () => {
+describe('Live monomorphic ChatEngine loop', () => {
   let projectRoot: string;
 
   before(() => {
@@ -272,7 +272,7 @@ describe('Live P1-A monomorphic ChatEngine loop', () => {
 
 // ─── (e) resume from event log with tool results ────────────────────────────
 
-describe('Live P1-C resume via event log', () => {
+describe('Live resume via event log', () => {
   test('createEngineFromEventLog restores tool results without re-call', () => {
     const root = mkdtempSync(join(tmpdir(), 'babel-resume-'));
     try {
@@ -499,7 +499,7 @@ describe('Live P1-C resume via event log', () => {
   });
 });
 
-describe('Live P1-D subagent scope ceiling', () => {
+describe('Live subagent scope ceiling', () => {
   test('deriveSubagentApprovalSession caps child below parent (live helper)', () => {
     const parent = createApprovalSession('parent', ['shell', 'write']);
     const child = deriveSubagentApprovalSession(parent, 'child', [
@@ -523,7 +523,7 @@ describe('Live P1-D subagent scope ceiling', () => {
 
 // ─── (f) live chatApproval uses ApprovalRequest ─────────────────────────────
 
-describe('Live P1-D chatApproval path', () => {
+describe('Live chatApproval path', () => {
   test('headless deny/allow_once via requestChatActionApproval', async () => {
     resetChatApprovalSession('live-approval-test');
     process.env['CI'] = 'true';
@@ -552,7 +552,7 @@ describe('Live P1-D chatApproval path', () => {
 
 // ─── (g) failover decision used by resolve path ─────────────────────────────
 
-describe('Live P1-E failover on engine', () => {
+describe('Live failover on engine', () => {
   test('parityTryFailover records decision for Pro rate-limit', () => {
     const d = decideProToFlashFailover(
       'deepseek-v4-pro',
@@ -574,9 +574,9 @@ describe('Live P1-E failover on engine', () => {
   });
 });
 
-// ─── P2-B cancel dispatches input arbiter ───────────────────────────────────
+// ─── Cancel dispatches input arbiter ───────────────────────────────────
 
-describe('Live P2-B cancel → input arbiter', () => {
+describe('Live cancel → input arbiter', () => {
   test('engine.cancel dispatches ctrl_c cancel_turn', () => {
     resetInputArbiterForTests();
     dispatchInputArbiter({ type: 'run_started' });
@@ -589,9 +589,9 @@ describe('Live P2-B cancel → input arbiter', () => {
   });
 });
 
-// ─── P2-A chat compile live entry ───────────────────────────────────────────
+// ─── Chat compile live entry ───────────────────────────────────────────
 
-describe('Live P2-A chat compile entry', () => {
+describe('Live chat compile entry', () => {
   test('compileChatStackForRun records manifest hash', () => {
     const root = process.cwd().includes('babel-cli')
       ? join(process.cwd(), '..')

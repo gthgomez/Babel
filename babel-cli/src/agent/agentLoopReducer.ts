@@ -1,5 +1,5 @@
 /**
- * P1-A — Unified agent-loop reducer/state machine.
+ * Unified agent-loop reducer/state machine.
  *
  * One pure reducer owns loop semantics for streamed, non-streamed, headless,
  * and benchmark surfaces. Presentation is a subscriber; it never owns agent

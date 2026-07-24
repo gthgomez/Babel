@@ -1,0 +1,16 @@
+id: playwright-e2e
+name: Playwright E2E
+version: 0.1.0
+status: reviewed
+description: Playwright E2E testing patterns for resilient selectors, auth-gated tests, reports, screenshots, and CI-friendly verification.
+entrypoint: SKILL.md
+allowed_tools:
+  - shell_command
+  - apply_patch
+denied_tools: []
+inputs: contracts/input.schema.json
+outputs: contracts/output.schema.json
+tests: tests/
+owner: Babel Skill Forge
+created_at: 2026-04-29T05:09:35.438Z
+updated_at: 2026-04-29T05:20:00.000Z

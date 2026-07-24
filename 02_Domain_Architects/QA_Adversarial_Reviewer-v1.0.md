@@ -7,7 +7,7 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
 -->
 
-# QA Adversarial Reviewer — v1.0
+# QA Adversarial Reviewer (Domain Architect) — v1.0
 
 **Status:** ACTIVE
 **Layer:** 02_Domain_Architects / Pipeline Stage

@@ -1,5 +1,5 @@
 /**
- * P1-E — Provider capability truth, context budget, failover helpers.
+ * Provider capability truth, context budget, failover helpers.
  *
  * One ProviderCapabilities record per model. Budget formula:
  *   context_budget = context_window - max_output - tool/schema_reserve - safety_margin

@@ -3133,7 +3133,7 @@ export async function _runBabelPipelineInternal(
   }
 }
 
-// ── Shared Stage 4 executor preparation (R2.1) ────────────────────────────────
+// ── Shared Stage 4 executor preparation ────────────────────────────────
 
 interface StagedExecutorOptions {
   approvedPlan: SwePlan;
@@ -3160,7 +3160,7 @@ type StagedExecutorResult = StagedExecutorHalt | StagedExecutorSuccess;
 /**
  * Shared Stage 4 executor preparation + execution: scaffold seed, deterministic
  * bootstrap lanes, and the executor loop itself. Extracted from the duplicated
- * blocks in `_runBabelPipelineInternal` and `resumeManualBridge` (R2.1).
+ * blocks in `_runBabelPipelineInternal` and `resumeManualBridge`.
  *
  * Bootstrap halts are handled internally (writeValidatedExecutionReport + log)
  * and surfaced as `{ ok: false }`. Executor-loop exceptions propagate to the
@@ -3251,7 +3251,7 @@ async function runStagedExecutor(
 /**
  * Resume a pipeline run from a previously-computed Orchestrator manifest.
  *
- * R2.1 note: Stage 4 executor preparation (scaffold seed, bootstrap lanes,
+ * Stage 4 executor preparation (scaffold seed, bootstrap lanes,
  * executor loop) is now shared via `runStagedExecutor()`. Stage 2 (SWE) and
  * Stage 3 (QA) remain separate by design — the main path has a retry loop
  * with QA feedback, while this resume path is single-shot with manual plan

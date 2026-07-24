@@ -70,8 +70,6 @@ import { handleNormalModeKey as dispatchNormalModeKey } from './promptInputNorma
  * When set to '0', disables OutputBuffer frame wrapping for prompt rendering.
  * Writes still flow through OutputBuffer.write() (a11y sanitization, broken-pipe
  * detection) but without DEC 2026 beginFrame/endFrame delimiters.
- *
- * Remove after one week of dogfooding (per R1.3 rollout plan).
  */
 const BABEL_PROMPT_BUFFERED = process.env['BABEL_PROMPT_BUFFERED'] !== '0';
 

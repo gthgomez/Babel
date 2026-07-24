@@ -11,7 +11,7 @@ import {
 } from './backgroundShell.js';
 import { getSafeEnv } from '../utils/safeEnv.js';
 
-describe('backgroundShell (T2.2)', () => {
+describe('backgroundShell', () => {
   beforeEach(() => {
     resetBackgroundShellRegistryForTests();
   });

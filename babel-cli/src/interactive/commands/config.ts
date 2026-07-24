@@ -210,13 +210,13 @@ export function handleProject(ctx: ReplContext, args: string[]): void {
   if (args[0]) {
     ctx.state.project = args[0];
     ctx.saveSessionState();
-    // P0-C: invalidate stale engine so the next turn picks up the new root
+    // Invalidate stale engine so the next turn picks up the new root
     ctx.chatEngine = undefined;
     console.log(primary(`\n  Project set to ${accentBright(args[0])}`));
   } else {
     delete (ctx.state as any).project;
     ctx.saveSessionState();
-    // P0-C: invalidate stale engine so the next turn picks up the new root
+    // Invalidate stale engine so the next turn picks up the new root
     ctx.chatEngine = undefined;
     console.log(primary('\n  Project cleared — auto-detect enabled'));
   }
@@ -227,7 +227,7 @@ export function handleRetarget(ctx: ReplContext, args: string[]): void {
   ctx.targetOverrideRoot = requested ? path.resolve(requested) : null;
   const target = ctx.resolveCurrentTarget();
   ctx.saveSessionState();
-  // P0-C: invalidate stale engine so the next turn uses the new target root
+  // Invalidate stale engine so the next turn uses the new target root
   ctx.chatEngine = undefined;
   console.log(primary(`\n  Target set to ${accentBright(target.targetRoot)}`));
   if (!requested) {
@@ -256,7 +256,7 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
       };
       ctx.saveSessionState();
 
-      // P0-C: invalidate stale engine so the next turn uses the new model/provider
+      // Invalidate stale engine so the next turn uses the new model/provider
       ctx.chatEngine = undefined;
 
       // Warn if the required API key is missing
@@ -298,7 +298,7 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
     delete (ctx.state as any).resolvedModelId;
     delete (ctx.state as any).approximateCostPerRunUsd;
     ctx.saveSessionState();
-    // P0-C: invalidate stale engine so the next turn uses route-selected model
+    // Invalidate stale engine so the next turn uses route-selected model
     ctx.chatEngine = undefined;
     console.log(primary('\n  Model cleared — route-selected enabled'));
   } else {

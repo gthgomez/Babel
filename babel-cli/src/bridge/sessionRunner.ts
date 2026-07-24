@@ -407,7 +407,7 @@ export class SessionRunner {
    * In Phase 1 the child process lifecycle is managed externally, so
    * messages are echoed to the client rather than forwarded to a child.
    *
-   * TODO(feat/lsp-memory-bridge): implement child stdin forwarding when
+   * TODO: implement child stdin forwarding when
    *   the child process communication layer is ready. This should write
    *   NDJSON-framed messages to the child's stdin pipe.
    *

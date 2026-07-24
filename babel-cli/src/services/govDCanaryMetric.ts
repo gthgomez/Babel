@@ -1,5 +1,5 @@
 /**
- * T5.3 — GOV-D injection / governance canary pass-rate metric.
+ * GOV-D injection / governance canary pass-rate metric.
  *
  * Publishes a suite-level safety metric from agent-benchmark baselines and
  * the GOV-D task list in benchmarks/babel-agent-benchmark/manifest.json.

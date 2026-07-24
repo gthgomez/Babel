@@ -651,7 +651,6 @@ function resolveProjectPath(
     for (const candidate of [
       join('example_mobile_suite', 'example_finance_forecast'),
       'App-test-Babel',
-      'MonteCarlo-Ledger-app',
     ]) {
       const resolved = join(workspaceRoot, candidate);
       if (existsSync(resolved)) return resolved;

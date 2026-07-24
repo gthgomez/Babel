@@ -218,8 +218,7 @@ function findReferenceSourceRoots(taskText, projectRoot) {
   const normalizedTask = normalizeTaskText(taskText);
   const taskIdentifier = normalizeIdentifier(taskText);
   const directChildren = listDirectChildDirectories(projectRoot);
-  const mirroredRoot = join(projectRoot, 'reference-montecarlo-ledger');
-  const candidates = [...(existsSync(mirroredRoot) ? [mirroredRoot] : []), ...directChildren];
+  const candidates = directChildren;
   return unique(candidates).filter((candidatePath) => {
     const candidateName = basename(candidatePath);
     const candidateLower = candidateName.toLowerCase();
@@ -430,17 +429,6 @@ export function buildTaskGrounding(taskContract, projectRoot) {
     groundingRoots.flatMap((groundingRoot) => listGroundedFiles(groundingRoot, filePattern)),
   );
   const referenceRoots = findReferenceSourceRoots(rawTask, projectRoot);
-  if (referenceRoots.length === 0 && /MonteCarlo-Ledger|Antigavity_Projects/i.test(rawTask)) {
-    const externalReferenceRoot = resolve(
-      projectRoot,
-      '..',
-      'Antigavity_Projects',
-      'MonteCarlo-Ledger',
-    );
-    if (existsSync(externalReferenceRoot) && isLikelyPythonReferenceRoot(externalReferenceRoot)) {
-      referenceRoots.push(externalReferenceRoot);
-    }
-  }
   const referenceFiles = unique(
     referenceRoots.flatMap((referenceRoot) =>
       listGroundedFiles(referenceRoot, /\.(py|md|toml|sql|yaml|yml|json)$/i),
@@ -626,27 +614,8 @@ function resolveGroundedTargetMatches(target, grounding) {
   }
   return unique([...directMatches, ...basenameMatches]);
 }
-function canonicalizeExternalReferenceTarget(target, grounding) {
-  const normalizedTarget = String(target ?? '').trim();
-  if (!normalizedTarget || !grounding?.grounded) {
-    return null;
-  }
-  const externalMarker = 'Antigavity_Projects\\MonteCarlo-Ledger';
-  const normalizedMarker = externalMarker.replace(/\\/g, '/').toLowerCase();
-  const normalizedInput = normalizedTarget.replace(/\\/g, '/');
-  const markerIndex = normalizedInput.toLowerCase().indexOf(normalizedMarker);
-  if (markerIndex < 0) {
-    return null;
-  }
-  const mirrorRoot =
-    Array.isArray(grounding.referenceRoots) && grounding.referenceRoots.length > 0
-      ? grounding.referenceRoots[0]
-      : join(grounding.projectRoot, 'reference-montecarlo-ledger');
-  if (!mirrorRoot || !existsSync(mirrorRoot)) {
-    return null;
-  }
-  const suffix = normalizedInput.slice(markerIndex + normalizedMarker.length).replace(/^\/+/, '');
-  return suffix.length > 0 ? join(mirrorRoot, suffix) : mirrorRoot;
+function canonicalizeExternalReferenceTarget(_target, _grounding) {
+  return null;
 }
 function canonicalizeReferenceModuleGuess(step, grounding) {
   const normalizedTarget = String(step?.target ?? '').trim();

@@ -382,7 +382,7 @@ export class FrameScheduler {
    * Effective frame interval, accounting for focus. When blurred, animations
    * slow down to conserve resources (same pattern as ClockContext.tsx).
    *
-   * Exposed for testing (R4.7). Marked as internal — not part of the stable API.
+   * Exposed for testing. Marked as internal — not part of the stable API.
    * @internal
    */
   getEffectiveFrameInterval(): number {
@@ -391,7 +391,7 @@ export class FrameScheduler {
 
   /**
    * Whether the scheduler currently believes the window has focus.
-   * Exposed for testing (R4.7).
+   * Exposed for testing.
    * @internal
    */
   isWindowFocused(): boolean {

@@ -64,7 +64,7 @@ export interface HarnessCellPayload {
   notes: string[];
 }
 
-// ─── P-4 Task-Class Playbooks (shared service; T3.1 also uses REPL path) ─────
+// ─── Task-Class Playbooks (shared service; also uses REPL path) ─────
 
 function selectPlaybook(task: AgentBenchmarkTask): PlaybookDefinition | undefined {
   return selectPlaybookBySkills(task.skills ?? []);

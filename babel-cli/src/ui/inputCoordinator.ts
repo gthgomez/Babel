@@ -493,7 +493,7 @@ export class InputCoordinator {
     // (before restoring the monkey-patched stdout.write) because OutputBuffer
     // may be in a corrupted state during a crash. Without this, a crash
     // mid-frame on a DEC-2026 terminal leaves all subsequent output
-    // invisibly buffered. See R1.1 / BUG-3.
+    // invisibly buffered.
     process.stdout.write(DEC_2026_END);
 
 

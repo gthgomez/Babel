@@ -1,5 +1,5 @@
 /**
- * focusTracker.test.ts — Tests for FocusTracker (R4.7/D2).
+ * focusTracker.test.ts — Tests for FocusTracker.
  *
  * Covers:
  *   - Singleton lifecycle

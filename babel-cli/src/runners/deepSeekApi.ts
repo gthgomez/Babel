@@ -794,7 +794,7 @@ export class DeepSeekApiRunner implements LlmRunner {
     const buildBody = () => {
       const effort = resolveReasoningEffort();
       // DeepSeek API: "Thinking mode does not support this tool_choice" (HTTP 400).
-      // P1-E: capability matrix says thinkingWithTools is 'unsupported' for DeepSeek.
+      // Capability matrix says thinkingWithTools is 'unsupported' for DeepSeek.
       // Override: BABEL_DEEPSEEK_THINKING_WITH_TOOLS=1 (experimental; may 400).
       const wantThinking = process.env['BABEL_DEEPSEEK_THINKING'] !== 'disabled';
       const allowThinkingWithTools =

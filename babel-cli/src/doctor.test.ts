@@ -352,7 +352,7 @@ test('doctor repo map distinguishes missing mapped repo paths', async () => {
     join(workspace, 'config', 'repo-map.json'),
     JSON.stringify({
       repos: {
-        babel_private: root,
+        babel_core: root,
         babel_public: join(workspace, 'missing-babel-public'),
         example_saas_backend: join(workspace, 'repos', 'example_saas_backend'),
         prismatix: join(workspace, 'repos', 'prismatix'),
@@ -394,7 +394,7 @@ test('doctor scope all allows documented external repo-map prerequisite to remai
   const { root, workspace } = makeDoctorWorkspace({ validCatalog: true, dist: true });
   const externalGodotPath = join(workspace, 'missing', 'example_game_suite', 'TowerDefenseGodot');
   const expectedRepoPaths = {
-    babel_private: root,
+    babel_core: root,
     babel_public: join(workspace, 'repos', 'babel_public'),
     example_saas_backend: join(workspace, 'repos', 'example_saas_backend'),
     prismatix: join(workspace, 'repos', 'prismatix'),
@@ -582,7 +582,7 @@ function makeDoctorWorkspace(options: { validCatalog: boolean; dist: boolean }):
   }
 
   const repos: Record<string, string> = {
-    babel_private: root,
+    babel_core: root,
     babel_public: join(workspace, 'repos', 'babel_public'),
     example_saas_backend: join(workspace, 'repos', 'example_saas_backend'),
     prismatix: join(workspace, 'repos', 'prismatix'),

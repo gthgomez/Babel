@@ -1,6 +1,6 @@
 /**
  * Task-class playbooks — shared by the agent benchmark harness (P-4) and
- * ChatEngine REPL path (T3.1).
+ * ChatEngine REPL path.
  *
  * Playbooks inject phase guidance and optional plan-first warnings into the
  * system prompt so weaker models get task-shaped scaffolds without hardcoding
@@ -168,7 +168,7 @@ export function inferChatTaskSkills(task: string): string[] {
 }
 
 /**
- * T3.1: Select a playbook for the interactive chat / REPL path.
+ * Select a playbook for the interactive chat / REPL path.
  *
  * U1.4: Only inject playbooks for general_swe tasks. Default/quick_fix/investigate
  * tasks get no heavy playbook scaffold — the slim compiled stack is sufficient.

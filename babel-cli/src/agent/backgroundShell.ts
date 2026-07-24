@@ -1,5 +1,5 @@
 /**
- * backgroundShell.ts — chat-session background shell jobs (T2.2).
+ * backgroundShell.ts — Chat-session background shell jobs.
  *
  * Long-running commands can be started with run_command(background=true) and
  * later collected via await_command(task_id). This prevents wall-clock stalls

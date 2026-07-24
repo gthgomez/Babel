@@ -1,5 +1,5 @@
 /**
- * P1-A — Every file mutation, including exact string replace, uses one
+ * Every file mutation, including exact string replace, uses one
  * governed policy / checkpoint / integrity / cache path.
  *
  * str_replace is implemented as: read → replace → executeActionWithPolicy(write_file).
