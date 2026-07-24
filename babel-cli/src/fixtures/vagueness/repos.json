@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "fixture_type": "babel_vagueness_repos",
-  "workspace_root": "C:\\Workspace",
+  "workspace_root": "/workspace",
   "repos": [
     {
       "id": "babel_core",

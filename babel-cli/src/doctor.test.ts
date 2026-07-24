@@ -365,7 +365,7 @@ test('doctor repo map distinguishes missing mapped repo paths', async () => {
     }),
     'utf8',
   );
-  mkdirSync(join(workspace, 'Project_Public', 'Babel-public'), { recursive: true });
+  mkdirSync(join(workspace, 'Babel-public-live'), { recursive: true });
   writeFileSync(join(root, 'tools', 'validate-public-release.ps1'), 'exit 0\n', 'utf8');
 
   const result = await runDoctor({
@@ -412,7 +412,7 @@ test('doctor scope all allows documented external repo-map prerequisite to remai
     }),
     'utf8',
   );
-  mkdirSync(join(workspace, 'Project_Public', 'Babel-public'), { recursive: true });
+  mkdirSync(join(workspace, 'Babel-public-live'), { recursive: true });
   writeFileSync(join(root, 'tools', 'export-babel-public.ps1'), 'Write-Output "{}"\\n', 'utf8');
 
   const result = await runDoctor({

@@ -4,13 +4,13 @@
  * Provides the four tool primitives used by localTools.ts:
  *   fileRead   — reads a file; path must resolve within projectRoot
  *   fileWrite  — writes a file; path must resolve within projectRoot
- *   shellExec  — runs a whitelisted command with shell: false
+ *   shellExec  — runs an allowed command with shell: false
  *   testRun    — alias of shellExec with a default test-runner timeout
  *
  * Security guarantees:
  *   1. Path traversal prevention: all file paths are resolved to absolute
  *      and verified to be within (or equal to) `projectRoot` before I/O.
- *   2. Command whitelist: only a defined set of safe command names may be
+ *   2. Command allowlist: only a defined set of safe command names may be
  *      executed (npm, npx, node, git, python, pytest, etc.).
  *   3. Shell injection prevention: normal local execution rejects shell
  *      operator characters (; | & > < ` $ ( ) { } ! \). The isolated
