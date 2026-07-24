@@ -1,5 +1,5 @@
 /**
- * T3.3 — Plan-then-execute enforcement.
+ * Plan-then-execute enforcement.
  *
  * For tasks above a size threshold (or playbooks with requireTodoPlan),
  * block direct file mutations until the agent has created at least one todo via

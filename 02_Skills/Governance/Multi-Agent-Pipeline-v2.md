@@ -279,4 +279,4 @@ After every pipeline plan, end with one next-move question: confirm the learning
 
 ---
 
-**OLS-MCC Compliance:** v2.0 adds Boundaries, Failure Behavior (3 scenarios including learning auto-apply guard), Strategic Next Move, cross-references to all sister multi-agent skills, and meta-tool references. Migrated 2026-06-19 per Beyond the OLS-MCC Roadmap Workstream C Target 2.
+**OLS-MCC Compliance:** v2.0 adds Boundaries, Failure Behavior (3 scenarios including learning auto-apply guard), Strategic Next Move, cross-references to all sister multi-agent skills, and meta-tool references. Migrated 2026-06-19.

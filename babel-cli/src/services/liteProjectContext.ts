@@ -114,7 +114,7 @@ export function formatRepoMapPromptSection(repoMap: RepoMap, maxEntries = 30): s
   return ['## Repo Map (symbols)', `Files indexed: ${repoMap.files_indexed}`, ...lines].join('\n');
 }
 
-// Batch 3 #9: Memoized git info — git metadata is stable within a session
+// Memoized git info — git metadata is stable within a session
 const gitInfoCache = new Map<string, { info: string | null; ts: number }>();
 const GIT_INFO_CACHE_TTL_MS = 60_000;
 
@@ -216,7 +216,7 @@ function buildLiteProjectContextBase(options: ReadLiteProjectContextOptions): st
   return snippets.join('\n\n');
 }
 
-// Batch 3 #29: Auto-wire WorkspaceScanner results into project context
+// Auto-wire WorkspaceScanner results into project context
 function buildWorkspaceContextSection(workspaceRoot: string, projectRoot: string): string | null {
   try {
     const resolvedWs = resolve(workspaceRoot);
@@ -261,7 +261,7 @@ export async function readLiteProjectContext(
 ): Promise<string> {
   let base = buildLiteProjectContextBase(options);
 
-  // Batch 3 #29: Auto-wire WorkspaceScanner results
+  // Auto-wire WorkspaceScanner results
   if (options.workspaceRoot) {
     const wsSection = buildWorkspaceContextSection(options.workspaceRoot, options.projectRoot);
     if (wsSection) {

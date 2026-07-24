@@ -1,5 +1,5 @@
 /**
- * FocusTracker — terminal window focus detection (R4.7/D2).
+ * FocusTracker — terminal window focus detection.
  *
  * Detects when the terminal window gains or loses focus and forwards the
  * event to FrameScheduler.setWindowFocused() so the render loop can

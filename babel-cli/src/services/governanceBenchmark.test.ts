@@ -39,12 +39,12 @@ test('governance benchmark manifest covers required corpus categories', () => {
   }
 });
 
-test('BUG-01 Babel benchmark run produces a schema-valid governance result', () => {
+test('canonical benchmark run produces a schema-valid governance result', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-governance-benchmark-'));
   const outputPath = join(root, 'results.jsonl');
   const summary = runGovernanceBenchmark({
     tool: 'babel',
-    caseId: 'BUG-01',
+    caseId: 'canonical',
     runs: 1,
     outputPath,
     artifactDir: join(root, 'artifacts'),
@@ -54,7 +54,7 @@ test('BUG-01 Babel benchmark run produces a schema-valid governance result', () 
   assert.equal(summary.result_count, 1);
   const result = summary.results[0];
   assert.ok(result);
-  assert.equal(result.task_id, 'BUG-01');
+  assert.equal(result.task_id, 'canonical');
   assert.equal(result.tool.id, 'babel');
   assert.equal(result.result_status, 'completed');
   assert.equal(result.metrics.task_success, true);
@@ -64,14 +64,14 @@ test('BUG-01 Babel benchmark run produces a schema-valid governance result', () 
   assert.equal(result.metrics.audit_trace_quality, 'strong');
   assert.deepEqual(validateBenchmarkResultWithSchema(result), []);
   const line = readFileSync(outputPath, 'utf8').trim();
-  assert.equal(JSON.parse(line).task_id, 'BUG-01');
+  assert.equal(JSON.parse(line).task_id, 'canonical');
 });
 
 test('external adapters produce unavailable records instead of fake failures', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-governance-benchmark-'));
   const summary = runGovernanceBenchmark({
     tool: 'codex_cli',
-    caseId: 'BUG-01',
+    caseId: 'canonical',
     runs: 1,
     outputPath: join(root, 'results.jsonl'),
     artifactDir: join(root, 'artifacts'),
@@ -91,7 +91,7 @@ test('benchmark report is public-safe and avoids global ranking claims', () => {
   const outputPath = join(root, 'results.jsonl');
   runGovernanceBenchmark({
     tool: 'babel',
-    caseId: 'BUG-01',
+    caseId: 'canonical',
     runs: 1,
     outputPath,
     artifactDir: join(root, 'artifacts'),

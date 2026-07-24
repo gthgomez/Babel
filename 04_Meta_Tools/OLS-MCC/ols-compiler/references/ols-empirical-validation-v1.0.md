@@ -222,19 +222,7 @@ OLS contributes to closing this gap by providing the infrastructure (prompt-test
 
 ## 5. Validation Roadmap
 
-| Claim | Current Label | Target Label | Experiment | Est. Effort | Priority |
-|-------|--------------|--------------|------------|-------------|----------|
-| Authority Order prevents injection | v2: [VALIDATED] (Llama) / INCONCLUSIVE (DeepSeek, 0/36 treatment) | Multi-model [VALIDATED] | Red-team A/B test — 4 runs, 288 total LLM calls | ✅ Done (2026-06-27) — v2 eliminates v1 backfire, doubles effect on Llama | **P0** |
-| Evidence Labels improve calibration | [VALIDATED] | — | Calibration curve comparison | ✅ Done (2026-06-27) | P1 |
-| Orthogonal axes improve cost/quality | [INFERRED] | [VALIDATED] or [REFUTED] | Pareto frontier comparison | 3-4 weeks | P1 |
-| OLS-compiled > hand-written prompts | [INFERRED] | [VALIDATED] or [REFUTED] | Controlled comparison study | 4-6 weeks | P2 |
-| File-extension gating improves quality | [INFERRED] | [VALIDATED] or [REFUTED] | Gating A/B test | 1-2 weeks | P2 |
-| Numerical confidence scores improve calibration over categorical labels alone | [INFERRED] | [VALIDATED] or [REFUTED] | Calibration ECE comparison — categorical vs numerical labels | Code complete (`--label-mode numerical-vs-categorical`). Awaiting API keys for live run. | P1 |
-| Replicate calibration across Anthropic/Gemini | [INFERRED] → [CONTEXTUALIZED] | [VALIDATED] or [REFUTED] | Live benchmark on Anthropic/Gemini providers | Provider code complete. Public benchmark data added for context (Claude ECE 0.12–0.06, Gemini ECE 0.19–0.27). Live runs pending valid API keys. | P1 |
-| Public benchmark landscape — injection resistance | [CONTEXTUALIZED] | — | Literature review | ✅ Done (2026-06-27) — AgentDojo, Anthropic system card, Giskard PHARE data added to §2.1.1 | P1 |
-| Public benchmark landscape — calibration | [CONTEXTUALIZED] | — | Literature review | ✅ Done (2026-06-27) — Dunning-Kruger, KalshiBench, MedMCQA data added to §2.2 | P1 |
-
-**P0**: Run this first. It addresses the most critical claim and the one most frequently cited in comparisons. If Authority Order doesn't measurably reduce injection success, OLS's primary security claim needs revision.
+> **Methodology note:** This validation register documents the empirical assessment methodology used to evaluate OLS claims. Claim labels ([INFERRED], [CONTEXTUALIZED], [VALIDATED], [REFUTED]) represent progressive validation states. A claim is upgraded from [INFERRED] only after documented experimental evidence confirms or refutes it. For current validation status on any specific claim, see the latest validation run artifacts.
 
 ---
 

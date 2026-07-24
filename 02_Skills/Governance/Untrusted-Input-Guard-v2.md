@@ -164,4 +164,4 @@ After every INJECTION SCAN RESULT, end with exactly one strategic next-move ques
 
 ---
 
-**Design note:** This v2.0 is the first full-source version of the untrusted input guard. It supersedes the compiled-min-only v1.0 and retrofits the 4-step workflow with OLS-MCC v4.2 compliance: explicit Boundaries (what this skill does NOT gate), Failure Behavior (6 scenarios including novel injection patterns and false positives), Strategic Next Move discipline, handoff contracts to ols-compiler and prompt-tester, and evidence-labeled injection indicators. This directly implements Workstream B Tier 1 of the Beyond the OLS-MCC Roadmap.
+**Design note:** This v2.0 is the first full-source version of the untrusted input guard. It supersedes the compiled-min-only v1.0 and retrofits the 4-step workflow with OLS-MCC v4.2 compliance: explicit Boundaries (what this skill does NOT gate), Failure Behavior (6 scenarios including novel injection patterns and false positives), Strategic Next Move discipline, handoff contracts to ols-compiler and prompt-tester, and evidence-labeled injection indicators.

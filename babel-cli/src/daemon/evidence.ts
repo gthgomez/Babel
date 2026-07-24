@@ -2,8 +2,8 @@
  * daemon/evidence.ts — Daemon evidence bundle helpers (Phase 9)
  *
  * Every daemon job produces Babel evidence artifacts alongside pipeline
- * artifacts. This is Babel's governance differentiator — no competitor
- * daemon produces auditable, replayable evidence for background jobs.
+ * artifacts. Every daemon job produces auditable, replayable evidence
+ * alongside pipeline artifacts for governance and debugging.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';

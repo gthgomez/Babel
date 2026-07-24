@@ -139,7 +139,7 @@ export interface RunnerCallbacks {
 
 // ─── Native Function-Calling Types ───────────────────────────────────────────
 
-// ─── Provider-Neutral Structured Messages (P0-B) ────────────────────────────
+// ─── Provider-Neutral Structured Messages ────────────────────────────
 // ProviderMessage replaces the legacy flat-Markdown prompt string with
 // a protocol-faithful message array. Provider adapters may transform syntax
 // but must not flatten roles into prose.
@@ -166,7 +166,7 @@ export interface ProviderToolCall {
   };
 }
 
-/** Provider capability matrix (P0-B / P1-E). One canonical record per model. */
+/** Provider capability matrix. One canonical record per model. */
 export interface ProviderCapabilities {
   contextWindow: number;
   maxOutputTokens: number;

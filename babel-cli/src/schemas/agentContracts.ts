@@ -1007,7 +1007,7 @@ export const BlockedReportSchema = z.object({
 export type BlockedReport = z.infer<typeof BlockedReportSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// § 3c  TERMINAL OUTCOME  (Phase P0-D: Honest Termination)
+// § 3c  TERMINAL OUTCOME  (Honest Termination)
 //
 //       A discriminated union of every possible way a chat task can terminate.
 //       Unlike the legacy string `status` field on ChatResult, which conflates

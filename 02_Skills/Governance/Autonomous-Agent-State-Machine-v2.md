@@ -230,4 +230,4 @@ After every state transition that involves human communication (hold message, ha
 
 ---
 
-**Design note:** This v2.0 is the first full-source version of the autonomous agent state machine. It supersedes the compiled-min-only v1.0 and retrofits the 6-state model with OLS-MCC v4.2 compliance: explicit Boundaries (4 scope limits), Failure Behavior (6 scenarios), Strategic Next Move discipline, 10 halt conditions (up from 8 — added loop detection and external halt), handoff contracts to input guard, async delivery, and the OLS-MCC meta layer. This directly implements Workstream B Tier 1 of the Beyond the OLS-MCC Roadmap.
+**Design note:** This v2.0 is the first full-source version of the autonomous agent state machine. It supersedes the compiled-min-only v1.0 and retrofits the 6-state model with OLS-MCC v4.2 compliance: explicit Boundaries (4 scope limits), Failure Behavior (6 scenarios), Strategic Next Move discipline, 10 halt conditions (up from 8 — added loop detection and external halt), handoff contracts to input guard, async delivery, and the OLS-MCC meta layer.

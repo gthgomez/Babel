@@ -71,7 +71,7 @@ export function getLastChatCompiledStack(): ChatCompiledStack | null {
   return _lastChatCompiledStack;
 }
 
-/** Compile and attach the smallest chat instruction stack (P2-A). */
+/** Compile and attach the smallest chat instruction stack. */
 export function compileChatStackForRun(input: {
   projectRoot: string;
   task: string;
@@ -354,7 +354,7 @@ export async function runChatEngineOnce(input: {
 
   const limits = resolveChatEngineLimits();
 
-  // P2-A: smallest compiled chat stack (identity / project / safety / provider / verifier)
+  // Smallest compiled chat stack (identity / project / safety / provider / verifier)
   const chatStack = compileChatStackForRun({
     projectRoot: input.target.targetRoot,
     task: input.task,
@@ -485,7 +485,7 @@ export async function runChatEngineOnce(input: {
     persistIntentPlan(result.runDir, intentPlan).catch(() => {});
   }
 
-  // P2-A: persist chat stack manifest hash next to the run when possible
+  // Persist chat stack manifest hash next to the run when possible
   if (result.runDir && chatStack.manifest_hash) {
     try {
       const manifestPath = path.join(result.runDir, 'chat_stack_manifest.json');
@@ -530,7 +530,7 @@ export function buildChatRunPayload(
   },
   opts?: { taskIntent?: TaskIntent },
 ): Record<string, unknown> {
-  // P0-D: Map truthful TerminalOutcome to legacy AskAnswer status.
+  // Map truthful TerminalOutcome to legacy AskAnswer status.
   // Falls back to old heuristics when outcome is absent (test fixtures).
   const answerStatus = (() => {
     const o = result.outcome;
@@ -649,7 +649,7 @@ export function buildChatRunPayload(
     verification,
   };
 
-  // P4: Surface toolCalls for evidence linking — always include even when empty
+  // Surface toolCalls for evidence linking — always include even when empty
   payload['toolCalls'] = result.toolCalls ?? [];
 
   // A1: Aggregate tool call counts derived from toolCalls
@@ -701,7 +701,7 @@ export function buildChatRunPayload(
   // A4: Transcript path — set by harness if available
   payload['transcript_path'] = null;
 
-  // P4: Surface changed_files derived from toolCalls (T0.1: includes str_replace)
+  // Surface changed_files derived from toolCalls (includes str_replace)
   if (result.toolCalls && result.toolCalls.length > 0) {
     const changedFiles = [...new Set(
       result.toolCalls
@@ -714,7 +714,7 @@ export function buildChatRunPayload(
     payload['changed_files'] = [];
   }
 
-  // P4: Surface verifier receipt
+  // Surface verifier receipt
   if (result.verifierReceipt) {
     payload['verifier_receipt'] = result.verifierReceipt;
   }
@@ -790,7 +790,7 @@ export function buildChatRunPayload(
     }
   }
 
-  // P4: Surface run_dir
+  // Surface run_dir
   payload['run_dir'] = result.runDir ?? null;
 
   // BLOCKED: Surface blocked report when present

@@ -1,5 +1,5 @@
 /**
- * P2-A — Bring the smallest compiled Babel stack into daily chat.
+ * Bring the smallest compiled Babel stack into daily chat.
  *
  * Compile only: identity, closest project instructions, relevant domain/skill,
  * safety/permission adapter, provider/model adapter, task verifier guidance.

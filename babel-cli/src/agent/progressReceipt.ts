@@ -1,5 +1,5 @@
 /**
- * P1-B — Progress-aware control: ProgressReceipt after each model/tool cycle.
+ * Progress-aware control: ProgressReceipt after each model/tool cycle.
  *
  * Policy intervenes on repeated no-delta receipts, not raw turns-without-write.
  * Correct localization counts as progress; repeated reads of the same unchanged

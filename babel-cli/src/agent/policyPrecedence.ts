@@ -1,5 +1,5 @@
 /**
- * P1-B — Human-readable policy precedence table.
+ * Human-readable policy precedence table.
  *
  * At most one policy intervention is presented to the model per cycle.
  * Higher precedence wins; ties break by declaration order in the table.

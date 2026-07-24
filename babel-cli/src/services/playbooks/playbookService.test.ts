@@ -11,7 +11,7 @@ import {
   type PlaybookDefinition,
 } from './playbookService.js';
 
-describe('playbookService (T3.1)', () => {
+describe('playbookService', () => {
   const prev = process.env['BABEL_CHAT_PLAYBOOKS'];
 
   beforeEach(() => {

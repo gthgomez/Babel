@@ -92,7 +92,7 @@ export function updateStallState(
   const sessionHasWrites = state.totalWrites > 0 || hasWriteThisTurn;
 
   for (const tc of turnToolCalls) {
-    // Track writes (T0.1: includes str_replace) — successful only
+    // Track writes (includes str_replace) — successful only
     if (isSuccessfulDirectMutation(tc.tool, tc.error)) {
       next.turnsSinceLastWrite = 0;
       next.lastWriteTurn = turnIndex;

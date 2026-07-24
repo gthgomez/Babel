@@ -185,7 +185,7 @@ export async function executeChatTask(
 
       const postRunCost = globalCostTracker.getSessionSummary().totalCostUSD;
       const o = result.outcome;
-      // P0-D: use TerminalOutcome for precise failure display
+      // Use TerminalOutcome for precise failure display
       if (o === 'AGENT_FAILURE' || (!o && result.status === 'failed')) {
         convRenderer.fail(new Error(result.answer || 'Chat task failed'));
       } else if (o === 'BLOCKED_EXTERNAL' || o === 'BLOCKED_POLICY' || (!o && result.status === 'blocked')) {
@@ -217,7 +217,7 @@ export async function executeChatTask(
 
     ctx.lastResolvedTask = null;
     ctx.lastAssistantAnswer = result.answer;
-    // P0-D: preserve truthful terminal outcomes from TerminalOutcome
+    // Preserve truthful terminal outcomes from TerminalOutcome
     const lo = result.outcome;
     const hasAnyWrites = (result.toolCalls ?? []).some((t) =>
       /str_replace|write_file|apply_patch|file_write/.test(t.tool),
@@ -262,7 +262,7 @@ export async function executeChatTask(
           : term;
     }
     ctx.lastRunDir = null;
-    // P0-D: preserve truthful outcome — blocked/budget-exhausted/cancelled are not plain "failed"
+    // Preserve truthful outcome — blocked/budget-exhausted/cancelled are not plain "failed"
     // W0.4: env_blocked is operator-visible and distinct from clean complete
     if (envBlocked) {
       ctx.state.lastRunUserStatus = 'blocked';

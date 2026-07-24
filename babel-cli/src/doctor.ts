@@ -112,7 +112,7 @@ interface ExternalRepoPrerequisite {
 }
 
 const REQUIRED_REPO_KEYS = [
-  'babel_private',
+  'babel_core',
   'babel_public',
   'example_saas_backend',
   'prismatix',
@@ -514,7 +514,7 @@ function runWorkspaceChecks(
 
   for (const [id, title, path] of [
     [
-      'workspace.babel_private.exists',
+      'workspace.babel_core.exists',
       'Babel exists',
       join(workspaceRoot, 'Babel'),
     ],

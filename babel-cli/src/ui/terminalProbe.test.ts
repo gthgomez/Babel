@@ -319,7 +319,7 @@ test('detectTerminalIdentity returns unknown when TERM_PROGRAM is unset', () => 
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 7. R1.2 — Graphics detection (migrated from terminalCapabilities.test.ts)
+// 7. Graphics detection (migrated from terminalCapabilities.test.ts)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 test('TerminalCapabilities has all expected graphics fields', () => {
@@ -342,7 +342,7 @@ test('anyGraphics is true if any image protocol is supported', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 8. R1.2 — terminalCapsCompat backward compatibility
+// 8. terminalCapsCompat backward compatibility
 // ═══════════════════════════════════════════════════════════════════════════════
 
 test('terminalCapsCompat returns same object reference as probeTerminalCapabilities', () => {
@@ -362,7 +362,7 @@ test('terminalCapsCompat works without prior probe', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 9. R1.2 — Windows Terminal DEC 2026 override
+// 9. Windows Terminal DEC 2026 override
 // ═══════════════════════════════════════════════════════════════════════════════
 
 test('Windows Terminal defaults dec2026Sync to false', { skip: process.platform !== 'win32' }, () => {
@@ -446,7 +446,7 @@ test('non-Windows-Terminal gets dec2026Sync from terminal capabilities', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 10. R1.2 — formatCapabilityReport includes DEC 2026 info
+// 10. formatCapabilityReport includes DEC 2026 info
 // ═══════════════════════════════════════════════════════════════════════════════
 
 test('formatCapabilityReport includes DEC 2026 gated line', () => {

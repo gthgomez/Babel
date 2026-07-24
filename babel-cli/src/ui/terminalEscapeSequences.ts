@@ -4,7 +4,7 @@
  * FocusTracker).
  *
  * Centralizing these prevents drift between the three uncoordinated restore
- * mechanisms identified in the post-OSS architectural audit (R1.1).
+ * mechanisms identified in an architectural audit.
  *
  * @module terminalEscapeSequences
  */
@@ -17,7 +17,7 @@ export const DEC_2026_BEGIN = '\x1b[?2026h';
 /** End synchronized update frame (DEC private mode 2026). */
 export const DEC_2026_END = '\x1b[?2026l';
 
-// ── Terminal Focus Events (R4.7) ─────────────────────────────────────────────
+// ── Terminal Focus Events ─────────────────────────────────────────────
 
 /**
  * Enable terminal focus-event reporting (DEC private mode 1004).

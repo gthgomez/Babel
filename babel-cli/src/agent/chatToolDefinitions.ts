@@ -44,7 +44,7 @@ export const ChatToolActionSchema = z.discriminatedUnion('type', [
   BaseGlobSchema,
   BaseWriteFileSchema,
   BaseApplyPatchSchema,
-  // T2.2: optional background flag on run_command (chat path only).
+  // Optional background flag on run_command (chat path only).
   BaseRunCommandSchema.extend({
     background: z.boolean().optional(),
   }),
@@ -569,7 +569,7 @@ export function buildChatTurnPrompt(options: ChatTurnPromptOptions): string {
   return sections.join('\n');
 }
 
-// ─── Provider-Native Structured Messages (P0-B) ────────────────────────────
+// ─── Provider-Native Structured Messages ────────────────────────────
 // buildProviderMessages replaces buildChatTurnPrompt for native-tool-capable
 // providers. Instead of flattening the entire conversation into Markdown prose
 // inside a single user message, it produces a protocol-faithful ProviderMessage[]
@@ -1223,7 +1223,7 @@ export function buildChatToolDefinitions(): ToolDefinition[] {
 }
 
 /**
- * T2.3: Build a restricted tool set for stall / force-mutate interventions.
+ * Build a restricted tool set for stall / force-mutate interventions.
  *
  * When the agent is stuck in a read/shell loop, the harness removes
  * exploration tools from the schema for one turn. This makes "restrict_tools"

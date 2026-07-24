@@ -225,7 +225,7 @@ After every substantial response, end with one strategic next-move question focu
 
 ---
 
-**OLS-MCC Compliance:** v2.0 adds Boundaries, Failure Behavior, Strategic Next Move, and meta-tool references. Migrated 2026-06-19 per Beyond the OLS-MCC Roadmap Workstream B Tier 2.
+**OLS-MCC Compliance:** v2.0 adds Boundaries, Failure Behavior, Strategic Next Move, and meta-tool references. Migrated 2026-06-19.
 
 ---
 
@@ -248,4 +248,4 @@ After every substantial response, end with one strategic next-move question focu
 
 ---
 
-**OLS-MCC Compliance:** v2.0 adds Boundaries, Failure Behavior, Strategic Next Move, and meta-tool references. Migrated 2026-06-20 per Phase 4 Tier 3 Migration — Block 1 (Android Extended).
+**OLS-MCC Compliance:** v2.0 adds Boundaries, Failure Behavior, Strategic Next Move, and meta-tool references. Migrated 2026-06-20.

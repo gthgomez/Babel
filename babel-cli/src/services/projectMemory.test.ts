@@ -12,7 +12,7 @@ import {
   BABEL_MD_PROPOSED_NAME,
 } from './projectMemory.js';
 
-describe('projectMemory (P-4.2 / T3.2)', () => {
+describe('projectMemory (P-4.2)', () => {
   let dir: string;
   const prev = process.env['BABEL_MEMORY_WRITEBACK'];
 

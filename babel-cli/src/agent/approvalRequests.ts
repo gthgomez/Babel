@@ -1,5 +1,5 @@
 /**
- * P1-D — Scoped approvals instead of unrecoverable denial.
+ * Scoped approvals instead of unrecoverable denial.
  *
  * Eligible policy denials become ApprovalRequest events supporting:
  * deny | allow_once | allow_session | narrow_rule.

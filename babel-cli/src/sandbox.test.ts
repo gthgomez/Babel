@@ -694,10 +694,10 @@ test(
   },
 );
 
-// ── P2.1 T1.4 residual sandbox cases ──────────────────────────────────────
+// ── residual sandbox cases ──────────────────────────────────────
 
 test(
-  'P2.1: cd path && allowed-cmd is not allowlist-rejected (T1.4 thrash)',
+  'cd path && allowed-cmd is not allowlist-rejected',
   { skip: process.platform !== 'win32' },
   () => {
     const samples = [
@@ -718,7 +718,7 @@ test(
 );
 
 test(
-  'P2.1: bare redirect and lone & still rejected (T1.4 dangerous patterns)',
+  'bare redirect and lone & still rejected',
   { skip: process.platform !== 'win32' },
   () => {
     const dangerous = ['npm test > out.txt', 'ls >', 'echo hello & echo world', 'python test.py &'];

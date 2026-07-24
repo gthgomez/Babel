@@ -35,7 +35,7 @@ describe('updateStallState', () => {
     assert.equal(s.lastWriteTurn, 2);
   });
 
-  // T0.1: preferred edit tool must reset stall write progress
+  // Preferred edit tool must reset stall write progress
   test('resets turnsSinceLastWrite on str_replace', () => {
     let s = createStallDetector();
     s = updateStallState(s, [{ tool: 'read_file', target: 'src/a.ts' }], 0);
@@ -357,7 +357,7 @@ describe('getStallInterventionMessage', () => {
   });
 });
 
-// ─── T2.3: Restricted Tool Definitions ──────────────────────────────────────
+// ─── Restricted Tool Definitions ──────────────────────────────────────
 
 import { buildChatToolDefinitions, buildRestrictedChatToolDefinitions } from './chatToolDefinitions.js';
 

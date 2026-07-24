@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { evaluatePhaseToolGate, isPhaseGatedToolsEnabled } from './phaseToolPolicy.js';
 
-describe('phaseToolPolicy (T3.4)', () => {
+describe('phaseToolPolicy', () => {
   const prev = process.env['BABEL_PHASE_GATED_TOOLS'];
   const prevClass = process.env['BABEL_CHAT_TASK_CLASS'];
   const prevSwe = process.env['BABEL_CHAT_SWE_PROFILE'];

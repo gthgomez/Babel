@@ -180,7 +180,7 @@ export async function handleSemanticSearch(
   req: Extract<ToolCallRequest, { tool: 'semantic_search' }>,
 ): Promise<ToolResult> {
   try {
-    // ── R2.5: Lazily register embedding function on first semantic search ──
+    // ── Lazily register embedding function on first semantic search ──
     if (!embeddingRegistered) {
       embeddingRegistered = true;
       const provider = createEmbeddingProvider();

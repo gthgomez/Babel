@@ -8,11 +8,9 @@
 
 ## Repository Identity
 
-This is the **public, canonical source** for the Babel coding agent (`gthgomez/Babel`). All active product development happens here. The private vault (`Babel-private`) holds only secrets, config, and migration evidence — it is NOT the product trunk.
+This is the **public, canonical source** for the Babel coding agent (`gthgomez/Babel`). All active product development happens here.
 
 - **Source work**: clone, branch, PR on this repo
-- **Private vault**: `C:\Workspace\Babel-private` — `.env` secrets, `config/project-aliases.json`, migration evidence, frozen export pipeline, generated artifacts, session handoffs
-- **Authority model**: See `docs/migration/CANONICAL-OSS-FOUNDATION.md` (in the vault) for the full bidirectional sync design
 
 **This is "Option A"**: the public repo is fully independent. Private→public write is permanently frozen (remote push disabled, script guarded).
 
@@ -42,7 +40,6 @@ This is the **public, canonical source** for the Babel coding agent (`gthgomez/B
 | Embedding & vector index decision | `docs/adr/ADR-011-embedding-decision.md` |
 | Coding standards | `ENGINEERING.md` |
 | Public content policy & secret scan | `tools/check-public-content-policy.ps1`, `tools/run-public-secret-scan.ps1` |
-| Private vault (secrets, handoffs, migration evidence) | `C:\Workspace\Babel-private\` — see `docs/migration/VAULT-INVENTORY.md` there |
 
 ## Repo Layer Architecture
 
@@ -99,17 +96,9 @@ The root CLAUDE.md takes precedence for cross-project rules. `babel-cli/CLAUDE.m
 
 ## Relationship: Public Repo vs Private Vault
 
-| Aspect | Public (`gthgomez/Babel`) | Private (`Babel-private`) |
-|--------|--------------------------|---------------------------|
-| Role | Canonical product source | Secrets/config vault |
-| Active development | **Here** | Frozen |
-| Prompt layers | **Authoritative** copies | Local copy for TUI execution only |
-| `.env` / secrets | None — use env vars or Credential Manager | Vault holds `.env` |
-| Handoff chain | New chain (starts here) | Historical chain (archive) |
-| CI/CD | Public Actions workflows | Vault CI (if any) |
-| Git remote | `origin` = `gthgomez/Babel` | Local only / no push |
+This is the canonical public source for the Babel coding agent. All active product development happens here. Secrets and credentials are managed via environment variables or system credential managers — never committed to this repo.
 
-**Rule**: When you need Babel source code, prompt layers, tools, CI workflows, or security policy — this is the repo. The private vault exists only for secrets and historical evidence. Never commit secrets, credentials, or private paths to this repo.
+CI/CD runs on public GitHub Actions workflows. No private infrastructure is referenced or required.
 
 ## Critical Invariants
 
@@ -146,17 +135,13 @@ The root CLAUDE.md takes precedence for cross-project rules. `babel-cli/CLAUDE.m
 
 These are the most frequent tool failures observed across sessions. Follow them to avoid rediscovering them:
 
-1. **Always use absolute, forward-slash paths in Bash commands.** Windows backslash paths get their backslashes stripped inside bash (`C:\Workspace\...` becomes `C:Workspace...`). Use `C:/Workspace/...` or `/c/Workspace/...`.
-2. **Know where you are before `cd babel-cli`.** The npm workspace lives at `<repo-root>/babel-cli/`. `cd babel-cli` fails when the shell is already inside `babel-cli/` or anywhere other than repo root, and produces doubled paths like `babel-cli/babel-cli/src/...`. Prefer absolute paths: `cd C:/Workspace/Babel-public-live/babel-cli`.
+1. **Always use absolute, forward-slash paths in Bash commands.** Windows backslash paths get their backslashes stripped inside bash (`C:\MyProject\...` becomes `C:MyProject...`). Use `C:/MyProject/...` or `/c/MyProject/...`.
+2. **Know where you are before `cd babel-cli`.** The npm workspace lives at `<repo-root>/babel-cli/`. `cd babel-cli` fails when the shell is already inside `babel-cli/` or anywhere other than repo root, and produces doubled paths like `babel-cli/babel-cli/src/...`. Prefer absolute paths: `cd <repo-root>/babel-cli`.
 3. **Scope searches — unscoped `rg`/Grep over the repo root times out.** Default to `babel-cli/src/` for runtime code, the specific prompt-layer directory for control-plane work. Never search `runs/`, `artifacts/`, `runtime/`, `node_modules/`, or `dist/`. The `.rgignore` file at repo root enforces these exclusions for ripgrep-based tools.
 4. **Run the File Size Ratchet check before committing** (it is part of CI and fails late otherwise): run `pwsh tools/check-architectural-budget.ps1` before pushing when you touched large files.
 5. **Fanning out subagents that edit files: partition file ownership first.** Concurrent subagents editing the same file (historically `babel-cli/src/agent/chatEngine.ts`) cause "File has been modified since read" errors and merge conflicts. Assign each subagent a disjoint set of files, and confirm the worktree is clean before fan-out.
 6. **CI/PR checks via `gh`:** `gh pr view --json statusChecks` is invalid — the field is `statusCheckRollup`. `gh pr checks` exits 8 while checks are *pending*; that is not a failure. A brand-new branch may report "no checks reported" until the first workflow starts — wait and retry rather than diagnosing.
-7. **Self-hosted Windows CI runners** may show "online" in GitHub but be dead — the agent process hangs despite a live connection. Restart the runner agent service on the host. This is a recurring pattern. [INFERRED from session retrospective 2026-07-23]
-8. **CI artifact retention** must be ≥7 days for workflow re-runs. The `babel-dist` artifact was set to `retention-days: 1` which caused silent re-run failures. Current value in `ci.yml` is 7. [INFERRED from session retrospective 2026-07-23]
-9. **Windows sandbox timing thresholds** need 5000ms headroom in CI. The 500ms default is too tight for Windows self-hosted runners. Documented in CI notes. [INFERRED from session retrospective 2026-07-23]
-10. **Pre-commit hooks on Windows** need a bash entrypoint that delegates to `.ps1` scripts. Direct PowerShell hooks fail under Git Bash. Use the pattern: bash script → `pwsh -File script.ps1`. [INFERRED from session retrospective 2026-07-23]
-11. **Scrub config regex escaping**: PowerShell/JSON escaping layers can turn `\\b` (word boundary) into literal `b`. When editing scrub rules in `tools/public-export/scrub_config.json`, verify regex escaping survives the double-layer (JSON parse → PS string). [INFERRED from session retrospective 2026-07-23]
+7. **Scrub config regex escaping**: PowerShell/JSON escaping layers can turn `\\b` (word boundary) into literal `b`. When editing scrub rules, verify regex escaping survives the double-layer (JSON parse → PS string).
 
 ## Common Task Paths
 
@@ -247,11 +232,4 @@ For full rule layers: `LLM_COLLABORATION_SYSTEM/` (RULES_CORE, RULES_GUARD, ADAP
 
 ## Session Knowledge
 
-This CLAUDE.md was bootstrapped from private vault session knowledge on 2026-07-24. It incorporates:
-- All 6 original Environment Gotchas from the private vault's CLAUDE.md
-- 5 additional gotchas discovered during the session retrospective v2 (2026-07-23) — items 7-11
-- Tool-use patterns synthesized from 999 tool calls across 10 sessions
-- Testing discipline rules from retrospective finding B3-001
-- Pre-PR checklist based on public CI gate requirements
-
-For the full retrospective report and remaining action items, see `session-retrospective-20260723-153000.md` in the private vault. The retrospective identified 23 recommendations; the highest-priority ones are encoded in this file's rules and gotchas.
+This CLAUDE.md incorporates operational patterns learned across multiple development sessions, including environment-specific gotchas, tool-use patterns, and testing discipline rules. The pre-PR checklist reflects CI gate requirements validated through repeated use.
