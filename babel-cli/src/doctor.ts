@@ -494,10 +494,10 @@ function runWorkspaceChecks(
   const catalogPath = join(babelRoot, 'prompt_catalog.yaml');
   const babelPublicPath =
     [
-      join(workspaceRoot, 'Project_Public', 'Babel-public'),
+      join(workspaceRoot, 'Babel-public-live'),
       join(workspaceRoot, 'Babel-public'),
     ].find((candidate) => existsSync(candidate)) ??
-    join(workspaceRoot, 'Project_Public', 'Babel-public');
+    join(workspaceRoot, 'Babel-public-live');
 
   checks.push(
     createCheck(

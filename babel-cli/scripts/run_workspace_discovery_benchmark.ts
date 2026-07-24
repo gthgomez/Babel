@@ -41,7 +41,7 @@ function printHelp(): void {
     '  --provider <mode>       live | mock (default: live)',
     '  --repo-manifest <path>  Repo manifest (default: fixtures/workspace-discovery/repos.json)',
     '  --scenarios <path>      Scenario matrix override',
-    '  --workspace-root <path> Workspace root (default: C:\\Workspace)',
+    '  --workspace-root <path> Workspace root (default: /workspace)',
     '  --repo-filter <ids>     Comma-separated repo ids (e.g. relic_run,simlife)',
     '  --smoke                 Run smoke subset (2 scenarios x 4 repos)',
     '  --max-cells <n>         Cap executed cells',

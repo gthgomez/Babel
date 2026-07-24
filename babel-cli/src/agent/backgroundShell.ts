@@ -5,7 +5,7 @@
  * later collected via await_command(task_id). This prevents wall-clock stalls
  * where a single blocking shellExec holds the agent loop for minutes.
  *
- * Security: callers must validate commands (whitelist / operators), plan mode,
+ * Security: callers must validate commands (allowlist / operators), plan mode,
  * execution profile, and cwd-within-project before startBackgroundShell.
  * This module applies getSafeEnv(), output caps, hard job timeout, and lifecycle.
  *

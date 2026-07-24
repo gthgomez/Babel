@@ -1,6 +1,6 @@
 # AGENTS.md - Babel CLI
 
-Agent-neutral startup router for the private Babel CLI package. Root `ENGINEERING.md` and root `AGENTS.md` remain authoritative for safety, verification, deletion, scope, and truthfulness.
+Agent-neutral startup router for the Babel CLI package. Root `ENGINEERING.md` and root `AGENTS.md` remain authoritative for safety, verification, deletion, scope, and truthfulness.
 
 ## Startup Sequence
 

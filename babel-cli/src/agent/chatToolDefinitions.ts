@@ -1016,7 +1016,7 @@ export function buildChatToolDefinitions(): ToolDefinition[] {
       function: {
         name: 'run_command',
         description:
-          'Execute a shell command and return its output. Set background=true for long-running jobs (builds, full test suites) so the agent loop is not blocked; then call await_command with the returned task_id. Background uses the same whitelist/cwd sandbox as foreground shell; argv is whitespace-split only (no quoted multi-arg syntax). Not available under Docker sandbox profiles or plan mode.',
+          'Execute a shell command and return its output. Set background=true for long-running jobs (builds, full test suites) so the agent loop is not blocked; then call await_command with the returned task_id. Background uses the same allowlist/cwd sandbox as foreground shell; argv is whitespace-split only (no quoted multi-arg syntax). Not available under Docker sandbox profiles or plan mode.',
         parameters: {
           type: 'object',
           properties: {
