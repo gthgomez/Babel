@@ -371,7 +371,7 @@ describe('Completion gate — positive paths', () => {
     assert.equal((engine as any).evaluateCompletionGate(turn, 'execute'), 'reject');
   });
 
-  // T0.1: str_replace is the preferred edit primitive and must satisfy the gate
+  // str_replace is the preferred edit primitive and must satisfy the gate
   test('gate allows completion after successful str_replace + verifier', () => {
     pushToolLog(engine, { tool: 'str_replace', target: '/tmp/test-project/src/math.js' });
     pushToolLog(engine, { tool: 'test_run', target: 'npm test', exit_code: 0 });
@@ -457,7 +457,7 @@ describe('Completion gate — positive paths', () => {
     assert.equal((verifyEngine as any).evaluateCompletionGate(turn, 'execute'), 'allow');
   });
 
-  // T0.2: chat path logs verifiers as run_command
+  // Chat path logs verifiers as run_command
   test('gate allows with str_replace + run_command when task asks for tests', () => {
     const verifyEngine = new ChatEngine({
       task: 'fix the bug and run npm test after making changes',

@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { BABEL_ROOT, BABEL_RUNS_DIR } from '../cli/constants.js';
 
-export type ParityToolId = 'babel' | 'codex' | 'claude_code';
+export type ParityToolId = 'babel' | 'competitor_a' | 'competitor_b';
 export type ParityRunStatus = 'success' | 'failure' | 'manual_required' | 'not_run';
 export type ParityVerifierStatus = 'pass' | 'fail' | 'not_run' | 'unknown';
 export type ParityComparisonVerdict =
@@ -84,7 +84,7 @@ export interface ParityBenchmarkOptions {
 
 const ToolResultSchema = z.object({
   task_id: z.string(),
-  tool: z.enum(['babel', 'codex', 'claude_code']),
+  tool: z.enum(['babel', 'competitor_a', 'competitor_b']),
   status: z.enum(['success', 'failure', 'manual_required', 'not_run']),
   verifier: z.enum(['pass', 'fail', 'not_run', 'unknown']),
   false_complete: z.boolean().default(false),
@@ -194,7 +194,7 @@ function defaultTasks(): ParityTaskDefinition[] {
 }
 
 function defaultTools(): ParityToolId[] {
-  return ['babel', 'codex', 'claude_code'];
+  return ['babel', 'competitor_a', 'competitor_b'];
 }
 
 function manualResult(taskId: string, tool: ParityToolId): ParityToolResult {
@@ -327,7 +327,7 @@ function buildComparisons(
   return tasks.flatMap((task) => {
     const babel = byKey.get(`${task.id}::babel`);
     if (!babel) return [];
-    return (['codex', 'claude_code'] as const).map((competitor) => {
+    return (['competitor_a', 'competitor_b'] as const).map((competitor) => {
       const competitorResult = byKey.get(`${task.id}::${competitor}`);
       const verdict = competitorResult ? compareStatus(babel, competitorResult) : 'inconclusive';
       return {

@@ -1,0 +1,236 @@
+<!--
+Babel — Prompt Operating System
+Copyright © 2025–2026 Jonathan Gomez Aguilar
+Licensed under the MIT License
+Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
+
+You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
+-->
+
+# Skill: Evidence Gathering Protocol (v1.1)
+
+**Category:** Governance
+**Status:** Active
+**Pairs with:** `domain_swe_backend`, `domain_swe_frontend`, `domain_devops`, `domain_compliance_gpc`
+
+## Package bridge
+
+- **Canonical package:** `skills/evidence-gathering/` (`SKILL.md`, `skill.yaml`, `contracts/`, `examples/`, `tests/`)
+- **Catalog id:** `skill_evidence_gathering`
+- **This file:** Babel prompt routing and layer behavior only
+- Do not duplicate schemas or examples here; use the package skill for I/O contracts and fixtures
+
+---
+
+## Purpose
+
+The Evidence Gate is the #1 cause of QA rejection. Writing a plan against a file you have not read
+is a protocol violation — not a shortcut. This skill converts the Guard's reactive stop into a
+proactive mandatory phase that completes before any plan section is authored.
+
+A plan built on inferred file contents is not a plan. It is a guess with structure.
+
+---
+
+## Activation
+
+This protocol runs ONCE, at the start of every task, before any OBJECTIVE, KNOWN FACTS, or
+MINIMAL ACTION SET is written. It is not optional. It is not skippable for "simple" tasks.
+
+If the task is an EVIDENCE_REQUEST (its sole purpose is gathering context), complete Step 1 only
+and proceed. Do not run Steps 2–3 for read-only evidence tasks.
+
+---
+
+## Step 1 — FILE INDEX
+
+Enumerate every file that the task will touch, reference, or need to understand.
+
+For each file:
+
+| File | In Context? | Action |
+|------|-------------|--------|
+| `[path]` | YES | No action needed. |
+| `[path]` | NO — file access available | Read it now before continuing. |
+| `[path]` | NO — no file access | **HALT.** Output the block below. |
+
+**HALT output (copy exactly when any file is missing and no file access exists):**
+
+```
+EVIDENCE MISSING
+────────────────
+Missing: [filename or path]
+Reason:  File content is not in context and environment has no file access.
+Impact:  Cannot write a safe plan without current content.
+
+Required action: Paste the relevant sections of [filename] before I proceed.
+I will not infer, approximate, or plan against unseen content.
+```
+
+Do not write OBJECTIVE or any plan section until all files in the index are confirmed IN_CONTEXT.
+
+---
+
+## Step 2 — SCHEMA AND TYPE INDEX
+
+For every interface, Zod schema, TypeScript type, API contract, or database table the plan
+will reference or modify:
+
+| Contract | Type | In Context? | Action |
+|----------|------|-------------|--------|
+| `[name]` | [interface \| schema \| table \| API] | YES | No action. |
+| `[name]` | [interface \| schema \| table \| API] | NO — accessible | Read or query it now. |
+| `[name]` | [interface \| schema \| table \| API] | NO — inaccessible | Treat as `[EVIDENCE-GATE]`. |
+
+**Rule:** A Zod schema you have not read is not a schema you can safely modify. A TypeScript
+interface you have not seen is not one you can classify as COMPATIBLE or BREAKING.
+
+If any schema or type is inaccessible, apply the same HALT output from Step 1.
+
+---
+
+## Step 2.5 — EXECUTION SURFACE INDEX
+
+If the task touches operational behavior, enumerate the execution surface before planning:
+
+| Surface | Kind | In Context? | Action |
+|---------|------|-------------|--------|
+| `[scheduler / cron / trigger]` | execution | YES | No action. |
+| `[env var / secret / webhook target]` | runtime dependency | NO — accessible | Read now. |
+| `[runbook / operator page / queue store]` | operational surface | NO — accessible | Read now. |
+| `[surface]` | execution / runtime / operational | NO — inaccessible | Treat as `[EVIDENCE-GATE]`. |
+
+Use this step whenever the task includes scheduled jobs, billing providers, notification channels,
+webhooks, or support/compliance operator workflows.
+
+**Rule:** If a plan references a cron, portal, queue, env var, webhook, or runbook you have not
+confirmed, that plan is incomplete even if the code file itself is visible.
+
+For recurring-job and incident tasks, also confirm:
+- the execution ledger table or run history surface
+- the alert table or alert view used by operators
+- the acknowledge / resolve path if the workflow expects human closure
+- the escalation signal path, not just the initial alert-creation path
+
+For database-auth, Supabase, or partitioned-table tasks, also confirm:
+- the parent table grants
+- the current active partition grants
+- the RLS policy text currently live
+- whether remote migration state matches local migration state
+- whether schema cache / PostgREST visibility is relevant
+- whether the runtime is using a JWT-scoped client or service-role client
+
+---
+
+## Step 3 — CONSUMER INDEX (required if any contract will be modified)
+
+If the task involves modifying a contract (schema, interface, API shape, component props,
+environment variables), enumerate all known consumers before writing the plan.
+
+**When `skill_bcdp_contracts` is also loaded:** This Step 3 output is the input to BCDP Step 1.
+Complete this table first, then hand off to BCDP for impact classification and safety artifacts.
+Do not run consumer enumeration again inside BCDP Step 1 — use this table as the starting list.
+
+For each consumer:
+
+| Consumer | Location | Visibility |
+|----------|----------|------------|
+| `[file or service]` | [path or external] | IN_CONTEXT \| NOT_VERIFIED \| EXTERNAL |
+
+**NOT_VERIFIED** means: the consumer exists but you cannot confirm its current usage from
+available context. This is not a blocker — but you must declare it explicitly and include
+it as an ASSUMPTION in the plan.
+
+**EXTERNAL** means: a consumer outside this repository (webhook, published SDK, third-party
+integration). External consumers must be treated as BREAKING-risk until proven otherwise.
+
+If consumer enumeration is incomplete, do not claim it is complete. State:
+`Consumer list is NOT_VERIFIED — additional consumers may exist outside visible context.`
+
+For operational tasks, include non-code consumers too:
+- support teams
+- compliance operators
+- dashboards
+- schedulers
+- external providers
+- incident responders consuming deduplicated alerts or run ledgers
+- deployment/runtime layers such as Vercel, Supabase Edge Functions, and PostgREST schema cache when they can preserve stale behavior after code changes
+
+---
+
+---
+
+## Step 2.7 — MCP CONTEXT INDEX (2026)
+
+If the environment supports **MCP (Model Context Protocol)**, prioritize gathering evidence through MCP servers for external or structured data:
+
+| Resource | MCP Server | In Context? | Action |
+|----------|------------|-------------|--------|
+| `[repo-issue / pr]` | `github` | NO | Query `get_issue` or `list_pull_requests`. |
+| `[db schema / logs]` | `sqlite / postgres` | NO | Query `describe_table` or `search_logs`. |
+| `[docs / wiki]` | `mcp-docs` | NO | Query `search_docs` or `get_resource`. |
+| `[tool / script]` | `mcp-tools` | NO | Execute specialized tool for diagnostic evidence. |
+
+**Rule:** Never approximate external state (PR comments, Jira tickets, database row counts) if an MCP server is available to fetch the ground truth.
+
+---
+
+## Evidence Receipt (2026)
+
+When Steps 1–3 complete with no HALT conditions, output exactly this line before writing the plan:
+
+```
+EVIDENCE RECEIPT
+────────────────
+Files confirmed in context:    [n]
+Schemas confirmed in context:  [n]
+Execution surfaces confirmed:  [n]
+MCP Resources gathered:        [n]
+Consumers identified:          [n] (IN_CONTEXT: [n], NOT_VERIFIED: [n], EXTERNAL: [n])
+Status: EVIDENCE COMPLETE — proceeding to plan.
+```
+
+
+This receipt is machine-parseable. Do not omit it, paraphrase it, or combine it with plan content.
+
+---
+
+## Hard Rules
+
+1. Never write a KNOWN FACTS entry that references a file you have not read in this session.
+2. Never write a MINIMAL ACTION SET step that touches a schema you have not confirmed in context.
+3. Never claim consumer enumeration is exhaustive when any consumer is marked NOT_VERIFIED.
+4. "The file probably looks like X" is not evidence. It is an assumption — and it must be labeled as one.
+5. If the task was triggered by an error message or log output, that output is required evidence.
+   If it is not in context, request it before planning.
+6. A runtime dependency you have not confirmed is evidence missing, not implementation detail.
+7. A live auth or RLS problem is not fully understood until both code intent and remote effective grants/policies are checked.
+8. When porting from one stack to another, never assume the source repo mirrors the target stack's file layout. A Python source repo is not an Android repo; a web repo is not a Kotlin package tree. Read the actual source files first, then map them into target files.
+
+---
+
+## Rule 8 — Hook and Import Contract Reads (Frontend Tasks)
+
+If the plan contains a `file_write` step targeting a React component, page, or hook, the
+following reads are **mandatory before that step** and must appear as earlier steps in the
+`minimal_action_set`:
+
+| Required read | When mandatory |
+|---------------|----------------|
+| Every hook the component calls (`useSites`, `useAccount`, etc.) | Always |
+| `@/lib/api.ts` sections covering interfaces the component uses | When component imports from `@/lib/api` |
+| `@/lib/tier-utils.ts` | When component calls any tier utility function |
+| The component file being rewritten (its current content) | Always — before any `file_write` on an existing file |
+
+**Why this rule exists:** Hook return shapes, interface field names, and utility function
+signatures cannot be safely inferred from task descriptions or general React knowledge.
+Writing a component against an inferred API is the #1 cause of broken builds in this project.
+Prior failures: `useSites()` return shape inferred as `{ sites, loading }` when the real
+return is a TanStack Query result `{ data, isLoading, error }`. Import path inferred as
+`@/lib/utils` when the real path is `@/lib/tier-utils`.
+
+**The plan is invalid if any `file_write` on a component appears before the hook reads
+that component will call.** This is not a style preference — it is a correctness gate.
+
+**Do not treat project overlay API documentation as a substitute for reading the source.**
+Read the actual source file. The overlay may be out of date.

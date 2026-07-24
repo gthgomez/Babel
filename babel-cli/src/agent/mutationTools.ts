@@ -1,12 +1,12 @@
 /**
  * Shared mutation / verifier tool identity for the chat harness.
  *
- * T0.1: `str_replace` is a first-class edit primitive and must count as a write
+ * `str_replace` is a first-class edit primitive and must count as a write
  * everywhere governance and evidence inspect tool logs (gate, stall, changed_files,
  * benchmark write counts). Historically only write_file / file_write / apply_patch
  * were recognized, so preferred-edit sessions could look write-less.
  *
- * T0.2: chat tools primarily log verifiers as `run_command`; the completion gate
+ * Chat tools primarily log verifiers as `run_command`; the completion gate
  * must accept that name alongside shell_exec / test_run.
  */
 

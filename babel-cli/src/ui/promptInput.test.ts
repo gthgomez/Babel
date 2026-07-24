@@ -828,10 +828,10 @@ describe('PromptInput', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// R1.3 — OutputBuffer framing
+// OutputBuffer framing
 // ═══════════════════════════════════════════════════════════════════════════════
 
-describe('OutputBuffer framing (R1.3)', () => {
+describe('OutputBuffer framing', () => {
   it('OutputBuffer is imported and usable', () => {
     const buf = OutputBuffer.getInstance();
     assert.ok(buf, 'OutputBuffer.getInstance() should return an instance');
@@ -851,9 +851,9 @@ describe('OutputBuffer framing (R1.3)', () => {
   });
 });
 
-// ── R4.2 — Cursor restoration on exception ─────────────────────────────────
+// ── Cursor restoration on exception ─────────────────────────────────
 
-describe('R4.2 cursor restoration', () => {
+describe('cursor restoration', () => {
   it('restores cursor if renderCursor throws during render', () => {
     FrameScheduler.getInstance().resetForTest();
 

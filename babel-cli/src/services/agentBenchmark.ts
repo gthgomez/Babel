@@ -165,13 +165,13 @@ export interface AgentBenchmarkCellResult extends ParityToolResult {
   blocked_report?: BlockedReport | null;
   verifier_tampered?: boolean;
   /**
-   * T1.2: true when failure_class is blocked and token_count ≤ BLOCKED_TOKEN_BUDGET.
+   * True when failure_class is blocked and token_count ≤ BLOCKED_TOKEN_BUDGET.
    * null when not a blocked outcome or tokens unknown.
    */
   blocked_within_budget?: boolean | null;
 }
 
-/** T1.2 target: honest BLOCKED exits should complete under this token budget. */
+/** Honest BLOCKED exits should complete under this token budget. */
 export const BLOCKED_TOKEN_BUDGET = 100_000;
 
 export interface AgentBenchmarkReadinessReport {
@@ -299,7 +299,7 @@ function extractEvidenceFromPayload(payload: Record<string, unknown> | null): {
         : null;
   const toolCallSummary = {
     total: toolCalls.length,
-    // T0.1: str_replace counts as a write
+    // str_replace counts as a write
     writes: toolCalls.filter((tc) => isDirectMutationTool(String(tc['tool'] ?? ''))).length,
     reads: toolCalls.filter((tc) => tc['tool'] === 'read_file' || tc['tool'] === 'grep' || tc['tool'] === 'glob' || tc['tool'] === 'list_dir' || tc['tool'] === 'read_range').length,
     verifier_attempts: toolCalls.filter((tc) => isVerifierAttemptTool(String(tc['tool'] ?? ''))).length,
@@ -591,7 +591,7 @@ function classifyFailure(
 }
 
 /**
- * R1 / T1.2: Validate a BlockedReport against the tool-call log.
+ * Validate a BlockedReport against the tool-call log.
  *
  * Accepts:
  * - Engine-synthesized blocks (text-only loop / per-round ceiling) with synthetic checked entries
@@ -651,14 +651,14 @@ export function extractBlockedReportFromPayload(
   if (validateBlockedReport(parsed.data, toolCalls)) {
     return parsed.data;
   }
-  // T1.2 soft accept: top-level status BLOCKED + schema-valid report + any tool activity
+  // Soft accept: top-level status BLOCKED + schema-valid report + any tool activity
   if (payload['status'] === 'BLOCKED' && toolCalls.length > 0) {
     return parsed.data;
   }
   return null;
 }
 
-/** T1.2: whether a blocked cell stayed under the token budget. */
+/** Whether a blocked cell stayed under the token budget. */
 export function isBlockedWithinBudget(
   tokenCount: number | null | undefined,
   blockedReport: BlockedReport | null | undefined,
@@ -899,7 +899,7 @@ async function runParityAgentCell(
   // per-round stall detector but never actually writes files.
   let totalWrites = extractEvidenceFromPayload(cli.payload).toolCallSummary.writes;
   let zeroWriteRounds = totalWrites === 0 ? 1 : 0;
-  // T2.4: Track consecutive rounds with zero tool calls. An auto-continue
+  // Track consecutive rounds with zero tool calls. An auto-continue
   // round that made zero tool calls is in a text-only loop — the engine's
   // R11 guard caught it within the round; restarting would only re-trigger
   // the same loop. Refuse to auto-continue and treat as stuck.
@@ -917,7 +917,7 @@ async function runParityAgentCell(
         : cli.stdout + cli.stderr,
     );
 
-  // T2.4: Do not auto-continue when the first round made zero tool calls —
+  // Do not auto-continue when the first round made zero tool calls —
   // the model was stuck in a text-only loop and restarting wastes budget.
   if (zeroToolCallRounds > 0) {
     continueNotes.push('auto_continue: refusing — round made zero tool calls (text-only loop)');
@@ -941,7 +941,7 @@ async function runParityAgentCell(
       continueNotes.push(`auto_continue_round_${continueRounds}: agent declared BLOCKED, stopping`);
       break;
     }
-    // T2.4: If the previous round made zero tool calls, refuse to
+    // If the previous round made zero tool calls, refuse to
     // auto-continue — the model is in a text-only loop and restarting
     // would just re-trigger the same R11 guard.
     if (zeroToolCallRounds > 0) {
@@ -1010,7 +1010,7 @@ async function runParityAgentCell(
     } else {
       zeroWriteRounds = 0; // Reset — progress was made
     }
-    // T2.4: Track zero-tool-call rounds. If this round had zero tool
+    // Track zero-tool-call rounds. If this round had zero tool
     // calls, the model is stuck in a text-only loop — the next iteration
     // (if any) will check zeroToolCallRounds and refuse to restart.
     const roundToolCalls = roundEvidence.toolCallSummary.total;
@@ -1027,7 +1027,7 @@ async function runParityAgentCell(
   const postRunHashes = computeVerifierDependencyHashes(projectRoot, [corpusTask.verifier_command]);
   const verifierTampered = hasVerifierDependencyTamper(preRunHashes, postRunHashes);
 
-  // R1 / T1.2: Extract and validate BLOCKED report from final CLI payload
+  // Extract and validate BLOCKED report from final CLI payload
   const blockedReport = extractBlockedReportFromPayload(cli.payload);
   const blockedWithinBudgetParity = isBlockedWithinBudget(usage.token_count, blockedReport);
 
@@ -1156,7 +1156,7 @@ async function runGovernanceAgentCell(
     statusText === 'ANSWER_READY' ||
     statusText === 'FIX_COMPLETE' ||
     statusText === 'COMPLETE';
-  // T1.2: never treat BLOCKED as a pass; stop auto-continue on honest exits
+  // Never treat BLOCKED as a pass; stop auto-continue on honest exits
   let declaredBlocked =
     statusText === 'BLOCKED' ||
     extractBlockedReportFromPayload(cli.payload) != null ||
@@ -1168,11 +1168,11 @@ async function runGovernanceAgentCell(
   // R12: Track cumulative writes across auto-continue rounds.
   let totalWrites = extractEvidenceFromPayload(cli.payload).toolCallSummary.writes;
   let zeroWriteRounds = totalWrites === 0 ? 1 : 0;
-  // T2.4: Track consecutive rounds with zero tool calls (see parity loop).
+  // Track consecutive rounds with zero tool calls (see parity loop).
   let totalToolCalls = extractEvidenceFromPayload(cli.payload).toolCallSummary.total;
   let zeroToolCallRounds = totalToolCalls === 0 ? 1 : 0;
 
-  // T2.4: Do not auto-continue when the first round made zero tool calls.
+  // Do not auto-continue when the first round made zero tool calls.
   if (zeroToolCallRounds > 0) {
     continueNotes.push('auto_continue: refusing — round made zero tool calls (text-only loop)');
     agentBlocked = false;
@@ -1186,7 +1186,7 @@ async function runGovernanceAgentCell(
     usage.cost_usd !== null &&
     usage.cost_usd < MAX_CONTINUE_COST_USD
   ) {
-    // T2.4: If the previous round made zero tool calls, refuse to auto-continue.
+    // If the previous round made zero tool calls, refuse to auto-continue.
     if (zeroToolCallRounds > 0) {
       continueNotes.push(`auto_continue_round_${continueRounds}: zero tool calls, refusing restart`);
       break;
@@ -1254,7 +1254,7 @@ async function runGovernanceAgentCell(
     } else {
       zeroWriteRounds = 0;
     }
-    // T2.4: Track zero-tool-call rounds (same pattern as parity loop).
+    // Track zero-tool-call rounds (same pattern as parity loop).
     const roundToolCalls = roundEvidence.toolCallSummary.total;
     if (roundToolCalls === 0) {
       zeroToolCallRounds++;
@@ -1267,7 +1267,7 @@ async function runGovernanceAgentCell(
   const postRunHashes = computeVerifierDependencyHashes(fixtureRoot, allowedCommands);
   const verifierTampered = hasVerifierDependencyTamper(preRunHashes, postRunHashes);
 
-  // R1 / T1.2: Extract and validate BLOCKED report from final CLI payload
+  // Extract and validate BLOCKED report from final CLI payload
   let blockedReport = extractBlockedReportFromPayload(cli.payload);
   if (!blockedReport && declaredBlocked && Array.isArray(cli.payload?.['toolCalls'])) {
     // Synthesize minimal report so diagnosis is preserved when status was BLOCKED

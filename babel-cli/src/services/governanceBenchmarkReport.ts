@@ -114,7 +114,7 @@ export function formatGovernanceBenchmarkReport(
     '',
     '## Interpretation Boundary',
     '',
-    'This report can support narrow claims about the recorded benchmark harness run only. It cannot support superiority claims over Codex CLI, Claude Code, Gemini CLI, Aider, OpenHands, or any other coding agent until those adapters run real tasks under the same corpus and the resulting artifacts are reviewed.',
+    'This report can support narrow claims about the recorded benchmark harness run only. It cannot support superiority claims over other coding agents until those adapters run real tasks under the same corpus and the resulting artifacts are reviewed.',
     '',
   );
 

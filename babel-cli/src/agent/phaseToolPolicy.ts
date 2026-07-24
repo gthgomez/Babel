@@ -1,5 +1,5 @@
 /**
- * T3.4 — Phase-gated tool exposure (task-class aware).
+ * Phase-gated tool exposure (task-class aware).
  *
  * When enabled, the harness soft-blocks tools that are out-of-phase:
  *   investigate → no write tools

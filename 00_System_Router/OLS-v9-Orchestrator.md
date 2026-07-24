@@ -227,10 +227,10 @@ Unless the user explicitly specifies a model, apply this decision logic based on
 
 | Tier | Best For | Backend Key | Adapter ID | Checkpoint |
 |-------|----------|------------|------------|------------|
-| **standard** | Configured standard practitioner lane for coding and QA | `deepseek` (DeepSeek-V3-0324) | `adapter_codex_balanced` | `deepseek-ai/DeepSeek-V3-0324` |
+| **standard** | Configured standard practitioner lane for coding and QA | `deepseek` (DeepSeek-V3-0324) | `adapter_deepseek_balanced` | `deepseek-ai/DeepSeek-V3-0324` |
 | **cheap** | Everyday worker turns, everyday planning, simple logic | `qwen3` (Qwen3-235B-Instruct-2507) | `adapter_qwen` | `Qwen/Qwen3-235B-A22B-Instruct-2507` (non-thinking checkpoint — standard mode only) |
 | **triage** | Fast structural analysis, orchestrator turns | `scout` (Llama-4-Scout) | `adapter_scout` | `meta-llama/Llama-4-Scout-17B-16E-Instruct` |
-| **fallback** | Budget rescue, lightweight recovery | `qwen3-32b` | `adapter_codex` | `Qwen/Qwen3-32B` |
+| **fallback** | Budget rescue, lightweight recovery | `qwen3-32b` | `adapter_ultraterse_fallback` | `Qwen/Qwen3-32B` |
 | **escalation** | Adversarial critique, plan verification | `nemotron` | `adapter_nemotron` | `nvidia/NVIDIA-Nemotron-3-Super-120B-A12B` |
 
 > **Qwen tier note:** `adapter_qwen` targets the `-Instruct-2507` non-thinking checkpoint.
@@ -253,8 +253,8 @@ If the selected model is **`deepseek`**, choose the adapter as follows:
 
 | Condition | Adapter ID |
 |-----------|------------|
-| Multi-file refactor, architecture-preserving extraction, frontend polish | `adapter_codex_balanced` |
-| Schema generation, dense algorithmic task, compressed execution output | `adapter_codex` |
+| Multi-file refactor, architecture-preserving extraction, frontend polish | `adapter_deepseek_balanced` |
+| Schema generation, dense algorithmic task, compressed execution output | `adapter_ultraterse_fallback` |
 
 
 
@@ -501,7 +501,7 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
     "behavioral_ids": ["behavioral_core_v10", "behavioral_cognitive_micro_v7", "behavioral_guard_v7"],
     "domain_id": "domain_swe_backend",
     "skill_ids": ["skill_ts_zod", "skill_supabase_pg"],
-    "model_adapter_id": "adapter_codex_balanced",
+    "model_adapter_id": "adapter_deepseek_balanced",
     "project_overlay_id": "overlay_example_saas_backend",
     "task_overlay_ids": [],
     "pipeline_stage_ids": ["pipeline_qa_reviewer"]
@@ -561,7 +561,7 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
     "behavioral_ids": ["behavioral_core_v10", "behavioral_cognitive_micro_v7", "behavioral_guard_v7"],
     "domain_id": "domain_android_kotlin",
     "skill_ids": ["skill_android_app_bundle", "skill_android_release_build"],
-    "model_adapter_id": "adapter_codex_balanced",
+    "model_adapter_id": "adapter_deepseek_balanced",
     "project_overlay_id": "overlay_example_mobile_suite",
     "task_overlay_ids": [],
     "pipeline_stage_ids": ["pipeline_qa_reviewer"]
@@ -621,7 +621,7 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
     "behavioral_ids": ["behavioral_core_v10", "behavioral_cognitive_micro_v7", "behavioral_guard_v7"],
     "domain_id": "domain_android_kotlin",
     "skill_ids": ["skill_android_room", "skill_jetpack_compose"],
-    "model_adapter_id": "adapter_codex_balanced",
+    "model_adapter_id": "adapter_deepseek_balanced",
     "project_overlay_id": "overlay_example_reference_application",
     "task_overlay_ids": [],
     "pipeline_stage_ids": ["pipeline_qa_reviewer", "pipeline_cli_executor"]
@@ -681,7 +681,7 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
     "behavioral_ids": ["behavioral_core_v10", "behavioral_cognitive_micro_v7", "behavioral_guard_v7"],
     "domain_id": "domain_android_kotlin",
     "skill_ids": ["skill_google_play_store"],
-    "model_adapter_id": "adapter_codex_balanced",
+    "model_adapter_id": "adapter_deepseek_balanced",
     "project_overlay_id": "overlay_example_mobile_suite",
     "task_overlay_ids": [],
     "pipeline_stage_ids": ["pipeline_qa_reviewer"]
@@ -741,7 +741,7 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
     "behavioral_ids": ["behavioral_core_v10", "behavioral_cognitive_micro_v7", "behavioral_guard_v7"],
     "domain_id": "domain_android_kotlin",
     "skill_ids": ["skill_google_play_billing", "skill_android_play_store_compliance"],
-    "model_adapter_id": "adapter_codex_balanced",
+    "model_adapter_id": "adapter_deepseek_balanced",
     "project_overlay_id": "overlay_example_mobile_suite",
     "task_overlay_ids": [],
     "pipeline_stage_ids": ["pipeline_qa_reviewer"]
@@ -801,7 +801,7 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
     "behavioral_ids": ["behavioral_core_v10", "behavioral_cognitive_micro_v7", "behavioral_guard_v7"],
     "domain_id": "domain_android_kotlin",
     "skill_ids": ["skill_android_app_bundle", "skill_amazon_appstore", "skill_samsung_galaxy_store"],
-    "model_adapter_id": "adapter_codex_balanced",
+    "model_adapter_id": "adapter_deepseek_balanced",
     "project_overlay_id": "overlay_example_mobile_suite",
     "task_overlay_ids": [],
     "pipeline_stage_ids": ["pipeline_qa_reviewer"]

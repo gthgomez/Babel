@@ -81,7 +81,7 @@ import { getContextLimit } from '../ui/tokenBar.js';
 
 // ─── (a) stream vs non-stream identical outcome fixture ─────────────────────
 
-describe('P1-A agent loop reducer', () => {
+describe('Agent loop reducer', () => {
   test('stream vs non-stream identical outcome on golden fixture', () => {
     const events: AgentLoopEvent[] = [
       { type: 'user_turn', task: 'fix bug in foo.ts' },
@@ -175,7 +175,7 @@ describe('P1-A agent loop reducer', () => {
 
 // ─── (c) str_replace uses governed mutation path ────────────────────────────
 
-describe('P1-A governed str_replace', () => {
+describe('Governed str_replace', () => {
   test('mutation path not bypassed — file written via policy gate', async () => {
     resetCircuitBreaker();
     const dir = mkdtempSync(join(tmpdir(), 'babel-gov-mut-'));
@@ -262,7 +262,7 @@ describe('P1-A governed str_replace', () => {
 
 // ─── (d) localization-as-progress / same-target-read no-progress ─────────────
 
-describe('P1-B progress receipts', () => {
+describe('Progress receipts', () => {
   test('localization counts as progress; same-target unchanged read does not', () => {
     const ledger = createProgressLedger();
     const r1 = recordProgressCycle(ledger, {
@@ -336,7 +336,7 @@ describe('P1-B progress receipts', () => {
 
 // ─── (e) resume restores tool results without re-call ───────────────────────
 
-describe('P1-C durable event log resume', () => {
+describe('Durable event log resume', () => {
   test('resume rebuilds provider messages including tool results', () => {
     const log = createThreadEventLog('thread-resume-1');
     const turnId = startTurn(log, {
@@ -412,7 +412,7 @@ describe('P1-C durable event log resume', () => {
 
 // ─── (f) approval deny / allow_once / session ───────────────────────────────
 
-describe('P1-D scoped approvals', () => {
+describe('Scoped approvals', () => {
   test('deny / allow_once / allow_session decisions', () => {
     const state = createApprovalSession('t1');
     const req = buildApprovalRequest({
@@ -513,7 +513,7 @@ describe('P1-D scoped approvals', () => {
 
 // ─── (g) context budget formula + no conflicting DeepSeek hard-code ─────────
 
-describe('P1-E provider capabilities', () => {
+describe('Provider capabilities', () => {
   test('context budget formula and DeepSeek window', () => {
     const budget = computeContextBudget({
       contextWindow: 128_000,
@@ -557,7 +557,7 @@ describe('P1-E provider capabilities', () => {
 
 // ─── (h) chat manifest hash recorded ────────────────────────────────────────
 
-describe('P2-A compiled chat stack', () => {
+describe('Compiled chat stack', () => {
   test('chat compile records selected entries + manifest hash; excludes deep stages', () => {
     const root = process.cwd().includes('babel-cli')
       ? join(process.cwd(), '..')
@@ -595,9 +595,9 @@ describe('P2-A compiled chat stack', () => {
   });
 });
 
-// ─── P2-B input arbiter ─────────────────────────────────────────────────────
+// ─── Input arbiter ─────────────────────────────────────────────────────
 
-describe('P2-B input arbiter modes', () => {
+describe('Input arbiter modes', () => {
   test('single stdin owner; first Ctrl+C cancels, second exits', () => {
     let s = initialInputArbiterState();
     assert.deepEqual(activeStdinOwners(s), ['prompt']);

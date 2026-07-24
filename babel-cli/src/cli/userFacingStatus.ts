@@ -11,17 +11,17 @@ interface UserFacingVerificationPayload {
 
 /** Maps runtime status + optional TerminalOutcome to a user-facing status label.
  *  Two-phase design:
- *  1. When `outcome` is provided (P0-D honest terminal outcome), it is the
+ *  1. When `outcome` is provided (honest terminal outcome), it is the
  *     authoritative source — the switch bypasses all legacy heuristics.
  *  2. Legacy heuristic path for callers that don't yet supply TerminalOutcome. */
 export function getUserFacingStatus(input: {
   status: string;
   verification: UserFacingVerificationPayload;
   changedFiles: string[];
-  /** P0-D: Optional TerminalOutcome for honest status rendering. */
+  /** Optional TerminalOutcome for honest status rendering. */
   outcome?: TerminalOutcome;
 }): UserFacingStatus {
-  // P0-D: When TerminalOutcome is available, use it as the authoritative source.
+  // When TerminalOutcome is available, use it as the authoritative source.
   if (input.outcome !== undefined) {
     switch (input.outcome) {
       case 'VERIFIED_COMPLETE': return 'success';

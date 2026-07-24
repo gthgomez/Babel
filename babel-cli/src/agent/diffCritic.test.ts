@@ -36,7 +36,7 @@ import {
   type DiffCriticInput,
 } from './diffCritic.js';
 
-// ─── A09-class fixtures (from live T1.4 evidence + SWE gold) ──────────────
+// ─── A09-class fixtures (from live evidence + SWE gold) ──────────────
 
 /** Problem statement excerpt for pytest-10051. */
 export const A09_TASK = `caplog.get_records and caplog.clear conflict

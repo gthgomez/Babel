@@ -17,7 +17,7 @@ test('vagueness fixtures load with expected schema', () => {
   assert.equal(scenarios.fixture_type, 'babel_vagueness_scenarios');
   assert.equal(repos.fixture_type, 'babel_vagueness_repos');
   assert.ok(scenarios.scenarios.length >= 18);
-  assert.ok(repos.repos.some((repo) => repo.id === 'babel_private'));
+  assert.ok(repos.repos.some((repo) => repo.id === 'babel_core'));
 });
 
 test('scoreVaguenessScenario accepts blocked clarification for vague L3 tasks', () => {

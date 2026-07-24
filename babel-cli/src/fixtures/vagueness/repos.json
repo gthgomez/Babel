@@ -4,7 +4,7 @@
   "workspace_root": "C:\\Workspace",
   "repos": [
     {
-      "id": "babel_private",
+      "id": "babel_core",
       "path": "Babel",
       "required": true,
       "description": "Babel prompt OS lab and CLI harness"

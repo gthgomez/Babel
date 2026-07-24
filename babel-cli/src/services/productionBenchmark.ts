@@ -593,7 +593,7 @@ export function runProductionBenchmark(
       : 'Babel is an autonomous Coding Agent CLI with optional governed pipeline mode; some production-proof gates are still open.',
     unsafe_wording: [
       'provider-agnostic production AI control plane',
-      'market parity with Codex, Claude Code, Gemini CLI, Aider, or OpenHands',
+      'market parity with other coding agents',
       'safe live autonomous parallel coding agents',
       'universal mandatory verifiers across every command path',
     ],

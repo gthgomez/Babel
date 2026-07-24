@@ -2,10 +2,87 @@ version: 3
 catalog_scope: babel_prompt_library
 maintainer: control_plane
 root: "."
-last_updated: "2026-07-22"
+last_updated: "2026-07-24"  # Pass 39: VERSIONING POLICY added. validate-catalog.ps1 -VersionPolicy switch for advisory version checks.
+# Pass 35 additions (2026-04-30): HD-2D mobile rendering/JRPG UX skills and mobile-safe Godot HD-2D routing
+# Pass 34 additions (2026-04-29): Android game/TV UX and Godot UI/runtime/testing/export/input/performance skills plus game routing
+# Pass 33 additions (2026-04-25): 2026 Modernization Sweep (Web, Backend, Android, Mobile, Payments, Testing)
+# Pass 32 additions (2026-04-25): domain_godot_game_dev, Godot skills, Tailwind v4, Framer Motion, Fluid Typography, Agent Coordination triad, overlay_example_game_suite
+# Pass 1 additions (2026-03-28): domain_python_backend, skill_deno_edge_functions, skill_sse_streaming
+# Pass 2 additions (2026-03-28): domain_llm_router, skill_prisma_orm, skill_stripe_webhook
+# Pass 3 additions (2026-03-28): skill_playwright_e2e, skill_vite_react, skill_multi_agent_pipeline
+# Pass 4 additions (2026-03-28): skill_android_app_bundle, android mobile routing cleanup
+# Pass 5 additions (2026-03-29): skill_android_saf, skill_android_instrumented_testing, skill_android_pdf_processing
+# Pass 6 additions (2026-03-29): claim-audit governance skills, adversarial claims audit overlays, corrected example_saas_backend overlay
+# Pass 7 additions (2026-03-29): domain_product_audit first-class routing for claim/reality work
+# Pass 8 additions (2026-03-30): skill_nodejs_cli — Node.js CLI tool patterns (ESM path resolution, arg parsing, exit codes, stdout/stderr, graceful error handling)
+# Pass 9 additions (2026-03-29): skill_npm_oss_release, skill_skill_authoring, skill_capability_gap_review, skill_babel_catalog_tuning
+# Pass 10 additions (2026-03-30): skill_public_export_hardening, sync-skill-catalog tool, skill-catalog sync workflow
+# Pass 11 additions (2026-03-30): skill_outbound_truth_redlining, skill_prompt_runtime_continuity
+# Pass 12 additions (2026-03-30): skill_in_app_truth_sweep for app-wide user-facing scope cleanup after product truth is verified
+# Pass 13 additions (2026-03-30): skill_repo_boundary_release_hygiene, skill_github_release_batching for safe multi-repo GitHub release batching
+# Pass 14 additions (2026-03-30): skill_private_source_repo_discipline, skill_derived_public_release_gate for paired private/public repo targeting
+# Pass 15 additions (2026-03-30): android lane hardening skills for classification, navigation, state, test enforcement, platform APIs, performance, and AI-android task overlay
+# Pass 16 additions (2026-03-31): skill_untrusted_input_guard, skill_autonomous_agent_state_machine, skill_async_task_delivery — autonomous agent governance triad for example_autonomous_agent hardening
+# Pass 17 additions (2026-03-31): skill_android_testing_strategy — thin orchestration layer above the four Android testing skills; routes test surface, resolves ViewModel/dispatcher/AGP ambiguity, defines load order
+# Pass 18 additions (2026-04-01): skill_run_artifact_inspection — read-only protocol for Babel evidence bundle inspection, stack review, manifest inventory, and honest summary-artifact handling
+# Pass 19 additions (2026-04-01): skill_android_ui_audit_review — grounded Android Compose UI audit/review skill for findings-first critique and prioritized change plans
+# Pass 20 additions (2026-04-02): cognition skills for adaptive depth, epistemic calibration, and compact exploration outside domain_research
+# Pass 21 additions (2026-04-02): skill_dirty_worktree_triage plus tighter release-hygiene guidance for dirty repos, local helpers, and advisory hook failures
+# Pass 22 additions (2026-04-03): skill_supabase_rls_drift_audit plus governance hardening for live DB drift, partition grants, remote verification, and remote-only state debt
+# Pass 23 additions (2026-04-03): skill_evidence_field_consistency_audit for response→DB→RPC→UI mismatch tracing on live events
+# Pass 24 additions (2026-04-03): session-model reality audit, exposed-schema hardening, auth enumeration resistance, and security release gating skills
+# Pass 25 additions (2026-04-07): skill_gradle_wrapper for wrapper bootstrap and launcher restoration
+# Pass 26 additions (2026-04-13): skill_android_room — Room database patterns (entities, DAOs, migrations, repository, integer-cents rule)
+# Pass 27 additions (2026-04-20): skill_x_marketing_manager — X-native launch sequencing, attachment strategy, and marketing-manager voice
+# Pass 28 additions (2026-04-20): skill_x_thread_reply_strategy — X-native thread and reply-chain sequencing companion
+# Pass 29 additions (2026-04-20): skill_x_engagement_reply_strategy — X reply intent selection for engagement vs technical support
+# Pass 30 additions (2026-04-20): skill_x_category_clarity — X cold-reader clarity and plain-English category framing
+# Pass 31 additions (2026-04-24): skill_memory_extraction — durable memory extraction from run evidence and retrospectives
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SKILL BOUNDARY MAP
+# LOAD POSITION POLICY
+# load_position defines ordering within a layer when multiple entries are
+# loaded together. It is only populated for entries where intra-layer ordering
+# matters. It is intentionally OMITTED for:
+#   - Domain Architects  (resolver selects exactly one per task)
+#   - Model Adapters      (resolver selects exactly one per task)
+#   - Project Overlays    (resolver selects zero or one per task)
+#   - Task Overlays       (additive, no ordering constraint)
+#   - Standalone Skills   (selected individually by task shape, not stacked)
+# It IS populated for:
+#   - Behavioral OS       (mandatory positions 1-4 in every stack)
+#   - Pipeline Stages     (executor < QA < stage ordering matters)
+#   - Meta Tools          (tool-chain ordering in OLS-MCC triad)
+#   - Chained Skills      (skills with dependencies that require ordering)
+#   - Cognition Skills    (adaptive-depth < epistemic < exploration ordering)
+# Current: 44 of ~190 entries have load_position (all in the above categories).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VERSIONING POLICY
+# Each layer uses a specific versioning convention. Existing files are
+# grandfathered; new files and v2+ iterations must follow their layer convention.
+#
+# Layer              | Filename Convention     | Catalog ID Convention    | Notes
+# ───────────────────┼────────────────────────┼─────────────────────────┼──────
+# Behavioral OS      | OLS-v{N}-{Name}.md     | behavioral_core_v{N}    | Monotonic integer. Superseded entries stay on disk as deprecated.
+#                    |                        | behavioral_guard_v{N}   | v11 unified the former v10 core + v7 cognitive micro + v7 guard split.
+# Domain Architects  | {Name}-v{N}.md or      | domain_{name}           | Historical: backend/frontend/products use bare integer (v6, v7, v1).
+#                    | {Name}-v{N}.{M}.md     | (versionless ID)        | New domains since 2026-04 use semver (v1.0). Both are valid.
+# Skills             | {Name}-v{N}.md         | skill_{name}            | Simple integer iteration (v1→v2). Catalog ID is versionless —
+#                    |                        | (versionless ID)        | the stable ID survives file renames across versions.
+# Pipeline Stages    | {Name}-v{N}.{M}.md     | (versionless ID)        | Semver minor. Catalog ID stable.
+# Model Adapters     | {Name}.md              | adapter_{name}          | Intentionally unversioned — evergreen, updated in-place.
+# Project Overlays   | {Name}.md              | overlay_{name}          | Intentionally unversioned — project-specific, updated in-place.
+# Task Overlays      | {Name}-v{N}.{M}.md     | (versionless ID)        | Semver minor. Catalog ID stable.
+# Meta Tools         | {Name}-v{N}.{M}.md     | meta_{name}_v{N}        | Semver minor. ID versioned when multiple versions are active (e.g. compiler v5).
+# System Router      | {Name}-v{N}.{M}.md     | orchestrator_v{N},      | Semver minor for contracts; integer for orchestrator lane.
+#                    |                        |   system_runtime_       |
+#                    |                        |   contracts_v{N}        |
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SKILL BOUNDARY MAP  (Fix F1 — critique remediation 2026-04-26)
 # When two skills overlap in purpose, use this table to pick the right one.
 # Loading both is never wrong on safety grounds, but wastes token budget.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -82,6 +159,18 @@ last_updated: "2026-07-22"
 # ─────────────────────────────────────────────
 entries:
 
+  - id: project_context
+    layer: system_documentation
+    path: PROJECT_CONTEXT.md
+    description: >
+      Canonical system contracts and hot paths for the Babel control plane.
+      Referenced by CLAUDE.md startup sequence as step 2. Not loaded as a
+      runtime prompt layer — catalogued for discoverability and drift checks.
+    status: reference
+    selection_scope: reference_only
+    token_budget: 60
+    tags: [reference, system_documentation]
+
   - id: system_bible
     layer: entrypoint
     path: BABEL_BIBLE.md
@@ -105,7 +194,7 @@ entries:
     tags: [compiler_lane, orchestrator, pipeline_entry, router, typed]
     token_budget: 240
     defaults:
-      behavioral_ids: [behavioral_core_v10, behavioral_cognitive_micro_v7]
+      behavioral_ids: [behavioral_core_v11]
 
 
   - id: system_runtime_contracts_v1
@@ -121,8 +210,24 @@ entries:
     token_budget: 300
 
 # ─────────────────────────────────────────────
-# 01 — BEHAVIORAL OS  (Core + Cognitive always loaded; Guard conditional)
+# 01 — BEHAVIORAL OS  (v11 Unified; always loaded, guard section is per-task)
 # ─────────────────────────────────────────────
+
+  - id: behavioral_core_v11
+    layer: behavioral_os
+    path: 01_Behavioral_OS/OLS-v11-Core-Unified.md
+    description: >
+      Single consolidated behavioral OS covering universal rules
+      (state machine, epistemic integrity, minimal action,
+      verification-first, contract discipline, failure recovery)
+      and conditional guard rules (evidence gate, anti-eager
+      execution, terminal handshake, BCDP, NAMIT, root cause).
+      Always loaded. Guard section applies per task context.
+      Replaces v10 Core + v7 Cognitive Micro + v7 Guard.
+    status: active
+    load_position: 1
+    tags: [config:always_load, core, state_machine, guard, cognitive]
+    token_budget: 600
 
   - id: behavioral_core_v10
     layer: behavioral_os
@@ -132,7 +237,9 @@ entries:
       discipline, minimal action, and verification-first behavior across all
       agents with agentic reasoning support.
       Load position [1] — always first in any manifest.
-    status: active
+      Superseded by behavioral_core_v11.
+    status: deprecated
+    superseded_by: behavioral_core_v11
     load_position: 1
     tags: [config:always_load, core, state_machine]
     token_budget: 450
@@ -145,8 +252,9 @@ entries:
       Minimal universal cognitive layer. Restores contextual anchoring,
       facts-vs-inference separation, and explicit low-confidence signaling
       without adding domain reasoning. Load position [2] — always loaded after
-      Core and before Guard.
-    status: active
+      Core and before Guard. Superseded by behavioral_core_v11.
+    status: deprecated
+    superseded_by: behavioral_core_v11
     load_position: 2
     tags: [cognition:epistemic, cognitive, config:always_load]
     token_budget: 150
@@ -159,8 +267,9 @@ entries:
       anti-eager execution, BCDP, NAMIT, root-cause, and terminal-handshake
       modules for write-capable, verified, autonomous, debugging, or
       contract-modifying tasks. Load after Core and Cognitive Micro only when
-      execution risk exists.
-    status: active
+      execution risk exists. Superseded by behavioral_core_v11.
+    status: deprecated
+    superseded_by: behavioral_core_v11
     load_position: 3
     tags: [config:conditional_load, governance:safety, guard]
     token_budget: 325
@@ -218,19 +327,9 @@ entries:
       - skill_evidence_gathering
       - skill_bcdp_contracts
 
-  - id: skill_catalog
-    layer: config
-    path: 02_Skills/Skill-Catalog.yaml
-    description: >
-      Registry of atomic technical skills (Lang, DB, API, UI).
-      Used for Just-in-Time (JIT) prompt assembly.
-    status: active
-    token_budget: 200
-    tags: [config, utility:catalog, utility:skills]
-
   - id: skill_ts_zod
     layer: skill
-    path: 02_Skills/Lang/TS-Zod-v1.md
+    path: 02_Skills/Lang/TS-Zod-v2.md
     description: TypeScript strict typing and Zod validation rules.
     status: active
     tags: [language:typescript, skill, utility:validation, utility:zod]
@@ -242,7 +341,7 @@ entries:
 
   - id: skill_unix_shell
     layer: skill
-    path: 02_Skills/Lang/Unix-Shell-v1.md
+    path: 02_Skills/Lang/Unix-Shell-v2.md
     description: POSIX shell scripting rules for bounded operational artifacts.
     status: active
     tags: [language:bash, skill, utility:devops, utility:posix, utility:script]
@@ -254,7 +353,7 @@ entries:
 
   - id: skill_python_backend
     layer: skill
-    path: 02_Skills/Lang/Python-Backend-v1.md
+    path: 02_Skills/Lang/Python-Backend-v2.md
     description: Python standard-library scripting and backend-style data processing rules.
     status: active
     tags: [language:python, skill, utility:backend, utility:logs, utility:python]
@@ -268,7 +367,7 @@ entries:
 
   - id: skill_log_analysis
     layer: skill
-    path: 02_Skills/Data/Log-Analysis-v1.md
+    path: 02_Skills/Data/Log-Analysis-v2.md
     description: Log parsing, date-window aggregation, and exact CSV/JSON summary output rules.
     status: active
     tags: [skill, utility:aggregation, utility:devops, utility:logs, utility:serialization]
@@ -282,7 +381,7 @@ entries:
 
   - id: skill_exact_output_schema
     layer: skill
-    path: 02_Skills/Data/Exact-Output-Schema-v1.md
+    path: 02_Skills/Data/Exact-Output-Schema-v2.md
     description: Exact CSV/JSON/text output-schema preservation rules for generated artifacts and CLI-style results.
     status: active
     tags: [skill, utility:exactness, utility:schema, utility:serialization, utility:validation]
@@ -295,7 +394,7 @@ entries:
 
   - id: skill_supabase_pg
     layer: skill
-    path: 02_Skills/DB/Supabase-PG-v1.md
+    path: 02_Skills/DB/Supabase-PG-v2.md
     description: Supabase and Postgres RLS, migration, and naming rules.
     status: active
     tags: [db:postgres, db:rls, db:supabase, skill]
@@ -308,7 +407,7 @@ entries:
 
   - id: skill_prisma_orm
     layer: skill
-    path: 02_Skills/DB/Prisma-ORM-v1.md
+    path: 02_Skills/DB/Prisma-ORM-v2.md
     description: >
       Prisma ORM rules for schema-first database access. Covers migration workflow
       (migrate dev vs migrate deploy, immutable migration files, prisma generate after
@@ -330,7 +429,7 @@ entries:
 
   - id: skill_a11y_design
     layer: skill
-    path: 02_Skills/UI/A11y-Design-v1.md
+    path: 02_Skills/UI/A11y-Design-v2.md
     description: WCAG 2.2 AA and semantic HTML accessibility rules.
     status: active
     jit_activation_rules:
@@ -352,7 +451,7 @@ entries:
 
   - id: skill_react_nextjs
     layer: skill
-    path: 02_Skills/Framework/React-NextJS-v1.md
+    path: 02_Skills/Framework/React-NextJS-v2.md
     description: React/Next.js component state and performance rules.
     status: active
     jit_activation_rules:
@@ -373,7 +472,7 @@ entries:
 
   - id: skill_deno_edge_functions
     layer: skill
-    path: 02_Skills/Framework/Deno-Edge-Functions-v1.md
+    path: 02_Skills/Framework/Deno-Edge-Functions-v2.md
     description: >
       Deno runtime rules for Supabase Edge Functions. Covers ESM import semantics
       (URL imports, pinned versions, esm.sh for npm compat), Deno.env.get() for all
@@ -393,7 +492,7 @@ entries:
 
   - id: skill_sse_streaming
     layer: skill
-    path: 02_Skills/Framework/SSE-Streaming-v1.md
+    path: 02_Skills/Framework/SSE-Streaming-v2.md
     description: >
       Server-Sent Events (SSE) production and consumption patterns for Deno Edge
       Functions and React clients. Covers SSE wire format (Content-Type, Cache-Control,
@@ -415,7 +514,7 @@ entries:
 
   - id: skill_playwright_e2e
     layer: skill
-    path: 02_Skills/Framework/Playwright-E2E-v1.md
+    path: 02_Skills/Framework/Playwright-E2E-v2.md
     description: >
       Playwright E2E testing patterns for Next.js and Vite apps. Covers
       playwright.config.ts setup (webServer block, CI-aware retries/workers,
@@ -436,7 +535,7 @@ entries:
 
   - id: skill_nodejs_cli
     layer: skill
-    path: 02_Skills/Framework/NodeJS-CLI-v1.md
+    path: 02_Skills/Framework/NodeJS-CLI-v2.md
     description: >
       Node.js CLI tool patterns for ES module projects. Covers package.json bin
       setup (type: "module", shebang requirement, engines field), __dirname
@@ -461,7 +560,7 @@ entries:
 
   - id: skill_npm_oss_release
     layer: skill
-    path: 02_Skills/Framework/NPM-OSS-Release-v1.md
+    path: 02_Skills/Framework/NPM-OSS-Release-v2.md
     description: >
       Public npm/open-source release hardening for Node.js packages and CLIs.
       Covers package metadata contract, tarball proof via npm pack --dry-run,
@@ -476,7 +575,7 @@ entries:
 
   - id: skill_vite_react
     layer: skill
-    path: 02_Skills/Framework/Vite-React-v1.md
+    path: 02_Skills/Framework/Vite-React-v2.md
     description: >
       Vite + plain React SPA patterns (no Next.js). Covers what does NOT apply
       from Next.js (no pages/, no getServerSideProps, no next/link, no middleware),
@@ -499,7 +598,7 @@ entries:
 
   - id: skill_evidence_gathering
     layer: skill
-    path: 02_Skills/Governance/Evidence-Gathering-v1.md
+    path: 02_Skills/Governance/Evidence-Gathering-v2.md
     description: >
       Mandatory pre-plan evidence protocol. Three phases: File Index (confirm all required
       files are in context), Schema/Type Index (confirm all contracts are in context),
@@ -518,7 +617,7 @@ entries:
 
   - id: skill_claim_extraction_ledger
     layer: skill
-    path: 02_Skills/Governance/Claim-Extraction-Ledger-v1.md
+    path: 02_Skills/Governance/Claim-Extraction-Ledger-v2.md
     description: >
       Claim-ledger protocol for extracting atomic implementation, pricing, legal,
       and competitive claims from chats, docs, and marketing before verification.
@@ -532,7 +631,7 @@ entries:
 
   - id: skill_product_reality_audit
     layer: skill
-    path: 02_Skills/Governance/Product-Reality-Audit-v1.md
+    path: 02_Skills/Governance/Product-Reality-Audit-v2.md
     description: >
       Product-truth verification protocol. Compares claims to actual runtime
       boundaries, persistence surfaces, entitlements, and customer-visible
@@ -546,7 +645,7 @@ entries:
 
   - id: skill_compliance_evidence_audit
     layer: skill
-    path: 02_Skills/Governance/Compliance-Evidence-Audit-v1.md
+    path: 02_Skills/Governance/Compliance-Evidence-Audit-v2.md
     description: >
       Audit-evidence verification for compliance products. Checks persisted field
       coverage, failure-path recording, tenant retrieval, tamper story, retention
@@ -559,7 +658,7 @@ entries:
 
   - id: skill_competitive_teardown
     layer: skill
-    path: 02_Skills/Governance/Competitive-Teardown-v1.md
+    path: 02_Skills/Governance/Competitive-Teardown-v2.md
     description: >
       Competitive comparison discipline anchored to verified local capability.
       Forces a local baseline first, uses stable comparison axes, and permits
@@ -573,7 +672,7 @@ entries:
 
   - id: skill_bcdp_contracts
     layer: skill
-    path: 02_Skills/Governance/BCDP-Contracts-v1.md
+    path: 02_Skills/Governance/BCDP-Contracts-v2.md
     description: >
       Breaking Change Detection Protocol. Before modifying any API shape, schema,
       interface, component props, or environment variable: identify all consumers,
@@ -592,7 +691,7 @@ entries:
 
   - id: skill_reject_loop_recovery
     layer: skill
-    path: 02_Skills/Governance/Reject-Loop-Recovery-v1.md
+    path: 02_Skills/Governance/Reject-Loop-Recovery-v2.md
     description: >
       QA REJECT loop recovery protocol. Load only after receiving a REJECT verdict from
       the QA Adversarial Reviewer — not for first-attempt plans. Six-step protocol:
@@ -608,7 +707,7 @@ entries:
 
   - id: skill_json_output_contract
     layer: skill
-    path: 02_Skills/Governance/Json-Output-Contract-v1.md
+    path: 02_Skills/Governance/Json-Output-Contract-v2.md
     description: >
       Pre-emission JSON self-check for all pipeline stages. Four-step protocol:
       boundary check (output starts/ends with braces, no text contamination),
@@ -624,7 +723,7 @@ entries:
 
   - id: skill_context_budget_defense
     layer: skill
-    path: 02_Skills/Governance/Context-Budget-Defense-v1.md
+    path: 02_Skills/Governance/Context-Budget-Defense-v2.md
     description: >
       Behavioral response protocol for context window pressure. Defines layer drop
       priority (behavioral OS and active BCDP assessment are never dropped; task overlays
@@ -640,7 +739,7 @@ entries:
 
   - id: skill_adaptive_depth
     layer: skill
-    path: 02_Skills/Cognition/Adaptive-Depth-v1.md
+    path: 02_Skills/Cognition/Adaptive-Depth-v2.md
     description: >
       User-model and depth-calibration skill for non-research stacks. Infers a
       likely baseline, maps requested depth (`LIGHT | STANDARD | DEEP |
@@ -655,7 +754,7 @@ entries:
 
   - id: skill_epistemic_calibration
     layer: skill
-    path: 02_Skills/Cognition/Epistemic-Calibration-v1.md
+    path: 02_Skills/Cognition/Epistemic-Calibration-v2.md
     description: >
       Portable epistemic calibration for evidence-sensitive tasks outside
       `domain_research`. Tags claim basis, applies explicit confidence markers,
@@ -669,7 +768,7 @@ entries:
 
   - id: skill_exploration_learning
     layer: skill
-    path: 02_Skills/Cognition/Exploration-Learning-v1.md
+    path: 02_Skills/Cognition/Exploration-Learning-v2.md
     description: >
       Compact multi-path reasoning skill for non-research stacks. Supports
       bounded option generation, comparison, scenario exploration, and
@@ -684,7 +783,7 @@ entries:
 
   - id: skill_memory_extraction
     layer: skill
-    path: 02_Skills/Cognition/Memory-Extraction-v1.md
+    path: 02_Skills/Cognition/Memory-Extraction-v2.md
     description: >
       Durable memory extraction skill for completed runs, logs, chats, and
       retrospectives. Filters execution history into high-signal project
@@ -698,22 +797,42 @@ entries:
     load_position: 4
     token_budget: 300
 
+  - id: skill_memory_curator
+    layer: skill
+    path: 02_Skills/Cognition/Memory-Curator-v1.md
+    description: >
+      Cross-project memory curation with three modes. EXTRACT: classify memories
+      as project-scoped or workspace-scoped after pipeline runs. SYNC: periodic
+      scan across projects, dedup, promote workspace insights to /workspace-root/memory\,
+      and prune stale entries. RETRIEVE: on-demand query across project + workspace
+      stores for task-relevant context. Bridges babel-cli memoryExtraction.ts with
+      workspace-level knowledge management. Phase 2.1 of OLS-MCC audit roadmap.
+    status: active
+    tags: [cognition:memory, governance:evidence, skill, utility:cognition, utility:curation, utility:cross-project, utility:extraction, utility:retrieval, utility:sync]
+    dependencies:
+      - skill_memory_extraction
+    conflicts: []
+    token_budget: 400
+
   - id: skill_skill_authoring
     layer: skill
-    path: 02_Skills/Governance/Skill-Authoring-v1.md
+    path: 02_Skills/Governance/Skill-Authoring-v2.md
     description: >
-      Babel-specific skill creation workflow. Covers fit-testing whether a new
-      skill is justified, choosing the correct family/id/path shape, writing a
-      minimal skill, registering it in both catalogs, and validating the result.
+      Babel-specific skill creation workflow v2.0. Covers fit-testing, shape
+      selection, OLS-MCC-compliant authoring (Boundaries, Failure Behavior,
+      Strategic Next Move), catalog registration, and the full validation
+      pipeline including ols-compiler hardening, prompt-tester adversarial
+      testing, skill-auditor semantic audit, and coherence-linter contradiction
+      detection. First full-source version.
     status: active
-    tags: [governance:safety, skill, utility:authoring, utility:babel, utility:catalog, utility:reuse, utility:skills]
+    tags: [governance:safety, skill, utility:authoring, utility:babel, utility:catalog, utility:ols-mcc, utility:reuse, utility:skills]
     dependencies: []
     conflicts: []
     token_budget: 350
 
   - id: skill_capability_gap_review
     layer: skill
-    path: 02_Skills/Governance/Capability-Gap-Review-v1.md
+    path: 02_Skills/Governance/Capability-Gap-Review-v2.md
     description: >
       Post-task Babel capability review. Classifies repeated friction as
       existing-skill update, new skill, domain update, task overlay, tooling/docs
@@ -726,7 +845,7 @@ entries:
 
   - id: skill_babel_catalog_tuning
     layer: skill
-    path: 02_Skills/Governance/Babel-Catalog-Tuning-v1.md
+    path: 02_Skills/Governance/Babel-Catalog-Tuning-v2.md
     description: >
       Post-addition catalog hygiene for Babel prompt assets. Keeps prompt_catalog
       and Skill-Catalog in sync, checks overlap/default-domain wiring, preserves
@@ -737,22 +856,22 @@ entries:
     conflicts: []
     token_budget: 350
 
-  - id: skill_publication_sanitization
+  - id: skill_public_export_hardening
     layer: skill
-    path: 02_Skills/Governance/Publication-Sanitization-v1.md
+    path: 02_Skills/Governance/Public-Export-Hardening-v2.md
     description: >
-      Controlled sanitization for a separately managed publication target.
-      Classifies publication surfaces, uses target-owned transformation rules,
-      and requires scrub, content-policy, and release validation evidence.
+      Private-to-public export hardening for Babel repos. Routes work through the
+      existing surface-classification, export, scrub, and validation workflow so
+      private identifiers are replaced intentionally instead of mass-scrubbed.
     status: active
-    tags: [governance:safety, skill, utility:content-policy, utility:publication, utility:sanitization, utility:scrub]
+    tags: [governance:safety, skill, utility:babel, utility:public-export, utility:sanitization, utility:scrub]
     dependencies: []
     conflicts: []
     token_budget: 325
 
   - id: skill_outbound_truth_redlining
     layer: skill
-    path: 02_Skills/Governance/Outbound-Truth-Redlining-v1.md
+    path: 02_Skills/Governance/Outbound-Truth-Redlining-v2.md
     description: >
       Safe-redline workflow for outbound copy after product truth is established.
       Converts verified product/evidence truths into ship-ready emails, demo
@@ -768,7 +887,7 @@ entries:
 
   - id: skill_x_marketing_manager
     layer: skill
-    path: 02_Skills/Governance/X-Marketing-Manager-v1.md
+    path: 02_Skills/Governance/X-Marketing-Manager-v2.md
     description: >
       X/Twitter marketing planning and publishing skill for founder brands and
       products. Covers post sequencing, hooks, reply strategy, quote posts,
@@ -782,7 +901,7 @@ entries:
 
   - id: skill_x_thread_reply_strategy
     layer: skill
-    path: 02_Skills/Governance/X-Thread-Reply-Strategy-v1.md
+    path: 02_Skills/Governance/X-Thread-Reply-Strategy-v2.md
     description: >
       X/Twitter thread and reply-chain sequencing companion skill. Covers when
       to thread versus reply, how to assign post roles, how to order supporting
@@ -795,7 +914,7 @@ entries:
 
   - id: skill_x_engagement_reply_strategy
     layer: skill
-    path: 02_Skills/Governance/X-Engagement-Reply-Strategy-v1.md
+    path: 02_Skills/Governance/X-Engagement-Reply-Strategy-v2.md
     description: >
       X reply-intent strategy skill for choosing engagement replies versus
       supportive technical replies. Covers light acknowledgements, substantive
@@ -809,7 +928,7 @@ entries:
 
   - id: skill_x_category_clarity
     layer: skill
-    path: 02_Skills/Governance/X-Category-Clarity-v1.md
+    path: 02_Skills/Governance/X-Category-Clarity-v2.md
     description: >
       X cold-reader clarity and category-framing skill for plain-English
       definitions, acronym expansion, and category splits that must make sense
@@ -822,7 +941,7 @@ entries:
 
   - id: skill_prompt_runtime_continuity
     layer: skill
-    path: 02_Skills/Governance/Prompt-Runtime-Continuity-v1.md
+    path: 02_Skills/Governance/Prompt-Runtime-Continuity-v2.md
     description: >
       Continuity check for prompts, example JSON, and docs snippets against real
       runtime contracts. Prevents field drift, silent flattening, stale examples,
@@ -836,7 +955,7 @@ entries:
 
   - id: skill_in_app_truth_sweep
     layer: skill
-    path: 02_Skills/Governance/In-App-Truth-Sweep-v1.md
+    path: 02_Skills/Governance/In-App-Truth-Sweep-v2.md
     description: >
       App-wide user-facing copy sweep after product truth is established.
       Normalizes scope language across marketing, auth, onboarding, dashboard,
@@ -851,7 +970,7 @@ entries:
 
   - id: skill_repo_boundary_release_hygiene
     layer: skill
-    path: 02_Skills/Governance/Repo-Boundary-Release-Hygiene-v1.md
+    path: 02_Skills/Governance/Repo-Boundary-Release-Hygiene-v2.md
     description: >
       Release-safety workflow for nested workspaces and ambiguous git roots.
       Forces repo-root confirmation, remote confirmation, changed-path
@@ -867,7 +986,7 @@ entries:
 
   - id: skill_dirty_worktree_triage
     layer: skill
-    path: 02_Skills/Governance/Dirty-Worktree-Triage-v1.md
+    path: 02_Skills/Governance/Dirty-Worktree-Triage-v2.md
     description: >
       Dirty-worktree classification protocol for deciding what belongs in a
       commit, what should become a separate cleanup batch, what needs further
@@ -883,7 +1002,7 @@ entries:
 
   - id: skill_github_release_batching
     layer: skill
-    path: 02_Skills/Governance/GitHub-Release-Batching-v1.md
+    path: 02_Skills/Governance/GitHub-Release-Batching-v2.md
     description: >
       GitHub release batching discipline for dirty repos. Slices local changes
       into cohesive commit stories, requires staged-diff review before every
@@ -898,54 +1017,65 @@ entries:
     conflicts: []
     token_budget: 325
 
-  - id: skill_repository_role_discipline
+  - id: skill_private_source_repo_discipline
     layer: skill
-    path: 02_Skills/Governance/Repository-Role-Discipline-v1.md
+    path: 02_Skills/Governance/Private-Source-Repo-Discipline-v2.md
     description: >
-      Repository-role discipline for multi-repository workspaces. Maps
-      authoritative, publication-target, and standalone repositories and
-      verifies content policy and remote role before Git operations.
+      Repo-role discipline for paired private/public systems. Forces an
+      explicit source-of-truth versus derived-public map, correct default push
+      targets, remote-role verification before any GitHub push or release
+      action, and explicit classification of helper files as repo tooling
+      versus private-machine local aids.
     status: active
-    tags: [governance:safety, skill, utility:git, utility:github, utility:publication, utility:remote-role, utility:repository-role]
+    tags: [governance:safety, skill, utility:git, utility:github, utility:private-repo, utility:public-repo, utility:remote-role]
     dependencies:
       - skill_repo_boundary_release_hygiene
     conflicts: []
     token_budget: 325
 
-  - id: skill_publication_target_release_gate
+  - id: skill_derived_public_release_gate
     layer: skill
-    path: 02_Skills/Governance/Publication-Target-Release-Gate-v1.md
+    path: 02_Skills/Governance/Derived-Public-Release-Gate-v2.md
     description: >
-      Release gate for repositories explicitly mapped as publication targets.
-      Requires surface classification, target-owned validation, exact staged
-      paths, and an explicit excluded-path record before remote mutation.
+      Release gate for derived public repos. Requires surface classification,
+      export/sanitization workflow, scrub validation, and a bias toward
+      under-releasing whenever a private source-of-truth repo exists.
     status: active
-    tags: [governance:safety, skill, utility:git, utility:github, utility:publication, utility:release-gate, utility:sanitization, utility:secrets]
+    tags: [governance:safety, skill, utility:export, utility:git, utility:github, utility:public-release, utility:sanitization, utility:secrets]
     dependencies:
-      - skill_repository_role_discipline
-      - skill_publication_sanitization
+      - skill_private_source_repo_discipline
+      - skill_public_export_hardening
     conflicts: []
     token_budget: 325
 
   - id: skill_multi_agent_pipeline
     layer: skill
-    path: 02_Skills/Governance/Multi-Agent-Pipeline-v1.md
+    path: 02_Skills/Governance/Multi-Agent-Pipeline-v2.md
     description: >
-      Reusable multi-agent review-pipeline guidance. Covers typed execution states,
-      validated deadline propagation, project-configured routing and weights,
-      context budgeting, guarded prompt-change proposals, coverage gates,
-      consolidation, and regression testing.
+      Multi-agent LLM pipeline patterns from example_saas_backend scanner system. Covers
+      BaseAgent contract (abstract _get_agent_name/_get_system_prompt, review()
+      returns AgentExecutionResult with explicit ExecutionState), timeout chain
+      invariant (AGENT_TIMEOUTS → agent_timeout → api_timeout = agent_timeout - 5s),
+      aggregation weights (must sum 1.0, security highest at 0.25), smart routing
+      via ROUTING_RULES (dispatch only relevant agents per file pattern), context
+      budgeting (CONTEXT_BUDGETS per agent, EXCLUDED_PATTERNS for generated files),
+      learning pipeline guardrails (learning_modifications_enabled and
+      learning_auto_apply always False — locked after prior regression incident),
+      execution state handling (OK/TIMEOUT/PARSE_ERROR/PROVIDER_ERROR/SKIPPED),
+      SLO gates (34% unavailability rate triggers NEEDS_REVISION), quality guards
+      and consolidation thresholds, and new-agent checklist (timeouts, weights,
+      routing, context budget, tests).
     status: active
-    tags: [cognition:exploration, governance:safety, llm, skill, utility:multi-agent, utility:pipeline, utility:review]
+    tags: [cognition:exploration, governance:safety, llm, skill, utility:example_saas_backend, utility:multi-agent, utility:pipeline, utility:review]
     dependencies: []
     conflicts: []
     default_for_domains:
       - domain_python_backend
-    token_budget: 325
+    token_budget: 400
 
   - id: skill_workspace_locking
     layer: skill
-    path: 02_Skills/Governance/Workspace-Locking-v1.md
+    path: 02_Skills/Governance/Workspace-Locking-v2.md
     description: >
       Workspace-wide advisory locking protocol for multi-agent parallel operations.
       Enforces a decentralized, file-based locking mechanism in `.babel/locks/` to
@@ -962,24 +1092,25 @@ entries:
 
   - id: skill_ops_observability
     layer: skill
-    path: 02_Skills/Governance/Ops-Observability-v1.md
+    path: 02_Skills/Governance/Ops-Observability-v2.md
     description: >
-      Pre-plan OPERATIONAL section protocol. Forces declaration of operation surface,
-      logging strategy (fields, levels, correlation ID), and recovery paths (retry,
-      circuit-breaker, fail-closed) before MINIMAL ACTION SET is written.
-      Directly addresses the [SFDIPOT-O] QA rejection cluster.
+      Dual-mode operational protocol. DESIGN mode (plan-time): forces declaration of
+      operation surface, logging strategy, and recovery paths before code is written.
+      OBSERVE mode (runtime): captures actual skill activations, tool calls, cost,
+      state drift vs DESIGN contract, and generates example_saas_backend-ready evidence bundles.
+      Closes the plan → execute → audit loop.
     status: active
-    tags: [governance:safety, skill, utility:logging, utility:observability, utility:operations, utility:recovery, utility:sfdipot]
+    tags: [governance:safety, skill, utility:cost-tracking, utility:drift-detection, utility:evidence-bundles, utility:example_saas_backend, utility:logging, utility:observability, utility:operations, utility:recovery, utility:sfdipot, utility:tracing]
     dependencies: []
     conflicts: []
     default_for_domains:
       - domain_swe_backend
       - domain_devops
-    token_budget: 325
+    token_budget: 450
 
   - id: skill_session_model_reality_audit
     layer: skill
-    path: 02_Skills/Governance/Session-Model-Reality-Audit-v1.md
+    path: 02_Skills/Governance/Session-Model-Reality-Audit-v2.md
     description: >
       Audit claimed auth/session protections against the real runtime. Checks
       cookie storage, browser/server boundaries, refresh rotation, logout
@@ -997,7 +1128,7 @@ entries:
 
   - id: skill_supabase_rls_drift_audit
     layer: skill
-    path: 02_Skills/Governance/Supabase-RLS-Drift-Audit-v1.md
+    path: 02_Skills/Governance/Supabase-RLS-Drift-Audit-v2.md
     description: >
       Audits Supabase live-state drift when grants, policies, partitions, schema
       cache, or deployments diverge from repo intent. Compares code intent to
@@ -1018,7 +1149,7 @@ entries:
 
   - id: skill_supabase_exposed_schema_hardening
     layer: skill
-    path: 02_Skills/Governance/Supabase-Exposed-Schema-Hardening-v1.md
+    path: 02_Skills/Governance/Supabase-Exposed-Schema-Hardening-v2.md
     description: >
       Hardening protocol for Supabase PostgREST-exposed schemas. Inventories
       public tables, views, partitions, and RPCs; classifies intended exposure;
@@ -1037,7 +1168,7 @@ entries:
 
   - id: skill_auth_enumeration_resistance
     layer: skill
-    path: 02_Skills/Governance/Auth-Enumeration-Resistance-v1.md
+    path: 02_Skills/Governance/Auth-Enumeration-Resistance-v2.md
     description: >
       Removes account-discovery leaks from signup, login, reset, verification,
       and adjacent auth UX. Builds an enumeration matrix, classifies leak types,
@@ -1056,7 +1187,7 @@ entries:
 
   - id: skill_security_release_gate
     layer: skill
-    path: 02_Skills/Governance/Security-Release-Gate-v1.md
+    path: 02_Skills/Governance/Security-Release-Gate-v2.md
     description: >
       Converts fixed security work into a formal launch or no-launch decision.
       Defines pass criteria, hard fail conditions, required evidence, and the
@@ -1074,7 +1205,7 @@ entries:
 
   - id: skill_run_artifact_inspection
     layer: skill
-    path: 02_Skills/Governance/Run-Artifact-Inspection-v1.md
+    path: 02_Skills/Governance/Run-Artifact-Inspection-v2.md
     description: >
       Read-only protocol for inspecting existing Babel run artifacts. Locks the
       run target first, reads the canonical evidence files in the correct order,
@@ -1091,7 +1222,7 @@ entries:
 
   - id: skill_stripe_webhook
     layer: skill
-    path: 02_Skills/Payments/Stripe-Webhook-v1.md
+    path: 02_Skills/Payments/Stripe-Webhook-v2.md
     description: >
       Stripe webhook handling for Deno Edge Functions (Supabase). Covers the two
       load-bearing rules (signature first, status code semantics), Deno-specific SDK
@@ -1115,7 +1246,7 @@ entries:
 
   - id: skill_idempotency
     layer: skill
-    path: 02_Skills/Governance/Idempotency-Contract-v1.md
+    path: 02_Skills/Governance/Idempotency-Contract-v2.md
     description: >
       Idempotency classification and contract enforcement for serverless and edge
       environments. Classifies each mutation (NATURAL / KEY_GATED / CONDITIONAL /
@@ -1132,10 +1263,13 @@ entries:
 
   - id: skill_google_play_billing
     layer: skill
-    path: 02_Skills/Mobile/Google-Play-Billing-v1.md
+    path: 02_Skills/Mobile/Google-Play-Billing-v2.md
     description: >
-      Google Play Billing lifecycle, entitlement, isolation, and current-source
-      verification guidance for Android applications.
+      Google Play Billing contract enforcement for Android IAP. Covers the full billing
+      lifecycle (connect → queryPurchasesAsync → acknowledge), billing isolation contract
+      (zero billing imports in domain/processing layers), PRO_PRODUCT_ID contract rules,
+      required ProGuard rules for release builds, entitlement model classification
+      (client-side vs server-side), and v7→v8 migration guidance (v7 EOL Aug 2026).
     status: active
     jit_activation_rules:
       - 'google\\s+play\\s+billing'
@@ -1148,10 +1282,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 350
+    file_extension_gate: [".kt"]
 
   - id: skill_android_play_store_compliance
     layer: skill
-    path: 02_Skills/Mobile/Android-Play-Store-Compliance-v1.md
+    path: 02_Skills/Mobile/Android-Play-Store-Compliance-v2.md
     description: >
       Android Play Store compliance enforcement. Covers permission audit (no unnecessary
       dangerous permissions), Photo Picker requirement (PickVisualMedia, Android 14+),
@@ -1166,10 +1301,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 350
+    file_extension_gate: [".kt"]
 
   - id: skill_jetpack_compose
     layer: skill
-    path: 02_Skills/Mobile/Jetpack-Compose-v1.md
+    path: 02_Skills/Mobile/Jetpack-Compose-v2.md
     description: >
       Jetpack Compose best practices for Android. Covers state model (mutableStateOf in
       ViewModel vs remember in Composable), state hoisting rules, correct side-effect APIs
@@ -1190,10 +1326,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 375
+    file_extension_gate: [".kt"]
 
   - id: skill_android_ui_audit_review
     layer: skill
-    path: 02_Skills/Mobile/Android-UI-Audit-Review-v1.md
+    path: 02_Skills/Mobile/Android-UI-Audit-Review-v2.md
     description: >
       Grounded Android UI audit and critique protocol for Jetpack Compose apps.
       Use when a task asks to audit, review, critique, evaluate, analyze, or
@@ -1206,10 +1343,11 @@ entries:
       - skill_jetpack_compose
     conflicts: []
     token_budget: 300
+    file_extension_gate: [".kt"]
 
   - id: skill_android_accessibility_semantics
     layer: skill
-    path: 02_Skills/Mobile/Android-Accessibility-Semantics-v1.md
+    path: 02_Skills/Mobile/Android-Accessibility-Semantics-v2.md
     description: >
       Android accessibility and semantics enforcement for Compose UI. Use for tasks
       involving TalkBack, content descriptions, icon-only controls, touch targets,
@@ -1222,10 +1360,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 300
+    file_extension_gate: [".kt"]
 
   - id: skill_android_adaptive_layouts
     layer: skill
-    path: 02_Skills/Mobile/Android-Adaptive-Layouts-v1.md
+    path: 02_Skills/Mobile/Android-Adaptive-Layouts-v2.md
     description: >
       Android adaptive layout guidance for Compose apps. Use for responsive UI work
       involving WindowSizeClass, navigation rails, list-detail layouts, tablets,
@@ -1244,10 +1383,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 300
+    file_extension_gate: [".kt"]
 
   - id: skill_android_form_ux_date_input
     layer: skill
-    path: 02_Skills/Mobile/Android-Form-UX-Date-Input-v1.md
+    path: 02_Skills/Mobile/Android-Form-UX-Date-Input-v2.md
     description: >
       Android form UX for date, schedule, due date, payday, recurrence, and validation
       flows. Use when tasks involve add/edit forms, Material 3 date pickers, explicit
@@ -1265,10 +1405,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 300
+    file_extension_gate: [".kt"]
 
   - id: skill_android_release_build
     layer: skill
-    path: 02_Skills/Mobile/Android-Release-Build-v1.md
+    path: 02_Skills/Mobile/Android-Release-Build-v2.md
     description: >
       Android release build readiness. Covers MaterialTheme wrapper setup (dynamic color
       API 31+ / static fallback), signing configuration (env vars only, no hardcoded
@@ -1283,10 +1424,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 375
+    file_extension_gate: [".kt"]
 
   - id: skill_android_app_bundle
     layer: skill
-    path: 02_Skills/Mobile/Android-App-Bundle-v1.md
+    path: 02_Skills/Mobile/Android-App-Bundle-v2.md
     description: >
       Android App Bundle packaging and distribution guidance. Covers the artifact chain
       (Gradle bundle -> store processing -> APK delivery), store matrix (Google Play vs
@@ -1298,10 +1440,11 @@ entries:
     dependencies: []
     conflicts: []
     token_budget: 375
+    file_extension_gate: [".kt"]
 
   - id: skill_gradle_wrapper
     layer: skill
-    path: 02_Skills/Mobile/Gradle-Wrapper-v1.md
+    path: 02_Skills/Mobile/Gradle-Wrapper-v2.md
     description: >
       Gradle wrapper bootstrap and launcher restoration. Covers missing gradlew /
       gradlew.bat recovery, target-root gradle-wrapper.properties as the source
@@ -1311,10 +1454,11 @@ entries:
     dependencies: []
     conflicts: []
     token_budget: 220
+    file_extension_gate: [".kt"]
 
   - id: skill_samsung_galaxy_store
     layer: skill
-    path: 02_Skills/Mobile/Samsung-Galaxy-Store-v1.md
+    path: 02_Skills/Mobile/Samsung-Galaxy-Store-v2.md
     description: >
       Samsung Galaxy Store submission requirements and compliance (verified March 2026).
       Covers binary format (APK + AAB accepted; no Play Asset/Feature Delivery), target API
@@ -1327,10 +1471,11 @@ entries:
     dependencies: []
     conflicts: []
     token_budget: 400
+    file_extension_gate: [".kt"]
 
   - id: skill_amazon_appstore
     layer: skill
-    path: 02_Skills/Mobile/Amazon-Appstore-v1.md
+    path: 02_Skills/Mobile/Amazon-Appstore-v2.md
     description: >
       Amazon Appstore submission requirements and compliance (verified March 2026). Covers
       binary format (APK + AAB accepted via bundletool 1.11; no dynamic delivery), mandatory
@@ -1349,10 +1494,11 @@ entries:
     dependencies: []
     conflicts: []
     token_budget: 425
+    file_extension_gate: [".kt"]
 
   - id: skill_revenuecat_iap
     layer: skill
-    path: 02_Skills/Mobile/RevenueCat-IAP-v1.md
+    path: 02_Skills/Mobile/RevenueCat-IAP-v2.md
     description: >
       RevenueCat SDK v9+ integration for cross-platform Android IAP (Google Play + Amazon Appstore).
       Covers artifact split — Amazon flavor requires BOTH purchases (core) + purchases-store-amazon
@@ -1376,10 +1522,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 500
+    file_extension_gate: [".kt"]
 
   - id: skill_android_dependency_research
     layer: skill
-    path: 02_Skills/Mobile/Android-Dependency-Research-v1.md
+    path: 02_Skills/Mobile/Android-Dependency-Research-v2.md
     description: >
       Pre-implementation dependency verification protocol for Android/Gradle projects. Covers three
       failure modes: wrong artifact name/version (artifact renamed between major versions; version
@@ -1400,10 +1547,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 350
+    file_extension_gate: [".kt"]
 
   - id: skill_android_app_classification
     layer: skill
-    path: 02_Skills/Mobile/Android-App-Classification-v1.md
+    path: 02_Skills/Mobile/Android-App-Classification-v2.md
     description: >
       Android architecture classification gate. Classifies apps as utility_stateless,
       utility_stateful, content_data_driven, or multi_feature, then maps each type
@@ -1411,16 +1559,17 @@ entries:
       Prevents over-engineering by requiring written reclassification before Hilt,
       Room, or NavHost-style escalation.
     status: active
-    tags: [framework:godot, platform:android, skill, utility:classification, utility:minimalism, utility:mobile, utility:routing]
+    tags: [platform:android, skill, utility:classification, utility:minimalism, utility:mobile, utility:routing]
     dependencies: []
     conflicts: []
     default_for_domains:
       - domain_android_kotlin
     token_budget: 325
+    file_extension_gate: [".kt"]
 
   - id: skill_android_navigation_strategy
     layer: skill
-    path: 02_Skills/Mobile/Android-Navigation-Strategy-v1.md
+    path: 02_Skills/Mobile/Android-Navigation-Strategy-v2.md
     description: >
       Android navigation decision layer. Defines local state navigation, typed
       Navigation Compose, and Navigation 3 explicit back-stack patterns; enforces
@@ -1434,26 +1583,28 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 325
+    file_extension_gate: [".kt"]
 
   - id: skill_android_state_management
     layer: skill
-    path: 02_Skills/Mobile/Android-State-Management-v1.md
+    path: 02_Skills/Mobile/Android-State-Management-v2.md
     description: >
       Android state-ownership rules for ViewModel + StateFlow apps. Enforces
       ViewModel as single source of truth, private MutableStateFlow/public StateFlow
       exposure, UI as pure render layer, and anti-pattern bans around business logic
       in composables and mutable shared state leakage.
     status: active
-    tags: [framework:godot, platform:android, skill, utility:compose, utility:mobile, utility:state, utility:stateflow, utility:viewmodel]
+    tags: [platform:android, skill, utility:compose, utility:mobile, utility:state, utility:stateflow, utility:viewmodel]
     dependencies: []
     conflicts: []
     default_for_domains:
       - domain_android_kotlin
     token_budget: 325
+    file_extension_gate: [".kt"]
 
   - id: skill_android_testing_strategy
     layer: skill
-    path: 02_Skills/Mobile/Android-Testing-Strategy-v1.md
+    path: 02_Skills/Mobile/Android-Testing-Strategy-v2.md
     description: >
       Thin orchestration layer above the four Android testing skills. Routes test surface
       (unit vs. instrumented vs. screenshot), resolves ViewModel state type and dispatcher
@@ -1467,10 +1618,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 300
+    file_extension_gate: [".kt"]
 
   - id: skill_android_unit_testing
     layer: skill
-    path: 02_Skills/Mobile/Android-Unit-Testing-v1.md
+    path: 02_Skills/Mobile/Android-Unit-Testing-v2.md
     description: >
       Android JVM test patterns for ViewModel and pure-Kotlin processing code.
       Covers src/test placement, JUnit setup, coroutines-test, Turbine-based
@@ -1484,10 +1636,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 350
+    file_extension_gate: [".kt"]
 
   - id: skill_android_screenshot_testing
     layer: skill
-    path: 02_Skills/Mobile/Android-Screenshot-Testing-v1.md
+    path: 02_Skills/Mobile/Android-Screenshot-Testing-v2.md
     description: >
       Android screenshot regression testing guidance. Covers Roborazzi-first setup,
       AGP compatibility check (plugin mode vs. library-only for AGP >= 9.0), golden
@@ -1503,10 +1656,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 350
+    file_extension_gate: [".kt"]
 
   - id: skill_android_test_enforcement
     layer: skill
-    path: 02_Skills/Mobile/Android-Test-Enforcement-v1.md
+    path: 02_Skills/Mobile/Android-Test-Enforcement-v2.md
     description: >
       Android test enforcement layer. Converts behavior changes into mandatory
       unit, Turbine, screenshot, or framework-aware test obligations and defines
@@ -1523,10 +1677,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 325
+    file_extension_gate: [".kt"]
 
   - id: skill_parity_audit_engine
     layer: skill
-    path: 02_Skills/skill_parity_audit_engine.md
+    path: 02_Skills/Governance/Parity-Audit-Engine-v2.md
     description: >
       Babel Skill for executing parity audits between Source and Target projects.
       Provides technical guidance on schema comparison, logic tracing, and data verification
@@ -1541,7 +1696,7 @@ entries:
 
   - id: skill_android_file_handling
     layer: skill
-    path: 02_Skills/Mobile/Platform/Android-File-Handling-v1.md
+    path: 02_Skills/Mobile/Platform/Android-File-Handling-v2.md
     description: >
       Android file-handling execution patterns. Covers ContentResolver-first I/O,
       temp-file copy strategy, FileProvider sharing, SAF-aligned import/export flows,
@@ -1554,10 +1709,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 325
+    file_extension_gate: [".kt"]
 
   - id: skill_android_photo_picker
     layer: skill
-    path: 02_Skills/Mobile/Platform/Android-PhotoPicker-v1.md
+    path: 02_Skills/Mobile/Platform/Android-PhotoPicker-v2.md
     description: >
       Android photo picker implementation rules. Covers PickVisualMedia for Google
       Play builds, Fire OS / Amazon fallback handling, lifecycle-safe URI consumption,
@@ -1569,10 +1725,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 300
+    file_extension_gate: [".kt"]
 
   - id: skill_android_permissions
     layer: skill
-    path: 02_Skills/Mobile/Platform/Android-Permissions-v1.md
+    path: 02_Skills/Mobile/Platform/Android-Permissions-v2.md
     description: >
       Android permission decision and implementation rules. Covers normal versus
       dangerous versus special-access permissions, Activity Result runtime flows,
@@ -1585,10 +1742,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 300
+    file_extension_gate: [".kt"]
 
   - id: skill_android_background_work
     layer: skill
-    path: 02_Skills/Mobile/Platform/Android-Background-Work-v1.md
+    path: 02_Skills/Mobile/Platform/Android-Background-Work-v2.md
     description: >
       Android background execution rules. Covers WorkManager, foreground service
       selection, lifecycle-safe escalation from UI scope to durable work, Android 15+
@@ -1600,10 +1758,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 300
+    file_extension_gate: [".kt"]
 
   - id: skill_android_performance_hardening
     layer: skill
-    path: 02_Skills/Mobile/Android-Performance-Hardening-v1.md
+    path: 02_Skills/Mobile/Android-Performance-Hardening-v2.md
     description: >
       Android production performance hardening rules. Defines when baseline profiles
       and Macrobenchmark are required, startup discipline for release apps, Compose
@@ -1616,10 +1775,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 325
+    file_extension_gate: [".kt"]
 
   - id: skill_android_game_development
     layer: skill
-    path: 02_Skills/Mobile/Android-Game-Development-v1.md
+    path: 02_Skills/Mobile/Android-Game-Development-v2.md
     description: >
       Android game development rules for native or renderer-heavy games. Covers
       GameActivity/AGDK classification, OpenGL/Vulkan frame pacing with Swappy,
@@ -1627,16 +1787,17 @@ entries:
       release-like device verification. Keeps UI-driven Compose games out of
       unnecessary native complexity.
     status: active
-    tags: [framework:godot, platform:android, skill, utility:agdk, utility:controller, utility:frame-pacing, utility:gameactivity, utility:mobile, utility:native]
+    tags: [platform:android, skill, utility:agdk, utility:controller, utility:frame-pacing, utility:gameactivity, utility:mobile, utility:native]
     dependencies: []
     conflicts: []
     default_for_domains:
       - domain_android_kotlin
     token_budget: 375
+    file_extension_gate: [".kt"]
 
   - id: skill_android_tv_game_ux
     layer: skill
-    path: 02_Skills/Mobile/Android-TV-Game-UX-v1.md
+    path: 02_Skills/Mobile/Android-TV-Game-UX-v2.md
     description: >
       Android TV and Fire TV game UX rules. Covers Leanback launcher manifest
       requirements, TV banner, touchscreen required=false, D-pad/gamepad-first
@@ -1649,29 +1810,37 @@ entries:
       - 'leanback'
       - 'focus\\s+ring'
       - 'firetv'
-    tags: [framework:godot, platform:android, platform:tv, skill, utility:d-pad, utility:fire-tv, utility:focus, utility:gamepad, utility:leanback, utility:mobile, utility:ux]
+    tags: [platform:android, platform:tv, skill, utility:d-pad, utility:fire-tv, utility:focus, utility:gamepad, utility:leanback, utility:mobile, utility:ux]
     dependencies: []
     conflicts: []
     default_for_domains:
       - domain_android_kotlin
     token_budget: 350
+    file_extension_gate: [".kt"]
 
   - id: skill_google_play_store
     layer: skill
-    path: 02_Skills/Mobile/Google-Play-Store-v1.md
+    path: 02_Skills/Mobile/Google-Play-Store-v2.md
     description: >
-      Google Play submission and policy-review framework grounded in current official
-      sources and target-project evidence. Pair with Android Play Store Compliance for
-      implementation changes and Android App Bundle for packaging execution.
+      Google Play Store submission requirements and policy compliance (verified March 2026).
+      Covers all enforced 2025-2026 deadlines: targetSdk 35 mandate (Aug 31 2025), AAB
+      mandatory, Billing Library v7 minimum (Aug 31 2025) with v8 migration required before
+      Aug 2026, Photo Picker enforcement (May 28 2025), AccessibilityService non-disability
+      ban (Jan 28 2026), US billing exclusivity ended (Sep 12 2025 Epic injunction), SafetyNet
+      shutdown (May 20 2025) → Play Integrity API, IARC rating re-review (Jan 31 2026), 16KB
+      page size (Nov 1 2025), exact asset specs, and Data Safety section requirements.
+      Policy/deadline layer only; pair with Android Play Store Compliance for implementation
+      changes and Android App Bundle for packaging execution.
     status: active
     tags: [governance:audit, platform:android, skill, utility:billing, utility:google-play, utility:mobile, utility:permissions, utility:store]
     dependencies: []
     conflicts: []
     token_budget: 450
+    file_extension_gate: [".kt"]
 
   - id: skill_android_saf
     layer: skill
-    path: 02_Skills/Mobile/Android-SAF-v1.md
+    path: 02_Skills/Mobile/Android-SAF-v2.md
     description: >
       Storage Access Framework patterns for Android file-handling apps. Covers SAF contract
       selection (OpenDocument vs OpenMultipleDocuments vs CreateDocument vs FileProvider share),
@@ -1690,10 +1859,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 425
+    file_extension_gate: [".kt"]
 
   - id: skill_android_instrumented_testing
     layer: skill
-    path: 02_Skills/Mobile/Android-Instrumented-Testing-v1.md
+    path: 02_Skills/Mobile/Android-Instrumented-Testing-v2.md
     description: >
       Android instrumented test patterns for apps using platform APIs. Covers placement decision
       (androidTest/ vs test/ vs Robolectric — anything importing android.* belongs in androidTest/),
@@ -1713,10 +1883,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 400
+    file_extension_gate: [".kt"]
 
   - id: skill_android_pdf_processing
     layer: skill
-    path: 02_Skills/Mobile/Android-PDF-Processing-v1.md
+    path: 02_Skills/Mobile/Android-PDF-Processing-v2.md
     description: >
       PdfRenderer and PdfDocument platform API patterns for Android PDF processing apps. Covers
       PdfRenderer contract (seekable FD requirement, encrypted PDF detection via constructor throw,
@@ -1737,10 +1908,11 @@ entries:
     default_for_domains:
       - domain_android_kotlin
     token_budget: 450
+    file_extension_gate: [".kt"]
 
   - id: skill_android_room
     layer: skill
-    path: 02_Skills/Mobile/Android-Room-Database-v1.md
+    path: 02_Skills/Mobile/Android-Room-Database-v2.md
     description: >
       Android Room database patterns for Kotlin apps. Enforces correct entity annotation
       (@Entity, @PrimaryKey, foreign keys with indices), DAO contracts (suspend writes,
@@ -1749,16 +1921,108 @@ entries:
       separation (no DAO/entity imports in UI), and integer-cents monetary storage
       rule (no Double/Float/BigDecimal in entities).
     status: active
-    tags: [db:postgres, platform:android, skill, utility:dao, utility:entity, utility:migration, utility:mobile, utility:repository, utility:room, utility:sqlite]
+    tags: [db:sqlite, platform:android, skill, utility:dao, utility:entity, utility:migration, utility:mobile, utility:repository, utility:room]
     dependencies: []
     conflicts: []
     default_for_domains:
       - domain_android_kotlin
     token_budget: 420
+    file_extension_gate: [".kt"]
+
+  - id: skill_android_native_jni_llama
+    layer: skill
+    path: 02_Skills/Mobile/Platform/Android-Native-JNI-Llama-v1.md
+    description: >
+      Android JNI and Llama.cpp native memory/execution safety. Covers JNI local/global reference leak prevention,
+      monothreaded JNI mutex guards, attaching native C++ threads to JVM callbacks, File Descriptor-based memory
+      mapping (mmap) for GGUF model files via Storage Access Framework, and low-memory trim triggers.
+    status: active
+    tags: [platform:android, skill, utility:jni, utility:llama, utility:native, utility:mmap, utility:mobile]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_android_kotlin
+    token_budget: 375
+    file_extension_gate: [".kt", ".cpp", ".h"]
+
+  - id: skill_android_socket_tls_client
+    layer: skill
+    path: 02_Skills/Mobile/Platform/Android-Socket-TLS-Client-v1.md
+    description: >
+      Android raw socket networking, SSDP UDP multicast loops, and PIN-paired TLS socket handshakes.
+      Covers WifiManager.MulticastLock lifecycle management, SocketTimeoutException prevention, Android KeyStore
+      client credentials signing, and custom PinTrust SSLContext managers.
+    status: active
+    tags: [platform:android, skill, utility:sockets, utility:ssdp, utility:tls, utility:keystore, utility:mobile]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_android_kotlin
+    token_budget: 375
+    file_extension_gate: [".kt", ".cpp"]
+
+  - id: skill_android_native_oboe_emulator
+    layer: skill
+    path: 02_Skills/Mobile/Platform/Android-Native-Oboe-Emulator-v1.md
+    description: >
+      Low-latency audio streaming via Google's Oboe C++ library and cycle-accurate emulator loops.
+      Covers monotonic clock sleep schedules, lock-free FifoBuffer callback writes, AAudio vs OpenSL ES performance,
+      and copy-free direct ByteBuffer framebuffer copies.
+    status: active
+    tags: [platform:android, skill, utility:oboe, utility:aaudio, utility:emulator, utility:jni, utility:mobile]
+    dependencies:
+      - skill_android_native_jni_llama
+    conflicts: []
+    default_for_domains:
+      - domain_android_kotlin
+    token_budget: 375
+    file_extension_gate: [".kt", ".cpp", ".h"]
+
+  - id: skill_android_compose_tv
+    layer: skill
+    path: 02_Skills/Mobile/Platform/Android-Compose-TV-v1.md
+    description: >
+      Jetpack Compose TV focus management and layout components. Covers initial focus requests,
+      TvLazyRow state preservation, Material3 TV CardDefaults, and spatial safety margins.
+    status: active
+    tags: [platform:android, platform:tv, skill, utility:compose, utility:focus, utility:material3, utility:mobile]
+    dependencies: []
+    conflicts: []
+    default_for_domains: []
+    token_budget: 375
+    file_extension_gate: [".kt"]
+
+  - id: skill_react_native_tv_focus
+    layer: skill
+    path: 02_Skills/Mobile/Platform/React-Native-TV-Focus-v1.md
+    description: >
+      React Native focus management and spatial navigation on TV platforms (Android TV, Apple TV).
+      Covers TVFocusGuideView, useTVEventHandler, FlatList scrolling focus delegation, and focus contrast.
+    status: active
+    tags: [platform:android, platform:ios, platform:tv, skill, utility:focus, utility:spatial-navigation, utility:react-native, utility:mobile]
+    dependencies: []
+    conflicts: []
+    default_for_domains: []
+    token_budget: 375
+    file_extension_gate: [".js", ".jsx", ".ts", ".tsx"]
+
+  - id: skill_ios_swift_sandbox
+    layer: skill
+    path: 02_Skills/Mobile/Platform/iOS-Swift-Sandbox-v1.md
+    description: >
+      iOS Swift App Sandbox security boundaries and file handling. Covers startAccessingSecurityScopedResource,
+      security-scoped URL bookmarking, NSFileCoordinator data integrity, and BGTaskScheduler background budgets.
+    status: active
+    tags: [platform:ios, skill, utility:swift, utility:sandbox, utility:file-coordinator, utility:backgroundtasks, utility:mobile]
+    dependencies: []
+    conflicts: []
+    default_for_domains: []
+    token_budget: 375
+    file_extension_gate: [".swift"]
 
   - id: skill_godot_gdscript_arch
     layer: skill
-    path: 02_Skills/Game/Godot-GDScript-Arch-v1.md
+    path: 02_Skills/Game/Godot-GDScript-Arch-v2.md
     description: >
       Godot 4.4+ architecture and GDScript 2.0 best practices. Enforces composition
       over inheritance, "Call Down, Signal Up" signal bus patterns, static typing,
@@ -1770,10 +2034,11 @@ entries:
     default_for_domains:
       - domain_godot_game_dev
     token_budget: 350
+    file_extension_gate: [".gd"]
 
   - id: skill_godot_ui_theme
     layer: skill
-    path: 02_Skills/Game/Godot-UI-Theme-v1.md
+    path: 02_Skills/Game/Godot-UI-Theme-v2.md
     description: >
       Godot UI and Theme system rules. Covers centralized Theme resources,
       responsive layout containers, mobile/JRPG tokens, touch target sizing,
@@ -1792,10 +2057,11 @@ entries:
     default_for_domains:
       - domain_godot_game_dev
     token_budget: 325
+    file_extension_gate: [".gd"]
 
   - id: skill_godot_data_resources
     layer: skill
-    path: 02_Skills/Game/Godot-Data-Resources-v1.md
+    path: 02_Skills/Game/Godot-Data-Resources-v2.md
     description: >
       Data-driven design in Godot via the Resource system. Covers custom Resource
       objects, exported resources, and modular save/load logic.
@@ -1812,10 +2078,11 @@ entries:
     default_for_domains:
       - domain_godot_game_dev
     token_budget: 300
+    file_extension_gate: [".gd"]
 
   - id: skill_hd2d_sprite_pipeline
     layer: skill
-    path: 02_Skills/Game/HD2D-Sprite-Pipeline-v1.md
+    path: 02_Skills/Game/Godot-HD2D-Sprite-Pipeline-v2.md
     description: >
       Full HD-2D sprite creation pipeline targeting Octopath Traveler quality.
       Covers pixel art authoring rules (palette, outline, dithering), 8-frame walk
@@ -1834,10 +2101,11 @@ entries:
     default_for_domains:
       - domain_godot_game_dev
     token_budget: 500
+    file_extension_gate: [".gd"]
 
   - id: skill_godot_hd2d_mobile_rendering
     layer: skill
-    path: 02_Skills/Game/Godot-HD2D-Mobile-Rendering-v1.md
+    path: 02_Skills/Game/Godot-HD2D-Mobile-Rendering-v2.md
     description: >
       Godot HD-2D mobile rendering architecture. Covers fixed low-resolution
       world SubViewport plus native-resolution CanvasLayer UI, renderer profiles
@@ -1854,10 +2122,11 @@ entries:
     default_for_domains:
       - domain_godot_game_dev
     token_budget: 425
+    file_extension_gate: [".gd"]
 
   - id: skill_godot_hd2d_map_design
     layer: skill
-    path: 02_Skills/Game/Godot-HD2D-Map-Design-v1.md
+    path: 02_Skills/Game/Godot-HD2D-Map-Design-v2.md
     description: >
       Godot 4 HD-2D diorama overworld map design rules. Covers the required scene
       hierarchy (Terrain / Props / Encounters / Events / CameraRig), terrain layering
@@ -1877,10 +2146,11 @@ entries:
     default_for_domains:
       - domain_godot_game_dev
     token_budget: 550
+    file_extension_gate: [".gd"]
 
   - id: skill_godot_hd2d_rpg_ui
     layer: skill
-    path: 02_Skills/Game/Godot-HD2D-RPG-UI-v1.md
+    path: 02_Skills/Game/Godot-HD2D-RPG-UI-v2.md
     description: >
       Godot HD-2D RPG UI rules for Octopath-adjacent JRPG interfaces. Covers
       ornate NinePatchRect panels, dark translucent fantasy frames, readable
@@ -1898,10 +2168,11 @@ entries:
     default_for_domains:
       - domain_godot_game_dev
     token_budget: 425
+    file_extension_gate: [".gd"]
 
   - id: skill_godot_mobile_jrpg_ux
     layer: skill
-    path: 02_Skills/Game/Godot-Mobile-JRPG-UX-v1.md
+    path: 02_Skills/Game/Godot-Mobile-JRPG-UX-v2.md
     description: >
       Godot mobile JRPG UX rules for touch-first premium RPG menus and battle HUDs.
       Covers 48dp touch targets, bottom thumb zones, safe areas via
@@ -1918,10 +2189,11 @@ entries:
     default_for_domains:
       - domain_godot_game_dev
     token_budget: 425
+    file_extension_gate: [".gd"]
 
   - id: skill_godot_ui_runtime
     layer: skill
-    path: 02_Skills/Game/Godot-UI-Runtime-v1.md
+    path: 02_Skills/Game/Godot-UI-Runtime-v2.md
     description: >
       Godot runtime UI rules for HUDs, menus, pause/settings screens, CanvasLayer
       overlays, Control-node structure, keyboard/controller focus, responsive
@@ -1934,10 +2206,11 @@ entries:
     default_for_domains:
       - domain_godot_game_dev
     token_budget: 375
+    file_extension_gate: [".gd"]
 
   - id: skill_godot_testing_ci
     layer: skill
-    path: 02_Skills/Game/Godot-Testing-CI-v1.md
+    path: 02_Skills/Game/Godot-Testing-CI-v2.md
     description: >
       Godot testing and CI validation ladder. Covers Godot binary discovery,
       headless import, script parse checks, scene-load smoke scripts, existing
@@ -1952,10 +2225,11 @@ entries:
     default_for_domains:
       - domain_godot_game_dev
     token_budget: 350
+    file_extension_gate: [".gd"]
 
   - id: skill_godot_android_export
     layer: skill
-    path: 02_Skills/Game/Godot-Android-Export-v1.md
+    path: 02_Skills/Game/Godot-Android-Export-v2.md
     description: >
       Godot Android export rules for APK/AAB presets, package names, min/target
       SDK settings, release signing via export presets or environment variables,
@@ -1970,10 +2244,11 @@ entries:
     default_for_domains:
       - domain_godot_game_dev
     token_budget: 375
+    file_extension_gate: [".gd"]
 
   - id: skill_godot_input_save_audio
     layer: skill
-    path: 02_Skills/Game/Godot-Input-Save-Audio-v1.md
+    path: 02_Skills/Game/Godot-Input-Save-Audio-v2.md
     description: >
       Godot runtime systems guidance for InputMap action design, controller/touch
       remapping, pause/cancel behavior, user:// save and settings files, save
@@ -1986,10 +2261,11 @@ entries:
     default_for_domains:
       - domain_godot_game_dev
     token_budget: 350
+    file_extension_gate: [".gd"]
 
   - id: skill_godot_performance_mobile
     layer: skill
-    path: 02_Skills/Game/Godot-Performance-Mobile-v1.md
+    path: 02_Skills/Game/Godot-Performance-Mobile-v2.md
     description: >
       Godot performance and mobile readiness rules. Covers profiler-first
       diagnosis, CPU/GPU/memory/loading separation, process/physics discipline,
@@ -2003,10 +2279,53 @@ entries:
     default_for_domains:
       - domain_godot_game_dev
     token_budget: 375
+    file_extension_gate: [".gd"]
+
+  - id: skill_kivy_buildozer_android
+    layer: skill
+    path: 02_Skills/Game/Kivy-Buildozer-Android-v1.md
+    description: >
+      Python game development using Kivy and APK packaging via Buildozer. Covers buildozer.spec requirements,
+      density-independent dp coordinate scaling, Touch collision and grab events, and Pyjnius Java bindings.
+    status: active
+    tags: [platform:android, skill, utility:kivy, utility:python, utility:buildozer, utility:pyjnius, utility:mobile]
+    dependencies: []
+    conflicts: []
+    default_for_domains: []
+    token_budget: 375
+    file_extension_gate: [".py", ".kv", ".spec"]
+
+  - id: skill_phaser_webrpg
+    layer: skill
+    path: 02_Skills/Game/Phaser-WebRPG-v1.md
+    description: >
+      Phaser 3 HTML5 game engine integration in Next.js React hydration cycles. Covers dynamic ssr: false imports,
+      canvas container mounting and cleanup (game.destroy), absolute public asset paths, and EventEmitter state bridges.
+    status: active
+    tags: [framework:nextjs, skill, utility:phaser, utility:react, utility:hydration, utility:canvas, utility:game]
+    dependencies: []
+    conflicts: []
+    default_for_domains: []
+    token_budget: 375
+    file_extension_gate: [".js", ".jsx", ".ts", ".tsx"]
+
+  - id: skill_gsap_static_localization
+    layer: skill
+    path: 02_Skills/UI/GSAP-Static-Localization-v1.md
+    description: >
+      GSAP animation lifecycle and static localization scaling rules. Covers gsap.context cleanup,
+      dynamic LTR/RTL layout direction vectors, text wrap/overflow safety configurations, and FOUC prevention.
+    status: active
+    tags: [skill, utility:animation, utility:gsap, utility:scrolltrigger, utility:localization, utility:direction, utility:ui]
+    dependencies: []
+    conflicts: []
+    default_for_domains: []
+    token_budget: 375
+    file_extension_gate: [".js", ".jsx", ".ts", ".tsx"]
 
   - id: skill_tailwind_css_v4
     layer: skill
-    path: 02_Skills/UI/Tailwind-CSS-v4-v1.md
+    path: 02_Skills/UI/Tailwind-CSS-v4-v2.md
     description: >
       Tailwind CSS 4.0+ CSS-first configuration and OKLCH color space rules.
       Removes tailwind.config.js in favor of @theme, enforces container queries,
@@ -2021,7 +2340,7 @@ entries:
 
   - id: skill_motion_kinetic_ui
     layer: skill
-    path: 02_Skills/UI/Motion-Kinetic-UI-v1.md
+    path: 02_Skills/UI/Motion-Kinetic-UI-v2.md
     description: >
       Guidelines for implementing kinetic and immersive UI using motion/react. Covers layout
       transitions, gesture-based motion, and scroll-triggered narrative.
@@ -2041,7 +2360,7 @@ entries:
 
   - id: skill_modern_typography_fluid
     layer: skill
-    path: 02_Skills/UI/Modern-Typography-Fluid-v1.md
+    path: 02_Skills/UI/Modern-Typography-Fluid-v2.md
     description: >
       Premium typography and fluid layout rules. Covers clamp() font scaling,
       variable fonts, and subgrid-based consistency.
@@ -2055,7 +2374,7 @@ entries:
 
   - id: skill_agent_handoff_protocol
     layer: skill
-    path: 02_Skills/Governance/Agent-Handoff-Protocol-v1.md
+    path: 02_Skills/Governance/Agent-Handoff-Protocol-v2.md
     description: >
       Formalized inter-agent handoff protocol. Covers artifact generation,
       state summarization, and memory fragment resolution.
@@ -2067,7 +2386,7 @@ entries:
 
   - id: skill_mcp_agentic_tooling
     layer: skill
-    path: 02_Skills/Governance/MCP-Agentic-Tooling-v1.md
+    path: 02_Skills/Governance/MCP-Agentic-Tooling-v2.md
     description: >
       MCP-centric tool interoperability standards. Covers server/client separation,
       standardized tool schemas, and multi-agent tool sharing.
@@ -2079,7 +2398,7 @@ entries:
 
   - id: skill_parallel_swarm_governance
     layer: skill
-    path: 02_Skills/Governance/Parallel-Swarm-Governance-v1.md
+    path: 02_Skills/Governance/Parallel-Swarm-Governance-v2.md
     description: >
       Governance for parallel agent swarms. Covers workspace locking, result
       aggregation weights, and decentralized voting/consensus.
@@ -2092,13 +2411,15 @@ entries:
 
   - id: skill_standards_currency_audit
     layer: skill
-    path: 02_Skills/Governance/Standards-Currency-Audit-v1.md
+    path: 02_Skills/Governance/Standards-Currency-Audit-v2.md
     description: >
-      Standards-currency audit guidance for routing, adapter, skill, and
-      behavioral OS updates. Ensures agents verify active catalog IDs and
-      current implementation contracts before changing prompt layers.
+      Standards-currency audit v2.0. Web-search-evidence-backed audit of Babel
+      prompt files for version freshness, deprecated APIs, model behavior accuracy,
+      and LLM instruction quality. v2.0 adds OLS-MCC compliance checking (Boundaries,
+      Failure Behavior, Strategic Next Move) and handoff to ols-compiler for
+      hardening stale skills. First full-source version.
     status: active
-    tags: [governance:safety, skill, utility:audit, utility:catalog, utility:currency, utility:standards]
+    tags: [governance:safety, skill, utility:audit, utility:catalog, utility:currency, utility:ols-mcc, utility:standards]
     dependencies: []
     conflicts: []
     token_budget: 325
@@ -2118,6 +2439,7 @@ entries:
     dependencies: []
     conflicts: []
     default_skill_ids:
+      - skill_untrusted_input_guard
       - skill_evidence_gathering
       - skill_compliance_evidence_audit
 
@@ -2127,7 +2449,7 @@ entries:
     description: >
       General research and strategy agent. Uses MPAF/GSA frameworks for
       structured investigation, claim verification, and competitive teardown
-      work. Current OLS v4.1 general-research lineage.
+      work. Apex of OLS v4.1 General APEX lineage.
     status: active
     token_budget: 250
     load_position: 3
@@ -2137,7 +2459,6 @@ entries:
     default_skill_ids:
       - skill_evidence_gathering
       - skill_claim_extraction_ledger
-      - skill_product_reality_audit
 
   - id: domain_product_audit
     layer: domain_architect
@@ -2193,8 +2514,6 @@ entries:
     conflicts: []
     token_budget: 325
     default_skill_ids:
-      - skill_sse_streaming
-      - skill_deno_edge_functions
       - skill_evidence_gathering
       - skill_bcdp_contracts
 
@@ -2203,9 +2522,10 @@ entries:
     path: 02_Domain_Architects/Python_Backend-v1.0.md
     description: >
       Senior Python backend engineer for multi-agent pipelines and deterministic
-      validators. Covers async coordination, typed results, guarded learning
-      proposals, schema-first validation, deterministic scoring, exception
-      propagation, and mutable-default prevention.
+      validators. Covers example_saas_backend scanner (async agents, learning pipeline, guardrail
+      contracts, CI hooks, pytest suites) and example_web_audit ci-validator (scoring weights,
+      schema checks, deterministic output). Enforces async hygiene, exception propagation,
+      mutable-default-argument prohibition, and learning guardrail lock invariants.
     status: active
     load_position: 3
     tags: [utility:agents, utility:async, utility:backend, utility:cli, utility:pipeline, utility:pytest, utility:python, utility:scoring, utility:validators]
@@ -2216,7 +2536,6 @@ entries:
       - skill_log_analysis
       - skill_evidence_gathering
       - skill_bcdp_contracts
-      - skill_ops_observability
 
   - id: domain_android_kotlin
     layer: domain_architect
@@ -2236,8 +2555,10 @@ entries:
     conflicts: []
     default_skill_ids:
       - skill_android_app_classification
+      - skill_android_testing_obligation
       - skill_evidence_gathering
       - skill_bcdp_contracts
+      - skill_jetpack_compose
 
   - id: domain_godot_game_dev
     layer: domain_architect
@@ -2260,28 +2581,50 @@ entries:
 
   - id: pipeline_qa_reviewer
     layer: pipeline_stage
-    path: 02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md
+    path: 07_Pipeline_Stages/QA_Adversarial_Reviewer-v1.0.md
     description: >
       Adversarial QA gate. Reviews SWE plans across six audit layers: Evidence Gate,
       SFDIPOT coverage, NAMIT code-level checklist, BCDP contract verification,
       Security audit, and Root Cause verification. Outputs only PASS or REJECT with
       tagged failures and per-claim confidence scores. Never writes code. Loaded by
-      pipeline_mode: verified or autonomous.
+      pipeline_mode: deep.
     status: active
     selection_scope: stage_only
     load_position: 9
     tags: [governance:safety, utility:bcdp, utility:namit, utility:pipeline_stage, utility:sfdipot, utility:verification]
     token_budget: 425
 
+  - id: pipeline_tui_deep_auditor
+    layer: pipeline_stage
+    path: 07_Pipeline_Stages/TUI-Deep-Auditor-v1.0.md
+    description: >
+      DEEP-depth TUI audit gate. Performs evidence-backed, structured audit of
+      the Babel TUI codebase across seven priority layers (rendering pipeline,
+      agent harness, component system, input system, terminal robustness,
+      quality gate, test coverage). Outputs OLS-MCC verdict (GREEN/YELLOW/RED/GRAY),
+      composite readiness score, gap-coded failure mode catalog, and machine-readable
+      JSON audit block. Read-only. Composable with pipeline_qa_reviewer for
+      cross-validation and meta_ols_compiler for prompt hardening.
+    status: active
+    selection_scope: stage_only
+    load_position: 9
+    tags: [governance:safety, utility:audit, utility:evidence, utility:ols-mcc, utility:pipeline_stage, utility:tui, utility:verification]
+    dependencies: []
+    conflicts: []
+    token_budget: 850
+
   - id: pipeline_cli_executor
     layer: pipeline_stage
-    path: 02_Domain_Architects/CLI_Executor-v1.0.md
+    path: 07_Pipeline_Stages/CLI_Executor-v1.0.md
     description: >
       CLI "Hands" agent. Activates only after QA PASS. Translates the approved
       MINIMAL ACTION SET into physical tool calls (file_read, file_write,
       shell_exec, test_run) one step at a time with verification after each.
       On any failure, halts and emits a PIPELINE_ERROR payload routed back to
-      the SWE Agent. Zero architectural authority. Loaded by pipeline_mode: autonomous.
+      the SWE Agent. Zero architectural authority. Loaded by pipeline_mode: deep.
+      Supports incremental/streaming tool intent emission (<|tool_start|>...json tool_call...<|tool_end|>)
+      for client-side JIT human veto / denied fingerprints (see co-evolution note in 2026-06-13 audit for #45).
+      New workspace_symbol_search tool (approved-roots scoped) is available in context flows.
     status: active
     selection_scope: stage_only
     load_position: 10
@@ -2300,25 +2643,25 @@ entries:
       enforces strict PLAN→ACT gating, and prevents hallucinated file paths.
       Derived from OLS v6.2 Claude variant.
     status: active
-    token_budget: 275
+    token_budget: 160
     load_position: 4
     tags: [utility:adapter, utility:anti_eager, utility:claude]
 
   - id: adapter_codex
     layer: model_adapter
-    path: 03_Model_Adapters/Codex_UltraTerse.md
+    path: 03_Model_Adapters/UltraTerse_Fallback.md
     description: >
-      Personality adapter for Codex/o1. Maximizes brevity and precision for
-      dense algorithmic tasks and schema generation. Derived from OLS v6.2
-      Codex variant.
+      Ultra-terse fallback adapter for schema generation, dense algorithmic
+      tasks, and compressed executor turns. Strips behavioral OS duplicate
+      content; keeps only compression-specific format and architecture rules.
     status: active
-    token_budget: 275
+    token_budget: 100
     load_position: 8
     tags: [utility:adapter, utility:schema, utility:terse]
 
-  - id: adapter_codex_balanced
+  - id: adapter_deepseek_balanced
     layer: model_adapter
-    path: 03_Model_Adapters/Codex_Balanced.md
+    path: 03_Model_Adapters/DeepSeek_Balanced.md
     description: >
       Balanced Codex adapter for multi-file refactors, frontend work, and
       architecture-sensitive edits. Preserves Codex execution strengths without
@@ -2326,17 +2669,17 @@ entries:
     status: active
     load_position: 8
     tags: [utility:adapter, utility:balanced, utility:frontend, utility:refactor]
-    token_budget: 275
+    token_budget: 90
 
   - id: adapter_gemini
     layer: model_adapter
     path: 03_Model_Adapters/Gemini_LongContext.md
     description: >
-      Personality adapter for Gemini. Optimized for long-context document
-      synthesis, log analysis, and multi-file research tasks. Derived from OLS
-      v6.2 Gemini variant.
+      Long-context adapter for Gemini 2.5 Flash/Pro. Leverages 1M+ token
+      context window for multi-document reasoning. Strips behavioral OS
+      duplicates; keeps only model-specific strengths and format rules.
     status: active
-    token_budget: 275
+    token_budget: 95
     load_position: 8
     tags: [utility:adapter, utility:gemini, utility:google, utility:long_context]
 
@@ -2348,7 +2691,7 @@ entries:
       contracts, integer confidence rounding, and suppresses prose contamination
       for automated verification pipelines.
     status: active
-    token_budget: 300
+    token_budget: 250
     load_position: 4
     tags: [governance:safety, utility:adapter, utility:adversarial, utility:nemotron, utility:nvidia]
 
@@ -2356,10 +2699,10 @@ entries:
     layer: model_adapter
     path: 03_Model_Adapters/Scout_Orchestrator.md
     description: >
-      Structural adapter for Llama 4 Scout orchestration and triage turns.
-      Requires evidence-backed paths and schema validation after JSON generation.
+      Structural adapter for Llama 4 Scout. Optimized for 10M+ context windows,
+      high-precision orchestration, and structural triage turns.
     status: active
-    token_budget: 350
+    token_budget: 120
     load_position: 4
     tags: [orchestrator, utility:adapter, utility:llama, utility:meta, utility:triage]
 
@@ -2370,7 +2713,7 @@ entries:
       Thinking/Standard hybrid adapter for Qwen 3. Manages inference modes for
       precise planning (thinking) and fast execution (standard).
     status: active
-    token_budget: 350
+    token_budget: 120
     load_position: 4
     tags: [execution, governance:evidence, utility:adapter, utility:alibaba, utility:qwen]
 
@@ -2384,18 +2727,29 @@ entries:
     path: 04_Meta_Tools/Prompt_Compiler-v5.0.md
     description: >
       Deterministic meta-prompt compiler. Use for hardening and validating
-      new domain or adapter prompts in the current canonical lineage.
+      new domain or adapter prompts. Apex of OLS v5.0 Canonical lineage.
     status: active
     token_budget: 300
     tags: [utility:authoring, utility:compiler, utility:meta]
+
+  - id: meta_research_optimizer
+    layer: meta_tool
+    path: 04_Meta_Tools/Research_Optimizer.md
+    description: >
+      Prompt improvement research plan. Guides structured investigation of
+      whether a prompt change is grounded in evidence before adopting it.
+    status: active
+    token_budget: 275
+    tags: [utility:meta, utility:optimization, utility:research]
 
   - id: meta_namit_critique
     layer: meta_tool
     path: 04_Meta_Tools/NAMIT-Research-Critique.md
     description: >
-      Reference critique of NAMIT and confidence scoring. Treats NAMIT as a
-      Babel-local mnemonic, not an industry standard, and compares it with
-      established test-planning heuristics for bounded prompt authoring.
+      Research critique of the NAMIT edge-case framework and confidence scoring
+      protocol. Confirms NAMIT is a proprietary OLS mnemonic (not industry-
+      standard). Recommends Hybrid approach: SFDIPOT for test planning + NAMIT
+      for code-level checks. Reference when authoring QA_Adversarial_Reviewer.
     status: active
     token_budget: 275
     tags: [utility:meta, utility:namit, utility:reference, utility:research]
@@ -2415,9 +2769,9 @@ entries:
     layer: meta_tool
     path: docs/architecture/MCP_Adapter-v1.md
     description: >
-      Canonical read-only MCP control-plane documentation for catalog inspection,
-      typed stack resolution, instruction-stack preview, manifest preview, and
-      the currently registered tool surface.
+      Read-only MCP control-plane adapter for Babel v10 Phase 1. Documents the
+      safe stdio interface for catalog inspection, typed stack resolution,
+      instruction stack preview, and manifest preview. No execution tools.
     status: active
     token_budget: 275
     tags: [compiler_lane, utility:control_plane, utility:mcp, utility:meta, utility:read_only]
@@ -2434,7 +2788,124 @@ entries:
     token_budget: 4550
     tags: [audit, currentness, meta, review, standards]
 
+  - id: meta_dynamic_context_injector
+    layer: meta_tool
+    path: 04_Meta_Tools/dynamic-context-injector/SKILL.md
+    description: >
+      Dynamic skill relevance scoring and selective loading for Babel instruction
+      stack assembly. Augments V9 orchestrator Step C by scoring each candidate
+      skill against the actual task description, filtering by configurable
+      threshold mode (CONSERVATIVE / BALANCED / AGGRESSIVE), and emitting a
+      refined minimal manifest. Reduces token bloat and attention decay in
+      multi-agent runs. Implements Phase 1.3 of the OLS-MCC audit roadmap.
+    status: active
+    selection_scope: discoverable
+    token_budget: 400
+    tags: [utility:context, utility:injection, utility:manifest, utility:meta, utility:relevance, utility:routing, utility:token-efficiency]
+
+  - id: meta_ols_compiler
+    layer: meta_tool
+    path: 04_Meta_Tools/OLS-MCC/ols-compiler/SKILL.md
+    description: >
+      OLS-MCC Meta Prompt Compiler v4.5. Creates, audits, hardens, and compiles
+      production-grade prompts and skills to v4.5 standards. New opt-in modules:
+      Programmatic Optimization (Signature + Reflection Optimizer), Dynamic
+      Alignment Engine, and Enhanced Multi-Agent Patterns. Backed by security
+      threat model, empirical validation register, and OLS Meta-Meta Standards.
+      Enforces Authority Order, Verdict Gates (GREEN/YELLOW/RED/GRAY), Evidence
+      Labels, orthogonal THINKING_DEPTH/OUTPUT_DETAIL axes, and PRODUCTION-level
+      rigor for meta-meta work. Defers pure testing to prompt-tester, deep
+      semantic audit to skill-auditor, relevance routing to
+      dynamic-context-injector, and runtime drift feedback to ops-observability
+      OBSERVE mode.
+    status: active
+    selection_scope: discoverable
+    token_budget: 350
+    tags: [utility:audit, utility:compiler, utility:creation, utility:hardening, utility:meta, utility:ols-mcc, utility:prompt-engineering]
+
+  - id: meta_ols_compiler_coding
+    layer: meta_tool
+    path: skills/ols-compiler-coding/SKILL.md
+    description: >
+      OLS-MCC Coding Compiler v1.0 — specialized ols-compiler variant for
+      software engineering prompts. Compiles, audits, and hardens prompts for
+      code review, test generation, refactoring, PR analysis, and
+      language-specific patterns (TypeScript, Python, Kotlin, GDScript, etc.).
+      Inherits the full v4.5 architecture (Authority Order, Verdict Gates,
+      orthogonal THINKING_DEPTH/OUTPUT_DETAIL axes, Evidence Labels). Includes
+      coding-specific modules: Code Review Patterns, Test Generation Templates,
+      Refactoring Compilation, PR Review Automation, and Language-Specific
+      Nuances. Defers general prompt engineering to base ols-compiler, pure
+      testing to prompt-tester, and semantic audit to skill-auditor.
+    status: active
+    selection_scope: discoverable
+    token_budget: 300
+    tags: [utility:audit, utility:code-review, utility:coding, utility:compiler, utility:creation, utility:hardening, utility:meta, utility:ols-mcc, utility:prompt-engineering, utility:refactoring, utility:test-generation]
+
+  - id: meta_prompt_tester
+    layer: meta_tool
+    path: 04_Meta_Tools/OLS-MCC/prompt-tester/SKILL.md
+    description: >
+      OLS-MCC adversarial prompt and skill tester. Simulates and executes
+      structured test batteries: injection resistance, role override, output
+      schema violations, multi-turn state drift, and assumption violations.
+      Produces structured critique reports with Verdict, Test Results Matrix,
+      prioritized weaknesses with evidence labels, and actionable recommendations.
+      Complements ols-compiler (testing vs creation). Defers deep semantic audit
+      to skill-auditor.
+    status: active
+    selection_scope: discoverable
+    token_budget: 350
+    tags: [utility:adversarial, utility:critique, utility:meta, utility:ols-mcc, utility:robustness, utility:testing]
+
+  - id: meta_skill_auditor
+    layer: meta_tool
+    path: 04_Meta_Tools/OLS-MCC/skill-auditor/SKILL.md
+    description: >
+      OLS-MCC deep semantic skill auditor. Goes beyond structural validation into
+      trigger quality, progressive disclosure, robustness sections, resource
+      organization, non-duplication, and meta-meta alignment. Produces structured
+      GREEN/YELLOW/RED verdicts with prioritized hardening recommendations.
+      Closes the create (ols-compiler) → test (prompt-tester) → audit loop.
+      Self-auditable — passes its own criteria.
+    status: active
+    selection_scope: discoverable
+    token_budget: 400
+    tags: [utility:audit, utility:meta, utility:ols-mcc, utility:quality, utility:semantic, utility:standards, utility:verdict]
+
+  - id: meta_coherence_linter
+    layer: meta_tool
+    path: 04_Meta_Tools/coherence-linter/SKILL.md
+    description: >
+      Pre-activation semantic contradiction detection for Babel skills. Scans
+      skill pairs across three dimensions: rule-level contradictions (opposite
+      safety defaults, incompatible numeric defaults, mutually exclusive
+      always/never rules), version/API conflicts (incompatible library versions,
+      deprecated API vs active recommendation), and handoff gaps (same domain
+      with no dependency or pairs-with declaration). Complements validate-catalog.ps1
+      (structural) and skill-auditor (individual semantic). Phase 2.2 of OLS-MCC
+      audit roadmap.
+    status: active
+    selection_scope: discoverable
+    token_budget: 375
+    tags: [utility:audit, utility:coherence, utility:contradiction, utility:linting, utility:meta, utility:pre-activation, utility:semantic]
+
 # ─────────────────────────────────────────────
+  - id: meta_visualization
+    layer: meta_tool
+    path: 04_Meta_Tools/visualization/SKILL.md
+    description: >
+      Visual introspection for the Babel skill ecosystem. Generates four
+      Mermaid.js diagram types from catalog and runtime data: skill activation
+      graphs (domain->skills with dependency edges), meta-tool handoff graph
+      (create->test->audit->lint->observe loop), workflow traces (sequence
+      diagrams from OBSERVE mode run reports), and catalog heatmaps (skill
+      density by domain). GitHub-native rendering, zero dependencies.
+      Workstream A of Beyond the OLS-MCC Roadmap.
+    status: active
+    selection_scope: discoverable
+    token_budget: 350
+    tags: [utility:diagram, utility:graph, utility:meta, utility:onboarding, utility:trace, utility:visualization]
 # 05 — PROJECT OVERLAYS  (thin, per-project context)
 # ─────────────────────────────────────────────
 
@@ -2442,7 +2913,11 @@ entries:
     layer: project_overlay
     path: 05_Project_Overlays/Example-SaaS-Backend-Context.md
     description: >
-      Routing context for a public-safe multi-tenant SaaS backend example.
+      Project context for example_saas_backend. Covers the verified implementation surfaces:
+      GPC signal-processing endpoint, customer API, browser SDK / loader,
+      dashboard evidence views, and internal scanner tooling, plus hard
+      constraints around scoped enforcement claims, evidence-schema reality,
+      multi-tenant isolation, and evidence-first copy.
     status: active
     token_budget: 325
     load_position: 6
@@ -2453,7 +2928,10 @@ entries:
     layer: project_overlay
     path: 05_Project_Overlays/Example-LLM-Router-Context.md
     description: >
-      Routing context for a public-safe streaming request-router example.
+      Project context for example_llm_router. Covers tech stack (Supabase router, React/
+      Vite, multi-provider LLM, SSE), core invariants (normalized SSE contract,
+      server-side ownership checks, AbortError→504 mapping), and primary
+      objects (router manifests, conversation records).
     status: active
     token_budget: 325
     load_position: 5
@@ -2464,7 +2942,10 @@ entries:
     layer: project_overlay
     path: 05_Project_Overlays/Example-Web-Audit-Context.md
     description: >
-      Routing context for a public-safe web audit and evidence example.
+      Project context for example_web_audit. Covers tech stack (Next.js, Prisma,
+      Supabase, TanStack React Query), hard constraints (append-only audit
+      records, CI validator gating), and primary objects (audit entries,
+      evidence artifacts, compliance reports).
     status: active
     token_budget: 325
     load_position: 6
@@ -2475,35 +2956,48 @@ entries:
     layer: project_overlay
     path: 05_Project_Overlays/Example-Mobile-Suite-Context.md
     description: >
-      Routing context for a public-safe Kotlin mobile application suite example.
+      Project context for example_mobile_suite monorepo. Four Kotlin utility apps:
+      demo_kotlin_one, demo_kotlin_two, demo_kotlin_three (all IAP-monetized, Compose),
+      and demo_accessibility_service (accessibility service, ViewBinding). Current billing
+      version 7.1.1 (v7 EOL Aug 2026 — migration to v8 required). Compose BOM
+      2026.03.01, targetSdk 35. Encodes hard invariants: billing isolation, FileProvider
+      security, screen-enum navigation, no NavHost, EXIF-before-crop rule, JPEG quality
+      floor 35, and demo_accessibility_service policy risk flag.
     status: active
     token_budget: 350
     load_position: 5
     project: example_mobile_suite
     tags: [language:kotlin, platform:android, utility:billing, utility:compose, utility:mobile, utility:overlay]
 
-  - id: overlay_example_mobile_reference
+  - id: overlay_example_mobile_finance
     layer: project_overlay
-    path: 05_Project_Overlays/Example-Mobile-Reference-Context.md
+    path: 05_Project_Overlays/Example-Mobile-Finance-Context.md
     description: >
-      Routing context for the example mobile reference application.
+      Project context for example_mobile_finance. Covers the FinanceExample-Ledger Android
+      port, a local-first personal finance forecasting app in Kotlin +
+      Jetpack Compose with Room, integer-cents precision, and MVVM StateFlow
+      architecture.
     status: active
     token_budget: 325
     load_position: 5
-    project: example_mobile_reference
-    tags: [language:kotlin, platform:android, utility:example_mobile_reference, utility:compose, utility:context, utility:overlay, utility:room]
+    project: example_mobile_finance
+    tags: [language:kotlin, platform:android, utility:example_mobile_finance, utility:compose, utility:context, utility:overlay, utility:room]
 
-  - id: overlay_example_reference_application
+  - id: overlay_example_finance_forecast
     layer: project_overlay
-    path: 05_Project_Overlays/Example-Reference-Application-Context.md
+    path: 05_Project_Overlays/Example-Finance-Forecast-Context.md
     description: >
-      Routing context for a generic persisted-data reference application.
+      Project context for FinanceExampleLedger. Covers tech stack (Kotlin, Room,
+      Compose, Haze, Google Play Billing), core invariants (integer cents,
+      MVVM StateFlow, Room migrations, queryPurchasesAsync entitlement checks),
+      and primary objects (IncomeEntity, PaymentEntity, TransactionEntity,
+      GoalEntity).
     status: active
     selection_scope: discoverable
     token_budget: 1300
     load_position: 6
-    project: example_reference_application
-    tags: [android, compose, kotlin, overlay, reference, room]
+    project: FinanceExampleLedger
+    tags: [android, compose, kotlin, ledger, FinanceExample, overlay, room]
 
   - id: overlay_example_game_workspace
     layer: project_overlay
@@ -2576,7 +3070,10 @@ entries:
     layer: task_overlay
     path: 06_Task_Overlays/Example-SaaS-Backend-Adversarial-Claims-Audit-v1.0.md
     description: >
-      Example SaaS delta for evidence-scoped public claim audits.
+      example_saas_backend-specific delta overlay for adversarial claim audits. Forces
+      careful scoping around endpoint-level enforcement, evidence-schema reality,
+      pricing parity, legal/docs drift, and internal scanner versus
+      customer-facing scanner claims.
     status: active
     token_budget: 275
     load_position: 6
@@ -2587,7 +3084,9 @@ entries:
     layer: task_overlay
     path: 06_Task_Overlays/AI-Android-Development-v1.md
     description: >
-      Android task overlay for repository-grounded generation and review.
+      Android-specific task overlay for AI-assisted coding and review sessions.
+      Injects exact stack anchors, bans stale Android defaults, and adds review
+      gates for Compose, billing, processing, permissions, and test-order discipline.
     status: active
     token_budget: 325
     load_position: 6
@@ -2610,9 +3109,11 @@ entries:
     layer: project_overlay
     path: 05_Project_Overlays/Example-Autonomous-Agent-Context.md
     description: >
-      Public example context for an unattended agent. Covers explicit execution
-      roots, untrusted-input handling, approval-aware state transitions, startup
-      contracts, and structured asynchronous result delivery.
+      Project context for example_autonomous_agent autonomous agent. Covers runtime surface
+      (Step-3.5-Flash/DeepInfra, Slack async, /workspace-root/ execution authority),
+      agent IDs (main, example_autonomous_agent), and hard constraints: governance triad always
+      required, Babel mandatory for dev tasks, AGENTS.md immutable, startup
+      acknowledgment required, absent-user protocol always active.
     status: active
     token_budget: 300
     load_position: 5
@@ -2633,41 +3134,48 @@ entries:
 
 # ─────────────────────────────────────────────
 # AUTONOMOUS AGENT GOVERNANCE SKILLS
+# Pass 16 additions (2026-03-31): untrusted_input_guard, autonomous_agent_state_machine, async_task_delivery
 # ─────────────────────────────────────────────
 
   - id: skill_untrusted_input_guard
     layer: skill
-    path: 02_Skills/Governance/Untrusted-Input-Guard-v1.md
+    path: 02_Skills/Governance/Untrusted-Input-Guard-v2.md
     description: >
-      Prompt injection defense for autonomous agents that consume external input.
-      Classifies input sources (TRUSTED / OPERATOR / UNTRUSTED), scans for injection
-      patterns, extracts legitimate task data, and emits an INJECTION SCAN RESULT
-      audit block. Required for any agent reading Slack, Discord, files, APIs, or
-      webhooks. Does not replace task planning — gates entry into planning.
+      Prompt injection defense v2.0 for autonomous agents. Four-step pipeline:
+      source classification (TRUSTED/OPERATOR/UNTRUSTED), injection pattern
+      scanning (role override, permission escalation, structural injection,
+      multi-turn poisoning), data extraction (task intent from data, discard
+      instruction wrappers), and INJECTION SCAN RESULT audit block. Includes
+      Boundaries, Failure Behavior (6 scenarios including novel patterns),
+      and handoff to ols-compiler for hardening discovered vectors. First
+      full-source version. Non-negotiable for autonomous/unattended modes.
     status: active
-    tags: [governance:safety, skill, utility:autonomous, utility:injection, utility:security, utility:untrusted-input]
+    tags: [governance:safety, skill, utility:autonomous, utility:guard, utility:injection, utility:ols-mcc, utility:security, utility:untrusted-input]
     dependencies: []
     conflicts: []
     token_budget: 380
 
   - id: skill_autonomous_agent_state_machine
     layer: skill
-    path: 02_Skills/Governance/Autonomous-Agent-State-Machine-v1.md
+    path: 02_Skills/Governance/Autonomous-Agent-State-Machine-v2.md
     description: >
-      State-machine governance for unattended operation. Defines planning,
-      approval, execution, reporting, and halt states with project-configured
-      approval policy, hold/halt reports, and session-start acknowledgment.
-      Load for asynchronous or elevated-risk tasks.
+      Six-state machine v2.0 for unattended autonomous operation: IDLE → PLAN →
+      WAIT_FOR_APPROVAL → ACT → REPORT → IDLE, with HALT reachable from any
+      state. Blast-radius-aware absent-user protocol with confidence routing
+      (LOW/MEDIUM/HIGH) and per-tier approval windows (2h MEDIUM, 24h HIGH).
+      10 halt conditions including loop detection and external halt. First
+      full-source version with Boundaries, Failure Behavior, Strategic Next
+      Move, and handoff to untrusted_input_guard + OLS-MCC meta layer.
     status: active
-    tags: [governance:safety, skill, utility:async, utility:autonomous, utility:halt, utility:hitl, utility:state-machine]
+    tags: [governance:safety, skill, utility:async, utility:autonomous, utility:halt, utility:hitl, utility:ols-mcc, utility:state-machine]
     dependencies:
       - skill_untrusted_input_guard
     conflicts: []
-    token_budget: 520
+    token_budget: 550
 
   - id: skill_async_task_delivery
     layer: skill
-    path: 02_Skills/Governance/Async-Task-Delivery-v1.md
+    path: 02_Skills/Governance/Async-Task-Delivery-v2.md
     description: >
       Structured result delivery contract for unattended async task output to messaging
       surfaces (Slack, Discord, webhook). Enforces STATUS / CONFIDENCE / SUMMARY header
@@ -2684,7 +3192,7 @@ entries:
 
   - id: skill_base_consumer_indexing
     layer: skill
-    path: 02_Skills/Governance/Base-Consumer-Indexing-v1.md
+    path: 02_Skills/Governance/Base-Consumer-Indexing-v2.md
     description: >
       Shared base consumer indexing skill. Enforces pre-plan consumer indexing tables
       classifying IN_CONTEXT, NOT_VERIFIED, and EXTERNAL consumers.
@@ -2696,7 +3204,7 @@ entries:
 
   - id: skill_base_deno_runtime
     layer: skill
-    path: 02_Skills/Framework/Base-Deno-Runtime-v1.md
+    path: 02_Skills/Framework/Base-Deno-Runtime-v2.md
     description: >
       Shared base Deno runtime environment rules. Covers ES imports, import maps,
       CORS OPTIONS preflight checks, and standard server response wrappers.
@@ -2705,6 +3213,109 @@ entries:
     dependencies: []
     conflicts: []
     token_budget: 180
+
+  - id: skill_assemble_babel_stack
+    layer: skill
+    path: 02_Skills/Governance/Assemble-Babel-Stack-v1.md
+    description: >
+      Assembles the correct Babel instruction stack for a task. Covers
+      task-purpose identification, domain/skill/adapter selection, overlay
+      loading, and risk classification (COMPATIBLE|RISKY|BREAKING).
+      Also live in .agents/skills/assemble-babel-stack/SKILL.md for
+      Claude Code agent system access.
+    status: active
+    tags: [governance:safety, skill, utility:babel, utility:catalog, utility:stack-assembly]
+    dependencies: []
+    conflicts: []
+    token_budget: 200
+
+  - id: skill_validate_control_plane
+    layer: skill
+    path: 02_Skills/Governance/Validate-Control-Plane-v1.md
+    description: >
+      Validates the Babel control plane after changes. Runs typecheck, build,
+      catalog validation, and control-plane resolver tests. Escalates to
+      compiled-memory tooling checks when relevant.
+      Also live in .agents/skills/validate-control-plane/SKILL.md for
+      Claude Code agent system access.
+    status: active
+    tags: [governance:safety, skill, utility:babel, utility:catalog, utility:control-plane, utility:validation]
+    dependencies: []
+    conflicts: []
+    token_budget: 150
+
+  - id: skill_uncertainty_triage
+    layer: skill
+    path: 02_Skills/Cognition/Uncertainty-Triage-v1.md
+    description: >
+      Uncertainty triage for ambiguous tasks, incomplete evidence, or mid-task
+      confusion. Pairs with all domains and session types. Load when the task
+      is ambiguous, evidence is incomplete, or the model is unsure how to proceed.
+    status: active
+    tags: [cognition:uncertainty, skill, utility:cognition, utility:triage]
+    dependencies: []
+    conflicts: []
+    token_budget: 200
+
+  - id: skill_evidence_field_consistency_audit
+    layer: skill
+    path: 02_Skills/Governance/Evidence-Field-Consistency-Audit-v1.md
+    description: >
+      Audit when a product exposes the same event or decision across multiple
+      layers (API, DB, RPC, UI) and values disagree. End-to-end field tracing
+      for one concrete event before changing code.
+    status: active
+    tags: [governance:audit, governance:evidence, skill, utility:audit, utility:consistency, utility:evidence]
+    dependencies:
+      - skill_evidence_gathering
+    conflicts: []
+    token_budget: 250
+
+  - id: skill_whitehat_web_security_testing
+    layer: skill
+    path: 02_Skills/Governance/Whitehat-Web-Security-Testing-v1.md
+    description: >
+      Authorized defensive web security testing for websites, SaaS dashboards,
+      auth flows, and customer portals. Typical triggers: whitehat test,
+      pre-launch security pass, test auth/session security, website hardening.
+      Pairs with untrusted_input_guard, playwright_e2e, session_model_reality_audit,
+      auth_enumeration_resistance, and security_release_gate.
+    status: active
+    tags: [governance:safety, governance:security, skill, utility:audit, utility:pentest, utility:security, utility:whitehat]
+    dependencies:
+      - skill_untrusted_input_guard
+    conflicts: []
+    token_budget: 350
+
+  - id: skill_agent_documentation_architecture
+    layer: skill
+    path: 02_Skills/Governance/Agent-Documentation-Architecture-v2.md
+    description: >
+      Cold-start agent navigation for repos that need AGENTS/CLAUDE/GEMINI/Copilot
+      instruction routing, PROJECT_CONTEXT docs, stale-doc cleanup, docs-as-code
+      checks, QA/release runbooks, or a compact source-backed documentation graph
+      for no-context LLMs and human maintainers.
+    status: active
+    tags: [governance:docs, skill, utility:agent, utility:architecture, utility:docs, utility:onboarding]
+    dependencies: []
+    conflicts: []
+    token_budget: 300
+
+  - id: skill_android_testing_obligation
+    layer: skill
+    path: 02_Skills/Mobile/Android-Testing-Obligation-v1.md
+    description: >
+      Default Android testing obligation skill. Changed Android behavior needs
+      proof: unit/ViewModel, screenshot, instrumented/platform, build/static,
+      or manual/device. Never claim tests passed without evidence. Use
+      skill_android_test_enforcement_deep for CI gates and release blockers.
+    status: active
+    tags: [framework:android, skill, utility:android, utility:testing]
+    dependencies: []
+    conflicts: []
+    default_for_domains:
+      - domain_android_kotlin
+    token_budget: 200
 
 # ─────────────────────────────────────────────
 # DEPRECATED / SUPERSEDED
@@ -2721,3 +3332,83 @@ entries:
 #     supersedes: "00_System_Router/archive/Orchestrator_Router-v1.0-STUB-DEPRECATED.md"
 #     tags: [router, orchestrator, pipeline_entry]
 #     token_budget: 220
+
+
+  # ─────────────────────────────────────────────
+  # Live-only entries preserved from catch-up merge
+  # ─────────────────────────────────────────────
+  - id: skill_catalog
+    layer: config
+    path: 02_Skills/Skill-Catalog.yaml
+    description: >
+      Registry of atomic technical skills (Lang, DB, API, UI).
+      Used for Just-in-Time (JIT) prompt assembly.
+    status: active
+    token_budget: 200
+    tags: [config, utility:catalog, utility:skills]
+
+  - id: skill_publication_sanitization
+    layer: skill
+    path: 02_Skills/Governance/Publication-Sanitization-v1.md
+    description: >
+      Controlled sanitization for a separately managed publication target.
+      Classifies publication surfaces, uses target-owned transformation rules,
+      and requires scrub, content-policy, and release validation evidence.
+    status: active
+    tags: [governance:safety, skill, utility:content-policy, utility:publication, utility:sanitization, utility:scrub]
+    dependencies: []
+    conflicts: []
+    token_budget: 325
+
+  - id: skill_publication_target_release_gate
+    layer: skill
+    path: 02_Skills/Governance/Publication-Target-Release-Gate-v1.md
+    description: >
+      Release gate for repositories explicitly mapped as publication targets.
+      Requires surface classification, target-owned validation, exact staged
+      paths, and an explicit excluded-path record before remote mutation.
+    status: active
+    tags: [governance:safety, skill, utility:git, utility:github, utility:publication, utility:release-gate, utility:sanitization, utility:secrets]
+    dependencies:
+      - skill_repository_role_discipline
+      - skill_publication_sanitization
+    conflicts: []
+    token_budget: 325
+
+  - id: skill_repository_role_discipline
+    layer: skill
+    path: 02_Skills/Governance/Repository-Role-Discipline-v1.md
+    description: >
+      Repository-role discipline for multi-repository workspaces. Maps
+      authoritative, publication-target, and standalone repositories and
+      verifies content policy and remote role before Git operations.
+    status: active
+    tags: [governance:safety, skill, utility:git, utility:github, utility:publication, utility:remote-role, utility:repository-role]
+    dependencies:
+      - skill_repo_boundary_release_hygiene
+    conflicts: []
+    token_budget: 325
+
+  - id: overlay_example_mobile_reference
+    layer: project_overlay
+    path: 05_Project_Overlays/Example-Mobile-Reference-Context.md
+    description: >
+      Routing context for the example mobile reference application.
+    status: active
+    token_budget: 325
+    load_position: 5
+    project: example_mobile_reference
+    tags: [language:kotlin, platform:android, utility:example_mobile_reference, utility:compose, utility:context, utility:overlay, utility:room]
+
+  - id: overlay_example_reference_application
+    layer: project_overlay
+    path: 05_Project_Overlays/Example-Reference-Application-Context.md
+    description: >
+      Routing context for a generic persisted-data reference application.
+    status: active
+    selection_scope: discoverable
+    token_budget: 1300
+    load_position: 6
+    project: example_reference_application
+    tags: [android, compose, kotlin, overlay, reference, room]
+

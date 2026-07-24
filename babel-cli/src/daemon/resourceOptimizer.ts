@@ -3,8 +3,8 @@
  *
  * Routes daemon jobs to the most appropriate model based on task
  * characteristics. Tracks per-model usage statistics for cost optimization.
- * Babel differentiator: no competitor daemon routes background jobs
- * across a multi-model fleet.
+ * Routes daemon jobs across a multi-model fleet to the most appropriate
+ * model based on task characteristics and cost constraints.
  */
 
 import type { AgentJob } from '../services/agentJobs.js';

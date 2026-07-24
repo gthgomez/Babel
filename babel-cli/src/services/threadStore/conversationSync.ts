@@ -1,6 +1,6 @@
 /**
  * Rebuild ChatEngine conversation from committed HistoryCell records.
- * P1-C: Prefer typed ThreadEventLog when available so tool results are not dropped.
+ * Prefer typed ThreadEventLog when available so tool results are not dropped.
  */
 
 import type { ChatMessage } from '../../agent/chatToolDefinitions.js';
@@ -47,7 +47,7 @@ export function providerMessagesToChatMessages(
 }
 
 /**
- * P1-C exact resume: rebuild provider context from typed events so no tool
+ * Rebuild provider context from typed events so no tool
  * result is dropped. Also mirrors into the legacy conversation store.
  */
 export function applyEventLogToChatEngine(
@@ -98,7 +98,7 @@ export function createEngineFromThreadCells(
 }
 
 /**
- * P1-C: Create/resync engine from a durable ThreadEventLog so tool results
+ * Create/resync engine from a durable ThreadEventLog so tool results
  * are not dropped on resume.
  */
 export function createEngineFromEventLog(

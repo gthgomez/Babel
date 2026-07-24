@@ -1947,7 +1947,7 @@ export class ConversationalRenderer extends BaseRenderer {
         const allLines = diffContent.split('\n');
         const maxLines = 20;
         const diffLines = allLines.slice(0, maxLines);
-        // Batch 2: Compute gutter width from hunk headers for line numbers
+        // Compute gutter width from hunk headers for line numbers
         let gutterWidth = 0;
         for (const diffLine of diffLines) {
           if (diffLine.startsWith('@@')) {
@@ -2090,7 +2090,7 @@ export class ConversationalRenderer extends BaseRenderer {
   }
 
   /**
-   * T4.1: User-visible notice when ChatEngine compacted conversation context.
+   * User-visible notice when ChatEngine compacted conversation context.
    * Writes a one-line toast into the transcript (not as model thought text).
    */
   onContextCompacted(message?: string): void {
@@ -2242,7 +2242,7 @@ export class ConversationalRenderer extends BaseRenderer {
     });
     scheduler.setComponentPermanentDirty('thinking-spinner', true);
 
-    // Batch 2: Terminal resize — thinking overlay + streaming reflow (B6).
+    // Terminal resize — thinking overlay + streaming reflow (B6).
     // Single path via OutputBuffer (debounced; width + height).
     this._unregisterResize = OutputBuffer.getInstance().onResize((width: number, height: number) => {
       this._handleTerminalResize(width, height);
@@ -2281,7 +2281,7 @@ export class ConversationalRenderer extends BaseRenderer {
     }
     FrameScheduler.getInstance().setComponentPermanentDirty('thinking-spinner', false);
 
-    // Batch 2: Remove resize handler
+    // Remove resize handler
     if (this._unregisterResize) {
       this._unregisterResize();
       this._unregisterResize = null;
