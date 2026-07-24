@@ -10,7 +10,7 @@
  *
  * LIVE MODE (BABEL_LIVE=true, or persisted dry-mode off):
  *   Mutating operations are executed for real via SafeExecutor (sandbox.ts),
- *   which enforces path traversal protection, a command whitelist, and
+ *   which enforces path traversal protection, a command allowlist, and
  *   shell-injection blocking. Activate only after validating dry-run output
  *   and confirming the SWE plan is safe.
  *
