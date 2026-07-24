@@ -151,7 +151,7 @@ Google services do not exist on Fire OS. Apps that call them at runtime will cra
 | Play Integrity API | Amazon Device Messaging or custom | Different attestation model |
 
 **Recommendation for utility apps with no Google services dependency:**
-example_app_one, example_app_two, and example_app_three use no Google services beyond Play Billing.
+example_app_1, example_app_2, and example_app_3 use no Google services beyond Play Billing.
 The only change required is swapping the billing implementation via a product flavor.
 
 ---

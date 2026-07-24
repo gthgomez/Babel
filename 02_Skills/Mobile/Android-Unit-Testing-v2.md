@@ -285,7 +285,7 @@ fun `purchase unlocks pro flag in ViewModel state`() = runTest {
 
 For processing logic that can be extracted from Android-specific code:
 
-### Testing constraint math (example_app_one example)
+### Testing constraint math (example_app_1 example)
 
 ```kotlin
 class FixConstraintsTest {
@@ -349,7 +349,7 @@ Fakes belong in `src/test/java/com.<app>/fakes/`. They implement the real interf
 expose control methods for tests.
 
 ```kotlin
-// src/test/java/com.example_app_one/fakes/FakeExactUploadEngine.kt
+// src/test/java/com.example_app_1/fakes/FakeExactUploadEngine.kt
 class FakeExactUploadEngine : ExactUploadEngine {
     var result: FixResult = FixResult.Failure(FixFailure.ProcessingFailed)
     var processCallCount = 0
@@ -366,7 +366,7 @@ class FakeExactUploadEngine : ExactUploadEngine {
     }
 }
 
-// src/test/java/com.example_app_one/fakes/FakeBillingGateway.kt
+// src/test/java/com.example_app_1/fakes/FakeBillingGateway.kt
 class FakeBillingGateway : BillingGateway {
     private val _isProUnlocked = MutableStateFlow(false)
     override val isProUnlocked: StateFlow<Boolean> = _isProUnlocked.asStateFlow()

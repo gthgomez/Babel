@@ -9,7 +9,7 @@ status: ACTIVE
 last_verified: 2026-07-03
 -->
 
-# Skill: Breaking Change Detection Protocol (BCDP) — v1.0
+# Skill: Breaking Change Detection Protocol (BCDP) — v2.0
 
 **Category:** Governance
 **Status:** Active

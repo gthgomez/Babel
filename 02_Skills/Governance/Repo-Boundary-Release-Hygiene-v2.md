@@ -9,7 +9,7 @@ status: ACTIVE
 last_verified: 2026-07-03
 -->
 
-# Skill: Repo Boundary Release Hygiene (v1.2)
+# Skill: Repo Boundary Release Hygiene (v2.0)
 **Category:** Governance
 **Status:** Active
 **Activation:** Load when a workspace contains multiple nested repos, temp/export folders, or ambiguous git roots and the task involves committing, batching, releasing, or pushing changes.

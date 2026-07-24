@@ -78,7 +78,7 @@ Similar to Google Play's Data Safety section:
 - Failure to provide data safety information blocks new registrations and updates
 - Accessible in Seller Portal under the app's listing details
 
-**For offline utility apps (example_app_one pattern):**
+**For offline utility apps (example_app_1 pattern):**
 - Declare: no data collected or transmitted
 - State: 100% offline processing
 - Confirm: no analytics SDK, no network calls

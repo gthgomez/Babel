@@ -2,7 +2,7 @@
 status: ACTIVE
 last_verified: 2026-07-03
 -->
-# Log Analysis Skill v1
+# Log Analysis Skill v2
 
 ## Activation
 

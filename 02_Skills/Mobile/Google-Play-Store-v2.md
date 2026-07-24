@@ -117,7 +117,7 @@ Implementation pattern belongs to `skill_android_play_store_compliance`, which c
 | Foreground app detection, keep-awake, automation, monitoring | **PROHIBITED** — app suspension + possible account termination |
 | Content scraping, UI interaction automation | **NEVER PERMITTED** |
 
-**example_app_four impact:** The current `BIND_ACCESSIBILITY_SERVICE` foreground-detection approach
+**example_app_4 impact:** The current `BIND_ACCESSIBILITY_SERVICE` foreground-detection approach
 is a policy violation as of January 28, 2026. Migration to `UsageStatsManager +
 PACKAGE_USAGE_STATS` is required before any Google Play submission. The concrete migration pattern
 lives in `skill_android_play_store_compliance`.
@@ -157,7 +157,7 @@ the policy threshold and the Play Console consequences.
 - Google uses ML to cross-check declared data vs. SDK runtime behavior — accurate declarations are enforced
 - Third-party SDK data collection counts as your collection — declare all SDKs' behavior
 
-**For offline utility apps with no billing SDK (example_app_four pattern):**
+**For offline utility apps with no billing SDK (example_app_4 pattern):**
 - Declare: no data collected or transmitted
 - Privacy policy must state "All processing occurs locally on device. No data is collected or transmitted."
 - Verify no analytics SDK is linked in the APK (use APK Analyzer in Android Studio)
@@ -170,10 +170,10 @@ Apps with RevenueCat cannot answer "No data collected" in the Data Safety form.
 
 | App | Local processing | RevenueCat present | Data Safety answer |
 |-----|-----------------|-------------------|--------------------|
-| example_app_one (Play flavor) | ✓ local only | ✓ YES | Declare purchase history |
-| example_app_two (Play flavor) | ✓ local only | ✓ YES | Declare purchase history |
-| example_app_three (Play flavor) | ✓ local only | ✓ YES | Declare purchase history |
-| example_app_four | ✓ local only | ✗ NO | "No data collected" (if no other SDK transmits) |
+| example_app_1 (Play flavor) | ✓ local only | ✓ YES | Declare purchase history |
+| example_app_2 (Play flavor) | ✓ local only | ✓ YES | Declare purchase history |
+| example_app_3 (Play flavor) | ✓ local only | ✓ YES | Declare purchase history |
+| example_app_4 | ✓ local only | ✗ NO | "No data collected" (if no other SDK transmits) |
 
 Privacy policy text for billing apps:
 > *"All file, image, and PDF processing occurs locally on your device and is never transmitted

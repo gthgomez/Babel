@@ -2,7 +2,7 @@
 status: ACTIVE
 last_verified: 2026-07-03
 -->
-# Exact Output Schema Skill v1
+# Exact Output Schema Skill v2
 
 ## Activation
 
