@@ -1,0 +1,19 @@
+# Ripgrep ignore patterns for Babel public repo
+# Prevents Glob/Ripgrep timeouts on unscoped searches (20s default timeout)
+# Per CLAUDE.md Environment Gotcha #3
+
+# Build artifacts and dependencies
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Generated runtime paths (never search these)
+runs/
+artifacts/
+runtime/
+
+# Git internals
+.git/
+
+# CI artifacts
+coverage/

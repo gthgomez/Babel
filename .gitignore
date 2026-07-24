@@ -70,3 +70,25 @@ desktop.ini
 *.tmp
 *.bak
 WebLLM-Contextdoc.md
+
+# ─── Babel runtime history / generated artifacts ────────────────────────────
+.babel_history
+artifacts/live-governance-evidence/
+babel-cli/artifacts/
+babel-cli/runs/
+babel-cli/scratch/
+babel-cli/output/
+
+# ─── Agent tools / terminals / MCP servers (runtime) ─────────────────────────
+agent-tools/
+terminals/
+mcps/
+
+# ─── Claude Code worktrees ───────────────────────────────────────────────────
+.claude/worktrees/
+
+# ─── Editor / cursor ─────────────────────────────────────────────────────────
+.cursor/
+
+# ─── Factory campaign artifacts ──────────────────────────────────────────────
+plans/factory/

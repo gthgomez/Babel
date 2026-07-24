@@ -1,0 +1,16 @@
+id: android-testing-strategy
+name: Android Testing Strategy
+version: 0.1.0
+status: reviewed
+description: Android test-surface routing for JVM, instrumented, screenshot, ViewModel, Gradle, and device-availability decisions.
+entrypoint: SKILL.md
+allowed_tools:
+  - shell_command
+  - apply_patch
+denied_tools: []
+inputs: contracts/input.schema.json
+outputs: contracts/output.schema.json
+tests: tests/
+owner: Babel Skill Forge
+created_at: 2026-04-29T05:09:36.809Z
+updated_at: 2026-04-29T05:20:00.000Z
