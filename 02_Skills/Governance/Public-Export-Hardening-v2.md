@@ -39,7 +39,8 @@ Load only the repo-role, export-workflow, release-checklist, and surface-classif
 
 Use these tools, not ad hoc copy/scrub flows:
 
-- `tools/export-babel-public.ps1`
+- `tools/check-public-content-policy.ps1`
+- `tools/run-public-secret-scan.ps1`
 - `tools/check-public-scrub.ps1`
 - `tools/validate-public-release.ps1`
 
@@ -64,9 +65,9 @@ Before editing, classify each touched artifact:
 Preferred path:
 
 1. improve the private source intentionally
-2. export through `tools/export-babel-public.ps1`
-3. let the export pipeline perform the replacement rules
-4. harden the public tree afterward only where needed
+2. run `tools/check-public-content-policy.ps1` and `tools/run-public-secret-scan.ps1`
+3. apply replacement rules from `tools/security/public-content-policy.json`
+4. harden the content afterward only where needed
 
 **Rule:** Do not use sanitization rules as permission to rewrite `private source repo` into a pseudo-public repo.
 
