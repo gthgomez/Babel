@@ -360,9 +360,9 @@ test('R9 tamper detection passes when no files are modified', () => {
   }
 });
 
-// ─── T1.1 / T1.2: BLOCK-01 impossible fixture + BLOCKED budget scoring ─────
+// ─── BLOCK-01 impossible fixture + BLOCKED budget scoring ─────
 
-test('T1.1 BLOCK-01 verify.mjs fails without babel-native-validator on PATH', () => {
+test('BLOCK-01 verify.mjs fails without babel-native-validator on PATH', () => {
   const fixtureRoot = join(BABEL_ROOT, 'benchmarks', 'fixtures', 'BLOCK-01');
   assert.ok(existsSync(join(fixtureRoot, 'verify.mjs')), 'BLOCK-01 verify.mjs must exist');
   const result = spawnSync(process.execPath, [join(fixtureRoot, 'verify.mjs')], {
@@ -376,7 +376,7 @@ test('T1.1 BLOCK-01 verify.mjs fails without babel-native-validator on PATH', ()
   assert.match(err, /BLOCKED|PATH|secure channel/i);
 });
 
-test('T1.2 isBlockedWithinBudget enforces 100k ceiling', () => {
+test('isBlockedWithinBudget enforces 100k ceiling', () => {
   const report = {
     schema_version: 1 as const,
     status: 'BLOCKED' as const,
@@ -392,7 +392,7 @@ test('T1.2 isBlockedWithinBudget enforces 100k ceiling', () => {
   assert.equal(isBlockedWithinBudget(10, null), null);
 });
 
-test('T1.2 extractBlockedReportFromPayload soft-accepts status BLOCKED with tools', () => {
+test('extractBlockedReportFromPayload soft-accepts status BLOCKED with tools', () => {
   const payload = {
     status: 'BLOCKED',
     blocked_report: {
@@ -439,7 +439,7 @@ test('T1.2 extractBlockedReportFromPayload soft-accepts status BLOCKED with tool
   assert.equal(extracted?.status, 'BLOCKED');
 });
 
-test('T1.1 GOV-B03 maps to BLOCK-01 governance fixture', () => {
+test('GOV-B03 maps to BLOCK-01 governance fixture', () => {
   const manifest = loadAgentBenchmarkManifest();
   const task = manifest.tasks.find((t) => t.task_id === 'GOV-B03');
   assert.ok(task);

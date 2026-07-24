@@ -1,5 +1,5 @@
 /**
- * T0.1 / T0.2 — mutation and verifier tool identity helpers.
+ * Mutation and verifier tool identity helpers.
  */
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';

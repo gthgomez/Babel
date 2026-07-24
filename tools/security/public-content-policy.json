@@ -9,7 +9,7 @@
     "(?i)(^|/)babel-benchmark-results\\.jsonl$"
   ],
   "generated_artifact_allowlist": [],
-  "excluded_path_prefixes": ["docs/archive/", "02_Domain_Architects/archive/"],
+  "excluded_path_prefixes": ["docs/archive/", "02_Domain_Architects/archive/", "02_Skills/archive/", "skills/"],
   "excluded_paths": [],
   "temporary_exceptions": [
     {
@@ -198,6 +198,48 @@
         "pattern": "(?i)deferrable guaranteed work",
         "rationale": "This is Android's documented category for persistent WorkManager work.",
         "evidence": "https://developer.android.com/develop/background-work/background-tasks/persistent"
+      },
+      {
+        "path": "02_Skills/Mobile/Android-Release-Build-v2.md",
+        "pattern": "(?i)transition from debug to production-ready build",
+        "rationale": "Describes a task category; does not claim the current repository is production ready.",
+        "evidence": "02_Skills/Mobile/Android-Release-Build-v1.md"
+      },
+      {
+        "path": "02_Skills/Mobile/Android-SAF-v2.md",
+        "pattern": "(?i)not guaranteed to be seekable",
+        "rationale": "Explicit limitation, not an outcome guarantee.",
+        "evidence": "https://developer.android.com/reference/android/content/ContentResolver#openFileDescriptor(android.net.Uri,%20java.lang.String)"
+      },
+      {
+        "path": "02_Skills/Mobile/Platform/Android-Background-Work-v2.md",
+        "pattern": "(?i)deferrable guaranteed work",
+        "rationale": "This is Android's documented category for persistent WorkManager work.",
+        "evidence": "https://developer.android.com/develop/background-work/background-tasks/persistent"
+      },
+      {
+        "path": "02_Skills/Game/Phaser-WebRPG-v1.md",
+        "pattern": "(?i)to guarantee correct routing",
+        "rationale": "Technical instruction for asset path prefixing; describes developer action, not product guarantee.",
+        "evidence": "02_Skills/Game/Phaser-WebRPG-v1.md"
+      },
+      {
+        "path": "02_Skills/UI/Motion-Kinetic-UI-v2.md",
+        "pattern": "(?i)(To guarantee smooth visual|guarantee 60\\/120fps|eliminate layout shift)",
+        "rationale": "Animation optimization guidance describing frame-budget targets; not a product-level claim.",
+        "evidence": "02_Skills/UI/Motion-Kinetic-UI-v2.md"
+      },
+      {
+        "path": "04_Meta_Tools/*",
+        "pattern": "(?i)\\b(production[- ]ready|guarantee(?:d|s)?|proves?|always correct)\\b",
+        "rationale": "Meta-tool instructions use these terms exclusively in negative/diagnostic contexts (never claim, not a guarantee, mark unverified instead of guaranteed, etc.) — they instruct agents to AVOID making these claims.",
+        "evidence": "04_Meta_Tools/OLS-MCC/ols-compiler/SKILL.md"
+      },
+      {
+        "path": "07_Pipeline_Stages/*",
+        "pattern": "(?i)\\b(production[- ]ready|guarantee(?:d|s)?)\\b",
+        "rationale": "Pipeline stage instructions use these terms in diagnostic/verification contexts (do not claim production-ready without evidence).",
+        "evidence": "07_Pipeline_Stages/TUI-Deep-Auditor-v1.0.md"
       }
     ]
   },

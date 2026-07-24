@@ -266,7 +266,7 @@ export interface ChatEngineOptions {
   task: string;
   projectRoot: string;
   systemContext?: string;
-  /** Batch 3: Appended system prompt fragments (plugins, skills, project memory).
+  /** Appended system prompt fragments (plugins, skills, project memory).
    *  Injected after the base system prompt for layered context assembly. */
   appendSystemPrompt?: string;
   /** Pre-flight context injected into the system prompt (git state, session info, etc.).
@@ -379,7 +379,7 @@ export type ChatEvent =
 
 export interface ChatResult {
   status: 'completed' | 'failed' | 'cancelled' | 'blocked' | 'budget_exhausted';
-  /** P0-D: Honest terminal outcome — semantically precise, never conflated.
+  /** Honest terminal outcome — semantically precise, never conflated.
    *  Optional for backward compatibility with test fixtures that omit it. */
   outcome?: TerminalOutcome;
   answer: string;
@@ -413,15 +413,15 @@ export interface ChatResult {
 
 const SUB_AGENT_MAX_ROUNDS = 4;
 const TURN_TIMEOUT_MS = 120_000; // per-turn LLM call deadline
-const MAX_TOOL_CONCURRENCY = 6; // Batch 3 #14: prevent exhausting connection pools
+const MAX_TOOL_CONCURRENCY = 6; // Prevent exhausting connection pools
 
 // ─── ChatEngine ───────────────────────────────────────────────────────────
 
 export class ChatEngine {
-  // P0-B TODO: once ProviderMessage[] path is stable, remove legacy ChatMessage[]
+  // TODO: once ProviderMessage[] path is stable, remove legacy ChatMessage[]
   // conversation store and Markdown flattening buildChatTurnPrompt.
   private conversation: ChatMessage[] = [];
-  /** P0-B: Structured provider conversation — native tool calls and results with IDs. */
+  /** Structured provider conversation — native tool calls and results with IDs. */
   private providerConversation: ProviderMessage[] = [];
   private abortController: AbortController;
   private engineRunId: string;
@@ -484,7 +484,7 @@ export class ChatEngine {
    *  Used by the auto-continue refusal gate — a turn with zero tool
    *  calls must not be auto-restarted. */
   private _hadToolCallsThisTurn = false;
-  /** T2.3: When true, the next deliberateTurn / native-tools call restricts
+  /** When true, the next deliberateTurn / native-tools call restricts
    *  the tool schema to write+verify+todo+finish only (no read/exploration).
    *  Set by the stall restrict_tools intervention; cleared after one turn. */
   private restrictToolsNextTurn = false;
@@ -505,7 +505,7 @@ export class ChatEngine {
    *  Used alongside AbortController to close the race window where a new
    *  controller replaces the aborted one before the loop re-checks it. */
   private _cancelled = false;
-  /** E5: LLM-based conversation compaction (from chatCompaction.ts).
+  /** LLM-based conversation compaction (from chatCompaction.ts).
    *  Undefined when BABEL_COMPACTION=off — falls back to heuristic truncation. */
   private compactionManager?: CompactionManager;
   /**
@@ -598,9 +598,9 @@ export class ChatEngine {
     this.engineRunId = allocateThreadId();
     // definite assignment: engineRunId set immediately above
     this.parity = createParityRuntime(this.engineRunId);
-    clearBackgroundShellRegistry(); // T2.2: per-session bg shell isolation
+    clearBackgroundShellRegistry(); // Per-session bg shell isolation
 
-    // E5: Initialize LLM-based compaction manager (gated behind BABEL_COMPACTION=off).
+    // Initialize LLM-based compaction manager (gated behind BABEL_COMPACTION=off).
     // When disabled or on failure, falls back to the inline compactConversation() heuristic.
     if (process.env['BABEL_COMPACTION'] !== 'off') {
       this.compactionManager = new CompactionManager();
@@ -620,7 +620,7 @@ export class ChatEngine {
       this.options.systemContext = babelMd + (this.options.systemContext ? '\n\n' + this.options.systemContext : '');
     }
 
-    // T3.1: Task-class playbook inject for REPL/chat (benchmark path already had this).
+    // Task-class playbook inject for REPL/chat (benchmark path already had this).
     const chatPlaybook = selectPlaybookForChatTask(this.options.task);
     if (chatPlaybook) {
       this.activePlaybook = chatPlaybook;
@@ -630,7 +630,7 @@ export class ChatEngine {
           (this.options.systemContext ? this.options.systemContext + '\n\n' : '') + pbPrompt;
       }
     }
-    // T3.3: Plan-then-execute hard gate when playbook/size threshold says so.
+    // Plan-then-execute hard gate when playbook/size threshold says so.
     this.requireTodoBeforeMutate = shouldRequireTodoPlan(this.options.task, this.activePlaybook);
 
     // Implementor W1.3 / W1.4: operator mode + hard plan + plan handoff.
@@ -1031,7 +1031,7 @@ export class ChatEngine {
   }
 
   /**
-   * P1-A: Non-stream entry is a thin adapter over submitMessageStream.
+   * Non-stream entry is a thin adapter over submitMessageStream.
    * One loop owns semantics; presentation maps ChatEvent → callbacks.
    */
   async submitMessage(
@@ -1289,7 +1289,7 @@ export class ChatEngine {
       const _tracer = trace.getTracer('babel-cli', '1.0.0');
       let _turnSpan: Span | null = _tracer.startSpan('babel.chat.turn');
 
-      // Compact if needed (E5) + T4.1 user-visible notice via stream event
+      // Compact if needed; user-visible notice via stream event
       const compactInfo = await this.compactIfNeeded();
       if (compactInfo) {
         yield { type: 'context_compacted', ...compactInfo };
@@ -1793,7 +1793,7 @@ export class ChatEngine {
           );
         }
 
-        // P1-B/C: record progress + durable tool results (contentHash for re-read fidelity)
+        // Record progress + durable tool results (contentHash for re-read fidelity)
         const turnSlice = this.toolCallLog.slice(this._turnToolCallLogStart);
         const resolveToolCallId = (idx: number): string => {
           if (providerToolCallIds?.[idx]) return providerToolCallIds[idx]!;
@@ -2250,7 +2250,7 @@ export class ChatEngine {
   cancel(): void {
     this._cancelled = true;
     this.abortController.abort();
-    // P2-B: first Ctrl+C → cancel_turn; second may request exit_process (host-owned).
+    // First Ctrl+C → cancel_turn; second may request exit_process (host-owned).
     const { effects } = dispatchInputArbiter({ type: 'ctrl_c' });
     this._lastCancelArbiterEffects = consumeInputArbiterEffects(effects);
     // AC3 choke point: cancel always flushes event log to disk
@@ -2268,7 +2268,7 @@ export class ChatEngine {
     return { ...this._lastCancelArbiterEffects };
   }
 
-  /** P1-C: expose durable event log for resume / tests. */
+  /** Expose durable event log for resume / tests. */
   getParityEventLog() {
     return this.parity.eventLog;
   }
@@ -2277,7 +2277,7 @@ export class ChatEngine {
     return this.parity;
   }
 
-  /** P1-C: restore persisted event log after kill/restart resume. */
+  /** Restore persisted event log after kill/restart resume. */
   restoreEventLog(log: import('./threadEventLog.js').ThreadEventLog): void {
     this.parity.eventLog = log;
     const lastTurn = [...log.events].reverse().find((e) => e.kind === 'turn_started');
@@ -2336,7 +2336,7 @@ export class ChatEngine {
     this.cachedSystemPromptText = null;
   }
 
-  /** P1-C: restore structured provider conversation (tool call/result IDs) on resume. */
+  /** Restore structured provider conversation (tool call/result IDs) on resume. */
   replaceProviderConversation(messages: ProviderMessage[]): void {
     this.providerConversation = messages;
   }
@@ -2538,7 +2538,7 @@ export class ChatEngine {
       signal: this.abortController.signal,
     };
     let subAgentCounter = 0;
-    // P1-A: order-preserving batches (only consecutive reads may parallelize).
+    // Order-preserving batches (only consecutive reads may parallelize).
     const batches = planToolBatches(
       orderChatToolActions(
         actions.map((a) => ({
@@ -2606,7 +2606,7 @@ export class ChatEngine {
     const restoreProjectRoot = pinProjectRootEnv(this.options.projectRoot);
 
     try {
-      // T3.3 / T3.4: plan-then-execute + optional phase tool gates (before side effects)
+      // Plan-then-execute + optional phase tool gates (before side effects)
       const isMutationSubAgent =
         action.type === 'sub_agent' && (action as { mutation?: boolean }).mutation === true;
       // Implementor W1.3: hard plan mode (mutations blocked until /execute-plan).
@@ -2686,7 +2686,7 @@ export class ChatEngine {
         const onParentAbort = () => childController.abort();
         this.abortController.signal.addEventListener('abort', onParentAbort, { once: true });
 
-        // P1-D: subagent approval session cannot exceed parent permission ceiling
+        // Subagent approval session cannot exceed parent permission ceiling
         const parentApproval = getChatApprovalSession();
         const childCeiling = mutationEnabled
           ? (['shell', 'write', 'other'] as const)
@@ -2995,7 +2995,7 @@ export class ChatEngine {
         }
       }
 
-      // ── P1-A: str_replace via governed mutation path (policy/checkpoint/cache) ──
+      // ── str_replace via governed mutation path (policy/checkpoint/cache) ──
       if (action.type === 'str_replace') {
         const autoApprove =
           isBabelHeadlessEnv() || process.env['BABEL_BENCHMARK_AUTO_APPROVE'] === '1';
@@ -3106,7 +3106,7 @@ export class ChatEngine {
         };
       }
 
-      // T2.2 background shell — handlers in chatBackgroundShell.ts (size ratchet)
+      // Background shell — handlers in chatBackgroundShell.ts (size ratchet)
       if (action.type === 'await_command') {
         return executeAwaitCommandAction(action, {
           projectRoot: this.options.projectRoot, tool, target, toolId,
@@ -3216,7 +3216,7 @@ export class ChatEngine {
           : `exit ${lastResult.exit_code}`
         : 'done';
 
-      // Batch 1: Log tool call for structured result metadata
+      // Log tool call for structured result metadata
       this.toolCallLog.push({
         tool,
         target,
@@ -3485,7 +3485,7 @@ export class ChatEngine {
   }
 
   /**
-   * E5 + T4.1: Run compaction if over budget; notify UI when history shrinks.
+   * Run compaction if over budget; notify UI when history shrinks.
    * Returns compact info when message count actually dropped, else null.
    */
   private async compactIfNeeded(
@@ -3495,7 +3495,7 @@ export class ChatEngine {
     let mode: 'llm' | 'heuristic' | null = null;
     const tokenEstimate = estimateTokens(this.conversation);
     const modelId = this.options.model ?? this.modelPolicy?.family ?? 'deepseek-v4-pro';
-    // P1-E: trigger on actual request tokens (budget formula), not only message count
+    // Trigger on actual request tokens (budget formula), not only message count
     const tokenTriggered = parityShouldCompact(tokenEstimate, modelId);
 
     if (this.compactionManager) {
@@ -3921,7 +3921,7 @@ export class ChatEngine {
       yield this.streamFailed(err.message);
       return null;
     }
-    // P1-E: runtime Pro → Flash failover with visible reason (not verification)
+    // Runtime Pro → Flash failover with visible reason (not verification)
     const modelId = this.options.model ?? 'deepseek-v4-pro';
     const decision = parityTryFailover(this.parity, modelId, err);
     let fb = this.resolveFallbackRunner();
@@ -4124,7 +4124,7 @@ export class ChatEngine {
 
     if (this.cachedSystemPromptNative) stashEngineFingerprint(this.engineRunId, buildPromptFingerprint({ systemPrompt: this.cachedSystemPromptNative, taskClass: this.taskClass, tune: getChatTaskTune(this.taskClass), playbookId: this.activePlaybook?.id ?? null }));
 
-    // P0-D: Compute truthful TerminalOutcome from status and runtime state.
+    // Compute truthful TerminalOutcome from status and runtime state.
     const outcome: TerminalOutcome = computeTerminalOutcome({
       finalStatus,
       budgetExceeded: this.budgetExceeded,
@@ -4151,7 +4151,7 @@ export class ChatEngine {
       ...observabilityResultFields(this.obsHandles()),
     };
 
-    // Batch 1 #1: Persist conversation transcript to disk for session resume.
+    // Persist conversation transcript to disk for session resume.
     // Write is fire-and-forget — failure must not block the turn result.
     persistTranscriptToDisk(this.engineRunDir, result.conversation).catch(() => {});
 
@@ -4159,7 +4159,7 @@ export class ChatEngine {
     persistPolicyEventsJsonl(this.engineRunDir, this.policyEventLog).catch(() => {});
     // Event log disk flush is owned solely by finalizeParityTurn / checkpointParityEventLog
 
-    // T3.2: Propose BABEL.md learnings after successful runs with writes only.
+    // Propose BABEL.md learnings after successful runs with writes only.
     if (finalStatus === 'completed' && this.writeCount > 0) {
       try {
         const changed = this.toolCallLog

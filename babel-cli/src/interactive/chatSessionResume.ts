@@ -67,7 +67,7 @@ export async function resumeChatSession(
       workspaceRoot: target.workspaceRoot ?? null,
     };
 
-    // P1-C: Prefer durable thread event log (preserves tool call/result IDs)
+    // Prefer durable thread event log (preserves tool call/result IDs)
     const eventLog = loadThreadEventLogFromDir(chatSessionDir(sessionId));
     if (eventLog && eventLog.events.length > 0) {
       ctx.chatEngine = createEngineFromEventLog(engineOptions, eventLog);

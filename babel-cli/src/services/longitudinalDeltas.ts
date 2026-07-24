@@ -1,5 +1,5 @@
 /**
- * T5.2 — Longitudinal benchmark deltas (v6→…→current).
+ * Longitudinal benchmark deltas (v6→…→current).
  *
  * Builds a publishable generation series from historical reference points and
  * on-disk baseline JSON files under benchmarks/baselines/.
@@ -123,7 +123,7 @@ export function extractMetricsFromBaseline(
 ): GenerationPoint | null {
   const root = asRecord(baseline);
   if (!root['summary'] && !root['tasks'] && !Array.isArray(root['results'])) {
-    // T1.3-style bands file
+    // Bands file
     if (root['suite'] || root['tasks'] || root['bands'] || root['cells']) {
       return extractFromT13Style(root, id, label, source);
     }
@@ -208,14 +208,14 @@ function extractFromT13Style(
     }
   }
 
-  // T2.1 cache baseline shape
+  // Cache baseline shape
   if (root['task_id'] === 'PAR-B01' || asRecord(root['meta'])['task_id'] === 'PAR-B01') {
     const bands = asRecord(root['bands'] ?? root['summary'] ?? root);
     parB01Tokens = num(asRecord(bands['tokens'])['p95']) ?? parB01Tokens;
     parB01Cost = num(asRecord(bands['cost'])['p95']) ?? parB01Cost;
   }
 
-  // Flat T1.3 file uses top-level suite_pass etc.
+  // Flat file uses top-level suite_pass etc.
   const suitePass = num(root['suite_pass']) ?? num(asRecord(root['summary'])['pass']);
   const suiteTotal = num(root['suite_total']) ?? num(asRecord(root['summary'])['total']);
   if (total === 0 && suitePass != null && suiteTotal != null) {
@@ -223,7 +223,7 @@ function extractFromT13Style(
     total = suiteTotal;
   }
 
-  // T1.3 baseline structure from our published file
+  // Baseline structure from our published file
   if (Array.isArray(root['per_task'])) {
     for (const t of root['per_task'] as unknown[]) {
       const row = asRecord(t);
@@ -280,7 +280,7 @@ export function loadKnownBaselines(baselinesDir: string): GenerationPoint[] {
           // leave suite p95 as-is; notes
         }
       }
-      // T1.3 has better PAR-B01 bands; annotate R1-R6 with suite-level tokens as proxy
+      // Better PAR-B01 bands; annotate R1-R6 with suite-level tokens as proxy
       p.metrics.notes = 'Suite p95 tokens/cost; GOV-D 2/2 from tier_pass_rates.';
       // Parity: 5 A_daily + not pure parity — leave parity null
       points.push(p);

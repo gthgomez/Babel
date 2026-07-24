@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "task": {
+      "type": "string",
+      "description": "The user request involving a Node.js CLI."
+    },
+    "project_root": {
+      "type": "string",
+      "description": "Optional project root containing package.json and CLI source."
+    },
+    "entrypoint": {
+      "type": "string",
+      "description": "Optional known CLI entrypoint path."
+    },
+    "json_output_required": {
+      "type": "boolean",
+      "description": "Whether the command must preserve machine-readable stdout."
+    }
+  },
+  "required": [
+    "task"
+  ]
+}

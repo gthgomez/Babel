@@ -546,10 +546,10 @@ test('createLiveRunRenderer handles missing context fields', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// R4.2 — Spinner cursor restoration on render exception
+// Spinner cursor restoration on render exception
 // ═══════════════════════════════════════════════════════════════════════════════
 
-test('spinner restores cursor on render exception (R4.2)', () => {
+test('spinner restores cursor on render exception', () => {
   const writes: string[] = [];
   const originalStderrWrite = process.stderr.write;
   process.stderr.write = ((chunk: unknown) => {
@@ -585,10 +585,10 @@ test('spinner restores cursor on render exception (R4.2)', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// R4.3 — Event bus listener cleanup
+// Event bus listener cleanup
 // ═══════════════════════════════════════════════════════════════════════════════
 
-test('WaterfallRenderer unregisters event bus listeners after create/stop cycles (R4.3)', () => {
+test('WaterfallRenderer unregisters event bus listeners after create/stop cycles', () => {
   const bus = new BabelEventBus();
 
   for (let i = 0; i < 3; i++) {
@@ -607,7 +607,7 @@ test('WaterfallRenderer unregisters event bus listeners after create/stop cycles
   assert.equal(bus.listenerCount('prompt_resume'), 0);
 });
 
-test('AppendOnlyRenderer unregisters event bus listeners after create/stop cycles (R4.3)', () => {
+test('AppendOnlyRenderer unregisters event bus listeners after create/stop cycles', () => {
   const bus = new BabelEventBus();
 
   for (let i = 0; i < 3; i++) {
@@ -625,10 +625,10 @@ test('AppendOnlyRenderer unregisters event bus listeners after create/stop cycle
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// R4.4 — safeStdoutWrite DEC 2026 synchronized update frames
+// safeStdoutWrite DEC 2026 synchronized update frames
 // ═══════════════════════════════════════════════════════════════════════════════
 
-test('safeStdoutWrite wraps streaming writes inside DEC 2026 frames (R4.4)', () => {
+test('safeStdoutWrite wraps streaming writes inside DEC 2026 frames', () => {
   const writes: string[] = [];
   const originalWrite = process.stdout.write;
   process.stdout.write = ((chunk: unknown) => {

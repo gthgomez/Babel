@@ -368,7 +368,7 @@ export async function persistIntentPlan(
   }
 }
 
-// ─── P0-D: TerminalOutcome computation ───────────────────────────────────
+// ─── TerminalOutcome computation ───────────────────────────────────
 
 /** Pure function: map final session state to honest TerminalOutcome.
  *  Extracted from ChatEngine.buildResult to keep chatEngine.ts under size ratchet. */
@@ -404,7 +404,7 @@ export function computeTerminalOutcome(input: {
   return 'AGENT_FAILURE';
 }
 
-// ─── P0-B: Provider conversation population ──────────────────────────────
+// ─── Provider conversation population ──────────────────────────────
 
 /** Push assistant + tool messages to the structured provider conversation.
  *  Extracted from ChatEngine (duplicated in submitMessage + submitMessageStream)

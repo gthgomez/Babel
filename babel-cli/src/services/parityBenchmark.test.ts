@@ -141,7 +141,7 @@ test('parity benchmark can ingest measured fixture results and compute claim rea
     },
     {
       task_id: taskId,
-      tool: 'codex',
+      tool: 'competitor_a',
       status: index === 0 ? 'failure' : 'success',
       verifier: index === 0 ? 'fail' : 'pass',
       false_complete: false,
@@ -155,7 +155,7 @@ test('parity benchmark can ingest measured fixture results and compute claim rea
     },
     {
       task_id: taskId,
-      tool: 'claude_code',
+      tool: 'competitor_b',
       status: 'success',
       verifier: 'pass',
       false_complete: false,

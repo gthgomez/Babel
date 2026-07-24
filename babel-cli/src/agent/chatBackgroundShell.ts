@@ -1,5 +1,5 @@
 /**
- * chatBackgroundShell.ts — T2.2 chat-path wiring for background shell jobs.
+ * chatBackgroundShell.ts — Chat-path wiring for background shell jobs.
  *
  * Kept out of chatEngine.ts to respect the architectural file-size ratchet
  * (chatEngine is already >2k lines and must not grow).

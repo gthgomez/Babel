@@ -1,5 +1,5 @@
 /**
- * P1-C — Durable versioned event log and exact resume.
+ * Durable versioned event log and exact resume.
  *
  * Persist all agent events with thread_id, turn_id, item_id, and tool_call_id.
  * Resume rebuilds ProviderMessage[] from typed events + compaction capsules

@@ -1,6 +1,6 @@
 /**
  * Inline JIT approval flow for chat-mode tool execution.
- * P1-D: routes through ApprovalRequest (deny / once / session / narrow_rule).
+ * Routes through ApprovalRequest (deny / once / session / narrow_rule).
  */
 
 import type { AgentAction } from './actions.js';

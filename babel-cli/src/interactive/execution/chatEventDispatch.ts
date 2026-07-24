@@ -118,7 +118,7 @@ export function terminalResultFromDoneEvent(
     turnRouting?: TurnRoutingReceipt[];
   },
 ): ChatResult {
-  // P0-D: Derive truthful TerminalOutcome from available event data.
+  // Derive truthful TerminalOutcome from available event data.
   // In the streaming path we lack the engine's this.budgetExceeded flag,
   // so we use the best available proxy.
   const outcome: TerminalOutcome = blockedReport

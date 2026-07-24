@@ -101,7 +101,7 @@ export class CostTracker {
     this.sessionTotalCost = 0;
   }
 
-  /** Batch 3 #6: Restore cost state from a saved session (resume). */
+  /** Restore cost state from a saved session (resume). */
   public restoreSessionCost(totals: {
     totalCostUSD: number;
     totalInputTokens: number;

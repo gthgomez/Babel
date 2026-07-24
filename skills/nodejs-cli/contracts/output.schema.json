@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "files_created_changed": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "validation_verdict": {
+      "type": "string",
+      "enum": [
+        "GREEN",
+        "YELLOW",
+        "RED"
+      ]
+    },
+    "tests_run": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "next_recommended_action": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "files_created_changed",
+    "validation_verdict",
+    "tests_run",
+    "next_recommended_action"
+  ]
+}

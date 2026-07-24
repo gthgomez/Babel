@@ -11,7 +11,7 @@ import {
 const REPO_ROOT = join(process.cwd(), '..');
 const BASELINES = join(REPO_ROOT, 'benchmarks', 'baselines');
 
-describe('longitudinalDeltas (T5.2)', () => {
+describe('longitudinalDeltas', () => {
   it('historical series has v6→v8 seeds', () => {
     assert.ok(HISTORICAL_GENERATIONS.length >= 3);
     assert.equal(HISTORICAL_GENERATIONS[0]!.id, 'v6-era');

@@ -11,7 +11,7 @@ import {
 
 const REPO_ROOT = join(process.cwd(), '..');
 
-describe('verifiedCompletion (T5.1)', () => {
+describe('verifiedCompletion', () => {
   it('validates a well-formed artifact', () => {
     const art = buildVerifiedCompletion({
       status: 'completed',

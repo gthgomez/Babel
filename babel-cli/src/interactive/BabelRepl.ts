@@ -121,7 +121,7 @@ export class BabelRepl {
     });
 
     // Start focus tracking so the render loop throttles when the terminal
-    // window loses focus (R4.7). Keypress events are emitted by readline
+    // Window loses focus. Keypress events are emitted by readline
     // after createPromptInputAdapter above calls emitKeypressEvents internally.
     FocusTracker.getInstance().start();
 

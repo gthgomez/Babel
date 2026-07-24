@@ -293,14 +293,14 @@ function runBabelBenchmarkTask(input: {
   artifactRoot: string;
   fixtureRootBase?: string;
 }): GovernanceBenchmarkResult {
-  if (input.task.task_id !== 'BUG-01') {
+  if (input.task.task_id !== 'canonical') {
     return buildUnavailableToolRecord({
       manifest: input.manifest,
       task: input.task,
       adapter: {
         ...input.adapter,
         availability: 'pending',
-        adapter_status: 'runnable_only_for_BUG-01_initial_canary',
+        adapter_status: 'runnable_only_for_canonical_initial_canary',
       },
       runIndex: input.runIndex,
       artifactRoot: input.artifactRoot,
