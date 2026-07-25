@@ -53,9 +53,9 @@ It is at the "improve signal quality, validate treatment value, and tighten prom
 ### Current maturity snapshot
 
 As of the latest live Local Mode evidence:
-- `repo:gpcguard:verification_loop_hints:strict` is active in `runs/local-learning/active/repos/GPCGuard.json`
-- that GPCGuard policy is still early-treatment and should be treated as promising, not globally proven
-- Prismatix and AuditGuard still sit at repo-candidate stage for the same surface
+- `repo:gpcguard:verification_loop_hints:strict` is active in `runs/local-learning/active/repos/example_saas_backend.json`
+- that example_saas_backend policy is still early-treatment and should be treated as promising, not globally proven
+- example_llm_router and example_web_audit still sit at repo-candidate stage for the same surface
 - no local-learning-driven prompt evolution proposals have yet proven necessary for this surface
 
 ### Non-goals for the next pass
@@ -142,15 +142,15 @@ Make the current local-learning lifecycle operationally clear without creating a
 - a reader can answer "what exists now, what is proven, and what happens next?" from the existing canonical docs
 - no parallel lifecycle doc is needed to understand the system
 
-## Phase 3: GPCGuard Treatment Validation
+## Phase 3: example_saas_backend Treatment Validation
 
 ### Objective
 
-Let the active GPCGuard `verification_loop_hints:strict` policy earn broader trust through treatment evidence, not baseline support alone.
+Let the active example_saas_backend `verification_loop_hints:strict` policy earn broader trust through treatment evidence, not baseline support alone.
 
 ### Current state
 
-The GPCGuard policy is active, but the active record still shows immature treatment evidence and should not justify global promotion by itself.
+The example_saas_backend policy is active, but the active record still shows immature treatment evidence and should not justify global promotion by itself.
 
 ### Metrics to track
 
@@ -173,19 +173,19 @@ Do not consider this repo-scoped policy "treatment-proven" until all of the foll
 
 ### Exit criteria
 
-- the GPCGuard policy is treatment-proven at repo scope
+- the example_saas_backend policy is treatment-proven at repo scope
 - treatment evidence is strong enough to compare meaningfully with other repos
 
 ## Phase 4: Cross-Repo Replication
 
 ### Objective
 
-Replicate the same bounded policy pattern in Prismatix and AuditGuard before any global fallback decision.
+Replicate the same bounded policy pattern in example_llm_router and example_web_audit before any global fallback decision.
 
 ### Work
 
-- bring Prismatix from candidate to active only if its evidence qualifies
-- bring AuditGuard from candidate to active only if its evidence qualifies
+- bring example_llm_router from candidate to active only if its evidence qualifies
+- bring example_web_audit from candidate to active only if its evidence qualifies
 - keep the evaluation rubric the same across repos
 - treat contradiction as a stop signal, not something to smooth over narratively
 
@@ -300,8 +300,8 @@ powershell -ExecutionPolicy Bypass -File .\tools\stage-local-learning-prompt-evo
 ## Immediate Next Actions
 
 1. Clean the operator view of `protocol-violations.jsonl` so fresh issues surface first.
-2. Keep the GPCGuard policy active and accumulate treatment evidence until the repo-scoped gate is truly met.
-3. Re-run Prismatix and AuditGuard through the same verification-loop-hints measurement rubric.
+2. Keep the example_saas_backend policy active and accumulate treatment evidence until the repo-scoped gate is truly met.
+3. Re-run example_llm_router and example_web_audit through the same verification-loop-hints measurement rubric.
 4. Revisit global fallback only after 3 repos have treatment-proven evidence for the same bounded pattern.
 5. Keep stronger enforcement variants and public positioning out of scope until the above is true.
 

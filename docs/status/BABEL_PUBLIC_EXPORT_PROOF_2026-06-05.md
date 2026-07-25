@@ -31,12 +31,12 @@ It covers:
    - Result: **PASS**
    - Verified: 7 resolver regression cases.
 
-3. `powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\resolve-local-stack.ps1 -Project GPCGuard -TaskCategory backend -Model codex -PipelineMode verified -Format json`
+3. `powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\resolve-local-stack.ps1 -Project example_saas_backend -TaskCategory backend -Model deepseek -PipelineMode verified -Format json`
 
    - Result: **PASS**  
-   - Verified: selected stack includes backend architect/skills/policies for `GPCGuard`.
+   - Verified: selected stack includes backend architect/skills/policies for `example_saas_backend`.
 
-4. `powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\resolve-local-stack.ps1 -Project Project_Android -TaskCategory mobile -Model codex -Format json`
+4. `powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\resolve-local-stack.ps1 -Project Project_Android -TaskCategory mobile -Model deepseek -Format json`
 
    - Result: **PASS**  
    - Verified: selected stack includes Android architect/skills for `Project_Android`.

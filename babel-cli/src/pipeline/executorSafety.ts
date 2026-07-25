@@ -699,14 +699,14 @@ export function collectGradleBootstrapSequencingViolations(
     const normalizedTarget = target.replace(/\//g, '\\').toLowerCase();
     const isMirroredGradleRead =
       ((step.tool === 'file_read' || step.tool === 'directory_list') &&
-        normalizedTarget.includes('\\reference-montecarlo-ledger\\') &&
+        normalizedTarget.includes('\\reference-example-finance-forecast\\') &&
         normalizedTarget.includes('gradle')) ||
       ((step.tool === 'file_read' || step.tool === 'directory_list') &&
-        normalizedTarget.includes('\\reference-montecarlo-ledger\\build.gradle.kts')) ||
+        normalizedTarget.includes('\\reference-example-finance-forecast\\build.gradle.kts')) ||
       ((step.tool === 'file_read' || step.tool === 'directory_list') &&
-        normalizedTarget.includes('\\reference-montecarlo-ledger\\settings.gradle.kts')) ||
+        normalizedTarget.includes('\\reference-example-finance-forecast\\settings.gradle.kts')) ||
       ((step.tool === 'file_read' || step.tool === 'directory_list') &&
-        normalizedTarget.includes('\\reference-montecarlo-ledger\\app\\build.gradle.kts'));
+        normalizedTarget.includes('\\reference-example-finance-forecast\\app\\build.gradle.kts'));
 
     if (isMirroredGradleRead) {
       failures.push({

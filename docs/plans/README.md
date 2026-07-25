@@ -40,7 +40,7 @@ This folder contains active roadmaps and implementation plans. Superseded or com
 - [**Consolidated ROI Roadmap (2026-06)**](./BABEL_CONSOLIDATED_ROI_ROADMAP_2026-06.md) — product/ROI planning master (broader than harness loop).
 - [**Slice 4 Proof Plan (2026-06-12)**](./BABEL_TUI_HYBRID_SLICE_4_PROOF_PLAN_2026-06-12.md) — Slice 4 gates (largely absorbed into TUI A–E; prefer competitive reference for residual).
 - [**Hardening to Product Roadmap (2026-06)**](./BABEL_CLI_HARDENING_TO_PRODUCT_ROADMAP_2026-06.md) — largely implemented; P0/P1 complete per ROI master.
-- [**Local V1.1 Phase 4.5 Plan**](./BABEL_LOCAL_V1_1_PHASE_4_5_PLAN.md) — Local Learning validation (GPCGuard policy, cross-repo replication).
+- [**Local V1.1 Phase 4.5 Plan**](./BABEL_LOCAL_V1_1_PHASE_4_5_PLAN.md) — Local Learning validation (example_saas_backend policy, cross-repo replication).
 - **OpenClaw Integration Roadmap** (BABEL_OPENCLAW_INTEGRATION_ROADMAP.md, vault-only) — Babel/OpenClaw interface plan.
 - [**Model Policy Eval Plan**](./MODEL_POLICY_EVAL_PLAN.md) — Current model defaults and eval commands.
 - [**API Mode**](./BABEL_API_MODE.md) — API-backed runtime phased build plan.
