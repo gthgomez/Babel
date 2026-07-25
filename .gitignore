@@ -55,6 +55,7 @@ npm-debug.log*
 
 # ─── TypeScript build output ───────────────────────────────────────────────────
 babel-cli/dist/
+*.tsbuildinfo
 
 # ─── Local runtime cache (e.g. Gradle distributions — large, machine-specific) ─
 cache/
