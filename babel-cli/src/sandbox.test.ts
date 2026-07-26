@@ -892,6 +892,9 @@ test('shellExecAsync cancels a running command without blocking the event loop',
       Date.now() - startedAt < cancelBudgetMs,
       `cancellation should settle quickly, took ${Date.now() - startedAt}ms (budget ${cancelBudgetMs}ms)`,
     );
+    // Tree-kill is deferred via setImmediate so the awaiter can settle first;
+    // wait briefly so Windows file locks release before fixture cleanup.
+    await new Promise((r) => setTimeout(r, 500));
   } finally {
     fixture.cleanup();
   }
