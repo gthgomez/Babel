@@ -1,15 +1,17 @@
 /**
- * W0.3 — TurnRuntime: per-user-submission execution state.
+ * W0.3 / P0-C — TurnRuntime: per-user-submission execution state.
  *
  * ThreadState (conversation history, durable event log) lives on ChatEngine.
- * Task-scoped counters, intent, and class belong to a fresh runtime each
- * user submission unless the operator explicitly continues a prior task.
+ * Task-scoped counters, intent, class, and budgets belong to a fresh runtime
+ * each user submission unless the operator explicitly continues a prior task.
  *
- * Acceptance (Implementor / Codex parity P0-C):
+ * Acceptance (Codex harness parity P0-C):
  * - Prior task writes cannot satisfy a later task's completion gate
  * - Sticky intent is explicit (continueTask or stickyIntent override)
+ * - Isolated submissions re-resolve taskClass + limits (budgets) for the new text
  * - /model, /project, /retarget invalidate the engine so the *next* submission
  *   rebuilds with the new model/root (handled in interactive/commands/config.ts)
+ * - turn_started records model, root, taskClass, gatePolicy, submissionIndex
  */
 
 import {
