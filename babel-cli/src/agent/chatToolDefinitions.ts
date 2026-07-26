@@ -582,26 +582,36 @@ export interface ProviderMessagesOptions {
   conversation: ProviderMessage[];
   /** The current task / user request. */
   task: string;
-  /** When true, omit the user turn (caller will add it separately). */
+  /**
+   * When true, never append the user turn (caller already seeded conversation).
+   * Default false: append task only if no matching user message exists yet.
+   */
   omitUserTurn?: boolean;
 }
 
 let _providerToolCallSeq = 0;
 
-/** Build a protocol-faithful ProviderMessage[] for native-tool-capable runners. */
+/**
+ * Build a protocol-faithful ProviderMessage[] for native-tool-capable runners.
+ * P0-B: the user task is appended at most once (not retransmitted every tool turn).
+ */
 export function buildProviderMessages(options: ProviderMessagesOptions): ProviderMessage[] {
   const messages: ProviderMessage[] = [];
 
   // Conversation history — structured native messages (system, assistant+tool_calls,
-  // tool+tool_call_id). The system prompt is the first message; assistant tool calls
-  // carry their tool_calls array; tool results carry tool_call_id.
+  // tool+tool_call_id). Assistant tool calls carry tool_calls; tool results carry tool_call_id.
   for (const msg of options.conversation) {
     messages.push(msg);
   }
 
-  // Current user request — sent once, never duplicated across turns
+  // Current user request — at most once (not re-appended every tool turn).
   if (!options.omitUserTurn && options.task) {
-    messages.push({ role: 'user', content: options.task });
+    const alreadyHasUserTask = messages.some(
+      (m) => m.role === 'user' && m.content === options.task,
+    );
+    if (!alreadyHasUserTask) {
+      messages.push({ role: 'user', content: options.task });
+    }
   }
 
   return messages;
