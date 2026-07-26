@@ -45,9 +45,9 @@ git log --oneline -5             # recent history for context
 Read the files affected by the diff — do not rely on diff hunks alone. Understand the full function/class context.
 
 Also read (when relevant to changed files):
-- `C:\Workspace\Babel-private\CLAUDE.md` §Critical Invariants — for control-plane rules
-- `C:\Workspace\Babel-private\prompt_catalog.yaml` — if catalog entries changed
-- `C:\Workspace\Babel-private\.agents\rules\` — for project coding standards
+- `CLAUDE.md` §Critical Invariants — for control-plane rules
+- `prompt_catalog.yaml` — if catalog entries changed
+- `.agents/rules/` — for project coding standards
 
 ## Phase 1 — Correctness
 

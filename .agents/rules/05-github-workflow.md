@@ -55,7 +55,7 @@ The managing agent must not merge, deploy, force push, reset, clean, delete bran
 
 ## Repo Identity
 
-This is the **canonical public source** of Babel (`gthgomez/Babel`). There is no private parent repo required to build or run. CI gates (security, public-content-policy, linux-validation, windows-portability) run on every PR and must pass before merge. Never skip or bypass CI gates.
+This is the **canonical public source** of Babel (`gthgomez/Babel`). No separate private source repository is required to build or run. CI gates (security, public-content-policy, linux-validation, windows-portability) run on every PR and must pass before merge. Never skip or bypass CI gates.
 
 ## Manager And Subagents
 

@@ -12,11 +12,11 @@ name: assemble-babel-stack
 description: Assembles the correct Babel instruction stack for a task. Use when deciding which Behavioral OS, Domain Architect, Skills, adapters, and overlays should be loaded before implementation.
 ---
 
-# Assemble A Babel Stack
+# Assemble Babel Stack (Agent Skill)
 
 ## Workflow
 
-1. Read `BABEL_BIBLE.md`, `PROJECT_CONTEXT.md`, and `prompt_catalog.yaml` (paths relative to `C:\Workspace\Babel-private\`). Also read `CLAUDE.md` §Startup Sequence for the canonical load order.
+1. Read `BABEL_BIBLE.md`, `PROJECT_CONTEXT.md`, and `prompt_catalog.yaml` (paths relative to the repo root). Also read `CLAUDE.md` §Startup Sequence for the canonical load order.
 2. Using `prompt_catalog.yaml` as the canonical registry, identify:
    - task purpose
    - primary domain

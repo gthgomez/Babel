@@ -12,11 +12,11 @@ name: validate-control-plane
 description: Validates Babel control-plane changes after edits to routers, catalog, runtime harness, or resolver tooling. Use when prompt routing, stack resolution, or compiled-memory behavior may have changed.
 ---
 
-# Validate Babel Control Plane
+# Validate Control Plane (Agent Skill)
 
 ## Workflow
 
-1. Read `C:\Workspace\Babel-private\CLAUDE.md` §Critical Invariants and §High-Risk Zones for the protected boundaries.
+1. Read `CLAUDE.md` §Critical Invariants and §High-Risk Zones for the protected boundaries.
 2. Run the narrowest relevant checks:
    ```powershell
    npm --prefix .\babel-cli run typecheck
