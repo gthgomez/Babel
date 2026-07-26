@@ -117,6 +117,11 @@ export interface RunnerInvocationMetadata {
   ttft_ms?: number | null;
   generation_ms?: number | null;
   validation_ms?: number | null;
+  /**
+   * When thinking/reasoning was forced off for a tool turn, records why
+   * (P0-B: Pro reasoning is not silently disabled without a routing reason).
+   */
+  thinking_disabled_reason?: string | null;
 }
 
 export type RunnerProgressState =

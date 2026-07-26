@@ -1307,10 +1307,20 @@ export class ChatEngine {
         nativeTools: useNativeTools,
         textTools: useTextTools,
       });
+      // P0-B: seed user task once into provider conversation; do not retransmit every tool turn.
+      if (useNativeTools) {
+        const hasUserTask = this.providerConversation.some(
+          (m) => m.role === 'user' && m.content === this.options.task,
+        );
+        if (!hasUserTask && this.options.task) {
+          this.providerConversation.push({ role: 'user', content: this.options.task });
+        }
+      }
       const providerMessages = useNativeTools
         ? buildProviderMessages({
             conversation: this.providerConversation,
             task: this.options.task,
+            omitUserTurn: true, // already seeded above
           })
         : [];
 

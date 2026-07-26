@@ -10,13 +10,13 @@ import type { ZodType } from 'zod';
 import {
   type LlmRunner,
   type ProviderMessage,
-  type ProviderToolCall,
   type RunnerInvocationMetadata,
   type RunnerCallbacks,
   type ToolDefinition,
   type ToolStreamEvent,
   buildStructuredOutputError,
 } from './base.js';
+import { mapProviderMessagesToWire } from './providerMessages.js';
 import { assertSupportedDeepSeekModel, type DeepSeekModelId } from '../services/deepSeekPricing.js';
 import { estimateProviderUsageCost } from '../services/modelPricingRegistry.js';
 import { extractJson } from '../utils/extractJson.js';
@@ -155,36 +155,6 @@ function isAbortError(error: unknown): boolean {
 
 async function readErrorBody(response: Response): Promise<string> {
   return (await response.text().catch(() => '')).slice(0, 200);
-}
-
-/** Map ProviderMessage[] to the OpenAI-compatible wire format. */
-function mapProviderMessages(
-  messages: ProviderMessage[],
-  defaultSystemPrompt: string,
-  systemPromptOverride?: string,
-): Array<{ role: string; content: string; tool_calls?: ProviderToolCall[]; tool_call_id?: string }> {
-  const result: Array<{ role: string; content: string; tool_calls?: ProviderToolCall[]; tool_call_id?: string }> = [];
-
-  const hasSystem = messages.length > 0 && messages[0]!.role === 'system';
-  if (systemPromptOverride) {
-    result.push({ role: 'system', content: systemPromptOverride });
-  } else if (!hasSystem) {
-    result.push({ role: 'system', content: defaultSystemPrompt });
-  }
-
-  for (const msg of messages) {
-    if (msg.role === 'system' && result.some(r => r.role === 'system')) continue;
-    const wire: { role: string; content: string; tool_calls?: ProviderToolCall[]; tool_call_id?: string } = { role: msg.role, content: msg.content };
-    if (msg.role === 'assistant' && msg.tool_calls?.length) {
-      wire.tool_calls = msg.tool_calls;
-    }
-    if (msg.role === 'tool' && msg.tool_call_id) {
-      wire.tool_call_id = msg.tool_call_id;
-    }
-    result.push(wire);
-  }
-
-  return result;
 }
 
 async function readStreamingResponse(
@@ -791,6 +761,9 @@ export class DeepSeekApiRunner implements LlmRunner {
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
 
+    // Track thinking routing for lastInvocationMetadata (P0-B honesty).
+    let thinkingDisabledReason: string | null = null;
+
     const buildBody = () => {
       const effort = resolveReasoningEffort();
       // DeepSeek API: "Thinking mode does not support this tool_choice" (HTTP 400).
@@ -802,6 +775,14 @@ export class DeepSeekApiRunner implements LlmRunner {
       // resolveProviderCapabilities('deepseek-*').thinkingWithTools === 'unsupported'
       // unless experimental env forces the interleaved path.
       const thinkingEnabled = wantThinking && allowThinkingWithTools;
+      if (wantThinking && !allowThinkingWithTools) {
+        thinkingDisabledReason =
+          'thinkingWithTools=unsupported: DeepSeek rejects tool_choice with thinking; set BABEL_DEEPSEEK_THINKING_WITH_TOOLS=1 to force experimental path';
+      } else if (!wantThinking) {
+        thinkingDisabledReason = 'BABEL_DEEPSEEK_THINKING=disabled';
+      } else {
+        thinkingDisabledReason = null;
+      }
       const choice = (toolChoice ?? 'auto') as 'auto' | 'required';
       return JSON.stringify({
         model: this.model,
@@ -814,7 +795,7 @@ export class DeepSeekApiRunner implements LlmRunner {
         ...(thinkingEnabled ? {} : { tool_choice: choice }),
         ...(effort ? { reasoning_effort: effort } : {}),
         thinking: { type: thinkingEnabled ? 'enabled' as const : 'disabled' as const },
-        messages: mapProviderMessages(messages, CHAT_SYSTEM_PROMPT, systemPrompt),
+        messages: mapProviderMessagesToWire(messages, CHAT_SYSTEM_PROMPT, systemPrompt),
       });
     };
 
@@ -1045,12 +1026,16 @@ export class DeepSeekApiRunner implements LlmRunner {
       yield { type: 'error', message: err instanceof Error ? err.message : String(err) };
     }
 
-    this.lastInvocationMetadata = buildInvocationMetadata(
+    const meta = buildInvocationMetadata(
       this.model,
       Date.now() - startedAt,
       streamState.usage ?? undefined,
       streamState.ttftMs,
       streamState.generationMs,
     );
+    if (thinkingDisabledReason) {
+      meta.thinking_disabled_reason = thinkingDisabledReason;
+    }
+    this.lastInvocationMetadata = meta;
   }
 }

@@ -26,13 +26,13 @@ import type { ZodType } from 'zod';
 import {
   type LlmRunner,
   type ProviderMessage,
-  type ProviderToolCall,
   type RunnerInvocationMetadata,
   type RunnerCallbacks,
   type ToolDefinition,
   type ToolStreamEvent,
   buildStructuredOutputError,
 } from './base.js';
+import { mapProviderMessagesToWire } from './providerMessages.js';
 import { estimateProviderUsageCost } from '../services/modelPricingRegistry.js';
 import { extractJson } from '../utils/extractJson.js';
 import { JitDenialError, PolicyBlockedDuplicateError } from '../ui/incrementalToolDetector.js';
@@ -195,34 +195,13 @@ async function readErrorBody(response: Response): Promise<string> {
   return (await response.text().catch(() => '')).slice(0, 200);
 }
 
-/** Map ProviderMessage[] to the OpenAI-compatible wire format. */
+/** Map ProviderMessage[] to the OpenAI-compatible wire format (shared P0-B mapper). */
 function mapProviderMessages(
   messages: ProviderMessage[],
   defaultSystemPrompt: string,
   systemPromptOverride?: string,
-): Array<{ role: string; content: string; tool_calls?: ProviderToolCall[]; tool_call_id?: string }> {
-  const result: Array<{ role: string; content: string; tool_calls?: ProviderToolCall[]; tool_call_id?: string }> = [];
-
-  const hasSystem = messages.length > 0 && messages[0]!.role === 'system';
-  if (systemPromptOverride) {
-    result.push({ role: 'system', content: systemPromptOverride });
-  } else if (!hasSystem) {
-    result.push({ role: 'system', content: defaultSystemPrompt });
-  }
-
-  for (const msg of messages) {
-    if (msg.role === 'system' && result.some(r => r.role === 'system')) continue;
-    const wire: { role: string; content: string; tool_calls?: ProviderToolCall[]; tool_call_id?: string } = { role: msg.role, content: msg.content };
-    if (msg.role === 'assistant' && msg.tool_calls?.length) {
-      wire.tool_calls = msg.tool_calls;
-    }
-    if (msg.role === 'tool' && msg.tool_call_id) {
-      wire.tool_call_id = msg.tool_call_id;
-    }
-    result.push(wire);
-  }
-
-  return result;
+) {
+  return mapProviderMessagesToWire(messages, defaultSystemPrompt, systemPromptOverride);
 }
 
 interface SseLineResult {
