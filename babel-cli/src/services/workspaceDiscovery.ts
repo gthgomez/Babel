@@ -434,7 +434,7 @@ export class WorkspaceScanner {
       return specificOverlay;
     }
     if (family === 'example_mobile_suite') {
-      if (projectName.toLowerCase() === 'montecarloledger') {
+      if (projectName.toLowerCase() === 'example_finance_forecast') {
         return 'overlay_monte_carlo_ledger';
       }
       return 'overlay_project_android';

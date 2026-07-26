@@ -18,4 +18,4 @@ last_verified: 2026-07-21
 
 ## Archived Architecture Docs
 
-Historical spikes, process audits, and monolith rescope analysis are archived in the private vault (not included in this public release).
+Historical spikes, process audits, and monolith rescope analysis are archived in the historical development repository and not included in this public release.

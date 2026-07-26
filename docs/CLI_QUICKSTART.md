@@ -114,7 +114,7 @@ From the repo root, still useful without credentials:
 pwsh -File .\tools\resolve-local-stack.ps1 `
   -TaskCategory backend `
   -Project example_saas_backend `
-  -Model codex `
+  -Model deepseek `
   -Format json
 ```
 

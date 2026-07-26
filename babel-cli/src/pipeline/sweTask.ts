@@ -155,13 +155,13 @@ Your JSON output MUST include a "thinking" field. Use this field to:
       const appBuildGradlePath = join(projectRoot, 'app', 'build.gradle.kts');
       const rootBuildGradleExists = existsSync(rootBuildGradlePath);
       const appBuildGradleExists = existsSync(appBuildGradlePath);
-      const referenceMonteCarloRoot = join(projectRoot, 'reference-montecarlo-ledger');
-      const referenceMonteCarloExists = existsSync(referenceMonteCarloRoot);
-      const referenceMonteCarloLooksLikePython =
-        referenceMonteCarloExists &&
-        (existsSync(join(referenceMonteCarloRoot, 'pyproject.toml')) ||
-          existsSync(join(referenceMonteCarloRoot, 'requirements.txt')) ||
-          existsSync(join(referenceMonteCarloRoot, 'monte_carlo_ledger')));
+      const referenceExampleFinanceRoot = join(projectRoot, 'reference-example-finance-forecast');
+      const referenceExampleFinanceExists = existsSync(referenceExampleFinanceRoot);
+      const referenceExampleFinanceLooksLikePython =
+        referenceExampleFinanceExists &&
+        (existsSync(join(referenceExampleFinanceRoot, 'pyproject.toml')) ||
+          existsSync(join(referenceExampleFinanceRoot, 'requirements.txt')) ||
+          existsSync(join(referenceExampleFinanceRoot, 'monte_carlo_ledger')));
 
       projectRootLines.push(
         `Gradle wrapper state: properties=${wrapperPropertiesExists ? 'present' : 'missing'}, jar=${wrapperJarExists ? 'present' : 'missing'}, gradlew=${gradlewExists ? 'present' : 'missing'}, gradlew.bat=${gradlewBatExists ? 'present' : 'missing'}`,
@@ -173,9 +173,9 @@ Your JSON output MUST include a "thinking" field. Use this field to:
       runtimePreflightLines.push(`Executor Gradle runtime: ${gradleRuntimeStatus.summary}`);
       runtimePreflightLines.push(`Executor Android SDK runtime: ${androidSdkStatus.summary}`);
       runtimePreflightLines.push(`Executor winget runtime: ${wingetRuntimeStatus.summary}`);
-      if (referenceMonteCarloLooksLikePython) {
+      if (referenceExampleFinanceLooksLikePython) {
         runtimePreflightLines.push(
-          'Reference source shape: reference-montecarlo-ledger is a non-Android Python repo (pyproject/requirements/monte_carlo_ledger present). Do NOT assume Android package paths or Gradle files inside the reference source. Read the actual Python files under reference-montecarlo-ledger/README.md, pyproject.toml, monte_carlo_ledger/*.py, and docs/** first.',
+          'Reference source shape: reference-example-finance-forecast is a non-Android Python repo (pyproject/requirements/monte_carlo_ledger present). Do NOT assume Android package paths or Gradle files inside the reference source. Read the actual Python files under reference-example-finance-forecast/README.md, pyproject.toml, monte_carlo_ledger/*.py, and docs/** first.',
         );
       }
 

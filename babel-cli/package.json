@@ -2,6 +2,24 @@
   "name": "babel-cli",
   "version": "0.1.0",
   "description": "Local coding agent runtime for Babel — chat, plan, and deep modes with TUI/REPL",
+  "license": "MIT",
+  "author": "Jonathan Gomez Aguilar",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gthgomez/Babel.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gthgomez/Babel/issues"
+  },
+  "homepage": "https://github.com/gthgomez/Babel#readme",
+  "keywords": [
+    "babel",
+    "coding-agent",
+    "cli",
+    "ai",
+    "prompt-engineering",
+    "developer-tools"
+  ],
   "type": "module",
   "main": "dist/index.js",
   "bin": {

@@ -10,7 +10,7 @@ Please report security issues privately (GitHub Security Advisories preferred wh
 
 As a solo-maintainer project:
 
-- Reports will be acknowledged as capacity permits.
+- We aim to acknowledge reports within **72 hours** and publish fixes for confirmed vulnerabilities within **30 days**.
 - Critical credential exposures are prioritized immediately.
 - Do not open a public issue that includes live secrets or private customer data.
 

@@ -97,7 +97,7 @@ Adapters are pure style — they contain no domain knowledge. They must not weak
 
 Zero or one per task. A thin layer of project-specific context: stack details, hard constraints, naming conventions. Keeps the Domain Architect generic while giving the model the facts it needs for a specific codebase.
 
-Current overlays: `overlay_gpcguard`, `overlay_prismatix`, `overlay_auditguard`, `overlay_project_android`.
+Current overlays: `overlay_example_saas_backend`, `overlay_example_llm_router`, `overlay_example_web_audit`, `overlay_example_mobile_suite`.
 
 **Rule:** If a project overlay grows beyond ~400 tokens of meaningful content, it should be split into domain-level invariants (belong in the Domain Architect or a skill) and actual project-specific context (stays in the overlay).
 
@@ -135,7 +135,7 @@ The catalog is the single source of truth for all registered prompt files. Every
 The v9 orchestrator is the active typed runtime lane. It:
 
 1. Reads the user's request
-2. Matches it to a project (`GPCGuard`, `Prismatix`, `AuditGuard`, `Project_Android`, or `global`)
+2. Matches it to a project (`example_saas_backend`, `example_llm_router`, `example_web_audit`, `example_mobile_suite`, or `global`)
 3. Classifies the task type (Frontend / Backend / Mobile / Compliance / DevOps / Research)
 4. Emits one typed `analysis.purpose_mode` for the task's primary purpose (`execution`, `verification`, `learning`, `exploration`, or `audit`)
 5. Selects the minimum correct set of layer IDs
@@ -156,7 +156,7 @@ Output is a typed manifest:
     "domain_id": "domain_swe_backend",
     "skill_ids": ["skill_ts_zod", "skill_supabase_pg"],
     "model_adapter_id": "adapter_standard",
-    "project_overlay_id": "overlay_gpcguard",
+    "project_overlay_id": "overlay_example_saas_backend",
     "task_overlay_ids": [],
     "pipeline_stage_ids": ["pipeline_qa_reviewer"]
   },

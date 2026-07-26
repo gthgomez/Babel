@@ -33,7 +33,7 @@ Preview the backend example:
 pwsh -File .\tools\resolve-local-stack.ps1 `
   -TaskCategory backend `
   -Project example_saas_backend `
-  -Model codex `
+  -Model deepseek `
   -PipelineMode verified `
   -Format json
 ```
@@ -48,7 +48,7 @@ Preview the Android/mobile example:
 pwsh -File .\tools\resolve-local-stack.ps1 `
   -TaskCategory mobile `
   -Project example_mobile_suite `
-  -Model codex `
+  -Model deepseek `
   -Format json
 ```
 
