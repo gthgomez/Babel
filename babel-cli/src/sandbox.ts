@@ -228,42 +228,49 @@ function appendCappedChunk(
 
 /**
  * W0.1 Process supervisor: kill the spawned process and its descendants.
- * Windows: taskkill /T /F. POSIX: SIGTERM process group (detached spawn).
+ * Windows: synchronous taskkill /T /F (async taskkill delayed cancel settlement).
+ * POSIX: SIGTERM process group (detached spawn), then SIGKILL fallback.
  */
 export function terminateChildTree(child: ChildProcessWithoutNullStreams): void {
   if (process.platform === 'win32' && child.pid) {
     const windowsRoot = process.env['SystemRoot'] || process.env['WINDIR'] || 'C:\\Windows';
     const taskkillPath = resolve(windowsRoot, 'System32', 'taskkill.exe');
     try {
-      const killer = spawn(taskkillPath, ['/pid', String(child.pid), '/T', '/F'], {
+      // spawnSync so abort settles without waiting on async taskkill close.
+      spawnSync(taskkillPath, ['/pid', String(child.pid), '/T', '/F'], {
         windowsHide: true,
         stdio: 'ignore',
         env: getSafeEnv(),
+        timeout: 1_500,
       });
-      const fallback = () => {
-        try {
-          child.kill();
-        } catch {
-          // Best effort: the child may already have exited.
-        }
-      };
-      killer.once('error', fallback);
-      killer.once('close', (code) => {
-        if (code !== 0) fallback();
-      });
-      return;
     } catch {
       // Fall through to direct child termination.
     }
+    try {
+      child.kill();
+    } catch {
+      // Best effort: the child may already have exited.
+    }
+    return;
   }
 
   if (process.platform !== 'win32' && child.pid) {
     try {
       process.kill(-child.pid, 'SIGTERM');
-      return;
     } catch {
       // Fall through when the process group has already exited.
     }
+    try {
+      process.kill(-child.pid, 'SIGKILL');
+    } catch {
+      // Group may already be gone after SIGTERM.
+    }
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // Best effort.
+    }
+    return;
   }
 
   try {
@@ -273,8 +280,12 @@ export function terminateChildTree(child: ChildProcessWithoutNullStreams): void 
   }
 }
 
-/** Max wait after AbortSignal before forcing promise settle (W0.1 cancel p95). */
-export const PROCESS_ABORT_SETTLE_MS = 2_000;
+/**
+ * Max wait after AbortSignal before forcing promise settle if `close` never fires.
+ * Product cancel p95 is under 250ms; 500ms local/CI budget covers OS reaping jitter.
+ * Prefer immediate finish after terminateChildTree (see onAbort).
+ */
+export const PROCESS_ABORT_SETTLE_MS = 500;
 
 /**
  * W0.1 Process supervisor — async spawn with AbortSignal, output caps, tree kill.
@@ -351,14 +362,14 @@ export function spawnCommandAsync(
 
     const onAbort = () => {
       aborted = true;
-      terminateChildTree(child);
-      // Do not wait for the full command timeout if the child never emits close.
-      if (!abortSettle) {
-        abortSettle = setTimeout(() => {
-          finish(1, new Error(`spawn ${executable} aborted`));
-        }, PROCESS_ABORT_SETTLE_MS);
-        abortSettle.unref?.();
-      }
+      // Unblock the tool awaiter first (cancel p95). Defer tree-kill to the next
+      // event-loop turn so spawnSync(taskkill) cannot hold the promise microtask
+      // queue — otherwise Windows cancel latency is dominated by taskkill, not
+      // by AbortSignal delivery.
+      finish(1, new Error(`spawn ${executable} aborted`));
+      setImmediate(() => {
+        terminateChildTree(child);
+      });
     };
 
     if (options.timeoutMs > 0) {

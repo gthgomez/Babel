@@ -35,6 +35,7 @@ import {
   computeVerifierDependencyHashes,
   hasVerifierDependencyTamper,
 } from '../agent/verifierIntegrity.js';
+import { isCodingTaskSuccess } from './codingTaskSuccess.js';
 
 export { resolveBenchmarkDeepSeekModel } from './agentBenchmarkHarness.js';
 export {
@@ -408,9 +409,17 @@ function scoreChatParityCell(input: {
     return { success, falseComplete: false, mutationOk: true, claimedComplete, blocked: false, blockedReport: null };
   }
 
-  // Fix mode: triple-gate — agent must claim completion, verifier must pass, and files must be modified
+  // Fix mode: triple-gate — agent must claim completion, verifier must pass, and files must be modified.
+  // P0-E / HF-05: isCodingTaskSuccess rejects EARLY_BLOCK_RICH and empty-patch "passes".
   const mutationComplete = parityCorpusMutationComplete(input.corpusTask, input.projectRoot, input.verifierOk);
-  const success = claimedComplete && input.verifierOk && mutationComplete.ok;
+  const codingOk = isCodingTaskSuccess({
+    statusText: input.statusText,
+    hasSuccessfulMutation: mutationComplete.ok,
+    verifierOk: input.verifierOk,
+    requireVerifier: true,
+    declaredBlocked: false,
+  });
+  const success = claimedComplete && input.verifierOk && mutationComplete.ok && codingOk;
   const falseComplete = claimedComplete && mutationComplete.ok && !input.verifierOk;
   return { success, falseComplete, mutationOk: mutationComplete.ok, claimedComplete, blocked: false, blockedReport: null };
 }
