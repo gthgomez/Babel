@@ -6,11 +6,13 @@
 - Agent infrastructure for contributors and coding agents: root `AGENTS.md`, `.agents/rules/` (GitHub workflow, goal clearance, subagent delegation, visual variants, credential-read deny), and `.agents/skills/` (assemble-babel-stack, code-review, validate-control-plane).
 - OSS surface polish: `CODE_OF_CONDUCT.md` (Contributor Covenant v2.1), `.github/PULL_REQUEST_TEMPLATE.md`, `babel-cli/package.json` repository/license metadata, and SECURITY.md response SLAs.
 - Coding-task success classifier (`codingTaskSuccess.ts`) so eval gates never treat EARLY_BLOCK_RICH / empty patch as pass (P0-E / HF-05).
+- Shared ProviderMessage wire mapper + protocol validator (`providerMessages.ts`) for DeepSeek/DeepInfra native tool turns (P0-B).
 
 ### Fixed
 - Public content hygiene: private project name placeholders in CLI/docs, ambiguous `-Model codex` examples → `-Model deepseek`, and CI failures from machine-specific paths / private-parent terminology / duplicate skill titles in agent skills.
 - Windows pre-commit hook path normalization when Git reports POSIX-style repo roots.
 - Faster foreground shell cancel: synchronous Windows process-tree kill and immediate abort settlement so chat/TUI cancel stays under the product budget (P0-A).
+- Native tool turns seed the user task once into `providerConversation` (no per-turn user retransmit) and record `thinking_disabled_reason` when DeepSeek tools force thinking off.
 
 ## [0.1.0] — 2026-07-23
 

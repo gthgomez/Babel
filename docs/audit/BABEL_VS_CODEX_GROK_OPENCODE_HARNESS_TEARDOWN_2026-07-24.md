@@ -675,7 +675,7 @@ Edit as PRs land. Do not mark done without §7 test IDs.
 
 | ID | Item | Wave | Status | PR / evidence | Notes |
 |----|------|------|--------|---------------|-------|
-| P0.1 | Harness fidelity HF-01…05 | W0 | partial | `feat/p0-async-process-supervisor` | P0-A async shell + cancel settle + HF-05 codingTaskSuccess; P0-B protocol still open |
+| P0.1 | Harness fidelity HF-01…05 | W0 | partial | PRs #22 + structured protocol | P0-A cancel + HF-05 shipped; P0-B wire mapper + single user-turn seed + thinking_disabled_reason; P0-C/D still open |
 | P0.2 | Multi-file reliability RL-02 | W1 | | | |
 | P0.3 | Install + first-run PS-01/02 | W2 | | | |
 | P0.4 | BYOM UX PS-03 | W3 | | | |
