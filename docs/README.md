@@ -6,7 +6,10 @@ This directory contains the active public documentation for Babel.
 - [CLI quick start](./CLI_QUICKSTART.md) covers the first local validation path.
 - [Architecture](./architecture/ARCHITECTURE.md) describes the current public system shape.
 - [Canonical source decision](./adr/ADR-0001-canonical-public-source.md) records repository authority.
+- [Status index](./status/README.md) tracks qualification evidence and product locks.
 - [`archive/`](./archive/) contains explicitly historical, unsupported material.
+
+Root onboarding companions (outside this folder): [README.md](../README.md), [START_HERE.md](../START_HERE.md), [AGENTS.md](../AGENTS.md), [BABEL_BIBLE.md](../BABEL_BIBLE.md).
 
 Active guidance must describe the canonical repository and pass the public content,
 link, independence, and supplemental scrub checks before release.

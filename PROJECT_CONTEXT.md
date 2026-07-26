@@ -69,6 +69,7 @@ or building a clean Babel clone.
 - **05_Project_Overlays:** Public example overlays only.
 - **06_Task_Overlays:** Public reusable task overlays and public example deltas.
 - **babel-cli:** Public runtime harness for resolver preview, read-only MCP, and advanced pipeline experimentation.
+- **AGENTS.md / `.agents/`:** Public agent identity, goal-clearance and GitHub workflow rules, and repo-local skills for stack assembly, code review, and control-plane validation.
 
 ## Key Contracts
 
@@ -95,6 +96,7 @@ or building a clean Babel clone.
 - `prompt_catalog.yaml`
 - `00_System_Router/`
 - `babel-cli/src/control-plane/`
+- `AGENTS.md` and `.agents/rules/` / `.agents/skills/`
 - public onboarding docs
 - public release tooling
 - public CI and security scanning
