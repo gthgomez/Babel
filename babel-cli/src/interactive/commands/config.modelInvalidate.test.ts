@@ -2,7 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { ReplContext } from '../context.js';
-import { handleClear, handleMode, handleProject, handleRetarget } from './config.js';
+import {
+  handleClear,
+  handleMode,
+  handleModel,
+  handleProject,
+  handleRetarget,
+} from './config.js';
 
 function makeCtx(partial?: Partial<ReplContext>): ReplContext {
   const state: ReplContext['state'] = {
@@ -57,4 +63,34 @@ test('operator /mode hard-plan invalidates chatEngine for next turn', () => {
   handleMode(ctx, ['hard-plan']);
   assert.equal(ctx.chatEngine, undefined);
   assert.equal(ctx.state.operatorMode, 'hard_plan');
+});
+
+test('P0-C: /model invalidates chatEngine so next turn uses new provider', () => {
+  const ctx = makeCtx();
+  assert.ok(ctx.chatEngine);
+  // clear path always invalidates even without a valid model key
+  handleModel(ctx, ['clear']);
+  assert.equal(ctx.chatEngine, undefined);
+  assert.equal(ctx.state.model, undefined);
+});
+
+test('P0-C: /model clear leaves state ready for route-selected model', () => {
+  const ctx = makeCtx({
+    state: {
+      mode: 'chat',
+      router: 'v9',
+      model: 'deepseek-v4-flash',
+      costTotals: {
+        totalCostUSD: 0,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalTokens: 0,
+      },
+      turnCount: 0,
+    },
+  });
+  ctx.chatEngine = { marker: true } as unknown as ReplContext['chatEngine'];
+  handleModel(ctx, ['clear']);
+  assert.equal(ctx.chatEngine, undefined);
+  assert.equal(ctx.state.model, undefined);
 });

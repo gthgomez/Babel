@@ -426,7 +426,8 @@ export class ChatEngine {
   private abortController: AbortController;
   private engineRunId: string;
   private options: ChatEngineOptions;
-  private readonly limits: ChatEngineLimits;
+  /** Mutable: P0-C re-resolves limits on isolated user submissions (task class change). */
+  private limits: ChatEngineLimits;
   private modelPolicy: ResolvedModelPolicy | undefined;
   private synthesisRunner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | null = null;
   private deliberationRunner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | null = null;
@@ -1220,6 +1221,10 @@ export class ChatEngine {
       provider: providerName,
       projectRoot: this.options.projectRoot,
       policyPreset: 'workspace_write',
+      taskClass: runtime.taskClass,
+      gatePolicy: runtime.gatePolicy ?? this.gatePolicy ?? 'required',
+      submissionIndex: runtime.submissionIndex,
+      continuedTask: runtime.continuedTask,
     });
     setChatApprovalTurnId(this.parity.turnId);
 
@@ -2441,6 +2446,36 @@ export class ChatEngine {
       this.verifierReceiptCache.clear();
       // Plan handoff force-mutate elevation must not leak into an unrelated task.
       this.forceMutateTurnsOverride = null;
+      // P0-C: prior task exploration / stall state must not bias a new submission.
+      this.fullReadCounts.clear();
+      this.cumulativeExplorationTools = 0;
+      this.stallState = createStallDetector();
+      this.repetitionDetector.reset();
+      // Budgets follow the new task class (not the previous submission's class).
+      this.limits = resolveChatEngineLimits(
+        {
+          ...(this.options.maxTurns !== undefined ? { maxTurns: this.options.maxTurns } : {}),
+          ...(this.options.maxConversationMessages !== undefined
+            ? { maxConversationMessages: this.options.maxConversationMessages }
+            : {}),
+          ...(this.options.maxEstimatedTokens !== undefined
+            ? { maxEstimatedTokens: this.options.maxEstimatedTokens }
+            : {}),
+          ...(this.options.maxTokensPerRound !== undefined
+            ? { maxTokensPerRound: this.options.maxTokensPerRound }
+            : {}),
+        },
+        undefined,
+        { taskClass: runtime.taskClass, taskText: runtime.taskText },
+      );
+      // Playbook / todo gate re-evaluate for the new task text.
+      this.activePlaybook = selectPlaybookForChatTask(runtime.taskText) ?? null;
+      this.requireTodoBeforeMutate = shouldRequireTodoPlan(
+        runtime.taskText,
+        this.activePlaybook,
+      );
+      // System prompt may embed class/playbook hints — rebuild next LLM call.
+      this.clearSystemPromptCache();
     }
 
     this.lastTurnRuntime = runtime;
@@ -2448,8 +2483,8 @@ export class ChatEngine {
       at_turn: this._turnIndex,
       kind: 'progress_policy',
       detail: runtime.continuedTask
-        ? `turn_runtime:continue:sub=${runtime.submissionIndex}:writes=${runtime.writeCount}`
-        : `turn_runtime:isolate:sub=${runtime.submissionIndex}:intent=${runtime.taskIntent}`,
+        ? `turn_runtime:continue:sub=${runtime.submissionIndex}:writes=${runtime.writeCount}:class=${runtime.taskClass}`
+        : `turn_runtime:isolate:sub=${runtime.submissionIndex}:intent=${runtime.taskIntent}:class=${runtime.taskClass}`,
     });
     return runtime;
   }

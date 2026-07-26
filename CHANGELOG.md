@@ -7,6 +7,7 @@
 - OSS surface polish: `CODE_OF_CONDUCT.md` (Contributor Covenant v2.1), `.github/PULL_REQUEST_TEMPLATE.md`, `babel-cli/package.json` repository/license metadata, and SECURITY.md response SLAs.
 - Coding-task success classifier (`codingTaskSuccess.ts`) so eval gates never treat EARLY_BLOCK_RICH / empty patch as pass (P0-E / HF-05).
 - Shared ProviderMessage wire mapper + protocol validator (`providerMessages.ts`) for DeepSeek/DeepInfra native tool turns (P0-B).
+- Per-submission TurnRuntime isolation refreshes task-class budgets/limits, clears exploration/stall leak, and records taskClass/gatePolicy on `turn_started` (P0-C).
 
 ### Fixed
 - Public content hygiene: private project name placeholders in CLI/docs, ambiguous `-Model codex` examples → `-Model deepseek`, and CI failures from machine-specific paths / private-parent terminology / duplicate skill titles in agent skills.

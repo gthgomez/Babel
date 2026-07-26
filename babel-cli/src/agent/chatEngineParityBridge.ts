@@ -79,6 +79,10 @@ export function parityOnUserTurn(
     projectRoot: string;
     policyPreset?: string;
     verifier?: string;
+    taskClass?: string;
+    gatePolicy?: string;
+    submissionIndex?: number;
+    continuedTask?: boolean;
   },
 ): void {
   rt.loop = reduceAgentLoop(rt.loop, { type: 'user_turn', task: input.task }).state;
@@ -91,6 +95,10 @@ export function parityOnUserTurn(
     projectRoot: input.projectRoot,
     policyPreset: input.policyPreset ?? 'workspace_write',
     ...(input.verifier !== undefined ? { verifier: input.verifier } : {}),
+    ...(input.taskClass !== undefined ? { taskClass: input.taskClass } : {}),
+    ...(input.gatePolicy !== undefined ? { gatePolicy: input.gatePolicy } : {}),
+    ...(input.submissionIndex !== undefined ? { submissionIndex: input.submissionIndex } : {}),
+    ...(input.continuedTask !== undefined ? { continuedTask: input.continuedTask } : {}),
   });
 }
 
