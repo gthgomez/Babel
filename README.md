@@ -55,7 +55,7 @@ See the stack the agent would load for a backend task:
 pwsh -File .\tools\resolve-local-stack.ps1 `
   -TaskCategory backend `
   -Project example_saas_backend `
-  -Model codex `
+  -Model deepseek `
   -PipelineMode chat `
   -Format json
 ```
@@ -68,7 +68,7 @@ Mobile lane:
 pwsh -File .\tools\resolve-local-stack.ps1 `
   -TaskCategory mobile `
   -Project example_mobile_suite `
-  -Model codex `
+  -Model deepseek `
   -Format json
 ```
 

@@ -203,7 +203,7 @@ test('doctor latest run pointer check warns on malformed pointer JSON', async ()
   const runsRoot = join(root, 'runs');
   mkdirSync(runsRoot, { recursive: true });
   writeFileSync(
-    join(runsRoot, '.latest.Openclaw.json'),
+    join(runsRoot, '.latest.example_autonomous_agent.json'),
     '{\n  "run_dir": "/tmp/\\Babel\\\\runs\\\\bad"\n}\n',
     'utf8',
   );
@@ -220,7 +220,7 @@ test('doctor latest run pointer check warns on malformed pointer JSON', async ()
   assert.equal(pointerCheck?.message, 'Found 1 malformed latest run pointer(s)');
   assert.match(
     pointerCheck?.details?.[0] ?? '',
-    /^runs[\\/]\.latest\.Openclaw\.json :: invalid JSON/,
+    /^runs[\\/]\.latest\.example_autonomous_agent\.json :: invalid JSON/,
   );
 });
 
@@ -355,8 +355,8 @@ test('doctor repo map distinguishes missing mapped repo paths', async () => {
         babel_core: root,
         babel_public: join(workspace, 'missing-babel-public'),
         example_saas_backend: join(workspace, 'repos', 'example_saas_backend'),
-        prismatix: join(workspace, 'repos', 'prismatix'),
-        auditguard: join(workspace, 'repos', 'auditguard'),
+        prismatix: join(workspace, 'repos', 'example_llm_router'),
+        auditguard: join(workspace, 'repos', 'example_web_audit'),
         project_android: join(workspace, 'repos', 'project_android'),
         project_games: join(workspace, 'repos', 'project_games'),
         godot_td: join(workspace, 'repos', 'godot_td'),

@@ -108,11 +108,11 @@ Invoke-Step -Label 'TypeScript typecheck' -Body {
 }
 
 Invoke-Step -Label 'Resolver smoke test' -Body {
-  & $shellPath -NoProfile -ExecutionPolicy Bypass -File $resolveLocalStackScriptPath -TaskCategory backend -Project example_saas_backend -Model codex -PipelineMode verified -Format json | Out-Null
+  & $shellPath -NoProfile -ExecutionPolicy Bypass -File $resolveLocalStackScriptPath -TaskCategory backend -Project example_saas_backend -Model deepseek -PipelineMode verified -Format json | Out-Null
 }
 
 Invoke-Step -Label 'Mobile resolver smoke test' -Body {
-  & $shellPath -NoProfile -ExecutionPolicy Bypass -File $resolveLocalStackScriptPath -TaskCategory mobile -Project example_mobile_suite -Model codex -Format json | Out-Null
+  & $shellPath -NoProfile -ExecutionPolicy Bypass -File $resolveLocalStackScriptPath -TaskCategory mobile -Project example_mobile_suite -Model deepseek -Format json | Out-Null
 }
 
 Write-Host ''

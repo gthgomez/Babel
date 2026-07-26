@@ -279,7 +279,7 @@ test('collectGradleBootstrapSequencingViolations: returns null when manifest has
       makeStep({
         step: 1,
         tool: 'file_read',
-        target: './reference-montecarlo-ledger/build.gradle.kts',
+        target: './reference-example-finance-forecast/build.gradle.kts',
       }),
     ],
   });
@@ -330,7 +330,7 @@ test('collectGradleBootstrapSequencingViolations: rejects mirrored Gradle reads 
         makeStep({
           step: 1,
           tool: 'file_read',
-          target: './reference-montecarlo-ledger/build.gradle.kts',
+          target: './reference-example-finance-forecast/build.gradle.kts',
         }),
       ],
     });

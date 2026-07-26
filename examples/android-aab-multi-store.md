@@ -43,7 +43,7 @@ In the public repo, a mobile manifest preview is now a real first-class helper p
 pwsh -File .\tools\resolve-local-stack.ps1 `
   -TaskCategory mobile `
   -Project example_mobile_suite `
-  -Model codex `
+  -Model deepseek `
   -Format json
 ```
 

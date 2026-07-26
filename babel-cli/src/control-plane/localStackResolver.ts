@@ -68,7 +68,7 @@ export type LocalProject =
   | 'global'
   | 'example_saas_backend'
   | 'example_llm_router'
-  | 'AuditGuard'
+  | 'example_web_audit'
   | 'example_mobile_suite'
   | 'example_game_suite'
   | 'simlife'
@@ -209,7 +209,7 @@ function resolveOverlayId(projectPath: string): string | null {
     return `overlay_${dirLower.replace(/[^a-z0-9_]/g, '_')}`;
   }
   if (parentDir === 'example_mobile_suite') {
-    if (dirLower === 'montecarloledger') return 'overlay_monte_carlo_ledger';
+    if (dirLower === 'example_finance_forecast') return 'overlay_monte_carlo_ledger';
     return 'overlay_project_android';
   }
 

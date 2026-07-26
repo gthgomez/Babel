@@ -1931,7 +1931,7 @@ Notes:
     )
     .option(
       '-p, --project <name>',
-      'Target project (example_saas_backend | example_llm_router | AuditGuard | example_mobile_suite | example_game_suite | godot_td | app_test_babel)',
+      'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_suite | godot_td | app_test_babel)',
     )
     .option('--mode <mode>', `Pipeline mode: ${VALID_MODES.join(' | ')}`, 'chat')
     .option(
@@ -3227,7 +3227,7 @@ Notes:
     )
     .requiredOption(
       '--project <name>',
-      'Target project (example_saas_backend | example_llm_router | AuditGuard | example_mobile_suite | example_game_suite | godot_td | app_test_babel)',
+      'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_suite | godot_td | app_test_babel)',
     )
     .addHelpText(
       'after',
@@ -3248,7 +3248,7 @@ Notes:
     .description('Legacy alias for smoke diagnostic; not a general project test runner')
     .option(
       '--project <name>',
-      'Target project (example_saas_backend | example_llm_router | AuditGuard | example_mobile_suite | example_game_suite | godot_td | app_test_babel)',
+      'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_suite | godot_td | app_test_babel)',
     )
     .argument('[project]', 'Target project')
     .addHelpText(

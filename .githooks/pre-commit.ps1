@@ -8,7 +8,14 @@ CI is authoritative; hooks are optional. Use --no-verify to bypass.
 param()
 
 $ErrorActionPreference = 'Stop'
+# Git may report a POSIX-style root (e.g. /c/Workspace/...) under Git Bash hooks.
+# Normalize so PowerShell Push-Location and path APIs work on Windows.
 $repoRoot = (git rev-parse --show-toplevel)
+if ($repoRoot -match '^/([A-Za-z])/(.*)$') {
+    $repoRoot = ('{0}:\{1}' -f $Matches[1].ToUpperInvariant(), ($Matches[2] -replace '/', '\'))
+} elseif ($repoRoot -match '^([A-Za-z]):/') {
+    $repoRoot = $repoRoot -replace '/', '\'
+}
 $exitCode = 0
 
 function Write-Finding([string]$Label, [string]$Detail) {
