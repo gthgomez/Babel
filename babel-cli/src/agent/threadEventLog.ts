@@ -47,6 +47,14 @@ export type ThreadEvent =
       projectRoot: string;
       policyPreset: string;
       verifier?: string;
+      /** P0-C: effective chat task class for this submission (budgets / gates). */
+      taskClass?: string;
+      /** P0-C: verification policy for this submission. */
+      gatePolicy?: string;
+      /** P0-C: submission index within the thread. */
+      submissionIndex?: number;
+      /** P0-C: whether counters continued from prior task. */
+      continuedTask?: boolean;
     })
   | (ThreadEventBase & { kind: 'user_message'; content: string })
   | (ThreadEventBase & { kind: 'assistant_message'; content: string })
@@ -164,6 +172,10 @@ export function startTurn(
     projectRoot: string;
     policyPreset: string;
     verifier?: string;
+    taskClass?: string;
+    gatePolicy?: string;
+    submissionIndex?: number;
+    continuedTask?: boolean;
   },
 ): string {
   const turnId = randomUUID();
@@ -176,6 +188,10 @@ export function startTurn(
     projectRoot: input.projectRoot,
     policyPreset: input.policyPreset,
     ...(input.verifier !== undefined ? { verifier: input.verifier } : {}),
+    ...(input.taskClass !== undefined ? { taskClass: input.taskClass } : {}),
+    ...(input.gatePolicy !== undefined ? { gatePolicy: input.gatePolicy } : {}),
+    ...(input.submissionIndex !== undefined ? { submissionIndex: input.submissionIndex } : {}),
+    ...(input.continuedTask !== undefined ? { continuedTask: input.continuedTask } : {}),
   });
   appendThreadEvent(log, {
     kind: 'repo_identity',

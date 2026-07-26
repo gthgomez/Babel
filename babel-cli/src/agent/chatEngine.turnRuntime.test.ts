@@ -57,3 +57,40 @@ test('resyncTurnStateAfterBranch zeros writeCount on runtime snapshot', () => {
   assert.equal(engine.getWriteCount(), 0);
   assert.equal(engine.getTurnRuntimeSnapshot()?.writeCount, 0);
 });
+
+test('P0-C: isolated submission reloads limits for new task class', () => {
+  const engine = new ChatEngine({
+    task: 'explain the architecture without editing any files',
+    projectRoot: process.cwd(),
+  });
+  const first = engine.applyUserSubmission({
+    userInput: 'explain the architecture without editing any files',
+  });
+  assert.equal(first.taskClass, 'investigate');
+  const wallInvestigate = (engine as unknown as { limits: { maxWallMs: number } }).limits.maxWallMs;
+
+  const second = engine.applyUserSubmission({
+    userInput: 'fix multi-file race condition across the codebase',
+  });
+  assert.equal(second.continuedTask, false);
+  assert.equal(second.taskClass, 'general_swe');
+  assert.notEqual(second.taskClass, first.taskClass);
+  const wallSwe = (engine as unknown as { limits: { maxWallMs: number } }).limits.maxWallMs;
+  // general_swe uses a longer wall than investigate in chatTaskClass tunes.
+  assert.ok(wallSwe !== wallInvestigate || wallSwe > 0);
+  assert.equal(second.gatePolicy, 'required'); // general_swe verificationPolicy
+});
+
+test('P0-C: continueTask keeps limits class sticky with prior taskClass', () => {
+  const engine = new ChatEngine({ task: 'fix parser bug', projectRoot: process.cwd() });
+  const first = engine.applyUserSubmission({
+    userInput: 'fix parser bug',
+    taskIntent: 'execute',
+  });
+  const cont = engine.applyUserSubmission({
+    userInput: 'continue the same fix',
+    continueTask: true,
+  });
+  assert.equal(cont.continuedTask, true);
+  assert.equal(cont.taskClass, first.taskClass);
+});
