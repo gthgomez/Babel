@@ -34,7 +34,7 @@ This is the **public, canonical source** for the Babel coding agent (`gthgomez/B
 | CLI tests | `babel-cli/src/**/*.test.ts` |
 | CLI package scripts | `babel-cli/package.json` |
 | CI workflows | `.github/workflows/` |
-| Agent/skill lifecycle & execution rules | `AGENTS.md`, `.agents/rules/` (`05`-`08`), `.agents/skills/` |
+| Agent/skill lifecycle & execution rules | `AGENTS.md`, `.agents/rules/` (`05`-`09`), `.agents/skills/` |
 | Autonomous goal clearance & research delegation | `.agents/rules/06-autonomous-goal-clearance.md`, `.agents/rules/07-subagent-research-delegation.md` |
 | Docs (architecture, ADRs, audits, plans, guides, status, research, release) | `docs/` — start with `docs/README.md` |
 | Embedding & vector index decision | `docs/adr/ADR-011-embedding-decision.md` |
