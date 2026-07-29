@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "description": "Public metadata policy for pull request titles, bodies, and commit messages.",
+  "forbidden_phrases": [
+    {
+      "id": "PRMETA001",
+      "category": "private-lineage-terminology",
+      "pattern": "(?i)\\b(?:private\\s+vault|from\\s+(?:the\\s+)?vault|vault\\s*(?:→|to)\\s*public)\\b"
+    }
+  ]
+}
