@@ -2,6 +2,8 @@ name: Public Release Gate
 
 on:
   pull_request:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited]
   push:
     branches:
       - main
@@ -16,6 +18,7 @@ concurrency:
 jobs:
   security:
     name: security
+    if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,6 +50,7 @@ jobs:
 
   public-content-policy:
     name: public-content-policy
+    if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,8 +61,36 @@ jobs:
       - name: Check canonical repository independence
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-canonical-independence.ps1 -RepoRoot .
 
+  public-pr-metadata-tests:
+    name: public-pr-metadata-tests
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test public PR metadata policy
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/tests/test-public-pr-metadata.ps1
+
+  public-pr-metadata:
+    name: public-pr-metadata
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Check public PR metadata
+        env:
+          BABEL_PRIVATE_METADATA_POLICY_B64: ${{ secrets.BABEL_PRIVATE_METADATA_POLICY_B64 }}
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-pr-metadata.ps1 -RepoRoot . -RequireSupplementalPolicy
+
   linux-validation:
     name: linux-validation
+    if: github.event_name != 'pull_request_target'
     needs: [security, public-content-policy]
     runs-on: ubuntu-latest
     steps:
@@ -79,6 +111,7 @@ jobs:
 
   windows-portability:
     name: windows-portability
+    if: github.event_name != 'pull_request_target'
     needs: [security, public-content-policy]
     runs-on: windows-latest
     steps:
