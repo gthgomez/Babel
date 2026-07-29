@@ -6,6 +6,10 @@
 
 <!-- e.g. typecheck, unit tests, content policy scan, secret scan -->
 
+## Public Disclosure Check
+
+- [ ] I reviewed the title, description, commit messages, and attachments for credentials, machine-specific paths, internal project names, and other sensitive internal details.
+
 ## Risks
 
 <!-- Breaking changes? Migration needed? Docs to update? -->
