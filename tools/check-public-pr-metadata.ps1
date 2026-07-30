@@ -116,11 +116,17 @@ function Get-PullRequestCommits {
     return @($commits)
   } catch {
     $statusCode = ''
-    if ($null -ne $_.Exception.Response) {
-      try { $statusCode = [string][int]$_.Exception.Response.StatusCode } catch { $statusCode = '' }
+    $responseProperty = $_.Exception.PSObject.Properties['Response']
+    if ($null -ne $responseProperty -and $null -ne $responseProperty.Value) {
+      $statusProperty = $responseProperty.Value.PSObject.Properties['StatusCode']
+      if ($null -ne $statusProperty) {
+        try { $statusCode = [string][int]$statusProperty.Value } catch { $statusCode = '' }
+      }
     }
     if ($statusCode) { throw "Pull request commit metadata could not be read (HTTP $statusCode)." }
-    throw 'Pull request commit metadata could not be read.'
+    $detail = [string]$_.Exception.Message
+    if ($detail.Length -gt 160) { $detail = $detail.Substring(0, 160) }
+    throw "Pull request commit metadata could not be read ($detail)."
   }
 }
 
