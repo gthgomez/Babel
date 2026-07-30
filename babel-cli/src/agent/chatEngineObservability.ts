@@ -118,6 +118,10 @@ export type StreamDoneEvent = {
   usage: SessionUsageSummary;
   toolCalls: ExportedToolCall[];
   runDir: string;
+  /** Authoritative terminal outcome from the engine (P0-D lossless). */
+  outcome: TerminalOutcome;
+  /** True when wall/cost/token budget forced termination. */
+  budgetExceeded?: boolean;
   verifierReceipt?: { command: string; exit_code: number; summary: string } | null;
   blockedReport?: BlockedReport | null;
   verifierTampered?: boolean;
@@ -188,17 +192,23 @@ export function buildStreamDone(
   h: ObservabilityHandles,
   answer: string,
   extra?: {
+    outcome: TerminalOutcome;
+    budgetExceeded?: boolean;
     blockedReport?: BlockedReport | null;
     verifierTampered?: boolean;
     criticReceipt?: DiffCriticVerdict | null;
   },
 ): StreamDoneEvent {
+  if (!extra?.outcome) {
+    throw new Error('buildStreamDone requires an authoritative TerminalOutcome (P0-D)');
+  }
   const event: StreamDoneEvent = {
     type: 'done',
     answer,
     usage: globalCostTracker.getSessionSummary(),
     toolCalls: exportToolCalls(h.toolCallLog),
     runDir: h.engineRunDir,
+    outcome: extra.outcome,
     verifierReceipt: h.lastVerifierReceipt ?? null,
     policyEvents: h.policyEventLog.last(50),
     turnRouting: h.routingReceiptLog.toJSON(),
@@ -206,9 +216,10 @@ export function buildStreamDone(
     blockedAttempts: h.blockedAttemptLedger.toJSON(),
     turnSummaries: getEngineTurnSummaryStore(h.engineRunDir).toJSON(),
   };
-  if (extra?.blockedReport !== undefined) event.blockedReport = extra.blockedReport;
-  if (extra?.verifierTampered) event.verifierTampered = true;
-  if (extra?.criticReceipt) event.criticReceipt = extra.criticReceipt;
+  if (extra.budgetExceeded) event.budgetExceeded = true;
+  if (extra.blockedReport !== undefined) event.blockedReport = extra.blockedReport;
+  if (extra.verifierTampered) event.verifierTampered = true;
+  if (extra.criticReceipt) event.criticReceipt = extra.criticReceipt;
   return event;
 }
 
@@ -378,7 +389,9 @@ export function computeTerminalOutcome(input: {
   lastVerifierReceipt?: { exit_code: number } | null | undefined;
   blockedReport?: { reason: string } | null | undefined;
 }): TerminalOutcome {
-  if (input.budgetExceeded) return 'BUDGET_EXHAUSTED';
+  if (input.budgetExceeded || input.finalStatus === 'budget_exhausted') {
+    return 'BUDGET_EXHAUSTED';
+  }
   switch (input.finalStatus) {
     case 'completed':
       return (input.lastVerifierReceipt && input.lastVerifierReceipt.exit_code === 0)

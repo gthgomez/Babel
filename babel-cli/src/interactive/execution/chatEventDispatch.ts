@@ -3,6 +3,7 @@
  */
 
 import type { ChatEvent, ChatResult } from '../../agent/chatEngine.js';
+import { computeTerminalOutcome } from '../../agent/chatEngineObservability.js';
 import type { TurnRoutingReceipt } from '../../agent/turnRoutingReceipt.js';
 import type { BlockedReport, TerminalOutcome } from '../../schemas/agentContracts.js';
 import type { SessionUsageSummary } from '../../services/costTracker.js';
@@ -113,22 +114,34 @@ export function terminalResultFromDoneEvent(
   verifierReceipt?: { command: string; exit_code: number; summary: string } | null,
   blockedReport?: BlockedReport | null,
   opts?: {
+    /** Prefer engine-emitted outcome (P0-D lossless). */
+    outcome?: TerminalOutcome;
+    budgetExceeded?: boolean;
     criticReceipt?: ChatResult['criticReceipt'];
     verifierTampered?: boolean;
     turnRouting?: TurnRoutingReceipt[];
   },
 ): ChatResult {
-  // Derive truthful TerminalOutcome from available event data.
-  // In the streaming path we lack the engine's this.budgetExceeded flag,
-  // so we use the best available proxy.
-  const outcome: TerminalOutcome = blockedReport
-    ? 'BLOCKED_EXTERNAL'
-    : verifierReceipt && verifierReceipt.exit_code === 0
-      ? 'VERIFIED_COMPLETE'
-      : 'UNVERIFIED_PATCH';
+  // Prefer the engine's authoritative TerminalOutcome. Only recompute when
+  // older fixtures omit it (tests / partial events).
+  const budgetExceeded = opts?.budgetExceeded === true;
+  const outcome: TerminalOutcome =
+    opts?.outcome ??
+    computeTerminalOutcome({
+      finalStatus: blockedReport ? 'blocked' : budgetExceeded ? 'budget_exhausted' : 'completed',
+      budgetExceeded,
+      lastVerifierReceipt: verifierReceipt,
+      blockedReport,
+    });
+
+  const status: ChatResult['status'] = blockedReport
+    ? 'blocked'
+    : budgetExceeded
+      ? 'budget_exhausted'
+      : 'completed';
 
   return {
-    status: blockedReport ? 'blocked' : 'completed',
+    status,
     outcome,
     answer,
     usage,
@@ -137,6 +150,7 @@ export function terminalResultFromDoneEvent(
     ...(runDir ? { runDir } : {}),
     ...(verifierReceipt ? { verifierReceipt } : {}),
     ...(blockedReport ? { blockedReport } : {}),
+    ...(budgetExceeded ? { budgetExceeded: true as const } : {}),
     ...(opts?.criticReceipt ? { criticReceipt: opts.criticReceipt } : {}),
     ...(opts?.verifierTampered ? { verifierTampered: true as const } : {}),
     ...(opts?.turnRouting ? { turnRouting: opts.turnRouting } : {}),
