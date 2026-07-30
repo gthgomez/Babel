@@ -355,6 +355,9 @@ export type ChatEvent =
       type: 'done';
       answer: string;
       usage: SessionUsageSummary;
+      /** Authoritative terminal outcome from the engine (P0-D lossless). */
+      outcome?: TerminalOutcome;
+      budgetExceeded?: boolean;
       toolCalls?: Array<{ tool: string; target: string; detail?: string; error?: string }>;
       runDir?: string;
       verifierReceipt?: { command: string; exit_code: number; summary: string } | null;
@@ -2312,7 +2315,7 @@ export class ChatEngine {
     },
   ) {
     const outcome = computeTerminalOutcome({
-      finalStatus: extra?.blockedReport ? 'blocked' : 'completed',
+      finalStatus: extra?.blockedReport ? 'blocked' : this.budgetExceeded ? 'budget_exhausted' : 'completed',
       budgetExceeded: this.budgetExceeded,
       lastVerifierReceipt: this.lastVerifierReceipt,
       blockedReport: extra?.blockedReport,
@@ -2321,9 +2324,13 @@ export class ChatEngine {
       this.parity,
       this.engineRunDir,
       outcome,
-      extra?.blockedReport ? 'blocked' : 'completed',
+      extra?.blockedReport ? 'blocked' : this.budgetExceeded ? 'budget_exhausted' : 'completed',
     );
-    return buildStreamDone(this.obsHandles(), answer, extra);
+    return buildStreamDone(this.obsHandles(), answer, {
+      outcome,
+      ...(this.budgetExceeded ? { budgetExceeded: true as const } : {}),
+      ...(extra ?? {}),
+    });
   }
 
   private streamFailed(error: string) {
