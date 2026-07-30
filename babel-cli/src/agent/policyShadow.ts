@@ -9,6 +9,12 @@
  * Ablation (not a code fork): set BABEL_POLICY_MODE_<POLICY>=shadow|enforce|off
  * or BABEL_POLICY_MODE for a global default.
  *
+ * Modes for zero-write:
+ * - shadow: log once when shadow threshold would kill; soft nudge only if live
+ *   threshold still enabled for the class
+ * - enforce: live threshold fires as a **terminal** hard-stop (parity action)
+ * - off: no log, no nudge, no kill
+ *
  * See Codex harness parity plan P0-E and teardown HF-05.
  */
 
@@ -18,22 +24,10 @@ import {
 } from '../config/chatTaskClass.js';
 import {
   buildZeroWriteHardStopMessage,
+  resolveEnvThresholdTurns,
   shouldHardBlockZeroWrite,
 } from './budgetKillPolicy.js';
 import type { PolicyEvent, PolicyEventKind, PolicyEventLog } from './policyEventLog.js';
-
-/** Live zero-write threshold (mirrors chatZeroWritePolicy; no import cycle). */
-function resolveLiveZeroWriteTurns(
-  taskClass: ChatTaskClass,
-  env: NodeJS.ProcessEnv,
-): number {
-  const raw = env['BABEL_CHAT_ZERO_WRITE_HARD_STOP_TURNS']?.trim();
-  if (raw !== undefined && raw !== '') {
-    const n = Number.parseInt(raw, 10);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
-  return getChatTaskTune(taskClass).zeroWriteHardStopTurns;
-}
 
 /** Policies that historically hard-killed or hard-restricted coding runs. */
 export type ShadowKillPolicy =
@@ -45,7 +39,7 @@ export type ShadowKillPolicy =
 
 /**
  * - shadow: log would-have intervention; soft nudge only (never terminal)
- * - enforce: historical hard-stop / hard-restrict behavior
+ * - enforce: historical hard-stop / hard-restrict behavior (zero-write is terminal)
  * - off: disable the policy entirely (no log, no nudge, no kill)
  */
 export type PolicyShadowMode = 'shadow' | 'enforce' | 'off';
@@ -63,6 +57,7 @@ const POLICY_ENV_KEYS: Record<ShadowKillPolicy, string> = {
 
 const GLOBAL_MODE_ENV = 'BABEL_POLICY_MODE';
 const SHADOW_ZERO_WRITE_TURNS_ENV = 'BABEL_CHAT_ZERO_WRITE_SHADOW_TURNS';
+const LIVE_ZERO_WRITE_TURNS_ENV = 'BABEL_CHAT_ZERO_WRITE_HARD_STOP_TURNS';
 
 /** Event kinds that count as shadow interventions for later-success rollup. */
 export const SHADOW_INTERVENTION_KINDS: ReadonlySet<PolicyEventKind> = new Set([
@@ -82,7 +77,7 @@ function parseMode(raw: string | undefined): PolicyShadowMode | null {
 
 /**
  * Per-class defaults: coding profiles shadow kill-switches; governance enforces;
- * investigate leaves zero-write off and does not stall-shadow (research may thrash reads).
+ * investigate: stall remains enforce (may kill); zero-write/force-mutate off.
  */
 export function defaultPolicyMode(
   policy: ShadowKillPolicy,
@@ -91,13 +86,13 @@ export function defaultPolicyMode(
   if (taskClass === 'governance') {
     if (policy === 'stall_kill') return 'enforce';
     if (policy === 'zero_write') return 'enforce';
-    // Force/read/explore already soft-nudge unless restrictToolsOnPolicyFire;
-    // governance hard-restricts — treat terminal restrict path as enforce.
+    // Force/read/explore: governance hard-restricts under enforce.
     return 'enforce';
   }
   if (taskClass === 'investigate') {
     if (policy === 'zero_write') return 'off';
     if (policy === 'force_mutate') return 'off';
+    // Stall remains enforce — research thrash can still be killed.
     if (policy === 'stall_kill') return 'enforce';
     return 'shadow';
   }
@@ -145,12 +140,19 @@ export function resolveStallInterventionsEnabled(
 export function resolveShadowZeroWriteTurns(
   env: NodeJS.ProcessEnv = process.env,
 ): number {
-  const raw = env[SHADOW_ZERO_WRITE_TURNS_ENV]?.trim();
-  if (raw !== undefined && raw !== '') {
-    const n = Number.parseInt(raw, 10);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
-  return DEFAULT_SHADOW_ZERO_WRITE_TURNS;
+  return resolveEnvThresholdTurns(env, SHADOW_ZERO_WRITE_TURNS_ENV, DEFAULT_SHADOW_ZERO_WRITE_TURNS);
+}
+
+/** Live zero-write threshold (shared parse with chatZeroWritePolicy). */
+function resolveLiveZeroWriteTurns(
+  taskClass: ChatTaskClass,
+  env: NodeJS.ProcessEnv,
+): number {
+  return resolveEnvThresholdTurns(
+    env,
+    LIVE_ZERO_WRITE_TURNS_ENV,
+    getChatTaskTune(taskClass).zeroWriteHardStopTurns,
+  );
 }
 
 export interface ZeroWriteShadowDecision {
@@ -162,17 +164,24 @@ export interface ZeroWriteShadowDecision {
   /** Shadow threshold would fire (precision/recall narrative). */
   shadowWouldFire: boolean;
   /**
-   * Message for parity arbiter (nudge-only on live path).
-   * Null when silent (off, or shadow with live threshold disabled).
+   * Soft nudge for parity arbiter (shadow mode when live threshold still set).
+   * Never set when terminalMessage is set.
    */
   arbiterMessage: string | null;
-  /** Policy events to append (shadow and/or hard-stop). */
+  /**
+   * Enforce-mode terminal answer. When set, parity must use action=terminal.
+   */
+  terminalMessage: string | null;
+  /** Policy events to append (shadow and/or hard-stop). At most one zero_write_shadow. */
   events: PolicyEvent[];
 }
 
 /**
  * Evaluate zero-write policy under shadow/enforce/off.
- * Callers pass events to PolicyEventLog; message goes to parity arbiter as nudge.
+ * Callers pass events to PolicyEventLog; message goes to parity arbiter.
+ *
+ * Pass `alreadyHasZeroWriteShadow` so shadow logs fire once per session, not
+ * every turn after the threshold is crossed.
  */
 export function evaluateZeroWriteWithShadow(input: {
   executeIntent: boolean;
@@ -181,6 +190,8 @@ export function evaluateZeroWriteWithShadow(input: {
   taskClass: ChatTaskClass;
   env?: NodeJS.ProcessEnv;
   atTurn?: number;
+  /** When true, skip emitting another zero_write_shadow (session already logged). */
+  alreadyHasZeroWriteShadow?: boolean;
 }): ZeroWriteShadowDecision {
   const env = input.env ?? process.env;
   const mode = resolvePolicyMode('zero_write', input.taskClass, env);
@@ -210,13 +221,14 @@ export function evaluateZeroWriteWithShadow(input: {
       liveWouldFire,
       shadowWouldFire,
       arbiterMessage: null,
+      terminalMessage: null,
       events,
     };
   }
 
   if (mode === 'shadow') {
-    // Always log when the shadow threshold would have killed (even if live is 0).
-    if (shadowWouldFire) {
+    // Log once when the shadow threshold would have killed (even if live is 0).
+    if (shadowWouldFire && !input.alreadyHasZeroWriteShadow) {
       events.push({
         at_turn: at,
         kind: 'zero_write_shadow',
@@ -226,7 +238,7 @@ export function evaluateZeroWriteWithShadow(input: {
       });
     }
     // Soft nudge only when class still has a live threshold (legacy HS:Nt classes).
-    // general_swe (live 0) stays silent except for the shadow log above.
+    // general_swe (live 0) stays silent except for the one-shot shadow log above.
     const arbiterMessage =
       liveWouldFire
         ? buildZeroWriteHardStopMessage(input.completedTurns, liveThreshold)
@@ -238,12 +250,12 @@ export function evaluateZeroWriteWithShadow(input: {
       liveWouldFire,
       shadowWouldFire,
       arbiterMessage,
+      terminalMessage: null,
       events,
     };
   }
 
-  // enforce — historical hard-stop candidate (parity still treats as nudge-only;
-  // event kind remains zero_write_hard_stop for observability / scorecard).
+  // enforce — hard-stop is a real terminal when live threshold fires.
   if (liveWouldFire) {
     events.push({
       at_turn: at,
@@ -256,7 +268,8 @@ export function evaluateZeroWriteWithShadow(input: {
       shadowThreshold,
       liveWouldFire,
       shadowWouldFire,
-      arbiterMessage: buildZeroWriteHardStopMessage(input.completedTurns, liveThreshold),
+      arbiterMessage: null,
+      terminalMessage: buildZeroWriteHardStopMessage(input.completedTurns, liveThreshold),
       events,
     };
   }
@@ -268,6 +281,7 @@ export function evaluateZeroWriteWithShadow(input: {
     liveWouldFire,
     shadowWouldFire,
     arbiterMessage: null,
+    terminalMessage: null,
     events,
   };
 }
@@ -276,6 +290,9 @@ export function evaluateZeroWriteWithShadow(input: {
  * Shadow events for soft fuses that historically restricted tools or
  * demanded BLOCKED (exploration exhausted). Soft nudge messages still fire
  * from applyExploreFuses; these events record would-have terminal/restrict.
+ *
+ * Emits under mode=shadow even when the task class has hardRestrict enabled
+ * (live restrict only applies under mode=enforce).
  */
 export function buildExploreFuseShadowEvents(input: {
   atTurn: number;
@@ -288,39 +305,40 @@ export function buildExploreFuseShadowEvents(input: {
 }): PolicyEvent[] {
   const env = input.env ?? process.env;
   const events: PolicyEvent[] = [];
-  const tuneHard = input.hardRestrictEnabled;
+  // Live restrict only when hardRestrict && mode=enforce (caller enforces that).
+  // Under shadow, live_restrict is always 0 even if the class prefers hardRestrict.
+  const liveRestrictNote = 'live_restrict=0';
 
   if (input.forceMutateFired) {
     const mode = resolvePolicyMode('force_mutate', input.taskClass, env);
-    if (mode === 'shadow' && !tuneHard) {
+    if (mode === 'shadow') {
       events.push({
         at_turn: input.atTurn,
         kind: 'force_mutate_shadow',
-        detail: 'would_restrict_tools=mutate_only (soft nudge only)',
+        detail: `would_restrict_tools=mutate_only ${liveRestrictNote}`,
       });
     }
   }
   if (input.readThrashFired) {
     const mode = resolvePolicyMode('read_thrash', input.taskClass, env);
-    if (mode === 'shadow' && !tuneHard) {
+    if (mode === 'shadow') {
       events.push({
         at_turn: input.atTurn,
         kind: 'read_thrash_shadow',
-        detail: 'would_restrict_tools=mutate_only (soft nudge only)',
+        detail: `would_restrict_tools=mutate_only ${liveRestrictNote}`,
       });
     }
   }
   if (input.explorationExhausted) {
     const mode = resolvePolicyMode('exploration_fuse', input.taskClass, env);
-    if (mode === 'shadow' && !tuneHard) {
+    if (mode === 'shadow') {
       events.push({
         at_turn: input.atTurn,
         kind: 'exploration_shadow',
-        detail: 'would_exhaust_and_restrict (soft message only)',
+        detail: `would_exhaust_and_restrict ${liveRestrictNote}`,
       });
-    } else if (mode === 'off') {
-      // Caller should not push exploration exhausted message when off — handled in applyExploreFuses.
     }
+    // mode=off: caller skips exploration fuse entirely in applyExploreFuses.
   }
   return events;
 }
@@ -337,6 +355,9 @@ export interface PolicyShadowSummaryInput {
 /**
  * Append a session-end summary linking shadow interventions to later success.
  * No-op when no shadow intervention events were recorded.
+ *
+ * `later_succeeded` is coding-task gate pass only (not mere mutation).
+ * `later_progressed` records any successful mutation for thrash analysis.
  */
 export function recordPolicyShadowSessionOutcome(
   log: PolicyEventLog,
@@ -349,12 +370,14 @@ export function recordPolicyShadowSessionOutcome(
   const shadows = log.all().filter((e) => SHADOW_INTERVENTION_KINDS.has(e.kind));
   if (shadows.length === 0) return null;
 
-  const laterSucceeded = input.codingTaskPassed || input.hasSuccessfulMutation;
+  const laterSucceeded = input.codingTaskPassed;
+  const laterProgressed = input.hasSuccessfulMutation;
   const event: PolicyEvent = {
     at_turn: input.atTurn,
     kind: 'policy_shadow_summary',
     detail:
       `shadow_count=${shadows.length} later_succeeded=${laterSucceeded ? 1 : 0} ` +
+      `later_progressed=${laterProgressed ? 1 : 0} ` +
       `mutation=${input.hasSuccessfulMutation ? 1 : 0} ` +
       `coding_pass=${input.codingTaskPassed ? 1 : 0} ` +
       `outcome=${input.terminalOutcome}`,
@@ -369,6 +392,7 @@ export function measureShadowInterventionOutcomes(events: readonly PolicyEvent[]
   sessions_with_summary: number;
   later_succeeded: number;
   later_failed: number;
+  later_progressed: number;
   by_kind: Partial<Record<PolicyEventKind, number>>;
 } {
   const by_kind: Partial<Record<PolicyEventKind, number>> = {};
@@ -376,6 +400,7 @@ export function measureShadowInterventionOutcomes(events: readonly PolicyEvent[]
   let sessions_with_summary = 0;
   let later_succeeded = 0;
   let later_failed = 0;
+  let later_progressed = 0;
 
   for (const e of events) {
     by_kind[e.kind] = (by_kind[e.kind] ?? 0) + 1;
@@ -389,6 +414,9 @@ export function measureShadowInterventionOutcomes(events: readonly PolicyEvent[]
       } else {
         later_failed += 1;
       }
+      if (/\blater_progressed=1\b/.test(e.detail ?? '')) {
+        later_progressed += 1;
+      }
     }
   }
 
@@ -397,6 +425,7 @@ export function measureShadowInterventionOutcomes(events: readonly PolicyEvent[]
     sessions_with_summary,
     later_succeeded,
     later_failed,
+    later_progressed,
     by_kind,
   };
 }

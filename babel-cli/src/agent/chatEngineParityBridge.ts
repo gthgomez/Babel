@@ -213,7 +213,10 @@ function isMutatingToolName(name: string): boolean {
 
 /**
  * Arbitrate fuse + progress candidates → at most one intervention message.
- * Zero-write alone is never terminal unless progress score says terminal.
+ *
+ * Zero-write:
+ * - default/shadow: nudge only (never sole terminal under soft coding path)
+ * - enforce ablation: terminal when `zeroWriteTerminalMessage` is set
  */
 export function parityArbitrateCycle(input: {
   rt: ParityRuntime;
@@ -229,7 +232,13 @@ export function parityArbitrateCycle(input: {
   stallMessage?: string | null;
   /** Non-shadow stall kill — terminal via progress_terminal precedence. */
   stallKillMessage?: string | null;
+  /** Soft zero-write nudge (shadow / legacy HS classes). */
   zeroWriteCandidate?: string | null;
+  /**
+   * P0-E enforce ablation: zero-write hard-stop as a real terminal.
+   * When set, takes precedence over zeroWriteCandidate.
+   */
+  zeroWriteTerminalMessage?: string | null;
   hardCeiling?: boolean;
   hardCeilingReason?: string;
 }): {
@@ -338,8 +347,14 @@ export function parityArbitrateCycle(input: {
       message: input.stallMessage,
     });
   }
-  // Zero-write is nudge-only here — never sole terminal (P1-B).
-  if (input.zeroWriteCandidate) {
+  // Zero-write: enforce ablation → terminal; otherwise nudge-only (P0-E / P1-B).
+  if (input.zeroWriteTerminalMessage) {
+    candidates.push({
+      source: 'zero_write',
+      action: 'terminal',
+      message: input.zeroWriteTerminalMessage,
+    });
+  } else if (input.zeroWriteCandidate) {
     candidates.push({
       source: 'zero_write',
       action: 'nudge',

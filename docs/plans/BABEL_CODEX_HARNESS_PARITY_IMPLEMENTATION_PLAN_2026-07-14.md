@@ -628,6 +628,9 @@ Primary files:
 | P0-D TerminalOutcome honesty (budget → BUDGET_EXHAUSTED) | Done (PRs #34–#36); goldens in `terminalOutcomeGolden.test.ts` |
 | Live shadow logs (`*_shadow`) + `policy_shadow_summary` later_succeeded | Done (`policyShadow.ts`) |
 | Ablation flags `BABEL_POLICY_MODE[_*]=shadow\|enforce\|off` | Done |
+| Zero-write shadow one-shot log (no per-turn spam) | Done |
+| Zero-write `enforce` is real parity terminal | Done |
+| `later_succeeded` = coding gate only; `later_progressed` = mutation | Done |
 | Offline precision/recall campaign before re-enforce | Open |
 | Docker/Linux eval-before-policy ordering | Open |
 
@@ -637,6 +640,12 @@ Ablation (not a code fork):
 - `BABEL_POLICY_MODE_ZERO_WRITE` / `_FORCE_MUTATE` / `_READ_THRASH` / `_EXPLORATION_FUSE` / `_STALL_KILL`
 - `BABEL_CHAT_ZERO_WRITE_SHADOW_TURNS` — would-have-killed threshold when live hard-stop is 0 (default 12)
 - `BABEL_CHAT_ZERO_WRITE_HARD_STOP_TURNS` — live hard-stop threshold override
+
+Zero-write contract:
+
+- **shadow** (coding default): log `zero_write_shadow` once per session when shadow threshold would kill; soft nudge only if live threshold still &gt; 0
+- **enforce**: live threshold → parity `action: terminal` + `zero_write_hard_stop` event
+- **off**: silent
 
 Acceptance:
 
