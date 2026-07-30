@@ -110,25 +110,30 @@ export function formatPolicyPrecedenceTable(): string {
     '|------|--------|----------------|',
   ];
   POLICY_PRECEDENCE.forEach((source, i) => {
-    const typical =
+    let typical = 'allow';
+    if (
       source === 'hard_ceiling' ||
       source === 'explicit_deny' ||
       source === 'circuit_breaker' ||
       source === 'external_blocker' ||
       source === 'progress_terminal'
-        ? 'terminal'
-        : source === 'progress_recover'
-          ? 'recover'
-          : source.startsWith('progress') ||
-              source === 'force_mutate' ||
-              source === 'read_thrash' ||
-              source === 'stall' ||
-              source === 'exploration_fuse' ||
-              source === 'zero_write'
-            ? 'nudge'
-            : source === 'completion_gate'
-              ? 'terminal/nudge'
-              : 'allow';
+    ) {
+      typical = 'terminal';
+    } else if (source === 'progress_recover') {
+      typical = 'recover';
+    } else if (source === 'zero_write') {
+      typical = 'nudge/terminal';
+    } else if (
+      source.startsWith('progress') ||
+      source === 'force_mutate' ||
+      source === 'read_thrash' ||
+      source === 'stall' ||
+      source === 'exploration_fuse'
+    ) {
+      typical = 'nudge';
+    } else if (source === 'completion_gate') {
+      typical = 'terminal/nudge';
+    }
     lines.push(`| ${i + 1} | ${source} | ${typical} |`);
   });
   lines.push('');

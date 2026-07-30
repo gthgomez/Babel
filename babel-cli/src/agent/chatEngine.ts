@@ -172,11 +172,17 @@ import {
 import {
   applyExploreFuses as applyExploreFusesPolicy,
   buildPolicyTerminalBlockedReport,
-  evaluateZeroWriteHardStop,
   resolveRestrictedToolMode,
   type ExploreFuseResult,
 } from './chatZeroWritePolicy.js';
 import { PolicyEventLog, type PolicyEvent } from './policyEventLog.js';
+import {
+  evaluateZeroWriteWithShadow,
+  recordPolicyShadowSessionOutcome,
+  resolveStallInterventionsEnabled,
+  resolveStallShadowMode,
+} from './policyShadow.js';
+import { isCodingTaskSuccess } from '../services/codingTaskSuccess.js';
 import { BlockedAttemptLedger } from './blockedAttemptLedger.js';
 import {
   TurnRoutingReceiptLog,
@@ -1006,15 +1012,17 @@ export class ChatEngine {
    *  Returns null when not stalled or when the intervention has already been
    *  applied for the current stall state.
    *
-   *  When the task class has stallShadowMode on and the intervention would be
-   *  'kill', the level is downgraded to 'nudge' (see getStallInterventionMessage)
-   *  and a shadow-kill event is logged to policyEventLog. */
+   *  P0-E: stall_kill mode shadow|enforce|off (env ablation or task-class default).
+   *  Shadow downgrades kill → nudge and logs stall_shadow_kill. */
   private checkStallIntervention(): StallIntervention | null {
-    const tune = getChatTaskTune(this.taskClass);
+    if (!resolveStallInterventionsEnabled(this.taskClass)) {
+      return null;
+    }
+    const stallShadow = resolveStallShadowMode(this.taskClass);
     const intervention = getStallInterventionMessage(
       this.stallState,
       this.limits.stallTurns,
-      tune.stallShadowMode,
+      stallShadow,
     );
     if (!intervention) return null;
 
@@ -1023,7 +1031,7 @@ export class ChatEngine {
     this.stallState.interventionHistory.push(intervention.message);
 
     // Shadow mode: log each time the stall detector would have killed
-    if (tune.stallShadowMode && this.stallState.interventionLevel >= 4) {
+    if (stallShadow && this.stallState.interventionLevel >= 4) {
       this.policyEventLog.record({
         at_turn: this._turnIndex,
         kind: 'stall_shadow_kill',
@@ -1881,13 +1889,22 @@ export class ChatEngine {
         });
         this._streamNativeToolCallIds = [];
 
-        const zeroWriteNudge = evaluateZeroWriteHardStop({
+        // P0-E: zero-write shadow by default for coding classes (one-shot log);
+        // enforce ablation is a real terminal via zeroWriteTerminalMessage.
+        const alreadyHasZeroWriteShadow = this.policyEventLog
+          .all()
+          .some((e) => e.kind === 'zero_write_shadow');
+        const zeroWriteDecision = evaluateZeroWriteWithShadow({
           executeIntent: resolvedIntent === 'execute',
           completedTurns: turn + 1,
           hasAnyWrites: this.hasAnyWrites(),
           taskClass: this.taskClass,
-          onPolicyEvent: (event) => this.policyEventLog.record(event),
+          atTurn: turn,
+          alreadyHasZeroWriteShadow,
         });
+        for (const ev of zeroWriteDecision.events) {
+          this.policyEventLog.record(ev);
+        }
         const arb = parityArbitrateCycle({
           rt: this.parity,
           fuseLabels: exploreFuses.labels,
@@ -1902,7 +1919,8 @@ export class ChatEngine {
               : null,
           stallKillMessage:
             stallIntervention?.level === 'kill' ? stallIntervention.message : null,
-          zeroWriteCandidate: zeroWriteNudge,
+          zeroWriteCandidate: zeroWriteDecision.arbiterMessage,
+          zeroWriteTerminalMessage: zeroWriteDecision.terminalMessage,
         });
         if (arb.policySource) {
           this.policyEventLog.record({
@@ -2333,6 +2351,20 @@ export class ChatEngine {
       budgetExceeded: this.budgetExceeded,
       lastVerifierReceipt: this.lastVerifierReceipt,
       blockedReport: extra?.blockedReport,
+    });
+    // P0-E: attach shadow later-succeeded summary before export (idempotent with buildResult).
+    const hasMutation = this.hasAnyWrites();
+    recordPolicyShadowSessionOutcome(this.policyEventLog, {
+      atTurn: this._turnIndex,
+      hasSuccessfulMutation: hasMutation,
+      codingTaskPassed: isCodingTaskSuccess({
+        terminalOutcome: outcome,
+        hasSuccessfulMutation: hasMutation,
+        verifierOk: this.lastVerifierReceipt?.exit_code === 0,
+        requireVerifier: false,
+        declaredBlocked: Boolean(extra?.blockedReport),
+      }),
+      terminalOutcome: outcome,
     });
     finalizeParityTurnSync(
       this.parity,
@@ -4197,6 +4229,24 @@ export class ChatEngine {
       lastVerifierReceipt: this.lastVerifierReceipt,
       blockedReport: finalBlockedReport,
     });
+
+    // P0-E: if any kill-switch ran in shadow mode, record whether the task
+    // later succeeded (mutation / coding-task gate) for precision/recall.
+    const hasMutation = this.hasAnyWrites();
+    const codingPassed = isCodingTaskSuccess({
+      terminalOutcome: outcome,
+      hasSuccessfulMutation: hasMutation,
+      verifierOk: this.lastVerifierReceipt?.exit_code === 0,
+      requireVerifier: false,
+      declaredBlocked: Boolean(finalBlockedReport),
+    });
+    recordPolicyShadowSessionOutcome(this.policyEventLog, {
+      atTurn: this._turnIndex,
+      hasSuccessfulMutation: hasMutation,
+      codingTaskPassed: codingPassed,
+      terminalOutcome: outcome,
+    });
+
     // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
     finalizeParityTurnSync(this.parity, this.engineRunDir, outcome, finalStatus);
 
