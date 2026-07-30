@@ -85,6 +85,7 @@ jobs:
           persist-credentials: false
       - name: Check public PR metadata
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           BABEL_PRIVATE_METADATA_POLICY_B64: ${{ secrets.BABEL_PRIVATE_METADATA_POLICY_B64 }}
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-pr-metadata.ps1 -RepoRoot . -RequireSupplementalPolicy
 
