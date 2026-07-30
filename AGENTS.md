@@ -80,7 +80,7 @@ If the user says `run the whole GitHub workflow`, `ship this`, `open the PR`, or
 Default stance:
 - Autonomous through safe local inspection, verification, intentional staging, focused commit, non-main branch push, and draft PR creation when gates pass
 - Stop for hard-risk conditions: unrelated dirty-tree changes, secrets, failed required checks, destructive Git operations, direct `main` pushes, production deploys, or mixed unrelated concerns
-- **This is the canonical public repo.** CI gates (security, public-content-policy, linux-validation, windows-portability) run on every PR. Never skip or bypass them.
+- **This is the canonical public repo.** Required `protect-main` checks: `security`, `public-content-policy`, `linux-validation`, `public-pr-metadata`, `windows-portability`. Never skip or bypass them.
 
 ## How To Work Here
 

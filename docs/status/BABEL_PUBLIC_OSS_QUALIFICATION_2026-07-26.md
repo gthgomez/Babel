@@ -2,7 +2,7 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-07-26
+last_verified: 2026-07-30
 -->
 
 ## Verdict
@@ -23,6 +23,8 @@ content sync for product surface is complete; remaining private-only material
 | `public-content-policy` (+ independence) | Pass |
 | `linux-validation` | Pass |
 | `windows-portability` | Pass |
+| `public-pr-metadata` (trusted job) | Required on `protect-main` (ruleset `19597161`) as of 2026-07-29 |
+| `windows-portability` required | Elevated from advisory to **required** on `protect-main` 2026-07-30 |
 | Local re-scrub before merge | content-policy, scrub, independence, secret-scan (gitleaks 8.30.1), `tsc --noEmit` |
 
 ## What landed with qualification
@@ -41,5 +43,5 @@ content sync for product surface is complete; remaining private-only material
 ## Next product moves
 
 1. Prefer feature work on `main` via short-lived branches in this repo.
-2. Treat CI (security + content-policy + linux + windows) as merge-blocking for every PR.
+2. Treat CI (`security`, `public-content-policy`, `linux-validation`, `public-pr-metadata`, `windows-portability`) as merge-blocking for every PR.
 3. Execute remaining document work from [status/README.md](./README.md) when not blocking product features.
