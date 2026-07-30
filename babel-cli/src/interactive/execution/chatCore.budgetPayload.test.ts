@@ -59,6 +59,8 @@ describe('buildChatRunPayload budget honesty', () => {
     assert.equal(payload['status'], 'BUDGET_EXCEEDED');
     assert.equal(payload['budget_exceeded'], true);
     assert.equal(payload['failure_class_hint'], 'budget_exceeded');
+    // user_status stays within UserFacingStatus enum (failed), not a freeform string
+    assert.equal(payload['user_status'], 'failed');
     assert.ok(Array.isArray(payload['toolCalls']));
     assert.equal((payload['toolCalls'] as unknown[]).length, 2);
     assert.equal(payload['run_dir'], 'C:/tmp/runs/engine-abc');
