@@ -1108,6 +1108,9 @@ export class ChatEngine {
       answer?: string;
       blockedReport?: BlockedReport | null;
       error?: string;
+      /** Authoritative outcome from streamDone (P0-D B4). */
+      outcome?: TerminalOutcome;
+      budgetExceeded?: boolean;
     } | null = null;
 
     try {
@@ -1133,6 +1136,8 @@ export class ChatEngine {
               kind: 'done',
               answer: event.answer,
               blockedReport: event.blockedReport ?? null,
+              ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
+              ...(event.budgetExceeded ? { budgetExceeded: true } : {}),
             };
             break;
           case 'failed':
@@ -1146,13 +1151,10 @@ export class ChatEngine {
         }
       }
     } catch (error) {
-      return {
-        status: 'failed',
-        outcome: 'AGENT_FAILURE',
-        answer: error instanceof Error ? error.message : String(error),
-        usage: globalCostTracker.getSessionSummary(),
-        conversation: this.conversation,
-      };
+      // P0-D B4: unexpected throw must still finalize turn_ended on disk.
+      const message = error instanceof Error ? error.message : String(error);
+      finalizeParityTurnSync(this.parity, this.engineRunDir, 'AGENT_FAILURE', 'failed');
+      return this.buildResult('failed', cb, message);
     }
 
     if (!terminal || terminal.kind === 'cancelled') {
@@ -1168,6 +1170,18 @@ export class ChatEngine {
         terminal.answer,
         terminal.blockedReport,
       );
+    }
+    // Preserve budget_exhausted status from streamDone (do not collapse to completed).
+    if (
+      terminal.budgetExceeded ||
+      terminal.outcome === 'BUDGET_EXHAUSTED' ||
+      this.budgetExceeded
+    ) {
+      this.budgetExceeded = true;
+      return this.buildResult('budget_exhausted', cb, terminal.answer);
+    }
+    if (terminal.outcome === 'AGENT_FAILURE' || terminal.outcome === 'INFRA_FAILURE') {
+      return this.buildResult('failed', cb, terminal.answer);
     }
     return this.buildResult('completed', cb, terminal.answer);
   }
