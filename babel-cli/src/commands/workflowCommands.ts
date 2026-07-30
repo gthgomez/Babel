@@ -69,6 +69,8 @@ import {
   writeJson,
   writeNdjson,
 } from '../cli/structuredOutput.js';
+import { exitCodeFromOutcome } from '../cli/userFacingStatus.js';
+import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import { validateRuntimeEnvForCommand } from './coreCommands.js';
 import { applyRunCommandEnvFlags } from './runCommandEnv.js';
 import {
@@ -2437,7 +2439,11 @@ Notes:
                 process.stdout.write(`\n${note}\n`);
               }
             }
-            if (payload['status'] !== 'ANSWER_READY') {
+            // Prefer TerminalOutcome for exit code when present (P0-D B3).
+            const terminalOutcome = payload['terminal_outcome'];
+            if (typeof terminalOutcome === 'string') {
+              process.exitCode = exitCodeFromOutcome(terminalOutcome as TerminalOutcome);
+            } else if (payload['status'] !== 'ANSWER_READY') {
               process.exitCode = 1;
             }
             return;

@@ -590,11 +590,16 @@ export function buildChatRunPayload(
     liteCommand,
     suppressImplementationNext: isExecute,
     ...(result.runDir !== undefined ? { runDir: result.runDir } : {}),
+    ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
   }) as unknown as Record<string, unknown>;
 
   payload['command'] = 'run';
   payload['mode'] = 'chat';
   payload['checks'] = ['chat engine path'];
+  // Ensure terminal_outcome is always visible on the run payload when known.
+  if (result.outcome !== undefined) {
+    payload['terminal_outcome'] = result.outcome;
+  }
   payload['verification'] = result.verifierReceipt
     ? {
         status: 'completed',
@@ -742,11 +747,19 @@ export function buildChatRunPayload(
     };
   }
 
-  // Honest budget-kill classification for harness failure_class mapping
-  if (result.budgetExceeded || answerStatus === 'BUDGET_EXCEEDED') {
+  // Honest budget-kill classification for harness failure_class mapping.
+  // user_status stays within UserFacingStatus via outcome (failed); keep
+  // budget_exceeded as a dedicated machine flag, not a user_status string.
+  if (
+    result.budgetExceeded ||
+    answerStatus === 'BUDGET_EXCEEDED' ||
+    result.outcome === 'BUDGET_EXHAUSTED'
+  ) {
     payload['budget_exceeded'] = true;
     payload['failure_class_hint'] = 'budget_exceeded';
-    payload['user_status'] = 'budget_exceeded';
+    if (result.outcome === undefined) {
+      payload['user_status'] = 'failed';
+    }
   }
 
   // W0.4: env-red honesty — ENV_BLOCKED distinct from fail / empty success
