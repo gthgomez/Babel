@@ -10,6 +10,7 @@ import {
 import {
   buildForceMutateMessage,
   buildZeroWriteHardStopMessage,
+  resolveEnvThresholdTurns,
   shouldForceMutateEscalation,
   shouldHardBlockZeroWrite,
 } from './budgetKillPolicy.js';
@@ -36,12 +37,11 @@ export function resolveZeroWriteHardStopTurns(
   taskClass: ChatTaskClass,
   env: NodeJS.ProcessEnv = process.env,
 ): number {
-  const raw = env['BABEL_CHAT_ZERO_WRITE_HARD_STOP_TURNS']?.trim();
-  if (raw !== undefined && raw !== '') {
-    const n = Number.parseInt(raw, 10);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
-  return getChatTaskTune(taskClass).zeroWriteHardStopTurns;
+  return resolveEnvThresholdTurns(
+    env,
+    'BABEL_CHAT_ZERO_WRITE_HARD_STOP_TURNS',
+    getChatTaskTune(taskClass).zeroWriteHardStopTurns,
+  );
 }
 
 /**
@@ -214,6 +214,8 @@ export function applyExploreFuses(input: {
   deferMessagesToArbiter?: boolean;
   /** Override force-mutate turn threshold (plan→execute elevated mutate). */
   forceMutateTurnsOverride?: number;
+  /** Injectable env for ablation tests (defaults to process.env). */
+  env?: NodeJS.ProcessEnv;
 }): ExploreFuseResult {
   if (!input.executeIntent) {
     return {
@@ -240,8 +242,9 @@ export function applyExploreFuses(input: {
   // Soft-nudge mode matches Claude Code / Grok CLI: trust the model to
   // sequence its own tools, with the hard-stop as the safety net.
   // P0-E: ablation modes (shadow|enforce|off) via resolvePolicyMode.
+  // Hard restrict applies only when mode === 'enforce' (shadow never restricts).
   const hardRestrict = tune.restrictToolsOnPolicyFire === true;
-  const env = process.env;
+  const env = input.env ?? process.env;
   const forceMode = resolvePolicyMode('force_mutate', input.taskClass, env);
   const thrashMode = resolvePolicyMode('read_thrash', input.taskClass, env);
   const exploreMode = resolvePolicyMode('exploration_fuse', input.taskClass, env);

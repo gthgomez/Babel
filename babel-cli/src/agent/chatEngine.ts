@@ -1889,19 +1889,22 @@ export class ChatEngine {
         });
         this._streamNativeToolCallIds = [];
 
-        // P0-E: zero-write uses shadow mode by default for coding classes —
-        // log would-have-killed; arbiter still treats message as nudge-only.
+        // P0-E: zero-write shadow by default for coding classes (one-shot log);
+        // enforce ablation is a real terminal via zeroWriteTerminalMessage.
+        const alreadyHasZeroWriteShadow = this.policyEventLog
+          .all()
+          .some((e) => e.kind === 'zero_write_shadow');
         const zeroWriteDecision = evaluateZeroWriteWithShadow({
           executeIntent: resolvedIntent === 'execute',
           completedTurns: turn + 1,
           hasAnyWrites: this.hasAnyWrites(),
           taskClass: this.taskClass,
           atTurn: turn,
+          alreadyHasZeroWriteShadow,
         });
         for (const ev of zeroWriteDecision.events) {
           this.policyEventLog.record(ev);
         }
-        const zeroWriteNudge = zeroWriteDecision.arbiterMessage;
         const arb = parityArbitrateCycle({
           rt: this.parity,
           fuseLabels: exploreFuses.labels,
@@ -1916,7 +1919,8 @@ export class ChatEngine {
               : null,
           stallKillMessage:
             stallIntervention?.level === 'kill' ? stallIntervention.message : null,
-          zeroWriteCandidate: zeroWriteNudge,
+          zeroWriteCandidate: zeroWriteDecision.arbiterMessage,
+          zeroWriteTerminalMessage: zeroWriteDecision.terminalMessage,
         });
         if (arb.policySource) {
           this.policyEventLog.record({
