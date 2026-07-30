@@ -86,14 +86,18 @@ function Get-PullRequestCommits {
     $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json' }
     $commits = [Collections.Generic.List[object]]::new()
     while ($null -ne $uri) {
-      $response = Invoke-WebRequest -UseBasicParsing -Headers $headers -MaximumRedirection 0 -Uri $uri.AbsoluteUri
+      $responseHeaders = $null
+      $response = Invoke-WebRequest -UseBasicParsing -Headers $headers -MaximumRedirection 0 -ResponseHeadersVariable responseHeaders -Uri $uri.AbsoluteUri
       foreach ($commit in @($response.Content | ConvertFrom-Json)) {
         $commits.Add([pscustomobject]@{ sha = [string]$commit.sha; message = [string]$commit.commit.message })
       }
       $next = $null
       $linkHeader = ''
-      $linkProperty = $response.Headers.PSObject.Properties['Link']
+      $linkProperty = $responseHeaders.PSObject.Properties['Link']
       if ($null -ne $linkProperty) { $linkHeader = [string]$linkProperty.Value }
+      if ([string]::IsNullOrWhiteSpace($linkHeader)) {
+        try { $linkHeader = [string]$responseHeaders['Link'] } catch { $linkHeader = '' }
+      }
       if ($linkHeader -match '<([^>]+)>;\s*rel="next"') { $next = $Matches[1] }
       if ($next) {
         $nextUri = [Uri]$next
