@@ -151,7 +151,7 @@ Babel/
 ## Status (v0.1.0)
 
 - Canonical open-source coding agent surface — clone, validate, run locally  
-- **Public Release Gate** on every PR: `security` → `public-content-policy` → `linux-validation` (+ `windows-portability`)  
+- **Public Release Gate** on every PR (required on `protect-main`): `security`, `public-content-policy`, `linux-validation`, `public-pr-metadata`, `windows-portability`  
 - `main` is PR-only; `v*` tags protected; secret scanning + push protection on  
 - Optional pre-commit hooks; **CI is authoritative** ([CONTRIBUTING.md](./CONTRIBUTING.md))  
 
