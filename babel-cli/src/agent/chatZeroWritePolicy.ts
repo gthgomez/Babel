@@ -10,6 +10,7 @@ import {
 import {
   buildForceMutateMessage,
   buildZeroWriteHardStopMessage,
+  resolveEnvThresholdTurns,
   shouldForceMutateEscalation,
   shouldHardBlockZeroWrite,
 } from './budgetKillPolicy.js';
@@ -26,23 +27,30 @@ import {
   evaluateInvestigateToolBudget,
   evaluateShellSoftBudget,
 } from './implementorPolicy.js';
+import {
+  buildExploreFuseShadowEvents,
+  resolvePolicyMode,
+} from './policyShadow.js';
 
 /** Env override for zero-write hard-stop turns; 0 disables. */
 export function resolveZeroWriteHardStopTurns(
   taskClass: ChatTaskClass,
   env: NodeJS.ProcessEnv = process.env,
 ): number {
-  const raw = env['BABEL_CHAT_ZERO_WRITE_HARD_STOP_TURNS']?.trim();
-  if (raw !== undefined && raw !== '') {
-    const n = Number.parseInt(raw, 10);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
-  return getChatTaskTune(taskClass).zeroWriteHardStopTurns;
+  return resolveEnvThresholdTurns(
+    env,
+    'BABEL_CHAT_ZERO_WRITE_HARD_STOP_TURNS',
+    getChatTaskTune(taskClass).zeroWriteHardStopTurns,
+  );
 }
 
 /**
  * After a completed tool turn: when execute + zero writes past threshold,
  * return the BLOCKED answer; otherwise null.
+ *
+ * Prefer {@link evaluateZeroWriteWithShadow} on the live chat path (P0-E).
+ * This helper remains for offline scorecards / prove smokes and still emits
+ * `zero_write_hard_stop` when the live threshold fires (enforce-style).
  */
 export function evaluateZeroWriteHardStop(input: {
   executeIntent: boolean;
@@ -206,6 +214,8 @@ export function applyExploreFuses(input: {
   deferMessagesToArbiter?: boolean;
   /** Override force-mutate turn threshold (plan→execute elevated mutate). */
   forceMutateTurnsOverride?: number;
+  /** Injectable env for ablation tests (defaults to process.env). */
+  env?: NodeJS.ProcessEnv;
 }): ExploreFuseResult {
   if (!input.executeIntent) {
     return {
@@ -231,9 +241,19 @@ export function applyExploreFuses(input: {
   // tool access) or as hard restrictions (tools restricted next turn).
   // Soft-nudge mode matches Claude Code / Grok CLI: trust the model to
   // sequence its own tools, with the hard-stop as the safety net.
+  // P0-E: ablation modes (shadow|enforce|off) via resolvePolicyMode.
+  // Hard restrict applies only when mode === 'enforce' (shadow never restricts).
   const hardRestrict = tune.restrictToolsOnPolicyFire === true;
+  const env = input.env ?? process.env;
+  const forceMode = resolvePolicyMode('force_mutate', input.taskClass, env);
+  const thrashMode = resolvePolicyMode('read_thrash', input.taskClass, env);
+  const exploreMode = resolvePolicyMode('exploration_fuse', input.taskClass, env);
+  let forceMutateFired = false;
+  let readThrashFired = false;
+  let explorationExhausted = false;
 
   if (
+    forceMode !== 'off' &&
     shouldForceMutateEscalation({
       executeIntent: true,
       turnsWithoutWrite: s.turnsWithoutWrite,
@@ -241,9 +261,11 @@ export function applyExploreFuses(input: {
       hasAnyWrites: input.hasAnyWrites,
     })
   ) {
+    forceMutateFired = true;
     forceMutateMessage = buildForceMutateMessage(s.turnsWithoutWrite);
     if (!defer) input.pushUser(forceMutateMessage);
-    if (hardRestrict) {
+    // Hard restrict only in enforce mode when the task class enables it.
+    if (hardRestrict && forceMode === 'enforce') {
       s.restrictToolsNextTurn = true;
       input.onPolicyEvent?.({
         at_turn: input.currentTurn ?? 0,
@@ -261,15 +283,17 @@ export function applyExploreFuses(input: {
   }
 
   if (
+    thrashMode !== 'off' &&
     shouldFireReadThrashFuse({
       executeIntent: true,
       consecutiveReadOnlyTools: s.consecutiveReadOnlyTools,
       budget: tune.readThrashToolBudget,
     })
   ) {
+    readThrashFired = true;
     readThrashMessage = buildReadThrashFuseMessage(s.consecutiveReadOnlyTools);
     if (!defer) input.pushUser(readThrashMessage);
-    if (hardRestrict) {
+    if (hardRestrict && thrashMode === 'enforce') {
       s.restrictToolsNextTurn = true;
       input.onPolicyEvent?.({
         at_turn: input.currentTurn ?? 0,
@@ -286,19 +310,38 @@ export function applyExploreFuses(input: {
     s.consecutiveReadOnlyTools = 0;
   }
 
-  const result = applyCumulativeExplorationEscalation(
-    s.cumulativeExplorationTools,
-    tune.readThrashToolBudget,
-    (msg) => {
-      if (defer) {
-        explorationFuseMessage = msg.content;
-      } else {
-        input.pushUser(msg.content);
-      }
-    },
-  );
-  if (hardRestrict && result.restrictTools) s.restrictToolsNextTurn = true;
+  const result =
+    exploreMode === 'off'
+      ? { fired: [] as string[], restrictTools: false }
+      : applyCumulativeExplorationEscalation(
+          s.cumulativeExplorationTools,
+          tune.readThrashToolBudget,
+          (msg) => {
+            if (defer) {
+              explorationFuseMessage = msg.content;
+            } else {
+              input.pushUser(msg.content);
+            }
+          },
+        );
+  explorationExhausted = result.restrictTools === true;
+  if (hardRestrict && exploreMode === 'enforce' && result.restrictTools) {
+    s.restrictToolsNextTurn = true;
+  }
   out.push(...result.fired);
+
+  // P0-E: record would-have-restrict / exhaust while soft-nudge path continues.
+  for (const shadowEv of buildExploreFuseShadowEvents({
+    atTurn: input.currentTurn ?? 0,
+    taskClass: input.taskClass,
+    forceMutateFired,
+    readThrashFired,
+    explorationExhausted,
+    hardRestrictEnabled: hardRestrict,
+    env,
+  })) {
+    input.onPolicyEvent?.(shadowEv);
+  }
 
   // Implementor W1: shell soft budget (non-mutating shell thrash).
   const shellEval = evaluateShellSoftBudget({

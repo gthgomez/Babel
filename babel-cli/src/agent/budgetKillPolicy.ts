@@ -138,6 +138,23 @@ export function buildForceMutateMessage(turnsWithoutWrite: number): string {
 }
 
 /**
+ * Parse a non-negative integer threshold from env, else return fallback.
+ * Shared by live hard-stop and shadow would-have-killed resolvers (P0-E).
+ */
+export function resolveEnvThresholdTurns(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  fallback: number,
+): number {
+  const raw = env[key]?.trim();
+  if (raw !== undefined && raw !== '') {
+    const n = Number.parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return fallback;
+}
+
+/**
  * Hard-stop policy: execute tasks with zero successful mutations after N
  * completed turns → honest BLOCKED (no burning the full turn/cost budget).
  *

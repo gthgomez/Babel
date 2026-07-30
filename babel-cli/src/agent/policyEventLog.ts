@@ -12,8 +12,18 @@ export type PolicyEventKind =
   | 'exploration_escalation'
   | 'exploration_exhausted'
   | 'zero_write_hard_stop'
+  /** P0-E: would have zero-write hard-stopped; session continued. */
+  | 'zero_write_shadow'
   | 'stall_intervention'
   | 'stall_shadow_kill'
+  /** P0-E: force-mutate would have hard-restricted tools. */
+  | 'force_mutate_shadow'
+  /** P0-E: read-thrash would have hard-restricted tools. */
+  | 'read_thrash_shadow'
+  /** P0-E: exploration fuse would have exhausted/restricted. */
+  | 'exploration_shadow'
+  /** P0-E: session-end rollup — shadow count + later_succeeded. */
+  | 'policy_shadow_summary'
   | 'phase_gate_block'
   | 'plan_gate_block'
   | 'shell_soft_budget'

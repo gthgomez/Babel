@@ -140,4 +140,61 @@ describe('chatZeroWritePolicy', () => {
     });
     assert.ok(result.shellSoftMessage?.includes('shell soft budget'));
   });
+
+  test('applyExploreFuses records force_mutate_shadow for general_swe soft path', () => {
+    const events: Array<{ kind: string }> = [];
+    const state = {
+      turnsWithoutWrite: 99,
+      consecutiveReadOnlyTools: 0,
+      cumulativeExplorationTools: 0,
+      restrictToolsNextTurn: false,
+      consecutiveNonMutatingShells: 0,
+      toolsWithoutWrite: 0,
+      phase: 'mutate' as const,
+    };
+    applyExploreFuses({
+      executeIntent: true,
+      taskClass: 'general_swe',
+      hasAnyWrites: false,
+      state,
+      pushUser: () => {},
+      deferMessagesToArbiter: true,
+      onPolicyEvent: (e) => events.push(e),
+      currentTurn: 4,
+    });
+    assert.ok(events.some((e) => e.kind === 'force_mutate'));
+    assert.ok(events.some((e) => e.kind === 'force_mutate_shadow'));
+    assert.equal(state.restrictToolsNextTurn, false, 'soft coding path must not hard-restrict');
+  });
+
+  test('applyExploreFuses respects env ablation off without process mutation', () => {
+    const events: Array<{ kind: string }> = [];
+    const state = {
+      turnsWithoutWrite: 99,
+      consecutiveReadOnlyTools: 99,
+      cumulativeExplorationTools: 0,
+      restrictToolsNextTurn: false,
+      consecutiveNonMutatingShells: 0,
+      toolsWithoutWrite: 0,
+      phase: 'mutate' as const,
+    };
+    const result = applyExploreFuses({
+      executeIntent: true,
+      taskClass: 'general_swe',
+      hasAnyWrites: false,
+      state,
+      pushUser: () => {},
+      deferMessagesToArbiter: true,
+      onPolicyEvent: (e) => events.push(e),
+      currentTurn: 4,
+      env: {
+        BABEL_POLICY_MODE_FORCE_MUTATE: 'off',
+        BABEL_POLICY_MODE_READ_THRASH: 'off',
+        BABEL_POLICY_MODE_EXPLORATION_FUSE: 'off',
+      },
+    });
+    assert.equal(result.forceMutateMessage, null);
+    assert.equal(result.readThrashMessage, null);
+    assert.ok(!events.some((e) => e.kind === 'force_mutate' || e.kind === 'force_mutate_shadow'));
+  });
 });
