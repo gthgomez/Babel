@@ -30,6 +30,7 @@ try {
   Assert-True ($checkerSource -match "response\.Headers\.GetValues\('Link'\)") 'checker must tolerate commit responses without a Link header under strict mode'
   Assert-True ($checkerSource -notmatch 'ResponseHeadersVariable') 'checker must avoid unsupported response-header parameters'
   Assert-True ($checkerSource -match 'Net\.Http\.HttpClient') 'checker must use cross-platform HTTP handling'
+  Assert-True ($checkerSource -match 'AuthenticationHeaderValue') 'checker must authenticate API requests explicitly'
 
   $syntheticIdentifier = 'fixture-' + 'internal-identifier'
   $supplemental = New-SupplementalPolicy @([regex]::Escape($syntheticIdentifier))
