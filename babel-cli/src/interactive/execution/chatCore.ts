@@ -195,6 +195,8 @@ export async function consumeChatStream(
   let criticReceipt: ChatResult['criticReceipt'];
   let verifierTampered: boolean | undefined;
   let turnRouting: ChatResult['turnRouting'];
+  let doneOutcome: ChatResult['outcome'];
+  let doneBudgetExceeded = false;
   const toolIdQueue: number[] = [];
   let receivedTerminalEvent = false;
 
@@ -218,6 +220,8 @@ export async function consumeChatStream(
         criticReceipt = event.criticReceipt;
         verifierTampered = event.verifierTampered;
         turnRouting = event.turnRouting;
+        doneOutcome = event.outcome;
+        doneBudgetExceeded = event.budgetExceeded === true;
         receivedTerminalEvent = true;
       }
     }
@@ -242,6 +246,8 @@ export async function consumeChatStream(
   }
 
   return terminalResultFromDoneEvent(answer, usage, toolCalls, runDir, verifierReceipt, blockedReport, {
+    ...(doneOutcome ? { outcome: doneOutcome } : {}),
+    ...(doneBudgetExceeded ? { budgetExceeded: true } : {}),
     ...(criticReceipt ? { criticReceipt } : {}),
     ...(verifierTampered ? { verifierTampered: true } : {}),
     ...(turnRouting ? { turnRouting } : {}),
