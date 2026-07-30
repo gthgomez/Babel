@@ -355,6 +355,11 @@ foreach ($file in Get-PublicScrubFiles) {
       if ($token -match '^sha[0-9a-fA-F]') {
         continue
       }
+      if ($token -match '[a-f0-9]{40}') {
+        # Skip tokens that embed a full git SHA (benchmark instance IDs,
+        # dockerhub tags like org-repo-deadbeef...-vdeadbeef...).
+        continue
+      }
       if ($token -match '^20[0-9]{6}_') {
         # Skip date-based task/run identifiers
         continue
