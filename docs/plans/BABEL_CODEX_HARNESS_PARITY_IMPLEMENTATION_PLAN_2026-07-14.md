@@ -610,6 +610,7 @@ Primary files:
 
 - babel-cli/src/agent/chatZeroWritePolicy.ts
 - babel-cli/src/agent/policyShadow.ts — ablation modes + zero-write shadow + later_succeeded summary
+- babel-cli/src/agent/policyShadowPrecisionRecall.ts — offline would-kill precision/recall report
 - babel-cli/src/agent/readThrashPolicy.ts
 - babel-cli/src/agent/explorationFuse.ts
 - babel-cli/src/agent/stallDetector.ts
@@ -617,7 +618,7 @@ Primary files:
 - babel-cli/src/services/codingTaskSuccess.ts — HF-05 coding gate (no EARLY_BLOCK_RICH pass)
 - benchmark/campaign scoring and docs
 
-**Status (2026-07-29):**
+**Status (2026-07-30):**
 
 | Item | State |
 |------|--------|
@@ -631,8 +632,8 @@ Primary files:
 | Zero-write shadow one-shot log (no per-turn spam) | Done |
 | Zero-write `enforce` is real parity terminal | Done |
 | `later_succeeded` = coding gate only; `later_progressed` = mutation | Done |
-| Offline precision/recall campaign before re-enforce | Open |
-| Docker/Linux eval-before-policy ordering | Open |
+| Offline precision/recall campaign before re-enforce | Done (report tooling) — `policyShadowPrecisionRecall.ts` + `evidence shadow-precision`; scorecard dimension `shadow_precision_recall`. Live campaign data still required before any coding-class re-enforce. |
+| Docker/Linux eval-before-policy ordering | Open — authoritative Docker/Linux evaluation remains an acceptance ordering item: run Docker/Linux eval **before** policy tuning / re-enforce, not after. Not closed by P0-E shadow merge alone. |
 
 Ablation (not a code fork):
 

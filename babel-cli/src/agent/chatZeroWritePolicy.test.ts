@@ -151,6 +151,7 @@ describe('chatZeroWritePolicy', () => {
       consecutiveNonMutatingShells: 0,
       toolsWithoutWrite: 0,
       phase: 'mutate' as const,
+      shadowLoggedKinds: new Set<string>(),
     };
     applyExploreFuses({
       executeIntent: true,
@@ -165,6 +166,62 @@ describe('chatZeroWritePolicy', () => {
     assert.ok(events.some((e) => e.kind === 'force_mutate'));
     assert.ok(events.some((e) => e.kind === 'force_mutate_shadow'));
     assert.equal(state.restrictToolsNextTurn, false, 'soft coding path must not hard-restrict');
+  });
+
+  test('force_mutate_shadow is one-shot per session (deduped)', () => {
+    const events: Array<{ kind: string }> = [];
+    const state = {
+      turnsWithoutWrite: 99,
+      consecutiveReadOnlyTools: 0,
+      cumulativeExplorationTools: 0,
+      restrictToolsNextTurn: false,
+      consecutiveNonMutatingShells: 0,
+      toolsWithoutWrite: 0,
+      phase: 'mutate' as const,
+      shadowLoggedKinds: new Set<string>(),
+    };
+    const run = (turn: number) => {
+      // re-arm turns so force_mutate fires again (policy resets turnsWithoutWrite)
+      state.turnsWithoutWrite = 99;
+      applyExploreFuses({
+        executeIntent: true,
+        taskClass: 'general_swe',
+        hasAnyWrites: false,
+        state,
+        pushUser: () => {},
+        deferMessagesToArbiter: true,
+        onPolicyEvent: (e) => events.push(e),
+        currentTurn: turn,
+      });
+    };
+    run(1);
+    run(2);
+    run(3);
+    const shadows = events.filter((e) => e.kind === 'force_mutate_shadow');
+    assert.equal(shadows.length, 1, 'shadow must fire once, not every force_mutate cycle');
+    assert.ok(state.shadowLoggedKinds?.has('force_mutate_shadow'));
+  });
+
+  test('investigate hard cap terminals after tools without write', () => {
+    const state = {
+      turnsWithoutWrite: 0,
+      consecutiveReadOnlyTools: 0,
+      cumulativeExplorationTools: 0,
+      restrictToolsNextTurn: false,
+      consecutiveNonMutatingShells: 0,
+      toolsWithoutWrite: 16, // general_swe hard cap
+      phase: 'investigate' as const,
+    };
+    const result = applyExploreFuses({
+      executeIntent: true,
+      taskClass: 'general_swe',
+      hasAnyWrites: false,
+      state,
+      pushUser: () => {},
+      deferMessagesToArbiter: true,
+    });
+    assert.ok(result.investigateHardCapTerminal);
+    assert.match(result.investigateHardCapTerminal!, /hard cap 16/i);
   });
 
   test('applyExploreFuses respects env ablation off without process mutation', () => {

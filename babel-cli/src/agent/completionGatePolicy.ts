@@ -101,7 +101,46 @@ export function isAgentOwnedAdHocVerifier(command: string | null | undefined): b
 }
 
 /**
- * B2: command is a real test runner **and** not an agent-owned ad-hoc script.
+ * Inline one-liners / simulated harnesses that must not solely green completion.
+ *
+ * Evidence (SWE-Bench Pro pilot / general_swe):
+ * - `python -c "print('hello')"` was treated as green authoritative verify
+ * - `python -c` re-implementing the unit under test with dataclasses (no project import)
+ *   passed exit checks while real project tests never ran
+ *
+ * Keep these as {@link isLikelyVerifierCommand} so they still log as verify attempts,
+ * but they are **not** authoritative for honesty gates.
+ *
+ * Pure function; no I/O.
+ */
+export function isInlineProbeVerifier(command: string | null | undefined): boolean {
+  if (command == null) return false;
+  const trimmed = command.trim();
+  if (!trimmed) return false;
+  const lower = trimmed.toLowerCase();
+
+  // python -c / python3 -c / node -e / node --eval  → inline probes
+  if (
+    /^(?:python3?|py)\s+-c\b/.test(lower) ||
+    /^node\s+(?:-e|--eval)\b/.test(lower)
+  ) {
+    return true;
+  }
+
+  // Toy print-only probes even if wrapped (shell -c 'python -c print...')
+  if (
+    /\bpython3?\s+-c\s+["']?\s*print\s*\(\s*['"]hello['"]\s*\)/i.test(trimmed) ||
+    /\bnode\s+-e\s+["']?\s*console\.log\s*\(\s*['"]hello['"]\s*\)/i.test(trimmed)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * B2: command is a real test runner **and** not an agent-owned ad-hoc script
+ * or an inline probe (`python -c` / `node -e`).
  * Use for completion honesty gates and lastVerifierReceipt capture.
  */
 export function isAuthoritativeVerifierCommand(
@@ -109,6 +148,7 @@ export function isAuthoritativeVerifierCommand(
 ): boolean {
   if (!isLikelyVerifierCommand(command)) return false;
   if (isAgentOwnedAdHocVerifier(command)) return false;
+  if (isInlineProbeVerifier(command)) return false;
   return true;
 }
 
