@@ -37,6 +37,12 @@ try {
   Assert-True (@((ConvertFrom-Json $phraseFailure.Text).findings.id) -contains 'PRMETA001') 'private-lineage phrase did not produce PRMETA001'
   Assert-True ($phraseFailure.Text -notmatch [regex]::Escape($lineage)) 'phrase failure output exposed matched content'
 
+  $commitPhraseFailure = Invoke-Checker -Title 'docs: update public guidance' -Body 'Public documentation update.' -Messages @("docs: update $lineage") -SupplementalPolicy $supplemental -RequireSupplementalPolicy
+  Assert-True ($commitPhraseFailure.ExitCode -eq 1) 'private-lineage commit message unexpectedly passed'
+  $commitFindings = @((ConvertFrom-Json $commitPhraseFailure.Text).findings)
+  Assert-True (@($commitFindings | Where-Object { $_.id -eq 'PRMETA001' -and $_.field -eq 'commit-message' }).Count -eq 1) 'private-lineage commit message did not identify its field'
+  Assert-True ($commitPhraseFailure.Text -notmatch [regex]::Escape($lineage)) 'commit phrase failure output exposed matched content'
+
   $identifierFailure = Invoke-Checker -Title 'docs: update' -Body 'No sensitive metadata here.' -Messages @($syntheticIdentifier) -SupplementalPolicy $supplemental -RequireSupplementalPolicy
   Assert-True ($identifierFailure.ExitCode -eq 1) 'supplemental identifier unexpectedly passed'
   Assert-True (@((ConvertFrom-Json $identifierFailure.Text).findings.id) -contains 'PRMETA002') 'supplemental identifier did not produce PRMETA002'

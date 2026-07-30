@@ -91,7 +91,10 @@ function Get-PullRequestCommits {
         $commits.Add([pscustomobject]@{ sha = [string]$commit.sha; message = [string]$commit.commit.message })
       }
       $next = $null
-      if ($response.Headers.Link -match '<([^>]+)>;\s*rel="next"') { $next = $Matches[1] }
+      $linkHeader = ''
+      $linkProperty = $response.Headers.PSObject.Properties['Link']
+      if ($null -ne $linkProperty) { $linkHeader = [string]$linkProperty.Value }
+      if ($linkHeader -match '<([^>]+)>;\s*rel="next"') { $next = $Matches[1] }
       if ($next) {
         $nextUri = [Uri]$next
         if ($nextUri.Scheme -ne 'https' -or $nextUri.Host -ne 'api.github.com' -or $nextUri.AbsolutePath -ne $ExpectedPath) { throw 'invalid pagination endpoint' }
