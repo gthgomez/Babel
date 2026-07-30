@@ -675,7 +675,7 @@ Edit as PRs land. Do not mark done without §7 test IDs.
 
 | ID | Item | Wave | Status | PR / evidence | Notes |
 |----|------|------|--------|---------------|-------|
-| P0.1 | Harness fidelity HF-01…05 | W0 | partial | PRs #22–#23 + per-turn runtime | P0-A/B + P0-C limits refresh + turn_started taskClass; P0-D still open |
+| P0.1 | Harness fidelity HF-01…05 | W0 | partial | PRs #22–#24, #34–#36 + P0-E shadow | **P0-D closed** (stream TerminalOutcome, user_status/exit, goldens: #34–#36). **P0-E in progress**: coding-task gate + general_swe zero-write off (#22); policy shadow modes + later_succeeded summary (feat/p0e-policy-shadow-remainder). HF-01…04 earlier PRs. Remaining: measured precision/recall before re-enforcing any heuristic; Docker-first eval ordering. |
 | P0.2 | Multi-file reliability RL-02 | W1 | | | |
 | P0.3 | Install + first-run PS-01/02 | W2 | | | |
 | P0.4 | BYOM UX PS-03 | W3 | | | |

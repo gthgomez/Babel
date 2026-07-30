@@ -609,11 +609,34 @@ Immediate changes:
 Primary files:
 
 - babel-cli/src/agent/chatZeroWritePolicy.ts
+- babel-cli/src/agent/policyShadow.ts — ablation modes + zero-write shadow + later_succeeded summary
 - babel-cli/src/agent/readThrashPolicy.ts
 - babel-cli/src/agent/explorationFuse.ts
 - babel-cli/src/agent/stallDetector.ts
 - babel-cli/src/agent/completionGatePolicy.ts
+- babel-cli/src/services/codingTaskSuccess.ts — HF-05 coding gate (no EARLY_BLOCK_RICH pass)
 - benchmark/campaign scoring and docs
+
+**Status (2026-07-29):**
+
+| Item | State |
+|------|--------|
+| Coding-task gate (`classifyCodingTaskGate` / agentBenchmark) | Done (PR #22 lineage) |
+| general_swe `zeroWriteHardStopTurns = 0` | Done |
+| Stall kill shadow for coding classes | Done (tune + `resolveStallShadowMode`) |
+| Soft fuses (force-mutate / read-thrash) without hard restrict | Done for coding classes |
+| P0-D TerminalOutcome honesty (budget → BUDGET_EXHAUSTED) | Done (PRs #34–#36); goldens in `terminalOutcomeGolden.test.ts` |
+| Live shadow logs (`*_shadow`) + `policy_shadow_summary` later_succeeded | Done (`policyShadow.ts`) |
+| Ablation flags `BABEL_POLICY_MODE[_*]=shadow\|enforce\|off` | Done |
+| Offline precision/recall campaign before re-enforce | Open |
+| Docker/Linux eval-before-policy ordering | Open |
+
+Ablation (not a code fork):
+
+- `BABEL_POLICY_MODE` — global default
+- `BABEL_POLICY_MODE_ZERO_WRITE` / `_FORCE_MUTATE` / `_READ_THRASH` / `_EXPLORATION_FUSE` / `_STALL_KILL`
+- `BABEL_CHAT_ZERO_WRITE_SHADOW_TURNS` — would-have-killed threshold when live hard-stop is 0 (default 12)
+- `BABEL_CHAT_ZERO_WRITE_HARD_STOP_TURNS` — live hard-stop threshold override
 
 Acceptance:
 
