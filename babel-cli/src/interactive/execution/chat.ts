@@ -185,18 +185,14 @@ export async function executeChatTask(
 
       const postRunCost = globalCostTracker.getSessionSummary().totalCostUSD;
       const o = result.outcome;
-      // Use TerminalOutcome for precise failure display
-      if (o === 'AGENT_FAILURE' || (!o && result.status === 'failed')) {
-        convRenderer.fail(new Error(result.answer || 'Chat task failed'));
-      } else if (o === 'BLOCKED_EXTERNAL' || o === 'BLOCKED_POLICY' || (!o && result.status === 'blocked')) {
-        convRenderer.fail(new Error(result.answer || 'Task blocked'));
-      } else if (o === 'CANCELLED' || (!o && result.status === 'cancelled')) {
-        convRenderer.fail(new Error('Task cancelled'));
-      } else if (o === 'BUDGET_EXHAUSTED' || result.budgetExceeded) {
-        convRenderer.fail(new Error(result.answer || 'Budget exhausted'));
-      } else if (o === 'INFRA_FAILURE') {
-        convRenderer.fail(new Error(result.answer || 'Infrastructure error'));
-      } else {
+      // P0-D B3: TerminalOutcome is authoritative for pass vs fail TUI summary.
+      // Only VERIFIED_COMPLETE / UNVERIFIED_PATCH (or legacy completed without outcome)
+      // render as pass — never blocked/cancelled/budget/agent failure.
+      const isPass =
+        o === 'VERIFIED_COMPLETE' ||
+        o === 'UNVERIFIED_PATCH' ||
+        (!o && result.status === 'completed' && !result.budgetExceeded);
+      if (isPass) {
         convRenderer.onSummary({
           status: 'pass',
           costUSD: postRunCost,
@@ -208,6 +204,16 @@ export async function executeChatTask(
         if (threadId) {
           hydrateResumedThreadToScreen(ctx, threadId);
         }
+      } else if (o === 'BLOCKED_EXTERNAL' || o === 'BLOCKED_POLICY' || (!o && result.status === 'blocked')) {
+        convRenderer.fail(new Error(result.answer || 'Task blocked'));
+      } else if (o === 'CANCELLED' || (!o && result.status === 'cancelled')) {
+        convRenderer.fail(new Error('Task cancelled'));
+      } else if (o === 'BUDGET_EXHAUSTED' || result.budgetExceeded) {
+        convRenderer.fail(new Error(result.answer || 'Budget exhausted'));
+      } else if (o === 'INFRA_FAILURE') {
+        convRenderer.fail(new Error(result.answer || 'Infrastructure error'));
+      } else {
+        convRenderer.fail(new Error(result.answer || 'Chat task failed'));
       }
     } else if (result.outcome === 'AGENT_FAILURE' || (!result.outcome && result.status === 'failed')) {
       console.error(`\n  ${error('✖')} ${result.answer}\n`);

@@ -5,7 +5,7 @@ import { isAbsolute, join, relative } from 'node:path';
 import { existsSync, readFileSync, writeFileSync, writeSync } from 'node:fs';
 import type { AskAnswer, TerminalOutcome } from '../schemas/agentContracts.js';
 import type { SessionUsageSummary } from '../services/costTracker.js';
-import { getUserFacingStatus } from './userFacingStatus.js';
+import { getUserFacingStatus, userFacingStatusFromOutcome } from './userFacingStatus.js';
 import {
   collectHumanOutputReviewContext,
   validateEffectiveTargetRoot,
@@ -302,6 +302,8 @@ export interface LiteResultPayload {
 export interface AskResultPayload {
   status: 'ANSWER_READY' | 'NEEDS_MORE_CONTEXT' | 'ASK_FAILED' | 'BLOCKED' | 'BUDGET_EXCEEDED';
   user_status: UserFacingStatus;
+  /** Authoritative terminal outcome when the chat engine produced one (P0-D B3). */
+  terminal_outcome?: TerminalOutcome;
   command: 'ask';
   lite_command?: 'ask' | 'fix';
   execution_path?: string;
@@ -930,6 +932,8 @@ export function buildAskResultPayload(input: {
   liteCommand?: 'ask' | 'fix';
   /** When true, suppress the default "run babel plan" next steps. */
   suppressImplementationNext?: boolean;
+  /** Authoritative TerminalOutcome when available (P0-D B3). */
+  outcome?: TerminalOutcome;
 }): AskResultPayload {
   const schemaRetry = getSchemaRetrySummary(input.runDir);
   const next = input.suppressImplementationNext
@@ -941,14 +945,23 @@ export function buildAskResultPayload(input: {
           'Run babel if you want Babel to make the change.',
         ];
   const sessionLoopSteps = input.sessionLoopSteps ?? [];
+  const verification = {
+    status: 'not_required' as const,
+    commands: [] as string[],
+    skipped_reason: null as string | null,
+  };
+  const user_status =
+    input.outcome !== undefined
+      ? userFacingStatusFromOutcome(input.outcome)
+      : getUserFacingStatus({
+          status: input.answer.status,
+          verification,
+          changedFiles: [],
+        });
   return {
     status: input.answer.status,
-    user_status:
-      input.answer.status === 'ANSWER_READY'
-        ? 'success'
-        : input.answer.status === 'NEEDS_MORE_CONTEXT'
-          ? 'blocked'
-          : 'failed',
+    user_status,
+    ...(input.outcome !== undefined ? { terminal_outcome: input.outcome } : {}),
     command: 'ask',
     ...(input.lite === true ? { lite_command: input.liteCommand ?? 'ask' as const } : {}),
     ...(sessionLoopSteps.length > 0
@@ -1104,10 +1117,27 @@ function normalizeCommandVerb(command: string | null, selectedLane?: string | nu
 function normalizeOutcome(payload: Record<string, unknown>): string {
   const status = asString(payload['status']) ?? '';
   const userStatus = asString(payload['user_status']) ?? '';
+  const terminal = asString(payload['terminal_outcome']) ?? '';
+  // Prefer authoritative TerminalOutcome labels when present (P0-D B3).
+  if (terminal === 'VERIFIED_COMPLETE') return 'Complete';
+  if (terminal === 'UNVERIFIED_PATCH') return 'Needs Verification';
+  if (terminal === 'BLOCKED_EXTERNAL' || terminal === 'BLOCKED_POLICY') return 'Blocked';
+  if (
+    terminal === 'BUDGET_EXHAUSTED' ||
+    terminal === 'CANCELLED' ||
+    terminal === 'INFRA_FAILURE' ||
+    terminal === 'AGENT_FAILURE'
+  ) {
+    return 'Failed';
+  }
   if (/HALTED|REJECTED|DENIED|DRIFT|UNSAFE|ROLLBACK_FAILED/.test(status)) {
     return 'Blocked';
   }
-  if (/FAILED|FAIL|ASK_FAILED/.test(status) || userStatus === 'failed') {
+  if (
+    /FAILED|FAIL|ASK_FAILED|BUDGET_EXCEEDED/.test(status) ||
+    userStatus === 'failed' ||
+    userStatus === 'budget_exceeded'
+  ) {
     return 'Failed';
   }
   if (

@@ -76,6 +76,54 @@ test('buildChatRunPayload maps failed ChatResult to NEEDS_MORE_CONTEXT', () => {
   assert.equal(answer['answer'], 'rate limited');
 });
 
+test('buildChatRunPayload prefers TerminalOutcome for user_status and terminal_outcome', () => {
+  const verified = buildChatRunPayload(
+    {
+      ...completedResult('done'),
+      outcome: 'VERIFIED_COMPLETE',
+    },
+    { task: 't', projectRoot: '/tmp/p' },
+  );
+  assert.equal(verified['status'], 'ANSWER_READY');
+  assert.equal(verified['user_status'], 'success');
+  assert.equal(verified['terminal_outcome'], 'VERIFIED_COMPLETE');
+
+  const unverified = buildChatRunPayload(
+    {
+      ...completedResult('patched'),
+      outcome: 'UNVERIFIED_PATCH',
+    },
+    { task: 't', projectRoot: '/tmp/p' },
+  );
+  assert.equal(unverified['user_status'], 'not_verified');
+  assert.equal(unverified['terminal_outcome'], 'UNVERIFIED_PATCH');
+
+  const policy = buildChatRunPayload(
+    {
+      status: 'blocked',
+      outcome: 'BLOCKED_POLICY',
+      answer: 'blocked by critic',
+      usage: completedResult('x').usage,
+      conversation: [],
+    },
+    { task: 't', projectRoot: '/tmp/p' },
+  );
+  assert.equal(policy['status'], 'BLOCKED');
+  assert.equal(policy['user_status'], 'blocked');
+  assert.equal(policy['terminal_outcome'], 'BLOCKED_POLICY');
+
+  const agentFail = buildChatRunPayload(
+    {
+      ...failedResult('boom'),
+      outcome: 'AGENT_FAILURE',
+    },
+    { task: 't', projectRoot: '/tmp/p' },
+  );
+  // Legacy status maps to NEEDS_MORE_CONTEXT, but user_status must not look like a soft block.
+  assert.equal(agentFail['terminal_outcome'], 'AGENT_FAILURE');
+  assert.equal(agentFail['user_status'], 'failed');
+});
+
 test('runChatEngineOnce uses injected engineFactory and submitMessage', async () => {
   const target = makeTarget('/tmp/project');
   let factoryCalled = false;
