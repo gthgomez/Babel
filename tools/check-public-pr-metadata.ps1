@@ -83,7 +83,12 @@ function Get-PullRequestCommits {
     $uri = [Uri]$Url
     if ($uri.Scheme -ne 'https' -or $uri.Host -ne 'api.github.com' -or $uri.AbsolutePath -ne $ExpectedPath) { throw 'invalid endpoint' }
     if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) { throw 'missing token' }
-    $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json' }
+    $headers = @{
+      Authorization = "Bearer $env:GITHUB_TOKEN"
+      Accept = 'application/vnd.github+json'
+      'X-GitHub-Api-Version' = '2022-11-28'
+      'User-Agent' = 'Babel-public-metadata-check'
+    }
     $commits = [Collections.Generic.List[object]]::new()
     while ($null -ne $uri) {
       $response = Invoke-WebRequest -UseBasicParsing -Headers $headers -MaximumRedirection 0 -Uri $uri.AbsoluteUri
@@ -104,6 +109,11 @@ function Get-PullRequestCommits {
     }
     return @($commits)
   } catch {
+    $statusCode = ''
+    if ($null -ne $_.Exception.Response) {
+      try { $statusCode = [string][int]$_.Exception.Response.StatusCode } catch { $statusCode = '' }
+    }
+    if ($statusCode) { throw "Pull request commit metadata could not be read (HTTP $statusCode)." }
     throw 'Pull request commit metadata could not be read.'
   }
 }
