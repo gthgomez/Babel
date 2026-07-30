@@ -33,6 +33,7 @@ try {
   Assert-True ($checkerSource -notmatch 'ResponseHeadersVariable') 'checker must avoid unsupported response-header parameters'
   Assert-True ($checkerSource -match 'Net\.Http\.HttpClient') 'checker must use cross-platform HTTP handling'
   Assert-True ($checkerSource -match 'AuthenticationHeaderValue') 'checker must authenticate API requests explicitly'
+  Assert-True ($workflowSource -match 'pull-requests:\s*read') 'trusted workflow must retain pull-request read permission'
   Assert-True ($workflowSource -match 'GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}') 'trusted workflow must export the GitHub token to the metadata checker'
 
   $syntheticIdentifier = 'fixture-' + 'internal-identifier'
