@@ -675,7 +675,7 @@ Edit as PRs land. Do not mark done without §7 test IDs.
 
 | ID | Item | Wave | Status | PR / evidence | Notes |
 |----|------|------|--------|---------------|-------|
-| P0.1 | Harness fidelity HF-01…05 | W0 | partial | PRs #22–#24, #34–#37 | **P0-D closed** (stream TerminalOutcome, user_status/exit, goldens: #34–#36). **P0-E shipped** (PR #37): coding-task gate + general_swe zero-write off (#22 lineage); policy shadow modes, one-shot `*_shadow` logs, `later_succeeded`/`later_progressed` summary, enforce terminal path. Offline precision/recall report tooling added (`policyShadowPrecisionRecall` / `evidence shadow-precision`). Remaining before re-enforce: run campaign on live shadow sessions; Docker/Linux eval-before-policy ordering still open. |
+| P0.1 | Harness fidelity HF-01…05 | W0 | partial | PRs #22–#24, #34–#38 | **P0-D closed** (stream TerminalOutcome, user_status/exit, goldens: #34–#36). **P0-E shipped** (PR #37): coding-task gate + general_swe zero-write off (#22 lineage); policy shadow modes, one-shot `*_shadow` logs, `later_succeeded`/`later_progressed` summary, enforce terminal path. **PR #38** (draft): offline precision/recall + SWE-Bench Pro campaign path + general_swe pilot product fixes (env_blocked ImportError, investigate hard cap, critic repair cap, inline-probe non-authority, CLI capsules). Harvested pilot shadow scoreboard n=2 (kill_precision 100%, false_kill 0%; advisory not ready n&lt;20). Remaining before re-enforce: more live shadow sessions; Docker/Linux eval-before-policy ordering still open. |
 | P0.2 | Multi-file reliability RL-02 | W1 | | | |
 | P0.3 | Install + first-run PS-01/02 | W2 | | | |
 | P0.4 | BYOM UX PS-03 | W3 | | | |

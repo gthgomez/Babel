@@ -632,8 +632,9 @@ Primary files:
 | Zero-write shadow one-shot log (no per-turn spam) | Done |
 | Zero-write `enforce` is real parity terminal | Done |
 | `later_succeeded` = coding gate only; `later_progressed` = mutation | Done |
-| Offline precision/recall campaign before re-enforce | Done (report tooling) — `policyShadowPrecisionRecall.ts` + `evidence shadow-precision`; scorecard dimension `shadow_precision_recall`. Live campaign data still required before any coding-class re-enforce. |
-| Docker/Linux eval-before-policy ordering | Open — authoritative Docker/Linux evaluation remains an acceptance ordering item: run Docker/Linux eval **before** policy tuning / re-enforce, not after. Not closed by P0-E shadow merge alone. |
+| Offline precision/recall campaign before re-enforce | Done (report tooling) — `policyShadowPrecisionRecall.ts` + `evidence shadow-precision`; scorecard dimension `shadow_precision_recall` (PR #38 draft). Pilot harvest n=2 would-kill sessions: kill_precision 100%, false_kill 0%; advisory not ready (n&lt;20). More live shadow sessions still required before any coding-class re-enforce. |
+| SWE-Bench Pro campaign runner + general_swe pilot product fixes | Done (PR #38 draft) — provision/campaign scripts, pilot JSONL, env_blocked ImportError, investigate hard cap, critic repair cost cap, inline-probe non-authority, CLI failure capsules. Live re-measure after fixes optional follow-up. |
+| Docker/Linux eval-before-policy ordering | Open — authoritative Docker/Linux evaluation remains an acceptance ordering item: run Docker/Linux eval **before** policy tuning / re-enforce, not after. Not closed by P0-E shadow merge alone. Prefer Linux/Docker eval before further policy re-enforce. |
 
 Ablation (not a code fork):
 
