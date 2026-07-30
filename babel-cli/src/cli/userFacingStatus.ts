@@ -1,12 +1,44 @@
-import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import {
+  isBlockedOutcome,
+  isFailureOutcome,
+  isPassingOutcome,
+  type TerminalOutcome,
+} from '../schemas/agentContracts.js';
 
-type UserFacingStatus = 'success' | 'partial' | 'blocked' | 'failed' | 'not_verified';
+export type UserFacingStatus = 'success' | 'partial' | 'blocked' | 'failed' | 'not_verified';
 type VerificationStatus = 'passed' | 'failed' | 'skipped' | 'not_required' | 'unknown';
 
 interface UserFacingVerificationPayload {
   status: VerificationStatus;
   commands: string[];
   skipped_reason: string | null;
+}
+
+/**
+ * Map TerminalOutcome → user-facing status (P0-D / B3 authoritative path).
+ * Never maps blocked/cancelled/budget/agent failure to success.
+ */
+export function userFacingStatusFromOutcome(outcome: TerminalOutcome): UserFacingStatus {
+  switch (outcome) {
+    case 'VERIFIED_COMPLETE':
+      return 'success';
+    case 'UNVERIFIED_PATCH':
+      // Completed without authoritative verification — not a silent pass.
+      return 'not_verified';
+    case 'BLOCKED_EXTERNAL':
+    case 'BLOCKED_POLICY':
+      return 'blocked';
+    case 'BUDGET_EXHAUSTED':
+    case 'CANCELLED':
+    case 'INFRA_FAILURE':
+    case 'AGENT_FAILURE':
+      return 'failed';
+  }
+}
+
+/** Process exit code from TerminalOutcome (0 only for passing outcomes). */
+export function exitCodeFromOutcome(outcome: TerminalOutcome): number {
+  return isPassingOutcome(outcome) ? 0 : 1;
 }
 
 /** Maps runtime status + optional TerminalOutcome to a user-facing status label.
@@ -23,16 +55,7 @@ export function getUserFacingStatus(input: {
 }): UserFacingStatus {
   // When TerminalOutcome is available, use it as the authoritative source.
   if (input.outcome !== undefined) {
-    switch (input.outcome) {
-      case 'VERIFIED_COMPLETE': return 'success';
-      case 'UNVERIFIED_PATCH': return 'success';
-      case 'BLOCKED_EXTERNAL': return 'blocked';
-      case 'BLOCKED_POLICY': return 'blocked';
-      case 'BUDGET_EXHAUSTED': return 'failed';
-      case 'CANCELLED': return 'failed';
-      case 'INFRA_FAILURE': return 'failed';
-      case 'AGENT_FAILURE': return 'failed';
-    }
+    return userFacingStatusFromOutcome(input.outcome);
   }
   // Legacy heuristic path for callers that don't provide TerminalOutcome.
   if (input.verification.status === 'skipped') {
@@ -59,3 +82,6 @@ export function getUserFacingStatus(input: {
   }
   return 'success';
 }
+
+// Re-export outcome classifiers for CLI exit-code helpers.
+export { isBlockedOutcome, isFailureOutcome, isPassingOutcome };
