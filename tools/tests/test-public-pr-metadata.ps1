@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $checker = Join-Path $repoRoot 'tools/check-public-pr-metadata.ps1'
+$workflow = Join-Path $repoRoot '.github/workflows/typecheck.yml'
 $policy = Join-Path $repoRoot 'tools/security/public-pr-metadata-policy.json'
 $shell = (Get-Command pwsh -ErrorAction Stop).Source
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("babel-pr-metadata-{0}" -f [guid]::NewGuid().ToString('N'))
@@ -27,10 +28,12 @@ function Invoke-Checker([string]$Title, [string]$Body, [string[]]$Messages, [str
 
 try {
   $checkerSource = Get-Content -LiteralPath $checker -Raw
+  $workflowSource = Get-Content -LiteralPath $workflow -Raw
   Assert-True ($checkerSource -match "response\.Headers\.GetValues\('Link'\)") 'checker must tolerate commit responses without a Link header under strict mode'
   Assert-True ($checkerSource -notmatch 'ResponseHeadersVariable') 'checker must avoid unsupported response-header parameters'
   Assert-True ($checkerSource -match 'Net\.Http\.HttpClient') 'checker must use cross-platform HTTP handling'
   Assert-True ($checkerSource -match 'AuthenticationHeaderValue') 'checker must authenticate API requests explicitly'
+  Assert-True ($workflowSource -match 'GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}') 'trusted workflow must export the GitHub token to the metadata checker'
 
   $syntheticIdentifier = 'fixture-' + 'internal-identifier'
   $supplemental = New-SupplementalPolicy @([regex]::Escape($syntheticIdentifier))
