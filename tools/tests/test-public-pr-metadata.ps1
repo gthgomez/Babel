@@ -29,6 +29,7 @@ try {
   $checkerSource = Get-Content -LiteralPath $checker -Raw
   Assert-True ($checkerSource -match "response\.Headers\.GetValues\('Link'\)") 'checker must tolerate commit responses without a Link header under strict mode'
   Assert-True ($checkerSource -notmatch 'ResponseHeadersVariable') 'checker must avoid unsupported response-header parameters'
+  Assert-True ($checkerSource -match 'Net\.Http\.HttpClient') 'checker must use cross-platform HTTP handling'
 
   $syntheticIdentifier = 'fixture-' + 'internal-identifier'
   $supplemental = New-SupplementalPolicy @([regex]::Escape($syntheticIdentifier))
