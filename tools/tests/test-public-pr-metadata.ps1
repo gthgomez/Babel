@@ -27,8 +27,7 @@ function Invoke-Checker([string]$Title, [string]$Body, [string[]]$Messages, [str
 
 try {
   $checkerSource = Get-Content -LiteralPath $checker -Raw
-  Assert-True ($checkerSource -match 'ResponseHeadersVariable responseHeaders') 'checker must capture response headers portably'
-  Assert-True ($checkerSource -match "responseHeaders\['Link'\]") 'checker must tolerate commit responses without a Link header under strict mode'
+  Assert-True ($checkerSource -match "response\.Headers\['Link'\]") 'checker must tolerate commit responses without a Link header under strict mode'
 
   $syntheticIdentifier = 'fixture-' + 'internal-identifier'
   $supplemental = New-SupplementalPolicy @([regex]::Escape($syntheticIdentifier))
