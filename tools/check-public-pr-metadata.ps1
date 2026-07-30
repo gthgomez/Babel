@@ -83,29 +83,35 @@ function Get-PullRequestCommits {
     $uri = [Uri]$Url
     if ($uri.Scheme -ne 'https' -or $uri.Host -ne 'api.github.com' -or $uri.AbsolutePath -ne $ExpectedPath) { throw 'invalid endpoint' }
     if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) { throw 'missing token' }
-    $headers = @{
-      Authorization = "Bearer $env:GITHUB_TOKEN"
-      Accept = 'application/vnd.github+json'
-      'X-GitHub-Api-Version' = '2022-11-28'
-      'User-Agent' = 'Babel-public-metadata-check'
-    }
     $commits = [Collections.Generic.List[object]]::new()
-    while ($null -ne $uri) {
-      $response = Invoke-WebRequest -UseBasicParsing -Headers $headers -MaximumRedirection 0 -Uri $uri.AbsoluteUri
-      foreach ($commit in @($response.Content | ConvertFrom-Json)) {
-        $commits.Add([pscustomobject]@{ sha = [string]$commit.sha; message = [string]$commit.commit.message })
+    $client = [Net.Http.HttpClient]::new()
+    $client.DefaultRequestHeaders.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $env:GITHUB_TOKEN)
+    $client.DefaultRequestHeaders.Accept.Add([Net.Http.Headers.MediaTypeWithQualityHeaderValue]::new('application/vnd.github+json'))
+    $client.DefaultRequestHeaders.Add('X-GitHub-Api-Version', '2022-11-28')
+    $client.DefaultRequestHeaders.UserAgent.ParseAdd('Babel-public-metadata-check')
+    try {
+      while ($null -ne $uri) {
+        $response = $client.GetAsync($uri.AbsoluteUri).GetAwaiter().GetResult()
+        if (-not $response.IsSuccessStatusCode) { throw "HTTP $([int]$response.StatusCode)" }
+        $content = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        foreach ($commit in @($content | ConvertFrom-Json)) {
+          $commits.Add([pscustomobject]@{ sha = [string]$commit.sha; message = [string]$commit.commit.message })
+        }
+        $next = $null
+        $linkHeader = ''
+        if ($response.Headers.Contains('Link')) { $linkHeader = [string](@($response.Headers.GetValues('Link')) -join ', ') }
+        if ($linkHeader -match '<([^>]+)>;\s*rel="next"') { $next = $Matches[1] }
+        if ($next) {
+          $nextUri = [Uri]$next
+          if ($nextUri.Scheme -ne 'https' -or $nextUri.Host -ne 'api.github.com' -or $nextUri.AbsolutePath -ne $ExpectedPath) { throw 'invalid pagination endpoint' }
+          $uri = $nextUri
+        } else {
+          $uri = $null
+        }
+        $response.Dispose()
       }
-      $next = $null
-      $linkHeader = ''
-      try { $linkHeader = [string](@($response.Headers['Link']) -join ', ') } catch { $linkHeader = '' }
-      if ($linkHeader -match '<([^>]+)>;\s*rel="next"') { $next = $Matches[1] }
-      if ($next) {
-        $nextUri = [Uri]$next
-        if ($nextUri.Scheme -ne 'https' -or $nextUri.Host -ne 'api.github.com' -or $nextUri.AbsolutePath -ne $ExpectedPath) { throw 'invalid pagination endpoint' }
-        $uri = $nextUri
-      } else {
-        $uri = $null
-      }
+    } finally {
+      $client.Dispose()
     }
     return @($commits)
   } catch {
