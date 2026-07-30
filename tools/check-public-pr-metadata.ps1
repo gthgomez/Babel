@@ -92,8 +92,7 @@ function Get-PullRequestCommits {
       }
       $next = $null
       $linkHeader = ''
-      $linkProperty = $response.Headers.PSObject.Properties['Link']
-      if ($null -ne $linkProperty) { $linkHeader = [string]$linkProperty.Value }
+      try { $linkHeader = [string](@($response.Headers['Link']) -join ', ') } catch { $linkHeader = '' }
       if ($linkHeader -match '<([^>]+)>;\s*rel="next"') { $next = $Matches[1] }
       if ($next) {
         $nextUri = [Uri]$next
