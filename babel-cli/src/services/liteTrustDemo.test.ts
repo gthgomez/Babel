@@ -144,6 +144,41 @@ test('parseCliJson recovers last JSON object after banner noise (P1.2)', () => {
   assert.equal(parseCliJson('not json at all'), null);
 });
 
+test('buildCliFailureCapsule + synthetic payload for timeout / empty JSON', async () => {
+  const { buildCliFailureCapsule, syntheticPayloadFromFailureCapsule } = await import(
+    './liteTrustDemo.js'
+  );
+  const cap = buildCliFailureCapsule({
+    timedOut: true,
+    timeoutMs: 1_200_000,
+    exitCode: 124,
+    stdout: 'partial noise',
+    stderr: 'still running…',
+  });
+  assert.equal(cap.kind, 'babel_cli_failure_capsule');
+  assert.equal(cap.timed_out, true);
+  assert.equal(cap.failure_class_hint, 'harness_timeout');
+  assert.equal(cap.recovered_payload, false);
+  assert.match(cap.stderr_tail, /still running/);
+
+  const synth = syntheticPayloadFromFailureCapsule(cap);
+  assert.equal(synth['status'], 'BUDGET_EXCEEDED');
+  assert.equal(synth['terminal_outcome'], 'BUDGET_EXHAUSTED');
+  assert.equal(synth['failure_class_hint'], 'harness_timeout');
+  assert.ok(synth['failure_capsule']);
+
+  const empty = buildCliFailureCapsule({
+    timedOut: false,
+    exitCode: 1,
+    stdout: '',
+    stderr: 'boom',
+  });
+  assert.equal(empty.failure_class_hint, 'cli_nonzero');
+  const synthEmpty = syntheticPayloadFromFailureCapsule(empty);
+  assert.equal(synthEmpty['status'], 'FAILED');
+  assert.equal(synthEmpty['terminal_outcome'], 'AGENT_FAILURE');
+});
+
 test('extractCriticReceiptFromCli prefers payload then stream (P1.2)', () => {
   const fromPayload = extractCriticReceiptFromCli(
     { critic_receipt: { verdict: 'pass', confidence: 0.9 } },

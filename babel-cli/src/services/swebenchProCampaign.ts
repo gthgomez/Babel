@@ -1,0 +1,826 @@
+/**
+ * SWE-Bench Pro (Scale AI) campaign runner — standalone path for shadow scoreboard data.
+ *
+ * - Does not reuse Verified docker eval (`swebench.harness`)
+ * - V1 verifier: semantic gold_diff when gold patch present
+ * - Early-stop: abort after N consecutive identical failure signatures
+ * - Harvests policy_events for offline shadow precision/recall
+ */
+
+import { spawnSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  appendFileSync,
+} from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+
+import { BABEL_ROOT, BABEL_RUNS_DIR } from '../cli/constants.js';
+import {
+  buildSweAgentChatEnv,
+  buildSweIssuePrompt,
+  isDockerAvailable,
+  patchesMatchSemantically,
+  type SwebenchInstanceRow,
+} from './agentBenchmarkHarness.js';
+import {
+  ensureBabelCliDistReady,
+  resolveBabelCliEntry,
+  runBabelCli,
+} from './liteTrustDemo.js';
+
+export const SWE_PRO_CAMPAIGN_SCHEMA = 1 as const;
+
+export interface SwebenchProInstanceRow extends SwebenchInstanceRow {
+  test_patch?: string;
+  repo_language?: string;
+  requirements?: string;
+  interface?: string;
+  fail_to_pass?: string;
+  pass_to_pass?: string;
+  dockerhub_tag?: string;
+  before_repo_set_cmd?: string;
+  selected_test_files_to_run?: string;
+  _babel_source?: string;
+}
+
+export type CampaignPhase = 'infra' | 'live';
+
+export interface CampaignCellResult {
+  instance_id: string;
+  phase: CampaignPhase;
+  status: 'pass' | 'fail' | 'skipped';
+  signature: string;
+  notes: string[];
+  patch_bytes: number;
+  gold_diff_ok: boolean | null;
+  policy_events: Array<{ at_turn?: number; kind?: string; detail?: string; tool?: string }>;
+  has_shadow_summary: boolean;
+  duration_ms: number;
+  evidence_path: string;
+  cli_exit_code?: number | null;
+  status_text?: string | null;
+}
+
+export interface CampaignAbort {
+  reason: string;
+  signature: string;
+  streak: number;
+  phase: CampaignPhase;
+  cell_ids: string[];
+}
+
+export interface CampaignReport {
+  schema_version: typeof SWE_PRO_CAMPAIGN_SCHEMA;
+  kind: 'babel_swe_bench_pro_campaign';
+  campaign_id: string;
+  generated_at: string;
+  provider: 'mock' | 'live';
+  early_stop_n: number;
+  dataset_path: string;
+  evidence_dir: string;
+  cells: CampaignCellResult[];
+  aborted: CampaignAbort | null;
+  policy_events_jsonl: string;
+  shadow_sessions_with_summary: number;
+  summary_lines: string[];
+}
+
+export interface CampaignOptions {
+  datasetPath: string;
+  evidenceDir?: string;
+  provider: 'mock' | 'live';
+  earlyStopN?: number;
+  instanceLimit?: number;
+  instanceIds?: string[];
+  model?: string;
+  /** When true, skip live agent even if provider=live (infra only). */
+  infraOnly?: boolean;
+  /** Pull docker image during infra for first K instances (default 0 = skip pull). */
+  dockerPullFirstK?: number;
+  now?: Date;
+  /** Inject for tests */
+  runCell?: (instance: SwebenchProInstanceRow, phase: CampaignPhase) => CampaignCellResult;
+}
+
+const DEFAULT_EARLY_STOP = 5;
+const CLONE_TIMEOUT_MS = 10 * 60 * 1000;
+const CHECKOUT_TIMEOUT_MS = 5 * 60 * 1000;
+const AGENT_TIMEOUT_MS = 20 * 60 * 1000;
+
+export function defaultSweProDatasetPath(): string {
+  return join(BABEL_ROOT, 'benchmarks', 'datasets', 'swe-bench-pro', 'pilot-subset.jsonl');
+}
+
+export function resolveSweProDatasetPath(explicit?: string): string | null {
+  if (explicit) {
+    const r = resolve(explicit);
+    return existsSync(r) ? r : null;
+  }
+  const fromEnv = process.env['SWEBENCH_PRO_DATASET_PATH'];
+  if (fromEnv) {
+    const r = resolve(fromEnv);
+    return existsSync(r) ? r : null;
+  }
+  const fallback = defaultSweProDatasetPath();
+  return existsSync(fallback) ? fallback : null;
+}
+
+export function loadSweProInstances(datasetPath: string): SwebenchProInstanceRow[] {
+  const text = readFileSync(datasetPath, 'utf8');
+  const rows: SwebenchProInstanceRow[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    rows.push(JSON.parse(t) as SwebenchProInstanceRow);
+  }
+  return rows;
+}
+
+/** Normalize a finished cell into a stable early-stop signature. */
+export function classifyCampaignFailureSignature(input: {
+  phase: CampaignPhase;
+  infraOk?: boolean;
+  infraError?: string;
+  cliExitCode?: number | null;
+  statusText?: string | null;
+  patchBytes?: number;
+  goldDiffOk?: boolean | null;
+  stdoutStderr?: string;
+  missingApiKey?: boolean;
+}): string {
+  if (input.missingApiKey || /missing.?api.?key|DEEPSEEK_API_KEY/i.test(input.infraError ?? '')) {
+    return 'infra:missing_api_key';
+  }
+  if (input.phase === 'infra') {
+    if (input.infraOk) return 'infra:ok';
+    const err = (input.infraError ?? '').toLowerCase();
+    if (err.includes('docker') || err.includes('pull')) return 'infra:docker_pull_failed';
+    if (err.includes('clone') || err.includes('checkout') || err.includes('git')) {
+      return 'infra:checkout_failed';
+    }
+    return `infra:failed:${slug(input.infraError ?? 'unknown')}`;
+  }
+
+  const blob = input.stdoutStderr ?? '';
+  if (/HTTP 402|positive balance|insufficient.?credit/i.test(blob)) {
+    return 'agent:provider_error:billing';
+  }
+  if (/401|unauthorized|invalid.?api.?key|authentication/i.test(blob)) {
+    return 'agent:provider_error:auth';
+  }
+  if (
+    input.statusText === 'BUDGET_EXCEEDED' ||
+    /budget.?exceeded|harness_timeout|process timed out/i.test(blob)
+  ) {
+    // Distinguish outer harness timeout from in-agent cost ceiling when possible.
+    if (/harness_timeout|process timed out after/i.test(blob)) {
+      return 'agent:harness_timeout';
+    }
+    return 'agent:budget_exhausted';
+  }
+  if (
+    /env_blocked|importerror|modulenotfound|while loading conftest/i.test(blob) ||
+    /ENV_BLOCKED/i.test(input.statusText ?? '')
+  ) {
+    return 'agent:env_blocked';
+  }
+  if (input.statusText === 'NEEDS_MORE_CONTEXT' || /blocked_policy|BLOCKED/i.test(blob)) {
+    return 'agent:blocked_policy';
+  }
+  if ((input.patchBytes ?? 0) === 0 && input.goldDiffOk !== true) {
+    if (input.cliExitCode !== 0 && input.cliExitCode != null) {
+      return `agent:cli_nonzero:${input.cliExitCode}`;
+    }
+    return 'agent:empty_patch';
+  }
+  if (input.goldDiffOk === true) return 'agent:task_pass';
+  if (input.cliExitCode !== 0 && input.cliExitCode != null) {
+    return `agent:cli_nonzero:${input.cliExitCode}`;
+  }
+  return 'agent:task_fail';
+}
+
+function slug(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 48) || 'unknown';
+}
+
+/**
+ * Update consecutive failure streak. Returns abort info when threshold hit.
+ */
+export function updateFailureStreak(
+  prev: { signature: string | null; count: number; cell_ids: string[] },
+  cell: CampaignCellResult,
+  earlyStopN: number,
+  phase: CampaignPhase,
+): { signature: string | null; count: number; cell_ids: string[]; abort: CampaignAbort | null } {
+  if (cell.status === 'pass' || cell.signature.endsWith(':ok') || cell.signature === 'agent:task_pass') {
+    return { signature: null, count: 0, cell_ids: [], abort: null };
+  }
+  const same = prev.signature === cell.signature;
+  const signature = cell.signature;
+  const count = same ? prev.count + 1 : 1;
+  const cell_ids = same ? [...prev.cell_ids, cell.instance_id] : [cell.instance_id];
+  if (count >= earlyStopN) {
+    return {
+      signature,
+      count,
+      cell_ids,
+      abort: {
+        reason: `early_stop: ${count} consecutive failures with signature ${signature}`,
+        signature,
+        streak: count,
+        phase,
+        cell_ids,
+      },
+    };
+  }
+  return { signature, count, cell_ids, abort: null };
+}
+
+export function liveApiKeyPresent(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(
+    env['DEEPSEEK_API_KEY']?.trim() ||
+      env['DEEPINFRA_API_KEY']?.trim() ||
+      env['OPENAI_API_KEY']?.trim(),
+  );
+}
+
+function checkoutProRepo(instance: SwebenchProInstanceRow, repoRoot: string): void {
+  if (existsSync(repoRoot)) {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+  mkdirSync(dirname(repoRoot), { recursive: true });
+  const url = `https://github.com/${instance.repo}.git`;
+  let result = spawnSync('git', ['clone', '--filter=blob:none', url, repoRoot], {
+    encoding: 'utf8',
+    timeout: CLONE_TIMEOUT_MS,
+    windowsHide: true,
+  });
+  if (result.status !== 0) {
+    throw new Error(`git clone failed for ${instance.repo}: ${result.stderr || result.stdout}`);
+  }
+  result = spawnSync('git', ['checkout', instance.base_commit], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    timeout: CHECKOUT_TIMEOUT_MS,
+    windowsHide: true,
+  });
+  if (result.status !== 0) {
+    throw new Error(
+      `git checkout ${instance.base_commit} failed: ${result.stderr || result.stdout}`,
+    );
+  }
+}
+
+function captureGitPatch(repoRoot: string): string {
+  const unstaged = spawnSync('git', ['diff', 'HEAD'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  const staged = spawnSync('git', ['diff', '--cached'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  return [unstaged.stdout ?? '', staged.stdout ?? ''].filter((p) => p.trim().length > 0).join('\n');
+}
+
+function dockerPullTag(tag: string): void {
+  if (!tag.trim()) return;
+  const image = tag.includes('/') ? tag : `jefzda/sweap-images:${tag}`;
+  const result = spawnSync('docker', ['pull', image], {
+    encoding: 'utf8',
+    timeout: 30 * 60 * 1000,
+    windowsHide: true,
+    shell: process.platform === 'win32',
+  });
+  if (result.status !== 0) {
+    throw new Error(`docker pull failed for ${image}: ${result.stderr || result.stdout}`);
+  }
+}
+
+function proPrompt(instance: SwebenchProInstanceRow): string {
+  // Reuse Verified prompt builder; map fail_to_pass into extractable form.
+  const asVerified: SwebenchInstanceRow = {
+    instance_id: instance.instance_id,
+    repo: instance.repo,
+    base_commit: instance.base_commit,
+    problem_statement: [
+      instance.problem_statement,
+      instance.requirements
+        ? `\n\n## Requirements\n${String(instance.requirements).slice(0, 4000)}`
+        : '',
+      instance.interface
+        ? `\n\n## Interface\n${String(instance.interface).slice(0, 3000)}`
+        : '',
+    ]
+      .filter(Boolean)
+      .join(''),
+    patch: instance.patch,
+    fail_to_pass: instance.fail_to_pass,
+  } as SwebenchInstanceRow & { fail_to_pass?: string };
+  return buildSweIssuePrompt(asVerified);
+}
+
+function extractPolicyEvents(
+  payload: Record<string, unknown> | null | undefined,
+): CampaignCellResult['policy_events'] {
+  if (!payload) return [];
+  const raw = payload['policy_events'] ?? payload['policyEvents'];
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw as CampaignCellResult['policy_events'];
+  }
+  // Headless CLI JSON often omits policy_events; load session JSONL from run_dir.
+  const runDir =
+    typeof payload['run_dir'] === 'string'
+      ? payload['run_dir']
+      : typeof payload['runDir'] === 'string'
+        ? payload['runDir']
+        : null;
+  if (runDir && existsSync(join(runDir, 'policy-events.jsonl'))) {
+    return loadPolicyEventsJsonl(join(runDir, 'policy-events.jsonl'));
+  }
+  return [];
+}
+
+/** Load PolicyEvent JSONL (one object per line). */
+export function loadPolicyEventsJsonl(
+  path: string,
+): CampaignCellResult['policy_events'] {
+  if (!existsSync(path)) return [];
+  const events: CampaignCellResult['policy_events'] = [];
+  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    try {
+      events.push(JSON.parse(t) as CampaignCellResult['policy_events'][number]);
+    } catch {
+      // skip bad lines
+    }
+  }
+  return events;
+}
+
+function benchmarkBabelEnv(provider: 'mock' | 'live'): NodeJS.ProcessEnv {
+  const base: NodeJS.ProcessEnv = {
+    ...process.env,
+    CI: '1',
+    NO_COLOR: '1',
+    BABEL_ROOT,
+    BABEL_HEADLESS: '1',
+    BABEL_BENCHMARK_AUTO_APPROVE: '1',
+    BABEL_ALLOW_INTERPRETER_EVAL: '1',
+    ...(provider === 'live' ? { BABEL_LITE_OFFLINE: '0' } : {}),
+  };
+  if (provider === 'live') {
+    delete base['DEEPINFRA_API_KEY'];
+    base['BABEL_BENCHMARK_DEEPSEEK_ONLY'] = '1';
+    base['BABEL_COMPACTION_MODEL'] = 'deepseek-v4-flash';
+  }
+  return base;
+}
+
+function defaultRunInfraCell(
+  instance: SwebenchProInstanceRow,
+  evidenceDir: string,
+  dockerPull: boolean,
+): CampaignCellResult {
+  const started = performance.now();
+  const evidence_path = join(evidenceDir, 'infra', `${instance.instance_id}.json`);
+  mkdirSync(dirname(evidence_path), { recursive: true });
+  const notes: string[] = [];
+  try {
+    const workspaceRoot = join(evidenceDir, 'workspaces', instance.instance_id);
+    checkoutProRepo(instance, workspaceRoot);
+    notes.push('checkout_ok');
+    if (dockerPull && instance.dockerhub_tag && isDockerAvailable()) {
+      dockerPullTag(instance.dockerhub_tag);
+      notes.push('docker_pull_ok');
+    } else if (dockerPull && !isDockerAvailable()) {
+      notes.push('docker_unavailable_skip_pull');
+    }
+    const result: CampaignCellResult = {
+      instance_id: instance.instance_id,
+      phase: 'infra',
+      status: 'pass',
+      signature: 'infra:ok',
+      notes,
+      patch_bytes: 0,
+      gold_diff_ok: null,
+      policy_events: [],
+      has_shadow_summary: false,
+      duration_ms: Math.round(performance.now() - started),
+      evidence_path,
+    };
+    writeFileSync(evidence_path, JSON.stringify(result, null, 2), 'utf8');
+    return result;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const signature = classifyCampaignFailureSignature({
+      phase: 'infra',
+      infraOk: false,
+      infraError: msg,
+    });
+    const result: CampaignCellResult = {
+      instance_id: instance.instance_id,
+      phase: 'infra',
+      status: 'fail',
+      signature,
+      notes: [msg],
+      patch_bytes: 0,
+      gold_diff_ok: null,
+      policy_events: [],
+      has_shadow_summary: false,
+      duration_ms: Math.round(performance.now() - started),
+      evidence_path,
+    };
+    writeFileSync(evidence_path, JSON.stringify(result, null, 2), 'utf8');
+    return result;
+  }
+}
+
+function defaultRunLiveCell(
+  instance: SwebenchProInstanceRow,
+  evidenceDir: string,
+  provider: 'mock' | 'live',
+  model: string,
+): CampaignCellResult {
+  const started = performance.now();
+  const evidence_path = join(evidenceDir, 'live', `${instance.instance_id}.json`);
+  mkdirSync(dirname(evidence_path), { recursive: true });
+
+  if (provider === 'live' && !liveApiKeyPresent()) {
+    const result: CampaignCellResult = {
+      instance_id: instance.instance_id,
+      phase: 'live',
+      status: 'fail',
+      signature: 'infra:missing_api_key',
+      notes: ['DEEPSEEK_API_KEY (or compatible) not set — refusing live cell'],
+      patch_bytes: 0,
+      gold_diff_ok: null,
+      policy_events: [],
+      has_shadow_summary: false,
+      duration_ms: Math.round(performance.now() - started),
+      evidence_path,
+    };
+    writeFileSync(evidence_path, JSON.stringify(result, null, 2), 'utf8');
+    return result;
+  }
+
+  const workspaceRoot = join(evidenceDir, 'workspaces', instance.instance_id);
+  try {
+    if (!existsSync(workspaceRoot)) {
+      checkoutProRepo(instance, workspaceRoot);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const result: CampaignCellResult = {
+      instance_id: instance.instance_id,
+      phase: 'live',
+      status: 'fail',
+      signature: classifyCampaignFailureSignature({
+        phase: 'infra',
+        infraOk: false,
+        infraError: msg,
+      }),
+      notes: [msg],
+      patch_bytes: 0,
+      gold_diff_ok: null,
+      policy_events: [],
+      has_shadow_summary: false,
+      duration_ms: Math.round(performance.now() - started),
+      evidence_path,
+    };
+    writeFileSync(evidence_path, JSON.stringify(result, null, 2), 'utf8');
+    return result;
+  }
+
+  ensureBabelCliDistReady();
+  const prompt = proPrompt(instance);
+  // Product general_swe budgets only — do not inflate turns/cost for "benchmark max".
+  // Allow operator env to raise caps; strip harness-only MAX_TURNS default of 250
+  // when unset so chatTaskClass general_swe (250/3.0/10min) is the sole source of truth.
+  const baseEnv = benchmarkBabelEnv(provider);
+  const productEnv = buildSweAgentChatEnv(baseEnv);
+  // Prefer product stall tune over harness stall=25 unless operator set it.
+  if (!process.env['BABEL_CHAT_STALL_TURNS']?.trim()) {
+    delete productEnv['BABEL_CHAT_STALL_TURNS'];
+  }
+  if (!process.env['BABEL_CHAT_MAX_TURNS']?.trim()) {
+    delete productEnv['BABEL_CHAT_MAX_TURNS'];
+  }
+  // Never auto-raise cost for Pro campaign (no BABEL_CHAT_MAX_COST injection).
+  delete productEnv['BABEL_CHAT_MAX_COST'];
+
+  const cli = runBabelCli(
+    [
+      'run',
+      '--mode',
+      'chat-headless',
+      ...(provider === 'live' ? (['--model', model] as const) : []),
+      '--json',
+      '--yes',
+      '--project-root',
+      workspaceRoot,
+      prompt,
+    ],
+    {
+      projectRoot: workspaceRoot,
+      offlineDemo: provider !== 'live',
+      cliEntry: resolveBabelCliEntry(),
+      cwd: join(BABEL_ROOT, 'babel-cli'),
+      env: productEnv,
+      timeoutMs: AGENT_TIMEOUT_MS,
+      ensureDist: false,
+    },
+  );
+
+  const patch = captureGitPatch(workspaceRoot);
+  const gold = instance.patch ?? '';
+  let gold_diff_ok: boolean | null = null;
+  if (patch.trim() && gold.trim()) {
+    gold_diff_ok = patchesMatchSemantically(patch, gold);
+  } else if (!patch.trim()) {
+    gold_diff_ok = false;
+  }
+
+  const payload = cli.payload as Record<string, unknown> | null;
+  // Persist failure capsule when CLI timed out / had no real JSON (ansible pilot).
+  if (cli.failureCapsule) {
+    writeFileSync(
+      join(evidenceDir, 'live', `${instance.instance_id}.failure-capsule.json`),
+      JSON.stringify(cli.failureCapsule, null, 2),
+      'utf8',
+    );
+  }
+  const policy_events = extractPolicyEvents(payload);
+  const has_shadow_summary = policy_events.some((e) => e.kind === 'policy_shadow_summary');
+  const statusText =
+    typeof payload?.['status'] === 'string' ? (payload['status'] as string) : null;
+  // Prefer terminal_outcome when status is generic
+  const terminalOutcome =
+    typeof payload?.['terminal_outcome'] === 'string'
+      ? (payload['terminal_outcome'] as string)
+      : statusText;
+  const streamBlob = `${cli.stdout ?? ''}\n${cli.stderr ?? ''}`;
+  const signature = classifyCampaignFailureSignature({
+    phase: 'live',
+    cliExitCode: cli.exitCode,
+    statusText: terminalOutcome ?? statusText,
+    patchBytes: patch.length,
+    goldDiffOk: gold_diff_ok,
+    stdoutStderr:
+      cli.timedOut || cli.failureCapsule?.timed_out
+        ? `harness_timeout process timed out after\n${streamBlob}`
+        : streamBlob,
+  });
+  const status: CampaignCellResult['status'] =
+    gold_diff_ok === true || signature === 'agent:task_pass' ? 'pass' : 'fail';
+
+  const runDir =
+    typeof payload?.['run_dir'] === 'string' ? (payload['run_dir'] as string) : null;
+
+  const result: CampaignCellResult = {
+    instance_id: instance.instance_id,
+    phase: 'live',
+    status,
+    signature,
+    notes: [
+      `cli_exit=${cli.exitCode}`,
+      `status=${statusText ?? 'null'}`,
+      `terminal_outcome=${terminalOutcome ?? 'null'}`,
+      `patch_bytes=${patch.length}`,
+      `gold_diff=${gold_diff_ok}`,
+      `policy_events=${policy_events.length}`,
+      `shadow_summary=${has_shadow_summary}`,
+      ...(runDir ? [`run_dir=${runDir}`] : []),
+    ],
+    patch_bytes: patch.length,
+    gold_diff_ok,
+    policy_events,
+    has_shadow_summary,
+    duration_ms: Math.round(performance.now() - started),
+    evidence_path,
+    cli_exit_code: cli.exitCode,
+    status_text: statusText,
+  };
+
+  writeFileSync(
+    evidence_path,
+    JSON.stringify(
+      {
+        ...result,
+        preds: {
+          model_name_or_path: 'babel-agent-chat',
+          instance_id: instance.instance_id,
+          model_patch: patch,
+        },
+        cli_payload: payload,
+        run_dir: runDir,
+      },
+      null,
+      2,
+    ),
+    'utf8',
+  );
+
+  // Copy session policy log into campaign evidence for offline scoreboard
+  if (runDir && existsSync(join(runDir, 'policy-events.jsonl'))) {
+    writeFileSync(
+      join(evidenceDir, 'live', `${instance.instance_id}.policy-events.jsonl`),
+      readFileSync(join(runDir, 'policy-events.jsonl'), 'utf8'),
+      'utf8',
+    );
+  }
+
+  // Also drop patch alone for Pro gather_patches compatibility
+  writeFileSync(
+    join(evidenceDir, 'live', `${instance.instance_id}.patch`),
+    patch,
+    'utf8',
+  );
+
+  return result;
+}
+
+/**
+ * Run infra phase then live phase with early-stop on consecutive same-signature failures.
+ */
+export async function runSwebenchProCampaign(
+  options: CampaignOptions,
+): Promise<CampaignReport> {
+  const earlyStopN = options.earlyStopN ?? DEFAULT_EARLY_STOP;
+  const datasetPath = resolve(options.datasetPath);
+  if (!existsSync(datasetPath)) {
+    throw new Error(`SWE-Bench Pro dataset missing: ${datasetPath}`);
+  }
+
+  const campaign_id =
+    (options.now ?? new Date()).toISOString().replace(/[:.]/g, '-').slice(0, 19) +
+    (options.provider === 'live' ? '-live' : '-mock');
+  const evidenceDir =
+    options.evidenceDir ??
+    join(BABEL_RUNS_DIR, 'agent-benchmark', 'swe-pro', campaign_id);
+  mkdirSync(evidenceDir, { recursive: true });
+
+  let instances = loadSweProInstances(datasetPath);
+  if (options.instanceIds?.length) {
+    const want = new Set(options.instanceIds);
+    instances = instances.filter((i) => want.has(i.instance_id));
+  }
+  if (options.instanceLimit != null && options.instanceLimit > 0) {
+    instances = instances.slice(0, options.instanceLimit);
+  }
+
+  const cells: CampaignCellResult[] = [];
+  let aborted: CampaignAbort | null = null;
+  const policyJsonlPath = join(evidenceDir, 'policy-events.jsonl');
+  writeFileSync(policyJsonlPath, '', 'utf8');
+
+  const runCell =
+    options.runCell ??
+    ((instance: SwebenchProInstanceRow, phase: CampaignPhase) => {
+      if (phase === 'infra') {
+        const idx = instances.findIndex((i) => i.instance_id === instance.instance_id);
+        const pull =
+          (options.dockerPullFirstK ?? 0) > 0 && idx >= 0 && idx < (options.dockerPullFirstK ?? 0);
+        return defaultRunInfraCell(instance, evidenceDir, pull);
+      }
+      return defaultRunLiveCell(
+        instance,
+        evidenceDir,
+        options.provider,
+        options.model ?? 'deepseek-v4-pro',
+      );
+    });
+
+  // ── Infra phase ──────────────────────────────────────────────────────────
+  let streak = { signature: null as string | null, count: 0, cell_ids: [] as string[] };
+  for (const instance of instances) {
+    const cell = runCell(instance, 'infra');
+    cells.push(cell);
+    const next = updateFailureStreak(streak, cell, earlyStopN, 'infra');
+    streak = { signature: next.signature, count: next.count, cell_ids: next.cell_ids };
+    if (next.abort) {
+      aborted = next.abort;
+      break;
+    }
+  }
+
+  // ── Live phase ───────────────────────────────────────────────────────────
+  if (!aborted && !options.infraOnly) {
+    streak = { signature: null, count: 0, cell_ids: [] };
+    const infraPassed = new Set(
+      cells.filter((c) => c.phase === 'infra' && c.status === 'pass').map((c) => c.instance_id),
+    );
+    for (const instance of instances) {
+      if (!infraPassed.has(instance.instance_id)) {
+        cells.push({
+          instance_id: instance.instance_id,
+          phase: 'live',
+          status: 'skipped',
+          signature: 'live:skipped_infra_fail',
+          notes: ['skipped because infra phase failed'],
+          patch_bytes: 0,
+          gold_diff_ok: null,
+          policy_events: [],
+          has_shadow_summary: false,
+          duration_ms: 0,
+          evidence_path: join(evidenceDir, 'live', `${instance.instance_id}.skipped.json`),
+        });
+        continue;
+      }
+      const cell = runCell(instance, 'live');
+      cells.push(cell);
+      // Append policy events for scoreboard
+      for (const pe of cell.policy_events) {
+        appendFileSync(
+          policyJsonlPath,
+          `${JSON.stringify({ ...pe, _instance_id: cell.instance_id })}\n`,
+          'utf8',
+        );
+      }
+      // Session boundary: if shadow summary missing but we have shadow kinds, still emit events
+      const next = updateFailureStreak(streak, cell, earlyStopN, 'live');
+      streak = { signature: next.signature, count: next.count, cell_ids: next.cell_ids };
+      if (next.abort) {
+        aborted = next.abort;
+        break;
+      }
+    }
+  }
+
+  const shadow_sessions_with_summary = cells.filter((c) => c.has_shadow_summary).length;
+  const liveCells = cells.filter((c) => c.phase === 'live' && c.status !== 'skipped');
+  const livePass = liveCells.filter((c) => c.status === 'pass').length;
+
+  const summary_lines = [
+    `SWE-Bench Pro campaign ${campaign_id}`,
+    `instances=${instances.length} provider=${options.provider} early_stop_n=${earlyStopN}`,
+    `infra_pass=${cells.filter((c) => c.phase === 'infra' && c.status === 'pass').length}`,
+    `live_pass=${livePass}/${liveCells.length}`,
+    `shadow_summaries=${shadow_sessions_with_summary}`,
+    aborted ? `ABORTED: ${aborted.reason}` : 'completed_without_early_stop',
+    `policy_events_jsonl=${policyJsonlPath}`,
+  ];
+
+  const report: CampaignReport = {
+    schema_version: SWE_PRO_CAMPAIGN_SCHEMA,
+    kind: 'babel_swe_bench_pro_campaign',
+    campaign_id,
+    generated_at: (options.now ?? new Date()).toISOString(),
+    provider: options.provider,
+    early_stop_n: earlyStopN,
+    dataset_path: datasetPath,
+    evidence_dir: evidenceDir,
+    cells,
+    aborted,
+    policy_events_jsonl: policyJsonlPath,
+    shadow_sessions_with_summary,
+    summary_lines,
+  };
+
+  writeFileSync(join(evidenceDir, 'campaign-report.json'), JSON.stringify(report, null, 2), 'utf8');
+  if (aborted) {
+    writeFileSync(join(evidenceDir, 'campaign_abort.json'), JSON.stringify(aborted, null, 2), 'utf8');
+  }
+  writeFileSync(join(evidenceDir, 'campaign-summary.txt'), summary_lines.join('\n') + '\n', 'utf8');
+
+  return report;
+}
+
+export function formatCampaignReportHuman(report: CampaignReport): string {
+  const lines = [
+    'Babel SWE-Bench Pro Campaign',
+    `id: ${report.campaign_id}`,
+    `provider: ${report.provider}`,
+    '',
+    '## Summary',
+    ...report.summary_lines.map((l) => `- ${l}`),
+    '',
+    '## Cells',
+  ];
+  for (const c of report.cells) {
+    lines.push(
+      `- [${c.phase}] ${c.status} \`${c.instance_id}\` sig=${c.signature} patch=${c.patch_bytes}b shadow=${c.has_shadow_summary}`,
+    );
+  }
+  if (report.aborted) {
+    lines.push('', '## Abort', JSON.stringify(report.aborted, null, 2));
+  }
+  lines.push(
+    '',
+    '## Next',
+    `babel evidence shadow-precision --events ${report.policy_events_jsonl} --json`,
+  );
+  return lines.join('\n');
+}

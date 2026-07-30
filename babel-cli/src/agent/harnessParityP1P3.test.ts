@@ -321,9 +321,14 @@ describe('Progress receipts', () => {
   test('policy precedence table is human-readable and ordered', () => {
     assert.ok(policyPrecedenceRank('hard_ceiling') < policyPrecedenceRank('force_mutate'));
     assert.ok(policyPrecedenceRank('progress_nudge') < policyPrecedenceRank('zero_write'));
+    assert.ok(policyPrecedenceRank('env_blocked') < policyPrecedenceRank('progress_terminal'));
+    assert.ok(
+      policyPrecedenceRank('investigate_hard_cap') < policyPrecedenceRank('force_mutate'),
+    );
     const table = formatPolicyPrecedenceTable();
     assert.match(table, /Policy precedence/);
     assert.ok(POLICY_PRECEDENCE.includes('hard_ceiling'));
+    assert.ok(POLICY_PRECEDENCE.includes('env_blocked'));
 
     const winner = arbitratePolicy([
       { source: 'force_mutate', action: 'nudge', message: 'mutate' },
@@ -331,6 +336,16 @@ describe('Progress receipts', () => {
       { source: 'read_thrash', action: 'nudge', message: 'thrash' },
     ]);
     assert.equal(winner?.source, 'hard_ceiling');
+
+    const envWinsProgress = arbitratePolicy([
+      { source: 'progress_terminal', action: 'terminal', message: 'no progress' },
+      {
+        source: 'env_blocked',
+        action: 'terminal',
+        message: 'ENV_BLOCKED: ImportError while loading conftest',
+      },
+    ]);
+    assert.equal(envWinsProgress?.source, 'env_blocked');
   });
 });
 

@@ -36,10 +36,39 @@ describe('W0.4 env-red honesty', () => {
     assert.equal(detectEnvBlockedFromText('all tests passed'), false);
   });
 
+  test('ImportError / conftest load is env_blocked (not policy thrash)', () => {
+    // SWE-Bench Pro pilot: qutebrowser host env
+    assert.equal(
+      detectEnvBlockedFromText(
+        "ImportError while loading conftest 'C:\\repo\\tests\\conftest.py'",
+      ),
+      true,
+    );
+    assert.equal(
+      detectEnvBlockedFromText("ModuleNotFoundError: No module named 'qutebrowser'"),
+      true,
+    );
+    assert.equal(
+      detectEnvBlockedFromText("cannot import name 'HostBlocker' from 'qutebrowser.components'"),
+      true,
+    );
+    // Logic/assertion failures are not env
+    assert.equal(detectEnvBlockedFromText('AssertionError: expected 1 got 2'), false);
+  });
+
   test('tool log with pytest missing triggers env_blocked', () => {
     assert.equal(
       detectEnvBlockedFromToolLog([
         { detail: 'exit 127', error: 'pytest: command not found' },
+      ]),
+      true,
+    );
+    assert.equal(
+      detectEnvBlockedFromToolLog([
+        {
+          stderr:
+            "ImportError while loading conftest 'C:\\ws\\tests\\conftest.py'\nModuleNotFoundError: No module named 'pkg'",
+        },
       ]),
       true,
     );

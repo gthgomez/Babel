@@ -398,8 +398,18 @@ export function computeTerminalOutcome(input: {
         ? 'VERIFIED_COMPLETE'
         : 'UNVERIFIED_PATCH';
     case 'blocked':
+      // Env/toolchain blocks are external (host), not policy thrash — check first
+      // so "cannot run verification" in the ENV_BLOCKED reason does not mislabel.
+      if (
+        input.blockedReport &&
+        /\benv_blocked\b|environment\s*\/\s*toolchain|environment cannot|missing dep|importerror|modulenotfound/i.test(
+          input.blockedReport.reason,
+        )
+      ) {
+        return 'BLOCKED_EXTERNAL';
+      }
       // Distinguish policy blocks (critic, gate, auto-continue, tamper,
-      // zero-write) from external blocks (missing dep, permission, etc.).
+      // zero-write) from other external blocks (permission, etc.).
       if (
         input.blockedReport &&
         /auto.continue|verification|verifier|gate|critic|zero.write|tamper/i.test(

@@ -111,6 +111,41 @@ export function checkCostWallBudgets(input: {
   return { ok: true };
 }
 
+/**
+ * After first diff-critic reject: remaining spend is capped to a repair window
+ * so thrash cannot burn the full session maxCost (pilot: $3 after correct reject).
+ *
+ * Window = clamp(remaining × fraction, minUsd, maxUsd), then cap = spent + window.
+ * Never raises the session max.
+ */
+export const CRITIC_REPAIR_REMAINING_FRACTION = 0.35;
+export const CRITIC_REPAIR_MIN_USD = 0.25;
+export const CRITIC_REPAIR_MAX_USD = 0.75;
+
+export function computeCriticRepairCostCap(input: {
+  spentUsd: number;
+  sessionMaxCostUsd: number;
+  fraction?: number;
+  minUsd?: number;
+  maxUsd?: number;
+}): { capUsd: number; repairWindowUsd: number } {
+  const fraction = input.fraction ?? CRITIC_REPAIR_REMAINING_FRACTION;
+  const minUsd = input.minUsd ?? CRITIC_REPAIR_MIN_USD;
+  const maxUsd = input.maxUsd ?? CRITIC_REPAIR_MAX_USD;
+  const remaining = Math.max(0, input.sessionMaxCostUsd - input.spentUsd);
+  if (remaining <= 0) {
+    return { capUsd: input.sessionMaxCostUsd, repairWindowUsd: 0 };
+  }
+  const raw = remaining * fraction;
+  const repairWindowUsd = Math.min(maxUsd, Math.max(minUsd, raw));
+  // Never exceed session max; never go below spent (window may exceed remaining if min > remaining)
+  const window = Math.min(repairWindowUsd, remaining);
+  return {
+    capUsd: input.spentUsd + window,
+    repairWindowUsd: window,
+  };
+}
+
 export function buildCriticBlockedReport(
   verdict: DiffCriticVerdict,
   criticStrikes: number,

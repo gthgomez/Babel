@@ -154,6 +154,22 @@ describe('policyShadow (P0-E)', () => {
     assert.equal(decision.shadowWouldFire, true);
   });
 
+  test('explore fuse shadow events skip already-logged kinds', () => {
+    const already = new Set(['force_mutate_shadow']);
+    const events = buildExploreFuseShadowEvents({
+      atTurn: 3,
+      taskClass: 'general_swe',
+      forceMutateFired: true,
+      readThrashFired: true,
+      explorationExhausted: false,
+      hardRestrictEnabled: false,
+      env: {},
+      alreadyLoggedKinds: already,
+    });
+    assert.ok(!events.some((e) => e.kind === 'force_mutate_shadow'));
+    assert.ok(events.some((e) => e.kind === 'read_thrash_shadow'));
+  });
+
   test('explore fuse shadow events under soft and hardRestrict class', () => {
     const soft = buildExploreFuseShadowEvents({
       atTurn: 3,

@@ -139,11 +139,35 @@ export function evaluateCompletionPrefersPatch(input: {
   };
 }
 
-/** Detect common “pytest/node missing” / env failure signals in observation text. */
+/**
+ * Detect common environment / toolchain failure signals in observation text.
+ *
+ * Covers:
+ * - Missing binaries (pytest/npm/python not found) — W0.4
+ * - Import / dependency failures that are **host env**, not patch logic
+ *   (ImportError while loading conftest, ModuleNotFoundError, cannot import name)
+ *
+ * Pure; no I/O. Used to stop progress-terminal thrash and score ENV_BLOCKED.
+ */
 export function detectEnvBlockedFromText(text: string): boolean {
   const t = text.toLowerCase();
   if (/\benv_blocked\b/.test(t)) return true;
   if (/\benvironment (is )?(not |un)(available|ready|configured)\b/.test(t)) return true;
+
+  // Python/JS import failures (host deps / conftest load) — product pilot evidence
+  // from qutebrowser: "ImportError while loading conftest '...'"
+  if (/\bimporterror\b/.test(t)) return true;
+  if (/\bmodulenotfounderror\b/.test(t)) return true;
+  if (/\bcannot import name\b/.test(t)) return true;
+  if (/\bwhile loading conftest\b/.test(t)) return true;
+  if (/\bno module named\b/.test(t)) return true;
+  if (/\bpackagenotfounderror\b/.test(t)) return true;
+  if (
+    /\bmodule ['"][\w.]+['"] has no attribute\b/.test(t) &&
+    /\b(conftest|pytest|setup\.cfg|pyproject)\b/.test(t)
+  ) {
+    return true;
+  }
 
   const missing =
     /\bnot found\b/.test(t) ||
@@ -164,9 +188,24 @@ export function detectEnvBlockedFromText(text: string): boolean {
     /\bpython\b/.test(t) ||
     /\bpython3\b/.test(t) ||
     /\bpip\b/.test(t) ||
-    /\btsc\b/.test(t);
+    /\btsc\b/.test(t) ||
+    /\bconftest\b/.test(t);
 
   return toolchain && missing;
+}
+
+/**
+ * Extract a short env-block signal for progress terminal / operator cards.
+ * Returns null when not env-blocked.
+ */
+export function extractEnvBlockedReason(
+  text: string,
+  maxLen = 200,
+): string | null {
+  if (!detectEnvBlockedFromText(text)) return null;
+  const compact = text.replace(/\s+/g, ' ').trim();
+  const slice = compact.slice(0, maxLen);
+  return slice.length < compact.length ? `${slice}…` : slice;
 }
 
 /** Scan tool log detail/error/stdout/stderr for env-red signals. */
