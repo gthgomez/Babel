@@ -26,6 +26,9 @@ function Invoke-Checker([string]$Title, [string]$Body, [string[]]$Messages, [str
 }
 
 try {
+  $checkerSource = Get-Content -LiteralPath $checker -Raw
+  Assert-True ($checkerSource -match "response\.Headers\['Link'\]") 'checker must tolerate commit responses without a Link header under strict mode'
+
   $syntheticIdentifier = 'fixture-' + 'internal-identifier'
   $supplemental = New-SupplementalPolicy @([regex]::Escape($syntheticIdentifier))
   $neutral = Invoke-Checker -Title 'docs: clarify contributor workflow' -Body 'This change documents a private method implementation detail.' -Messages @('docs: clarify contribution guidance') -SupplementalPolicy $supplemental -RequireSupplementalPolicy
