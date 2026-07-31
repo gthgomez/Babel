@@ -12,7 +12,9 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
   appendFileSync,
 } from 'node:fs';
@@ -109,7 +111,8 @@ export interface CampaignOptions {
 const DEFAULT_EARLY_STOP = 5;
 const CLONE_TIMEOUT_MS = 10 * 60 * 1000;
 const CHECKOUT_TIMEOUT_MS = 5 * 60 * 1000;
-const AGENT_TIMEOUT_MS = 20 * 60 * 1000;
+/** Outer kill must exceed product general_swe wall (10m) so the agent can finalize + flush policy-events. */
+const AGENT_TIMEOUT_MS = 25 * 60 * 1000;
 
 export function defaultSweProDatasetPath(): string {
   return join(BABEL_ROOT, 'benchmarks', 'datasets', 'swe-bench-pro', 'pilot-subset.jsonl');
@@ -333,21 +336,108 @@ function proPrompt(instance: SwebenchProInstanceRow): string {
 
 function extractPolicyEvents(
   payload: Record<string, unknown> | null | undefined,
+  workspaceRoot?: string,
 ): CampaignCellResult['policy_events'] {
-  if (!payload) return [];
-  const raw = payload['policy_events'] ?? payload['policyEvents'];
-  if (Array.isArray(raw) && raw.length > 0) {
-    return raw as CampaignCellResult['policy_events'];
+  if (payload) {
+    const raw = payload['policy_events'] ?? payload['policyEvents'];
+    if (Array.isArray(raw) && raw.length > 0) {
+      return raw as CampaignCellResult['policy_events'];
+    }
+    // Headless CLI JSON often omits policy_events; load session JSONL from run_dir.
+    const runDir =
+      typeof payload['run_dir'] === 'string'
+        ? payload['run_dir']
+        : typeof payload['runDir'] === 'string'
+          ? payload['runDir']
+          : null;
+    if (runDir && existsSync(join(runDir, 'policy-events.jsonl'))) {
+      return loadPolicyEventsJsonl(join(runDir, 'policy-events.jsonl'));
+    }
   }
-  // Headless CLI JSON often omits policy_events; load session JSONL from run_dir.
-  const runDir =
-    typeof payload['run_dir'] === 'string'
-      ? payload['run_dir']
-      : typeof payload['runDir'] === 'string'
-        ? payload['runDir']
-        : null;
-  if (runDir && existsSync(join(runDir, 'policy-events.jsonl'))) {
-    return loadPolicyEventsJsonl(join(runDir, 'policy-events.jsonl'));
+  // Timeout recovery: mid-loop flushes leave policy-events under recent chat-sessions
+  // even when the synthetic failure payload has no run_dir.
+  if (workspaceRoot) {
+    const recovered = findRecentPolicyEventsForWorkspace(workspaceRoot);
+    if (recovered.length > 0) return recovered;
+  }
+  return [];
+}
+
+const SHADOW_KIND_RE =
+  /^(zero_write_shadow|force_mutate_shadow|read_thrash_shadow|exploration_shadow|stall_shadow_kill)$/;
+
+/**
+ * If the agent was hard-killed after mid-loop flush, synthesize a scoreboard
+ * session boundary so would-kill sessions still count offline.
+ */
+export function ensureShadowSummaryForCampaign(
+  events: CampaignCellResult['policy_events'],
+  input: {
+    patchBytes: number;
+    goldDiffOk: boolean | null;
+    terminalOutcome: string | null;
+  },
+): CampaignCellResult['policy_events'] {
+  if (events.some((e) => e.kind === 'policy_shadow_summary')) return events;
+  const shadows = events.filter((e) => typeof e.kind === 'string' && SHADOW_KIND_RE.test(e.kind));
+  if (shadows.length === 0) return events;
+  const laterProgressed = input.patchBytes > 0 ? 1 : 0;
+  const laterSucceeded = input.goldDiffOk === true ? 1 : 0;
+  const outcome = input.terminalOutcome ?? 'UNKNOWN';
+  return [
+    ...events,
+    {
+      kind: 'policy_shadow_summary',
+      detail:
+        `shadow_count=${shadows.length} later_succeeded=${laterSucceeded} ` +
+        `later_progressed=${laterProgressed} mutation=${laterProgressed} ` +
+        `coding_pass=${laterSucceeded} outcome=${outcome} source=campaign_synthetic`,
+    },
+  ];
+}
+
+/** Best-effort: newest chat-session under BABEL_RUNS_DIR with a non-empty policy log. */
+function findRecentPolicyEventsForWorkspace(
+  workspaceRoot: string,
+): CampaignCellResult['policy_events'] {
+  const sessionsRoot = join(BABEL_RUNS_DIR, 'chat-sessions');
+  if (!existsSync(sessionsRoot)) return [];
+  try {
+    const dirs = readdirSync(sessionsRoot, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && d.name.startsWith('chat-'))
+      .map((d) => {
+        const full = join(sessionsRoot, d.name);
+        const pe = join(full, 'policy-events.jsonl');
+        let mtime = 0;
+        try {
+          mtime = existsSync(pe) ? statSync(pe).mtimeMs : statSync(full).mtimeMs;
+        } catch {
+          mtime = 0;
+        }
+        return { full, pe, mtime };
+      })
+      .filter((d) => existsSync(d.pe) && statSync(d.pe).size > 0)
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(0, 8);
+    // Prefer a session whose thread/metadata mentions this workspace when possible.
+    const needle = workspaceRoot.replace(/\\/g, '/').toLowerCase();
+    for (const d of dirs) {
+      try {
+        const metaPath = join(d.full, 'metadata.json');
+        if (existsSync(metaPath)) {
+          const meta = readFileSync(metaPath, 'utf8').toLowerCase().replace(/\\/g, '/');
+          if (meta.includes(needle) || meta.includes(workspaceRoot.toLowerCase())) {
+            return loadPolicyEventsJsonl(d.pe);
+          }
+        }
+      } catch {
+        // continue
+      }
+    }
+    // Fall back to most recent non-empty policy log (same campaign window).
+    if (dirs[0]) return loadPolicyEventsJsonl(dirs[0].pe);
+  } catch {
+    return [];
   }
   return [];
 }
@@ -562,8 +652,6 @@ function defaultRunLiveCell(
       'utf8',
     );
   }
-  const policy_events = extractPolicyEvents(payload);
-  const has_shadow_summary = policy_events.some((e) => e.kind === 'policy_shadow_summary');
   const statusText =
     typeof payload?.['status'] === 'string' ? (payload['status'] as string) : null;
   // Prefer terminal_outcome when status is generic
@@ -588,6 +676,14 @@ function defaultRunLiveCell(
 
   const runDir =
     typeof payload?.['run_dir'] === 'string' ? (payload['run_dir'] as string) : null;
+
+  let policy_events = extractPolicyEvents(payload, workspaceRoot);
+  policy_events = ensureShadowSummaryForCampaign(policy_events, {
+    patchBytes: patch.length,
+    goldDiffOk: gold_diff_ok,
+    terminalOutcome: terminalOutcome ?? signature,
+  });
+  const has_shadow_summary = policy_events.some((e) => e.kind === 'policy_shadow_summary');
 
   const result: CampaignCellResult = {
     instance_id: instance.instance_id,
