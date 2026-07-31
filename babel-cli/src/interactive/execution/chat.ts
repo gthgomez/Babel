@@ -228,11 +228,16 @@ export async function executeChatTask(
     const hasAnyWrites = (result.toolCalls ?? []).some((t) =>
       /str_replace|write_file|apply_patch|file_write/.test(t.tool),
     );
-    // W0.4: env-red from answer or tool observations (pytest/npm missing, etc.)
+    // W0.4: env-red from answer or tool observations (pytest/npm missing, etc.).
+    // After writes, import-class failures are not scored as host ENV_BLOCKED.
+    const envDetectOpts = { hasAnyWrites };
     const envBlocked =
-      detectEnvBlockedFromText(result.answer ?? '') ||
+      detectEnvBlockedFromText(result.answer ?? '', envDetectOpts) ||
       (result.toolCalls ?? []).some((t) =>
-        detectEnvBlockedFromText(`${t.detail ?? ''} ${t.error ?? ''}`),
+        detectEnvBlockedFromText(
+          `${t.detail ?? ''} ${t.error ?? ''}`,
+          envDetectOpts,
+        ),
       );
     if (envBlocked) {
       ctx.lastAssistantStatus = 'ENV_BLOCKED';
