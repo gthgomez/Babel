@@ -10,6 +10,8 @@ import {
   classifyEmptyPatchHonesty,
   detectEnvBlockedFromText,
   detectEnvBlockedFromToolLog,
+  detectHostToolchainEnvBlockedFromText,
+  detectImportEnvAmbiguousFromText,
   formatEnvBlockedOperatorCard,
   resolveImplementorHarnessFields,
 } from './implementorPolicy.js';
@@ -37,7 +39,7 @@ describe('W0.4 env-red honesty', () => {
   });
 
   test('ImportError / conftest load is env_blocked (not policy thrash)', () => {
-    // SWE-Bench Pro pilot: qutebrowser host env
+    // SWE-Bench Pro pilot: qutebrowser host env (no agent writes yet)
     assert.equal(
       detectEnvBlockedFromText(
         "ImportError while loading conftest 'C:\\repo\\tests\\conftest.py'",
@@ -56,6 +58,54 @@ describe('W0.4 env-red honesty', () => {
     assert.equal(detectEnvBlockedFromText('AssertionError: expected 1 got 2'), false);
   });
 
+  test('after writes, import failures are not host env_blocked', () => {
+    const importErr =
+      "ImportError while loading conftest 'C:\\repo\\tests\\conftest.py'";
+    const moduleErr = "ModuleNotFoundError: No module named 'qutebrowser'";
+    const cannotImport =
+      "cannot import name 'HostBlocker' from 'qutebrowser.components'";
+
+    // Ambiguous import class still matches raw helpers
+    assert.equal(detectImportEnvAmbiguousFromText(importErr), true);
+    assert.equal(detectHostToolchainEnvBlockedFromText(importErr), false);
+
+    // Write-aware: do not terminalize as host ENV_BLOCKED
+    assert.equal(
+      detectEnvBlockedFromText(importErr, { hasAnyWrites: true }),
+      false,
+    );
+    assert.equal(
+      detectEnvBlockedFromText(moduleErr, { hasAnyWrites: true }),
+      false,
+    );
+    assert.equal(
+      detectEnvBlockedFromText(cannotImport, { hasAnyWrites: true }),
+      false,
+    );
+    assert.equal(
+      detectEnvBlockedFromToolLog(
+        [
+          {
+            stderr:
+              "ImportError while loading conftest 'C:\\ws\\tests\\conftest.py'\nModuleNotFoundError: No module named 'pkg'",
+          },
+        ],
+        { hasAnyWrites: true },
+      ),
+      false,
+    );
+
+    // Host toolchain still env_blocked after writes (pytest missing)
+    assert.equal(
+      detectEnvBlockedFromText('pytest: command not found', { hasAnyWrites: true }),
+      true,
+    );
+    assert.equal(
+      detectHostToolchainEnvBlockedFromText('pytest: command not found'),
+      true,
+    );
+  });
+
   test('tool log with pytest missing triggers env_blocked', () => {
     assert.equal(
       detectEnvBlockedFromToolLog([
@@ -72,6 +122,46 @@ describe('W0.4 env-red honesty', () => {
       ]),
       true,
     );
+  });
+
+  test('resolveImplementorHarnessFields: post-write ImportError is not env_blocked', () => {
+    const fields = resolveImplementorHarnessFields({
+      answer: 'Tests failed after patch.',
+      toolCalls: [
+        { tool: 'str_replace', detail: 'ok' },
+        {
+          tool: 'test_run',
+          stderr:
+            "ImportError while loading conftest 'C:\\repo\\tests\\conftest.py'",
+        },
+      ],
+      hasAnyWrites: true,
+      emptyPatch: false,
+      legacyAnswerStatus: 'ANSWER_READY',
+    });
+    assert.equal(fields.env_blocked, false);
+    assert.equal(fields.status, 'ANSWER_READY');
+    assert.equal(fields.failure_class_hint, null);
+    assert.equal(fields.operator_card, null);
+  });
+
+  test('resolveImplementorHarnessFields: pre-write ImportError stays ENV_BLOCKED', () => {
+    const fields = resolveImplementorHarnessFields({
+      answer: 'Cannot run tests.',
+      toolCalls: [
+        {
+          tool: 'test_run',
+          stderr:
+            "ImportError while loading conftest 'C:\\repo\\tests\\conftest.py'",
+        },
+      ],
+      hasAnyWrites: false,
+      emptyPatch: true,
+      legacyAnswerStatus: 'ANSWER_READY',
+    });
+    assert.equal(fields.env_blocked, true);
+    assert.equal(fields.status, 'ENV_BLOCKED');
+    assert.equal(fields.failure_class_hint, 'env_blocked');
   });
 
   test('empty_patch KPI quarantined when env_blocked', () => {
