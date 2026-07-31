@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 
 import {
   classifyCampaignFailureSignature,
+  ensureShadowSummaryForCampaign,
   runSwebenchProCampaign,
   updateFailureStreak,
   type CampaignCellResult,
@@ -31,6 +32,39 @@ function cell(
 }
 
 describe('swebenchProCampaign early-stop', () => {
+  test('ensureShadowSummaryForCampaign synthesizes boundary for mid-flush shadows', () => {
+    const withSummary = ensureShadowSummaryForCampaign(
+      [
+        { kind: 'force_mutate_shadow', detail: 'would_kill' },
+        { kind: 'zero_write_shadow', detail: 'would_kill' },
+      ],
+      { patchBytes: 120, goldDiffOk: false, terminalOutcome: 'BUDGET_EXHAUSTED' },
+    );
+    assert.equal(withSummary.some((e) => e.kind === 'policy_shadow_summary'), true);
+    const detail = withSummary.find((e) => e.kind === 'policy_shadow_summary')?.detail ?? '';
+    assert.match(detail, /later_progressed=1/);
+    assert.match(detail, /later_succeeded=0/);
+    assert.match(detail, /source=campaign_synthetic/);
+
+    // No shadows → no synthetic summary
+    const empty = ensureShadowSummaryForCampaign([], {
+      patchBytes: 0,
+      goldDiffOk: null,
+      terminalOutcome: 'X',
+    });
+    assert.equal(empty.length, 0);
+
+    // Existing summary preserved
+    const already = ensureShadowSummaryForCampaign(
+      [
+        { kind: 'force_mutate_shadow' },
+        { kind: 'policy_shadow_summary', detail: 'shadow_count=1 later_succeeded=0 later_progressed=0' },
+      ],
+      { patchBytes: 0, goldDiffOk: false, terminalOutcome: 'Y' },
+    );
+    assert.equal(already.filter((e) => e.kind === 'policy_shadow_summary').length, 1);
+  });
+
   test('classifyCampaignFailureSignature covers infra and agent cases', () => {
     assert.equal(
       classifyCampaignFailureSignature({

@@ -2024,8 +2024,10 @@ export class ChatEngine {
           this.conversation.push({ role: 'user', content: arb.policyMessage });
           yield { type: 'thought', text: `[Policy: ${arb.policySource}]` };
         }
-        // Mid-loop checkpoint only (turn continues) — terminal paths use finalizeParityTurn
+        // Mid-loop checkpoint only (turn continues) — terminal paths use finalizeParityTurn.
+        // Also flush policy events so hard harness kills still leave scoreboard data.
         checkpointParityEventLog(this.parity, this.engineRunDir);
+        persistPolicyEventsJsonl(this.engineRunDir, this.policyEventLog);
 
         _turnSpan.setAttribute('babel.chat.turn', `${turn + 1}:tool_calls`);
         endSpan(_turnSpan, SpanStatusCode.OK); _turnSpan = null;
@@ -2443,6 +2445,8 @@ export class ChatEngine {
       }),
       terminalOutcome: outcome,
     });
+    // Sync flush before process exit — required for campaign shadow scoreboard.
+    persistPolicyEventsJsonl(this.engineRunDir, this.policyEventLog);
     finalizeParityTurnSync(
       this.parity,
       this.engineRunDir,
@@ -4348,8 +4352,8 @@ export class ChatEngine {
     // Write is fire-and-forget — failure must not block the turn result.
     persistTranscriptToDisk(this.engineRunDir, result.conversation).catch(() => {});
 
-    // Tier A2: Persist policy event log alongside transcript
-    persistPolicyEventsJsonl(this.engineRunDir, this.policyEventLog).catch(() => {});
+    // Tier A2: Persist policy event log alongside transcript (sync — no exit race)
+    persistPolicyEventsJsonl(this.engineRunDir, this.policyEventLog);
     // Event log disk flush is owned solely by finalizeParityTurn / checkpointParityEventLog
 
     // Propose BABEL.md learnings after successful runs with writes only.
