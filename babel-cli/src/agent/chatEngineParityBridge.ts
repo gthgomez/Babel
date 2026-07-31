@@ -247,7 +247,8 @@ export function parityArbitrateCycle(input: {
   hardCeiling?: boolean;
   hardCeilingReason?: string;
   /**
-   * Host/toolchain env block (ImportError, missing pytest, conftest load, …).
+   * Host/toolchain env block (missing pytest, pre-write host ImportError, …).
+   * Caller should suppress post-write import failures (patch-induced).
    * When set, terminals as **env_blocked** — do not burn progress_terminal cycles.
    */
   envBlockedSignal?: string | null;

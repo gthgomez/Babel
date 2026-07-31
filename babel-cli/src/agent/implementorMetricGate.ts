@@ -237,9 +237,10 @@ export function sampleFromToolLog(input: {
       ...(tc.error !== undefined ? { error: tc.error } : {}),
     })),
   );
+  const envOpts = { hasAnyWrites: write_count > 0 };
   const env_blocked =
-    detectEnvBlockedFromText(input.answer ?? '') ||
-    detectEnvBlockedFromToolLog(input.toolCalls);
+    detectEnvBlockedFromText(input.answer ?? '', envOpts) ||
+    detectEnvBlockedFromToolLog(input.toolCalls, envOpts);
   return {
     id: input.id,
     recorded_at: input.recorded_at ?? new Date().toISOString(),
@@ -301,11 +302,12 @@ export function sampleFromHarnessPayload(
           'string'
         ? (payload['cli_payload'] as { answer: string }).answer
         : '';
+  const envOpts = { hasAnyWrites: write_count > 0 };
   const env_blocked =
     payload['env_blocked'] === true ||
     payload['status'] === 'ENV_BLOCKED' ||
-    detectEnvBlockedFromText(answer) ||
-    detectEnvBlockedFromToolLog(toolCalls);
+    detectEnvBlockedFromText(answer, envOpts) ||
+    detectEnvBlockedFromToolLog(toolCalls, envOpts);
 
   return {
     id: meta.id,
