@@ -229,6 +229,11 @@ export function parityArbitrateCycle(input: {
   shellSoftMessage?: string | null;
   /** Implementor: investigate tool-budget nudge. */
   investigateBudgetMessage?: string | null;
+  /**
+   * Hard cap: too many tools without a mutation → terminal thrash stop.
+   * Outranks soft investigate_budget / force_mutate nudges.
+   */
+  investigateHardCapTerminal?: string | null;
   stallMessage?: string | null;
   /** Non-shadow stall kill — terminal via progress_terminal precedence. */
   stallKillMessage?: string | null;
@@ -241,6 +246,11 @@ export function parityArbitrateCycle(input: {
   zeroWriteTerminalMessage?: string | null;
   hardCeiling?: boolean;
   hardCeilingReason?: string;
+  /**
+   * Host/toolchain env block (ImportError, missing pytest, conftest load, …).
+   * When set, terminals as **env_blocked** — do not burn progress_terminal cycles.
+   */
+  envBlockedSignal?: string | null;
 }): {
   intervention: ProgressIntervention;
   policyMessage: string | null;
@@ -255,6 +265,25 @@ export function parityArbitrateCycle(input: {
       message: input.hardCeilingReason ?? 'Hard resource ceiling',
     });
   }
+  // Env blocks outrank progress thrash: host cannot verify — stop the spiral.
+  if (input.envBlockedSignal?.trim()) {
+    candidates.push({
+      source: 'env_blocked',
+      action: 'terminal',
+      message:
+        `ENV_BLOCKED: verification cannot run in this environment. ` +
+        `${input.envBlockedSignal.trim()} ` +
+        `Fix the host toolchain/deps (or re-run where the project installs cleanly); ` +
+        `do not treat this as policy thrash or missing semantic progress.`,
+    });
+  }
+  if (input.investigateHardCapTerminal?.trim()) {
+    candidates.push({
+      source: 'investigate_hard_cap',
+      action: 'terminal',
+      message: input.investigateHardCapTerminal.trim(),
+    });
+  }
   if (input.stallKillMessage) {
     candidates.push({
       source: 'progress_terminal',
@@ -264,6 +293,10 @@ export function parityArbitrateCycle(input: {
   }
   const progressIx = scoreProgressIntervention(input.rt.progress, {
     recoveryAlreadyTried: input.rt.recoveryTried,
+    // Prefer env terminal over "repeated no-progress after recovery"
+    ...(input.envBlockedSignal?.trim()
+      ? { verifiedExternalBlocker: `ENV_BLOCKED: ${input.envBlockedSignal.trim()}` }
+      : {}),
     ...(input.hardCeiling === true
       ? {
           hardCeiling: true as const,
@@ -273,24 +306,27 @@ export function parityArbitrateCycle(input: {
         }
       : {}),
   });
-  if (progressIx.action === 'terminal') {
-    candidates.push({
-      source: 'progress_terminal',
-      action: 'terminal',
-      message: progressIx.reason,
-    });
-  } else if (progressIx.action === 'recover') {
-    candidates.push({
-      source: 'progress_recover',
-      action: 'nudge',
-      message: `Recovery: ${progressIx.strategy}. Summarize evidence and change approach.`,
-    });
-  } else if (progressIx.action === 'nudge') {
-    candidates.push({
-      source: 'progress_nudge',
-      action: 'nudge',
-      message: progressIx.message,
-    });
+  // Skip progress thrash interventions when env already queued — wrong failure class.
+  if (!input.envBlockedSignal?.trim()) {
+    if (progressIx.action === 'terminal') {
+      candidates.push({
+        source: 'progress_terminal',
+        action: 'terminal',
+        message: progressIx.reason,
+      });
+    } else if (progressIx.action === 'recover') {
+      candidates.push({
+        source: 'progress_recover',
+        action: 'nudge',
+        message: `Recovery: ${progressIx.strategy}. Summarize evidence and change approach.`,
+      });
+    } else if (progressIx.action === 'nudge') {
+      candidates.push({
+        source: 'progress_nudge',
+        action: 'nudge',
+        message: progressIx.message,
+      });
+    }
   }
   if (input.forceMutateMessage) {
     candidates.push({

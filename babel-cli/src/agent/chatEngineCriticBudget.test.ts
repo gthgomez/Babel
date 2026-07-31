@@ -50,6 +50,31 @@ describe('buildCriticSkipReceipt', () => {
   });
 });
 
+import { computeCriticRepairCostCap } from './chatEngineCriticBudget.js';
+
+describe('computeCriticRepairCostCap', () => {
+  test('caps remaining spend to a repair window under session max', () => {
+    // Spent $2.00 of $3.00 → remaining $1.00 → window min(0.75, max(0.25, 0.35)) = 0.35
+    const r = computeCriticRepairCostCap({ spentUsd: 2.0, sessionMaxCostUsd: 3.0 });
+    assert.ok(r.repairWindowUsd > 0);
+    assert.ok(r.repairWindowUsd <= 0.75);
+    assert.equal(r.capUsd, 2.0 + r.repairWindowUsd);
+    assert.ok(r.capUsd <= 3.0);
+  });
+
+  test('never exceeds session max when little remaining', () => {
+    const r = computeCriticRepairCostCap({ spentUsd: 2.9, sessionMaxCostUsd: 3.0 });
+    assert.ok(r.capUsd <= 3.0 + 1e-9);
+    assert.ok(r.repairWindowUsd <= 0.1 + 1e-9);
+  });
+
+  test('zero remaining leaves cap at session max', () => {
+    const r = computeCriticRepairCostCap({ spentUsd: 3.0, sessionMaxCostUsd: 3.0 });
+    assert.equal(r.repairWindowUsd, 0);
+    assert.equal(r.capUsd, 3.0);
+  });
+});
+
 describe('runAsymmetricDiffCritic early paths (C1)', () => {
   test('non-execute intent sets skip receipt non_execute', async () => {
     const state = baseState();

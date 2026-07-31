@@ -117,6 +117,16 @@ export function buildPolicyTerminalBlockedReport(
       missing: 'Semantic progress (mutation, new localization, or hypothesis change)',
       target: 'progress',
     },
+    investigate_hard_cap: {
+      reason: 'Too many tools without a file mutation (investigate hard cap)',
+      missing: 'A successful str_replace/write_file before more exploration',
+      target: 'investigate_budget',
+    },
+    env_blocked: {
+      reason: 'Environment / toolchain cannot run verification',
+      missing: 'Working project runtime (deps installed, conftest importable, pytest/node on PATH)',
+      target: 'environment',
+    },
     stall: {
       reason: 'Stall kill intervention',
       missing: 'Non-repeating tool trajectory toward a fix',
@@ -182,6 +192,11 @@ export interface ExploreFuseState {
   toolsWithoutWrite: number;
   /** Current control phase for investigate-budget gating. */
   phase: ChatPhase | null;
+  /**
+   * One-shot shadow kinds already emitted this session (force_mutate_shadow, …).
+   * Prevents 12× force_mutate_shadow spam while soft nudges may still re-fire.
+   */
+  shadowLoggedKinds?: Set<string>;
 }
 
 /** Result of fuse evaluation — messages may be deferred to the policy arbiter. */
@@ -192,6 +207,40 @@ export interface ExploreFuseResult {
   explorationFuseMessage: string | null;
   shellSoftMessage: string | null;
   investigateBudgetMessage: string | null;
+  /**
+   * Hard cap on tools without a write — terminal candidate (not a soft nudge).
+   * Set when toolsWithoutWrite >= investigate hard cap for the task class.
+   */
+  investigateHardCapTerminal: string | null;
+}
+
+/** Build hard-cap terminal message for explore-without-mutate thrash. */
+export function buildInvestigateHardCapTerminalMessage(
+  toolsWithoutWrite: number,
+  hardCap: number,
+): string {
+  return [
+    `BLOCKED: ${toolsWithoutWrite} tools without a successful file mutation ` +
+      `(hard cap ${hardCap} for this task class).`,
+    'You spent the investigate budget exploring without applying a fix.',
+    'Stop reading. If you can still fix the issue, the next turn must use str_replace/write_file;',
+    'this session is terminating explore thrash so cost is not burned on re-reads.',
+  ].join(' ');
+}
+
+/**
+ * Resolve hard cap for tools-before-first-write.
+ * Explicit tune field wins; else 2× soft investigate budget; 0 disables.
+ */
+export function resolveInvestigateToolHardCap(
+  investigateToolBudget: number,
+  explicitHardCap?: number,
+): number {
+  if (explicitHardCap !== undefined && explicitHardCap >= 0) {
+    return explicitHardCap;
+  }
+  if (investigateToolBudget <= 0) return 0;
+  return investigateToolBudget * 2;
 }
 
 /**
@@ -225,6 +274,7 @@ export function applyExploreFuses(input: {
       explorationFuseMessage: null,
       shellSoftMessage: null,
       investigateBudgetMessage: null,
+      investigateHardCapTerminal: null,
     };
   }
   const tune = getChatTaskTune(input.taskClass);
@@ -236,6 +286,7 @@ export function applyExploreFuses(input: {
   let explorationFuseMessage: string | null = null;
   let shellSoftMessage: string | null = null;
   let investigateBudgetMessage: string | null = null;
+  let investigateHardCapTerminal: string | null = null;
 
   // Policy fuses can fire as soft nudges (message only — model keeps full
   // tool access) or as hard restrictions (tools restricted next turn).
@@ -331,6 +382,8 @@ export function applyExploreFuses(input: {
   out.push(...result.fired);
 
   // P0-E: record would-have-restrict / exhaust while soft-nudge path continues.
+  // One-shot per kind per session (same discipline as zero_write_shadow).
+  if (!s.shadowLoggedKinds) s.shadowLoggedKinds = new Set();
   for (const shadowEv of buildExploreFuseShadowEvents({
     atTurn: input.currentTurn ?? 0,
     taskClass: input.taskClass,
@@ -339,8 +392,10 @@ export function applyExploreFuses(input: {
     explorationExhausted,
     hardRestrictEnabled: hardRestrict,
     env,
+    alreadyLoggedKinds: s.shadowLoggedKinds,
   })) {
     input.onPolicyEvent?.(shadowEv);
+    s.shadowLoggedKinds.add(shadowEv.kind);
   }
 
   // Implementor W1: shell soft budget (non-mutating shell thrash).
@@ -379,6 +434,29 @@ export function applyExploreFuses(input: {
     });
   }
 
+  // Hard cap: stop explore thrash (pilot: 53 tools before first write).
+  // Soft budget still nudges; hard cap is a terminal candidate for the arbiter.
+  const hardCap = resolveInvestigateToolHardCap(
+    tune.investigateToolBudget,
+    tune.investigateToolHardCap,
+  );
+  if (
+    hardCap > 0 &&
+    !input.hasAnyWrites &&
+    s.toolsWithoutWrite >= hardCap
+  ) {
+    investigateHardCapTerminal = buildInvestigateHardCapTerminalMessage(
+      s.toolsWithoutWrite,
+      hardCap,
+    );
+    out.push('[Implementor: investigate hard cap — terminal]');
+    input.onPolicyEvent?.({
+      at_turn: input.currentTurn ?? 0,
+      kind: 'investigate_budget',
+      detail: `hard_cap tools_without_write=${s.toolsWithoutWrite} cap=${hardCap}`,
+    });
+  }
+
   return {
     labels: out,
     forceMutateMessage,
@@ -386,5 +464,6 @@ export function applyExploreFuses(input: {
     explorationFuseMessage,
     shellSoftMessage,
     investigateBudgetMessage,
+    investigateHardCapTerminal,
   };
 }

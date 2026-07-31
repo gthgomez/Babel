@@ -302,16 +302,22 @@ export function buildExploreFuseShadowEvents(input: {
   explorationExhausted: boolean;
   hardRestrictEnabled: boolean;
   env?: NodeJS.ProcessEnv;
+  /**
+   * Session kinds already logged once (P0-E one-shot, same as zero_write_shadow).
+   * When set, skips re-emitting force_mutate_shadow / read_thrash_shadow / exploration_shadow.
+   */
+  alreadyLoggedKinds?: ReadonlySet<string>;
 }): PolicyEvent[] {
   const env = input.env ?? process.env;
   const events: PolicyEvent[] = [];
+  const already = input.alreadyLoggedKinds;
   // Live restrict only when hardRestrict && mode=enforce (caller enforces that).
   // Under shadow, live_restrict is always 0 even if the class prefers hardRestrict.
   const liveRestrictNote = 'live_restrict=0';
 
   if (input.forceMutateFired) {
     const mode = resolvePolicyMode('force_mutate', input.taskClass, env);
-    if (mode === 'shadow') {
+    if (mode === 'shadow' && !already?.has('force_mutate_shadow')) {
       events.push({
         at_turn: input.atTurn,
         kind: 'force_mutate_shadow',
@@ -321,7 +327,7 @@ export function buildExploreFuseShadowEvents(input: {
   }
   if (input.readThrashFired) {
     const mode = resolvePolicyMode('read_thrash', input.taskClass, env);
-    if (mode === 'shadow') {
+    if (mode === 'shadow' && !already?.has('read_thrash_shadow')) {
       events.push({
         at_turn: input.atTurn,
         kind: 'read_thrash_shadow',
@@ -331,7 +337,7 @@ export function buildExploreFuseShadowEvents(input: {
   }
   if (input.explorationExhausted) {
     const mode = resolvePolicyMode('exploration_fuse', input.taskClass, env);
-    if (mode === 'shadow') {
+    if (mode === 'shadow' && !already?.has('exploration_shadow')) {
       events.push({
         at_turn: input.atTurn,
         kind: 'exploration_shadow',

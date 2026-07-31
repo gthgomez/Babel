@@ -49,11 +49,93 @@ export interface LiteTrustDemoResult {
   execution_mode?: 'offline_demo';
 }
 
-interface CliInvocationResult {
+/** Structured evidence when CLI JSON is missing (timeout, crash, hang). */
+export interface CliFailureCapsule {
+  kind: 'babel_cli_failure_capsule';
+  schema_version: 1;
+  timed_out: boolean;
+  timeout_ms: number | null;
+  exit_code: number;
+  signal: string | null;
+  error_name: string | null;
+  error_message: string | null;
+  stdout_tail: string;
+  stderr_tail: string;
+  stdout_bytes: number;
+  stderr_bytes: number;
+  /** True when no structured payload could be recovered from stdout/stderr. */
+  recovered_payload: false;
+  failure_class_hint: 'harness_timeout' | 'cli_no_payload' | 'cli_nonzero';
+}
+
+export interface CliInvocationResult {
   exitCode: number;
   stdout: string;
   stderr: string;
   payload: Record<string, unknown> | null;
+  /** Present when payload is null and/or the process timed out. */
+  failureCapsule?: CliFailureCapsule;
+  timedOut?: boolean;
+}
+
+const CAPSULE_TAIL_CHARS = 4000;
+
+/** Build a failure capsule for headless CLI timeouts / empty JSON. Pure. */
+export function buildCliFailureCapsule(input: {
+  timedOut: boolean;
+  timeoutMs?: number;
+  exitCode: number;
+  signal?: string | null;
+  errorName?: string | null;
+  errorMessage?: string | null;
+  stdout: string;
+  stderr: string;
+}): CliFailureCapsule {
+  const stdout = input.stdout ?? '';
+  const stderr = input.stderr ?? '';
+  const tail = (s: string) =>
+    s.length <= CAPSULE_TAIL_CHARS ? s : s.slice(-CAPSULE_TAIL_CHARS);
+  const failure_class_hint: CliFailureCapsule['failure_class_hint'] = input.timedOut
+    ? 'harness_timeout'
+    : input.exitCode !== 0
+      ? 'cli_nonzero'
+      : 'cli_no_payload';
+  return {
+    kind: 'babel_cli_failure_capsule',
+    schema_version: 1,
+    timed_out: input.timedOut,
+    timeout_ms: input.timeoutMs ?? null,
+    exit_code: input.exitCode,
+    signal: input.signal ?? null,
+    error_name: input.errorName ?? null,
+    error_message: input.errorMessage ?? null,
+    stdout_tail: tail(stdout),
+    stderr_tail: tail(stderr),
+    stdout_bytes: Buffer.byteLength(stdout, 'utf8'),
+    stderr_bytes: Buffer.byteLength(stderr, 'utf8'),
+    recovered_payload: false,
+    failure_class_hint,
+  };
+}
+
+/**
+ * Synthetic payload so harnesses never see a pure null after timeout/crash.
+ * Does not invent success; marks harness_timeout / cli_no_payload.
+ */
+export function syntheticPayloadFromFailureCapsule(
+  capsule: CliFailureCapsule,
+): Record<string, unknown> {
+  return {
+    status: capsule.timed_out ? 'BUDGET_EXCEEDED' : 'FAILED',
+    terminal_outcome: capsule.timed_out ? 'BUDGET_EXHAUSTED' : 'AGENT_FAILURE',
+    user_status: 'failed',
+    failure_class_hint: capsule.failure_class_hint,
+    failure_capsule: capsule,
+    budget_exceeded: capsule.timed_out,
+    answer: capsule.timed_out
+      ? `Harness timeout after ${capsule.timeout_ms ?? '?'}ms — no structured CLI payload. See failure_capsule.`
+      : `CLI exited without structured JSON (exit=${capsule.exit_code}). See failure_capsule.`,
+  };
 }
 
 function defaultFixturePath(): string {
@@ -514,17 +596,61 @@ export function runBabelCli(
     ...(typeof options.timeoutMs === 'number' ? { timeout: options.timeoutMs } : {}),
   });
   const stdout = result.stdout ?? '';
-  const stderr = result.stderr ?? '';
-  const timedOut = result.error?.name === 'ETIMEDOUT';
+  const rawStderr = result.stderr ?? '';
+  const timedOut =
+    result.error?.name === 'ETIMEDOUT' ||
+    // Node may set error code without name on some platforms
+    (result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT';
+  const stderr = timedOut
+    ? `${rawStderr}\n[babel-cli] Process timed out after ${options.timeoutMs}ms`.trim()
+    : rawStderr;
   // Prefer stdout; if empty/noise, try stderr (some paths leak JSON there).
-  const payload = parseCliJson(stdout) ?? parseCliJson(stderr);
+  let payload = parseCliJson(stdout) ?? parseCliJson(stderr);
+  const exitCode = timedOut ? 124 : (result.status ?? 1);
+  const signal =
+    typeof result.signal === 'string'
+      ? result.signal
+      : result.signal != null
+        ? String(result.signal)
+        : null;
+
+  // Failure capsule when no recoverable JSON — ansible pilot hangs left null payload.
+  let failureCapsule: CliFailureCapsule | undefined;
+  if (payload == null || timedOut) {
+    failureCapsule = buildCliFailureCapsule({
+      timedOut,
+      ...(typeof options.timeoutMs === 'number' ? { timeoutMs: options.timeoutMs } : {}),
+      exitCode,
+      signal,
+      errorName: result.error?.name ?? null,
+      errorMessage: result.error?.message ?? null,
+      stdout,
+      stderr,
+    });
+    // Always attach synthetic payload on empty JSON so harnesses have a status.
+    if (payload == null) {
+      payload = syntheticPayloadFromFailureCapsule(failureCapsule);
+    } else if (timedOut && payload) {
+      // Timed out but somehow had JSON — stamp class for scorers.
+      payload = {
+        ...payload,
+        failure_class_hint:
+          typeof payload['failure_class_hint'] === 'string'
+            ? payload['failure_class_hint']
+            : 'harness_timeout',
+        failure_capsule: failureCapsule,
+        budget_exceeded: true,
+      };
+    }
+  }
+
   return {
-    exitCode: timedOut ? 124 : (result.status ?? 1),
+    exitCode,
     stdout,
-    stderr: timedOut
-      ? `${stderr}\n[babel-cli] Process timed out after ${options.timeoutMs}ms`.trim()
-      : stderr,
+    stderr,
     payload,
+    timedOut,
+    ...(failureCapsule ? { failureCapsule } : {}),
   };
 }
 

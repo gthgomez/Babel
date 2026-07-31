@@ -21,6 +21,8 @@ describe('W3.3 implementor Grok-shadow scorecard', () => {
     assert.equal(report.dimensions.interactive_metrics.pass, true);
     assert.equal(report.dimensions.false_positive_dashboard.pass, true);
     assert.equal(report.dimensions.shadow_would_have_killed.pass, true);
+    assert.equal(report.dimensions.shadow_precision_recall.pass, true);
+    assert.equal(report.dimensions.shadow_precision_recall.report.source, 'fixtures');
   });
 
   test('false-positive dashboard has zero FPs on known-good cells', () => {
@@ -56,6 +58,16 @@ describe('W3.3 implementor Grok-shadow scorecard', () => {
     assert.match(text, /Status: PASS/);
     assert.match(text, /False-positive dashboard/);
     assert.match(text, /Shadow would-have-killed/);
+    assert.match(text, /Shadow precision\/recall/);
     assert.match(text, /S-EVL-01/);
+  });
+
+  test('shadow precision/recall fixture rates are consistent', () => {
+    const report = runImplementorScorecard();
+    const pr = report.dimensions.shadow_precision_recall.report;
+    assert.equal(pr.would_kill_sessions, pr.later_succeeded + pr.later_failed);
+    assert.ok(pr.later_succeeded >= 1);
+    assert.ok(pr.later_failed >= 1);
+    assert.equal(pr.advisory_enforce_ready, false);
   });
 });
