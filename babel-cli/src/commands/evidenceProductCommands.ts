@@ -3,12 +3,19 @@
  * Kept out of coreCommands.ts for architectural file-size budget.
  */
 
+import { readFileSync } from 'node:fs';
+
 import { type Command } from 'commander';
 
 import {
   formatImplementorScorecardHuman,
   runImplementorScorecard,
 } from '../agent/implementorScorecard.js';
+import {
+  buildShadowPrecisionRecallReport,
+  formatShadowPrecisionRecallHuman,
+  parsePolicyEventsFromText,
+} from '../agent/policyShadowPrecisionRecall.js';
 import {
   exportEvidenceBundle,
   formatEvidenceExportHuman,
@@ -76,5 +83,32 @@ export function registerEvidenceProductSubcommands(evidenceCommand: Command): vo
       const report = runImplementorScorecard();
       printJsonOrHuman(report, formatImplementorScorecardHuman(report), options.json === true);
       if (!report.pass) process.exitCode = 1;
+    });
+
+  // P0-E — offline shadow would-kill precision/recall campaign report
+  evidenceCommand
+    .command('shadow-precision')
+    .description(
+      'Offline precision/recall for policy shadow would-kill events (later_succeeded / later_progressed)',
+    )
+    .option(
+      '--events <path>',
+      'JSON array or JSONL of policy events (*_shadow + policy_shadow_summary). Omit for fixtures.',
+    )
+    .option('--json', 'Emit structured JSON only')
+    .action((options: { events?: string; json?: boolean }) => {
+      let report;
+      if (options.events) {
+        const text = readFileSync(options.events, 'utf8');
+        const events = parsePolicyEventsFromText(text);
+        report = buildShadowPrecisionRecallReport({ events });
+      } else {
+        report = buildShadowPrecisionRecallReport({ useFixtures: true });
+      }
+      printJsonOrHuman(
+        report,
+        formatShadowPrecisionRecallHuman(report),
+        options.json === true,
+      );
     });
 }

@@ -6,6 +6,7 @@ import {
   hasGreenVerifierReceipt,
   isAgentOwnedAdHocVerifier,
   isAuthoritativeVerifierCommand,
+  isInlineProbeVerifier,
   isLikelyVerifierCommand,
   requiresGreenVerifier,
   resolveVerificationPolicy,
@@ -473,6 +474,25 @@ describe('isAgentOwnedAdHocVerifier / isAuthoritativeVerifierCommand (B2)', () =
     // still "likely" for logging, not authoritative for honesty
     assert.equal(isLikelyVerifierCommand('python _verify_fix.py'), true);
     assert.equal(isAuthoritativeVerifierCommand('python _verify_fix.py'), false);
+  });
+
+  test('inline probes (python -c / node -e) are never authoritative', () => {
+    // Live pilot failure mode: toy hello verifier greened completion honesty
+    assert.equal(isInlineProbeVerifier("python -c \"print('hello')\""), true);
+    assert.equal(isLikelyVerifierCommand("python -c \"print('hello')\""), true);
+    assert.equal(isAuthoritativeVerifierCommand("python -c \"print('hello')\""), false);
+
+    // Live pilot: simulate class under test without project import
+    const simulated = `python -c "\nfrom dataclasses import dataclass\n# Simulate the WikidataEntity class\n"`;
+    assert.equal(isInlineProbeVerifier(simulated), true);
+    assert.equal(isAuthoritativeVerifierCommand(simulated), false);
+
+    assert.equal(isInlineProbeVerifier("node -e \"console.log('ok')\""), true);
+    assert.equal(isAuthoritativeVerifierCommand("node -e \"console.log('ok')\""), false);
+
+    // Real runners still authoritative
+    assert.equal(isAuthoritativeVerifierCommand('python -m pytest tests/'), true);
+    assert.equal(isInlineProbeVerifier('python -m pytest tests/'), false);
   });
 });
 

@@ -8,6 +8,7 @@
  * - False-positive cells (policies must not fire on known-good cases)
  * - Shadow would-have-killed narrative (S-PR-03): what zero-write hard-stop
  *   *would* have done under a non-zero threshold while general_swe stays at 0
+ * - P0-E shadow precision/recall fixture report (would-kill vs later_succeeded)
  *
  * Pure offline — no live LLM. Publish via JSON report + human formatter.
  */
@@ -27,6 +28,10 @@ import {
   type ProveSmokeSuiteReport,
 } from './implementorProveSmoke.js';
 import { runW1ResidualExitSmokes } from './implementorW1ExitSmoke.js';
+import {
+  buildShadowPrecisionRecallReport,
+  type ShadowPrecisionRecallReport,
+} from './policyShadowPrecisionRecall.js';
 import { reviewDiffHeuristically } from './reviewOnDiffAgent.js';
 import {
   buildSecretScanReport,
@@ -89,6 +94,10 @@ export interface ImplementorScorecardReport {
     shadow_would_have_killed: ScorecardDimensionResult & {
       events: ShadowWouldHaveKilledEvent[];
       would_have_killed_count: number;
+    };
+    /** P0-E offline precision/recall fixture rollup (informational pipeline check). */
+    shadow_precision_recall: ScorecardDimensionResult & {
+      report: ShadowPrecisionRecallReport;
     };
   };
   fail_reasons: string[];
@@ -372,6 +381,37 @@ export function runImplementorScorecard(opts?: { now?: Date }): ImplementorScore
     fail_reasons.push('shadow: live general_swe hard-stopped (threshold 0 regression)');
   }
 
+  // Dimension 6 — P0-E shadow precision/recall pipeline (fixture demo; math must be consistent)
+  const prReport = buildShadowPrecisionRecallReport({
+    useFixtures: true,
+    now: opts?.now ?? new Date(generated_at),
+  });
+  // Consistency: counts sum, rates in [0,1], fixtures produce ≥1 false kill + ≥1 justified
+  const prMathOk =
+    prReport.would_kill_sessions ===
+      prReport.later_succeeded + prReport.later_failed &&
+    prReport.later_succeeded >= 1 &&
+    prReport.later_failed >= 1 &&
+    prReport.false_kill_rate != null &&
+    prReport.kill_precision != null &&
+    prReport.false_kill_rate >= 0 &&
+    prReport.false_kill_rate <= 1 &&
+    Math.abs(
+      (prReport.false_kill_rate ?? 0) + (prReport.kill_precision ?? 0) - 1,
+    ) < 1e-9;
+  const prDim: ImplementorScorecardReport['dimensions']['shadow_precision_recall'] = {
+    id: 'shadow_precision_recall',
+    pass: prMathOk,
+    summary:
+      `fixtures kill_precision=${prReport.kill_precision != null ? (prReport.kill_precision * 100).toFixed(0) + '%' : 'n/a'} ` +
+      `false_kill_rate=${prReport.false_kill_rate != null ? (prReport.false_kill_rate * 100).toFixed(0) + '%' : 'n/a'} ` +
+      `n=${prReport.would_kill_sessions}`,
+    report: prReport,
+  };
+  if (!prMathOk) {
+    fail_reasons.push('shadow_precision_recall fixture rollup inconsistent');
+  }
+
   const pass = fail_reasons.length === 0;
   const summary_lines = [
     `Grok-shadow implementor scorecard: ${pass ? 'PASS' : 'FAIL'}`,
@@ -380,6 +420,7 @@ export function runImplementorScorecard(opts?: { now?: Date }): ImplementorScore
     metricDim.summary,
     fpDim.summary,
     shadowDim.summary,
+    prDim.summary,
   ];
 
   return {
@@ -393,6 +434,7 @@ export function runImplementorScorecard(opts?: { now?: Date }): ImplementorScore
       interactive_metrics: metricDim,
       false_positive_dashboard: fpDim,
       shadow_would_have_killed: shadowDim,
+      shadow_precision_recall: prDim,
     },
     fail_reasons,
     summary_lines,
@@ -412,6 +454,7 @@ export function formatImplementorScorecardHuman(report: ImplementorScorecardRepo
     `- Interactive metrics: ${report.dimensions.interactive_metrics.pass ? 'PASS' : 'FAIL'} — ${report.dimensions.interactive_metrics.summary}`,
     `- False-positive dashboard: ${report.dimensions.false_positive_dashboard.pass ? 'PASS' : 'FAIL'} — ${report.dimensions.false_positive_dashboard.summary}`,
     `- Shadow would-have-killed: ${report.dimensions.shadow_would_have_killed.pass ? 'PASS' : 'FAIL'} — ${report.dimensions.shadow_would_have_killed.summary}`,
+    `- Shadow precision/recall: ${report.dimensions.shadow_precision_recall.pass ? 'PASS' : 'FAIL'} — ${report.dimensions.shadow_precision_recall.summary}`,
   ];
 
   lines.push('', '## False-positive cells');
@@ -429,6 +472,16 @@ export function formatImplementorScorecardHuman(report: ImplementorScorecardRepo
     );
   }
 
+  const pr = report.dimensions.shadow_precision_recall.report;
+  lines.push(
+    '',
+    '## Shadow precision/recall (fixtures)',
+    `- kill_precision=${pr.kill_precision != null ? (pr.kill_precision * 100).toFixed(1) + '%' : 'n/a'} ` +
+      `false_kill_rate=${pr.false_kill_rate != null ? (pr.false_kill_rate * 100).toFixed(1) + '%' : 'n/a'} ` +
+      `n=${pr.would_kill_sessions}`,
+    `- advisory_enforce_ready=${pr.advisory_enforce_ready} (fixtures never ready)`,
+  );
+
   if (report.fail_reasons.length > 0) {
     lines.push('', '## Fail reasons', ...report.fail_reasons.map((r) => `- ${r}`));
   }
@@ -436,7 +489,7 @@ export function formatImplementorScorecardHuman(report: ImplementorScorecardRepo
   lines.push(
     '',
     '---',
-    '_W3.3 / S-EVL-01 Grok-shadow suite · S-EVL-02 false-positive rate · S-PR-03 shadow narrative_',
+    '_W3.3 / S-EVL-01 Grok-shadow suite · S-EVL-02 false-positive rate · S-PR-03 shadow narrative · P0-E precision/recall_',
   );
   return lines.join('\n');
 }

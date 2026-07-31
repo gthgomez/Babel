@@ -85,6 +85,12 @@ export interface ChatTaskTune {
    */
   investigateToolBudget: number;
   /**
+   * Hard stop: tools without a successful mutation → terminal thrash stop.
+   * 0 = disabled. When omitted/undefined at runtime, defaults to 2× soft budget.
+   * general_swe uses an explicit cap so explore thrash cannot burn full cost.
+   */
+  investigateToolHardCap: number;
+  /**
    * Max full-file reads of the same path before hard skip (use read_range / edit).
    */
   maxFullReadsPerFile: number;
@@ -140,6 +146,7 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
     readThrashToolBudget: 24,
     shellSoftBudget: 4,
     investigateToolBudget: 14,
+    investigateToolHardCap: 28, // 2× soft
     maxFullReadsPerFile: 3,
     zeroWriteHardStopTurns: 12,
     restrictToolsOnPolicyFire: false,
@@ -161,6 +168,7 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
     readThrashToolBudget: 20,
     shellSoftBudget: 3,
     investigateToolBudget: 10,
+    investigateToolHardCap: 20,
     maxFullReadsPerFile: 3,
     zeroWriteHardStopTurns: 8,
     restrictToolsOnPolicyFire: false,
@@ -182,7 +190,9 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
     verificationPolicy: 'required',
     readThrashToolBudget: 16,
     shellSoftBudget: 4,
-    investigateToolBudget: 12,
+    // Soft nudge earlier; hard terminal well before pilot's 53-tool thrash.
+    investigateToolBudget: 8,
+    investigateToolHardCap: 16,
     maxFullReadsPerFile: 3,
     zeroWriteHardStopTurns: 0, // disabled — stall shadow mode handles thrash
     restrictToolsOnPolicyFire: false,
@@ -205,6 +215,7 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
     readThrashToolBudget: 40,
     shellSoftBudget: 0, // disabled — research may use shell freely
     investigateToolBudget: 0, // disabled — research is explore-first
+    investigateToolHardCap: 0, // disabled
     maxFullReadsPerFile: 4,
     zeroWriteHardStopTurns: 0, // disabled — research may not mutate
     restrictToolsOnPolicyFire: false,
@@ -226,6 +237,7 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
     readThrashToolBudget: 16,
     shellSoftBudget: 3,
     investigateToolBudget: 12,
+    investigateToolHardCap: 24,
     maxFullReadsPerFile: 2,
     zeroWriteHardStopTurns: 10,
     restrictToolsOnPolicyFire: true,

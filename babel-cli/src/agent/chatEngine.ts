@@ -221,6 +221,7 @@ import {
   isDiffCriticEnabled,
   maybeInjectMidLoopHeuristicCritic as injectMidLoopHeuristicCritic,
   runAsymmetricDiffCritic as runAsymmetricDiffCriticImpl,
+  computeCriticRepairCostCap,
   type AsymmetricCriticState,
   type CriticRunner,
 } from './chatEngineCriticBudget.js';
@@ -481,6 +482,13 @@ export class ChatEngine {
   private consecutiveNonMutatingShells = 0;
   /** Implementor: tools since last successful mutation. */
   private toolsWithoutWrite = 0;
+  /** One-shot explore-fuse shadow kinds this session (force_mutate_shadow, …). */
+  private exploreShadowLoggedKinds = new Set<string>();
+  /**
+   * After first diff-critic reject: effective cost ceiling (spent + repair window).
+   * null = use limits.maxCostUsd only.
+   */
+  private criticRepairCostCapUsd: number | null = null;
   /** Cumulative exploration tools across the entire session (never resets).
    *  Used for progressive escalation to prevent A01-class analysis paralysis. */
   private cumulativeExplorationTools = 0;
@@ -939,6 +947,7 @@ export class ChatEngine {
       consecutiveNonMutatingShells: this.consecutiveNonMutatingShells,
       toolsWithoutWrite: this.toolsWithoutWrite,
       phase: this._lastPhase,
+      shadowLoggedKinds: this.exploreShadowLoggedKinds,
     };
     const out = applyExploreFusesPolicy({
       executeIntent,
@@ -959,6 +968,9 @@ export class ChatEngine {
     this.restrictToolsNextTurn = state.restrictToolsNextTurn;
     this.consecutiveNonMutatingShells = state.consecutiveNonMutatingShells;
     this.toolsWithoutWrite = state.toolsWithoutWrite;
+    if (state.shadowLoggedKinds) {
+      this.exploreShadowLoggedKinds = state.shadowLoggedKinds;
+    }
     return out;
   }
 
@@ -978,11 +990,39 @@ export class ChatEngine {
   }
 
   private checkBudgets(): { ok: boolean; reason?: string } {
+    const sessionCost = globalCostTracker.getSessionSummary().totalCostUSD;
+    // After first critic reject, use the tighter repair cost cap when lower.
+    const maxCostUsd =
+      this.criticRepairCostCapUsd != null
+        ? Math.min(this.limits.maxCostUsd, this.criticRepairCostCapUsd)
+        : this.limits.maxCostUsd;
     return checkCostWallBudgets({
-      totalCostUsd: globalCostTracker.getSessionSummary().totalCostUSD,
-      maxCostUsd: this.limits.maxCostUsd,
+      totalCostUsd: sessionCost,
+      maxCostUsd,
       sessionStartTime: this._sessionStartTime,
       maxWallMs: this.limits.maxWallMs,
+    });
+  }
+
+  /**
+   * On first diff-critic reject: shrink remaining cost budget to a repair window
+   * so thrash cannot burn the full general_swe $3 after a correct reject.
+   */
+  private applyCriticRepairCostBudget(): void {
+    if (this.criticRepairCostCapUsd != null) return;
+    const spent = globalCostTracker.getSessionSummary().totalCostUSD;
+    const { capUsd, repairWindowUsd } = computeCriticRepairCostCap({
+      spentUsd: spent,
+      sessionMaxCostUsd: this.limits.maxCostUsd,
+    });
+    this.criticRepairCostCapUsd = capUsd;
+    this.policyEventLog.record({
+      at_turn: this._turnIndex,
+      kind: 'progress_policy',
+      detail:
+        `critic_repair_budget spent=${spent.toFixed(3)} ` +
+        `repair_window=${repairWindowUsd.toFixed(3)} cap=${capUsd.toFixed(3)} ` +
+        `session_max=${this.limits.maxCostUsd.toFixed(2)}`,
     });
   }
 
@@ -1905,6 +1945,19 @@ export class ChatEngine {
         for (const ev of zeroWriteDecision.events) {
           this.policyEventLog.record(ev);
         }
+        // Host/toolchain env block (ImportError, missing pytest, conftest) →
+        // terminal ENV_BLOCKED instead of progress_terminal thrash.
+        const envBlockedSignal = (() => {
+          for (const t of turnSlice) {
+            const blob = [t.detail, t.error, t.stdout, t.stderr]
+              .filter(Boolean)
+              .join('\n');
+            if (blob && detectEnvBlockedFromText(blob)) {
+              return blob.replace(/\s+/g, ' ').trim().slice(0, 220);
+            }
+          }
+          return null;
+        })();
         const arb = parityArbitrateCycle({
           rt: this.parity,
           fuseLabels: exploreFuses.labels,
@@ -1913,6 +1966,7 @@ export class ChatEngine {
           explorationFuseMessage: exploreFuses.explorationFuseMessage,
           shellSoftMessage: exploreFuses.shellSoftMessage,
           investigateBudgetMessage: exploreFuses.investigateBudgetMessage,
+          investigateHardCapTerminal: exploreFuses.investigateHardCapTerminal,
           stallMessage:
             stallIntervention && stallIntervention.level !== 'kill'
               ? stallIntervention.message
@@ -1921,11 +1975,17 @@ export class ChatEngine {
             stallIntervention?.level === 'kill' ? stallIntervention.message : null,
           zeroWriteCandidate: zeroWriteDecision.arbiterMessage,
           zeroWriteTerminalMessage: zeroWriteDecision.terminalMessage,
+          envBlockedSignal,
         });
         if (arb.policySource) {
           this.policyEventLog.record({
             at_turn: turn,
-            kind: arb.terminalAnswer ? 'progress_terminal' : 'progress_policy',
+            kind:
+              arb.policySource === 'env_blocked'
+                ? 'progress_policy'
+                : arb.terminalAnswer
+                  ? 'progress_terminal'
+                  : 'progress_policy',
             detail: `${arb.policySource}: ${arb.policyMessage ?? arb.terminalAnswer ?? ''}`,
           });
         }
@@ -2163,6 +2223,8 @@ export class ChatEngine {
         }
         if (streamCritic === 'reject') {
           _turnSpan.setAttribute('babel.chat.critic_strike', this.criticStrikes);
+          // Shrink remaining cost to a repair window (do not burn full session max).
+          this.applyCriticRepairCostBudget();
           // Inject critic feedback so the model knows WHY and can fix it.
           const receipt = this.lastCriticReceipt;
           if (receipt?.reasons?.length) {
@@ -2180,7 +2242,12 @@ export class ChatEngine {
                 'Fix these issues before trying to complete again.',
                 'If the critic says you modified the wrong method or API,',
                 're-read the issue to identify the CORRECT symbol to fix.',
-              ].join('\n'),
+                this.criticRepairCostCapUsd != null
+                  ? `\nCost repair window active — finish the fix soon (cap $${this.criticRepairCostCapUsd.toFixed(2)}).`
+                  : '',
+              ]
+                .filter(Boolean)
+                .join('\n'),
             });
           }
           endSpan(_turnSpan, SpanStatusCode.OK);
