@@ -271,7 +271,9 @@ export function handleWhyStopped(ctx: ReplContext, args: string[]): void {
       }
       // Also accept top-level phase-gate counters if present
       const answer = String(cliPayload?.answer ?? '');
-      envBlocked = detectEnvBlockedFromText(answer) || status === 'ENV_BLOCKED';
+      envBlocked =
+        detectEnvBlockedFromText(answer, { hasAnyWrites }) ||
+        status === 'ENV_BLOCKED';
       break;
     }
     const policyPath = path.join(runDir, 'policy-events.jsonl');

@@ -1945,14 +1945,19 @@ export class ChatEngine {
         for (const ev of zeroWriteDecision.events) {
           this.policyEventLog.record(ev);
         }
-        // Host/toolchain env block (ImportError, missing pytest, conftest) →
+        // Host/toolchain env block (missing pytest, host deps before patch) →
         // terminal ENV_BLOCKED instead of progress_terminal thrash.
+        // After writes, import failures are treated as patch-induced (not host env).
+        const sessionHasWrites = this.hasAnyWrites();
         const envBlockedSignal = (() => {
           for (const t of turnSlice) {
             const blob = [t.detail, t.error, t.stdout, t.stderr]
               .filter(Boolean)
               .join('\n');
-            if (blob && detectEnvBlockedFromText(blob)) {
+            if (
+              blob &&
+              detectEnvBlockedFromText(blob, { hasAnyWrites: sessionHasWrites })
+            ) {
               return blob.replace(/\s+/g, ' ').trim().slice(0, 220);
             }
           }
@@ -2044,15 +2049,20 @@ export class ChatEngine {
         }
 
         // Implementor I-03: refuse silent complete on execute with zero writes
-        // (allow env_blocked answers through).
+        // (allow env_blocked answers through). Import errors after writes are not host env.
+        const completionHasWrites = this.hasAnyWrites();
+        const envDetectOpts = { hasAnyWrites: completionHasWrites };
         const envBlocked =
-          detectEnvBlockedFromText(answer) ||
+          detectEnvBlockedFromText(answer, envDetectOpts) ||
           this.toolCallLog.some((t) =>
-            detectEnvBlockedFromText(`${t.detail ?? ''} ${t.error ?? ''}`),
+            detectEnvBlockedFromText(
+              `${t.detail ?? ''} ${t.error ?? ''}`,
+              envDetectOpts,
+            ),
           );
         const completionPref = evaluateCompletionPrefersPatch({
           executeIntent: resolvedIntent === 'execute',
-          hasAnyWrites: this.hasAnyWrites(),
+          hasAnyWrites: completionHasWrites,
           envBlocked,
         });
         if (!completionPref.allowComplete && completionPref.message) {

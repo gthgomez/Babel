@@ -140,22 +140,62 @@ export function evaluateCompletionPrefersPatch(input: {
 }
 
 /**
- * Detect common environment / toolchain failure signals in observation text.
+ * Options for write-aware env_blocked detection.
  *
- * Covers:
- * - Missing binaries (pytest/npm/python not found) — W0.4
- * - Import / dependency failures that are **host env**, not patch logic
- *   (ImportError while loading conftest, ModuleNotFoundError, cannot import name)
- *
- * Pure; no I/O. Used to stop progress-terminal thrash and score ENV_BLOCKED.
+ * After the agent has mutated files, import/module failures are often
+ * patch-induced (agent broke the package) — not host toolchain gaps.
+ * Missing binaries (pytest not on PATH) remain host env regardless of writes.
  */
-export function detectEnvBlockedFromText(text: string): boolean {
+export type EnvBlockedDetectOptions = {
+  /** When true, suppress ambiguous import-class signals as host ENV_BLOCKED. */
+  hasAnyWrites?: boolean;
+};
+
+/**
+ * Host-authoritative toolchain signals: missing binaries / explicit env block.
+ * Always count as env_blocked whether or not the agent has written a patch.
+ */
+export function detectHostToolchainEnvBlockedFromText(text: string): boolean {
   const t = text.toLowerCase();
   if (/\benv_blocked\b/.test(t)) return true;
-  if (/\benvironment (is )?(not |un)(available|ready|configured)\b/.test(t)) return true;
+  if (/\benvironment (is )?(not |un)(available|ready|configured)\b/.test(t)) {
+    return true;
+  }
 
-  // Python/JS import failures (host deps / conftest load) — product pilot evidence
-  // from qutebrowser: "ImportError while loading conftest '...'"
+  const missing =
+    /\bnot found\b/.test(t) ||
+    /\bis not recognized\b/.test(t) ||
+    /\bcommand not found\b/.test(t) ||
+    /\bcannot find\b/.test(t) ||
+    /\bcould not find\b/.test(t) ||
+    /\benoent\b/.test(t) ||
+    /\bwas not found\b/.test(t) ||
+    /\bno such file or directory\b/.test(t);
+
+  // Toolchain binary / runner names only — not package-level "no module named".
+  const toolchain =
+    /\bpytest\b/.test(t) ||
+    /\bnpm\b/.test(t) ||
+    /\bnpx\b/.test(t) ||
+    /\bnode\b/.test(t) ||
+    /\bpython\b/.test(t) ||
+    /\bpython3\b/.test(t) ||
+    /\bpip\b/.test(t) ||
+    /\btsc\b/.test(t);
+
+  return toolchain && missing;
+}
+
+/**
+ * Import / module-load failures.
+ *
+ * Without writes these usually mean host deps or a broken host install
+ * (SWE-Bench Pro pilot: qutebrowser ImportError while loading conftest).
+ * After writes they are often agent-broken imports — do not terminalize as
+ * host ENV_BLOCKED (see detectEnvBlockedFromText + hasAnyWrites).
+ */
+export function detectImportEnvAmbiguousFromText(text: string): boolean {
+  const t = text.toLowerCase();
   if (/\bimporterror\b/.test(t)) return true;
   if (/\bmodulenotfounderror\b/.test(t)) return true;
   if (/\bcannot import name\b/.test(t)) return true;
@@ -168,30 +208,25 @@ export function detectEnvBlockedFromText(text: string): boolean {
   ) {
     return true;
   }
+  return false;
+}
 
-  const missing =
-    /\bnot found\b/.test(t) ||
-    /\bis not recognized\b/.test(t) ||
-    /\bno module named\b/.test(t) ||
-    /\bcommand not found\b/.test(t) ||
-    /\bcannot find\b/.test(t) ||
-    /\bcould not find\b/.test(t) ||
-    /\benoent\b/.test(t) ||
-    /\bwas not found\b/.test(t) ||
-    /\bno such file or directory\b/.test(t);
-
-  const toolchain =
-    /\bpytest\b/.test(t) ||
-    /\bnpm\b/.test(t) ||
-    /\bnpx\b/.test(t) ||
-    /\bnode\b/.test(t) ||
-    /\bpython\b/.test(t) ||
-    /\bpython3\b/.test(t) ||
-    /\bpip\b/.test(t) ||
-    /\btsc\b/.test(t) ||
-    /\bconftest\b/.test(t);
-
-  return toolchain && missing;
+/**
+ * Detect environment / toolchain failure signals in observation text.
+ *
+ * Covers:
+ * - Missing binaries (pytest/npm/python not found) — always host env
+ * - Import / dependency failures — host env only when no agent writes yet
+ *
+ * Pure; no I/O. Used to stop progress-terminal thrash and score ENV_BLOCKED.
+ */
+export function detectEnvBlockedFromText(
+  text: string,
+  options?: EnvBlockedDetectOptions,
+): boolean {
+  if (detectHostToolchainEnvBlockedFromText(text)) return true;
+  if (options?.hasAnyWrites) return false;
+  return detectImportEnvAmbiguousFromText(text);
 }
 
 /**
@@ -201,8 +236,9 @@ export function detectEnvBlockedFromText(text: string): boolean {
 export function extractEnvBlockedReason(
   text: string,
   maxLen = 200,
+  options?: EnvBlockedDetectOptions,
 ): string | null {
-  if (!detectEnvBlockedFromText(text)) return null;
+  if (!detectEnvBlockedFromText(text, options)) return null;
   const compact = text.replace(/\s+/g, ' ').trim();
   const slice = compact.slice(0, maxLen);
   return slice.length < compact.length ? `${slice}…` : slice;
@@ -216,10 +252,11 @@ export function detectEnvBlockedFromToolLog(
     stdout?: string;
     stderr?: string;
   }>,
+  options?: EnvBlockedDetectOptions,
 ): boolean {
   for (const t of toolCalls) {
     const blob = [t.detail, t.error, t.stdout, t.stderr].filter(Boolean).join('\n');
-    if (blob && detectEnvBlockedFromText(blob)) return true;
+    if (blob && detectEnvBlockedFromText(blob, options)) return true;
   }
   return false;
 }
@@ -268,9 +305,10 @@ export function resolveImplementorHarnessFields(input: {
   failure_class_hint: string | null;
   operator_card: string | null;
 } {
+  const envOpts: EnvBlockedDetectOptions = { hasAnyWrites: input.hasAnyWrites };
   const envBlocked =
-    detectEnvBlockedFromText(input.answer ?? '') ||
-    detectEnvBlockedFromToolLog(input.toolCalls ?? []);
+    detectEnvBlockedFromText(input.answer ?? '', envOpts) ||
+    detectEnvBlockedFromToolLog(input.toolCalls ?? [], envOpts);
   const honesty = classifyEmptyPatchHonesty({
     emptyPatch: input.emptyPatch,
     envBlocked,
@@ -294,7 +332,11 @@ export function resolveImplementorHarnessFields(input: {
     operator_card: envBlocked
       ? formatEnvBlockedOperatorCard({
           hasAnyWrites: input.hasAnyWrites,
-          signal: extractEnvBlockedSignal(input.answer ?? '', input.toolCalls ?? []),
+          signal: extractEnvBlockedSignal(
+            input.answer ?? '',
+            input.toolCalls ?? [],
+            envOpts,
+          ),
         })
       : null,
   };
@@ -303,13 +345,14 @@ export function resolveImplementorHarnessFields(input: {
 function extractEnvBlockedSignal(
   answer: string,
   toolCalls: Array<{ detail?: string; error?: string; stdout?: string; stderr?: string }>,
+  options?: EnvBlockedDetectOptions,
 ): string {
-  if (detectEnvBlockedFromText(answer)) {
+  if (detectEnvBlockedFromText(answer, options)) {
     return answer.slice(0, 160).replace(/\s+/g, ' ').trim();
   }
   for (const t of toolCalls) {
     const blob = [t.detail, t.error, t.stdout, t.stderr].filter(Boolean).join(' ');
-    if (blob && detectEnvBlockedFromText(blob)) {
+    if (blob && detectEnvBlockedFromText(blob, options)) {
       return blob.slice(0, 160).replace(/\s+/g, ' ').trim();
     }
   }
@@ -355,7 +398,11 @@ export function classifyImplementorTerminal(input: {
 }): ImplementorTerminalStatus {
   if (input.status === 'cancelled') return 'CANCELLED';
   if (input.budgetExceeded) return 'BUDGET_EXCEEDED';
-  if (input.envBlocked || (input.answer && detectEnvBlockedFromText(input.answer))) {
+  if (
+    input.envBlocked ||
+    (input.answer &&
+      detectEnvBlockedFromText(input.answer, { hasAnyWrites: input.hasAnyWrites }))
+  ) {
     return 'ENV_BLOCKED';
   }
   if (input.status === 'completed') return 'ANSWER_READY';
