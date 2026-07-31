@@ -3,6 +3,8 @@
  * Keeps size pressure off chatEngine.ts — prefer growing this module.
  */
 
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { ChatMessage } from './chatToolDefinitions.js';
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
 import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
@@ -293,16 +295,22 @@ export function pushRoutingReceiptFromMetadata(
   });
 }
 
-export async function persistPolicyEventsJsonl(
+/**
+ * Persist policy events to runDir/policy-events.jsonl.
+ *
+ * **Synchronous on purpose**: headless CLI exits immediately after printing
+ * JSON. An async fire-and-forget write races process exit and left Phase-2
+ * shadow campaigns with empty scoreboards (run_dir present, 0-byte/missing
+ * policy-events.jsonl). Callers must not treat this as best-effort async I/O.
+ */
+export function persistPolicyEventsJsonl(
   runDir: string,
   log: PolicyEventLog,
-): Promise<void> {
+): void {
   const jsonl = log.toJSONL();
   if (!jsonl) return;
-  const { writeFile, mkdir } = await import('node:fs/promises');
-  const { join } = await import('node:path');
-  await mkdir(runDir, { recursive: true });
-  await writeFile(join(runDir, 'policy-events.jsonl'), jsonl, 'utf-8');
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, 'policy-events.jsonl'), jsonl, 'utf-8');
 }
 
 /**
