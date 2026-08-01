@@ -274,6 +274,23 @@ export function probePythonImport(input: {
 }
 
 /**
+ * Truncate probe text but keep the tail when long Windows paths push the real
+ * `No module named X` past a head-only slice (blocks multi-round soft-deps).
+ */
+export function truncateProbeDetail(blob: string, max = 900): string {
+  if (blob.length <= max) return blob;
+  // Prefer keeping ModuleNotFound / No module named lines when present.
+  const missingHit = blob.search(/No module named|ModuleNotFoundError/i);
+  if (missingHit >= 0) {
+    const start = Math.max(0, missingHit - 120);
+    const slice = blob.slice(start, start + max);
+    return start > 0 ? `…${slice}` : slice;
+  }
+  // Default: tail (pytest prints the root cause last)
+  return `…${blob.slice(-max)}`;
+}
+
+/**
  * Light verify readiness: `python -m pytest --collect-only -q` (optionally one path).
  * Catches ImportError-while-loading-conftest that bare package import misses.
  */
@@ -306,21 +323,24 @@ export function probePytestCollect(input: {
     /\bwhile loading conftest\b/.test(lower) ||
     /\bno module named\b/.test(lower)
   ) {
-    return { ok: false, detail: blob.slice(0, 500) };
+    return { ok: false, detail: truncateProbeDetail(blob) };
   }
   if (r.error) {
     return { ok: false, detail: r.error.message.slice(0, 500) };
   }
   // pytest missing
   if (/no module named pytest|No module named pytest/i.test(blob)) {
-    return { ok: false, detail: blob.slice(0, 500) };
+    return { ok: false, detail: truncateProbeDetail(blob) };
   }
   if (r.status === 0 || /no tests collected/i.test(blob)) {
     return { ok: true, detail: blob.slice(0, 200) || 'collect_ok' };
   }
   // Other non-zero: still blocked if looks like env, else soft-ok when package imported
   if (r.status !== 0 && r.status != null) {
-    return { ok: false, detail: blob.slice(0, 500) || `pytest collect exit ${r.status}` };
+    return {
+      ok: false,
+      detail: truncateProbeDetail(blob) || `pytest collect exit ${r.status}`,
+    };
   }
   return { ok: true, detail: blob.slice(0, 200) };
 }
@@ -358,7 +378,11 @@ export const SOFT_DEP_PIP_FALLBACK: Readonly<Record<string, readonly string[]>> 
   web: ['web.py'],
   /** PyPI name for `import multipart` (OpenLibrary requirements pin multipart==0.2.4). */
   multipart: ['multipart'],
-  infogami: ['infogami'],
+  /**
+   * OpenLibrary vendors infogami as a git submodule (often empty on shallow clones).
+   * Prefer git URL over bare `pip install infogami` (not a reliable PyPI package).
+   */
+  infogami: ['git+https://github.com/internetarchive/infogami.git'],
   eventer: ['eventer'],
   psycopg2: ['psycopg2-binary'],
 };
@@ -412,16 +436,19 @@ export function resolveSoftDepSpecForModule(
     const found = findRequirementLineForModule(body, mod);
     if (found) return found;
   }
-  // Vendored infogami (common on OpenLibrary checkouts)
+  // Vendored infogami (OpenLibrary) — only when submodule is actually populated
   if (mod === 'infogami') {
     for (const rel of ['vendor/infogami', 'infogami']) {
       const abs = join(workspaceRoot, rel);
       try {
-        if (existsSync(join(abs, 'setup.py')) || existsSync(join(abs, 'pyproject.toml'))) {
-          return `-e ${rel}`;
-        }
-        // Plain package dir without setup — still try path install of parent marker
-        if (existsSync(join(abs, '__init__.py')) || existsSync(join(abs, 'infobase'))) {
+        // Skip empty submodule placeholders / gitlinks (no real package tree).
+        const hasSetup =
+          existsSync(join(abs, 'setup.py')) || existsSync(join(abs, 'pyproject.toml'));
+        const hasPkg =
+          existsSync(join(abs, '__init__.py')) ||
+          existsSync(join(abs, 'infobase')) ||
+          existsSync(join(abs, 'infogami', '__init__.py'));
+        if (hasSetup || hasPkg) {
           return `-e ${rel}`;
         }
       } catch {
