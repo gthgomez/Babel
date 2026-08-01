@@ -13,7 +13,7 @@ This folder contains active roadmaps and implementation plans. Superseded or com
 ## Canonical four-way competitive plan (Codex + Grok + OpenCode)
 
 - [**Babel vs Codex · Grok · OpenCode Harness Teardown (2026-07-24)**](../audit/BABEL_VS_CODEX_GROK_OPENCODE_HARNESS_TEARDOWN_2026-07-24.md) — cross-competitor prioritization and W0–W7 catch-up waves. Pair with 2026-08-01 reliable-executor roadmap for implementation order.
-- Aug-1 pairwise research (status): [OpenCode](../status/BABEL_VS_OPENCODE_SOURCE_FIRST_RESEARCH_2026-08-01.md), [Codex](../status/BABEL_VS_CODEX_OSS_RUNTIME_ARCHITECTURE_2026-08-01.md), [Grok Build](../status/BABEL_VS_GROK_BUILD_HARNESS_2026-08-01.md)
+- Aug-1 pairwise research notes (OpenCode / Codex OSS / Grok Build harness) may land under `docs/status/` in a separate research PR; until then treat the 2026-08-01 reliable-executor roadmap as the action layer.
 
 ## Canonical product upgrade (Grok-class agency)
 
