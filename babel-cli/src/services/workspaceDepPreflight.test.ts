@@ -19,6 +19,7 @@ import {
   resolveVenvPython,
   runWorkspaceDepPreflight,
   SOFT_DEP_MAX_ROUNDS,
+  truncateProbeDetail,
 } from './workspaceDepPreflight.js';
 
 describe('workspaceDepPreflight', () => {
@@ -69,6 +70,34 @@ E   ModuleNotFoundError: No module named 'web'
       resolveSoftDepSpecForModule(dir, 'infogami', []),
       '-e vendor/infogami',
     );
+    // Empty submodule dir (OpenLibrary shallow clone) → git URL fallback
+    const empty = mkdtempSync(join(tmpdir(), 'dep-infogami-empty-'));
+    mkdirSync(join(empty, 'vendor', 'infogami'), { recursive: true });
+    assert.match(
+      resolveSoftDepSpecForModule(empty, 'infogami', []) ?? '',
+      /github\.com\/internetarchive\/infogami/,
+    );
+  });
+
+  test('W1 multi-round: truncateProbeDetail keeps No module named on long paths', () => {
+    const longPath = 'C:\\\\' + 'x'.repeat(400) + '\\\\openlibrary\\\\conftest.py';
+    const blob = [
+      `ImportError while loading conftest '${longPath}'.`,
+      'openlibrary\\conftest.py:5: in <module>',
+      '    import web',
+      '.babel-venv\\lib\\python3.10\\site-packages\\web\\__init__.py:4: in <module>',
+      '    from . import (  # noqa: F401',
+      '.babel-venv\\lib\\python3.10\\site-packages\\web\\debugerror.py:19: in <module>',
+      '    from . import webapi as web',
+      '.babel-venv\\lib\\python3.10\\site-packages\\web\\webapi.py:12: in <module>',
+      '    import multipart',
+      "E   ModuleNotFoundError: No module named 'multipart'",
+    ].join('\n');
+    // Head-only slice(0,500) would drop the missing module name on Windows paths.
+    assert.equal(parseMissingModulesFromProbe(blob.slice(0, 500)).includes('multipart'), false);
+    const kept = truncateProbeDetail(blob, 500);
+    assert.ok(kept.includes('multipart') || kept.includes("No module named"));
+    assert.deepEqual(parseMissingModulesFromProbe(kept), ['multipart']);
   });
 
   test('packageHintFromRepo maps repo leaf and hyphens', () => {
