@@ -190,9 +190,10 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
     verificationPolicy: 'required',
     readThrashToolBudget: 16,
     shellSoftBudget: 4,
-    // Soft nudge earlier; hard terminal well before pilot's 53-tool thrash.
+    // Soft nudge earlier; hard terminal before wall thrash (Wave A: soft spam to
+    // tools_without_write=13 then wall kill — hard cap 16 never fired).
     investigateToolBudget: 8,
-    investigateToolHardCap: 16,
+    investigateToolHardCap: 12,
     maxFullReadsPerFile: 3,
     zeroWriteHardStopTurns: 0, // disabled — stall shadow mode handles thrash
     restrictToolsOnPolicyFire: false,

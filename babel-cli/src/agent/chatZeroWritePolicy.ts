@@ -197,6 +197,11 @@ export interface ExploreFuseState {
    * Prevents 12× force_mutate_shadow spam while soft nudges may still re-fire.
    */
   shadowLoggedKinds?: Set<string>;
+  /**
+   * Soft investigate budget already nudged once since last write.
+   * Prevents Wave A–style 13× soft spam without terminalizing.
+   */
+  investigateSoftNudgeDone?: boolean;
 }
 
 /** Result of fuse evaluation — messages may be deferred to the policy arbiter. */
@@ -417,13 +422,19 @@ export function applyExploreFuses(input: {
   }
 
   // Implementor W1: investigate tool budget (soft force-mutate by tool count).
+  // Fire once per zero-write streak when toolsWithoutWrite first reaches soft
+  // budget — not every later turn at the same count or above (Wave A spam).
+  // Hard cap remains the terminal stop.
+  if (input.hasAnyWrites || s.toolsWithoutWrite === 0) {
+    s.investigateSoftNudgeDone = false;
+  }
   const invEval = evaluateInvestigateToolBudget({
     toolCallCount: s.toolsWithoutWrite,
     budget: tune.investigateToolBudget,
     hasAnyWrites: input.hasAnyWrites,
     phase: s.phase,
   });
-  if (invEval.fire && invEval.message) {
+  if (invEval.fire && invEval.message && !s.investigateSoftNudgeDone) {
     investigateBudgetMessage = invEval.message;
     if (!defer) input.pushUser(invEval.message);
     out.push('[Implementor: investigate tool budget]');
@@ -432,10 +443,11 @@ export function applyExploreFuses(input: {
       kind: 'investigate_budget',
       detail: `tools_without_write=${s.toolsWithoutWrite}`,
     });
+    s.investigateSoftNudgeDone = true;
   }
 
   // Hard cap: stop explore thrash (pilot: 53 tools before first write).
-  // Soft budget still nudges; hard cap is a terminal candidate for the arbiter.
+  // Soft budget still nudges once; hard cap is a terminal candidate for the arbiter.
   const hardCap = resolveInvestigateToolHardCap(
     tune.investigateToolBudget,
     tune.investigateToolHardCap,
