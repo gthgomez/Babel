@@ -8,6 +8,8 @@ import {
   isAuthoritativeVerifierCommand,
   isInlineProbeVerifier,
   isLikelyVerifierCommand,
+  isPackageManagerInstallCommand,
+  matchesAuthoritativeVerifierAllowlist,
   requiresGreenVerifier,
   resolveVerificationPolicy,
   taskAsksForVerifier,
@@ -228,10 +230,19 @@ describe('isLikelyVerifierCommand', () => {
     assert.equal(isLikelyVerifierCommand('set FOO=bar'), false);
   });
 
-  test('defaults to true for unknown commands', () => {
+  test('defaults to true for unknown commands (attempt logging only)', () => {
     assert.equal(isLikelyVerifierCommand('run_tests.sh'), true);
     assert.equal(isLikelyVerifierCommand('my_custom_test_runner'), true);
     assert.equal(isLikelyVerifierCommand('./scripts/verify.sh'), true);
+  });
+
+  test('package manager installs are not likely verifiers (4a5d hole)', () => {
+    assert.equal(isLikelyVerifierCommand('pip install requests'), false);
+    assert.equal(isLikelyVerifierCommand('pip3 install -U web'), false);
+    assert.equal(isLikelyVerifierCommand('python -m pip install requests'), false);
+    assert.equal(isLikelyVerifierCommand('npm install lodash'), false);
+    assert.equal(isPackageManagerInstallCommand('pip install requests'), true);
+    assert.equal(isPackageManagerInstallCommand('pytest tests/'), false);
   });
 
   test('empty or whitespace returns false', () => {
@@ -465,7 +476,7 @@ describe('isAgentOwnedAdHocVerifier / isAuthoritativeVerifierCommand (B2)', () =
     assert.equal(isAgentOwnedAdHocVerifier('pytest tests/test_verify_api.py'), false);
   });
 
-  test('authoritative requires likely + not agent-owned', () => {
+  test('authoritative requires allowlist + not agent-owned', () => {
     assert.equal(isAuthoritativeVerifierCommand('pytest tests/'), true);
     assert.equal(isAuthoritativeVerifierCommand('npm test'), true);
     assert.equal(isAuthoritativeVerifierCommand('del _verify_fix.py'), false);
@@ -474,6 +485,58 @@ describe('isAgentOwnedAdHocVerifier / isAuthoritativeVerifierCommand (B2)', () =
     // still "likely" for logging, not authoritative for honesty
     assert.equal(isLikelyVerifierCommand('python _verify_fix.py'), true);
     assert.equal(isAuthoritativeVerifierCommand('python _verify_fix.py'), false);
+  });
+
+  test('W1 deny-by-default: unknown and install commands never authoritative', () => {
+    // Pre-W1 hole: isLikely default-true made pip install authoritative
+    assert.equal(isAuthoritativeVerifierCommand('pip install requests'), false);
+    assert.equal(isAuthoritativeVerifierCommand('python -m pip install requests'), false);
+    assert.equal(isAuthoritativeVerifierCommand('npm install lodash'), false);
+    assert.equal(isAuthoritativeVerifierCommand('yarn add left-pad'), false);
+    // Unknown custom scripts are not authoritative without binding
+    assert.equal(isAuthoritativeVerifierCommand('run_tests.sh'), false);
+    assert.equal(isAuthoritativeVerifierCommand('my_custom_test_runner'), false);
+    assert.equal(isAuthoritativeVerifierCommand('./scripts/verify.sh'), false);
+    // 4a5d ad-hoc + install
+    assert.equal(isAuthoritativeVerifierCommand('python _test_wikidata.py'), false);
+    assert.equal(isAuthoritativeVerifierCommand('python _test_wikidata.py'), false);
+  });
+
+  test('W1 bound commands can authorize dataset fail_to_pass paths', () => {
+    const bound = [
+      'python -m pytest openlibrary/tests/core/test_wikidata.py::test_get_statement_values -q',
+    ];
+    assert.equal(
+      isAuthoritativeVerifierCommand(
+        'python -m pytest openlibrary/tests/core/test_wikidata.py::test_get_statement_values -q',
+        bound,
+      ),
+      true,
+    );
+    // Bound exact prefix still requires not install/ad-hoc
+    assert.equal(isAuthoritativeVerifierCommand('pip install requests', bound), false);
+    assert.equal(
+      matchesAuthoritativeVerifierAllowlist(
+        'python -m pytest openlibrary/tests/core/test_wikidata.py::test_get_statement_values -q',
+        bound,
+      ),
+      true,
+    );
+  });
+
+  test('evaluate honesty rejects pip install green receipt (4a5d class)', () => {
+    const r = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: 'strict',
+      lastVerifierReceipt: {
+        command: 'pip install requests',
+        exit_code: 0,
+        summary: 'Successfully installed requests',
+      },
+      toolCallLog: [],
+    });
+    assert.equal(r.allow, false);
+    assert.equal(r.reason, 'verifier_missing');
   });
 
   test('inline probes (python -c / node -e) are never authoritative', () => {

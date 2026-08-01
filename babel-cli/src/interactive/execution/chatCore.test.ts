@@ -485,6 +485,29 @@ describe('completion_verification in buildChatRunPayload', () => {
     const cv = payload['completion_verification'] as Record<string, unknown>;
     assert.equal(cv['status'], 'pass');
     assert.equal(cv['required'], true);
+    assert.equal(cv['authority'], true);
+  });
+
+  it('non-authoritative pip install receipt never status=pass (4a5d hole)', () => {
+    const payload = buildChatRunPayload(
+      {
+        status: 'completed',
+        answer: 'done',
+        usage: EMPTY_USAGE,
+        conversation: [],
+        verifierReceipt: {
+          command: 'pip install requests',
+          exit_code: 0,
+          summary: 'Successfully installed',
+        },
+        gatePolicy: 'strict',
+      },
+      { task: 'fix', projectRoot: '/tmp/project' },
+    );
+    const cv = payload['completion_verification'] as Record<string, unknown>;
+    assert.equal(cv['status'], 'not_run');
+    assert.equal(cv['authority'], false);
+    assert.match(String(cv['reason']), /not an authoritative/i);
   });
 
   it('verifierReceipt with non-zero exit_code sets status=fail required=true', () => {

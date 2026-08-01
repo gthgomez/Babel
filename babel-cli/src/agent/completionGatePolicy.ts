@@ -7,17 +7,86 @@ import { isSuccessfulDirectMutation, isVerifierAttemptTool } from './mutationToo
 import { getChatTaskTune, isStrictVerification, type ChatTaskClass, type VerificationPolicy } from '../config/chatTaskClass.js';
 import { buildGateRejectionMessage, hasSubAgentWrites } from './chatEngineCriticBudget.js';
 
+/** Known project/dataset test runners (prefixes; case-insensitive match on trimmed cmd). */
+const AUTHORITATIVE_VERIFIER_PREFIXES = [
+  'npm run test',
+  'npm test',
+  'npx jest',
+  'npx vitest',
+  'python -m pytest',
+  'python -m unittest',
+  'python3 -m pytest',
+  'python3 -m unittest',
+  'py -m pytest',
+  'py -m unittest',
+  'pytest',
+  'cargo test',
+  'go test',
+  'make test',
+  'jest',
+  'mocha',
+  'vitest',
+  'deno test',
+  'bun test',
+  'ctest',
+  'dotnet test',
+  'rake test',
+  'rspec',
+  'tox',
+  'nox',
+  'poetry run pytest',
+  'poetry run test',
+  'pdm run pytest',
+  'pdm run test',
+] as const;
+
 /**
- * Heuristic: is this command likely a real test/verification run?
- * Returns false for obviously non-test commands (shell builtins, file ops).
- * Defaults to true for unknown commands (be generous — don't block legitimate
- * but unusual commands).
+ * Package-manager / env-bootstrap commands that must never green completion.
+ * Evidence (SWE-Pro 4a5d reval 2026-08-01): `pip install requests` exit 0 became
+ * lastVerifierReceipt / completion_verification pass under default-true likely-verifier.
+ *
+ * Pure function; no I/O.
+ */
+export function isPackageManagerInstallCommand(
+  command: string | null | undefined,
+): boolean {
+  if (command == null) return false;
+  const lower = command.trim().toLowerCase();
+  if (!lower) return false;
+
+  // pip / python -m pip / uv pip
+  if (
+    /^(?:python3?|py)\s+-m\s+pip\s+install\b/.test(lower) ||
+    /^(?:pip3?|pipx)\s+install\b/.test(lower) ||
+    /^uv\s+pip\s+install\b/.test(lower) ||
+    /^uv\s+add\b/.test(lower)
+  ) {
+    return true;
+  }
+  // npm / yarn / pnpm / bun install or add (not npm test)
+  if (
+    /^(?:npm|yarn|pnpm|bun)\s+(?:install|add|i)\b/.test(lower) ||
+    /^npm\s+ci\b/.test(lower)
+  ) {
+    return true;
+  }
+  if (/^(?:cargo\s+add|go\s+get|composer\s+install|gem\s+install|bundle\s+install)\b/.test(lower)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Heuristic: is this command likely a verification *attempt* (for logging / counters)?
+ * Returns false for shell junk and package installs.
+ * Defaults to true for unknown commands so unusual project scripts still log as attempts.
  *
  * Pure function; no I/O.
  *
  * Note: B1 shell junk (`del`, `echo`, …) is rejected here. B2 agent-owned
- * ad-hoc scripts (`_verify*.py`) are still "likely" verifiers for logging
- * but fail {@link isAuthoritativeVerifierCommand} used by honesty gates.
+ * ad-hoc scripts (`_verify*.py`) are still "likely" for logging but fail
+ * {@link isAuthoritativeVerifierCommand} used by honesty gates.
+ * Package installs are neither likely nor authoritative.
  */
 export function isLikelyVerifierCommand(command: string | null | undefined): boolean {
   if (command == null) return false;
@@ -26,35 +95,18 @@ export function isLikelyVerifierCommand(command: string | null | undefined): boo
 
   const lower = trimmed.toLowerCase();
 
-  // Known verifier test commands — check first so they beat any coincidental
-  // prefix match against the non-verifier list below.
+  if (isPackageManagerInstallCommand(trimmed)) return false;
+
+  // Known verifier / probe prefixes (includes inline probes — still "likely" for logging)
   const verifierPrefixes = [
-    'npm run test',
-    'npm test',
-    'python -m pytest',
-    'python -m unittest',
+    ...AUTHORITATIVE_VERIFIER_PREFIXES,
     'python -c',
     'python3 -c',
-    'python3 -m pytest',
-    'python3 -m unittest',
+    'py -c',
     'node -e',
-    'pytest',
-    'cargo test',
-    'go test',
-    'make test',
-    'jest',
-    'mocha',
-    'npx jest',
-    'deno test',
-    'bun test',
-    'ctest',
-    'dotnet test',
-    'rake test',
-    'rspec',
+    'node --eval',
     'pdm run',
     'poetry run',
-    'tox',
-    'nox',
   ];
 
   for (const prefix of verifierPrefixes) {
@@ -66,9 +118,46 @@ export function isLikelyVerifierCommand(command: string | null | undefined): boo
     /^(?:del|rm|echo|ls|cat|type|dir|cd|pwd|cp|mv|mkdir|rmdir|cls|clear|set)(?:\s|$)/;
   if (nonVerifierRe.test(lower)) return false;
 
-  // Default: unsure → assume it IS a verifier (don't block legitimate
-  // unusual commands).
+  // Default: unsure → assume it IS a verifier attempt (logging only).
+  // Honesty uses {@link isAuthoritativeVerifierCommand} which is deny-by-default.
   return true;
+}
+
+/**
+ * True when command matches the hard allowlist of project/dataset test runners,
+ * or an optional session-bound authoritative command (exact or prefix match).
+ */
+export function matchesAuthoritativeVerifierAllowlist(
+  command: string,
+  boundCommands?: readonly string[] | null,
+): boolean {
+  const lower = command.trim().toLowerCase();
+  if (!lower) return false;
+
+  for (const prefix of AUTHORITATIVE_VERIFIER_PREFIXES) {
+    if (lower.startsWith(prefix)) return true;
+  }
+
+  // python path/to/test_*.py or …/tests/… (not agent-owned _test_* — filtered later)
+  if (
+    /^(?:python3?|py)\s+(?:["']?)(?:\.\/)?(?:[\w./\\-]*\/)?(?:tests?\/|test_)[\w./\\-]+\.py\b/.test(
+      lower,
+    )
+  ) {
+    return true;
+  }
+
+  if (boundCommands && boundCommands.length > 0) {
+    for (const bound of boundCommands) {
+      const b = bound.trim().toLowerCase();
+      if (!b) continue;
+      if (lower === b || lower.startsWith(`${b} `) || lower.startsWith(b)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -139,17 +228,39 @@ export function isInlineProbeVerifier(command: string | null | undefined): boole
 }
 
 /**
- * B2: command is a real test runner **and** not an agent-owned ad-hoc script
- * or an inline probe (`python -c` / `node -e`).
+ * B2 / W1 honesty: command is an allowlisted project/dataset test runner
+ * (or session-bound authoritative command), and not agent-owned ad-hoc,
+ * inline probe, package install, or shell junk.
+ *
+ * **Deny-by-default** for unknown commands — the pre-W1 path treated unknown
+ * commands as authoritative via {@link isLikelyVerifierCommand}'s default-true,
+ * which let `pip install requests` green completion (SWE-Pro 4a5d).
+ *
  * Use for completion honesty gates and lastVerifierReceipt capture.
+ *
+ * @param boundCommands Optional session/dataset commands (e.g. fail_to_pass pytest
+ *   nodes) that are authoritative even if not on the global prefix list.
  */
 export function isAuthoritativeVerifierCommand(
   command: string | null | undefined,
+  boundCommands?: readonly string[] | null,
 ): boolean {
-  if (!isLikelyVerifierCommand(command)) return false;
-  if (isAgentOwnedAdHocVerifier(command)) return false;
-  if (isInlineProbeVerifier(command)) return false;
-  return true;
+  if (command == null) return false;
+  const trimmed = command.trim();
+  if (!trimmed) return false;
+
+  if (isPackageManagerInstallCommand(trimmed)) return false;
+  if (isAgentOwnedAdHocVerifier(trimmed)) return false;
+  if (isInlineProbeVerifier(trimmed)) return false;
+
+  // Shell junk is never authoritative
+  const lower = trimmed.toLowerCase();
+  if (/^(?:del|rm|echo|ls|cat|type|dir|cd|pwd|cp|mv|mkdir|rmdir|cls|clear|set)(?:\s|$)/.test(lower)) {
+    return false;
+  }
+
+  // Deny-by-default: only allowlisted runners or session-bound commands
+  return matchesAuthoritativeVerifierAllowlist(trimmed, boundCommands);
 }
 
 export type VerifierReceipt = {
