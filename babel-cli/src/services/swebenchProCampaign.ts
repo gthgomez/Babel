@@ -162,7 +162,15 @@ export function classifyCampaignFailureSignature(input: {
   infraOk?: boolean;
   infraError?: string;
   cliExitCode?: number | null;
+  /** Prefer CLI `status` (ENV_BLOCKED / BLOCKED / …). */
   statusText?: string | null;
+  /**
+   * Prefer CLI `terminal_outcome` (BLOCKED_EXTERNAL / BLOCKED_POLICY / …).
+   * When present, outranks noisy stdout blob heuristics (Pri-3).
+   */
+  terminalOutcome?: string | null;
+  /** Explicit payload.env_blocked when known. */
+  envBlocked?: boolean | null;
   patchBytes?: number;
   goldDiffOk?: boolean | null;
   stdoutStderr?: string;
@@ -182,6 +190,9 @@ export function classifyCampaignFailureSignature(input: {
   }
 
   const blob = input.stdoutStderr ?? '';
+  const status = (input.statusText ?? '').trim();
+  const terminal = (input.terminalOutcome ?? '').trim();
+
   if (/HTTP 402|positive balance|insufficient.?credit/i.test(blob)) {
     return 'agent:provider_error:billing';
   }
@@ -189,7 +200,8 @@ export function classifyCampaignFailureSignature(input: {
     return 'agent:provider_error:auth';
   }
   if (
-    input.statusText === 'BUDGET_EXCEEDED' ||
+    status === 'BUDGET_EXCEEDED' ||
+    terminal === 'BUDGET_EXHAUSTED' ||
     /budget.?exceeded|harness_timeout|process timed out/i.test(blob)
   ) {
     // Distinguish outer harness timeout from in-agent cost ceiling when possible.
@@ -198,13 +210,35 @@ export function classifyCampaignFailureSignature(input: {
     }
     return 'agent:budget_exhausted';
   }
-  if (
-    /env_blocked|importerror|modulenotfound|while loading conftest/i.test(blob) ||
-    /ENV_BLOCKED/i.test(input.statusText ?? '')
-  ) {
+
+  // Pri-3: structured fields first — do not let ImportError text in a
+  // policy-killed transcript re-label investigate_hard_cap as env_blocked.
+  if (input.envBlocked === true || status === 'ENV_BLOCKED') {
     return 'agent:env_blocked';
   }
-  if (input.statusText === 'NEEDS_MORE_CONTEXT' || /blocked_policy|BLOCKED/i.test(blob)) {
+  if (terminal === 'BLOCKED_POLICY' || status === 'BLOCKED_POLICY') {
+    return 'agent:blocked_policy';
+  }
+  if (terminal === 'BLOCKED_EXTERNAL') {
+    // External without env_blocked flag → generic external (permission, etc.)
+    return 'agent:blocked_external';
+  }
+  if (status === 'BLOCKED') {
+    // Legacy generic BLOCKED: prefer policy unless blob is clearly env-only
+    // and no policy markers — still require clear env signal in blob.
+    if (
+      /env_blocked|importerror|modulenotfound|while loading conftest/i.test(blob) &&
+      !/investigate.?hard.?cap|zero.?write|blocked_policy|progress_terminal/i.test(blob)
+    ) {
+      return 'agent:env_blocked';
+    }
+    return 'agent:blocked_policy';
+  }
+  // Blob heuristics only when structured status/outcome were absent
+  if (/env_blocked|importerror|modulenotfound|while loading conftest/i.test(blob)) {
+    return 'agent:env_blocked';
+  }
+  if (status === 'NEEDS_MORE_CONTEXT' || /blocked_policy|BLOCKED_POLICY/i.test(blob)) {
     return 'agent:blocked_policy';
   }
   if ((input.patchBytes ?? 0) === 0 && input.goldDiffOk !== true) {
@@ -780,16 +814,20 @@ function defaultRunLiveCell(
   }
   const statusText =
     typeof payload?.['status'] === 'string' ? (payload['status'] as string) : null;
-  // Prefer terminal_outcome when status is generic
+  // Prefer structured terminal_outcome (Pri-3); keep status separate.
   const terminalOutcome =
     typeof payload?.['terminal_outcome'] === 'string'
       ? (payload['terminal_outcome'] as string)
-      : statusText;
+      : null;
+  const envBlockedFlag =
+    payload?.['env_blocked'] === true || statusText === 'ENV_BLOCKED';
   const streamBlob = `${cli.stdout ?? ''}\n${cli.stderr ?? ''}`;
   const signature = classifyCampaignFailureSignature({
     phase: 'live',
     cliExitCode: cli.exitCode,
-    statusText: terminalOutcome ?? statusText,
+    statusText,
+    terminalOutcome: terminalOutcome ?? statusText,
+    envBlocked: envBlockedFlag,
     patchBytes: patch.length,
     goldDiffOk: gold_diff_ok,
     stdoutStderr:
@@ -821,6 +859,7 @@ function defaultRunLiveCell(
       `cli_exit=${cli.exitCode}`,
       `status=${statusText ?? 'null'}`,
       `terminal_outcome=${terminalOutcome ?? 'null'}`,
+      `env_blocked=${envBlockedFlag}`,
       `patch_bytes=${patch.length}`,
       `gold_diff=${gold_diff_ok}`,
       `policy_events=${policy_events.length}`,

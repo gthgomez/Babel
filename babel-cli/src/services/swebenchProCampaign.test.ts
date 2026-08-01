@@ -101,6 +101,45 @@ describe('swebenchProCampaign early-stop', () => {
     );
   });
 
+  test('Pri-3: structured env vs policy outranks blob ImportError noise', () => {
+    // Policy hard-cap kill with ImportError text in stdout must stay policy
+    assert.equal(
+      classifyCampaignFailureSignature({
+        phase: 'live',
+        statusText: 'BLOCKED',
+        terminalOutcome: 'BLOCKED_POLICY',
+        envBlocked: false,
+        patchBytes: 0,
+        goldDiffOk: false,
+        stdoutStderr: "ModuleNotFoundError: No module named 'qutebrowser'",
+      }),
+      'agent:blocked_policy',
+    );
+    // Explicit ENV_BLOCKED status
+    assert.equal(
+      classifyCampaignFailureSignature({
+        phase: 'live',
+        statusText: 'ENV_BLOCKED',
+        terminalOutcome: 'BLOCKED_EXTERNAL',
+        envBlocked: true,
+        patchBytes: 0,
+        goldDiffOk: false,
+      }),
+      'agent:env_blocked',
+    );
+    // env_blocked flag alone
+    assert.equal(
+      classifyCampaignFailureSignature({
+        phase: 'live',
+        statusText: 'BLOCKED',
+        terminalOutcome: 'BLOCKED_EXTERNAL',
+        envBlocked: true,
+        patchBytes: 0,
+      }),
+      'agent:env_blocked',
+    );
+  });
+
   test('updateFailureStreak aborts after N identical fails', () => {
     let streak = { signature: null as string | null, count: 0, cell_ids: [] as string[] };
     for (let i = 0; i < 4; i += 1) {

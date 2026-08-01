@@ -822,10 +822,24 @@ export function buildChatRunPayload(
     payload['phase_gate_write_block_visibility'] = phaseGateMetrics.visibility_line;
   }
   if (implementorHarness.env_blocked) {
-    payload['status'] = implementorHarness.status;
+    // Pri-3: never leave status=BLOCKED + terminal_outcome=BLOCKED_POLICY on env red.
+    payload['status'] = implementorHarness.status; // ENV_BLOCKED when no writes
     payload['failure_class_hint'] = implementorHarness.failure_class_hint;
     payload['user_status'] =
       writeCountFromTools > 0 ? 'partial' : 'blocked';
+    // Host env is external, not policy thrash — normalize outcome for scoreboard.
+    if (writeCountFromTools === 0) {
+      payload['terminal_outcome'] = 'BLOCKED_EXTERNAL';
+      if (payload['status'] !== 'ENV_BLOCKED') {
+        payload['status'] = 'ENV_BLOCKED';
+      }
+    } else if (
+      payload['terminal_outcome'] === 'BLOCKED_POLICY' ||
+      result.outcome === 'BLOCKED_POLICY'
+    ) {
+      // Patch present but verify blocked by env — still external, not policy.
+      payload['terminal_outcome'] = 'BLOCKED_EXTERNAL';
+    }
     if (implementorHarness.operator_card) {
       payload['env_blocked_card'] = implementorHarness.operator_card;
     }
@@ -835,6 +849,13 @@ export function buildChatRunPayload(
       pr['env_blocked'] = true;
       pr['empty_patch_scoreable'] = implementorHarness.empty_patch_scoreable;
     }
+  } else if (
+    // Policy block must not be labeled ENV_BLOCKED; ensure outcome stays policy.
+    result.outcome === 'BLOCKED_POLICY' &&
+    payload['status'] === 'BLOCKED'
+  ) {
+    payload['terminal_outcome'] = 'BLOCKED_POLICY';
+    payload['failure_class_hint'] = payload['failure_class_hint'] ?? 'blocked_policy';
   }
 
   // Surface run_dir
