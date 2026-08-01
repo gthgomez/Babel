@@ -477,6 +477,12 @@ export function runWorkspaceDepPreflight(input: {
   let pathPrefix: string | null = null;
   let installed = false;
 
+  /**
+   * Ready enough to start the agent: package importable + pytest present.
+   * Full conftest collect often needs heavy host deps (openlibrary) that still
+   * block verify — agent may mutate first; runtime ENV_BLOCKED handles verify.
+   * Collect is recorded as a soft signal only.
+   */
   const probePythonReady = (bin: string): { ok: boolean; detail: string } => {
     const parts: string[] = [];
     if (plan.packageHint) {
@@ -497,17 +503,15 @@ export function runWorkspaceDepPreflight(input: {
     });
     parts.push(`pytest_mod:${pytestMod.detail}`);
     if (!pytestMod.ok) return { ok: false, detail: parts.join(' | ') };
-    // Deeper conftest/import graph only when a focused test path is known
-    // (full-suite collect is too slow/noisy for preflight).
+    // Soft: focused collect when path known (does not fail preflight).
     if (input.testPath?.trim()) {
       const collect = probePytestCollect({
         cwd: input.workspaceRoot,
         pythonBin: bin,
         testPath: input.testPath,
-        timeoutMs: probeTimeout,
+        timeoutMs: Math.min(probeTimeout, 20_000),
       });
-      parts.push(`collect:${collect.detail}`);
-      if (!collect.ok) return { ok: false, detail: parts.join(' | ') };
+      parts.push(`collect_${collect.ok ? 'ok' : 'soft_fail'}:${collect.detail}`);
     }
     return { ok: true, detail: parts.join(' | ') };
   };
