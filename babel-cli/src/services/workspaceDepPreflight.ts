@@ -208,15 +208,39 @@ function resolveSystemPython(): string {
   return 'python';
 }
 
-function venvPython(workspaceRoot: string): string {
+/**
+ * Resolve venv interpreter. Windows stdlib uses `Scripts/`; MSYS2/MinGW and
+ * Unix use `bin/` (observed on this host with C:\\msys64\\mingw64 python).
+ */
+export function resolveVenvPython(workspaceRoot: string): string | null {
   const base = join(workspaceRoot, BABEL_WORKSPACE_VENV);
-  return process.platform === 'win32'
-    ? join(base, 'Scripts', 'python.exe')
-    : join(base, 'bin', 'python');
+  const candidates = [
+    join(base, 'Scripts', 'python.exe'),
+    join(base, 'Scripts', 'python'),
+    join(base, 'bin', 'python.exe'),
+    join(base, 'bin', 'python3.exe'),
+    join(base, 'bin', 'python'),
+    join(base, 'bin', 'python3'),
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+function venvPython(workspaceRoot: string): string {
+  return (
+    resolveVenvPython(workspaceRoot) ??
+    (process.platform === 'win32'
+      ? join(workspaceRoot, BABEL_WORKSPACE_VENV, 'Scripts', 'python.exe')
+      : join(workspaceRoot, BABEL_WORKSPACE_VENV, 'bin', 'python'))
+  );
 }
 
 function venvScriptsDir(workspaceRoot: string): string {
   const base = join(workspaceRoot, BABEL_WORKSPACE_VENV);
+  if (existsSync(join(base, 'Scripts'))) return join(base, 'Scripts');
+  if (existsSync(join(base, 'bin'))) return join(base, 'bin');
   return process.platform === 'win32' ? join(base, 'Scripts') : join(base, 'bin');
 }
 
@@ -523,17 +547,17 @@ export function runWorkspaceDepPreflight(input: {
 
   // Create venv + install
   venvPath = join(input.workspaceRoot, BABEL_WORKSPACE_VENV);
-  pathPrefix = venvScriptsDir(input.workspaceRoot);
-  const venvPy = venvPython(input.workspaceRoot);
 
-  if (!existsSync(venvPy)) {
+  if (!resolveVenvPython(input.workspaceRoot)) {
     commands.push(`${systemPy} -m venv ${BABEL_WORKSPACE_VENV}`);
     mkdirSync(input.workspaceRoot, { recursive: true });
     const venv = runCmd(systemPy, ['-m', 'venv', BABEL_WORKSPACE_VENV], {
       cwd: input.workspaceRoot,
       timeoutMs: Math.min(installTimeout, 120_000),
     });
-    if (!venv.ok || !existsSync(venvPy)) {
+    // Success = interpreter exists (MSYS venvs may non-zero-exit with useful stdout).
+    const resolvedAfter = resolveVenvPython(input.workspaceRoot);
+    if (!resolvedAfter) {
       return {
         plan,
         ready: false,
@@ -549,18 +573,19 @@ export function runWorkspaceDepPreflight(input: {
       };
     }
   }
-  pythonBin = venvPy;
+  pythonBin = venvPython(input.workspaceRoot);
+  pathPrefix = venvScriptsDir(input.workspaceRoot);
 
   // Upgrade pip quietly (best-effort)
-  commands.push(`${venvPy} -m pip install -U pip`);
-  runCmd(venvPy, ['-m', 'pip', 'install', '-U', 'pip', 'setuptools', 'wheel'], {
+  commands.push(`${pythonBin} -m pip install -U pip`);
+  runCmd(pythonBin, ['-m', 'pip', 'install', '-U', 'pip', 'setuptools', 'wheel'], {
     cwd: input.workspaceRoot,
     timeoutMs: Math.min(installTimeout, 180_000),
   });
 
   if (plan.kind === 'python_editable') {
-    commands.push(`${venvPy} -m pip install -e .`);
-    const editable = runCmd(venvPy, ['-m', 'pip', 'install', '-e', '.'], {
+    commands.push(`${pythonBin} -m pip install -e .`);
+    const editable = runCmd(pythonBin, ['-m', 'pip', 'install', '-e', '.'], {
       cwd: input.workspaceRoot,
       timeoutMs: installTimeout,
     });
@@ -587,8 +612,8 @@ export function runWorkspaceDepPreflight(input: {
   }
 
   for (const req of plan.requirementFiles) {
-    commands.push(`${venvPy} -m pip install -r ${req}`);
-    const reqInstall = runCmd(venvPy, ['-m', 'pip', 'install', '-r', req], {
+    commands.push(`${pythonBin} -m pip install -r ${req}`);
+    const reqInstall = runCmd(pythonBin, ['-m', 'pip', 'install', '-r', req], {
       cwd: input.workspaceRoot,
       timeoutMs: installTimeout,
     });
@@ -612,8 +637,8 @@ export function runWorkspaceDepPreflight(input: {
   }
 
   // pytest is commonly needed for Pro verify even when not a declared runtime dep
-  commands.push(`${venvPy} -m pip install pytest`);
-  runCmd(venvPy, ['-m', 'pip', 'install', 'pytest'], {
+  commands.push(`${pythonBin} -m pip install pytest`);
+  runCmd(pythonBin, ['-m', 'pip', 'install', 'pytest'], {
     cwd: input.workspaceRoot,
     timeoutMs: Math.min(installTimeout, 180_000),
   });
