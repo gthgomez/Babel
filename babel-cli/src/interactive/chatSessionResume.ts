@@ -68,10 +68,13 @@ export async function resumeChatSession(
     };
 
     // Prefer durable thread event log (preserves tool call/result IDs)
-    const eventLog = loadThreadEventLogFromDir(chatSessionDir(sessionId));
+    const sessionDir = chatSessionDir(sessionId);
+    const eventLog = loadThreadEventLogFromDir(sessionDir);
     if (eventLog && eventLog.events.length > 0) {
       ctx.chatEngine = createEngineFromEventLog(engineOptions, eventLog);
       ctx.chatEngine.assignRunId(sessionId);
+      // W2.2: session-events settle after run id assignment (same session dir).
+      ctx.chatEngine.restoreSessionEventsFromDir(sessionDir);
       if (hasThreadStore) {
         hydrateResumedThreadToScreen(ctx, sessionId);
         const cells = loadThreadCells(sessionId);

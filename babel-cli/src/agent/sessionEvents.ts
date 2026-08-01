@@ -441,3 +441,78 @@ export function interruptedToolIdempotencyKeys(log: SessionEventLog): string[] {
   }
   return out;
 }
+
+/** Lookup tool_name for an idempotency key from proposed/started events. */
+export function toolMetaForIdempotencyKey(
+  log: SessionEventLog,
+  key: string,
+): { tool_call_id: string; tool_name: string; turn_id: string | null } | null {
+  for (let i = log.events.length - 1; i >= 0; i--) {
+    const e = log.events[i]!;
+    if (
+      (e.kind === 'tool_proposed' || e.kind === 'tool_started') &&
+      e.idempotency_key === key
+    ) {
+      return {
+        tool_call_id: e.tool_call_id,
+        tool_name: e.tool_name,
+        turn_id: e.turn_id,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * W2.2: on resume after kill, mark in-flight tools as cancelled (not success).
+ * Idempotent — skips keys that already have a terminal event.
+ */
+export function markInterruptedToolsOnResume(
+  log: SessionEventLog,
+  reason = 'interrupted_mid_tool',
+): SessionEvent[] {
+  const marked: SessionEvent[] = [];
+  for (const key of interruptedToolIdempotencyKeys(log)) {
+    const meta = toolMetaForIdempotencyKey(log, key);
+    if (!meta) continue;
+    marked.push(
+      recordToolTerminal(log, {
+        turn_id: meta.turn_id ?? 'resume',
+        tool_call_id: meta.tool_call_id,
+        tool_name: meta.tool_name,
+        idempotency_key: key,
+        cancelled: true,
+        reason,
+      }),
+    );
+  }
+  return marked;
+}
+
+/** True when this tool already has a terminal settle event — resume must not re-exec. */
+export function shouldSkipToolReExec(log: SessionEventLog, idempotencyKey: string): boolean {
+  return completedToolIdempotencyKeys(log).has(idempotencyKey);
+}
+
+/**
+ * Partition planned tools into skip (already settled) vs execute (need run).
+ * Used by kill/resume and settle protocol tests.
+ */
+export function planToolSettle(
+  log: SessionEventLog,
+  tools: Array<{ idempotency_key: string; tool_call_id: string; tool_name: string }>,
+): {
+  skip: Array<{ idempotency_key: string; tool_call_id: string; tool_name: string }>;
+  execute: Array<{ idempotency_key: string; tool_call_id: string; tool_name: string }>;
+  interrupted: string[];
+} {
+  const done = completedToolIdempotencyKeys(log);
+  const interrupted = interruptedToolIdempotencyKeys(log);
+  const skip: typeof tools = [];
+  const execute: typeof tools = [];
+  for (const t of tools) {
+    if (done.has(t.idempotency_key)) skip.push(t);
+    else execute.push(t);
+  }
+  return { skip, execute, interrupted };
+}

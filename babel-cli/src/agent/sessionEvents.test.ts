@@ -22,6 +22,9 @@ import {
   serializeSessionEventLog,
   completedToolIdempotencyKeys,
   interruptedToolIdempotencyKeys,
+  markInterruptedToolsOnResume,
+  planToolSettle,
+  shouldSkipToolReExec,
   shortDigest,
   SESSION_EVENT_SCHEMA_VERSION,
   SESSION_EVENTS_FILENAME,
@@ -205,5 +208,139 @@ describe('SessionEventV1 dual-write JSONL', () => {
       () => parseSessionEventLog('{"schema_version":2,"event_id":"x","session_id":"s","turn_id":null,"seq":0,"ts":"t","kind":"turn_ended","outcome":"CANCELLED","status":"x"}\n'),
       /Unsupported session event schema/,
     );
+  });
+});
+
+describe('W2.2 tool settle kill/resume golden', () => {
+  test('kill mid-tool → resume marks interrupted, no silent success', () => {
+    // Simulate: propose+start flushed, then process killed before terminal.
+    const log = createSessionEventLog('kill-resume');
+    recordUserSubmitted(log, { turn_id: 't1', task: 'mutate then verify' });
+    recordToolProposed(log, {
+      turn_id: 't1',
+      tool_call_id: 'call_mut',
+      tool_name: 'str_replace',
+    });
+    recordToolStarted(log, {
+      turn_id: 't1',
+      tool_call_id: 'call_mut',
+      tool_name: 'str_replace',
+    });
+    recordToolProposed(log, {
+      turn_id: 't1',
+      tool_call_id: 'call_run',
+      tool_name: 'run_command',
+    });
+    recordToolStarted(log, {
+      turn_id: 't1',
+      tool_call_id: 'call_run',
+      tool_name: 'run_command',
+    });
+    // Only mutation completed before kill; run_command still in-flight.
+    recordToolTerminal(log, {
+      turn_id: 't1',
+      tool_call_id: 'call_mut',
+      tool_name: 'str_replace',
+      exit_code: 0,
+      content: 'patched',
+    });
+
+    assert.deepEqual(interruptedToolIdempotencyKeys(log), ['call_run']);
+    assert.equal(shouldSkipToolReExec(log, 'call_mut'), true);
+    assert.equal(shouldSkipToolReExec(log, 'call_run'), false);
+
+    const marked = markInterruptedToolsOnResume(log);
+    assert.equal(marked.length, 1);
+    assert.equal(marked[0]!.kind, 'tool_cancelled');
+    if (marked[0]!.kind === 'tool_cancelled') {
+      assert.equal(marked[0]!.reason, 'interrupted_mid_tool');
+      assert.equal(marked[0]!.idempotency_key, 'call_run');
+    }
+    // No silent success for interrupted tool.
+    assert.equal(shouldSkipToolReExec(log, 'call_run'), true);
+    assert.ok(
+      !log.events.some(
+        (e) => e.kind === 'tool_completed' && e.idempotency_key === 'call_run',
+      ),
+    );
+    // Second resume is idempotent.
+    assert.equal(markInterruptedToolsOnResume(log).length, 0);
+  });
+
+  test('resume planToolSettle skips completed keys (no double mutate)', () => {
+    const log = createSessionEventLog('double-mut');
+    recordToolProposed(log, {
+      turn_id: 't',
+      tool_call_id: 'a',
+      tool_name: 'str_replace',
+    });
+    recordToolStarted(log, {
+      turn_id: 't',
+      tool_call_id: 'a',
+      tool_name: 'str_replace',
+    });
+    recordToolTerminal(log, {
+      turn_id: 't',
+      tool_call_id: 'a',
+      tool_name: 'str_replace',
+      exit_code: 0,
+      content: 'ok',
+    });
+    recordToolProposed(log, {
+      turn_id: 't',
+      tool_call_id: 'b',
+      tool_name: 'str_replace',
+    });
+    recordToolStarted(log, {
+      turn_id: 't',
+      tool_call_id: 'b',
+      tool_name: 'str_replace',
+    });
+
+    const plan = planToolSettle(log, [
+      { idempotency_key: 'a', tool_call_id: 'a', tool_name: 'str_replace' },
+      { idempotency_key: 'b', tool_call_id: 'b', tool_name: 'str_replace' },
+      { idempotency_key: 'c', tool_call_id: 'c', tool_name: 'read_file' },
+    ]);
+    assert.deepEqual(
+      plan.skip.map((t) => t.idempotency_key),
+      ['a'],
+    );
+    assert.deepEqual(
+      plan.execute.map((t) => t.idempotency_key),
+      ['b', 'c'],
+    );
+    assert.deepEqual(plan.interrupted, ['b']);
+  });
+
+  test('disk dual-write: propose+start survives reload for kill simulation', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'babel-settle-kill-'));
+    try {
+      const log = createSessionEventLog('disk-kill');
+      recordToolProposed(log, {
+        turn_id: 't',
+        tool_call_id: 'run1',
+        tool_name: 'run_command',
+      });
+      recordToolStarted(log, {
+        turn_id: 't',
+        tool_call_id: 'run1',
+        tool_name: 'run_command',
+      });
+      const flush = flushSessionEventLog(dir, log);
+      assert.equal(flush.wrote, 2);
+
+      // "Kill" — new process loads disk only.
+      const reloaded = loadSessionEventLogFromDir(dir);
+      assert.ok(reloaded);
+      assert.deepEqual(interruptedToolIdempotencyKeys(reloaded!), ['run1']);
+      markInterruptedToolsOnResume(reloaded!);
+      flushSessionEventLog(dir, reloaded!);
+      const final = loadSessionEventLogFromDir(dir);
+      assert.ok(final!.events.some((e) => e.kind === 'tool_cancelled'));
+      assert.equal(interruptedToolIdempotencyKeys(final!).length, 0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
