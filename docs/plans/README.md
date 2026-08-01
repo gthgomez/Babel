@@ -2,21 +2,26 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-07-21
+last_verified: 2026-08-01
 -->
 This folder contains active roadmaps and implementation plans. Superseded or completed plans move to `../archive/plans/`.
 
+## Canonical reliable-executor roadmap (current)
+
+- [**Babel Reliable Executor Roadmap (2026-08-01)**](./BABEL_RELIABLE_EXECUTOR_ROADMAP_2026-08-01.md) — **CANONICAL** for ChatEngine executor reliability: honesty allowlist (W1), durable tool settle (W2), progress controller (W3), edit transactions, app-server D2, surpass evidence graph. Incorporates Aug-1 peer research + 4a5d verify-hole autopsy. Prefer this for “make Babel a consistent reliable executor.”
+
 ## Canonical four-way competitive plan (Codex + Grok + OpenCode)
 
-- [**Babel vs Codex · Grok · OpenCode Harness Teardown (2026-07-24)**](../audit/BABEL_VS_CODEX_GROK_OPENCODE_HARNESS_TEARDOWN_2026-07-24.md) — **CANONICAL** for cross-competitor prioritization, harness-how-it-works detail, catch-up waves **W0–W7**, and competitor test contracts (HF/AG/PS/RL). Use when planning “what Babel lacks to be daily-usable.” Does not replace the pairwise deep plans below; see its §2 conflict rules.
+- [**Babel vs Codex · Grok · OpenCode Harness Teardown (2026-07-24)**](../audit/BABEL_VS_CODEX_GROK_OPENCODE_HARNESS_TEARDOWN_2026-07-24.md) — cross-competitor prioritization and W0–W7 catch-up waves. Pair with 2026-08-01 reliable-executor roadmap for implementation order.
+- Aug-1 pairwise research (status): [OpenCode](../status/BABEL_VS_OPENCODE_SOURCE_FIRST_RESEARCH_2026-08-01.md), [Codex](../status/BABEL_VS_CODEX_OSS_RUNTIME_ARCHITECTURE_2026-08-01.md), [Grok Build](../status/BABEL_VS_GROK_BUILD_HARNESS_2026-08-01.md)
 
 ## Canonical product upgrade (Grok-class agency)
 
 - [**Babel vs Grok CLI Upgrade Audit (2026-07-16)**](../audit/BABEL_VS_GROK_CLI_UPGRADE_AUDIT_2026-07-16.md) — **CANONICAL** for product upgrade waves **U0–U5** (validate → interactive defaults → plan/permissions → subagents/skills → sandbox → ACP/local). Prefer this for “make Babel feel like Grok + keep governance.”
 
-## Canonical harness backlog (current)
+## Canonical harness backlog (historical / absorb)
 
-- [**Babel ↔ Codex Harness Parity Implementation Plan (2026-07-14)**](./BABEL_CODEX_HARNESS_PARITY_IMPLEMENTATION_PLAN_2026-07-14.md) — **CANONICAL** P0–P3 harness backlog (protocol fidelity, async executor, progress arbiter, event log, compiled chat stack, TUI honesty). Prefer this over older peer-CLI / SWE thrash plans for **loop architecture** work. Orthogonal to the Grok product-upgrade audit (agency/UX defaults).
+- [**Babel ↔ Codex Harness Parity Implementation Plan (2026-07-14)**](./BABEL_CODEX_HARNESS_PARITY_IMPLEMENTATION_PLAN_2026-07-14.md) — **SUPERSEDED for priority order** by the 2026-08-01 reliable-executor roadmap; residual items (protocol fidelity, async executor, progress arbiter) map to W2–W3 there.
 
 ## Coding agent harness (reference)
 
