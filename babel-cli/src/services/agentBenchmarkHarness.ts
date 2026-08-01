@@ -173,30 +173,77 @@ export function loadSwebenchInstance(
   return null;
 }
 
+/**
+ * Parse SWE path/test list fields that may be JSON arrays, Python-style lists,
+ * plain strings, or real arrays. Never leave brackets/quotes on emitted paths
+ * (H4 / W1.2 — e.g. fail_to_pass: `['openlibrary/...::test_x']`).
+ */
+export function parseSweStringList(value: unknown): string[] {
+  if (value == null) return [];
+  if (Array.isArray(value)) {
+    return value
+      .filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
+      .map((t) => t.trim());
+  }
+  if (typeof value !== 'string') return [];
+  const raw = value.trim();
+  if (!raw) return [];
+
+  // JSON array / string
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed
+        .filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
+        .map((t) => t.trim());
+    }
+    if (typeof parsed === 'string' && parsed.trim()) {
+      return [parsed.trim()];
+    }
+  } catch {
+    // fall through — SWE-Pro often uses Python list literals with single quotes
+  }
+
+  // Python-style list: ['a', "b"] or mixed
+  if (raw.startsWith('[') && raw.endsWith(']')) {
+    const inner = raw.slice(1, -1).trim();
+    if (!inner) return [];
+    const quoted = [...inner.matchAll(/(['"])((?:\\.|(?!\1).)*)\1/g)];
+    if (quoted.length > 0) {
+      return quoted
+        .map((m) => (m[2] ?? '').replace(/\\(.)/g, '$1').trim())
+        .filter((t) => t.length > 0);
+    }
+    // Unquoted tokens (rare)
+    return inner
+      .split(',')
+      .map((s) => s.trim().replace(/^['"]+|['"]+$/g, ''))
+      .filter((t) => t.length > 0);
+  }
+
+  // Strip accidental outer brackets/quotes on a single path
+  const stripped = raw
+    .replace(/^[\[\s'"]+/, '')
+    .replace(/[\]\s'"]+$/, '')
+    .trim();
+  return stripped ? [stripped] : [];
+}
+
 /** Extract FAIL_TO_PASS / PASS_TO_PASS test names when present on the instance. */
 export function extractSweTestNames(instance: SwebenchInstanceRow): string[] {
   const row = instance as SwebenchInstanceRow & {
     FAIL_TO_PASS?: string | string[];
     PASS_TO_PASS?: string | string[];
     fail_to_pass?: string | string[];
+    selected_test_files_to_run?: string | string[];
   };
   const out: string[] = [];
   for (const key of ['FAIL_TO_PASS', 'fail_to_pass', 'PASS_TO_PASS'] as const) {
-    const v = row[key as keyof typeof row];
-    if (typeof v === 'string' && v.trim()) {
-      try {
-        const parsed = JSON.parse(v) as unknown;
-        if (Array.isArray(parsed)) {
-          for (const t of parsed) if (typeof t === 'string') out.push(t);
-        } else {
-          out.push(v.trim());
-        }
-      } catch {
-        out.push(v.trim());
-      }
-    } else if (Array.isArray(v)) {
-      for (const t of v) if (typeof t === 'string') out.push(t);
-    }
+    out.push(...parseSweStringList(row[key as keyof typeof row]));
+  }
+  // Fallback file paths when node ids are absent (still better than empty verify hint)
+  if (out.length === 0 && row.selected_test_files_to_run != null) {
+    out.push(...parseSweStringList(row.selected_test_files_to_run));
   }
   return [...new Set(out)].slice(0, 30);
 }
