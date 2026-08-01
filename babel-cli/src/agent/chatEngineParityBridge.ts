@@ -35,6 +35,15 @@ import {
   type ThreadEventLog,
 } from './threadEventLog.js';
 import {
+  createSessionEventLog,
+  recordUserSubmitted,
+  recordToolProposed,
+  recordToolTerminal,
+  recordTurnEnded,
+  flushSessionEventLog,
+  type SessionEventLog,
+} from './sessionEvents.js';
+import {
   createApprovalSession,
   type ApprovalSessionState,
 } from './approvalRequests.js';
@@ -52,6 +61,8 @@ export interface ParityRuntime {
   loop: AgentLoopState;
   progress: ProgressLedger;
   eventLog: ThreadEventLog;
+  /** W2 PR-E: SessionEventV1 dual-write log (JSONL next to thread_events). */
+  sessionEvents: SessionEventLog;
   approvalSession: ApprovalSessionState;
   turnId: string | null;
   recoveryTried: boolean;
@@ -63,6 +74,7 @@ export function createParityRuntime(threadId: string): ParityRuntime {
     loop: initialAgentLoopState(),
     progress: createProgressLedger(),
     eventLog: createThreadEventLog(threadId),
+    sessionEvents: createSessionEventLog(threadId),
     approvalSession: createApprovalSession(threadId),
     turnId: null,
     recoveryTried: false,
@@ -99,6 +111,15 @@ export function parityOnUserTurn(
     ...(input.gatePolicy !== undefined ? { gatePolicy: input.gatePolicy } : {}),
     ...(input.submissionIndex !== undefined ? { submissionIndex: input.submissionIndex } : {}),
     ...(input.continuedTask !== undefined ? { continuedTask: input.continuedTask } : {}),
+  });
+  // W2 PR-E dual-write: session event mirrors user submission.
+  recordUserSubmitted(rt.sessionEvents, {
+    turn_id: rt.turnId,
+    task: input.task,
+    model: input.model,
+    provider: input.provider,
+    projectRoot: input.projectRoot,
+    ...(input.taskClass !== undefined ? { taskClass: input.taskClass } : {}),
   });
 }
 
@@ -149,10 +170,27 @@ export function parityRecordToolBatch(
       input.thinking ?? 'Using tools…',
       input.toolCalls,
     );
+    // W2 PR-E: tool_proposed before results (settle protocol starts here; W2.2 adds started).
+    for (const tc of input.toolCalls) {
+      recordToolProposed(rt.sessionEvents, {
+        turn_id: rt.turnId,
+        tool_call_id: tc.id,
+        tool_name: tc.function.name,
+        idempotency_key: tc.id,
+      });
+    }
     for (const r of input.results) {
       recordToolResult(rt.eventLog, rt.turnId, {
         tool_call_id: r.tool_call_id,
         tool_name: r.tool_name,
+        content: r.content,
+        ...(r.exit_code !== undefined ? { exit_code: r.exit_code } : {}),
+      });
+      recordToolTerminal(rt.sessionEvents, {
+        turn_id: rt.turnId,
+        tool_call_id: r.tool_call_id,
+        tool_name: r.tool_name,
+        idempotency_key: r.tool_call_id,
         content: r.content,
         ...(r.exit_code !== undefined ? { exit_code: r.exit_code } : {}),
       });
@@ -471,12 +509,23 @@ export function parityEndTurn(
   parityReduce(rt, event);
   if (rt.turnId) {
     endTurn(rt.eventLog, rt.turnId, outcome, status);
+    // W2 PR-E: only one turn_ended per turn_id in session log.
+    const already = rt.sessionEvents.events.some(
+      (e) => e.kind === 'turn_ended' && e.turn_id === rt.turnId,
+    );
+    if (!already) {
+      recordTurnEnded(rt.sessionEvents, {
+        turn_id: rt.turnId,
+        outcome,
+        status,
+      });
+    }
   }
 }
 
 /**
  * AC3 choke point: every turn terminal MUST go through this.
- * Always: parityEndTurn (memory) then persistThreadEventLog (disk).
+ * Always: parityEndTurn (memory) then persistThreadEventLog (disk) + session-events.jsonl.
  * Idempotent on turn_ended — safe if streamDone + buildResult both fire.
  */
 export async function finalizeParityTurn(
@@ -487,6 +536,7 @@ export async function finalizeParityTurn(
 ): Promise<void> {
   parityEndTurn(rt, outcome, status);
   await persistThreadEventLog(runDir, rt.eventLog);
+  flushSessionEventsBestEffort(rt, runDir, `finalize:${outcome}`);
 }
 
 function reportEventLogPersistFailure(context: string, err: unknown): void {
@@ -495,6 +545,23 @@ function reportEventLogPersistFailure(context: string, err: unknown): void {
     console.error(`[babel] thread_events.json persist failed (${context}): ${msg}`);
   } catch {
     /* ignore console failures */
+  }
+}
+
+function flushSessionEventsBestEffort(
+  rt: ParityRuntime,
+  runDir: string,
+  context: string,
+): void {
+  const result = flushSessionEventLog(runDir, rt.sessionEvents);
+  if (result.error) {
+    try {
+      console.error(
+        `[babel] session-events.jsonl persist failed (${context}): ${result.error}`,
+      );
+    } catch {
+      /* ignore console failures */
+    }
   }
 }
 
@@ -509,6 +576,7 @@ export function finalizeParityTurnSync(
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure(`finalize:${outcome}`, err);
   });
+  flushSessionEventsBestEffort(rt, runDir, `finalize-sync:${outcome}`);
 }
 
 /**
@@ -519,6 +587,7 @@ export function checkpointParityEventLog(rt: ParityRuntime, runDir: string): voi
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure('checkpoint', err);
   });
+  flushSessionEventsBestEffort(rt, runDir, 'checkpoint');
 }
 
 /**

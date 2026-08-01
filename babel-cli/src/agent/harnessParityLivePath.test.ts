@@ -30,6 +30,10 @@ import {
   THREAD_EVENT_LOG_FILENAME,
 } from './threadEventLog.js';
 import {
+  loadSessionEventLogFromDir,
+  SESSION_EVENTS_FILENAME,
+} from './sessionEvents.js';
+import {
   getInputArbiterState,
   resetInputArbiterForTests,
   dispatchInputArbiter,
@@ -355,6 +359,28 @@ describe('Live resume via event log', () => {
         existsSync(diskPath),
         `thread_events.json must exist after stream terminal (path=${diskPath}). ` +
           'If missing, streamDone did not call finalizeParityTurn.',
+      );
+      // W2 PR-E: SessionEventV1 dual-write next to thread_events.json
+      const sessionPath = join(sessionDir, SESSION_EVENTS_FILENAME);
+      assert.ok(
+        existsSync(sessionPath),
+        `session-events.jsonl must exist after stream terminal (path=${sessionPath})`,
+      );
+      const sessionLog = loadSessionEventLogFromDir(sessionDir);
+      assert.ok(sessionLog, 'session-events.jsonl must parse');
+      assert.ok(
+        sessionLog!.events.some((e) => e.kind === 'user_submitted'),
+        `session log missing user_submitted; kinds=${sessionLog!.events.map((e) => e.kind).join(',')}`,
+      );
+      assert.ok(
+        sessionLog!.events.some(
+          (e) => e.kind === 'tool_proposed' || e.kind === 'tool_completed',
+        ),
+        'session log must record tool lifecycle events',
+      );
+      assert.ok(
+        sessionLog!.events.some((e) => e.kind === 'turn_ended'),
+        'session log must retain turn_ended',
       );
       const toolResults = loaded.events.filter((e) => e.kind === 'tool_result');
       const ended = loaded.events.filter((e) => e.kind === 'turn_ended');
