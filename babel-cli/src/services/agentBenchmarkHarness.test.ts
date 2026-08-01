@@ -7,8 +7,11 @@ import { defaultSwebenchDatasetPath } from './agentBenchmark.js';
 import {
   buildSweAgentChatEnv,
   buildSweIssuePrompt,
+  buildTargetedPytestHint,
+  extractSweTestNames,
   isDockerAvailable,
   loadSwebenchInstance,
+  parseSweStringList,
   resolveSwebenchForkPath,
   resolveTerminalBenchRoot,
 } from './agentBenchmarkHarness.js';
@@ -540,10 +543,8 @@ for (const c of cases) {
 // ─── Failure notes + empty_patch_rate + Windows docker skip ─────────────────
 
 import {
-  buildTargetedPytestHint,
   classifySweFailureNote,
   computeEmptyPatchRate,
-  extractSweTestNames,
   payloadIsBudgetExceeded,
   shouldSkipDockerEvalOnPlatform,
 } from './agentBenchmarkHarness.js';
@@ -630,6 +631,60 @@ test('extractSweTestNames + targeted pytest hint', () => {
   const hint = buildTargetedPytestHint(names);
   assert.ok(hint);
   assert.match(hint!, /pytest/);
+});
+
+test('W1.2 H4: parseSweStringList handles Python-style fail_to_pass (no brackets leak)', () => {
+  const pythonList =
+    "['openlibrary/tests/core/test_wikidata.py::test_get_statement_values']";
+  const parsed = parseSweStringList(pythonList);
+  assert.deepEqual(parsed, [
+    'openlibrary/tests/core/test_wikidata.py::test_get_statement_values',
+  ]);
+  assert.ok(!parsed.some((p) => p.includes('[') || p.includes("']")));
+
+  const multi =
+    "['openlibrary/catalog/marc/tests/test_parse.py::TestParseMARCXML::test_xml[nybc200247]', 'openlibrary/catalog/marc/tests/test_parse.py::TestParseMARCBinary::test_binary']";
+  const multiParsed = parseSweStringList(multi);
+  assert.equal(multiParsed.length, 2);
+  assert.ok(multiParsed[0]!.includes('test_xml[nybc200247]'));
+  assert.ok(!multiParsed[0]!.startsWith('['));
+
+  // JSON selected_test_files_to_run
+  assert.deepEqual(parseSweStringList('["openlibrary/tests/core/test_wikidata.py"]'), [
+    'openlibrary/tests/core/test_wikidata.py',
+  ]);
+
+  const names = extractSweTestNames({
+    instance_id: '4a5d',
+    repo: 'internetarchive/openlibrary',
+    base_commit: 'abc',
+    problem_statement: 'bug',
+    fail_to_pass: pythonList,
+  } as never);
+  assert.equal(names.length, 1);
+  assert.equal(
+    names[0],
+    'openlibrary/tests/core/test_wikidata.py::test_get_statement_values',
+  );
+
+  const hint = buildTargetedPytestHint(names);
+  assert.ok(hint);
+  assert.match(
+    hint!,
+    /python -m pytest openlibrary\/tests\/core\/test_wikidata\.py::test_get_statement_values -q/,
+  );
+  assert.doesNotMatch(hint!, /pytest \['/);
+  assert.doesNotMatch(hint!, /pytest \["/);
+
+  const prompt = buildSweIssuePrompt({
+    instance_id: '4a5d',
+    repo: 'internetarchive/openlibrary',
+    base_commit: 'abc',
+    problem_statement: 'Fix Wikidata statement values.',
+    fail_to_pass: pythonList,
+  } as never);
+  assert.match(prompt, /test_get_statement_values/);
+  assert.doesNotMatch(prompt, /pytest \['openlibrary/);
 });
 
 // ─── C2: First-move card integration ───────────────────────────────────────

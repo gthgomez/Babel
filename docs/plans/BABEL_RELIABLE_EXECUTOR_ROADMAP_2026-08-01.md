@@ -256,6 +256,11 @@ After first production write, progress policy / repair window:
 
 **Do not** silently redefine pass without a flag. Default keep gold for continuity; **report both**.
 
+**Env (implemented on campaign runner):**
+- `BABEL_SWE_PRO_PASS_MODE=gold|ftp|both` — controls `cell.status` / `live_pass` only (default **gold**).
+- `BABEL_SWE_PRO_FTP_CHECK=0` — skip host fail_to_pass pytest after agent (still report `fail_to_pass_ok=null`).
+- Cell notes always include `gold_diff=…` and `fail_to_pass_ok=…`; campaign-summary has both columns.
+
 **Acceptance:** campaign-summary shows both columns; 4a5d autopsy reproducible.
 
 ### W1.4 Terminal outcome cleanup

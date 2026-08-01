@@ -25,6 +25,7 @@ import {
   buildSweAgentChatEnv,
   buildSweIssuePrompt,
   isDockerAvailable,
+  parseSweStringList,
   patchesMatchSemantically,
   type SwebenchInstanceRow,
 } from './agentBenchmarkHarness.js';
@@ -57,6 +58,9 @@ export interface SwebenchProInstanceRow extends SwebenchInstanceRow {
 
 export type CampaignPhase = 'infra' | 'live';
 
+/** How campaign `status=pass` is decided (default gold for continuity). */
+export type SweProPassMode = 'gold' | 'ftp' | 'both';
+
 export interface CampaignCellResult {
   instance_id: string;
   phase: CampaignPhase;
@@ -64,7 +68,13 @@ export interface CampaignCellResult {
   signature: string;
   notes: string[];
   patch_bytes: number;
+  /** Semantic gold patch match (existing scoreboard). */
   gold_diff_ok: boolean | null;
+  /**
+   * W1.3: host ran bound fail_to_pass after agent (best-effort).
+   * null = not run / skipped; true/false = pytest exit.
+   */
+  fail_to_pass_ok?: boolean | null;
   policy_events: Array<{ at_turn?: number; kind?: string; detail?: string; tool?: string }>;
   has_shadow_summary: boolean;
   duration_ms: number;
@@ -88,6 +98,8 @@ export interface CampaignReport {
   generated_at: string;
   provider: 'mock' | 'live';
   early_stop_n: number;
+  /** W1.3 pass policy for cell.status (gold | ftp | both). */
+  pass_mode: SweProPassMode;
   dataset_path: string;
   evidence_dir: string;
   cells: CampaignCellResult[];
@@ -330,6 +342,238 @@ function checkoutProRepo(instance: SwebenchProInstanceRow, repoRoot: string): vo
   }
 }
 
+export interface TestPatchApplyResult {
+  /** True when a non-empty test_patch was present. */
+  attempted: boolean;
+  /** True when git apply (or 3-way) succeeded. */
+  applied: boolean;
+  method: 'git_apply' | 'git_apply_3way' | 'none' | 'skip_empty';
+  error?: string;
+}
+
+/**
+ * W1.2 / H3: Apply instance `test_patch` into a checked-out workspace so
+ * fail_to_pass tests exist on disk before the agent (and dep preflight collect).
+ *
+ * Does not hard-fail the campaign when apply fails — caller records notes.
+ */
+export function applyInstanceTestPatch(
+  workspaceRoot: string,
+  testPatch: string | undefined | null,
+): TestPatchApplyResult {
+  if (typeof testPatch !== 'string' || !testPatch.trim()) {
+    return { attempted: false, applied: false, method: 'skip_empty' };
+  }
+  const markerPath = join(workspaceRoot, '.babel-swe-pro-test-patch.ok');
+  // Reused campaign workspaces: skip re-apply when prior cell already applied.
+  if (existsSync(markerPath)) {
+    return { attempted: true, applied: true, method: 'git_apply' };
+  }
+  const patchPath = join(workspaceRoot, '.babel-swe-pro-test.patch');
+  try {
+    writeFileSync(patchPath, testPatch, 'utf8');
+    const tryApply = (args: string[]): { ok: boolean; err: string } => {
+      const result = spawnSync('git', args, {
+        cwd: workspaceRoot,
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 60_000,
+      });
+      if (result.status === 0) return { ok: true, err: '' };
+      const err = `${result.stderr || ''}${result.stdout || ''}`.trim();
+      return { ok: false, err: err.slice(0, 500) || `git apply exit ${result.status}` };
+    };
+
+    const first = tryApply(['apply', '--whitespace=nowarn', patchPath]);
+    if (first.ok) {
+      try {
+        rmSync(patchPath, { force: true });
+      } catch {
+        /* ignore */
+      }
+      // Marker + commit so later captureGitPatch is agent-only (not gold pollution).
+      writeFileSync(markerPath, 'ok\n', 'utf8');
+      commitTestPatchBaseline(workspaceRoot);
+      return { attempted: true, applied: true, method: 'git_apply' };
+    }
+
+    const second = tryApply(['apply', '--3way', '--whitespace=nowarn', patchPath]);
+    try {
+      rmSync(patchPath, { force: true });
+    } catch {
+      /* ignore */
+    }
+    if (second.ok) {
+      writeFileSync(markerPath, 'ok\n', 'utf8');
+      commitTestPatchBaseline(workspaceRoot);
+      return { attempted: true, applied: true, method: 'git_apply_3way' };
+    }
+    return {
+      attempted: true,
+      applied: false,
+      method: 'git_apply',
+      error: second.err || first.err,
+    };
+  } catch (err) {
+    return {
+      attempted: true,
+      applied: false,
+      method: 'none',
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/** Stage + commit applied test_patch so agent git-diff is production-only. */
+function commitTestPatchBaseline(workspaceRoot: string): void {
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'Babel SWE-Pro',
+    GIT_AUTHOR_EMAIL: 'babel-swe-pro@local',
+    GIT_COMMITTER_NAME: 'Babel SWE-Pro',
+    GIT_COMMITTER_EMAIL: 'babel-swe-pro@local',
+  };
+  spawnSync('git', ['add', '-A'], {
+    cwd: workspaceRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+    env,
+  });
+  spawnSync(
+    'git',
+    ['commit', '--allow-empty', '-m', 'babel: apply instance test_patch (baseline)'],
+    {
+      cwd: workspaceRoot,
+      encoding: 'utf8',
+      windowsHide: true,
+      env,
+    },
+  );
+}
+
+/** Prefer selected_test_files, else fail_to_pass file path (node id stripped). */
+export function resolveProTestPathHint(instance: SwebenchProInstanceRow): string | null {
+  const selected = parseSweStringList(instance.selected_test_files_to_run);
+  if (selected[0]) return selected[0]!;
+  const ftp = parseSweStringList(instance.fail_to_pass);
+  if (!ftp[0]) return null;
+  const node = ftp[0]!;
+  const idx = node.indexOf('::');
+  return idx >= 0 ? node.slice(0, idx) : node;
+}
+
+function testPatchNotes(result: TestPatchApplyResult): string[] {
+  if (!result.attempted) {
+    return ['test_patch_applied=false', 'test_patch_reason=absent_or_empty'];
+  }
+  if (result.applied) {
+    return [`test_patch_applied=true`, `test_patch_method=${result.method}`];
+  }
+  return [
+    'test_patch_applied=false',
+    `test_patch_method=${result.method}`,
+    `test_patch_error=${(result.error ?? 'unknown').replace(/\s+/g, ' ').slice(0, 200)}`,
+  ];
+}
+
+/**
+ * W1.3: pass_mode for live_pass / cell.status.
+ * Default `gold` keeps historical scoreboard; set BABEL_SWE_PRO_PASS_MODE=ftp|both to change.
+ */
+export function resolveSweProPassMode(
+  env: NodeJS.ProcessEnv = process.env,
+): SweProPassMode {
+  const raw = (env['BABEL_SWE_PRO_PASS_MODE'] ?? 'gold').trim().toLowerCase();
+  if (raw === 'ftp' || raw === 'fail_to_pass') return 'ftp';
+  if (raw === 'both' || raw === 'gold+ftp') return 'both';
+  return 'gold';
+}
+
+export function cellPassesByMode(
+  goldDiffOk: boolean | null,
+  failToPassOk: boolean | null | undefined,
+  mode: SweProPassMode,
+): boolean {
+  const gold = goldDiffOk === true;
+  const ftp = failToPassOk === true;
+  if (mode === 'ftp') return ftp;
+  if (mode === 'both') return gold && ftp;
+  return gold;
+}
+
+export interface FailToPassCheckResult {
+  ok: boolean | null;
+  command: string | null;
+  exitCode: number | null;
+  skippedReason?: string;
+}
+
+/**
+ * Best-effort host fail_to_pass after the agent. Does not throw.
+ * Skip with BABEL_SWE_PRO_FTP_CHECK=0.
+ */
+export function runFailToPassCheck(
+  workspaceRoot: string,
+  instance: SwebenchProInstanceRow,
+  env: NodeJS.ProcessEnv = process.env,
+): FailToPassCheckResult {
+  const disabled = (env['BABEL_SWE_PRO_FTP_CHECK'] ?? '1').trim() === '0';
+  if (disabled) {
+    return { ok: null, command: null, exitCode: null, skippedReason: 'disabled' };
+  }
+  const targets = parseSweStringList(instance.fail_to_pass).slice(0, 5);
+  if (targets.length === 0) {
+    return { ok: null, command: null, exitCode: null, skippedReason: 'no_fail_to_pass' };
+  }
+  const command = `python -m pytest ${targets.join(' ')} -q --tb=no`;
+  try {
+    const result = spawnSync(
+      'python',
+      ['-m', 'pytest', ...targets, '-q', '--tb=no'],
+      {
+        cwd: workspaceRoot,
+        encoding: 'utf8',
+        env,
+        timeout: 180_000,
+        windowsHide: true,
+        shell: process.platform === 'win32',
+      },
+    );
+    if (result.error) {
+      const code = (result.error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') {
+        return { ok: null, command, exitCode: null, skippedReason: 'python_missing' };
+      }
+      return {
+        ok: null,
+        command,
+        exitCode: null,
+        skippedReason: result.error.message.slice(0, 120),
+      };
+    }
+    if (result.status === null && result.signal) {
+      return {
+        ok: false,
+        command,
+        exitCode: null,
+        skippedReason: `signal_${result.signal}`,
+      };
+    }
+    return {
+      ok: result.status === 0,
+      command,
+      exitCode: typeof result.status === 'number' ? result.status : null,
+    };
+  } catch (err) {
+    return {
+      ok: null,
+      command,
+      exitCode: null,
+      skippedReason: err instanceof Error ? err.message.slice(0, 120) : String(err),
+    };
+  }
+}
+
 function captureGitPatch(repoRoot: string): string {
   const unstaged = spawnSync('git', ['diff', 'HEAD'], {
     cwd: repoRoot,
@@ -360,6 +604,10 @@ function dockerPullTag(tag: string): void {
 
 function proPrompt(instance: SwebenchProInstanceRow): string {
   // Reuse Verified prompt builder; map fail_to_pass into extractable form.
+  // parseSweStringList runs inside extractSweTestNames so Python-style lists
+  // (`['path::test']`) never emit `pytest ['path` brackets (H4).
+  const ftpClean = parseSweStringList(instance.fail_to_pass);
+  const selectedClean = parseSweStringList(instance.selected_test_files_to_run);
   const asVerified: SwebenchInstanceRow = {
     instance_id: instance.instance_id,
     repo: instance.repo,
@@ -376,8 +624,14 @@ function proPrompt(instance: SwebenchProInstanceRow): string {
       .filter(Boolean)
       .join(''),
     patch: instance.patch,
-    fail_to_pass: instance.fail_to_pass,
-  } as SwebenchInstanceRow & { fail_to_pass?: string };
+    // Pass already-parsed arrays so prompt builder never re-stringifies brackets.
+    fail_to_pass: ftpClean.length > 0 ? ftpClean : instance.fail_to_pass,
+    selected_test_files_to_run:
+      selectedClean.length > 0 ? selectedClean : instance.selected_test_files_to_run,
+  } as SwebenchInstanceRow & {
+    fail_to_pass?: string | string[];
+    selected_test_files_to_run?: string | string[];
+  };
   return buildSweIssuePrompt(asVerified);
 }
 
@@ -600,6 +854,7 @@ function envBlockedPreflightCell(
   started: number,
   evidence_path: string,
   preflight: WorkspaceDepPreflightResult,
+  extraNotes: string[] = [],
 ): CampaignCellResult {
   const result: CampaignCellResult = {
     instance_id: instance.instance_id,
@@ -607,6 +862,7 @@ function envBlockedPreflightCell(
     status: 'fail',
     signature: 'agent:env_blocked',
     notes: [
+      ...extraNotes,
       'dep_preflight_blocked',
       `dep_ready=false`,
       `dep_installed=${preflight.installed}`,
@@ -711,18 +967,15 @@ function defaultRunLiveCell(
     return result;
   }
 
+  // W1.2 / H3: apply test_patch before dep preflight + agent so fail_to_pass is collectable.
+  const testPatchResult = applyInstanceTestPatch(workspaceRoot, instance.test_patch);
+  const patchNotes = testPatchNotes(testPatchResult);
+
   // C2: install workspace deps (or honest ENV_BLOCKED) before burning agent wall/cost.
   let depNotes: string[] = [];
   let depEnvPatch: WorkspaceDepPreflightResult | null = null;
   if (depPreflightEnabled(options?.depPreflight)) {
-    const testPath =
-      typeof instance.selected_test_files_to_run === 'string'
-        ? instance.selected_test_files_to_run
-            .replace(/^[\[\s'"]+/, '')
-            .replace(/[\]\s'"]+$/, '')
-            .split(/[,\s]+/)
-            .find((p) => p.includes('/') || p.endsWith('.py')) ?? null
-        : null;
+    const testPath = resolveProTestPathHint(instance);
     const preflight = runWorkspaceDepPreflight({
       workspaceRoot,
       packageHint: packageHintFromRepo(instance.repo),
@@ -745,6 +998,7 @@ function defaultRunLiveCell(
         started,
         evidence_path,
         preflight,
+        patchNotes,
       );
     }
   } else {
@@ -803,6 +1057,11 @@ function defaultRunLiveCell(
     gold_diff_ok = false;
   }
 
+  // W1.3: dual scoreboard — host fail_to_pass (best-effort; does not redefine gold).
+  const ftpCheck = runFailToPassCheck(workspaceRoot, instance, productEnv);
+  const fail_to_pass_ok = ftpCheck.ok;
+  const passMode = resolveSweProPassMode();
+
   const payload = cli.payload as Record<string, unknown> | null;
   // Persist failure capsule when CLI timed out / had no real JSON (ansible pilot).
   if (cli.failureCapsule) {
@@ -835,8 +1094,10 @@ function defaultRunLiveCell(
         ? `harness_timeout process timed out after\n${streamBlob}`
         : streamBlob,
   });
-  const status: CampaignCellResult['status'] =
-    gold_diff_ok === true || signature === 'agent:task_pass' ? 'pass' : 'fail';
+  // Pass mode controls cell.status only; always report both gold_diff and fail_to_pass.
+  // Do not OR with agent:task_pass (gold-derived) — that would break pass_mode=ftp|both.
+  const modePass = cellPassesByMode(gold_diff_ok, fail_to_pass_ok, passMode);
+  const status: CampaignCellResult['status'] = modePass ? 'pass' : 'fail';
 
   const runDir =
     typeof payload?.['run_dir'] === 'string' ? (payload['run_dir'] as string) : null;
@@ -849,13 +1110,25 @@ function defaultRunLiveCell(
   });
   const has_shadow_summary = policy_events.some((e) => e.kind === 'policy_shadow_summary');
 
+  const ftpNotes: string[] = [
+    `pass_mode=${passMode}`,
+    `fail_to_pass_ok=${fail_to_pass_ok === null || fail_to_pass_ok === undefined ? 'null' : fail_to_pass_ok}`,
+  ];
+  if (ftpCheck.command) ftpNotes.push(`fail_to_pass_cmd=${ftpCheck.command.slice(0, 240)}`);
+  if (ftpCheck.exitCode !== null && ftpCheck.exitCode !== undefined) {
+    ftpNotes.push(`fail_to_pass_exit=${ftpCheck.exitCode}`);
+  }
+  if (ftpCheck.skippedReason) ftpNotes.push(`fail_to_pass_skip=${ftpCheck.skippedReason}`);
+
   const result: CampaignCellResult = {
     instance_id: instance.instance_id,
     phase: 'live',
     status,
     signature,
     notes: [
+      ...patchNotes,
       ...depNotes,
+      ...ftpNotes,
       `cli_exit=${cli.exitCode}`,
       `status=${statusText ?? 'null'}`,
       `terminal_outcome=${terminalOutcome ?? 'null'}`,
@@ -868,6 +1141,7 @@ function defaultRunLiveCell(
     ],
     patch_bytes: patch.length,
     gold_diff_ok,
+    fail_to_pass_ok: fail_to_pass_ok ?? null,
     policy_events,
     has_shadow_summary,
     duration_ms: Math.round(performance.now() - started),
@@ -881,6 +1155,11 @@ function defaultRunLiveCell(
     JSON.stringify(
       {
         ...result,
+        test_patch_applied: testPatchResult.applied,
+        test_patch_attempted: testPatchResult.attempted,
+        test_patch_method: testPatchResult.method,
+        ...(testPatchResult.error ? { test_patch_error: testPatchResult.error } : {}),
+        fail_to_pass_check: ftpCheck,
         dep_preflight: depEnvPatch,
         preds: {
           model_name_or_path: 'babel-agent-chat',
@@ -1028,12 +1307,21 @@ export async function runSwebenchProCampaign(
   const shadow_sessions_with_summary = cells.filter((c) => c.has_shadow_summary).length;
   const liveCells = cells.filter((c) => c.phase === 'live' && c.status !== 'skipped');
   const livePass = liveCells.filter((c) => c.status === 'pass').length;
+  const goldOk = liveCells.filter((c) => c.gold_diff_ok === true).length;
+  const ftpOk = liveCells.filter((c) => c.fail_to_pass_ok === true).length;
+  const ftpRan = liveCells.filter(
+    (c) => c.fail_to_pass_ok === true || c.fail_to_pass_ok === false,
+  ).length;
+  const passMode = resolveSweProPassMode();
 
   const summary_lines = [
     `SWE-Bench Pro campaign ${campaign_id}`,
     `instances=${instances.length} provider=${options.provider} early_stop_n=${earlyStopN}`,
+    `pass_mode=${passMode} (BABEL_SWE_PRO_PASS_MODE=gold|ftp|both; default gold)`,
     `infra_pass=${cells.filter((c) => c.phase === 'infra' && c.status === 'pass').length}`,
     `live_pass=${livePass}/${liveCells.length}`,
+    `gold_diff_ok=${goldOk}/${liveCells.length}`,
+    `fail_to_pass_ok=${ftpOk}/${liveCells.length} (ran=${ftpRan})`,
     `shadow_summaries=${shadow_sessions_with_summary}`,
     aborted ? `ABORTED: ${aborted.reason}` : 'completed_without_early_stop',
     `policy_events_jsonl=${policyJsonlPath}`,
@@ -1046,6 +1334,7 @@ export async function runSwebenchProCampaign(
     generated_at: (options.now ?? new Date()).toISOString(),
     provider: options.provider,
     early_stop_n: earlyStopN,
+    pass_mode: passMode,
     dataset_path: datasetPath,
     evidence_dir: evidenceDir,
     cells,
