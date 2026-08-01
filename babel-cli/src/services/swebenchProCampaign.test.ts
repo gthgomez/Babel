@@ -3,19 +3,25 @@
  */
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import {
+  applyInstanceTestPatch,
+  cellPassesByMode,
   classifyCampaignFailureSignature,
   ensureShadowSummaryForCampaign,
+  resolveProTestPathHint,
+  resolveSweProPassMode,
   runSwebenchProCampaign,
   updateFailureStreak,
   type CampaignCellResult,
   type SwebenchProInstanceRow,
 } from './swebenchProCampaign.js';
 import { packageHintFromRepo } from './workspaceDepPreflight.js';
+import { parseSweStringList } from './agentBenchmarkHarness.js';
 
 function cell(
   partial: Partial<CampaignCellResult> & Pick<CampaignCellResult, 'instance_id' | 'signature' | 'status' | 'phase'>,
@@ -255,5 +261,116 @@ describe('swebenchProCampaign early-stop', () => {
     assert.equal(liveCount, 5, 'should not run remaining instances after abort');
     assert.equal(report.shadow_sessions_with_summary, 1);
     assert.match(report.policy_events_jsonl, /policy-events\.jsonl$/);
+  });
+
+  test('W1.3: resolveSweProPassMode + cellPassesByMode dual scoreboard', () => {
+    assert.equal(resolveSweProPassMode({}), 'gold');
+    assert.equal(resolveSweProPassMode({ BABEL_SWE_PRO_PASS_MODE: 'gold' }), 'gold');
+    assert.equal(resolveSweProPassMode({ BABEL_SWE_PRO_PASS_MODE: 'ftp' }), 'ftp');
+    assert.equal(resolveSweProPassMode({ BABEL_SWE_PRO_PASS_MODE: 'both' }), 'both');
+    assert.equal(resolveSweProPassMode({ BABEL_SWE_PRO_PASS_MODE: 'fail_to_pass' }), 'ftp');
+
+    // gold mode: historical — gold only
+    assert.equal(cellPassesByMode(true, false, 'gold'), true);
+    assert.equal(cellPassesByMode(false, true, 'gold'), false);
+    assert.equal(cellPassesByMode(null, true, 'gold'), false);
+
+    // ftp mode
+    assert.equal(cellPassesByMode(false, true, 'ftp'), true);
+    assert.equal(cellPassesByMode(true, false, 'ftp'), false);
+    assert.equal(cellPassesByMode(true, null, 'ftp'), false);
+
+    // both requires gold AND ftp
+    assert.equal(cellPassesByMode(true, true, 'both'), true);
+    assert.equal(cellPassesByMode(true, false, 'both'), false);
+    assert.equal(cellPassesByMode(false, true, 'both'), false);
+  });
+
+  test('W1.2 H4: resolveProTestPathHint strips Python-list / JSON brackets', () => {
+    assert.equal(
+      resolveProTestPathHint({
+        instance_id: '4a5d',
+        repo: 'internetarchive/openlibrary',
+        base_commit: 'abc',
+        problem_statement: 'x',
+        selected_test_files_to_run: '["openlibrary/tests/core/test_wikidata.py"]',
+        fail_to_pass:
+          "['openlibrary/tests/core/test_wikidata.py::test_get_statement_values']",
+      }),
+      'openlibrary/tests/core/test_wikidata.py',
+    );
+    // fall back to fail_to_pass file path when selected absent
+    assert.equal(
+      resolveProTestPathHint({
+        instance_id: 'x',
+        repo: 'a/b',
+        base_commit: 'c',
+        problem_statement: 'y',
+        fail_to_pass:
+          "['openlibrary/tests/core/test_wikidata.py::test_get_statement_values']",
+      }),
+      'openlibrary/tests/core/test_wikidata.py',
+    );
+    assert.deepEqual(
+      parseSweStringList(
+        "['openlibrary/tests/core/test_wikidata.py::test_get_statement_values']",
+      ),
+      ['openlibrary/tests/core/test_wikidata.py::test_get_statement_values'],
+    );
+  });
+
+  test('W1.2 H3: applyInstanceTestPatch applies unified diff into a git workspace', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'swe-test-patch-'));
+    const git = (args: string[]) =>
+      spawnSync('git', args, {
+        cwd: dir,
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+    assert.equal(git(['init']).status, 0);
+    // Identity for commit on clean CI agents
+    git(['config', 'user.email', 'babel-test@example.com']);
+    git(['config', 'user.name', 'Babel Test']);
+    mkdirSync(join(dir, 'tests'), { recursive: true });
+    writeFileSync(join(dir, 'tests', 'test_example.py'), 'def existing():\n    return 1\n', 'utf8');
+    assert.equal(git(['add', '.']).status, 0);
+    assert.equal(git(['commit', '-m', 'base']).status, 0);
+
+    const empty = applyInstanceTestPatch(dir, '');
+    assert.equal(empty.attempted, false);
+    assert.equal(empty.applied, false);
+
+    const patch = [
+      'diff --git a/tests/test_example.py b/tests/test_example.py',
+      'index 1111111..2222222 100644',
+      '--- a/tests/test_example.py',
+      '+++ b/tests/test_example.py',
+      '@@ -1,2 +1,5 @@',
+      ' def existing():',
+      '     return 1',
+      '+',
+      '+def test_get_statement_values():',
+      '+    assert True',
+      '',
+    ].join('\n');
+
+    const first = applyInstanceTestPatch(dir, patch);
+    assert.equal(first.attempted, true, first.error ?? 'apply should attempt');
+    assert.equal(first.applied, true, first.error ?? 'apply should succeed');
+    const body = readFileSync(join(dir, 'tests', 'test_example.py'), 'utf8');
+    assert.match(body, /test_get_statement_values/);
+    assert.equal(existsSync(join(dir, '.babel-swe-pro-test-patch.ok')), true);
+
+    // test_patch committed → working tree clean (agent-only diffs later)
+    const dirty = spawnSync('git', ['status', '--porcelain'], {
+      cwd: dir,
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    assert.equal((dirty.stdout ?? '').trim(), '', 'test_patch must be committed baseline');
+
+    // Idempotent on reused workspace
+    const second = applyInstanceTestPatch(dir, patch);
+    assert.equal(second.applied, true);
   });
 });
