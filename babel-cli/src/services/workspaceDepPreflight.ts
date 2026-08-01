@@ -47,6 +47,9 @@ export interface WorkspaceDepPreflightResult {
   commands: string[];
   probeDetail: string | null;
   durationMs: number;
+  /** Soft-deps install attempted after collect soft-fail (W1 A). */
+  softDepsAttempted?: boolean;
+  softDepsInstalled?: string[];
 }
 
 const DEFAULT_INSTALL_TIMEOUT_MS = 8 * 60 * 1000;
@@ -320,6 +323,145 @@ export function probePytestCollect(input: {
     return { ok: false, detail: blob.slice(0, 500) || `pytest collect exit ${r.status}` };
   }
   return { ok: true, detail: blob.slice(0, 200) };
+}
+
+/**
+ * Parse missing import names from pytest/collect/ImportError text.
+ * Pure — used for soft-deps install after collect soft-fail (W1 A / 4a5d).
+ */
+export function parseMissingModulesFromProbe(detail: string | null | undefined): string[] {
+  if (!detail?.trim()) return [];
+  const out: string[] = [];
+  const re = /No module named ['"]([^'"]+)['"]/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(detail)) !== null) {
+    const raw = (m[1] ?? '').trim();
+    if (!raw) continue;
+    // top-level package only (web.utils → web)
+    const top = raw.split('.')[0]!;
+    if (top && !out.includes(top)) out.push(top);
+  }
+  // ModuleNotFoundError: No module named web (unquoted rare form)
+  const re2 = /ModuleNotFoundError:\s*No module named\s+([A-Za-z_][\w]*)/gi;
+  while ((m = re2.exec(detail)) !== null) {
+    const top = (m[1] ?? '').trim();
+    if (top && !out.includes(top)) out.push(top);
+  }
+  return out.slice(0, 12);
+}
+
+/**
+ * Known host soft-deps when collect fails but package import works.
+ * Prefer requirements.txt lines when present; these are fallbacks.
+ */
+export const SOFT_DEP_PIP_FALLBACK: Readonly<Record<string, readonly string[]>> = {
+  web: ['web.py'],
+  infogami: ['infogami'],
+  eventer: ['eventer'],
+  psycopg2: ['psycopg2-binary'],
+};
+
+/**
+ * Find a requirements line that likely satisfies a missing module.
+ * Handles git+ pins (webpy) and simple package names.
+ */
+export function findRequirementLineForModule(
+  requirementsText: string,
+  moduleName: string,
+): string | null {
+  const mod = moduleName.trim().toLowerCase();
+  if (!mod) return null;
+  const aliases = new Set<string>([mod]);
+  if (mod === 'web') {
+    aliases.add('web.py');
+    aliases.add('webpy');
+    aliases.add('web-py');
+  }
+  for (const line of requirementsText.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const lower = t.toLowerCase();
+    for (const a of aliases) {
+      if (lower.includes(a)) return t;
+    }
+  }
+  return null;
+}
+
+/**
+ * Install soft-deps for modules missing from collect soft-fail.
+ * Best-effort; does not throw. Returns pip specs that were attempted successfully.
+ */
+export function installSoftDepsForCollectFail(input: {
+  workspaceRoot: string;
+  pythonBin: string;
+  probeDetail: string;
+  requirementFiles?: string[];
+  timeoutMs?: number;
+  commands?: string[];
+}): { installed: string[]; attempted: boolean; detail: string } {
+  const missing = parseMissingModulesFromProbe(input.probeDetail);
+  if (missing.length === 0) {
+    return { installed: [], attempted: false, detail: 'no_missing_modules' };
+  }
+  const timeout = input.timeoutMs ?? Math.min(DEFAULT_INSTALL_TIMEOUT_MS, 4 * 60 * 1000);
+  const commands = input.commands ?? [];
+  const installed: string[] = [];
+  const details: string[] = [];
+
+  // Load requirement files once
+  const reqBodies: string[] = [];
+  for (const rel of input.requirementFiles ?? []) {
+    try {
+      reqBodies.push(readFileSync(join(input.workspaceRoot, rel), 'utf8'));
+    } catch {
+      // ignore
+    }
+  }
+
+  const specs: string[] = [];
+  for (const mod of missing) {
+    let found: string | null = null;
+    for (const body of reqBodies) {
+      found = findRequirementLineForModule(body, mod);
+      if (found) break;
+    }
+    if (found) {
+      specs.push(found);
+    } else {
+      const fallback = SOFT_DEP_PIP_FALLBACK[mod];
+      if (fallback) specs.push(...fallback);
+    }
+  }
+  // Dedupe specs
+  const uniqueSpecs = [...new Set(specs.map((s) => s.trim()).filter(Boolean))].slice(0, 8);
+  if (uniqueSpecs.length === 0) {
+    return {
+      installed: [],
+      attempted: true,
+      detail: `missing=${missing.join(',')} no_specs`,
+    };
+  }
+
+  for (const spec of uniqueSpecs) {
+    // git+ URL or path with spaces: pass as single pip arg
+    const isUrlOrVcs = /^(git\+|https?:|file:)/i.test(spec) || spec.includes('://');
+    const args = isUrlOrVcs
+      ? ['-m', 'pip', 'install', spec]
+      : ['-m', 'pip', 'install', ...spec.split(/\s+/).filter(Boolean)];
+    commands.push(`${input.pythonBin} -m pip install ${spec}`);
+    const r = runCmd(input.pythonBin, args, {
+      cwd: input.workspaceRoot,
+      timeoutMs: timeout,
+    });
+    details.push(`${spec}:${r.ok ? 'ok' : 'fail'}`);
+    if (r.ok) installed.push(spec);
+  }
+  return {
+    installed,
+    attempted: true,
+    detail: `missing=${missing.join(',')} ${details.join(' ')}`.slice(0, 500),
+  };
 }
 
 /**
@@ -624,6 +766,31 @@ export function runWorkspaceDepPreflight(input: {
     probe = probePythonReady(pythonBin);
   }
 
+  // W1 A: package import ok but collect soft-fail (missing web/infogami) → soft-deps.
+  // Full -r requirements often fails on Windows hosts; targeted install is enough for many cells.
+  let softDepsAttempted = false;
+  let softDepsInstalled: string[] = [];
+  if (
+    probe.ok &&
+    /collect_soft_fail:/.test(probe.detail) &&
+    parseMissingModulesFromProbe(probe.detail).length > 0
+  ) {
+    const soft = installSoftDepsForCollectFail({
+      workspaceRoot: input.workspaceRoot,
+      pythonBin,
+      probeDetail: probe.detail,
+      requirementFiles: plan.requirementFiles,
+      timeoutMs: Math.min(installTimeout, 5 * 60 * 1000),
+      commands,
+    });
+    softDepsAttempted = soft.attempted;
+    softDepsInstalled = soft.installed;
+    if (soft.installed.length > 0) installed = true;
+    lastInstallDetail = soft.detail || lastInstallDetail;
+    // Re-probe collect after soft-deps (still soft-ok if more modules remain)
+    probe = probePythonReady(pythonBin);
+  }
+
   // If still unready but package import alone works (pytest missing is rarer),
   // leave probe as-is — final block below uses it.
   try {
@@ -636,6 +803,8 @@ export function runWorkspaceDepPreflight(input: {
           installed,
           venv: BABEL_WORKSPACE_VENV,
           detail: probe.detail,
+          softDepsAttempted,
+          softDepsInstalled,
           commands,
         },
         null,
@@ -661,6 +830,8 @@ export function runWorkspaceDepPreflight(input: {
       pythonBin,
       commands,
       probeDetail: probe.detail,
+      softDepsAttempted,
+      softDepsInstalled,
       durationMs: Math.round(performance.now() - started),
     };
   }
@@ -675,6 +846,8 @@ export function runWorkspaceDepPreflight(input: {
     pythonBin,
     commands,
     probeDetail: probe.detail,
+    softDepsAttempted,
+    softDepsInstalled,
     durationMs: Math.round(performance.now() - started),
   };
 }
@@ -699,5 +872,9 @@ export function applyDepPreflightEnv(
     void pathKey;
   }
   env['BABEL_WORKSPACE_DEP_PREFLIGHT'] = preflight.ready ? 'ready' : 'blocked';
+  // W1 B: host fail_to_pass and agent should share the same interpreter when known.
+  if (preflight.pythonBin?.trim()) {
+    env['BABEL_WORKSPACE_PYTHON'] = preflight.pythonBin.trim();
+  }
   return env;
 }

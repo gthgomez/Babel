@@ -2517,14 +2517,15 @@ export class ChatEngine {
       criticReceipt?: DiffCriticVerdict | null;
     },
   ) {
+    const hasMutation = this.hasAnyWrites();
     const outcome = computeTerminalOutcome({
       finalStatus: extra?.blockedReport ? 'blocked' : this.budgetExceeded ? 'budget_exhausted' : 'completed',
       budgetExceeded: this.budgetExceeded,
       lastVerifierReceipt: this.lastVerifierReceipt,
       blockedReport: extra?.blockedReport,
+      hasAnyWrites: hasMutation,
     });
     // P0-E: attach shadow later-succeeded summary before export (idempotent with buildResult).
-    const hasMutation = this.hasAnyWrites();
     recordPolicyShadowSessionOutcome(this.policyEventLog, {
       atTurn: this._turnIndex,
       hasSuccessfulMutation: hasMutation,
@@ -4399,16 +4400,17 @@ export class ChatEngine {
     if (this.cachedSystemPromptNative) stashEngineFingerprint(this.engineRunId, buildPromptFingerprint({ systemPrompt: this.cachedSystemPromptNative, taskClass: this.taskClass, tune: getChatTaskTune(this.taskClass), playbookId: this.activePlaybook?.id ?? null }));
 
     // Compute truthful TerminalOutcome from status and runtime state.
+    const hasMutation = this.hasAnyWrites();
     const outcome: TerminalOutcome = computeTerminalOutcome({
       finalStatus,
       budgetExceeded: this.budgetExceeded,
       lastVerifierReceipt: this.lastVerifierReceipt,
       blockedReport: finalBlockedReport,
+      hasAnyWrites: hasMutation,
     });
 
     // P0-E: if any kill-switch ran in shadow mode, record whether the task
     // later succeeded (mutation / coding-task gate) for precision/recall.
-    const hasMutation = this.hasAnyWrites();
     const codingPassed = isCodingTaskSuccess({
       terminalOutcome: outcome,
       hasSuccessfulMutation: hasMutation,

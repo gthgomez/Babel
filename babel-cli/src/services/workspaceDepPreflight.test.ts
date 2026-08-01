@@ -10,14 +10,43 @@ import { tmpdir } from 'node:os';
 import {
   applyDepPreflightEnv,
   detectWorkspaceDepPlan,
+  findRequirementLineForModule,
   formatWorkspaceDepUnreadyNote,
   packageHintFromRepo,
   packageNameFromPyproject,
+  parseMissingModulesFromProbe,
   resolveVenvPython,
   runWorkspaceDepPreflight,
 } from './workspaceDepPreflight.js';
 
 describe('workspaceDepPreflight', () => {
+  test('W1 A: parseMissingModulesFromProbe extracts import names', () => {
+    const detail = `
+ImportError while loading conftest 'openlibrary/conftest.py'.
+openlibrary\\conftest.py:5: in <module>
+    import web
+E   ModuleNotFoundError: No module named 'web'
+`;
+    assert.deepEqual(parseMissingModulesFromProbe(detail), ['web']);
+    assert.deepEqual(
+      parseMissingModulesFromProbe("ModuleNotFoundError: No module named 'infogami.utils'"),
+      ['infogami'],
+    );
+    assert.deepEqual(parseMissingModulesFromProbe('all good'), []);
+  });
+
+  test('W1 A: findRequirementLineForModule matches webpy git pin', () => {
+    const req = [
+      'pytest',
+      'git+https://github.com/webpy/webpy.git@d3649322b85777b291ac2b7b3699fb6fc839e382',
+      'requests',
+    ].join('\n');
+    const line = findRequirementLineForModule(req, 'web');
+    assert.ok(line);
+    assert.match(line!, /webpy/);
+    assert.equal(findRequirementLineForModule(req, 'definitely_missing_xyz'), null);
+  });
+
   test('packageHintFromRepo maps repo leaf and hyphens', () => {
     assert.equal(packageHintFromRepo('internetarchive/openlibrary'), 'openlibrary');
     assert.equal(packageHintFromRepo('qutebrowser/qutebrowser'), 'qutebrowser');
@@ -55,6 +84,35 @@ version = "0.1.0"
     const nodeDir = mkdtempSync(join(tmpdir(), 'dep-node-'));
     writeFileSync(join(nodeDir, 'package.json'), '{"name":"x"}');
     assert.equal(detectWorkspaceDepPlan(nodeDir).kind, 'node_npm');
+  });
+
+  test('W1 B: applyDepPreflightEnv sets BABEL_WORKSPACE_PYTHON', () => {
+    const env = applyDepPreflightEnv(
+      { PATH: '/usr/bin' },
+      {
+        plan: {
+          kind: 'python_editable',
+          markers: [],
+          packageHint: 'x',
+          requirementFiles: [],
+          hasPyproject: true,
+          hasSetupPy: false,
+          hasPackageJson: false,
+        },
+        ready: true,
+        installed: true,
+        blocked: false,
+        reason: null,
+        venvPath: 'C:/ws/.babel-venv',
+        pathPrefix: 'C:/ws/.babel-venv/bin',
+        pythonBin: 'C:/ws/.babel-venv/bin/python.exe',
+        commands: [],
+        probeDetail: 'ok',
+        durationMs: 1,
+      },
+    );
+    assert.equal(env['BABEL_WORKSPACE_PYTHON'], 'C:/ws/.babel-venv/bin/python.exe');
+    assert.match(env['PATH'] ?? '', /\.babel-venv/);
   });
 
   test('runWorkspaceDepPreflight install=false blocks unready python package', () => {
