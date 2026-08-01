@@ -222,6 +222,8 @@ import {
   maybeInjectMidLoopHeuristicCritic as injectMidLoopHeuristicCritic,
   runAsymmetricDiffCritic as runAsymmetricDiffCriticImpl,
   computeCriticRepairCostCap,
+  computePostWriteRepairWallMs,
+  buildPostWriteRepairMessage,
   type AsymmetricCriticState,
   type CriticRunner,
 } from './chatEngineCriticBudget.js';
@@ -489,6 +491,18 @@ export class ChatEngine {
    * null = use limits.maxCostUsd only.
    */
   private criticRepairCostCapUsd: number | null = null;
+  /**
+   * Absolute wall deadline (ms from session start) after first successful write.
+   * Caps remaining thrash so patches get verify/repair time (Wave A C1).
+   */
+  private postWriteRepairWallCapMs: number | null = null;
+  /**
+   * After first write: keep tools restricted to act_or_verify for the rest of
+   * the session (no re-explore).
+   */
+  private postWriteRepairRestrict = false;
+  /** Soft investigate-budget one-shot latch (synced via explore fuse state). */
+  private investigateSoftNudgeDone = false;
   /** Cumulative exploration tools across the entire session (never resets).
    *  Used for progressive escalation to prevent A01-class analysis paralysis. */
   private cumulativeExplorationTools = 0;
@@ -948,6 +962,7 @@ export class ChatEngine {
       toolsWithoutWrite: this.toolsWithoutWrite,
       phase: this._lastPhase,
       shadowLoggedKinds: this.exploreShadowLoggedKinds,
+      investigateSoftNudgeDone: this.investigateSoftNudgeDone,
     };
     const out = applyExploreFusesPolicy({
       executeIntent,
@@ -968,6 +983,7 @@ export class ChatEngine {
     this.restrictToolsNextTurn = state.restrictToolsNextTurn;
     this.consecutiveNonMutatingShells = state.consecutiveNonMutatingShells;
     this.toolsWithoutWrite = state.toolsWithoutWrite;
+    this.investigateSoftNudgeDone = state.investigateSoftNudgeDone === true;
     if (state.shadowLoggedKinds) {
       this.exploreShadowLoggedKinds = state.shadowLoggedKinds;
     }
@@ -991,16 +1007,21 @@ export class ChatEngine {
 
   private checkBudgets(): { ok: boolean; reason?: string } {
     const sessionCost = globalCostTracker.getSessionSummary().totalCostUSD;
-    // After first critic reject, use the tighter repair cost cap when lower.
+    // After first critic reject or post-write repair, use the tighter cost cap.
     const maxCostUsd =
       this.criticRepairCostCapUsd != null
         ? Math.min(this.limits.maxCostUsd, this.criticRepairCostCapUsd)
         : this.limits.maxCostUsd;
+    // After first write: absolute wall cap from session start (repair window).
+    const maxWallMs =
+      this.postWriteRepairWallCapMs != null
+        ? Math.min(this.limits.maxWallMs, this.postWriteRepairWallCapMs)
+        : this.limits.maxWallMs;
     return checkCostWallBudgets({
       totalCostUsd: sessionCost,
       maxCostUsd,
       sessionStartTime: this._sessionStartTime,
-      maxWallMs: this.limits.maxWallMs,
+      maxWallMs,
     });
   }
 
@@ -1024,6 +1045,72 @@ export class ChatEngine {
         `repair_window=${repairWindowUsd.toFixed(3)} cap=${capUsd.toFixed(3)} ` +
         `session_max=${this.limits.maxCostUsd.toFixed(2)}`,
     });
+  }
+
+  /**
+   * On first successful mutation: activate post-write repair mode —
+   * wall slice + cost slice + sticky act_or_verify tools + one nudge.
+   * Idempotent.
+   */
+  private applyPostWriteRepairBudget(): void {
+    if (this.postWriteRepairWallCapMs != null) return;
+    // Only for execute-style classes that must verify (not pure investigate).
+    if (this.taskClass === 'investigate') return;
+
+    const elapsedMs =
+      this._sessionStartTime > 0 ? Date.now() - this._sessionStartTime : 0;
+    const { capMs, repairWindowMs } = computePostWriteRepairWallMs({
+      elapsedMs,
+      sessionMaxWallMs: this.limits.maxWallMs,
+    });
+    this.postWriteRepairWallCapMs = capMs;
+    this.postWriteRepairRestrict = true;
+
+    // Also shrink cost if critic repair cap not already tighter.
+    if (this.criticRepairCostCapUsd == null) {
+      const spent = globalCostTracker.getSessionSummary().totalCostUSD;
+      const { capUsd, repairWindowUsd } = computeCriticRepairCostCap({
+        spentUsd: spent,
+        sessionMaxCostUsd: this.limits.maxCostUsd,
+      });
+      this.criticRepairCostCapUsd = capUsd;
+      this.policyEventLog.record({
+        at_turn: this._turnIndex,
+        kind: 'progress_policy',
+        detail:
+          `post_write_repair_cost spent=${spent.toFixed(3)} ` +
+          `repair_window=${repairWindowUsd.toFixed(3)} cap=${capUsd.toFixed(3)}`,
+      });
+    }
+
+    const remainingWallSec = Math.max(
+      0,
+      Math.round((this.limits.maxWallMs - elapsedMs) / 1000),
+    );
+    const repairWindowSec = Math.round(repairWindowMs / 1000);
+    const msg = buildPostWriteRepairMessage({
+      repairWindowSec,
+      remainingWallSec,
+    });
+    this.conversation.push({ role: 'user', content: msg });
+    this.policyEventLog.record({
+      at_turn: this._turnIndex,
+      kind: 'progress_policy',
+      detail:
+        `post_write_repair_wall elapsed_ms=${elapsedMs} ` +
+        `repair_window_ms=${repairWindowMs} cap_ms=${capMs} ` +
+        `session_max_ms=${this.limits.maxWallMs} tools=act_or_verify`,
+    });
+  }
+
+  /** Whether the next model turn should use restricted mutate/verify tools. */
+  private shouldRestrictToolsThisTurn(): boolean {
+    if (this.postWriteRepairRestrict) return true;
+    if (this.restrictToolsNextTurn) {
+      this.restrictToolsNextTurn = false;
+      return true;
+    }
+    return false;
   }
 
   // ─── R11: Per-Round Token Ceiling ──────────────────────────────────────────
@@ -1421,10 +1508,13 @@ export class ChatEngine {
           return;
         }
       } else if (useNativeTools) {
-        const restrictTools = this.restrictToolsNextTurn;
-        this.restrictToolsNextTurn = false;
+        const restrictTools = this.shouldRestrictToolsThisTurn();
         const toolDefs = restrictTools
-          ? buildRestrictedChatToolDefinitions(resolveRestrictedToolMode(this.hasAnyWrites()))
+          ? buildRestrictedChatToolDefinitions(
+              this.postWriteRepairRestrict
+                ? 'act_or_verify'
+                : resolveRestrictedToolMode(this.hasAnyWrites()),
+            )
           : buildChatToolDefinitions();
         const nativeActions: ChatToolAction[] = [];
         const nativeToolCallIds: string[] = [];
@@ -1771,7 +1861,9 @@ export class ChatEngine {
           this.consecutiveReadOnlyTools = 0;
           this.consecutiveNonMutatingShells = 0;
           this.toolsWithoutWrite = 0;
+          this.investigateSoftNudgeDone = false;
           this.midLoopCriticFired = false;
+          this.applyPostWriteRepairBudget();
         } else {
           this.turnsWithoutWrite++;
         }
@@ -3998,10 +4090,13 @@ export class ChatEngine {
     hooks: { onStreamedChunks?: (text: string) => void } = {},
   ): Promise<ChatTurn> {
     if (useNativeTools && typeof runner.executeWithToolsStream === 'function') {
-      const restrictTools = this.restrictToolsNextTurn;
-      this.restrictToolsNextTurn = false;
+      const restrictTools = this.shouldRestrictToolsThisTurn();
       const toolDefs = restrictTools
-        ? buildRestrictedChatToolDefinitions(resolveRestrictedToolMode(this.hasAnyWrites()))
+        ? buildRestrictedChatToolDefinitions(
+            this.postWriteRepairRestrict
+              ? 'act_or_verify'
+              : resolveRestrictedToolMode(this.hasAnyWrites()),
+          )
         : buildChatToolDefinitions();
       const nativeActions: ChatToolAction[] = [];
       let answerText = '';

@@ -7,6 +7,11 @@ import { describe, test } from 'node:test';
 
 import {
   buildCriticSkipReceipt,
+  buildPostWriteRepairMessage,
+  computeCriticRepairCostCap,
+  computePostWriteRepairWallMs,
+  POST_WRITE_REPAIR_WALL_MAX_MS,
+  POST_WRITE_REPAIR_WALL_MIN_MS,
   runAsymmetricDiffCritic,
   type AsymmetricCriticState,
   type CriticRunner,
@@ -50,8 +55,6 @@ describe('buildCriticSkipReceipt', () => {
   });
 });
 
-import { computeCriticRepairCostCap } from './chatEngineCriticBudget.js';
-
 describe('computeCriticRepairCostCap', () => {
   test('caps remaining spend to a repair window under session max', () => {
     // Spent $2.00 of $3.00 → remaining $1.00 → window min(0.75, max(0.25, 0.35)) = 0.35
@@ -72,6 +75,47 @@ describe('computeCriticRepairCostCap', () => {
     const r = computeCriticRepairCostCap({ spentUsd: 3.0, sessionMaxCostUsd: 3.0 });
     assert.equal(r.repairWindowUsd, 0);
     assert.equal(r.capUsd, 3.0);
+  });
+});
+
+describe('computePostWriteRepairWallMs', () => {
+  test('caps remaining wall to repair window under session max', () => {
+    // elapsed 300s of 600s → remaining 300s → window clamp to [90s, 180s] of 40% = 120s
+    const r = computePostWriteRepairWallMs({
+      elapsedMs: 300_000,
+      sessionMaxWallMs: 600_000,
+    });
+    assert.ok(r.repairWindowMs >= POST_WRITE_REPAIR_WALL_MIN_MS);
+    assert.ok(r.repairWindowMs <= POST_WRITE_REPAIR_WALL_MAX_MS);
+    assert.equal(r.capMs, 300_000 + r.repairWindowMs);
+    assert.ok(r.capMs <= 600_000);
+  });
+
+  test('uses all remaining when under min window', () => {
+    const r = computePostWriteRepairWallMs({
+      elapsedMs: 550_000,
+      sessionMaxWallMs: 600_000,
+    });
+    assert.equal(r.repairWindowMs, 50_000);
+    assert.equal(r.capMs, 600_000);
+  });
+
+  test('zero remaining leaves cap at session max', () => {
+    const r = computePostWriteRepairWallMs({
+      elapsedMs: 600_000,
+      sessionMaxWallMs: 600_000,
+    });
+    assert.equal(r.repairWindowMs, 0);
+    assert.equal(r.capMs, 600_000);
+  });
+
+  test('buildPostWriteRepairMessage mentions act_or_verify intent', () => {
+    const msg = buildPostWriteRepairMessage({
+      repairWindowSec: 120,
+      remainingWallSec: 300,
+    });
+    assert.match(msg, /post-write repair window/i);
+    assert.match(msg, /mutate \+ verify/i);
   });
 });
 

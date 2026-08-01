@@ -146,6 +146,58 @@ export function computeCriticRepairCostCap(input: {
   };
 }
 
+/**
+ * After first successful mutation: shrink remaining wall so thrash cannot
+ * burn the full general_swe 10m after a patch already exists (Wave A: wall
+ * killed sessions with incomplete gold while soft investigate nudges spammed).
+ *
+ * Window = clamp(remaining × fraction, minMs, maxMs), then cap = elapsed + window.
+ * Never raises the session wall. If remaining &lt; minMs, use all remaining.
+ */
+export const POST_WRITE_REPAIR_WALL_FRACTION = 0.4;
+export const POST_WRITE_REPAIR_WALL_MIN_MS = 90_000; // 1.5 min
+export const POST_WRITE_REPAIR_WALL_MAX_MS = 180_000; // 3 min
+
+export function computePostWriteRepairWallMs(input: {
+  elapsedMs: number;
+  sessionMaxWallMs: number;
+  fraction?: number;
+  minMs?: number;
+  maxMs?: number;
+}): { capMs: number; repairWindowMs: number } {
+  const remaining = Math.max(0, input.sessionMaxWallMs - input.elapsedMs);
+  if (remaining <= 0) {
+    return { capMs: input.sessionMaxWallMs, repairWindowMs: 0 };
+  }
+  const fraction = input.fraction ?? POST_WRITE_REPAIR_WALL_FRACTION;
+  const minMs = input.minMs ?? POST_WRITE_REPAIR_WALL_MIN_MS;
+  const maxMs = input.maxMs ?? POST_WRITE_REPAIR_WALL_MAX_MS;
+  if (remaining <= minMs) {
+    return { capMs: input.elapsedMs + remaining, repairWindowMs: remaining };
+  }
+  const raw = remaining * fraction;
+  const repairWindowMs = Math.min(remaining, Math.min(maxMs, Math.max(minMs, raw)));
+  return {
+    capMs: input.elapsedMs + repairWindowMs,
+    repairWindowMs,
+  };
+}
+
+/** Operator/model-facing nudge once repair window activates. */
+export function buildPostWriteRepairMessage(input: {
+  repairWindowSec: number;
+  remainingWallSec: number;
+}): string {
+  return [
+    '[Implementor: post-write repair window]',
+    `A file mutation exists. Remaining wall for this session is ~${input.repairWindowSec}s`,
+    `(of ~${input.remainingWallSec}s left before the hard wall).`,
+    'Do not re-explore the tree. Run project tests (pytest/npm test — not python -c probes),',
+    'read only failing paths, and fix with str_replace until tests pass or env_blocked.',
+    'Tools are restricted to mutate + verify for the rest of this session.',
+  ].join(' ');
+}
+
 export function buildCriticBlockedReport(
   verdict: DiffCriticVerdict,
   criticStrikes: number,
