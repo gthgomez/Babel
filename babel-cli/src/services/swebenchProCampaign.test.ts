@@ -15,6 +15,7 @@ import {
   type CampaignCellResult,
   type SwebenchProInstanceRow,
 } from './swebenchProCampaign.js';
+import { packageHintFromRepo } from './workspaceDepPreflight.js';
 
 function cell(
   partial: Partial<CampaignCellResult> & Pick<CampaignCellResult, 'instance_id' | 'signature' | 'status' | 'phase'>,
@@ -152,6 +153,11 @@ describe('swebenchProCampaign early-stop', () => {
     );
     assert.equal(r.count, 0);
     assert.equal(r.abort, null);
+  });
+
+  test('packageHintFromRepo aligns with Pro repo leaves', () => {
+    assert.equal(packageHintFromRepo('internetarchive/openlibrary'), 'openlibrary');
+    assert.equal(packageHintFromRepo('qutebrowser/qutebrowser'), 'qutebrowser');
   });
 
   test('campaign aborts live after 5 same signature (injected cells)', async () => {

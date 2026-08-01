@@ -38,6 +38,11 @@ import { buildAskResultPayload } from '../../cli/structuredOutput.js';
 import { runGitCommandAsync } from '../../utils/gitExec.js';
 import { loadProjectSessionIdentity } from '../identity.js';
 import { isChatStreamingEnabled, resolveChatEngineLimits } from '../../config/chatEngineLimits.js';
+import {
+  detectWorkspaceDepPlan,
+  formatWorkspaceDepUnreadyNote,
+  probePythonImport,
+} from '../../services/workspaceDepPreflight.js';
 import { resolveChatTaskClass } from '../../config/chatTaskClass.js';
 import { isSuccessfulDirectMutation } from '../../agent/mutationTools.js';
 import { computeToolCallAggregates } from '../../agent/toolCallExport.js';
@@ -128,19 +133,18 @@ export async function gatherChatPreflightContext(
         parts.push(`- Changes:\n${statLines.join('\n')}`);
       }
     }
+    // Append build/test commands from package.json
+    const pkgCmds = collectPackageJsonCommands(targetRoot);
+    if (pkgCmds) {
+      parts.push(pkgCmds);
+    }
+    // C2 product honesty: probe-only (no auto-install). Nudge mutate→one verify→ENV_BLOCKED.
+    const depNote = collectWorkspaceDepReadinessNote(targetRoot);
+    if (depNote) {
+      parts.push(depNote);
+    }
     if (parts.length > 0) {
-      // Append build/test commands from package.json
-      const pkgCmds = collectPackageJsonCommands(targetRoot);
-      if (pkgCmds) {
-        parts.push(pkgCmds);
-      }
       return '## Pre-flight Context\n' + parts.join('\n');
-    } else {
-      // No git info but we may still have package.json commands
-      const pkgCmds = collectPackageJsonCommands(targetRoot);
-      if (pkgCmds) {
-        return '## Pre-flight Context\n' + pkgCmds;
-      }
     }
   } catch (err) {
     console.error(
@@ -175,6 +179,30 @@ function collectPackageJsonCommands(targetRoot: string): string | undefined {
     // Best-effort — never throw
   }
   return undefined;
+}
+
+/**
+ * C2 product path: probe-only workspace dep readiness (no pip/npm install here).
+ * When the project package is not importable, tell the model to avoid thrash.
+ */
+function collectWorkspaceDepReadinessNote(targetRoot: string): string | undefined {
+  try {
+    const plan = detectWorkspaceDepPlan(targetRoot);
+    if (plan.kind === 'none' || plan.kind === 'node_npm') return undefined;
+    if (!plan.packageHint) return undefined;
+    const probe = probePythonImport({
+      packageName: plan.packageHint,
+      cwd: targetRoot,
+      timeoutMs: 8_000,
+    });
+    if (probe.ok) return undefined;
+    return formatWorkspaceDepUnreadyNote({
+      packageHint: plan.packageHint,
+      probeDetail: probe.detail,
+    });
+  } catch {
+    return undefined;
+  }
 }
 
 /**

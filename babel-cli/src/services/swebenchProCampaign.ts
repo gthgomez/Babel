@@ -33,6 +33,12 @@ import {
   resolveBabelCliEntry,
   runBabelCli,
 } from './liteTrustDemo.js';
+import {
+  applyDepPreflightEnv,
+  packageHintFromRepo,
+  runWorkspaceDepPreflight,
+  type WorkspaceDepPreflightResult,
+} from './workspaceDepPreflight.js';
 
 export const SWE_PRO_CAMPAIGN_SCHEMA = 1 as const;
 
@@ -103,6 +109,13 @@ export interface CampaignOptions {
   infraOnly?: boolean;
   /** Pull docker image during infra for first K instances (default 0 = skip pull). */
   dockerPullFirstK?: number;
+  /**
+   * C2: workspace dep install preflight before the agent (default true).
+   * Set false or env BABEL_SWE_PRO_DEP_PREFLIGHT=0 to skip.
+   * When install fails / package still not importable → honest env_blocked cell
+   * without multi-minute agent thrash.
+   */
+  depPreflight?: boolean;
   now?: Date;
   /** Inject for tests */
   runCell?: (instance: SwebenchProInstanceRow, phase: CampaignPhase) => CampaignCellResult;
@@ -538,11 +551,81 @@ function defaultRunInfraCell(
   }
 }
 
+function depPreflightEnabled(optionsDepPreflight?: boolean): boolean {
+  if (optionsDepPreflight === false) return false;
+  if (optionsDepPreflight === true) return true;
+  const env = process.env['BABEL_SWE_PRO_DEP_PREFLIGHT']?.trim().toLowerCase();
+  if (env === '0' || env === 'false' || env === 'off' || env === 'skip') return false;
+  return true;
+}
+
+/** Honest C2 terminal when workspace deps cannot be made ready. */
+function envBlockedPreflightCell(
+  instance: SwebenchProInstanceRow,
+  evidenceDir: string,
+  started: number,
+  evidence_path: string,
+  preflight: WorkspaceDepPreflightResult,
+): CampaignCellResult {
+  const result: CampaignCellResult = {
+    instance_id: instance.instance_id,
+    phase: 'live',
+    status: 'fail',
+    signature: 'agent:env_blocked',
+    notes: [
+      'dep_preflight_blocked',
+      `dep_ready=false`,
+      `dep_installed=${preflight.installed}`,
+      `dep_kind=${preflight.plan.kind}`,
+      `dep_package=${preflight.plan.packageHint ?? 'null'}`,
+      `dep_ms=${preflight.durationMs}`,
+      `status=ENV_BLOCKED`,
+      `terminal_outcome=ENV_BLOCKED`,
+      `reason=${(preflight.reason ?? 'workspace deps not ready').slice(0, 240)}`,
+      ...preflight.commands.map((c) => `dep_cmd=${c}`),
+    ],
+    patch_bytes: 0,
+    gold_diff_ok: false,
+    policy_events: [
+      {
+        at_turn: 0,
+        kind: 'env_blocked',
+        detail: `workspace_dep_preflight: ${preflight.reason ?? 'not ready'}`,
+      },
+    ],
+    has_shadow_summary: false,
+    duration_ms: Math.round(performance.now() - started),
+    evidence_path,
+    cli_exit_code: null,
+    status_text: 'ENV_BLOCKED',
+  };
+  writeFileSync(
+    evidence_path,
+    JSON.stringify(
+      {
+        ...result,
+        dep_preflight: preflight,
+        preds: {
+          model_name_or_path: 'babel-agent-chat',
+          instance_id: instance.instance_id,
+          model_patch: '',
+        },
+      },
+      null,
+      2,
+    ),
+    'utf8',
+  );
+  writeFileSync(join(evidenceDir, 'live', `${instance.instance_id}.patch`), '', 'utf8');
+  return result;
+}
+
 function defaultRunLiveCell(
   instance: SwebenchProInstanceRow,
   evidenceDir: string,
   provider: 'mock' | 'live',
   model: string,
+  options?: Pick<CampaignOptions, 'depPreflight'>,
 ): CampaignCellResult {
   const started = performance.now();
   const evidence_path = join(evidenceDir, 'live', `${instance.instance_id}.json`);
@@ -594,13 +677,56 @@ function defaultRunLiveCell(
     return result;
   }
 
+  // C2: install workspace deps (or honest ENV_BLOCKED) before burning agent wall/cost.
+  let depNotes: string[] = [];
+  let depEnvPatch: WorkspaceDepPreflightResult | null = null;
+  if (depPreflightEnabled(options?.depPreflight)) {
+    const testPath =
+      typeof instance.selected_test_files_to_run === 'string'
+        ? instance.selected_test_files_to_run
+            .replace(/^[\[\s'"]+/, '')
+            .replace(/[\]\s'"]+$/, '')
+            .split(/[,\s]+/)
+            .find((p) => p.includes('/') || p.endsWith('.py')) ?? null
+        : null;
+    const preflight = runWorkspaceDepPreflight({
+      workspaceRoot,
+      packageHint: packageHintFromRepo(instance.repo),
+      testPath,
+      install: true,
+    });
+    depEnvPatch = preflight;
+    depNotes = [
+      `dep_preflight=1`,
+      `dep_ready=${preflight.ready}`,
+      `dep_installed=${preflight.installed}`,
+      `dep_kind=${preflight.plan.kind}`,
+      `dep_package=${preflight.plan.packageHint ?? 'null'}`,
+      `dep_ms=${preflight.durationMs}`,
+    ];
+    if (preflight.blocked || !preflight.ready) {
+      return envBlockedPreflightCell(
+        instance,
+        evidenceDir,
+        started,
+        evidence_path,
+        preflight,
+      );
+    }
+  } else {
+    depNotes = ['dep_preflight=0'];
+  }
+
   ensureBabelCliDistReady();
   const prompt = proPrompt(instance);
   // Product general_swe budgets only — do not inflate turns/cost for "benchmark max".
   // Allow operator env to raise caps; strip harness-only MAX_TURNS default of 250
   // when unset so chatTaskClass general_swe (250/3.0/10min) is the sole source of truth.
   const baseEnv = benchmarkBabelEnv(provider);
-  const productEnv = buildSweAgentChatEnv(baseEnv);
+  let productEnv = buildSweAgentChatEnv(baseEnv);
+  if (depEnvPatch) {
+    productEnv = applyDepPreflightEnv(productEnv, depEnvPatch);
+  }
   // Prefer product stall tune over harness stall=25 unless operator set it.
   if (!process.env['BABEL_CHAT_STALL_TURNS']?.trim()) {
     delete productEnv['BABEL_CHAT_STALL_TURNS'];
@@ -691,6 +817,7 @@ function defaultRunLiveCell(
     status,
     signature,
     notes: [
+      ...depNotes,
       `cli_exit=${cli.exitCode}`,
       `status=${statusText ?? 'null'}`,
       `terminal_outcome=${terminalOutcome ?? 'null'}`,
@@ -715,6 +842,7 @@ function defaultRunLiveCell(
     JSON.stringify(
       {
         ...result,
+        dep_preflight: depEnvPatch,
         preds: {
           model_name_or_path: 'babel-agent-chat',
           instance_id: instance.instance_id,
@@ -796,6 +924,9 @@ export async function runSwebenchProCampaign(
         evidenceDir,
         options.provider,
         options.model ?? 'deepseek-v4-pro',
+        options.depPreflight === undefined
+          ? undefined
+          : { depPreflight: options.depPreflight },
       );
     });
 
