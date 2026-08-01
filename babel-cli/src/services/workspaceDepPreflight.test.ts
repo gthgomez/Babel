@@ -15,8 +15,10 @@ import {
   packageHintFromRepo,
   packageNameFromPyproject,
   parseMissingModulesFromProbe,
+  resolveSoftDepSpecForModule,
   resolveVenvPython,
   runWorkspaceDepPreflight,
+  SOFT_DEP_MAX_ROUNDS,
 } from './workspaceDepPreflight.js';
 
 describe('workspaceDepPreflight', () => {
@@ -45,6 +47,28 @@ E   ModuleNotFoundError: No module named 'web'
     assert.ok(line);
     assert.match(line!, /webpy/);
     assert.equal(findRequirementLineForModule(req, 'definitely_missing_xyz'), null);
+  });
+
+  test('W1 multi-round: resolveSoftDepSpec prefers requirements then vendor infogami', () => {
+    assert.equal(SOFT_DEP_MAX_ROUNDS, 3);
+    const req = [
+      'git+https://github.com/webpy/webpy.git@d3649322b85777b291ac2b7b3699fb6fc839e382',
+      'multipart==0.2.4',
+    ].join('\n');
+    assert.match(
+      resolveSoftDepSpecForModule('/tmp/ws', 'web', [req]) ?? '',
+      /webpy/,
+    );
+    assert.equal(resolveSoftDepSpecForModule('/tmp/ws', 'multipart', [req]), 'multipart==0.2.4');
+    assert.equal(resolveSoftDepSpecForModule('/tmp/ws', 'multipart', []), 'multipart');
+
+    const dir = mkdtempSync(join(tmpdir(), 'dep-infogami-'));
+    mkdirSync(join(dir, 'vendor', 'infogami'), { recursive: true });
+    writeFileSync(join(dir, 'vendor', 'infogami', 'setup.py'), 'from setuptools import setup\nsetup(name="infogami")\n');
+    assert.equal(
+      resolveSoftDepSpecForModule(dir, 'infogami', []),
+      '-e vendor/infogami',
+    );
   });
 
   test('packageHintFromRepo maps repo leaf and hyphens', () => {

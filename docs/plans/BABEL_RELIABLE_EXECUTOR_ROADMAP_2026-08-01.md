@@ -261,7 +261,9 @@ After first production write, progress policy / repair window:
 - `BABEL_SWE_PRO_FTP_CHECK=0` — skip host fail_to_pass pytest after agent (still report `fail_to_pass_ok=null`).
 - Cell notes always include `gold_diff=…` and `fail_to_pass_ok=…`; campaign-summary has both columns.
 - **W1 A–D (post-4a5d):** soft-deps install after collect soft-fail; host ftp uses `BABEL_WORKSPACE_PYTHON` / preflight `pythonBin`; production patch + collect fail → `agent:verifier_collect_error` / `AGENT_FAILURE` (not thrash env); `fail_to_pass_class=collect_error|assert_fail|…`.
-- **Post-#45 reval** (`2026-08-01T18-33-41-live`, 3-cell OL): honesty signal **green** — `soft_deps_attempted=true`, webpy pin installed, `fail_to_pass_class=collect_error`×3 (not assert), venv python for ftp, `test_patch_applied=true`, 4a5d produced real patch (1270 B) + `authority=true` verify. Collect residual: `infogami` (then `multipart`) — multi-round soft-deps still open; product pass still 0/3. **W2 SessionEventV1 dual-write is next.**
+- **Post-#45 reval** (`2026-08-01T18-33-41-live`, 3-cell OL): honesty signal **green** — `soft_deps_attempted=true`, webpy pin installed, `fail_to_pass_class=collect_error`×3 (not assert), venv python for ftp, `test_patch_applied=true`, 4a5d produced real patch (1270 B) + `authority=true` verify. Collect residual was `infogami` after `web` (also `multipart` mid-chain).
+- **W1 multi-round soft-deps:** up to 3 re-probe rounds; vendor `infogami` path (`-e vendor/infogami`); `multipart` from requirements/fallback.
+- **W2 PR-E/F:** SessionEventV1 dual-write + tool settle (`tool_started` before side effects; kill/resume marks interrupted keys).
 
 **Acceptance:** campaign-summary shows both columns; 4a5d autopsy reproducible.
 
