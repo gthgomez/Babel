@@ -260,6 +260,7 @@ After first production write, progress policy / repair window:
 - `BABEL_SWE_PRO_PASS_MODE=gold|ftp|both` — controls `cell.status` / `live_pass` only (default **gold**).
 - `BABEL_SWE_PRO_FTP_CHECK=0` — skip host fail_to_pass pytest after agent (still report `fail_to_pass_ok=null`).
 - Cell notes always include `gold_diff=…` and `fail_to_pass_ok=…`; campaign-summary has both columns.
+- **W1 A–D (post-4a5d):** soft-deps install after collect soft-fail; host ftp uses `BABEL_WORKSPACE_PYTHON` / preflight `pythonBin`; production patch + collect fail → `agent:verifier_collect_error` / `AGENT_FAILURE` (not thrash env); `fail_to_pass_class=collect_error|assert_fail|…`.
 
 **Acceptance:** campaign-summary shows both columns; 4a5d autopsy reproducible.
 

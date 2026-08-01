@@ -61,6 +61,16 @@ export type CampaignPhase = 'infra' | 'live';
 /** How campaign `status=pass` is decided (default gold for continuity). */
 export type SweProPassMode = 'gold' | 'ftp' | 'both';
 
+/** W1 D: host fail_to_pass outcome class (not just ok/false). */
+export type FailToPassClass =
+  | 'pass'
+  | 'assert_fail'
+  | 'collect_error'
+  | 'env_error'
+  | 'timeout'
+  | 'skipped'
+  | 'unknown';
+
 export interface CampaignCellResult {
   instance_id: string;
   phase: CampaignPhase;
@@ -75,6 +85,8 @@ export interface CampaignCellResult {
    * null = not run / skipped; true/false = pytest exit.
    */
   fail_to_pass_ok?: boolean | null;
+  /** W1 D: collect_error vs assert_fail (do not treat collect as "code wrong"). */
+  fail_to_pass_class?: FailToPassClass | null;
   policy_events: Array<{ at_turn?: number; kind?: string; detail?: string; tool?: string }>;
   has_shadow_summary: boolean;
   duration_ms: number;
@@ -187,6 +199,8 @@ export function classifyCampaignFailureSignature(input: {
   goldDiffOk?: boolean | null;
   stdoutStderr?: string;
   missingApiKey?: boolean;
+  /** W1 C/D: host fail_to_pass class when known. */
+  failToPassClass?: FailToPassClass | null;
 }): string {
   if (input.missingApiKey || /missing.?api.?key|DEEPSEEK_API_KEY/i.test(input.infraError ?? '')) {
     return 'infra:missing_api_key';
@@ -223,6 +237,20 @@ export function classifyCampaignFailureSignature(input: {
     return 'agent:budget_exhausted';
   }
 
+  // W1 C/D: production patch + collect-only fail → failed_with_evidence (not thrash/env).
+  if (
+    (input.patchBytes ?? 0) > 0 &&
+    (input.failToPassClass === 'collect_error' ||
+      terminal === 'AGENT_FAILURE' ||
+      /verifier_collect|failed_with_evidence|collect_error/i.test(
+        `${status}\n${terminal}\n${blob}`,
+      ))
+  ) {
+    if (input.failToPassClass === 'collect_error') {
+      return 'agent:verifier_collect_error';
+    }
+  }
+
   // Pri-3: structured fields first — do not let ImportError text in a
   // policy-killed transcript re-label investigate_hard_cap as env_blocked.
   if (input.envBlocked === true || status === 'ENV_BLOCKED') {
@@ -230,6 +258,15 @@ export function classifyCampaignFailureSignature(input: {
   }
   if (terminal === 'BLOCKED_POLICY' || status === 'BLOCKED_POLICY') {
     return 'agent:blocked_policy';
+  }
+  // W1 C: after a production patch, BLOCKED_EXTERNAL from collect soft-deps
+  // is failed-with-evidence — not a pure env quarantine (hasAnyWrites path).
+  if (
+    terminal === 'BLOCKED_EXTERNAL' &&
+    (input.patchBytes ?? 0) > 0 &&
+    input.failToPassClass === 'collect_error'
+  ) {
+    return 'agent:verifier_collect_error';
   }
   if (terminal === 'BLOCKED_EXTERNAL') {
     // External without env_blocked flag → generic external (permission, etc.)
@@ -506,49 +543,129 @@ export interface FailToPassCheckResult {
   command: string | null;
   exitCode: number | null;
   skippedReason?: string;
+  /** W1 D */
+  failToPassClass: FailToPassClass;
+  /** Captured stdout/stderr slice for classification. */
+  outputSnippet?: string;
+  /** Interpreter used (W1 B). */
+  pythonBin?: string;
+}
+
+/**
+ * Classify host fail_to_pass output. Pure — collect_error ≠ assert_fail (W1 D).
+ */
+export function classifyFailToPassResult(input: {
+  exitCode: number | null;
+  output?: string | null;
+  skippedReason?: string | null;
+}): FailToPassClass {
+  if (input.skippedReason) {
+    if (/timeout|signal_/i.test(input.skippedReason)) return 'timeout';
+    if (/python_missing|disabled|no_fail_to_pass/i.test(input.skippedReason)) {
+      return input.skippedReason === 'disabled' || input.skippedReason === 'no_fail_to_pass'
+        ? 'skipped'
+        : 'env_error';
+    }
+    return 'env_error';
+  }
+  if (input.exitCode === 0) return 'pass';
+  const blob = (input.output ?? '').toLowerCase();
+  if (
+    /\bimporterror\b/.test(blob) ||
+    /\bmodulenotfounderror\b/.test(blob) ||
+    /\bwhile loading conftest\b/.test(blob) ||
+    /\bno module named\b/.test(blob) ||
+    /\berror collecting\b/.test(blob) ||
+    /\bno tests ran\b/.test(blob) ||
+    /\bcollected 0 items\b/.test(blob) ||
+    // pytest exit 4 = usage error; often collect/import path failures
+    (input.exitCode === 4 && blob.length > 0) ||
+    input.exitCode === 5
+  ) {
+    // exit 5 = no tests collected; exit 4 with import noise = collect_error
+    if (
+      /\bimporterror\b/.test(blob) ||
+      /\bmodulenotfounderror\b/.test(blob) ||
+      /\bwhile loading conftest\b/.test(blob) ||
+      /\bno module named\b/.test(blob) ||
+      /\berror collecting\b/.test(blob) ||
+      input.exitCode === 5 ||
+      input.exitCode === 4
+    ) {
+      return 'collect_error';
+    }
+  }
+  if (input.exitCode === 1) return 'assert_fail';
+  if (input.exitCode == null) return 'unknown';
+  return 'assert_fail';
 }
 
 /**
  * Best-effort host fail_to_pass after the agent. Does not throw.
  * Skip with BABEL_SWE_PRO_FTP_CHECK=0.
+ * W1 B: prefer preflight pythonBin / BABEL_WORKSPACE_PYTHON over bare `python`.
  */
 export function runFailToPassCheck(
   workspaceRoot: string,
   instance: SwebenchProInstanceRow,
   env: NodeJS.ProcessEnv = process.env,
+  options?: { pythonBin?: string | null },
 ): FailToPassCheckResult {
   const disabled = (env['BABEL_SWE_PRO_FTP_CHECK'] ?? '1').trim() === '0';
   if (disabled) {
-    return { ok: null, command: null, exitCode: null, skippedReason: 'disabled' };
+    return {
+      ok: null,
+      command: null,
+      exitCode: null,
+      skippedReason: 'disabled',
+      failToPassClass: 'skipped',
+    };
   }
   const targets = parseSweStringList(instance.fail_to_pass).slice(0, 5);
   if (targets.length === 0) {
-    return { ok: null, command: null, exitCode: null, skippedReason: 'no_fail_to_pass' };
+    return {
+      ok: null,
+      command: null,
+      exitCode: null,
+      skippedReason: 'no_fail_to_pass',
+      failToPassClass: 'skipped',
+    };
   }
-  const command = `python -m pytest ${targets.join(' ')} -q --tb=no`;
+  const pythonBin =
+    options?.pythonBin?.trim() ||
+    env['BABEL_WORKSPACE_PYTHON']?.trim() ||
+    (process.platform === 'win32' ? 'python' : 'python3');
+  const command = `${pythonBin} -m pytest ${targets.join(' ')} -q --tb=short`;
   try {
-    const result = spawnSync(
-      'python',
-      ['-m', 'pytest', ...targets, '-q', '--tb=no'],
-      {
-        cwd: workspaceRoot,
-        encoding: 'utf8',
-        env,
-        timeout: 180_000,
-        windowsHide: true,
-        shell: process.platform === 'win32',
-      },
-    );
+    // Prefer argv form without shell so venv pythonBin paths with spaces work.
+    const result = spawnSync(pythonBin, ['-m', 'pytest', ...targets, '-q', '--tb=short'], {
+      cwd: workspaceRoot,
+      encoding: 'utf8',
+      env,
+      timeout: 180_000,
+      windowsHide: true,
+    });
+    const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim();
     if (result.error) {
       const code = (result.error as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') {
-        return { ok: null, command, exitCode: null, skippedReason: 'python_missing' };
+        return {
+          ok: null,
+          command,
+          exitCode: null,
+          skippedReason: 'python_missing',
+          failToPassClass: 'env_error',
+          pythonBin,
+          outputSnippet: result.error.message.slice(0, 300),
+        };
       }
       return {
         ok: null,
         command,
         exitCode: null,
         skippedReason: result.error.message.slice(0, 120),
+        failToPassClass: 'env_error',
+        pythonBin,
       };
     }
     if (result.status === null && result.signal) {
@@ -557,12 +674,20 @@ export function runFailToPassCheck(
         command,
         exitCode: null,
         skippedReason: `signal_${result.signal}`,
+        failToPassClass: 'timeout',
+        pythonBin,
+        outputSnippet: output.slice(0, 500),
       };
     }
+    const exitCode = typeof result.status === 'number' ? result.status : null;
+    const failToPassClass = classifyFailToPassResult({ exitCode, output });
     return {
-      ok: result.status === 0,
+      ok: exitCode === 0,
       command,
-      exitCode: typeof result.status === 'number' ? result.status : null,
+      exitCode,
+      failToPassClass,
+      pythonBin,
+      outputSnippet: output.slice(0, 800),
     };
   } catch (err) {
     return {
@@ -570,6 +695,8 @@ export function runFailToPassCheck(
       command,
       exitCode: null,
       skippedReason: err instanceof Error ? err.message.slice(0, 120) : String(err),
+      failToPassClass: 'env_error',
+      pythonBin,
     };
   }
 }
@@ -990,6 +1117,12 @@ function defaultRunLiveCell(
       `dep_kind=${preflight.plan.kind}`,
       `dep_package=${preflight.plan.packageHint ?? 'null'}`,
       `dep_ms=${preflight.durationMs}`,
+      ...(preflight.softDepsAttempted
+        ? [
+            `soft_deps_attempted=true`,
+            `soft_deps_installed=${(preflight.softDepsInstalled ?? []).join('|') || 'none'}`,
+          ]
+        : []),
     ];
     if (preflight.blocked || !preflight.ready) {
       return envBlockedPreflightCell(
@@ -1057,9 +1190,12 @@ function defaultRunLiveCell(
     gold_diff_ok = false;
   }
 
-  // W1.3: dual scoreboard — host fail_to_pass (best-effort; does not redefine gold).
-  const ftpCheck = runFailToPassCheck(workspaceRoot, instance, productEnv);
+  // W1.3/B/D: dual scoreboard + venv interpreter + collect vs assert class.
+  const ftpCheck = runFailToPassCheck(workspaceRoot, instance, productEnv, {
+    pythonBin: depEnvPatch?.pythonBin ?? productEnv['BABEL_WORKSPACE_PYTHON'] ?? null,
+  });
   const fail_to_pass_ok = ftpCheck.ok;
+  const fail_to_pass_class = ftpCheck.failToPassClass;
   const passMode = resolveSweProPassMode();
 
   const payload = cli.payload as Record<string, unknown> | null;
@@ -1074,21 +1210,35 @@ function defaultRunLiveCell(
   const statusText =
     typeof payload?.['status'] === 'string' ? (payload['status'] as string) : null;
   // Prefer structured terminal_outcome (Pri-3); keep status separate.
-  const terminalOutcome =
+  let terminalOutcome =
     typeof payload?.['terminal_outcome'] === 'string'
       ? (payload['terminal_outcome'] as string)
       : null;
+  // W1 C: production patch + host collect_error → failed-with-evidence terminal class.
+  if (
+    patch.length > 0 &&
+    fail_to_pass_class === 'collect_error' &&
+    (terminalOutcome === 'BLOCKED_EXTERNAL' ||
+      terminalOutcome === 'BLOCKED_POLICY' ||
+      !terminalOutcome)
+  ) {
+    terminalOutcome = 'AGENT_FAILURE';
+  }
   const envBlockedFlag =
     payload?.['env_blocked'] === true || statusText === 'ENV_BLOCKED';
+  // Do not treat collect_error after patch as env_blocked for scoreboard.
+  const envBlockedForSig =
+    envBlockedFlag && !(patch.length > 0 && fail_to_pass_class === 'collect_error');
   const streamBlob = `${cli.stdout ?? ''}\n${cli.stderr ?? ''}`;
   const signature = classifyCampaignFailureSignature({
     phase: 'live',
     cliExitCode: cli.exitCode,
     statusText,
     terminalOutcome: terminalOutcome ?? statusText,
-    envBlocked: envBlockedFlag,
+    envBlocked: envBlockedForSig,
     patchBytes: patch.length,
     goldDiffOk: gold_diff_ok,
+    failToPassClass: fail_to_pass_class,
     stdoutStderr:
       cli.timedOut || cli.failureCapsule?.timed_out
         ? `harness_timeout process timed out after\n${streamBlob}`
@@ -1096,6 +1246,7 @@ function defaultRunLiveCell(
   });
   // Pass mode controls cell.status only; always report both gold_diff and fail_to_pass.
   // Do not OR with agent:task_pass (gold-derived) — that would break pass_mode=ftp|both.
+  // W1 D: collect_error must not count as ftp pass for pass_mode=ftp|both (already false).
   const modePass = cellPassesByMode(gold_diff_ok, fail_to_pass_ok, passMode);
   const status: CampaignCellResult['status'] = modePass ? 'pass' : 'fail';
 
@@ -1113,7 +1264,9 @@ function defaultRunLiveCell(
   const ftpNotes: string[] = [
     `pass_mode=${passMode}`,
     `fail_to_pass_ok=${fail_to_pass_ok === null || fail_to_pass_ok === undefined ? 'null' : fail_to_pass_ok}`,
+    `fail_to_pass_class=${fail_to_pass_class}`,
   ];
+  if (ftpCheck.pythonBin) ftpNotes.push(`fail_to_pass_python=${ftpCheck.pythonBin}`);
   if (ftpCheck.command) ftpNotes.push(`fail_to_pass_cmd=${ftpCheck.command.slice(0, 240)}`);
   if (ftpCheck.exitCode !== null && ftpCheck.exitCode !== undefined) {
     ftpNotes.push(`fail_to_pass_exit=${ftpCheck.exitCode}`);
@@ -1142,6 +1295,7 @@ function defaultRunLiveCell(
     patch_bytes: patch.length,
     gold_diff_ok,
     fail_to_pass_ok: fail_to_pass_ok ?? null,
+    fail_to_pass_class,
     policy_events,
     has_shadow_summary,
     duration_ms: Math.round(performance.now() - started),
@@ -1312,6 +1466,8 @@ export async function runSwebenchProCampaign(
   const ftpRan = liveCells.filter(
     (c) => c.fail_to_pass_ok === true || c.fail_to_pass_ok === false,
   ).length;
+  const ftpCollect = liveCells.filter((c) => c.fail_to_pass_class === 'collect_error').length;
+  const ftpAssert = liveCells.filter((c) => c.fail_to_pass_class === 'assert_fail').length;
   const passMode = resolveSweProPassMode();
 
   const summary_lines = [
@@ -1322,6 +1478,7 @@ export async function runSwebenchProCampaign(
     `live_pass=${livePass}/${liveCells.length}`,
     `gold_diff_ok=${goldOk}/${liveCells.length}`,
     `fail_to_pass_ok=${ftpOk}/${liveCells.length} (ran=${ftpRan})`,
+    `fail_to_pass_class collect_error=${ftpCollect} assert_fail=${ftpAssert}`,
     `shadow_summaries=${shadow_sessions_with_summary}`,
     aborted ? `ABORTED: ${aborted.reason}` : 'completed_without_early_stop',
     `policy_events_jsonl=${policyJsonlPath}`,
