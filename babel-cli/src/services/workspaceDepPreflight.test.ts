@@ -13,6 +13,7 @@ import {
   formatWorkspaceDepUnreadyNote,
   packageHintFromRepo,
   packageNameFromPyproject,
+  resolveVenvPython,
   runWorkspaceDepPreflight,
 } from './workspaceDepPreflight.js';
 
@@ -97,6 +98,16 @@ version = "0.1.0"
     assert.match(note, /qutebrowser/);
     assert.match(note, /ENV_BLOCKED/);
     assert.match(note, /do not thrash/i);
+  });
+
+  test('resolveVenvPython finds MSYS-style bin/python.exe on Windows layouts', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dep-msys-venv-'));
+    mkdirSync(join(dir, '.babel-venv', 'bin'), { recursive: true });
+    writeFileSync(join(dir, '.babel-venv', 'bin', 'python.exe'), '');
+    assert.equal(
+      resolveVenvPython(dir)?.replace(/\\/g, '/').endsWith('.babel-venv/bin/python.exe'),
+      true,
+    );
   });
 
   test('applyDepPreflightEnv prepends pathPrefix and VIRTUAL_ENV', () => {
