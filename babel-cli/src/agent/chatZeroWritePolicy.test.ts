@@ -224,18 +224,19 @@ describe('chatZeroWritePolicy', () => {
     assert.match(result.investigateHardCapTerminal!, /hard cap 12/i);
   });
 
-  test('investigate soft budget fires only at exact soft threshold', () => {
-    const mk = (tools: number) => {
-      const state = {
-        turnsWithoutWrite: 0,
-        consecutiveReadOnlyTools: 0,
-        cumulativeExplorationTools: 0,
-        restrictToolsNextTurn: false,
-        consecutiveNonMutatingShells: 0,
-        toolsWithoutWrite: tools,
-        phase: 'investigate' as const,
-      };
-      return applyExploreFuses({
+  test('investigate soft budget fires once per zero-write streak', () => {
+    const state = {
+      turnsWithoutWrite: 0,
+      consecutiveReadOnlyTools: 0,
+      cumulativeExplorationTools: 0,
+      restrictToolsNextTurn: false,
+      consecutiveNonMutatingShells: 0,
+      toolsWithoutWrite: 8,
+      phase: 'investigate' as const,
+      investigateSoftNudgeDone: false,
+    };
+    const run = () =>
+      applyExploreFuses({
         executeIntent: true,
         taskClass: 'general_swe',
         hasAnyWrites: false,
@@ -243,18 +244,19 @@ describe('chatZeroWritePolicy', () => {
         pushUser: () => {},
         deferMessagesToArbiter: true,
       });
-    };
-    // Exactly soft budget (8) → one soft nudge, not hard cap
-    const atSoft = mk(8);
-    assert.ok(atSoft.investigateBudgetMessage);
-    assert.equal(atSoft.investigateHardCapTerminal, null);
-    // Past soft but under hard → no soft re-fire
-    const pastSoft = mk(10);
-    assert.equal(pastSoft.investigateBudgetMessage, null);
-    assert.equal(pastSoft.investigateHardCapTerminal, null);
+    // First hit at soft budget → one soft nudge
+    const first = run();
+    assert.ok(first.investigateBudgetMessage);
+    assert.equal(state.investigateSoftNudgeDone, true);
+    assert.equal(first.investigateHardCapTerminal, null);
+    // Still at 8 or past soft → no re-fire
+    state.toolsWithoutWrite = 8;
+    assert.equal(run().investigateBudgetMessage, null);
+    state.toolsWithoutWrite = 10;
+    assert.equal(run().investigateBudgetMessage, null);
     // Hard cap (12)
-    const hard = mk(12);
-    assert.ok(hard.investigateHardCapTerminal);
+    state.toolsWithoutWrite = 12;
+    assert.ok(run().investigateHardCapTerminal);
   });
 
   test('applyExploreFuses respects env ablation off without process mutation', () => {

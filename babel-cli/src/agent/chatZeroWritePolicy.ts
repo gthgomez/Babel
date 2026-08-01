@@ -422,19 +422,19 @@ export function applyExploreFuses(input: {
   }
 
   // Implementor W1: investigate tool budget (soft force-mutate by tool count).
-  // Fire only on the exact soft threshold crossing (toolsWithoutWrite === budget),
-  // not every subsequent turn — Wave A spammed 13 soft nudges with >= budget.
+  // Fire once per zero-write streak when toolsWithoutWrite first reaches soft
+  // budget — not every later turn at the same count or above (Wave A spam).
   // Hard cap remains the terminal stop.
+  if (input.hasAnyWrites || s.toolsWithoutWrite === 0) {
+    s.investigateSoftNudgeDone = false;
+  }
   const invEval = evaluateInvestigateToolBudget({
     toolCallCount: s.toolsWithoutWrite,
     budget: tune.investigateToolBudget,
     hasAnyWrites: input.hasAnyWrites,
     phase: s.phase,
   });
-  const atSoftThreshold =
-    tune.investigateToolBudget > 0 &&
-    s.toolsWithoutWrite === tune.investigateToolBudget;
-  if (invEval.fire && invEval.message && atSoftThreshold) {
+  if (invEval.fire && invEval.message && !s.investigateSoftNudgeDone) {
     investigateBudgetMessage = invEval.message;
     if (!defer) input.pushUser(invEval.message);
     out.push('[Implementor: investigate tool budget]');
