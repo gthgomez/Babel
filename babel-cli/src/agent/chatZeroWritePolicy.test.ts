@@ -224,44 +224,37 @@ describe('chatZeroWritePolicy', () => {
     assert.match(result.investigateHardCapTerminal!, /hard cap 12/i);
   });
 
-  test('investigate soft budget nudges once per zero-write streak', () => {
-    const state = {
-      turnsWithoutWrite: 0,
-      consecutiveReadOnlyTools: 0,
-      cumulativeExplorationTools: 0,
-      restrictToolsNextTurn: false,
-      consecutiveNonMutatingShells: 0,
-      toolsWithoutWrite: 8, // general_swe soft budget
-      phase: 'investigate' as const,
-      investigateSoftNudgeDone: false,
+  test('investigate soft budget fires only at exact soft threshold', () => {
+    const mk = (tools: number) => {
+      const state = {
+        turnsWithoutWrite: 0,
+        consecutiveReadOnlyTools: 0,
+        cumulativeExplorationTools: 0,
+        restrictToolsNextTurn: false,
+        consecutiveNonMutatingShells: 0,
+        toolsWithoutWrite: tools,
+        phase: 'investigate' as const,
+      };
+      return applyExploreFuses({
+        executeIntent: true,
+        taskClass: 'general_swe',
+        hasAnyWrites: false,
+        state,
+        pushUser: () => {},
+        deferMessagesToArbiter: true,
+      });
     };
-    const first = applyExploreFuses({
-      executeIntent: true,
-      taskClass: 'general_swe',
-      hasAnyWrites: false,
-      state,
-      pushUser: () => {},
-      deferMessagesToArbiter: true,
-    });
-    assert.ok(first.investigateBudgetMessage);
-    assert.equal(state.investigateSoftNudgeDone, true);
-    // Soft only — not hard terminal at 8
-    assert.equal(first.investigateHardCapTerminal, null);
-
-    state.toolsWithoutWrite = 10;
-    const second = applyExploreFuses({
-      executeIntent: true,
-      taskClass: 'general_swe',
-      hasAnyWrites: false,
-      state,
-      pushUser: () => {},
-      deferMessagesToArbiter: true,
-    });
-    assert.equal(
-      second.investigateBudgetMessage,
-      null,
-      'soft investigate must not re-fire every turn',
-    );
+    // Exactly soft budget (8) → one soft nudge, not hard cap
+    const atSoft = mk(8);
+    assert.ok(atSoft.investigateBudgetMessage);
+    assert.equal(atSoft.investigateHardCapTerminal, null);
+    // Past soft but under hard → no soft re-fire
+    const pastSoft = mk(10);
+    assert.equal(pastSoft.investigateBudgetMessage, null);
+    assert.equal(pastSoft.investigateHardCapTerminal, null);
+    // Hard cap (12)
+    const hard = mk(12);
+    assert.ok(hard.investigateHardCapTerminal);
   });
 
   test('applyExploreFuses respects env ablation off without process mutation', () => {
