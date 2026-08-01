@@ -112,5 +112,7 @@ export function createEngineFromEventLog(
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
   });
   engine.restoreEventLog(log);
+  // W2.2: settle interrupted tools from session-events.jsonl if present.
+  engine.restoreSessionEventsFromDir();
   return engine;
 }

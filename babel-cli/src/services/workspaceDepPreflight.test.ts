@@ -15,8 +15,11 @@ import {
   packageHintFromRepo,
   packageNameFromPyproject,
   parseMissingModulesFromProbe,
+  resolveSoftDepSpecForModule,
   resolveVenvPython,
   runWorkspaceDepPreflight,
+  SOFT_DEP_MAX_ROUNDS,
+  truncateProbeDetail,
 } from './workspaceDepPreflight.js';
 
 describe('workspaceDepPreflight', () => {
@@ -45,6 +48,56 @@ E   ModuleNotFoundError: No module named 'web'
     assert.ok(line);
     assert.match(line!, /webpy/);
     assert.equal(findRequirementLineForModule(req, 'definitely_missing_xyz'), null);
+  });
+
+  test('W1 multi-round: resolveSoftDepSpec prefers requirements then vendor infogami', () => {
+    assert.equal(SOFT_DEP_MAX_ROUNDS, 3);
+    const req = [
+      'git+https://github.com/webpy/webpy.git@d3649322b85777b291ac2b7b3699fb6fc839e382',
+      'multipart==0.2.4',
+    ].join('\n');
+    assert.match(
+      resolveSoftDepSpecForModule('/tmp/ws', 'web', [req]) ?? '',
+      /webpy/,
+    );
+    assert.equal(resolveSoftDepSpecForModule('/tmp/ws', 'multipart', [req]), 'multipart==0.2.4');
+    assert.equal(resolveSoftDepSpecForModule('/tmp/ws', 'multipart', []), 'multipart');
+
+    const dir = mkdtempSync(join(tmpdir(), 'dep-infogami-'));
+    mkdirSync(join(dir, 'vendor', 'infogami'), { recursive: true });
+    writeFileSync(join(dir, 'vendor', 'infogami', 'setup.py'), 'from setuptools import setup\nsetup(name="infogami")\n');
+    assert.equal(
+      resolveSoftDepSpecForModule(dir, 'infogami', []),
+      '-e vendor/infogami',
+    );
+    // Empty submodule dir (OpenLibrary shallow clone) → git URL fallback
+    const empty = mkdtempSync(join(tmpdir(), 'dep-infogami-empty-'));
+    mkdirSync(join(empty, 'vendor', 'infogami'), { recursive: true });
+    assert.match(
+      resolveSoftDepSpecForModule(empty, 'infogami', []) ?? '',
+      /github\.com\/internetarchive\/infogami/,
+    );
+  });
+
+  test('W1 multi-round: truncateProbeDetail keeps No module named on long paths', () => {
+    const longPath = 'C:\\\\' + 'x'.repeat(400) + '\\\\openlibrary\\\\conftest.py';
+    const blob = [
+      `ImportError while loading conftest '${longPath}'.`,
+      'openlibrary\\conftest.py:5: in <module>',
+      '    import web',
+      '.babel-venv\\lib\\python3.10\\site-packages\\web\\__init__.py:4: in <module>',
+      '    from . import (  # noqa: F401',
+      '.babel-venv\\lib\\python3.10\\site-packages\\web\\debugerror.py:19: in <module>',
+      '    from . import webapi as web',
+      '.babel-venv\\lib\\python3.10\\site-packages\\web\\webapi.py:12: in <module>',
+      '    import multipart',
+      "E   ModuleNotFoundError: No module named 'multipart'",
+    ].join('\n');
+    // Head-only slice(0,500) would drop the missing module name on Windows paths.
+    assert.equal(parseMissingModulesFromProbe(blob.slice(0, 500)).includes('multipart'), false);
+    const kept = truncateProbeDetail(blob, 500);
+    assert.ok(kept.includes('multipart') || kept.includes("No module named"));
+    assert.deepEqual(parseMissingModulesFromProbe(kept), ['multipart']);
   });
 
   test('packageHintFromRepo maps repo leaf and hyphens', () => {

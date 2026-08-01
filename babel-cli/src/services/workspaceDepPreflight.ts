@@ -274,6 +274,23 @@ export function probePythonImport(input: {
 }
 
 /**
+ * Truncate probe text but keep the tail when long Windows paths push the real
+ * `No module named X` past a head-only slice (blocks multi-round soft-deps).
+ */
+export function truncateProbeDetail(blob: string, max = 900): string {
+  if (blob.length <= max) return blob;
+  // Prefer keeping ModuleNotFound / No module named lines when present.
+  const missingHit = blob.search(/No module named|ModuleNotFoundError/i);
+  if (missingHit >= 0) {
+    const start = Math.max(0, missingHit - 120);
+    const slice = blob.slice(start, start + max);
+    return start > 0 ? `…${slice}` : slice;
+  }
+  // Default: tail (pytest prints the root cause last)
+  return `…${blob.slice(-max)}`;
+}
+
+/**
  * Light verify readiness: `python -m pytest --collect-only -q` (optionally one path).
  * Catches ImportError-while-loading-conftest that bare package import misses.
  */
@@ -306,21 +323,24 @@ export function probePytestCollect(input: {
     /\bwhile loading conftest\b/.test(lower) ||
     /\bno module named\b/.test(lower)
   ) {
-    return { ok: false, detail: blob.slice(0, 500) };
+    return { ok: false, detail: truncateProbeDetail(blob) };
   }
   if (r.error) {
     return { ok: false, detail: r.error.message.slice(0, 500) };
   }
   // pytest missing
   if (/no module named pytest|No module named pytest/i.test(blob)) {
-    return { ok: false, detail: blob.slice(0, 500) };
+    return { ok: false, detail: truncateProbeDetail(blob) };
   }
   if (r.status === 0 || /no tests collected/i.test(blob)) {
     return { ok: true, detail: blob.slice(0, 200) || 'collect_ok' };
   }
   // Other non-zero: still blocked if looks like env, else soft-ok when package imported
   if (r.status !== 0 && r.status != null) {
-    return { ok: false, detail: blob.slice(0, 500) || `pytest collect exit ${r.status}` };
+    return {
+      ok: false,
+      detail: truncateProbeDetail(blob) || `pytest collect exit ${r.status}`,
+    };
   }
   return { ok: true, detail: blob.slice(0, 200) };
 }
@@ -356,10 +376,19 @@ export function parseMissingModulesFromProbe(detail: string | null | undefined):
  */
 export const SOFT_DEP_PIP_FALLBACK: Readonly<Record<string, readonly string[]>> = {
   web: ['web.py'],
-  infogami: ['infogami'],
+  /** PyPI name for `import multipart` (OpenLibrary requirements pin multipart==0.2.4). */
+  multipart: ['multipart'],
+  /**
+   * OpenLibrary vendors infogami as a git submodule (often empty on shallow clones).
+   * Prefer git URL over bare `pip install infogami` (not a reliable PyPI package).
+   */
+  infogami: ['git+https://github.com/internetarchive/infogami.git'],
   eventer: ['eventer'],
   psycopg2: ['psycopg2-binary'],
 };
+
+/** Max soft-dep re-probe rounds after collect soft-fail (web → multipart → infogami). */
+export const SOFT_DEP_MAX_ROUNDS = 3;
 
 /**
  * Find a requirements line that likely satisfies a missing module.
@@ -392,6 +421,46 @@ export function findRequirementLineForModule(
  * Install soft-deps for modules missing from collect soft-fail.
  * Best-effort; does not throw. Returns pip specs that were attempted successfully.
  */
+/**
+ * Resolve a pip install spec for a missing import, including vendored paths
+ * (OpenLibrary `vendor/infogami` / root `infogami`).
+ */
+export function resolveSoftDepSpecForModule(
+  workspaceRoot: string,
+  moduleName: string,
+  requirementBodies: string[],
+): string | null {
+  const mod = moduleName.trim();
+  if (!mod) return null;
+  for (const body of requirementBodies) {
+    const found = findRequirementLineForModule(body, mod);
+    if (found) return found;
+  }
+  // Vendored infogami (OpenLibrary) — only when submodule is actually populated
+  if (mod === 'infogami') {
+    for (const rel of ['vendor/infogami', 'infogami']) {
+      const abs = join(workspaceRoot, rel);
+      try {
+        // Skip empty submodule placeholders / gitlinks (no real package tree).
+        const hasSetup =
+          existsSync(join(abs, 'setup.py')) || existsSync(join(abs, 'pyproject.toml'));
+        const hasPkg =
+          existsSync(join(abs, '__init__.py')) ||
+          existsSync(join(abs, 'infobase')) ||
+          existsSync(join(abs, 'infogami', '__init__.py'));
+        if (hasSetup || hasPkg) {
+          return `-e ${rel}`;
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+  const fallback = SOFT_DEP_PIP_FALLBACK[mod];
+  if (fallback?.[0]) return fallback[0];
+  return null;
+}
+
 export function installSoftDepsForCollectFail(input: {
   workspaceRoot: string;
   pythonBin: string;
@@ -399,6 +468,8 @@ export function installSoftDepsForCollectFail(input: {
   requirementFiles?: string[];
   timeoutMs?: number;
   commands?: string[];
+  /** Specs already installed this preflight — skip re-pip. */
+  alreadyInstalled?: string[];
 }): { installed: string[]; attempted: boolean; detail: string } {
   const missing = parseMissingModulesFromProbe(input.probeDetail);
   if (missing.length === 0) {
@@ -408,6 +479,9 @@ export function installSoftDepsForCollectFail(input: {
   const commands = input.commands ?? [];
   const installed: string[] = [];
   const details: string[] = [];
+  const already = new Set(
+    (input.alreadyInstalled ?? []).map((s) => s.trim()).filter(Boolean),
+  );
 
   // Load requirement files once
   const reqBodies: string[] = [];
@@ -421,34 +495,30 @@ export function installSoftDepsForCollectFail(input: {
 
   const specs: string[] = [];
   for (const mod of missing) {
-    let found: string | null = null;
-    for (const body of reqBodies) {
-      found = findRequirementLineForModule(body, mod);
-      if (found) break;
-    }
-    if (found) {
-      specs.push(found);
-    } else {
-      const fallback = SOFT_DEP_PIP_FALLBACK[mod];
-      if (fallback) specs.push(...fallback);
-    }
+    const found = resolveSoftDepSpecForModule(input.workspaceRoot, mod, reqBodies);
+    if (found) specs.push(found);
   }
-  // Dedupe specs
-  const uniqueSpecs = [...new Set(specs.map((s) => s.trim()).filter(Boolean))].slice(0, 8);
+  // Dedupe specs; skip already installed this session
+  const uniqueSpecs = [
+    ...new Set(specs.map((s) => s.trim()).filter((s) => s && !already.has(s))),
+  ].slice(0, 8);
   if (uniqueSpecs.length === 0) {
     return {
       installed: [],
       attempted: true,
-      detail: `missing=${missing.join(',')} no_specs`,
+      detail: `missing=${missing.join(',')} no_new_specs`,
     };
   }
 
   for (const spec of uniqueSpecs) {
-    // git+ URL or path with spaces: pass as single pip arg
+    // git+ URL / path / -e editable: pass tokens carefully
     const isUrlOrVcs = /^(git\+|https?:|file:)/i.test(spec) || spec.includes('://');
+    const isEditable = /^\s*-e\s+/i.test(spec);
     const args = isUrlOrVcs
       ? ['-m', 'pip', 'install', spec]
-      : ['-m', 'pip', 'install', ...spec.split(/\s+/).filter(Boolean)];
+      : isEditable
+        ? ['-m', 'pip', 'install', ...spec.split(/\s+/).filter(Boolean)]
+        : ['-m', 'pip', 'install', ...spec.split(/\s+/).filter(Boolean)];
     commands.push(`${input.pythonBin} -m pip install ${spec}`);
     const r = runCmd(input.pythonBin, args, {
       cwd: input.workspaceRoot,
@@ -766,15 +836,20 @@ export function runWorkspaceDepPreflight(input: {
     probe = probePythonReady(pythonBin);
   }
 
-  // W1 A: package import ok but collect soft-fail (missing web/infogami) → soft-deps.
+  // W1 A + multi-round: package import ok but collect soft-fail → soft-deps.
+  // After web installs, next collect often surfaces multipart then infogami —
+  // re-probe up to SOFT_DEP_MAX_ROUNDS instead of a single install wave.
   // Full -r requirements often fails on Windows hosts; targeted install is enough for many cells.
   let softDepsAttempted = false;
   let softDepsInstalled: string[] = [];
-  if (
+  let softRound = 0;
+  while (
     probe.ok &&
     /collect_soft_fail:/.test(probe.detail) &&
-    parseMissingModulesFromProbe(probe.detail).length > 0
+    parseMissingModulesFromProbe(probe.detail).length > 0 &&
+    softRound < SOFT_DEP_MAX_ROUNDS
   ) {
+    softRound += 1;
     const soft = installSoftDepsForCollectFail({
       workspaceRoot: input.workspaceRoot,
       pythonBin,
@@ -782,12 +857,16 @@ export function runWorkspaceDepPreflight(input: {
       requirementFiles: plan.requirementFiles,
       timeoutMs: Math.min(installTimeout, 5 * 60 * 1000),
       commands,
+      alreadyInstalled: softDepsInstalled,
     });
-    softDepsAttempted = soft.attempted;
-    softDepsInstalled = soft.installed;
+    softDepsAttempted = softDepsAttempted || soft.attempted;
+    for (const s of soft.installed) {
+      if (!softDepsInstalled.includes(s)) softDepsInstalled.push(s);
+    }
     if (soft.installed.length > 0) installed = true;
     lastInstallDetail = soft.detail || lastInstallDetail;
-    // Re-probe collect after soft-deps (still soft-ok if more modules remain)
+    // No progress this round → stop (avoid infinite loop on unmappable modules)
+    if (soft.installed.length === 0) break;
     probe = probePythonReady(pythonBin);
   }
 

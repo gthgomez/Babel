@@ -129,6 +129,8 @@ import {
   createParityRuntime,
   parityOnUserTurn,
   parityRecordToolBatch,
+  paritySettleProposeTools,
+  paritySettleInterruptedOnResume,
   parityArbitrateCycle,
   parityShouldCompact,
   parityBuildCapsule,
@@ -138,6 +140,10 @@ import {
   checkpointParityEventLog,
   type ParityRuntime,
 } from './chatEngineParityBridge.js';
+import {
+  loadSessionEventLogFromDir,
+  type SessionEventLog,
+} from './sessionEvents.js';
 import { buildRepoMapPreamble } from './repoMapPreamble.js';
 import {
   requestChatActionApproval,
@@ -1742,6 +1748,29 @@ export class ChatEngine {
         // per-turn slice is correct even as the log grows across turns.
         this._turnToolCallLogStart = this.toolCallLog.length;
 
+        // W2.2 settle: assign stable call ids, persist tool_proposed+tool_started
+        // to session-events.jsonl BEFORE any side effects (kill/resume safety).
+        const settleCallIds = turnResult.actions.map((_, idx) => {
+          if (this._streamNativeToolCallIds[idx]) return this._streamNativeToolCallIds[idx]!;
+          return `tool_call_${turn}_${idx}`;
+        });
+        if (
+          this._streamNativeToolCallIds.length === 0 &&
+          turnResult.actions.length > 0
+        ) {
+          this._streamNativeToolCallIds = settleCallIds;
+        }
+        if (turnResult.actions.length > 0) {
+          paritySettleProposeTools(
+            this.parity,
+            turnResult.actions.map((action, idx) => ({
+              id: settleCallIds[idx]!,
+              name: chatActionToolName(action),
+            })),
+            this.engineRunDir,
+          );
+        }
+
         const subAgentEvents: ChatEvent[] = [];
 
         const { observations, observationList } = await this.executeActions(turnResult.actions, {
@@ -2017,6 +2046,8 @@ export class ChatEngine {
           verifierChanged: turnSlice.some(
             (t) => t.tool === 'run_command' || t.tool === 'test_run' || t.tool === 'shell_exec',
           ),
+          // W2.2: propose+start already flushed before executeActions.
+          settleAlreadyProposed: turnResult.actions.length > 0,
           // Do NOT pass every read as localizedPaths — re-reads use contentHash only.
         });
         this._streamNativeToolCallIds = [];
@@ -2503,6 +2534,24 @@ export class ChatEngine {
     this.parity.eventLog = log;
     const lastTurn = [...log.events].reverse().find((e) => e.kind === 'turn_started');
     if (lastTurn) this.parity.turnId = lastTurn.turn_id;
+  }
+
+  /**
+   * W2.2: restore session-events.jsonl and mark mid-tool keys as cancelled
+   * so resume never treats an interrupted tool as success or re-mutates completed keys.
+   */
+  restoreSessionEvents(log: SessionEventLog, options?: { runDir?: string }): number {
+    this.parity.sessionEvents = log;
+    const runDir = options?.runDir ?? this.engineRunDir;
+    return paritySettleInterruptedOnResume(this.parity, runDir);
+  }
+
+  /** Load session-events from run dir if present; mark interrupted tools. */
+  restoreSessionEventsFromDir(runDir?: string): number {
+    const dir = runDir ?? this.engineRunDir;
+    const loaded = loadSessionEventLogFromDir(dir);
+    if (!loaded) return 0;
+    return this.restoreSessionEvents(loaded, { runDir: dir });
   }
 
   /**
