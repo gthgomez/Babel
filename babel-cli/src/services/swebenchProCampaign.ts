@@ -33,6 +33,12 @@ import {
   resolveBabelCliEntry,
   runBabelCli,
 } from './liteTrustDemo.js';
+import {
+  applyDepPreflightEnv,
+  packageHintFromRepo,
+  runWorkspaceDepPreflight,
+  type WorkspaceDepPreflightResult,
+} from './workspaceDepPreflight.js';
 
 export const SWE_PRO_CAMPAIGN_SCHEMA = 1 as const;
 
@@ -103,6 +109,13 @@ export interface CampaignOptions {
   infraOnly?: boolean;
   /** Pull docker image during infra for first K instances (default 0 = skip pull). */
   dockerPullFirstK?: number;
+  /**
+   * C2: workspace dep install preflight before the agent (default true).
+   * Set false or env BABEL_SWE_PRO_DEP_PREFLIGHT=0 to skip.
+   * When install fails / package still not importable → honest env_blocked cell
+   * without multi-minute agent thrash.
+   */
+  depPreflight?: boolean;
   now?: Date;
   /** Inject for tests */
   runCell?: (instance: SwebenchProInstanceRow, phase: CampaignPhase) => CampaignCellResult;
@@ -149,7 +162,15 @@ export function classifyCampaignFailureSignature(input: {
   infraOk?: boolean;
   infraError?: string;
   cliExitCode?: number | null;
+  /** Prefer CLI `status` (ENV_BLOCKED / BLOCKED / …). */
   statusText?: string | null;
+  /**
+   * Prefer CLI `terminal_outcome` (BLOCKED_EXTERNAL / BLOCKED_POLICY / …).
+   * When present, outranks noisy stdout blob heuristics (Pri-3).
+   */
+  terminalOutcome?: string | null;
+  /** Explicit payload.env_blocked when known. */
+  envBlocked?: boolean | null;
   patchBytes?: number;
   goldDiffOk?: boolean | null;
   stdoutStderr?: string;
@@ -169,6 +190,9 @@ export function classifyCampaignFailureSignature(input: {
   }
 
   const blob = input.stdoutStderr ?? '';
+  const status = (input.statusText ?? '').trim();
+  const terminal = (input.terminalOutcome ?? '').trim();
+
   if (/HTTP 402|positive balance|insufficient.?credit/i.test(blob)) {
     return 'agent:provider_error:billing';
   }
@@ -176,7 +200,8 @@ export function classifyCampaignFailureSignature(input: {
     return 'agent:provider_error:auth';
   }
   if (
-    input.statusText === 'BUDGET_EXCEEDED' ||
+    status === 'BUDGET_EXCEEDED' ||
+    terminal === 'BUDGET_EXHAUSTED' ||
     /budget.?exceeded|harness_timeout|process timed out/i.test(blob)
   ) {
     // Distinguish outer harness timeout from in-agent cost ceiling when possible.
@@ -185,13 +210,35 @@ export function classifyCampaignFailureSignature(input: {
     }
     return 'agent:budget_exhausted';
   }
-  if (
-    /env_blocked|importerror|modulenotfound|while loading conftest/i.test(blob) ||
-    /ENV_BLOCKED/i.test(input.statusText ?? '')
-  ) {
+
+  // Pri-3: structured fields first — do not let ImportError text in a
+  // policy-killed transcript re-label investigate_hard_cap as env_blocked.
+  if (input.envBlocked === true || status === 'ENV_BLOCKED') {
     return 'agent:env_blocked';
   }
-  if (input.statusText === 'NEEDS_MORE_CONTEXT' || /blocked_policy|BLOCKED/i.test(blob)) {
+  if (terminal === 'BLOCKED_POLICY' || status === 'BLOCKED_POLICY') {
+    return 'agent:blocked_policy';
+  }
+  if (terminal === 'BLOCKED_EXTERNAL') {
+    // External without env_blocked flag → generic external (permission, etc.)
+    return 'agent:blocked_external';
+  }
+  if (status === 'BLOCKED') {
+    // Legacy generic BLOCKED: prefer policy unless blob is clearly env-only
+    // and no policy markers — still require clear env signal in blob.
+    if (
+      /env_blocked|importerror|modulenotfound|while loading conftest/i.test(blob) &&
+      !/investigate.?hard.?cap|zero.?write|blocked_policy|progress_terminal/i.test(blob)
+    ) {
+      return 'agent:env_blocked';
+    }
+    return 'agent:blocked_policy';
+  }
+  // Blob heuristics only when structured status/outcome were absent
+  if (/env_blocked|importerror|modulenotfound|while loading conftest/i.test(blob)) {
+    return 'agent:env_blocked';
+  }
+  if (status === 'NEEDS_MORE_CONTEXT' || /blocked_policy|BLOCKED_POLICY/i.test(blob)) {
     return 'agent:blocked_policy';
   }
   if ((input.patchBytes ?? 0) === 0 && input.goldDiffOk !== true) {
@@ -538,11 +585,81 @@ function defaultRunInfraCell(
   }
 }
 
+function depPreflightEnabled(optionsDepPreflight?: boolean): boolean {
+  if (optionsDepPreflight === false) return false;
+  if (optionsDepPreflight === true) return true;
+  const env = process.env['BABEL_SWE_PRO_DEP_PREFLIGHT']?.trim().toLowerCase();
+  if (env === '0' || env === 'false' || env === 'off' || env === 'skip') return false;
+  return true;
+}
+
+/** Honest C2 terminal when workspace deps cannot be made ready. */
+function envBlockedPreflightCell(
+  instance: SwebenchProInstanceRow,
+  evidenceDir: string,
+  started: number,
+  evidence_path: string,
+  preflight: WorkspaceDepPreflightResult,
+): CampaignCellResult {
+  const result: CampaignCellResult = {
+    instance_id: instance.instance_id,
+    phase: 'live',
+    status: 'fail',
+    signature: 'agent:env_blocked',
+    notes: [
+      'dep_preflight_blocked',
+      `dep_ready=false`,
+      `dep_installed=${preflight.installed}`,
+      `dep_kind=${preflight.plan.kind}`,
+      `dep_package=${preflight.plan.packageHint ?? 'null'}`,
+      `dep_ms=${preflight.durationMs}`,
+      `status=ENV_BLOCKED`,
+      `terminal_outcome=ENV_BLOCKED`,
+      `reason=${(preflight.reason ?? 'workspace deps not ready').slice(0, 240)}`,
+      ...preflight.commands.map((c) => `dep_cmd=${c}`),
+    ],
+    patch_bytes: 0,
+    gold_diff_ok: false,
+    policy_events: [
+      {
+        at_turn: 0,
+        kind: 'env_blocked',
+        detail: `workspace_dep_preflight: ${preflight.reason ?? 'not ready'}`,
+      },
+    ],
+    has_shadow_summary: false,
+    duration_ms: Math.round(performance.now() - started),
+    evidence_path,
+    cli_exit_code: null,
+    status_text: 'ENV_BLOCKED',
+  };
+  writeFileSync(
+    evidence_path,
+    JSON.stringify(
+      {
+        ...result,
+        dep_preflight: preflight,
+        preds: {
+          model_name_or_path: 'babel-agent-chat',
+          instance_id: instance.instance_id,
+          model_patch: '',
+        },
+      },
+      null,
+      2,
+    ),
+    'utf8',
+  );
+  writeFileSync(join(evidenceDir, 'live', `${instance.instance_id}.patch`), '', 'utf8');
+  return result;
+}
+
 function defaultRunLiveCell(
   instance: SwebenchProInstanceRow,
   evidenceDir: string,
   provider: 'mock' | 'live',
   model: string,
+  options?: Pick<CampaignOptions, 'depPreflight'>,
 ): CampaignCellResult {
   const started = performance.now();
   const evidence_path = join(evidenceDir, 'live', `${instance.instance_id}.json`);
@@ -594,13 +711,56 @@ function defaultRunLiveCell(
     return result;
   }
 
+  // C2: install workspace deps (or honest ENV_BLOCKED) before burning agent wall/cost.
+  let depNotes: string[] = [];
+  let depEnvPatch: WorkspaceDepPreflightResult | null = null;
+  if (depPreflightEnabled(options?.depPreflight)) {
+    const testPath =
+      typeof instance.selected_test_files_to_run === 'string'
+        ? instance.selected_test_files_to_run
+            .replace(/^[\[\s'"]+/, '')
+            .replace(/[\]\s'"]+$/, '')
+            .split(/[,\s]+/)
+            .find((p) => p.includes('/') || p.endsWith('.py')) ?? null
+        : null;
+    const preflight = runWorkspaceDepPreflight({
+      workspaceRoot,
+      packageHint: packageHintFromRepo(instance.repo),
+      testPath,
+      install: true,
+    });
+    depEnvPatch = preflight;
+    depNotes = [
+      `dep_preflight=1`,
+      `dep_ready=${preflight.ready}`,
+      `dep_installed=${preflight.installed}`,
+      `dep_kind=${preflight.plan.kind}`,
+      `dep_package=${preflight.plan.packageHint ?? 'null'}`,
+      `dep_ms=${preflight.durationMs}`,
+    ];
+    if (preflight.blocked || !preflight.ready) {
+      return envBlockedPreflightCell(
+        instance,
+        evidenceDir,
+        started,
+        evidence_path,
+        preflight,
+      );
+    }
+  } else {
+    depNotes = ['dep_preflight=0'];
+  }
+
   ensureBabelCliDistReady();
   const prompt = proPrompt(instance);
   // Product general_swe budgets only — do not inflate turns/cost for "benchmark max".
   // Allow operator env to raise caps; strip harness-only MAX_TURNS default of 250
   // when unset so chatTaskClass general_swe (250/3.0/10min) is the sole source of truth.
   const baseEnv = benchmarkBabelEnv(provider);
-  const productEnv = buildSweAgentChatEnv(baseEnv);
+  let productEnv = buildSweAgentChatEnv(baseEnv);
+  if (depEnvPatch) {
+    productEnv = applyDepPreflightEnv(productEnv, depEnvPatch);
+  }
   // Prefer product stall tune over harness stall=25 unless operator set it.
   if (!process.env['BABEL_CHAT_STALL_TURNS']?.trim()) {
     delete productEnv['BABEL_CHAT_STALL_TURNS'];
@@ -654,16 +814,20 @@ function defaultRunLiveCell(
   }
   const statusText =
     typeof payload?.['status'] === 'string' ? (payload['status'] as string) : null;
-  // Prefer terminal_outcome when status is generic
+  // Prefer structured terminal_outcome (Pri-3); keep status separate.
   const terminalOutcome =
     typeof payload?.['terminal_outcome'] === 'string'
       ? (payload['terminal_outcome'] as string)
-      : statusText;
+      : null;
+  const envBlockedFlag =
+    payload?.['env_blocked'] === true || statusText === 'ENV_BLOCKED';
   const streamBlob = `${cli.stdout ?? ''}\n${cli.stderr ?? ''}`;
   const signature = classifyCampaignFailureSignature({
     phase: 'live',
     cliExitCode: cli.exitCode,
-    statusText: terminalOutcome ?? statusText,
+    statusText,
+    terminalOutcome: terminalOutcome ?? statusText,
+    envBlocked: envBlockedFlag,
     patchBytes: patch.length,
     goldDiffOk: gold_diff_ok,
     stdoutStderr:
@@ -691,9 +855,11 @@ function defaultRunLiveCell(
     status,
     signature,
     notes: [
+      ...depNotes,
       `cli_exit=${cli.exitCode}`,
       `status=${statusText ?? 'null'}`,
       `terminal_outcome=${terminalOutcome ?? 'null'}`,
+      `env_blocked=${envBlockedFlag}`,
       `patch_bytes=${patch.length}`,
       `gold_diff=${gold_diff_ok}`,
       `policy_events=${policy_events.length}`,
@@ -715,6 +881,7 @@ function defaultRunLiveCell(
     JSON.stringify(
       {
         ...result,
+        dep_preflight: depEnvPatch,
         preds: {
           model_name_or_path: 'babel-agent-chat',
           instance_id: instance.instance_id,
@@ -796,6 +963,9 @@ export async function runSwebenchProCampaign(
         evidenceDir,
         options.provider,
         options.model ?? 'deepseek-v4-pro',
+        options.depPreflight === undefined
+          ? undefined
+          : { depPreflight: options.depPreflight },
       );
     });
 

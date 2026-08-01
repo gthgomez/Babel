@@ -389,44 +389,72 @@ export async function persistIntentPlan(
 
 // ─── TerminalOutcome computation ───────────────────────────────────
 
+/** True when a blocked-report reason is host env / toolchain (not policy thrash). */
+export function isEnvBlockedReportReason(reason: string | null | undefined): boolean {
+  if (!reason?.trim()) return false;
+  const r = reason.toLowerCase();
+  return (
+    /\benv_blocked\b/.test(r) ||
+    /\benvironment\s*\/\s*toolchain\b/.test(r) ||
+    /\benvironment cannot\b/.test(r) ||
+    /\bworking project runtime\b/.test(r) ||
+    /\bmissing dep\b/.test(r) ||
+    /\bimporterror\b/.test(r) ||
+    /\bmodulenotfound\b/.test(r) ||
+    /\bwhile loading conftest\b/.test(r) ||
+    /\bhost toolchain\b/.test(r) ||
+    /\bcannot run verification\b/.test(r) ||
+    // buildPolicyTerminalBlockedReport('env_blocked') reason
+    /\bdeps installed\b/.test(r) ||
+    /\bconftest importable\b/.test(r)
+  );
+}
+
 /** Pure function: map final session state to honest TerminalOutcome.
  *  Extracted from ChatEngine.buildResult to keep chatEngine.ts under size ratchet. */
 export function computeTerminalOutcome(input: {
   finalStatus: string;
   budgetExceeded: boolean;
   lastVerifierReceipt?: { exit_code: number } | null | undefined;
-  blockedReport?: { reason: string } | null | undefined;
+  blockedReport?: { reason: string; missing?: string } | null | undefined;
 }): TerminalOutcome {
   if (input.budgetExceeded || input.finalStatus === 'budget_exhausted') {
     return 'BUDGET_EXHAUSTED';
+  }
+  // Explicit env terminal status (product / harness may surface this)
+  if (
+    input.finalStatus === 'env_blocked' ||
+    input.finalStatus === 'ENV_BLOCKED'
+  ) {
+    return 'BLOCKED_EXTERNAL';
   }
   switch (input.finalStatus) {
     case 'completed':
       return (input.lastVerifierReceipt && input.lastVerifierReceipt.exit_code === 0)
         ? 'VERIFIED_COMPLETE'
         : 'UNVERIFIED_PATCH';
-    case 'blocked':
+    case 'blocked': {
+      const reason = input.blockedReport?.reason ?? '';
+      const missing = input.blockedReport?.missing ?? '';
+      const envBlob = `${reason}\n${missing}`;
       // Env/toolchain blocks are external (host), not policy thrash — check first
       // so "cannot run verification" in the ENV_BLOCKED reason does not mislabel.
-      if (
-        input.blockedReport &&
-        /\benv_blocked\b|environment\s*\/\s*toolchain|environment cannot|missing dep|importerror|modulenotfound/i.test(
-          input.blockedReport.reason,
-        )
-      ) {
+      if (isEnvBlockedReportReason(envBlob) || isEnvBlockedReportReason(reason)) {
         return 'BLOCKED_EXTERNAL';
       }
       // Distinguish policy blocks (critic, gate, auto-continue, tamper,
-      // zero-write) from other external blocks (permission, etc.).
+      // zero-write, investigate hard cap) from other external blocks.
+      // Avoid bare "verification" matching ENV_BLOCKED copy — env already handled.
       if (
-        input.blockedReport &&
-        /auto.continue|verification|verifier|gate|critic|zero.write|tamper/i.test(
-          input.blockedReport.reason,
-        )
+        /auto.continue|investigate.?hard.?cap|zero.?write|tamper|critic|phase.?gate|completion.?gate|progress.?terminal|stall.?kill|circuit.?breaker|explicit.?deny|policy/i.test(
+          reason,
+        ) ||
+        /verifier honesty|green verifier|gate reject/i.test(reason)
       ) {
         return 'BLOCKED_POLICY';
       }
       return 'BLOCKED_EXTERNAL';
+    }
     case 'cancelled':
       return 'CANCELLED';
     case 'failed':

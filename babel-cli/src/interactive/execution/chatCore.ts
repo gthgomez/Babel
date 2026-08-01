@@ -38,6 +38,11 @@ import { buildAskResultPayload } from '../../cli/structuredOutput.js';
 import { runGitCommandAsync } from '../../utils/gitExec.js';
 import { loadProjectSessionIdentity } from '../identity.js';
 import { isChatStreamingEnabled, resolveChatEngineLimits } from '../../config/chatEngineLimits.js';
+import {
+  detectWorkspaceDepPlan,
+  formatWorkspaceDepUnreadyNote,
+  probePythonImport,
+} from '../../services/workspaceDepPreflight.js';
 import { resolveChatTaskClass } from '../../config/chatTaskClass.js';
 import { isSuccessfulDirectMutation } from '../../agent/mutationTools.js';
 import { computeToolCallAggregates } from '../../agent/toolCallExport.js';
@@ -128,19 +133,18 @@ export async function gatherChatPreflightContext(
         parts.push(`- Changes:\n${statLines.join('\n')}`);
       }
     }
+    // Append build/test commands from package.json
+    const pkgCmds = collectPackageJsonCommands(targetRoot);
+    if (pkgCmds) {
+      parts.push(pkgCmds);
+    }
+    // C2 product honesty: probe-only (no auto-install). Nudge mutate→one verify→ENV_BLOCKED.
+    const depNote = collectWorkspaceDepReadinessNote(targetRoot);
+    if (depNote) {
+      parts.push(depNote);
+    }
     if (parts.length > 0) {
-      // Append build/test commands from package.json
-      const pkgCmds = collectPackageJsonCommands(targetRoot);
-      if (pkgCmds) {
-        parts.push(pkgCmds);
-      }
       return '## Pre-flight Context\n' + parts.join('\n');
-    } else {
-      // No git info but we may still have package.json commands
-      const pkgCmds = collectPackageJsonCommands(targetRoot);
-      if (pkgCmds) {
-        return '## Pre-flight Context\n' + pkgCmds;
-      }
     }
   } catch (err) {
     console.error(
@@ -175,6 +179,30 @@ function collectPackageJsonCommands(targetRoot: string): string | undefined {
     // Best-effort — never throw
   }
   return undefined;
+}
+
+/**
+ * C2 product path: probe-only workspace dep readiness (no pip/npm install here).
+ * When the project package is not importable, tell the model to avoid thrash.
+ */
+function collectWorkspaceDepReadinessNote(targetRoot: string): string | undefined {
+  try {
+    const plan = detectWorkspaceDepPlan(targetRoot);
+    if (plan.kind === 'none' || plan.kind === 'node_npm') return undefined;
+    if (!plan.packageHint) return undefined;
+    const probe = probePythonImport({
+      packageName: plan.packageHint,
+      cwd: targetRoot,
+      timeoutMs: 8_000,
+    });
+    if (probe.ok) return undefined;
+    return formatWorkspaceDepUnreadyNote({
+      packageHint: plan.packageHint,
+      probeDetail: probe.detail,
+    });
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -794,10 +822,24 @@ export function buildChatRunPayload(
     payload['phase_gate_write_block_visibility'] = phaseGateMetrics.visibility_line;
   }
   if (implementorHarness.env_blocked) {
-    payload['status'] = implementorHarness.status;
+    // Pri-3: never leave status=BLOCKED + terminal_outcome=BLOCKED_POLICY on env red.
+    payload['status'] = implementorHarness.status; // ENV_BLOCKED when no writes
     payload['failure_class_hint'] = implementorHarness.failure_class_hint;
     payload['user_status'] =
       writeCountFromTools > 0 ? 'partial' : 'blocked';
+    // Host env is external, not policy thrash — normalize outcome for scoreboard.
+    if (writeCountFromTools === 0) {
+      payload['terminal_outcome'] = 'BLOCKED_EXTERNAL';
+      if (payload['status'] !== 'ENV_BLOCKED') {
+        payload['status'] = 'ENV_BLOCKED';
+      }
+    } else if (
+      payload['terminal_outcome'] === 'BLOCKED_POLICY' ||
+      result.outcome === 'BLOCKED_POLICY'
+    ) {
+      // Patch present but verify blocked by env — still external, not policy.
+      payload['terminal_outcome'] = 'BLOCKED_EXTERNAL';
+    }
     if (implementorHarness.operator_card) {
       payload['env_blocked_card'] = implementorHarness.operator_card;
     }
@@ -807,6 +849,13 @@ export function buildChatRunPayload(
       pr['env_blocked'] = true;
       pr['empty_patch_scoreable'] = implementorHarness.empty_patch_scoreable;
     }
+  } else if (
+    // Policy block must not be labeled ENV_BLOCKED; ensure outcome stays policy.
+    result.outcome === 'BLOCKED_POLICY' &&
+    payload['status'] === 'BLOCKED'
+  ) {
+    payload['terminal_outcome'] = 'BLOCKED_POLICY';
+    payload['failure_class_hint'] = payload['failure_class_hint'] ?? 'blocked_policy';
   }
 
   // Surface run_dir
