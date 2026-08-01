@@ -421,20 +421,20 @@ export function applyExploreFuses(input: {
     s.consecutiveNonMutatingShells = 0;
   }
 
-  // Reset soft-nudge latch when a write cleared toolsWithoutWrite.
-  if (input.hasAnyWrites || s.toolsWithoutWrite === 0) {
-    s.investigateSoftNudgeDone = false;
-  }
-
   // Implementor W1: investigate tool budget (soft force-mutate by tool count).
-  // One-shot per zero-write streak — hard cap is the real stop.
+  // Fire only on the exact soft threshold crossing (toolsWithoutWrite === budget),
+  // not every subsequent turn — Wave A spammed 13 soft nudges with >= budget.
+  // Hard cap remains the terminal stop.
   const invEval = evaluateInvestigateToolBudget({
     toolCallCount: s.toolsWithoutWrite,
     budget: tune.investigateToolBudget,
     hasAnyWrites: input.hasAnyWrites,
     phase: s.phase,
   });
-  if (invEval.fire && invEval.message && !s.investigateSoftNudgeDone) {
+  const atSoftThreshold =
+    tune.investigateToolBudget > 0 &&
+    s.toolsWithoutWrite === tune.investigateToolBudget;
+  if (invEval.fire && invEval.message && atSoftThreshold) {
     investigateBudgetMessage = invEval.message;
     if (!defer) input.pushUser(invEval.message);
     out.push('[Implementor: investigate tool budget]');
