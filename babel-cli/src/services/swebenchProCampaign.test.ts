@@ -15,6 +15,7 @@ import {
   type CampaignCellResult,
   type SwebenchProInstanceRow,
 } from './swebenchProCampaign.js';
+import { packageHintFromRepo } from './workspaceDepPreflight.js';
 
 function cell(
   partial: Partial<CampaignCellResult> & Pick<CampaignCellResult, 'instance_id' | 'signature' | 'status' | 'phase'>,
@@ -100,6 +101,45 @@ describe('swebenchProCampaign early-stop', () => {
     );
   });
 
+  test('Pri-3: structured env vs policy outranks blob ImportError noise', () => {
+    // Policy hard-cap kill with ImportError text in stdout must stay policy
+    assert.equal(
+      classifyCampaignFailureSignature({
+        phase: 'live',
+        statusText: 'BLOCKED',
+        terminalOutcome: 'BLOCKED_POLICY',
+        envBlocked: false,
+        patchBytes: 0,
+        goldDiffOk: false,
+        stdoutStderr: "ModuleNotFoundError: No module named 'qutebrowser'",
+      }),
+      'agent:blocked_policy',
+    );
+    // Explicit ENV_BLOCKED status
+    assert.equal(
+      classifyCampaignFailureSignature({
+        phase: 'live',
+        statusText: 'ENV_BLOCKED',
+        terminalOutcome: 'BLOCKED_EXTERNAL',
+        envBlocked: true,
+        patchBytes: 0,
+        goldDiffOk: false,
+      }),
+      'agent:env_blocked',
+    );
+    // env_blocked flag alone
+    assert.equal(
+      classifyCampaignFailureSignature({
+        phase: 'live',
+        statusText: 'BLOCKED',
+        terminalOutcome: 'BLOCKED_EXTERNAL',
+        envBlocked: true,
+        patchBytes: 0,
+      }),
+      'agent:env_blocked',
+    );
+  });
+
   test('updateFailureStreak aborts after N identical fails', () => {
     let streak = { signature: null as string | null, count: 0, cell_ids: [] as string[] };
     for (let i = 0; i < 4; i += 1) {
@@ -152,6 +192,11 @@ describe('swebenchProCampaign early-stop', () => {
     );
     assert.equal(r.count, 0);
     assert.equal(r.abort, null);
+  });
+
+  test('packageHintFromRepo aligns with Pro repo leaves', () => {
+    assert.equal(packageHintFromRepo('internetarchive/openlibrary'), 'openlibrary');
+    assert.equal(packageHintFromRepo('qutebrowser/qutebrowser'), 'qutebrowser');
   });
 
   test('campaign aborts live after 5 same signature (injected cells)', async () => {
