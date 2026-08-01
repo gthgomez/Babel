@@ -76,6 +76,31 @@ test('buildChatRunPayload maps failed ChatResult to NEEDS_MORE_CONTEXT', () => {
   assert.equal(answer['answer'], 'rate limited');
 });
 
+test('Pri-3: env_blocked payload forces ENV_BLOCKED + BLOCKED_EXTERNAL not policy', () => {
+  const payload = buildChatRunPayload(
+    {
+      status: 'blocked',
+      outcome: 'BLOCKED_POLICY', // mislabeled upstream — harness must correct
+      answer: 'ENV_BLOCKED: ModuleNotFoundError: No module named x',
+      usage: completedResult('x').usage,
+      conversation: [],
+      toolCalls: [
+        {
+          tool: 'run_command',
+          target: 'pytest',
+          detail: "ModuleNotFoundError: No module named 'openlibrary'",
+          error: "ModuleNotFoundError: No module named 'openlibrary'",
+        },
+      ],
+    },
+    { task: 't', projectRoot: '/tmp/p' },
+  );
+  assert.equal(payload['env_blocked'], true);
+  assert.equal(payload['status'], 'ENV_BLOCKED');
+  assert.equal(payload['terminal_outcome'], 'BLOCKED_EXTERNAL');
+  assert.equal(payload['failure_class_hint'], 'env_blocked');
+});
+
 test('buildChatRunPayload prefers TerminalOutcome for user_status and terminal_outcome', () => {
   const verified = buildChatRunPayload(
     {

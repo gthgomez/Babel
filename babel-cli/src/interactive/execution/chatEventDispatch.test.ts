@@ -46,6 +46,31 @@ describe('terminalResultFromDoneEvent (P0-D lossless)', () => {
     assert.equal(result.status, 'blocked');
   });
 
+  test('Pri-3: env toolchain blockedReport maps to BLOCKED_EXTERNAL not policy', () => {
+    const result = terminalResultFromDoneEvent(
+      'ENV_BLOCKED: cannot run verification',
+      EMPTY_USAGE,
+      undefined,
+      undefined,
+      null,
+      {
+        schema_version: 1 as const,
+        status: 'BLOCKED' as const,
+        reason: 'Environment / toolchain cannot run verification',
+        missing: 'Working project runtime (deps installed, conftest importable, pytest/node on PATH)',
+        checked: [
+          {
+            action: 'env_blocked',
+            target: 'environment',
+            finding: 'ImportError while loading conftest',
+          },
+        ],
+      },
+    );
+    assert.equal(result.outcome, 'BLOCKED_EXTERNAL');
+    assert.equal(result.status, 'blocked');
+  });
+
   test('maps budgetExceeded to BUDGET_EXHAUSTED', () => {
     const result = terminalResultFromDoneEvent(
       'wall budget hit',
