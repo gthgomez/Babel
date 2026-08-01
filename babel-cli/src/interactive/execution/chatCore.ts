@@ -45,6 +45,7 @@ import {
 } from '../../services/workspaceDepPreflight.js';
 import { resolveChatTaskClass } from '../../config/chatTaskClass.js';
 import { isSuccessfulDirectMutation } from '../../agent/mutationTools.js';
+import { isAuthoritativeVerifierCommand } from '../../agent/completionGatePolicy.js';
 import { computeToolCallAggregates } from '../../agent/toolCallExport.js';
 import {
   buildInteractiveFirstMoveHint,
@@ -657,12 +658,25 @@ export function buildChatRunPayload(
   let required: boolean;
   let reason: string;
   let verification: { command: string; exit_code: number; summary: string } | null;
+  /** W1: only allowlisted project/dataset commands may green completion_verification. */
+  let authority: boolean | null = null;
 
   if (verifier) {
-    status = verifier.exit_code === 0 ? 'pass' : 'fail';
-    required = true;
-    reason = `Verifier "${verifier.command}" exited with code ${verifier.exit_code}.`;
-    verification = verifier;
+    const isAuth = isAuthoritativeVerifierCommand(verifier.command);
+    authority = isAuth;
+    if (!isAuth) {
+      // Defense in depth: never report pass on install/ad-hoc/probe receipts
+      // even if an older engine path leaked them into verifierReceipt.
+      status = 'not_run';
+      required = gatePolicy === 'required' || gatePolicy === 'strict';
+      reason = `Verifier "${verifier.command}" is not an authoritative project/dataset test command (install, ad-hoc, or probe).`;
+      verification = verifier;
+    } else {
+      status = verifier.exit_code === 0 ? 'pass' : 'fail';
+      required = true;
+      reason = `Verifier "${verifier.command}" exited with code ${verifier.exit_code}.`;
+      verification = verifier;
+    }
   } else if (gatePolicy === 'none') {
     status = 'not_required';
     required = false;
@@ -686,6 +700,7 @@ export function buildChatRunPayload(
     reason,
     required,
     verification,
+    authority,
   };
 
   // Surface toolCalls for evidence linking — always include even when empty
