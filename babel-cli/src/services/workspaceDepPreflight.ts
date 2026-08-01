@@ -583,67 +583,45 @@ export function runWorkspaceDepPreflight(input: {
     timeoutMs: Math.min(installTimeout, 180_000),
   });
 
-  if (plan.kind === 'python_editable') {
+  // Minimal path first: editable + pytest. Full requirements only if still unready
+  // (openlibrary-scale requirements often fail on host Windows while package+unit tests work).
+  let lastInstallDetail = '';
+  if (plan.kind === 'python_editable' || plan.hasPyproject || plan.hasSetupPy) {
     commands.push(`${pythonBin} -m pip install -e .`);
     const editable = runCmd(pythonBin, ['-m', 'pip', 'install', '-e', '.'], {
       cwd: input.workspaceRoot,
       timeoutMs: installTimeout,
     });
-    if (!editable.ok) {
-      // Fall through to requirements if any; else block
-      if (plan.requirementFiles.length === 0) {
-        return {
-          plan,
-          ready: false,
-          installed: false,
-          blocked: true,
-          reason: `pip install -e . failed: ${editable.detail}`,
-          venvPath,
-          pathPrefix,
-          pythonBin,
-          commands,
-          probeDetail: editable.detail,
-          durationMs: Math.round(performance.now() - started),
-        };
-      }
-    } else {
-      installed = true;
-    }
-  }
-
-  for (const req of plan.requirementFiles) {
-    commands.push(`${pythonBin} -m pip install -r ${req}`);
-    const reqInstall = runCmd(pythonBin, ['-m', 'pip', 'install', '-r', req], {
-      cwd: input.workspaceRoot,
-      timeoutMs: installTimeout,
-    });
-    if (reqInstall.ok) {
-      installed = true;
-    } else if (!installed) {
-      return {
-        plan,
-        ready: false,
-        installed: false,
-        blocked: true,
-        reason: `pip install -r ${req} failed: ${reqInstall.detail}`,
-        venvPath,
-        pathPrefix,
-        pythonBin,
-        commands,
-        probeDetail: reqInstall.detail,
-        durationMs: Math.round(performance.now() - started),
-      };
-    }
+    lastInstallDetail = editable.detail;
+    if (editable.ok) installed = true;
   }
 
   // pytest is commonly needed for Pro verify even when not a declared runtime dep
   commands.push(`${pythonBin} -m pip install pytest`);
-  runCmd(pythonBin, ['-m', 'pip', 'install', 'pytest'], {
+  const pytestInstall = runCmd(pythonBin, ['-m', 'pip', 'install', 'pytest'], {
     cwd: input.workspaceRoot,
     timeoutMs: Math.min(installTimeout, 180_000),
   });
+  if (pytestInstall.ok) installed = true;
+  else lastInstallDetail = pytestInstall.detail || lastInstallDetail;
 
-  const probe = probePythonReady(pythonBin);
+  let probe = probePythonReady(pythonBin);
+  if (!probe.ok && plan.requirementFiles.length > 0) {
+    for (const req of plan.requirementFiles) {
+      commands.push(`${pythonBin} -m pip install -r ${req}`);
+      const reqInstall = runCmd(pythonBin, ['-m', 'pip', 'install', '-r', req], {
+        cwd: input.workspaceRoot,
+        timeoutMs: installTimeout,
+      });
+      lastInstallDetail = reqInstall.detail || lastInstallDetail;
+      if (reqInstall.ok) installed = true;
+    }
+    // Re-probe after requirements attempt (success or partial)
+    probe = probePythonReady(pythonBin);
+  }
+
+  // If still unready but package import alone works (pytest missing is rarer),
+  // leave probe as-is — final block below uses it.
   try {
     writeFileSync(
       join(input.workspaceRoot, '.babel-dep-preflight.json'),
@@ -665,12 +643,15 @@ export function runWorkspaceDepPreflight(input: {
     // ignore
   }
   if (!probe.ok) {
+    const installHint = lastInstallDetail
+      ? ` last_install=${lastInstallDetail.slice(0, 200)}`
+      : '';
     return {
       plan,
       ready: false,
       installed,
       blocked: true,
-      reason: `workspace still not verify-ready after install: ${probe.detail}`,
+      reason: `workspace still not verify-ready after install: ${probe.detail}${installHint}`,
       venvPath,
       pathPrefix,
       pythonBin,
