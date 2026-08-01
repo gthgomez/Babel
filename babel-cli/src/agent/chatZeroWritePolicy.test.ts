@@ -209,7 +209,7 @@ describe('chatZeroWritePolicy', () => {
       cumulativeExplorationTools: 0,
       restrictToolsNextTurn: false,
       consecutiveNonMutatingShells: 0,
-      toolsWithoutWrite: 16, // general_swe hard cap
+      toolsWithoutWrite: 12, // general_swe hard cap (Wave A: 12 fires before wall)
       phase: 'investigate' as const,
     };
     const result = applyExploreFuses({
@@ -221,7 +221,42 @@ describe('chatZeroWritePolicy', () => {
       deferMessagesToArbiter: true,
     });
     assert.ok(result.investigateHardCapTerminal);
-    assert.match(result.investigateHardCapTerminal!, /hard cap 16/i);
+    assert.match(result.investigateHardCapTerminal!, /hard cap 12/i);
+  });
+
+  test('investigate soft budget fires once per zero-write streak', () => {
+    const state = {
+      turnsWithoutWrite: 0,
+      consecutiveReadOnlyTools: 0,
+      cumulativeExplorationTools: 0,
+      restrictToolsNextTurn: false,
+      consecutiveNonMutatingShells: 0,
+      toolsWithoutWrite: 8,
+      phase: 'investigate' as const,
+      investigateSoftNudgeDone: false,
+    };
+    const run = () =>
+      applyExploreFuses({
+        executeIntent: true,
+        taskClass: 'general_swe',
+        hasAnyWrites: false,
+        state,
+        pushUser: () => {},
+        deferMessagesToArbiter: true,
+      });
+    // First hit at soft budget → one soft nudge
+    const first = run();
+    assert.ok(first.investigateBudgetMessage);
+    assert.equal(state.investigateSoftNudgeDone, true);
+    assert.equal(first.investigateHardCapTerminal, null);
+    // Still at 8 or past soft → no re-fire
+    state.toolsWithoutWrite = 8;
+    assert.equal(run().investigateBudgetMessage, null);
+    state.toolsWithoutWrite = 10;
+    assert.equal(run().investigateBudgetMessage, null);
+    // Hard cap (12)
+    state.toolsWithoutWrite = 12;
+    assert.ok(run().investigateHardCapTerminal);
   });
 
   test('applyExploreFuses respects env ablation off without process mutation', () => {
