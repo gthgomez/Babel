@@ -410,13 +410,29 @@ export function isEnvBlockedReportReason(reason: string | null | undefined): boo
   );
 }
 
+/** True when blocked/verify text is pytest collect/import failure (not assert fail). */
+export function isVerifierCollectErrorText(text: string | null | undefined): boolean {
+  if (!text?.trim()) return false;
+  const t = text.toLowerCase();
+  return (
+    /\bwhile loading conftest\b/.test(t) ||
+    /\berror collecting\b/.test(t) ||
+    (/\b(modulenotfounderror|importerror|no module named)\b/.test(t) &&
+      (/\bconftest\b/.test(t) || /\bpytest\b/.test(t) || /\bcollect\b/.test(t))) ||
+    (/\bno tests (ran|collected)\b/.test(t) &&
+      /\b(modulenotfounderror|importerror|no module named)\b/.test(t))
+  );
+}
+
 /** Pure function: map final session state to honest TerminalOutcome.
  *  Extracted from ChatEngine.buildResult to keep chatEngine.ts under size ratchet. */
 export function computeTerminalOutcome(input: {
   finalStatus: string;
   budgetExceeded: boolean;
-  lastVerifierReceipt?: { exit_code: number } | null | undefined;
+  lastVerifierReceipt?: { exit_code: number; command?: string; summary?: string } | null | undefined;
   blockedReport?: { reason: string; missing?: string } | null | undefined;
+  /** W1 C: production writes present — collect fail is failed-with-evidence, not pure env. */
+  hasAnyWrites?: boolean;
 }): TerminalOutcome {
   if (input.budgetExceeded || input.finalStatus === 'budget_exhausted') {
     return 'BUDGET_EXHAUSTED';
@@ -437,9 +453,37 @@ export function computeTerminalOutcome(input: {
       const reason = input.blockedReport?.reason ?? '';
       const missing = input.blockedReport?.missing ?? '';
       const envBlob = `${reason}\n${missing}`;
+      const receiptBlob = [
+        input.lastVerifierReceipt?.command,
+        input.lastVerifierReceipt?.summary,
+        input.lastVerifierReceipt?.exit_code != null
+          ? `exit ${input.lastVerifierReceipt.exit_code}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
+      // W1 C: after production patch, collect/import verify fail → AGENT_FAILURE
+      // (failed-with-evidence / verifier_red class) — not BLOCKED_EXTERNAL thrash.
+      if (
+        input.hasAnyWrites &&
+        (isVerifierCollectErrorText(envBlob) ||
+          isVerifierCollectErrorText(receiptBlob) ||
+          (input.lastVerifierReceipt != null &&
+            input.lastVerifierReceipt.exit_code !== 0 &&
+            isVerifierCollectErrorText(
+              `${input.lastVerifierReceipt.command ?? ''}\n${input.lastVerifierReceipt.summary ?? ''}`,
+            )))
+      ) {
+        return 'AGENT_FAILURE';
+      }
       // Env/toolchain blocks are external (host), not policy thrash — check first
       // so "cannot run verification" in the ENV_BLOCKED reason does not mislabel.
+      // After writes, import-class env reasons without host-toolchain still map external
+      // only when they are true pre-mutate env; collect-after-write handled above.
       if (isEnvBlockedReportReason(envBlob) || isEnvBlockedReportReason(reason)) {
+        if (input.hasAnyWrites && isVerifierCollectErrorText(envBlob)) {
+          return 'AGENT_FAILURE';
+        }
         return 'BLOCKED_EXTERNAL';
       }
       // Distinguish policy blocks (critic, gate, auto-continue, tamper,
@@ -451,6 +495,14 @@ export function computeTerminalOutcome(input: {
         ) ||
         /verifier honesty|green verifier|gate reject/i.test(reason)
       ) {
+        // W1 C: completion-gate verifier_red on collect after patch → evidence fail
+        if (
+          input.hasAnyWrites &&
+          /verifier honesty|green verifier|gate reject|verifier_red/i.test(reason) &&
+          isVerifierCollectErrorText(envBlob + receiptBlob)
+        ) {
+          return 'AGENT_FAILURE';
+        }
         return 'BLOCKED_POLICY';
       }
       return 'BLOCKED_EXTERNAL';

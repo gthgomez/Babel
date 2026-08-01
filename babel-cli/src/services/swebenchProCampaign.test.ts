@@ -12,6 +12,7 @@ import {
   applyInstanceTestPatch,
   cellPassesByMode,
   classifyCampaignFailureSignature,
+  classifyFailToPassResult,
   ensureShadowSummaryForCampaign,
   resolveProTestPathHint,
   resolveSweProPassMode,
@@ -261,6 +262,55 @@ describe('swebenchProCampaign early-stop', () => {
     assert.equal(liveCount, 5, 'should not run remaining instances after abort');
     assert.equal(report.shadow_sessions_with_summary, 1);
     assert.match(report.policy_events_jsonl, /policy-events\.jsonl$/);
+  });
+
+  test('W1 D: classifyFailToPassResult separates collect_error from assert_fail', () => {
+    assert.equal(classifyFailToPassResult({ exitCode: 0, output: '1 passed' }), 'pass');
+    assert.equal(
+      classifyFailToPassResult({
+        exitCode: 4,
+        output:
+          "ImportError while loading conftest\nModuleNotFoundError: No module named 'web'",
+      }),
+      'collect_error',
+    );
+    assert.equal(
+      classifyFailToPassResult({
+        exitCode: 1,
+        output: 'FAILED test_x.py::test_y - AssertionError',
+      }),
+      'assert_fail',
+    );
+    assert.equal(
+      classifyFailToPassResult({ exitCode: null, skippedReason: 'disabled' }),
+      'skipped',
+    );
+  });
+
+  test('W1 C: production patch + collect_error → verifier_collect_error signature', () => {
+    assert.equal(
+      classifyCampaignFailureSignature({
+        phase: 'live',
+        patchBytes: 1040,
+        goldDiffOk: false,
+        terminalOutcome: 'BLOCKED_EXTERNAL',
+        envBlocked: false,
+        failToPassClass: 'collect_error',
+      }),
+      'agent:verifier_collect_error',
+    );
+    // Without patch, collect stays env/external path
+    assert.equal(
+      classifyCampaignFailureSignature({
+        phase: 'live',
+        patchBytes: 0,
+        goldDiffOk: false,
+        terminalOutcome: 'BLOCKED_EXTERNAL',
+        envBlocked: false,
+        failToPassClass: 'collect_error',
+      }),
+      'agent:blocked_external',
+    );
   });
 
   test('W1.3: resolveSweProPassMode + cellPassesByMode dual scoreboard', () => {
