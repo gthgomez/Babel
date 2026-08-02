@@ -11,5 +11,4 @@ This directory contains the active public documentation for Babel.
 Root onboarding companions (outside this folder): [README.md](../README.md), [START_HERE.md](../START_HERE.md), [AGENTS.md](../AGENTS.md), [BABEL_BIBLE.md](../BABEL_BIBLE.md).
 
 Active guidance must describe the canonical repository and pass the public content,
-link, independence, and supplemental scrub checks before release. Internal audits,
-roadmaps, research, and status ledgers are maintained outside this public tree.
+link, independence, and supplemental scrub checks before release.
