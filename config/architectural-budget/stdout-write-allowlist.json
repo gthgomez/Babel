@@ -1,0 +1,11 @@
+[
+  "src/ui/terminalRestoreGuard.ts",
+  "src/ui/outputBuffer.ts",
+  "src/ui/inputCoordinator.ts",
+  "src/ui/a11y.ts",
+  "src/ui/chunkCoalescer.ts",
+  "src/ui/terminalDetection.ts",
+  "src/ui/tokenHistory.ts",
+  "src/ui/latencyProbe.ts",
+  "src/ui/focusTracker.ts"
+]

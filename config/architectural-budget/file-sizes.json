@@ -1,0 +1,10 @@
+{
+  "babel-cli/src/services/liveCliReliabilityMatrix.ts": 3613,
+  "babel-cli/src/cli/structuredOutput.ts": 2057,
+  "babel-cli/src/pipeline.ts": 3258,
+  "babel-cli/src/pipeline/executorLoop.ts": 2777,
+  "babel-cli/src/commands/coreCommands.ts": 4709,
+  "babel-cli/src/ui/waterfall.ts": 2165,
+  "babel-cli/src/commands/workflowCommands.ts": 3223,
+  "babel-cli/src/agent/chatEngine.ts": 4488
+}
