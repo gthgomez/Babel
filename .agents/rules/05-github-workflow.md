@@ -17,16 +17,22 @@ This is the agent operating contract. Babel CLI support can later automate piece
 
 Treat `run the whole GitHub workflow` as the safe local-to-draft-PR path:
 
-1. inspect repo state
-2. sync remote metadata
-3. review local and base diffs
-4. verify the touched surface
-5. stage intentionally
-6. review the staged diff
-7. create a focused commit
-8. push a non-main branch
-9. open a draft PR
-10. report evidence and CI status when visible
+1. inspect repo identity, branch, remote, and dirty-tree inventory
+2. sync remote metadata and identify the sanitized base
+3. classify every visible path into a release batch or an explicit exclusion
+4. build a release map and dependency-ordered PR stack
+5. review each proposed batch against size and risk limits
+6. verify the selected batch
+7. stage only the selected paths
+8. review the staged diff
+9. create one focused commit
+10. push a non-main branch
+11. open a draft PR with stack context
+12. report evidence, exclusions, and CI status when visible
+
+When the worktree contains more than one coherent concern, the agent must stop
+thinking about the entire tree as one change. It should produce a batch map first
+and ship one batch at a time.
 
 If the user specifically asks to monitor GitHub Actions, include CI follow-up after the PR is opened.
 
@@ -35,11 +41,15 @@ If the user specifically asks to monitor GitHub Actions, include CI follow-up af
 The managing agent may proceed without step-by-step approval when all of these are true:
 
 - the work is inside the trusted workspace and current repo
-- the intended file set is coherent and task-related
+- the intended batch is coherent and task-related
 - no hard-stop condition is triggered
 - required local verification passes or the user explicitly requested a draft despite known failures
 - Git operations target a non-main branch
 - PR creation is draft by default
+
+The default review budget is at most 1,500 changed lines and 30 files per PR.
+Exceeding either limit requires a semantic split or explicit user approval with
+the reason recorded in the PR body.
 
 The managing agent may autonomously:
 
@@ -86,11 +96,41 @@ git diff --stat
 
 Review the diff directly enough to understand scope and risk. Use targeted file reads for high-risk or surprising files.
 
+## Dirty-Tree Triage
+
+Before staging a non-clean tree, create a release map with one row per visible
+path. Each row must have exactly one disposition:
+
+| Disposition | Meaning | Default action |
+|---|---|---|
+| `ship` | Clearly belongs to the requested product slice | Assign to one batch |
+| `split` | Related work that belongs in a later dependent PR | Assign to a later batch |
+| `vault` | Internal audit, teardown, operator note, or private research | Copy to the vault; never stage publicly |
+| `exclude` | Scratch, cache, generated data, local settings, or debug output | Leave unstaged and ignore when appropriate |
+| `investigate` | Unclear ownership or unexplained content | Block until classified |
+| `local-helper` | Machine-specific tooling outside the public product | Keep local unless separately approved |
+
+Use path and diff evidence, not filenames alone. Sample at least one code file,
+one documentation/tooling file, and one generated-looking file before deciding.
+No path without a batch assignment may be staged.
+
+Prefer these deterministic batch boundaries:
+
+- provider behavior and provider tests;
+- executor, evidence, and recovery behavior;
+- protocol, daemon, and session behavior;
+- public product docs;
+- GitHub workflow and verification skills.
+
+Preserve dependency order. If a historical commit is not independently
+buildable, move it after the slice that supplies its interfaces or split out a
+small compatibility change with its owning feature.
+
 ## Hard Stops
 
 Stop and ask the user before proceeding if any of these are true:
 
-- unrelated user edits are mixed into the worktree
+- the release map contains `investigate` paths or a batch mixes unrelated concerns
 - secrets, tokens, credentials, private keys, or `.env*` files appear in the diff
 - the workflow would push directly to `main` or `master`
 - required tests, typecheck, build, or validators fail
@@ -124,11 +164,16 @@ cd babel-cli && npx tsc --noEmit
 
 Before staging, identify:
 
-- planned staging set
+- planned batch name and exact staging set
 - intentionally excluded local files
 - reason each excluded file is not part of the PR
+- the next dependent batch, if any
 
 Stage by explicit path whenever practical. Avoid blind `git add .`; use it only after the full dirty tree has been reviewed and every changed file is intended.
+
+Never stage a path that is both staged and unstaged. Never stage unexplained
+untracked directories. If the planned set contains an internal/public-policy
+path, a secret-risk path, or a generated artifact, fail closed and restage.
 
 Before committing, always inspect:
 
@@ -166,6 +211,9 @@ The PR body should include:
 - intentionally excluded files
 - known failures or skipped verification
 - follow-ups
+- exact included batch and its parent/child PR relationship
+- intentionally deferred batches from the release map
+- changed-file and changed-line counts
 
 After opening the PR, check visible CI status when available. Do not wait indefinitely unless the user asked for CI monitoring.
 

@@ -80,6 +80,15 @@ babel-cli/runs/
 babel-cli/scratch/
 babel-cli/output/
 
+# ─── Local scratch and benchmark samples ────────────────────────────────────
+babel-cli/scratch.cjs
+benchmarks/datasets/swe-bench-pro/hf-cache-sample.jsonl
+benchmarks/datasets/swe-bench-pro/phase2-completion-20.jsonl
+benchmarks/datasets/swe-bench-pro/phase2-pri1-reval-ol.jsonl
+benchmarks/datasets/swe-bench-pro/phase2-remeasure-2.jsonl
+benchmarks/datasets/swe-bench-pro/phase2-waveA-completion.jsonl
+benchmarks/datasets/swe-bench-pro/phase2-waveA-ordered.jsonl
+
 # ─── Agent tools / terminals / MCP servers (runtime) ─────────────────────────
 agent-tools/
 terminals/
@@ -87,6 +96,7 @@ mcps/
 
 # ─── Claude Code worktrees ───────────────────────────────────────────────────
 .claude/worktrees/
+/.claude/
 
 # ─── Editor / cursor ─────────────────────────────────────────────────────────
 .cursor/
