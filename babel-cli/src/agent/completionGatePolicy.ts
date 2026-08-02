@@ -6,6 +6,7 @@
 import { isSuccessfulDirectMutation, isVerifierAttemptTool } from './mutationTools.js';
 import { getChatTaskTune, isStrictVerification, type ChatTaskClass, type VerificationPolicy } from '../config/chatTaskClass.js';
 import { buildGateRejectionMessage, hasSubAgentWrites } from './chatEngineCriticBudget.js';
+import type { StructuredVerifierCommand, VerifierAuthoritySource } from '../executor/contracts.js';
 
 /** Known project/dataset test runners (prefixes; case-insensitive match on trimmed cmd). */
 const AUTHORITATIVE_VERIFIER_PREFIXES = [
@@ -227,6 +228,65 @@ export function isInlineProbeVerifier(command: string | null | undefined): boole
   return false;
 }
 
+/** Detect shell composition outside quoted verifier arguments. */
+export function hasVerifierShellComposition(command: string | null | undefined): boolean {
+  if (command == null) return false;
+  const trimmed = command.trim();
+  if (!trimmed) return false;
+
+  let quote: 'single' | 'double' | null = null;
+  let escaped = false;
+  for (let index = 0; index < trimmed.length; index += 1) {
+    const char = trimmed[index];
+    const next = trimmed[index + 1] ?? '';
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\' && quote !== 'single') {
+      escaped = true;
+      continue;
+    }
+    if (char === "'" && quote !== 'double') {
+      quote = quote === 'single' ? null : 'single';
+      continue;
+    }
+    if (char === '"' && quote !== 'single') {
+      quote = quote === 'double' ? null : 'double';
+      continue;
+    }
+    if (quote !== null) continue;
+    if (char === ';' || char === '|' || char === '>' || char === '<' || char === '\n' || char === '\r') return true;
+    if (char === '&' && next === '&') return true;
+    if (char === '$' && next === '(') return true;
+    if (char === '`') return true;
+  }
+
+  const lower = trimmed.toLowerCase();
+  return /(?:^|\s)(?:cmd(?:\.exe)?\s+\/c|powershell(?:\.exe)?\s+-(?:command|encodedcommand)|pwsh(?:\.exe)?\s+-(?:command|encodedcommand))(?:\s|$)/.test(lower)
+    || /(?:^|\s)(?:invoke-expression|iex)(?:\s|$)/.test(lower);
+}
+
+/** Parse a simple verifier invocation into a structured executable/argv record. */
+export function parseStructuredVerifierCommand(
+  command: string,
+  options?: { verifierId?: string; authoritySource?: VerifierAuthoritySource },
+): StructuredVerifierCommand | null {
+  const trimmed = command.trim();
+  if (!trimmed || hasVerifierShellComposition(trimmed)) return null;
+  const tokens = trimmed.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map((token) =>
+    token.replace(/^("|')|("|')$/g, ''),
+  );
+  if (!tokens || tokens.length === 0) return null;
+  return {
+    verifierId: options?.verifierId ?? `verifier:${tokens[0]!.toLowerCase()}`,
+    executable: tokens[0]!,
+    args: tokens.slice(1),
+    authoritySource: options?.authoritySource ?? 'unknown',
+    displayCommand: trimmed,
+  };
+}
+
 /**
  * B2 / W1 honesty: command is an allowlisted project/dataset test runner
  * (or session-bound authoritative command), and not agent-owned ad-hoc,
@@ -252,6 +312,7 @@ export function isAuthoritativeVerifierCommand(
   if (isPackageManagerInstallCommand(trimmed)) return false;
   if (isAgentOwnedAdHocVerifier(trimmed)) return false;
   if (isInlineProbeVerifier(trimmed)) return false;
+  if (hasVerifierShellComposition(trimmed)) return false;
 
   // Shell junk is never authoritative
   const lower = trimmed.toLowerCase();
@@ -267,6 +328,10 @@ export type VerifierReceipt = {
   command: string;
   exit_code: number;
   summary: string;
+  stale?: boolean;
+  verifier_id?: string;
+  authority_source?: VerifierAuthoritySource;
+  argv?: string[];
 };
 
 export type GateToolLogEntry = {
@@ -326,6 +391,7 @@ export type CompletionGateRejectReason =
   | 'no_writes'
   | 'verifier_missing'
   | 'verifier_red'
+  | 'verifier_stale'
   | null;
 
 /**
@@ -379,6 +445,10 @@ export function evaluateExecuteCompletionHonesty(opts: {
 
   if (!hasRealReceipt && !hasRealGreenInLog) {
     return { allow: false, reason: 'verifier_missing' };
+  }
+
+  if (hasRealReceipt && opts.lastVerifierReceipt!.stale) {
+    return { allow: false, reason: 'verifier_stale' };
   }
 
   // 'strict' blocks on red verifier; 'required' lets it through with a warning.
@@ -439,6 +509,16 @@ export function buildGreenVerifierRejectionMessage(
     ];
     if (cmdHint) parts.push(cmdHint);
     return parts.filter(Boolean).join(' ');
+  }
+
+  if (reason === 'verifier_stale') {
+    return [
+      preamble,
+      `COMPLETION_GATE_REJECTED: verifier_stale`,
+      `Files were modified after the last successful verifier execution.`,
+      `You must re-run the tests to prove the new changes are correct before completing.`,
+      strikeEscalation,
+    ].filter(Boolean).join(' ');
   }
 
   // verifier_missing (includes B2: agent-owned _verify*.py is non-authoritative)
@@ -708,7 +788,7 @@ export function buildGateRejectUserMessageForEngine(opts: {
     lastVerifierReceipt: opts.lastVerifierReceipt,
     toolCallLog: log,
   });
-  if (honesty.reason === 'verifier_missing' || honesty.reason === 'verifier_red') {
+  if (honesty.reason === 'verifier_missing' || honesty.reason === 'verifier_red' || honesty.reason === 'verifier_stale') {
     return buildGreenVerifierRejectionMessage(
       honesty.reason,
       opts.lastVerifierReceipt,

@@ -4,6 +4,7 @@ import {
   buildGreenVerifierRejectionMessage,
   evaluateExecuteCompletionHonesty,
   hasGreenVerifierReceipt,
+  hasVerifierShellComposition,
   isAgentOwnedAdHocVerifier,
   isAuthoritativeVerifierCommand,
   isInlineProbeVerifier,
@@ -12,6 +13,7 @@ import {
   matchesAuthoritativeVerifierAllowlist,
   requiresGreenVerifier,
   resolveVerificationPolicy,
+  parseStructuredVerifierCommand,
   taskAsksForVerifier,
 } from './completionGatePolicy.js';
 
@@ -556,6 +558,37 @@ describe('isAgentOwnedAdHocVerifier / isAuthoritativeVerifierCommand (B2)', () =
     // Real runners still authoritative
     assert.equal(isAuthoritativeVerifierCommand('python -m pytest tests/'), true);
     assert.equal(isInlineProbeVerifier('python -m pytest tests/'), false);
+  });
+
+  test('W1.5 rejects shell composition from authoritative verifier evidence', () => {
+    for (const command of [
+      'pytest || true',
+      'pytest; echo ok',
+      'pytest && npm test',
+      'pytest | tee result.log',
+      'pytest > result.log',
+      'cmd /c pytest',
+      'powershell -Command pytest',
+      'pytest $(echo test)',
+    ]) {
+      assert.equal(hasVerifierShellComposition(command), true, command);
+      assert.equal(isAuthoritativeVerifierCommand(command), false, command);
+    }
+  });
+
+  test('W1.5 preserves quoted verifier arguments in structured records', () => {
+    const command = parseStructuredVerifierCommand('pytest "tests/test_a.py::test_case" -q', {
+      verifierId: 'project:test_a',
+      authoritySource: 'project_discovery',
+    });
+    assert.deepEqual(command, {
+      verifierId: 'project:test_a',
+      executable: 'pytest',
+      args: ['tests/test_a.py::test_case', '-q'],
+      authoritySource: 'project_discovery',
+      displayCommand: 'pytest "tests/test_a.py::test_case" -q',
+    });
+    assert.equal(parseStructuredVerifierCommand('pytest; echo unsafe'), null);
   });
 });
 
