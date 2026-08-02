@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "artifact_type": "babel_verified_completion",
+  "generated_at": "2026-08-02T00:00:00.000Z",
+  "status": "completed",
+  "task": "Add a verified completion artifact",
+  "project": "example_project",
+  "run_dir": "runs/example",
+  "changed_files": ["src/example.ts"],
+  "verifier_receipt": {
+    "command": "npm test",
+    "exit_code": 0,
+    "summary": "Project tests passed."
+  },
+  "false_complete": false,
+  "failure_class": null,
+  "tool_call_summary": {
+    "total": 3,
+    "writes": 1,
+    "reads": 1,
+    "verifier_attempts": 1
+  },
+  "blocked_report": null,
+  "evidence_paths": {
+    "completion": "runs/example/completion.json"
+  }
+}

@@ -65,23 +65,27 @@ function ipcRequest(
   });
 }
 
-function spawnDaemon(tempRoot: string): ChildProcess {
+function spawnDaemon(tempRoot: string, port = 49200): ChildProcess {
   return spawn(process.execPath, ['--import', 'tsx', DAEMON_MAIN], {
     cwd: PACKAGE_ROOT,
-    env: { ...process.env, BABEL_RUNS_DIR: tempRoot },
+    env: {
+      ...process.env,
+      BABEL_RUNS_DIR: tempRoot,
+      BABEL_DAEMON_PORT: String(port),
+    },
     stdio: 'pipe',
   });
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-test('Daemon integration: full lifecycle', async (t) => {
+test('Daemon integration: full lifecycle', { concurrency: false }, async (t) => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'babel-daemon-integration-'));
   const PORT = 16000 + Math.floor(Math.random() * 1000);
 
   try {
     // 1. Start daemon on TCP
-    const child = spawnDaemon(tempRoot);
+    const child = spawnDaemon(tempRoot, PORT);
     let daemonOutput = '';
     child.stdout?.on('data', (d: Buffer) => {
       daemonOutput += d.toString();
@@ -90,8 +94,8 @@ test('Daemon integration: full lifecycle', async (t) => {
       daemonOutput += d.toString();
     });
 
-    // Wait for daemon to be ready (up to 5s)
-    const deadline = Date.now() + 5000;
+    // Wait for daemon to be ready (up to 10s; Windows/tsx startup is load-sensitive)
+    const deadline = Date.now() + 10_000;
     let daemonReady = false;
     while (Date.now() < deadline) {
       if (child.exitCode !== null) {
@@ -122,7 +126,7 @@ test('Daemon integration: full lifecycle', async (t) => {
     }
 
     // Wait for exit (up to 5s on Windows)
-    const exitDeadline = Date.now() + (isWindows ? 5000 : 3000);
+    const exitDeadline = Date.now() + (isWindows ? 10_000 : 3000);
     while (Date.now() < exitDeadline && child.exitCode === null) {
       await new Promise((r) => setTimeout(r, 100));
     }
@@ -146,7 +150,7 @@ test('Daemon integration: full lifecycle', async (t) => {
     }
 
     // 5. Restart — verify crash recovery detects clean shutdown
-    const child2 = spawnDaemon(tempRoot);
+    const child2 = spawnDaemon(tempRoot, PORT);
     let daemonOutput2 = '';
     child2.stdout?.on('data', (d: Buffer) => {
       daemonOutput2 += d.toString();
@@ -155,7 +159,7 @@ test('Daemon integration: full lifecycle', async (t) => {
       daemonOutput2 += d.toString();
     });
 
-    const deadline2 = Date.now() + 5000;
+    const deadline2 = Date.now() + 10_000;
     let ready2 = false;
     while (Date.now() < deadline2) {
       if (child2.exitCode !== null) break;
@@ -177,12 +181,13 @@ test('Daemon integration: full lifecycle', async (t) => {
   }
 });
 
-test('Daemon integration: crash recovery detects clean previous shutdown', async (t) => {
+test('Daemon integration: crash recovery detects clean previous shutdown', { concurrency: false }, async (t) => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'babel-daemon-crash-test-'));
+  const PORT = 17000 + Math.floor(Math.random() * 1000);
 
   try {
     // First run: clean shutdown
-    const child1 = spawnDaemon(tempRoot);
+    const child1 = spawnDaemon(tempRoot, PORT);
     let out1 = '';
     child1.stdout?.on('data', (d: Buffer) => {
       out1 += d.toString();
@@ -190,12 +195,21 @@ test('Daemon integration: crash recovery detects clean previous shutdown', async
     child1.stderr?.on('data', (d: Buffer) => {
       out1 += d.toString();
     });
-    await new Promise((r) => setTimeout(r, 2000));
-    child1.kill('SIGTERM');
-    await new Promise((r) => setTimeout(r, 500));
+    const firstDeadline = Date.now() + 10_000;
+    while (Date.now() < firstDeadline && !out1.includes('Started. PID:')) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(out1.includes('Started. PID:'), `Daemon should start before shutdown: ${out1.slice(-500)}`);
+    if (process.platform === 'win32') process.kill(child1.pid!, 'SIGTERM');
+    else child1.kill('SIGTERM');
+    const firstExitDeadline = Date.now() + 10_000;
+    while (Date.now() < firstExitDeadline && child1.exitCode === null) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.notEqual(child1.exitCode, null, 'Daemon should exit before restart');
 
     // Second run: should report no orphans (clean shutdown)
-    const child2 = spawnDaemon(tempRoot);
+    const child2 = spawnDaemon(tempRoot, PORT);
     let out2 = '';
     child2.stdout?.on('data', (d: Buffer) => {
       out2 += d.toString();
@@ -203,9 +217,16 @@ test('Daemon integration: crash recovery detects clean previous shutdown', async
     child2.stderr?.on('data', (d: Buffer) => {
       out2 += d.toString();
     });
-    await new Promise((r) => setTimeout(r, 2000));
-    child2.kill('SIGTERM');
-    await new Promise((r) => setTimeout(r, 500));
+    const secondDeadline = Date.now() + 10_000;
+    while (Date.now() < secondDeadline && !out2.includes('Started. PID:')) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (process.platform === 'win32') process.kill(child2.pid!, 'SIGTERM');
+    else child2.kill('SIGTERM');
+    const secondExitDeadline = Date.now() + 10_000;
+    while (Date.now() < secondExitDeadline && child2.exitCode === null) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
 
     // Crash recovery should not report stale PID or abandoned jobs
     // (clean shutdown removed PID file)

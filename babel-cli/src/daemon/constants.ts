@@ -14,7 +14,10 @@ export const DAEMON_PROTOCOL_VERSION = 1;
 
 /** Platform-aware IPC path. Unix uses UDS, Windows uses localhost TCP. */
 export const DAEMON_IPC_PATH = join(tmpdir(), 'babel-daemon.sock');
-export const DAEMON_IPC_PORT = 49200;
+const configuredDaemonPort = Number.parseInt(process.env['BABEL_DAEMON_PORT'] ?? '', 10);
+export const DAEMON_IPC_PORT = Number.isInteger(configuredDaemonPort) && configuredDaemonPort > 0 && configuredDaemonPort < 65_536
+  ? configuredDaemonPort
+  : 49200;
 export const DAEMON_IPC_HOST = '127.0.0.1';
 
 /** Daemon runtime directory under BABEL_RUNS_DIR. */
