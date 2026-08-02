@@ -14,7 +14,8 @@ testable.
 
 > Babel is pre-1.0. The public checkout is runnable and typechecked, but model
 > choice, provider setup, sandboxing, and repository-specific execution policy
-> still matter. Use the validation commands below before model-backed runs.
+> still matter. See [the chat-mode contract](./docs/CHAT_MODE.md) and
+> [current vision](./docs/VISION.md) for the public product boundaries.
 
 ## The short version
 
@@ -154,9 +155,8 @@ Babel/
 ## Product status and positioning
 
 Babel is an open-source coding-agent CLI with a distinctive inspectable and
-governed harness. Public documentation intentionally describes shipped
-capabilities and validation commands, not private comparative baselines or
-implementation backlogs.
+governed harness. It is pre-1.0 and describes its current public capabilities
+directly rather than making parity claims about other coding agents.
 
 The strongest public proof today is:
 
