@@ -1,0 +1,21 @@
+[
+  "src/cli/deprecation.ts",
+  "src/cli/structuredOutput.ts",
+  "src/commands/coreCommands.ts",
+  "src/commands/liteCommands.ts",
+  "src/commands/maintenanceCommands.ts",
+  "src/commands/output.ts",
+  "src/commands/projectCommands.ts",
+  "src/commands/skillCommands.ts",
+  "src/commands/workflowCommands.ts",
+  "src/config/envBootstrap.ts",
+  "src/daemon/main.ts",
+  "src/interactive/repl/replLifecycle.ts",
+  "src/services/cliSmokeBenchmark.ts",
+  "src/services/governanceBenchmark.ts",
+  "src/services/liteParallelReview.ts",
+  "src/services/liveCliReliabilityMatrix.ts",
+  "src/ui/inputCoordinator.ts",
+  "src/ui/terminalRestoreGuard.ts",
+  "src/ui/waterfall.ts"
+]
