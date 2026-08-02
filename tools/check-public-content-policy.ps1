@@ -79,6 +79,17 @@ foreach ($entry in @($policy.generated_artifact_allowlist)) {
 $inventory = Get-TrackedScanInventory -RepoRoot $RepoRoot -BinaryAllowlist @($validBinaryAllowlist)
 foreach ($issue in @($inventory.issues)) { Add-Finding -Id 'PCONT010' -Category ("unscannable-tracked-file:{0}" -f $issue.reason) -Path $issue.path -Line 0 }
 foreach ($record in @($inventory.records)) {
+  $normalizedPath = ([string]$record.path).Replace('\', '/').TrimStart('/')
+  $forbiddenExact = @($policy.forbidden_public_paths) -contains $normalizedPath
+  $forbiddenPrefix = $false
+  foreach ($prefix in @($policy.forbidden_public_path_prefixes)) {
+    if ($normalizedPath.StartsWith([string]$prefix, [StringComparison]::OrdinalIgnoreCase)) { $forbiddenPrefix = $true; break }
+  }
+  if ($forbiddenExact -or $forbiddenPrefix) {
+    Add-Finding -Id 'PCONT013' -Category 'forbidden-public-document-path' -Path $record.path -Line 0
+  }
+}
+foreach ($record in @($inventory.records)) {
   foreach ($pattern in @($policy.forbidden_generated_path_patterns)) {
     if ($record.path -match [string]$pattern) {
       $allowed = @($validGeneratedAllowlist | Where-Object {

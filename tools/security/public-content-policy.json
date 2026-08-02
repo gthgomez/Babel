@@ -11,6 +11,18 @@
   "generated_artifact_allowlist": [],
   "excluded_path_prefixes": ["docs/archive/", "02_Domain_Architects/archive/", "02_Skills/archive/", "skills/"],
   "excluded_paths": [],
+  "forbidden_public_path_prefixes": [
+    "docs/archive/",
+    "docs/audit/",
+    "docs/critiques/",
+    "docs/plans/",
+    "docs/research/",
+    "docs/status/"
+  ],
+  "forbidden_public_paths": [
+    "docs/guides/PARITY_BENCHMARK.md",
+    "docs/OSS_DOCS_CRITIQUE_2026-08-01.md"
+  ],
   "temporary_exceptions": [
     {
       "id": "TEMP-RUNTIME-PROFILE-001",

@@ -36,7 +36,7 @@ This is the **public, canonical source** for the Babel coding agent (`gthgomez/B
 | CI workflows | `.github/workflows/` |
 | Agent/skill lifecycle & execution rules | `AGENTS.md`, `.agents/rules/` (`05`-`09`), `.agents/skills/` |
 | Autonomous goal clearance & research delegation | `.agents/rules/06-autonomous-goal-clearance.md`, `.agents/rules/07-subagent-research-delegation.md` |
-| Docs (architecture, ADRs, audits, plans, guides, status, research, release) | `docs/` — start with `docs/README.md` |
+| Public docs (architecture, ADRs, guides, release) | `docs/` — start with `docs/README.md` |
 | Embedding & vector index decision | `docs/adr/ADR-011-embedding-decision.md` |
 | Coding standards | `ENGINEERING.md` |
 | Public content policy & secret scan | `tools/check-public-content-policy.ps1`, `tools/run-public-secret-scan.ps1` |
@@ -60,7 +60,7 @@ Runtime:
   babel-cli/dist/       ← compiled output
 Support:
   tools/                ← PowerShell automation
-  docs/                 ← architecture, plans, status, ADRs
+  docs/                 ← public architecture, guides, release docs, ADRs
   config/               ← static configuration
   examples/             ← example outputs
   .github/workflows/    ← CI/CD
@@ -215,7 +215,7 @@ After CLI source changes, use the targeted `babel-cli` checks listed in `babel-c
 
 **Key rules:**
 - Prefer adding indexes, labels, and docs lanes before moving many files.
-- **Documentation Co-Evolution**: When adding `.agents/rules/`, ADRs (`docs/adr/`), or archiving historical docs into `docs/archive/`, update `CLAUDE.md` §Quick Traverse and the section `README.md` index in the same change set. Run `pwsh tools/check-architectural-budget.ps1` before committing.
+- **Documentation Co-Evolution**: When adding `.agents/rules/`, ADRs (`docs/adr/`), or public guides, update `CLAUDE.md` §Quick Traverse and the `README.md` index in the same change set. Internal audits, plans, research, and status ledgers belong outside this public repository. Run `pwsh tools/check-architectural-budget.ps1` before committing.
 - Do not move `AGENTS.md`, `PROJECT_CONTEXT.md`, `BABEL_BIBLE.md`, model adapters, or startup files without explicit approval.
 - Do not delete run evidence, generated artifacts, or snapshots just because they look noisy.
 - Generated paths (`runs/`, `artifacts/`, `runtime/`) can contain important evidence — do not delete or flatten without an explicit cleanup task.

@@ -55,7 +55,7 @@ The default implementation path supports distinct execution modes. Docs and JSON
 Rules:
 
 - `--provider mock` and `BABEL_LITE_OFFLINE=1` are **fixture/demo scope only**. They must not be documented as the default daily path or as proof of arbitrary-repo fix without keys.
-- Mock/offline success must not upgrade `claims-matrix.md` "daily worker" wording.
+- Mock/offline success must not upgrade public evidence wording for the daily worker.
 - Provider failures must return structured `next` steps (credential check, `babel undo`, retry guidance).
 
 ## Required Output Shape

@@ -45,6 +45,13 @@ try {
   Assert-True ($contentPass.ExitCode -eq 0) "positive content fixture failed: $($contentPass.Text)"
   $canonicalPass = Invoke-Gate (Join-Path $positive 'tools/check-canonical-independence.ps1') $positive
   Assert-True ($canonicalPass.ExitCode -eq 0) "positive canonical fixture failed: $($canonicalPass.Text)"
+  $forbiddenPath = Initialize-Fixture 'forbidden-public-path'
+  New-Item -ItemType Directory -Path (Join-Path $forbiddenPath 'docs/audit') -Force | Out-Null
+  Set-Content -LiteralPath (Join-Path $forbiddenPath 'docs/audit/internal.md') -Value '# Internal audit'
+  & git -C $forbiddenPath add .
+  $forbiddenPathResult = Invoke-Gate (Join-Path $forbiddenPath 'tools/check-public-content-policy.ps1') $forbiddenPath
+  Assert-True ($forbiddenPathResult.ExitCode -eq 1) 'forbidden public document path unexpectedly passed'
+  Assert-True (@((ConvertFrom-Json $forbiddenPathResult.Text).findings.id) -contains 'PCONT013') 'forbidden public document path did not produce PCONT013'
   $fixturePolicyPath = Join-Path $positive 'tools/security/public-content-policy.json'
   $invalidPolicy = Get-Content -Raw -LiteralPath $fixturePolicyPath | ConvertFrom-Json
   $invalidPolicy.temporary_exceptions = @($invalidPolicy.temporary_exceptions) + @([pscustomobject]@{ id = 'missing-metadata' })

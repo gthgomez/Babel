@@ -69,11 +69,10 @@ Discovery intentionally does **not** cover:
 
 - `autonomous` repair loops
 - `parallel_swarm` / Spark mutation subagents
-- Worker-chain (`bl do --worker-chain`) — covered separately by parity corpus worker-loop mode
+- Worker-chain (`bl do --worker-chain`) — covered separately by runtime worker-loop tests
 
 ## Related guides
 
-- [Parity Benchmark](./PARITY_BENCHMARK.md) — fix-only live regression on parity corpus tasks 1–2
 - [Lite command contract](../LITE_COMMAND_CONTRACT.md) — daily verb semantics
 
 ## Manual repro

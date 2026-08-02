@@ -6,7 +6,7 @@
   "task_id": "SWE-A09",
   "source": {
     "wrong_patch": "runs/agent-benchmark-t1.4/SWE-A09-preds.jsonl",
-    "investigation": "docs/audit/BABEL_CODING_AGENT_STATE_2026-07-08.md §6.2b"
+    "investigation": "internal evidence ledger §6.2b"
   },
   "expected_critic": {
     "wrong_patch_verdict": "reject",

@@ -93,3 +93,13 @@ mcps/
 
 # ─── Factory campaign artifacts ──────────────────────────────────────────────
 plans/factory/
+
+# Internal-only documentation; do not add competitive or operator material to the public repo.
+docs/archive/
+docs/audit/
+docs/critiques/
+docs/plans/
+docs/research/
+docs/status/
+docs/guides/PARITY_BENCHMARK.md
+docs/OSS_DOCS_CRITIQUE_2026-08-01.md

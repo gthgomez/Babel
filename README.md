@@ -4,54 +4,104 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/gthgomez/Babel/typecheck.yml?branch=main&label=Public%20Release%20Gate)](https://github.com/gthgomez/Babel/actions)
 
-**Open-source coding agent for real software work.**
+**Open-source agent harness for real software work.**
 
-Babel plans, reviews, and implements engineering tasks in your local workspace.
-For each task it loads a **small, explicit instruction stack**—behavioral rules, domain expertise, skills, model adapters, and project overlays—so you can see *how* the agent will work before it edits a line of code.
+Babel is a local coding agent with a conversational **chat** loop, explicit
+**plan** and **deep** modes, and an inspectable Prompt OS underneath. It gives a
+model the context, tools, permissions, workflows, and evidence needed to work
+inside a real repository—while keeping the operating instructions visible and
+testable.
 
-| | |
+> Babel is pre-1.0. The public checkout is runnable and typechecked, but model
+> choice, provider setup, sandboxing, and repository-specific execution policy
+> still matter. Use the validation commands below before model-backed runs.
+
+## The short version
+
+The default experience is a coding conversation in your terminal:
+
+```powershell
+node .\babel-cli\dist\index.js interactive
+```
+
+Or give Babel a task directly:
+
+```powershell
+node .\babel-cli\dist\index.js "Fix the failing webhook retry test"
+```
+
+Chat mode can inspect files, reason over the repository, use tools, make
+approved changes, and verify the result across multiple turns. When the task
+needs a stronger gate, move to a reviewable plan or the fully governed path:
+
+```powershell
+node .\babel-cli\dist\index.js plan "Split the auth module safely"
+node .\babel-cli\dist\index.js deep "Harden the migration path and verify it"
+```
+
+## Why Babel
+
+Most coding agents expose a model and a tool loop. Babel also exposes the
+harness around that loop:
+
+| Harness surface | What it gives you |
 |---|---|
-| **Product** | Local coding agent — TUI/REPL + chat / plan / deep |
-| **Primary UI** | Interactive terminal session (`babel`) |
-| **Release** | [**v0.1.0**](https://github.com/gthgomez/Babel/releases/tag/v0.1.0) · pre-1.0 |
-| **Source of truth** | This repo — [`gthgomez/Babel`](https://github.com/gthgomez/Babel) |
-| **Edge** | Inspectable stacks, domain routing, plan → review → execute |
+| **Chat** | A lightweight, multi-turn daily coding loop with live tool use |
+| **Plan** | A reviewable plan before changes are applied |
+| **Deep** | Routed planning, adversarial review, execution, and verification for higher-risk work |
+| **Prompt OS** | Modular behavioral rules, domain expertise, skills, model adapters, and overlays |
+| **Control plane** | Catalog validation, stack/manifest previews, typed contracts, and read-only MCP inspection |
+| **Evidence** | Checkpoints, run artifacts, cost tracking, diagnostics, and recovery tools such as `undo` |
 
-This is the **canonical public source**. Day-to-day Babel development happens here.
-Pin consumers with a **release tag + commit SHA**. See [ADR-0001](./docs/adr/ADR-0001-canonical-public-source.md) and [docs/guides/RELEASE.md](./docs/guides/RELEASE.md).
+The model supplies reasoning. The harness supplies the working context, tools,
+state, permissions, workflow, and proof around that reasoning.
 
-## What Babel does
+## Modes
 
-| You need to… | Babel |
-|--------------|--------|
-| Ship a feature or fix | Plan the work, then run an implementation session |
-| Stay safe on risky changes | Prefer **plan** or **deep** when you want stronger gates before or during execution |
-| Work across domains | Route backend, frontend, mobile, and more to the right expertise—not one generic prompt |
-| Reuse hard-won workflows | Skills for testing, review, governance, release hygiene, and more |
-| Trust the agent’s “brain” | Preview the exact stack from the catalog before the model runs |
-| Integrate other tools | Read-only MCP for stack and manifest inspection |
+Chat is the default. The modes are different levels of structure around the
+same local coding-agent product:
 
-Most coding agents hide the system prompt. Babel makes the agent’s operating instructions **modular, versioned, and testable**—engineered software, not an improvised blob.
+| Mode | Command | Best for |
+|---|---|---|
+| **Chat** | `babel "task"` | Daily coding, exploration, iteration, and questions |
+| **Chat headless** | `babel chat --headless "task"` | Scripts, CI, and JSON-oriented automation |
+| **Plan** | `babel plan "task"` | A plan you can review before mutation |
+| **Deep** | `babel deep "task"` | Higher-risk implementation with the full governed pipeline |
 
-## Quick start
+Read the complete [chat-mode contract](./docs/CHAT_MODE.md) for routing and
+runtime details. Legacy names remain accepted as aliases, but new integrations
+should use `chat`, `plan`, and `deep`.
+
+## Quick start from source
+
+Babel is currently easiest to run from a clone of this repository. It requires
+Node.js 22+ for the CLI build.
 
 ```powershell
-cd .\babel-cli
-npm install
-npm run build
-node .\dist\index.js doctor
+git clone https://github.com/gthgomez/Babel.git
+cd Babel
+npm --prefix .\babel-cli ci
+npm --prefix .\babel-cli run build
+node .\babel-cli\dist\index.js doctor
 ```
 
-Validate the public surface (no model required):
+Start the interactive TUI:
 
 ```powershell
-cd ..
+node .\babel-cli\dist\index.js interactive
+```
+
+Model-backed sessions need a configured provider. Credentials belong in your
+environment or credential manager, never in the repository.
+
+## Inspect before you execute
+
+You can validate Babel and preview the instruction stack without a model or API
+key:
+
+```powershell
 pwsh -File .\tools\validate-public-release.ps1
-```
 
-See the stack the agent would load for a backend task:
-
-```powershell
 pwsh -File .\tools\resolve-local-stack.ps1 `
   -TaskCategory backend `
   -Project example_saas_backend `
@@ -60,157 +110,89 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
   -Format json
 ```
 
-Golden preview: [examples/manifest-previews/backend-verified.json](./examples/manifest-previews/backend-verified.json)
+Compare the result with the checked-in
+[backend manifest preview](./examples/manifest-previews/backend-verified.json).
+For integrations, `babel mcp` exposes the read-only control-plane surface.
 
-Mobile lane:
+This preview-first path is intentional: you can inspect what Babel would load
+before asking a model to act.
 
-```powershell
-pwsh -File .\tools\resolve-local-stack.ps1 `
-  -TaskCategory mobile `
-  -Project example_mobile_suite `
-  -Model deepseek `
-  -Format json
-```
+## How the harness works
 
-Golden: [examples/manifest-previews/mobile-direct.json](./examples/manifest-previews/mobile-direct.json)
+Before a model runs, Babel resolves an ordered stack from
+[`prompt_catalog.yaml`](./prompt_catalog.yaml):
 
-With local provider credentials configured:
+1. **Behavioral rules** — how the agent plans, acts, verifies, and stays safe.
+2. **Domain architect** — the technical lens for backend, frontend, mobile, and other work.
+3. **Skills** — reusable workflows for testing, review, governance, release, and more.
+4. **Model adapter** — model-specific delivery shaping.
+5. **Project and task overlays** — context for the target workspace and task.
+6. **Manifest** — the exact ordered stack, available for preview and validation.
 
-```powershell
-cd .\babel-cli
-node .\dist\index.js                 # interactive TUI (chat)
-node .\dist\index.js plan "..."      # plan mode
-node .\dist\index.js deep "..."      # governed deep path
-```
+That makes the agent’s operating instructions modular, versioned, and
+inspectable rather than one opaque prompt. The stack is an important part of
+Babel, but it serves the agent harness—it is not a separate product users must
+understand before they can start a coding session.
 
-Full onboarding: [START_HERE.md](./START_HERE.md) · CLI reference: [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md)
+## What is in the repository
 
-## How the agent works
-
-Before the model acts, Babel resolves an ordered stack from `prompt_catalog.yaml`:
-
-1. **Behavioral rules** — how the agent plans, acts, verifies, and stays safe  
-2. **Domain architect** — backend, frontend, mobile, … for this kind of work  
-3. **Skills** — reusable workflows the task needs  
-4. **Model adapter** — tune the same agent for the model you chose  
-5. **Overlays** — project- or task-specific context  
-6. **Manifest** — the exact load order you can preview and test  
-
-That is the product idea: **a coding agent whose instructions are engineered, not improvised.**
-
-### Product modes
-
-| Mode | When to use |
-|------|-------------|
-| `chat` | Default conversational agent (TUI and one-shot tasks) |
-| `chat-headless` | Same engine for scripts / CI |
-| `plan` | Plan first, then apply with approval |
-| `deep` | Full governed pipeline for higher-risk work |
-
-Legacy aliases (`verified`→`deep`, `manual`→`plan`, `direct`→`chat`) still work with deprecation warnings.
-
-### Inspect vs execute
-
-| Mode | Purpose |
-|------|---------|
-| **Inspect** | Validate catalog, preview stack, compare goldens, MCP — no model required |
-| **Execute** | `babel` (TUI), `babel plan`, `babel deep` — model-backed sessions |
-
-**Pre-1.0 honesty:** model-backed runs are real and typechecked, but need local credentials and workspace setup. You can still validate and preview stacks from a clean clone with no API keys.
-
-## What’s in the repo
-
-| Path | Role |
-|------|------|
-| `00_`–`06_` prompt layers | Router, behavior, domains, skills, adapters, overlays |
-| `prompt_catalog.yaml` | Routable stack contract |
-| `babel-cli/` | Coding agent runtime (TUI + chat / plan / deep) |
-| `examples/` | Golden stack previews and first-success walkthroughs |
-| `tools/` | Validate, scrub, content policy, release gates |
-| `docs/` | Architecture, vision, CLI guides |
-
-```
+```text
 Babel/
-├── START_HERE.md
-├── BABEL_BIBLE.md         # agent / integration entry
-├── prompt_catalog.yaml
-├── 00_System_Router/
-├── 01_Behavioral_OS/
-├── 02_Domain_Architects/
-├── 02_Skills/
-├── 03_Model_Adapters/
-├── 04_Meta_Tools/
-├── 05_Project_Overlays/
-├── 06_Task_Overlays/
-├── babel-cli/
-├── examples/
-├── docs/
-└── tools/
+├── babel-cli/              # Local coding-agent runtime and TUI
+├── 00_System_Router/       # Typed routing and runtime contracts
+├── 01_Behavioral_OS/       # Shared execution behavior and evidence discipline
+├── 02_Domain_Architects/   # Backend, frontend, mobile, and other technical lanes
+├── 02_Skills/              # Reusable workflows
+├── 03_Model_Adapters/      # Model-specific shaping
+├── 05_Project_Overlays/    # Public project context examples
+├── 06_Task_Overlays/       # Public task context examples
+├── examples/               # Golden previews and first-success fixtures
+├── docs/                   # Product, CLI, architecture, audit, and release docs
+└── tools/                  # Validation, scrub, and release gates
 ```
 
-## Status (v0.1.0)
+## Product status and positioning
 
-- Canonical open-source coding agent surface — clone, validate, run locally  
-- **Public Release Gate** on every PR (required on `protect-main`): `security`, `public-content-policy`, `linux-validation`, `public-pr-metadata`, `windows-portability`  
-- `main` is PR-only; `v*` tags protected; secret scanning + push protection on  
-- Optional pre-commit hooks; **CI is authoritative** ([CONTRIBUTING.md](./CONTRIBUTING.md))  
+Babel is an open-source coding-agent CLI with a distinctive inspectable and
+governed harness. Public documentation intentionally describes shipped
+capabilities and validation commands, not private comparative baselines or
+implementation backlogs.
 
-Pin when ready:
+The strongest public proof today is:
 
-```json
-{
-  "babel": {
-    "tag": "v0.1.0",
-    "sha": "8184bbbbfa818001382fdeaf8e9d51ba8bf6003d"
-  }
-}
-```
+- a runnable local CLI with chat, plan, and deep routes;
+- deterministic catalog and stack/manifest validation;
+- typed routing and runtime contracts;
+- read-only MCP inspection;
+- public release, scrub, and secret-scan gates; and
+- locally tested evidence, checkpoint, rollback, and diagnostics components.
 
-Agent contracts and CLI surfaces may still change before `1.0.0`.
+Provider-backed runs still depend on local credentials and environment setup.
+Claims about universal verifiers, unrestricted autonomous workers, mutating
+subagent teams, sandbox parity, or market parity are intentionally excluded.
 
-## Verification
+## Documentation
 
-```powershell
-pwsh -File .\tools\validate-public-release.ps1
-pwsh -File .\tools\check-public-content-policy.ps1
-pwsh -File .\tools\check-canonical-independence.ps1
-```
-
-Maintainers may use a confidential supplemental policy stored **outside** this repo:
-
-```powershell
-pwsh -File .\tools\validate-public-release.ps1 -Strict `
-  -RequireSupplementalPolicy `
-  -SupplementalPolicyPath $env:BABEL_PRIVATE_SCRUB_POLICY_PATH
-```
-
-MCP (read-only):
-
-```powershell
-cd .\babel-cli
-npm run build
-node .\dist\index.js mcp
-```
-
-## Docs
-
-- [START_HERE.md](./START_HERE.md) — first success  
-- [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md) — TUI, chat / plan / deep, doctor, MCP  
-- [docs/VISION.md](./docs/VISION.md) — product direction  
-- [docs/architecture/ARCHITECTURE.md](./docs/architecture/ARCHITECTURE.md) — system shape  
-- [BABEL_BIBLE.md](./BABEL_BIBLE.md) — invocation contract for models and wrappers  
-- [CONTRIBUTING.md](./CONTRIBUTING.md)  
+- [Start Here](./START_HERE.md) — first successful validation and preview
+- [CLI quickstart](./docs/CLI_QUICKSTART.md) — chat, plan, deep, doctor, and MCP
+- [Chat mode](./docs/CHAT_MODE.md) — the default daily runtime contract
+- [Vision](./docs/VISION.md) — product principles and public scope
+- [Architecture](./docs/architecture/ARCHITECTURE.md) — system shape and layers
+- [Babel Bible](./BABEL_BIBLE.md) — integration and model-facing invocation contract
+- [Contributing](./CONTRIBUTING.md)
 
 ## Contributing
 
-Highest-value work:
+The highest-value contributions improve the agent as a product:
 
-- stronger agent behavior (skills, domains, adapters)  
-- clearer plan/run UX and diagnostics  
-- end-to-end coding task examples  
-- tighter stack selection and release safety  
+- make the daily chat loop more reliable and legible;
+- improve plan, deep, verification, and recovery UX;
+- add end-to-end coding-task examples;
+- strengthen stack selection and conflict explanations; and
+- keep public release and security gates reproducible.
 
-Keep out: private dependency fingerprints, credentials, machine paths, operator-only notes.
+Keep credentials, private paths, operator notes, and private dependency
+fingerprints out of public docs and fixtures.
 
 ## License
 

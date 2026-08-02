@@ -1,8 +1,12 @@
 # Babel Vision
 
-Babel is a prompt operating system for software work.
+Babel is an open-source agent harness for software work, with a structured
+Prompt OS underneath.
 
-The goal is not to hide prompts behind a black box. The goal is to make the instruction stack explicit enough that a human, a model, or another tool can inspect what will happen before execution begins.
+The goal is to give a local coding agent a useful daily loop while making the
+context, tools, permissions, instruction stack, and evidence explicit enough
+that a human, a model, or another tool can inspect what will happen before
+execution begins.
 
 ## Current State
 
@@ -16,6 +20,7 @@ What works today from a fresh clone:
 - run a read-only MCP control-plane server
 - build and typecheck the public CLI
 - run public secret and scrub checks before release
+- use the default conversational chat loop, with plan and deep modes for stronger gates
 
 What is available but more advanced:
 
