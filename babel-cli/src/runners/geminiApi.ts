@@ -14,6 +14,7 @@
  */
 
 import type { ZodType } from 'zod';
+import { classifyProviderError } from './providerNormalize.js';
 import { type LlmRunner, type RunnerCallbacks, buildStructuredOutputError } from './base.js';
 import { extractJson } from '../utils/extractJson.js';
 import { parseRateLimitHeaders } from '../ui/rateLimitWidget.js';
