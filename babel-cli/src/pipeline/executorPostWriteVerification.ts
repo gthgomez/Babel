@@ -1,4 +1,5 @@
-import { executeTool, DRY_RUN, type ToolCallRequest } from '../localTools.js';
+import { DRY_RUN, type ToolCallRequest } from '../localTools.js';
+import { executeExecutorTool } from './executorToolDispatch.js';
 import { EvidenceBundle } from '../evidence.js';
 import { verifySuccessfulTextWriteTarget } from '../stages/verification.js';
 import { getDeterministicSimpleRepairWrite } from '../stages/simpleArtifactFallback.js';
@@ -119,7 +120,7 @@ export async function verifyAndRepairFileWrite(
   reportWarnings.push(warning);
   logDetail(warning);
 
-  const repairResult = await executeTool(
+  const repairResult = await executeExecutorTool(
     {
       tool: 'file_write',
       path: repairWrite.target,

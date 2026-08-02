@@ -12,7 +12,8 @@
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ToolCallLog, SwePlan, ActionStep } from '../schemas/agentContracts.js';
-import { executeTool, type ToolCallRequest } from '../localTools.js';
+import type { ToolCallRequest } from '../localTools.js';
+import { executeExecutorTool } from './executorToolDispatch.js';
 import { EvidenceBundle } from '../evidence.js';
 import { BABEL_ROOT } from '../cli/constants.js';
 
@@ -76,7 +77,7 @@ export async function runChatExecutorLoop(
     if (request.tool === 'file_write' && (!request.content || request.content.length === 0))
       continue;
 
-    const result = await executeTool(request, {
+    const result = await executeExecutorTool(request, {
       agentId: 'chat-executor',
       runId: evidence.runId,
       runDir: evidence.runDir,

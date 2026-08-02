@@ -14,6 +14,7 @@ import {
   type ChatToolAction,
 } from './chatToolDefinitions.js';
 import { isSuccessfulDirectMutation } from './mutationTools.js';
+import { normalizeModelToolName } from './canonicalToolMapping.js';
 
 /**
  * Pin BABEL_PROJECT_ROOT for the duration of a tool action (P2.4).
@@ -36,10 +37,11 @@ export function nativeToolUseToChatAction(
   name: string,
   input: Record<string, unknown>,
 ): ChatToolAction {
-  if (name === 'finish') {
+  const canonicalName = normalizeModelToolName(name);
+  if (canonicalName === 'finish') {
     return { type: 'finish' };
   }
-  return { type: name as ChatToolAction['type'], ...input } as ChatToolAction;
+  return { type: canonicalName as ChatToolAction['type'], ...input } as ChatToolAction;
 }
 
 /**

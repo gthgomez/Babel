@@ -73,6 +73,9 @@ export function dispatchChatEvent(
         event.content,
       );
       break;
+    case 'progress_recovery':
+      sinks.convRenderer?.onProgressRecovery?.(event.intervention, event.source, event.score, event.message);
+      break;
     case 'cancelled':
     case 'done':
     case 'failed':

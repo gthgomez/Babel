@@ -15,6 +15,7 @@ import {
   type ChatResult,
   type TaskIntent,
 } from '../../agent/chatEngine.js';
+import type { ChatExecutionProfile } from '../../agent/chatEngineServices.js';
 import type { SessionUsageSummary } from '../../services/costTracker.js';
 import type { BlockedReport } from '../../schemas/agentContracts.js';
 import { ConversationalRenderer } from '../../ui/waterfall.js';
@@ -382,6 +383,7 @@ export async function runChatEngineOnce(input: {
   onStreamEvent?: (event: ChatStreamEvent) => void;
   onCancel?: () => void;
   taskIntent?: TaskIntent;
+  executionProfile?: ChatExecutionProfile;
 }): Promise<ChatResult> {
   const factory = input.engineFactory ?? defaultEngineFactory;
   const preflightContext =
@@ -450,6 +452,7 @@ export async function runChatEngineOnce(input: {
       maxEstimatedTokens: limits.maxEstimatedTokens,
       workspaceRoot: input.target.workspaceRoot ?? null,
       ...(intentPlanUserMessage ? { intentPlanUserMessage } : {}),
+      ...(input.executionProfile ? { executionProfile: input.executionProfile } : {}),
     });
 
   const convRenderer = input.convRenderer ?? null;
@@ -1020,6 +1023,7 @@ export async function runCliChatTask(input: {
   outputFormat?: 'text' | 'json' | 'stream-json';
   onStreamEvent?: (event: ChatStreamEvent) => void;
   engineFactory?: ChatEngineFactory;
+  executionProfile?: ChatExecutionProfile;
 }): Promise<{ payload: Record<string, unknown>; exitCode: number }> {
   const outputFormat = input.outputFormat ?? 'text';
   const target = resolveAgentTarget({
@@ -1052,6 +1056,7 @@ export async function runCliChatTask(input: {
     convRenderer,
     ...(input.onStreamEvent ? { onStreamEvent: input.onStreamEvent } : {}),
     ...(input.engineFactory ? { engineFactory: input.engineFactory } : {}),
+    ...(input.executionProfile ? { executionProfile: input.executionProfile } : {}),
   });
 
   if (outputFormat === 'text') {

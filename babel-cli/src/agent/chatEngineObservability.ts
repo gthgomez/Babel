@@ -122,6 +122,7 @@ export type StreamDoneEvent = {
   runDir: string;
   /** Authoritative terminal outcome from the engine (P0-D lossless). */
   outcome: TerminalOutcome;
+  planOutcome?: 'PLAN_COMPLETE';
   /** True when wall/cost/token budget forced termination. */
   budgetExceeded?: boolean;
   verifierReceipt?: { command: string; exit_code: number; summary: string } | null;
@@ -195,6 +196,7 @@ export function buildStreamDone(
   answer: string,
   extra?: {
     outcome: TerminalOutcome;
+    planOutcome?: 'PLAN_COMPLETE';
     budgetExceeded?: boolean;
     blockedReport?: BlockedReport | null;
     verifierTampered?: boolean;
@@ -222,6 +224,7 @@ export function buildStreamDone(
   if (extra.blockedReport !== undefined) event.blockedReport = extra.blockedReport;
   if (extra.verifierTampered) event.verifierTampered = true;
   if (extra.criticReceipt) event.criticReceipt = extra.criticReceipt;
+  if (extra.planOutcome) event.planOutcome = extra.planOutcome;
   return event;
 }
 
