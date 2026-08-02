@@ -271,6 +271,36 @@ async function main(): Promise<void> {
     return rec;
   });
 
+  // ── Protocol IPC handlers (Phase 5) ───────────────────────────────────
+
+  const { createProtocolHostState, handleProtocolRequest } = await import('../protocol/client/host.js');
+  const { isJsonRpcErrorResponse } = await import('../protocol/jsonRpc.js');
+  const protocolState = createProtocolHostState({ executeWithoutNotifications: true });
+
+  const handleProtocolMethod = async (method: string, params: any, socket: Socket) => {
+    socket.setTimeout(0); // Persistent connection for protocol
+    const request = { jsonrpc: '2.0', id: Date.now(), method, params };
+    const response = await handleProtocolRequest(
+      request as any,
+      protocolState,
+      (notification) => {
+        try {
+          socket.write(JSON.stringify(notification) + '\n');
+        } catch { /* ignore disconnected */ }
+      }
+    );
+    if (isJsonRpcErrorResponse(response)) {
+      throw response.error;
+    }
+    return response.result;
+  };
+
+  ipc.on('thread.create', (params: any, socket: Socket) => handleProtocolMethod('thread.create', params, socket));
+  ipc.on('thread.resume', (params: any, socket: Socket) => handleProtocolMethod('thread.resume', params, socket));
+  ipc.on('turn.submit', (params: any, socket: Socket) => handleProtocolMethod('turn.submit', params, socket));
+  ipc.on('turn.cancel', (params: any, socket: Socket) => handleProtocolMethod('turn.cancel', params, socket));
+  ipc.on('history.lookup', (params: any, socket: Socket) => handleProtocolMethod('history.lookup', params, socket));
+
   // ── Streaming Pipeline IPC handlers ───────────────────────────────────
 
   ipc.onStreaming('pipeline.run', async (params: any, socket: Socket) => {

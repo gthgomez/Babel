@@ -6,6 +6,7 @@
  */
 
 import type { HistoryCellRecord } from '../ui/historyCells/types.js';
+import type { BabelMode } from '../executor/contracts.js';
 
 /** Wire protocol version — bump on breaking catalog changes. */
 export const BABEL_PROTOCOL_VERSION = '1.0.0' as const;
@@ -22,7 +23,13 @@ export type BabelProtocolMethod =
   | 'history.lookup';
 
 /** Server-initiated JSON-RPC notifications (no response `id`). */
-export type BabelProtocolNotification = 'turn.event' | 'cell.committed';
+export type BabelProtocolNotification =
+  | 'turn.event'
+  | 'cell.committed'
+  | 'permission.request'
+  | 'permission.respond'
+  | 'gate.rejected'
+  | 'env_blocked';
 
 export const BABEL_PROTOCOL_METHODS: readonly BabelProtocolMethod[] = [
   'thread.create',
@@ -35,6 +42,10 @@ export const BABEL_PROTOCOL_METHODS: readonly BabelProtocolMethod[] = [
 export const BABEL_PROTOCOL_NOTIFICATIONS: readonly BabelProtocolNotification[] = [
   'turn.event',
   'cell.committed',
+  'permission.request',
+  'permission.respond',
+  'gate.rejected',
+  'env_blocked',
 ] as const;
 
 /**
@@ -94,7 +105,18 @@ export type TurnStreamEvent =
     }
   | { type: 'done'; answer: string; usage: TurnUsageSummary }
   | { type: 'failed'; error: string }
-  | { type: 'cancelled' };
+  | { type: 'cancelled' }
+  | {
+      type: 'progress_recovery';
+      intervention: import('../agent/progressController.js').ProgressInterventionLevel;
+      source: string;
+      score: number;
+      message?: string;
+    }
+  | { type: 'permission.request'; permission: string; reason?: string }
+  | { type: 'permission.respond'; permission: string; granted: boolean }
+  | { type: 'gate.rejected'; gate: string; reason: string }
+  | { type: 'env_blocked'; category: string; evidence: string };
 
 // ─── Request params ───────────────────────────────────────────────────────────
 
@@ -102,6 +124,9 @@ export interface ThreadCreateParams {
   project_root: string;
   task?: string;
   model?: string;
+  provider?: string;
+  mode?: BabelMode;
+  policy_profile?: string;
 }
 
 export interface ThreadResumeParams {
@@ -170,4 +195,28 @@ export interface CellCommittedParams {
   thread_id: ThreadId;
   turn_id: number;
   cells: HistoryCellRecord[];
+}
+
+export interface PermissionRequestParams {
+  thread_id: ThreadId;
+  permission: string;
+  reason?: string;
+}
+
+export interface PermissionRespondParams {
+  thread_id: ThreadId;
+  permission: string;
+  granted: boolean;
+}
+
+export interface GateRejectedParams {
+  thread_id: ThreadId;
+  gate: string;
+  reason: string;
+}
+
+export interface EnvBlockedParams {
+  thread_id: ThreadId;
+  category: string;
+  evidence: string;
 }
