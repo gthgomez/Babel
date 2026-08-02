@@ -21,6 +21,10 @@ import type {
   TurnEventParams,
   TurnSubmitParams,
   TurnSubmitResult,
+  PermissionRequestParams,
+  PermissionRespondParams,
+  GateRejectedParams,
+  EnvBlockedParams,
 } from './types.js';
 
 // ─── Per-method request/response pairs ───────────────────────────────────────
@@ -69,7 +73,25 @@ export interface TurnEventNotification extends JsonRpcNotification<'turn.event',
 export interface CellCommittedNotification
   extends JsonRpcNotification<'cell.committed', CellCommittedParams> {}
 
-export type BabelProtocolServerNotification = TurnEventNotification | CellCommittedNotification;
+export interface PermissionRequestNotification
+  extends JsonRpcNotification<'permission.request', PermissionRequestParams> {}
+
+export interface PermissionRespondNotification
+  extends JsonRpcNotification<'permission.respond', PermissionRespondParams> {}
+
+export interface GateRejectedNotification
+  extends JsonRpcNotification<'gate.rejected', GateRejectedParams> {}
+
+export interface EnvBlockedNotification
+  extends JsonRpcNotification<'env_blocked', EnvBlockedParams> {}
+
+export type BabelProtocolServerNotification =
+  | TurnEventNotification
+  | CellCommittedNotification
+  | PermissionRequestNotification
+  | PermissionRespondNotification
+  | GateRejectedNotification
+  | EnvBlockedNotification;
 
 // ─── Method → params/result maps (for handler typing in D2) ─────────────────
 
@@ -84,6 +106,10 @@ export interface BabelProtocolMethodMap {
 export interface BabelProtocolNotificationMap {
   'turn.event': TurnEventParams;
   'cell.committed': CellCommittedParams;
+  'permission.request': PermissionRequestParams;
+  'permission.respond': PermissionRespondParams;
+  'gate.rejected': GateRejectedParams;
+  'env_blocked': EnvBlockedParams;
 }
 
 /** Extract params for a catalog method. */

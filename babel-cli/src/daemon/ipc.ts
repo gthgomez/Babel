@@ -28,7 +28,7 @@ export interface IpcResponse {
   error?: { code: number; message: string; data?: unknown };
 }
 
-export type IpcHandler = (params: unknown) => Promise<unknown>;
+export type IpcHandler = (params: unknown, socket: Socket) => Promise<unknown>;
 export type StreamingIpcHandler = (params: any, socket: Socket) => Promise<void>;
 
 // ── Server ───────────────────────────────────────────────────────────────────
@@ -223,7 +223,7 @@ export class DaemonIpcServer {
     }
 
     try {
-      const result = await handler(request.params ?? {});
+      const result = await handler(request.params ?? {}, socket);
       this.writeResponse(socket, { id: request.id, result });
     } catch (err: any) {
       this.writeResponse(socket, {
@@ -243,8 +243,6 @@ export class DaemonIpcServer {
     } catch {
       /* socket may already be closed */
     }
-    // Per-request connection: close after response
-    socket.end();
   }
 }
 

@@ -1,7 +1,13 @@
 /** True when chat should use direct ChatEngine imports (default migration path). */
 export function isInProcessMode(): boolean {
+  if (isTuiClientMode()) return false;
   const raw = process.env['BABEL_INPROCESS'];
   if (raw === undefined || raw === '') return true;
+  return raw === '1' || raw?.toLowerCase() === 'true' || raw?.toLowerCase() === 'yes';
+}
+
+export function isTuiClientMode(): boolean {
+  const raw = process.env['BABEL_TUI_CLIENT'];
   return raw === '1' || raw?.toLowerCase() === 'true' || raw?.toLowerCase() === 'yes';
 }
 

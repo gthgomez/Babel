@@ -1,5 +1,6 @@
 export type { ListThreadsOptions, ThreadMeta, TurnBounds } from './types.js';
 export { allocateThreadId } from './threadIds.js';
+export { loadSessionDescriptor, writeSessionDescriptor } from './sessionDescriptor.js';
 export {
   appendTurnCells,
   ensureThread,
