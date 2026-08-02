@@ -2,13 +2,15 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-08-01
+last_verified: 2026-08-02
 -->
 
-**Status:** W3–W7 REMEDIATION IN PROGRESS — contract freeze, verifier hardening, crash-consistency, and kernel migration are being implemented; acceptance evidence is not yet complete
+**Status:** IMPLEMENTATION LANDED — W0–W2 are complete; W3–W7 implementation slices are merged on `main`; the program is now in acceptance-validation and evidence closure
 **Scope:** Make Babel a **consistent, recoverable, proof-carrying coding executor** on the daily ChatEngine path  
-**Baselines:** Babel `main` @ `63c3942` (Pri-1 #41 + C2/Pri-3 #42); 4a5d reval autopsy; Aug-1 peer research corpus  
+**Baselines:** Babel `main` @ `09b4ebe` (W3–W7 implementation stack merged 2026-08-02); 4a5d reval autopsy; Aug-1 peer research corpus
 **Strategy:** Peer-class **execution substrate** under Babel **trust contracts** — not a clone of OpenCode/Codex/Grok, not policy-only stacking
+
+**Current phase:** No implementation PRs are open. The remaining work is to prove the landed contracts under adversarial, restart, daemon, and cross-mode acceptance scenarios; do not treat focused unit coverage or green CI as wave-exit evidence by themselves.
 
 **Supersedes for harness loop work (when landed as repo plan):**
 
@@ -130,11 +132,11 @@ After Wave B: mini suite of 8–12 tasks Babel vs self-ablation (gate-on/off, se
 | **W0** | Freeze & instrumentation      | Decisions, metrics, fixtures          | 2–4 days              | ✅ COMPLETED — roadmap, ADR/evidence fixtures, and instrumentation landed                                                                       |
 | **W1** | Honesty kernel                | Close verify holes H1–H5              | 1–2 weeks             | ✅ COMPLETED — authoritative verification and dual scoreboard coverage                                                                          |
 | **W2** | Durable execution kernel      | Tool lifecycle + event log H6         | 2–3 weeks             | ✅ COMPLETED — SessionEventV1, settlement, continuity, and retry fixtures                                                                       |
-| **W3** | Progress & recovery UX        | Adaptive stop H7; checkpoints         | 1–2 weeks             | 🟡 IMPLEMENTED_UNVERIFIED — controller, durable progress events, and deterministic ablation added; acceptance metrics pending                   |
-| **W4** | Edit & workspace transactions | H8 mutation reliability               | 2–3 weeks             | 🟡 IMPLEMENTED_UNVERIFIED — workspace revisions, effect ledger, changed-byte receipts, and undo integration added; restart/git evidence pending |
-| **W5** | Runtime surfaces              | Protocol D2 thin client H9            | 2–4 weeks             | 🟡 IMPLEMENTED_UNVERIFIED — server-owned descriptors and lazy runtime materialization added; disconnect/restart replay pending                  |
-| **W6** | Surpass layer                 | Acceptance contracts, evidence graph  | ongoing               | 🟡 IMPLEMENTED_UNVERIFIED — isolated verifier and evidence evaluator added; all production completion paths still require proof wiring          |
-| **W7** | Debt collapse                 | Monolith extraction H10; deep profile | ongoing               | 🟡 IMPLEMENTED_UNVERIFIED — shared executor kernel boundary added; controller migration and bypass allowlist closure pending                    |
+| **W3** | Progress & recovery UX        | Adaptive stop H7; checkpoints         | 1–2 weeks             | 🟡 IMPLEMENTED_UNVERIFIED — landed in #48; controller, durable progress events, and deterministic ablation added; acceptance metrics pending |
+| **W4** | Edit & workspace transactions | H8 mutation reliability               | 2–3 weeks             | 🟡 IMPLEMENTED_UNVERIFIED — landed in #48; workspace revisions, effect ledger, changed-byte receipts, and undo integration added; restart/git evidence pending |
+| **W5** | Runtime surfaces              | Protocol D2 thin client H9            | 2–4 weeks             | 🟡 IMPLEMENTED_UNVERIFIED — landed in #50; server-owned descriptors and lazy runtime materialization added; disconnect/restart replay pending |
+| **W6** | Surpass layer                 | Acceptance contracts, evidence graph  | ongoing               | 🟡 IMPLEMENTED_UNVERIFIED — landed in #47; isolated verifier and evidence evaluator added; all production completion paths still require proof wiring |
+| **W7** | Debt collapse                 | Monolith extraction H10; deep profile | ongoing               | 🟡 IMPLEMENTED_UNVERIFIED — landed in #49 and #53; shared executor kernel boundary added; controller migration and bypass allowlist closure pending |
 
 **Critical path for Pro / executor reliability:** **W0 → W1 → W2 → W3**, then reval.  
 W4–W7 improve general coding quality and peer parity but must not block honesty fixes.
@@ -464,23 +466,25 @@ Implement **ADR-010 D2 minimal**:
 | Structural regression coverage | `structuralCleanup.test.ts`                                                                                                    |
 | Documentation alignment        | `docs/architecture/ARCHITECTURE.md`, `docs/plans/BABEL_RELIABLE_EXECUTOR_ROADMAP_2026-08-01.md`                                |
 
-### Remediation status (2026-08-01)
+### Remediation status (2026-08-02)
 
 | Slice                        | Status                   | Evidence                                                                                                  | Remaining acceptance gate                                                |
 | ---------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
 | W1.5 verifier integrity      | `IMPLEMENTED_UNVERIFIED` | Structured command parsing, shell-composition rejection, authority-source fields, isolated verifier tests | Full adversarial corpus and benchmark-worktree revalidation              |
 | W2.5 crash consistency       | `IMPLEMENTED_UNVERIFIED` | Durable effect intent/terminal ledger, torn-log tolerance, deterministic reconciliation decisions         | Kill/resume fault injection across every effect class                    |
-| W3 progress/recovery         | `IMPLEMENTED_UNVERIFIED` | Canonical progress events, intervention controller, paired deterministic ablation harness                 | Fixed-baseline acceptance metrics and end-to-end terminal arbitration    |
-| W4 workspace truth           | `IMPLEMENTED_UNVERIFIED` | Workspace revisions, changed-byte receipts, undo/new-revision behavior, mutex tests                       | Restart/git patch-reality and partial-failure integration evidence       |
-| W5 server-owned sessions     | `IMPLEMENTED_UNVERIFIED` | Atomic session descriptors, lazy server materialization, disconnect-survival protocol test                | Full real-daemon replay/resume/cancel matrix                             |
-| W6 proof-carrying completion | `IMPLEMENTED_UNVERIFIED` | Acceptance/evidence graph, isolated verifier, Chat proof gate                                             | All production completion paths wired to fresh revision-bound evidence   |
-| W7 mode/kernel parity        | `IMPLEMENTED_UNVERIFIED` | Shared executor kernel, mode contract, Plan mutation/terminal guardrails, 93 focused tests                | Deep/lite structural bypass closure and deterministic Chat/Plan/Deep E2E |
+| W3 progress/recovery         | `IMPLEMENTED_UNVERIFIED` | Canonical progress events, intervention controller, paired deterministic ablation harness; implementation landed in #48 | Fixed-baseline acceptance metrics and end-to-end terminal arbitration |
+| W4 workspace truth           | `IMPLEMENTED_UNVERIFIED` | Workspace revisions, changed-byte receipts, undo/new-revision behavior, mutex tests; implementation landed in #48 | Restart/git patch-reality and partial-failure integration evidence |
+| W5 server-owned sessions     | `IMPLEMENTED_UNVERIFIED` | Atomic session descriptors, lazy server materialization, disconnect-survival protocol test; implementation landed in #50 | Full real-daemon replay/resume/cancel matrix |
+| W6 proof-carrying completion | `IMPLEMENTED_UNVERIFIED` | Acceptance/evidence graph, isolated verifier, Chat proof gate; implementation landed in #47 | All production completion paths wired to fresh revision-bound evidence |
+| W7 mode/kernel parity        | `IMPLEMENTED_UNVERIFIED` | Shared executor kernel, mode contract, Plan mutation/terminal guardrails, 93 focused tests; implementation landed in #49/#53 | Deep/lite structural bypass closure and deterministic Chat/Plan/Deep E2E |
 
-Validation source revision: working tree based on `1aa41d7`; contract version
+Validation source revision: public `main` @ `09b4ebe`; contract version
 `executor-contract-v1`, event schema `1`, kernel version `executor-kernel-v1`.
-The focused suite, typecheck, build, and `bv -Project babel` pass. The full
-`npm run test:unit` and public scans remain environment-limited in this
-workspace and are not treated as acceptance proof.
+The final public `main` CI gate passed security, public-content policy,
+Linux validation, and Windows portability. Focused tests, typecheck, build,
+and `bv -Project babel` pass; these remain implementation evidence, not
+wave-exit proof. Acceptance evidence is still required for the gates listed
+above.
 
 ---
 
@@ -593,15 +597,19 @@ npm --prefix babel-cli run benchmark:agent:swe-pro -- --provider live --limit 3 
 
 ---
 
-## 19. Immediate next actions (when leaving plan mode)
+## 19. Immediate next actions — acceptance validation
 
-1. Write plan to repo: `docs/plans/BABEL_RELIABLE_EXECUTOR_ROADMAP_2026-08-01.md`
-2. Update `docs/plans/README.md` canonical harness pointer
-3. Implement **Issue 1** (allowlist) + tests on a feature branch
-4. Issue 3–4 (prompt parse + test_patch)
-5. Reval 4a5d; write one-page results note under `docs/status/` or campaign dir
+1. Run the W1 verifier adversarial corpus and a fresh 4a5d benchmark-worktree revalidation.
+2. Run W2 kill/resume fault injection across every effect class and confirm no duplicate mutation.
+3. Run fixed-baseline W3 progress ablations and verify terminal arbitration remains honest.
+4. Run W4 restart/git patch-reality and partial-failure integration scenarios.
+5. Run the W5 real-daemon replay/resume/cancel matrix.
+6. Wire and verify fresh revision-bound evidence on every production W6 completion path.
+7. Close W7 deep/lite bypasses and run deterministic Chat/Plan/Deep end-to-end parity.
+8. Record results in `docs/status/`, then change each wave from `IMPLEMENTED_UNVERIFIED` only when its acceptance gate is evidenced.
 
-**Do not** start app-server or fuzzy-patch ports before Issues 1–4 land.
+Do not start new app-server or fuzzy-patch expansion work until the acceptance
+gates above establish that the landed executor contracts are reliable.
 
 ---
 

@@ -1,6 +1,6 @@
 <!--
 status: ACTIVE
-last_verified: 2026-07-03
+last_verified: 2026-08-01
 -->
 
 # Babel Chat Mode
