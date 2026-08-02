@@ -5,11 +5,11 @@ Licensed under the MIT License
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 -->
 
-
 <!--
 status: ACTIVE
-last_verified: 2026-07-03
+last_verified: 2026-08-01
 -->
+
 # Babel Architecture
 
 > **Role**: Deep technical reference — how Babel works internally. Layer model, catalog system, router, pipeline, and layer precedence.
@@ -21,6 +21,25 @@ last_verified: 2026-07-03
 Babel is an autonomous Coding Agent CLI with optional governed pipeline mode (Prompt OS). It assembles task-relevant instructions in a deterministic resolver/compiler path, then hands the compiled context to the runtime or model-facing layer. Current evidence supports the resolver/compiler, catalog, schema, status, rollback, verifier-contract, doctor, and local-test surfaces; it does not yet demonstrate production readiness or broad live-provider governance.
 
 The core design principle: **separate what the model knows from how it behaves**. Behavioral rules (PLAN before ACT, execution gates, epistemic honesty) live in one layer. Domain knowledge (backend engineering, frontend patterns, compliance rules) lives in another. A third layer shapes model-specific output style. These layers compose — they do not override each other.
+
+## Unified Execution Kernel
+
+The daily ChatEngine path and the governed plan/deep profiles share a
+mode-neutral executor substrate. `babel-cli/src/executor/kernel.ts` owns the
+executor contract, effect classification, completion boundary, and durable
+effect identifiers; `babel-cli/src/agent/chatEngineServices.ts` remains the
+composition boundary for conversation serialization, provider-message replay,
+tool definitions, canonical tool-name normalization, and progress-controller
+creation. `chat` and `deep` retain mutation capability behind their existing
+policy and verification gates; `plan` uses the same substrate with read-only
+effect enforcement and a separate plan-artifact completion path.
+
+Model-facing names (`read_file`, `run_command`, `write_file`) are normalized at
+the boundary to executor names (`file_read`, `shell_exec`, `file_write`). The
+bidirectional map lives in `babel-cli/src/agent/canonicalToolMapping.ts`, so
+provider aliases and governed executor logs cannot silently grow separate tool
+vocabularies. The kernel does not replace the V9 orchestrator or weaken deep
+mode's QA/evidence stages; it supplies their shared runtime contracts.
 
 ---
 
@@ -34,6 +53,7 @@ meta tools author/audit them, but neither is included in the runtime prompt stac
 ### 1. Behavioral OS (`01_Behavioral_OS/`)
 
 Loaded first, always. Governs:
+
 - The PLAN → ACT state machine (no action without a plan)
 - Execution gates (what requires human confirmation before proceeding)
 - Epistemic honesty rules (observed vs inferred vs unknown)
@@ -47,14 +67,14 @@ Loaded first, always. Governs:
 
 Loaded second. One per task. Governs what the model knows and how it approaches the problem domain:
 
-| ID | Domain |
-|----|--------|
-| `domain_swe_backend` | API, database, auth, Supabase, PostgreSQL, RLS |
-| `domain_swe_frontend` | React, Next.js, design systems, accessibility |
+| ID                      | Domain                                                       |
+| ----------------------- | ------------------------------------------------------------ |
+| `domain_swe_backend`    | API, database, auth, Supabase, PostgreSQL, RLS               |
+| `domain_swe_frontend`   | React, Next.js, design systems, accessibility                |
 | `domain_android_kotlin` | Android, Kotlin, Jetpack Compose, Play/Appstore distribution |
-| `domain_compliance_gpc` | GPC, GDPR, CCPA, privacy regulation |
-| `domain_devops` | CI/CD, Docker, Vercel, Terraform, migrations |
-| `domain_research` | Structured investigation, strategy, synthesis |
+| `domain_compliance_gpc` | GPC, GDPR, CCPA, privacy regulation                          |
+| `domain_devops`         | CI/CD, Docker, Vercel, Terraform, migrations                 |
+| `domain_research`       | Structured investigation, strategy, synthesis                |
 
 The Domain Architect is the primary expertise layer. It defines invariants (e.g. "RLS must be enabled on every table"), recommended tools, and the lens through which the model reads the task.
 
@@ -64,12 +84,12 @@ The Domain Architect is the primary expertise layer. It defines invariants (e.g.
 
 Zero or more per task. Loaded after the Domain Architect. Each skill is a focused, reusable technical rule set that the domain alone doesn't cover:
 
-| ID | Skill |
-|----|-------|
-| `skill_ts_zod` | TypeScript strict typing and Zod validation rules |
-| `skill_supabase_pg` | Supabase/Postgres RLS, migration, and naming rules |
-| `skill_react_nextjs` | React/Next.js component state and performance rules |
-| `skill_a11y_design` | WCAG 2.2 AA and semantic HTML accessibility rules |
+| ID                     | Skill                                                                                                                       |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `skill_ts_zod`         | TypeScript strict typing and Zod validation rules                                                                           |
+| `skill_supabase_pg`    | Supabase/Postgres RLS, migration, and naming rules                                                                          |
+| `skill_react_nextjs`   | React/Next.js component state and performance rules                                                                         |
+| `skill_a11y_design`    | WCAG 2.2 AA and semantic HTML accessibility rules                                                                           |
 | `skill_bcdp_contracts` | Breaking Change Detection Protocol — consumer identification, COMPATIBLE/RISKY/BREAKING classification, migration artifacts |
 
 Skills are selected by the resolver by task shape and local runtime context. Domain architects declare `default_skill_ids` for their common pairings. The resolver expands skill dependencies automatically and can apply JIT/semantic skill routing with token-budget awareness so selection remains behaviorally bounded while still context-appropriate.
@@ -82,12 +102,12 @@ When `02_Skills/.compiled/` exists for a skill set, the resolver prefers private
 
 One per task. Shapes how the model formats and delivers its output:
 
-| ID | Model | Purpose |
-|----|-------|---------|
-| `adapter_claude` | Claude Sonnet/Opus | Suppresses over-helpfulness, enforces PLAN→ACT gating |
-| `adapter_fallback` | Fallback lane | Ultra-terse output, dense algorithmic tasks |
-| `adapter_standard` | Standard lane | Balanced output for multi-file refactors and architecture-sensitive edits |
-| `adapter_gemini` | Gemini | Optimized for long-context document synthesis and log analysis |
+| ID                 | Model              | Purpose                                                                   |
+| ------------------ | ------------------ | ------------------------------------------------------------------------- |
+| `adapter_claude`   | Claude Sonnet/Opus | Suppresses over-helpfulness, enforces PLAN→ACT gating                     |
+| `adapter_fallback` | Fallback lane      | Ultra-terse output, dense algorithmic tasks                               |
+| `adapter_standard` | Standard lane      | Balanced output for multi-file refactors and architecture-sensitive edits |
+| `adapter_gemini`   | Gemini             | Optimized for long-context document synthesis and log analysis            |
 
 Adapters are pure style — they contain no domain knowledge. They must not weaken Behavioral OS rules.
 
@@ -144,6 +164,7 @@ The v9 orchestrator is the active typed runtime lane. It:
 `purpose_mode` only seeds bounded generic cognition. It must not choose the domain, weaken governance, replace domain defaults, or make cognition ambient in routine SWE lanes.
 
 Output is a typed manifest:
+
 ```json
 {
   "analysis": {
@@ -223,6 +244,7 @@ A project overlay cannot introduce domain-level rules — those belong in the Do
 6. Run `tools/validate-catalog.ps1` — must exit clean
 
 **Layer-specific rules:**
+
 - **Behavioral OS**: universal only — no project or domain specifics
 - **Domain Architect**: broad primary expertise — no model-style guidance
 - **Skill**: focused, reusable technical rules — no domain architecture

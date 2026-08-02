@@ -54,6 +54,9 @@ export class BabelEventBus extends EventEmitter {
   assistantThought(thought: string): void {
     this.emit('assistant_thought', thought);
   }
+  modelFailover(payload: { original_model?: string; original_provider?: string; new_model?: string; new_provider?: string; reason?: string }): void {
+    this.emit('model_failover', payload);
+  }
 }
 
 export function log(msg: string): void {

@@ -1,20 +1,25 @@
 import type { EvidenceBundle } from '../evidence.js';
-import { executeTool, type ToolCallRequest, type ToolResult } from '../localTools.js';
+import type { ToolCallRequest, ToolResult, ToolContext } from '../localTools.js';
 import type { ToolCallLog } from '../schemas/agentContracts.js';
 import { isVerifierCommand } from '../services/terminalStatus.js';
 import { canonicalizeExecutorTargetForLog, getTarget } from '../stages/executorHelpers.js';
 import { BABEL_ROOT } from './paths.js';
+import { createExecutorKernel, type ExecutorKernel } from '../executor/kernel.js';
 
 export async function executeExecutorTool(
   req: ToolCallRequest,
-  evidence: EvidenceBundle,
+  evidenceOrContext: EvidenceBundle | ToolContext,
+  kernel: ExecutorKernel = createExecutorKernel('deep'),
 ): Promise<ToolResult> {
-  return executeTool(req, {
-    agentId: 'executor',
-    runId: evidence.runId,
-    runDir: evidence.runDir,
-    babelRoot: BABEL_ROOT,
-  });
+  const context: ToolContext = 'babelRoot' in evidenceOrContext
+    ? evidenceOrContext
+    : {
+        agentId: 'executor',
+        runId: evidenceOrContext.runId,
+        runDir: evidenceOrContext.runDir,
+        babelRoot: BABEL_ROOT,
+      };
+  return kernel.tools.execute(req, context);
 }
 
 export function buildExecutorToolCallEntry(params: {

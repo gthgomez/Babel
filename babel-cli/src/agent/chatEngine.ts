@@ -76,6 +76,7 @@ import {
   buildGateRejectUserMessageForEngine,
   evaluateCompletionGateForEngine,
   isAuthoritativeVerifierCommand,
+  parseStructuredVerifierCommand,
   planCompletionGateReject,
   resolveVerificationPolicy,
 } from './completionGatePolicy.js';
@@ -95,11 +96,7 @@ import {
 import { parseTextToolTurn } from './textToolParser.js';
 import {
   ChatTurnSchema,
-  buildChatSystemPrompt,
-  buildChatTurnPrompt,
   buildAnswerSynthesisPrompt,
-  buildChatToolDefinitions,
-  buildRestrictedChatToolDefinitions,
   mapChatActionToAgentAction,
   isMcpChatAction,
   mapChatMcpActionToToolRequest,
@@ -111,8 +108,13 @@ import {
   type ChatMessage,
   type ChatToolAction,
   type ChatTurn,
-  buildProviderMessages,
 } from './chatToolDefinitions.js';
+import {
+  type ChatEngineServices,
+  type ChatExecutionProfile,
+} from './chatEngineServices.js';
+import { createExecutorKernel, type ExecutorKernel } from '../executor/kernel.js';
+import type { VerifierAuthoritySource } from '../executor/contracts.js';
 
 import {
   executeActionWithPolicy,
@@ -142,6 +144,11 @@ import {
 } from './chatEngineParityBridge.js';
 import {
   loadSessionEventLogFromDir,
+  recordCompletionDecision,
+  recordModelFailover,
+  recordMutationBatch,
+  recordProgressRecovery,
+  recordVerifierAttempt,
   type SessionEventLog,
 } from './sessionEvents.js';
 import { buildRepoMapPreamble } from './repoMapPreamble.js';
@@ -169,6 +176,7 @@ import { runImplementWorktreeAgent } from './implementWorktreeAgent.js';
 import { executeTool, renderGitDiff, type ToolContext } from '../localTools.js';
 import { createStallDetector, updateStallState, getStallInterventionMessage, isTextOnlyLoop, buildTextOnlyLoopIntervention, buildTextOnlyLoopBlockedMessage, TEXT_ONLY_FORCE_BLOCKED_THRESHOLD } from './stallDetector.js';
 import type { StallState, StallIntervention } from './stallDetector.js';
+import type { ProgressController, ProgressSignal } from './progressController.js';
 import { classifyPhase, buildPhaseNudge, shouldNudge, type ChatPhase } from './chatPhaseNudge.js';
 import { isSuccessfulDirectMutation } from './mutationTools.js';
 import type { DiffCriticVerdict } from './diffCritic.js';
@@ -311,6 +319,8 @@ export interface ChatEngineOptions {
   operatorMode?: import('./planExecuteMode.js').ChatOperatorMode;
   /** Implementor W1.3: plan→execute handoff injected at first user turn. */
   planHandoff?: import('./planExecuteMode.js').ChatPlanExecuteHandoff;
+  /** Shared kernel profile. Plan is read-only; deep retains governed writes. */
+  executionProfile?: ChatExecutionProfile;
 }
 
 export interface ContextCompactedInfo {
@@ -372,6 +382,7 @@ export type ChatEvent =
       usage: SessionUsageSummary;
       /** Authoritative terminal outcome from the engine (P0-D lossless). */
       outcome?: TerminalOutcome;
+      planOutcome?: 'PLAN_COMPLETE';
       budgetExceeded?: boolean;
       toolCalls?: Array<{ tool: string; target: string; detail?: string; error?: string }>;
       runDir?: string;
@@ -393,13 +404,22 @@ export type ChatEvent =
       toolCalls?: Array<{ tool: string; target: string; detail?: string; error?: string }>;
       runDir?: string;
     }
-  | { type: 'cancelled' };
+  | { type: 'cancelled' }
+  | {
+      type: 'progress_recovery';
+      intervention: import('./progressController.js').ProgressInterventionLevel;
+      source: string;
+      score: number;
+      message?: string;
+    };
 
 export interface ChatResult {
   status: 'completed' | 'failed' | 'cancelled' | 'blocked' | 'budget_exhausted';
   /** Honest terminal outcome — semantically precise, never conflated.
    *  Optional for backward compatibility with test fixtures that omit it. */
   outcome?: TerminalOutcome;
+  /** Separate plan-mode completion result; never an executor terminal. */
+  planOutcome?: 'PLAN_COMPLETE';
   answer: string;
   usage: SessionUsageSummary;
   conversation: ChatMessage[];
@@ -439,8 +459,9 @@ export class ChatEngine {
   // TODO: once ProviderMessage[] path is stable, remove legacy ChatMessage[]
   // conversation store and Markdown flattening buildChatTurnPrompt.
   private conversation: ChatMessage[] = [];
-  /** Structured provider conversation — native tool calls and results with IDs. */
-  private providerConversation: ProviderMessage[] = [];
+  private readonly services: ChatEngineServices;
+  private readonly executorKernel: ExecutorKernel;
+  private readonly executionProfile: ChatExecutionProfile;
   private abortController: AbortController;
   private engineRunId: string;
   private options: ChatEngineOptions;
@@ -461,7 +482,14 @@ export class ChatEngine {
     stderr?: string;
     verified?: boolean;
   }> = [];
-  private lastVerifierReceipt: { command: string; exit_code: number; summary: string } | null = null;
+  private lastVerifierReceipt: {
+    command: string;
+    exit_code: number;
+    summary: string;
+    verifier_id?: string;
+    authority_source?: VerifierAuthoritySource;
+    argv?: string[];
+  } | null = null;
   /** Index into toolCallLog at the start of the current turn's actions.
    *  Used to correctly slice per-turn entries even as the log grows across turns. */
   private _turnToolCallLogStart = 0;
@@ -469,6 +497,7 @@ export class ChatEngine {
   private gateStrikes = 0;
   private static readonly MAX_GATE_STRIKES = 3;
   private criticStrikes = 0;
+  private progressController: ProgressController;
   private lastCriticReceipt: DiffCriticVerdict | null = null;
   private criticRunner: CriticRunner | null = null;
   private criticProRunner: CriticRunner | null = null;
@@ -608,6 +637,10 @@ export class ChatEngine {
 
   constructor(options: ChatEngineOptions) {
     this.options = options;
+    this.executionProfile = options.executionProfile ?? 'chat';
+    this.executorKernel = createExecutorKernel(this.executionProfile);
+    this.services = this.executorKernel.services;
+    this.progressController = this.services.progress.createController();
     this.taskClass = resolveChatTaskClass({
       taskText: options.task,
       autoClassify: true,
@@ -674,7 +707,9 @@ export class ChatEngine {
     // Implementor W1.3 / W1.4: operator mode + hard plan + plan handoff.
     this.operatorMode = options.operatorMode ?? 'default';
     this.hardPlanMode =
-      options.hardPlanMode === true || operatorModeIsHardPlan(this.operatorMode);
+      this.executionProfile === 'plan' ||
+      options.hardPlanMode === true ||
+      operatorModeIsHardPlan(this.operatorMode);
     if (options.planHandoff) {
       this.planHandoff = options.planHandoff;
       this.forceMutateTurnsOverride = resolveForceMutateTurnsForHandoff(
@@ -917,6 +952,37 @@ export class ChatEngine {
   }
 
   private hasAnyWrites(): boolean { return sessionHasAnyWrites(this.toolCallLog); }
+
+  /**
+   * Build the synchronous proof summary passed to the shared completion
+   * authority. The async evidence graph remains available to deep/pipeline
+   * callers; Chat's terminal choke point must still refuse a green legacy gate
+   * when the canonical event stream lacks mutation or verifier evidence.
+   */
+  private buildCompletionProof(hasMutation: boolean): { compliant: boolean; errors?: string[] } {
+    const errors: string[] = [];
+    if (!hasMutation) errors.push('missing production mutation evidence');
+    if (this.verifierTampered) errors.push('verifier integrity violation');
+
+    const receipt = this.lastVerifierReceipt;
+    if (!receipt || receipt.exit_code !== 0) {
+      errors.push('missing green verifier receipt');
+    } else if (!isAuthoritativeVerifierCommand(receipt.command)) {
+      errors.push('verifier receipt is not authoritative');
+    } else if (!receipt.verifier_id || !receipt.argv) {
+      errors.push('verifier receipt is not durably structured');
+    }
+
+    const events = this.parity.sessionEvents.events;
+    if (!events.some((event) => event.kind === 'mutation_batch')) {
+      errors.push('missing mutation transaction evidence');
+    }
+    if (!events.some((event) => event.kind === 'verifier_attempt' && event.authoritative && event.exit_code === 0)) {
+      errors.push('missing canonical verifier-attempt evidence');
+    }
+
+    return errors.length === 0 ? { compliant: true } : { compliant: false, errors };
+  }
 
   private readCacheKey(filePath: string): string { return normalizeReadCacheKey(filePath, this.options.projectRoot); }
 
@@ -1464,26 +1530,15 @@ export class ChatEngine {
       const runner = this.resolveRoutedRunner();
       const useNativeTools = this.shouldUseNativeTools(runner);
       const useTextTools = !useNativeTools && this.shouldUseTextTools();
-      const prompt = buildChatTurnPrompt({
+      const prompt = this.services.conversation.buildTurnPrompt({
         conversation: this.conversation,
         task: this.options.task,
         nativeTools: useNativeTools,
         textTools: useTextTools,
       });
-      // P0-B: seed user task once into provider conversation; do not retransmit every tool turn.
-      if (useNativeTools) {
-        const hasUserTask = this.providerConversation.some(
-          (m) => m.role === 'user' && m.content === this.options.task,
-        );
-        if (!hasUserTask && this.options.task) {
-          this.providerConversation.push({ role: 'user', content: this.options.task });
-        }
-      }
       const providerMessages = useNativeTools
-        ? buildProviderMessages({
-            conversation: this.providerConversation,
-            task: this.options.task,
-            omitUserTurn: true, // already seeded above
+        ? this.services.conversation.rebuildProviderMessages(this.parity.eventLog, {
+            systemPrompt: this.getOrBuildSystemPrompt('native'),
           })
         : [];
 
@@ -1516,12 +1571,12 @@ export class ChatEngine {
       } else if (useNativeTools) {
         const restrictTools = this.shouldRestrictToolsThisTurn();
         const toolDefs = restrictTools
-          ? buildRestrictedChatToolDefinitions(
+          ? this.services.tools.buildRestrictedDefinitions(
               this.postWriteRepairRestrict
                 ? 'act_or_verify'
                 : resolveRestrictedToolMode(this.hasAnyWrites()),
             )
-          : buildChatToolDefinitions();
+          : this.services.tools.buildDefinitions();
         const nativeActions: ChatToolAction[] = [];
         const nativeToolCallIds: string[] = [];
         let answerText = '';
@@ -1853,16 +1908,11 @@ export class ChatEngine {
 
         let providerToolCallIds: string[] | undefined;
         if (useNativeTools && turnResult.type === 'tool_calls') {
-          providerToolCallIds = pushProviderTurnMessages({
-            conversation: this.providerConversation,
-            actions: turnResult.actions,
-            thinking: turnResult.thinking,
-            turnIndex: this._turnIndex,
-            observations,
-            observationsPerTool: observationList,
-            ...(this._streamNativeToolCallIds.length === turnResult.actions.length
-              ? { toolCallIds: this._streamNativeToolCallIds }
-              : {}),
+          providerToolCallIds = turnResult.actions.map((_, idx) => {
+            if (this._streamNativeToolCallIds.length === turnResult.actions.length) {
+              return this._streamNativeToolCallIds[idx]!;
+            }
+            return `tool_call_${this._turnIndex}_${idx}`;
           });
         }
 
@@ -1916,6 +1966,32 @@ export class ChatEngine {
         // P2: Update stall detector and inject phase nudge if needed
         const turnCallsStr = this.toolCallLog.slice(this._turnToolCallLogStart);
         this.stallState = updateStallState(this.stallState, turnCallsStr, turn);
+
+        // W3 Phase 3 Progress and Recovery Controller
+        const signals: ProgressSignal[] = [];
+        if (turnCallsStr.some(tc => isSuccessfulDirectMutation(tc.tool, tc.error))) {
+          signals.push('production_mutation');
+        }
+
+        const isTextOnly = turnCallsStr.length === 0;
+        const pcResult = this.progressController.scoreTurn(signals, isTextOnly, this.gateStrikes);
+        recordProgressRecovery(this.parity.sessionEvents, String(this.parity.turnId ?? this._turnIndex), {
+          intervention: pcResult.intervention,
+          score: pcResult.score,
+          signals,
+          reason: 'turn_scored',
+        });
+
+        if (pcResult.transitioned) {
+          yield {
+            type: 'progress_recovery',
+            intervention: pcResult.intervention,
+            source: 'progress_controller',
+            score: pcResult.score,
+            message: `Transitioned to ${pcResult.intervention}`
+          };
+        }
+
         const streamPhase = classifyPhase(
           this.stallState,
           this.hasAnyWrites(),
@@ -2001,14 +2077,23 @@ export class ChatEngine {
           if (this._streamNativeToolCallIds[idx]) return this._streamNativeToolCallIds[idx]!;
           return `tool_call_${turn}_${idx}`;
         };
-        const toolCalls = turnSlice.map((tc, idx) => ({
-          id: resolveToolCallId(idx),
-          type: 'function' as const,
-          function: {
-            name: tc.tool,
-            arguments: JSON.stringify({ target: tc.target }),
-          },
-        }));
+        const toolCalls = turnSlice.map((tc, idx) => {
+          let argsObj: Record<string, unknown> = { target: tc.target };
+          if (turnResult.type === 'tool_calls' && turnResult.actions[idx]) {
+            argsObj = {};
+            for (const [k, v] of Object.entries(turnResult.actions[idx]!)) {
+              if (k !== 'type') argsObj[k] = v;
+            }
+          }
+          return {
+            id: resolveToolCallId(idx),
+            type: 'function' as const,
+            function: {
+              name: tc.tool,
+              arguments: JSON.stringify(argsObj),
+            },
+          };
+        });
         const isReadTool = (name: string) =>
           name === 'read_file' ||
           name === 'file_read' ||
@@ -2159,6 +2244,10 @@ export class ChatEngine {
 
       if (turnResult.type === 'completion') {
         const answer = turnResult.answer;
+
+        if (this.parity.turnId) {
+          this.services.conversation.recordAssistantMessage(this.parity.eventLog, this.parity.turnId, answer);
+        }
 
         // R1: Check for BLOCKED declaration before the gate — the agent may
         // declare BLOCKED even though no writes were made.
@@ -2325,6 +2414,25 @@ export class ChatEngine {
           }
           if (plan.kind === 'reject_continue') {
             this.gateStrikes = plan.gateStrikesAfter;
+
+            // W3 Phase 3 Progress and Recovery Controller
+            const pcResult = this.progressController.scoreTurn([], true, this.gateStrikes);
+            recordProgressRecovery(this.parity.sessionEvents, String(this.parity.turnId ?? this._turnIndex), {
+              intervention: pcResult.intervention,
+              score: pcResult.score,
+              signals: ['text_only_turn', 'gate_rejection'],
+              reason: 'completion_gate_rejection',
+            });
+            if (pcResult.transitioned) {
+              yield {
+                type: 'progress_recovery',
+                intervention: pcResult.intervention,
+                source: 'progress_controller',
+                score: pcResult.score,
+                message: `Gate strike threshold escalated to ${pcResult.intervention}`
+              };
+            }
+
             this.conversation.push({ role: 'assistant', content: answer });
             this.conversation.push({
               role: 'user',
@@ -2567,13 +2675,42 @@ export class ChatEngine {
     },
   ) {
     const hasMutation = this.hasAnyWrites();
-    const outcome = computeTerminalOutcome({
+    const requestedOutcome = computeTerminalOutcome({
       finalStatus: extra?.blockedReport ? 'blocked' : this.budgetExceeded ? 'budget_exhausted' : 'completed',
       budgetExceeded: this.budgetExceeded,
       lastVerifierReceipt: this.lastVerifierReceipt,
       blockedReport: extra?.blockedReport,
       hasAnyWrites: hasMutation,
     });
+    const planCompletion = this.executionProfile === 'plan' && !extra?.blockedReport && !this.budgetExceeded;
+    const decision = this.executorKernel.completion.decide({
+      mode: this.executionProfile,
+      requestedOutcome: planCompletion ? 'PLAN_COMPLETE' : requestedOutcome,
+      hasWrite: hasMutation,
+      verificationPolicy: this.gatePolicy ?? 'required',
+      lastVerifierReceipt: this.lastVerifierReceipt,
+      toolCallLog: this.toolCallLog.map((entry) => ({
+        tool: entry.tool,
+        target: entry.target ?? '',
+        ...(entry.detail !== undefined ? { detail: entry.detail } : {}),
+        ...(entry.error !== undefined ? { error: entry.error } : {}),
+        ...(entry.exit_code !== undefined ? { exit_code: entry.exit_code } : {}),
+      })),
+      ...(requestedOutcome === 'VERIFIED_COMPLETE'
+        ? { proof: this.buildCompletionProof(hasMutation) }
+        : { proof: { compliant: false, errors: ['requested outcome was not verified'] } }),
+    });
+    const outcome = decision.finalOutcome === 'PLAN_COMPLETE' ? 'UNVERIFIED_PATCH' : decision.finalOutcome;
+    if (decision.finalOutcome === 'PLAN_COMPLETE') {
+      recordCompletionDecision(this.parity.sessionEvents, String(this.parity.turnId ?? this._turnIndex), {
+        requestedOutcome: decision.requestedOutcome,
+        finalOutcome: decision.finalOutcome,
+        allowed: decision.allowed,
+        reason: decision.reason,
+        evidenceRefs: decision.evidenceRefs,
+        policyVersion: decision.policyVersion,
+      });
+    }
     // P0-E: attach shadow later-succeeded summary before export (idempotent with buildResult).
     recordPolicyShadowSessionOutcome(this.policyEventLog, {
       atTurn: this._turnIndex,
@@ -2597,6 +2734,7 @@ export class ChatEngine {
     );
     return buildStreamDone(this.obsHandles(), answer, {
       outcome,
+      ...(decision.finalOutcome === 'PLAN_COMPLETE' ? { planOutcome: 'PLAN_COMPLETE' as const } : {}),
       ...(this.budgetExceeded ? { budgetExceeded: true as const } : {}),
       ...(extra ?? {}),
     });
@@ -2629,11 +2767,11 @@ export class ChatEngine {
 
   /** Restore structured provider conversation (tool call/result IDs) on resume. */
   replaceProviderConversation(messages: ProviderMessage[]): void {
-    this.providerConversation = messages;
+    // Deprecated. We rebuild from event log.
   }
 
   getProviderConversation(): ProviderMessage[] {
-    return [...this.providerConversation];
+    return this.services.conversation.rebuildProviderMessages(this.parity.eventLog);
   }
 
   resyncTurnStateAfterBranch(): void {
@@ -3334,6 +3472,26 @@ export class ChatEngine {
                 : {}),
           },
         );
+
+        if (gov.mutationPaths && gov.mutationPaths.length > 0) {
+          recordMutationBatch(this.parity.sessionEvents, this.parity.turnId ?? 'unknown', {
+            paths: gov.mutationPaths,
+            pre_hash: Object.values(gov.preBatchHash ?? {}).join(','),
+            post_hash: Object.values(gov.postBatchHash ?? {}).join(','),
+            ...(gov.mutationReceipt
+              ? {
+                  batch_id: gov.mutationReceipt.batchId,
+                  starting_revision: gov.mutationReceipt.startingRevision,
+                  ...(gov.mutationReceipt.endingRevision ? { ending_revision: gov.mutationReceipt.endingRevision } : {}),
+                  changed_bytes: gov.mutationReceipt.changedBytes,
+                  status: gov.mutationReceipt.status,
+                  pre_image_hashes: gov.mutationReceipt.preImageHashes,
+                  post_image_hashes: gov.mutationReceipt.postImageHashes,
+                }
+              : {}),
+          });
+        }
+
         if (gov.exit_code !== 0) {
           this.toolCallLog.push({
             tool, target, detail: 'error', error: gov.error ?? 'str_replace failed',
@@ -3516,10 +3674,29 @@ export class ChatEngine {
             : process.stdout.isTTY && !process.env['CI']
               ? { onAskApproval: requestChatActionApproval }
               : {}),
-        },
+        }
       );
 
-      const obsParts: string[] = [];
+      if (result.mutationPaths && result.mutationPaths.length > 0) {
+          recordMutationBatch(this.parity.sessionEvents, this.parity.turnId ?? 'unknown', {
+            paths: result.mutationPaths,
+            pre_hash: Object.values(result.preBatchHash ?? {}).join(','),
+            post_hash: Object.values(result.postBatchHash ?? {}).join(','),
+            ...(result.mutationReceipt
+              ? {
+                  batch_id: result.mutationReceipt.batchId,
+                  starting_revision: result.mutationReceipt.startingRevision,
+                  ...(result.mutationReceipt.endingRevision ? { ending_revision: result.mutationReceipt.endingRevision } : {}),
+                  changed_bytes: result.mutationReceipt.changedBytes,
+                  status: result.mutationReceipt.status,
+                  pre_image_hashes: result.mutationReceipt.preImageHashes,
+                  post_image_hashes: result.mutationReceipt.postImageHashes,
+                }
+              : {}),
+          });
+        }
+
+        const obsParts: string[] = [];
       for (const r of result.results) {
         obsParts.push(
           formatChatToolObservation(action, {
@@ -3596,12 +3773,28 @@ export class ChatEngine {
             this.platformUnusableVerifiers.add(target);
           }
           if (isAuthoritativeVerifierCommand(target)) {
+            const structured = parseStructuredVerifierCommand(target, {
+              authoritySource: 'built_in_runner',
+            });
             const receipt = {
               command: target,
               exit_code: lastResult.exit_code,
               summary: (lastResult.stdout || '').slice(0, 200),
+              ...(structured
+                ? {
+                    verifier_id: structured.verifierId,
+                    authority_source: structured.authoritySource,
+                    argv: [structured.executable, ...structured.args],
+                  }
+                : {}),
             };
             this.lastVerifierReceipt = receipt;
+            recordVerifierAttempt(this.parity.sessionEvents, {
+              turn_id: String(this.parity.turnId ?? this._turnIndex),
+              command_preview: target,
+              authoritative: true,
+              exit_code: lastResult.exit_code,
+            });
             // R8: cache identical verifier runs until an intervening write.
             this.verifierReceiptCache.set(target, {
               receipt,
@@ -4142,12 +4335,12 @@ export class ChatEngine {
     if (useNativeTools && typeof runner.executeWithToolsStream === 'function') {
       const restrictTools = this.shouldRestrictToolsThisTurn();
       const toolDefs = restrictTools
-        ? buildRestrictedChatToolDefinitions(
+        ? this.services.tools.buildRestrictedDefinitions(
             this.postWriteRepairRestrict
               ? 'act_or_verify'
               : resolveRestrictedToolMode(this.hasAnyWrites()),
           )
-        : buildChatToolDefinitions();
+        : this.services.tools.buildDefinitions();
       const nativeActions: ChatToolAction[] = [];
       let answerText = '';
       const systemPrompt = this.getOrBuildSystemPrompt('native');
@@ -4257,6 +4450,11 @@ export class ChatEngine {
         kind: 'failover',
         detail: decision.reason,
       });
+      recordModelFailover(this.parity.sessionEvents, this.parity.turnId || '', {
+        original_model: decision.fromModel,
+        new_model: decision.toModel,
+        reason: decision.reason,
+      });
       yield {
         type: 'thought',
         text: `[Failover] ${decision.reason} (not independent verification)`,
@@ -4289,7 +4487,7 @@ export class ChatEngine {
     const nativeTools = mode === 'native';
     const textTools = mode === 'text';
     const systemCtx = this.options.systemContext;
-    let systemContent = buildChatSystemPrompt({
+    let systemContent = this.services.conversation.buildSystemPrompt({
       projectRoot: this.options.projectRoot,
       nativeTools,
       textTools,
@@ -4457,11 +4655,43 @@ export class ChatEngine {
       blockedReport: finalBlockedReport,
       hasAnyWrites: hasMutation,
     });
+    const planCompletion = this.executionProfile === 'plan' && finalStatus === 'completed';
+    const kernelDecision = this.executorKernel.completion.decide({
+          mode: this.executionProfile,
+          requestedOutcome: planCompletion ? 'PLAN_COMPLETE' : outcome,
+          hasWrite: hasMutation,
+          verificationPolicy: this.gatePolicy ?? 'required',
+          lastVerifierReceipt: this.lastVerifierReceipt,
+          toolCallLog: this.toolCallLog.map((entry) => ({
+            tool: entry.tool,
+            target: entry.target ?? '',
+            ...(entry.detail !== undefined ? { detail: entry.detail } : {}),
+            ...(entry.error !== undefined ? { error: entry.error } : {}),
+            ...(entry.exit_code !== undefined ? { exit_code: entry.exit_code } : {}),
+          })),
+          proof: outcome === 'VERIFIED_COMPLETE'
+            ? this.buildCompletionProof(hasMutation)
+            : { compliant: false, errors: ['requested outcome was not verified'] },
+        });
+    const authoritativeOutcome: TerminalOutcome =
+      kernelDecision && kernelDecision.finalOutcome !== 'PLAN_COMPLETE'
+        ? kernelDecision.finalOutcome
+        : planCompletion ? 'UNVERIFIED_PATCH' : outcome;
+    if (kernelDecision) {
+      recordCompletionDecision(this.parity.sessionEvents, String(this.parity.turnId ?? this._turnIndex), {
+        requestedOutcome: kernelDecision.requestedOutcome,
+        finalOutcome: authoritativeOutcome,
+        allowed: kernelDecision.allowed,
+        reason: kernelDecision.reason,
+        evidenceRefs: kernelDecision.evidenceRefs,
+        policyVersion: kernelDecision.policyVersion,
+      });
+    }
 
     // P0-E: if any kill-switch ran in shadow mode, record whether the task
     // later succeeded (mutation / coding-task gate) for precision/recall.
     const codingPassed = isCodingTaskSuccess({
-      terminalOutcome: outcome,
+      terminalOutcome: authoritativeOutcome,
       hasSuccessfulMutation: hasMutation,
       verifierOk: this.lastVerifierReceipt?.exit_code === 0,
       requireVerifier: false,
@@ -4471,15 +4701,16 @@ export class ChatEngine {
       atTurn: this._turnIndex,
       hasSuccessfulMutation: hasMutation,
       codingTaskPassed: codingPassed,
-      terminalOutcome: outcome,
+      terminalOutcome: authoritativeOutcome,
     });
 
     // AC3 choke point: memory + disk (idempotent if streamDone already finalized)
-    finalizeParityTurnSync(this.parity, this.engineRunDir, outcome, finalStatus);
+    finalizeParityTurnSync(this.parity, this.engineRunDir, authoritativeOutcome, finalStatus);
 
     const result: ChatResult = {
       status: finalStatus,
-      outcome,
+      outcome: authoritativeOutcome,
+      ...(kernelDecision?.finalOutcome === 'PLAN_COMPLETE' ? { planOutcome: 'PLAN_COMPLETE' as const } : {}),
       answer: answer ?? '',
       usage: globalCostTracker.getSessionSummary(),
       conversation: this.conversation,

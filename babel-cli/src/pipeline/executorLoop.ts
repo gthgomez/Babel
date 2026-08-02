@@ -10,7 +10,6 @@ import { resolveExecutionProfile } from '../config/executionProfiles.js';
 import { EvidenceBundle } from '../evidence.js';
 import { runWithFallback, type TargetModel } from '../execute.js';
 import {
-  executeTool,
   DRY_RUN,
   promptUserJit,
   ToolCallRequestSchema,
@@ -18,6 +17,7 @@ import {
   type ToolResult,
 } from '../localTools.js';
 import { type RuntimeHookTraceEvent } from '../runtime/hooks.js';
+import type { ChatEngineServices } from '../agent/chatEngineServices.js';
 import { applyPreToolUseHooks } from './executorPreToolHooks.js';
 import {
   IncrementalToolDetector,
@@ -306,7 +306,7 @@ async function runDirectBoundedWritePlan(
 
   for (const write of directBoundedPlan.writes) {
     const stepNum = toolCallLog.length + 1;
-    const toolResult = await executeTool(
+    const toolResult = await executeExecutorTool(
       {
         tool: 'file_write',
         path: write.target,
@@ -1353,6 +1353,7 @@ export async function runExecutorLoop(
   initialToolCallLog: ToolCallLog[] = [],
   rawTask: string = '',
   pruningStubs?: Map<string, string>,
+  services?: ChatEngineServices,
 ): Promise<ExecutorLoopResult> {
   assertExecutorGate(evidence.runDir);
 
@@ -1399,6 +1400,9 @@ export async function runExecutorLoop(
 
   const normalizedInitialToolCallLog: ToolCallLog[] = initialToolCallLog.map((entry) => ({
     ...entry,
+    ...(services
+      ? { tool: services.tools.normalizeExecutorName(entry.tool) as ToolCallLog['tool'] }
+      : {}),
     target: canonicalizeExecutorTargetForLog(entry.target, entry.tool),
   }));
 
@@ -2138,7 +2142,7 @@ export async function runExecutorLoop(
         reportWarnings.push(warning);
         logDetail(warning);
 
-        const toolResult = await executeTool(
+        const toolResult = await executeExecutorTool(
           {
             tool: 'file_write',
             path: deterministicWrite.target,
@@ -2642,7 +2646,7 @@ export async function runExecutorLoop(
     }
     const toolResult =
       fastPathToolResult ??
-      (await executeTool(req, {
+      (await executeExecutorTool(req, {
         agentId: 'executor', // Default for single-agent runs
         runId: evidence.runId,
         runDir: evidence.runDir,
