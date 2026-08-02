@@ -1,4 +1,4 @@
-export { isInProcessMode, isProtocolClientEnabled } from './mode.js';
+export { isInProcessMode, isProtocolClientEnabled, isTuiClientMode } from './mode.js';
 export {
   allocateThreadViaProtocol,
   BabelProtocolClient,
