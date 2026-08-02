@@ -55,6 +55,7 @@ export function applyEventLogToChatEngine(
   log: ThreadEventLog,
   options: { systemPrompt?: string } = {},
 ): ProviderMessage[] {
+  engine.restoreEventLog(log);
   const providerMessages = rebuildProviderMessagesFromEvents(log, {
     ...(options.systemPrompt !== undefined
       ? { systemPrompt: options.systemPrompt }

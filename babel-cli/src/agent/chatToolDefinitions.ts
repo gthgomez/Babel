@@ -30,6 +30,7 @@ import { readMcpServers } from '../config/mcpServers.js';
 import type { ToolCallRequest } from '../localTools.js';
 import { targetBasename } from '../services/targetResolver.js';
 import { trimForPrompt } from '../services/liteProjectContext.js';
+import { normalizeModelToolName } from './canonicalToolMapping.js';
 
 // ─── Chat Tool Action Schema ──────────────────────────────────────────────
 
@@ -158,7 +159,7 @@ export interface ChatMessage {
 // ─── Action Helpers ───────────────────────────────────────────────────────
 
 export function chatActionToolName(action: ChatToolAction): string {
-  return action.type;
+  return normalizeModelToolName(action.type);
 }
 
 export function chatActionTarget(action: ChatToolAction): string {

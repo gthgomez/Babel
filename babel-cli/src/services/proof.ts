@@ -4,6 +4,7 @@ import { basename, join } from 'node:path';
 import { isVerifierCommand } from './terminalStatus.js';
 
 export type ProofStatus =
+  | 'VERIFIED_COMPLETE'
   | 'COMPLETE_VERIFIED'
   | 'COMPLETE_UNVERIFIED'
   | 'CLAIMED_BUT_NOT_PROVEN'
@@ -265,6 +266,8 @@ function determineProofStatus(input: {
   changedFiles: string[];
   missingVerifiers: string[];
   unsafeToolAttempts: string[];
+  staleReceipts?: boolean;
+  unverifiedClaims?: boolean;
 }): { status: ProofStatus; reasons: string[] } {
   const reasons: string[] = [];
   const observed = input.observedStatus ?? '';
@@ -335,12 +338,20 @@ function determineProofStatus(input: {
       reasons.push('Files changed, but passing verifier evidence is unavailable.');
       return { status: 'COMPLETE_UNVERIFIED', reasons };
     }
+    if (input.staleReceipts) {
+      reasons.push('Files changed after verifier execution, making receipts stale.');
+      return { status: 'CLAIMED_BUT_NOT_PROVEN', reasons };
+    }
+    if (input.unverifiedClaims) {
+      reasons.push('Required claims lack non-stale authoritative evidence coverage.');
+      return { status: 'CLAIMED_BUT_NOT_PROVEN', reasons };
+    }
     reasons.push(
       input.changedFiles.length > 0
         ? 'Completion claim is supported by execution and passing verifier evidence.'
         : 'Completion/no-modification claim is supported by available run evidence.',
     );
-    return { status: 'COMPLETE_VERIFIED', reasons };
+    return { status: 'VERIFIED_COMPLETE', reasons };
   }
 
   if (input.changedFiles.length > 0 && !input.testsRun) {
@@ -428,6 +439,8 @@ export function buildProofStatus(runDir: string): ProofStatusArtifact {
     changedFiles,
     missingVerifiers,
     unsafeToolAttempts,
+    staleReceipts: asRecord(terminal.data?.['evidence_graph'])?.['stale_receipts'] === true,
+    unverifiedClaims: asRecord(terminal.data?.['evidence_graph'])?.['unverified_claims'] === true,
   });
   const evidencePaths: Record<string, string> = {};
   for (const [key, path] of Object.entries({

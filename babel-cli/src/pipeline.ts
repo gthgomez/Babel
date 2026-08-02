@@ -88,8 +88,9 @@ import { getAllowedShellCommands, validateExecutorShellCommand } from './sandbox
 import { collectHarnessMetadata } from './telemetry/metadata.js';
 import { PipelineTrace, endSpan } from './telemetry/tracing.js';
 import { runPreToolUseHooks, type RuntimeHookTraceEvent } from './runtime/hooks.js';
-import { executeTool, ToolCallRequestSchema, promptUserJit, DRY_RUN } from './localTools.js';
+import { ToolCallRequestSchema, promptUserJit, DRY_RUN } from './localTools.js';
 import type { ToolCallRequest, ToolResult, ToolContext } from './localTools.js';
+import { executeExecutorTool } from './pipeline/executorToolDispatch.js';
 import {
   buildGroundingQaReject,
   buildTaskGrounding,
@@ -587,6 +588,7 @@ import {
   sanitizeGroundingViolationsForAndroidSdkLane,
 } from './pipeline/qaVerdictSanitizers.js';
 import { runExecutorLoop } from './pipeline/executorLoop.js';
+import { createExecutorKernel } from './executor/kernel.js';
 
 // ─── Executor halt resolution ──────────────────────────────────────────────────
 
@@ -2195,7 +2197,7 @@ export async function _runBabelPipelineInternal(
       log(
         `Command-only no-modification task detected; running "${commandOnlyNoModification}" through shell_exec.`,
       );
-      const toolResult = await executeTool(
+      const toolResult = await executeExecutorTool(
         {
           tool: 'shell_exec',
           command: commandOnlyNoModification,
@@ -3243,6 +3245,7 @@ async function runStagedExecutor(
     initialExecutorLog,
     rawTask,
     pruningStubs,
+    createExecutorKernel('deep').services,
   );
 
   return { ok: true, executorResult };

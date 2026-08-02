@@ -723,6 +723,7 @@ function classifyFailure(proof: ProofStatusArtifact): {
   }
 
   switch (proof.proof_status) {
+    case 'VERIFIED_COMPLETE':
     case 'COMPLETE_VERIFIED':
       return {
         failureType: 'NO_FAILURE_DETECTED',

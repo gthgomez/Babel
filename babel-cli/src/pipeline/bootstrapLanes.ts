@@ -5,7 +5,8 @@ import { dirname, join } from 'node:path';
 import { z } from 'zod';
 
 import { EvidenceBundle } from '../evidence.js';
-import { executeTool, ToolCallRequestSchema, type ToolResult } from '../localTools.js';
+import { ToolCallRequestSchema, type ToolResult } from '../localTools.js';
+import { executeExecutorTool } from './executorToolDispatch.js';
 import type { OrchestratorManifest, ToolCallLog } from '../schemas/agentContracts.js';
 import {
   buildHaltReport,
@@ -142,7 +143,7 @@ export async function runDeterministicGradleBootstrapLane(
     req: z.infer<typeof ToolCallRequestSchema>,
   ): Promise<ToolResult> => {
     const stepNum = toolCallLog.length + 1;
-    const toolResult = await executeTool(req, {
+    const toolResult = await executeExecutorTool(req, {
       agentId: 'bootstrap_lane',
       runId: evidence.runId,
       runDir: evidence.runDir,
