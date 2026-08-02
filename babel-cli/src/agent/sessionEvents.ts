@@ -28,6 +28,9 @@ export type SessionEventKind =
   | 'verifier_attempt'
   | 'gate_decision'
   | 'policy_intervened'
+  | 'progress_recovery'
+  | 'completion_decision'
+  | 'model_failover'
   | 'compaction_created'
   | 'turn_ended';
 
@@ -97,6 +100,13 @@ export type SessionEvent =
       paths: string[];
       pre_hash?: string;
       post_hash?: string;
+      batch_id?: string;
+      starting_revision?: string;
+      ending_revision?: string;
+      changed_bytes?: number;
+      status?: string;
+      pre_image_hashes?: Record<string, string>;
+      post_image_hashes?: Record<string, string>;
     })
   | (SessionEventBase & {
       kind: 'verifier_attempt';
@@ -114,6 +124,30 @@ export type SessionEvent =
       source: string;
       action: string;
       detail?: string;
+    })
+  | (SessionEventBase & {
+      kind: 'progress_recovery';
+      intervention: string;
+      score: number;
+      signals: string[];
+      reason?: string;
+    })
+  | (SessionEventBase & {
+      kind: 'completion_decision';
+      requested_outcome: string;
+      final_outcome: string;
+      allowed: boolean;
+      reason: string;
+      evidence_refs: string[];
+      policy_version: string;
+    })
+  | (SessionEventBase & {
+      kind: 'model_failover';
+      original_model?: string;
+      original_provider?: string;
+      new_model?: string;
+      new_provider?: string;
+      reason?: string;
     })
   | (SessionEventBase & {
       kind: 'compaction_created';
@@ -325,6 +359,109 @@ export function recordTurnEnded(
     turn_id: input.turn_id,
     outcome: input.outcome,
     status: input.status,
+  });
+}
+
+export function recordPolicyIntervened(
+  log: SessionEventLog,
+  turnId: string,
+  input: { source: string; action: string; detail?: string }
+): SessionEvent {
+  return appendSessionEvent(log, {
+    kind: 'policy_intervened',
+    turn_id: turnId,
+    source: input.source,
+    action: input.action,
+    ...(input.detail !== undefined ? { detail: input.detail } : {}),
+  });
+}
+
+/** Persist one normalized progress/recovery decision for replay and transports. */
+export function recordProgressRecovery(
+  log: SessionEventLog,
+  turnId: string,
+  input: { intervention: string; score: number; signals: string[]; reason?: string },
+): SessionEvent {
+  return appendSessionEvent(log, {
+    kind: 'progress_recovery',
+    turn_id: turnId,
+    intervention: input.intervention,
+    score: input.score,
+    signals: [...input.signals],
+    ...(input.reason !== undefined ? { reason: input.reason } : {}),
+  });
+}
+
+/** Persist the shared completion authority decision as canonical session evidence. */
+export function recordCompletionDecision(
+  log: SessionEventLog,
+  turnId: string,
+  input: {
+    requestedOutcome: string;
+    finalOutcome: string;
+    allowed: boolean;
+    reason: string;
+    evidenceRefs: string[];
+    policyVersion: string;
+  },
+): SessionEvent {
+  return appendSessionEvent(log, {
+    kind: 'completion_decision',
+    turn_id: turnId,
+    requested_outcome: input.requestedOutcome,
+    final_outcome: input.finalOutcome,
+    allowed: input.allowed,
+    reason: input.reason,
+    evidence_refs: [...input.evidenceRefs],
+    policy_version: input.policyVersion,
+  });
+}
+
+export function recordModelFailover(
+  log: SessionEventLog,
+  turnId: string,
+  input: { original_model?: string; original_provider?: string; new_model?: string; new_provider?: string; reason?: string }
+): SessionEvent {
+  return appendSessionEvent(log, {
+    kind: 'model_failover',
+    turn_id: turnId,
+    ...(input.original_model !== undefined ? { original_model: input.original_model } : {}),
+    ...(input.original_provider !== undefined ? { original_provider: input.original_provider } : {}),
+    ...(input.new_model !== undefined ? { new_model: input.new_model } : {}),
+    ...(input.new_provider !== undefined ? { new_provider: input.new_provider } : {}),
+    ...(input.reason !== undefined ? { reason: input.reason } : {}),
+  });
+}
+
+export function recordMutationBatch(
+  log: SessionEventLog,
+  turnId: string,
+  input: {
+    paths: string[];
+    pre_hash?: string;
+    post_hash?: string;
+    batch_id?: string;
+    starting_revision?: string;
+    ending_revision?: string;
+    changed_bytes?: number;
+    status?: string;
+    pre_image_hashes?: Record<string, string>;
+    post_image_hashes?: Record<string, string>;
+  },
+): void {
+  appendSessionEvent(log, {
+    kind: 'mutation_batch',
+    turn_id: turnId,
+    paths: input.paths,
+    pre_hash: input.pre_hash,
+    post_hash: input.post_hash,
+    ...(input.batch_id !== undefined ? { batch_id: input.batch_id } : {}),
+    ...(input.starting_revision !== undefined ? { starting_revision: input.starting_revision } : {}),
+    ...(input.ending_revision !== undefined ? { ending_revision: input.ending_revision } : {}),
+    ...(input.changed_bytes !== undefined ? { changed_bytes: input.changed_bytes } : {}),
+    ...(input.status !== undefined ? { status: input.status } : {}),
+    ...(input.pre_image_hashes !== undefined ? { pre_image_hashes: { ...input.pre_image_hashes } } : {}),
+    ...(input.post_image_hashes !== undefined ? { post_image_hashes: { ...input.post_image_hashes } } : {}),
   });
 }
 

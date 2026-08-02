@@ -234,6 +234,18 @@ export function recordAssistantToolCalls(
   });
 }
 
+export function recordAssistantMessage(
+  log: ThreadEventLog,
+  turnId: string,
+  content: string,
+): void {
+  appendThreadEvent(log, {
+    kind: 'assistant_message',
+    turn_id: turnId,
+    content,
+  });
+}
+
 export function recordToolResult(
   log: ThreadEventLog,
   turnId: string,
