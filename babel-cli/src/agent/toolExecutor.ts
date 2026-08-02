@@ -18,6 +18,9 @@
  */
 
 import { isAbsolute, resolve } from 'node:path';
+import { WorkspaceTransactionManager, type MutationBatchReceipt } from '../services/workspaceTransactions.js';
+import { classifyToolEffect } from '../executor/contracts.js';
+import { recordEffectIntent, recordEffectTerminal } from '../executor/effectLedger.js';
 
 import {
   executeTool,
@@ -27,6 +30,7 @@ import {
 } from '../localTools.js';
 import { isPathInside } from '../services/targetResolver.js';
 import type { AgentAction } from './actions.js';
+import { modelToolNameToExecutor } from './canonicalToolMapping.js';
 import { emitAgentEvent } from './events.js';
 import { decideAction, type PermissionDecision, type PermissionPreset } from './policy.js';
 
@@ -116,6 +120,10 @@ export interface ToolExecutionResult {
 export interface PolicyGatedExecutionResult extends ToolExecutionResult {
   policyDecision: PermissionDecision;
   policyBlocked: boolean;
+  mutationPaths?: string[] | undefined;
+  preBatchHash?: Record<string, string> | undefined;
+  postBatchHash?: Record<string, string> | undefined;
+  mutationReceipt?: MutationBatchReceipt | undefined;
 }
 
 export interface ToolExecutor {
@@ -255,31 +263,32 @@ function runCommandToolRequest(
 
 /** Map one agent action to zero or more executor tool calls (terminal actions map to none). */
 export function mapAgentActionToToolCalls(action: AgentAction): MappedToolCall[] {
+  const executorName = modelToolNameToExecutor(action.type);
   switch (action.type) {
     case 'read_file':
-      return [{ kind: 'execute', request: { tool: 'file_read', path: action.path } }];
+      return [{ kind: 'execute', request: { tool: (executorName ?? 'file_read') as 'file_read', path: action.path } }];
     case 'list_dir':
-      return [{ kind: 'execute', request: { tool: 'directory_list', path: action.path } }];
+      return [{ kind: 'execute', request: { tool: (executorName ?? 'directory_list') as 'directory_list', path: action.path } }];
     case 'search':
-      return [{ kind: 'execute', request: { tool: 'semantic_search', query: action.query } }];
+      return [{ kind: 'execute', request: { tool: (executorName ?? 'semantic_search') as 'semantic_search', query: action.query } }];
     case 'grep':
       return [
         {
           kind: 'execute',
           request: {
-            tool: 'grep',
+            tool: (executorName ?? 'grep') as 'grep',
             pattern: action.pattern,
             ...(action.path !== undefined ? { path: action.path } : {}),
           },
         },
       ];
     case 'glob':
-      return [{ kind: 'execute', request: { tool: 'glob', pattern: action.pattern } }];
+      return [{ kind: 'execute', request: { tool: (executorName ?? 'glob') as 'glob', pattern: action.pattern } }];
     case 'write_file':
       return [
         {
           kind: 'execute',
-          request: { tool: 'file_write', path: action.path, content: action.content },
+          request: { tool: (executorName ?? 'file_write') as 'file_write', path: action.path, content: action.content },
         },
       ];
     case 'apply_patch':
@@ -307,7 +316,7 @@ export function mapAgentActionToToolCalls(action: AgentAction): MappedToolCall[]
         {
           kind: 'execute',
           request: {
-            tool: 'git_context',
+            tool: (executorName ?? 'git_context') as 'git_context',
             ...(action.format !== undefined ? { format: action.format } : {}),
             ...(action.path !== undefined ? { path: action.path } : {}),
             ...(action.max_lines !== undefined ? { max_lines: action.max_lines } : {}),
@@ -319,7 +328,7 @@ export function mapAgentActionToToolCalls(action: AgentAction): MappedToolCall[]
         {
           kind: 'execute',
           request: {
-            tool: 'test_run',
+            tool: (executorName ?? 'test_run') as 'test_run',
             command: action.command,
             ...(action.cwd ? { working_directory: action.cwd } : {}),
             ...(action.timeout_seconds !== undefined
@@ -333,7 +342,7 @@ export function mapAgentActionToToolCalls(action: AgentAction): MappedToolCall[]
         {
           kind: 'execute',
           request: {
-            tool: 'workspace_map',
+            tool: (executorName ?? 'workspace_map') as 'workspace_map',
             ...(action.max_depth !== undefined ? { max_depth: action.max_depth } : {}),
             ...(action.max_files !== undefined ? { max_files: action.max_files } : {}),
           },
@@ -543,6 +552,14 @@ function readOnlyScopeViolation(action: AgentAction, preset: PermissionPreset): 
   return `Policy denied ${action.type}: tool target outside project_root (${violation})`;
 }
 
+function readOnlyEffectViolation(action: AgentAction, preset: PermissionPreset): string | null {
+  if (preset !== 'read_only') return null;
+  const effectClass = classifyToolEffect(action.type);
+  return effectClass === 'read_only'
+    ? null
+    : `Plan/read-only policy denied ${action.type}: effect class ${effectClass} is not read-only`;
+}
+
 /**
  * Execute one agent action after `decideAction()` — central policy gate for tool calls.
  * Deny and ask decisions block execution; allow proceeds through the tool executor.
@@ -632,19 +649,20 @@ export async function executeActionWithPolicy(
   }
 
   const scopeViolation = readOnlyScopeViolation(action, preset);
-  if (scopeViolation) {
+  const effectViolation = readOnlyEffectViolation(action, preset);
+  if (scopeViolation || effectViolation) {
     incrementBlocks(context.runId);
     emitAgentEvent({
       type: 'scope_violation',
       action: action.type,
-      target: scopeViolation,
+      target: scopeViolation ?? effectViolation ?? action.type,
       projectRoot: process.env['BABEL_PROJECT_ROOT'] ?? process.cwd(),
       preset,
     });
     return {
       action,
       terminal: isTerminalAgentAction(action),
-      results: [policyBlockedToolResult(action, 'deny', scopeViolation)],
+      results: [policyBlockedToolResult(action, 'deny', scopeViolation ?? effectViolation ?? undefined)],
       policyDecision: 'deny',
       policyBlocked: true,
     };
@@ -677,10 +695,77 @@ export async function executeActionWithPolicy(
   // ── Successful execution: reset circuit-breaker ────────────────────
   resetBlocks(context.runId);
 
-  const execution = await executor.execute(action, context, budget);
-  return {
-    ...execution,
-    policyDecision,
-    policyBlocked: false,
-  };
+  let txPaths: string[] = [];
+  if (action.type === 'write_file') {
+    txPaths = [isAbsolute(action.path) ? action.path : resolve(process.cwd(), action.path)];
+  } else if (action.type === 'apply_patch') {
+    txPaths = extractPatchTargetPaths(action.patch, projectRootForScope(preset) ?? resolve(process.cwd()));
+  }
+
+  let batchTx: Awaited<ReturnType<typeof WorkspaceTransactionManager.beginBatch>> | null = null;
+  let effectIntent: ReturnType<typeof recordEffectIntent> | null = null;
+  if (txPaths.length > 0) {
+    batchTx = await WorkspaceTransactionManager.beginBatch(txPaths, { sessionId: context.runId });
+    if (context.runDir) {
+      effectIntent = recordEffectIntent({
+        runDir: context.runDir,
+        sessionId: context.runId,
+        turnId: null,
+        mutationBatchId: batchTx.batchId,
+        effectClass: classifyToolEffect(action.type),
+        toolName: action.type,
+        targetPaths: txPaths,
+        preImageHashes: batchTx.preBatchHash,
+        ...(action.type === 'write_file'
+          ? { intendedContent: action.content }
+          : action.type === 'apply_patch'
+            ? { intendedContent: action.patch }
+            : {}),
+      });
+    }
+  }
+
+  try {
+    const execution = await executor.execute(action, context, budget);
+
+    if (batchTx) {
+      batchTx = await WorkspaceTransactionManager.commitBatch(batchTx);
+      if (effectIntent && context.runDir) {
+        recordEffectTerminal(context.runDir, effectIntent, {
+          status: 'completed',
+          postImageHashes: batchTx.postBatchHash,
+        });
+      }
+    }
+
+    return {
+      ...execution,
+      policyDecision,
+      policyBlocked: false,
+      ...(batchTx ? {
+        mutationPaths: txPaths,
+        preBatchHash: batchTx.preBatchHash,
+        postBatchHash: batchTx.postBatchHash,
+        mutationReceipt: {
+          batchId: batchTx.batchId,
+          ...(batchTx.sessionId ? { sessionId: batchTx.sessionId } : {}),
+          startingRevision: batchTx.preRevisionHash,
+          ...(batchTx.postRevisionHash ? { endingRevision: batchTx.postRevisionHash } : {}),
+          affectedFiles: [...txPaths],
+          preImageHashes: { ...batchTx.preBatchHash },
+          postImageHashes: { ...batchTx.postBatchHash },
+          changedBytes: batchTx.changedBytes,
+          status: batchTx.status,
+        },
+      } : {})
+    };
+  } catch (error) {
+    if (effectIntent && context.runDir) {
+      recordEffectTerminal(context.runDir, effectIntent, {
+        status: context.signal?.aborted ? 'cancelled' : 'failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    throw error;
+  }
 }
