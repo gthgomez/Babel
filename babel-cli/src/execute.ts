@@ -1288,6 +1288,11 @@ async function runWaterfall<T>(
       tiersSkipped.push(spec.name);
       if (next) {
         if (eventBus) {
+          eventBus.modelFailover({
+            original_model: spec.name,
+            new_model: next.name,
+            ...(lastError?.message ? { reason: lastError.message } : {}),
+          });
           eventBus.logLine(`[babel:${label}] Using backup route: cascading to ${next.name}`);
         }
         if (verboseFallbackLogs) {
@@ -1553,6 +1558,11 @@ async function runWaterfall<T>(
       tiersSkipped.push(spec.name);
       if (next) {
         if (eventBus) {
+          eventBus.modelFailover({
+            original_model: spec.name,
+            new_model: next.name,
+            ...(lastError?.message ? { reason: lastError.message } : {}),
+          });
           eventBus.logLine(`[babel:${label}] Using backup route: cascading to ${next.name}`);
         }
         if (verboseFallbackLogs) {

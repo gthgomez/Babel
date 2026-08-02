@@ -23,6 +23,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { classifyProviderError } from './providerNormalize.js';
 import type { ZodType } from 'zod';
 import { type LlmRunner, type RunnerCallbacks, buildStructuredOutputError } from './base.js';
 import { extractJson } from '../utils/extractJson.js';
