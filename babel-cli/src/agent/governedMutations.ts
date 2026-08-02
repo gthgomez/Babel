@@ -9,7 +9,9 @@
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 
+import { FileWriteMutex, findNearMissContext, fuzzyPatchAssist } from '../services/editReliability.js';
 import type { ToolContext, ToolResult } from '../localTools.js';
+import type { MutationBatchReceipt } from '../services/workspaceTransactions.js';
 import type { AgentAction } from './actions.js';
 import {
   executeActionWithPolicy,
@@ -35,6 +37,10 @@ export interface GovernedStrReplaceResult {
   lineNumber?: number;
   absolutePath: string;
   policyDecision?: string;
+  mutationPaths?: string[] | undefined;
+  preBatchHash?: Record<string, string> | undefined;
+  postBatchHash?: Record<string, string> | undefined;
+  mutationReceipt?: MutationBatchReceipt | undefined;
 }
 
 function resolveProjectPath(projectRoot: string, filePath: string): string {
@@ -62,9 +68,10 @@ export async function governedStrReplace(
   const absolutePath = resolveProjectPath(options.projectRoot, input.file_path);
   const target = input.file_path;
 
-  let content: string;
-  try {
-    content = await readFile(absolutePath, 'utf-8');
+  return await FileWriteMutex.runExclusive(absolutePath, async () => {
+    let content: string;
+    try {
+      content = await readFile(absolutePath, 'utf-8');
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
@@ -77,37 +84,54 @@ export async function governedStrReplace(
     };
   }
 
-  const firstIdx = content.indexOf(input.old_str);
-  if (firstIdx === -1) {
-    return {
-      observation: `### str_replace ${target}\nError: str_replace: old_str not found in file`,
-      exit_code: 1,
-      error: 'str_replace: old_str not found',
-      policyBlocked: false,
-      terminal: false,
-      absolutePath,
-    };
-  }
-  const lastIdx = content.lastIndexOf(input.old_str);
-  if (firstIdx !== lastIdx) {
-    return {
-      observation: `### str_replace ${target}\nError: str_replace: old_str matches multiple locations — make it more specific`,
-      exit_code: 1,
-      error: 'str_replace: ambiguous match',
-      policyBlocked: false,
-      terminal: false,
-      absolutePath,
-    };
-  }
+    const firstIdx = content.indexOf(input.old_str);
+    let newContent: string;
+    let lineNumber: number;
 
-  const lineNumber = content.substring(0, firstIdx).split('\n').length;
-  const newContent = content.replace(input.old_str, input.new_str);
+    if (firstIdx === -1) {
+      const fuzzyContent = fuzzyPatchAssist(content, input.old_str, input.new_str ?? '');
+      if (fuzzyContent !== null) {
+        newContent = fuzzyContent;
+        lineNumber = content.substring(0, content.indexOf(input.old_str.trim().split('\n')[0] ?? '')).split('\n').length;
+      } else {
+        const candidates = findNearMissContext(content, input.old_str);
+        let errorMsg = 'str_replace: old_str not found';
+        let obsMsg = `### str_replace ${target}\nError: str_replace: old_str not found in file`;
+        if (candidates.length > 0) {
+          const topCandidate = candidates[0]!;
+          obsMsg += `\n\nDiagnostic: Did you mean lines ${topCandidate.startLine}-${topCandidate.endLine}?\n\`\`\`\n${topCandidate.context}\n\`\`\``;
+        }
 
-  const action: AgentAction = {
-    type: 'write_file',
-    path: input.file_path,
-    content: newContent,
-  };
+        return {
+          observation: obsMsg,
+          exit_code: 1,
+          error: errorMsg,
+          policyBlocked: false,
+          terminal: false,
+          absolutePath,
+        };
+      }
+    } else {
+      const lastIdx = content.lastIndexOf(input.old_str);
+      if (firstIdx !== lastIdx) {
+        return {
+          observation: `### str_replace ${target}\nError: str_replace: old_str matches multiple locations — make it more specific`,
+          exit_code: 1,
+          error: 'str_replace: ambiguous match',
+          policyBlocked: false,
+          terminal: false,
+          absolutePath,
+        };
+      }
+      lineNumber = content.substring(0, firstIdx).split('\n').length;
+      newContent = content.replace(input.old_str, input.new_str);
+    }
+
+    const action: AgentAction = {
+      type: 'write_file',
+      path: input.file_path,
+      content: newContent,
+    };
 
   // SafeExecutor resolves paths via BABEL_PROJECT_ROOT (same pin as ChatEngine).
   // Honor BABEL_DRY_RUN — never clear it here (safety harness / dry-run must stick).
@@ -166,15 +190,20 @@ export async function governedStrReplace(
     .map((l, i) => `${pStart + i + 1}:${l}`)
     .join('\n');
 
-  return {
-    observation: `### str_replace ${target} (line ${lineNumber})\nexit_code: 0\n\`\`\`\n${preview}\n\`\`\``,
-    exit_code: 0,
-    policyBlocked: false,
-    terminal: result.terminal === true,
-    lineNumber,
-    absolutePath,
-    policyDecision: result.policyDecision,
-  };
+    return {
+      observation: `### str_replace ${target} (line ${lineNumber})\nexit_code: 0\n\`\`\`\n${preview}\n\`\`\``,
+      exit_code: 0,
+      policyBlocked: false,
+      terminal: result.terminal === true,
+      lineNumber,
+      absolutePath,
+      policyDecision: result.policyDecision,
+      mutationPaths: result.mutationPaths,
+      preBatchHash: result.preBatchHash,
+      postBatchHash: result.postBatchHash,
+      mutationReceipt: result.mutationReceipt,
+    };
+  });
 }
 
 /** Map a ToolResult-shaped object for callers that expect executeTool shape. */

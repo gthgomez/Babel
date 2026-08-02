@@ -2088,6 +2088,36 @@ export class ConversationalRenderer extends BaseRenderer {
       this._writeThinkingLine();
     }
   }
+  /** W3 Phase 3 Progress Recovery Controller events */
+  onProgressRecovery(
+    intervention: import('../agent/progressController.js').ProgressInterventionLevel,
+    source: string,
+    score: number,
+    message?: string,
+  ): void {
+    if (this.outputBroken || this.paused) return;
+
+    // Only display an indicator if we're not at 'none' or if we want to show a recovery nudge.
+    if (intervention === 'none' && !message) return;
+
+    if (this.isTTY) {
+      const levelColors = {
+        none: success,
+        nudge: info,
+        restricted_tools: warning,
+        last_chance_repair: error,
+        terminal_blocked: error
+      };
+
+      const colorFn = levelColors[intervention] || dim;
+      const title = colorFn(`[${intervention.toUpperCase()}]`);
+      const body = message ? dim(` - ${message}`) : dim(` (Score: ${score})`);
+
+      const line = `  ${dim('↳')} ${title} Progress/Recovery${body}`;
+      safeStdoutWrite(`${line}\n`);
+      this._pushLinesToScrollback(line);
+    }
+  }
 
   /**
    * User-visible notice when ChatEngine compacted conversation context.
