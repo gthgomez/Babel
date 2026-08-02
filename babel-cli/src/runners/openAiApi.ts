@@ -21,6 +21,7 @@
  */
 
 import type { ZodType } from 'zod';
+import { classifyProviderError } from './providerNormalize.js';
 import { type LlmRunner, type RunnerCallbacks, buildStructuredOutputError } from './base.js';
 import { extractJson } from '../utils/extractJson.js';
 import { parseRateLimitHeaders } from '../ui/rateLimitWidget.js';
@@ -95,9 +96,12 @@ export class OpenAiApiRunner implements LlmRunner {
 
     if (!response.ok) {
       const body = await response.text().catch(() => '');
-      // Prefix with "rate limit:" so isImmediateCascade() in execute.ts detects it.
-      if (response.status === 429) {
-        throw new Error(`rate limit: [openAiApi] HTTP 429 — ${body.slice(0, 200)}`);
+      const classification = classifyProviderError(new Error(body), response.status);
+      if (classification === 'rate_limit') {
+        throw new Error(`rate limit: [openAiApi] HTTP ${response.status} — ${body.slice(0, 200)}`);
+      }
+      if (classification === 'auth_fatal' || classification === 'quota_fatal') {
+        throw new Error(`fatal: [openAiApi] HTTP ${response.status} — ${body.slice(0, 200)}`);
       }
       throw new Error(`[openAiApi] HTTP ${response.status}: ${body.slice(0, 200)}`);
     }

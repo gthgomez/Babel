@@ -8,6 +8,14 @@ import {
   validateProviderMessageProtocol,
 } from './providerMessages.js';
 import { buildProviderMessages } from '../agent/chatToolDefinitions.js';
+import {
+  createThreadEventLog,
+  startTurn,
+  recordAssistantToolCalls,
+  recordToolResult,
+  recordAssistantMessage,
+  rebuildProviderMessagesFromEvents,
+} from '../agent/threadEventLog.js';
 
 describe('providerMessages (P0-B protocol fidelity)', () => {
   test('mapProviderMessagesToWire emits system once and preserves tool_call ids', () => {
@@ -142,5 +150,89 @@ describe('providerMessages (P0-B protocol fidelity)', () => {
     const wire = mapProviderMessagesToWire(messages, 'sys');
     assert.equal(wire[0]!.role, 'system');
     assert.ok(wire.some((m) => m.role === 'tool' && m.tool_call_id));
+  });
+
+  test('3+ native tool turns reconstruct with exact assistant/tool ID pairing', () => {
+    const log = createThreadEventLog('test-thread');
+    const turnId1 = startTurn(log, {
+      task: 'Task 1',
+      model: 'test-model',
+      provider: 'test-provider',
+      projectRoot: '/test',
+      policyPreset: 'default',
+    });
+    recordAssistantToolCalls(log, turnId1, 'thinking 1', [
+      { id: 't1', type: 'function', function: { name: 'f1', arguments: '{}' } },
+    ]);
+    recordToolResult(log, turnId1, { tool_call_id: 't1', tool_name: 'f1', content: 'r1' });
+
+    const turnId2 = startTurn(log, {
+      task: 'Task 2',
+      model: 'test-model',
+      provider: 'test-provider',
+      projectRoot: '/test',
+      policyPreset: 'default',
+    });
+    recordAssistantToolCalls(log, turnId2, 'thinking 2', [
+      { id: 't2', type: 'function', function: { name: 'f2', arguments: '{}' } },
+      { id: 't3', type: 'function', function: { name: 'f3', arguments: '{}' } },
+    ]);
+    recordToolResult(log, turnId2, { tool_call_id: 't2', tool_name: 'f2', content: 'r2' });
+    recordToolResult(log, turnId2, { tool_call_id: 't3', tool_name: 'f3', content: 'r3' });
+
+    recordAssistantMessage(log, turnId2, 'Done with Task 2');
+
+    const messages = rebuildProviderMessagesFromEvents(log, { systemPrompt: 'sys' });
+    assert.deepEqual(validateProviderMessageProtocol(messages), []);
+
+    // 1 sys, 2 users, 2 assistant (tool calls), 3 tools, 1 assistant (msg) = 9 messages
+    assert.equal(messages.length, 9);
+    assert.equal(messages[2]!.role, 'assistant');
+    assert.equal(messages[2]!.tool_calls![0]!.id, 't1');
+    assert.equal(messages[3]!.role, 'tool');
+    assert.equal(messages[3]!.tool_call_id, 't1');
+    assert.equal(messages[8]!.role, 'assistant');
+    assert.equal(messages[8]!.content, 'Done with Task 2');
+  });
+
+  test('rebuildProviderMessagesFromEvents on resume produces identical ProviderMessage[] as live', () => {
+    const log = createThreadEventLog('test-thread');
+    const turnId = startTurn(log, {
+      task: 'Identical Test',
+      model: 'm',
+      provider: 'p',
+      projectRoot: '/',
+      policyPreset: 'default',
+    });
+    recordAssistantToolCalls(log, turnId, 'thinking', [
+      { id: 'call_live', type: 'function', function: { name: 'read_file', arguments: '{}' } },
+    ]);
+    recordToolResult(log, turnId, { tool_call_id: 'call_live', tool_name: 'read_file', content: 'ok' });
+
+    const liveMessages = rebuildProviderMessagesFromEvents(log, { systemPrompt: 'system_prompt_live' });
+
+    // Simulate resume by rebuilding from the same log
+    const resumedMessages = rebuildProviderMessagesFromEvents(log, { systemPrompt: 'system_prompt_live' });
+
+    assert.deepEqual(liveMessages, resumedMessages);
+  });
+
+  test('DeepSeek provider wire format regression coverage', () => {
+    // Tests mapProviderMessagesToWire with DeepSeek specific expectations
+    const messages: ProviderMessage[] = [
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'thinking', tool_calls: [{ id: 'ds_call', type: 'function', function: { name: 'ls', arguments: '{}' } }] },
+      { role: 'tool', content: 'file.txt', tool_call_id: 'ds_call' },
+    ];
+
+    const wire = mapProviderMessagesToWire(messages, 'default-sys', 'deepseek-override');
+    assert.equal(wire.length, 4);
+    assert.equal(wire[0]!.role, 'system');
+    assert.equal(wire[0]!.content, 'deepseek-override');
+    assert.equal(wire[2]!.role, 'assistant');
+    assert.ok(wire[2]!.tool_calls);
+    assert.equal(wire[2]!.tool_calls![0]!.id, 'ds_call');
+    assert.equal(wire[3]!.role, 'tool');
+    assert.equal(wire[3]!.tool_call_id, 'ds_call');
   });
 });

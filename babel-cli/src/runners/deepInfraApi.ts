@@ -23,6 +23,7 @@
  */
 
 import type { ZodType } from 'zod';
+import { parseRetryAfterHeader, isRetryableStatus, normalizeFinishReason, classifyProviderError } from './providerNormalize.js';
 import {
   type LlmRunner,
   type ProviderMessage,
@@ -163,25 +164,15 @@ function getStreamMaxRetries(): number {
 }
 
 function retryDelayMs(attempt: number, response?: Response): number {
-  const retryAfter = response?.headers.get('retry-after');
-  if (retryAfter) {
-    const retryAfterSeconds = Number(retryAfter);
-    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0) {
-      return Math.min(retryAfterSeconds * 1000, 30_000);
-    }
-    const retryAfterDate = Date.parse(retryAfter);
-    if (Number.isFinite(retryAfterDate)) {
-      return Math.min(Math.max(retryAfterDate - Date.now(), 0), 30_000);
-    }
+  const retryAfter = parseRetryAfterHeader(response?.headers.get('retry-after'));
+  if (retryAfter !== null) {
+    return Math.min(retryAfter * 1000, 30_000);
   }
   const exponential = RETRY_BASE_DELAY_MS * 2 ** Math.max(attempt - 1, 0);
   const jitter = Math.floor(Math.random() * RETRY_BASE_DELAY_MS);
   return Math.min(exponential + jitter, 5_000);
 }
 
-function isRetryableStatus(status: number): boolean {
-  return status === 408 || status === 429 || status >= 500;
-}
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
@@ -993,8 +984,8 @@ export class DeepInfraApiRunner implements LlmRunner {
               }
             }
 
-            if (choice.finish_reason) {
-              finishReason = choice.finish_reason;
+            if (normalizeFinishReason(choice.finish_reason)) {
+              finishReason = normalizeFinishReason(choice.finish_reason);
             }
 
             if (json.usage) {
@@ -1019,7 +1010,7 @@ export class DeepInfraApiRunner implements LlmRunner {
               streamState.usage = json.usage;
             }
             if (json.choices?.[0]?.finish_reason) {
-              finishReason = json.choices[0].finish_reason;
+              finishReason = normalizeFinishReason(json.choices[0].finish_reason);
             }
           } catch { /* ignore */ }
         }

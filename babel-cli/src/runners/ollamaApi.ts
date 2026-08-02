@@ -18,6 +18,7 @@
  */
 
 import type { RunnerInvocationMetadata } from './base.js';
+import { classifyProviderError } from './providerNormalize.js';
 import { DeepInfraApiRunner } from './deepInfraApi.js';
 
 function resolveOllamaTokens(): number {
