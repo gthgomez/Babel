@@ -15,14 +15,50 @@ import {
   packageHintFromRepo,
   packageNameFromPyproject,
   parseMissingModulesFromProbe,
+  parseMissingPytestPluginsFromProbe,
+  parsePytestVersionPinFromProbe,
+  parsePythonVersion,
+  parseRequiredPluginsFromPytestIni,
+  pythonVersionMeetsMin,
   resolveSoftDepSpecForModule,
+  resolveSystemPython,
   resolveVenvPython,
   runWorkspaceDepPreflight,
   SOFT_DEP_MAX_ROUNDS,
   truncateProbeDetail,
+  validatePythonExecutable,
 } from './workspaceDepPreflight.js';
 
 describe('workspaceDepPreflight', () => {
+  test('parseMissingPytestPluginsFromProbe and pytest.ini required_plugins', () => {
+    const plugins = parseMissingPytestPluginsFromProbe(
+      'ERROR: Missing required plugins: pytest-bdd, pytest-benchmark, pytest-qt',
+    );
+    assert.deepEqual(plugins, ['pytest-bdd', 'pytest-benchmark', 'pytest-qt']);
+    const fromIni = parseRequiredPluginsFromPytestIni(`
+[pytest]
+required_plugins =
+    pytest-bdd
+    pytest-benchmark
+    pytest-instafail
+markers =
+    gui: tests
+`);
+    assert.deepEqual(fromIni, [
+      'pytest-bdd',
+      'pytest-benchmark',
+      'pytest-instafail',
+    ]);
+    assert.equal(
+      parsePytestVersionPinFromProbe(
+        `pluggy._manager.PluginValidationError: Plugin 'tests/conftest.py' for hook 'pytest_ignore_collect'
+hookimpl definition: pytest_ignore_collect(path)
+Argument(s) {'path'} are declared in the hookimpl but can not be found in the hookspec`,
+      ),
+      'pytest>=7,<8',
+    );
+  });
+
   test('W1 A: parseMissingModulesFromProbe extracts import names', () => {
     const detail = `
 ImportError while loading conftest 'openlibrary/conftest.py'.
@@ -51,7 +87,7 @@ E   ModuleNotFoundError: No module named 'web'
   });
 
   test('W1 multi-round: resolveSoftDepSpec prefers requirements then vendor infogami', () => {
-    assert.equal(SOFT_DEP_MAX_ROUNDS, 3);
+    assert.equal(SOFT_DEP_MAX_ROUNDS, 16);
     const req = [
       'git+https://github.com/webpy/webpy.git@d3649322b85777b291ac2b7b3699fb6fc839e382',
       'multipart==0.2.4',
@@ -62,6 +98,18 @@ E   ModuleNotFoundError: No module named 'web'
     );
     assert.equal(resolveSoftDepSpecForModule('/tmp/ws', 'multipart', [req]), 'multipart==0.2.4');
     assert.equal(resolveSoftDepSpecForModule('/tmp/ws', 'multipart', []), 'multipart');
+    assert.equal(resolveSoftDepSpecForModule('/tmp/ws', 'requests', []), 'requests');
+    assert.equal(resolveSoftDepSpecForModule('/tmp/ws', 'simplejson', []), 'simplejson');
+    assert.equal(
+      resolveSoftDepSpecForModule('/tmp/ws', 'paapi5_python_sdk', [
+        'amightygirl.paapi5-python-sdk==1.0.0',
+      ]),
+      'amightygirl.paapi5-python-sdk==1.0.0',
+    );
+    assert.equal(
+      resolveSoftDepSpecForModule('/tmp/ws', 'psycopg2', ['psycopg2==2.9.9']),
+      'psycopg2-binary',
+    );
 
     const dir = mkdtempSync(join(tmpdir(), 'dep-infogami-'));
     mkdirSync(join(dir, 'vendor', 'infogami'), { recursive: true });
@@ -219,6 +267,66 @@ version = "0.1.0"
       resolveVenvPython(dir)?.replace(/\\/g, '/').endsWith('.babel-venv/bin/python.exe'),
       true,
     );
+  });
+
+  test('validatePythonExecutable rejects a present but non-executable venv placeholder', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dep-invalid-python-'));
+    const python = join(dir, '.babel-venv', 'bin', 'python.exe');
+    mkdirSync(join(dir, '.babel-venv', 'bin'), { recursive: true });
+    writeFileSync(python, 'not an executable');
+    const result = validatePythonExecutable({ pythonBin: python, cwd: dir });
+    assert.equal(result.ok, false);
+    assert.ok(result.detail);
+  });
+
+  test('parsePythonVersion and pythonVersionMeetsMin handle Required-era cuts', () => {
+    assert.deepEqual(parsePythonVersion('Python 3.10.1'), {
+      major: 3,
+      minor: 10,
+      patch: 1,
+    });
+    assert.deepEqual(parsePythonVersion('3.11.15'), {
+      major: 3,
+      minor: 11,
+      patch: 15,
+    });
+    assert.equal(
+      pythonVersionMeetsMin({ major: 3, minor: 11, patch: 0 }, { major: 3, minor: 11 }),
+      true,
+    );
+    assert.equal(
+      pythonVersionMeetsMin({ major: 3, minor: 10, patch: 1 }, { major: 3, minor: 11 }),
+      false,
+    );
+  });
+
+  test('resolveSystemPython prefers env override when executable', () => {
+    const host = resolveSystemPython({ requireMin: false });
+    if (!host.ok) return; // nothing to probe on exotic hosts
+    const resolved = resolveSystemPython({
+      requireMin: false,
+      env: { ...process.env, BABEL_WORKSPACE_PYTHON: host.python.bin },
+    });
+    assert.equal(resolved.ok, true);
+    if (resolved.ok) {
+      assert.equal(resolved.python.bin, host.python.bin);
+      assert.match(resolved.python.source, /^env:/);
+    }
+  });
+
+  test('resolveSystemPython requireMin 3.11 fails closed when only older available', () => {
+    // Force a doomed override path then require 99.0 so selection cannot succeed.
+    const resolved = resolveSystemPython({
+      minMajor: 99,
+      minMinor: 0,
+      requireMin: true,
+      env: { ...process.env, BABEL_WORKSPACE_PYTHON: '', BABEL_PYTHON: '' },
+    });
+    // Hosts with real 99.x do not exist; expect failure.
+    assert.equal(resolved.ok, false);
+    if (!resolved.ok) {
+      assert.match(resolved.reason, /no Python >= 99\.0/i);
+    }
   });
 
   test('applyDepPreflightEnv prepends pathPrefix and VIRTUAL_ENV', () => {

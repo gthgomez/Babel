@@ -709,6 +709,22 @@ export function buildChatRunPayload(
   // Surface toolCalls for evidence linking — always include even when empty
   payload['toolCalls'] = result.toolCalls ?? [];
 
+  // Slice 2/7: per-turn effort/cost routing for campaign cell telemetry.
+  // Always emit (even empty) so SWE-Pro can roll up effort without relying on
+  // optional stream-done fields that may be dropped in headless JSON.
+  const turnRouting = Array.isArray(result.turnRouting) ? result.turnRouting : [];
+  payload['turnRouting'] = turnRouting;
+  payload['turn_routing'] = turnRouting;
+
+  // Policy events: dual keys for harness extractors (policy_events / policyEvents)
+  const policyEventsOut = Array.isArray(result.policyEvents)
+    ? result.policyEvents
+    : Array.isArray((result as unknown as Record<string, unknown>)['policyEvents'])
+      ? ((result as unknown as Record<string, unknown>)['policyEvents'] as unknown[])
+      : [];
+  payload['policyEvents'] = policyEventsOut;
+  payload['policy_events'] = policyEventsOut;
+
   // A1: Aggregate tool call counts derived from toolCalls
   if (result.toolCalls && result.toolCalls.length > 0) {
     const aggregates = computeToolCallAggregates(

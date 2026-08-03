@@ -1,0 +1,346 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "number",
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "const": "babel_causal_campaign_derived"
+    },
+    "scorer_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "campaign_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evidence_dir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "derived_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "eligibility": {
+      "type": "object",
+      "properties": {
+        "artifact_valid": {
+          "type": "boolean"
+        },
+        "campaign_complete": {
+          "type": "boolean"
+        },
+        "reliability_eligible": {
+          "type": "boolean"
+        },
+        "promotion_eligible": {
+          "type": "boolean"
+        },
+        "capability_score_valid": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "artifact_valid",
+        "campaign_complete",
+        "reliability_eligible",
+        "promotion_eligible",
+        "capability_score_valid"
+      ],
+      "additionalProperties": false
+    },
+    "conservation_ok": {
+      "type": "boolean"
+    },
+    "conservation_errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "by_lifecycle": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      }
+    },
+    "expected_attempts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "intent_to_treat_capability": {
+      "type": "object",
+      "properties": {
+        "numerator": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "denominator": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "rate": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "numerator",
+        "denominator",
+        "rate"
+      ],
+      "additionalProperties": false
+    },
+    "conditional_capability": {
+      "type": "object",
+      "properties": {
+        "numerator": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "denominator": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "rate": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "numerator",
+        "denominator",
+        "rate"
+      ],
+      "additionalProperties": false
+    },
+    "exclusion_counts": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      }
+    },
+    "attempts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "type": "number",
+            "const": 1
+          },
+          "kind": {
+            "type": "string",
+            "const": "babel_causal_attempt_derived"
+          },
+          "attempt_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "task_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "arm": {
+            "type": "string",
+            "minLength": 1
+          },
+          "replicate_id": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "lifecycle": {
+            "type": "string",
+            "minLength": 1
+          },
+          "axes": {
+            "type": "object",
+            "properties": {
+              "execution_terminal": {
+                "type": "string",
+                "enum": [
+                  "pass",
+                  "fail",
+                  "null",
+                  "not_run",
+                  "error",
+                  "diagnostic_only"
+                ]
+              },
+              "babel_authoritative_verifier": {
+                "type": "string",
+                "enum": [
+                  "pass",
+                  "fail",
+                  "null",
+                  "not_run",
+                  "error",
+                  "diagnostic_only"
+                ]
+              },
+              "host_fail_to_pass": {
+                "type": "string",
+                "enum": [
+                  "pass",
+                  "fail",
+                  "null",
+                  "not_run",
+                  "error",
+                  "diagnostic_only"
+                ]
+              },
+              "official_evaluator": {
+                "type": "string",
+                "enum": [
+                  "pass",
+                  "fail",
+                  "null",
+                  "not_run",
+                  "error",
+                  "diagnostic_only"
+                ]
+              },
+              "gold_patch_similarity": {
+                "type": "string",
+                "enum": [
+                  "pass",
+                  "fail",
+                  "null",
+                  "not_run",
+                  "error",
+                  "diagnostic_only"
+                ]
+              }
+            },
+            "required": [
+              "execution_terminal",
+              "babel_authoritative_verifier",
+              "host_fail_to_pass",
+              "official_evaluator",
+              "gold_patch_similarity"
+            ],
+            "additionalProperties": false
+          },
+          "capability_verified_pass": {
+            "type": "boolean"
+          },
+          "capability_eligible": {
+            "type": "boolean"
+          },
+          "capability_exclusion_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "false_complete_suspected": {
+            "type": "boolean"
+          },
+          "evidence_authority_failure": {
+            "type": "boolean"
+          },
+          "artifact_valid": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "schema_version",
+          "kind",
+          "attempt_id",
+          "task_id",
+          "arm",
+          "replicate_id",
+          "lifecycle",
+          "axes",
+          "capability_verified_pass",
+          "capability_eligible",
+          "capability_exclusion_reason",
+          "false_complete_suspected",
+          "evidence_authority_failure",
+          "artifact_valid",
+          "notes"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "legacy_pass_mode_display": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "kind",
+    "scorer_version",
+    "campaign_id",
+    "evidence_dir",
+    "derived_at",
+    "eligibility",
+    "conservation_ok",
+    "conservation_errors",
+    "by_lifecycle",
+    "expected_attempts",
+    "intent_to_treat_capability",
+    "conditional_capability",
+    "exclusion_counts",
+    "attempts",
+    "legacy_pass_mode_display",
+    "notes"
+  ],
+  "additionalProperties": false
+}
