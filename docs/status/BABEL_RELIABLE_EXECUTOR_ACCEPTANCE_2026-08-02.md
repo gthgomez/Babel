@@ -125,3 +125,22 @@ Implementation landed on `codex/reliable-executor-acceptance`:
 1. Prefer system Python 3.11+ for `runWorkspaceDepPreflight` (or document Docker-in-WSL workspace execution).
 2. Re-run detached `gate0-mock` until live cells reach readiness (or honest non-Python blocks only).
 3. Explicitly authorized `gate0-canary` (limit=1, thinking on).
+
+## Python 3.11 preference re-mock (2026-08-03)
+
+| Commit | Content |
+| --- | --- |
+| `8772e92` | Prefer/require Python 3.11+ for SWE-Pro venvs; recreate stale &lt;3.11 venvs |
+
+Host now has Python **3.11.9** (`py -3.11`). Evidence:
+
+`runs/agent-benchmark/swe-pro/gate0-mock-py311-20260802-202001`
+
+| Cell | Result |
+| --- | --- |
+| infra ×2 | `infra:ok` |
+| openlibrary live | **`dep_ready=true`**, venv = 3.11.9 `Scripts/python.exe`, signed readiness, verifier_overlay, fail_to_pass ran (`assert_fail`); mock agent still terminal non-solve (`agent:env_blocked` from in-agent progress policy, not preflight) |
+| qutebrowser live | Still preflight `ENV_BLOCKED`: missing pytest plugins (`pytest-bdd`, `pytest-qt`, …) after requirements install — **not** a 3.10/`Required` failure |
+
+**Cleared:** host Python 3.10 / `typing.Required` preflight doom path.  
+**Remaining env:** qutebrowser plugin set; mock-agent arbitration noise on openlibrary.
