@@ -13,10 +13,30 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 export const BABEL_WORKSPACE_VENV = '.babel-venv';
+
+/** Default minimum CPython for SWE-Pro / modern packages (`typing.Required` needs 3.11+). */
+export const DEFAULT_MIN_PYTHON = { major: 3, minor: 11 } as const;
+
+export interface PythonVersion {
+  major: number;
+  minor: number;
+  patch: number;
+}
+
+export interface ResolvedSystemPython {
+  /** Absolute interpreter path when available; otherwise a bare command name. */
+  bin: string;
+  version: string;
+  major: number;
+  minor: number;
+  patch: number;
+  /** How the interpreter was selected (for notes/telemetry). */
+  source: string;
+}
 
 export type DepInstallKind =
   | 'python_editable'
@@ -200,20 +220,201 @@ export function detectWorkspaceDepPlan(
   };
 }
 
-function resolveSystemPython(): string {
-  // Prefer the native Windows launcher/interpreter. MSYS2 `python3` can create
-  // a valid-looking `bin/` venv whose native-extension wheels cannot run on
-  // the Windows host (notably psycopg2); use it only as a fallback.
-  const candidates = process.platform === 'win32' ? ['python', 'py', 'python3'] : ['python3', 'python'];
-  for (const bin of candidates) {
-    const r = spawnSync(bin, ['--version'], {
+/**
+ * Parse `Python X.Y.Z` or bare `X.Y.Z` from interpreter output.
+ */
+export function parsePythonVersion(text: string): PythonVersion | null {
+  const m = text.match(/(?:Python\s+)?(\d+)\.(\d+)(?:\.(\d+))?/i);
+  if (!m) return null;
+  return {
+    major: Number(m[1]),
+    minor: Number(m[2]),
+    patch: Number(m[3] ?? 0),
+  };
+}
+
+export function pythonVersionMeetsMin(
+  version: PythonVersion,
+  min: { major: number; minor: number },
+): boolean {
+  if (version.major !== min.major) return version.major > min.major;
+  return version.minor >= min.minor;
+}
+
+function probePythonInvocation(
+  bin: string,
+  prefixArgs: string[] = [],
+): ResolvedSystemPython | null {
+  // Prefer sys.executable so venvs are created with a real path, not `py -3.11`.
+  const r = spawnSync(
+    bin,
+    [
+      ...prefixArgs,
+      '-c',
+      'import sys; print("%d.%d.%d" % sys.version_info[:3]); print(sys.executable)',
+    ],
+    {
       encoding: 'utf8',
       windowsHide: true,
-      timeout: 10_000,
-    });
-    if (r.status === 0) return bin;
+      timeout: 15_000,
+    },
+  );
+  if (r.status !== 0) return null;
+  const lines = `${r.stdout ?? ''}`
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const versionLine = lines[0] ?? '';
+  const executable = lines[1]?.trim() || bin;
+  const parsed = parsePythonVersion(versionLine);
+  if (!parsed) return null;
+  // Reject MSYS/MinGW python on Windows when a native alternative exists later
+  // in the candidate list; caller ranks native first.
+  return {
+    bin: executable,
+    version: `${parsed.major}.${parsed.minor}.${parsed.patch}`,
+    major: parsed.major,
+    minor: parsed.minor,
+    patch: parsed.patch,
+    source: prefixArgs.length ? `${bin} ${prefixArgs.join(' ')}` : bin,
+  };
+}
+
+function isMsysPath(bin: string): boolean {
+  const n = bin.replace(/\\/g, '/').toLowerCase();
+  return n.includes('/msys') || n.includes('/mingw');
+}
+
+/**
+ * Resolve a host Python interpreter.
+ *
+ * Preference order:
+ * 1. `BABEL_WORKSPACE_PYTHON` / `BABEL_PYTHON` env (if executable)
+ * 2. Versioned launchers (`py -3.12`, `py -3.11`, `python3.12`, `python3.11`, …)
+ * 3. Generic `python` / `python3` / `py` only when they meet min version
+ *
+ * On Windows, native installers are preferred over MSYS/MinGW paths so venvs
+ * get `Scripts/` + MSVC wheels instead of broken `bin/` layouts.
+ */
+export function resolveSystemPython(options?: {
+  /** Preferred / required minimum major (default 3). */
+  minMajor?: number;
+  /** Preferred / required minimum minor (default 11). */
+  minMinor?: number;
+  /**
+   * When true, fail if no interpreter meets min.
+   * When false, prefer min+ but fall back to any working CPython.
+   */
+  requireMin?: boolean;
+  env?: NodeJS.ProcessEnv;
+}): { ok: true; python: ResolvedSystemPython } | { ok: false; reason: string; tried: string[] } {
+  const env = options?.env ?? process.env;
+  const preferMin = {
+    major: options?.minMajor ?? DEFAULT_MIN_PYTHON.major,
+    minor: options?.minMinor ?? DEFAULT_MIN_PYTHON.minor,
+  };
+  const requireMin = options?.requireMin === true;
+  const tried: string[] = [];
+
+  const probeLabeled = (
+    label: string,
+    bin: string,
+    prefixArgs: string[] = [],
+  ): ResolvedSystemPython | null => {
+    tried.push(label);
+    const probed = probePythonInvocation(bin, prefixArgs);
+    if (!probed) return null;
+    return { ...probed, source: label };
+  };
+
+  const allHits: ResolvedSystemPython[] = [];
+
+  const envOverride =
+    env['BABEL_WORKSPACE_PYTHON']?.trim() || env['BABEL_PYTHON']?.trim() || '';
+  if (envOverride) {
+    const hit = probeLabeled(`env:${envOverride}`, envOverride);
+    if (hit) allHits.push(hit);
   }
-  return 'python';
+
+  type Cand = { label: string; bin: string; args?: string[] };
+  const versioned: Cand[] =
+    process.platform === 'win32'
+      ? [
+          { label: 'py -3.13', bin: 'py', args: ['-3.13'] },
+          { label: 'py -3.12', bin: 'py', args: ['-3.12'] },
+          { label: 'py -3.11', bin: 'py', args: ['-3.11'] },
+          { label: 'python3.13', bin: 'python3.13' },
+          { label: 'python3.12', bin: 'python3.12' },
+          { label: 'python3.11', bin: 'python3.11' },
+        ]
+      : [
+          { label: 'python3.13', bin: 'python3.13' },
+          { label: 'python3.12', bin: 'python3.12' },
+          { label: 'python3.11', bin: 'python3.11' },
+        ];
+
+  const generic: Cand[] =
+    process.platform === 'win32'
+      ? [
+          { label: 'python', bin: 'python' },
+          { label: 'py -3', bin: 'py', args: ['-3'] },
+          { label: 'py', bin: 'py' },
+          { label: 'python3', bin: 'python3' },
+        ]
+      : [
+          { label: 'python3', bin: 'python3' },
+          { label: 'python', bin: 'python' },
+        ];
+
+  for (const c of [...versioned, ...generic]) {
+    const hit = probeLabeled(c.label, c.bin, c.args ?? []);
+    if (hit) allHits.push(hit);
+  }
+
+  // Deduplicate by resolved executable path.
+  const unique = new Map<string, ResolvedSystemPython>();
+  for (const hit of allHits) {
+    const key = hit.bin.replace(/\\/g, '/').toLowerCase();
+    if (!unique.has(key)) unique.set(key, hit);
+  }
+  const hits = [...unique.values()];
+
+  const rank = (list: ResolvedSystemPython[]): ResolvedSystemPython[] =>
+    [...list].sort((a, b) => {
+      const aMsys = isMsysPath(a.bin) ? 1 : 0;
+      const bMsys = isMsysPath(b.bin) ? 1 : 0;
+      if (aMsys !== bMsys) return aMsys - bMsys;
+      if (a.major !== b.major) return b.major - a.major;
+      if (a.minor !== b.minor) return b.minor - a.minor;
+      return b.patch - a.patch;
+    });
+
+  const meetingMin = rank(hits.filter((h) => pythonVersionMeetsMin(h, preferMin)));
+  const any = rank(hits);
+
+  if (meetingMin.length > 0) {
+    return { ok: true, python: meetingMin[0]! };
+  }
+  if (!requireMin && any.length > 0) {
+    return { ok: true, python: any[0]! };
+  }
+
+  return {
+    ok: false,
+    reason: `no Python >= ${preferMin.major}.${preferMin.minor} found (need typing.Required / modern packaging). Tried: ${tried.join(', ') || 'none'}. Set BABEL_WORKSPACE_PYTHON to a 3.11+ interpreter or install Python ${preferMin.major}.${preferMin.minor}+.`,
+    tried,
+  };
+}
+
+/** Resolve a string path/command for probes; prefers 3.11+ when present. */
+function resolveSystemPythonBin(min?: { major: number; minor: number }): string {
+  const resolved = resolveSystemPython({
+    minMajor: min?.major ?? DEFAULT_MIN_PYTHON.major,
+    minMinor: min?.minor ?? DEFAULT_MIN_PYTHON.minor,
+    requireMin: false,
+  });
+  if (resolved.ok) return resolved.python.bin;
+  return process.platform === 'win32' ? 'python' : 'python3';
 }
 
 /**
@@ -278,7 +479,7 @@ export function probePythonImport(input: {
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
 }): { ok: boolean; detail: string } {
-  const py = input.pythonBin ?? resolveSystemPython();
+  const py = input.pythonBin ?? resolveSystemPythonBin();
   const code = `import importlib; importlib.import_module(${JSON.stringify(input.packageName)}); print("ok")`;
   const r = spawnSync(py, ['-c', code], {
     cwd: input.cwd,
@@ -325,7 +526,7 @@ export function probePytestCollect(input: {
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
 }): { ok: boolean; detail: string } {
-  const py = input.pythonBin ?? resolveSystemPython();
+  const py = input.pythonBin ?? resolveSystemPythonBin();
   const args = ['-m', 'pytest', '--collect-only', '-q'];
   if (input.testPath?.trim()) {
     args.push(input.testPath.trim());
@@ -622,6 +823,21 @@ function runCmd(
  * editable/requirements/npm deps. When install is false (product guidance path),
  * only probes and reports readiness.
  */
+/**
+ * Optional hard minimum from env (`BABEL_MIN_PYTHON=3.11`).
+ * When unset, preflight *prefers* 3.11+ but does not fail solely on 3.10.
+ */
+export function parseMinPythonEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): { major: number; minor: number } | null {
+  const raw = env['BABEL_MIN_PYTHON']?.trim() || env['BABEL_REQUIRE_PYTHON_MIN']?.trim();
+  if (raw) {
+    const m = raw.match(/^(\d+)\.(\d+)/);
+    if (m) return { major: Number(m[1]), minor: Number(m[2]) };
+  }
+  return null;
+}
+
 export function runWorkspaceDepPreflight(input: {
   workspaceRoot: string;
   packageHint?: string | null;
@@ -631,6 +847,14 @@ export function runWorkspaceDepPreflight(input: {
   install?: boolean;
   installTimeoutMs?: number;
   probeTimeoutMs?: number;
+  /**
+   * Hard minimum CPython for venv creation. When set (or via BABEL_MIN_PYTHON),
+   * preflight refuses <min instead of creating a doomed 3.10 venv.
+   * SWE-Pro campaigns should pass 3.11.
+   */
+  minPython?: { major: number; minor: number };
+  /** When true, enforce DEFAULT_MIN_PYTHON (3.11) even if env unset. */
+  requireMinPython?: boolean;
 }): WorkspaceDepPreflightResult {
   const started = performance.now();
   const workspaceRoot = resolve(input.workspaceRoot);
@@ -639,6 +863,17 @@ export function runWorkspaceDepPreflight(input: {
   const install = input.install !== false;
   const installTimeout = input.installTimeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS;
   const probeTimeout = input.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+  const minPython =
+    input.minPython ??
+    parseMinPythonEnv() ??
+    (input.requireMinPython
+      ? { major: DEFAULT_MIN_PYTHON.major, minor: DEFAULT_MIN_PYTHON.minor }
+      : null);
+  const preferMin = minPython ?? {
+    major: DEFAULT_MIN_PYTHON.major,
+    minor: DEFAULT_MIN_PYTHON.minor,
+  };
+  const requireMin = minPython != null;
 
   if (plan.kind === 'none') {
     return {
@@ -724,8 +959,32 @@ export function runWorkspaceDepPreflight(input: {
     };
   }
 
-  // Python paths
-  const systemPy = resolveSystemPython();
+  // Python paths — prefer 3.11+; hard-require when minPython / BABEL_MIN_PYTHON set.
+  const systemResolved = resolveSystemPython({
+    minMajor: preferMin.major,
+    minMinor: preferMin.minor,
+    requireMin,
+  });
+  if (!systemResolved.ok) {
+    return {
+      plan,
+      ready: false,
+      installed: false,
+      blocked: true,
+      reason: systemResolved.reason,
+      venvPath: null,
+      pathPrefix: null,
+      pythonBin: null,
+      pythonExecutableValid: false,
+      commands,
+      probeDetail: `python_resolve_failed tried=${systemResolved.tried.join('|')}`,
+      durationMs: Math.round(performance.now() - started),
+    };
+  }
+  const systemPy = systemResolved.python.bin;
+  commands.push(
+    `# system_python=${systemPy} version=${systemResolved.python.version} source=${systemResolved.python.source} prefer=${preferMin.major}.${preferMin.minor} requireMin=${requireMin}`,
+  );
   let pythonBin = systemPy;
   let venvPath: string | null = null;
   let pathPrefix: string | null = null;
@@ -812,7 +1071,26 @@ export function runWorkspaceDepPreflight(input: {
   // Create venv + install
   venvPath = join(workspaceRoot, BABEL_WORKSPACE_VENV);
 
-  if (!resolveVenvPython(workspaceRoot)) {
+  const venvMeetsMin = (bin: string): boolean => {
+    if (!requireMin) return true;
+    const probed = probePythonInvocation(bin);
+    return Boolean(probed && pythonVersionMeetsMin(probed, preferMin));
+  };
+
+  let existingVenv = resolveVenvPython(workspaceRoot);
+  if (existingVenv && requireMin && !venvMeetsMin(existingVenv)) {
+    commands.push(
+      `# recreate_venv: existing interpreter below min ${preferMin.major}.${preferMin.minor}`,
+    );
+    try {
+      rmSync(venvPath, { recursive: true, force: true });
+    } catch {
+      // best-effort; create will fail clearly if stale dir blocks
+    }
+    existingVenv = null;
+  }
+
+  if (!existingVenv) {
     commands.push(`${systemPy} -m venv ${BABEL_WORKSPACE_VENV}`);
     mkdirSync(workspaceRoot, { recursive: true });
     const venv = runCmd(systemPy, ['-m', 'venv', BABEL_WORKSPACE_VENV], {
@@ -827,12 +1105,29 @@ export function runWorkspaceDepPreflight(input: {
         ready: false,
         installed: false,
         blocked: true,
-        reason: `venv create failed: ${venv.detail}`,
+        reason: `venv create failed with ${systemPy} (${systemResolved.python.version}): ${venv.detail}`,
         venvPath,
         pathPrefix: null,
         pythonBin: systemPy,
+        pythonExecutableValid: true,
         commands,
         probeDetail: venv.detail,
+        durationMs: Math.round(performance.now() - started),
+      };
+    }
+    if (requireMin && !venvMeetsMin(resolvedAfter)) {
+      return {
+        plan,
+        ready: false,
+        installed: false,
+        blocked: true,
+        reason: `venv python is below min ${preferMin.major}.${preferMin.minor} after create with ${systemPy}`,
+        venvPath,
+        pathPrefix: null,
+        pythonBin: resolvedAfter,
+        pythonExecutableValid: true,
+        commands,
+        probeDetail: `venv_version_below_min system=${systemResolved.python.version}`,
         durationMs: Math.round(performance.now() - started),
       };
     }
@@ -855,7 +1150,7 @@ export function runWorkspaceDepPreflight(input: {
       pythonExecutableValid: false,
       commands,
       probeDetail: executable.detail,
-      durationMs: Math.round(performance.now() - started),
+    durationMs: Math.round(performance.now() - started),
     };
   }
   pathPrefix = dirname(pythonBin);

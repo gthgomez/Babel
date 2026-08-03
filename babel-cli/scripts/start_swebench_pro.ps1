@@ -130,10 +130,12 @@ $npmArgs.Add('--json') | Out-Null
 # Bake honesty env into the script: Win32_Process.Create does not reliably inherit
 # PowerShell session env mutations for all child trees.
 $passMode = if ($env:BABEL_SWE_PRO_PASS_MODE) { $env:BABEL_SWE_PRO_PASS_MODE } else { 'both' }
+$minPython = if ($env:BABEL_MIN_PYTHON) { $env:BABEL_MIN_PYTHON } else { '3.11' }
 $launchBody = @(
   '@echo off'
   "cd /d `"$packageRoot`""
   "set BABEL_SWE_PRO_PASS_MODE=$passMode"
+  "set BABEL_MIN_PYTHON=$minPython"
   "call npm.cmd $($npmArgs -join ' ') > `"$stdoutPath`" 2> `"$stderrPath`""
   "echo EXIT_CODE=%ERRORLEVEL%>> `"$stderrPath`""
 )

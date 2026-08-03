@@ -1192,6 +1192,8 @@ function defaultRunLiveCell(
       packageHint: packageHintFromRepo(instance.repo),
       testPath: verifierTestPath,
       install: true,
+      // typing.Required and modern packaging — refuse host Python 3.10 venvs.
+      minPython: { major: 3, minor: 11 },
     });
     depEnvPatch = preflight;
     depNotes = [
@@ -1200,6 +1202,7 @@ function defaultRunLiveCell(
       `dep_installed=${preflight.installed}`,
       `dep_kind=${preflight.plan.kind}`,
       `dep_package=${preflight.plan.packageHint ?? 'null'}`,
+      `dep_python=${preflight.pythonBin ?? 'null'}`,
       `dep_ms=${preflight.durationMs}`,
       ...(preflight.softDepsAttempted
         ? [
