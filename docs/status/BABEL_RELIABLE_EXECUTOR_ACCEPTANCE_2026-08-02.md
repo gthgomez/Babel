@@ -80,3 +80,48 @@ Latest Wave 0 disposition: no live provider call was made during this
 revalidation. The next parity step is a Linux/container-backed SWE-Pro
 preflight (Python 3.11+ and a short `/app`-style workspace), followed by the
 same three-cell mock gate and only then an explicitly authorized live canary.
+
+## Gate 0 operator path (2026-08-03)
+
+Implementation landed on `codex/reliable-executor-acceptance`:
+
+| Commit | Content |
+| --- | --- |
+| `47b72c8` | Wave 0 measurement truth + `/swe-pro-campaign` skill |
+| `07c9f86` | Detached campaigns via `Win32_Process.Create` (Job Object escape) |
+
+### Preflight
+
+- Receipt: `runs/agent-benchmark/swe-pro/preflight-gate0/preflight-receipt.json`
+- `docker_python311_ok=true` (python:3.11-slim → 3.11.15)
+- Host Python remains 3.10 (`typing.Required` unavailable on host)
+
+### Detached `gate0-mock` (complete)
+
+- Evidence: `runs/agent-benchmark/swe-pro/gate0-mock-20260802-200957`
+- Campaign id: `2026-08-03T01-09-59-mock`
+- Harvest: `harvest-summary.md` / `harvest-summary.json`
+- **Outer reliability:** campaign finished with `campaign-report.json` (no accidental tool timeout)
+- **Infra:** 2/2 `infra:ok` (openlibrary + qutebrowser)
+- **Live mock:** 2/2 honest `agent:env_blocked` (zero false completes, zero provider spend)
+  - openlibrary: venv built from host Python 3.10 → `ImportError: cannot import name 'Required' from 'typing'`
+  - qutebrowser: collect fails on missing pytest plugins after install
+- **Positive harness facts:** `test_patch_applied=true` (git_apply) on both live cells; dep install attempted; native `Scripts` venv paths used
+- **Note:** report `pass_mode` recorded as `gold` — detached launcher now bakes `BABEL_SWE_PRO_PASS_MODE=both` into `launch.cmd` for subsequent runs
+
+### Gate 0 exit status
+
+| Criterion | Status |
+| --- | --- |
+| Wave 0 code landed | **PASS** |
+| Detached finish + report | **PASS** |
+| Honest classifications | **PASS** |
+| Working Py≥3.11 agent/verify plane | **FAIL** (Docker probe OK; campaign still creates venvs with host 3.10) |
+| Live DeepSeek conformance canary | **NOT RUN** (needs authorize + Py 3.11 plane) |
+| Gate 0 overall | **PARTIAL** — operator skill works; measurement plane must inject Python 3.11 into dep preflight/venv before canary |
+
+### Next
+
+1. Prefer system Python 3.11+ for `runWorkspaceDepPreflight` (or document Docker-in-WSL workspace execution).
+2. Re-run detached `gate0-mock` until live cells reach readiness (or honest non-Python blocks only).
+3. Explicitly authorized `gate0-canary` (limit=1, thinking on).

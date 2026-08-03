@@ -127,9 +127,13 @@ $npmArgs.Add("`"$heartbeatPath`"") | Out-Null
 $npmArgs.Add('--json') | Out-Null
 
 # launch.cmd keeps a durable process identity for monitor (cmd stays alive for full campaign).
+# Bake honesty env into the script: Win32_Process.Create does not reliably inherit
+# PowerShell session env mutations for all child trees.
+$passMode = if ($env:BABEL_SWE_PRO_PASS_MODE) { $env:BABEL_SWE_PRO_PASS_MODE } else { 'both' }
 $launchBody = @(
   '@echo off'
   "cd /d `"$packageRoot`""
+  "set BABEL_SWE_PRO_PASS_MODE=$passMode"
   "call npm.cmd $($npmArgs -join ' ') > `"$stdoutPath`" 2> `"$stderrPath`""
   "echo EXIT_CODE=%ERRORLEVEL%>> `"$stderrPath`""
 )
