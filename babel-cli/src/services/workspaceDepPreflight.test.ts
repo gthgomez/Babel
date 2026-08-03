@@ -15,7 +15,9 @@ import {
   packageHintFromRepo,
   packageNameFromPyproject,
   parseMissingModulesFromProbe,
+  parseMissingPytestPluginsFromProbe,
   parsePythonVersion,
+  parseRequiredPluginsFromPytestIni,
   pythonVersionMeetsMin,
   resolveSoftDepSpecForModule,
   resolveSystemPython,
@@ -27,6 +29,27 @@ import {
 } from './workspaceDepPreflight.js';
 
 describe('workspaceDepPreflight', () => {
+  test('parseMissingPytestPluginsFromProbe and pytest.ini required_plugins', () => {
+    const plugins = parseMissingPytestPluginsFromProbe(
+      'ERROR: Missing required plugins: pytest-bdd, pytest-benchmark, pytest-qt',
+    );
+    assert.deepEqual(plugins, ['pytest-bdd', 'pytest-benchmark', 'pytest-qt']);
+    const fromIni = parseRequiredPluginsFromPytestIni(`
+[pytest]
+required_plugins =
+    pytest-bdd
+    pytest-benchmark
+    pytest-instafail
+markers =
+    gui: tests
+`);
+    assert.deepEqual(fromIni, [
+      'pytest-bdd',
+      'pytest-benchmark',
+      'pytest-instafail',
+    ]);
+  });
+
   test('W1 A: parseMissingModulesFromProbe extracts import names', () => {
     const detail = `
 ImportError while loading conftest 'openlibrary/conftest.py'.

@@ -131,6 +131,20 @@ describe('swebenchProCampaign early-stop', () => {
       }),
       'agent:blocked_policy',
     );
+    // Mock openlibrary: env_blocked=false but policy log mentions env_blocked
+    assert.equal(
+      classifyCampaignFailureSignature({
+        phase: 'live',
+        statusText: 'NEEDS_MORE_CONTEXT',
+        terminalOutcome: 'AGENT_FAILURE',
+        envBlocked: false,
+        patchBytes: 0,
+        goldDiffOk: false,
+        stdoutStderr:
+          'progress_policy env_blocked: ENV_BLOCKED: verification cannot run in this environment',
+      }),
+      'agent:empty_patch',
+    );
     // Explicit ENV_BLOCKED status
     assert.equal(
       classifyCampaignFailureSignature({

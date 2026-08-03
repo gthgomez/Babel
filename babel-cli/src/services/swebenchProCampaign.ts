@@ -355,7 +355,10 @@ export function classifyCampaignFailureSignature(input: {
   if (status === 'BLOCKED') {
     // Legacy generic BLOCKED: prefer policy unless blob is clearly env-only
     // and no policy markers — still require clear env signal in blob.
+    // Never override an explicit envBlocked=false (in-agent policy may log
+    // "env_blocked:" wording without host quarantine).
     if (
+      input.envBlocked !== false &&
       /env_blocked|importerror|modulenotfound|while loading conftest/i.test(blob) &&
       !/investigate.?hard.?cap|zero.?write|blocked_policy|progress_terminal/i.test(blob)
     ) {
@@ -363,8 +366,26 @@ export function classifyCampaignFailureSignature(input: {
     }
     return 'agent:blocked_policy';
   }
-  // Blob heuristics only when structured status/outcome were absent
-  if (/env_blocked|importerror|modulenotfound|while loading conftest/i.test(blob)) {
+  // Structured non-env terminals with zero production patch: empty_patch beats
+  // blob "env_blocked" noise from progress-policy shadow logs (mock openlibrary).
+  if (
+    input.envBlocked === false &&
+    (input.patchBytes ?? 0) === 0 &&
+    (status === 'NEEDS_MORE_CONTEXT' ||
+      terminal === 'AGENT_FAILURE' ||
+      terminal === 'BLOCKED_EXTERNAL' ||
+      terminal === 'BLOCKED_POLICY')
+  ) {
+    return 'agent:empty_patch';
+  }
+  // Blob heuristics only when structured status/outcome were absent AND
+  // envBlocked was not explicitly false.
+  if (
+    input.envBlocked !== false &&
+    !status &&
+    !terminal &&
+    /env_blocked|importerror|modulenotfound|while loading conftest/i.test(blob)
+  ) {
     return 'agent:env_blocked';
   }
   if (status === 'NEEDS_MORE_CONTEXT' || /blocked_policy|BLOCKED_POLICY/i.test(blob)) {

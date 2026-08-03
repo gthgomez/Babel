@@ -99,6 +99,11 @@ function listRequirementFiles(root: string): string[] {
     'test-requirements.txt',
     'requirements-test.txt',
     'dev-requirements.txt',
+    // Common nested layouts (e.g. qutebrowser / misc packages)
+    'requirements/tests.txt',
+    'requirements/requirements.txt',
+    'misc/requirements/requirements-tests.txt',
+    'misc/requirements/requirements.txt',
   ];
   return candidates.filter((c) => fileExists(root, c));
 }
@@ -596,6 +601,69 @@ export function parseMissingModulesFromProbe(detail: string | null | undefined):
 }
 
 /**
+ * Parse `ERROR: Missing required plugins: pytest-bdd, pytest-qt, …` from collect.
+ * Pip distribution names match the plugin names for the common pytest-* set.
+ */
+export function parseMissingPytestPluginsFromProbe(
+  detail: string | null | undefined,
+): string[] {
+  if (!detail?.trim()) return [];
+  const out: string[] = [];
+  const m = detail.match(/Missing required plugins:\s*([^\n\r]+)/i);
+  if (!m?.[1]) return out;
+  for (const part of m[1].split(/[,]+/)) {
+    const name = part.trim().replace(/\s+/g, '');
+    if (!name) continue;
+    if (!/^pytest[\w.-]*$/i.test(name) && !/^[\w.-]+$/.test(name)) continue;
+    const pipName = name.toLowerCase();
+    if (!out.includes(pipName)) out.push(pipName);
+  }
+  return out.slice(0, 16);
+}
+
+/**
+ * Read `required_plugins` from pytest.ini (qutebrowser-style multi-line list).
+ */
+export function parseRequiredPluginsFromPytestIni(text: string): string[] {
+  const out: string[] = [];
+  const lines = text.split(/\r?\n/);
+  let inRequired = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^required_plugins\s*=/.test(trimmed)) {
+      inRequired = true;
+      const same = trimmed.replace(/^required_plugins\s*=\s*/, '').trim();
+      if (same) {
+        for (const p of same.split(/[,\s]+/)) {
+          if (p && !out.includes(p)) out.push(p);
+        }
+      }
+      continue;
+    }
+    if (inRequired) {
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      if (/^\w+\s*=/.test(trimmed) || trimmed.startsWith('[')) break;
+      const name = trimmed.replace(/[,]/g, '').trim();
+      if (name && !out.includes(name)) out.push(name);
+    }
+  }
+  return out.slice(0, 16);
+}
+
+function readWorkspacePytestRequiredPlugins(workspaceRoot: string): string[] {
+  for (const rel of ['pytest.ini', 'pytest.cfg']) {
+    const path = join(workspaceRoot, rel);
+    if (!existsSync(path)) continue;
+    try {
+      return parseRequiredPluginsFromPytestIni(readFileSync(path, 'utf8'));
+    } catch {
+      // ignore
+    }
+  }
+  return [];
+}
+
+/**
  * Known host soft-deps when collect fails but package import works.
  * Prefer requirements.txt lines when present; these are fallbacks.
  */
@@ -711,10 +779,14 @@ export function installSoftDepsForCollectFail(input: {
   commands?: string[];
   /** Specs already installed this preflight — skip re-pip. */
   alreadyInstalled?: string[];
+  /** Extra pip specs to attempt (e.g. pytest.ini required_plugins). */
+  extraSpecs?: string[];
 }): { installed: string[]; attempted: boolean; detail: string } {
   const workspaceRoot = resolve(input.workspaceRoot);
-  const missing = parseMissingModulesFromProbe(input.probeDetail);
-  if (missing.length === 0) {
+  const missingMods = parseMissingModulesFromProbe(input.probeDetail);
+  const missingPlugins = parseMissingPytestPluginsFromProbe(input.probeDetail);
+  const missing = [...missingMods, ...missingPlugins];
+  if (missing.length === 0 && !(input.extraSpecs?.length)) {
     return { installed: [], attempted: false, detail: 'no_missing_modules' };
   }
   const timeout = input.timeoutMs ?? Math.min(DEFAULT_INSTALL_TIMEOUT_MS, 4 * 60 * 1000);
@@ -735,15 +807,20 @@ export function installSoftDepsForCollectFail(input: {
     }
   }
 
-  const specs: string[] = [];
+  const specs: string[] = [...(input.extraSpecs ?? [])];
   for (const mod of missing) {
+    // pytest-* plugins: pip name is usually the plugin name itself.
+    if (/^pytest[\w.-]*$/i.test(mod)) {
+      specs.push(mod);
+      continue;
+    }
     const found = resolveSoftDepSpecForModule(workspaceRoot, mod, reqBodies);
     if (found) specs.push(found);
   }
   // Dedupe specs; skip already installed this session
   const uniqueSpecs = [
     ...new Set(specs.map((s) => s.trim()).filter((s) => s && !already.has(s))),
-  ].slice(0, 8);
+  ].slice(0, 12);
   if (uniqueSpecs.length === 0) {
     return {
       installed: [],
@@ -772,7 +849,7 @@ export function installSoftDepsForCollectFail(input: {
   return {
     installed,
     attempted: true,
-    detail: `missing=${missing.join(',')} ${details.join(' ')}`.slice(0, 500),
+    detail: `missing=${missing.join(',') || 'plugins'} ${details.join(' ')}`.slice(0, 500),
   };
 }
 
@@ -1184,6 +1261,22 @@ export function runWorkspaceDepPreflight(input: {
   if (pytestInstall.ok) installed = true;
   else lastInstallDetail = pytestInstall.detail || lastInstallDetail;
 
+  // Proactively install pytest.ini required_plugins (qutebrowser) before collect.
+  const requiredPlugins = readWorkspacePytestRequiredPlugins(workspaceRoot);
+  if (requiredPlugins.length > 0) {
+    commands.push(`# pytest_required_plugins=${requiredPlugins.join(',')}`);
+    const pluginInstall = runCmd(
+      pythonBin,
+      ['-m', 'pip', 'install', ...requiredPlugins],
+      {
+        cwd: workspaceRoot,
+        timeoutMs: Math.min(installTimeout, 5 * 60 * 1000),
+      },
+    );
+    lastInstallDetail = pluginInstall.detail || lastInstallDetail;
+    if (pluginInstall.ok) installed = true;
+  }
+
   let probe = probePythonReady(pythonBin);
   if ((!probe.ok || !probe.collectOk) && plan.requirementFiles.length > 0) {
     for (const req of plan.requirementFiles) {
@@ -1202,17 +1295,20 @@ export function runWorkspaceDepPreflight(input: {
   // W1 A + multi-round: package import ok but collect soft-fail → soft-deps.
   // After web installs, next collect often surfaces multipart then infogami —
   // re-probe up to SOFT_DEP_MAX_ROUNDS instead of a single install wave.
+  // Also remediates Missing required plugins: pytest-* (qutebrowser).
   // Full -r requirements often fails on Windows hosts; targeted install is enough for many cells.
   let softDepsAttempted = false;
   let softDepsInstalled: string[] = [];
   let softRound = 0;
-  while (
-    probe.ok &&
-    !probe.collectOk &&
-    parseMissingModulesFromProbe(probe.detail).length > 0 &&
-    softRound < SOFT_DEP_MAX_ROUNDS
-  ) {
+  while (probe.ok && !probe.collectOk && softRound < SOFT_DEP_MAX_ROUNDS) {
     softRound += 1;
+    const missingMods = parseMissingModulesFromProbe(probe.detail);
+    const missingPlugins = parseMissingPytestPluginsFromProbe(probe.detail);
+    // Round 1 may force pytest.ini plugins even if collect text is truncated.
+    const forcePlugins = softRound === 1 ? requiredPlugins : [];
+    if (missingMods.length === 0 && missingPlugins.length === 0 && forcePlugins.length === 0) {
+      break;
+    }
     const soft = installSoftDepsForCollectFail({
       workspaceRoot,
       pythonBin,
@@ -1221,6 +1317,7 @@ export function runWorkspaceDepPreflight(input: {
       timeoutMs: Math.min(installTimeout, 5 * 60 * 1000),
       commands,
       alreadyInstalled: softDepsInstalled,
+      extraSpecs: forcePlugins,
     });
     softDepsAttempted = softDepsAttempted || soft.attempted;
     for (const s of soft.installed) {
