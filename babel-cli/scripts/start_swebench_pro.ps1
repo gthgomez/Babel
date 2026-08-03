@@ -132,13 +132,36 @@ $launchBody = @(
 )
 $launchBody -join "`r`n" | Set-Content -LiteralPath $launcherPath -Encoding ASCII
 
-$process = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', "`"$launcherPath`"") `
-  -WorkingDirectory $packageRoot -WindowStyle Hidden -PassThru
+# Escape the agent/shell Job Object: Start-Process children are often killed when
+# the launching tool completes. Win32_Process.Create starts outside that job.
+$commandLine = "cmd.exe /c `"$launcherPath`""
+$created = $null
+try {
+  $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+    CommandLine = $commandLine
+    CurrentDirectory = $packageRoot
+  }
+} catch {
+  $created = $null
+}
+$pidValue = $null
+$launchMethod = 'win32_process'
+if ($created -and [int]$created.ReturnValue -eq 0 -and $created.ProcessId) {
+  $pidValue = [int]$created.ProcessId
+} else {
+  # Fallback: nested start may break away from some job objects.
+  $launchMethod = 'cmd_start'
+  $fallback = Start-Process -FilePath 'cmd.exe' `
+    -ArgumentList @('/c', "start `"babel-swe-pro`" /MIN cmd.exe /c `"$launcherPath`"") `
+    -WorkingDirectory $packageRoot -WindowStyle Hidden -PassThru
+  $pidValue = $fallback.Id
+}
 
 $meta = [ordered]@{
   schema_version = 1
   profile = $Profile
-  pid = $process.Id
+  pid = $pidValue
+  launch_method = $launchMethod
   started_at = (Get-Date).ToUniversalTime().ToString('o')
   evidence_dir = $evidencePath
   dataset = $datasetPath
@@ -153,6 +176,7 @@ $meta = [ordered]@{
   stdout_log = $stdoutPath
   stderr_log = $stderrPath
   heartbeat_file = $heartbeatPath
+  launcher = $launcherPath
   repo_root = $repoRoot
   package_root = $packageRoot
 }
@@ -160,6 +184,6 @@ $meta = [ordered]@{
 ($meta | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath $pidPath -Encoding UTF8
 ($meta | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath $profilePath -Encoding UTF8
 
-Write-Output "Started SWE-Pro profile=$Profile PID=$($process.Id)"
+Write-Output "Started SWE-Pro profile=$Profile PID=$pidValue method=$launchMethod"
 Write-Output "Evidence: $evidencePath"
 Write-Output "Monitor: pwsh -File babel-cli/scripts/monitor_swebench_pro_live.ps1 -EvidenceDir `"$evidencePath`""
