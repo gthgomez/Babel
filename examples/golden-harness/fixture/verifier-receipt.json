@@ -1,0 +1,19 @@
+{
+  "architecture_version": "harness-v1",
+  "receiptId": "golden-receipt-final",
+  "command": "npm test",
+  "exit_code": 0,
+  "summary": "1 passed",
+  "authority": true,
+  "authority_source": "project_discovery",
+  "stale": false,
+  "verifier_id": "verifier:npm",
+  "argv": ["test"],
+  "boundRevision": {
+    "gitCommitHash": null,
+    "compositeTreeHash": "sim-final-tree-hash-0002",
+    "capturedAt": 1754179200000
+  },
+  "liveRuntime": "partial",
+  "notes": "Shape matches VerifierReceipt + ExecutorVerifierReceipt fields; live chat may omit full boundRevision."
+}

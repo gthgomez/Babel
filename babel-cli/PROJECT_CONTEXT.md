@@ -34,6 +34,31 @@ a clean Babel clone.
 - Prompt catalog and runtime contract changes can affect the whole Babel system.
 - CLI commands that push, deploy, create PRs, or mutate remote state must remain gated.
 
+### Runtime harness (read before large agent/executor edits)
+
+| Document | Role |
+|----------|------|
+| `../docs/architecture/HARNESS_ARCHITECTURE_V1.md` | **Normative** harness architecture (`harness-v1`) |
+| `../docs/architecture/HARNESS_OVERVIEW.md` | Explanatory map only |
+| `../docs/adr/ADR-012-canonical-harness-architecture-v1.md` | Decision record |
+| `CLAUDE.md` (this package) | Ops pointer, high-risk files, test commands |
+| `../examples/golden-harness/` | Golden + negative fixtures |
+| `../tools/check-harness-architecture.ps1` | Drift checker |
+| `src/executor/architectureConformance.test.ts` | Conformance tests |
+
+| Concern | Primary paths under `src/` |
+|---------|----------------------------|
+| Daily loop | `agent/chatEngine.ts`, `interactive/execution/chatCore.ts` |
+| Completion honesty | `agent/completionGatePolicy.ts`, `executor/kernel.ts` |
+| Terminal outcomes | `schemas/agentContracts.ts` (`TerminalOutcome`), `agent/chatEngineObservability.ts` |
+| Mode policy / effects | `executor/contracts.ts` |
+| Governed pipeline | `pipeline.ts`, `pipeline/executorLoop.ts` |
+| Sandbox / profiles | `sandbox.ts`, `config/executionProfiles.ts` |
+| Worktree safety | `services/worktreeSafety.ts`, `services/workspaceTransactions.ts` |
+| Required verifiers (pipeline) | `services/requiredVerifierContract.ts` |
+
+**Invariant:** the model proposes; `executorKernel.completion.decide` owns final terminal honesty for execute modes. This file records **implementation context** and MUST NOT redefine target architecture norms.
+
 ## Verification & Commands
 
 Run from `.\babel-cli`.

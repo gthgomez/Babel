@@ -50,6 +50,8 @@ Its strongest public surfaces are:
 
 The larger pipeline harness is included and typechecked, but it is an advanced surface and may require local model tooling or credentials. Do not treat it as the canonical first success path.
 
+For **runtime harness architecture** (Chat / Plan / Deep controllers, completion authority, isolation, verifiers), the normative document is `docs/architecture/HARNESS_ARCHITECTURE_V1.md`. The daily interactive path is ChatEngine; Prompt OS layers and catalog remain documented in `docs/architecture/ARCHITECTURE.md` and `prompt_catalog.yaml`.
+
 ## Canonical Public Workflow
 
 When using this repository, do this:

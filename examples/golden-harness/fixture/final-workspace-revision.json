@@ -1,0 +1,12 @@
+{
+  "architecture_version": "harness-v1",
+  "gitCommitHash": null,
+  "compositeTreeHash": "sim-final-tree-hash-0002",
+  "fileHashes": {
+    "src/add.ts": "sim-hash-add-fixed",
+    "tests/add.test.ts": "sim-hash-test-protected",
+    "package.json": "sim-hash-pkg"
+  },
+  "capturedAt": 1754179200000,
+  "liveRuntime": false
+}

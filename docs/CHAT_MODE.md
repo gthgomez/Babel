@@ -1,6 +1,6 @@
 <!--
 status: ACTIVE
-last_verified: 2026-08-01
+last_verified: 2026-08-03
 -->
 
 # Babel Chat Mode
@@ -8,6 +8,8 @@ last_verified: 2026-08-01
 > **Status:** ACTIVE
 > **Role:** Default runtime mode for daily coding work — the conversational coding agent loop.
 > **Human entry:** [README.md](../README.md) — quick start and chat-mode showcase.
+> **Harness (normative):** [architecture/HARNESS_ARCHITECTURE_V1.md](./architecture/HARNESS_ARCHITECTURE_V1.md).
+> **Harness (explanatory):** [architecture/HARNESS_OVERVIEW.md](./architecture/HARNESS_OVERVIEW.md).
 
 ## Purpose
 
@@ -22,8 +24,10 @@ When you type `babel "fix this bug"`, chat mode is what handles it: a multi-turn
 | Command | `babel "task"` | `babel plan "task"` | `babel deep "task"` | `babel chat-headless "task"` |
 | Orchestrator | Not loaded | Not loaded | OLS v9 loaded | Not loaded |
 | QA Review | None | Interactive approve/deny | Adversarial reviewer | None |
-| Executor | ChatEngine (multi-turn) | Interactive apply | CLI Executor | ChatEngine (JSON output) |
-| Pipeline stages | None | QA reviewer only | QA + CLI executor | None |
+| Executor | ChatEngine (multi-turn) | Interactive apply / plan profile | CLI Executor (`runExecutorLoop`) | Same ChatEngine (JSON/headless) |
+| Pipeline stages | None | Plan path (not full Stage 4 by default) | QA + Stage 4 executor | None |
+| Shared kernel | Yes (`executor/kernel`) | Yes (read-only / plan terminal) | Yes (proof-carrying policy) | Yes |
+| Completion | Honesty gate + `kernel.completion.decide` | Plan artifact terminal | Gates + verifier contract finalize | Same as chat + **hard** gate (no soft-allow) |
 | Use case | Daily coding, read/edit/verify | Design-first, approve to apply | Governed pipeline | CI/testing, scripted automation |
 
 ## Chat-Headless
@@ -68,20 +72,21 @@ Chat mode's routing is defined in `00_System_Router/OLS-v9-Orchestrator.md` Step
 
 ```
 babel "task"
-  → REPL dispatches to dispatch.ts
-  → mode === 'chat' && verb !== 'deep'
-  → executeChatTask() in chat.ts
-  → ChatEngine in chatEngine.ts (multi-turn agent loop, default maxTurns=8)
-  → Streams via ConversationalRenderer (no stage labels)
-  → Cost + elapsed time footer on completion
+  → CLI: argv rewrite → run --mode chat → runCliChatTask (chatCore.ts)
+  → REPL: dispatch.ts → executeChatTask (chat.ts) → same runChatEngineOnce
+  → ChatEngine (chatEngine.ts) multi-turn loop
+       default maxTurns = 200 (safety ceiling; cost/wall/stall budgets usually stop first)
+       see chatEngineLimits.ts DEFAULT_CHAT_ENGINE_LIMITS
+  → On completion claim:
+       evaluateCompletionGate (completionGatePolicy)
+       computeTerminalOutcome (chatEngineObservability)
+       executorKernel.completion.decide (kernel.ts)  ← final terminal authority
+  → TTY: ConversationalRenderer; cost + elapsed footer
 
 babel chat-headless "task"
-  → REPL dispatches to dispatch.ts
-  → mode === 'chat-headless' → BABEL_HEADLESS=1
-  → executeChatTask() in chat.ts
-  → ChatEngine in chatEngine.ts (same loop, JSON output)
-  → Outputs JSON to stdout (no TUI)
-  → Cost + elapsed time footer on completion
+  → BABEL_HEADLESS=1 / hard gate when non-TTY
+  → Same ChatEngine + same completion authority
+  → JSON/headless payload (no soft-allow of weak verifier greens under required/strict)
 ```
 
 ### REPL Routing Logic
@@ -129,13 +134,29 @@ Chat mode is defined by the REPL dispatch and ChatEngine. Key source files:
 | `babel-cli/src/interactive/execution/chat.ts` | REPL bridge (`executeChatTask()`) |
 | `babel-cli/src/interactive/execution/chatCore.ts` | Shared engine run (`runChatEngineOnce()`) |
 | `babel-cli/src/agent/chatEngine.ts` | Multi-turn agent loop |
+| `babel-cli/src/agent/completionGatePolicy.ts` | Write/verifier honesty gates |
+| `babel-cli/src/executor/kernel.ts` | Shared completion authority |
+| `babel-cli/src/agent/chatEngineObservability.ts` | `computeTerminalOutcome` |
 | `babel-cli/src/agent/chatToolDefinitions.ts` | Tool definitions for chat |
 | `babel-cli/src/agent/chatApproval.ts` | JIT permission approval |
-| `babel-cli/src/config/chatEngineLimits.ts` | Limits (maxTurns, tokens) |
+| `babel-cli/src/config/chatEngineLimits.ts` | Limits (maxTurns=200 default, cost, wall, stall) |
+
+## Completion honesty (harness, not model opinion)
+
+Chat does **not** treat a model “I’m done” answer as success by itself.
+
+1. **Execute tasks** typically need successful **writes** plus policy-dependent verification.
+2. Only **authoritative** verifier commands (project test runners, etc.) may green completion — package installs and ad-hoc `_verify*.py` do not.
+3. Verifier-dependency **tamper** detection (R9) can block after repeated edits to tracked verifier scripts/`package.json` scripts.
+4. Requested `VERIFIED_COMPLETE` can be **downgraded** to `UNVERIFIED_PATCH` by `executorKernel.completion.decide`.
+5. Honest outcomes live in `TerminalOutcome` (`agentContracts.ts`); exit 0 only for `VERIFIED_COMPLETE` | `UNVERIFIED_PATCH`.
+
+Details and normative mode/completion rules: [architecture/HARNESS_ARCHITECTURE_V1.md](./architecture/HARNESS_ARCHITECTURE_V1.md).
 
 ## Contract
 
 - Chat mode never invokes the v9 orchestrator in the REPL path.
 - Chat mode never loads pipeline stages (QA or executor) in the governed pipeline sense.
 - The `--use-chat-pipeline` flag exists as a legacy path for `pipeline.ts` but is not the default.
-- `babel-cli/CLAUDE.md` §Routing Invariants documents the chat mode routing contract for maintainers.
+- Chat **does** share the unified executor kernel (completion + tool mapping) with plan/deep — see [architecture/HARNESS_ARCHITECTURE_V1.md](./architecture/HARNESS_ARCHITECTURE_V1.md) and [architecture/ARCHITECTURE.md](./architecture/ARCHITECTURE.md) §Unified Execution Kernel.
+- Package-local notes: `babel-cli/CLAUDE.md`, `babel-cli/AGENTS.md`, `babel-cli/PROJECT_CONTEXT.md`. Root `CLAUDE.md` remains repo-wide.

@@ -1,0 +1,25 @@
+{
+  "architecture_version": "harness-v1",
+  "capturedAt": "2026-08-03T00:00:00.000Z",
+  "gitCommitHash": null,
+  "compositeTreeHash": "sim-initial-tree-hash-0001",
+  "files": {
+    "src/add.ts": {
+      "contentHash": "sim-hash-add-buggy",
+      "note": "returns a - b (bug)"
+    },
+    "tests/add.test.ts": {
+      "contentHash": "sim-hash-test-protected",
+      "protected": true
+    },
+    "package.json": {
+      "contentHash": "sim-hash-pkg",
+      "protectedScripts": true
+    }
+  },
+  "baselineVerifier": {
+    "command": "npm test",
+    "exitCode": 1,
+    "authority": true
+  }
+}

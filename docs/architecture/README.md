@@ -2,20 +2,44 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-07-26
+last_verified: 2026-08-03
 -->
 
 > **Role**: Architecture guides, layer model specifications, and execution contract documentation for Babel.
 
-## Live Architectural Documentation
+## Start here (agents)
 
 | Document | Description |
 | :--- | :--- |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | **Primary Specification**: High-level system architecture, layer model, and router contracts. |
-| [BABEL_LOCAL_MODE.md](./BABEL_LOCAL_MODE.md) | **Local Mode**: Local workspace harness, session lifecycle, and editor integrations. |
-| [BABEL_FULL_ORCHESTRATION.md](./BABEL_FULL_ORCHESTRATION.md) | **Governed Pipeline**: Deep-mode orchestration, waterfall chains, and 4-stage pipeline topology. |
-| [BABEL_LITE.md](./BABEL_LITE.md) | **Lite Surface**: Lite session model and simplified CLI surface. |
+| [**HARNESS_ARCHITECTURE_V1.md**](./HARNESS_ARCHITECTURE_V1.md) | **Normative** runtime harness specification (`harness-v1`). Authority: canonical. |
+| [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) | **Explanatory** short map — defers to V1. |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | **Prompt OS + system architecture**: six layers, catalog, V9 router, kernel headline. |
+| [../CHAT_MODE.md](../CHAT_MODE.md) | Default daily ChatEngine product path. |
+| [../adr/ADR-012-canonical-harness-architecture-v1.md](../adr/ADR-012-canonical-harness-architecture-v1.md) | Decision record for harness-v1 freeze. |
 
-## Archived Architecture Docs
+## Live architectural documentation
+
+| Document | Description |
+| :--- | :--- |
+| [HARNESS_ARCHITECTURE_V1.md](./HARNESS_ARCHITECTURE_V1.md) | **Normative harness contract** (modes, authority, invariants, gaps). |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | High-level system architecture, layer model, router contracts, kernel. |
+| [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) | Explanatory harness map (not normative). |
+| [BABEL_LOCAL_MODE.md](./BABEL_LOCAL_MODE.md) | Local workspace surfaces, session lifecycle, editor integrations. |
+| [BABEL_FULL_ORCHESTRATION.md](./BABEL_FULL_ORCHESTRATION.md) | Full/Spark multi-agent product lane and proof gates (distinct from pipeline `deep` mutation path — see harness overview). |
+| [BABEL_LITE.md](./BABEL_LITE.md) | Lite session model (**status: STALE** — prefer [../LITE_COMMAND_CONTRACT.md](../LITE_COMMAND_CONTRACT.md) + ChatEngine docs). |
+| [BABEL_CLI_STAGE_WATERFALLS.md](./BABEL_CLI_STAGE_WATERFALLS.md) | Per-stage model waterfalls ↔ `model-policy.json`. |
+| [operator-status-taxonomy.md](./operator-status-taxonomy.md) | Doctor / env operator status codes. |
+| [BABEL_OTEL_SCHEMA-v1.md](./BABEL_OTEL_SCHEMA-v1.md) | OpenTelemetry span schema for governed runs. |
+| [MCP_Adapter-v1.md](./MCP_Adapter-v1.md) | MCP control-plane adapter. |
+| [SKILL_SYSTEM_BRIDGE.md](./SKILL_SYSTEM_BRIDGE.md) | Prompt skills vs package skills. |
+| [SKILL_CATALOG_AND_DOMAIN_DEFAULTS.md](./SKILL_CATALOG_AND_DOMAIN_DEFAULTS.md) | Domain default skill expansion. |
+| [ROUTER_PLATFORM_FIELDS.md](./ROUTER_PLATFORM_FIELDS.md) | Platform routing fields. |
+| [BABEL_PROJECT_SYSTEM_INTEGRATION.md](./BABEL_PROJECT_SYSTEM_INTEGRATION.md) | Babel vs repo-local collaboration systems. |
+
+## Related ADRs
+
+Pipeline and isolation decisions: `docs/adr/ADR-001` through `ADR-004`, `ADR-006`–`ADR-008`, `ADR-010`.
+
+## Archived architecture docs
 
 Historical spikes, process audits, and monolith rescope analysis are archived in the historical development repository and not included in this public release.

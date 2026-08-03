@@ -1,0 +1,8 @@
+{
+  "name": "golden-harness-add",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/add.test.ts"
+  }
+}

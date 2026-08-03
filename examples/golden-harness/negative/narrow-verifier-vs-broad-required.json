@@ -1,0 +1,18 @@
+{
+  "id": "narrow-verifier-vs-broad-required",
+  "architecture_version": "harness-v1",
+  "status": "target",
+  "description": "Required verifier is full suite; actual run is one targeted test — requirement MUST NOT be satisfied.",
+  "required": {
+    "displayCommand": "npm test",
+    "expectedScope": "full"
+  },
+  "actual": {
+    "displayCommand": "npx vitest run src/add.test.ts",
+    "expectedScope": "targeted"
+  },
+  "currentRisk": "pipeline normalizeCommand may collapse identity (lossy)",
+  "expect": {
+    "requirementSatisfied": false
+  }
+}

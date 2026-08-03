@@ -37,6 +37,10 @@ This is the **public, canonical source** for the Babel coding agent (`gthgomez/B
 | Agent/skill lifecycle & execution rules | `AGENTS.md`, `.agents/rules/` (`05`-`09`), `.agents/skills/` |
 | Autonomous goal clearance & research delegation | `.agents/rules/06-autonomous-goal-clearance.md`, `.agents/rules/07-subagent-research-delegation.md` |
 | Public docs (architecture, ADRs, guides, release) | `docs/` — start with `docs/README.md` |
+| **Runtime harness (normative)** | `docs/architecture/HARNESS_ARCHITECTURE_V1.md` |
+| Runtime harness (explanatory map) | `docs/architecture/HARNESS_OVERVIEW.md` |
+| Prompt OS layers + catalog + V9 pipeline | `docs/architecture/ARCHITECTURE.md` |
+| babel-cli package ops (CLI coding / routing pointer) | `babel-cli/CLAUDE.md` |
 | Embedding & vector index decision | `docs/adr/ADR-011-embedding-decision.md` |
 | Coding standards | `ENGINEERING.md` |
 | Public content policy & secret scan | `tools/check-public-content-policy.ps1`, `tools/run-public-secret-scan.ps1` |
@@ -90,9 +94,10 @@ When working on the Babel control plane itself (prompt stack assembly, routing, 
 | File | Scope | Contains |
 |------|-------|----------|
 | `CLAUDE.md` (this file) | Whole Babel control plane | Repo invariants, layer architecture, high-risk zones |
-| `babel-cli/CLAUDE.md` | babel-cli package only | Coding standards, event-loop rules, testing discipline, chat-mode invariants |
+| `babel-cli/CLAUDE.md` | babel-cli package only | Package ops, harness-v1 pointer, high-risk runtime files, verification commands |
+| `docs/architecture/HARNESS_ARCHITECTURE_V1.md` | Runtime harness norms | Sole **normative** harness specification (`harness-v1`) |
 
-The root CLAUDE.md takes precedence for cross-project rules. `babel-cli/CLAUDE.md` is the authority for CLI-specific coding standards.
+The root CLAUDE.md takes precedence for cross-project rules. `babel-cli/CLAUDE.md` is the package ops pointer for CLI work. Harness architecture norms live only in `HARNESS_ARCHITECTURE_V1.md`.
 
 ## Relationship: Public Repo vs Private Vault
 
