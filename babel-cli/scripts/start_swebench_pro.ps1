@@ -89,39 +89,51 @@ $stderrPath = Join-Path $evidencePath 'campaign.stderr.log'
 $heartbeatPath = Join-Path $evidencePath 'heartbeat.json'
 $pidPath = Join-Path $evidencePath 'process.json'
 $profilePath = Join-Path $evidencePath 'profile.json'
+$launcherPath = Join-Path $evidencePath 'launch.cmd'
 
-$arguments = [System.Collections.Generic.List[string]]::new()
-$arguments.Add('run') | Out-Null
-$arguments.Add('benchmark:agent:swe-pro') | Out-Null
-$arguments.Add('--') | Out-Null
+# Build npm args. Use cmd.exe redirection (not Start-Process -Redirect*) so the
+# process tree is not tied to the launching PowerShell pipes/job lifetime.
+$npmArgs = [System.Collections.Generic.List[string]]::new()
+$npmArgs.Add('run') | Out-Null
+$npmArgs.Add('benchmark:agent:swe-pro') | Out-Null
+$npmArgs.Add('--') | Out-Null
 if ($infraOnly) {
-  $arguments.Add('--infra-only') | Out-Null
+  $npmArgs.Add('--infra-only') | Out-Null
 } else {
-  $arguments.Add('--provider') | Out-Null
-  $arguments.Add($provider) | Out-Null
+  $npmArgs.Add('--provider') | Out-Null
+  $npmArgs.Add($provider) | Out-Null
   if ($provider -eq 'live') {
-    $arguments.Add('--model') | Out-Null
-    $arguments.Add($defaultModel) | Out-Null
+    $npmArgs.Add('--model') | Out-Null
+    $npmArgs.Add($defaultModel) | Out-Null
   }
-  $arguments.Add('--agent-timeout-ms') | Out-Null
-  $arguments.Add([string]$defaultAgentTimeoutMs) | Out-Null
-  $arguments.Add('--fail-to-pass-timeout-ms') | Out-Null
-  $arguments.Add([string]$defaultFailToPassTimeoutMs) | Out-Null
+  $npmArgs.Add('--agent-timeout-ms') | Out-Null
+  $npmArgs.Add([string]$defaultAgentTimeoutMs) | Out-Null
+  $npmArgs.Add('--fail-to-pass-timeout-ms') | Out-Null
+  $npmArgs.Add([string]$defaultFailToPassTimeoutMs) | Out-Null
 }
-$arguments.Add('--limit') | Out-Null
-$arguments.Add([string]$defaultLimit) | Out-Null
-$arguments.Add('--early-stop') | Out-Null
-$arguments.Add([string]$defaultEarlyStop) | Out-Null
-$arguments.Add('--dataset') | Out-Null
-$arguments.Add($datasetPath) | Out-Null
-$arguments.Add('--evidence-dir') | Out-Null
-$arguments.Add($evidencePath) | Out-Null
-$arguments.Add('--heartbeat-file') | Out-Null
-$arguments.Add($heartbeatPath) | Out-Null
-$arguments.Add('--json') | Out-Null
+$npmArgs.Add('--limit') | Out-Null
+$npmArgs.Add([string]$defaultLimit) | Out-Null
+$npmArgs.Add('--early-stop') | Out-Null
+$npmArgs.Add([string]$defaultEarlyStop) | Out-Null
+$npmArgs.Add('--dataset') | Out-Null
+$npmArgs.Add("`"$datasetPath`"") | Out-Null
+$npmArgs.Add('--evidence-dir') | Out-Null
+$npmArgs.Add("`"$evidencePath`"") | Out-Null
+$npmArgs.Add('--heartbeat-file') | Out-Null
+$npmArgs.Add("`"$heartbeatPath`"") | Out-Null
+$npmArgs.Add('--json') | Out-Null
 
-$process = Start-Process -FilePath 'npm.cmd' -WorkingDirectory $packageRoot -ArgumentList $arguments.ToArray() `
-  -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -WindowStyle Hidden -PassThru
+# launch.cmd keeps a durable process identity for monitor (cmd stays alive for full campaign).
+$launchBody = @(
+  '@echo off'
+  "cd /d `"$packageRoot`""
+  "call npm.cmd $($npmArgs -join ' ') > `"$stdoutPath`" 2> `"$stderrPath`""
+  "echo EXIT_CODE=%ERRORLEVEL%>> `"$stderrPath`""
+)
+$launchBody -join "`r`n" | Set-Content -LiteralPath $launcherPath -Encoding ASCII
+
+$process = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', "`"$launcherPath`"") `
+  -WorkingDirectory $packageRoot -WindowStyle Hidden -PassThru
 
 $meta = [ordered]@{
   schema_version = 1
