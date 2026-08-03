@@ -78,8 +78,24 @@ if ($null -ne $EarlyStop) { $defaultEarlyStop = [int]$EarlyStop }
 if ($null -ne $AgentTimeoutMs) { $defaultAgentTimeoutMs = [int]$AgentTimeoutMs }
 if ($null -ne $FailToPassTimeoutMs) { $defaultFailToPassTimeoutMs = [int]$FailToPassTimeoutMs }
 
+# Load babel-cli/.env for live credentials without printing values (dotenv-style KEY=VAL).
+$envFile = Join-Path $packageRoot '.env'
+if (Test-Path -LiteralPath $envFile) {
+  Get-Content -LiteralPath $envFile | ForEach-Object {
+    $line = $_.Trim()
+    if (-not $line -or $line.StartsWith('#')) { return }
+    $eq = $line.IndexOf('=')
+    if ($eq -lt 1) { return }
+    $k = $line.Substring(0, $eq).Trim()
+    $v = $line.Substring($eq + 1).Trim().Trim('"').Trim("'")
+    if ($k -and -not [string]::IsNullOrWhiteSpace($v) -and -not (Test-Path "Env:$k")) {
+      Set-Item -Path "Env:$k" -Value $v
+    }
+  }
+}
+
 if ($provider -eq 'live' -and [string]::IsNullOrWhiteSpace($env:DEEPSEEK_API_KEY)) {
-  throw "Profile $Profile requires DEEPSEEK_API_KEY in the environment (value not logged)."
+  throw "Profile $Profile requires DEEPSEEK_API_KEY in the environment or babel-cli/.env (value not logged)."
 }
 
 # Honesty dual scoreboard for all skill-started campaigns
