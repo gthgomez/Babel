@@ -17,6 +17,7 @@ last_verified: 2026-07-21
 | [ADR-009](ADR-009-tui-rendering-paradigm.md) | Hybrid TUI Rendering Paradigm | Accepted | 2026-06-26 |
 | [ADR-010](ADR-010-app-server-protocol.md) | App Server Protocol Contract | Accepted | 2026-07-01 |
 | [ADR-011](ADR-011-embedding-decision.md) | Local Vector Embeddings Decision | Accepted | 2026-07-05 |
+| [ADR-012](ADR-012-canonical-harness-architecture-v1.md) | Canonical Harness Architecture v1 | Accepted | 2026-08-03 |
 
 ## Status Convention
 

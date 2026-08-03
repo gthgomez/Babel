@@ -7,7 +7,7 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 <!--
 status: ACTIVE
-last_verified: 2026-08-01
+last_verified: 2026-08-03
 -->
 
 # Babel Architecture
@@ -15,6 +15,8 @@ last_verified: 2026-08-01
 > **Role**: Deep technical reference — how Babel works internally. Layer model, catalog system, router, pipeline, and layer precedence.
 > For what Babel is and how to invoke it, see [BABEL_BIBLE.md](../../BABEL_BIBLE.md).
 > For AI-session navigation and invariants, see [CLAUDE.md](../../CLAUDE.md).
+> For the **runtime harness**, the normative specification is [HARNESS_ARCHITECTURE_V1.md](./HARNESS_ARCHITECTURE_V1.md).
+> [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) is an explanatory map only.
 
 ## Overview
 
@@ -22,17 +24,43 @@ Babel is an autonomous Coding Agent CLI with optional governed pipeline mode (Pr
 
 The core design principle: **separate what the model knows from how it behaves**. Behavioral rules (PLAN before ACT, execution gates, epistemic honesty) live in one layer. Domain knowledge (backend engineering, frontend patterns, compliance rules) lives in another. A third layer shapes model-specific output style. These layers compose — they do not override each other.
 
+**Two surfaces agents must not conflate:**
+
+1. **Prompt OS** (this document’s layer model, catalog, V9 routing) — feedforward instruction composition.
+2. **Runtime harness** ([HARNESS_ARCHITECTURE_V1.md](./HARNESS_ARCHITECTURE_V1.md) normative; [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) explanatory) — ChatEngine / pipeline controllers, tools, sandbox, completion honesty, evidence.
+
+```text
+Agent = Model + Harness
+```
+
+The model proposes; the harness owns tools, policy, isolation, and the final terminal outcome.
+
 ## Unified Execution Kernel
 
 The daily ChatEngine path and the governed plan/deep profiles share a
-mode-neutral executor substrate. `babel-cli/src/executor/kernel.ts` owns the
-executor contract, effect classification, completion boundary, and durable
-effect identifiers; `babel-cli/src/agent/chatEngineServices.ts` remains the
-composition boundary for conversation serialization, provider-message replay,
-tool definitions, canonical tool-name normalization, and progress-controller
-creation. `chat` and `deep` retain mutation capability behind their existing
-policy and verification gates; `plan` uses the same substrate with read-only
-effect enforcement and a separate plan-artifact completion path.
+mode-neutral executor substrate. They share **contracts and completion authority**,
+not a single control loop.
+
+| Piece | Path | Owns |
+|-------|------|------|
+| Kernel | `babel-cli/src/executor/kernel.ts` | `completion.decide`, tool execute facade, mode policy binding |
+| Contracts | `babel-cli/src/executor/contracts.ts` | `BabelMode`, effect classes, `CompletionDecision`, canonical events |
+| Services | `babel-cli/src/agent/chatEngineServices.ts` | Conversation serialization, tool defs, progress controllers |
+| Tool names | `babel-cli/src/agent/canonicalToolMapping.ts` | Model aliases ↔ executor names |
+
+**Mode policies** (`modePolicyFor`):
+
+| Mode | Mutation | Approval | Completion |
+|------|----------|----------|------------|
+| `chat` | `normal` | `interactive` | `executor` |
+| `plan` | `read_only` | `handoff_required` | `plan_artifact` |
+| `deep` | `governed` | `stage_gated` | `proof_carrying` |
+
+**Completion authority:** the model may request `VERIFIED_COMPLETE`; the kernel may
+**downgrade** to `UNVERIFIED_PATCH` when honesty gate or proof fails
+(`decideCompletion` in `kernel.ts`). Mid-loop refusal lives in
+`completionGatePolicy.ts` (ChatEngine). Pipeline post-run demotion of COMPLETE
+status lives in the required-verifier contract (`requiredVerifierContract.ts`).
 
 Model-facing names (`read_file`, `run_command`, `write_file`) are normalized at
 the boundary to executor names (`file_read`, `shell_exec`, `file_write`). The
@@ -40,6 +68,17 @@ bidirectional map lives in `babel-cli/src/agent/canonicalToolMapping.ts`, so
 provider aliases and governed executor logs cannot silently grow separate tool
 vocabularies. The kernel does not replace the V9 orchestrator or weaken deep
 mode's QA/evidence stages; it supplies their shared runtime contracts.
+
+**Daily loop entry (not the layer catalog):**
+
+```text
+babel "task" → runCliChatTask → ChatEngine → gates → kernel.completion.decide
+babel deep   → runBabelPipeline Stages 1–4 → runExecutorLoop (deep only)
+```
+
+See [HARNESS_ARCHITECTURE_V1.md](./HARNESS_ARCHITECTURE_V1.md) for normative invariants,
+authority matrix, and subsystem maturity; [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md)
+for a short call-graph map.
 
 ---
 

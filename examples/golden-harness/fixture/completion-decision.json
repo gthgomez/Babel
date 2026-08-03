@@ -1,0 +1,18 @@
+{
+  "architecture_version": "harness-v1",
+  "requestedOutcome": "VERIFIED_COMPLETE",
+  "finalOutcome": "VERIFIED_COMPLETE",
+  "allowed": true,
+  "reason": "proof_carrying_completion_accepted",
+  "evidenceRefs": ["golden-receipt-final", "mutation-batch-2"],
+  "policyVersion": "executor-contract-v1",
+  "workspaceRevision": {
+    "compositeTreeHash": "sim-final-tree-hash-0002",
+    "gitCommitHash": null,
+    "capturedAt": 1754179200000,
+    "fileHashes": {
+      "src/add.ts": "sim-hash-add-fixed"
+    }
+  },
+  "notes": "Mirrors CompletionDecision from executor/contracts.ts; live path uses createExecutorKernel().completion.decide."
+}

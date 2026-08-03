@@ -62,6 +62,8 @@ If Babel control-plane work is requested (`use Babel`, prompt-stack assembly, ro
 
 This is the **canonical public source** of Babel — an open-source coding agent and layered prompt operating system. It assembles the smallest correct instruction stack from behavioral layers, domain architects, skills, adapters, and overlays. This is the independent public source of truth; no separate private source repository is required to build or run Babel.
 
+**Runtime harness norms** (controllers, completion, isolation, verifiers): [`docs/architecture/HARNESS_ARCHITECTURE_V1.md`](./docs/architecture/HARNESS_ARCHITECTURE_V1.md). Explanatory map: [`docs/architecture/HARNESS_OVERVIEW.md`](./docs/architecture/HARNESS_OVERVIEW.md).
+
 ## Antigravity Layout
 
 - `.agents/rules/05-github-workflow.md` — end-to-end GitHub workflow (staging, commit, push, PR)

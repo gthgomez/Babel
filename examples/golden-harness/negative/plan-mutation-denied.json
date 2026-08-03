@@ -1,0 +1,11 @@
+{
+  "id": "plan-mutation-denied",
+  "architecture_version": "harness-v1",
+  "status": "implemented",
+  "description": "Plan requests mutation → deterministic denial path; PLAN_COMPLETE is the only plan success terminal.",
+  "steps": [
+    { "mode": "plan", "action": "request_mutation", "tool": "file_write" },
+    { "expect": "mutationPolicy", "equals": "read_only" },
+    { "expect": "completion.decide VERIFIED_COMPLETE", "finalOutcome": "PLAN_COMPLETE", "allowed": false }
+  ]
+}

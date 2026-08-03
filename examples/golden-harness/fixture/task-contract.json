@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "architecture_version": "harness-v1",
+  "taskId": "golden-add-bug-001",
+  "intent": "Fix add(a, b) so tests/add.test.ts passes",
+  "taskClass": "bug_fix",
+  "mode": "chat",
+  "allowedPaths": ["src/add.ts"],
+  "forbiddenPaths": ["tests/add.test.ts", "package.json"],
+  "requiredVerifierIds": ["verifier:npm-test"],
+  "requiredVerifierCommands": ["npm test"],
+  "allowedTerminalStates": ["VERIFIED_COMPLETE", "BLOCKED_POLICY", "BUDGET_EXHAUSTED"],
+  "budget": {
+    "maxRepairAttempts": 2,
+    "maxWallTimeMs": 120000
+  },
+  "liveRuntime": false,
+  "notes": "Simulated frozen contract for golden episode; pipeline task envelopes are the live analog."
+}

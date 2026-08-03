@@ -13,7 +13,8 @@ Agent-neutral startup router for the Babel CLI package. Root `ENGINEERING.md` an
 
 ## Local Rules
 
-- `PROJECT_CONTEXT.md` is the canonical package-local context for all agents.
+- `PROJECT_CONTEXT.md` is the canonical package-local **implementation** context for all agents.
+- Runtime harness **norms**: `../docs/architecture/HARNESS_ARCHITECTURE_V1.md` (see also `CLAUDE.md` in this package).
 - Edit `src/`, not generated `dist/`.
 - Do not clean `runs/` without explicit user approval.
 - Keep remote-mutating workflows gated and explicit.

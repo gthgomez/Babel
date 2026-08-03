@@ -1,0 +1,28 @@
+{
+  "id": "stale-verifier-receipt",
+  "architecture_version": "harness-v1",
+  "status": "implemented_partial",
+  "description": "Honesty gate rejects receipts already marked stale. Full revision-bound verification remains TARGET.",
+  "implemented": {
+    "honestyRejectsStaleFlag": true,
+    "note": "evaluateExecuteCompletionHonesty returns verifier_stale when receipt.stale === true"
+  },
+  "target": {
+    "controllerDerivesStalenessFromRevision": true,
+    "note": "receipt.boundRevision must match currentWorkspaceRevision (trusted hashes); do not rely on model-set flags"
+  },
+  "live": {
+    "honestyRejectsStaleFlag": true,
+    "systematicRevisionBinding": false
+  },
+  "receipt": {
+    "command": "npm test",
+    "exit_code": 0,
+    "summary": "1 passed",
+    "stale": true
+  },
+  "expectHonesty": {
+    "allow": false,
+    "reason": "verifier_stale"
+  }
+}

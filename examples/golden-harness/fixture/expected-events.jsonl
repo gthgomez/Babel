@@ -1,0 +1,14 @@
+{"seq":1,"eventType":"TASK_CONTRACT_FROZEN","live":false,"payload":{"taskId":"golden-add-bug-001"}}
+{"seq":2,"eventType":"BASELINE_VERIFIER_FAILED","live":false,"payload":{"command":"npm test","exitCode":1}}
+{"seq":3,"eventType":"PLAN_ACCEPTED","live":false,"payload":{"planId":"plan-1"}}
+{"seq":4,"eventType":"MUTATION_STARTED","live":false,"payload":{"paths":["src/add.ts"]}}
+{"seq":5,"eventType":"FILE_MUTATED","live":false,"payload":{"path":"src/add.ts","attempt":1,"note":"incorrect partial fix"}}
+{"seq":6,"eventType":"VERIFIER_FAILED","live":false,"payload":{"command":"npm test","exitCode":1,"attempt":1}}
+{"seq":7,"eventType":"FAILURE_CLASSIFIED","live":false,"payload":{"class":"IMPLEMENTATION_DEFECT"}}
+{"seq":8,"eventType":"REPAIR_STARTED","live":false,"payload":{"attempt":2}}
+{"seq":9,"eventType":"FILE_MUTATED","live":false,"payload":{"path":"src/add.ts","attempt":2,"note":"correct fix a+b"}}
+{"seq":10,"eventType":"VERIFIER_PASSED","live":false,"payload":{"command":"npm test","exitCode":0,"authority":true}}
+{"seq":11,"eventType":"WORKSPACE_REVISION_CAPTURED","live":false,"payload":{"compositeTreeHash":"sim-final-tree-hash-0002"}}
+{"seq":12,"eventType":"COMPLETION_PROPOSED","live":false,"payload":{"requestedOutcome":"VERIFIED_COMPLETE","actor":"model"}}
+{"seq":13,"eventType":"COMPLETION_ACCEPTED","live":true,"payload":{"note":"kernel.completion.decide with proof.compliant + honesty allow"}}
+{"seq":14,"eventType":"VERIFIED_COMPLETE","live":true,"payload":{"finalOutcome":"VERIFIED_COMPLETE"}}
