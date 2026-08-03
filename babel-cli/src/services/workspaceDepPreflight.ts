@@ -681,6 +681,10 @@ export const SOFT_DEP_PIP_FALLBACK: Readonly<Record<string, readonly string[]>> 
   infogami: ['git+https://github.com/internetarchive/infogami.git'],
   eventer: ['eventer'],
   psycopg2: ['psycopg2-binary'],
+  /** qutebrowser / pytest-qt GUI collect needs a Qt binding on the host. */
+  PyQt5: ['PyQt5'],
+  PyQt6: ['PyQt6'],
+  sip: ['PyQt5'],
 };
 
 /**
@@ -815,7 +819,14 @@ export function installSoftDepsForCollectFail(input: {
       continue;
     }
     const found = resolveSoftDepSpecForModule(workspaceRoot, mod, reqBodies);
-    if (found) specs.push(found);
+    if (found) {
+      specs.push(found);
+      continue;
+    }
+    // Last resort for capitalised Qt bindings (import PyQt5 → pip PyQt5).
+    if (/^PyQt\d$/i.test(mod) || /^PySide\d$/i.test(mod)) {
+      specs.push(mod);
+    }
   }
   // Dedupe specs; skip already installed this session
   const uniqueSpecs = [
