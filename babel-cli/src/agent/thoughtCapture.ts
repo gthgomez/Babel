@@ -5,9 +5,8 @@
  * thinking chunks to thoughts.jsonl under the session run_dir. Never
  * re-injects thoughts into the model context.
  *
- * DeepSeek constraint: thinking+tools = HTTP 400. Tool streams remain
- * thinking-off by default (BABEL_DEEPSEEK_THINKING_WITH_TOOLS must
- * explicitly be "1" to enable — do not change the default).
+ * DeepSeek constraint: thinking+tools requires tool_choice omission. The
+ * DeepSeek runner pins thinking on by default and records any explicit opt-out.
  */
 import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';

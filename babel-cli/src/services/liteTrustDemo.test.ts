@@ -8,6 +8,7 @@ import {
   ensureBabelCliDistReady,
   extractCriticReceiptFromCli,
   inspectBabelCliDistFreshness,
+  normalizeCliTimeoutMs,
   parseCliJson,
   readLiteTrustDemoFixture,
   resolveBabelCliDistGateMode,
@@ -66,6 +67,14 @@ test('resolveBabelCliDistGateMode maps env aliases', () => {
 test('resolveBabelCliEntry honors BABEL_CLI_ENTRY override', () => {
   const entry = resolveBabelCliEntry({ BABEL_CLI_ENTRY: 'C:/tmp/custom-entry.js' });
   assert.match(entry.replace(/\\/g, '/'), /custom-entry\.js$/);
+});
+
+test('normalizeCliTimeoutMs treats zero as no deadline and rejects invalid values', () => {
+  assert.equal(normalizeCliTimeoutMs(undefined), undefined);
+  assert.equal(normalizeCliTimeoutMs(0), undefined);
+  assert.equal(normalizeCliTimeoutMs(1234), 1234);
+  assert.throws(() => normalizeCliTimeoutMs(-1), /non-negative integer/);
+  assert.throws(() => normalizeCliTimeoutMs(1.5), /non-negative integer/);
 });
 
 test('inspectBabelCliDistFreshness reports missing and stale dist', () => {

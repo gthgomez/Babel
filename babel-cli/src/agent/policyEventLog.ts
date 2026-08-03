@@ -30,6 +30,8 @@ export type PolicyEventKind =
   | 'investigate_budget'
   | 'token_explosion'
   | 'budget_kill'
+  /** W0: provider spend blocked until a signed readiness receipt verifies. */
+  | 'readiness_block'
   | 'progress_policy'
   | 'progress_terminal'
   | 'failover';

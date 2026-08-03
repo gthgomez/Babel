@@ -125,19 +125,15 @@ describe('DeepSeek tool path thinking guard', () => {
   beforeEach(() => saveEnv());
   afterEach(() => restoreEnv());
 
-  it('by default, thinking+tools is disabled (BABEL_DEEPSEEK_THINKING_WITH_TOOLS not "1")', () => {
+  it('by default, thinking+tools is enabled while tool_choice is omitted', () => {
     delete process.env['BABEL_DEEPSEEK_THINKING'];
     delete process.env['BABEL_DEEPSEEK_THINKING_WITH_TOOLS'];
 
-    // Replicate the logic from deepSeekApi.ts executeWithToolsStream buildBody:
+    // Replicate the routing contract from deepSeekApi.ts:
     const wantThinking = process.env['BABEL_DEEPSEEK_THINKING'] !== 'disabled';
-    const allowThinkingWithTools =
-      process.env['BABEL_DEEPSEEK_THINKING_WITH_TOOLS'] === '1';
-    const thinkingEnabled = wantThinking && allowThinkingWithTools;
+    const thinkingEnabled = wantThinking;
 
-    // Default: thinking is NOT enabled for tool streams
-    assert.equal(thinkingEnabled, false,
-      'DeepSeek tool stream must default to thinking=disabled (HTTP 400 if enabled with tools)');
+    assert.equal(thinkingEnabled, true);
   });
 
   it('explicit BABEL_DEEPSEEK_THINKING=disabled keeps tools thinking-off', () => {
@@ -146,19 +142,17 @@ describe('DeepSeek tool path thinking guard', () => {
 
     const wantThinking = process.env['BABEL_DEEPSEEK_THINKING'] !== 'disabled';
     assert.equal(wantThinking, false);
-    // thinkingEnabled = wantThinking && allowThinkingWithTools = false
+    assert.equal(process.env['BABEL_DEEPSEEK_THINKING'], 'disabled');
   });
 
-  it('BABEL_DEEPSEEK_THINKING_WITH_TOOLS=1 overrides to enable thinking+tools', () => {
+  it('legacy BABEL_DEEPSEEK_THINKING_WITH_TOOLS=1 remains compatible', () => {
     process.env['BABEL_DEEPSEEK_THINKING'] = 'enabled';
     process.env['BABEL_DEEPSEEK_THINKING_WITH_TOOLS'] = '1';
 
     const wantThinking = process.env['BABEL_DEEPSEEK_THINKING'] !== 'disabled';
-    const allowThinkingWithTools =
-      process.env['BABEL_DEEPSEEK_THINKING_WITH_TOOLS'] === '1';
-    const thinkingEnabled = wantThinking && allowThinkingWithTools;
+    const thinkingEnabled = wantThinking;
 
-    // This test documents that the escape hatch exists but is opt-in
+    // The legacy flag is harmless; the explicit thinking flag controls the route.
     assert.equal(thinkingEnabled, true);
   });
 });

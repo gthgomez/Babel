@@ -24,6 +24,7 @@ describe('providerMessages (P0-B protocol fidelity)', () => {
       {
         role: 'assistant',
         content: 'Using tools…',
+        reasoning_content: 'I inspected the relevant module.',
         tool_calls: [
           {
             id: 'call_1',
@@ -41,6 +42,7 @@ describe('providerMessages (P0-B protocol fidelity)', () => {
     assert.equal(wire[1]!.role, 'user');
     assert.equal(wire[2]!.role, 'assistant');
     assert.equal(wire[2]!.tool_calls?.[0]?.id, 'call_1');
+    assert.equal(wire[2]!.reasoning_content, 'I inspected the relevant module.');
     assert.equal(wire[3]!.role, 'tool');
     assert.equal(wire[3]!.tool_call_id, 'call_1');
   });
@@ -217,11 +219,31 @@ describe('providerMessages (P0-B protocol fidelity)', () => {
     assert.deepEqual(liveMessages, resumedMessages);
   });
 
+  test('resume preserves DeepSeek reasoning_content with assistant tool calls', () => {
+    const log = createThreadEventLog('deepseek-reasoning-resume');
+    const turnId = startTurn(log, {
+      task: 'edit the file',
+      model: 'deepseek-v4-flash',
+      provider: 'deepseek',
+      projectRoot: '/test',
+      policyPreset: 'workspace_write',
+    });
+    recordAssistantToolCalls(
+      log,
+      turnId,
+      'Using tools…',
+      [{ id: 'reason_call', type: 'function', function: { name: 'read_file', arguments: '{}' } }],
+      'I need the current file before editing.',
+    );
+    const resumed = rebuildProviderMessagesFromEvents(log, { systemPrompt: 'sys' });
+    assert.equal(resumed[2]?.reasoning_content, 'I need the current file before editing.');
+  });
+
   test('DeepSeek provider wire format regression coverage', () => {
     // Tests mapProviderMessagesToWire with DeepSeek specific expectations
     const messages: ProviderMessage[] = [
       { role: 'user', content: 'hello' },
-      { role: 'assistant', content: 'thinking', tool_calls: [{ id: 'ds_call', type: 'function', function: { name: 'ls', arguments: '{}' } }] },
+      { role: 'assistant', content: 'thinking', reasoning_content: 'reasoning', tool_calls: [{ id: 'ds_call', type: 'function', function: { name: 'ls', arguments: '{}' } }] },
       { role: 'tool', content: 'file.txt', tool_call_id: 'ds_call' },
     ];
 
@@ -232,6 +254,7 @@ describe('providerMessages (P0-B protocol fidelity)', () => {
     assert.equal(wire[2]!.role, 'assistant');
     assert.ok(wire[2]!.tool_calls);
     assert.equal(wire[2]!.tool_calls![0]!.id, 'ds_call');
+    assert.equal(wire[2]!.reasoning_content, 'reasoning');
     assert.equal(wire[3]!.role, 'tool');
     assert.equal(wire[3]!.tool_call_id, 'ds_call');
   });

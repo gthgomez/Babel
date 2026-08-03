@@ -5,6 +5,9 @@ import { z } from 'zod';
 
 const originalFetch = globalThis.fetch;
 const originalApiKey = process.env['DEEPSEEK_API_KEY'];
+const originalReasoningEffort = process.env['BABEL_REASONING_EFFORT'];
+const originalThinking = process.env['BABEL_DEEPSEEK_THINKING'];
+const originalThinkingWithTools = process.env['BABEL_DEEPSEEK_THINKING_WITH_TOOLS'];
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -13,23 +16,42 @@ test.afterEach(() => {
   } else {
     process.env['DEEPSEEK_API_KEY'] = originalApiKey;
   }
+  for (const [name, value] of [
+    ['BABEL_REASONING_EFFORT', originalReasoningEffort],
+    ['BABEL_DEEPSEEK_THINKING', originalThinking],
+    ['BABEL_DEEPSEEK_THINKING_WITH_TOOLS', originalThinkingWithTools],
+  ] as const) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
 });
 
 test('DeepSeek API runner calls the direct OpenAI-compatible endpoint', async () => {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
   let requestUrl = '';
-  let requestBody: { model?: string; response_format?: { type?: string } } = {};
+  process.env['BABEL_REASONING_EFFORT'] = 'medium';
+  let requestBody: {
+    model?: string;
+    response_format?: { type?: string };
+    reasoning_effort?: string;
+    thinking?: { type?: string };
+  } = {};
 
   globalThis.fetch = (async (input, init) => {
     requestUrl = String(input);
     requestBody = JSON.parse(String(init?.body ?? '{}')) as {
       model?: string;
       response_format?: { type?: string };
+      reasoning_effort?: string;
+      thinking?: { type?: string };
     };
     return new Response(
       JSON.stringify({
         choices: [{ message: { content: '{"ok":true}' } }],
+        model: 'deepseek-v4-flash',
+        reasoning_effort: 'high',
+        thinking: { type: 'enabled' },
         usage: {
           prompt_tokens: 1000,
           completion_tokens: 2000,
@@ -50,12 +72,26 @@ test('DeepSeek API runner calls the direct OpenAI-compatible endpoint', async ()
   assert.equal(requestUrl, 'https://api.deepseek.com/v1/chat/completions');
   assert.equal(requestBody.model, 'deepseek-v4-flash');
   assert.deepEqual(requestBody.response_format, { type: 'json_object' });
+  assert.equal(requestBody.reasoning_effort, 'high', 'medium must normalize to DeepSeek high');
+  assert.deepEqual(requestBody.thinking, { type: 'enabled' });
   assert.equal(metadata?.provider, 'deepseek');
   assert.equal(metadata?.provider_model_id, 'deepseek-v4-flash');
   assert.equal(metadata?.total_tokens, 3000);
   assert.equal(metadata?.prompt_cache_hit_tokens, 400);
   assert.equal(metadata?.prompt_cache_miss_tokens, 600);
   assert.equal(metadata?.cost_precision, 'exact');
+  assert.equal(metadata?.requested_model_id, 'deepseek-v4-flash');
+  assert.equal(metadata?.normalized_model_id, 'deepseek-v4-flash');
+  assert.equal(metadata?.sent_model_id, 'deepseek-v4-flash');
+  assert.equal(metadata?.observed_model_id, 'deepseek-v4-flash');
+  assert.equal(metadata?.requested_reasoning_effort, 'medium');
+  assert.equal(metadata?.normalized_reasoning_effort, 'high');
+  assert.equal(metadata?.sent_reasoning_effort, 'high');
+  assert.equal(metadata?.observed_reasoning_effort, 'high');
+  assert.equal(metadata?.thinking_requested, true);
+  assert.equal(metadata?.thinking_sent, 'enabled');
+  assert.equal(metadata?.thinking_observed, true);
+  assert.equal(metadata?.tool_choice_sent, null);
   assert.match(metadata?.pricing_source_url ?? '', /deepseek/i);
   assert.ok(Math.abs((metadata?.estimated_cost_usd ?? 0) - 0.00064512) < 1e-12);
 });
@@ -211,6 +247,51 @@ test('DeepSeek API runner executeWithToolsStream yields tool_use for native tool
   assert.equal(metadata?.provider, 'deepseek');
   assert.equal(metadata?.prompt_tokens, 10);
   assert.equal(metadata?.completion_tokens, 5);
+});
+
+test('DeepSeek tool conformance pins thinking, omits tool_choice, and preserves telemetry', async () => {
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  process.env['BABEL_REASONING_EFFORT'] = 'low';
+  const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
+  let requestBody: Record<string, unknown> = {};
+
+  globalThis.fetch = (async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+    return makeSseResponse([
+      'data: {"model":"deepseek-v4-flash","reasoning_effort":"high","choices":[{"index":0,"delta":{"reasoning_content":"Inspecting the file."}}]}',
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_reason","type":"function","function":{"name":"read_file","arguments":"{}"}}]}}]}',
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}',
+      'data: [DONE]',
+    ]);
+  }) as typeof fetch;
+
+  const runner = new DeepSeekApiRunner('deepseek-v4-flash');
+  const events: any[] = [];
+  for await (const event of runner.executeWithToolsStream(
+    [{ role: 'user', content: 'read the file' }],
+    [{
+      type: 'function' as const,
+      function: {
+        name: 'read_file',
+        description: 'Read a file',
+        parameters: { type: 'object', properties: {} },
+      },
+    }],
+  )) {
+    events.push(event);
+  }
+
+  assert.equal((requestBody['reasoning_effort'] as string), 'high');
+  assert.deepEqual(requestBody['thinking'], { type: 'enabled' });
+  assert.equal('tool_choice' in requestBody, false);
+  assert.equal(events[0]?.type, 'thought_delta');
+  const metadata = runner.getLastInvocationMetadata();
+  assert.equal(metadata?.requested_reasoning_effort, 'low');
+  assert.equal(metadata?.normalized_reasoning_effort, 'high');
+  assert.equal(metadata?.sent_reasoning_effort, 'high');
+  assert.equal(metadata?.observed_reasoning_effort, 'high');
+  assert.equal(metadata?.thinking_observed, true);
+  assert.equal(metadata?.tool_choice_sent, null);
 });
 
 test('DeepSeek API runner executeWithToolsStream yields text_delta for completion', async () => {

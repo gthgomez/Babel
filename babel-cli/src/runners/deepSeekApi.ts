@@ -24,6 +24,11 @@ import { extractJson } from '../utils/extractJson.js';
 import { JitDenialError, PolicyBlockedDuplicateError } from '../ui/incrementalToolDetector.js';
 import { createVcrRecorder, createVcrPlayer, type VcrRecorder } from '../services/streamingVcr.js';
 import { parseRateLimitHeaders } from '../ui/rateLimitWidget.js';
+import {
+  resolveReasoningEffort,
+  toDeepSeekReasoningEffort,
+  type ReasoningEffort,
+} from '../config/executionProfiles.js';
 
 const MAX_TOKENS = readPositiveIntEnv('BABEL_DEEPSEEK_TOKENS', 32000);
 const REQUEST_TIMEOUT_MS = readPositiveIntEnv('BABEL_DEEPSEEK_REQUEST_TIMEOUT_MS', 120_000);
@@ -31,13 +36,6 @@ const REQUEST_MAX_RETRIES = readPositiveIntEnv('BABEL_DEEPSEEK_REQUEST_MAX_RETRI
 const STREAM_IDLE_TIMEOUT_MS = readPositiveIntEnv('BABEL_DEEPSEEK_STREAM_IDLE_TIMEOUT_MS', 120_000);
 const RETRY_BASE_DELAY_MS = 200;
 const API_URL = 'https://api.deepseek.com/v1/chat/completions';
-
-const VALID_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'max']);
-
-function resolveReasoningEffort(): string | undefined {
-  const raw = process.env['BABEL_REASONING_EFFORT']?.trim().toLowerCase();
-  return raw && VALID_REASONING_EFFORTS.has(raw) ? raw : undefined;
-}
 
 const SYSTEM_PROMPT =
   'You are executing a Babel pipeline agent. ' +
@@ -54,10 +52,13 @@ const CHAT_SYSTEM_PROMPT =
   'Do NOT output JSON — respond in plain natural language.';
 
 interface ChatChoice {
-  message?: { content?: string | null };
+  message?: { content?: string | null; reasoning_content?: string | null };
 }
 
 interface ChatResponse {
+  model?: string;
+  reasoning_effort?: string;
+  thinking?: { type?: string } | string;
   choices?: ChatChoice[];
   usage?: {
     prompt_tokens?: number;
@@ -66,6 +67,32 @@ interface ChatResponse {
     prompt_cache_hit_tokens?: number;
     prompt_cache_miss_tokens?: number;
   };
+}
+
+type DeepSeekReasoningEffort = 'high' | 'max';
+
+interface DeepSeekStreamState {
+  ttftMs: number | null;
+  generationMs: number | null;
+  usage: ChatResponse['usage'] | null;
+  observedModelId: string | null;
+  observedReasoningEffort: string | null;
+  thinkingObserved: boolean | null;
+}
+
+interface DeepSeekRoutingMetadata {
+  requestedModelId: string;
+  normalizedModelId: DeepSeekModelId;
+  sentModelId: DeepSeekModelId;
+  requestedReasoningEffort: ReasoningEffort;
+  normalizedReasoningEffort: DeepSeekReasoningEffort;
+  sentReasoningEffort: DeepSeekReasoningEffort;
+  observedModelId: string | null;
+  observedReasoningEffort: string | null;
+  thinkingRequested: boolean;
+  thinkingSent: 'enabled' | 'disabled';
+  thinkingObserved: boolean | null;
+  toolChoiceSent: 'auto' | 'required' | null;
 }
 
 function normalizeTokenCount(value: unknown): number | null {
@@ -79,6 +106,7 @@ function buildInvocationMetadata(
   ttftMs?: number | null,
   generationMs?: number | null,
   validationMs?: number | null,
+  routing?: DeepSeekRoutingMetadata,
 ): RunnerInvocationMetadata {
   const promptTokens = normalizeTokenCount(usage?.prompt_tokens);
   const completionTokens = normalizeTokenCount(usage?.completion_tokens);
@@ -116,6 +144,22 @@ function buildInvocationMetadata(
     ttft_ms: ttftMs ?? null,
     generation_ms: generationMs ?? null,
     validation_ms: validationMs ?? null,
+    ...(routing
+      ? {
+          requested_model_id: routing.requestedModelId,
+          normalized_model_id: routing.normalizedModelId,
+          sent_model_id: routing.sentModelId,
+          observed_model_id: routing.observedModelId,
+          requested_reasoning_effort: routing.requestedReasoningEffort,
+          normalized_reasoning_effort: routing.normalizedReasoningEffort,
+          sent_reasoning_effort: routing.sentReasoningEffort,
+          observed_reasoning_effort: routing.observedReasoningEffort,
+          thinking_requested: routing.thinkingRequested,
+          thinking_sent: routing.thinkingSent,
+          thinking_observed: routing.thinkingObserved,
+          tool_choice_sent: routing.toolChoiceSent,
+        }
+      : {}),
   };
 }
 
@@ -152,11 +196,7 @@ async function readStreamingResponse(
   response: Response,
   callbacks: RunnerCallbacks | undefined,
   startedAt: number,
-  state: {
-    ttftMs: number | null;
-    generationMs: number | null;
-    usage: ChatResponse['usage'] | null;
-  },
+  state: DeepSeekStreamState,
   vcrRecorder?: VcrRecorder,
 ): Promise<string> {
   if (!response.body) {
@@ -226,14 +266,26 @@ async function readStreamingResponse(
         }
         try {
           const json = JSON.parse(data) as {
+            model?: string;
+            reasoning_effort?: string;
+            thinking?: { type?: string } | string;
             choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>;
             usage?: ChatResponse['usage'];
           };
+          if (json.model) state.observedModelId = json.model;
+          if (json.reasoning_effort) state.observedReasoningEffort = json.reasoning_effort;
+          if (json.thinking !== undefined) {
+            state.thinkingObserved =
+              typeof json.thinking === 'string'
+                ? json.thinking !== 'disabled'
+                : json.thinking.type !== 'disabled';
+          }
           const delta = json.choices?.[0]?.delta?.content || '';
           const reasoning = json.choices?.[0]?.delta?.reasoning_content || '';
           if (reasoning || delta) {
             lastContentChunkAt = Date.now();
           }
+          if (reasoning) state.thinkingObserved = true;
           if (reasoning && callbacks?.onThought) {
             callbacks.onThought(reasoning);
           }
@@ -263,14 +315,26 @@ async function readStreamingResponse(
     if (data !== '[DONE]') {
       try {
         const json = JSON.parse(data) as {
+          model?: string;
+          reasoning_effort?: string;
+          thinking?: { type?: string } | string;
           choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>;
           usage?: ChatResponse['usage'];
         };
+        if (json.model) state.observedModelId = json.model;
+        if (json.reasoning_effort) state.observedReasoningEffort = json.reasoning_effort;
+        if (json.thinking !== undefined) {
+          state.thinkingObserved =
+            typeof json.thinking === 'string'
+              ? json.thinking !== 'disabled'
+              : json.thinking.type !== 'disabled';
+        }
         const delta = json.choices?.[0]?.delta?.content || '';
         const reasoning = json.choices?.[0]?.delta?.reasoning_content || '';
         if (reasoning || delta) {
           lastContentChunkAt = Date.now();
         }
+        if (reasoning) state.thinkingObserved = true;
         if (reasoning && callbacks?.onThought) {
           callbacks.onThought(reasoning);
         }
@@ -299,6 +363,7 @@ async function readStreamingResponse(
 
 export class DeepSeekApiRunner implements LlmRunner {
   private readonly apiKey: string;
+  private readonly requestedModel: string;
   private readonly model: DeepSeekModelId;
   private lastInvocationMetadata: RunnerInvocationMetadata | null = null;
 
@@ -319,7 +384,29 @@ export class DeepSeekApiRunner implements LlmRunner {
       );
     }
     this.apiKey = key;
+    this.requestedModel = model;
     this.model = assertSupportedDeepSeekModel(model);
+  }
+
+  private buildRoutingMetadata(input: {
+    thinkingRequested: boolean;
+    thinkingSent: 'enabled' | 'disabled';
+    thinkingObserved: boolean | null;
+    observedModelId: string | null;
+    observedReasoningEffort: string | null;
+    toolChoiceSent: 'auto' | 'required' | null;
+  }): DeepSeekRoutingMetadata {
+    const requestedReasoningEffort = resolveReasoningEffort();
+    const normalizedReasoningEffort = toDeepSeekReasoningEffort(requestedReasoningEffort);
+    return {
+      requestedModelId: this.requestedModel,
+      normalizedModelId: this.model,
+      sentModelId: this.model,
+      requestedReasoningEffort,
+      normalizedReasoningEffort,
+      sentReasoningEffort: normalizedReasoningEffort,
+      ...input,
+    };
   }
 
   getLastInvocationMetadata(): RunnerInvocationMetadata | null {
@@ -343,11 +430,7 @@ export class DeepSeekApiRunner implements LlmRunner {
   ): Promise<{
     text: string;
     startedAt: number;
-    streamState: {
-      ttftMs: number | null;
-      generationMs: number | null;
-      usage: ChatResponse['usage'] | null;
-    };
+    streamState: DeepSeekStreamState;
   }> {
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
@@ -366,6 +449,9 @@ export class DeepSeekApiRunner implements LlmRunner {
         ttftMs: null as number | null,
         generationMs: null as number | null,
         usage: null as ChatResponse['usage'] | null,
+        observedModelId: null as string | null,
+        observedReasoningEffort: null as string | null,
+        thinkingObserved: null as boolean | null,
       };
       let firstChunkReceived = false;
       for (const line of lines) {
@@ -377,9 +463,22 @@ export class DeepSeekApiRunner implements LlmRunner {
           }
           try {
             const json = JSON.parse(data) as {
+              model?: string;
+              reasoning_effort?: string;
+              thinking?: { type?: string } | string;
               choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>;
               usage?: ChatResponse['usage'];
             };
+            if (json.model) streamState.observedModelId = json.model;
+            if (json.reasoning_effort) {
+              streamState.observedReasoningEffort = json.reasoning_effort;
+            }
+            if (json.thinking !== undefined) {
+              streamState.thinkingObserved =
+                typeof json.thinking === 'string'
+                  ? json.thinking !== 'disabled'
+                  : json.thinking.type !== 'disabled';
+            }
             if (
               !firstChunkReceived &&
               (json.choices?.[0]?.delta?.content || json.choices?.[0]?.delta?.reasoning_content)
@@ -392,6 +491,7 @@ export class DeepSeekApiRunner implements LlmRunner {
             }
             const delta = json.choices?.[0]?.delta?.content || '';
             const reasoning = json.choices?.[0]?.delta?.reasoning_content || '';
+            if (reasoning) streamState.thinkingObserved = true;
             if (reasoning && callbacks?.onThought) {
               callbacks.onThought(reasoning);
             }
@@ -416,7 +516,7 @@ export class DeepSeekApiRunner implements LlmRunner {
     }
 
     const buildBody = () => {
-      const effort = resolveReasoningEffort();
+      const effort = toDeepSeekReasoningEffort(resolveReasoningEffort());
       const thinkingEnabled = process.env['BABEL_DEEPSEEK_THINKING'] !== 'disabled';
       return JSON.stringify({
         model: this.model,
@@ -425,7 +525,7 @@ export class DeepSeekApiRunner implements LlmRunner {
         ...(raw ? {} : { response_format: { type: 'json_object' as const } }),
         stream: isStreaming,
         ...(isStreaming ? { stream_options: { include_usage: true } } : {}),
-        ...(effort ? { reasoning_effort: effort } : {}),
+        reasoning_effort: effort,
         thinking: { type: thinkingEnabled ? 'enabled' : 'disabled' },
         messages: [
           { role: 'system', content: systemPrompt },
@@ -509,6 +609,9 @@ export class DeepSeekApiRunner implements LlmRunner {
       ttftMs: null as number | null,
       generationMs: null as number | null,
       usage: null as ChatResponse['usage'] | null,
+      observedModelId: null as string | null,
+      observedReasoningEffort: null as string | null,
+      thinkingObserved: null as boolean | null,
     };
 
     if (isStreaming) {
@@ -541,6 +644,16 @@ export class DeepSeekApiRunner implements LlmRunner {
         rawDataText = await response.text();
         data = JSON.parse(rawDataText) as ChatResponse;
         streamState.usage = data.usage;
+        streamState.observedModelId = data.model ?? null;
+        streamState.observedReasoningEffort = data.reasoning_effort ?? null;
+        streamState.thinkingObserved =
+          data.thinking !== undefined
+            ? typeof data.thinking === 'string'
+              ? data.thinking !== 'disabled'
+              : data.thinking.type !== 'disabled'
+            : data.choices?.[0]?.message?.reasoning_content
+              ? true
+              : null;
         text = data?.choices?.[0]?.message?.content ?? '';
       } catch (err) {
         this.lastInvocationMetadata = buildInvocationMetadata(this.model, Date.now() - startedAt);
@@ -614,6 +727,14 @@ export class DeepSeekApiRunner implements LlmRunner {
       streamState.ttftMs,
       streamState.generationMs,
       validationMs,
+      this.buildRoutingMetadata({
+        thinkingRequested: process.env['BABEL_DEEPSEEK_THINKING'] !== 'disabled',
+        thinkingSent: process.env['BABEL_DEEPSEEK_THINKING'] === 'disabled' ? 'disabled' : 'enabled',
+        thinkingObserved: streamState.thinkingObserved,
+        observedModelId: streamState.observedModelId,
+        observedReasoningEffort: streamState.observedReasoningEffort,
+        toolChoiceSent: null,
+      }),
     );
 
     if (!result.success) {
@@ -670,6 +791,15 @@ export class DeepSeekApiRunner implements LlmRunner {
       streamState.usage ?? undefined,
       streamState.ttftMs,
       streamState.generationMs,
+      undefined,
+      this.buildRoutingMetadata({
+        thinkingRequested: process.env['BABEL_DEEPSEEK_THINKING'] !== 'disabled',
+        thinkingSent: process.env['BABEL_DEEPSEEK_THINKING'] === 'disabled' ? 'disabled' : 'enabled',
+        thinkingObserved: streamState.thinkingObserved,
+        observedModelId: streamState.observedModelId,
+        observedReasoningEffort: streamState.observedReasoningEffort,
+        toolChoiceSent: null,
+      }),
     );
 
     return text;
@@ -754,27 +884,23 @@ export class DeepSeekApiRunner implements LlmRunner {
 
     // Track thinking routing for lastInvocationMetadata (P0-B honesty).
     let thinkingDisabledReason: string | null = null;
+    const thinkingRequested = process.env['BABEL_DEEPSEEK_THINKING'] !== 'disabled';
+    const thinkingSent: 'enabled' | 'disabled' = thinkingRequested ? 'enabled' : 'disabled';
+    let toolChoiceSent: 'auto' | 'required' | null = null;
 
     const buildBody = () => {
-      const effort = resolveReasoningEffort();
-      // DeepSeek API: "Thinking mode does not support this tool_choice" (HTTP 400).
-      // Capability matrix says thinkingWithTools is 'unsupported' for DeepSeek.
-      // Override: BABEL_DEEPSEEK_THINKING_WITH_TOOLS=1 (experimental; may 400).
-      const wantThinking = process.env['BABEL_DEEPSEEK_THINKING'] !== 'disabled';
-      const allowThinkingWithTools =
-        process.env['BABEL_DEEPSEEK_THINKING_WITH_TOOLS'] === '1';
-      // resolveProviderCapabilities('deepseek-*').thinkingWithTools === 'unsupported'
-      // unless experimental env forces the interleaved path.
-      const thinkingEnabled = wantThinking && allowThinkingWithTools;
-      if (wantThinking && !allowThinkingWithTools) {
-        thinkingDisabledReason =
-          'thinkingWithTools=unsupported: DeepSeek rejects tool_choice with thinking; set BABEL_DEEPSEEK_THINKING_WITH_TOOLS=1 to force experimental path';
-      } else if (!wantThinking) {
+      const effort = toDeepSeekReasoningEffort(resolveReasoningEffort());
+      // DeepSeek rejects tool_choice while thinking is enabled. Keep thinking
+      // on by default and omit tool_choice; explicit BABEL_DEEPSEEK_THINKING=
+      // disabled remains the opt-out for conformance/debug runs.
+      const thinkingEnabled = thinkingRequested;
+      if (!thinkingRequested) {
         thinkingDisabledReason = 'BABEL_DEEPSEEK_THINKING=disabled';
       } else {
         thinkingDisabledReason = null;
       }
       const choice = (toolChoice ?? 'auto') as 'auto' | 'required';
+      toolChoiceSent = thinkingEnabled ? null : choice;
       return JSON.stringify({
         model: this.model,
         max_tokens: MAX_TOKENS,
@@ -782,9 +908,9 @@ export class DeepSeekApiRunner implements LlmRunner {
         stream: true,
         ...{ stream_options: { include_usage: true } },
         tools,
-        // When thinking is forced on with tools, omit tool_choice (API rejects it).
+        // When thinking is enabled with tools, omit tool_choice (API rejects it).
         ...(thinkingEnabled ? {} : { tool_choice: choice }),
-        ...(effort ? { reasoning_effort: effort } : {}),
+        reasoning_effort: effort,
         thinking: { type: thinkingEnabled ? 'enabled' as const : 'disabled' as const },
         messages: mapProviderMessagesToWire(messages, CHAT_SYSTEM_PROMPT, systemPrompt),
       });
@@ -861,11 +987,14 @@ export class DeepSeekApiRunner implements LlmRunner {
     // Accumulate tool call arguments that arrive incrementally across SSE chunks
     const pendingToolCalls = new Map<number, { id: string; name: string; arguments: string }>();
 
-    const streamState: {
-      ttftMs: number | null;
-      generationMs: number | null;
-      usage: ChatResponse['usage'] | null;
-    } = { ttftMs: null, generationMs: null, usage: null };
+    const streamState: DeepSeekStreamState = {
+      ttftMs: null,
+      generationMs: null,
+      usage: null,
+      observedModelId: null,
+      observedReasoningEffort: null,
+      thinkingObserved: null,
+    };
 
     try {
       let finishReason: string | null = null;
@@ -917,6 +1046,9 @@ export class DeepSeekApiRunner implements LlmRunner {
 
           try {
             const json = JSON.parse(data) as {
+              model?: string;
+              reasoning_effort?: string;
+              thinking?: { type?: string } | string;
               choices?: Array<{
                 delta?: {
                   content?: string | null;
@@ -933,6 +1065,17 @@ export class DeepSeekApiRunner implements LlmRunner {
               usage?: ChatResponse['usage'];
             };
 
+            if (json.model) streamState.observedModelId = json.model;
+            if (json.reasoning_effort) {
+              streamState.observedReasoningEffort = json.reasoning_effort;
+            }
+            if (json.thinking !== undefined) {
+              streamState.thinkingObserved =
+                typeof json.thinking === 'string'
+                  ? json.thinking !== 'disabled'
+                  : json.thinking.type !== 'disabled';
+            }
+
             const choice = json.choices?.[0];
             if (!choice) continue;
 
@@ -940,6 +1083,7 @@ export class DeepSeekApiRunner implements LlmRunner {
 
             // Reasoning content (e.g. DeepSeek's thinking tokens)
             if (delta?.reasoning_content) {
+              streamState.thinkingObserved = true;
               yield { type: 'thought_delta', text: delta.reasoning_content };
             }
 
@@ -983,9 +1127,22 @@ export class DeepSeekApiRunner implements LlmRunner {
         if (data !== '[DONE]') {
           try {
             const json = JSON.parse(data) as {
+              model?: string;
+              reasoning_effort?: string;
+              thinking?: { type?: string } | string;
               choices?: Array<{ finish_reason?: string | null }>;
               usage?: ChatResponse['usage'];
             };
+            if (json.model) streamState.observedModelId = json.model;
+            if (json.reasoning_effort) {
+              streamState.observedReasoningEffort = json.reasoning_effort;
+            }
+            if (json.thinking !== undefined) {
+              streamState.thinkingObserved =
+                typeof json.thinking === 'string'
+                  ? json.thinking !== 'disabled'
+                  : json.thinking.type !== 'disabled';
+            }
             if (json.usage) {
               streamState.usage = json.usage;
             }
@@ -1023,6 +1180,15 @@ export class DeepSeekApiRunner implements LlmRunner {
       streamState.usage ?? undefined,
       streamState.ttftMs,
       streamState.generationMs,
+      undefined,
+      this.buildRoutingMetadata({
+        thinkingRequested,
+        thinkingSent,
+        thinkingObserved: streamState.thinkingObserved,
+        observedModelId: streamState.observedModelId,
+        observedReasoningEffort: streamState.observedReasoningEffort,
+        toolChoiceSent,
+      }),
     );
     if (thinkingDisabledReason) {
       meta.thinking_disabled_reason = thinkingDisabledReason;

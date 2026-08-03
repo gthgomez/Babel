@@ -56,7 +56,8 @@ const CAPABILITY_DEFAULTS: Record<string, Partial<ProviderCapabilities>> = {
     supportsToolChoice: true,
     supportsParallelToolCalls: true,
     supportsStreaming: true,
-    thinkingWithTools: 'unsupported',
+    // DeepSeek accepts thinking with tools when tool_choice is omitted.
+    thinkingWithTools: 'without_tool_choice',
   },
   deepinfra: {
     maxOutputTokens: 8_192,

@@ -14,7 +14,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 export const BABEL_WORKSPACE_VENV = '.babel-venv';
 
@@ -44,6 +44,8 @@ export interface WorkspaceDepPreflightResult {
   /** Directory to prepend to PATH for the agent process. */
   pathPrefix: string | null;
   pythonBin: string | null;
+  /** True only after the selected interpreter executes `--version`. */
+  pythonExecutableValid?: boolean;
   commands: string[];
   probeDetail: string | null;
   durationMs: number;
@@ -199,8 +201,11 @@ export function detectWorkspaceDepPlan(
 }
 
 function resolveSystemPython(): string {
-  // Prefer python3 then python (Windows often only has python).
-  for (const bin of ['python3', 'python']) {
+  // Prefer the native Windows launcher/interpreter. MSYS2 `python3` can create
+  // a valid-looking `bin/` venv whose native-extension wheels cannot run on
+  // the Windows host (notably psycopg2); use it only as a fallback.
+  const candidates = process.platform === 'win32' ? ['python', 'py', 'python3'] : ['python3', 'python'];
+  for (const bin of candidates) {
     const r = spawnSync(bin, ['--version'], {
       encoding: 'utf8',
       windowsHide: true,
@@ -231,6 +236,32 @@ export function resolveVenvPython(workspaceRoot: string): string | null {
   return null;
 }
 
+/**
+ * Validate that a resolved interpreter is executable, not merely present on
+ * disk. This matters on Windows/MSYS layouts where a stale `bin/python.exe`
+ * placeholder can win path resolution but cannot run pytest.
+ */
+export function validatePythonExecutable(input: {
+  pythonBin: string;
+  cwd?: string;
+  timeoutMs?: number;
+}): { ok: boolean; detail: string } {
+  const r = spawnSync(input.pythonBin, ['--version'], {
+    cwd: input.cwd,
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: input.timeoutMs ?? 10_000,
+  });
+  const blob = `${r.stdout ?? ''}\n${r.stderr ?? ''}`.trim();
+  if (r.status === 0 && /python\s+\d/i.test(blob)) {
+    return { ok: true, detail: blob.slice(0, 160) };
+  }
+  return {
+    ok: false,
+    detail: (blob || (r.error ? r.error.message : `exit ${r.status ?? 'null'}`)).slice(0, 500),
+  };
+}
+
 function venvPython(workspaceRoot: string): string {
   return (
     resolveVenvPython(workspaceRoot) ??
@@ -238,13 +269,6 @@ function venvPython(workspaceRoot: string): string {
       ? join(workspaceRoot, BABEL_WORKSPACE_VENV, 'Scripts', 'python.exe')
       : join(workspaceRoot, BABEL_WORKSPACE_VENV, 'bin', 'python'))
   );
-}
-
-function venvScriptsDir(workspaceRoot: string): string {
-  const base = join(workspaceRoot, BABEL_WORKSPACE_VENV);
-  if (existsSync(join(base, 'Scripts'))) return join(base, 'Scripts');
-  if (existsSync(join(base, 'bin'))) return join(base, 'bin');
-  return process.platform === 'win32' ? join(base, 'Scripts') : join(base, 'bin');
 }
 
 export function probePythonImport(input: {
@@ -378,6 +402,9 @@ export const SOFT_DEP_PIP_FALLBACK: Readonly<Record<string, readonly string[]>> 
   web: ['web.py'],
   /** PyPI name for `import multipart` (OpenLibrary requirements pin multipart==0.2.4). */
   multipart: ['multipart'],
+  /** Common transitive imports surfaced by legacy OpenLibrary/infogami collection. */
+  requests: ['requests'],
+  simplejson: ['simplejson'],
   /**
    * OpenLibrary vendors infogami as a git submodule (often empty on shallow clones).
    * Prefer git URL over bare `pip install infogami` (not a reliable PyPI package).
@@ -387,8 +414,15 @@ export const SOFT_DEP_PIP_FALLBACK: Readonly<Record<string, readonly string[]>> 
   psycopg2: ['psycopg2-binary'],
 };
 
-/** Max soft-dep re-probe rounds after collect soft-fail (web → multipart → infogami). */
-export const SOFT_DEP_MAX_ROUNDS = 3;
+/**
+ * Max soft-dep re-probe rounds after collect soft-fail.
+ *
+ * Legacy conftest imports often reveal one missing transitive module per
+ * probe (web → multipart → infogami → simplejson → requests → project
+ * utilities). Keep the remediation finite while allowing the full observed
+ * chain to settle.
+ */
+export const SOFT_DEP_MAX_ROUNDS = 16;
 
 /**
  * Find a requirements line that likely satisfies a missing module.
@@ -401,6 +435,9 @@ export function findRequirementLineForModule(
   const mod = moduleName.trim().toLowerCase();
   if (!mod) return null;
   const aliases = new Set<string>([mod]);
+  // Python import names commonly use underscores while pip distributions use
+  // hyphens (for example paapi5_python_sdk vs paapi5-python-sdk).
+  aliases.add(mod.replace(/_/g, '-'));
   if (mod === 'web') {
     aliases.add('web.py');
     aliases.add('webpy');
@@ -432,6 +469,9 @@ export function resolveSoftDepSpecForModule(
 ): string | null {
   const mod = moduleName.trim();
   if (!mod) return null;
+  // Source psycopg2 frequently cannot build on Windows; the binary wheel is
+  // the intentional host-safe substitute even when requirements pin psycopg2.
+  if (mod.toLowerCase() === 'psycopg2') return SOFT_DEP_PIP_FALLBACK.psycopg2?.[0] ?? null;
   for (const body of requirementBodies) {
     const found = findRequirementLineForModule(body, mod);
     if (found) return found;
@@ -471,6 +511,7 @@ export function installSoftDepsForCollectFail(input: {
   /** Specs already installed this preflight — skip re-pip. */
   alreadyInstalled?: string[];
 }): { installed: string[]; attempted: boolean; detail: string } {
+  const workspaceRoot = resolve(input.workspaceRoot);
   const missing = parseMissingModulesFromProbe(input.probeDetail);
   if (missing.length === 0) {
     return { installed: [], attempted: false, detail: 'no_missing_modules' };
@@ -487,7 +528,7 @@ export function installSoftDepsForCollectFail(input: {
   const reqBodies: string[] = [];
   for (const rel of input.requirementFiles ?? []) {
     try {
-      reqBodies.push(readFileSync(join(input.workspaceRoot, rel), 'utf8'));
+      reqBodies.push(readFileSync(join(workspaceRoot, rel), 'utf8'));
     } catch {
       // ignore
     }
@@ -495,7 +536,7 @@ export function installSoftDepsForCollectFail(input: {
 
   const specs: string[] = [];
   for (const mod of missing) {
-    const found = resolveSoftDepSpecForModule(input.workspaceRoot, mod, reqBodies);
+    const found = resolveSoftDepSpecForModule(workspaceRoot, mod, reqBodies);
     if (found) specs.push(found);
   }
   // Dedupe specs; skip already installed this session
@@ -521,7 +562,7 @@ export function installSoftDepsForCollectFail(input: {
         : ['-m', 'pip', 'install', ...spec.split(/\s+/).filter(Boolean)];
     commands.push(`${input.pythonBin} -m pip install ${spec}`);
     const r = runCmd(input.pythonBin, args, {
-      cwd: input.workspaceRoot,
+      cwd: workspaceRoot,
       timeoutMs: timeout,
     });
     details.push(`${spec}:${r.ok ? 'ok' : 'fail'}`);
@@ -592,8 +633,9 @@ export function runWorkspaceDepPreflight(input: {
   probeTimeoutMs?: number;
 }): WorkspaceDepPreflightResult {
   const started = performance.now();
+  const workspaceRoot = resolve(input.workspaceRoot);
   const commands: string[] = [];
-  const plan = detectWorkspaceDepPlan(input.workspaceRoot, input.packageHint);
+  const plan = detectWorkspaceDepPlan(workspaceRoot, input.packageHint);
   const install = input.install !== false;
   const installTimeout = input.installTimeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS;
   const probeTimeout = input.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
@@ -616,7 +658,7 @@ export function runWorkspaceDepPreflight(input: {
 
   // Node path: optional npm install when node_modules missing
   if (plan.kind === 'node_npm') {
-    const hasModules = existsSync(join(input.workspaceRoot, 'node_modules'));
+    const hasModules = existsSync(join(workspaceRoot, 'node_modules'));
     if (hasModules) {
       return {
         plan,
@@ -649,7 +691,7 @@ export function runWorkspaceDepPreflight(input: {
     }
     commands.push('npm install');
     const npm = runCmd('npm', ['install', '--no-fund', '--no-audit'], {
-      cwd: input.workspaceRoot,
+      cwd: workspaceRoot,
       timeoutMs: installTimeout,
     });
     if (!npm.ok) {
@@ -690,46 +732,51 @@ export function runWorkspaceDepPreflight(input: {
   let installed = false;
 
   /**
-   * Ready enough to start the agent: package importable + pytest present.
-   * Full conftest collect often needs heavy host deps (openlibrary) that still
-   * block verify — agent may mutate first; runtime ENV_BLOCKED handles verify.
-   * Collect is recorded as a soft signal only.
+   * Ready enough to start the agent: package importable, pytest present, and
+   * the selected verifier target collects successfully. Collection is a hard
+   * readiness boundary when a test path is supplied; otherwise the package
+   * and pytest probes are sufficient.
    */
-  const probePythonReady = (bin: string): { ok: boolean; detail: string } => {
+  const probePythonReady = (bin: string): {
+    ok: boolean;
+    collectOk: boolean;
+    detail: string;
+  } => {
     const parts: string[] = [];
     if (plan.packageHint) {
       const pkg = probePythonImport({
         packageName: plan.packageHint,
-        cwd: input.workspaceRoot,
+        cwd: workspaceRoot,
         pythonBin: bin,
         timeoutMs: probeTimeout,
       });
       parts.push(`import:${pkg.detail}`);
-      if (!pkg.ok) return { ok: false, detail: parts.join(' | ') };
+      if (!pkg.ok) return { ok: false, collectOk: false, detail: parts.join(' | ') };
     }
     const pytestMod = probePythonImport({
       packageName: 'pytest',
-      cwd: input.workspaceRoot,
+      cwd: workspaceRoot,
       pythonBin: bin,
       timeoutMs: probeTimeout,
     });
     parts.push(`pytest_mod:${pytestMod.detail}`);
-    if (!pytestMod.ok) return { ok: false, detail: parts.join(' | ') };
-    // Soft: focused collect when path known (does not fail preflight).
+    if (!pytestMod.ok) return { ok: false, collectOk: false, detail: parts.join(' | ') };
+    let collectOk = true;
     if (input.testPath?.trim()) {
       const collect = probePytestCollect({
-        cwd: input.workspaceRoot,
+        cwd: workspaceRoot,
         pythonBin: bin,
         testPath: input.testPath,
         timeoutMs: Math.min(probeTimeout, 20_000),
       });
       parts.push(`collect_${collect.ok ? 'ok' : 'soft_fail'}:${collect.detail}`);
+      collectOk = collect.ok;
     }
-    return { ok: true, detail: parts.join(' | ') };
+    return { ok: true, collectOk, detail: parts.join(' | ') };
   };
 
   const first = probePythonReady(pythonBin);
-  if (first.ok) {
+  if (first.ok && first.collectOk) {
     return {
       plan,
       ready: true,
@@ -739,6 +786,7 @@ export function runWorkspaceDepPreflight(input: {
       venvPath: null,
       pathPrefix: null,
       pythonBin,
+      pythonExecutableValid: true,
       commands,
       probeDetail: first.detail,
       durationMs: Math.round(performance.now() - started),
@@ -751,7 +799,7 @@ export function runWorkspaceDepPreflight(input: {
       ready: false,
       installed: false,
       blocked: true,
-      reason: `workspace package not ready (install=false): ${first.detail}`,
+      reason: `workspace not verify-ready (install=false): ${first.detail}`,
       venvPath: null,
       pathPrefix: null,
       pythonBin,
@@ -762,17 +810,17 @@ export function runWorkspaceDepPreflight(input: {
   }
 
   // Create venv + install
-  venvPath = join(input.workspaceRoot, BABEL_WORKSPACE_VENV);
+  venvPath = join(workspaceRoot, BABEL_WORKSPACE_VENV);
 
-  if (!resolveVenvPython(input.workspaceRoot)) {
+  if (!resolveVenvPython(workspaceRoot)) {
     commands.push(`${systemPy} -m venv ${BABEL_WORKSPACE_VENV}`);
-    mkdirSync(input.workspaceRoot, { recursive: true });
+    mkdirSync(workspaceRoot, { recursive: true });
     const venv = runCmd(systemPy, ['-m', 'venv', BABEL_WORKSPACE_VENV], {
-      cwd: input.workspaceRoot,
+      cwd: workspaceRoot,
       timeoutMs: Math.min(installTimeout, 120_000),
     });
     // Success = interpreter exists (MSYS venvs may non-zero-exit with useful stdout).
-    const resolvedAfter = resolveVenvPython(input.workspaceRoot);
+    const resolvedAfter = resolveVenvPython(workspaceRoot);
     if (!resolvedAfter) {
       return {
         plan,
@@ -789,13 +837,33 @@ export function runWorkspaceDepPreflight(input: {
       };
     }
   }
-  pythonBin = venvPython(input.workspaceRoot);
-  pathPrefix = venvScriptsDir(input.workspaceRoot);
+  pythonBin = venvPython(workspaceRoot);
+  const executable = validatePythonExecutable({
+    pythonBin,
+    cwd: workspaceRoot,
+  });
+  if (!executable.ok) {
+    return {
+      plan,
+      ready: false,
+      installed: false,
+      blocked: true,
+      reason: `venv interpreter is not executable: ${executable.detail}`,
+      venvPath,
+      pathPrefix: null,
+      pythonBin,
+      pythonExecutableValid: false,
+      commands,
+      probeDetail: executable.detail,
+      durationMs: Math.round(performance.now() - started),
+    };
+  }
+  pathPrefix = dirname(pythonBin);
 
   // Upgrade pip quietly (best-effort)
   commands.push(`${pythonBin} -m pip install -U pip`);
   runCmd(pythonBin, ['-m', 'pip', 'install', '-U', 'pip', 'setuptools', 'wheel'], {
-    cwd: input.workspaceRoot,
+    cwd: workspaceRoot,
     timeoutMs: Math.min(installTimeout, 180_000),
   });
 
@@ -805,7 +873,7 @@ export function runWorkspaceDepPreflight(input: {
   if (plan.kind === 'python_editable' || plan.hasPyproject || plan.hasSetupPy) {
     commands.push(`${pythonBin} -m pip install -e .`);
     const editable = runCmd(pythonBin, ['-m', 'pip', 'install', '-e', '.'], {
-      cwd: input.workspaceRoot,
+      cwd: workspaceRoot,
       timeoutMs: installTimeout,
     });
     lastInstallDetail = editable.detail;
@@ -815,18 +883,18 @@ export function runWorkspaceDepPreflight(input: {
   // pytest is commonly needed for Pro verify even when not a declared runtime dep
   commands.push(`${pythonBin} -m pip install pytest`);
   const pytestInstall = runCmd(pythonBin, ['-m', 'pip', 'install', 'pytest'], {
-    cwd: input.workspaceRoot,
+    cwd: workspaceRoot,
     timeoutMs: Math.min(installTimeout, 180_000),
   });
   if (pytestInstall.ok) installed = true;
   else lastInstallDetail = pytestInstall.detail || lastInstallDetail;
 
   let probe = probePythonReady(pythonBin);
-  if (!probe.ok && plan.requirementFiles.length > 0) {
+  if ((!probe.ok || !probe.collectOk) && plan.requirementFiles.length > 0) {
     for (const req of plan.requirementFiles) {
       commands.push(`${pythonBin} -m pip install -r ${req}`);
       const reqInstall = runCmd(pythonBin, ['-m', 'pip', 'install', '-r', req], {
-        cwd: input.workspaceRoot,
+        cwd: workspaceRoot,
         timeoutMs: installTimeout,
       });
       lastInstallDetail = reqInstall.detail || lastInstallDetail;
@@ -845,13 +913,13 @@ export function runWorkspaceDepPreflight(input: {
   let softRound = 0;
   while (
     probe.ok &&
-    /collect_soft_fail:/.test(probe.detail) &&
+    !probe.collectOk &&
     parseMissingModulesFromProbe(probe.detail).length > 0 &&
     softRound < SOFT_DEP_MAX_ROUNDS
   ) {
     softRound += 1;
     const soft = installSoftDepsForCollectFail({
-      workspaceRoot: input.workspaceRoot,
+      workspaceRoot,
       pythonBin,
       probeDetail: probe.detail,
       requirementFiles: plan.requirementFiles,
@@ -874,10 +942,10 @@ export function runWorkspaceDepPreflight(input: {
   // leave probe as-is — final block below uses it.
   try {
     writeFileSync(
-      join(input.workspaceRoot, '.babel-dep-preflight.json'),
+      join(workspaceRoot, '.babel-dep-preflight.json'),
       JSON.stringify(
         {
-          ready: probe.ok,
+          ready: probe.ok && probe.collectOk,
           packageHint: plan.packageHint,
           installed,
           venv: BABEL_WORKSPACE_VENV,
@@ -894,7 +962,7 @@ export function runWorkspaceDepPreflight(input: {
   } catch {
     // ignore
   }
-  if (!probe.ok) {
+  if (!probe.ok || !probe.collectOk) {
     const installHint = lastInstallDetail
       ? ` last_install=${lastInstallDetail.slice(0, 200)}`
       : '';
@@ -907,6 +975,7 @@ export function runWorkspaceDepPreflight(input: {
       venvPath,
       pathPrefix,
       pythonBin,
+      pythonExecutableValid: true,
       commands,
       probeDetail: probe.detail,
       softDepsAttempted,
@@ -923,6 +992,7 @@ export function runWorkspaceDepPreflight(input: {
     venvPath,
     pathPrefix,
     pythonBin,
+    pythonExecutableValid: true,
     commands,
     probeDetail: probe.detail,
     softDepsAttempted,

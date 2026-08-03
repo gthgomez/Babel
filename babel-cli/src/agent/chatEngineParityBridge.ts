@@ -218,6 +218,7 @@ export function parityRecordToolBatch(
   input: {
     at_turn: number;
     thinking?: string;
+    reasoningContent?: string;
     toolCalls: ProviderToolCall[];
     results: Array<{
       tool_call_id: string;
@@ -241,6 +242,7 @@ export function parityRecordToolBatch(
       rt.turnId,
       input.thinking ?? 'Using tools…',
       input.toolCalls,
+      input.reasoningContent,
     );
     // W2.2: if settle propose did not run, still propose+start here (compat).
     if (!input.settleAlreadyProposed) {

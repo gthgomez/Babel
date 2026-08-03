@@ -540,6 +540,7 @@ describe('Provider capabilities', () => {
 
     const caps = resolveProviderCapabilities('deepseek-v4-pro');
     assert.equal(caps.contextWindow, 128_000);
+    assert.equal(caps.thinkingWithTools, 'without_tool_choice');
     assert.notEqual(caps.contextWindow, 1_000_000);
 
     const bar = getContextLimit('deepseek-v4-pro');

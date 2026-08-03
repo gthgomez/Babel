@@ -114,6 +114,19 @@ export interface RunnerInvocationMetadata {
   output_cost_per_1m?: number | null;
   input_cache_hit_cost_per_1m?: number | null;
   input_cache_miss_cost_per_1m?: number | null;
+  /** Provider request/response conformance telemetry (redacted, no prompts). */
+  requested_model_id?: string | null;
+  normalized_model_id?: string | null;
+  sent_model_id?: string | null;
+  observed_model_id?: string | null;
+  requested_reasoning_effort?: string | null;
+  normalized_reasoning_effort?: string | null;
+  sent_reasoning_effort?: string | null;
+  observed_reasoning_effort?: string | null;
+  thinking_requested?: boolean | null;
+  thinking_sent?: 'enabled' | 'disabled' | null;
+  thinking_observed?: boolean | null;
+  tool_choice_sent?: 'auto' | 'required' | null;
   ttft_ms?: number | null;
   generation_ms?: number | null;
   validation_ms?: number | null;
@@ -153,6 +166,8 @@ export interface RunnerCallbacks {
 export interface ProviderMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  /** Provider-native reasoning continuity (DeepSeek reasoning_content). */
+  reasoning_content?: string;
   /** For tool role: matches the assistant's tool call id. */
   tool_call_id?: string;
   /** For assistant role: native tool calls requested by the model. */

@@ -18,6 +18,7 @@ import {
   resolveSweProPassMode,
   runSwebenchProCampaign,
   updateFailureStreak,
+  workspaceDirectoryName,
   type CampaignCellResult,
   type SwebenchProInstanceRow,
 } from './swebenchProCampaign.js';
@@ -40,6 +41,14 @@ function cell(
 }
 
 describe('swebenchProCampaign early-stop', () => {
+  test('workspace directory names stay short and stable for Windows paths', () => {
+    const instanceId = 'instance_internetarchive__openlibrary-' + 'a'.repeat(120);
+    const first = workspaceDirectoryName(instanceId);
+    assert.equal(first, workspaceDirectoryName(instanceId));
+    assert.ok(first.length <= 40);
+    assert.doesNotMatch(first, /[\\/]/);
+  });
+
   test('ensureShadowSummaryForCampaign synthesizes boundary for mid-flush shadows', () => {
     const withSummary = ensureShadowSummaryForCampaign(
       [

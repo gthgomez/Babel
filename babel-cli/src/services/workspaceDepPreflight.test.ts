@@ -20,6 +20,7 @@ import {
   runWorkspaceDepPreflight,
   SOFT_DEP_MAX_ROUNDS,
   truncateProbeDetail,
+  validatePythonExecutable,
 } from './workspaceDepPreflight.js';
 
 describe('workspaceDepPreflight', () => {
@@ -51,7 +52,7 @@ E   ModuleNotFoundError: No module named 'web'
   });
 
   test('W1 multi-round: resolveSoftDepSpec prefers requirements then vendor infogami', () => {
-    assert.equal(SOFT_DEP_MAX_ROUNDS, 3);
+    assert.equal(SOFT_DEP_MAX_ROUNDS, 16);
     const req = [
       'git+https://github.com/webpy/webpy.git@d3649322b85777b291ac2b7b3699fb6fc839e382',
       'multipart==0.2.4',
@@ -62,6 +63,18 @@ E   ModuleNotFoundError: No module named 'web'
     );
     assert.equal(resolveSoftDepSpecForModule('/tmp/ws', 'multipart', [req]), 'multipart==0.2.4');
     assert.equal(resolveSoftDepSpecForModule('/tmp/ws', 'multipart', []), 'multipart');
+    assert.equal(resolveSoftDepSpecForModule('/tmp/ws', 'requests', []), 'requests');
+    assert.equal(resolveSoftDepSpecForModule('/tmp/ws', 'simplejson', []), 'simplejson');
+    assert.equal(
+      resolveSoftDepSpecForModule('/tmp/ws', 'paapi5_python_sdk', [
+        'amightygirl.paapi5-python-sdk==1.0.0',
+      ]),
+      'amightygirl.paapi5-python-sdk==1.0.0',
+    );
+    assert.equal(
+      resolveSoftDepSpecForModule('/tmp/ws', 'psycopg2', ['psycopg2==2.9.9']),
+      'psycopg2-binary',
+    );
 
     const dir = mkdtempSync(join(tmpdir(), 'dep-infogami-'));
     mkdirSync(join(dir, 'vendor', 'infogami'), { recursive: true });
@@ -219,6 +232,16 @@ version = "0.1.0"
       resolveVenvPython(dir)?.replace(/\\/g, '/').endsWith('.babel-venv/bin/python.exe'),
       true,
     );
+  });
+
+  test('validatePythonExecutable rejects a present but non-executable venv placeholder', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dep-invalid-python-'));
+    const python = join(dir, '.babel-venv', 'bin', 'python.exe');
+    mkdirSync(join(dir, '.babel-venv', 'bin'), { recursive: true });
+    writeFileSync(python, 'not an executable');
+    const result = validatePythonExecutable({ pythonBin: python, cwd: dir });
+    assert.equal(result.ok, false);
+    assert.ok(result.detail);
   });
 
   test('applyDepPreflightEnv prepends pathPrefix and VIRTUAL_ENV', () => {

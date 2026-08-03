@@ -31,12 +31,21 @@ Additional acceptance checks run after the original evidence record:
 | Absolute-path SWE-Pro infra preflight | PASS: 1/1 checkout |
 | Absolute-path mock SWE-Pro cell | INCONCLUSIVE: no completed campaign report within the bounded runner window |
 | DeepSeek V4 Flash live cell | HONEST FAILURE: `test_patch_applied=true`, `collect_error`, no authoritative completion; campaign timed out before the remaining cells finalized |
+| DeepSeek wire/continuity conformance | PASS: focused provider-message, reasoning-content, thinking/tool-choice, effort-normalization, and cache-split tests |
+| Readiness receipt + verifier overlay | PASS: signed redacted receipt blocks provider spend when absent; detached overlay excludes the test patch and preserves the primary workspace |
+| Fresh three-cell mock SWE-Pro revalidation | HONEST BLOCK: 3/3 infra cells passed; 2/3 cells reached signed readiness + detached verification but produced zero production edits and terminal `BLOCKED_POLICY`/`BLOCKED_EXTERNAL`; 1/3 remained `ENV_BLOCKED` because Python 3.10 lacks `typing.Required` |
 
 The focused corpus covers verifier authority and false-complete rejection,
 Chat completion payloads, SessionEventV1, tool settlement, progress and
 ablation, workspace/effect reconciliation, evidence graph and independent
 verification, server-owned sessions, daemon lifecycle/recovery, and
 Chat/Plan/Deep kernel parity.
+
+The fresh mock revalidation also confirmed native Windows `Scripts` venv
+selection and short per-instance workspace paths. It did not produce a model
+capability score: the ready mock cells exercised harness arbitration with no
+production patch, while the remaining cell was blocked by the host Python
+version before provider execution.
 
 ## Changes made during acceptance closure
 
@@ -66,3 +75,8 @@ failure, not a false green. The three-cell current-vs-baseline campaign and
 Wave-A promotion remain blocked until the campaign runner completes within a
 repeatable outer timeout; the preflight and dependency/workspace lifecycle need
 further bounded-runner investigation before spending more live budget.
+
+Latest Wave 0 disposition: no live provider call was made during this
+revalidation. The next parity step is a Linux/container-backed SWE-Pro
+preflight (Python 3.11+ and a short `/app`-style workspace), followed by the
+same three-cell mock gate and only then an explicitly authorized live canary.

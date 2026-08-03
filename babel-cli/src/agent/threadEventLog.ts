@@ -62,6 +62,7 @@ export type ThreadEvent =
       kind: 'assistant_tool_calls';
       content: string;
       tool_calls: ProviderToolCall[];
+      reasoning_content?: string;
     })
   | (ThreadEventBase & {
       kind: 'tool_result';
@@ -225,12 +226,14 @@ export function recordAssistantToolCalls(
   turnId: string,
   content: string,
   toolCalls: ProviderToolCall[],
+  reasoningContent?: string,
 ): void {
   appendThreadEvent(log, {
     kind: 'assistant_tool_calls',
     turn_id: turnId,
     content,
     tool_calls: toolCalls,
+    ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
   });
 }
 
@@ -318,6 +321,7 @@ export function rebuildProviderMessagesFromEvents(
           name: 'tool_calls',
         };
         if (e.tool_calls.length > 0) msg.tool_calls = e.tool_calls;
+        if (e.reasoning_content) msg.reasoning_content = e.reasoning_content;
         messages.push(msg);
         break;
       }

@@ -12,6 +12,7 @@ import type { ProviderMessage, ProviderToolCall } from './base.js';
 export type WireProviderMessage = {
   role: string;
   content: string;
+  reasoning_content?: string;
   tool_calls?: ProviderToolCall[];
   tool_call_id?: string;
   name?: string;
@@ -51,6 +52,9 @@ export function mapProviderMessagesToWire(
   for (const msg of messages) {
     if (msg.role === 'system' && result.some((r) => r.role === 'system')) continue;
     const wire: WireProviderMessage = { role: msg.role, content: msg.content };
+    if (msg.role === 'assistant' && msg.reasoning_content) {
+      wire.reasoning_content = msg.reasoning_content;
+    }
     if (msg.role === 'assistant' && msg.tool_calls?.length) {
       wire.tool_calls = msg.tool_calls;
     }

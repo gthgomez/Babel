@@ -7,7 +7,9 @@
  *   npx tsx scripts/run_swebench_pro_campaign.ts --help
  */
 import { config as dotenvConfig } from 'dotenv';
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -18,7 +20,16 @@ import {
 } from '../src/services/swebenchProCampaign.js';
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+const repositoryRoot = resolve(packageRoot, '..');
 dotenvConfig({ path: join(packageRoot, '.env'), override: true, quiet: true });
+
+/** Resolve operator paths predictably when npm --prefix changes process.cwd(). */
+function resolveOperatorPath(value: string): string {
+  if (isAbsolute(value)) return value;
+  const fromCwd = resolve(value);
+  if (existsSync(fromCwd)) return fromCwd;
+  return resolve(repositoryRoot, value);
+}
 
 interface Opts {
   help: boolean;
@@ -31,6 +42,9 @@ interface Opts {
   evidenceDir: string;
   dockerPullK: number;
   model: string;
+  agentTimeoutMs?: number;
+  failToPassTimeoutMs?: number;
+  heartbeatFile: string;
 }
 
 function printHelp(): void {
@@ -51,6 +65,9 @@ function printHelp(): void {
       '  --evidence-dir <path> Evidence root',
       '  --docker-pull <k>     Pull first K dockerhub tags during infra (default 0)',
       '  --model <id>          Live model (default deepseek-v4-pro)',
+      '  --agent-timeout-ms <n> Agent timeout; 0 disables this deadline',
+      '  --fail-to-pass-timeout-ms <n> Verifier timeout; 0 disables this deadline',
+      '  --heartbeat-file <path> Redacted progress file for detached runs',
       '  --json                Structured JSON only',
       '  --help                This help',
       '',
@@ -73,6 +90,7 @@ function parseArgs(argv: string[]): Opts {
     evidenceDir: '',
     dockerPullK: 0,
     model: 'deepseek-v4-pro',
+    heartbeatFile: '',
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -90,6 +108,9 @@ function parseArgs(argv: string[]): Opts {
     else if (a === '--evidence-dir') opts.evidenceDir = String(argv[++i]);
     else if (a === '--docker-pull') opts.dockerPullK = Number(argv[++i]);
     else if (a === '--model') opts.model = String(argv[++i]);
+    else if (a === '--agent-timeout-ms') opts.agentTimeoutMs = Number(argv[++i]);
+    else if (a === '--fail-to-pass-timeout-ms') opts.failToPassTimeoutMs = Number(argv[++i]);
+    else if (a === '--heartbeat-file') opts.heartbeatFile = String(argv[++i]);
     else throw new Error(`Unknown arg: ${a}`);
   }
   return opts;
@@ -102,12 +123,10 @@ async function main(): Promise<void> {
     return;
   }
 
+  const explicitDataset = opts.dataset ? resolveOperatorPath(opts.dataset) : undefined;
   const datasetPath =
-    resolveSweProDatasetPath(opts.dataset || undefined) ??
-    (opts.dataset ? opts.dataset : defaultSweProDatasetPath());
-  if (!resolveSweProDatasetPath(opts.dataset || undefined) && !opts.dataset) {
-    // still try default path for clearer error inside run
-  }
+    resolveSweProDatasetPath(explicitDataset) ??
+    (explicitDataset ?? defaultSweProDatasetPath());
 
   const report = await runSwebenchProCampaign({
     datasetPath,
@@ -115,9 +134,14 @@ async function main(): Promise<void> {
     infraOnly: opts.infraOnly,
     earlyStopN: opts.earlyStop,
     ...(opts.limit > 0 ? { instanceLimit: opts.limit } : {}),
-    ...(opts.evidenceDir ? { evidenceDir: opts.evidenceDir } : {}),
+    ...(opts.evidenceDir ? { evidenceDir: resolveOperatorPath(opts.evidenceDir) } : {}),
     dockerPullFirstK: opts.dockerPullK,
     model: opts.model,
+    ...(opts.agentTimeoutMs !== undefined ? { agentTimeoutMs: opts.agentTimeoutMs } : {}),
+    ...(opts.failToPassTimeoutMs !== undefined
+      ? { failToPassTimeoutMs: opts.failToPassTimeoutMs }
+      : {}),
+    ...(opts.heartbeatFile ? { heartbeatFile: resolveOperatorPath(opts.heartbeatFile) } : {}),
   });
 
   if (opts.json) {

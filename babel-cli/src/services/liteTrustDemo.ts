@@ -78,6 +78,15 @@ export interface CliInvocationResult {
   timedOut?: boolean;
 }
 
+/** Normalize an operator timeout. Zero means deliberately no subprocess deadline. */
+export function normalizeCliTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  if (timeoutMs === undefined) return undefined;
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 0) {
+    throw new Error('timeoutMs must be a non-negative integer');
+  }
+  return timeoutMs === 0 ? undefined : timeoutMs;
+}
+
 const CAPSULE_TAIL_CHARS = 4000;
 
 /** Build a failure capsule for headless CLI timeouts / empty JSON. Pure. */
@@ -588,12 +597,13 @@ export function runBabelCli(
     env['BABEL_LITE_OFFLINE'] = '1';
     env['BABEL_SMALL_FIX_PROVIDER'] = 'mock';
   }
+  const normalizedTimeoutMs = normalizeCliTimeoutMs(options.timeoutMs);
   const result = spawnSync(process.execPath, [cliEntry, ...args], {
     cwd: options.cwd ?? options.projectRoot,
     env,
     encoding: 'utf-8',
     maxBuffer: 10 * 1024 * 1024,
-    ...(typeof options.timeoutMs === 'number' ? { timeout: options.timeoutMs } : {}),
+    ...(normalizedTimeoutMs !== undefined ? { timeout: normalizedTimeoutMs } : {}),
   });
   const stdout = result.stdout ?? '';
   const rawStderr = result.stderr ?? '';
@@ -602,7 +612,7 @@ export function runBabelCli(
     // Node may set error code without name on some platforms
     (result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT';
   const stderr = timedOut
-    ? `${rawStderr}\n[babel-cli] Process timed out after ${options.timeoutMs}ms`.trim()
+    ? `${rawStderr}\n[babel-cli] Process timed out after ${normalizedTimeoutMs ?? '?'}ms`.trim()
     : rawStderr;
   // Prefer stdout; if empty/noise, try stderr (some paths leak JSON there).
   let payload = parseCliJson(stdout) ?? parseCliJson(stderr);
@@ -619,7 +629,7 @@ export function runBabelCli(
   if (payload == null || timedOut) {
     failureCapsule = buildCliFailureCapsule({
       timedOut,
-      ...(typeof options.timeoutMs === 'number' ? { timeoutMs: options.timeoutMs } : {}),
+      ...(normalizedTimeoutMs !== undefined ? { timeoutMs: normalizedTimeoutMs } : {}),
       exitCode,
       signal,
       errorName: result.error?.name ?? null,

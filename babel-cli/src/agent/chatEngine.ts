@@ -267,6 +267,11 @@ import {
   beginUserSubmission,
   type TurnRuntimeSnapshot,
 } from './turnRuntime.js';
+import {
+  loadWorkspaceReadinessFromEnv,
+  type WorkspaceReadinessReceipt,
+  verifyWorkspaceReadinessReceipt,
+} from '../services/workspaceReadinessReceipt.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -321,6 +326,12 @@ export interface ChatEngineOptions {
   planHandoff?: import('./planExecuteMode.js').ChatPlanExecuteHandoff;
   /** Shared kernel profile. Plan is read-only; deep retains governed writes. */
   executionProfile?: ChatExecutionProfile;
+  /** W0: signed redacted preflight receipt supplied by a trusted launcher. */
+  workspaceReadinessReceipt?: WorkspaceReadinessReceipt;
+  /** W0: base64 DER Ed25519 public key for workspaceReadinessReceipt. */
+  workspaceReadinessPublicKeyBase64?: string;
+  /** W0: fail closed before any provider request when the receipt is absent/invalid. */
+  requireWorkspaceReadiness?: boolean;
 }
 
 export interface ContextCompactedInfo {
@@ -630,6 +641,13 @@ export class ChatEngine {
   private _logIndexToTurn = new Map<number, number>();
   /** P1–P3 live parity runtime (loop / progress / event log / approvals). */
   private parity: ParityRuntime;
+  /** W0: readiness policy is evaluated once and never relaxed mid-session. */
+  private readonly workspaceReadiness: {
+    required: boolean;
+    ok: boolean;
+    reason: string | null;
+    receipt: WorkspaceReadinessReceipt | null;
+  };
 
   private get engineRunDir(): string {
     return chatSessionDir(this.engineRunId);
@@ -637,6 +655,26 @@ export class ChatEngine {
 
   constructor(options: ChatEngineOptions) {
     this.options = options;
+    const envReadiness = loadWorkspaceReadinessFromEnv();
+    const readinessReceipt = options.workspaceReadinessReceipt ?? envReadiness.receipt;
+    const readinessPublicKey =
+      options.workspaceReadinessPublicKeyBase64 ?? envReadiness.publicKeyBase64;
+    const readinessRequired =
+      options.requireWorkspaceReadiness === true ||
+      /^(1|true|yes|on)$/i.test(process.env['BABEL_REQUIRE_WORKSPACE_READINESS']?.trim() ?? '');
+    const readinessValidation = readinessReceipt
+      ? verifyWorkspaceReadinessReceipt({
+          receipt: readinessReceipt,
+          publicKeyBase64: readinessPublicKey,
+          expectedWorkspaceRoot: options.projectRoot,
+        })
+      : { ok: false, reason: envReadiness.reason ?? 'receipt_missing' };
+    this.workspaceReadiness = {
+      required: readinessRequired,
+      ok: readinessValidation.ok,
+      reason: readinessValidation.reason,
+      receipt: readinessValidation.receipt ?? null,
+    };
     this.executionProfile = options.executionProfile ?? 'chat';
     this.executorKernel = createExecutorKernel(this.executionProfile);
     this.services = this.executorKernel.services;
@@ -1402,6 +1440,19 @@ export class ChatEngine {
     taskIntent?: TaskIntent,
     submitOpts?: SubmitMessageOptions,
   ): AsyncGenerator<ChatEvent, void, undefined> {
+    if (this.workspaceReadiness.required && !this.workspaceReadiness.ok) {
+      const reason = this.workspaceReadiness.reason ?? 'receipt_invalid';
+      this.policyEventLog.record({
+        at_turn: this._turnIndex,
+        kind: 'readiness_block',
+        detail: reason,
+      });
+      yield {
+        type: 'failed',
+        error: `Workspace readiness blocked the provider request (${reason}).`,
+      };
+      return;
+    }
     this._cancelled = false;
     // W0.3: fresh TurnRuntime per user submission (isolate counters by default).
     const runtime = this.applyUserSubmission({
@@ -1580,6 +1631,7 @@ export class ChatEngine {
         const nativeActions: ChatToolAction[] = [];
         const nativeToolCallIds: string[] = [];
         let answerText = '';
+        let reasoningText = '';
         const systemPrompt = this.getOrBuildSystemPrompt('native');
 
         try {
@@ -1596,6 +1648,7 @@ export class ChatEngine {
                 yield { type: 'answer_chunk', text: event.text };
                 break;
               case 'thought_delta':
+                reasoningText += event.text;
                 yield { type: 'thought', text: event.text };
                 break;
               case 'tool_use': {
@@ -1622,7 +1675,7 @@ export class ChatEngine {
           this.trackRunnerUsage(runner);
           this._streamNativeToolCallIds = nativeToolCallIds;
           turnResult = nativeActions.length > 0
-            ? { type: 'tool_calls', actions: nativeActions }
+            ? { type: 'tool_calls', actions: nativeActions, ...(reasoningText ? { thinking: reasoningText } : {}) }
             : { type: 'completion', answer: answerText || 'OK' };
         } catch (err: any) {
           const fb = yield* this.resolveFallbackOrFail(err, turn);
@@ -1640,6 +1693,7 @@ export class ChatEngine {
           nativeActions.length = 0;
           nativeToolCallIds.length = 0;
           answerText = '';
+          reasoningText = '';
           try {
             for await (const event of fb.executeWithToolsStream(
               providerMessages,
@@ -1653,6 +1707,7 @@ export class ChatEngine {
                   yield { type: 'answer_chunk', text: event.text };
                   break;
                 case 'thought_delta':
+                  reasoningText += event.text;
                   yield { type: 'thought', text: event.text };
                   break;
                 case 'tool_use': {
@@ -1678,7 +1733,7 @@ export class ChatEngine {
             this.trackRunnerUsage(fb);
             this._streamNativeToolCallIds = nativeToolCallIds;
             turnResult = nativeActions.length > 0
-              ? { type: 'tool_calls', actions: nativeActions }
+              ? { type: 'tool_calls', actions: nativeActions, ...(reasoningText ? { thinking: reasoningText } : {}) }
               : { type: 'completion', answer: answerText || 'OK' };
           } catch (fbErr: any) {
             // If tools still fail, degrade to raw-text streaming
@@ -2103,6 +2158,9 @@ export class ChatEngine {
           at_turn: turn,
           ...(turnResult.type === 'tool_calls' && turnResult.thinking
             ? { thinking: turnResult.thinking }
+            : {}),
+          ...(turnResult.type === 'tool_calls' && turnResult.thinking
+            ? { reasoningContent: turnResult.thinking }
             : {}),
           toolCalls,
           results: turnSlice.map((tc, idx) => {
