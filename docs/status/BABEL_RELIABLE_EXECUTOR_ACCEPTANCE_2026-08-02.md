@@ -144,3 +144,20 @@ Host now has Python **3.11.9** (`py -3.11`). Evidence:
 
 **Cleared:** host Python 3.10 / `typing.Required` preflight doom path.  
 **Remaining env:** qutebrowser plugin set; mock-agent arbitration noise on openlibrary.
+
+## Plugin + signature fix re-mock (2026-08-03)
+
+| Commit | Content |
+| --- | --- |
+| `278e4f6` | pytest.ini required_plugins install + empty_patch mislabel fix |
+| `272f852` | PyQt5 soft-dep for qutebrowser conftest |
+| `ea0312e` | Load babel-cli/.env for detached live profiles |
+
+Evidence `gate0-mock-plugins-20260802-203634`:
+
+| Cell | Result |
+| --- | --- |
+| openlibrary live | **`dep_ready=true`**, signature **`agent:empty_patch`** (correct; not env_blocked) |
+| qutebrowser live | Plugins installed; then **`ModuleNotFoundError: PyQt5`** (addressed in `272f852`) |
+
+Live **gate0-canary** not run: `DEEPSEEK_API_KEY` absent in env and `babel-cli/.env`.
