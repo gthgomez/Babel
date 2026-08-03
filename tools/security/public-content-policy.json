@@ -40,8 +40,8 @@
       "id": "FIXTURE-CONTENT-POLICY-ESCAPED-PATH",
       "rule_id": "PCONT002",
       "path": "tools/security/public-content-policy.json",
-      "pattern": "C:[\\\\/]+Users[\\\\/]+someone",
-      "rationale": "The policy contains an exact negative-fixture pattern, not a machine path used by the product."
+      "pattern": "C:[\\\\/]+Users[\\\\/]+someone|AppData[\\\\/]+(Local|Roaming)[\\\\/]|\\.agent-skills[\\\\/]",
+      "rationale": "The policy contains exact negative-fixture patterns for machine paths, not product usage."
     },
     {
       "id": "FIXTURE-CONTENT-POLICY-IDENTIFIER",
@@ -125,7 +125,7 @@
       "id": "PCONT002",
       "category": "machine-specific-path",
       "severity": "error",
-      "pattern": "(?i)([A-Z]:[\\\\/]+(Users|Workspace|Projects)[\\\\/]+|/(Users|home)/[^/\\s]+/)"
+      "pattern": "(?i)([A-Z]:[\\\\/]+(Users|Workspace|Projects)[\\\\/]+|/(Users|home)/[^/\\s]+/|AppData[\\\\/]+(Local|Roaming)[\\\\/]|\\.agent-skills[\\\\/])"
     },
     {
       "id": "PCONT003",

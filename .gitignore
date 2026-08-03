@@ -80,14 +80,20 @@ babel-cli/runs/
 babel-cli/scratch/
 babel-cli/output/
 
-# ─── Local scratch and benchmark samples ────────────────────────────────────
+# ─── Local scratch and agent-only prompts ───────────────────────────────────
 babel-cli/scratch.cjs
-benchmarks/datasets/swe-bench-pro/hf-cache-sample.jsonl
-benchmarks/datasets/swe-bench-pro/phase2-completion-20.jsonl
-benchmarks/datasets/swe-bench-pro/phase2-pri1-reval-ol.jsonl
-benchmarks/datasets/swe-bench-pro/phase2-remeasure-2.jsonl
-benchmarks/datasets/swe-bench-pro/phase2-waveA-completion.jsonl
-benchmarks/datasets/swe-bench-pro/phase2-waveA-ordered.jsonl
+local/
+**/goldenarch.md
+babel-cli/context.md
+babel-cli/**/context.local.md
+
+# ─── Benchmark datasets / caches (allowlist intentionally tracked fixtures) ─
+# Default-deny dataset dumps so agents cannot casually ship large or private
+# fixtures. Explicitly re-include known committed pilot lists only.
+benchmarks/datasets/**
+!benchmarks/datasets/swe-bench-pro/
+!benchmarks/datasets/swe-bench-pro/pilot-remaining.jsonl
+!benchmarks/datasets/swe-bench-pro/pilot-subset.jsonl
 
 # ─── Agent tools / terminals / MCP servers (runtime) ─────────────────────────
 agent-tools/

@@ -107,11 +107,15 @@ try {
 
   $negative = Initialize-Fixture 'negative'
   $machinePath = 'C:' + '\Users\someone\project'
+  $appDataPath = 'AppData' + '\Local\Babel'
+  $agentSkillsPath = '.agent-skills' + '/swebench-pro-campaign'
   $privateParent = 'private ' + 'parent repo'
   Set-Content -LiteralPath (Join-Path $negative 'one.md') -Value @"
 # Duplicate v1
 Operator: named maintainer in a personal location
 $machinePath
+$appDataPath
+$agentSkillsPath
 $privateParent
 opencalw_manager
 example_app_one

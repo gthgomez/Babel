@@ -35,6 +35,7 @@ This is the **public, canonical source** for the Babel coding agent (`gthgomez/B
 | CLI package scripts | `babel-cli/package.json` |
 | CI workflows | `.github/workflows/` |
 | Agent/skill lifecycle & execution rules | `AGENTS.md`, `.agents/rules/` (`05`-`09`), `.agents/skills/` |
+| **Ship set vs worktree / commit-all / sync main** | `.agents/rules/05-github-workflow.md` (OSS safety; never blind `git add -A`) |
 | Autonomous goal clearance & research delegation | `.agents/rules/06-autonomous-goal-clearance.md`, `.agents/rules/07-subagent-research-delegation.md` |
 | Public docs (architecture, ADRs, guides, release) | `docs/` — start with `docs/README.md` |
 | **Runtime harness (normative)** | `docs/architecture/HARNESS_ARCHITECTURE_V1.md` |
