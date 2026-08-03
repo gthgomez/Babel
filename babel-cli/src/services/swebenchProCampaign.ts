@@ -1608,7 +1608,7 @@ export async function runSwebenchProCampaign(
         instance,
         evidenceDir,
         options.provider,
-        options.model ?? 'deepseek-v4-pro',
+        options.model ?? 'deepseek-v4-flash',
         options.depPreflight === undefined
           ? {
               ...(options.agentTimeoutMs !== undefined

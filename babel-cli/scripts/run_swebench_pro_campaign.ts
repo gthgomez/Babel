@@ -64,7 +64,7 @@ function printHelp(): void {
       '  --dataset <path>      JSONL path (or SWEBENCH_PRO_DATASET_PATH)',
       '  --evidence-dir <path> Evidence root',
       '  --docker-pull <k>     Pull first K dockerhub tags during infra (default 0)',
-      '  --model <id>          Live model (default deepseek-v4-pro)',
+      '  --model <id>          Live model (default deepseek-v4-flash)',
       '  --agent-timeout-ms <n> Agent timeout; 0 disables this deadline',
       '  --fail-to-pass-timeout-ms <n> Verifier timeout; 0 disables this deadline',
       '  --heartbeat-file <path> Redacted progress file for detached runs',
@@ -89,7 +89,7 @@ function parseArgs(argv: string[]): Opts {
     dataset: '',
     evidenceDir: '',
     dockerPullK: 0,
-    model: 'deepseek-v4-pro',
+    model: 'deepseek-v4-flash',
     heartbeatFile: '',
   };
   for (let i = 0; i < argv.length; i += 1) {

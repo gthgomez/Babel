@@ -13,9 +13,9 @@ Environment always set by starter unless profile overrides:
 |---------|----------|-------|-------|------------------|-----------------|------------|-------|
 | `gate0-preflight` | — | 0 | — | — | — | — | Script: preflight only; no campaign |
 | `gate0-mock` | mock | 3 | (unused) | 1500000 (25m) | 900000 (15m) | 5 | Mechanism smoke; $0 |
-| `gate0-canary` | live | 1 | deepseek-v4-flash | 1500000 | 900000 | 5 | Wire proof; user authorize |
-| `remeasure-3` | live | 3 | deepseek-v4-flash | 0 (cell uses product caps; no harness kill) | 900000 | 5 | Post–Gate 0; authorize |
-| `waveA-20` | live | 20 | deepseek-v4-flash | 0 | 900000 | 5 | Needs resume (Phase 2); authorize |
+| `gate0-canary` | live | 1 | **deepseek-v4-flash** | 1500000 | 900000 | 5 | Wire proof; user authorize |
+| `remeasure-3` | live | 3 | **deepseek-v4-flash** | 0 (cell uses product caps; no harness kill) | 900000 | 5 | Post–Gate 0; authorize |
+| `waveA-20` | live | 20 | **deepseek-v4-flash** | 0 | 900000 | 5 | Needs resume (Phase 2); authorize |
 | `infra-only` | mock | 3 | — | — | — | 5 | `--infra-only` |
 
 Timeout semantics:
