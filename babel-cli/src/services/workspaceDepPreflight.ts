@@ -622,6 +622,24 @@ export function parseMissingPytestPluginsFromProbe(
 }
 
 /**
+ * Detect collect failures caused by host pytest being too new for the project
+ * (qutebrowser conftest still uses pytest_ignore_collect(path), removed in pytest 8).
+ */
+export function parsePytestVersionPinFromProbe(
+  detail: string | null | undefined,
+): string | null {
+  if (!detail?.trim()) return null;
+  if (
+    /PluginValidationError/i.test(detail) &&
+    /pytest_ignore_collect/i.test(detail) &&
+    /\bpath\b/.test(detail)
+  ) {
+    return 'pytest>=7,<8';
+  }
+  return null;
+}
+
+/**
  * Read `required_plugins` from pytest.ini (qutebrowser-style multi-line list).
  */
 export function parseRequiredPluginsFromPytestIni(text: string): string[] {
@@ -789,8 +807,9 @@ export function installSoftDepsForCollectFail(input: {
   const workspaceRoot = resolve(input.workspaceRoot);
   const missingMods = parseMissingModulesFromProbe(input.probeDetail);
   const missingPlugins = parseMissingPytestPluginsFromProbe(input.probeDetail);
+  const pytestPin = parsePytestVersionPinFromProbe(input.probeDetail);
   const missing = [...missingMods, ...missingPlugins];
-  if (missing.length === 0 && !(input.extraSpecs?.length)) {
+  if (missing.length === 0 && !(input.extraSpecs?.length) && !pytestPin) {
     return { installed: [], attempted: false, detail: 'no_missing_modules' };
   }
   const timeout = input.timeoutMs ?? Math.min(DEFAULT_INSTALL_TIMEOUT_MS, 4 * 60 * 1000);
@@ -812,6 +831,7 @@ export function installSoftDepsForCollectFail(input: {
   }
 
   const specs: string[] = [...(input.extraSpecs ?? [])];
+  if (pytestPin) specs.push(pytestPin);
   for (const mod of missing) {
     // pytest-* plugins: pip name is usually the plugin name itself.
     if (/^pytest[\w.-]*$/i.test(mod)) {
@@ -1315,9 +1335,15 @@ export function runWorkspaceDepPreflight(input: {
     softRound += 1;
     const missingMods = parseMissingModulesFromProbe(probe.detail);
     const missingPlugins = parseMissingPytestPluginsFromProbe(probe.detail);
+    const pytestPin = parsePytestVersionPinFromProbe(probe.detail);
     // Round 1 may force pytest.ini plugins even if collect text is truncated.
     const forcePlugins = softRound === 1 ? requiredPlugins : [];
-    if (missingMods.length === 0 && missingPlugins.length === 0 && forcePlugins.length === 0) {
+    if (
+      missingMods.length === 0 &&
+      missingPlugins.length === 0 &&
+      forcePlugins.length === 0 &&
+      !pytestPin
+    ) {
       break;
     }
     const soft = installSoftDepsForCollectFail({

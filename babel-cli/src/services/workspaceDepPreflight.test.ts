@@ -16,6 +16,7 @@ import {
   packageNameFromPyproject,
   parseMissingModulesFromProbe,
   parseMissingPytestPluginsFromProbe,
+  parsePytestVersionPinFromProbe,
   parsePythonVersion,
   parseRequiredPluginsFromPytestIni,
   pythonVersionMeetsMin,
@@ -48,6 +49,14 @@ markers =
       'pytest-benchmark',
       'pytest-instafail',
     ]);
+    assert.equal(
+      parsePytestVersionPinFromProbe(
+        `pluggy._manager.PluginValidationError: Plugin 'tests/conftest.py' for hook 'pytest_ignore_collect'
+hookimpl definition: pytest_ignore_collect(path)
+Argument(s) {'path'} are declared in the hookimpl but can not be found in the hookspec`,
+      ),
+      'pytest>=7,<8',
+    );
   });
 
   test('W1 A: parseMissingModulesFromProbe extracts import names', () => {
