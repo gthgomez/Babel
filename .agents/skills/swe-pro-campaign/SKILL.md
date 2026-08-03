@@ -47,7 +47,7 @@ Profiles: see `references/profiles.md`.
 
 1. **Live spend requires explicit user authorization** in this session. Do not start `gate0-canary`, `remeasure-3`, or `waveA-20` without a clear “go”.
 2. **Never** run multi-cell live (or long mock with dep install) under a blocking tool whose timeout is shorter than the campaign wall.
-3. **Always detach** for live and for mock when `limit≥1` and deps may install. Agent session only runs start/monitor (seconds).
+3. **Always detach** for live and for mock when `limit≥1` and deps may install. Agent session only runs start/monitor (seconds). Use `start_swebench_pro.ps1` (Win32_Process.Create) — plain `Start-Process` / blocking `npm run` under an agent tool will be killed or timeout.
 4. **Campaign process may run unbounded; cells must not.** Per-cell agent/ftp budgets come from the profile. Cell expiry → honest timeout class, then continue.
 5. **Never** set `BABEL_DEEPSEEK_THINKING=disabled` “to make tools work” unless the profile is an explicit contrast arm, recorded in harvest.
 6. **Never** claim model capability from env/harness/readiness blocks.

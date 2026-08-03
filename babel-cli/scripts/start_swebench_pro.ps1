@@ -5,6 +5,9 @@
 .DESCRIPTION
   Launches npm benchmark:agent:swe-pro in the background, writes process.json
   and heartbeat path. Returns immediately — never waits for campaign completion.
+
+  Uses Win32_Process.Create so the campaign survives agent shell Job Objects
+  (Start-Process children are often killed when the launching tool exits).
 #>
 param(
   [Parameter(Mandatory = $true)]
