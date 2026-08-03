@@ -161,3 +161,20 @@ Evidence `gate0-mock-plugins-20260802-203634`:
 | qutebrowser live | Plugins installed; then **`ModuleNotFoundError: PyQt5`** (addressed in `272f852`) |
 
 Live **gate0-canary** not run: `DEEPSEEK_API_KEY` absent in env and `babel-cli/.env`.
+
+## Readiness green remock (2026-08-03)
+
+| Commit | Content |
+| --- | --- |
+| `7f20742` | Soft-pin `pytest>=7,<8` for qutebrowser `pytest_ignore_collect(path)` |
+
+Evidence: `runs/agent-benchmark/swe-pro/gate0-mock-pytest7-20260802-204733`
+
+| Cell | dep_ready | signature | fail_to_pass | notes |
+| --- | --- | --- | --- | --- |
+| openlibrary | **true** | `agent:empty_patch` | assert_fail (collect ok) | signed readiness + overlay |
+| qutebrowser | **true** | `agent:empty_patch` | assert_fail (collect ok) | soft_deps: plugins + PyQt5 + pytest&lt;8 |
+
+**Both cells reached readiness.** Mock agent produces zero production patch → honest `agent:empty_patch` (not env_blocked).  
+**Gate 0 measurement substrate:** green for this 2-cell dataset.  
+**Still open:** budget-authorized live `gate0-canary` (needs `DEEPSEEK_API_KEY`).
