@@ -178,3 +178,25 @@ Evidence: `runs/agent-benchmark/swe-pro/gate0-mock-pytest7-20260802-204733`
 **Both cells reached readiness.** Mock agent produces zero production patch → honest `agent:empty_patch` (not env_blocked).  
 **Gate 0 measurement substrate:** green for this 2-cell dataset.  
 **Still open:** budget-authorized live `gate0-canary` (needs `DEEPSEEK_API_KEY`).
+
+## Live gate0-canary (2026-08-03)
+
+| Field | Value |
+| --- | --- |
+| Evidence | `runs/agent-benchmark/swe-pro/gate0-canary-20260802-220222` |
+| Model | **`deepseek-v4-flash`** (explicit `--model`; profile.json) |
+| Instance | openlibrary 4a5d… |
+| Infra | `infra:ok` |
+| Live signature | **`agent:budget_exhausted`** |
+| Status | `BUDGET_EXCEEDED` / `BUDGET_EXHAUSTED` (time budget ~600s / 72 turns) |
+| `dep_ready` | true |
+| Readiness + overlay | signed receipt; verifier_overlay used |
+| `test_patch_applied` | true |
+| fail_to_pass | ran; `assert_fail` (collect ok) |
+| patch_bytes | 0 |
+| env_blocked | false |
+| False complete | no |
+
+**Wire/config proof (partial):** live path executed on V4 Flash with readiness gate and dual scoreboard; not a solve. Terminal is **product time budget**, not env quarantine or harness crash.
+
+**Next (optional):** raise chat wall for canary profile or re-run with higher `BABEL_CHAT_*` budget if measuring solve rate; for Gate 0 wire proof this cell is usable as honest live exercise.
