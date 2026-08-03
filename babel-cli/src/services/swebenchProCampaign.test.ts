@@ -18,9 +18,16 @@ import {
   resolveSweProPassMode,
   runSwebenchProCampaign,
   updateFailureStreak,
+  workspaceDirectoryName,
   type CampaignCellResult,
   type SwebenchProInstanceRow,
 } from './swebenchProCampaign.js';
+import {
+  listAttemptStates,
+  loadCampaignManifest,
+  reconcileCampaignEvidence,
+  validateConservation,
+} from './causalCampaignContract.js';
 import { packageHintFromRepo } from './workspaceDepPreflight.js';
 import { parseSweStringList } from './agentBenchmarkHarness.js';
 
@@ -40,6 +47,14 @@ function cell(
 }
 
 describe('swebenchProCampaign early-stop', () => {
+  test('workspace directory names stay short and stable for Windows paths', () => {
+    const instanceId = 'instance_internetarchive__openlibrary-' + 'a'.repeat(120);
+    const first = workspaceDirectoryName(instanceId);
+    assert.equal(first, workspaceDirectoryName(instanceId));
+    assert.ok(first.length <= 40);
+    assert.doesNotMatch(first, /[\\/]/);
+  });
+
   test('ensureShadowSummaryForCampaign synthesizes boundary for mid-flush shadows', () => {
     const withSummary = ensureShadowSummaryForCampaign(
       [
@@ -121,6 +136,20 @@ describe('swebenchProCampaign early-stop', () => {
         stdoutStderr: "ModuleNotFoundError: No module named 'qutebrowser'",
       }),
       'agent:blocked_policy',
+    );
+    // Mock openlibrary: env_blocked=false but policy log mentions env_blocked
+    assert.equal(
+      classifyCampaignFailureSignature({
+        phase: 'live',
+        statusText: 'NEEDS_MORE_CONTEXT',
+        terminalOutcome: 'AGENT_FAILURE',
+        envBlocked: false,
+        patchBytes: 0,
+        goldDiffOk: false,
+        stdoutStderr:
+          'progress_policy env_blocked: ENV_BLOCKED: verification cannot run in this environment',
+      }),
+      'agent:empty_patch',
     );
     // Explicit ENV_BLOCKED status
     assert.equal(
@@ -262,6 +291,37 @@ describe('swebenchProCampaign early-stop', () => {
     assert.equal(liveCount, 5, 'should not run remaining instances after abort');
     assert.equal(report.shadow_sessions_with_summary, 1);
     assert.match(report.policy_events_jsonl, /policy-events\.jsonl$/);
+
+    // Frozen denominator: manifest exists before/through abort; open attempts remain non-terminal
+    const evidenceDir = join(dir, 'evidence');
+    assert.equal(existsSync(join(evidenceDir, 'campaign-manifest.json')), true);
+    const manifest = loadCampaignManifest(evidenceDir);
+    assert.equal(manifest.expected_attempts.length, 7);
+    assert.equal(manifest.causal_stage1_complete_design, false);
+    assert.equal(manifest.identity.mode, 'chat-headless');
+    const states = listAttemptStates(evidenceDir);
+    assert.equal(states.length, 7);
+    assert.equal(validateConservation(manifest, states).ok, true);
+    // 5 live terminals + remaining queued/running after early-stop
+    const terminal = states.filter((s) => s.lifecycle === 'terminal').length;
+    assert.equal(terminal, 5);
+    const open = states.filter((s) => s.lifecycle === 'queued' || s.lifecycle === 'running');
+    assert.ok(open.length >= 2, 'early-stop must leave expected attempts open for reconcile');
+
+    const recon = reconcileCampaignEvidence({
+      evidenceDir,
+      graceMs: 0,
+      nowMs: Date.now() + 60_000,
+      processTreeAlive: false,
+      processRecord: {
+        pid: 1,
+        started_at: '2026-07-30T12:00:00.000Z',
+        launch_method: 'test',
+      },
+    });
+    assert.equal(recon.conservation_ok, true);
+    assert.equal(recon.campaign_complete, true);
+    assert.ok(recon.orphaned_attempt_ids.length >= 2);
   });
 
   test('W1 D: classifyFailToPassResult separates collect_error from assert_fail', () => {

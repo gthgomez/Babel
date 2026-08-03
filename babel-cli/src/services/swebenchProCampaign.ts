@@ -8,6 +8,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -40,6 +41,30 @@ import {
   runWorkspaceDepPreflight,
   type WorkspaceDepPreflightResult,
 } from './workspaceDepPreflight.js';
+import {
+  createWorkspaceReadinessReceipt,
+  createWorkspaceReadinessSigner,
+  encodeWorkspaceReadinessReceipt,
+} from './workspaceReadinessReceipt.js';
+import {
+  createVerifierOverlay,
+  getHeadCommitChangedPaths,
+  removeVerifierOverlay,
+} from './verifierOverlay.js';
+import {
+  buildCampaignManifest,
+  captureGitIdentity,
+  findAttemptForTaskArm,
+  hashFileSha256,
+  loadCampaignManifest,
+  seedQueuedAttempts,
+  transitionAttempt,
+  writeCampaignManifest,
+  type CausalStage1Arm,
+} from './causalCampaignContract.js';
+import { buildCellTelemetryBundle } from '../agent/chatEngineObservability.js';
+import type { TurnRoutingReceipt } from '../agent/turnRoutingReceipt.js';
+import { writeDerivedCampaignState } from './causalCampaignValidator.js';
 
 export const SWE_PRO_CAMPAIGN_SCHEMA = 1 as const;
 
@@ -54,6 +79,20 @@ export interface SwebenchProInstanceRow extends SwebenchInstanceRow {
   before_repo_set_cmd?: string;
   selected_test_files_to_run?: string;
   _babel_source?: string;
+}
+
+/**
+ * Keep native Windows extension/DLL paths short while retaining a stable,
+ * collision-resistant mapping from evidence identity to workspace directory.
+ */
+export function workspaceDirectoryName(instanceId: string): string {
+  const prefix =
+    instanceId
+      .trim()
+      .replace(/[^A-Za-z0-9_-]+/g, '_')
+      .slice(0, 20) || 'instance';
+  const digest = createHash('sha256').update(instanceId).digest('hex').slice(0, 16);
+  return `${prefix}-${digest}`;
 }
 
 export type CampaignPhase = 'infra' | 'live';
@@ -93,6 +132,34 @@ export interface CampaignCellResult {
   evidence_path: string;
   cli_exit_code?: number | null;
   status_text?: string | null;
+  verifier_overlay?: {
+    used: boolean;
+    excluded_path_count: number;
+    applied_file_count: number;
+    reason: string | null;
+  };
+  /** Slice 2: effort / cost / boundary telemetry from chat-headless payload. */
+  telemetry?: {
+    effort: ReturnType<typeof buildCellTelemetryBundle>['effort'];
+    cost: ReturnType<typeof buildCellTelemetryBundle>['cost'];
+    boundary: ReturnType<typeof buildCellTelemetryBundle>['boundary'];
+  };
+  /**
+   * Dual scoreboard: host FTP is product capability primary; gold is diagnostic only
+   * (multi-file PR reference — never sole capability criterion).
+   */
+  scoreboard?: {
+    host_fail_to_pass: boolean | null;
+    gold_diagnostic: boolean | null;
+    capability_primary: 'host_fail_to_pass';
+    gold_role: 'diagnostic_only';
+  };
+  /**
+   * In-session Babel authoritative verifier (allowlisted command only).
+   * null = not run / non-authoritative; true/false = pass/fail.
+   */
+  babel_authoritative_verifier?: boolean | null;
+  babel_authoritative_verifier_command?: string | null;
 }
 
 export interface CampaignAbort {
@@ -129,6 +196,12 @@ export interface CampaignOptions {
   instanceLimit?: number;
   instanceIds?: string[];
   model?: string;
+  /** Agent subprocess timeout in milliseconds; 0 disables only this deadline. */
+  agentTimeoutMs?: number;
+  /** Host fail-to-pass verifier timeout in milliseconds; 0 disables only this deadline. */
+  failToPassTimeoutMs?: number;
+  /** Optional redacted progress file for detached long-running campaigns. */
+  heartbeatFile?: string;
   /** When true, skip live agent even if provider=live (infra only). */
   infraOnly?: boolean;
   /** Pull docker image during infra for first K instances (default 0 = skip pull). */
@@ -143,6 +216,14 @@ export interface CampaignOptions {
   now?: Date;
   /** Inject for tests */
   runCell?: (instance: SwebenchProInstanceRow, phase: CampaignPhase) => CampaignCellResult;
+  /**
+   * Stage 1 causal arms to freeze in campaign-manifest.json.
+   * Default: `['babel_enforce']` (reliability-only; not a complete causal design).
+   * Full causal Stage 1: `['babel_prompt_control','babel_shadow','babel_enforce']`.
+   */
+  causalArms?: CausalStage1Arm[];
+  /** Replicates per task×arm (default 1). */
+  causalReplicates?: number;
 }
 
 const DEFAULT_EARLY_STOP = 5;
@@ -150,6 +231,49 @@ const CLONE_TIMEOUT_MS = 10 * 60 * 1000;
 const CHECKOUT_TIMEOUT_MS = 5 * 60 * 1000;
 /** Outer kill must exceed product general_swe wall (10m) so the agent can finalize + flush policy-events. */
 const AGENT_TIMEOUT_MS = 25 * 60 * 1000;
+const FAIL_TO_PASS_TIMEOUT_MS = 180_000;
+
+export interface SweProHeartbeat {
+  schema_version: 1;
+  campaign_id: string;
+  pid: number;
+  phase: CampaignPhase | 'starting' | 'complete';
+  current_instance_id: string | null;
+  started_at: string;
+  last_progress_at: string;
+  completed_cells: number;
+  total_cells: number;
+  evidence_files: number;
+  last_error_class: string | null;
+  process_state: 'running' | 'complete';
+}
+
+function validateNonNegativeTimeout(name: string, value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function gitHeadForReceipt(repoRoot: string): string | null {
+  const result = spawnSync('git', ['rev-parse', 'HEAD'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 10_000,
+  });
+  return result.status === 0 && result.stdout?.trim() ? result.stdout.trim() : null;
+}
+
+function writeSweProHeartbeat(
+  file: string | undefined,
+  state: SweProHeartbeat,
+): void {
+  if (!file) return;
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+}
 
 export function defaultSweProDatasetPath(): string {
   return join(BABEL_ROOT, 'benchmarks', 'datasets', 'swe-bench-pro', 'pilot-subset.jsonl');
@@ -275,7 +399,10 @@ export function classifyCampaignFailureSignature(input: {
   if (status === 'BLOCKED') {
     // Legacy generic BLOCKED: prefer policy unless blob is clearly env-only
     // and no policy markers — still require clear env signal in blob.
+    // Never override an explicit envBlocked=false (in-agent policy may log
+    // "env_blocked:" wording without host quarantine).
     if (
+      input.envBlocked !== false &&
       /env_blocked|importerror|modulenotfound|while loading conftest/i.test(blob) &&
       !/investigate.?hard.?cap|zero.?write|blocked_policy|progress_terminal/i.test(blob)
     ) {
@@ -283,8 +410,26 @@ export function classifyCampaignFailureSignature(input: {
     }
     return 'agent:blocked_policy';
   }
-  // Blob heuristics only when structured status/outcome were absent
-  if (/env_blocked|importerror|modulenotfound|while loading conftest/i.test(blob)) {
+  // Structured non-env terminals with zero production patch: empty_patch beats
+  // blob "env_blocked" noise from progress-policy shadow logs (mock openlibrary).
+  if (
+    input.envBlocked === false &&
+    (input.patchBytes ?? 0) === 0 &&
+    (status === 'NEEDS_MORE_CONTEXT' ||
+      terminal === 'AGENT_FAILURE' ||
+      terminal === 'BLOCKED_EXTERNAL' ||
+      terminal === 'BLOCKED_POLICY')
+  ) {
+    return 'agent:empty_patch';
+  }
+  // Blob heuristics only when structured status/outcome were absent AND
+  // envBlocked was not explicitly false.
+  if (
+    input.envBlocked !== false &&
+    !status &&
+    !terminal &&
+    /env_blocked|importerror|modulenotfound|while loading conftest/i.test(blob)
+  ) {
     return 'agent:env_blocked';
   }
   if (status === 'NEEDS_MORE_CONTEXT' || /blocked_policy|BLOCKED_POLICY/i.test(blob)) {
@@ -514,8 +659,10 @@ function testPatchNotes(result: TestPatchApplyResult): string[] {
 }
 
 /**
- * W1.3: pass_mode for live_pass / cell.status.
- * Default `gold` keeps historical scoreboard; set BABEL_SWE_PRO_PASS_MODE=ftp|both to change.
+ * W1.3: pass_mode for live_pass / cell.status only.
+ * Capability primary remains host fail_to_pass; gold is diagnostic (multi-file PR ref).
+ * Default `gold` keeps historical scoreboard; canaries force `both`.
+ * Set BABEL_SWE_PRO_PASS_MODE=ftp|both|gold to change cell.status aggregation.
  */
 export function resolveSweProPassMode(
   env: NodeJS.ProcessEnv = process.env,
@@ -526,6 +673,10 @@ export function resolveSweProPassMode(
   return 'gold';
 }
 
+/**
+ * cell.status aggregation only — does not redefine dual axes.
+ * Prefer reporting host_fail_to_pass_ok and gold_diagnostic_ok separately.
+ */
 export function cellPassesByMode(
   goldDiffOk: boolean | null,
   failToPassOk: boolean | null | undefined,
@@ -609,7 +760,7 @@ export function runFailToPassCheck(
   workspaceRoot: string,
   instance: SwebenchProInstanceRow,
   env: NodeJS.ProcessEnv = process.env,
-  options?: { pythonBin?: string | null },
+  options?: { pythonBin?: string | null; timeoutMs?: number },
 ): FailToPassCheckResult {
   const disabled = (env['BABEL_SWE_PRO_FTP_CHECK'] ?? '1').trim() === '0';
   if (disabled) {
@@ -637,12 +788,16 @@ export function runFailToPassCheck(
     (process.platform === 'win32' ? 'python' : 'python3');
   const command = `${pythonBin} -m pytest ${targets.join(' ')} -q --tb=short`;
   try {
+    const timeoutMs = validateNonNegativeTimeout(
+      'failToPassTimeoutMs',
+      options?.timeoutMs ?? FAIL_TO_PASS_TIMEOUT_MS,
+    );
     // Prefer argv form without shell so venv pythonBin paths with spaces work.
     const result = spawnSync(pythonBin, ['-m', 'pytest', ...targets, '-q', '--tb=short'], {
       cwd: workspaceRoot,
       encoding: 'utf8',
       env,
-      timeout: 180_000,
+      ...(timeoutMs === undefined || timeoutMs === 0 ? {} : { timeout: timeoutMs }),
       windowsHide: true,
     });
     const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim();
@@ -917,7 +1072,7 @@ function defaultRunInfraCell(
   mkdirSync(dirname(evidence_path), { recursive: true });
   const notes: string[] = [];
   try {
-    const workspaceRoot = join(evidenceDir, 'workspaces', instance.instance_id);
+    const workspaceRoot = join(evidenceDir, 'workspaces', workspaceDirectoryName(instance.instance_id));
     checkoutProRepo(instance, workspaceRoot);
     notes.push('checkout_ok');
     if (dockerPull && instance.dockerhub_tag && isDockerAvailable()) {
@@ -1042,7 +1197,7 @@ function defaultRunLiveCell(
   evidenceDir: string,
   provider: 'mock' | 'live',
   model: string,
-  options?: Pick<CampaignOptions, 'depPreflight'>,
+  options?: Pick<CampaignOptions, 'depPreflight' | 'agentTimeoutMs' | 'failToPassTimeoutMs'>,
 ): CampaignCellResult {
   const started = performance.now();
   const evidence_path = join(evidenceDir, 'live', `${instance.instance_id}.json`);
@@ -1066,7 +1221,7 @@ function defaultRunLiveCell(
     return result;
   }
 
-  const workspaceRoot = join(evidenceDir, 'workspaces', instance.instance_id);
+  const workspaceRoot = join(evidenceDir, 'workspaces', workspaceDirectoryName(instance.instance_id));
   try {
     if (!existsSync(workspaceRoot)) {
       checkoutProRepo(instance, workspaceRoot);
@@ -1101,13 +1256,15 @@ function defaultRunLiveCell(
   // C2: install workspace deps (or honest ENV_BLOCKED) before burning agent wall/cost.
   let depNotes: string[] = [];
   let depEnvPatch: WorkspaceDepPreflightResult | null = null;
+  const verifierTestPath = resolveProTestPathHint(instance);
   if (depPreflightEnabled(options?.depPreflight)) {
-    const testPath = resolveProTestPathHint(instance);
     const preflight = runWorkspaceDepPreflight({
       workspaceRoot,
       packageHint: packageHintFromRepo(instance.repo),
-      testPath,
+      testPath: verifierTestPath,
       install: true,
+      // typing.Required and modern packaging — refuse host Python 3.10 venvs.
+      minPython: { major: 3, minor: 11 },
     });
     depEnvPatch = preflight;
     depNotes = [
@@ -1116,6 +1273,7 @@ function defaultRunLiveCell(
       `dep_installed=${preflight.installed}`,
       `dep_kind=${preflight.plan.kind}`,
       `dep_package=${preflight.plan.packageHint ?? 'null'}`,
+      `dep_python=${preflight.pythonBin ?? 'null'}`,
       `dep_ms=${preflight.durationMs}`,
       ...(preflight.softDepsAttempted
         ? [
@@ -1148,6 +1306,33 @@ function defaultRunLiveCell(
   if (depEnvPatch) {
     productEnv = applyDepPreflightEnv(productEnv, depEnvPatch);
   }
+  // W0: provider calls are allowed only after a redacted, signed readiness
+  // receipt has been created from the completed local preflight. The private
+  // signing key remains in this parent process; only the public key and
+  // encoded receipt cross into the CLI subprocess.
+  const readinessSigner = createWorkspaceReadinessSigner();
+  const readinessReceipt = createWorkspaceReadinessReceipt(
+    {
+      workspaceRoot,
+      gitHead: gitHeadForReceipt(workspaceRoot),
+      testPath: verifierTestPath,
+      verifierCommand: verifierTestPath
+        ? `python -m pytest ${verifierTestPath} -q --tb=short`
+        : null,
+      dependencyReady: depEnvPatch?.ready === true,
+      pythonExecutableValid: depEnvPatch?.pythonExecutableValid ?? null,
+      collectionReady: depEnvPatch ? depEnvPatch.ready : false,
+      testPatchApplied: testPatchResult.applied,
+      verifierAuthority: verifierTestPath || testPatchResult.applied ? 'dataset_bound' : 'project_bound',
+    },
+    readinessSigner,
+  );
+  productEnv = {
+    ...productEnv,
+    BABEL_REQUIRE_WORKSPACE_READINESS: '1',
+    BABEL_WORKSPACE_READINESS_RECEIPT: encodeWorkspaceReadinessReceipt(readinessReceipt),
+    BABEL_WORKSPACE_READINESS_PUBLIC_KEY: readinessSigner.publicKeyBase64,
+  };
   // Prefer product stall tune over harness stall=25 unless operator set it.
   if (!process.env['BABEL_CHAT_STALL_TURNS']?.trim()) {
     delete productEnv['BABEL_CHAT_STALL_TURNS'];
@@ -1176,12 +1361,46 @@ function defaultRunLiveCell(
       cliEntry: resolveBabelCliEntry(),
       cwd: join(BABEL_ROOT, 'babel-cli'),
       env: productEnv,
-      timeoutMs: AGENT_TIMEOUT_MS,
+      timeoutMs: options?.agentTimeoutMs ?? AGENT_TIMEOUT_MS,
       ensureDist: false,
     },
   );
 
-  const patch = captureGitPatch(workspaceRoot);
+  const agentPatch = captureGitPatch(workspaceRoot);
+
+  // W0: verify in a clean detached overlay. The test_patch baseline remains
+  // committed in the agent workspace; its changed paths plus the selected
+  // verifier file are excluded from the agent production diff.
+  const protectedVerifierPaths = [
+    ...(testPatchResult.applied ? getHeadCommitChangedPaths(workspaceRoot) : []),
+    ...(verifierTestPath ? [verifierTestPath] : []),
+  ];
+  const verifierOverlay = createVerifierOverlay({
+    agentRoot: workspaceRoot,
+    overlayRoot: join(evidenceDir, 'verifier-overlays', instance.instance_id),
+    protectedPaths: protectedVerifierPaths,
+  });
+  let patch = agentPatch;
+  let ftpCheck: ReturnType<typeof runFailToPassCheck>;
+  if (verifierOverlay.ok && verifierOverlay.root) {
+    patch = captureGitPatch(verifierOverlay.root);
+    ftpCheck = runFailToPassCheck(verifierOverlay.root, instance, productEnv, {
+      pythonBin: depEnvPatch?.pythonBin ?? productEnv['BABEL_WORKSPACE_PYTHON'] ?? null,
+      ...(options?.failToPassTimeoutMs !== undefined
+        ? { timeoutMs: options.failToPassTimeoutMs }
+        : {}),
+    });
+  } else {
+    ftpCheck = {
+      ok: null,
+      command: null,
+      exitCode: null,
+      skippedReason: `verifier_overlay_${verifierOverlay.reason ?? 'unavailable'}`,
+      failToPassClass: 'env_error',
+    };
+  }
+  removeVerifierOverlay(workspaceRoot, verifierOverlay.root);
+
   const gold = instance.patch ?? '';
   let gold_diff_ok: boolean | null = null;
   if (patch.trim() && gold.trim()) {
@@ -1191,9 +1410,6 @@ function defaultRunLiveCell(
   }
 
   // W1.3/B/D: dual scoreboard + venv interpreter + collect vs assert class.
-  const ftpCheck = runFailToPassCheck(workspaceRoot, instance, productEnv, {
-    pythonBin: depEnvPatch?.pythonBin ?? productEnv['BABEL_WORKSPACE_PYTHON'] ?? null,
-  });
   const fail_to_pass_ok = ftpCheck.ok;
   const fail_to_pass_class = ftpCheck.failToPassClass;
   const passMode = resolveSweProPassMode();
@@ -1261,10 +1477,88 @@ function defaultRunLiveCell(
   });
   const has_shadow_summary = policy_events.some((e) => e.kind === 'policy_shadow_summary');
 
+  // Slice 2: cell effort/cost/boundary from chat-headless turnRouting + policy/tools
+  const turnRoutingRaw = payload?.['turnRouting'] ?? payload?.['turn_routing'];
+  const turnRouting: TurnRoutingReceipt[] = Array.isArray(turnRoutingRaw)
+    ? (turnRoutingRaw as TurnRoutingReceipt[])
+    : [];
+  const toolCallsRaw = payload?.['toolCalls'] ?? payload?.['tool_calls'];
+  const toolCalls = Array.isArray(toolCallsRaw)
+    ? (toolCallsRaw as Array<{
+        tool?: string;
+        error?: string;
+        exit_code?: number;
+        index?: number;
+        turn?: number;
+      }>)
+    : [];
+  // Rebuild logIndexToTurn from tool.turn when present (headless export)
+  const logIndexToTurn = new Map<number, number>();
+  for (let i = 0; i < toolCalls.length; i += 1) {
+    const tc = toolCalls[i]!;
+    if (typeof tc.turn === 'number') {
+      logIndexToTurn.set(typeof tc.index === 'number' ? tc.index : i, tc.turn);
+    }
+  }
+  const telemetry = buildCellTelemetryBundle({
+    turnRouting,
+    policyEvents: policy_events,
+    toolCalls,
+    ...(logIndexToTurn.size > 0 ? { logIndexToTurn } : {}),
+  });
+
+  // In-session Babel authoritative verifier (allowlisted only)
+  const completionVerification = payload?.['completion_verification'] as
+    | {
+        status?: string;
+        authority?: boolean | null;
+        verification?: { command?: string; exit_code?: number } | null;
+      }
+    | undefined;
+  const verifierReceiptPayload = payload?.['verifier_receipt'] as
+    | { command?: string; exit_code?: number }
+    | undefined;
+  let babel_authoritative_verifier: boolean | null = null;
+  let babel_authoritative_verifier_command: string | null = null;
+  if (completionVerification && completionVerification.authority === true) {
+    babel_authoritative_verifier = completionVerification.status === 'pass';
+    babel_authoritative_verifier_command =
+      completionVerification.verification?.command ??
+      verifierReceiptPayload?.command ??
+      null;
+  } else if (
+    completionVerification &&
+    completionVerification.authority === false &&
+    completionVerification.verification?.command
+  ) {
+    // Explicit non-authoritative receipt → not_run for capability axis
+    babel_authoritative_verifier = null;
+    babel_authoritative_verifier_command = completionVerification.verification.command;
+  }
+
+  const scoreboard = {
+    host_fail_to_pass: fail_to_pass_ok ?? null,
+    gold_diagnostic: gold_diff_ok,
+    capability_primary: 'host_fail_to_pass' as const,
+    gold_role: 'diagnostic_only' as const,
+  };
+
   const ftpNotes: string[] = [
     `pass_mode=${passMode}`,
     `fail_to_pass_ok=${fail_to_pass_ok === null || fail_to_pass_ok === undefined ? 'null' : fail_to_pass_ok}`,
     `fail_to_pass_class=${fail_to_pass_class}`,
+    `gold_diagnostic=${gold_diff_ok} (not capability sole criterion)`,
+    `capability_primary=host_fail_to_pass`,
+    `babel_authoritative_verifier=${babel_authoritative_verifier === null ? 'not_run' : babel_authoritative_verifier}`,
+    ...(babel_authoritative_verifier_command
+      ? [`babel_authoritative_cmd=${babel_authoritative_verifier_command.slice(0, 160)}`]
+      : []),
+    `turns_to_first_write=${telemetry.boundary.turns_to_first_applied_write ?? 'null'}`,
+    `verifier_overlay=${verifierOverlay.ok}`,
+    `verifier_overlay_excluded=${verifierOverlay.excludedPaths.length}`,
+    `verifier_overlay_files=${verifierOverlay.appliedFiles.length}`,
+    ...(verifierOverlay.reason ? [`verifier_overlay_reason=${verifierOverlay.reason}`] : []),
+    'readiness_receipt=signed',
   ];
   if (ftpCheck.pythonBin) ftpNotes.push(`fail_to_pass_python=${ftpCheck.pythonBin}`);
   if (ftpCheck.command) ftpNotes.push(`fail_to_pass_cmd=${ftpCheck.command.slice(0, 240)}`);
@@ -1272,6 +1566,9 @@ function defaultRunLiveCell(
     ftpNotes.push(`fail_to_pass_exit=${ftpCheck.exitCode}`);
   }
   if (ftpCheck.skippedReason) ftpNotes.push(`fail_to_pass_skip=${ftpCheck.skippedReason}`);
+  if (gold_diff_ok === false && fail_to_pass_ok === true) {
+    ftpNotes.push('gold_ftp_gap=true (host FTP pass; gold multi-file PR mismatch is diagnostic)');
+  }
 
   const result: CampaignCellResult = {
     instance_id: instance.instance_id,
@@ -1290,6 +1587,11 @@ function defaultRunLiveCell(
       `gold_diff=${gold_diff_ok}`,
       `policy_events=${policy_events.length}`,
       `shadow_summary=${has_shadow_summary}`,
+      `effort_aliased=${telemetry.effort.effort_aliased}`,
+      `effort_source=${telemetry.effort.effective_source}`,
+      `cost_est_usd=${telemetry.cost.estimated_usd}`,
+      `boundary_writes=${telemetry.boundary.successful_write_tool_count}`,
+      `boundary_force_mutate=${telemetry.boundary.force_mutate_count + telemetry.boundary.force_mutate_shadow_count}`,
       ...(runDir ? [`run_dir=${runDir}`] : []),
     ],
     patch_bytes: patch.length,
@@ -1302,6 +1604,16 @@ function defaultRunLiveCell(
     evidence_path,
     cli_exit_code: cli.exitCode,
     status_text: statusText,
+    verifier_overlay: {
+      used: verifierOverlay.ok,
+      excluded_path_count: verifierOverlay.excludedPaths.length,
+      applied_file_count: verifierOverlay.appliedFiles.length,
+      reason: verifierOverlay.reason,
+    },
+    telemetry,
+    scoreboard,
+    babel_authoritative_verifier,
+    babel_authoritative_verifier_command,
   };
 
   writeFileSync(
@@ -1315,6 +1627,13 @@ function defaultRunLiveCell(
         ...(testPatchResult.error ? { test_patch_error: testPatchResult.error } : {}),
         fail_to_pass_check: ftpCheck,
         dep_preflight: depEnvPatch,
+        readiness_receipt: readinessReceipt,
+        verifier_overlay: {
+          used: verifierOverlay.ok,
+          excluded_path_count: verifierOverlay.excludedPaths.length,
+          applied_file_count: verifierOverlay.appliedFiles.length,
+          reason: verifierOverlay.reason,
+        },
         preds: {
           model_name_or_path: 'babel-agent-chat',
           instance_id: instance.instance_id,
@@ -1354,6 +1673,8 @@ function defaultRunLiveCell(
 export async function runSwebenchProCampaign(
   options: CampaignOptions,
 ): Promise<CampaignReport> {
+  validateNonNegativeTimeout('agentTimeoutMs', options.agentTimeoutMs);
+  validateNonNegativeTimeout('failToPassTimeoutMs', options.failToPassTimeoutMs);
   const earlyStopN = options.earlyStopN ?? DEFAULT_EARLY_STOP;
   const datasetPath = resolve(options.datasetPath);
   if (!existsSync(datasetPath)) {
@@ -1377,10 +1698,64 @@ export async function runSwebenchProCampaign(
     instances = instances.slice(0, options.instanceLimit);
   }
 
+  // ── Frozen Stage 1 denominator (immutable manifest + queued attempts) ─────
+  // Written BEFORE any cell runs so crash mid-campaign cannot erase expected set.
+  const gitId = captureGitIdentity(BABEL_ROOT);
+  const causalArms: CausalStage1Arm[] = options.causalArms?.length
+    ? options.causalArms
+    : ['babel_enforce'];
+  const causalManifest = buildCampaignManifest({
+    campaignId: campaign_id,
+    createdAt: (options.now ?? new Date()).toISOString(),
+    taskIds: instances.map((i) => i.instance_id),
+    arms: causalArms,
+    replicates: options.causalReplicates ?? 1,
+    identity: {
+      babel_commit: gitId.babel_commit,
+      babel_branch: gitId.babel_branch,
+      dirty_digest: gitId.dirty_digest,
+      project_root: BABEL_ROOT,
+      canonical_remote: gitId.canonical_remote,
+      dataset_path: datasetPath,
+      dataset_sha256: hashFileSha256(datasetPath),
+      model: options.provider === 'live' ? (options.model ?? 'deepseek-v4-flash') : null,
+      provider: options.provider,
+    },
+  });
+  writeCampaignManifest(evidenceDir, causalManifest);
+  seedQueuedAttempts(evidenceDir, causalManifest, options.now);
+
   const cells: CampaignCellResult[] = [];
   let aborted: CampaignAbort | null = null;
   const policyJsonlPath = join(evidenceDir, 'policy-events.jsonl');
   writeFileSync(policyJsonlPath, '', 'utf8');
+  const startedAt = new Date().toISOString();
+  const heartbeat = (phase: SweProHeartbeat['phase'], instance: string | null, error: string | null = null) => {
+    const evidenceFiles = ['infra', 'live']
+      .map((part) => {
+        try {
+          return readdirSync(join(evidenceDir, part)).length;
+        } catch {
+          return 0;
+        }
+      })
+      .reduce((sum, count) => sum + count, 0);
+    writeSweProHeartbeat(options.heartbeatFile, {
+      schema_version: 1,
+      campaign_id,
+      pid: process.pid,
+      phase,
+      current_instance_id: instance,
+      started_at: startedAt,
+      last_progress_at: new Date().toISOString(),
+      completed_cells: cells.length,
+      total_cells: instances.length * (options.infraOnly ? 1 : 2),
+      evidence_files: evidenceFiles,
+      last_error_class: error,
+      process_state: phase === 'complete' ? 'complete' : 'running',
+    });
+  };
+  heartbeat('starting', null);
 
   const runCell =
     options.runCell ??
@@ -1395,18 +1770,47 @@ export async function runSwebenchProCampaign(
         instance,
         evidenceDir,
         options.provider,
-        options.model ?? 'deepseek-v4-pro',
+        options.model ?? 'deepseek-v4-flash',
         options.depPreflight === undefined
-          ? undefined
-          : { depPreflight: options.depPreflight },
+          ? {
+              ...(options.agentTimeoutMs !== undefined
+                ? { agentTimeoutMs: options.agentTimeoutMs }
+                : {}),
+              ...(options.failToPassTimeoutMs !== undefined
+                ? { failToPassTimeoutMs: options.failToPassTimeoutMs }
+                : {}),
+            }
+          : {
+              depPreflight: options.depPreflight,
+              ...(options.agentTimeoutMs !== undefined
+                ? { agentTimeoutMs: options.agentTimeoutMs }
+                : {}),
+              ...(options.failToPassTimeoutMs !== undefined
+                ? { failToPassTimeoutMs: options.failToPassTimeoutMs }
+                : {}),
+            },
       );
     });
 
-  // ── Infra phase ──────────────────────────────────────────────────────────
+  // ── Infra phase (substage of each attempt; not a separate capability row) ─
   let streak = { signature: null as string | null, count: 0, cell_ids: [] as string[] };
   for (const instance of instances) {
+    // Mark primary arm attempt as running/infra for this task (reliability default arm).
+    const exp = findAttemptForTaskArm(causalManifest, instance.instance_id, 'babel_enforce', 0);
+    if (exp) {
+      try {
+        transitionAttempt(evidenceDir, exp.attempt_id, {
+          lifecycle: 'running',
+          substage: 'infra',
+        });
+      } catch {
+        /* already terminal/orphaned — leave alone */
+      }
+    }
+    heartbeat('infra', instance.instance_id);
     const cell = runCell(instance, 'infra');
     cells.push(cell);
+    heartbeat('infra', instance.instance_id, cell.status === 'fail' ? cell.signature : null);
     const next = updateFailureStreak(streak, cell, earlyStopN, 'infra');
     streak = { signature: next.signature, count: next.count, cell_ids: next.cell_ids };
     if (next.abort) {
@@ -1422,7 +1826,9 @@ export async function runSwebenchProCampaign(
       cells.filter((c) => c.phase === 'infra' && c.status === 'pass').map((c) => c.instance_id),
     );
     for (const instance of instances) {
+      const exp = findAttemptForTaskArm(causalManifest, instance.instance_id, 'babel_enforce', 0);
       if (!infraPassed.has(instance.instance_id)) {
+        const skippedPath = join(evidenceDir, 'live', `${instance.instance_id}.skipped.json`);
         cells.push({
           instance_id: instance.instance_id,
           phase: 'live',
@@ -1434,12 +1840,48 @@ export async function runSwebenchProCampaign(
           policy_events: [],
           has_shadow_summary: false,
           duration_ms: 0,
-          evidence_path: join(evidenceDir, 'live', `${instance.instance_id}.skipped.json`),
+          evidence_path: skippedPath,
         });
+        if (exp) {
+          try {
+            transitionAttempt(evidenceDir, exp.attempt_id, {
+              lifecycle: 'terminal',
+              substage: 'done',
+              terminal_signature: 'live:skipped_infra_fail',
+              cell_evidence_path: skippedPath,
+            });
+          } catch {
+            /* ignore illegal transition */
+          }
+        }
         continue;
       }
+      if (exp) {
+        try {
+          transitionAttempt(evidenceDir, exp.attempt_id, {
+            lifecycle: 'running',
+            substage: 'live',
+          });
+        } catch {
+          /* ignore */
+        }
+      }
+      heartbeat('live', instance.instance_id);
       const cell = runCell(instance, 'live');
       cells.push(cell);
+      if (exp) {
+        try {
+          transitionAttempt(evidenceDir, exp.attempt_id, {
+            lifecycle: 'terminal',
+            substage: 'done',
+            terminal_signature: cell.signature,
+            cell_evidence_path: cell.evidence_path,
+          });
+        } catch {
+          /* ignore */
+        }
+      }
+      heartbeat('live', instance.instance_id, cell.status === 'fail' ? cell.signature : null);
       // Append policy events for scoreboard
       for (const pe of cell.policy_events) {
         appendFileSync(
@@ -1456,6 +1898,35 @@ export async function runSwebenchProCampaign(
         break;
       }
     }
+  } else if (!aborted && options.infraOnly) {
+    // Infra-only: each attempt ends after infra substage (terminal with infra signature).
+    for (const instance of instances) {
+      const exp = findAttemptForTaskArm(causalManifest, instance.instance_id, 'babel_enforce', 0);
+      const infraCell = cells.find(
+        (c) => c.instance_id === instance.instance_id && c.phase === 'infra',
+      );
+      if (exp && infraCell) {
+        try {
+          transitionAttempt(evidenceDir, exp.attempt_id, {
+            lifecycle: 'terminal',
+            substage: 'done',
+            terminal_signature: infraCell.signature,
+            cell_evidence_path: infraCell.evidence_path,
+          });
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+
+  // Re-load manifest for summary note (immutable; must still match)
+  let causalNote = 'causal_manifest=present';
+  try {
+    const m = loadCampaignManifest(evidenceDir);
+    causalNote = `causal_manifest attempts=${m.expected_attempts.length} complete_design=${m.causal_stage1_complete_design}`;
+  } catch {
+    causalNote = 'causal_manifest=missing';
   }
 
   const shadow_sessions_with_summary = cells.filter((c) => c.has_shadow_summary).length;
@@ -1474,11 +1945,14 @@ export async function runSwebenchProCampaign(
     `SWE-Bench Pro campaign ${campaign_id}`,
     `instances=${instances.length} provider=${options.provider} early_stop_n=${earlyStopN}`,
     `pass_mode=${passMode} (BABEL_SWE_PRO_PASS_MODE=gold|ftp|both; default gold)`,
+    `scoreboard: capability_primary=host_fail_to_pass; gold_role=diagnostic_only (never sole capability)`,
+    causalNote,
     `infra_pass=${cells.filter((c) => c.phase === 'infra' && c.status === 'pass').length}`,
-    `live_pass=${livePass}/${liveCells.length}`,
-    `gold_diff_ok=${goldOk}/${liveCells.length}`,
-    `fail_to_pass_ok=${ftpOk}/${liveCells.length} (ran=${ftpRan})`,
+    `live_pass=${livePass}/${liveCells.length} (cell.status under pass_mode=${passMode})`,
+    `host_fail_to_pass_ok=${ftpOk}/${liveCells.length} (ran=${ftpRan}) [capability primary]`,
+    `gold_diagnostic_ok=${goldOk}/${liveCells.length} [diagnostic only — multi-file PR ref]`,
     `fail_to_pass_class collect_error=${ftpCollect} assert_fail=${ftpAssert}`,
+    `babel_authoritative_pass=${cells.filter((c) => c.babel_authoritative_verifier === true).length}/${liveCells.length}`,
     `shadow_summaries=${shadow_sessions_with_summary}`,
     aborted ? `ABORTED: ${aborted.reason}` : 'completed_without_early_stop',
     `policy_events_jsonl=${policyJsonlPath}`,
@@ -1505,7 +1979,38 @@ export async function runSwebenchProCampaign(
   if (aborted) {
     writeFileSync(join(evidenceDir, 'campaign_abort.json'), JSON.stringify(aborted, null, 2), 'utf8');
   }
+
+  // Slice 3: independently derived eligibility + multi-axis rates (not writer pass_mode)
+  let derivedNote = 'derived=skipped';
+  try {
+    const derived = writeDerivedCampaignState({
+      evidenceDir,
+      ...(options.now !== undefined ? { now: options.now } : {}),
+      writerCells: cells,
+      manifest: causalManifest,
+      legacyPassMode: passMode,
+    });
+    derivedNote = [
+      `derived_artifact_valid=${derived.eligibility.artifact_valid}`,
+      `derived_complete=${derived.eligibility.campaign_complete}`,
+      `derived_reliability_eligible=${derived.eligibility.reliability_eligible}`,
+      `derived_promotion_eligible=${derived.eligibility.promotion_eligible}`,
+      `derived_capability_score_valid=${derived.eligibility.capability_score_valid}`,
+      `itt_capability=${derived.intent_to_treat_capability.numerator}/${derived.intent_to_treat_capability.denominator}`,
+      `cond_capability=${derived.conditional_capability.numerator}/${derived.conditional_capability.denominator}`,
+    ].join(' ');
+    summary_lines.push(derivedNote);
+    report.summary_lines = summary_lines;
+    writeFileSync(join(evidenceDir, 'campaign-report.json'), JSON.stringify(report, null, 2), 'utf8');
+  } catch (err) {
+    derivedNote = `derived=error:${err instanceof Error ? err.message : String(err)}`;
+    summary_lines.push(derivedNote);
+    report.summary_lines = summary_lines;
+    writeFileSync(join(evidenceDir, 'campaign-report.json'), JSON.stringify(report, null, 2), 'utf8');
+  }
+
   writeFileSync(join(evidenceDir, 'campaign-summary.txt'), summary_lines.join('\n') + '\n', 'utf8');
+  heartbeat('complete', null, aborted ? aborted.signature : null);
 
   return report;
 }

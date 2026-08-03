@@ -13,10 +13,30 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 
 export const BABEL_WORKSPACE_VENV = '.babel-venv';
+
+/** Default minimum CPython for SWE-Pro / modern packages (`typing.Required` needs 3.11+). */
+export const DEFAULT_MIN_PYTHON = { major: 3, minor: 11 } as const;
+
+export interface PythonVersion {
+  major: number;
+  minor: number;
+  patch: number;
+}
+
+export interface ResolvedSystemPython {
+  /** Absolute interpreter path when available; otherwise a bare command name. */
+  bin: string;
+  version: string;
+  major: number;
+  minor: number;
+  patch: number;
+  /** How the interpreter was selected (for notes/telemetry). */
+  source: string;
+}
 
 export type DepInstallKind =
   | 'python_editable'
@@ -44,6 +64,8 @@ export interface WorkspaceDepPreflightResult {
   /** Directory to prepend to PATH for the agent process. */
   pathPrefix: string | null;
   pythonBin: string | null;
+  /** True only after the selected interpreter executes `--version`. */
+  pythonExecutableValid?: boolean;
   commands: string[];
   probeDetail: string | null;
   durationMs: number;
@@ -77,6 +99,11 @@ function listRequirementFiles(root: string): string[] {
     'test-requirements.txt',
     'requirements-test.txt',
     'dev-requirements.txt',
+    // Common nested layouts (e.g. qutebrowser / misc packages)
+    'requirements/tests.txt',
+    'requirements/requirements.txt',
+    'misc/requirements/requirements-tests.txt',
+    'misc/requirements/requirements.txt',
   ];
   return candidates.filter((c) => fileExists(root, c));
 }
@@ -198,17 +225,201 @@ export function detectWorkspaceDepPlan(
   };
 }
 
-function resolveSystemPython(): string {
-  // Prefer python3 then python (Windows often only has python).
-  for (const bin of ['python3', 'python']) {
-    const r = spawnSync(bin, ['--version'], {
+/**
+ * Parse `Python X.Y.Z` or bare `X.Y.Z` from interpreter output.
+ */
+export function parsePythonVersion(text: string): PythonVersion | null {
+  const m = text.match(/(?:Python\s+)?(\d+)\.(\d+)(?:\.(\d+))?/i);
+  if (!m) return null;
+  return {
+    major: Number(m[1]),
+    minor: Number(m[2]),
+    patch: Number(m[3] ?? 0),
+  };
+}
+
+export function pythonVersionMeetsMin(
+  version: PythonVersion,
+  min: { major: number; minor: number },
+): boolean {
+  if (version.major !== min.major) return version.major > min.major;
+  return version.minor >= min.minor;
+}
+
+function probePythonInvocation(
+  bin: string,
+  prefixArgs: string[] = [],
+): ResolvedSystemPython | null {
+  // Prefer sys.executable so venvs are created with a real path, not `py -3.11`.
+  const r = spawnSync(
+    bin,
+    [
+      ...prefixArgs,
+      '-c',
+      'import sys; print("%d.%d.%d" % sys.version_info[:3]); print(sys.executable)',
+    ],
+    {
       encoding: 'utf8',
       windowsHide: true,
-      timeout: 10_000,
-    });
-    if (r.status === 0) return bin;
+      timeout: 15_000,
+    },
+  );
+  if (r.status !== 0) return null;
+  const lines = `${r.stdout ?? ''}`
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const versionLine = lines[0] ?? '';
+  const executable = lines[1]?.trim() || bin;
+  const parsed = parsePythonVersion(versionLine);
+  if (!parsed) return null;
+  // Reject MSYS/MinGW python on Windows when a native alternative exists later
+  // in the candidate list; caller ranks native first.
+  return {
+    bin: executable,
+    version: `${parsed.major}.${parsed.minor}.${parsed.patch}`,
+    major: parsed.major,
+    minor: parsed.minor,
+    patch: parsed.patch,
+    source: prefixArgs.length ? `${bin} ${prefixArgs.join(' ')}` : bin,
+  };
+}
+
+function isMsysPath(bin: string): boolean {
+  const n = bin.replace(/\\/g, '/').toLowerCase();
+  return n.includes('/msys') || n.includes('/mingw');
+}
+
+/**
+ * Resolve a host Python interpreter.
+ *
+ * Preference order:
+ * 1. `BABEL_WORKSPACE_PYTHON` / `BABEL_PYTHON` env (if executable)
+ * 2. Versioned launchers (`py -3.12`, `py -3.11`, `python3.12`, `python3.11`, …)
+ * 3. Generic `python` / `python3` / `py` only when they meet min version
+ *
+ * On Windows, native installers are preferred over MSYS/MinGW paths so venvs
+ * get `Scripts/` + MSVC wheels instead of broken `bin/` layouts.
+ */
+export function resolveSystemPython(options?: {
+  /** Preferred / required minimum major (default 3). */
+  minMajor?: number;
+  /** Preferred / required minimum minor (default 11). */
+  minMinor?: number;
+  /**
+   * When true, fail if no interpreter meets min.
+   * When false, prefer min+ but fall back to any working CPython.
+   */
+  requireMin?: boolean;
+  env?: NodeJS.ProcessEnv;
+}): { ok: true; python: ResolvedSystemPython } | { ok: false; reason: string; tried: string[] } {
+  const env = options?.env ?? process.env;
+  const preferMin = {
+    major: options?.minMajor ?? DEFAULT_MIN_PYTHON.major,
+    minor: options?.minMinor ?? DEFAULT_MIN_PYTHON.minor,
+  };
+  const requireMin = options?.requireMin === true;
+  const tried: string[] = [];
+
+  const probeLabeled = (
+    label: string,
+    bin: string,
+    prefixArgs: string[] = [],
+  ): ResolvedSystemPython | null => {
+    tried.push(label);
+    const probed = probePythonInvocation(bin, prefixArgs);
+    if (!probed) return null;
+    return { ...probed, source: label };
+  };
+
+  const allHits: ResolvedSystemPython[] = [];
+
+  const envOverride =
+    env['BABEL_WORKSPACE_PYTHON']?.trim() || env['BABEL_PYTHON']?.trim() || '';
+  if (envOverride) {
+    const hit = probeLabeled(`env:${envOverride}`, envOverride);
+    if (hit) allHits.push(hit);
   }
-  return 'python';
+
+  type Cand = { label: string; bin: string; args?: string[] };
+  const versioned: Cand[] =
+    process.platform === 'win32'
+      ? [
+          { label: 'py -3.13', bin: 'py', args: ['-3.13'] },
+          { label: 'py -3.12', bin: 'py', args: ['-3.12'] },
+          { label: 'py -3.11', bin: 'py', args: ['-3.11'] },
+          { label: 'python3.13', bin: 'python3.13' },
+          { label: 'python3.12', bin: 'python3.12' },
+          { label: 'python3.11', bin: 'python3.11' },
+        ]
+      : [
+          { label: 'python3.13', bin: 'python3.13' },
+          { label: 'python3.12', bin: 'python3.12' },
+          { label: 'python3.11', bin: 'python3.11' },
+        ];
+
+  const generic: Cand[] =
+    process.platform === 'win32'
+      ? [
+          { label: 'python', bin: 'python' },
+          { label: 'py -3', bin: 'py', args: ['-3'] },
+          { label: 'py', bin: 'py' },
+          { label: 'python3', bin: 'python3' },
+        ]
+      : [
+          { label: 'python3', bin: 'python3' },
+          { label: 'python', bin: 'python' },
+        ];
+
+  for (const c of [...versioned, ...generic]) {
+    const hit = probeLabeled(c.label, c.bin, c.args ?? []);
+    if (hit) allHits.push(hit);
+  }
+
+  // Deduplicate by resolved executable path.
+  const unique = new Map<string, ResolvedSystemPython>();
+  for (const hit of allHits) {
+    const key = hit.bin.replace(/\\/g, '/').toLowerCase();
+    if (!unique.has(key)) unique.set(key, hit);
+  }
+  const hits = [...unique.values()];
+
+  const rank = (list: ResolvedSystemPython[]): ResolvedSystemPython[] =>
+    [...list].sort((a, b) => {
+      const aMsys = isMsysPath(a.bin) ? 1 : 0;
+      const bMsys = isMsysPath(b.bin) ? 1 : 0;
+      if (aMsys !== bMsys) return aMsys - bMsys;
+      if (a.major !== b.major) return b.major - a.major;
+      if (a.minor !== b.minor) return b.minor - a.minor;
+      return b.patch - a.patch;
+    });
+
+  const meetingMin = rank(hits.filter((h) => pythonVersionMeetsMin(h, preferMin)));
+  const any = rank(hits);
+
+  if (meetingMin.length > 0) {
+    return { ok: true, python: meetingMin[0]! };
+  }
+  if (!requireMin && any.length > 0) {
+    return { ok: true, python: any[0]! };
+  }
+
+  return {
+    ok: false,
+    reason: `no Python >= ${preferMin.major}.${preferMin.minor} found (need typing.Required / modern packaging). Tried: ${tried.join(', ') || 'none'}. Set BABEL_WORKSPACE_PYTHON to a 3.11+ interpreter or install Python ${preferMin.major}.${preferMin.minor}+.`,
+    tried,
+  };
+}
+
+/** Resolve a string path/command for probes; prefers 3.11+ when present. */
+function resolveSystemPythonBin(min?: { major: number; minor: number }): string {
+  const resolved = resolveSystemPython({
+    minMajor: min?.major ?? DEFAULT_MIN_PYTHON.major,
+    minMinor: min?.minor ?? DEFAULT_MIN_PYTHON.minor,
+    requireMin: false,
+  });
+  if (resolved.ok) return resolved.python.bin;
+  return process.platform === 'win32' ? 'python' : 'python3';
 }
 
 /**
@@ -231,6 +442,32 @@ export function resolveVenvPython(workspaceRoot: string): string | null {
   return null;
 }
 
+/**
+ * Validate that a resolved interpreter is executable, not merely present on
+ * disk. This matters on Windows/MSYS layouts where a stale `bin/python.exe`
+ * placeholder can win path resolution but cannot run pytest.
+ */
+export function validatePythonExecutable(input: {
+  pythonBin: string;
+  cwd?: string;
+  timeoutMs?: number;
+}): { ok: boolean; detail: string } {
+  const r = spawnSync(input.pythonBin, ['--version'], {
+    cwd: input.cwd,
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: input.timeoutMs ?? 10_000,
+  });
+  const blob = `${r.stdout ?? ''}\n${r.stderr ?? ''}`.trim();
+  if (r.status === 0 && /python\s+\d/i.test(blob)) {
+    return { ok: true, detail: blob.slice(0, 160) };
+  }
+  return {
+    ok: false,
+    detail: (blob || (r.error ? r.error.message : `exit ${r.status ?? 'null'}`)).slice(0, 500),
+  };
+}
+
 function venvPython(workspaceRoot: string): string {
   return (
     resolveVenvPython(workspaceRoot) ??
@@ -240,13 +477,6 @@ function venvPython(workspaceRoot: string): string {
   );
 }
 
-function venvScriptsDir(workspaceRoot: string): string {
-  const base = join(workspaceRoot, BABEL_WORKSPACE_VENV);
-  if (existsSync(join(base, 'Scripts'))) return join(base, 'Scripts');
-  if (existsSync(join(base, 'bin'))) return join(base, 'bin');
-  return process.platform === 'win32' ? join(base, 'Scripts') : join(base, 'bin');
-}
-
 export function probePythonImport(input: {
   packageName: string;
   cwd: string;
@@ -254,7 +484,7 @@ export function probePythonImport(input: {
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
 }): { ok: boolean; detail: string } {
-  const py = input.pythonBin ?? resolveSystemPython();
+  const py = input.pythonBin ?? resolveSystemPythonBin();
   const code = `import importlib; importlib.import_module(${JSON.stringify(input.packageName)}); print("ok")`;
   const r = spawnSync(py, ['-c', code], {
     cwd: input.cwd,
@@ -301,7 +531,7 @@ export function probePytestCollect(input: {
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
 }): { ok: boolean; detail: string } {
-  const py = input.pythonBin ?? resolveSystemPython();
+  const py = input.pythonBin ?? resolveSystemPythonBin();
   const args = ['-m', 'pytest', '--collect-only', '-q'];
   if (input.testPath?.trim()) {
     args.push(input.testPath.trim());
@@ -371,6 +601,87 @@ export function parseMissingModulesFromProbe(detail: string | null | undefined):
 }
 
 /**
+ * Parse `ERROR: Missing required plugins: pytest-bdd, pytest-qt, …` from collect.
+ * Pip distribution names match the plugin names for the common pytest-* set.
+ */
+export function parseMissingPytestPluginsFromProbe(
+  detail: string | null | undefined,
+): string[] {
+  if (!detail?.trim()) return [];
+  const out: string[] = [];
+  const m = detail.match(/Missing required plugins:\s*([^\n\r]+)/i);
+  if (!m?.[1]) return out;
+  for (const part of m[1].split(/[,]+/)) {
+    const name = part.trim().replace(/\s+/g, '');
+    if (!name) continue;
+    if (!/^pytest[\w.-]*$/i.test(name) && !/^[\w.-]+$/.test(name)) continue;
+    const pipName = name.toLowerCase();
+    if (!out.includes(pipName)) out.push(pipName);
+  }
+  return out.slice(0, 16);
+}
+
+/**
+ * Detect collect failures caused by host pytest being too new for the project
+ * (qutebrowser conftest still uses pytest_ignore_collect(path), removed in pytest 8).
+ */
+export function parsePytestVersionPinFromProbe(
+  detail: string | null | undefined,
+): string | null {
+  if (!detail?.trim()) return null;
+  if (
+    /PluginValidationError/i.test(detail) &&
+    /pytest_ignore_collect/i.test(detail) &&
+    /\bpath\b/.test(detail)
+  ) {
+    return 'pytest>=7,<8';
+  }
+  return null;
+}
+
+/**
+ * Read `required_plugins` from pytest.ini (qutebrowser-style multi-line list).
+ */
+export function parseRequiredPluginsFromPytestIni(text: string): string[] {
+  const out: string[] = [];
+  const lines = text.split(/\r?\n/);
+  let inRequired = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^required_plugins\s*=/.test(trimmed)) {
+      inRequired = true;
+      const same = trimmed.replace(/^required_plugins\s*=\s*/, '').trim();
+      if (same) {
+        for (const p of same.split(/[,\s]+/)) {
+          if (p && !out.includes(p)) out.push(p);
+        }
+      }
+      continue;
+    }
+    if (inRequired) {
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      if (/^\w+\s*=/.test(trimmed) || trimmed.startsWith('[')) break;
+      const name = trimmed.replace(/[,]/g, '').trim();
+      if (name && !out.includes(name)) out.push(name);
+    }
+  }
+  return out.slice(0, 16);
+}
+
+function readWorkspacePytestRequiredPlugins(workspaceRoot: string): string[] {
+  for (const rel of ['pytest.ini', 'pytest.cfg']) {
+    const path = join(workspaceRoot, rel);
+    if (!existsSync(path)) continue;
+    try {
+      return parseRequiredPluginsFromPytestIni(readFileSync(path, 'utf8'));
+    } catch {
+      // ignore
+    }
+  }
+  return [];
+}
+
+/**
  * Known host soft-deps when collect fails but package import works.
  * Prefer requirements.txt lines when present; these are fallbacks.
  */
@@ -378,6 +689,9 @@ export const SOFT_DEP_PIP_FALLBACK: Readonly<Record<string, readonly string[]>> 
   web: ['web.py'],
   /** PyPI name for `import multipart` (OpenLibrary requirements pin multipart==0.2.4). */
   multipart: ['multipart'],
+  /** Common transitive imports surfaced by legacy OpenLibrary/infogami collection. */
+  requests: ['requests'],
+  simplejson: ['simplejson'],
   /**
    * OpenLibrary vendors infogami as a git submodule (often empty on shallow clones).
    * Prefer git URL over bare `pip install infogami` (not a reliable PyPI package).
@@ -385,10 +699,21 @@ export const SOFT_DEP_PIP_FALLBACK: Readonly<Record<string, readonly string[]>> 
   infogami: ['git+https://github.com/internetarchive/infogami.git'],
   eventer: ['eventer'],
   psycopg2: ['psycopg2-binary'],
+  /** qutebrowser / pytest-qt GUI collect needs a Qt binding on the host. */
+  PyQt5: ['PyQt5'],
+  PyQt6: ['PyQt6'],
+  sip: ['PyQt5'],
 };
 
-/** Max soft-dep re-probe rounds after collect soft-fail (web → multipart → infogami). */
-export const SOFT_DEP_MAX_ROUNDS = 3;
+/**
+ * Max soft-dep re-probe rounds after collect soft-fail.
+ *
+ * Legacy conftest imports often reveal one missing transitive module per
+ * probe (web → multipart → infogami → simplejson → requests → project
+ * utilities). Keep the remediation finite while allowing the full observed
+ * chain to settle.
+ */
+export const SOFT_DEP_MAX_ROUNDS = 16;
 
 /**
  * Find a requirements line that likely satisfies a missing module.
@@ -401,6 +726,9 @@ export function findRequirementLineForModule(
   const mod = moduleName.trim().toLowerCase();
   if (!mod) return null;
   const aliases = new Set<string>([mod]);
+  // Python import names commonly use underscores while pip distributions use
+  // hyphens (for example paapi5_python_sdk vs paapi5-python-sdk).
+  aliases.add(mod.replace(/_/g, '-'));
   if (mod === 'web') {
     aliases.add('web.py');
     aliases.add('webpy');
@@ -432,6 +760,9 @@ export function resolveSoftDepSpecForModule(
 ): string | null {
   const mod = moduleName.trim();
   if (!mod) return null;
+  // Source psycopg2 frequently cannot build on Windows; the binary wheel is
+  // the intentional host-safe substitute even when requirements pin psycopg2.
+  if (mod.toLowerCase() === 'psycopg2') return SOFT_DEP_PIP_FALLBACK.psycopg2?.[0] ?? null;
   for (const body of requirementBodies) {
     const found = findRequirementLineForModule(body, mod);
     if (found) return found;
@@ -470,9 +801,15 @@ export function installSoftDepsForCollectFail(input: {
   commands?: string[];
   /** Specs already installed this preflight — skip re-pip. */
   alreadyInstalled?: string[];
+  /** Extra pip specs to attempt (e.g. pytest.ini required_plugins). */
+  extraSpecs?: string[];
 }): { installed: string[]; attempted: boolean; detail: string } {
-  const missing = parseMissingModulesFromProbe(input.probeDetail);
-  if (missing.length === 0) {
+  const workspaceRoot = resolve(input.workspaceRoot);
+  const missingMods = parseMissingModulesFromProbe(input.probeDetail);
+  const missingPlugins = parseMissingPytestPluginsFromProbe(input.probeDetail);
+  const pytestPin = parsePytestVersionPinFromProbe(input.probeDetail);
+  const missing = [...missingMods, ...missingPlugins];
+  if (missing.length === 0 && !(input.extraSpecs?.length) && !pytestPin) {
     return { installed: [], attempted: false, detail: 'no_missing_modules' };
   }
   const timeout = input.timeoutMs ?? Math.min(DEFAULT_INSTALL_TIMEOUT_MS, 4 * 60 * 1000);
@@ -487,21 +824,34 @@ export function installSoftDepsForCollectFail(input: {
   const reqBodies: string[] = [];
   for (const rel of input.requirementFiles ?? []) {
     try {
-      reqBodies.push(readFileSync(join(input.workspaceRoot, rel), 'utf8'));
+      reqBodies.push(readFileSync(join(workspaceRoot, rel), 'utf8'));
     } catch {
       // ignore
     }
   }
 
-  const specs: string[] = [];
+  const specs: string[] = [...(input.extraSpecs ?? [])];
+  if (pytestPin) specs.push(pytestPin);
   for (const mod of missing) {
-    const found = resolveSoftDepSpecForModule(input.workspaceRoot, mod, reqBodies);
-    if (found) specs.push(found);
+    // pytest-* plugins: pip name is usually the plugin name itself.
+    if (/^pytest[\w.-]*$/i.test(mod)) {
+      specs.push(mod);
+      continue;
+    }
+    const found = resolveSoftDepSpecForModule(workspaceRoot, mod, reqBodies);
+    if (found) {
+      specs.push(found);
+      continue;
+    }
+    // Last resort for capitalised Qt bindings (import PyQt5 → pip PyQt5).
+    if (/^PyQt\d$/i.test(mod) || /^PySide\d$/i.test(mod)) {
+      specs.push(mod);
+    }
   }
   // Dedupe specs; skip already installed this session
   const uniqueSpecs = [
     ...new Set(specs.map((s) => s.trim()).filter((s) => s && !already.has(s))),
-  ].slice(0, 8);
+  ].slice(0, 12);
   if (uniqueSpecs.length === 0) {
     return {
       installed: [],
@@ -521,7 +871,7 @@ export function installSoftDepsForCollectFail(input: {
         : ['-m', 'pip', 'install', ...spec.split(/\s+/).filter(Boolean)];
     commands.push(`${input.pythonBin} -m pip install ${spec}`);
     const r = runCmd(input.pythonBin, args, {
-      cwd: input.workspaceRoot,
+      cwd: workspaceRoot,
       timeoutMs: timeout,
     });
     details.push(`${spec}:${r.ok ? 'ok' : 'fail'}`);
@@ -530,7 +880,7 @@ export function installSoftDepsForCollectFail(input: {
   return {
     installed,
     attempted: true,
-    detail: `missing=${missing.join(',')} ${details.join(' ')}`.slice(0, 500),
+    detail: `missing=${missing.join(',') || 'plugins'} ${details.join(' ')}`.slice(0, 500),
   };
 }
 
@@ -581,6 +931,21 @@ function runCmd(
  * editable/requirements/npm deps. When install is false (product guidance path),
  * only probes and reports readiness.
  */
+/**
+ * Optional hard minimum from env (`BABEL_MIN_PYTHON=3.11`).
+ * When unset, preflight *prefers* 3.11+ but does not fail solely on 3.10.
+ */
+export function parseMinPythonEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): { major: number; minor: number } | null {
+  const raw = env['BABEL_MIN_PYTHON']?.trim() || env['BABEL_REQUIRE_PYTHON_MIN']?.trim();
+  if (raw) {
+    const m = raw.match(/^(\d+)\.(\d+)/);
+    if (m) return { major: Number(m[1]), minor: Number(m[2]) };
+  }
+  return null;
+}
+
 export function runWorkspaceDepPreflight(input: {
   workspaceRoot: string;
   packageHint?: string | null;
@@ -590,13 +955,33 @@ export function runWorkspaceDepPreflight(input: {
   install?: boolean;
   installTimeoutMs?: number;
   probeTimeoutMs?: number;
+  /**
+   * Hard minimum CPython for venv creation. When set (or via BABEL_MIN_PYTHON),
+   * preflight refuses <min instead of creating a doomed 3.10 venv.
+   * SWE-Pro campaigns should pass 3.11.
+   */
+  minPython?: { major: number; minor: number };
+  /** When true, enforce DEFAULT_MIN_PYTHON (3.11) even if env unset. */
+  requireMinPython?: boolean;
 }): WorkspaceDepPreflightResult {
   const started = performance.now();
+  const workspaceRoot = resolve(input.workspaceRoot);
   const commands: string[] = [];
-  const plan = detectWorkspaceDepPlan(input.workspaceRoot, input.packageHint);
+  const plan = detectWorkspaceDepPlan(workspaceRoot, input.packageHint);
   const install = input.install !== false;
   const installTimeout = input.installTimeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS;
   const probeTimeout = input.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+  const minPython =
+    input.minPython ??
+    parseMinPythonEnv() ??
+    (input.requireMinPython
+      ? { major: DEFAULT_MIN_PYTHON.major, minor: DEFAULT_MIN_PYTHON.minor }
+      : null);
+  const preferMin = minPython ?? {
+    major: DEFAULT_MIN_PYTHON.major,
+    minor: DEFAULT_MIN_PYTHON.minor,
+  };
+  const requireMin = minPython != null;
 
   if (plan.kind === 'none') {
     return {
@@ -616,7 +1001,7 @@ export function runWorkspaceDepPreflight(input: {
 
   // Node path: optional npm install when node_modules missing
   if (plan.kind === 'node_npm') {
-    const hasModules = existsSync(join(input.workspaceRoot, 'node_modules'));
+    const hasModules = existsSync(join(workspaceRoot, 'node_modules'));
     if (hasModules) {
       return {
         plan,
@@ -649,7 +1034,7 @@ export function runWorkspaceDepPreflight(input: {
     }
     commands.push('npm install');
     const npm = runCmd('npm', ['install', '--no-fund', '--no-audit'], {
-      cwd: input.workspaceRoot,
+      cwd: workspaceRoot,
       timeoutMs: installTimeout,
     });
     if (!npm.ok) {
@@ -682,54 +1067,83 @@ export function runWorkspaceDepPreflight(input: {
     };
   }
 
-  // Python paths
-  const systemPy = resolveSystemPython();
+  // Python paths — prefer 3.11+; hard-require when minPython / BABEL_MIN_PYTHON set.
+  const systemResolved = resolveSystemPython({
+    minMajor: preferMin.major,
+    minMinor: preferMin.minor,
+    requireMin,
+  });
+  if (!systemResolved.ok) {
+    return {
+      plan,
+      ready: false,
+      installed: false,
+      blocked: true,
+      reason: systemResolved.reason,
+      venvPath: null,
+      pathPrefix: null,
+      pythonBin: null,
+      pythonExecutableValid: false,
+      commands,
+      probeDetail: `python_resolve_failed tried=${systemResolved.tried.join('|')}`,
+      durationMs: Math.round(performance.now() - started),
+    };
+  }
+  const systemPy = systemResolved.python.bin;
+  commands.push(
+    `# system_python=${systemPy} version=${systemResolved.python.version} source=${systemResolved.python.source} prefer=${preferMin.major}.${preferMin.minor} requireMin=${requireMin}`,
+  );
   let pythonBin = systemPy;
   let venvPath: string | null = null;
   let pathPrefix: string | null = null;
   let installed = false;
 
   /**
-   * Ready enough to start the agent: package importable + pytest present.
-   * Full conftest collect often needs heavy host deps (openlibrary) that still
-   * block verify — agent may mutate first; runtime ENV_BLOCKED handles verify.
-   * Collect is recorded as a soft signal only.
+   * Ready enough to start the agent: package importable, pytest present, and
+   * the selected verifier target collects successfully. Collection is a hard
+   * readiness boundary when a test path is supplied; otherwise the package
+   * and pytest probes are sufficient.
    */
-  const probePythonReady = (bin: string): { ok: boolean; detail: string } => {
+  const probePythonReady = (bin: string): {
+    ok: boolean;
+    collectOk: boolean;
+    detail: string;
+  } => {
     const parts: string[] = [];
     if (plan.packageHint) {
       const pkg = probePythonImport({
         packageName: plan.packageHint,
-        cwd: input.workspaceRoot,
+        cwd: workspaceRoot,
         pythonBin: bin,
         timeoutMs: probeTimeout,
       });
       parts.push(`import:${pkg.detail}`);
-      if (!pkg.ok) return { ok: false, detail: parts.join(' | ') };
+      if (!pkg.ok) return { ok: false, collectOk: false, detail: parts.join(' | ') };
     }
     const pytestMod = probePythonImport({
       packageName: 'pytest',
-      cwd: input.workspaceRoot,
+      cwd: workspaceRoot,
       pythonBin: bin,
       timeoutMs: probeTimeout,
     });
     parts.push(`pytest_mod:${pytestMod.detail}`);
-    if (!pytestMod.ok) return { ok: false, detail: parts.join(' | ') };
-    // Soft: focused collect when path known (does not fail preflight).
+    if (!pytestMod.ok) return { ok: false, collectOk: false, detail: parts.join(' | ') };
+    let collectOk = true;
     if (input.testPath?.trim()) {
       const collect = probePytestCollect({
-        cwd: input.workspaceRoot,
+        cwd: workspaceRoot,
         pythonBin: bin,
         testPath: input.testPath,
         timeoutMs: Math.min(probeTimeout, 20_000),
       });
       parts.push(`collect_${collect.ok ? 'ok' : 'soft_fail'}:${collect.detail}`);
+      collectOk = collect.ok;
     }
-    return { ok: true, detail: parts.join(' | ') };
+    return { ok: true, collectOk, detail: parts.join(' | ') };
   };
 
   const first = probePythonReady(pythonBin);
-  if (first.ok) {
+  if (first.ok && first.collectOk) {
     return {
       plan,
       ready: true,
@@ -739,6 +1153,7 @@ export function runWorkspaceDepPreflight(input: {
       venvPath: null,
       pathPrefix: null,
       pythonBin,
+      pythonExecutableValid: true,
       commands,
       probeDetail: first.detail,
       durationMs: Math.round(performance.now() - started),
@@ -751,7 +1166,7 @@ export function runWorkspaceDepPreflight(input: {
       ready: false,
       installed: false,
       blocked: true,
-      reason: `workspace package not ready (install=false): ${first.detail}`,
+      reason: `workspace not verify-ready (install=false): ${first.detail}`,
       venvPath: null,
       pathPrefix: null,
       pythonBin,
@@ -762,40 +1177,96 @@ export function runWorkspaceDepPreflight(input: {
   }
 
   // Create venv + install
-  venvPath = join(input.workspaceRoot, BABEL_WORKSPACE_VENV);
+  venvPath = join(workspaceRoot, BABEL_WORKSPACE_VENV);
 
-  if (!resolveVenvPython(input.workspaceRoot)) {
+  const venvMeetsMin = (bin: string): boolean => {
+    if (!requireMin) return true;
+    const probed = probePythonInvocation(bin);
+    return Boolean(probed && pythonVersionMeetsMin(probed, preferMin));
+  };
+
+  let existingVenv = resolveVenvPython(workspaceRoot);
+  if (existingVenv && requireMin && !venvMeetsMin(existingVenv)) {
+    commands.push(
+      `# recreate_venv: existing interpreter below min ${preferMin.major}.${preferMin.minor}`,
+    );
+    try {
+      rmSync(venvPath, { recursive: true, force: true });
+    } catch {
+      // best-effort; create will fail clearly if stale dir blocks
+    }
+    existingVenv = null;
+  }
+
+  if (!existingVenv) {
     commands.push(`${systemPy} -m venv ${BABEL_WORKSPACE_VENV}`);
-    mkdirSync(input.workspaceRoot, { recursive: true });
+    mkdirSync(workspaceRoot, { recursive: true });
     const venv = runCmd(systemPy, ['-m', 'venv', BABEL_WORKSPACE_VENV], {
-      cwd: input.workspaceRoot,
+      cwd: workspaceRoot,
       timeoutMs: Math.min(installTimeout, 120_000),
     });
     // Success = interpreter exists (MSYS venvs may non-zero-exit with useful stdout).
-    const resolvedAfter = resolveVenvPython(input.workspaceRoot);
+    const resolvedAfter = resolveVenvPython(workspaceRoot);
     if (!resolvedAfter) {
       return {
         plan,
         ready: false,
         installed: false,
         blocked: true,
-        reason: `venv create failed: ${venv.detail}`,
+        reason: `venv create failed with ${systemPy} (${systemResolved.python.version}): ${venv.detail}`,
         venvPath,
         pathPrefix: null,
         pythonBin: systemPy,
+        pythonExecutableValid: true,
         commands,
         probeDetail: venv.detail,
         durationMs: Math.round(performance.now() - started),
       };
     }
+    if (requireMin && !venvMeetsMin(resolvedAfter)) {
+      return {
+        plan,
+        ready: false,
+        installed: false,
+        blocked: true,
+        reason: `venv python is below min ${preferMin.major}.${preferMin.minor} after create with ${systemPy}`,
+        venvPath,
+        pathPrefix: null,
+        pythonBin: resolvedAfter,
+        pythonExecutableValid: true,
+        commands,
+        probeDetail: `venv_version_below_min system=${systemResolved.python.version}`,
+        durationMs: Math.round(performance.now() - started),
+      };
+    }
   }
-  pythonBin = venvPython(input.workspaceRoot);
-  pathPrefix = venvScriptsDir(input.workspaceRoot);
+  pythonBin = venvPython(workspaceRoot);
+  const executable = validatePythonExecutable({
+    pythonBin,
+    cwd: workspaceRoot,
+  });
+  if (!executable.ok) {
+    return {
+      plan,
+      ready: false,
+      installed: false,
+      blocked: true,
+      reason: `venv interpreter is not executable: ${executable.detail}`,
+      venvPath,
+      pathPrefix: null,
+      pythonBin,
+      pythonExecutableValid: false,
+      commands,
+      probeDetail: executable.detail,
+    durationMs: Math.round(performance.now() - started),
+    };
+  }
+  pathPrefix = dirname(pythonBin);
 
   // Upgrade pip quietly (best-effort)
   commands.push(`${pythonBin} -m pip install -U pip`);
   runCmd(pythonBin, ['-m', 'pip', 'install', '-U', 'pip', 'setuptools', 'wheel'], {
-    cwd: input.workspaceRoot,
+    cwd: workspaceRoot,
     timeoutMs: Math.min(installTimeout, 180_000),
   });
 
@@ -805,7 +1276,7 @@ export function runWorkspaceDepPreflight(input: {
   if (plan.kind === 'python_editable' || plan.hasPyproject || plan.hasSetupPy) {
     commands.push(`${pythonBin} -m pip install -e .`);
     const editable = runCmd(pythonBin, ['-m', 'pip', 'install', '-e', '.'], {
-      cwd: input.workspaceRoot,
+      cwd: workspaceRoot,
       timeoutMs: installTimeout,
     });
     lastInstallDetail = editable.detail;
@@ -815,18 +1286,34 @@ export function runWorkspaceDepPreflight(input: {
   // pytest is commonly needed for Pro verify even when not a declared runtime dep
   commands.push(`${pythonBin} -m pip install pytest`);
   const pytestInstall = runCmd(pythonBin, ['-m', 'pip', 'install', 'pytest'], {
-    cwd: input.workspaceRoot,
+    cwd: workspaceRoot,
     timeoutMs: Math.min(installTimeout, 180_000),
   });
   if (pytestInstall.ok) installed = true;
   else lastInstallDetail = pytestInstall.detail || lastInstallDetail;
 
+  // Proactively install pytest.ini required_plugins (qutebrowser) before collect.
+  const requiredPlugins = readWorkspacePytestRequiredPlugins(workspaceRoot);
+  if (requiredPlugins.length > 0) {
+    commands.push(`# pytest_required_plugins=${requiredPlugins.join(',')}`);
+    const pluginInstall = runCmd(
+      pythonBin,
+      ['-m', 'pip', 'install', ...requiredPlugins],
+      {
+        cwd: workspaceRoot,
+        timeoutMs: Math.min(installTimeout, 5 * 60 * 1000),
+      },
+    );
+    lastInstallDetail = pluginInstall.detail || lastInstallDetail;
+    if (pluginInstall.ok) installed = true;
+  }
+
   let probe = probePythonReady(pythonBin);
-  if (!probe.ok && plan.requirementFiles.length > 0) {
+  if ((!probe.ok || !probe.collectOk) && plan.requirementFiles.length > 0) {
     for (const req of plan.requirementFiles) {
       commands.push(`${pythonBin} -m pip install -r ${req}`);
       const reqInstall = runCmd(pythonBin, ['-m', 'pip', 'install', '-r', req], {
-        cwd: input.workspaceRoot,
+        cwd: workspaceRoot,
         timeoutMs: installTimeout,
       });
       lastInstallDetail = reqInstall.detail || lastInstallDetail;
@@ -839,25 +1326,35 @@ export function runWorkspaceDepPreflight(input: {
   // W1 A + multi-round: package import ok but collect soft-fail → soft-deps.
   // After web installs, next collect often surfaces multipart then infogami —
   // re-probe up to SOFT_DEP_MAX_ROUNDS instead of a single install wave.
+  // Also remediates Missing required plugins: pytest-* (qutebrowser).
   // Full -r requirements often fails on Windows hosts; targeted install is enough for many cells.
   let softDepsAttempted = false;
   let softDepsInstalled: string[] = [];
   let softRound = 0;
-  while (
-    probe.ok &&
-    /collect_soft_fail:/.test(probe.detail) &&
-    parseMissingModulesFromProbe(probe.detail).length > 0 &&
-    softRound < SOFT_DEP_MAX_ROUNDS
-  ) {
+  while (probe.ok && !probe.collectOk && softRound < SOFT_DEP_MAX_ROUNDS) {
     softRound += 1;
+    const missingMods = parseMissingModulesFromProbe(probe.detail);
+    const missingPlugins = parseMissingPytestPluginsFromProbe(probe.detail);
+    const pytestPin = parsePytestVersionPinFromProbe(probe.detail);
+    // Round 1 may force pytest.ini plugins even if collect text is truncated.
+    const forcePlugins = softRound === 1 ? requiredPlugins : [];
+    if (
+      missingMods.length === 0 &&
+      missingPlugins.length === 0 &&
+      forcePlugins.length === 0 &&
+      !pytestPin
+    ) {
+      break;
+    }
     const soft = installSoftDepsForCollectFail({
-      workspaceRoot: input.workspaceRoot,
+      workspaceRoot,
       pythonBin,
       probeDetail: probe.detail,
       requirementFiles: plan.requirementFiles,
       timeoutMs: Math.min(installTimeout, 5 * 60 * 1000),
       commands,
       alreadyInstalled: softDepsInstalled,
+      extraSpecs: forcePlugins,
     });
     softDepsAttempted = softDepsAttempted || soft.attempted;
     for (const s of soft.installed) {
@@ -874,10 +1371,10 @@ export function runWorkspaceDepPreflight(input: {
   // leave probe as-is — final block below uses it.
   try {
     writeFileSync(
-      join(input.workspaceRoot, '.babel-dep-preflight.json'),
+      join(workspaceRoot, '.babel-dep-preflight.json'),
       JSON.stringify(
         {
-          ready: probe.ok,
+          ready: probe.ok && probe.collectOk,
           packageHint: plan.packageHint,
           installed,
           venv: BABEL_WORKSPACE_VENV,
@@ -894,7 +1391,7 @@ export function runWorkspaceDepPreflight(input: {
   } catch {
     // ignore
   }
-  if (!probe.ok) {
+  if (!probe.ok || !probe.collectOk) {
     const installHint = lastInstallDetail
       ? ` last_install=${lastInstallDetail.slice(0, 200)}`
       : '';
@@ -907,6 +1404,7 @@ export function runWorkspaceDepPreflight(input: {
       venvPath,
       pathPrefix,
       pythonBin,
+      pythonExecutableValid: true,
       commands,
       probeDetail: probe.detail,
       softDepsAttempted,
@@ -923,6 +1421,7 @@ export function runWorkspaceDepPreflight(input: {
     venvPath,
     pathPrefix,
     pythonBin,
+    pythonExecutableValid: true,
     commands,
     probeDetail: probe.detail,
     softDepsAttempted,
