@@ -50,6 +50,7 @@ switch ($Profile) {
     $defaultLimit = 3
     $defaultAgentTimeoutMs = 1500000
   }
+  # gate0-canary: dual-honest scoreboard (gold + fail_to_pass). Never gold-only.
   'gate0-canary' {
     $provider = 'live'
     $defaultLimit = 1

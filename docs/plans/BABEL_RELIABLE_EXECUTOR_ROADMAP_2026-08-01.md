@@ -10,7 +10,7 @@ last_verified: 2026-08-02
 **Baselines:** Babel `main` @ `09b4ebe` (W3–W7 implementation stack merged 2026-08-02); 4a5d reval autopsy; Aug-1 peer research corpus
 **Strategy:** Peer-class **execution substrate** under Babel **trust contracts** — not a clone of OpenCode/Codex/Grok, not policy-only stacking
 
-**Current phase:** No implementation PRs are open. The remaining work is to prove the landed contracts under adversarial, restart, daemon, and cross-mode acceptance scenarios; do not treat focused unit coverage or green CI as wave-exit evidence by themselves.
+**Current phase:** No implementation PRs are open. The remaining work is to validate the landed contracts under adversarial, restart, daemon, and cross-mode acceptance scenarios; do not treat focused unit coverage or green CI as wave-exit evidence by themselves.
 
 **Supersedes for harness loop work (when landed as repo plan):**
 

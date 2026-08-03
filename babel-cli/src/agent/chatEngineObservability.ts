@@ -15,7 +15,6 @@ import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
 import type { ChatToolAction } from './chatToolDefinitions.js';
 import { chatActionToolName } from './chatToolDefinitions.js';
 import type { DiffCriticVerdict } from './diffCritic.js';
-import { exportToolCallLog } from './chatZeroWritePolicy.js';
 import { computeToolCallAggregates, type ToolCallAggregates } from './toolCallExport.js';
 import type { PolicyEvent, PolicyEventKind, PolicyEventLog } from './policyEventLog.js';
 import type { ObservationTailBuffer, ObservationTailEntry } from './observationTails.js';
@@ -23,6 +22,13 @@ import type {
   ChatPhase,
   TurnRoutingReceipt,
   TurnRoutingReceiptLog,
+} from './turnRoutingReceipt.js';
+import {
+  deriveEffortAliased,
+  mapCostPrecisionToBasis,
+  resolveEffectiveEffortSource,
+  summarizeCellCost,
+  summarizeCellEffort,
 } from './turnRoutingReceipt.js';
 import type { BlockedAttempt, BlockedAttemptLedger } from './blockedAttemptLedger.js';
 import type { TurnSummary, TurnSummaryStore, SummaryCompletionHook } from './turnSummaryScheduler.js';
@@ -112,6 +118,11 @@ export type ExportedToolCall = {
   target: string;
   detail?: string;
   error?: string;
+  /** Stable log order index (for harness logIndexToTurn reconstruction). */
+  index?: number;
+  /** Chat turn that executed this tool (from engine logIndexToTurn). */
+  turn?: number;
+  exit_code?: number;
 };
 
 export type StreamDoneEvent = {
@@ -187,8 +198,39 @@ export function recordPolicyEvent(
   });
 }
 
-function exportToolCalls(log: ToolCallLogEntry[]): ExportedToolCall[] {
-  return exportToolCallLog(log) as ExportedToolCall[];
+/**
+ * Export tool calls with turn binding for TTF-write / thrash metrics.
+ * Prefer turn+index over legacy strip-only export so campaigns can compute
+ * turns_to_first_write without replaying the engine.
+ */
+export function exportToolCallsWithTurns(
+  log: ToolCallLogEntry[],
+  logIndexToTurn?: ReadonlyMap<number, number>,
+): ExportedToolCall[] {
+  return log.map((entry) => {
+    const turn = logIndexToTurn?.get(entry.index);
+    const out: ExportedToolCall = {
+      tool: entry.tool,
+      target: entry.target,
+      index: entry.index,
+    };
+    if (entry.detail !== undefined) out.detail = entry.detail;
+    if (entry.error !== undefined) out.error = entry.error;
+    if (entry.exit_code !== undefined) out.exit_code = entry.exit_code;
+    if (turn !== undefined) out.turn = turn;
+    return out;
+  });
+}
+
+function exportToolCalls(
+  log: ToolCallLogEntry[],
+  logIndexToTurn?: ReadonlyMap<number, number>,
+): ExportedToolCall[] {
+  if (logIndexToTurn && logIndexToTurn.size > 0) {
+    return exportToolCallsWithTurns(log, logIndexToTurn);
+  }
+  // Fallback: still keep index so harness can recover order even without turn map
+  return exportToolCallsWithTurns(log);
 }
 
 export function buildStreamDone(
@@ -210,7 +252,7 @@ export function buildStreamDone(
     type: 'done',
     answer,
     usage: globalCostTracker.getSessionSummary(),
-    toolCalls: exportToolCalls(h.toolCallLog),
+    toolCalls: exportToolCalls(h.toolCallLog, h.logIndexToTurn),
     runDir: h.engineRunDir,
     outcome: extra.outcome,
     verifierReceipt: h.lastVerifierReceipt ?? null,
@@ -250,7 +292,7 @@ export function observabilityResultFields(h: ObservabilityHandles): {
 } {
   const fp = lookupFingerprint(h.engineRunDir);
   return {
-    toolCalls: exportToolCalls(h.toolCallLog),
+    toolCalls: exportToolCalls(h.toolCallLog, h.logIndexToTurn),
     policyEvents: h.policyEventLog.last(50),
     turnRouting: h.routingReceiptLog.toJSON(),
     observationTails: h.observationTails.toJSON(),
@@ -262,18 +304,35 @@ export function observabilityResultFields(h: ObservabilityHandles): {
   };
 }
 
+/**
+ * Metadata accepted from runner.getLastInvocationMetadata().
+ * Effort fields must not be dropped (Slice 2 causal telemetry).
+ */
+export type RoutingReceiptMetadata = {
+  provider_model_id?: string | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  estimated_cost_usd?: number | null;
+  prompt_cache_hit_tokens?: number | null;
+  prompt_cache_miss_tokens?: number | null;
+  cost_precision?: string | null;
+  pricing_source_url?: string | null;
+  pricing_verified_at?: string | null;
+  requested_model_id?: string | null;
+  normalized_model_id?: string | null;
+  sent_model_id?: string | null;
+  observed_model_id?: string | null;
+  requested_reasoning_effort?: string | null;
+  normalized_reasoning_effort?: string | null;
+  sent_reasoning_effort?: string | null;
+  observed_reasoning_effort?: string | null;
+};
+
 export function pushRoutingReceiptFromMetadata(
   log: TurnRoutingReceiptLog,
   turn: number,
   phase: ChatPhase,
-  metadata: {
-    provider_model_id?: string | null;
-    prompt_tokens?: number | null;
-    completion_tokens?: number | null;
-    estimated_cost_usd?: number | null;
-    prompt_cache_hit_tokens?: number | null;
-    prompt_cache_miss_tokens?: number | null;
-  },
+  metadata: RoutingReceiptMetadata,
 ): void {
   if (
     !metadata.provider_model_id ||
@@ -282,20 +341,266 @@ export function pushRoutingReceiptFromMetadata(
   ) {
     return;
   }
-  log.push({
+
+  const requested = metadata.requested_reasoning_effort ?? null;
+  const normalized = metadata.normalized_reasoning_effort ?? null;
+  const sent = metadata.sent_reasoning_effort ?? null;
+  const observed = metadata.observed_reasoning_effort ?? null;
+  const { source: effective_source } = resolveEffectiveEffortSource({
+    requested,
+    normalized,
+    sent,
+    observed,
+  });
+  const effort_aliased = deriveEffortAliased(requested, sent, normalized);
+  const cost_basis = mapCostPrecisionToBasis(metadata.cost_precision);
+
+  const receipt: TurnRoutingReceipt = {
     turn,
     phase,
     model: metadata.provider_model_id,
     input_tokens: metadata.prompt_tokens,
     output_tokens: metadata.completion_tokens,
     cost_usd: metadata.estimated_cost_usd ?? 0,
-    ...(metadata.prompt_cache_hit_tokens != null
-      ? { cache_hit_tokens: metadata.prompt_cache_hit_tokens }
-      : {}),
-    ...(metadata.prompt_cache_miss_tokens != null
-      ? { cache_miss_tokens: metadata.prompt_cache_miss_tokens }
-      : {}),
-  });
+    cost_basis,
+    effective_source,
+    effort_aliased,
+  };
+
+  if (metadata.prompt_cache_hit_tokens != null) {
+    receipt.cache_hit_tokens = metadata.prompt_cache_hit_tokens;
+  }
+  if (metadata.prompt_cache_miss_tokens != null) {
+    receipt.cache_miss_tokens = metadata.prompt_cache_miss_tokens;
+  }
+  if (metadata.pricing_verified_at != null) {
+    receipt.pricing_verified_at = metadata.pricing_verified_at;
+  }
+  if (metadata.pricing_source_url != null) {
+    receipt.pricing_source_url = metadata.pricing_source_url;
+  }
+  if (metadata.cost_precision != null) {
+    receipt.cost_precision = metadata.cost_precision;
+  }
+  if (metadata.requested_model_id != null) {
+    receipt.requested_model_id = metadata.requested_model_id;
+  }
+  if (metadata.normalized_model_id != null) {
+    receipt.normalized_model_id = metadata.normalized_model_id;
+  }
+  if (metadata.sent_model_id != null) {
+    receipt.sent_model_id = metadata.sent_model_id;
+  }
+  if (metadata.observed_model_id != null) {
+    receipt.observed_model_id = metadata.observed_model_id;
+  }
+  if (requested != null) receipt.requested_reasoning_effort = requested;
+  if (normalized != null) receipt.normalized_reasoning_effort = normalized;
+  if (sent != null) receipt.sent_reasoning_effort = sent;
+  if (observed != null) receipt.observed_reasoning_effort = observed;
+
+  log.push(receipt);
+}
+
+// ── Harness boundary counters (Slice 2) ───────────────────────────────────────
+
+/** Stable cell-level counters for thrash / suppression diagnosis. */
+export interface HarnessBoundaryCounters {
+  mutation_intent_count: number;
+  tool_parse_reject_count: number;
+  tool_parse_repair_count: number;
+  tool_alias_normalize_count: number;
+  arg_validation_fail_count: number;
+  policy_deny_count: number;
+  tool_dispatch_count: number;
+  write_apply_count: number;
+  write_receipt_count: number;
+  git_patch_count: number;
+  verifier_authority_count: number;
+  progress_controller_count: number;
+  budget_arbitration_count: number;
+  /** Legacy/policy kinds that deny or restrict mutations */
+  force_mutate_count: number;
+  force_mutate_shadow_count: number;
+  zero_write_hard_stop_count: number;
+  zero_write_shadow_count: number;
+  phase_gate_block_count: number;
+  /** Derived from tool log */
+  successful_write_tool_count: number;
+  denied_or_failed_write_tool_count: number;
+  verifier_attempt_tool_count: number;
+  turns_to_first_mutation_intent: number | null;
+  turns_to_first_applied_write: number | null;
+}
+
+const WRITE_TOOLS = new Set([
+  'write_file',
+  'edit_file',
+  'str_replace',
+  'apply_patch',
+  'create_file',
+  'delete_file',
+  'multi_edit',
+]);
+
+const VERIFIER_TOOLS = new Set([
+  'run_tests',
+  'run_command',
+  'bash',
+  'shell',
+]);
+
+function countKind(
+  events: ReadonlyArray<{ kind?: string; at_turn?: number }>,
+  kind: string,
+): number {
+  return events.filter((e) => e.kind === kind).length;
+}
+
+function firstTurnOfKind(
+  events: ReadonlyArray<{ kind?: string; at_turn?: number }>,
+  kinds: string[],
+): number | null {
+  let min: number | null = null;
+  for (const e of events) {
+    if (!e.kind || !kinds.includes(e.kind)) continue;
+    if (typeof e.at_turn !== 'number') continue;
+    if (min == null || e.at_turn < min) min = e.at_turn;
+  }
+  return min;
+}
+
+/**
+ * Compute harness-boundary counters from policy events + tool call log.
+ * Maps both new Slice-2 kinds and legacy policy kinds so thrash is classifiable
+ * even before every emit site is upgraded.
+ */
+export function computeHarnessBoundaryCounters(input: {
+  policyEvents?: ReadonlyArray<{ kind?: string; at_turn?: number; detail?: string }>;
+  toolCalls?: ReadonlyArray<{
+    tool?: string;
+    error?: string;
+    exit_code?: number;
+    index?: number;
+    turn?: number;
+  }>;
+  /** Optional turn index per tool log entry (from ObservabilityHandles.logIndexToTurn). */
+  logIndexToTurn?: ReadonlyMap<number, number>;
+}): HarnessBoundaryCounters {
+  const events = input.policyEvents ?? [];
+  const tools = input.toolCalls ?? [];
+
+  let successful_write_tool_count = 0;
+  let denied_or_failed_write_tool_count = 0;
+  let verifier_attempt_tool_count = 0;
+  let turns_to_first_applied_write: number | null = null;
+
+  for (let i = 0; i < tools.length; i += 1) {
+    const tc = tools[i]!;
+    const name = (tc.tool ?? '').toLowerCase();
+    const isWrite = WRITE_TOOLS.has(name) || name.includes('write') || name.includes('edit') || name.includes('patch');
+    const isVerifier =
+      VERIFIER_TOOLS.has(name) ||
+      name.includes('test') ||
+      name.includes('pytest') ||
+      name.includes('verify');
+    const failed = Boolean(tc.error) || (tc.exit_code != null && tc.exit_code !== 0);
+
+    if (isWrite) {
+      if (failed) denied_or_failed_write_tool_count += 1;
+      else {
+        successful_write_tool_count += 1;
+        // Prefer explicit tool.turn (headless JSON), then logIndexToTurn map, then index-as-order fallback
+        const turn =
+          typeof tc.turn === 'number'
+            ? tc.turn
+            : input.logIndexToTurn?.get(tc.index ?? i) ??
+              input.logIndexToTurn?.get(i) ??
+              null;
+        if (turn != null && (turns_to_first_applied_write == null || turn < turns_to_first_applied_write)) {
+          turns_to_first_applied_write = turn;
+        }
+      }
+    }
+    if (isVerifier) verifier_attempt_tool_count += 1;
+  }
+
+  // Mutation intent: explicit kind or first write-class tool attempt
+  const mutation_intent_count =
+    countKind(events, 'mutation_intent') +
+    tools.filter((t) => {
+      const name = (t.tool ?? '').toLowerCase();
+      return WRITE_TOOLS.has(name) || name.includes('write') || name.includes('edit') || name.includes('patch');
+    }).length;
+
+  const turns_to_first_mutation_intent =
+    firstTurnOfKind(events, ['mutation_intent']) ??
+    turns_to_first_applied_write;
+
+  return {
+    mutation_intent_count,
+    tool_parse_reject_count: countKind(events, 'tool_parse_reject'),
+    tool_parse_repair_count: countKind(events, 'tool_parse_repair'),
+    tool_alias_normalize_count: countKind(events, 'tool_alias_normalize'),
+    arg_validation_fail_count: countKind(events, 'arg_validation_fail'),
+    policy_deny_count:
+      countKind(events, 'policy_deny') +
+      countKind(events, 'phase_gate_block') +
+      countKind(events, 'plan_gate_block'),
+    tool_dispatch_count: countKind(events, 'tool_dispatch') + tools.length,
+    write_apply_count: countKind(events, 'write_apply') + successful_write_tool_count,
+    write_receipt_count: countKind(events, 'write_receipt'),
+    git_patch_count: countKind(events, 'git_patch'),
+    verifier_authority_count: countKind(events, 'verifier_authority'),
+    progress_controller_count:
+      countKind(events, 'progress_controller') +
+      countKind(events, 'progress_policy') +
+      countKind(events, 'progress_terminal'),
+    budget_arbitration_count:
+      countKind(events, 'budget_arbitration') +
+      countKind(events, 'budget_kill') +
+      countKind(events, 'token_explosion'),
+    force_mutate_count: countKind(events, 'force_mutate'),
+    force_mutate_shadow_count: countKind(events, 'force_mutate_shadow'),
+    zero_write_hard_stop_count: countKind(events, 'zero_write_hard_stop'),
+    zero_write_shadow_count: countKind(events, 'zero_write_shadow'),
+    phase_gate_block_count: countKind(events, 'phase_gate_block'),
+    successful_write_tool_count,
+    denied_or_failed_write_tool_count,
+    verifier_attempt_tool_count,
+    turns_to_first_mutation_intent,
+    turns_to_first_applied_write,
+  };
+}
+
+/**
+ * Build cell telemetry bundle from session observability (effort + cost + boundary).
+ */
+export function buildCellTelemetryBundle(input: {
+  turnRouting: ReadonlyArray<TurnRoutingReceipt>;
+  policyEvents?: ReadonlyArray<{ kind?: string; at_turn?: number; detail?: string }>;
+  toolCalls?: ReadonlyArray<{
+    tool?: string;
+    error?: string;
+    exit_code?: number;
+    index?: number;
+    turn?: number;
+  }>;
+  logIndexToTurn?: ReadonlyMap<number, number>;
+}): {
+  effort: ReturnType<typeof summarizeCellEffort>;
+  cost: ReturnType<typeof summarizeCellCost>;
+  boundary: HarnessBoundaryCounters;
+} {
+  return {
+    effort: summarizeCellEffort(input.turnRouting),
+    cost: summarizeCellCost(input.turnRouting),
+    boundary: computeHarnessBoundaryCounters({
+      ...(input.policyEvents !== undefined ? { policyEvents: input.policyEvents } : {}),
+      ...(input.toolCalls !== undefined ? { toolCalls: input.toolCalls } : {}),
+      ...(input.logIndexToTurn !== undefined ? { logIndexToTurn: input.logIndexToTurn } : {}),
+    }),
+  };
 }
 
 /**

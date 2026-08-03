@@ -66,7 +66,7 @@ Profiles: see `references/profiles.md`.
 | Per-cell fail-to-pass | Profile wall (live default 15m). Expiry → `fail_to_pass_class=timeout`. |
 | Outer operator soft deadline | Notification only; prefer SIGTERM **between** cells if implemented later. |
 
-Absolute zero wall-clock limit is impossible for live LLMs. The skill guarantees **zero accidental outer death** and **honest per-cell budgets**.
+Absolute zero wall-clock limit is impossible for live LLMs. The skill targets **zero accidental outer death** and **honest per-cell budgets**.
 
 ## Phase details
 

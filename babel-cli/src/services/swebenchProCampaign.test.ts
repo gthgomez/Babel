@@ -22,6 +22,12 @@ import {
   type CampaignCellResult,
   type SwebenchProInstanceRow,
 } from './swebenchProCampaign.js';
+import {
+  listAttemptStates,
+  loadCampaignManifest,
+  reconcileCampaignEvidence,
+  validateConservation,
+} from './causalCampaignContract.js';
 import { packageHintFromRepo } from './workspaceDepPreflight.js';
 import { parseSweStringList } from './agentBenchmarkHarness.js';
 
@@ -285,6 +291,37 @@ describe('swebenchProCampaign early-stop', () => {
     assert.equal(liveCount, 5, 'should not run remaining instances after abort');
     assert.equal(report.shadow_sessions_with_summary, 1);
     assert.match(report.policy_events_jsonl, /policy-events\.jsonl$/);
+
+    // Frozen denominator: manifest exists before/through abort; open attempts remain non-terminal
+    const evidenceDir = join(dir, 'evidence');
+    assert.equal(existsSync(join(evidenceDir, 'campaign-manifest.json')), true);
+    const manifest = loadCampaignManifest(evidenceDir);
+    assert.equal(manifest.expected_attempts.length, 7);
+    assert.equal(manifest.causal_stage1_complete_design, false);
+    assert.equal(manifest.identity.mode, 'chat-headless');
+    const states = listAttemptStates(evidenceDir);
+    assert.equal(states.length, 7);
+    assert.equal(validateConservation(manifest, states).ok, true);
+    // 5 live terminals + remaining queued/running after early-stop
+    const terminal = states.filter((s) => s.lifecycle === 'terminal').length;
+    assert.equal(terminal, 5);
+    const open = states.filter((s) => s.lifecycle === 'queued' || s.lifecycle === 'running');
+    assert.ok(open.length >= 2, 'early-stop must leave expected attempts open for reconcile');
+
+    const recon = reconcileCampaignEvidence({
+      evidenceDir,
+      graceMs: 0,
+      nowMs: Date.now() + 60_000,
+      processTreeAlive: false,
+      processRecord: {
+        pid: 1,
+        started_at: '2026-07-30T12:00:00.000Z',
+        launch_method: 'test',
+      },
+    });
+    assert.equal(recon.conservation_ok, true);
+    assert.equal(recon.campaign_complete, true);
+    assert.ok(recon.orphaned_attempt_ids.length >= 2);
   });
 
   test('W1 D: classifyFailToPassResult separates collect_error from assert_fail', () => {

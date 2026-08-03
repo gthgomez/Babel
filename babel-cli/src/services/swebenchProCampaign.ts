@@ -51,6 +51,20 @@ import {
   getHeadCommitChangedPaths,
   removeVerifierOverlay,
 } from './verifierOverlay.js';
+import {
+  buildCampaignManifest,
+  captureGitIdentity,
+  findAttemptForTaskArm,
+  hashFileSha256,
+  loadCampaignManifest,
+  seedQueuedAttempts,
+  transitionAttempt,
+  writeCampaignManifest,
+  type CausalStage1Arm,
+} from './causalCampaignContract.js';
+import { buildCellTelemetryBundle } from '../agent/chatEngineObservability.js';
+import type { TurnRoutingReceipt } from '../agent/turnRoutingReceipt.js';
+import { writeDerivedCampaignState } from './causalCampaignValidator.js';
 
 export const SWE_PRO_CAMPAIGN_SCHEMA = 1 as const;
 
@@ -124,6 +138,28 @@ export interface CampaignCellResult {
     applied_file_count: number;
     reason: string | null;
   };
+  /** Slice 2: effort / cost / boundary telemetry from chat-headless payload. */
+  telemetry?: {
+    effort: ReturnType<typeof buildCellTelemetryBundle>['effort'];
+    cost: ReturnType<typeof buildCellTelemetryBundle>['cost'];
+    boundary: ReturnType<typeof buildCellTelemetryBundle>['boundary'];
+  };
+  /**
+   * Dual scoreboard: host FTP is product capability primary; gold is diagnostic only
+   * (multi-file PR reference — never sole capability criterion).
+   */
+  scoreboard?: {
+    host_fail_to_pass: boolean | null;
+    gold_diagnostic: boolean | null;
+    capability_primary: 'host_fail_to_pass';
+    gold_role: 'diagnostic_only';
+  };
+  /**
+   * In-session Babel authoritative verifier (allowlisted command only).
+   * null = not run / non-authoritative; true/false = pass/fail.
+   */
+  babel_authoritative_verifier?: boolean | null;
+  babel_authoritative_verifier_command?: string | null;
 }
 
 export interface CampaignAbort {
@@ -180,6 +216,14 @@ export interface CampaignOptions {
   now?: Date;
   /** Inject for tests */
   runCell?: (instance: SwebenchProInstanceRow, phase: CampaignPhase) => CampaignCellResult;
+  /**
+   * Stage 1 causal arms to freeze in campaign-manifest.json.
+   * Default: `['babel_enforce']` (reliability-only; not a complete causal design).
+   * Full causal Stage 1: `['babel_prompt_control','babel_shadow','babel_enforce']`.
+   */
+  causalArms?: CausalStage1Arm[];
+  /** Replicates per task×arm (default 1). */
+  causalReplicates?: number;
 }
 
 const DEFAULT_EARLY_STOP = 5;
@@ -615,8 +659,10 @@ function testPatchNotes(result: TestPatchApplyResult): string[] {
 }
 
 /**
- * W1.3: pass_mode for live_pass / cell.status.
- * Default `gold` keeps historical scoreboard; set BABEL_SWE_PRO_PASS_MODE=ftp|both to change.
+ * W1.3: pass_mode for live_pass / cell.status only.
+ * Capability primary remains host fail_to_pass; gold is diagnostic (multi-file PR ref).
+ * Default `gold` keeps historical scoreboard; canaries force `both`.
+ * Set BABEL_SWE_PRO_PASS_MODE=ftp|both|gold to change cell.status aggregation.
  */
 export function resolveSweProPassMode(
   env: NodeJS.ProcessEnv = process.env,
@@ -627,6 +673,10 @@ export function resolveSweProPassMode(
   return 'gold';
 }
 
+/**
+ * cell.status aggregation only — does not redefine dual axes.
+ * Prefer reporting host_fail_to_pass_ok and gold_diagnostic_ok separately.
+ */
 export function cellPassesByMode(
   goldDiffOk: boolean | null,
   failToPassOk: boolean | null | undefined,
@@ -1427,10 +1477,83 @@ function defaultRunLiveCell(
   });
   const has_shadow_summary = policy_events.some((e) => e.kind === 'policy_shadow_summary');
 
+  // Slice 2: cell effort/cost/boundary from chat-headless turnRouting + policy/tools
+  const turnRoutingRaw = payload?.['turnRouting'] ?? payload?.['turn_routing'];
+  const turnRouting: TurnRoutingReceipt[] = Array.isArray(turnRoutingRaw)
+    ? (turnRoutingRaw as TurnRoutingReceipt[])
+    : [];
+  const toolCallsRaw = payload?.['toolCalls'] ?? payload?.['tool_calls'];
+  const toolCalls = Array.isArray(toolCallsRaw)
+    ? (toolCallsRaw as Array<{
+        tool?: string;
+        error?: string;
+        exit_code?: number;
+        index?: number;
+        turn?: number;
+      }>)
+    : [];
+  // Rebuild logIndexToTurn from tool.turn when present (headless export)
+  const logIndexToTurn = new Map<number, number>();
+  for (let i = 0; i < toolCalls.length; i += 1) {
+    const tc = toolCalls[i]!;
+    if (typeof tc.turn === 'number') {
+      logIndexToTurn.set(typeof tc.index === 'number' ? tc.index : i, tc.turn);
+    }
+  }
+  const telemetry = buildCellTelemetryBundle({
+    turnRouting,
+    policyEvents: policy_events,
+    toolCalls,
+    ...(logIndexToTurn.size > 0 ? { logIndexToTurn } : {}),
+  });
+
+  // In-session Babel authoritative verifier (allowlisted only)
+  const completionVerification = payload?.['completion_verification'] as
+    | {
+        status?: string;
+        authority?: boolean | null;
+        verification?: { command?: string; exit_code?: number } | null;
+      }
+    | undefined;
+  const verifierReceiptPayload = payload?.['verifier_receipt'] as
+    | { command?: string; exit_code?: number }
+    | undefined;
+  let babel_authoritative_verifier: boolean | null = null;
+  let babel_authoritative_verifier_command: string | null = null;
+  if (completionVerification && completionVerification.authority === true) {
+    babel_authoritative_verifier = completionVerification.status === 'pass';
+    babel_authoritative_verifier_command =
+      completionVerification.verification?.command ??
+      verifierReceiptPayload?.command ??
+      null;
+  } else if (
+    completionVerification &&
+    completionVerification.authority === false &&
+    completionVerification.verification?.command
+  ) {
+    // Explicit non-authoritative receipt → not_run for capability axis
+    babel_authoritative_verifier = null;
+    babel_authoritative_verifier_command = completionVerification.verification.command;
+  }
+
+  const scoreboard = {
+    host_fail_to_pass: fail_to_pass_ok ?? null,
+    gold_diagnostic: gold_diff_ok,
+    capability_primary: 'host_fail_to_pass' as const,
+    gold_role: 'diagnostic_only' as const,
+  };
+
   const ftpNotes: string[] = [
     `pass_mode=${passMode}`,
     `fail_to_pass_ok=${fail_to_pass_ok === null || fail_to_pass_ok === undefined ? 'null' : fail_to_pass_ok}`,
     `fail_to_pass_class=${fail_to_pass_class}`,
+    `gold_diagnostic=${gold_diff_ok} (not capability sole criterion)`,
+    `capability_primary=host_fail_to_pass`,
+    `babel_authoritative_verifier=${babel_authoritative_verifier === null ? 'not_run' : babel_authoritative_verifier}`,
+    ...(babel_authoritative_verifier_command
+      ? [`babel_authoritative_cmd=${babel_authoritative_verifier_command.slice(0, 160)}`]
+      : []),
+    `turns_to_first_write=${telemetry.boundary.turns_to_first_applied_write ?? 'null'}`,
     `verifier_overlay=${verifierOverlay.ok}`,
     `verifier_overlay_excluded=${verifierOverlay.excludedPaths.length}`,
     `verifier_overlay_files=${verifierOverlay.appliedFiles.length}`,
@@ -1443,6 +1566,9 @@ function defaultRunLiveCell(
     ftpNotes.push(`fail_to_pass_exit=${ftpCheck.exitCode}`);
   }
   if (ftpCheck.skippedReason) ftpNotes.push(`fail_to_pass_skip=${ftpCheck.skippedReason}`);
+  if (gold_diff_ok === false && fail_to_pass_ok === true) {
+    ftpNotes.push('gold_ftp_gap=true (host FTP pass; gold multi-file PR mismatch is diagnostic)');
+  }
 
   const result: CampaignCellResult = {
     instance_id: instance.instance_id,
@@ -1461,6 +1587,11 @@ function defaultRunLiveCell(
       `gold_diff=${gold_diff_ok}`,
       `policy_events=${policy_events.length}`,
       `shadow_summary=${has_shadow_summary}`,
+      `effort_aliased=${telemetry.effort.effort_aliased}`,
+      `effort_source=${telemetry.effort.effective_source}`,
+      `cost_est_usd=${telemetry.cost.estimated_usd}`,
+      `boundary_writes=${telemetry.boundary.successful_write_tool_count}`,
+      `boundary_force_mutate=${telemetry.boundary.force_mutate_count + telemetry.boundary.force_mutate_shadow_count}`,
       ...(runDir ? [`run_dir=${runDir}`] : []),
     ],
     patch_bytes: patch.length,
@@ -1479,6 +1610,10 @@ function defaultRunLiveCell(
       applied_file_count: verifierOverlay.appliedFiles.length,
       reason: verifierOverlay.reason,
     },
+    telemetry,
+    scoreboard,
+    babel_authoritative_verifier,
+    babel_authoritative_verifier_command,
   };
 
   writeFileSync(
@@ -1563,6 +1698,33 @@ export async function runSwebenchProCampaign(
     instances = instances.slice(0, options.instanceLimit);
   }
 
+  // ── Frozen Stage 1 denominator (immutable manifest + queued attempts) ─────
+  // Written BEFORE any cell runs so crash mid-campaign cannot erase expected set.
+  const gitId = captureGitIdentity(BABEL_ROOT);
+  const causalArms: CausalStage1Arm[] = options.causalArms?.length
+    ? options.causalArms
+    : ['babel_enforce'];
+  const causalManifest = buildCampaignManifest({
+    campaignId: campaign_id,
+    createdAt: (options.now ?? new Date()).toISOString(),
+    taskIds: instances.map((i) => i.instance_id),
+    arms: causalArms,
+    replicates: options.causalReplicates ?? 1,
+    identity: {
+      babel_commit: gitId.babel_commit,
+      babel_branch: gitId.babel_branch,
+      dirty_digest: gitId.dirty_digest,
+      project_root: BABEL_ROOT,
+      canonical_remote: gitId.canonical_remote,
+      dataset_path: datasetPath,
+      dataset_sha256: hashFileSha256(datasetPath),
+      model: options.provider === 'live' ? (options.model ?? 'deepseek-v4-flash') : null,
+      provider: options.provider,
+    },
+  });
+  writeCampaignManifest(evidenceDir, causalManifest);
+  seedQueuedAttempts(evidenceDir, causalManifest, options.now);
+
   const cells: CampaignCellResult[] = [];
   let aborted: CampaignAbort | null = null;
   const policyJsonlPath = join(evidenceDir, 'policy-events.jsonl');
@@ -1630,9 +1792,21 @@ export async function runSwebenchProCampaign(
       );
     });
 
-  // ── Infra phase ──────────────────────────────────────────────────────────
+  // ── Infra phase (substage of each attempt; not a separate capability row) ─
   let streak = { signature: null as string | null, count: 0, cell_ids: [] as string[] };
   for (const instance of instances) {
+    // Mark primary arm attempt as running/infra for this task (reliability default arm).
+    const exp = findAttemptForTaskArm(causalManifest, instance.instance_id, 'babel_enforce', 0);
+    if (exp) {
+      try {
+        transitionAttempt(evidenceDir, exp.attempt_id, {
+          lifecycle: 'running',
+          substage: 'infra',
+        });
+      } catch {
+        /* already terminal/orphaned — leave alone */
+      }
+    }
     heartbeat('infra', instance.instance_id);
     const cell = runCell(instance, 'infra');
     cells.push(cell);
@@ -1652,7 +1826,9 @@ export async function runSwebenchProCampaign(
       cells.filter((c) => c.phase === 'infra' && c.status === 'pass').map((c) => c.instance_id),
     );
     for (const instance of instances) {
+      const exp = findAttemptForTaskArm(causalManifest, instance.instance_id, 'babel_enforce', 0);
       if (!infraPassed.has(instance.instance_id)) {
+        const skippedPath = join(evidenceDir, 'live', `${instance.instance_id}.skipped.json`);
         cells.push({
           instance_id: instance.instance_id,
           phase: 'live',
@@ -1664,13 +1840,47 @@ export async function runSwebenchProCampaign(
           policy_events: [],
           has_shadow_summary: false,
           duration_ms: 0,
-          evidence_path: join(evidenceDir, 'live', `${instance.instance_id}.skipped.json`),
+          evidence_path: skippedPath,
         });
+        if (exp) {
+          try {
+            transitionAttempt(evidenceDir, exp.attempt_id, {
+              lifecycle: 'terminal',
+              substage: 'done',
+              terminal_signature: 'live:skipped_infra_fail',
+              cell_evidence_path: skippedPath,
+            });
+          } catch {
+            /* ignore illegal transition */
+          }
+        }
         continue;
+      }
+      if (exp) {
+        try {
+          transitionAttempt(evidenceDir, exp.attempt_id, {
+            lifecycle: 'running',
+            substage: 'live',
+          });
+        } catch {
+          /* ignore */
+        }
       }
       heartbeat('live', instance.instance_id);
       const cell = runCell(instance, 'live');
       cells.push(cell);
+      if (exp) {
+        try {
+          transitionAttempt(evidenceDir, exp.attempt_id, {
+            lifecycle: 'terminal',
+            substage: 'done',
+            terminal_signature: cell.signature,
+            cell_evidence_path: cell.evidence_path,
+          });
+        } catch {
+          /* ignore */
+        }
+      }
       heartbeat('live', instance.instance_id, cell.status === 'fail' ? cell.signature : null);
       // Append policy events for scoreboard
       for (const pe of cell.policy_events) {
@@ -1688,6 +1898,35 @@ export async function runSwebenchProCampaign(
         break;
       }
     }
+  } else if (!aborted && options.infraOnly) {
+    // Infra-only: each attempt ends after infra substage (terminal with infra signature).
+    for (const instance of instances) {
+      const exp = findAttemptForTaskArm(causalManifest, instance.instance_id, 'babel_enforce', 0);
+      const infraCell = cells.find(
+        (c) => c.instance_id === instance.instance_id && c.phase === 'infra',
+      );
+      if (exp && infraCell) {
+        try {
+          transitionAttempt(evidenceDir, exp.attempt_id, {
+            lifecycle: 'terminal',
+            substage: 'done',
+            terminal_signature: infraCell.signature,
+            cell_evidence_path: infraCell.evidence_path,
+          });
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+
+  // Re-load manifest for summary note (immutable; must still match)
+  let causalNote = 'causal_manifest=present';
+  try {
+    const m = loadCampaignManifest(evidenceDir);
+    causalNote = `causal_manifest attempts=${m.expected_attempts.length} complete_design=${m.causal_stage1_complete_design}`;
+  } catch {
+    causalNote = 'causal_manifest=missing';
   }
 
   const shadow_sessions_with_summary = cells.filter((c) => c.has_shadow_summary).length;
@@ -1706,11 +1945,14 @@ export async function runSwebenchProCampaign(
     `SWE-Bench Pro campaign ${campaign_id}`,
     `instances=${instances.length} provider=${options.provider} early_stop_n=${earlyStopN}`,
     `pass_mode=${passMode} (BABEL_SWE_PRO_PASS_MODE=gold|ftp|both; default gold)`,
+    `scoreboard: capability_primary=host_fail_to_pass; gold_role=diagnostic_only (never sole capability)`,
+    causalNote,
     `infra_pass=${cells.filter((c) => c.phase === 'infra' && c.status === 'pass').length}`,
-    `live_pass=${livePass}/${liveCells.length}`,
-    `gold_diff_ok=${goldOk}/${liveCells.length}`,
-    `fail_to_pass_ok=${ftpOk}/${liveCells.length} (ran=${ftpRan})`,
+    `live_pass=${livePass}/${liveCells.length} (cell.status under pass_mode=${passMode})`,
+    `host_fail_to_pass_ok=${ftpOk}/${liveCells.length} (ran=${ftpRan}) [capability primary]`,
+    `gold_diagnostic_ok=${goldOk}/${liveCells.length} [diagnostic only — multi-file PR ref]`,
     `fail_to_pass_class collect_error=${ftpCollect} assert_fail=${ftpAssert}`,
+    `babel_authoritative_pass=${cells.filter((c) => c.babel_authoritative_verifier === true).length}/${liveCells.length}`,
     `shadow_summaries=${shadow_sessions_with_summary}`,
     aborted ? `ABORTED: ${aborted.reason}` : 'completed_without_early_stop',
     `policy_events_jsonl=${policyJsonlPath}`,
@@ -1737,6 +1979,36 @@ export async function runSwebenchProCampaign(
   if (aborted) {
     writeFileSync(join(evidenceDir, 'campaign_abort.json'), JSON.stringify(aborted, null, 2), 'utf8');
   }
+
+  // Slice 3: independently derived eligibility + multi-axis rates (not writer pass_mode)
+  let derivedNote = 'derived=skipped';
+  try {
+    const derived = writeDerivedCampaignState({
+      evidenceDir,
+      ...(options.now !== undefined ? { now: options.now } : {}),
+      writerCells: cells,
+      manifest: causalManifest,
+      legacyPassMode: passMode,
+    });
+    derivedNote = [
+      `derived_artifact_valid=${derived.eligibility.artifact_valid}`,
+      `derived_complete=${derived.eligibility.campaign_complete}`,
+      `derived_reliability_eligible=${derived.eligibility.reliability_eligible}`,
+      `derived_promotion_eligible=${derived.eligibility.promotion_eligible}`,
+      `derived_capability_score_valid=${derived.eligibility.capability_score_valid}`,
+      `itt_capability=${derived.intent_to_treat_capability.numerator}/${derived.intent_to_treat_capability.denominator}`,
+      `cond_capability=${derived.conditional_capability.numerator}/${derived.conditional_capability.denominator}`,
+    ].join(' ');
+    summary_lines.push(derivedNote);
+    report.summary_lines = summary_lines;
+    writeFileSync(join(evidenceDir, 'campaign-report.json'), JSON.stringify(report, null, 2), 'utf8');
+  } catch (err) {
+    derivedNote = `derived=error:${err instanceof Error ? err.message : String(err)}`;
+    summary_lines.push(derivedNote);
+    report.summary_lines = summary_lines;
+    writeFileSync(join(evidenceDir, 'campaign-report.json'), JSON.stringify(report, null, 2), 'utf8');
+  }
+
   writeFileSync(join(evidenceDir, 'campaign-summary.txt'), summary_lines.join('\n') + '\n', 'utf8');
   heartbeat('complete', null, aborted ? aborted.signature : null);
 

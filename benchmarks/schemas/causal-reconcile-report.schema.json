@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "number",
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "const": "babel_causal_reconcile_report"
+    },
+    "campaign_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evidence_dir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reconciled_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "process_alive": {
+      "type": "boolean"
+    },
+    "process_tree_alive": {
+      "type": "boolean"
+    },
+    "grace_remaining_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "campaign_complete": {
+      "type": "boolean"
+    },
+    "expected_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "by_lifecycle": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      }
+    },
+    "orphaned_attempt_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "conservation_ok": {
+      "type": "boolean"
+    },
+    "conservation_errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "kind",
+    "campaign_id",
+    "evidence_dir",
+    "reconciled_at",
+    "process_alive",
+    "process_tree_alive",
+    "grace_remaining_ms",
+    "campaign_complete",
+    "expected_count",
+    "by_lifecycle",
+    "orphaned_attempt_ids",
+    "conservation_ok",
+    "conservation_errors",
+    "notes"
+  ],
+  "additionalProperties": false
+}

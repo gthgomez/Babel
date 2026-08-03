@@ -46,6 +46,7 @@
     "benchmark:agent:swe-pro:infra": "tsx --no-warnings=ExperimentalWarning scripts/run_swebench_pro_campaign.ts --infra-only",
     "benchmark:agent:swe-pro:preflight": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/preflight_swebench_pro.ps1",
     "benchmark:agent:swe-pro:harvest": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/harvest_swebench_pro.ps1",
+    "benchmark:agent:swe-pro:reconcile": "tsx --no-warnings=ExperimentalWarning scripts/reconcile_swebench_pro.ts",
     "benchmark:parity": "node dist/index.js benchmark parity --json",
     "benchmark:production": "node dist/index.js benchmark production --json",
     "benchmark:product": "node dist/index.js benchmark product --json",

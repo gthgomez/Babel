@@ -62,6 +62,44 @@ test('buildChatRunPayload maps completed ChatResult to ANSWER_READY', () => {
   assert.equal(routing['orchestrator'], 'chat_engine');
   const answer = payload['answer'] as Record<string, unknown>;
   assert.equal(answer['answer'], 'All good.');
+  // Slice 2/7: always emit turnRouting (+ alias) for campaign effort rollups
+  assert.ok(Array.isArray(payload['turnRouting']));
+  assert.ok(Array.isArray(payload['turn_routing']));
+  assert.ok(Array.isArray(payload['policy_events']));
+  assert.ok(Array.isArray(payload['policyEvents']));
+});
+
+test('buildChatRunPayload surfaces turnRouting effort fields for headless JSON', () => {
+  const base = completedResult('patched');
+  const payload = buildChatRunPayload(
+    {
+      ...base,
+      turnRouting: [
+        {
+          turn: 0,
+          phase: 'mutate',
+          model: 'deepseek-v4-flash',
+          input_tokens: 100,
+          output_tokens: 20,
+          cost_usd: 0.01,
+          requested_reasoning_effort: 'medium',
+          sent_reasoning_effort: 'high',
+          observed_reasoning_effort: 'high',
+          effort_aliased: true,
+          effective_source: 'observed',
+        },
+      ],
+      policyEvents: [{ at_turn: 0, kind: 'force_mutate_shadow' }],
+    },
+    { task: 'fix', projectRoot: '/tmp/project' },
+  );
+  const tr = payload['turnRouting'] as Array<Record<string, unknown>>;
+  assert.equal(tr.length, 1);
+  assert.equal(tr[0]!['requested_reasoning_effort'], 'medium');
+  assert.equal(tr[0]!['sent_reasoning_effort'], 'high');
+  assert.equal(tr[0]!['effort_aliased'], true);
+  const pe = payload['policy_events'] as Array<Record<string, unknown>>;
+  assert.equal(pe[0]!['kind'], 'force_mutate_shadow');
 });
 
 test('buildChatRunPayload maps failed ChatResult to NEEDS_MORE_CONTEXT', () => {

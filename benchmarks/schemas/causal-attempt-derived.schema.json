@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "number",
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "const": "babel_causal_attempt_derived"
+    },
+    "attempt_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "arm": {
+      "type": "string",
+      "minLength": 1
+    },
+    "replicate_id": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "lifecycle": {
+      "type": "string",
+      "minLength": 1
+    },
+    "axes": {
+      "type": "object",
+      "properties": {
+        "execution_terminal": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "null",
+            "not_run",
+            "error",
+            "diagnostic_only"
+          ]
+        },
+        "babel_authoritative_verifier": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "null",
+            "not_run",
+            "error",
+            "diagnostic_only"
+          ]
+        },
+        "host_fail_to_pass": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "null",
+            "not_run",
+            "error",
+            "diagnostic_only"
+          ]
+        },
+        "official_evaluator": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "null",
+            "not_run",
+            "error",
+            "diagnostic_only"
+          ]
+        },
+        "gold_patch_similarity": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "null",
+            "not_run",
+            "error",
+            "diagnostic_only"
+          ]
+        }
+      },
+      "required": [
+        "execution_terminal",
+        "babel_authoritative_verifier",
+        "host_fail_to_pass",
+        "official_evaluator",
+        "gold_patch_similarity"
+      ],
+      "additionalProperties": false
+    },
+    "capability_verified_pass": {
+      "type": "boolean"
+    },
+    "capability_eligible": {
+      "type": "boolean"
+    },
+    "capability_exclusion_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "false_complete_suspected": {
+      "type": "boolean"
+    },
+    "evidence_authority_failure": {
+      "type": "boolean"
+    },
+    "artifact_valid": {
+      "type": "boolean"
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "kind",
+    "attempt_id",
+    "task_id",
+    "arm",
+    "replicate_id",
+    "lifecycle",
+    "axes",
+    "capability_verified_pass",
+    "capability_eligible",
+    "capability_exclusion_reason",
+    "false_complete_suspected",
+    "evidence_authority_failure",
+    "artifact_valid",
+    "notes"
+  ],
+  "additionalProperties": false
+}

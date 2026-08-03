@@ -34,7 +34,33 @@ export type PolicyEventKind =
   | 'readiness_block'
   | 'progress_policy'
   | 'progress_terminal'
-  | 'failover';
+  | 'failover'
+  // ── Slice 2 harness-boundary taxonomy (stable kinds for causal thrash diagnosis)
+  /** Model emitted a mutation-class tool intent. */
+  | 'mutation_intent'
+  /** Tool call failed schema/parse; may include repair. */
+  | 'tool_parse_reject'
+  | 'tool_parse_repair'
+  /** Tool name alias normalization applied. */
+  | 'tool_alias_normalize'
+  /** Argument validation failed before dispatch. */
+  | 'arg_validation_fail'
+  /** Policy/approval denied a tool (distinct from phase_gate when authority is policy). */
+  | 'policy_deny'
+  /** Tool dispatch started/finished (detail may carry start|end). */
+  | 'tool_dispatch'
+  /** Filesystem apply of an edit/patch. */
+  | 'write_apply'
+  /** Write receipt recorded (pre-image / success). */
+  | 'write_receipt'
+  /** Git patch non-empty observation after writes. */
+  | 'git_patch'
+  /** Verifier authority accept/reject (detail carries reason). */
+  | 'verifier_authority'
+  /** Progress-controller intervention (nudge/restrict/lease). */
+  | 'progress_controller'
+  /** Budget/terminal arbitration (turn/cost/wall). */
+  | 'budget_arbitration';
 
 export interface PolicyEvent {
   /** The turn number (0-based) when this event fired. */
