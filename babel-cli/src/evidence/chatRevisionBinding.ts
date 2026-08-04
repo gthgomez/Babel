@@ -7,10 +7,18 @@
 
 import type { VerifierAuthoritySource } from '../executor/contracts.js';
 import {
+  evaluateCompletionEvidenceSync,
+  type CompletionEvidenceEvaluation,
+} from './completionEvidence.js';
+import { EvidenceGraph } from './evidenceGraph.js';
+import {
   RevisionManager,
   type RevisionBoundReceipt,
   type WorkspaceRevision,
 } from './revisionBoundReceipt.js';
+
+/** Canonical claim id for Chat-produced evidence graphs. */
+export const CHAT_EVIDENCE_CLAIM_ID = 'chat-claim' as const;
 
 /** Chat verifier receipt with optional durable workspace binding. */
 export type BoundChatVerifierReceipt = {
@@ -155,4 +163,138 @@ export function toGateToolLog(
     ...(entry.error !== undefined ? { error: entry.error } : {}),
     ...(entry.exit_code !== undefined ? { exit_code: entry.exit_code } : {}),
   }));
+}
+
+/**
+ * Build the lightweight EvidenceGraph Chat feeds into kernel evaluateEvidence.
+ * Uses SessionEventV1 mutation_batch paths + the bound Chat verifier receipt.
+ */
+export function buildChatEvidenceGraph(input: {
+  receipt: BoundChatVerifierReceipt | null | undefined;
+  mutationPaths: string[];
+  hasMutation: boolean;
+  claimId?: string;
+}): EvidenceGraph {
+  const claimId = input.claimId ?? CHAT_EVIDENCE_CLAIM_ID;
+  const graph = new EvidenceGraph();
+  graph.addNode({
+    id: claimId,
+    type: 'claim',
+    data: { source: 'chat' },
+    parents: [],
+  });
+
+  if (input.hasMutation) {
+    graph.addNode({
+      id: 'chat-patch',
+      type: 'patch',
+      data: { paths: input.mutationPaths },
+      parents: [claimId],
+    });
+  }
+
+  const bound = input.receipt ? toRevisionBoundReceipt(input.receipt) : null;
+  if (bound && input.receipt && input.receipt.exit_code === 0) {
+    graph.addNode({
+      id: bound.receiptId,
+      type: 'verifier_receipt',
+      data: bound,
+      parents: [claimId],
+    });
+  }
+
+  return graph;
+}
+
+/** Run kernel-equivalent evidence evaluation for Chat proof (sync). */
+export function evaluateChatEvidenceGraph(input: {
+  projectRoot: string;
+  receipt: BoundChatVerifierReceipt | null | undefined;
+  events: readonly {
+    kind: string;
+    paths?: readonly string[];
+    authoritative?: boolean;
+    exit_code?: number;
+  }[];
+  hasMutation: boolean;
+}): CompletionEvidenceEvaluation {
+  const mutationPaths = mutationPathsFromSessionEvents(input.events);
+  const graph = buildChatEvidenceGraph({
+    receipt: input.receipt,
+    mutationPaths,
+    hasMutation: input.hasMutation,
+  });
+  return evaluateCompletionEvidenceSync({
+    projectRoot: input.projectRoot,
+    graph,
+    contract: {
+      taskClaimId: CHAT_EVIDENCE_CLAIM_ID,
+      requiredEvidenceTypes: input.hasMutation
+        ? ['patch', 'verifier_receipt']
+        : ['verifier_receipt'],
+    },
+  });
+}
+
+/**
+ * Full Chat proof surface: structural checks + shared evaluateEvidence authority.
+ * Extracted so ChatEngine stays under the file-size ratchet.
+ */
+export function evaluateChatCompletionProof(input: {
+  projectRoot: string;
+  hasMutation: boolean;
+  verifierTampered: boolean;
+  receipt: BoundChatVerifierReceipt | null | undefined;
+  events: readonly {
+    kind: string;
+    paths?: readonly string[];
+    authoritative?: boolean;
+    exit_code?: number;
+  }[];
+  isAuthoritativeCommand: (command: string) => boolean;
+}): { compliant: boolean; errors?: string[] } {
+  const errors: string[] = [];
+  if (!input.hasMutation) errors.push('missing production mutation evidence');
+  if (input.verifierTampered) errors.push('verifier integrity violation');
+
+  const receipt = input.receipt;
+  if (!receipt || receipt.exit_code !== 0) {
+    errors.push('missing green verifier receipt');
+  } else if (!input.isAuthoritativeCommand(receipt.command)) {
+    errors.push('verifier receipt is not authoritative');
+  } else if (!receipt.verifier_id || !receipt.argv) {
+    errors.push('verifier receipt is not durably structured');
+  } else {
+    errors.push(...revisionBindingProofErrors(receipt));
+  }
+
+  if (!input.events.some((event) => event.kind === 'mutation_batch')) {
+    errors.push('missing mutation transaction evidence');
+  }
+  if (
+    !input.events.some(
+      (event) =>
+        event.kind === 'verifier_attempt' &&
+        event.authoritative &&
+        event.exit_code === 0,
+    )
+  ) {
+    errors.push('missing canonical verifier-attempt evidence');
+  }
+
+  // Shared kernel evidence authority (contract coverage + revision-bound graph).
+  const evidence = evaluateChatEvidenceGraph({
+    projectRoot: input.projectRoot,
+    receipt: input.receipt,
+    events: input.events,
+    hasMutation: input.hasMutation,
+  });
+  for (const missing of evidence.missing) {
+    errors.push(`missing evidence: ${missing}`);
+  }
+  for (const err of evidence.errors) {
+    if (!errors.includes(err)) errors.push(err);
+  }
+
+  return errors.length === 0 ? { compliant: true } : { compliant: false, errors };
 }

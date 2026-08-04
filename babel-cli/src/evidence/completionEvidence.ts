@@ -11,20 +11,29 @@ export interface CompletionEvidenceEvaluation {
   errors: string[];
 }
 
+/** Sync evaluate for Chat finalize; same authority as the async kernel path. */
+export function evaluateCompletionEvidenceSync(input: {
+  contract: AcceptanceContract;
+  graph: EvidenceGraph;
+  projectRoot: string;
+}): CompletionEvidenceEvaluation {
+  const contractResult = ContractEvaluator.evaluateContract(
+    input.contract,
+    input.graph,
+  );
+  const graphResult = input.graph.evaluateGraphSync(input.projectRoot);
+  return {
+    compliant: contractResult.compliant && graphResult.valid,
+    missing: [...contractResult.missing],
+    errors: [...graphResult.errors],
+  };
+}
+
 /** Evaluate the production completion contract against the canonical evidence graph. */
 export async function evaluateCompletionEvidence(input: {
   contract: AcceptanceContract;
   graph: EvidenceGraph;
   projectRoot: string;
 }): Promise<CompletionEvidenceEvaluation> {
-  const contractResult = ContractEvaluator.evaluateContract(
-    input.contract,
-    input.graph,
-  );
-  const graphResult = await input.graph.evaluateGraph(input.projectRoot);
-  return {
-    compliant: contractResult.compliant && graphResult.valid,
-    missing: [...contractResult.missing],
-    errors: [...graphResult.errors],
-  };
+  return evaluateCompletionEvidenceSync(input);
 }

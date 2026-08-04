@@ -36,9 +36,11 @@ export class EvidenceGraph {
     return this.nodes;
   }
 
-  async evaluateGraph(
-    projectRoot: string,
-  ): Promise<{ valid: boolean; errors: string[] }> {
+  /**
+   * Sync graph validation for Chat finalize (streamDone/buildResult are sync).
+   * Async wrapper delegates here — RevisionManager now has isReceiptStaleSync.
+   */
+  evaluateGraphSync(projectRoot: string): { valid: boolean; errors: string[] } {
     const errors: string[] = [];
 
     // Check for missing dependencies (broken DAG links)
@@ -52,16 +54,29 @@ export class EvidenceGraph {
       }
     }
 
-    // Check for stale verifier receipts
+    // Check for stale verifier receipts (revision recheck when boundRevision present)
     const receipts = this.getNodesByType("verifier_receipt");
     for (const receiptNode of receipts) {
       const receipt = receiptNode.data as RevisionBoundReceipt;
-      const { stale, reason } = await RevisionManager.isReceiptStale(
-        receipt,
+      if (!receipt?.boundRevision) {
+        errors.push(
+          `Verifier receipt ${receiptNode.id} missing boundRevision for H7 recheck`,
+        );
+        continue;
+      }
+      const { stale, reason } = RevisionManager.isReceiptStaleSync(
+        {
+          receiptId: receipt.receiptId ?? receiptNode.id,
+          command: receipt.command ?? "",
+          exitCode: receipt.exitCode ?? 1,
+          boundRevision: receipt.boundRevision,
+          stale: receipt.stale === true,
+          ...(receipt.staleReason ? { staleReason: receipt.staleReason } : {}),
+        },
         projectRoot,
       );
       if (stale) {
-        errors.push(`Stale receipt ${receipt.receiptId}: ${reason}`);
+        errors.push(`Stale receipt ${receipt.receiptId ?? receiptNode.id}: ${reason}`);
       }
     }
 
@@ -78,5 +93,11 @@ export class EvidenceGraph {
       valid: errors.length === 0,
       errors,
     };
+  }
+
+  async evaluateGraph(
+    projectRoot: string,
+  ): Promise<{ valid: boolean; errors: string[] }> {
+    return this.evaluateGraphSync(projectRoot);
   }
 }

@@ -50,6 +50,12 @@ test("executor kernel downgrades verified completion until proof is complete", (
   assert.equal(decision.allowed, false);
 });
 
+test("executor kernel exposes sync evaluateEvidence twin", () => {
+  const kernel = createExecutorKernel("chat");
+  assert.equal(typeof kernel.completion.evaluateEvidenceSync, "function");
+  assert.equal(typeof kernel.completion.evaluateEvidence, "function");
+});
+
 test("executor kernel rejects an incomplete proof even with a green verifier", () => {
   const kernel = createExecutorKernel("deep");
   const decision = kernel.completion.decide({

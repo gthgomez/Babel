@@ -116,9 +116,9 @@ import {
 import { createExecutorKernel, type ExecutorKernel } from '../executor/kernel.js';
 import {
   bindChatVerifierReceipt,
+  evaluateChatCompletionProof,
   mutationPathsFromSessionEvents,
   refreshChatVerifierReceiptStalenessSync,
-  revisionBindingProofErrors,
   toGateToolLog,
   type BoundChatVerifierReceipt,
 } from '../evidence/chatRevisionBinding.js';
@@ -956,35 +956,17 @@ export class ChatEngine {
 
   /**
    * Build the synchronous proof summary passed to the shared completion
-   * authority. The async evidence graph remains available to deep/pipeline
-   * callers; Chat's terminal choke point must still refuse a green legacy gate
-   * when the canonical event stream lacks mutation or verifier evidence.
+   * authority. Uses SessionEventV1 + bound receipts, then kernel evaluateEvidenceSync.
    */
   private buildCompletionProof(hasMutation: boolean): { compliant: boolean; errors?: string[] } {
-    const errors: string[] = [];
-    if (!hasMutation) errors.push('missing production mutation evidence');
-    if (this.verifierTampered) errors.push('verifier integrity violation');
-
-    const receipt = this.lastVerifierReceipt;
-    if (!receipt || receipt.exit_code !== 0) {
-      errors.push('missing green verifier receipt');
-    } else if (!isAuthoritativeVerifierCommand(receipt.command)) {
-      errors.push('verifier receipt is not authoritative');
-    } else if (!receipt.verifier_id || !receipt.argv) {
-      errors.push('verifier receipt is not durably structured');
-    } else {
-      errors.push(...revisionBindingProofErrors(receipt));
-    }
-
-    const events = this.parity.sessionEvents.events;
-    if (!events.some((event) => event.kind === 'mutation_batch')) {
-      errors.push('missing mutation transaction evidence');
-    }
-    if (!events.some((event) => event.kind === 'verifier_attempt' && event.authoritative && event.exit_code === 0)) {
-      errors.push('missing canonical verifier-attempt evidence');
-    }
-
-    return errors.length === 0 ? { compliant: true } : { compliant: false, errors };
+    return evaluateChatCompletionProof({
+      projectRoot: this.options.projectRoot,
+      hasMutation,
+      verifierTampered: this.verifierTampered,
+      receipt: this.lastVerifierReceipt,
+      events: this.parity.sessionEvents.events,
+      isAuthoritativeCommand: isAuthoritativeVerifierCommand,
+    });
   }
 
   private readCacheKey(filePath: string): string { return normalizeReadCacheKey(filePath, this.options.projectRoot); }

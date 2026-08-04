@@ -5,12 +5,17 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   bindChatVerifierReceipt,
+  buildChatEvidenceGraph,
+  CHAT_EVIDENCE_CLAIM_ID,
+  evaluateChatCompletionProof,
+  evaluateChatEvidenceGraph,
   mutationPathsFromSessionEvents,
   refreshChatVerifierReceiptStalenessSync,
   revisionBindingProofErrors,
   toRevisionBoundReceipt,
 } from './chatRevisionBinding.js';
 import { evaluateExecuteCompletionHonesty } from '../agent/completionGatePolicy.js';
+import { createExecutorKernel } from '../executor/kernel.js';
 
 describe('chatRevisionBinding', () => {
   it('collects unique mutation_batch paths', () => {
@@ -85,5 +90,85 @@ describe('chatRevisionBinding', () => {
       }),
       null,
     );
+  });
+
+  it('builds evidence graph and evaluateEvidence rejects stale bound receipt', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'babel-chat-ev-'));
+    try {
+      const rel = 'src/mod.ts';
+      await fs.mkdir(path.join(tempDir, 'src'), { recursive: true });
+      await fs.writeFile(path.join(tempDir, rel), 'v1');
+
+      const receipt = await bindChatVerifierReceipt({
+        projectRoot: tempDir,
+        command: 'npm test',
+        exit_code: 0,
+        summary: 'ok',
+        mutationPaths: [rel],
+        structured: {
+          verifierId: 'npm-test',
+          authoritySource: 'built_in_runner',
+          executable: 'npm',
+          args: ['test'],
+        },
+      });
+
+      const events = [
+        { kind: 'mutation_batch' as const, paths: [rel] },
+        {
+          kind: 'verifier_attempt' as const,
+          authoritative: true,
+          exit_code: 0,
+        },
+      ];
+
+      const fresh = evaluateChatEvidenceGraph({
+        projectRoot: tempDir,
+        receipt,
+        events,
+        hasMutation: true,
+      });
+      assert.strictEqual(fresh.compliant, true);
+
+      // Kernel sync twin agrees with helper
+      const graph = buildChatEvidenceGraph({
+        receipt,
+        mutationPaths: [rel],
+        hasMutation: true,
+      });
+      const kernel = createExecutorKernel('chat');
+      const viaKernel = kernel.completion.evaluateEvidenceSync({
+        projectRoot: tempDir,
+        graph,
+        contract: {
+          taskClaimId: CHAT_EVIDENCE_CLAIM_ID,
+          requiredEvidenceTypes: ['patch', 'verifier_receipt'],
+        },
+      });
+      assert.strictEqual(viaKernel.compliant, true);
+
+      await fs.writeFile(path.join(tempDir, rel), 'v2');
+      const stale = evaluateChatEvidenceGraph({
+        projectRoot: tempDir,
+        receipt,
+        events,
+        hasMutation: true,
+      });
+      assert.strictEqual(stale.compliant, false);
+      assert.ok(stale.errors.some((e) => /Stale receipt/i.test(e)));
+
+      const proof = evaluateChatCompletionProof({
+        projectRoot: tempDir,
+        hasMutation: true,
+        verifierTampered: false,
+        receipt,
+        events,
+        isAuthoritativeCommand: () => true,
+      });
+      assert.strictEqual(proof.compliant, false);
+      assert.ok(proof.errors?.some((e) => /Stale receipt|stale/i.test(e)));
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
   });
 });
