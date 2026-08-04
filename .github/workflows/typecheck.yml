@@ -12,7 +12,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Include event_name so pull_request and pull_request_target do not cancel
+  # each other. Both fire on PR open/sync; without this, the metadata-only
+  # pull_request_target run cancels real protect-main validation jobs.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:

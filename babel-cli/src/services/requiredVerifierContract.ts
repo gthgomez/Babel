@@ -3,6 +3,11 @@ import { join } from 'node:path';
 import { extractRequiredVerifierCommandsFromTask } from '../pipeline/planVerifierInjection.js';
 import type { ToolCallLog } from '../schemas/agentContracts.js';
 import { isVerifierCommand, type TerminalStatus } from './terminalStatus.js';
+import {
+  analyzeVerifierIdentity,
+  sameVerifierIdentity,
+  satisfiesVerifierRequirement,
+} from './verifierIdentity.js';
 
 export type VerifierState =
   | 'planned'
@@ -15,11 +20,6 @@ export type VerifierState =
   | 'missing';
 
 export type VerifierSource = 'user_required' | 'discovered' | 'default_project' | 'optional';
-
-interface ParsedVerifierCommand {
-  executable: string;
-  args: string[];
-}
 
 export interface VerifierExecutionRecord {
   step: number;
@@ -113,7 +113,7 @@ export function buildVerifierPlan(
     ...additionalRequiredVerifiers.filter((command) => isVerifierCommand(command)),
   ]);
   const optional = extractOptionalVerifierCommands(task).filter(
-    (command) => !required.some((item) => sameCommand(item, command)),
+    (command) => !required.some((item) => sameVerifierIdentity(item, command)),
   );
   return [
     ...required.map((command, index) =>
@@ -135,7 +135,10 @@ export function reconcileVerifierPlan(
   );
   let priorRequiredFailed = false;
   return plan.map((entry) => {
-    const matches = commandEntries.filter((item) => sameCommand(item.target, entry.command));
+    // Directional identity: full suite may satisfy targeted required; reverse must not.
+    const matches = commandEntries.filter((item) =>
+      satisfiesVerifierRequirement(entry.command, item.target),
+    );
     const finalMatch = matches.at(-1);
     if (!finalMatch) {
       if (!entry.required) {
@@ -302,151 +305,18 @@ function cleanCommand(raw: string): string {
     .trim();
 }
 
-function sameCommand(left: string, right: string): boolean {
-  return normalizeCommand(left) === normalizeCommand(right);
-}
-
-function normalizeCommand(command: string): string {
-  const parsed = parseCanonicalVerifierCommand(command);
-  if (!parsed) {
-    return cleanCommand(command).toLowerCase();
-  }
-  const executable = parsed.executable;
-  const args = parsed.args;
-  if (executable === 'npm') {
-    const normalizedArgs = skipLeadingOptions(args);
-    if (normalizedArgs[0] === 'test') {
-      return 'npm test';
-    }
-    if (normalizedArgs[0] === 'run' && normalizedArgs[1]) {
-      return `npm run ${normalizedArgs[1]}`;
-    }
-    return cleanCommand(command).toLowerCase();
-  }
-  if (executable === 'node' && args.includes('--test')) {
-    return 'node --test';
-  }
-  if (executable === 'tsc') {
-    return args.includes('-b') ? 'tsc -b' : 'tsc';
-  }
-  if (executable === 'vitest') {
-    return normalizedVerifierName('vitest', normalizedArgsOrRun(args));
-  }
-  if (executable === 'pytest' || executable === 'jest') {
-    return executable;
-  }
-  if (executable === 'go' && skipLeadingOptions(args)[0] === 'test') {
-    return 'go test';
-  }
-  if (executable === 'cargo' && skipLeadingOptions(args)[0] === 'test') {
-    return 'cargo test';
-  }
-  if (executable === 'gradle' && skipLeadingOptions(args)[0] === 'test') {
-    return 'gradle test';
-  }
-  if (executable === 'gradlew' && skipLeadingOptions(args)[0] === 'test') {
-    return 'gradlew test';
-  }
-  return cleanCommand(command).toLowerCase();
-}
-
 function uniqueCommands(commands: readonly string[]): string[] {
   const seen = new Set<string>();
   const output: string[] = [];
   for (const command of commands.map(cleanCommand).filter(Boolean)) {
-    const normalized = normalizeCommand(command);
-    if (!seen.has(normalized)) {
-      seen.add(normalized);
+    const identity = analyzeVerifierIdentity(command);
+    const key = identity?.identityKey ?? cleanCommand(command).toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
       output.push(command);
     }
   }
   return output;
-}
-
-function parseCanonicalVerifierCommand(command: string): ParsedVerifierCommand | null {
-  const tokens = tokenizeCommand(command);
-  if (tokens.length === 0) {
-    return null;
-  }
-  const firstToken = tokens[0];
-  if (!firstToken) {
-    return null;
-  }
-  const executable = normalizeCommandExecutable(firstToken);
-  if (!executable) {
-    return null;
-  }
-  return {
-    executable,
-    args: tokens.slice(1).map((token) => normalizeCommandArg(token)),
-  };
-}
-
-function tokenizeCommand(command: string): string[] {
-  const tokens: string[] = [];
-  let current = '';
-  let inSingle = false;
-  let inDouble = false;
-  for (let i = 0; i < command.length; i += 1) {
-    const char = command.charAt(i);
-    if (char === "'" && !inDouble) {
-      inSingle = !inSingle;
-      continue;
-    }
-    if (char === '"' && !inSingle) {
-      inDouble = !inDouble;
-      continue;
-    }
-    if (!inSingle && !inDouble && /\s/.test(char)) {
-      if (current.length > 0) {
-        tokens.push(current);
-        current = '';
-      }
-      continue;
-    }
-    current += char;
-  }
-  if (current.length > 0) {
-    tokens.push(current);
-  }
-  return tokens;
-}
-
-function normalizeCommandExecutable(token: string): string {
-  const trimmed = token.replace(/^['"]|['"]$/g, '').trim();
-  const normalized = trimmed.split(/[\\/]/).at(-1) ?? '';
-  return normalized
-    .toLowerCase()
-    .replace(/\.(cmd|bat|exe)$/i, '')
-    .replace(/\.cmd$/i, '');
-}
-
-function normalizeCommandArg(token: string): string {
-  return token
-    .replace(/^['"]|['"]$/g, '')
-    .trim()
-    .toLowerCase();
-}
-
-function skipLeadingOptions(args: readonly string[]): string[] {
-  const normalized = [...args];
-  while (normalized.length > 0 && (normalized[0] ?? '').startsWith('-')) {
-    normalized.shift();
-  }
-  return normalized;
-}
-
-function normalizedVerifierName(executable: string, args: readonly string[]): string {
-  if (args.length > 0 && args[0] === 'run') {
-    return `${executable} run`;
-  }
-  return executable;
-}
-
-function normalizedArgsOrRun(args: readonly string[]): string[] {
-  const normalized = skipLeadingOptions(args);
-  const first = normalized[0];
-  return first ? [first] : [];
 }
 
 function summarizeVerifierStream(text: string | null | undefined): string | null {

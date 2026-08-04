@@ -205,7 +205,7 @@ Additional (partially wired):
 
 - `isLikelyVerifierCommand` — logging / counters (broader)
 - `isAuthoritativeVerifierCommand` — may green completion (allowlist prefixes; package installs **never** green)
-- Pipeline `normalizeCommand` can collapse pytest/jest/npm variants — **lossy identity** risk when matching plan vs log
+- Structural identity (`verifierIdentity.ts`) enforces full vs targeted in pipeline **and** Chat honesty (`verifier_scope`). IndependentVerifier clean-room is **opt-in** (`BABEL_INDEPENDENT_VERIFIER=1`), not default.
 
 ### Evidence is multi-stream (today)
 
@@ -255,7 +255,7 @@ Read in this order when changing harness behavior:
 | 8 | `babel-cli/src/pipeline/executorLoop.ts` | Deep Stage 4 |
 | 9 | `babel-cli/src/sandbox.ts` + `config/executionProfiles.ts` | Isolation profiles |
 | 10 | `babel-cli/src/services/worktreeSafety.ts` | Dirty veto / rollback |
-| 11 | `babel-cli/src/services/requiredVerifierContract.ts` | Pipeline verifier plan |
+| 11 | `babel-cli/src/services/requiredVerifierContract.ts` + `verifierIdentity.ts` | Pipeline verifier plan + structural identity |
 | 12 | `babel-cli/src/schemas/agentContracts.ts` | Zod contracts + `TerminalOutcome` |
 
 **Do not** treat `sessionLoop.ts` as the ChatEngine turn machine — it is read-only lane step payloads.
@@ -267,8 +267,8 @@ Read in this order when changing harness behavior:
 Use these when planning reliability work; do not paper over them in marketing claims.
 
 1. **Docker isolation is conditional** — missing Docker/image on isolation profiles **fail-closes** unless `BABEL_ALLOW_HOST_FALLBACK=1` or `BABEL_DOCKER_DISABLE=true` (H13).
-2. **Verifier independence is mostly policy + revision bind**, not a universal clean-room verifier mount for chat (`IndependentVerifier` still opt-in / prototype).
-3. **Command identity can be lossy** in pipeline `normalizeCommand` (targeted suite vs full suite).
+2. **Verifier independence is mostly policy + revision bind**; clean-room IndependentVerifier is **opt-in** (`BABEL_INDEPENDENT_VERIFIER=1`), not default Chat finalize.
+3. **Required-command scope is live** in pipeline + Chat honesty; residual is product UX (discoverability of full-suite requirements).
 4. **Evidence is multi-file / dual-stream**, not one append-only hash-linked episode for all modes.
 5. **`ModeController` interface** exists; production chat is still ChatEngine + `kernel.decide`, not a full adapter implementation for every mode.
 6. **Chat revision binding + evidence-graph proof are live**; clean-room IndependentVerifier remains prototype-only.

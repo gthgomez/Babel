@@ -27,6 +27,16 @@ import {
   evaluateExecuteCompletionHonesty,
   parseStructuredVerifierCommand,
 } from "../agent/completionGatePolicy.js";
+import {
+  analyzeVerifierIdentity,
+  classifyVerifierScope,
+  satisfiesVerifierRequirement,
+} from "../services/verifierIdentity.js";
+import {
+  buildVerifierPlan,
+  reconcileVerifierPlan,
+  summarizeVerifierContract,
+} from "../services/requiredVerifierContract.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "../../..");
@@ -316,8 +326,12 @@ test("golden negative: stale receipt fixture matches honesty gate + Chat revisio
       honestyRejectsStaleFlag: boolean;
       controllerDerivesStalenessFromRevision?: boolean;
     };
-    target?: { independentIsolatedVerifierOnChatFinalize?: boolean };
-    live?: { systematicRevisionBinding?: boolean };
+    target?: { independentIsolatedVerifierOnChatFinalizeDefault?: boolean };
+    live?: {
+      systematicRevisionBinding?: boolean;
+      independentIsolatedVerifierOptIn?: boolean;
+      independentIsolatedVerifierOnChatFinalizeDefault?: boolean;
+    };
     receipt: { command: string; exit_code: number; summary: string; stale: boolean };
     expectHonesty: { allow: boolean; reason: string };
   }>("examples/golden-harness/negative/stale-verifier-receipt.json");
@@ -326,10 +340,12 @@ test("golden negative: stale receipt fixture matches honesty gate + Chat revisio
   );
   // IMPLEMENTED: honesty reacts to receipt.stale === true
   assert.equal(fixture.implemented?.honestyRejectsStaleFlag, true);
-  // IMPLEMENTED: Chat binds boundRevision and rechecks at finalize (not IndependentVerifier)
+  // IMPLEMENTED: Chat binds boundRevision and rechecks at finalize
   assert.equal(fixture.implemented?.controllerDerivesStalenessFromRevision, true);
   assert.equal(fixture.live?.systematicRevisionBinding, true);
-  assert.equal(fixture.target?.independentIsolatedVerifierOnChatFinalize, true);
+  // IndependentVerifier is opt-in, not default finalize path
+  assert.equal(fixture.live?.independentIsolatedVerifierOnChatFinalizeDefault, false);
+  assert.equal(fixture.live?.independentIsolatedVerifierOptIn, true);
   const honesty = evaluateExecuteCompletionHonesty({
     hasWrite: true,
     policy: "required",
@@ -340,13 +356,95 @@ test("golden negative: stale receipt fixture matches honesty gate + Chat revisio
   assert.equal(honesty.reason, fixture.expectHonesty.reason);
 });
 
-test("golden negative: target fixtures are labeled target (not silent pass)", () => {
-  const narrow = readJson<{ status: string; expect: { requirementSatisfied: boolean } }>(
-    "examples/golden-harness/negative/narrow-verifier-vs-broad-required.json",
+test("golden negative: narrow verifier does not satisfy full-suite requirement", () => {
+  const narrow = readJson<{
+    status: string;
+    required: { displayCommand: string; expectedScope: string; expectedFamily: string };
+    actual: { displayCommand: string; expectedScope: string; expectedFamily: string };
+    sameFamilyDirectional: {
+      required: string;
+      targetedActual: string;
+      expectFullSatisfiesTargeted: boolean;
+      expectTargetedSatisfiesFull: boolean;
+    };
+    implemented?: {
+      structuralIdentity: boolean;
+      directionalCoverage: boolean;
+      chatHonestyRequiredCommandScope?: boolean;
+    };
+    expect: { requirementSatisfied: boolean };
+  }>("examples/golden-harness/negative/narrow-verifier-vs-broad-required.json");
+
+  assert.equal(narrow.status, "implemented");
+  assert.equal(narrow.implemented?.structuralIdentity, true);
+  assert.equal(narrow.implemented?.directionalCoverage, true);
+  assert.equal(narrow.implemented?.chatHonestyRequiredCommandScope, true);
+
+  assert.equal(classifyVerifierScope(narrow.required.displayCommand), narrow.required.expectedScope);
+  assert.equal(classifyVerifierScope(narrow.actual.displayCommand), narrow.actual.expectedScope);
+  assert.equal(
+    analyzeVerifierIdentity(narrow.required.displayCommand)?.family,
+    narrow.required.expectedFamily,
   );
-  assert.equal(narrow.status, "target");
-  assert.equal(narrow.expect.requirementSatisfied, false);
-  // isolation-unavailable is live-tested separately (H13 implemented).
+  assert.equal(
+    analyzeVerifierIdentity(narrow.actual.displayCommand)?.family,
+    narrow.actual.expectedFamily,
+  );
+
+  // Cross-family targeted must not satisfy full npm suite.
+  assert.equal(
+    satisfiesVerifierRequirement(narrow.required.displayCommand, narrow.actual.displayCommand),
+    narrow.expect.requirementSatisfied,
+  );
+
+  // Directional coverage within same family.
+  assert.equal(
+    satisfiesVerifierRequirement(
+      narrow.sameFamilyDirectional.targetedActual,
+      narrow.sameFamilyDirectional.required,
+    ),
+    narrow.sameFamilyDirectional.expectFullSatisfiesTargeted,
+  );
+  assert.equal(
+    satisfiesVerifierRequirement(
+      narrow.sameFamilyDirectional.required,
+      narrow.sameFamilyDirectional.targetedActual,
+    ),
+    narrow.sameFamilyDirectional.expectTargetedSatisfiesFull,
+  );
+
+  // Pipeline required-verifier contract: only targeted run → missing required full suite.
+  const plan = buildVerifierPlan(`Run ${narrow.required.displayCommand} before completing.`);
+  const summary = summarizeVerifierContract(
+    reconcileVerifierPlan(plan, [
+      {
+        step: 1,
+        tool: "test_run",
+        target: narrow.actual.displayCommand,
+        exit_code: 0,
+        stdout: "ok",
+        stderr: "",
+        verified: true,
+      },
+    ]),
+  );
+  assert.equal(summary.verifierCompletionSatisfied, false);
+  assert.equal(summary.completionBlockingStatus, "REQUIRED_VERIFIER_MISSING");
+
+  // Chat honesty scope: same fixture shape rejects with verifier_scope
+  const honesty = evaluateExecuteCompletionHonesty({
+    hasWrite: true,
+    policy: "strict",
+    lastVerifierReceipt: {
+      command: narrow.actual.displayCommand,
+      exit_code: 0,
+      summary: "1 passed",
+    },
+    toolCallLog: [],
+    requiredVerifierCommands: [narrow.required.displayCommand],
+  });
+  assert.equal(honesty.allow, false);
+  assert.equal(honesty.reason, "verifier_scope");
 });
 
 test("golden negative: isolation-unavailable matches live H13 fail-closed decision", async () => {

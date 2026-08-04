@@ -1,17 +1,34 @@
 {
   "id": "narrow-verifier-vs-broad-required",
   "architecture_version": "harness-v1",
-  "status": "target",
-  "description": "Required verifier is full suite; actual run is one targeted test — requirement MUST NOT be satisfied.",
+  "status": "implemented",
+  "description": "Required verifier is full suite; actual run is one targeted test — requirement MUST NOT be satisfied. Directional: full covers targeted; reverse does not.",
   "required": {
     "displayCommand": "npm test",
-    "expectedScope": "full"
+    "expectedScope": "full",
+    "expectedFamily": "npm-test"
   },
   "actual": {
     "displayCommand": "npx vitest run src/add.test.ts",
-    "expectedScope": "targeted"
+    "expectedScope": "targeted",
+    "expectedFamily": "vitest"
   },
-  "currentRisk": "pipeline normalizeCommand may collapse identity (lossy)",
+  "sameFamilyDirectional": {
+    "required": "npm test",
+    "targetedActual": "npm test -- src/add.test.ts",
+    "expectFullSatisfiesTargeted": true,
+    "expectTargetedSatisfiesFull": false
+  },
+  "implemented": {
+    "structuralIdentity": true,
+    "directionalCoverage": true,
+    "requiredVerifierContractUsesIdentity": true,
+    "chatHonestyRequiredCommandScope": true,
+    "note": "Pipeline + Chat honesty both enforce full-vs-targeted via verifierIdentity / requiredVerifierCommands"
+  },
+  "residual": {
+    "note": "IndependentVerifier clean-room remains opt-in (BABEL_INDEPENDENT_VERIFIER); not default Chat finalize"
+  },
   "expect": {
     "requirementSatisfied": false
   }

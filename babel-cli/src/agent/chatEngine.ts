@@ -805,6 +805,9 @@ export class ChatEngine {
   }
 
   private evaluateCompletionGate(turnResult: ChatTurn, taskIntent: TaskIntent): 'allow' | 'reject' {
+    const projectTestCommands = this.discoveredTestCommands
+      .map((entry) => entry.command)
+      .filter((command) => command.trim().length > 0);
     return evaluateCompletionGateForEngine({
       turnType: turnResult.type,
       taskIntent,
@@ -812,6 +815,7 @@ export class ChatEngine {
       taskClass: this.taskClass,
       toolCallLog: this.toolCallLog,
       lastVerifierReceipt: this.lastVerifierReceipt,
+      projectTestCommands,
     });
   }
 

@@ -541,6 +541,89 @@ describe('isAgentOwnedAdHocVerifier / isAuthoritativeVerifierCommand (B2)', () =
     assert.equal(r.reason, 'verifier_missing');
   });
 
+  test('honesty rejects targeted run when full suite is required (verifier_scope)', () => {
+    const r = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: 'strict',
+      lastVerifierReceipt: {
+        command: 'npx vitest run src/add.test.ts',
+        exit_code: 0,
+        summary: '1 passed',
+      },
+      toolCallLog: [],
+      requiredVerifierCommands: ['npm test'],
+    });
+    assert.equal(r.allow, false);
+    assert.equal(r.reason, 'verifier_scope');
+  });
+
+  test('honesty rejects same-family targeted when full suite is required', () => {
+    const r = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: 'strict',
+      lastVerifierReceipt: {
+        command: 'npm test -- src/add.test.ts',
+        exit_code: 0,
+        summary: '1 passed',
+      },
+      toolCallLog: [],
+      requiredVerifierCommands: ['npm test'],
+    });
+    assert.equal(r.allow, false);
+    assert.equal(r.reason, 'verifier_scope');
+  });
+
+  test('honesty allows full suite when required is full suite', () => {
+    const r = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: 'strict',
+      lastVerifierReceipt: {
+        command: 'npm test',
+        exit_code: 0,
+        summary: 'all pass',
+      },
+      toolCallLog: [],
+      requiredVerifierCommands: ['npm test'],
+    });
+    assert.equal(r.allow, true);
+    assert.equal(r.reason, null);
+  });
+
+  test('honesty allows full suite when required is targeted (directional)', () => {
+    const r = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: 'strict',
+      lastVerifierReceipt: {
+        command: 'npm test',
+        exit_code: 0,
+        summary: 'all pass',
+      },
+      toolCallLog: [],
+      requiredVerifierCommands: ['npm test -- src/add.test.ts'],
+    });
+    assert.equal(r.allow, true);
+  });
+
+  test('resolveHonestyRequiredVerifiers prefers task verifier commands', async () => {
+    const { resolveHonestyRequiredVerifiers } = await import('./completionGatePolicy.js');
+    const required = resolveHonestyRequiredVerifiers({
+      task: 'Fix bug. Run npm test before completing.',
+      projectTestCommands: ['pytest'],
+    });
+    assert.deepEqual(required, ['npm test']);
+  });
+
+  test('rejection message for verifier_scope mentions narrow suite', () => {
+    const msg = buildGreenVerifierRejectionMessage(
+      'verifier_scope',
+      { command: 'npx vitest run src/add.test.ts', exit_code: 0, summary: '' },
+      ['npm test'],
+    );
+    assert.match(msg, /verifier_scope/);
+    assert.match(msg, /too narrow|full required/i);
+    assert.match(msg, /npm test/);
+  });
+
   test('inline probes (python -c / node -e) are never authoritative', () => {
     // Live pilot failure mode: toy hello verifier greened completion honesty
     assert.equal(isInlineProbeVerifier("python -c \"print('hello')\""), true);

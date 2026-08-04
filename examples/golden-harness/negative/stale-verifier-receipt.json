@@ -9,13 +9,14 @@
     "note": "evaluateExecuteCompletionHonesty returns verifier_stale when receipt.stale === true; Chat refreshChatVerifierReceiptStalenessSync sets stale from boundRevision hashes"
   },
   "target": {
-    "independentIsolatedVerifierOnChatFinalize": true,
-    "note": "IndependentVerifier full tree copy is built but not on the Chat hot path"
+    "independentIsolatedVerifierOnChatFinalizeDefault": false,
+    "note": "IndependentVerifier clean-room is opt-in via BABEL_INDEPENDENT_VERIFIER=1; still not default hot path"
   },
   "live": {
     "honestyRejectsStaleFlag": true,
     "systematicRevisionBinding": true,
-    "independentIsolatedVerifierOnChatFinalize": false
+    "independentIsolatedVerifierOptIn": true,
+    "independentIsolatedVerifierOnChatFinalizeDefault": false
   },
   "receipt": {
     "command": "npm test",
