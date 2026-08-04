@@ -338,14 +338,35 @@ test("golden negative: target fixtures are labeled target (not silent pass)", ()
   const narrow = readJson<{ status: string; expect: { requirementSatisfied: boolean } }>(
     "examples/golden-harness/negative/narrow-verifier-vs-broad-required.json",
   );
-  const isolation = readJson<{ status: string; targetBehavior: string }>(
-    "examples/golden-harness/negative/isolation-unavailable.json",
-  );
   assert.equal(narrow.status, "target");
   assert.equal(narrow.expect.requirementSatisfied, false);
-  assert.equal(isolation.status, "target");
+  // isolation-unavailable is live-tested separately (H13 implemented).
+});
+
+test("golden negative: isolation-unavailable matches live H13 fail-closed decision", async () => {
+  const { evaluateGovernedIsolation, setDockerAvailableForTest, resetDockerAvailabilityCache } =
+    await import("../config/benchmarkContainer.js");
+  const isolation = readJson<{
+    status: string;
+    targetBehavior: string;
+    currentBehavior: string;
+    profile: string;
+  }>("examples/golden-harness/negative/isolation-unavailable.json");
+  assert.equal(isolation.status, "implemented");
   assert.equal(isolation.targetBehavior, "fail_closed_or_explicit_escalation");
-  // Document-only targets: architecture package records them; implementation later.
+  assert.equal(isolation.currentBehavior, "fail_closed_or_explicit_escalation");
+
+  setDockerAvailableForTest(false);
+  try {
+    const decision = evaluateGovernedIsolation(isolation.profile, "", {});
+    assert.equal(decision.kind, "fail_closed");
+    const escalated = evaluateGovernedIsolation(isolation.profile, "", {
+      BABEL_ALLOW_HOST_FALLBACK: "1",
+    } as NodeJS.ProcessEnv);
+    assert.equal(escalated.kind, "host_escalated");
+  } finally {
+    resetDockerAvailabilityCache();
+  }
 });
 
 test("live kernel accepts golden-shaped verified completion with proof", () => {
