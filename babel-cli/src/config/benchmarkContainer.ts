@@ -213,15 +213,83 @@ export function setDockerAvailableForTest(available: boolean): void {
 }
 
 /**
+ * Explicit operator escalation off Docker isolation (H13).
+ * - BABEL_ALLOW_HOST_FALLBACK=1|true — preferred
+ * - BABEL_DOCKER_DISABLE=true — legacy isolation opt-out (counts as escalation)
+ */
+export function isHostIsolationEscalationAllowed(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const allow = String(env['BABEL_ALLOW_HOST_FALLBACK'] ?? '')
+    .trim()
+    .toLowerCase();
+  if (allow === '1' || allow === 'true' || allow === 'yes') return true;
+  return env['BABEL_DOCKER_DISABLE'] === 'true';
+}
+
+/** H13 decision for profiles that prefer Docker isolation. */
+export type GovernedIsolationDecision =
+  | { kind: 'docker' }
+  | { kind: 'host_profile'; profile: string }
+  | { kind: 'host_escalated'; profile: string; reason: string }
+  | { kind: 'fail_closed'; profile: string; reason: string };
+
+/**
+ * Decide whether shell execution may proceed on host when Docker is required.
+ * Fail closed unless the profile does not require Docker or the operator
+ * explicitly escalates (BABEL_ALLOW_HOST_FALLBACK / BABEL_DOCKER_DISABLE).
+ */
+export function evaluateGovernedIsolation(
+  executionProfile?: string | null | undefined,
+  dockerImage?: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): GovernedIsolationDecision {
+  const profile = executionProfile
+    ? resolveExecutionProfile(executionProfile)
+    : resolveExecutionProfile(env['BABEL_EXECUTION_PROFILE']);
+
+  if (!profile.dockerSandbox) {
+    return { kind: 'host_profile', profile: profile.name };
+  }
+
+  // Mirror shouldUseDockerSandbox against the provided env (testable without process pollution).
+  const dockerDisabled = env['BABEL_DOCKER_DISABLE'] === 'true';
+  const image = (dockerImage ?? env['BABEL_BENCHMARK_DOCKER_IMAGE'] ?? '').trim();
+  if (!dockerDisabled && isDockerAvailable() && image.length > 0) {
+    return { kind: 'docker' };
+  }
+
+  const unavailable = getDockerUnavailableReason() || 'Docker is not available';
+  const reason =
+    image.length === 0
+      ? `no Docker image configured for isolation profile "${profile.name}" (set BABEL_BENCHMARK_DOCKER_IMAGE)`
+      : unavailable;
+
+  if (isHostIsolationEscalationAllowed(env)) {
+    return { kind: 'host_escalated', profile: profile.name, reason };
+  }
+
+  return {
+    kind: 'fail_closed',
+    profile: profile.name,
+    reason:
+      `${reason}. Isolation required for profile "${profile.name}". ` +
+      `Set BABEL_ALLOW_HOST_FALLBACK=1 (or BABEL_DOCKER_DISABLE=true) for explicit host escalation, ` +
+      `or use profile dev_local when isolation is not required.`,
+  };
+}
+
+/**
  * Determine whether to use Docker sandbox for command execution (H4 hardening).
  *
  * Docker is used when:
  *   1. BABEL_DOCKER_DISABLE is NOT set to 'true'
  *   2. The profile's dockerSandbox field is true
  *   3. Docker is available (preflight passed)
+ *   4. BABEL_BENCHMARK_DOCKER_IMAGE (or override) is set
  *
- * Falls back to direct execution with elevated security posture if
- * Docker is configured but unavailable.
+ * When Docker is required but unavailable, {@link evaluateGovernedIsolation}
+ * fail-closes unless the operator explicitly escalates (H13).
  */
 export function shouldUseDockerSandbox(
   executionProfile?: string | null | undefined,
