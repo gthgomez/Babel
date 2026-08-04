@@ -1,6 +1,6 @@
 <!--
 status: ACTIVE
-last_verified: 2026-08-03
+last_verified: 2026-08-04
 architecture_version: harness-v1
 -->
 
@@ -27,9 +27,9 @@ It **does** freeze expected semantics before all runtime wiring exists, and exer
 |---------|---------------|--------|
 | Mode policies, kernel completion decide, effect classification, structured verifier parse | **Live** (conformance tests import `babel-cli` modules) | No external model |
 | Episode event sequence, task contract, patch/revision artifacts | **Simulated fixtures** | Represent target episode shape; not produced by a live controller run |
-| Stale-receipt honesty (`stale: true` flag) | **Live** gate reaction to pre-marked flag | **Not** revision-bound auto-detection |
+| Stale-receipt honesty + Chat revision recheck | **Live** | Gate rejects `stale: true`; Chat binds `boundRevision` and rechecks hashes at finalize |
 | Narrow-vs-broad verifier coverage | **Target audit fixture** | Current pipeline identity may be lossy |
-| Isolation fail-closed | **Target audit fixture** | Current code may host-fallback |
+| Isolation fail-closed | **Target audit fixture** | Current code may host-fallback (H13) |
 
 ## Positive golden scenario
 
@@ -63,9 +63,9 @@ Fixture project (`fixture/project/`):
 | Fixture | Expectation | Live today? |
 |---------|-------------|-------------|
 | `plan-mutation-denied.json` | Plan requests mutation → denied; plan success = `PLAN_COMPLETE` only | **Yes** (kernel + mode policy) |
-| `stale-verifier-receipt.json` | Green receipt with `stale: true` → honesty reject | **IMPLEMENTED**: gate rejects flag. **TARGET**: derive staleness from `boundRevision` vs workspace |
+| `stale-verifier-receipt.json` | Green receipt with `stale: true` → honesty reject; Chat derives stale from `boundRevision` recheck | **IMPLEMENTED** (flag + Chat bind/recheck). **TARGET residual**: IndependentVerifier clean-room on finalize |
 | `narrow-verifier-vs-broad-required.json` | Full suite required; targeted-only run MUST NOT satisfy | **Target** (audit) |
-| `isolation-unavailable.json` | Governed isolation required + backend missing → block/escalate, not silent host | **Target** (audit) |
+| `isolation-unavailable.json` | Governed isolation required + backend missing → block/escalate, not silent host | **Target** (audit) — H13 |
 
 ## How engineers use this
 

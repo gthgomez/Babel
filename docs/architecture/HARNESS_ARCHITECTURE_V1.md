@@ -8,7 +8,7 @@ Licensed under the MIT License
 status: CANONICAL
 architecture_version: harness-v1
 authority: normative
-last_verified: 2026-08-03
+last_verified: 2026-08-04
 change_policy: ADR and conformance-test updates required
 ```
 
@@ -174,10 +174,10 @@ Maturity labels: **IMPLEMENTED** | **PARTIAL** | **PROTOTYPE** | **PLANNED** | *
 | **Purpose** | Controller-owned oracles independent of agent self-report |
 | **Current** | Three-part: honesty gate + kernel decide + pipeline required-verifier demotion |
 | **Owner** | Controller + shared completion authority |
-| **Sources** | `completionGatePolicy.ts`, `executor/kernel.ts`, `services/requiredVerifierContract.ts`, `evidence/independentVerifier.ts` (**PROTOTYPE**) |
-| **Maturity** | **PARTIAL** |
+| **Sources** | `completionGatePolicy.ts`, `executor/kernel.ts`, `services/requiredVerifierContract.ts`, `evidence/chatRevisionBinding.ts`, `evidence/independentVerifier.ts` (**PROTOTYPE** clean-room) |
+| **Maturity** | **PARTIAL** — Chat bind+recheck **IMPLEMENTED**; clean-room IndependentVerifier still prototype |
 | **Gaps** | No universal clean-room mount; lossy command identity; IndependentVerifier not live-wired |
-| **Target** | Revision-bound independent receipts + structural identity |
+| **Target** | Clean-room independent receipts + structural verifier identity |
 
 ### 8. Failure Classification and Repair
 
@@ -290,8 +290,8 @@ Language: **MUST** / **MUST NOT** / **SHOULD** / **MAY** / **OWNS** / **SUPERSED
 | H4 | Mode-specific controllers MAY retain different orchestration policies. | **IMPLEMENTED** |
 | H5 | No model response may independently authorize `VERIFIED_COMPLETE`. | **IMPLEMENTED** (gate + kernel) |
 | H6 | Completion MUST be decided by controller-owned deterministic logic. | **IMPLEMENTED** |
-| H7 | Verification evidence SHOULD be bound to the workspace revision it evaluated. | **PARTIAL** / target |
-| H8 | Stale verification evidence MUST NOT authorize current verified completion once revision binding is enforced. | **PARTIAL** — honesty rejects `stale: true`; systematic binding incomplete |
+| H7 | Verification evidence SHOULD be bound to the workspace revision it evaluated. | **IMPLEMENTED** (Chat) — bind at verifier capture via `boundRevision`; residual when mutation paths empty |
+| H8 | Stale verification evidence MUST NOT authorize current verified completion once revision binding is enforced. | **IMPLEMENTED** (Chat) — mutation flag + hash recheck at finalize; honesty + proof + evidence graph |
 | H9 | Prompt instructions MUST NOT override tool, mutation, isolation, or completion policy. | **IMPLEMENTED** (enforcement outside prompts) |
 | H10 | Tool effects MUST be classified before execution or conservatively treated as high risk. | **IMPLEMENTED** (`classifyToolEffect` default external) |
 | H11 | Interrupted non-idempotent effects MUST NOT be retried blindly. | **IMPLEMENTED** (effect ledger) |
@@ -348,13 +348,14 @@ Do not invent runtime support where the enum does not exist.
 |-------|----------|
 | Structured verifier parse (`parseStructuredVerifierCommand`) | **IMPLEMENTED** |
 | R9 dependency integrity hash | **IMPLEMENTED** (detect + escalate) |
+| Chat revision-bound receipts (`chatRevisionBinding` + finalize recheck) | **IMPLEMENTED** |
+| Chat evidence graph on proof (`evaluateEvidenceSync`) | **IMPLEMENTED** |
 | `IndependentVerifier` clean copy | **PROTOTYPE** (tests; not live chat path) |
-| Revision-bound receipts | **PROTOTYPE** / **PARTIAL** |
 | Lossy pipeline `normalizeCommand` | Known **risk** |
 
 ### Target
 
-Independent mount, structural identity, directional coverage (full suite covers targeted; not reverse), held-out checks for promotion.
+Clean-room IndependentVerifier mount, structural identity, directional coverage (full suite covers targeted; not reverse), held-out checks for promotion.
 
 ---
 
@@ -418,11 +419,11 @@ Changes to any of the following MUST trigger architecture review and updates to 
 
 ## 6.12 Known gaps and roadmap (do not implement in architecture freeze)
 
-Priority order:
+Priority order (post Chat H7/H8 bind+recheck + evidence-graph wire):
 
-1. Structural verifier identity and directional coverage.
-2. Revision-bound independent verifier receipts in Chat.
-3. Fail-closed governed isolation (H13).
+1. Structural verifier identity and directional coverage (full suite vs targeted).
+2. Fail-closed governed isolation (H13).
+3. Clean-room IndependentVerifier opt-in (not default hot path).
 4. Canonical unified episode stream.
 5. Held-out or clean-room promotion verification.
 6. Model-fixed harness evaluation.
@@ -436,18 +437,19 @@ Priority order:
 |----------|------|
 | 1 | `babel-cli/src/agent/chatEngine.ts` |
 | 2 | `babel-cli/src/agent/completionGatePolicy.ts` |
-| 3 | `babel-cli/src/executor/kernel.ts` |
-| 4 | `babel-cli/src/executor/contracts.ts` |
-| 5 | `babel-cli/src/interactive/execution/chatCore.ts` |
-| 6 | `babel-cli/src/agent/chatEngineObservability.ts` |
-| 7 | `babel-cli/src/pipeline.ts` |
-| 8 | `babel-cli/src/pipeline/executorLoop.ts` |
-| 9 | `babel-cli/src/sandbox.ts` |
-| 10 | `babel-cli/src/config/executionProfiles.ts` |
-| 11 | `babel-cli/src/services/worktreeSafety.ts` |
-| 12 | `babel-cli/src/services/requiredVerifierContract.ts` |
-| 13 | `babel-cli/src/schemas/agentContracts.ts` |
-| 14 | `babel-cli/src/config/chatEngineLimits.ts` |
+| 3 | `babel-cli/src/evidence/chatRevisionBinding.ts` |
+| 4 | `babel-cli/src/executor/kernel.ts` |
+| 5 | `babel-cli/src/executor/contracts.ts` |
+| 6 | `babel-cli/src/interactive/execution/chatCore.ts` |
+| 7 | `babel-cli/src/agent/chatEngineObservability.ts` |
+| 8 | `babel-cli/src/pipeline.ts` |
+| 9 | `babel-cli/src/pipeline/executorLoop.ts` |
+| 10 | `babel-cli/src/sandbox.ts` |
+| 11 | `babel-cli/src/config/executionProfiles.ts` |
+| 12 | `babel-cli/src/services/worktreeSafety.ts` |
+| 13 | `babel-cli/src/services/requiredVerifierContract.ts` |
+| 14 | `babel-cli/src/schemas/agentContracts.ts` |
+| 15 | `babel-cli/src/config/chatEngineLimits.ts` |
 
 ---
 
@@ -455,4 +457,4 @@ Priority order:
 
 - **SUPERSEDES**: prior informal “primary harness” claims in overview/mode docs.
 - **Version**: `harness-v1` — increment only with ADR + conformance updates.
-- **last_verified**: 2026-08-03 against live `babel-cli` sources listed above.
+- **last_verified**: 2026-08-04 against live `babel-cli` sources listed above (Chat H7/H8 bind+recheck + evaluateEvidence wire).

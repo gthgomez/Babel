@@ -14,6 +14,6 @@
     "compositeTreeHash": "sim-final-tree-hash-0002",
     "capturedAt": 1754179200000
   },
-  "liveRuntime": "partial",
-  "notes": "Shape matches VerifierReceipt + ExecutorVerifierReceipt fields; live chat may omit full boundRevision."
+  "liveRuntime": "chat_bind_recheck",
+  "notes": "Shape matches VerifierReceipt + ExecutorVerifierReceipt. Live Chat binds boundRevision at capture and rechecks at finalize; IndependentVerifier clean-room remains TARGET."
 }
