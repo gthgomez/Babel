@@ -7,6 +7,8 @@ import { isSuccessfulDirectMutation, isVerifierAttemptTool } from './mutationToo
 import { getChatTaskTune, isStrictVerification, type ChatTaskClass, type VerificationPolicy } from '../config/chatTaskClass.js';
 import { buildGateRejectionMessage, hasSubAgentWrites } from './chatEngineCriticBudget.js';
 import type { StructuredVerifierCommand, VerifierAuthoritySource } from '../executor/contracts.js';
+import { extractRequiredVerifierCommandsFromTask } from '../pipeline/planVerifierInjection.js';
+import { satisfiesVerifierRequirement } from '../services/verifierIdentity.js';
 
 /** Known project/dataset test runners (prefixes; case-insensitive match on trimmed cmd). */
 const AUTHORITATIVE_VERIFIER_PREFIXES = [
@@ -402,7 +404,44 @@ export type CompletionGateRejectReason =
   | 'verifier_missing'
   | 'verifier_red'
   | 'verifier_stale'
+  | 'verifier_scope'
   | null;
+
+/**
+ * Resolve required verifier commands for Chat honesty scope checks.
+ * Explicit list wins; else task "Verifier commands:" / "Run X before completing";
+ * else when the task asks for verification, project-discovered test commands.
+ */
+export function resolveHonestyRequiredVerifiers(opts: {
+  task: string;
+  projectTestCommands?: readonly string[] | null;
+  requiredVerifierCommands?: readonly string[] | null;
+}): string[] {
+  if (opts.requiredVerifierCommands && opts.requiredVerifierCommands.length > 0) {
+    return [...opts.requiredVerifierCommands];
+  }
+  const fromTask = extractRequiredVerifierCommandsFromTask(opts.task);
+  if (fromTask.length > 0) return fromTask;
+  if (
+    taskAsksForVerifier(opts.task) &&
+    opts.projectTestCommands &&
+    opts.projectTestCommands.length > 0
+  ) {
+    return opts.projectTestCommands.map((c) => c.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+/** Whether an actual command satisfies any required verifier (directional identity). */
+export function commandSatisfiesRequiredVerifierScope(
+  actualCommand: string,
+  requiredVerifierCommands: readonly string[] | null | undefined,
+): boolean {
+  if (!requiredVerifierCommands || requiredVerifierCommands.length === 0) return true;
+  return requiredVerifierCommands.some((required) =>
+    satisfiesVerifierRequirement(required, actualCommand),
+  );
+}
 
 /**
  * Evaluate write + verification rules for execute completion.
@@ -412,12 +451,18 @@ export type CompletionGateRejectReason =
  * - required: must have a verifier receipt or attempt in log;
  *             non-zero exit warns but still allows (the user sees it)
  * - strict:   must have green verifier (exit 0); missing/red rejects
+ *
+ * When `requiredVerifierCommands` is non-empty, authoritative greens that fail
+ * structural scope (e.g. targeted run vs full-suite required) reject with
+ * `verifier_scope`.
  */
 export function evaluateExecuteCompletionHonesty(opts: {
   hasWrite: boolean;
   policy: VerificationPolicy;
   lastVerifierReceipt: VerifierReceipt | null | undefined;
   toolCallLog: GateToolLogEntry[];
+  /** Required full/targeted commands for structural scope (optional). */
+  requiredVerifierCommands?: readonly string[] | null;
 }): { allow: boolean; reason: CompletionGateRejectReason } {
   if (!opts.hasWrite) {
     return { allow: false, reason: 'no_writes' };
@@ -426,34 +471,51 @@ export function evaluateExecuteCompletionHonesty(opts: {
     return { allow: true, reason: null };
   }
 
+  const required = opts.requiredVerifierCommands ?? [];
+
   // Both 'required' and 'strict' need at least a verifier attempt.
   const hasReceipt = opts.lastVerifierReceipt != null;
+  const receiptCmd = opts.lastVerifierReceipt?.command ?? '';
 
   // B1/B2: Verifier-command validation — reject receipts that are shell junk
   // (del/echo) or agent-owned ad-hoc scripts (_verify*.py). Honesty requires
   // an authoritative project/dataset-style verifier command.
-  const hasRealReceipt =
-    hasReceipt && isAuthoritativeVerifierCommand(opts.lastVerifierReceipt!.command);
+  const receiptAuthoritative =
+    hasReceipt && isAuthoritativeVerifierCommand(receiptCmd);
+  const receiptInScope =
+    receiptAuthoritative && commandSatisfiesRequiredVerifierScope(receiptCmd, required);
+  const hasRealReceipt = Boolean(receiptInScope);
 
-  const greenInLog = opts.toolCallLog.some(
-    (e) =>
-      isVerifierAttemptTool(e.tool) &&
-      e.error !== 'blocked' &&
-      e.error !== 'error' &&
-      (e as { exit_code?: number }).exit_code === 0,
-  );
   // B1/B2: A log entry with a non-authoritative command does NOT satisfy the
   // verifier requirement even if the tool name matches and exit is 0.
+  // Scope: targeted-only runs do not satisfy full-suite required commands.
   const hasRealGreenInLog = opts.toolCallLog.some(
     (e) =>
       isVerifierAttemptTool(e.tool) &&
       e.error !== 'blocked' &&
       e.error !== 'error' &&
       (e as { exit_code?: number }).exit_code === 0 &&
-      isAuthoritativeVerifierCommand(e.target),
+      isAuthoritativeVerifierCommand(e.target) &&
+      commandSatisfiesRequiredVerifierScope(e.target, required),
   );
 
   if (!hasRealReceipt && !hasRealGreenInLog) {
+    const hadAuthoritativeOutOfScope =
+      required.length > 0 &&
+      ((receiptAuthoritative &&
+        !commandSatisfiesRequiredVerifierScope(receiptCmd, required)) ||
+        opts.toolCallLog.some(
+          (e) =>
+            isVerifierAttemptTool(e.tool) &&
+            e.error !== 'blocked' &&
+            e.error !== 'error' &&
+            (e as { exit_code?: number }).exit_code === 0 &&
+            isAuthoritativeVerifierCommand(e.target) &&
+            !commandSatisfiesRequiredVerifierScope(e.target, required),
+        ));
+    if (hadAuthoritativeOutOfScope) {
+      return { allow: false, reason: 'verifier_scope' };
+    }
     return { allow: false, reason: 'verifier_missing' };
   }
 
@@ -466,8 +528,7 @@ export function evaluateExecuteCompletionHonesty(opts: {
     if (hasRealReceipt && opts.lastVerifierReceipt!.exit_code !== 0) {
       return { allow: false, reason: 'verifier_red' };
     }
-    // No real receipt but real green in log: allow (verifier ran somewhere
-    // with a real command and was green)
+    // No in-scope receipt but real green in log: allow
     if (!hasRealReceipt) {
       return { allow: true, reason: null };
     }
@@ -529,6 +590,22 @@ export function buildGreenVerifierRejectionMessage(
       `You must re-run the tests to prove the new changes are correct before completing.`,
       strikeEscalation,
     ].filter(Boolean).join(' ');
+  }
+
+  if (reason === 'verifier_scope') {
+    return [
+      preamble,
+      `COMPLETION_GATE_REJECTED: verifier_scope`,
+      `Your last verifier was too narrow (or the wrong runner) for the required suite.`,
+      receipt
+        ? `Last command: ${receipt.command}`
+        : 'Last command: (none recorded).',
+      'Run the full required project test command (not a single-file targeted run) before completing.',
+      cmdHint,
+      strikeEscalation,
+    ]
+      .filter(Boolean)
+      .join(' ');
   }
 
   // verifier_missing (includes B2: agent-owned _verify*.py is non-authoritative)
@@ -746,6 +823,8 @@ export function evaluateCompletionGateForEngine(opts: {
   taskClass: ChatTaskClass;
   toolCallLog: GateToolLogEntry[];
   lastVerifierReceipt: VerifierReceipt | null | undefined;
+  projectTestCommands?: readonly string[] | null;
+  requiredVerifierCommands?: readonly string[] | null;
 }): 'allow' | 'reject' {
   if (opts.taskIntent !== 'execute') return 'allow';
   if (opts.turnType !== 'completion') return 'allow';
@@ -759,11 +838,21 @@ export function evaluateCompletionGateForEngine(opts: {
     policy: tune.verificationPolicy,
     task: opts.task,
   });
+  const requiredVerifierCommands = resolveHonestyRequiredVerifiers({
+    task: opts.task,
+    ...(opts.projectTestCommands !== undefined
+      ? { projectTestCommands: opts.projectTestCommands }
+      : {}),
+    ...(opts.requiredVerifierCommands !== undefined
+      ? { requiredVerifierCommands: opts.requiredVerifierCommands }
+      : {}),
+  });
   const honesty = evaluateExecuteCompletionHonesty({
     hasWrite,
     policy,
     lastVerifierReceipt: opts.lastVerifierReceipt,
     toolCallLog: log,
+    requiredVerifierCommands,
   });
   if (!honesty.allow) return 'reject';
   // For 'required' policy: also check that when task asks for verifier,
@@ -781,6 +870,7 @@ export function buildGateRejectUserMessageForEngine(opts: {
   lastVerifierReceipt: VerifierReceipt | null | undefined;
   hasAnyWrites: boolean;
   projectTestCommands?: string[];
+  requiredVerifierCommands?: readonly string[] | null;
   gateStrikes?: number;
 }): string {
   const tune = getChatTaskTune(opts.taskClass);
@@ -792,13 +882,28 @@ export function buildGateRejectUserMessageForEngine(opts: {
   if (!opts.hasAnyWrites) {
     return buildGateRejectionMessage(log);
   }
+  const requiredVerifierCommands = resolveHonestyRequiredVerifiers({
+    task: opts.task,
+    ...(opts.projectTestCommands !== undefined
+      ? { projectTestCommands: opts.projectTestCommands }
+      : {}),
+    ...(opts.requiredVerifierCommands !== undefined
+      ? { requiredVerifierCommands: opts.requiredVerifierCommands }
+      : {}),
+  });
   const honesty = evaluateExecuteCompletionHonesty({
     hasWrite: true,
     policy,
     lastVerifierReceipt: opts.lastVerifierReceipt,
     toolCallLog: log,
+    requiredVerifierCommands,
   });
-  if (honesty.reason === 'verifier_missing' || honesty.reason === 'verifier_red' || honesty.reason === 'verifier_stale') {
+  if (
+    honesty.reason === 'verifier_missing' ||
+    honesty.reason === 'verifier_red' ||
+    honesty.reason === 'verifier_stale' ||
+    honesty.reason === 'verifier_scope'
+  ) {
     return buildGreenVerifierRejectionMessage(
       honesty.reason,
       opts.lastVerifierReceipt,

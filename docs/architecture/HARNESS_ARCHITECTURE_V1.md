@@ -174,10 +174,10 @@ Maturity labels: **IMPLEMENTED** | **PARTIAL** | **PROTOTYPE** | **PLANNED** | *
 | **Purpose** | Controller-owned oracles independent of agent self-report |
 | **Current** | Three-part: honesty gate + kernel decide + pipeline required-verifier demotion |
 | **Owner** | Controller + shared completion authority |
-| **Sources** | `completionGatePolicy.ts`, `executor/kernel.ts`, `services/requiredVerifierContract.ts`, `evidence/chatRevisionBinding.ts`, `evidence/independentVerifier.ts` (**PROTOTYPE** clean-room) |
-| **Maturity** | **PARTIAL** — Chat bind+recheck **IMPLEMENTED**; clean-room IndependentVerifier still prototype |
-| **Gaps** | No universal clean-room mount; lossy command identity; IndependentVerifier not live-wired |
-| **Target** | Clean-room independent receipts + structural verifier identity |
+| **Sources** | `completionGatePolicy.ts`, `executor/kernel.ts`, `services/requiredVerifierContract.ts`, `services/verifierIdentity.ts`, `evidence/chatRevisionBinding.ts`, `evidence/independentVerifier.ts` (**PROTOTYPE** clean-room) |
+| **Maturity** | **PARTIAL** — bind+recheck + identity + honesty scope **IMPLEMENTED**; IndependentVerifier **opt-in** |
+| **Gaps** | Clean-room not default; no universal episode stream; promotion held-out checks incomplete |
+| **Target** | Profile-gated clean-room defaults + held-out promotion |
 
 ### 8. Failure Classification and Repair
 
@@ -350,12 +350,14 @@ Do not invent runtime support where the enum does not exist.
 | R9 dependency integrity hash | **IMPLEMENTED** (detect + escalate) |
 | Chat revision-bound receipts (`chatRevisionBinding` + finalize recheck) | **IMPLEMENTED** |
 | Chat evidence graph on proof (`evaluateEvidenceSync`) | **IMPLEMENTED** |
-| `IndependentVerifier` clean copy | **PROTOTYPE** (tests; not live chat path) |
-| Lossy pipeline `normalizeCommand` | Known **risk** |
+| Structural verifier identity + directional coverage | **IMPLEMENTED** (pipeline + Chat honesty via `verifierIdentity.ts`) |
+| Chat honesty required-command scope | **IMPLEMENTED** (`verifier_scope` when full required / targeted actual) |
+| `IndependentVerifier` clean-room | **OPT-IN** — `BABEL_INDEPENDENT_VERIFIER=1`; default Chat path unchanged |
+| Default IndependentVerifier on Chat finalize | **OFF** (hot path must not tree-copy) |
 
 ### Target
 
-Clean-room IndependentVerifier mount, structural identity, directional coverage (full suite covers targeted; not reverse), held-out checks for promotion.
+Held-out / clean-room promotion verification by default for high-assurance profiles, model-fixed harness evaluation, adversarial no-op suites.
 
 ---
 
@@ -420,15 +422,13 @@ Changes to any of the following MUST trigger architecture review and updates to 
 
 ## 6.12 Known gaps and roadmap (do not implement in architecture freeze)
 
-Priority order (post Chat H7/H8 bind+recheck + H13 fail-closed isolation):
+Priority order (post structural identity + honesty scope + IndependentVerifier opt-in):
 
-1. Structural verifier identity and directional coverage (full suite vs targeted).
-2. Clean-room IndependentVerifier opt-in (not default hot path).
-3. Canonical unified episode stream.
-4. Held-out or clean-room promotion verification.
-5. Model-fixed harness evaluation.
-6. Adversarial no-op and verifier-tamper suites.
-7. Chat default-profile UX: `safe_repo` fail-closes without Docker image unless escalated — use `dev_local` or `BABEL_ALLOW_HOST_FALLBACK=1` for host-only day-to-day work.
+1. Canonical unified episode stream.
+2. Held-out or clean-room promotion verification (profile-default opt-in).
+3. Model-fixed harness evaluation.
+4. Adversarial no-op and verifier-tamper suites.
+5. Chat default-profile UX: `safe_repo` fail-closes without Docker image unless escalated — use `dev_local` or `BABEL_ALLOW_HOST_FALLBACK=1` for host-only day-to-day work.
 
 ---
 
@@ -448,7 +448,7 @@ Priority order (post Chat H7/H8 bind+recheck + H13 fail-closed isolation):
 | 10 | `babel-cli/src/sandbox.ts` |
 | 11 | `babel-cli/src/config/executionProfiles.ts` |
 | 12 | `babel-cli/src/services/worktreeSafety.ts` |
-| 13 | `babel-cli/src/services/requiredVerifierContract.ts` |
+| 13 | `babel-cli/src/services/requiredVerifierContract.ts` / `verifierIdentity.ts` |
 | 14 | `babel-cli/src/schemas/agentContracts.ts` |
 | 15 | `babel-cli/src/config/chatEngineLimits.ts` |
 
@@ -458,4 +458,4 @@ Priority order (post Chat H7/H8 bind+recheck + H13 fail-closed isolation):
 
 - **SUPERSEDES**: prior informal “primary harness” claims in overview/mode docs.
 - **Version**: `harness-v1` — increment only with ADR + conformance updates.
-- **last_verified**: 2026-08-04 against live `babel-cli` sources listed above (Chat H7/H8 bind+recheck + evaluateEvidence wire).
+- **last_verified**: 2026-08-04 against live `babel-cli` sources (H7/H8 + identity + honesty scope + IndependentVerifier opt-in).

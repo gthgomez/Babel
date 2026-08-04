@@ -28,7 +28,8 @@ It **does** freeze expected semantics before all runtime wiring exists, and exer
 | Mode policies, kernel completion decide, effect classification, structured verifier parse | **Live** (conformance tests import `babel-cli` modules) | No external model |
 | Episode event sequence, task contract, patch/revision artifacts | **Simulated fixtures** | Represent target episode shape; not produced by a live controller run |
 | Stale-receipt honesty + Chat revision recheck | **Live** | Gate rejects `stale: true`; Chat binds `boundRevision` and rechecks hashes at finalize |
-| Narrow-vs-broad verifier coverage | **Target audit fixture** | Current pipeline identity may be lossy |
+| Narrow-vs-broad verifier coverage | **Live** | Structural identity + Chat honesty `verifier_scope`; full covers targeted, not reverse |
+| IndependentVerifier clean-room | **Opt-in** | `BABEL_INDEPENDENT_VERIFIER=1`; default Chat path does not tree-copy |
 | Isolation fail-closed | **Live (H13)** | Fail-closed without Docker; explicit escalation via env |
 
 ## Positive golden scenario
@@ -64,7 +65,7 @@ Fixture project (`fixture/project/`):
 |---------|-------------|-------------|
 | `plan-mutation-denied.json` | Plan requests mutation → denied; plan success = `PLAN_COMPLETE` only | **Yes** (kernel + mode policy) |
 | `stale-verifier-receipt.json` | Green receipt with `stale: true` → honesty reject; Chat derives stale from `boundRevision` recheck | **IMPLEMENTED** (flag + Chat bind/recheck). **TARGET residual**: IndependentVerifier clean-room on finalize |
-| `narrow-verifier-vs-broad-required.json` | Full suite required; targeted-only run MUST NOT satisfy | **Target** (audit) |
+| `narrow-verifier-vs-broad-required.json` | Full suite required; targeted-only run MUST NOT satisfy | **Yes** (structural identity + required-verifier contract) |
 | `isolation-unavailable.json` | Governed isolation required + backend missing → fail closed or explicit host escalation | **IMPLEMENTED** (H13) |
 
 ## How engineers use this

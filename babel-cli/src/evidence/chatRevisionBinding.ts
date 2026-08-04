@@ -1,8 +1,8 @@
 /**
  * Chat-path revision binding for verifier receipts (H7/H8).
  *
- * Wires existing RevisionManager into ChatEngine without pulling IndependentVerifier
- * (full tree copy) onto the hot completion path.
+ * IndependentVerifier (full tree copy) stays off the default hot path.
+ * Enable with BABEL_INDEPENDENT_VERIFIER=1 (see independentVerifier.ts).
  */
 
 import type { VerifierAuthoritySource } from '../executor/contracts.js';
@@ -11,6 +11,7 @@ import {
   type CompletionEvidenceEvaluation,
 } from './completionEvidence.js';
 import { EvidenceGraph } from './evidenceGraph.js';
+import { independentVerifierProofErrors } from './independentVerifier.js';
 import {
   RevisionManager,
   type RevisionBoundReceipt,
@@ -252,6 +253,8 @@ export function evaluateChatCompletionProof(input: {
     exit_code?: number;
   }[];
   isAuthoritativeCommand: (command: string) => boolean;
+  /** Optional env override for IndependentVerifier opt-in tests. */
+  env?: NodeJS.ProcessEnv;
 }): { compliant: boolean; errors?: string[] } {
   const errors: string[] = [];
   if (!input.hasMutation) errors.push('missing production mutation evidence');
@@ -294,6 +297,20 @@ export function evaluateChatCompletionProof(input: {
   }
   for (const err of evidence.errors) {
     if (!errors.includes(err)) errors.push(err);
+  }
+
+  // Opt-in clean-room IndependentVerifier (default off — no hot-path tree copy).
+  if (receipt && receipt.exit_code === 0) {
+    const mutationPaths = mutationPathsFromSessionEvents(input.events);
+    for (const err of independentVerifierProofErrors({
+      projectRoot: input.projectRoot,
+      command: receipt.command,
+      exitCode: receipt.exit_code,
+      mutationPaths,
+      ...(input.env !== undefined ? { env: input.env } : {}),
+    })) {
+      if (!errors.includes(err)) errors.push(err);
+    }
   }
 
   return errors.length === 0 ? { compliant: true } : { compliant: false, errors };

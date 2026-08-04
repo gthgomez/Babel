@@ -90,9 +90,9 @@ test('command-path variants from plan and execution dedupe identical verifier ke
     'Verifier commands: npm test && ./node_modules/.bin/npm run test && npm test',
   );
 
-  assert.equal(plan.length, 2);
+  // Structural identity: npm test and path-prefixed npm run test share npm-test#full.
+  assert.equal(plan.length, 1);
   assert.equal(plan[0]?.command, 'npm test');
-  assert.equal(plan[1]?.command, './node_modules/.bin/npm run test');
 });
 
 test('verifier plan creation trims human cwd phrase from command text', () => {
@@ -198,6 +198,39 @@ test('buildVerifierPlan merges additional required verifiers from scope resoluti
     ['npm test'],
   );
   assert.equal(plan[0]?.source, 'user_required');
+});
+
+test('targeted run does not satisfy full-suite required verifier', () => {
+  const plan = buildVerifierPlan('Run npm test before completing.');
+  const summary = summarizeVerifierContract(
+    reconcileVerifierPlan(plan, [command('npm test -- src/add.test.ts', 0)]),
+  );
+
+  assert.equal(summary.verifierCompletionSatisfied, false);
+  assert.equal(summary.completionBlockingStatus, 'REQUIRED_VERIFIER_MISSING');
+  assert.deepEqual(summary.missingRequiredVerifiers, ['npm test']);
+});
+
+test('full suite satisfies targeted required verifier (directional coverage)', () => {
+  const plan = buildVerifierPlan(
+    'Verifier commands: npm test -- --run src/add.test.ts',
+  );
+  const summary = summarizeVerifierContract(
+    reconcileVerifierPlan(plan, [command('npm test', 0)]),
+  );
+
+  assert.equal(summary.verifierCompletionSatisfied, true);
+  assert.equal(summary.completionBlockingStatus, null);
+  assert.equal(summary.verifiers[0]?.state, 'passed');
+});
+
+test('full and targeted npm test remain distinct plan entries', () => {
+  const plan = buildVerifierPlan(
+    'Verifier commands: npm test && npm test -- src/a.test.ts',
+  );
+  assert.equal(plan.length, 2);
+  assert.equal(plan[0]?.command, 'npm test');
+  assert.equal(plan[1]?.command, 'npm test -- src/a.test.ts');
 });
 
 test('buildVerifierContractArtifacts honors additional required verifiers', () => {
