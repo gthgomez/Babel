@@ -8,6 +8,12 @@
 
 This file MUST NOT redefine harness architecture. Point to harness-v1 for norms.
 
+## Shipping from this package
+
+- **Ship set ≠ worktree.** “Commit all work” means the intentional OSS-safe path list after triage — not every untracked file under `babel-cli/`.
+- Do not stage `context.md`, `goldenarch.md`, datasets, evidence, or machine paths. Prefer gitignored `local/` or quarantine outside the public clone.
+- Full GitHub workflow contract: [`../.agents/rules/05-github-workflow.md`](../.agents/rules/05-github-workflow.md).
+
 ## Runtime harness (read first)
 
 ```text

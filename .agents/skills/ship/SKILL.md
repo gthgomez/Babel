@@ -53,6 +53,10 @@ Override with `-Message "custom: my message"`.
 
 ## Dirty Worktree Contract
 
+`/ship` ships a **ship set**, not the whole **worktree**. User phrases like
+“commit all work” still require triage: only paths classified `ship` for one
+batch are staged. See `.agents/rules/05-github-workflow.md` terminology.
+
 `/ship` is a batch command, not a whole-worktree command. When the worktree is
 dirty, first run the inventory tool and create a batch selection. The command
 must refuse to stage when:
@@ -101,8 +105,9 @@ Configured in `.workspace-map.json` under `ship.forbidPaths`:
 - **Blocks on forbidden paths:** Unstage with `git reset HEAD <file>`
 - **Blocks on main/master:** Create a feature branch first
 - **Blocks on dirty worktree with no selected batch:** Create a release map first
-- **Never uses `git add -A`** for a mixed worktree
+- **Never uses `git add -A` or blind `git add .`** for a mixed worktree
 - **Blocks oversized batches** unless explicitly overridden and documented
+- **Blocks machine paths / implementation-prompt dumps** (e.g. `goldenarch.md`, absolute user-home paths) from the ship set
 
 ## Related
 
