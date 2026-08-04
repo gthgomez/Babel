@@ -1,12 +1,17 @@
 {
   "id": "isolation-unavailable",
   "architecture_version": "harness-v1",
-  "status": "target",
-  "description": "Governed run requires isolation; backend unavailable → explicit block or boundary escalation, not silent host fallback.",
+  "status": "implemented",
+  "description": "Governed run requires isolation; backend unavailable → fail closed unless operator explicitly escalates (BABEL_ALLOW_HOST_FALLBACK or BABEL_DOCKER_DISABLE).",
   "profile": "safe_repo",
   "dockerSandbox": true,
   "dockerAvailable": false,
-  "currentBehavior": "host_fallback_with_warning",
+  "currentBehavior": "fail_closed_or_explicit_escalation",
   "targetBehavior": "fail_closed_or_explicit_escalation",
+  "implemented": {
+    "evaluateGovernedIsolation": true,
+    "sandboxDeniesIsolationUnavailable": true,
+    "explicitEscalationEnv": ["BABEL_ALLOW_HOST_FALLBACK", "BABEL_DOCKER_DISABLE"]
+  },
   "invariant": "H13"
 }

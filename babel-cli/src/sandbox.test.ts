@@ -11,6 +11,12 @@ import {
 } from './config/benchmarkContainer.js';
 import { approveApproval, requestDependencyInstallApproval } from './services/approvalQueue.js';
 
+// H13: unit sandbox tests exercise host path policy without a Docker image.
+// Explicit escalation keeps fail-closed isolation from blocking fixtures.
+if (!process.env['BABEL_ALLOW_HOST_FALLBACK'] && process.env['BABEL_DOCKER_DISABLE'] !== 'true') {
+  process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+}
+
 function makeFixture() {
   const rootParent = mkdtempSync(join(tmpdir(), 'babel-sandbox-root-'));
   const outsideParent = mkdtempSync(join(tmpdir(), 'babel-sandbox-outside-'));

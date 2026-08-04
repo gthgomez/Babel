@@ -50,6 +50,7 @@ import {
 import { resolve, sep, dirname, basename, isAbsolute, relative } from 'node:path';
 import {
   buildBenchmarkContainerCommand,
+  evaluateGovernedIsolation,
   getDockerUnavailableReason,
   isBenchmarkProjectExecutableCommand,
   shouldUseDockerSandbox,
@@ -150,6 +151,7 @@ const MAX_TRANSIENT_SPAWN_RETRIES = 2;
 
 /** Module-level sentinel for one-shot Docker fallback warning */
 let dockerFallbackWarningEmitted = false;
+let isolationEscalationWarningEmitted = false;
 
 /**
  * Determines whether a spawn error message corresponds to a transient
@@ -1492,7 +1494,31 @@ export class SafeExecutor {
     const spawnArgs = isWin ? ['/c', normalizedRawCmd, ...argv.slice(1)] : argv.slice(1);
 
     const benchmarkDockerImage = process.env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim();
-    const useDockerSandbox = shouldUseDockerSandbox(process.env['BABEL_EXECUTION_PROFILE']);
+    const isolation = evaluateGovernedIsolation(
+      process.env['BABEL_EXECUTION_PROFILE'],
+      benchmarkDockerImage,
+    );
+    // H13: isolation-required profiles fail closed unless Docker is active or
+    // the operator explicitly escalates to host (BABEL_ALLOW_HOST_FALLBACK /
+    // BABEL_DOCKER_DISABLE). Profiles with dockerSandbox:false stay on host.
+    if (isolation.kind === 'fail_closed') {
+      return policyDeniedResult(
+        'isolation_unavailable',
+        `[sandbox] isolation_unavailable: ${isolation.reason}`,
+        toolName,
+        [command],
+      );
+    }
+    if (isolation.kind === 'host_escalated' && !isolationEscalationWarningEmitted) {
+      isolationEscalationWarningEmitted = true;
+      console.error(
+        `[sandbox] isolation boundary escalated to host for profile "${isolation.profile}" — ${isolation.reason}`,
+      );
+    }
+
+    const useDockerSandbox =
+      isolation.kind === 'docker' &&
+      shouldUseDockerSandbox(process.env['BABEL_EXECUTION_PROFILE']);
     const containerCommand = useDockerSandbox
       ? buildBenchmarkContainerCommand({
           dockerImage: benchmarkDockerImage!,
@@ -1502,20 +1528,17 @@ export class SafeExecutor {
         })
       : null;
 
-    // H4: One-time warning when Docker sandbox is configured but unavailable
-    if (!containerCommand && !dockerFallbackWarningEmitted) {
-      const profile = resolveExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']);
-      if (profile.dockerSandbox) {
-        if (process.env['BABEL_DOCKER_DISABLE'] === 'true') {
-          // Docker explicitly disabled — no warning needed
-        } else {
-          dockerFallbackWarningEmitted = true;
-          const reason = getDockerUnavailableReason();
-          const fallbackMsg = reason
-            ? `[sandbox] Docker not available — ${reason}`
-            : `[sandbox] Docker not available — no Docker image configured for profile "${profile.name}".`;
-          console.error(fallbackMsg);
-        }
+    // Legacy one-time warning path (host_escalated already logged above).
+    if (
+      isolation.kind === 'host_escalated' &&
+      !containerCommand &&
+      !dockerFallbackWarningEmitted &&
+      process.env['BABEL_DOCKER_DISABLE'] !== 'true'
+    ) {
+      dockerFallbackWarningEmitted = true;
+      const reason = getDockerUnavailableReason();
+      if (reason) {
+        console.error(`[sandbox] Docker not available — ${reason}`);
       }
     }
 

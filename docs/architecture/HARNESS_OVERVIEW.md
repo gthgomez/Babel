@@ -218,7 +218,7 @@ Chat may write both `thread_events.json` and `session-events.jsonl`. Pipeline wr
 | Mechanism | Strength | Notes |
 |-----------|----------|-------|
 | Docker sandbox (`safe_repo` default) | Strong when active | `--network none`, cap-drop, no-new-privileges |
-| Host fallback | Weaker | When Docker unavailable/image missing: **host spawn**, not fail-closed (warn once) |
+| Host fallback | Controlled | Isolation profiles fail-close without Docker; escalate with `BABEL_ALLOW_HOST_FALLBACK=1` (H13) |
 | Child env allowlist | Strong | `getSafeEnv()` strips secrets by default |
 | File mutation batch | Strong for writes | Pre/post hashes, undo batch (`workspaceTransactions`) |
 | Worktree dirty veto | Strong on deep loop | Refuse overwrite of dirty/protected paths; rollback backups |
@@ -266,7 +266,7 @@ Read in this order when changing harness behavior:
 
 Use these when planning reliability work; do not paper over them in marketing claims.
 
-1. **Docker isolation is conditional** — missing Docker/image → host execution with allowlist only (**H13** not fail-closed).
+1. **Docker isolation is conditional** — missing Docker/image on isolation profiles **fail-closes** unless `BABEL_ALLOW_HOST_FALLBACK=1` or `BABEL_DOCKER_DISABLE=true` (H13).
 2. **Verifier independence is mostly policy + revision bind**, not a universal clean-room verifier mount for chat (`IndependentVerifier` still opt-in / prototype).
 3. **Command identity can be lossy** in pipeline `normalizeCommand` (targeted suite vs full suite).
 4. **Evidence is multi-file / dual-stream**, not one append-only hash-linked episode for all modes.

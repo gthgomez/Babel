@@ -152,8 +152,8 @@ Maturity labels: **IMPLEMENTED** | **PARTIAL** | **PROTOTYPE** | **PLANNED** | *
 | **Owner** | Sandbox / execution profile |
 | **Sources** | `sandbox.ts`, `config/benchmarkContainer.ts`, `config/executionProfiles.ts`, `utils/safeEnv.ts` |
 | **Maturity** | **PARTIAL** — strong when Docker active |
-| **Gaps** | Host fallback is silent for isolation loss (**not fail-closed**) |
-| **Target** | Governed isolation MUST fail closed or require explicit escalation (invariant 13 target) |
+| **Gaps** | Day-to-day host work on `safe_repo` requires Docker image or explicit escalation env |
+| **Target** | Cleaner product defaults (profile UX) without weakening H13 |
 
 ### 6. Transactional Workspace
 
@@ -296,7 +296,7 @@ Language: **MUST** / **MUST NOT** / **SHOULD** / **MAY** / **OWNS** / **SUPERSED
 | H10 | Tool effects MUST be classified before execution or conservatively treated as high risk. | **IMPLEMENTED** (`classifyToolEffect` default external) |
 | H11 | Interrupted non-idempotent effects MUST NOT be retried blindly. | **IMPLEMENTED** (effect ledger) |
 | H12 | Actual changed files MUST be derived from filesystem or Git evidence, not solely model reports. | **PARTIAL**–**IMPLEMENTED** on write paths |
-| H13 | Governed execution requiring isolation MUST eventually fail closed or require explicit boundary escalation. | **TARGET** — current host fallback is known gap |
+| H13 | Governed execution requiring isolation MUST eventually fail closed or require explicit boundary escalation. | **IMPLEMENTED** — `evaluateGovernedIsolation` fail-closes unless Docker active or `BABEL_ALLOW_HOST_FALLBACK` / `BABEL_DOCKER_DISABLE` escalates |
 | H14 | Verification authority MUST NOT come solely from agent-authored ad hoc checks. | **IMPLEMENTED** (authoritative allowlist) |
 | H15 | Evidence schemas MUST be versioned. | **IMPLEMENTED** (executor event/contract versions) |
 | H16 | Architecture-changing runtime modifications MUST update this specification, ADR status where relevant, and conformance tests. | **PROCESS** (this package) |
@@ -366,10 +366,11 @@ Clean-room IndependentVerifier mount, structural identity, directional coverage 
 | Execution profiles | `safe_repo` (Docker preferred), `dev_local` (host), etc. | **IMPLEMENTED** |
 | Docker | `--network none`, cap-drop, project mount | **IMPLEMENTED** when active |
 | Host spawn | Allowlist + operator rules + `getSafeEnv()` | **IMPLEMENTED** |
-| Host fallback | When Docker/image unavailable | **IMPLEMENTED** — **not fail-closed** |
-| Fail-closed governed isolation | Block or escalate | **TARGET** (H13) |
+| Host fallback | When Docker/image unavailable | **Fail-closed by default** for `dockerSandbox` profiles |
+| Explicit host escalation | `BABEL_ALLOW_HOST_FALLBACK=1` or `BABEL_DOCKER_DISABLE=true` | **IMPLEMENTED** (H13) |
+| Fail-closed governed isolation | Block or escalate | **IMPLEMENTED** (H13) |
 
-Do not overstate isolation on host fallback paths.
+Host execution without escalation remains allowed for profiles with `dockerSandbox: false` (e.g. `dev_local`).
 
 ---
 
@@ -419,15 +420,15 @@ Changes to any of the following MUST trigger architecture review and updates to 
 
 ## 6.12 Known gaps and roadmap (do not implement in architecture freeze)
 
-Priority order (post Chat H7/H8 bind+recheck + evidence-graph wire):
+Priority order (post Chat H7/H8 bind+recheck + H13 fail-closed isolation):
 
 1. Structural verifier identity and directional coverage (full suite vs targeted).
-2. Fail-closed governed isolation (H13).
-3. Clean-room IndependentVerifier opt-in (not default hot path).
-4. Canonical unified episode stream.
-5. Held-out or clean-room promotion verification.
-6. Model-fixed harness evaluation.
-7. Adversarial no-op and verifier-tamper suites.
+2. Clean-room IndependentVerifier opt-in (not default hot path).
+3. Canonical unified episode stream.
+4. Held-out or clean-room promotion verification.
+5. Model-fixed harness evaluation.
+6. Adversarial no-op and verifier-tamper suites.
+7. Chat default-profile UX: `safe_repo` fail-closes without Docker image unless escalated — use `dev_local` or `BABEL_ALLOW_HOST_FALLBACK=1` for host-only day-to-day work.
 
 ---
 

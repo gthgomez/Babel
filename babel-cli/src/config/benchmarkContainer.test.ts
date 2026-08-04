@@ -4,10 +4,12 @@ import test from 'node:test';
 
 import {
   buildBenchmarkContainerCommand,
+  evaluateGovernedIsolation,
   formatBenchmarkRuntimeInventoryPromptLines,
   getBenchmarkRuntimeCommandUsability,
   isBenchmarkProjectExecutableCommand,
   isDockerAvailable,
+  isHostIsolationEscalationAllowed,
   parseBenchmarkRuntimeInventoryOutput,
   resetDockerAvailabilityCache,
   setDockerAvailableForTest,
@@ -53,6 +55,55 @@ test('shouldUseDockerSandbox returns false when Docker unavailable', () => {
   const result = shouldUseDockerSandbox('safe_repo');
   // Don't assert true/false (depends on environment), just verify it doesn't throw
   assert.ok(typeof result === 'boolean');
+  resetDockerAvailabilityCache();
+});
+
+test('H13 evaluateGovernedIsolation fail-closes safe_repo without Docker/image', () => {
+  setDockerAvailableForTest(false);
+  const prevAllow = process.env['BABEL_ALLOW_HOST_FALLBACK'];
+  const prevDisable = process.env['BABEL_DOCKER_DISABLE'];
+  const prevImage = process.env['BABEL_BENCHMARK_DOCKER_IMAGE'];
+  delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+  delete process.env['BABEL_DOCKER_DISABLE'];
+  delete process.env['BABEL_BENCHMARK_DOCKER_IMAGE'];
+  try {
+    const decision = evaluateGovernedIsolation('safe_repo', '', {});
+    assert.equal(decision.kind, 'fail_closed');
+    if (decision.kind === 'fail_closed') {
+      assert.match(decision.reason, /Isolation required|no Docker image|Docker/i);
+    }
+  } finally {
+    if (prevAllow === undefined) delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+    else process.env['BABEL_ALLOW_HOST_FALLBACK'] = prevAllow;
+    if (prevDisable === undefined) delete process.env['BABEL_DOCKER_DISABLE'];
+    else process.env['BABEL_DOCKER_DISABLE'] = prevDisable;
+    if (prevImage === undefined) delete process.env['BABEL_BENCHMARK_DOCKER_IMAGE'];
+    else process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = prevImage;
+    resetDockerAvailabilityCache();
+  }
+});
+
+test('H13 evaluateGovernedIsolation allows explicit host escalation', () => {
+  setDockerAvailableForTest(false);
+  const decision = evaluateGovernedIsolation('safe_repo', '', {
+    BABEL_ALLOW_HOST_FALLBACK: '1',
+  } as NodeJS.ProcessEnv);
+  assert.equal(decision.kind, 'host_escalated');
+  assert.equal(isHostIsolationEscalationAllowed({ BABEL_DOCKER_DISABLE: 'true' }), true);
+  resetDockerAvailabilityCache();
+});
+
+test('H13 evaluateGovernedIsolation allows host_profile for dev_local', () => {
+  setDockerAvailableForTest(false);
+  const decision = evaluateGovernedIsolation('dev_local', '', {});
+  assert.equal(decision.kind, 'host_profile');
+  resetDockerAvailabilityCache();
+});
+
+test('H13 evaluateGovernedIsolation uses docker when available and imaged', () => {
+  setDockerAvailableForTest(true);
+  const decision = evaluateGovernedIsolation('safe_repo', 'example/image:latest', {});
+  assert.equal(decision.kind, 'docker');
   resetDockerAvailabilityCache();
 });
 
