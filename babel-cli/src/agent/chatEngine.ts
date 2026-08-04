@@ -114,7 +114,14 @@ import {
   type ChatExecutionProfile,
 } from './chatEngineServices.js';
 import { createExecutorKernel, type ExecutorKernel } from '../executor/kernel.js';
-import type { VerifierAuthoritySource } from '../executor/contracts.js';
+import {
+  bindChatVerifierReceipt,
+  mutationPathsFromSessionEvents,
+  refreshChatVerifierReceiptStalenessSync,
+  revisionBindingProofErrors,
+  toGateToolLog,
+  type BoundChatVerifierReceipt,
+} from '../evidence/chatRevisionBinding.js';
 
 import {
   executeActionWithPolicy,
@@ -247,6 +254,7 @@ import {
   summarizeDroppedTurns as summarizeDroppedTurnsFn,
   compactHeuristicConversation,
   pinProjectRootEnv,
+  noteChatWorkspaceMutation,
   nativeToolUseToChatAction,
   formatResultDetail,
   countPatchStats,
@@ -482,14 +490,7 @@ export class ChatEngine {
     stderr?: string;
     verified?: boolean;
   }> = [];
-  private lastVerifierReceipt: {
-    command: string;
-    exit_code: number;
-    summary: string;
-    verifier_id?: string;
-    authority_source?: VerifierAuthoritySource;
-    argv?: string[];
-  } | null = null;
+  private lastVerifierReceipt: BoundChatVerifierReceipt | null = null;
   /** Index into toolCallLog at the start of the current turn's actions.
    *  Used to correctly slice per-turn entries even as the log grows across turns. */
   private _turnToolCallLogStart = 0;
@@ -597,7 +598,7 @@ export class ChatEngine {
    *  when no writes have occurred since the last run. Keyed by command string. */
   private verifierReceiptCache: Map<
     string,
-    { receipt: { command: string; exit_code: number; summary: string }; writeCountAtCache: number }
+    { receipt: BoundChatVerifierReceipt; writeCountAtCache: number }
   > = new Map();
   /** Commands that hard-crashed on this platform — never re-exec (A06 DLL_INIT thrash). */
   private platformUnusableVerifiers = new Set<string>();
@@ -971,6 +972,8 @@ export class ChatEngine {
       errors.push('verifier receipt is not authoritative');
     } else if (!receipt.verifier_id || !receipt.argv) {
       errors.push('verifier receipt is not durably structured');
+    } else {
+      errors.push(...revisionBindingProofErrors(receipt));
     }
 
     const events = this.parity.sessionEvents.events;
@@ -2674,6 +2677,7 @@ export class ChatEngine {
       criticReceipt?: DiffCriticVerdict | null;
     },
   ) {
+    refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, this.lastVerifierReceipt);
     const hasMutation = this.hasAnyWrites();
     const requestedOutcome = computeTerminalOutcome({
       finalStatus: extra?.blockedReport ? 'blocked' : this.budgetExceeded ? 'budget_exhausted' : 'completed',
@@ -2689,13 +2693,10 @@ export class ChatEngine {
       hasWrite: hasMutation,
       verificationPolicy: this.gatePolicy ?? 'required',
       lastVerifierReceipt: this.lastVerifierReceipt,
-      toolCallLog: this.toolCallLog.map((entry) => ({
-        tool: entry.tool,
-        target: entry.target ?? '',
-        ...(entry.detail !== undefined ? { detail: entry.detail } : {}),
-        ...(entry.error !== undefined ? { error: entry.error } : {}),
-        ...(entry.exit_code !== undefined ? { exit_code: entry.exit_code } : {}),
-      })),
+      toolCallLog: toGateToolLog(this.toolCallLog),
+      ...(this.lastVerifierReceipt?.boundRevision
+        ? { workspaceRevision: this.lastVerifierReceipt.boundRevision }
+        : {}),
       ...(requestedOutcome === 'VERIFIED_COMPLETE'
         ? { proof: this.buildCompletionProof(hasMutation) }
         : { proof: { compliant: false, errors: ['requested outcome was not verified'] } }),
@@ -3507,8 +3508,7 @@ export class ChatEngine {
           });
         } catch { /* best-effort */ }
         this.fullReadCounts.delete(this.readCacheKey(gov.absolutePath));
-        this.writeCount++;
-        this.consecutiveReadOnlyTools = 0;
+        noteChatWorkspaceMutation(this as never);
         const lineNumber = gov.lineNumber ?? 0;
         this.toolCallLog.push({ tool, target, detail: `line ${lineNumber}`, index: meta.index, exit_code: 0 });
         callbacks.onToolComplete?.(toolId, `line ${lineNumber}`);
@@ -3745,8 +3745,7 @@ export class ChatEngine {
             timestamp: Date.now(),
           });
           this.fullReadCounts.delete(this.readCacheKey(action.path));
-          this.writeCount++;
-          this.consecutiveReadOnlyTools = 0;
+          noteChatWorkspaceMutation(this as never);
           // Crash-safe: persist patch to recovery log
           appendPatchRecovery(this.patchRecoveryPath ?? '', 'write_file', action.path, action.content);
         } else if (action.type === 'apply_patch' && !result.policyBlocked) {
@@ -3761,8 +3760,7 @@ export class ChatEngine {
             this.readCache.set(pKey, { hash: patchedHash, timestamp: Date.now() });
             this.fullReadCounts.delete(pKey);
           } catch { /* file may not exist after patch — safe to skip */ }
-          this.writeCount++;
-          this.consecutiveReadOnlyTools = 0;
+          noteChatWorkspaceMutation(this as never);
           // Crash-safe: persist patch to recovery log
           appendPatchRecovery(this.patchRecoveryPath ?? '', 'apply_patch', path, action.patch);
         }
@@ -3776,18 +3774,16 @@ export class ChatEngine {
             const structured = parseStructuredVerifierCommand(target, {
               authoritySource: 'built_in_runner',
             });
-            const receipt = {
+            const receipt = await bindChatVerifierReceipt({
+              projectRoot: this.options.projectRoot,
               command: target,
               exit_code: lastResult.exit_code,
               summary: (lastResult.stdout || '').slice(0, 200),
-              ...(structured
-                ? {
-                    verifier_id: structured.verifierId,
-                    authority_source: structured.authoritySource,
-                    argv: [structured.executable, ...structured.args],
-                  }
-                : {}),
-            };
+              mutationPaths: mutationPathsFromSessionEvents(
+                this.parity.sessionEvents.events,
+              ),
+              structured,
+            });
             this.lastVerifierReceipt = receipt;
             recordVerifierAttempt(this.parity.sessionEvents, {
               turn_id: String(this.parity.turnId ?? this._turnIndex),
@@ -4646,6 +4642,9 @@ export class ChatEngine {
 
     if (this.cachedSystemPromptNative) stashEngineFingerprint(this.engineRunId, buildPromptFingerprint({ systemPrompt: this.cachedSystemPromptNative, taskClass: this.taskClass, tune: getChatTaskTune(this.taskClass), playbookId: this.activePlaybook?.id ?? null }));
 
+    // H8: re-derive stale from boundRevision before terminal honesty/proof.
+    refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, this.lastVerifierReceipt);
+
     // Compute truthful TerminalOutcome from status and runtime state.
     const hasMutation = this.hasAnyWrites();
     const outcome: TerminalOutcome = computeTerminalOutcome({
@@ -4662,13 +4661,10 @@ export class ChatEngine {
           hasWrite: hasMutation,
           verificationPolicy: this.gatePolicy ?? 'required',
           lastVerifierReceipt: this.lastVerifierReceipt,
-          toolCallLog: this.toolCallLog.map((entry) => ({
-            tool: entry.tool,
-            target: entry.target ?? '',
-            ...(entry.detail !== undefined ? { detail: entry.detail } : {}),
-            ...(entry.error !== undefined ? { error: entry.error } : {}),
-            ...(entry.exit_code !== undefined ? { exit_code: entry.exit_code } : {}),
-          })),
+          toolCallLog: toGateToolLog(this.toolCallLog),
+          ...(this.lastVerifierReceipt?.boundRevision
+            ? { workspaceRevision: this.lastVerifierReceipt.boundRevision }
+            : {}),
           proof: outcome === 'VERIFIED_COMPLETE'
             ? this.buildCompletionProof(hasMutation)
             : { compliant: false, errors: ['requested outcome was not verified'] },

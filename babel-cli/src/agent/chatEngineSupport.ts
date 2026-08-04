@@ -32,6 +32,26 @@ export function pinProjectRootEnv(projectRoot: string): () => void {
   };
 }
 
+/**
+ * After a successful workspace mutation: bump write counter and mark any prior
+ * green verifier receipt stale (H8 — intervening edits invalidate completion proof).
+ * Mutates the engine bag in place so ChatEngine call sites stay one line.
+ */
+export function noteChatWorkspaceMutation(engine: {
+  writeCount: number;
+  consecutiveReadOnlyTools: number;
+  lastVerifierReceipt: { stale?: boolean; staleReason?: string } | null;
+}): void {
+  engine.writeCount += 1;
+  engine.consecutiveReadOnlyTools = 0;
+  if (engine.lastVerifierReceipt) {
+    engine.lastVerifierReceipt.stale = true;
+    engine.lastVerifierReceipt.staleReason =
+      engine.lastVerifierReceipt.staleReason ??
+      'workspace mutated after verifier receipt';
+  }
+}
+
 /** Map a native tool-use event into a ChatToolAction for policy-gated execution. */
 export function nativeToolUseToChatAction(
   name: string,

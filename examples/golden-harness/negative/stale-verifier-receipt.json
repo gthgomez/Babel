@@ -2,18 +2,20 @@
   "id": "stale-verifier-receipt",
   "architecture_version": "harness-v1",
   "status": "implemented_partial",
-  "description": "Honesty gate rejects receipts already marked stale. Full revision-bound verification remains TARGET.",
+  "description": "Honesty rejects stale flags; Chat binds boundRevision at verifier capture and rechecks at finalize (H7/H8). Isolated IndependentVerifier remains TARGET for Chat.",
   "implemented": {
     "honestyRejectsStaleFlag": true,
-    "note": "evaluateExecuteCompletionHonesty returns verifier_stale when receipt.stale === true"
+    "controllerDerivesStalenessFromRevision": true,
+    "note": "evaluateExecuteCompletionHonesty returns verifier_stale when receipt.stale === true; Chat refreshChatVerifierReceiptStalenessSync sets stale from boundRevision hashes"
   },
   "target": {
-    "controllerDerivesStalenessFromRevision": true,
-    "note": "receipt.boundRevision must match currentWorkspaceRevision (trusted hashes); do not rely on model-set flags"
+    "independentIsolatedVerifierOnChatFinalize": true,
+    "note": "IndependentVerifier full tree copy is built but not on the Chat hot path"
   },
   "live": {
     "honestyRejectsStaleFlag": true,
-    "systematicRevisionBinding": false
+    "systematicRevisionBinding": true,
+    "independentIsolatedVerifierOnChatFinalize": false
   },
   "receipt": {
     "command": "npm test",

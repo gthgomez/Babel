@@ -309,11 +309,15 @@ test("golden negative: plan mutation denied aligns with live kernel", () => {
   assert.equal(modePolicyFor("plan").mutationPolicy, "read_only");
 });
 
-test("golden negative: stale receipt fixture matches honesty gate (flag only, not revision-binding)", () => {
+test("golden negative: stale receipt fixture matches honesty gate + Chat revision recheck", () => {
   const fixture = readJson<{
     status: string;
-    implemented?: { honestyRejectsStaleFlag: boolean };
-    target?: { controllerDerivesStalenessFromRevision: boolean };
+    implemented?: {
+      honestyRejectsStaleFlag: boolean;
+      controllerDerivesStalenessFromRevision?: boolean;
+    };
+    target?: { independentIsolatedVerifierOnChatFinalize?: boolean };
+    live?: { systematicRevisionBinding?: boolean };
     receipt: { command: string; exit_code: number; summary: string; stale: boolean };
     expectHonesty: { allow: boolean; reason: string };
   }>("examples/golden-harness/negative/stale-verifier-receipt.json");
@@ -322,8 +326,10 @@ test("golden negative: stale receipt fixture matches honesty gate (flag only, no
   );
   // IMPLEMENTED: honesty reacts to receipt.stale === true
   assert.equal(fixture.implemented?.honestyRejectsStaleFlag, true);
-  // TARGET: automatic boundRevision vs workspace comparison is not claimed here
-  assert.equal(fixture.target?.controllerDerivesStalenessFromRevision, true);
+  // IMPLEMENTED: Chat binds boundRevision and rechecks at finalize (not IndependentVerifier)
+  assert.equal(fixture.implemented?.controllerDerivesStalenessFromRevision, true);
+  assert.equal(fixture.live?.systematicRevisionBinding, true);
+  assert.equal(fixture.target?.independentIsolatedVerifierOnChatFinalize, true);
   const honesty = evaluateExecuteCompletionHonesty({
     hasWrite: true,
     policy: "required",
