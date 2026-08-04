@@ -3,13 +3,91 @@ import * as assert from "node:assert";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
+import { execFileSync } from "node:child_process";
 import { IndependentVerifier } from "./independentVerifier.js";
 import { RevisionManager } from "./revisionBoundReceipt.js";
 import { EvidenceGraph } from "./evidenceGraph.js";
 import { ContractEvaluator } from "./acceptanceContracts.js";
 import { evaluateExecuteCompletionHonesty } from "../agent/completionGatePolicy.js";
+import { noteChatWorkspaceMutation } from "../agent/chatEngineSupport.js";
 
 describe("Proof-Carrying Completion", () => {
+  it("captures git HEAD for revision binding (H7)", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "babel-git-rev-"));
+    try {
+      execFileSync("git", ["init"], {
+        cwd: tempDir,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: tempDir,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      execFileSync("git", ["config", "user.name", "Test"], {
+        cwd: tempDir,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      const filePath = path.join(tempDir, "tracked.txt");
+      await fs.writeFile(filePath, "v1");
+      execFileSync("git", ["add", "tracked.txt"], {
+        cwd: tempDir,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      execFileSync("git", ["commit", "-m", "init"], {
+        cwd: tempDir,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      const expected = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: tempDir,
+        encoding: "utf8",
+        windowsHide: true,
+      }).trim();
+
+      const revision = await RevisionManager.computeRevision(tempDir, [
+        "tracked.txt",
+      ]);
+      assert.strictEqual(revision.gitCommitHash, expected);
+      assert.ok(revision.compositeTreeHash.length === 64);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("marks chat verifier receipt stale after intervening mutation (H8)", () => {
+    const engine = {
+      writeCount: 0,
+      consecutiveReadOnlyTools: 3,
+      lastVerifierReceipt: {
+        command: "npm test",
+        exit_code: 0,
+        summary: "ok",
+        stale: false,
+      },
+    };
+    noteChatWorkspaceMutation(engine);
+    assert.strictEqual(engine.writeCount, 1);
+    assert.strictEqual(engine.consecutiveReadOnlyTools, 0);
+    assert.strictEqual(engine.lastVerifierReceipt.stale, true);
+
+    const honesty = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: "required",
+      lastVerifierReceipt: engine.lastVerifierReceipt,
+      toolCallLog: [
+        { tool: "write_file", target: "src/a.ts" },
+        { tool: "run_command", target: "npm test", exit_code: 0 },
+        { tool: "write_file", target: "src/a.ts" },
+      ],
+    });
+    assert.strictEqual(honesty.allow, false);
+    assert.strictEqual(honesty.reason, "verifier_stale");
+  });
+
   it("verifies IndependentVerifier execution leaves primary workspace un-mutated", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "babel-test-"));
     try {

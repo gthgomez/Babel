@@ -6,7 +6,7 @@ Licensed under the MIT License
 
 <!--
 status: ACTIVE
-last_verified: 2026-08-03
+last_verified: 2026-08-04
 architecture_version: harness-v1
 authority: explanatory
 -->
@@ -197,7 +197,8 @@ Additional (partially wired):
 | Layer | Status |
 |-------|--------|
 | R9 verifier-dependency integrity | **Detect + escalate** (hash scripts/files; tamper strikes) — `verifierIntegrity.ts` |
-| `IndependentVerifier` + evidence graph | **Prototype / tests** — not the live chat completion path |
+| Chat revision-bound receipts + evidence graph on proof | **Live Chat path** — `chatRevisionBinding.ts`, `evaluateEvidenceSync`; IndependentVerifier clean-room still prototype |
+| `IndependentVerifier` tree-copy | **Prototype / tests** — not the default Chat finalize path |
 | Benchmark overlay / gold | External fail-to-pass scoring; labels `false_complete`, `incorrect_patch`, `verifier_tampered` |
 
 ### Authoritative vs likely commands
@@ -266,11 +267,11 @@ Read in this order when changing harness behavior:
 Use these when planning reliability work; do not paper over them in marketing claims.
 
 1. **Docker isolation is conditional** — missing Docker/image on isolation profiles **fail-closes** unless `BABEL_ALLOW_HOST_FALLBACK=1` or `BABEL_DOCKER_DISABLE=true` (H13).
-2. **Verifier independence is mostly policy + detect**, not a universal read-only verifier mount for chat.
+2. **Verifier independence is mostly policy + revision bind**, not a universal clean-room verifier mount for chat (`IndependentVerifier` still opt-in / prototype).
 3. **Command identity can be lossy** in pipeline `normalizeCommand` (targeted suite vs full suite).
 4. **Evidence is multi-file / dual-stream**, not one append-only hash-linked episode for all modes.
 5. **`ModeController` interface** exists; production chat is still ChatEngine + `kernel.decide`, not a full adapter implementation for every mode.
-6. **IndependentVerifier / full evidence graph** is real code with tests but not the default live chat completion path.
+6. **Chat revision binding + evidence-graph proof are live**; clean-room IndependentVerifier remains prototype-only.
 7. **Doc history**: Lite `AgentSession` vs ChatEngine, and Full RO proof vs pipeline deep mutation — always check this overview + code over older Lite wording.
 
 ---

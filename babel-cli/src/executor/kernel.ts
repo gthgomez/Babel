@@ -20,6 +20,7 @@ import {
 import type { TerminalOutcome } from "../schemas/agentContracts.js";
 import {
   evaluateCompletionEvidence,
+  evaluateCompletionEvidenceSync,
   type CompletionEvidenceEvaluation,
 } from "../evidence/completionEvidence.js";
 import type { AcceptanceContract } from "../evidence/acceptanceContracts.js";
@@ -59,6 +60,12 @@ export interface ExecutorKernel {
       graph: EvidenceGraph;
       projectRoot: string;
     }): Promise<CompletionEvidenceEvaluation>;
+    /** Sync twin for Chat finalize (same authority as evaluateEvidence). */
+    evaluateEvidenceSync(input: {
+      contract: AcceptanceContract;
+      graph: EvidenceGraph;
+      projectRoot: string;
+    }): CompletionEvidenceEvaluation;
   };
   readonly tools: {
     execute(
@@ -215,6 +222,7 @@ export function createExecutorKernel(
     completion: {
       decide: decideCompletion,
       evaluateEvidence: evaluateCompletionEvidence,
+      evaluateEvidenceSync: evaluateCompletionEvidenceSync,
     },
     tools: {
       async execute(request, context) {

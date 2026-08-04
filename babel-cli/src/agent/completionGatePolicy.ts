@@ -329,6 +329,16 @@ export type VerifierReceipt = {
   exit_code: number;
   summary: string;
   stale?: boolean;
+  /** Why the controller marked the receipt stale (mutation flag or revision recheck). */
+  staleReason?: string;
+  receiptId?: string;
+  /** Workspace identity captured when the verifier ran (H7). */
+  boundRevision?: {
+    gitCommitHash: string | null;
+    compositeTreeHash: string;
+    fileHashes: Record<string, string>;
+    capturedAt: number;
+  };
   verifier_id?: string;
   authority_source?: VerifierAuthoritySource;
   argv?: string[];
