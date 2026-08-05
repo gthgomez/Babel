@@ -126,4 +126,18 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
 4. `babel doctor` — environment health  
 5. `babel mcp` — integrations  
 
+## Execution profile note (default `safe_repo`)
+
+Default execution profile is **`safe_repo`**, which expects Docker isolation when
+active. Without Docker + a configured image it **fail-closes** (H13) unless you
+use **`dev_local`** or set **`BABEL_ALLOW_HOST_FALLBACK=1`**.
+
+```powershell
+$env:BABEL_EXECUTION_PROFILE = 'dev_local'
+# or: babel run "..." --execution-profile dev_local
+```
+
+Details: [CHAT_MODE.md](./CHAT_MODE.md#execution-profile-and-isolation-h13) ·
+normative: [architecture/HARNESS_ARCHITECTURE_V1.md](./architecture/HARNESS_ARCHITECTURE_V1.md) §6.9.
+
 Further reading: [START_HERE.md](../START_HERE.md) · [README.md](../README.md)

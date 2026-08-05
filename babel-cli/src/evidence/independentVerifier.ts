@@ -1,8 +1,12 @@
 /**
  * Clean-room IndependentVerifier — tree-copy + re-run outside the primary workspace.
  *
- * Default: **off** the Chat hot path. Enable with BABEL_INDEPENDENT_VERIFIER=1.
- * When disabled, callers must not run isolated verification (no temp copy cost).
+ * Default: **off** the Chat hot path (safe_repo / host-local profiles).
+ * Enable via:
+ * - BABEL_INDEPENDENT_VERIFIER=1 (env always wins when set), or
+ * - high-assurance execution profiles with independentVerifierDefault: true
+ *   (benchmark_container, babel_research, opencalw_manager) when env is unset.
+ * Env explicit OFF (0/false/no/off) disables even for high-assurance profiles.
  */
 
 import * as fs from 'node:fs';
@@ -14,22 +18,79 @@ import {
   parseStructuredVerifierCommand,
   isAuthoritativeVerifierCommand,
 } from '../agent/completionGatePolicy.js';
+import {
+  resolveExecutionProfile,
+  type ExecutionProfile,
+  type ExecutionProfileName,
+} from '../config/executionProfiles.js';
 import { RevisionManager, type RevisionBoundReceipt } from './revisionBoundReceipt.js';
 
-/** Env flag for Chat/finalize clean-room verification (default off). */
+/** Env flag for Chat/finalize clean-room verification (default off unless profile opts in). */
 export const INDEPENDENT_VERIFIER_ENV = 'BABEL_INDEPENDENT_VERIFIER' as const;
 
+/** Profile input accepted by IndependentVerifier opt-in resolution. */
+export type IndependentVerifierProfileRef =
+  | ExecutionProfile
+  | ExecutionProfileName
+  | string
+  | null
+  | undefined;
+
+function isExecutionProfileObject(
+  profile: IndependentVerifierProfileRef,
+): profile is ExecutionProfile {
+  return (
+    profile != null &&
+    typeof profile === 'object' &&
+    typeof (profile as ExecutionProfile).name === 'string'
+  );
+}
+
 /**
- * True when operators explicitly opt into clean-room IndependentVerifier.
- * Pure; no I/O. Default false.
+ * Resolve the profile used for IndependentVerifier defaults.
+ * Explicit profile object/name wins; otherwise BABEL_EXECUTION_PROFILE from env.
+ */
+function resolveProfileForIndependentVerifier(
+  env: NodeJS.ProcessEnv,
+  profile?: IndependentVerifierProfileRef,
+): ExecutionProfile {
+  if (isExecutionProfileObject(profile)) {
+    return profile;
+  }
+  if (typeof profile === 'string' && profile.trim().length > 0) {
+    return resolveExecutionProfile(profile);
+  }
+  return resolveExecutionProfile(env['BABEL_EXECUTION_PROFILE']);
+}
+
+/**
+ * True when clean-room IndependentVerifier should run.
+ * Pure; no I/O.
+ *
+ * Resolution order:
+ * 1. Env explicit OFF (`0`/`false`/`no`/`off`) → false always
+ * 2. Env explicit ON (`1`/`true`/`yes`/`on`) → true always
+ * 3. Else if profile (arg or BABEL_EXECUTION_PROFILE) has independentVerifierDefault → true
+ * 4. Default false
  */
 export function isIndependentVerifierOptIn(
   env: NodeJS.ProcessEnv = process.env,
+  profile?: IndependentVerifierProfileRef,
 ): boolean {
   const raw = env[INDEPENDENT_VERIFIER_ENV];
-  if (raw == null) return false;
-  const v = String(raw).trim().toLowerCase();
-  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+  if (raw != null && String(raw).trim() !== '') {
+    const v = String(raw).trim().toLowerCase();
+    if (v === '0' || v === 'false' || v === 'no' || v === 'off') {
+      return false;
+    }
+    if (v === '1' || v === 'true' || v === 'yes' || v === 'on') {
+      return true;
+    }
+    // Unknown env tokens fall through to profile default.
+  }
+
+  const resolved = resolveProfileForIndependentVerifier(env, profile);
+  return resolved.independentVerifierDefault === true;
 }
 
 function shouldCopyPath(src: string): boolean {
@@ -155,8 +216,14 @@ export function independentVerifierProofErrors(input: {
   exitCode: number;
   mutationPaths: readonly string[];
   env?: NodeJS.ProcessEnv;
+  /**
+   * Optional execution profile (object, name, or string). When omitted, opt-in
+   * resolution uses BABEL_EXECUTION_PROFILE from env (see isIndependentVerifierOptIn).
+   */
+  profile?: IndependentVerifierProfileRef;
 }): string[] {
-  if (!isIndependentVerifierOptIn(input.env ?? process.env)) {
+  const env = input.env ?? process.env;
+  if (!isIndependentVerifierOptIn(env, input.profile)) {
     return [];
   }
   if (input.exitCode !== 0) {

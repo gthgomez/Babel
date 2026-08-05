@@ -139,11 +139,14 @@ node dist/index.js run "Solve benchmark task" --execution-profile benchmark_cont
 node dist/index.js run "Audit this repo" --execution-profile read_only_audit
 ```
 
-- `safe_repo` is the default guarded profile.
-- `dev_local` permits common local build tools such as pnpm, yarn, cargo, go, gcc, make, uv, and dotnet while keeping shell wrappers and destructive commands rejected.
+- `safe_repo` is the default guarded profile (`dockerSandbox: true`). After H13 it **fail-closes** without Docker daemon + image (`BABEL_BENCHMARK_DOCKER_IMAGE`) unless you escalate with `BABEL_ALLOW_HOST_FALLBACK=1` or `BABEL_DOCKER_DISABLE=true`.
+- `dev_local` is host-friendly (`dockerSandbox: false`); permits common local build tools such as pnpm, yarn, cargo, go, gcc, make, uv, and dotnet while keeping shell wrappers and destructive commands rejected. Prefer this for host-only day-to-day work.
+- You can also set `BABEL_EXECUTION_PROFILE=dev_local` instead of the CLI flag.
 - `benchmark_container` is for Terminal-Bench style isolated tasks and relaxes benchmark-fixture QA posture without enabling host shell operators.
 - `scaffold` is for new project creation.
 - `read_only_audit` blocks writes and command execution.
+
+Normative isolation (H13): `docs/architecture/HARNESS_ARCHITECTURE_V1.md` §6.9. Operator-facing chat notes: `docs/CHAT_MODE.md`.
 
 Project lifecycle commands:
 

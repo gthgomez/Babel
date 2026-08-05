@@ -174,10 +174,10 @@ Maturity labels: **IMPLEMENTED** | **PARTIAL** | **PROTOTYPE** | **PLANNED** | *
 | **Purpose** | Controller-owned oracles independent of agent self-report |
 | **Current** | Three-part: honesty gate + kernel decide + pipeline required-verifier demotion |
 | **Owner** | Controller + shared completion authority |
-| **Sources** | `completionGatePolicy.ts`, `executor/kernel.ts`, `services/requiredVerifierContract.ts`, `services/verifierIdentity.ts`, `evidence/chatRevisionBinding.ts`, `evidence/independentVerifier.ts` (**PROTOTYPE** clean-room) |
-| **Maturity** | **PARTIAL** — bind+recheck + identity + honesty scope **IMPLEMENTED**; IndependentVerifier **opt-in** |
-| **Gaps** | Clean-room not default; no universal episode stream; promotion held-out checks incomplete |
-| **Target** | Profile-gated clean-room defaults + held-out promotion |
+| **Sources** | `completionGatePolicy.ts`, `executor/kernel.ts`, `services/requiredVerifierContract.ts`, `services/verifierIdentity.ts`, `evidence/chatRevisionBinding.ts`, `evidence/independentVerifier.ts` (**clean-room**) |
+| **Maturity** | **PARTIAL** — bind+recheck + identity + honesty scope **IMPLEMENTED**; IndependentVerifier env **or** high-assurance **profile default** (`benchmark_container`, `babel_research`, `opencalw_manager`); everyday `safe_repo` still off |
+| **Gaps** | Clean-room not default on `safe_repo`; pipeline EvidenceBundle not yet on episode bus; broader promotion held-out incomplete |
+| **Target** | Broader profile promotion policy + held-out eval gates |
 
 ### 8. Failure Classification and Repair
 
@@ -196,12 +196,12 @@ Maturity labels: **IMPLEMENTED** | **PARTIAL** | **PROTOTYPE** | **PLANNED** | *
 | | |
 |--|--|
 | **Purpose** | Append-only, versioned, replayable episode |
-| **Current** | Dual chat streams + pipeline EvidenceBundle; `CanonicalExecutorEvent` shape exists |
+| **Current** | Chat: `thread_events.json` + `session-events.jsonl` + **`episode-events.jsonl`** dual-write (`episodeStream.ts`, hash-linked foundation); pipeline EvidenceBundle still separate |
 | **Owner** | Evidence managers per surface |
-| **Sources** | `sessionEvents.ts`, `threadEventLog.ts`, `evidence.ts`, `executor/contracts.ts` |
-| **Maturity** | **PARTIAL** |
-| **Gaps** | No single hash-linked episode end-to-end |
-| **Target** | Unified episode stream (**PLANNED**) |
+| **Sources** | `sessionEvents.ts`, `threadEventLog.ts`, `evidence/episodeStream.ts`, `evidence.ts`, `executor/contracts.ts` |
+| **Maturity** | **PARTIAL** — Chat episode dual-write **IMPLEMENTED** (foundation); not yet universal across modes |
+| **Gaps** | Pipeline not on the episode bus; consumers/TUI replay incomplete; cold-resume reattach optional |
+| **Target** | Unified episode stream across Chat + pipeline |
 
 ### 10. Evaluation and Promotion System
 
@@ -384,22 +384,22 @@ Host execution without escalation remains allowed for profiles with `dockerSandb
 |--------|---------|-------|
 | `thread_events.json` | Chat | threadEventLog |
 | `session-events.jsonl` | Chat | sessionEvents |
+| `episode-events.jsonl` | Chat (dual-write foundation) | episodeStream + parity bridge |
 | EvidenceBundle JSON files | Pipeline | evidence.ts |
 | Effect ledger | Mutations | effectLedger |
 | Benchmark reports | Eval | agent benchmark |
 
-### Target relationship (PLANNED unified episode)
+### Target relationship (unified episode — Chat foundation live)
 
 ```text
 SessionDescriptor
-  → CanonicalExecutorEvent[] (seq + schemaVersion)
+  → CanonicalExecutorEvent[] (seq + schemaVersion)  // episode-events.jsonl on Chat
        tool / mutation / verifier / completion / recovery
   → workspace revision identity
   → artifact refs + cost records
 ```
 
-`CanonicalExecutorEvent` is **IMPLEMENTED** as a type; end-to-end single-stream persistence is **PARTIAL** / **PLANNED**.
-
+`CanonicalExecutorEvent` type **IMPLEMENTED**; Chat append-only `episode-events.jsonl` with optional `prevHash` **IMPLEMENTED** (projected from session events at flush). Pipeline EvidenceBundle collapse remains **PLANNED**.
 ---
 
 ## 6.11 Change protocol
@@ -422,13 +422,13 @@ Changes to any of the following MUST trigger architecture review and updates to 
 
 ## 6.12 Known gaps and roadmap (do not implement in architecture freeze)
 
-Priority order (post structural identity + honesty scope + IndependentVerifier opt-in):
+Priority order (post identity + honesty scope + IV opt-in + Chat episode foundation + profile IV defaults + H13 UX docs):
 
-1. Canonical unified episode stream.
-2. Held-out or clean-room promotion verification (profile-default opt-in).
+1. ~~Canonical unified episode stream (Chat dual-write)~~ — **foundation done**; next: pipeline join + consumers.
+2. ~~Profile-default clean-room (high-assurance)~~ — **done** for `benchmark_container` / `babel_research` / `opencalw_manager`; next: promotion policy for more profiles if desired.
 3. Model-fixed harness evaluation.
 4. Adversarial no-op and verifier-tamper suites.
-5. Chat default-profile UX: `safe_repo` fail-closes without Docker image unless escalated — use `dev_local` or `BABEL_ALLOW_HOST_FALLBACK=1` for host-only day-to-day work.
+5. ~~Chat default-profile UX (H13 docs)~~ — **done** in `CHAT_MODE.md` / local-mode / CLI quickstart; residual: TUI discoverability.
 
 ---
 
@@ -448,7 +448,7 @@ Priority order (post structural identity + honesty scope + IndependentVerifier o
 | 10 | `babel-cli/src/sandbox.ts` |
 | 11 | `babel-cli/src/config/executionProfiles.ts` |
 | 12 | `babel-cli/src/services/worktreeSafety.ts` |
-| 13 | `babel-cli/src/services/requiredVerifierContract.ts` / `verifierIdentity.ts` |
+| 13 | `babel-cli/src/services/requiredVerifierContract.ts` / `verifierIdentity.ts` / `evidence/episodeStream.ts` / `evidence/independentVerifier.ts` |
 | 14 | `babel-cli/src/schemas/agentContracts.ts` |
 | 15 | `babel-cli/src/config/chatEngineLimits.ts` |
 
@@ -458,4 +458,4 @@ Priority order (post structural identity + honesty scope + IndependentVerifier o
 
 - **SUPERSEDES**: prior informal “primary harness” claims in overview/mode docs.
 - **Version**: `harness-v1` — increment only with ADR + conformance updates.
-- **last_verified**: 2026-08-04 against live `babel-cli` sources (H7/H8 + identity + honesty scope + IndependentVerifier opt-in).
+- **last_verified**: 2026-08-04 against live `babel-cli` sources (H7/H8 + identity + honesty scope + IndependentVerifier profile defaults + Chat episode-events dual-write + H13 UX docs).

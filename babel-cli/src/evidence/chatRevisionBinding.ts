@@ -1,8 +1,9 @@
 /**
  * Chat-path revision binding for verifier receipts (H7/H8).
  *
- * IndependentVerifier (full tree copy) stays off the default hot path.
- * Enable with BABEL_INDEPENDENT_VERIFIER=1 (see independentVerifier.ts).
+ * IndependentVerifier (full tree copy) stays off the default Chat hot path
+ * (safe_repo). Enable with BABEL_INDEPENDENT_VERIFIER=1 or high-assurance
+ * execution profiles (see independentVerifier.ts).
  */
 
 import type { VerifierAuthoritySource } from '../executor/contracts.js';
@@ -255,6 +256,12 @@ export function evaluateChatCompletionProof(input: {
   isAuthoritativeCommand: (command: string) => boolean;
   /** Optional env override for IndependentVerifier opt-in tests. */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Optional execution profile name for IndependentVerifier profile defaults.
+   * When omitted, independentVerifierProofErrors reads BABEL_EXECUTION_PROFILE
+   * from env (or process.env when env is also omitted).
+   */
+  executionProfile?: string;
 }): { compliant: boolean; errors?: string[] } {
   const errors: string[] = [];
   if (!input.hasMutation) errors.push('missing production mutation evidence');
@@ -300,14 +307,19 @@ export function evaluateChatCompletionProof(input: {
   }
 
   // Opt-in clean-room IndependentVerifier (default off — no hot-path tree copy).
+  // High-assurance profiles may default ON; env still overrides.
   if (receipt && receipt.exit_code === 0) {
     const mutationPaths = mutationPathsFromSessionEvents(input.events);
+    const env = input.env ?? process.env;
+    const executionProfile =
+      input.executionProfile ?? env['BABEL_EXECUTION_PROFILE'];
     for (const err of independentVerifierProofErrors({
       projectRoot: input.projectRoot,
       command: receipt.command,
       exitCode: receipt.exit_code,
       mutationPaths,
-      ...(input.env !== undefined ? { env: input.env } : {}),
+      env,
+      ...(executionProfile !== undefined ? { profile: executionProfile } : {}),
     })) {
       if (!errors.includes(err)) errors.push(err);
     }

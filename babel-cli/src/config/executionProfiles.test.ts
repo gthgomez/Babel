@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   buildExecutionProfilePromptLines,
+  EXECUTION_PROFILE_NAMES,
   getExecutionProfileCommandAdditions,
   getExecutionProfileToolPolicy,
   normalizeExecutionProfile,
@@ -65,4 +66,35 @@ test('prompt lines carry profile-specific guidance', () => {
   assert.match(lines, /benchmark_container/);
   assert.match(lines, /POSIX pipes/);
   assert.match(lines, /\/app/);
+});
+
+test('high-assurance profiles default IndependentVerifier on; everyday stay off', () => {
+  const onByDefault = new Set([
+    'benchmark_container',
+    'babel_research',
+    'opencalw_manager',
+  ]);
+  for (const name of EXECUTION_PROFILE_NAMES) {
+    const profile = resolveExecutionProfile(name);
+    if (onByDefault.has(name)) {
+      assert.equal(
+        profile.independentVerifierDefault,
+        true,
+        `${name} should default IndependentVerifier on`,
+      );
+    } else {
+      assert.notEqual(
+        profile.independentVerifierDefault,
+        true,
+        `${name} should not default IndependentVerifier on`,
+      );
+    }
+  }
+});
+
+test('high-assurance profile descriptions note clean-room IndependentVerifier', () => {
+  for (const name of ['benchmark_container', 'babel_research', 'opencalw_manager'] as const) {
+    const description = resolveExecutionProfile(name).description;
+    assert.match(description, /IndependentVerifier/i, name);
+  }
 });

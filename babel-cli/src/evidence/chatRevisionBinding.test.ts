@@ -164,9 +164,79 @@ describe('chatRevisionBinding', () => {
         receipt,
         events,
         isAuthoritativeCommand: () => true,
+        // Keep IndependentVerifier off so this case only asserts staleness.
+        env: {},
+        executionProfile: 'safe_repo',
       });
       assert.strictEqual(proof.compliant, false);
       assert.ok(proof.errors?.some((e) => /Stale receipt|stale/i.test(e)));
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('evaluateChatCompletionProof enables clean-room IV from high-assurance profile default', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'babel-chat-iv-profile-'));
+    try {
+      const rel = 'src/mod.ts';
+      await fs.mkdir(path.join(tempDir, 'src'), { recursive: true });
+      await fs.writeFile(path.join(tempDir, rel), 'v1');
+
+      const receipt = await bindChatVerifierReceipt({
+        projectRoot: tempDir,
+        command: 'node -e "process.exit(1)"',
+        exit_code: 0,
+        summary: 'primary green',
+        mutationPaths: [rel],
+        structured: {
+          verifierId: 'node-exit',
+          authoritySource: 'built_in_runner',
+          executable: 'node',
+          args: ['-e', 'process.exit(1)'],
+        },
+      });
+
+      const events = [
+        { kind: 'mutation_batch' as const, paths: [rel] },
+        {
+          kind: 'verifier_attempt' as const,
+          authoritative: true,
+          exit_code: 0,
+        },
+      ];
+
+      // env unset for BABEL_INDEPENDENT_VERIFIER; profile default should opt in
+      const proof = evaluateChatCompletionProof({
+        projectRoot: tempDir,
+        hasMutation: true,
+        verifierTampered: false,
+        receipt,
+        events,
+        isAuthoritativeCommand: () => true,
+        env: {},
+        executionProfile: 'benchmark_container',
+      });
+      assert.strictEqual(proof.compliant, false);
+      assert.ok(
+        proof.errors?.some((e) => /independent clean-room verifier failed/i.test(e)),
+        `expected clean-room failure, got: ${proof.errors?.join('; ')}`,
+      );
+
+      // same setup with everyday profile: no clean-room path
+      const everyday = evaluateChatCompletionProof({
+        projectRoot: tempDir,
+        hasMutation: true,
+        verifierTampered: false,
+        receipt,
+        events,
+        isAuthoritativeCommand: () => true,
+        env: {},
+        executionProfile: 'safe_repo',
+      });
+      assert.ok(
+        !everyday.errors?.some((e) => /independent clean-room/i.test(e)),
+        'safe_repo must not enable clean-room IndependentVerifier by default',
+      );
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
     }
