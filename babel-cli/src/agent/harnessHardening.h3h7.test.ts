@@ -852,6 +852,14 @@ describe('H7 model-fixed eval substrate', () => {
     try {
       const path = writeEvalReport(dir, report);
       assert.ok(existsSync(path));
+      assert.throws(
+        () => writeEvalReport('undefined', report),
+        /invalid output directory/,
+      );
+      assert.throws(
+        () => writeEvalReport(undefined as unknown as string, report),
+        /invalid output directory/,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

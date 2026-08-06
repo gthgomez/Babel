@@ -161,7 +161,7 @@ Regression gate:
 
 ### H1 — Context integrity and compaction correctness
 
-**Status: COMPLETE** (live evidence: `babel-cli/src/agent/compactionCommit.test.ts`, `chatCompaction.test.ts`; commit path `compactionCommit.ts` + `ChatEngine.compactIfNeeded`)
+**Status: PARTIAL** (ChatEngine awaits checkpoint receipts and blocks on persistence failure; multi-artifact checkpoint is now one all-or-nothing transaction with backup-backed rollback in `checkpointParityEventLogStrict` — unit-proven in `liveSession.failClosed.test.ts`. Live long-session exit gates remain unproven.)
 
 Why first: the pre-H1 live path could report successful compaction while losing the generated summary and leaving durable provider history unchanged. Those six defects are closed on the commit path below.
 
@@ -184,7 +184,7 @@ Deliverables:
 - deterministic observation reduction with immutable raw-log references; and
 - provider-aware summarization model resolution.
 
-Exit gates (all covered by shipped tests in `compactionCommit.test.ts` / `chatCompaction.test.ts`):
+Exit gates (unit-covered in `compactionCommit.test.ts` / `chatCompaction.test.ts` / `liveSession.failClosed.test.ts`; multi-artifact atomic checkpoint unit-proven; live long-session evidence remains open):
 
 - successful LLM summary survives into the next actual provider request;
 - failed LLM compaction executes the heuristic fallback without destructive state loss;
@@ -196,7 +196,7 @@ Exit gates (all covered by shipped tests in `compactionCommit.test.ts` / `chatCo
 
 ### H2 — Policy-Bound LiveSession and crash recovery
 
-**Status: COMPLETE** (controller-level evidence: `liveSession.controller.test.ts` + `liveSession.test.ts`)
+**Status: PARTIAL** (ChatEngine authority persistence and restore now fail closed with validated manifest/contract identities, but complete budget/idempotency reconstruction and the governed V9 pipeline do not yet share this contract.)
 
 Live path:
 
@@ -225,7 +225,7 @@ Exit gates:
 
 ### H3 — Universal task contract and honest outcome taxonomy
 
-**Status: COMPLETE** (evidence: `taskContract.ts` + H3 tests + ChatEngine constructor freeze via `liveSessionBridge` / `getTaskContract()`)
+**Status: PARTIAL** (ChatEngine freezes a contract, but it uses generic acceptance criteria and lacks baseline reproduction/verifier state; V9 is not yet covered.)
 
 - Frozen contract identity on every ChatEngine construction; plan profile restricts `allowed_effects` to `read_only`.
 - Honest outcomes `NO_CHANGE_REQUIRED` / `INVALID_TASK` / `NEEDS_HUMAN_DECISION` with exit-code mapping and live UI status mappers.
@@ -249,7 +249,7 @@ Exit gates:
 
 ### H4 — Capability broker and transactional effects
 
-**Status: COMPLETE** (evidence: `capabilityBroker.ts` wired into `executeActionWithPolicy`; H4 suite + toolExecutor tests)
+**Status: PARTIAL** (the live broker is wired; nonzero results do not commit; shell/external effects now record policy linkage, pre/post revisions, and reconciliation state, but full tool-surface coverage and durable recovery remain open.)
 
 - Unknown/external effects fail conservatively; plan mode denies mutations; dirty-tree and protected-path fail-closed.
 - Effect transaction records with true rollback reporting (success/failed/partial).
@@ -272,7 +272,7 @@ Exit gates:
 
 ### H5 — Verifier Kernel promotion and anti-reward-hacking
 
-**Status: COMPLETE** (evidence: `verifierKernel.ts` + H5 suite; hooked into `evaluateCompletionGateForEngine` for strict mutating work)
+**Status: PARTIAL** (full-suite scope, required revision binding, and failed receipt enforcement are covered; broader promotion/clean-room live exit gates remain unproven.)
 
 - Richer `VerifierReceiptV2`, min profiles by task class, empty-plan / targeted-as-full / stale / wrong-revision / adversarial denials.
 - Legitimate full-suite green still authorizes; baseline structural honesty remains primary authority with H5 as additive strict gate.
@@ -298,7 +298,7 @@ Exit gates:
 
 ### H6 — Replay consumers, operator truth, and live golden episode
 
-**Status: COMPLETE** (evidence: `episodeReplay.ts` + `episodeReplay.liveGolden.test.ts` + H6 suite)
+**Status: PARTIAL** (the controller golden is live and auto-approval is restored after setup/execution and each H7 Chat/Deep cell, but cross-surface proof is still projection-based rather than exercising every consumer.)
 
 - Model-free terminal replay; cross-surface facts via live status/exit mappers.
 - Golden builder requires explicit `live_runtime` provenance (never hard-coded true by default).
@@ -324,7 +324,7 @@ Exit gates:
 
 ### H7 — Model-fixed evaluation and continuous harness hardening
 
-**Status: COMPLETE** (offline + same-model LLM factorial measured; [ADR-013](../adr/ADR-013-h7-model-path-experimental-deferral.md))
+**Status: PARTIAL** (declared sampling controls and custom credentials reach provider requests, task-level paired trials report measured uncertainty, and control drift blocks evidence; production model-path reliability and full Deep-pipeline coverage remain unproven.)
 
 Evidenced:
 
@@ -341,11 +341,11 @@ Evidenced:
 
 Deliverables:
 
-- repeated same-model factorial comparisons for minimal loop, Chat, Deep-profile → **IMPLEMENTED** (`runSameModelLlmFactorial`);
-- fixed task, model snapshot, sampling parameters, repository revision, permissions, verifier, resource profile, and environment digest → **IMPLEMENTED**;
-- dedicated suite registry for no-op, stale-context, dirty-tree, prompt-injection, verifier-tamper, flake, missing-dependency, network-denied, resource-exhaustion, false-completion, crash/resume, compaction, policy disappearance, idempotency → **IMPLEMENTED** as suite ids (runners expand over time);
-- failure ledger linking episodes to fixtures → **IMPLEMENTED**;
-- held-out promotion gates for harness changes → **IMPLEMENTED** (schema + validation).
+- repeated same-model factorial comparisons for minimal loop, Chat, Deep-profile → **PARTIAL** (`runSameModelLlmFactorial` implements repeated cells; a publishable live campaign is still required);
+- fixed task, model snapshot, sampling parameters, repository revision, permissions, verifier, resource profile, and environment digest → **PARTIAL** (runtime preflight/drift checks exist; live campaign receipts remain open);
+- dedicated suite registry for no-op, stale-context, dirty-tree, prompt-injection, verifier-tamper, flake, missing-dependency, network-denied, resource-exhaustion, false-completion, crash/resume, compaction, policy disappearance, idempotency → **PARTIAL** (suite IDs exist; runners continue to expand);
+- failure ledger linking episodes to fixtures → **IMPLEMENTED LOCALLY**;
+- held-out promotion gates for harness changes → **PARTIAL** (schema/validation exist; promotion process evidence remains open).
 
 Core measures (offline + same-model LLM cells):
 
@@ -425,4 +425,3 @@ This roadmap is complete only when H1–H7 exit gates are met or explicitly remo
 | Executable architecture invariants | `babel-cli/src/executor/architectureConformance.test.ts` |
 | Contract fixtures | `examples/golden-harness/` |
 | Drift detection | `tools/check-harness-architecture.ps1` |
-

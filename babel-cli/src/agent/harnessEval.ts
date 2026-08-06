@@ -9,7 +9,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join, normalize } from 'node:path';
 import {
   assembleCompactedConversation,
   measureCriticalFactRetention,
@@ -818,9 +818,26 @@ export async function runSameModelLlmFactorial(input: {
   };
 }
 
+/**
+ * Persist an eval report under `dir`. Rejects missing/placeholder paths so a
+ * forgotten CLI arg cannot create a literal `undefined/` directory (seen when
+ * `String(undefined)` or an unset env was passed as the output root).
+ */
 export function writeEvalReport(dir: string, report: HarnessEvalReport): string {
-  mkdirSync(dir, { recursive: true });
-  const path = join(dir, 'harness-eval-report.json');
+  if (typeof dir !== 'string') {
+    throw new Error(
+      `writeEvalReport: invalid output directory ${JSON.stringify(dir)}; pass an explicit path`,
+    );
+  }
+  const trimmed = dir.trim();
+  const leaf = basename(normalize(trimmed));
+  if (!trimmed || leaf === 'undefined' || leaf === 'null') {
+    throw new Error(
+      `writeEvalReport: invalid output directory ${JSON.stringify(dir)}; pass an explicit path`,
+    );
+  }
+  mkdirSync(trimmed, { recursive: true });
+  const path = join(trimmed, 'harness-eval-report.json');
   writeFileSync(path, JSON.stringify(report, null, 2), 'utf-8');
   return path;
 }
