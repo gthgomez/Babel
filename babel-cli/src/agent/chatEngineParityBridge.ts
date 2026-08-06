@@ -64,6 +64,13 @@ import {
   type FailoverDecision,
 } from './providerCapabilities.js';
 import type { PolicyEvent } from './policyEventLog.js';
+import {
+  dualWriteBudgetSnapshot,
+  persistLiveSessionAuthority,
+  persistLiveSessionSnapshot,
+  projectFromDurableSession,
+  loadLiveSessionAuthority,
+} from './liveSessionBridge.js';
 
 export interface ParityRuntime {
   loop: AgentLoopState;
@@ -81,6 +88,10 @@ export interface ParityRuntime {
   turnId: string | null;
   recoveryTried: boolean;
   lastFailover: FailoverDecision | null;
+  /** H2: policy-bound instruction + frozen task authority (in-memory + disk). */
+  liveAuthority?: import('./liveSessionBridge.js').LiveSessionAuthority;
+  /** H2: last projected LiveSession (rebuilt on resume). */
+  liveSession?: import('./liveSession.js').LiveSessionV1;
 }
 
 export function createParityRuntime(threadId: string): ParityRuntime {
@@ -705,6 +716,31 @@ function flushEpisodeStreamBestEffort(
   }
 }
 
+/** H2: dual-write budget + project LiveSession + persist authority/snapshot. */
+function parityPersistLiveSession(rt: ParityRuntime, runDir: string): void {
+  try {
+    const turnsUsed = rt.sessionEvents.events.filter(
+      (e) => e.kind === 'user_submitted',
+    ).length;
+    dualWriteBudgetSnapshot(rt.sessionEvents, rt.turnId, {
+      turns_used: turnsUsed,
+      turns_remaining: null,
+    });
+    if (rt.liveAuthority) {
+      persistLiveSessionAuthority(runDir, rt.liveAuthority);
+    }
+    const live = projectFromDurableSession({
+      sessionLog: rt.sessionEvents,
+      threadLog: rt.eventLog,
+      ...(rt.liveAuthority ? { authority: rt.liveAuthority } : {}),
+    });
+    rt.liveSession = live;
+    persistLiveSessionSnapshot(runDir, live);
+  } catch {
+    /* never break finalize/checkpoint for projection failures */
+  }
+}
+
 /** Fire-and-forget finalize for sync call sites (streamDone/cancel/buildResult). */
 export function finalizeParityTurnSync(
   rt: ParityRuntime,
@@ -713,6 +749,7 @@ export function finalizeParityTurnSync(
   status: string,
 ): void {
   parityEndTurn(rt, outcome, status);
+  parityPersistLiveSession(rt, runDir);
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure(`finalize:${outcome}`, err);
   });
@@ -724,6 +761,7 @@ export function finalizeParityTurnSync(
  * Use after tool batches that continue the loop.
  */
 export function checkpointParityEventLog(rt: ParityRuntime, runDir: string): void {
+  parityPersistLiveSession(rt, runDir);
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure('checkpoint', err);
   });
@@ -768,6 +806,16 @@ export function parityBuildCapsule(input: {
   patchSummary?: string;
   verifierSummary?: string;
   recentToolResults?: string[];
+  taskAcceptanceId?: string;
+  planStep?: string;
+  changedPaths?: string[];
+  unresolvedFailures?: string[];
+  verifierFreshness?: string;
+  approvalsSummary?: string;
+  budgetsSummary?: string;
+  workspaceRevision?: string;
+  evidenceRefs?: string[];
+  rawObservationRefs?: string[];
 }): string {
   const last = input.progress.receipts[input.progress.receipts.length - 1];
   return formatCompactionCapsule(
@@ -780,6 +828,26 @@ export function parityBuildCapsule(input: {
       ...(input.verifierSummary ? { verifierSummary: input.verifierSummary } : {}),
       ...(input.recentToolResults
         ? { recentToolResults: input.recentToolResults }
+        : {}),
+      ...(input.taskAcceptanceId ? { taskAcceptanceId: input.taskAcceptanceId } : {}),
+      ...(input.planStep ? { planStep: input.planStep } : {}),
+      ...(input.changedPaths ? { changedPaths: input.changedPaths } : {}),
+      ...(input.unresolvedFailures
+        ? { unresolvedFailures: input.unresolvedFailures }
+        : {}),
+      ...(input.verifierFreshness
+        ? { verifierFreshness: input.verifierFreshness }
+        : {}),
+      ...(input.approvalsSummary
+        ? { approvalsSummary: input.approvalsSummary }
+        : {}),
+      ...(input.budgetsSummary ? { budgetsSummary: input.budgetsSummary } : {}),
+      ...(input.workspaceRevision
+        ? { workspaceRevision: input.workspaceRevision }
+        : {}),
+      ...(input.evidenceRefs ? { evidenceRefs: input.evidenceRefs } : {}),
+      ...(input.rawObservationRefs
+        ? { rawObservationRefs: input.rawObservationRefs }
         : {}),
     }),
   );

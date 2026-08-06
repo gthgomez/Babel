@@ -13,6 +13,111 @@ import {
 import type { StructuredVerifierCommand, VerifierAuthoritySource } from '../executor/contracts.js';
 import { extractRequiredVerifierCommandsFromTask } from '../pipeline/planVerifierInjection.js';
 import { analyzeVerifierIdentity, satisfiesVerifierRequirement } from '../services/verifierIdentity.js';
+import {
+  buildVerifierReceiptV2,
+  evaluateVerifierPromotion,
+  type VerifierScope,
+} from './verifierKernel.js';
+
+/** Preserve ledger scope; never force targeted → full_suite (H5 live gate). */
+export function receiptScopeFromLedgerEntry(r: unknown): VerifierScope {
+  if (r && typeof r === 'object' && 'scope' in r) {
+    const s = String((r as { scope?: unknown }).scope ?? '');
+    if (
+      s === 'full_suite' ||
+      s === 'targeted' ||
+      s === 'smoke' ||
+      s === 'property' ||
+      s === 'security'
+    ) {
+      return s;
+    }
+  }
+  // Missing scope: treat as full_suite only when command looks suite-level;
+  // explicit "targeted" markers on the receipt or command keep honesty.
+  if (r && typeof r === 'object') {
+    const cmd = 'command' in r ? String((r as { command?: string }).command ?? '') : '';
+    if (/\btargeted\b|\bsingle.?test\b|\b-t\b|\b--testNamePattern\b/i.test(cmd)) {
+      return 'targeted';
+    }
+  }
+  return 'full_suite';
+}
+
+/**
+ * Derive adversarial promotion signals from ledger + tool log (not only flag injection).
+ * Specialized detectors may also pass opts.adversarial; these are mechanical heuristics.
+ */
+export function deriveAdversarialSignals(opts: {
+  toolCallLog: readonly { tool: string; target?: string; exit_code?: number }[];
+  receipts: readonly {
+    exit_code?: number;
+    tests_skipped?: number;
+    tests_total?: number;
+    tests_failed?: number;
+    summary?: string;
+  }[];
+  hasWrite: boolean;
+}): {
+  tests_deleted?: boolean;
+  shortcut_noop?: boolean;
+  hardcoded_fixture?: boolean;
+  flaky_green?: boolean;
+  baseline_failing?: boolean;
+  verifier_def_tampered?: boolean;
+} {
+  const signals: {
+    tests_deleted?: boolean;
+    shortcut_noop?: boolean;
+    hardcoded_fixture?: boolean;
+    flaky_green?: boolean;
+    baseline_failing?: boolean;
+    verifier_def_tampered?: boolean;
+  } = {};
+
+  for (const r of opts.receipts) {
+    if (
+      typeof r.tests_skipped === 'number' &&
+      typeof r.tests_total === 'number' &&
+      r.tests_total > 0 &&
+      r.tests_skipped >= r.tests_total &&
+      (r.tests_failed ?? 0) === 0 &&
+      (r.exit_code ?? 1) === 0
+    ) {
+      signals.tests_deleted = true;
+    }
+    const summary = String(r.summary ?? '');
+    if (/HARDCODED_FIXTURE|fixture.?green|always.?pass/i.test(summary)) {
+      signals.hardcoded_fixture = true;
+    }
+    if (/VERIFIER_DEF_TAMPERED|tampered.?verifier/i.test(summary)) {
+      signals.verifier_def_tampered = true;
+    }
+  }
+
+  // Shortcut/no-op: writes claimed but every write target is empty / noop marker
+  if (opts.hasWrite) {
+    const writes = opts.toolCallLog.filter(
+      (e) => e.tool === 'write_file' || e.tool === 'str_replace' || e.tool === 'apply_patch',
+    );
+    if (
+      writes.length > 0 &&
+      writes.every(
+        (w) =>
+          !w.target ||
+          /noop|shortcut|empty/i.test(String(w.target)) ||
+          w.exit_code === 0 && String(w.target).endsWith('.noop'),
+      )
+    ) {
+      // Only flag when all writes look like deliberate shortcuts
+      if (writes.some((w) => /noop|shortcut|\.noop$/i.test(String(w.target ?? '')))) {
+        signals.shortcut_noop = true;
+      }
+    }
+  }
+
+  return signals;
+}
 
 /** Known project/dataset test runners (prefixes; case-insensitive match on trimmed cmd). */
 const AUTHORITATIVE_VERIFIER_PREFIXES = [
@@ -919,6 +1024,23 @@ export function evaluateCompletionGateForEngine(opts: {
   executedVerifierLedger?: readonly VerifierReceipt[] | readonly import('../executor/contracts.js').ExecutorVerifierReceipt[] | null;
   /** Adaptation errors from chat receipt → canonical receipt conversion. */
   verifierEvidenceErrors?: readonly string[] | null;
+  /**
+   * H5: live workspace revision hash at completion time.
+   * Must NOT be taken from the receipt itself (that makes wrong_revision tautological).
+   */
+  currentWorkspaceRevisionHash?: string | null;
+  /**
+   * Optional explicit adversarial signals (specialized detectors / tests).
+   * Live path also derives mechanical signals via deriveAdversarialSignals.
+   */
+  adversarial?: {
+    tests_deleted?: boolean;
+    shortcut_noop?: boolean;
+    hardcoded_fixture?: boolean;
+    flaky_green?: boolean;
+    baseline_failing?: boolean;
+    verifier_def_tampered?: boolean;
+  };
 }): 'allow' | 'reject' {
   if (opts.taskIntent !== 'execute') return 'allow';
   if (opts.turnType !== 'completion') return 'allow';
@@ -959,6 +1081,123 @@ export function evaluateCompletionGateForEngine(opts: {
           ? isAuthoritativeReceipt(opts.lastVerifierReceipt)
           : log.some((e) => isVerifierAttemptTool(e.tool));
     if (!hasCanonicalAttempt) return 'reject';
+  }
+  // H5: when mutating work requires verifiers, empty required plans cannot green.
+  if (hasWrite && requiredVerifierCommands.length === 0 && policy === 'strict') {
+    return 'reject';
+  }
+  if (hasWrite && requiredVerifierCommands.length > 0 && policy === 'strict') {
+    const receipts = (opts.executedVerifierLedger ?? []).map((r, i) => {
+      const cmd = 'command' in r ? String((r as { command?: string }).command ?? '') : '';
+      const exit =
+        'exitCode' in r
+          ? Number((r as { exitCode?: number }).exitCode ?? 1)
+          : 'exit_code' in r
+            ? Number((r as { exit_code?: number }).exit_code ?? 1)
+            : 1;
+      const rev =
+        'boundRevision' in r && (r as { boundRevision?: { compositeTreeHash?: string } }).boundRevision
+          ? (r as { boundRevision: { compositeTreeHash?: string } }).boundRevision
+          : { compositeTreeHash: '' };
+      const stale = 'stale' in r ? Boolean((r as { stale?: boolean }).stale) : false;
+      const scope = receiptScopeFromLedgerEntry(r);
+      const summary = 'summary' in r ? String((r as { summary?: string }).summary ?? '') : '';
+      const optCounts: {
+        tests_total?: number;
+        tests_skipped?: number;
+        tests_failed?: number;
+      } = {};
+      if ('tests_total' in r && typeof (r as { tests_total?: unknown }).tests_total === 'number') {
+        optCounts.tests_total = (r as { tests_total: number }).tests_total;
+      }
+      if (
+        'tests_skipped' in r &&
+        typeof (r as { tests_skipped?: unknown }).tests_skipped === 'number'
+      ) {
+        optCounts.tests_skipped = (r as { tests_skipped: number }).tests_skipped;
+      }
+      if (
+        'tests_failed' in r &&
+        typeof (r as { tests_failed?: unknown }).tests_failed === 'number'
+      ) {
+        optCounts.tests_failed = (r as { tests_failed: number }).tests_failed;
+      }
+      return buildVerifierReceiptV2({
+        receipt_id: `gate-${i}`,
+        verifier_id: cmd || `v-${i}`,
+        argv: cmd.split(/\s+/).filter(Boolean),
+        cwd: '.',
+        env_profile_hash: 'gate',
+        started_at: new Date().toISOString(),
+        ended_at: new Date().toISOString(),
+        exit_code: exit,
+        stdout: summary,
+        stderr: '',
+        workspace_revision: { compositeTreeHash: rev.compositeTreeHash ?? '' },
+        scope,
+        command: cmd,
+        authoritative: isAuthoritativeReceipt(r as VerifierReceipt),
+        freshness: stale ? 'stale' : 'fresh',
+        ...optCounts,
+      });
+    });
+    // Live workspace revision must come from the workspace, not the receipt self-hash.
+    // When omitted, only non-revision denials apply (empty plan, non-authoritative, etc.).
+    const liveRevision =
+      opts.currentWorkspaceRevisionHash ??
+      // Prefer boundRevision from the *last* verifier capture only as a last-resort
+      // placeholder when caller forgot live hash — still require freshness/authoritative.
+      '';
+    const adversarialReceipts = (opts.executedVerifierLedger ?? []).map((r) => {
+      const entry: {
+        exit_code: number;
+        summary: string;
+        tests_skipped?: number;
+        tests_total?: number;
+        tests_failed?: number;
+      } = {
+        exit_code:
+          'exitCode' in r
+            ? Number((r as { exitCode?: number }).exitCode ?? 1)
+            : 'exit_code' in r
+              ? Number((r as { exit_code?: number }).exit_code ?? 1)
+              : 1,
+        summary: 'summary' in r ? String((r as { summary?: string }).summary ?? '') : '',
+      };
+      if (
+        'tests_skipped' in r &&
+        typeof (r as { tests_skipped?: unknown }).tests_skipped === 'number'
+      ) {
+        entry.tests_skipped = (r as { tests_skipped: number }).tests_skipped;
+      }
+      if ('tests_total' in r && typeof (r as { tests_total?: unknown }).tests_total === 'number') {
+        entry.tests_total = (r as { tests_total: number }).tests_total;
+      }
+      if (
+        'tests_failed' in r &&
+        typeof (r as { tests_failed?: unknown }).tests_failed === 'number'
+      ) {
+        entry.tests_failed = (r as { tests_failed: number }).tests_failed;
+      }
+      return entry;
+    });
+    const adversarial = {
+      ...deriveAdversarialSignals({
+        toolCallLog: log,
+        receipts: adversarialReceipts,
+        hasWrite,
+      }),
+      ...(opts.adversarial ?? {}),
+    };
+    const promo = evaluateVerifierPromotion({
+      mutating: true,
+      task_class: opts.taskClass,
+      required_verifier_commands: requiredVerifierCommands,
+      receipts,
+      current_revision_hash: liveRevision,
+      adversarial,
+    });
+    if (!promo.authorize_verified_complete) return 'reject';
   }
   return 'allow';
 }

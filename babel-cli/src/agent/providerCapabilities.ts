@@ -143,31 +143,71 @@ export function shouldCompactByTokens(
   return estimatedRequestTokens >= budget.contextBudget;
 }
 
+/**
+ * Deterministic operational state capsule (H1 expanded).
+ * Survives compaction into the next provider request and cold-resume rebuild.
+ */
 export interface CompactionCapsule {
   task: string;
+  /** Immutable task / acceptance identity when available. */
+  taskAcceptanceId: string;
+  /** Current plan step id or label. */
+  planStep: string;
   progressSummary: string;
   patchSummary: string;
+  /** Paths known changed in this session (filesystem/Git evidence). */
+  changedPaths: string[];
+  /** Unresolved failure capsules (short digests). */
+  unresolvedFailures: string[];
   verifierSummary: string;
+  /** Verifier freshness: bound revision or "stale"/empty. */
+  verifierFreshness: string;
   approvalsSummary: string;
+  /** Remaining budget summary (turns/tokens). */
+  budgetsSummary: string;
+  /** Workspace revision (git HEAD or harness revision id). */
+  workspaceRevision: string;
+  /** Evidence references (event ids, receipt digests). */
+  evidenceRefs: string[];
   recentToolResults: string[];
+  /** Immutable refs to raw observation logs reduced out of the active window. */
+  rawObservationRefs: string[];
   createdAt: string;
 }
 
 export function buildCompactionCapsule(input: {
   task: string;
+  taskAcceptanceId?: string;
+  planStep?: string;
   progressSummary?: string;
   patchSummary?: string;
+  changedPaths?: string[];
+  unresolvedFailures?: string[];
   verifierSummary?: string;
+  verifierFreshness?: string;
   approvalsSummary?: string;
+  budgetsSummary?: string;
+  workspaceRevision?: string;
+  evidenceRefs?: string[];
   recentToolResults?: string[];
+  rawObservationRefs?: string[];
 }): CompactionCapsule {
   return {
     task: input.task,
+    taskAcceptanceId: input.taskAcceptanceId ?? '',
+    planStep: input.planStep ?? '',
     progressSummary: input.progressSummary ?? '',
     patchSummary: input.patchSummary ?? '',
+    changedPaths: (input.changedPaths ?? []).slice(0, 64),
+    unresolvedFailures: (input.unresolvedFailures ?? []).slice(0, 16),
     verifierSummary: input.verifierSummary ?? '',
+    verifierFreshness: input.verifierFreshness ?? '',
     approvalsSummary: input.approvalsSummary ?? '',
+    budgetsSummary: input.budgetsSummary ?? '',
+    workspaceRevision: input.workspaceRevision ?? '',
+    evidenceRefs: (input.evidenceRefs ?? []).slice(0, 32),
     recentToolResults: (input.recentToolResults ?? []).slice(-8),
+    rawObservationRefs: (input.rawObservationRefs ?? []).slice(0, 32),
     createdAt: new Date().toISOString(),
   };
 }
@@ -176,15 +216,98 @@ export function formatCompactionCapsule(capsule: CompactionCapsule): string {
   const parts = [
     '# Compaction capsule (state preserved)',
     `Task: ${capsule.task}`,
+    capsule.taskAcceptanceId ? `TaskAcceptanceId: ${capsule.taskAcceptanceId}` : null,
+    capsule.planStep ? `PlanStep: ${capsule.planStep}` : null,
     capsule.progressSummary ? `Progress: ${capsule.progressSummary}` : null,
     capsule.patchSummary ? `Patch: ${capsule.patchSummary}` : null,
+    capsule.changedPaths.length > 0
+      ? `ChangedPaths:\n${capsule.changedPaths.map((p) => `- ${p}`).join('\n')}`
+      : null,
+    capsule.unresolvedFailures.length > 0
+      ? `UnresolvedFailures:\n${capsule.unresolvedFailures.map((f) => `- ${f}`).join('\n')}`
+      : null,
     capsule.verifierSummary ? `Verifier: ${capsule.verifierSummary}` : null,
+    capsule.verifierFreshness ? `VerifierFreshness: ${capsule.verifierFreshness}` : null,
     capsule.approvalsSummary ? `Approvals: ${capsule.approvalsSummary}` : null,
+    capsule.budgetsSummary ? `Budgets: ${capsule.budgetsSummary}` : null,
+    capsule.workspaceRevision ? `WorkspaceRevision: ${capsule.workspaceRevision}` : null,
+    capsule.evidenceRefs.length > 0
+      ? `EvidenceRefs: ${capsule.evidenceRefs.join(', ')}`
+      : null,
     capsule.recentToolResults.length > 0
       ? `Recent tools:\n${capsule.recentToolResults.map((r) => `- ${r}`).join('\n')}`
       : null,
+    capsule.rawObservationRefs.length > 0
+      ? `RawObservationRefs: ${capsule.rawObservationRefs.join(', ')}`
+      : null,
   ].filter(Boolean);
   return parts.join('\n');
+}
+
+/**
+ * One complete operational context-budget contract (H1).
+ * Covers next-request size, reserves, active window, canonical state,
+ * retrieved context, output reserve, and headroom.
+ */
+export interface ContextBudgetSnapshot {
+  /** Estimated tokens for the next provider request payload. */
+  nextRequestTokens: number;
+  /** System + tool-schema reserve. */
+  systemToolReserve: number;
+  /** Tokens in the active working-set window. */
+  activeWindowTokens: number;
+  /** Tokens in the deterministic capsule / canonical state. */
+  canonicalStateTokens: number;
+  /** Tokens attributed to retrieved/external context (0 when none). */
+  retrievedContextTokens: number;
+  /** Output / response reserve. */
+  outputReserve: number;
+  /** Remaining headroom before the model context window is exceeded. */
+  headroom: number;
+  /** Model context window. */
+  contextWindow: number;
+  /** Effective conversation budget (window − output − tool reserve − margin). */
+  contextBudget: number;
+}
+
+export function buildContextBudgetSnapshot(input: {
+  nextRequestTokens: number;
+  activeWindowTokens?: number;
+  canonicalStateTokens?: number;
+  retrievedContextTokens?: number;
+  contextWindow: number;
+  maxOutputTokens?: number;
+  toolSchemaReserve?: number;
+  safetyMargin?: number;
+}): ContextBudgetSnapshot {
+  const maxOutputTokens = input.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+  const toolSchemaReserve = input.toolSchemaReserve ?? DEFAULT_TOOL_SCHEMA_RESERVE;
+  const safetyMargin = input.safetyMargin ?? DEFAULT_SAFETY_MARGIN;
+  const budget = computeContextBudget({
+    contextWindow: input.contextWindow,
+    maxOutputTokens,
+    toolSchemaReserve,
+    safetyMargin,
+  });
+  const activeWindowTokens = input.activeWindowTokens ?? input.nextRequestTokens;
+  const canonicalStateTokens = input.canonicalStateTokens ?? 0;
+  const retrievedContextTokens = input.retrievedContextTokens ?? 0;
+  const systemToolReserve = toolSchemaReserve + safetyMargin;
+  const headroom = Math.max(
+    0,
+    budget.contextBudget - input.nextRequestTokens - canonicalStateTokens - retrievedContextTokens,
+  );
+  return {
+    nextRequestTokens: input.nextRequestTokens,
+    systemToolReserve,
+    activeWindowTokens,
+    canonicalStateTokens,
+    retrievedContextTokens,
+    outputReserve: maxOutputTokens,
+    headroom,
+    contextWindow: budget.contextWindow,
+    contextBudget: budget.contextBudget,
+  };
 }
 
 // ─── Runtime Pro → Flash failover ───────────────────────────────────────────

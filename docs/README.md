@@ -6,6 +6,7 @@ This directory contains the active public documentation for Babel.
 - [CLI quick start](./CLI_QUICKSTART.md) covers the first local validation path.
 - [Chat mode](./CHAT_MODE.md) documents the default daily coding-agent loop.
 - [**Harness architecture v1**](./architecture/HARNESS_ARCHITECTURE_V1.md) is the **normative** runtime harness specification (`harness-v1`).
+- [Harness hardening roadmap v1](./architecture/HARNESS_HARDENING_ROADMAP_V1.md) is the single implementation sequence and acceptance-gate backlog under that specification.
 - [Harness overview](./architecture/HARNESS_OVERVIEW.md) is an explanatory map (not normative).
 - [Architecture](./architecture/ARCHITECTURE.md) describes Prompt OS layers, catalog, kernel, and the V9 pipeline.
 - [Architecture index](./architecture/README.md) lists all architecture guides.

@@ -21,6 +21,13 @@ import { isAbsolute, resolve } from 'node:path';
 import { WorkspaceTransactionManager, type MutationBatchReceipt } from '../services/workspaceTransactions.js';
 import { classifyToolEffect } from '../executor/contracts.js';
 import { recordEffectIntent, recordEffectTerminal } from '../executor/effectLedger.js';
+import {
+  beginEffectTransaction,
+  checkToolCapability,
+  commitEffectTransaction,
+  rollbackEffectTransaction,
+  type EffectTransactionRecord,
+} from './capabilityBroker.js';
 
 import {
   executeTool,
@@ -124,6 +131,30 @@ export interface PolicyGatedExecutionResult extends ToolExecutionResult {
   preBatchHash?: Record<string, string> | undefined;
   postBatchHash?: Record<string, string> | undefined;
   mutationReceipt?: MutationBatchReceipt | undefined;
+  /** H4: revision-linked effect transaction record when a reconcilable mutation ran. */
+  effectTransaction?: EffectTransactionRecord | undefined;
+}
+
+/** Extract primary target path from an AgentAction for capability checks. */
+export function targetPathFromAction(action: AgentAction): string | undefined {
+  if (action.type === 'write_file' || action.type === 'read_file' || action.type === 'list_dir') {
+    return action.path;
+  }
+  if (action.type === 'grep' && action.path) return action.path;
+  if (action.type === 'git_context' && action.path) return action.path;
+  return undefined;
+}
+
+/** Stable idempotency key for a mutating action when caller does not supply one. */
+export function defaultIdempotencyKeyForAction(action: AgentAction): string | undefined {
+  if (action.type === 'write_file') return `write_file:${action.path}`;
+  if (action.type === 'apply_patch') {
+    const h = action.patch.length;
+    return `apply_patch:len=${h}`;
+  }
+  if (action.type === 'run_command') return `run_command:${action.command.slice(0, 120)}`;
+  if (action.type === 'test_run') return `test_run:${action.command.slice(0, 120)}`;
+  return undefined;
 }
 
 export interface ToolExecutor {
@@ -577,11 +608,102 @@ export async function executeActionWithPolicy(
     budget?: ToolExecutionBudget;
     /** When policy returns `ask`, invoke this before blocking. Return true to execute. */
     onAskApproval?: (action: AgentAction) => Promise<boolean>;
+    /** H4: optional completed idempotency keys for double-mutation deny. */
+    completedIdempotencyKeys?: readonly string[];
+    /** H4: optional protected paths. */
+    protectedPaths?: readonly string[];
+    /** Execution mode for capability broker (default chat). */
+    mode?: 'chat' | 'plan' | 'deep';
+    /** H4: dirty working tree — refuse reconcilable mutations when true. */
+    dirtyTree?: boolean;
+    /** H4: isolation required for this profile. */
+    isolationRequired?: boolean;
+    /** H4: isolation (e.g. Docker) currently available. */
+    isolationAvailable?: boolean;
+    /** H4: explicit host fallback allowed (must be true to escalate). */
+    hostFallbackAllowed?: boolean;
+    /** H4: explicit idempotency key for this invocation (defaults from action). */
+    idempotencyKey?: string;
+    /** H4: task / plan-step linkage for effect transaction records. */
+    taskId?: string;
+    planStepId?: string;
   } = {},
 ): Promise<PolicyGatedExecutionResult> {
   const executor = deps.executor ?? defaultToolExecutor;
   const decide = deps.decide ?? decideAction;
   const budget = deps.budget ?? DEFAULT_TOOL_BUDGET;
+
+  // ── H4 capability broker: classify + authorize before policy decide ──
+  // Skip non-tool terminal/control actions (finish, ask_approval).
+  const toolName = action.type;
+  const isControlAction = toolName === 'finish' || toolName === 'ask_approval';
+  let effectClass = classifyToolEffect(
+    toolName === 'search' ? 'semantic_search' : toolName,
+  );
+  const idempotencyKey =
+    deps.idempotencyKey ?? defaultIdempotencyKeyForAction(action);
+  const targetPath = targetPathFromAction(action);
+  if (!isControlAction) {
+    const classifyName = toolName === 'search' ? 'semantic_search' : toolName;
+    effectClass = classifyToolEffect(classifyName);
+    const mode = deps.mode ?? 'chat';
+    const cap = checkToolCapability({
+      toolName: classifyName,
+      effectClass,
+      allowedEffects:
+        mode === 'plan'
+          ? ['read_only']
+          : [
+              'read_only',
+              'idempotent',
+              'reconcilable_mutation',
+              'non_idempotent_local_effect',
+              // Unknown tools classify as external_side_effect and are denied.
+            ],
+      mode,
+      ...(targetPath !== undefined ? { targetPath } : {}),
+      ...(deps.protectedPaths ? { protectedPaths: deps.protectedPaths } : {}),
+      ...(deps.completedIdempotencyKeys
+        ? { completedIdempotencyKeys: deps.completedIdempotencyKeys }
+        : {}),
+      ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+      ...(deps.dirtyTree !== undefined ? { dirtyTree: deps.dirtyTree } : {}),
+      ...(deps.isolationRequired !== undefined
+        ? { isolationRequired: deps.isolationRequired }
+        : {}),
+      ...(deps.isolationAvailable !== undefined
+        ? { isolationAvailable: deps.isolationAvailable }
+        : {}),
+      ...(deps.hostFallbackAllowed !== undefined
+        ? { hostFallbackAllowed: deps.hostFallbackAllowed }
+        : {}),
+    });
+    if (!cap.allowed) {
+      // Capability denials count toward the circuit breaker (same as policy deny).
+      incrementBlocks(context.runId);
+      emitAgentEvent({
+        type: 'policy_decision',
+        action: toolName,
+        decision: 'deny',
+        preset,
+        runId: context.runId,
+        agentId: context.agentId,
+      });
+      return {
+        action,
+        terminal: false,
+        results: [
+          {
+            exit_code: 1,
+            stdout: '',
+            stderr: `[CAPABILITY_DENIED:${cap.denial ?? 'unknown'}] ${cap.message ?? 'not allowed'}`,
+          },
+        ],
+        policyDecision: 'deny',
+        policyBlocked: true,
+      };
+    }
+  }
 
   // ── Circuit-breaker: entry check ───────────────────────────────────
   const limit = getCircuitBreakerLimit();
@@ -704,8 +826,28 @@ export async function executeActionWithPolicy(
 
   let batchTx: Awaited<ReturnType<typeof WorkspaceTransactionManager.beginBatch>> | null = null;
   let effectIntent: ReturnType<typeof recordEffectIntent> | null = null;
+  let effectTx: EffectTransactionRecord | null = null;
   if (txPaths.length > 0) {
     batchTx = await WorkspaceTransactionManager.beginBatch(txPaths, { sessionId: context.runId });
+    // H4: begin revision-linked effect transaction (linked to task/plan step/idempotency).
+    effectTx = beginEffectTransaction({
+      tool_name: action.type,
+      effect_class: effectClass,
+      paths: txPaths,
+      pre_revision: { compositeTreeHash: batchTx.preRevisionHash },
+      ...(deps.taskId ? { task_id: deps.taskId } : {}),
+      ...(deps.planStepId ? { plan_step_id: deps.planStepId } : {}),
+      ...(idempotencyKey !== undefined ? { idempotency_key: idempotencyKey } : {}),
+      ...(deps.isolationRequired && deps.isolationAvailable === false && deps.hostFallbackAllowed
+        ? {
+            boundary_escalation: {
+              kind: 'host_execution' as const,
+              reason: 'isolation_unavailable_explicit_host_fallback',
+              explicit: true,
+            },
+          }
+        : {}),
+    });
     if (context.runDir) {
       effectIntent = recordEffectIntent({
         runDir: context.runDir,
@@ -723,6 +865,20 @@ export async function executeActionWithPolicy(
             : {}),
       });
     }
+  } else if (
+    effectClass === 'non_idempotent_local_effect' ||
+    effectClass === 'external_side_effect'
+  ) {
+    // Shell / external: still open a reconciliation record (no file pre-images).
+    effectTx = beginEffectTransaction({
+      tool_name: action.type,
+      effect_class: effectClass,
+      paths: [],
+      shell_side: true,
+      ...(deps.taskId ? { task_id: deps.taskId } : {}),
+      ...(deps.planStepId ? { plan_step_id: deps.planStepId } : {}),
+      ...(idempotencyKey !== undefined ? { idempotency_key: idempotencyKey } : {}),
+    });
   }
 
   try {
@@ -736,12 +892,20 @@ export async function executeActionWithPolicy(
           postImageHashes: batchTx.postBatchHash,
         });
       }
+      if (effectTx) {
+        effectTx = commitEffectTransaction(effectTx, {
+          compositeTreeHash: batchTx.postRevisionHash ?? batchTx.preRevisionHash,
+        });
+      }
+    } else if (effectTx) {
+      effectTx = commitEffectTransaction(effectTx);
     }
 
     return {
       ...execution,
       policyDecision,
       policyBlocked: false,
+      ...(effectTx ? { effectTransaction: effectTx } : {}),
       ...(batchTx ? {
         mutationPaths: txPaths,
         preBatchHash: batchTx.preBatchHash,
@@ -765,6 +929,19 @@ export async function executeActionWithPolicy(
         status: context.signal?.aborted ? 'cancelled' : 'failed',
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+    if (effectTx) {
+      // True rollback result — never assume success.
+      let rollbackResult: 'success' | 'failed' | 'partial' = 'failed';
+      if (batchTx) {
+        try {
+          const undo = await WorkspaceTransactionManager.undoLastMutationBatch(batchTx);
+          rollbackResult = undo.verification ? 'success' : 'partial';
+        } catch {
+          rollbackResult = 'failed';
+        }
+      }
+      effectTx = rollbackEffectTransaction(effectTx, rollbackResult);
     }
     throw error;
   }

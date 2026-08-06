@@ -153,6 +153,12 @@ export function mapSessionKindToEpisode(
       return { kind: 'session', type: 'compaction_created' };
     case 'turn_ended':
       return { kind: 'turn', type: 'turn_ended' };
+    case 'budget_snapshot':
+      return { kind: 'session', type: 'budget_snapshot' };
+    case 'approval_decision':
+      return { kind: 'session', type: 'approval_decision' };
+    case 'repair_attempt':
+      return { kind: 'recovery', type: 'repair_attempt' };
     default: {
       const _exhaustive: never = kind;
       return { kind: 'session', type: String(_exhaustive) };

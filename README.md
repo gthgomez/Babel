@@ -178,6 +178,8 @@ subagent teams, sandbox parity, or market parity are intentionally excluded.
 - [Chat mode](./docs/CHAT_MODE.md) — the default daily runtime contract
 - [Vision](./docs/VISION.md) — product principles and public scope
 - [Architecture](./docs/architecture/ARCHITECTURE.md) — system shape and layers
+- [Harness architecture](./docs/architecture/HARNESS_ARCHITECTURE_V1.md) — normative runtime contract
+- [Harness hardening roadmap](./docs/architecture/HARNESS_HARDENING_ROADMAP_V1.md) — canonical H0–H7 implementation sequence
 - [Babel Bible](./BABEL_BIBLE.md) — integration and model-facing invocation contract
 - [Contributing](./CONTRIBUTING.md)
 

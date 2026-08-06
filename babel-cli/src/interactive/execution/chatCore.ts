@@ -576,8 +576,11 @@ export function buildChatRunPayload(
       switch (o) {
         case 'VERIFIED_COMPLETE': return 'ANSWER_READY' as const;
         case 'UNVERIFIED_PATCH': return 'ANSWER_READY' as const;
+        case 'NO_CHANGE_REQUIRED': return 'ANSWER_READY' as const;
         case 'BLOCKED_EXTERNAL': return 'BLOCKED' as const;
         case 'BLOCKED_POLICY': return 'BLOCKED' as const;
+        case 'INVALID_TASK': return 'BLOCKED' as const;
+        case 'NEEDS_HUMAN_DECISION': return 'BLOCKED' as const;
         case 'BUDGET_EXHAUSTED': return 'BUDGET_EXCEEDED' as const;
         case 'CANCELLED': return 'NEEDS_MORE_CONTEXT' as const;
         case 'INFRA_FAILURE': return 'NEEDS_MORE_CONTEXT' as const;
