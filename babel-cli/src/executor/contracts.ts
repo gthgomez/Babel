@@ -51,20 +51,32 @@ export interface WorkspaceRevisionIdentity {
   capturedAt: number
 }
 
+/** Runtime-authoritative sources that may grant verifier authority. */
+export const VERIFIER_AUTHORITY_SOURCES = [
+  'project_discovery',
+  'dataset_contract',
+  'explicit_user_command',
+  'built_in_runner',
+] as const
+
 /** Source that granted verifier authority. */
-export type VerifierAuthoritySource =
-  | 'project_discovery'
-  | 'dataset_contract'
-  | 'explicit_user_command'
-  | 'built_in_runner'
-  | 'unknown'
+export type VerifierAuthoritySource = (typeof VERIFIER_AUTHORITY_SOURCES)[number]
+
+/** Unresolved provenance used before authority has been established. */
+export type UnresolvedVerifierAuthoritySource = VerifierAuthoritySource | 'unknown'
+
+/** Runtime guard for canonical verifier authority provenance. */
+export function isVerifierAuthoritySource(value: unknown): value is VerifierAuthoritySource {
+  return typeof value === 'string' &&
+    (VERIFIER_AUTHORITY_SOURCES as readonly string[]).includes(value)
+}
 
 /** Structured verifier command after authority resolution. */
 export interface StructuredVerifierCommand {
   verifierId: string
   executable: string
   args: string[]
-  authoritySource: VerifierAuthoritySource
+  authoritySource: UnresolvedVerifierAuthoritySource
   displayCommand: string
 }
 
@@ -80,6 +92,29 @@ export interface ExecutorVerifierReceipt {
   capturedAt: number
   stale: boolean
   staleReason?: string
+}
+
+/** Input used by the shared completion authority. */
+export interface ExecutorCompletionInput {
+  mode: BabelMode
+  requestedOutcome: TerminalOutcome | 'PLAN_COMPLETE'
+  hasWrite: boolean
+  verificationPolicy: 'none' | 'required' | 'strict'
+  lastVerifierReceipt?: ExecutorVerifierReceipt | null
+  requiredVerifierCommands?: readonly string[] | null
+  executedVerifierLedger?: readonly ExecutorVerifierReceipt[] | null
+  verifierEvidenceErrors?: readonly string[] | null
+  toolCallLog: {
+    tool: string
+    target: string
+    error?: string
+    exit_code?: number
+    stale?: boolean
+    mutation_paths?: string[]
+  }[]
+  proof?: { compliant: boolean; errors?: string[] }
+  workspaceRevision?: WorkspaceRevisionIdentity
+  evidenceRefs?: string[]
 }
 
 /** Durable decision made by the shared completion authority. */

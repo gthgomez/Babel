@@ -67,6 +67,7 @@ describe("Proof-Carrying Completion", () => {
         exit_code: 0,
         summary: "ok",
         stale: false,
+        authority: true,
       },
     };
     noteChatWorkspaceMutation(engine);

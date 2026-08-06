@@ -97,7 +97,7 @@ describe('completionGatePolicy', () => {
       evaluateExecuteCompletionHonesty({
         hasWrite: true,
         policy: 'strict',
-        lastVerifierReceipt: { command: 'pytest', exit_code: 4, summary: '' },
+        lastVerifierReceipt: { command: 'pytest', exit_code: 4, summary: '', authority: true },
         toolCallLog: [],
       }).reason,
       'verifier_red',
@@ -108,7 +108,7 @@ describe('completionGatePolicy', () => {
     const r = evaluateExecuteCompletionHonesty({
       hasWrite: true,
       policy: 'strict',
-      lastVerifierReceipt: { command: 'pytest', exit_code: 0, summary: '15 passed' },
+      lastVerifierReceipt: { command: 'pytest', exit_code: 0, summary: '15 passed', authority: true },
       toolCallLog: [],
     });
     assert.equal(r.allow, true);
@@ -139,7 +139,7 @@ describe('completionGatePolicy', () => {
     const r = evaluateExecuteCompletionHonesty({
       hasWrite: true,
       policy: 'required',
-      lastVerifierReceipt: { command: 'pytest', exit_code: 1, summary: '2 failed' },
+      lastVerifierReceipt: { command: 'pytest', exit_code: 1, summary: '2 failed', authority: true },
       toolCallLog: [],
     });
     assert.equal(r.allow, true);
@@ -149,7 +149,7 @@ describe('completionGatePolicy', () => {
     const r = evaluateExecuteCompletionHonesty({
       hasWrite: true,
       policy: 'required',
-      lastVerifierReceipt: { command: 'pytest', exit_code: 0, summary: 'all pass' },
+      lastVerifierReceipt: { command: 'pytest', exit_code: 0, summary: 'all pass', authority: true },
       toolCallLog: [],
     });
     assert.equal(r.allow, true);
@@ -336,7 +336,7 @@ describe('gate command validation in evaluateExecuteCompletionHonesty', () => {
     assert.equal(r.reason, 'verifier_missing');
   });
 
-  test('bogus receipt with real greenInLog still allows', () => {
+  test('bogus receipt in canonical mode yields verifier_missing (no toolCallLog fallback)', () => {
     const r = evaluateExecuteCompletionHonesty({
       hasWrite: true,
       policy: 'strict',
@@ -345,7 +345,8 @@ describe('gate command validation in evaluateExecuteCompletionHonesty', () => {
         { tool: 'run_command', target: 'pytest', detail: '15 passed', exit_code: 0 },
       ],
     });
-    assert.equal(r.allow, true);
+    assert.equal(r.allow, false);
+    assert.equal(r.reason, 'verifier_missing');
   });
 
   test('bogus receipt with bogus greenInLog rejects', () => {
@@ -365,7 +366,7 @@ describe('gate command validation in evaluateExecuteCompletionHonesty', () => {
     const r = evaluateExecuteCompletionHonesty({
       hasWrite: true,
       policy: 'strict',
-      lastVerifierReceipt: { command: 'pytest tests/', exit_code: 0, summary: '15 passed' },
+      lastVerifierReceipt: { command: 'pytest tests/', exit_code: 0, summary: '15 passed', authority: true },
       toolCallLog: [
         { tool: 'test_run', target: 'npm test', detail: 'all pass', exit_code: 0 },
       ],
@@ -417,7 +418,7 @@ describe('gate command validation in evaluateExecuteCompletionHonesty', () => {
     assert.equal(r.reason, 'verifier_missing');
   });
 
-  test('B2: agent-owned green + authoritative green still allows', () => {
+  test('B2: agent-owned green in canonical receipt mode rejects without toolCallLog fallback', () => {
     const r = evaluateExecuteCompletionHonesty({
       hasWrite: true,
       policy: 'strict',
@@ -430,7 +431,8 @@ describe('gate command validation in evaluateExecuteCompletionHonesty', () => {
         { tool: 'run_command', target: 'pytest tests/', detail: '15 passed', exit_code: 0 },
       ],
     });
-    assert.equal(r.allow, true);
+    assert.equal(r.allow, false);
+    assert.equal(r.reason, 'verifier_missing');
   });
 });
 
@@ -549,6 +551,7 @@ describe('isAgentOwnedAdHocVerifier / isAuthoritativeVerifierCommand (B2)', () =
         command: 'npx vitest run src/add.test.ts',
         exit_code: 0,
         summary: '1 passed',
+        authority: true,
       },
       toolCallLog: [],
       requiredVerifierCommands: ['npm test'],
@@ -565,6 +568,7 @@ describe('isAgentOwnedAdHocVerifier / isAuthoritativeVerifierCommand (B2)', () =
         command: 'npm test -- src/add.test.ts',
         exit_code: 0,
         summary: '1 passed',
+        authority: true,
       },
       toolCallLog: [],
       requiredVerifierCommands: ['npm test'],
@@ -581,6 +585,7 @@ describe('isAgentOwnedAdHocVerifier / isAuthoritativeVerifierCommand (B2)', () =
         command: 'npm test',
         exit_code: 0,
         summary: 'all pass',
+        authority: true,
       },
       toolCallLog: [],
       requiredVerifierCommands: ['npm test'],
@@ -597,6 +602,7 @@ describe('isAgentOwnedAdHocVerifier / isAuthoritativeVerifierCommand (B2)', () =
         command: 'npm test',
         exit_code: 0,
         summary: 'all pass',
+        authority: true,
       },
       toolCallLog: [],
       requiredVerifierCommands: ['npm test -- src/add.test.ts'],
@@ -832,5 +838,124 @@ describe('planCompletionGateReject', () => {
     if (p.kind === 'blocked') {
       assert.match(p.reason, /no successful file mutations/);
     }
+  });
+
+  test('verifierEvidenceErrors has highest precedence over policy none', () => {
+    const r = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: 'none',
+      lastVerifierReceipt: null,
+      toolCallLog: [],
+      verifierEvidenceErrors: ['bad receipt structure'],
+    });
+    assert.equal(r.allow, false);
+    assert.equal(r.reason, 'verifier_receipt_invalid');
+  });
+
+  test('stale canonical receipt is NOT overridden by unbound tool log entries', () => {
+    const r = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: 'strict',
+      lastVerifierReceipt: null,
+      requiredVerifierCommands: ['npm test', 'pytest'],
+      executedVerifierLedger: [
+        { command: 'npm test', exit_code: 0, stale: true, authority: true } as any,
+        { command: 'pytest', exit_code: 0, stale: false, authority: true } as any,
+      ],
+      toolCallLog: [
+        { tool: 'run_command', target: 'npm test', exit_code: 0 },
+        { tool: 'run_command', target: 'pytest', exit_code: 0 },
+      ],
+    });
+    assert.equal(r.allow, false);
+    assert.equal(r.reason, 'verifier_stale');
+  });
+
+  test('canonical empty ledger yields verifier_missing without toolCallLog fallback', () => {
+    const r = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: 'strict',
+      lastVerifierReceipt: null,
+      executedVerifierLedger: [], // canonical mode active, but ledger is empty
+      toolCallLog: [
+        { tool: 'run_command', target: 'npm test', exit_code: 0 },
+      ],
+    });
+    assert.equal(r.allow, false);
+    assert.equal(r.reason, 'verifier_missing');
+  });
+
+  test('receipt with authority: false does not satisfy completion gate', () => {
+    const r = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: 'strict',
+      lastVerifierReceipt: null,
+      executedVerifierLedger: [
+        { command: 'npm test', exit_code: 0, authority: false, stale: false } as any,
+      ],
+      toolCallLog: [],
+    });
+    assert.equal(r.allow, false);
+    assert.equal(r.reason, 'verifier_missing');
+  });
+
+  test('strict uses the latest result for each canonical verifier identity', () => {
+    const r = evaluateExecuteCompletionHonesty({
+      hasWrite: true,
+      policy: 'strict',
+      lastVerifierReceipt: null,
+      executedVerifierLedger: [
+        { command: 'npm test', exit_code: 0, authority: true, stale: false } as any,
+        { command: 'npm test', exit_code: 1, authority: true, stale: false } as any,
+      ],
+      toolCallLog: [],
+    });
+    assert.equal(r.allow, false);
+    assert.equal(r.reason, 'verifier_red');
+  });
+
+  test('required and strict reject stale canonical identities beside fresh evidence', () => {
+    const ledger = [
+      { command: 'npm test', exit_code: 0, authority: true, stale: true } as any,
+      { command: 'pytest', exit_code: 0, authority: true, stale: false } as any,
+    ];
+    for (const policy of ['required', 'strict'] as const) {
+      const result = evaluateExecuteCompletionHonesty({
+        hasWrite: true,
+        policy,
+        lastVerifierReceipt: null,
+        executedVerifierLedger: ledger,
+        toolCallLog: [],
+      });
+      assert.equal(result.allow, false, policy);
+      assert.equal(result.reason, 'verifier_stale', policy);
+    }
+  });
+
+  test('all explicit required verifiers must have current authoritative attempts', () => {
+    const base = {
+      hasWrite: true,
+      policy: 'strict' as const,
+      lastVerifierReceipt: null,
+      requiredVerifierCommands: ['npm test', 'pytest'],
+      toolCallLog: [],
+    };
+    const complete = evaluateExecuteCompletionHonesty({
+      ...base,
+      executedVerifierLedger: [
+        { command: 'npm test', exit_code: 0, authority: true, stale: false } as any,
+        { command: 'pytest', exit_code: 0, authority: true, stale: false } as any,
+      ],
+    });
+    assert.equal(complete.allow, true);
+
+    const incomplete = evaluateExecuteCompletionHonesty({
+      ...base,
+      executedVerifierLedger: [
+        { command: 'npm test', exit_code: 0, authority: true, stale: false } as any,
+      ],
+    });
+    assert.equal(incomplete.allow, false);
+    assert.equal(incomplete.reason, 'verifier_scope');
   });
 });

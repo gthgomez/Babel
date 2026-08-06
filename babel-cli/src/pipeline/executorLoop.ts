@@ -278,7 +278,8 @@ function evictFileReadCache(
 /**
  * Extracted: executes a direct bounded write plan without LLM calls, if one exists.
  * Returns null if no direct bounded plan is available (normal execution path).
- */
+ */ const appendExecutorToolLog = (toolCallLog: ToolCallLog[], entry: ToolCallLog, episodeSink?: { recordExecutorToolCall(entry: ToolCallLog): void } | null): void => { toolCallLog.push(entry); episodeSink?.recordExecutorToolCall(entry); };
+
 async function runDirectBoundedWritePlan(
   reliabilityRepairProofEnabled: boolean,
   approvedPlan: SwePlan,
@@ -292,7 +293,7 @@ async function runDirectBoundedWritePlan(
     status: 'ready_for_next_turn' | 'after_tool_call' | 'terminal',
     nextTurnPrompt: string,
     details?: { terminalStatus?: string; haltTag?: string; condition?: string },
-  ) => Promise<void>,
+  ) => Promise<void>, episodeSink?: { recordExecutorToolCall(entry: ToolCallLog): void } | null,
 ): Promise<ExecutorLoopResult | null> {
   const directBoundedPlan = reliabilityRepairProofEnabled
     ? null
@@ -332,7 +333,7 @@ async function runDirectBoundedWritePlan(
       ...(toolResult.checkpoint_ids ? { checkpoint_ids: toolResult.checkpoint_ids } : {}),
       verified: toolResult.exit_code === 0,
     };
-    toolCallLog.push(entry);
+    appendExecutorToolLog(toolCallLog, entry, episodeSink);
 
     const writeVerificationFailure =
       toolResult.exit_code === 0
@@ -1203,7 +1204,7 @@ async function applyWorktreeSafetySnapshot(
     status: 'ready_for_next_turn' | 'after_tool_call' | 'terminal',
     nextTurnPrompt: string,
     details?: { terminalStatus?: string; haltTag?: string; condition?: string },
-  ) => Promise<void>,
+  ) => Promise<void>, episodeSink?: { recordExecutorToolCall(entry: ToolCallLog): void } | null,
 ): Promise<{ kind: 'ok' } | { kind: 'return'; result: ExecutorLoopResult }> {
   const snapshotResult = worktreeSafety.snapshotBeforeWrite(
     String(req.path ?? ''),
@@ -1221,7 +1222,7 @@ async function applyWorktreeSafetySnapshot(
       stderr: condition,
       verified: false,
     };
-    toolCallLog.push(entry);
+    appendExecutorToolLog(toolCallLog, entry, episodeSink);
     const rollbackSummary = worktreeSafety.rollbackTouchedFiles(condition);
     writeRBSummary(rollbackSummary);
     const report = buildHaltReport(toolCallLog, 'SCOPE_VIOLATION', stepNum, condition);
@@ -1269,7 +1270,7 @@ async function handleBenchmarkInstallRecovery(
     status: 'ready_for_next_turn' | 'after_tool_call' | 'terminal',
     prompt: string,
     details?: { terminalStatus?: string; haltTag?: string; condition?: string },
-  ) => void,
+  ) => void, episodeSink?: { recordExecutorToolCall(entry: ToolCallLog): void } | null,
 ): Promise<
   | { kind: 'continue'; executionHistory: string; blockedBenchmarkInstallRecoveryCount: number }
   | { kind: 'return'; result: ExecutorLoopResult }
@@ -1293,7 +1294,7 @@ async function handleBenchmarkInstallRecovery(
     stderr: benchmarkInstallBlockReason,
     verified: false,
   };
-  toolCallLog.push(entry);
+  appendExecutorToolLog(toolCallLog, entry, episodeSink);
 
   const warning =
     `[${BENCHMARK_INSTALL_RECOVERY_TAG}] Step ${stepNum} ${req.tool} blocked before execution; ` +
@@ -1353,7 +1354,7 @@ export async function runExecutorLoop(
   initialToolCallLog: ToolCallLog[] = [],
   rawTask: string = '',
   pruningStubs?: Map<string, string>,
-  services?: ChatEngineServices,
+  services?: ChatEngineServices, episodeSink?: { recordExecutorToolCall(entry: ToolCallLog): void } | null,
 ): Promise<ExecutorLoopResult> {
   assertExecutorGate(evidence.runDir);
 
@@ -1406,7 +1407,7 @@ export async function runExecutorLoop(
     target: canonicalizeExecutorTargetForLog(entry.target, entry.tool),
   }));
 
-  let executionHistory = normalizedInitialToolCallLog.map(formatHistoryEntry).join('\n\n');
+  for (const entry of normalizedInitialToolCallLog) episodeSink?.recordExecutorToolCall(entry); let executionHistory = normalizedInitialToolCallLog.map(formatHistoryEntry).join('\n\n');
   const toolCallLog: ToolCallLog[] = [...normalizedInitialToolCallLog];
 
   // FILE_READ_CACHE: stores the complete, untruncated content of every
@@ -1901,7 +1902,7 @@ export async function runExecutorLoop(
     baseContext,
     reportWarnings,
     executionHistory,
-    persistExecutorContext,
+    persistExecutorContext, episodeSink,
   );
   if (directBoundedResult) {
     return directBoundedResult;
@@ -2104,7 +2105,7 @@ export async function runExecutorLoop(
           fingerprint,
           retry_forbidden: true,
         };
-        toolCallLog.push(entry);
+        appendExecutorToolLog(toolCallLog, entry, episodeSink);
         executionHistory += (executionHistory ? '\n\n' : '') + formatHistoryEntry(entry);
         continue;
       }
@@ -2123,7 +2124,7 @@ export async function runExecutorLoop(
           fingerprint: err.fingerprint,
           retry_forbidden: true,
         };
-        toolCallLog.push(entry);
+        appendExecutorToolLog(toolCallLog, entry, episodeSink);
         executionHistory += (executionHistory ? '\n\n' : '') + formatHistoryEntry(entry);
         continue;
       }
@@ -2168,7 +2169,7 @@ export async function runExecutorLoop(
           ...(toolResult.checkpoint_ids ? { checkpoint_ids: toolResult.checkpoint_ids } : {}),
           verified: toolResult.exit_code === 0,
         };
-        toolCallLog.push(entry);
+        appendExecutorToolLog(toolCallLog, entry, episodeSink);
 
         if (!DRY_RUN && toolResult.exit_code !== 0) {
           const report = buildHaltReport(
@@ -2604,7 +2605,7 @@ export async function runExecutorLoop(
       blockedBenchmarkInstallRecoveryCount,
       maxBenchmarkInstallRecoveryBlocks,
       evidence,
-      persistExecutorContext,
+      persistExecutorContext, episodeSink,
     );
     if (benchmarkRecoveryResult.kind === 'continue') {
       executionHistory = benchmarkRecoveryResult.executionHistory;
@@ -2629,7 +2630,7 @@ export async function runExecutorLoop(
         worktreeSafety,
         writeWorktreeSafetySummary,
         writeRollbackSummary,
-        persistExecutorContext,
+        persistExecutorContext, episodeSink,
       );
       if (wssResult.kind === 'return') {
         return wssResult.result;
@@ -2665,7 +2666,7 @@ export async function runExecutorLoop(
       ...(toolResult.checkpoint_ids ? { checkpoint_ids: toolResult.checkpoint_ids } : {}),
       verified: toolResult.exit_code === 0,
     };
-    toolCallLog.push(entry);
+    appendExecutorToolLog(toolCallLog, entry, episodeSink);
 
     if (!DRY_RUN && req.tool === 'file_write' && toolResult.exit_code === 0) {
       const changedTarget = canonicalizeExecutorTargetForLog(String(req.path ?? ''), 'file_write');

@@ -5,10 +5,14 @@
 
 import { isSuccessfulDirectMutation, isVerifierAttemptTool } from './mutationTools.js';
 import { getChatTaskTune, isStrictVerification, type ChatTaskClass, type VerificationPolicy } from '../config/chatTaskClass.js';
-import { buildGateRejectionMessage, hasSubAgentWrites } from './chatEngineCriticBudget.js';
+import {
+  buildGateRejectionMessage,
+  hasAnyWrites as hasLoggedWrites,
+  hasSubAgentWrites,
+} from './chatEngineCriticBudget.js';
 import type { StructuredVerifierCommand, VerifierAuthoritySource } from '../executor/contracts.js';
 import { extractRequiredVerifierCommandsFromTask } from '../pipeline/planVerifierInjection.js';
-import { satisfiesVerifierRequirement } from '../services/verifierIdentity.js';
+import { analyzeVerifierIdentity, satisfiesVerifierRequirement } from '../services/verifierIdentity.js';
 
 /** Known project/dataset test runners (prefixes; case-insensitive match on trimmed cmd). */
 const AUTHORITATIVE_VERIFIER_PREFIXES = [
@@ -329,11 +333,14 @@ export function isAuthoritativeVerifierCommand(
 export type VerifierReceipt = {
   command: string;
   exit_code: number;
+  exitCode?: number;
   summary: string;
   stale?: boolean;
+  authority?: boolean;
   /** Why the controller marked the receipt stale (mutation flag or revision recheck). */
   staleReason?: string;
   receiptId?: string;
+  verifierId?: string;
   /** Workspace identity captured when the verifier ran (H7). */
   boundRevision?: {
     gitCommitHash: string | null;
@@ -343,6 +350,8 @@ export type VerifierReceipt = {
   };
   verifier_id?: string;
   authority_source?: VerifierAuthoritySource;
+  authoritySource?: VerifierAuthoritySource;
+  capturedAt?: number;
   argv?: string[];
 };
 
@@ -352,6 +361,7 @@ export type GateToolLogEntry = {
   detail?: string;
   error?: string;
   exit_code?: number;
+  mutation_paths?: string[];
 };
 
 /**
@@ -405,6 +415,7 @@ export type CompletionGateRejectReason =
   | 'verifier_red'
   | 'verifier_stale'
   | 'verifier_scope'
+  | 'verifier_receipt_invalid'
   | null;
 
 /**
@@ -443,6 +454,17 @@ export function commandSatisfiesRequiredVerifierScope(
   );
 }
 
+/** Whether all required verifiers are satisfied by actual executed commands (directional identity). */
+export function areAllRequiredVerifiersSatisfied(
+  requiredVerifierCommands: readonly string[] | null | undefined,
+  actualCommands: readonly string[],
+): boolean {
+  if (!requiredVerifierCommands || requiredVerifierCommands.length === 0) return true;
+  return requiredVerifierCommands.every((required) =>
+    actualCommands.some((actual) => satisfiesVerifierRequirement(required, actual)),
+  );
+}
+
 /**
  * Evaluate write + verification rules for execute completion.
  *
@@ -459,11 +481,20 @@ export function commandSatisfiesRequiredVerifierScope(
 export function evaluateExecuteCompletionHonesty(opts: {
   hasWrite: boolean;
   policy: VerificationPolicy;
-  lastVerifierReceipt: VerifierReceipt | null | undefined;
+  lastVerifierReceipt?: VerifierReceipt | import('../executor/contracts.js').ExecutorVerifierReceipt | null;
   toolCallLog: GateToolLogEntry[];
   /** Required full/targeted commands for structural scope (optional). */
   requiredVerifierCommands?: readonly string[] | null;
+  /** Ledger of executed verifier receipts (optional). */
+  executedVerifierLedger?: readonly VerifierReceipt[] | readonly import('../executor/contracts.js').ExecutorVerifierReceipt[] | null;
+  /** Errors produced during evidence adaptation (optional). */
+  verifierEvidenceErrors?: readonly string[] | null;
 }): { allow: boolean; reason: CompletionGateRejectReason } {
+  // Precedence 1: Receipt adaptation failures deterministically reject completion.
+  if (opts.verifierEvidenceErrors && opts.verifierEvidenceErrors.length > 0) {
+    return { allow: false, reason: 'verifier_receipt_invalid' };
+  }
+
   if (!opts.hasWrite) {
     return { allow: false, reason: 'no_writes' };
   }
@@ -472,71 +503,123 @@ export function evaluateExecuteCompletionHonesty(opts: {
   }
 
   const required = opts.requiredVerifierCommands ?? [];
+  // Explicit presence, including [], selects canonical mode. In that mode the
+  // tool log is never an authorization source.
+  const hasExplicitLedger = opts.executedVerifierLedger !== undefined && opts.executedVerifierLedger !== null;
+  const hasCanonicalEvidence = hasExplicitLedger || opts.lastVerifierReceipt != null;
+  const canonicalReceipts = hasCanonicalEvidence
+    ? deduplicateVerifierReceipts(
+        hasExplicitLedger
+          ? opts.executedVerifierLedger ?? []
+          : opts.lastVerifierReceipt
+            ? [opts.lastVerifierReceipt]
+            : [],
+      )
+    : [];
+  const authoritativeReceipts = canonicalReceipts.filter(isAuthoritativeReceipt);
+  const legacyLogEntries = hasCanonicalEvidence
+    ? []
+    : opts.toolCallLog.filter(
+        (entry) =>
+          isVerifierAttemptTool(entry.tool) &&
+          entry.error !== 'blocked' &&
+          entry.error !== 'error' &&
+          isAuthoritativeVerifierCommand(entry.target),
+      );
 
-  // Both 'required' and 'strict' need at least a verifier attempt.
-  const hasReceipt = opts.lastVerifierReceipt != null;
-  const receiptCmd = opts.lastVerifierReceipt?.command ?? '';
-
-  // B1/B2: Verifier-command validation — reject receipts that are shell junk
-  // (del/echo) or agent-owned ad-hoc scripts (_verify*.py). Honesty requires
-  // an authoritative project/dataset-style verifier command.
-  const receiptAuthoritative =
-    hasReceipt && isAuthoritativeVerifierCommand(receiptCmd);
-  const receiptInScope =
-    receiptAuthoritative && commandSatisfiesRequiredVerifierScope(receiptCmd, required);
-  const hasRealReceipt = Boolean(receiptInScope);
-
-  // B1/B2: A log entry with a non-authoritative command does NOT satisfy the
-  // verifier requirement even if the tool name matches and exit is 0.
-  // Scope: targeted-only runs do not satisfy full-suite required commands.
-  const hasRealGreenInLog = opts.toolCallLog.some(
-    (e) =>
-      isVerifierAttemptTool(e.tool) &&
-      e.error !== 'blocked' &&
-      e.error !== 'error' &&
-      (e as { exit_code?: number }).exit_code === 0 &&
-      isAuthoritativeVerifierCommand(e.target) &&
-      commandSatisfiesRequiredVerifierScope(e.target, required),
-  );
-
-  if (!hasRealReceipt && !hasRealGreenInLog) {
-    const hadAuthoritativeOutOfScope =
-      required.length > 0 &&
-      ((receiptAuthoritative &&
-        !commandSatisfiesRequiredVerifierScope(receiptCmd, required)) ||
-        opts.toolCallLog.some(
-          (e) =>
-            isVerifierAttemptTool(e.tool) &&
-            e.error !== 'blocked' &&
-            e.error !== 'error' &&
-            (e as { exit_code?: number }).exit_code === 0 &&
-            isAuthoritativeVerifierCommand(e.target) &&
-            !commandSatisfiesRequiredVerifierScope(e.target, required),
-        ));
-    if (hadAuthoritativeOutOfScope) {
-      return { allow: false, reason: 'verifier_scope' };
+  if (required.length === 0) {
+    const attempts = hasCanonicalEvidence ? authoritativeReceipts : legacyLogEntries;
+    const staleAttempts = attempts.filter((entry) => isStaleVerifierEvidence(entry));
+    const activeAttempts = attempts.filter((entry) => !isStaleVerifierEvidence(entry));
+    if (staleAttempts.length > 0) return { allow: false, reason: 'verifier_stale' };
+    if (activeAttempts.length === 0) {
+      return {
+        allow: false,
+        reason: staleAttempts.length > 0 ? 'verifier_stale' : 'verifier_missing',
+      };
     }
-    return { allow: false, reason: 'verifier_missing' };
+
+    if (opts.policy === 'strict' && activeAttempts.some((entry) => verifierExitCode(entry) !== 0)) {
+      return { allow: false, reason: 'verifier_red' };
+    }
+    return { allow: true, reason: null };
   }
 
-  if (hasRealReceipt && opts.lastVerifierReceipt!.stale) {
+  if (hasCanonicalEvidence && authoritativeReceipts.some((entry) => isStaleVerifierEvidence(entry))) {
     return { allow: false, reason: 'verifier_stale' };
   }
 
-  // 'strict' blocks on red verifier; 'required' lets it through with a warning.
-  if (opts.policy === 'strict') {
-    if (hasRealReceipt && opts.lastVerifierReceipt!.exit_code !== 0) {
-      return { allow: false, reason: 'verifier_red' };
+  let hasStaleRequirement = false;
+  let hasRedRequirement = false;
+  let hasMissingRequirement = false;
+  let hasOutOfScopeAttempt = false;
+
+  for (const requirement of required) {
+    const matching = hasCanonicalEvidence
+      ? authoritativeReceipts.filter((receipt) => satisfiesVerifierRequirement(requirement, receipt.command))
+      : legacyLogEntries.filter((entry) => satisfiesVerifierRequirement(requirement, entry.target));
+    const latest = matching.at(-1);
+
+    if (!latest) {
+      hasMissingRequirement = true;
+      if ((hasCanonicalEvidence ? authoritativeReceipts : legacyLogEntries).length > 0) {
+        hasOutOfScopeAttempt = true;
+      }
+      continue;
     }
-    // No in-scope receipt but real green in log: allow
-    if (!hasRealReceipt) {
-      return { allow: true, reason: null };
+    if (isStaleVerifierEvidence(latest)) {
+      hasStaleRequirement = true;
+      continue;
+    }
+    if (verifierExitCode(latest) !== 0) {
+      hasRedRequirement = true;
     }
   }
 
-  // 'required' with a receipt: allow regardless of exit code — the user
-  // sees the result in the TUI and decides.
+  // Stable precedence: invalid adaptation → stale → red → missing/scope.
+  if (hasStaleRequirement) return { allow: false, reason: 'verifier_stale' };
+  if (opts.policy === 'strict' && hasRedRequirement) return { allow: false, reason: 'verifier_red' };
+  if (hasMissingRequirement) {
+    return {
+      allow: false,
+      reason: hasOutOfScopeAttempt ? 'verifier_scope' : 'verifier_missing',
+    };
+  }
   return { allow: true, reason: null };
+}
+
+type VerifierEvidence = VerifierReceipt | import('../executor/contracts.js').ExecutorVerifierReceipt;
+
+function deduplicateVerifierReceipts(
+  receipts: readonly VerifierEvidence[],
+): VerifierEvidence[] {
+  const byIdentity = new Map<string, VerifierEvidence>();
+  for (const receipt of receipts) {
+    const key = verifierIdentityKey(receipt.command);
+    // Map insertion order is retained while assignment makes the latest
+    // attempt authoritative for a structural identity.
+    byIdentity.set(key, receipt);
+  }
+  return [...byIdentity.values()];
+}
+
+function verifierIdentityKey(command: string): string {
+  const identity = analyzeVerifierIdentity(command);
+  return identity?.identityKey ?? command.trim().replace(/\s+/g, ' ');
+}
+
+function isAuthoritativeReceipt(entry: VerifierEvidence): boolean {
+  return entry.authority === true && isAuthoritativeVerifierCommand(entry.command);
+}
+
+function verifierExitCode(entry: VerifierEvidence | GateToolLogEntry): number {
+  if ('exitCode' in entry && typeof entry.exitCode === 'number') return entry.exitCode;
+  if ('exit_code' in entry && typeof entry.exit_code === 'number') return entry.exit_code;
+  return Number.NaN;
+}
+
+function isStaleVerifierEvidence(entry: VerifierEvidence | GateToolLogEntry): boolean {
+  return 'stale' in entry && entry.stale === true;
 }
 
 export function buildGreenVerifierRejectionMessage(
@@ -550,8 +633,6 @@ export function buildGreenVerifierRejectionMessage(
       ? `\nProject test commands: ${projectTestCommands.join(', ')}.`
       : '';
 
-  // Strike-aware escalation: after multiple consecutive rejections the model
-  // needs a more direct hint about what is wrong with its approach.
   const isStrike = strikeCount != null && strikeCount >= 2;
   const preamble = isStrike
     ? `This is rejection #${strikeCount}. Your previous verification attempts were not valid test runs.${
@@ -559,10 +640,19 @@ export function buildGreenVerifierRejectionMessage(
       } `
     : '';
 
-  // Escalation warning when strikes accumulate toward the auto-block threshold.
   const strikeEscalation = isStrike
     ? `After ${strikeCount} gate rejections, your next completion attempt will be auto-blocked. You MUST run and pass the verifier before completing.`
     : '';
+
+  if (reason === 'verifier_receipt_invalid') {
+    return [
+      preamble,
+      `COMPLETION_GATE_REJECTED: verifier_receipt_invalid`,
+      `Verifier receipt evidence is missing required bound revision or authority metadata.`,
+      `You must re-run an authoritative project test command before completing.`,
+      strikeEscalation,
+    ].filter(Boolean).join(' ');
+  }
 
   if (reason === 'verifier_red' && receipt) {
     const parts = [
@@ -825,14 +915,16 @@ export function evaluateCompletionGateForEngine(opts: {
   lastVerifierReceipt: VerifierReceipt | null | undefined;
   projectTestCommands?: readonly string[] | null;
   requiredVerifierCommands?: readonly string[] | null;
+  /** Canonical executed verifier ledger — when supplied, toolCallLog is not used for requirement satisfaction. */
+  executedVerifierLedger?: readonly VerifierReceipt[] | readonly import('../executor/contracts.js').ExecutorVerifierReceipt[] | null;
+  /** Adaptation errors from chat receipt → canonical receipt conversion. */
+  verifierEvidenceErrors?: readonly string[] | null;
 }): 'allow' | 'reject' {
   if (opts.taskIntent !== 'execute') return 'allow';
   if (opts.turnType !== 'completion') return 'allow';
 
   const log = opts.toolCallLog;
-  const hasWrite =
-    log.some((e) => isSuccessfulDirectMutation(e.tool, e.error)) ||
-    hasSubAgentWrites(log);
+  const hasWrite = hasLoggedWrites(log);
   const tune = getChatTaskTune(opts.taskClass);
   const policy = resolveVerificationPolicy({
     policy: tune.verificationPolicy,
@@ -850,15 +942,23 @@ export function evaluateCompletionGateForEngine(opts: {
   const honesty = evaluateExecuteCompletionHonesty({
     hasWrite,
     policy,
-    lastVerifierReceipt: opts.lastVerifierReceipt,
+    lastVerifierReceipt: opts.lastVerifierReceipt ?? null,
     toolCallLog: log,
     requiredVerifierCommands,
+    executedVerifierLedger: opts.executedVerifierLedger ?? null,
+    verifierEvidenceErrors: opts.verifierEvidenceErrors ?? null,
   });
   if (!honesty.allow) return 'reject';
   // For 'required' policy: also check that when task asks for verifier,
   // the agent actually ran one (even if the receipt was non-zero and allowed).
   if (policy !== 'strict' && taskAsksForVerifier(opts.task)) {
-    if (!log.some((e) => isVerifierAttemptTool(e.tool))) return 'reject';
+    const hasCanonicalAttempt =
+      opts.executedVerifierLedger !== undefined && opts.executedVerifierLedger !== null
+        ? deduplicateVerifierReceipts(opts.executedVerifierLedger).some(isAuthoritativeReceipt)
+        : opts.lastVerifierReceipt != null
+          ? isAuthoritativeReceipt(opts.lastVerifierReceipt)
+          : log.some((e) => isVerifierAttemptTool(e.tool));
+    if (!hasCanonicalAttempt) return 'reject';
   }
   return 'allow';
 }
@@ -872,6 +972,10 @@ export function buildGateRejectUserMessageForEngine(opts: {
   projectTestCommands?: string[];
   requiredVerifierCommands?: readonly string[] | null;
   gateStrikes?: number;
+  /** Canonical executed verifier ledger \u2014 when supplied, toolCallLog is not used for requirement satisfaction. */
+  executedVerifierLedger?: readonly VerifierReceipt[] | readonly import('../executor/contracts.js').ExecutorVerifierReceipt[] | null;
+  /** Adaptation errors from chat receipt \u2192 canonical receipt conversion. */
+  verifierEvidenceErrors?: readonly string[] | null;
 }): string {
   const tune = getChatTaskTune(opts.taskClass);
   const policy = resolveVerificationPolicy({
@@ -894,15 +998,18 @@ export function buildGateRejectUserMessageForEngine(opts: {
   const honesty = evaluateExecuteCompletionHonesty({
     hasWrite: true,
     policy,
-    lastVerifierReceipt: opts.lastVerifierReceipt,
+    lastVerifierReceipt: opts.lastVerifierReceipt ?? null,
     toolCallLog: log,
     requiredVerifierCommands,
+    executedVerifierLedger: opts.executedVerifierLedger ?? null,
+    verifierEvidenceErrors: opts.verifierEvidenceErrors ?? null,
   });
   if (
     honesty.reason === 'verifier_missing' ||
     honesty.reason === 'verifier_red' ||
     honesty.reason === 'verifier_stale' ||
-    honesty.reason === 'verifier_scope'
+    honesty.reason === 'verifier_scope' ||
+    honesty.reason === 'verifier_receipt_invalid'
   ) {
     return buildGreenVerifierRejectionMessage(
       honesty.reason,

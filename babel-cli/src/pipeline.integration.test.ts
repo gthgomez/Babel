@@ -13,6 +13,9 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import {
   buildPipelineV9OfflineFixtureResponse,
@@ -20,6 +23,16 @@ import {
   type RunOptions,
 } from '../src/execute.js';
 import type { PipelineStage } from '../src/execute.js';
+import { EvidenceBundle } from '../src/evidence.js';
+import {
+  EPISODE_EVENTS_FILENAME,
+  flushEpisodeEventLog,
+  loadEpisodeEventLogForMode,
+  parseEpisodeEventLogResult,
+  validateEpisodeEventLog,
+} from '../src/evidence/episodeStream.js';
+import { _runBabelPipelineInternal, resumeManualBridge } from '../src/pipeline.js';
+import { OrchestratorManifestSchema } from '../src/schemas/agentContracts.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -66,6 +79,63 @@ function qaOptions(): RunOptions {
 }
 function executorOptions(): RunOptions {
   return { stage: 'executor' as PipelineStage, schemaName: 'executor_turn' };
+}
+
+function buildOfflineIntegrationManifest(): unknown {
+  return {
+    orchestrator_version: '9.0',
+    target_project: 'global',
+    target_project_path: process.cwd(),
+    analysis: {
+      task_summary: 'OTEL regression pipeline episode integration.',
+      task_category: 'Backend',
+      secondary_category: null,
+      task_overlay_ids: [],
+      complexity_estimate: 'Medium',
+      pipeline_mode: 'deep',
+      purpose_mode: 'execution',
+      purpose_source: 'fallback_default',
+      purpose_confidence: 0.7,
+      ambiguity_note: null,
+      routing_confidence: 0.95,
+    },
+    platform_profile: {
+      profile_source: 'not_required_for_routing',
+      client_surface: 'unspecified',
+      container_model: null,
+      ingestion_mode: 'none',
+      repo_write_mode: null,
+      output_surface: [],
+      platform_modes: [],
+      execution_trust: null,
+      data_trust: null,
+      freshness_trust: null,
+      action_trust: null,
+      approval_mode: 'none',
+    },
+    worker_configuration: { assigned_model: 'qwen3', rationale: 'Offline episode integration fixture.' },
+    compilation_state: 'uncompiled',
+    instruction_stack: {
+      behavioral_ids: ['behavioral_core_v11'],
+      domain_id: 'domain_swe_backend',
+      skill_ids: [],
+      model_adapter_id: 'adapter_codex',
+      project_overlay_id: null,
+      task_overlay_ids: [],
+      pipeline_stage_ids: [],
+    },
+    resolution_policy: {
+      apply_domain_default_skills: true,
+      expand_skill_dependencies: true,
+      strict_conflict_mode: 'error',
+      task_shape_profile: 'full',
+    },
+    prompt_manifest: [],
+    handoff_payload: {
+      user_request: 'BABEL_EPISODE_STREAM_INTEGRATION: implement the verified pipeline event stream.',
+      system_directive: 'Resolve the instruction stack and execute the offline fixture.',
+    },
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -471,20 +541,125 @@ describe('OTEL regression fixture path', () => {
 // 8. Notes on full end-to-end pipeline integration
 // ═══════════════════════════════════════════════════════════════════════════════
 
-describe('full pipeline integration (documented)', () => {
-  it('TODO: end-to-end pipeline test with CLI stub', () => {
-    // Full pipeline integration testing requires running the complete pipeline
-    // with the CLI stub approach used by test_pipeline_v9.ts.
-    //
-    // The offline fixture system tested above validates that each stage returns
-    // correct responses for each scenario. The next step is to wire these
-    // fixtures into a complete pipeline run that exercises:
-    //   1. Orchestrator → SWE → QA PASS → Executor (full happy path)
-    //   2. Orchestrator → SWE → QA REJECT → SWE replan → QA PASS → Executor
-    //   3. Orchestrator → SWE → QA REJECT × MAX_SWE_QA_LOOPS → halt
-    //   4. Orchestrator → SWE (EVIDENCE_REQUEST) → evidence → SWE (IMPLEMENTATION_PLAN) → ...
-    //
-    // This is tracked as Phase A2 in the critique remediation roadmap.
-    assert.ok(true, 'Documented coverage gap — full pipeline integration test planned');
+describe('full pipeline integration', () => {
+  it('runs the offline pipeline through finalization with one valid episode chain', async () => {
+    const previousOffline = process.env['BABEL_PIPELINE_V9_OFFLINE'];
+    const previousScenario = process.env['BABEL_PIPELINE_V9_OFFLINE_SCENARIO'];
+    const previousEpisodeIntegration = process.env['BABEL_EPISODE_STREAM_INTEGRATION'];
+    const runsRoot = mkdtempSync(join(tmpdir(), 'babel-pipeline-episode-integration-'));
+    let memoryExtractorCalls = 0;
+    try {
+      process.env['BABEL_PIPELINE_V9_OFFLINE'] = '1';
+      delete process.env['BABEL_PIPELINE_V9_OFFLINE_SCENARIO'];
+      process.env['BABEL_EPISODE_STREAM_INTEGRATION'] = '1';
+      resetOfflineQaCallCount();
+      const task = 'BABEL_EPISODE_STREAM_INTEGRATION: implement the verified pipeline event stream.';
+      const evidence = new EvidenceBundle(task, runsRoot);
+      const result = await _runBabelPipelineInternal(
+        task,
+        {
+          orchestratorVersion: 'v9',
+          mode: 'deep',
+          disableMemoryExtraction: true,
+          memoryExtractor: async () => { memoryExtractorCalls++; },
+        },
+        evidence,
+        OrchestratorManifestSchema.parse(buildOfflineIntegrationManifest()),
+      );
+      assert.equal(result.episodePersistenceStatus, 'active');
+      assert.equal(memoryExtractorCalls, 0, 'offline integration must not invoke memory extraction');
+      const episodePath = join(evidence.runDir, EPISODE_EVENTS_FILENAME);
+      assert.equal(existsSync(episodePath), true);
+      const parsed = parseEpisodeEventLogResult(readFileSync(episodePath, 'utf-8'));
+      if (!parsed.ok) throw new Error('offline pipeline wrote an invalid episode stream');
+      assert.equal(validateEpisodeEventLog(parsed.value.events, parsed.value.sessionId).valid, true);
+      const events = parsed.value.events;
+      assert.equal(events.filter((event) => event.type === 'PIPELINE_COMPLETION').length, 1);
+      const completion = events.find((event) => event.type === 'PIPELINE_COMPLETION');
+      assert.equal(completion?.payload['outcome'], result.status);
+      assert.equal(events.at(-1)?.type, 'PIPELINE_COMPLETION');
+      for (const phase of ['orchestrator', 'swe_planning', 'qa_review', 'executor', 'finalization']) {
+        assert.ok(events.some((event) => event.type === 'PIPELINE_PHASE_STARTED' && event.payload['phase'] === phase), `missing started phase ${phase}`);
+        assert.ok(events.some((event) => event.type === 'PIPELINE_PHASE_COMPLETED' && event.payload['phase'] === phase), `missing completed phase ${phase}`);
+      }
+      assert.ok(events.some((event) => event.kind === 'tool'), 'expected executor tool episode event');
+    } finally {
+      if (previousOffline === undefined) delete process.env['BABEL_PIPELINE_V9_OFFLINE'];
+      else process.env['BABEL_PIPELINE_V9_OFFLINE'] = previousOffline;
+      if (previousScenario === undefined) delete process.env['BABEL_PIPELINE_V9_OFFLINE_SCENARIO'];
+      else process.env['BABEL_PIPELINE_V9_OFFLINE_SCENARIO'] = previousScenario;
+      if (previousEpisodeIntegration === undefined) delete process.env['BABEL_EPISODE_STREAM_INTEGRATION'];
+      else process.env['BABEL_EPISODE_STREAM_INTEGRATION'] = previousEpisodeIntegration;
+      rmSync(runsRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('manual invalid-plan resume finalizes a legacy stream and an existing valid stream', async () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), 'babel-manual-episode-integration-'));
+    try {
+      const task = 'BABEL_EPISODE_STREAM_INTEGRATION: manual resume.';
+      const legacyEvidence = new EvidenceBundle(task, runsRoot);
+      legacyEvidence.writeManifest(OrchestratorManifestSchema.parse(buildOfflineIntegrationManifest()));
+      const legacyResult = await resumeManualBridge(legacyEvidence.runDir, { rawPlanText: '{bad json' });
+      assert.equal(legacyResult.status, 'MANUAL_PLAN_INVALID');
+      const legacyEvents = parseEpisodeEventLogResult(readFileSync(join(legacyEvidence.runDir, EPISODE_EVENTS_FILENAME), 'utf-8'));
+      if (!legacyEvents.ok) throw new Error('legacy manual resume did not write a valid episode stream');
+      assert.equal(legacyEvents.value.events[0]!.type, 'LEGACY_MIGRATION_GENESIS');
+      for (const phase of ['swe_planning', 'qa_review', 'executor']) {
+        assert.equal(legacyEvents.value.events.some((event) => event.payload['phase'] === phase), false, `invalid manual plan fabricated ${phase}`);
+      }
+
+      const existingEvidence = new EvidenceBundle(task, runsRoot);
+      existingEvidence.writeManifest(OrchestratorManifestSchema.parse(buildOfflineIntegrationManifest()));
+      const created = loadEpisodeEventLogForMode(existingEvidence.runDir, { mode: 'new', sessionId: 'manual-existing' });
+      if (!created.ok) throw new Error('failed to create existing manual episode stream');
+      flushEpisodeEventLog(existingEvidence.runDir, created.value);
+      const existingResult = await resumeManualBridge(existingEvidence.runDir, { rawPlanText: '{bad json' });
+      assert.equal(existingResult.status, 'MANUAL_PLAN_INVALID');
+      const existingEvents = parseEpisodeEventLogResult(readFileSync(join(existingEvidence.runDir, EPISODE_EVENTS_FILENAME), 'utf-8'), { sessionId: 'manual-existing' });
+      if (!existingEvents.ok) throw new Error('existing manual resume broke the episode chain');
+      assert.equal(existingEvents.value.events[0]!.type, 'PIPELINE_GENESIS');
+      assert.equal(validateEpisodeEventLog(existingEvents.value.events, 'manual-existing').valid, true);
+    } finally {
+      rmSync(runsRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves active or degraded episode status on recoverable early errors', async () => {
+    const runsRoot = mkdtempSync(join(tmpdir(), 'babel-pipeline-episode-error-status-'));
+    const previousRoot = process.env['BABEL_PROJECT_ROOT'];
+    const missingRoot = join(runsRoot, 'missing-project');
+    try {
+      const manifest = OrchestratorManifestSchema.parse(buildOfflineIntegrationManifest());
+      const activeEvidence = new EvidenceBundle('recoverable active status', runsRoot);
+      activeEvidence.writeManifest(manifest);
+      activeEvidence.writeDebugFile('04_execution_report.json', JSON.stringify({ status: 'partial' }));
+      process.env['BABEL_PROJECT_ROOT'] = missingRoot;
+      const active = await _runBabelPipelineInternal('recoverable active status', { mode: 'deep' }, activeEvidence, manifest);
+      assert.equal(active.status, 'EXECUTOR_HALTED');
+      assert.equal(active.episodePersistenceStatus, 'active');
+      const activeEpisodes = parseEpisodeEventLogResult(
+        readFileSync(join(activeEvidence.runDir, EPISODE_EVENTS_FILENAME), 'utf-8'),
+      );
+      if (!activeEpisodes.ok) throw new Error('recoverable pipeline wrote an invalid episode stream');
+      const activeCompletions = activeEpisodes.value.events.filter(
+        (event) => event.type === 'PIPELINE_COMPLETION',
+      );
+      assert.equal(activeCompletions.length, 1);
+      assert.equal(activeCompletions[0]!.payload['outcome'], active.status);
+      assert.equal(activeEpisodes.value.events.at(-1)?.type, 'PIPELINE_COMPLETION');
+
+      const degradedEvidence = new EvidenceBundle('recoverable degraded status', runsRoot);
+      degradedEvidence.writeManifest(manifest);
+      degradedEvidence.writeDebugFile('04_execution_report.json', JSON.stringify({ status: 'partial' }));
+      writeFileSync(join(degradedEvidence.runDir, EPISODE_EVENTS_FILENAME), 'existing stream\n', 'utf-8');
+      const degraded = await _runBabelPipelineInternal('recoverable degraded status', { mode: 'deep' }, degradedEvidence, manifest);
+      assert.equal(degraded.status, 'EXECUTOR_HALTED');
+      assert.equal(degraded.episodePersistenceStatus, 'degraded');
+    } finally {
+      if (previousRoot === undefined) delete process.env['BABEL_PROJECT_ROOT'];
+      else process.env['BABEL_PROJECT_ROOT'] = previousRoot;
+      rmSync(runsRoot, { recursive: true, force: true });
+    }
   });
 });

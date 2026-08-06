@@ -3,7 +3,7 @@
  */
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -18,8 +18,14 @@ import {
   serializeEpisodeEventLog,
   hashEpisodeEvent,
   mapSessionKindToEpisode,
+  verifyHashChain,
+  loadOrQuarantineEpisodeLog,
+  loadEpisodeEventLogForMode,
+  parseEpisodeEventLogResult,
+  validateEpisodeEventLog,
   EPISODE_EVENT_SCHEMA_VERSION,
   EPISODE_EVENTS_FILENAME,
+  EPISODE_PAYLOAD_MAX_BYTES,
 } from './episodeStream.js';
 import {
   createSessionEventLog,
@@ -304,5 +310,177 @@ describe('parity bridge dual-write choke point', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('verifyHashChain and loadOrQuarantineEpisodeLog', () => {
+  test('verifyHashChain passes for valid event log', () => {
+    const log = createEpisodeEventLog('sess-valid-1');
+    appendEpisodeEvent(log, { kind: 'session', type: 't1', payload: {} });
+    appendEpisodeEvent(log, { kind: 'tool', type: 't2', payload: {} });
+    const res = verifyHashChain(log.events);
+    assert.equal(res.valid, true);
+    assert.equal(res.error, undefined);
+  });
+
+  test('verifyHashChain detects non-contiguous seq and broken hash chain', () => {
+    const log = createEpisodeEventLog('sess-valid-2');
+    appendEpisodeEvent(log, { kind: 'session', type: 't1', payload: {} });
+    appendEpisodeEvent(log, { kind: 'tool', type: 't2', payload: {} });
+
+    // Break prevHash
+    log.events[1]!.prevHash = 'corrupted_hash_value';
+    const res = verifyHashChain(log.events);
+    assert.equal(res.valid, false);
+    assert.match(res.error ?? '', /Hash chain broken/);
+  });
+
+  test('loadOrQuarantineEpisodeLog creates quarantine file when stream is corrupt', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'babel-episode-quarantine-'));
+    try {
+      const log = createEpisodeEventLog('sess-corrupt');
+      appendEpisodeEvent(log, { kind: 'session', type: 't1', payload: {} });
+      appendEpisodeEvent(log, { kind: 'tool', type: 't2', payload: {} });
+      log.events[1]!.prevHash = 'bad_hash';
+
+      const path = join(dir, EPISODE_EVENTS_FILENAME);
+      writeFileSync(path, log.events.map((e) => JSON.stringify(e)).join('\n') + '\n', 'utf-8');
+
+      const recovered = loadOrQuarantineEpisodeLog(dir, 'sess-corrupt');
+      assert.ok(recovered);
+      assert.equal(recovered.events[0]!.type, 'RECOVERY_GENESIS');
+      assert.ok(recovered.events[0]!.payload['quarantineFile']);
+      assert.deepEqual(Object.keys(recovered.events[0]!.payload).sort(), ['quarantineFile', 'reason']);
+
+      const files = readdirSync(dir) as string[];
+      const corruptFile = files.find((f) => f.startsWith('episode-events.corrupt.'));
+      assert.ok(corruptFile, 'expected quarantined corrupt file to exist');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('typed episode load boundary', () => {
+  test('new creates genesis, resume requires an existing stream, and new rejects duplicates', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'babel-episode-modes-'));
+    try {
+      const absentResume = loadEpisodeEventLogForMode(dir, { mode: 'resume', sessionId: 'mode-sess' });
+      if (absentResume.ok) throw new Error('expected resume to fail when absent');
+      assert.equal(absentResume.error.code, 'absent');
+
+      const created = loadEpisodeEventLogForMode(dir, { mode: 'new', sessionId: 'mode-sess' });
+      if (!created.ok) throw new Error('expected new mode to create a stream');
+      assert.equal(created.value.events[0]!.type, 'PIPELINE_GENESIS');
+      assert.equal(created.value.events[0]!.seq, 0);
+      assert.equal(created.value.events[0]!.prevHash, undefined);
+      flushEpisodeEventLog(dir, created.value);
+
+      const duplicate = loadEpisodeEventLogForMode(dir, { mode: 'new', sessionId: 'mode-sess' });
+      if (duplicate.ok) throw new Error('expected new to reject an existing stream');
+      assert.equal(duplicate.error.code, 'already_exists');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('cold resume preserves the hash chain and expected session', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'babel-episode-resume-'));
+    try {
+      const created = loadEpisodeEventLogForMode(dir, { mode: 'new', sessionId: 'resume-sess' });
+      if (!created.ok) throw new Error('expected new mode to create a stream');
+      appendEpisodeEvent(created.value, { kind: 'tool', type: 'TOOL_TEST', payload: { step: 1 } });
+      flushEpisodeEventLog(dir, created.value);
+
+      const resumed = loadEpisodeEventLogForMode(dir, { mode: 'resume', sessionId: 'resume-sess' });
+      if (!resumed.ok) throw new Error('expected resume mode to load the stream');
+      const previous = resumed.value.events[resumed.value.events.length - 1]!;
+      const next = appendEpisodeEvent(resumed.value, { kind: 'completion', type: 'PIPELINE_COMPLETION' });
+      assert.equal(next.seq, previous.seq + 1);
+      assert.equal(next.prevHash, hashEpisodeEvent(previous));
+      assert.equal(validateEpisodeEventLog(resumed.value.events, 'resume-sess').valid, true);
+      flushEpisodeEventLog(dir, resumed.value);
+
+      const wrongSession = loadEpisodeEventLogForMode(dir, { mode: 'resume', sessionId: 'other-sess' });
+      assert.equal(wrongSession.ok, false);
+      if (wrongSession.ok) throw new Error('expected session mismatch');
+      assert.equal(wrongSession.error.code, 'session_mismatch');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('rename failure is fail-closed and leaves the corrupt file untouched', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'babel-episode-rename-fail-'));
+    try {
+      const path = join(dir, EPISODE_EVENTS_FILENAME);
+      const corrupt = '{"schemaVersion":1,not-json}\n';
+      writeFileSync(path, corrupt, 'utf-8');
+      const result = loadEpisodeEventLogForMode(dir, {
+        mode: 'legacy_resume',
+        sessionId: 'rename-fail-sess',
+        filesystem: {
+          exists: (candidate) => existsSync(candidate),
+          readFile: (candidate) => readFileSync(candidate, 'utf-8'),
+          rename: () => {
+            throw new Error('injected rename failure');
+          },
+        },
+      });
+      if (result.ok) throw new Error('expected quarantine failure');
+      assert.equal(result.error.code, 'quarantine_failed');
+      assert.equal(readFileSync(path, 'utf-8'), corrupt);
+      assert.equal(readdirSync(dir).some((name) => name.startsWith('episode-events.corrupt.')), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('typed parsing distinguishes malformed JSON and schema mismatch', () => {
+      const malformed = parseEpisodeEventLogResult('{"schemaVersion":1,}\n');
+    if (malformed.ok) throw new Error('expected malformed JSON to fail');
+    assert.equal(malformed.error.code, 'malformed');
+
+    const wrongSchema = parseEpisodeEventLogResult(
+      '{"schemaVersion":2,"eventId":"x","sessionId":"s","turnId":null,"seq":0,"ts":"t","kind":"session","type":"x","payload":{}}\n',
+    );
+    if (wrongSchema.ok) throw new Error('expected schema mismatch to fail');
+    assert.equal(wrongSchema.error.code, 'malformed');
+  });
+});
+
+describe('episode payload safety', () => {
+  test('redacts secrets, preserves routing fields, and caps UTF-8 payloads', () => {
+    const log = createEpisodeEventLog('payload-sess');
+    const secret = 'sk-live-should-not-persist';
+    const event = appendEpisodeEvent(log, {
+      kind: 'tool',
+      type: 'TOOL_OUTPUT',
+      payload: {
+        tool: 'shell_exec',
+        step: 7,
+        status: 'completed',
+        input: '😀'.repeat(80_000),
+        stdout: `${secret} ${'x'.repeat(80_000)}`,
+      },
+    });
+    const serialized = JSON.stringify(event.payload);
+    assert.ok(Buffer.byteLength(serialized, 'utf8') <= EPISODE_PAYLOAD_MAX_BYTES);
+    assert.equal(event.payload['truncated'], true);
+    assert.equal(event.payload['tool'], 'shell_exec');
+    assert.equal(event.payload['step'], 7);
+    assert.equal(serialized.includes(secret), false);
+    assert.equal(serialized.includes('\uFFFD'), false);
+      assert.equal(Buffer.byteLength(String(event.payload['preview']), 'utf8') > 0, true);
+    });
+
+  test('caps serialized payloads after JSON escaping quotes and backslashes', () => {
+    const log = createEpisodeEventLog('escaping-cap-sess');
+    const event = appendEpisodeEvent(log, {
+      kind: 'tool',
+      type: 'TOOL_OUTPUT',
+      payload: { stdout: ('"\\').repeat(100_000) },
+    });
+    assert.ok(Buffer.byteLength(JSON.stringify(event.payload), 'utf8') <= EPISODE_PAYLOAD_MAX_BYTES);
   });
 });

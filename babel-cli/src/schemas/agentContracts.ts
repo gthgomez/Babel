@@ -1289,6 +1289,7 @@ export const ToolCallLogSchema = z.object({
   status: z.string().optional(),
   fingerprint: z.string().optional(),
   retry_forbidden: z.boolean().optional(),
+  mutation_paths: z.array(z.string().min(1)).optional(),
 });
 export type ToolCallLog = z.infer<typeof ToolCallLogSchema>;
 

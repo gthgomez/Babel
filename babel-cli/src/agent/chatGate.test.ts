@@ -322,6 +322,28 @@ describe('Completion gate logic', () => {
 // These verify the gate correctly detects writes in toolCallLog, covering
 // the tool name mismatch bug (file_write vs write_file) and sub-agent writes.
 
+function setTestVerifierReceipt(engine: ChatEngine, command: string, exit_code = 0) {
+  const receipt = {
+    command,
+    exit_code,
+    exitCode: exit_code,
+    summary: exit_code === 0 ? 'ok' : 'failed',
+    receiptId: `test-receipt-${command}-${exit_code}`,
+    authority: true,
+    authoritySource: 'built_in_runner' as const,
+    verifierId: 'test-verifier',
+    capturedAt: 1_700_000_000_000,
+    boundRevision: {
+      gitCommitHash: null,
+      compositeTreeHash: 'sha256:test-tree',
+      fileHashes: {},
+      capturedAt: 1_700_000_000_000,
+    },
+  };
+  (engine as any).lastVerifierReceipt = receipt;
+  (engine as any).executedVerifierLedger = [receipt];
+}
+
 function pushToolLog(engine: ChatEngine, entry: Record<string, unknown>) {
   (engine as any).toolCallLog.push({
     tool: 'unknown',
@@ -330,6 +352,14 @@ function pushToolLog(engine: ChatEngine, entry: Record<string, unknown>) {
     exit_code: 0,
     ...entry,
   });
+  if (
+    (entry.tool === 'test_run' || entry.tool === 'run_command') &&
+    typeof entry.target === 'string' &&
+    entry.error == null &&
+    entry.exit_code === 0
+  ) {
+    setTestVerifierReceipt(engine, entry.target, 0);
+  }
 }
 
 describe('Completion gate — positive paths', () => {
@@ -448,11 +478,7 @@ describe('Completion gate — positive paths', () => {
     });
     pushToolLog(verifyEngine, { tool: 'write_file', target: '/tmp/test-project/src/math.js' });
     pushToolLog(verifyEngine, { tool: 'test_run', target: 'npm test', exit_code: 0 });
-    (verifyEngine as any).lastVerifierReceipt = {
-      command: 'npm test',
-      exit_code: 0,
-      summary: 'ok',
-    };
+    setTestVerifierReceipt(verifyEngine, 'npm test');
     const turn: ChatTurn = { type: 'completion', answer: 'Fixed and verified.' };
     assert.equal((verifyEngine as any).evaluateCompletionGate(turn, 'execute'), 'allow');
   });
@@ -465,11 +491,7 @@ describe('Completion gate — positive paths', () => {
     });
     pushToolLog(verifyEngine, { tool: 'str_replace', target: '/tmp/test-project/src/math.js' });
     pushToolLog(verifyEngine, { tool: 'run_command', target: 'npm test', exit_code: 0 });
-    (verifyEngine as any).lastVerifierReceipt = {
-      command: 'npm test',
-      exit_code: 0,
-      summary: 'ok',
-    };
+    setTestVerifierReceipt(verifyEngine, 'npm test');
     const turn: ChatTurn = { type: 'completion', answer: 'Fixed and verified via run_command.' };
     assert.equal((verifyEngine as any).evaluateCompletionGate(turn, 'execute'), 'allow');
   });
@@ -485,11 +507,7 @@ describe('Completion gate — positive paths', () => {
       pushToolLog(eng, { tool: 'str_replace', target: '/tmp/test-project/src/a.ts' });
       const turn: ChatTurn = { type: 'completion', answer: 'Done.' };
       assert.equal((eng as any).evaluateCompletionGate(turn, 'execute'), 'reject');
-      (eng as any).lastVerifierReceipt = {
-        command: 'pytest -q',
-        exit_code: 0,
-        summary: 'ok',
-      };
+      setTestVerifierReceipt(eng, 'pytest -q');
       assert.equal((eng as any).evaluateCompletionGate(turn, 'execute'), 'allow');
     } finally {
       if (prev === undefined) delete process.env['BABEL_CHAT_TASK_CLASS'];
@@ -506,11 +524,7 @@ describe('Completion gate — positive paths', () => {
         projectRoot: '/tmp/test-project',
       });
       pushToolLog(eng, { tool: 'write_file', target: '/tmp/x.py' });
-      (eng as any).lastVerifierReceipt = {
-        command: 'pytest',
-        exit_code: 1,
-        summary: 'fail',
-      };
+      setTestVerifierReceipt(eng, 'pytest', 1);
       const turn: ChatTurn = { type: 'completion', answer: 'Ship it.' };
       assert.equal((eng as any).evaluateCompletionGate(turn, 'execute'), 'reject');
     } finally {

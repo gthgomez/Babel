@@ -11,14 +11,64 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CanonicalEventKind, CanonicalExecutorEvent } from '../executor/contracts.js';
 import { EXECUTOR_EVENT_SCHEMA_VERSION } from '../executor/contracts.js';
 import type { SessionEvent, SessionEventKind, SessionEventLog } from '../agent/sessionEvents.js';
+import { redactEvidenceValue } from '../utils/redaction.js';
 
 export const EPISODE_EVENT_SCHEMA_VERSION = 1 as const;
 export const EPISODE_EVENTS_FILENAME = 'episode-events.jsonl';
+export const EPISODE_PAYLOAD_MAX_BYTES = 64 * 1024;
+
+export type EpisodeStreamLoadMode = 'new' | 'resume' | 'legacy_resume';
+export type EpisodeStreamMode = EpisodeStreamLoadMode;
+
+export type EpisodeStreamErrorCode =
+  | 'absent'
+  | 'already_exists'
+  | 'malformed'
+  | 'invalid_chain'
+  | 'session_mismatch'
+  | 'io_error'
+  | 'quarantine_failed';
+
+export interface EpisodeStreamError {
+  code: EpisodeStreamErrorCode;
+  message: string;
+  reason?: string;
+  quarantineFile?: string;
+}
+
+export type EpisodeStreamResult<T> =
+  | { ok: true; value: T; mode: EpisodeStreamLoadMode }
+  | { ok: false; error: EpisodeStreamError };
+
+export interface EpisodeStreamFilesystem {
+  exists(path: string): boolean;
+  readFile(path: string): string;
+  rename(from: string, to: string): void;
+}
+
+const DEFAULT_EPISODE_FILESYSTEM: EpisodeStreamFilesystem = {
+  exists: existsSync,
+  readFile: (path) => readFileSync(path, 'utf-8'),
+  rename: renameSync,
+};
+
+export interface EpisodeStreamLoadOptions {
+  sessionId?: string;
+  mode?: EpisodeStreamLoadMode;
+  hashLink?: boolean;
+  filesystem?: EpisodeStreamFilesystem;
+}
+
+export interface EpisodeValidationResult {
+  valid: boolean;
+  error?: string;
+  code?: Exclude<EpisodeStreamErrorCode, 'absent' | 'already_exists' | 'io_error' | 'quarantine_failed'>;
+}
 
 /** Canonical episode event: executor envelope + optional hash-link field. */
 export type EpisodeEvent = CanonicalExecutorEvent & {
@@ -139,6 +189,79 @@ export function hashEpisodeEvent(event: EpisodeEvent): string {
   return createHash('sha256').update(JSON.stringify(event), 'utf8').digest('hex');
 }
 
+function truncateUtf8(value: string, maxBytes: number): string {
+  const bytes = Buffer.from(value, 'utf8');
+  if (bytes.byteLength <= maxBytes) return value;
+  let end = Math.max(0, maxBytes);
+  while (end > 0 && (bytes[end - 1]! & 0xc0) === 0x80) {
+    let start = end - 1;
+    while (start > 0 && (bytes[start]! & 0xc0) === 0x80) start -= 1;
+    const lead = bytes[start]!;
+    const expectedLength =
+      lead < 0x80 ? 1 : lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+    if (end - start === expectedLength) break;
+    end = start;
+  }
+  return bytes.subarray(0, end).toString('utf8');
+}
+
+/** Redacts and caps event payloads before they enter the durable stream. */
+export function redactAndCapEpisodePayload(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const redacted = redactEvidenceValue(payload) as Record<string, unknown>;
+  const serialized = JSON.stringify(redacted);
+  if (Buffer.byteLength(serialized, 'utf8') <= EPISODE_PAYLOAD_MAX_BYTES) return redacted;
+
+  const routingKeys = new Set([
+    'eventId',
+    'turnId',
+    'runId',
+    'phase',
+    'stage',
+    'status',
+    'outcome',
+    'reason',
+    'tool',
+    'step',
+    'target',
+  ]);
+  const routing: Record<string, unknown> = {};
+  for (const key of routingKeys) {
+    const value = redacted[key];
+    if (
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'boolean' ||
+      value === null
+    ) {
+      routing[key] = typeof value === 'string' ? truncateUtf8(value, 512) : value;
+    }
+  }
+  const base = {
+    ...routing,
+    truncated: true,
+    originalBytes: Buffer.byteLength(serialized, 'utf8'),
+  };
+  let low = 0;
+  let high = Buffer.byteLength(serialized, 'utf8');
+  let best: Record<string, unknown> = { ...base, preview: '' };
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const candidate = { ...base, preview: truncateUtf8(serialized, mid) };
+    if (Buffer.byteLength(JSON.stringify(candidate), 'utf8') <= EPISODE_PAYLOAD_MAX_BYTES) {
+      best = candidate;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  if (Buffer.byteLength(JSON.stringify(best), 'utf8') > EPISODE_PAYLOAD_MAX_BYTES) {
+    throw new Error('Episode payload cap could not be satisfied.');
+  }
+  return best;
+}
+
 /**
  * Append one episode event. Optionally hash-links via prevHash when log.hashLink.
  * Returns the full record.
@@ -165,7 +288,7 @@ export function appendEpisodeEvent(
     ts: input.ts ?? new Date().toISOString(),
     kind: input.kind,
     type: input.type,
-    payload: input.payload ? { ...input.payload } : {},
+    payload: redactAndCapEpisodePayload(input.payload ? { ...input.payload } : {}),
   };
   if (log.hashLink && log.lastEventHash) {
     event.prevHash = log.lastEventHash;
@@ -314,6 +437,129 @@ export function rewriteEpisodeEventLog(runDir: string, log: EpisodeEventLog): st
   return path;
 }
 
+/**
+ * Verify SHA-256 prevHash chain, contiguous sequence numbers, and session identity consistency.
+ */
+export function verifyHashChain(events: readonly EpisodeEvent[]): { valid: boolean; error?: string } {
+  const validation = validateEpisodeEventLog(events);
+  return validation.valid
+    ? { valid: true }
+    : validation.error
+      ? { valid: false, error: validation.error }
+      : { valid: false };
+}
+
+const EPISODE_EVENT_KINDS = new Set<CanonicalEventKind>([
+  'session',
+  'turn',
+  'tool',
+  'mutation',
+  'progress',
+  'verifier',
+  'completion',
+  'recovery',
+]);
+
+/** Strict runtime validation used at every pipeline load boundary. */
+export function validateEpisodeEventLog(
+  events: readonly EpisodeEvent[],
+  expectedSessionId?: string,
+): EpisodeValidationResult {
+  if (!Array.isArray(events) || events.length === 0) {
+    return { valid: false, code: 'malformed', error: 'Episode event stream is empty.' };
+  }
+
+  const first = events[0]!;
+  if (typeof first.sessionId !== 'string' || first.sessionId.length === 0) {
+    return { valid: false, code: 'malformed', error: 'Episode stream has an invalid sessionId.' };
+  }
+  if (expectedSessionId && first.sessionId !== expectedSessionId) {
+    return {
+      valid: false,
+      code: 'session_mismatch',
+      error: `Episode session mismatch: expected "${expectedSessionId}", got "${first.sessionId}"`,
+    };
+  }
+  if (!first.sessionId || first.seq !== 0 || first.prevHash !== undefined) {
+    return {
+      valid: false,
+      code: 'invalid_chain',
+      error: 'Episode stream must begin at seq 0 without a predecessor hash.',
+    };
+  }
+
+  const expectedSession = first.sessionId;
+  let expectedSeq = 0;
+
+  for (let i = 0; i < events.length; i += 1) {
+    const event = events[i]!;
+
+    if (
+      event.schemaVersion !== EXECUTOR_EVENT_SCHEMA_VERSION ||
+      typeof event.eventId !== 'string' ||
+      event.eventId.length === 0 ||
+      typeof event.sessionId !== 'string' ||
+      event.sessionId.length === 0 ||
+      (event.turnId !== null && typeof event.turnId !== 'string') ||
+      typeof event.ts !== 'string' ||
+      event.ts.length === 0 ||
+      !Number.isInteger(event.seq) ||
+      event.seq < 0 ||
+      typeof event.type !== 'string' ||
+      event.type.length === 0 ||
+      !EPISODE_EVENT_KINDS.has(event.kind) ||
+      !event.payload ||
+      typeof event.payload !== 'object' ||
+      Array.isArray(event.payload)
+    ) {
+      return {
+        valid: false,
+        code: 'malformed',
+        error: `Malformed episode event at index ${i}.`,
+      };
+    }
+
+    if (event.sessionId !== expectedSession) {
+      return {
+        valid: false,
+        code: 'session_mismatch',
+        error: `Inconsistent sessionId at index ${i}: expected "${expectedSession}", got "${event.sessionId}"`,
+      };
+    }
+
+    if (event.seq !== expectedSeq) {
+      return {
+        valid: false,
+        code: 'invalid_chain',
+        error: `Non-contiguous seq at index ${i}: expected ${expectedSeq}, got ${event.seq}`,
+      };
+    }
+
+    if (i > 0 && (typeof event.prevHash !== 'string' || !/^[a-f0-9]{64}$/i.test(event.prevHash))) {
+      return {
+        valid: false,
+        code: 'invalid_chain',
+        error: `Hash chain broken at index ${i}: predecessor hash is missing or malformed.`,
+      };
+    }
+
+    if (i > 0) {
+      const expectedPrevHash = hashEpisodeEvent(events[i - 1]!);
+      if (event.prevHash !== expectedPrevHash) {
+        return {
+          valid: false,
+          code: 'invalid_chain',
+          error: `Hash chain broken at index ${i}: prevHash mismatch for seq ${event.seq}`,
+        };
+      }
+    }
+
+    expectedSeq += 1;
+  }
+
+  return { valid: true };
+}
+
 export function loadEpisodeEventLogFromDir(
   runDir: string,
   options?: CreateEpisodeEventLogOptions,
@@ -321,8 +567,202 @@ export function loadEpisodeEventLogFromDir(
   try {
     const path = join(runDir, EPISODE_EVENTS_FILENAME);
     if (!existsSync(path)) return null;
-    return parseEpisodeEventLog(readFileSync(path, 'utf-8'), undefined, options);
+    const parsed = parseEpisodeEventLog(readFileSync(path, 'utf-8'), undefined, options);
+    return validateEpisodeEventLog(parsed.events).valid ? parsed : null;
   } catch {
     return null;
   }
+}
+
+function episodeError(
+  code: EpisodeStreamErrorCode,
+  message: string,
+  details?: Omit<EpisodeStreamError, 'code' | 'message'>,
+): EpisodeStreamResult<never> {
+  return { ok: false, error: { code, message, ...(details ?? {}) } };
+}
+
+function recoveryReason(reason: string): string {
+  return truncateUtf8(redactEvidenceValue(reason), 512);
+}
+
+function genesisLog(
+  sessionId: string | undefined,
+  mode: EpisodeStreamLoadMode,
+  reason?: string,
+  options?: CreateEpisodeEventLogOptions,
+  quarantineFile?: string,
+): EpisodeEventLog {
+  const log = createEpisodeEventLog(sessionId, options);
+  appendEpisodeEvent(log, {
+    kind: 'recovery',
+    type: quarantineFile
+      ? 'RECOVERY_GENESIS'
+      : mode === 'legacy_resume'
+        ? 'LEGACY_MIGRATION_GENESIS'
+        : 'PIPELINE_GENESIS',
+    payload:
+      quarantineFile
+        ? { quarantineFile, reason: recoveryReason(reason ?? 'Validation failed.') }
+        : mode === 'legacy_resume'
+        ? { reason: 'No episode stream existed for legacy resume.' }
+        : reason
+          ? { reason: recoveryReason(reason) }
+          : { reason: 'New pipeline episode stream.' },
+  });
+  return log;
+}
+
+function loadEpisodeEventLogWithMode(
+  runDir: string,
+  options: EpisodeStreamLoadOptions = {},
+): EpisodeStreamResult<EpisodeEventLog> {
+  const mode = options.mode ?? 'resume';
+  const fs = options.filesystem ?? DEFAULT_EPISODE_FILESYSTEM;
+  const path = join(runDir, EPISODE_EVENTS_FILENAME);
+  let present: boolean;
+  try {
+    present = fs.exists(path);
+  } catch (error: unknown) {
+    return episodeError('io_error', `Unable to inspect episode stream: ${String(error)}`);
+  }
+
+  if (!present) {
+    if (mode === 'resume') {
+      return episodeError('absent', `Episode stream does not exist at ${path}.`);
+    }
+    return { ok: true, value: genesisLog(options.sessionId, mode, undefined, options), mode };
+  }
+
+  if (mode === 'new') {
+    return episodeError('already_exists', `Episode stream already exists at ${path}.`);
+  }
+
+  let raw: string;
+  try {
+    raw = fs.readFile(path);
+  } catch (error: unknown) {
+    return episodeError('io_error', `Unable to read episode stream: ${String(error)}`);
+  }
+
+  let parsed: EpisodeEventLog;
+  try {
+    parsed = parseEpisodeEventLog(raw, options.sessionId, options);
+  } catch (error: unknown) {
+    const timestamp = Date.now();
+    const quarantineFile = `episode-events.corrupt.${timestamp}-${randomUUID()}.jsonl`;
+    const quarantinePath = join(runDir, quarantineFile);
+    try {
+      fs.rename(path, quarantinePath);
+    } catch (renameError: unknown) {
+      return episodeError(
+        'quarantine_failed',
+        'Episode stream parsing failed and quarantine could not be completed; refusing recovery append.',
+        { reason: recoveryReason(String(error ?? renameError)) },
+      );
+    }
+    if (mode === 'resume') {
+      return episodeError(
+        'malformed',
+        'Episode stream was quarantined after a parse failure; resume is fail-closed.',
+        { quarantineFile, reason: recoveryReason(String(error)) },
+      );
+    }
+    return {
+      ok: true,
+      value: genesisLog(options.sessionId, mode, String(error), options, quarantineFile),
+      mode,
+    };
+  }
+
+  const validation = validateEpisodeEventLog(parsed.events, options.sessionId);
+  if (validation.valid) return { ok: true, value: parsed, mode };
+
+  if (validation.code === 'session_mismatch') {
+    return episodeError('session_mismatch', validation.error ?? 'Episode session mismatch.');
+  }
+
+  const timestamp = Date.now();
+  const quarantineFile = `episode-events.corrupt.${timestamp}.jsonl`;
+  const quarantinePath = join(runDir, quarantineFile);
+  try {
+    fs.rename(path, quarantinePath);
+  } catch (error: unknown) {
+    return episodeError(
+      'quarantine_failed',
+      'Episode stream validation failed and quarantine could not be completed; refusing recovery append.',
+      { reason: recoveryReason(validation.error ?? String(error)) },
+    );
+  }
+
+  if (mode === 'resume') {
+    return episodeError(
+      'invalid_chain',
+      'Episode stream was quarantined after validation failure; resume is fail-closed.',
+      { quarantineFile, reason: recoveryReason(validation.error ?? 'Validation failed.') },
+    );
+  }
+
+  return {
+    ok: true,
+    value: genesisLog(
+      options.sessionId ?? parsed.sessionId,
+      mode,
+      validation.error ?? 'validation failed',
+      options,
+      quarantineFile,
+    ),
+    mode,
+  };
+}
+
+/** Parse and validate an episode stream without touching the filesystem. */
+export function parseEpisodeEventLogResult(
+  raw: string,
+  options: Pick<EpisodeStreamLoadOptions, 'sessionId' | 'hashLink'> = {},
+): EpisodeStreamResult<EpisodeEventLog> {
+  try {
+    const parsed = parseEpisodeEventLog(raw, options.sessionId, options);
+    const validation = validateEpisodeEventLog(parsed.events, options.sessionId);
+    if (!validation.valid) {
+      return episodeError(
+        validation.code === 'session_mismatch' ? 'session_mismatch' : validation.code === 'malformed' ? 'malformed' : 'invalid_chain',
+        validation.error ?? 'Episode stream validation failed.',
+      );
+    }
+    return { ok: true, value: parsed, mode: 'resume' };
+  } catch (error: unknown) {
+    return episodeError('malformed', `Episode stream JSONL is malformed: ${String(error)}`);
+  }
+}
+
+/** Typed load boundary for all pipeline episode streams. */
+export function loadEpisodeEventLogForMode(
+  runDir: string,
+  options: EpisodeStreamLoadOptions = {},
+): EpisodeStreamResult<EpisodeEventLog> {
+  return loadEpisodeEventLogWithMode(runDir, options);
+}
+
+export const loadEpisodeEventLog = loadEpisodeEventLogForMode;
+
+/**
+ * Load episode event log with hash-chain integrity validation.
+ * If corrupt, quarantines the file to `episode-events.corrupt.<ts>.jsonl` and initializes
+ * a new stream with a RECOVERY_GENESIS event.
+ */
+export function loadOrQuarantineEpisodeLog(
+  runDir: string,
+  sessionId?: string,
+  options?: CreateEpisodeEventLogOptions,
+): EpisodeEventLog {
+  const result = loadEpisodeEventLogForMode(runDir, {
+    ...(sessionId !== undefined ? { sessionId } : {}),
+    mode: 'legacy_resume',
+    ...(options?.hashLink !== undefined ? { hashLink: options.hashLink } : {}),
+  });
+  if (!result.ok) {
+    throw new Error(`[episode-stream:${result.error.code}] ${result.error.message}`);
+  }
+  return result.value;
 }

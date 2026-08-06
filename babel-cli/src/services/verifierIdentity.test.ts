@@ -84,3 +84,13 @@ test('npm run test is same family as npm test', () => {
   assert.equal(satisfiesVerifierRequirement('npm test', 'npm run test'), true);
   assert.equal(analyzeVerifierIdentity('npm run test')?.family, 'npm-test');
 });
+
+test('classifies flag=value targeted filters correctly', () => {
+  assert.equal(classifyVerifierScope('npm test -- -t=math'), 'targeted');
+  assert.equal(classifyVerifierScope('pytest -k=math'), 'targeted');
+  assert.equal(classifyVerifierScope('vitest run --test-name-pattern=math'), 'targeted');
+  assert.equal(classifyVerifierScope('npm test -- --filter=math'), 'targeted');
+
+  assert.equal(satisfiesVerifierRequirement('npm test', 'npm test -- -t=math'), false);
+  assert.equal(satisfiesVerifierRequirement('pytest', 'pytest -k=math'), false);
+});

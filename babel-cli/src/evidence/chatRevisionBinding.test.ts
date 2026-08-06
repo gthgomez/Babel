@@ -12,6 +12,7 @@ import {
   mutationPathsFromSessionEvents,
   refreshChatVerifierReceiptStalenessSync,
   revisionBindingProofErrors,
+  toExecutorVerifierReceipt,
   toRevisionBoundReceipt,
 } from './chatRevisionBinding.js';
 import { evaluateExecuteCompletionHonesty } from '../agent/completionGatePolicy.js';
@@ -239,6 +240,91 @@ describe('chatRevisionBinding', () => {
       );
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('toExecutorVerifierReceipt performs strict validation without fabrication', () => {
+    // Rejects null/undefined
+    const nullRes = toExecutorVerifierReceipt(null);
+    assert.strictEqual(nullRes.ok, false);
+
+    // Rejects authority: false or missing authority
+    const noAuth = toExecutorVerifierReceipt({
+      receiptId: 'r1',
+      command: 'npm test',
+      exit_code: 0,
+      authority: false,
+      authoritySource: 'built_in_runner',
+      capturedAt: Date.now(),
+      boundRevision: { fileHashes: { 'a.ts': 'h1' } },
+    } as any);
+    assert.strictEqual(noAuth.ok, false);
+    if (!noAuth.ok) assert.ok(noAuth.errors.some((e: string) => /authority/i.test(e)));
+
+    // Rejects authoritySource === 'unknown'
+    const unknownSource = toExecutorVerifierReceipt({
+      receiptId: 'r1',
+      command: 'npm test',
+      exit_code: 0,
+      authority: true,
+      authoritySource: 'unknown',
+      capturedAt: Date.now(),
+      boundRevision: { fileHashes: { 'a.ts': 'h1' } },
+    } as any);
+    assert.strictEqual(unknownSource.ok, false);
+    if (!unknownSource.ok) assert.ok(unknownSource.errors.some((e: string) => /authoritySource/i.test(e)));
+
+    // Rejects non-finite capturedAt
+    const invalidTime = toExecutorVerifierReceipt({
+      receiptId: 'r1',
+      command: 'npm test',
+      exit_code: 0,
+      authority: true,
+      authoritySource: 'built_in_runner',
+      capturedAt: Infinity,
+      boundRevision: { fileHashes: { 'a.ts': 'h1' } },
+    } as any);
+    assert.strictEqual(invalidTime.ok, false);
+    if (!invalidTime.ok) assert.ok(invalidTime.errors.some((e: string) => /capturedAt/i.test(e)));
+
+    // Rejects missing boundRevision fileHashes
+    const noHashes = toExecutorVerifierReceipt({
+      receiptId: 'r1',
+      command: 'npm test',
+      exit_code: 0,
+      authority: true,
+      authoritySource: 'built_in_runner',
+      capturedAt: Date.now(),
+      boundRevision: null,
+    } as any);
+    assert.strictEqual(noHashes.ok, false);
+    if (!noHashes.ok) assert.ok(noHashes.errors.some((e: string) => /boundRevision/i.test(e)));
+
+    // Accepts valid receipt with complete boundRevision (no fabrication allowed)
+    const valid = toExecutorVerifierReceipt({
+      receiptId: 'r1',
+      verifierId: 'npm-test',
+      command: 'npm test',
+      exitCode: 0,
+      authority: true,
+      authoritySource: 'built_in_runner',
+      capturedAt: 123456789,
+      stale: false,
+      boundRevision: {
+        gitCommitHash: null,
+        fileHashes: { 'a.ts': 'hash1' },
+        compositeTreeHash: 'sha256:abc123',
+        capturedAt: 123456789,
+      },
+    } as any);
+    assert.strictEqual(valid.ok, true);
+    if (valid.ok) {
+      assert.strictEqual(valid.receipt.receiptId, 'r1');
+      assert.strictEqual(valid.receipt.authority, true);
+      assert.strictEqual(valid.receipt.authoritySource, 'built_in_runner');
+      assert.strictEqual(valid.receipt.capturedAt, 123456789);
+      assert.deepStrictEqual(valid.receipt.boundRevision.fileHashes, { 'a.ts': 'hash1' });
+      assert.strictEqual(valid.receipt.boundRevision.compositeTreeHash, 'sha256:abc123');
     }
   });
 });

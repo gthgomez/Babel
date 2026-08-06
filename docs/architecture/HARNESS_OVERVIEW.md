@@ -198,7 +198,7 @@ Additional (partially wired):
 |-------|--------|
 | R9 verifier-dependency integrity | **Detect + escalate** (hash scripts/files; tamper strikes) — `verifierIntegrity.ts` |
 | Chat revision-bound receipts + evidence graph on proof | **Live Chat path** — `chatRevisionBinding.ts`, `evaluateEvidenceSync` |
-| `IndependentVerifier` tree-copy | **Env opt-in** or **high-assurance profile default** (`benchmark_container`, `babel_research`, `opencalw_manager`); everyday `safe_repo` still off |
+| `IndependentVerifier` tree-copy | **Env opt-in** or **high-assurance profile default** (`benchmark_container`, `babel_research`, and the workspace-manager profile); everyday `safe_repo` still off |
 | Benchmark overlay / gold | External fail-to-pass scoring; labels `false_complete`, `incorrect_patch`, `verifier_tampered` |
 
 ### Authoritative vs likely commands
@@ -209,7 +209,7 @@ Additional (partially wired):
 
 ### Evidence is multi-stream (today)
 
-Chat may write `thread_events.json`, `session-events.jsonl`, and hash-linked foundation `episode-events.jsonl` (`episodeStream.ts`, dual-write from parity flush). Pipeline writes a rich `EvidenceBundle` (manifest, plans, QA, verifier summary, worktree/rollback, cost). Full cross-mode episode bus is still incomplete; Chat foundation is live.
+Chat may write `thread_events.json`, `session-events.jsonl`, and hash-linked `episode-events.jsonl` (`episodeStream.ts`, dual-write from parity flush). The pipeline writes the authoritative `EvidenceBundle` plus one validated, hash-linked `PipelineEpisodeSink` stream per primary or manual run; persistence is observable as `active` or `degraded`. Phase instrumentation, offline integration, cross-mode replay consumers, and TUI replay remain release-gate work.
 ---
 
 ## Isolation and mutation safety (summary)
@@ -256,7 +256,7 @@ Read in this order when changing harness behavior:
 | 10 | `babel-cli/src/services/worktreeSafety.ts` | Dirty veto / rollback |
 | 11 | `babel-cli/src/services/requiredVerifierContract.ts` + `verifierIdentity.ts` | Pipeline verifier plan + structural identity |
 | 12 | `babel-cli/src/schemas/agentContracts.ts` | Zod contracts + `TerminalOutcome` |
-| 13 | `babel-cli/src/evidence/episodeStream.ts` + `chatEngineParityBridge.ts` | Chat episode dual-write foundation |
+| 13 | `babel-cli/src/evidence/episodeStream.ts` + `pipeline/pipelineEpisodeSink.ts` + `chatEngineParityBridge.ts` | Chat + pipeline episode producers |
 | 14 | `babel-cli/src/evidence/independentVerifier.ts` | Clean-room IV env + profile defaults |
 
 **Do not** treat `sessionLoop.ts` as the ChatEngine turn machine — it is read-only lane step payloads.
@@ -270,7 +270,7 @@ Use these when planning reliability work; do not paper over them in marketing cl
 1. **Docker isolation is conditional** — missing Docker/image on isolation profiles **fail-closes** unless `BABEL_ALLOW_HOST_FALLBACK=1` or `BABEL_DOCKER_DISABLE=true` (H13). Operator UX: see [CHAT_MODE.md](../CHAT_MODE.md) (use `dev_local` for host-only day-to-day).
 2. **Verifier independence** — revision bind + honesty scope live; clean-room IndependentVerifier is env **or** high-assurance profile default — **not** everyday `safe_repo` Chat finalize.
 3. **Required-command scope is live** in pipeline + Chat honesty; residual is product UX (discoverability of full-suite requirements).
-4. **Evidence multi-stream** — Chat episode dual-write foundation exists (`episode-events.jsonl`); pipeline EvidenceBundle not yet joined; cross-mode replay incomplete.
+4. **Evidence multi-stream** — Chat and pipeline both produce validated `episode-events.jsonl` alongside EvidenceBundle/session evidence; EvidenceBundle remains authoritative on degradation; cross-mode replay is incomplete.
 5. **`ModeController` interface** exists; production chat is still ChatEngine + `kernel.decide`, not a full adapter implementation for every mode.
 6. **Chat revision binding + evidence-graph proof are live**.
 7. **Doc history**: Lite `AgentSession` vs ChatEngine, and Full RO proof vs pipeline deep mutation — always check this overview + code over older Lite wording.

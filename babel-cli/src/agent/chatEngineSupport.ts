@@ -33,23 +33,41 @@ export function pinProjectRootEnv(projectRoot: string): () => void {
 }
 
 /**
- * After a successful workspace mutation: bump write counter and mark any prior
- * green verifier receipt stale (H8 — intervening edits invalidate completion proof).
- * Mutates the engine bag in place so ChatEngine call sites stay one line.
+ * Invalidate active verifier ledger receipts and lastVerifierReceipt staleness
+ * without modifying writeCount or mutation metrics.
+ */
+export function invalidateVerifierLedger(
+  engine: {
+    lastVerifierReceipt: { stale?: boolean; staleReason?: string } | null;
+    executedVerifierLedger?: { stale?: boolean; staleReason?: string }[];
+  },
+  reason?: string,
+): void {
+  const defaultReason = reason ?? 'workspace state changed after verifier receipt';
+  if (engine.lastVerifierReceipt) {
+    engine.lastVerifierReceipt.stale = true;
+    engine.lastVerifierReceipt.staleReason = engine.lastVerifierReceipt.staleReason ?? defaultReason;
+  }
+  if (engine.executedVerifierLedger) {
+    for (const item of engine.executedVerifierLedger) {
+      item.stale = true;
+      item.staleReason = item.staleReason ?? defaultReason;
+    }
+  }
+}
+
+/**
+ * After a confirmed workspace mutation: bump write counter and mark active verifier ledger stale.
  */
 export function noteChatWorkspaceMutation(engine: {
   writeCount: number;
   consecutiveReadOnlyTools: number;
   lastVerifierReceipt: { stale?: boolean; staleReason?: string } | null;
+  executedVerifierLedger?: { stale?: boolean; staleReason?: string }[];
 }): void {
   engine.writeCount += 1;
   engine.consecutiveReadOnlyTools = 0;
-  if (engine.lastVerifierReceipt) {
-    engine.lastVerifierReceipt.stale = true;
-    engine.lastVerifierReceipt.staleReason =
-      engine.lastVerifierReceipt.staleReason ??
-      'workspace mutated after verifier receipt';
-  }
+  invalidateVerifierLedger(engine, 'workspace mutated after verifier receipt');
 }
 
 /** Map a native tool-use event into a ChatToolAction for policy-gated execution. */

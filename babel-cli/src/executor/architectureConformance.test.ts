@@ -99,7 +99,16 @@ test("H5/H6 failed honesty downgrades VERIFIED_COMPLETE", () => {
     requestedOutcome: "VERIFIED_COMPLETE",
     hasWrite: true,
     verificationPolicy: "strict",
-    lastVerifierReceipt: { command: "npm test", exit_code: 0, summary: "ok" },
+    lastVerifierReceipt: {
+      receiptId: "r-mock-1",
+      command: "npm test",
+      exitCode: 0,
+      authority: true,
+      authoritySource: "built_in_runner",
+      boundRevision: { fileHashes: {} } as any,
+      capturedAt: Date.now(),
+      stale: false,
+    },
     toolCallLog: [],
     proof: { compliant: false, errors: ["missing mutation evidence"] },
     evidenceRefs: ["r1"],
@@ -130,6 +139,7 @@ test("H8 honesty rejects stale verifier receipt", () => {
       exit_code: 0,
       summary: "ok",
       stale: true,
+      authority: true,
     },
     toolCallLog: [
       { tool: "write_file", target: "src/add.ts" },
@@ -439,6 +449,7 @@ test("golden negative: narrow verifier does not satisfy full-suite requirement",
       command: narrow.actual.displayCommand,
       exit_code: 0,
       summary: "1 passed",
+      authority: true,
     },
     toolCallLog: [],
     requiredVerifierCommands: [narrow.required.displayCommand],
@@ -480,9 +491,14 @@ test("live kernel accepts golden-shaped verified completion with proof", () => {
     hasWrite: true,
     verificationPolicy: "required",
     lastVerifierReceipt: {
+      receiptId: "golden-r1",
       command: "npm test",
-      exit_code: 0,
-      summary: "1 passed",
+      exitCode: 0,
+      authority: true,
+      authoritySource: "built_in_runner",
+      boundRevision: { fileHashes: {} } as any,
+      capturedAt: Date.now(),
+      stale: false,
     },
     toolCallLog: [
       { tool: "write_file", target: "src/add.ts" },
@@ -494,4 +510,32 @@ test("live kernel accepts golden-shaped verified completion with proof", () => {
   assert.equal(decision.finalOutcome, "VERIFIED_COMPLETE");
   assert.equal(decision.allowed, true);
   assert.equal(decision.policyVersion, EXECUTOR_CONTRACT_VERSION);
+});
+
+test("canonical kernel requires coverage for all required verifiers in multi-verifier mode", () => {
+  const kernel = createExecutorKernel("chat");
+  const greenNpm = {
+    receiptId: "r-npm",
+    command: "npm test",
+    exitCode: 0,
+    authority: true,
+    authoritySource: "built_in_runner" as const,
+    boundRevision: { fileHashes: {} } as any,
+    capturedAt: Date.now(),
+    stale: false,
+  };
+
+  const decision = kernel.completion.decide({
+    mode: "chat",
+    requestedOutcome: "VERIFIED_COMPLETE",
+    hasWrite: true,
+    verificationPolicy: "strict",
+    requiredVerifierCommands: ["npm test", "pytest"],
+    executedVerifierLedger: [greenNpm],
+    toolCallLog: [],
+    proof: { compliant: true },
+  });
+
+  assert.equal(decision.finalOutcome, "UNVERIFIED_PATCH");
+  assert.match(decision.reason, /verifier_scope|verifier_missing/);
 });

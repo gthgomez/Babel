@@ -10,6 +10,7 @@ import {
   buildPostWriteRepairMessage,
   computeCriticRepairCostCap,
   computePostWriteRepairWallMs,
+  hasAnyWrites,
   POST_WRITE_REPAIR_WALL_MAX_MS,
   POST_WRITE_REPAIR_WALL_MIN_MS,
   runAsymmetricDiffCritic,
@@ -120,6 +121,21 @@ describe('computePostWriteRepairWallMs', () => {
 });
 
 describe('runAsymmetricDiffCritic early paths (C1)', () => {
+  test('confirmed mutation paths count as writes', () => {
+    assert.equal(
+      hasAnyWrites([
+        { tool: 'run_command', target: 'generator', mutation_paths: ['src/generated.ts'] },
+      ]),
+      true,
+    );
+    assert.equal(
+      hasAnyWrites([
+        { tool: 'run_command', target: 'generator', mutation_paths: [] },
+      ]),
+      false,
+    );
+  });
+
   test('non-execute intent sets skip receipt non_execute', async () => {
     const state = baseState();
     const decision = await runAsymmetricDiffCritic(state, 'done', 'explain');
