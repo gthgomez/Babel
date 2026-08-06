@@ -255,6 +255,7 @@ import {
   compactHeuristicConversation,
   pinProjectRootEnv,
   noteChatWorkspaceMutation,
+  invalidateVerifierLedger,
   nativeToolUseToChatAction,
   formatResultDetail,
   countPatchStats,
@@ -271,6 +272,13 @@ import {
 import { isFatalWindowsProcessExit, logPlatformUnusableResult } from './verifierFailFast.js';
 import { RepetitionDetector } from './repetitionDetector.js';
 import { captureThought } from './thoughtCapture.js';
+import { resolveHonestyRequiredVerifiers } from './completionGatePolicy.js';
+import {
+  prepareKernelVerifierInput,
+  captureChatVerifierReceipt,
+  resolveEngineRequiredVerifiers,
+  upsertVerifierReceipt,
+} from './chatEngineVerifierAdapter.js';
 import {
   beginUserSubmission,
   type TurnRuntimeSnapshot,
@@ -329,6 +337,8 @@ export interface ChatEngineOptions {
   planHandoff?: import('./planExecuteMode.js').ChatPlanExecuteHandoff;
   /** Shared kernel profile. Plan is read-only; deep retains governed writes. */
   executionProfile?: ChatExecutionProfile;
+  /** Externally supplied required verifier commands for completion gate scope. */
+  requiredVerifierCommands?: readonly string[] | null;
 }
 
 export interface ContextCompactedInfo {
@@ -489,8 +499,10 @@ export class ChatEngine {
     stdout?: string;
     stderr?: string;
     verified?: boolean;
+    mutation_paths?: string[];
   }> = [];
   private lastVerifierReceipt: BoundChatVerifierReceipt | null = null;
+  private executedVerifierLedger: BoundChatVerifierReceipt[] = [];
   /** Index into toolCallLog at the start of the current turn's actions.
    *  Used to correctly slice per-turn entries even as the log grows across turns. */
   private _turnToolCallLogStart = 0;
@@ -808,6 +820,7 @@ export class ChatEngine {
     const projectTestCommands = this.discoveredTestCommands
       .map((entry) => entry.command)
       .filter((command) => command.trim().length > 0);
+    const verifierInput = this.buildVerifierInput();
     return evaluateCompletionGateForEngine({
       turnType: turnResult.type,
       taskIntent,
@@ -815,12 +828,16 @@ export class ChatEngine {
       taskClass: this.taskClass,
       toolCallLog: this.toolCallLog,
       lastVerifierReceipt: this.lastVerifierReceipt,
+      executedVerifierLedger: verifierInput.executedVerifierLedger ?? null,
+      verifierEvidenceErrors: verifierInput.verifierEvidenceErrors ?? null,
+      requiredVerifierCommands: verifierInput.requiredVerifierCommands,
       projectTestCommands,
     });
   }
 
   private buildGateRejectUserMessage(): string {
     const testCommands = formatTestCommandsForGate(this.discoveredTestCommands);
+    const verifierInput = this.buildVerifierInput();
     return buildGateRejectUserMessageForEngine({
       task: this.options.task,
       taskClass: this.taskClass,
@@ -828,6 +845,9 @@ export class ChatEngine {
       lastVerifierReceipt: this.lastVerifierReceipt,
       hasAnyWrites: this.hasAnyWrites(),
       gateStrikes: this.gateStrikes,
+      executedVerifierLedger: verifierInput.executedVerifierLedger ?? null,
+      verifierEvidenceErrors: verifierInput.verifierEvidenceErrors ?? null,
+      requiredVerifierCommands: verifierInput.requiredVerifierCommands,
       ...(testCommands ? { projectTestCommands: testCommands.split(', ') } : {}),
     });
   }
@@ -2629,6 +2649,7 @@ export class ChatEngine {
   /** Restore persisted event log after kill/restart resume. */
   restoreEventLog(log: import('./threadEventLog.js').ThreadEventLog): void {
     this.parity.eventLog = log;
+    this.clearVerifierEvidenceState();
     const lastTurn = [...log.events].reverse().find((e) => e.kind === 'turn_started');
     if (lastTurn) this.parity.turnId = lastTurn.turn_id;
   }
@@ -2639,6 +2660,7 @@ export class ChatEngine {
    */
   restoreSessionEvents(log: SessionEventLog, options?: { runDir?: string }): number {
     this.parity.sessionEvents = log;
+    this.clearVerifierEvidenceState();
     const runDir = options?.runDir ?? this.engineRunDir;
     return paritySettleInterruptedOnResume(this.parity, runDir);
   }
@@ -2649,6 +2671,35 @@ export class ChatEngine {
     const loaded = loadSessionEventLogFromDir(dir);
     if (!loaded) return 0;
     return this.restoreSessionEvents(loaded, { runDir: dir });
+  }
+
+  public getResolvedRequiredVerifiers(): string[] { return resolveEngineRequiredVerifiers({ task: this.options.task, projectTestCommands: this.discoveredTestCommands.map((e) => e.command), requiredVerifierCommands: this.options.requiredVerifierCommands ?? null }); }
+
+  private clearVerifierEvidenceState(): void { this.executedVerifierLedger = []; this.lastVerifierReceipt = null; this.verifierReceiptCache.clear(); this.platformUnusableVerifiers.clear(); this.verifierDependencyHashes.clear(); }
+
+  /** Build the single canonical verifier input shared by every completion gate. */
+  private buildVerifierInput(): ReturnType<typeof prepareKernelVerifierInput> & { requiredVerifierCommands: string[] } { return { ...prepareKernelVerifierInput(this.lastVerifierReceipt, this.executedVerifierLedger), requiredVerifierCommands: this.getResolvedRequiredVerifiers() }; }
+
+  private decideCompletion(requestedOutcome: TerminalOutcome | 'PLAN_COMPLETE', hasMutation: boolean) {
+    refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, this.lastVerifierReceipt);
+    for (const receipt of this.executedVerifierLedger) refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, receipt);
+    const verifierInput = this.buildVerifierInput();
+
+    return this.executorKernel.completion.decide({
+      mode: this.executionProfile,
+      requestedOutcome,
+      hasWrite: hasMutation,
+      verificationPolicy: this.gatePolicy ?? 'required',
+      lastVerifierReceipt: verifierInput.lastVerifierReceipt,
+      executedVerifierLedger: verifierInput.executedVerifierLedger,
+      verifierEvidenceErrors: verifierInput.verifierEvidenceErrors,
+      requiredVerifierCommands: verifierInput.requiredVerifierCommands,
+      toolCallLog: toGateToolLog(this.toolCallLog),
+      ...(this.lastVerifierReceipt?.boundRevision ? { workspaceRevision: this.lastVerifierReceipt.boundRevision } : {}),
+      proof: requestedOutcome === 'VERIFIED_COMPLETE'
+        ? this.buildCompletionProof(hasMutation)
+        : { compliant: false, errors: ['requested outcome was not verified'] },
+    });
   }
 
   /**
@@ -2663,7 +2714,6 @@ export class ChatEngine {
       criticReceipt?: DiffCriticVerdict | null;
     },
   ) {
-    refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, this.lastVerifierReceipt);
     const hasMutation = this.hasAnyWrites();
     const requestedOutcome = computeTerminalOutcome({
       finalStatus: extra?.blockedReport ? 'blocked' : this.budgetExceeded ? 'budget_exhausted' : 'completed',
@@ -2673,20 +2723,7 @@ export class ChatEngine {
       hasAnyWrites: hasMutation,
     });
     const planCompletion = this.executionProfile === 'plan' && !extra?.blockedReport && !this.budgetExceeded;
-    const decision = this.executorKernel.completion.decide({
-      mode: this.executionProfile,
-      requestedOutcome: planCompletion ? 'PLAN_COMPLETE' : requestedOutcome,
-      hasWrite: hasMutation,
-      verificationPolicy: this.gatePolicy ?? 'required',
-      lastVerifierReceipt: this.lastVerifierReceipt,
-      toolCallLog: toGateToolLog(this.toolCallLog),
-      ...(this.lastVerifierReceipt?.boundRevision
-        ? { workspaceRevision: this.lastVerifierReceipt.boundRevision }
-        : {}),
-      ...(requestedOutcome === 'VERIFIED_COMPLETE'
-        ? { proof: this.buildCompletionProof(hasMutation) }
-        : { proof: { compliant: false, errors: ['requested outcome was not verified'] } }),
-    });
+    const decision = this.decideCompletion(planCompletion ? 'PLAN_COMPLETE' : requestedOutcome, hasMutation);
     const outcome = decision.finalOutcome === 'PLAN_COMPLETE' ? 'UNVERIFIED_PATCH' : decision.finalOutcome;
     if (decision.finalOutcome === 'PLAN_COMPLETE') {
       recordCompletionDecision(this.parity.sessionEvents, String(this.parity.turnId ?? this._turnIndex), {
@@ -2770,9 +2807,7 @@ export class ChatEngine {
     this.toolCallLog = [];
     this._turnToolCallLogStart = 0;
     this.readCache.clear();
-    this.verifierReceiptCache.clear();
-    this.platformUnusableVerifiers.clear();
-    this.verifierDependencyHashes.clear();
+    this.clearVerifierEvidenceState();
     this.verifierTampered = false;
     this.tamperCount = 0;
     this.tamperedThisTurn = false;
@@ -2843,8 +2878,7 @@ export class ChatEngine {
     this.restrictToolsNextTurn = runtime.restrictToolsNextTurn;
 
     if (!runtime.continuedTask) {
-      this.lastVerifierReceipt = null;
-      this.verifierReceiptCache.clear();
+      this.clearVerifierEvidenceState();
       // Plan handoff force-mutate elevation must not leak into an unrelated task.
       this.forceMutateTurnsOverride = null;
       // P0-C: prior task exploration / stall state must not bias a new submission.
@@ -2856,15 +2890,9 @@ export class ChatEngine {
       this.limits = resolveChatEngineLimits(
         {
           ...(this.options.maxTurns !== undefined ? { maxTurns: this.options.maxTurns } : {}),
-          ...(this.options.maxConversationMessages !== undefined
-            ? { maxConversationMessages: this.options.maxConversationMessages }
-            : {}),
-          ...(this.options.maxEstimatedTokens !== undefined
-            ? { maxEstimatedTokens: this.options.maxEstimatedTokens }
-            : {}),
-          ...(this.options.maxTokensPerRound !== undefined
-            ? { maxTokensPerRound: this.options.maxTokensPerRound }
-            : {}),
+          ...(this.options.maxConversationMessages !== undefined ? { maxConversationMessages: this.options.maxConversationMessages } : {}),
+          ...(this.options.maxEstimatedTokens !== undefined ? { maxEstimatedTokens: this.options.maxEstimatedTokens } : {}),
+          ...(this.options.maxTokensPerRound !== undefined ? { maxTokensPerRound: this.options.maxTokensPerRound } : {}),
         },
         undefined,
         { taskClass: runtime.taskClass, taskText: runtime.taskText },
@@ -2890,16 +2918,8 @@ export class ChatEngine {
     return runtime;
   }
 
-  /** Observability / tests: last TurnRuntime snapshot (not live-synced mid-loop). */
-  getTurnRuntimeSnapshot(): TurnRuntimeSnapshot | null {
-    if (!this.lastTurnRuntime) return null;
-    return this.snapshotPreviousForBegin();
-  }
-
-  /** Current submission write count (live). */
-  getWriteCount(): number {
-    return this.writeCount;
-  }
+  getTurnRuntimeSnapshot(): TurnRuntimeSnapshot | null { return this.lastTurnRuntime ? this.snapshotPreviousForBegin() : null; }
+  getWriteCount(): number { return this.writeCount; }
 
   private snapshotPreviousForBegin(): TurnRuntimeSnapshot | null {
     if (!this.lastTurnRuntime) return null;
@@ -2958,6 +2978,7 @@ export class ChatEngine {
     const engine = new ChatEngine(options);
     engine.engineRunId = engineRunId;
     engine.conversation = messages;
+    engine.clearVerifierEvidenceState();
     engine.cachedSystemPromptLegacy = null;
     engine.cachedSystemPromptNative = null;
     engine.cachedSystemPromptText = null;
@@ -3496,7 +3517,16 @@ export class ChatEngine {
         this.fullReadCounts.delete(this.readCacheKey(gov.absolutePath));
         noteChatWorkspaceMutation(this as never);
         const lineNumber = gov.lineNumber ?? 0;
-        this.toolCallLog.push({ tool, target, detail: `line ${lineNumber}`, index: meta.index, exit_code: 0 });
+        this.toolCallLog.push({
+          tool,
+          target,
+          detail: `line ${lineNumber}`,
+          index: meta.index,
+          exit_code: 0,
+          ...(gov.mutationPaths && gov.mutationPaths.length > 0
+            ? { mutation_paths: [...gov.mutationPaths] }
+            : {}),
+        });
         callbacks.onToolComplete?.(toolId, `line ${lineNumber}`);
         callbacks.onFileChanged?.(
           gov.absolutePath,
@@ -3710,6 +3740,9 @@ export class ChatEngine {
           ? { exit_code: lastResult.exit_code, stdout: lastResult.stdout, stderr: lastResult.stderr }
           : {}),
         ...(result.policyBlocked ? { error: 'blocked' as const } : {}),
+        ...(result.mutationPaths && result.mutationPaths.length > 0
+          ? { mutation_paths: [...result.mutationPaths] }
+          : {}),
       });
 
       if (result.policyBlocked) {
@@ -3751,26 +3784,24 @@ export class ChatEngine {
           appendPatchRecovery(this.patchRecoveryPath ?? '', 'apply_patch', path, action.patch);
         }
 
-        // B1/B2: only authoritative verifier commands update the completion receipt.
+        // A shell action that reports confirmed mutation paths is a real write and
+        // must account exactly once before verifier receipt capture. A successful
+        // shell action without paths is indeterminate and only invalidates prior
+        // verifier evidence.
         if ((action.type === 'run_command' || action.type === 'test_run') && lastResult) {
+          const confirmedShellMutation = lastResult.exit_code === 0 && result.mutationPaths !== undefined && result.mutationPaths.length > 0;
+          if (confirmedShellMutation) {
+            noteChatWorkspaceMutation(this as never);
+          }
+
+          // B1/B2: only authoritative verifier commands update the completion receipt.
           if (isFatalWindowsProcessExit(lastResult.exit_code) && target) {
             this.platformUnusableVerifiers.add(target);
           }
-          if (isAuthoritativeVerifierCommand(target)) {
-            const structured = parseStructuredVerifierCommand(target, {
-              authoritySource: 'built_in_runner',
-            });
-            const receipt = await bindChatVerifierReceipt({
-              projectRoot: this.options.projectRoot,
-              command: target,
-              exit_code: lastResult.exit_code,
-              summary: (lastResult.stdout || '').slice(0, 200),
-              mutationPaths: mutationPathsFromSessionEvents(
-                this.parity.sessionEvents.events,
-              ),
-              structured,
-            });
+          const receipt = await captureChatVerifierReceipt({ projectRoot: this.options.projectRoot, command: target, exitCode: lastResult.exit_code, summary: (lastResult.stdout || '').slice(0, 200), mutationPaths: mutationPathsFromSessionEvents(this.parity.sessionEvents.events) });
+          if (receipt) {
             this.lastVerifierReceipt = receipt;
+            upsertVerifierReceipt(this.executedVerifierLedger, receipt);
             recordVerifierAttempt(this.parity.sessionEvents, {
               turn_id: String(this.parity.turnId ?? this._turnIndex),
               command_preview: target,
@@ -3782,6 +3813,8 @@ export class ChatEngine {
               receipt,
               writeCountAtCache: this.writeCount,
             });
+          } else if (lastResult.exit_code === 0 && !confirmedShellMutation) {
+            invalidateVerifierLedger(this as never, 'non-verifier shell command executed');
           }
         }
 
@@ -4628,9 +4661,6 @@ export class ChatEngine {
 
     if (this.cachedSystemPromptNative) stashEngineFingerprint(this.engineRunId, buildPromptFingerprint({ systemPrompt: this.cachedSystemPromptNative, taskClass: this.taskClass, tune: getChatTaskTune(this.taskClass), playbookId: this.activePlaybook?.id ?? null }));
 
-    // H8: re-derive stale from boundRevision before terminal honesty/proof.
-    refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, this.lastVerifierReceipt);
-
     // Compute truthful TerminalOutcome from status and runtime state.
     const hasMutation = this.hasAnyWrites();
     const outcome: TerminalOutcome = computeTerminalOutcome({
@@ -4641,20 +4671,7 @@ export class ChatEngine {
       hasAnyWrites: hasMutation,
     });
     const planCompletion = this.executionProfile === 'plan' && finalStatus === 'completed';
-    const kernelDecision = this.executorKernel.completion.decide({
-          mode: this.executionProfile,
-          requestedOutcome: planCompletion ? 'PLAN_COMPLETE' : outcome,
-          hasWrite: hasMutation,
-          verificationPolicy: this.gatePolicy ?? 'required',
-          lastVerifierReceipt: this.lastVerifierReceipt,
-          toolCallLog: toGateToolLog(this.toolCallLog),
-          ...(this.lastVerifierReceipt?.boundRevision
-            ? { workspaceRevision: this.lastVerifierReceipt.boundRevision }
-            : {}),
-          proof: outcome === 'VERIFIED_COMPLETE'
-            ? this.buildCompletionProof(hasMutation)
-            : { compliant: false, errors: ['requested outcome was not verified'] },
-        });
+    const kernelDecision = this.decideCompletion(planCompletion ? 'PLAN_COMPLETE' : outcome, hasMutation);
     const authoritativeOutcome: TerminalOutcome =
       kernelDecision && kernelDecision.finalOutcome !== 'PLAN_COMPLETE'
         ? kernelDecision.finalOutcome

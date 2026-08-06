@@ -534,6 +534,20 @@ export function buildPipelineV9OfflineFixtureResponse(
   }
 
   const stage = options.stage ?? options.mode;
+  const isEpisodeIntegration = process.env['BABEL_EPISODE_STREAM_INTEGRATION'] === '1' || /BABEL_EPISODE_STREAM_INTEGRATION/i.test(prompt);
+  if (isEpisodeIntegration && stage === 'planning') {
+    const plan = buildPipelineV9OfflineSwePlan('backend');
+    return { ...plan, minimal_action_set: [{ ...plan.minimal_action_set[0], target: 'src/evidence/episodeStream.ts' }] };
+  }
+  if (isEpisodeIntegration && stage === 'qa') {
+    return { verdict: 'PASS', overall_confidence: 5, notes: 'Episode stream integration fixture passed QA.' };
+  }
+  if (isEpisodeIntegration && (stage === 'executor' || prompt.includes('EXECUTION HISTORY'))) {
+    const hasSuccessfulRead = /file_read[^\n]*src\/evidence\/episodeStream\.ts[^\n]*\r?\nExit code: 0/.test(prompt);
+    return hasSuccessfulRead
+      ? { type: 'completion', status: 'EXECUTION_COMPLETE' }
+      : { type: 'tool_call', thinking: 'Read the episode stream source before completing.', tool: 'file_read', path: 'src/evidence/episodeStream.ts' };
+  }
   const isOtelRegression = /otel regression|otel verified lane|otel autonomous lane/i.test(prompt);
 
   if (isOtelRegression) {

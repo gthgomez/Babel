@@ -10,7 +10,7 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 
 <!--
 status: ACTIVE
-last_verified: 2026-07-03
+last_verified: 2026-08-04
 -->
 # Babel Runtime Modes
 
@@ -149,6 +149,32 @@ The CLI loads environment configuration on startup. Environment validation
 warnings are emitted if required configuration is missing. Use `--strict-env`,
 set `BABEL_STRICT_ENV=true`, or run under `CI=true` to exit non-zero instead
 of warning.
+
+## Execution profiles and Docker isolation (H13)
+
+Runtime modes (chat / plan / deep) are separate from **execution profiles**, which
+control tool posture and whether shell work expects Docker isolation.
+
+Default profile is **`safe_repo`**. After H13, profiles with `dockerSandbox: true`
+**fail closed** when isolation cannot run — no silent host fallback.
+
+| Control | Meaning |
+|---------|---------|
+| **`safe_repo` (default)** | Isolation required. Needs Docker daemon + configured image (`BABEL_BENCHMARK_DOCKER_IMAGE`). Without them, governed isolation **fail-closes** unless host escalation env is set. |
+| **`dev_local`** | Host-friendly local coding (`dockerSandbox: false`). Prefer for everyday host work without a sandbox image. |
+| **`BABEL_ALLOW_HOST_FALLBACK=1`** | Preferred explicit host escalation when keeping an isolation profile. |
+| **`BABEL_DOCKER_DISABLE=true`** | Legacy isolation opt-out; also treated as host escalation under H13. |
+
+Select a profile:
+
+```powershell
+$env:BABEL_EXECUTION_PROFILE = 'dev_local'
+# or:
+babel run "your task" --execution-profile dev_local
+```
+
+Normative H13 behavior: [HARNESS_ARCHITECTURE_V1.md](./HARNESS_ARCHITECTURE_V1.md) §6.9.
+Chat-mode operator notes: [CHAT_MODE.md](../CHAT_MODE.md#execution-profile-and-isolation-h13).
 
 ## Best Use Cases
 

@@ -237,9 +237,14 @@ function extractTargetSelectors(
       }
       continue;
     }
-    if (token.startsWith('--testnamepattern=') || token.startsWith('--grep=')) {
-      selectors.push(token.slice(token.indexOf('=') + 1));
-      continue;
+    const eqIndex = token.indexOf('=');
+    if (eqIndex > 0) {
+      const flag = token.slice(0, eqIndex);
+      const val = token.slice(eqIndex + 1);
+      if (FILTER_FLAGS_WITH_VALUE.has(flag)) {
+        if (val) selectors.push(val);
+        continue;
+      }
     }
     if (token.startsWith('-') || BOOLEAN_RUNNER_FLAGS.has(token)) {
       continue;
@@ -293,7 +298,7 @@ function argsAfterRunner(
     return body;
   }
   if (family === 'jest' || family === 'mocha' || family === 'pytest' || family === 'unittest') {
-    return skipLeadingOptions(args);
+    return [...args];
   }
   return [...args];
 }

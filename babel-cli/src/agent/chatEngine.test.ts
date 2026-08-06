@@ -225,3 +225,36 @@ describe('BABEL.md project memory', () => {
     );
   });
 });
+
+describe('ChatEngine active verifier ledger & invalidation', () => {
+  it('invalidateVerifierLedger marks receipts stale without modifying writeCount', async () => {
+    const { invalidateVerifierLedger } = await import('./chatEngineSupport.js');
+    const engine: any = {
+      writeCount: 0,
+      lastVerifierReceipt: { command: 'npm test', stale: false },
+      executedVerifierLedger: [{ command: 'npm test', stale: false }],
+    };
+
+    invalidateVerifierLedger(engine, 'non-verifier shell command executed');
+
+    assert.equal(engine.writeCount, 0, 'writeCount MUST NOT be incremented by invalidateVerifierLedger');
+    assert.equal(engine.lastVerifierReceipt.stale, true);
+    assert.match(engine.lastVerifierReceipt.staleReason, /non-verifier shell/);
+    assert.equal(engine.executedVerifierLedger[0].stale, true);
+  });
+
+  it('session restore clears active verifier ledger, last receipt, and cache', async () => {
+    const testRoot = join(BABEL_RUNS_DIR, 'chat-sessions');
+    const sessionId = setupMockSession(testRoot);
+    createdSessions.push(sessionId);
+
+    const engine = await ChatEngine.restore(sessionId, {
+      task: 'Restore evidence test',
+      projectRoot: '/tmp',
+    });
+
+    assert.deepEqual((engine as any).executedVerifierLedger, [], 'executedVerifierLedger MUST be empty on restore');
+    assert.equal((engine as any).lastVerifierReceipt, null, 'lastVerifierReceipt MUST be null on restore');
+    assert.equal((engine as any).verifierReceiptCache.size, 0, 'verifierReceiptCache MUST be empty on restore');
+  });
+});

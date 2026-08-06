@@ -30,22 +30,12 @@ import {
   EXECUTOR_KERNEL_VERSION,
   type BabelMode,
   type CompletionDecision,
+  type ExecutorCompletionInput,
   type ModePolicy,
   modePolicyFor,
 } from "./contracts.js";
 
-/** Input used by the shared completion authority. */
-export interface ExecutorCompletionInput {
-  mode: BabelMode;
-  requestedOutcome: TerminalOutcome | "PLAN_COMPLETE";
-  hasWrite: boolean;
-  verificationPolicy: "none" | "required" | "strict";
-  lastVerifierReceipt?: VerifierReceipt | null;
-  toolCallLog: GateToolLogEntry[];
-  proof?: { compliant: boolean; errors?: string[] };
-  workspaceRevision?: CompletionDecision["workspaceRevision"];
-  evidenceRefs?: string[];
-}
+export type { ExecutorCompletionInput };
 
 /** Shared execution substrate consumed by Chat, Plan, Deep, and protocol adapters. */
 export interface ExecutorKernel {
@@ -181,8 +171,11 @@ function decideCompletion(input: ExecutorCompletionInput): CompletionDecision {
   const gate = evaluateExecuteCompletionHonesty({
     hasWrite: input.hasWrite,
     policy: input.verificationPolicy,
-    lastVerifierReceipt: input.lastVerifierReceipt,
+    lastVerifierReceipt: input.lastVerifierReceipt ?? null,
     toolCallLog: input.toolCallLog,
+    requiredVerifierCommands: input.requiredVerifierCommands ?? null,
+    executedVerifierLedger: input.executedVerifierLedger ?? null,
+    verifierEvidenceErrors: input.verifierEvidenceErrors ?? null,
   });
   const verified = input.proof?.compliant === true && gate.allow;
   const finalOutcome: TerminalOutcome =

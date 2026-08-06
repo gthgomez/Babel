@@ -55,6 +55,13 @@ export interface ExecutionProfile {
    * Override with BABEL_MAX_TOOL_ITERATIONS env var.
    */
   maxToolIterations?: number;
+  /**
+   * When true, clean-room IndependentVerifier is enabled for this profile unless
+   * BABEL_INDEPENDENT_VERIFIER explicitly disables it (0/false/no/off).
+   * Everyday Chat (safe_repo) stays off unless env forces on or a high-assurance
+   * profile is selected. See isIndependentVerifierOptIn.
+   */
+  independentVerifierDefault?: boolean;
 }
 
 const COMMON_LOCAL_BUILD_COMMANDS = [
@@ -107,7 +114,8 @@ const PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
   safe_repo: {
     name: 'safe_repo',
     dockerSandbox: true,
-    description: 'Default guarded profile for normal repository work.',
+    description:
+      'Default guarded profile for normal repository work (Docker sandbox; clean-room IndependentVerifier off by default).',
     commandAdditions: [],
     allowedTools: [],
     disallowedTools: [],
@@ -132,7 +140,8 @@ const PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
   dev_local: {
     name: 'dev_local',
     dockerSandbox: false, // Performance-sensitive: avoid Docker overhead for local dev
-    description: 'Local development profile with common language build tools enabled.',
+    description:
+      'Local development profile with common language build tools enabled (host-local; no Docker; IndependentVerifier off by default).',
     commandAdditions: COMMON_LOCAL_BUILD_COMMANDS,
     allowedTools: [],
     disallowedTools: [],
@@ -151,7 +160,9 @@ const PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
   benchmark_container: {
     name: 'benchmark_container',
     dockerSandbox: true,
-    description: 'Isolated benchmark task profile for Docker-mounted /app workspaces.',
+    independentVerifierDefault: true,
+    description:
+      'Isolated Docker benchmark profile for /app-mounted workspaces; clean-room IndependentVerifier on by default.',
     commandAdditions: [...COMMON_LOCAL_BUILD_COMMANDS, ...BENCHMARK_CONTAINER_COMMANDS],
     allowedTools: [],
     disallowedTools: [],
@@ -180,7 +191,7 @@ const PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
   read_only_audit: {
     name: 'read_only_audit',
     dockerSandbox: true,
-    description: 'Inspection-only profile for audits and planning.',
+    description: 'Inspection-only profile for audits and planning (Docker sandbox; no IndependentVerifier default).',
     commandAdditions: [],
     allowedTools: [
       'directory_list',
@@ -211,7 +222,8 @@ const PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
   scaffold: {
     name: 'scaffold',
     dockerSandbox: true,
-    description: 'New-project scaffolding profile for empty approved target roots.',
+    description:
+      'New-project scaffolding profile for empty approved target roots (IndependentVerifier off by default).',
     commandAdditions: COMMON_LOCAL_BUILD_COMMANDS,
     allowedTools: [],
     disallowedTools: [],
@@ -232,7 +244,9 @@ const PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
   opencalw_manager: {
     name: 'opencalw_manager',
     dockerSandbox: true,
-    description: 'Workspace-manager profile for approved local project maintenance.',
+    independentVerifierDefault: true,
+    description:
+      'Workspace-manager profile for approved local project maintenance; clean-room IndependentVerifier on by default.',
     commandAdditions: [
       ...COMMON_LOCAL_BUILD_COMMANDS,
       'gradle',
@@ -265,8 +279,9 @@ const PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
   babel_research: {
     name: 'babel_research',
     dockerSandbox: true,
+    independentVerifierDefault: true,
     description:
-      'Research profile for Babel/product analysis with strict untrusted-input handling.',
+      'Research profile for Babel/product analysis with strict untrusted-input handling; clean-room IndependentVerifier on by default.',
     commandAdditions: [],
     allowedTools: [],
     disallowedTools: [],
@@ -292,7 +307,7 @@ const PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
     name: 'bench_local',
     dockerSandbox: false, // Performance-sensitive local benchmark profile
     description:
-      'Restricted tool set (no web_search, web_fetch, mcp_request, shell_exec). High reasoning effort. Uses allowed command additions for local build tools.',
+      'Host-local bench sandbox: restricted tools (no web/mcp/shell_exec), high reasoning; IndependentVerifier off by default.',
     commandAdditions: COMMON_LOCAL_BUILD_COMMANDS,
     allowedTools: [
       'directory_list',

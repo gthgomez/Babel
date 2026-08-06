@@ -1,11 +1,17 @@
 /**
  * Chat-path revision binding for verifier receipts (H7/H8).
  *
- * IndependentVerifier (full tree copy) stays off the default hot path.
- * Enable with BABEL_INDEPENDENT_VERIFIER=1 (see independentVerifier.ts).
+ * IndependentVerifier (full tree copy) stays off the default Chat hot path
+ * (safe_repo). Enable with BABEL_INDEPENDENT_VERIFIER=1 or high-assurance
+ * execution profiles (see independentVerifier.ts).
  */
 
-import type { VerifierAuthoritySource } from '../executor/contracts.js';
+import {
+  isVerifierAuthoritySource,
+  type ExecutorVerifierReceipt,
+  type VerifierAuthoritySource,
+  type WorkspaceRevisionIdentity,
+} from '../executor/contracts.js';
 import {
   evaluateCompletionEvidenceSync,
   type CompletionEvidenceEvaluation,
@@ -25,13 +31,18 @@ export const CHAT_EVIDENCE_CLAIM_ID = 'chat-claim' as const;
 export type BoundChatVerifierReceipt = {
   command: string;
   exit_code: number;
+  exitCode?: number;
   summary: string;
   stale?: boolean;
   staleReason?: string;
   receiptId?: string;
   boundRevision?: WorkspaceRevision;
   verifier_id?: string;
+  verifierId?: string;
   authority_source?: VerifierAuthoritySource;
+  authoritySource?: VerifierAuthoritySource;
+  authority?: boolean;
+  capturedAt?: number;
   argv?: string[];
 };
 
@@ -67,17 +78,23 @@ export async function bindChatVerifierReceipt(input: {
     input.projectRoot,
     input.mutationPaths,
   );
+  const now = Date.now();
   return {
     command: input.command,
     exit_code: input.exit_code,
+    exitCode: input.exit_code,
     summary: input.summary,
     stale: false,
-    receiptId: `receipt-${Date.now()}`,
+    receiptId: `receipt-${now}`,
+    capturedAt: now,
+    authority: input.structured !== undefined && input.structured !== null,
     boundRevision,
     ...(input.structured
       ? {
           verifier_id: input.structured.verifierId,
+          verifierId: input.structured.verifierId,
           authority_source: input.structured.authoritySource,
+          authoritySource: input.structured.authoritySource,
           argv: [input.structured.executable, ...input.structured.args],
         }
       : {}),
@@ -88,18 +105,146 @@ export async function bindChatVerifierReceipt(input: {
 export function toRevisionBoundReceipt(
   receipt: BoundChatVerifierReceipt,
 ): RevisionBoundReceipt | null {
-  if (!receipt.boundRevision) return null;
+  if (!receipt.boundRevision || !receipt.receiptId || receipt.receiptId.trim().length === 0) return null;
   return {
-    receiptId: receipt.receiptId ?? 'chat-receipt',
+    receiptId: receipt.receiptId,
     command: receipt.command,
     exitCode: receipt.exit_code,
     boundRevision: receipt.boundRevision,
     stale: receipt.stale === true,
-    authority: true,
-    ...(receipt.authority_source
-      ? { authoritySource: receipt.authority_source }
-      : {}),
-    ...(receipt.staleReason ? { staleReason: receipt.staleReason } : {}),
+  };
+}
+
+/**
+ * Adapt a Chat-layer BoundChatVerifierReceipt into a strict canonical ExecutorVerifierReceipt.
+ * Returns fallible result: never fabricates missing revision, receipt ID, or authority.
+ */
+export function toExecutorVerifierReceipt(
+  chatReceipt: BoundChatVerifierReceipt | null | undefined,
+): { ok: true; receipt: ExecutorVerifierReceipt } | { ok: false; errors: string[] } {
+  if (!chatReceipt || typeof chatReceipt !== 'object') {
+    return { ok: false, errors: ['Chat verifier receipt is null or undefined'] };
+  }
+
+  const errors: string[] = [];
+  const command = chatReceipt.command;
+  if (typeof command !== 'string' || command.trim().length === 0) {
+    errors.push('Missing or invalid verifier command');
+  }
+
+  const exitCode = chatReceipt.exitCode ?? chatReceipt.exit_code;
+  if (typeof exitCode !== 'number' || !Number.isFinite(exitCode)) {
+    errors.push('Missing or invalid exit code');
+  }
+
+  const receiptId = chatReceipt.receiptId;
+  if (typeof receiptId !== 'string' || receiptId.trim().length === 0) {
+    errors.push('Missing receiptId on verifier receipt');
+  }
+
+  if (chatReceipt.authority !== true) {
+    errors.push('Verifier receipt authority must be explicitly true');
+  }
+
+  const capturedAt = chatReceipt.capturedAt;
+  if (typeof capturedAt !== 'number' || !Number.isFinite(capturedAt) || capturedAt <= 0) {
+    errors.push('Missing or non-finite positive capturedAt timestamp on verifier receipt');
+  }
+
+  const authoritySource = chatReceipt.authoritySource ?? chatReceipt.authority_source;
+  if (!isVerifierAuthoritySource(authoritySource)) {
+    errors.push(`Invalid or missing authoritySource provenance: '${String(authoritySource)}'`);
+  }
+
+  if (chatReceipt.stale !== undefined && typeof chatReceipt.stale !== 'boolean') {
+    errors.push('stale must be a boolean when present');
+  }
+
+  const verifierId = chatReceipt.verifierId ?? chatReceipt.verifier_id;
+  if (typeof verifierId !== 'string' || verifierId.trim().length === 0) {
+    errors.push('Missing verifierId on verifier receipt');
+  }
+
+  const revision = chatReceipt.boundRevision;
+  const boundRevision = validateWorkspaceRevisionIdentity(revision, errors);
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+
+  return {
+    ok: true,
+    receipt: {
+      receiptId: receiptId as string,
+      verifierId: verifierId as string,
+      command: command as string,
+      exitCode: exitCode!,
+      authority: true,
+      authoritySource: authoritySource as VerifierAuthoritySource,
+      boundRevision,
+      capturedAt: capturedAt!,
+      stale: chatReceipt.stale === true,
+      ...(chatReceipt.staleReason ? { staleReason: chatReceipt.staleReason } : {}),
+    },
+  };
+}
+
+function validateWorkspaceRevisionIdentity(
+  value: WorkspaceRevision | undefined,
+  errors: string[],
+): WorkspaceRevisionIdentity {
+  if (!value || typeof value !== 'object') {
+    errors.push('Missing or invalid boundRevision on verifier receipt');
+    return {
+      gitCommitHash: null,
+      compositeTreeHash: '',
+      fileHashes: {},
+      capturedAt: 0,
+    };
+  }
+
+  const revision = value as unknown as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(revision, 'gitCommitHash')) {
+    errors.push('boundRevision.gitCommitHash is required; no commit value may be synthesized');
+  } else if (
+    revision['gitCommitHash'] !== null &&
+    (typeof revision['gitCommitHash'] !== 'string' || revision['gitCommitHash'].trim().length === 0)
+  ) {
+    errors.push('boundRevision.gitCommitHash must be null or a non-empty string');
+  }
+
+  const compositeTreeHash = revision['compositeTreeHash'];
+  if (typeof compositeTreeHash !== 'string' || compositeTreeHash.trim().length === 0) {
+    errors.push('boundRevision.compositeTreeHash is required and must be a non-empty string');
+  }
+
+  const rawFileHashes = revision['fileHashes'];
+  const fileHashes: Record<string, string> = {};
+  if (!rawFileHashes || typeof rawFileHashes !== 'object' || Array.isArray(rawFileHashes)) {
+    errors.push('boundRevision.fileHashes must be an object containing only non-empty hash values');
+  } else {
+    for (const [file, hash] of Object.entries(rawFileHashes)) {
+      if (file.trim().length === 0) {
+        errors.push('boundRevision.fileHashes contains an empty file key');
+      }
+      if (typeof hash !== 'string' || hash.trim().length === 0) {
+        errors.push(`boundRevision.fileHashes[${JSON.stringify(file)}] must be a non-empty string`);
+      } else {
+        fileHashes[file] = hash;
+      }
+    }
+  }
+
+  const capturedAt = revision['capturedAt'];
+  if (typeof capturedAt !== 'number' || !Number.isFinite(capturedAt) || capturedAt <= 0) {
+    errors.push('boundRevision.capturedAt is required and must be a finite positive number');
+  }
+
+  return {
+    gitCommitHash: revision['gitCommitHash'] === null ? null : String(revision['gitCommitHash'] ?? ''),
+    compositeTreeHash: typeof compositeTreeHash === 'string' ? compositeTreeHash : '',
+    fileHashes,
+    capturedAt: typeof capturedAt === 'number' ? capturedAt : 0,
   };
 }
 
@@ -149,6 +294,7 @@ export function toGateToolLog(
     detail?: string;
     error?: string;
     exit_code?: number;
+    mutation_paths?: string[];
   }[],
 ): {
   tool: string;
@@ -156,6 +302,7 @@ export function toGateToolLog(
   detail?: string;
   error?: string;
   exit_code?: number;
+  mutation_paths?: string[];
 }[] {
   return log.map((entry) => ({
     tool: entry.tool,
@@ -163,6 +310,7 @@ export function toGateToolLog(
     ...(entry.detail !== undefined ? { detail: entry.detail } : {}),
     ...(entry.error !== undefined ? { error: entry.error } : {}),
     ...(entry.exit_code !== undefined ? { exit_code: entry.exit_code } : {}),
+    ...(entry.mutation_paths !== undefined ? { mutation_paths: [...entry.mutation_paths] } : {}),
   }));
 }
 
@@ -255,6 +403,12 @@ export function evaluateChatCompletionProof(input: {
   isAuthoritativeCommand: (command: string) => boolean;
   /** Optional env override for IndependentVerifier opt-in tests. */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Optional execution profile name for IndependentVerifier profile defaults.
+   * When omitted, independentVerifierProofErrors reads BABEL_EXECUTION_PROFILE
+   * from env (or process.env when env is also omitted).
+   */
+  executionProfile?: string;
 }): { compliant: boolean; errors?: string[] } {
   const errors: string[] = [];
   if (!input.hasMutation) errors.push('missing production mutation evidence');
@@ -300,14 +454,19 @@ export function evaluateChatCompletionProof(input: {
   }
 
   // Opt-in clean-room IndependentVerifier (default off — no hot-path tree copy).
+  // High-assurance profiles may default ON; env still overrides.
   if (receipt && receipt.exit_code === 0) {
     const mutationPaths = mutationPathsFromSessionEvents(input.events);
+    const env = input.env ?? process.env;
+    const executionProfile =
+      input.executionProfile ?? env['BABEL_EXECUTION_PROFILE'];
     for (const err of independentVerifierProofErrors({
       projectRoot: input.projectRoot,
       command: receipt.command,
       exitCode: receipt.exit_code,
       mutationPaths,
-      ...(input.env !== undefined ? { env: input.env } : {}),
+      env,
+      ...(executionProfile !== undefined ? { profile: executionProfile } : {}),
     })) {
       if (!errors.includes(err)) errors.push(err);
     }

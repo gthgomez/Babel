@@ -47,6 +47,11 @@ import {
   type SessionEventLog,
 } from './sessionEvents.js';
 import {
+  createEpisodeEventLog,
+  syncAndFlushEpisodeFromSession,
+  type EpisodeEventLog,
+} from '../evidence/episodeStream.js';
+import {
   createApprovalSession,
   type ApprovalSessionState,
 } from './approvalRequests.js';
@@ -66,6 +71,12 @@ export interface ParityRuntime {
   eventLog: ThreadEventLog;
   /** W2 PR-E: SessionEventV1 dual-write log (JSONL next to thread_events). */
   sessionEvents: SessionEventLog;
+  /**
+   * Slice A: canonical episode stream dual-write (episode-events.jsonl).
+   * Projected from session events at flush choke points — not a separate
+   * instrumentation surface for tools yet.
+   */
+  episodeStream: EpisodeEventLog;
   approvalSession: ApprovalSessionState;
   turnId: string | null;
   recoveryTried: boolean;
@@ -78,6 +89,7 @@ export function createParityRuntime(threadId: string): ParityRuntime {
     progress: createProgressLedger(),
     eventLog: createThreadEventLog(threadId),
     sessionEvents: createSessionEventLog(threadId),
+    episodeStream: createEpisodeEventLog(threadId),
     approvalSession: createApprovalSession(threadId),
     turnId: null,
     recoveryTried: false,
@@ -648,6 +660,44 @@ function flushSessionEventsBestEffort(
     try {
       console.error(
         `[babel] session-events.jsonl persist failed (${context}): ${result.error}`,
+      );
+    } catch {
+      /* ignore console failures */
+    }
+  }
+  // Slice A: project session events → episode-events.jsonl (best-effort dual-write).
+  flushEpisodeStreamBestEffort(rt, runDir, context);
+}
+
+/**
+ * Dual-write episode stream from already-recorded session events.
+ * Never throws — failures log like session-events.
+ */
+function flushEpisodeStreamBestEffort(
+  rt: ParityRuntime,
+  runDir: string,
+  context: string,
+): void {
+  try {
+    const result = syncAndFlushEpisodeFromSession(
+      runDir,
+      rt.episodeStream,
+      rt.sessionEvents,
+    );
+    if (result.error) {
+      try {
+        console.error(
+          `[babel] episode-events.jsonl persist failed (${context}): ${result.error}`,
+        );
+      } catch {
+        /* ignore console failures */
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    try {
+      console.error(
+        `[babel] episode-events.jsonl persist failed (${context}): ${msg}`,
       );
     } catch {
       /* ignore console failures */

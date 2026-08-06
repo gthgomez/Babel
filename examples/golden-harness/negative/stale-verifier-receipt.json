@@ -22,7 +22,8 @@
     "command": "npm test",
     "exit_code": 0,
     "summary": "1 passed",
-    "stale": true
+    "stale": true,
+    "authority": true
   },
   "expectHonesty": {
     "allow": false,

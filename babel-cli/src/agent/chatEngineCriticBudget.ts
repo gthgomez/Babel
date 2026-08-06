@@ -28,6 +28,7 @@ export type CriticToolLogEntry = {
   target: string;
   detail?: string;
   error?: string;
+  mutation_paths?: string[];
 };
 
 export type CriticGateDecision = 'allow' | 'reject' | 'block';
@@ -48,6 +49,12 @@ export function hasSubAgentWrites(toolCallLog: CriticToolLogEntry[]): boolean {
 export function hasAnyWrites(toolCallLog: CriticToolLogEntry[]): boolean {
   return (
     toolCallLog.some((e) => isSuccessfulDirectMutation(e.tool, e.error)) ||
+    toolCallLog.some(
+      (e) =>
+        e.error == null &&
+        Array.isArray(e.mutation_paths) &&
+        e.mutation_paths.some((path) => typeof path === 'string' && path.trim().length > 0),
+    ) ||
     hasSubAgentWrites(toolCallLog)
   );
 }

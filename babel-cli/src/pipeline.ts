@@ -84,6 +84,7 @@ import { confirmCost, ConfirmDialog } from './ui/dialog.js';
 import { isRunningInDaemon } from './daemon/client.js';
 import { assessPlanningComplexity } from './services/plannerRouter.js';
 import { EvidenceBundle } from './evidence.js';
+import { createEpisodeLifecycleForEvidence, recordExecutorToolLog, type PipelineEpisodeSink } from './pipeline/pipelineEpisodeLifecycle.js';
 import { getAllowedShellCommands, validateExecutorShellCommand } from './sandbox.js';
 import { collectHarnessMetadata } from './telemetry/metadata.js';
 import { PipelineTrace, endSpan } from './telemetry/tracing.js';
@@ -519,7 +520,7 @@ export interface PipelineOptions {
   /** Denied fingerprints from session to pass down to executor loop */
   deniedFingerprints?: Map<string, { count: number; turn: number }>;
   /** Signal to abort the pipeline mid-execution. */
-  abortSignal?: AbortSignal;
+  abortSignal?: AbortSignal; /** Inject memory persistence for deterministic callers; defaults to the production extractor. */ memoryExtractor?: (runDir: string, projectRoot: string | undefined, evidence: EvidenceBundle) => Promise<void>; /** Disable post-run memory extraction for offline or explicitly read-only runs. */ disableMemoryExtraction?: boolean;
 }
 
 export interface PipelineResult {
@@ -535,7 +536,7 @@ export interface PipelineResult {
   usageSummary?: SessionUsageSummary;
   terminalSummary?: TerminalStatusSummary;
   attemptSafetySummary?: AttemptSafetySummary | null;
-  verifierContractSummary?: VerifierContractSummary;
+  verifierContractSummary?: VerifierContractSummary; episodePersistenceStatus?: 'active' | 'degraded'; episodePersistenceWarning?: string;
 }
 
 type ExecutorTerminalStatus =
@@ -1190,6 +1191,21 @@ export async function _runBabelPipelineInternal(
   };
   const pipelineTrace = await PipelineTrace.start(traceOptions);
 
+  const episodeLifecycle = createEpisodeLifecycleForEvidence(evidence, {
+    ...(sessionId ? { sessionId } : {}),
+    mode: 'new',
+    initialPhase: { phase: 'orchestrator', status: 'started' },
+  });
+  const pipelineEpisodeSink = episodeLifecycle.sink;
+  const decorateEpisodePersistence = (result: PipelineResult): PipelineResult => ({
+    ...result,
+    episodePersistenceStatus: episodeLifecycle.status,
+    ...(episodeLifecycle.warning ? { episodePersistenceWarning: episodeLifecycle.warning } : {}),
+  });
+  const finalizeEpisodeResult = (result: PipelineResult, reason: string): PipelineResult => {
+    episodeLifecycle.recordFinalization(result.status, reason);
+    return decorateEpisodePersistence(result);
+  };
   const finalizeResult = async (result: PipelineResult): Promise<PipelineResult> => {
     const terminalContext = collectTerminalContext(evidence.runDir);
     const verifierContract = buildVerifierContractArtifacts({
@@ -1247,8 +1263,8 @@ export async function _runBabelPipelineInternal(
         : globalCostTracker.getSessionSummary();
 
     // Trigger Project Memory Extraction on success
-    if (finalizedResult.status === 'COMPLETE') {
-      await extractAndSaveMemories(
+    if (finalizedResult.status === 'COMPLETE' && !options.disableMemoryExtraction) {
+      await (options.memoryExtractor ?? extractAndSaveMemories)(
         finalizedResult.runDir,
         inferProjectRoot(finalizedResult.manifest),
         evidence,
@@ -1277,17 +1293,21 @@ export async function _runBabelPipelineInternal(
         evidenceComplete: true,
       });
     }
-    if (finalizedResult.modelPolicy !== undefined || resolvedModelPolicy === undefined) {
-      return {
-        ...finalizedResult,
-        usageSummary,
-      };
-    }
-    return {
-      ...finalizedResult,
-      modelPolicy: resolvedModelPolicy,
-      usageSummary,
-    };
+    const resultWithUsage: PipelineResult =
+      finalizedResult.modelPolicy !== undefined || resolvedModelPolicy === undefined
+        ? {
+            ...finalizedResult,
+            usageSummary,
+          }
+        : {
+            ...finalizedResult,
+            modelPolicy: resolvedModelPolicy,
+            usageSummary,
+          };
+    return finalizeEpisodeResult(
+      resultWithUsage,
+      resultWithUsage.errors?.[0] ?? 'Pipeline finalized.',
+    );
   };
 
   const finalizeError = async (error: unknown): Promise<PipelineResult> => {
@@ -1351,19 +1371,22 @@ export async function _runBabelPipelineInternal(
         waterfallEntries: evidence.getWaterfallLogSnapshot(),
       });
       evidence.writeCostLedger(costLedger);
-      return {
-        runDir: evidence.runDir,
-        manifest: recoverableManifest,
-        plan: recoveredPlan,
-        status: 'EXECUTOR_HALTED',
-        errors: [message],
-        terminalSummary,
-        finalAnswer: blockedSummary.answer,
-        usageSummary:
-          costLedger.entries.length > 0
-            ? usageSummaryFromCostLedger(costLedger)
-            : globalCostTracker.getSessionSummary(),
-      };
+      return finalizeEpisodeResult(
+        {
+          runDir: evidence.runDir,
+          manifest: recoverableManifest,
+          plan: recoveredPlan,
+          status: 'EXECUTOR_HALTED',
+          errors: [message],
+          terminalSummary,
+          finalAnswer: blockedSummary.answer,
+          usageSummary:
+            costLedger.entries.length > 0
+              ? usageSummaryFromCostLedger(costLedger)
+              : globalCostTracker.getSessionSummary(),
+        },
+        message,
+      );
     }
     writeValidatedExecutionReport(
       evidence,
@@ -1412,6 +1435,7 @@ export async function _runBabelPipelineInternal(
         waterfallEntries: evidence.getWaterfallLogSnapshot(),
       }),
     );
+    episodeLifecycle.recordFinalization('FATAL_ERROR', message);
     throw error;
   };
 
@@ -1513,7 +1537,7 @@ export async function _runBabelPipelineInternal(
     }
     manifest = normalizeManifestProjectRoot(manifest, sessionStartPath, {
       authoritativeProjectRoot,
-    });
+    }); episodeLifecycle.recordPhase('orchestrator', 'completed');
     let manifestArtifact: Record<string, unknown> = manifest as unknown as Record<string, unknown>;
     let v9StackTelemetry: RuntimeTelemetry | null = null;
     let stackOptimizationWarnings: string[] = [];
@@ -2296,7 +2320,7 @@ export async function _runBabelPipelineInternal(
       // ── Stage 2 & 3: SWE Agent → QA Reviewer loop ───────────────────────────
       for (let attempt = 1; attempt <= MAX_SWE_QA_LOOPS; attempt++) {
         // ── Stage 2: SWE Agent ─────────────────────────────────────────────────
-        log(
+        episodeLifecycle.recordPhase('swe_planning', 'started'); log(
           `Stage 2 / 4  —  Planning` +
             (attempt > 1 ? ` (attempt ${attempt}/${MAX_SWE_QA_LOOPS})` : '') +
             (evidenceLoopCount > 0 ? ` [evidence pass ${evidenceLoopCount}]` : ''),
@@ -2395,7 +2419,7 @@ export async function _runBabelPipelineInternal(
           groundingWarnings.forEach((w) => logDetail(`SWE plan warning: ${w}`));
           requestedTargetWarnings.forEach((w) => logDetail(`SWE plan warning: ${w}`));
         }
-        evidence.writeSwePlan(swePlan, attempt);
+        evidence.writeSwePlan(swePlan, attempt); episodeLifecycle.recordPhase('swe_planning', 'completed');
         await runPluginHooks('PostPlan', {
           runId: evidence.runId,
           runDir: evidence.runDir,
@@ -2513,7 +2537,7 @@ export async function _runBabelPipelineInternal(
         }
 
         // ── Stage 3: QA Reviewer ───────────────────────────────────────────────
-        log(
+        episodeLifecycle.recordPhase('qa_review', 'started'); log(
           `Stage 3 / 4  —  Reviewing` +
             (attempt > 1 ? ` (attempt ${attempt}/${MAX_SWE_QA_LOOPS})` : ''),
         );
@@ -2560,13 +2584,13 @@ export async function _runBabelPipelineInternal(
           verdict = sanitizeWindowsGradlewPermissionQaVerdict(verdict, swePlan);
           verdict = sanitizeExistingWrapperQaVerdict(verdict, swePlan, manifest);
         } catch (error) {
-          endSpan(qaSpan, SpanStatusCode.ERROR, {}, error);
+          endSpan(qaSpan, SpanStatusCode.ERROR, {}, error); episodeLifecycle.recordPhase('qa_review', 'failed', { error: error instanceof Error ? error.message : String(error) });
           log(
             `[pipeline] QA model invocation error on attempt ${attempt}: ${error instanceof Error ? error.message : String(error)}`,
           );
           continue;
         }
-        evidence.writeQaVerdict(verdict, attempt);
+        evidence.writeQaVerdict(verdict, attempt); episodeLifecycle.recordPhase('qa_review', 'completed', { verdict: verdict.verdict });
 
         if (verdict.verdict === 'PASS') {
           logDetail(`QA: PASS  (confidence: ${verdict.overall_confidence}/5)`);
@@ -2913,7 +2937,7 @@ export async function _runBabelPipelineInternal(
         });
       }
 
-      const preExecutorResult = await runPreExecutorSafetyGates({
+      episodeLifecycle.recordPhase('executor', 'started'); const preExecutorResult = await runPreExecutorSafetyGates({
         approvedPlan,
         projectRoot: inferProjectRoot(manifest) ?? runtimeProjectRoot,
         taskContext: mergedTaskContext,
@@ -2921,7 +2945,7 @@ export async function _runBabelPipelineInternal(
         babelRoot: BABEL_ROOT,
       });
 
-      if (!preExecutorResult.ok) {
+      if (!preExecutorResult.ok) { episodeLifecycle.recordPhase('executor', 'failed', { activation: 'refused' });
         log(`  Executor: ACTIVATION_REFUSED [${preExecutorResult.gate}]`);
         logDetail(preExecutorResult.reason);
         writeValidatedExecutionReport(
@@ -2976,10 +3000,10 @@ export async function _runBabelPipelineInternal(
           rawTask: mergedTaskContext,
           reportWarnings: executionReportWarnings,
           initialExecutorLog,
-          pruningStubs,
+          pruningStubs, episodeSink: pipelineEpisodeSink,
         });
 
-        if (!stagedResult.ok) {
+        if (!stagedResult.ok) { episodeLifecycle.recordPhase('executor', 'failed', { halted: true });
           return await finalizeResult({
             runDir: evidence.runDir,
             manifest,
@@ -2992,7 +3016,7 @@ export async function _runBabelPipelineInternal(
         toolCallLog = executorResult.toolCallLog;
         lastToolCallLog = toolCallLog;
         lastExecutorResult = executorResult;
-        if (executorResult.terminalStatus !== 'EXECUTION_COMPLETE') {
+        if (executorResult.terminalStatus !== 'EXECUTION_COMPLETE') { episodeLifecycle.recordPhase('executor', 'failed', { terminalStatus: executorResult.terminalStatus });
           log(
             `Pipeline halted after executor terminal status ${executorResult.terminalStatus}. ` +
               `Run data: ${evidence.runDir}`,
@@ -3025,7 +3049,7 @@ export async function _runBabelPipelineInternal(
             status: haltedStatus,
           });
         }
-      } catch (err) {
+      } catch (err) { episodeLifecycle.recordPhase('executor', 'failed', { error: err instanceof Error ? err.message : String(err) });
         log(`CLI Executor error: ${err instanceof Error ? err.message : String(err)}`);
         const driftResult = await finalizeExactInstructionDrift(approvedPlan, lastToolCallLog);
         if (driftResult) {
@@ -3043,7 +3067,7 @@ export async function _runBabelPipelineInternal(
           plan: approvedPlan,
           status: 'EXECUTOR_HALTED',
         });
-      }
+      } episodeLifecycle.recordPhase('executor', 'completed');
 
       // ── Evidence loop evaluation ──────────────────────────────────────────────
       // If the approved plan was an evidence-gathering pass, rebound to Stage 2
@@ -3145,7 +3169,7 @@ interface StagedExecutorOptions {
   rawTask: string;
   reportWarnings: string[];
   initialExecutorLog: ToolCallLog[];
-  pruningStubs?: Map<string, string>;
+  pruningStubs?: Map<string, string>; episodeSink?: PipelineEpisodeSink | null;
 }
 
 interface StagedExecutorHalt {
@@ -3182,7 +3206,7 @@ async function runStagedExecutor(
     rawTask,
     reportWarnings,
     initialExecutorLog,
-    pruningStubs,
+    pruningStubs, episodeSink,
   } = opts;
 
   const scaffoldSeed = seedGodotMobileScaffold({
@@ -3212,9 +3236,7 @@ async function runStagedExecutor(
         initialExecutorLog,
         reportWarnings,
       );
-      log(
-        '  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during deterministic Android SDK bootstrap lane',
-      );
+      log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during deterministic Android SDK bootstrap lane'); recordExecutorToolLog(episodeSink, initialExecutorLog);
       return { ok: false };
     }
   }
@@ -3230,9 +3252,7 @@ async function runStagedExecutor(
         initialExecutorLog,
         reportWarnings,
       );
-      log(
-        '  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during deterministic Gradle bootstrap lane',
-      );
+      log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during deterministic Gradle bootstrap lane'); recordExecutorToolLog(episodeSink, initialExecutorLog);
       return { ok: false };
     }
   }
@@ -3245,7 +3265,7 @@ async function runStagedExecutor(
     initialExecutorLog,
     rawTask,
     pruningStubs,
-    createExecutorKernel('deep').services,
+    createExecutorKernel('deep').services, episodeSink,
   );
 
   return { ok: true, executorResult };
@@ -3271,6 +3291,7 @@ export async function resumeManualBridge(
   const manifest = OrchestratorManifestSchema.parse(manifestRaw);
   configureToolProjectRoot(manifest);
 
+  const evidence = EvidenceBundle.fromExistingRun(runDir); const manualEpisodeLifecycle = createEpisodeLifecycleForEvidence(evidence, { ...(manifest.session_id ? { sessionId: manifest.session_id } : {}), mode: 'legacy_resume', initialPhase: { phase: 'orchestrator', status: 'completed', details: { resumed: true } } }); const manualEpisodeSink = manualEpisodeLifecycle.sink; const finishManual = (result: PipelineResult): PipelineResult => { manualEpisodeLifecycle.recordFinalization(result.status, result.errors?.[0] ?? 'Manual run finalized.'); return { ...result, episodePersistenceStatus: manualEpisodeLifecycle.status, ...(manualEpisodeLifecycle.warning ? { episodePersistenceWarning: manualEpisodeLifecycle.warning } : {}) }; };
   let rawPlanText: string;
   if (typeof planInput === 'string') {
     rawPlanText = readFileSync(planInput, 'utf-8');
@@ -3289,35 +3310,32 @@ export async function resumeManualBridge(
     const errors = [
       `plan.json is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
     ];
-    const evidence = EvidenceBundle.fromExistingRun(runDir);
     evidence.writeManualPlanRepair(buildManualPlanRepairPrompt(errors, sanitizedPlanText));
-    return {
+    return finishManual({
       runDir,
       manifest,
       plan: null,
       status: 'MANUAL_PLAN_INVALID',
       repairPromptPath: join(runDir, '02_manual_plan_repair.md'),
       errors,
-    };
+    });
   }
 
   const parsedPlan = SwePlanSchema.safeParse(planJson);
   if (!parsedPlan.success) {
     const errors = formatZodErrors(parsedPlan.error);
-    const evidence = EvidenceBundle.fromExistingRun(runDir);
     evidence.writeManualPlanRepair(buildManualPlanRepairPrompt(errors, sanitizedPlanText));
-    return {
+    return finishManual({
       runDir,
       manifest,
       plan: null,
       status: 'MANUAL_PLAN_INVALID',
       repairPromptPath: join(runDir, '02_manual_plan_repair.md'),
       errors,
-    };
+    });
   }
 
   const { plan: swePlan, warnings: planWarnings } = normalizeSwePlan(parsedPlan.data);
-  const evidence = EvidenceBundle.fromExistingRun(runDir);
   const canonicalPlan = `${JSON.stringify(swePlan, null, 2)}\n`;
   const manualDir = join(runDir, 'manual');
   mkdirSync(manualDir, { recursive: true });
@@ -3325,7 +3343,7 @@ export async function resumeManualBridge(
   writeFileSync(join(runDir, '02_swe_plan_v1.json'), canonicalPlan, 'utf-8');
 
   const targetModel = manifest.worker_configuration.assigned_model as TargetModel;
-  log('Stage 3 / 4  —  Reviewing (resume)');
+   manualEpisodeLifecycle.recordPhase('qa_review', 'started'); log('Stage 3 / 4  —  Reviewing (resume)');
   const qaContext = await compileContext(
     abs(QA_PATHS),
     buildQaTask(
@@ -3351,24 +3369,24 @@ export async function resumeManualBridge(
   );
   const sanitizedVerdict = sanitizeWindowsGradlewPermissionQaVerdict(verdict, swePlan);
   const normalizedVerdict = sanitizeExistingWrapperQaVerdict(sanitizedVerdict, swePlan, manifest);
-  evidence.writeQaVerdict(normalizedVerdict, 1);
+   evidence.writeQaVerdict(normalizedVerdict, 1); manualEpisodeLifecycle.recordPhase('qa_review', 'completed', { verdict: normalizedVerdict.verdict });
 
   if (normalizedVerdict.verdict !== 'PASS') {
     log(`QA rejected the resumed manual plan. Pipeline halted at Stage 3.`);
-    return {
+    return finishManual({
       runDir,
       manifest,
       plan: null,
       status: 'QA_REJECTED_MAX_LOOPS',
-    };
+    });
   }
 
-  log('Stage 4 / 4  —  Applying changes');
+   log('Stage 4 / 4  —  Applying changes');
   const executionReportWarnings: string[] = [];
   const initialExecutorLog: ToolCallLog[] = [];
 
   // ── Pre-executor safety gates (shared with primary pipeline path) ─────
-  const bridgePreExecutorResult = await runPreExecutorSafetyGates({
+  manualEpisodeLifecycle.recordPhase('executor', 'started'); const bridgePreExecutorResult = await runPreExecutorSafetyGates({
     approvedPlan: swePlan,
     projectRoot: inferProjectRoot(manifest) ?? process.cwd(),
     taskContext: manifest.handoff_payload.user_request,
@@ -3377,6 +3395,7 @@ export async function resumeManualBridge(
   });
 
   if (!bridgePreExecutorResult.ok) {
+    manualEpisodeLifecycle.recordPhase('executor', 'failed', { activation: 'refused' });
     log(`  Executor: ACTIVATION_REFUSED [${bridgePreExecutorResult.gate}] (manual bridge)`);
     logDetail(bridgePreExecutorResult.reason);
     writeValidatedExecutionReport(
@@ -3390,12 +3409,12 @@ export async function resumeManualBridge(
       initialExecutorLog,
       [bridgePreExecutorResult.reason],
     );
-    return {
-      runDir,
-      manifest,
-      plan: swePlan,
-      status: 'EXECUTOR_HALTED',
-    };
+     return finishManual({
+       runDir,
+       manifest,
+       plan: swePlan,
+       status: 'EXECUTOR_HALTED',
+     });
   }
 
   // Use the plan returned by the gates (may have verifier-injected steps).
@@ -3409,41 +3428,44 @@ export async function resumeManualBridge(
       manifest,
       rawTask: manifest.handoff_payload.user_request,
       reportWarnings: planWarnings,
-      initialExecutorLog,
+      initialExecutorLog, episodeSink: manualEpisodeSink,
     });
 
     if (!stagedResult.ok) {
-      return {
+      manualEpisodeLifecycle.recordPhase('executor', 'failed', { halted: true });
+      return finishManual({
         runDir,
         manifest,
         plan: swePlan,
         status: 'EXECUTOR_HALTED',
-      };
+      });
     }
 
-    if (stagedResult.executorResult.terminalStatus !== 'EXECUTION_COMPLETE') {
-      return {
+     if (stagedResult.executorResult.terminalStatus !== 'EXECUTION_COMPLETE') {
+       manualEpisodeLifecycle.recordPhase('executor', 'failed', { terminalStatus: stagedResult.executorResult.terminalStatus });
+       return finishManual({
         runDir,
         manifest,
         plan: swePlan,
         status: 'EXECUTOR_HALTED',
-      };
-    }
-  } catch (err) {
+      });
+     }
+   } catch (err) {
+    manualEpisodeLifecycle.recordPhase('executor', 'failed', { error: err instanceof Error ? err.message : String(err) });
     log(`CLI Executor error: ${err instanceof Error ? err.message : String(err)}`);
-    return {
+    return finishManual({
       runDir,
       manifest,
       plan: swePlan,
       status: 'EXECUTOR_HALTED',
-    };
+    });
   }
 
-  return {
+  manualEpisodeLifecycle.recordPhase('executor', 'completed'); return finishManual({
     runDir,
     manifest,
     plan: swePlan,
     status: 'COMPLETE',
     usageSummary: globalCostTracker.getSessionSummary(),
-  };
+  });
 }

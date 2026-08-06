@@ -34,6 +34,17 @@ test("plan kernel cannot emit executor completion", () => {
   assert.equal(decision.allowed, false);
 });
 
+const mockGreenReceipt = {
+  receiptId: 'mock-1',
+  command: 'npm test',
+  exitCode: 0,
+  authority: true,
+  authoritySource: 'built_in_runner' as const,
+  boundRevision: { fileHashes: {} } as any,
+  capturedAt: Date.now(),
+  stale: false,
+};
+
 test("executor kernel downgrades verified completion until proof is complete", () => {
   const kernel = createExecutorKernel("chat");
   const decision = kernel.completion.decide({
@@ -41,7 +52,7 @@ test("executor kernel downgrades verified completion until proof is complete", (
     requestedOutcome: "VERIFIED_COMPLETE",
     hasWrite: true,
     verificationPolicy: "strict",
-    lastVerifierReceipt: { command: "npm test", exit_code: 0, summary: "" },
+    lastVerifierReceipt: mockGreenReceipt,
     toolCallLog: [],
     proof: { compliant: false },
   });
@@ -63,10 +74,25 @@ test("executor kernel rejects an incomplete proof even with a green verifier", (
     requestedOutcome: "VERIFIED_COMPLETE",
     hasWrite: true,
     verificationPolicy: "strict",
-    lastVerifierReceipt: { command: "npm test", exit_code: 0, summary: "" },
+    lastVerifierReceipt: mockGreenReceipt,
     toolCallLog: [],
     proof: { compliant: false, errors: ["missing claim receipt"] },
   });
   assert.equal(decision.finalOutcome, "UNVERIFIED_PATCH");
   assert.match(decision.reason, /evidence_incomplete/);
+});
+
+test("executor kernel downgrades verified completion when verifierEvidenceErrors present", () => {
+  const kernel = createExecutorKernel("chat");
+  const decision = kernel.completion.decide({
+    mode: "chat",
+    requestedOutcome: "VERIFIED_COMPLETE",
+    hasWrite: true,
+    verificationPolicy: "none",
+    verifierEvidenceErrors: ["invalid receipt format"],
+    toolCallLog: [],
+    proof: { compliant: true },
+  });
+  assert.equal(decision.finalOutcome, "UNVERIFIED_PATCH");
+  assert.match(decision.reason, /verifier_receipt_invalid/);
 });

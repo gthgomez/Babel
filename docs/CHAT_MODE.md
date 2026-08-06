@@ -1,6 +1,6 @@
 <!--
 status: ACTIVE
-last_verified: 2026-08-03
+last_verified: 2026-08-04
 -->
 
 # Babel Chat Mode
@@ -140,6 +140,39 @@ Chat mode is defined by the REPL dispatch and ChatEngine. Key source files:
 | `babel-cli/src/agent/chatToolDefinitions.ts` | Tool definitions for chat |
 | `babel-cli/src/agent/chatApproval.ts` | JIT permission approval |
 | `babel-cli/src/config/chatEngineLimits.ts` | Limits (maxTurns=200 default, cost, wall, stall) |
+
+## Execution profile and isolation (H13)
+
+Chat uses the same default execution profile as other run paths: **`safe_repo`**. After H13, isolation profiles with `dockerSandbox: true` **fail closed** when Docker isolation cannot activate — they do not silently fall back to the host.
+
+| Profile / control | Behavior |
+|-------------------|----------|
+| **`safe_repo` (default)** | Docker isolation required when the profile is active. Proceeds only if Docker is available **and** a sandbox image is configured (`BABEL_BENCHMARK_DOCKER_IMAGE`). Without daemon/image, shell execution **fail-closes** unless host escalation env is set. |
+| **`dev_local`** | Host-friendly local coding (`dockerSandbox: false`). No Docker requirement; use for day-to-day host work without isolation containers. |
+| **`BABEL_ALLOW_HOST_FALLBACK=1`** | Explicit host escalation (preferred). Allows host execution when isolation would otherwise fail closed. Also accepts `true` / `yes`. |
+| **`BABEL_DOCKER_DISABLE=true`** | Legacy isolation opt-out; also counts as explicit host escalation under H13. Disables Docker sandbox selection for the process. |
+
+### How to select a profile
+
+```powershell
+# Env (applies across babel invocations in this shell)
+$env:BABEL_EXECUTION_PROFILE = 'dev_local'
+
+# Or per-run CLI flag (babel run / advanced surfaces that expose the option)
+babel run "Fix tests" --execution-profile dev_local
+```
+
+Default remains `safe_repo` when neither env nor `--execution-profile` is set.
+
+### Practical defaults for operators
+
+- **Docker ready + image configured** → keep `safe_repo` (default guarded posture).
+- **Host-only day-to-day coding** → use `dev_local` (`BABEL_EXECUTION_PROFILE=dev_local` or `--execution-profile dev_local`).
+- **Keep `safe_repo` but temporarily allow host** → set `BABEL_ALLOW_HOST_FALLBACK=1` (prefer over `BABEL_DOCKER_DISABLE`).
+
+Normative isolation rule (H13) and maturity notes: [architecture/HARNESS_ARCHITECTURE_V1.md](./architecture/HARNESS_ARCHITECTURE_V1.md) §6.9 Isolation architecture. Runtime decision lives in `babel-cli/src/config/benchmarkContainer.ts` (`evaluateGovernedIsolation`).
+
+Clean-room IndependentVerifier is separate from execution-profile isolation; see env `BABEL_INDEPENDENT_VERIFIER` if you need that surface.
 
 ## Completion honesty (harness, not model opinion)
 

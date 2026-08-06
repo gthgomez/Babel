@@ -1,6 +1,6 @@
 <!--
 status: ACTIVE
-last_verified: 2026-08-03
+last_verified: 2026-08-05
 architecture_version: harness-v1
 -->
 
@@ -33,6 +33,7 @@ Without a frozen contract, agents and humans re-discover or accidentally weaken 
 4. Place **completion authority outside model self-report** (`completionGatePolicy` + `kernel.completion.decide`).
 5. Enforce the freeze with **conformance tests**, a **golden harness example**, and **`tools/check-harness-architecture.ps1`** drift detection.
 6. Resolve package guidance via **`babel-cli/CLAUDE.md`** (concise operational pointer), not a second architecture bible.
+7. Use one validated, hash-linked `episode-events.jsonl` producer per Chat/pipeline run. Pipeline episode persistence is supplemental to the authoritative `EvidenceBundle`, reports degradation, and fails closed on invalid resume/quarantine boundaries. This remains **PARTIAL** until phase instrumentation, offline integration, and full-suite release gates are green.
 
 ## Alternatives considered
 
@@ -68,7 +69,7 @@ Without a frozen contract, agents and humans re-discover or accidentally weaken 
 1. Structural verifier identity and directional coverage.  
 2. Live revision-bound independent verification in Chat.  
 3. Fail-closed governed isolation when Docker unavailable.  
-4. Unified hash-linked episode stream.  
+4. Episode-stream consumers/TUI replay and cross-mode replay.
 5. Held-out promotion verification and model-fixed harness eval.
 
 ## Related
