@@ -1,11 +1,8 @@
 #!/usr/bin/env node
 
-import { config as dotenvConfig } from 'dotenv';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { loadBabelCliEnv } from './config/envBootstrap.js';
 
-const __envDir = dirname(fileURLToPath(import.meta.url));
-dotenvConfig({ path: resolve(__envDir, '../.env'), override: true, debug: false, quiet: true });
+loadBabelCliEnv();
 process.env['BABEL_ENV_LOADED'] = 'true';
 
 import { Command } from 'commander';
