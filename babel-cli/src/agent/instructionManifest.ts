@@ -91,6 +91,22 @@ function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
+/** Validate the structural identity of a persisted instruction manifest. */
+export function validateInstructionManifestV1(value: InstructionManifestV1): string[] {
+  const errors: string[] = []
+  if (value.schema_version !== INSTRUCTION_MANIFEST_VERSION) errors.push('schema_version')
+  if (!Array.isArray(value.fragments) || value.fragments.length === 0) errors.push('fragments')
+  const computed = sha256(
+    [...(value.fragments ?? [])]
+      .sort((a, b) => a.rule_id.localeCompare(b.rule_id))
+      .map((fragment) => `${fragment.rule_id}:${fragment.source_hash}`)
+      .join('\n'),
+  ).slice(0, 32)
+  if (value.manifest_hash !== computed) errors.push('manifest_hash')
+  if (value.manifest_id !== `im1:${computed}`) errors.push('manifest_id')
+  return errors
+}
+
 function layerToPrecedence(layer: ChatStackEntry['layer']): InstructionPrecedence {
   return layer;
 }

@@ -166,6 +166,18 @@ function hashContractBody(c: Omit<TaskContractV1, 'contract_id' | 'contract_hash
   return createHash('sha256').update(payload).digest('hex').slice(0, 32);
 }
 
+/** Validate the frozen identity of a persisted task contract. */
+export function validateTaskContractV1(value: TaskContractV1): string[] {
+  const errors: string[] = []
+  if (value.schema_version !== TASK_CONTRACT_VERSION) errors.push('schema_version')
+  if (value.frozen !== true) errors.push('not_frozen')
+  const { contract_id: _id, contract_hash: _hash, frozen: _frozen, provenance: _provenance, ...body } = value
+  const computed = hashContractBody(body)
+  if (value.contract_hash !== computed) errors.push('contract_hash')
+  if (!value.contract_id?.startsWith(`tc1:${computed.slice(0, 16)}:`)) errors.push('contract_id')
+  return errors
+}
+
 export function buildTaskContractV1(input: BuildTaskContractInput): TaskContractV1 {
   const body = {
     schema_version: TASK_CONTRACT_VERSION,

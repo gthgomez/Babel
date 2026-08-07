@@ -5,10 +5,12 @@
  * competing with sessionEvents or threadEventLog as the durable event source.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import {
   buildInstructionManifestV1,
+  validateInstructionManifestV1,
   type InstructionManifestV1,
 } from './instructionManifest.js';
 import {
@@ -31,6 +33,7 @@ import { compileChatStack, type ChatCompiledStack } from './chatStackCompile.js'
 import {
   buildTaskContractV1,
   freezeTaskContract,
+  validateTaskContractV1,
   type TaskContractV1,
 } from './taskContract.js';
 import type { BabelMode } from '../executor/contracts.js';
@@ -43,6 +46,30 @@ export interface LiveSessionAuthority {
   instructionManifest: InstructionManifestV1;
   taskContract: TaskContractV1;
   chatStack?: ChatCompiledStack;
+}
+
+export class LiveSessionAuthorityError extends Error {
+  readonly code: string
+
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = 'LiveSessionAuthorityError'
+    this.code = code
+  }
+}
+
+function writeJsonAtomic(path: string, value: unknown): void {
+  const tempPath = `${path}.${randomUUID()}.tmp`
+  try {
+    writeFileSync(tempPath, JSON.stringify(value, null, 2), 'utf-8')
+    renameSync(tempPath, path)
+  } finally {
+    try {
+      rmSync(tempPath, { force: true })
+    } catch {
+      // The durable target has already been renamed or the original error wins.
+    }
+  }
 }
 
 /**
@@ -123,16 +150,8 @@ export function persistLiveSessionAuthority(
   authority: LiveSessionAuthority,
 ): void {
   mkdirSync(runDir, { recursive: true });
-  writeFileSync(
-    join(runDir, INSTRUCTION_MANIFEST_FILENAME),
-    JSON.stringify(authority.instructionManifest, null, 2),
-    'utf-8',
-  );
-  writeFileSync(
-    join(runDir, TASK_CONTRACT_FILENAME),
-    JSON.stringify(authority.taskContract, null, 2),
-    'utf-8',
-  );
+  writeJsonAtomic(join(runDir, INSTRUCTION_MANIFEST_FILENAME), authority.instructionManifest);
+  writeJsonAtomic(join(runDir, TASK_CONTRACT_FILENAME), authority.taskContract);
 }
 
 export function loadLiveSessionAuthority(
@@ -150,6 +169,44 @@ export function loadLiveSessionAuthority(
   } catch {
     return null;
   }
+}
+
+/** Load and validate durable authority; absence and corruption are distinct failures. */
+export function loadLiveSessionAuthorityStrict(runDir: string): LiveSessionAuthority {
+  const manPath = join(runDir, INSTRUCTION_MANIFEST_FILENAME)
+  const tcPath = join(runDir, TASK_CONTRACT_FILENAME)
+  if (!existsSync(manPath) || !existsSync(tcPath)) {
+    throw new LiveSessionAuthorityError(
+      'LIVE_AUTHORITY_MISSING',
+      `Live session authority is incomplete in ${runDir}`,
+    )
+  }
+  let instructionManifest: InstructionManifestV1
+  let taskContract: TaskContractV1
+  try {
+    instructionManifest = JSON.parse(readFileSync(manPath, 'utf-8')) as InstructionManifestV1
+    taskContract = JSON.parse(readFileSync(tcPath, 'utf-8')) as TaskContractV1
+  } catch (error) {
+    throw new LiveSessionAuthorityError(
+      'LIVE_AUTHORITY_CORRUPT',
+      `Live session authority is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+  const manifestErrors = validateInstructionManifestV1(instructionManifest)
+  const contractErrors = validateTaskContractV1(taskContract)
+  if (manifestErrors.length > 0 || contractErrors.length > 0) {
+    throw new LiveSessionAuthorityError(
+      'LIVE_AUTHORITY_INVALID',
+      `Live session authority failed validation: ${[...manifestErrors, ...contractErrors].join(', ')}`,
+    )
+  }
+  if (instructionManifest.mode !== taskContract.mode) {
+    throw new LiveSessionAuthorityError(
+      'LIVE_AUTHORITY_MODE_MISMATCH',
+      'Instruction manifest and task contract modes do not match',
+    )
+  }
+  return { instructionManifest, taskContract }
 }
 
 /**
