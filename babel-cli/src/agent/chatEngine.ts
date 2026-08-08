@@ -58,7 +58,13 @@ import {
   CompactionManager,
   DEFAULT_COMPACTION_CONFIG,
   estimateTokens,
+  resolveCompactionModelId,
 } from './chatCompaction.js';
+import { runChatEngineCompaction } from './compactionCommit.js';
+import { initLiveAuthorityOnEngine, projectEngineLiveSession, restoreEngineSessionEvents, engineCanMutateKey } from './chatEngineLiveSession.js';
+import { loadLiveSessionAuthorityStrict, persistLiveSessionAuthority } from './liveSessionBridge.js';
+import type { LiveSessionV1 } from './liveSession.js';
+import { applyHonestTaskOutcomeToCompletion, createFailureBudgetTrackerFromContract, type FailureClassBudgetTracker, type FailureCapsuleV1 } from './taskContract.js';
 import { getGlobalTokenTracker } from '../ui/tokenHistory.js';
 import {
   resolveChatEngineLimits,
@@ -122,6 +128,8 @@ import {
   toGateToolLog,
   type BoundChatVerifierReceipt,
 } from '../evidence/chatRevisionBinding.js';
+import { RevisionManager } from '../evidence/revisionBoundReceipt.js';
+import { resolveIsolationBrokerFlags } from './chatEngineIsolationFlags.js';
 
 import {
   executeActionWithPolicy,
@@ -139,14 +147,13 @@ import {
   parityOnUserTurn,
   parityRecordToolBatch,
   paritySettleProposeTools,
-  paritySettleInterruptedOnResume,
   parityArbitrateCycle,
   parityShouldCompact,
-  parityBuildCapsule,
   parityTryFailover,
   finalizeParityTurnSync,
   finalizeParityCancel,
   checkpointParityEventLog,
+  checkpointParityEventLogStrict,
   type ParityRuntime,
 } from './chatEngineParityBridge.js';
 import {
@@ -304,6 +311,8 @@ export interface SubmitMessageOptions {
 export interface ChatEngineOptions {
   task: string;
   projectRoot: string;
+  runId?: string;
+  resumeExisting?: boolean;
   systemContext?: string;
   /** Appended system prompt fragments (plugins, skills, project memory).
    *  Injected after the base system prompt for layered context assembly. */
@@ -643,6 +652,7 @@ export class ChatEngine {
   private _logIndexToTurn = new Map<number, number>();
   /** P1–P3 live parity runtime (loop / progress / event log / approvals). */
   private parity: ParityRuntime;
+  private failureBudgetTracker: FailureClassBudgetTracker = createFailureBudgetTrackerFromContract(null);
 
   private get engineRunDir(): string {
     return chatSessionDir(this.engineRunId);
@@ -679,7 +689,7 @@ export class ChatEngine {
       { taskClass: this.taskClass, taskText: options.task },
     );
     this.abortController = new AbortController();
-    this.engineRunId = allocateThreadId();
+    this.engineRunId = options.runId ?? allocateThreadId();
     // definite assignment: engineRunId set immediately above
     this.parity = createParityRuntime(this.engineRunId);
     clearBackgroundShellRegistry(); // Per-session bg shell isolation
@@ -691,6 +701,9 @@ export class ChatEngine {
     }
     mkdirSync(this.engineRunDir, { recursive: true });
 
+    if (options.resumeExisting) this.parity.liveAuthority = loadLiveSessionAuthorityStrict(this.engineRunDir);
+    else initLiveAuthorityOnEngine({ parity: this.parity, options, taskClass: this.taskClass, executionProfile: this.executionProfile, engineRunDir: this.engineRunDir });
+    this.failureBudgetTracker = createFailureBudgetTrackerFromContract(this.parity.liveAuthority?.taskContract);
     // Crash-safe patch persistence: write-through recovery file.
     this.patchRecoveryPath = join(this.engineRunDir, 'patches.recovery.log');
 
@@ -821,17 +834,21 @@ export class ChatEngine {
       .map((entry) => entry.command)
       .filter((command) => command.trim().length > 0);
     const verifierInput = this.buildVerifierInput();
+    // H5: live workspace revision at gate time (not the receipt's own bound hash).
+    let currentWorkspaceRevisionHash: string | undefined;
+    try {
+      currentWorkspaceRevisionHash = RevisionManager.computeRevisionSync(
+        this.options.projectRoot,
+        mutationPathsFromSessionEvents(this.parity.sessionEvents.events),
+      ).compositeTreeHash;
+    } catch { /* best-effort */ }
     return evaluateCompletionGateForEngine({
-      turnType: turnResult.type,
-      taskIntent,
-      task: this.options.task,
-      taskClass: this.taskClass,
-      toolCallLog: this.toolCallLog,
-      lastVerifierReceipt: this.lastVerifierReceipt,
+      turnType: turnResult.type, taskIntent, task: this.options.task, taskClass: this.taskClass,
+      toolCallLog: this.toolCallLog, lastVerifierReceipt: this.lastVerifierReceipt,
       executedVerifierLedger: verifierInput.executedVerifierLedger ?? null,
       verifierEvidenceErrors: verifierInput.verifierEvidenceErrors ?? null,
-      requiredVerifierCommands: verifierInput.requiredVerifierCommands,
-      projectTestCommands,
+      requiredVerifierCommands: verifierInput.requiredVerifierCommands, projectTestCommands,
+      ...(currentWorkspaceRevisionHash ? { currentWorkspaceRevisionHash } : {}),
     });
   }
 
@@ -2646,31 +2663,29 @@ export class ChatEngine {
     return this.parity;
   }
 
-  /** Restore persisted event log after kill/restart resume. */
+  getInstructionManifest() { return this.parity.liveAuthority?.instructionManifest ?? null; }
+  getTaskContract() { return this.parity.liveAuthority?.taskContract ?? null; }
+  getLiveSession(c?: { turns?: number; tokens?: number; repair_attempts?: number; infra_retries?: number }): LiveSessionV1 { return projectEngineLiveSession(this.parity, c); }
+  canMutateIdempotencyKey(key: string): boolean { return engineCanMutateKey(this.parity, key); }
+  consumeFailureBudget(failure: FailureCapsuleV1): boolean { return this.failureBudgetTracker.consume(failure); }
+  getFailureBudgets() { return this.failureBudgetTracker.remainingBudgets(); }
+  /** H4: isolation + dirty-tree flags for the capability broker. */
+  private isolationBrokerFlags() {
+    return resolveIsolationBrokerFlags(this.options.projectRoot);
+  }
   restoreEventLog(log: import('./threadEventLog.js').ThreadEventLog): void {
-    this.parity.eventLog = log;
-    this.clearVerifierEvidenceState();
+    this.parity.eventLog = log; this.clearVerifierEvidenceState();
     const lastTurn = [...log.events].reverse().find((e) => e.kind === 'turn_started');
     if (lastTurn) this.parity.turnId = lastTurn.turn_id;
   }
-
-  /**
-   * W2.2: restore session-events.jsonl and mark mid-tool keys as cancelled
-   * so resume never treats an interrupted tool as success or re-mutates completed keys.
-   */
+  /** W2.2+H2: restore session events, settle interrupted tools, reload authority, reproject LiveSession. */
   restoreSessionEvents(log: SessionEventLog, options?: { runDir?: string }): number {
-    this.parity.sessionEvents = log;
     this.clearVerifierEvidenceState();
-    const runDir = options?.runDir ?? this.engineRunDir;
-    return paritySettleInterruptedOnResume(this.parity, runDir);
+    return restoreEngineSessionEvents({ parity: this.parity, log, runDir: options?.runDir ?? this.engineRunDir });
   }
-
-  /** Load session-events from run dir if present; mark interrupted tools. */
   restoreSessionEventsFromDir(runDir?: string): number {
-    const dir = runDir ?? this.engineRunDir;
-    const loaded = loadSessionEventLogFromDir(dir);
-    if (!loaded) return 0;
-    return this.restoreSessionEvents(loaded, { runDir: dir });
+    const loaded = loadSessionEventLogFromDir(runDir ?? this.engineRunDir);
+    return loaded ? this.restoreSessionEvents(loaded, { runDir: runDir ?? this.engineRunDir }) : 0;
   }
 
   public getResolvedRequiredVerifiers(): string[] { return resolveEngineRequiredVerifiers({ task: this.options.task, projectTestCommands: this.discoveredTestCommands.map((e) => e.command), requiredVerifierCommands: this.options.requiredVerifierCommands ?? null }); }
@@ -2715,13 +2730,14 @@ export class ChatEngine {
     },
   ) {
     const hasMutation = this.hasAnyWrites();
-    const requestedOutcome = computeTerminalOutcome({
+    let requestedOutcome = computeTerminalOutcome({
       finalStatus: extra?.blockedReport ? 'blocked' : this.budgetExceeded ? 'budget_exhausted' : 'completed',
       budgetExceeded: this.budgetExceeded,
       lastVerifierReceipt: this.lastVerifierReceipt,
       blockedReport: extra?.blockedReport,
       hasAnyWrites: hasMutation,
     });
+    requestedOutcome = applyHonestTaskOutcomeToCompletion({ contract: this.parity.liveAuthority?.taskContract, requestedOutcome, hasMutation, planMode: this.executionProfile === 'plan' });
     const planCompletion = this.executionProfile === 'plan' && !extra?.blockedReport && !this.budgetExceeded;
     const decision = this.decideCompletion(planCompletion ? 'PLAN_COMPLETE' : requestedOutcome, hasMutation);
     const outcome = decision.finalOutcome === 'PLAN_COMPLETE' ? 'UNVERIFIED_PATCH' : decision.finalOutcome;
@@ -2778,8 +2794,14 @@ export class ChatEngine {
   }
 
   assignRunId(runId: string): void {
-    this.engineRunId = runId;
-    mkdirSync(this.engineRunDir, { recursive: true });
+    if (runId === this.engineRunId) return;
+    if (this.parity.eventLog.events.length > 0 || this.parity.sessionEvents.events.length > 0) {
+      throw new Error('Cannot change ChatEngine run identity after durable events exist');
+    }
+    const authority = this.parity.liveAuthority; this.engineRunId = runId;
+    this.parity = createParityRuntime(runId); if (authority) this.parity.liveAuthority = authority;
+    mkdirSync(this.engineRunDir, { recursive: true }); if (authority) persistLiveSessionAuthority(this.engineRunDir, authority);
+    this.failureBudgetTracker = createFailureBudgetTrackerFromContract(authority?.taskContract);
   }
 
   replaceConversation(messages: ChatMessage[]): void {
@@ -2970,13 +2992,10 @@ export class ChatEngine {
       .split('\n')
       .filter((line) => line.trim() !== '')
       .map((line) => JSON.parse(line));
-
-    // Create a fresh engine (this generates a random engineRunId and creates a
-    // directory that we will not use). Then replace the run ID with the existing
-    // session ID and inject the loaded conversation. Private fields are
-    // accessible across instances of the same class in TypeScript.
-    const engine = new ChatEngine(options);
-    engine.engineRunId = engineRunId;
+    const engine = new ChatEngine({ ...options, runId: engineRunId, resumeExisting: true });
+    const sessionLog = loadSessionEventLogFromDir(engine.engineRunDir);
+    if (!sessionLog) throw new Error(`Cannot resume ${engineRunId}: session-events.jsonl is missing or invalid`);
+    engine.restoreSessionEvents(sessionLog, { runDir: engine.engineRunDir });
     engine.conversation = messages;
     engine.clearVerifierEvidenceState();
     engine.cachedSystemPromptLegacy = null;
@@ -3681,10 +3700,24 @@ export class ChatEngine {
         // Future evolutions:
         //   B — new 'auto' preset that allows everything (no approval, no denial)
         //   C — BABEL_ALLOW_NETWORK_COMMANDS=1 env flag for graduated autonomy
-        'workspace_write',
+        this.executionProfile === 'plan' ? 'read_only' : 'workspace_write',
         toolContext,
         {
           executor: defaultToolExecutor,
+          mode:
+            this.executionProfile === 'plan'
+              ? 'plan'
+              : this.executionProfile === 'deep'
+                ? 'deep'
+                : 'chat',
+          completedIdempotencyKeys: this.getLiveSession().tools.completed_idempotency_keys,
+          ...(this.parity.liveAuthority?.taskContract.contract_id
+            ? { taskId: this.parity.liveAuthority.taskContract.contract_id }
+            : {}),
+          ...(this.parity.liveAuthority?.taskContract.protected_paths
+            ? { protectedPaths: this.parity.liveAuthority.taskContract.protected_paths }
+            : {}),
+          ...this.isolationBrokerFlags(),
           ...(autoApproveMutations
             ? { onAskApproval: async () => true }
             : process.stdout.isTTY && !process.env['CI']
@@ -4013,75 +4046,56 @@ export class ChatEngine {
     }
   }
 
-  /**
-   * Run compaction if over budget; notify UI when history shrinks.
-   * Returns compact info when message count actually dropped, else null.
-   */
+  /** H1 compaction: delegates to runChatEngineCompaction (atomic commit path). */
   private async compactIfNeeded(
     callbacks?: ChatCallbacks,
   ): Promise<ContextCompactedInfo | null> {
-    const before = this.conversation.length;
-    let mode: 'llm' | 'heuristic' | null = null;
-    const tokenEstimate = estimateTokens(this.conversation);
-    const modelId = this.options.model ?? this.modelPolicy?.family ?? 'deepseek-v4-pro';
-    // Trigger on actual request tokens (budget formula), not only message count
-    const tokenTriggered = parityShouldCompact(tokenEstimate, modelId);
-
-    if (this.compactionManager) {
-      const isTextTools = this.shouldUseTextTools();
-      const reserve = isTextTools ? 1024 : DEFAULT_COMPACTION_CONFIG.reserveTokens;
-      if (tokenTriggered || tokenEstimate > this.limits.maxEstimatedTokens - reserve) {
-        try {
-          const next = await this.compactionManager.compact(this.conversation, {
-            model: this.modelPolicy?.family ?? DEFAULT_COMPACTION_CONFIG.compactionModel,
-            maxTokens: this.limits.maxEstimatedTokens,
-            signal: this.abortController.signal,
-          });
-          if (next !== this.conversation) {
-            // Preserve task/progress/patch/verifier capsule in history
-            const capsule = parityBuildCapsule({
-              task: this.options.task,
-              progress: this.parity.progress,
-              patchSummary: this.writeCount > 0 ? `writes=${this.writeCount}` : '',
-              verifierSummary: this.lastVerifierReceipt
-                ? `${this.lastVerifierReceipt.command}→${this.lastVerifierReceipt.exit_code}`
-                : '',
-              recentToolResults: this.toolCallLog.slice(-6).map((t) => `${t.tool} ${t.target}`),
-            });
-            this.conversation = [
-              ...next.filter((m) => m.role === 'system').slice(0, 1),
-              { role: 'system', content: capsule, name: 'compaction_capsule' },
-              ...next.filter((m) => m.role !== 'system' || m.name === 'compaction_capsule'),
-            ];
-            mode = 'llm';
-          }
-        } catch {
-          this.compactConversation();
-          mode = 'heuristic';
+    const host: import('./compactionCommit.js').ChatEngineCompactionHost = {
+      conversation: this.conversation,
+      options: this.options,
+      ...(this.modelPolicy ? { modelPolicy: this.modelPolicy } : {}),
+      limits: this.limits,
+      abortSignal: this.abortController.signal,
+      writeCount: this.writeCount,
+      turnIndex: this._turnIndex,
+      toolCallLog: this.toolCallLog,
+      ...(this.lastVerifierReceipt
+        ? { lastVerifierReceipt: this.lastVerifierReceipt }
+        : {}),
+      progress: this.parity.progress,
+      threadLog: this.parity.eventLog,
+      sessionLog: this.parity.sessionEvents,
+      turnId: this.parity.turnId,
+      shouldUseTextTools: () => this.shouldUseTextTools(),
+      compactHeuristic: () => {
+        this.compactConversation();
+        host.conversation = this.conversation;
+      },
+      checkpoint: async () => {
+        const receipt = await checkpointParityEventLogStrict(this.parity, this.engineRunDir);
+        if (receipt.status !== 'committed') {
+          throw new Error(receipt.error ?? 'checkpoint persistence blocked');
         }
-      }
-    } else if (tokenTriggered) {
-      this.compactConversation();
-      mode = 'heuristic';
-    } else {
-      this.compactConversation();
-      mode = 'heuristic';
-    }
-
-    const after = this.conversation.length;
-    if (mode == null || after >= before) return null;
-
-    const info: ContextCompactedInfo = {
-      mode,
-      beforeMessages: before,
-      afterMessages: after,
-      message: `[Context compacted…] ${before}→${after} messages (${mode})`,
+      },
+      reserveTokens: DEFAULT_COMPACTION_CONFIG.reserveTokens,
+      textToolsReserve: 1024,
+      resolveModel: resolveCompactionModelId,
+      shouldCompactByTokens: parityShouldCompact,
+      estimateTokens,
     };
-    // Log compaction events to stderr so they're visible in test/debug output.
-    // Critical for verifying the text-tools 4K budget is working correctly.
+    if (this.compactionManager) host.compactionManager = this.compactionManager;
+    const result = await runChatEngineCompaction(host);
+    this.conversation = host.conversation;
+    if (!result) return null;
+    const info: ContextCompactedInfo = {
+      mode: result.mode,
+      beforeMessages: result.beforeMessages,
+      afterMessages: result.afterMessages,
+      message: result.message,
+    };
     if (this.shouldUseTextTools()) {
       console.error(
-        `[compaction] text-tools: ${before}→${after} msgs (${mode}), token estimate was ~${this.apiTokenCount}`,
+        `[compaction] text-tools: ${info.beforeMessages}→${info.afterMessages} msgs (${info.mode}), token estimate was ~${this.apiTokenCount}`,
       );
     }
     callbacks?.onContextCompacted?.(info);
@@ -4663,13 +4677,14 @@ export class ChatEngine {
 
     // Compute truthful TerminalOutcome from status and runtime state.
     const hasMutation = this.hasAnyWrites();
-    const outcome: TerminalOutcome = computeTerminalOutcome({
+    let outcome: TerminalOutcome = computeTerminalOutcome({
       finalStatus,
       budgetExceeded: this.budgetExceeded,
       lastVerifierReceipt: this.lastVerifierReceipt,
       blockedReport: finalBlockedReport,
       hasAnyWrites: hasMutation,
     });
+    outcome = applyHonestTaskOutcomeToCompletion({ contract: this.parity.liveAuthority?.taskContract, requestedOutcome: outcome, hasMutation, planMode: this.executionProfile === 'plan' });
     const planCompletion = this.executionProfile === 'plan' && finalStatus === 'completed';
     const kernelDecision = this.decideCompletion(planCompletion ? 'PLAN_COMPLETE' : outcome, hasMutation);
     const authoritativeOutcome: TerminalOutcome =

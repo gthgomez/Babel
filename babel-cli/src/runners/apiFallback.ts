@@ -27,6 +27,7 @@ import { classifyProviderError } from './providerNormalize.js';
 import type { ZodType } from 'zod';
 import { type LlmRunner, type RunnerCallbacks, buildStructuredOutputError } from './base.js';
 import { extractJson } from '../utils/extractJson.js';
+import { resolveProviderCredential } from './credentialHub.js';
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -49,16 +50,18 @@ const SYSTEM_PROMPT =
 
 export class ApiFallbackRunner implements LlmRunner {
   private readonly client: Anthropic;
+  private readonly model: string;
+  private readonly maxTokens: number;
+  private readonly temperature: number | undefined;
 
-  constructor() {
-    if (!process.env['ANTHROPIC_API_KEY']) {
-      throw new Error(
-        '[apiFallback] ANTHROPIC_API_KEY is not set. ' +
-          'Add it to your .env file to enable the API fallback runner.',
-      );
-    }
+  constructor(options: { explicitCredential?: string; env?: NodeJS.ProcessEnv; modelId?: string; maxTokens?: number; temperature?: number } = {}) {
+    const apiKey = resolveProviderCredential('anthropic', options);
+    if (apiKey === null) throw new Error('[apiFallback] credential resolution failed');
+    this.model = options.modelId ?? API_MODEL;
+    this.maxTokens = options.maxTokens ?? MAX_TOKENS;
+    this.temperature = options.temperature;
     this.client = new Anthropic({
-      apiKey: process.env['ANTHROPIC_API_KEY'],
+      apiKey,
     });
   }
 
@@ -78,8 +81,9 @@ export class ApiFallbackRunner implements LlmRunner {
 
     try {
       response = await this.client.messages.create({
-        model: API_MODEL,
-        max_tokens: MAX_TOKENS,
+        model: this.model,
+        max_tokens: this.maxTokens,
+        ...(this.temperature === undefined ? {} : { temperature: this.temperature }),
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: prompt }],
       });
@@ -100,7 +104,7 @@ export class ApiFallbackRunner implements LlmRunner {
       throw buildStructuredOutputError({
         failure_kind: 'empty_response',
         provider: 'anthropic',
-        model: API_MODEL,
+        model: this.model,
         message: '[apiFallback] API returned an empty response.',
         raw_output: text,
       });
@@ -113,7 +117,7 @@ export class ApiFallbackRunner implements LlmRunner {
       throw buildStructuredOutputError({
         failure_kind: 'invalid_json',
         provider: 'anthropic',
-        model: API_MODEL,
+        model: this.model,
         message: `[apiFallback] invalid json: ${err instanceof Error ? err.message : String(err)}`,
         raw_output: text,
         cause: err instanceof Error ? err : undefined,
@@ -125,7 +129,7 @@ export class ApiFallbackRunner implements LlmRunner {
       throw buildStructuredOutputError({
         failure_kind: 'zod_validation_failed',
         provider: 'anthropic',
-        model: API_MODEL,
+        model: this.model,
         message: `[apiFallback] Zod validation failed:\n${result.error.toString()}`,
         raw_output: text,
         parsed_json: parsed,

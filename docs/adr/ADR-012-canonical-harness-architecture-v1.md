@@ -57,7 +57,7 @@ Without a frozen contract, agents and humans re-discover or accidentally weaken 
 ### Negative / costs
 
 - Doc hierarchy maintenance cost (spec + ADR + overview + checker).
-- Some target invariants (H13 fail-closed isolation) are documented as gaps and will fail audit fixtures until implemented.
+- Architecture follow-ups require coordinated contract, implementation, conformance, and documentation updates as they move from target to implemented.
 
 ### Migration
 
@@ -66,15 +66,12 @@ Without a frozen contract, agents and humans re-discover or accidentally weaken 
 
 ## Open follow-ups (not decided here)
 
-1. Structural verifier identity and directional coverage.  
-2. Live revision-bound independent verification in Chat.  
-3. Fail-closed governed isolation when Docker unavailable.  
-4. Episode-stream consumers/TUI replay and cross-mode replay.
-5. Held-out promotion verification and model-fixed harness eval.
+Structural verifier identity, Chat revision binding, fail-closed governed isolation, high-assurance IndependentVerifier defaults, and core episode producers landed after this ADR was accepted. Remaining hardening work and measurable exit gates are sequenced in the [Harness Hardening Roadmap v1](../architecture/HARNESS_HARDENING_ROADMAP_V1.md).
 
 ## Related
 
 - [HARNESS_ARCHITECTURE_V1.md](../architecture/HARNESS_ARCHITECTURE_V1.md)
+- [HARNESS_HARDENING_ROADMAP_V1.md](../architecture/HARNESS_HARDENING_ROADMAP_V1.md) (canonical implementation sequence)
 - [HARNESS_OVERVIEW.md](../architecture/HARNESS_OVERVIEW.md) (explanatory)
 - ADR-001–004 (pipeline), ADR-006–008 (isolation)
 - `babel-cli/src/executor/architectureConformance.test.ts`

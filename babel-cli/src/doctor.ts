@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 
 import { loadEnterprisePolicy } from './config/enterprisePolicy.js';
+import { listProviderSpecs } from './runners/providerRegistry.js';
 import {
   isStaleLatestPointer,
   listLatestPointerFiles,
@@ -363,12 +364,9 @@ function runEnvironmentChecks(
     ),
   );
 
-  const providerKeys = [
-    ['DEEPINFRA_API_KEY', env['DEEPINFRA_API_KEY']],
-    ['ANTHROPIC_API_KEY', env['ANTHROPIC_API_KEY']],
-    ['GROQ_API_KEY', env['GROQ_API_KEY']],
-    ['OPENAI_API_KEY', env['OPENAI_API_KEY']],
-  ] as const;
+  const providerKeys = listProviderSpecs()
+    .filter((spec) => spec.credentialEnvVar !== null)
+    .map((spec) => [spec.credentialEnvVar!, env[spec.credentialEnvVar!]] as const);
   const presentProviders = providerKeys.filter(
     ([, value]) => typeof value === 'string' && value.trim().length > 0,
   );

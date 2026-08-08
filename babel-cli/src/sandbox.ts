@@ -68,6 +68,7 @@ import {
 import { getSafeEnv } from './utils/safeEnv.js';
 import { contextAwareOperatorCheck } from './utils/cmdTokenizer.js';
 import { sanitizePath } from './cli/constants.js';
+import { OutputBuffer } from './ui/outputBuffer.js';
 
 // ─── Shared result type ───────────────────────────────────────────────────────
 
@@ -152,6 +153,24 @@ const MAX_TRANSIENT_SPAWN_RETRIES = 2;
 /** Module-level sentinel for one-shot Docker fallback warning */
 let dockerFallbackWarningEmitted = false;
 let isolationEscalationWarningEmitted = false;
+
+/**
+ * Operator-facing sandbox notices.
+ *
+ * During TUI / TTY sessions, write a full newline-terminated line via
+ * OutputBuffer so stderr cannot glue onto an open tool-start line
+ * ("Running npm test[sandbox] …"). Non-TTY keeps console.error.
+ */
+function emitSandboxOperatorNotice(message: string): void {
+  const line = `[sandbox] ${message}`;
+  const useTuiChannel =
+    process.env['BABEL_INTERACTIVE'] === '1' || Boolean(process.stdout.isTTY);
+  if (useTuiChannel) {
+    OutputBuffer.getInstance().write(`\n  \x1b[2m${line}\x1b[0m\n`);
+    return;
+  }
+  console.error(line);
+}
 
 /**
  * Determines whether a spawn error message corresponds to a transient
@@ -1511,8 +1530,8 @@ export class SafeExecutor {
     }
     if (isolation.kind === 'host_escalated' && !isolationEscalationWarningEmitted) {
       isolationEscalationWarningEmitted = true;
-      console.error(
-        `[sandbox] isolation boundary escalated to host for profile "${isolation.profile}" — ${isolation.reason}`,
+      emitSandboxOperatorNotice(
+        `isolation boundary escalated to host for profile "${isolation.profile}" — ${isolation.reason}`,
       );
     }
 
@@ -1538,7 +1557,7 @@ export class SafeExecutor {
       dockerFallbackWarningEmitted = true;
       const reason = getDockerUnavailableReason();
       if (reason) {
-        console.error(`[sandbox] Docker not available — ${reason}`);
+        emitSandboxOperatorNotice(`Docker not available — ${reason}`);
       }
     }
 

@@ -1025,16 +1025,31 @@ export type TerminalOutcome =
   | 'BUDGET_EXHAUSTED'       // wall, cost, or token budget exhausted
   | 'CANCELLED'              // user cancelled
   | 'INFRA_FAILURE'          // provider/infra error
-  | 'AGENT_FAILURE';         // agent logic error, crash, unrecoverable
+  | 'AGENT_FAILURE'          // agent logic error, crash, unrecoverable
+  /** H3: workspace already satisfies acceptance; no mutation required. */
+  | 'NO_CHANGE_REQUIRED'
+  /** H3: task is malformed / impossible; must not mutate. */
+  | 'INVALID_TASK'
+  /** H3: requires an explicit human decision before further action. */
+  | 'NEEDS_HUMAN_DECISION';
 
 /** Returns true for outcomes that represent a passing result. */
 export function isPassingOutcome(o: TerminalOutcome): boolean {
-  return o === 'VERIFIED_COMPLETE' || o === 'UNVERIFIED_PATCH';
+  return (
+    o === 'VERIFIED_COMPLETE' ||
+    o === 'UNVERIFIED_PATCH' ||
+    o === 'NO_CHANGE_REQUIRED'
+  );
 }
 
 /** Returns true for outcomes where the task was blocked. */
 export function isBlockedOutcome(o: TerminalOutcome): boolean {
-  return o === 'BLOCKED_EXTERNAL' || o === 'BLOCKED_POLICY';
+  return (
+    o === 'BLOCKED_EXTERNAL' ||
+    o === 'BLOCKED_POLICY' ||
+    o === 'NEEDS_HUMAN_DECISION' ||
+    o === 'INVALID_TASK'
+  );
 }
 
 /** Returns true for outcomes that represent a terminal failure (not passing, not blocked). */
@@ -1053,6 +1068,33 @@ export function terminalOutcomeLabel(o: TerminalOutcome): string {
     case 'CANCELLED': return 'Cancelled by user';
     case 'INFRA_FAILURE': return 'Infrastructure error';
     case 'AGENT_FAILURE': return 'Agent error';
+    case 'NO_CHANGE_REQUIRED': return 'No change required — acceptance already met';
+    case 'INVALID_TASK': return 'Invalid task — cannot execute';
+    case 'NEEDS_HUMAN_DECISION': return 'Needs human decision';
+  }
+}
+
+/** Process exit code mapping for cross-surface agreement (H3). */
+export function terminalOutcomeExitCode(o: TerminalOutcome): number {
+  switch (o) {
+    case 'VERIFIED_COMPLETE':
+    case 'UNVERIFIED_PATCH':
+    case 'NO_CHANGE_REQUIRED':
+      return 0;
+    case 'INVALID_TASK':
+      return 2;
+    case 'NEEDS_HUMAN_DECISION':
+    case 'BLOCKED_EXTERNAL':
+    case 'BLOCKED_POLICY':
+      return 3;
+    case 'BUDGET_EXHAUSTED':
+      return 4;
+    case 'CANCELLED':
+      return 130;
+    case 'INFRA_FAILURE':
+      return 5;
+    case 'AGENT_FAILURE':
+      return 1;
   }
 }
 

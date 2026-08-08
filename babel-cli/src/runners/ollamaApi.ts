@@ -33,15 +33,12 @@ export class OllamaApiRunner extends DeepInfraApiRunner {
   }
 
   constructor(model: string) {
-    process.env['OLLAMA_API_KEY'] ??= 'ollama-no-auth';
-    const saved = process.env['BABEL_DEEPINFRA_TOKENS'];
-    process.env['BABEL_DEEPINFRA_TOKENS'] = String(resolveOllamaTokens());
-    super(model, 'OLLAMA_API_KEY');
-    if (saved !== undefined) {
-      process.env['BABEL_DEEPINFRA_TOKENS'] = saved;
-    } else {
-      delete process.env['BABEL_DEEPINFRA_TOKENS'];
-    }
+    super(
+      model,
+      'OLLAMA_API_KEY',
+      { maxTokens: resolveOllamaTokens(), temperature: 0 },
+      { provider: 'ollama', explicitCredential: 'ollama-no-auth' },
+    );
   }
 
   override getLastInvocationMetadata(): RunnerInvocationMetadata | null {
