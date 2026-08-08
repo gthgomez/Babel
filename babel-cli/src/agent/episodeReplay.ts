@@ -313,27 +313,29 @@ export async function runLiveControllerGoldenEpisode(input: {
     getLastInvocationMetadata: () => null,
   };
 
+  const priorAutoApprove = process.env['BABEL_BENCHMARK_AUTO_APPROVE'];
   process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
-  const engine = new ChatEngine({
-    task,
-    projectRoot: input.workspace_path,
-    model: 'deepseek-v4-flash',
-    maxTurns: 6,
-  });
-  const anyEngine = engine as unknown as {
-    deliberationRunner: unknown;
-    synthesisRunner: unknown;
-    shouldUseNativeTools: () => boolean;
-  };
-  anyEngine.deliberationRunner = mockRunner;
-  anyEngine.synthesisRunner = mockRunner;
-  anyEngine.shouldUseNativeTools = () => true;
-
   try {
-    await engine.submitMessage(userMessage, { onThought: () => {} });
-  } catch (e) {
-    errors.push(`submitMessage_failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
+    const engine = new ChatEngine({
+      task,
+      projectRoot: input.workspace_path,
+      model: 'deepseek-v4-flash',
+      maxTurns: 6,
+    });
+    const anyEngine = engine as unknown as {
+      deliberationRunner: unknown;
+      synthesisRunner: unknown;
+      shouldUseNativeTools: () => boolean;
+    };
+    anyEngine.deliberationRunner = mockRunner;
+    anyEngine.synthesisRunner = mockRunner;
+    anyEngine.shouldUseNativeTools = () => true;
+
+    try {
+      await engine.submitMessage(userMessage, { onThought: () => {} });
+    } catch (e) {
+      errors.push(`submitMessage_failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
 
   const runDir = (engine as unknown as { engineRunDir: string }).engineRunDir;
   const sessionLog = engine.getParityRuntime().sessionEvents;
@@ -394,7 +396,7 @@ export async function runLiveControllerGoldenEpisode(input: {
     errors.push('cross_surface_disagree');
   }
 
-  return {
+    return {
     ok: errors.length === 0 && golden.ok && replay_matches && facts.agree,
     workspace_path: input.workspace_path,
     run_dir: runDir,
@@ -407,8 +409,12 @@ export async function runLiveControllerGoldenEpisode(input: {
     replay_matches,
     cross_surface_agree: facts.agree,
     validation: golden.validation,
-    errors,
-  };
+      errors,
+    };
+  } finally {
+    if (priorAutoApprove === undefined) delete process.env['BABEL_BENCHMARK_AUTO_APPROVE'];
+    else process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = priorAutoApprove;
+  }
 }
 
 /**

@@ -508,6 +508,64 @@ test('ConversationalRenderer: fail clears thinking and shows error state', () =>
   assert.match(out, /Something broke/);
 });
 
+test('ConversationalRenderer: tool start from thinking clears spinner line', () => {
+  const r = new ConversationalRenderer({ isTTY: true });
+  const { writes, restore } = interceptStdout();
+  try {
+    r.start();
+    // Pure thinking (no overlay rows) — _leaveThinking must still erase spinner.
+    r.onToolCallStart('shell_exec', 'npm test');
+    r.stop();
+  } finally {
+    restore();
+  }
+
+  const raw = writes.join('');
+  // Leave-thinking always emits clear-to-EOL before the tool indicator.
+  assert.ok(raw.includes('\r\x1b[K') || raw.includes('\r\u001b[K'), 'must clear thinking line');
+  assert.match(stripAnsi(raw), /Running npm test/);
+});
+
+test('ConversationalRenderer: tool start clears subagent overlay rows', () => {
+  const r = new ConversationalRenderer({ isTTY: true });
+  const { writes, restore } = interceptStdout();
+  try {
+    r.start();
+    r.onSubAgentStart('sa-1', 'Indexing workspace…');
+    // Force thinking line rewrite with overlay rows present.
+    r.onThought('planning the approach');
+    r.onToolCallStart('think', '(thinking)');
+    r.stop();
+  } finally {
+    restore();
+  }
+
+  const raw = writes.join('');
+  // Overlay teardown uses clear sequences; tool banner follows.
+  assert.ok(raw.includes('\x1b[K') || raw.includes('\u001b[K'), 'must clear overlay/thinking rows');
+  assert.match(stripAnsi(raw), /think/i);
+});
+
+test('ConversationalRenderer: first answer chunk leaves thinking via stream path', () => {
+  const prevScroll = process.env['BABEL_SCROLL_REGIONS'];
+  process.env['BABEL_SCROLL_REGIONS'] = '0';
+  const r = new ConversationalRenderer({ isTTY: true });
+  const { writes, restore } = interceptStdout();
+  try {
+    r.start();
+    r.onAnswerChunk('Hello from the model');
+    r.stop();
+  } finally {
+    restore();
+    if (prevScroll === undefined) delete process.env['BABEL_SCROLL_REGIONS'];
+    else process.env['BABEL_SCROLL_REGIONS'] = prevScroll;
+  }
+
+  const raw = writes.join('');
+  assert.ok(raw.includes('\r\x1b[K') || raw.includes('\r\u001b[K'), 'stream leave must clear spinner');
+  assert.match(stripAnsi(raw), /Hello from the model/);
+});
+
 test('ConversationalRenderer: multiple tool calls in parallel tracked independently', () => {
   const r = new ConversationalRenderer({ isTTY: false });
   const { writes, restore } = interceptStdout();

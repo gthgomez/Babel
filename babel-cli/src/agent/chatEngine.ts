@@ -62,6 +62,7 @@ import {
 } from './chatCompaction.js';
 import { runChatEngineCompaction } from './compactionCommit.js';
 import { initLiveAuthorityOnEngine, projectEngineLiveSession, restoreEngineSessionEvents, engineCanMutateKey } from './chatEngineLiveSession.js';
+import { loadLiveSessionAuthorityStrict, persistLiveSessionAuthority } from './liveSessionBridge.js';
 import type { LiveSessionV1 } from './liveSession.js';
 import { applyHonestTaskOutcomeToCompletion, createFailureBudgetTrackerFromContract, type FailureClassBudgetTracker, type FailureCapsuleV1 } from './taskContract.js';
 import { getGlobalTokenTracker } from '../ui/tokenHistory.js';
@@ -152,6 +153,7 @@ import {
   finalizeParityTurnSync,
   finalizeParityCancel,
   checkpointParityEventLog,
+  checkpointParityEventLogStrict,
   type ParityRuntime,
 } from './chatEngineParityBridge.js';
 import {
@@ -309,6 +311,8 @@ export interface SubmitMessageOptions {
 export interface ChatEngineOptions {
   task: string;
   projectRoot: string;
+  runId?: string;
+  resumeExisting?: boolean;
   systemContext?: string;
   /** Appended system prompt fragments (plugins, skills, project memory).
    *  Injected after the base system prompt for layered context assembly. */
@@ -685,7 +689,7 @@ export class ChatEngine {
       { taskClass: this.taskClass, taskText: options.task },
     );
     this.abortController = new AbortController();
-    this.engineRunId = allocateThreadId();
+    this.engineRunId = options.runId ?? allocateThreadId();
     // definite assignment: engineRunId set immediately above
     this.parity = createParityRuntime(this.engineRunId);
     clearBackgroundShellRegistry(); // Per-session bg shell isolation
@@ -697,9 +701,9 @@ export class ChatEngine {
     }
     mkdirSync(this.engineRunDir, { recursive: true });
 
-    initLiveAuthorityOnEngine({ parity: this.parity, options, taskClass: this.taskClass, executionProfile: this.executionProfile, engineRunDir: this.engineRunDir });
+    if (options.resumeExisting) this.parity.liveAuthority = loadLiveSessionAuthorityStrict(this.engineRunDir);
+    else initLiveAuthorityOnEngine({ parity: this.parity, options, taskClass: this.taskClass, executionProfile: this.executionProfile, engineRunDir: this.engineRunDir });
     this.failureBudgetTracker = createFailureBudgetTrackerFromContract(this.parity.liveAuthority?.taskContract);
-
     // Crash-safe patch persistence: write-through recovery file.
     this.patchRecoveryPath = join(this.engineRunDir, 'patches.recovery.log');
 
@@ -2790,8 +2794,14 @@ export class ChatEngine {
   }
 
   assignRunId(runId: string): void {
-    this.engineRunId = runId;
-    mkdirSync(this.engineRunDir, { recursive: true });
+    if (runId === this.engineRunId) return;
+    if (this.parity.eventLog.events.length > 0 || this.parity.sessionEvents.events.length > 0) {
+      throw new Error('Cannot change ChatEngine run identity after durable events exist');
+    }
+    const authority = this.parity.liveAuthority; this.engineRunId = runId;
+    this.parity = createParityRuntime(runId); if (authority) this.parity.liveAuthority = authority;
+    mkdirSync(this.engineRunDir, { recursive: true }); if (authority) persistLiveSessionAuthority(this.engineRunDir, authority);
+    this.failureBudgetTracker = createFailureBudgetTrackerFromContract(authority?.taskContract);
   }
 
   replaceConversation(messages: ChatMessage[]): void {
@@ -2982,13 +2992,10 @@ export class ChatEngine {
       .split('\n')
       .filter((line) => line.trim() !== '')
       .map((line) => JSON.parse(line));
-
-    // Create a fresh engine (this generates a random engineRunId and creates a
-    // directory that we will not use). Then replace the run ID with the existing
-    // session ID and inject the loaded conversation. Private fields are
-    // accessible across instances of the same class in TypeScript.
-    const engine = new ChatEngine(options);
-    engine.engineRunId = engineRunId;
+    const engine = new ChatEngine({ ...options, runId: engineRunId, resumeExisting: true });
+    const sessionLog = loadSessionEventLogFromDir(engine.engineRunDir);
+    if (!sessionLog) throw new Error(`Cannot resume ${engineRunId}: session-events.jsonl is missing or invalid`);
+    engine.restoreSessionEvents(sessionLog, { runDir: engine.engineRunDir });
     engine.conversation = messages;
     engine.clearVerifierEvidenceState();
     engine.cachedSystemPromptLegacy = null;
@@ -4064,7 +4071,12 @@ export class ChatEngine {
         this.compactConversation();
         host.conversation = this.conversation;
       },
-      checkpoint: () => checkpointParityEventLog(this.parity, this.engineRunDir),
+      checkpoint: async () => {
+        const receipt = await checkpointParityEventLogStrict(this.parity, this.engineRunDir);
+        if (receipt.status !== 'committed') {
+          throw new Error(receipt.error ?? 'checkpoint persistence blocked');
+        }
+      },
       reserveTokens: DEFAULT_COMPACTION_CONFIG.reserveTokens,
       textToolsReserve: 1024,
       resolveModel: resolveCompactionModelId,

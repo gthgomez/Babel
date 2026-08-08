@@ -17,14 +17,17 @@
  * | ask_approval     | (none)                              | terminal — loop should pause for user approval |
  */
 
+import { randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 import { WorkspaceTransactionManager, type MutationBatchReceipt } from '../services/workspaceTransactions.js';
 import { classifyToolEffect } from '../executor/contracts.js';
 import { recordEffectIntent, recordEffectTerminal } from '../executor/effectLedger.js';
 import {
   beginEffectTransaction,
+  captureWorkspaceRevisionIdentity,
   checkToolCapability,
   commitEffectTransaction,
+  reconcileEffectTransaction,
   rollbackEffectTransaction,
   type EffectTransactionRecord,
 } from './capabilityBroker.js';
@@ -733,6 +736,7 @@ export async function executeActionWithPolicy(
   }
 
   let policyDecision = decide(action, preset);
+  const policyDecisionId = randomUUID();
 
   if (policyDecision === 'ask' && deps.onAskApproval) {
     const approved = await deps.onAskApproval(action);
@@ -827,6 +831,8 @@ export async function executeActionWithPolicy(
   let batchTx: Awaited<ReturnType<typeof WorkspaceTransactionManager.beginBatch>> | null = null;
   let effectIntent: ReturnType<typeof recordEffectIntent> | null = null;
   let effectTx: EffectTransactionRecord | null = null;
+  const scopedContext = context as ToolContext & { projectRoot?: string; cwd?: string };
+  const workspaceRoot = scopedContext.projectRoot ?? scopedContext.cwd ?? process.cwd();
   if (txPaths.length > 0) {
     batchTx = await WorkspaceTransactionManager.beginBatch(txPaths, { sessionId: context.runId });
     // H4: begin revision-linked effect transaction (linked to task/plan step/idempotency).
@@ -834,6 +840,7 @@ export async function executeActionWithPolicy(
       tool_name: action.type,
       effect_class: effectClass,
       paths: txPaths,
+      policy_decision_id: policyDecisionId,
       pre_revision: { compositeTreeHash: batchTx.preRevisionHash },
       ...(deps.taskId ? { task_id: deps.taskId } : {}),
       ...(deps.planStepId ? { plan_step_id: deps.planStepId } : {}),
@@ -870,19 +877,68 @@ export async function executeActionWithPolicy(
     effectClass === 'external_side_effect'
   ) {
     // Shell / external: still open a reconciliation record (no file pre-images).
+    const preRevision = captureWorkspaceRevisionIdentity(workspaceRoot);
     effectTx = beginEffectTransaction({
       tool_name: action.type,
       effect_class: effectClass,
       paths: [],
       shell_side: true,
+      pre_revision: preRevision,
+      policy_decision_id: policyDecisionId,
       ...(deps.taskId ? { task_id: deps.taskId } : {}),
       ...(deps.planStepId ? { plan_step_id: deps.planStepId } : {}),
       ...(idempotencyKey !== undefined ? { idempotency_key: idempotencyKey } : {}),
     });
+    if (context.runDir) {
+      effectIntent = recordEffectIntent({
+        runDir: context.runDir,
+        sessionId: context.runId,
+        turnId: null,
+        mutationBatchId: effectTx.transaction_id,
+        effectClass,
+        toolName: action.type,
+        targetPaths: [],
+        preImageHashes: { workspace: preRevision.compositeTreeHash },
+      });
+    }
   }
 
   try {
     const execution = await executor.execute(action, context, budget);
+    const toolFailed = execution.results.some((result) => result.exit_code !== 0);
+
+    if (toolFailed) {
+      if (effectIntent && context.runDir) {
+        recordEffectTerminal(context.runDir, effectIntent, {
+          status: 'failed',
+          error: 'tool returned a nonzero exit code',
+        });
+      }
+      if (effectTx) {
+        if (batchTx) {
+          let rollbackResult: 'success' | 'failed' | 'partial' = 'failed';
+          try {
+            const undo = await WorkspaceTransactionManager.undoLastMutationBatch(batchTx);
+            rollbackResult = undo.verification ? 'success' : 'partial';
+          } catch {
+            rollbackResult = 'failed';
+          }
+          effectTx = rollbackEffectTransaction(effectTx, rollbackResult);
+        } else {
+          const postRevision = captureWorkspaceRevisionIdentity(workspaceRoot);
+          effectTx = {
+            ...reconcileEffectTransaction(effectTx),
+            post_revision: postRevision,
+          };
+        }
+      }
+      return {
+        ...execution,
+        policyDecision,
+        policyBlocked: false,
+        ...(effectTx ? { effectTransaction: effectTx } : {}),
+      };
+    }
 
     if (batchTx) {
       batchTx = await WorkspaceTransactionManager.commitBatch(batchTx);
@@ -898,7 +954,14 @@ export async function executeActionWithPolicy(
         });
       }
     } else if (effectTx) {
-      effectTx = commitEffectTransaction(effectTx);
+      const postRevision = captureWorkspaceRevisionIdentity(workspaceRoot);
+      effectTx = commitEffectTransaction(effectTx, postRevision);
+      if (effectIntent && context.runDir) {
+        recordEffectTerminal(context.runDir, effectIntent, {
+          status: 'completed',
+          postImageHashes: { workspace: postRevision.compositeTreeHash },
+        });
+      }
     }
 
     return {

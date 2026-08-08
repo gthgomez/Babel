@@ -462,7 +462,7 @@ export interface ChatEngineCompactionHost {
   turnId: string | null;
   shouldUseTextTools: () => boolean;
   compactHeuristic: () => void;
-  checkpoint: () => void;
+  checkpoint: () => Promise<void>;
   reserveTokens: number;
   textToolsReserve: number;
   resolveModel: (input: {
@@ -482,6 +482,15 @@ export interface ChatEngineCompactInfo {
   commit?: CompactionCommitResult;
 }
 
+export class CompactionPersistenceError extends Error {
+  readonly code = 'COMPACTION_PERSISTENCE_BLOCKED'
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'CompactionPersistenceError'
+  }
+}
+
 /**
  * Full ChatEngine compaction path (H1). Extracted so chatEngine stays under size ratchet.
  * Mutates `host.conversation` when compaction applies.
@@ -499,9 +508,18 @@ export async function runChatEngineCompaction(
     host.modelPolicy?.family ??
     'deepseek-v4-pro';
   const tokenTriggered = host.shouldCompactByTokens(tokenEstimate, modelId);
-  const applyHeuristic = (): void => {
+  const applyHeuristic = async (): Promise<void> => {
+    const prior = [...host.conversation]
     host.compactHeuristic();
-    mode = 'heuristic';
+    try {
+      await host.checkpoint()
+      mode = 'heuristic';
+    } catch (error) {
+      host.conversation = prior
+      throw new CompactionPersistenceError(
+        `Heuristic compaction checkpoint failed: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
   };
 
   if (host.compactionManager) {
@@ -524,6 +542,11 @@ export async function runChatEngineCompaction(
           signal: host.abortSignal,
         });
         if (mgr.changed) {
+          const threadEventCountBefore = host.threadLog.events.length;
+          const threadNextSeqBefore = host.threadLog.nextSeq;
+          const sessionEventCountBefore = host.sessionLog.events.length;
+          const sessionNextSeqBefore = host.sessionLog.nextSeq;
+          const sessionFlushedBefore = host.sessionLog.flushedThroughSeq;
           const boundRevStr = host.lastVerifierReceipt?.boundRevision?.compositeTreeHash
             ? String(host.lastVerifierReceipt.boundRevision.compositeTreeHash)
             : '';
@@ -558,28 +581,32 @@ export async function runChatEngineCompaction(
             sessionLog: host.sessionLog,
             turnId: host.turnId,
             modelId,
-            persist: () => {
-              host.checkpoint();
+            persist: async () => {
+              await host.checkpoint();
               return true;
             },
+            blockOnPersistFailure: true,
           });
+          if (commit.status !== 'committed') {
+            host.threadLog.events.splice(threadEventCountBefore)
+            host.threadLog.nextSeq = threadNextSeqBefore
+            host.sessionLog.events.splice(sessionEventCountBefore)
+            host.sessionLog.nextSeq = sessionNextSeqBefore
+            host.sessionLog.flushedThroughSeq = sessionFlushedBefore
+            throw new CompactionPersistenceError(
+              commit.error ?? 'Compaction persistence failed',
+            )
+          }
           host.conversation = commit.conversation;
           mode = strategyToCompactMode(commit.strategy);
-          if (
-            commit.status === 'degraded_persistence' ||
-            commit.status === 'blocked_persistence'
-          ) {
-            console.error(
-              `[compaction] ${commit.status}: ${commit.error ?? 'persistence failed'}`,
-            );
-          }
         }
-      } catch {
-        applyHeuristic();
+      } catch (error) {
+        if (error instanceof CompactionPersistenceError) throw error
+        await applyHeuristic();
       }
     }
   } else {
-    applyHeuristic();
+    await applyHeuristic();
   }
 
   const after = host.conversation.length;

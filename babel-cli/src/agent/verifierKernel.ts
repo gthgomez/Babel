@@ -11,7 +11,7 @@ import type { WorkspaceRevisionIdentity } from '../executor/contracts.js';
 
 export const VERIFIER_RECEIPT_V2 = 2 as const;
 
-export type VerifierScope = 'full_suite' | 'targeted' | 'smoke' | 'property' | 'security';
+export type VerifierScope = 'full_suite' | 'targeted' | 'smoke' | 'property' | 'security' | 'unknown';
 
 export type MutatingTaskClass =
   | 'quick_fix'
@@ -181,7 +181,10 @@ export function buildVerifierReceiptV2(input: {
 export type VerifierGateDenial =
   | 'empty_verifier_plan'
   | 'targeted_cannot_satisfy_full'
+  | 'insufficient_verifier_scope'
+  | 'failed_verifier_receipt'
   | 'stale_receipt'
+  | 'missing_revision'
   | 'wrong_revision'
   | 'tampered_verifier_def'
   | 'tests_deleted_or_skipped'
@@ -237,8 +240,17 @@ export function evaluateVerifierPromotion(
   }
 
   for (const r of input.receipts) {
-    if (profile.min_scope === 'full_suite' && r.scope === 'targeted') {
+    // A full-suite profile requires an actual full-suite receipt. Treat every
+    // narrower scope identically; otherwise smoke/property/security receipts
+    // can accidentally promote a mutating task.
+    if (profile.min_scope === 'full_suite' && r.scope !== 'full_suite') {
       denials.push('targeted_cannot_satisfy_full');
+    }
+    if (r.scope === 'unknown') {
+      denials.push('insufficient_verifier_scope');
+    }
+    if (r.exit_code !== 0 || r.timed_out || r.signal !== null || (r.tests_failed ?? 0) > 0) {
+      denials.push('failed_verifier_receipt');
     }
     if (r.freshness === 'stale') {
       denials.push('stale_receipt');
@@ -247,8 +259,12 @@ export function evaluateVerifierPromotion(
       'compositeTreeHash' in r.workspace_revision
         ? r.workspace_revision.compositeTreeHash
         : '';
-    if (profile.require_revision_bind && revHash && revHash !== input.current_revision_hash) {
-      denials.push('wrong_revision');
+    if (profile.require_revision_bind) {
+      if (!revHash || !input.current_revision_hash) {
+        denials.push('missing_revision');
+      } else if (revHash !== input.current_revision_hash) {
+        denials.push('wrong_revision');
+      }
     }
     if (profile.require_authoritative && !r.authoritative) {
       denials.push('non_authoritative');
@@ -306,7 +322,30 @@ export function evaluateCleanRoomPromotion(input: {
   if (input.clean_room_receipts.length === 0) {
     return { promote: false, reason: 'missing_clean_room_receipts' };
   }
-  const allGreen = input.clean_room_receipts.every((r) => r.exit_code === 0);
-  if (!allGreen) return { promote: false, reason: 'clean_room_failed' };
+  if (input.primary_receipts.length === 0) {
+    return { promote: false, reason: 'missing_primary_receipts' };
+  }
+  const receiptIsValid = (receipt: VerifierReceiptV2): boolean =>
+    receipt.exit_code === 0 &&
+    receipt.timed_out === false &&
+    receipt.signal === null &&
+    (receipt.tests_failed ?? 0) === 0 &&
+    receipt.freshness !== 'stale' &&
+    receipt.authoritative === true &&
+    receipt.scope === 'full_suite' &&
+    ('compositeTreeHash' in receipt.workspace_revision
+      ? Boolean(receipt.workspace_revision.compositeTreeHash)
+      : false)
+  if (![...input.primary_receipts, ...input.clean_room_receipts].every(receiptIsValid)) {
+    return { promote: false, reason: 'clean_room_failed' };
+  }
+  const revisionHashes = new Set(
+    [...input.primary_receipts, ...input.clean_room_receipts].map((receipt) =>
+      'compositeTreeHash' in receipt.workspace_revision
+        ? receipt.workspace_revision.compositeTreeHash
+        : '',
+    ),
+  )
+  if (revisionHashes.size !== 1) return { promote: false, reason: 'clean_room_revision_mismatch' };
   return { promote: true, reason: 'clean_room_green' };
 }

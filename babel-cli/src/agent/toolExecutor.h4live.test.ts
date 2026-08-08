@@ -6,7 +6,7 @@
 
 import * as assert from 'node:assert';
 import { describe, it, beforeEach } from 'node:test';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -223,9 +223,101 @@ describe('H4 executeActionWithPolicy live capability gates', () => {
     assert.ok(result.effectTransaction!.post_revision);
     assert.ok(result.mutationPaths?.length);
   });
+
+  it('does not commit an effect transaction when a tool returns a nonzero exit code', async () => {
+    const file = join(tmp, 'failed-mut.ts');
+    writeFileSync(file, 'before', 'utf-8');
+    const action: AgentAction = { type: 'write_file', path: file, content: 'after' };
+    const failing = {
+      mapAction() { return []; },
+      async execute() {
+        writeFileSync(file, 'after', 'utf-8');
+        return { action, terminal: false, results: [{ exit_code: 1, stdout: '', stderr: 'failed' }] };
+      },
+    } as unknown as ToolExecutor;
+    const result = await executeActionWithPolicy(action, 'workspace_write', ctx('r-failed-tx', tmp), {
+      executor: failing,
+      mode: 'chat',
+    });
+    assert.ok(result.effectTransaction);
+    assert.notStrictEqual(result.effectTransaction!.status, 'commit');
+    assert.strictEqual(readFileSync(file, 'utf-8'), 'before');
+  });
+
+  it('captures shell pre/post revisions and policy linkage', async () => {
+    const file = join(tmp, 'shell-mutated.txt');
+    const action: AgentAction = { type: 'run_command', command: 'synthetic mutation' };
+    const shellExecutor = {
+      mapAction() { return []; },
+      async execute() {
+        writeFileSync(file, 'after', 'utf-8');
+        return { action, terminal: false, results: [{ exit_code: 0, stdout: 'ok', stderr: '' }] };
+      },
+    } as unknown as ToolExecutor;
+    const result = await executeActionWithPolicy(action, 'workspace_write', ctx('r-shell', tmp), {
+      executor: shellExecutor,
+      mode: 'chat',
+      taskId: 'task-shell',
+      planStepId: 'step-shell',
+    });
+    const tx = result.effectTransaction!;
+    assert.strictEqual(tx.status, 'commit');
+    assert.ok(tx.policy_decision_id);
+    assert.strictEqual(tx.task_id, 'task-shell');
+    assert.strictEqual(tx.plan_step_id, 'step-shell');
+    assert.ok(tx.pre_revision);
+    assert.ok(tx.post_revision);
+    assert.notStrictEqual(
+      tx.pre_revision!.compositeTreeHash,
+      tx.post_revision!.compositeTreeHash,
+    );
+  });
+
+  it('marks failed shell effects for reconciliation with observed post state', async () => {
+    const file = join(tmp, 'shell-failed.txt');
+    const action: AgentAction = { type: 'run_command', command: 'synthetic failure' };
+    const shellExecutor = {
+      mapAction() { return []; },
+      async execute() {
+        writeFileSync(file, 'partial', 'utf-8');
+        return { action, terminal: false, results: [{ exit_code: 1, stdout: '', stderr: 'failed' }] };
+      },
+    } as unknown as ToolExecutor;
+    const result = await executeActionWithPolicy(action, 'workspace_write', ctx('r-shell-fail', tmp), {
+      executor: shellExecutor,
+      mode: 'chat',
+    });
+    const tx = result.effectTransaction!;
+    assert.strictEqual(tx.status, 'reconcile_needed');
+    assert.ok(tx.pre_revision);
+    assert.ok(tx.post_revision);
+    assert.ok(tx.policy_decision_id);
+  });
 });
 
 describe('H5 evaluateCompletionGateForEngine live revision', () => {
+  it('missing revision and missing scope fail closed', async () => {
+    const { evaluateVerifierPromotion, buildVerifierReceiptV2 } = await import('./verifierKernel.js');
+    const { receiptScopeFromLedgerEntry } = await import('./completionGatePolicy.js');
+    assert.strictEqual(receiptScopeFromLedgerEntry({ command: 'npm test' }), 'unknown');
+    const receipt = buildVerifierReceiptV2({
+      receipt_id: 'missing-rev', verifier_id: 'v', argv: ['npm', 'test'], cwd: '.',
+      env_profile_hash: 'e', started_at: new Date().toISOString(), ended_at: new Date().toISOString(),
+      exit_code: 0, stdout: 'ok', stderr: '', workspace_revision: { compositeTreeHash: '' },
+      scope: 'unknown', command: 'npm test', authoritative: true,
+    });
+    const promo = evaluateVerifierPromotion({
+      mutating: true,
+      task_class: 'general_swe',
+      required_verifier_commands: ['npm test'],
+      receipts: [receipt],
+      current_revision_hash: '',
+    });
+    assert.ok(promo.denials.includes('missing_revision'));
+    assert.ok(promo.denials.includes('insufficient_verifier_scope'));
+    assert.strictEqual(promo.authorize_verified_complete, false);
+  });
+
   it('wrong_revision denies when currentWorkspaceRevisionHash differs from receipt', async () => {
     const { evaluateCompletionGateForEngine } = await import('./completionGatePolicy.js');
     const decision = evaluateCompletionGateForEngine({

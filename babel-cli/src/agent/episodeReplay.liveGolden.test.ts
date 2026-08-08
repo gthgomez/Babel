@@ -35,7 +35,6 @@ describe('H6 live controller golden episode', () => {
       'utf-8',
     );
     outDir = join(workspace, '.babel-golden');
-    process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
   });
 
   after(() => {
@@ -44,7 +43,6 @@ describe('H6 live controller golden episode', () => {
     } catch {
       /* ignore */
     }
-    delete process.env['BABEL_BENCHMARK_AUTO_APPROVE'];
   });
 
   it('one command: ChatEngine + real workspace → live_runtime golden + model-free replay', async () => {
@@ -119,5 +117,29 @@ describe('H6 live controller golden episode', () => {
     assert.strictEqual(raw.live_runtime, true);
     const v = validateGoldenEpisode(raw);
     assert.ok(v.ok, v.errors.join('; '));
+  });
+
+  it('restores benchmark approval when initially absent or preconfigured', async () => {
+    const previous = process.env['BABEL_BENCHMARK_AUTO_APPROVE'];
+    try {
+      delete process.env['BABEL_BENCHMARK_AUTO_APPROVE'];
+      await runLiveControllerGoldenEpisode({
+        workspace_path: workspace,
+        out_dir: join(workspace, '.babel-golden-env-absent'),
+        sequence: 'complete',
+      });
+      assert.strictEqual(process.env['BABEL_BENCHMARK_AUTO_APPROVE'], undefined);
+
+      process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = 'operator-value';
+      await runLiveControllerGoldenEpisode({
+        workspace_path: workspace,
+        out_dir: join(workspace, '.babel-golden-env-present'),
+        sequence: 'complete',
+      });
+      assert.strictEqual(process.env['BABEL_BENCHMARK_AUTO_APPROVE'], 'operator-value');
+    } finally {
+      if (previous === undefined) delete process.env['BABEL_BENCHMARK_AUTO_APPROVE'];
+      else process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = previous;
+    }
   });
 });

@@ -29,7 +29,10 @@ export async function bootstrapReplSession(
   ctx: ReplContext,
   loadSessionState: () => SessionState | null,
 ): Promise<void> {
-  OutputBuffer.getInstance().write('\x1b[2J\x1b[H');
+  // Marks interactive TUI so sandbox notices route through OutputBuffer (not stderr).
+  process.env['BABEL_INTERACTIVE'] = '1';
+  // Clear viewport + scrollback so prior-session error boxes do not linger above the picker.
+  OutputBuffer.getInstance().writeControl('\x1b[2J\x1b[3J\x1b[H');
   warmReplRuntime();
   startBackgroundIndexing();
 

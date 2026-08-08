@@ -75,6 +75,8 @@ import {
 } from '../cli/helpers.js';
 import { resolveModelByKey } from '../modelPolicy.js';
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
+import { resolveProviderCredential } from '../runners/credentialHub.js';
+import type { ProviderId } from '../runners/providerRegistry.js';
 import {
   prepareContextInjection,
   summarizeContextInjection,
@@ -1501,6 +1503,29 @@ function printSessionResume(
   } catch (err: unknown) {
     printJsonErrorAndExit(err instanceof Error ? err.message : String(err), options.json === true);
   }
+}
+
+function resolveBenchmarkProvider(providerInput: string): {
+  provider: ProviderId
+  apiKey: string
+  defaultModel: string
+} {
+  const provider: ProviderId =
+    providerInput === 'anthropic' ||
+    providerInput === 'gemini' ||
+    providerInput === 'deepseek'
+      ? providerInput
+      : 'deepinfra'
+  const defaultModel =
+    provider === 'anthropic'
+      ? 'claude-haiku-4-5-20251001'
+      : provider === 'gemini'
+        ? 'gemini-2.5-flash-lite'
+        : provider === 'deepseek'
+          ? 'deepseek-v4-flash'
+          : 'meta-llama/Llama-3.3-70B-Instruct'
+  const apiKey = resolveProviderCredential(provider)!
+  return { provider, apiKey, defaultModel }
 }
 
 export function registerCoreCommands(program: Command): void {
@@ -3778,36 +3803,9 @@ Commands include:
             ? options.labelMode
             : undefined;
           if (options.live) {
-            const provider = options.provider ?? 'deepinfra';
-            let apiKey: string | undefined;
-            let defaultModel: string;
-
-            if (provider === 'anthropic') {
-              apiKey = process.env['ANTHROPIC_API_KEY'];
-              defaultModel = 'claude-haiku-4-5-20251001';
-            } else if (provider === 'gemini') {
-              apiKey = process.env['GEMINI_API_KEY'];
-              defaultModel = 'gemini-2.5-flash-lite';
-            } else if (provider === 'deepseek') {
-              apiKey = process.env['DEEPSEEK_API_KEY'];
-              defaultModel = 'deepseek-v4-flash';
-            } else {
-              apiKey = process.env['DEEPINFRA_API_KEY'];
-              defaultModel = 'meta-llama/Llama-3.3-70B-Instruct';
-            }
-
-            if (!apiKey) {
-              const envVar =
-                provider === 'anthropic' ? 'ANTHROPIC_API_KEY' :
-                provider === 'gemini' ? 'GEMINI_API_KEY' :
-                provider === 'deepseek' ? 'DEEPSEEK_API_KEY' :
-                'DEEPINFRA_API_KEY';
-              printJsonErrorAndExit(
-                `${envVar} is required for --live --provider ${provider}. Set it in your environment or use offline mode (omit --live).`,
-                options.json === true,
-              );
-              return;
-            }
+            const { provider, apiKey, defaultModel } = resolveBenchmarkProvider(
+              options.provider ?? 'deepinfra',
+            );
 
             const model = options.model ?? defaultModel;
             const delayMs = Number.parseInt(options.delayMs ?? '500', 10);
@@ -3964,36 +3962,9 @@ Commands include:
       }) => {
         try {
           if (options.live) {
-            const provider = options.provider ?? 'deepinfra';
-            let apiKey: string | undefined;
-            let defaultModel: string;
-
-            if (provider === 'anthropic') {
-              apiKey = process.env['ANTHROPIC_API_KEY'];
-              defaultModel = 'claude-haiku-4-5-20251001';
-            } else if (provider === 'gemini') {
-              apiKey = process.env['GEMINI_API_KEY'];
-              defaultModel = 'gemini-2.5-flash-lite';
-            } else if (provider === 'deepseek') {
-              apiKey = process.env['DEEPSEEK_API_KEY'];
-              defaultModel = 'deepseek-v4-flash';
-            } else {
-              apiKey = process.env['DEEPINFRA_API_KEY'];
-              defaultModel = 'meta-llama/Llama-3.3-70B-Instruct';
-            }
-
-            if (!apiKey) {
-              const envVar =
-                provider === 'anthropic' ? 'ANTHROPIC_API_KEY' :
-                provider === 'gemini' ? 'GEMINI_API_KEY' :
-                provider === 'deepseek' ? 'DEEPSEEK_API_KEY' :
-                'DEEPINFRA_API_KEY';
-              printJsonErrorAndExit(
-                `${envVar} is required for --live --provider ${provider}. Set it in your environment or use offline mode (omit --live).`,
-                options.json === true,
-              );
-              return;
-            }
+            const { provider, apiKey, defaultModel } = resolveBenchmarkProvider(
+              options.provider ?? 'deepinfra',
+            );
 
             const model = options.model ?? defaultModel;
             const delayMs = Number.parseInt(options.delayMs ?? '500', 10);

@@ -10,6 +10,7 @@ import {
   resolveLiveSessionAuthority,
   persistLiveSessionAuthority,
   loadLiveSessionAuthority,
+  loadLiveSessionAuthorityStrict,
   projectFromDurableSession,
   persistLiveSessionSnapshot,
   canMutateWithIdempotencyKey,
@@ -32,7 +33,6 @@ export function initLiveAuthorityOnEngine(input: {
   executionProfile: string;
   engineRunDir: string;
 }): void {
-  try {
     const mode =
       input.executionProfile === 'plan'
         ? 'plan'
@@ -53,9 +53,6 @@ export function initLiveAuthorityOnEngine(input: {
         : [],
     });
     persistLiveSessionAuthority(input.engineRunDir, input.parity.liveAuthority);
-  } catch {
-    /* best-effort */
-  }
 }
 
 export function projectEngineLiveSession(
@@ -84,8 +81,8 @@ export function restoreEngineSessionEvents(input: {
 }): number {
   input.parity.sessionEvents = input.log;
   const interrupted = paritySettleInterruptedOnResume(input.parity, input.runDir);
-  const authority = loadLiveSessionAuthority(input.runDir);
-  if (authority) input.parity.liveAuthority = authority;
+  const authority = loadLiveSessionAuthorityStrict(input.runDir);
+  input.parity.liveAuthority = authority;
   input.parity.liveSession = projectFromDurableSession({
     sessionLog: input.parity.sessionEvents,
     threadLog: input.parity.eventLog,

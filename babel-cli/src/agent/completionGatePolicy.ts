@@ -33,15 +33,8 @@ export function receiptScopeFromLedgerEntry(r: unknown): VerifierScope {
       return s;
     }
   }
-  // Missing scope: treat as full_suite only when command looks suite-level;
-  // explicit "targeted" markers on the receipt or command keep honesty.
-  if (r && typeof r === 'object') {
-    const cmd = 'command' in r ? String((r as { command?: string }).command ?? '') : '';
-    if (/\btargeted\b|\bsingle.?test\b|\b-t\b|\b--testNamePattern\b/i.test(cmd)) {
-      return 'targeted';
-    }
-  }
-  return 'full_suite';
+  // Missing scope is never promoted from command spelling.
+  return 'unknown';
 }
 
 /**

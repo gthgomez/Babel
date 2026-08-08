@@ -6,8 +6,10 @@
  * reconciliation for reconcilable mutations including shell-side effects.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { readdirSync, readFileSync, statSync, type Dirent } from 'node:fs';
+import { join, relative } from 'node:path';
 import {
   classifyToolEffect,
   type ToolEffectClass,
@@ -34,6 +36,74 @@ export function detectWorkingTreeDirty(projectRoot: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Capture a bounded workspace identity for shell-side effect reconciliation. */
+export function captureWorkspaceRevisionIdentity(projectRoot: string): WorkspaceRevisionIdentity {
+  const capturedAt = Date.now()
+  try {
+    const head = spawnSync('git', ['rev-parse', 'HEAD'], {
+      cwd: projectRoot,
+      encoding: 'utf-8',
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    const status = spawnSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], {
+      cwd: projectRoot,
+      encoding: 'utf-8',
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    if (head.status === 0 && status.status === 0) {
+      const gitCommitHash = String(head.stdout ?? '').trim() || null
+      const state = `${gitCommitHash ?? ''}\n${String(status.stdout ?? '')}`
+      return {
+        gitCommitHash,
+        compositeTreeHash: createHash('sha256').update(state).digest('hex').slice(0, 32),
+        fileHashes: {},
+        capturedAt,
+      }
+    }
+  } catch {
+    // Fall through to a bounded filesystem identity for non-git workspaces.
+  }
+
+  const fileHashes: Record<string, string> = {}
+  const queue = [projectRoot]
+  while (queue.length > 0 && Object.keys(fileHashes).length < 5000) {
+    const dir = queue.shift()!
+    let entries: Dirent<string>[]
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === 'runs') continue
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        queue.push(path)
+      } else if (entry.isFile()) {
+        try {
+          const rel = relative(projectRoot, path).replaceAll('\\', '/')
+          const stat = statSync(path)
+          const content = readFileSync(path)
+          fileHashes[rel] = createHash('sha256')
+            .update(content)
+            .update(String(stat.mode))
+            .digest('hex')
+        } catch {
+          // A concurrently changed file is represented by its absence.
+        }
+      }
+      if (Object.keys(fileHashes).length >= 5000) break
+    }
+  }
+  const compositeTreeHash = createHash('sha256')
+    .update(Object.entries(fileHashes).sort().map(([path, hash]) => `${path}:${hash}`).join('\n'))
+    .digest('hex')
+    .slice(0, 32)
+  return { gitCommitHash: null, compositeTreeHash, fileHashes, capturedAt }
 }
 
 export type CapabilityDenialReason =
@@ -241,6 +311,21 @@ export function commitEffectTransaction(
     status: 'commit',
     updated_at: new Date().toISOString(),
     ...(post_revision ? { post_revision } : {}),
+  };
+}
+
+/**
+ * A tool returned a failure result after its effect may have started. The
+ * transaction is deliberately left for reconciliation rather than reported as
+ * committed.
+ */
+export function reconcileEffectTransaction(
+  tx: EffectTransactionRecord,
+): EffectTransactionRecord {
+  return {
+    ...tx,
+    status: 'reconcile_needed',
+    updated_at: new Date().toISOString(),
   };
 }
 

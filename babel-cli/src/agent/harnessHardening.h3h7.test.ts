@@ -435,7 +435,7 @@ describe('H5 verifier promotion + adversarial fixtures', () => {
 
   function receipt(
     overrides: Partial<Parameters<typeof buildVerifierReceiptV2>[0]> & {
-      scope?: 'full_suite' | 'targeted';
+      scope?: 'full_suite' | 'targeted' | 'smoke' | 'property' | 'security';
       exit_code?: number;
       freshness?: 'fresh' | 'stale';
     } = {},
@@ -482,6 +482,39 @@ describe('H5 verifier promotion + adversarial fixtures', () => {
     });
     assert.strictEqual(r.authorize_verified_complete, false);
     assert.ok(r.denials.includes('targeted_cannot_satisfy_full'));
+  });
+
+  it('smoke, property, and security receipts cannot satisfy full-suite requirements', () => {
+    for (const scope of ['smoke', 'property', 'security'] as const) {
+      const r = evaluateVerifierPromotion({
+        mutating: true,
+        task_class: 'general_swe',
+        required_verifier_commands: ['npm test'],
+        receipts: [receipt({ scope, command: 'npm test' })],
+        current_revision_hash: 'rev-current',
+      });
+      assert.strictEqual(r.authorize_verified_complete, false, scope);
+      assert.ok(r.denials.includes('targeted_cannot_satisfy_full'), scope);
+    }
+  });
+
+  it('timed out, signalled, nonzero, or failed-test receipts cannot authorize completion', () => {
+    for (const overrides of [
+      { timed_out: true },
+      { signal: 'SIGTERM' },
+      { exit_code: 1 },
+      { tests_failed: 1 },
+    ]) {
+      const r = evaluateVerifierPromotion({
+        mutating: true,
+        task_class: 'general_swe',
+        required_verifier_commands: ['npm test'],
+        receipts: [receipt({ command: 'npm test', ...overrides })],
+        current_revision_hash: 'rev-current',
+      });
+      assert.strictEqual(r.authorize_verified_complete, false);
+      assert.ok(r.denials.includes('failed_verifier_receipt'));
+    }
   });
 
   it('stale or wrong-revision receipts cannot authorize completion', () => {
@@ -750,7 +783,7 @@ describe('H7 model-fixed eval substrate', () => {
     assert.notStrictEqual(m.infrastructure_failure_rate, m.agent_failure_rate);
   });
 
-  it('paired deltas include uncertainty', () => {
+  it('single-trial paired deltas disclose zero measured uncertainty', () => {
     const base: EvalTaskResult[] = [
       {
         task_id: 't1',
@@ -772,7 +805,20 @@ describe('H7 model-fixed eval substrate', () => {
     const deltas = computePairedDeltas(base, cand, 'tokens');
     assert.strictEqual(deltas.length, 1);
     assert.strictEqual(deltas[0]!.delta, -200);
-    assert.ok(deltas[0]!.uncertainty > 0);
+    assert.strictEqual(deltas[0]!.uncertainty, 0);
+  });
+
+  it('repeated paired trials report measured uncertainty', () => {
+    const base: EvalTaskResult[] = [
+      { task_id: 't1', trial_index: 0, variant: 'base', verified_complete_no_policy_violation: true, tokens: 100, duration_ms: 1, false_completion: false, instruction_policy_violation: false, resume_state_equivalent: null, critical_fact_retention: null, infrastructure_failure: false, agent_failure: false, human_intervention: false, clean_room_pass: null },
+      { task_id: 't1', trial_index: 1, variant: 'base', verified_complete_no_policy_violation: true, tokens: 100, duration_ms: 1, false_completion: false, instruction_policy_violation: false, resume_state_equivalent: null, critical_fact_retention: null, infrastructure_failure: false, agent_failure: false, human_intervention: false, clean_room_pass: null },
+    ];
+    const candidate: EvalTaskResult[] = [
+      { ...base[0]!, variant: 'candidate', tokens: 80 },
+      { ...base[1]!, variant: 'candidate', tokens: 60 },
+    ];
+    const deltas = computePairedDeltas(base, candidate, 'tokens');
+    assert.ok(deltas.every((delta) => delta.uncertainty > 0));
   });
 
   it('promotion requires pre-fail, post-pass, held-out, rollback', () => {
@@ -831,7 +877,7 @@ describe('H7 model-fixed eval substrate', () => {
     assert.strictEqual(report.experimental_evidence, true);
     assert.ok(report.notes.some((n) => /NOT same-model Chat\/Deep LLM/i.test(n)));
     assert.ok(report.paired_deltas.length >= 1);
-    assert.ok(report.paired_deltas[0]!.uncertainty > 0);
+    assert.strictEqual(report.paired_deltas[0]!.uncertainty, 0);
     assert.strictEqual(
       report.metrics.infrastructure_failure_rate !== undefined &&
         report.metrics.agent_failure_rate !== undefined,

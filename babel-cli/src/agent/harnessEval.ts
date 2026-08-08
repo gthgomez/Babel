@@ -16,6 +16,7 @@ import {
 } from './compactionCommit.js';
 import { estimateTokens } from './chatCompaction.js';
 import { checkToolCapability } from './capabilityBroker.js';
+import { captureWorkspaceRevisionIdentity } from './capabilityBroker.js';
 import {
   buildVerifierReceiptV2,
   evaluateVerifierPromotion,
@@ -54,6 +55,8 @@ export interface FixedEvalControls {
 export interface EvalTaskResult {
   task_id: string;
   variant: string;
+  /** Repeated paired trial index; absent for historical/offline fixtures. */
+  trial_index?: number;
   verified_complete_no_policy_violation: boolean;
   tokens: number;
   duration_ms: number;
@@ -77,6 +80,8 @@ export interface PairedDelta {
   delta: number;
   /** Simple uncertainty band (e.g. half-width of Wilson or bootstrap). */
   uncertainty: number;
+  /** Number of repeated task-level pairs in this aggregate. */
+  n_pairs?: number;
 }
 
 export interface FailureLedgerEntry {
@@ -197,23 +202,38 @@ export function computePairedDeltas(
   > = 'tokens',
 ): PairedDelta[] {
   const deltas: PairedDelta[] = [];
-  for (const b of baseline) {
-    const c = candidate.find((x) => x.task_id === b.task_id);
-    if (!c) continue;
-    const bv = Number(b[metric] ?? 0);
-    const cv = Number(c[metric] ?? 0);
-    const delta = cv - bv;
-    // Conservative uncertainty: max(1, 10% of |baseline|)
-    const uncertainty = Math.max(1, Math.abs(bv) * 0.1);
+  for (const taskId of [...new Set(baseline.map((result) => result.task_id))]) {
+    const pairs = baseline
+      .filter((result) => result.task_id === taskId)
+      .flatMap((base) => {
+        const candidateResult = candidate.find(
+          (result) => result.task_id === taskId && result.trial_index === base.trial_index,
+        )
+        return candidateResult ? [{ base, candidate: candidateResult }] : []
+      })
+    if (pairs.length === 0) continue
+    const baselineValues = pairs.map(({ base }) => Number(base[metric] ?? 0))
+    const candidateValues = pairs.map(({ candidate: result }) => Number(result[metric] ?? 0))
+    const pairedValues = pairs.map(
+      ({ base, candidate: result }) => Number(result[metric] ?? 0) - Number(base[metric] ?? 0),
+    )
+    const mean = pairedValues.reduce((sum, value) => sum + value, 0) / pairedValues.length;
+    const variance = pairedValues.length > 1
+      ? pairedValues.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (pairedValues.length - 1)
+      : 0;
+    // Standard error from repeated paired trials. A single trial explicitly has
+    // no measured uncertainty rather than a fabricated heuristic band.
+    const uncertainty = pairedValues.length > 1 ? Math.sqrt(variance / pairedValues.length) : 0;
     deltas.push({
-      task_id: b.task_id,
-      baseline_variant: b.variant,
-      candidate_variant: c.variant,
+      task_id: taskId,
+      baseline_variant: pairs[0]!.base.variant,
+      candidate_variant: pairs[0]!.candidate.variant,
       metric,
-      baseline_value: bv,
-      candidate_value: cv,
-      delta,
+      baseline_value: baselineValues.reduce((sum, value) => sum + value, 0) / pairs.length,
+      candidate_value: candidateValues.reduce((sum, value) => sum + value, 0) / pairs.length,
+      delta: mean,
       uncertainty,
+      n_pairs: pairs.length,
     });
   }
   return deltas;
@@ -518,6 +538,8 @@ export async function runSameModelLlmFactorial(input: {
   api_key_env?: string;
   /** Max tasks from the fixed set (default 2). */
   max_tasks?: number;
+  /** Repeated paired trials per task/variant; defaults to three. */
+  repetitions?: number;
 }): Promise<HarnessEvalReport> {
   const modelId = input.model_id ?? 'openai/gpt-4o-mini';
   const apiKeyEnv = input.api_key_env ?? 'OPENROUTER_API_KEY';
@@ -546,6 +568,40 @@ export async function runSameModelLlmFactorial(input: {
       experimental_evidence: false,
       notes: [...notes, 'BLOCKED: API key missing — no model-path experimental evidence'],
     };
+  }
+
+  const initialRevision = captureWorkspaceRevisionIdentity(input.workspace_path)
+  const declaredRevisionMatches =
+    input.controls.repository_revision === initialRevision.compositeTreeHash ||
+    input.controls.repository_revision === initialRevision.gitCommitHash
+  const effectivePermissions = process.env['BABEL_EXECUTION_PROFILE'] ?? input.controls.permissions_profile
+  const effectiveVerifier = process.env['BABEL_VERIFIER_PROFILE'] ?? input.controls.verifier_profile
+  const effectiveResource = process.env['BABEL_RESOURCE_PROFILE'] ?? input.controls.resource_profile
+  const controlDeviations = [
+    ...(!declaredRevisionMatches ? ['repository_revision'] : []),
+    ...(effectivePermissions !== input.controls.permissions_profile ? ['permissions_profile'] : []),
+    ...(effectiveVerifier !== input.controls.verifier_profile ? ['verifier_profile'] : []),
+    ...(effectiveResource !== input.controls.resource_profile ? ['resource_profile'] : []),
+    ...(!input.controls.environment_digest ? ['environment_digest'] : []),
+  ]
+  if (controlDeviations.length > 0) {
+    return {
+      schema_version: HARNESS_EVAL_VERSION,
+      controls: input.controls,
+      results: [],
+      paired_deltas: [],
+      failure_ledger: [{
+        entry_id: randomUUID(),
+        episode_id: 'h7-control-preflight',
+        failure_class: 'infrastructure_control',
+        regression_fixture: 'runSameModelLlmFactorial.controls',
+        created_at: new Date().toISOString(),
+        held_out: false,
+      }],
+      metrics: computeCoreMetrics([]),
+      experimental_evidence: false,
+      notes: [...notes, `BLOCKED: uncontrolled comparison (${controlDeviations.join(',')})`],
+    }
   }
 
   // Tasks must classify as ChatEngine 'explain' intent (do not edit / what is)
@@ -666,12 +722,19 @@ export async function runSameModelLlmFactorial(input: {
     variant: 'chat_harness' | 'deep_profile',
   ): Promise<EvalTaskResult> {
     const t0 = Date.now();
+    const priorAutoApprove = process.env['BABEL_BENCHMARK_AUTO_APPROVE'];
+    process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
     try {
       const { ChatEngine } = await import('./chatEngine.js');
       const { OpenRouterApiRunner } = await import('../runners/openRouterApi.js');
       // Engine model must be a configured policy family; actual inference uses
       // OpenRouter runner with the fixed modelId (same for all variants).
-      const runner = new OpenRouterApiRunner(modelId);
+      const runner = new OpenRouterApiRunner(modelId, {
+        maxTokens,
+        temperature,
+      }, {
+        apiKeyEnvVar: apiKeyEnv,
+      });
       const engine = new ChatEngine({
         task,
         projectRoot: input.workspace_path,
@@ -690,9 +753,7 @@ export async function runSameModelLlmFactorial(input: {
       anyEngine.fallbackRunner = runner;
       // Complete-only: avoid tool loops for stable factorial cells
       anyEngine.shouldUseNativeTools = () => false;
-      process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
-
-      const turn = await engine.submitMessage(userMessage, { onThought: () => {} });
+      const turn: unknown = await engine.submitMessage(userMessage, { onThought: () => {} });
       const t = (turn ?? {}) as unknown as Record<string, unknown>;
       const answer = typeof t['answer'] === 'string' ? t['answer'] : '';
       const status = typeof t['status'] === 'string' ? t['status'] : '';
@@ -774,13 +835,39 @@ export async function runSameModelLlmFactorial(input: {
         human_intervention: false,
         clean_room_pass: null,
       };
+    } finally {
+      if (priorAutoApprove === undefined) delete process.env['BABEL_BENCHMARK_AUTO_APPROVE'];
+      else process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = priorAutoApprove;
     }
   }
 
-  for (const t of tasks) {
-    results.push(await minimalLoop(t.task_id, t.user_message));
-    results.push(await chatVariant(t.task_id, t.task, t.user_message, 'chat_harness'));
-    results.push(await chatVariant(t.task_id, t.task, t.user_message, 'deep_profile'));
+  const repetitions = Math.max(2, Math.floor(input.repetitions ?? 3));
+  async function controlledCell(run: () => Promise<EvalTaskResult>): Promise<EvalTaskResult> {
+    const before = captureWorkspaceRevisionIdentity(input.workspace_path)
+    const result = await run()
+    const after = captureWorkspaceRevisionIdentity(input.workspace_path)
+    if (before.compositeTreeHash === after.compositeTreeHash) return result
+    failureLedger.push({
+      entry_id: randomUUID(),
+      episode_id: `${result.variant}:${result.task_id}:${result.trial_index ?? 'trial'}`,
+      failure_class: 'infrastructure_control',
+      regression_fixture: 'runSameModelLlmFactorial.repository_revision',
+      created_at: new Date().toISOString(),
+      held_out: false,
+    })
+    return {
+      ...result,
+      verified_complete_no_policy_violation: false,
+      infrastructure_failure: true,
+      agent_failure: false,
+    }
+  }
+  for (let trialIndex = 0; trialIndex < repetitions; trialIndex += 1) {
+    for (const t of tasks) {
+      results.push({ ...(await controlledCell(() => minimalLoop(t.task_id, t.user_message))), trial_index: trialIndex });
+      results.push({ ...(await controlledCell(() => chatVariant(t.task_id, t.task, t.user_message, 'chat_harness'))), trial_index: trialIndex });
+      results.push({ ...(await controlledCell(() => chatVariant(t.task_id, t.task, t.user_message, 'deep_profile'))), trial_index: trialIndex });
+    }
   }
 
   const minimal = results.filter((r) => r.variant === 'minimal_loop');
@@ -792,10 +879,11 @@ export async function runSameModelLlmFactorial(input: {
     ...computePairedDeltas(minimal, chat, 'duration_ms'),
   ];
 
-  const anyOk = results.some((r) => !r.infrastructure_failure && r.tokens > 0);
+  const anyOk = results.some((r) => r.verified_complete_no_policy_violation && !r.infrastructure_failure);
   const modelSnapshot = `openrouter:${modelId}@temp${temperature}`;
   notes.push(
     `cells=${results.length}`,
+    `repetitions=${repetitions}`,
     `minimal_ok=${minimal.filter((r) => r.verified_complete_no_policy_violation).length}/${minimal.length}`,
     `chat_ok=${chat.filter((r) => r.verified_complete_no_policy_violation).length}/${chat.length}`,
     `deep_ok=${deep.filter((r) => r.verified_complete_no_policy_violation).length}/${deep.length}`,
@@ -869,5 +957,7 @@ export function controlsMatch(
   if (a.sampling.temperature !== b.sampling.temperature) {
     deviations.push('sampling.temperature');
   }
+  if (a.sampling.top_p !== b.sampling.top_p) deviations.push('sampling.top_p');
+  if (a.sampling.max_tokens !== b.sampling.max_tokens) deviations.push('sampling.max_tokens');
   return { ok: deviations.length === 0, deviations };
 }

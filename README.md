@@ -95,6 +95,12 @@ node .\babel-cli\dist\index.js interactive
 Model-backed sessions need a configured provider. Credentials belong in your
 environment or credential manager, never in the repository.
 
+For local development, copy `babel-cli/.env.example` to `babel-cli/.env` and
+set only the providers you use. Babel loads that one package-local file at the
+CLI boundary; variables already supplied by the host or CI take precedence.
+Provider code resolves credentials through the shared registry/credential hub
+and never logs, hashes, or persists secret values.
+
 ## Inspect before you execute
 
 You can validate Babel and preview the instruction stack without a model or API
