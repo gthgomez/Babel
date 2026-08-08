@@ -178,6 +178,7 @@ subagent teams, sandbox parity, or market parity are intentionally excluded.
 - [Chat mode](./docs/CHAT_MODE.md) — the default daily runtime contract
 - [Vision](./docs/VISION.md) — product principles and public scope
 - [Architecture](./docs/architecture/ARCHITECTURE.md) — system shape and layers
+- [Portable agent workflow plan](./docs/guides/PORTABLE_AGENT_WORKFLOW_PLAN.md) — proposed cross-harness contract, subordinate to the native harness
 - [Babel Bible](./BABEL_BIBLE.md) — integration and model-facing invocation contract
 - [Contributing](./CONTRIBUTING.md)
 

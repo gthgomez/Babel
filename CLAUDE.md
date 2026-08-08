@@ -40,6 +40,7 @@ This is the **public, canonical source** for the Babel coding agent (`gthgomez/B
 | Public docs (architecture, ADRs, guides, release) | `docs/` — start with `docs/README.md` |
 | **Runtime harness (normative)** | `docs/architecture/HARNESS_ARCHITECTURE_V1.md` |
 | Runtime harness (explanatory map) | `docs/architecture/HARNESS_OVERVIEW.md` |
+| Portable workflow contract (proposed, non-normative) | `docs/guides/PORTABLE_AGENT_WORKFLOW_PLAN.md` |
 | Prompt OS layers + catalog + V9 pipeline | `docs/architecture/ARCHITECTURE.md` |
 | babel-cli package ops (CLI coding / routing pointer) | `babel-cli/CLAUDE.md` |
 | Embedding & vector index decision | `docs/adr/ADR-011-embedding-decision.md` |
