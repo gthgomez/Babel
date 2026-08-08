@@ -2,9 +2,9 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-07-03
+last_verified: 2026-08-08
 -->
-**Status:** Proposed  
+**Status:** Accepted for the protocol contract; runtime transport remains partial
 **Date:** 2026-06-30  
 **Deciders:** Babel team  
 
@@ -24,9 +24,11 @@ The industry pattern is to separate agent and UI via a stdio JSON-RPC 2.0 proces
 hosts the agent while the TUI is a thin client. Babel should follow the same shape for
 architectural parity and to reuse established client patterns.
 
-Phase D1 delivers **types and an ADR only** — no runtime server, no WebSocket, no auth.
-D2 will implement the server and TUI client; D3 owns persistence. This ADR defines the
-message catalog both depend on.
+Phase D1 is complete: the typed catalog and round-trip tests live under
+`babel-cli/src/protocol/`. D2 has an in-process JSON-RPC host/client stub used by
+the chat transport tests; a standalone stdio app-server and thin-client TUI remain
+future work. D3 owns durable thread-store integration. This ADR defines the message
+catalog shared by those surfaces.
 
 ## Decision
 
@@ -95,9 +97,9 @@ thread, aligned with `HistoryCellRecord.turn_id`.
 
 ### Migration path (D2)
 
-During D2 rollout, `BABEL_INPROCESS=1` keeps today's embedded path: `BabelRepl` continues
-to import `ChatEngine` directly. Protocol client mode is opt-in via env or launch flag. D1
-types compile independently of either path — no runtime behavior change in D1.
+The current D2 stub is in-process: `BabelRepl` can keep importing `ChatEngine`
+directly while `BABEL_PROTOCOL_CLIENT=1` enables protocol notifications and thread
+allocation. The standalone stdio process remains opt-in future work.
 
 ## Alternatives Considered
 
@@ -128,14 +130,14 @@ future bridges. `ChatEngine` should not depend on wire format.
 
 | Consumer | Phase | Uses |
 |----------|-------|------|
-| `babel-tui` (thin client) | D2 | All requests + `turn.event` / `cell.committed` |
-| `babel-app-server` | D2 | Implements handlers; maps to `ChatEngine` + D3 store |
+| `babel-tui` (thin client) | Future | All requests + `turn.event` / `cell.committed` |
+| `babel-app-server` | Future | Standalone handlers mapping to `ChatEngine` + D3 store |
 | IDE / web UI | Future | Same types; may use socket transport later |
 | Contract tests | D2 | Round-trip per message type against mock server |
 
 ### Non-goals (explicit)
 
-- Full `babel-app-server` process implementation
+- Standalone `babel-app-server` process implementation
 - WebSocket or TCP socket transport
 - Authentication or multi-tenant session management
 - Wiring into `BabelRepl` or changing TUI runtime behavior
@@ -153,7 +155,7 @@ future bridges. `ChatEngine` should not depend on wire format.
 
 ## Compliance
 
-- Phase D1 exit: types in `src/protocol/` compile; `protocol.test.ts` passes; no runtime
-  behavior change.
-- Phase D2 exit: REPL chat works with out-of-process server; contract suite covers every
-  method and notification in this catalog.
+- Phase D1 exit: types in `src/protocol/` compile; `protocol.test.ts` passes. **Complete.**
+- D2 stub exit: in-process host/client contract tests cover the catalog. **Complete.**
+- D2 transport exit: REPL chat works with an out-of-process server; contract suite covers
+  every method and notification in this catalog. **Open.**

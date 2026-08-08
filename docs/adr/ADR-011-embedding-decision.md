@@ -2,11 +2,11 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-07-03
+last_verified: 2026-08-08
 -->
 > **Date**: 2026-07-03
 > **Source**: OSS-2 / R2.5 from the architectural audit
-> **Status**: Decision recorded — implementation 6–10h, scheduled post Tier 2 sprint
+> **Status**: Implemented — OpenAI embeddings are optional and FTS5 remains the fallback
 
 ---
 
@@ -23,15 +23,11 @@ The entire vector storage and query infrastructure is **complete and tested**:
 | `SemanticIndexer.setEmbeddingFunction()` hook | Defined, exposed on `globalIndexer` |
 | `SemanticIndexer.vectorIndex` lazy getter | Returns `VectorIndex` or null if extension fails |
 
-**What's missing**: No code provides a real embedding function (`text → Float32Array`). Three TODOs mark the gap:
-
-| Location | Line | What it says |
-|----------|------|-------------|
-| `indexer.ts` | 482–484 | After FTS indexing, call `vectorIndex?.indexEmbeddings(getEmbedding, onProgress)` |
-| `indexer.ts` | 501–506 | In `search()`, convert query to embedding, call `vectorIndex?.search()`, fall back to FTS |
-| `chronicleMemory.ts` | 186–188 | Register embedding function on `globalIndexer` for `semantic_search` tool |
-
-The blocker is a **product decision**: which embedding provider, at what cost, with what offline behavior.
+`embeddingProvider.ts` now provides the OpenAI text-to-vector adapter. The indexer
+generates embeddings after FTS indexing, `searchWithEmbedding()` falls back to FTS5,
+and `semantic_search` lazily registers the provider. The remaining boundary is
+operational: embeddings are disabled when no API key is configured and never make
+semantic search unavailable.
 
 ---
 
@@ -65,16 +61,16 @@ The blocker is a **product decision**: which embedding provider, at what cost, w
 ## 3. Configuration Design
 
 ```
-BABEL_EMBEDDING_PROVIDER=openai              # default: openai (extensible to other providers later)
+BABEL_EMBEDDING_API_KEY=                      # optional explicit key override
 BABEL_EMBEDDING_MODEL=text-embedding-3-small  # default model
-BABEL_EMBEDDING_API_KEY=                      # defaults to OPENAI_API_KEY if unset
-BABEL_EMBEDDING_BASE_URL=                     # defaults to https://api.openai.com/v1 (enables proxies/azure)
-BABEL_EMBEDDING_DIMENSIONS=384               # must match vec0 table FLOAT[384]; changing requires re-index
-BABEL_EMBEDDING_BATCH_SIZE=100               # texts per API call (OpenAI max: 2048)
-BABEL_EMBEDDING_DISABLE=0                    # set to 1 to skip embedding entirely
+BABEL_EMBEDDING_BASE_URL=                     # default: https://api.openai.com/v1
+BABEL_EMBEDDING_DISABLE=0                     # set to 1 (or true) to skip embeddings
 ```
 
-All vars default sanely. The only one users need to set is the API key. No config file changes required.
+When no explicit override is supplied, the provider uses the standard OpenAI key
+environment setting. The implementation fixes vectors at 384 dimensions to match the
+current vec0 table; provider selection and batch-size configuration are not public
+settings yet.
 
 ---
 

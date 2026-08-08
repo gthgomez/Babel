@@ -10,7 +10,7 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 
 <!--
 status: ACTIVE
-last_verified: 2026-07-03
+last_verified: 2026-08-08
 -->
 # Babel OTel Local Validation Guide
 
@@ -24,22 +24,20 @@ When enabled, each `babel run` emits a `babel.run` root span (with child spans p
 
 ## Prerequisites
 
-- Docker (for local Jaeger)
-- Node.js ≥ 20 (already required by `babel-cli`)
+- Docker (optional, for a locally supplied Jaeger collector)
+- Node.js ≥ 22.5 (required by `babel-cli`)
 - A working `babel-cli` setup (configuration file configured)
 
 ---
 
 ## Quick Start — Local Jaeger
 
-### 1. Start Jaeger
+### 1. Start an OTLP-compatible collector
 
-```bash
-cd babel-cli
-docker compose -f docker-compose.jaeger.yml up -d
-```
-
-Jaeger UI is now available at **http://localhost:16686**.
+This repository does not ship a Jaeger Compose file. Start Jaeger, Tempo, or an
+OpenTelemetry Collector using your organization's local configuration, then expose
+an OTLP/HTTP endpoint (the examples below use `http://localhost:4318/v1/traces`).
+If using Jaeger locally, its UI is commonly available at **http://localhost:16686**.
 
 ### 2. Enable tracing in your config file
 
@@ -77,12 +75,11 @@ Or via the CLI binary if installed:
 babel run "Your task here"
 ```
 
-### 4. Inspect traces in Jaeger
+### 4. Inspect traces in your collector
 
-1. Open **http://localhost:16686**
-2. Select service **`babel-cli`** from the dropdown
-3. Click **Find Traces**
-4. Click a trace to see the full span waterfall: `babel.run → babel.orchestrator → babel.compiler → babel.qa → babel.executor.activation`
+For Jaeger, open **http://localhost:16686**, select service **`babel-cli`**, and
+find traces. Other collectors expose the same spans through their own UI:
+`babel.run → babel.orchestrator → babel.compiler → babel.qa → babel.executor.activation`.
 
 ### 5. Correlate with the run bundle
 
@@ -97,10 +94,7 @@ To find a trace in Jaeger by ID, copy `trace_id` from `07_trace_context.json` an
 
 ## Stopping the collector
 
-```bash
-cd babel-cli
-docker compose -f docker-compose.jaeger.yml down
-```
+Stop it with the command or Compose configuration used to start your local collector.
 
 ---
 
