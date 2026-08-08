@@ -1,11 +1,7 @@
 /**
  * pipeline.ts — Babel Multi-Agent State Machine
  *
- * Implements the four-stage pipeline:
- *   Stage 1: Orchestrator     — routes task, selects domain + model, emits manifest
- *   Stage 2: SWE Agent        — produces a MINIMAL_ACTION_SET plan
- *   Stage 3: QA Reviewer      — adversarially audits plan (loop up to MAX_LOOPS)
- *   Stage 4: CLI Executor     — multi-turn tool execution loop (deep mode)
+ * Implements four stages: orchestration, SWE planning, adversarial QA, and deep execution.
  *
  * Execution model:
  *   All four stages use `runWithFallback` (single-turn: CLI → API waterfall).
@@ -14,8 +10,7 @@
  *   runner can see what has already been executed.
  *
  * Path resolution:
- *   All prompt file paths are relative to BABEL_ROOT (two directories above this
- *   file: babel-cli/src/ → babel-cli/ → Babel/).
+ *   Prompt paths are relative to BABEL_ROOT (two directories above this file).
  *   Override with the BABEL_ROOT environment variable.
  */
 
@@ -311,6 +306,7 @@ import { writeLatestRunPointers } from './pipeline/runPointers.js';
 import { buildSweTask } from './pipeline/sweTask.js';
 import { buildQaTask } from './pipeline/qaTask.js';
 import { buildPipelineFinalTerminalState } from './pipeline/finalization.js';
+import { finalizeV9LiveSessionForPipeline, maybeInitializeV9LiveSession, type V9LiveSessionRuntime } from './pipeline/liveSessionParity.js';
 import { validatePlanTargetsWithinEffectiveRoots } from './pipeline/targetConsistency.js';
 import { runPreExecutorSafetyGates } from './pipeline/preExecutorGates.js';
 import {
@@ -1048,7 +1044,6 @@ export async function runBabelPipeline(
       }
     }
   }
-
   clearRoutingCache();
   // Session cost accumulates across runs within the same TUI session.
   // Reset only happens on interactive session startup, not per-pipeline-run.
@@ -1068,7 +1063,6 @@ export async function runBabelPipeline(
   } else {
     delete process.env['BABEL_SHADOW_ROOT'];
   }
-
   let stream: WriteStream | undefined;
   if (options.logFile) {
     const logPath = resolve(options.logFile);
@@ -1083,7 +1077,6 @@ export async function runBabelPipeline(
     run_dir: evidence.runDir,
     task,
   });
-
   const runLogic = async (): Promise<PipelineResult> => {
     try {
       const result = await _runBabelPipelineInternal(task, options, evidence);
@@ -1121,7 +1114,6 @@ export async function _runBabelPipelineInternal(
   precomputedManifest?: OrchestratorManifest,
 ): Promise<PipelineResult> {
   log(`Run directory: ${evidence.runDir}`);
-
   const orchestratorVersion = resolveOrchestratorVersion(options.orchestratorVersion);
   const sessionId =
     options.sessionId?.trim() || process.env['BABEL_SESSION_ID']?.trim() || undefined;
@@ -1156,7 +1148,6 @@ export async function _runBabelPipelineInternal(
     authoritativeProjectRoot ?? sessionResolvedRoot ?? process.cwd(),
   );
   logDetail(`Runtime project root: ${runtimeProjectRoot}`);
-
   // ── Phase 1a: Load and activate task envelope ───────────────────────────
   const envelopeResult = loadTaskEnvelope(runtimeProjectRoot);
   if (envelopeResult.loaded && envelopeResult.envelope) {
@@ -1197,6 +1188,7 @@ export async function _runBabelPipelineInternal(
     initialPhase: { phase: 'orchestrator', status: 'started' },
   });
   const pipelineEpisodeSink = episodeLifecycle.sink;
+  let v9LiveSession: V9LiveSessionRuntime | null = null;
   const decorateEpisodePersistence = (result: PipelineResult): PipelineResult => ({
     ...result,
     episodePersistenceStatus: episodeLifecycle.status,
@@ -1237,6 +1229,7 @@ export async function _runBabelPipelineInternal(
       attemptSafetySummary: terminalContext.attemptSafetySummary,
       verifierContractSummary: verifierContract.summary,
     };
+    finalizeV9LiveSessionForPipeline(v9LiveSession, finalizedResult, verifierContract.summary.verifierCompletionSatisfied);
     await runPluginHooks('PostRun', {
       runId: evidence.runId,
       runDir: evidence.runDir,
@@ -1923,6 +1916,8 @@ export async function _runBabelPipelineInternal(
     const effectiveModel = (options.modelOverride ??
       manifest.worker_configuration.assigned_model ??
       'deepseek-v4-pro') as TargetModel;
+    v9LiveSession = maybeInitializeV9LiveSession(evidence.runDir, manifest.session_id ?? sessionId, effectiveMode, mergedTaskContext,
+      inferProjectRoot(manifest) ?? runtimeProjectRoot, manifest.prompt_manifest, effectiveModel);
     const exactInvariantRegistry = getRequestedTargetContract(mergedTaskContext).exactInvariants;
     evidence.writeDebugFile(
       '11_exact_invariants.json',
