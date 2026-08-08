@@ -16,6 +16,7 @@ last_verified: 2026-08-05
 | [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) | **Explanatory** short map — defers to V1. |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | **Prompt OS + system architecture**: six layers, catalog, V9 router, kernel headline. |
 | [../CHAT_MODE.md](../CHAT_MODE.md) | Default daily ChatEngine product path. |
+| [../guides/PORTABLE_AGENT_WORKFLOW_PLAN.md](../guides/PORTABLE_AGENT_WORKFLOW_PLAN.md) | Proposed portable workflow contract; non-normative and subordinate to `harness-v1`. |
 | [../adr/ADR-012-canonical-harness-architecture-v1.md](../adr/ADR-012-canonical-harness-architecture-v1.md) | Decision record for harness-v1 freeze. |
 
 ## Live architectural documentation

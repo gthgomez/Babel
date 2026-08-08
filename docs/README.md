@@ -8,6 +8,7 @@ This directory contains the active public documentation for Babel.
 - [**Harness architecture v1**](./architecture/HARNESS_ARCHITECTURE_V1.md) is the **normative** runtime harness specification (`harness-v1`).
 - [Harness hardening roadmap v1](./architecture/HARNESS_HARDENING_ROADMAP_V1.md) is the single implementation sequence and acceptance-gate backlog under that specification.
 - [Harness overview](./architecture/HARNESS_OVERVIEW.md) is an explanatory map (not normative).
+- [Portable agent workflow plan](./guides/PORTABLE_AGENT_WORKFLOW_PLAN.md) defines the proposed cross-harness contract; it is subordinate to `harness-v1` and does not implement a second executor.
 - [Architecture](./architecture/ARCHITECTURE.md) describes Prompt OS layers, catalog, kernel, and the V9 pipeline.
 - [Architecture index](./architecture/README.md) lists all architecture guides.
 - [Canonical source decision](./adr/ADR-0001-canonical-public-source.md) records repository authority.

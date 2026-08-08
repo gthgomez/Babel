@@ -186,6 +186,7 @@ subagent teams, sandbox parity, or market parity are intentionally excluded.
 - [Architecture](./docs/architecture/ARCHITECTURE.md) — system shape and layers
 - [Harness architecture](./docs/architecture/HARNESS_ARCHITECTURE_V1.md) — normative runtime contract
 - [Harness hardening roadmap](./docs/architecture/HARNESS_HARDENING_ROADMAP_V1.md) — canonical H0–H7 implementation sequence
+- [Portable agent workflow plan](./docs/guides/PORTABLE_AGENT_WORKFLOW_PLAN.md) — proposed cross-harness contract, subordinate to the native harness
 - [Babel Bible](./BABEL_BIBLE.md) — integration and model-facing invocation contract
 - [Contributing](./CONTRIBUTING.md)
 
