@@ -72,6 +72,23 @@ node --env-file=.\babel-cli\.env .\babel-cli\dist\index.js run --project example
 - `BABEL_DEEPINFRA_STREAM_MAX_RETRIES` controls stream-idle retries. The default is `1`; set `0` to classify the first idle stream as failed.
 - `BABEL_CONTEXT_PRUNING=true` enables model-backed context pruning. By default, pruning is skipped so smoke and release-gate runs avoid an extra provider call.
 
+## Provider configuration
+
+Use `babel-cli/.env` as the single optional local credential hub. Start from
+`.env.example`; leave unused providers blank and never commit the populated
+file. Host and CI environment variables win over values in the file.
+
+The provider registry owns canonical provider IDs, protocols, and credential
+variable names. The credential hub resolves keys only at transport boundaries,
+while `ProviderEngine` selects the protocol-specific runner body. This keeps
+one engine entry point without pretending that Anthropic, Gemini, and
+OpenAI-compatible HTTP bodies are identical.
+
+Canonical credential variables are `DEEPINFRA_API_KEY`, `DEEPSEEK_API_KEY`,
+`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`,
+and `GROQ_API_KEY`. Ollama is credential-free by default and uses
+`BABEL_OLLAMA_BASE_URL` for an optional endpoint override.
+
 ## Daily Interactive Loop
 
 ```powershell

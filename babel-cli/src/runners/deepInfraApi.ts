@@ -39,6 +39,8 @@ import { extractJson } from '../utils/extractJson.js';
 import { JitDenialError, PolicyBlockedDuplicateError } from '../ui/incrementalToolDetector.js';
 import { createVcrRecorder, createVcrPlayer, type VcrRecorder } from '../services/streamingVcr.js';
 import { parseRateLimitHeaders } from '../ui/rateLimitWidget.js';
+import { resolveProviderCredential } from './credentialHub.js';
+import type { ProviderId } from './providerRegistry.js';
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -312,6 +314,8 @@ async function readStreamingResponse(
 export class DeepInfraApiRunner implements LlmRunner {
   protected readonly apiKey: string;
   protected readonly model: string;
+  private readonly maxTokens: number;
+  private readonly temperature: number;
   private lastInvocationMetadata: RunnerInvocationMetadata | null = null;
 
   /** Override in subclasses for alternate OpenAI-compatible providers. */
@@ -323,16 +327,30 @@ export class DeepInfraApiRunner implements LlmRunner {
    * @param model           Model ID.
    * @param apiKeyEnvVar    Env-var name for the API key (default: DEEPINFRA_API_KEY).
    */
-  constructor(model: string, apiKeyEnvVar = 'DEEPINFRA_API_KEY') {
-    const key = process.env[apiKeyEnvVar];
-    if (!key) {
-      throw new Error(
-        `[deepInfraApi] ${apiKeyEnvVar} is not set. ` +
-          'Add it to your .env file to enable this runner.',
-      );
-    }
-    this.apiKey = key;
+  constructor(
+    model: string,
+    apiKeyEnvVar = 'DEEPINFRA_API_KEY',
+    sampling: { maxTokens?: number; temperature?: number } = {},
+    credential: {
+      provider?: ProviderId;
+      explicitCredential?: string;
+      env?: NodeJS.ProcessEnv;
+    } = {},
+  ) {
+    const provider = credential.provider ?? 'deepinfra';
+    this.apiKey = credential.explicitCredential ?? resolveProviderCredential(provider, {
+      envVarOverride: apiKeyEnvVar,
+      ...(credential.env ? { env: credential.env } : {}),
+    }) ?? '';
     this.model = model;
+    this.maxTokens =
+      typeof sampling.maxTokens === 'number' && Number.isFinite(sampling.maxTokens) && sampling.maxTokens > 0
+        ? Math.floor(sampling.maxTokens)
+        : MAX_TOKENS;
+    this.temperature =
+      typeof sampling.temperature === 'number' && Number.isFinite(sampling.temperature)
+        ? sampling.temperature
+        : 0;
   }
 
   getLastInvocationMetadata(): RunnerInvocationMetadata | null {
@@ -368,8 +386,8 @@ export class DeepInfraApiRunner implements LlmRunner {
     const buildBody = () =>
       JSON.stringify({
         model: this.model,
-        max_tokens: MAX_TOKENS,
-        temperature: 0,
+        max_tokens: this.maxTokens,
+        temperature: this.temperature,
         stream: isStreaming,
         messages: [
           { role: 'system', content: systemPrompt },
@@ -805,8 +823,8 @@ export class DeepInfraApiRunner implements LlmRunner {
     const buildBody = () =>
       JSON.stringify({
         model: this.model,
-        max_tokens: MAX_TOKENS,
-        temperature: 0,
+        max_tokens: this.maxTokens,
+        temperature: this.temperature,
         stream: true,
         tools,
         tool_choice: (toolChoice ?? 'auto') as 'auto' | 'required',

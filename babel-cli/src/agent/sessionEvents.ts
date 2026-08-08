@@ -12,6 +12,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
 
 export const SESSION_EVENT_SCHEMA_VERSION = 1 as const;
 export const SESSION_EVENTS_FILENAME = 'session-events.jsonl';
@@ -32,7 +33,13 @@ export type SessionEventKind =
   | 'completion_decision'
   | 'model_failover'
   | 'compaction_created'
-  | 'turn_ended';
+  | 'turn_ended'
+  /** H2: remaining budget snapshot for resume. */
+  | 'budget_snapshot'
+  /** H2: approval decision boundary. */
+  | 'approval_decision'
+  /** H2: typed repair attempt (failure-class keyed). */
+  | 'repair_attempt';
 
 export interface SessionEventBase {
   schema_version: typeof SESSION_EVENT_SCHEMA_VERSION;
@@ -113,6 +120,8 @@ export type SessionEvent =
       command_preview: string;
       authoritative: boolean;
       exit_code?: number;
+      /** Durable revision-bound receipt used to reconstruct verifier state. */
+      receipt?: BoundChatVerifierReceipt;
     })
   | (SessionEventBase & {
       kind: 'gate_decision';
@@ -158,6 +167,29 @@ export type SessionEvent =
       kind: 'turn_ended';
       outcome: TerminalOutcome;
       status: string;
+    })
+  | (SessionEventBase & {
+      kind: 'budget_snapshot';
+      turns_used?: number;
+      turns_remaining?: number | null;
+      tokens_used?: number;
+      tokens_remaining?: number | null;
+      repair_attempts_used?: number;
+      repair_attempts_remaining?: number | null;
+      infra_retries_used?: number;
+      infra_retries_remaining?: number | null;
+    })
+  | (SessionEventBase & {
+      kind: 'approval_decision';
+      request_id: string;
+      decision: 'deny' | 'allow_once' | 'allow_session' | 'narrow_rule';
+      scope?: string;
+    })
+  | (SessionEventBase & {
+      kind: 'repair_attempt';
+      failure_class: string;
+      attempt: number;
+      detail?: string;
     });
 
 export interface SessionEventLog {
@@ -339,6 +371,7 @@ export function recordVerifierAttempt(
     command_preview: string;
     authoritative: boolean;
     exit_code?: number;
+    receipt?: BoundChatVerifierReceipt;
   },
 ): SessionEvent {
   return appendSessionEvent(log, {
@@ -347,6 +380,7 @@ export function recordVerifierAttempt(
     command_preview: input.command_preview.slice(0, 500),
     authoritative: input.authoritative,
     ...(input.exit_code !== undefined ? { exit_code: input.exit_code } : {}),
+    ...(input.receipt !== undefined ? { receipt: structuredClone(input.receipt) } : {}),
   });
 }
 
@@ -430,6 +464,89 @@ export function recordModelFailover(
     ...(input.new_model !== undefined ? { new_model: input.new_model } : {}),
     ...(input.new_provider !== undefined ? { new_provider: input.new_provider } : {}),
     ...(input.reason !== undefined ? { reason: input.reason } : {}),
+  });
+}
+
+/** H2: durable budget snapshot for resume. */
+export function recordBudgetSnapshot(
+  log: SessionEventLog,
+  turnId: string | null,
+  input: {
+    turns_used?: number;
+    turns_remaining?: number | null;
+    tokens_used?: number;
+    tokens_remaining?: number | null;
+    repair_attempts_used?: number;
+    repair_attempts_remaining?: number | null;
+    infra_retries_used?: number;
+    infra_retries_remaining?: number | null;
+  },
+): SessionEvent {
+  return appendSessionEvent(log, {
+    kind: 'budget_snapshot',
+    turn_id: turnId,
+    ...input,
+  });
+}
+
+/** H2: approval decision boundary. */
+export function recordApprovalDecision(
+  log: SessionEventLog,
+  turnId: string | null,
+  input: {
+    request_id: string;
+    decision: 'deny' | 'allow_once' | 'allow_session' | 'narrow_rule';
+    scope?: string;
+  },
+): SessionEvent {
+  return appendSessionEvent(log, {
+    kind: 'approval_decision',
+    turn_id: turnId,
+    request_id: input.request_id,
+    decision: input.decision,
+    ...(input.scope !== undefined ? { scope: input.scope } : {}),
+  });
+}
+
+/** H2: repair attempt keyed by failure class. */
+export function recordRepairAttempt(
+  log: SessionEventLog,
+  turnId: string | null,
+  input: { failure_class: string; attempt: number; detail?: string },
+): SessionEvent {
+  return appendSessionEvent(log, {
+    kind: 'repair_attempt',
+    turn_id: turnId,
+    failure_class: input.failure_class,
+    attempt: input.attempt,
+    ...(input.detail !== undefined ? { detail: input.detail } : {}),
+  });
+}
+
+/** H1: durable compaction boundary on the session event stream. */
+export function recordCompactionCreated(
+  log: SessionEventLog,
+  turnId: string | null,
+  input: {
+    preserved_tool_call_ids?: string[];
+    content_preview?: string;
+    strategy?: string;
+    tokens_before?: number;
+    tokens_after?: number;
+    status?: string;
+  } = {},
+): SessionEvent {
+  return appendSessionEvent(log, {
+    kind: 'compaction_created',
+    turn_id: turnId,
+    ...(input.preserved_tool_call_ids !== undefined
+      ? { preserved_tool_call_ids: [...input.preserved_tool_call_ids] }
+      : {}),
+    ...(input.content_preview !== undefined ? { content_preview: input.content_preview } : {}),
+    ...(input.strategy !== undefined ? { strategy: input.strategy } : {}),
+    ...(input.tokens_before !== undefined ? { tokens_before: input.tokens_before } : {}),
+    ...(input.tokens_after !== undefined ? { tokens_after: input.tokens_after } : {}),
+    ...(input.status !== undefined ? { status: input.status } : {}),
   });
 }
 
@@ -526,6 +643,21 @@ export function flushSessionEventLog(
     const msg = err instanceof Error ? err.message : String(err);
     return { path, wrote: 0, error: msg };
   }
+}
+
+/**
+ * Flush a required session boundary. Unlike the legacy best-effort helper,
+ * this throws when the durable write cannot be completed.
+ */
+export function flushSessionEventLogStrict(
+  runDir: string,
+  log: SessionEventLog,
+): { path: string; wrote: number } {
+  const result = flushSessionEventLog(runDir, log);
+  if (result.error) {
+    throw new Error(`session event persistence failed: ${result.error}`);
+  }
+  return result;
 }
 
 /** Full rewrite (tests / recovery); sets flushedThroughSeq to last event. */

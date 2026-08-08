@@ -110,6 +110,9 @@ jobs:
       - name: Typecheck CLI
         run: npm run typecheck
         working-directory: babel-cli
+      - name: Run required harness runtime suite
+        run: npm run test:harness-runtime
+        working-directory: babel-cli
       - name: Validate catalog
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/validate-catalog.ps1
 
@@ -130,6 +133,9 @@ jobs:
         working-directory: babel-cli
       - name: Typecheck CLI
         run: npm run typecheck
+        working-directory: babel-cli
+      - name: Run required harness runtime suite
+        run: npm run test:harness-runtime
         working-directory: babel-cli
       - name: Validate catalog
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/validate-catalog.ps1

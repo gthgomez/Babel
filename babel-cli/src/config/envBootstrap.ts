@@ -156,10 +156,3 @@ export function assertEnvFileActiveForPipelineCommand(
     process.exit(1);
   }
 }
-
-// Phase 5a: Guard the module-level side-effect so tests and consumers that
-// import from envBootstrap don't trigger env loading as a side effect.
-// If the entry point (index.ts) already loaded .env, skip the auto-load.
-if (!process.env['BABEL_ENV_LOADED']) {
-  loadBabelCliEnv();
-}

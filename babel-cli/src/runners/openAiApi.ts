@@ -25,6 +25,7 @@ import { classifyProviderError } from './providerNormalize.js';
 import { type LlmRunner, type RunnerCallbacks, buildStructuredOutputError } from './base.js';
 import { extractJson } from '../utils/extractJson.js';
 import { parseRateLimitHeaders } from '../ui/rateLimitWidget.js';
+import { resolveProviderCredential } from './credentialHub.js';
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -53,16 +54,15 @@ interface OpenAiResponse {
 
 export class OpenAiApiRunner implements LlmRunner {
   private readonly apiKey: string;
+  private readonly model: string;
+  private readonly maxTokens: number;
+  private readonly temperature: number | undefined;
 
-  constructor() {
-    const key = process.env['OPENAI_API_KEY'];
-    if (!key) {
-      throw new Error(
-        '[openAiApi] OPENAI_API_KEY is not set. ' +
-          'Add it to your .env file to enable the OpenAI API runner.',
-      );
-    }
-    this.apiKey = key;
+  constructor(options: { explicitCredential?: string; env?: NodeJS.ProcessEnv; modelId?: string; maxTokens?: number; temperature?: number } = {}) {
+    this.apiKey = resolveProviderCredential('openai', options) ?? '';
+    this.model = options.modelId ?? OPENAI_MODEL;
+    this.maxTokens = options.maxTokens ?? MAX_TOKENS;
+    this.temperature = options.temperature;
   }
 
   async execute<T>(
@@ -80,8 +80,9 @@ export class OpenAiApiRunner implements LlmRunner {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: OPENAI_MODEL,
-          max_completion_tokens: MAX_TOKENS,
+          model: this.model,
+          max_completion_tokens: this.maxTokens,
+          ...(this.temperature === undefined ? {} : { temperature: this.temperature }),
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
             { role: 'user', content: prompt },
@@ -117,7 +118,7 @@ export class OpenAiApiRunner implements LlmRunner {
       throw buildStructuredOutputError({
         failure_kind: 'failed_to_parse_api_json',
         provider: 'openai',
-        model: OPENAI_MODEL,
+        model: this.model,
         message: `[openAiApi] Failed to parse API response as JSON: ${String(err)}`,
         raw_output: dataText,
         cause: err instanceof Error ? err : undefined,
@@ -129,7 +130,7 @@ export class OpenAiApiRunner implements LlmRunner {
       throw buildStructuredOutputError({
         failure_kind: 'empty_response',
         provider: 'openai',
-        model: OPENAI_MODEL,
+        model: this.model,
         message: '[openAiApi] OpenAI API returned an empty response.',
         raw_output: JSON.stringify(data),
       });
@@ -143,7 +144,7 @@ export class OpenAiApiRunner implements LlmRunner {
       throw buildStructuredOutputError({
         failure_kind: 'invalid_json',
         provider: 'openai',
-        model: OPENAI_MODEL,
+        model: this.model,
         message: `[openAiApi] invalid json: ${err instanceof Error ? err.message : String(err)}`,
         raw_output: text,
         cause: err instanceof Error ? err : undefined,
@@ -155,7 +156,7 @@ export class OpenAiApiRunner implements LlmRunner {
       throw buildStructuredOutputError({
         failure_kind: 'zod_validation_failed',
         provider: 'openai',
-        model: OPENAI_MODEL,
+        model: this.model,
         message: `[openAiApi] Zod validation failed:\n${result.error.toString()}`,
         raw_output: text,
         parsed_json: parsed,

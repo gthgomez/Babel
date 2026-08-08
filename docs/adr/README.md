@@ -18,6 +18,7 @@ last_verified: 2026-07-21
 | [ADR-010](ADR-010-app-server-protocol.md) | App Server Protocol Contract | Accepted | 2026-07-01 |
 | [ADR-011](ADR-011-embedding-decision.md) | Local Vector Embeddings Decision | Accepted | 2026-07-05 |
 | [ADR-012](ADR-012-canonical-harness-architecture-v1.md) | Canonical Harness Architecture v1 | Accepted | 2026-08-03 |
+| [ADR-013](ADR-013-h7-model-path-experimental-deferral.md) | Defer H7 same-model LLM factorial experimental gates | Accepted | 2026-08-06 |
 
 ## Status Convention
 

@@ -23,6 +23,7 @@
  */
 import Groq from 'groq-sdk';
 import { extractJson } from '../utils/extractJson.js';
+import { resolveProviderCredential } from './credentialHub.js';
 // ─── Configuration ────────────────────────────────────────────────────────────
 const GROQ_MODEL = process.env['BABEL_GROQ_MODEL'] ?? 'llama-3.3-70b-versatile';
 const _rawGroqTokens = Number(process.env['BABEL_GROQ_TOKENS'] ?? '8096');
@@ -36,22 +37,24 @@ const SYSTEM_PROMPT =
 // ─── Runner implementation ────────────────────────────────────────────────────
 export class GroqApiRunner {
   client;
-  constructor() {
-    if (!process.env['GROQ_API_KEY']) {
-      throw new Error(
-        '[groqApi] GROQ_API_KEY is not set. ' +
-          'Add it to your .env file to enable the Groq API runner.',
-      );
-    }
-    this.client = new Groq({ apiKey: process.env['GROQ_API_KEY'] });
+  model;
+  maxTokens;
+  temperature;
+  constructor(options = {}) {
+    const apiKey = resolveProviderCredential('groq', options);
+    if (apiKey === null) throw new Error('[groqApi] credential resolution failed');
+    this.model = options.modelId ?? GROQ_MODEL;
+    this.maxTokens = options.maxTokens ?? MAX_TOKENS;
+    this.temperature = options.temperature ?? 0;
+    this.client = new Groq({ apiKey });
   }
   async execute(prompt, schema) {
     let completion;
     try {
       completion = await this.client.chat.completions.create({
-        model: GROQ_MODEL,
-        max_tokens: MAX_TOKENS,
-        temperature: 0,
+        model: this.model,
+        max_tokens: this.maxTokens,
+        temperature: this.temperature,
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: prompt },

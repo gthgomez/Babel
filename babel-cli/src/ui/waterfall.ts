@@ -27,6 +27,7 @@ import { renderMarkdown, clearMdRenderCache } from './highlight.js';
 import { RawModeManager } from './rawMode.js';
 import { KeybindingManager } from './keybindings.js';
 import { FrameScheduler } from './frameScheduler.js';
+import { leaveThinking, type ThinkingExitReason } from './thinkingState.js';
 import { MarkdownAccumulator } from './markdownAccumulator.js';
 import { backgroundTaskRegistry } from '../services/backgroundTaskRegistry.js';
 import { renderBackgroundTaskOverlay } from './backgroundTaskOverlay.js';
@@ -1558,30 +1559,20 @@ export class ConversationalRenderer extends BaseRenderer {
     safeStdoutWrite(output);
   }
 
+  /** Leave the thinking state (on first answer chunk, tool call start, or turn finish/error).
+   *  Always clears the thinking spinner line, then any _showingOverlayLines, before subsequent writes. */
+  private _leaveThinking(reason: ThinkingExitReason): void {
+    const result = leaveThinking({ state: this._state, reason, isTTY: this.isTTY === true, overlayLines: this._showingOverlayLines,
+      write: safeStdoutWrite, transition: (state) => { this._state = state; this._store?.dispatch({ type: 'state:transition', to: state }); }, unregisterTick: this._unregisterTick });
+    this._state = result.state; this._showingOverlayLines = result.overlayLines; this._unregisterTick = result.unregisterTick;
+  }
+
   /** Record activity for stall detection (Fixes 2+7). Transitions state to
    *  'streaming' on first answer evidence. */
   private _recordActivity(): void {
     this._lastActivityTime = Date.now();
     if (this._state === 'thinking' && this.answerChunks.length > 0) {
-      this._state = 'streaming';
-      this._store?.dispatch({ type: 'state:transition', to: 'streaming' });
-      // Clear the live thinking line and any overlay rows — answer text takes over
-      if (this.isTTY) {
-        safeStdoutWrite('\r\x1b[K');
-        if (this._showingOverlayLines > 0) {
-          // Clear all overlay lines (bg tasks + subagent progress)
-          for (let i = 0; i < this._showingOverlayLines; i++) {
-            safeStdoutWrite('\n\x1b[K');
-          }
-          safeStdoutWrite(`\x1b[${this._showingOverlayLines}A`);
-          this._showingOverlayLines = 0;
-        }
-      }
-      // Unregister permanent dirty — no more spinner ticks needed
-      const scheduler = FrameScheduler.getInstance();
-      scheduler.setComponentPermanentDirty('thinking-spinner', false);
-      this._unregisterTick?.();
-      this._unregisterTick = null;
+      this._leaveThinking('stream');
     }
   }
 
@@ -1845,6 +1836,9 @@ export class ConversationalRenderer extends BaseRenderer {
     if (this.paused) return -1;
     if (this._state === 'done' || this._state === 'failed') return -1;
     if (tool === undefined || target === undefined) return -1;
+    if (this._state === 'thinking') {
+      this._leaveThinking('tool');
+    }
     this._recordActivity();
     const id = ++this.toolCallIndex;
 
@@ -1866,6 +1860,8 @@ export class ConversationalRenderer extends BaseRenderer {
       // emit \r\x1b[K and erase the freshly-printed tool call indicator.
       this._pendingToolCallLines++;
       const label = conversationalToolLabel(tool, target);
+      // No trailing newline: onToolCallComplete rewrites this line with \r ✓ …
+      // Sandbox notices must use OutputBuffer (emitSandboxOperatorNotice), not stderr.
       safeStdoutWrite(`\n  ${dim('○')} ${label}`);
     }
     if (isA11yMode()) {
@@ -2337,6 +2333,9 @@ export class ConversationalRenderer extends BaseRenderer {
   /** Error — clear thinking line, unregister tick, show error, stop. */
   fail(error?: unknown): void {
     if (this.outputBroken) return;
+    if (this._state === 'thinking') {
+      this._leaveThinking('end');
+    }
     this._state = 'failed';
     const message = error instanceof Error ? error.message : String(error ?? 'unknown error');
     this._historyTranscript.abortTurn();

@@ -18,6 +18,7 @@ import { classifyProviderError } from './providerNormalize.js';
 import { type LlmRunner, type RunnerCallbacks, buildStructuredOutputError } from './base.js';
 import { extractJson } from '../utils/extractJson.js';
 import { parseRateLimitHeaders } from '../ui/rateLimitWidget.js';
+import { resolveProviderCredential } from './credentialHub.js';
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 
@@ -31,16 +32,15 @@ const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 export class GeminiApiRunner implements LlmRunner {
   private readonly apiKey: string;
+  private readonly model: string;
+  private readonly maxTokens: number;
+  private readonly temperature: number;
 
-  constructor() {
-    const key = process.env['GEMINI_API_KEY'];
-    if (!key) {
-      throw new Error(
-        '[geminiApi] GEMINI_API_KEY is not set. ' +
-          'Add it to your .env file to enable the Gemini API runner.',
-      );
-    }
-    this.apiKey = key;
+  constructor(options: { explicitCredential?: string; env?: NodeJS.ProcessEnv; modelId?: string; maxTokens?: number; temperature?: number } = {}) {
+    this.apiKey = resolveProviderCredential('gemini', options) ?? '';
+    this.model = options.modelId ?? GEMINI_MODEL;
+    this.maxTokens = options.maxTokens ?? MAX_TOKENS;
+    this.temperature = options.temperature ?? 0;
   }
 
   async execute<T>(
@@ -48,7 +48,7 @@ export class GeminiApiRunner implements LlmRunner {
     schema: ZodType<T, unknown>,
     callbacks?: RunnerCallbacks,
   ): Promise<T> {
-    const url = `${API_BASE}/${GEMINI_MODEL}:generateContent`;
+    const url = `${API_BASE}/${this.model}:generateContent`;
 
     let res: Response;
     let rawJsonText = '';
@@ -62,8 +62,8 @@ export class GeminiApiRunner implements LlmRunner {
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
-            temperature: 0,
-            maxOutputTokens: MAX_TOKENS,
+            temperature: this.temperature,
+            maxOutputTokens: this.maxTokens,
           },
           systemInstruction: {
             parts: [
@@ -104,7 +104,7 @@ export class GeminiApiRunner implements LlmRunner {
       throw buildStructuredOutputError({
         failure_kind: 'failed_to_parse_api_json',
         provider: 'gemini',
-        model: GEMINI_MODEL,
+        model: this.model,
         message: `[geminiApi] Failed to parse API response as JSON: ${err instanceof Error ? err.message : String(err)}`,
         raw_output: rawJsonText,
         cause: err instanceof Error ? err : undefined,
@@ -116,7 +116,7 @@ export class GeminiApiRunner implements LlmRunner {
       throw buildStructuredOutputError({
         failure_kind: 'empty_response',
         provider: 'gemini',
-        model: GEMINI_MODEL,
+        model: this.model,
         message: '[geminiApi] Gemini API returned an empty response.',
         raw_output: rawJsonText,
       });
@@ -129,7 +129,7 @@ export class GeminiApiRunner implements LlmRunner {
       throw buildStructuredOutputError({
         failure_kind: 'invalid_json',
         provider: 'gemini',
-        model: GEMINI_MODEL,
+        model: this.model,
         message: `[geminiApi] invalid json: ${err instanceof Error ? err.message : String(err)}`,
         raw_output: text,
         cause: err instanceof Error ? err : undefined,
@@ -141,7 +141,7 @@ export class GeminiApiRunner implements LlmRunner {
       throw buildStructuredOutputError({
         failure_kind: 'zod_validation_failed',
         provider: 'gemini',
-        model: GEMINI_MODEL,
+        model: this.model,
         message: `[geminiApi] Zod validation failed:\n${result.error.toString()}`,
         raw_output: text,
         parsed_json: parsed,

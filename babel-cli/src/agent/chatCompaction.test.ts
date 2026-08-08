@@ -383,7 +383,7 @@ describe('LLMSummarizeCompaction', () => {
     assert.strictEqual(result, false);
   });
 
-  it('returns compacted messages with summary annotation on API failure', async () => {
+  it('H1: throws on API failure so CompactionManager can advance to heuristic', async () => {
     const savedKey = process.env['BABEL_COMPACTION_API_KEY'];
     process.env['BABEL_COMPACTION_API_KEY'] = 'test-key';
     const strategy = new LLMSummarizeCompaction({ keepRecentMessages: 2 });
@@ -396,12 +396,11 @@ describe('LLMSummarizeCompaction', () => {
       throw new Error('API timeout');
     };
 
-    const result = await strategy.compact(msgs, { model: 'test-model', maxTokens: 1000 });
-    assert.ok(result.length > 0);
-    const compactedMsgs = result.filter(
-      (m) => m.name === 'compaction_fallback',
+    await assert.rejects(
+      () => strategy.compact(msgs, { model: 'test-model', maxTokens: 1000 }),
+      /API timeout/,
     );
-    assert.ok(compactedMsgs.length > 0);
+    assert.strictEqual(strategy.getConsecutiveFailures(), 1);
 
     // Restore
     (strategy as any).callCompactionApi = originalCallApi;
@@ -726,21 +725,40 @@ describe('Strategy names are unique', () => {
 // ─── 13. AbortSignal Handling ─────────────────────────────────────────────
 
 describe('AbortSignal handling', () => {
-  it('LLMSummarizeCompaction respects abort signal on API call', async () => {
+  it('LLMSummarizeCompaction throws on abort so manager can fall back (H1)', async () => {
     const strategy = new LLMSummarizeCompaction({ keepRecentMessages: 2 });
     const abortController = new AbortController();
     abortController.abort();
+    const savedKey = process.env['BABEL_COMPACTION_API_KEY'];
+    process.env['BABEL_COMPACTION_API_KEY'] = 'test-key';
 
-    // With an already-aborted signal, the API call should fail
+    // Mock API to observe abort signal and throw AbortError
+    (strategy as any).callCompactionApi = async (
+      _toCompact: unknown,
+      _target: unknown,
+      options: { signal?: AbortSignal },
+    ) => {
+      if (options.signal?.aborted) {
+        const err = new Error('The operation was aborted');
+        err.name = 'AbortError';
+        throw err;
+      }
+      return { summary: 'ok', inputTokens: 1, outputTokens: 1 };
+    };
+
     const msgs = makeLongConversation(3);
-    const result = await strategy.compact(msgs, {
-      model: 'test-model',
-      maxTokens: 100,
-      signal: abortController.signal,
-    });
+    await assert.rejects(
+      () =>
+        strategy.compact(msgs, {
+          model: 'test-model',
+          maxTokens: 100,
+          signal: abortController.signal,
+        }),
+      /aborted/i,
+    );
 
-    // Should gracefully degrade (fallback annotation or original messages)
-    assert.ok(result.length > 0);
+    if (savedKey) process.env['BABEL_COMPACTION_API_KEY'] = savedKey;
+    else delete process.env['BABEL_COMPACTION_API_KEY'];
   });
 });
 

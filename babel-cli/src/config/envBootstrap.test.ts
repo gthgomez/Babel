@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -12,11 +10,7 @@ import {
   isStrictEnvMode,
   loadBabelCliEnv,
   parseEnvFileKeys,
-  wasBabelCliEnvFileLoaded,
 } from './envBootstrap.js';
-
-const babelCliRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
-const distIndex = join(babelCliRoot, 'dist/index.js');
 
 test('parseEnvFileKeys ignores comments and empty values', () => {
   const dir = mkdtempSync(join(tmpdir(), 'babel-env-bootstrap-'));
@@ -77,90 +71,4 @@ test('formatEnvFileInactiveMessage includes canonical invocation hints', () => {
   const message = formatEnvFileInactiveMessage(['BABEL_ROOT'], '/tmp/.env');
   assert.match(message, /node --env-file=\.\/babel-cli\/\.env/);
   assert.match(message, /--strict-env/);
-});
-
-test('babel-cli entry auto-loads package .env when present', () => {
-  const envPath = join(babelCliRoot, '.env');
-  if (!wasBabelCliEnvFileLoaded()) {
-    return;
-  }
-
-  const keys = parseEnvFileKeys(envPath);
-  if (keys.length === 0) {
-    return;
-  }
-
-  const missing = getEnvFileKeysNotActiveInProcess();
-  assert.equal(missing.length, 0, `expected auto-loaded keys to be active: ${missing.join(', ')}`);
-});
-
-test('spawned CLI auto-loads babel-cli/.env without node --env-file', (t) => {
-  const envPath = join(babelCliRoot, '.env');
-  if (!wasBabelCliEnvFileLoaded()) {
-    t.skip('babel-cli/.env is not present; skipping spawn auto-load test');
-    return;
-  }
-
-  const keys = parseEnvFileKeys(envPath).filter((key) => key.startsWith('BABEL_'));
-  if (keys.length === 0) {
-    t.skip('babel-cli/.env has no BABEL_* keys; skipping spawn auto-load test');
-    return;
-  }
-
-  const sampleKey = keys[0]!;
-  const cleanEnv = { ...process.env };
-  for (const key of Object.keys(cleanEnv)) {
-    if (key.startsWith('BABEL_') || key === 'DEEPINFRA_API_KEY') {
-      delete cleanEnv[key];
-    }
-  }
-
-  const result = spawnSync(process.execPath, [distIndex, 'doctor', '--scope', 'env', '--json'], {
-    cwd: babelCliRoot,
-    env: cleanEnv,
-    encoding: 'utf8',
-    timeout: 120_000,
-  });
-
-  assert.equal(result.status, 0, result.stderr || result.stdout);
-  assert.equal(cleanEnv[sampleKey], undefined);
-  const payload = JSON.parse(result.stdout) as { status?: string };
-  assert.equal(payload.status, 'pass');
-});
-
-test('spawned CLI exits non-zero with --strict-env when .env keys stay inactive', (t) => {
-  const envPath = join(babelCliRoot, '.env');
-  if (!wasBabelCliEnvFileLoaded()) {
-    t.skip('babel-cli/.env is not present; skipping strict-env spawn test');
-    return;
-  }
-
-  const keys = parseEnvFileKeys(envPath);
-  if (keys.length === 0) {
-    t.skip('babel-cli/.env has no active keys; skipping strict-env spawn test');
-    return;
-  }
-
-  const blockedKey = keys[0]!;
-  const cleanEnv = { ...process.env };
-  for (const key of Object.keys(cleanEnv)) {
-    if (key.startsWith('BABEL_') || key === 'DEEPINFRA_API_KEY') {
-      delete cleanEnv[key];
-    }
-  }
-  cleanEnv[blockedKey] = '';
-
-  const result = spawnSync(
-    process.execPath,
-    [distIndex, 'run', '--strict-env', '--json', 'env bootstrap strict probe'],
-    {
-      cwd: babelCliRoot,
-      env: cleanEnv,
-      encoding: 'utf8',
-      timeout: 120_000,
-    },
-  );
-
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr + result.stdout, /not active in this process|missing_env_keys/i);
 });

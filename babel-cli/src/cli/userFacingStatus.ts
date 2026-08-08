@@ -21,12 +21,15 @@ interface UserFacingVerificationPayload {
 export function userFacingStatusFromOutcome(outcome: TerminalOutcome): UserFacingStatus {
   switch (outcome) {
     case 'VERIFIED_COMPLETE':
+    case 'NO_CHANGE_REQUIRED':
       return 'success';
     case 'UNVERIFIED_PATCH':
       // Completed without authoritative verification — not a silent pass.
       return 'not_verified';
     case 'BLOCKED_EXTERNAL':
     case 'BLOCKED_POLICY':
+    case 'NEEDS_HUMAN_DECISION':
+    case 'INVALID_TASK':
       return 'blocked';
     case 'BUDGET_EXHAUSTED':
     case 'CANCELLED':

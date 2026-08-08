@@ -10,10 +10,14 @@
  * Phase 0 — additive, no breaking changes.
  */
 
-import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
-import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
-import { OllamaApiRunner } from '../runners/ollamaApi.js';
-import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
+import { createProviderRunner, type ProviderEngine } from '../runners/providerEngine.js';
+import {
+  isProviderId,
+  providerSupportsOperation,
+  type ProviderId,
+  type ProviderOperation,
+} from '../runners/providerRegistry.js';
+import { getProviderCredentialStatus } from '../runners/credentialHub.js';
 import { loadModelPolicyConfig } from '../modelPolicy.js';
 import type { ModelPolicyModelEntry } from '../modelPolicy.js';
 
@@ -21,11 +25,11 @@ import type { ModelPolicyModelEntry } from '../modelPolicy.js';
 
 export interface ModelRoute {
   /** Provider discriminator for runner selection. */
-  provider: 'deepinfra' | 'deepseek' | 'ollama' | 'openrouter';
+  provider: ProviderId;
   /** The actual model ID to pass to the runner constructor. */
   modelId: string;
   /** Cached runner instance. */
-  runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner;
+  runner: ProviderEngine;
 }
 
 export interface ModelRouterOptions {
@@ -34,6 +38,8 @@ export interface ModelRouterOptions {
    * Defaults to the policy's cheapest enabled model.
    */
   defaultBackendKey?: string;
+  /** Operation required from automatically selected providers. */
+  requiredOperation?: ProviderOperation;
 }
 
 // ─── ModelRouter ────────────────────────────────────────────────────────────
@@ -42,9 +48,11 @@ export class ModelRouter {
   private readonly routes = new Map<string, ModelRoute>();
   private readonly defaultBackendKey: string;
   private readonly modelConfig: ReturnType<typeof loadModelPolicyConfig>;
+  private readonly requiredOperation: ProviderOperation;
 
   constructor(options: ModelRouterOptions = {}) {
     this.modelConfig = loadModelPolicyConfig();
+    this.requiredOperation = options.requiredOperation ?? 'structured';
     this.defaultBackendKey = options.defaultBackendKey ?? this.resolveDefaultBackendKey();
   }
 
@@ -100,19 +108,17 @@ export class ModelRouter {
       );
     }
 
-    const provider = backend.provider as 'deepinfra' | 'deepseek' | 'ollama' | 'openrouter';
-    const modelId = backend.model_id;
-
-    let runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner;
-    if (provider === 'deepseek') {
-      runner = new DeepSeekApiRunner(modelId);
-    } else if (provider === 'ollama') {
-      runner = new OllamaApiRunner(modelId);
-    } else if (provider === 'openrouter') {
-      runner = new OpenRouterApiRunner(modelId);
-    } else {
-      throw new Error(`[ModelRouter] Unknown provider: ${provider}`);
+    if (!isProviderId(backend.provider)) {
+      throw new Error(`[ModelRouter] Unknown provider: ${backend.provider}`);
     }
+    const provider = backend.provider;
+    if (!providerSupportsOperation(provider, this.requiredOperation)) {
+      throw new Error(
+        `[ModelRouter] Provider ${provider} does not support ${this.requiredOperation}`,
+      );
+    }
+    const modelId = backend.model_id;
+    const runner = createProviderRunner({ provider, modelId });
 
     return { provider, modelId, runner };
   }
@@ -124,6 +130,14 @@ export class ModelRouter {
 
     const entries = Object.entries(models)
       .filter(([, m]) => m.enabled !== false && m.expensive !== true)
+      .filter(([, m]) =>
+        isProviderId(m.provider) &&
+        providerSupportsOperation(m.provider, this.requiredOperation),
+      )
+      .filter(([, m]) =>
+        isProviderId(m.provider) &&
+        getProviderCredentialStatus(m.provider, process.env).configured,
+      )
       .map(([key, m]) => ({
         key,
         cost: m.estimated_cost_per_1m_output,

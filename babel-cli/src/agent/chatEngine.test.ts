@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 
 import { ChatEngine } from './chatEngine.js';
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
+import { createSessionEventLog, flushSessionEventLog, recordUserSubmitted } from './sessionEvents.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -18,6 +19,10 @@ function setupMockSession(tempRoot: string): string {
   const sessionId = `test-session-${randomBytes(4).toString('hex')}`;
   const sessionDir = join(tempRoot, sessionId);
   mkdirSync(sessionDir, { recursive: true });
+  new ChatEngine({ task: 'Resume test', projectRoot: '/tmp', runId: sessionId });
+  const sessionLog = createSessionEventLog(sessionId);
+  recordUserSubmitted(sessionLog, { turn_id: 'restore-turn', task: 'Resume test' });
+  flushSessionEventLog(sessionDir, sessionLog);
 
   const transcript = [
     { role: 'system', content: 'You are a helpful coding assistant.' },

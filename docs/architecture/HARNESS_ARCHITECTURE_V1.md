@@ -8,7 +8,7 @@ Licensed under the MIT License
 status: CANONICAL
 architecture_version: harness-v1
 authority: normative
-last_verified: 2026-08-04
+last_verified: 2026-08-05
 change_policy: ADR and conformance-test updates required
 ```
 
@@ -21,6 +21,7 @@ change_policy: ADR and conformance-test updates required
 | Companion | Role |
 |-----------|------|
 | [ADR-012](../adr/ADR-012-canonical-harness-architecture-v1.md) | Decision record for this freeze |
+| [HARNESS_HARDENING_ROADMAP_V1.md](./HARNESS_HARDENING_ROADMAP_V1.md) | **Canonical implementation sequence**; subordinate to this specification |
 | [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) | **Explanatory** map only |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Prompt OS layers + broader system |
 | `babel-cli/PROJECT_CONTEXT.md` | Changing implementation hot paths |
@@ -103,7 +104,7 @@ Maturity labels: **IMPLEMENTED** | **PARTIAL** | **PROTOTYPE** | **PLANNED** | *
 | **Current** | Pipeline `.babel/task-envelope.json` + Zod envelope; chat uses task class / intent plan |
 | **Owner** | Router + envelope activation (`taskEnvelope.ts`) |
 | **Sources** | `schemas/taskEnvelope.ts`, `agent/intentCompiler.ts`, `pipeline.ts` |
-| **Maturity** | **PARTIAL** — strong on pipeline; chat less formal |
+| **Maturity** | H3 `TaskContractV1` freeze + honest completion hook on ChatEngine **IMPLEMENTED**; FailureClass budgets on ChatEngine **IMPLEMENTED**; pipeline envelope remains |
 | **Gaps** | No single immutable envelope on every Chat path |
 | **Target** | One frozen `TaskContractV1` per run on all modes |
 
@@ -115,8 +116,8 @@ Maturity labels: **IMPLEMENTED** | **PARTIAL** | **PROTOTYPE** | **PLANNED** | *
 | **Current** | Chat: `compileChatStack`; Deep: catalog `stackResolver` + `compileContext` |
 | **Owner** | Control-plane resolver / chat stack compiler |
 | **Sources** | `control-plane/stackResolver.ts`, `compiler.ts`, `agent/chatStackCompile.ts` |
-| **Maturity** | **IMPLEMENTED** (catalog path); chat stack **IMPLEMENTED** (slim) |
-| **Gaps** | Fragment utility measurement; conflict reports |
+| **Maturity** | **IMPLEMENTED** (catalog path); chat stack **IMPLEMENTED** (slim); H1 compaction commit + `ContextBudgetSnapshot` + expanded capsule **IMPLEMENTED**; H2 `InstructionManifestV1` **IMPLEMENTED** |
+| **Gaps** | Fragment utility measurement; conflict reports; full ChatEngine dual-write of every H2 budget event on all paths |
 | **Target** | Provenance-aware fragments + utility metrics |
 
 ### 3. Risk Router and Controller
@@ -136,10 +137,10 @@ Maturity labels: **IMPLEMENTED** | **PARTIAL** | **PROTOTYPE** | **PLANNED** | *
 | | |
 |--|--|
 | **Purpose** | Map tools to effect class and authorize by policy |
-| **Current** | `classifyToolEffect`, profiles, allowlists, thin `toolCapabilities` (bench) |
+| **Current** | `classifyToolEffect` + H4 `checkToolCapability` in `executeActionWithPolicy` (mode, protected paths, idempotency); profiles/allowlists; thin `toolCapabilities` (bench) |
 | **Owner** | Capability/policy layers before execute |
-| **Sources** | `executor/contracts.ts`, `agent/toolExecutor.ts`, `config/toolCapabilities.ts`, `sandbox.ts` |
-| **Maturity** | **PARTIAL** |
+| **Sources** | `executor/contracts.ts`, `agent/capabilityBroker.ts`, `agent/toolExecutor.ts`, `config/toolCapabilities.ts`, `sandbox.ts` |
+| **Maturity** | **PARTIAL** → core broker gate on Chat execute path **IMPLEMENTED**; full shell-side effect graph still residual |
 | **Gaps** | Broker not full effect graph for all tools |
 | **Target** | Narrow non-overlapping tools + capability tokens |
 
@@ -199,8 +200,8 @@ Maturity labels: **IMPLEMENTED** | **PARTIAL** | **PROTOTYPE** | **PLANNED** | *
 | **Current** | Chat: `thread_events.json` + `session-events.jsonl` + **`episode-events.jsonl`** dual-write; pipeline: one validated `PipelineEpisodeSink` per primary/manual run alongside the authoritative EvidenceBundle |
 | **Owner** | Evidence managers per surface |
 | **Sources** | `sessionEvents.ts`, `threadEventLog.ts`, `evidence/episodeStream.ts`, `evidence.ts`, `executor/contracts.ts` |
-| **Maturity** | **PARTIAL** — Chat and pipeline producers, validation/quarantine, hash-linked resume, phase/tool/completion events, and degraded persistence reporting are implemented; full-suite and replay promotion gates remain open |
-| **Gaps** | Consumers/TUI replay and cross-mode replay remain incomplete; phase instrumentation and offline integration still require release-gate verification; EvidenceBundle remains authoritative when episode persistence degrades |
+| **Maturity** | H6 replay consumers + **runtime controller golden** (`runLiveControllerGoldenEpisode` / `episodeReplay.ts`) **IMPLEMENTED**; Chat/pipeline producers, validation/quarantine, hash-linked resume remain baseline |
+| **Gaps** | Full TUI scrollback product UX residual; phase instrumentation and offline integration still require release-gate verification; EvidenceBundle remains authoritative when episode persistence degrades |
 | **Target** | Unified episode consumers and replay across Chat + pipeline |
 
 ### 10. Evaluation and Promotion System
@@ -211,7 +212,7 @@ Maturity labels: **IMPLEMENTED** | **PARTIAL** | **PROTOTYPE** | **PLANNED** | *
 | **Current** | Agent benchmarks, SWE-Pro campaign, false_complete labels |
 | **Owner** | Benchmark harness |
 | **Sources** | `services/agentBenchmark*.ts`, SWE-Pro scripts |
-| **Maturity** | **PARTIAL** / **UNPROVEN** for production reliability claims |
+| **Maturity** | H7 local substrate + offline harness-factor factorial **IMPLEMENTED** (`harnessEval.ts`); same-model Chat/Deep LLM factorial **DEFERRED** ([ADR-013](../adr/ADR-013-h7-model-path-experimental-deferral.md)); production model-path reliability claims remain **UNPROVEN** |
 | **Gaps** | Stronger repeated-run / infra methodology |
 | **Target** | Model-fixed harness eval + held-out promotion |
 
@@ -422,15 +423,19 @@ Changes to any of the following MUST trigger architecture review and updates to 
 
 ---
 
-## 6.12 Known gaps and roadmap (do not implement in architecture freeze)
+## 6.12 Known gaps and canonical hardening sequence
 
-Priority order (post identity + honesty scope + IV opt-in + Chat + pipeline episode producers + profile IV defaults + H13 UX docs):
+The subsystem maturity tables above remain the normative statement of current gaps. Implementation priority, dependencies, research reconciliation, and measurable exit gates live in the subordinate [Harness Hardening Roadmap v1](./HARNESS_HARDENING_ROADMAP_V1.md).
 
-1. Canonical unified episode stream producers (Chat + pipeline) — core producer slice implemented; overall protocol remains **PARTIAL** pending consumers/TUI replay, cross-mode replay, and release-gate verification.
-2. ~~Profile-default clean-room (high-assurance)~~ — **done** for `benchmark_container` / `babel_research` / workspace-manager profile; next: promotion policy for more profiles if desired.
-3. Model-fixed harness evaluation.
-4. Adversarial no-op and verifier-tamper suites.
-5. ~~Chat default-profile UX (H13 docs)~~ — **done** in `CHAT_MODE.md` / local-mode / CLI quickstart; residual: TUI discoverability.
+Current post-foundation priorities are:
+
+1. context integrity and durable compaction;
+2. a policy-bound, crash-recoverable live-session substrate;
+3. universal task/outcome contracts, transactional effects, and verifier promotion;
+4. replay consumers and an actual runtime-generated golden episode; and
+5. model-fixed, adversarial promotion evaluation.
+
+Do not create a second active implementation backlog for these gaps.
 
 ---
 
