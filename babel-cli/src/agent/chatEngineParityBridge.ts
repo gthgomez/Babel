@@ -43,7 +43,7 @@ import {
   recordToolStarted,
   recordToolTerminal,
   recordTurnEnded,
-  flushSessionEventLog,
+  flushSessionEventLogStrict,
   SESSION_EVENTS_FILENAME,
   serializeSessionEventLog,
   completedToolIdempotencyKeys,
@@ -74,6 +74,9 @@ import {
   persistLiveSessionSnapshot,
   projectFromDurableSession,
   loadLiveSessionAuthority,
+  CHECKPOINT_JOURNAL_FILENAME,
+  recoverCheckpointArtifacts,
+  writeCheckpointJournal,
   INSTRUCTION_MANIFEST_FILENAME,
   TASK_CONTRACT_FILENAME,
   LIVE_SESSION_SNAPSHOT_FILENAME,
@@ -235,7 +238,7 @@ export function paritySettleProposeTools(
     proposed += 1;
   }
   if (runDir) {
-    flushSessionEventsBestEffort(rt, runDir, 'settle-propose');
+    flushSessionEventsRequired(rt, runDir, 'settle-propose');
   }
   return { proposed, skipped };
 }
@@ -250,7 +253,7 @@ export function paritySettleInterruptedOnResume(
 ): number {
   const marked = markInterruptedToolsOnResume(rt.sessionEvents, reason);
   if (runDir && marked.length > 0) {
-    flushSessionEventsBestEffort(rt, runDir, 'settle-resume-interrupted');
+    flushSessionEventsRequired(rt, runDir, 'settle-resume-interrupted');
   }
   return marked.length;
 }
@@ -667,8 +670,9 @@ export async function finalizeParityTurn(
   status: string,
 ): Promise<void> {
   parityEndTurn(rt, outcome, status);
+  parityPersistLiveSession(rt, runDir);
   await persistThreadEventLog(runDir, rt.eventLog);
-  flushSessionEventsBestEffort(rt, runDir, `finalize:${outcome}`);
+  flushSessionEventsRequired(rt, runDir, `finalize:${outcome}`);
 }
 
 function reportEventLogPersistFailure(context: string, err: unknown): void {
@@ -680,22 +684,13 @@ function reportEventLogPersistFailure(context: string, err: unknown): void {
   }
 }
 
-function flushSessionEventsBestEffort(
+/** Flush primary session evidence before crossing an effect/terminal boundary. */
+function flushSessionEventsRequired(
   rt: ParityRuntime,
   runDir: string,
   context: string,
 ): void {
-  const result = flushSessionEventLog(runDir, rt.sessionEvents);
-  if (result.error) {
-    try {
-      console.error(
-        `[babel] session-events.jsonl persist failed (${context}): ${result.error}`,
-      );
-    } catch {
-      /* ignore console failures */
-    }
-  }
-  // Slice A: project session events → episode-events.jsonl (best-effort dual-write).
+  flushSessionEventLogStrict(runDir, rt.sessionEvents);
   flushEpisodeStreamBestEffort(rt, runDir, context);
 }
 
@@ -737,27 +732,26 @@ function flushEpisodeStreamBestEffort(
 
 /** H2: dual-write budget + project LiveSession + persist authority/snapshot. */
 function parityPersistLiveSession(rt: ParityRuntime, runDir: string): void {
-  try {
-    const turnsUsed = rt.sessionEvents.events.filter(
-      (e) => e.kind === 'user_submitted',
-    ).length;
-    dualWriteBudgetSnapshot(rt.sessionEvents, rt.turnId, {
-      turns_used: turnsUsed,
-      turns_remaining: null,
-    });
-    if (rt.liveAuthority) {
-      persistLiveSessionAuthority(runDir, rt.liveAuthority);
-    }
-    const live = projectFromDurableSession({
-      sessionLog: rt.sessionEvents,
-      threadLog: rt.eventLog,
-      ...(rt.liveAuthority ? { authority: rt.liveAuthority } : {}),
-    });
-    rt.liveSession = live;
-    persistLiveSessionSnapshot(runDir, live);
-  } catch {
-    /* never break finalize/checkpoint for projection failures */
+  // A compatibility runtime with no session events must not overwrite a
+  // previously durable projection with an empty one.
+  if (rt.sessionEvents.events.length === 0) return;
+  const turnsUsed = rt.sessionEvents.events.filter(
+    (e) => e.kind === 'user_submitted',
+  ).length;
+  dualWriteBudgetSnapshot(rt.sessionEvents, rt.turnId, {
+    turns_used: turnsUsed,
+    turns_remaining: null,
+  });
+  if (rt.liveAuthority) {
+    persistLiveSessionAuthority(runDir, rt.liveAuthority);
   }
+  const live = projectFromDurableSession({
+    sessionLog: rt.sessionEvents,
+    threadLog: rt.eventLog,
+    ...(rt.liveAuthority ? { authority: rt.liveAuthority } : {}),
+  });
+  rt.liveSession = live;
+  persistLiveSessionSnapshot(runDir, live);
 }
 
 /** Fire-and-forget finalize for sync call sites (streamDone/cancel/buildResult). */
@@ -772,7 +766,7 @@ export function finalizeParityTurnSync(
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure(`finalize:${outcome}`, err);
   });
-  flushSessionEventsBestEffort(rt, runDir, `finalize-sync:${outcome}`);
+  flushSessionEventsRequired(rt, runDir, `finalize-sync:${outcome}`);
 }
 
 /**
@@ -784,7 +778,7 @@ export function checkpointParityEventLog(rt: ParityRuntime, runDir: string): voi
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure('checkpoint', err);
   });
-  flushSessionEventsBestEffort(rt, runDir, 'checkpoint');
+  flushSessionEventsRequired(rt, runDir, 'checkpoint');
 }
 
 /**
@@ -841,6 +835,7 @@ export async function checkpointParityEventLogStrict(
   };
 
   try {
+    recoverCheckpointArtifacts(runDir);
     const turnsUsed = rt.sessionEvents.events.filter((event) => event.kind === 'user_submitted').length;
     dualWriteBudgetSnapshot(rt.sessionEvents, rt.turnId, {
       turns_used: turnsUsed,
@@ -888,6 +883,13 @@ export async function checkpointParityEventLogStrict(
     ];
 
     mkdirSync(runDir, { recursive: true });
+    writeCheckpointJournal(runDir, {
+      schema_version: 1,
+      batch_id: batchId,
+      status: 'prepared',
+      backups_ready: false,
+      targets: targets.map((target) => target.filename),
+    });
 
     // Step 2: Sibling .tmp file staging phase
     for (const t of targets) {
@@ -908,6 +910,13 @@ export async function checkpointParityEventLogStrict(
         bakPaths.push(null);
       }
     }
+    writeCheckpointJournal(runDir, {
+      schema_version: 1,
+      batch_id: batchId,
+      status: 'prepared',
+      backups_ready: true,
+      targets: targets.map((target) => target.filename),
+    });
 
     // Step 4: Fixed-order rename. injectCommitFailureAfter === i throws BEFORE rename of index i.
     // Do not mark receipt artifacts committed until the full batch succeeds (honest blocked receipts).
@@ -937,7 +946,15 @@ export async function checkpointParityEventLogStrict(
     }
 
     // Step 5: Post-commit state advance (success only) — then drop sidecars
+    writeCheckpointJournal(runDir, {
+      schema_version: 1,
+      batch_id: batchId,
+      status: 'committed',
+      backups_ready: true,
+      targets: targets.map((target) => target.filename),
+    });
     cleanupBatchSidecars();
+    unlinkQuiet(join(runDir, CHECKPOINT_JOURNAL_FILENAME));
     const maxSeq =
       rt.sessionEvents.events.length > 0
         ? Math.max(...rt.sessionEvents.events.map((e) => e.seq))
@@ -955,6 +972,7 @@ export async function checkpointParityEventLogStrict(
     return { status: 'committed', operation: 'checkpoint', runDir, artifacts };
   } catch (error) {
     cleanupBatchSidecars();
+    unlinkQuiet(join(runDir, CHECKPOINT_JOURNAL_FILENAME));
     restoreMemoryCursors();
     const message = error instanceof Error ? error.message : String(error);
     // Honest blocked receipt: never report partial committed child artifacts after rollback.

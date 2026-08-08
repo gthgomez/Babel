@@ -9,7 +9,7 @@ status: CANONICAL_ROADMAP
 roadmap_version: harness-hardening-v1
 architecture_version: harness-v1
 authority: implementation sequencing subordinate to HARNESS_ARCHITECTURE_V1.md
-last_verified: 2026-08-05
+last_verified: 2026-08-08
 baseline_commit: 7bef9c7
 ```
 
@@ -66,6 +66,24 @@ The following implementation packages are already part of the baseline and must 
 - fail-closed isolation-required profiles with explicit host-boundary escalation;
 - IndependentVerifier opt-in and high-assurance profile defaults; and
 - validated, hash-linked Chat and pipeline episode producers with observable degraded persistence.
+
+### Current remediation checkpoint (2026-08-08)
+
+The current hardening branch has implemented the core PR63 safety slice:
+
+- pre-effect session settlement now uses strict durable flushing;
+- tool interruption and retry state use canonical idempotency keys;
+- persisted budget dimensions and resume equivalence are retained and checked;
+- checkpoint artifacts have a startup recovery journal;
+- verifier receipts and workspace revision identity are persisted more strongly;
+- provider operation capabilities are explicit and routing rejects unsupported operations; and
+- the focused runtime suite is required in both Linux and Windows validation jobs.
+
+This is an implementation checkpoint, not completion of H1–H7. Full package
+tests, public hygiene gates, hard-kill checkpoint fixtures, and release review
+remain required. Portable workflow contract refinements remain a separate
+PR64 documentation batch and must pass their Phase 0 exit gates before any
+portable runtime adapter is built.
 
 ## 3. Research synthesis and evidence rules
 

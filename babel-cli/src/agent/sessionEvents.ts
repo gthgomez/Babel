@@ -12,6 +12,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
 
 export const SESSION_EVENT_SCHEMA_VERSION = 1 as const;
 export const SESSION_EVENTS_FILENAME = 'session-events.jsonl';
@@ -119,6 +120,8 @@ export type SessionEvent =
       command_preview: string;
       authoritative: boolean;
       exit_code?: number;
+      /** Durable revision-bound receipt used to reconstruct verifier state. */
+      receipt?: BoundChatVerifierReceipt;
     })
   | (SessionEventBase & {
       kind: 'gate_decision';
@@ -368,6 +371,7 @@ export function recordVerifierAttempt(
     command_preview: string;
     authoritative: boolean;
     exit_code?: number;
+    receipt?: BoundChatVerifierReceipt;
   },
 ): SessionEvent {
   return appendSessionEvent(log, {
@@ -376,6 +380,7 @@ export function recordVerifierAttempt(
     command_preview: input.command_preview.slice(0, 500),
     authoritative: input.authoritative,
     ...(input.exit_code !== undefined ? { exit_code: input.exit_code } : {}),
+    ...(input.receipt !== undefined ? { receipt: structuredClone(input.receipt) } : {}),
   });
 }
 
@@ -538,6 +543,10 @@ export function recordCompactionCreated(
       ? { preserved_tool_call_ids: [...input.preserved_tool_call_ids] }
       : {}),
     ...(input.content_preview !== undefined ? { content_preview: input.content_preview } : {}),
+    ...(input.strategy !== undefined ? { strategy: input.strategy } : {}),
+    ...(input.tokens_before !== undefined ? { tokens_before: input.tokens_before } : {}),
+    ...(input.tokens_after !== undefined ? { tokens_after: input.tokens_after } : {}),
+    ...(input.status !== undefined ? { status: input.status } : {}),
   });
 }
 
@@ -634,6 +643,21 @@ export function flushSessionEventLog(
     const msg = err instanceof Error ? err.message : String(err);
     return { path, wrote: 0, error: msg };
   }
+}
+
+/**
+ * Flush a required session boundary. Unlike the legacy best-effort helper,
+ * this throws when the durable write cannot be completed.
+ */
+export function flushSessionEventLogStrict(
+  runDir: string,
+  log: SessionEventLog,
+): { path: string; wrote: number } {
+  const result = flushSessionEventLog(runDir, log);
+  if (result.error) {
+    throw new Error(`session event persistence failed: ${result.error}`);
+  }
+  return result;
 }
 
 /** Full rewrite (tests / recovery); sets flushedThroughSeq to last event. */

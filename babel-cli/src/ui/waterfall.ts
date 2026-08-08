@@ -27,6 +27,7 @@ import { renderMarkdown, clearMdRenderCache } from './highlight.js';
 import { RawModeManager } from './rawMode.js';
 import { KeybindingManager } from './keybindings.js';
 import { FrameScheduler } from './frameScheduler.js';
+import { leaveThinking, type ThinkingExitReason } from './thinkingState.js';
 import { MarkdownAccumulator } from './markdownAccumulator.js';
 import { backgroundTaskRegistry } from '../services/backgroundTaskRegistry.js';
 import { renderBackgroundTaskOverlay } from './backgroundTaskOverlay.js';
@@ -1560,30 +1561,10 @@ export class ConversationalRenderer extends BaseRenderer {
 
   /** Leave the thinking state (on first answer chunk, tool call start, or turn finish/error).
    *  Always clears the thinking spinner line, then any _showingOverlayLines, before subsequent writes. */
-  private _leaveThinking(reason: 'stream' | 'tool' | 'end'): void {
-    if (this._state !== 'thinking') return;
-    // Explicit union for store typing — do not pass this._state (typed as string).
-    const next: 'streaming' | 'failed' = reason === 'end' ? 'failed' : 'streaming';
-    this._state = next;
-    this._store?.dispatch({ type: 'state:transition', to: next });
-
-    if (this.isTTY) {
-      // Always erase the thinking spinner line (even when no overlay rows exist).
-      safeStdoutWrite('\r\x1b[K');
-      if (this._showingOverlayLines > 0) {
-        for (let i = 0; i < this._showingOverlayLines; i++) {
-          safeStdoutWrite('\n\x1b[K');
-        }
-        safeStdoutWrite(`\x1b[${this._showingOverlayLines}A`);
-        this._showingOverlayLines = 0;
-      }
-    }
-
-    // Unregister permanent dirty — no more spinner ticks needed
-    const scheduler = FrameScheduler.getInstance();
-    scheduler.setComponentPermanentDirty('thinking-spinner', false);
-    this._unregisterTick?.();
-    this._unregisterTick = null;
+  private _leaveThinking(reason: ThinkingExitReason): void {
+    const result = leaveThinking({ state: this._state, reason, isTTY: this.isTTY === true, overlayLines: this._showingOverlayLines,
+      write: safeStdoutWrite, transition: (state) => { this._state = state; this._store?.dispatch({ type: 'state:transition', to: state }); }, unregisterTick: this._unregisterTick });
+    this._state = result.state; this._showingOverlayLines = result.overlayLines; this._unregisterTick = result.unregisterTick;
   }
 
   /** Record activity for stall detection (Fixes 2+7). Transitions state to

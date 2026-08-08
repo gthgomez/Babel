@@ -35,6 +35,8 @@ import {
   recordCompactionCreated,
   recordPolicyIntervened,
   recordModelFailover,
+  serializeSessionEventLog,
+  parseSessionEventLog,
   type SessionEventLog,
 } from './sessionEvents.js';
 
@@ -254,6 +256,107 @@ describe('H2 LiveSession projection + resume', () => {
     const session = projectLiveSession({ sessionLog: log });
     assert.strictEqual(mayBlindRetryInterrupted(session, 'idem-x'), false);
     assert.ok(session.tools.interrupted_idempotency_keys.includes('idem-x'));
+  });
+
+  it('projects interrupted effects in the idempotency-key domain', () => {
+    const log = createSessionEventLog('distinct-identities');
+    recordToolStarted(log, {
+      turn_id: 'turn-1',
+      tool_call_id: 'native-call-1',
+      tool_name: 'write_file',
+      idempotency_key: 'effect-key-1',
+    });
+    const session = projectLiveSession({ sessionLog: log });
+    assert.deepEqual(session.tools.interrupted_idempotency_keys, ['effect-key-1']);
+    assert.strictEqual(mayBlindRetryInterrupted(session, 'effect-key-1'), false);
+    assert.strictEqual(mayBlindRetryInterrupted(session, 'native-call-1'), true);
+  });
+
+  it('preserves persisted remaining budgets without restore ceilings', () => {
+    const log = createSessionEventLog('persisted-budgets');
+    recordBudgetSnapshot(log, 'turn-1', {
+      turns_used: 4,
+      turns_remaining: 6,
+      tokens_used: 800,
+      tokens_remaining: 1200,
+      repair_attempts_used: 2,
+      repair_attempts_remaining: 3,
+      infra_retries_used: 1,
+      infra_retries_remaining: 4,
+    });
+    const session = projectLiveSession({ sessionLog: log });
+    assert.deepEqual(session.budgets, {
+      turns_used: 4,
+      turns_remaining: 6,
+      tokens_used: 800,
+      tokens_remaining: 1200,
+      repair_attempts_used: 2,
+      repair_attempts_remaining: 3,
+      infra_retries_used: 1,
+      infra_retries_remaining: 4,
+    });
+  });
+
+  it('compares safety state completely without mutating inputs', () => {
+    const log = createSessionEventLog('comparator');
+    const a = projectLiveSession({ sessionLog: log });
+    const b = projectLiveSession({ sessionLog: log });
+    a.tools.completed_idempotency_keys = ['z', 'a'];
+    b.tools.completed_idempotency_keys = ['a', 'z'];
+    b.provider_name = 'different-provider';
+    b.budgets.tokens_remaining = 1;
+    b.tools.open_tool_call_ids = ['different-open-tool'];
+    const eq = liveSessionsEquivalentForResume(a, b);
+    assert.strictEqual(eq.ok, false);
+    assert.ok(eq.mismatches.includes('provider_name'));
+    assert.deepEqual(a.tools.completed_idempotency_keys, ['z', 'a']);
+  });
+
+  it('serializes all accepted compaction boundary fields', () => {
+    const log = createSessionEventLog('compaction-fields');
+    const event = recordCompactionCreated(log, 'turn-1', {
+      strategy: 'heuristic',
+      tokens_before: 100,
+      tokens_after: 40,
+      status: 'committed',
+    });
+    assert.equal(event.kind, 'compaction_created');
+    assert.equal((event as { strategy?: string }).strategy, 'heuristic');
+    assert.equal((event as { tokens_before?: number }).tokens_before, 100);
+    assert.equal((event as { tokens_after?: number }).tokens_after, 40);
+    assert.equal((event as { status?: string }).status, 'committed');
+  });
+
+  it('round-trips a revision-bound verifier receipt in durable session evidence', () => {
+    const log = createSessionEventLog('verifier-receipt');
+    recordVerifierAttempt(log, {
+      turn_id: 'turn-1',
+      command_preview: 'npm test',
+      authoritative: true,
+      exit_code: 0,
+      receipt: {
+        command: 'npm test',
+        exit_code: 0,
+        exitCode: 0,
+        summary: 'ok',
+        receiptId: 'receipt-1',
+        capturedAt: 1,
+        authority: true,
+        authoritySource: 'built_in_runner',
+        verifierId: 'npm-test',
+        boundRevision: {
+          gitCommitHash: null,
+          compositeTreeHash: 'revision-1',
+          fileHashes: {},
+          capturedAt: 1,
+        },
+      },
+    });
+    const roundTrip = parseSessionEventLog(serializeSessionEventLog(log));
+    const event = roundTrip.events.find((candidate) => candidate.kind === 'verifier_attempt');
+    assert.ok(event && event.kind === 'verifier_attempt');
+    assert.equal(event.receipt?.receiptId, 'receipt-1');
+    assert.equal(event.receipt?.boundRevision?.compositeTreeHash, 'revision-1');
   });
 
   it('terminal reconstructs from durable evidence only', () => {

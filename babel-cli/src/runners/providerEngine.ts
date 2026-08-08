@@ -15,7 +15,11 @@ import { GroqApiRunner } from './groqApi.js'
 import { OllamaApiRunner } from './ollamaApi.js'
 import { OpenAiApiRunner } from './openAiApi.js'
 import { OpenRouterApiRunner } from './openRouterApi.js'
-import type { ProviderId } from './providerRegistry.js'
+import {
+  providerSupportsOperation,
+  type ProviderId,
+  type ProviderOperation,
+} from './providerRegistry.js'
 
 interface RawLlmRunner extends LlmRunner {
   executeRaw?: (
@@ -139,6 +143,10 @@ export class ProviderEngine implements LlmRunner {
 
   getLastInvocationMetadata(): RunnerInvocationMetadata | null {
     return this.adapter.getLastInvocationMetadata?.() ?? null
+  }
+
+  supports(operation: ProviderOperation): boolean {
+    return providerSupportsOperation(this.provider, operation)
   }
 }
 

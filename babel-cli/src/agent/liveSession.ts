@@ -11,7 +11,10 @@ import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import type { InstructionManifestV1 } from './instructionManifest.js';
 import type { SessionEvent, SessionEventLog } from './sessionEvents.js';
 import type { ThreadEvent, ThreadEventLog } from './threadEventLog.js';
-import { completedToolIdempotencyKeys } from './sessionEvents.js';
+import {
+  completedToolIdempotencyKeys,
+  interruptedToolIdempotencyKeys,
+} from './sessionEvents.js';
 
 export const LIVE_SESSION_VERSION = 1 as const;
 
@@ -168,8 +171,15 @@ export function projectLiveSession(input: ProjectLiveSessionInput): LiveSessionV
   }
 
   const open = new Set<string>();
+  const openIdempotencyKeys = new Map<string, string>();
   const completed = new Set<string>();
   const interrupted = new Set<string>();
+  const persistedRemaining = {
+    turns: false,
+    tokens: false,
+    repair_attempts: false,
+    infra_retries: false,
+  };
 
   for (const e of events) {
     state.last_seq = e.seq;
@@ -196,20 +206,24 @@ export function projectLiveSession(input: ProjectLiveSessionInput): LiveSessionV
         break;
       case 'tool_started':
         open.add(e.tool_call_id);
+        openIdempotencyKeys.set(e.tool_call_id, e.idempotency_key);
         state.phase = 'effect_running';
         state.tools.last_tool_name = e.tool_name;
         break;
       case 'tool_completed':
         open.delete(e.tool_call_id);
+        openIdempotencyKeys.delete(e.tool_call_id);
         completed.add(e.idempotency_key);
         state.phase = 'effect_complete';
         break;
       case 'tool_failed':
         open.delete(e.tool_call_id);
+        openIdempotencyKeys.delete(e.tool_call_id);
         state.phase = 'effect_complete';
         break;
       case 'tool_cancelled':
         open.delete(e.tool_call_id);
+        openIdempotencyKeys.delete(e.tool_call_id);
         interrupted.add(e.idempotency_key);
         state.phase = 'effect_complete';
         break;
@@ -253,15 +267,19 @@ export function projectLiveSession(input: ProjectLiveSessionInput): LiveSessionV
         }
         if (e.turns_remaining !== undefined) {
           state.budgets.turns_remaining = e.turns_remaining;
+          persistedRemaining.turns = true;
         }
         if (e.tokens_remaining !== undefined) {
           state.budgets.tokens_remaining = e.tokens_remaining;
+          persistedRemaining.tokens = true;
         }
         if (e.repair_attempts_remaining !== undefined) {
           state.budgets.repair_attempts_remaining = e.repair_attempts_remaining;
+          persistedRemaining.repair_attempts = true;
         }
         if (e.infra_retries_remaining !== undefined) {
           state.budgets.infra_retries_remaining = e.infra_retries_remaining;
+          persistedRemaining.infra_retries = true;
         }
         break;
       case 'approval_decision':
@@ -318,16 +336,24 @@ export function projectLiveSession(input: ProjectLiveSessionInput): LiveSessionV
       : {}),
   };
 
-  state.budgets.turns_remaining = rem(state.budgets.turns_used, ceilings.turns);
-  state.budgets.tokens_remaining = rem(state.budgets.tokens_used, ceilings.tokens);
-  state.budgets.repair_attempts_remaining = rem(
-    state.budgets.repair_attempts_used,
-    ceilings.repair_attempts,
-  );
-  state.budgets.infra_retries_remaining = rem(
-    state.budgets.infra_retries_used,
-    ceilings.infra_retries,
-  );
+  if (!persistedRemaining.turns) {
+    state.budgets.turns_remaining = rem(state.budgets.turns_used, ceilings.turns);
+  }
+  if (!persistedRemaining.tokens) {
+    state.budgets.tokens_remaining = rem(state.budgets.tokens_used, ceilings.tokens);
+  }
+  if (!persistedRemaining.repair_attempts) {
+    state.budgets.repair_attempts_remaining = rem(
+      state.budgets.repair_attempts_used,
+      ceilings.repair_attempts,
+    );
+  }
+  if (!persistedRemaining.infra_retries) {
+    state.budgets.infra_retries_remaining = rem(
+      state.budgets.infra_retries_used,
+      ceilings.infra_retries,
+    );
+  }
 
   // Thread log: latest compaction / repo identity for revision
   if (input.threadLog) {
@@ -339,9 +365,13 @@ export function projectLiveSession(input: ProjectLiveSessionInput): LiveSessionV
   }
 
   // Open tools without terminal → interrupted projection (not success)
+  for (const key of interruptedToolIdempotencyKeys(input.sessionLog)) {
+    interrupted.add(key);
+  }
   for (const id of open) {
-    if (!interrupted.has(id) && !completed.has(id)) {
-      interrupted.add(id);
+    const key = openIdempotencyKeys.get(id);
+    if (key && !interrupted.has(key) && !completed.has(key)) {
+      interrupted.add(key);
     }
   }
   state.tools.interrupted_idempotency_keys = [
@@ -395,27 +425,44 @@ export function liveSessionsEquivalentForResume(
   a: LiveSessionV1,
   b: LiveSessionV1,
 ): { ok: boolean; mismatches: string[] } {
+  const normalize = (session: LiveSessionV1): Record<string, unknown> => ({
+    schema_version: session.schema_version,
+    session_id: session.session_id,
+    phase: session.phase,
+    active_task: session.active_task,
+    task_class: session.task_class,
+    turn_id: session.turn_id,
+    instruction_manifest_hash: session.instruction_manifest_hash,
+    provider_model: session.provider_model,
+    provider_name: session.provider_name,
+    workspace_revision: session.workspace_revision,
+    budgets: { ...session.budgets },
+    tools: {
+      open_tool_call_ids: [...session.tools.open_tool_call_ids].sort(),
+      completed_idempotency_keys: [...session.tools.completed_idempotency_keys].sort(),
+      interrupted_idempotency_keys: [...session.tools.interrupted_idempotency_keys].sort(),
+      last_tool_name: session.tools.last_tool_name,
+    },
+    verifier: { ...session.verifier },
+    mutation: {
+      ...session.mutation,
+      last_paths: [...session.mutation.last_paths].sort(),
+    },
+    terminal: session.terminal
+      ? { ...session.terminal, evidence_refs: [...session.terminal.evidence_refs].sort() }
+      : undefined,
+    compaction_count: session.compaction_count,
+    policy_intervention_count: session.policy_intervention_count,
+    last_seq: session.last_seq,
+    evidence_event_ids: [...session.evidence_event_ids],
+    degraded: session.degraded,
+    degraded_reasons: [...session.degraded_reasons].sort(),
+  });
+  const left = normalize(a);
+  const right = normalize(b);
   const mismatches: string[] = [];
-  const keys: Array<keyof LiveSessionV1> = [
-    'active_task',
-    'instruction_manifest_hash',
-    'provider_model',
-    'workspace_revision',
-  ];
-  for (const k of keys) {
-    if (a[k] !== b[k]) mismatches.push(String(k));
-  }
-  if (
-    JSON.stringify(a.tools.completed_idempotency_keys.sort()) !==
-    JSON.stringify(b.tools.completed_idempotency_keys.sort())
-  ) {
-    mismatches.push('tools.completed_idempotency_keys');
-  }
-  if (a.budgets.turns_remaining !== b.budgets.turns_remaining) {
-    mismatches.push('budgets.turns_remaining');
-  }
-  if (a.terminal?.outcome !== b.terminal?.outcome) {
-    mismatches.push('terminal.outcome');
+  for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+    if (JSON.stringify(left[key]) !== JSON.stringify(right[key])) mismatches.push(key);
   }
   return { ok: mismatches.length === 0, mismatches };
 }

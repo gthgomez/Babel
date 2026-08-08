@@ -11,7 +11,13 @@
  */
 
 import { createProviderRunner, type ProviderEngine } from '../runners/providerEngine.js';
-import { isProviderId, type ProviderId } from '../runners/providerRegistry.js';
+import {
+  isProviderId,
+  providerSupportsOperation,
+  type ProviderId,
+  type ProviderOperation,
+} from '../runners/providerRegistry.js';
+import { getProviderCredentialStatus } from '../runners/credentialHub.js';
 import { loadModelPolicyConfig } from '../modelPolicy.js';
 import type { ModelPolicyModelEntry } from '../modelPolicy.js';
 
@@ -32,6 +38,8 @@ export interface ModelRouterOptions {
    * Defaults to the policy's cheapest enabled model.
    */
   defaultBackendKey?: string;
+  /** Operation required from automatically selected providers. */
+  requiredOperation?: ProviderOperation;
 }
 
 // ─── ModelRouter ────────────────────────────────────────────────────────────
@@ -40,9 +48,11 @@ export class ModelRouter {
   private readonly routes = new Map<string, ModelRoute>();
   private readonly defaultBackendKey: string;
   private readonly modelConfig: ReturnType<typeof loadModelPolicyConfig>;
+  private readonly requiredOperation: ProviderOperation;
 
   constructor(options: ModelRouterOptions = {}) {
     this.modelConfig = loadModelPolicyConfig();
+    this.requiredOperation = options.requiredOperation ?? 'structured';
     this.defaultBackendKey = options.defaultBackendKey ?? this.resolveDefaultBackendKey();
   }
 
@@ -102,6 +112,11 @@ export class ModelRouter {
       throw new Error(`[ModelRouter] Unknown provider: ${backend.provider}`);
     }
     const provider = backend.provider;
+    if (!providerSupportsOperation(provider, this.requiredOperation)) {
+      throw new Error(
+        `[ModelRouter] Provider ${provider} does not support ${this.requiredOperation}`,
+      );
+    }
     const modelId = backend.model_id;
     const runner = createProviderRunner({ provider, modelId });
 
@@ -115,6 +130,14 @@ export class ModelRouter {
 
     const entries = Object.entries(models)
       .filter(([, m]) => m.enabled !== false && m.expensive !== true)
+      .filter(([, m]) =>
+        isProviderId(m.provider) &&
+        providerSupportsOperation(m.provider, this.requiredOperation),
+      )
+      .filter(([, m]) =>
+        isProviderId(m.provider) &&
+        getProviderCredentialStatus(m.provider, process.env).configured,
+      )
       .map(([key, m]) => ({
         key,
         cost: m.estimated_cost_per_1m_output,

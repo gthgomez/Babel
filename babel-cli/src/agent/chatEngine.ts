@@ -121,7 +121,6 @@ import {
 } from './chatEngineServices.js';
 import { createExecutorKernel, type ExecutorKernel } from '../executor/kernel.js';
 import {
-  bindChatVerifierReceipt,
   evaluateChatCompletionProof,
   mutationPathsFromSessionEvents,
   refreshChatVerifierReceiptStalenessSync,
@@ -162,7 +161,6 @@ import {
   recordModelFailover,
   recordMutationBatch,
   recordProgressRecovery,
-  recordVerifierAttempt,
   type SessionEventLog,
 } from './sessionEvents.js';
 import { buildRepoMapPreamble } from './repoMapPreamble.js';
@@ -279,12 +277,11 @@ import {
 import { isFatalWindowsProcessExit, logPlatformUnusableResult } from './verifierFailFast.js';
 import { RepetitionDetector } from './repetitionDetector.js';
 import { captureThought } from './thoughtCapture.js';
-import { resolveHonestyRequiredVerifiers } from './completionGatePolicy.js';
 import {
   prepareKernelVerifierInput,
-  captureChatVerifierReceipt,
+  captureAndRecordVerifierReceipt,
   resolveEngineRequiredVerifiers,
-  upsertVerifierReceipt,
+  restorePersistedVerifierEvidence,
 } from './chatEngineVerifierAdapter.js';
 import {
   beginUserSubmission,
@@ -2681,7 +2678,9 @@ export class ChatEngine {
   /** W2.2+H2: restore session events, settle interrupted tools, reload authority, reproject LiveSession. */
   restoreSessionEvents(log: SessionEventLog, options?: { runDir?: string }): number {
     this.clearVerifierEvidenceState();
-    return restoreEngineSessionEvents({ parity: this.parity, log, runDir: options?.runDir ?? this.engineRunDir });
+    const interrupted = restoreEngineSessionEvents({ parity: this.parity, log, runDir: options?.runDir ?? this.engineRunDir });
+    this.restorePersistedVerifierEvidence(log);
+    return interrupted;
   }
   restoreSessionEventsFromDir(runDir?: string): number {
     const loaded = loadSessionEventLogFromDir(runDir ?? this.engineRunDir);
@@ -2691,6 +2690,8 @@ export class ChatEngine {
   public getResolvedRequiredVerifiers(): string[] { return resolveEngineRequiredVerifiers({ task: this.options.task, projectTestCommands: this.discoveredTestCommands.map((e) => e.command), requiredVerifierCommands: this.options.requiredVerifierCommands ?? null }); }
 
   private clearVerifierEvidenceState(): void { this.executedVerifierLedger = []; this.lastVerifierReceipt = null; this.verifierReceiptCache.clear(); this.platformUnusableVerifiers.clear(); this.verifierDependencyHashes.clear(); }
+
+  private restorePersistedVerifierEvidence(log: SessionEventLog): void { this.lastVerifierReceipt = restorePersistedVerifierEvidence(log, this.executedVerifierLedger); }
 
   /** Build the single canonical verifier input shared by every completion gate. */
   private buildVerifierInput(): ReturnType<typeof prepareKernelVerifierInput> & { requiredVerifierCommands: string[] } { return { ...prepareKernelVerifierInput(this.lastVerifierReceipt, this.executedVerifierLedger), requiredVerifierCommands: this.getResolvedRequiredVerifiers() }; }
@@ -3084,7 +3085,7 @@ export class ChatEngine {
     action: ChatToolAction,
     toolContext: ToolContext,
     callbacks: ChatCallbacks,
-    meta: { index: number; subAgentCounter: number },
+    meta: { index: number; subAgentCounter: number; idempotencyKey?: string },
   ): Promise<{ index: number; observation: string }> {
     const tool = chatActionToolName(action);
     const target = chatActionTarget(action);
@@ -3711,6 +3712,10 @@ export class ChatEngine {
                 ? 'deep'
                 : 'chat',
           completedIdempotencyKeys: this.getLiveSession().tools.completed_idempotency_keys,
+          idempotencyKey:
+            meta.idempotencyKey ??
+            this._streamNativeToolCallIds[meta.index] ??
+            `tool_call_${this._turnIndex}_${meta.index}`,
           ...(this.parity.liveAuthority?.taskContract.contract_id
             ? { taskId: this.parity.liveAuthority.taskContract.contract_id }
             : {}),
@@ -3831,21 +3836,14 @@ export class ChatEngine {
           if (isFatalWindowsProcessExit(lastResult.exit_code) && target) {
             this.platformUnusableVerifiers.add(target);
           }
-          const receipt = await captureChatVerifierReceipt({ projectRoot: this.options.projectRoot, command: target, exitCode: lastResult.exit_code, summary: (lastResult.stdout || '').slice(0, 200), mutationPaths: mutationPathsFromSessionEvents(this.parity.sessionEvents.events) });
+          const receipt = await captureAndRecordVerifierReceipt({
+            projectRoot: this.options.projectRoot, command: target, exitCode: lastResult.exit_code,
+            summary: (lastResult.stdout || '').slice(0, 200), mutationPaths: mutationPathsFromSessionEvents(this.parity.sessionEvents.events),
+            sessionEvents: this.parity.sessionEvents, turnId: String(this.parity.turnId ?? this._turnIndex),
+            ledger: this.executedVerifierLedger, cache: this.verifierReceiptCache, writeCount: this.writeCount,
+          });
           if (receipt) {
             this.lastVerifierReceipt = receipt;
-            upsertVerifierReceipt(this.executedVerifierLedger, receipt);
-            recordVerifierAttempt(this.parity.sessionEvents, {
-              turn_id: String(this.parity.turnId ?? this._turnIndex),
-              command_preview: target,
-              authoritative: true,
-              exit_code: lastResult.exit_code,
-            });
-            // R8: cache identical verifier runs until an intervening write.
-            this.verifierReceiptCache.set(target, {
-              receipt,
-              writeCountAtCache: this.writeCount,
-            });
           } else if (lastResult.exit_code === 0 && !confirmedShellMutation) {
             invalidateVerifierLedger(this as never, 'non-verifier shell command executed');
           }

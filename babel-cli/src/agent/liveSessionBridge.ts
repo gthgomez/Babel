@@ -5,7 +5,16 @@
  * competing with sessionEvents or threadEventLog as the durable event source.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import {
@@ -41,6 +50,85 @@ import type { BabelMode } from '../executor/contracts.js';
 export const INSTRUCTION_MANIFEST_FILENAME = 'instruction-manifest.json';
 export const TASK_CONTRACT_FILENAME = 'task-contract.json';
 export const LIVE_SESSION_SNAPSHOT_FILENAME = 'live-session-snapshot.json';
+export const CHECKPOINT_JOURNAL_FILENAME = 'live-session-checkpoint.journal.json';
+
+export interface CheckpointJournal {
+  schema_version: 1;
+  batch_id: string;
+  status: 'prepared' | 'committed';
+  backups_ready: boolean;
+  targets: string[];
+}
+
+export function writeCheckpointJournal(
+  runDir: string,
+  journal: CheckpointJournal,
+): void {
+  writeFileSync(
+    join(runDir, CHECKPOINT_JOURNAL_FILENAME),
+    JSON.stringify(journal, null, 2),
+    'utf-8',
+  );
+}
+
+/** Recover an interrupted multi-artifact checkpoint before reading session state. */
+export function recoverCheckpointArtifacts(runDir: string): void {
+  const journalPath = join(runDir, CHECKPOINT_JOURNAL_FILENAME);
+  if (!existsSync(journalPath)) return;
+  let journal: CheckpointJournal;
+  try {
+    journal = JSON.parse(readFileSync(journalPath, 'utf-8')) as CheckpointJournal;
+  } catch (error) {
+    throw new LiveSessionAuthorityError(
+      'CHECKPOINT_JOURNAL_INVALID',
+      `Checkpoint journal is not valid JSON in ${runDir}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (
+    journal.schema_version !== 1 ||
+    !journal.batch_id ||
+    !Array.isArray(journal.targets) ||
+    journal.targets.length === 0 ||
+    new Set(journal.targets).size !== journal.targets.length ||
+    journal.targets.some(
+      (filename) =>
+        typeof filename !== 'string' ||
+        filename.length === 0 ||
+        filename === '.' ||
+        filename === '..' ||
+        filename.includes('/') ||
+        filename.includes('\\') ||
+        filename.includes(':'),
+    )
+  ) {
+    throw new LiveSessionAuthorityError(
+      'CHECKPOINT_JOURNAL_INVALID',
+      `Checkpoint journal is invalid in ${runDir}`,
+    );
+  }
+  const remove = (path: string): void => {
+    try {
+      if (existsSync(path)) unlinkSync(path);
+    } catch (error) {
+      throw new LiveSessionAuthorityError(
+        'CHECKPOINT_RECOVERY_FAILED',
+        `Unable to remove checkpoint sidecar ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  };
+  for (const filename of journal.targets) {
+    const target = join(runDir, filename);
+    const tmp = `${target}.${journal.batch_id}.tmp`;
+    const bak = `${target}.${journal.batch_id}.bak`;
+    if (journal.status === 'prepared' && journal.backups_ready) {
+      if (existsSync(bak)) copyFileSync(bak, target);
+      else if (!existsSync(tmp) && existsSync(target)) remove(target);
+    }
+    remove(tmp);
+    remove(bak);
+  }
+  remove(journalPath);
+}
 
 export interface LiveSessionAuthority {
   instructionManifest: InstructionManifestV1;
@@ -311,7 +399,13 @@ export function resumeEquivalenceFromDisk(runDir: string): {
   if (!sessionLog) {
     return { ok: false, mismatches: ['missing_session_events'], live: null };
   }
-  const authority = loadLiveSessionAuthority(runDir);
+  let authority: LiveSessionAuthority;
+  try {
+    authority = loadLiveSessionAuthorityStrict(runDir);
+  } catch (error) {
+    const code = error instanceof LiveSessionAuthorityError ? error.code : 'LIVE_AUTHORITY_INVALID';
+    return { ok: false, mismatches: [`authority:${code}`], live: null };
+  }
   let threadLog: ThreadEventLog | undefined;
   try {
     threadLog = loadThreadEventLogFromDir(runDir) ?? undefined;
@@ -329,7 +423,15 @@ export function resumeEquivalenceFromDisk(runDir: string): {
     authority,
   });
   const eq = liveSessionsEquivalentForResume(a, b);
-  return { ok: eq.ok, mismatches: eq.mismatches, live: a };
+  const persisted = loadLiveSessionSnapshot(runDir);
+  const snapshotEq = persisted
+    ? liveSessionsEquivalentForResume(a, persisted)
+    : { ok: true, mismatches: [] };
+  const mismatches = [
+    ...eq.mismatches.map((mismatch) => `projection:${mismatch}`),
+    ...snapshotEq.mismatches.map((mismatch) => `snapshot:${mismatch}`),
+  ];
+  return { ok: mismatches.length === 0, mismatches, live: a };
 }
 
 export {

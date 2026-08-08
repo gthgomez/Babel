@@ -6,7 +6,7 @@
 
 import * as assert from 'node:assert';
 import { describe, it, before, after } from 'node:test';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ChatEngine } from './chatEngine.js';
@@ -22,6 +22,7 @@ import {
   recordCompactionCreated,
   recordPolicyIntervened,
   flushSessionEventLog,
+  flushSessionEventLogStrict,
   serializeSessionEventLog,
   parseSessionEventLog,
   SESSION_EVENTS_FILENAME,
@@ -46,7 +47,13 @@ import {
   sliceSessionAtBoundary,
   type CrashBoundary,
 } from './liveSession.js';
-import { finalizeParityTurnSync, checkpointParityEventLog } from './chatEngineParityBridge.js';
+import {
+  createParityRuntime,
+  parityOnUserTurn,
+  paritySettleProposeTools,
+  finalizeParityTurnSync,
+  checkpointParityEventLog,
+} from './chatEngineParityBridge.js';
 import { withAcceptanceCriteria } from './taskContract.js';
 import {
   buildLiveGoldenEpisode,
@@ -230,6 +237,26 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
     assert.ok(existsSync(join(runDir, LIVE_SESSION_SNAPSHOT_FILENAME)));
     assert.ok(rt.liveSession, 'liveSession projected on checkpoint');
     assert.strictEqual(rt.liveSession!.active_task, 'checkpoint task');
+  });
+
+  it('required session flush blocks an effect boundary on persistence failure', () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-session-flush-'));
+    const invalidRunDir = join(root, 'run-file');
+    writeFileSync(invalidRunDir, 'not a directory');
+    const rt = createParityRuntime('flush-failure');
+    parityOnUserTurn(rt, {
+      task: 'flush boundary',
+      model: 'test-model',
+      provider: 'test-provider',
+      projectRoot: root,
+    });
+    assert.throws(
+      () => paritySettleProposeTools(rt, [{ id: 'call-1', name: 'write_file' }], invalidRunDir),
+      /session event persistence failed/,
+    );
+    assert.equal(existsSync(join(invalidRunDir, SESSION_EVENTS_FILENAME)), false);
+    assert.throws(() => flushSessionEventLogStrict(invalidRunDir, rt.sessionEvents));
+    rmSync(root, { recursive: true, force: true });
   });
 
   it('disk resume equivalence of projected LiveSession', () => {

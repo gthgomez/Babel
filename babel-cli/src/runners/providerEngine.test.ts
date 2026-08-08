@@ -54,3 +54,18 @@ test('ProviderEngine maps shared controls into Gemini-specific generationConfig'
   assert.match(url, /gemini-test-model:generateContent$/)
   assert.deepEqual(body['generationConfig'], { temperature: 0.5, maxOutputTokens: 654 })
 })
+
+test('ProviderEngine exposes operation capabilities before invocation', () => {
+  const native = createProviderRunner({
+    provider: 'deepseek',
+    modelId: 'deepseek-v4-flash',
+    explicitCredential: 'sk-synthetic-deepseek-key',
+  })
+  const structuredOnly = createProviderRunner({
+    provider: 'openai',
+    modelId: 'openai-test-model',
+    explicitCredential: 'synthetic-openai-key',
+  })
+  assert.equal(native.supports('native_tool_stream'), true)
+  assert.equal(structuredOnly.supports('native_tool_stream'), false)
+})

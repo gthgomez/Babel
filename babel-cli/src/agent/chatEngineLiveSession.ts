@@ -13,6 +13,7 @@ import {
   loadLiveSessionAuthorityStrict,
   projectFromDurableSession,
   persistLiveSessionSnapshot,
+  recoverCheckpointArtifacts,
   canMutateWithIdempotencyKey,
 } from './liveSessionBridge.js';
 import { paritySettleInterruptedOnResume } from './chatEngineParityBridge.js';
@@ -79,6 +80,7 @@ export function restoreEngineSessionEvents(input: {
   log: SessionEventLog;
   runDir: string;
 }): number {
+  recoverCheckpointArtifacts(input.runDir);
   input.parity.sessionEvents = input.log;
   const interrupted = paritySettleInterruptedOnResume(input.parity, input.runDir);
   const authority = loadLiveSessionAuthorityStrict(input.runDir);

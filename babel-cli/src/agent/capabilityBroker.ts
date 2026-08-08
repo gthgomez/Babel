@@ -48,19 +48,44 @@ export function captureWorkspaceRevisionIdentity(projectRoot: string): Workspace
       timeout: 5000,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
-    const status = spawnSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], {
-      cwd: projectRoot,
-      encoding: 'utf-8',
-      timeout: 5000,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    if (head.status === 0 && status.status === 0) {
+    const files = spawnSync(
+      'git',
+      ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+      {
+        cwd: projectRoot,
+        encoding: 'utf-8',
+        timeout: 5000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    )
+    if (head.status === 0 && files.status === 0) {
       const gitCommitHash = String(head.stdout ?? '').trim() || null
-      const state = `${gitCommitHash ?? ''}\n${String(status.stdout ?? '')}`
+      const fileHashes: Record<string, string> = {}
+      const paths = String(files.stdout ?? '').split('\0').filter(Boolean)
+      for (const rel of paths) {
+        if (Object.keys(fileHashes).length >= 5000) break
+        try {
+          const absolute = join(projectRoot, rel)
+          const stat = statSync(absolute)
+          if (!stat.isFile()) continue
+          fileHashes[rel.replaceAll('\\', '/')] = createHash('sha256')
+            .update(readFileSync(absolute))
+            .update(String(stat.mode))
+            .digest('hex')
+        } catch {
+          // A concurrently changed file is represented by its absence.
+        }
+      }
+      const state = [
+        gitCommitHash ?? '',
+        ...Object.entries(fileHashes)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([path, hash]) => `${path}:${hash}`),
+      ].join('\n')
       return {
         gitCommitHash,
         compositeTreeHash: createHash('sha256').update(state).digest('hex').slice(0, 32),
-        fileHashes: {},
+        fileHashes,
         capturedAt,
       }
     }

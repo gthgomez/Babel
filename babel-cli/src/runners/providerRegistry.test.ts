@@ -58,4 +58,9 @@ describe('provider credential hub', () => {
     )
     assert.equal(resolveProviderCredential('ollama', { env: {} }), null)
   })
+
+  it('declares operation capabilities independently of credentials', () => {
+    assert.equal(getProviderSpec('deepseek').operations.includes('native_tool_stream'), true)
+    assert.equal(getProviderSpec('openai').operations.includes('native_tool_stream'), false)
+  })
 })

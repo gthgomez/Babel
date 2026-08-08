@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import {
   INSTRUCTION_MANIFEST_FILENAME,
+  CHECKPOINT_JOURNAL_FILENAME,
   LiveSessionAuthorityError,
   TASK_CONTRACT_FILENAME,
   loadLiveSessionAuthorityStrict,
   persistLiveSessionAuthority,
   resolveLiveSessionAuthority,
+  recoverCheckpointArtifacts,
 } from './liveSessionBridge.js'
 
 test('strict authority load distinguishes missing, corrupt, and tampered artifacts', () => {
@@ -189,3 +191,96 @@ test('checkpointParityEventLogStrict atomic commit and failure recovery', async 
   }
 })
 
+test('checkpoint recovery restores the last coherent generation after process interruption', () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'babel-checkpoint-recovery-'))
+  try {
+    const target = 'live-session-snapshot.json'
+    const batchId = 'batch-recovery'
+    writeFileSync(join(runDir, target), 'new-generation', 'utf-8')
+    writeFileSync(join(runDir, `${target}.${batchId}.bak`), 'old-generation', 'utf-8')
+    writeFileSync(join(runDir, `${target}.${batchId}.tmp`), 'staged-generation', 'utf-8')
+    writeFileSync(
+      join(runDir, CHECKPOINT_JOURNAL_FILENAME),
+      JSON.stringify({
+        schema_version: 1,
+        batch_id: batchId,
+        status: 'prepared',
+        backups_ready: true,
+        targets: [target],
+      }),
+      'utf-8',
+    )
+
+    recoverCheckpointArtifacts(runDir)
+
+    assert.equal(readFileSync(join(runDir, target), 'utf-8'), 'old-generation')
+    assert.equal(existsSync(join(runDir, CHECKPOINT_JOURNAL_FILENAME)), false)
+    assert.equal(existsSync(join(runDir, `${target}.${batchId}.bak`)), false)
+    assert.equal(existsSync(join(runDir, `${target}.${batchId}.tmp`)), false)
+  } finally {
+    rmSync(runDir, { recursive: true, force: true })
+  }
+})
+
+test('checkpoint recovery restores every rename boundary and rejects unsafe journals', () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'babel-checkpoint-boundaries-'))
+  const targets = [
+    INSTRUCTION_MANIFEST_FILENAME,
+    TASK_CONTRACT_FILENAME,
+    'live-session-snapshot.json',
+    'thread_events.json',
+    'session-events.jsonl',
+  ]
+  try {
+    for (let interruptedAfter = 0; interruptedAfter < targets.length; interruptedAfter += 1) {
+      const batchId = `batch-${interruptedAfter}`
+      for (let index = 0; index < targets.length; index += 1) {
+        const target = join(runDir, targets[index]!)
+        writeFileSync(target, `old-${index}`, 'utf-8')
+        writeFileSync(`${target}.${batchId}.bak`, `old-${index}`, 'utf-8')
+        if (index > interruptedAfter) {
+          writeFileSync(`${target}.${batchId}.tmp`, `new-${index}`, 'utf-8')
+        } else {
+          writeFileSync(target, `new-${index}`, 'utf-8')
+        }
+      }
+      writeFileSync(
+        join(runDir, CHECKPOINT_JOURNAL_FILENAME),
+        JSON.stringify({
+          schema_version: 1,
+          batch_id: batchId,
+          status: 'prepared',
+          backups_ready: true,
+          targets,
+        }),
+        'utf-8',
+      )
+
+      recoverCheckpointArtifacts(runDir)
+
+      for (let index = 0; index < targets.length; index += 1) {
+        assert.equal(readFileSync(join(runDir, targets[index]!), 'utf-8'), `old-${index}`)
+      }
+      assert.equal(existsSync(join(runDir, CHECKPOINT_JOURNAL_FILENAME)), false)
+    }
+
+    writeFileSync(
+      join(runDir, CHECKPOINT_JOURNAL_FILENAME),
+      JSON.stringify({
+        schema_version: 1,
+        batch_id: 'unsafe',
+        status: 'prepared',
+        backups_ready: true,
+        targets: ['..\\outside.txt'],
+      }),
+      'utf-8',
+    )
+    assert.throws(
+      () => recoverCheckpointArtifacts(runDir),
+      (error: unknown) =>
+        error instanceof LiveSessionAuthorityError && error.code === 'CHECKPOINT_JOURNAL_INVALID',
+    )
+  } finally {
+    rmSync(runDir, { recursive: true, force: true })
+  }
+})
