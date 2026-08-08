@@ -74,6 +74,19 @@ describe('renderStatusBar — basic format', () => {
     assert.ok(result.endsWith('\n'));
   });
 
+  it('is strictly single-line (no sparkline second row)', () => {
+    const result = renderStatusBar(
+      defaultState({
+        modelId: 'deepseek-v4-pro',
+        totalTokens: 45000,
+        width: 100,
+      }),
+    );
+    // Content is one line + trailing newline (split yields ['…', '']).
+    const contentLines = result.replace(/\n$/, '').split('\n');
+    assert.equal(contentLines.length, 1);
+  });
+
   it('pads to full terminal width so background spans edge-to-edge', () => {
     const result = renderStatusBar(defaultState({ width: 80 }));
     const line = firstLine(result);
@@ -172,6 +185,24 @@ describe('renderStatusBar — truncation', () => {
     const plainCount = line.length;
     // Under narrow width, truncation should occur (bar is padded to width)
     assert.ok(plainCount <= 55);
+  });
+
+  it('truncates right cluster when it alone exceeds width', () => {
+    const result = renderStatusBar(
+      defaultState({
+        model: 'M',
+        mode: 'chat',
+        project: 'p',
+        modelId: 'deepseek-v4-pro',
+        totalTokens: 999_999_999,
+        totalCost: 12345.6789,
+        turnCount: 9999,
+        width: 24,
+      }),
+    );
+    const contentLines = result.replace(/\n$/, '').split('\n');
+    assert.equal(contentLines.length, 1, 'must not wrap onto a second row');
+    assert.ok(firstLine(result).length <= 24);
   });
 });
 

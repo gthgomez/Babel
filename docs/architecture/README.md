@@ -2,7 +2,7 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-08-03
+last_verified: 2026-08-05
 -->
 
 > **Role**: Architecture guides, layer model specifications, and execution contract documentation for Babel.
@@ -12,6 +12,7 @@ last_verified: 2026-08-03
 | Document | Description |
 | :--- | :--- |
 | [**HARNESS_ARCHITECTURE_V1.md**](./HARNESS_ARCHITECTURE_V1.md) | **Normative** runtime harness specification (`harness-v1`). Authority: canonical. |
+| [HARNESS_HARDENING_ROADMAP_V1.md](./HARNESS_HARDENING_ROADMAP_V1.md) | **Canonical implementation roadmap** under harness-v1: H0–H7 sequencing and exit gates. |
 | [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) | **Explanatory** short map — defers to V1. |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | **Prompt OS + system architecture**: six layers, catalog, V9 router, kernel headline. |
 | [../CHAT_MODE.md](../CHAT_MODE.md) | Default daily ChatEngine product path. |
@@ -22,6 +23,7 @@ last_verified: 2026-08-03
 | Document | Description |
 | :--- | :--- |
 | [HARNESS_ARCHITECTURE_V1.md](./HARNESS_ARCHITECTURE_V1.md) | **Normative harness contract** (modes, authority, invariants, gaps). |
+| [HARNESS_HARDENING_ROADMAP_V1.md](./HARNESS_HARDENING_ROADMAP_V1.md) | Canonical hardening sequence, research reconciliation, dependencies, and promotion gates. |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | High-level system architecture, layer model, router contracts, kernel. |
 | [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) | Explanatory harness map (not normative). |
 | [BABEL_LOCAL_MODE.md](./BABEL_LOCAL_MODE.md) | Local workspace surfaces, session lifecycle, editor integrations. |

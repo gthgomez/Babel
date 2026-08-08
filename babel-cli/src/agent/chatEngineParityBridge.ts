@@ -31,6 +31,8 @@ import {
   recordAssistantToolCalls,
   recordToolResult,
   rebuildProviderMessagesFromEvents,
+  THREAD_EVENT_LOG_FILENAME,
+  serializeThreadEventLog,
   persistThreadEventLog,
   type ThreadEventLog,
 } from './threadEventLog.js';
@@ -41,7 +43,9 @@ import {
   recordToolStarted,
   recordToolTerminal,
   recordTurnEnded,
-  flushSessionEventLog,
+  flushSessionEventLogStrict,
+  SESSION_EVENTS_FILENAME,
+  serializeSessionEventLog,
   completedToolIdempotencyKeys,
   markInterruptedToolsOnResume,
   type SessionEventLog,
@@ -64,6 +68,23 @@ import {
   type FailoverDecision,
 } from './providerCapabilities.js';
 import type { PolicyEvent } from './policyEventLog.js';
+import {
+  dualWriteBudgetSnapshot,
+  persistLiveSessionAuthority,
+  persistLiveSessionSnapshot,
+  projectFromDurableSession,
+  loadLiveSessionAuthority,
+  CHECKPOINT_JOURNAL_FILENAME,
+  recoverCheckpointArtifacts,
+  writeCheckpointJournal,
+  INSTRUCTION_MANIFEST_FILENAME,
+  TASK_CONTRACT_FILENAME,
+  LIVE_SESSION_SNAPSHOT_FILENAME,
+} from './liveSessionBridge.js';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, writeFileSync, copyFileSync, renameSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+
 
 export interface ParityRuntime {
   loop: AgentLoopState;
@@ -81,6 +102,18 @@ export interface ParityRuntime {
   turnId: string | null;
   recoveryTried: boolean;
   lastFailover: FailoverDecision | null;
+  /** H2: policy-bound instruction + frozen task authority (in-memory + disk). */
+  liveAuthority?: import('./liveSessionBridge.js').LiveSessionAuthority;
+  /** H2: last projected LiveSession (rebuilt on resume). */
+  liveSession?: import('./liveSession.js').LiveSessionV1;
+}
+
+export interface PersistenceReceipt {
+  status: 'committed' | 'blocked'
+  operation: 'checkpoint' | 'finalize'
+  runDir: string
+  artifacts: Array<{ kind: string; path?: string; status: 'committed' | 'blocked'; error?: string }>
+  error?: string
 }
 
 export function createParityRuntime(threadId: string): ParityRuntime {
@@ -205,7 +238,7 @@ export function paritySettleProposeTools(
     proposed += 1;
   }
   if (runDir) {
-    flushSessionEventsBestEffort(rt, runDir, 'settle-propose');
+    flushSessionEventsRequired(rt, runDir, 'settle-propose');
   }
   return { proposed, skipped };
 }
@@ -220,7 +253,7 @@ export function paritySettleInterruptedOnResume(
 ): number {
   const marked = markInterruptedToolsOnResume(rt.sessionEvents, reason);
   if (runDir && marked.length > 0) {
-    flushSessionEventsBestEffort(rt, runDir, 'settle-resume-interrupted');
+    flushSessionEventsRequired(rt, runDir, 'settle-resume-interrupted');
   }
   return marked.length;
 }
@@ -637,8 +670,9 @@ export async function finalizeParityTurn(
   status: string,
 ): Promise<void> {
   parityEndTurn(rt, outcome, status);
+  parityPersistLiveSession(rt, runDir);
   await persistThreadEventLog(runDir, rt.eventLog);
-  flushSessionEventsBestEffort(rt, runDir, `finalize:${outcome}`);
+  flushSessionEventsRequired(rt, runDir, `finalize:${outcome}`);
 }
 
 function reportEventLogPersistFailure(context: string, err: unknown): void {
@@ -650,22 +684,13 @@ function reportEventLogPersistFailure(context: string, err: unknown): void {
   }
 }
 
-function flushSessionEventsBestEffort(
+/** Flush primary session evidence before crossing an effect/terminal boundary. */
+function flushSessionEventsRequired(
   rt: ParityRuntime,
   runDir: string,
   context: string,
 ): void {
-  const result = flushSessionEventLog(runDir, rt.sessionEvents);
-  if (result.error) {
-    try {
-      console.error(
-        `[babel] session-events.jsonl persist failed (${context}): ${result.error}`,
-      );
-    } catch {
-      /* ignore console failures */
-    }
-  }
-  // Slice A: project session events → episode-events.jsonl (best-effort dual-write).
+  flushSessionEventLogStrict(runDir, rt.sessionEvents);
   flushEpisodeStreamBestEffort(rt, runDir, context);
 }
 
@@ -705,6 +730,30 @@ function flushEpisodeStreamBestEffort(
   }
 }
 
+/** H2: dual-write budget + project LiveSession + persist authority/snapshot. */
+function parityPersistLiveSession(rt: ParityRuntime, runDir: string): void {
+  // A compatibility runtime with no session events must not overwrite a
+  // previously durable projection with an empty one.
+  if (rt.sessionEvents.events.length === 0) return;
+  const turnsUsed = rt.sessionEvents.events.filter(
+    (e) => e.kind === 'user_submitted',
+  ).length;
+  dualWriteBudgetSnapshot(rt.sessionEvents, rt.turnId, {
+    turns_used: turnsUsed,
+    turns_remaining: null,
+  });
+  if (rt.liveAuthority) {
+    persistLiveSessionAuthority(runDir, rt.liveAuthority);
+  }
+  const live = projectFromDurableSession({
+    sessionLog: rt.sessionEvents,
+    threadLog: rt.eventLog,
+    ...(rt.liveAuthority ? { authority: rt.liveAuthority } : {}),
+  });
+  rt.liveSession = live;
+  persistLiveSessionSnapshot(runDir, live);
+}
+
 /** Fire-and-forget finalize for sync call sites (streamDone/cancel/buildResult). */
 export function finalizeParityTurnSync(
   rt: ParityRuntime,
@@ -713,10 +762,11 @@ export function finalizeParityTurnSync(
   status: string,
 ): void {
   parityEndTurn(rt, outcome, status);
+  parityPersistLiveSession(rt, runDir);
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure(`finalize:${outcome}`, err);
   });
-  flushSessionEventsBestEffort(rt, runDir, `finalize-sync:${outcome}`);
+  flushSessionEventsRequired(rt, runDir, `finalize-sync:${outcome}`);
 }
 
 /**
@@ -724,11 +774,218 @@ export function finalizeParityTurnSync(
  * Use after tool batches that continue the loop.
  */
 export function checkpointParityEventLog(rt: ParityRuntime, runDir: string): void {
+  parityPersistLiveSession(rt, runDir);
   persistThreadEventLog(runDir, rt.eventLog).catch((err) => {
     reportEventLogPersistFailure('checkpoint', err);
   });
-  flushSessionEventsBestEffort(rt, runDir, 'checkpoint');
+  flushSessionEventsRequired(rt, runDir, 'checkpoint');
 }
+
+/**
+ * Await every authority-bearing checkpoint artifact. Compaction and other
+ * state-replacing operations must use this path instead of fire-and-forget.
+ *
+ * Multi-artifact atomicity (all-or-nothing across 5 primaries):
+ * 1. Memory-only prepare (budget dual-write for payload; cursors not advanced)
+ * 2. Stage sibling `.tmp` files for the full batch
+ * 3. Backup existing primaries to `.bak`
+ * 4. Fixed-order rename; on failure restore from `.bak` or unlink newly created primaries
+ * 5. Advance `flushedThroughSeq` / `liveSession` only after all renames succeed
+ *
+ * Failure contract:
+ * - Disk primaries restored to pre-checkpoint state (byte-equal or absent)
+ * - Session event list + `nextSeq` + `flushedThroughSeq` restored
+ * - All batch `.tmp` / `.bak` sidecars removed
+ * - Receipt is `blocked` with no child artifacts marked `committed`
+ */
+export async function checkpointParityEventLogStrict(
+  rt: ParityRuntime,
+  runDir: string,
+  options?: { injectCommitFailureAfter?: number },
+): Promise<PersistenceReceipt> {
+  const initialEventsCount = rt.sessionEvents.events.length;
+  const initialNextSeq = rt.sessionEvents.nextSeq;
+  const initialFlushedThroughSeq = rt.sessionEvents.flushedThroughSeq;
+  const batchId = randomUUID();
+  const tmpPaths: string[] = [];
+  const bakPaths: Array<string | null> = [];
+
+  const unlinkQuiet = (path: string | null | undefined): void => {
+    if (!path) return;
+    try {
+      if (existsSync(path)) unlinkSync(path);
+    } catch {
+      /* best-effort sidecar cleanup */
+    }
+  };
+
+  /** Remove every staged/backup sidecar for this batch (all failure + success paths). */
+  const cleanupBatchSidecars = (): void => {
+    for (const p of tmpPaths) unlinkQuiet(p);
+    for (const p of bakPaths) unlinkQuiet(p);
+  };
+
+  /** Roll back dual-write budget events and seq cursor; never leave half-advanced memory. */
+  const restoreMemoryCursors = (): void => {
+    if (rt.sessionEvents.events.length > initialEventsCount) {
+      rt.sessionEvents.events.length = initialEventsCount;
+    }
+    rt.sessionEvents.nextSeq = initialNextSeq;
+    rt.sessionEvents.flushedThroughSeq = initialFlushedThroughSeq;
+  };
+
+  try {
+    recoverCheckpointArtifacts(runDir);
+    const turnsUsed = rt.sessionEvents.events.filter((event) => event.kind === 'user_submitted').length;
+    dualWriteBudgetSnapshot(rt.sessionEvents, rt.turnId, {
+      turns_used: turnsUsed,
+      turns_remaining: null,
+    });
+
+    if (!rt.liveAuthority) throw new Error('live authority is missing');
+
+    const projectedLive = projectFromDurableSession({
+      sessionLog: rt.sessionEvents,
+      threadLog: rt.eventLog,
+      authority: rt.liveAuthority,
+    });
+
+    const targets: Array<{
+      kind: 'authority' | 'live_session' | 'thread_events' | 'session_events';
+      filename: string;
+      content: string;
+    }> = [
+      {
+        kind: 'authority',
+        filename: INSTRUCTION_MANIFEST_FILENAME,
+        content: JSON.stringify(rt.liveAuthority.instructionManifest, null, 2),
+      },
+      {
+        kind: 'authority',
+        filename: TASK_CONTRACT_FILENAME,
+        content: JSON.stringify(rt.liveAuthority.taskContract, null, 2),
+      },
+      {
+        kind: 'live_session',
+        filename: LIVE_SESSION_SNAPSHOT_FILENAME,
+        content: JSON.stringify(projectedLive, null, 2),
+      },
+      {
+        kind: 'thread_events',
+        filename: THREAD_EVENT_LOG_FILENAME,
+        content: serializeThreadEventLog(rt.eventLog),
+      },
+      {
+        kind: 'session_events',
+        filename: SESSION_EVENTS_FILENAME,
+        content: serializeSessionEventLog(rt.sessionEvents),
+      },
+    ];
+
+    mkdirSync(runDir, { recursive: true });
+    writeCheckpointJournal(runDir, {
+      schema_version: 1,
+      batch_id: batchId,
+      status: 'prepared',
+      backups_ready: false,
+      targets: targets.map((target) => target.filename),
+    });
+
+    // Step 2: Sibling .tmp file staging phase
+    for (const t of targets) {
+      const targetPath = join(runDir, t.filename);
+      const tmpPath = `${targetPath}.${batchId}.tmp`;
+      tmpPaths.push(tmpPath);
+      writeFileSync(tmpPath, t.content, 'utf-8');
+    }
+
+    // Step 3: Primary target backup phase
+    for (const t of targets) {
+      const targetPath = join(runDir, t.filename);
+      if (existsSync(targetPath)) {
+        const bakPath = `${targetPath}.${batchId}.bak`;
+        copyFileSync(targetPath, bakPath);
+        bakPaths.push(bakPath);
+      } else {
+        bakPaths.push(null);
+      }
+    }
+    writeCheckpointJournal(runDir, {
+      schema_version: 1,
+      batch_id: batchId,
+      status: 'prepared',
+      backups_ready: true,
+      targets: targets.map((target) => target.filename),
+    });
+
+    // Step 4: Fixed-order rename. injectCommitFailureAfter === i throws BEFORE rename of index i.
+    // Do not mark receipt artifacts committed until the full batch succeeds (honest blocked receipts).
+    const committedIndices: number[] = [];
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        if (options?.injectCommitFailureAfter === i) {
+          throw new Error('simulated_commit_failure');
+        }
+        const targetPath = join(runDir, targets[i]!.filename);
+        const tmpPath = tmpPaths[i]!;
+        renameSync(tmpPath, targetPath);
+        committedIndices.push(i);
+      }
+    } catch (commitErr) {
+      // Disk rollback: restore pre-existing primaries; unlink primaries created by this batch.
+      for (let i = 0; i < targets.length; i++) {
+        const targetPath = join(runDir, targets[i]!.filename);
+        const bakPath = bakPaths[i];
+        if (bakPath && existsSync(bakPath)) {
+          copyFileSync(bakPath, targetPath);
+        } else if (committedIndices.includes(i) && existsSync(targetPath)) {
+          unlinkQuiet(targetPath);
+        }
+      }
+      throw commitErr;
+    }
+
+    // Step 5: Post-commit state advance (success only) — then drop sidecars
+    writeCheckpointJournal(runDir, {
+      schema_version: 1,
+      batch_id: batchId,
+      status: 'committed',
+      backups_ready: true,
+      targets: targets.map((target) => target.filename),
+    });
+    cleanupBatchSidecars();
+    unlinkQuiet(join(runDir, CHECKPOINT_JOURNAL_FILENAME));
+    const maxSeq =
+      rt.sessionEvents.events.length > 0
+        ? Math.max(...rt.sessionEvents.events.map((e) => e.seq))
+        : -1;
+    rt.sessionEvents.flushedThroughSeq = maxSeq;
+    rt.liveSession = projectedLive;
+
+    const artifacts: PersistenceReceipt['artifacts'] = targets.map((t) => ({
+      kind: t.kind,
+      path: join(runDir, t.filename),
+      status: 'committed' as const,
+    }));
+
+    flushEpisodeStreamBestEffort(rt, runDir, 'checkpoint-strict');
+    return { status: 'committed', operation: 'checkpoint', runDir, artifacts };
+  } catch (error) {
+    cleanupBatchSidecars();
+    unlinkQuiet(join(runDir, CHECKPOINT_JOURNAL_FILENAME));
+    restoreMemoryCursors();
+    const message = error instanceof Error ? error.message : String(error);
+    // Honest blocked receipt: never report partial committed child artifacts after rollback.
+    return {
+      status: 'blocked',
+      operation: 'checkpoint',
+      runDir,
+      artifacts: [{ kind: 'checkpoint', status: 'blocked', error: message }],
+      error: message,
+    };
+  }
+}
+
 
 /**
  * Cancel terminal: memory cancel + disk flush via finalize choke point.
@@ -768,6 +1025,16 @@ export function parityBuildCapsule(input: {
   patchSummary?: string;
   verifierSummary?: string;
   recentToolResults?: string[];
+  taskAcceptanceId?: string;
+  planStep?: string;
+  changedPaths?: string[];
+  unresolvedFailures?: string[];
+  verifierFreshness?: string;
+  approvalsSummary?: string;
+  budgetsSummary?: string;
+  workspaceRevision?: string;
+  evidenceRefs?: string[];
+  rawObservationRefs?: string[];
 }): string {
   const last = input.progress.receipts[input.progress.receipts.length - 1];
   return formatCompactionCapsule(
@@ -780,6 +1047,26 @@ export function parityBuildCapsule(input: {
       ...(input.verifierSummary ? { verifierSummary: input.verifierSummary } : {}),
       ...(input.recentToolResults
         ? { recentToolResults: input.recentToolResults }
+        : {}),
+      ...(input.taskAcceptanceId ? { taskAcceptanceId: input.taskAcceptanceId } : {}),
+      ...(input.planStep ? { planStep: input.planStep } : {}),
+      ...(input.changedPaths ? { changedPaths: input.changedPaths } : {}),
+      ...(input.unresolvedFailures
+        ? { unresolvedFailures: input.unresolvedFailures }
+        : {}),
+      ...(input.verifierFreshness
+        ? { verifierFreshness: input.verifierFreshness }
+        : {}),
+      ...(input.approvalsSummary
+        ? { approvalsSummary: input.approvalsSummary }
+        : {}),
+      ...(input.budgetsSummary ? { budgetsSummary: input.budgetsSummary } : {}),
+      ...(input.workspaceRevision
+        ? { workspaceRevision: input.workspaceRevision }
+        : {}),
+      ...(input.evidenceRefs ? { evidenceRefs: input.evidenceRefs } : {}),
+      ...(input.rawObservationRefs
+        ? { rawObservationRefs: input.rawObservationRefs }
         : {}),
     }),
   );

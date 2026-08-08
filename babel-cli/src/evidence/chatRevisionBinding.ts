@@ -44,6 +44,15 @@ export type BoundChatVerifierReceipt = {
   authority?: boolean;
   capturedAt?: number;
   argv?: string[];
+  /**
+   * H5: verifier scope. Must be preserved into completion promotion —
+   * never silently upgraded from targeted → full_suite.
+   */
+  scope?: 'full_suite' | 'targeted' | 'smoke' | 'property' | 'security';
+  tests_total?: number;
+  tests_passed?: number;
+  tests_failed?: number;
+  tests_skipped?: number;
 };
 
 /** Collect unique mutation paths from SessionEventV1 mutation_batch events. */

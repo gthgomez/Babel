@@ -10,6 +10,10 @@ import {
   isVerifierAuthoritySource,
   type ExecutorVerifierReceipt,
 } from '../executor/contracts.js';
+import {
+  recordVerifierAttempt,
+  type SessionEventLog,
+} from './sessionEvents.js';
 import { analyzeVerifierIdentity } from '../services/verifierIdentity.js';
 import {
   isAuthoritativeVerifierCommand,
@@ -66,6 +70,48 @@ export function upsertVerifierReceipt(
   else ledger.push(receipt);
 }
 
+/** Restore the durable verifier ledger and return its latest valid receipt. */
+export function restorePersistedVerifierEvidence(
+  log: SessionEventLog,
+  ledger: BoundChatVerifierReceipt[],
+): BoundChatVerifierReceipt | null {
+  let latest: BoundChatVerifierReceipt | null = null;
+  for (const event of log.events) {
+    if (event.kind !== 'verifier_attempt' || !event.receipt) continue;
+    if (!toExecutorVerifierReceipt(event.receipt).ok) continue;
+    latest = event.receipt;
+    upsertVerifierReceipt(ledger, event.receipt);
+  }
+  return latest;
+}
+
+/** Capture, persist, and cache one authoritative verifier result. */
+export async function captureAndRecordVerifierReceipt(input: {
+  projectRoot: string;
+  command: string;
+  exitCode: number;
+  summary: string;
+  mutationPaths: string[];
+  sessionEvents: SessionEventLog;
+  turnId: string;
+  ledger: BoundChatVerifierReceipt[];
+  cache: Map<string, { receipt: BoundChatVerifierReceipt; writeCountAtCache: number }>;
+  writeCount: number;
+}): Promise<BoundChatVerifierReceipt | null> {
+  const receipt = await captureChatVerifierReceipt(input);
+  if (!receipt) return null;
+  upsertVerifierReceipt(input.ledger, receipt);
+  recordVerifierAttempt(input.sessionEvents, {
+    turn_id: input.turnId,
+    command_preview: input.command,
+    authoritative: true,
+    exit_code: input.exitCode,
+    receipt,
+  });
+  input.cache.set(input.command, { receipt, writeCountAtCache: input.writeCount });
+  return receipt;
+}
+
 function verifierReceiptIdentityKey(command: string): string {
   return analyzeVerifierIdentity(command)?.identityKey ?? command.trim().replace(/\s+/g, ' ');
 }
@@ -111,3 +157,5 @@ export function prepareKernelVerifierInput(
     verifierEvidenceErrors: errors,
   };
 }
+
+export { toExecutorVerifierReceipt } from '../evidence/chatRevisionBinding.js';

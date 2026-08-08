@@ -372,12 +372,14 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
       return messages;
     }
 
+    // Call the LLM to produce a summary. On failure, rethrow so CompactionManager
+    // advances to HeuristicTruncationStrategy (H1: true heuristic fallback).
+    // Do not swallow errors into a compaction_fallback annotation — that blocks
+    // the manager chain and was the pre-H1 defect path.
     try {
-      // Call the LLM to produce a summary
       const targetTokens = options.targetTokens ?? this.maxSummaryTokens;
       const summaryResult = await this.callCompactionApi(toCompact, targetTokens, options);
 
-      // Build the compacted result: system prompt + summary message + working set
       const summaryMessage: ChatMessage = {
         role: 'system',
         content: `[Compacted conversation summary — ${summaryResult.inputTokens} input → ${summaryResult.outputTokens} output tokens]\n\n${summaryResult.summary}`,
@@ -390,15 +392,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
         : [summaryMessage, ...workingSet];
     } catch (err) {
       this.consecutiveFailures++;
-      // Fall back to a simple annotation
-      const annotation: ChatMessage = {
-        role: 'system',
-        content: `[Compacted ${toCompact.length} messages — LLM summarization failed: ${err instanceof Error ? err.message : String(err)}]`,
-        name: 'compaction_fallback',
-      };
-      return systemMsg
-        ? [systemMsg, annotation, ...workingSet]
-        : [annotation, ...workingSet];
+      throw err instanceof Error ? err : new Error(String(err));
     }
   }
 
@@ -643,6 +637,34 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
 // ─── Compaction Manager ─────────────────────────────────────────────────────
 
 /**
+ * Structured result from CompactionManager (H1).
+ * Strategy identity is authoritative — never inferred from message-array identity.
+ */
+export type CompactionStrategyId = 'llm-summarize' | 'heuristic-truncation' | 'none' | string;
+
+export type CompactionRunStatus =
+  | 'applied'
+  | 'noop'
+  | 'all_strategies_failed';
+
+export interface CompactionManagerResult {
+  /** Compacted (or original) messages. */
+  messages: ChatMessage[];
+  /** Strategy that produced the result, or 'none' when unchanged. */
+  strategy: CompactionStrategyId;
+  /** High-level run status. */
+  status: CompactionRunStatus;
+  /** Token estimate before compaction. */
+  tokensBefore: number;
+  /** Token estimate after compaction. */
+  tokensAfter: number;
+  /** Errors from strategies that were tried and failed. */
+  strategyErrors: string[];
+  /** Whether messages actually changed. */
+  changed: boolean;
+}
+
+/**
  * CompactionManager — orchestrates compaction by trying strategies in order.
  *
  * Strategies are tried in registration order. The first strategy whose
@@ -664,44 +686,71 @@ export class CompactionManager {
   }
 
   /**
-   * Auto-select and apply the best compaction strategy.
+   * Auto-select and apply the best compaction strategy; return structured result.
    *
    * Tries each registered strategy in order:
    *   1. Checks canApply() — if false, skips to next strategy
    *   2. Calls compact() — if it throws, tries the next strategy
    *   3. Returns the compacted message list from the first successful strategy
    *
-   * If ALL strategies fail, returns the original messages unchanged (safe
-   * no-op rather than breaking the conversation).
-   *
-   * @param messages  The full conversation history
-   * @param options   Compaction options (model, maxTokens, etc.)
-   * @returns         The compacted message list
+   * If ALL strategies fail, returns the original messages with status
+   * `all_strategies_failed` (safe no-op rather than breaking the conversation).
    */
-  async compact(messages: ChatMessage[], options: CompactionOptions): Promise<ChatMessage[]> {
-    const estimatedTokens = estimateTokens(messages);
+  async compactWithResult(
+    messages: ChatMessage[],
+    options: CompactionOptions,
+  ): Promise<CompactionManagerResult> {
+    const tokensBefore = estimateTokens(messages);
     const errors: string[] = [];
 
     for (const strategy of this.strategies) {
-      if (!strategy.canApply(messages, estimatedTokens, options.maxTokens)) {
+      if (!strategy.canApply(messages, tokensBefore, options.maxTokens)) {
         continue;
       }
 
       try {
         const result = await strategy.compact(messages, options);
-        return result;
+        const tokensAfter = estimateTokens(result);
+        const changed = result !== messages && (
+          result.length !== messages.length ||
+          result.some((m, i) => m !== messages[i])
+        );
+        return {
+          messages: result,
+          strategy: strategy.name,
+          status: changed ? 'applied' : 'noop',
+          tokensBefore,
+          tokensAfter,
+          strategyErrors: errors,
+          changed,
+        };
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         errors.push(`[${strategy.name}] ${errMsg}`);
-        // Continue to next strategy
       }
     }
 
-    // If all strategies failed, log and return original messages
     if (errors.length > 0) {
       console.warn(`[CompactionManager] All strategies failed:\n  ${errors.join('\n  ')}`);
     }
-    return messages;
+    return {
+      messages,
+      strategy: 'none',
+      status: errors.length > 0 ? 'all_strategies_failed' : 'noop',
+      tokensBefore,
+      tokensAfter: tokensBefore,
+      strategyErrors: errors,
+      changed: false,
+    };
+  }
+
+  /**
+   * Auto-select and apply the best compaction strategy.
+   * @returns The compacted message list (backward-compatible wrapper).
+   */
+  async compact(messages: ChatMessage[], options: CompactionOptions): Promise<ChatMessage[]> {
+    const result = await this.compactWithResult(messages, options);
+    return result.messages;
   }
 
   /**
@@ -716,6 +765,30 @@ export class CompactionManager {
   getStrategies(): readonly CompactionStrategy[] {
     return [...this.strategies];
   }
+}
+
+/**
+ * Resolve the model ID for the compaction summarizer (H1 provider-aware).
+ * Priority: explicit override > BABEL_COMPACTION_MODEL > providerModelId > default.
+ * Never pass a bare model-family label (e.g. "DeepSeek") as the API model id.
+ */
+export function resolveCompactionModelId(input: {
+  explicitModel?: string | null;
+  providerModelId?: string | null;
+  family?: string | null;
+}): string {
+  if (input.explicitModel && input.explicitModel.trim()) {
+    return input.explicitModel.trim();
+  }
+  const envModel = process.env['BABEL_COMPACTION_MODEL'];
+  if (envModel && envModel.trim()) {
+    return envModel.trim();
+  }
+  if (input.providerModelId && input.providerModelId.trim()) {
+    return input.providerModelId.trim();
+  }
+  // Family alone is not a provider model id — fall through to default.
+  return DEFAULT_COMPACTION_CONFIG.compactionModel;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

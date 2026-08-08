@@ -24,6 +24,7 @@ import { extractJson } from '../utils/extractJson.js';
 import { JitDenialError, PolicyBlockedDuplicateError } from '../ui/incrementalToolDetector.js';
 import { createVcrRecorder, createVcrPlayer, type VcrRecorder } from '../services/streamingVcr.js';
 import { parseRateLimitHeaders } from '../ui/rateLimitWidget.js';
+import { resolveProviderCredential } from './credentialHub.js';
 
 const MAX_TOKENS = readPositiveIntEnv('BABEL_DEEPSEEK_TOKENS', 32000);
 const REQUEST_TIMEOUT_MS = readPositiveIntEnv('BABEL_DEEPSEEK_REQUEST_TIMEOUT_MS', 120_000);
@@ -302,20 +303,17 @@ export class DeepSeekApiRunner implements LlmRunner {
   private readonly model: DeepSeekModelId;
   private lastInvocationMetadata: RunnerInvocationMetadata | null = null;
 
-  constructor(model = 'deepseek-v4-flash') {
-    const key = process.env['DEEPSEEK_API_KEY'];
-    if (!key) {
-      throw new Error(
-        '[deepSeekApi] DEEPSEEK_API_KEY is not set. ' +
-          'Add it to your environment to enable the direct DeepSeek runner.',
-      );
-    }
-    // Guard against malformed keys (e.g. truncated "k-" prefix missing the leading "s")
+  constructor(
+    model = 'deepseek-v4-flash',
+    credential: { explicitCredential?: string; env?: NodeJS.ProcessEnv } = {},
+  ) {
+    const key = resolveProviderCredential('deepseek', credential);
+    if (key === null) throw new Error('[deepSeekApi] credential resolution failed');
+    // Validate expected provider shape without including any secret fragment.
     if (!key.startsWith('sk-')) {
       throw new Error(
-        `[deepSeekApi] DEEPSEEK_API_KEY does not start with "sk-" (got prefix "${key.slice(0, 4)}…"). ` +
-          'The key may be truncated or invalid. Check your environment — ' +
-          'a stale env var may be shadowing the correct key in babel-cli/.env.',
+        '[deepSeekApi] DEEPSEEK_API_KEY has an invalid format. ' +
+          'Check the host environment and babel-cli/.env precedence.',
       );
     }
     this.apiKey = key;

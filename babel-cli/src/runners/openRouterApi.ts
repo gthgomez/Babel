@@ -11,13 +11,33 @@
  */
 
 import { DeepInfraApiRunner } from './deepInfraApi.js';
+import type { RunnerInvocationMetadata } from './base.js';
 
 export class OpenRouterApiRunner extends DeepInfraApiRunner {
   protected override get apiUrl(): string {
     return 'https://openrouter.ai/api/v1/chat/completions';
   }
 
-  constructor(model: string) {
-    super(model, 'OPENROUTER_API_KEY');
+  constructor(
+    model: string,
+    sampling: { maxTokens?: number; temperature?: number } = {},
+    credential: {
+      apiKeyEnvVar?: string;
+      explicitCredential?: string;
+      env?: NodeJS.ProcessEnv;
+    } = {},
+  ) {
+    super(model, credential.apiKeyEnvVar ?? 'OPENROUTER_API_KEY', sampling, {
+      provider: 'openrouter',
+      ...(credential.explicitCredential
+        ? { explicitCredential: credential.explicitCredential }
+        : {}),
+      ...(credential.env ? { env: credential.env } : {}),
+    });
+  }
+
+  override getLastInvocationMetadata(): RunnerInvocationMetadata | null {
+    const metadata = super.getLastInvocationMetadata();
+    return metadata ? { ...metadata, provider: 'openrouter' } : null;
   }
 }

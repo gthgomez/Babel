@@ -1,18 +1,16 @@
 import {
-  getTerminalWidth,
   getEffectiveTerminalWidth,
   visibleLength,
-  error,
-  success,
   warning,
   muted,
   info,
   dim,
   bold,
+  truncate,
+  stripAnsi,
 } from './theme.js';
-import { renderCompactTokenBar, renderTokenBarWithHistory, getContextLimit } from './tokenBar.js';
+import { renderCompactTokenBar, getContextLimit } from './tokenBar.js';
 import { renderBackgroundTaskFooter } from './backgroundTaskProgress.js';
-import { getGlobalTokenTracker } from './tokenHistory.js';
 import { getGlobalRateLimitState, renderCompactRateLimit } from './rateLimitWidget.js';
 import type { BackgroundTaskState } from './backgroundTaskProgress.js';
 
@@ -132,12 +130,18 @@ export function renderStatusBar(state: StatusBarState): string {
   const rightBase = `${state.totalTokens.toLocaleString()} tok | $${state.totalCost.toFixed(4)} | turn ${state.turnCount}`;
   const rlWidget = renderCompactRateLimit(getGlobalRateLimitState());
   const rightCore = rlWidget ? `${rightBase} | ${rlWidget}` : rightBase;
-  const right = tokenBarStr ? `${rightCore}${tokenBarStr}` : rightCore;
+  let right = tokenBarStr ? `${rightCore}${tokenBarStr}` : rightCore;
+
+  const minSpacing = 2;
+  // When the right cluster alone exceeds the bar width, shrink it so the line
+  // never wraps (turn count / token bar used to spill onto a second row).
+  if (visibleLength(right) + minSpacing > width) {
+    const maxRight = Math.max(8, width - minSpacing);
+    right = truncate(stripAnsi(right), maxRight);
+  }
 
   const leftLen = visibleLength(left);
   const rightLen = visibleLength(right);
-
-  const minSpacing = 2;
   let line: string;
 
   if (leftLen + rightLen + minSpacing <= width) {
@@ -146,29 +150,19 @@ export function renderStatusBar(state: StatusBarState): string {
     line = left + ' '.repeat(padding) + right;
   } else {
     // Truncate the left side so the right-aligned info stays visible
-    const maxLeftLen = Math.max(10, width - rightLen - minSpacing);
-    const truncatedLeft = [...left].slice(0, Math.max(0, maxLeftLen - 1)).join('') + '…';
+    const maxLeftLen = Math.max(4, width - rightLen - minSpacing);
+    const truncatedLeft = truncate(stripAnsi(left), maxLeftLen);
     const truncatedLen = visibleLength(truncatedLeft);
     const padding = Math.max(minSpacing, width - truncatedLen - rightLen);
     line = truncatedLeft + ' '.repeat(padding) + right;
   }
 
-  // Token sparkline — rendered as a separate dim line below the main bar
-  // when history data is available (compact bar alone is already inline above)
-  let sparkLine = '';
-  if (showBar) {
-    const limit = getContextLimit(state.modelId!);
-    const tracker = getGlobalTokenTracker();
-    const barWithHistory = renderTokenBarWithHistory(
-      state.totalTokens,
-      limit.tokens,
-      tracker,
-      Math.min(16, Math.floor(width / 5)),
-    );
-    const barLines = barWithHistory.split('\n');
-    if (barLines.length > 1) {
-      sparkLine = `\x1b[2m ${barLines.slice(1).join('\n')}\x1b[0m\n`;
-    }
+  // Clamp final line so reverse-video fill never exceeds terminal width
+  // (defensive: truncation math + ANSI edge cases).
+  let lineVisLen = visibleLength(line);
+  if (lineVisLen > width) {
+    line = truncate(stripAnsi(line), width);
+    lineVisLen = visibleLength(line);
   }
 
   // Color-coded status bar: change background based on last run status
@@ -179,8 +173,9 @@ export function renderStatusBar(state: StatusBarState): string {
   };
   const bgCode = state.status ? bgCodes[state.status] : null;
   if (bgCode) {
-    return `${bgCode} ${line.padEnd(width - 2)} \x1b[0m\n${sparkLine}`;
+    const fillSpaces = ' '.repeat(Math.max(0, width - 2 - lineVisLen));
+    return `${bgCode} ${line}${fillSpaces} \x1b[0m\n`;
   }
-  // Standard reverse video for ready state
-  return `\x1b[7m${line.padEnd(width)}\x1b[0m\n${sparkLine}`;
+  const fillSpaces = ' '.repeat(Math.max(0, width - lineVisLen));
+  return `\x1b[7m${line}${fillSpaces}\x1b[0m\n`;
 }
