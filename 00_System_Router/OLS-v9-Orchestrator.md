@@ -381,10 +381,7 @@ Use project-relative paths unless a runtime API explicitly requires a resolved p
   },
   "compilation_state": "[uncompiled | compiled]",
   "instruction_stack": {
-    "behavioral_ids": [
-      "behavioral_core_v10",
-      "behavioral_cognitive_micro_v7"
-    ],
+    "behavioral_ids": ["behavioral_core_v11"],
     "domain_id": "[domain id]",
     "skill_ids": ["selected skill ids"],
     "model_adapter_id": "[adapter id]",
@@ -446,8 +443,8 @@ Use project-relative paths unless a runtime API explicitly requires a resolved p
 - `task_overlay_ids` live only in `instruction_stack` for v9 selection intent. Do not duplicate them in `analysis`.
 - Never output physical prompt file paths as a substitute for `instruction_stack`.
 - Never select `pipeline_qa_reviewer` or `pipeline_cli_executor` as a domain or skill.
-- Never omit `behavioral_core_v10` or `behavioral_cognitive_micro_v7`.
-- Include `behavioral_guard_v7` only when the task has execution, write, debugging, deployment, contract-change, verified, manual-execution, or autonomous risk. Do not load terminal-handshake behavior for pure research, read-only critique, strategy, or product audit.
+- Always include `behavioral_core_v11`.
+- Resolve any conditional governance behavior from the canonical catalog. Do not name retired V10/V7 behavioral layers in a runtime stack; keep pure research, read-only critique, strategy, and product-audit stacks read-only unless execution or file-modification risk is present.
 - Never invent IDs not present in the canonical catalog.
 - If a required catalog entry appears missing, emit the typed stack anyway and include the issue in `analysis.ambiguity_note`.
 - Never route Android/mobile store-distribution work to `domain_swe_frontend` or `domain_swe_backend` when `domain_android_kotlin` is the clear fit.
@@ -496,7 +493,7 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
   },
   "compilation_state": "uncompiled",
   "instruction_stack": {
-    "behavioral_ids": ["behavioral_core_v10", "behavioral_cognitive_micro_v7", "behavioral_guard_v7"],
+    "behavioral_ids": ["behavioral_core_v11"],
     "domain_id": "domain_swe_backend",
     "skill_ids": ["skill_ts_zod", "skill_supabase_pg"],
     "model_adapter_id": "adapter_deepseek_balanced",
@@ -556,7 +553,7 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
   },
   "compilation_state": "uncompiled",
   "instruction_stack": {
-    "behavioral_ids": ["behavioral_core_v10", "behavioral_cognitive_micro_v7", "behavioral_guard_v7"],
+    "behavioral_ids": ["behavioral_core_v11"],
     "domain_id": "domain_android_kotlin",
     "skill_ids": ["skill_android_app_bundle", "skill_android_release_build"],
     "model_adapter_id": "adapter_deepseek_balanced",
@@ -616,7 +613,7 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
   },
   "compilation_state": "uncompiled",
   "instruction_stack": {
-    "behavioral_ids": ["behavioral_core_v10", "behavioral_cognitive_micro_v7", "behavioral_guard_v7"],
+    "behavioral_ids": ["behavioral_core_v11"],
     "domain_id": "domain_android_kotlin",
     "skill_ids": ["skill_android_room", "skill_jetpack_compose"],
     "model_adapter_id": "adapter_deepseek_balanced",
@@ -676,7 +673,7 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
   },
   "compilation_state": "uncompiled",
   "instruction_stack": {
-    "behavioral_ids": ["behavioral_core_v10", "behavioral_cognitive_micro_v7", "behavioral_guard_v7"],
+    "behavioral_ids": ["behavioral_core_v11"],
     "domain_id": "domain_android_kotlin",
     "skill_ids": ["skill_google_play_store"],
     "model_adapter_id": "adapter_deepseek_balanced",
@@ -736,7 +733,7 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
   },
   "compilation_state": "uncompiled",
   "instruction_stack": {
-    "behavioral_ids": ["behavioral_core_v10", "behavioral_cognitive_micro_v7", "behavioral_guard_v7"],
+    "behavioral_ids": ["behavioral_core_v11"],
     "domain_id": "domain_android_kotlin",
     "skill_ids": ["skill_google_play_billing", "skill_android_play_store_compliance"],
     "model_adapter_id": "adapter_deepseek_balanced",
@@ -796,7 +793,7 @@ Both signals must be consistent. A non-null `ambiguity_note` with `routing_confi
   },
   "compilation_state": "uncompiled",
   "instruction_stack": {
-    "behavioral_ids": ["behavioral_core_v10", "behavioral_cognitive_micro_v7", "behavioral_guard_v7"],
+    "behavioral_ids": ["behavioral_core_v11"],
     "domain_id": "domain_android_kotlin",
     "skill_ids": ["skill_android_app_bundle", "skill_amazon_appstore", "skill_samsung_galaxy_store"],
     "model_adapter_id": "adapter_deepseek_balanced",

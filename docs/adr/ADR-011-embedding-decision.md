@@ -74,7 +74,22 @@ settings yet.
 
 ---
 
-## 4. Offline Behavior (Graceful No-Op)
+## 4. External Content Boundary
+
+When an embedding provider is configured, Babel sends the text content of each
+not-yet-embedded indexed file and each `semantic_search` query to the configured
+embedding endpoint. The default endpoint is OpenAI; `BABEL_EMBEDDING_BASE_URL` may
+select another compatible provider. Treat this as external content egress: do not
+enable embeddings for repositories whose policy forbids sending their content to an
+external service.
+
+Embeddings remain disabled until a valid embedding or OpenAI API key is configured.
+Set `BABEL_EMBEDDING_DISABLE=1` (or `true`) to disable the path explicitly; FTS5
+continues to provide local search without external embedding requests.
+
+---
+
+## 5. Offline Behavior (Graceful No-Op)
 
 The embedding path is **strictly additive** — it never blocks or degrades existing functionality:
 
@@ -88,11 +103,9 @@ The embedding path is **strictly additive** — it never blocks or degrades exis
 | `sqlite-vec` extension fails to load | `vectorIndex` getter returns `null` → embedding path skipped |
 | Embedding succeeds but vector search returns no hits | Fall back to FTS5 results (already the search contract) |
 
-**Failure-path test requirement**: The embedding provider test suite must assert FTS5 fallback when the API is down.
-
 ---
 
-## 5. Cost Estimate
+## 6. Cost Estimate
 
 **One-time indexing cost** (per project):
 
@@ -110,7 +123,7 @@ The embedding path is **strictly additive** — it never blocks or degrades exis
 
 ---
 
-## 6. Dimension Lock
+## 7. Dimension Lock
 
 The vec0 virtual table is created with `FLOAT[384]` at first initialization (`vectorIndex.ts` line 55). This dimension is **baked into the SQLite schema**. Changing it requires:
 
@@ -125,93 +138,15 @@ The vec0 virtual table is created with `FLOAT[384]` at first initialization (`ve
 
 ---
 
-## 7. Implementation Plan (6–10h, post-decision)
+## 8. Implementation Evidence
 
-### 7.1 New module: `src/services/embeddingProvider.ts` (2–3h)
-
-```typescript
-interface EmbeddingProvider {
-  embedTexts(texts: string[]): Promise<Float32Array[]>;
-}
-
-function createEmbeddingProvider(): EmbeddingProvider | null;
-```
-
-- `OpenAiEmbeddingProvider` calls `POST https://api.openai.com/v1/embeddings` via `fetch`
-- Reads config from env vars (see §3)
-- Returns `null` when API key is unset or `BABEL_EMBEDDING_DISABLE=1`
-- Retries HTTP 429/5xx with exponential backoff (3 attempts, 1s/2s/4s delays)
-
-### 7.2 Wire `indexProject()` in `indexer.ts` (1–2h)
-
-After the FTS indexing block at line 476:
-
-```typescript
-// After FTS indexing completes
-const provider = createEmbeddingProvider();
-if (provider && this.vectorIndex) {
-  const embeddingFn = (text: string) =>
-    provider.embedTexts([text]).then((vs) => vs[0]!);
-  await this.vectorIndex.indexEmbeddings(embeddingFn, onProgress);
-}
-```
-
-- Registers a `BackgroundTaskRegistry` task for embedding progress
-- Skips entirely if no provider configured (existing FTS indexing is unaffected)
-
-### 7.3 Wire `search()` in `indexer.ts` (1–2h)
-
-Restructure `SemanticIndexer.search()` to attempt vector search first:
-
-```typescript
-public search(query: string, limit = 5): SearchHit[] {
-  if (this.embedFn && this.vectorIndex) {
-    try {
-      const queryVec = await this.embedFn(query);
-      const vectorHits = this.vectorIndex.search(queryVec, limit);
-      if (vectorHits.length > 0) {
-        return this.resolveVectorHits(vectorHits);
-      }
-    } catch {
-      // Fall through to FTS
-    }
-  }
-  // FTS5 fallback
-  return this.ftsSearch(query, limit);
-}
-```
-
-### 7.4 Wire `handleSemanticSearch` in `chronicleMemory.ts` (30 min)
-
-At module init (or first call):
-
-```typescript
-const provider = createEmbeddingProvider();
-if (provider) {
-  globalIndexer.setEmbeddingFunction((text) =>
-    provider.embedTexts([text]).then((vs) => vs[0]!),
-  );
-}
-```
-
-Remove the TODO comment at line 186.
-
-### 7.5 Tests (2–3h)
-
-| Test file | What it covers |
-|-----------|---------------|
-| `embeddingProvider.test.ts` (NEW) | `createEmbeddingProvider()` returns null when unconfigured; mocks `fetch` for success, rate-limit, server-error, malformed response; verifies retry behavior; verifies dimension (384) |
-| `indexer.test.ts` (extend) | Vector results blended with FTS results; fallback when embedding function throws; null provider path |
-| G8 closure | Explicit test: embedding API returns 500 → `search()` returns FTS5 results (does not throw) |
-
----
-
-## 8. Validation Criteria
-
-- [ ] Embedding function registered at startup when configured
-- [ ] `SemanticIndexer.search()` blends vector results
-- [ ] Graceful no-op when unconfigured (API key unset)
-- [ ] Failure-path test: embedding API down → FTS5 fallback
+| Artifact | Implemented behavior |
+|----------|----------------------|
+| `babel-cli/src/services/embeddingProvider.ts` | Configured OpenAI-compatible provider, explicit disable path, response validation, and retry handling |
+| `babel-cli/src/services/vectorIndex.ts` | Incremental vector creation from stored FTS file content |
+| `babel-cli/src/services/indexer.ts` | Vector ranking with FTS5 fallback when vectors are unavailable or fail |
+| `babel-cli/src/tools/chronicleMemory.ts` | Lazy provider registration for `semantic_search` |
+| `babel-cli/src/services/embeddingProvider.test.ts` | Configuration, disable, provider response, retry, and dimension coverage |
 
 ---
 
@@ -221,7 +156,7 @@ Remove the TODO comment at line 186.
 |------|-----------|
 | `babel-cli/src/services/vectorIndex.ts` | vec0 table schema, `indexEmbeddings()`, `search()` signatures |
 | `babel-cli/src/services/vectorIndex.test.ts` | Validates the full storage/query stack works with a test embedding function |
-| `babel-cli/src/services/indexer.ts` | `SemanticIndexer` with `setEmbeddingFunction` hook + 2 TODOs (lines 482, 501) |
-| `babel-cli/src/tools/chronicleMemory.ts` | `handleSemanticSearch` with TODO (line 186) |
+| `babel-cli/src/services/indexer.ts` | `SemanticIndexer` embedding registration, indexing, vector search, and FTS5 fallback |
+| `babel-cli/src/tools/chronicleMemory.ts` | Lazy provider registration for `handleSemanticSearch` |
 | `babel-cli/src/config/` | API key configuration |
 | `babel-cli/package.json` | `sqlite-vec: ^0.1.9` runtime dependency confirmed |
