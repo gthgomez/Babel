@@ -41,10 +41,10 @@ function makeManifest() {
     },
     compilation_state: 'uncompiled',
     instruction_stack: {
-      behavioral_ids: ['behavioral_core_v7', 'behavioral_guard_v7'],
+      behavioral_ids: ['behavioral_core_v11'],
       domain_id: 'domain_swe_frontend',
       skill_ids: [],
-      model_adapter_id: 'adapter_codex_balanced',
+      model_adapter_id: 'adapter_codex',
       project_overlay_id: 'overlay_auditguard',
       task_overlay_ids: ['task_frontend_professionalism'],
       pipeline_stage_ids: ['pipeline_qa_reviewer', 'pipeline_cli_executor'],

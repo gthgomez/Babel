@@ -25,11 +25,9 @@ const CATALOG_PATH = join(BABEL_ROOT, 'prompt_catalog.yaml');
 const OUTPUT_ROOT = join(BABEL_ROOT, 'artifacts', 'token-audit');
 
 const DEFAULT_BEHAVIORAL_IDS = [
-  'behavioral_core_v7',
-  'behavioral_cognitive_micro_v7',
-  'behavioral_guard_v7',
+  'behavioral_core_v11',
 ] as const;
-const DEFAULT_MODEL_ADAPTER_ID = 'adapter_codex_balanced';
+const DEFAULT_MODEL_ADAPTER_ID = 'adapter_codex';
 const DEFAULT_PIPELINE_STAGE_IDS = ['pipeline_qa_reviewer'] as const;
 const DEFAULT_RESOLUTION_POLICY: ResolutionPolicy = {
   apply_domain_default_skills: false,

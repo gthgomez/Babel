@@ -331,44 +331,6 @@ function getAlwaysLoadBehavioralEntries(entries: CatalogEntry[]): CatalogEntry[]
   );
 }
 
-function testGuardShouldLoad(
-  taskCategory: LocalTaskCategory,
-  pipelineMode: LocalPipelineMode,
-  taskPrompt: string,
-): boolean {
-  if (pipelineMode === 'plan' || pipelineMode === 'deep') {
-    return true;
-  }
-  if (['frontend', 'backend', 'mobile', 'game', 'devops'].includes(taskCategory)) {
-    return true;
-  }
-  const prompt = normalizeTaskPrompt(taskPrompt);
-  if (!prompt) {
-    return false;
-  }
-  return /\b(implement|edit|modify|fix|debug|refactor|deploy|migrate|migration|write\s+files?|run\s+tests?|execute|commit|create|add|build|generate|produce|scaffold|bootstrap|initialize|setup|delete|remove|erase|clear|purge|drop|destroy|update|change|patch|rewrite|convert|transform|replace|rename|install|configure|release|publish|kill|stop|restart|start|launch|copy|move|extract|compress|download)\b/i.test(
-    prompt,
-  );
-}
-
-function getConditionalGuardBehavioralEntries(
-  entries: CatalogEntry[],
-  taskCategory: LocalTaskCategory,
-  pipelineMode: LocalPipelineMode,
-  taskPrompt: string,
-): CatalogEntry[] {
-  if (!testGuardShouldLoad(taskCategory, pipelineMode, taskPrompt)) {
-    return [];
-  }
-  return entries.filter(
-    (entry) =>
-      entry.layer === 'behavioral_os' &&
-      entry.status === 'active' &&
-      entry.id === 'behavioral_guard_v7' &&
-      entry.tags.includes('conditional_load'),
-  );
-}
-
 function getInferredPurposeModeFromPrompt(
   taskCategory: LocalTaskCategory,
   taskPrompt: string,
@@ -804,7 +766,7 @@ export function resolveLocalStack(options: LocalStackResolveOptions): LocalStack
     model === 'codex'
       ? selectedCodexAdapterName === 'ultra'
         ? 'adapter_codex'
-        : 'adapter_codex_balanced'
+        : 'adapter_codex'
       : model === 'claude'
         ? 'adapter_claude'
         : 'adapter_gemini';
@@ -865,9 +827,6 @@ export function resolveLocalStack(options: LocalStackResolveOptions): LocalStack
     if (preferredStackIds.includes('adapter_codex')) {
       selectedCodexAdapterName = 'ultra';
       selectedAdapterId = 'adapter_codex';
-    } else if (preferredStackIds.includes('adapter_codex_balanced')) {
-      selectedCodexAdapterName = 'balanced';
-      selectedAdapterId = 'adapter_codex_balanced';
     }
   }
 
@@ -903,15 +862,7 @@ export function resolveLocalStack(options: LocalStackResolveOptions): LocalStack
     selectedCognitionSkillIds.push(purposeDiagnostics.PurposeSeedSkillId);
   }
 
-  const behavioralIds = [
-    ...getAlwaysLoadBehavioralEntries(catalogEntries).map((entry) => entry.id),
-    ...getConditionalGuardBehavioralEntries(
-      catalogEntries,
-      options.taskCategory,
-      pipelineMode,
-      options.taskPrompt ?? '',
-    ).map((entry) => entry.id),
-  ];
+  const behavioralIds = getAlwaysLoadBehavioralEntries(catalogEntries).map((entry) => entry.id);
 
   const pipelineStageIds: string[] = [];
   if (pipelineMode === 'deep') {

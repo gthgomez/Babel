@@ -227,10 +227,10 @@ function buildOrchestratorManifest(scenario) {
     },
     compilation_state: 'uncompiled',
     instruction_stack: {
-      behavioral_ids: ['behavioral_core_v7', 'behavioral_guard_v7'],
+      behavioral_ids: ['behavioral_core_v11'],
       domain_id: isFrontend ? 'domain_swe_frontend' : 'domain_swe_backend',
       skill_ids: [],
-      model_adapter_id: 'adapter_codex_balanced',
+      model_adapter_id: 'adapter_codex',
       project_overlay_id: null,
       task_overlay_ids: [],
       pipeline_stage_ids: ['pipeline_qa_reviewer'],
