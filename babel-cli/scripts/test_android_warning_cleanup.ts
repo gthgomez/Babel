@@ -44,10 +44,10 @@ function buildManifest() {
     },
     compilation_state: 'compiled',
     instruction_stack: {
-      behavioral_ids: ['behavioral_core_v7', 'behavioral_guard_v7'],
+      behavioral_ids: ['behavioral_core_v11'],
       domain_id: 'domain_android_kotlin',
       skill_ids: ['skill_android_app_bundle', 'skill_android_release_build'],
-      model_adapter_id: 'adapter_codex_balanced',
+      model_adapter_id: 'adapter_codex',
       project_overlay_id: 'overlay_app_test_babel',
       task_overlay_ids: [],
       pipeline_stage_ids: ['pipeline_qa_reviewer', 'pipeline_cli_executor'],
@@ -60,11 +60,11 @@ function buildManifest() {
     },
     prompt_manifest: ['<BABEL_REPO_ROOT>\\BABEL_BIBLE.md'],
     compiled_artifacts: {
-      selected_entry_ids: ['behavioral_core_v7'],
+      selected_entry_ids: ['behavioral_core_v11'],
       prompt_manifest: ['<BABEL_REPO_ROOT>\\BABEL_BIBLE.md'],
       token_budget_total: 1,
       token_budget_missing: [],
-      token_budget_by_entry: { behavioral_core_v7: 1 },
+      token_budget_by_entry: { behavioral_core_v11: 1 },
       warnings: [],
     },
     handoff_payload: {

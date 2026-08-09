@@ -130,9 +130,8 @@ Ready to implement. Type "ACT" to proceed.
 
 When loaded, this adapter sits at layer 8 (Model Adapter) in the Babel canonical load order:
 
-1. `behavioral_core_v10`
-2. `behavioral_cognitive_micro_v7`
-3. Conditional Guard modules
+1. `behavioral_core_v11`
+2. Conditional governance resolved by the canonical catalog
 4. Domain Architect
 5. Skills
 6. Project Overlay

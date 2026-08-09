@@ -174,6 +174,59 @@ test('embedTexts returns embeddings for multiple texts in correct order', async 
   assert.ok(Math.abs(r2[0]! - 0.9) < 0.001, `expected ~0.9, got ${r2[0]}`);
 });
 
+test('embedTexts rejects malformed response data without retrying', async () => {
+  setEnv('OPENAI_API_KEY', 'sk-test');
+  installMockFetch();
+  mockFetchResponse = {
+    status: 200,
+    body: { data: [{ embedding: 'not-a-vector', index: 0 }] },
+  };
+
+  const provider = createEmbeddingProvider()!;
+  await assert.rejects(
+    () => provider.embedTexts(['test']),
+    (err: unknown) => err instanceof Error && err.message.includes('Invalid embedding API response'),
+  );
+  assert.equal(fetchCalls.length, 1);
+});
+
+test('embedTexts rejects wrong-dimension response vectors without retrying', async () => {
+  setEnv('OPENAI_API_KEY', 'sk-test');
+  installMockFetch();
+  mockFetchResponse = {
+    status: 200,
+    body: { data: [{ embedding: Array(3).fill(0.1), index: 0 }] },
+  };
+
+  const provider = createEmbeddingProvider()!;
+  await assert.rejects(
+    () => provider.embedTexts(['test']),
+    (err: unknown) => err instanceof Error && err.message.includes('384 numbers'),
+  );
+  assert.equal(fetchCalls.length, 1);
+});
+
+test('embedTexts rejects invalid JSON without retrying', async () => {
+  setEnv('OPENAI_API_KEY', 'sk-test');
+  let callCount = 0;
+  globalThis.fetch = async () => {
+    callCount++;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => { throw new SyntaxError('Unexpected token'); },
+      text: async () => '',
+    } as unknown as Response;
+  };
+
+  const provider = createEmbeddingProvider()!;
+  await assert.rejects(
+    () => provider.embedTexts(['test']),
+    (err: unknown) => err instanceof Error && err.message.includes('body is not valid JSON'),
+  );
+  assert.equal(callCount, 1);
+});
+
 test('embedTexts sorts out-of-order API responses by index', async () => {
   setEnv('OPENAI_API_KEY', 'sk-test');
   installMockFetch();

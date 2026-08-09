@@ -69,7 +69,7 @@ function runV9CoverageChecks(): void {
   assertContains(v9Text, 'EXAMPLE — Backend API Fix', 'v9 example heading');
   assertContains(v9Text, '"domain_id": "domain_swe_backend"', 'v9 example domain');
   assertContains(v9Text, '"skill_ids": ["skill_ts_zod", "skill_supabase_pg"]', 'v9 example skills');
-  assertContains(v9Text, '"model_adapter_id": "adapter_codex_balanced"', 'v9 example model adapter');
+  assertContains(v9Text, '"model_adapter_id": "adapter_codex"', 'v9 example model adapter');
 
   assertPromptIdsExist(v9Text, 'v9 prompt ids');
 }

@@ -39,7 +39,7 @@ export function buildV9OrchestratorTask(task: string, options: OrchestratorTaskO
     '  },',
     '  "compilation_state": "uncompiled",',
     '  "instruction_stack": {',
-    '    "behavioral_ids": ["behavioral_core_v10", "behavioral_cognitive_micro_v7", "behavioral_guard_v7"],',
+    '    "behavioral_ids": ["behavioral_core_v11"],',
     '    "domain_id": "domain_swe_backend|domain_swe_frontend|domain_devops|domain_godot_game_dev|domain_research|domain_mobile|domain_llm_router|domain_web|domain_game",',
     '    "skill_ids": [],',
     '    "model_adapter_id": "...",',
