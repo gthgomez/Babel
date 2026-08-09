@@ -50,7 +50,7 @@ function assertPromptIdsExist(text: string, label: string): void {
 }
 
 function runV9CoverageChecks(): void {
-  assertContains(v9Text, 'Mobile/Android', 'v9 mobile routing table');
+  assertContains(v9Text, '**Mobile / Android**', 'v9 mobile routing table');
   assertContains(v9Text, '`domain_android_kotlin`', 'v9 mobile domain');
 
   for (const id of [
@@ -66,10 +66,10 @@ function runV9CoverageChecks(): void {
   }
 
   // Verify the canonical example block exists with expected structure
-  assertContains(v9Text, 'EXAMPLE — Backend API Fix', 'v9 example heading');
+  assertContains(v9Text, '## 5. EXAMPLES', 'v9 example section');
   assertContains(v9Text, '"domain_id": "domain_swe_backend"', 'v9 example domain');
   assertContains(v9Text, '"skill_ids": ["skill_ts_zod", "skill_supabase_pg"]', 'v9 example skills');
-  assertContains(v9Text, '"model_adapter_id": "adapter_codex"', 'v9 example model adapter');
+  assertContains(v9Text, '"model_adapter_id": "adapter_deepseek_balanced"', 'v9 example model adapter');
 
   assertPromptIdsExist(v9Text, 'v9 prompt ids');
 }

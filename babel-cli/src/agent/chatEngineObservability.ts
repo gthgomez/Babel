@@ -14,6 +14,8 @@ import type { BlockedReport, TerminalOutcome } from '../schemas/agentContracts.j
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
 import type { ChatToolAction } from './chatToolDefinitions.js';
 import { chatActionToolName } from './chatToolDefinitions.js';
+import { isOfflineChatMode } from './chatModelPolicy.js';
+import { assertDeepSeekLiveModelId } from '../modelPolicy.js';
 import type { DiffCriticVerdict } from './diffCritic.js';
 import { computeToolCallAggregates, type ToolCallAggregates } from './toolCallExport.js';
 import type { PolicyEvent, PolicyEventKind, PolicyEventLog } from './policyEventLog.js';
@@ -909,6 +911,7 @@ export function pushProviderTurnMessages(input: {
 export function makeChatRunner(
   modelName: string,
 ): DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner {
+  if (!isOfflineChatMode()) assertDeepSeekLiveModelId(modelName, 'live chat phase routing');
   const isDS = modelName.toLowerCase().includes('deepseek');
   const isOL = modelName.toLowerCase().includes('ollama') || modelName.includes(':');
   return isOL ? new OllamaApiRunner(modelName)

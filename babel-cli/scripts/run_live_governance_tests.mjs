@@ -48,8 +48,6 @@ if (requiredDeepSeek) {
 
 if (process.env.DEEPSEEK_API_KEY && !requiredDeepSeek && !isReplayMode) {
   process.env.BABEL_LIVE_GOVERNANCE_PROVIDER = 'deepseek';
-} else if (process.env.DEEPINFRA_API_KEY && !requiredDeepSeek && !isReplayMode) {
-  process.env.BABEL_LIVE_GOVERNANCE_PROVIDER = 'deepinfra';
 } else {
   delete process.env.BABEL_LIVE_GOVERNANCE_PROVIDER;
 }
@@ -66,13 +64,7 @@ const provider = requiredDeepSeek
       envKeyName: 'DEEPSEEK_API_KEY',
       modelPolicyPath: process.env.BABEL_MODEL_POLICY_PATH,
     }
-    : (process.env.DEEPINFRA_API_KEY
-      ? {
-        id: 'deepinfra',
-        envKeyName: 'DEEPINFRA_API_KEY',
-        modelPolicyPath: process.env.BABEL_MODEL_POLICY_PATH || null,
-      }
-      : null));
+    : null);
 
 if (!provider) {
   if (requiredDeepSeek) {
@@ -80,7 +72,7 @@ if (!provider) {
     console.error('[test:live-governance:required] failed — no governance provider is available');
     process.exit(1);
   }
-  console.log('[test:live-governance] skipped — DEEPSEEK_API_KEY or DEEPINFRA_API_KEY not set');
+    console.log('[test:live-governance] skipped — DEEPSEEK_API_KEY not set');
   console.log('  Run offline replay: npm run test:governance-replay');
   process.exit(0);
 }
@@ -101,9 +93,5 @@ if (requiredDeepSeek) {
   process.exit(0);
 }
 runNpmScript('test:pipeline-v9');
-if (provider.id === 'deepinfra') {
-  runNpmScript('test:otel-tracing');
-} else {
-  console.log('[test:live-governance] OTel regression skipped for direct DeepSeek live proof; run test:otel-tracing separately.');
-}
+console.log('[test:live-governance] OTel regression skipped for direct DeepSeek live proof; run test:otel-tracing separately.');
 console.log('[test:live-governance] passed');

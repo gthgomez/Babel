@@ -22,6 +22,8 @@ import {
 import { formatBudgetExceededAnswer } from './budgetKillPolicy.js';
 import { isSuccessfulDirectMutation } from './mutationTools.js';
 import type { ChatMessage } from './chatToolDefinitions.js';
+import { isOfflineChatMode } from './chatModelPolicy.js';
+import { assertDeepSeekLiveModelId } from '../modelPolicy.js';
 
 export type CriticToolLogEntry = {
   tool: string;
@@ -262,6 +264,7 @@ export function resolveOrCreateCriticRunner(
   fallback: () => CriticRunner,
 ): { runner: CriticRunner; cache: CriticRunner } {
   if (cached) return { runner: cached, cache: cached };
+  if (!isOfflineChatMode()) assertDeepSeekLiveModelId(modelId, 'live chat diff critic');
   const lower = modelId.toLowerCase();
   let runner: CriticRunner;
   try {
@@ -284,6 +287,7 @@ export function resolveOrCreateCriticProRunner(
   flashFallback: () => CriticRunner,
 ): { runner: CriticRunner; cache: CriticRunner } {
   if (cached) return { runner: cached, cache: cached };
+  if (!isOfflineChatMode()) assertDeepSeekLiveModelId(modelId, 'live chat pro diff critic');
   const lower = modelId.toLowerCase();
   let runner: CriticRunner;
   try {

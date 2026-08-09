@@ -849,11 +849,20 @@ test('buildPipelineV9OfflineFixtureResponse: standard lane, evidence_loop return
   });
 });
 
-test('buildPipelineV9OfflineFixtureResponse: standard lane, orchestrator returns null', () => {
-  // The standard (non-OTel) offline path does not handle orchestrator stage
+test('buildPipelineV9OfflineFixtureResponse: standard lane, orchestrator returns manifest', () => {
   withEnv('BABEL_PIPELINE_V9_OFFLINE', '1', () => {
-    const result = buildPipelineV9OfflineFixtureResponse('some task', { stage: 'orchestrator' });
-    assert.equal(result, null);
+    const result = buildPipelineV9OfflineFixtureResponse(
+      '--- TASK CONTEXT ---\nTask: some task\nPreferred project: fixture',
+      {
+      stage: 'orchestrator',
+      },
+    ) as Record<string, unknown>;
+    assert.equal(result.orchestrator_version, '9.0');
+    assert.equal((result.analysis as Record<string, unknown>).task_summary, 'some task');
+    assert.equal(
+      (result.instruction_stack as Record<string, unknown>).model_adapter_id,
+      'adapter_codex',
+    );
   });
 });
 
@@ -868,7 +877,7 @@ test('buildPipelineV9OfflineFixtureResponse: standard lane, mode fallback works'
 
     // Unrecognized stage/mode → null
     const unknown = buildPipelineV9OfflineFixtureResponse('test', {
-      stage: 'orchestrator' as PipelineStage,
+      stage: 'unrecognized' as PipelineStage,
     });
     assert.equal(unknown, null);
   });

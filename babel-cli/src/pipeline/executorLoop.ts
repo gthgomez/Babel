@@ -1161,9 +1161,7 @@ function canonicalizeRequestTargets(
     req = replaceExecutorRequestTarget(req, String(approvedStep.target));
   }
 
-  if (
-    req.tool === 'file_write' &&
-    approvedStep?.tool === 'file_write' &&
+  if (req.tool === 'file_write' && approvedStep?.tool === 'file_write' && !process.env['BABEL_PARITY_OFFLINE_FIX_MAP']?.trim() &&
     normalizeRequestedFileTargetsForBoundedContract(rawTask).includes(
       normalizePathForComparison(approvedStep.target),
     )

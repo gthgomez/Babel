@@ -214,13 +214,14 @@ Exit gates (unit-covered in `compactionCommit.test.ts` / `chatCompaction.test.ts
 
 ### H2 — Policy-Bound LiveSession and crash recovery
 
-**Status: PARTIAL** (ChatEngine authority persistence and restore now fail closed with validated manifest/contract identities, but complete budget/idempotency reconstruction and the governed V9 pipeline do not yet share this contract.)
+**Status: PARTIAL** (ChatEngine authority persistence and restore fail closed with validated manifest/contract identities. Governed V9 Plan/Deep now persist the same frozen authority and terminal LiveSession projection after typed-stack resolution, but complete live budget/idempotency reconstruction remains Chat-only.)
 
 Live path:
 
 - `ChatEngine` constructor freezes `InstructionManifestV1` + `TaskContractV1` via `initLiveAuthorityOnEngine` and persists them under the session run dir.
 - `checkpointParityEventLog` / `finalizeParityTurnSync` dual-write `budget_snapshot`, reproject `LiveSession`, and persist `live-session-snapshot.json`.
 - `restoreSessionEvents` reloads authority from disk, settles interrupted tools, and reprojects LiveSession (no invented success / no double-mutate).
+- Governed V9 Plan/Deep freeze the resolved prompt manifest plus `TaskContractV1` before planning/execution, persist the shared artifacts, and map final pipeline status into the shared terminal vocabulary without replacing their controller policies.
 
 Exit gates proven on controller path: task/manifest restore, completed idempotency deny, interrupted non-retry, crash-boundary projections never invent `VERIFIED_COMPLETE`, plan contract read-only effects, disk resume equivalence.
 
@@ -243,11 +244,12 @@ Exit gates:
 
 ### H3 — Universal task contract and honest outcome taxonomy
 
-**Status: PARTIAL** (ChatEngine freezes a contract, but it uses generic acceptance criteria and lacks baseline reproduction/verifier state; V9 is not yet covered.)
+**Status: PARTIAL** (ChatEngine freezes a contract but still uses generic acceptance criteria. V9 Plan/Deep now freeze the shared contract with baseline workspace identity, but plan-derived acceptance/verifier receipts and full cross-surface outcomes remain open.)
 
 - Frozen contract identity on every ChatEngine construction; plan profile restricts `allowed_effects` to `read_only`.
 - Honest outcomes `NO_CHANGE_REQUIRED` / `INVALID_TASK` / `NEEDS_HUMAN_DECISION` with exit-code mapping and live UI status mappers.
 - FailureClass budgets: infrastructure retries do not consume implementation-repair budget.
+- V9 Plan/Deep persist `TaskContractV1`; Plan remains `read_only`, while Deep retains governed effect classes and can only record `VERIFIED_COMPLETE` when its verifier contract is satisfied.
 
 Deliverables:
 

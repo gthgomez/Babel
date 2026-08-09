@@ -221,29 +221,39 @@ Conservative rules:
 
 ### Step D: MODEL_SELECTION (Babel CLI Runtime Policy)
 
-Unless the user explicitly specifies a model, apply this decision logic based on the configured **Babel CLI DeepInfra** waterfall. This is Babel-local runtime policy, not a statement about OpenAI Codex CLI or OpenAI Codex model defaults. This table mirrors `config/model-policy.json`; if runtime policy differs, `model-policy.json` is authoritative and this file must be updated.
+Provider-backed live runs use the direct DeepSeek policy below. This is Babel-local runtime policy, not a statement about OpenAI Codex CLI or OpenAI Codex model defaults. DeepInfra/Qwen3 and other provider tiers remain in the repository for offline tests and legacy compatibility, but are not valid live routes.
+
+| Stage | Live model |
+|-------|------------|
+| orchestrator | `deepseek-v4-flash` |
+| executor | `deepseek-v4-flash` |
+| planning | `deepseek-v4-pro` |
+| qa | `deepseek-v4-pro` |
+
+The `deepseek` alias resolves to `deepseek-v4-pro`. Live runs require `DEEPSEEK_API_KEY` and fail closed before any non-DeepSeek network request.
+
+The following tier table is retained only as an offline/legacy compatibility reference:
 
 | Tier | Best For | Backend Key | Adapter ID | Checkpoint |
 |-------|----------|------------|------------|------------|
 | **standard** | Configured standard practitioner lane for coding and QA | `deepseek` (DeepSeek-V3-0324) | `adapter_deepseek_balanced` | `deepseek-ai/DeepSeek-V3-0324` |
 | **cheap** | Everyday worker turns, everyday planning, simple logic | `qwen3` (Qwen3-235B-Instruct-2507) | `adapter_qwen` | `Qwen/Qwen3-235B-A22B-Instruct-2507` (non-thinking checkpoint — standard mode only) |
 | **triage** | Fast structural analysis, orchestrator turns | `scout` (Llama-4-Scout) | `adapter_scout` | `meta-llama/Llama-4-Scout-17B-16E-Instruct` |
-| **fallback** | Budget rescue, lightweight recovery | `qwen3-32b` | `adapter_ultraterse_fallback` | `Qwen/Qwen3-32B` |
+| **fallback** | Budget rescue, lightweight recovery | `qwen3-32b` | `adapter_codex` | `Qwen/Qwen3-32B` |
 | **escalation** | Adversarial critique, plan verification | `nemotron` | `adapter_nemotron` | `nvidia/NVIDIA-Nemotron-3-Super-120B-A12B` |
 
-> **Qwen tier note:** `adapter_qwen` targets the `-Instruct-2507` non-thinking checkpoint.
+> **Legacy/offline note:** `adapter_qwen` targets the `-Instruct-2507` non-thinking checkpoint.
 > It does NOT support `<thinking>` blocks and must not receive `/think` or `/no_think`
 > mode-switch instructions. For reasoning-heavy PLAN turns, route to a reasoning-capable
 > checkpoint or adapter explicitly.
 
 
-**Default Selections:**
-- Use **`deepseek`** for the configured standard-tier refactoring, complex logic, and QA stages.
-- Use **`qwen3`** for routine execution and repository edits.
-- Use **`scout`** for fast orchestration and structural validation.
+**Live Default Selections:**
+- Use **`deepseek-v4-flash`** for orchestration and execution.
+- Use **`deepseek-v4-pro`** for planning and QA.
 
 **Platform Note:**
-- **Babel CLI** uses the DeepInfra waterfall above for cost-efficiency.
+- **Babel CLI live runs** use the DeepSeek-only stage policy above.
 - **OpenAI Codex CLI / IDE / app** use OpenAI's current Codex model picker and configuration. Do not infer OpenAI Codex behavior from this Babel-local table.
 - **Web Surfaces** (ChatGPT, Claude.ai, Gemini.google.com) may use native Pro/Opus models, but Babel CLI strictly follows the `model-policy.json` waterfall.
 
@@ -252,7 +262,7 @@ If the selected model is **`deepseek`**, choose the adapter as follows:
 | Condition | Adapter ID |
 |-----------|------------|
 | Multi-file refactor, architecture-preserving extraction, frontend polish | `adapter_deepseek_balanced` |
-| Schema generation, dense algorithmic task, compressed execution output | `adapter_ultraterse_fallback` |
+| Schema generation, dense algorithmic task, compressed execution output | `adapter_codex` |
 
 
 
@@ -421,7 +431,7 @@ Use project-relative paths unless a runtime API explicitly requires a resolved p
     "approval_mode": "[none | explicit_confirmation | takeover_or_confirmation | implicit_permissions | unknown]"
   },
   "worker_configuration": {
-    "assigned_model": "[deepseek | qwen3 | scout | nemotron | qwen3-32b]",
+    "assigned_model": "[deepseek | deepseek-v4-flash | deepseek-v4-pro]",
     "rationale": "One sentence explaining why this model fits the task."
   },
   "prompt_manifest": [],

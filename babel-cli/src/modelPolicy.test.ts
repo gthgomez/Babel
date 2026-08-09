@@ -10,6 +10,7 @@ import {
   resolveFamilyModelPolicy,
   resolveStagePolicyRoutes,
   validateModelPolicyMetadataFreshness,
+  assertDeepSeekLiveModelId,
 } from './modelPolicy.js';
 
 function createModelPolicyRoot(): string {
@@ -337,4 +338,56 @@ test('default model policy resolves family tiers to configured backends', () => 
   assert.equal(routeByStage.get('qa')?.primaryBackendKey, 'deepseek-v4-pro');
   assert.equal(routeByStage.get('executor')?.primaryBackendKey, 'deepseek-v4-pro');
   assert.equal(routeByStage.get('qa')?.orderedBackends[1]?.backendKey, 'nemotron');
+});
+
+function createLiveRoutingPolicyRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), 'babel-live-model-policy-'));
+  mkdirSync(join(root, 'config'), { recursive: true });
+  writeFileSync(
+    join(root, 'config', 'model-policy.json'),
+    JSON.stringify({
+      version: 1,
+      default_tier: 'cheap',
+      family_defaults: { DeepSeek: { cheap: 'deepseek-v4-flash', standard: 'deepseek-v4-pro' } },
+      models: {
+        qwen3: { provider: 'deepinfra', model_id: 'Qwen/Qwen3', tier: 'cheap' },
+        'deepinfra-model': { provider: 'deepinfra', model_id: 'meta/legacy', tier: 'cheap' },
+        'deepseek-v4-flash': { provider: 'deepseek', model_id: 'deepseek-v4-flash', tier: 'cheap' },
+        'deepseek-v4-pro': { provider: 'deepseek', model_id: 'deepseek-v4-pro', tier: 'standard' },
+        deepseek: { provider: 'deepseek', model_id: 'deepseek-v4-pro', tier: 'standard' },
+      },
+      stages: {
+        orchestrator: { primary_backend_key: 'deepseek-v4-flash', ordered_backend_keys: ['deepseek-v4-flash', 'qwen3'] },
+        executor: { primary_backend_key: 'deepseek-v4-flash', ordered_backend_keys: ['deepseek-v4-flash', 'qwen3'] },
+        planning: { primary_backend_key: 'deepseek-v4-pro', ordered_backend_keys: ['deepseek-v4-pro', 'deepinfra-model'] },
+        qa: { primary_backend_key: 'deepseek-v4-pro', ordered_backend_keys: ['deepseek-v4-pro', 'deepinfra-model'] },
+      },
+    }),
+    'utf-8',
+  );
+  return root;
+}
+
+test('DeepSeek live policy accepts Flash/Pro and rejects legacy providers', () => {
+  const root = createLiveRoutingPolicyRoot();
+  assertDeepSeekLiveModelId('deepseek-v4-flash');
+  assertDeepSeekLiveModelId('deepseek-v4-pro');
+  assert.throws(() => assertDeepSeekLiveModelId('Qwen/Qwen3'), /LIVE_MODEL_POLICY/);
+
+  const routes = resolveStagePolicyRoutes({ babelRoot: root, liveOnly: true });
+  const routeByStage = new Map(routes.map((route) => [route.stage, route]));
+  assert.equal(routeByStage.get('orchestrator')?.primaryBackendKey, 'deepseek-v4-flash');
+  assert.equal(routeByStage.get('executor')?.primaryBackendKey, 'deepseek-v4-flash');
+  assert.equal(routeByStage.get('planning')?.primaryBackendKey, 'deepseek-v4-pro');
+  assert.equal(routeByStage.get('qa')?.primaryBackendKey, 'deepseek-v4-pro');
+  for (const route of routes) {
+    assert.ok(route.orderedBackends.every((entry) => entry.provider === 'deepseek'));
+  }
+
+  assert.equal(
+    resolveModelByKey({ key: 'deepseek', babelRoot: root, liveOnly: true }).providerModelId,
+    'deepseek-v4-pro',
+  );
+  assert.throws(() => resolveModelByKey({ key: 'qwen3', babelRoot: root, liveOnly: true }), /LIVE_MODEL_POLICY/);
+  assert.throws(() => resolveModelByKey({ key: 'deepinfra-model', babelRoot: root, liveOnly: true }), /LIVE_MODEL_POLICY/);
 });

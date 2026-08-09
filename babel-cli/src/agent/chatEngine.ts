@@ -21,11 +21,14 @@ import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
 import { OllamaApiRunner } from '../runners/ollamaApi.js';
 import type { ProviderMessage, RunnerCallbacks } from '../runners/base.js';
 import {
-  resolveFamilyModelPolicy,
-  loadModelPolicyConfig,
-  getAvailableModels,
+  assertDeepSeekLiveModelId,
   type ResolvedModelPolicy,
 } from '../modelPolicy.js';
+import {
+  isOfflineChatMode,
+  resolveChatModelPolicy,
+  resolveFallbackModelId,
+} from './chatModelPolicy.js';
 import { globalCostTracker } from '../services/costTracker.js';
 import type { SessionUsageSummary } from '../services/costTracker.js';
 import {
@@ -236,6 +239,7 @@ import {
   type ObservabilityHandles,
   type PromptFingerprint,
 } from './chatEngineObservability.js';
+
 import {
   buildCriticBlockedAnswer,
   buildCriticBlockedReport,
@@ -745,17 +749,13 @@ export class ChatEngine {
 
     // Resolve model policy for provider selection.
     // Always resolve — when no model is specified, use the policy default tier.
-    const isOffline =
-      process.env['BABEL_OFFLINE'] === '1' ||
-      process.env['BABEL_OFFLINE'] === 'true' ||
-      process.argv.includes('--offline');
-    this.modelPolicy = resolveFamilyModelPolicy({
-      family: isOffline ? 'Ollama' : (options.model ?? 'DeepSeek'),
-      ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
+    const { policy: modelPolicy, offline: isOffline } = resolveChatModelPolicy({
+      ...(options.model !== undefined ? { model: options.model } : {}),
+      ...(options.modelTier !== undefined ? { modelTier: options.modelTier } : {}),
       ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
       ...(process.env['BABEL_ROOT'] ? { babelRoot: process.env['BABEL_ROOT'] } : {}),
     });
-
+    this.modelPolicy = modelPolicy;
     // Text-tools / offline mode: override limits for small local models.
     // gemma3:4b has ~4K practical attention ceiling and ~6K VRAM headroom.
     // We compact aggressively to keep the model within its effective range.
@@ -766,13 +766,10 @@ export class ChatEngine {
         maxConversationMessages: 8,
       };
     }
-
     // Discover project test commands for verification gate hints.
     this.discoveredTestCommands = discoverProjectTestCommands(this.options.projectRoot);
-
     // Repetition loop detector: safety net for text-tools path gemma loops.
     this.repetitionDetector = new RepetitionDetector();
-
     // Tier A5: Observation tail buffer sized from env.
     this.observationTails = new ObservationTailBuffer({
       maxEntries: 5,
@@ -3978,22 +3975,26 @@ export class ChatEngine {
     if (!this.synthesisRunner) {
       const provider = this.modelPolicy?.provider;
       const modelId = this.modelPolicy?.providerModelId;
+      const offline = isOfflineChatMode();
       if (provider === 'ollama' && modelId) {
+        if (!offline) throw new Error('[LIVE_MODEL_POLICY] Ollama is not a valid live chat provider.');
         try {
           this.synthesisRunner = new OllamaApiRunner(modelId);
         } catch {
-          this.synthesisRunner = new DeepInfraApiRunner(this.resolveFallbackModelId());
+          this.synthesisRunner = new DeepInfraApiRunner(resolveFallbackModelId());
         }
       } else if (provider === 'deepseek' && modelId) {
         try {
           this.synthesisRunner = new DeepSeekApiRunner(modelId);
         } catch {
-          this.synthesisRunner = new DeepInfraApiRunner(this.resolveFallbackModelId());
+          if (!offline) throw new Error('Cannot start live chat synthesis: DeepSeek runner is unavailable. Set DEEPSEEK_API_KEY in your environment.');
+          this.synthesisRunner = new DeepInfraApiRunner(resolveFallbackModelId());
         }
       } else if (modelId) {
-        this.synthesisRunner = new DeepInfraApiRunner(modelId);
+        if (!offline) assertDeepSeekLiveModelId(modelId, 'live chat synthesis');
+        this.synthesisRunner = offline ? new DeepInfraApiRunner(modelId) : new DeepSeekApiRunner(modelId);
       } else {
-        this.synthesisRunner = new DeepInfraApiRunner(this.resolveFallbackModelId());
+        this.synthesisRunner = offline ? new DeepInfraApiRunner(resolveFallbackModelId()) : new DeepSeekApiRunner('deepseek-v4-flash');
       }
     }
 
@@ -4184,6 +4185,12 @@ export class ChatEngine {
         try {
           this.deliberationRunner = new DeepSeekApiRunner(modelId);
         } catch (err) {
+          if (!isOfflineChatMode()) {
+            throw new Error(
+              'Cannot start live chat: DeepSeek runner is unavailable. ' +
+                'Set DEEPSEEK_API_KEY in your environment.',
+            );
+          }
           // Fall back to DeepSeek Flash if v4 Pro is unavailable
           try {
             this.deliberationRunner = new DeepSeekApiRunner('deepseek-v4-flash');
@@ -4198,23 +4205,24 @@ export class ChatEngine {
           }
         }
       } else if (modelId) {
+        const offline = isOfflineChatMode();
+        if (!offline) assertDeepSeekLiveModelId(modelId, 'live chat');
         try {
-          this.deliberationRunner = new DeepInfraApiRunner(modelId);
+          this.deliberationRunner = offline ? new DeepInfraApiRunner(modelId) : new DeepSeekApiRunner(modelId);
         } catch (err) {
-          throw new Error(
-            `Cannot start chat: DeepInfra runner failed to initialize.\n` +
-              `  ${err instanceof Error ? err.message : String(err)}\n` +
-              `  Set DEEPINFRA_API_KEY in your environment.\n` +
-              `  Use /model to see available providers.`,
-          );
+          throw new Error(`Cannot start chat: ${offline ? 'DeepInfra' : 'DeepSeek'} runner failed to initialize.\n  ${err instanceof Error ? err.message : String(err)}\n  Set ${offline ? 'DEEPINFRA_API_KEY' : 'DEEPSEEK_API_KEY'} in your environment.\n  Use /model to see available providers.`);
         }
       } else {
         // No model configured — resolve from policy default tier.
-        // Try DeepSeek first (default provider), fall back to DeepInfra.
-        const fallbackId = this.resolveFallbackModelId();
+        const fallbackId = resolveFallbackModelId();
         try {
-          this.deliberationRunner = new DeepSeekApiRunner(fallbackId);
+          this.deliberationRunner = new DeepSeekApiRunner(isOfflineChatMode() ? fallbackId : 'deepseek-v4-flash');
         } catch {
+          if (!isOfflineChatMode()) {
+            throw new Error(
+              'Cannot start live chat: DeepSeek runner is unavailable. Set DEEPSEEK_API_KEY in your environment.',
+            );
+          }
           try {
             this.deliberationRunner = new DeepInfraApiRunner(fallbackId);
           } catch (err) {
@@ -4229,30 +4237,6 @@ export class ChatEngine {
       }
     }
     return this.deliberationRunner;
-  }
-
-  /** Resolve the model ID to use when no user model is configured.
-   *  Reads model-policy.json and picks the cheapest enabled model,
-   *  falling back to a hardcoded default only if the policy is unavailable. */
-  private resolveFallbackModelId(): string {
-    try {
-      const policy = loadModelPolicyConfig();
-      const available = getAvailableModels();
-      const enabled = available.filter((m) => m.entry.enabled !== false);
-      if (enabled.length > 0) {
-        // Pick cheapest by output cost per 1M tokens
-        enabled.sort(
-          (a, b) =>
-            (a.entry.estimated_cost_per_1m_output ?? Infinity) -
-            (b.entry.estimated_cost_per_1m_output ?? Infinity),
-        );
-        const cheapest = enabled[0]!;
-        return cheapest.entry.model_id;
-      }
-    } catch {
-      /* policy unavailable — use hardcoded fallback */
-    }
-    return 'deepseek-v4-flash';
   }
 
   /**
@@ -4301,6 +4285,17 @@ export class ChatEngine {
 
   private resolveFallbackRunner(): DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | null {
     if (!this.options.fallbackModel) return null;
+    if (!isOfflineChatMode()) {
+      assertDeepSeekLiveModelId(this.options.fallbackModel, 'live chat fallback');
+      if (!this.fallbackRunner) {
+        try {
+          this.fallbackRunner = new DeepSeekApiRunner(this.options.fallbackModel);
+        } catch {
+          return null;
+        }
+      }
+      return this.fallbackRunner;
+    }
     if (!this.fallbackRunner) {
       try {
         this.fallbackRunner = new OllamaApiRunner(this.options.fallbackModel);
@@ -4608,6 +4603,9 @@ export class ChatEngine {
       mutateModel: this.limits.mutateModel,
     });
     if (!modelName) return this.resolveDeliberationRunner();
+    if (!isOfflineChatMode()) {
+      assertDeepSeekLiveModelId(modelName, 'live chat phase routing');
+    }
     const isInvestigate = !this._lastPhase || this._lastPhase === 'investigate';
     if (isInvestigate) {
       this.investigateRunner ??= makeChatRunner(modelName);

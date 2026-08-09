@@ -76,7 +76,7 @@ const deepSeekLiveModelPolicyPath = join(
 );
 
 function hasLiveGovernanceProviderKey(): boolean {
-  return Boolean(process.env['DEEPSEEK_API_KEY'] || process.env['DEEPINFRA_API_KEY']);
+  return Boolean(process.env['DEEPSEEK_API_KEY']);
 }
 
 function liveGovernanceEnvPatch(): Record<string, string | undefined> {
@@ -84,11 +84,6 @@ function liveGovernanceEnvPatch(): Record<string, string | undefined> {
     return {
       BABEL_LIVE_GOVERNANCE_PROVIDER: 'deepseek',
       BABEL_MODEL_POLICY_PATH: process.env['BABEL_MODEL_POLICY_PATH'] ?? deepSeekLiveModelPolicyPath,
-    };
-  }
-  if (process.env['DEEPINFRA_API_KEY']) {
-    return {
-      BABEL_LIVE_GOVERNANCE_PROVIDER: 'deepinfra',
     };
   }
   return {};
@@ -745,7 +740,7 @@ async function runOfflineRegression(): Promise<void> {
 
 async function runLiveRegression(): Promise<void> {
   if (!hasLiveGovernanceProviderKey()) {
-    console.log('[test:pipeline-v9:live] SKIPPED — DEEPSEEK_API_KEY/DEEPINFRA_API_KEY not set');
+    console.log('[test:pipeline-v9:live] SKIPPED — DEEPSEEK_API_KEY not set');
     return;
   }
 

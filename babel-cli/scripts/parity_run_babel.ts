@@ -15,7 +15,7 @@ interface CliOptions {
   task: string;
   mode?: ParityCorpusRunMode;
   provider?: 'mock' | 'live';
-  command?: 'daily' | 'plan' | 'deep';
+  command?: 'run';
   output?: string;
   evidenceDir?: string;
   json: boolean;
@@ -31,7 +31,7 @@ function printHelp(): void {
     'Options:',
     '  --task <id|all>     parity corpus task id or all (default: all)',
     '  --mode <mode>       fix | ask | worker-loop (default: per-task; ask for read-only fixtures)',
-    '  --command <c>      daily | plan | deep (default: daily)',
+    '  --command <c>      run (default: run; legacy daily/plan/deep aliases are removed)',
     '  --provider <p>      mock | live (default: mock; live requires API keys in .env)',
     '  --output <path>     Write parity --fixture compatible JSON',
     '  --evidence-dir <p>  Evidence directory (default: runs/parity-corpus)',
@@ -84,8 +84,8 @@ function parseArgs(argv: string[]): CliOptions {
     }
     if (arg === '--command') {
       const command = readValue(argv, ++index, '--command');
-      if (command !== 'daily' && command !== 'plan' && command !== 'deep') {
-        throw new Error('--command must be daily, plan, or deep');
+      if (command !== 'run') {
+        throw new Error('--command must be run');
       }
       options.command = command;
       continue;

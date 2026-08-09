@@ -117,7 +117,7 @@ function readValue(argv: string[], index: number, flag: string): string {
 }
 
 function hasLiveProviderKey(): boolean {
-  return Boolean(process.env['DEEPSEEK_API_KEY'] || process.env['DEEPINFRA_API_KEY']);
+  return Boolean(process.env['DEEPSEEK_API_KEY']);
 }
 
 const INTERNAL_VERBS = new Set(['daily', 'plan', 'undo', 'review']);
@@ -296,7 +296,7 @@ async function main(): Promise<void> {
     return;
   }
   if (options.provider === 'live' && !hasLiveProviderKey()) {
-    throw new Error('Live discovery requires DEEPSEEK_API_KEY or DEEPINFRA_API_KEY.');
+    throw new Error('Live discovery requires DEEPSEEK_API_KEY.');
   }
 
   const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '');

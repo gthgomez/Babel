@@ -805,7 +805,7 @@ async function runParityAgentCell(
     const parityResult = await runParityBabelCell(parityTaskId, {
       provider: 'mock',
       evidenceDir,
-      command: 'daily',
+      command: 'run',
     });
     const cell = toAgentCellResult(task, parityResult, null);
     return { ...cell, execution_path: 'parity_offline_demo', input_tokens: null, output_tokens: null };

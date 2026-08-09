@@ -132,10 +132,7 @@ function defaultEvidenceDir(): string {
 }
 
 function hasLiveProviderCredentials(): boolean {
-  return Boolean(
-    process.env['DEEPINFRA_API_KEY']?.trim() ||
-    process.env['DEEPSEEK_API_KEY']?.trim(),
-  );
+  return Boolean(process.env['DEEPSEEK_API_KEY']?.trim());
 }
 
 async function runMockProbe(options: CliOptions, evidencePath: string): Promise<ProbeEvidence> {
@@ -188,7 +185,7 @@ async function runLiveDeepProbe(options: CliOptions, evidencePath: string): Prom
       execution_mode: null,
       run_dir: null,
       evidence_path: evidencePath,
-      notes: ['skipped — set DEEPINFRA_API_KEY or DEEPSEEK_API_KEY for live deep probe'],
+      notes: ['skipped — set DEEPSEEK_API_KEY for live deep probe'],
     };
     writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
     return evidence;
