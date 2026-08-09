@@ -359,8 +359,10 @@ async function assertEnabledTelemetryRegression(
   assert(deepResult1.status === 'COMPLETE', `Expected verified run COMPLETE, got ${deepResult1.status}`);
   assert(deepResult2.status === 'COMPLETE', `Expected autonomous run COMPLETE, got ${deepResult2.status}`);
 
-  assertTraceContext(deepResult1.runDir, '9.0:verified');
-  assertTraceContext(deepResult2.runDir, '9.0:autonomous');
+  // `verified` and `autonomous` are legacy aliases that normalize to the
+  // canonical deep mode before telemetry baggage is recorded.
+  assertTraceContext(deepResult1.runDir, '9.0:deep');
+  assertTraceContext(deepResult2.runDir, '9.0:deep');
 
   const spans = getFinishedTestSpans().slice(spanStartIndex);
   const spanNames = spans.map(span => span.name);

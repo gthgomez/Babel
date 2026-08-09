@@ -68,7 +68,7 @@ export interface ParityBabelCellEvidence {
 export interface RunParityBabelCellOptions {
   mode?: ParityCorpusRunMode;
   provider?: ParityCorpusProvider;
-  command?: 'daily' | 'plan' | 'deep';
+  command?: 'run';
   cliEntry?: string;
   evidenceDir?: string;
   keepWorkspace?: boolean;
@@ -87,12 +87,13 @@ function expectedExecutionMode(provider: ParityCorpusProvider): 'offline_demo' |
 function parityCliBase(
   projectRoot: string,
   options: RunParityBabelCellOptions,
-): { projectRoot: string; offlineDemo: boolean; cliEntry?: string } {
+): { projectRoot: string; offlineDemo: boolean; cliEntry?: string; env?: NodeJS.ProcessEnv } {
   const provider = resolveParityProvider(options);
   return {
     projectRoot,
     offlineDemo: provider === 'mock',
     ...(options.cliEntry !== undefined ? { cliEntry: options.cliEntry } : {}),
+    ...(provider === 'mock' ? { env: { BABEL_PIPELINE_V9_OFFLINE: '1' } } : {}),
   };
 }
 
@@ -106,8 +107,14 @@ function parityCommandArgs(
   return [
     command,
     '--json',
-    ...(command === 'run' ? ['--mode', 'chat'] : []),
-    ...(options.humanSummary === true ? ['--human-summary'] : []),
+    '--yes',
+    // Deep is the canonical structured execution lane for headless parity
+    // cells; chat mode may exit without a final JSON payload in non-TTY runs.
+    ...(command === 'run' ? ['--mode', 'deep'] : []),
+    // `run` emits structured JSON but does not expose the workflow command's
+    // `--human-summary` option. Keep the option in the evidence API for
+    // callers that want to copy an existing summary, but never pass an
+    // unsupported flag to the canonical run command.
     '--project-root',
     projectRoot,
     ...extraArgs,

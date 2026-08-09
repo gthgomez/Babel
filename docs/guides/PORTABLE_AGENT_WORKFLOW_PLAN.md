@@ -5,7 +5,7 @@ Licensed under the MIT License
 -->
 
 ```yaml
-status: PROPOSED
+status: IMPLEMENTED_PHASE_0
 authority: non-normative
 depends_on: harness-v1
 last_verified: 2026-08-08
@@ -302,4 +302,22 @@ than its native evidence.
 - The guide remains subordinate to `harness-v1` and does not authorize a second
   executor.
 
-Only after these gates pass should a narrow adapter implementation begin.
+The narrow adapter implementation below is limited to projection and validation;
+it does not create a second executor or authority.
+
+## 9. Phase 0 implementation
+
+The Phase 0 contract implementation lives in
+`babel-cli/src/portable/workflow.ts` and is re-exported from
+`babel-cli/src/portable/index.ts`. It provides strict schemas, native
+authority/revision/verifier projections, invalid-state checks, committed-only
+checkpoint recovery, and public export redaction. The focused contract suite
+is run with:
+
+```text
+npm run test:portable-workflow
+```
+
+The module remains a projection layer: native task contracts, instruction
+manifests, live-session authorities, verifier receipts, and checkpoint journals
+remain authoritative.

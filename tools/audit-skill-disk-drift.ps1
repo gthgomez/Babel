@@ -61,6 +61,18 @@ function Get-ActivePromptSkillPathsOnDisk {
         }
 
         $relative = Normalize-RelativePath -Path ("02_Skills/" + $file.FullName.Substring($skillsRootFull.Length).TrimStart('\', '/'))
+        # v1 skills are retained as historical compatibility material while
+        # the catalog routes the v2/current surface. Archive and references
+        # trees are evidence/documentation, not routable skill entries. The
+        # catalog-to-disk check below still verifies every explicitly
+        # cataloged path, including cataloged v1 compatibility entries.
+        if (
+            $relative -match '/archive/' -or
+            $relative -match '/references/' -or
+            $file.Name -match '-v1\.md$'
+        ) {
+            continue
+        }
         $results.Add($relative)
     }
 

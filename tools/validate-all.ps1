@@ -6,6 +6,7 @@ a single pass/fail with per-tool summaries.
 Runs in order:
   1. validate-catalog.ps1       — prompt_catalog.yaml integrity
   2. audit-skill-disk-drift.ps1 — SKILL.md vs disk coherence
+  3. test-domain-default-policy.ps1 — domain default routing policy
 
 Produces a table of results and exits with the count of failed tools.
 Designed to be invoked by the catalog-validate-all Claude Code skill,
@@ -35,7 +36,8 @@ $Root = (Resolve-Path (Join-Path $scriptDir "..")).Path
 
 $tools = @(
     @{ Name = "validate-catalog";       Path = Join-Path $scriptDir "validate-catalog.ps1";       Desc = "prompt_catalog.yaml integrity" },
-    @{ Name = "audit-skill-disk-drift"; Path = Join-Path $scriptDir "audit-skill-disk-drift.ps1";  Desc = "SKILL.md vs disk coherence" }
+    @{ Name = "audit-skill-disk-drift"; Path = Join-Path $scriptDir "audit-skill-disk-drift.ps1";  Desc = "SKILL.md vs disk coherence" },
+    @{ Name = "test-domain-default-policy"; Path = Join-Path $scriptDir "test-domain-default-policy.ps1"; Desc = "domain default routing policy" }
 )
 
 $results = @()
@@ -78,13 +80,14 @@ $totalElapsed = [math]::Round(((Get-Date) - $totalStart).TotalSeconds, 1)
 Write-Host "`n━━━ Validation Summary ($totalElapsed s) ━━━" -ForegroundColor Cyan
 $results | Format-Table Tool, Passed, ExitCode, Elapsed -AutoSize
 
-$failures = ($results | Where-Object { -not $_.Passed }).Count
+$resultsArray = @($results)
+$failures = @($resultsArray | Where-Object { -not $_.Passed }).Count
 
 if ($failures -eq 0) {
-    Write-Host "All $($results.Count) validations passed." -ForegroundColor Green
+    Write-Host "All $($resultsArray.Count) validations passed." -ForegroundColor Green
 } else {
-    Write-Host "$failures/$($results.Count) validations FAILED." -ForegroundColor Red
-    foreach ($r in $results | Where-Object { -not $_.Passed }) {
+    Write-Host "$failures/$($resultsArray.Count) validations FAILED." -ForegroundColor Red
+    foreach ($r in $resultsArray | Where-Object { -not $_.Passed }) {
         Write-Host "  ✗ $($r.Tool) — $($r.Desc) (exit $($r.ExitCode))" -ForegroundColor Red
     }
 }
