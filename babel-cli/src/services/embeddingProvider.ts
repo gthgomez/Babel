@@ -154,7 +154,13 @@ class OpenAiEmbeddingProvider implements EmbeddingProvider {
         });
 
         if (response.ok) {
-          return parseEmbeddingResponse(await response.json(), texts.length);
+          let body: unknown;
+          try {
+            body = await response.json();
+          } catch {
+            throw new EmbeddingResponseError('body is not valid JSON');
+          }
+          return parseEmbeddingResponse(body, texts.length);
         }
 
         // Retryable errors

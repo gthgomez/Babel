@@ -206,6 +206,27 @@ test('embedTexts rejects wrong-dimension response vectors without retrying', asy
   assert.equal(fetchCalls.length, 1);
 });
 
+test('embedTexts rejects invalid JSON without retrying', async () => {
+  setEnv('OPENAI_API_KEY', 'sk-test');
+  let callCount = 0;
+  globalThis.fetch = async () => {
+    callCount++;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => { throw new SyntaxError('Unexpected token'); },
+      text: async () => '',
+    } as unknown as Response;
+  };
+
+  const provider = createEmbeddingProvider()!;
+  await assert.rejects(
+    () => provider.embedTexts(['test']),
+    (err: unknown) => err instanceof Error && err.message.includes('body is not valid JSON'),
+  );
+  assert.equal(callCount, 1);
+});
+
 test('embedTexts sorts out-of-order API responses by index', async () => {
   setEnv('OPENAI_API_KEY', 'sk-test');
   installMockFetch();

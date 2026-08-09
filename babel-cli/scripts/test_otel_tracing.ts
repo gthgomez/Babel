@@ -106,7 +106,7 @@ function buildOrchestratorManifest(mode) {
     },
     compilation_state: 'uncompiled',
     instruction_stack: {
-      behavioral_ids: ['behavioral_core_v7', 'behavioral_guard_v7'],
+      behavioral_ids: ['behavioral_core_v11'],
       domain_id: 'domain_swe_backend',
       skill_ids: [],
       model_adapter_id: 'adapter_codex_balanced',
@@ -323,7 +323,7 @@ function buildPrecomputedOtelManifest(mode: 'deep') {
     },
     compilation_state: 'uncompiled',
     instruction_stack: {
-      behavioral_ids: ['behavioral_core_v10', 'behavioral_cognitive_micro_v7', 'behavioral_guard_v7'],
+      behavioral_ids: ['behavioral_core_v11'],
       domain_id: 'domain_swe_backend',
       skill_ids: [],
       model_adapter_id: 'adapter_codex_balanced',
