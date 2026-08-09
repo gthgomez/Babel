@@ -13,7 +13,7 @@ last_verified: 2026-07-21
 | [ADR-005](ADR-005-esm-module-system.md) | ESM Module System | Accepted | 2026-06-19 |
 | [ADR-006](ADR-006-interpreter-allowlist.md) | Interpreter Allowlist Approach | Accepted | 2026-06-19 |
 | [ADR-007](ADR-007-path-jail-symlink.md) | Path Jail with Symlink Resolution | Accepted | 2026-06-19 |
-| [ADR-008](ADR-008-docker-isolation-strategy.md) | Docker Isolation Strategy | Accepted (H3 done, H4 planned, H6 future) | 2026-06-19 |
+| [ADR-008](ADR-008-docker-isolation-strategy.md) | Docker Isolation Strategy | Accepted (H3 done, H4 fail-closed, H6 future) | 2026-06-19 |
 | [ADR-009](ADR-009-tui-rendering-paradigm.md) | Hybrid TUI Rendering Paradigm | Accepted | 2026-06-26 |
 | [ADR-010](ADR-010-app-server-protocol.md) | App Server Protocol Contract | Accepted | 2026-07-01 |
 | [ADR-011](ADR-011-embedding-decision.md) | Local Vector Embeddings Decision | Accepted | 2026-07-05 |

@@ -2,9 +2,9 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-07-03
+last_verified: 2026-08-08
 -->
-**Status:** Accepted (Phased — H3 complete, H4 partially implemented, H6 future)  
+**Status:** Accepted (H3 complete; H4 fail-closed isolation implemented; platform-native backends remain future research)
 **Date:** 2026-06-19  
 **Deciders:** Babel team  
 
@@ -24,7 +24,7 @@ We use a **phased isolation strategy** documented in `SECURITY_HARDENING_STATUS.
 
 **H3 — Docker Security Defaults (COMPLETE):** `--cap-drop=ALL` and `--security-opt=no-new-privileges` on all benchmark containers. `BABEL_BENCHMARK_DOCKER_EXTRA_ARGS` for operator customization.
 
-**H4 — Docker as Default Execution Environment (PARTIALLY IMPLEMENTED):** Extend Docker isolation from benchmark-only to all non-interactive profiles. `docker/sandbox.Dockerfile` exists with Node, Python, Git, build tools. `shouldUseDockerSandbox()` function exists in `benchmarkContainer.ts`. `dockerSandbox` field present in all execution profiles (most set to `true`, `dev_local` and `bench_local` opt out). Docker availability preflight and graceful fallback pending.
+**H4 — Docker as Default Execution Environment (IMPLEMENTED, fail-closed):** Isolation profiles declare `dockerSandbox: true` and use Docker only when the daemon and configured image are available. Otherwise governed execution fails closed unless the operator explicitly sets `BABEL_ALLOW_HOST_FALLBACK` or `BABEL_DOCKER_DISABLE`; `dev_local` and `bench_local` remain host-oriented opt-outs.
 
 **H6 — Platform-Native Sandbox Backends (FUTURE):** Research bubblewrap (Linux), Seatbelt (macOS), and restricted tokens (Windows) as lighter alternatives to Docker. Design a `SandboxBackend` abstraction.
 
@@ -52,4 +52,4 @@ We use a **phased isolation strategy** documented in `SECURITY_HARDENING_STATUS.
 
 ## Compliance
 
-All new execution profiles must explicitly declare `dockerSandbox: boolean`. The Docker availability preflight must be checked before every Docker-dependent run. Graceful fallback to direct execution must log a warning and elevate security posture (stricter path enforcement, additional denied tools).
+All new execution profiles must explicitly declare `dockerSandbox: boolean`. The Docker availability preflight must be checked before every Docker-dependent run. An unavailable isolation boundary fails closed; a direct host run requires explicit operator escalation and remains auditable.

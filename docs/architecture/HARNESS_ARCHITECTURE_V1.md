@@ -327,11 +327,11 @@ Plan terminal (kernel): `PLAN_COMPLETE` — **IMPLEMENTED** for plan mode; not a
 
 | Outcome | Status |
 |---------|--------|
-| `NO_CHANGE_REQUIRED` | **PLANNED** / partial product language — not full TerminalOutcome enum member |
-| `INVALID_TASK` | **PLANNED** as first-class terminal |
-| `NEEDS_HUMAN_DECISION` | **PARTIAL** (approvals / blocked paths) |
+| `NO_CHANGE_REQUIRED` | **IMPLEMENTED** on the Chat terminal-outcome path; cross-surface parity remains H3 work |
+| `INVALID_TASK` | **IMPLEMENTED** on the Chat terminal-outcome path; cross-surface parity remains H3 work |
+| `NEEDS_HUMAN_DECISION` | **IMPLEMENTED** on the Chat terminal-outcome path; approvals and governed-pipeline parity remain H3 work |
 
-Do not invent runtime support where the enum does not exist.
+Do not claim cross-surface support beyond the Chat path until the H3 parity exit gates are met.
 
 ---
 

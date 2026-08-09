@@ -106,7 +106,7 @@ For non-trivial changes, check applicable edge cases:
 
 1. Treat this repo as the single source of truth for the project's **Behavioral OS**, **Domain Architect**, and **Skill** prompt assets.
 2. Maintain strict versioning and path integrity in `prompt_catalog.yaml`.
-3. Do not break the live dual-router contract: v9 typed routing is the default runtime lane, and v8 remains the compatibility fallback until retired.
+3. Do not revive a V8 compatibility lane: the catalog-backed V9 typed router is the only live runtime route. Treat legacy V8 references as historical unless runtime support and tests are added in the same change.
 4. Preserve root-level `prompt_manifest` compatibility for downstream runtime consumers even when routing through v9 typed compilation.
 5. Do not introduce circular dependencies between prompt overlays, skills, and meta-tools.
 
@@ -121,11 +121,10 @@ At the end of each run:
 ## Purpose Routing (Shared Prompts Library)
 
 - Identify task purpose (for example: `UI_UX`, `Coding`, `Safety_Governance`, `Research`, `Compliance_Regulatory`).
-- Attempt to load model-specific purpose guidance from:
-  - Codex: `<YOUR_PROJECT_ROOT>/Prompts/categorized/<Purpose>/<Purpose>-Codex.md`
-  - Claude: `<YOUR_PROJECT_ROOT>/Prompts/categorized/<Purpose>/<Purpose>-Claude.md`
-  - Gemini: `<YOUR_PROJECT_ROOT>/Prompts/categorized/<Purpose>/<Purpose>-Gemini.md`
-- If missing, proceed with this file and log a creation recommendation.
+- Resolve model- and purpose-specific guidance through `prompt_catalog.yaml` and
+  the catalog resolver. Do not load legacy `Prompts/categorized/` paths directly.
+- If the catalog has no applicable entry, proceed with the resolved base stack and
+  record the gap as catalog hygiene rather than creating an ad-hoc path.
 
 ## Model Switching Rule
 

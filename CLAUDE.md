@@ -188,7 +188,6 @@ From session retrospective analysis: all 10 reviewed sessions deferred testing e
 | `/ci-dry-run` | Before pushing — run CI build+test in Docker |
 | `/catalog-validate-all` | After catalog/routing changes — run the validation trio |
 | `/branch-stack` | Working on sequential dependent feature branches |
-| `/evidence-compile` | Auto-update implementor roadmap status from git history |
 
 ## Tool-Use Patterns (learned from session data)
 
