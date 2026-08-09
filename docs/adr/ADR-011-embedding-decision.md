@@ -142,7 +142,7 @@ The vec0 virtual table is created with `FLOAT[384]` at first initialization (`ve
 
 | Artifact | Implemented behavior |
 |----------|----------------------|
-| `babel-cli/src/services/embeddingProvider.ts` | Configured OpenAI-compatible provider, explicit disable path, response validation, and retry handling |
+| `babel-cli/src/services/embeddingProvider.ts` | Configured OpenAI-compatible provider, explicit disable path, response-shape/dimension validation, and retry handling |
 | `babel-cli/src/services/vectorIndex.ts` | Incremental vector creation from stored FTS file content |
 | `babel-cli/src/services/indexer.ts` | Vector ranking with FTS5 fallback when vectors are unavailable or fail |
 | `babel-cli/src/tools/chronicleMemory.ts` | Lazy provider registration for `semantic_search` |

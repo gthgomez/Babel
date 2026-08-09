@@ -61,8 +61,8 @@ Rules:
 
 - `prompt_manifest` is empty while `compilation_state = "uncompiled"`.
 - `instruction_stack` contains typed IDs only. Do not substitute physical prompt file paths.
-- `behavioral_core_v10` and `behavioral_cognitive_micro_v7` are mandatory behavioral IDs.
-- `behavioral_guard_v7` is conditional. Include it for write-capable, verified, autonomous, debugging, file-modifying, or contract-modifying work. Omit it for pure research, read-only critique, strategy, and product-audit outputs unless execution risk exists.
+- `behavioral_core_v11` is the mandatory behavioral ID; it is the unified replacement for the retired V10/V7 behavioral layers.
+- Resolve any additional conditional governance behavior from the canonical catalog. Keep pure research, read-only critique, strategy, and product-audit outputs read-only unless execution or file-modification risk is present.
 
 ---
 

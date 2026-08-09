@@ -46,11 +46,6 @@ export interface EmbeddingProvider {
   embedTexts(texts: string[]): Promise<Float32Array[]>;
 }
 
-interface OpenAiEmbeddingResponse {
-  data: Array<{ embedding: number[]; index: number }>;
-  usage: { prompt_tokens: number; total_tokens: number };
-}
-
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DEFAULT_MODEL = 'text-embedding-3-small';
@@ -73,6 +68,54 @@ function resolveApiKey(): string | null {
 
 async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+class EmbeddingResponseError extends Error {
+  constructor(message: string) {
+    super(`Invalid embedding API response: ${message}`);
+    this.name = 'EmbeddingResponseError';
+  }
+}
+
+function parseEmbeddingResponse(body: unknown, expectedCount: number): Float32Array[] {
+  if (typeof body !== 'object' || body === null || !Array.isArray((body as { data?: unknown }).data)) {
+    throw new EmbeddingResponseError('data must be an array');
+  }
+
+  const data = (body as { data: unknown[] }).data;
+  if (data.length !== expectedCount) {
+    throw new EmbeddingResponseError(`expected ${expectedCount} embeddings, received ${data.length}`);
+  }
+
+  const entries = data.map((item, position) => {
+    if (typeof item !== 'object' || item === null) {
+      throw new EmbeddingResponseError(`data[${position}] must be an object`);
+    }
+
+    const record = item as { embedding?: unknown; index?: unknown };
+    if (!Number.isInteger(record.index) || (record.index as number) < 0 || (record.index as number) >= expectedCount) {
+      throw new EmbeddingResponseError(`data[${position}].index is out of range`);
+    }
+    if (!Array.isArray(record.embedding) || record.embedding.length !== DEFAULT_DIMENSIONS) {
+      throw new EmbeddingResponseError(
+        `data[${position}].embedding must contain ${DEFAULT_DIMENSIONS} numbers`,
+      );
+    }
+    if (record.embedding.some((value) => typeof value !== 'number' || !Number.isFinite(value))) {
+      throw new EmbeddingResponseError(`data[${position}].embedding contains a non-finite value`);
+    }
+
+    return { index: record.index as number, embedding: record.embedding as number[] };
+  });
+
+  const indexes = new Set(entries.map((entry) => entry.index));
+  if (indexes.size !== expectedCount) {
+    throw new EmbeddingResponseError('data indexes must be unique and cover every input');
+  }
+
+  return entries
+    .sort((a, b) => a.index - b.index)
+    .map((entry) => new Float32Array(entry.embedding));
 }
 
 // ─── Provider Implementation ──────────────────────────────────────────────────
@@ -111,10 +154,7 @@ class OpenAiEmbeddingProvider implements EmbeddingProvider {
         });
 
         if (response.ok) {
-          const body = (await response.json()) as OpenAiEmbeddingResponse;
-          // Sort by index to preserve input order, then extract embeddings
-          const sorted = [...body.data].sort((a, b) => a.index - b.index);
-          return sorted.map((item) => new Float32Array(item.embedding));
+          return parseEmbeddingResponse(await response.json(), texts.length);
         }
 
         // Retryable errors
@@ -134,7 +174,12 @@ class OpenAiEmbeddingProvider implements EmbeddingProvider {
           `OpenAI embedding API returned ${response.status}: ${await response.text().catch(() => '(no body)')}`,
         );
       } catch (err) {
-        if (attempt < MAX_RETRIES && err instanceof Error && !err.message.startsWith('OpenAI embedding API returned 4')) {
+        if (
+          attempt < MAX_RETRIES &&
+          !(err instanceof EmbeddingResponseError) &&
+          err instanceof Error &&
+          !err.message.startsWith('OpenAI embedding API returned 4')
+        ) {
           lastError = err instanceof Error ? err : new Error(String(err));
           await sleep(RETRY_DELAYS_MS[attempt]!);
           continue;
