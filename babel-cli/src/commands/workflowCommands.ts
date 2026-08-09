@@ -5,7 +5,7 @@ import * as readline from 'node:readline/promises';
 import { Command } from 'commander';
 
 import { BabelEventBus, runBabelPipeline, resumeManualBridge } from '../pipeline.js';
-import { getAvailableModels, resolveFamilyModelPolicy } from '../modelPolicy.js';
+import { getAvailableModels } from '../modelPolicy.js';
 import { createLiveRunRenderer } from '../ui/waterfall.js';
 import {
   getExecutionProfileHelpText,
@@ -119,6 +119,7 @@ import { registerDogfoodCommands } from './dogfoodCommands.js';
 import { loadPlanHandoff } from '../agent/planHandoff.js';
 import { runPlanReviewLane } from '../agent/lanes/planReviewLane.js';
 import { resolveFuzzyWorkspaceDirectory } from '../services/pathScanner.js';
+import { preflightRequestedModelPolicy } from './workflowModelPolicy.js';
 
 export { buildSmallFixLitePayload, normalizeSmallFixProvider, resolveSmallFixProviderForCommand };
 export const READ_ONLY_LITE_TOOLS = [
@@ -395,27 +396,12 @@ async function runDeepCommand(taskParts: string[], options: DeepCommandOptions):
     process.exitCode = 1;
   }
 }
-
 export { shouldRecoverLitePlanSchemaFailure } from '../services/liteSessionRunner.js';
-
-function preflightRequestedModelPolicy(
-  model: string,
-  options: { modelTier?: string; allowExpensive?: boolean },
-) {
-  return resolveFamilyModelPolicy({
-    family: model,
-    ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
-    allowExpensive: options.allowExpensive === true,
-    babelRoot: BABEL_ROOT,
-  });
-}
-
 function isModelEscalationPolicyError(message: string): boolean {
   return /expensive or blocked by policy|blocked by policy|explicit opt-in|\[ENTERPRISE_POLICY\]/i.test(
     message,
   );
 }
-
 function printModelEscalationApprovalRequired(options: {
   task: string;
   model?: string;
@@ -466,7 +452,6 @@ function printModelEscalationApprovalRequired(options: {
   }
   process.exit(1);
 }
-
 function resolveEffectiveAllowExpensive(options: {
   task: string;
   model?: string;
@@ -497,7 +482,6 @@ function resolveEffectiveAllowExpensive(options: {
 
   return false;
 }
-
 function buildCompletionVerificationForRun(input: {
   pipelineStatus: string;
   executionProfile: ExecutionProfileName;
@@ -2287,6 +2271,7 @@ Notes:
             preflightRequestedModelPolicy(normalizedModel, {
               ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
               ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
+              liveOnly: process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1',
             });
           } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
@@ -3093,6 +3078,7 @@ Notes:
             preflightRequestedModelPolicy(normalizedModel, {
               ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
               ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
+              liveOnly: process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1',
             });
           } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);

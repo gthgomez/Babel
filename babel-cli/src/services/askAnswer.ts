@@ -66,6 +66,15 @@ interface RecoverableRunError extends Error {
   nextCommand: string;
 }
 
+function askUsesLiveProvider(options: RunAskAnswerPathOptions): boolean {
+  return (
+    options.provider !== 'mock' &&
+    process.env['BABEL_OFFLINE'] !== '1' &&
+    process.env['BABEL_OFFLINE'] !== 'true' &&
+    !process.argv.includes('--offline')
+  );
+}
+
 function taskMentionsTarget(task: string, projectRoot: string): boolean {
   const base = targetBasename(projectRoot).toLowerCase();
   return base.length > 0 && task.toLowerCase().includes(base.toLowerCase());
@@ -468,11 +477,13 @@ export async function runAskAnswerFastPath(
   const prompt = await buildAskPrompt(options);
 
   // Resolve model policy if a specific model was requested
-  const modelPolicy = options.model
+  const liveOnly = askUsesLiveProvider(options);
+  const modelPolicy = options.model || liveOnly
     ? resolveFamilyModelPolicy({
-        family: options.model,
+        family: options.model ?? 'DeepSeek',
         ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
         ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+        liveOnly,
         babelRoot: BABEL_ROOT,
       })
     : undefined;
@@ -601,11 +612,13 @@ export async function runAskAnswerPath(
   globalCostTracker.resetSession();
   evidence.writeCompiledContext('ask', prompt);
 
-  const modelPolicy = options.model
+  const liveOnly = askUsesLiveProvider(options);
+  const modelPolicy = options.model || liveOnly
     ? resolveFamilyModelPolicy({
-        family: options.model,
+        family: options.model ?? 'DeepSeek',
         ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
         ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+        liveOnly,
         babelRoot: BABEL_ROOT,
       })
     : undefined;

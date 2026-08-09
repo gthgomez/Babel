@@ -30,7 +30,7 @@ const deepSeekLiveModelPolicyPath = join(
 );
 
 function hasLiveGovernanceProviderKey(): boolean {
-  return Boolean(process.env['DEEPSEEK_API_KEY'] || process.env['DEEPINFRA_API_KEY']);
+  return Boolean(process.env['DEEPSEEK_API_KEY']);
 }
 
 function liveGovernanceEnvPatch(): Record<string, string | undefined> {
@@ -38,11 +38,6 @@ function liveGovernanceEnvPatch(): Record<string, string | undefined> {
     return {
       BABEL_LIVE_GOVERNANCE_PROVIDER: 'deepseek',
       BABEL_MODEL_POLICY_PATH: process.env['BABEL_MODEL_POLICY_PATH'] ?? deepSeekLiveModelPolicyPath,
-    };
-  }
-  if (process.env['DEEPINFRA_API_KEY']) {
-    return {
-      BABEL_LIVE_GOVERNANCE_PROVIDER: 'deepinfra',
     };
   }
   return {};
@@ -434,6 +429,7 @@ async function runOfflineRegression(): Promise<void> {
     await withPatchedEnv(
       {
         BABEL_PIPELINE_V9_OFFLINE: '1',
+        BABEL_DAEMON_ENABLED: 'false',
         BABEL_PROJECT_ROOT: resolve(packageRoot, '..'),
         BABEL_OTEL_ENABLED: 'true',
         BABEL_OTEL_SERVICE_NAME: 'babel-cli-tests',
@@ -466,6 +462,7 @@ async function runOfflineRegression(): Promise<void> {
     await withPatchedEnv(
       {
         BABEL_PIPELINE_V9_OFFLINE: '1',
+        BABEL_DAEMON_ENABLED: 'false',
         BABEL_PROJECT_ROOT: resolve(packageRoot, '..'),
         BABEL_OTEL_ENABLED: undefined,
         BABEL_OTEL_EXPORTER_OTLP_ENDPOINT: undefined,
@@ -495,7 +492,7 @@ async function runOfflineRegression(): Promise<void> {
 
 async function runLiveRegression(): Promise<void> {
   if (!hasLiveGovernanceProviderKey()) {
-    console.log('[test:otel-tracing:live] SKIPPED — DEEPSEEK_API_KEY/DEEPINFRA_API_KEY not set');
+    console.log('[test:otel-tracing:live] SKIPPED — DEEPSEEK_API_KEY not set');
     return;
   }
 
@@ -508,6 +505,7 @@ async function runLiveRegression(): Promise<void> {
     await withPatchedEnv(
       {
         ...liveGovernanceEnvPatch(),
+        BABEL_DAEMON_ENABLED: 'false',
         BABEL_CLAUDE_CMD: claudeCmd,
         BABEL_CLAUDE_ARGS: '',
         BABEL_CODEX_CMD: codexCmd,
@@ -538,6 +536,7 @@ async function runLiveRegression(): Promise<void> {
     await withPatchedEnv(
       {
         ...liveGovernanceEnvPatch(),
+        BABEL_DAEMON_ENABLED: 'false',
         BABEL_CLAUDE_CMD: claudeCmd,
         BABEL_CLAUDE_ARGS: '',
         BABEL_CODEX_CMD: codexCmd,

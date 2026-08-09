@@ -87,13 +87,30 @@ function expectedExecutionMode(provider: ParityCorpusProvider): 'offline_demo' |
 function parityCliBase(
   projectRoot: string,
   options: RunParityBabelCellOptions,
-): { projectRoot: string; offlineDemo: boolean; cliEntry?: string; env?: NodeJS.ProcessEnv } {
+): {
+  projectRoot: string;
+  offlineDemo: boolean;
+  cliEntry?: string;
+  env?: NodeJS.ProcessEnv;
+  timeoutMs: number;
+} {
   const provider = resolveParityProvider(options);
   return {
     projectRoot,
     offlineDemo: provider === 'mock',
+    // A parity cell must leave bounded evidence when the provider or local
+    // daemon does not return. Without this, one hung subprocess stalls the
+    // whole corpus and hides the actual failure capsule.
+    timeoutMs: provider === 'mock' ? 30_000 : 120_000,
     ...(options.cliEntry !== undefined ? { cliEntry: options.cliEntry } : {}),
-    ...(provider === 'mock' ? { env: { BABEL_PIPELINE_V9_OFFLINE: '1' } } : {}),
+    ...(provider === 'mock'
+      ? {
+          env: {
+            BABEL_PIPELINE_V9_OFFLINE: '1',
+            BABEL_DAEMON_ENABLED: 'false',
+          },
+        }
+      : {}),
   };
 }
 
@@ -102,15 +119,16 @@ function parityCommandArgs(
   task: string,
   options: RunParityBabelCellOptions,
   extraArgs: string[] = [],
+  pipelineMode: 'deep' | 'plan' = 'deep',
 ): string[] {
   const command = options.command ?? 'run';
   return [
     command,
     '--json',
     '--yes',
-    // Deep is the canonical structured execution lane for headless parity
-    // cells; chat mode may exit without a final JSON payload in non-TTY runs.
-    ...(command === 'run' ? ['--mode', 'deep'] : []),
+    // Deep is the canonical structured execution lane for mutating parity
+    // cells. Read-only cells use plan mode so they cannot activate writes.
+    ...(command === 'run' ? ['--mode', pipelineMode] : []),
     // `run` emits structured JSON but does not expose the workflow command's
     // `--human-summary` option. Keep the option in the evidence API for
     // callers that want to copy an existing summary, but never pass an
@@ -231,6 +249,19 @@ function writeMultiFileFixRepo(root: string, task: ParityCorpusTaskFixture): voi
 function writeDependencyUpdateRepo(root: string, task: ParityCorpusTaskFixture): void {
   writeFileWithParents(root, task.target_file, task.broken_implementation);
   writeExtraBrokenFiles(root, task);
+  // Keep the dependency-update verifier network-free. The fixture exercises
+  // the manifest change, so a tiny local ESM-compatible chalk double is enough
+  // to run its smoke script in isolated temporary workspaces.
+  writeFileWithParents(
+    root,
+    'node_modules/chalk/package.json',
+    JSON.stringify({ type: 'module', name: 'chalk', version: '5.3.0' }, null, 2),
+  );
+  writeFileWithParents(
+    root,
+    'node_modules/chalk/index.js',
+    'const identity = (value) => value;\nexport default { green: identity };',
+  );
 }
 
 function writeReadOnlyReviewRepo(root: string, task: ParityCorpusTaskFixture): void {
@@ -427,6 +458,29 @@ function scopedParityFixTask(task: ParityCorpusTaskFixture, relativePath: string
   return `Fix the parity corpus fixture for ${task.parity_task_id}. Only edit ${relativePath}.`;
 }
 
+function parityOfflineFixEnv(
+  task: ParityCorpusTaskFixture,
+  targets: string[],
+  cliBase: { env?: NodeJS.ProcessEnv },
+  provider: ParityCorpusProvider,
+): NodeJS.ProcessEnv {
+  if (provider !== 'mock') return cliBase.env ?? {};
+  const referencedFixtureFiles = Object.keys(task.files ?? {}).filter((path) =>
+    task.task.includes(path),
+  );
+  const envTargets = [...new Set([...targets, ...referencedFixtureFiles])];
+  const fixMap = Object.fromEntries(
+    envTargets.flatMap((target) => {
+      const content = parityCorpusExpectedContent(task, target) ?? parityCorpusBrokenContent(task, target);
+      return content === null ? [] : [[target, content] as const];
+    }),
+  );
+  return {
+    ...cliBase.env,
+    BABEL_PARITY_OFFLINE_FIX_MAP: JSON.stringify(fixMap),
+  };
+}
+
 async function runFixCell(
   task: ParityCorpusTaskFixture,
   projectRoot: string,
@@ -446,7 +500,10 @@ async function runFixCell(
 
   if (isMultiFile) {
     // Attempt coordinated multi-file fix first
-    const cli = runBabelCli(parityCommandArgs(projectRoot, task.task, options), cliBase);
+    const cli = runBabelCli(parityCommandArgs(projectRoot, task.task, options), {
+      ...cliBase,
+      env: parityOfflineFixEnv(task, fixTargets, cliBase, provider),
+    });
     payload = cli.payload;
     cliExitCode = cli.exitCode;
     const statusText = typeof payload?.['status'] === 'string' ? payload['status'] : null;
@@ -457,13 +514,18 @@ async function runFixCell(
 
     // Fallback: if coordinated approach failed (especially with live provider),
     // decompose into sequential per-file fixes
-    const coordinatedFailed = cliExitCode !== 0 || statusText !== 'FIX_COMPLETE' && statusText !== 'ANSWER_READY';
+    const coordinatedFailed =
+      cliExitCode !== 0 ||
+      !['FIX_COMPLETE', 'ANSWER_READY', 'COMPLETE'].includes(statusText ?? '');
     if (coordinatedFailed && fixTargets.length > 1) {
       steps.push({ target: '---fallback_sequential---', exit: 0, status: 'DECOMPOSING' });
       for (const relativePath of fixTargets) {
         const perFileCli = runBabelCli(
           parityCommandArgs(projectRoot, scopedParityFixTask(task, relativePath), options),
-          cliBase,
+          {
+            ...cliBase,
+            env: parityOfflineFixEnv(task, [relativePath], cliBase, provider),
+          },
         );
         payload = perFileCli.payload;
         cliExitCode = perFileCli.exitCode;
@@ -476,14 +538,17 @@ async function runFixCell(
     }
   } else {
     for (const relativePath of fixTargets) {
-      const cli = runBabelCli(
+        const cli = runBabelCli(
         parityCommandArgs(
           projectRoot,
           fixTargets.length === 1 ? task.task : scopedParityFixTask(task, relativePath),
           options,
         ),
-        cliBase,
-      );
+          {
+            ...cliBase,
+            env: parityOfflineFixEnv(task, [relativePath], cliBase, provider),
+          },
+        );
       payload = cli.payload;
       cliExitCode = cli.exitCode;
       const statusText = typeof payload?.['status'] === 'string' ? payload['status'] : null;
@@ -508,8 +573,10 @@ async function runFixCell(
   const mutation = parityCorpusMutationComplete(task, projectRoot, verifierOk);
   const statusText = steps.at(-1)?.status ?? null;
   const expectedMode = expectedExecutionMode(provider);
-  // Chat mode uses ANSWER_READY; deep pipeline uses FIX_COMPLETE.
-  const claimedFixed = statusText === 'FIX_COMPLETE' || statusText === 'ANSWER_READY';
+  // Chat mode uses ANSWER_READY; governed deep runs may finalize as COMPLETE
+  // after the executor has satisfied the approved plan and verifier.
+  const claimedFixed =
+    statusText === 'FIX_COMPLETE' || statusText === 'ANSWER_READY' || statusText === 'COMPLETE';
   const success = claimedFixed && verifierOk && mutation.ok;
   const falseComplete = claimedFixed && mutation.ok && !verifierOk;
 
@@ -531,7 +598,7 @@ async function runFixCell(
     },
     changed_files: mutation.changedFiles,
     notes: [
-      `parity corpus fix cell via babel ${options.command ?? 'run --mode chat'} --provider ${provider}`,
+      `parity corpus fix cell via babel ${options.command ?? 'run --mode deep'} --provider ${provider}`,
       `exit=${cliExitCode}, status=${String(statusText)}, verifier=${verifierOk ? 'pass' : 'fail'}`,
       ...(fixTargets.length > 1 ? [`fix_targets=${fixTargets.join(',')}`] : []),
     ],
@@ -546,7 +613,10 @@ async function runAskCell(
   const started = performance.now();
   const provider = resolveParityProvider(options);
   const cliBase = parityCliBase(projectRoot, options);
-  const cli = runBabelCli(parityCommandArgs(projectRoot, task.task, options), cliBase);
+  const cli = runBabelCli(
+    parityCommandArgs(projectRoot, task.task, options, [], 'plan'),
+    cliBase,
+  );
   const payload = cli.payload;
   const statusText = typeof payload?.['status'] === 'string' ? payload['status'] : null;
   const executionMode = resolveExecutionModeFromPayload(provider, payload);
@@ -558,9 +628,11 @@ async function runAskCell(
   // Chat mode uses ANSWER_READY; deep pipeline uses REPORT_READY.
   // Accept either for backward compatibility.
   const claimedReady =
-    statusText === 'ANSWER_READY' || statusText === 'REPORT_READY';
+    statusText === 'ANSWER_READY' ||
+    statusText === 'REPORT_READY' ||
+    statusText === 'READ_ONLY_MODE_NO_EXECUTOR';
   const success =
-    cli.exitCode === 0 &&
+    (cli.exitCode === 0 || statusText === 'READ_ONLY_MODE_NO_EXECUTOR') &&
     claimedReady &&
     seedIntact &&
     verifierMatches;
@@ -580,7 +652,7 @@ async function runAskCell(
     cli_payload: payload,
     changed_files: [],
     notes: [
-      'read-only fixture-scoped Babel cell via chat mode (ask lane)',
+      'read-only fixture-scoped Babel cell via deep mode (ask lane)',
       `exit=${cli.exitCode}, status=${String(statusText)}, verifier=${verifierOk ? 'pass' : 'fail'}, seed_intact=${seedIntact}`,
     ],
   };

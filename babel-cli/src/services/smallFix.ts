@@ -560,27 +560,23 @@ function buildRepairPrompt(input: {
   ].join('\n');
 }
 
-function liveProviderEnvKey(): 'DEEPINFRA_API_KEY' {
-  return 'DEEPINFRA_API_KEY';
+function liveProviderEnvKey(): 'DEEPSEEK_API_KEY' {
+  return 'DEEPSEEK_API_KEY';
 }
 
 function assertLiveProviderCredential(
   provider?: string,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
-  if (provider === 'deepseek') {
-    if (!env['DEEPSEEK_API_KEY']?.trim()) {
-      throw new Error(
-        `[smallFix] DEEPSEEK_API_KEY is not set. Add it to your .env file or environment for live bl fix.`,
-      );
-    }
-  } else {
-    const key = liveProviderEnvKey();
-    if (!env[key]?.trim()) {
-      throw new Error(
-        `[smallFix] ${key} is not set. Add it to your .env file or environment for live bl fix.`,
-      );
-    }
+  if (provider !== 'deepseek') {
+    throw new Error(
+      `[LIVE_MODEL_POLICY] live small fix requires a DeepSeek model; received ${provider ?? 'no provider'}.`,
+    );
+  }
+  if (!env['DEEPSEEK_API_KEY']?.trim()) {
+    throw new Error(
+      `[smallFix] DEEPSEEK_API_KEY is not set. Add it to your .env file or environment for live bl fix.`,
+    );
   }
 }
 
@@ -903,16 +899,18 @@ async function runSmallFixModel(
   modelPolicy?: ResolvedModelPolicy;
   executionMode?: SmallFixExecutionMode;
 }> {
-  const modelPolicy = options.model
+  const provider = resolveSmallFixProvider(options);
+  const liveOnly = provider === 'live';
+  const modelPolicy = options.model || liveOnly
     ? resolveFamilyModelPolicy({
-        family: options.model,
+        family: options.model ?? 'DeepSeek',
         ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
         ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+        liveOnly,
         babelRoot: BABEL_ROOT,
       })
     : undefined;
 
-  const provider = resolveSmallFixProvider(options);
   if (provider === 'live') {
     assertLiveProviderCredential(modelPolicy?.provider);
   }

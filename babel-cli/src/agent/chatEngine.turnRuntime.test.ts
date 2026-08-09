@@ -3,6 +3,20 @@ import test from 'node:test';
 
 import { ChatEngine } from './chatEngine.js';
 
+test('live ChatEngine rejects legacy provider model before runner/network creation', () => {
+  const previousOffline = process.env['BABEL_OFFLINE'];
+  delete process.env['BABEL_OFFLINE'];
+  try {
+    assert.throws(
+      () => new ChatEngine({ task: 't', projectRoot: process.cwd(), model: 'qwen3' }),
+      /LIVE_MODEL_POLICY/,
+    );
+  } finally {
+    if (previousOffline === undefined) delete process.env['BABEL_OFFLINE'];
+    else process.env['BABEL_OFFLINE'] = previousOffline;
+  }
+});
+
 test('applyUserSubmission isolates writeCount so prior task cannot satisfy later gate', () => {
   const engine = new ChatEngine({ task: 'fix parser', projectRoot: process.cwd() });
   engine.applyUserSubmission({ userInput: 'fix parser' });

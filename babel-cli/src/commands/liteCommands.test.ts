@@ -10,6 +10,7 @@ import { BABEL_ROOT } from '../cli/constants.js';
 import {
   applyUserFocusedHelpTiers,
   buildApprovalProfilePayload,
+  resolveBenchmarkProvider,
   resolveBenchmarkAnalyzeRun,
 } from './coreCommands.js';
 import { classifyDoTask, registerWorkflowCommands } from './workflowCommands.js';
@@ -22,6 +23,19 @@ function makeProgram(): Command {
 }
 
 describe('Babel CLI command registration', () => {
+  it('enforces DeepSeek-only live benchmark provider selection', () => {
+    const previousKey = process.env['DEEPSEEK_API_KEY'];
+    process.env['DEEPSEEK_API_KEY'] = 'test-key';
+    try {
+      assert.equal(resolveBenchmarkProvider('deepseek').defaultModel, 'deepseek-v4-flash');
+      assert.throws(() => resolveBenchmarkProvider('deepinfra'), /LIVE_MODEL_POLICY/);
+      assert.throws(() => resolveBenchmarkProvider('qwen3'), /LIVE_MODEL_POLICY/);
+    } finally {
+      if (previousKey === undefined) delete process.env['DEEPSEEK_API_KEY'];
+      else process.env['DEEPSEEK_API_KEY'] = previousKey;
+    }
+  });
+
   it('registers plan and deep commands, and verifies removed Lite commands are not registered', () => {
     const program = makeProgram();
     const plan = program.commands.find((command) => command.name() === 'plan');

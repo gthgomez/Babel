@@ -1911,8 +1911,7 @@ export async function _runBabelPipelineInternal(
       logDetail(resolvedMode.note);
     }
     let effectiveMode = resolvedMode.mode;
-    // Default to deepseek-v4-pro for best instruction following across all stages.
-    // The stage-specific policies in model-policy.json further refine per-stage selection.
+    // Stage-specific model-policy routes refine the DeepSeek default.
     const effectiveModel = (options.modelOverride ??
       manifest.worker_configuration.assigned_model ??
       'deepseek-v4-pro') as TargetModel;
@@ -1953,9 +1952,9 @@ export async function _runBabelPipelineInternal(
       family: effectiveModel,
       ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
       ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+      liveOnly: process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1',
       babelRoot: BABEL_ROOT,
     });
-
     const { config: policyConfig } = loadModelPolicyConfig(BABEL_ROOT);
     const costWarnThreshold = policyConfig.policy?.warn_if_estimated_cost_per_run_usd_at_least;
     const isDaemon = isRunningInDaemon();
@@ -2399,8 +2398,7 @@ export async function _runBabelPipelineInternal(
         const { plan: normalizedPlan, warnings: planWarnings } = normalizeSwePlan(swePlanRaw);
         const { plan: groundedPlan, warnings: groundingWarnings } =
           normalizePlanTargetsAgainstGrounding(taskGrounding, normalizedPlan);
-        const { plan: requestedTargetPlan, warnings: requestedTargetWarnings } =
-          normalizePlanTargetsAgainstRequestedOutputs(mergedTaskContext, groundedPlan);
+        const { plan: requestedTargetPlan, warnings: requestedTargetWarnings } = process.env['BABEL_PARITY_OFFLINE_FIX_MAP']?.trim() ? { plan: groundedPlan, warnings: [] as string[] } : normalizePlanTargetsAgainstRequestedOutputs(mergedTaskContext, groundedPlan);
         const swePlan = splitChainedShellSteps(requestedTargetPlan);
         if (
           planWarnings.length > 0 ||

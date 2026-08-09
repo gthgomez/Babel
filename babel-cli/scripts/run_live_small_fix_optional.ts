@@ -14,10 +14,7 @@ dotenvConfig({
 });
 
 function hasLiveProviderCredentials(): boolean {
-  return Boolean(
-    process.env['DEEPINFRA_API_KEY']?.trim() ||
-    process.env['DEEPSEEK_API_KEY']?.trim(),
-  );
+  return Boolean(process.env['DEEPSEEK_API_KEY']?.trim());
 }
 
 function writeNodeFixture(root: string): void {
@@ -41,7 +38,7 @@ function writeNodeFixture(root: string): void {
 
 async function main(): Promise<void> {
   if (!hasLiveProviderCredentials()) {
-    console.log('[test:live-small-fix:optional] skipped — set DEEPINFRA_API_KEY or DEEPSEEK_API_KEY');
+    console.log('[test:live-small-fix:optional] skipped — set DEEPSEEK_API_KEY');
     return;
   }
 

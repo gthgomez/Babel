@@ -2,8 +2,8 @@
  * execute.ts — Per-Stage LLM Waterfall Executor
  *
  * Implements four dedicated waterfalls, one per pipeline stage.
- * Default tiers are DeepInfra API runners; direct DeepSeek is supported for
- * live governance proof and explicit model-policy entries. No CLI runners.
+ * Live runs are restricted to direct DeepSeek API runners; legacy DeepInfra
+ * tiers remain available for offline tests and compatibility. No CLI runners.
  *
  * Model selection is loaded from config/model-policy.json. Pricing and
  * capability notes belong in that config with source_url / verified_at /
@@ -36,8 +36,8 @@
  *   `stage` takes priority over `mode` when both are provided.
  *
  * Environment variables:
- *   DEEPINFRA_API_KEY          — Required for DeepInfra tiers.
- *   DEEPSEEK_API_KEY           — Required for direct DeepSeek tiers.
+ *   DEEPINFRA_API_KEY          — Required for legacy/offline DeepInfra tiers.
+ *   DEEPSEEK_API_KEY           — Required for live DeepSeek tiers.
  *   BABEL_DEEPINFRA_TOKENS     — max_tokens for DeepInfra responses. Default: 8096
  *   BABEL_WATERFALL_TIMEOUT_MS — aggregate wall-clock timeout per stage waterfall. Default: 180000
  *   BABEL_DISABLE_API_FALLBACK — Set to "true" to halt after first tier failure.
@@ -67,7 +67,11 @@ import {
 import { BabelEventBus } from './pipeline/logging.js';
 
 export { clearRoutingCache };
-import { resolveStagePolicyRoutes, type ResolvedModelPolicyEntry } from './modelPolicy.js';
+import {
+  resolveModelByKey,
+  resolveStagePolicyRoutes,
+  type ResolvedModelPolicyEntry,
+} from './modelPolicy.js';
 import { loadModelPolicyConfig } from './modelPolicy.js';
 import { globalCostTracker } from './services/costTracker.js';
 import type { CostPrecision } from './services/modelPricingRegistry.js';
@@ -307,6 +311,9 @@ export interface RunOptions {
    * When omitted (default), the stage waterfall resolves normally.
    */
   model?: string;
+
+  /** Restrict all provider-backed tiers to direct DeepSeek models. */
+  liveOnly?: boolean;
 }
 
 export const RELIABILITY_REPAIR_PROOF_MARKER = '[BABEL_RELIABILITY_AUTONOMOUS_LIVE_FAIL_THEN_PASS]';
@@ -399,6 +406,32 @@ function buildOtelOfflineOrchestratorManifest(
   };
 }
 
+function buildPipelineV9OfflineOrchestratorManifest(prompt: string): Record<string, unknown> {
+  const repoRoot = process.env['BABEL_PROJECT_ROOT']?.trim() || process.cwd();
+  // The orchestrator prompt is a compiled document containing examples and
+  // catalog text. Preserve only the caller's task in the fixture manifest so
+  // offline compilation does not mistake instructional literals for task
+  // bindings.
+  const taskContext = prompt.lastIndexOf('--- TASK CONTEXT ---');
+  const taskSection = taskContext >= 0 ? prompt.slice(taskContext) : prompt;
+  const taskMatch = /Task:\s*([\s\S]*?)(?:\r?\nPreferred project:|\r?\nPreferred pipeline mode:|$)/i.exec(
+    taskSection,
+  );
+  const userRequest = taskMatch?.[1]?.trim() || 'Offline pipeline fixture.';
+  const base = buildOtelOfflineOrchestratorManifest('deep', repoRoot);
+  return {
+    ...base,
+    analysis: {
+      ...(base.analysis as Record<string, unknown>),
+      task_summary: userRequest,
+    },
+    handoff_payload: {
+      ...(base.handoff_payload as Record<string, unknown>),
+      user_request: userRequest,
+    },
+  };
+}
+
 function buildOtelOfflineSwePlan(): Record<string, unknown> {
   return {
     plan_version: '1.0',
@@ -469,6 +502,68 @@ function buildPipelineV9OfflineSwePlan(lane: 'frontend' | 'backend') {
   };
 }
 
+function personalizeOfflineSwePlan(prompt: string, lane: 'frontend' | 'backend') {
+  const plan = buildPipelineV9OfflineSwePlan(lane);
+  const parityFixMap = readParityOfflineFixMap();
+  if (parityFixMap !== null) {
+    return {
+      ...plan,
+      minimal_action_set: Object.keys(parityFixMap).map((target, index) => ({
+        step: index + 1,
+        description: `Apply the offline parity fixture repair to ${target}.`,
+        tool: 'file_write',
+        target,
+        rationale: 'Writes the fixture-provided repair through the governed executor path.',
+        reversible: true,
+        verification: 'The fixture verifier passes after the file write.',
+      })),
+    };
+  }
+  const target = /Only edit ([A-Za-z0-9_./-]+)/i.exec(prompt)?.[1];
+  if (!target) return plan;
+  return {
+    ...plan,
+    minimal_action_set: plan.minimal_action_set.map((step) => ({ ...step, target })),
+  };
+}
+
+function readParityOfflineFixMap(): Record<string, string> | null {
+  const raw = process.env['BABEL_PARITY_OFFLINE_FIX_MAP']?.trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const entries = Object.entries(parsed).filter(
+      ([path, content]) => path.length > 0 && typeof content === 'string',
+    );
+    return entries.length > 0 ? Object.fromEntries(entries) : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildParityOfflineExecutorResponse(prompt: string): Record<string, unknown> | null {
+  const fixMap = readParityOfflineFixMap();
+  if (fixMap === null) return null;
+
+  const history = prompt.includes('### EXECUTION HISTORY SO FAR:')
+    ? prompt.slice(prompt.indexOf('### EXECUTION HISTORY SO FAR:'))
+    : '';
+  const completedCount = (history.match(/<tool-result tool="file_write"/g) ?? []).length;
+  const next = Object.entries(fixMap)[completedCount];
+  if (!next) {
+    return { type: 'completion', status: 'EXECUTION_COMPLETE' };
+  }
+  const [target, content] = next;
+  return {
+    type: 'tool_call',
+    thinking: 'Offline parity fixture: apply the approved fixture repair.',
+    tool: 'file_write',
+    path: target,
+    content,
+  };
+}
+
 function buildPipelineV9OfflineQaPass(lane: 'frontend' | 'backend') {
   return {
     verdict: 'PASS',
@@ -530,6 +625,9 @@ export function buildPipelineV9OfflineFixtureResponse(
   }
 
   const stage = options.stage ?? options.mode;
+  if ((stage as string) === 'orchestrator') {
+    return buildPipelineV9OfflineOrchestratorManifest(prompt);
+  }
   const isEpisodeIntegration = process.env['BABEL_EPISODE_STREAM_INTEGRATION'] === '1' || /BABEL_EPISODE_STREAM_INTEGRATION/i.test(prompt);
   if (isEpisodeIntegration && stage === 'planning') {
     const plan = buildPipelineV9OfflineSwePlan('backend');
@@ -599,7 +697,7 @@ export function buildPipelineV9OfflineFixtureResponse(
       }
       return buildPipelineV9OfflineEvidencePlan(lane);
     }
-    return buildPipelineV9OfflineSwePlan(lane);
+    return personalizeOfflineSwePlan(prompt, lane);
   }
   if (stage === 'qa' || prompt.includes('produce a QA verdict')) {
     const callNum = incrementQaCallCount();
@@ -615,6 +713,8 @@ export function buildPipelineV9OfflineFixtureResponse(
     return buildPipelineV9OfflineQaPass(lane);
   }
   if (stage === 'executor') {
+    const parityExecutorResponse = buildParityOfflineExecutorResponse(prompt);
+    if (parityExecutorResponse !== null) return parityExecutorResponse;
     return {
       type: 'completion',
       status: 'EXECUTION_COMPLETE',
@@ -753,6 +853,7 @@ type TierKind = 'cli' | 'api';
 interface TierSpec {
   kind: TierKind;
   name: string;
+  provider?: string;
   /** Canonical backend key from model-policy.json (e.g. "scout", "deepseek-v4-pro"). */
   backendKey?: string;
   factory: () => LlmRunner;
@@ -773,11 +874,13 @@ const ORCHESTRATOR_WATERFALL: TierSpec[] = [
   {
     kind: 'api',
     name: 'qwen3-32b',
+    provider: 'deepinfra',
     factory: () => new DeepInfraApiRunner(QWEN3_32B),
   },
   {
     kind: 'api',
     name: 'scout',
+    provider: 'deepinfra',
     factory: () => new DeepInfraApiRunner(LLAMA4_SCOUT),
   },
 ];
@@ -789,11 +892,13 @@ const PLANNING_WATERFALL: TierSpec[] = [
   {
     kind: 'api',
     name: 'qwen3-32b',
+    provider: 'deepinfra',
     factory: () => new DeepInfraApiRunner(QWEN3_32B),
   },
   {
     kind: 'api',
     name: 'scout',
+    provider: 'deepinfra',
     factory: () => new DeepInfraApiRunner(LLAMA4_SCOUT),
   },
 ];
@@ -805,21 +910,25 @@ const QA_WATERFALL: TierSpec[] = [
   {
     kind: 'api',
     name: 'deepseek',
+    provider: 'deepinfra',
     factory: () => new DeepInfraApiRunner(DEEPSEEK_V3),
   },
   {
     kind: 'api',
     name: 'nemotron',
+    provider: 'deepinfra',
     factory: () => new DeepInfraApiRunner(NEMOTRON),
   },
   {
     kind: 'api',
     name: 'step-flash',
+    provider: 'deepinfra',
     factory: () => new DeepInfraApiRunner(STEP_FLASH),
   },
   {
     kind: 'api',
     name: 'qwen3-32b',
+    provider: 'deepinfra',
     factory: () => new DeepInfraApiRunner(QWEN3_32B),
   },
 ];
@@ -831,21 +940,25 @@ const EXECUTOR_WATERFALL: TierSpec[] = [
   {
     kind: 'api',
     name: 'scout',
+    provider: 'deepinfra',
     factory: () => new DeepInfraApiRunner(LLAMA4_SCOUT),
   },
   {
     kind: 'api',
     name: 'qwen3',
+    provider: 'deepinfra',
     factory: () => new DeepInfraApiRunner(QWEN3_235B),
   },
   {
     kind: 'api',
     name: 'qwen3-32b',
+    provider: 'deepinfra',
     factory: () => new DeepInfraApiRunner(QWEN3_32B),
   },
   {
     kind: 'api',
     name: 'nemotron',
+    provider: 'deepinfra',
     factory: () => new DeepInfraApiRunner(NEMOTRON),
   },
 ];
@@ -894,6 +1007,7 @@ function tierSpecFromPolicyEntry(entry: ResolvedModelPolicyEntry): TierSpec {
     return {
       kind: 'api',
       name: getPolicyDisplayName(entry),
+      provider: entry.provider,
       backendKey: entry.backendKey,
       factory: () => new DeepSeekApiRunner(entry.providerModelId),
     };
@@ -908,22 +1022,27 @@ function tierSpecFromPolicyEntry(entry: ResolvedModelPolicyEntry): TierSpec {
   return {
     kind: 'api',
     name: getPolicyDisplayName(entry),
+    provider: entry.provider,
     backendKey: entry.backendKey,
     factory: () => new DeepInfraApiRunner(entry.providerModelId),
   };
 }
 
-function resolvePolicyWaterfall(stage: PipelineStage): TierSpec[] | null {
-  const routes = resolveStagePolicyRoutes();
+function resolvePolicyWaterfall(stage: PipelineStage, liveOnly = false): TierSpec[] | null {
+  const routes = resolveStagePolicyRoutes({ liveOnly });
   const route = routes.find((candidate) => candidate.stage === stage);
   if (!route) return null;
   return route.orderedBackends.map(tierSpecFromPolicyEntry);
 }
 
 /** Resolve a stage or legacy mode to its waterfall. */
-function resolveWaterfall(stage: PipelineStage | undefined, mode: RunMode | undefined): TierSpec[] {
+function resolveWaterfall(
+  stage: PipelineStage | undefined,
+  mode: RunMode | undefined,
+  liveOnly = false,
+): TierSpec[] {
   const effectiveStage = resolveEffectiveStage(stage, mode) as PipelineStage;
-  const policyWaterfall = resolvePolicyWaterfall(effectiveStage);
+  const policyWaterfall = resolvePolicyWaterfall(effectiveStage, liveOnly);
   if (policyWaterfall && policyWaterfall.length > 0) {
     return policyWaterfall;
   }
@@ -1630,7 +1749,8 @@ export async function runWithFallback<T>(
   // a deterministic per-session directory so failures are never silent.
   const evidence =
     options.evidence ?? EvidenceBundle.inMemory(options.schemaName ?? 'schema-failure');
-  let waterfall = resolveWaterfall(options.stage, options.mode);
+  const liveOnly = options.liveOnly ?? process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1';
+  let waterfall = resolveWaterfall(options.stage, options.mode, liveOnly);
   if (options.fallbackPolicy === 'primary_only') {
     waterfall = waterfall.slice(0, 1);
   }
@@ -1642,16 +1762,31 @@ export async function runWithFallback<T>(
     const { config } = loadModelPolicyConfig();
     const backend = config.models?.[options.model];
     if (backend) {
+      const resolved = resolveModelByKey({ key: options.model, liveOnly });
       const factory =
         backend.provider === 'deepseek'
           ? () => new DeepSeekApiRunner(backend.model_id)
           : () => new DeepInfraApiRunner(backend.model_id);
       waterfall = [
-        { kind: 'api', name: options.model, backendKey: options.model, factory },
+        {
+          kind: 'api',
+          name: options.model,
+          provider: resolved.provider,
+          backendKey: options.model,
+          factory,
+        },
       ];
     }
     // If the model key is unknown, fall through to the normal waterfall.
     // The caller should validate the key before invoking runWithFallback.
+  }
+  if (liveOnly) {
+    waterfall = waterfall.filter((tier) => tier.provider === 'deepseek');
+    if (waterfall.length === 0) {
+      throw new Error(
+        '[LIVE_MODEL_POLICY] No direct DeepSeek tier is available for this live stage.',
+      );
+    }
   }
   const label = options.stage ?? options.mode ?? 'unknown';
   const effectiveStage = resolveEffectiveStage(options.stage, options.mode);

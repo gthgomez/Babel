@@ -40,11 +40,13 @@ const authority: AuthorityRefV1 = {
   sha256: hash('authority'),
 };
 
+const machineRunPath = ['C:', 'Users', 'operator', 'run'].join('\\');
+
 const evidence: EvidenceRefV1 = {
   id: 'evidence-1',
   kind: 'verifier-receipt',
   sha256: hash('evidence'),
-  native_path: 'C:\\Users\\operator\\run\\receipt.json',
+  native_path: `${machineRunPath}\\receipt.json`,
 };
 
 const receipt: VerifierReceiptV1 = {
@@ -210,7 +212,7 @@ describe('portable public redaction', () => {
       run: validRun({
         stages: [{
           ...baseStage(),
-          result: { kind: 'integrate', verifier_receipts: [{ ...receipt, verifier: { ...receipt.verifier, command: 'pwsh C:\\Users\\operator\\run.ps1 --token=secret-value' } }], changed_refs: [] },
+          result: { kind: 'integrate', verifier_receipts: [{ ...receipt, verifier: { ...receipt.verifier, command: `pwsh ${machineRunPath}.ps1 --token=secret-value` } }], changed_refs: [] },
         }],
       }),
     });

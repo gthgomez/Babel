@@ -154,7 +154,7 @@ export function maybeApplyDeterministicDomainOverride(
 const KNOWN_MODEL_ADAPTER_IDS = new Set([
   'adapter_claude',
   'adapter_codex',
-  'adapter_codex_balanced',
+  'adapter_deepseek_balanced',
   'adapter_gemini',
   'adapter_nemotron',
   'adapter_scout',
@@ -187,7 +187,7 @@ export function maybeApplyModelAdapterFallback(manifest: OrchestratorManifest): 
           ? 'adapter_scout'
           : normalized.includes('nemotron') || assignedModel === 'nemotron'
             ? 'adapter_nemotron'
-            : 'adapter_codex_balanced';
+            : 'adapter_deepseek_balanced';
 
   return {
     manifest: {

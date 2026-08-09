@@ -233,7 +233,7 @@ async function main(): Promise<void> {
 
   if (mode === 'live') {
     process.stderr.write(
-      'Live benchmark mode requires API keys. Set DEEPSEEK_API_KEY or DEEPINFRA_API_KEY.\n' +
+      'Live benchmark mode requires DEEPSEEK_API_KEY.\n' +
       'Live benchmarking is not yet implemented — use --offline for now.\n',
     );
     process.exit(1);

@@ -18,6 +18,25 @@ export type ModelPolicyTier = (typeof MODEL_POLICY_TIERS)[number];
 export const MODEL_POLICY_STAGES = ['orchestrator', 'planning', 'qa', 'executor'] as const;
 export type ModelPolicyStage = (typeof MODEL_POLICY_STAGES)[number];
 
+export const LIVE_DEEPSEEK_BACKEND_KEYS = [
+  'deepseek-v4-flash',
+  'deepseek-v4-pro',
+] as const;
+
+export type LiveDeepSeekBackendKey = (typeof LIVE_DEEPSEEK_BACKEND_KEYS)[number];
+
+export function isDeepSeekLiveModelId(modelId: string): boolean {
+  return (LIVE_DEEPSEEK_BACKEND_KEYS as readonly string[]).includes(modelId.trim());
+}
+
+export function assertDeepSeekLiveModelId(modelId: string, context = 'live run'): void {
+  if (isDeepSeekLiveModelId(modelId)) return;
+  throw new Error(
+    `[LIVE_MODEL_POLICY] ${context} requires deepseek-v4-flash or deepseek-v4-pro; ` +
+      `received "${modelId}".`,
+  );
+}
+
 export interface ModelPolicyModelEntry {
   provider: string;
   model_id: string;
@@ -136,6 +155,28 @@ export interface ResolvedModelPolicy {
   contextLimit?: number;
   nativeToolUse?: boolean;
   capabilities?: string[];
+}
+
+export function isDeepSeekLiveBackend(
+  entry: Pick<ResolvedModelPolicyEntry, 'backendKey' | 'provider' | 'providerModelId'>,
+): boolean {
+  return (
+    entry.provider === 'deepseek' &&
+    ((LIVE_DEEPSEEK_BACKEND_KEYS as readonly string[]).includes(entry.backendKey) ||
+      entry.backendKey === 'deepseek') &&
+    (LIVE_DEEPSEEK_BACKEND_KEYS as readonly string[]).includes(entry.providerModelId)
+  );
+}
+
+export function assertDeepSeekLiveBackend(
+  entry: Pick<ResolvedModelPolicyEntry, 'backendKey' | 'provider' | 'providerModelId'>,
+  context = 'live run',
+): void {
+  if (isDeepSeekLiveBackend(entry)) return;
+  throw new Error(
+    `[LIVE_MODEL_POLICY] ${context} requires DeepSeek v4 Flash or v4 Pro; ` +
+      `backend "${entry.backendKey}" resolves to ${entry.provider}/${entry.providerModelId}.`,
+  );
 }
 
 interface ModelPolicyConfig {
@@ -467,6 +508,7 @@ function getExperimentRecommendation(
 function resolveStagePolicies(
   config: ModelPolicyConfig,
   hardFail: boolean,
+  liveOnly = false,
 ): ResolvedModelPolicyStageRoute[] {
   const stagePolicies: ResolvedModelPolicyStageRoute[] = [];
 
@@ -498,19 +540,25 @@ function resolveStagePolicies(
     const enterpriseAllowedBackends = orderedBackends.filter((entry) =>
       isEnterpriseModelAllowed(entry),
     );
-    if (enterpriseAllowedBackends.length === 0) {
+    const allowedBackends = liveOnly
+      ? enterpriseAllowedBackends.filter((entry) => isDeepSeekLiveBackend(entry))
+      : enterpriseAllowedBackends;
+    if (allowedBackends.length === 0) {
+      if (liveOnly) {
+        throw new Error(
+          `[LIVE_MODEL_POLICY] No DeepSeek backend remains for live stage "${stage}".`,
+        );
+      }
       throw new Error(
         `[ENTERPRISE_POLICY] No enterprise-allowed model backends remain for stage "${stage}".`,
       );
     }
-    const enterprisePrimary = enterpriseAllowedBackends[0]!;
-
     stagePolicies.push({
       stage,
-      primaryBackendKey: enterprisePrimary.backendKey,
-      primaryProvider: enterprisePrimary.provider,
-      primaryProviderModelId: enterprisePrimary.providerModelId,
-      orderedBackends: enterpriseAllowedBackends,
+      primaryBackendKey: allowedBackends[0]!.backendKey,
+      primaryProvider: allowedBackends[0]!.provider,
+      primaryProviderModelId: allowedBackends[0]!.providerModelId,
+      orderedBackends: allowedBackends,
       ...(stageConfig.selection_reason !== undefined
         ? { selectionReason: stageConfig.selection_reason }
         : {}),
@@ -523,10 +571,11 @@ function resolveStagePolicies(
 
 export function resolveStagePolicyRoutes(options?: {
   babelRoot?: string;
+  liveOnly?: boolean;
 }): ResolvedModelPolicyStageRoute[] {
   const { config } = loadModelPolicyConfig(options?.babelRoot);
   const hardFail = config.hard_fail_on_unknown_model !== false;
-  return resolveStagePolicies(config, hardFail);
+  return resolveStagePolicies(config, hardFail, options?.liveOnly === true);
 }
 
 export function getAvailableModels(options?: {
@@ -549,6 +598,7 @@ export function resolveModelByKey(options: {
   key: string;
   allowExpensive?: boolean;
   babelRoot?: string;
+  liveOnly?: boolean;
 }): ResolvedModelPolicy {
   const { path: policyPath, config } = loadModelPolicyConfig(options.babelRoot);
   const hardFail = config.hard_fail_on_unknown_model !== false;
@@ -565,6 +615,9 @@ export function resolveModelByKey(options: {
 
   if (!resolvedBackend.enabled) {
     throw new Error(`Model policy backend "${modelKey}" is disabled.`);
+  }
+  if (options.liveOnly === true) {
+    assertDeepSeekLiveBackend(resolvedBackend);
   }
   assertEnterpriseModelAllowed(resolvedBackend, options.allowExpensive === true);
 
@@ -594,7 +647,7 @@ export function resolveModelByKey(options: {
     );
   }
 
-  const stagePolicies = resolveStagePolicies(config, hardFail);
+  const stagePolicies = resolveStagePolicies(config, hardFail, options.liveOnly === true);
 
   return {
     policyPath,
@@ -633,6 +686,7 @@ export function resolveFamilyModelPolicy(options: {
   requestedStage?: string;
   allowExpensive?: boolean;
   babelRoot?: string;
+  liveOnly?: boolean;
 }): ResolvedModelPolicy {
   const { path: policyPath, config } = loadModelPolicyConfig(options.babelRoot);
   const familyDefaults = resolveFamilyDefaults(config.family_defaults, options.family);
@@ -643,6 +697,7 @@ export function resolveFamilyModelPolicy(options: {
       return resolveModelByKey({
         key: resolveVendorAliasKey(config, options.family),
         ...(options.allowExpensive !== undefined ? { allowExpensive: options.allowExpensive } : {}),
+        ...(options.liveOnly === true ? { liveOnly: true } : {}),
         ...(options.babelRoot !== undefined ? { babelRoot: options.babelRoot } : {}),
       });
     } catch {
@@ -673,6 +728,9 @@ export function resolveFamilyModelPolicy(options: {
   }
   if (!resolvedBackend.enabled) {
     throw new Error(`Model policy backend "${backendKey}" is disabled and cannot be selected.`);
+  }
+  if (options.liveOnly === true) {
+    assertDeepSeekLiveBackend(resolvedBackend, `live family "${options.family}"`);
   }
   assertEnterpriseModelAllowed(resolvedBackend, options.allowExpensive === true);
 
@@ -745,7 +803,7 @@ export function resolveFamilyModelPolicy(options: {
     waterfall.unshift(resolvedBackend);
   }
 
-  const stagePolicies = resolveStagePolicies(config, hardFail);
+  const stagePolicies = resolveStagePolicies(config, hardFail, options.liveOnly === true);
 
   return {
     policyPath,

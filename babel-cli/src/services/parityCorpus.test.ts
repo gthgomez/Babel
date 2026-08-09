@@ -67,37 +67,41 @@ test('parity corpus run modes resolve per repo_kind', () => {
 });
 
 for (const taskId of ALL_TASK_IDS) {
-  test(`parity babel cell records offline_demo evidence for ${taskId}`, { skip: skipIfNoApiKeys }, async () => {
-    const task = readParityCorpusTask(taskId);
-    const expectedMode = resolveParityCorpusRunMode(task);
-    const evidenceDir = mkdtempSync(join(tmpdir(), 'babel-parity-corpus-test-'));
-    const result = await runParityBabelCell(taskId, { evidenceDir });
+  test(
+    `parity babel cell records offline_demo evidence for ${taskId}`,
+    { skip: skipIfNoApiKeys, concurrency: false },
+    async () => {
+      const task = readParityCorpusTask(taskId);
+      const expectedMode = resolveParityCorpusRunMode(task);
+      const evidenceDir = mkdtempSync(join(tmpdir(), 'babel-parity-corpus-test-'));
+      const result = await runParityBabelCell(taskId, { evidenceDir });
 
-    assert.equal(result.tool, 'babel');
-    assert.equal(result.task_id, taskId);
-    assert.equal(result.status, 'success');
-    assert.equal(result.false_complete, false);
-    assert.ok(result.evidence_path);
-    assert.ok(result.latency_ms !== null && result.latency_ms >= 0);
+      assert.equal(result.tool, 'babel');
+      assert.equal(result.task_id, taskId);
+      assert.equal(result.status, 'success');
+      assert.equal(result.false_complete, false);
+      assert.ok(result.evidence_path);
+      assert.ok(result.latency_ms !== null && result.latency_ms >= 0);
 
-    if (expectedMode === 'ask') {
-      const repoKind = resolveParityCorpusRepoKind(task);
-      assert.equal(result.verifier, repoKind === 'static_ui_report' ? 'fail' : 'pass');
-    } else {
-      assert.equal(result.verifier, 'pass');
-    }
+      if (expectedMode === 'ask') {
+        const repoKind = resolveParityCorpusRepoKind(task);
+        assert.equal(result.verifier, repoKind === 'static_ui_report' ? 'fail' : 'pass');
+      } else {
+        assert.equal(result.verifier, 'pass');
+      }
 
-    const evidence = JSON.parse(readFileSync(result.evidence_path!, 'utf8')) as {
-      fixture_type?: string;
-      mode?: string;
-    };
-    assert.equal(evidence.fixture_type, 'babel_parity_babel_cell');
-    assert.equal(evidence.mode, expectedMode);
+      const evidence = JSON.parse(readFileSync(result.evidence_path!, 'utf8')) as {
+        fixture_type?: string;
+        mode?: string;
+      };
+      assert.equal(evidence.fixture_type, 'babel_parity_babel_cell');
+      assert.equal(evidence.mode, expectedMode);
 
-    const fixture = buildParityFixtureFromResults([result]);
-    assert.equal(fixture.results.length, 1);
-    assert.equal(fixture.results[0]?.tool, 'babel');
-  });
+      const fixture = buildParityFixtureFromResults([result]);
+      assert.equal(fixture.results.length, 1);
+      assert.equal(fixture.results[0]?.tool, 'babel');
+    },
+  );
 }
 
 for (const taskId of ALL_TASK_IDS) {

@@ -74,7 +74,7 @@ import {
   writeDryRunState,
 } from '../cli/helpers.js';
 import { resolveModelByKey } from '../modelPolicy.js';
-import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
+import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
 import { resolveProviderCredential } from '../runners/credentialHub.js';
 import type { ProviderId } from '../runners/providerRegistry.js';
 import {
@@ -737,15 +737,19 @@ async function handleModelsPing(options: {
   allowExpensive?: boolean;
 }): Promise<void> {
   const startedAt = Date.now();
-  const requestedModel = options.model?.trim() || 'qwen3-32b';
+  const requestedModel = options.model?.trim() || 'deepseek-v4-flash';
 
   try {
     const resolved = resolveModelByKey({
       key: requestedModel,
       allowExpensive: options.allowExpensive === true,
+      liveOnly: true,
       babelRoot: BABEL_ROOT,
     });
-    const runner = new DeepInfraApiRunner(resolved.providerModelId);
+    if (!process.env['DEEPSEEK_API_KEY']?.trim()) {
+      throw new Error('[LIVE_MODEL_POLICY] DEEPSEEK_API_KEY is required for model ping.');
+    }
+    const runner = new DeepSeekApiRunner(resolved.providerModelId);
     const schema = z.object({ ok: z.literal(true) });
     await runner.execute('Return exactly this JSON object and nothing else: {"ok":true}', schema);
     const metadata = runner.getLastInvocationMetadata();
@@ -756,12 +760,10 @@ async function handleModelsPing(options: {
       provider: resolved.provider,
       provider_model_id: resolved.providerModelId,
       latency_ms: metadata?.latency_ms ?? Date.now() - startedAt,
-      request_timeout_ms: Number(process.env['BABEL_DEEPINFRA_REQUEST_TIMEOUT_MS'] ?? '120000'),
-      request_max_retries: Number(process.env['BABEL_DEEPINFRA_REQUEST_MAX_RETRIES'] ?? '4'),
-      stream_idle_timeout_ms: Number(
-        process.env['BABEL_DEEPINFRA_STREAM_IDLE_TIMEOUT_MS'] ?? '60000',
-      ),
-      stream_max_retries: Number(process.env['BABEL_DEEPINFRA_STREAM_MAX_RETRIES'] ?? '1'),
+      request_timeout_ms: Number(process.env['BABEL_DEEPSEEK_REQUEST_TIMEOUT_MS'] ?? '120000'),
+      request_max_retries: Number(process.env['BABEL_DEEPSEEK_REQUEST_MAX_RETRIES'] ?? '4'),
+      stream_idle_timeout_ms: Number(process.env['BABEL_DEEPSEEK_STREAM_IDLE_TIMEOUT_MS'] ?? '60000'),
+      stream_max_retries: Number(process.env['BABEL_DEEPSEEK_STREAM_MAX_RETRIES'] ?? '1'),
     };
 
     if (options.json) {
@@ -1505,26 +1507,24 @@ function printSessionResume(
   }
 }
 
-function resolveBenchmarkProvider(providerInput: string): {
+export function resolveBenchmarkProvider(providerInput: string): {
   provider: ProviderId
   apiKey: string
   defaultModel: string
 } {
-  const provider: ProviderId =
-    providerInput === 'anthropic' ||
-    providerInput === 'gemini' ||
-    providerInput === 'deepseek'
-      ? providerInput
-      : 'deepinfra'
-  const defaultModel =
-    provider === 'anthropic'
-      ? 'claude-haiku-4-5-20251001'
-      : provider === 'gemini'
-        ? 'gemini-2.5-flash-lite'
-        : provider === 'deepseek'
-          ? 'deepseek-v4-flash'
-          : 'meta-llama/Llama-3.3-70B-Instruct'
-  const apiKey = resolveProviderCredential(provider)!
+  if (providerInput !== 'deepseek') {
+    throw new Error(
+      `[LIVE_MODEL_POLICY] Live benchmarks require the direct DeepSeek provider; received "${providerInput}".`,
+    );
+  }
+  const provider: ProviderId = 'deepseek';
+  const defaultModel = 'deepseek-v4-flash';
+  const apiKey = resolveProviderCredential(provider);
+  if (!apiKey) {
+    throw new Error(
+      '[LIVE_MODEL_POLICY] Live benchmarks require DEEPSEEK_API_KEY before execution.',
+    );
+  }
   return { provider, apiKey, defaultModel }
 }
 
@@ -3774,13 +3774,13 @@ Commands include:
     .option('--json', 'Emit structured JSON only')
     .option('--output-dir <path>', 'Benchmark artifact output directory')
     .option('--tasks <n>', 'Number of test tasks to run (default: all)', '23')
-    .option('--live', 'Run with live LLM calls (uses DEEPINFRA_API_KEY)')
+    .option('--live', 'Run with live DeepSeek LLM calls (uses DEEPSEEK_API_KEY)')
     .option('--model <model>', 'Model ID for live mode (provider shorthand)')
     .option('--delay-ms <n>', 'Delay between LLM calls in ms', '500')
     .option(
       '--provider <name>',
-      'LLM provider: deepinfra (default), deepseek, anthropic, or gemini',
-      'deepinfra',
+      'LLM provider: deepseek only for live runs',
+      'deepseek',
     )
     .option(
       '--label-mode <mode>',
@@ -3804,7 +3804,7 @@ Commands include:
             : undefined;
           if (options.live) {
             const { provider, apiKey, defaultModel } = resolveBenchmarkProvider(
-              options.provider ?? 'deepinfra',
+              options.provider ?? 'deepseek',
             );
 
             const model = options.model ?? defaultModel;
@@ -3931,13 +3931,13 @@ Commands include:
     .option('--json', 'Emit structured JSON only')
     .option('--output-dir <path>', 'Benchmark artifact output directory')
     .option('--tasks <n>', 'Number of test tasks to run (default: all)', '36')
-    .option('--live', 'Run with live LLM calls (uses DEEPINFRA_API_KEY)')
+    .option('--live', 'Run with live DeepSeek LLM calls (uses DEEPSEEK_API_KEY)')
     .option('--model <model>', 'Model ID for live mode (provider shorthand)')
     .option('--delay-ms <n>', 'Delay between LLM calls in ms', '500')
     .option(
       '--provider <name>',
-      'LLM provider: deepinfra (default), deepseek, anthropic, or gemini',
-      'deepinfra',
+      'LLM provider: deepseek only for live runs',
+      'deepseek',
     )
     .option(
       '--variant <v1|v2>',
@@ -3963,7 +3963,7 @@ Commands include:
         try {
           if (options.live) {
             const { provider, apiKey, defaultModel } = resolveBenchmarkProvider(
-              options.provider ?? 'deepinfra',
+              options.provider ?? 'deepseek',
             );
 
             const model = options.model ?? defaultModel;
