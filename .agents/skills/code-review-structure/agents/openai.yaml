@@ -1,0 +1,6 @@
+interface:
+  display_name: "Code Review Structure"
+  short_description: "Optional maintainability lens, never the default"
+  default_prompt: "Use $code-review-structure only when structure was selected or a file crossed 1000 lines."
+policy:
+  allow_implicit_invocation: false
