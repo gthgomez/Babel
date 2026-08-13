@@ -88,11 +88,9 @@ export async function executeChatTask(
   deps?: ExecuteChatTaskDeps,
 ): Promise<void> {
   ctx.isRunning = true;
-  // C2: keep composer active so Tab can queue follow-ups during the turn.
-  if (process.stdout.isTTY && !process.env['CI']) {
-    ctx.rl.resume();
-    ctx.rl.prompt();
-  }
+  // Slice 2: do not re-activate PromptInput during the turn. A live composer
+  // shares stdin with ConversationalRenderer and turns one Ctrl+C into
+  // cancel + process-exit on ConPTY (raw 0x03 plus SIGINT).
   const preRunCost = globalCostTracker.getSessionSummary().totalCostUSD;
   ctx.lastTargetRoot = target.targetRoot;
   ctx.lastWorkspaceRoot = target.workspaceRoot;
