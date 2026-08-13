@@ -16,6 +16,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { resolve as pathResolve } from 'node:path';
 
+import { terminateChildTree } from '../sandbox.js';
 import { getSafeEnv } from '../utils/safeEnv.js';
 
 /** Cap retained on the job record (same ballpark as SafeExecutor maxBuffer). */
@@ -39,6 +40,10 @@ export interface BackgroundShellJob {
   stdout: string;
   stderr: string;
   error?: string;
+  /** When true, job survives turn cancellation (killAllBackgroundShells skips it). */
+  detached?: boolean;
+  /** Engine/session that owns this job — scopes turn-cancel and registry clears. */
+  ownerId?: string;
   /** Resolves when the process exits (or is killed). */
   done: Promise<void>;
 }
@@ -49,6 +54,10 @@ export interface StartBackgroundShellInput {
   cwd: string;
   /** Hard wall-clock kill for the child (default DEFAULT_BACKGROUND_JOB_TIMEOUT_MS). */
   timeoutMs?: number;
+  /** Detached jobs survive turn cancellation (default false). */
+  detached?: boolean;
+  /** Owning engine/session id — lets killAllBackgroundShells target one engine. */
+  ownerId?: string;
 }
 
 export interface AwaitBackgroundShellResult {
@@ -108,7 +117,7 @@ function activeCount(): number {
 function killChild(child: ChildProcessWithoutNullStreams | undefined): void {
   if (!child) return;
   try {
-    child.kill();
+    terminateChildTree(child);
   } catch {
     /* ignore */
   }
@@ -146,6 +155,8 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
     resolveDone = resolve;
   });
 
+  const detached = input.detached === true;
+
   const job: InternalJob = {
     id,
     command,
@@ -155,6 +166,8 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
     exitCode: null,
     stdout: '',
     stderr: '',
+    detached,
+    ...(input.ownerId !== undefined ? { ownerId: input.ownerId } : {}),
     done,
   };
 
@@ -170,6 +183,8 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
       // M10 parity with SafeExecutor.shellExec — strip secrets from child env.
       env: getSafeEnv(),
       windowsHide: true,
+      // POSIX: new process group so terminateChildTree can SIGTERM -pid.
+      detached: process.platform !== 'win32',
       // shell: false — cmd.exe invoked directly on Windows (same as SafeExecutor).
     }) as ChildProcessWithoutNullStreams;
   } catch (err) {
@@ -276,6 +291,35 @@ export async function awaitBackgroundShell(
   };
 }
 
+/**
+ * Tree-kill running background jobs. By default skips detached jobs
+ * (they survive turn cancellation). When ownerId is provided, only that
+ * engine's jobs are killed — sibling engines in the same process are
+ * untouched. Job status flips synchronously; the actual tree kill is
+ * deferred to setImmediate so cancel paths (abortTurn) never block on
+ * Windows taskkill. Returns ids that were killed.
+ */
+export function killAllBackgroundShells(options?: {
+  includeDetached?: boolean;
+  ownerId?: string;
+}): { killed: string[] } {
+  const includeDetached = options?.includeDetached ?? false;
+  const ownerId = options?.ownerId;
+  const killed: string[] = [];
+  for (const job of jobs.values()) {
+    if (job.status !== 'running') continue;
+    if (job.detached && !includeDetached) continue;
+    if (ownerId !== undefined && job.ownerId !== ownerId) continue;
+    job.status = 'killed';
+    job.error = job.error ?? 'Killed by turn cancellation';
+    job.exitCode = job.exitCode ?? 1;
+    const child = job.child;
+    setImmediate(() => killChild(child));
+    killed.push(job.id);
+  }
+  return { killed };
+}
+
 /** Best-effort kill of a running background job. */
 export function killBackgroundShell(taskId: string): AwaitBackgroundShellResult {
   const job = jobs.get(taskId);
@@ -319,20 +363,26 @@ export function getBackgroundShellJob(taskId: string): BackgroundShellJob | unde
 }
 
 /**
- * Kill all running jobs and clear the process-global registry.
- * Call at chat session start/end so task ids and output do not leak across sessions.
+ * Kill running jobs and clear registry entries.
+ * With ownerId: only that engine's jobs are killed and removed (task ids are
+ * NOT reset — sibling engines may still hold live ids). Without ownerId:
+ * full process-wide clear and id reset (session teardown / tests only).
  */
-export function clearBackgroundShellRegistry(): void {
-  for (const job of jobs.values()) {
+export function clearBackgroundShellRegistry(ownerId?: string): void {
+  for (const [id, job] of jobs.entries()) {
+    if (ownerId !== undefined && job.ownerId !== ownerId) continue;
     if (job.status === 'running') {
       killChild(job.child);
       job.status = 'killed';
       job.error = job.error ?? 'Cleared with background shell registry';
       job.exitCode = job.exitCode ?? 1;
     }
+    if (ownerId !== undefined) jobs.delete(id);
   }
-  jobs.clear();
-  nextId = 1;
+  if (ownerId === undefined) {
+    jobs.clear();
+    nextId = 1;
+  }
 }
 
 /** Test helper alias — clears registry between unit tests. */

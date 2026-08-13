@@ -33,6 +33,8 @@ export interface BackgroundShellActionCtx {
   target: string;
   toolId: number;
   index: number;
+  /** Owning engine run id — scopes turn-cancel kills to this engine's jobs. */
+  ownerId?: string | undefined;
   pushLog: (entry: BackgroundShellLogEntry) => void;
   onToolComplete?: ((id: number, detail?: string | undefined) => void) | undefined;
 }
@@ -80,7 +82,7 @@ export async function executeAwaitCommandAction(
 
 /** run_command(background=true) — non-blocking shell with sandbox parity gates. */
 export function executeBackgroundRunCommandAction(
-  action: { command: string; cwd?: string | undefined },
+  action: { command: string; cwd?: string | undefined; detached?: boolean | undefined },
   ctx: BackgroundShellActionCtx,
 ): BackgroundShellActionResult {
   const denyBg = (message: string, detail = 'denied'): BackgroundShellActionResult => {
@@ -150,6 +152,8 @@ export function executeBackgroundRunCommandAction(
       command: action.command,
       cwd: safeCwd,
       timeoutMs: DEFAULT_BACKGROUND_JOB_TIMEOUT_MS,
+      detached: action.detached === true,
+      ...(ctx.ownerId !== undefined ? { ownerId: ctx.ownerId } : {}),
     });
     ctx.pushLog({
       tool: ctx.tool,

@@ -175,7 +175,7 @@ import {
   setChatApprovalTurnId,
 } from './chatApproval.js';
 import { deriveSubagentApprovalSession } from './approvalRequests.js';
-import { clearBackgroundShellRegistry } from './backgroundShell.js';
+import { clearBackgroundShellRegistry, killAllBackgroundShells } from './backgroundShell.js';
 import {
   dispatchInputArbiter,
   consumeInputArbiterEffects,
@@ -696,7 +696,9 @@ export class ChatEngine {
     this.engineRunId = options.runId ?? allocateThreadId();
     // definite assignment: engineRunId set immediately above
     this.parity = createParityRuntime(this.engineRunId);
-    clearBackgroundShellRegistry(); // Per-session bg shell isolation
+    // Per-session bg shell isolation — scoped to this run id so sibling
+    // engines in the same process keep their jobs (matters for resume).
+    clearBackgroundShellRegistry(this.engineRunId);
 
     // Initialize LLM-based compaction manager (gated behind BABEL_COMPACTION=off).
     // When disabled or on failure, falls back to the inline compactConversation() heuristic.
@@ -2671,6 +2673,13 @@ export class ChatEngine {
   abortTurn(): void {
     this._cancelled = true;
     this.abortController.abort();
+    try {
+      // Scoped to this engine's jobs; the tree kill itself is deferred
+      // (setImmediate) so cancel latency never blocks on Windows taskkill.
+      killAllBackgroundShells({ ownerId: this.engineRunId });
+    } catch {
+      // Best-effort: session must remain usable after cancel.
+    }
     finalizeParityCancel(this.parity, this.engineRunDir);
     this.abortController = new AbortController();
   }
@@ -3670,6 +3679,7 @@ export class ChatEngine {
         return executeBackgroundRunCommandAction(action, {
           projectRoot: this.options.projectRoot, tool, target, toolId,
           index: meta.index,
+          ownerId: this.engineRunId,
           pushLog: (entry) => this.toolCallLog.push(entry),
           onToolComplete: callbacks.onToolComplete,
         });
