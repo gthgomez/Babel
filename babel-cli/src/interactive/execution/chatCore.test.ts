@@ -508,6 +508,17 @@ test('consumeChatStream returns failed result on failed event', async () => {
   assert.equal(result.answer, 'upstream error');
 });
 
+test('consumeChatStream maps DeepSeek operator cancel to CANCELLED', async () => {
+  async function* cancelledProvider(): AsyncGenerator<ChatEvent, void, undefined> {
+    throw new Error('[deepSeekApi] request cancelled (deepseek-v4-flash)');
+  }
+
+  const result = await consumeChatStream(cancelledProvider(), null);
+
+  assert.equal(result.status, 'cancelled');
+  assert.equal(result.outcome, 'CANCELLED');
+});
+
 describe('completion_verification in buildChatRunPayload', () => {
   it('verifierReceipt with exit_code 0 sets status=pass required=true', () => {
     const payload = buildChatRunPayload(

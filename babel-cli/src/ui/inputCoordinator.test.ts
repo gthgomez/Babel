@@ -78,6 +78,34 @@ test('drainStdinResiduals is safe to call when stdin has no buffered data', asyn
   drainStdinResiduals();
 });
 
+test('raw Ctrl+C plus SIGINT in the same tick is not a second press', async () => {
+  const {
+    markCtrlCHandled,
+    isDuplicateCtrlC,
+    resetCtrlCDedupeForTests,
+  } = await import('./inputCoordinator.js');
+  resetCtrlCDedupeForTests();
+  const now = 1_000_000;
+  assert.equal(isDuplicateCtrlC(now), false);
+  markCtrlCHandled(now);
+  assert.equal(isDuplicateCtrlC(now + 10), true, 'SIGINT 10ms later is the same key');
+  assert.equal(isDuplicateCtrlC(now + 400), false, 'a later press is a real second Ctrl+C');
+});
+
+test('release is idempotent when the lock is already free', async () => {
+  const { InputCoordinator } = await import('./inputCoordinator.js');
+  const coordinator = InputCoordinator.getInstance();
+  coordinator.emergencyRestore();
+  const first = coordinator.tryAcquire('repl');
+  assert.ok(first);
+  first();
+  first();
+  coordinator.release('repl');
+  const again = coordinator.tryAcquire('repl');
+  assert.ok(again);
+  again();
+});
+
 test('withRawStdinPrompt restores prior raw mode when stdin is not a TTY', async () => {
   const { withRawStdinPrompt } = await import('./inputCoordinator.js');
   const result = await withRawStdinPrompt(async () => 'ok');

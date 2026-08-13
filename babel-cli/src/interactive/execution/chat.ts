@@ -42,6 +42,7 @@ import {
   buildInteractiveCard,
 } from '../../agent/failureCard.js';
 import { formatRoutingStatusLabel } from '../../agent/turnRoutingReceipt.js';
+import { isOperatorAbortError } from '../../agent/operatorAbort.js';
 
 /**
  * Extract changed file paths from a ChatResult's tool-call log.
@@ -87,11 +88,9 @@ export async function executeChatTask(
   deps?: ExecuteChatTaskDeps,
 ): Promise<void> {
   ctx.isRunning = true;
-  // C2: keep composer active so Tab can queue follow-ups during the turn.
-  if (process.stdout.isTTY && !process.env['CI']) {
-    ctx.rl.resume();
-    ctx.rl.prompt();
-  }
+  // Slice 2: do not re-activate PromptInput during the turn. A live composer
+  // shares stdin with ConversationalRenderer and turns one Ctrl+C into
+  // cancel + process-exit on ConPTY (raw 0x03 plus SIGINT).
   const preRunCost = globalCostTracker.getSessionSummary().totalCostUSD;
   ctx.lastTargetRoot = target.targetRoot;
   ctx.lastWorkspaceRoot = target.workspaceRoot;
@@ -406,6 +405,11 @@ export async function executeChatTask(
       next: ctx.lastAssistantNext,
     });
   } catch (err: any) {
+    if (isOperatorAbortError(err)) {
+      ctx.state.lastRunUserStatus = 'cancelled';
+      ctx.lastAssistantStatus = 'CANCELLED';
+      return;
+    }
     const message = err?.message ?? String(err);
     console.error(`\n  ${error('✖')} ${message}\n`);
     ctx.state.lastRunUserStatus = 'failed';

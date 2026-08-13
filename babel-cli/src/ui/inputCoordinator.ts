@@ -18,6 +18,22 @@ import {
 
 export { consumeInputArbiterEffects };
 
+/** Collapse raw 0x03 + process SIGINT from one keypress into a single Ctrl+C. */
+const CTRL_C_DEBOUNCE_MS = 300;
+let lastCtrlCHandledAt = 0;
+
+export function markCtrlCHandled(now = Date.now()): void {
+  lastCtrlCHandledAt = now;
+}
+
+export function isDuplicateCtrlC(now = Date.now(), windowMs = CTRL_C_DEBOUNCE_MS): boolean {
+  return lastCtrlCHandledAt > 0 && now - lastCtrlCHandledAt < windowMs;
+}
+
+export function resetCtrlCDedupeForTests(): void {
+  lastCtrlCHandledAt = 0;
+}
+
 /** P2-B: process-wide input arbiter mode (single stdin owner). */
 let _arbiterState: InputArbiterState = initialInputArbiterState();
 
@@ -441,6 +457,9 @@ export class InputCoordinator {
 
   constructor() {
     process.on('SIGINT', () => {
+      if (isDuplicateCtrlC()) {
+        return;
+      }
       this.emergencyRestore();
       process.exit(130);
     });
@@ -582,6 +601,11 @@ export class InputCoordinator {
   }
 
   public release(owner: Owner): void {
+    // Idempotent when already unlocked — overlapping readline 'line' events
+    // can invoke the same release token twice (daily-driver /cancel + next task).
+    if (!this.locked && this.currentOwner === null) {
+      return;
+    }
     if (this.currentOwner !== owner) {
       throw new Error(
         `InputCoordinator: Cannot release lock owned by '${this.currentOwner}' from owner '${owner}'`,

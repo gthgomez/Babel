@@ -158,6 +158,7 @@ import {
   checkpointParityEventLogStrict,
   type ParityRuntime,
 } from './chatEngineParityBridge.js';
+import { isOperatorAbortError } from './operatorAbort.js';
 import {
   loadSessionEventLogFromDir,
   recordCompletionDecision,
@@ -1585,6 +1586,11 @@ export class ChatEngine {
         } catch (err: any) {
           endSpan(_turnSpan, SpanStatusCode.ERROR);
           _turnSpan = null;
+          const cancelled = this.emitCancelledIfOperatorAbort(err);
+          if (cancelled) {
+            yield cancelled;
+            return;
+          }
           yield this.streamFailed(err?.message ?? String(err));
           return;
         }
@@ -1718,6 +1724,11 @@ export class ChatEngine {
             } catch (rawErr: any) {
               endSpan(_turnSpan, SpanStatusCode.ERROR);
               _turnSpan = null;
+              const cancelled = this.emitCancelledIfOperatorAbort(rawErr);
+              if (cancelled) {
+                yield cancelled;
+                return;
+              }
               yield this.streamFailed(rawErr?.message ?? String(rawErr));
               return;
             }
@@ -1757,6 +1768,11 @@ export class ChatEngine {
           } catch (fbErr: any) {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
             _turnSpan = null;
+            const cancelled = this.emitCancelledIfOperatorAbort(fbErr);
+            if (cancelled) {
+              yield cancelled;
+              return;
+            }
             yield this.streamFailed(fbErr?.message ?? String(fbErr));
             return;
           }
@@ -2616,6 +2632,20 @@ export class ChatEngine {
     yield this.streamDone(maxTurnAnswer, {
       ...(this.lastCriticReceipt ? { criticReceipt: this.lastCriticReceipt } : {}),
     });
+  }
+
+  /**
+   * Map operator abort / in-flight cancel to a cancelled stream event.
+   * cancel() replaces AbortController, so signal.aborted on the new
+   * controller is not sufficient — also honor _cancelled and runner wrap.
+   */
+  private emitCancelledIfOperatorAbort(err?: unknown): ChatEvent | null {
+    if (this._cancelled || this.abortController.signal.aborted || isOperatorAbortError(err)) {
+      this._cancelled = true;
+      finalizeParityCancel(this.parity, this.engineRunDir);
+      return { type: 'cancelled' };
+    }
+    return null;
   }
 
   /**
@@ -4456,6 +4486,11 @@ export class ChatEngine {
     err: any,
     turn: number,
   ): AsyncGenerator<ChatEvent, DeepInfraApiRunner | DeepSeekApiRunner | null, undefined> {
+    const cancelled = this.emitCancelledIfOperatorAbort(err);
+    if (cancelled) {
+      yield cancelled;
+      return null;
+    }
     if (turn > 0) {
       yield this.streamFailed(err.message);
       return null;

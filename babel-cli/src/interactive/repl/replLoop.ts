@@ -62,8 +62,19 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
   let release: (() => void) | null = await coordinator.acquire('repl');
   ctx.rl.prompt();
 
+  const consumeRelease = (): void => {
+    const token = release;
+    release = null;
+    if (!token) return;
+    try {
+      token();
+    } catch {
+      /* already released by an overlapping line event */
+    }
+  };
+
   ctx.rl.on('line', async (line) => {
-    if (release) release();
+    consumeRelease();
     ctx.currentStageIdx = 0;
     const input = line.trim();
 

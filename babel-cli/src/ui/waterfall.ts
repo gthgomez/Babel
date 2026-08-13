@@ -34,6 +34,7 @@ import { renderBackgroundTaskOverlay } from './backgroundTaskOverlay.js';
 import { ScrollbackBuffer } from './scrollback.js';
 import { ScreenManager } from './screenManager.js';
 import { OutputBuffer, isBrokenStdoutError } from './outputBuffer.js';
+import { isDuplicateCtrlC, markCtrlCHandled } from './inputCoordinator.js';
 import { isA11yMode, a11yStageEvent, a11yActivityEvent, a11yToolEvent } from './a11y.js';
 import { ChunkCoalescer } from './chunkCoalescer.js';
 import { TwoRegionStreaming } from './twoRegionStreaming.js';
@@ -373,7 +374,8 @@ export class WaterfallRenderer extends BaseRenderer {
           process.kill(process.pid, 'SIGTSTP');
           return;
         case 'cancel_double': {
-          // Double-tap timing logic stays inline (stateful)
+          if (isDuplicateCtrlC()) break;
+          markCtrlCHandled();
           const now = Date.now();
           if (this.lastCancelTime && now - this.lastCancelTime < 1000) {
             this.stop();
@@ -1591,20 +1593,26 @@ export class ConversationalRenderer extends BaseRenderer {
               /* best-effort */
             }
           }
-          this.fail(new Error('Run cancelled (Esc).'));
           break;
         case 'suspend':
           process.kill(process.pid, 'SIGTSTP');
           return;
         case 'cancel_double': {
-          // Double-tap timing logic stays inline (stateful)
+          if (isDuplicateCtrlC()) break;
+          markCtrlCHandled();
           const now = Date.now();
           if (this.lastCancelTime && now - this.lastCancelTime < 1000) {
             this.stop();
             process.exit(130);
           }
           this.lastCancelTime = now;
-          this.fail(new Error('Run cancelled (Ctrl+C). Double-press to exit.'));
+          if (this._cancelCallback) {
+            try {
+              this._cancelCallback();
+            } catch {
+              /* best-effort */
+            }
+          }
           break;
         }
         case 'thought_toggle':
