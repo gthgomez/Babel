@@ -72,7 +72,7 @@ export async function resumeChatSession(
 
     // Prefer durable thread event log (preserves tool call/result IDs)
     const sessionDir = chatSessionDir(sessionId);
-    const sessionEvents = inspectSessionEventLogFromDir(sessionDir);
+    const sessionEvents = inspectSessionEventLogFromDir(sessionDir, sessionId);
     if (sessionEvents.kind === 'invalid') {
       throw new SessionEventLogRestoreError(
         'SESSION_EVENT_LOG_INVALID',

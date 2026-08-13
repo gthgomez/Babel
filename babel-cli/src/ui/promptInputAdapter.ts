@@ -20,6 +20,7 @@
 import * as readline from 'node:readline';
 import type { Interface } from 'node:readline';
 import { Writable } from 'node:stream';
+import { suspendReadlineInput } from './inputCoordinator.js';
 import { PromptInput, type PromptInputConfig } from './promptInput.js';
 import {
   enqueueComposerMessage,
@@ -88,6 +89,8 @@ export interface PromptInputAdapter {
   /** Expose the underlying PromptInput for voice dictation and other subsystems.
    *  Returns null if the adapter was created without a PromptInput (readline fallback). */
   getPromptInput(): PromptInput | null;
+  /** Temporarily detach the internal readline surface during an exclusive overlay. */
+  suspendInput(): () => void;
 }
 
 /**
@@ -139,6 +142,10 @@ class PromptInputAdapterImpl implements PromptInputAdapter {
    *  was created without a PromptInput (readline fallback path). */
   getPromptInput(): PromptInput | null {
     return this.promptInput;
+  }
+
+  suspendInput(): () => void {
+    return suspendReadlineInput(this.internalRl);
   }
   private lineCallbacks: LineCallback[] = [];
   private sigintCallbacks: SigintCallback[] = [];

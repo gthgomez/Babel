@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
+import * as readline from 'node:readline'
 import { PassThrough } from 'node:stream'
 import test from 'node:test'
 
 import { handleDiffReview } from './review.js'
-
-test('the /diff command uses the interactive pager and consumes q before restoring the draft', async () => {
+test('the production /diff path isolates a real readline interface from pager input', async () => {
   const originalStdin = process.stdin
   const originalWrite = process.stdout.write.bind(process.stdout)
   const stdin = new PassThrough() as PassThrough & {
@@ -17,23 +17,13 @@ test('the /diff command uses the interactive pager and consumes q before restori
   stdin.setRawMode = (mode: boolean) => {
     stdin.isRaw = mode
   }
+  const output = new PassThrough()
+  Object.assign(output, { isTTY: true, columns: 80, rows: 24 })
+  const rl = readline.createInterface({ input: stdin, output, terminal: true })
+  const draft = 'real readline draft: 你好'
+  rl.write(draft)
 
-  let leakedToComposer = ''
-  const draft = 'preserve this draft byte-for-byte: 你好\nsecond line'
-  let currentDraft = draft
-  const composerListener = (chunk: Buffer) => {
-    leakedToComposer += chunk.toString('utf8')
-  }
-  stdin.on('data', composerListener)
 
-  const rl = {
-    pause: () => stdin.off('data', composerListener),
-    resume: () => stdin.on('data', composerListener),
-    getInputText: () => currentDraft,
-    setInputText: (text: string) => {
-      currentDraft = text
-    },
-  }
   const ctx = {
     rl,
     resolveCurrentTarget: () => ({ targetRoot: process.cwd() }),
@@ -45,16 +35,22 @@ test('the /diff command uses the interactive pager and consumes q before restori
   }) as typeof process.stdout.write
   Object.defineProperty(process, 'stdin', { configurable: true, value: stdin })
 
+  let lineAfterPager = ''
   try {
     const pending = handleDiffReview(ctx as never)
     await new Promise<void>((resolve) => setImmediate(resolve))
+    stdin.write('j')
     stdin.write('q')
     await pending
+    lineAfterPager = rl.line
   } finally {
+    rl.close()
+    output.destroy()
     process.stdout.write = originalWrite
     Object.defineProperty(process, 'stdin', { configurable: true, value: originalStdin })
   }
 
-  assert.equal(leakedToComposer, '')
-  assert.equal(currentDraft, draft)
+  assert.equal(lineAfterPager, draft, 'pager bytes must not enter readline internal line state')
+  assert.equal(stdin.read(), null, 'pager bytes must not remain buffered for readline')
+  assert.equal(rl.line, draft, 'the exact prior readline draft must be restored')
 })

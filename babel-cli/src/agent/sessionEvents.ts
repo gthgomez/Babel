@@ -608,14 +608,17 @@ export function serializeSessionEventLog(log: SessionEventLog): string {
   return log.events.map((e) => JSON.stringify(e)).join('\n') + (log.events.length ? '\n' : '');
 }
 
-/** Parse JSONL session event log; skips blank lines; rejects wrong schema. */
+/** Parse JSONL session event log; rejects blank durable logs and wrong schema. */
 export function parseSessionEventLog(
   raw: string,
-  sessionIdFallback?: string,
+  expectedSessionId?: string,
 ): SessionEventLog {
   const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length === 0) {
+    throw new Error('Invalid session event log: no events found');
+  }
   const events: SessionEvent[] = [];
-  let sessionId = sessionIdFallback ?? '';
+  let sessionId = '';
   let maxSeq = -1;
   const knownKinds = new Set<SessionEventKind>([
     'user_submitted', 'model_started', 'tool_proposed', 'tool_started',
@@ -645,8 +648,8 @@ export function parseSessionEventLog(
     if (typeof ev.turn_id !== 'string' && ev.turn_id !== null) {
       throw new Error(`Invalid session event at line ${index + 1}: turn_id is invalid`)
     }
-    if (typeof ev.seq !== 'number' || !Number.isInteger(ev.seq) || ev.seq < 0 || ev.seq <= maxSeq) {
-      throw new Error(`Invalid session event at line ${index + 1}: seq must increase monotonically`)
+    if (typeof ev.seq !== 'number' || !Number.isInteger(ev.seq) || ev.seq !== events.length) {
+      throw new Error(`Invalid session event at line ${index + 1}: seq must be contiguous starting at 0`)
     }
     if (typeof ev.ts !== 'string' || ev.ts.length === 0) {
       throw new Error(`Invalid session event at line ${index + 1}: ts is required`)
@@ -683,6 +686,9 @@ export function parseSessionEventLog(
         throw new Error(`Invalid session event at line ${index + 1}: ${field} must be a string`)
       }
     }
+    if (expectedSessionId && ev.session_id !== expectedSessionId) {
+      throw new Error(`Invalid session event at line ${index + 1}: session_id does not match requested session`)
+    }
     if (sessionId && ev.session_id !== sessionId) {
       throw new Error(`Invalid session event at line ${index + 1}: session_id changed`)
     }
@@ -692,7 +698,7 @@ export function parseSessionEventLog(
   }
   return {
     schema_version: SESSION_EVENT_SCHEMA_VERSION,
-    session_id: sessionId || randomUUID(),
+    session_id: sessionId,
     events,
     nextSeq: maxSeq + 1,
     flushedThroughSeq: maxSeq,
@@ -754,11 +760,14 @@ export function loadSessionEventLogFromDir(runDir: string): SessionEventLog | nu
   return result.kind === 'valid' ? result.log : null
 }
 
-export function inspectSessionEventLogFromDir(runDir: string): SessionEventLogLoadResult {
+export function inspectSessionEventLogFromDir(
+  runDir: string,
+  expectedSessionId?: string,
+): SessionEventLogLoadResult {
   const path = join(runDir, SESSION_EVENTS_FILENAME)
   if (!existsSync(path)) return { kind: 'missing', path }
   try {
-    return { kind: 'valid', path, log: parseSessionEventLog(readFileSync(path, 'utf-8')) }
+    return { kind: 'valid', path, log: parseSessionEventLog(readFileSync(path, 'utf-8'), expectedSessionId) }
   } catch (error) {
     return {
       kind: 'invalid',
@@ -769,7 +778,7 @@ export function inspectSessionEventLogFromDir(runDir: string): SessionEventLogLo
 }
 
 export function loadSessionEventLogForResume(runDir: string, sessionId: string): SessionEventLog {
-  const result = inspectSessionEventLogFromDir(runDir)
+  const result = inspectSessionEventLogFromDir(runDir, sessionId)
   if (result.kind === 'missing') {
     throw new SessionEventLogRestoreError(
       'SESSION_EVENT_LOG_MISSING',
@@ -790,7 +799,7 @@ export function loadSessionEventLogIfPresentForResume(
   runDir: string,
   sessionId: string,
 ): SessionEventLog | null {
-  const result = inspectSessionEventLogFromDir(runDir)
+  const result = inspectSessionEventLogFromDir(runDir, sessionId)
   if (result.kind === 'missing') return null
   if (result.kind === 'invalid') {
     throw new SessionEventLogRestoreError(
