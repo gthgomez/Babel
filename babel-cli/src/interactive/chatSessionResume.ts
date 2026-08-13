@@ -18,6 +18,8 @@ import {
   applyEventLogToChatEngine,
 } from '../services/threadStore/conversationSync.js';
 import { loadThreadEventLogFromDir } from '../agent/threadEventLog.js';
+import { SessionEventLogRestoreError } from '../agent/sessionEvents.js';
+import { inspectSessionEventLogFromDir } from '../agent/sessionEvents.js';
 import type { ReplContext } from './context.js';
 import {
   hydrateReplTurnsFromCells,
@@ -70,6 +72,14 @@ export async function resumeChatSession(
 
     // Prefer durable thread event log (preserves tool call/result IDs)
     const sessionDir = chatSessionDir(sessionId);
+    const sessionEvents = inspectSessionEventLogFromDir(sessionDir);
+    if (sessionEvents.kind === 'invalid') {
+      throw new SessionEventLogRestoreError(
+        'SESSION_EVENT_LOG_INVALID',
+        `Cannot resume ${sessionId}: session-events.jsonl is invalid (${sessionEvents.error.message})`,
+        { cause: sessionEvents.error },
+      );
+    }
     const eventLog = loadThreadEventLogFromDir(sessionDir);
     if (eventLog && eventLog.events.length > 0) {
       ctx.chatEngine = createEngineFromEventLog(engineOptions, eventLog);
@@ -122,7 +132,13 @@ export async function resumeChatSession(
       // Legacy transcript-only sessions may predate session-events.jsonl.
       // They remain resumable as conversation history; the durable event log
       // is rebuilt by subsequent turns rather than invented during resume.
-      if (!hasTranscript) throw err;
+      if (
+        !hasTranscript ||
+        !(err instanceof SessionEventLogRestoreError) ||
+        err.code !== 'SESSION_EVENT_LOG_MISSING'
+      ) {
+        throw err;
+      }
       engine = new ChatEngine({ ...engineOptions, runId: sessionId });
       engine.replaceConversation(parseChatTranscriptFile(txPath));
     }

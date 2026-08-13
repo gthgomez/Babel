@@ -1,6 +1,7 @@
 import type { ReplContext } from '../context.js';
 import { muted, warning } from '../../ui/theme.js';
 import { OutputBuffer } from '../../ui/outputBuffer.js';
+import { withPausedStdin } from '../../ui/inputCoordinator.js';
 import { openLastReviewDiff } from '../../ui/diffReview.js';
 
 function getDraft(ctx: ReplContext): string {
@@ -16,14 +17,15 @@ function setDraft(ctx: ReplContext, text: string): void {
 export async function handleDiffReview(ctx: ReplContext): Promise<void> {
   const draft = getDraft(ctx);
   const target = ctx.resolveCurrentTarget();
-  const result = await openLastReviewDiff({
-    getComposerDraft: () => draft,
-    setComposerDraft: (text) => setDraft(ctx, text),
-    cwd: target.targetRoot,
-    showPager: async (content) => {
-      OutputBuffer.getInstance().write(`\n${content}\n`);
-    },
-  });
+  const result = await withPausedStdin(
+    () =>
+      openLastReviewDiff({
+        getComposerDraft: () => draft,
+        setComposerDraft: (text) => setDraft(ctx, text),
+        cwd: target.targetRoot,
+      }),
+    ctx.rl,
+  );
   setDraft(ctx, result.restoredDraft);
 }
 

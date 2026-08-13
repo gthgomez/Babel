@@ -47,6 +47,8 @@ test('receipt validation requires findings for non-PASS outcomes', () => {
     },
     semantic: {
       passed: true,
+      evidenceMode: 'visual_only',
+      evidenceRequired: false,
       observedEvents: [],
       missingEvents: [],
       detail: 'no events required',
@@ -60,4 +62,43 @@ test('receipt validation requires findings for non-PASS outcomes', () => {
   const result = validateTuiVisualReceipt(receipt)
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.errors.join('\n'), /must contain at least one finding/)
+})
+
+test('scenario validation rejects contradictory semantic declarations', () => {
+  const result = validateTuiVisualScenario({
+    ...TUI_VISUAL_SCENARIOS[0]!,
+    evidenceMode: 'visual_plus_semantic',
+    expectedEvents: [],
+  })
+
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.match(result.errors.join('\n'), /must require at least one expected event/)
+})
+
+test('receipt validation rejects PASS when semantic evidence failed', () => {
+  const base = {
+    schemaVersion: TUI_VISUAL_TEST_SCHEMA_VERSION,
+    scenarioId: 'scenario',
+    scenarioName: 'Scenario',
+    status: 'PASS' as const,
+    startedAt: '2026-08-12T00:00:00.000Z',
+    endedAt: '2026-08-12T00:00:01.000Z',
+    terminal: { program: 'test', term: 'xterm', cols: 80, rows: 24, platform: 'win32', isWindowsTerminal: false },
+    semantic: {
+      passed: false,
+      evidenceMode: 'visual_plus_semantic' as const,
+      evidenceRequired: true,
+      observedEvents: [],
+      missingEvents: ['babel.diff.review.closed'],
+      detail: 'missing event',
+    },
+    observations: [],
+    findings: [],
+    evidenceDir: 'runs/tui-visual/scenario',
+    controller: { name: 'test', version: '1' },
+  } satisfies TuiVisualReceipt
+
+  const result = validateTuiVisualReceipt(base)
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.match(result.errors.join('\n'), /require passing semantic evidence/)
 })

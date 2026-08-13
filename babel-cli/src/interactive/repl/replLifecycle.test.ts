@@ -6,7 +6,7 @@ import { DEC_2026_END } from '../../ui/terminalEscapeSequences.js';
 import { globalCostTracker } from '../../services/costTracker.js';
 
 describe('restoreTerminalBeforeExit', () => {
-  it('resets scroll region, ends DEC 2026, and clears the viewport', () => {
+  it('restores terminal state without clearing the viewport', () => {
     const writes: string[] = [];
     const original = process.stdout.write.bind(process.stdout);
     const stub = ((chunk: string | Uint8Array) => {
@@ -23,8 +23,7 @@ describe('restoreTerminalBeforeExit', () => {
     assert.ok(out.includes('\x1b[?25h'), 'cursor shown');
     assert.ok(out.includes('\x1b[r'), 'scroll region reset');
     assert.ok(out.includes(DEC_2026_END), 'DEC 2026 ended');
-    assert.ok(out.includes('\x1b[2J'), 'viewport cleared');
-    assert.ok(out.includes('\x1b[H'), 'cursor homed after clear');
+    assert.doesNotMatch(out, /\x1b\[2J|\x1b\[3J/, 'clean exit preserves viewport');
   });
 });
 

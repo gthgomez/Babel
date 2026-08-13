@@ -160,7 +160,7 @@ import {
 } from './chatEngineParityBridge.js';
 import { isOperatorAbortError } from './operatorAbort.js';
 import {
-  loadSessionEventLogFromDir,
+  loadSessionEventLogForResume, loadSessionEventLogIfPresentForResume,
   recordCompletionDecision,
   recordModelFailover,
   recordMutationBatch,
@@ -2719,8 +2719,9 @@ export class ChatEngine {
     return interrupted;
   }
   restoreSessionEventsFromDir(runDir?: string): number {
-    const loaded = loadSessionEventLogFromDir(runDir ?? this.engineRunDir);
-    return loaded ? this.restoreSessionEvents(loaded, { runDir: runDir ?? this.engineRunDir }) : 0;
+    const targetDir = runDir ?? this.engineRunDir;
+    const loaded = loadSessionEventLogIfPresentForResume(targetDir, this.engineRunId);
+    return loaded ? this.restoreSessionEvents(loaded, { runDir: targetDir }) : 0;
   }
 
   public getResolvedRequiredVerifiers(): string[] { return resolveEngineRequiredVerifiers({ task: this.options.task, projectTestCommands: this.discoveredTestCommands.map((e) => e.command), requiredVerifierCommands: this.options.requiredVerifierCommands ?? null }); }
@@ -3029,10 +3030,9 @@ export class ChatEngine {
       .split('\n')
       .filter((line) => line.trim() !== '')
       .map((line) => JSON.parse(line));
+    const sessionDir = chatSessionDir(engineRunId), sessionLog = loadSessionEventLogForResume(sessionDir, engineRunId)
     const engine = new ChatEngine({ ...options, runId: engineRunId, resumeExisting: true });
-    const sessionLog = loadSessionEventLogFromDir(engine.engineRunDir);
-    if (!sessionLog) throw new Error(`Cannot resume ${engineRunId}: session-events.jsonl is missing or invalid`);
-    engine.restoreSessionEvents(sessionLog, { runDir: engine.engineRunDir });
+    engine.restoreSessionEvents(sessionLog, { runDir: sessionDir });
     engine.conversation = messages;
     engine.clearVerifierEvidenceState();
     engine.cachedSystemPromptLegacy = null;

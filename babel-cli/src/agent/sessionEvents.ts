@@ -201,6 +201,23 @@ export interface SessionEventLog {
   flushedThroughSeq: number;
 }
 
+export type SessionEventLogLoadResult =
+  | { kind: 'missing'; path: string }
+  | { kind: 'valid'; path: string; log: SessionEventLog }
+  | { kind: 'invalid'; path: string; error: Error }
+
+export type SessionEventLogRestoreCode = 'SESSION_EVENT_LOG_MISSING' | 'SESSION_EVENT_LOG_INVALID'
+
+export class SessionEventLogRestoreError extends Error {
+  readonly code: SessionEventLogRestoreCode
+
+  constructor(code: SessionEventLogRestoreCode, message: string, options?: { cause?: unknown }) {
+    super(message, options)
+    this.name = 'SessionEventLogRestoreError'
+    this.code = code
+  }
+}
+
 export function createSessionEventLog(sessionId?: string): SessionEventLog {
   return {
     schema_version: SESSION_EVENT_SCHEMA_VERSION,
@@ -600,16 +617,78 @@ export function parseSessionEventLog(
   const events: SessionEvent[] = [];
   let sessionId = sessionIdFallback ?? '';
   let maxSeq = -1;
-  for (const line of lines) {
-    const ev = JSON.parse(line) as SessionEvent;
+  const knownKinds = new Set<SessionEventKind>([
+    'user_submitted', 'model_started', 'tool_proposed', 'tool_started',
+    'tool_completed', 'tool_failed', 'tool_cancelled', 'mutation_batch',
+    'verifier_attempt', 'gate_decision', 'policy_intervened', 'progress_recovery',
+    'completion_decision', 'model_failover', 'compaction_created', 'turn_ended',
+    'budget_snapshot', 'approval_decision', 'repair_attempt',
+  ])
+
+  for (const [index, line] of lines.entries()) {
+    const value: unknown = JSON.parse(line)
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error(`Invalid session event at line ${index + 1}: expected an object`)
+    }
+    const ev = value as Record<string, unknown>
     if (ev.schema_version !== SESSION_EVENT_SCHEMA_VERSION) {
       throw new Error(
         `Unsupported session event schema: ${String(ev.schema_version)} (expected ${SESSION_EVENT_SCHEMA_VERSION})`,
       );
     }
-    if (!sessionId) sessionId = ev.session_id;
-    events.push(ev);
-    if (ev.seq > maxSeq) maxSeq = ev.seq;
+    if (typeof ev.event_id !== 'string' || ev.event_id.length === 0) {
+      throw new Error(`Invalid session event at line ${index + 1}: event_id is required`)
+    }
+    if (typeof ev.session_id !== 'string' || ev.session_id.length === 0) {
+      throw new Error(`Invalid session event at line ${index + 1}: session_id is required`)
+    }
+    if (typeof ev.turn_id !== 'string' && ev.turn_id !== null) {
+      throw new Error(`Invalid session event at line ${index + 1}: turn_id is invalid`)
+    }
+    if (typeof ev.seq !== 'number' || !Number.isInteger(ev.seq) || ev.seq < 0 || ev.seq <= maxSeq) {
+      throw new Error(`Invalid session event at line ${index + 1}: seq must increase monotonically`)
+    }
+    if (typeof ev.ts !== 'string' || ev.ts.length === 0) {
+      throw new Error(`Invalid session event at line ${index + 1}: ts is required`)
+    }
+    if (typeof ev.kind !== 'string' || !knownKinds.has(ev.kind as SessionEventKind)) {
+      throw new Error(`Invalid session event at line ${index + 1}: unknown kind ${String(ev.kind)}`)
+    }
+    const required: Record<SessionEventKind, string[]> = {
+      user_submitted: ['task_preview'], model_started: [], tool_proposed: ['tool_call_id', 'tool_name', 'idempotency_key'],
+      tool_started: ['tool_call_id', 'tool_name', 'idempotency_key'], tool_completed: ['tool_call_id', 'tool_name', 'idempotency_key'],
+      tool_failed: ['tool_call_id', 'tool_name', 'idempotency_key'], tool_cancelled: ['tool_call_id', 'tool_name', 'idempotency_key'],
+      mutation_batch: ['paths'], verifier_attempt: ['command_preview', 'authoritative'], gate_decision: ['decision'],
+      policy_intervened: ['source', 'action'], progress_recovery: ['intervention', 'score', 'signals'],
+      completion_decision: ['requested_outcome', 'final_outcome', 'allowed', 'reason', 'evidence_refs', 'policy_version'],
+      model_failover: [], compaction_created: [], turn_ended: ['outcome', 'status'], budget_snapshot: [],
+      approval_decision: ['request_id', 'decision'], repair_attempt: ['failure_class', 'attempt'],
+    }
+    const arrayFields = new Set(['paths', 'signals', 'evidence_refs'])
+    const booleanFields = new Set(['authoritative', 'allowed'])
+    const numberFields = new Set(['score', 'attempt'])
+    for (const field of required[ev.kind as SessionEventKind]) {
+      if (!(field in ev)) throw new Error(`Invalid session event at line ${index + 1}: ${field} is required`)
+      const fieldValue = ev[field]
+      if (arrayFields.has(field) && !Array.isArray(fieldValue)) {
+        throw new Error(`Invalid session event at line ${index + 1}: ${field} must be an array`)
+      }
+      if (booleanFields.has(field) && typeof fieldValue !== 'boolean') {
+        throw new Error(`Invalid session event at line ${index + 1}: ${field} must be boolean`)
+      }
+      if (numberFields.has(field) && typeof fieldValue !== 'number') {
+        throw new Error(`Invalid session event at line ${index + 1}: ${field} must be a number`)
+      }
+      if (!arrayFields.has(field) && !booleanFields.has(field) && !numberFields.has(field) && typeof fieldValue !== 'string') {
+        throw new Error(`Invalid session event at line ${index + 1}: ${field} must be a string`)
+      }
+    }
+    if (sessionId && ev.session_id !== sessionId) {
+      throw new Error(`Invalid session event at line ${index + 1}: session_id changed`)
+    }
+    if (!sessionId) sessionId = ev.session_id
+    events.push(ev as unknown as SessionEvent)
+    maxSeq = ev.seq
   }
   return {
     schema_version: SESSION_EVENT_SCHEMA_VERSION,
@@ -671,13 +750,56 @@ export function rewriteSessionEventLog(runDir: string, log: SessionEventLog): st
 }
 
 export function loadSessionEventLogFromDir(runDir: string): SessionEventLog | null {
+  const result = inspectSessionEventLogFromDir(runDir)
+  return result.kind === 'valid' ? result.log : null
+}
+
+export function inspectSessionEventLogFromDir(runDir: string): SessionEventLogLoadResult {
+  const path = join(runDir, SESSION_EVENTS_FILENAME)
+  if (!existsSync(path)) return { kind: 'missing', path }
   try {
-    const path = join(runDir, SESSION_EVENTS_FILENAME);
-    if (!existsSync(path)) return null;
-    return parseSessionEventLog(readFileSync(path, 'utf-8'));
-  } catch {
-    return null;
+    return { kind: 'valid', path, log: parseSessionEventLog(readFileSync(path, 'utf-8')) }
+  } catch (error) {
+    return {
+      kind: 'invalid',
+      path,
+      error: error instanceof Error ? error : new Error(String(error)),
+    }
   }
+}
+
+export function loadSessionEventLogForResume(runDir: string, sessionId: string): SessionEventLog {
+  const result = inspectSessionEventLogFromDir(runDir)
+  if (result.kind === 'missing') {
+    throw new SessionEventLogRestoreError(
+      'SESSION_EVENT_LOG_MISSING',
+      `Cannot resume ${sessionId}: session-events.jsonl is missing`,
+    )
+  }
+  if (result.kind === 'invalid') {
+    throw new SessionEventLogRestoreError(
+      'SESSION_EVENT_LOG_INVALID',
+      `Cannot resume ${sessionId}: session-events.jsonl is invalid (${result.error.message})`,
+      { cause: result.error },
+    )
+  }
+  return result.log
+}
+
+export function loadSessionEventLogIfPresentForResume(
+  runDir: string,
+  sessionId: string,
+): SessionEventLog | null {
+  const result = inspectSessionEventLogFromDir(runDir)
+  if (result.kind === 'missing') return null
+  if (result.kind === 'invalid') {
+    throw new SessionEventLogRestoreError(
+      'SESSION_EVENT_LOG_INVALID',
+      `Cannot resume ${sessionId}: session-events.jsonl is invalid (${result.error.message})`,
+      { cause: result.error },
+    )
+  }
+  return result.log
 }
 
 /** Idempotency keys that already have a terminal tool event (completed/failed/cancelled). */

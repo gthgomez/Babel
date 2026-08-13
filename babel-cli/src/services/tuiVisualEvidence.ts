@@ -15,6 +15,7 @@ import type {
   TuiVisualScenario,
   TuiTerminalIdentity,
   TuiVisualObservation,
+  TuiVisualEvidenceMode,
 } from './tuiVisualTestContract.js'
 import { TUI_VISUAL_TEST_SCHEMA_VERSION } from './tuiVisualTestContract.js'
 
@@ -92,6 +93,7 @@ function payloadString(record: TuiEventRecord, key: string): string | undefined 
  */
 export function evaluateTuiSemanticOracle(input: {
   records: TuiEventRecord[]
+  evidenceMode: TuiVisualEvidenceMode
   expectedEvents: string[]
   stream?: Pick<TuiEventStreamRead, 'missing' | 'malformedLines'>
 }): TuiSemanticOracle {
@@ -105,17 +107,33 @@ export function evaluateTuiSemanticOracle(input: {
   const finalStatus = payloadString(runResult ?? {}, 'status') ?? payloadString(streamEnded ?? {}, 'status')
   const malformed = input.stream?.malformedLines ?? 0
   const missing = input.stream?.missing ?? false
-  const streamRequired = input.expectedEvents.length > 0
-  const passed = (!streamRequired || !missing) && malformed === 0 && missingEvents.length === 0
+  const streamRequired = input.evidenceMode === 'visual_plus_semantic'
+  const contradictory =
+    (input.evidenceMode === 'visual_only' && input.expectedEvents.length > 0) ||
+    (input.evidenceMode === 'visual_plus_semantic' && input.expectedEvents.length === 0)
+  const passed = contradictory
+    ? false
+    : input.evidenceMode === 'visual_only'
+      ? true
+      : !missing && malformed === 0 && missingEvents.length === 0
 
   let detail = passed
-    ? `Observed all ${input.expectedEvents.length} required event(s).`
+    ? input.evidenceMode === 'visual_only'
+      ? 'Semantic evidence was not required for this visual-only scenario.'
+      : `Observed all ${input.expectedEvents.length} required event(s).`
     : `Missing required events: ${missingEvents.join(', ') || '(none)'}.`
   if (missing && streamRequired) detail = 'Event stream file was not produced.'
   if (malformed > 0) detail += ` Ignored ${malformed} malformed line(s).`
+  if (contradictory) {
+    detail = input.evidenceMode === 'visual_only'
+      ? 'Scenario is contradictory: visual-only mode cannot require semantic events.'
+      : 'Scenario is contradictory: semantic evidence requires at least one expected event.'
+  }
 
   return {
     passed,
+    evidenceMode: input.evidenceMode,
+    evidenceRequired: streamRequired,
     observedEvents,
     missingEvents,
     ...(runDir !== undefined ? { runDir } : {}),
