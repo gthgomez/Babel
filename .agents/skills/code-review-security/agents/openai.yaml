@@ -1,0 +1,6 @@
+interface:
+  display_name: "Code Review Security"
+  short_description: "Security lens: secrets, injection, authz, prompt-injection"
+  default_prompt: "Use $code-review-security to review the current target for security findings only."
+policy:
+  allow_implicit_invocation: false

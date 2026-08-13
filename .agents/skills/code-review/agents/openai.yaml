@@ -1,0 +1,6 @@
+interface:
+  display_name: "Code Review"
+  short_description: "Defect-first review of what would merge"
+  default_prompt: "Use $code-review to review merge-base plus dirty plus untracked changes and return P0-P3 findings. Do not post to GitHub."
+policy:
+  allow_implicit_invocation: false

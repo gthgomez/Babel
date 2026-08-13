@@ -1,0 +1,6 @@
+interface:
+  display_name: "Code Review Control Plane"
+  short_description: "Catalog, router, and skill integrity when a catalog exists"
+  default_prompt: "Use $code-review-control only when the collector selected the control-plane lens."
+policy:
+  allow_implicit_invocation: false
