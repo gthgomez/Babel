@@ -21,8 +21,9 @@ import * as Session from '../session.js';
 import { formatResumeHint, shouldForceResumePicker } from './startupResumeHint.js';
 
 /**
- * Restore TTY modes and wipe leftover two-region/DECSTBM cells before
- * printing the session-ended line. Safe to call more than once.
+ * Restore TTY modes and terminal layout before printing the session-ended
+ * line without erasing the user's visible session history. Safe to call more
+ * than once.
  */
 export function restoreTerminalBeforeExit(): void {
   logUpdate.clear();
@@ -39,7 +40,6 @@ export function restoreTerminalBeforeExit(): void {
     write('\x1b[0m');
     write('\x1b[r');
     write(DEC_2026_END);
-    write('\x1b[2J\x1b[H');
   } catch {
     // stdout may already be closed
   }

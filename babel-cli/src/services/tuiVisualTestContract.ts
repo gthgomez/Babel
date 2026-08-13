@@ -14,6 +14,9 @@ export type TuiVisualSafety = 'read_only' | 'fixture_mutation'
 /** Terminal result classification for a visual scenario. */
 export type TuiVisualStatus = 'PASS' | 'BUG' | 'BLOCKED' | 'INCONCLUSIVE'
 
+/** Whether the scenario claims an independent runtime-event oracle. */
+export type TuiVisualEvidenceMode = 'visual_only' | 'visual_plus_semantic'
+
 /** Severity assigned to a controller finding. */
 export type TuiVisualSeverity = 'low' | 'medium' | 'high' | 'critical'
 
@@ -34,6 +37,8 @@ export interface TuiVisualScenario {
   safety: TuiVisualSafety
   /** Ordered, allow-listed actions for the external computer-use adapter. */
   steps: TuiVisualStep[]
+  /** Explicitly states whether semantic runtime evidence is required. */
+  evidenceMode: TuiVisualEvidenceMode
   /** Event names that must be observed for the semantic oracle to pass. */
   expectedEvents: string[]
   /** Labels interpreted by the vision agent as expected screen states. */
@@ -92,6 +97,8 @@ export interface TuiVisualFinding {
 /** Independent semantic result derived from Babel runtime evidence. */
 export interface TuiSemanticOracle {
   passed: boolean
+  evidenceMode: TuiVisualEvidenceMode
+  evidenceRequired: boolean
   observedEvents: string[]
   missingEvents: string[]
   runDir?: string
@@ -170,6 +177,15 @@ export function validateTuiVisualScenario(
   if (scenario.expectedVisualStates.length === 0) {
     errors.push('expectedVisualStates must not be empty')
   }
+  if (scenario.evidenceMode === 'visual_plus_semantic' && scenario.expectedEvents.length === 0) {
+    errors.push('visual_plus_semantic scenarios must require at least one expected event')
+  }
+  if (scenario.evidenceMode === 'visual_only' && scenario.expectedEvents.length > 0) {
+    errors.push('visual_only scenarios must not declare expected semantic events')
+  }
+  if (scenario.evidenceMode !== 'visual_only' && scenario.evidenceMode !== 'visual_plus_semantic') {
+    errors.push('evidenceMode must be visual_only or visual_plus_semantic')
+  }
   scenario.steps.forEach((step, index) => validateStep(step, index, errors))
 
   return errors.length === 0 ? { ok: true } : { ok: false, errors }
@@ -190,6 +206,15 @@ export function validateTuiVisualReceipt(receipt: TuiVisualReceipt): TuiScenario
   if (!isNonEmpty(receipt.evidenceDir)) errors.push('evidenceDir must be non-empty')
   if (receipt.status === 'PASS' && receipt.findings.length > 0) {
     errors.push('PASS receipts must not contain findings')
+  }
+  if (receipt.status === 'PASS' && !receipt.semantic.passed) {
+    errors.push('PASS receipts require passing semantic evidence')
+  }
+  if (receipt.semantic.evidenceMode === 'visual_plus_semantic' && !receipt.semantic.evidenceRequired) {
+    errors.push('semantic-required receipts must record evidenceRequired=true')
+  }
+  if (receipt.semantic.evidenceMode === 'visual_only' && receipt.semantic.evidenceRequired) {
+    errors.push('visual-only receipts must record evidenceRequired=false')
   }
   if (receipt.status !== 'PASS' && receipt.findings.length === 0) {
     errors.push('non-PASS receipts must contain at least one finding')

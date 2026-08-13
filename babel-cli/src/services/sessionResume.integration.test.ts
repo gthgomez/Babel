@@ -6,12 +6,19 @@ import { join } from 'node:path';
 
 import { HISTORY_CELL_SCHEMA_VERSION } from '../ui/historyCells/types.js';
 import { transcriptPath } from '../cli/runsLayout.js';
+import {
+  createSessionEventLog,
+  flushSessionEventLog,
+  recordUserSubmitted,
+  SESSION_EVENTS_FILENAME,
+} from '../agent/sessionEvents.js';
 import { HistoryCellViewport } from '../ui/historyCells/viewport.js';
 import { ScreenManager } from '../ui/screenManager.js';
 import type { AgentTargetContext } from './targetResolver.js';
 import { appendTurnCells } from './threadStore/index.js';
 import { listResumableSessions } from './chatSessionIndex.js';
 import { resumeChatSession } from '../interactive/chatSessionResume.js';
+import { ChatEngine } from '../agent/chatEngine.js';
 import type { ReplContext } from '../interactive/context.js';
 import type { SessionState } from '../interactive/types.js';
 
@@ -135,6 +142,148 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       assert.match(ctx.chatEngine?.getConversation().find((m) => m.role === 'user')?.content ?? '', /transcript-only hello/);
     } finally {
       fixture.cleanup();
+    }
+  });
+
+  await t.test('valid transcript plus valid event log restores normally', async () => {
+    const fixture = withTempRunsDir();
+    try {
+      const sessionId = 'chat-valid-events-int';
+      const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(join(sessionDir, 'transcript.jsonl'), `${JSON.stringify({ role: 'user', content: 'valid durable history' })}\n`, 'utf8');
+      new ChatEngine({ task: 'valid durable history', projectRoot: target.targetRoot, runId: sessionId });
+      const log = createSessionEventLog(sessionId);
+      recordUserSubmitted(log, { turn_id: 'turn-1', task: 'valid durable history' });
+      flushSessionEventLog(sessionDir, log);
+
+      const outcome = await resumeChatSession(makeResumeCtx(target), sessionId);
+      assert.equal(outcome.ok, true);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  await t.test('malformed event evidence rejects resume instead of falling back', async () => {
+    const fixture = withTempRunsDir();
+    try {
+      const sessionId = 'chat-malformed-events-int';
+      const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(join(sessionDir, 'transcript.jsonl'), `${JSON.stringify({ role: 'user', content: 'must not hide corruption' })}\n`, 'utf8');
+      writeFileSync(join(sessionDir, SESSION_EVENTS_FILENAME), '{"schema_version":1}\n', 'utf8');
+
+      const outcome = await resumeChatSession(makeResumeCtx(target), sessionId);
+      assert.equal(outcome.ok, false);
+      if (outcome.ok) return;
+      assert.equal(outcome.reason, 'error');
+      assert.match(outcome.message, /session-events\.jsonl is invalid/);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  await t.test('zero-byte and whitespace-only event logs reject resume', async () => {
+    for (const [suffix, raw] of [['empty', ''], ['whitespace', ' \n\t']] as const) {
+      const fixture = withTempRunsDir();
+      try {
+        const sessionId = 'chat-invalid-empty-events-int-' + suffix;
+        const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
+        mkdirSync(sessionDir, { recursive: true });
+        writeFileSync(
+          join(sessionDir, 'transcript.jsonl'),
+          JSON.stringify({ role: 'user', content: 'empty evidence is not legacy' }) + '\n',
+          'utf8',
+        );
+        writeFileSync(join(sessionDir, SESSION_EVENTS_FILENAME), raw, 'utf8');
+
+        const outcome = await resumeChatSession(makeResumeCtx(target), sessionId);
+        assert.equal(outcome.ok, false, suffix);
+        if (outcome.ok) continue;
+        assert.match(outcome.message, /session-events\.jsonl is invalid/, suffix);
+      } finally {
+        fixture.cleanup();
+      }
+    }
+  });
+
+  await t.test('clean sequence truncation rejects resume', async () => {
+    const fixture = withTempRunsDir();
+    try {
+      const sessionId = 'chat-clean-truncation-events-int';
+      const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(
+        join(sessionDir, 'transcript.jsonl'),
+        JSON.stringify({ role: 'user', content: 'clean truncation is not legacy' }) + '\n',
+        'utf8',
+      );
+      const event = (id: string, seq: number): string =>
+        JSON.stringify({
+          schema_version: 1,
+          event_id: id,
+          session_id: sessionId,
+          turn_id: null,
+          seq,
+          ts: '2026-08-13T00:00:00.000Z',
+          kind: 'model_started',
+        });
+      writeFileSync(
+        join(sessionDir, SESSION_EVENTS_FILENAME),
+        event('event-0', 0) + '\n' + event('event-2', 2) + '\n',
+        'utf8',
+      );
+
+      const outcome = await resumeChatSession(makeResumeCtx(target), sessionId);
+      assert.equal(outcome.ok, false);
+      if (!outcome.ok) assert.match(outcome.message, /contiguous|invalid/);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  await t.test('event log copied from another session rejects resume', async () => {
+    const fixture = withTempRunsDir();
+    try {
+      const sessionId = 'chat-provenance-target-int';
+      const sourceSessionId = 'chat-provenance-source-int';
+      const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(
+        join(sessionDir, 'transcript.jsonl'),
+        JSON.stringify({ role: 'user', content: 'provenance must be bound' }) + '\n',
+        'utf8',
+      );
+      const foreignLog = createSessionEventLog(sourceSessionId);
+      recordUserSubmitted(foreignLog, { turn_id: 'turn-foreign', task: 'foreign durable evidence' });
+      flushSessionEventLog(sessionDir, foreignLog);
+
+      const outcome = await resumeChatSession(makeResumeCtx(target), sessionId);
+      assert.equal(outcome.ok, false);
+      if (!outcome.ok) assert.match(outcome.message, /does not match requested session|invalid/);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  await t.test('semantically invalid and truncated event evidence never becomes transcript-only success', async () => {
+    for (const [suffix, raw] of [
+      ['semantic', '{"schema_version":1,"event_id":"e","session_id":"chat-invalid-events-int-semantic","turn_id":null,"seq":0,"ts":"2026-08-13T00:00:00.000Z","kind":"user_submitted"}\n'],
+      ['truncated', '{"schema_version":1,"event_id":"e"'],
+    ] as const) {
+      const fixture = withTempRunsDir();
+      try {
+        const sessionId = `chat-invalid-events-int-${suffix}`;
+        const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
+        mkdirSync(sessionDir, { recursive: true });
+        writeFileSync(join(sessionDir, 'transcript.jsonl'), `${JSON.stringify({ role: 'user', content: 'not a fallback' })}\n`, 'utf8');
+        writeFileSync(join(sessionDir, SESSION_EVENTS_FILENAME), raw, 'utf8');
+
+        const outcome = await resumeChatSession(makeResumeCtx(target), sessionId);
+        assert.equal(outcome.ok, false, suffix);
+      } finally {
+        fixture.cleanup();
+      }
     }
   });
 

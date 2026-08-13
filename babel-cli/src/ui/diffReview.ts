@@ -17,7 +17,6 @@ export interface DiffReviewPorts {
   getDiff: () => Promise<string> | string;
   getComposerDraft: () => string;
   setComposerDraft: (text: string) => void;
-  showPager?: (content: string) => Promise<void>;
 }
 
 let lastReview: ReviewDiffState = { files: [], draft: '' };
@@ -43,9 +42,35 @@ export function resetReviewDiffForTests(): void {
 }
 
 export async function collectWorkspaceDiff(cwd: string): Promise<string> {
-  const result = await runGitCommand(['diff', '--color=never'], cwd);
-  const staged = await runGitCommand(['diff', '--cached', '--color=never'], cwd);
+  const result = await runGitCommand(
+    ['diff', '--no-ext-diff', '--binary', '--color=never'],
+    cwd,
+  );
+  const staged = await runGitCommand(
+    ['diff', '--cached', '--no-ext-diff', '--binary', '--color=never'],
+    cwd,
+  );
+  const untracked = runGitCommand(
+    ['ls-files', '--others', '--exclude-standard', '-z'],
+    cwd,
+  );
   const parts = [result.stdout.trim(), staged.stdout.trim()].filter(Boolean);
+
+  if (untracked.status === 0 && untracked.stdout.length > 0) {
+    const paths = untracked.stdout.split('\0').filter(Boolean);
+    for (const path of paths) {
+      const fileDiff = runGitCommand(
+        ['diff', '--no-index', '--no-ext-diff', '--binary', '--color=never', '--', '/dev/null', path],
+        cwd,
+      );
+      // git diff --no-index returns 1 when the files differ. Its binary form
+      // reports a safe summary instead of copying binary bytes to the pager.
+      if ((fileDiff.status === 0 || fileDiff.status === 1) && fileDiff.stdout.trim()) {
+        parts.push(`# Untracked file: ${JSON.stringify(path)}\n${fileDiff.stdout.trim()}`);
+      }
+    }
+  }
+
   return parts.join('\n\n') || '(no unstaged or staged changes)';
 }
 
@@ -58,15 +83,11 @@ export async function openDiffReview(ports: DiffReviewPorts): Promise<{
 }> {
   const draftBefore = ports.getComposerDraft();
   const diffText = await ports.getDiff();
-  if (ports.showPager) {
-    await ports.showPager(diffText);
-  } else {
-    const buffer = new ScrollbackBuffer();
-    for (const line of diffText.split('\n')) {
-      buffer.push(line);
-    }
-    await PagerOverlay.show(buffer);
+  const buffer = new ScrollbackBuffer();
+  for (const line of diffText.split('\n')) {
+    buffer.push(line);
   }
+  await PagerOverlay.show(buffer);
   ports.setComposerDraft(draftBefore);
   return { restoredDraft: draftBefore, diffText };
 }
@@ -75,13 +96,11 @@ export async function openLastReviewDiff(ports: {
   getComposerDraft: () => string;
   setComposerDraft: (text: string) => void;
   cwd?: string;
-  showPager?: (content: string) => Promise<void>;
 }): Promise<{ restoredDraft: string; diffText: string }> {
   const cwd = ports.cwd ?? lastReview.cwd ?? process.cwd();
   return openDiffReview({
     getDiff: () => collectWorkspaceDiff(cwd),
     getComposerDraft: ports.getComposerDraft,
     setComposerDraft: ports.setComposerDraft,
-    ...(ports.showPager ? { showPager: ports.showPager } : {}),
   });
 }

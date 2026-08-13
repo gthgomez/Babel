@@ -96,7 +96,10 @@ export class PagerOverlay extends Component {
     const buf = OutputBuffer.getInstance();
     buf.write('\x1b[?1049h\x1b[?25l\x1b[?1000h');
 
-    stdin.setRawMode(true);
+    if (stdin.isTTY && typeof stdin.setRawMode === 'function') {
+      stdin.setRawMode(true);
+    }
+    stdin.resume();
 
     const onResize = (): void => {
       this.updateDimensions();
@@ -119,7 +122,7 @@ export class PagerOverlay extends Component {
     buf.write('\x1b[?1000l\x1b[?25h\x1b[?1049l');
 
     const stdin = process.stdin;
-    if (stdin.isTTY) {
+    if (stdin.isTTY && typeof stdin.setRawMode === 'function') {
       try {
         if (stdin.isRaw !== this.wasRaw) {
           stdin.setRawMode(this.wasRaw);

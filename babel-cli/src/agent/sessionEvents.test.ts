@@ -209,6 +209,29 @@ describe('SessionEventV1 dual-write JSONL', () => {
       /Unsupported session event schema/,
     );
   });
+
+  test('requires exact append-only sequence continuity and rejects empty content', () => {
+    const event = (seq: number): string =>
+      JSON.stringify({
+        schema_version: SESSION_EVENT_SCHEMA_VERSION,
+        event_id: 'event-' + seq,
+        session_id: 'session-sequence',
+        turn_id: null,
+        seq,
+        ts: '2026-08-13T00:00:00.000Z',
+        kind: 'model_started',
+      });
+
+    assert.equal(parseSessionEventLog([0, 1, 2].map(event).join('\n')).events.length, 3);
+    for (const seqs of [[5], [0, 1, 3], [0, 1, 1], [0, 2, 1]]) {
+      assert.throws(
+        () => parseSessionEventLog(seqs.map(event).join('\n')),
+        /seq must be contiguous starting at 0/,
+      );
+    }
+    assert.throws(() => parseSessionEventLog(''), /no events found/);
+    assert.throws(() => parseSessionEventLog(' \n\t'), /no events found/);
+  });
 });
 
 describe('W2.2 tool settle kill/resume golden', () => {

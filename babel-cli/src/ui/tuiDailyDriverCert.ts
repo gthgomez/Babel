@@ -18,10 +18,10 @@ import {
 } from './interruptHost.js';
 import { presentChatReview } from './reviewCard.js';
 import { classifyLiveActivity } from './liveActivity.js';
-import { openDiffReview } from './diffReview.js';
-import { shouldForceResumePicker, formatResumeHint } from '../interactive/repl/startupResumeHint.js';
+import { shouldForceResumePicker } from '../interactive/repl/startupResumeHint.js';
 import { InputCoordinator } from './inputCoordinator.js';
 import { TerminalRestoreGuard } from './terminalRestoreGuard.js';
+import { restoreTerminalBeforeExit } from '../interactive/repl/replLifecycle.js';
 
 export type CertStatus = 'PASS' | 'FAIL' | 'BLOCKED' | 'NOT_APPLICABLE';
 
@@ -296,12 +296,11 @@ export async function runDailyDriverScenarios(opts?: {
   );
 
   scenarios.push(
-    (() => {
-      const hint = formatResumeHint({ id: 'sess1', mtimeMs: Date.now() - 60_000 });
-      return hint.includes('/resume sess1')
-        ? pass('T18', 'Session resume', 'resume command hydrates via /resume and --resume')
-        : fail('T18', 'Session resume', hint);
-    })(),
+    blocked(
+      'T18',
+      'Session resume',
+      'This deterministic lane only formats the resume hint; hydration is proven by sessionResume integration tests',
+    ),
   );
 
   scenarios.push(
@@ -311,29 +310,20 @@ export async function runDailyDriverScenarios(opts?: {
       runInterrupt({ overlayActive: true });
       const restored = notifyOverlayClosed();
       return restored === '11'
-        ? pass('T19', 'Resume picker cancel', 'draft restored; no phantom picker text as task')
+        ? blocked('T19', 'Resume picker cancel', 'overlay interrupt state only; picker stdin ownership requires a real terminal')
         : fail('T19', 'Resume picker cancel', String(restored));
     })(),
   );
 
-  {
-    let draft = 'queued follow-up';
-    const result = await openDiffReview({
-      getDiff: () => '+changed',
-      getComposerDraft: () => draft,
-      setComposerDraft: (t) => {
-        draft = t;
-      },
-      showPager: async () => {
-        draft = 'pager-clobber';
-      },
-    });
-    scenarios.push(
-      result.restoredDraft === 'queued follow-up' && draft === 'queued follow-up'
-        ? pass('T20', 'Diff roundtrip', 'composer restored after diff')
-        : fail('T20', 'Diff roundtrip', draft),
-    );
-  }
+  scenarios.push(
+    blocked(
+      'T20',
+      'Diff roundtrip',
+      pty
+        ? 'Interactive PagerOverlay requires a real input harness; see /diff production integration coverage'
+        : 'No PTY available; helper-only roundtrip is not evidence that /diff owns pager input',
+    ),
+  );
 
   scenarios.push(
     (() => {
@@ -364,12 +354,13 @@ export async function runDailyDriverScenarios(opts?: {
         return true;
       }) as typeof process.stdout.write;
       try {
-        new TerminalRestoreGuard().restore();
+        restoreTerminalBeforeExit();
         InputCoordinator.getInstance().emergencyRestore();
       } finally {
         process.stdout.write = original;
       }
-      const ok = writes.some((w) => w.includes('\x1b[?25h')) && writes.some((w) => w === '\x1b[r');
+      const output = writes.join('');
+      const ok = writes.some((w) => w.includes('\x1b[?25h')) && writes.some((w) => w === '\x1b[r') && !/\x1b\[2J|\x1b\[3J/.test(output);
       return ok
         ? pass('T22', 'Exit cleanup', 'cursor shown; scroll region reset')
         : fail('T22', 'Exit cleanup', writes.join('|').slice(0, 200));

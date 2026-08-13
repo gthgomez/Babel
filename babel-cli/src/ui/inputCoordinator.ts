@@ -73,6 +73,60 @@ export type PermissionAction =
   | { type: 'mcp_call'; toolName: string; arguments: string }
   | { type: 'generic'; description: string };
 
+type InputListener = (...args: unknown[]) => void;
+type InputEventStream = {
+  listeners: (eventName: string) => InputListener[];
+  removeListener: (eventName: string, listener: InputListener) => InputEventStream;
+  on: (eventName: string, listener: InputListener) => InputEventStream;
+};
+
+const EXCLUSIVE_INPUT_EVENTS = ['data', 'keypress', 'readable'] as const;
+
+function detachInputListeners(input: unknown): () => void {
+  const stream = input as Partial<InputEventStream> | null;
+  if (
+    !stream ||
+    typeof stream.listeners !== 'function' ||
+    typeof stream.removeListener !== 'function' ||
+    typeof stream.on !== 'function'
+  ) {
+    return () => {};
+  }
+
+  const snapshots = EXCLUSIVE_INPUT_EVENTS.map((eventName) => ({
+    eventName,
+    listeners: stream.listeners!(eventName),
+  }));
+  for (const { eventName, listeners } of snapshots) {
+    for (const listener of listeners) {
+      stream.removeListener!(eventName, listener);
+    }
+  }
+
+  return () => {
+    for (const { eventName, listeners } of snapshots) {
+      for (const listener of listeners) {
+        stream.on!(eventName, listener);
+      }
+    }
+  };
+}
+
+/**
+ * Temporarily detach every input-delivery listener owned by a readline surface.
+ * The returned function restores the exact listener set and registration order.
+ */
+export function suspendReadlineInput(rl: Interface): () => void {
+  const adapter = rl as unknown as {
+    input?: unknown;
+    suspendInput?: () => (() => void);
+  };
+  if (typeof adapter.suspendInput === 'function') {
+    return adapter.suspendInput();
+  }
+  return detachInputListeners(adapter.input);
+}
+
 let runDepth = 0;
 let readlinePausedForRun = false;
 let registeredReadline: Interface | null = null;
@@ -153,6 +207,30 @@ export async function withPausedStdin<T>(
   try {
     return await fn();
   } finally {
+    stdinCoordinatorResumeAfterRun(rl);
+  }
+}
+
+/**
+ * Pause the REPL and grant stdin exclusively to an interactive overlay.
+ * Unlike readline.pause(), this also detaches readline's input listeners so
+ * a later stream.resume() cannot deliver overlay bytes into readline state.
+ */
+export async function withExclusiveStdin<T>(
+  fn: () => Promise<T>,
+  rl: Interface | null = registeredReadline,
+): Promise<T> {
+  if (!rl) {
+    return fn();
+  }
+
+  stdinCoordinatorPauseForRun(rl);
+  let restoreInput = (): void => {};
+  try {
+    restoreInput = suspendReadlineInput(rl);
+    return await fn();
+  } finally {
+    restoreInput();
     stdinCoordinatorResumeAfterRun(rl);
   }
 }
