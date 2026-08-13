@@ -16,7 +16,15 @@ import {
   type InputArbiterEffect,
 } from './inputArbiterModes.js';
 
+/** Optional SIGINT consumer. Return true to keep the process alive. */
+let processSigintHook: (() => boolean) | null = null;
+
+export function setProcessSigintHook(hook: (() => boolean) | null): void {
+  processSigintHook = hook;
+}
+
 export { consumeInputArbiterEffects };
+export type { InputArbiterState, InputArbiterEvent, InputArbiterEffect };
 
 /** Collapse raw 0x03 + process SIGINT from one keypress into a single Ctrl+C. */
 const CTRL_C_DEBOUNCE_MS = 300;
@@ -221,11 +229,12 @@ export async function captureRawKeypress(question: string): Promise<boolean> {
 
     const onData = (data: Buffer) => {
       const char = data.toString('utf8');
-      if (char === '') {
-        // Ctrl+C
+      if (char === '\u0003') {
+        // Ctrl+C declines the JIT prompt — do not kill Babel.
         clearTimeout(watchdog);
         cleanup();
-        process.exit(130);
+        OutputBuffer.getInstance().write('\n');
+        resolve(false);
       }
       const lower = char.toLowerCase();
       if (lower === 'y' || char === '\r' || char === '\n') {
@@ -458,6 +467,9 @@ export class InputCoordinator {
   constructor() {
     process.on('SIGINT', () => {
       if (isDuplicateCtrlC()) {
+        return;
+      }
+      if (processSigintHook?.()) {
         return;
       }
       this.emergencyRestore();

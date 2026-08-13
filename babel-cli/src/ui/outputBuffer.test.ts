@@ -347,6 +347,29 @@ describe('Cursor positioning', () => {
     }
   });
 
+  it('writeLine clips text that would wrap onto the next row', () => {
+    const buf = freshBuffer();
+    const stdout = process.stdout;
+    const prevCols = Object.getOwnPropertyDescriptor(stdout, 'columns');
+    Object.defineProperty(stdout, 'columns', {
+      value: 20,
+      configurable: true,
+      enumerable: true,
+      writable: true,
+    });
+    const mock = mockStdoutWrite();
+    try {
+      buf.writeLine(1, 1, 'x'.repeat(80));
+      const output = mock.writes.join('');
+      assert.equal(output.includes('x'.repeat(80)), false, 'must not emit an overflowing line');
+      assert.ok(output.includes('…'), 'should truncate with ellipsis');
+    } finally {
+      mock.restore();
+      if (prevCols) Object.defineProperty(stdout, 'columns', prevCols);
+      else delete (stdout as { columns?: number }).columns;
+    }
+  });
+
   it('clearRegion writes spaces over the given range', () => {
     const buf = freshBuffer();
     const mock = mockStdoutWrite();

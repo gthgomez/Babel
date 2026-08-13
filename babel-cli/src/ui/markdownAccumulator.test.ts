@@ -87,6 +87,22 @@ describe('MarkdownAccumulator streaming deltas', () => {
     assert.equal(acc.feed('.\n\nNext', identity), '.\n\nNext');
   });
 
+  it('append-only policy never emits cursor-up rewrites and keeps the intro once', () => {
+    const acc = new MarkdownAccumulator();
+    acc.setPaintPolicy('append-only');
+    let out = '';
+    out += acc.feed('Hello I am ready to help you work on your game projects.', identity);
+    out += acc.feed('\n\n', identity);
+    out += acc.feed('## Startup Process\n\n', fakeMarkdown);
+    out += acc.feed('Just let me know the project and the task.\n', identity);
+    assert.equal(/\x1b\[\d+A/.test(out), false, 'append-only must not emit cursor-up');
+    assert.equal(/\x1b\[J/.test(out), false, 'append-only must not emit erase-below');
+    assert.equal(
+      countOccurrences(out, 'Hello I am ready to help you work on your game projects.'),
+      1,
+    );
+  });
+
   it('rewrites transformed markdown instead of appending a second copy', () => {
     const acc = new MarkdownAccumulator();
     let out = '';

@@ -547,20 +547,52 @@ describe('parseKeypress — edge cases and unrecognized input', () => {
     assert.equal(parseKeypress(Buffer.from([0x1b, 0x4f])), null);
   });
 
-  it('returns null for unrecognized SS3 (\\x1bOX) — third byte not P/Q/R/S', () => {
-    assert.equal(parseKeypress(Buffer.from([0x1b, 0x4f, 0x58])), null);
+  it('consumes unrecognized SS3 (\\x1bOX) as ignored so the key buffer cannot stall', () => {
+    assert.deepEqual(parseKeypress(Buffer.from([0x1b, 0x4f, 0x58])), {
+      name: 'ignored',
+      ctrl: false,
+      meta: false,
+      shift: false,
+      sequence: '\x1bOX',
+    });
   });
 
-  it('returns null for unrecognized CSI terminator (\\x1b[Z)', () => {
-    assert.equal(parseKeypress(Buffer.from([0x1b, 0x5b, 0x5a])), null);
+  it('consumes unrecognized CSI terminator (\\x1b[Z) as ignored', () => {
+    assert.deepEqual(parseKeypress(Buffer.from([0x1b, 0x5b, 0x5a])), {
+      name: 'ignored',
+      ctrl: false,
+      meta: false,
+      shift: false,
+      sequence: '\x1b[Z',
+    });
   });
 
-  it('returns null for SGR mouse sequence (\\x1b[<0;10;5M) — parsed as CSI but no key mapping', () => {
-    assert.equal(parseKeypress(Buffer.from('\x1b[<0;10;5M')), null);
+  it('consumes focus-in CSI I so DEC 1004 reports do not stall the composer', () => {
+    assert.deepEqual(parseKeypress(Buffer.from('\x1b[I')), {
+      name: 'focusin',
+      ctrl: false,
+      meta: false,
+      shift: false,
+      sequence: '\x1b[I',
+    });
   });
 
-  it('returns null for SGR mouse release (\\x1b[<0;10;5m) — lowercase m terminator', () => {
-    assert.equal(parseKeypress(Buffer.from('\x1b[<0;10;5m')), null);
+  it('consumes focus-out CSI O so DEC 1004 reports do not stall the composer', () => {
+    assert.deepEqual(parseKeypress(Buffer.from('\x1b[O')), {
+      name: 'focusout',
+      ctrl: false,
+      meta: false,
+      shift: false,
+      sequence: '\x1b[O',
+    });
+  });
+
+  it('consumes SGR mouse sequence (\\x1b[<0;10;5M) as ignored when it reaches parseKeypress', () => {
+    assert.equal(parseKeypress(Buffer.from('\x1b[<0;10;5M'))?.name, 'ignored');
+  });
+
+  it('consumes SGR mouse release (\\x1b[<0;10;5m) as ignored', () => {
+    assert.equal(parseKeypress(Buffer.from('\x1b[<0;10;5m'))?.name, 'ignored');
   });
 
   it('returns single Escape for double Escape (\\x1b\\x1b) — first escape consumed, second deferred', () => {

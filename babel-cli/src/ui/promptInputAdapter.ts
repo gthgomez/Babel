@@ -19,6 +19,7 @@
 
 import * as readline from 'node:readline';
 import type { Interface } from 'node:readline';
+import { Writable } from 'node:stream';
 import { PromptInput, type PromptInputConfig } from './promptInput.js';
 import {
   enqueueComposerMessage,
@@ -27,6 +28,7 @@ import {
 import { OutputBuffer } from './outputBuffer.js';
 import { supportsColor } from './theme.js';
 import { isLegacyWindowsConsole } from './terminalProbe.js';
+import { handleInteractiveInterrupt } from './interruptHost.js';
 
 // ── Detection ───────────────────────────────────────────────────────────────────
 
@@ -172,12 +174,22 @@ class PromptInputAdapterImpl implements PromptInputAdapter {
     this.historySnapshot = config.history ?? [];
     this.vimMode = config.vimMode ?? false;
 
-    // Internal readline for question() — PromptInput doesn't handle this yet
+    // Internal readline is only a question() fallback. Never attach it to
+    // stdout — a second Interface on the same TTY echoes keystrokes as a
+    // phantom second prompt (see screenshots 643–645). Discard its output
+    // and keep it paused until question() on the non-V2 path.
+    const discard = new Writable({
+      write(_chunk, _enc, cb) {
+        cb();
+      },
+    });
     this.internalRl = readline.createInterface({
       input: config.input ?? process.stdin,
-      output: config.output ?? process.stdout,
+      output: discard,
+      terminal: false,
       prompt: config.prompt ?? '› ',
     });
+    this.internalRl.pause();
 
     // Wire SIGINT callbacks through PromptInput's cancel/interrupt hooks
     // so readline-compatible `on('SIGINT', ...)` listeners fire on Ctrl+C.
@@ -191,6 +203,25 @@ class PromptInputAdapterImpl implements PromptInputAdapter {
       }
     };
 
+    const routeInterrupt = (composerEmpty: boolean) => {
+      config.onInterrupt?.();
+      const result = handleInteractiveInterrupt({
+        composerEmpty,
+        inPaste: false,
+      });
+      // No host registered — keep readline-compatible SIGINT listeners.
+      if (
+        !result.cancelled &&
+        !result.clearedComposer &&
+        !result.hintedExit &&
+        !result.exited &&
+        !result.cancelledPaste &&
+        !result.declinedOverlay
+      ) {
+        fireSigintCallbacks();
+      }
+    };
+
     this.promptInput = new PromptInput({
       prompt: this.currentPrompt,
       history: this.historySnapshot,
@@ -201,11 +232,11 @@ class PromptInputAdapterImpl implements PromptInputAdapter {
       },
       onCancel: () => {
         config.onCancel?.();
-        fireSigintCallbacks();
+        routeInterrupt(true);
       },
       onInterrupt: () => {
-        config.onInterrupt?.();
-        fireSigintCallbacks();
+        const empty = (this.promptInput?.getState().text ?? '') === '';
+        routeInterrupt(empty);
       },
       ...(config.onCommandPalette !== undefined
         ? { onCommandPalette: config.onCommandPalette }

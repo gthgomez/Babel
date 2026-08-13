@@ -1,8 +1,32 @@
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { bootstrapReplSession } from './replLifecycle.js';
+import { bootstrapReplSession, restoreTerminalBeforeExit } from './replLifecycle.js';
+import { DEC_2026_END } from '../../ui/terminalEscapeSequences.js';
 import { globalCostTracker } from '../../services/costTracker.js';
+
+describe('restoreTerminalBeforeExit', () => {
+  it('resets scroll region, ends DEC 2026, and clears the viewport', () => {
+    const writes: string[] = [];
+    const original = process.stdout.write.bind(process.stdout);
+    const stub = ((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString());
+      return true;
+    }) as typeof process.stdout.write;
+    process.stdout.write = stub;
+    try {
+      restoreTerminalBeforeExit();
+    } finally {
+      process.stdout.write = original;
+    }
+    const out = writes.join('');
+    assert.ok(out.includes('\x1b[?25h'), 'cursor shown');
+    assert.ok(out.includes('\x1b[r'), 'scroll region reset');
+    assert.ok(out.includes(DEC_2026_END), 'DEC 2026 ended');
+    assert.ok(out.includes('\x1b[2J'), 'viewport cleared');
+    assert.ok(out.includes('\x1b[H'), 'cursor homed after clear');
+  });
+});
 
 describe('fresh interactive launch cost', () => {
   afterEach(() => {

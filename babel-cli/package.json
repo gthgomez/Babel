@@ -52,6 +52,7 @@
     "benchmark:product": "node dist/index.js benchmark product --json",
     "benchmark:cli": "tsx --no-warnings=ExperimentalWarning scripts/cli_benchmark.ts",
     "benchmark:tui": "tsx --no-warnings=ExperimentalWarning scripts/tui_benchmark.ts",
+    "tui:visual:manifest": "tsx --no-warnings=ExperimentalWarning scripts/tui_visual_manifest.ts",
     "parity:run-babel": "tsx --no-warnings=ExperimentalWarning scripts/parity_run_babel.ts",
     "parity:merge-fixture": "tsx --no-warnings=ExperimentalWarning scripts/parity_merge_fixture.ts",
     "test:live-parity-corpus": "tsx --no-warnings=ExperimentalWarning scripts/run_live_parity_corpus.ts",

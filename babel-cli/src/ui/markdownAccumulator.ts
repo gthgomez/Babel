@@ -33,6 +33,9 @@ import { TableHoldbackScanner } from './tableHoldback.js';
 
 const HAS_COLOR = supportsColor();
 
+/** How structural restyles are turned into terminal writes. */
+export type AccumulatorPaintPolicy = 'csi' | 'append-only';
+
 export class MarkdownAccumulator {
   private fullText = '';
   private lastRendered = '';
@@ -63,6 +66,12 @@ export class MarkdownAccumulator {
    * re-painted HUD chrome (thinking line), not committed answer text.
    */
   private shimmerEnabled = false;
+
+  /**
+   * `csi` — Case-3 restyles emit cursor-up + erase (capable Unix terminals).
+   * `append-only` — never emit CUU/ED; ConPTY cannot apply that motion.
+   */
+  private _paintPolicy: AccumulatorPaintPolicy = 'csi';
 
   // ── Terminal geometry ──────────────────────────────────────────────────
   // NOTE: setViewportHeight / setTerminalWidth are only valid when the
@@ -127,6 +136,19 @@ export class MarkdownAccumulator {
   /** Enable or disable shimmer on fast-path streaming output. */
   setShimmerEnabled(enabled: boolean): void {
     this.shimmerEnabled = enabled;
+  }
+
+  /**
+   * Select how restyles are emitted. `append-only` never returns CSI
+   * cursor-up / erase-below sequences (required on Windows ConPTY).
+   */
+  setPaintPolicy(policy: AccumulatorPaintPolicy): void {
+    this._paintPolicy = policy;
+  }
+
+  /** Current paint policy. */
+  get paintPolicy(): AccumulatorPaintPolicy {
+    return this._paintPolicy;
   }
 
   /** Whether shimmer is currently active. */
@@ -399,7 +421,16 @@ export class MarkdownAccumulator {
     }
 
     // Case 3: earlier content diverged (markdown heading/list/table rewrite).
-    // Cursor-up by the visual height of the discarded tail, clear, rewrite.
+    if (this._paintPolicy === 'append-only') {
+      // ConPTY ignores CUU/ED. Keep already-printed cells; only append
+      // lines the host has not seen yet. Restyled earlier lines stay raw.
+      if (newLines.length > oldLines.length) {
+        return '\n' + newLines.slice(oldLines.length).join('\n');
+      }
+      return '';
+    }
+
+    // CSI path: cursor-up by the visual height of the discarded tail, clear, rewrite.
     const discarded = oldLines.slice(common).join('\n');
     const visualLines =
       this._terminalWidth > 0

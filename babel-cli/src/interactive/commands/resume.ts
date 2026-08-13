@@ -18,7 +18,16 @@ export async function handleResume(ctx: ReplContext, args: string[]): Promise<vo
     if (process.stdout.isTTY && !process.env['CI']) {
       const sessions = await listResumableSessions({ limit: 30 });
       if (sessions.length > 0) {
+        const adapter = ctx.rl as unknown as {
+          getInputText?: () => string;
+          setInputText?: (text: string) => void;
+        };
+        const draft = adapter.getInputText?.() ?? '';
+        const { notifyOverlayClosed, notifyOverlayOpened } = await import('../../ui/interruptHost.js');
+        notifyOverlayOpened(draft);
         const choice = await SessionPicker.show(sessions);
+        const restored = notifyOverlayClosed();
+        if (restored) adapter.setInputText?.(restored);
         if (choice.action === 'resume') {
           await resumeSession(ctx, choice.sessionId);
         }

@@ -22,6 +22,7 @@ import type { ReplContext } from './context.js';
 import {
   hydrateReplTurnsFromCells,
   hydrateReplTurnsFromChatTranscript,
+  parseChatTranscriptFile,
 } from './chatTranscriptHydration.js';
 
 export interface ResumeChatSessionResult {
@@ -114,7 +115,17 @@ export async function resumeChatSession(
       return { ok: true, sessionId, turnCount, exchangeCount, source: 'thread_store' };
     }
 
-    const engine = await ChatEngine.restore(sessionId, engineOptions);
+    let engine: ChatEngine;
+    try {
+      engine = await ChatEngine.restore(sessionId, engineOptions);
+    } catch (err) {
+      // Legacy transcript-only sessions may predate session-events.jsonl.
+      // They remain resumable as conversation history; the durable event log
+      // is rebuilt by subsequent turns rather than invented during resume.
+      if (!hasTranscript) throw err;
+      engine = new ChatEngine({ ...engineOptions, runId: sessionId });
+      engine.replaceConversation(parseChatTranscriptFile(txPath));
+    }
     // Attach event log if it lands after transcript restore
     const lateLog = loadThreadEventLogFromDir(chatSessionDir(sessionId));
     if (lateLog && lateLog.events.length > 0) {

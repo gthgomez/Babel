@@ -432,6 +432,8 @@ export type ChatEvent =
       /** Present when tools ran before failure (turn-limit / stall kill / etc.). */
       toolCalls?: Array<{ tool: string; target: string; detail?: string; error?: string }>;
       runDir?: string;
+      /** Preserve INFRA_FAILURE vs AGENT_FAILURE when the engine already classified. */
+      outcome?: import('../schemas/agentContracts.js').TerminalOutcome;
     }
   | { type: 'cancelled' }
   | {
@@ -2652,29 +2654,36 @@ export class ChatEngine {
    * Last input-arbiter effects from cancel() — hosts may read shouldExitProcess
    * after cancel (second Ctrl+C while running).
    */
-  private _lastCancelArbiterEffects: {
-    shouldCancelTurn: boolean;
-    shouldExitProcess: boolean;
-  } = { shouldCancelTurn: false, shouldExitProcess: false };
+  private _lastCancelArbiterEffects: ReturnType<typeof consumeInputArbiterEffects> = {
+    shouldCancelTurn: false,
+    shouldExitProcess: false,
+    shouldClearComposer: false,
+    shouldHintExit: false,
+    shouldCancelPaste: false,
+    shouldDeclineOverlay: false,
+  };
 
-  cancel(): void {
+  /**
+   * Abort the in-flight turn without touching the input arbiter.
+   * TUI hosts dispatch ctrl_c themselves, then call this so a second
+   * dispatch cannot be mistaken for "exit the process".
+   */
+  abortTurn(): void {
     this._cancelled = true;
     this.abortController.abort();
-    // First Ctrl+C → cancel_turn; second may request exit_process (host-owned).
-    const { effects } = dispatchInputArbiter({ type: 'ctrl_c' });
-    this._lastCancelArbiterEffects = consumeInputArbiterEffects(effects);
-    // AC3 choke point: cancel always flushes event log to disk
     finalizeParityCancel(this.parity, this.engineRunDir);
-    // Replace with a fresh controller so future requests are not affected
-    // by a stale aborted signal from a prior cancellation.
     this.abortController = new AbortController();
   }
 
+  cancel(): void {
+    // First Ctrl+C → cancel_turn; second may request exit_process (host-owned).
+    const { effects } = dispatchInputArbiter({ type: 'ctrl_c' });
+    this._lastCancelArbiterEffects = consumeInputArbiterEffects(effects);
+    this.abortTurn();
+  }
+
   /** Host/REPL: whether the last cancel() also requested process exit. */
-  getLastCancelArbiterEffects(): {
-    shouldCancelTurn: boolean;
-    shouldExitProcess: boolean;
-  } {
+  getLastCancelArbiterEffects(): ReturnType<typeof consumeInputArbiterEffects> {
     return { ...this._lastCancelArbiterEffects };
   }
 

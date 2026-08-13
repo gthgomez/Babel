@@ -87,7 +87,7 @@ export function dispatchChatEvent(
   if (event.type === 'failed') {
     return {
       status: 'failed',
-      outcome: 'AGENT_FAILURE',
+      outcome: event.outcome ?? 'AGENT_FAILURE',
       answer: event.error,
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],

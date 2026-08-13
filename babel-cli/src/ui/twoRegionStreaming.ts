@@ -37,6 +37,7 @@
 
 import { OutputBuffer } from './outputBuffer.js';
 import { probeTerminalCapabilities } from './terminalProbe.js';
+import { wrapText } from './theme.js';
 
 /** Default number of rows reserved for the mutable streaming area. */
 const DEFAULT_STREAMING_ROWS = 12;
@@ -235,16 +236,7 @@ export class TwoRegionStreaming {
 
       // Clear absolute-positioned streaming paint so graduation is the sole
       // remaining copy of these lines on screen.
-      if (this.streamingTop > 0 && this.streamingRows > 0) {
-        this.buf.beginFrame();
-        try {
-          for (let i = 0; i < this.streamingRows; i++) {
-            this.buf.writeLine(this.streamingTop + i, 1, '');
-          }
-        } finally {
-          this.buf.endFrame();
-        }
-      }
+      this._clearStreamingRows();
 
       // Reset scroll region to full screen
       this.buf.resetScrollRegion();
@@ -340,6 +332,9 @@ export class TwoRegionStreaming {
     if (!this._isActive) return;
 
     if (!this.fallbackMode) {
+      // Wipe smeared streaming cells before dropping DECSTBM so a cancel
+      // review card is not painted over leftover greeting wallpaper.
+      this._clearStreamingRows();
       this.buf.resetScrollRegion();
     }
 
@@ -371,6 +366,14 @@ export class TwoRegionStreaming {
     return this.graduatedCount;
   }
 
+  /**
+   * Full logical line buffer, including lines already graduated to scrollback.
+   * Test/inspection helper — used to assert rewrite-replace does not duplicate.
+   */
+  getLogicalLines(): readonly string[] {
+    return this.lines;
+  }
+
   // ── Private helpers ─────────────────────────────────────────────────────────
 
   /**
@@ -392,19 +395,46 @@ export class TwoRegionStreaming {
     }
   }
 
+  /** Clear every row of the hardware streaming window. */
+  private _clearStreamingRows(): void {
+    if (this.streamingTop <= 0 || this.streamingRows <= 0) return;
+    this.buf.beginFrame();
+    try {
+      for (let i = 0; i < this.streamingRows; i++) {
+        this.buf.writeLine(this.streamingTop + i, 1, '');
+      }
+    } finally {
+      this.buf.endFrame();
+    }
+  }
+
   /**
    * Re-render the streaming window from the ungraduated tail of `lines`.
+   *
+   * Long logical lines are hard-wrapped to the terminal width before paint
+   * so they cannot wrap onto the next streaming row and collide with the
+   * next writeLine (the two-column wallpaper on Windows Terminal).
    */
   private _renderStreamingArea(): void {
     const startRow = this.streamingTop;
     const availableRows = this.streamingRows;
+    const width = this.terminalWidth > 0 ? this.terminalWidth : (process.stdout.columns ?? 80);
+    const wrapWidth = Math.max(1, width);
     const visible = this.lines.slice(this.graduatedCount);
+    const visual: string[] = [];
+    for (const line of visible) {
+      if (!line) {
+        visual.push('');
+        continue;
+      }
+      visual.push(...wrapText(line, wrapWidth));
+    }
 
     this.buf.beginFrame();
     try {
       for (let i = 0; i < availableRows; i++) {
         const row = startRow + i;
-        const line = i < visible.length ? visible[i]! : '';
+        const line = i < visual.length ? visual[i]! : '';
         this.buf.writeLine(row, 1, line);
       }
     } finally {

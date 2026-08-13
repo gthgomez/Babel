@@ -43,6 +43,7 @@ import {
 } from './imeCursor.js';
 import { FrameScheduler } from './frameScheduler.js';
 import { OutputBuffer } from './outputBuffer.js';
+import { isWindowsTerminal } from './terminalProbe.js';
 import { fuzzyScore } from '../utils/fuzzy.js';
 import { searchFilesGlob, type MentionResult } from './mentionPopup.js';
 import { type SearchHit } from '../services/indexer.js';
@@ -550,6 +551,9 @@ export class PromptInput {
 
   private handleKey(event: KeyEvent): void {
     if (!this.active) return;
+    if (event.name === 'ignored' || event.name === 'focusin' || event.name === 'focusout') {
+      return;
+    }
 
     // Voice dictation hotkey (configurable via BABEL_VOICE_HOTKEY env var)
     if (matchesHotkey(event, voiceHotkey)) {
@@ -557,13 +561,15 @@ export class PromptInput {
       if (consumed) return;
     }
 
-    // Ctrl+C
+    // Ctrl+C — host (onInterrupt) owns idle/running policy when provided.
     if (event.name === 'c' && event.ctrl) {
+      if (this.config.onInterrupt) {
+        this.config.onInterrupt();
+        return;
+      }
       if (this.lines.length === 1 && this.lines[0] === '') {
         this.deactivate();
         this.config.onCancel?.();
-      } else if (this.config.onInterrupt) {
-        this.config.onInterrupt();
       } else {
         this.clear();
         this.render();
@@ -1795,9 +1801,30 @@ export class PromptInput {
 
   // ── Rendering ───────────────────────────────────────────────────────────────
 
+  /** ConPTY cannot dock with CUP / SCO save-restore — stay on the current line. */
+  private useLinearComposer(): boolean {
+    return isWindowsTerminal() && process.env['BABEL_PROMPT_CUP'] !== '1';
+  }
+
+  /** Single-line \r + erase + prompt. No absolute positioning. */
+  private renderLinear(): void {
+    const buf = OutputBuffer.getInstance();
+    const prefix = this.config.prompt;
+    const line = sanitizeUserText(this.lines[this.cursorLine] ?? this.lines[0] ?? '');
+    const before = sanitizeUserText(
+      (this.lines[this.cursorLine] ?? '').slice(0, this.cursorCol),
+    );
+    const show = this.cursorVisible || this.imeComposing;
+    buf.write(`\r\x1b[2K${prefix}${line}\r${prefix}${before}${show ? '\x1b[?25h' : '\x1b[?25l'}`);
+  }
+
   /** Full render: write all lines and position cursor. */
   private render(): void {
     if (!this.active) return;
+    if (this.useLinearComposer()) {
+      this.renderLinear();
+      return;
+    }
 
     const buf = OutputBuffer.getInstance();
     let cursorRestored = false;
@@ -2023,6 +2050,10 @@ export class PromptInput {
   /** Render only the cursor at its current position. */
   private renderCursor(): void {
     if (!this.active) return;
+    if (this.useLinearComposer()) {
+      this.renderLinear();
+      return;
+    }
 
     const buf = OutputBuffer.getInstance();
     let cursorRestored = false;

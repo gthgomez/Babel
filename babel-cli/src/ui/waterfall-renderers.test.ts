@@ -355,6 +355,76 @@ test('ConversationalRenderer: tool call lifecycle with TTY visual output', () =>
   assert.match(out, /exit 0/);
 });
 
+test('ConversationalRenderer: append-only TTY stream emits no cursor-up and keeps intro once', async () => {
+  const prevRewrite = process.env['BABEL_ANSWER_REWRITE'];
+  process.env['BABEL_ANSWER_REWRITE'] = 'append-only';
+  const r = new ConversationalRenderer({ isTTY: true });
+  const { writes, restore } = interceptStdout();
+  try {
+    r.start();
+    r.onAnswerChunk('Hello I am ready to help you work on your game projects.\n\n');
+    r.onAnswerChunk('## Startup Process\n\n');
+    r.onAnswerChunk('Just let me know the project and the task.\n');
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const out = writes.join('');
+    assert.equal(/\x1b\[\d+A/.test(out), false, 'must not emit CSI cursor-up');
+    assert.equal(/\x1b\[J/.test(out), false, 'must not emit erase-below');
+    const intro = 'Hello I am ready to help you work on your game projects.';
+    assert.equal(out.split(intro).length - 1, 1, `intro must appear once: ${JSON.stringify(stripAnsi(out))}`);
+  } finally {
+    try {
+      r.stop();
+    } catch {
+      /* already stopped */
+    }
+    restore();
+    if (prevRewrite === undefined) delete process.env['BABEL_ANSWER_REWRITE'];
+    else process.env['BABEL_ANSWER_REWRITE'] = prevRewrite;
+  }
+});
+
+test('ConversationalRenderer: hardware two-region heading rewrite does not duplicate intro', async () => {
+  const prevScroll = process.env['BABEL_SCROLL_REGIONS'];
+  process.env['BABEL_SCROLL_REGIONS'] = '1';
+  const stdout = process.stdout;
+  const prevRows = Object.getOwnPropertyDescriptor(stdout, 'rows');
+  const prevCols = Object.getOwnPropertyDescriptor(stdout, 'columns');
+  Object.defineProperty(stdout, 'rows', { value: 40, configurable: true, enumerable: true, writable: true });
+  Object.defineProperty(stdout, 'columns', { value: 80, configurable: true, enumerable: true, writable: true });
+
+  const r = new ConversationalRenderer({ isTTY: true });
+  const { restore } = interceptStdout();
+  try {
+    r.start();
+    assert.equal(r.isTwoRegionHardwareMode(), true, 'expected hardware two-region with BABEL_SCROLL_REGIONS=1');
+    r.onAnswerChunk('Hello I am ready to help you work on your game projects.\n\n');
+    r.onAnswerChunk('## Startup Process\n\n');
+    r.onAnswerChunk('Just let me know the project and the task.\n');
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const snapshot = r.getTwoRegionLogicalLines().join('\n');
+    const intro = 'Hello I am ready to help you work on your game projects.';
+    const introCount = snapshot.split(intro).length - 1;
+    assert.equal(
+      introCount,
+      1,
+      `intro must appear once in two-region buffer, got ${introCount}: ${JSON.stringify(snapshot)}`,
+    );
+  } finally {
+    try {
+      r.stop();
+    } catch {
+      /* renderer may already be stopped */
+    }
+    restore();
+    if (prevScroll === undefined) delete process.env['BABEL_SCROLL_REGIONS'];
+    else process.env['BABEL_SCROLL_REGIONS'] = prevScroll;
+    if (prevRows) Object.defineProperty(stdout, 'rows', prevRows);
+    else delete (stdout as { rows?: number }).rows;
+    if (prevCols) Object.defineProperty(stdout, 'columns', prevCols);
+    else delete (stdout as { columns?: number }).columns;
+  }
+});
+
 test('ConversationalRenderer: TTY answer stream does not duplicate mid-line chunks', async () => {
   // Force fallback (cursor) mode so stdout captures linear deltas, not
   // DECSTBM absolute paints that re-render the whole streaming area.
@@ -441,6 +511,20 @@ test('ConversationalRenderer: thought accumulation via onThought', () => {
     const snap = stripAnsi(r.snapshot());
     assert.match(snap, /Hmm, let me think about this/);
     assert.match(snap, /check the imports/);
+  } finally {
+    r.stop();
+  }
+});
+
+test('ConversationalRenderer exposes phase and model-idle liveness', () => {
+  const r = new ConversationalRenderer({ isTTY: false });
+  try {
+    r.start();
+    r.onPhaseChange('verify');
+    const snapshot = r.getLivenessSnapshot();
+    assert.equal(snapshot.phase, 'verify');
+    assert.ok(snapshot.elapsedMs >= 0);
+    assert.ok(snapshot.modelIdleMs >= 0);
   } finally {
     r.stop();
   }

@@ -301,6 +301,44 @@ describe('Hardware mode', () => {
     });
   });
 
+  it('getLogicalLines returns the snapshot after replaceStreamingContent', () => {
+    withEnv({ BABEL_SCROLL_REGIONS: '1' }, () => {
+      const trs = new TwoRegionStreaming();
+      const mock = mockStdoutWrite();
+      try {
+        trs.setup(30, 8, 40);
+        trs.replaceStreamingContent('alpha\nbeta\ngamma');
+        assert.deepEqual([...trs.getLogicalLines()], ['alpha', 'beta', 'gamma']);
+      } finally {
+        mock.restore();
+        trs.teardown();
+      }
+    });
+  });
+
+  it('long streaming lines are wrapped before paint so they do not occupy the next row', () => {
+    withEnv({ BABEL_SCROLL_REGIONS: '1' }, () => {
+      const trs = new TwoRegionStreaming();
+      const mock = mockStdoutWrite();
+      try {
+        trs.setup(40, 8, 20);
+        const long = 'A'.repeat(60);
+        trs.writeStreaming(long);
+        const output = mock.writes.join('');
+        assert.equal(
+          output.includes(long),
+          false,
+          'unwrapped 60-col line must not be painted as one row',
+        );
+        assert.ok(output.includes('A'.repeat(20)), 'should paint width-sized segments');
+        assert.equal(trs.getLogicalLines().join('\n'), long);
+      } finally {
+        mock.restore();
+        trs.teardown();
+      }
+    });
+  });
+
   it('replaceStreamingContent does not re-graduate the same prefix on each rewrite', () => {
     withEnv({ BABEL_SCROLL_REGIONS: '1' }, () => {
       const trs = new TwoRegionStreaming();
@@ -395,6 +433,7 @@ describe('Hardware mode', () => {
         mock.writes.length = 0;
         trs.teardown();
         const output = mock.writes.join('');
+        assert.ok(output.includes('\x1b[K'), 'should clear smeared streaming rows on teardown');
         assert.ok(output.includes('\x1b[r'), 'should reset scroll region on teardown');
       } finally {
         mock.restore();

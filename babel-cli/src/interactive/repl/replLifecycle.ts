@@ -12,15 +12,42 @@ import { showOnboarding, isFirstRun } from '../../ui/onboarding.js';
 import { listResumableSessions } from '../../services/chatSessionIndex.js';
 import { SessionPicker } from '../../ui/sessionPicker.js';
 import { OutputBuffer } from '../../ui/outputBuffer.js';
+import { InputCoordinator } from '../../ui/inputCoordinator.js';
+import { DEC_2026_END } from '../../ui/terminalEscapeSequences.js';
 import { primary, error, muted } from '../../ui/theme.js';
 import type { ReplContext } from '../context.js';
 import type { SessionState } from '../types.js';
 import * as Session from '../session.js';
+import { formatResumeHint, shouldForceResumePicker } from './startupResumeHint.js';
+
+/**
+ * Restore TTY modes and wipe leftover two-region/DECSTBM cells before
+ * printing the session-ended line. Safe to call more than once.
+ */
+export function restoreTerminalBeforeExit(): void {
+  logUpdate.clear();
+  try {
+    InputCoordinator.getInstance().emergencyRestore();
+  } catch {
+    // Coordinator may not be constructed in non-interactive tests.
+  }
+  try {
+    const write = (s: string) => {
+      process.stdout.write(s);
+    };
+    write('\x1b[?25h');
+    write('\x1b[0m');
+    write('\x1b[r');
+    write(DEC_2026_END);
+    write('\x1b[2J\x1b[H');
+  } catch {
+    // stdout may already be closed
+  }
+}
 
 export function exitRepl(): void {
   delete process.env['BABEL_INTERACTIVE'];
-  logUpdate.clear();
-  OutputBuffer.getInstance().write('\x1b[?25h');
+  restoreTerminalBeforeExit();
   console.log(primary('  Babel session ended. See you next run.\n'));
   process.exit(0);
 }
@@ -79,12 +106,43 @@ export async function bootstrapReplSession(
   }
 }
 
+export { formatResumeHint, shouldForceResumePicker } from './startupResumeHint.js';
+
 export async function maybeShowResumePicker(ctx: ReplContext): Promise<void> {
-  if (!process.stdout.isTTY || process.env['CI'] || process.env['BABEL_SKIP_RESUME_PICKER'] === '1') {
+  if (!process.stdout.isTTY || process.env['CI']) {
     return;
   }
+
   const sessions = await listResumableSessions({ limit: 20 });
+  const requested = process.env['BABEL_RESUME_SESSION']?.trim();
+  if (requested) {
+    const id =
+      requested === 'latest' || requested === '1'
+        ? sessions[0]?.id
+        : requested;
+    if (id) {
+      const { resumeChatSession } = await import('../chatSessionResume.js');
+      const outcome = await resumeChatSession(ctx, id);
+      const buf = OutputBuffer.getInstance();
+      if (outcome.ok) {
+        buf.write(primary(`\n  Resumed ${id} — ${outcome.turnCount} turns loaded\n`));
+        buf.write(muted('  Type a message to continue, or /help for commands.\n'));
+      } else {
+        buf.write(error(`\n  Failed to resume ${id}: ${outcome.message}\n`));
+      }
+    }
+    ctx.isRunning = false;
+    return;
+  }
+
   if (sessions.length === 0) return;
+
+  if (!shouldForceResumePicker() || process.env['BABEL_SKIP_RESUME_PICKER'] === '1') {
+    const latest = sessions[0]!;
+    OutputBuffer.getInstance().write(muted(`\n${formatResumeHint(latest)}\n`));
+    ctx.isRunning = false;
+    return;
+  }
 
   const choice = await SessionPicker.show(sessions);
   // Picker already drained stdin; keep isRunning false so idle header + prompt

@@ -34,13 +34,13 @@ import { renderBackgroundTaskOverlay } from './backgroundTaskOverlay.js';
 import { ScrollbackBuffer } from './scrollback.js';
 import { ScreenManager } from './screenManager.js';
 import { OutputBuffer, isBrokenStdoutError } from './outputBuffer.js';
-import { isDuplicateCtrlC, markCtrlCHandled } from './inputCoordinator.js';
 import { isA11yMode, a11yStageEvent, a11yActivityEvent, a11yToolEvent } from './a11y.js';
 import { ChunkCoalescer } from './chunkCoalescer.js';
 import { TwoRegionStreaming } from './twoRegionStreaming.js';
 import { AgentStreamManager, type AgentStreamEvent } from './agentProgress.js';
-import { getMotionMode, MotionMode, shimmerText } from './motion.js';
+import { getMotionMode, MotionMode } from './motion.js';
 import { renderUnseenDividerPill } from './unseenDivider.js';
+import { isWindowsTerminal } from './terminalProbe.js';
 import {
   StateStore,
   createTuiStore,
@@ -49,10 +49,18 @@ import {
   createInitialTuiState,
 } from './stateMutationBus.js';
 import { HistoryCellViewport, HistoryTranscript } from './historyCells/index.js';
+import { appendStreamingDraft, handleInteractiveInterrupt } from './interruptHost.js';
+import { isDuplicateCtrlC, markCtrlCHandled } from './inputCoordinator.js';
 import type { HistoryCellRecord } from './historyCells/types.js';
+import type { ChatPhase } from '../agent/chatPhaseNudge.js';
+import {
+  ConversationLivenessTracker,
+  formatConversationThinkingStatus,
+  type ConversationLivenessSnapshot,
+} from './conversationLiveness.js';
+import { renderSubAgentOverlay, type SubAgentOverlayEntry } from './subAgentOverlay.js';
 
 const SPINNER_FRAMES: readonly string[] = ['◐', '◓', '◑', '◒'];
-const STALL_THRESHOLD_MS = 3000; // fade indicator toward red after 3s idle
 const FRAME_INTERVAL_MS = 200; // 5 FPS spinner tick
 
 /**
@@ -368,21 +376,17 @@ export class WaterfallRenderer extends BaseRenderer {
           if (this._store.currentState.renderState === 'failed') this.stop();
           break;
         case 'cancel':
+          handleInteractiveInterrupt();
           this.fail(new Error('Run cancelled (Esc).'));
           break;
         case 'suspend':
           process.kill(process.pid, 'SIGTSTP');
           return;
         case 'cancel_double': {
-          if (isDuplicateCtrlC()) break;
-          markCtrlCHandled();
-          const now = Date.now();
-          if (this.lastCancelTime && now - this.lastCancelTime < 1000) {
-            this.stop();
-            process.exit(130);
+          const result = handleInteractiveInterrupt();
+          if (!result.exited) {
+            this.fail(new Error('Run cancelled (Ctrl+C). Press Ctrl+C again to exit.'));
           }
-          this.lastCancelTime = now;
-          this.fail(new Error('Run cancelled (Ctrl+C). Double-press to exit.'));
           break;
         }
         case 'thought_toggle': {
@@ -1229,24 +1233,19 @@ export class ConversationalRenderer extends BaseRenderer {
   private _chunkCoalescer: ChunkCoalescer;
   private _twoRegion: TwoRegionStreaming | null = null;
   /**
-   * Mutable function reference for writing output chunks.
+   * Mutable function reference for writing output chunks in fallback
+   * (non-hardware) mode. Defaults to safeStdoutWrite.
    *
-   * Defaults to safeStdoutWrite for direct stdout output. When
-   * TwoRegionStreaming hardware mode is active, this is swapped to
-   * `(text) => this._twoRegion!.writeStreaming(text)` so streaming
-   * content goes through the DECSTBM-scoped streaming region instead
-   * of raw stdout.
-   *
-   * This indirection lets the ChunkCoalescer callback stay fixed while
-   * the actual write path changes. Any refactoring of the ChunkCoalescer
-   * callback must preserve this indirection — it is intentionally a
-   * mutable function reference.
+   * Hardware two-region mode does not use this hook: the ChunkCoalescer
+   * paints via replaceStreamingContent(getRenderedText()) so Case-3
+   * rewrite deltas cannot be appended as extra answer copies.
    */
   private _writeOutput: (text: string) => void = safeStdoutWrite;
   private _agentStreams: AgentStreamManager;
   private _cancelCallback: ((...args: unknown[]) => unknown) | null;
   private _state: string;
   private _lastActivityTime: number;
+  private readonly _liveness: ConversationLivenessTracker;
   private _spinnerFrame: number;
   private _unregisterTick: (() => void) | null;
   private _resizeHandler: (() => void) | null;
@@ -1256,13 +1255,7 @@ export class ConversationalRenderer extends BaseRenderer {
   /** Total overlay lines shown below the thinking line (bg tasks + subagents). */
   private _showingOverlayLines: number;
   /** Gap #4: Active subagents tracked during the thinking phase. */
-  private _subAgents: Map<string, {
-    label: string;
-    startTime: number;
-    status: 'running' | 'complete' | 'failed';
-    tokens?: number;
-    error?: string;
-  }> = new Map();
+  private _subAgents: Map<string, SubAgentOverlayEntry> = new Map();
   private _toolFrameIndex: number;
   private scrollback: ScrollbackBuffer | undefined;
   private screenManager: ScreenManager | undefined;
@@ -1328,12 +1321,16 @@ export class ConversationalRenderer extends BaseRenderer {
     this._mdAccumulator = new MarkdownAccumulator();
     this._chunkCoalescer = new ChunkCoalescer(
       (batch: string) => {
-        this._writeOutput(batch);
-        // In two-region mode, the terminal's hardware scroll region handles
-        // scrollback — we don't need to push lines manually.
-        if (!this._twoRegion?.isHardwareMode) {
-          this._pushLinesToScrollback(batch);
+        // Hardware two-region paints from the accumulator snapshot. Feeding
+        // Case-3 cursor-up rewrite deltas through writeStreaming() appends
+        // another copy of the answer (and the CSI itself) into the line
+        // buffer — the Windows Terminal smear/reprint bug.
+        if (this._twoRegion?.isHardwareMode) {
+          this._twoRegion.replaceStreamingContent(this._mdAccumulator.getRenderedText());
+          return;
         }
+        this._writeOutput(batch);
+        this._pushLinesToScrollback(batch);
       },
       16, // 16ms batch window (~60 FPS)
     );
@@ -1341,6 +1338,7 @@ export class ConversationalRenderer extends BaseRenderer {
     this._cancelCallback = null;
     this._state = 'idle';
     this._lastActivityTime = Date.now();
+    this._liveness = new ConversationLivenessTracker();
     this._spinnerFrame = 0;
     this._unregisterTick = null;
     this._resizeHandler = null;
@@ -1403,6 +1401,22 @@ export class ConversationalRenderer extends BaseRenderer {
   /** All history cell records (committed + active) for the current turn. */
   getHistoryCellRecords(): HistoryCellRecord[] {
     return this._historyTranscript.getAllRecords();
+  }
+
+  /**
+   * Whether DECSTBM two-region streaming is active.
+   * Test/inspection helper.
+   */
+  isTwoRegionHardwareMode(): boolean {
+    return this._twoRegion?.isHardwareMode === true;
+  }
+
+  /**
+   * Logical lines held by hardware two-region streaming (including graduated).
+   * Empty when hardware mode is off. Test/inspection helper.
+   */
+  getTwoRegionLogicalLines(): readonly string[] {
+    return this._twoRegion?.getLogicalLines() ?? [];
   }
 
   /** Virtual scroll viewport over history cells (B4). */
@@ -1501,27 +1515,13 @@ export class ConversationalRenderer extends BaseRenderer {
    *  All writes are batched into a single safeStdoutWrite call per frame. */
   private _writeThinkingLine(): void {
     if (!this.isTTY) return;
-    const elapsed = Math.floor((Date.now() - this.startTime) / 1000);
     const spinner = SPINNER_FRAMES[this._spinnerFrame] ?? '◐';
     const stallMs = Date.now() - this._lastActivityTime;
-
-    // Apply shimmer to the "Thinking…" label for live-streaming feedback.
-    // In reduced-motion mode, shimmerText returns plain text (no-op).
-    const motionMode = getMotionMode();
-    const thinkingLabel = shimmerText('Thinking…', motionMode);
-
-    let indicator = dim(`${spinner} ${thinkingLabel}`);
-    // Fix 2: After STALL_THRESHOLD_MS without activity, fade toward red
-    if (stallMs > STALL_THRESHOLD_MS) {
-      const intensity = Math.min((stallMs - STALL_THRESHOLD_MS) / 2000, 1);
-      if (intensity > 0.6) {
-        indicator = warning(indicator);
-      } else if (intensity > 0.3) {
-        indicator = `${dim(spinner)} ${warning(thinkingLabel)}`;
-      }
-    }
-
-    const timer = muted(`(${elapsed}s)`);
+    const { indicator, timer } = formatConversationThinkingStatus({
+      spinner,
+      stallMs,
+      snapshot: this._liveness.snapshot(this.startTime),
+    });
 
     // Build combined overlay: background tasks + subagent progress.
     const overlayLines: string[] = [];
@@ -1534,7 +1534,12 @@ export class ConversationalRenderer extends BaseRenderer {
 
     // Gap #4: Subagent progress overlay below background tasks.
     if (this._subAgents.size > 0) {
-      overlayLines.push(...this._buildSubAgentLines());
+      overlayLines.push(
+        ...renderSubAgentOverlay(
+          this._subAgents,
+          SPINNER_FRAMES[this._spinnerFrame] ?? '◐',
+        ),
+      );
     }
 
     // Batch all writes into a single string to minimise OutputBuffer calls.
@@ -1578,6 +1583,30 @@ export class ConversationalRenderer extends BaseRenderer {
     }
   }
 
+  private _recordModelActivity(): void {
+    this._liveness.recordModelActivity();
+    this._recordActivity();
+  }
+
+  /** Update the operator-visible phase before the next provider wait begins. */
+  onPhaseChange(phase: ChatPhase): void {
+    if (this._state === 'done' || this._state === 'failed') return;
+    this._liveness.setPhase(phase);
+    if (this._pendingToolCallLines > 0) return;
+    if (this._state !== 'thinking') {
+      this._state = 'thinking';
+      this._store?.dispatch({ type: 'state:transition', to: 'thinking' });
+      this._lastActivityTime = Date.now();
+      if (this.isTTY) safeStdoutWrite('\n');
+    }
+    if (this.isTTY) this._writeThinkingLine();
+    this._registerThinkingTicker();
+  }
+
+  getLivenessSnapshot(): ConversationLivenessSnapshot {
+    return this._liveness.snapshot(this.startTime);
+  }
+
   enableRawMode(): void {
     if (this._rawMode.isActive) return;
     this._rawMode.enable((event) => {
@@ -1585,7 +1614,6 @@ export class ConversationalRenderer extends BaseRenderer {
 
       switch (action) {
         case 'cancel':
-          // Esc cancels — notify host to abort in-flight HTTP request
           if (this._cancelCallback) {
             try {
               this._cancelCallback();
@@ -1593,6 +1621,7 @@ export class ConversationalRenderer extends BaseRenderer {
               /* best-effort */
             }
           }
+          this.cancelRun();
           break;
         case 'suspend':
           process.kill(process.pid, 'SIGTSTP');
@@ -1600,12 +1629,6 @@ export class ConversationalRenderer extends BaseRenderer {
         case 'cancel_double': {
           if (isDuplicateCtrlC()) break;
           markCtrlCHandled();
-          const now = Date.now();
-          if (this.lastCancelTime && now - this.lastCancelTime < 1000) {
-            this.stop();
-            process.exit(130);
-          }
-          this.lastCancelTime = now;
           if (this._cancelCallback) {
             try {
               this._cancelCallback();
@@ -1613,6 +1636,7 @@ export class ConversationalRenderer extends BaseRenderer {
               /* best-effort */
             }
           }
+          this.cancelRun();
           break;
         }
         case 'thought_toggle':
@@ -1691,6 +1715,15 @@ export class ConversationalRenderer extends BaseRenderer {
           }
           break;
         default:
+          if (
+            event.name &&
+            event.name.length === 1 &&
+            !event.ctrl &&
+            !event.meta &&
+            event.name !== 'escape'
+          ) {
+            appendStreamingDraft(event.sequence || event.name);
+          }
           break;
       }
     });
@@ -1807,7 +1840,7 @@ export class ConversationalRenderer extends BaseRenderer {
     this.answerChunks.push(chunk);
     this._historyTranscript.onAnswerChunk(chunk);
     this._syncCellViewport();
-    this._recordActivity();
+    this._recordModelActivity();
     this._store?.dispatch({ type: 'answer:chunk', text: chunk });
     // Clear "Thinking…" on first chunk (length is now 1 after push)
     if (this.answerChunks.length === 1 && this.isTTY) {
@@ -1847,7 +1880,7 @@ export class ConversationalRenderer extends BaseRenderer {
     if (this._state === 'thinking') {
       this._leaveThinking('tool');
     }
-    this._recordActivity();
+    this._recordModelActivity();
     const id = ++this.toolCallIndex;
 
     // Dispatch FIRST — returns false if middleware cancelled
@@ -2081,7 +2114,7 @@ export class ConversationalRenderer extends BaseRenderer {
     // Filter synthetic "Thinking… (N chars)" progress strings
     // from ChatEngine — these are spinner updates, not reasoning.
     if (/^Thinking… \(\d+ chars\)$/.test(chunk.trim())) return;
-    this._recordActivity();
+    this._recordModelActivity();
     this.thoughtText += chunk;
     this._store?.dispatch({ type: 'thought:chunk', text: chunk });
     // Show thinking progress visibly — update the live thinking line
@@ -2178,52 +2211,6 @@ export class ConversationalRenderer extends BaseRenderer {
     }, 8000);
   }
 
-  /** Build overlay lines for all tracked sub-agents below the thinking line. */
-  private _buildSubAgentLines(): string[] {
-    const all = Array.from(this._subAgents.entries());
-    if (all.length === 0) return [];
-
-    // Sort: running first, then failed, then completed (by start time within tier)
-    const statusRank = (s: 'running' | 'complete' | 'failed') =>
-      s === 'running' ? 0 : s === 'failed' ? 1 : 2;
-    all.sort((a, b) => {
-      const rankDiff = statusRank(a[1].status) - statusRank(b[1].status);
-      if (rankDiff !== 0) return rankDiff;
-      return a[1].startTime - b[1].startTime;
-    });
-
-    const maxVisible = 5;
-    const visible = all.slice(0, maxVisible);
-    const lines: string[] = [];
-
-    for (let i = 0; i < visible.length; i++) {
-      const entry = visible[i]!;
-      const info = entry[1];
-      const isLast = i === visible.length - 1 && all.length <= maxVisible;
-      const branch = isLast ? '└─' : '├─';
-      const elapsed = formatElapsed(Date.now() - info.startTime);
-
-      if (info.status === 'running') {
-        const saSpinner = SPINNER_FRAMES[this._spinnerFrame] ?? '◐';
-        lines.push(`  ${dim(branch)} ${saSpinner} ${info.label} ${dim(`(${elapsed})`)}`);
-      } else if (info.status === 'failed') {
-        const errStr = info.error ? ` ${dim(info.error)}` : '';
-        lines.push(`  ${dim(branch)} ${error(`✗ ${info.label}`)}${errStr} ${dim(`(${elapsed})`)}`);
-      } else {
-        const tokensStr = info.tokens
-          ? ` ${dim(`(${info.tokens.toLocaleString()} tokens)`)}`
-          : '';
-        lines.push(`  ${dim(branch)} ${dim(`✓ ${info.label} (${elapsed})`)}${tokensStr}`);
-      }
-    }
-
-    if (all.length > maxVisible) {
-      lines.push(`  ${dim('└─')} ${dim(`(+${all.length - maxVisible} more)`)}`);
-    }
-
-    return lines;
-  }
-
   /** Start — hide cursor, register FrameScheduler tick for live timer,
    *  subscribe to background tasks, transition state to 'thinking'.
    *  Configures shimmer on the MarkdownAccumulator based on motion mode. */
@@ -2234,6 +2221,7 @@ export class ConversationalRenderer extends BaseRenderer {
     this._state = 'thinking';
     this._store?.dispatch({ type: 'state:transition', to: 'thinking' });
     this._lastActivityTime = Date.now();
+    this._liveness.reset();
     // Gap #4: Reset subagent state for a new turn
     this._subAgents.clear();
     this._showingOverlayLines = 0;
@@ -2241,6 +2229,13 @@ export class ConversationalRenderer extends BaseRenderer {
     // Configure shimmer on the markdown accumulator based on motion mode
     const motionMode = getMotionMode();
     this._mdAccumulator.setShimmerEnabled(motionMode === MotionMode.Animated);
+
+    // ConPTY cannot apply cursor-up rewrites. Force append-only paint unless
+    // the operator explicitly opts back into CSI with BABEL_ANSWER_REWRITE=csi.
+    const rewriteOverride = (process.env['BABEL_ANSWER_REWRITE'] ?? '').toLowerCase();
+    if (rewriteOverride === 'append-only' || (rewriteOverride !== 'csi' && isWindowsTerminal())) {
+      this._mdAccumulator.setPaintPolicy('append-only');
+    }
 
     // Set viewport dimensions for cursor-up clamping and CJK-aware
     // visual line counting in the markdown accumulator.
@@ -2252,12 +2247,12 @@ export class ConversationalRenderer extends BaseRenderer {
     // Set up two-region hardware-scroll streaming when the terminal supports it.
     // This partitions the terminal into a stable scrollback region (top) and a
     // mutable streaming region (bottom) where live markdown renders in-place.
+    // Hardware paints are applied in the ChunkCoalescer via replaceStreamingContent
+    // (full snapshot), not writeStreaming(delta), so markdown rewrites cannot
+    // append a second copy of the answer.
     if (this.isTTY) {
       this._twoRegion = new TwoRegionStreaming();
       this._twoRegion.setup(process.stdout.rows ?? 24, undefined, process.stdout.columns ?? 80);
-      if (this._twoRegion.isHardwareMode) {
-        this._writeOutput = (text: string) => this._twoRegion!.writeStreaming(text);
-      }
     }
 
     if (this.isTTY) {
@@ -2266,7 +2261,20 @@ export class ConversationalRenderer extends BaseRenderer {
     }
     this.enableRawMode();
 
-    // Register with FrameScheduler for live spinner + elapsed timer.
+    this._registerThinkingTicker();
+
+    // Terminal resize — thinking overlay + streaming reflow (B6).
+    // Single path via OutputBuffer (debounced; width + height).
+    this._unregisterResize = OutputBuffer.getInstance().onResize((width: number, height: number) => {
+      this._handleTerminalResize(width, height);
+    });
+    this._syncFromStore();
+  }
+
+  /** Register the 15s-status-friendly live timer after each model phase begins. */
+  private _registerThinkingTicker(): void {
+    if (this._unregisterTick) return;
+    // Register with FrameScheduler for live spinner + elapsed/model-idle timer.
     // Per-component scheduling: independent 200ms interval.
     const scheduler = FrameScheduler.getInstance();
     this._unregisterTick = scheduler.scheduleComponent('thinking-spinner', () => this._tick(), {
@@ -2275,13 +2283,6 @@ export class ConversationalRenderer extends BaseRenderer {
       label: 'thinking-spinner',
     });
     scheduler.setComponentPermanentDirty('thinking-spinner', true);
-
-    // Terminal resize — thinking overlay + streaming reflow (B6).
-    // Single path via OutputBuffer (debounced; width + height).
-    this._unregisterResize = OutputBuffer.getInstance().onResize((width: number, height: number) => {
-      this._handleTerminalResize(width, height);
-    });
-    this._syncFromStore();
   }
 
   /** Stop — unregister FrameScheduler, unsubscribe bg tasks, transition
@@ -2336,6 +2337,33 @@ export class ConversationalRenderer extends BaseRenderer {
       safeStdoutWrite('\n\x1b[?25h');
     }
     this.destroy();
+  }
+
+  /**
+   * Operator cancel — clear spinner/progress without painting a failure box.
+   * The host review card is responsible for the CANCELLED label.
+   */
+  cancelRun(): void {
+    if (this.outputBroken) return;
+    if (this._state === 'thinking') {
+      this._leaveThinking('end');
+    }
+    this._historyTranscript.abortTurn();
+    this._syncCellViewport();
+    if (this._chunkCoalescer) {
+      this._chunkCoalescer.flush();
+      this._chunkCoalescer.dispose();
+    }
+    if (this.isTTY) safeStdoutWrite('\r\x1b[K');
+    if (this._unregisterTick) {
+      this._unregisterTick();
+      this._unregisterTick = null;
+    }
+    FrameScheduler.getInstance().setComponentPermanentDirty('thinking-spinner', false);
+    if (this._twoRegion) {
+      this._twoRegion.teardown();
+    }
+    this.stop();
   }
 
   /** Error — clear thinking line, unregister tick, show error, stop. */

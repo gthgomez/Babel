@@ -133,7 +133,9 @@ const KNOWN_CAPABILITIES: Record<string, Partial<TerminalCapabilities>> = {
   winterm: {
     trueColor: true,
     syncUpdate: true,
-    scrollRegions: true,
+    // DECSTBM + ConPTY ignores CUP/SCO save-restore and wallpaper-smears
+    // the streaming region. Opt in with BABEL_SCROLL_REGIONS=1.
+    scrollRegions: false,
     kittyKbd: false,
     sixel: false,
     clipboard: true,
@@ -444,7 +446,14 @@ export function probeTerminalCapabilities(): TerminalCapabilities {
   if (isTmux && !tmuxPassthrough) {
     effectiveScrollRegions = false;
   }
-  // Allow explicit override for testing / force-disable
+  // Windows Terminal / VS Code-on-Windows share ConPTY. DECSTBM + absolute
+  // CUP + SCO save/restore (\x1b[s/\x1b[u]) leaves a two-column wallpaper
+  // of the live answer. Same default-off stance as DEC 2026. Opt in with
+  // BABEL_SCROLL_REGIONS=1.
+  if (isWinTerm || (isVSCode && process.platform === 'win32')) {
+    effectiveScrollRegions = false;
+  }
+  // Allow explicit override for testing / force-enable
   const scrollOverride = envOverride('BABEL_SCROLL_REGIONS');
   if (scrollOverride !== undefined) {
     effectiveScrollRegions = scrollOverride;
@@ -516,7 +525,7 @@ export function formatCapabilityReport(): string {
     `  True color:       ${caps.trueColor ? '✓ yes' : '✗ no'}`,
     `  Sync update:      ${caps.syncUpdate ? '✓ yes' : '✗ no'}`,
     `  DEC 2026 gated:   ${caps.dec2026Sync ? '✓ yes' : '✗ no'}${caps.isWindowsTerminal && !caps.dec2026Sync ? ' (Windows Terminal — set BABEL_WINTERM_SYNC=1 to enable)' : ''}`,
-    `  Scroll regions:   ${caps.scrollRegions ? '✓ yes' : '✗ no'}`,
+    `  Scroll regions:   ${caps.scrollRegions ? '✓ yes' : '✗ no'}${caps.isWindowsTerminal && !caps.scrollRegions ? ' (Windows Terminal — set BABEL_SCROLL_REGIONS=1 to enable)' : ''}`,
     `  Kitty keyboard:   ${caps.kittyKbd ? '✓ yes' : '✗ no'}`,
     `  Sixel graphics:   ${caps.sixel ? '✓ yes' : '✗ no'}`,
     `  OSC 52 clipboard: ${caps.clipboard ? '✓ yes' : '✗ no'}`,

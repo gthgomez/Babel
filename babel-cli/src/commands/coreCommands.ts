@@ -2891,6 +2891,8 @@ Examples:
     .description('Default: enter persistent interactive Babel session (REPL)')
     .option('-p, --project <name>', 'Default project for this session')
     .option('--mode <mode>', 'Default mode for this session', 'chat')
+    .option('--resume [sessionId]', 'Resume a prior session (latest if omitted)')
+    .option('--resume-picker', 'Show the session picker at startup (off by default)')
     .addHelpText(
       'after',
       `
@@ -2899,8 +2901,18 @@ Interactive slash command map:
   /mcp, /plugins, /plugin, /agents
 `,
     )
-    .action(async (options: { project?: string; mode?: string }) => {
+    .action(async (options: {
+      project?: string;
+      mode?: string;
+      resume?: string | boolean;
+      resumePicker?: boolean;
+    }) => {
       try {
+        if (options.resumePicker) process.env['BABEL_RESUME_PICKER'] = '1';
+        if (options.resume !== undefined) {
+          process.env['BABEL_RESUME_SESSION'] =
+            options.resume === true || options.resume === '' ? 'latest' : String(options.resume);
+        }
         await startInteractiveSession({
           ...(options.project !== undefined ? { project: options.project } : {}),
           mode: options.mode as never,
