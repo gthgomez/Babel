@@ -42,6 +42,7 @@ function createMockEngine(
       yield { type: 'done', answer: result.answer, usage: result.usage } as ChatEvent;
     },
     cancel: () => undefined,
+    abortTurn: () => undefined,
   } as unknown as ChatEngine;
 }
 

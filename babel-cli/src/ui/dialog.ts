@@ -302,7 +302,12 @@ export class DialogManager {
 
   private handleKey(event: KeyEvent): void {
     const top = this.stack[this.stack.length - 1];
-    if (top) top.handleKey(event);
+    if (!top) return;
+    if (event.ctrl && event.name === 'c') {
+      top.handleKey({ ...event, name: 'escape', ctrl: false, sequence: '\u001b' });
+      return;
+    }
+    top.handleKey(event);
   }
 
   renderTop(): void {

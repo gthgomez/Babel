@@ -19,6 +19,7 @@ import { PaneManager } from '../ui/paneManager.js';
 import { CommandPalette } from '../ui/palette.js';
 import { alert } from '../ui/dialog.js';
 import { SessionPicker } from '../ui/sessionPicker.js';
+import { preserveComposerAcrossResize } from '../ui/interruptHost.js';
 import { openEditor } from './openEditor.js';
 import {
   bootstrapReplSession,
@@ -178,6 +179,14 @@ export class BabelRepl {
       // isRunning alone is wrong here: during bootstrap/picker it is always false,
       // so Windows Terminal init resize events would inject the BABEL banner mid-picker.
       if (!this.isRunning && !SessionPicker.isActive()) {
+        const adapter = this.rl as unknown as {
+          getInputText?: () => string;
+          setInputText?: (text: string) => void;
+        };
+        preserveComposerAcrossResize(
+          () => adapter.getInputText?.() ?? '',
+          (text) => adapter.setInputText?.(text),
+        );
         this.printIdleHeader();
       }
     });

@@ -4,6 +4,12 @@ import { dim, muted } from '../../ui/theme.js';
 import { saveHistory } from '../../services/history.js';
 import { InputCoordinator } from '../../ui/inputCoordinator.js';
 import { dequeueComposerMessage, enqueueComposerMessage } from '../../ui/composerQueue.js';
+import {
+  handleInteractiveInterrupt,
+  registerInterruptHost,
+  unregisterInterruptHost,
+} from '../../ui/interruptHost.js';
+import { OutputBuffer } from '../../ui/outputBuffer.js';
 import { openEditor } from '../openEditor.js';
 import { handleCommand } from '../commands.js';
 import type { ReplContext } from '../context.js';
@@ -56,10 +62,66 @@ async function finishReplTurn(
   return release;
 }
 
+function getAdapterDraft(ctx: ReplContext): string {
+  const adapter = ctx.rl as unknown as {
+    getInputText?: () => string;
+    setInputText?: (text: string) => void;
+  };
+  return adapter.getInputText?.() ?? '';
+}
+
+function setAdapterDraft(ctx: ReplContext, text: string): void {
+  const adapter = ctx.rl as unknown as {
+    setInputText?: (text: string) => void;
+  };
+  adapter.setInputText?.(text);
+}
+
 export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise<void> {
   printIdleHeader(ctx);
   const coordinator = InputCoordinator.getInstance();
   let release: (() => void) | null = await coordinator.acquire('repl');
+
+  registerInterruptHost(
+    {
+      cancelTurn: () => {
+        ctx.chatEngine?.abortTurn();
+      },
+      clearComposer: () => {
+        setAdapterDraft(ctx, '');
+        ctx.rl.setPrompt(dim('› '));
+      },
+      cancelPaste: () => {
+        ctx.inPaste = false;
+        ctx.pasteBuffer = [];
+        ctx.rl.setPrompt(dim('› '));
+        OutputBuffer.getInstance().write(muted('\n  Paste cancelled.\n'));
+      },
+      declineOverlay: () => {
+        /* overlay components close themselves; restore draft if any */
+      },
+      restorePrompt: () => {
+        try {
+          ctx.rl.prompt();
+        } catch {
+          /* ignore */
+        }
+      },
+      hintExit: (message) => {
+        OutputBuffer.getInstance().write(muted(`\n  ${message}\n`));
+      },
+      requestExit: () => {
+        unregisterInterruptHost();
+        ctx.exit();
+      },
+    },
+    () => ({
+      composerEmpty: getAdapterDraft(ctx).trim() === '',
+      inPaste: ctx.inPaste,
+      overlayActive: false,
+    }),
+  );
+
   ctx.rl.prompt();
 
   const consumeRelease = (): void => {
@@ -154,14 +216,9 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
   });
 
   ctx.rl.on('SIGINT', () => {
-    if (ctx.inPaste) {
-      ctx.inPaste = false;
-      ctx.pasteBuffer = [];
-      ctx.rl.setPrompt(dim('› '));
-      console.log(muted('\n  Paste cancelled.'));
-      ctx.rl.prompt();
-    } else {
-      ctx.exit();
-    }
+    handleInteractiveInterrupt({
+      composerEmpty: getAdapterDraft(ctx).trim() === '',
+      inPaste: ctx.inPaste,
+    });
   });
 }

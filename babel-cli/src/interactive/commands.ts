@@ -66,6 +66,7 @@ import { handlePermissions, handleSettings } from './commands/permissions.js';
 import { handleTheme } from './commands/theme.js';
 import { handleWorkflow } from './commands/workflow.js';
 import { handleResume } from './commands/resume.js';
+import { handleCancelTurn, handleDiffReview } from './commands/review.js';
 import { handleFork, handleRewind } from './commands/threadBranch.js';
 import { CommandPalette } from '../ui/palette.js';
 import { KeybindingRemapWizard } from '../ui/keybindingRemap.js';
@@ -197,6 +198,13 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
       break;
     case 'git':
       await handleGit(ctx, args);
+      break;
+    case 'diff':
+    case 'd':
+      await handleDiffReview(ctx);
+      break;
+    case 'cancel':
+      handleCancelTurn(ctx);
       break;
     case 'ship':
       handleShip(ctx, args);

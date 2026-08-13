@@ -10,10 +10,9 @@ import { ChatEngine, type ChatEngineOptions } from '../../agent/chatEngine.js';
 import { ConversationalRenderer } from '../../ui/waterfall.js';
 import { globalCostTracker } from '../../services/costTracker.js';
 
-import { error, muted, success, warning } from '../../ui/theme.js';
+import { error, muted } from '../../ui/theme.js';
 import { updateConversationMemory } from '../turns.js';
 import { alert } from '../../ui/dialog.js';
-import { dim } from '../../ui/theme.js';
 import { resolveChatEngineLimits } from '../../config/chatEngineLimits.js';
 import {
   describeInteractiveCodingProfile,
@@ -38,10 +37,10 @@ import {
   classifyImplementorTerminal,
   detectEnvBlockedFromText,
 } from '../../agent/implementorPolicy.js';
-import {
-  buildInteractiveCard,
-} from '../../agent/failureCard.js';
 import { formatRoutingStatusLabel } from '../../agent/turnRoutingReceipt.js';
+import { notifyRunEnded, notifyRunStarted, takeStreamingDraft } from '../../ui/interruptHost.js';
+import { presentChatReview } from '../../ui/reviewCard.js';
+import { rememberReviewDiff } from '../../ui/diffReview.js';
 import { isOperatorAbortError } from '../../agent/operatorAbort.js';
 
 /**
@@ -88,6 +87,7 @@ export async function executeChatTask(
   deps?: ExecuteChatTaskDeps,
 ): Promise<void> {
   ctx.isRunning = true;
+  notifyRunStarted();
   // Slice 2: do not re-activate PromptInput during the turn. A live composer
   // shares stdin with ConversationalRenderer and turns one Ctrl+C into
   // cancel + process-exit on ConPTY (raw 0x03 plus SIGINT).
@@ -165,7 +165,7 @@ export async function executeChatTask(
       convRenderer,
 
       ...(preflightContext ? { preflightContext } : {}),
-      onCancel: () => ctx.chatEngine!.cancel(),
+      onCancel: () => ctx.chatEngine!.abortTurn(),
     });
 
     // U1.3: Surface last routing receipt label on status bar (model tier + phase)
@@ -179,46 +179,65 @@ export async function executeChatTask(
     // Collect changed files from the tool log for the summary display.
     const changedFiles = collectChangedFiles(result);
 
+    const postRunCost = globalCostTracker.getSessionSummary().totalCostUSD;
+    const perRunCost = Math.max(0, postRunCost - preRunCost);
+    const o = result.outcome;
+    const verification = result.verifierReceipt
+      ? {
+          ran: true,
+          passed: result.verifierReceipt.exit_code === 0,
+          command: result.verifierReceipt.command,
+          exitCode: result.verifierReceipt.exit_code,
+        }
+      : { ran: false };
+
+    const review = presentChatReview({
+      outcome: o,
+      status: result.status,
+      changedFiles,
+      verification,
+      summary: (result.answer ?? '').slice(0, 240),
+      costUsd: perRunCost,
+      tokens: result.usage?.totalTokens,
+      mutated: changedFiles.length > 0,
+    });
+
     if (convRenderer) {
       scanSessionCheckpoints(convRenderer);
 
-      const postRunCost = globalCostTracker.getSessionSummary().totalCostUSD;
-      const o = result.outcome;
-      // P0-D B3: TerminalOutcome is authoritative for pass vs fail TUI summary.
-      // Only VERIFIED_COMPLETE / UNVERIFIED_PATCH (or legacy completed without outcome)
-      // render as pass — never blocked/cancelled/budget/agent failure.
-      const isPass =
-        o === 'VERIFIED_COMPLETE' ||
-        o === 'UNVERIFIED_PATCH' ||
-        (!o && result.status === 'completed' && !result.budgetExceeded);
-      if (isPass) {
+      if (review.kind === 'VERIFIED_COMPLETE') {
         convRenderer.onSummary({
           status: 'pass',
           costUSD: postRunCost,
-          perRunCost: Math.max(0, postRunCost - preRunCost),
+          perRunCost,
           changedFiles,
         });
         convRenderer.stop();
-        const threadId = ctx.chatEngine?.getEngineRunId();
-        if (threadId) {
-          hydrateResumedThreadToScreen(ctx, threadId);
-        }
-      } else if (o === 'BLOCKED_EXTERNAL' || o === 'BLOCKED_POLICY' || (!o && result.status === 'blocked')) {
-        convRenderer.fail(new Error(result.answer || 'Task blocked'));
-      } else if (o === 'CANCELLED' || (!o && result.status === 'cancelled')) {
-        convRenderer.fail(new Error('Task cancelled'));
-      } else if (o === 'BUDGET_EXHAUSTED' || result.budgetExceeded) {
-        convRenderer.fail(new Error(result.answer || 'Budget exhausted'));
-      } else if (o === 'INFRA_FAILURE') {
-        convRenderer.fail(new Error(result.answer || 'Infrastructure error'));
+      } else if (review.kind === 'CANCELLED') {
+        convRenderer.cancelRun();
+      } else if (review.kind === 'COMPLETE_UNVERIFIED') {
+        convRenderer.onSummary({
+          status: 'unverified',
+          costUSD: postRunCost,
+          perRunCost,
+          changedFiles,
+        });
+        convRenderer.stop();
       } else {
-        convRenderer.fail(new Error(result.answer || 'Chat task failed'));
+        convRenderer.fail(new Error(result.answer || review.title));
+      }
+      const threadId = ctx.chatEngine?.getEngineRunId();
+      if (threadId && review.kind === 'VERIFIED_COMPLETE') {
+        hydrateResumedThreadToScreen(ctx, threadId);
       }
     } else if (result.outcome === 'AGENT_FAILURE' || (!result.outcome && result.status === 'failed')) {
       console.error(`\n  ${error('✖')} ${result.answer}\n`);
     } else if (result.answer) {
       console.log(`\n${result.answer}\n`);
     }
+
+    console.log(`\n${review.body}\n`);
+    rememberReviewDiff({ files: changedFiles, draft: '', cwd: target.targetRoot });
 
     ctx.lastResolvedTask = null;
     ctx.lastAssistantAnswer = result.answer;
@@ -288,81 +307,6 @@ export async function executeChatTask(
       ctx.state.lastRunUserStatus = result.status === 'completed' ? 'complete' : 'failed';
     }
 
-    // U1.1: Surface tool timeline + interactive card in-session.
-    // Operators see last-N tools without opening harness JSON.
-    const toolCalls = result.toolCalls ?? [];
-    if (toolCalls.length > 0) {
-      const isFailOrBlocked =
-        result.outcome === 'AGENT_FAILURE' ||
-        result.outcome === 'BLOCKED_EXTERNAL' ||
-        result.outcome === 'BLOCKED_POLICY' ||
-        result.outcome === 'CANCELLED' ||
-        result.outcome === 'BUDGET_EXHAUSTED' ||
-        result.outcome === 'INFRA_FAILURE' ||
-        result.status === 'failed' ||
-        result.status === 'blocked' ||
-        result.status === 'cancelled';
-
-      if (isFailOrBlocked) {
-        const postRunCost = globalCostTracker.getSessionSummary().totalCostUSD;
-        const perRunCost = Math.max(0, postRunCost - preRunCost);
-        const statusLabel =
-          result.status === 'blocked' || result.outcome === 'BLOCKED_EXTERNAL' || result.outcome === 'BLOCKED_POLICY'
-            ? 'BLOCKED'
-            : result.status === 'cancelled' || result.outcome === 'CANCELLED'
-              ? 'CANCELLED'
-              : result.outcome === 'BUDGET_EXHAUSTED'
-                ? 'BUDGET_EXHAUSTED'
-                : 'FAILED';
-        const cardBody = buildInteractiveCard({
-          status: statusLabel,
-          costUsd: perRunCost,
-          lastTools: toolCalls,
-          recommendedAction: statusLabel === 'BLOCKED'
-            ? 'Review blocked report or adjust constraints.'
-            : statusLabel === 'FAILED'
-              ? 'Inspect tool errors above; re-run with clarified intent or lower scope.'
-              : undefined,
-        });
-        console.log(muted(`\n${cardBody}`));
-      } else {
-        // Success: short last-tools line when tools ran
-        const lastTool = toolCalls[toolCalls.length - 1];
-        if (lastTool) {
-          const shortTarget =
-            lastTool.target.length > 40
-              ? lastTool.target.slice(0, 37) + '...'
-              : lastTool.target;
-          console.log(
-            muted(
-              `  ${toolCalls.length} tool${toolCalls.length !== 1 ? 's' : ''} run (last: ${lastTool.tool} ${shortTarget})`,
-            ),
-          );
-        }
-      }
-    }
-
-    // Surface verification status to the user when present.
-    if (result.verifierReceipt) {
-      const vr = result.verifierReceipt;
-      if (vr.exit_code === 0) {
-        console.log(`${success('✓')} ${muted('Verified')} — ${vr.command} (exit 0)`);
-      } else {
-        console.log(`${warning('⚠')} ${muted('Verification failed')} — ${vr.command} (exit ${vr.exit_code})`);
-      }
-    } else if (result.outcome === 'VERIFIED_COMPLETE' || result.outcome === 'UNVERIFIED_PATCH' || result.status === 'completed') {
-      console.log(`${error('✗')} ${muted('No verification run')}`);
-    }
-
-    // Surface a compact diff summary when files were changed.
-    if (changedFiles.length > 0) {
-      const fileList = changedFiles.slice(0, 10).map((f) => `  ${dim('±')} ${f}`).join('\n');
-      const tail = changedFiles.length > 10
-        ? `\n  ${dim(`… and ${changedFiles.length - 10} more`)}`
-        : '';
-      console.log(`${dim('── Changes')}${tail}\n${fileList}`);
-    }
-
     const verificationData = result.verifierReceipt
       ? {
           status: 'completed' as const,
@@ -404,8 +348,24 @@ export async function executeChatTask(
         : 'not_run',
       next: ctx.lastAssistantNext,
     });
+    // updateConversationMemory remaps TerminalOutcome onto legacy AskAnswer
+    // statuses (CANCELLED → NEEDS_MORE_CONTEXT). Restore the operator-facing
+    // status so cancel cannot masquerade as a generic failure.
+    if (lo === 'CANCELLED') ctx.lastAssistantStatus = 'CANCELLED';
+    else if (review.kind === 'COMPLETE_UNVERIFIED') ctx.lastAssistantStatus = 'ANSWER_READY';
+    else if (review.kind === 'VERIFICATION_FAILED') ctx.lastAssistantStatus = 'ANSWER_READY';
   } catch (err: any) {
     if (isOperatorAbortError(err)) {
+      const review = presentChatReview({
+        outcome: 'CANCELLED',
+        status: 'cancelled',
+        verification: { ran: false },
+        summary: 'Cancelled',
+      });
+      if (convRenderer) {
+        convRenderer.cancelRun();
+      }
+      console.log(`\n${review.body}\n`);
       ctx.state.lastRunUserStatus = 'cancelled';
       ctx.lastAssistantStatus = 'CANCELLED';
       return;
@@ -457,5 +417,15 @@ export async function executeChatTask(
     }
   } finally {
     ctx.isRunning = false;
+    notifyRunEnded();
+    const typedDuringRun = takeStreamingDraft();
+    if (typedDuringRun) {
+      const adapter = ctx.rl as unknown as {
+        getInputText?: () => string;
+        setInputText?: (text: string) => void;
+      };
+      const existing = adapter.getInputText?.() ?? '';
+      adapter.setInputText?.(existing + typedDuringRun);
+    }
   }
 }

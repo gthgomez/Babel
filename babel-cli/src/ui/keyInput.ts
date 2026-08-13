@@ -396,7 +396,14 @@ function parseEscapeSequence(data: Buffer): KeyEvent | null {
       const seq = '\x1bO' + String.fromCharCode(thirdByte);
       return { name: mapped, ctrl: false, meta: false, shift: false, sequence: seq };
     }
-    return null; // Unrecognized SS3
+    // Complete but unknown SS3 — consume so the buffer cannot stall.
+    return {
+      name: 'ignored',
+      ctrl: false,
+      meta: false,
+      shift: false,
+      sequence: '\x1bO' + String.fromCharCode(thirdByte),
+    };
   }
 
   // Double Escape (ESC ESC) -- treat first as bare Escape, second stays in buffer
@@ -520,8 +527,17 @@ function parseCSI(params: Buffer): KeyEvent | null {
     return parseKittyCsiU(paramPart.toString(), seq);
   }
 
-  // Unrecognized CSI sequence -- caller should consume and discard it
-  return null;
+  // DEC 1004 focus reports: CSI I / CSI O. Must be consumed — returning
+  // null here stalls the key buffer and every later keystroke is lost.
+  if (finalByte === 0x49 && paramPart.length === 0) {
+    return { name: 'focusin', ctrl: false, meta: false, shift: false, sequence: seq };
+  }
+  if (finalByte === 0x4f && paramPart.length === 0) {
+    return { name: 'focusout', ctrl: false, meta: false, shift: false, sequence: seq };
+  }
+
+  // Complete but unrecognized CSI (DA, DECRQM, etc.) — consume, do not stall.
+  return { name: 'ignored', ctrl: false, meta: false, shift: false, sequence: seq };
 }
 
 // ─── Lifecycle manager ───────────────────────────────────────────────────────

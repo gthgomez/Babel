@@ -522,6 +522,18 @@ describe('PromptInput', () => {
       assert.equal(cancelled, true);
     });
 
+    it('Ctrl+C on empty with onInterrupt stays active for double-tap host', () => {
+      let interrupted = false;
+      const input = createTestInput({
+        onInterrupt: () => {
+          interrupted = true;
+        },
+      });
+      input.handleKey(key('c', { ctrl: true }));
+      assert.equal(interrupted, true);
+      assert.equal(input.active, true);
+    });
+
     it('Ctrl+C on non-empty with onInterrupt fires interrupt', () => {
       let interrupted = false;
       const input = createTestInput({

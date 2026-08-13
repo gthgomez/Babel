@@ -18,6 +18,7 @@
 
 import { isA11yMode, sanitizeForA11y } from './a11y.js';
 import { probeTerminalCapabilities, terminalCapsCompat } from './terminalProbe.js';
+import { truncate, visibleLength } from './theme.js';
 
 // ── Error handling ──────────────────────────────────────────────────────────
 
@@ -315,9 +316,20 @@ export class OutputBuffer {
   /**
    * Clear from cursor to end of line, then write text at an absolute
    * position. Equivalent to "clear this line region and write".
+   *
+   * Text is clipped to the remaining columns so a long string cannot
+   * wrap onto the next row and collide with a later writeLine.
    */
   writeLine(row: number, col: number, text: string): void {
-    const seq = `${CURSOR_SAVE}${cursorPos(row, col)}${CLEAR_TO_EOL}${text}${CURSOR_RESTORE}`;
+    const columns = process.stdout.columns ?? 80;
+    const maxCols = Math.max(0, columns - Math.max(1, col) + 1);
+    const clipped =
+      maxCols <= 0
+        ? ''
+        : visibleLength(text) > maxCols
+          ? truncate(text, maxCols)
+          : text;
+    const seq = `${CURSOR_SAVE}${cursorPos(row, col)}${CLEAR_TO_EOL}${clipped}${CURSOR_RESTORE}`;
     if (this._inFrame) {
       this._frameBuffer.push(seq);
     } else {

@@ -406,6 +406,46 @@ test('BABEL_WINTERM_SYNC=1 enables dec2026Sync on Windows Terminal', { skip: pro
   );
 });
 
+test('Windows Terminal defaults scrollRegions to false', { skip: process.platform !== 'win32' }, () => {
+  resetTerminalProbe();
+  withEnv(
+    {
+      TERM_PROGRAM: 'winterm',
+      TERM: 'xterm-256color',
+      WT_SESSION: 'abc123',
+      TMUX: undefined,
+      BABEL_SCROLL_REGIONS: undefined,
+    },
+    () => {
+      const caps = probeTerminalCapabilities();
+      assert.equal(caps.isWindowsTerminal, true);
+      assert.equal(
+        caps.scrollRegions,
+        false,
+        'scrollRegions should default to false on Windows Terminal ConPTY',
+      );
+    },
+  );
+});
+
+test('BABEL_SCROLL_REGIONS=1 enables scrollRegions on Windows Terminal', { skip: process.platform !== 'win32' }, () => {
+  resetTerminalProbe();
+  withEnv(
+    {
+      TERM_PROGRAM: 'winterm',
+      TERM: 'xterm-256color',
+      WT_SESSION: 'abc123',
+      TMUX: undefined,
+      BABEL_SCROLL_REGIONS: '1',
+    },
+    () => {
+      const caps = probeTerminalCapabilities();
+      assert.equal(caps.isWindowsTerminal, true);
+      assert.equal(caps.scrollRegions, true, 'BABEL_SCROLL_REGIONS=1 must opt in');
+    },
+  );
+});
+
 test('BABEL_WINTERM_SYNC=0 overrides stays false on Windows Terminal', { skip: process.platform !== 'win32' }, () => {
   resetTerminalProbe();
   withEnv(

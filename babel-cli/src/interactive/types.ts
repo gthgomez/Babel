@@ -154,6 +154,8 @@ export const INTERACTIVE_COMMAND_GROUPS = [
     commands: [
       ['/git status', 'Show working tree status'],
       ['/git diff', 'Show unstaged changes'],
+      ['/diff', 'Open the last-task diff and restore the composer'],
+      ['/cancel', 'Cancel the in-flight chat turn'],
       ['/git log', 'Show recent commit history'],
       ['/ship', 'Implementor ship dry-run (secret scan + evidence PR body); /ship apply'],
       ['/evidence [open|export]', 'Open or export last-run implementor evidence'],
