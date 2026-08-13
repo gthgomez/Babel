@@ -42,6 +42,7 @@ import {
   buildInteractiveCard,
 } from '../../agent/failureCard.js';
 import { formatRoutingStatusLabel } from '../../agent/turnRoutingReceipt.js';
+import { isOperatorAbortError } from '../../agent/operatorAbort.js';
 
 /**
  * Extract changed file paths from a ChatResult's tool-call log.
@@ -406,6 +407,11 @@ export async function executeChatTask(
       next: ctx.lastAssistantNext,
     });
   } catch (err: any) {
+    if (isOperatorAbortError(err)) {
+      ctx.state.lastRunUserStatus = 'cancelled';
+      ctx.lastAssistantStatus = 'CANCELLED';
+      return;
+    }
     const message = err?.message ?? String(err);
     console.error(`\n  ${error('✖')} ${message}\n`);
     ctx.state.lastRunUserStatus = 'failed';

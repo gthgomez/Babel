@@ -27,7 +27,7 @@ export function exitRepl(): void {
 
 export async function bootstrapReplSession(
   ctx: ReplContext,
-  loadSessionState: () => SessionState | null,
+  _loadSessionState: () => SessionState | null,
 ): Promise<void> {
   // Marks interactive TUI so sandbox notices route through OutputBuffer (not stderr).
   process.env['BABEL_INTERACTIVE'] = '1';
@@ -36,14 +36,9 @@ export async function bootstrapReplSession(
   warmReplRuntime();
   startBackgroundIndexing();
 
-  const saved = loadSessionState();
-  if (saved?.costTotals) {
-    try {
-      globalCostTracker.restoreSessionCost(saved.costTotals);
-    } catch {
-      /* non-critical */
-    }
-  }
+  // Fresh interactive process: never inherit ~/.babel/session.json cost.
+  // Conversation resume is explicit (/resume); do not reload last process totals.
+  globalCostTracker.resetSession();
 
   if (!ctx.projectSettingsApplied) {
     const currentTarget = ctx.resolveCurrentTarget();

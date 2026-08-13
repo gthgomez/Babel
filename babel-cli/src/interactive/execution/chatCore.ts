@@ -20,6 +20,7 @@ import type { SessionUsageSummary } from '../../services/costTracker.js';
 import type { BlockedReport } from '../../schemas/agentContracts.js';
 import { ConversationalRenderer } from '../../ui/waterfall.js';
 import { globalCostTracker } from '../../services/costTracker.js';
+import { isOperatorAbortError } from '../../agent/operatorAbort.js';
 import { BABEL_RUNS_DIR } from '../../cli/constants.js';
 import { getProtocolClient } from '../../protocol/client/index.js';
 import {
@@ -256,6 +257,15 @@ export async function consumeChatStream(
       }
     }
   } catch (err: unknown) {
+    if (isOperatorAbortError(err)) {
+      return {
+        status: 'cancelled',
+        outcome: 'CANCELLED',
+        answer: 'Cancelled',
+        usage: globalCostTracker.getSessionSummary(),
+        conversation: [],
+      };
+    }
     return {
       status: 'failed',
       outcome: 'AGENT_FAILURE',

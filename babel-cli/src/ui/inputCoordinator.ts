@@ -582,6 +582,11 @@ export class InputCoordinator {
   }
 
   public release(owner: Owner): void {
+    // Idempotent when already unlocked — overlapping readline 'line' events
+    // can invoke the same release token twice (daily-driver /cancel + next task).
+    if (!this.locked && this.currentOwner === null) {
+      return;
+    }
     if (this.currentOwner !== owner) {
       throw new Error(
         `InputCoordinator: Cannot release lock owned by '${this.currentOwner}' from owner '${owner}'`,
