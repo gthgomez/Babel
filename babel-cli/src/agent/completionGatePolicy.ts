@@ -1084,7 +1084,7 @@ export function evaluateCompletionGateForEngine(opts: {
   }
   if (hasWrite && requiredVerifierCommands.length > 0 && policy === 'strict') {
     const rawReceipts =
-      opts.executedVerifierLedger && opts.executedVerifierLedger.length > 0
+      opts.executedVerifierLedger !== undefined && opts.executedVerifierLedger !== null
         ? opts.executedVerifierLedger
         : opts.lastVerifierReceipt
           ? [opts.lastVerifierReceipt]
@@ -1144,14 +1144,8 @@ export function evaluateCompletionGateForEngine(opts: {
       });
     });
     // Live workspace revision must come from the workspace, not the receipt self-hash.
-    // When omitted, only non-revision denials apply (empty plan, non-authoritative, etc.).
-    const liveRevision =
-      opts.currentWorkspaceRevisionHash ??
-      (receipts.length > 0 &&
-      receipts.at(-1)?.workspace_revision &&
-      'compositeTreeHash' in receipts.at(-1)!.workspace_revision
-        ? (receipts.at(-1)!.workspace_revision as { compositeTreeHash: string }).compositeTreeHash
-        : '');
+    // If not provided, missing_revision will be enforced by the verifier kernel.
+    const liveRevision = opts.currentWorkspaceRevisionHash ?? '';
     const adversarialReceipts = rawReceipts.map((r) => {
       const entry: {
         exit_code: number;

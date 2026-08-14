@@ -34,7 +34,7 @@ function Get-TrackedScanInventory {
       continue
     }
     $bytes = [IO.File]::ReadAllBytes($item.FullName)
-    $isBinary = $bytes -contains 0
+    $isBinary = [Array]::IndexOf($bytes, [byte]0) -ge 0
     $text = $null
     $decodeReason = ''
     if (-not $isBinary) {

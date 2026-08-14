@@ -865,7 +865,7 @@ export class ChatEngine {
       .filter((command) => command.trim().length > 0);
     const verifierInput = this.buildVerifierInput();
     // H5: live workspace revision at gate time (not the receipt's own bound hash).
-    let currentWorkspaceRevisionHash: string | undefined;
+    let currentWorkspaceRevisionHash: string | undefined = (this as any).currentWorkspaceRevisionHash;
     try {
       const paths = mutationPathsFromSessionEvents(this.parity.sessionEvents.events);
       if (paths.length > 0) {
