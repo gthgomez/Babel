@@ -152,14 +152,39 @@ foreach ($rel in $sourceMap) {
   if (-not (Test-RepoFile $rel)) { Add-Fail "Source map path missing: $rel" }
 }
 
-# ── Conformance test registration ───────────────────────────────────────────
+# ── Protect-main acceptance registration ────────────────────────────────────
+# File presence alone is not enforcement: the named conformance suite must be
+# listed in test:harness-acceptance, and both required CI jobs must run that
+# script plus this checker. A hollow file with zero test() calls must fail.
+$minConformanceTests = 23
+$conformanceRel = 'babel-cli/src/executor/architectureConformance.test.ts'
+if (Test-RepoFile $conformanceRel) {
+  $conformanceText = Get-RepoText $conformanceRel
+  $testCallCount = [regex]::Matches($conformanceText, '(?m)^test\(').Count
+  if ($testCallCount -lt $minConformanceTests) {
+    Add-Fail "$conformanceRel has $testCallCount top-level test( calls; minimum is $minConformanceTests"
+  }
+}
+
 if (Test-RepoFile 'babel-cli/package.json') {
   $pkg = Get-RepoText 'babel-cli/package.json'
-  if ($pkg -notmatch 'src/executor/\*\.test\.ts' -and $pkg -notmatch 'architectureConformance') {
-    # test:unit must include executor tests for conformance to run in npm test
-    if ($pkg -notmatch 'src/executor') {
-      Add-Fail 'babel-cli/package.json test:unit does not include src/executor tests'
-    }
+  if ($pkg -notmatch '"test:harness-acceptance"') {
+    Add-Fail 'babel-cli/package.json missing test:harness-acceptance script'
+  } elseif ($pkg -notmatch 'architectureConformance\.test\.ts') {
+    Add-Fail 'test:harness-acceptance must explicitly list architectureConformance.test.ts'
+  }
+}
+
+$workflowRel = '.github/workflows/typecheck.yml'
+if (Test-RepoFile $workflowRel) {
+  $wf = Get-RepoText $workflowRel
+  $acceptanceHits = [regex]::Matches($wf, 'test:harness-acceptance').Count
+  if ($acceptanceHits -lt 2) {
+    Add-Fail "$workflowRel must run test:harness-acceptance in both linux-validation and windows-portability"
+  }
+  $checkerHits = [regex]::Matches($wf, 'check-harness-architecture\.ps1').Count
+  if ($checkerHits -lt 2) {
+    Add-Fail "$workflowRel must run check-harness-architecture.ps1 in both linux-validation and windows-portability"
   }
 }
 
