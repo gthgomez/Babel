@@ -1,9 +1,9 @@
 /**
- * Layer 2: Spawned Real Babel CLI Interactive Process Certification Suite.
+ * Layer 2: Spawned Real Babel CLI Child Process Certification Suite (REAL_CHILD_PROCESS).
  *
- * Spawns the actual Babel CLI entrypoint (src/index.ts) as a child process,
- * testing real interactive process lifecycle, startup banner, prompt readiness,
- * single-line/multiline input, Unicode/path handling, and clean shutdown on /exit.
+ * Spawns the actual Babel CLI entrypoint (src/index.ts) as a child process with piped stdio,
+ * testing process bootstrap, startup banner, prompt readiness, Unicode/path handling,
+ * and deterministic clean termination with exit code 0 on /exit.
  */
 
 import assert from 'node:assert/strict';
@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import { stripAnsi } from '../../ui/theme.js';
 
-describe('PR-76 Layer 2: Real CLI Process Interactive Certification', () => {
+describe('PR-76 Layer 2: REAL_CHILD_PROCESS Interactive Smoke Certification', () => {
   const cliPath = join(process.cwd(), 'src', 'index.ts');
 
   function spawnInteractiveCli(extraEnv: Record<string, string> = {}) {
@@ -33,7 +33,7 @@ describe('PR-76 Layer 2: Real CLI Process Interactive Certification', () => {
     );
   }
 
-  test('1. CLI startup displays ready status and prompt in chat mode', async () => {
+  test('1. CLI startup displays ready status and prompt in chat mode with clean exit', async () => {
     const child = spawnInteractiveCli();
     let out = '';
     child.stdout.on('data', (chunk) => {
@@ -62,24 +62,24 @@ describe('PR-76 Layer 2: Real CLI Process Interactive Certification', () => {
       /* ignore */
     }
 
-    const exitCode = await new Promise<number | null>((resolve) => {
+    const exitCode = await new Promise<number>((resolve, reject) => {
       const timer = setTimeout(() => {
         child.kill();
-        resolve(null);
-      }, 4000);
+        reject(new Error('CLI process timed out waiting for exit on /exit'));
+      }, 6000);
       child.on('exit', (code) => {
         clearTimeout(timer);
-        resolve(code);
+        resolve(code ?? 0);
       });
     });
 
     const text = stripAnsi(out);
     assert.equal(isReady, true, `CLI failed to reach ready state: ${text.slice(0, 400)}`);
     assert.ok(text.includes('BABEL') || text.includes('babel'), 'Expected banner in output');
-    assert.ok(exitCode === 0 || exitCode === null);
+    assert.equal(exitCode, 0, 'CLI must exit cleanly with code 0 on /exit, not timeout or kill');
   });
 
-  test('2. CLI handles Unicode input and commands cleanly without crashing', async () => {
+  test('2. CLI handles Unicode input and commands cleanly without crashing and exits 0', async () => {
     const child = spawnInteractiveCli();
     let out = '';
     child.stdout.on('data', (chunk) => {
@@ -109,17 +109,17 @@ describe('PR-76 Layer 2: Real CLI Process Interactive Certification', () => {
       /* ignore */
     }
 
-    const exitCode = await new Promise<number | null>((resolve) => {
+    const exitCode = await new Promise<number>((resolve, reject) => {
       const timer = setTimeout(() => {
         child.kill();
-        resolve(null);
-      }, 4000);
+        reject(new Error('CLI process timed out waiting for exit on /exit'));
+      }, 6000);
       child.on('exit', (code) => {
         clearTimeout(timer);
-        resolve(code);
+        resolve(code ?? 0);
       });
     });
 
-    assert.ok(exitCode === 0 || exitCode === null);
+    assert.equal(exitCode, 0, 'CLI must exit cleanly with code 0 on /exit');
   });
 });

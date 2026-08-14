@@ -344,7 +344,7 @@ function setTestVerifierReceipt(engine: ChatEngine, command: string, exit_code =
   };
   (engine as any).lastVerifierReceipt = receipt;
   (engine as any).executedVerifierLedger = [receipt];
-  (engine as any).currentWorkspaceRevisionHash = 'sha256:test-tree';
+  engine.setTestWorkspaceRevisionHash('sha256:test-tree');
 }
 
 function pushToolLog(engine: ChatEngine, entry: Record<string, unknown>) {
