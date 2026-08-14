@@ -968,15 +968,20 @@ export class ChatEngine {
     taskIntent: TaskIntent,
     opts?: { terminal?: boolean },
   ): Promise<'allow' | 'reject' | 'block'> {
-    const state = this.criticState(callbacks.onThought);
-    const decision = await runAsymmetricDiffCriticImpl(
-      state,
-      answer,
-      taskIntent,
-      opts,
-    );
-    this.applyCriticState(state);
-    return decision;
+    const criticSpan = this.currentTurnTelemetry?.startCriticSpan();
+    try {
+      const state = this.criticState(callbacks.onThought);
+      const decision = await runAsymmetricDiffCriticImpl(
+        state,
+        answer,
+        taskIntent,
+        opts,
+      );
+      this.applyCriticState(state);
+      return decision;
+    } finally {
+      criticSpan?.end();
+    }
   }
 
   private buildCriticBlockedReport(verdict: DiffCriticVerdict): BlockedReport {
