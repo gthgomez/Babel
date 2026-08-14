@@ -311,8 +311,38 @@ describe('chatZeroWritePolicy', () => {
     });
     // Must NOT fire force_mutate because it is a read-only query
     assert.equal(result.forceMutateMessage, null);
-    // Must fire investigate tool budget soft nudge at 4 tools
+    // Must fire read-only investigate tool budget soft nudge at 4 tools
     assert.ok(result.investigateBudgetMessage);
+    assert.ok(result.investigateBudgetMessage?.includes('read-only budget'));
     assert.ok(result.investigateBudgetMessage?.includes('4 tools'));
+    assert.ok(!result.investigateBudgetMessage?.includes('str_replace'));
+  });
+
+  test('quick_inspect at hard cap terminates with read-only answer synthesis and never requests mutation', () => {
+    const state = {
+      turnsWithoutWrite: 10,
+      consecutiveReadOnlyTools: 8,
+      cumulativeExplorationTools: 8,
+      restrictToolsNextTurn: false,
+      consecutiveNonMutatingShells: 0,
+      toolsWithoutWrite: 8,
+      phase: 'investigate' as const,
+    };
+    const result = applyExploreFuses({
+      executeIntent: false,
+      taskClass: 'quick_inspect',
+      hasAnyWrites: false,
+      state,
+      pushUser: () => {},
+      deferMessagesToArbiter: true,
+      currentTurn: 2,
+    });
+    assert.ok(result.investigateHardCapTerminal);
+    assert.match(result.investigateHardCapTerminal!, /Inspection tool budget reached/i);
+    assert.match(result.investigateHardCapTerminal!, /synthesize and return your best-supported final answer/i);
+    // Must NEVER ask a read-only task to use mutation tools
+    assert.ok(!result.investigateHardCapTerminal?.includes('str_replace'));
+    assert.ok(!result.investigateHardCapTerminal?.includes('write_file'));
+    assert.ok(!result.investigateHardCapTerminal?.includes('file mutation'));
   });
 });

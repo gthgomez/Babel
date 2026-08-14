@@ -205,6 +205,7 @@ import { executeTool, renderGitDiff, type ToolContext } from '../localTools.js';
 import { createStallDetector, updateStallState, getStallInterventionMessage, isTextOnlyLoop, buildTextOnlyLoopIntervention, buildTextOnlyLoopBlockedMessage, TEXT_ONLY_FORCE_BLOCKED_THRESHOLD } from './stallDetector.js';
 import type { StallState, StallIntervention } from './stallDetector.js';
 import type { ProgressController, ProgressSignal } from './progressController.js';
+import { classifyShellCapability } from './progressController.js';
 import { classifyPhase, buildPhaseNudge, shouldNudge, type ChatPhase } from './chatPhaseNudge.js';
 import { isSuccessfulDirectMutation } from './mutationTools.js';
 import type { DiffCriticVerdict } from './diffCritic.js';
@@ -1458,6 +1459,8 @@ export class ChatEngine {
     submitOpts?: SubmitMessageOptions,
   ): AsyncGenerator<ChatEvent, void, undefined> {
     this._cancelled = false;
+    this.lastRequestPromptTokens = null;
+    this.lastRequestModelId = null;
     // W0.3: fresh TurnRuntime per user submission (isolate counters by default).
     const runtime = this.applyUserSubmission({
       userInput,
@@ -3799,27 +3802,23 @@ export class ChatEngine {
       }
 
       // Capability check: reject recursive shell enumeration if shell.recursive_enumeration is DEGRADED/UNAVAILABLE
-      if ((action.type === 'run_command' || action.type === 'test_run') && 'command' in action && typeof action.command === 'string') {
-        const cmdLower = action.command.toLowerCase();
-        const isRecursive =
-          cmdLower.includes('get-childitem') ||
-          cmdLower.includes('dir /s') ||
-          cmdLower.includes('findstr /s') ||
-          cmdLower.includes('ls -r') ||
-          cmdLower.includes('find .');
-        const capState = this.progressController.getCapabilityState('shell.recursive_enumeration');
-        if (isRecursive && (capState === 'DEGRADED' || capState === 'UNAVAILABLE')) {
-          const observation = `### ${tool} ${target}\nexit_code: 1\n\`\`\`\n[BABEL ADVISORY] Recursive shell command suppressed: shell.recursive_enumeration is DEGRADED due to repeated failures. Use the list_dir / directory_list tool instead for reliable filesystem inspection.\n\`\`\``;
-          this.toolCallLog.push({
-            tool,
-            target,
-            detail: 'degraded_suppressed',
-            index: meta.index,
-            exit_code: 1,
-            error: 'capability_degraded',
-          });
-          callbacks.onToolComplete?.(toolId, 'degraded_suppressed');
-          return { index: meta.index, observation };
+      if ('command' in action && typeof action.command === 'string') {
+        const classification = classifyShellCapability(action.type, action.command);
+        if (classification.isRecursiveEnum) {
+          const capState = this.progressController.getCapabilityState('shell.recursive_enumeration');
+          if (capState === 'DEGRADED' || capState === 'UNAVAILABLE') {
+            const observation = `### ${tool} ${target}\nexit_code: 1\n\`\`\`\n[BABEL ADVISORY] Recursive shell command suppressed: shell.recursive_enumeration is DEGRADED due to repeated failures. Use the list_dir / directory_list tool instead for reliable filesystem inspection.\n\`\`\``;
+            this.toolCallLog.push({
+              tool,
+              target,
+              detail: 'degraded_suppressed',
+              index: meta.index,
+              exit_code: 1,
+              error: 'capability_degraded',
+            });
+            callbacks.onToolComplete?.(toolId, 'degraded_suppressed');
+            return { index: meta.index, observation };
+          }
         }
       }
 
@@ -3961,14 +3960,9 @@ export class ChatEngine {
           }
         } else if (lastResult.exit_code === 0) {
           this.progressController.recordSuccess('tool.' + action.type);
-          const cmd = 'command' in action && typeof action.command === 'string' ? action.command.toLowerCase() : '';
-          if (
-            cmd.includes('get-childitem') ||
-            cmd.includes('dir /s') ||
-            cmd.includes('findstr /s') ||
-            cmd.includes('ls -r') ||
-            cmd.includes('find .')
-          ) {
+          const cmd = 'command' in action && typeof action.command === 'string' ? action.command : undefined;
+          const classification = classifyShellCapability(action.type, cmd);
+          if (classification.isRecursiveEnum) {
             this.progressController.recordSuccess('shell.recursive_enumeration');
           }
         }

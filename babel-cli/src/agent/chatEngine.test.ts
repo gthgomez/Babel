@@ -263,3 +263,33 @@ describe('ChatEngine active verifier ledger & invalidation', () => {
     assert.equal((engine as any).verifierReceiptCache.size, 0, 'verifierReceiptCache MUST be empty on restore');
   });
 });
+
+describe('ChatEngine recursive shell degradation & suppression loop', () => {
+  it('suppresses recursive shell commands and emits list_dir advisory after repeat failures', async () => {
+    const engine = new ChatEngine({
+      task: 'Find all files in repo',
+      projectRoot: '/tmp',
+    });
+
+    const action = {
+      type: 'run_command' as const,
+      command: 'Get-ChildItem -Path /non_existent_path_xyz_123 -Recurse',
+    };
+
+    const ctx = { agentId: 'test', runId: 'test', runDir: '/tmp', babelRoot: '/tmp' };
+
+    // Tool call 1: fails -> records failure -> SUSPECT
+    const res1 = await (engine as any).executeOneAction(action, ctx, {}, { index: 0, subAgentCounter: 0 });
+    assert.ok(res1.observation.includes('exit_code: 1') || res1.observation.includes('Cannot find path') || res1.observation.includes('non_existent'));
+
+    // Tool call 2: fails -> records failure -> DEGRADED
+    const res2 = await (engine as any).executeOneAction(action, ctx, {}, { index: 1, subAgentCounter: 0 });
+    assert.equal((engine as any).progressController.getCapabilityState('shell.recursive_enumeration'), 'DEGRADED');
+
+    // Tool call 3: equivalent recursive command -> pre-execution interception blocks executor!
+    const res3 = await (engine as any).executeOneAction(action, ctx, {}, { index: 2, subAgentCounter: 0 });
+    assert.ok(res3.observation.includes('[BABEL ADVISORY] Recursive shell command suppressed'));
+    assert.ok(res3.observation.includes('list_dir'));
+  });
+});
+

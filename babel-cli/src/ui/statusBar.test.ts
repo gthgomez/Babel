@@ -413,4 +413,45 @@ describe('Acceptance Tests T17–T20: Status Bar Refinements', () => {
     const lines = result.replace(/\n$/, '').split('\n');
     assert.equal(lines.length, 1);
   });
+
+  it('T21: Turn 1 provider usage followed by Turn 2 failure before provider request renders [ctx ?]', () => {
+    // Turn 1 completed with active provider telemetry
+    let turn1State = defaultState({
+      modelId: 'deepseek-v4-flash',
+      activeContext: { tokens: 166_588, modelId: 'deepseek-v4-flash', source: 'provider_prompt_tokens' },
+      totalTokens: 166_588,
+      width: 100,
+    });
+    let plain1 = stripAnsi(renderStatusBar(turn1State));
+    assert.ok(plain1.includes('17%'));
+
+    // Turn 2 started but fails before any provider invocation -> activeContext is cleared
+    let turn2State = defaultState({
+      modelId: 'deepseek-v4-flash',
+      activeContext: null,
+      activeContextTokens: undefined,
+      totalTokens: 166_588,
+      width: 100,
+    });
+    let plain2 = stripAnsi(renderStatusBar(turn2State));
+    assert.ok(plain2.includes('[ctx ?]'), `Expected [ctx ?] for turn 2 without provider request, got: ${plain2}`);
+    assert.ok(!plain2.includes('17%'));
+  });
+
+  it('T22: Context denominator resolves from activeContext.modelId when different from session model', () => {
+    // Session model is 1M deepseek-v4-flash, but invocation fell back to 200k claude-sonnet-4-6
+    const state = defaultState({
+      modelId: 'deepseek-v4-flash',
+      activeContext: {
+        tokens: 50_000,
+        modelId: 'claude-sonnet-4-6',
+        source: 'provider_prompt_tokens',
+      },
+      totalTokens: 50_000,
+      width: 100,
+    });
+    const plain = stripAnsi(renderStatusBar(state));
+    // 50,000 / 200,000 (claude-sonnet-4-6) = 25% (NOT 50,000 / 1,000,000 = 5%)
+    assert.ok(plain.includes('25%'), `Expected 25% calculated against activeContext.modelId limit, got: ${plain}`);
+  });
 });

@@ -223,7 +223,16 @@ export interface ExploreFuseResult {
 export function buildInvestigateHardCapTerminalMessage(
   toolsWithoutWrite: number,
   hardCap: number,
+  isReadOnly = false,
 ): string {
+  if (isReadOnly) {
+    return [
+      `BLOCKED: ${toolsWithoutWrite} tools used for inspection query ` +
+        `(hard cap ${hardCap} for this task class).`,
+      'Inspection tool budget reached. Stop reading tools.',
+      'Please synthesize and return your best-supported final answer based on the evidence gathered so far, noting any limitations or discrepancies.',
+    ].join(' ');
+  }
   return [
     `BLOCKED: ${toolsWithoutWrite} tools without a successful file mutation ` +
       `(hard cap ${hardCap} for this task class).`,
@@ -435,6 +444,7 @@ export function applyExploreFuses(input: {
     budget: tune.investigateToolBudget,
     hasAnyWrites: input.hasAnyWrites,
     phase: s.phase,
+    isReadOnly: isReadOnlyClass,
   });
   if (invEval.fire && invEval.message && !s.investigateSoftNudgeDone) {
     investigateBudgetMessage = invEval.message;
@@ -462,6 +472,7 @@ export function applyExploreFuses(input: {
     investigateHardCapTerminal = buildInvestigateHardCapTerminalMessage(
       s.toolsWithoutWrite,
       hardCap,
+      isReadOnlyClass,
     );
     out.push('[Implementor: investigate hard cap — terminal]');
     input.onPolicyEvent?.({

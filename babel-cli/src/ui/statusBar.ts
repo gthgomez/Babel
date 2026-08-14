@@ -84,9 +84,10 @@ export function renderStatusBar(state: StatusBarState): string {
   let tokenBarStr = '';
   const activeTokens = state.activeContext ? state.activeContext.tokens : state.activeContextTokens;
   const hasActiveContext = activeTokens !== undefined && activeTokens !== null;
-  const showBar = state.showTokenBar !== false && state.modelId;
-  if (showBar) {
-    const limit = getContextLimit(state.modelId!);
+  const targetModelId = state.activeContext?.modelId ?? state.modelId;
+  const showBar = state.showTokenBar !== false && Boolean(targetModelId);
+  if (showBar && targetModelId) {
+    const limit = getContextLimit(targetModelId);
     const barWidth = Math.min(12, Math.floor(width / 8));
     const compactBar = renderCompactTokenBar(
       hasActiveContext ? activeTokens : 0,

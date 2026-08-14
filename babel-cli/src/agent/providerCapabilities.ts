@@ -36,6 +36,15 @@ export function computeContextBudget(input: ContextBudgetInput): ContextBudget {
   const maxOutputTokens = input.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
   const toolSchemaReserve = input.toolSchemaReserve ?? DEFAULT_TOOL_SCHEMA_RESERVE;
   const safetyMargin = input.safetyMargin ?? DEFAULT_SAFETY_MARGIN;
+  if (!input.contextWindow || input.contextWindow <= 0) {
+    return {
+      contextWindow: 0,
+      maxOutputTokens,
+      toolSchemaReserve,
+      safetyMargin,
+      contextBudget: 0,
+    };
+  }
   const raw =
     input.contextWindow - maxOutputTokens - toolSchemaReserve - safetyMargin;
   const contextBudget = Math.max(1_024, raw);
@@ -138,6 +147,9 @@ export function shouldCompactByTokens(
   modelId: string,
 ): boolean {
   const budget = contextBudgetForModel(modelId);
+  if (budget.contextWindow <= 0 || budget.contextBudget <= 0) {
+    return false;
+  }
   return estimatedRequestTokens >= budget.contextBudget;
 }
 

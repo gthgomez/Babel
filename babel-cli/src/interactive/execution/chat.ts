@@ -96,6 +96,8 @@ export async function executeChatTask(
   ctx.lastTargetRoot = target.targetRoot;
   ctx.lastWorkspaceRoot = target.workspaceRoot;
   ctx.state.lastRunTargetRoot = target.targetRoot;
+  ctx.activeContext = null;
+  ctx.lastTurnActiveContextTokens = null;
 
   const useConversational =
     process.stdout.isTTY && !ctx.verboseMode && !process.env['CI'] && !process.env['NO_COLOR'];

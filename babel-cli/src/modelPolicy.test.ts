@@ -423,3 +423,19 @@ test('canonical model capabilities resolve DeepSeek V4 Flash and Pro 1M context 
   assert.equal(getNormalizedModelCapabilities('completely-unknown-model-xyz'), null);
 });
 
+test('unknown context models like qwen3 have context budget 0 and do not compact prematurely at 1,024', async () => {
+  const { resolveProviderCapabilities, contextBudgetForModel, shouldCompactByTokens } =
+    await import('./agent/providerCapabilities.js');
+
+  const qwenCaps = resolveProviderCapabilities('qwen3');
+  assert.equal(qwenCaps.contextWindow, 0);
+
+  const budget = contextBudgetForModel('qwen3');
+  assert.equal(budget.contextWindow, 0);
+  assert.equal(budget.contextBudget, 0);
+
+  // An unknown model must not trigger premature token compaction at 1,024 tokens
+  assert.equal(shouldCompactByTokens(1_024, 'qwen3'), false);
+  assert.equal(shouldCompactByTokens(50_000, 'qwen3'), false);
+});
+

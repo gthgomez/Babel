@@ -197,6 +197,40 @@ describe("ProgressController", () => {
     assert.ok(f2.notice?.includes("list_dir") || f2.notice?.includes("filesystem"));
     assert.strictEqual(pc.getCapabilityState("shell.recursive_enumeration"), "DEGRADED");
   });
+
+  it("T13: classifyShellCapability differentiates recursive from non-recursive commands safely", async () => {
+    const { classifyShellCapability } = await import("./progressController.js");
+
+    // Non-recursive Get-ChildItem must NOT be classified as recursive enumeration
+    const nonRecGci = classifyShellCapability("run_command", "Get-ChildItem -Path ./src");
+    assert.strictEqual(nonRecGci.isRecursiveEnum, false);
+    assert.strictEqual(nonRecGci.capability, "shell.execution");
+
+    // Recursive Get-ChildItem with -Recurse must be classified as recursive enumeration
+    const recGci = classifyShellCapability("run_command", "Get-ChildItem -Path . -Recurse");
+    assert.strictEqual(recGci.isRecursiveEnum, true);
+    assert.strictEqual(recGci.capability, "shell.recursive_enumeration");
+
+    // POSIX ls -r (lowercase: reverse sort) must NOT be classified as recursive enumeration
+    const lsReverse = classifyShellCapability("run_command", "ls -r");
+    assert.strictEqual(lsReverse.isRecursiveEnum, false);
+    assert.strictEqual(lsReverse.capability, "shell.execution");
+
+    // POSIX ls -R (uppercase: recursive) must be classified as recursive enumeration
+    const lsRec = classifyShellCapability("run_command", "ls -lR ./src");
+    assert.strictEqual(lsRec.isRecursiveEnum, true);
+    assert.strictEqual(lsRec.capability, "shell.recursive_enumeration");
+
+    // Windows dir /s must be classified as recursive enumeration
+    const dirS = classifyShellCapability("run_command", "dir /s");
+    assert.strictEqual(dirS.isRecursiveEnum, true);
+    assert.strictEqual(dirS.capability, "shell.recursive_enumeration");
+
+    // Non-shell tool must not be shell
+    const nonShell = classifyShellCapability("read_file", "foo.txt");
+    assert.strictEqual(nonShell.isShellTool, false);
+    assert.strictEqual(nonShell.isRecursiveEnum, false);
+  });
 });
 
 describe("ConversationalRenderer - ProgressRecovery", () => {

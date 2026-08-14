@@ -49,6 +49,67 @@ export interface ProgressControllerSnapshot {
   capabilities?: Record<string, CapabilityHealth> | undefined;
 }
 
+export interface ShellCapabilityClassification {
+  isShellTool: boolean;
+  isRecursiveEnum: boolean;
+  capability: string;
+  preferredAlternative?: string;
+}
+
+export function classifyShellCapability(
+  tool: string,
+  commandSnippet?: string,
+): ShellCapabilityClassification {
+  const isShellTool =
+    tool === 'run_shell_command' ||
+    tool === 'run_command' ||
+    tool === 'test_run' ||
+    tool === 'shell_exec';
+
+  if (!isShellTool) {
+    return {
+      isShellTool: false,
+      isRecursiveEnum: false,
+      capability: 'tool.' + tool,
+    };
+  }
+
+  const cmd = (commandSnippet ?? '').trim();
+  let isRecursiveEnum = false;
+
+  // PowerShell / Windows: Get-ChildItem with -Recurse or -r
+  if (/\bGet-ChildItem\b/i.test(cmd) && /\s-(r|recurse)\b/i.test(cmd)) {
+    isRecursiveEnum = true;
+  } else if (/\bdir\b/i.test(cmd) && /\s\/s\b/i.test(cmd)) {
+    // Windows: dir /s
+    isRecursiveEnum = true;
+  } else if (/\bfindstr\b/i.test(cmd) && /\s\/s\b/i.test(cmd)) {
+    // Windows: findstr /s
+    isRecursiveEnum = true;
+  } else if (/\bls\b/.test(cmd) && /\s-[a-zA-Z]*R[a-zA-Z]*\b/.test(cmd)) {
+    // POSIX: ls -R (case sensitive uppercase R; ls -r is reverse sort, not recursive)
+    isRecursiveEnum = true;
+  } else if (/\bfind\s+(\.|\/|[a-zA-Z0-9_\-\.\/]+)/.test(cmd) && !/\bfindstr\b/i.test(cmd)) {
+    // POSIX: find . or find <path>
+    isRecursiveEnum = true;
+  }
+
+  if (isRecursiveEnum) {
+    return {
+      isShellTool: true,
+      isRecursiveEnum: true,
+      capability: 'shell.recursive_enumeration',
+      preferredAlternative: 'list_dir / directory_list tool',
+    };
+  }
+
+  return {
+    isShellTool: true,
+    isRecursiveEnum: false,
+    capability: 'shell.execution',
+  };
+}
+
 export class ProgressController {
   private level: ProgressInterventionLevel = 'none';
   private totalScore: number = 0;
@@ -88,29 +149,9 @@ export class ProgressController {
     state: CapabilityHealthState;
     notice?: string | undefined;
   } {
-    let capability = 'tool.' + sig.tool;
-    let preferredAlternative: string | undefined;
-
-    const cmd = (sig.commandSnippet ?? '').toLowerCase();
-    const isRecursiveEnum =
-      cmd.includes('get-childitem') ||
-      cmd.includes('dir /s') ||
-      cmd.includes('findstr /s') ||
-      cmd.includes('ls -r') ||
-      cmd.includes('find .');
-
-    const isShellTool =
-      sig.tool === 'run_shell_command' ||
-      sig.tool === 'run_command' ||
-      sig.tool === 'test_run' ||
-      sig.tool === 'shell_exec';
-
-    if (isShellTool && isRecursiveEnum) {
-      capability = 'shell.recursive_enumeration';
-      preferredAlternative = 'list_dir / directory_list tool';
-    } else if (isShellTool) {
-      capability = 'shell.execution';
-    }
+    const classification = classifyShellCapability(sig.tool, sig.commandSnippet);
+    const capability = classification.capability;
+    const preferredAlternative = classification.preferredAlternative;
 
     const current = this.capabilities.get(capability) ?? {
       capability,
