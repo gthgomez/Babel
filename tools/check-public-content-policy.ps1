@@ -46,9 +46,7 @@ function Test-IsExcluded {
 
 function Get-TrackedActiveFiles {
   foreach ($record in @($inventory.records)) {
-    if (@($policy.active_extensions) -contains $record.extension) {
-      [pscustomobject]@{ Relative = $record.path; Full = $record.full_path; Extension = $record.extension; Lines = $record.lines }
-    }
+    [pscustomobject]@{ Relative = $record.path; Full = $record.full_path; Extension = $record.extension; Lines = $record.lines }
   }
 }
 
