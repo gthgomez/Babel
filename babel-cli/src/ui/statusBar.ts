@@ -27,6 +27,12 @@ export interface StatusBarState {
   mode: string;
   /** Active project label (e.g. "my-project" or "global") */
   project: string;
+  /** Active context telemetry from latest provider invocation */
+  activeContext?: {
+    tokens: number;
+    modelId: string;
+    source: 'policy' | 'provider' | 'provider_prompt_tokens' | 'estimated' | 'unknown';
+  } | null | undefined;
   /** Active input context tokens from latest turn (for context window meter) */
   activeContextTokens?: number | undefined;
   /** Total tokens consumed in this session */
@@ -58,44 +64,35 @@ export interface StatusBarState {
    * Examples: "Flash·mutate", "Pro·investigate", "escalate".
    * When undefined or empty, no routing cue is shown.
    */
-  routingLabel?: string | undefined;
+  routingLabel?: string | null | undefined;
 }
 
 /**
- * Render a single-line status bar using ANSI reverse video.
- *
- * Format:
- *   <model> | <mode> | <project>              <tok> tok | $<cost> | turn <n>
- *
- * The bar is padded to the full terminal width on neutral reverse video.
- * The right-aligned section (tokens / cost / turn count / context bar)
- * is preserved if the bar must be truncated.
- *
- * @returns An ANSI-escaped string ending with a newline, suitable for writing
- *          directly to stdout.
+ * Render the status bar for display between interactive REPL turns.
  */
 export function renderStatusBar(state: StatusBarState): string {
-  const width = state.width ?? getEffectiveTerminalWidth(40, 200);
+  const width = state.width ?? getEffectiveTerminalWidth();
 
-  // Render background tasks as a compact footer (if any)
+  // Background task progress segment
   let bgTaskStr = '';
   if (state.backgroundTasks && state.backgroundTasks.length > 0) {
-    // Allocate roughly 40% of the bar width for the task footer, clamped
-    const footerWidth = Math.max(20, Math.floor(width * 0.4));
+    const footerWidth = Math.max(10, Math.floor(width / 3));
     bgTaskStr = ` ${renderBackgroundTaskFooter(state.backgroundTasks, footerWidth)}`;
   }
 
-  // Compact token bar — uses activeContextTokens if available, otherwise totalTokens
+  // Compact token bar — strictly uses active request context; NEVER falls back to cumulative session tokens
   let tokenBarStr = '';
-  const contextNumerator = state.activeContextTokens ?? (state.totalTokens > 0 ? state.totalTokens : 0);
-  const showBar = state.showTokenBar !== false && (state.activeContextTokens !== undefined || state.totalTokens > 0) && state.modelId;
+  const activeTokens = state.activeContext ? state.activeContext.tokens : state.activeContextTokens;
+  const hasActiveContext = activeTokens !== undefined && activeTokens !== null;
+  const showBar = state.showTokenBar !== false && state.modelId;
   if (showBar) {
     const limit = getContextLimit(state.modelId!);
     const barWidth = Math.min(12, Math.floor(width / 8));
     const compactBar = renderCompactTokenBar(
-      contextNumerator,
+      hasActiveContext ? activeTokens : 0,
       limit.tokens,
       Math.max(6, barWidth),
+      hasActiveContext,
     );
     tokenBarStr = `  ${compactBar}`;
   }

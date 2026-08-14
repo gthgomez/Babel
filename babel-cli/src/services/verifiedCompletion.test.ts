@@ -51,9 +51,6 @@ describe('verifiedCompletion', () => {
 
   it('published example validates', () => {
     const r = loadAndValidateExample(REPO_ROOT);
-    if (!r.ok && r.errors[0]?.startsWith('example missing:')) {
-      return;
-    }
     assert.equal(r.ok, true, r.errors.join('; '));
   });
 });

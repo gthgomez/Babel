@@ -106,13 +106,18 @@ export interface ResolvedModelPolicyEntry {
   capabilities?: string[];
 }
 
+export type CapabilityProvenance = 'policy' | 'provider' | 'provider_default' | 'unknown';
+
 export interface NormalizedModelCapabilities {
   backendKey: string;
   provider: string;
   modelId: string;
-  contextWindow: number;
-  maxOutputTokens: number;
-  nativeToolUse: boolean;
+  contextWindow?: number;
+  contextWindowSource: CapabilityProvenance;
+  maxOutputTokens?: number;
+  maxOutputTokensSource: CapabilityProvenance;
+  nativeToolUse?: boolean;
+  nativeToolUseSource: CapabilityProvenance;
   capabilities: string[];
   estimatedCostPer1MInput?: number;
   estimatedCostPer1MOutput?: number;
@@ -943,13 +948,22 @@ export function getNormalizedModelCapabilities(
     const resolvedKey = config.vendor_aliases?.[modelId]?.maps_to ?? modelId;
     const entry = config.models?.[resolvedKey] ?? config.models?.[modelId];
     if (!entry) return null;
+
+    const hasContextWindow = entry.context_window !== undefined || entry.context_limit !== undefined;
+    const contextWindow = entry.context_window ?? entry.context_limit;
+    const hasMaxOutput = entry.max_output_tokens !== undefined;
+    const hasNativeToolUse = entry.native_tool_use !== undefined;
+
     return {
       backendKey: resolvedKey,
       provider: entry.provider,
       modelId: entry.model_id,
-      contextWindow: entry.context_window ?? entry.context_limit ?? 1_000_000,
-      maxOutputTokens: entry.max_output_tokens ?? 8_192,
-      nativeToolUse: entry.native_tool_use ?? true,
+      ...(hasContextWindow ? { contextWindow } : {}),
+      contextWindowSource: hasContextWindow ? 'policy' : 'unknown',
+      ...(hasMaxOutput ? { maxOutputTokens: entry.max_output_tokens } : {}),
+      maxOutputTokensSource: hasMaxOutput ? 'policy' : 'unknown',
+      ...(hasNativeToolUse ? { nativeToolUse: entry.native_tool_use } : {}),
+      nativeToolUseSource: hasNativeToolUse ? 'policy' : 'unknown',
       capabilities: Array.isArray(entry.capabilities) ? [...entry.capabilities] : [],
       ...(entry.estimated_cost_per_1m_input !== undefined
         ? { estimatedCostPer1MInput: entry.estimated_cost_per_1m_input }

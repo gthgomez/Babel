@@ -129,7 +129,10 @@ export async function executeChatTask(
     const engineFactory = deps?.engineFactory ?? ((options) => new ChatEngine(options));
 
     if (!ctx.chatEngine) {
-      const limits = resolveChatEngineLimits();
+      const limits = resolveChatEngineLimits({}, ctx.state.model, {
+        taskClass: activeProfile,
+        taskText: task,
+      });
       const operatorMode = normalizeChatOperatorMode(ctx.state.operatorMode) ?? 'default';
       if (operatorModeImpliesDryRun(operatorMode)) {
         process.env['BABEL_DRY_RUN'] = '1';
@@ -186,10 +189,20 @@ export async function executeChatTask(
       }
     }
 
-    // Record active context tokens from turn usage for the status bar context meter
-    const turnInputTokens = result.usage?.totalInputTokens;
-    if (turnInputTokens !== undefined && turnInputTokens > 0) {
-      ctx.lastTurnActiveContextTokens = turnInputTokens;
+    // Record active context tokens strictly from latest model request prompt_tokens (never cumulative session tokens)
+    if (result.activeContext) {
+      ctx.activeContext = result.activeContext;
+      ctx.lastTurnActiveContextTokens = result.activeContext.tokens;
+    } else if (result.lastRequestPromptTokens != null && result.lastRequestPromptTokens > 0) {
+      ctx.activeContext = {
+        tokens: result.lastRequestPromptTokens,
+        modelId: ctx.state.resolvedModelId ?? ctx.state.model ?? 'default',
+        source: 'provider_prompt_tokens',
+      };
+      ctx.lastTurnActiveContextTokens = result.lastRequestPromptTokens;
+    } else {
+      ctx.activeContext = null;
+      ctx.lastTurnActiveContextTokens = null;
     }
 
     // Collect changed files from the tool log for the summary display.

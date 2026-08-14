@@ -76,6 +76,13 @@ export interface ReplContext {
   /** Active input context tokens from latest turn (for context window meter). */
   lastTurnActiveContextTokens?: number | null;
 
+  /** Active context telemetry from latest provider invocation (for context meter). */
+  activeContext?: {
+    tokens: number;
+    modelId: string;
+    source: 'provider_prompt_tokens' | 'estimated' | 'unknown';
+  } | null;
+
   // ── Callbacks (methods on BabelRepl that extracted modules call back) ────
   printIdleHeader(): void;
   renderTurnStatusBar(): void;

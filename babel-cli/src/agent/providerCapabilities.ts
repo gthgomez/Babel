@@ -103,9 +103,9 @@ export function resolveProviderCapabilities(
     supportsStreaming: true,
     thinkingWithTools: 'unknown' as const,
   };
-  // Canonical window from policy; fallback 1M for DeepSeek-class, 200k else.
+  // Canonical window from policy; 0 if unknown.
   const norm = getNormalizedModelCapabilities(modelId);
-  const contextWindow = norm?.contextWindow ?? getModelContextWindow(modelId) ?? (provider === 'deepseek' ? 1_000_000 : 200_000);
+  const contextWindow = norm?.contextWindow ?? getModelContextWindow(modelId) ?? 0;
   const maxOutputTokens = norm?.maxOutputTokens ?? defaults.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
 
   const base: ProviderCapabilities = {

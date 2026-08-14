@@ -99,10 +99,16 @@ export class ProgressController {
       cmd.includes('ls -r') ||
       cmd.includes('find .');
 
-    if (sig.tool === 'run_shell_command' && isRecursiveEnum) {
+    const isShellTool =
+      sig.tool === 'run_shell_command' ||
+      sig.tool === 'run_command' ||
+      sig.tool === 'test_run' ||
+      sig.tool === 'shell_exec';
+
+    if (isShellTool && isRecursiveEnum) {
       capability = 'shell.recursive_enumeration';
-      preferredAlternative = 'filesystem/list API';
-    } else if (sig.tool === 'run_shell_command') {
+      preferredAlternative = 'list_dir / directory_list tool';
+    } else if (isShellTool) {
       capability = 'shell.execution';
     }
 

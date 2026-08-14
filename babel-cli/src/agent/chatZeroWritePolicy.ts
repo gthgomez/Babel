@@ -271,7 +271,8 @@ export function applyExploreFuses(input: {
   /** Injectable env for ablation tests (defaults to process.env). */
   env?: NodeJS.ProcessEnv;
 }): ExploreFuseResult {
-  if (!input.executeIntent) {
+  const isReadOnlyClass = input.taskClass === 'quick_inspect' || input.taskClass === 'investigate';
+  if (!input.executeIntent && !isReadOnlyClass) {
     return {
       labels: [],
       forceMutateMessage: null,
@@ -309,6 +310,7 @@ export function applyExploreFuses(input: {
   let explorationExhausted = false;
 
   if (
+    input.executeIntent &&
     forceMode !== 'off' &&
     shouldForceMutateEscalation({
       executeIntent: true,

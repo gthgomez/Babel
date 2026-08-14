@@ -240,6 +240,7 @@ describe('renderStatusBar — token context bar', () => {
     const result = renderStatusBar(
       defaultState({
         modelId: 'deepseek-v4-pro',
+        activeContextTokens: 45000,
         totalTokens: 45000,
       }),
     );
@@ -291,6 +292,7 @@ describe('renderStatusBar — token context bar', () => {
     const result = renderStatusBar(
       defaultState({
         modelId: 'deepseek-v4-pro',
+        activeContextTokens: 500_000,
         totalTokens: 500_000,
         width: 80,
       }),
@@ -387,6 +389,21 @@ describe('Acceptance Tests T17–T20: Status Bar Refinements', () => {
     // 166,588 / 1,000,000 = 17%
     assert.ok(plain.includes('17%'), `Expected 17% in status bar, got: ${plain}`);
     assert.ok(!plain.includes('100%'), 'Must NOT calculate 100% from cumulative tokens');
+  });
+
+  it('T19b: When active context telemetry is missing, renders [ctx ?] and NEVER falls back to totalTokens', () => {
+    const result = renderStatusBar(
+      defaultState({
+        modelId: 'deepseek-v4-flash',
+        activeContextTokens: undefined,
+        totalTokens: 2_000_000,
+        width: 100,
+      }),
+    );
+    const plain = stripAnsi(result);
+    assert.ok(plain.includes('[ctx ?]'), `Expected [ctx ?] when activeContextTokens is missing, got: ${plain}`);
+    assert.ok(!plain.includes('100%'), 'Must NOT calculate 100% from cumulative tokens');
+    assert.ok(!plain.includes('200%'), 'Must NOT calculate from cumulative tokens');
   });
 
   it('T20: Width clamping and edge-to-edge padding preserved without terminal line wrap', () => {

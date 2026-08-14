@@ -289,4 +289,30 @@ describe('chatZeroWritePolicy', () => {
     assert.equal(result.readThrashMessage, null);
     assert.ok(!events.some((e) => e.kind === 'force_mutate' || e.kind === 'force_mutate_shadow'));
   });
+
+  test('quick_inspect enforces 4-tool initial budget without executeIntent and never fires force_mutate', () => {
+    const state = {
+      turnsWithoutWrite: 10,
+      consecutiveReadOnlyTools: 4,
+      cumulativeExplorationTools: 4,
+      restrictToolsNextTurn: false,
+      consecutiveNonMutatingShells: 0,
+      toolsWithoutWrite: 4,
+      phase: 'investigate' as const,
+    };
+    const result = applyExploreFuses({
+      executeIntent: false,
+      taskClass: 'quick_inspect',
+      hasAnyWrites: false,
+      state,
+      pushUser: () => {},
+      deferMessagesToArbiter: true,
+      currentTurn: 1,
+    });
+    // Must NOT fire force_mutate because it is a read-only query
+    assert.equal(result.forceMutateMessage, null);
+    // Must fire investigate tool budget soft nudge at 4 tools
+    assert.ok(result.investigateBudgetMessage);
+    assert.ok(result.investigateBudgetMessage?.includes('4 tools'));
+  });
 });

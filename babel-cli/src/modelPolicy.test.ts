@@ -11,6 +11,7 @@ import {
   resolveStagePolicyRoutes,
   validateModelPolicyMetadataFreshness,
   assertDeepSeekLiveModelId,
+  getNormalizedModelCapabilities,
 } from './modelPolicy.js';
 
 function createModelPolicyRoot(): string {
@@ -392,7 +393,7 @@ test('DeepSeek live policy accepts Flash/Pro and rejects legacy providers', () =
   assert.throws(() => resolveModelByKey({ key: 'deepinfra-model', babelRoot: root, liveOnly: true }), /LIVE_MODEL_POLICY/);
 });
 
-test('canonical model capabilities resolve DeepSeek V4 Flash and Pro 1M context / 384k output', () => {
+test('canonical model capabilities resolve DeepSeek V4 Flash and Pro 1M context / 384k output with true provenance', () => {
   const flashCaps = resolveModelByKey({ key: 'deepseek-v4-flash' });
   assert.equal(flashCaps.contextWindow, 1_000_000);
   assert.equal(flashCaps.maxOutputTokens, 384_000);
@@ -400,5 +401,25 @@ test('canonical model capabilities resolve DeepSeek V4 Flash and Pro 1M context 
   const proCaps = resolveModelByKey({ key: 'deepseek-v4-pro' });
   assert.equal(proCaps.contextWindow, 1_000_000);
   assert.equal(proCaps.maxOutputTokens, 384_000);
+
+  const normFlash = getNormalizedModelCapabilities('deepseek-v4-flash');
+  assert.equal(normFlash?.contextWindow, 1_000_000);
+  assert.equal(normFlash?.contextWindowSource, 'policy');
+  assert.equal(normFlash?.maxOutputTokens, 384_000);
+  assert.equal(normFlash?.maxOutputTokensSource, 'policy');
+
+  const normPro = getNormalizedModelCapabilities('deepseek-v4-pro');
+  assert.equal(normPro?.contextWindow, 1_000_000);
+  assert.equal(normPro?.contextWindowSource, 'policy');
+
+  // qwen3 is registered without context_window / max_output_tokens in policy
+  const normQwen = getNormalizedModelCapabilities('qwen3');
+  assert.equal(normQwen?.contextWindow, undefined);
+  assert.equal(normQwen?.contextWindowSource, 'unknown');
+  assert.equal(normQwen?.maxOutputTokens, undefined);
+  assert.equal(normQwen?.maxOutputTokensSource, 'unknown');
+
+  // Unknown model returns null
+  assert.equal(getNormalizedModelCapabilities('completely-unknown-model-xyz'), null);
 });
 

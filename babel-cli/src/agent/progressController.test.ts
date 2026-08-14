@@ -136,7 +136,7 @@ describe("ProgressController", () => {
     const degraded = pc.getDegradedCapabilities();
     assert.strictEqual(degraded.length, 1);
     assert.strictEqual(degraded[0]?.capability, "shell.recursive_enumeration");
-    assert.strictEqual(degraded[0]?.preferredAlternative, "filesystem/list API");
+    assert.strictEqual(degraded[0]?.preferredAlternative, "list_dir / directory_list tool");
   });
 
   it("T11: Recovery or explicit success restores capability to AVAILABLE", () => {
@@ -175,6 +175,27 @@ describe("ProgressController", () => {
     const pc2 = new ProgressController();
     pc2.restore(snap);
     assert.strictEqual(pc2.getCapabilityState("shell.recursive_enumeration"), "DEGRADED");
+  });
+
+  it("T12b: Canonical tool names (run_command, test_run) trigger capability degradation with list_dir alternative", () => {
+    const pc = new ProgressController();
+    const f1 = pc.recordFailure({
+      tool: "run_command",
+      commandSnippet: "Get-ChildItem -Recurse",
+      exitCode: 1,
+    });
+    assert.strictEqual(f1.capability, "shell.recursive_enumeration");
+    assert.strictEqual(f1.state, "SUSPECT");
+
+    const f2 = pc.recordFailure({
+      tool: "test_run",
+      commandSnippet: "dir /s",
+      exitCode: 1,
+    });
+    assert.strictEqual(f2.capability, "shell.recursive_enumeration");
+    assert.strictEqual(f2.state, "DEGRADED");
+    assert.ok(f2.notice?.includes("list_dir") || f2.notice?.includes("filesystem"));
+    assert.strictEqual(pc.getCapabilityState("shell.recursive_enumeration"), "DEGRADED");
   });
 });
 

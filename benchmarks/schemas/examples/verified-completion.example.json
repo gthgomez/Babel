@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "artifact_type": "babel_verified_completion",
+  "generated_at": "2026-08-14T00:00:00.000Z",
+  "status": "completed",
+  "task": "Fix the issue in src/math.js",
+  "project": "sample-project",
+  "run_dir": "runs/sample_run",
+  "changed_files": [
+    "src/math.js"
+  ],
+  "verifier_receipt": {
+    "command": "npm test",
+    "exit_code": 0,
+    "summary": "All tests passed (12/12)"
+  },
+  "false_complete": false,
+  "failure_class": null
+}

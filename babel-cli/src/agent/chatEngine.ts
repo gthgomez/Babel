@@ -490,6 +490,14 @@ export interface ChatResult {
   /** Tier A1: Aggregate counts derived from the tool call log. */
   toolCallAggregates?: { tool_call_count: number; write_count: number; verifier_attempt_count: number };
   promptFingerprint?: PromptFingerprint;
+  /** Active input prompt tokens from latest single model invocation */
+  lastRequestPromptTokens?: number | null;
+  /** Structured active context telemetry from latest provider invocation */
+  activeContext?: {
+    tokens: number;
+    modelId: string;
+    source: 'provider_prompt_tokens' | 'estimated' | 'unknown';
+  } | null;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────
@@ -584,6 +592,9 @@ export class ChatEngine {
   /** Full-file read counts keyed by normalized path. */
   private fullReadCounts = new Map<string, number>();
   private apiTokenCount = 0;
+  /** Prompt tokens from latest single model invocation in the active turn */
+  private lastRequestPromptTokens: number | null = null;
+  private lastRequestModelId: string | null = null;
   /** R11: API-reported token count at the start of the current turn.
    *  Used to compute the per-round token delta for the token ceiling check. */
   private apiTokenCountAtTurnStart = 0;
@@ -3787,6 +3798,31 @@ export class ChatEngine {
         });
       }
 
+      // Capability check: reject recursive shell enumeration if shell.recursive_enumeration is DEGRADED/UNAVAILABLE
+      if ((action.type === 'run_command' || action.type === 'test_run') && 'command' in action && typeof action.command === 'string') {
+        const cmdLower = action.command.toLowerCase();
+        const isRecursive =
+          cmdLower.includes('get-childitem') ||
+          cmdLower.includes('dir /s') ||
+          cmdLower.includes('findstr /s') ||
+          cmdLower.includes('ls -r') ||
+          cmdLower.includes('find .');
+        const capState = this.progressController.getCapabilityState('shell.recursive_enumeration');
+        if (isRecursive && (capState === 'DEGRADED' || capState === 'UNAVAILABLE')) {
+          const observation = `### ${tool} ${target}\nexit_code: 1\n\`\`\`\n[BABEL ADVISORY] Recursive shell command suppressed: shell.recursive_enumeration is DEGRADED due to repeated failures. Use the list_dir / directory_list tool instead for reliable filesystem inspection.\n\`\`\``;
+          this.toolCallLog.push({
+            tool,
+            target,
+            detail: 'degraded_suppressed',
+            index: meta.index,
+            exit_code: 1,
+            error: 'capability_degraded',
+          });
+          callbacks.onToolComplete?.(toolId, 'degraded_suppressed');
+          return { index: meta.index, observation };
+        }
+      }
+
       // Platform fail-fast: never re-exec a command that hard-crashed (A06 thrash).
       if (
         (action.type === 'run_command' || action.type === 'test_run') &&
@@ -3912,6 +3948,32 @@ export class ChatEngine {
       }
 
       const lastResult = result.results[result.results.length - 1];
+      if (lastResult) {
+        if (lastResult.exit_code !== 0 || (lastResult.stdout.trim() === '' && lastResult.stderr.trim() !== '')) {
+          const rec = this.progressController.recordFailure({
+            tool: action.type,
+            commandSnippet: 'command' in action && typeof action.command === 'string' ? action.command : undefined,
+            exitCode: lastResult.exit_code,
+            emptyStdout: lastResult.stdout.trim() === '',
+          });
+          if (rec.notice) {
+            obsParts.push(`\n[BABEL ADVISORY] ${rec.notice}`);
+          }
+        } else if (lastResult.exit_code === 0) {
+          this.progressController.recordSuccess('tool.' + action.type);
+          const cmd = 'command' in action && typeof action.command === 'string' ? action.command.toLowerCase() : '';
+          if (
+            cmd.includes('get-childitem') ||
+            cmd.includes('dir /s') ||
+            cmd.includes('findstr /s') ||
+            cmd.includes('ls -r') ||
+            cmd.includes('find .')
+          ) {
+            this.progressController.recordSuccess('shell.recursive_enumeration');
+          }
+        }
+      }
+
       const detail = lastResult
         ? lastResult.exit_code === 0
           ? formatResultDetail(action, lastResult)
@@ -4171,6 +4233,8 @@ export class ChatEngine {
       metadata.prompt_tokens !== null &&
       metadata.completion_tokens !== null
     ) {
+      this.lastRequestPromptTokens = metadata.prompt_tokens;
+      this.lastRequestModelId = metadata.provider_model_id;
       globalCostTracker.trackUsage(
         metadata.provider_model_id,
         metadata.prompt_tokens,
@@ -4903,6 +4967,15 @@ export class ChatEngine {
       ...(kernelDecision?.finalOutcome === 'PLAN_COMPLETE' ? { planOutcome: 'PLAN_COMPLETE' as const } : {}),
       answer: answer ?? '',
       usage: globalCostTracker.getSessionSummary(),
+      lastRequestPromptTokens: this.lastRequestPromptTokens,
+      activeContext:
+        this.lastRequestPromptTokens !== null && this.lastRequestPromptTokens !== undefined
+          ? {
+              tokens: this.lastRequestPromptTokens,
+              modelId: this.lastRequestModelId ?? this.options.model ?? 'default',
+              source: 'provider_prompt_tokens' as const,
+            }
+          : null,
       conversation: this.conversation,
       runDir: this.engineRunDir,
       verifierReceipt: this.lastVerifierReceipt,

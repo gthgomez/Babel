@@ -75,8 +75,12 @@ interface UtilizationInfo {
   unknown?: boolean;
 }
 
-function classifyUtilization(used: number, limit: number): UtilizationInfo {
-  if (!limit || limit <= 0 || !Number.isFinite(limit)) {
+function classifyUtilization(
+  used: number,
+  limit: number,
+  hasExplicitActiveContext = true,
+): UtilizationInfo {
+  if (!limit || limit <= 0 || !Number.isFinite(limit) || !hasExplicitActiveContext) {
     return { tier: UtilizationTier.Safe, percent: null, unknown: true };
   }
   const percent = Math.min(100, Math.round((used / Math.max(1, limit)) * 100));
@@ -185,8 +189,9 @@ export function renderCompactTokenBar(
   usedTokens: number,
   contextLimit: number,
   barChars: number = BAR_WIDTH_DEFAULT,
+  hasExplicitActiveContext = true,
 ): string {
-  const { tier, percent, unknown } = classifyUtilization(usedTokens, contextLimit);
+  const { tier, percent, unknown } = classifyUtilization(usedTokens, contextLimit, hasExplicitActiveContext);
   if (unknown || percent === null) {
     return `[ctx ?]`;
   }
