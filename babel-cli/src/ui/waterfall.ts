@@ -58,6 +58,11 @@ import {
   formatConversationThinkingStatus,
   type ConversationLivenessSnapshot,
 } from './conversationLiveness.js';
+import {
+  formatToolGroupSummary,
+  groupToolExecutions,
+  type ToolExecutionSummary,
+} from './toolPresentation.js';
 import { renderSubAgentOverlay, type SubAgentOverlayEntry } from './subAgentOverlay.js';
 
 const SPINNER_FRAMES: readonly string[] = ['◐', '◓', '◑', '◒'];
@@ -1294,16 +1299,21 @@ export class ConversationalRenderer extends BaseRenderer {
     // are renderer-local and intentionally NOT synced from store.
   }
 
+  public verboseMode: boolean = false;
+
   constructor(
     {
       isTTY,
       stateStore,
+      verboseMode,
     }: {
       isTTY?: boolean;
       stateStore?: StateStore<TuiState, TuiMutation> | undefined;
+      verboseMode?: boolean;
     } = { isTTY: process.stdout.isTTY },
   ) {
     super();
+    this.verboseMode = verboseMode ?? false;
     this._store = stateStore ?? createTuiStore();
     // Note: do NOT call setState — the store is already initialized with defaults
     // Only gate auto-detected TTY on CI — explicit {isTTY: true} from tests

@@ -120,4 +120,15 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
       assert.ok(stripAnsi(rendered).includes('failed (exit 1)'));
     }
   });
+
+  test('production integration: ConversationalRenderer completes tools with presentation formatting and verboseMode', async () => {
+    const { ConversationalRenderer } = await import('./waterfall.js');
+    const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: true });
+    assert.equal(renderer.verboseMode, true);
+
+    const callId = renderer.onToolCallStart('read_file', 'src/config.ts');
+    assert.ok(callId > 0);
+    renderer.onToolCallComplete(callId, 'read 120 bytes');
+    renderer.stop();
+  });
 });

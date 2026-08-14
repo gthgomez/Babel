@@ -22,10 +22,10 @@ import {
 export interface ToolExecutionSummary {
   tool: string;
   target: string;
-  exitCode?: number;
-  durationMs?: number;
-  error?: string;
-  detail?: string;
+  exitCode?: number | undefined;
+  durationMs?: number | undefined;
+  error?: string | undefined;
+  detail?: string | undefined;
 }
 
 export interface CollapsedToolGroup {
