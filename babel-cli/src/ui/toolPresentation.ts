@@ -3,9 +3,21 @@
  *
  * Provides calm, concise, collapsed formatting for routine successful tool activity,
  * while automatically expanding errors, policy interventions, and verifier failures.
+ * Fully width-aware across 60, 80, 100, 120, and 160 column breakpoints.
  */
 
-import { success, error, warning, muted, info, dim, bold } from './theme.js';
+import {
+  success,
+  error,
+  warning,
+  muted,
+  info,
+  dim,
+  bold,
+  truncate,
+  visibleLength,
+  getEffectiveTerminalWidth,
+} from './theme.js';
 
 export interface ToolExecutionSummary {
   tool: string;
@@ -44,7 +56,7 @@ export function groupToolExecutions(
       category = 'command';
     }
 
-    const hasError = exec.exitCode !== undefined && exec.exitCode !== 0 || Boolean(exec.error);
+    const hasError = (exec.exitCode !== undefined && exec.exitCode !== 0) || Boolean(exec.error);
 
     // Group adjacent same-category executions unless they contain errors
     const lastGroup = groups.at(-1);
@@ -64,7 +76,13 @@ export function groupToolExecutions(
   return groups;
 }
 
-export function formatToolGroupSummary(group: CollapsedToolGroup, verbose = false): string {
+export function formatToolGroupSummary(
+  group: CollapsedToolGroup,
+  verbose = false,
+  width?: number,
+): string {
+  const termWidth = width ?? getEffectiveTerminalWidth();
+
   if (verbose || group.hasErrors) {
     // Expanded view for errors or verbose mode
     return group.items
@@ -72,33 +90,55 @@ export function formatToolGroupSummary(group: CollapsedToolGroup, verbose = fals
         const isErr = (item.exitCode !== undefined && item.exitCode !== 0) || Boolean(item.error);
         const icon = isErr ? error('✖') : success('✔');
         const statusText = isErr ? error(`failed (exit ${item.exitCode ?? 1})`) : muted('ok');
-        return `  ${icon} ${dim(item.tool)} ${item.target} — ${statusText}${item.error ? ` (${item.error})` : ''}`;
+        const errSuffix = item.error ? ` (${item.error})` : '';
+        const rawLine = `  ${icon} ${dim(item.tool)} ${item.target} — ${statusText}${errSuffix}`;
+        if (visibleLength(rawLine) > termWidth) {
+          const staticLen = visibleLength(`  ${icon} ${dim(item.tool)}  — ${statusText}${errSuffix}`);
+          const budget = Math.max(4, termWidth - staticLen);
+          const truncatedTarget = truncate(item.target, budget);
+          const fittedLine = `  ${icon} ${dim(item.tool)} ${truncatedTarget} — ${statusText}${errSuffix}`;
+          return visibleLength(fittedLine) > termWidth ? truncate(fittedLine, termWidth) : fittedLine;
+        }
+        return rawLine;
       })
       .join('\n');
   }
 
   // Collapsed summary for routine successful activity
+  let line = '';
   switch (group.category) {
     case 'read':
-      return `  ${muted('○')} ${dim(`Read ${group.count} file${group.count > 1 ? 's' : ''}`)}`;
+      line = `  ${muted('○')} ${dim(`Read ${group.count} file${group.count > 1 ? 's' : ''}`)}`;
+      break;
     case 'search':
-      return `  ${muted('○')} ${dim(`Searched workspace (${group.count} step${group.count > 1 ? 's' : ''})`)}`;
+      line = `  ${muted('○')} ${dim(`Searched workspace (${group.count} step${group.count > 1 ? 's' : ''})`)}`;
+      break;
     case 'edit':
-      return `  ${success('✔')} ${bold(`Edited ${group.count} file${group.count > 1 ? 's' : ''}`)}`;
+      line = `  ${success('✔')} ${bold(`Edited ${group.count} file${group.count > 1 ? 's' : ''}`)}`;
+      break;
     case 'verifier':
-      return `  ${success('✔')} ${success('Ran tests & verifiers (exit 0)')}`;
+      line = `  ${success('✔')} ${success('Ran tests & verifiers (exit 0)')}`;
+      break;
     case 'command':
-      return `  ${muted('○')} ${dim(`Executed ${group.count} command${group.count > 1 ? 's' : ''}`)}`;
+      line = `  ${muted('○')} ${dim(`Executed ${group.count} command${group.count > 1 ? 's' : ''}`)}`;
+      break;
     default:
-      return `  ${muted('○')} ${dim(`${group.items[0]?.tool ?? 'tool'} (${group.count})`)}`;
+      line = `  ${muted('○')} ${dim(`${group.items[0]?.tool ?? 'tool'} (${group.count})`)}`;
+      break;
   }
+
+  if (visibleLength(line) > termWidth) {
+    return truncate(line, termWidth);
+  }
+  return line;
 }
 
 export function renderToolExecutionTrail(
   executions: readonly ToolExecutionSummary[],
   verbose = false,
+  width?: number,
 ): string {
   if (executions.length === 0) return '';
   const groups = groupToolExecutions(executions);
-  return groups.map((g) => formatToolGroupSummary(g, verbose)).join('\n');
+  return groups.map((g) => formatToolGroupSummary(g, verbose, width)).join('\n');
 }

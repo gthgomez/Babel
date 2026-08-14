@@ -6,7 +6,7 @@
  * 2. Tool errors, verifier failures, and non-zero exits expand automatically.
  * 3. Verbose mode exposes full un-collapsed execution trails.
  * 4. Semantic color rules are respected (green only for true success, red for errors).
- * 5. Output formats cleanly across multiple widths: 60, 80, 100, 120, 160 columns.
+ * 5. Output formats cleanly across multiple widths: 60, 80, 100, 120, 160 columns without overflow.
  */
 
 import assert from 'node:assert/strict';
@@ -17,7 +17,7 @@ import {
   renderToolExecutionTrail,
   type ToolExecutionSummary,
 } from './toolPresentation.js';
-import { stripAnsi } from './theme.js';
+import { stripAnsi, visibleLength } from './theme.js';
 
 describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
   test('consecutive routine reads collapse into a single calm summary line', () => {
@@ -84,9 +84,40 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
     ];
 
     for (const width of widths) {
-      const rendered = stripAnsi(renderToolExecutionTrail(tools));
-      assert.ok(rendered.length <= width, `Rendered length ${rendered.length} exceeded width ${width}`);
-      assert.equal(rendered.trim(), '○ Read 2 files');
+      const rendered = renderToolExecutionTrail(tools, false, width);
+      const lines = rendered.split('\n');
+      for (const line of lines) {
+        assert.ok(
+          visibleLength(line) <= width,
+          `Rendered line length ${visibleLength(line)} exceeded width ${width}: "${line}"`,
+        );
+      }
+      assert.equal(stripAnsi(rendered).trim(), '○ Read 2 files');
+    }
+  });
+
+  test('responsive widths: error expansion truncates long paths cleanly across narrow columns', () => {
+    const widths = [60, 80, 100, 120, 160];
+    const errorTools: ToolExecutionSummary[] = [
+      {
+        tool: 'write_file',
+        target: 'packages/some-deeply-nested-package/src/components/veryLongFilenameForTestingResponsiveColumns.ts',
+        exitCode: 1,
+        error: 'Permission denied',
+      },
+    ];
+
+    for (const width of widths) {
+      const rendered = renderToolExecutionTrail(errorTools, false, width);
+      const lines = rendered.split('\n');
+      for (const line of lines) {
+        assert.ok(
+          visibleLength(line) <= width,
+          `Error line length ${visibleLength(line)} exceeded width ${width}: "${line}"`,
+        );
+      }
+      assert.ok(stripAnsi(rendered).includes('✖ write_file'));
+      assert.ok(stripAnsi(rendered).includes('failed (exit 1)'));
     }
   });
 });
