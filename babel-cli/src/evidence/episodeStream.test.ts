@@ -31,6 +31,7 @@ import {
   createSessionEventLog,
   recordUserSubmitted,
   recordToolProposed,
+  recordToolStarted,
   recordToolTerminal,
   recordTurnEnded,
 } from '../agent/sessionEvents.js';
@@ -202,6 +203,11 @@ describe('episodeStream session projection', () => {
       tool_call_id: 'c1',
       tool_name: 'grep',
     });
+    recordToolStarted(session, {
+      turn_id: 't1',
+      tool_call_id: 'c1',
+      tool_name: 'grep',
+    });
     recordToolTerminal(session, {
       turn_id: 't1',
       tool_call_id: 'c1',
@@ -217,19 +223,21 @@ describe('episodeStream session projection', () => {
 
     const episode = createEpisodeEventLog('sess-proj');
     const n = syncEpisodeFromSessionEvents(episode, session);
-    assert.equal(n, 4);
-    assert.equal(episode.events.length, 4);
+    assert.equal(n, 5);
+    assert.equal(episode.events.length, 5);
     assert.equal(episode.syncedSessionSeq, session.events[session.events.length - 1]!.seq);
 
     assert.equal(episode.events[0]!.kind, 'session');
     assert.equal(episode.events[0]!.type, 'user_submitted');
     assert.equal(episode.events[1]!.kind, 'tool');
     assert.equal(episode.events[1]!.type, 'tool_proposed');
-    assert.equal(episode.events[2]!.type, 'tool_completed');
-    assert.equal(episode.events[3]!.kind, 'turn');
-    assert.equal(episode.events[3]!.type, 'turn_ended');
+    assert.equal(episode.events[2]!.kind, 'tool');
+    assert.equal(episode.events[2]!.type, 'tool_started');
+    assert.equal(episode.events[3]!.type, 'tool_completed');
+    assert.equal(episode.events[4]!.kind, 'turn');
+    assert.equal(episode.events[4]!.type, 'turn_ended');
     assert.equal(episode.events[0]!.payload['sourceSessionSeq'], 0);
-    assert.equal(episode.events[3]!.payload['outcome'], 'AGENT_FAILURE');
+    assert.equal(episode.events[4]!.payload['outcome'], 'AGENT_FAILURE');
 
     // Idempotent second sync.
     assert.equal(syncEpisodeFromSessionEvents(episode, session), 0);

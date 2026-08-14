@@ -84,7 +84,7 @@ async function waitForThreadEventLog(
 
 // ─── Mock native-tools runner ───────────────────────────────────────────────
 
-function makeMockRunner(sequence: 'complete' | 'tools_then_complete' | 'fail_retryable') {
+function makeMockRunner(sequence: 'complete' | 'tools_then_complete' | 'write_then_complete' | 'fail_retryable') {
   let call = 0;
   return {
     executeWithToolsStream: async function* (
@@ -98,12 +98,12 @@ function makeMockRunner(sequence: 'complete' | 'tools_then_complete' | 'fail_ret
         yield { type: 'error', message: '429 rate limit exceeded' };
         return;
       }
-      if (sequence === 'tools_then_complete' && call === 1) {
+      if ((sequence === 'tools_then_complete' || sequence === 'write_then_complete') && call === 1) {
         yield {
           type: 'tool_use',
           id: 'c1',
-          name: 'read_file',
-          input: { path: 'hello.txt' },
+          name: sequence === 'tools_then_complete' ? 'read_file' : 'write_file',
+          input: sequence === 'tools_then_complete' ? { path: 'hello.txt' } : { path: 'blocked.ts', content: 'x' },
         };
         yield { type: 'done', finishReason: 'tool_calls' };
         return;
@@ -193,6 +193,24 @@ describe('Live monomorphic ChatEngine loop', () => {
     assert.ok(syncResult.outcome, 'sync path must set TerminalOutcome via buildResult');
   });
 
+  test('live plan denial remains TOOL_NOT_STARTED after post-action batch recording', async () => {
+    const engine = new ChatEngine({
+      task: 'do not write in plan mode',
+      projectRoot,
+      model: 'deepseek-v4-flash',
+      maxTurns: 4,
+      executionProfile: 'plan',
+    });
+    installMockRunner(engine, makeMockRunner('write_then_complete'));
+
+    await engine.submitMessage('Attempt the write', { onThought: () => {} });
+
+    const events = engine.getParityRuntime().sessionEvents.events;
+    assert.equal(events.filter((event) => event.kind === 'tool_started' && event.tool_name === 'write_file').length, 0);
+    const cancelled = events.find((event) => event.kind === 'tool_cancelled' && event.tool_name === 'write_file');
+    assert.ok(cancelled && cancelled.kind === 'tool_cancelled');
+    assert.equal(cancelled.recovery_state, 'TOOL_NOT_STARTED');
+  });
   test('tool cycle records progress + tool_result events on live engine', async () => {
     const engine = new ChatEngine({
       task: 'inspect file',
@@ -600,17 +618,42 @@ describe('Live failover on engine', () => {
   });
 });
 
-// ─── Cancel dispatches input arbiter ───────────────────────────────────
+// ─── C1 model-visible wire invariant bridge ─────────────────────────────
 
-describe('Live cancel → input arbiter', () => {
-  test('engine.cancel dispatches ctrl_c cancel_turn', () => {
+describe('C1 model-visible equals persisted', () => {
+  test('ChatEngine shadows a mutated final native wire request', () => {
+    const engine = new ChatEngine({
+      task: 't', projectRoot: process.cwd(), runtimeInvariantMode: 'shadow',
+    });
+    const turnId = startTurn(engine.getParityRuntime().eventLog, {
+      task: 't', model: 'm', provider: 'p', projectRoot: process.cwd(), policyPreset: 'default',
+    });
+    assert.ok(turnId);
+    const c1 = engine as unknown as {
+      assertNativeRequestMatchesDurable: (
+        outbound: Array<{ role: 'system' | 'user'; content: string }>,
+        systemPrompt: string,
+        systemPromptOverride: string | undefined,
+      ) => void;
+    };
+    c1.assertNativeRequestMatchesDurable([
+      { role: 'system', content: 'system prompt' },
+      { role: 'user', content: 'mutated after durable reconstruction' },
+    ], 'system prompt', 'system prompt');
+    assert.equal(engine.getRuntimeInvariantViolationCount(), 1);
+  });
+});
+// ─── Runtime cancellation stays outside input arbitration ───────────────
+
+describe('Live cancel without input arbiter coupling', () => {
+  test('engine.cancel aborts without dispatching ctrl_c', () => {
     resetInputArbiterForTests();
     dispatchInputArbiter({ type: 'run_started' });
     assert.equal(getInputArbiterState().mode, 'running');
 
     const engine = new ChatEngine({ task: 't', projectRoot: process.cwd() });
     engine.cancel();
-    assert.equal(getInputArbiterState().cancelArmed, true);
+    assert.equal(getInputArbiterState().cancelArmed, false);
     assert.equal(engine.getParityRuntime().loop.outcome, 'CANCELLED');
   });
 });

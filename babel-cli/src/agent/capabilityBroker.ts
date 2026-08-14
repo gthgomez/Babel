@@ -8,13 +8,14 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync, statSync, type Dirent } from 'node:fs';
+import { readdirSync, readFileSync, realpathSync, statSync, type Dirent } from 'node:fs';
 import { join, relative } from 'node:path';
 import {
   classifyToolEffect,
   type ToolEffectClass,
   type WorkspaceRevisionIdentity,
 } from '../executor/contracts.js';
+import { isCredentialReadPath } from '../sandbox.js';
 
 /**
  * Detect a dirty git working tree from workspace evidence (not env-only).
@@ -64,12 +65,15 @@ export function captureWorkspaceRevisionIdentity(projectRoot: string): Workspace
       const paths = String(files.stdout ?? '').split('\0').filter(Boolean)
       for (const rel of paths) {
         if (Object.keys(fileHashes).length >= 5000) break
+        if (isCredentialReadPath(rel)) continue
         try {
           const absolute = join(projectRoot, rel)
-          const stat = statSync(absolute)
+          const effectivePath = realpathSync(absolute)
+          if (isCredentialReadPath(effectivePath)) continue
+          const stat = statSync(effectivePath)
           if (!stat.isFile()) continue
           fileHashes[rel.replaceAll('\\', '/')] = createHash('sha256')
-            .update(readFileSync(absolute))
+            .update(readFileSync(effectivePath))
             .update(String(stat.mode))
             .digest('hex')
         } catch {
@@ -111,6 +115,7 @@ export function captureWorkspaceRevisionIdentity(projectRoot: string): Workspace
       } else if (entry.isFile()) {
         try {
           const rel = relative(projectRoot, path).replaceAll('\\', '/')
+          if (isCredentialReadPath(rel)) continue
           const stat = statSync(path)
           const content = readFileSync(path)
           fileHashes[rel] = createHash('sha256')

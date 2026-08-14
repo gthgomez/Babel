@@ -45,6 +45,17 @@ describe('providerMessages (P0-B protocol fidelity)', () => {
     assert.equal(wire[3]!.tool_call_id, 'call_1');
   });
 
+  test('mapProviderMessagesToWire preserves a committed compaction capsule in its single system message', () => {
+    const wire = mapProviderMessagesToWire([
+      { role: 'system', content: 'base system prompt' },
+      { role: 'system', content: 'COMMITTED CAPSULE: retained repair context', name: 'compaction_capsule' },
+      { role: 'user', content: 'continue' },
+    ], 'default system prompt', 'base system prompt');
+
+    assert.equal(wire.filter((message) => message.role === 'system').length, 1);
+    assert.match(wire[0]!.content, /base system prompt/);
+    assert.match(wire[0]!.content, /COMMITTED CAPSULE: retained repair context/);
+  });
   test('validateProviderMessageProtocol rejects orphan tool results', () => {
     const issues = validateProviderMessageProtocol([
       { role: 'user', content: 'task' },

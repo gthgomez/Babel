@@ -992,3 +992,78 @@ await new Promise((resolve) => setTimeout(resolve, 60_000));
     fixture.cleanup();
   }
 });
+
+test('sandbox denies credential-class files and requires explicit external read roots', () => {
+  const fixture = makeFixture();
+  const previousRoots = process.env['BABEL_OPENCLAW_APPROVED_ROOTS'];
+  try {
+    mkdirSync(join(fixture.projectRoot, '.aws'));
+    writeFileSync(join(fixture.projectRoot, '.env'), 'SYNTHETIC=only\n', 'utf-8');
+    writeFileSync(join(fixture.projectRoot, '.env.example'), 'SYNTHETIC=\n', 'utf-8');
+    writeFileSync(join(fixture.projectRoot, 'id_rsa'), 'synthetic\n', 'utf-8');
+    writeFileSync(join(fixture.projectRoot, '.aws', 'credentials'), 'synthetic\n', 'utf-8');
+    writeFileSync(join(fixture.outsideRoot, '.env'), 'synthetic\n', 'utf-8');
+
+    const defaultExecutor = new SafeExecutor(fixture.projectRoot);
+    for (const path of ['.env', 'id_rsa', '.aws/credentials']) {
+      expectPolicyDenial(defaultExecutor.fileRead(path), 'credential_read_denied');
+    }
+    assert.match(defaultExecutor.fileRead('.env.example').stdout, /SYNTHETIC=/);
+    expectPolicyDenial(
+      defaultExecutor.fileRead(join(fixture.outsideRoot, 'outside.txt')),
+      'path_jail_rejected',
+    );
+
+    process.env['BABEL_OPENCLAW_APPROVED_ROOTS'] = fixture.outsideRoot;
+    const approvedExecutor = new SafeExecutor(fixture.projectRoot);
+    assert.match(approvedExecutor.fileRead(join(fixture.outsideRoot, 'outside.txt')).stdout, /outside/);
+    expectPolicyDenial(
+      approvedExecutor.fileRead(join(fixture.outsideRoot, '.env')),
+      'credential_read_denied',
+    );
+  } finally {
+    if (previousRoots === undefined) {
+      delete process.env['BABEL_OPENCLAW_APPROVED_ROOTS'];
+    } else {
+      process.env['BABEL_OPENCLAW_APPROVED_ROOTS'] = previousRoots;
+    }
+    fixture.cleanup();
+  }
+});
+test('sandbox rejects credential-class shadow targets', { skip: process.platform === 'win32' }, () => {
+  const fixture = makeFixture();
+  const shadowRoot = mkdtempSync(join(tmpdir(), 'babel-sandbox-shadow-'));
+  try {
+    writeFileSync(join(fixture.projectRoot, 'config.json'), '{}\n', 'utf-8');
+    writeFileSync(join(shadowRoot, '.env'), 'SYNTHETIC=only\n', 'utf-8');
+    symlinkSync(
+      join(shadowRoot, '.env'),
+      join(shadowRoot, 'config.json'),
+      process.platform === 'win32' ? 'file' : 'file',
+    );
+
+    const executor = new SafeExecutor(fixture.projectRoot, shadowRoot);
+    expectPolicyDenial(executor.fileRead('config.json'), 'credential_read_denied');
+  } finally {
+    rmSync(shadowRoot, { recursive: true, force: true });
+    fixture.cleanup();
+  }
+});
+test('sandbox rejects credential-class shadow directories', { skip: process.platform === 'win32' }, () => {
+  const fixture = makeFixture();
+  const shadowRoot = mkdtempSync(join(tmpdir(), 'babel-sandbox-shadow-dir-'));
+  const secretRoot = mkdtempSync(join(tmpdir(), 'babel-sandbox-secret-dir-'));
+  try {
+    mkdirSync(join(fixture.projectRoot, 'config'));
+    mkdirSync(join(secretRoot, '.ssh'));
+    writeFileSync(join(secretRoot, '.ssh', 'id_rsa'), 'synthetic\n', 'utf-8');
+    symlinkSync(join(secretRoot, '.ssh'), join(shadowRoot, 'config'));
+
+    const executor = new SafeExecutor(fixture.projectRoot, shadowRoot);
+    expectPolicyDenial(executor.listDirectory('config'), 'credential_read_denied');
+  } finally {
+    rmSync(shadowRoot, { recursive: true, force: true });
+    rmSync(secretRoot, { recursive: true, force: true });
+    fixture.cleanup();
+  }
+});

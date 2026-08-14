@@ -9,7 +9,7 @@
 
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import type { InstructionManifestV1 } from './instructionManifest.js';
-import type { SessionEvent, SessionEventLog } from './sessionEvents.js';
+import type { InterruptedToolRecovery, SessionEvent, SessionEventLog } from './sessionEvents.js';
 import type { ThreadEvent, ThreadEventLog } from './threadEventLog.js';
 import {
   completedToolIdempotencyKeys,
@@ -45,6 +45,7 @@ export interface LiveSessionToolState {
   open_tool_call_ids: string[];
   completed_idempotency_keys: string[];
   interrupted_idempotency_keys: string[];
+  recovery: InterruptedToolRecovery[];
   last_tool_name?: string;
 }
 
@@ -151,6 +152,7 @@ export function projectLiveSession(input: ProjectLiveSessionInput): LiveSessionV
       open_tool_call_ids: [],
       completed_idempotency_keys: [],
       interrupted_idempotency_keys: [],
+      recovery: [],
     },
     verifier: { authoritative: false, attempts: 0 },
     mutation: { last_paths: [] },
@@ -174,6 +176,7 @@ export function projectLiveSession(input: ProjectLiveSessionInput): LiveSessionV
   const openIdempotencyKeys = new Map<string, string>();
   const completed = new Set<string>();
   const interrupted = new Set<string>();
+  const recovery = new Map<string, InterruptedToolRecovery>();
   const persistedRemaining = {
     turns: false,
     tokens: false,
@@ -225,6 +228,16 @@ export function projectLiveSession(input: ProjectLiveSessionInput): LiveSessionV
         open.delete(e.tool_call_id);
         openIdempotencyKeys.delete(e.tool_call_id);
         interrupted.add(e.idempotency_key);
+        if (e.recovery_state) {
+          recovery.set(e.idempotency_key, {
+            idempotencyKey: e.idempotency_key,
+            toolCallId: e.tool_call_id,
+            toolName: e.tool_name,
+            effectClass: e.effect_class ?? 'external_side_effect',
+            state: e.recovery_state,
+            reconciliation: e.reconciliation ?? 'inspect_or_reconcile_before_retry',
+          });
+        }
         state.phase = 'effect_complete';
         break;
       case 'mutation_batch': {
@@ -331,6 +344,7 @@ export function projectLiveSession(input: ProjectLiveSessionInput): LiveSessionV
     open_tool_call_ids: [...open],
     completed_idempotency_keys: [...completed],
     interrupted_idempotency_keys: [...interrupted],
+    recovery: [...recovery.values()],
     ...(state.tools.last_tool_name
       ? { last_tool_name: state.tools.last_tool_name }
       : {}),
@@ -441,6 +455,7 @@ export function liveSessionsEquivalentForResume(
       open_tool_call_ids: [...session.tools.open_tool_call_ids].sort(),
       completed_idempotency_keys: [...session.tools.completed_idempotency_keys].sort(),
       interrupted_idempotency_keys: [...session.tools.interrupted_idempotency_keys].sort(),
+      recovery: [...session.tools.recovery].sort((a, b) => a.idempotencyKey.localeCompare(b.idempotencyKey)),
       last_tool_name: session.tools.last_tool_name,
     },
     verifier: { ...session.verifier },

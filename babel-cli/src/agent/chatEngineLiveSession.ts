@@ -3,8 +3,10 @@
  * Keeps chatEngine.ts under the architectural size ratchet.
  */
 
+import { createHash } from 'node:crypto';
 import type { ParityRuntime } from './chatEngineParityBridge.js';
-import type { SessionEventLog } from './sessionEvents.js';
+import { assertSessionEventRecoveryReconciliationCausality, assertSessionEventToolLifecycleCausalities, assertSessionEventCompactionLifecycleCausality, type SessionEvent, type SessionEventLog } from './sessionEvents.js';
+import type { ThreadEvent, ThreadEventLog } from './threadEventLog.js';
 import type { LiveSessionV1 } from './liveSession.js';
 import {
   resolveLiveSessionAuthority,
@@ -75,11 +77,42 @@ export function projectEngineLiveSession(
   return live;
 }
 
+/** Fail closed unless every C2 commit names exactly its durable thread capsule. */
+function assertCompactionThreadLinks(log: SessionEventLog, threadLog: ThreadEventLog): void {
+  for (const committed of log.events) {
+    if (committed.kind !== 'compaction_committed') continue;
+    const summary = log.events.find(
+      (event): event is Extract<SessionEvent, { kind: 'compaction_summary' }> =>
+        event.kind === 'compaction_summary' && event.operation_id === committed.operation_id,
+    );
+    const capsules = threadLog.events.filter(
+      (event): event is Extract<ThreadEvent, { kind: 'compaction_capsule' }> =>
+        event.kind === 'compaction_capsule' && event.event_id === committed.thread_event_id,
+    );
+    if (!summary || capsules.length !== 1) {
+      throw new Error(`C2 compaction ${committed.operation_id} must link exactly one durable thread capsule`);
+    }
+    const capsule = capsules[0]!;
+    const digest = createHash('sha256').update(capsule.content).digest('hex');
+    if (digest !== committed.capsule_digest ||
+      capsule.preserved_tool_call_ids.length !== summary.preserved_tool_call_ids.length ||
+      capsule.preserved_tool_call_ids.length !== committed.preserved_tool_call_ids.length ||
+      capsule.preserved_tool_call_ids.some((id, index) => id !== summary.preserved_tool_call_ids[index]) ||
+      capsule.preserved_tool_call_ids.some((id, index) => id !== committed.preserved_tool_call_ids[index])) {
+      throw new Error(`C2 compaction ${committed.operation_id} does not match its durable thread capsule`);
+    }
+  }
+}
+
 export function restoreEngineSessionEvents(input: {
   parity: ParityRuntime;
   log: SessionEventLog;
   runDir: string;
 }): number {
+  assertSessionEventToolLifecycleCausalities(input.log);
+  assertSessionEventCompactionLifecycleCausality(input.log);
+  assertSessionEventRecoveryReconciliationCausality(input.log);
+  assertCompactionThreadLinks(input.log, input.parity.eventLog);
   recoverCheckpointArtifacts(input.runDir);
   input.parity.sessionEvents = input.log;
   const interrupted = paritySettleInterruptedOnResume(input.parity, input.runDir);

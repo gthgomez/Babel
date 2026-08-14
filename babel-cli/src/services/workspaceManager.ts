@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'n
 import { dirname, relative, resolve, sep } from 'node:path';
 
 import { BABEL_ROOT } from '../cli/constants.js';
-import { SafeExecutor, type ToolResult } from '../sandbox.js';
+import { isCredentialReadPath, SafeExecutor, type ToolResult } from '../sandbox.js';
 import { analyzeProjectRoot, type ProjectOnboardingReport } from './projectOnboarding.js';
 
 export interface ApprovedWorkspaceRoot {
@@ -290,6 +290,13 @@ export function readWorkspaceFile(
   const resolved = resolveApprovedWorkspacePath(pathArg);
   if (!existsSync(resolved.path) || !statSync(resolved.path).isFile()) {
     throw new Error(`Workspace read target is not a file: ${resolved.path}`);
+  }
+
+  if (isCredentialReadPath(resolved.path)) {
+    throw new Error(
+      `Credential read denied: ${pathArg} is credential-class material. ` +
+        'Read .env.example or inspect required variable names instead.',
+    );
   }
 
   const size = statSync(resolved.path).size;

@@ -11,6 +11,8 @@ import { afterEach, describe, test } from 'node:test';
 
 import type { ChatEngine, ChatEvent, ChatResult } from '../../agent/chatEngine.js';
 import { globalCostTracker } from '../../services/costTracker.js';
+import { appendTurnCells, ensureThread } from '../../services/threadStore/index.js';
+import { HISTORY_CELL_SCHEMA_VERSION, type HistoryCellRecord } from '../../ui/historyCells/types.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
 import { resumeChatSession } from '../chatSessionResume.js';
 import { BabelRepl } from '../BabelRepl.js';
@@ -306,6 +308,37 @@ describe('executeChatTask daily-driver outcomes', { concurrency: 1 }, () => {
 });
 
 describe('resume then follow-up and cancel', () => {
+  test('resumeChatSession rejects a corrupted present event log instead of falling back to thread cells', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-dd-corrupt-event-log-'));
+    const prev = process.env['BABEL_RUNS_DIR'];
+    process.env['BABEL_RUNS_DIR'] = root;
+    try {
+      const sessionId = 'dd-corrupt-event-log';
+      const sessionDir = join(root, 'chat-sessions', sessionId);
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(join(sessionDir, 'transcript.jsonl'), `${JSON.stringify({ role: 'user', content: 'legacy UI history' })}\n`, 'utf8');
+      ensureThread(sessionId, { project_root: process.cwd() });
+      const cell: HistoryCellRecord = {
+        schema_version: HISTORY_CELL_SCHEMA_VERSION,
+        cell_id: 'corrupt-log-user', thread_id: sessionId, turn_id: 1,
+        ts: new Date().toISOString(), kind: 'user_message', lifecycle: 'committed', revision: 0,
+        payload: { message: 'thread-store fallback must not run' },
+      };
+      appendTurnCells(sessionId, 1, [cell]);
+      // Present, versioned, but sequence-inconsistent evidence is not legacy.
+      writeFileSync(join(sessionDir, 'thread_events.json'), JSON.stringify({
+        schema_version: 1, thread_id: sessionId, events: [], nextSeq: 1,
+      }), 'utf8');
+
+      const outcome = await resumeChatSession(makeReplContext(), sessionId);
+      assert.equal(outcome.ok, false);
+      if (!outcome.ok) assert.match(outcome.message, /Cannot restore thread event log.*nextSeq/i);
+    } finally {
+      if (prev === undefined) delete process.env['BABEL_RUNS_DIR'];
+      else process.env['BABEL_RUNS_DIR'] = prev;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   test('resumeChatSession hydrates transcript and follow-up executeChatTask works', async () => {
     const root = mkdtempSync(join(tmpdir(), 'babel-dd-resume-'));
     const prev = process.env['BABEL_RUNS_DIR'];

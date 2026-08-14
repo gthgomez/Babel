@@ -24,6 +24,8 @@ import {
 import {
   createSessionEventLog,
   recordUserSubmitted,
+  recordToolProposed,
+  recordToolStarted,
   recordToolTerminal,
   recordCompletionDecision,
   recordTurnEnded,
@@ -419,6 +421,12 @@ export function runOfflineHarnessFactorial(controls: FixedEvalControls): Harness
 
   const log = createSessionEventLog('offline-h7');
   recordUserSubmitted(log, { turn_id: 't1', task: 'offline harness factor' });
+  recordToolProposed(log, {
+    turn_id: 't1', tool_call_id: 'c1', tool_name: 'write_file', idempotency_key: 'idem-1',
+  });
+  recordToolStarted(log, {
+    turn_id: 't1', tool_call_id: 'c1', tool_name: 'write_file', idempotency_key: 'idem-1',
+  });
   recordToolTerminal(log, {
     turn_id: 't1',
     tool_call_id: 'c1',

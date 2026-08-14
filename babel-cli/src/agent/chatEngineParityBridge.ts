@@ -5,6 +5,7 @@
  */
 
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import { classifyToolEffect } from '../executor/contracts.js';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
 import {
   initialAgentLoopState,
@@ -39,8 +40,12 @@ import {
 import {
   createSessionEventLog,
   recordUserSubmitted,
+  recordProviderRetryScheduled,
+  recordProviderRetrySettled,
   recordToolProposed,
   recordToolStarted,
+  assertRecoveredOutcomeReconciliationAuthorization,
+  recordRecoveredOutcomeReconciled,
   recordToolTerminal,
   recordTurnEnded,
   flushSessionEventLogStrict,
@@ -171,6 +176,51 @@ export function parityOnUserTurn(
   });
 }
 
+/** Dual-write provider retry lifecycle facts at the ChatEngine persistence boundary. */
+export function parityRecordProviderRetry(
+  rt: ParityRuntime,
+  input: {
+    provider: 'deepinfra' | 'deepseek';
+    model: string;
+    attempt: number;
+    reason: 'transport' | 'timeout' | 'rate_limit' | 'server_error' | 'stream_idle';
+    backoffMs: number;
+  },
+  runDir?: string,
+): void {
+  if (!rt.turnId) return;
+  recordProviderRetryScheduled(rt.sessionEvents, {
+    turn_id: rt.turnId,
+    provider: input.provider,
+    model: input.model,
+    attempt: input.attempt,
+    reason: input.reason,
+    backoff_ms: input.backoffMs,
+  });
+  if (runDir) flushSessionEventsRequired(rt, runDir, 'provider-retry-scheduled');
+}
+
+/** Record a retry sequence settlement; historical events never trigger another call on resume. */
+export function paritySettleProviderRetry(
+  rt: ParityRuntime,
+  input: {
+    provider: 'deepinfra' | 'deepseek';
+    model: string;
+    attempt: number;
+    outcome: 'succeeded' | 'failed' | 'cancelled';
+  },
+  runDir?: string,
+): void {
+  if (!rt.turnId) return;
+  recordProviderRetrySettled(rt.sessionEvents, {
+    turn_id: rt.turnId,
+    provider: input.provider,
+    model: input.model,
+    attempt: input.attempt,
+    outcome: input.outcome,
+  });
+  if (runDir) flushSessionEventsRequired(rt, runDir, 'provider-retry-settled');
+}
 export function parityReduce(rt: ParityRuntime, event: AgentLoopEvent): AgentLoopState {
   const result = reduceAgentLoop(rt.loop, event);
   rt.loop = result.state;
@@ -192,13 +242,13 @@ export function parityOnBudgetExhausted(rt: ParityRuntime, reason: string): void
 }
 
 /**
- * W2.2 settle step 1–2: persist tool_proposed + tool_started, then flush to disk
- * **before** side effects. Call this immediately before executeActions.
+ * W2.2 settle step 1: persist tool_proposed before scheduling work. The
+ * separate tool_started record is persisted at the concrete dispatch boundary.
  * Skips keys already terminal (resume no double-mutate).
  */
 export function paritySettleProposeTools(
   rt: ParityRuntime,
-  tools: Array<{ id: string; name: string }>,
+  tools: Array<{ id: string; name: string; argsDigest?: string }>,
   runDir?: string,
 ): { proposed: number; skipped: number } {
   if (!rt.turnId || tools.length === 0) return { proposed: 0, skipped: 0 };
@@ -222,17 +272,8 @@ export function paritySettleProposeTools(
         tool_call_id: t.id,
         tool_name: t.name,
         idempotency_key: t.id,
-      });
-    }
-    const alreadyStarted = rt.sessionEvents.events.some(
-      (e) => e.kind === 'tool_started' && e.idempotency_key === t.id,
-    );
-    if (!alreadyStarted) {
-      recordToolStarted(rt.sessionEvents, {
-        turn_id: rt.turnId,
-        tool_call_id: t.id,
-        tool_name: t.name,
-        idempotency_key: t.id,
+        effect_class: classifyToolEffect(t.name),
+        ...(t.argsDigest !== undefined ? { args_digest: t.argsDigest } : {}),
       });
     }
     proposed += 1;
@@ -243,6 +284,50 @@ export function paritySettleProposeTools(
   return { proposed, skipped };
 }
 
+/** Persist the irreversible dispatch boundary immediately before tool execution. */
+export function paritySettleToolStarted(
+  rt: ParityRuntime,
+  tool: { id: string; name: string },
+  runDir?: string,
+): boolean {
+  if (!rt.turnId || completedToolIdempotencyKeys(rt.sessionEvents).has(tool.id)) return false;
+  const alreadyStarted = rt.sessionEvents.events.some(
+    (event) => event.kind === 'tool_started' && event.idempotency_key === tool.id,
+  );
+  if (alreadyStarted) return false;
+  recordToolStarted(rt.sessionEvents, {
+    turn_id: rt.turnId,
+    tool_call_id: tool.id,
+    tool_name: tool.name,
+    idempotency_key: tool.id,
+    effect_class: classifyToolEffect(tool.name),
+  });
+  if (runDir) flushSessionEventsRequired(rt, runDir, 'settle-start');
+  return true;
+}
+
+/** Persist an explicit, operator-auditable authorization for one recovered unknown effect. */
+export function parityAuthorizeRecoveredOutcomeRetry(
+  rt: ParityRuntime,
+  input: {
+    recoveredIdempotencyKey: string;
+    operationFingerprint: string;
+    reconciliationRef: string;
+  },
+  runDir?: string,
+): void {
+  const authorization = {
+    recovered_idempotency_key: input.recoveredIdempotencyKey,
+    operation_fingerprint: input.operationFingerprint,
+    reconciliation_ref: input.reconciliationRef,
+  };
+  assertRecoveredOutcomeReconciliationAuthorization(rt.sessionEvents, authorization);
+  recordRecoveredOutcomeReconciled(rt.sessionEvents, {
+    turn_id: rt.turnId,
+    ...authorization,
+  });
+  if (runDir) flushSessionEventsRequired(rt, runDir, 'recovery-reconciled');
+}
 /**
  * W2.2 resume: mark in-flight tools cancelled and flush (no silent success).
  */
@@ -301,12 +386,7 @@ export function parityRecordToolBatch(
             tool_call_id: tc.id,
             tool_name: tc.function.name,
             idempotency_key: tc.id,
-          });
-          recordToolStarted(rt.sessionEvents, {
-            turn_id: rt.turnId,
-            tool_call_id: tc.id,
-            tool_name: tc.function.name,
-            idempotency_key: tc.id,
+            effect_class: classifyToolEffect(tc.function.name),
           });
         }
       }
@@ -318,15 +398,56 @@ export function parityRecordToolBatch(
         content: r.content,
         ...(r.exit_code !== undefined ? { exit_code: r.exit_code } : {}),
       });
+      // Compatibility callers may supply a completed result without using the
+      // live dispatch hook. Materialize the same proposal → start evidence before
+      // terminal settlement so resume never consumes a malformed lifecycle.
+      const hasProposal = rt.sessionEvents.events.some(
+        (event) => event.kind === 'tool_proposed' && event.idempotency_key === r.tool_call_id,
+      );
+      if (!hasProposal) {
+        recordToolProposed(rt.sessionEvents, {
+          turn_id: rt.turnId,
+          tool_call_id: r.tool_call_id,
+          tool_name: r.tool_name,
+          idempotency_key: r.tool_call_id,
+          effect_class: classifyToolEffect(r.tool_name),
+        });
+      }
+      const hasStart = rt.sessionEvents.events.some(
+        (event) => event.kind === 'tool_started' && event.idempotency_key === r.tool_call_id,
+      );
+      // Only the legacy compatibility lane may materialize a start after receiving
+      // an already-executed result. The live lane has already proposed the action:
+      // a missing marker is proof it never crossed the dispatch boundary.
+      const materializeCompatibilityStart = !input.settleAlreadyProposed;
+      if (!hasStart && materializeCompatibilityStart) {
+        recordToolStarted(rt.sessionEvents, {
+          turn_id: rt.turnId,
+          tool_call_id: r.tool_call_id,
+          tool_name: r.tool_name,
+          idempotency_key: r.tool_call_id,
+          effect_class: classifyToolEffect(r.tool_name),
+        });
+      }
       // Terminal settle — skip if already terminal (resume double-complete guard).
       if (!completedToolIdempotencyKeys(rt.sessionEvents).has(r.tool_call_id)) {
+        const dispatched = hasStart || materializeCompatibilityStart;
         recordToolTerminal(rt.sessionEvents, {
           turn_id: rt.turnId,
           tool_call_id: r.tool_call_id,
           tool_name: r.tool_name,
           idempotency_key: r.tool_call_id,
-          content: r.content,
-          ...(r.exit_code !== undefined ? { exit_code: r.exit_code } : {}),
+          ...(dispatched
+            ? {
+                content: r.content,
+                ...(r.exit_code !== undefined ? { exit_code: r.exit_code } : {}),
+              }
+            : {
+                cancelled: true,
+                reason: 'pre_dispatch_denied_or_invalid',
+                recovery_state: 'TOOL_NOT_STARTED' as const,
+                effect_class: classifyToolEffect(r.tool_name),
+              }),
         });
       }
     }

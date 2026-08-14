@@ -62,6 +62,8 @@ export async function governedStrReplace(
     executor?: ToolExecutor;
     budget?: ToolExecutionBudget;
     onAskApproval?: (action: AgentAction) => Promise<boolean>;
+    onDispatchAuthorized?: () => { allowed: boolean; message?: string };
+    onBeforeExecutorExecute?: () => void;
   },
 ): Promise<GovernedStrReplaceResult> {
   const preset = options.preset ?? 'workspace_write';
@@ -148,6 +150,8 @@ export async function governedStrReplace(
         ...(options.executor ? { executor: options.executor } : {}),
         ...(options.budget ? { budget: options.budget } : {}),
         ...(options.onAskApproval ? { onAskApproval: options.onAskApproval } : {}),
+        ...(options.onDispatchAuthorized ? { onDispatchAuthorized: options.onDispatchAuthorized } : {}),
+        ...(options.onBeforeExecutorExecute ? { onBeforeExecutorExecute: options.onBeforeExecutorExecute } : {}),
         decide: decideAction,
       },
     );

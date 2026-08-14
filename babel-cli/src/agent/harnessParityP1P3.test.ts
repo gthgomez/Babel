@@ -408,6 +408,23 @@ describe('Durable event log resume', () => {
     assert.equal(parsed.events.length, log.events.length);
   });
 
+  test('event log rejects discontinuous, malformed, or inconsistent persisted evidence', () => {
+    const log = createThreadEventLog('strict-log');
+    startTurn(log, {
+      task: 't', model: 'm', provider: 'p', projectRoot: '/r', policyPreset: 'workspace_write',
+    });
+    const discontinuous = JSON.parse(serializeThreadEventLog(log)) as { events: Array<Record<string, unknown>>; nextSeq: number };
+    discontinuous.events[1]!.seq = 2;
+    assert.throws(() => parseThreadEventLog(JSON.stringify(discontinuous)), /sequence is not contiguous/);
+
+    const malformed = JSON.parse(serializeThreadEventLog(log)) as { events: Array<Record<string, unknown>>; nextSeq: number };
+    delete malformed.events[2]!.content;
+    assert.throws(() => parseThreadEventLog(JSON.stringify(malformed)), /content must be a string/);
+
+    const inconsistent = JSON.parse(serializeThreadEventLog(log)) as { events: Array<Record<string, unknown>>; nextSeq: number };
+    inconsistent.nextSeq += 1;
+    assert.throws(() => parseThreadEventLog(JSON.stringify(inconsistent)), /nextSeq must equal/);
+  });
   test('repo identity mismatch requires confirm on resume', () => {
     const log = createThreadEventLog();
     startTurn(log, {

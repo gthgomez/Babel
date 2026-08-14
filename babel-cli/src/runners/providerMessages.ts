@@ -30,8 +30,8 @@ export interface ProviderProtocolIssue {
 
 /**
  * Map ProviderMessage[] to the OpenAI-compatible wire format.
- * - Prefers systemPromptOverride as the single system message
- * - Skips duplicate system messages from the conversation array
+ * - Emits one provider-compatible system message without discarding durable
+ *   system context (notably a committed compaction capsule)
  * - Preserves assistant tool_calls and tool tool_call_id
  */
 export function mapProviderMessagesToWire(
@@ -41,15 +41,24 @@ export function mapProviderMessagesToWire(
 ): WireProviderMessage[] {
   const result: WireProviderMessage[] = [];
 
-  const hasSystem = messages.length > 0 && messages[0]!.role === 'system';
-  if (systemPromptOverride) {
-    result.push({ role: 'system', content: systemPromptOverride });
-  } else if (!hasSystem) {
-    result.push({ role: 'system', content: defaultSystemPrompt });
-  }
+  const systemMessages = messages.filter((message) => message.role === 'system');
+  const firstSystem = systemMessages[0];
+  const primarySystem = systemPromptOverride ?? firstSystem?.content ?? defaultSystemPrompt;
+  // An override normally replaces the first reconstructed system prompt. Keep
+  // every other durable system record, including compaction capsules, in the
+  // sole system message required by these provider APIs.
+  const extraSystemMessages = systemPromptOverride && firstSystem?.content === systemPromptOverride
+    ? systemMessages.slice(1)
+    : systemPromptOverride
+      ? systemMessages
+      : systemMessages.slice(1);
+  result.push({
+    role: 'system',
+    content: [primarySystem, ...extraSystemMessages.map((message) => message.content)].join('\n\n'),
+  });
 
   for (const msg of messages) {
-    if (msg.role === 'system' && result.some((r) => r.role === 'system')) continue;
+    if (msg.role === 'system') continue;
     const wire: WireProviderMessage = { role: msg.role, content: msg.content };
     if (msg.role === 'assistant' && msg.tool_calls?.length) {
       wire.tool_calls = msg.tool_calls;

@@ -73,6 +73,7 @@ import { EXECUTOR_TOOL_NAMES } from './tools/toolContracts.js';
 import { LSP_OPERATIONS } from './services/lsp/types.js';
 import { enforceActiveTaskEnvelope, type EnvelopeBlockResult } from './schemas/taskEnvelope.js';
 import { getCircuitBreakerState, resetCircuitBreakerForRun } from './agent/toolExecutor.js';
+import { readMcpServers } from './config/mcpServers.js';
 import {
   createPreMutationCheckpoint,
   finalizeCheckpointAfterToolCall,
@@ -112,6 +113,8 @@ export interface ToolContext {
   babelRoot: string;
   /** Optional turn/session cancellation propagated to foreground child processes. */
   signal?: AbortSignal;
+  /** Called after local validation/cache gates, immediately before a real tool handler dispatches. */
+  onBeforeDispatch?: () => void;
 }
 
 // ─── Dry-run gate ─────────────────────────────────────────────────────────────
@@ -1808,6 +1811,16 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
   }
 
   // ── Dispatch ─────────────────────────────────────────────────────────────
+  // Validate MCP registry membership before the B2 start marker: a known-invalid
+  // server is TOOL_NOT_STARTED, while the marker remains immediately before handler I/O.
+  if (req.tool.startsWith('mcp_') && 'server' in req && !readMcpServers()[req.server]) {
+    const available = Object.keys(readMcpServers()).sort().join(', ') || '(none)';
+    return {
+      exit_code: 1,
+      stdout: '',
+      stderr: `[MCP_ERROR] Unknown server '${req.server}'. Available: ${available}`,
+    };
+  }
   const projectRoot = getExecutorProjectRoot();
   const checkpoint = shouldCheckpointToolCall(req)
     ? createPreMutationCheckpoint(req, context, {
@@ -1817,6 +1830,7 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
       })
     : null;
 
+  context.onBeforeDispatch?.();
   const result = await EXECUTOR_TOOL_REGISTRY.dispatch(req, context);
 
   // ── Phase 4: Post-dispatch cache/gate updates ────────────────────────────

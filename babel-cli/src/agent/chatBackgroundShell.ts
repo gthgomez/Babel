@@ -7,6 +7,7 @@
 
 import {
   awaitBackgroundShell,
+  hasBackgroundShellJob,
   capObservationText,
   DEFAULT_BACKGROUND_JOB_TIMEOUT_MS,
   startBackgroundShell,
@@ -33,8 +34,14 @@ export interface BackgroundShellActionCtx {
   target: string;
   toolId: number;
   index: number;
+  /** Owning engine run id — scopes turn-cancel kills to this engine's jobs. */
+  ownerId?: string | undefined;
   pushLog: (entry: BackgroundShellLogEntry) => void;
   onToolComplete?: ((id: number, detail?: string | undefined) => void) | undefined;
+  /** Invoked after local validation and immediately before background process spawn. */
+  onBeforeSpawn?: (() => void) | undefined;
+  /** Invoked immediately before awaiting a validated known background job. */
+  onBeforeAwait?: (() => void) | undefined;
 }
 
 export type BackgroundShellActionResult = { index: number; observation: string };
@@ -45,6 +52,8 @@ export async function executeAwaitCommandAction(
   ctx: BackgroundShellActionCtx,
 ): Promise<BackgroundShellActionResult> {
   const timeoutMs = (action.timeout_seconds ?? 120) * 1000;
+  // Unknown ids are local validation failures, not an external await effect.
+  if (hasBackgroundShellJob(action.task_id)) ctx.onBeforeAwait?.();
   const result = await awaitBackgroundShell(action.task_id, timeoutMs);
   const exitCode = result.timed_out ? null : result.exit_code;
   const detail = result.timed_out
@@ -77,10 +86,9 @@ export async function executeAwaitCommandAction(
     observation: `### await_command ${action.task_id}\nexit_code: ${exitCode ?? 'null'}\n\`\`\`\n${body}\n\`\`\``,
   };
 }
-
 /** run_command(background=true) — non-blocking shell with sandbox parity gates. */
 export function executeBackgroundRunCommandAction(
-  action: { command: string; cwd?: string | undefined },
+  action: { command: string; cwd?: string | undefined; detached?: boolean | undefined },
   ctx: BackgroundShellActionCtx,
 ): BackgroundShellActionResult {
   const denyBg = (message: string, detail = 'denied'): BackgroundShellActionResult => {
@@ -146,10 +154,13 @@ export function executeBackgroundRunCommandAction(
   }
 
   try {
+    ctx.onBeforeSpawn?.();
     const job = startBackgroundShell({
       command: action.command,
       cwd: safeCwd,
       timeoutMs: DEFAULT_BACKGROUND_JOB_TIMEOUT_MS,
+      detached: action.detached === true,
+      ...(ctx.ownerId !== undefined ? { ownerId: ctx.ownerId } : {}),
     });
     ctx.pushLog({
       tool: ctx.tool,

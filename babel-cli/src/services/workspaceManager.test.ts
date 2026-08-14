@@ -217,3 +217,25 @@ test('workspace verify blocks dependency install commands', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('workspace file reads deny credential-class paths while allowing .env.example', () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'babel-opencalw-credential-read-'));
+  const repo = join(workspace, 'repo');
+  try {
+    mkdirSync(repo);
+    writeFileSync(join(repo, '.env'), 'SYNTHETIC=only\n', 'utf-8');
+    writeFileSync(join(repo, '.env.example'), 'SYNTHETIC=\n', 'utf-8');
+
+    withWorkspaceRoot(workspace, () => {
+      withApprovedRoots([repo], () => {
+        assert.throws(
+          () => readWorkspaceFile('/workspace/repo/.env'),
+          /Credential read denied/,
+        );
+        assert.match(readWorkspaceFile('/workspace/repo/.env.example').content, /SYNTHETIC=/);
+      });
+    });
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});

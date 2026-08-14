@@ -68,6 +68,7 @@ import {
 import { getSafeEnv } from './utils/safeEnv.js';
 import { contextAwareOperatorCheck } from './utils/cmdTokenizer.js';
 import { sanitizePath } from './cli/constants.js';
+import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
 import { OutputBuffer } from './ui/outputBuffer.js';
 
 // ─── Shared result type ───────────────────────────────────────────────────────
@@ -97,6 +98,26 @@ export interface McpLifecycle {
   evidence: string[] | null;
 }
 
+/** How the host may render a high-risk tool result. */
+export type ToolRenderIntent =
+  | 'shell_output'
+  | 'mutation_receipt'
+  | 'mcp_result'
+  | 'tool_failure';
+
+/** Structured failure used when a tool handler returns an unusable result shape. */
+export interface ToolResultFailure {
+  code:
+    | 'invalid_tool_result'
+    | 'invalid_mcp_tool_result'
+    | 'mcp_tool_error'
+    | 'mcp_rpc_error'
+    | 'mcp_protocol_error'
+    | 'no_compatible_mcp_tool';
+  category: 'output_contract' | 'tool_execution' | 'transport' | 'input_contract';
+  tool: string;
+}
+
 export interface ToolResult {
   exit_code: number;
   stdout: string;
@@ -104,6 +125,76 @@ export interface ToolResult {
   denial?: StructuredDenial;
   mcp_lifecycle?: McpLifecycle;
   checkpoint_ids?: string[];
+  render_intent?: ToolRenderIntent;
+  failure?: ToolResultFailure;
+}
+
+/**
+ * Validate the small set of results that can be mistaken for execution evidence.
+ * This runs at the executor registry boundary, where a handler can still be
+ * replaced by a plugin, test double, or future transport implementation.
+ * Malformed payloads are never reflected in the error because tool output may
+ * contain untrusted or credential-like material.
+ */
+export function validateHighRiskToolResult(
+  tool: string,
+  candidate: unknown,
+): ToolResult {
+  const isMcp = tool.startsWith('mcp_');
+  const isShell = tool === 'shell_exec' || tool === 'test_run';
+  const isMutation = tool === 'file_write' || tool === 'file_delete';
+  if (!isMcp && !isShell && !isMutation) return candidate as ToolResult;
+
+  const invalid = (): ToolResult => ({
+    exit_code: 1,
+    stdout: '',
+    stderr: `[TOOL_RESULT_INVALID] ${tool} returned an invalid output contract.`,
+    render_intent: 'tool_failure',
+    failure: { code: isMcp ? 'invalid_mcp_tool_result' : 'invalid_tool_result', category: 'output_contract', tool },
+  });
+  if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) return invalid();
+
+  const result = candidate as Partial<ToolResult>;
+  if (
+    !Number.isInteger(result.exit_code) ||
+    (result.exit_code ?? -1) < 0 ||
+    typeof result.stdout !== 'string' ||
+    typeof result.stderr !== 'string'
+  ) return invalid();
+
+  // A mutation may only report success with an explicit receipt. Shell commands
+  // legitimately have empty stdout, so their exit code remains authoritative.
+  if (result.exit_code === 0 && isMutation && result.stdout.trim().length === 0) return invalid();
+
+  // An MCP success is execution evidence from an untrusted subprocess. Do not
+  // accept arbitrary handler stdout merely because it has exit code zero: the
+  // transport must attest a completed lifecycle and emit the recognised
+  // secret-safe MCP success envelope.
+  if (result.exit_code === 0 && isMcp) {
+    const lifecycle = result.mcp_lifecycle;
+    if (
+      lifecycle?.phase !== 'complete' ||
+      lifecycle.outcome !== 'success' ||
+      lifecycle.reason_code !== 'response_received' ||
+      typeof lifecycle.server !== 'string' ||
+      lifecycle.server.trim().length === 0
+    ) return invalid();
+    try {
+      const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+      if (!isCanonicalMcpSuccessResult(payload) || payload['server'] !== lifecycle.server) return invalid();
+    } catch {
+      return invalid();
+    }
+  }
+
+  const render_intent: ToolRenderIntent = result.exit_code !== 0
+    ? 'tool_failure'
+    : isMcp
+      ? 'mcp_result'
+      : isMutation
+        ? 'mutation_receipt'
+        : 'shell_output';
+  return { ...(result as ToolResult), render_intent };
 }
 
 export interface ShellCommandValidationIssue {
@@ -838,6 +929,23 @@ function policyDeniedResult(
   };
 }
 
+/** Return whether a path names credential-class material. */
+export function isCredentialReadPath(inputPath: string): boolean {
+  const normalized = inputPath.replace(/\\/g, '/').toLowerCase();
+  const segments = normalized.split('/').filter((segment) => segment.length > 0);
+  const name = basename(normalized);
+
+  if (name === '.env.example') return false;
+  if (name === '.env' || name.startsWith('.env.')) return true;
+  if (['id_rsa', 'id_ed25519', 'credentials.json'].includes(name)) return true;
+  if (/\.(pem|p12|pfx)$/.test(name)) return true;
+
+  return (
+    segments.includes('.ssh') ||
+    segments.includes('secrets') ||
+    segments.some((segment, index) => segment === '.aws' && segments[index + 1] === 'credentials')
+  );
+}
 function maybePolicyDeniedResult(
   err: unknown,
   tool: string,
@@ -850,6 +958,10 @@ function maybePolicyDeniedResult(
 
   if (message.startsWith('[sandbox] Symlink traversal denied:')) {
     return policyDeniedResult('symlink_escape_rejected', message, tool, evidence);
+  }
+
+  if (message.startsWith('[sandbox] Credential read denied:')) {
+    return policyDeniedResult('credential_read_denied', message, tool, evidence);
   }
 
   return null;
@@ -921,17 +1033,13 @@ export class SafeExecutor {
     const openclawRoots = process.env['BABEL_OPENCLAW_APPROVED_ROOTS']?.trim();
     const rootsSource = openclawRoots ?? allowedRootsRaw;
     if (rootsSource) {
-      this.approvedReadRoots = rootsSource.split(',').map((r) => {
+      this.approvedReadRoots = rootsSource.split(/[;,]/).map((r) => {
         const p = r.trim();
         return existsSync(p) ? realpathSync(p) : resolve(p);
       });
     } else {
-      // Default: the workspace parent (one level above projectRoot), capped at /tmp
-      const defaultReadRoot =
-        process.platform === 'win32' ? '/tmp' : (process.env['HOME'] ?? '/');
-      this.approvedReadRoots = [
-        existsSync(defaultReadRoot) ? realpathSync(defaultReadRoot) : resolve(defaultReadRoot),
-      ];
+      // Default to the active project. Cross-project reads require explicit authority.
+      this.approvedReadRoots = [this.projectRoot];
     }
   }
 
@@ -1237,14 +1345,27 @@ export class SafeExecutor {
     try {
       const safePath = this.resolveSafeRead(inputPath);
 
+      if (isCredentialReadPath(safePath)) {
+        throw new Error(
+          `[sandbox] Credential read denied: "${inputPath}" is credential-class material. ` +
+            'Read .env.example or inspect required variable names without loading secret values.',
+        );
+      }
+
       // Shadow Read-Through
       if (this.shadowRoot) {
         const relativePath = relative(this.projectRoot, safePath);
         const shadowPath = resolve(this.shadowRoot, relativePath);
         if (existsSync(shadowPath)) {
-          const stats = statSync(shadowPath);
+          const effectiveShadowPath = realpathSync(shadowPath);
+          if (isCredentialReadPath(effectiveShadowPath)) {
+            throw new Error(
+              `[sandbox] Credential read denied: "${inputPath}" resolves to credential-class shadow material.`,
+            );
+          }
+          const stats = statSync(effectiveShadowPath);
           if (!stats.isDirectory()) {
-            const content = readFileSync(shadowPath, 'utf-8');
+            const content = readFileSync(effectiveShadowPath, 'utf-8');
             return this.formatFileContent(content, options);
           }
         }
@@ -1348,13 +1469,28 @@ export class SafeExecutor {
     try {
       const safePath = this.resolveSafeRead(inputPath);
 
+      if (isCredentialReadPath(safePath)) {
+        throw new Error(
+          `[sandbox] Credential read denied: "${inputPath}" is credential-class material. ` +
+            'Read .env.example or inspect required variable names without loading secret values.',
+        );
+      }
+
       // Shadow Read-Through (for directories, we might want to merge, but for now simple swap)
       let effectivePath = safePath;
       if (this.shadowRoot) {
         const relativePath = relative(this.projectRoot, safePath);
         const shadowPath = resolve(this.shadowRoot, relativePath);
-        if (existsSync(shadowPath) && statSync(shadowPath).isDirectory()) {
-          effectivePath = shadowPath;
+        if (existsSync(shadowPath)) {
+          const effectiveShadowPath = realpathSync(shadowPath);
+          if (isCredentialReadPath(effectiveShadowPath)) {
+            throw new Error(
+              `[sandbox] Credential read denied: "${inputPath}" resolves to credential-class shadow material.`,
+            );
+          }
+          if (statSync(effectiveShadowPath).isDirectory()) {
+            effectivePath = effectiveShadowPath;
+          }
         }
       }
 

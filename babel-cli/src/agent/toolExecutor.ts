@@ -627,6 +627,10 @@ export async function executeActionWithPolicy(
     hostFallbackAllowed?: boolean;
     /** H4: explicit idempotency key for this invocation (defaults from action). */
     idempotencyKey?: string;
+    /** B2: final authorization check after policy/approval but before an effect ledger intent. */
+    onDispatchAuthorized?: () => { allowed: boolean; message?: string };
+    /** B2: invoked immediately before executor.execute after durable effect intent persistence. */
+    onBeforeExecutorExecute?: () => void;
     /** H4: task / plan-step linkage for effect transaction records. */
     taskId?: string;
     planStepId?: string;
@@ -820,6 +824,21 @@ export async function executeActionWithPolicy(
 
   // ── Successful execution: reset circuit-breaker ────────────────────
   resetBlocks(context.runId);
+  const dispatchAuthorization = deps.onDispatchAuthorized?.();
+  if (dispatchAuthorization && !dispatchAuthorization.allowed) {
+    incrementBlocks(context.runId);
+    return {
+      action,
+      terminal: false,
+      results: [{
+        exit_code: 1,
+        stdout: '',
+        stderr: `[RECOVERY_RECONCILIATION_REQUIRED] ${dispatchAuthorization.message ?? 'Reconcile the prior unknown effect before retrying'}`,
+      }],
+      policyDecision: 'deny',
+      policyBlocked: true,
+    };
+  }
 
   let txPaths: string[] = [];
   if (action.type === 'write_file') {
@@ -904,6 +923,7 @@ export async function executeActionWithPolicy(
   }
 
   try {
+    deps.onBeforeExecutorExecute?.();
     const execution = await executor.execute(action, context, budget);
     const toolFailed = execution.results.some((result) => result.exit_code !== 0);
 

@@ -48,6 +48,8 @@ export const ChatToolActionSchema = z.discriminatedUnion('type', [
   // Optional background flag on run_command (chat path only).
   BaseRunCommandSchema.extend({
     background: z.boolean().optional(),
+    /** Detached jobs survive turn cancellation. */
+    detached: z.boolean().optional(),
   }),
   z.object({
     type: z.literal('await_command'),
@@ -1040,6 +1042,11 @@ export function buildChatToolDefinitions(): ToolDefinition[] {
               type: 'boolean',
               description:
                 'When true, start the command in the background and return a task_id immediately. Jobs have a hard kill timeout (default 10 minutes). Use await_command to collect exit code and output.',
+            },
+            detached: {
+              type: 'boolean',
+              description:
+                'When true with background, the job survives chat turn cancellation (Ctrl+C). Default false — cancelled turns kill non-detached background jobs.',
             },
           },
           required: ['command'],
