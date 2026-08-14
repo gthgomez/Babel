@@ -148,6 +148,30 @@ export type CanonicalTurnEvent =
   | ModelSwitchedEvent
   | ContextCompactedEvent;
 
+export function mapOutcomeToStatus(
+  outcome: TerminalOutcome,
+): 'completed' | 'cancelled' | 'blocked' | 'budget_exhausted' | 'failed' {
+  switch (outcome) {
+    case 'VERIFIED_COMPLETE':
+    case 'UNVERIFIED_PATCH':
+    case 'NO_CHANGE_REQUIRED':
+      return 'completed';
+    case 'CANCELLED':
+      return 'cancelled';
+    case 'BLOCKED_POLICY':
+    case 'BLOCKED_EXTERNAL':
+    case 'NEEDS_HUMAN_DECISION':
+      return 'blocked';
+    case 'BUDGET_EXHAUSTED':
+      return 'budget_exhausted';
+    case 'AGENT_FAILURE':
+    case 'INFRA_FAILURE':
+    case 'INVALID_TASK':
+    default:
+      return 'failed';
+  }
+}
+
 export function mapSessionEventToCanonicalTurnEvent(ev: SessionEvent): CanonicalTurnEvent | null {
   const ts = new Date(ev.ts).getTime() || performance.now();
   switch (ev.kind) {
@@ -158,15 +182,15 @@ export function mapSessionEventToCanonicalTurnEvent(ev: SessionEvent): Canonical
         timestamp: ts,
         userInput: ev.task_preview,
         taskClass: ev.task_class ?? 'default',
-        model: ev.model ?? 'DeepSeek v4 Flash',
-        modelId: ev.model ?? 'deepseek-v4-flash',
+        model: ev.model ?? 'unknown',
+        modelId: ev.model ?? 'unknown',
       };
     case 'model_started':
       return {
         type: 'provider_request_started',
         requestId: ev.event_id,
         timestamp: ts,
-        modelId: ev.model ?? 'default',
+        modelId: ev.model ?? 'unknown',
       };
     case 'tool_started':
       return {
@@ -205,7 +229,7 @@ export function mapSessionEventToCanonicalTurnEvent(ev: SessionEvent): Canonical
         type: 'verification_evaluated',
         timestamp: ts,
         command: ev.command_preview,
-        exitCode: ev.exit_code ?? 0,
+        exitCode: ev.exit_code ?? -1,
         receipt: ev.receipt as unknown as VerifierReceipt,
         passed: ev.exit_code === 0,
       };
@@ -217,24 +241,31 @@ export function mapSessionEventToCanonicalTurnEvent(ev: SessionEvent): Canonical
         action: 'nudge',
         message: ev.detail ?? ev.action,
       };
-    case 'completion_decision':
+    case 'completion_decision': {
+      const outcome = ev.final_outcome as TerminalOutcome;
       return {
         type: 'turn_terminal_resolved',
         timestamp: ts,
-        outcome: ev.final_outcome as TerminalOutcome,
-        status: ev.final_outcome === 'CANCELLED' ? 'cancelled' : 'completed',
+        outcome,
+        status: mapOutcomeToStatus(outcome),
         finalAnswer: ev.reason,
       };
-    case 'turn_ended':
+    }
+    case 'turn_ended': {
+      const outcome = (ev as { outcome?: TerminalOutcome }).outcome;
+      const status = (ev as { status?: 'completed' | 'cancelled' | 'blocked' | 'budget_exhausted' | 'failed' }).status;
+      if (!outcome && !status) {
+        return null;
+      }
+      const resolvedOutcome = outcome ?? (status === 'cancelled' ? 'CANCELLED' : status === 'blocked' ? 'BLOCKED_POLICY' : status === 'budget_exhausted' ? 'BUDGET_EXHAUSTED' : 'AGENT_FAILURE');
       return {
         type: 'turn_terminal_resolved',
         timestamp: ts,
-        outcome: (ev as { outcome?: TerminalOutcome }).outcome ?? 'NO_CHANGE_REQUIRED',
-        status:
-          (ev as { status?: 'completed' | 'cancelled' | 'blocked' | 'budget_exhausted' | 'failed' })
-            .status ?? 'completed',
+        outcome: resolvedOutcome,
+        status: status ?? mapOutcomeToStatus(resolvedOutcome),
         finalAnswer: '',
       };
+    }
     default:
       return null;
   }

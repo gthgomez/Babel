@@ -68,8 +68,8 @@ export function projectTurnViewState(
   let turnId = 'turn-0';
   let taskClass = 'default';
   let userInput = '';
-  let model = 'DeepSeek v4 Flash';
-  let modelId = 'deepseek-v4-flash';
+  let model = 'unknown';
+  let modelId = 'unknown';
   let activeContextTokens: number | null = null;
   let sessionTokens = initialSessionTokens;
   let sessionCost = initialSessionCost;
@@ -149,14 +149,27 @@ export function projectTurnViewState(
         };
         break;
 
-      case 'turn_terminal_resolved':
-        terminalOutcome = ev.outcome;
-        terminalStatus = ev.status;
-        isTerminal = true;
+      case 'turn_terminal_resolved': {
+        const isStronger =
+          !isTerminal ||
+          ev.outcome === 'CANCELLED' ||
+          ev.outcome === 'VERIFIED_COMPLETE' ||
+          ev.outcome === 'BLOCKED_POLICY' ||
+          ev.outcome === 'BUDGET_EXHAUSTED' ||
+          ev.outcome === 'INFRA_FAILURE' ||
+          ev.outcome === 'AGENT_FAILURE' ||
+          (terminalOutcome === 'NO_CHANGE_REQUIRED' && ev.outcome !== 'NO_CHANGE_REQUIRED');
+
+        if (isStronger) {
+          terminalOutcome = ev.outcome;
+          terminalStatus = ev.status;
+          isTerminal = true;
+        }
         if (ev.finalAnswer) {
           answerBuffer = ev.finalAnswer;
         }
         break;
+      }
     }
   }
 

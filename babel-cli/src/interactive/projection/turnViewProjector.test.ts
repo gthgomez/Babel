@@ -400,4 +400,91 @@ describe('PR-C: Canonical Turn View Projection', () => {
     assert.equal(turn2View.transcriptCell.assistantAnswer, 'It is 12:00 PM.');
     assert.equal(turn2View.statusBar.turnCount, 2);
   });
+
+  test('adversarial sequence: authoritative failure cannot be overwritten by later sparse completion', () => {
+    const events: CanonicalTurnEvent[] = [
+      {
+        type: 'turn_started',
+        turnId: 'turn-adv-1',
+        timestamp: 1000,
+        userInput: 'risky edit',
+        taskClass: 'default',
+        model: 'unknown',
+        modelId: 'unknown',
+      },
+      {
+        type: 'turn_terminal_resolved',
+        timestamp: 1100,
+        outcome: 'BLOCKED_POLICY',
+        status: 'blocked',
+        finalAnswer: 'Blocked by safe path policy.',
+      },
+      // Adversarial later sparse event
+      {
+        type: 'turn_terminal_resolved',
+        timestamp: 1200,
+        outcome: 'NO_CHANGE_REQUIRED',
+        status: 'completed',
+        finalAnswer: '',
+      },
+    ];
+
+    const view = projectTurnViewState(events);
+    assert.equal(view.reviewCard.terminalOutcome, 'BLOCKED_POLICY');
+    assert.equal(view.reviewCard.status, 'blocked');
+    assert.equal(view.reviewCard.title, 'Blocked by policy');
+    assert.equal(view.statusBar.statusLabel, 'blocked');
+  });
+
+  test('adversarial sequence: cancellation cannot be overwritten by generic end event', () => {
+    const events: CanonicalTurnEvent[] = [
+      {
+        type: 'turn_started',
+        turnId: 'turn-adv-2',
+        timestamp: 1000,
+        userInput: 'cancel me',
+        taskClass: 'default',
+        model: 'unknown',
+        modelId: 'unknown',
+      },
+      {
+        type: 'turn_terminal_resolved',
+        timestamp: 1100,
+        outcome: 'CANCELLED',
+        status: 'cancelled',
+        finalAnswer: 'Turn cancelled.',
+      },
+      // Adversarial generic end event
+      {
+        type: 'turn_terminal_resolved',
+        timestamp: 1200,
+        outcome: 'NO_CHANGE_REQUIRED',
+        status: 'completed',
+        finalAnswer: '',
+      },
+    ];
+
+    const view = projectTurnViewState(events);
+    assert.equal(view.reviewCard.terminalOutcome, 'CANCELLED');
+    assert.equal(view.reviewCard.status, 'cancelled');
+    assert.equal(view.reviewCard.title, 'Cancelled');
+  });
+
+  test('unknown model fallback represents unknown truthfully without fabricating identity', () => {
+    const events: CanonicalTurnEvent[] = [
+      {
+        type: 'turn_started',
+        turnId: 'turn-unknown',
+        timestamp: 1000,
+        userInput: 'hello',
+        taskClass: 'default',
+        model: 'unknown',
+        modelId: 'unknown',
+      },
+    ];
+
+    const view = projectTurnViewState(events);
+    assert.equal(view.statusBar.model, 'unknown');
+    assert.equal(view.statusBar.modelId, 'unknown');
+  });
 });
