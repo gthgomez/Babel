@@ -129,13 +129,13 @@ export function buildPolicyTerminalBlockedReport(
         ? 'Read-only inspection budget reached'
         : 'Too many tools without a file mutation (investigate hard cap)',
       missing: isReadOnlyReport
-        ? 'Evidence sufficient for complete answer'
+        ? 'Sufficient evidence to answer confidently'
         : 'A successful str_replace/write_file before more exploration',
       target: isReadOnlyReport ? 'inspection_budget' : 'investigate_budget',
     },
     read_only_hard_cap: {
       reason: 'Read-only inspection budget reached',
-      missing: 'Evidence sufficient for complete answer',
+      missing: 'Sufficient evidence to answer confidently',
       target: 'inspection_budget',
     },
     env_blocked: {
@@ -243,7 +243,7 @@ export function buildInvestigateHardCapTerminalMessage(
 ): string {
   if (isReadOnly) {
     return [
-      `BLOCKED: ${toolsWithoutWrite} tools used for inspection query ` +
+      `READ_ONLY_BUDGET_REACHED: ${toolsWithoutWrite} tools used for inspection query ` +
         `(hard cap ${hardCap} for this task class).`,
       'Inspection tool budget reached. Stop reading tools.',
       'Please synthesize and return your best-supported final answer based on the evidence gathered so far, noting any limitations or discrepancies.',

@@ -293,3 +293,124 @@ describe('ChatEngine recursive shell degradation & suppression loop', () => {
   });
 });
 
+describe('ChatEngine read-only inspection hard cap answer synthesis', () => {
+  it('synthesizes informational answer and completes normally with blockedReport: null on hard cap', async () => {
+    const engine = new ChatEngine({
+      task: 'how many services exist in this project',
+      projectRoot: '/tmp',
+      maxTurns: 20,
+    });
+
+    let toolCount = 0;
+    const mockRunner = {
+      executeWithToolsStream: async function* () {
+        toolCount += 1;
+        yield {
+          type: 'tool_use' as const,
+          id: `tool-${toolCount}`,
+          name: 'read_file',
+          input: { path: `src/file_${toolCount}.ts` },
+        };
+        yield { type: 'done' as const, finishReason: 'tool_calls' as const };
+      },
+      execute: async () => ({
+        type: 'completion',
+        answer: 'Synthesized summary: The repository contains 10 modules and 4 services.',
+      }),
+      executeRaw: async () => 'Synthesized summary: The repository contains 10 modules and 4 services.',
+      getLastInvocationMetadata: () => null,
+    };
+
+    (engine as any).deliberationRunner = mockRunner;
+    (engine as any).synthesisRunner = mockRunner;
+    (engine as any).shouldUseNativeTools = () => true;
+
+    // Stub executeOneAction to return unique file contents per path and update inspection counters
+    (engine as any).executeOneAction = async (action: any) => {
+      (engine as any).noteToolForReadThrash(action.type ?? 'read_file');
+      return {
+        action: { ...action, path: action.path ?? `src/file_${toolCount}.ts` },
+        observation: `Content of file_${toolCount}: exports data_${toolCount}`,
+      };
+    };
+
+    let doneEvent: any = null;
+    for await (const event of engine.submitMessageStream('how many services exist in this project', 'ask' as any)) {
+      if (event.type === 'done') {
+        doneEvent = event;
+      }
+    }
+
+    assert.ok(doneEvent, 'Stream must yield a done event');
+    assert.equal(doneEvent.blockedReport ?? null, null, 'Must NOT be BLOCKED for reaching inspection budget');
+    assert.ok(doneEvent.answer.includes('Synthesized summary: The repository contains 10 modules and 4 services.'));
+    assert.ok(!doneEvent.answer.includes('BLOCKED:'));
+    assert.ok(!doneEvent.answer.includes('str_replace'));
+    assert.ok(!doneEvent.answer.includes('write_file'));
+  });
+
+  it('truthfully reports synthesis failure when synthesis runner errors without misreporting inspection budget', async () => {
+    const engine = new ChatEngine({
+      task: 'how many services exist in this project',
+      projectRoot: '/tmp',
+      maxTurns: 20,
+    });
+
+    let toolCount = 0;
+    const mockDelibRunner = {
+      executeWithToolsStream: async function* () {
+        toolCount += 1;
+        yield {
+          type: 'tool_use' as const,
+          id: `tool-${toolCount}`,
+          name: 'read_file',
+          input: { path: `src/file_${toolCount}.ts` },
+        };
+        yield { type: 'done' as const, finishReason: 'tool_calls' as const };
+      },
+      execute: async () => ({
+        type: 'completion',
+        answer: 'Exploring...',
+      }),
+      executeRaw: async () => 'Exploring...',
+      getLastInvocationMetadata: () => null,
+    };
+
+    const mockSynthRunner = {
+      execute: async () => {
+        throw new Error('LLM Provider timeout 504');
+      },
+      executeRaw: async () => {
+        throw new Error('LLM Provider timeout 504');
+      },
+      getLastInvocationMetadata: () => null,
+    };
+
+    (engine as any).deliberationRunner = mockDelibRunner;
+    (engine as any).synthesisRunner = mockSynthRunner;
+    (engine as any).shouldUseNativeTools = () => true;
+
+    (engine as any).executeOneAction = async (action: any) => {
+      (engine as any).noteToolForReadThrash(action.type ?? 'read_file');
+      return {
+        action: { ...action, path: action.path ?? `src/file_${toolCount}.ts` },
+        observation: `Content of file_${toolCount}: exports data_${toolCount}`,
+      };
+    };
+
+    const events: any[] = [];
+    for await (const event of engine.submitMessageStream('how many services exist in this project', 'ask' as any)) {
+      events.push(event);
+    }
+    const doneEvents = events.filter((e) => e.type === 'done');
+    const doneEvent = doneEvents[doneEvents.length - 1];
+
+    assert.ok(doneEvent, `Stream must yield a done event; got all events: ${JSON.stringify(events)}`);
+    assert.ok(doneEvent.blockedReport, `Must have blockedReport; got doneEvent: ${JSON.stringify(doneEvent)}`);
+    assert.equal(doneEvent.blockedReport.reason, 'Answer synthesis unavailable');
+    assert.notEqual(doneEvent.blockedReport.reason, 'Too many tools without a file mutation (investigate hard cap)');
+    assert.notEqual(doneEvent.blockedReport.reason, 'Read-only inspection budget reached');
+    assert.ok(doneEvent.blockedReport.missing.includes('LLM provider response'));
+  });
+});
+

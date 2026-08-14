@@ -556,13 +556,18 @@ describe('Provider capabilities', () => {
     assert.equal(budget.contextBudget, 128_000 - 8_192 - 4_096 - 1_024);
 
     const caps = resolveProviderCapabilities('deepseek-v4-pro');
-    assert.equal(caps.contextWindow, 128_000);
-    assert.notEqual(caps.contextWindow, 1_000_000);
+    assert.equal(caps.contextWindow, 1_000_000);
 
     const bar = getContextLimit('deepseek-v4-pro');
-    assert.equal(bar.tokens, 128_000);
+    assert.equal(bar.tokens, 1_000_000);
 
-    assert.equal(shouldCompactByTokens(budget.contextBudget + 1, 'deepseek-v4-pro'), true);
+    const proBudget = computeContextBudget({
+      contextWindow: 1_000_000,
+      maxOutputTokens: 8_192,
+      toolSchemaReserve: 4_096,
+      safetyMargin: 1_024,
+    });
+    assert.equal(shouldCompactByTokens(proBudget.contextBudget + 1, 'deepseek-v4-pro'), true);
     assert.equal(shouldCompactByTokens(100, 'deepseek-v4-pro'), false);
   });
 

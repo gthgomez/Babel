@@ -528,6 +528,11 @@ export function parityArbitrateCycle(input: {
    * Outranks soft investigate_budget / force_mutate nudges.
    */
   investigateHardCapTerminal?: string | null;
+  /**
+   * Hard cap for read-only inspection queries → terminal answer synthesis.
+   * Concludes inspection and prompts model for best-supported informational answer.
+   */
+  readOnlyHardCapTerminal?: string | null;
   stallMessage?: string | null;
   /** Non-shadow stall kill — terminal via progress_terminal precedence. */
   stallKillMessage?: string | null;
@@ -540,6 +545,8 @@ export function parityArbitrateCycle(input: {
   zeroWriteTerminalMessage?: string | null;
   hardCeiling?: boolean;
   hardCeilingReason?: string;
+  /** Read-only inspection query (bypasses mutation-based progress thrash/stall policies). */
+  isReadOnlyInspection?: boolean;
   /**
    * Host/toolchain env block (missing pytest, pre-write host ImportError, …).
    * Caller should suppress post-write import failures (patch-induced).
@@ -572,14 +579,20 @@ export function parityArbitrateCycle(input: {
         `do not treat this as policy thrash or missing semantic progress.`,
     });
   }
-  if (input.investigateHardCapTerminal?.trim()) {
+  if (input.readOnlyHardCapTerminal?.trim()) {
+    candidates.push({
+      source: 'read_only_hard_cap',
+      action: 'terminal',
+      message: input.readOnlyHardCapTerminal.trim(),
+    });
+  } else if (input.investigateHardCapTerminal?.trim()) {
     candidates.push({
       source: 'investigate_hard_cap',
       action: 'terminal',
       message: input.investigateHardCapTerminal.trim(),
     });
   }
-  if (input.stallKillMessage) {
+  if (input.stallKillMessage && !input.isReadOnlyInspection) {
     candidates.push({
       source: 'progress_terminal',
       action: 'terminal',
@@ -601,8 +614,8 @@ export function parityArbitrateCycle(input: {
         }
       : {}),
   });
-  // Skip progress thrash interventions when env already queued — wrong failure class.
-  if (!input.envBlockedSignal?.trim()) {
+  // Skip progress thrash interventions when env, read-only inspection, or read-only hard cap active.
+  if (!input.envBlockedSignal?.trim() && !input.readOnlyHardCapTerminal?.trim() && !input.isReadOnlyInspection) {
     if (progressIx.action === 'terminal') {
       candidates.push({
         source: 'progress_terminal',

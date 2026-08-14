@@ -338,6 +338,8 @@ describe('chatZeroWritePolicy', () => {
       currentTurn: 2,
     });
     assert.ok(result.investigateHardCapTerminal);
+    assert.match(result.investigateHardCapTerminal!, /^READ_ONLY_BUDGET_REACHED:/);
+    assert.ok(!result.investigateHardCapTerminal?.startsWith('BLOCKED:'));
     assert.match(result.investigateHardCapTerminal!, /Inspection tool budget reached/i);
     assert.match(result.investigateHardCapTerminal!, /synthesize and return your best-supported final answer/i);
     // Must NEVER ask a read-only task to use mutation tools

@@ -19,6 +19,7 @@ export type PolicySource =
   | 'circuit_breaker'
   | 'external_blocker'
   | 'env_blocked'
+  | 'read_only_hard_cap'
   | 'progress_terminal'
   | 'investigate_hard_cap'
   | 'progress_recover'
@@ -53,6 +54,7 @@ export const POLICY_PRECEDENCE: readonly PolicySource[] = [
   'external_blocker',
   // Host toolchain/import failures outrank progress thrash (pilot: ImportError → progress death spiral)
   'env_blocked',
+  'read_only_hard_cap',
   'progress_terminal',
   // Explore thrash hard stop (tools without write ≥ hard cap)
   'investigate_hard_cap',

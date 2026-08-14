@@ -2253,15 +2253,21 @@ export class ChatEngine {
           }
           return null;
         })();
+        const isReadOnlyInspection =
+          resolvedIntent !== 'execute' &&
+          (this.taskClass === 'quick_inspect' || this.taskClass === 'investigate');
+
         const arb = parityArbitrateCycle({
           rt: this.parity,
+          isReadOnlyInspection,
           fuseLabels: exploreFuses.labels,
           forceMutateMessage: exploreFuses.forceMutateMessage,
           readThrashMessage: exploreFuses.readThrashMessage,
           explorationFuseMessage: exploreFuses.explorationFuseMessage,
           shellSoftMessage: exploreFuses.shellSoftMessage,
           investigateBudgetMessage: exploreFuses.investigateBudgetMessage,
-          investigateHardCapTerminal: exploreFuses.investigateHardCapTerminal,
+          readOnlyHardCapTerminal: isReadOnlyInspection ? exploreFuses.investigateHardCapTerminal : null,
+          investigateHardCapTerminal: !isReadOnlyInspection ? exploreFuses.investigateHardCapTerminal : null,
           stallMessage:
             stallIntervention && stallIntervention.level !== 'kill'
               ? stallIntervention.message
@@ -2288,23 +2294,44 @@ export class ChatEngine {
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
 
-          const isReadOnlyInspection =
-            resolvedIntent !== 'execute' &&
-            (this.taskClass === 'quick_inspect' || this.taskClass === 'investigate');
-
           // Read-only inspection hard cap: synthesize gathered evidence into a final informational answer
           if (
             (arb.policySource === 'investigate_hard_cap' || arb.policySource === 'read_only_hard_cap') &&
             isReadOnlyInspection
           ) {
-            const synthAnswer = await this.synthesizeAnswer(allToolObservations, {
-              onAnswerChunk: (_chunk: string) => {},
-            }).catch(() => '');
+            let synthAnswer = '';
+            let synthError: Error | null = null;
+            try {
+              synthAnswer = await this.synthesizeAnswer(allToolObservations, {
+                onAnswerChunk: (_chunk: string) => {},
+              });
+            } catch (err: any) {
+              synthError = err instanceof Error ? err : new Error(String(err));
+            }
 
-            const finalAnswer = synthAnswer?.trim()
-              ? synthAnswer.trim()
-              : arb.terminalAnswer;
+            if (synthError || !synthAnswer?.trim()) {
+              const failMsg = `Answer synthesis failed after inspection completed: ${synthError?.message ?? 'no answer generated'}`;
+              this.conversation.push({ role: 'assistant', content: failMsg });
+              yield { type: 'answer_chunk', text: failMsg };
+              yield this.streamDone(failMsg, {
+                blockedReport: {
+                  schema_version: 1,
+                  status: 'BLOCKED',
+                  reason: 'Answer synthesis unavailable',
+                  missing: 'LLM provider response for answer synthesis',
+                  checked: [
+                    {
+                      action: 'synthesize_answer',
+                      target: 'provider',
+                      finding: synthError?.message ?? 'Empty synthesis output',
+                    },
+                  ],
+                },
+              });
+              return;
+            }
 
+            const finalAnswer = synthAnswer.trim();
             const synthBlocked = this.detectAndBuildBlockedReport(finalAnswer);
             this.conversation.push({ role: 'assistant', content: finalAnswer });
             yield { type: 'answer_chunk', text: finalAnswer };
