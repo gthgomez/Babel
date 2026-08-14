@@ -147,6 +147,7 @@ export type StreamDoneEvent = {
   observationTails?: ObservationTailEntry[];
   blockedAttempts?: BlockedAttempt[];
   turnSummaries?: TurnSummary[];
+  turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
 };
 
 export type StreamFailedEvent = {
@@ -154,6 +155,7 @@ export type StreamFailedEvent = {
   error: string;
   toolCalls: ExportedToolCall[];
   runDir?: string;
+  turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
 };
 
 export interface ObservabilityHandles {
@@ -245,6 +247,7 @@ export function buildStreamDone(
     blockedReport?: BlockedReport | null;
     verifierTampered?: boolean;
     criticReceipt?: DiffCriticVerdict | null;
+    turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord;
   },
 ): StreamDoneEvent {
   if (!extra?.outcome) {
@@ -269,16 +272,22 @@ export function buildStreamDone(
   if (extra.verifierTampered) event.verifierTampered = true;
   if (extra.criticReceipt) event.criticReceipt = extra.criticReceipt;
   if (extra.planOutcome) event.planOutcome = extra.planOutcome;
+  if (extra.turnTelemetry) event.turnTelemetry = extra.turnTelemetry;
   return event;
 }
 
-export function buildStreamFailed(h: ObservabilityHandles, error: string): StreamFailedEvent {
+export function buildStreamFailed(
+  h: ObservabilityHandles,
+  error: string,
+  extra?: { turnTelemetry?: import('./chatTurnTelemetry.js').ChatTurnTelemetryRecord },
+): StreamFailedEvent {
   const event: StreamFailedEvent = {
     type: 'failed',
     error,
     toolCalls: exportToolCalls(h.toolCallLog),
   };
   if (h.engineRunDir) event.runDir = h.engineRunDir;
+  if (extra?.turnTelemetry) event.turnTelemetry = extra.turnTelemetry;
   return event;
 }
 

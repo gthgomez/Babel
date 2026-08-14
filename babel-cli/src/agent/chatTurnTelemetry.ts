@@ -12,6 +12,42 @@
  * - Token efficiency and intervention counts
  */
 
+export interface TimeInterval {
+  start: number;
+  end: number;
+}
+
+/**
+ * Computes total covered wall-clock duration of a set of intervals
+ * by merging overlapping and contiguous ranges.
+ */
+export function computeIntervalUnionDuration(intervals: readonly TimeInterval[]): number {
+  if (intervals.length === 0) return 0;
+  const sorted = [...intervals]
+    .filter((iv) => iv.end >= iv.start)
+    .sort((a, b) => a.start - b.start);
+  const first = sorted[0];
+  if (!first) return 0;
+
+  let total = 0;
+  let currentStart = first.start;
+  let currentEnd = first.end;
+
+  for (let i = 1; i < sorted.length; i++) {
+    const iv = sorted[i];
+    if (!iv) continue;
+    if (iv.start <= currentEnd) {
+      currentEnd = Math.max(currentEnd, iv.end);
+    } else {
+      total += Math.max(0, currentEnd - currentStart);
+      currentStart = iv.start;
+      currentEnd = iv.end;
+    }
+  }
+  total += Math.max(0, currentEnd - currentStart);
+  return total;
+}
+
 export interface ChatTurnTimingBreakdown {
   /** Timestamp when user submitted the turn (monotonic ms) */
   submittedAt: number;
@@ -80,9 +116,16 @@ export class ChatTurnTelemetryCollector {
   private policyInterventions: number = 0;
   private pastTools: string[] = [];
 
+  private providerIntervals: TimeInterval[] = [];
+  private toolIntervals: TimeInterval[] = [];
+  private verificationIntervals: TimeInterval[] = [];
+  private criticIntervals: TimeInterval[] = [];
+  private compactionIntervals: TimeInterval[] = [];
+
   constructor(submittedAt?: number, nowFn: () => number = () => performance.now()) {
     this.nowFn = nowFn;
     this.submittedAt = submittedAt ?? this.nowFn();
+    this.startedAt = this.submittedAt;
   }
 
   public markStarted(): void {
@@ -95,13 +138,75 @@ export class ChatTurnTelemetryCollector {
     }
   }
 
-  public recordProviderSpan(durationMs: number): void {
-    this.providerDurationMs += Math.max(0, durationMs);
-    this.modelInvocations += 1;
+  public startProviderSpan(): { end: () => void } {
+    const start = this.nowFn();
+    return {
+      end: () => {
+        const end = this.nowFn();
+        this.recordProviderSpan(Math.max(0, end - start), start, end);
+      },
+    };
   }
 
-  public recordToolSpan(toolName: string, target: string, durationMs: number, success: boolean): void {
-    this.toolDurationMs += Math.max(0, durationMs);
+  public startToolSpan(toolName: string, target: string): { end: (success: boolean) => void } {
+    const start = this.nowFn();
+    return {
+      end: (success: boolean) => {
+        const end = this.nowFn();
+        this.recordToolSpan(toolName, target, Math.max(0, end - start), success, start, end);
+      },
+    };
+  }
+
+  public startVerificationSpan(): { end: () => void } {
+    const start = this.nowFn();
+    return {
+      end: () => {
+        const end = this.nowFn();
+        this.recordVerificationSpan(Math.max(0, end - start), start, end);
+      },
+    };
+  }
+
+  public startCriticSpan(): { end: () => void } {
+    const start = this.nowFn();
+    return {
+      end: () => {
+        const end = this.nowFn();
+        this.recordCriticSpan(Math.max(0, end - start), start, end);
+      },
+    };
+  }
+
+  public startCompactionSpan(): { end: () => void } {
+    const start = this.nowFn();
+    return {
+      end: () => {
+        const end = this.nowFn();
+        this.recordCompactionSpan(Math.max(0, end - start), start, end);
+      },
+    };
+  }
+
+  public recordProviderSpan(durationMs: number, start?: number, end?: number): void {
+    const d = Math.max(0, durationMs);
+    this.providerDurationMs += d;
+    this.modelInvocations += 1;
+    const s = start ?? this.nowFn() - d;
+    const e = end ?? s + d;
+    this.providerIntervals.push({ start: s, end: e });
+  }
+
+  public recordToolSpan(
+    toolName: string,
+    target: string,
+    durationMs: number,
+    success: boolean,
+    start?: number,
+    end?: number,
+  ): void {
+    const d = Math.max(0, durationMs);
+    this.toolDurationMs += d;
     this.toolCalls += 1;
     if (success) {
       this.successfulToolCalls += 1;
@@ -114,18 +219,33 @@ export class ChatTurnTelemetryCollector {
     } else {
       this.pastTools.push(signature);
     }
+    const s = start ?? this.nowFn() - d;
+    const e = end ?? s + d;
+    this.toolIntervals.push({ start: s, end: e });
   }
 
-  public recordVerificationSpan(durationMs: number): void {
-    this.verificationDurationMs += Math.max(0, durationMs);
+  public recordVerificationSpan(durationMs: number, start?: number, end?: number): void {
+    const d = Math.max(0, durationMs);
+    this.verificationDurationMs += d;
+    const s = start ?? this.nowFn() - d;
+    const e = end ?? s + d;
+    this.verificationIntervals.push({ start: s, end: e });
   }
 
-  public recordCriticSpan(durationMs: number): void {
-    this.criticDurationMs += Math.max(0, durationMs);
+  public recordCriticSpan(durationMs: number, start?: number, end?: number): void {
+    const d = Math.max(0, durationMs);
+    this.criticDurationMs += d;
+    const s = start ?? this.nowFn() - d;
+    const e = end ?? s + d;
+    this.criticIntervals.push({ start: s, end: e });
   }
 
-  public recordCompactionSpan(durationMs: number): void {
-    this.compactionDurationMs += Math.max(0, durationMs);
+  public recordCompactionSpan(durationMs: number, start?: number, end?: number): void {
+    const d = Math.max(0, durationMs);
+    this.compactionDurationMs += d;
+    const s = start ?? this.nowFn() - d;
+    const e = end ?? s + d;
+    this.compactionIntervals.push({ start: s, end: e });
   }
 
   public recordPolicyIntervention(): void {
@@ -140,15 +260,19 @@ export class ChatTurnTelemetryCollector {
     cumulativeSessionTokens: number;
   }): ChatTurnTelemetryRecord {
     const endedAt = this.nowFn();
-    const totalWallTimeMs = Math.max(0, endedAt - (this.startedAt || this.submittedAt));
-    const productiveTimeMs =
-      this.providerDurationMs +
-      this.toolDurationMs +
-      this.verificationDurationMs +
-      this.criticDurationMs +
-      this.compactionDurationMs;
+    const effectiveStart = this.startedAt || this.submittedAt;
+    const totalWallTimeMs = Math.max(0, endedAt - effectiveStart);
 
-    const orchestrationOverheadMs = Math.max(0, totalWallTimeMs - productiveTimeMs);
+    // Overlap-safe productive time computation using union of all active intervals
+    const allIntervals = [
+      ...this.providerIntervals,
+      ...this.toolIntervals,
+      ...this.verificationIntervals,
+      ...this.criticIntervals,
+      ...this.compactionIntervals,
+    ];
+    const productiveUnionMs = computeIntervalUnionDuration(allIntervals);
+    const orchestrationOverheadMs = Math.max(0, totalWallTimeMs - productiveUnionMs);
     const ttftMs =
       this.firstTokenAt !== null ? Math.max(0, this.firstTokenAt - this.submittedAt) : null;
 

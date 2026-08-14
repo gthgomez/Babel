@@ -53,6 +53,7 @@ export interface InteractiveTurn {
   changed_files?: string[];
   verification?: string | null;
   next?: string | null;
+  turn_telemetry?: import('../agent/chatTurnTelemetry.js').ChatTurnTelemetryRecord | undefined;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
