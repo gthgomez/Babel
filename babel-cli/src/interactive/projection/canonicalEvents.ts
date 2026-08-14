@@ -7,6 +7,7 @@
 
 import type { TerminalOutcome } from '../../schemas/agentContracts.js';
 import type { VerifierReceipt } from '../../agent/completionGatePolicy.js';
+import type { SessionEvent } from '../../agent/sessionEvents.js';
 
 export type CanonicalEventType =
   | 'turn_started'
@@ -16,6 +17,7 @@ export type CanonicalEventType =
   | 'tool_started'
   | 'tool_progressed'
   | 'tool_completed'
+  | 'mutation_batch_recorded'
   | 'policy_intervention_triggered'
   | 'verification_evaluated'
   | 'turn_terminal_resolved'
@@ -86,6 +88,12 @@ export interface ToolCompletedEvent {
   isMutating: boolean;
 }
 
+export interface MutationBatchRecordedEvent {
+  type: 'mutation_batch_recorded';
+  timestamp: number;
+  paths: string[];
+}
+
 export interface PolicyInterventionTriggeredEvent {
   type: 'policy_intervention_triggered';
   timestamp: number;
@@ -133,8 +141,112 @@ export type CanonicalTurnEvent =
   | ToolStartedEvent
   | ToolProgressedEvent
   | ToolCompletedEvent
+  | MutationBatchRecordedEvent
   | PolicyInterventionTriggeredEvent
   | VerificationEvaluatedEvent
   | TurnTerminalResolvedEvent
   | ModelSwitchedEvent
   | ContextCompactedEvent;
+
+export function mapSessionEventToCanonicalTurnEvent(ev: SessionEvent): CanonicalTurnEvent | null {
+  const ts = new Date(ev.ts).getTime() || performance.now();
+  switch (ev.kind) {
+    case 'user_submitted':
+      return {
+        type: 'turn_started',
+        turnId: ev.turn_id ?? '0',
+        timestamp: ts,
+        userInput: ev.task_preview,
+        taskClass: ev.task_class ?? 'default',
+        model: ev.model ?? 'DeepSeek v4 Flash',
+        modelId: ev.model ?? 'deepseek-v4-flash',
+      };
+    case 'model_started':
+      return {
+        type: 'provider_request_started',
+        requestId: ev.event_id,
+        timestamp: ts,
+        modelId: ev.model ?? 'default',
+      };
+    case 'tool_started':
+      return {
+        type: 'tool_started',
+        toolId: ev.tool_call_id,
+        toolName: ev.tool_name,
+        target: '',
+        timestamp: ts,
+        isMutating:
+          ev.effect_class === 'reconcilable_mutation' ||
+          ev.effect_class === 'non_idempotent_local_effect',
+      };
+    case 'tool_completed':
+    case 'tool_failed': {
+      const err = ev.kind === 'tool_failed' ? (ev as { error_preview?: string }).error_preview : undefined;
+      return {
+        type: 'tool_completed',
+        toolId: ev.tool_call_id,
+        toolName: ev.tool_name,
+        target: '',
+        timestamp: ts,
+        durationMs: 0,
+        exitCode: ev.exit_code ?? (ev.kind === 'tool_completed' ? 0 : 1),
+        ...(err ? { error: err } : {}),
+        isMutating: false,
+      };
+    }
+    case 'mutation_batch':
+      return {
+        type: 'mutation_batch_recorded',
+        timestamp: ts,
+        paths: [...ev.paths],
+      };
+    case 'verifier_attempt':
+      return {
+        type: 'verification_evaluated',
+        timestamp: ts,
+        command: ev.command_preview,
+        exitCode: ev.exit_code ?? 0,
+        receipt: ev.receipt as unknown as VerifierReceipt,
+        passed: ev.exit_code === 0,
+      };
+    case 'policy_intervened':
+      return {
+        type: 'policy_intervention_triggered',
+        timestamp: ts,
+        policyKind: 'stall_nudge',
+        action: 'nudge',
+        message: ev.detail ?? ev.action,
+      };
+    case 'completion_decision':
+      return {
+        type: 'turn_terminal_resolved',
+        timestamp: ts,
+        outcome: ev.final_outcome as TerminalOutcome,
+        status: ev.final_outcome === 'CANCELLED' ? 'cancelled' : 'completed',
+        finalAnswer: ev.reason,
+      };
+    case 'turn_ended':
+      return {
+        type: 'turn_terminal_resolved',
+        timestamp: ts,
+        outcome: (ev as { outcome?: TerminalOutcome }).outcome ?? 'NO_CHANGE_REQUIRED',
+        status:
+          (ev as { status?: 'completed' | 'cancelled' | 'blocked' | 'budget_exhausted' | 'failed' })
+            .status ?? 'completed',
+        finalAnswer: '',
+      };
+    default:
+      return null;
+  }
+}
+
+export function mapSessionEventsToCanonicalTurnEvents(
+  events: readonly SessionEvent[],
+): CanonicalTurnEvent[] {
+  const out: CanonicalTurnEvent[] = [];
+  for (const ev of events) {
+    const mapped = mapSessionEventToCanonicalTurnEvent(ev);
+    if (mapped) out.push(mapped);
+  }
+  return out;
+}

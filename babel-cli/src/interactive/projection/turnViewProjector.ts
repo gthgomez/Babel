@@ -5,9 +5,15 @@
  * of canonical turn events without side effects or hidden mutations.
  */
 
-import type { CanonicalTurnEvent } from './canonicalEvents.js';
+import {
+  mapSessionEventsToCanonicalTurnEvents,
+  type CanonicalTurnEvent,
+} from './canonicalEvents.js';
 import type { TerminalOutcome } from '../../schemas/agentContracts.js';
 import type { VerifierReceipt } from '../../agent/completionGatePolicy.js';
+import type { SessionEvent } from '../../agent/sessionEvents.js';
+import { renderStatusBar, type StatusBarState } from '../../ui/statusBar.js';
+import { presentChatReview, type ReviewCard, type ReviewCardInput } from '../../ui/reviewCard.js';
 
 export interface StatusBarProjection {
   model: string;
@@ -119,8 +125,14 @@ export function projectTurnViewState(
           exitCode: ev.exitCode,
           durationMs: ev.durationMs,
         });
-        if (ev.isMutating && ev.exitCode === 0) {
+        if (ev.isMutating && ev.exitCode === 0 && ev.target) {
           changedFilesSet.add(ev.target);
+        }
+        break;
+
+      case 'mutation_batch_recorded':
+        for (const p of ev.paths) {
+          changedFilesSet.add(p);
         }
         break;
 
@@ -213,4 +225,68 @@ export function projectTurnViewState(
       policyInterventions,
     },
   };
+}
+
+/**
+ * Projects TurnViewState directly from durable SessionEventLog events.
+ */
+export function projectTurnViewStateFromSessionEvents(
+  events: readonly SessionEvent[],
+  initialSessionTokens = 0,
+  initialSessionCost = 0,
+  initialTurnCount = 0,
+): TurnViewState {
+  const canonicalEvents = mapSessionEventsToCanonicalTurnEvents(events);
+  return projectTurnViewState(canonicalEvents, initialSessionTokens, initialSessionCost, initialTurnCount);
+}
+
+/**
+ * Renders the terminal status bar string directly from a projected TurnViewState.
+ */
+export function renderProjectedStatusBar(
+  state: TurnViewState,
+  overrides?: Partial<StatusBarState>,
+): string {
+  const proj = state.statusBar;
+  return renderStatusBar({
+    model: proj.model,
+    modelId: proj.modelId,
+    mode: overrides?.mode ?? 'chat',
+    project: overrides?.project ?? 'global',
+    activeContextTokens: proj.activeContextTokens ?? undefined,
+    totalTokens: proj.cumulativeSessionTokens,
+    totalCost: proj.totalCostUsd,
+    turnCount: proj.turnCount,
+    status: proj.statusLabel,
+    ...overrides,
+  });
+}
+
+/**
+ * Renders the review card model directly from a projected TurnViewState.
+ */
+export function renderProjectedReviewCard(
+  state: TurnViewState,
+  overrides?: Partial<ReviewCardInput>,
+): ReviewCard {
+  const proj = state.reviewCard;
+  return presentChatReview({
+    outcome: proj.terminalOutcome,
+    status: proj.status,
+    changedFiles: [...proj.changedFiles],
+    mutated: proj.hasMutations,
+    verification: proj.verifierCommand
+      ? {
+          ran: true,
+          passed: proj.verifiedBadge === 'verified',
+          command: proj.verifierCommand,
+        }
+      : proj.hasMutations
+        ? { ran: false }
+        : null,
+    summary: state.transcriptCell.assistantAnswer.slice(0, 200),
+    costUsd: state.statusBar.totalCostUsd,
+    tokens: state.statusBar.cumulativeSessionTokens,
+    ...overrides,
+  });
 }

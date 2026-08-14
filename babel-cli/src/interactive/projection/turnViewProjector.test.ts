@@ -2,14 +2,31 @@
  * Projection Consistency Certification Suite.
  *
  * Asserts that the canonical pure view projector produces mutually consistent
- * state across the status bar, review card, and transcript cells under all terminal outcomes.
+ * state across the status bar, review card, and transcript cells under all terminal outcomes,
+ * and validates production session pipeline projection and multi-turn state isolation.
  */
 
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { projectTurnViewState } from './turnViewProjector.js';
+import {
+  projectTurnViewState,
+  projectTurnViewStateFromSessionEvents,
+  renderProjectedStatusBar,
+  renderProjectedReviewCard,
+} from './turnViewProjector.js';
 import type { CanonicalTurnEvent } from './canonicalEvents.js';
 import type { VerifierReceipt } from '../../agent/completionGatePolicy.js';
+import {
+  createSessionEventLog,
+  recordUserSubmitted,
+  recordToolProposed,
+  recordToolStarted,
+  recordToolTerminal,
+  recordMutationBatch,
+  recordVerifierAttempt,
+  recordCompletionDecision,
+  recordTurnEnded,
+} from '../../agent/sessionEvents.js';
 
 describe('PR-C: Canonical Turn View Projection', () => {
   test('cancellation produces honest Cancelled card without patch actions', () => {
@@ -224,5 +241,163 @@ describe('PR-C: Canonical Turn View Projection', () => {
 
     assert.equal(view.statusBar.model, 'DeepSeek v4 Pro');
     assert.equal(view.statusBar.modelId, 'deepseek-v4-pro');
+  });
+
+  test('production integration: session event log projects to UI views with verified success', () => {
+    const log = createSessionEventLog('test-session-001');
+
+    recordUserSubmitted(log, {
+      turn_id: 'turn-1',
+      task: 'fix calculation bug in math.ts and verify',
+      model: 'DeepSeek v4 Flash',
+      provider: 'deepseek',
+      taskClass: 'general_swe',
+    });
+
+    recordToolProposed(log, {
+      turn_id: 'turn-1',
+      tool_name: 'write_file',
+      tool_call_id: 'call-1',
+      idempotency_key: 'call-1',
+      effect_class: 'reconcilable_mutation',
+    });
+
+    recordToolStarted(log, {
+      turn_id: 'turn-1',
+      tool_name: 'write_file',
+      tool_call_id: 'call-1',
+      idempotency_key: 'call-1',
+      effect_class: 'reconcilable_mutation',
+    });
+
+    recordToolTerminal(log, {
+      turn_id: 'turn-1',
+      tool_name: 'write_file',
+      tool_call_id: 'call-1',
+      idempotency_key: 'call-1',
+      exit_code: 0,
+    });
+
+    recordMutationBatch(log, 'turn-1', {
+      paths: ['src/math.ts'],
+      status: 'applied',
+    });
+
+    recordVerifierAttempt(log, {
+      turn_id: 'turn-1',
+      command_preview: 'npm test',
+      exit_code: 0,
+      authoritative: true,
+    });
+
+    recordCompletionDecision(log, 'turn-1', {
+      requestedOutcome: 'VERIFIED_COMPLETE',
+      finalOutcome: 'VERIFIED_COMPLETE',
+      allowed: true,
+      reason: 'Mutation verified successfully with exit 0 tests',
+      evidenceRefs: ['ev-1'],
+      policyVersion: 'v1',
+    });
+
+    recordTurnEnded(log, {
+      turn_id: 'turn-1',
+      status: 'completed',
+      outcome: 'VERIFIED_COMPLETE',
+    });
+
+    const view = projectTurnViewStateFromSessionEvents(log.events);
+
+    assert.equal(view.isTerminal, true);
+    assert.equal(view.reviewCard.terminalOutcome, 'VERIFIED_COMPLETE');
+    assert.equal(view.reviewCard.title, 'Verified complete');
+    assert.equal(view.reviewCard.verifiedBadge, 'verified');
+    assert.equal(view.reviewCard.hasMutations, true);
+
+    // Verify projected view components render cleanly
+    const statusStr = renderProjectedStatusBar(view);
+    assert.ok(statusStr.includes('DeepSeek v4 Flash') || statusStr.includes('deepseek'));
+
+    const review = renderProjectedReviewCard(view);
+    assert.equal(review.kind, 'VERIFIED_COMPLETE');
+    assert.ok(review.body.includes('Verified'));
+  });
+
+  test('multi-turn session projection guarantees lack of stale state carryover', () => {
+    // Turn 1: Mutating turn
+    const turn1Events: CanonicalTurnEvent[] = [
+      {
+        type: 'turn_started',
+        turnId: 'turn-1',
+        timestamp: 1000,
+        userInput: 'edit file',
+        taskClass: 'general_swe',
+        model: 'DeepSeek v4 Flash',
+        modelId: 'deepseek-v4-flash',
+      },
+      {
+        type: 'tool_completed',
+        toolId: 't-1',
+        toolName: 'write_file',
+        target: 'src/app.ts',
+        timestamp: 1100,
+        durationMs: 30,
+        exitCode: 0,
+        isMutating: true,
+      },
+      {
+        type: 'turn_terminal_resolved',
+        timestamp: 1200,
+        outcome: 'UNVERIFIED_PATCH',
+        status: 'completed',
+        finalAnswer: 'Edited app.ts',
+      },
+    ];
+
+    const turn1View = projectTurnViewState(turn1Events);
+    assert.equal(turn1View.reviewCard.hasMutations, true);
+    assert.equal(turn1View.reviewCard.changedFiles.length, 1);
+    assert.equal(turn1View.reviewCard.showPatchActions, true);
+
+    // Turn 2: Fresh read-only turn (isolated event sequence for Turn 2)
+    const turn2Events: CanonicalTurnEvent[] = [
+      {
+        type: 'turn_started',
+        turnId: 'turn-2',
+        timestamp: 2000,
+        userInput: 'what time is it?',
+        taskClass: 'quick_inspect',
+        model: 'DeepSeek v4 Flash',
+        modelId: 'deepseek-v4-flash',
+      },
+      {
+        type: 'assistant_chunk_received',
+        timestamp: 2050,
+        textChunk: 'It is 12:00 PM.',
+      },
+      {
+        type: 'turn_terminal_resolved',
+        timestamp: 2100,
+        outcome: 'NO_CHANGE_REQUIRED',
+        status: 'completed',
+        finalAnswer: 'It is 12:00 PM.',
+      },
+    ];
+
+    const turn2View = projectTurnViewState(
+      turn2Events,
+      turn1View.statusBar.cumulativeSessionTokens,
+      turn1View.statusBar.totalCostUsd,
+      1,
+    );
+
+    // Turn 2 MUST have clean state — no leftover changed files or mutation badges from Turn 1
+    assert.equal(turn2View.reviewCard.hasMutations, false);
+    assert.equal(turn2View.reviewCard.changedFiles.length, 0);
+    assert.equal(turn2View.reviewCard.showPatchActions, false);
+    assert.equal(turn2View.reviewCard.verifiedBadge, 'not_applicable');
+    assert.equal(turn2View.reviewCard.title, 'Complete');
+    assert.equal(turn2View.transcriptCell.userInput, 'what time is it?');
+    assert.equal(turn2View.transcriptCell.assistantAnswer, 'It is 12:00 PM.');
+    assert.equal(turn2View.statusBar.turnCount, 2);
   });
 });
