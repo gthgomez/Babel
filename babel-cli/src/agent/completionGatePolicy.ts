@@ -12,6 +12,7 @@ import {
 } from './chatEngineCriticBudget.js';
 import type { StructuredVerifierCommand, VerifierAuthoritySource } from '../executor/contracts.js';
 import { extractRequiredVerifierCommandsFromTask } from '../pipeline/planVerifierInjection.js';
+import { extractVerifierCommand } from './chatEngineVerifierSession.js';
 import { analyzeVerifierIdentity, satisfiesVerifierRequirement } from '../services/verifierIdentity.js';
 import {
   buildVerifierReceiptV2,
@@ -531,6 +532,8 @@ export function resolveHonestyRequiredVerifiers(opts: {
   }
   const fromTask = extractRequiredVerifierCommandsFromTask(opts.task);
   if (fromTask.length > 0) return fromTask;
+  const single = extractVerifierCommand(opts.task);
+  if (single) return [single];
   if (
     taskAsksForVerifier(opts.task) &&
     opts.projectTestCommands &&
@@ -1080,7 +1083,13 @@ export function evaluateCompletionGateForEngine(opts: {
     return 'reject';
   }
   if (hasWrite && requiredVerifierCommands.length > 0 && policy === 'strict') {
-    const receipts = (opts.executedVerifierLedger ?? []).map((r, i) => {
+    const rawReceipts =
+      opts.executedVerifierLedger && opts.executedVerifierLedger.length > 0
+        ? opts.executedVerifierLedger
+        : opts.lastVerifierReceipt
+          ? [opts.lastVerifierReceipt]
+          : [];
+    const receipts = rawReceipts.map((r, i) => {
       const cmd = 'command' in r ? String((r as { command?: string }).command ?? '') : '';
       const exit =
         'exitCode' in r
@@ -1138,10 +1147,12 @@ export function evaluateCompletionGateForEngine(opts: {
     // When omitted, only non-revision denials apply (empty plan, non-authoritative, etc.).
     const liveRevision =
       opts.currentWorkspaceRevisionHash ??
-      // Prefer boundRevision from the *last* verifier capture only as a last-resort
-      // placeholder when caller forgot live hash — still require freshness/authoritative.
-      '';
-    const adversarialReceipts = (opts.executedVerifierLedger ?? []).map((r) => {
+      (receipts.length > 0 &&
+      receipts.at(-1)?.workspace_revision &&
+      'compositeTreeHash' in receipts.at(-1)!.workspace_revision
+        ? (receipts.at(-1)!.workspace_revision as { compositeTreeHash: string }).compositeTreeHash
+        : '');
+    const adversarialReceipts = rawReceipts.map((r) => {
       const entry: {
         exit_code: number;
         summary: string;

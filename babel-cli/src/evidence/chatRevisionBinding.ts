@@ -194,6 +194,7 @@ export function toExecutorVerifierReceipt(
       capturedAt: capturedAt!,
       stale: chatReceipt.stale === true,
       ...(chatReceipt.staleReason ? { staleReason: chatReceipt.staleReason } : {}),
+      ...(chatReceipt.scope ? { scope: chatReceipt.scope } : {}),
     },
   };
 }

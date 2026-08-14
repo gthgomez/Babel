@@ -333,24 +333,29 @@ export function analyzeTaskShape(taskText: string): TaskShape {
 
   // 1. Explicit read-only constraints
   const hasReadOnlyDirective =
-    /\b(without (any )?(editing|modifying|changing|writing)|read-?only|do not (edit|modify|change|write|delete)|dry-?run)\b/i.test(
+    /\b(without (any )?(editing|modifying|changing|writing)|read-?only|(?:do\s*not|don't)\s+(?:edit|modify|change|write|delete|remove)|dry-?run)\b/i.test(
       t,
     );
 
   // 2. Explicit mutation keywords across the entire prompt (multi-intent safety)
   const hasMutation =
-    /\b(delete|remove|rm|drop|erase|unlink|clean\s*up\s+and\s+delete|fix|implement|patch|repair|create|write|refactor|apply|modify|update|edit|add|change|replace|rename)\b/i.test(
+    /\b(clean\s*up\s+and\s+delete|fix|implement|patch|repair|create|write|refactor|apply|modify|update|edit|add|replace|rename)\b/i.test(t) ||
+    (!hasReadOnlyDirective && /\b(delete|remove|rm|drop|erase|unlink)\b/i.test(t));
+
+  // 3. Exploratory keywords (find, scan, list, check, explain, analyze, review, compare)
+  const hasExploratory =
+    /\b(find|search|list|check|inspect|discover|locate|scan|show|inventory|explain|analyze|review|compare|diagnose)\b/i.test(t);
+
+  // 4. Sequenced mutation override (e.g. "review without changing anything, then fix the issue")
+  const hasSequencedMutationOverride =
+    /\b(?:then|afterwards|and\s+then)\s+(?:fix|implement|repair|modify|update|apply|patch|change|edit)\b/i.test(
       t,
     );
 
-  // 3. Exploratory keywords (find, scan, list, check)
-  const hasExploratory =
-    /\b(find|search|list|check|inspect|discover|locate|scan|show|inventory)\b/i.test(t);
-
   let operation: TaskOperation;
-  if (hasReadOnlyDirective) {
+  if (hasReadOnlyDirective && !hasSequencedMutationOverride) {
     operation = 'READ_ONLY';
-  } else if (hasMutation && hasExploratory) {
+  } else if (hasMutation && (hasExploratory || hasReadOnlyDirective)) {
     operation = 'HYBRID';
   } else if (hasMutation) {
     operation = 'MUTATING';

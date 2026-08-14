@@ -867,10 +867,13 @@ export class ChatEngine {
     // H5: live workspace revision at gate time (not the receipt's own bound hash).
     let currentWorkspaceRevisionHash: string | undefined;
     try {
-      currentWorkspaceRevisionHash = RevisionManager.computeRevisionSync(
-        this.options.projectRoot,
-        mutationPathsFromSessionEvents(this.parity.sessionEvents.events),
-      ).compositeTreeHash;
+      const paths = mutationPathsFromSessionEvents(this.parity.sessionEvents.events);
+      if (paths.length > 0) {
+        currentWorkspaceRevisionHash = RevisionManager.computeRevisionSync(
+          this.options.projectRoot,
+          paths,
+        ).compositeTreeHash;
+      }
     } catch { /* best-effort */ }
     return evaluateCompletionGateForEngine({
       turnType: turnResult.type, taskIntent, task: this.options.task, taskClass: this.taskClass,

@@ -333,6 +333,7 @@ function setTestVerifierReceipt(engine: ChatEngine, command: string, exit_code =
     authoritySource: 'built_in_runner' as const,
     verifierId: 'test-verifier',
     capturedAt: 1_700_000_000_000,
+    scope: 'full_suite' as const,
     boundRevision: {
       gitCommitHash: null,
       compositeTreeHash: 'sha256:test-tree',

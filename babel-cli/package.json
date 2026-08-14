@@ -123,6 +123,7 @@
     "test:prompts": "npx promptfoo eval --config promptfoo/config.yaml",
     "test:prompts:ci": "npx promptfoo eval --config promptfoo/config.yaml --output promptfoo/results.json --max-concurrency 3",
     "test:schema-failures:unit": "tsx --no-warnings=ExperimentalWarning --test src/schemas/agentContracts.test.ts src/services/schemaFailureLedger.test.ts src/execute.reliabilityRepairProof.test.ts src/execute.schemaFailureLedger.test.ts src/runners/deepSeekApi.test.ts src/runners/deepInfraApi.test.ts",
+    "test:daily-driver": "tsx --no-warnings=ExperimentalWarning --test src/interactive/execution/chat.dailyDriver.test.ts src/interactive/testing/**/*.test.ts src/config/chatTaskClassAdversarial.test.ts",
     "test:ui": "tsx --no-warnings=ExperimentalWarning --test src/ui/**/*.test.ts",
     "test:ui:coverage": "tsx --no-warnings=ExperimentalWarning --experimental-test-coverage --test src/ui/**/*.test.ts",
     "test:ui:update": "UPDATE_SNAPSHOTS=1 npm run test:ui",
