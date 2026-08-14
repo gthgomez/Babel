@@ -498,6 +498,8 @@ export interface ChatResult {
   promptFingerprint?: PromptFingerprint;
   /** Active input prompt tokens from latest single model invocation */
   lastRequestPromptTokens?: number | null;
+  /** Active completion output tokens from latest single model invocation */
+  lastRequestCompletionTokens?: number | null;
   /** Structured active context telemetry from latest provider invocation */
   activeContext?: {
     tokens: number;
@@ -601,6 +603,8 @@ export class ChatEngine {
   private apiTokenCount = 0;
   /** Prompt tokens from latest single model invocation in the active turn */
   private lastRequestPromptTokens: number | null = null;
+  /** Completion output tokens from latest single model invocation in the active turn */
+  private lastRequestCompletionTokens: number | null = null;
   private lastRequestModelId: string | null = null;
   /** R11: API-reported token count at the start of the current turn.
    *  Used to compute the per-round token delta for the token ceiling check. */
@@ -1497,6 +1501,7 @@ export class ChatEngine {
     this.currentTurnTelemetry = new ChatTurnTelemetryCollector(performance.now());
     this.currentTurnTelemetry.markStarted();
     this.lastRequestPromptTokens = null;
+    this.lastRequestCompletionTokens = null;
     this.lastRequestModelId = null;
     // W0.3: fresh TurnRuntime per user submission (isolate counters by default).
     const runtime = this.applyUserSubmission({
@@ -1614,7 +1619,9 @@ export class ChatEngine {
       let _turnSpan: Span | null = _tracer.startSpan('babel.chat.turn');
 
       // Compact if needed; user-visible notice via stream event
+      const compactionSpan = this.currentTurnTelemetry?.startCompactionSpan();
       const compactInfo = await this.compactIfNeeded();
+      compactionSpan?.end();
       if (compactInfo) {
         yield { type: 'context_compacted', ...compactInfo };
       }
@@ -2174,6 +2181,7 @@ export class ChatEngine {
         });
 
         if (pcResult.transitioned) {
+          this.currentTurnTelemetry?.recordPolicyIntervention();
           yield {
             type: 'progress_recovery',
             intervention: pcResult.intervention,
@@ -3043,7 +3051,7 @@ export class ChatEngine {
       turnId: String(this.parity.turnId ?? this._turnIndex),
       taskClass: this.taskClass,
       promptTokens: this.lastRequestPromptTokens,
-      completionTokens: null,
+      completionTokens: this.lastRequestCompletionTokens,
       cumulativeSessionTokens: globalCostTracker.getSessionSummary().totalTokens,
     });
     this.lastTurnTelemetry = finalizedTelemetry ?? null;
@@ -3062,7 +3070,7 @@ export class ChatEngine {
       turnId: String(this.parity.turnId ?? this._turnIndex),
       taskClass: this.taskClass,
       promptTokens: this.lastRequestPromptTokens,
-      completionTokens: null,
+      completionTokens: this.lastRequestCompletionTokens,
       cumulativeSessionTokens: globalCostTracker.getSessionSummary().totalTokens,
     });
     this.lastTurnTelemetry = finalizedTelemetry ?? null;
@@ -4421,6 +4429,7 @@ export class ChatEngine {
       metadata.completion_tokens !== null
     ) {
       this.lastRequestPromptTokens = metadata.prompt_tokens;
+      this.lastRequestCompletionTokens = metadata.completion_tokens;
       this.lastRequestModelId = metadata.provider_model_id;
       globalCostTracker.trackUsage(
         metadata.provider_model_id,
@@ -5155,6 +5164,7 @@ export class ChatEngine {
       answer: answer ?? '',
       usage: globalCostTracker.getSessionSummary(),
       lastRequestPromptTokens: this.lastRequestPromptTokens,
+      lastRequestCompletionTokens: this.lastRequestCompletionTokens,
       activeContext:
         this.lastRequestPromptTokens !== null && this.lastRequestPromptTokens !== undefined
           ? {
