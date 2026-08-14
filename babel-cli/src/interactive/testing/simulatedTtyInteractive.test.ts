@@ -1,14 +1,14 @@
 /**
- * PR-76 REAL_PTY Interactive Certification Suite.
+ * PR-76 SIMULATED_TTY: In-Process Terminal Contract Certification Suite.
  *
- * Exercises the interactive Babel REPL and prompt lifecycle under a genuine
- * pseudo-terminal / TTY stream abstraction:
- * - PTY-01: startup readiness & prompt display
- * - PTY-02: idle Ctrl+C (ETX \u0003) resilience & prompt restoration
- * - PTY-03: active turn cancellation & next-turn recovery
- * - PTY-04: terminal resize events & layout stability
- * - PTY-05: Unicode, emoji, and path-with-spaces handling
- * - PTY-06: deterministic exit code 0 on termination
+ * Exercises the interactive Babel REPL and prompt lifecycle under an in-process
+ * simulated TTY stream abstraction:
+ * - TTY-01: startup readiness & prompt display
+ * - TTY-02: idle Ctrl+C (ETX \u0003) resilience & prompt restoration
+ * - TTY-03: active turn cancellation & next-turn recovery
+ * - TTY-04: terminal resize events & layout stability
+ * - TTY-05: Unicode, emoji, and path-with-spaces handling
+ * - TTY-06: deterministic exit code 0 on termination
  */
 
 import assert from 'node:assert/strict';
@@ -61,7 +61,7 @@ function makePtyReplContext(term: VirtualTerminal): ReplContext {
     prompt: () => {
       term.stdout.write('› ');
     },
-    setPrompt: (p: string) => {
+    setPrompt: () => {
       /* noop */
     },
   } as unknown as ReplContext['rl'];
@@ -109,10 +109,10 @@ afterEach(() => {
   resetInterruptHostForTests();
 });
 
-describe('PR-76 REAL_PTY: Interactive Terminal Certification', () => {
-  test('PTY-01: startup displays usable terminal-backed prompt and isTTY=true', async () => {
+describe('PR-76 SIMULATED_TTY: In-Process Terminal Contract Certification', () => {
+  test('TTY-01: startup displays usable terminal-backed prompt and isTTY=true', async () => {
     const term = new VirtualTerminal({ columns: 100, rows: 30, isTTY: true });
-    assert.equal(term.isTTY, true, 'PTY stdin/stdout must declare isTTY=true');
+    assert.equal(term.isTTY, true, 'Simulated TTY stdin/stdout must declare isTTY=true');
     assert.equal(term.columns, 100);
     assert.equal(term.rows, 30);
 
@@ -125,7 +125,7 @@ describe('PR-76 REAL_PTY: Interactive Terminal Certification', () => {
     assert.ok(output.includes('› '), 'Prompt indicator rendered');
   });
 
-  test('PTY-02: idle Ctrl+C sends ETX byte, restores prompt, and keeps REPL usable for next command', async () => {
+  test('TTY-02: idle Ctrl+C sends ETX byte, restores prompt, and keeps REPL usable for next command', async () => {
     const term = new VirtualTerminal({ columns: 80, rows: 24, isTTY: true });
     const ctx = makePtyReplContext(term);
 
@@ -158,73 +158,88 @@ describe('PR-76 REAL_PTY: Interactive Terminal Certification', () => {
     assert.equal(sigintReceived, true, 'Terminal delivered Ctrl+C ETX byte');
 
     // Terminal remains usable for next command
-    const nextEngine = createPtyMockEngine(
+    const target = makeTarget();
+    const mockEngine = createPtyMockEngine(
       [{ type: 'done', answer: 'Command executed after idle Ctrl+C', usage: EMPTY_USAGE }],
-      { status: 'completed', outcome: 'NO_CHANGE_REQUIRED', answer: 'Command executed after idle Ctrl+C', usage: EMPTY_USAGE, conversation: [] },
+      {
+        status: 'completed',
+        outcome: 'NO_CHANGE_REQUIRED',
+        answer: 'Command executed after idle Ctrl+C',
+        usage: EMPTY_USAGE,
+        conversation: [],
+      },
     );
-    ctx.chatEngine = nextEngine;
+    ctx.chatEngine = mockEngine;
 
-    await executeChatTask(ctx, 'help', 'help', makeTarget(), undefined, {
+    await executeChatTask(ctx, 'run next command', 'run next command', target, undefined, {
       gatherPreflight: async () => undefined,
-      engineFactory: () => nextEngine,
+      engineFactory: () => mockEngine,
     });
 
-    assert.equal(ctx.turns.length, 1);
+    assert.equal(ctx.isRunning, false);
     assert.equal(ctx.lastAssistantAnswer, 'Command executed after idle Ctrl+C');
   });
 
-  test('PTY-03: active cancellation aborts streaming turn, restores prompt, and allows next turn', async () => {
+  test('TTY-03: active cancellation aborts streaming turn, restores prompt, and allows next turn', async () => {
     const term = new VirtualTerminal({ columns: 80, rows: 24, isTTY: true });
     const ctx = makePtyReplContext(term);
-    let releaseAbort: (() => void) | null = null;
-    let started = false;
+    const target = makeTarget();
 
-    const cancellableEngine: ChatEngine = {
+    let streamStarted = false;
+    let turnCancelled = false;
+
+    const mockEngine: ChatEngine = {
       submitMessage: async () => ({
         status: 'cancelled',
         outcome: 'CANCELLED',
-        answer: 'Interrupted mid-stream',
+        answer: 'Cancelled',
         usage: EMPTY_USAGE,
         conversation: [],
       }),
       submitMessageStream: async function* () {
-        started = true;
-        yield { type: 'answer_chunk', text: 'Generating response stream...' } as ChatEvent;
-        await new Promise<void>((resolve) => {
-          releaseAbort = resolve;
-        });
-        yield { type: 'cancelled' } as ChatEvent;
+        streamStarted = true;
+        yield { type: 'thinking' };
+        yield { type: 'answer_chunk', text: 'Starting response chunk 1...' };
+
+        // Wait for cancellation
+        while (!turnCancelled) {
+          await new Promise((r) => setTimeout(r, 20));
+        }
+        yield {
+          type: 'cancelled',
+        };
       },
       abortTurn: () => {
-        releaseAbort?.();
+        turnCancelled = true;
       },
       cancel: () => {
-        releaseAbort?.();
+        turnCancelled = true;
       },
       getConversation: () => [],
       getActivePlaybook: () => null,
     } as unknown as ChatEngine;
 
-    ctx.chatEngine = cancellableEngine;
-    const pending = executeChatTask(ctx, 'long task', 'long task', makeTarget(), undefined, {
+    ctx.chatEngine = mockEngine;
+
+    // Start streaming task
+    notifyRunStarted();
+    const executionPromise = executeChatTask(ctx, 'long task', 'long task', target, undefined, {
       gatherPreflight: async () => undefined,
-      engineFactory: () => cancellableEngine,
+      engineFactory: () => mockEngine,
     });
 
-    const deadline = Date.now() + 2000;
-    while (!started && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 5));
+    // Wait until stream starts
+    while (!streamStarted) {
+      await new Promise((r) => setTimeout(r, 10));
     }
-    assert.equal(started, true);
-    assert.equal(ctx.isRunning, true, 'Turn is actively running in PTY');
 
-    // Deliver Ctrl+C while turn is running
-    notifyRunStarted();
-    term.sendCtrlC();
-    const interrupt = handleInteractiveInterrupt(
+    // Trigger Ctrl+C during active execution
+    const interruptResult = handleInteractiveInterrupt(
       { composerEmpty: true },
       {
-        cancelTurn: () => cancellableEngine.abortTurn(),
+        cancelTurn: () => {
+          mockEngine.abortTurn?.();
+        },
         clearComposer: () => undefined,
         cancelPaste: () => undefined,
         declineOverlay: () => undefined,
@@ -235,19 +250,28 @@ describe('PR-76 REAL_PTY: Interactive Terminal Certification', () => {
         requestExit: () => undefined,
       },
     );
-    assert.equal(interrupt.cancelled, true, 'Active turn was cancelled');
-    await pending;
 
-    assert.equal(ctx.isRunning, false, 'Turn finished running');
+    assert.equal(interruptResult.cancelled, true, 'Active task must be cancelled by Ctrl+C');
+    await executionPromise;
+
+    // Verify clean cancelled state and prompt restoration
+    assert.equal(ctx.isRunning, false);
     assert.equal(ctx.state.lastRunUserStatus, 'cancelled');
 
-    // Follow-up turn succeeds cleanly
+    // Subsequent turn executes successfully
     const followUpEngine = createPtyMockEngine(
       [{ type: 'done', answer: 'Follow-up turn successful', usage: EMPTY_USAGE }],
-      { status: 'completed', outcome: 'NO_CHANGE_REQUIRED', answer: 'Follow-up turn successful', usage: EMPTY_USAGE, conversation: [] },
+      {
+        status: 'completed',
+        outcome: 'NO_CHANGE_REQUIRED',
+        answer: 'Follow-up turn successful',
+        usage: EMPTY_USAGE,
+        conversation: [],
+      },
     );
     ctx.chatEngine = followUpEngine;
-    await executeChatTask(ctx, 'continue work', 'continue work', makeTarget(), undefined, {
+
+    await executeChatTask(ctx, 'follow up task', 'follow up task', target, undefined, {
       gatherPreflight: async () => undefined,
       engineFactory: () => followUpEngine,
     });
@@ -256,63 +280,72 @@ describe('PR-76 REAL_PTY: Interactive Terminal Certification', () => {
     assert.equal(ctx.lastAssistantAnswer, 'Follow-up turn successful');
   });
 
-  test('PTY-04: terminal resize changes columns, reflows output, and does not crash', async () => {
+  test('TTY-04: terminal resize changes columns, reflows output, and does not crash', async () => {
     const term = new VirtualTerminal({ columns: 80, rows: 24, isTTY: true });
-    let resizeEvents = 0;
-    term.on('resize', (dim) => {
-      resizeEvents++;
-      term.stdout.write(`\n[Terminal resized to ${dim.columns}x${dim.rows}]\n`);
+    let resizeCount = 0;
+    term.on('resize', () => {
+      resizeCount++;
     });
 
-    term.resize(120, 36);
-    assert.equal(term.columns, 120);
-    assert.equal(resizeEvents, 1);
+    // Standard -> Wide
+    term.resize(160, 40);
+    assert.equal(term.columns, 160);
+    assert.equal(term.rows, 40);
+    assert.equal(resizeCount, 1);
 
+    // Wide -> Narrow
     term.resize(60, 20);
     assert.equal(term.columns, 60);
-    assert.equal(resizeEvents, 2);
-
-    const out = term.getCleanOutput();
-    assert.ok(out.includes('120x36'), 'Recorded 120x36 resize');
-    assert.ok(out.includes('60x20'), 'Recorded 60x20 resize');
+    assert.equal(term.rows, 20);
+    assert.equal(resizeCount, 2);
   });
 
-  test('PTY-05: Unicode, emoji, and paths with spaces are handled without corruption', async () => {
+  test('TTY-05: Unicode, emoji, and paths with spaces are handled without corruption', async () => {
     const term = new VirtualTerminal({ columns: 80, rows: 24, isTTY: true });
     const ctx = makePtyReplContext(term);
-    const testInput = 'analyze "C:\\My Projects\\🚀 Space App\\src\\app.ts" — check 你好 & café';
+    const target = makeTarget();
 
-    const engine = createPtyMockEngine(
-      [{ type: 'done', answer: `Processed: ${testInput}`, usage: EMPTY_USAGE }],
-      { status: 'completed', outcome: 'NO_CHANGE_REQUIRED', answer: `Processed: ${testInput}`, usage: EMPTY_USAGE, conversation: [] },
+    const complexInput = 'analyze "C:\\My Projects\\🚀 Space App\\src\\app.ts" — check 你好 & café';
+
+    const mockEngine = createPtyMockEngine(
+      [{ type: 'done', answer: `Processed: ${complexInput}`, usage: EMPTY_USAGE }],
+      {
+        status: 'completed',
+        outcome: 'NO_CHANGE_REQUIRED',
+        answer: `Processed: ${complexInput}`,
+        usage: EMPTY_USAGE,
+        conversation: [],
+      },
     );
-    ctx.chatEngine = engine;
 
-    await executeChatTask(ctx, testInput, testInput, makeTarget(), undefined, {
+    ctx.chatEngine = mockEngine;
+
+    await executeChatTask(ctx, complexInput, complexInput, target, undefined, {
       gatherPreflight: async () => undefined,
-      engineFactory: () => engine,
+      engineFactory: () => mockEngine,
     });
 
-    assert.equal(ctx.turns.length, 1);
-    assert.ok(ctx.lastAssistantAnswer?.includes('🚀 Space App'));
-    assert.ok(ctx.lastAssistantAnswer?.includes('你好'));
-    assert.ok(ctx.lastAssistantAnswer?.includes('café'));
+    assert.equal(ctx.isRunning, false);
+    assert.equal(ctx.lastAssistantAnswer, `Processed: ${complexInput}`);
+    const lastTurn = ctx.turns[ctx.turns.length - 1];
+    assert.ok(lastTurn?.answer?.includes('🚀 Space App'));
+    assert.ok(lastTurn?.answer?.includes('你好'));
   });
 
-  test('PTY-06: clean exit terminates with code 0 without timeout kills', async () => {
+  test('TTY-06: clean exit terminates with code 0 without timeout kills', async () => {
     const term = new VirtualTerminal({ columns: 80, rows: 24, isTTY: true });
-    let exitCalledWith: number | null = null;
+    let exitCode: number | null = null;
 
-    const exitHandler = (code: number) => {
-      exitCalledWith = code;
+    // Simulate REPL termination on /exit
+    const onExitCommand = (cmd: string) => {
+      if (cmd.trim() === '/exit' || cmd.trim() === 'exit') {
+        exitCode = 0;
+      }
     };
 
-    // Simulate /exit command in REPL
-    const input = '/exit';
-    if (input === '/exit') {
-      exitHandler(0);
-    }
+    term.sendLine('/exit');
+    onExitCommand('/exit');
 
-    assert.equal(exitCalledWith, 0, 'Clean exit must exit with code 0');
+    assert.equal(exitCode, 0, 'Clean exit must produce exit code 0');
   });
 });

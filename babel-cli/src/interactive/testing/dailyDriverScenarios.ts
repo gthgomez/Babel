@@ -9,9 +9,11 @@ import type { ChatTaskClass } from '../../config/chatTaskClass.js';
 import type { TerminalOutcome } from '../../schemas/agentContracts.js';
 
 export type CertificationLayer =
-  | 'REAL_PTY'
-  | 'PRODUCTION_INTEGRATION'
   | 'CLASSIFIER'
+  | 'PRODUCTION_INTEGRATION'
+  | 'IN_PROCESS_INTEGRATION'
+  | 'SIMULATED_TTY'
+  | 'REAL_PROCESS'
   | 'PURE_INVARIANT';
 
 export interface DailyDriverScenario {
@@ -180,7 +182,7 @@ export const FROZEN_DAILY_DRIVER_SCENARIOS: readonly DailyDriverScenario[] = [
     id: 'D12-ctrl-c-mid-stream',
     name: 'Ctrl+C cancellation during assistant stream',
     category: 'cancellation',
-    certificationLayer: 'REAL_PTY',
+    certificationLayer: 'SIMULATED_TTY',
     input: 'stream long response',
     expectedTaskClass: 'investigate',
     expectedOperation: 'READ_ONLY',
@@ -192,7 +194,7 @@ export const FROZEN_DAILY_DRIVER_SCENARIOS: readonly DailyDriverScenario[] = [
     id: 'D13-ctrl-c-tool-exec',
     name: 'Ctrl+C cancellation during tool execution',
     category: 'cancellation',
-    certificationLayer: 'REAL_PTY',
+    certificationLayer: 'SIMULATED_TTY',
     input: 'run long running test command',
     expectedTaskClass: 'investigate',
     expectedOperation: 'READ_ONLY',
@@ -204,7 +206,7 @@ export const FROZEN_DAILY_DRIVER_SCENARIOS: readonly DailyDriverScenario[] = [
     id: 'D14-resize-during-stream',
     name: 'Terminal resize during active output stream',
     category: 'resize',
-    certificationLayer: 'REAL_PTY',
+    certificationLayer: 'SIMULATED_TTY',
     input: 'generate multiline explanation with resize events',
     expectedTaskClass: 'investigate',
     expectedOperation: 'READ_ONLY',
@@ -252,7 +254,7 @@ export const FROZEN_DAILY_DRIVER_SCENARIOS: readonly DailyDriverScenario[] = [
     id: 'D18-long-multiturn-chat',
     name: 'Long multi-turn chat maintains prompt responsiveness and clean state',
     category: 'multi_turn',
-    certificationLayer: 'REAL_PTY',
+    certificationLayer: 'SIMULATED_TTY',
     input: 'step 10 of a long interactive session',
     expectedTaskClass: 'investigate',
     expectedOperation: 'READ_ONLY',

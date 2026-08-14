@@ -425,16 +425,47 @@ describe('PR-A Certification: Frozen Daily-Driver Scenarios (18 Scenarios)', () 
         } finally {
           logs.restore();
         }
-      } else if (sc.certificationLayer === 'REAL_PTY') {
-        // Test interactive invariants and lifecycle
-        const checker = new TurnInvariantChecker();
-        if (sc.expectedOutcome === 'CANCELLED') {
-          checker.checkNoStaleFinalAnswerOnCancel(true, [{ type: 'cancelled' }]);
+      } else if (sc.certificationLayer === 'SIMULATED_TTY') {
+        const term = new VirtualTerminal({ columns: 80, rows: 24 });
+        const ctx = makeReplContext();
+        const target = makeTarget();
+        const logs = captureConsole();
+        try {
+          if (sc.expectedOutcome === 'CANCELLED') {
+            handleInteractiveInterrupt({ composerEmpty: true });
+            const pending = executeChatTask(ctx, sc.input, sc.input, target, undefined, {
+              gatherPreflight: noPreflight,
+              engineFactory: () =>
+                createMockEngine(
+                  [{ type: 'thinking' }, { type: 'answer_chunk', text: 'cancelling...' }],
+                  { status: 'cancelled', outcome: 'CANCELLED', answer: 'Cancelled', usage: EMPTY_USAGE, conversation: [] },
+                ),
+            });
+            await pending;
+            assert.equal(ctx.isRunning, false);
+            assert.equal(ctx.state.lastRunUserStatus, 'cancelled');
+            assert.match(logs.text(), sc.expectedCardTitlePattern);
+          } else {
+            const mockEngine = createMockEngine(
+              [{ type: 'done', answer: `Answer for ${sc.id}`, usage: EMPTY_USAGE, outcome: sc.expectedOutcome }],
+              { status: 'completed', outcome: sc.expectedOutcome, answer: `Answer for ${sc.id}`, usage: EMPTY_USAGE, conversation: [] },
+            );
+            await executeChatTask(ctx, sc.input, sc.input, target, undefined, {
+              gatherPreflight: noPreflight,
+              engineFactory: () => mockEngine,
+            });
+            assert.equal(ctx.isRunning, false);
+            assert.match(logs.text(), sc.expectedCardTitlePattern);
+          }
+
+          const checker = new TurnInvariantChecker();
+          checker
+            .checkReadOnlyNoPatches(sc.expectedOperation, 'review', 0)
+            .checkNoStaleBackgroundTasks(0)
+            .assertAll();
+        } finally {
+          logs.restore();
         }
-        checker
-          .checkReadOnlyNoPatches(sc.expectedOperation, 'review', 0)
-          .checkNoStaleBackgroundTasks(0)
-          .assertAll();
       }
     });
   }
