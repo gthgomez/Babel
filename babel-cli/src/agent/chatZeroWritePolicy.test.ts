@@ -345,4 +345,125 @@ describe('chatZeroWritePolicy', () => {
     assert.ok(!result.investigateHardCapTerminal?.includes('write_file'));
     assert.ok(!result.investigateHardCapTerminal?.includes('file mutation'));
   });
+
+  test('quick_inspect walks through shell tools, reads, and hard cap without ANY mutation pressure', () => {
+    const forbiddenPhrases = [
+      'str_replace',
+      'write_file',
+      'mutation',
+      'apply the fix',
+      'pick a file and mutate',
+      'commit to a file',
+      'without a successful file mutation',
+    ];
+
+    const assertNoMutationPressure = (res: any, stage: string) => {
+      const messages = [
+        res.forceMutateMessage,
+        res.readThrashMessage,
+        res.explorationFuseMessage,
+        res.shellSoftMessage,
+        res.investigateBudgetMessage,
+        res.investigateHardCapTerminal,
+      ].filter(Boolean) as string[];
+
+      for (const msg of messages) {
+        const lower = msg.toLowerCase();
+        for (const phrase of forbiddenPhrases) {
+          assert.ok(
+            !lower.includes(phrase),
+            `Stage ${stage}: message "${msg}" must NOT contain "${phrase}"`,
+          );
+        }
+      }
+    };
+
+    const state = {
+      turnsWithoutWrite: 0,
+      consecutiveReadOnlyTools: 0,
+      cumulativeExplorationTools: 0,
+      restrictToolsNextTurn: false,
+      consecutiveNonMutatingShells: 0,
+      toolsWithoutWrite: 0,
+      phase: 'investigate' as const,
+    };
+
+    // Stage 1: shell tool 1
+    state.consecutiveNonMutatingShells = 1;
+    state.toolsWithoutWrite = 1;
+    let res = applyExploreFuses({
+      executeIntent: false,
+      taskClass: 'quick_inspect',
+      hasAnyWrites: false,
+      state,
+      pushUser: () => {},
+      deferMessagesToArbiter: true,
+      currentTurn: 1,
+    });
+    assertNoMutationPressure(res, 'shell tool 1');
+    assert.equal(res.shellSoftMessage, null);
+
+    // Stage 2: shell tool 2 (would trigger shellSoftBudget in execute tasks)
+    state.consecutiveNonMutatingShells = 2;
+    state.toolsWithoutWrite = 2;
+    res = applyExploreFuses({
+      executeIntent: false,
+      taskClass: 'quick_inspect',
+      hasAnyWrites: false,
+      state,
+      pushUser: () => {},
+      deferMessagesToArbiter: true,
+      currentTurn: 1,
+    });
+    assertNoMutationPressure(res, 'shell tool 2');
+    assert.equal(res.shellSoftMessage, null, 'Read-only queries must NOT fire shell soft budget');
+
+    // Stage 3: tool 4 (reaches 4-tool soft budget)
+    state.toolsWithoutWrite = 4;
+    res = applyExploreFuses({
+      executeIntent: false,
+      taskClass: 'quick_inspect',
+      hasAnyWrites: false,
+      state,
+      pushUser: () => {},
+      deferMessagesToArbiter: true,
+      currentTurn: 2,
+    });
+    assertNoMutationPressure(res, 'tool 4');
+    assert.ok(res.investigateBudgetMessage);
+    assert.ok(res.investigateBudgetMessage?.includes('read-only budget'));
+
+    // Stage 4: read 6 (would trigger readThrash in execute tasks)
+    state.consecutiveReadOnlyTools = 6;
+    state.cumulativeExplorationTools = 6;
+    state.toolsWithoutWrite = 6;
+    res = applyExploreFuses({
+      executeIntent: false,
+      taskClass: 'quick_inspect',
+      hasAnyWrites: false,
+      state,
+      pushUser: () => {},
+      deferMessagesToArbiter: true,
+      currentTurn: 3,
+    });
+    assertNoMutationPressure(res, 'read 6');
+    assert.equal(res.readThrashMessage, null, 'Read-only queries must NOT fire read thrash');
+    assert.equal(res.explorationFuseMessage, null, 'Read-only queries must NOT fire exploration fuse');
+
+    // Stage 5: tool 8 (hard cap)
+    state.toolsWithoutWrite = 8;
+    res = applyExploreFuses({
+      executeIntent: false,
+      taskClass: 'quick_inspect',
+      hasAnyWrites: false,
+      state,
+      pushUser: () => {},
+      deferMessagesToArbiter: true,
+      currentTurn: 4,
+    });
+    assertNoMutationPressure(res, 'tool 8');
+    assert.ok(res.investigateHardCapTerminal);
+    assert.match(res.investigateHardCapTerminal!, /Inspection tool budget reached/i);
+    assert.match(res.investigateHardCapTerminal!, /synthesize and return your best-supported final answer/i);
+  });
 });

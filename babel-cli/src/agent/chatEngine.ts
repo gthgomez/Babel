@@ -2287,6 +2287,33 @@ export class ChatEngine {
         if (arb.terminalAnswer) {
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
+
+          const isReadOnlyInspection =
+            resolvedIntent !== 'execute' &&
+            (this.taskClass === 'quick_inspect' || this.taskClass === 'investigate');
+
+          // Read-only inspection hard cap: synthesize gathered evidence into a final informational answer
+          if (
+            (arb.policySource === 'investigate_hard_cap' || arb.policySource === 'read_only_hard_cap') &&
+            isReadOnlyInspection
+          ) {
+            const synthAnswer = await this.synthesizeAnswer(allToolObservations, {
+              onAnswerChunk: (_chunk: string) => {},
+            }).catch(() => '');
+
+            const finalAnswer = synthAnswer?.trim()
+              ? synthAnswer.trim()
+              : arb.terminalAnswer;
+
+            const synthBlocked = this.detectAndBuildBlockedReport(finalAnswer);
+            this.conversation.push({ role: 'assistant', content: finalAnswer });
+            yield { type: 'answer_chunk', text: finalAnswer };
+            yield this.streamDone(finalAnswer, {
+              blockedReport: synthBlocked ?? null,
+            });
+            return;
+          }
+
           // Prefer BLOCKED synthesis when stall kill and agent already diagnosed
           if (stallIntervention?.level === 'kill') {
             const killAnswer = await this.synthesizeAnswer(allToolObservations, {
