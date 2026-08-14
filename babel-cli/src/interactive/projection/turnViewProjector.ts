@@ -31,6 +31,8 @@ export interface ReviewCardProjection {
   status: 'completed' | 'cancelled' | 'blocked' | 'budget_exhausted' | 'failed' | 'in_progress';
   verifiedBadge: 'verified' | 'unverified' | 'failed' | 'not_applicable';
   verifierCommand?: string | undefined;
+  verifierExitCode?: number | undefined;
+  verifierPassed?: boolean | undefined;
   changedFiles: readonly string[];
   hasMutations: boolean;
   showPatchActions: boolean;
@@ -225,6 +227,8 @@ export function projectTurnViewState(
       status: terminalStatus,
       verifiedBadge,
       verifierCommand: latestVerifier?.command,
+      verifierExitCode: latestVerifier?.exitCode,
+      verifierPassed: latestVerifier?.passed,
       changedFiles,
       hasMutations,
       showPatchActions: hasMutations && terminalOutcome !== 'CANCELLED',
@@ -291,8 +295,9 @@ export function renderProjectedReviewCard(
     verification: proj.verifierCommand
       ? {
           ran: true,
-          passed: proj.verifiedBadge === 'verified',
+          passed: proj.verifierPassed ?? (proj.verifiedBadge === 'verified'),
           command: proj.verifierCommand,
+          exitCode: proj.verifierExitCode ?? (proj.verifiedBadge === 'verified' ? 0 : 1),
         }
       : proj.hasMutations
         ? { ran: false }
