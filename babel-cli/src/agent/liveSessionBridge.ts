@@ -36,6 +36,7 @@ import {
 } from './sessionEvents.js';
 import {
   loadThreadEventLogFromDir,
+  ThreadEventLogRestoreError,
   type ThreadEventLog,
 } from './threadEventLog.js';
 import { compileChatStack, type ChatCompiledStack } from './chatStackCompile.js';
@@ -409,8 +410,11 @@ export function resumeEquivalenceFromDisk(runDir: string): {
   let threadLog: ThreadEventLog | undefined;
   try {
     threadLog = loadThreadEventLogFromDir(runDir) ?? undefined;
-  } catch {
-    threadLog = undefined;
+  } catch (error) {
+    const code = error instanceof ThreadEventLogRestoreError
+      ? error.code
+      : 'THREAD_EVENT_LOG_INVALID';
+    return { ok: false, mismatches: [`thread_events:${code}`], live: null };
   }
   const a = projectFromDurableSession({
     sessionLog,

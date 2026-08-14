@@ -118,6 +118,34 @@ describe('backgroundShell', () => {
     assert.equal(result.status, 'killed');
   });
 
+  it('hard timeout terminates the full process tree (grandchild)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bg-shell-timeout-tree-'));
+    const grandchildScript = join(dir, 'grandchild.js');
+    const parentScript = join(dir, 'parent.js');
+    writeFileSync(grandchildScript, 'setTimeout(()=>{},60000);\n');
+    writeFileSync(parentScript, [
+      "const cp=require('child_process');",
+      'const gc=cp.spawn(process.execPath,[process.argv[2]],{stdio:"ignore"});',
+      'console.log(String(gc.pid));',
+      'setTimeout(()=>{},60000);',
+    ].join(''));
+    let grandchildPid: number | undefined;
+    try {
+      const job = startBackgroundShell({
+        command: `node ${parentScript} ${grandchildScript}`,
+        cwd: process.cwd(),
+        timeoutMs: 400,
+      });
+      grandchildPid = await waitForStdoutPid(job.id);
+      const result = await awaitBackgroundShell(job.id, 5_000);
+      assert.equal(result.status, 'killed');
+      assert.ok(await waitUntilDead(grandchildPid), 'grandchild should exit after timeout tree kill');
+    } finally {
+      if (grandchildPid !== undefined && isProcessAlive(grandchildPid)) {
+        try { process.kill(grandchildPid); } catch { /* already gone */ }
+      }
+    }
+  });
   it('killBackgroundShell terminates the full process tree (grandchild)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'bg-shell-tree-'));
     const grandchildScript = join(dir, 'grandchild.js');
@@ -218,6 +246,33 @@ describe('backgroundShell', () => {
     killBackgroundShell(sibling.id);
   });
 
+  it('abortTurn terminates its full owned process tree (grandchild)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bg-shell-abort-tree-'));
+    const grandchildScript = join(dir, 'grandchild.js');
+    const parentScript = join(dir, 'parent.js');
+    writeFileSync(grandchildScript, 'setTimeout(()=>{},60000);\n');
+    writeFileSync(parentScript, [
+      "const cp=require('child_process');",
+      'const gc=cp.spawn(process.execPath,[process.argv[2]],{stdio:"ignore"});',
+      'console.log(String(gc.pid));',
+      'setTimeout(()=>{},60000);',
+    ].join(''));
+    const runId = 'bg-shell-abort-tree';
+    const engine = new ChatEngine({ task: 't', projectRoot: process.cwd(), runId });
+    let grandchildPid: number | undefined;
+    try {
+      const job = startBackgroundShell({ command: `node ${parentScript} ${grandchildScript}`, cwd: process.cwd(), timeoutMs: 60_000, ownerId: runId });
+      grandchildPid = await waitForStdoutPid(job.id);
+      engine.abortTurn();
+      const result = await awaitBackgroundShell(job.id, 5_000);
+      assert.equal(result.status, 'killed');
+      assert.ok(await waitUntilDead(grandchildPid), 'grandchild should exit after owner abort tree kill');
+    } finally {
+      if (grandchildPid !== undefined && isProcessAlive(grandchildPid)) {
+        try { process.kill(grandchildPid); } catch { /* already gone */ }
+      }
+    }
+  });
   it('abortTurn kills only that engine\'s non-detached background shells', async () => {
     const sleeper =
       process.platform === 'win32' ? 'ping -n 10 127.0.0.1' : 'sleep 8';

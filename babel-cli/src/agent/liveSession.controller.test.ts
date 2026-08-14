@@ -13,6 +13,7 @@ import { ChatEngine } from './chatEngine.js';
 import {
   createSessionEventLog,
   recordUserSubmitted,
+  recordToolProposed,
   recordToolStarted,
   recordToolTerminal,
   recordMutationBatch,
@@ -20,15 +21,23 @@ import {
   recordCompletionDecision,
   recordTurnEnded,
   recordCompactionCreated,
+  recordCompactionStarted,
+  recordCompactionSummary,
+  recordCompactionCommitted,
   recordPolicyIntervened,
   flushSessionEventLog,
   flushSessionEventLogStrict,
+  loadSessionEventLogFromDir,
   serializeSessionEventLog,
   parseSessionEventLog,
   SESSION_EVENTS_FILENAME,
+  operationFingerprint,
+  interruptedToolRecoveries,
+  markInterruptedToolsOnResume,
 } from './sessionEvents.js';
 import {
   createThreadEventLog,
+  appendThreadEvent,
   startTurn,
   persistThreadEventLog,
   THREAD_EVENT_LOG_FILENAME,
@@ -51,6 +60,7 @@ import {
   createParityRuntime,
   parityOnUserTurn,
   paritySettleProposeTools,
+  paritySettleToolStarted,
   finalizeParityTurnSync,
   checkpointParityEventLog,
 } from './chatEngineParityBridge.js';
@@ -68,6 +78,7 @@ import {
 } from './taskContract.js';
 import { executeActionWithPolicy } from './toolExecutor.js';
 import { checkToolCapability } from './capabilityBroker.js';
+import { startBackgroundShell } from './backgroundShell.js';
 
 describe('H2 ChatEngine live authority freeze', () => {
   it('constructor freezes InstructionManifestV1 + TaskContractV1 and persists them', () => {
@@ -131,6 +142,12 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
       model: 'deepseek-chat',
       provider: 'deepseek',
       taskClass: 'general_swe',
+    });
+    recordToolProposed(log, {
+      turn_id: turn,
+      tool_call_id: 'tc1',
+      tool_name: 'write_file',
+      idempotency_key: 'idem-ctrl-1',
     });
     recordToolStarted(log, {
       turn_id: turn,
@@ -286,6 +303,12 @@ describe('H2 forced-termination at controller-visible boundaries', () => {
     const log = createSessionEventLog('kill');
     const turn = 't';
     recordUserSubmitted(log, { turn_id: turn, task: 'kill mid write' });
+    recordToolProposed(log, {
+      turn_id: turn,
+      tool_call_id: 'x',
+      tool_name: 'write_file',
+      idempotency_key: 'idem-kill',
+    });
     recordToolStarted(log, {
       turn_id: turn,
       tool_call_id: 'x',
@@ -301,27 +324,405 @@ describe('H2 forced-termination at controller-visible boundaries', () => {
         live.tools.interrupted_idempotency_keys.includes('idem-kill') ||
         live.tools.open_tool_call_ids.includes('x'),
       'mid-effect key must not look like clean success-only completion',
-    );
-    // Explicit cancel: blind retry forbidden
-    recordToolTerminal(log, {
-      turn_id: turn,
-      tool_call_id: 'x',
-      tool_name: 'write_file',
-      idempotency_key: 'idem-kill',
-      cancelled: true,
-      reason: 'killed',
-    });
-    engine.restoreSessionEvents(log);
+    );    // Restore settles the interrupted dispatch as a terminal cancellation; a second
+    // terminal must now be rejected instead of becoming contradictory evidence.
     const live2 = engine.getLiveSession();
     assert.strictEqual(mayBlindRetryInterrupted(live2, 'idem-kill'), false);
     // Cancelled keys are settled terminal — must not re-mutate with same key
     assert.strictEqual(canMutateWithIdempotencyKey(live2, 'idem-kill'), false);
   });
 
+  it('fails closed when direct restoration receives an orphan tool_started record', () => {
+    const log = createSessionEventLog('orphan-start');
+    log.events.push({
+      schema_version: 1,
+      event_id: 'orphan-start-event',
+      session_id: log.session_id,
+      turn_id: 't',
+      seq: 0,
+      ts: '2026-08-13T00:00:00.000Z',
+      kind: 'tool_started',
+      tool_call_id: 'orphan-call',
+      tool_name: 'run_command',
+      idempotency_key: 'orphan-key',
+      effect_class: 'non_idempotent_local_effect',
+    });
+    log.nextSeq = 1;
+    const engine = new ChatEngine({ task: 'reject orphan start', projectRoot: process.cwd() });
+    assert.throws(
+      () => engine.restoreSessionEvents(log),
+      /tool_started requires exactly one prior tool_proposed/,
+    );
+  });
+  it('fails closed when a persisted C2 commit does not match its durable thread capsule', () => {
+    const engine = new ChatEngine({ task: 'reject forged C2 link', projectRoot: process.cwd() });
+    const threadLog = engine.getParityRuntime().eventLog;
+    const turn = startTurn(threadLog, {
+      task: 'C2 restore', model: 'test', provider: 'test', projectRoot: process.cwd(), policyPreset: 'safe',
+    });
+    const capsule = appendThreadEvent(threadLog, {
+      turn_id: turn,
+      kind: 'compaction_capsule',
+      content: 'durable C2 capsule',
+      preserved_tool_call_ids: ['call-1'],
+    });
+    const digest = 'dfe562e56643a4a13ca7cecab3ef156518215ed5f9b0e0aa53dc30fbf4ca1aee';
+    const log = createSessionEventLog('forged-c2-link');
+    const start = {
+      operation_id: 'c2-forged-link', strategy: 'sliding_window',
+      replaces_thread_seq_start: 0, replaces_thread_seq_end: capsule.seq - 1, replaces_message_count: 1,
+    };
+    recordCompactionStarted(log, turn, start);
+    recordCompactionSummary(log, turn, {
+      operation_id: start.operation_id, capsule_digest: digest, raw_observation_refs: [], preserved_tool_call_ids: ['call-1'],
+    });
+    recordCompactionCommitted(log, turn, {
+      ...start, thread_event_id: 'forged-thread-event', capsule_digest: digest, preserved_tool_call_ids: ['call-1'],
+    });
+    const persisted = parseSessionEventLog(serializeSessionEventLog(log));
+    assert.throws(
+      () => engine.restoreSessionEvents(persisted),
+      /must link exactly one durable thread capsule/,
+    );
+
+    const forgedPreservedIds = structuredClone(log);
+    for (const event of forgedPreservedIds.events) {
+      if (event.kind === 'compaction_summary') event.preserved_tool_call_ids.push('forged-call');
+      if (event.kind === 'compaction_committed') {
+        event.thread_event_id = capsule.event_id;
+        event.preserved_tool_call_ids.push('forged-call');
+      }
+    }
+    const persistedPreservedIds = parseSessionEventLog(serializeSessionEventLog(forgedPreservedIds));
+    assert.throws(
+      () => engine.restoreSessionEvents(persistedPreservedIds),
+      /does not match its durable thread capsule/,
+    );
+  });
+
+  it('persists proposal and dispatch markers as separate reload boundaries', () => {
+    const runDir = mkdtempSync(join(tmpdir(), 'babel-dispatch-boundary-'));
+    try {
+      const runtime = createParityRuntime('separate-boundaries');
+      parityOnUserTurn(runtime, {
+        task: 'run a guarded effect', model: 'test-model', provider: 'test-provider', projectRoot: process.cwd(),
+      });
+      paritySettleProposeTools(runtime, [{ id: 'call-1', name: 'run_command' }], runDir);
+      const proposed = loadSessionEventLogFromDir(runDir)!;
+      assert.strictEqual(proposed.events.filter((event) => event.kind === 'tool_proposed').length, 1);
+      assert.strictEqual(proposed.events.filter((event) => event.kind === 'tool_started').length, 0);
+
+      paritySettleToolStarted(runtime, { id: 'call-1', name: 'run_command' }, runDir);
+      const dispatched = loadSessionEventLogFromDir(runDir)!;
+      assert.strictEqual(dispatched.events.filter((event) => event.kind === 'tool_started').length, 1);
+    } finally {
+      rmSync(runDir, { recursive: true, force: true });
+    }
+  });
+  it('does not mark policy-denied actions started, but marks the post-authorization executor hook', async () => {
+    const runDir = mkdtempSync(join(tmpdir(), 'babel-post-auth-boundary-'));
+    try {
+      const runtime = createParityRuntime('post-auth-boundary');
+      parityOnUserTurn(runtime, {
+        task: 'guard dispatch', model: 'test', provider: 'test', projectRoot: process.cwd(),
+      });
+      paritySettleProposeTools(runtime, [{ id: 'denied', name: 'write_file' }], runDir);
+      let startHookCalls = 0;
+      const denied = await executeActionWithPolicy(
+        { type: 'write_file', path: 'a.ts', content: 'x' }, 'read_only',
+        { agentId: 'a', runId: 'post-auth-boundary', runDir, babelRoot: process.cwd() },
+        { onBeforeExecutorExecute: () => { startHookCalls += 1; } },
+      );
+      assert.strictEqual(denied.policyBlocked, true);
+      assert.strictEqual(startHookCalls, 0);
+      assert.strictEqual(interruptedToolRecoveries(runtime.sessionEvents).at(0)!.state, 'TOOL_NOT_STARTED');
+
+      const allowedRunDir = join(runDir, 'allowed');
+      const runtime2 = createParityRuntime('post-executor-hook');
+      parityOnUserTurn(runtime2, {
+        task: 'dispatch', model: 'test', provider: 'test', projectRoot: process.cwd(),
+      });
+      paritySettleProposeTools(runtime2, [{ id: 'allowed', name: 'read_file' }], allowedRunDir);
+      await executeActionWithPolicy(
+        { type: 'read_file', path: 'a.ts' }, 'workspace_write',
+        { agentId: 'a', runId: 'post-executor-hook', runDir: allowedRunDir, babelRoot: process.cwd() },
+        {
+          executor: { execute: async () => ({ action: { type: 'read_file', path: 'a.ts' }, terminal: false, results: [{ exit_code: 0, stdout: '', stderr: '' }] }) } as never,
+          onBeforeExecutorExecute: () => paritySettleToolStarted(runtime2, { id: 'allowed', name: 'read_file' }, allowedRunDir),
+        },
+      );
+      const afterHook = loadSessionEventLogFromDir(allowedRunDir)!;
+      assert.strictEqual(interruptedToolRecoveries(afterHook).find((r) => r.idempotencyKey === 'allowed')!.state, 'TOOL_OUTCOME_UNKNOWN');
+    } finally {
+      rmSync(runDir, { recursive: true, force: true });
+    }
+  });
+
+  it('persists direct background and MCP dispatches as unknown outcomes that block fresh ids after reload', () => {
+    const runDir = mkdtempSync(join(tmpdir(), 'babel-direct-dispatch-reload-'));
+    try {
+      const cases = [
+        { id: 'background-original', name: 'run_command', action: { type: 'run_command' as const, command: 'echo background', background: true } },
+        { id: 'mcp-original', name: 'mcp_request', action: { type: 'mcp_request' as const, server: 'fixture', query: 'mutate remote state' } },
+      ];
+      for (const entry of cases) {
+        const caseRunDir = join(runDir, entry.id);
+        const runtime = createParityRuntime(`direct-${entry.id}`);
+        parityOnUserTurn(runtime, {
+          task: `direct ${entry.name}`, model: 'test', provider: 'test', projectRoot: process.cwd(),
+        });
+        const fingerprint = operationFingerprint(entry.name, entry.action);
+        paritySettleProposeTools(runtime, [{ id: entry.id, name: entry.name, argsDigest: fingerprint }], caseRunDir);
+        // Fault injection boundary: this is the marker immediately before direct spawn/MCP request.
+        paritySettleToolStarted(runtime, { id: entry.id, name: entry.name }, caseRunDir);
+        const reloaded = loadSessionEventLogFromDir(caseRunDir)!;
+        markInterruptedToolsOnResume(reloaded);
+        const engine = new ChatEngine({ task: `direct ${entry.name}`, projectRoot: process.cwd() });
+        engine.restoreSessionEvents(reloaded);
+        const recovery = engine.getLiveSession().tools.recovery.find((item) => item.idempotencyKey === entry.id);
+        assert.strictEqual(recovery?.state, 'TOOL_OUTCOME_UNKNOWN', entry.name);
+        const authorization = (engine as unknown as {
+          recoveredOperationDispatchAuthorization: (a: typeof entry.action) => { allowed: boolean };
+        }).recoveredOperationDispatchAuthorization(entry.action);
+        assert.strictEqual(authorization.allowed, false, `${entry.name} fresh id must reconcile`);
+      }
+    } finally {
+      rmSync(runDir, { recursive: true, force: true });
+    }
+  });
+  it('uses actual direct executeOneAction branches for persisted post-dispatch fault recovery', async () => {
+    const cases = [
+      { suffix: 'mcp', action: { type: 'mcp_request' as const, server: 'github', query: 'remote mutation' } },
+      { suffix: 'background', action: { type: 'run_command' as const, command: 'echo babel-b2-background', background: true } },
+      { suffix: 'web-search', action: { type: 'web_search' as const, query: 'Babel B2 harness' } },
+      { suffix: 'web-fetch', action: { type: 'web_fetch' as const, url: 'https://example.test/b2' } },
+      { suffix: 'lsp', action: { type: 'lsp' as const, operation: 'workspaceSymbol' as const, filePath: 'src/agent/chatEngine.ts', query: 'ChatEngine' } },
+      { suffix: 'await', action: { type: 'await_command' as const, task_id: 'set-at-runtime' } },
+    ];
+    for (const entry of cases) {
+      const runId = `b2-direct-${entry.suffix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const awaitJob = entry.suffix === 'await'
+        ? startBackgroundShell({ command: 'echo babel-b2-await', cwd: process.cwd(), timeoutMs: 5_000 })
+        : undefined;
+      const action = entry.suffix === 'await'
+        ? { type: 'await_command' as const, task_id: awaitJob!.id }
+        : entry.action;
+      const engine = new ChatEngine({ task: `direct ${entry.suffix}`, projectRoot: process.cwd(), runId });
+      const runDir = (engine as unknown as { engineRunDir: string }).engineRunDir;
+      const toolName = action.type;
+      const fingerprint = operationFingerprint(toolName, action);
+      const log = createSessionEventLog(runId);
+      recordUserSubmitted(log, { turn_id: 't', task: `direct ${entry.suffix}` });
+      recordToolProposed(log, {
+        turn_id: 't', tool_call_id: 'original-id', tool_name: toolName,
+        idempotency_key: 'original-id',
+        effect_class: toolName === 'run_command' || toolName === 'await_command'
+          ? 'non_idempotent_local_effect' : 'external_side_effect',
+        args_digest: fingerprint,
+      });
+      flushSessionEventLog(runDir, log);
+      // Keep the proposal live; restore would settle the interruption before this fault boundary.
+      const runtime = engine.getParityRuntime();
+      runtime.sessionEvents = log;
+      runtime.turnId = 't';
+      const faultingEngine = engine as unknown as {
+        persistToolStartedAtExecutorDispatch: (...args: unknown[]) => void;
+        executeOneAction: (input: typeof action, context: object, callbacks: object, meta: { index: number; subAgentCounter: number; idempotencyKey: string }) => Promise<{ observation: string }>;
+      };
+      const persist = faultingEngine.persistToolStartedAtExecutorDispatch.bind(engine);
+      faultingEngine.persistToolStartedAtExecutorDispatch = (...args) => {
+        persist(...args);
+        throw new Error('B2_FAULT_AFTER_PERSISTED_START');
+      };
+      let first: { observation: string };
+      try {
+        first = await faultingEngine.executeOneAction(action, {
+          agentId: 'b2', runId, runDir, babelRoot: process.cwd(), signal: new AbortController().signal,
+        }, {}, { index: 0, subAgentCounter: 0, idempotencyKey: 'original-id' });
+      } catch (error) {
+        assert.match(error instanceof Error ? error.message : String(error), /B2_FAULT_AFTER_PERSISTED_START/);
+        first = { observation: 'fault injected immediately after persisted start' };
+      }
+      const afterDispatch = loadSessionEventLogFromDir(runDir)!;
+      assert.ok(
+        afterDispatch.events.some((event) => event.kind === 'tool_started' && event.idempotency_key === 'original-id'),
+        `${entry.suffix}: ${first.observation}`,
+      );
+      markInterruptedToolsOnResume(afterDispatch);
+      flushSessionEventLog(runDir, afterDispatch);
+
+      const resumed = new ChatEngine({ task: `direct ${entry.suffix}`, projectRoot: process.cwd(), runId, resumeExisting: true });
+      resumed.restoreSessionEvents(loadSessionEventLogFromDir(runDir)!, { runDir });
+      const blocked = await (resumed as unknown as {
+        executeOneAction: (input: typeof action, context: object, callbacks: object, meta: { index: number; subAgentCounter: number; idempotencyKey: string }) => Promise<{ observation: string }>;
+      }).executeOneAction(action, {
+        agentId: 'b2', runId, runDir, babelRoot: process.cwd(), signal: new AbortController().signal,
+      }, {}, { index: 0, subAgentCounter: 0, idempotencyKey: 'fresh-id' });
+      assert.match(blocked.observation, /RECOVERY_RECONCILIATION_REQUIRED/, entry.suffix);
+    }
+  });
+
+  it('keeps known-invalid MCP and await requests at TOOL_NOT_STARTED', async () => {
+    const cases = [
+      { suffix: 'mcp-invalid', action: { type: 'mcp_request' as const, server: 'missing-b2-server', query: 'never dispatch' } },
+      { suffix: 'await-invalid', action: { type: 'await_command' as const, task_id: 'missing-b2-job' } },
+    ];
+    for (const entry of cases) {
+      const runId = `b2-not-started-${entry.suffix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const engine = new ChatEngine({ task: entry.suffix, projectRoot: process.cwd(), runId });
+      const runDir = (engine as unknown as { engineRunDir: string }).engineRunDir;
+      const log = createSessionEventLog(runId);
+      recordUserSubmitted(log, { turn_id: 't', task: entry.suffix });
+      recordToolProposed(log, {
+        turn_id: 't', tool_call_id: 'original-id', tool_name: entry.action.type,
+        idempotency_key: 'original-id', effect_class: entry.action.type === 'await_command' ? 'non_idempotent_local_effect' : 'external_side_effect',
+        args_digest: operationFingerprint(entry.action.type, entry.action),
+      });
+      flushSessionEventLog(runDir, log);
+      const runtime = engine.getParityRuntime();
+      runtime.sessionEvents = log;
+      runtime.turnId = 't';
+      await (engine as unknown as {
+        executeOneAction: (input: typeof entry.action, context: object, callbacks: object, meta: { index: number; subAgentCounter: number; idempotencyKey: string }) => Promise<unknown>;
+      }).executeOneAction(entry.action, {
+        agentId: 'b2', runId, runDir, babelRoot: process.cwd(), signal: new AbortController().signal,
+      }, {}, { index: 0, subAgentCounter: 0, idempotencyKey: 'original-id' });
+      const afterValidation = loadSessionEventLogFromDir(runDir)!;
+      assert.ok(!afterValidation.events.some((event) => event.kind === 'tool_started'), entry.suffix);
+      markInterruptedToolsOnResume(afterValidation);
+      assert.strictEqual(interruptedToolRecoveries(afterValidation).length, 0, entry.suffix);
+      assert.strictEqual(
+        afterValidation.events.find((event) => event.kind === 'tool_cancelled')?.recovery_state,
+        'TOOL_NOT_STARTED',
+        entry.suffix,
+      );
+    }
+  });
+  it('requires and durably audits explicit reconciliation before an equivalent fresh-id retry', async () => {
+    const action = { type: 'run_command' as const, command: 'echo guarded' };
+    const fingerprint = operationFingerprint('run_command', action);
+    const engine = new ChatEngine({ task: 'recover shell', projectRoot: process.cwd() });
+    const log = createSessionEventLog('fresh-id-recovery');
+    recordUserSubmitted(log, { turn_id: 't', task: 'recover shell' });
+    recordToolProposed(log, {
+      turn_id: 't', tool_call_id: 'original-id', tool_name: 'run_command',
+      idempotency_key: 'original-id', effect_class: 'non_idempotent_local_effect', args_digest: fingerprint,
+    });
+    recordToolStarted(log, {
+      turn_id: 't', tool_call_id: 'original-id', tool_name: 'run_command',
+      idempotency_key: 'original-id', effect_class: 'non_idempotent_local_effect',
+    });
+    engine.restoreSessionEvents(log);
+    const blockedAuthorization = (engine as unknown as {
+      recoveredOperationDispatchAuthorization: (a: typeof action) => { allowed: boolean; message?: string };
+    }).recoveredOperationDispatchAuthorization(action);
+    const blocked = await executeActionWithPolicy(
+      action, 'workspace_write',
+      { agentId: 'a', runId: 'fresh-id-recovery', runDir: '', babelRoot: process.cwd(), signal: new AbortController().signal },
+      {
+        isolationRequired: false,
+        idempotencyKey: 'fresh-id',
+        onDispatchAuthorized: () => blockedAuthorization,
+        executor: { execute: async () => { throw new Error('must not execute'); } } as never,
+      },
+    );
+    assert.match(blocked.results[0]!.stderr, /RECOVERY_RECONCILIATION_REQUIRED/);
+
+    assert.throws(
+      () => engine.authorizeRecoveredOutcomeRetry(action, 'original-id', 'contains spaces'),
+      /opaque, non-secret audit reference/,
+    );
+    engine.authorizeRecoveredOutcomeRetry(action, 'original-id', 'operator-ticket-B2-42');
+    const durable = loadSessionEventLogFromDir((engine as unknown as { engineRunDir: string }).engineRunDir)!;
+    assert.ok(durable.events.some((event) =>
+      event.kind === 'recovery_reconciled' &&
+      event.recovered_idempotency_key === 'original-id' &&
+      event.reconciliation_ref === 'operator-ticket-B2-42',
+    ));
+    const afterAuthorization = (engine as unknown as {
+      recoveredOperationDispatchAuthorization: (a: typeof action) => { allowed: boolean };
+    }).recoveredOperationDispatchAuthorization(action);
+    assert.strictEqual(afterAuthorization.allowed, true, 'only the explicitly reconciled prior unknown outcome is released');
+  });
+  it('rejects an in-memory P/S/unknown-cancelled/terminal/recovery authorization contradiction before restore', () => {
+    const action = { type: 'run_command' as const, command: 'echo forged' };
+    const fingerprint = operationFingerprint('run_command', action);
+    const log = createSessionEventLog('forged-recovery-restore');
+    recordToolProposed(log, {
+      turn_id: 't', tool_call_id: 'forged-id', tool_name: 'run_command', idempotency_key: 'forged-id',
+      effect_class: 'non_idempotent_local_effect', args_digest: fingerprint,
+    });
+    recordToolStarted(log, {
+      turn_id: 't', tool_call_id: 'forged-id', tool_name: 'run_command', idempotency_key: 'forged-id',
+      effect_class: 'non_idempotent_local_effect',
+    });
+    recordToolTerminal(log, {
+      turn_id: 't', tool_call_id: 'forged-id', tool_name: 'run_command', idempotency_key: 'forged-id',
+      cancelled: true, recovery_state: 'TOOL_OUTCOME_UNKNOWN',
+      effect_class: 'non_idempotent_local_effect', args_digest: fingerprint,
+    });
+    const seqTerminal = log.nextSeq++;
+    log.events.push({
+      schema_version: 1, event_id: `forged-terminal-${seqTerminal}`, session_id: log.session_id,
+      turn_id: 't', seq: seqTerminal, ts: '2026-08-13T00:00:00.000Z', kind: 'tool_completed',
+      tool_call_id: 'forged-id', tool_name: 'run_command', idempotency_key: 'forged-id', exit_code: 0,
+    });
+    const seq = log.nextSeq++;
+    log.events.push({
+      schema_version: 1,
+      event_id: `forged-recovery-${seq}`,
+      session_id: log.session_id,
+      turn_id: 't',
+      seq,
+      ts: '2026-08-13T00:00:00.000Z',
+      kind: 'recovery_reconciled',
+      recovered_idempotency_key: 'forged-id',
+      operation_fingerprint: fingerprint,
+      reconciliation_ref: 'operator-ticket-B2-forged',
+    });
+
+    const engine = new ChatEngine({ task: 'reject forged recovery', projectRoot: process.cwd() });
+    assert.throws(
+      () => engine.restoreSessionEvents(log),
+      /tool lifecycle cannot record a terminal after a terminal/,
+    );
+  });  it('projects unknown outcomes and injects explicit repair guidance on restore', () => {
+    const engine = new ChatEngine({ task: 'recover interrupted tool', projectRoot: process.cwd() });
+    const log = createSessionEventLog('unknown-outcome');
+    recordUserSubmitted(log, { turn_id: 't', task: 'recover interrupted tool' });
+    recordToolProposed(log, {
+      turn_id: 't', tool_call_id: 'shell-1', tool_name: 'run_command',
+      idempotency_key: 'shell-1', effect_class: 'non_idempotent_local_effect',
+    });
+    recordToolStarted(log, {
+      turn_id: 't', tool_call_id: 'shell-1', tool_name: 'run_command',
+      idempotency_key: 'shell-1', effect_class: 'non_idempotent_local_effect',
+    });
+
+    engine.restoreSessionEvents(log);
+    const live = engine.getLiveSession();
+    assert.deepStrictEqual(live.tools.recovery, [{
+      idempotencyKey: 'shell-1', toolCallId: 'shell-1', toolName: 'run_command',
+      effectClass: 'non_idempotent_local_effect', state: 'TOOL_OUTCOME_UNKNOWN',
+      reconciliation: 'manual_review_no_auto_retry',
+    }]);
+    assert.strictEqual(engine.canMutateIdempotencyKey('shell-1'), false);
+    const conversation = (engine as unknown as { conversation: Array<{ role: string; content: string }> }).conversation;
+    const repair = conversation.find((message) => message.content.includes('[RESUME_REPAIR]'));
+    assert.ok(repair, 'the next model request receives durable repair guidance');
+    assert.match(repair!.content, /inspect\/reconcile/i);
+    assert.match(repair!.content, /never blindly retry/i);
+  });
   it('every crash boundary projection never invents VERIFIED_COMPLETE', () => {
     const full = createSessionEventLog('b');
     const turn = 't';
     recordUserSubmitted(full, { turn_id: turn, task: 't' });
+    recordToolProposed(full, {
+      turn_id: turn,
+      tool_call_id: 'c',
+      tool_name: 'write_file',
+      idempotency_key: 'k',
+    });
     recordToolStarted(full, {
       turn_id: turn,
       tool_call_id: 'c',
@@ -439,6 +840,12 @@ describe('H3/H4 live ChatEngine wiring', () => {
     const engine = new ChatEngine({ task: 't', projectRoot: process.cwd() });
     const log = createSessionEventLog('idemp');
     recordUserSubmitted(log, { turn_id: 't', task: 't' });
+    recordToolProposed(log, {
+      turn_id: 't', tool_call_id: 'c1', tool_name: 'write_file', idempotency_key: 'idem-double',
+    });
+    recordToolStarted(log, {
+      turn_id: 't', tool_call_id: 'c1', tool_name: 'write_file', idempotency_key: 'idem-double',
+    });
     recordToolTerminal(log, {
       turn_id: 't',
       tool_call_id: 'c1',
@@ -490,6 +897,12 @@ describe('H6 golden from ChatEngine session path', () => {
     const log = createSessionEventLog(engine.getParityRuntime().sessionEvents.session_id);
     const turn = 'tg';
     recordUserSubmitted(log, { turn_id: turn, task: 'golden task' });
+    recordToolProposed(log, {
+      turn_id: turn, tool_call_id: 'c', tool_name: 'write_file', idempotency_key: 'kg',
+    });
+    recordToolStarted(log, {
+      turn_id: turn, tool_call_id: 'c', tool_name: 'write_file', idempotency_key: 'kg',
+    });
     recordToolTerminal(log, {
       turn_id: turn,
       tool_call_id: 'c',

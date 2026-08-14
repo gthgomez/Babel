@@ -9,7 +9,7 @@
  * Persistence failure yields an explicit degraded/blocked status, never silent divergence.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { ChatMessage } from './chatCompaction.js';
 import { estimateTokens } from './chatCompaction.js';
 import {
@@ -18,6 +18,9 @@ import {
 } from './threadEventLog.js';
 import {
   recordCompactionCreated,
+  recordCompactionStarted,
+  recordCompactionSummary,
+  recordCompactionCommitted,
   type SessionEventLog,
 } from './sessionEvents.js';
 import {
@@ -287,6 +290,13 @@ export async function commitCompaction(
     summaryContent,
   );
   const preservedToolCallIds = collectPreservedToolCallIds(conversation);
+  const operationId = randomUUID();
+  const capsuleDigest = createHash('sha256').update(durableContent).digest('hex');
+  const replacementBoundary = {
+    replaces_thread_seq_start: 0,
+    replaces_thread_seq_end: Math.max(input.threadLog.nextSeq - 1, 0),
+    replaces_message_count: input.priorConversation.length,
+  };
   const tokensAfter = estimateTokens(conversation);
   const caps = resolveProviderCapabilities(input.modelId);
   const budget = buildContextBudgetSnapshot({
@@ -302,6 +312,17 @@ export async function commitCompaction(
   let sessionEventId: string | undefined;
 
   try {
+    recordCompactionStarted(input.sessionLog, input.turnId, {
+      operation_id: operationId,
+      strategy: input.strategy,
+      ...replacementBoundary,
+    });
+    recordCompactionSummary(input.sessionLog, input.turnId, {
+      operation_id: operationId,
+      capsule_digest: capsuleDigest,
+      raw_observation_refs: rawRefs,
+      preserved_tool_call_ids: preservedToolCallIds,
+    });
     const threadEv = appendThreadEvent(input.threadLog, {
       kind: 'compaction_capsule',
       turn_id: turnId,
@@ -310,7 +331,16 @@ export async function commitCompaction(
     });
     threadEventId = threadEv.event_id;
 
-    const sessionEv = recordCompactionCreated(input.sessionLog, input.turnId, {
+    const sessionEv = recordCompactionCommitted(input.sessionLog, input.turnId, {
+      operation_id: operationId,
+      thread_event_id: threadEv.event_id,
+      capsule_digest: capsuleDigest,
+      ...replacementBoundary,
+      preserved_tool_call_ids: preservedToolCallIds,
+    });
+    sessionEventId = sessionEv.event_id;
+    // Retain the legacy boundary for current replay/live-session consumers.
+    recordCompactionCreated(input.sessionLog, input.turnId, {
       preserved_tool_call_ids: preservedToolCallIds,
       content_preview: durableContent.slice(0, 240),
       strategy: input.strategy,
@@ -318,7 +348,6 @@ export async function commitCompaction(
       tokens_after: tokensAfter,
       status: 'committed',
     });
-    sessionEventId = sessionEv.event_id;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {

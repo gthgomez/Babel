@@ -1,5 +1,5 @@
 import type { ToolCallRequest, ToolContext } from '../localTools.js';
-import type { ToolResult } from '../sandbox.js';
+import { validateHighRiskToolResult, type ToolResult } from '../sandbox.js';
 
 export const EXECUTOR_TOOL_CATEGORIES = [
   'filesystem',
@@ -96,7 +96,8 @@ export function createExecutorToolRegistry(
         };
       }
 
-      return definition.handler(req, context);
+      const result = await definition.handler(req, context);
+      return validateHighRiskToolResult(req.tool, result);
     },
   };
 }

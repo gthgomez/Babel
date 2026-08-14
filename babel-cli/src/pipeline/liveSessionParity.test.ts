@@ -39,6 +39,27 @@ test('V9 plan freezes a read-only contract before planning and persists a resuma
   });
 });
 
+test('resume equivalence rejects a present corrupted thread event log', () => {
+  withRunDir((runDir, prompt) => {
+    initializeV9LiveSession({
+      runDir,
+      sessionId: 'v9-corrupt-thread-log',
+      mode: 'plan',
+      task: 'Inspect safely.',
+      projectRoot: runDir,
+      promptManifestPaths: [prompt],
+    });
+    writeFileSync(join(runDir, 'thread_events.json'), JSON.stringify({
+      schema_version: 1, thread_id: 'v9-corrupt-thread-log', events: [], nextSeq: 1,
+    }), 'utf8');
+
+    assert.deepEqual(resumeEquivalenceFromDisk(runDir), {
+      ok: false,
+      mismatches: ['thread_events:THREAD_EVENT_LOG_INVALID'],
+      live: null,
+    });
+  });
+});
 test('V9 deep finalization uses shared terminal vocabulary and stays resume-equivalent', () => {
   withRunDir((runDir, prompt) => {
     const runtime = initializeV9LiveSession({

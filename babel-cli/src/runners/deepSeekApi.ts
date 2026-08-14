@@ -120,8 +120,19 @@ function buildInvocationMetadata(
   };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new DOMException('Request cancelled', 'AbortError'));
+  return new Promise((resolveSleep, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolveSleep();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('Request cancelled', 'AbortError'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function readPositiveIntEnv(name: string, fallback: number, max?: number): number {
@@ -435,6 +446,14 @@ export class DeepSeekApiRunner implements LlmRunner {
     // ── HTTP request loop ────────────────────────────────────────────────────
     let response: Response | null = null;
     let lastError: Error | null = null;
+    let retryAttempt: number | null = null;
+    const settleRetry = (outcome: 'succeeded' | 'failed' | 'cancelled'): void => {
+      if (retryAttempt === null) return;
+      callbacks?.onRetrySettled?.({
+        provider: 'deepseek', model: this.model, attempt: retryAttempt, outcome,
+      });
+      retryAttempt = null;
+    };
 
     for (let attempt = 1; attempt <= REQUEST_MAX_RETRIES; attempt += 1) {
       const controller = new AbortController();
@@ -466,9 +485,17 @@ export class DeepSeekApiRunner implements LlmRunner {
               details: `attempt ${attempt} failed`,
             });
           }
-          await sleep(retryDelayMs(attempt));
+          const retryDelay = retryDelayMs(attempt);
+          settleRetry('failed');
+          retryAttempt = attempt + 1;
+          callbacks?.onRetry?.({ provider: 'deepseek', model: this.model, attempt: retryAttempt, reason: isAbortError(err) ? 'timeout' : 'transport', backoff_ms: retryDelay });
+          await sleep(retryDelay, signal).catch((error: unknown) => {
+            if (isAbortError(error)) settleRetry('cancelled');
+            throw error;
+          });
           continue;
         }
+        settleRetry('failed');
         throw lastError;
       } finally {
         clearTimeout(timeout);
@@ -480,7 +507,14 @@ export class DeepSeekApiRunner implements LlmRunner {
       if (callbacks?.onProgress) {
         callbacks.onProgress({ state: 'Retrying response', details: `HTTP ${response.status}` });
       }
-      await sleep(retryDelayMs(attempt, response));
+      const retryDelay = retryDelayMs(attempt, response);
+      settleRetry('failed');
+          retryAttempt = attempt + 1;
+      callbacks?.onRetry?.({ provider: 'deepseek', model: this.model, attempt: retryAttempt, reason: response.status === 429 ? 'rate_limit' : response.status === 408 ? 'timeout' : 'server_error', backoff_ms: retryDelay });
+      await sleep(retryDelay, signal).catch((error: unknown) => {
+            if (isAbortError(error)) settleRetry('cancelled');
+            throw error;
+          });
     }
 
     if (!response) {
@@ -491,6 +525,7 @@ export class DeepSeekApiRunner implements LlmRunner {
     }
 
     if (!response.ok) {
+      settleRetry('failed');
       const body = await readErrorBody(response);
       this.lastInvocationMetadata = buildInvocationMetadata(this.model, Date.now() - startedAt);
       const retryNote = isRetryableStatus(response.status)
@@ -498,6 +533,8 @@ export class DeepSeekApiRunner implements LlmRunner {
         : '';
       throw new Error(`[deepSeekApi] HTTP ${response.status}${retryNote} (${this.model}): ${body}`);
     }
+
+    settleRetry('succeeded');
 
     parseRateLimitHeaders(response.headers, 'deepseek');
 
@@ -678,6 +715,7 @@ export class DeepSeekApiRunner implements LlmRunner {
     prompt: string,
     systemPrompt?: string,
     signal?: AbortSignal,
+    callbacks?: RunnerCallbacks,
   ): AsyncGenerator<string, void, undefined> {
     const chunks: string[] = [];
     let pending: (() => void) | null = null;
@@ -687,6 +725,7 @@ export class DeepSeekApiRunner implements LlmRunner {
     const execPromise = this._executeRequest(
       prompt,
       {
+        ...callbacks,
         onChunk: (chunk: string) => {
           chunks.push(chunk);
           pending?.();
@@ -746,6 +785,7 @@ export class DeepSeekApiRunner implements LlmRunner {
     systemPrompt?: string,
     signal?: AbortSignal,
     toolChoice?: 'auto' | 'required',
+    callbacks?: RunnerCallbacks,
   ): AsyncGenerator<ToolStreamEvent, void, undefined> {
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
@@ -791,6 +831,14 @@ export class DeepSeekApiRunner implements LlmRunner {
     // ── HTTP request loop (with retries) ─────────────────────────────────
     let response: Response | null = null;
     let lastError: Error | null = null;
+    let retryAttempt: number | null = null;
+    const settleRetry = (outcome: 'succeeded' | 'failed' | 'cancelled'): void => {
+      if (retryAttempt === null) return;
+      callbacks?.onRetrySettled?.({
+        provider: 'deepseek', model: this.model, attempt: retryAttempt, outcome,
+      });
+      retryAttempt = null;
+    };
 
     for (let attempt = 1; attempt <= REQUEST_MAX_RETRIES; attempt += 1) {
       const controller = new AbortController();
@@ -816,9 +864,17 @@ export class DeepSeekApiRunner implements LlmRunner {
             : `[deepSeekApi] Network error (${this.model}): ${err instanceof Error ? err.message : String(err)}`,
         );
         if (attempt < REQUEST_MAX_RETRIES) {
-          await sleep(retryDelayMs(attempt));
+          const retryDelay = retryDelayMs(attempt);
+          settleRetry('failed');
+          retryAttempt = attempt + 1;
+          callbacks?.onRetry?.({ provider: 'deepseek', model: this.model, attempt: retryAttempt, reason: isAbortError(err) ? 'timeout' : 'transport', backoff_ms: retryDelay });
+          await sleep(retryDelay, signal).catch((error: unknown) => {
+            if (isAbortError(error)) settleRetry('cancelled');
+            throw error;
+          });
           continue;
         }
+        settleRetry('failed');
         yield { type: 'error', message: lastError.message };
         return;
       } finally {
@@ -828,7 +884,14 @@ export class DeepSeekApiRunner implements LlmRunner {
       if (response.ok || !isRetryableStatus(response.status) || attempt === REQUEST_MAX_RETRIES) {
         break;
       }
-      await sleep(retryDelayMs(attempt, response));
+      const retryDelay = retryDelayMs(attempt, response);
+      settleRetry('failed');
+          retryAttempt = attempt + 1;
+      callbacks?.onRetry?.({ provider: 'deepseek', model: this.model, attempt: retryAttempt, reason: response.status === 429 ? 'rate_limit' : response.status === 408 ? 'timeout' : 'server_error', backoff_ms: retryDelay });
+      await sleep(retryDelay, signal).catch((error: unknown) => {
+            if (isAbortError(error)) settleRetry('cancelled');
+            throw error;
+          });
     }
 
     if (!response) {
@@ -837,11 +900,14 @@ export class DeepSeekApiRunner implements LlmRunner {
     }
 
     if (!response.ok) {
+      settleRetry('failed');
       const body = await readErrorBody(response);
       this.lastInvocationMetadata = buildInvocationMetadata(this.model, Date.now() - startedAt);
       yield { type: 'error', message: `[deepSeekApi] HTTP ${response.status} (${this.model}): ${body}` };
       return;
     }
+
+    settleRetry('succeeded');
 
     parseRateLimitHeaders(response.headers, 'deepseek');
 

@@ -247,6 +247,11 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
  * Does not kill the job on await timeout — returns timed_out=true so the model
  * can decide whether to keep waiting or call kill_background_shell / re-await.
  */
+/** True when an await request names a live/local background job. */
+export function hasBackgroundShellJob(taskId: string): boolean {
+  return jobs.has(taskId);
+}
+
 export async function awaitBackgroundShell(
   taskId: string,
   timeoutMs: number = DEFAULT_AWAIT_TIMEOUT_MS,

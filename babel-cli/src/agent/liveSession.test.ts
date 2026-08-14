@@ -239,6 +239,12 @@ describe('H2 LiveSession projection + resume', () => {
     const log = createSessionEventLog('kill');
     const turn = 't';
     recordUserSubmitted(log, { turn_id: turn, task: 'write' });
+    recordToolProposed(log, {
+      turn_id: turn,
+      tool_call_id: 'x',
+      tool_name: 'write_file',
+      idempotency_key: 'idem-x',
+    });
     recordToolStarted(log, {
       turn_id: turn,
       tool_call_id: 'x',
@@ -260,6 +266,12 @@ describe('H2 LiveSession projection + resume', () => {
 
   it('projects interrupted effects in the idempotency-key domain', () => {
     const log = createSessionEventLog('distinct-identities');
+    recordToolProposed(log, {
+      turn_id: 'turn-1',
+      tool_call_id: 'native-call-1',
+      tool_name: 'write_file',
+      idempotency_key: 'effect-key-1',
+    });
     recordToolStarted(log, {
       turn_id: 'turn-1',
       tool_call_id: 'native-call-1',

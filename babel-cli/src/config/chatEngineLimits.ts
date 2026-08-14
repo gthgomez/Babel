@@ -98,11 +98,11 @@ function parseBoundedFloat(
  * - BABEL_CHAT_MAX_TOKENS (default 128000)
  * - BABEL_CHAT_MAX_COST (default 2.00, USD)
  * - BABEL_CHAT_MAX_WALL_MS (default 600000, 10 minutes)
- * - BABEL_CHAT_STALL_TURNS (default 12)
+ * - BABEL_CHAT_STALL_TURNS (default 8)
  * - BABEL_CHAT_MAX_TOKENS_PER_ROUND (default 200_000, R11 per-round token ceiling)
  * - BABEL_CHAT_INVESTIGATE_MODEL (optional, default undefined — use primary for all phases)
  * - BABEL_CHAT_MUTATE_MODEL (optional, default undefined — use primary for all phases)
- * - BABEL_CHAT_STALL_DEEPSEEK_MULTIPLIER (default 1.5, range 1.0-3.0)
+ * - BABEL_CHAT_STALL_DEEPSEEK_MULTIPLIER (default 1.25, range 1.0-3.0)
  * - BABEL_CHAT_SWE_PROFILE=1 or BABEL_CHAT_TASK_CLASS=swe|general_swe|…
  *   → apply task-class base limits (general_swe wall 1200s) before env overrides
  * - Other classes: quick_fix, investigate, governance, default (see chatTaskClass.ts)

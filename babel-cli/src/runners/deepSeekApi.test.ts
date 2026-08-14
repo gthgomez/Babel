@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { z } from 'zod';
+import {
+  appendThreadEvent,
+  createThreadEventLog,
+  rebuildProviderMessagesFromEvents,
+  startTurn,
+} from '../agent/threadEventLog.js';
 
 const originalFetch = globalThis.fetch;
 const originalApiKey = process.env['DEEPSEEK_API_KEY'];
@@ -213,6 +219,37 @@ test('DeepSeek API runner executeWithToolsStream yields tool_use for native tool
   assert.equal(metadata?.completion_tokens, 5);
 });
 
+test('DeepSeek native POST retains the durable committed compaction capsule', async () => {
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
+  const log = createThreadEventLog('wire-capsule');
+  const turnId = startTurn(log, {
+    task: 'old context', model: 'm', provider: 'deepseek', projectRoot: '/p', policyPreset: 'default',
+  });
+  appendThreadEvent(log, {
+    kind: 'compaction_capsule', turn_id: turnId,
+    content: 'COMMITTED CAPSULE: preserve this repair context', preserved_tool_call_ids: [],
+  });
+  appendThreadEvent(log, { kind: 'user_message', turn_id: turnId, content: 'continue safely' });
+  const messages = rebuildProviderMessagesFromEvents(log, { systemPrompt: 'base system prompt' });
+  let postedMessages: Array<{ role: string; content: string }> = [];
+  globalThis.fetch = (async (_input, init) => {
+    postedMessages = (JSON.parse(String(init?.body ?? '{}')) as { messages: Array<{ role: string; content: string }> }).messages;
+    return makeSseResponse([
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+      'data: [DONE]',
+    ]);
+  }) as typeof fetch;
+
+  const runner = new DeepSeekApiRunner('deepseek-v4-flash');
+  for await (const _event of runner.executeWithToolsStream(messages, [], 'base system prompt')) {
+    // Exhaust the stream so the request is made and parsed.
+  }
+
+  assert.equal(postedMessages.filter((message) => message.role === 'system').length, 1);
+  assert.match(postedMessages[0]!.content, /COMMITTED CAPSULE: preserve this repair context/);
+  assert.equal(postedMessages.at(-1)?.content, 'continue safely');
+});
 test('DeepSeek API runner executeWithToolsStream yields text_delta for completion', async () => {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
@@ -263,4 +300,120 @@ test('DeepSeek API runner executeWithToolsStream yields error on HTTP failure', 
   assert.equal(events.length, 1);
   assert.equal(events[0]!.type, 'error');
   assert.match(events[0]!.message, /HTTP 401/);
+});
+
+test('DeepSeek retry callbacks settle and abort during backoff without another request', async () => {
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
+  let calls = 0;
+  const scheduled: unknown[] = [];
+  const settled: unknown[] = [];
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return new Response('temporary overload', { status: 500 });
+  }) as typeof fetch;
+  const controller = new AbortController();
+  await assert.rejects(
+    () => new DeepSeekApiRunner('deepseek-v4-flash').execute(
+      'return ok', z.object({ ok: z.literal(true) }), {
+        onRetry: (event) => { scheduled.push(event); controller.abort(); },
+        onRetrySettled: (event) => settled.push(event),
+      }, undefined, controller.signal,
+    ),
+    (error: unknown) => error instanceof Error && error.name === 'AbortError',
+  );
+  assert.equal(calls, 1);
+  assert.deepEqual(scheduled, [{
+    provider: 'deepseek', model: 'deepseek-v4-flash', attempt: 2,
+    reason: 'server_error', backoff_ms: (scheduled[0] as any).backoff_ms,
+  }]);
+  assert.equal((scheduled[0] as any).backoff_ms >= 200, true);
+  assert.deepEqual(settled, [{ provider: 'deepseek', model: 'deepseek-v4-flash', attempt: 2, outcome: 'cancelled' }]);
+});
+test('DeepSeek retry callbacks record normalized successful lifecycle', async () => {
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
+  let calls = 0;
+  const scheduled: any[] = [];
+  const settled: any[] = [];
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return calls === 1
+      ? new Response('retry later', { status: 429 })
+      : new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), { status: 200 });
+  }) as typeof fetch;
+  const result = await new DeepSeekApiRunner('deepseek-v4-flash').execute(
+    'return ok', z.object({ ok: z.literal(true) }), {
+      onRetry: (event) => scheduled.push(event),
+      onRetrySettled: (event) => settled.push(event),
+    },
+  );
+  assert.deepEqual(result, { ok: true });
+  assert.equal(calls, 2);
+  assert.equal(scheduled.length, 1);
+  assert.deepEqual({ ...scheduled[0], backoff_ms: 0 }, {
+    provider: 'deepseek', model: 'deepseek-v4-flash', attempt: 2,
+    reason: 'rate_limit', backoff_ms: 0,
+  });
+  assert.equal(scheduled[0].backoff_ms >= 0, true);
+  assert.deepEqual(settled, [{
+    provider: 'deepseek', model: 'deepseek-v4-flash', attempt: 2, outcome: 'succeeded',
+  }]);
+});
+test('DeepSeek settles each retry before scheduling the next failed attempt', async () => {
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
+  let calls = 0;
+  const scheduled: any[] = [];
+  const settled: any[] = [];
+  globalThis.fetch = (async () => {
+    calls += 1;
+    if (calls < 3) return new Response('retry later', { status: 500 });
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), { status: 200 });
+  }) as typeof fetch;
+  await new DeepSeekApiRunner('deepseek-v4-flash').execute(
+    'return ok', z.object({ ok: z.literal(true) }), {
+      onRetry: (event) => scheduled.push(event),
+      onRetrySettled: (event) => settled.push(event),
+    },
+  );
+  assert.deepEqual(scheduled.map((event) => event.attempt), [2, 3]);
+  assert.deepEqual(settled.map((event) => [event.attempt, event.outcome]), [[2, 'failed'], [3, 'succeeded']]);
+});
+
+test('DeepSeek settles the final retry as failed when all attempts fail', async () => {
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
+  let calls = 0;
+  const settled: any[] = [];
+  globalThis.fetch = (async () => { calls += 1; return new Response('retry later', { status: 500 }); }) as typeof fetch;
+  await assert.rejects(() => new DeepSeekApiRunner('deepseek-v4-flash').execute(
+    'return ok', z.object({ ok: z.literal(true) }), { onRetrySettled: (event) => settled.push(event) },
+  ), /HTTP 500/);
+  assert.equal(calls, 3);
+  assert.deepEqual(settled.map((event) => [event.attempt, event.outcome]), [[2, 'failed'], [3, 'failed']]);
+});
+
+test('DeepSeek native tool stream emits a complete retry lifecycle', async () => {
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
+  let calls = 0;
+  const scheduled: any[] = [];
+  const settled: any[] = [];
+  globalThis.fetch = (async () => {
+    calls += 1;
+    if (calls === 1) return new Response('retry later', { status: 503 });
+    return new Response('data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { status: 200 });
+  }) as typeof fetch;
+  const events: string[] = [];
+  for await (const event of new DeepSeekApiRunner('deepseek-v4-flash').executeWithToolsStream!(
+    [{ role: 'user', content: 'hello' }], [], undefined, undefined, 'auto', {
+      onRetry: (event) => scheduled.push(event),
+      onRetrySettled: (event) => settled.push(event),
+    },
+  )) events.push(event.type);
+  assert.equal(calls, 2);
+  assert.deepEqual(scheduled.map((event) => event.attempt), [2]);
+  assert.deepEqual(settled.map((event) => [event.attempt, event.outcome]), [[2, 'succeeded']]);
+  assert.ok(events.includes('text_delta'));
 });

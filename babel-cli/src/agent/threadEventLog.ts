@@ -14,6 +14,16 @@ import type { TerminalOutcome } from '../schemas/agentContracts.js';
 
 export const THREAD_EVENT_LOG_VERSION = 1 as const;
 
+/** A present-but-invalid durable log must never be downgraded to legacy resume. */
+export class ThreadEventLogRestoreError extends Error {
+  readonly code = 'THREAD_EVENT_LOG_INVALID' as const;
+
+  constructor(path: string, cause: unknown) {
+    super(`Cannot restore thread event log at ${path}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = 'ThreadEventLogRestoreError';
+  }
+}
+
 export type ThreadEventKind =
   | 'turn_started'
   | 'user_message'
@@ -410,18 +420,157 @@ export function serializeThreadEventLog(log: ThreadEventLog): string {
 }
 
 export function parseThreadEventLog(raw: string): ThreadEventLog {
-  const data = JSON.parse(raw) as ThreadEventLog;
-  if (data.schema_version !== THREAD_EVENT_LOG_VERSION) {
+  const data = JSON.parse(raw) as unknown;
+  assertThreadEventLog(data);
+  return data;
+}
+
+/** Fail closed before a persisted transcript can rebuild model-visible context. */
+function assertThreadEventLog(data: unknown): asserts data is ThreadEventLog {
+  const log = requireRecord(data, 'Thread event log');
+  if (log['schema_version'] !== THREAD_EVENT_LOG_VERSION) {
     throw new Error(
-      `Unsupported thread event log version: ${String(data.schema_version)} (expected ${THREAD_EVENT_LOG_VERSION})`,
+      `Unsupported thread event log version: ${String(log['schema_version'])} (expected ${THREAD_EVENT_LOG_VERSION})`,
     );
   }
-  return {
-    schema_version: THREAD_EVENT_LOG_VERSION,
-    thread_id: data.thread_id,
-    events: data.events ?? [],
-    nextSeq: data.nextSeq ?? (data.events?.length ?? 0),
-  };
+  const threadId = requireNonEmptyString(log, 'thread_id', 'Thread event log');
+  if (!Array.isArray(log['events'])) throw new Error('Thread event log events must be an array');
+  const events = log['events'];
+  if (!Number.isInteger(log['nextSeq']) || log['nextSeq'] !== events.length) {
+    throw new Error('Thread event log nextSeq must equal the next contiguous sequence');
+  }
+
+  const eventIds = new Set<string>();
+  for (let index = 0; index < events.length; index++) {
+    const event = requireRecord(events[index], `Thread event ${index}`);
+    if (event['schema_version'] !== THREAD_EVENT_LOG_VERSION) {
+      throw new Error(`Thread event ${index} has an unsupported schema version`);
+    }
+    const eventId = requireNonEmptyString(event, 'event_id', `Thread event ${index}`);
+    if (eventIds.has(eventId)) throw new Error(`Thread event ${index} duplicates event_id`);
+    eventIds.add(eventId);
+    if (requireNonEmptyString(event, 'thread_id', `Thread event ${index}`) !== threadId) {
+      throw new Error(`Thread event ${index} has inconsistent thread_id`);
+    }
+    const turnId = requireNonEmptyString(event, 'turn_id', `Thread event ${index}`);
+    if (requireNonEmptyString(event, 'item_id', `Thread event ${index}`) !== `${turnId}:${index}`) {
+      throw new Error(`Thread event ${index} has inconsistent item_id`);
+    }
+    if (event['seq'] !== index) throw new Error(`Thread event ${index} sequence is not contiguous`);
+    const timestamp = requireNonEmptyString(event, 'ts', `Thread event ${index}`);
+    if (!Number.isFinite(Date.parse(timestamp))) throw new Error(`Thread event ${index} has invalid timestamp`);
+    const kind = requireNonEmptyString(event, 'kind', `Thread event ${index}`);
+    assertThreadEventPayload(event, kind, index);
+  }
+}
+
+function assertThreadEventPayload(event: Record<string, unknown>, kind: string, index: number): void {
+  const context = `Thread event ${index}`;
+  switch (kind) {
+    case 'turn_started':
+      for (const key of ['task', 'model', 'provider', 'projectRoot', 'policyPreset']) {
+        requireString(event, key, context);
+      }
+      for (const key of ['verifier', 'taskClass', 'gatePolicy']) requireOptionalString(event, key, context);
+      requireOptionalInteger(event, 'submissionIndex', context);
+      requireOptionalBoolean(event, 'continuedTask', context);
+      return;
+    case 'user_message':
+    case 'assistant_message':
+      requireString(event, 'content', context);
+      return;
+    case 'assistant_tool_calls':
+      requireString(event, 'content', context);
+      if (!Array.isArray(event['tool_calls'])) throw new Error(`${context} tool_calls must be an array`);
+      event['tool_calls'].forEach((rawCall, callIndex) => {
+        const call = requireRecord(rawCall, `${context} tool_call ${callIndex}`);
+        requireNonEmptyString(call, 'id', `${context} tool_call ${callIndex}`);
+        if (call['type'] !== 'function') throw new Error(`${context} tool_call ${callIndex} has invalid type`);
+        const fn = requireRecord(call['function'], `${context} tool_call ${callIndex} function`);
+        requireNonEmptyString(fn, 'name', `${context} tool_call ${callIndex} function`);
+        requireString(fn, 'arguments', `${context} tool_call ${callIndex} function`);
+      });
+      return;
+    case 'tool_result':
+      for (const key of ['tool_call_id', 'tool_name', 'content']) requireString(event, key, context);
+      requireOptionalFiniteNumber(event, 'exit_code', context);
+      return;
+    case 'compaction_capsule':
+      requireString(event, 'content', context);
+      if (!Array.isArray(event['preserved_tool_call_ids']) || !event['preserved_tool_call_ids'].every((id) => typeof id === 'string')) {
+        throw new Error(`${context} preserved_tool_call_ids must be a string array`);
+      }
+      return;
+    case 'policy_decision':
+      for (const key of ['source', 'action', 'message']) requireString(event, key, context);
+      return;
+    case 'approval':
+      requireString(event, 'request_id', context);
+      if (!['deny', 'allow_once', 'allow_session', 'narrow_rule'].includes(String(event['decision']))) {
+        throw new Error(`${context} has invalid approval decision`);
+      }
+      requireOptionalString(event, 'scope', context);
+      return;
+    case 'progress':
+      if (typeof event['hasDelta'] !== 'boolean' || !Array.isArray(event['deltas']) || !event['deltas'].every((delta) => typeof delta === 'string')) {
+        throw new Error(`${context} has invalid progress payload`);
+      }
+      return;
+    case 'turn_ended':
+      if (typeof event['outcome'] !== 'string' || !TERMINAL_OUTCOMES.has(event['outcome'] as TerminalOutcome)) {
+        throw new Error(`${context} has invalid terminal outcome`);
+      }
+      requireString(event, 'status', context);
+      return;
+    case 'repo_identity':
+      requireString(event, 'projectRoot', context);
+      requireOptionalString(event, 'gitHead', context);
+      return;
+    default:
+      throw new Error(`${context} has unknown kind ${kind}`);
+  }
+}
+
+const TERMINAL_OUTCOMES = new Set<TerminalOutcome>([
+  'VERIFIED_COMPLETE', 'UNVERIFIED_PATCH', 'BLOCKED_EXTERNAL', 'BLOCKED_POLICY',
+  'BUDGET_EXHAUSTED', 'CANCELLED', 'INFRA_FAILURE', 'AGENT_FAILURE',
+  'NO_CHANGE_REQUIRED', 'INVALID_TASK', 'NEEDS_HUMAN_DECISION',
+]);
+
+function requireRecord(value: unknown, context: string): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireString(record: Record<string, unknown>, key: string, context: string): string {
+  if (typeof record[key] !== 'string') throw new Error(`${context} ${key} must be a string`);
+  return record[key] as string;
+}
+
+function requireNonEmptyString(record: Record<string, unknown>, key: string, context: string): string {
+  const value = requireString(record, key, context);
+  if (!value) throw new Error(`${context} ${key} must be nonempty`);
+  return value;
+}
+
+function requireOptionalString(record: Record<string, unknown>, key: string, context: string): void {
+  if (record[key] !== undefined) requireString(record, key, context);
+}
+
+function requireOptionalInteger(record: Record<string, unknown>, key: string, context: string): void {
+  if (record[key] !== undefined && !Number.isInteger(record[key])) throw new Error(`${context} ${key} must be an integer`);
+}
+
+function requireOptionalBoolean(record: Record<string, unknown>, key: string, context: string): void {
+  if (record[key] !== undefined && typeof record[key] !== 'boolean') throw new Error(`${context} ${key} must be a boolean`);
+}
+
+function requireOptionalFiniteNumber(record: Record<string, unknown>, key: string, context: string): void {
+  if (record[key] !== undefined && (typeof record[key] !== 'number' || !Number.isFinite(record[key]))) {
+    throw new Error(`${context} ${key} must be a finite number`);
+  }
 }
 
 /** Persist event log next to transcript for kill/restart resume. */
@@ -437,14 +586,14 @@ export async function persistThreadEventLog(
   return path;
 }
 
-/** Load persisted event log if present; null when missing/corrupt. */
+/** Load a persisted event log; null only when it is genuinely absent. */
 export function loadThreadEventLogFromDir(runDir: string): ThreadEventLog | null {
+  const path = join(runDir, THREAD_EVENT_LOG_FILENAME);
+  if (!existsSync(path)) return null;
   try {
-    const path = join(runDir, THREAD_EVENT_LOG_FILENAME);
-    if (!existsSync(path)) return null;
     return parseThreadEventLog(readFileSync(path, 'utf-8'));
-  } catch {
-    return null;
+  } catch (error) {
+    throw new ThreadEventLogRestoreError(path, error);
   }
 }
 

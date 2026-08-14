@@ -20,6 +20,7 @@ import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
 import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
 import { OllamaApiRunner } from '../runners/ollamaApi.js';
 import type { ProviderMessage, RunnerCallbacks } from '../runners/base.js';
+import { mapProviderMessagesToWire } from '../runners/providerMessages.js';
 import {
   assertDeepSeekLiveModelId,
   type ResolvedModelPolicy,
@@ -147,8 +148,12 @@ import {
 import {
   createParityRuntime,
   parityOnUserTurn,
+  parityRecordProviderRetry,
+  paritySettleProviderRetry,
   parityRecordToolBatch,
   paritySettleProposeTools,
+  paritySettleToolStarted,
+  parityAuthorizeRecoveredOutcomeRetry,
   parityArbitrateCycle,
   parityShouldCompact,
   parityTryFailover,
@@ -165,6 +170,9 @@ import {
   recordModelFailover,
   recordMutationBatch,
   recordProgressRecovery,
+  resumedToolRecoveryGuidance,
+  operationFingerprint,
+  requiresRecoveredOutcomeReconciliation,
   type SessionEventLog,
 } from './sessionEvents.js';
 import { buildRepoMapPreamble } from './repoMapPreamble.js';
@@ -177,9 +185,13 @@ import {
 import { deriveSubagentApprovalSession } from './approvalRequests.js';
 import { clearBackgroundShellRegistry, killAllBackgroundShells } from './backgroundShell.js';
 import {
-  dispatchInputArbiter,
-  consumeInputArbiterEffects,
-} from '../ui/inputCoordinator.js';
+  createRequestReconstructionInvariant,
+  MODEL_VISIBLE_EQUALS_PERSISTED,
+  resolveRuntimeInvariantMode,
+  RuntimeInvariantRegistry,
+  type RequestReconstructionContext,
+  type RuntimeInvariantMode,
+} from './runtimeInvariants.js';
 import { createHash } from 'node:crypto';
 import {
   executeAwaitCommandAction,
@@ -350,6 +362,8 @@ export interface ChatEngineOptions {
   executionProfile?: ChatExecutionProfile;
   /** Externally supplied required verifier commands for completion gate scope. */
   requiredVerifierCommands?: readonly string[] | null;
+  /** C1/B7 rollout: enforce in development/CI, shadow in production by default. */
+  runtimeInvariantMode?: RuntimeInvariantMode;
 }
 
 export interface ContextCompactedInfo {
@@ -656,6 +670,7 @@ export class ChatEngine {
   private _logIndexToTurn = new Map<number, number>();
   /** P1–P3 live parity runtime (loop / progress / event log / approvals). */
   private parity: ParityRuntime;
+  private readonly runtimeInvariants: RuntimeInvariantRegistry<RequestReconstructionContext>;
   private failureBudgetTracker: FailureClassBudgetTracker = createFailureBudgetTrackerFromContract(null);
 
   private get engineRunDir(): string {
@@ -696,6 +711,10 @@ export class ChatEngine {
     this.engineRunId = options.runId ?? allocateThreadId();
     // definite assignment: engineRunId set immediately above
     this.parity = createParityRuntime(this.engineRunId);
+    this.runtimeInvariants = new RuntimeInvariantRegistry(
+      resolveRuntimeInvariantMode(options.runtimeInvariantMode),
+    );
+    this.runtimeInvariants.register(createRequestReconstructionInvariant());
     // Per-session bg shell isolation — scoped to this run id so sibling
     // engines in the same process keep their jobs (matters for resume).
     clearBackgroundShellRegistry(this.engineRunId);
@@ -1581,6 +1600,7 @@ export class ChatEngine {
             prompt,
             systemPrompt,
             this.abortController.signal,
+            this.providerRetryCallbacks(),
           )) {
             rawText += chunk;
             yield { type: 'answer_chunk', text: chunk };
@@ -1612,6 +1632,7 @@ export class ChatEngine {
         let answerText = '';
         const systemPrompt = this.getOrBuildSystemPrompt('native');
 
+        this.assertNativeRequestMatchesDurable(providerMessages, systemPrompt, systemPrompt);
         try {
           for await (const event of runner.executeWithToolsStream(
             providerMessages,
@@ -1619,6 +1640,7 @@ export class ChatEngine {
             systemPrompt,
             this.abortController.signal,
             restrictTools ? 'required' : 'auto',
+            this.providerRetryCallbacks(),
           )) {
             switch (event.type) {
               case 'text_delta':
@@ -1670,12 +1692,15 @@ export class ChatEngine {
           nativeActions.length = 0;
           nativeToolCallIds.length = 0;
           answerText = '';
+          this.assertNativeRequestMatchesDurable(providerMessages, systemPrompt, undefined);
           try {
             for await (const event of fb.executeWithToolsStream(
               providerMessages,
               toolDefs,
               undefined,
               this.abortController.signal,
+              undefined,
+              this.providerRetryCallbacks(),
             )) {
               switch (event.type) {
                 case 'text_delta':
@@ -1719,6 +1744,7 @@ export class ChatEngine {
                 prompt,
                 undefined,
                 this.abortController.signal,
+                this.providerRetryCallbacks(),
               )) {
                 rawText += chunk;
                 yield { type: 'answer_chunk', text: chunk };
@@ -1746,6 +1772,7 @@ export class ChatEngine {
             prompt,
             undefined,
             this.abortController.signal,
+            this.providerRetryCallbacks(),
           )) {
             rawText += chunk;
             yield { type: 'answer_chunk', text: chunk };
@@ -1861,6 +1888,7 @@ export class ChatEngine {
             turnResult.actions.map((action, idx) => ({
               id: settleCallIds[idx]!,
               name: chatActionToolName(action),
+              argsDigest: operationFingerprint(chatActionToolName(action), action),
             })),
             this.engineRunDir,
           );
@@ -2652,18 +2680,6 @@ export class ChatEngine {
     return null;
   }
 
-  /**
-   * Last input-arbiter effects from cancel() — hosts may read shouldExitProcess
-   * after cancel (second Ctrl+C while running).
-   */
-  private _lastCancelArbiterEffects: ReturnType<typeof consumeInputArbiterEffects> = {
-    shouldCancelTurn: false,
-    shouldExitProcess: false,
-    shouldClearComposer: false,
-    shouldHintExit: false,
-    shouldCancelPaste: false,
-    shouldDeclineOverlay: false,
-  };
 
   /**
    * Abort the in-flight turn without touching the input arbiter.
@@ -2685,15 +2701,9 @@ export class ChatEngine {
   }
 
   cancel(): void {
-    // First Ctrl+C → cancel_turn; second may request exit_process (host-owned).
-    const { effects } = dispatchInputArbiter({ type: 'ctrl_c' });
-    this._lastCancelArbiterEffects = consumeInputArbiterEffects(effects);
+    // Compatibility alias for non-UI callers. Ctrl+C arbitration belongs to
+    // the interactive host so runtime cancellation cannot change UI state.
     this.abortTurn();
-  }
-
-  /** Host/REPL: whether the last cancel() also requested process exit. */
-  getLastCancelArbiterEffects(): ReturnType<typeof consumeInputArbiterEffects> {
-    return { ...this._lastCancelArbiterEffects };
   }
 
   /** Expose durable event log for resume / tests. */
@@ -2703,6 +2713,36 @@ export class ChatEngine {
 
   getParityRuntime(): ParityRuntime {
     return this.parity;
+  }
+
+  /** Content-free C1 mismatch count for shadow-mode telemetry consumers. */
+  getRuntimeInvariantViolationCount(invariantId = MODEL_VISIBLE_EQUALS_PERSISTED): number {
+    return this.runtimeInvariants.getViolationCount(invariantId);
+  }
+
+  /** Assert the exact native-provider wire request equals a fresh durable rebuild. */
+  private assertNativeRequestMatchesDurable(
+    outbound: readonly ProviderMessage[],
+    systemPrompt: string,
+    systemPromptOverride: string | undefined,
+  ): void {
+    const reconstructed = this.services.conversation.rebuildProviderMessages(this.parity.eventLog, {
+      systemPrompt,
+    });
+    // Native runners share this deterministic final serializer. Compare its
+    // exact output rather than neutral messages so committed capsules cannot
+    // disappear between C1 and the provider POST body.
+    const evaluation = this.runtimeInvariants.evaluate(MODEL_VISIBLE_EQUALS_PERSISTED, {
+      outbound: mapProviderMessagesToWire([...outbound], systemPrompt, systemPromptOverride),
+      reconstructed: mapProviderMessagesToWire(reconstructed, systemPrompt, systemPromptOverride),
+    });
+    if (!evaluation.passed && evaluation.violation) {
+      trace.getActiveSpan()?.addEvent('runtime_invariant_mismatch', {
+        'runtime_invariant.id': evaluation.invariantId,
+        'runtime_invariant.expected_hash': evaluation.violation.expectedHash,
+        'runtime_invariant.actual_hash': evaluation.violation.actualHash,
+      });
+    }
   }
 
   getInstructionManifest() { return this.parity.liveAuthority?.instructionManifest ?? null; }
@@ -2725,6 +2765,10 @@ export class ChatEngine {
     this.clearVerifierEvidenceState();
     const interrupted = restoreEngineSessionEvents({ parity: this.parity, log, runDir: options?.runDir ?? this.engineRunDir });
     this.restorePersistedVerifierEvidence(log);
+    const repairGuidance = resumedToolRecoveryGuidance(this.parity.sessionEvents);
+    if (repairGuidance && !this.conversation.some((message) => message.content === repairGuidance)) {
+      this.conversation.push({ role: 'system', content: repairGuidance });
+    }
     return interrupted;
   }
   restoreSessionEventsFromDir(runDir?: string): number {
@@ -3041,8 +3085,8 @@ export class ChatEngine {
       .map((line) => JSON.parse(line));
     const sessionDir = chatSessionDir(engineRunId), sessionLog = loadSessionEventLogForResume(sessionDir, engineRunId)
     const engine = new ChatEngine({ ...options, runId: engineRunId, resumeExisting: true });
-    engine.restoreSessionEvents(sessionLog, { runDir: sessionDir });
     engine.conversation = messages;
+    engine.restoreSessionEvents(sessionLog, { runDir: sessionDir });
     engine.clearVerifierEvidenceState();
     engine.cachedSystemPromptLegacy = null;
     engine.cachedSystemPromptNative = null;
@@ -3126,6 +3170,42 @@ export class ChatEngine {
     };
   }
 
+  /** Persist tool_started immediately before the policy-gated executor performs the effect. */
+  private persistToolStartedAtExecutorDispatch(action: ChatToolAction, meta: { index: number; idempotencyKey?: string }): void {
+    const idempotencyKey = meta.idempotencyKey ?? this._streamNativeToolCallIds[meta.index] ?? `tool_call_${this._turnIndex}_${meta.index}`;
+    paritySettleToolStarted(this.parity, { id: idempotencyKey, name: chatActionToolName(action) }, this.engineRunDir);
+  }
+
+  /** Block a fresh tool-call id from replaying an equivalent unknown external/non-idempotent effect. */
+  private recoveredOperationDispatchAuthorization(action: ChatToolAction): { allowed: boolean; message?: string } {
+    const fingerprint = operationFingerprint(chatActionToolName(action), action);
+    if (!requiresRecoveredOutcomeReconciliation(this.parity.sessionEvents, fingerprint)) return { allowed: true };
+    return {
+      allowed: false,
+      message: 'Equivalent recovered effect has TOOL_OUTCOME_UNKNOWN; inspect/reconcile its state, then require an explicit durable reconciliation authorization before retrying this fingerprint.',
+    };
+  }
+
+  /**
+   * Explicit controller/operator path to authorize retry after inspection of one
+   * prior unknown outcome. The opaque audit reference is persisted before retry.
+   */
+  public authorizeRecoveredOutcomeRetry(
+    action: ChatToolAction,
+    recoveredIdempotencyKey: string,
+    reconciliationRef: string,
+  ): void {
+    const fingerprint = operationFingerprint(chatActionToolName(action), action);
+    if (!requiresRecoveredOutcomeReconciliation(this.parity.sessionEvents, fingerprint, recoveredIdempotencyKey)) {
+      throw new Error('No matching unreconciled TOOL_OUTCOME_UNKNOWN effect exists for this authorization.');
+    }
+    parityAuthorizeRecoveredOutcomeRetry(this.parity, {
+      recoveredIdempotencyKey,
+      operationFingerprint: fingerprint,
+      reconciliationRef,
+    }, this.engineRunDir);
+  }
+
   private async executeOneAction(
     action: ChatToolAction,
     toolContext: ToolContext,
@@ -3207,6 +3287,14 @@ export class ChatEngine {
         return { index: meta.index, observation: phaseGate.observation ?? '' };
       }
 
+      const recoveredAuthorization = this.recoveredOperationDispatchAuthorization(action);
+      if (!recoveredAuthorization.allowed) {
+        const detail = `[RECOVERY_RECONCILIATION_REQUIRED] ${recoveredAuthorization.message ?? 'Reconcile the prior unknown effect before retrying'}`;
+        this.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1 });
+        callbacks.onToolComplete?.(toolId, 'reconciliation-required');
+        return { index: meta.index, observation: `### ${tool} ${target}\nexit_code: 1\n\`\`\`\n${detail}\n\`\`\`` };
+      }
+
       if (action.type === 'sub_agent') {
         const subId = `chat-sub-${meta.subAgentCounter}`;
         const mutationEnabled = (action as any).mutation === true;
@@ -3241,6 +3329,7 @@ export class ChatEngine {
             const useWorktree =
               writeScope.length > 0 && process.env['BABEL_IMPLEMENT_WORKTREE'] !== '0';
             if (useWorktree) {
+              this.persistToolStartedAtExecutorDispatch(action, meta);
               const implResult = await runImplementWorktreeAgent(
                 {
                   id: subId,
@@ -3292,6 +3381,7 @@ export class ChatEngine {
               return { index: meta.index, observation: findings };
             }
 
+            this.persistToolStartedAtExecutorDispatch(action, meta);
             const mutResult = await runMutationAgentLoop({
               agentId: subId,
               task: action.task,
@@ -3355,6 +3445,7 @@ export class ChatEngine {
         // Read-only sub-agent path (existing)
         callbacks.onSubAgentStart?.({ id: subId, label: action.task.slice(0, 60) });
         try {
+          this.persistToolStartedAtExecutorDispatch(action, meta);
           const subResult = await runReadOnlyAgentLoop({
             verb: 'ask',
             task: action.task,
@@ -3413,7 +3504,10 @@ export class ChatEngine {
         // MCP calls execute without approval prompts in chat mode.
         // Safety is provided by the execution sandbox and circuit breaker,
         // not by blocking the model mid-flow.
-        const mcpResult = await executeTool(mapChatMcpActionToToolRequest(action), toolContext);
+        const mcpResult = await executeTool(mapChatMcpActionToToolRequest(action), {
+          ...toolContext,
+          onBeforeDispatch: () => this.persistToolStartedAtExecutorDispatch(action, meta),
+        });
         const detail =
           mcpResult.exit_code === 0 ? 'ok' : `exit ${mcpResult.exit_code ?? -1}`;
         this.toolCallLog.push({
@@ -3439,7 +3533,7 @@ export class ChatEngine {
       if (action.type === 'web_search' || action.type === 'web_fetch') {
         const webResult = await executeTool(
           mapChatWebActionToToolRequest(action),
-          toolContext,
+          { ...toolContext, onBeforeDispatch: () => this.persistToolStartedAtExecutorDispatch(action, meta) },
         );
         const detail =
           webResult.exit_code === 0
@@ -3466,7 +3560,11 @@ export class ChatEngine {
 
       // Gap-1: LSP tool — read-only code intelligence via localTools executor.
       if (action.type === 'lsp') {
-        const lsp = await executeLspChatToolAction({ action, toolContext, executeTool });
+        const lsp = await executeLspChatToolAction({
+          action,
+          toolContext: { ...toolContext, onBeforeDispatch: () => this.persistToolStartedAtExecutorDispatch(action, meta) },
+          executeTool,
+        });
         this.toolCallLog.push({
           tool,
           target,
@@ -3538,6 +3636,8 @@ export class ChatEngine {
             context: toolContext,
             preset: 'workspace_write',
             executor: defaultToolExecutor,
+            onDispatchAuthorized: () => recoveredAuthorization,
+            onBeforeExecutorExecute: () => this.persistToolStartedAtExecutorDispatch(action, meta),
             ...(autoApprove
               ? { onAskApproval: async () => true }
               : process.stdout.isTTY && !process.env['CI']
@@ -3673,6 +3773,7 @@ export class ChatEngine {
           index: meta.index,
           pushLog: (entry) => this.toolCallLog.push(entry),
           onToolComplete: callbacks.onToolComplete,
+          onBeforeAwait: () => this.persistToolStartedAtExecutorDispatch(action, meta),
         });
       }
       if (action.type === 'run_command' && action.background === true) {
@@ -3682,6 +3783,7 @@ export class ChatEngine {
           ownerId: this.engineRunId,
           pushLog: (entry) => this.toolCallLog.push(entry),
           onToolComplete: callbacks.onToolComplete,
+          onBeforeSpawn: () => this.persistToolStartedAtExecutorDispatch(action, meta),
         });
       }
 
@@ -3768,6 +3870,8 @@ export class ChatEngine {
           ...(this.parity.liveAuthority?.taskContract.protected_paths
             ? { protectedPaths: this.parity.liveAuthority.taskContract.protected_paths }
             : {}),
+          onDispatchAuthorized: () => this.recoveredOperationDispatchAuthorization(action),
+          onBeforeExecutorExecute: () => this.persistToolStartedAtExecutorDispatch(action, meta),
           ...this.isolationBrokerFlags(),
           ...(autoApproveMutations
             ? { onAskApproval: async () => true }
@@ -4293,6 +4397,28 @@ export class ChatEngine {
    * the shared AbortController is signalled so the HTTP fetch is cancelled
    * and the Promise.race rejects with a descriptive error.
    */
+  /** Persist provider retry facts without exposing provider payloads in durable state. */
+  private providerRetryCallbacks(): RunnerCallbacks {
+    return {
+      onRetry: (event) => {
+        parityRecordProviderRetry(this.parity, {
+          provider: event.provider,
+          model: event.model,
+          attempt: event.attempt,
+          reason: event.reason,
+          backoffMs: event.backoff_ms,
+        }, this.engineRunDir);
+      },
+      onRetrySettled: (event) => {
+        paritySettleProviderRetry(this.parity, {
+          provider: event.provider,
+          model: event.model,
+          attempt: event.attempt,
+          outcome: event.outcome,
+        }, this.engineRunDir);
+      },
+    };
+  }
   private async executeWithTimeout(
     runner: DeepInfraApiRunner | DeepSeekApiRunner,
     prompt: string,

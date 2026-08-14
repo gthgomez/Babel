@@ -125,6 +125,10 @@ export function mapSessionKindToEpisode(
       return { kind: 'session', type: 'user_submitted' };
     case 'model_started':
       return { kind: 'session', type: 'model_started' };
+    case 'provider_retry_scheduled':
+      return { kind: 'session', type: 'provider_retry_scheduled' };
+    case 'provider_retry_settled':
+      return { kind: 'session', type: 'provider_retry_settled' };
     case 'tool_proposed':
       return { kind: 'tool', type: 'tool_proposed' };
     case 'tool_started':
@@ -135,6 +139,8 @@ export function mapSessionKindToEpisode(
       return { kind: 'tool', type: 'tool_failed' };
     case 'tool_cancelled':
       return { kind: 'tool', type: 'tool_cancelled' };
+    case 'recovery_reconciled':
+      return { kind: 'recovery', type: 'recovery_reconciled' };
     case 'mutation_batch':
       return { kind: 'mutation', type: 'mutation_batch' };
     case 'verifier_attempt':
@@ -149,8 +155,11 @@ export function mapSessionKindToEpisode(
       return { kind: 'completion', type: 'completion_decision' };
     case 'model_failover':
       return { kind: 'recovery', type: 'model_failover' };
+    case 'compaction_started':
+    case 'compaction_summary':
+    case 'compaction_committed':
     case 'compaction_created':
-      return { kind: 'session', type: 'compaction_created' };
+      return { kind: 'session', type: kind };
     case 'turn_ended':
       return { kind: 'turn', type: 'turn_ended' };
     case 'budget_snapshot':

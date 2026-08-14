@@ -3,8 +3,9 @@
  */
 
 import * as assert from 'node:assert';
+import { execFileSync } from 'node:child_process';
 import { describe, it } from 'node:test';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -24,6 +25,7 @@ import {
   rollbackEffectTransaction,
   wouldSilentHostFallback,
   safeRepoIsolationMessage,
+  captureWorkspaceRevisionIdentity,
 } from './capabilityBroker.js';
 import {
   executeActionWithPolicy,
@@ -63,6 +65,7 @@ import {
 import {
   createSessionEventLog,
   recordUserSubmitted,
+  recordToolProposed,
   recordToolStarted,
   recordToolTerminal,
   recordCompletionDecision,
@@ -621,6 +624,12 @@ describe('H6 replay, cross-surface, live golden', () => {
     const log = createSessionEventLog('gold-1');
     const turn = 't1';
     recordUserSubmitted(log, { turn_id: turn, task: 'fix', model: 'm' });
+    recordToolProposed(log, {
+      turn_id: turn,
+      tool_call_id: 'c1',
+      tool_name: 'write_file',
+      idempotency_key: 'k1',
+    });
     recordToolStarted(log, {
       turn_id: turn,
       tool_call_id: 'c1',
@@ -928,4 +937,43 @@ describe('H7 model-fixed eval substrate', () => {
       if (prev !== undefined) process.env['OPENROUTER_API_KEY'] = prev;
     }
   });
+});
+
+describe('credential read boundaries', () => {
+  it('workspace identity excludes credential-class paths', () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-broker-credential-'));
+    try {
+      mkdirSync(join(root, '.aws'));
+      writeFileSync(join(root, 'safe.txt'), 'safe\n', 'utf-8');
+      writeFileSync(join(root, '.env'), 'SYNTHETIC=only\n', 'utf-8');
+      writeFileSync(join(root, '.aws', 'credentials'), 'synthetic\n', 'utf-8');
+      writeFileSync(join(root, 'id_rsa'), 'synthetic\n', 'utf-8');
+
+      const identity = captureWorkspaceRevisionIdentity(root);
+      assert.ok(identity.fileHashes['safe.txt']);
+      assert.equal(identity.fileHashes['.env'], undefined);
+      assert.equal(identity.fileHashes['.aws/credentials'], undefined);
+      assert.equal(identity.fileHashes['id_rsa'], undefined);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+it('workspace identity rejects credential symlink targets', { skip: process.platform === 'win32' }, () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-broker-credential-link-'));
+  try {
+    writeFileSync(join(root, '.env'), 'SYNTHETIC=only\n', 'utf-8');
+    writeFileSync(join(root, 'safe.txt'), 'safe\n', 'utf-8');
+    symlinkSync(join(root, '.env'), join(root, 'config.json'));
+    execFileSync('git', ['init'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Babel Test'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['add', 'safe.txt', 'config.json'], { cwd: root, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'fixture'], { cwd: root, stdio: 'ignore' });
+
+    const identity = captureWorkspaceRevisionIdentity(root);
+    assert.equal(identity.fileHashes['config.json'], undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -136,10 +136,27 @@ export interface RunnerProgressEvent {
   details?: string;
 }
 
+/** Content-free durable telemetry for a bounded provider retry. */
+export interface ProviderRetryEvent {
+  provider: 'deepinfra' | 'deepseek';
+  model: string;
+  /** The upcoming request attempt, starting at 2 for the first retry. */
+  attempt: number;
+  reason: 'transport' | 'timeout' | 'rate_limit' | 'server_error' | 'stream_idle';
+  backoff_ms: number;
+}
+
+/** Terminal state of a retry sequence; never contains provider payloads. */
+export interface ProviderRetrySettlement extends Pick<ProviderRetryEvent, 'provider' | 'model' | 'attempt'> {
+  outcome: 'succeeded' | 'failed' | 'cancelled';
+}
+
 export interface RunnerCallbacks {
   onChunk?: (chunk: string) => void | Promise<void>;
   onProgress?: (event: RunnerProgressEvent) => void;
   onThought?: (thought: string) => void;
+  onRetry?: (event: ProviderRetryEvent) => void;
+  onRetrySettled?: (event: ProviderRetrySettlement) => void;
 }
 
 // ─── Native Function-Calling Types ───────────────────────────────────────────
@@ -259,6 +276,7 @@ export interface LlmRunner {
     systemPrompt?: string,
     signal?: AbortSignal,
     toolChoice?: 'auto' | 'required',
+    callbacks?: RunnerCallbacks,
   ): AsyncGenerator<ToolStreamEvent, void, undefined>;
 }
 

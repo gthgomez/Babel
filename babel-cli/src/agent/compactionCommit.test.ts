@@ -4,6 +4,7 @@
  */
 
 import * as assert from 'node:assert';
+import { createHash } from 'node:crypto';
 import { describe, it } from 'node:test';
 import {
   CompactionManager,
@@ -298,9 +299,25 @@ describe('H1 commitCompaction dual-write + resume equivalence', () => {
       assert.ok(
         (capsules[0] as { content: string }).content.includes('SECRET_FACT_ALPHA'),
       );
-      // Session event written
+      // Legacy boundary remains for existing consumers; C2 additionally records a
+      // linked start → summary → committed lifecycle with an auditable replacement range.
       const sess = sessionLog.events.filter((e) => e.kind === 'compaction_created');
       assert.strictEqual(sess.length, 1);
+      const started = sessionLog.events.find((e) => e.kind === 'compaction_started');
+      const summary = sessionLog.events.find((e) => e.kind === 'compaction_summary');
+      const committed = sessionLog.events.find((e) => e.kind === 'compaction_committed');
+      assert.ok(started && summary && committed, 'C2 lifecycle must be durable before success');
+      assert.strictEqual(started!.operation_id, summary!.operation_id);
+      assert.strictEqual(summary!.operation_id, committed!.operation_id);
+      assert.strictEqual(started!.replaces_thread_seq_start, 0);
+      assert.strictEqual(started!.replaces_thread_seq_end, capsules[0]!.seq - 1);
+      assert.strictEqual(committed!.thread_event_id, capsules[0]!.event_id);
+      assert.deepStrictEqual(committed!.preserved_tool_call_ids, capsules[0]!.preserved_tool_call_ids);
+      assert.strictEqual(
+        committed!.capsule_digest,
+        createHash('sha256').update(capsules[0]!.content).digest('hex'),
+      );
+      assert.deepStrictEqual(summary!.raw_observation_refs, commit.capsule.rawObservationRefs);
 
       // Live conversation vs cold-resume rebuild equivalence on capsule+summary content
       const rebuilt = rebuildProviderMessagesFromEvents(threadLog, {
