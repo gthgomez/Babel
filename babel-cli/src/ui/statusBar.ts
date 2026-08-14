@@ -8,6 +8,7 @@ import {
   bold,
   truncate,
   stripAnsi,
+  bgPanel,
 } from './theme.js';
 import { renderCompactTokenBar, getContextLimit } from './tokenBar.js';
 import { renderBackgroundTaskFooter } from './backgroundTaskProgress.js';
@@ -20,78 +21,79 @@ import type { BackgroundTaskState } from './backgroundTaskProgress.js';
 export interface StatusBarState {
   /** Active model name (e.g. "DeepSeek v4 Flash") */
   model: string;
-  /** Active model ID for context limit lookup (e.g. "deepseek-v4-pro") */
-  modelId?: string;
+  /** Active model ID for context limit lookup (e.g. "deepseek-v4-flash") */
+  modelId?: string | undefined;
   /** Active mode label (e.g. "default", "plan", "deep") */
   mode: string;
   /** Active project label (e.g. "my-project" or "global") */
   project: string;
+  /** Active context telemetry from latest provider invocation */
+  activeContext?: {
+    tokens: number;
+    modelId: string;
+    source: 'policy' | 'provider' | 'provider_prompt_tokens' | 'estimated' | 'unknown';
+  } | null | undefined;
+  /** Active input context tokens from latest turn (for context window meter) */
+  activeContextTokens?: number | undefined;
   /** Total tokens consumed in this session */
   totalTokens: number;
   /** Total cost in USD for this session */
   totalCost: number;
   /** Number of turns completed */
   turnCount: number;
-  /** Run status for color-coded background: 'ready' | 'complete' | 'blocked' | 'failed' */
-  status?: string;
+  /** Run status: 'ready' | 'complete' | 'blocked' | 'failed' */
+  status?: string | undefined;
   /** Active background tasks for progress display in the status bar. */
-  backgroundTasks?: BackgroundTaskState[];
+  backgroundTasks?: BackgroundTaskState[] | undefined;
   /** Terminal width override (auto-detected if omitted) */
-  width?: number;
+  width?: number | undefined;
   /** Whether to show the token context bar (default: true) */
-  showTokenBar?: boolean;
+  showTokenBar?: boolean | undefined;
   /** Current git branch name (e.g. "main", "feature/foo"). Shown next to project. */
-  gitBranch?: string | null;
+  gitBranch?: string | null | undefined;
   /** Whether the working tree has uncommitted changes. Shown as * suffix. */
-  gitDirty?: boolean;
+  gitDirty?: boolean | undefined;
   /** Knowledge graph state for compact indicator in the status bar. */
   knowledgeGraph?: {
     status: 'empty' | 'indexing' | 'ready' | 'stale';
     nodeCount: number | undefined;
-  };
+  } | undefined;
   /**
    * Compact routing-status label for the REPL status bar.
    * Set from the last turn routing receipt to show model tier + phase.
-   * Examples: "Flash·mutate", "Pro·investigate", "Flash".
+   * Examples: "Flash·mutate", "Pro·investigate", "escalate".
    * When undefined or empty, no routing cue is shown.
    */
-  routingLabel?: string;
+  routingLabel?: string | null | undefined;
 }
 
 /**
- * Render a single-line status bar using ANSI reverse video.
- *
- * Format:
- *   <model> | <mode> | <project>              <tok> tok | $<cost> | turn <n>
- *
- * The bar is padded to the full terminal width so the background highlight
- * spans edge-to-edge. The right-aligned section (tokens / cost / turn count)
- * is preserved if the bar must be truncated.
- *
- * @returns An ANSI-escaped string ending with a newline, suitable for writing
- *          directly to stdout.
+ * Render the status bar for display between interactive REPL turns.
  */
 export function renderStatusBar(state: StatusBarState): string {
-  const width = state.width ?? getEffectiveTerminalWidth(40, 200);
+  const width = state.width ?? getEffectiveTerminalWidth();
 
-  // Render background tasks as a compact footer (if any)
+  // Background task progress segment
   let bgTaskStr = '';
   if (state.backgroundTasks && state.backgroundTasks.length > 0) {
-    // Allocate roughly 40% of the bar width for the task footer, clamped
-    const footerWidth = Math.max(20, Math.floor(width * 0.4));
+    const footerWidth = Math.max(10, Math.floor(width / 3));
     bgTaskStr = ` ${renderBackgroundTaskFooter(state.backgroundTasks, footerWidth)}`;
   }
 
-  // Compact token bar — integrated inline at the end of the right section
+  // Compact token bar — strictly uses active request context; NEVER falls back to cumulative session tokens
   let tokenBarStr = '';
-  const showBar = state.showTokenBar !== false && state.totalTokens > 0 && state.modelId;
-  if (showBar) {
-    const limit = getContextLimit(state.modelId!);
+  const activeTokens = state.activeContext ? state.activeContext.tokens : state.activeContextTokens;
+  const hasActiveContext = activeTokens !== undefined && activeTokens !== null;
+  const targetModelId = state.activeContext?.modelId ?? state.modelId;
+  const showBar = state.showTokenBar !== false && Boolean(targetModelId);
+  if (showBar && targetModelId) {
+    const limit = getContextLimit(targetModelId);
     const barWidth = Math.min(12, Math.floor(width / 8));
     const compactBar = renderCompactTokenBar(
-      state.totalTokens,
+      hasActiveContext ? activeTokens : 0,
       limit.tokens,
       Math.max(6, barWidth),
+      hasActiveContext,
     );
     tokenBarStr = `  ${compactBar}`;
   }
@@ -120,10 +122,23 @@ export function renderStatusBar(state: StatusBarState): string {
     }
   }
 
-  // Routing label (tier + phase) — shown next to model name when available
+  // Routing label cleanup: avoid repeating model name (e.g. "DeepSeek V4 Flash Flash·escalate" -> "DeepSeek V4 Flash · escalate")
   let modelLabel = state.model;
   if (state.routingLabel) {
-    modelLabel = `${state.model} ${bold(state.routingLabel)}`;
+    let cleanLabel = state.routingLabel;
+    const modelLower = state.model.toLowerCase();
+    if (modelLower.includes('flash') && cleanLabel.toLowerCase().startsWith('flash·')) {
+      cleanLabel = cleanLabel.slice(6);
+    } else if (modelLower.includes('pro') && cleanLabel.toLowerCase().startsWith('pro·')) {
+      cleanLabel = cleanLabel.slice(4);
+    } else if (modelLower.includes('flash') && cleanLabel.toLowerCase() === 'flash') {
+      cleanLabel = '';
+    } else if (modelLower.includes('pro') && cleanLabel.toLowerCase() === 'pro') {
+      cleanLabel = '';
+    }
+    if (cleanLabel) {
+      modelLabel = `${state.model} ${dim('·')} ${bold(cleanLabel)}`;
+    }
   }
 
   const left = `${modelLabel} | ${state.mode} | ${projectLabel}${kgIndicator}${bgTaskStr}`;
@@ -165,17 +180,7 @@ export function renderStatusBar(state: StatusBarState): string {
     lineVisLen = visibleLength(line);
   }
 
-  // Color-coded status bar: change background based on last run status
-  const bgCodes: Record<string, string> = {
-    failed: '\x1b[41m', // red background
-    blocked: '\x1b[43m\x1b[30m', // yellow background, black text
-    complete: '\x1b[42m\x1b[30m', // green background, black text
-  };
-  const bgCode = state.status ? bgCodes[state.status] : null;
-  if (bgCode) {
-    const fillSpaces = ' '.repeat(Math.max(0, width - 2 - lineVisLen));
-    return `${bgCode} ${line}${fillSpaces} \x1b[0m\n`;
-  }
+  // Render on subtle theme panel background (avoids blinding inverted blocks)
   const fillSpaces = ' '.repeat(Math.max(0, width - lineVisLen));
-  return `\x1b[7m${line}${fillSpaces}\x1b[0m\n`;
+  return `${bgPanel(`${line}${fillSpaces}`)}\n`;
 }

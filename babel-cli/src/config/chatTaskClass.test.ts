@@ -187,9 +187,9 @@ describe('chatTaskClass', () => {
 
   test('listCodingProfileSummaries returns one row per class', () => {
     const summaries = listCodingProfileSummaries();
-    assert.equal(summaries.length, 5);
+    assert.equal(summaries.length, 6);
     const classes = summaries.map((s) => s.class);
-    assert.deepEqual(classes, ['default', 'quick_fix', 'general_swe', 'investigate', 'governance']);
+    assert.deepEqual(classes, ['default', 'quick_inspect', 'quick_fix', 'general_swe', 'investigate', 'governance']);
   });
 
   test('listCodingProfileSummaries rows match runtime tunes', () => {
@@ -306,5 +306,38 @@ describe('chatTaskClass', () => {
     assert.ok(desc.includes('verify:none'));
     // Zero-write hard-stop disabled for investigate
     assert.ok(!desc.includes('HS:'));
+  });
+
+  test('describeInteractiveCodingProfile quick_inspect — fast read-only path', () => {
+    const desc = describeInteractiveCodingProfile('quick_inspect');
+    assert.ok(desc.startsWith('quick_inspect ('));
+    assert.ok(desc.includes('verify:none'));
+  });
+
+  // ── Acceptance Tests T6–T8: Multi-Dimensional Task Classification ─────────
+
+  test('T6: Trivial fact queries route to quick_inspect with bounded budgets', () => {
+    const taskText = 'how many repos are here?';
+    const taskClass = classifyChatTaskClassFromText(taskText);
+    assert.equal(taskClass, 'quick_inspect');
+
+    const tune = getChatTaskTune(taskClass);
+    assert.ok((tune.limits.maxWallMs ?? 0) <= 60_000, 'quick_inspect maxWallMs must be <= 60s');
+    assert.ok(tune.investigateToolBudget <= 4, 'quick_inspect tool budget must be <= 4');
+    assert.equal(tune.verificationPolicy, 'none', 'quick_inspect should have verificationPolicy: none');
+  });
+
+  test('T7: Multi-intent query with mutation intent routes to mutating profile, NOT quick_inspect', () => {
+    const taskText = 'check how many files are in src/ and delete the unused ones';
+    const taskClass = classifyChatTaskClassFromText(taskText);
+    assert.notEqual(taskClass, 'quick_inspect');
+    assert.notEqual(taskClass, 'investigate');
+    assert.equal(taskClass, 'default');
+  });
+
+  test('T8: Deep analysis query routes to investigate', () => {
+    const taskText = 'analyze the architecture of the billing system and identify risks';
+    const taskClass = classifyChatTaskClassFromText(taskText);
+    assert.equal(taskClass, 'investigate');
   });
 });

@@ -78,10 +78,10 @@ describe('classifyUtilization', () => {
     assert.equal(result.tier, UtilizationTier.Critical);
   });
 
-  it('handles limit of 0 (division by zero guard)', () => {
+  it('handles limit of 0 (division by zero guard / unknown limit)', () => {
     const result = classifyUtilization(100, 0);
-    assert.equal(result.tier, UtilizationTier.Critical);
-    assert.equal(result.percent, 100);
+    assert.equal(result.unknown, true);
+    assert.equal(result.percent, null);
   });
 
   it('handles used=0 gracefully', () => {
@@ -116,40 +116,34 @@ describe('getContextLimit', () => {
     assert.equal(limit.tokens, 200_000);
   });
 
-  it('returns known limit for DeepSeek V4 Pro', () => {
+  it('returns canonical 1M limit for DeepSeek V4 Pro', () => {
     const limit = getContextLimit('deepseek-v4-pro');
-    assert.equal(limit.tokens, 128_000);
+    assert.equal(limit.tokens, 1_000_000);
     assert.equal(limit.label, 'DeepSeek V4 Pro');
   });
 
-  it('returns known limit for DeepSeek V3', () => {
+  it('returns canonical 1M limit for DeepSeek V4 Flash', () => {
+    const limit = getContextLimit('deepseek-v4-flash');
+    assert.equal(limit.tokens, 1_000_000);
+    assert.equal(limit.label, 'DeepSeek V4 Flash');
+  });
+
+  it('returns 0 tokens for unlisted DeepSeek V3 (renders ctx ?)', () => {
     const limit = getContextLimit('deepseek-v3');
-    assert.equal(limit.tokens, 128_000);
+    assert.equal(limit.tokens, 0);
   });
 
-  it('returns fallback 200K for unknown model', () => {
+  it('returns 0 tokens for unknown model (renders ctx ?)', () => {
     const limit = getContextLimit('unknown-model-v1');
-    assert.equal(limit.tokens, 200_000);
-    assert.equal(limit.label, 'Model');
+    assert.equal(limit.tokens, 0);
   });
 
-  it('CONTEXT_LIMITS includes all expected model keys', () => {
+  it('CONTEXT_LIMITS includes external Claude model keys', () => {
     const keys = Object.keys(CONTEXT_LIMITS);
     assert.ok(keys.includes('claude-sonnet-4-6'));
     assert.ok(keys.includes('claude-opus-4-8'));
     assert.ok(keys.includes('claude-haiku-4-5'));
     assert.ok(keys.includes('claude-fable-5'));
-    assert.ok(keys.includes('deepseek-v4-pro'));
-    assert.ok(keys.includes('deepseek-v4'));
-    assert.ok(keys.includes('deepseek-v3'));
-    assert.ok(keys.includes('__default__'));
-  });
-
-  it('all known limits have positive token counts', () => {
-    for (const [key, limit] of Object.entries(CONTEXT_LIMITS)) {
-      assert.ok(limit.tokens > 0, `Model ${key} has zero tokens`);
-      assert.ok(limit.label.length > 0, `Model ${key} has empty label`);
-    }
   });
 });
 
@@ -161,13 +155,13 @@ describe('getContextLimitFromPolicy', () => {
   it('returns ContextLimit for model keyed in model-policy.json', () => {
     const limit = getContextLimitFromPolicy('deepseek-v4-pro');
     assert.ok(limit !== null, 'deepseek-v4-pro should be found in policy');
-    assert.equal(limit!.tokens, 128_000);
+    assert.equal(limit!.tokens, 1_000_000);
   });
 
   it('returns ContextLimit for deepseek-v4-flash', () => {
     const limit = getContextLimitFromPolicy('deepseek-v4-flash');
     assert.ok(limit !== null, 'deepseek-v4-flash should be found in policy');
-    assert.equal(limit!.tokens, 128_000);
+    assert.equal(limit!.tokens, 1_000_000);
   });
 
   it('returns null for model not in policy', () => {
@@ -181,18 +175,14 @@ describe('getContextLimitFromPolicy', () => {
   });
 
   it('policy lookup for deepseek-v4-pro takes precedence over hardcoded map', () => {
-    // Both the policy and hardcoded map have deepseek-v4-pro with 128K,
-    // but this verifies getContextLimit routes through the policy first.
     const limit = getContextLimit('deepseek-v4-pro');
-    assert.equal(limit.tokens, 128_000);
+    assert.equal(limit.tokens, 1_000_000);
     assert.equal(limit.label, 'DeepSeek V4 Pro');
   });
 
-  it('policy lookup for deepseek-v4-flash (not in hardcoded map) returns 128K', () => {
-    // deepseek-v4-flash is NOT in the hardcoded CONTEXT_LIMITS map but IS
-    // in the policy — without the policy path this would fall to __default__.
+  it('policy lookup for deepseek-v4-flash returns 1M', () => {
     const limit = getContextLimit('deepseek-v4-flash');
-    assert.equal(limit.tokens, 128_000);
+    assert.equal(limit.tokens, 1_000_000);
   });
 
   it('falls back to hardcoded map for claude model not in policy', () => {
@@ -200,11 +190,54 @@ describe('getContextLimitFromPolicy', () => {
     assert.equal(limit.tokens, 200_000);
     assert.equal(limit.label, 'Opus 4.8');
   });
+});
 
-  it('falls back to hardcoded __default__ for unknown model', () => {
-    const limit = getContextLimit('unknown-model-v1');
-    assert.equal(limit.tokens, 200_000);
-    assert.equal(limit.label, 'Model');
+// ═══════════════════════════════════════════════════════════════════════════════
+// Acceptance Tests T1–T5: Telemetry Truthfulness
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('Acceptance Tests T1–T5: Telemetry Truthfulness', () => {
+  it('T1: DeepSeek V4 Flash with 166,588 active tokens calculates ~16.66% (17%)', () => {
+    const limit = getContextLimit('deepseek-v4-flash');
+    assert.equal(limit.tokens, 1_000_000);
+    const util = classifyUtilization(166_588, limit.tokens);
+    assert.equal(util.percent, 17);
+    const bar = renderCompactTokenBar(166_588, limit.tokens);
+    assert.ok(bar.includes('17%'), `Expected 17% in bar, got: ${bar}`);
+  });
+
+  it('T2: Session total 2,000,000 does not inflate active context (100,000 active / 1M = 10%)', () => {
+    const limit = getContextLimit('deepseek-v4-flash');
+    const activeContextTokens = 100_000;
+    const util = classifyUtilization(activeContextTokens, limit.tokens);
+    assert.equal(util.percent, 10);
+    const bar = renderCompactTokenBar(activeContextTokens, limit.tokens);
+    assert.ok(bar.includes('10%'));
+    assert.ok(!bar.includes('100%'), 'Must NOT calculate 100% from session total!');
+  });
+
+  it('T3: Unknown model or unknown context limit renders ctx ?', () => {
+    const limit = getContextLimit('some-totally-unknown-model-xyz');
+    assert.equal(limit.tokens, 0);
+    const bar = renderCompactTokenBar(10_000, limit.tokens);
+    assert.equal(bar, '[ctx ?]');
+  });
+
+  it('T4: Model switch within session resolves active model capability', () => {
+    const limitA = getContextLimit('claude-sonnet-4-6');
+    const limitB = getContextLimit('deepseek-v4-flash');
+    assert.equal(limitA.tokens, 200_000);
+    assert.equal(limitB.tokens, 1_000_000);
+    assert.equal(classifyUtilization(100_000, limitA.tokens).percent, 50);
+    assert.equal(classifyUtilization(100_000, limitB.tokens).percent, 10);
+  });
+
+  it('T5: Post-compaction active context reflects compacted size', () => {
+    const limit = getContextLimit('deepseek-v4-flash');
+    const preCompactionTokens = 850_000;
+    const postCompactionTokens = 120_000;
+    assert.equal(classifyUtilization(preCompactionTokens, limit.tokens).percent, 85);
+    assert.equal(classifyUtilization(postCompactionTokens, limit.tokens).percent, 12);
   });
 });
 

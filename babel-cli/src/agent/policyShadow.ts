@@ -89,6 +89,12 @@ export function defaultPolicyMode(
     // Force/read/explore: governance hard-restricts under enforce.
     return 'enforce';
   }
+  if (taskClass === 'quick_inspect') {
+    if (policy === 'zero_write') return 'off';
+    if (policy === 'force_mutate') return 'off';
+    if (policy === 'stall_kill') return 'off';
+    return 'off';
+  }
   if (taskClass === 'investigate') {
     if (policy === 'zero_write') return 'off';
     if (policy === 'force_mutate') return 'off';

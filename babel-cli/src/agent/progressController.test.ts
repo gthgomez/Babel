@@ -97,18 +97,147 @@ describe("ProgressController", () => {
     res = pc.scoreTurn(["env_blocker_resolved"], false, 0);
     assert.strictEqual(res.score, 60);
   });
+  // ── Acceptance Tests T9–T12: Capability Degradation & Quiet Recovery ────
+
+  it("T9: Transient shell failure marks capability SUSPECT without disabling tool family", () => {
+    const pc = new ProgressController();
+    const res = pc.recordFailure({
+      tool: "run_shell_command",
+      commandSnippet: "npm test",
+      exitCode: 1,
+    });
+    assert.strictEqual(res.capability, "shell.execution");
+    assert.strictEqual(res.state, "SUSPECT");
+    assert.strictEqual(pc.getCapabilityState("shell.execution"), "SUSPECT");
+    assert.strictEqual(pc.getDegradedCapabilities().length, 0);
+  });
+
+  it("T10: Repeated recursive enumeration failure marks capability DEGRADED and suggests filesystem alternative", () => {
+    const pc = new ProgressController();
+    // First failure -> SUSPECT
+    let res = pc.recordFailure({
+      tool: "run_shell_command",
+      commandSnippet: "Get-ChildItem -Recurse",
+      exitCode: 1,
+    });
+    assert.strictEqual(res.capability, "shell.recursive_enumeration");
+    assert.strictEqual(res.state, "SUSPECT");
+
+    // Second failure -> DEGRADED with notice
+    res = pc.recordFailure({
+      tool: "run_shell_command",
+      commandSnippet: "Get-ChildItem -Recurse",
+      exitCode: 1,
+    });
+    assert.strictEqual(res.capability, "shell.recursive_enumeration");
+    assert.strictEqual(res.state, "DEGRADED");
+    assert.ok(res.notice?.includes("filesystem tools"));
+
+    const degraded = pc.getDegradedCapabilities();
+    assert.strictEqual(degraded.length, 1);
+    assert.strictEqual(degraded[0]?.capability, "shell.recursive_enumeration");
+    assert.strictEqual(degraded[0]?.preferredAlternative, "list_dir / directory_list tool");
+  });
+
+  it("T11: Recovery or explicit success restores capability to AVAILABLE", () => {
+    const pc = new ProgressController();
+    pc.recordFailure({
+      tool: "run_shell_command",
+      commandSnippet: "Get-ChildItem -Recurse",
+      exitCode: 1,
+    });
+    pc.recordFailure({
+      tool: "run_shell_command",
+      commandSnippet: "Get-ChildItem -Recurse",
+      exitCode: 1,
+    });
+    assert.strictEqual(pc.getCapabilityState("shell.recursive_enumeration"), "DEGRADED");
+
+    pc.recordSuccess("shell.recursive_enumeration");
+    assert.strictEqual(pc.getCapabilityState("shell.recursive_enumeration"), "AVAILABLE");
+    assert.strictEqual(pc.getDegradedCapabilities().length, 0);
+  });
+
+  it("T12: Snapshot and restore preserve capability health state", () => {
+    const pc1 = new ProgressController();
+    pc1.recordFailure({
+      tool: "run_shell_command",
+      commandSnippet: "dir /s",
+      exitCode: 1,
+    });
+    pc1.recordFailure({
+      tool: "run_shell_command",
+      commandSnippet: "dir /s",
+      exitCode: 1,
+    });
+    const snap = pc1.snapshot();
+
+    const pc2 = new ProgressController();
+    pc2.restore(snap);
+    assert.strictEqual(pc2.getCapabilityState("shell.recursive_enumeration"), "DEGRADED");
+  });
+
+  it("T12b: Canonical tool names (run_command, test_run) trigger capability degradation with list_dir alternative", () => {
+    const pc = new ProgressController();
+    const f1 = pc.recordFailure({
+      tool: "run_command",
+      commandSnippet: "Get-ChildItem -Recurse",
+      exitCode: 1,
+    });
+    assert.strictEqual(f1.capability, "shell.recursive_enumeration");
+    assert.strictEqual(f1.state, "SUSPECT");
+
+    const f2 = pc.recordFailure({
+      tool: "test_run",
+      commandSnippet: "dir /s",
+      exitCode: 1,
+    });
+    assert.strictEqual(f2.capability, "shell.recursive_enumeration");
+    assert.strictEqual(f2.state, "DEGRADED");
+    assert.ok(f2.notice?.includes("list_dir") || f2.notice?.includes("filesystem"));
+    assert.strictEqual(pc.getCapabilityState("shell.recursive_enumeration"), "DEGRADED");
+  });
+
+  it("T13: classifyShellCapability differentiates recursive from non-recursive commands safely", async () => {
+    const { classifyShellCapability } = await import("./progressController.js");
+
+    // Non-recursive Get-ChildItem must NOT be classified as recursive enumeration
+    const nonRecGci = classifyShellCapability("run_command", "Get-ChildItem -Path ./src");
+    assert.strictEqual(nonRecGci.isRecursiveEnum, false);
+    assert.strictEqual(nonRecGci.capability, "shell.execution");
+
+    // Recursive Get-ChildItem with -Recurse must be classified as recursive enumeration
+    const recGci = classifyShellCapability("run_command", "Get-ChildItem -Path . -Recurse");
+    assert.strictEqual(recGci.isRecursiveEnum, true);
+    assert.strictEqual(recGci.capability, "shell.recursive_enumeration");
+
+    // POSIX ls -r (lowercase: reverse sort) must NOT be classified as recursive enumeration
+    const lsReverse = classifyShellCapability("run_command", "ls -r");
+    assert.strictEqual(lsReverse.isRecursiveEnum, false);
+    assert.strictEqual(lsReverse.capability, "shell.execution");
+
+    // POSIX ls -R (uppercase: recursive) must be classified as recursive enumeration
+    const lsRec = classifyShellCapability("run_command", "ls -lR ./src");
+    assert.strictEqual(lsRec.isRecursiveEnum, true);
+    assert.strictEqual(lsRec.capability, "shell.recursive_enumeration");
+
+    // Windows dir /s must be classified as recursive enumeration
+    const dirS = classifyShellCapability("run_command", "dir /s");
+    assert.strictEqual(dirS.isRecursiveEnum, true);
+    assert.strictEqual(dirS.capability, "shell.recursive_enumeration");
+
+    // Non-shell tool must not be shell
+    const nonShell = classifyShellCapability("read_file", "foo.txt");
+    assert.strictEqual(nonShell.isShellTool, false);
+    assert.strictEqual(nonShell.isRecursiveEnum, false);
+  });
 });
 
 describe("ConversationalRenderer - ProgressRecovery", () => {
   it("renders nudge, restriction, repair, blocked, and ENV_BLOCKED states", async () => {
-    // We dynamically import to avoid loading UI code when strictly unit testing agents,
-    // but we cover it here per requirements.
     const { ConversationalRenderer } = await import("../ui/waterfall.js");
     const renderer = new ConversationalRenderer({ isTTY: true });
 
-    // Replace safeStdoutWrite temporarily or capture output
-    // The instructions say "TUI/REPL rendering tests for nudge, restriction, repair, blocked, and ENV_BLOCKED states."
-    // We can at least call the method to ensure it doesn't throw.
     renderer.onProgressRecovery("nudge", "test", 5, "nudge hint");
     renderer.onProgressRecovery(
       "restricted_tools",
@@ -118,12 +247,8 @@ describe("ConversationalRenderer - ProgressRecovery", () => {
     );
     renderer.onProgressRecovery("last_chance_repair", "test", 5, "repair hint");
     renderer.onProgressRecovery("terminal_blocked", "test", 5, "blocked hint");
-
-    // The requirement mentions 'ENV_BLOCKED' state? We can just pass it as message for terminal_blocked
     renderer.onProgressRecovery("terminal_blocked", "test", 5, "ENV_BLOCKED");
 
-    // Just asserting they run without error since we aren't mocking stdout here trivially,
-    // but it validates the method exists and handles all enum values properly.
     assert.ok(true);
   });
 });

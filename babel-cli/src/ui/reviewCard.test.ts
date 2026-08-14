@@ -22,11 +22,12 @@ describe('review card — truthful terminal states', () => {
     });
     assert.equal(card.kind, 'VERIFIED_COMPLETE');
     assert.equal(card.looksLikeVerifiedSuccess, true);
+    assert.equal(reviewCardKindToken(card.kind), 'REVIEW_KIND:VERIFIED_COMPLETE');
     const text = stripAnsi(card.body);
     assert.match(text, /Verified complete/);
     assert.match(text, /src\/foo\.ts/);
     assert.match(text, /npm test/);
-    assert.match(text, /REVIEW_KIND:VERIFIED_COMPLETE/);
+    assert.doesNotMatch(text, /REVIEW_KIND:/);
   });
 
   it('does not treat mutation with no verifier as verified success', () => {
@@ -38,10 +39,11 @@ describe('review card — truthful terminal states', () => {
     });
     assert.equal(card.kind, 'COMPLETE_UNVERIFIED');
     assert.equal(card.looksLikeVerifiedSuccess, false);
+    assert.equal(reviewCardKindToken(card.kind), 'REVIEW_KIND:COMPLETE_UNVERIFIED');
     const text = stripAnsi(card.body);
     assert.match(text, /unverified|Not run/i);
     assert.doesNotMatch(text, /Verified complete/);
-    assert.match(text, /REVIEW_KIND:COMPLETE_UNVERIFIED/);
+    assert.doesNotMatch(text, /REVIEW_KIND:/);
   });
 
   it('does not treat verification nonzero as verified success', () => {
@@ -55,6 +57,7 @@ describe('review card — truthful terminal states', () => {
     const text = stripAnsi(card.body);
     assert.match(text, /Verification failed/);
     assert.match(text, /exit 1/);
+    assert.doesNotMatch(text, /REVIEW_KIND:/);
   });
 
   it('classifies blocked, cancelled, budget, infra, and agent failure distinctly', () => {
@@ -71,7 +74,8 @@ describe('review card — truthful terminal states', () => {
       assert.equal(card.kind, c.kind);
       assert.equal(card.looksLikeVerifiedSuccess, false);
       titles.add(card.title);
-      assert.match(card.body, new RegExp(reviewCardKindToken(c.kind).replace(':', '\\:')));
+      assert.equal(reviewCardKindToken(card.kind), `REVIEW_KIND:${c.kind}`);
+      assert.doesNotMatch(card.body, /REVIEW_KIND:/);
     }
     assert.equal(titles.size, cases.length);
   });
@@ -96,12 +100,6 @@ describe('review card — truthful terminal states', () => {
       return stripAnsi(card.body);
     });
     assert.equal(new Set(rendered).size, ALL_REVIEW_KINDS.length);
-    for (const kind of ALL_REVIEW_KINDS) {
-      assert.ok(
-        rendered.some((r) => r.includes(`REVIEW_KIND:${kind}`)),
-        `missing ${kind}`,
-      );
-    }
   });
 
   it('maps VERIFIED_COMPLETE without a verifier to unverified', () => {
@@ -109,5 +107,74 @@ describe('review card — truthful terminal states', () => {
       classifyReviewCard({ outcome: 'VERIFIED_COMPLETE', verification: { ran: false } }),
       'COMPLETE_UNVERIFIED',
     );
+  });
+
+  // ── Acceptance Tests T13–T16: Mode-Aware Completion Cards ────────────────
+
+  it('T13: Read-only query with 0 changed files omits Diff and Run verification actions', () => {
+    const card = buildReviewCard({
+      outcome: 'NO_CHANGE_REQUIRED',
+      changedFiles: [],
+      verificationPolicy: 'none',
+    });
+    const text = stripAnsi(card.body);
+    assert.match(text, /\[Enter\] Continue/);
+    assert.doesNotMatch(text, /\[D\] Diff/);
+    assert.doesNotMatch(text, /\[R\] Run verification/);
+  });
+
+  it('T14: Mutating run with changed files provides Diff and Run verification actions', () => {
+    const card = buildReviewCard({
+      outcome: 'UNVERIFIED_PATCH',
+      changedFiles: ['src/app.ts'],
+      verification: { ran: false },
+    });
+    const text = stripAnsi(card.body);
+    assert.match(text, /\[D\] Diff/);
+    assert.match(text, /\[R\] Run verification/);
+    assert.match(text, /\[Enter\] Continue/);
+  });
+
+  it('T15: Read-only query with verificationPolicy: none omits Not run — not verified', () => {
+    const card = buildReviewCard({
+      outcome: 'NO_CHANGE_REQUIRED',
+      changedFiles: [],
+      verificationPolicy: 'none',
+    });
+    const text = stripAnsi(card.body);
+    assert.doesNotMatch(text, /Not run — not verified/);
+  });
+
+  it('T16: Blocked verification is distinct from test failure', () => {
+    const blockedCard = buildReviewCard({
+      outcome: 'BLOCKED',
+      verification: { ran: false, status: 'blocked' },
+    });
+    const failedCard = buildReviewCard({
+      outcome: 'UNVERIFIED_PATCH',
+      verification: { ran: true, passed: false, command: 'npm test', exitCode: 1 },
+    });
+    const blockedText = stripAnsi(blockedCard.body);
+    const failedText = stripAnsi(failedCard.body);
+
+    assert.match(blockedText, /Verification blocked/);
+    assert.match(failedText, /Verification failed/);
+  });
+
+  it('T16b: Read-only query with verificationApplicability: not_applicable displays clean Complete title', () => {
+    const card = buildReviewCard({
+      status: 'completed',
+      outcome: 'COMPLETE_UNVERIFIED',
+      changedFiles: [],
+      verificationApplicability: 'not_applicable',
+    });
+    assert.equal(card.title, 'Complete');
+    const text = stripAnsi(card.body);
+    assert.match(text, /Complete/);
+    assert.doesNotMatch(text, /Complete — unverified/);
+    assert.doesNotMatch(text, /Not run — not verified/);
+    assert.doesNotMatch(text, /\[D\] Diff/);
+    assert.doesNotMatch(text, /\[R\] Run verification/);
+    assert.match(text, /\[Enter\] Continue/);
   });
 });

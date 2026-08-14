@@ -56,11 +56,11 @@ test('containsSecrets detects API key patterns', () => {
 test('redactSecretsDeep handles nested objects', () => {
   const input = {
     command: 'node --env-file=.env dist/index.js',
-    env: { DEEPSEEK_API_KEY: FAKE_ENV_VALUE },
+    env: { DEEPSEEK_API_KEY: FAKE_SK },
     nested: { value: '$env:DEEPINFRA_API_KEY = "oqXgxdeadbeefdeadbeefdeadbeefdeadbeef"' },
   };
   const result = redactSecretsDeep(input);
-  assert.ok(!JSON.stringify(result).includes(FAKE_ENV_VALUE));
+  assert.ok(!JSON.stringify(result).includes(FAKE_SK));
   assert.ok(!JSON.stringify(result).includes('oqXgxdeadbeef'));
   assert.ok((result as typeof input).command === input.command);
 });

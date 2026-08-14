@@ -27,9 +27,11 @@ import {
   error,
   ghost,
   getTerminalWidth,
+  stripAnsi,
 } from './theme.js';
 import { sanitizeLlmOutput, sanitizeCodeLine } from './sanitize.js';
 import { isTreeSitterAvailable, highlightWithTreeSitter } from './treeSitterHighlight.js';
+import { renderContentAwareTable, type MarkdownTableRow } from './tables.js';
 const HAS_COLOR = supportsColor();
 const ANSI_ITALIC_OPEN = '\x1b[3m';
 const ANSI_ITALIC_CLOSE = '\x1b[23m';
@@ -1558,68 +1560,14 @@ function renderBlockquote(token: MdTokens['Blockquote']): string {
 }
 
 function renderTable(token: MdTokens['Table']): string {
-  if (token.rows.length === 0 && token.header.length === 0) return '';
-  const allRows = token.header.length > 0 ? [token.header, ...token.rows] : token.rows;
-  const align = (token as any).align || [];
-  const colWidths: number[] = [];
-  for (const row of allRows) {
-    for (let i = 0; i < row.length; i++) {
-      const cellText = renderInlineTokens(row[i]!.tokens);
-      const len = stripAnsiLength(cellText);
-      colWidths[i] = Math.max(colWidths[i] || 0, len);
-    }
-  }
-  const totalWidth = colWidths.reduce((a: number, b: number) => a + b + 3, 0);
-  const maxWidth = getTerminalWidth() - 2;
-  if (totalWidth > maxWidth) {
-    return token.rows
-      .map((row: MdTokens['TableRow']) =>
-        row
-          .map((cell: any, i: number) => {
-            const hdr = token.header[i]
-              ? renderInlineTokens(token.header[i]!.tokens)
-              : `Col ${i + 1}`;
-            const val = renderInlineTokens(cell.tokens);
-            return `  ${dim(hdr + ':')} ${val}`;
-          })
-          .join('\n'),
-      )
-      .join('\n\n');
-  }
-  const lines: string[] = [];
-  const drawRow = (cells: any[][]) => {
-    return cells
-      .map((row) => {
-        const padded = row
-          .map((cell: any, ci: number) => {
-            const text = renderInlineTokens(cell.tokens);
-            const pad = colWidths[ci]! - stripAnsiLength(text);
-            const adj = align[ci] === 'right' ? ' '.repeat(pad) + text : text + ' '.repeat(pad);
-            return ` ${adj} `;
-          })
-          .join('│');
-        return `  │${padded}│`;
-      })
-      .join('\n');
-  };
-  if (token.header.length > 0) {
-    lines.push(drawRow([token.header]));
-    const sep = token.header
-      .map((_: any, i: number) => {
-        const w = colWidths[i]!;
-        const l =
-          align[i] === 'right'
-            ? '─'.repeat(w + 1) + ':'
-            : align[i] === 'center'
-              ? ':' + '─'.repeat(w) + ':'
-              : '─'.repeat(w + 2);
-        return l;
-      })
-      .join('┼');
-    lines.push('  ├' + sep + '┤');
-  }
-  if (token.rows.length > 0) lines.push(drawRow(token.rows));
-  return lines.join('\n');
+  if (!token.rows?.length && !token.header?.length) return '';
+  const headers = (token.header || []).map((cell: any) =>
+    stripAnsi(renderInlineTokens(cell.tokens)).trim(),
+  );
+  const rows: MarkdownTableRow[] = (token.rows || []).map((row: any) => ({
+    cells: row.map((cell: any) => stripAnsi(renderInlineTokens(cell.tokens)).trim()),
+  }));
+  return renderContentAwareTable(headers, rows);
 }
 
 // ─── Inline token rendering ─────────────────────────────────────────────────

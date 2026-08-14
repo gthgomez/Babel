@@ -9,7 +9,9 @@ import {
   VERIFIED_COMPLETION_ARTIFACT_TYPE,
 } from './verifiedCompletion.js';
 
-const REPO_ROOT = join(process.cwd(), '..');
+import { BABEL_ROOT } from '../cli/constants.js';
+
+const REPO_ROOT = BABEL_ROOT;
 
 describe('verifiedCompletion', () => {
   it('validates a well-formed artifact', () => {

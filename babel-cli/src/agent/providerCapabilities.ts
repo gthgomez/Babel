@@ -6,7 +6,7 @@
  */
 
 import type { ProviderCapabilities } from '../runners/base.js';
-import { getModelContextWindow } from '../modelPolicy.js';
+import { getModelContextWindow, getNormalizedModelCapabilities } from '../modelPolicy.js';
 
 export const DEFAULT_MAX_OUTPUT_TOKENS = 8_192;
 export const DEFAULT_TOOL_SCHEMA_RESERVE = 4_096;
@@ -36,6 +36,15 @@ export function computeContextBudget(input: ContextBudgetInput): ContextBudget {
   const maxOutputTokens = input.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
   const toolSchemaReserve = input.toolSchemaReserve ?? DEFAULT_TOOL_SCHEMA_RESERVE;
   const safetyMargin = input.safetyMargin ?? DEFAULT_SAFETY_MARGIN;
+  if (!input.contextWindow || input.contextWindow <= 0) {
+    return {
+      contextWindow: 0,
+      maxOutputTokens,
+      toolSchemaReserve,
+      safetyMargin,
+      contextBudget: 0,
+    };
+  }
   const raw =
     input.contextWindow - maxOutputTokens - toolSchemaReserve - safetyMargin;
   const contextBudget = Math.max(1_024, raw);
@@ -103,16 +112,14 @@ export function resolveProviderCapabilities(
     supportsStreaming: true,
     thinkingWithTools: 'unknown' as const,
   };
-
-  // Canonical window from policy; fallback 128k for DeepSeek-class, 200k else.
-  const fromPolicy = getModelContextWindow(modelId);
-  const contextWindow =
-    fromPolicy ??
-    (provider === 'deepseek' ? 128_000 : 200_000);
+  // Canonical window from policy; 0 if unknown.
+  const norm = getNormalizedModelCapabilities(modelId);
+  const contextWindow = norm?.contextWindow ?? getModelContextWindow(modelId) ?? 0;
+  const maxOutputTokens = norm?.maxOutputTokens ?? defaults.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
 
   const base: ProviderCapabilities = {
     contextWindow,
-    maxOutputTokens: defaults.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+    maxOutputTokens,
     supportsThinking: defaults.supportsThinking ?? false,
     supportsToolChoice: defaults.supportsToolChoice ?? true,
     supportsParallelToolCalls: defaults.supportsParallelToolCalls ?? true,
@@ -140,6 +147,9 @@ export function shouldCompactByTokens(
   modelId: string,
 ): boolean {
   const budget = contextBudgetForModel(modelId);
+  if (budget.contextWindow <= 0 || budget.contextBudget <= 0) {
+    return false;
+  }
   return estimatedRequestTokens >= budget.contextBudget;
 }
 

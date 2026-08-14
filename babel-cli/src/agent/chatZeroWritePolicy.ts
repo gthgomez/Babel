@@ -106,6 +106,13 @@ export function buildPolicyTerminalBlockedReport(
   if (source === 'zero_write') {
     return buildZeroWriteHardStopBlockedReport(answer);
   }
+  const isReadOnlyReport =
+    source === 'read_only_hard_cap' ||
+    (source === 'investigate_hard_cap' &&
+      (answer.includes('Inspection tool budget reached') ||
+        answer.includes('inspection query') ||
+        answer.includes('read-only')));
+
   const labels: Record<string, { reason: string; missing: string; target: string }> = {
     hard_ceiling: {
       reason: 'Hard resource ceiling',
@@ -118,9 +125,18 @@ export function buildPolicyTerminalBlockedReport(
       target: 'progress',
     },
     investigate_hard_cap: {
-      reason: 'Too many tools without a file mutation (investigate hard cap)',
-      missing: 'A successful str_replace/write_file before more exploration',
-      target: 'investigate_budget',
+      reason: isReadOnlyReport
+        ? 'Read-only inspection budget reached'
+        : 'Too many tools without a file mutation (investigate hard cap)',
+      missing: isReadOnlyReport
+        ? 'Sufficient evidence to answer confidently'
+        : 'A successful str_replace/write_file before more exploration',
+      target: isReadOnlyReport ? 'inspection_budget' : 'investigate_budget',
+    },
+    read_only_hard_cap: {
+      reason: 'Read-only inspection budget reached',
+      missing: 'Sufficient evidence to answer confidently',
+      target: 'inspection_budget',
     },
     env_blocked: {
       reason: 'Environment / toolchain cannot run verification',
@@ -223,7 +239,16 @@ export interface ExploreFuseResult {
 export function buildInvestigateHardCapTerminalMessage(
   toolsWithoutWrite: number,
   hardCap: number,
+  isReadOnly = false,
 ): string {
+  if (isReadOnly) {
+    return [
+      `READ_ONLY_BUDGET_REACHED: ${toolsWithoutWrite} tools used for inspection query ` +
+        `(hard cap ${hardCap} for this task class).`,
+      'Inspection tool budget reached. Stop reading tools.',
+      'Please synthesize and return your best-supported final answer based on the evidence gathered so far, noting any limitations or discrepancies.',
+    ].join(' ');
+  }
   return [
     `BLOCKED: ${toolsWithoutWrite} tools without a successful file mutation ` +
       `(hard cap ${hardCap} for this task class).`,
@@ -271,7 +296,11 @@ export function applyExploreFuses(input: {
   /** Injectable env for ablation tests (defaults to process.env). */
   env?: NodeJS.ProcessEnv;
 }): ExploreFuseResult {
-  if (!input.executeIntent) {
+  const isReadOnlyInspection =
+    !input.executeIntent &&
+    (input.taskClass === 'quick_inspect' || input.taskClass === 'investigate');
+
+  if (!input.executeIntent && !isReadOnlyInspection) {
     return {
       labels: [],
       forceMutateMessage: null,
@@ -308,123 +337,125 @@ export function applyExploreFuses(input: {
   let readThrashFired = false;
   let explorationExhausted = false;
 
-  if (
-    forceMode !== 'off' &&
-    shouldForceMutateEscalation({
-      executeIntent: true,
-      turnsWithoutWrite: s.turnsWithoutWrite,
-      threshold: input.forceMutateTurnsOverride ?? tune.forceMutateTurns,
+  // Mutation-pressure policies (force_mutate, readThrash, cumulativeExploration, shellSoftBudget)
+  // are strictly for tasks with execute/mutation intent. Read-only inspection tasks bypass all of them.
+  if (!isReadOnlyInspection && input.executeIntent) {
+    if (
+      forceMode !== 'off' &&
+      shouldForceMutateEscalation({
+        executeIntent: true,
+        turnsWithoutWrite: s.turnsWithoutWrite,
+        threshold: input.forceMutateTurnsOverride ?? tune.forceMutateTurns,
+        hasAnyWrites: input.hasAnyWrites,
+      })
+    ) {
+      forceMutateFired = true;
+      forceMutateMessage = buildForceMutateMessage(s.turnsWithoutWrite);
+      if (!defer) input.pushUser(forceMutateMessage);
+      // Hard restrict only in enforce mode when the task class enables it.
+      if (hardRestrict && forceMode === 'enforce') {
+        s.restrictToolsNextTurn = true;
+        input.onPolicyEvent?.({
+          at_turn: input.currentTurn ?? 0,
+          kind: 'restrict_tools',
+          detail: 'mode=mutate_only',
+        });
+      }
+      out.push('[Force mutate: zero writes — soft nudge]');
+      input.onPolicyEvent?.({
+        at_turn: input.currentTurn ?? 0,
+        kind: 'force_mutate',
+        detail: `turns_without_write=${s.turnsWithoutWrite}`,
+      });
+      s.turnsWithoutWrite = 0;
+    }
+
+    if (
+      thrashMode !== 'off' &&
+      shouldFireReadThrashFuse({
+        executeIntent: true,
+        consecutiveReadOnlyTools: s.consecutiveReadOnlyTools,
+        budget: tune.readThrashToolBudget,
+      })
+    ) {
+      readThrashFired = true;
+      readThrashMessage = buildReadThrashFuseMessage(s.consecutiveReadOnlyTools);
+      if (!defer) input.pushUser(readThrashMessage);
+      if (hardRestrict && thrashMode === 'enforce') {
+        s.restrictToolsNextTurn = true;
+        input.onPolicyEvent?.({
+          at_turn: input.currentTurn ?? 0,
+          kind: 'restrict_tools',
+          detail: 'mode=mutate_only',
+        });
+      }
+      out.push('[Read thrash fuse: soft nudge]');
+      input.onPolicyEvent?.({
+        at_turn: input.currentTurn ?? 0,
+        kind: 'read_thrash_fuse',
+        detail: `consecutive_read_only=${s.consecutiveReadOnlyTools}`,
+      });
+      s.consecutiveReadOnlyTools = 0;
+    }
+
+    const result =
+      exploreMode === 'off'
+        ? { fired: [] as string[], restrictTools: false }
+        : applyCumulativeExplorationEscalation(
+            s.cumulativeExplorationTools,
+            tune.readThrashToolBudget,
+            (msg) => {
+              if (defer) {
+                explorationFuseMessage = msg.content;
+              } else {
+                input.pushUser(msg.content);
+              }
+            },
+          );
+    explorationExhausted = result.restrictTools === true;
+    if (hardRestrict && exploreMode === 'enforce' && result.restrictTools) {
+      s.restrictToolsNextTurn = true;
+    }
+    out.push(...result.fired);
+
+    // P0-E: record would-have-restrict / exhaust while soft-nudge path continues.
+    // One-shot per kind per session (same discipline as zero_write_shadow).
+    if (!s.shadowLoggedKinds) s.shadowLoggedKinds = new Set();
+    for (const shadowEv of buildExploreFuseShadowEvents({
+      atTurn: input.currentTurn ?? 0,
+      taskClass: input.taskClass,
+      forceMutateFired,
+      readThrashFired,
+      explorationExhausted,
+      hardRestrictEnabled: hardRestrict,
+      env,
+      alreadyLoggedKinds: s.shadowLoggedKinds,
+    })) {
+      input.onPolicyEvent?.(shadowEv);
+      s.shadowLoggedKinds.add(shadowEv.kind);
+    }
+
+    // Implementor W1: shell soft budget (non-mutating shell thrash).
+    const shellEval = evaluateShellSoftBudget({
+      consecutiveNonMutatingShells: s.consecutiveNonMutatingShells,
+      budget: tune.shellSoftBudget,
       hasAnyWrites: input.hasAnyWrites,
-    })
-  ) {
-    forceMutateFired = true;
-    forceMutateMessage = buildForceMutateMessage(s.turnsWithoutWrite);
-    if (!defer) input.pushUser(forceMutateMessage);
-    // Hard restrict only in enforce mode when the task class enables it.
-    if (hardRestrict && forceMode === 'enforce') {
-      s.restrictToolsNextTurn = true;
+    });
+    if (shellEval.fire && shellEval.message) {
+      shellSoftMessage = shellEval.message;
+      if (!defer) input.pushUser(shellEval.message);
+      out.push('[Implementor: shell soft budget]');
       input.onPolicyEvent?.({
         at_turn: input.currentTurn ?? 0,
-        kind: 'restrict_tools',
-        detail: 'mode=mutate_only',
+        kind: 'shell_soft_budget',
+        detail: `consecutive_shells=${s.consecutiveNonMutatingShells}`,
       });
+      s.consecutiveNonMutatingShells = 0;
     }
-    out.push('[Force mutate: zero writes — soft nudge]');
-    input.onPolicyEvent?.({
-      at_turn: input.currentTurn ?? 0,
-      kind: 'force_mutate',
-      detail: `turns_without_write=${s.turnsWithoutWrite}`,
-    });
-    s.turnsWithoutWrite = 0;
   }
 
-  if (
-    thrashMode !== 'off' &&
-    shouldFireReadThrashFuse({
-      executeIntent: true,
-      consecutiveReadOnlyTools: s.consecutiveReadOnlyTools,
-      budget: tune.readThrashToolBudget,
-    })
-  ) {
-    readThrashFired = true;
-    readThrashMessage = buildReadThrashFuseMessage(s.consecutiveReadOnlyTools);
-    if (!defer) input.pushUser(readThrashMessage);
-    if (hardRestrict && thrashMode === 'enforce') {
-      s.restrictToolsNextTurn = true;
-      input.onPolicyEvent?.({
-        at_turn: input.currentTurn ?? 0,
-        kind: 'restrict_tools',
-        detail: 'mode=mutate_only',
-      });
-    }
-    out.push('[Read thrash fuse: soft nudge]');
-    input.onPolicyEvent?.({
-      at_turn: input.currentTurn ?? 0,
-      kind: 'read_thrash_fuse',
-      detail: `consecutive_read_only=${s.consecutiveReadOnlyTools}`,
-    });
-    s.consecutiveReadOnlyTools = 0;
-  }
-
-  const result =
-    exploreMode === 'off'
-      ? { fired: [] as string[], restrictTools: false }
-      : applyCumulativeExplorationEscalation(
-          s.cumulativeExplorationTools,
-          tune.readThrashToolBudget,
-          (msg) => {
-            if (defer) {
-              explorationFuseMessage = msg.content;
-            } else {
-              input.pushUser(msg.content);
-            }
-          },
-        );
-  explorationExhausted = result.restrictTools === true;
-  if (hardRestrict && exploreMode === 'enforce' && result.restrictTools) {
-    s.restrictToolsNextTurn = true;
-  }
-  out.push(...result.fired);
-
-  // P0-E: record would-have-restrict / exhaust while soft-nudge path continues.
-  // One-shot per kind per session (same discipline as zero_write_shadow).
-  if (!s.shadowLoggedKinds) s.shadowLoggedKinds = new Set();
-  for (const shadowEv of buildExploreFuseShadowEvents({
-    atTurn: input.currentTurn ?? 0,
-    taskClass: input.taskClass,
-    forceMutateFired,
-    readThrashFired,
-    explorationExhausted,
-    hardRestrictEnabled: hardRestrict,
-    env,
-    alreadyLoggedKinds: s.shadowLoggedKinds,
-  })) {
-    input.onPolicyEvent?.(shadowEv);
-    s.shadowLoggedKinds.add(shadowEv.kind);
-  }
-
-  // Implementor W1: shell soft budget (non-mutating shell thrash).
-  const shellEval = evaluateShellSoftBudget({
-    consecutiveNonMutatingShells: s.consecutiveNonMutatingShells,
-    budget: tune.shellSoftBudget,
-    hasAnyWrites: input.hasAnyWrites,
-  });
-  if (shellEval.fire && shellEval.message) {
-    shellSoftMessage = shellEval.message;
-    if (!defer) input.pushUser(shellEval.message);
-    out.push('[Implementor: shell soft budget]');
-    input.onPolicyEvent?.({
-      at_turn: input.currentTurn ?? 0,
-      kind: 'shell_soft_budget',
-      detail: `consecutive_shells=${s.consecutiveNonMutatingShells}`,
-    });
-    s.consecutiveNonMutatingShells = 0;
-  }
-
-  // Implementor W1: investigate tool budget (soft force-mutate by tool count).
-  // Fire once per zero-write streak when toolsWithoutWrite first reaches soft
-  // budget — not every later turn at the same count or above (Wave A spam).
-  // Hard cap remains the terminal stop.
+  // Dedicated Read-Only / Investigate Tool Budget (soft nudge).
+  // Fire once per zero-write streak when toolsWithoutWrite first reaches soft budget.
   if (input.hasAnyWrites || s.toolsWithoutWrite === 0) {
     s.investigateSoftNudgeDone = false;
   }
@@ -433,11 +464,16 @@ export function applyExploreFuses(input: {
     budget: tune.investigateToolBudget,
     hasAnyWrites: input.hasAnyWrites,
     phase: s.phase,
+    isReadOnly: isReadOnlyInspection,
   });
   if (invEval.fire && invEval.message && !s.investigateSoftNudgeDone) {
     investigateBudgetMessage = invEval.message;
     if (!defer) input.pushUser(invEval.message);
-    out.push('[Implementor: investigate tool budget]');
+    out.push(
+      isReadOnlyInspection
+        ? '[Implementor: read-only budget]'
+        : '[Implementor: investigate tool budget]',
+    );
     input.onPolicyEvent?.({
       at_turn: input.currentTurn ?? 0,
       kind: 'investigate_budget',
@@ -446,8 +482,7 @@ export function applyExploreFuses(input: {
     s.investigateSoftNudgeDone = true;
   }
 
-  // Hard cap: stop explore thrash (pilot: 53 tools before first write).
-  // Soft budget still nudges once; hard cap is a terminal candidate for the arbiter.
+  // Hard cap: stop explore thrash (for mutations) or conclude inspection (for read-only queries).
   const hardCap = resolveInvestigateToolHardCap(
     tune.investigateToolBudget,
     tune.investigateToolHardCap,
@@ -460,12 +495,17 @@ export function applyExploreFuses(input: {
     investigateHardCapTerminal = buildInvestigateHardCapTerminalMessage(
       s.toolsWithoutWrite,
       hardCap,
+      isReadOnlyInspection,
     );
-    out.push('[Implementor: investigate hard cap — terminal]');
+    out.push(
+      isReadOnlyInspection
+        ? '[Implementor: read-only hard cap — synthesize]'
+        : '[Implementor: investigate hard cap — terminal]',
+    );
     input.onPolicyEvent?.({
       at_turn: input.currentTurn ?? 0,
       kind: 'investigate_budget',
-      detail: `hard_cap tools_without_write=${s.toolsWithoutWrite} cap=${hardCap}`,
+      detail: `${isReadOnlyInspection ? 'read_only_hard_cap' : 'hard_cap'} tools_without_write=${s.toolsWithoutWrite} cap=${hardCap}`,
     });
   }
 

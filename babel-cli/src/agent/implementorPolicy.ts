@@ -69,12 +69,24 @@ export function evaluateInvestigateToolBudget(input: {
   budget: number;
   hasAnyWrites: boolean;
   phase: ChatPhase | null;
+  isReadOnly?: boolean;
 }): { fire: boolean; message: string | null } {
   if (input.hasAnyWrites) return { fire: false, message: null };
   if (input.budget <= 0) return { fire: false, message: null };
   if (input.toolCallCount < input.budget) return { fire: false, message: null };
   // Only pressure while still exploring or stuck without writes
   if (input.phase === 'verify') return { fire: false, message: null };
+  if (input.isReadOnly) {
+    return {
+      fire: true,
+      message: [
+        '[Implementor: read-only budget]',
+        `You have used ${input.toolCallCount} tools for this inspection query.`,
+        'If evidence is sufficient, formulate and return your final answer now without further tool calls.',
+        'If evidence is conflicting or incomplete, perform one targeted inspection before concluding.',
+      ].join(' '),
+    };
+  }
   return {
     fire: true,
     message: [

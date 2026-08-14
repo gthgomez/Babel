@@ -205,6 +205,7 @@ import { executeTool, renderGitDiff, type ToolContext } from '../localTools.js';
 import { createStallDetector, updateStallState, getStallInterventionMessage, isTextOnlyLoop, buildTextOnlyLoopIntervention, buildTextOnlyLoopBlockedMessage, TEXT_ONLY_FORCE_BLOCKED_THRESHOLD } from './stallDetector.js';
 import type { StallState, StallIntervention } from './stallDetector.js';
 import type { ProgressController, ProgressSignal } from './progressController.js';
+import { classifyShellCapability } from './progressController.js';
 import { classifyPhase, buildPhaseNudge, shouldNudge, type ChatPhase } from './chatPhaseNudge.js';
 import { isSuccessfulDirectMutation } from './mutationTools.js';
 import type { DiffCriticVerdict } from './diffCritic.js';
@@ -490,6 +491,14 @@ export interface ChatResult {
   /** Tier A1: Aggregate counts derived from the tool call log. */
   toolCallAggregates?: { tool_call_count: number; write_count: number; verifier_attempt_count: number };
   promptFingerprint?: PromptFingerprint;
+  /** Active input prompt tokens from latest single model invocation */
+  lastRequestPromptTokens?: number | null;
+  /** Structured active context telemetry from latest provider invocation */
+  activeContext?: {
+    tokens: number;
+    modelId: string;
+    source: 'provider_prompt_tokens' | 'estimated' | 'unknown';
+  } | null;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────
@@ -584,6 +593,9 @@ export class ChatEngine {
   /** Full-file read counts keyed by normalized path. */
   private fullReadCounts = new Map<string, number>();
   private apiTokenCount = 0;
+  /** Prompt tokens from latest single model invocation in the active turn */
+  private lastRequestPromptTokens: number | null = null;
+  private lastRequestModelId: string | null = null;
   /** R11: API-reported token count at the start of the current turn.
    *  Used to compute the per-round token delta for the token ceiling check. */
   private apiTokenCountAtTurnStart = 0;
@@ -1261,11 +1273,14 @@ export class ChatEngine {
     if (!resolveStallInterventionsEnabled(this.taskClass)) {
       return null;
     }
+    const isReadOnly =
+      this.taskClass === 'quick_inspect' || this.taskClass === 'investigate';
     const stallShadow = resolveStallShadowMode(this.taskClass);
     const intervention = getStallInterventionMessage(
       this.stallState,
       this.limits.stallTurns,
       stallShadow,
+      isReadOnly,
     );
     if (!intervention) return null;
 
@@ -1447,6 +1462,8 @@ export class ChatEngine {
     submitOpts?: SubmitMessageOptions,
   ): AsyncGenerator<ChatEvent, void, undefined> {
     this._cancelled = false;
+    this.lastRequestPromptTokens = null;
+    this.lastRequestModelId = null;
     // W0.3: fresh TurnRuntime per user submission (isolate counters by default).
     const runtime = this.applyUserSubmission({
       userInput,
@@ -2070,7 +2087,10 @@ export class ChatEngine {
           recordPolicyEvent(this.policyEventLog, this._turnIndex, 'phase_change', `${this._lastPhase ?? 'start'}→${streamPhase}`);
         }
         this._lastPhase = streamPhase;
-        if (shouldNudge(this._lastPhase)) {
+        const isReadOnlyInspection =
+          resolvedIntent !== 'execute' &&
+          (this.taskClass === 'quick_inspect' || this.taskClass === 'investigate');
+        if (shouldNudge(this._lastPhase) && !isReadOnlyInspection) {
           const hintsStr = turnCallsStr
             .filter(
               (e) =>
@@ -2241,13 +2261,15 @@ export class ChatEngine {
         })();
         const arb = parityArbitrateCycle({
           rt: this.parity,
+          isReadOnlyInspection,
           fuseLabels: exploreFuses.labels,
           forceMutateMessage: exploreFuses.forceMutateMessage,
           readThrashMessage: exploreFuses.readThrashMessage,
           explorationFuseMessage: exploreFuses.explorationFuseMessage,
           shellSoftMessage: exploreFuses.shellSoftMessage,
           investigateBudgetMessage: exploreFuses.investigateBudgetMessage,
-          investigateHardCapTerminal: exploreFuses.investigateHardCapTerminal,
+          readOnlyHardCapTerminal: isReadOnlyInspection ? exploreFuses.investigateHardCapTerminal : null,
+          investigateHardCapTerminal: !isReadOnlyInspection ? exploreFuses.investigateHardCapTerminal : null,
           stallMessage:
             stallIntervention && stallIntervention.level !== 'kill'
               ? stallIntervention.message
@@ -2273,6 +2295,54 @@ export class ChatEngine {
         if (arb.terminalAnswer) {
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
+
+          // Read-only inspection hard cap: synthesize gathered evidence into a final informational answer
+          if (
+            (arb.policySource === 'investigate_hard_cap' || arb.policySource === 'read_only_hard_cap') &&
+            isReadOnlyInspection
+          ) {
+            let synthAnswer = '';
+            let synthError: Error | null = null;
+            try {
+              synthAnswer = await this.synthesizeAnswer(allToolObservations, {
+                onAnswerChunk: (_chunk: string) => {},
+              });
+            } catch (err: any) {
+              synthError = err instanceof Error ? err : new Error(String(err));
+            }
+
+            if (synthError || !synthAnswer?.trim()) {
+              const failMsg = `Answer synthesis failed after inspection completed: ${synthError?.message ?? 'no answer generated'}`;
+              this.conversation.push({ role: 'assistant', content: failMsg });
+              yield { type: 'answer_chunk', text: failMsg };
+              yield this.streamDone(failMsg, {
+                blockedReport: {
+                  schema_version: 1,
+                  status: 'BLOCKED',
+                  reason: 'Answer synthesis unavailable',
+                  missing: 'LLM provider response for answer synthesis',
+                  checked: [
+                    {
+                      action: 'synthesize_answer',
+                      target: 'provider',
+                      finding: synthError?.message ?? 'Empty synthesis output',
+                    },
+                  ],
+                },
+              });
+              return;
+            }
+
+            const finalAnswer = synthAnswer.trim();
+            const synthBlocked = this.detectAndBuildBlockedReport(finalAnswer);
+            this.conversation.push({ role: 'assistant', content: finalAnswer });
+            yield { type: 'answer_chunk', text: finalAnswer };
+            yield this.streamDone(finalAnswer, {
+              blockedReport: synthBlocked ?? null,
+            });
+            return;
+          }
+
           // Prefer BLOCKED synthesis when stall kill and agent already diagnosed
           if (stallIntervention?.level === 'kill') {
             const killAnswer = await this.synthesizeAnswer(allToolObservations, {
@@ -3787,6 +3857,27 @@ export class ChatEngine {
         });
       }
 
+      // Capability check: reject recursive shell enumeration if shell.recursive_enumeration is DEGRADED/UNAVAILABLE
+      if ('command' in action && typeof action.command === 'string') {
+        const classification = classifyShellCapability(action.type, action.command);
+        if (classification.isRecursiveEnum) {
+          const capState = this.progressController.getCapabilityState('shell.recursive_enumeration');
+          if (capState === 'DEGRADED' || capState === 'UNAVAILABLE') {
+            const observation = `### ${tool} ${target}\nexit_code: 1\n\`\`\`\n[BABEL ADVISORY] Recursive shell command suppressed: shell.recursive_enumeration is DEGRADED due to repeated failures. Use the list_dir / directory_list tool instead for reliable filesystem inspection.\n\`\`\``;
+            this.toolCallLog.push({
+              tool,
+              target,
+              detail: 'degraded_suppressed',
+              index: meta.index,
+              exit_code: 1,
+              error: 'capability_degraded',
+            });
+            callbacks.onToolComplete?.(toolId, 'degraded_suppressed');
+            return { index: meta.index, observation };
+          }
+        }
+      }
+
       // Platform fail-fast: never re-exec a command that hard-crashed (A06 thrash).
       if (
         (action.type === 'run_command' || action.type === 'test_run') &&
@@ -3912,6 +4003,27 @@ export class ChatEngine {
       }
 
       const lastResult = result.results[result.results.length - 1];
+      if (lastResult) {
+        if (lastResult.exit_code !== 0 || (lastResult.stdout.trim() === '' && lastResult.stderr.trim() !== '')) {
+          const rec = this.progressController.recordFailure({
+            tool: action.type,
+            commandSnippet: 'command' in action && typeof action.command === 'string' ? action.command : undefined,
+            exitCode: lastResult.exit_code,
+            emptyStdout: lastResult.stdout.trim() === '',
+          });
+          if (rec.notice) {
+            obsParts.push(`\n[BABEL ADVISORY] ${rec.notice}`);
+          }
+        } else if (lastResult.exit_code === 0) {
+          this.progressController.recordSuccess('tool.' + action.type);
+          const cmd = 'command' in action && typeof action.command === 'string' ? action.command : undefined;
+          const classification = classifyShellCapability(action.type, cmd);
+          if (classification.isRecursiveEnum) {
+            this.progressController.recordSuccess('shell.recursive_enumeration');
+          }
+        }
+      }
+
       const detail = lastResult
         ? lastResult.exit_code === 0
           ? formatResultDetail(action, lastResult)
@@ -4171,6 +4283,8 @@ export class ChatEngine {
       metadata.prompt_tokens !== null &&
       metadata.completion_tokens !== null
     ) {
+      this.lastRequestPromptTokens = metadata.prompt_tokens;
+      this.lastRequestModelId = metadata.provider_model_id;
       globalCostTracker.trackUsage(
         metadata.provider_model_id,
         metadata.prompt_tokens,
@@ -4903,6 +5017,15 @@ export class ChatEngine {
       ...(kernelDecision?.finalOutcome === 'PLAN_COMPLETE' ? { planOutcome: 'PLAN_COMPLETE' as const } : {}),
       answer: answer ?? '',
       usage: globalCostTracker.getSessionSummary(),
+      lastRequestPromptTokens: this.lastRequestPromptTokens,
+      activeContext:
+        this.lastRequestPromptTokens !== null && this.lastRequestPromptTokens !== undefined
+          ? {
+              tokens: this.lastRequestPromptTokens,
+              modelId: this.lastRequestModelId ?? this.options.model ?? 'default',
+              source: 'provider_prompt_tokens' as const,
+            }
+          : null,
       conversation: this.conversation,
       runDir: this.engineRunDir,
       verifierReceipt: this.lastVerifierReceipt,

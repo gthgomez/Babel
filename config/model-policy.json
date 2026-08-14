@@ -78,6 +78,10 @@
     "gemini": {
       "maps_to": "deepseek-v4-flash",
       "notes": "Compatibility alias."
+    },
+    "deepseek-v4": {
+      "maps_to": "deepseek-v4-flash",
+      "notes": "Compatibility alias for DeepSeek V4 family."
     }
   },
   "models": {
@@ -93,6 +97,8 @@
       "model_id": "deepseek-v4-pro",
       "tier": "standard",
       "enabled": true,
+      "context_window": 1000000,
+      "max_output_tokens": 384000,
       "selection_reason": "Compatibility alias for the documented reasoning model."
     },
     "deepseek-v4-flash": {
@@ -100,6 +106,8 @@
       "model_id": "deepseek-v4-flash",
       "tier": "cheap",
       "enabled": true,
+      "context_window": 1000000,
+      "max_output_tokens": 384000,
       "estimated_cost_per_1m_input": 0.14,
       "estimated_cost_per_1m_output": 0.28,
       "source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
@@ -112,6 +120,8 @@
       "model_id": "deepseek-v4-pro",
       "tier": "standard",
       "enabled": true,
+      "context_window": 1000000,
+      "max_output_tokens": 384000,
       "estimated_cost_per_1m_input": 0.435,
       "estimated_cost_per_1m_output": 0.87,
       "source_url": "https://api-docs.deepseek.com/quick_start/pricing/",

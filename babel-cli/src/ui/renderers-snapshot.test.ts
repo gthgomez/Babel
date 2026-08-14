@@ -106,9 +106,10 @@ test('renderCompactTokenBar with small and large token counts', () => {
 test('renderStatusBar basic with model, mode, project, and cost info', () => {
   const out = renderStatusBar({
     model: 'DeepSeek V4 Flash',
-    modelId: 'deepseek-v4',
+    modelId: 'deepseek-v4-flash',
     mode: 'default',
     project: 'babel',
+    activeContextTokens: 15_000,
     totalTokens: 15_000,
     totalCost: 0.1234,
     turnCount: 3,
@@ -121,6 +122,7 @@ test('renderStatusBar basic with model, mode, project, and cost info', () => {
 test('renderStatusBar without token bar (zero cost, no tokens, showTokenBar=false)', () => {
   const out = renderStatusBar({
     model: 'Claude Sonnet 4.6',
+    modelId: 'claude-sonnet-4-6',
     mode: 'chat',
     project: 'global',
     totalTokens: 0,
@@ -135,7 +137,7 @@ test('renderStatusBar without token bar (zero cost, no tokens, showTokenBar=fals
 test('renderStatusBar truncation at narrow widths 40 and 60', () => {
   const state = {
     model: 'deepseek-v4-flash',
-    modelId: 'deepseek-v4',
+    modelId: 'deepseek-v4-flash',
     mode: 'deep',
     project: 'my-very-long-project-name-indeed',
     totalTokens: 50_000,
@@ -162,6 +164,7 @@ test('renderStatusBar with failed status and background tasks', () => {
     mode: 'plan',
     project: 'big-project',
     totalTokens: 250_000,
+    activeContextTokens: 250_000,
     totalCost: 1.2345,
     turnCount: 7,
     status: 'failed',

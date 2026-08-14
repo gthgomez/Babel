@@ -25,7 +25,7 @@ describe('shipSecretScan (W3.1)', () => {
       '@@ -1,2 +1,3 @@',
       ' keep',
       '-old ghp_UNITTEST_REMOVED_ONLY_FAKE',
-      '+const t = "ghp_UNITTEST_ONLY_FAKE_TOKEN_XXXX";',
+      '+const t = "' + 'ghp_' + 'abcdefghijklmnopqrstuvwxyz123456";',
     ].join('\n');
     const findings = scanDiffForSecrets(diff);
     assert.equal(findings.length, 1);

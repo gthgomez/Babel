@@ -7,7 +7,7 @@ describe('resolveProjectPath', () => {
 
   test('joins relative paths to projectRoot', () => {
     const resolved = resolveProjectPath(root, 'django/conf/global_settings.py');
-    assert.match(resolved.replace(/\\/g, '/'), /Workspace\/proj\/django\/conf\/global_settings\.py$/i);
+    assert.match(resolved.replace(/\\/g, '/'), /\/tmp\/proj\/django\/conf\/global_settings\.py$/i);
   });
 
   test('preserves absolute Windows paths', () => {

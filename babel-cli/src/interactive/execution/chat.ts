@@ -17,6 +17,7 @@ import { resolveChatEngineLimits } from '../../config/chatEngineLimits.js';
 import {
   describeInteractiveCodingProfile,
   resolveChatTaskClass,
+  getChatTaskTune,
 } from '../../config/chatTaskClass.js';
 import { isSuccessfulDirectMutation } from '../../agent/mutationTools.js';
 import { hydrateResumedThreadToScreen } from '../../services/threadStore/index.js';
@@ -95,15 +96,26 @@ export async function executeChatTask(
   ctx.lastTargetRoot = target.targetRoot;
   ctx.lastWorkspaceRoot = target.workspaceRoot;
   ctx.state.lastRunTargetRoot = target.targetRoot;
+  ctx.activeContext = null;
+  ctx.lastTurnActiveContextTokens = null;
 
   const useConversational =
     process.stdout.isTTY && !ctx.verboseMode && !process.env['CI'] && !process.env['NO_COLOR'];
   const convRenderer = useConversational ? new ConversationalRenderer() : null;
 
-  // U1.2: surface active coding profile so operators see peer-CLI defaults
-  // without reading env folklore. Muted — informational, not noisy.
+  // U1.2: surface active coding profile when non-default/specialized or in verbose mode
   const activeProfile = resolveChatTaskClass({ taskText: task });
-  console.log(muted(`  coding profile: ${describeInteractiveCodingProfile(activeProfile)}`));
+  const isExplicitOrSpecialized =
+    ctx.verboseMode ||
+    process.env['BABEL_VERBOSE'] ||
+    process.env['BABEL_CHAT_TASK_CLASS'] ||
+    process.env['BABEL_CHAT_SWE_PROFILE'] ||
+    activeProfile === 'governance' ||
+    activeProfile === 'general_swe';
+
+  if (isExplicitOrSpecialized) {
+    console.log(muted(`  coding profile: ${describeInteractiveCodingProfile(activeProfile)}`));
+  }
 
   try {
     const appendFragments: string[] = [];
@@ -119,7 +131,10 @@ export async function executeChatTask(
     const engineFactory = deps?.engineFactory ?? ((options) => new ChatEngine(options));
 
     if (!ctx.chatEngine) {
-      const limits = resolveChatEngineLimits();
+      const limits = resolveChatEngineLimits({}, ctx.state.model, {
+        taskClass: activeProfile,
+        taskText: task,
+      });
       const operatorMode = normalizeChatOperatorMode(ctx.state.operatorMode) ?? 'default';
       if (operatorModeImpliesDryRun(operatorMode)) {
         process.env['BABEL_DRY_RUN'] = '1';
@@ -176,6 +191,22 @@ export async function executeChatTask(
       }
     }
 
+    // Record active context tokens strictly from latest model request prompt_tokens (never cumulative session tokens)
+    if (result.activeContext) {
+      ctx.activeContext = result.activeContext;
+      ctx.lastTurnActiveContextTokens = result.activeContext.tokens;
+    } else if (result.lastRequestPromptTokens != null && result.lastRequestPromptTokens > 0) {
+      ctx.activeContext = {
+        tokens: result.lastRequestPromptTokens,
+        modelId: ctx.state.resolvedModelId ?? ctx.state.model ?? 'default',
+        source: 'provider_prompt_tokens',
+      };
+      ctx.lastTurnActiveContextTokens = result.lastRequestPromptTokens;
+    } else {
+      ctx.activeContext = null;
+      ctx.lastTurnActiveContextTokens = null;
+    }
+
     // Collect changed files from the tool log for the summary display.
     const changedFiles = collectChangedFiles(result);
 
@@ -196,7 +227,14 @@ export async function executeChatTask(
       status: result.status,
       changedFiles,
       verification,
-      summary: (result.answer ?? '').slice(0, 240),
+      verificationPolicy: activeProfile ? getChatTaskTune(activeProfile).verificationPolicy : undefined,
+      verificationApplicability:
+        changedFiles.length === 0 &&
+        !result.verifierReceipt &&
+        (activeProfile === 'quick_inspect' || activeProfile === 'investigate')
+          ? 'not_applicable'
+          : undefined,
+      summary: changedFiles.length > 0 ? `${changedFiles.length} file(s) modified` : undefined,
       costUsd: perRunCost,
       tokens: result.usage?.totalTokens,
       mutated: changedFiles.length > 0,

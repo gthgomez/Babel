@@ -46,6 +46,19 @@ describe('implementorPolicy', () => {
     assert.ok(r.message?.includes('investigate budget'));
   });
 
+  test('investigate tool budget fires with read-only synthesis guidance when isReadOnly is true', () => {
+    const r = evaluateInvestigateToolBudget({
+      toolCallCount: 4,
+      budget: 4,
+      hasAnyWrites: false,
+      phase: 'investigate',
+      isReadOnly: true,
+    });
+    assert.equal(r.fire, true);
+    assert.ok(r.message?.includes('read-only budget'));
+    assert.ok(!r.message?.includes('str_replace'));
+  });
+
   test('completion prefers patch refuses empty execute complete', () => {
     const r = evaluateCompletionPrefersPatch({
       executeIntent: true,

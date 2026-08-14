@@ -14,6 +14,7 @@ import type { ChatEngineLimits } from './chatEngineLimits.js';
 /** Supported chat task classes (product-facing). */
 export type ChatTaskClass =
   | 'default'
+  | 'quick_inspect'
   | 'quick_fix'
   | 'general_swe'
   | 'investigate'
@@ -21,6 +22,7 @@ export type ChatTaskClass =
 
 export const CHAT_TASK_CLASSES: readonly ChatTaskClass[] = [
   'default',
+  'quick_inspect',
   'quick_fix',
   'general_swe',
   'investigate',
@@ -153,6 +155,28 @@ const TUNES: Record<ChatTaskClass, ChatTaskTune> = {
     stallShadowMode: true,
     description: 'General interactive / execute work with balanced budgets.',
   },
+  quick_inspect: {
+    class: 'quick_inspect',
+    limits: {
+      maxWallMs: 10 * 1000, // 10s fast initial target
+      maxTurns: 12,
+      maxCostUsd: 0.15,
+      stallTurns: 4,
+    },
+    strictCritic: false,
+    forceMutateTurns: 99, // no mutation pressure
+    phaseGatedToolsDefault: true,
+    verificationPolicy: 'none',
+    readThrashToolBudget: 6, // bounded read budget
+    shellSoftBudget: 2,
+    investigateToolBudget: 4, // initial fast budget ~4 tool calls
+    investigateToolHardCap: 8,
+    maxFullReadsPerFile: 2,
+    zeroWriteHardStopTurns: 0,
+    restrictToolsOnPolicyFire: false,
+    stallShadowMode: false,
+    description: 'Lightweight read-only fact queries and directory/repo counts with bounded budgets.',
+  },
   quick_fix: {
     class: 'quick_fix',
     limits: {
@@ -254,6 +278,11 @@ const CLASS_ALIASES: Record<string, ChatTaskClass> = {
   general: 'default',
   chat: 'default',
   normal: 'default',
+  quick_inspect: 'quick_inspect',
+  inspect: 'quick_inspect',
+  fast_inspect: 'quick_inspect',
+  fast: 'quick_inspect',
+  read_only: 'quick_inspect',
   quick_fix: 'quick_fix',
   quick: 'quick_fix',
   small_fix: 'quick_fix',
@@ -284,13 +313,94 @@ export function getChatTaskTune(taskClass: ChatTaskClass): ChatTaskTune {
   return TUNES[taskClass];
 }
 
+export type TaskOperation = 'READ_ONLY' | 'MUTATING' | 'HYBRID';
+export type TaskComplexity = 'TRIVIAL' | 'BOUNDED' | 'OPEN_ENDED';
+
+export interface TaskShape {
+  operation: TaskOperation;
+  complexity: TaskComplexity;
+}
+
 /**
- * Classify task text into a general work shape.
- * Heuristics only — never cell IDs. Prefer explicit BABEL_CHAT_TASK_CLASS.
+ * Lightweight multi-dimensional task-shape analysis.
+ * Analyzes operation kind (READ_ONLY vs MUTATING vs HYBRID) and complexity (TRIVIAL vs BOUNDED vs OPEN_ENDED).
  */
-export function classifyChatTaskClassFromText(taskText: string): ChatTaskClass {
+export function analyzeTaskShape(taskText: string): TaskShape {
   const t = taskText.trim().toLowerCase();
-  if (!t) return 'default';
+  if (!t) {
+    return { operation: 'READ_ONLY', complexity: 'TRIVIAL' };
+  }
+
+  // 1. Explicit read-only constraints
+  const hasReadOnlyDirective =
+    /\b(without (any )?(editing|modifying|changing|writing)|read-?only|do not (edit|modify|change|write|delete)|dry-?run)\b/i.test(
+      t,
+    );
+
+  // 2. Explicit mutation keywords across the entire prompt (multi-intent safety)
+  const hasMutation =
+    /\b(delete|remove|rm|drop|erase|unlink|clean\s*up\s+and\s+delete|fix|implement|patch|repair|create|write|refactor|apply|modify|update|edit|add|change|replace|rename)\b/i.test(
+      t,
+    );
+
+  // 3. Exploratory keywords (find, scan, list, check)
+  const hasExploratory =
+    /\b(find|search|list|check|inspect|discover|locate|scan|show|inventory)\b/i.test(t);
+
+  let operation: TaskOperation;
+  if (hasReadOnlyDirective) {
+    operation = 'READ_ONLY';
+  } else if (hasMutation && hasExploratory) {
+    operation = 'HYBRID';
+  } else if (hasMutation) {
+    operation = 'MUTATING';
+  } else {
+    operation = 'READ_ONLY';
+  }
+
+  // 4. Complexity determination
+  // Deep/open-ended signals (architecture, root cause, trace, multi-file, race condition)
+  const isMultiFileSWE =
+    /\b(multi[- ]?file|across (the )?(codebase|repo|modules)|failing (test )?suite|regression|deadlock|race condition|production bug|segfault|entire (module|package|feature)|large refactor|migrate)\b/i.test(
+      t,
+    );
+  const isDeepAnalysis =
+    /\b(architecture|root\s*cause|deep\s*dive|risk|vulnerabilit|trace|data\s*flow|design\s*pattern|compare\s+and\s+contrast|walk\s*me\s*through\s+the\s+entire|in\s*depth)\b/i.test(
+      t,
+    ) || /^(explain|describe|analyze)\b/i.test(t);
+
+  const isOpenEnded = isMultiFileSWE || isDeepAnalysis;
+
+  // Trivial signals: quick queries like how many, count, list, is there, where is, what version, simple inventory (for read-only)
+  // or typo / single-line / rename only (for mutating)
+  const isTrivialFact =
+    operation === 'READ_ONLY' &&
+    /\b(how\s*many|count|inventory|is\s*there|which\s*folder|what\s*version|where\s*is|status\s*of|what\s*is|who\s*is|trivial)\b/i.test(
+      t,
+    );
+  const isTrivialMutation =
+    (operation === 'MUTATING' || operation === 'HYBRID') &&
+    /\b(typo|one[- ]liner|single (file|function|line)|rename only|just (change|fix|update) .{0,40}\b(line|function|variable))\b/i.test(
+      t,
+    );
+
+  let complexity: TaskComplexity;
+  if (isOpenEnded) {
+    complexity = 'OPEN_ENDED';
+  } else if (isTrivialFact || isTrivialMutation) {
+    complexity = 'TRIVIAL';
+  } else {
+    complexity = 'BOUNDED';
+  }
+
+  return { operation, complexity };
+}
+
+/**
+ * Map task shape into product task class.
+ */
+export function mapTaskShapeToClass(shape: TaskShape, taskText: string): ChatTaskClass {
+  const t = taskText.trim().toLowerCase();
 
   // Governance / untrusted input (general patterns, not GOV-D*)
   if (
@@ -302,43 +412,38 @@ export function classifyChatTaskClassFromText(taskText: string): ChatTaskClass {
     return 'governance';
   }
 
-  // Investigate / explain (no-edit or pure Q&A)
-  if (
-    /\b(without (any )?(editing|modifying|changing)|read-?only|do not (edit|modify|change|write))\b/.test(
-      t,
-    ) ||
-    /^(what|why|how|explain|describe|summarize|compare|review|analyze)\b/.test(t) ||
-    /\b(what does|how does|tell me about|walk me through)\b/.test(t)
-  ) {
-    // But "fix X and explain" stays execute path → not investigate-only
-    if (!/\b(fix|implement|patch|repair|create|write|refactor|apply)\b/.test(t)) {
-      return 'investigate';
-    }
-  }
-
   // Multi-file / hard SWE signals (general language — not swebench).
-  // Avoid treating a single "failing test" as general_swe (that is often a quick fix).
-  if (
-    /\b(multi[- ]?file|across (the )?(codebase|repo|modules)|root cause|failing tests\b|failing test suite|failing suite|reproduce|regression)\b/.test(
+  const isMultiFileSWE =
+    /\b(multi[- ]?file|across (the )?(codebase|repo|modules)|failing (test )?suite|regression|deadlock|race condition|production bug|segfault|entire (module|package|feature)|large refactor|migrate)\b/i.test(
       t,
-    ) ||
-    /\b(stack ?trace|segfault|race condition|deadlock|production bug)\b/.test(t) ||
-    /\b(entire (module|package|feature)|large refactor|migrate)\b/.test(t)
-  ) {
+    );
+  if (isMultiFileSWE) {
     return 'general_swe';
   }
 
-  // Quick localized fix
-  if (
-    /\b(typo|one[- ]liner|single (file|function|line)|rename only|trivial)\b/.test(t) ||
-    /\b(just (change|fix|update) .{0,40}\b(line|function|variable))\b/.test(t)
-  ) {
+  if (shape.operation === 'READ_ONLY') {
+    if (shape.complexity === 'TRIVIAL') {
+      return 'quick_inspect';
+    }
+    return 'investigate';
+  }
+
+  // MUTATING or HYBRID
+  if (shape.complexity === 'TRIVIAL') {
     return 'quick_fix';
   }
 
-  // Default execute-ish tasks ("fix the bug") stay balanced default —
-  // not all fixes need 20-minute SWE budgets.
+  // Default execute-ish tasks ("fix the bug", "clean up and delete unused folders") stay balanced default
   return 'default';
+}
+
+/**
+ * Classify task text into a general work shape.
+ * Multi-dimensional analysis: checks mutation intent, scope, and complexity.
+ */
+export function classifyChatTaskClassFromText(taskText: string): ChatTaskClass {
+  const shape = analyzeTaskShape(taskText);
+  return mapTaskShapeToClass(shape, taskText);
 }
 
 export function resolveChatTaskClass(opts?: {
