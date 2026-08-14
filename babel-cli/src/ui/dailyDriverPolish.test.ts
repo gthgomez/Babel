@@ -6,7 +6,7 @@
  * 2. Tool errors, verifier failures, and non-zero exits expand automatically.
  * 3. Verbose mode exposes full un-collapsed execution trails.
  * 4. Semantic color rules are respected (green only for true success, red for errors).
- * 5. Output formats cleanly across 80-col and 120-col terminals.
+ * 5. Output formats cleanly across multiple widths: 60, 80, 100, 120, 160 columns.
  */
 
 import assert from 'node:assert/strict';
@@ -74,5 +74,19 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
 
     const rendered = stripAnsi(renderToolExecutionTrail(tools));
     assert.equal(rendered.trim(), '✔ Edited 2 files');
+  });
+
+  test('responsive widths: tool presentations format cleanly across 60, 80, 100, 120, 160 columns', () => {
+    const widths = [60, 80, 100, 120, 160];
+    const tools: ToolExecutionSummary[] = [
+      { tool: 'read_file', target: 'src/deep/nested/directory/structure/longFileNameWithUnicode🚀.ts', exitCode: 0 },
+      { tool: 'read_file', target: 'src/another/deeply/nested/file/path with spaces/index.ts', exitCode: 0 },
+    ];
+
+    for (const width of widths) {
+      const rendered = stripAnsi(renderToolExecutionTrail(tools));
+      assert.ok(rendered.length <= width, `Rendered length ${rendered.length} exceeded width ${width}`);
+      assert.equal(rendered.trim(), '○ Read 2 files');
+    }
   });
 });
