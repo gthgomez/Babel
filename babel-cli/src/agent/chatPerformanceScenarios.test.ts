@@ -2,37 +2,41 @@
  * Chat Performance & Policy Tuning Regression Certification.
  *
  * Validates:
- * 1. Fine-grained per-turn timing breakdown via ChatTurnTelemetryCollector.
- * 2. Non-provider Babel orchestration overhead stays strictly bounded (< 50ms).
+ * 1. Fine-grained per-turn timing breakdown via ChatTurnTelemetryCollector with monotonic clock.
+ * 2. Non-provider Babel orchestration overhead accounting without clamping false zeroes.
  * 3. TTFT detection occurs on first token stream chunk.
- * 4. Zero duplicate / repeated tool calls under healthy execution.
+ * 4. Duplicate / repeated tool calls detection.
  * 5. Task-tune exploration budgets and policy fuses fire predictably.
  */
 
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { ChatTurnTelemetryCollector } from './chatTurnTelemetry.js';
-import { getChatTaskTune, classifyChatTaskClassFromText } from '../config/chatTaskClass.js';
+import { getChatTaskTune } from '../config/chatTaskClass.js';
 
 describe('PR-B: Chat Performance & Telemetry Certification', () => {
-  test('turn telemetry captures complete timing breakdown and transitions', async () => {
-    const collector = new ChatTurnTelemetryCollector();
+  test('turn telemetry captures complete timing breakdown and transitions with deterministic clock', () => {
+    let currentTime = 1000.0;
+    const fakeClock = () => currentTime;
+
+    const collector = new ChatTurnTelemetryCollector(1000.0, fakeClock);
     collector.markStarted();
 
-    // Simulate provider dispatch + TTFT
-    await new Promise((r) => setTimeout(r, 15));
+    // Advance 25ms to first token
+    currentTime = 1025.0;
     collector.markFirstToken();
 
-    // Simulate provider stream span
-    await new Promise((r) => setTimeout(r, 20));
-    collector.recordProviderSpan(35);
+    // Provider duration: 50ms
+    collector.recordProviderSpan(50.0);
 
-    // Simulate tool execution span
-    await new Promise((r) => setTimeout(r, 10));
-    collector.recordToolSpan('read_file', 'src/math.ts', 10, true);
+    // Tool execution: 20ms
+    collector.recordToolSpan('read_file', 'src/math.ts', 20.0, true);
 
-    // Simulate verifier span
-    collector.recordVerificationSpan(15);
+    // Verifier duration: 15ms
+    collector.recordVerificationSpan(15.0);
+
+    // Total elapsed: 100ms
+    currentTime = 1100.0;
 
     const record = collector.finalize({
       turnId: 'perf-turn-001',
@@ -51,13 +55,14 @@ describe('PR-B: Chat Performance & Telemetry Certification', () => {
     assert.equal(record.counts.repeatedToolCalls, 0);
 
     // Timing assertions
-    assert.ok(record.timing.ttftMs !== null && record.timing.ttftMs >= 10, 'Expected valid TTFT');
-    assert.equal(record.timing.providerDurationMs, 35);
-    assert.equal(record.timing.toolDurationMs, 10);
-    assert.equal(record.timing.verificationDurationMs, 15);
-    assert.ok(record.timing.totalWallTimeMs >= 40, 'Total wall time should cover elapsed work');
-    // Non-provider Babel orchestration overhead is strictly bounded
-    assert.ok(record.timing.orchestrationOverheadMs < 50, `Orchestration overhead ${record.timing.orchestrationOverheadMs}ms exceeds 50ms threshold`);
+    assert.equal(record.timing.ttftMs, 25.0);
+    assert.equal(record.timing.providerDurationMs, 50.0);
+    assert.equal(record.timing.toolDurationMs, 20.0);
+    assert.equal(record.timing.verificationDurationMs, 15.0);
+    assert.equal(record.timing.totalWallTimeMs, 100.0);
+    // Productive time = 50 + 20 + 15 = 85. Orchestration overhead = 100 - 85 = 15ms.
+    assert.equal(record.timing.orchestrationOverheadMs, 15.0);
+    assert.ok(record.timing.orchestrationOverheadMs < 50.0);
   });
 
   test('telemetry detects repeated tool calls and tracks failed calls', () => {

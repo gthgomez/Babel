@@ -13,11 +13,11 @@
  */
 
 export interface ChatTurnTimingBreakdown {
-  /** Timestamp when user submitted the turn (ms since epoch) */
+  /** Timestamp when user submitted the turn (monotonic ms) */
   submittedAt: number;
-  /** Timestamp when turn started processing (ms) */
+  /** Timestamp when turn started processing (monotonic ms) */
   startedAt: number;
-  /** Timestamp of first visible token / stream event (ms) */
+  /** Timestamp of first visible token / stream event (monotonic ms) */
   firstTokenAt: number | null;
   /** Time to first token in ms (firstTokenAt - submittedAt) */
   ttftMs: number | null;
@@ -63,6 +63,7 @@ export interface ChatTurnTelemetryRecord {
 }
 
 export class ChatTurnTelemetryCollector {
+  private nowFn: () => number;
   private submittedAt: number;
   private startedAt: number = 0;
   private firstTokenAt: number | null = null;
@@ -79,17 +80,18 @@ export class ChatTurnTelemetryCollector {
   private policyInterventions: number = 0;
   private pastTools: string[] = [];
 
-  constructor(submittedAt?: number) {
-    this.submittedAt = submittedAt ?? Date.now();
+  constructor(submittedAt?: number, nowFn: () => number = () => performance.now()) {
+    this.nowFn = nowFn;
+    this.submittedAt = submittedAt ?? this.nowFn();
   }
 
   public markStarted(): void {
-    this.startedAt = Date.now();
+    this.startedAt = this.nowFn();
   }
 
   public markFirstToken(): void {
     if (this.firstTokenAt === null) {
-      this.firstTokenAt = Date.now();
+      this.firstTokenAt = this.nowFn();
     }
   }
 
@@ -137,7 +139,7 @@ export class ChatTurnTelemetryCollector {
     completionTokens?: number | null;
     cumulativeSessionTokens: number;
   }): ChatTurnTelemetryRecord {
-    const endedAt = Date.now();
+    const endedAt = this.nowFn();
     const totalWallTimeMs = Math.max(0, endedAt - (this.startedAt || this.submittedAt));
     const productiveTimeMs =
       this.providerDurationMs +
@@ -155,7 +157,7 @@ export class ChatTurnTelemetryCollector {
       taskClass: opts.taskClass,
       timing: {
         submittedAt: this.submittedAt,
-        startedAt: this.startedAt || this.submittedAt,
+        startedAt: this.startedAt,
         firstTokenAt: this.firstTokenAt,
         ttftMs,
         providerDurationMs: this.providerDurationMs,
