@@ -42,6 +42,7 @@ export interface ModelPolicyModelEntry {
   model_id: string;
   tier: ModelPolicyTier;
   context_window?: number;
+  max_output_tokens?: number;
   estimated_cost_per_1m_input?: number;
   estimated_cost_per_1m_output?: number;
   source_url?: string;
@@ -89,6 +90,7 @@ export interface ResolvedModelPolicyEntry {
   providerModelId: string;
   tier: ModelPolicyTier;
   contextWindow?: number;
+  maxOutputTokens?: number;
   expensive: boolean;
   enabled: boolean;
   experimental: boolean;
@@ -102,6 +104,18 @@ export interface ResolvedModelPolicyEntry {
   contextLimit?: number;
   nativeToolUse?: boolean;
   capabilities?: string[];
+}
+
+export interface NormalizedModelCapabilities {
+  backendKey: string;
+  provider: string;
+  modelId: string;
+  contextWindow: number;
+  maxOutputTokens: number;
+  nativeToolUse: boolean;
+  capabilities: string[];
+  estimatedCostPer1MInput?: number;
+  estimatedCostPer1MOutput?: number;
 }
 
 export interface ModelMetadataFreshnessResult {
@@ -152,6 +166,8 @@ export interface ResolvedModelPolicy {
   waterfall: ResolvedModelPolicyEntry[];
   stagePolicies: ResolvedModelPolicyStageRoute[];
   experimentRecommendation?: ResolvedModelPolicyExperiment | null;
+  contextWindow?: number;
+  maxOutputTokens?: number;
   contextLimit?: number;
   nativeToolUse?: boolean;
   capabilities?: string[];
@@ -379,7 +395,12 @@ function getResolvedEntry(
     provider: entry.provider,
     providerModelId: entry.model_id,
     tier: entry.tier,
-    ...(entry.context_window !== undefined ? { contextWindow: entry.context_window } : {}),
+    ...(entry.context_window !== undefined
+      ? { contextWindow: entry.context_window }
+      : entry.context_limit !== undefined
+        ? { contextWindow: entry.context_limit }
+        : {}),
+    ...(entry.max_output_tokens !== undefined ? { maxOutputTokens: entry.max_output_tokens } : {}),
     expensive: entry.expensive === true,
     enabled: entry.enabled !== false,
     experimental: entry.experimental === true,
@@ -677,6 +698,21 @@ export function resolveModelByKey(options: {
     waterfall: [resolvedBackend], // single-model selection has no waterfall other than itself
     stagePolicies,
     experimentRecommendation: null,
+    ...(resolvedBackend.contextWindow !== undefined
+      ? { contextWindow: resolvedBackend.contextWindow }
+      : {}),
+    ...(resolvedBackend.maxOutputTokens !== undefined
+      ? { maxOutputTokens: resolvedBackend.maxOutputTokens }
+      : {}),
+    ...(resolvedBackend.contextLimit !== undefined
+      ? { contextLimit: resolvedBackend.contextLimit }
+      : {}),
+    ...(resolvedBackend.nativeToolUse !== undefined
+      ? { nativeToolUse: resolvedBackend.nativeToolUse }
+      : {}),
+    ...(resolvedBackend.capabilities !== undefined
+      ? { capabilities: resolvedBackend.capabilities }
+      : {}),
   };
 }
 
@@ -839,6 +875,12 @@ export function resolveFamilyModelPolicy(options: {
     ...(getExperimentRecommendation(config, effectiveTier) !== null
       ? { experimentRecommendation: getExperimentRecommendation(config, effectiveTier) }
       : { experimentRecommendation: null }),
+    ...(resolvedBackend.contextWindow !== undefined
+      ? { contextWindow: resolvedBackend.contextWindow }
+      : {}),
+    ...(resolvedBackend.maxOutputTokens !== undefined
+      ? { maxOutputTokens: resolvedBackend.maxOutputTokens }
+      : {}),
     ...(resolvedBackend.contextLimit !== undefined
       ? { contextLimit: resolvedBackend.contextLimit }
       : {}),
@@ -854,9 +896,9 @@ export function resolveFamilyModelPolicy(options: {
 /**
  * Look up a model's context window size from the model policy config.
  *
- * Checks the `models.{modelId}.context_window` field in model-policy.json.
+ * Checks the `models.{modelId}.context_window` field in model-policy.json,
+ * resolving vendor aliases if needed.
  * Returns `undefined` when the model is not listed or has no context_window set.
- * This allows callers to fall back to a hardcoded map for models not in the policy.
  */
 export function getModelContextWindow(
   modelId: string,
@@ -864,9 +906,60 @@ export function getModelContextWindow(
 ): number | undefined {
   try {
     const { config } = loadModelPolicyConfig(babelRoot);
-    const entry = config.models?.[modelId];
-    return entry?.context_window;
+    const resolvedKey = config.vendor_aliases?.[modelId]?.maps_to ?? modelId;
+    const entry = config.models?.[resolvedKey] ?? config.models?.[modelId];
+    return entry?.context_window ?? entry?.context_limit;
   } catch {
     return undefined;
   }
 }
+
+/**
+ * Look up a model's max output tokens from the model policy config.
+ */
+export function getModelMaxOutputTokens(
+  modelId: string,
+  babelRoot?: string,
+): number | undefined {
+  try {
+    const { config } = loadModelPolicyConfig(babelRoot);
+    const resolvedKey = config.vendor_aliases?.[modelId]?.maps_to ?? modelId;
+    const entry = config.models?.[resolvedKey] ?? config.models?.[modelId];
+    return entry?.max_output_tokens;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve canonical NormalizedModelCapabilities for a model ID from model policy.
+ */
+export function getNormalizedModelCapabilities(
+  modelId: string,
+  babelRoot?: string,
+): NormalizedModelCapabilities | null {
+  try {
+    const { config } = loadModelPolicyConfig(babelRoot);
+    const resolvedKey = config.vendor_aliases?.[modelId]?.maps_to ?? modelId;
+    const entry = config.models?.[resolvedKey] ?? config.models?.[modelId];
+    if (!entry) return null;
+    return {
+      backendKey: resolvedKey,
+      provider: entry.provider,
+      modelId: entry.model_id,
+      contextWindow: entry.context_window ?? entry.context_limit ?? 1_000_000,
+      maxOutputTokens: entry.max_output_tokens ?? 8_192,
+      nativeToolUse: entry.native_tool_use ?? true,
+      capabilities: Array.isArray(entry.capabilities) ? [...entry.capabilities] : [],
+      ...(entry.estimated_cost_per_1m_input !== undefined
+        ? { estimatedCostPer1MInput: entry.estimated_cost_per_1m_input }
+        : {}),
+      ...(entry.estimated_cost_per_1m_output !== undefined
+        ? { estimatedCostPer1MOutput: entry.estimated_cost_per_1m_output }
+        : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+

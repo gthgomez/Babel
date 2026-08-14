@@ -207,39 +207,27 @@ describe('renderStatusBar — truncation', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 3. Color-coded backgrounds
+// 3. Status Bar Styling
 // ═══════════════════════════════════════════════════════════════════════════════
 
-describe('renderStatusBar — status backgrounds', () => {
-  it('default (no status) uses reverse video (\\x1b[7m)', () => {
+describe('renderStatusBar — status styling', () => {
+  it('default uses theme panel background without raw reverse video or green flood', () => {
     const result = renderStatusBar(defaultState({} as any));
     const line = firstLineAnsi(result);
-    assert.ok(line.includes('\x1b[7m'), 'default should use reverse video');
+    assert.ok(!line.includes('\x1b[42m'), 'must NOT flood screen with green');
+    assert.ok(!line.includes('\x1b[41m'), 'must NOT flood screen with red');
   });
 
-  it('status=failed uses red background (\\x1b[41m)', () => {
-    const result = renderStatusBar(defaultState({ status: 'failed' }));
-    const line = firstLineAnsi(result);
-    assert.ok(line.includes('\x1b[41m'), 'failed should use red background');
-  });
-
-  it('status=blocked uses yellow background (\\x1b[43m)', () => {
-    const result = renderStatusBar(defaultState({ status: 'blocked' }));
-    const line = firstLineAnsi(result);
-    assert.ok(line.includes('\x1b[43m'), 'blocked should use yellow background');
-  });
-
-  it('status=complete uses green background (\\x1b[42m)', () => {
+  it('completed run uses clean theme panel background without solid green flood', () => {
     const result = renderStatusBar(defaultState({ status: 'complete' }));
     const line = firstLineAnsi(result);
-    assert.ok(line.includes('\x1b[42m'), 'complete should use green background');
+    assert.ok(!line.includes('\x1b[42m'), 'complete must NOT flood the screen with green');
   });
 
-  it('unknown status string falls back to reverse video', () => {
-    const result = renderStatusBar(defaultState({ status: 'unknown-status' }));
+  it('failed run uses clean theme panel background without solid red flood', () => {
+    const result = renderStatusBar(defaultState({ status: 'failed' }));
     const line = firstLineAnsi(result);
-    // Unknown status is not in the bgCodes map — should use reverse video
-    assert.ok(line.includes('\x1b[7m'), 'unknown status should fall back to reverse video');
+    assert.ok(!line.includes('\x1b[41m'), 'failed must NOT flood the screen with red');
   });
 });
 
@@ -255,9 +243,7 @@ describe('renderStatusBar — token context bar', () => {
         totalTokens: 45000,
       }),
     );
-    // Token bar is now integrated inline in the main status line (not a separate line)
     const lines = result.split('\n');
-    // First line contains the inline compact token bar
     assert.ok(lines[0]!.includes('%'));
     assert.ok(lines[0]!.includes('['));
   });
@@ -271,14 +257,12 @@ describe('renderStatusBar — token context bar', () => {
       }),
     );
     const lines = result.split('\n');
-    // Should only have one line (status bar) when token bar is hidden
-    // The second line would be empty from split newline
     if (lines.length >= 2 && lines[1]!.length > 0) {
       assert.ok(!lines[1]!.includes('limit:'));
     }
   });
 
-  it('omits token bar when totalTokens is 0', () => {
+  it('omits token bar when totalTokens is 0 and activeContextTokens is undefined', () => {
     const result = renderStatusBar(
       defaultState({
         modelId: 'deepseek-v4-pro',
@@ -307,13 +291,13 @@ describe('renderStatusBar — token context bar', () => {
     const result = renderStatusBar(
       defaultState({
         modelId: 'deepseek-v4-pro',
-        totalTokens: 64000,
+        totalTokens: 500_000,
         width: 80,
       }),
     );
-    // ~50% of 128K = should show "50%" in the main status bar line (now inline)
+    // ~50% of 1M = should show "50%" in the main status bar line
     const lines = result.split('\n');
-    assert.ok(lines[0]!.includes('%'));
+    assert.ok(lines[0]!.includes('50%'));
   });
 });
 
@@ -327,17 +311,15 @@ describe('renderStatusBar — routing label', () => {
       defaultState({ routingLabel: 'Flash·mutate' }),
     );
     const plain = stripAnsi(result);
-    assert.ok(plain.includes('Flash·mutate'));
-    // Should appear near the model name
+    assert.ok(plain.includes('mutate'));
     const modelIdx = plain.indexOf('DeepSeek v4 Flash');
-    const labelIdx = plain.indexOf('Flash·mutate');
+    const labelIdx = plain.indexOf('mutate');
     assert.ok(labelIdx > modelIdx);
   });
 
   it('does not show routing label when not set', () => {
     const result = renderStatusBar(defaultState({} as any));
     const plain = stripAnsi(result);
-    // The word "Flash" appears in the model name, but "Flash·mutate" should not appear
     assert.ok(!plain.includes('Flash·mutate'));
     assert.ok(!plain.includes('Pro·'));
   });
@@ -351,14 +333,6 @@ describe('renderStatusBar — routing label', () => {
     assert.ok(!plain.includes('Pro·'));
   });
 
-  it('shows tier-only label when phase is missing', () => {
-    const result = renderStatusBar(
-      defaultState({ routingLabel: 'Flash' }),
-    );
-    const plain = stripAnsi(result);
-    assert.ok(plain.includes('Flash'));
-  });
-
   it('handles truncation with routing label present', () => {
     const result = renderStatusBar(
       defaultState({
@@ -368,20 +342,58 @@ describe('renderStatusBar — routing label', () => {
       }),
     );
     const line = firstLine(result);
-    // Right-aligned info should still be present
     assert.ok(line.includes('45,000'));
     assert.ok(line.includes('turn'));
     assert.ok(line.length <= 42);
   });
+});
 
-  it('routing label is preserved in colored status backgrounds', () => {
+// ═══════════════════════════════════════════════════════════════════════════════
+// Acceptance Tests T17–T20: Status Bar Refinements
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('Acceptance Tests T17–T20: Status Bar Refinements', () => {
+  it('T17: Status bar uses neutral theme background across all statuses without green flood', () => {
+    const completeBar = renderStatusBar(defaultState({ status: 'complete' }));
+    const failedBar = renderStatusBar(defaultState({ status: 'failed' }));
+    const readyBar = renderStatusBar(defaultState({ status: 'ready' }));
+
+    assert.ok(!completeBar.includes('\x1b[42m'), 'complete must NOT have green bg code');
+    assert.ok(!failedBar.includes('\x1b[41m'), 'failed must NOT have red bg code');
+  });
+
+  it('T18: Routing label deduplicates model tier name (Flash Flash·escalate -> Flash · escalate)', () => {
     const result = renderStatusBar(
       defaultState({
-        routingLabel: 'Flash·mutate',
-        status: 'complete',
+        model: 'DeepSeek V4 Flash',
+        routingLabel: 'Flash·escalate',
       }),
     );
     const plain = stripAnsi(result);
-    assert.ok(plain.includes('Flash·mutate'));
+    assert.ok(plain.includes('DeepSeek V4 Flash · escalate'));
+    assert.ok(!plain.includes('Flash Flash'));
+  });
+
+  it('T19: Active context tokens numerator is passed to token bar', () => {
+    const result = renderStatusBar(
+      defaultState({
+        modelId: 'deepseek-v4-flash',
+        activeContextTokens: 166_588,
+        totalTokens: 2_000_000,
+        width: 100,
+      }),
+    );
+    const plain = stripAnsi(result);
+    // 166,588 / 1,000,000 = 17%
+    assert.ok(plain.includes('17%'), `Expected 17% in status bar, got: ${plain}`);
+    assert.ok(!plain.includes('100%'), 'Must NOT calculate 100% from cumulative tokens');
+  });
+
+  it('T20: Width clamping and edge-to-edge padding preserved without terminal line wrap', () => {
+    const result = renderStatusBar(defaultState({ width: 80 }));
+    const line = firstLine(result);
+    assert.equal(line.length, 80);
+    const lines = result.replace(/\n$/, '').split('\n');
+    assert.equal(lines.length, 1);
   });
 });

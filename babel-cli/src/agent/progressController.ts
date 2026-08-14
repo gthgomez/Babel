@@ -23,12 +23,30 @@ export type ProgressInterventionLevel =
   | 'last_chance_repair'
   | 'terminal_blocked';
 
+export type CapabilityHealthState = 'AVAILABLE' | 'SUSPECT' | 'DEGRADED' | 'UNAVAILABLE';
+
+export interface CapabilityHealth {
+  capability: string;
+  state: CapabilityHealthState;
+  failureCount: number;
+  lastFailureReason?: string | undefined;
+  preferredAlternative?: string | undefined;
+}
+
+export interface FailureSignature {
+  tool: string;
+  commandSnippet?: string | undefined;
+  exitCode?: number | undefined;
+  emptyStdout?: boolean | undefined;
+}
+
 export interface ProgressControllerSnapshot {
   level: ProgressInterventionLevel;
   totalScore: number;
   strikes: number;
   noProgressStreak: number;
   lastSignals: ProgressSignal[];
+  capabilities?: Record<string, CapabilityHealth> | undefined;
 }
 
 export class ProgressController {
@@ -37,6 +55,7 @@ export class ProgressController {
   private strikes: number = 0;
   private noProgressStreak = 0;
   private lastSignals: ProgressSignal[] = [];
+  private capabilities: Map<string, CapabilityHealth> = new Map();
 
   public get InterventionLevel(): ProgressInterventionLevel {
     return this.level;
@@ -46,13 +65,90 @@ export class ProgressController {
     return this.totalScore;
   }
 
+  public getCapabilityState(capability: string): CapabilityHealthState {
+    return this.capabilities.get(capability)?.state ?? 'AVAILABLE';
+  }
+
+  public getDegradedCapabilities(): CapabilityHealth[] {
+    return Array.from(this.capabilities.values()).filter(
+      (c) => c.state === 'DEGRADED' || c.state === 'UNAVAILABLE',
+    );
+  }
+
+  public recordSuccess(capability: string): void {
+    const existing = this.capabilities.get(capability);
+    if (existing) {
+      existing.state = 'AVAILABLE';
+      existing.failureCount = 0;
+    }
+  }
+
+  public recordFailure(sig: FailureSignature): {
+    capability: string;
+    state: CapabilityHealthState;
+    notice?: string | undefined;
+  } {
+    let capability = 'tool.' + sig.tool;
+    let preferredAlternative: string | undefined;
+
+    const cmd = (sig.commandSnippet ?? '').toLowerCase();
+    const isRecursiveEnum =
+      cmd.includes('get-childitem') ||
+      cmd.includes('dir /s') ||
+      cmd.includes('findstr /s') ||
+      cmd.includes('ls -r') ||
+      cmd.includes('find .');
+
+    if (sig.tool === 'run_shell_command' && isRecursiveEnum) {
+      capability = 'shell.recursive_enumeration';
+      preferredAlternative = 'filesystem/list API';
+    } else if (sig.tool === 'run_shell_command') {
+      capability = 'shell.execution';
+    }
+
+    const current = this.capabilities.get(capability) ?? {
+      capability,
+      state: 'AVAILABLE' as CapabilityHealthState,
+      failureCount: 0,
+    };
+
+    current.failureCount += 1;
+    current.preferredAlternative = preferredAlternative;
+
+    let notice: string | undefined;
+    if (capability === 'shell.recursive_enumeration') {
+      if (current.failureCount >= 2) {
+        current.state = 'DEGRADED';
+        current.lastFailureReason = 'repeated exit failure / empty output for recursive enumeration';
+        notice = '! Shell enumeration unavailable; switched to filesystem tools';
+      } else {
+        current.state = 'SUSPECT';
+      }
+    } else {
+      if (current.failureCount >= 3) {
+        current.state = 'DEGRADED';
+        notice = `! Tool capability ${capability} degraded after repeated failures`;
+      } else {
+        current.state = 'SUSPECT';
+      }
+    }
+
+    this.capabilities.set(capability, current);
+    return { capability, state: current.state, notice };
+  }
+
   public snapshot(): ProgressControllerSnapshot {
+    const caps: Record<string, CapabilityHealth> = {};
+    for (const [k, v] of this.capabilities.entries()) {
+      caps[k] = { ...v };
+    }
     return {
       level: this.level,
       totalScore: this.totalScore,
       strikes: this.strikes,
       noProgressStreak: this.noProgressStreak,
       lastSignals: [...this.lastSignals],
+      capabilities: caps,
     };
   }
 
@@ -62,6 +158,12 @@ export class ProgressController {
     this.strikes = snapshot.strikes;
     this.noProgressStreak = snapshot.noProgressStreak;
     this.lastSignals = [...snapshot.lastSignals];
+    this.capabilities.clear();
+    if (snapshot.capabilities) {
+      for (const [k, v] of Object.entries(snapshot.capabilities)) {
+        this.capabilities.set(k, { ...v });
+      }
+    }
   }
 
   public scoreTurn(

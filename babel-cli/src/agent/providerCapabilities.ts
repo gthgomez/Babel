@@ -6,7 +6,7 @@
  */
 
 import type { ProviderCapabilities } from '../runners/base.js';
-import { getModelContextWindow } from '../modelPolicy.js';
+import { getModelContextWindow, getNormalizedModelCapabilities } from '../modelPolicy.js';
 
 export const DEFAULT_MAX_OUTPUT_TOKENS = 8_192;
 export const DEFAULT_TOOL_SCHEMA_RESERVE = 4_096;
@@ -103,16 +103,14 @@ export function resolveProviderCapabilities(
     supportsStreaming: true,
     thinkingWithTools: 'unknown' as const,
   };
-
-  // Canonical window from policy; fallback 128k for DeepSeek-class, 200k else.
-  const fromPolicy = getModelContextWindow(modelId);
-  const contextWindow =
-    fromPolicy ??
-    (provider === 'deepseek' ? 128_000 : 200_000);
+  // Canonical window from policy; fallback 1M for DeepSeek-class, 200k else.
+  const norm = getNormalizedModelCapabilities(modelId);
+  const contextWindow = norm?.contextWindow ?? getModelContextWindow(modelId) ?? (provider === 'deepseek' ? 1_000_000 : 200_000);
+  const maxOutputTokens = norm?.maxOutputTokens ?? defaults.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
 
   const base: ProviderCapabilities = {
     contextWindow,
-    maxOutputTokens: defaults.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+    maxOutputTokens,
     supportsThinking: defaults.supportsThinking ?? false,
     supportsToolChoice: defaults.supportsToolChoice ?? true,
     supportsParallelToolCalls: defaults.supportsParallelToolCalls ?? true,

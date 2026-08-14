@@ -17,8 +17,10 @@
 import {
   getChatTaskTune,
   resolveChatTaskClass,
+  analyzeTaskShape,
   type ChatTaskClass,
   type VerificationPolicy,
+  type TaskShape,
 } from '../config/chatTaskClass.js';
 
 export type TurnTaskIntent = 'execute' | 'explain';
@@ -44,6 +46,8 @@ export interface TurnRuntimeSnapshot extends TurnRuntimeCounters {
   taskText: string;
   taskIntent: TurnTaskIntent;
   taskClass: ChatTaskClass;
+  taskShape?: TaskShape;
+  escalationReason?: string;
   gatePolicy: VerificationPolicy | null;
   /** Last sticky intent retained for explicit continuation. */
   stickyIntent: TurnTaskIntent | null;
@@ -122,11 +126,14 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
       }
     : emptyTurnCounters();
 
+  const taskShape = analyzeTaskShape(input.userInput);
+
   return {
     submissionIndex,
     taskText: input.userInput,
     taskIntent,
     taskClass,
+    taskShape,
     gatePolicy,
     stickyIntent: taskIntent,
     continuedTask: continueTask,

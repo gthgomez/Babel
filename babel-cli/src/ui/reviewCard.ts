@@ -18,21 +18,24 @@ export type ReviewCardKind =
 
 export interface ReviewVerification {
   ran: boolean;
-  passed?: boolean;
-  command?: string;
-  exitCode?: number;
+  passed?: boolean | undefined;
+  command?: string | undefined;
+  exitCode?: number | undefined;
+  status?: 'passed' | 'failed' | 'blocked' | 'not_applicable' | 'not_run' | undefined;
 }
 
 export interface ReviewCardInput {
   outcome?: TerminalOutcome | string | null | undefined;
-  status?: string | null;
-  changedFiles?: string[];
-  verification?: ReviewVerification | null;
-  summary?: string;
-  costUsd?: number;
-  tokens?: number;
-  mutated?: boolean;
-  nextActions?: string[];
+  status?: string | null | undefined;
+  changedFiles?: string[] | undefined;
+  verification?: ReviewVerification | null | undefined;
+  verificationPolicy?: 'none' | 'required' | 'strict' | 'not_applicable' | undefined;
+  verificationApplicability?: 'applicable' | 'not_applicable' | 'optional' | undefined;
+  summary?: string | undefined;
+  costUsd?: number | undefined;
+  tokens?: number | undefined;
+  mutated?: boolean | undefined;
+  nextActions?: string[] | undefined;
 }
 
 export interface ReviewCard {
@@ -90,7 +93,10 @@ export function looksLikeVerifiedSuccess(kind: ReviewCardKind): boolean {
   return kind === 'VERIFIED_COMPLETE';
 }
 
-function paintTitle(kind: ReviewCardKind, label: string): string {
+function paintTitle(kind: ReviewCardKind, label: string, isNotApplicable = false): string {
+  if (isNotApplicable && (kind === 'COMPLETE_UNVERIFIED' || kind === 'VERIFIED_COMPLETE')) {
+    return success(`✓ ${label}`);
+  }
   switch (kind) {
     case 'VERIFIED_COMPLETE':
       return success(`✓ ${label}`);
@@ -121,24 +127,75 @@ const TITLES: Record<ReviewCardKind, string> = {
   AGENT_FAILURE: 'Agent failure',
 };
 
-const DEFAULT_NEXT: Record<ReviewCardKind, string[]> = {
-  VERIFIED_COMPLETE: ['[D] Diff', '[Enter] Continue'],
-  COMPLETE_UNVERIFIED: ['[D] Diff', '[R] Run verification', '[Enter] Continue'],
-  VERIFICATION_FAILED: ['[F] Fix', '[R] Rerun verification', '[D] Diff'],
-  BLOCKED: ['Review the blocked capability', '[Enter] Continue'],
-  CANCELLED: ['[D] Diff (if workspace changed)', '[Enter] Continue'],
-  BUDGET_EXHAUSTED: ['Follow-up to continue', '[Enter] Continue'],
-  INFRA_FAILURE: ['Retry', '[Enter] Continue'],
-  AGENT_FAILURE: ['Inspect diagnostics', '[Enter] Continue'],
-};
+export function getContextualNextActions(
+  kind: ReviewCardKind,
+  input: ReviewCardInput,
+): string[] {
+  if (input.nextActions) return input.nextActions;
+  const hasFiles = (input.changedFiles ?? []).length > 0 || input.mutated === true;
+  const hasVerifier = Boolean(
+    input.verification?.command ||
+      input.verification?.ran ||
+      input.verificationPolicy === 'required' ||
+      input.verificationPolicy === 'strict' ||
+      input.verification != null,
+  );
+
+  switch (kind) {
+    case 'VERIFIED_COMPLETE':
+      return hasFiles ? ['[D] Diff', '[Enter] Continue'] : ['[Enter] Continue'];
+    case 'COMPLETE_UNVERIFIED':
+      if (hasFiles && hasVerifier) {
+        return ['[D] Diff', '[R] Run verification', '[Enter] Continue'];
+      }
+      if (hasFiles) {
+        return ['[D] Diff', '[Enter] Continue'];
+      }
+      return ['[Enter] Continue'];
+    case 'VERIFICATION_FAILED':
+      return hasFiles
+        ? ['[F] Fix', '[R] Rerun verification', '[D] Diff']
+        : ['[F] Fix', '[R] Rerun verification', '[Enter] Continue'];
+    case 'BLOCKED':
+      return ['Review the blocked capability', '[Enter] Continue'];
+    case 'CANCELLED':
+      return hasFiles
+        ? ['[D] Diff (if workspace changed)', '[Enter] Continue']
+        : ['[Enter] Continue'];
+    case 'BUDGET_EXHAUSTED':
+      return ['Follow-up to continue', '[Enter] Continue'];
+    case 'INFRA_FAILURE':
+      return ['Retry', '[Enter] Continue'];
+    case 'AGENT_FAILURE':
+      return ['Inspect diagnostics', '[Enter] Continue'];
+  }
+}
 
 export function buildReviewCard(input: ReviewCardInput): ReviewCard {
   const kind = classifyReviewCard(input);
-  const title = TITLES[kind];
-  const lines: string[] = [];
-  lines.push(paintTitle(kind, title));
-
   const files = input.changedFiles ?? [];
+  const v = input.verification;
+  const isVerificationNotApplicable =
+    !v?.ran &&
+    v?.status !== 'blocked' &&
+    (input.verificationApplicability === 'not_applicable' ||
+      input.verificationPolicy === 'none' ||
+      input.verificationPolicy === 'not_applicable' ||
+      v?.status === 'not_applicable' ||
+      (input.verificationApplicability === undefined &&
+        input.verificationPolicy === undefined &&
+        files.length === 0 &&
+        !input.mutated));
+
+  const title =
+    isVerificationNotApplicable &&
+    (kind === 'COMPLETE_UNVERIFIED' || kind === 'VERIFIED_COMPLETE')
+      ? 'Complete'
+      : TITLES[kind];
+
+  const lines: string[] = [];
+  lines.push(paintTitle(kind, title, isVerificationNotApplicable));
+
   if (files.length > 0) {
     lines.push(dim('Changed'));
     for (const f of files.slice(0, 12)) {
@@ -154,19 +211,26 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
     lines.push(muted('  No file list — workspace unchanged or not recorded.'));
   }
 
-  lines.push(dim('Verified'));
-  const v = input.verification;
-  if (v?.ran && v.passed) {
-    lines.push(`  ${success('✓')} ${v.command ?? 'verifier'} (exit ${v.exitCode ?? 0})`);
-  } else if (v?.ran && v.passed === false) {
-    lines.push(`  ${error('✗')} ${v.command ?? 'verifier'} (exit ${v.exitCode ?? '?'})`);
-  } else {
-    lines.push(`  ${warning('○')} Not run — not verified`);
+  if (!isVerificationNotApplicable) {
+    lines.push(dim('Verified'));
+    if (v?.ran && v.passed) {
+      lines.push(`  ${success('✓')} ${v.command ?? 'verifier'} (exit ${v.exitCode ?? 0})`);
+    } else if (v?.ran && v.passed === false) {
+      if (v.status === 'blocked' || v.exitCode === 126 || v.exitCode === 127) {
+        lines.push(`  ${warning('⊘')} ${v.command ?? 'verifier'} (blocked - exit ${v.exitCode ?? '?'})`);
+      } else {
+        lines.push(`  ${error('✗')} ${v.command ?? 'verifier'} (exit ${v.exitCode ?? '?'})`);
+      }
+    } else if (v?.status === 'blocked') {
+      lines.push(`  ${warning('⊘')} Verification blocked`);
+    } else {
+      lines.push(`  ${warning('○')} Not run — not verified`);
+    }
   }
 
   if (input.summary?.trim()) {
     lines.push(dim('Summary'));
-    lines.push(`  ${input.summary.trim().slice(0, 240)}`);
+    lines.push(`  ${input.summary.trim()}`);
   }
 
   if (input.costUsd !== undefined || input.tokens !== undefined) {
@@ -176,14 +240,9 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
     lines.push(`${dim('Cost')}  ${bits.join('  ')}`);
   }
 
-  const actions = input.nextActions ?? DEFAULT_NEXT[kind];
-  if (kind === 'BLOCKED' && input.summary) {
-    lines.push(dim('Next'));
-    lines.push(`  ${actions.join('   ')}`);
-  } else {
-    lines.push(dim('Next'));
-    lines.push(`  ${actions.join('   ')}`);
-  }
+  const actions = getContextualNextActions(kind, input);
+  lines.push(dim('Next'));
+  lines.push(`  ${actions.join('   ')}`);
 
   return {
     kind,
@@ -193,15 +252,13 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
   };
 }
 
-/** Distinct kind tokens so tests can assert visual/semantic separation. */
+/** Distinct kind tokens so tests and telemetry can assert visual/semantic separation. */
 export function reviewCardKindToken(kind: ReviewCardKind): string {
   return `REVIEW_KIND:${kind}`;
 }
 
 export function presentChatReview(input: ReviewCardInput): ReviewCard {
-  const card = buildReviewCard(input);
-  const token = reviewCardKindToken(card.kind);
-  return { ...card, body: `${card.body}\n${dim(token)}` };
+  return buildReviewCard(input);
 }
 
 export const ALL_REVIEW_KINDS = KIND_ORDER;

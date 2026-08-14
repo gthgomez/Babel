@@ -113,24 +113,24 @@ test('resume reruns a saved verifier failure when command and project root are p
       artifact_type: 'babel_terminal_status_summary',
       status: 'SMALL_FIX_FAILED',
       reason_category: 'small_fix_failed',
-      failed_command: 'npm test',
+      failed_command: 'node check.js',
       changed_files: ['src/math.js'],
       failure_capsule_path: capsulePath,
-      condition_summary: 'npm test failed',
+      condition_summary: 'node check.js failed',
     });
     writeJson(join(runDir, '04_execution_report.json'), {
       status: 'EXECUTION_HALTED',
       small_fix: {
         target_file: 'src/math.js',
-        verifier_command: 'npm test',
+        verifier_command: 'node check.js',
         project_root: projectRoot,
       },
-      tool_call_log: [{ tool: 'test_run', target: 'npm test', exit_code: 1 }],
+      tool_call_log: [{ tool: 'test_run', target: 'node check.js', exit_code: 1 }],
     });
     writeJson(capsulePath, {
       schema_version: 1,
       failure_code: 'verifier_failed',
-      failed_command: 'npm test',
+      failed_command: 'node check.js',
       project_root: projectRoot,
       retryable: true,
     });
@@ -139,7 +139,7 @@ test('resume reruns a saved verifier failure when command and project root are p
 
     assert.equal(result.status, 'RESUME_COMPLETE');
     assert.equal(result.action, 'rerun_verifier');
-    assert.deepEqual(result.checks, ['npm test: passed']);
+    assert.deepEqual(result.checks, ['node check.js: passed']);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

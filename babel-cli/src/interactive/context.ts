@@ -73,6 +73,9 @@ export interface ReplContext {
    *  Set after each chat run from the last TurnRoutingReceipt. */
   lastRoutingLabel: string | null;
 
+  /** Active input context tokens from latest turn (for context window meter). */
+  lastTurnActiveContextTokens?: number | null;
+
   // ── Callbacks (methods on BabelRepl that extracted modules call back) ────
   printIdleHeader(): void;
   renderTurnStatusBar(): void;

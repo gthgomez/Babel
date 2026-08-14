@@ -42,6 +42,7 @@ export function renderTurnStatusBar(ctx: ReplContext): void {
     ...(ctx.state.resolvedModelId !== undefined ? { modelId: ctx.state.resolvedModelId } : {}),
     mode: describeVisibleMode(ctx.state.mode).toLowerCase(),
     project: ctx.state.project ?? 'global',
+    activeContextTokens: ctx.lastTurnActiveContextTokens ?? undefined,
     totalTokens: ctx.state.costTotals.totalTokens,
     totalCost: ctx.state.costTotals.totalCostUSD,
     turnCount: ctx.turnCounter,

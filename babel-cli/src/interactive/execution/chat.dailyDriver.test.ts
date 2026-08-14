@@ -216,12 +216,9 @@ describe('executeChatTask daily-driver outcomes', { concurrency: 1 }, () => {
       assert.equal(ctx.isRunning, false, 'session should remain alive after cancel');
       assert.equal(ctx.state.lastRunUserStatus, 'cancelled');
       assert.equal(ctx.lastAssistantStatus, 'CANCELLED');
-      assert.match(painted, /REVIEW_KIND:CANCELLED/);
       assert.match(painted, /■ Cancelled|Cancelled/);
-      assert.match(painted, /REVIEW_KIND:CANCELLED/);
-      assert.doesNotMatch(painted, /REVIEW_KIND:VERIFIED_COMPLETE/);
+      assert.doesNotMatch(painted, /REVIEW_KIND:/);
       assert.doesNotMatch(painted, /Verified complete/);
-      assert.doesNotMatch(painted, /REVIEW_KIND:AGENT_FAILURE/);
 
       ctx.chatEngine = createInstantEngine(
         result({ status: 'completed', outcome: 'UNVERIFIED_PATCH', answer: 'follow-up ok' }),
@@ -232,7 +229,8 @@ describe('executeChatTask daily-driver outcomes', { concurrency: 1 }, () => {
       });
       assert.equal(ctx.isRunning, false);
       assert.equal(ctx.lastAssistantAnswer, 'follow-up ok');
-      assert.match(logs.text(), /REVIEW_KIND:COMPLETE_UNVERIFIED/);
+      assert.match(logs.text(), /Complete/);
+      assert.doesNotMatch(logs.text(), /REVIEW_KIND:/);
     } finally {
       logs.restore();
       if (prevCi === undefined) delete process.env['CI'];
@@ -257,8 +255,9 @@ describe('executeChatTask daily-driver outcomes', { concurrency: 1 }, () => {
         gatherPreflight: noGitPreflight,
         engineFactory: () => ctx.chatEngine!,
       });
-      assert.match(logs.text(), /REVIEW_KIND:COMPLETE_UNVERIFIED/);
-      assert.doesNotMatch(logs.text(), /REVIEW_KIND:VERIFIED_COMPLETE/);
+      assert.match(logs.text(), /○ Complete — unverified/);
+      assert.doesNotMatch(logs.text(), /Verified complete/);
+      assert.doesNotMatch(logs.text(), /REVIEW_KIND:/);
 
       ctx.chatEngine = createInstantEngine(
         result({
@@ -273,9 +272,10 @@ describe('executeChatTask daily-driver outcomes', { concurrency: 1 }, () => {
         gatherPreflight: noGitPreflight,
         engineFactory: () => ctx.chatEngine!,
       });
-      assert.match(logs.text(), /REVIEW_KIND:VERIFICATION_FAILED/);
+      assert.match(logs.text(), /✗ Verification failed/);
       assert.match(logs.text(), /src\/foo\.ts/);
       assert.match(logs.text(), /npm test/);
+      assert.doesNotMatch(logs.text(), /REVIEW_KIND:/);
     } finally {
       logs.restore();
     }
@@ -286,10 +286,10 @@ describe('executeChatTask daily-driver outcomes', { concurrency: 1 }, () => {
     const target = makeTarget();
     const logs = captureLogs();
     try {
-      for (const [outcome, status, kind] of [
-        ['BLOCKED_POLICY', 'blocked', 'BLOCKED'],
-        ['BUDGET_EXHAUSTED', 'budget_exhausted', 'BUDGET_EXHAUSTED'],
-        ['INFRA_FAILURE', 'failed', 'INFRA_FAILURE'],
+      for (const [outcome, status, titlePattern] of [
+        ['BLOCKED_POLICY', 'blocked', /⊘ Blocked/],
+        ['BUDGET_EXHAUSTED', 'budget_exhausted', /▣ Budget exhausted/],
+        ['INFRA_FAILURE', 'failed', /✖ Infrastructure failure/],
       ] as const) {
         ctx.chatEngine = createInstantEngine(
           result({ status, outcome, answer: `${outcome} happened` }),
@@ -299,7 +299,8 @@ describe('executeChatTask daily-driver outcomes', { concurrency: 1 }, () => {
           engineFactory: () => ctx.chatEngine!,
         });
         assert.equal(ctx.isRunning, false);
-        assert.match(logs.text(), new RegExp(`REVIEW_KIND:${kind}`));
+        assert.match(logs.text(), titlePattern);
+        assert.doesNotMatch(logs.text(), /REVIEW_KIND:/);
       }
     } finally {
       logs.restore();

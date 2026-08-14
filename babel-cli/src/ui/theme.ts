@@ -288,6 +288,7 @@ const MODEL_DISPLAY_NAMES: Record<string, string> = {
   qwen3: 'Qwen 3',
   'qwen3-32b': 'Qwen 3 32B',
   // DeepSeek family
+  'deepseek-v4-flash': 'DeepSeek V4 Flash',
   'deepseek-v4-pro': 'DeepSeek V4 Pro',
   'deepseek-v4': 'DeepSeek V4',
   'deepseek-v3': 'DeepSeek V3',

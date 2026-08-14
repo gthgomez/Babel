@@ -17,6 +17,7 @@ import { resolveChatEngineLimits } from '../../config/chatEngineLimits.js';
 import {
   describeInteractiveCodingProfile,
   resolveChatTaskClass,
+  getChatTaskTune,
 } from '../../config/chatTaskClass.js';
 import { isSuccessfulDirectMutation } from '../../agent/mutationTools.js';
 import { hydrateResumedThreadToScreen } from '../../services/threadStore/index.js';
@@ -100,10 +101,19 @@ export async function executeChatTask(
     process.stdout.isTTY && !ctx.verboseMode && !process.env['CI'] && !process.env['NO_COLOR'];
   const convRenderer = useConversational ? new ConversationalRenderer() : null;
 
-  // U1.2: surface active coding profile so operators see peer-CLI defaults
-  // without reading env folklore. Muted — informational, not noisy.
+  // U1.2: surface active coding profile when non-default/specialized or in verbose mode
   const activeProfile = resolveChatTaskClass({ taskText: task });
-  console.log(muted(`  coding profile: ${describeInteractiveCodingProfile(activeProfile)}`));
+  const isExplicitOrSpecialized =
+    ctx.verboseMode ||
+    process.env['BABEL_VERBOSE'] ||
+    process.env['BABEL_CHAT_TASK_CLASS'] ||
+    process.env['BABEL_CHAT_SWE_PROFILE'] ||
+    activeProfile === 'governance' ||
+    activeProfile === 'general_swe';
+
+  if (isExplicitOrSpecialized) {
+    console.log(muted(`  coding profile: ${describeInteractiveCodingProfile(activeProfile)}`));
+  }
 
   try {
     const appendFragments: string[] = [];
@@ -176,6 +186,12 @@ export async function executeChatTask(
       }
     }
 
+    // Record active context tokens from turn usage for the status bar context meter
+    const turnInputTokens = result.usage?.totalInputTokens;
+    if (turnInputTokens !== undefined && turnInputTokens > 0) {
+      ctx.lastTurnActiveContextTokens = turnInputTokens;
+    }
+
     // Collect changed files from the tool log for the summary display.
     const changedFiles = collectChangedFiles(result);
 
@@ -196,7 +212,14 @@ export async function executeChatTask(
       status: result.status,
       changedFiles,
       verification,
-      summary: (result.answer ?? '').slice(0, 240),
+      verificationPolicy: activeProfile ? getChatTaskTune(activeProfile).verificationPolicy : undefined,
+      verificationApplicability:
+        changedFiles.length === 0 &&
+        !result.verifierReceipt &&
+        (activeProfile === 'quick_inspect' || activeProfile === 'investigate')
+          ? 'not_applicable'
+          : undefined,
+      summary: changedFiles.length > 0 ? `${changedFiles.length} file(s) modified` : undefined,
       costUsd: perRunCost,
       tokens: result.usage?.totalTokens,
       mutated: changedFiles.length > 0,

@@ -20,7 +20,7 @@
  * @module tokenBar
  */
 
-import { muted, ghost, success, warning, error, info, bold } from './theme.js';
+import { muted, ghost, success, warning, error, info, bold, humanizeModelId } from './theme.js';
 import { getEffectiveTerminalWidth } from './theme.js';
 import { type TokenUsageTracker, renderTokenSparkline } from './tokenHistory.js';
 import { getModelContextWindow } from '../modelPolicy.js';
@@ -35,12 +35,12 @@ export interface ContextLimit {
 }
 
 /**
- * Known context window limits.
- * Keep in sync with model pricing registry and provider docs.
- * When a model isn't listed, defaults to 200K (Claude-family standard).
+ * Known context window limits for external/non-policy models.
+ * Policy-managed models (e.g. DeepSeek, Qwen) are loaded canonically from
+ * model-policy.json via getContextLimitFromPolicy.
  */
 export const CONTEXT_LIMITS: Record<string, ContextLimit> = {
-  // Claude family
+  // Claude family (external direct API)
   'claude-sonnet-4-6': { label: 'Sonnet 4.6', tokens: 200_000 },
   'claude-sonnet-4-5': { label: 'Sonnet 4.5', tokens: 200_000 },
   'claude-opus-4-8': { label: 'Opus 4.8', tokens: 200_000 },
@@ -49,15 +49,8 @@ export const CONTEXT_LIMITS: Record<string, ContextLimit> = {
   'claude-haiku-4-5': { label: 'Haiku 4.5', tokens: 200_000 },
   'claude-fable-5': { label: 'Fable 5', tokens: 200_000 },
 
-  // DeepSeek family — policy context_window is canonical (128k for V4).
-  // Hard-coded values match policy; do not invent a conflicting 1M limit (P1-E).
-  'deepseek-v4-pro': { label: 'DeepSeek V4 Pro', tokens: 128_000 },
-  'deepseek-v4-flash': { label: 'DeepSeek V4 Flash', tokens: 128_000 },
-  'deepseek-v4': { label: 'DeepSeek V4', tokens: 128_000 },
-  'deepseek-v3': { label: 'DeepSeek V3', tokens: 128_000 },
-
   // Fallback
-  __default__: { label: 'Model', tokens: 200_000 },
+  __default__: { label: 'Model', tokens: 0 },
 };
 
 // ── Bar character sets ──────────────────────────────────────────────────────────
@@ -78,10 +71,14 @@ enum UtilizationTier {
 
 interface UtilizationInfo {
   tier: UtilizationTier;
-  percent: number;
+  percent: number | null;
+  unknown?: boolean;
 }
 
 function classifyUtilization(used: number, limit: number): UtilizationInfo {
+  if (!limit || limit <= 0 || !Number.isFinite(limit)) {
+    return { tier: UtilizationTier.Safe, percent: null, unknown: true };
+  }
   const percent = Math.min(100, Math.round((used / Math.max(1, limit)) * 100));
   if (percent >= 90) return { tier: UtilizationTier.Critical, percent };
   if (percent >= 75) return { tier: UtilizationTier.High, percent };
@@ -99,12 +96,14 @@ function classifyUtilization(used: number, limit: number): UtilizationInfo {
  * map for models not tracked in the policy (e.g. Claude family models used
  * directly via provider APIs).
  *
- * Falls through to a 200K default for completely unknown models.
+ * For unknown models with no registered context limit, returns 0 tokens so
+ * callers display `ctx ?` rather than guessing a fabricated percentage.
  */
 export function getContextLimit(modelId: string): ContextLimit {
   const policyLimit = getContextLimitFromPolicy(modelId);
   if (policyLimit) return policyLimit;
-  return CONTEXT_LIMITS[modelId] ?? CONTEXT_LIMITS['__default__']!;
+  if (CONTEXT_LIMITS[modelId]) return CONTEXT_LIMITS[modelId]!;
+  return { label: humanizeModelId(modelId), tokens: 0 };
 }
 
 /**
@@ -128,16 +127,6 @@ export function getContextLimitFromPolicy(modelId: string): ContextLimit | null 
 }
 
 /**
- * Convert a kebab-case model ID to a display label.
- */
-function humanizeModelId(modelId: string): string {
-  return modelId
-    .split('-')
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
-}
-
-/**
  * Render a full-width token utilization bar.
  *
  * @param usedTokens  Total tokens consumed so far
@@ -154,8 +143,12 @@ export function renderTokenBar(
 ): string {
   const effectiveWidth = width ?? Math.min(50, getEffectiveTerminalWidth(40, 120) - 4);
   const barChars = Math.max(6, effectiveWidth - 18); // Reserve space for labels
-  const { tier, percent } = classifyUtilization(usedTokens, contextLimit);
+  const { tier, percent, unknown } = classifyUtilization(usedTokens, contextLimit);
   const label = modelLabel ?? formatTokenCount(usedTokens);
+
+  if (unknown || percent === null) {
+    return `${label}  ${muted('ctx ?')}`;
+  }
 
   const bar = buildBar(usedTokens, contextLimit, barChars, tier);
 
@@ -186,14 +179,17 @@ export function renderTokenBar(
  * Render a compact token bar suitable for status bars and footers.
  * Designed to fit in ~28-36 characters.
  *
- * @returns ANSI-escaped string like "[████░░░░  22%]"
+ * @returns ANSI-escaped string like "[████░░░░  22%]" or "[ctx ?]"
  */
 export function renderCompactTokenBar(
   usedTokens: number,
   contextLimit: number,
   barChars: number = BAR_WIDTH_DEFAULT,
 ): string {
-  const { tier, percent } = classifyUtilization(usedTokens, contextLimit);
+  const { tier, percent, unknown } = classifyUtilization(usedTokens, contextLimit);
+  if (unknown || percent === null) {
+    return `[ctx ?]`;
+  }
   const bar = buildBar(usedTokens, contextLimit, barChars, tier);
   return `[${bar} ${percent.toString().padStart(3)}%]`;
 }
@@ -250,7 +246,8 @@ export function renderTokenBarWithHistory(
 
 /**
  * Get color function for a utilization tier.
- * Useful for components that want to color their own display.
+ * Neutral/muted for safe utilization, warning for moderate/high, error for critical.
+ * Green is reserved for pass/verification semantics only.
  */
 export function utilizationColorFn(tier: UtilizationTier): (text: string) => string {
   switch (tier) {
@@ -261,7 +258,7 @@ export function utilizationColorFn(tier: UtilizationTier): (text: string) => str
     case UtilizationTier.Moderate:
       return info;
     default:
-      return success;
+      return muted;
   }
 }
 

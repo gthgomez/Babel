@@ -391,3 +391,14 @@ test('DeepSeek live policy accepts Flash/Pro and rejects legacy providers', () =
   assert.throws(() => resolveModelByKey({ key: 'qwen3', babelRoot: root, liveOnly: true }), /LIVE_MODEL_POLICY/);
   assert.throws(() => resolveModelByKey({ key: 'deepinfra-model', babelRoot: root, liveOnly: true }), /LIVE_MODEL_POLICY/);
 });
+
+test('canonical model capabilities resolve DeepSeek V4 Flash and Pro 1M context / 384k output', () => {
+  const flashCaps = resolveModelByKey({ key: 'deepseek-v4-flash' });
+  assert.equal(flashCaps.contextWindow, 1_000_000);
+  assert.equal(flashCaps.maxOutputTokens, 384_000);
+
+  const proCaps = resolveModelByKey({ key: 'deepseek-v4-pro' });
+  assert.equal(proCaps.contextWindow, 1_000_000);
+  assert.equal(proCaps.maxOutputTokens, 384_000);
+});
+

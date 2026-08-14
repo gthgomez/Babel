@@ -15,7 +15,7 @@
   "assistant:numbered-list": "  Babel  1. Read the roadmap\n         2. Implement B3\n         3. Ship snapshots",
   "assistant:blockquote": "  Babel  │ Competitive foundations require snapshot contracts.",
   "assistant:link": "  Babel  Read the reference (../docs/TUI_COMPETITIVE_REFERENCE.md).",
-  "assistant:table": "  Babel  │ Phase │ Task        │\n         ├───────┼─────────────┤\n         │ B1    │ HistoryCell │\n         │ B3    │ Snapshots   │",
+  "assistant:table": "  Babel  Phase    │ Task\n         ─────────┼────────────\n         B1       │ HistoryCell\n         B3       │ Snapshots",
   "assistant:multi-paragraph": "  Babel  First paragraph.\n         \n         Second paragraph with more detail.",
   "assistant:empty": "  Babel  ",
   "assistant:narrow-w40": "  Babel  This answer should wrap\n         aggressively at forty columns.",
