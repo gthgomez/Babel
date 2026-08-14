@@ -1921,8 +1921,7 @@ export class ConversationalRenderer extends BaseRenderer {
     return id;
   }
 
-  /** Tool call completes — clear the indicator and show a brief completion. */
-  onToolCallComplete(id: number, detail?: string): void {
+  onToolCallComplete(id: number, detail?: string, error?: string, exitCode?: number): void {
     if (this.outputBroken) return;
     if (this.paused) return;
     if (this._state === 'done' || this._state === 'failed') return;
@@ -1958,11 +1957,23 @@ export class ConversationalRenderer extends BaseRenderer {
     this._historyTranscript.completeToolCall(id, detail);
     this._syncCellViewport();
     if (this.isTTY) {
-      const label = conversationalToolLabel(pending.tool, pending.target);
-      const detailStr = detail ? ` ${dim(`(${detail})`)}` : '';
-      // Carriage-return to replace the "…" with "✓" on the same conceptual line
-      safeStdoutWrite(`\r  ${success('✓')} ${label}${detailStr}\n`);
-      this._pushLinesToScrollback(`  ${success('✓')} ${label}${detailStr}`);
+      const summary: ToolExecutionSummary = {
+        tool: pending.tool,
+        target: pending.target,
+        exitCode: exitCode ?? (error ? 1 : 0),
+        ...(detail !== undefined ? { detail } : {}),
+        ...(error !== undefined ? { error } : {}),
+      };
+      const groups = groupToolExecutions([summary]);
+      const group = groups[0] ?? {
+        category: 'other' as const,
+        count: 1,
+        items: [summary],
+        hasErrors: Boolean(error || (exitCode !== undefined && exitCode !== 0)),
+      };
+      const formatted = formatToolGroupSummary(group, this.verboseMode);
+      safeStdoutWrite(`\r${formatted}\n`);
+      this._pushLinesToScrollback(formatted);
     } else {
       const detailStr = detail ? ` (${detail})` : '';
       const line = `[${formatElapsed(Date.now() - this.startTime)}] ${pending.tool} ${pending.target}${detailStr}`;

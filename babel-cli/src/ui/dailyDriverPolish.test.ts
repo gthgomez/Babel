@@ -121,14 +121,91 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
     }
   });
 
-  test('production integration: ConversationalRenderer completes tools with presentation formatting and verboseMode', async () => {
+  test('production integration: ConversationalRenderer completes tools with calm presentation formatting by default', async () => {
     const { ConversationalRenderer } = await import('./waterfall.js');
-    const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: true });
-    assert.equal(renderer.verboseMode, true);
+    const chunks: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
 
-    const callId = renderer.onToolCallStart('read_file', 'src/config.ts');
-    assert.ok(callId > 0);
-    renderer.onToolCallComplete(callId, 'read 120 bytes');
-    renderer.stop();
+    try {
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
+      renderer.start();
+
+      const callId1 = renderer.onToolCallStart('read_file', 'src/config.ts');
+      assert.ok(callId1 > 0);
+      renderer.onToolCallComplete(callId1, 'read 120 bytes');
+
+      const callId2 = renderer.onToolCallStart('write_file', 'src/output.ts');
+      assert.ok(callId2 > 0);
+      renderer.onToolCallComplete(callId2, 'wrote 50 lines');
+
+      renderer.stop();
+
+      const out = stripAnsi(chunks.join(''));
+      assert.ok(out.includes('Read 1 file'), `Expected 'Read 1 file' in output, got: ${out}`);
+      assert.ok(out.includes('Edited 1 file'), `Expected 'Edited 1 file' in output, got: ${out}`);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  });
+
+  test('production integration: ConversationalRenderer verboseMode expands tool calls with full details', async () => {
+    const { ConversationalRenderer } = await import('./waterfall.js');
+    const chunks: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: true });
+      assert.equal(renderer.verboseMode, true);
+      renderer.start();
+
+      const callId = renderer.onToolCallStart('read_file', 'src/config.ts');
+      assert.ok(callId > 0);
+      renderer.onToolCallComplete(callId, 'read 120 bytes');
+
+      renderer.stop();
+
+      const out = stripAnsi(chunks.join(''));
+      assert.ok(out.includes('src/config.ts'), `Expected 'src/config.ts' in verbose output, got: ${out}`);
+      assert.ok(out.includes('read_file'), `Expected 'read_file' in verbose output, got: ${out}`);
+      assert.ok(out.includes('ok'), `Expected 'ok' status in verbose output, got: ${out}`);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  });
+
+  test('production integration: ConversationalRenderer auto-expands errors even in default mode', async () => {
+    const { ConversationalRenderer } = await import('./waterfall.js');
+    const chunks: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
+      renderer.start();
+
+      const callId = renderer.onToolCallStart('run_command', 'npm test');
+      assert.ok(callId > 0);
+      renderer.onToolCallComplete(callId, undefined, 'Command failed with exit code 1', 1);
+
+      renderer.stop();
+
+      const out = stripAnsi(chunks.join(''));
+      assert.ok(out.includes('✖'), `Expected failure icon '✖' in output, got: ${out}`);
+      assert.ok(out.includes('npm test'), `Expected target 'npm test' in error output, got: ${out}`);
+      assert.ok(out.includes('failed (exit 1)'), `Expected 'failed (exit 1)' in error output, got: ${out}`);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
   });
 });

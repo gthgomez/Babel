@@ -350,9 +350,9 @@ test('ConversationalRenderer: tool call lifecycle with TTY visual output', () =>
   }
 
   const out = stripAnsi(writes.join(''));
-  // TTY format: "○ Running npm test" then "✓ Running npm test (exit 0)"
+  // TTY format: "○ Running npm test" then calm "○ Executed 1 command" (or verbose "exit 0")
   assert.match(out, /Running npm test/);
-  assert.match(out, /exit 0/);
+  assert.match(out, /Executed 1 command|exit 0/);
 });
 
 test('ConversationalRenderer: append-only TTY stream emits no cursor-up and keeps intro once', async () => {
