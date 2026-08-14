@@ -164,8 +164,38 @@ export function isStalled(state: StallState, threshold: number): boolean {
 export function escalateStallIntervention(
   state: StallState,
   previousInterventions: StallIntervention[],
+  isReadOnly?: boolean,
 ): StallIntervention {
   const escalationIndex = previousInterventions.length;
+  if (isReadOnly) {
+    switch (escalationIndex) {
+      case 0:
+        return {
+          level: 'nudge',
+          message:
+            'You appear to be stuck in a repetitive read loop. Stop re-reading files and synthesize your answer based on the evidence gathered so far, or state specifically what information is missing.',
+        };
+      case 1:
+        return {
+          level: 'restrict_tools',
+          message:
+            'You have been reading repeatedly without making progress. Stop re-reading files. Synthesize your final answer from the gathered facts or state what evidence is missing.',
+        };
+      case 2:
+        return {
+          level: 'force_status',
+          message:
+            'You must now synthesize your findings and emit your final answer, or declare what specific evidence is missing. Conclude your inspection now.',
+        };
+      default:
+        return {
+          level: 'kill',
+          message:
+            'Maximum stall interventions reached. This inspection session is being concluded.',
+        };
+    }
+  }
+
   switch (escalationIndex) {
     case 0:
       return {
@@ -201,11 +231,14 @@ export function escalateStallIntervention(
  * @param shadowMode When true and the intervention would be 'kill', downgrade
  *   to 'nudge' level with a shadow-mode note. The agent is never terminated
  *   by the stall detector.
+ * @param isReadOnly When true, uses read-only wording that avoids mutation pressure
+ *   or false BLOCKED declarations for lack of writes.
  */
 export function getStallInterventionMessage(
   state: StallState,
   threshold: number,
   shadowMode?: boolean,
+  isReadOnly?: boolean,
 ): StallIntervention | null {
   if (!isStalled(state, threshold)) {
     return null;
@@ -216,7 +249,7 @@ export function getStallInterventionMessage(
     level: levels[i] ?? 'kill',
     message: msg,
   }));
-  const intervention = escalateStallIntervention(state, previousInterventions);
+  const intervention = escalateStallIntervention(state, previousInterventions, isReadOnly);
 
   // Shadow mode: downgrade kill to nudge — the model keeps full tool access
   // and the would-be-kill is recorded via policyEventLog in the caller.

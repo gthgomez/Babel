@@ -335,7 +335,7 @@ describe('ChatEngine read-only inspection hard cap answer synthesis', () => {
     };
 
     let doneEvent: any = null;
-    for await (const event of engine.submitMessageStream('how many services exist in this project', 'ask' as any)) {
+    for await (const event of engine.submitMessageStream('how many services exist in this project', 'explain')) {
       if (event.type === 'done') {
         doneEvent = event;
       }
@@ -399,7 +399,7 @@ describe('ChatEngine read-only inspection hard cap answer synthesis', () => {
     };
 
     const events: any[] = [];
-    for await (const event of engine.submitMessageStream('how many services exist in this project', 'ask' as any)) {
+    for await (const event of engine.submitMessageStream('how many services exist in this project', 'explain')) {
       events.push(event);
     }
     const doneEvents = events.filter((e) => e.type === 'done');

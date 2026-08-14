@@ -124,7 +124,10 @@ export function formatPolicyPrecedenceTable(): string {
       source === 'explicit_deny' ||
       source === 'circuit_breaker' ||
       source === 'external_blocker' ||
-      source === 'progress_terminal'
+      source === 'env_blocked' ||
+      source === 'read_only_hard_cap' ||
+      source === 'progress_terminal' ||
+      source === 'investigate_hard_cap'
     ) {
       typical = 'terminal';
     } else if (source === 'progress_recover') {

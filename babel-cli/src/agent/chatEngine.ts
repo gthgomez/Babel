@@ -1273,11 +1273,14 @@ export class ChatEngine {
     if (!resolveStallInterventionsEnabled(this.taskClass)) {
       return null;
     }
+    const isReadOnly =
+      this.taskClass === 'quick_inspect' || this.taskClass === 'investigate';
     const stallShadow = resolveStallShadowMode(this.taskClass);
     const intervention = getStallInterventionMessage(
       this.stallState,
       this.limits.stallTurns,
       stallShadow,
+      isReadOnly,
     );
     if (!intervention) return null;
 
@@ -2084,7 +2087,10 @@ export class ChatEngine {
           recordPolicyEvent(this.policyEventLog, this._turnIndex, 'phase_change', `${this._lastPhase ?? 'start'}→${streamPhase}`);
         }
         this._lastPhase = streamPhase;
-        if (shouldNudge(this._lastPhase)) {
+        const isReadOnlyInspection =
+          resolvedIntent !== 'execute' &&
+          (this.taskClass === 'quick_inspect' || this.taskClass === 'investigate');
+        if (shouldNudge(this._lastPhase) && !isReadOnlyInspection) {
           const hintsStr = turnCallsStr
             .filter(
               (e) =>
@@ -2253,10 +2259,6 @@ export class ChatEngine {
           }
           return null;
         })();
-        const isReadOnlyInspection =
-          resolvedIntent !== 'execute' &&
-          (this.taskClass === 'quick_inspect' || this.taskClass === 'investigate');
-
         const arb = parityArbitrateCycle({
           rt: this.parity,
           isReadOnlyInspection,

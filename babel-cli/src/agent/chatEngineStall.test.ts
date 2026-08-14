@@ -314,6 +314,36 @@ describe('escalateStallIntervention', () => {
     assert.equal(intervention.level, 'kill');
     assert.ok(intervention.message.includes('terminated'));
   });
+
+  test('read-only stall nudge asks for synthesis/missing without mutation pressure or BLOCKED for lack of writes', () => {
+    const state = createStallDetector();
+    const nudge = escalateStallIntervention(state, [], true);
+    assert.equal(nudge.level, 'nudge');
+    assert.match(nudge.message, /synthesize/i);
+    assert.match(nudge.message, /missing/i);
+    assert.ok(!nudge.message.includes('writing files'));
+    assert.ok(!nudge.message.includes('write_file'));
+    assert.ok(!nudge.message.includes('str_replace'));
+    assert.ok(!nudge.message.includes('BLOCKED'));
+
+    const restrict = escalateStallIntervention(state, [{ level: 'nudge', message: 'prior' }], true);
+    assert.equal(restrict.level, 'restrict_tools');
+    assert.match(restrict.message, /synthesize/i);
+    assert.ok(!restrict.message.includes('writing'));
+    assert.ok(!restrict.message.includes('write_file'));
+    assert.ok(!restrict.message.includes('str_replace'));
+    assert.ok(!restrict.message.includes('BLOCKED'));
+
+    const force = escalateStallIntervention(state, [
+      { level: 'nudge', message: '1' },
+      { level: 'restrict_tools', message: '2' },
+    ], true);
+    assert.equal(force.level, 'force_status');
+    assert.match(force.message, /synthesize/i);
+    assert.ok(!force.message.includes('writing'));
+    assert.ok(!force.message.includes('write_file'));
+    assert.ok(!force.message.includes('str_replace'));
+  });
 });
 
 describe('getStallInterventionMessage', () => {

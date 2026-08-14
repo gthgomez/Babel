@@ -329,6 +329,10 @@ describe('Progress receipts', () => {
     assert.match(table, /Policy precedence/);
     assert.ok(POLICY_PRECEDENCE.includes('hard_ceiling'));
     assert.ok(POLICY_PRECEDENCE.includes('env_blocked'));
+    assert.ok(POLICY_PRECEDENCE.includes('read_only_hard_cap'));
+    assert.match(table, /\|\s*read_only_hard_cap\s*\|\s*terminal\s*\|/);
+    assert.match(table, /\|\s*investigate_hard_cap\s*\|\s*terminal\s*\|/);
+    assert.match(table, /\|\s*env_blocked\s*\|\s*terminal\s*\|/);
 
     const winner = arbitratePolicy([
       { source: 'force_mutate', action: 'nudge', message: 'mutate' },
