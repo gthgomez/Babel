@@ -10,7 +10,8 @@ import {
   type SessionEvent,
   type SessionEventLog,
 } from './sessionEvents.js'
-import { chatSessionDir } from '../cli/runsLayout.js'
+import { chatSessionDir, resolveBabelRunsDir } from '../cli/runsLayout.js'
+import { resolveInspectRunDir } from '../inspect/loaders.js'
 
 export type SessionRunValidatorStatus = 'PASS' | 'FAIL'
 
@@ -247,6 +248,40 @@ export function validateSessionEventLog(
         ),
       )
     }
+    const indexDrift = idSiblings.filter(
+      (event) =>
+        isToolLifecycle(event) &&
+        event.action_index !== undefined &&
+        first.action_index !== undefined &&
+        event.action_index !== first.action_index,
+    )
+    if (indexDrift.length > 0) {
+      findings.push(
+        finding(
+          'action_index_drift',
+          `tool_call_id ${first.tool_call_id} is reused with a different action_index`,
+          indexDrift[0],
+          idSiblings,
+        ),
+      )
+    }
+    const targetDrift = idSiblings.filter(
+      (event) =>
+        isToolLifecycle(event) &&
+        event.target_summary !== undefined &&
+        first.target_summary !== undefined &&
+        event.target_summary !== first.target_summary,
+    )
+    if (targetDrift.length > 0) {
+      findings.push(
+        finding(
+          'target_summary_drift',
+          `tool_call_id ${first.tool_call_id} is reused with a different target_summary`,
+          targetDrift[0],
+          idSiblings,
+        ),
+      )
+    }
   }
 
   return {
@@ -257,13 +292,13 @@ export function validateSessionEventLog(
     findings,
     metrics: {
       tool_count: toolCount,
-      tool_batch_count: log.events.filter((event) => event.kind === 'tool_proposed').length > 0
-        ? new Set(
-            log.events
-              .filter((event) => event.kind === 'tool_proposed')
-              .map((event) => event.ts.slice(0, 19)),
-          ).size
-        : 0,
+      tool_batch_count: new Set(
+        log.events.flatMap((event) =>
+          isToolLifecycle(event) && typeof event.batch_id === 'string' && event.batch_id.length > 0
+            ? [event.batch_id]
+            : [],
+        ),
+      ).size,
       open_tool_count: openToolCount,
       progress_interventions: progressInterventions,
       turn_ended_count: turnEnded,
@@ -271,16 +306,64 @@ export function validateSessionEventLog(
   }
 }
 
-export function resolveSessionRunDir(runIdOrDir: string): string {
+export function resolveSessionRunDir(
+  runIdOrDir: string,
+  options?: { project?: string },
+): string {
   if (existsSync(join(runIdOrDir, 'session-events.jsonl'))) return runIdOrDir
-  const asChat = chatSessionDir(runIdOrDir)
+  const requested = runIdOrDir.trim()
+  if (!requested || requested.toLowerCase() === 'latest') {
+    const latest = resolveInspectRunDir({
+      run: 'latest',
+      ...(options?.project ? { project: options.project } : {}),
+      babelRunsDir: resolveBabelRunsDir(),
+    }) as string
+    if (existsSync(join(latest, 'session-events.jsonl'))) return latest
+    return latest
+  }
+  const asChat = chatSessionDir(requested)
   if (existsSync(join(asChat, 'session-events.jsonl'))) return asChat
-  return runIdOrDir
+  try {
+    const inspected = resolveInspectRunDir({
+      run: requested,
+      ...(options?.project ? { project: options.project } : {}),
+      babelRunsDir: resolveBabelRunsDir(),
+    }) as string
+    if (existsSync(join(inspected, 'session-events.jsonl'))) return inspected
+    return inspected
+  } catch {
+    return requested
+  }
 }
 
 /** Validate a persisted chat-session or explicit run directory. */
-export function validateSessionRun(runIdOrDir: string): SessionRunValidatorResult {
-  const runDir = resolveSessionRunDir(runIdOrDir)
+export function validateSessionRun(
+  runIdOrDir: string,
+  options?: { project?: string },
+): SessionRunValidatorResult {
+  let runDir: string
+  try {
+    runDir = resolveSessionRunDir(runIdOrDir, options)
+  } catch (error) {
+    return {
+      status: 'FAIL',
+      run_dir: runIdOrDir,
+      event_count: 0,
+      findings: [
+        {
+          invariant: 'run_dir_resolved',
+          explanation: error instanceof Error ? error.message : String(error),
+        },
+      ],
+      metrics: {
+        tool_count: 0,
+        tool_batch_count: 0,
+        open_tool_count: 0,
+        progress_interventions: 0,
+        turn_ended_count: 0,
+      },
+    }
+  }
   const inspected = inspectSessionEventLogFromDir(runDir)
   if (inspected.kind === 'missing') {
     return {

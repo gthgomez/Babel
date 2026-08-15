@@ -28,6 +28,7 @@ export interface DurableToolCallProjection {
   id: string
   type: 'function'
   function: { name: string; arguments: string }
+  actionIndex: number
 }
 
 export interface DurableToolResultProjection {
@@ -121,6 +122,7 @@ export function projectDurableToolBatch(input: {
       id: toolCallId,
       type: 'function',
       function: { name: row.tool, arguments: JSON.stringify(argsObj) },
+      actionIndex,
     })
     const hashed = input.contentHashFor?.(row.tool, content)
     results.push({
@@ -136,6 +138,7 @@ export function projectDurableToolBatch(input: {
     })
   }
 
+  toolCalls.sort((left, right) => left.actionIndex - right.actionIndex)
   return {
     batchId,
     toolCalls,

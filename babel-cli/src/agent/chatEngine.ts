@@ -1163,6 +1163,8 @@ export class ChatEngine {
 
   /** Provider-native tool_use ids for the current stream tool batch (if any). */
   private _streamNativeToolCallIds: string[] = [];
+  /** Stable batch id for the in-flight tool cycle (propose → start → terminal). */
+  private _activeToolBatchId: string | null = null;
 
   /** Snapshot for Tier A observability helpers (keeps chatEngine thin). */
   private obsHandles(): ObservabilityHandles {
@@ -1590,6 +1592,7 @@ export class ChatEngine {
       this._turnIndex = turn;
       // Never leak native tool-call IDs from a prior turn/batch into a new cycle.
       this._streamNativeToolCallIds = [];
+      this._activeToolBatchId = null;
       // R9: Reset per-turn tamper flag
       this.tamperedThisTurn = false;
 
@@ -2010,6 +2013,7 @@ export class ChatEngine {
         // Capture toolCallLog start index BEFORE execution so the
         // per-turn slice is correct even as the log grows across turns.
         this._turnToolCallLogStart = this.toolCallLog.length;
+        this._activeToolBatchId = `batch_${turn}_${this._turnToolCallLogStart}`;
 
         // W2.2 settle: assign stable call ids, persist tool_proposed+tool_started
         // to session-events.jsonl BEFORE any side effects (kill/resume safety).
@@ -2030,6 +2034,9 @@ export class ChatEngine {
               id: settleCallIds[idx]!,
               name: chatActionToolName(action),
               argsDigest: operationFingerprint(chatActionToolName(action), action),
+              action_index: idx,
+              batch_id: this._activeToolBatchId!,
+              target_summary: chatActionTarget(action),
             })),
             this.engineRunDir,
           );
@@ -2299,7 +2306,7 @@ export class ChatEngine {
             ? { actions: turnResult.actions as Array<Record<string, unknown>> }
             : {}),
           turn,
-          batchId: `batch_${turn}_${this._turnToolCallLogStart}`,
+          batchId: this._activeToolBatchId ?? `batch_${turn}_${this._turnToolCallLogStart}`,
           ...(providerToolCallIds ? { providerToolCallIds } : {}),
           streamNativeToolCallIds: this._streamNativeToolCallIds,
           contentHashFor: (toolName, content) =>
@@ -2331,6 +2338,7 @@ export class ChatEngine {
         } catch (err) {
           const captured = captureSessionEventAppendFailure(err, this.engineRunDir);
           this._streamNativeToolCallIds = [];
+          this._activeToolBatchId = null;
           if (captured) {
             yield this.streamFailed(captured.operatorMessage);
             return;
@@ -2338,6 +2346,7 @@ export class ChatEngine {
           throw err;
         }
         this._streamNativeToolCallIds = [];
+        this._activeToolBatchId = null;
 
         // P0-E: zero-write shadow by default for coding classes (one-shot log);
         // enforce ablation is a real terminal via zeroWriteTerminalMessage.
@@ -3385,7 +3394,13 @@ export class ChatEngine {
   /** Persist tool_started immediately before the policy-gated executor performs the effect. */
   private persistToolStartedAtExecutorDispatch(action: ChatToolAction, meta: { index: number; idempotencyKey?: string }): void {
     const idempotencyKey = meta.idempotencyKey ?? this._streamNativeToolCallIds[meta.index] ?? `tool_call_${this._turnIndex}_${meta.index}`;
-    paritySettleToolStarted(this.parity, { id: idempotencyKey, name: chatActionToolName(action) }, this.engineRunDir);
+    paritySettleToolStarted(this.parity, {
+      id: idempotencyKey,
+      name: chatActionToolName(action),
+      action_index: meta.index,
+      ...(this._activeToolBatchId ? { batch_id: this._activeToolBatchId } : {}),
+      target_summary: chatActionTarget(action),
+    }, this.engineRunDir);
   }
 
   /** Block a fresh tool-call id from replaying an equivalent unknown external/non-idempotent effect. */

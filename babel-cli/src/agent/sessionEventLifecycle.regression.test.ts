@@ -21,6 +21,7 @@ import {
   type SessionEventLog,
 } from './sessionEvents.js'
 import { SessionEventLifecycleCausalityError } from './sessionEventDiagnostics.js'
+import type { SessionEvent } from './sessionEvents.js'
 import {
   formatSessionRunValidatorText,
   validateSessionEventLog,
@@ -46,6 +47,7 @@ function settleProjected(
   turnSlice: readonly DurableToolLogRow[],
   ids: readonly string[],
   mode: 'index' | 'position',
+  batchId?: string,
 ): void {
   const projected =
     mode === 'position'
@@ -58,6 +60,7 @@ function settleProjected(
           turnSlice,
           turn: 0,
           providerToolCallIds: ids,
+          ...(batchId !== undefined ? { batchId } : {}),
         })
   for (const row of projected.results) {
     recordToolTerminal(log, {
@@ -66,29 +69,40 @@ function settleProjected(
       tool_name: row.tool_name,
       idempotency_key: row.tool_call_id,
       exit_code: 0,
-      content: 'ok',
+      content: row.content || 'ok',
+      action_index: row.action_index,
+      batch_id: row.batch_id,
+      target_summary: row.target,
     })
   }
 }
 
 function proposeAndStart(
   log: SessionEventLog,
-  tools: Array<{ id: string; name: string }>,
+  tools: Array<{ id: string; name: string; index?: number; target?: string; batchId?: string }>,
 ): void {
-  for (const tool of tools) {
+  for (const [position, tool] of tools.entries()) {
+    const actionIndex = tool.index ?? position
     recordToolProposed(log, {
       turn_id: 't1',
       tool_call_id: tool.id,
       tool_name: tool.name,
       idempotency_key: tool.id,
+      action_index: actionIndex,
+      ...(tool.batchId ? { batch_id: tool.batchId } : {}),
+      ...(tool.target ? { target_summary: tool.target } : {}),
     })
   }
-  for (const tool of tools) {
+  for (const [position, tool] of tools.entries()) {
+    const actionIndex = tool.index ?? position
     recordToolStarted(log, {
       turn_id: 't1',
       tool_call_id: tool.id,
       tool_name: tool.name,
       idempotency_key: tool.id,
+      action_index: actionIndex,
+      ...(tool.batchId ? { batch_id: tool.batchId } : {}),
+      ...(tool.target ? { target_summary: tool.target } : {}),
     })
   }
 }
@@ -411,6 +425,81 @@ describe('session-event lifecycle — required regressions', () => {
     assert.equal(validateSessionEventLog(log).status, 'PASS', formatSessionRunValidatorText(validateSessionEventLog(log)))
     assert.equal(log.events.filter((event) => event.kind === 'tool_completed').length, 7)
   })
+
+  test('Test 15 — three same-name read_file calls keep distinct target/content under reversed completion', () => {
+    const ids = ['call_00_aaa', 'call_01_bbb', 'call_02_ccc']
+    const rows: DurableToolLogRow[] = [
+      { tool: 'read_file', target: 'CURRENT_STATE.md', index: 0, stdout: 'state-content' },
+      { tool: 'read_file', target: 'README.md', index: 1, stdout: 'readme-content' },
+      { tool: 'read_file', target: 'SIMLIFE_ROADMAP_2026.md', index: 2, stdout: 'roadmap-content' },
+    ]
+
+    const projected = projectDurableToolBatch({
+      turnSlice: [...rows].reverse(),
+      turn: 0,
+      providerToolCallIds: ids,
+    })
+    // Completion order differs from request order.
+    assert.equal(projected.parallelCompletionReorders, 3)
+    // Each provider id keeps its own original target and content — never slice position.
+    for (const row of rows) {
+      const result = projected.results.find((r) => r.tool_call_id === ids[row.index])
+      assert.ok(result, `result for ${ids[row.index]}`)
+      assert.equal(result.target, row.target)
+      assert.equal(result.content, row.stdout)
+    }
+    // Durable assistant_tool_calls keep provider request order.
+    assert.deepEqual(projected.toolCalls.map((c) => c.id), [...ids])
+
+    // The gold-standard log also validates with correlation persisted end-to-end.
+    const log = createSessionEventLog('same-name-identity')
+    proposeAndStart(
+      log,
+      ids.map((id, index) => ({ id, name: 'read_file', target: rows[index]!.target, batchId: 'b1' })),
+    )
+    settleProjected(log, [...rows].reverse(), ids, 'index', 'b1')
+    const result = validateSessionEventLog(log)
+    assert.equal(result.status, 'PASS', formatSessionRunValidatorText(result))
+    for (const row of rows) {
+      const terminal = log.events.find(
+        (event): event is Extract<SessionEvent, { kind: 'tool_completed' }> =>
+          event.kind === 'tool_completed' && event.tool_call_id === ids[row.index],
+      )
+      assert.ok(terminal, `terminal for ${ids[row.index]}`)
+      assert.equal(terminal.target_summary, row.target)
+      assert.equal(terminal.action_index, row.index)
+      assert.equal(terminal.batch_id, 'b1')
+    }
+    assert.equal(result.metrics.tool_batch_count, 1)
+  })
+
+  test('Test 16 — positional projection on same-name tools now fails the validator via correlation drift', () => {
+    // The old positional bug is silent here: names, keys, and ids all match, so
+    // the pre-fix id+key+tool_name rule could never see the swap. The persisted
+    // action_index/target correlation makes the same-name corruption provable.
+    const ids = ['call_00_aaa', 'call_01_bbb', 'call_02_ccc']
+    const rows: DurableToolLogRow[] = [
+      { tool: 'read_file', target: 'CURRENT_STATE.md', index: 0, stdout: 'state' },
+      { tool: 'read_file', target: 'README.md', index: 1, stdout: 'readme' },
+      { tool: 'read_file', target: 'SIMLIFE_ROADMAP_2026.md', index: 2, stdout: 'roadmap' },
+    ]
+    const log = createSessionEventLog('same-name-swap')
+    proposeAndStart(
+      log,
+      ids.map((id, index) => ({ id, name: 'read_file', target: rows[index]!.target })),
+    )
+    // Positional reconstruction swaps the reversed rows' targets onto the wrong ids.
+    settleProjected(log, [...rows].reverse(), ids, 'position')
+    const result = validateSessionEventLog(log)
+    assert.equal(result.status, 'FAIL')
+    const drifts = result.findings.filter(
+      (finding) => finding.invariant === 'target_summary_drift' || finding.invariant === 'action_index_drift',
+    )
+    assert.ok(
+      drifts.length >= 2,
+      `expected correlation drift findings, got ${result.findings.map((f) => f.invariant).join(',')}`,
+    )
+  })
 })
 
 describe('Test 14 — ChatEngine live path with reverse-order parallel reads', () => {
@@ -532,6 +621,27 @@ describe('Test 14 — ChatEngine live path with reverse-order parallel reads', (
     assert.ok(thread.events.some((event) => event.kind === 'assistant_tool_calls'))
     assert.ok(thread.events.some((event) => event.kind === 'tool_result'))
     assert.ok(thread.events.some((event) => event.kind === 'turn_ended'))
+
+    // Execution completed [1,2,0]-ish (index 0 delayed), but the durable
+    // assistant_tool_calls record must preserve the provider request order.
+    const assistantCallIds = thread.events
+      .filter((event) => event.kind === 'assistant_tool_calls')
+      .flatMap((event) => event.tool_calls.map((call) => call.id))
+    assert.deepEqual(
+      assistantCallIds,
+      [...PROVIDER_IDS],
+      `assistant_tool_calls in request order, got ${assistantCallIds.join(',')}`,
+    )
+
+    // The live terminal records persist the correlation the validator relies on.
+    const completed = session.events.filter((event) => event.kind === 'tool_completed')
+    assert.equal(completed.length, 3)
+    const stateRead = completed.find((event) => event.tool_call_id === PROVIDER_IDS[0])
+    assert.ok(stateRead)
+    assert.equal(stateRead.action_index, 0)
+    assert.equal(stateRead.target_summary, 'SimLife/SIMLIFE_ROADMAP_2026.md')
+    assert.ok(stateRead.batch_id && stateRead.batch_id.startsWith('batch_'), 'live batch_id persisted')
+    assert.equal(new Set(completed.map((event) => event.batch_id)).size, 1, 'one batch for the turn')
 
     rewriteSessionEventLog(join(runsRoot, 'chat-sessions', 'chat-lifecycle-live'), session)
   })

@@ -248,7 +248,14 @@ export function parityOnBudgetExhausted(rt: ParityRuntime, reason: string): void
  */
 export function paritySettleProposeTools(
   rt: ParityRuntime,
-  tools: Array<{ id: string; name: string; argsDigest?: string }>,
+  tools: Array<{
+    id: string;
+    name: string;
+    argsDigest?: string;
+    action_index?: number;
+    batch_id?: string;
+    target_summary?: string;
+  }>,
   runDir?: string,
 ): { proposed: number; skipped: number } {
   if (!rt.turnId || tools.length === 0) return { proposed: 0, skipped: 0 };
@@ -274,6 +281,9 @@ export function paritySettleProposeTools(
         idempotency_key: t.id,
         effect_class: classifyToolEffect(t.name),
         ...(t.argsDigest !== undefined ? { args_digest: t.argsDigest } : {}),
+        ...(t.action_index !== undefined ? { action_index: t.action_index } : {}),
+        ...(t.batch_id !== undefined ? { batch_id: t.batch_id } : {}),
+        ...(t.target_summary !== undefined ? { target_summary: t.target_summary } : {}),
       });
     }
     proposed += 1;
@@ -287,7 +297,7 @@ export function paritySettleProposeTools(
 /** Persist the irreversible dispatch boundary immediately before tool execution. */
 export function paritySettleToolStarted(
   rt: ParityRuntime,
-  tool: { id: string; name: string },
+  tool: { id: string; name: string; action_index?: number; batch_id?: string; target_summary?: string },
   runDir?: string,
 ): boolean {
   if (!rt.turnId || completedToolIdempotencyKeys(rt.sessionEvents).has(tool.id)) return false;
@@ -301,6 +311,9 @@ export function paritySettleToolStarted(
     tool_name: tool.name,
     idempotency_key: tool.id,
     effect_class: classifyToolEffect(tool.name),
+    ...(tool.action_index !== undefined ? { action_index: tool.action_index } : {}),
+    ...(tool.batch_id !== undefined ? { batch_id: tool.batch_id } : {}),
+    ...(tool.target_summary !== undefined ? { target_summary: tool.target_summary } : {}),
   });
   if (runDir) flushSessionEventsRequired(rt, runDir, 'settle-start');
   return true;
@@ -356,6 +369,8 @@ export function parityRecordToolBatch(
       exit_code?: number;
       target?: string;
       contentHash?: string;
+      action_index?: number;
+      batch_id?: string;
     }>;
     patchAttempted?: boolean;
     patchFailed?: boolean;
@@ -411,6 +426,9 @@ export function parityRecordToolBatch(
           tool_name: r.tool_name,
           idempotency_key: r.tool_call_id,
           effect_class: classifyToolEffect(r.tool_name),
+          ...(r.action_index !== undefined ? { action_index: r.action_index } : {}),
+          ...(r.batch_id !== undefined ? { batch_id: r.batch_id } : {}),
+          ...(r.target !== undefined ? { target_summary: r.target } : {}),
         });
       }
       const hasStart = rt.sessionEvents.events.some(
@@ -427,6 +445,9 @@ export function parityRecordToolBatch(
           tool_name: r.tool_name,
           idempotency_key: r.tool_call_id,
           effect_class: classifyToolEffect(r.tool_name),
+          ...(r.action_index !== undefined ? { action_index: r.action_index } : {}),
+          ...(r.batch_id !== undefined ? { batch_id: r.batch_id } : {}),
+          ...(r.target !== undefined ? { target_summary: r.target } : {}),
         });
       }
       // Terminal settle — skip if already terminal (resume double-complete guard).
@@ -437,6 +458,9 @@ export function parityRecordToolBatch(
           tool_call_id: r.tool_call_id,
           tool_name: r.tool_name,
           idempotency_key: r.tool_call_id,
+          ...(r.action_index !== undefined ? { action_index: r.action_index } : {}),
+          ...(r.batch_id !== undefined ? { batch_id: r.batch_id } : {}),
+          ...(r.target !== undefined ? { target_summary: r.target } : {}),
           ...(dispatched
             ? {
                 content: r.content,

@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -12,6 +12,7 @@ import {
 } from './sessionEvents.js'
 import {
   SessionEventLifecycleCausalityError,
+  captureSessionEventAppendFailure,
   formatOperatorLifecycleFailureMessage,
   persistSessionEventLifecycleDiagnostic,
 } from './sessionEventDiagnostics.js'
@@ -67,6 +68,15 @@ describe('session event lifecycle diagnostics', () => {
       const written = readFileSync(path, 'utf-8')
       assert.match(written, /SESSION_EVENT_LIFECYCLE_CAUSALITY/)
       assert.doesNotMatch(written, /SECRET_SHOULD_NOT_APPEAR/)
+
+      const notADir = join(dir, 'not-a-directory')
+      writeFileSync(notADir, 'x', 'utf-8')
+      const blocked = persistSessionEventLifecycleDiagnostic(notADir, captured.diagnostic)
+      assert.equal(blocked, null)
+      const capturedAgain = captureSessionEventAppendFailure(captured, notADir)
+      assert.ok(capturedAgain)
+      assert.match(capturedAgain.operatorMessage, /Internal session-state consistency failure/)
+      assert.equal(capturedAgain.diagnosticPath, null)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

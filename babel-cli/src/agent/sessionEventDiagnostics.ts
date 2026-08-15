@@ -127,11 +127,19 @@ export function persistSessionEventLifecycleDiagnostic(
   diagnostic: SessionEventLifecycleDiagnostic,
 ): string | null {
   if (!runDir) return null
-  const dir = join(runDir, 'diagnostics')
-  mkdirSync(dir, { recursive: true })
-  const path = join(dir, `lifecycle-${diagnostic.candidate_seq}-${Date.now()}.json`)
-  writeFileSync(path, `${JSON.stringify(diagnostic, null, 2)}\n`, 'utf-8')
-  return path
+  try {
+    const dir = join(runDir, 'diagnostics')
+    mkdirSync(dir, { recursive: true })
+    const path = join(dir, `lifecycle-${diagnostic.candidate_seq}-${Date.now()}.json`)
+    writeFileSync(path, `${JSON.stringify(diagnostic, null, 2)}\n`, 'utf-8')
+    return path
+  } catch {
+    return null
+  }
+}
+
+export function isSessionConsistencyFailureMessage(message: string | undefined): boolean {
+  return typeof message === 'string' && message.includes('Internal session-state consistency failure')
 }
 
 export function captureSessionEventAppendFailure(

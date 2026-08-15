@@ -114,6 +114,9 @@ export type SessionEvent =
       idempotency_key: string;
       effect_class?: ToolEffectClass;
       args_digest?: string;
+      action_index?: number;
+      batch_id?: string;
+      target_summary?: string;
     })
   | (SessionEventBase & {
       kind: 'tool_started';
@@ -121,6 +124,9 @@ export type SessionEvent =
       tool_name: string;
       idempotency_key: string;
       effect_class?: ToolEffectClass;
+      action_index?: number;
+      batch_id?: string;
+      target_summary?: string;
     })
   | (SessionEventBase & {
       kind: 'tool_completed';
@@ -129,6 +135,9 @@ export type SessionEvent =
       idempotency_key: string;
       exit_code?: number;
       output_digest?: string;
+      action_index?: number;
+      batch_id?: string;
+      target_summary?: string;
     })
   | (SessionEventBase & {
       kind: 'tool_failed';
@@ -137,6 +146,9 @@ export type SessionEvent =
       idempotency_key: string;
       exit_code?: number;
       error_preview?: string;
+      action_index?: number;
+      batch_id?: string;
+      target_summary?: string;
     })
   | (SessionEventBase & {
       kind: 'tool_cancelled';
@@ -148,6 +160,9 @@ export type SessionEvent =
       effect_class?: ToolEffectClass;
       reconciliation?: InterruptedToolRecovery['reconciliation'];
       args_digest?: string;
+      action_index?: number;
+      batch_id?: string;
+      target_summary?: string;
     })
   | (SessionEventBase & {
       /** Explicit, auditable authorization to retry one recovered unknown effect. */
@@ -765,6 +780,18 @@ export function recordProviderRetrySettled(
 ): SessionEvent {
   return appendSessionEvent(log, { kind: 'provider_retry_settled', ...input });
 }
+function toolCorrelationFields(input: {
+  action_index?: number;
+  batch_id?: string;
+  target_summary?: string;
+}): { action_index?: number; batch_id?: string; target_summary?: string } {
+  return {
+    ...(input.action_index !== undefined ? { action_index: input.action_index } : {}),
+    ...(input.batch_id !== undefined ? { batch_id: input.batch_id } : {}),
+    ...(input.target_summary !== undefined ? { target_summary: input.target_summary.slice(0, 240) } : {}),
+  };
+}
+
 export function recordToolProposed(
   log: SessionEventLog,
   input: {
@@ -774,6 +801,9 @@ export function recordToolProposed(
     idempotency_key?: string;
     effect_class?: ToolEffectClass;
     args_digest?: string;
+    action_index?: number;
+    batch_id?: string;
+    target_summary?: string;
   },
 ): SessionEvent {
   return appendSessionEvent(log, {
@@ -784,6 +814,7 @@ export function recordToolProposed(
     idempotency_key: input.idempotency_key ?? input.tool_call_id,
     ...(input.effect_class !== undefined ? { effect_class: input.effect_class } : {}),
     ...(input.args_digest !== undefined ? { args_digest: input.args_digest } : {}),
+    ...toolCorrelationFields(input),
   });
 }
 
@@ -795,6 +826,9 @@ export function recordToolStarted(
     tool_name: string;
     idempotency_key?: string;
     effect_class?: ToolEffectClass;
+    action_index?: number;
+    batch_id?: string;
+    target_summary?: string;
   },
 ): SessionEvent {
   return appendSessionEvent(log, {
@@ -804,6 +838,7 @@ export function recordToolStarted(
     tool_name: input.tool_name,
     idempotency_key: input.idempotency_key ?? input.tool_call_id,
     ...(input.effect_class !== undefined ? { effect_class: input.effect_class } : {}),
+    ...toolCorrelationFields(input),
   });
 }
 
@@ -823,9 +858,13 @@ export function recordToolTerminal(
     effect_class?: ToolEffectClass;
     reconciliation?: InterruptedToolRecovery['reconciliation'];
     args_digest?: string;
+    action_index?: number;
+    batch_id?: string;
+    target_summary?: string;
   },
 ): SessionEvent {
   const key = input.idempotency_key ?? input.tool_call_id;
+  const correlation = toolCorrelationFields(input);
   if (input.cancelled) {
     return appendSessionEvent(log, {
       kind: 'tool_cancelled',
@@ -838,6 +877,7 @@ export function recordToolTerminal(
       ...(input.effect_class !== undefined ? { effect_class: input.effect_class } : {}),
       ...(input.reconciliation !== undefined ? { reconciliation: input.reconciliation } : {}),
       ...(input.args_digest !== undefined ? { args_digest: input.args_digest } : {}),
+      ...correlation,
     });
   }
   const digest =
@@ -853,6 +893,7 @@ export function recordToolTerminal(
       ...(input.content !== undefined
         ? { error_preview: input.content.slice(0, 240) }
         : {}),
+      ...correlation,
     });
   }
   return appendSessionEvent(log, {
@@ -863,6 +904,7 @@ export function recordToolTerminal(
     idempotency_key: key,
     ...(input.exit_code !== undefined ? { exit_code: input.exit_code } : {}),
     ...(digest !== undefined ? { output_digest: digest } : {}),
+    ...correlation,
   });
 }
 
@@ -1248,6 +1290,15 @@ export function parseSessionEventLog(
     }
     if (ev.recovery_state !== undefined && (ev.kind !== 'tool_cancelled' || !recoveryStates.includes(ev.recovery_state as InterruptedToolRecoveryState))) {
       throw new Error(`Invalid session event at line ${index + 1}: recovery_state is invalid`)
+    }
+    if (ev.action_index !== undefined && (!Number.isInteger(ev.action_index) || (ev.action_index as number) < 0)) {
+      throw new Error(`Invalid session event at line ${index + 1}: action_index is invalid`)
+    }
+    if (ev.batch_id !== undefined && typeof ev.batch_id !== 'string') {
+      throw new Error(`Invalid session event at line ${index + 1}: batch_id must be a string`)
+    }
+    if (ev.target_summary !== undefined && typeof ev.target_summary !== 'string') {
+      throw new Error(`Invalid session event at line ${index + 1}: target_summary must be a string`)
     }
     if (ev.reconciliation !== undefined && (ev.kind !== 'tool_cancelled' || !reconciliationValues.includes(ev.reconciliation as InterruptedToolRecovery['reconciliation']))) {
       throw new Error(`Invalid session event at line ${index + 1}: reconciliation is invalid`)

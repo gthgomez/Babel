@@ -180,6 +180,17 @@ describe('review card — truthful terminal states', () => {
     assert.doesNotMatch(text, /\nNext\n/);
   });
 
+  it('scopes do-not-resume warning to session-consistency failures only', () => {
+    const ordinary = buildReviewCard({ outcome: 'AGENT_FAILURE', summary: 'provider timeout' });
+    assert.doesNotMatch(stripAnsi(ordinary.body), /Do not resume this session blindly/);
+    const lifecycle = buildReviewCard({
+      outcome: 'AGENT_FAILURE',
+      summary: 'Internal session-state consistency failure',
+      sessionConsistencyFailure: true,
+    });
+    assert.match(stripAnsi(lifecycle.body), /Do not resume this session blindly/);
+  });
+
   it('omits always-on Continue and zero cost; keeps taxonomy and real next actions', () => {
     const readonly = presentChatReview({
       outcome: 'NO_CHANGE_REQUIRED',

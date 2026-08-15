@@ -67,6 +67,11 @@ describe('toolExecutionIdentity', () => {
         { id: providerIds[0], name: 'read_file', index: 0 },
       ],
     )
+    assert.deepEqual(
+      projected.toolCalls.map((call) => call.id),
+      [providerIds[0], providerIds[1], providerIds[2]],
+      'assistant_tool_calls stay in original action order',
+    )
   })
 
   test('positional reconstruction swaps names onto the wrong provider IDs', () => {

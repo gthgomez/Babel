@@ -36,6 +36,8 @@ export interface ReviewCardInput {
   tokens?: number | undefined;
   mutated?: boolean | undefined;
   nextActions?: string[] | undefined;
+  /** Only for SESSION_EVENT_LIFECYCLE_CAUSALITY — not every AGENT_FAILURE. */
+  sessionConsistencyFailure?: boolean | undefined;
 }
 
 export interface ReviewCard {
@@ -205,7 +207,9 @@ export function getContextualNextActions(
     case 'INFRA_FAILURE':
       return ['Retry'];
     case 'AGENT_FAILURE':
-      return ['Inspect diagnostics', 'Do not resume this session blindly'];
+      return input.sessionConsistencyFailure
+        ? ['Inspect diagnostics', 'Do not resume this session blindly']
+        : ['Inspect diagnostics'];
   }
 }
 

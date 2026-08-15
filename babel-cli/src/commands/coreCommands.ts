@@ -2808,7 +2808,9 @@ Notes:
         (runArg: string | undefined, options: { run?: string; project?: string; json?: boolean }) => {
           try {
             const requested = options.run ?? runArg ?? 'latest';
-            const result = validateSessionRun(requested);
+            const result = validateSessionRun(requested, {
+              ...(options.project ? { project: options.project } : {}),
+            });
             if (options.json) {
               process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
             } else {
