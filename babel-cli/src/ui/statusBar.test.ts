@@ -14,7 +14,8 @@ import assert from 'node:assert/strict';
 import {
   renderStatusBar,
   planStatusBarFields,
-  packStatusBarRightCluster,
+  applyAttentionPreemption,
+  ATTENTION_PREEMPTION,
   classifyStatusWidth,
   classifyRateLimitAttention,
   isDefaultStatusMode,
@@ -675,7 +676,7 @@ describe('status bar — explicit field shedding', () => {
   });
 });
 
-describe('status bar — dynamic attention hierarchy', () => {
+describe('status bar — attention-preemption policy', () => {
   function withRateLimit(state: RateLimitState | null, fn: () => void): void {
     const prev = getGlobalRateLimitState();
     setGlobalRateLimitState(state);
@@ -725,16 +726,29 @@ describe('status bar — dynamic attention hierarchy', () => {
     assert.equal(warn80.showRateLimit, true);
   });
 
-  it('drops turn, session tokens, and cost before the context meter', () => {
-    const packed = packStatusBarRightCluster(
+  it('names the preemption bands and drop order', () => {
+    assert.equal(ATTENTION_PREEMPTION.criticalRateLimitMinBand, 60);
+    assert.equal(ATTENTION_PREEMPTION.warningRateLimitMinBand, 80);
+    assert.deepEqual(ATTENTION_PREEMPTION.displaceInOrder, [
+      'turn',
+      'sessionTokens',
+      'cost',
+      'bgTasks',
+      'rateLimit',
+    ]);
+  });
+
+  it('displaces turn, session tokens, and cost before the context meter', () => {
+    const packed = applyAttentionPreemption(
       [
-        { id: 'sessionTokens', text: '999,999,999 tok', priority: 20 },
-        { id: 'cost', text: '$12345.6789', priority: 30 },
-        { id: 'turn', text: 'turn 9999', priority: 10 },
-        { id: 'rateLimit', text: 'API: 0/1000 ⛔ 12m', priority: 90, pinned: true },
-        { id: 'context', text: '[████████  50%]', priority: 80, pinned: true },
+        { slot: 'sessionTokens', text: '999,999,999 tok' },
+        { slot: 'cost', text: '$12345.6789' },
+        { slot: 'turn', text: 'turn 9999' },
+        { slot: 'rateLimit', text: 'API: 0/1000 ⛔ 12m' },
+        { slot: 'context', text: '[████████  50%]' },
       ],
       40,
+      true,
     );
     assert.ok(packed.includes('50%'), `context should survive: ${packed}`);
     assert.ok(packed.includes('0/1000'), `critical rate-limit should survive: ${packed}`);
