@@ -183,31 +183,29 @@ export function getContextualNextActions(
 
   switch (kind) {
     case 'VERIFIED_COMPLETE':
-      return hasFiles ? ['[D] Diff', '[Enter] Continue'] : ['[Enter] Continue'];
+      return hasFiles ? ['[D] Diff'] : [];
     case 'COMPLETE_UNVERIFIED':
       if (hasFiles && hasVerifier) {
-        return ['[D] Diff', '[R] Run verification', '[Enter] Continue'];
+        return ['[D] Diff', '[R] Run verification'];
       }
       if (hasFiles) {
-        return ['[D] Diff', '[Enter] Continue'];
+        return ['[D] Diff'];
       }
-      return ['[Enter] Continue'];
+      return [];
     case 'VERIFICATION_FAILED':
       return hasFiles
         ? ['[F] Fix', '[R] Rerun verification', '[D] Diff']
-        : ['[F] Fix', '[R] Rerun verification', '[Enter] Continue'];
+        : ['[F] Fix', '[R] Rerun verification'];
     case 'BLOCKED':
-      return ['Review the blocked capability', '[Enter] Continue'];
+      return ['Review the blocked capability'];
     case 'CANCELLED':
-      return hasFiles
-        ? ['[D] Diff (if workspace changed)', '[Enter] Continue']
-        : ['[Enter] Continue'];
+      return hasFiles ? ['[D] Diff (if workspace changed)'] : [];
     case 'BUDGET_EXHAUSTED':
-      return ['Follow-up to continue', '[Enter] Continue'];
+      return ['Follow-up to continue'];
     case 'INFRA_FAILURE':
-      return ['Retry', '[Enter] Continue'];
+      return ['Retry'];
     case 'AGENT_FAILURE':
-      return ['Inspect diagnostics', '[Enter] Continue'];
+      return ['Inspect diagnostics'];
   }
 }
 
@@ -273,16 +271,23 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
     lines.push(`  ${input.summary.trim()}`);
   }
 
-  if (input.costUsd !== undefined || input.tokens !== undefined) {
+  const hasRealCost = input.costUsd !== undefined && input.costUsd > 0;
+  const hasRealTokens = input.tokens !== undefined && input.tokens > 0;
+  if (hasRealCost || hasRealTokens) {
     const bits: string[] = [];
-    if (input.costUsd !== undefined) bits.push(`$${input.costUsd.toFixed(4)}`);
-    if (input.tokens !== undefined) bits.push(`${input.tokens} tok`);
+    if (hasRealCost) bits.push(`$${input.costUsd!.toFixed(4)}`);
+    if (hasRealTokens) bits.push(`${input.tokens} tok`);
     lines.push(`${dim('Cost')}  ${bits.join('  ')}`);
   }
 
-  const actions = getContextualNextActions(kind, input);
-  lines.push(dim('Next'));
-  lines.push(`  ${actions.join('   ')}`);
+  const actions = getContextualNextActions(kind, input).filter((action) => {
+    const normalized = action.trim();
+    return normalized !== '' && normalized !== '[Enter] Continue';
+  });
+  if (actions.length > 0) {
+    lines.push(dim('Next'));
+    lines.push(`  ${actions.join('   ')}`);
+  }
 
   return {
     kind,
