@@ -977,4 +977,194 @@ describe('status bar — attention-preemption policy', () => {
       },
     );
   });
+
+  describe('adversarial cases', () => {
+    const exhausted = {
+      remaining: 0,
+      limit: 1000,
+      resetAt: new Date(Date.now() + 12 * 60_000),
+    };
+    const warning = {
+      remaining: 200,
+      limit: 1000,
+      resetAt: new Date(Date.now() + 60_000),
+    };
+    const idle = {
+      remaining: 800,
+      limit: 1000,
+      resetAt: new Date(Date.now() + 60_000),
+    };
+
+    function crowdedState(width: number, overrides: Partial<StatusBarState> = {}): StatusBarState {
+      return defaultState({
+        width,
+        model: 'DeepSeek v4 Flash',
+        mode: 'deep',
+        modelId: 'deepseek-v4-flash',
+        totalTokens: 999_999_999,
+        totalCost: 12345.6789,
+        turnCount: 9999,
+        gitBranch: 'feat/very-long-status-bar-branch-name',
+        gitDirty: true,
+        activeContext: {
+          tokens: 500_000,
+          modelId: 'deepseek-v4-flash',
+          source: 'provider',
+        },
+        backgroundTasks: [
+          {
+            id: '1',
+            label: 'Indexing-a-very-long-background-task-name',
+            status: 'running',
+            current: 567,
+            total: 1234,
+            progress: 45,
+            elapsedMs: 3200,
+          },
+        ],
+        ...overrides,
+      });
+    }
+
+    function hasIntactContext(line: string): boolean {
+      return /\[\s*.+\s+\d+%\s*\]/.test(line) || line.includes('[ctx ?]');
+    }
+
+    function hasIntactRateLimit(line: string): boolean {
+      return /0\/1000/.test(line) || line.includes('⛔');
+    }
+
+    it('treats width 79 as the 60-band: critical RL displaces context and mode stays shed', () => {
+      withRateLimit(exhausted, () => {
+        const line = firstLine(renderStatusBar(crowdedState(79)));
+        assert.ok(line.length <= 79, line);
+        assert.ok(!line.includes('deep'), line);
+        assert.ok(hasIntactRateLimit(line), line);
+        assert.ok(!hasIntactContext(line), `context must yield below 80: ${line}`);
+        assert.ok(!line.includes('…0/') && !line.includes('0/1…'), line);
+      });
+    });
+
+    it('keeps warning RL hidden at 79 and whole at 80', () => {
+      withRateLimit(warning, () => {
+        const at79 = firstLine(renderStatusBar(crowdedState(79, { mode: 'default', backgroundTasks: undefined })));
+        assert.ok(!at79.includes('⚠'), at79);
+        assert.ok(!at79.includes('200/1000'), at79);
+        assert.ok(hasIntactContext(at79), at79);
+
+        const at80 = firstLine(renderStatusBar(crowdedState(80, { mode: 'default', backgroundTasks: undefined })));
+        assert.ok(at80.includes('200/1000') || at80.includes('⚠'), at80);
+        assert.ok(hasIntactContext(at80), `context stays beside warning RL at 80: ${at80}`);
+        assert.ok(!at80.includes('200/1…'), at80);
+      });
+    });
+
+    it('never shows idle rate-limit at 60, 80, or 160', () => {
+      withRateLimit(idle, () => {
+        for (const width of [60, 80, 160] as const) {
+          const line = firstLine(renderStatusBar(crowdedState(width)));
+          assert.ok(!line.includes('800/1000'), `idle RL leaked at ${width}: ${line}`);
+          assert.ok(!line.includes('⛔'), line);
+          assert.ok(!line.includes('⚠'), line);
+        }
+      });
+    });
+
+    it('lets a long model shrink before a critical RL slot is mid-clipped at 60', () => {
+      withRateLimit(exhausted, () => {
+        const line = firstLine(
+          renderStatusBar(
+            crowdedState(60, {
+              model: 'anthropic-claude-opus-4-8-preview-extended',
+              mode: 'default',
+              backgroundTasks: undefined,
+            }),
+          ),
+        );
+        assert.ok(line.length <= 60, line);
+        assert.ok(hasIntactRateLimit(line), `rate-limit must survive whole: ${line}`);
+        assert.ok(!line.includes('…0/') && !line.includes('API:…'), line);
+        assert.ok(!hasIntactContext(line), line);
+      });
+    });
+
+    it('at 160 drops turn and session tokens before context or critical RL', () => {
+      withRateLimit(exhausted, () => {
+        const line = firstLine(renderStatusBar(crowdedState(160)));
+        assert.ok(line.length <= 160, line);
+        assert.ok(hasIntactRateLimit(line), line);
+        assert.ok(hasIntactContext(line), `context must remain a whole slot: ${line}`);
+        assert.ok(!line.includes('turn 9999'), `turn must yield first: ${line}`);
+        assert.ok(!line.includes('999,999,999 tok'), `session tokens must yield before context: ${line}`);
+        assert.ok(!line.includes('…%') && !line.includes('%…'), line);
+      });
+    });
+
+    it('lets bg tasks return at 100 once attention no longer occupies the 80-band', () => {
+      const calm100 = planStatusBarFields(100, {
+        mode: 'deep',
+        hasBranch: true,
+        hasBgTasks: true,
+        hasActiveRateLimit: false,
+      });
+      assert.equal(calm100.showBgTasks, true);
+      assert.equal(calm100.showMode, true);
+
+      const busy100 = planStatusBarFields(100, {
+        mode: 'deep',
+        hasBranch: true,
+        hasBgTasks: true,
+        hasActiveRateLimit: true,
+        hasCriticalRateLimit: true,
+      });
+      assert.equal(busy100.showBgTasks, true);
+      assert.equal(busy100.showMode, true);
+      assert.equal(busy100.showRateLimit, true);
+      assert.equal(busy100.showContext, true);
+
+      const busy80 = planStatusBarFields(80, {
+        mode: 'deep',
+        hasBranch: true,
+        hasBgTasks: true,
+        hasActiveRateLimit: true,
+        hasCriticalRateLimit: true,
+      });
+      assert.equal(busy80.showBgTasks, false);
+      assert.equal(busy80.showMode, false);
+    });
+
+    it('never lets end-truncation decide that context dies first', () => {
+      const packed = applyAttentionPreemption(
+        [
+          { slot: 'sessionTokens', text: '999,999,999 tok' },
+          { slot: 'cost', text: '$12345.6789' },
+          { slot: 'turn', text: 'turn 9999' },
+          { slot: 'bgTasks', text: '◌ Indexing-a-very-long-background-task-name 45%' },
+          { slot: 'rateLimit', text: 'API: 0/1000 ⛔ 12m' },
+          { slot: 'context', text: '[████████████  50%]' },
+        ],
+        48,
+        true,
+      );
+      assert.ok(!packed.includes('…'), packed);
+      assert.ok(packed.includes('50%'), `context survives as a whole slot: ${packed}`);
+      assert.ok(packed.includes('0/1000'), packed);
+      assert.ok(!packed.includes('turn'), packed);
+      assert.ok(!packed.includes('tok'), packed);
+      assert.ok(!packed.includes('$12345'), packed);
+      assert.ok(!packed.includes('Indexing'), packed);
+
+      const tighter = applyAttentionPreemption(
+        [
+          { slot: 'rateLimit', text: 'API: 0/1000 ⛔ 12m' },
+          { slot: 'context', text: '[████████████  50%]' },
+        ],
+        24,
+        true,
+      );
+      assert.ok(!tighter.includes('…'), tighter);
+      assert.ok(tighter.includes('0/1000'), `rate-limit stays whole when context yields: ${tighter}`);
+      assert.ok(!tighter.includes('50%'), tighter);
+    });
+  });
 });

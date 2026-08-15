@@ -338,12 +338,16 @@ export function renderStatusBar(state: StatusBarState): string {
 
   const minSpacing = 2;
   const minLeft = 4;
-  const maxRight = Math.max(8, width - minLeft - minSpacing);
-  const right = applyAttentionPreemption(
-    rightParts,
-    maxRight,
-    rateAttention !== 'none',
-  );
+  const protectRateLimit = rateAttention !== 'none';
+  const preferredMaxRight = Math.max(8, width - visibleLength(left) - minSpacing);
+  let right = applyAttentionPreemption(rightParts, preferredMaxRight, protectRateLimit);
+  if (visibleLength(left) + visibleLength(right) + minSpacing > width) {
+    right = applyAttentionPreemption(
+      rightParts,
+      Math.max(8, width - minLeft - minSpacing),
+      protectRateLimit,
+    );
+  }
 
   const leftLen = visibleLength(left);
   const rightLen = visibleLength(right);
