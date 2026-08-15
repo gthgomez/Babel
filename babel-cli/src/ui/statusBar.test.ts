@@ -695,6 +695,37 @@ describe('status bar — attention-preemption policy', () => {
     assert.equal(classifyRateLimitAttention(10, 0), 'none');
   });
 
+  it('keeps the 60-col layout as model … context, and inserts critical rate-limit into the gap', () => {
+    const state = {
+      model: 'Flash',
+      modelId: 'deepseek-v4-flash',
+      width: 60,
+      activeContext: {
+        tokens: 12_400,
+        modelId: 'deepseek-v4-flash',
+        source: 'provider' as const,
+      },
+    };
+    const normal = firstLine(renderStatusBar(defaultState(state)));
+    assert.match(normal, /^Flash\s+\[/);
+    assert.ok(normal.includes('%') || normal.includes('ctx'), normal);
+    assert.ok(!normal.includes('API:'), normal);
+    assert.ok(!normal.includes('⛔'), normal);
+
+    withRateLimit(
+      { remaining: 0, limit: 1000, resetAt: new Date(Date.now() + 12 * 60_000) },
+      () => {
+        const critical = firstLine(renderStatusBar(defaultState(state)));
+        const flashAt = critical.indexOf('Flash');
+        const rlAt = critical.search(/API:|⛔/);
+        const ctxAt = critical.search(/%|ctx/);
+        assert.ok(flashAt === 0, critical);
+        assert.ok(rlAt > flashAt, `rate-limit should sit after model: ${critical}`);
+        assert.ok(ctxAt > rlAt, `context should stay right of rate-limit: ${critical}`);
+      },
+    );
+  });
+
   it('lets critical rate-limit appear at 60; warning stays at 80+', () => {
     const warn60 = planStatusBarFields(60, {
       mode: 'default',
