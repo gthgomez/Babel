@@ -102,24 +102,25 @@ export interface StatusBarRightPart {
  * Attention-preemption policy.
  *
  * The static shed matrix is the default. When something actually matters,
- * it may appear below its static band and take space from quieter chrome —
- * it does not end-truncate the right cluster (that clipped the context meter).
+ * it may appear below its static band and take the slot of quieter chrome.
  *
  * Width 60:
  *   normal:    model                         context
- *   critical:  model              rate-limit context
+ *   critical:  model                         ⛔ rate-limit
  *
- * Wider bands keep the same rule: insert the live signal, then drop
- * `displaceInOrder` if the right cluster still cannot fit.
+ * At 60, critical/exhausted rate-limit displaces the context meter.
+ * From 80 up, both may appear; `displaceInOrder` only runs if they still collide.
  */
 export const ATTENTION_PREEMPTION = {
   /** Exhausted / critical rate-limit may break through to the 60-band. */
   criticalRateLimitMinBand: 60 as StatusWidthBand,
   /** Warning pressure stays on the static 80+ gate. */
   warningRateLimitMinBand: 80 as StatusWidthBand,
+  /** Below this band, critical rate-limit takes the right-hand slot from context. */
+  contextYieldsBelowBand: 80 as StatusWidthBand,
   /**
    * First listed is dropped first when the right cluster still overflows.
-   * Context is omitted. `rateLimit` is skipped while the signal is critical.
+   * `rateLimit` is skipped while the signal is critical.
    */
   displaceInOrder: [
     'turn',
@@ -192,6 +193,7 @@ export interface StatusBarFieldPolicy {
   showRouting: boolean;
   showRateLimit: boolean;
   showBgTasks: boolean;
+  showContext: boolean;
 }
 
 /**
@@ -233,6 +235,9 @@ export function planStatusBarFields(
     showRateLimit: Boolean(input.hasActiveRateLimit || input.hasCriticalRateLimit)
       && band >= rateLimitMinBand,
     showBgTasks: input.hasBgTasks && band >= 80,
+    showContext: !(
+      input.hasCriticalRateLimit && band < ATTENTION_PREEMPTION.contextYieldsBelowBand
+    ),
   };
 }
 
@@ -297,7 +302,7 @@ export function renderStatusBar(state: StatusBarState): string {
     const bg = renderBackgroundTaskFooter(state.backgroundTasks, footerWidth);
     if (bg) rightParts.push({ slot: 'bgTasks', text: bg });
   }
-  const contextMeter = renderActiveContextMeter(state, width);
+  const contextMeter = policy.showContext ? renderActiveContextMeter(state, width) : '';
   if (contextMeter) rightParts.push({ slot: 'context', text: contextMeter });
 
   const minSpacing = 2;

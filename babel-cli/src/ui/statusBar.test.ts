@@ -695,7 +695,7 @@ describe('status bar — attention-preemption policy', () => {
     assert.equal(classifyRateLimitAttention(10, 0), 'none');
   });
 
-  it('keeps the 60-col layout as model … context, and inserts critical rate-limit into the gap', () => {
+  it('keeps 60-col as model … context, and lets critical rate-limit take that right slot', () => {
     const state = {
       model: 'Flash',
       modelId: 'deepseek-v4-flash',
@@ -716,12 +716,12 @@ describe('status bar — attention-preemption policy', () => {
       { remaining: 0, limit: 1000, resetAt: new Date(Date.now() + 12 * 60_000) },
       () => {
         const critical = firstLine(renderStatusBar(defaultState(state)));
-        const flashAt = critical.indexOf('Flash');
-        const rlAt = critical.search(/API:|⛔/);
-        const ctxAt = critical.search(/%|ctx/);
-        assert.ok(flashAt === 0, critical);
-        assert.ok(rlAt > flashAt, `rate-limit should sit after model: ${critical}`);
-        assert.ok(ctxAt > rlAt, `context should stay right of rate-limit: ${critical}`);
+        assert.match(critical, /^Flash\s+/);
+        assert.ok(critical.includes('⛔') || critical.includes('API:'), critical);
+        assert.ok(
+          !critical.includes('%') && !critical.includes('[ctx'),
+          `context must yield the 60-col right slot: ${critical}`,
+        );
       },
     );
   });
@@ -745,7 +745,9 @@ describe('status bar — attention-preemption policy', () => {
       hasCriticalRateLimit: true,
     });
     assert.equal(crit60.showRateLimit, true);
+    assert.equal(crit60.showContext, false);
     assert.equal(crit60.showBgTasks, false);
+    assert.equal(warn60.showContext, true);
 
     const warn80 = planStatusBarFields(80, {
       mode: 'deep',
@@ -755,6 +757,17 @@ describe('status bar — attention-preemption policy', () => {
       hasCriticalRateLimit: false,
     });
     assert.equal(warn80.showRateLimit, true);
+    assert.equal(warn80.showContext, true);
+
+    const crit80 = planStatusBarFields(80, {
+      mode: 'deep',
+      hasBranch: true,
+      hasBgTasks: true,
+      hasActiveRateLimit: true,
+      hasCriticalRateLimit: true,
+    });
+    assert.equal(crit80.showRateLimit, true);
+    assert.equal(crit80.showContext, true);
   });
 
   it('names the preemption bands and drop order', () => {
@@ -788,7 +801,7 @@ describe('status bar — attention-preemption policy', () => {
     assert.ok(!packed.includes('$12345'), packed);
   });
 
-  it('shows exhausted rate-limit at width 60 without shedding the context meter', () => {
+  it('shows exhausted rate-limit at width 60 in place of the context meter', () => {
     withRateLimit(
       { remaining: 0, limit: 1000, resetAt: new Date(Date.now() + 12 * 60_000) },
       () => {
@@ -811,8 +824,8 @@ describe('status bar — attention-preemption policy', () => {
           `expected exhausted rate-limit at 60: ${line}`,
         );
         assert.ok(
-          line.includes('%') || line.includes('ctx'),
-          `expected context meter to remain at 60: ${line}`,
+          !line.includes('%') && !line.includes('[ctx'),
+          `context yields at 60 when rate-limit is critical: ${line}`,
         );
       },
     );
