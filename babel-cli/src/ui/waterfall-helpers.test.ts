@@ -1083,17 +1083,17 @@ describe('Integration — ConversationalRenderer', () => {
     }) as typeof process.stdout.write;
 
     try {
-      const renderer = new ConversationalRenderer({ isTTY: true });
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: true });
       renderer.start();
 
       renderer.onToolCallStart('file_read', 'src/index.ts');
-      renderer.onToolCallComplete(1);
+      renderer.onToolCallComplete(1, 'read 100 bytes', undefined, 0);
 
-      // Check that the output contains the formatted conversationalToolLabel
+      // Check that the output contains the formatted conversationalToolLabel / verbose tool entry
       const allOutput = chunks.join('');
-      assert.match(allOutput, /Reading/);
+      assert.match(allOutput, /file_read|Reading/);
       assert.match(allOutput, /src\/index\.ts/);
-      assert.match(allOutput, /✓/);
+      assert.match(allOutput, /✔|✓/);
 
       renderer.stop();
     } finally {

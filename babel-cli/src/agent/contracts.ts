@@ -88,7 +88,7 @@ export interface AgentSessionOptions {
   /** Chat mode: tool execution callbacks for ConversationalRenderer visibility.
    *  Wired through from interactive.ts → AgentSession → ChatEngine. */
   onToolStart?: (tool: string, target: string) => number;
-  onToolComplete?: (id: number, detail?: string) => void;
+  onToolComplete?: (id: number, detail?: string, error?: string, exitCode?: number) => void;
   onFileChanged?: (path: string, additions: number, deletions: number, content?: string) => void;
   onThought?: (thought: string) => void;
   /** System-level context injected at session start (e.g. CLAUDE.md + AGENTS.md content).

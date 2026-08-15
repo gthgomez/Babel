@@ -52,7 +52,7 @@ export function dispatchChatEvent(
     case 'tool_complete': {
       const id = sinks.toolIdQueue?.shift();
       if (id !== undefined && id >= 0) {
-        sinks.convRenderer?.onToolCallComplete(id, event.detail);
+        sinks.convRenderer?.onToolCallComplete(id, event.detail, event.error, event.exitCode);
       }
       break;
     }
