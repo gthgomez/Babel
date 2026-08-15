@@ -121,7 +121,7 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
     }
   });
 
-  test('production integration: ConversationalRenderer completes tools with calm presentation formatting by default', async () => {
+  test('production integration: ConversationalRenderer accumulates and collapses N > 1 consecutive tool calls into a single group summary line', async () => {
     const { ConversationalRenderer } = await import('./waterfall.js');
     const chunks: string[] = [];
     const originalWrite = process.stdout.write.bind(process.stdout);
@@ -134,19 +134,61 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
       const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
       renderer.start();
 
-      const callId1 = renderer.onToolCallStart('read_file', 'src/config.ts');
-      assert.ok(callId1 > 0);
-      renderer.onToolCallComplete(callId1, 'read 120 bytes');
+      const id1 = renderer.onToolCallStart('read_file', 'src/a.ts');
+      assert.ok(id1 > 0);
+      renderer.onToolCallComplete(id1, 'read 100 bytes');
 
-      const callId2 = renderer.onToolCallStart('write_file', 'src/output.ts');
-      assert.ok(callId2 > 0);
-      renderer.onToolCallComplete(callId2, 'wrote 50 lines');
+      const id2 = renderer.onToolCallStart('read_file', 'src/b.ts');
+      assert.ok(id2 > 0);
+      renderer.onToolCallComplete(id2, 'read 200 bytes');
 
+      const id3 = renderer.onToolCallStart('read_file', 'src/c.ts');
+      assert.ok(id3 > 0);
+      renderer.onToolCallComplete(id3, 'read 300 bytes');
+
+      // Flush via answer chunk (start of assistant output)
+      renderer.onAnswerChunk('I have inspected all files.');
       renderer.stop();
 
       const out = stripAnsi(chunks.join(''));
-      assert.ok(out.includes('Read 1 file'), `Expected 'Read 1 file' in output, got: ${out}`);
-      assert.ok(out.includes('Edited 1 file'), `Expected 'Edited 1 file' in output, got: ${out}`);
+      assert.ok(out.includes('Read 3 files'), `Expected 'Read 3 files' in collapsed output, got: ${out}`);
+      assert.ok(!out.includes('Read 1 file'), `Should not contain individual 'Read 1 file' entries, got: ${out}`);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  });
+
+  test('production integration: Category change flushes previous group and begins next group', async () => {
+    const { ConversationalRenderer } = await import('./waterfall.js');
+    const chunks: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
+      renderer.start();
+
+      // Group 1: 2 reads
+      const r1 = renderer.onToolCallStart('read_file', 'src/config.ts');
+      renderer.onToolCallComplete(r1, 'read 50 bytes');
+      const r2 = renderer.onToolCallStart('read_file', 'src/types.ts');
+      renderer.onToolCallComplete(r2, 'read 80 bytes');
+
+      // Group 2: 2 writes (category change triggers flush of group 1)
+      const w1 = renderer.onToolCallStart('write_file', 'src/a.ts');
+      renderer.onToolCallComplete(w1, 'wrote 10 lines');
+      const w2 = renderer.onToolCallStart('write_file', 'src/b.ts');
+      renderer.onToolCallComplete(w2, 'wrote 20 lines');
+
+      renderer.onSummary();
+      renderer.stop();
+
+      const out = stripAnsi(chunks.join(''));
+      assert.ok(out.includes('Read 2 files'), `Expected 'Read 2 files' in output, got: ${out}`);
+      assert.ok(out.includes('Edited 2 files'), `Expected 'Edited 2 files' in output, got: ${out}`);
     } finally {
       process.stdout.write = originalWrite;
     }
@@ -181,8 +223,9 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
     }
   });
 
-  test('production integration: ConversationalRenderer auto-expands errors even in default mode', async () => {
+  test('production integration: structured error and exitCode flow through real dispatchChatEvent into ConversationalRenderer', async () => {
     const { ConversationalRenderer } = await import('./waterfall.js');
+    const { dispatchChatEvent } = await import('../interactive/execution/chatEventDispatch.js');
     const chunks: string[] = [];
     const originalWrite = process.stdout.write.bind(process.stdout);
     process.stdout.write = ((chunk: unknown) => {
@@ -194,9 +237,22 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
       const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
       renderer.start();
 
-      const callId = renderer.onToolCallStart('run_command', 'npm test');
-      assert.ok(callId > 0);
-      renderer.onToolCallComplete(callId, undefined, 'Command failed with exit code 1', 1);
+      const sinks = {
+        convRenderer: renderer,
+        toolIdQueue: [] as number[],
+      };
+
+      dispatchChatEvent({ type: 'tool_start', tool: 'run_command', target: 'npm test' }, sinks);
+      dispatchChatEvent(
+        {
+          type: 'tool_complete',
+          tool: 'run_command',
+          target: 'npm test',
+          error: 'Command failed with exit code 1',
+          exitCode: 1,
+        },
+        sinks,
+      );
 
       renderer.stop();
 

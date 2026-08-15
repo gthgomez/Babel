@@ -102,8 +102,10 @@ export async function executeChatTask(
   ctx.lastTurnActiveContextTokens = null;
 
   const useConversational =
-    process.stdout.isTTY && !ctx.verboseMode && !process.env['CI'] && !process.env['NO_COLOR'];
-  const convRenderer = useConversational ? new ConversationalRenderer() : null;
+    process.stdout.isTTY && !process.env['CI'] && !process.env['NO_COLOR'];
+  const convRenderer = useConversational
+    ? new ConversationalRenderer({ verboseMode: Boolean(ctx.verboseMode) })
+    : null;
 
   // U1.2: surface active coding profile when non-default/specialized or in verbose mode
   const activeProfile = resolveChatTaskClass({ taskText: task });

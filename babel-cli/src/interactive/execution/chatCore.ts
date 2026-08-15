@@ -322,16 +322,18 @@ function buildChatCallbacks(
       protocolSession?.emitChatEvent({ type: 'tool_start', tool, target: label });
       return id;
     },
-    onToolComplete: (id: number, detail?: string) => {
+    onToolComplete: (id: number, detail?: string, error?: string, exitCode?: number) => {
       const meta = toolMetadata.get(id);
       protocolSession?.emitChatEvent({
         type: 'tool_complete',
         tool: meta?.tool ?? 'tool',
         target: meta?.target ?? String(id),
         ...(detail !== undefined ? { detail } : {}),
+        ...(error !== undefined ? { error } : {}),
+        ...(exitCode !== undefined ? { exitCode } : {}),
       });
       if (meta) toolMetadata.delete(id);
-      convRenderer?.onToolCallComplete(id, detail);
+      convRenderer?.onToolCallComplete(id, detail, error, exitCode);
     },
     onFileChanged: (filePath: string, adds: number, dels: number, content?: string) => {
       dispatchChatEvent(

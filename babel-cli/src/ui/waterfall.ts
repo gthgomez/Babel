@@ -1281,6 +1281,8 @@ export class ConversationalRenderer extends BaseRenderer {
   private _historyTranscript: HistoryTranscript;
   /** Phase B4: virtual scroll viewport over measured history cells. */
   private _cellViewport: HistoryCellViewport;
+  /** Buffer for accumulating consecutive tool execution summaries to group them into N-item lines. */
+  private _pendingToolExecutions: ToolExecutionSummary[] = [];
 
   /** Sync a subset of renderer instance fields from the StateStore.
    *  Fields synced: paused, thoughtCollapsed, thoughtText.
@@ -1845,6 +1847,7 @@ export class ConversationalRenderer extends BaseRenderer {
     if (this.paused) return;
     if (this._state === 'done' || this._state === 'failed') return;
     if (!chunk) return;
+    this._flushPendingToolExecutions();
     // Fix: push BEFORE _recordActivity so the first chunk triggers
     // the 'thinking' → 'streaming' state transition.
     this.answerChunks.push(chunk);
@@ -1881,6 +1884,27 @@ export class ConversationalRenderer extends BaseRenderer {
     this._approvalPending = null;
   }
 
+  /** Flush accumulated consecutive tool execution summaries to the terminal. */
+  private _flushPendingToolExecutions(): void {
+    if (this._pendingToolExecutions.length === 0) return;
+    if (this.outputBroken) {
+      this._pendingToolExecutions = [];
+      return;
+    }
+    const groups = groupToolExecutions(this._pendingToolExecutions);
+    this._pendingToolExecutions = [];
+    for (const group of groups) {
+      const formatted = formatToolGroupSummary(group, this.verboseMode);
+      if (this.isTTY) {
+        safeStdoutWrite(`\r${formatted}\n`);
+        this._pushLinesToScrollback(formatted);
+      } else {
+        safeStdoutWrite(`${formatted}\n`);
+        this._pushLinesToScrollback(formatted);
+      }
+    }
+  }
+
   /** Tool call starts — show a brief conversational indicator with spinner. */
   onToolCallStart(tool: string | undefined, target: string | undefined): number {
     if (this.outputBroken) return -1;
@@ -1891,6 +1915,16 @@ export class ConversationalRenderer extends BaseRenderer {
       this._leaveThinking('tool');
     }
     this._recordModelActivity();
+
+    // If pending executions belong to a different category, flush them before starting new category
+    if (this._pendingToolExecutions.length > 0) {
+      const incomingGroup = groupToolExecutions([{ tool, target }])[0];
+      const pendingGroup = groupToolExecutions(this._pendingToolExecutions)[0];
+      if (incomingGroup?.category !== pendingGroup?.category || this.verboseMode) {
+        this._flushPendingToolExecutions();
+      }
+    }
+
     const id = ++this.toolCallIndex;
 
     // Dispatch FIRST — returns false if middleware cancelled
@@ -1911,9 +1945,11 @@ export class ConversationalRenderer extends BaseRenderer {
       // emit \r\x1b[K and erase the freshly-printed tool call indicator.
       this._pendingToolCallLines++;
       const label = conversationalToolLabel(tool, target);
-      // No trailing newline: onToolCallComplete rewrites this line with \r ✓ …
-      // Sandbox notices must use OutputBuffer (emitSandboxOperatorNotice), not stderr.
-      safeStdoutWrite(`\n  ${dim('○')} ${label}`);
+      if (this._pendingToolExecutions.length === 0) {
+        safeStdoutWrite(`\n  ${dim('○')} ${label}`);
+      } else {
+        safeStdoutWrite(`\r  ${dim('○')} ${label}`);
+      }
     }
     if (isA11yMode()) {
       a11yToolEvent(tool, target);
@@ -1956,24 +1992,41 @@ export class ConversationalRenderer extends BaseRenderer {
     this.pendingToolCalls.delete(id);
     this._historyTranscript.completeToolCall(id, detail);
     this._syncCellViewport();
+
+    const hasError = Boolean(error || (exitCode !== undefined && exitCode !== 0));
+    const summary: ToolExecutionSummary = {
+      tool: pending.tool,
+      target: pending.target,
+      exitCode: exitCode ?? (error ? 1 : 0),
+      ...(detail !== undefined ? { detail } : {}),
+      ...(error !== undefined ? { error } : {}),
+    };
+
     if (this.isTTY) {
-      const summary: ToolExecutionSummary = {
-        tool: pending.tool,
-        target: pending.target,
-        exitCode: exitCode ?? (error ? 1 : 0),
-        ...(detail !== undefined ? { detail } : {}),
-        ...(error !== undefined ? { error } : {}),
-      };
-      const groups = groupToolExecutions([summary]);
-      const group = groups[0] ?? {
-        category: 'other' as const,
-        count: 1,
-        items: [summary],
-        hasErrors: Boolean(error || (exitCode !== undefined && exitCode !== 0)),
-      };
-      const formatted = formatToolGroupSummary(group, this.verboseMode);
-      safeStdoutWrite(`\r${formatted}\n`);
-      this._pushLinesToScrollback(formatted);
+      if (this.verboseMode) {
+        const group = groupToolExecutions([summary])[0] ?? {
+          category: 'other' as const,
+          count: 1,
+          items: [summary],
+          hasErrors: hasError,
+        };
+        const formatted = formatToolGroupSummary(group, true);
+        safeStdoutWrite(`\r${formatted}\n`);
+        this._pushLinesToScrollback(formatted);
+      } else if (hasError) {
+        this._flushPendingToolExecutions();
+        const group = groupToolExecutions([summary])[0] ?? {
+          category: 'other' as const,
+          count: 1,
+          items: [summary],
+          hasErrors: true,
+        };
+        const formatted = formatToolGroupSummary(group, false);
+        safeStdoutWrite(`\r${formatted}\n`);
+        this._pushLinesToScrollback(formatted);
+      } else {
+        this._pendingToolExecutions.push(summary);
+      }
     } else {
       const detailStr = detail ? ` (${detail})` : '';
       const line = `[${formatElapsed(Date.now() - this.startTime)}] ${pending.tool} ${pending.target}${detailStr}`;
@@ -1989,6 +2042,7 @@ export class ConversationalRenderer extends BaseRenderer {
     deletions: number,
     diffContent?: string | null,
   ): void {
+    this._flushPendingToolExecutions();
     if (this.outputBroken) return;
     if (this.paused) return;
     this._store?.dispatch({ type: 'file:changed', filePath, additions, deletions });
@@ -2057,6 +2111,7 @@ export class ConversationalRenderer extends BaseRenderer {
 
   /** End of run — show a clean summary line. */
   onSummary({ costUSD, perRunCost }: SummaryOptions = {}): void {
+    this._flushPendingToolExecutions();
     if (this.outputBroken) return;
     if (this.isTTY) safeStdoutWrite('\r\x1b[K');
     const elapsed = formatElapsed(Date.now() - this.startTime);
@@ -2132,6 +2187,7 @@ export class ConversationalRenderer extends BaseRenderer {
    *  is stored in thoughtText (and preserved in transcripts/snapshots). */
   onThought(chunk: string): void {
     if (!chunk) return;
+    this._flushPendingToolExecutions();
     // Filter synthetic "Thinking… (N chars)" progress strings
     // from ChatEngine — these are spinner updates, not reasoning.
     if (/^Thinking… \(\d+ chars\)$/.test(chunk.trim())) return;
@@ -2153,6 +2209,7 @@ export class ConversationalRenderer extends BaseRenderer {
     score: number,
     message?: string,
   ): void {
+    this._flushPendingToolExecutions();
     if (this.outputBroken || this.paused) return;
 
     // Only display an indicator if we're not at 'none' or if we want to show a recovery nudge.
@@ -2182,6 +2239,7 @@ export class ConversationalRenderer extends BaseRenderer {
    * Writes a one-line toast into the transcript (not as model thought text).
    */
   onContextCompacted(message?: string): void {
+    this._flushPendingToolExecutions();
     if (this.outputBroken || this.paused) return;
     this._recordActivity();
     const line = message?.trim() || '[Context compacted…]';
@@ -2194,6 +2252,7 @@ export class ConversationalRenderer extends BaseRenderer {
 
   /** Track a newly spawned sub-agent in the thinking overlay. */
   onSubAgentStart(id: string, label: string, _model?: string): void {
+    this._flushPendingToolExecutions();
     if (this.outputBroken || this.paused) return;
     this._recordActivity();
     this._subAgents.set(id, {
@@ -2309,6 +2368,7 @@ export class ConversationalRenderer extends BaseRenderer {
   /** Stop — unregister FrameScheduler, unsubscribe bg tasks, transition
    *  state to terminal, show cursor. */
   stop(): void {
+    this._flushPendingToolExecutions();
     // Fix 7: Terminal state
     if (this._state !== 'failed') {
       this._state = 'done';
@@ -2365,6 +2425,7 @@ export class ConversationalRenderer extends BaseRenderer {
    * The host review card is responsible for the CANCELLED label.
    */
   cancelRun(): void {
+    this._flushPendingToolExecutions();
     if (this.outputBroken) return;
     if (this._state === 'thinking') {
       this._leaveThinking('end');
@@ -2389,6 +2450,7 @@ export class ConversationalRenderer extends BaseRenderer {
 
   /** Error — clear thinking line, unregister tick, show error, stop. */
   fail(error?: unknown): void {
+    this._flushPendingToolExecutions();
     if (this.outputBroken) return;
     if (this._state === 'thinking') {
       this._leaveThinking('end');

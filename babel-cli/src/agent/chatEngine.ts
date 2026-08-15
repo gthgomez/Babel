@@ -380,7 +380,7 @@ export interface ContextCompactedInfo {
 export interface ChatCallbacks {
   onAnswerChunk?: (chunk: string) => void;
   onToolStart?: (tool: string, target: string) => number;
-  onToolComplete?: (id: number, detail?: string) => void;
+  onToolComplete?: (id: number, detail?: string, error?: string, exitCode?: number) => void;
   onFileChanged?: (path: string, additions: number, deletions: number, content?: string) => void;
   onThought?: (thought: string) => void;
   onContextCompacted?: (info: ContextCompactedInfo) => void;
@@ -404,7 +404,7 @@ export type ChatEvent =
   | { type: 'thinking' }
   | { type: 'answer_chunk'; text: string }
   | { type: 'tool_start'; tool: string; target: string }
-  | { type: 'tool_complete'; tool: string; target: string; detail?: string }
+  | { type: 'tool_complete'; tool: string; target: string; detail?: string; error?: string; exitCode?: number }
   | { type: 'thought'; text: string }
   | {
       type: 'context_compacted';
@@ -1380,9 +1380,9 @@ export class ChatEngine {
       };
     }
     if (callbacks.onToolComplete) {
-      cb.onToolComplete = (id: number, detail?: string) => {
+      cb.onToolComplete = (id: number, detail?: string, error?: string, exitCode?: number) => {
         if (this.generationCounter !== generation) return;
-        callbacks.onToolComplete!(id, detail);
+        callbacks.onToolComplete!(id, detail, error, exitCode);
       };
     }
     if (callbacks.onFileChanged) {
@@ -1436,7 +1436,7 @@ export class ChatEngine {
             cb.onToolStart?.(event.tool, event.target);
             break;
           case 'tool_complete':
-            cb.onToolComplete?.(-1, event.detail);
+            cb.onToolComplete?.(-1, event.detail, event.error, event.exitCode);
             break;
           case 'done':
             terminal = {
@@ -2130,6 +2130,8 @@ export class ChatEngine {
             tool: tc.tool,
             target: tc.target,
             ...(tc.detail ? { detail: tc.detail } : {}),
+            ...(tc.error ? { error: tc.error } : {}),
+            ...(tc.exit_code !== undefined ? { exitCode: tc.exit_code } : {}),
           };
         }
 
