@@ -26,6 +26,7 @@ export interface ToolExecutionSummary {
   durationMs?: number | undefined;
   error?: string | undefined;
   detail?: string | undefined;
+  status?: 'success' | 'failure' | 'unknown' | undefined;
 }
 
 export interface CollapsedToolGroup {
@@ -33,6 +34,23 @@ export interface CollapsedToolGroup {
   count: number;
   items: ToolExecutionSummary[];
   hasErrors: boolean;
+  hasUnknowns: boolean;
+}
+
+export function isKnownFailureDetail(detail: string | undefined): boolean {
+  if (!detail) return false;
+  return (
+    detail === 'blocked' ||
+    detail === 'error' ||
+    detail === 'failed' ||
+    detail === 'degraded_suppressed' ||
+    detail === 'platform_unusable' ||
+    detail === 'hard-plan-mode' ||
+    detail === 'plan-gate' ||
+    detail === 'phase-gate' ||
+    detail === 'reconciliation-required' ||
+    (detail.startsWith('exit ') && !detail.startsWith('exit 0'))
+  );
 }
 
 export function groupToolExecutions(
@@ -56,19 +74,28 @@ export function groupToolExecutions(
       category = 'command';
     }
 
-    const hasError = (exec.exitCode !== undefined && exec.exitCode !== 0) || Boolean(exec.error);
+    const isErr =
+      exec.status === 'failure' ||
+      (exec.exitCode !== undefined && exec.exitCode !== 0) ||
+      Boolean(exec.error) ||
+      isKnownFailureDetail(exec.detail);
+    const isUnk =
+      exec.status === 'unknown' ||
+      (exec.exitCode === undefined && !isErr && exec.status !== 'success');
 
     // Group adjacent same-category executions unless they contain errors
     const lastGroup = groups.at(-1);
-    if (lastGroup && lastGroup.category === category && !hasError && !lastGroup.hasErrors) {
+    if (lastGroup && lastGroup.category === category && !isErr && !lastGroup.hasErrors) {
       lastGroup.count += 1;
       lastGroup.items.push(exec);
+      if (isUnk) lastGroup.hasUnknowns = true;
     } else {
       groups.push({
         category,
         count: 1,
         items: [exec],
-        hasErrors: hasError,
+        hasErrors: isErr,
+        hasUnknowns: isUnk,
       });
     }
   }
@@ -87,9 +114,20 @@ export function formatToolGroupSummary(
     // Expanded view for errors or verbose mode
     return group.items
       .map((item) => {
-        const isErr = (item.exitCode !== undefined && item.exitCode !== 0) || Boolean(item.error);
-        const icon = isErr ? error('✖') : success('✔');
-        const statusText = isErr ? error(`failed (exit ${item.exitCode ?? 1})`) : muted('ok');
+        const isErr =
+          item.status === 'failure' ||
+          (item.exitCode !== undefined && item.exitCode !== 0) ||
+          Boolean(item.error) ||
+          isKnownFailureDetail(item.detail);
+        const isSuccess =
+          item.status === 'success' ||
+          (item.exitCode === 0 && !item.error && !isKnownFailureDetail(item.detail));
+        const icon = isErr ? error('✖') : isSuccess ? success('✔') : muted('○');
+        const statusText = isErr
+          ? error(`failed (exit ${item.exitCode ?? 1})`)
+          : isSuccess
+            ? muted('ok')
+            : muted('unverified');
         const errSuffix = item.error ? ` (${item.error})` : '';
         const rawLine = `  ${icon} ${dim(item.tool)} ${item.target} — ${statusText}${errSuffix}`;
         if (visibleLength(rawLine) > termWidth) {
@@ -104,7 +142,7 @@ export function formatToolGroupSummary(
       .join('\n');
   }
 
-  // Collapsed summary for routine successful activity
+  // Collapsed summary for routine activity
   let line = '';
   switch (group.category) {
     case 'read':
@@ -114,10 +152,14 @@ export function formatToolGroupSummary(
       line = `  ${muted('○')} ${dim(`Searched workspace (${group.count} step${group.count > 1 ? 's' : ''})`)}`;
       break;
     case 'edit':
-      line = `  ${success('✔')} ${bold(`Edited ${group.count} file${group.count > 1 ? 's' : ''}`)}`;
+      line = group.hasUnknowns
+        ? `  ${muted('○')} ${dim(`Edited ${group.count} file${group.count > 1 ? 's' : ''} (unverified)`)}`
+        : `  ${success('✔')} ${bold(`Edited ${group.count} file${group.count > 1 ? 's' : ''}`)}`;
       break;
     case 'verifier':
-      line = `  ${success('✔')} ${success('Ran tests & verifiers (exit 0)')}`;
+      line = group.hasUnknowns
+        ? `  ${muted('○')} ${dim('Ran verifier (unverified)')}`
+        : `  ${success('✔')} ${success('Ran tests & verifiers (exit 0)')}`;
       break;
     case 'command':
       line = `  ${muted('○')} ${dim(`Executed ${group.count} command${group.count > 1 ? 's' : ''}`)}`;

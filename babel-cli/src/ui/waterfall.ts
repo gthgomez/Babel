@@ -61,6 +61,7 @@ import {
 import {
   formatToolGroupSummary,
   groupToolExecutions,
+  isKnownFailureDetail,
   type ToolExecutionSummary,
 } from './toolPresentation.js';
 import { renderSubAgentOverlay, type SubAgentOverlayEntry } from './subAgentOverlay.js';
@@ -1996,26 +1997,30 @@ export class ConversationalRenderer extends BaseRenderer {
     const isExplicitError = Boolean(
       error ||
       (exitCode !== undefined && exitCode !== 0) ||
-      (detail && (
-        detail === 'blocked' ||
-        detail === 'error' ||
-        detail === 'failed' ||
-        detail === 'degraded_suppressed' ||
-        detail === 'platform_unusable' ||
-        detail === 'hard-plan-mode' ||
-        detail === 'plan-gate' ||
-        detail === 'phase-gate' ||
-        detail === 'reconciliation-required' ||
-        (detail.startsWith('exit ') && !detail.startsWith('exit 0'))
-      ))
+      isKnownFailureDetail(detail)
     );
-    const resolvedExitCode = exitCode !== undefined ? exitCode : isExplicitError ? 1 : 0;
+    const isExplicitSuccess = !isExplicitError && exitCode === 0 && error === undefined;
+    const status: 'success' | 'failure' | 'unknown' = isExplicitError
+      ? 'failure'
+      : isExplicitSuccess
+        ? 'success'
+        : 'unknown';
+
     const summary: ToolExecutionSummary = {
       tool: pending.tool,
       target: pending.target,
-      exitCode: resolvedExitCode,
+      status,
+      ...(exitCode !== undefined
+        ? { exitCode }
+        : isExplicitError
+          ? { exitCode: 1 }
+          : {}),
+      ...(error !== undefined
+        ? { error }
+        : isExplicitError
+          ? { error: detail ?? 'failed' }
+          : {}),
       ...(detail !== undefined ? { detail } : {}),
-      ...(error !== undefined ? { error } : (isExplicitError ? { error: detail ?? 'failed' } : {})),
     };
 
     if (this.isTTY) {
@@ -2025,6 +2030,7 @@ export class ConversationalRenderer extends BaseRenderer {
           count: 1,
           items: [summary],
           hasErrors: isExplicitError,
+          hasUnknowns: status === 'unknown',
         };
         const formatted = formatToolGroupSummary(group, true);
         safeStdoutWrite(`\r${formatted}\n`);
@@ -2036,6 +2042,7 @@ export class ConversationalRenderer extends BaseRenderer {
           count: 1,
           items: [summary],
           hasErrors: true,
+          hasUnknowns: false,
         };
         const formatted = formatToolGroupSummary(group, false);
         safeStdoutWrite(`\r${formatted}\n`);

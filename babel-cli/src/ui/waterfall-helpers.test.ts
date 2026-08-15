@@ -1087,7 +1087,7 @@ describe('Integration — ConversationalRenderer', () => {
       renderer.start();
 
       renderer.onToolCallStart('file_read', 'src/index.ts');
-      renderer.onToolCallComplete(1);
+      renderer.onToolCallComplete(1, 'read 100 bytes', undefined, 0);
 
       // Check that the output contains the formatted conversationalToolLabel / verbose tool entry
       const allOutput = chunks.join('');

@@ -210,7 +210,7 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
 
       const callId = renderer.onToolCallStart('read_file', 'src/config.ts');
       assert.ok(callId > 0);
-      renderer.onToolCallComplete(callId, 'read 120 bytes');
+      renderer.onToolCallComplete(callId, 'read 120 bytes', undefined, 0);
 
       renderer.stop();
 
@@ -337,14 +337,14 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
       const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
       renderer.start();
 
-      // Edit 1
+      // Edit 1: Explicit success
       const id1 = renderer.onToolCallStart('write_file', 'src/a.ts');
-      renderer.onToolCallComplete(id1, 'line 10');
+      renderer.onToolCallComplete(id1, 'line 10', undefined, 0);
       renderer.onFileChanged('src/a.ts', 5, 2);
 
-      // Edit 2
+      // Edit 2: Explicit success
       const id2 = renderer.onToolCallStart('write_file', 'src/b.ts');
-      renderer.onToolCallComplete(id2, 'line 20');
+      renderer.onToolCallComplete(id2, 'line 20', undefined, 0);
       renderer.onFileChanged('src/b.ts', 8, 1);
 
       // Assistant responds
@@ -355,6 +355,152 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
       assert.ok(out.includes('Edited 2 files'), `Expected 'Edited 2 files' in collapsed output, got: ${out}`);
       assert.ok(out.includes('src/a.ts'), `Expected diff for src/a.ts, got: ${out}`);
       assert.ok(out.includes('src/b.ts'), `Expected diff for src/b.ts, got: ${out}`);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  });
+
+  test('production integration: true non-streaming execution chain with BABEL_STREAM_TOOLS=0 renders real tool failure truthfully', async () => {
+    const { isChatStreamingEnabled } = await import('../config/chatEngineLimits.js');
+    const { runChatEngineOnce } = await import('../interactive/execution/chatCore.js');
+    const { ConversationalRenderer } = await import('./waterfall.js');
+    const prevEnv = process.env.BABEL_STREAM_TOOLS;
+    process.env.BABEL_STREAM_TOOLS = '0';
+
+    assert.equal(
+      isChatStreamingEnabled(),
+      false,
+      'BABEL_STREAM_TOOLS=0 must resolve isChatStreamingEnabled() to false',
+    );
+
+    const chunks: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
+      renderer.start();
+
+      let submitMessageCalled = false;
+      const mockEngine: any = {
+        submitMessage: async (task: string, callbacks: any) => {
+          submitMessageCalled = true;
+          // Simulate real ChatEngine executing a failing command during non-streaming turn
+          const toolId = callbacks.onToolStart?.('run_command', 'git push origin main') ?? 1;
+          callbacks.onToolComplete?.(toolId, 'plan-gate', 'blocked', 1);
+          return {
+            status: 'completed',
+            answer: 'Operation was blocked by plan-gate policy.',
+            outcome: 'SUCCESS',
+            conversation: [],
+            toolCalls: [{ tool: 'run_command', target: 'git push origin main', error: 'blocked', exit_code: 1 }],
+            usage: { totalCostUSD: 0, totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0 },
+          };
+        },
+        cancel: () => undefined,
+      };
+
+      const target = {
+        targetRoot: process.cwd(),
+        workspaceRoot: null,
+        project: null,
+        source: 'cwd' as const,
+        cwd: process.cwd(),
+      };
+
+      const result = await runChatEngineOnce({
+        task: 'push my code',
+        target,
+        engine: mockEngine,
+        convRenderer: renderer,
+        preflightContext: '',
+      });
+
+      renderer.stop();
+
+      assert.equal(
+        submitMessageCalled,
+        true,
+        'runChatEngineOnce must execute submitMessage (non-streaming callback path)',
+      );
+      assert.equal(result.status, 'completed');
+      const out = stripAnsi(chunks.join(''));
+      assert.ok(out.includes('✖'), `Expected failure icon '✖' in output, got: ${out}`);
+      assert.ok(out.includes('git push origin main'), `Expected target 'git push origin main' in output, got: ${out}`);
+      assert.ok(out.includes('failed (exit 1)'), `Expected 'failed (exit 1)' in output, got: ${out}`);
+      assert.ok(!out.includes('✔'), `Should not contain success icon '✔', got: ${out}`);
+    } finally {
+      process.stdout.write = originalWrite;
+      if (prevEnv === undefined) {
+        delete process.env.BABEL_STREAM_TOOLS;
+      } else {
+        process.env.BABEL_STREAM_TOOLS = prevEnv;
+      }
+    }
+  });
+
+  test('unknown result state remains unverified and never produces green success or exit 0', async () => {
+    const { ConversationalRenderer } = await import('./waterfall.js');
+    const chunks: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: true });
+      renderer.start();
+
+      const id = renderer.onToolCallStart('read_file', 'src/unknown_probe.ts');
+      assert.ok(id > 0);
+      // Completely unspecified status with a neutral detail string
+      renderer.onToolCallComplete(id, 'read 42 bytes');
+
+      renderer.stop();
+
+      const out = stripAnsi(chunks.join(''));
+      assert.ok(out.includes('src/unknown_probe.ts'), `Expected target in output, got: ${out}`);
+      assert.ok(out.includes('unverified'), `Expected 'unverified' status in output, got: ${out}`);
+      assert.ok(!out.includes('✔'), `Should NOT contain success checkmark '✔', got: ${out}`);
+      assert.ok(!out.includes('exit 0'), `Should NOT invent 'exit 0', got: ${out}`);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  });
+
+  test('unknown edit among successful edits prevents false-green Edited N files promotion', async () => {
+    const { ConversationalRenderer } = await import('./waterfall.js');
+    const chunks: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
+      renderer.start();
+
+      // Confirmed success edit
+      const id1 = renderer.onToolCallStart('write_file', 'src/a.ts');
+      renderer.onToolCallComplete(id1, 'line 10', undefined, 0);
+      renderer.onFileChanged('src/a.ts', 5, 2);
+
+      // Unknown edit (missing exitCode and error)
+      const id2 = renderer.onToolCallStart('write_file', 'src/b.ts');
+      renderer.onToolCallComplete(id2, 'updated');
+      renderer.onFileChanged('src/b.ts', 8, 1);
+
+      renderer.onAnswerChunk('Edits made.');
+      renderer.stop();
+
+      const out = stripAnsi(chunks.join(''));
+      assert.ok(out.includes('Edited 2 files (unverified)'), `Expected unverified group summary, got: ${out}`);
+      assert.ok(!out.includes('✔ Edited 2 files'), `Should NOT contain green success '✔ Edited 2 files', got: ${out}`);
     } finally {
       process.stdout.write = originalWrite;
     }
