@@ -19,7 +19,6 @@ import {
   muted,
   ghost,
   primary,
-  accent,
   success,
   error as errColor,
   warning,
@@ -187,7 +186,7 @@ export class ReadFileRenderer implements ToolRenderer {
 
   renderRunning(context: ToolRenderContext): string {
     const path = extractPath(context.toolInput);
-    return `${dim('Reading')} ${accent(path)}${dim('...')}`;
+    return `${dim('Reading')} ${primary(path)}${dim('...')}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
@@ -195,7 +194,7 @@ export class ReadFileRenderer implements ToolRenderer {
     const lineCount =
       extractLineCount(context) ?? extractResultLineCount(context.result) ?? null;
     const duration = formatDuration(context.durationMs);
-    const parts: string[] = [success('Read'), accent(path)];
+    const parts: string[] = [success('Read'), primary(path)];
     if (lineCount !== null) parts.push(dim(`(${lineCount} lines)`));
     if (duration) parts.push(dim(duration));
     let output = parts.join(' ');
@@ -215,7 +214,7 @@ export class ReadFileRenderer implements ToolRenderer {
   renderError(context: ToolRenderContext): string {
     const path = extractPath(context.toolInput);
     const msg = context.error ?? 'unknown error';
-    return `${errColor('Failed')} ${accent(path)} ${dim(`— ${msg}`)}`;
+    return `${errColor('Failed')} ${primary(path)} ${dim(`— ${msg}`)}`;
   }
 }
 
@@ -230,14 +229,14 @@ export class WriteFileRenderer implements ToolRenderer {
 
   renderRunning(context: ToolRenderContext): string {
     const path = extractPath(context.toolInput);
-    return `${dim('Writing')} ${accent(path)}${dim('...')}`;
+    return `${dim('Writing')} ${primary(path)}${dim('...')}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
     const path = extractPath(context.toolInput);
     const diff = extractDiffInfo(context.toolInput);
     const duration = formatDuration(context.durationMs);
-    const parts: string[] = [success('Written'), accent(path)];
+    const parts: string[] = [success('Written'), primary(path)];
     if (diff) {
       const addStr = diff.additions > 0 ? `+${diff.additions}` : '';
       const delStr = diff.deletions > 0 ? `−${diff.deletions}` : '';
@@ -257,7 +256,7 @@ export class WriteFileRenderer implements ToolRenderer {
   renderError(context: ToolRenderContext): string {
     const path = extractPath(context.toolInput);
     const msg = context.error ?? 'unknown error';
-    return `${errColor('Failed')} ${accent(path)} ${dim(`— ${msg}`)}`;
+    return `${errColor('Failed')} ${primary(path)} ${dim(`— ${msg}`)}`;
   }
 }
 
@@ -331,7 +330,7 @@ export class GrepRenderer implements ToolRenderer {
 
   renderRunning(context: ToolRenderContext): string {
     const pattern = extractPattern(context.toolInput);
-    return `${dim('Searching for')} ${accent(pattern)}${dim('...')}`;
+    return `${dim('Searching for')} ${primary(pattern)}${dim('...')}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
@@ -342,7 +341,7 @@ export class GrepRenderer implements ToolRenderer {
     const parts: string[] = [success('Found')];
 
     if (matchCount !== null) {
-      parts.push(accent(String(matchCount)));
+      parts.push(primary(String(matchCount)));
       parts.push(dim(matchCount === 1 ? 'match' : 'matches'));
     }
     if (fileCount !== null) {
@@ -414,7 +413,7 @@ export class WebFetchRenderer implements ToolRenderer {
   renderRunning(context: ToolRenderContext): string {
     const url = extractUrl(context.toolInput);
     const display = url.length > 64 ? `${url.slice(0, 61)}...` : url;
-    return `${dim('Fetching')} ${accent(display)}${dim('...')}`;
+    return `${dim('Fetching')} ${primary(display)}${dim('...')}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
@@ -423,7 +422,7 @@ export class WebFetchRenderer implements ToolRenderer {
     const statusCode = this.extractStatusCode(context);
     const contentLength = this.extractContentLength(context);
     const duration = formatDuration(context.durationMs);
-    const parts: string[] = [success('Fetched'), accent(display)];
+    const parts: string[] = [success('Fetched'), primary(display)];
 
     if (statusCode !== null) {
       const codeStr = statusCode >= 200 && statusCode < 300 ? success(String(statusCode)) : warning(String(statusCode));
@@ -455,7 +454,7 @@ export class WebFetchRenderer implements ToolRenderer {
     const url = extractUrl(context.toolInput);
     const display = truncate(url, 64);
     const msg = context.error ?? 'unknown error';
-    return `${errColor('Failed to fetch')} ${accent(display)} ${dim(`— ${msg}`)}`;
+    return `${errColor('Failed to fetch')} ${primary(display)} ${dim(`— ${msg}`)}`;
   }
 
   private extractStatusCode(context: ToolRenderContext): number | null {
@@ -496,7 +495,7 @@ export class WebSearchRenderer implements ToolRenderer {
 
   renderRunning(context: ToolRenderContext): string {
     const query = extractPattern(context.toolInput);
-    return `${dim('Searching for')} ${accent(`"${query}"`)}${dim('...')}`;
+    return `${dim('Searching for')} ${primary(`"${query}"`)}${dim('...')}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
@@ -506,7 +505,7 @@ export class WebSearchRenderer implements ToolRenderer {
     const parts: string[] = [success('Found')];
 
     if (resultCount !== null) {
-      parts.push(accent(String(resultCount)));
+      parts.push(primary(String(resultCount)));
       parts.push(dim(resultCount === 1 ? 'result' : 'results'));
     }
     parts.push(dim(`for "${query}"`));
@@ -558,7 +557,7 @@ export class SubAgentRenderer implements ToolRenderer {
   renderRunning(context: ToolRenderContext): string {
     const agentName = this.extractAgentName(context);
     const task = this.extractTask(context);
-    const parts: string[] = [dim('Agent'), accent(agentName)];
+    const parts: string[] = [dim('Agent'), primary(agentName)];
     if (task) parts.push(dim(`— ${truncate(task, 60)}`));
     parts.push(dim('...'));
     return parts.join(' ');
@@ -568,7 +567,7 @@ export class SubAgentRenderer implements ToolRenderer {
     const agentName = this.extractAgentName(context);
     const task = this.extractTask(context);
     const duration = formatDuration(context.durationMs);
-    const parts: string[] = [success('Agent'), accent(agentName), success('✓')];
+    const parts: string[] = [success('Agent'), primary(agentName), success('✓')];
     if (task) parts.push(dim(truncate(task, 60)));
     if (duration) parts.push(dim(duration));
 
@@ -592,7 +591,7 @@ export class SubAgentRenderer implements ToolRenderer {
     const agentName = this.extractAgentName(context);
     const task = this.extractTask(context);
     const msg = context.error ?? 'unknown error';
-    const parts: string[] = [errColor('Agent'), accent(agentName), errColor('✖')];
+    const parts: string[] = [errColor('Agent'), primary(agentName), errColor('✖')];
     if (task) parts.push(dim(truncate(task, 60)));
     parts.push(dim(`— ${msg}`));
     return parts.join(' ');
@@ -634,12 +633,12 @@ export class GenericToolRenderer implements ToolRenderer {
 
   renderRunning(context: ToolRenderContext): string {
     const inputPreview = this.previewInput(context.toolInput);
-    return `${dim('Tool:')} ${accent(context.toolName)}${inputPreview ? ` ${dim(inputPreview)}` : ''}${dim('...')}`;
+    return `${dim('Tool:')} ${primary(context.toolName)}${inputPreview ? ` ${dim(inputPreview)}` : ''}${dim('...')}`;
   }
 
   renderComplete(context: ToolRenderContext): string {
     const duration = formatDuration(context.durationMs);
-    const parts: string[] = [accent(context.toolName), success('✓')];
+    const parts: string[] = [primary(context.toolName), success('✓')];
     if (duration) parts.push(dim(duration));
 
     let output = parts.join(' ');
@@ -655,7 +654,7 @@ export class GenericToolRenderer implements ToolRenderer {
 
   renderError(context: ToolRenderContext): string {
     const msg = context.error ?? 'unknown error';
-    return `${accent(context.toolName)} ${errColor('✖')} ${dim(`— ${msg}`)}`;
+    return `${primary(context.toolName)} ${errColor('✖')} ${dim(`— ${msg}`)}`;
   }
 
   private previewInput(input: Record<string, unknown>, maxLen: number = 40): string {

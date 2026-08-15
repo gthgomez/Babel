@@ -93,26 +93,66 @@ export function looksLikeVerifiedSuccess(kind: ReviewCardKind): boolean {
   return kind === 'VERIFIED_COMPLETE';
 }
 
-function paintTitle(kind: ReviewCardKind, label: string, isNotApplicable = false): string {
+export type ReviewTitleTone = 'success' | 'warning' | 'error' | 'muted';
+
+/** Semantic paint for a review title. Color is not the only carrier — glyphs stay. */
+export function reviewTitleTone(
+  kind: ReviewCardKind,
+  isNotApplicable = false,
+): ReviewTitleTone {
   if (isNotApplicable && (kind === 'COMPLETE_UNVERIFIED' || kind === 'VERIFIED_COMPLETE')) {
-    return success(`✓ ${label}`);
+    return 'muted';
   }
   switch (kind) {
     case 'VERIFIED_COMPLETE':
-      return success(`✓ ${label}`);
+      return 'success';
     case 'COMPLETE_UNVERIFIED':
-      return warning(`○ ${label}`);
-    case 'VERIFICATION_FAILED':
-      return error(`✗ ${label}`);
     case 'BLOCKED':
-      return warning(`⊘ ${label}`);
-    case 'CANCELLED':
-      return muted(`■ ${label}`);
     case 'BUDGET_EXHAUSTED':
-      return warning(`▣ ${label}`);
+      return 'warning';
+    case 'CANCELLED':
+      return 'muted';
+    case 'VERIFICATION_FAILED':
     case 'INFRA_FAILURE':
     case 'AGENT_FAILURE':
-      return error(`✖ ${label}`);
+      return 'error';
+  }
+}
+
+function paintByTone(tone: ReviewTitleTone, text: string): string {
+  switch (tone) {
+    case 'success':
+      return success(text);
+    case 'warning':
+      return warning(text);
+    case 'error':
+      return error(text);
+    case 'muted':
+      return muted(text);
+  }
+}
+
+function paintTitle(kind: ReviewCardKind, label: string, isNotApplicable = false): string {
+  const tone = reviewTitleTone(kind, isNotApplicable);
+  if (isNotApplicable && (kind === 'COMPLETE_UNVERIFIED' || kind === 'VERIFIED_COMPLETE')) {
+    return paintByTone(tone, `✓ ${label}`);
+  }
+  switch (kind) {
+    case 'VERIFIED_COMPLETE':
+      return paintByTone(tone, `✓ ${label}`);
+    case 'COMPLETE_UNVERIFIED':
+      return paintByTone(tone, `○ ${label}`);
+    case 'VERIFICATION_FAILED':
+      return paintByTone(tone, `✗ ${label}`);
+    case 'BLOCKED':
+      return paintByTone(tone, `⊘ ${label}`);
+    case 'CANCELLED':
+      return paintByTone(tone, `■ ${label}`);
+    case 'BUDGET_EXHAUSTED':
+      return paintByTone(tone, `▣ ${label}`);
+    case 'INFRA_FAILURE':
+    case 'AGENT_FAILURE':
+      return paintByTone(tone, `✖ ${label}`);
   }
 }
 

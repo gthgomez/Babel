@@ -409,13 +409,9 @@ export function renderRule(width: number = 18, char: string = '─'): string {
 // ── ThemeProvider ────────────────────────────────────────────────────────
 
 /**
- * Centralized theme token resolver.
- *
- * Components call `ThemeProvider.getInstance().resolve('primary')` instead of
- * hardcoding color functions. This enables runtime theme switching — all
- * components update when the active theme changes.
- *
- * Pattern ported from claude-code `src/components/design-system/ThemeProvider`.
+ * Optional token resolver. Unused by daily-driver surfaces — they call
+ * module-level helpers (`success`, `error`, `warning`, `muted`, `accent`).
+ * Do not migrate the TUI onto this class without measured need.
  */
 export class ThemeProvider {
   private static instance: ThemeProvider | null = null;

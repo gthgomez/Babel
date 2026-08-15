@@ -20,7 +20,7 @@
  * @module tokenBar
  */
 
-import { muted, ghost, success, warning, error, info, bold, humanizeModelId } from './theme.js';
+import { muted, ghost, warning, info, humanizeModelId } from './theme.js';
 import { getEffectiveTerminalWidth } from './theme.js';
 import { type TokenUsageTracker, renderTokenSparkline } from './tokenHistory.js';
 import { getModelContextWindow } from '../modelPolicy.js';
@@ -163,7 +163,8 @@ export function renderTokenBar(
   let coloredPercent: string;
   switch (tier) {
     case UtilizationTier.Critical:
-      coloredPercent = error(percentStr);
+      // Attention, not execution failure — error stays reserved for real failures.
+      coloredPercent = warning(percentStr);
       break;
     case UtilizationTier.High:
       coloredPercent = warning(percentStr);
@@ -251,13 +252,13 @@ export function renderTokenBarWithHistory(
 
 /**
  * Get color function for a utilization tier.
- * Neutral/muted for safe utilization, warning for moderate/high, error for critical.
+ * Safe → muted, moderate → info, high/critical → warning.
+ * `error` is reserved for actual execution failure, not resource pressure.
  * Green is reserved for pass/verification semantics only.
  */
 export function utilizationColorFn(tier: UtilizationTier): (text: string) => string {
   switch (tier) {
     case UtilizationTier.Critical:
-      return error;
     case UtilizationTier.High:
       return warning;
     case UtilizationTier.Moderate:
