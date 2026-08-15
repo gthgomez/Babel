@@ -102,8 +102,15 @@ export interface StatusBarRightPart {
  * Attention-preemption policy.
  *
  * The static shed matrix is the default. When something actually matters,
- * it may appear below its static band and displace quieter metadata —
+ * it may appear below its static band and take space from quieter chrome —
  * it does not end-truncate the right cluster (that clipped the context meter).
+ *
+ * Width 60:
+ *   normal:    model                         context
+ *   critical:  model              rate-limit context
+ *
+ * Wider bands keep the same rule: insert the live signal, then drop
+ * `displaceInOrder` if the right cluster still cannot fit.
  */
 export const ATTENTION_PREEMPTION = {
   /** Exhausted / critical rate-limit may break through to the 60-band. */
