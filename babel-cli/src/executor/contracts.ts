@@ -92,6 +92,7 @@ export interface ExecutorVerifierReceipt {
   capturedAt: number
   stale: boolean
   staleReason?: string
+  scope?: 'full_suite' | 'targeted' | 'smoke' | 'property' | 'security'
 }
 
 /** Input used by the shared completion authority. */

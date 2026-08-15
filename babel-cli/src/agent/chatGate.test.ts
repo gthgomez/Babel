@@ -6,6 +6,7 @@ import { describe, test, beforeEach } from 'node:test';
 import { ChatEngine, type TaskIntent } from './chatEngine.js';
 import { hasSubAgentWrites } from './chatEngineCriticBudget.js';
 import { extractVerifierCommand } from './chatEngineVerifierSession.js';
+import { evaluateCompletionGateForEngine, type VerifierReceipt } from './completionGatePolicy.js';
 import type { ChatTurn } from './chatToolDefinitions.js';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -333,6 +334,7 @@ function setTestVerifierReceipt(engine: ChatEngine, command: string, exit_code =
     authoritySource: 'built_in_runner' as const,
     verifierId: 'test-verifier',
     capturedAt: 1_700_000_000_000,
+    scope: 'full_suite' as const,
     boundRevision: {
       gitCommitHash: null,
       compositeTreeHash: 'sha256:test-tree',
@@ -342,6 +344,7 @@ function setTestVerifierReceipt(engine: ChatEngine, command: string, exit_code =
   };
   (engine as any).lastVerifierReceipt = receipt;
   (engine as any).executedVerifierLedger = [receipt];
+  engine.setTestWorkspaceRevisionHash('sha256:test-tree');
 }
 
 function pushToolLog(engine: ChatEngine, entry: Record<string, unknown>) {
@@ -837,3 +840,184 @@ describe('post-edit static check', () => {
     }
   });
 });
+
+describe('PR-76: Adversarial Verifier Freshness & Promotion Gate', () => {
+  const baseReceipt = (overrides?: Record<string, unknown>): any => ({
+    command: 'npm test',
+    exit_code: 0,
+    exitCode: 0,
+    summary: 'all tests passed',
+    receiptId: 'r-0',
+    authority: true,
+    authoritySource: 'built_in_runner',
+    verifierId: 'test-runner',
+    capturedAt: Date.now(),
+    boundRevision: {
+      gitCommitHash: null,
+      compositeTreeHash: 'rev-abc-123',
+      fileHashes: {},
+      capturedAt: Date.now(),
+    },
+    scope: 'full_suite',
+    ...overrides,
+  });
+
+  test('1. stale green receipt + mutated workspace => reject', () => {
+    const decision = evaluateCompletionGateForEngine({
+      turnType: 'completion',
+      taskIntent: 'execute',
+      task: 'fix the critical bug in production',
+      taskClass: 'general_swe',
+      toolCallLog: [{ tool: 'write_file', target: 'src/app.ts' }],
+      lastVerifierReceipt: baseReceipt({ stale: true }),
+      requiredVerifierCommands: ['npm test'],
+      currentWorkspaceRevisionHash: 'rev-abc-123',
+    });
+    assert.equal(decision, 'reject');
+  });
+
+  test('2. green receipt + missing live revision => reject when revision bind required', () => {
+    const decision = evaluateCompletionGateForEngine({
+      turnType: 'completion',
+      taskIntent: 'execute',
+      task: 'fix the critical bug in production',
+      taskClass: 'governance',
+      toolCallLog: [{ tool: 'write_file', target: 'src/app.ts' }],
+      lastVerifierReceipt: baseReceipt(),
+      requiredVerifierCommands: ['npm test'],
+      currentWorkspaceRevisionHash: null, // Missing live revision
+    });
+    assert.equal(decision, 'reject');
+  });
+
+  test('3. green receipt + wrong live revision => reject', () => {
+    const decision = evaluateCompletionGateForEngine({
+      turnType: 'completion',
+      taskIntent: 'execute',
+      task: 'fix the critical bug in production',
+      taskClass: 'governance',
+      toolCallLog: [{ tool: 'write_file', target: 'src/app.ts' }],
+      lastVerifierReceipt: baseReceipt({
+        boundRevision: {
+          gitCommitHash: null,
+          compositeTreeHash: 'rev-old-111',
+          fileHashes: {},
+          capturedAt: Date.now(),
+        },
+      }),
+      requiredVerifierCommands: ['npm test'],
+      currentWorkspaceRevisionHash: 'rev-new-222', // Mismatched live revision
+    });
+    assert.equal(decision, 'reject');
+  });
+
+  test('4. current green receipt + matching live revision => allow only when requirements pass', () => {
+    const decision = evaluateCompletionGateForEngine({
+      turnType: 'completion',
+      taskIntent: 'execute',
+      task: 'fix the critical bug in production',
+      taskClass: 'governance',
+      toolCallLog: [{ tool: 'write_file', target: 'src/app.ts' }],
+      lastVerifierReceipt: baseReceipt({
+        boundRevision: {
+          gitCommitHash: null,
+          compositeTreeHash: 'rev-match-333',
+          fileHashes: {},
+          capturedAt: Date.now(),
+        },
+      }),
+      requiredVerifierCommands: ['npm test'],
+      currentWorkspaceRevisionHash: 'rev-match-333',
+    });
+    assert.equal(decision, 'allow');
+  });
+
+  test('5. previous-turn green receipt cannot satisfy a new mutating turn when ledger is empty', () => {
+    const decision = evaluateCompletionGateForEngine({
+      turnType: 'completion',
+      taskIntent: 'execute',
+      task: 'fix the critical bug in production',
+      taskClass: 'governance',
+      toolCallLog: [{ tool: 'write_file', target: 'src/new-feature.ts' }],
+      executedVerifierLedger: [], // Current turn executed verifier ledger is empty
+      lastVerifierReceipt: baseReceipt(), // From previous turn
+      requiredVerifierCommands: ['npm test'],
+      currentWorkspaceRevisionHash: 'rev-abc-123',
+    });
+    assert.equal(decision, 'reject');
+  });
+
+  test('6. empty ledger cannot silently promote from unrelated historical receipt', () => {
+    const decision = evaluateCompletionGateForEngine({
+      turnType: 'completion',
+      taskIntent: 'execute',
+      task: 'repair database migration',
+      taskClass: 'governance',
+      toolCallLog: [{ tool: 'replace_file_content', target: 'src/db.ts' }],
+      executedVerifierLedger: [],
+      lastVerifierReceipt: null,
+      requiredVerifierCommands: ['npm test'],
+      currentWorkspaceRevisionHash: 'rev-abc-123',
+    });
+    assert.equal(decision, 'reject');
+  });
+
+  test('7. targeted receipt cannot satisfy full-suite requirement', () => {
+    const decision = evaluateCompletionGateForEngine({
+      turnType: 'completion',
+      taskIntent: 'execute',
+      task: 'refactor authentication pipeline',
+      taskClass: 'governance',
+      toolCallLog: [{ tool: 'write_file', target: 'src/auth.ts' }],
+      lastVerifierReceipt: baseReceipt({ scope: 'targeted' }), // Targeted scope on full_suite profile
+      requiredVerifierCommands: ['npm test'],
+      currentWorkspaceRevisionHash: 'rev-abc-123',
+    });
+    assert.equal(decision, 'reject');
+  });
+
+  test('8. non-authoritative receipt cannot promote', () => {
+    const decision = evaluateCompletionGateForEngine({
+      turnType: 'completion',
+      taskIntent: 'execute',
+      task: 'fix data validator',
+      taskClass: 'governance',
+      toolCallLog: [{ tool: 'write_file', target: 'src/validator.ts' }],
+      lastVerifierReceipt: baseReceipt({
+        authority: false,
+      }),
+      requiredVerifierCommands: ['npm test'],
+      currentWorkspaceRevisionHash: 'rev-abc-123',
+    });
+    assert.equal(decision, 'reject');
+  });
+
+  test('9. failed verifier cannot promote', () => {
+    const decision = evaluateCompletionGateForEngine({
+      turnType: 'completion',
+      taskIntent: 'execute',
+      task: 'fix test runner',
+      taskClass: 'governance',
+      toolCallLog: [{ tool: 'write_file', target: 'src/runner.ts' }],
+      lastVerifierReceipt: baseReceipt({ exitCode: 1, exit_code: 1 }),
+      requiredVerifierCommands: ['npm test'],
+      currentWorkspaceRevisionHash: 'rev-abc-123',
+    });
+    assert.equal(decision, 'reject');
+  });
+
+  test('10. explicitly stale receipt cannot promote', () => {
+    const decision = evaluateCompletionGateForEngine({
+      turnType: 'completion',
+      taskIntent: 'execute',
+      task: 'fix cache layer',
+      taskClass: 'governance',
+      toolCallLog: [{ tool: 'write_file', target: 'src/cache.ts' }],
+      lastVerifierReceipt: baseReceipt({ stale: true, staleReason: 'workspace mutated after verifier execution' }),
+      requiredVerifierCommands: ['npm test'],
+      currentWorkspaceRevisionHash: 'rev-abc-123',
+    });
+    assert.equal(decision, 'reject');
+  });
+});
+

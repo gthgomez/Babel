@@ -365,6 +365,8 @@ export interface ChatEngineOptions {
   requiredVerifierCommands?: readonly string[] | null;
   /** C1/B7 rollout: enforce in development/CI, shadow in production by default. */
   runtimeInvariantMode?: RuntimeInvariantMode;
+  /** Test-only: explicit live workspace revision hash for gate freshness tests. */
+  testWorkspaceRevisionHash?: string | null;
 }
 
 export interface ContextCompactedInfo {
@@ -684,6 +686,11 @@ export class ChatEngine {
   private parity: ParityRuntime;
   private readonly runtimeInvariants: RuntimeInvariantRegistry<RequestReconstructionContext>;
   private failureBudgetTracker: FailureClassBudgetTracker = createFailureBudgetTrackerFromContract(null);
+  private testWorkspaceRevisionHash?: string | null | undefined;
+
+  public setTestWorkspaceRevisionHash(hash: string | null | undefined): void {
+    this.testWorkspaceRevisionHash = hash;
+  }
 
   private get engineRunDir(): string {
     return chatSessionDir(this.engineRunId);
@@ -691,6 +698,7 @@ export class ChatEngine {
 
   constructor(options: ChatEngineOptions) {
     this.options = options;
+    this.testWorkspaceRevisionHash = options.testWorkspaceRevisionHash;
     this.executionProfile = options.executionProfile ?? 'chat';
     this.executorKernel = createExecutorKernel(this.executionProfile);
     this.services = this.executorKernel.services;
@@ -865,12 +873,16 @@ export class ChatEngine {
       .filter((command) => command.trim().length > 0);
     const verifierInput = this.buildVerifierInput();
     // H5: live workspace revision at gate time (not the receipt's own bound hash).
-    let currentWorkspaceRevisionHash: string | undefined;
+    let currentWorkspaceRevisionHash: string | undefined =
+      this.testWorkspaceRevisionHash !== null ? (this.testWorkspaceRevisionHash ?? undefined) : undefined;
     try {
-      currentWorkspaceRevisionHash = RevisionManager.computeRevisionSync(
-        this.options.projectRoot,
-        mutationPathsFromSessionEvents(this.parity.sessionEvents.events),
-      ).compositeTreeHash;
+      const paths = mutationPathsFromSessionEvents(this.parity.sessionEvents.events);
+      if (paths.length > 0) {
+        currentWorkspaceRevisionHash = RevisionManager.computeRevisionSync(
+          this.options.projectRoot,
+          paths,
+        ).compositeTreeHash;
+      }
     } catch { /* best-effort */ }
     return evaluateCompletionGateForEngine({
       turnType: turnResult.type, taskIntent, task: this.options.task, taskClass: this.taskClass,

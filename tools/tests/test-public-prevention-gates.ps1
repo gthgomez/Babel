@@ -211,5 +211,10 @@ const inferred = join(workspaceRoot, family, projectFolderName)
   Write-Host 'Public prevention gate fixture tests passed.' -ForegroundColor Green
 } finally {
   Remove-Item Env:BABEL_PRIVATE_SCRUB_POLICY_PATH -ErrorAction SilentlyContinue
-  if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
+  try {
+    if (Test-Path -LiteralPath $tempRoot) {
+      Get-ChildItem -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.Attributes = 'Normal' }
+      Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  } catch {}
 }
