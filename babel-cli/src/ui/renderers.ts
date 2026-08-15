@@ -14,6 +14,7 @@ import {
   muted,
   primary,
   warning,
+  error,
   accentBlue,
   dim,
   getEffectiveTerminalWidth,
@@ -304,7 +305,7 @@ export function renderErrorPanel(
   message: string,
   nextHint: string | null = null,
 ): string {
-  const lines = [`${warning('✖')} ${accentBright(errorKind)}`, `  ${muted(message)}`];
+  const lines = [`${warning('✖')} ${error(errorKind)}`, `  ${muted(message)}`];
   if (nextHint) {
     lines.push('');
     lines.push(`  ${dim('Next:')} ${accentBlue(nextHint)}`);
@@ -315,7 +316,7 @@ export function renderErrorPanel(
 export function renderPlanModeWarning(): string {
   const body = [
     `${warning('⚠')} ${warning('PLAN MODE ACTIVE')}`,
-    `${muted('file_write, shell_exec are')} ${accentBright('BLOCKED')}${muted('.')}`,
+    `${muted('file_write, shell_exec are')} ${warning('BLOCKED')}${muted('.')}`,
     `${muted("Switch back with '")}${accentBlue('/mode chat')}${muted("' when you want the normal action path.")}`,
   ];
   return renderWarningPanel(body, 'read-only safety gate');

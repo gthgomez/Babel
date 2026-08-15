@@ -746,7 +746,7 @@ export class MultiSelectDialog extends Dialog<string[] | null> {
     const optionLines: string[] = [];
     for (let i = 0; i < maxVisible; i++) {
       const option = this.options[i] ?? '';
-      const checked = this.selected.has(i) ? '\x1b[32m✓\x1b[0m' : '○';
+      const checked = this.selected.has(i) ? success('✓') : '○';
       const isCursor = i === this.cursor;
       const desc = this.descriptions[i] ? ghost(` — ${this.descriptions[i]}`) : '';
       const display = isCursor

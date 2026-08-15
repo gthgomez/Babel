@@ -24,7 +24,7 @@
  * @module rateLimitWidget
  */
 
-import { muted, ghost, warning, error, info, bold } from './theme.js';
+import { muted, ghost, warning, info, bold } from './theme.js';
 import { getEffectiveTerminalWidth } from './theme.js';
 
 // ── Types ───────────────────────────────────────────────────────────────
@@ -114,8 +114,10 @@ function buildBar(ratio: number, width: number, colorFn: (text: string) => strin
 function colorForTier(tier: RateLimitTier): (text: string) => string {
   switch (tier) {
     case RateLimitTier.Exhausted:
+      // Hard stop — cannot continue. Still not an execution-failure red flood:
+      // the ⛔ glyph carries the blocked meaning; warning is the pressure/block channel.
+      return warning;
     case RateLimitTier.Critical:
-      return error;
     case RateLimitTier.Warning:
       return warning;
     default:
@@ -172,7 +174,7 @@ export function renderRateLimitWidget(state: RateLimitState | null, width?: numb
   switch (tier) {
     case RateLimitTier.Exhausted: {
       const resetStr = formatTimeRemaining(resetAt);
-      return `${bar} ${colorFn(displayStr)} ${error(`⛔ ${resetStr}`)}`;
+      return `${bar} ${colorFn(displayStr)} ${warning(`⛔ ${resetStr}`)}`;
     }
     case RateLimitTier.Critical: {
       const resetStr = formatTimeRemaining(resetAt);
@@ -212,7 +214,7 @@ export function renderCompactRateLimit(state: RateLimitState | null): string {
   switch (tier) {
     case RateLimitTier.Exhausted: {
       const resetStr = formatTimeRemaining(resetAt);
-      return `${colorFn(displayStr)} ${error(`⛔ ${resetStr}`)}`;
+      return `${colorFn(displayStr)} ${warning(`⛔ ${resetStr}`)}`;
     }
     case RateLimitTier.Critical: {
       const resetStr = formatTimeRemaining(resetAt);

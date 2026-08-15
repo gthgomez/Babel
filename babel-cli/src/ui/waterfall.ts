@@ -6,7 +6,7 @@ import {
   primary,
   dim,
   bold,
-  commandAccent,
+
   info,
   sectionLabel,
   success,
@@ -583,7 +583,7 @@ export class WaterfallRenderer extends BaseRenderer {
 
     const lines: string[] = [
       sectionLabel('── Run Complete ──'),
-      `${muted('Duration')} ${elapsed}  ${muted('Cost')} ${commandAccent('$' + s.cachedCostStr)}  ${muted('Tools')} ${String(s.completedToolCalls)}`,
+      `${muted('Duration')} ${elapsed}  ${muted('Cost')} ${muted('$' + s.cachedCostStr)}  ${muted('Tools')} ${String(s.completedToolCalls)}`,
       '',
       sectionLabel('Stages:'),
       `  ${stageSummary}`,
@@ -680,7 +680,7 @@ export class WaterfallRenderer extends BaseRenderer {
           sectionLabel('Error:'),
           `  ${error(s.errorMessage)}`,
           '',
-          `${muted('Time')} ${elapsed}   ${muted('Cost')} ${commandAccent(`$${s.cachedCostStr}`)}`,
+          `${muted('Time')} ${elapsed}   ${muted('Cost')} ${muted(`$${s.cachedCostStr}`)}`,
           border('─'.repeat(width)),
           dim('  [Enter] dismiss  [/inspect] details'),
         ].join('\n');
@@ -807,7 +807,7 @@ export class WaterfallRenderer extends BaseRenderer {
             ]
           : []),
         '',
-        `${muted('Time')} ${elapsed}   ${muted('Cost')} ${commandAccent(`$${s.cachedCostStr}`)}`,
+        `${muted('Time')} ${elapsed}   ${muted('Cost')} ${muted(`$${s.cachedCostStr}`)}`,
         border('─'.repeat(width)),
         dim('  [T] thought  [P] pause  [Esc] cancel  [Ctrl+R] history'),
       ].join('\n');
@@ -2148,12 +2148,12 @@ export class ConversationalRenderer extends BaseRenderer {
     if (this.isTTY) {
       let output = `\n  ${dim('·')} ${muted(elapsed)}`;
       if (typeof perRunCost === 'number') {
-        output += `  ${dim('·')} ${commandAccent(`$${perRunCost.toFixed(4)}`)} this turn`;
+        output += `  ${dim('·')} ${muted(`$${perRunCost.toFixed(4)}`)} this turn`;
         if (typeof costUSD === 'number') {
           output += `  ${dim('·')} ${muted(`$${costUSD.toFixed(4)} total`)}`;
         }
       } else if (typeof costUSD === 'number') {
-        output += `  ${dim('·')} ${commandAccent(`$${costUSD.toFixed(4)}`)}`;
+        output += `  ${dim('·')} ${muted(`$${costUSD.toFixed(4)}`)}`;
       }
       if (this.toolCallCount > 0) {
         output += `  ${dim('·')} ${this.toolCallCount} tool call${this.toolCallCount !== 1 ? 's' : ''}`;
