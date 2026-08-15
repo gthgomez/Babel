@@ -32,3 +32,7 @@ last_verified: 2026-07-03
 - **Multi-Language Gating:** For platform-bridging skills (JNI, Sockets, AAudio/Oboe), the `file_extension_gate` must include both Kotlin and C++ file extensions (e.g. `[".kt", ".cpp", ".h"]`) to ensure activation across JVM and native NDK source scopes.
 - **Commit Integrity:** Stage and commit new skills and catalog changes locally to the current task branch immediately upon verification instead of leaving the workspace dirty.
 - **Walkthrough Veracity:** Walkthroughs must detail only the mutations completed in the current session. They must not claim credit for pre-existing work and must explicitly identify legacy files that are intentional standalones (without a `v2` equivalent).
+
+## Autonomy Policy
+
+Autonomy is limited by consequence, not capability. Work falls into classes **A** (autonomous by default), **B** (autonomous with automatic verification), **C** (explicit gate or deterministic boundary), and **D** (never without explicit exceptional instruction). Credential access is a hard boundary enforced by layered technical controls (tool-native deny, hooks, example env files, env injection, synthetic fixtures, metadata-only inspection) — never by instruction alone. Verification is proportional to risk class, and the final diff is reviewed before completion. See [`.agents/rules/10-autonomy-policy.md`](./.agents/rules/10-autonomy-policy.md) (repo anchor) and `AGENT_AUTONOMY_POLICY.md` (canonical contract, supplied per session).

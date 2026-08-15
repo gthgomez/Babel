@@ -6,7 +6,7 @@ last_verified: 2026-07-25
 
 ## Purpose
 
-Prevent live secrets from entering agent context or session transcripts. Tool permission deny is Layer 1; this rule is Layer 2 (behavioral) and covers shell bypass.
+Prevent live secrets from entering agent context or session transcripts. The tool-level deny is Layer 1: `permissions.deny` in `.claude/settings.json` (mirrored in `.claude/settings.local.json`) plus the `block-credential-read` PreToolUse hook on Bash/PowerShell. This rule is Layer 2 (behavioral) and covers shell bypass and judgment. Credential access is Class C under `.agents/rules/10-autonomy-policy.md` — an explicit gate or deterministic boundary, never an agent decision.
 
 ## Hard rules
 
@@ -33,6 +33,8 @@ Prevent live secrets from entering agent context or session transcripts. Tool pe
 
 | Layer | Where |
 |-------|--------|
-| Agent rule | this file (`.agents/rules/09-credential-read-deny.md`) |
+| Tool deny (Layer 1) | `.claude/settings.json` → `permissions.deny` (Read/Edit/Write of `.env`, keys, certs); mirrored in `.claude/settings.local.json` |
+| Hook (Layer 1.5) | `.claude/hooks/block-credential-read.sh` — PreToolUse on Bash/PowerShell |
+| Agent rule (Layer 2) | this file (`.agents/rules/09-credential-read-deny.md`) |
 | Project entry | `CLAUDE.md` §Environment Gotchas + §Special Rules |
 | CI gate | `tools/run-public-secret-scan.ps1` (gitleaks v8.30.1, SHA-256 pinned) |
