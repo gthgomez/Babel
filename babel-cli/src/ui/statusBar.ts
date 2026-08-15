@@ -7,7 +7,12 @@ import {
 } from './theme.js';
 import { renderCompactTokenBar, getContextLimit } from './tokenBar.js';
 import { renderBackgroundTaskFooter } from './backgroundTaskProgress.js';
-import { getGlobalRateLimitState, renderCompactRateLimit } from './rateLimitWidget.js';
+import {
+  classifyRateLimit,
+  getGlobalRateLimitState,
+  RateLimitTier,
+  renderCompactRateLimit,
+} from './rateLimitWidget.js';
 import type { BackgroundTaskState } from './backgroundTaskProgress.js';
 
 /**
@@ -78,9 +83,81 @@ export function isDefaultStatusMode(mode: string): boolean {
   return normalized === '' || normalized === 'default' || normalized === 'chat';
 }
 
+export type RateLimitAttentionLevel = 'none' | 'warning' | 'critical';
+
 export function isRateLimitAttention(remaining: number, limit: number): boolean {
-  if (!Number.isFinite(remaining) || !Number.isFinite(limit) || limit <= 0) return false;
-  return remaining / limit <= 0.25;
+  return classifyRateLimitAttention(remaining, limit) !== 'none';
+}
+
+/**
+ * Map remaining/limit onto status-bar attention.
+ * Warning is pressure (80+). Critical/exhausted may displace quieter chrome at any band.
+ */
+export function classifyRateLimitAttention(
+  remaining: number,
+  limit: number,
+): RateLimitAttentionLevel {
+  if (!Number.isFinite(remaining) || !Number.isFinite(limit) || limit <= 0) return 'none';
+  const { tier } = classifyRateLimit(remaining, limit);
+  if (tier === RateLimitTier.Exhausted || tier === RateLimitTier.Critical) return 'critical';
+  if (tier === RateLimitTier.Warning) return 'warning';
+  return 'none';
+}
+
+/** Right-cluster field used by the dynamic packer. Higher priority is kept longer. */
+export interface StatusBarRightField {
+  id: string;
+  text: string;
+  priority: number;
+  pinned?: boolean | undefined;
+}
+
+const RIGHT_PRIORITY = {
+  turn: 10,
+  sessionTokens: 20,
+  cost: 30,
+  bgTasks: 40,
+  rateLimitWarning: 50,
+  context: 80,
+  rateLimitCritical: 90,
+} as const;
+
+function joinRightFields(fields: readonly { text: string }[]): string {
+  return fields
+    .map((field) => field.text)
+    .filter((text) => text.length > 0)
+    .join('  ');
+}
+
+/**
+ * Drop lowest-priority right-hand fields until the cluster fits.
+ * Pinned fields (context meter, critical rate-limit) survive until nothing else remains.
+ */
+export function packStatusBarRightCluster(
+  fields: readonly StatusBarRightField[],
+  maxWidth: number,
+): string {
+  const kept = fields.filter((field) => field.text.length > 0);
+  while (visibleLength(joinRightFields(kept)) > maxWidth && kept.length > 0) {
+    const hasDroppable = kept.some((field) => !field.pinned);
+    let dropAt = -1;
+    let dropPriority = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < kept.length; i++) {
+      const field = kept[i]!;
+      if (hasDroppable && field.pinned) continue;
+      if (field.priority < dropPriority) {
+        dropPriority = field.priority;
+        dropAt = i;
+      }
+    }
+    if (dropAt < 0) break;
+    kept.splice(dropAt, 1);
+  }
+  const packed = joinRightFields(kept);
+  if (visibleLength(packed) > maxWidth) {
+    return truncate(stripAnsi(packed), maxWidth);
+  }
+  return packed;
 }
 
 export interface StatusBarFieldPolicy {
@@ -99,13 +176,15 @@ export interface StatusBarFieldPolicy {
 /**
  * Explicit field shedding — fields are omitted by policy, not rendered then truncated.
  *
- * 60:  model · active-context
- * 80:  + mode if non-default
+ * 60:  model · active-context · critical/exhausted rate-limit
+ * 80:  + mode if non-default · warning rate-limit · bg tasks
  * 100: + cost
  * 120: + session tok (kept distinct from the active-context %) + branch
  * 160: + turn
  *
  * kg / routing / default-mode / idle rate-limit never persist.
+ * When attention fields collide, packStatusBarRightCluster drops quieter
+ * metadata instead of end-truncating the context meter.
  */
 export function planStatusBarFields(
   width: number,
@@ -114,6 +193,7 @@ export function planStatusBarFields(
     hasBranch: boolean;
     hasBgTasks: boolean;
     hasActiveRateLimit: boolean;
+    hasCriticalRateLimit?: boolean;
   },
 ): StatusBarFieldPolicy {
   const band = classifyStatusWidth(width);
@@ -126,7 +206,9 @@ export function planStatusBarFields(
     showTurn: band >= 160,
     showKg: false,
     showRouting: false,
-    showRateLimit: input.hasActiveRateLimit && band >= 80,
+    showRateLimit: Boolean(
+      input.hasCriticalRateLimit || (input.hasActiveRateLimit && band >= 80),
+    ),
     showBgTasks: input.hasBgTasks && band >= 80,
   };
 }
@@ -155,14 +237,15 @@ export function renderStatusBar(state: StatusBarState): string {
   const rateState = getGlobalRateLimitState();
   const hasBranch = Boolean(state.gitBranch && state.gitBranch !== 'HEAD');
   const hasBgTasks = Boolean(state.backgroundTasks && state.backgroundTasks.length > 0);
-  const hasActiveRateLimit = Boolean(
-    rateState && isRateLimitAttention(rateState.remaining, rateState.limit),
-  );
+  const rateAttention = rateState
+    ? classifyRateLimitAttention(rateState.remaining, rateState.limit)
+    : 'none';
   const policy = planStatusBarFields(width, {
     mode: state.mode,
     hasBranch,
     hasBgTasks,
-    hasActiveRateLimit,
+    hasActiveRateLimit: rateAttention !== 'none',
+    hasCriticalRateLimit: rateAttention === 'critical',
   });
 
   const leftParts: string[] = [state.model];
@@ -172,38 +255,65 @@ export function renderStatusBar(state: StatusBarState): string {
   }
   const left = leftParts.join(' · ');
 
-  const rightParts: string[] = [];
+  const rightFields: StatusBarRightField[] = [];
   if (policy.showSessionTokens) {
-    rightParts.push(`${state.totalTokens.toLocaleString()} tok`);
+    rightFields.push({
+      id: 'sessionTokens',
+      text: `${state.totalTokens.toLocaleString()} tok`,
+      priority: RIGHT_PRIORITY.sessionTokens,
+    });
   }
   if (policy.showCost) {
-    rightParts.push(`$${state.totalCost.toFixed(4)}`);
+    rightFields.push({
+      id: 'cost',
+      text: `$${state.totalCost.toFixed(4)}`,
+      priority: RIGHT_PRIORITY.cost,
+    });
   }
   if (policy.showTurn) {
-    rightParts.push(`turn ${state.turnCount}`);
+    rightFields.push({
+      id: 'turn',
+      text: `turn ${state.turnCount}`,
+      priority: RIGHT_PRIORITY.turn,
+    });
   }
   if (policy.showRateLimit) {
     const rl = renderCompactRateLimit(rateState);
-    if (rl) rightParts.push(rl);
+    if (rl) {
+      const critical = rateAttention === 'critical';
+      rightFields.push({
+        id: 'rateLimit',
+        text: rl,
+        priority: critical ? RIGHT_PRIORITY.rateLimitCritical : RIGHT_PRIORITY.rateLimitWarning,
+        pinned: critical,
+      });
+    }
   }
   if (policy.showBgTasks && state.backgroundTasks) {
     const footerWidth = Math.max(10, Math.floor(width / 4));
     const bg = renderBackgroundTaskFooter(state.backgroundTasks, footerWidth);
-    if (bg) rightParts.push(bg);
+    if (bg) {
+      rightFields.push({
+        id: 'bgTasks',
+        text: bg,
+        priority: RIGHT_PRIORITY.bgTasks,
+      });
+    }
   }
   const contextMeter = renderActiveContextMeter(state, width);
-  if (contextMeter) rightParts.push(contextMeter);
-
-  let right = rightParts.join('  ');
+  if (contextMeter) {
+    rightFields.push({
+      id: 'context',
+      text: contextMeter,
+      priority: RIGHT_PRIORITY.context,
+      pinned: true,
+    });
+  }
 
   const minSpacing = 2;
-  // Context meter is the last right-hand field. If the right cluster still
-  // cannot fit, shrink it rather than wrapping — model identity is truncated
-  // only after the right cluster has been reduced.
-  if (visibleLength(right) + minSpacing > width) {
-    const maxRight = Math.max(8, width - minSpacing);
-    right = truncate(stripAnsi(right), maxRight);
-  }
+  const minLeft = 4;
+  const maxRight = Math.max(8, width - minLeft - minSpacing);
+  const right = packStatusBarRightCluster(rightFields, maxRight);
 
   const leftLen = visibleLength(left);
   const rightLen = visibleLength(right);
