@@ -43,8 +43,8 @@ const UI_DIR = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(UI_DIR, '..', '..');
 
 function runColored(source: string): { status: number | null; stdout: string; stderr: string } {
-  const env = { ...process.env, FORCE_COLOR: '3' };
-  delete env['NO_COLOR'];
+  const env: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: '3' };
+  delete env.NO_COLOR;
   const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', source], {
     cwd: PKG_ROOT,
     env,
