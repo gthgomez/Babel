@@ -523,12 +523,12 @@ describe('status bar — explicit field shedding', () => {
       mode: 'deep',
       hasBranch: true,
       hasBgTasks: true,
-      hasActiveRateLimit: true,
+      hasActiveRateLimit: false,
     });
     assert.equal(at80.showMode, true);
     assert.equal(at80.showCost, false);
     assert.equal(at80.showBgTasks, true);
-    assert.equal(at80.showRateLimit, true);
+    assert.equal(at80.showRateLimit, false);
 
     const at100 = planStatusBarFields(100, {
       mode: 'default',
@@ -758,6 +758,8 @@ describe('status bar — attention-preemption policy', () => {
     });
     assert.equal(warn80.showRateLimit, true);
     assert.equal(warn80.showContext, true);
+    assert.equal(warn80.showMode, false);
+    assert.equal(warn80.showBgTasks, false);
 
     const crit80 = planStatusBarFields(80, {
       mode: 'deep',
@@ -768,11 +770,27 @@ describe('status bar — attention-preemption policy', () => {
     });
     assert.equal(crit80.showRateLimit, true);
     assert.equal(crit80.showContext, true);
+    assert.equal(crit80.showMode, false);
+    assert.equal(crit80.showBgTasks, false);
+
+    const calm80 = planStatusBarFields(80, {
+      mode: 'deep',
+      hasBranch: true,
+      hasBgTasks: true,
+      hasActiveRateLimit: false,
+      hasCriticalRateLimit: false,
+    });
+    assert.equal(calm80.showMode, true);
+    assert.equal(calm80.showBgTasks, true);
+    assert.equal(calm80.showRateLimit, false);
   });
 
   it('names the preemption bands and drop order', () => {
     assert.equal(ATTENTION_PREEMPTION.criticalRateLimitMinBand, 60);
     assert.equal(ATTENTION_PREEMPTION.warningRateLimitMinBand, 80);
+    assert.equal(ATTENTION_PREEMPTION.contextYieldsBelowBand, 80);
+    assert.equal(ATTENTION_PREEMPTION.modeYieldsBelowBand, 100);
+    assert.equal(ATTENTION_PREEMPTION.bgTasksYieldBelowBand, 100);
     assert.deepEqual(ATTENTION_PREEMPTION.displaceInOrder, [
       'turn',
       'sessionTokens',
@@ -780,6 +798,53 @@ describe('status bar — attention-preemption policy', () => {
       'bgTasks',
       'rateLimit',
     ]);
+  });
+
+  it('keeps 80-col as model · mode … context, and drops mode when attention is live', () => {
+    const state = {
+      model: 'Flash',
+      mode: 'deep',
+      modelId: 'deepseek-v4-flash',
+      width: 80,
+      activeContext: {
+        tokens: 12_400,
+        modelId: 'deepseek-v4-flash',
+        source: 'provider' as const,
+      },
+    };
+    const normal = firstLine(renderStatusBar(defaultState(state)));
+    assert.match(normal, /^Flash · deep\s+\[/);
+    assert.ok(normal.includes('%') || normal.includes('ctx'), normal);
+    assert.ok(!normal.includes('⛔'), normal);
+
+    withRateLimit(
+      { remaining: 0, limit: 1000, resetAt: new Date(Date.now() + 12 * 60_000) },
+      () => {
+        const attention = firstLine(renderStatusBar(defaultState(state)));
+        assert.match(attention, /^Flash\s+/);
+        assert.ok(!attention.includes(' · deep'), `mode yields at 80 when attention is live: ${attention}`);
+        assert.ok(attention.includes('⛔') || attention.includes('API:'), attention);
+        assert.ok(
+          attention.includes('%') || attention.includes('ctx'),
+          `context survives beside rate-limit at 80: ${attention}`,
+        );
+      },
+    );
+  });
+
+  it('drops whole slots instead of truncating a surviving concept', () => {
+    const packed = applyAttentionPreemption(
+      [
+        { slot: 'turn', text: 'turn 9999' },
+        { slot: 'rateLimit', text: 'API: 0/1000 ⛔ 12m' },
+        { slot: 'context', text: '[████████  50%]' },
+      ],
+      22,
+      true,
+    );
+    assert.ok(!packed.includes('…'), `must not mid-clip a slot: ${packed}`);
+    assert.ok(packed.includes('0/1000') || packed.includes('50%'), packed);
+    assert.ok(!packed.includes('turn'), packed);
   });
 
   it('displaces turn, session tokens, and cost before the context meter', () => {
