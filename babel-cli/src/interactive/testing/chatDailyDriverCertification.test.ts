@@ -396,6 +396,10 @@ describe('PR-A Certification: Frozen Daily-Driver Scenarios (18 Scenarios)', () 
               outcome: sc.expectedOutcome,
               answer: `Answer for ${sc.id}`,
               usage: EMPTY_USAGE,
+              toolCalls,
+              verifierReceipt: sc.requiresVerifier
+                ? { command: 'npm test', exit_code: isVerified ? 0 : 1, summary: isVerified ? 'All passed' : 'Failed' }
+                : null,
               conversation: [],
             },
           );

@@ -19,6 +19,7 @@ import {
   resolveChatTaskClass,
   getChatTaskTune,
 } from '../../config/chatTaskClass.js';
+import type { TerminalOutcome } from '../../schemas/agentContracts.js';
 import { isSuccessfulDirectMutation } from '../../agent/mutationTools.js';
 import { hydrateResumedThreadToScreen } from '../../services/threadStore/index.js';
 import {
@@ -41,6 +42,7 @@ import {
 import { formatRoutingStatusLabel } from '../../agent/turnRoutingReceipt.js';
 import { notifyRunEnded, notifyRunStarted, takeStreamingDraft } from '../../ui/interruptHost.js';
 import { presentChatReview } from '../../ui/reviewCard.js';
+import { projectTurnViewState, renderProjectedReviewCard } from '../projection/turnViewProjector.js';
 import { rememberReviewDiff } from '../../ui/diffReview.js';
 import { isOperatorAbortError } from '../../agent/operatorAbort.js';
 
@@ -212,21 +214,74 @@ export async function executeChatTask(
 
     const postRunCost = globalCostTracker.getSessionSummary().totalCostUSD;
     const perRunCost = Math.max(0, postRunCost - preRunCost);
-    const o = result.outcome;
-    const verification = result.verifierReceipt
-      ? {
-          ran: true,
-          passed: result.verifierReceipt.exit_code === 0,
-          command: result.verifierReceipt.command,
-          exitCode: result.verifierReceipt.exit_code,
-        }
-      : { ran: false };
+    const resolvedOutcome: TerminalOutcome =
+      result.outcome ??
+      (result.status === 'completed'
+        ? 'NO_CHANGE_REQUIRED'
+        : result.status === 'cancelled'
+          ? 'CANCELLED'
+          : result.status === 'blocked'
+            ? 'BLOCKED_POLICY'
+            : result.status === 'budget_exhausted'
+              ? 'BUDGET_EXHAUSTED'
+              : 'AGENT_FAILURE');
 
-    const review = presentChatReview({
-      outcome: o,
-      status: result.status,
-      changedFiles,
-      verification,
+    const projectedState = projectTurnViewState([
+      {
+        type: 'turn_started',
+        turnId: String(ctx.turnCounter + 1),
+        timestamp: Date.now(),
+        userInput: task,
+        taskClass: activeProfile ?? 'default',
+        model: ctx.state.model ?? 'unknown',
+        modelId: ctx.state.resolvedModelId ?? ctx.state.model ?? 'unknown',
+      },
+      ...(result.activeContext
+        ? [
+            {
+              type: 'provider_usage_recorded' as const,
+              requestId: `req-${ctx.turnCounter + 1}`,
+              timestamp: Date.now(),
+              modelId: result.activeContext.modelId,
+              promptTokens: result.activeContext.tokens,
+              completionTokens: result.lastRequestCompletionTokens ?? 0,
+              costUsd: perRunCost,
+            },
+          ]
+        : []),
+      ...changedFiles.map((p) => ({
+        type: 'mutation_batch_recorded' as const,
+        timestamp: Date.now(),
+        paths: [p],
+      })),
+      ...(result.verifierReceipt
+        ? [
+            {
+              type: 'verification_evaluated' as const,
+              timestamp: Date.now(),
+              command: result.verifierReceipt.command,
+              exitCode: result.verifierReceipt.exit_code,
+              receipt: result.verifierReceipt,
+              passed: result.verifierReceipt.exit_code === 0,
+            },
+          ]
+        : []),
+      {
+        type: 'turn_terminal_resolved',
+        timestamp: Date.now(),
+        outcome: resolvedOutcome,
+        status:
+          result.status === 'completed' ||
+          result.status === 'cancelled' ||
+          result.status === 'blocked' ||
+          result.status === 'budget_exhausted'
+            ? result.status
+            : 'failed',
+        finalAnswer: result.answer ?? '',
+      },
+    ]);
+
+    const review = renderProjectedReviewCard(projectedState, {
       verificationPolicy: activeProfile ? getChatTaskTune(activeProfile).verificationPolicy : undefined,
       verificationApplicability:
         changedFiles.length === 0 &&
@@ -234,10 +289,8 @@ export async function executeChatTask(
         (activeProfile === 'quick_inspect' || activeProfile === 'investigate')
           ? 'not_applicable'
           : undefined,
-      summary: changedFiles.length > 0 ? `${changedFiles.length} file(s) modified` : undefined,
       costUsd: perRunCost,
       tokens: result.usage?.totalTokens,
-      mutated: changedFiles.length > 0,
     });
 
     if (convRenderer) {
@@ -395,12 +448,25 @@ export async function executeChatTask(
     else if (review.kind === 'VERIFICATION_FAILED') ctx.lastAssistantStatus = 'ANSWER_READY';
   } catch (err: any) {
     if (isOperatorAbortError(err)) {
-      const review = presentChatReview({
-        outcome: 'CANCELLED',
-        status: 'cancelled',
-        verification: { ran: false },
-        summary: 'Cancelled',
-      });
+      const projectedState = projectTurnViewState([
+        {
+          type: 'turn_started',
+          turnId: String(ctx.turnCounter + 1),
+          timestamp: Date.now(),
+          userInput: task,
+          taskClass: activeProfile ?? 'default',
+          model: ctx.state.model ?? 'unknown',
+          modelId: ctx.state.resolvedModelId ?? ctx.state.model ?? 'unknown',
+        },
+        {
+          type: 'turn_terminal_resolved',
+          timestamp: Date.now(),
+          outcome: 'CANCELLED',
+          status: 'cancelled',
+          finalAnswer: 'Cancelled',
+        },
+      ]);
+      const review = renderProjectedReviewCard(projectedState);
       if (convRenderer) {
         convRenderer.cancelRun();
       }
