@@ -11,7 +11,12 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderStatusBar } from './statusBar.js';
+import {
+  renderStatusBar,
+  planStatusBarFields,
+  classifyStatusWidth,
+  isDefaultStatusMode,
+} from './statusBar.js';
 import type { StatusBarState } from './statusBar.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -53,20 +58,23 @@ function firstLineAnsi(text: string): string {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe('renderStatusBar — basic format', () => {
-  it('contains model, mode, and project name', () => {
-    const result = renderStatusBar(defaultState());
+  it('contains model identity at default width', () => {
+    const result = renderStatusBar(defaultState({ width: 80 }));
     const plain = stripAnsi(result);
     assert.ok(plain.includes('DeepSeek v4 Flash'));
-    assert.ok(plain.includes('default'));
-    assert.ok(plain.includes('my-project'));
+    assert.ok(!plain.includes('default'), 'default mode is shed');
+    assert.ok(!plain.includes('my-project'), 'project name is not persistent chrome');
   });
 
-  it('contains right-aligned token count, cost, and turn count', () => {
-    const result = renderStatusBar(defaultState());
-    const plain = stripAnsi(result);
-    assert.ok(plain.includes('45,000 tok'));
-    assert.ok(plain.includes('$0.1234'));
-    assert.ok(plain.includes('turn 42'));
+  it('shows cost and session tokens only at the Stage 0 bands that allow them', () => {
+    const wide = stripAnsi(renderStatusBar(defaultState({ width: 160 })));
+    assert.ok(wide.includes('45,000 tok'));
+    assert.ok(wide.includes('$0.1234'));
+    assert.ok(wide.includes('turn 42'));
+    const mid = stripAnsi(renderStatusBar(defaultState({ width: 100 })));
+    assert.ok(mid.includes('$0.1234'));
+    assert.ok(!mid.includes('45,000 tok'));
+    assert.ok(!mid.includes('turn 42'));
   });
 
   it('ends with a newline', () => {
@@ -93,7 +101,7 @@ describe('renderStatusBar — basic format', () => {
     assert.equal(line.length, 80);
   });
 
-  it('shows background tasks when provided', () => {
+  it('shows background tasks when provided at 80+', () => {
     const result = renderStatusBar(
       defaultState({
         backgroundTasks: [
@@ -112,24 +120,42 @@ describe('renderStatusBar — basic format', () => {
     );
     const plain = stripAnsi(result);
     assert.ok(plain.includes('Indexing'));
-    assert.ok(plain.includes('567'));
-    assert.ok(plain.includes('1234'));
+  });
+
+  it('sheds background tasks at width 60', () => {
+    const result = renderStatusBar(
+      defaultState({
+        backgroundTasks: [
+          {
+            id: '1',
+            label: 'Indexing',
+            status: 'running',
+            current: 567,
+            total: 1234,
+            progress: 45,
+            elapsedMs: 3200,
+          },
+        ],
+        width: 60,
+      }),
+    );
+    const plain = stripAnsi(result);
+    assert.ok(!plain.includes('Indexing'));
   });
 
   it('omits background tasks section when absent', () => {
     const result = renderStatusBar(defaultState({} as any));
     const plain = stripAnsi(result);
-    // The bar should still look normal
     assert.ok(plain.includes('DeepSeek'));
-    assert.ok(plain.includes('45,000 tok'));
   });
 
-  it('renders with zero tokens and zero cost', () => {
+  it('renders with zero tokens and zero cost at 160', () => {
     const result = renderStatusBar(
       defaultState({
         totalTokens: 0,
         totalCost: 0,
         turnCount: 0,
+        width: 160,
       }),
     );
     const plain = stripAnsi(result);
@@ -154,13 +180,12 @@ describe('renderStatusBar — truncation', () => {
       }),
     );
     const line = firstLine(result);
-    // Right-aligned info should still be present
-    assert.ok(line.includes('45,000'));
-    assert.ok(line.includes('turn'));
+    assert.ok(line.includes('VeryLong') || line.includes('…'));
+    assert.equal(result.replace(/\n$/, '').split('\n').length, 1);
     assert.ok(line.length <= 42);
   });
 
-  it('preserves right-aligned info under severe truncation', () => {
+  it('stays single-line under severe truncation', () => {
     const result = renderStatusBar(
       defaultState({
         model: 'ExtremelyLongModelNameThatWillGetTruncated',
@@ -170,8 +195,8 @@ describe('renderStatusBar — truncation', () => {
       }),
     );
     const line = firstLine(result);
-    // The right-aligned info is the most important part — it should survive
-    assert.ok(line.includes('tok') || line.includes('turn'));
+    assert.equal(line.length, 30);
+    assert.equal(result.replace(/\n$/, '').split('\n').length, 1);
   });
 
   it('uses ellipsis … for truncated content', () => {
@@ -308,15 +333,13 @@ describe('renderStatusBar — token context bar', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe('renderStatusBar — routing label', () => {
-  it('shows routing label next to model when set', () => {
+  it('sheds routing labels from the default status bar', () => {
     const result = renderStatusBar(
-      defaultState({ routingLabel: 'Flash·mutate' }),
+      defaultState({ routingLabel: 'Flash·mutate', width: 160 }),
     );
     const plain = stripAnsi(result);
-    assert.ok(plain.includes('mutate'));
-    const modelIdx = plain.indexOf('DeepSeek v4 Flash');
-    const labelIdx = plain.indexOf('mutate');
-    assert.ok(labelIdx > modelIdx);
+    assert.ok(plain.includes('DeepSeek v4 Flash'));
+    assert.ok(!plain.includes('mutate'));
   });
 
   it('does not show routing label when not set', () => {
@@ -335,7 +358,7 @@ describe('renderStatusBar — routing label', () => {
     assert.ok(!plain.includes('Pro·'));
   });
 
-  it('handles truncation with routing label present', () => {
+  it('handles truncation with routing label present (routing still shed)', () => {
     const result = renderStatusBar(
       defaultState({
         routingLabel: 'Pro·investigate',
@@ -344,9 +367,9 @@ describe('renderStatusBar — routing label', () => {
       }),
     );
     const line = firstLine(result);
-    assert.ok(line.includes('45,000'));
-    assert.ok(line.includes('turn'));
+    assert.ok(!line.includes('investigate'));
     assert.ok(line.length <= 42);
+    assert.equal(result.replace(/\n$/, '').split('\n').length, 1);
   });
 });
 
@@ -364,15 +387,17 @@ describe('Acceptance Tests T17–T20: Status Bar Refinements', () => {
     assert.ok(!failedBar.includes('\x1b[41m'), 'failed must NOT have red bg code');
   });
 
-  it('T18: Routing label deduplicates model tier name (Flash Flash·escalate -> Flash · escalate)', () => {
+  it('T18: Routing cue is shed (not a persistent default-chat field)', () => {
     const result = renderStatusBar(
       defaultState({
         model: 'DeepSeek V4 Flash',
         routingLabel: 'Flash·escalate',
+        width: 160,
       }),
     );
     const plain = stripAnsi(result);
-    assert.ok(plain.includes('DeepSeek V4 Flash · escalate'));
+    assert.ok(plain.includes('DeepSeek V4 Flash'));
+    assert.ok(!plain.includes('escalate'));
     assert.ok(!plain.includes('Flash Flash'));
   });
 
@@ -453,5 +478,192 @@ describe('Acceptance Tests T17–T20: Status Bar Refinements', () => {
     const plain = stripAnsi(renderStatusBar(state));
     // 50,000 / 200,000 (claude-sonnet-4-6) = 25% (NOT 50,000 / 1,000,000 = 5%)
     assert.ok(plain.includes('25%'), `Expected 25% calculated against activeContext.modelId limit, got: ${plain}`);
+  });
+});
+
+describe('status bar — explicit field shedding', () => {
+  it('classifies the frozen width bands', () => {
+    assert.equal(classifyStatusWidth(60), 60);
+    assert.equal(classifyStatusWidth(79), 60);
+    assert.equal(classifyStatusWidth(80), 80);
+    assert.equal(classifyStatusWidth(100), 100);
+    assert.equal(classifyStatusWidth(120), 120);
+    assert.equal(classifyStatusWidth(160), 160);
+    assert.ok(isDefaultStatusMode('default'));
+    assert.ok(isDefaultStatusMode('chat'));
+    assert.ok(!isDefaultStatusMode('deep'));
+  });
+
+  it('plans fields from the Stage 0 matrix instead of rendering everything', () => {
+    const at60 = planStatusBarFields(60, {
+      mode: 'default',
+      hasBranch: true,
+      hasBgTasks: true,
+      hasActiveRateLimit: true,
+    });
+    assert.equal(at60.showMode, false);
+    assert.equal(at60.showCost, false);
+    assert.equal(at60.showSessionTokens, false);
+    assert.equal(at60.showBranch, false);
+    assert.equal(at60.showTurn, false);
+    assert.equal(at60.showKg, false);
+    assert.equal(at60.showRouting, false);
+    assert.equal(at60.showBgTasks, false);
+    assert.equal(at60.showRateLimit, false);
+
+    const at80 = planStatusBarFields(80, {
+      mode: 'deep',
+      hasBranch: true,
+      hasBgTasks: true,
+      hasActiveRateLimit: true,
+    });
+    assert.equal(at80.showMode, true);
+    assert.equal(at80.showCost, false);
+    assert.equal(at80.showBgTasks, true);
+    assert.equal(at80.showRateLimit, true);
+
+    const at100 = planStatusBarFields(100, {
+      mode: 'default',
+      hasBranch: false,
+      hasBgTasks: false,
+      hasActiveRateLimit: false,
+    });
+    assert.equal(at100.showCost, true);
+    assert.equal(at100.showSessionTokens, false);
+    assert.equal(at100.showTurn, false);
+
+    const at120 = planStatusBarFields(120, {
+      mode: 'chat',
+      hasBranch: true,
+      hasBgTasks: false,
+      hasActiveRateLimit: false,
+    });
+    assert.equal(at120.showSessionTokens, true);
+    assert.equal(at120.showBranch, true);
+    assert.equal(at120.showTurn, false);
+
+    const at160 = planStatusBarFields(160, {
+      mode: 'plan',
+      hasBranch: true,
+      hasBgTasks: false,
+      hasActiveRateLimit: false,
+    });
+    assert.equal(at160.showTurn, true);
+    assert.equal(at160.showMode, true);
+  });
+
+  it('does not wrap at 60/80/100/120/160 and keeps model identity at 60/80', () => {
+    const widths = [60, 80, 100, 120, 160] as const;
+    for (const width of widths) {
+      const result = renderStatusBar(
+        defaultState({
+          width,
+          modelId: 'deepseek-v4-flash',
+          activeContext: {
+            tokens: 12_400,
+            modelId: 'deepseek-v4-flash',
+            source: 'provider',
+          },
+          gitBranch: 'feat/tui',
+          gitDirty: true,
+          knowledgeGraph: { status: 'ready', nodeCount: 1284 },
+          routingLabel: 'Flash·mutate',
+        }),
+      );
+      const line = firstLine(result);
+      assert.equal(line.length, width, `width ${width} padded`);
+      assert.equal(result.replace(/\n$/, '').split('\n').length, 1, `width ${width} must not wrap`);
+      assert.ok(!line.includes('kg'), `width ${width} sheds kg`);
+      assert.ok(!line.includes('mutate'), `width ${width} sheds routing`);
+      if (width >= 60) {
+        assert.ok(line.includes('DeepSeek'), `width ${width} keeps model identity: ${line}`);
+      }
+      if (width < 80) {
+        assert.ok(!line.includes('default'));
+        assert.ok(!line.includes('$0.1234'));
+      }
+      if (width < 100) {
+        assert.ok(!line.includes('$0.1234'), `width ${width} sheds cost`);
+      }
+      if (width < 120) {
+        assert.ok(!line.includes('45,000 tok'), `width ${width} sheds session tok`);
+        assert.ok(!line.includes('feat/tui'));
+      }
+      if (width < 160) {
+        assert.ok(!line.includes('turn 42'), `width ${width} sheds turn`);
+      }
+    }
+  });
+
+  it('keeps unknown model / unknown limit / unknown active context unknown', () => {
+    const unknownModel = firstLine(
+      renderStatusBar(
+        defaultState({
+          width: 80,
+          model: 'mystery-local',
+          modelId: 'mystery-local',
+          activeContext: { tokens: 800, modelId: 'mystery-local', source: 'unknown' },
+        }),
+      ),
+    );
+    assert.ok(unknownModel.includes('mystery-local'));
+    assert.ok(unknownModel.includes('[ctx ?]'));
+    assert.ok(!unknownModel.includes('%'));
+
+    const unknownActive = firstLine(
+      renderStatusBar(
+        defaultState({
+          width: 80,
+          modelId: 'deepseek-v4-flash',
+          activeContext: null,
+          activeContextTokens: undefined,
+        }),
+      ),
+    );
+    assert.ok(unknownActive.includes('[ctx ?]'));
+    assert.ok(!unknownActive.includes('%'));
+  });
+
+  it('keeps 1M windows readable and does not let helper model switch corrupt the denominator', () => {
+    const oneM = firstLine(
+      renderStatusBar(
+        defaultState({
+          width: 120,
+          model: 'DeepSeek V4 Pro',
+          modelId: 'deepseek-v4-pro',
+          activeContext: { tokens: 412_000, modelId: 'deepseek-v4-pro', source: 'provider' },
+        }),
+      ),
+    );
+    assert.ok(oneM.includes('41%'), oneM);
+
+    const switched = firstLine(
+      renderStatusBar(
+        defaultState({
+          width: 100,
+          model: 'DeepSeek V4 Flash',
+          modelId: 'deepseek-v4-flash',
+          activeContext: { tokens: 50_000, modelId: 'claude-sonnet-4-6', source: 'provider' },
+        }),
+      ),
+    );
+    assert.ok(switched.includes('25%'), switched);
+    assert.ok(!/\b5%/.test(switched), switched);
+  });
+
+  it('shows a long model name at width 60 without fabricating a percent', () => {
+    const line = firstLine(
+      renderStatusBar(
+        defaultState({
+          width: 60,
+          model: 'anthropic-claude-opus-4-8-preview-extended',
+          modelId: 'unknown-long-model',
+          activeContext: null,
+        }),
+      ),
+    );
+    assert.equal(line.length, 60);
+    assert.ok(line.includes('anthropic') || line.includes('…'));
+    assert.ok(line.includes('[ctx ?]') || line.includes('ctx'));
   });
 });

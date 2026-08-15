@@ -1,11 +1,6 @@
 import {
   getEffectiveTerminalWidth,
   visibleLength,
-  warning,
-  muted,
-  info,
-  dim,
-  bold,
   truncate,
   stripAnsi,
   bgPanel,
@@ -67,89 +62,144 @@ export interface StatusBarState {
   routingLabel?: string | null | undefined;
 }
 
+export type StatusWidthBand = 60 | 80 | 100 | 120 | 160;
+
+/** Map a terminal width onto the Stage 0 shed bands. */
+export function classifyStatusWidth(width: number): StatusWidthBand {
+  if (width < 80) return 60;
+  if (width < 100) return 80;
+  if (width < 120) return 100;
+  if (width < 160) return 120;
+  return 160;
+}
+
+export function isDefaultStatusMode(mode: string): boolean {
+  const normalized = mode.trim().toLowerCase();
+  return normalized === '' || normalized === 'default' || normalized === 'chat';
+}
+
+export function isRateLimitAttention(remaining: number, limit: number): boolean {
+  if (!Number.isFinite(remaining) || !Number.isFinite(limit) || limit <= 0) return false;
+  return remaining / limit <= 0.25;
+}
+
+export interface StatusBarFieldPolicy {
+  band: StatusWidthBand;
+  showMode: boolean;
+  showCost: boolean;
+  showSessionTokens: boolean;
+  showBranch: boolean;
+  showTurn: boolean;
+  showKg: boolean;
+  showRouting: boolean;
+  showRateLimit: boolean;
+  showBgTasks: boolean;
+}
+
+/**
+ * Explicit field shedding — fields are omitted by policy, not rendered then truncated.
+ *
+ * 60:  model · active-context
+ * 80:  + mode if non-default
+ * 100: + cost
+ * 120: + session tok (kept distinct from the active-context %) + branch
+ * 160: + turn
+ *
+ * kg / routing / default-mode / idle rate-limit never persist.
+ */
+export function planStatusBarFields(
+  width: number,
+  input: {
+    mode: string;
+    hasBranch: boolean;
+    hasBgTasks: boolean;
+    hasActiveRateLimit: boolean;
+  },
+): StatusBarFieldPolicy {
+  const band = classifyStatusWidth(width);
+  return {
+    band,
+    showMode: !isDefaultStatusMode(input.mode) && band >= 80,
+    showCost: band >= 100,
+    showSessionTokens: band >= 120,
+    showBranch: input.hasBranch && band >= 120,
+    showTurn: band >= 160,
+    showKg: false,
+    showRouting: false,
+    showRateLimit: input.hasActiveRateLimit && band >= 80,
+    showBgTasks: input.hasBgTasks && band >= 80,
+  };
+}
+
+function renderActiveContextMeter(state: StatusBarState, width: number): string {
+  if (state.showTokenBar === false) return '';
+  const activeTokens = state.activeContext ? state.activeContext.tokens : state.activeContextTokens;
+  const hasActiveContext = activeTokens !== undefined && activeTokens !== null;
+  const targetModelId = state.activeContext?.modelId ?? state.modelId;
+  if (!targetModelId) return '';
+  const limit = getContextLimit(targetModelId);
+  const barWidth = Math.min(12, Math.floor(width / 8));
+  return renderCompactTokenBar(
+    hasActiveContext ? activeTokens : 0,
+    limit.tokens,
+    Math.max(6, barWidth),
+    hasActiveContext,
+  );
+}
+
 /**
  * Render the status bar for display between interactive REPL turns.
  */
 export function renderStatusBar(state: StatusBarState): string {
   const width = state.width ?? getEffectiveTerminalWidth();
+  const rateState = getGlobalRateLimitState();
+  const hasBranch = Boolean(state.gitBranch && state.gitBranch !== 'HEAD');
+  const hasBgTasks = Boolean(state.backgroundTasks && state.backgroundTasks.length > 0);
+  const hasActiveRateLimit = Boolean(
+    rateState && isRateLimitAttention(rateState.remaining, rateState.limit),
+  );
+  const policy = planStatusBarFields(width, {
+    mode: state.mode,
+    hasBranch,
+    hasBgTasks,
+    hasActiveRateLimit,
+  });
 
-  // Background task progress segment
-  let bgTaskStr = '';
-  if (state.backgroundTasks && state.backgroundTasks.length > 0) {
-    const footerWidth = Math.max(10, Math.floor(width / 3));
-    bgTaskStr = ` ${renderBackgroundTaskFooter(state.backgroundTasks, footerWidth)}`;
+  const leftParts: string[] = [state.model];
+  if (policy.showMode) leftParts.push(state.mode);
+  if (policy.showBranch && state.gitBranch) {
+    leftParts.push(`${state.gitBranch}${state.gitDirty ? '*' : ''}`);
   }
+  const left = leftParts.join(' · ');
 
-  // Compact token bar — strictly uses active request context; NEVER falls back to cumulative session tokens
-  let tokenBarStr = '';
-  const activeTokens = state.activeContext ? state.activeContext.tokens : state.activeContextTokens;
-  const hasActiveContext = activeTokens !== undefined && activeTokens !== null;
-  const targetModelId = state.activeContext?.modelId ?? state.modelId;
-  const showBar = state.showTokenBar !== false && Boolean(targetModelId);
-  if (showBar && targetModelId) {
-    const limit = getContextLimit(targetModelId);
-    const barWidth = Math.min(12, Math.floor(width / 8));
-    const compactBar = renderCompactTokenBar(
-      hasActiveContext ? activeTokens : 0,
-      limit.tokens,
-      Math.max(6, barWidth),
-      hasActiveContext,
-    );
-    tokenBarStr = `  ${compactBar}`;
+  const rightParts: string[] = [];
+  if (policy.showSessionTokens) {
+    rightParts.push(`${state.totalTokens.toLocaleString()} tok`);
   }
-
-  // Git info: show branch + dirty indicator when in a repo
-  let projectLabel = state.project;
-  if (state.gitBranch && state.gitBranch !== 'HEAD') {
-    const dirtyMark = state.gitDirty ? '*' : '';
-    projectLabel = `${state.project} (${state.gitBranch}${dirtyMark})`;
+  if (policy.showCost) {
+    rightParts.push(`$${state.totalCost.toFixed(4)}`);
   }
-
-  // Knowledge graph indicator
-  let kgIndicator = '';
-  if (state.knowledgeGraph) {
-    if (state.knowledgeGraph.status === 'ready') {
-      const nodes = state.knowledgeGraph.nodeCount ?? 0;
-      const nodesStr =
-        nodes >= 1000 ? `${(nodes / 1000).toFixed(1)}k` : String(nodes);
-      kgIndicator = ` ${muted('kg')} ${info(nodesStr)}`;
-    } else if (state.knowledgeGraph.status === 'empty') {
-      kgIndicator = ` ${dim('kg empty')}`;
-    } else if (state.knowledgeGraph.status === 'indexing') {
-      kgIndicator = ` ${muted('kg')} ${warning('…')}`;
-    } else if (state.knowledgeGraph.status === 'stale') {
-      kgIndicator = ` ${muted('kg')} ${warning('stale')}`;
-    }
+  if (policy.showTurn) {
+    rightParts.push(`turn ${state.turnCount}`);
   }
-
-  // Routing label cleanup: avoid repeating model name (e.g. "DeepSeek V4 Flash Flash·escalate" -> "DeepSeek V4 Flash · escalate")
-  let modelLabel = state.model;
-  if (state.routingLabel) {
-    let cleanLabel = state.routingLabel;
-    const modelLower = state.model.toLowerCase();
-    if (modelLower.includes('flash') && cleanLabel.toLowerCase().startsWith('flash·')) {
-      cleanLabel = cleanLabel.slice(6);
-    } else if (modelLower.includes('pro') && cleanLabel.toLowerCase().startsWith('pro·')) {
-      cleanLabel = cleanLabel.slice(4);
-    } else if (modelLower.includes('flash') && cleanLabel.toLowerCase() === 'flash') {
-      cleanLabel = '';
-    } else if (modelLower.includes('pro') && cleanLabel.toLowerCase() === 'pro') {
-      cleanLabel = '';
-    }
-    if (cleanLabel) {
-      modelLabel = `${state.model} ${dim('·')} ${bold(cleanLabel)}`;
-    }
+  if (policy.showRateLimit) {
+    const rl = renderCompactRateLimit(rateState);
+    if (rl) rightParts.push(rl);
   }
+  if (policy.showBgTasks && state.backgroundTasks) {
+    const footerWidth = Math.max(10, Math.floor(width / 4));
+    const bg = renderBackgroundTaskFooter(state.backgroundTasks, footerWidth);
+    if (bg) rightParts.push(bg);
+  }
+  const contextMeter = renderActiveContextMeter(state, width);
+  if (contextMeter) rightParts.push(contextMeter);
 
-  const left = `${modelLabel} | ${state.mode} | ${projectLabel}${kgIndicator}${bgTaskStr}`;
-  const rightBase = `${state.totalTokens.toLocaleString()} tok | $${state.totalCost.toFixed(4)} | turn ${state.turnCount}`;
-  const rlWidget = renderCompactRateLimit(getGlobalRateLimitState());
-  const rightCore = rlWidget ? `${rightBase} | ${rlWidget}` : rightBase;
-  let right = tokenBarStr ? `${rightCore}${tokenBarStr}` : rightCore;
+  let right = rightParts.join('  ');
 
   const minSpacing = 2;
-  // When the right cluster alone exceeds the bar width, shrink it so the line
-  // never wraps (turn count / token bar used to spill onto a second row).
+  // Context meter is the last right-hand field. If the right cluster still
+  // cannot fit, shrink it rather than wrapping — model identity is truncated
+  // only after the right cluster has been reduced.
   if (visibleLength(right) + minSpacing > width) {
     const maxRight = Math.max(8, width - minSpacing);
     right = truncate(stripAnsi(right), maxRight);
@@ -160,11 +210,9 @@ export function renderStatusBar(state: StatusBarState): string {
   let line: string;
 
   if (leftLen + rightLen + minSpacing <= width) {
-    // Full bar fits comfortably
     const padding = width - leftLen - rightLen;
     line = left + ' '.repeat(padding) + right;
   } else {
-    // Truncate the left side so the right-aligned info stays visible
     const maxLeftLen = Math.max(4, width - rightLen - minSpacing);
     const truncatedLeft = truncate(stripAnsi(left), maxLeftLen);
     const truncatedLen = visibleLength(truncatedLeft);
@@ -172,15 +220,12 @@ export function renderStatusBar(state: StatusBarState): string {
     line = truncatedLeft + ' '.repeat(padding) + right;
   }
 
-  // Clamp final line so reverse-video fill never exceeds terminal width
-  // (defensive: truncation math + ANSI edge cases).
   let lineVisLen = visibleLength(line);
   if (lineVisLen > width) {
     line = truncate(stripAnsi(line), width);
     lineVisLen = visibleLength(line);
   }
 
-  // Render on subtle theme panel background (avoids blinding inverted blocks)
   const fillSpaces = ' '.repeat(Math.max(0, width - lineVisLen));
   return `${bgPanel(`${line}${fillSpaces}`)}\n`;
 }
