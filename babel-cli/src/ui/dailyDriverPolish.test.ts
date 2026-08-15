@@ -264,4 +264,99 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
       process.stdout.write = originalWrite;
     }
   });
+
+  test('production integration: direct ChatCallbacks non-streaming failure renders failure, never success', async () => {
+    const { ConversationalRenderer } = await import('./waterfall.js');
+    const chunks: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
+      renderer.start();
+
+      // Direct non-streaming callback invocation: blocked tool with error and exit_code
+      const id = renderer.onToolCallStart('run_command', 'git push origin main');
+      assert.ok(id > 0);
+      renderer.onToolCallComplete(id, 'plan-gate', 'blocked', 1);
+
+      renderer.stop();
+
+      const out = stripAnsi(chunks.join(''));
+      assert.ok(out.includes('✖'), `Expected failure icon '✖' in non-streaming callback failure, got: ${out}`);
+      assert.ok(out.includes('git push origin main'), `Expected target in error output, got: ${out}`);
+      assert.ok(out.includes('failed (exit 1)'), `Expected 'failed (exit 1)' in output, got: ${out}`);
+      assert.ok(!out.includes('✔'), `Should not contain success icon '✔', got: ${out}`);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  });
+
+  test('production integration: fail-closed fallback converts missing exitCode with gate/blocked detail into failure', async () => {
+    const { ConversationalRenderer } = await import('./waterfall.js');
+    const chunks: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
+      renderer.start();
+
+      // Callback invocation with detail only (no error/exitCode parameters passed)
+      const id = renderer.onToolCallStart('str_replace', 'src/auth.ts');
+      assert.ok(id > 0);
+      renderer.onToolCallComplete(id, 'hard-plan-mode');
+
+      renderer.stop();
+
+      const out = stripAnsi(chunks.join(''));
+      assert.ok(out.includes('✖'), `Expected fail-closed failure icon '✖' for hard-plan-mode detail, got: ${out}`);
+      assert.ok(out.includes('src/auth.ts'), `Expected target in error output, got: ${out}`);
+      assert.ok(!out.includes('Edited'), `Should not group as successful edit, got: ${out}`);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  });
+
+  test('production integration: consecutive edits with onFileChanged diffs preserve grouping into Edited N files', async () => {
+    const { ConversationalRenderer } = await import('./waterfall.js');
+    const chunks: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
+      renderer.start();
+
+      // Edit 1
+      const id1 = renderer.onToolCallStart('write_file', 'src/a.ts');
+      renderer.onToolCallComplete(id1, 'line 10');
+      renderer.onFileChanged('src/a.ts', 5, 2);
+
+      // Edit 2
+      const id2 = renderer.onToolCallStart('write_file', 'src/b.ts');
+      renderer.onToolCallComplete(id2, 'line 20');
+      renderer.onFileChanged('src/b.ts', 8, 1);
+
+      // Assistant responds
+      renderer.onAnswerChunk('Both files have been updated.');
+      renderer.stop();
+
+      const out = stripAnsi(chunks.join(''));
+      assert.ok(out.includes('Edited 2 files'), `Expected 'Edited 2 files' in collapsed output, got: ${out}`);
+      assert.ok(out.includes('src/a.ts'), `Expected diff for src/a.ts, got: ${out}`);
+      assert.ok(out.includes('src/b.ts'), `Expected diff for src/b.ts, got: ${out}`);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  });
 });

@@ -37,7 +37,7 @@ export interface BackgroundShellActionCtx {
   /** Owning engine run id — scopes turn-cancel kills to this engine's jobs. */
   ownerId?: string | undefined;
   pushLog: (entry: BackgroundShellLogEntry) => void;
-  onToolComplete?: ((id: number, detail?: string | undefined) => void) | undefined;
+  onToolComplete?: ((id: number, detail?: string | undefined, error?: string | undefined, exitCode?: number | undefined) => void) | undefined;
   /** Invoked after local validation and immediately before background process spawn. */
   onBeforeSpawn?: (() => void) | undefined;
   /** Invoked immediately before awaiting a validated known background job. */
@@ -68,7 +68,12 @@ export async function executeAwaitCommandAction(
     stdout: result.stdout.slice(0, 2000),
     stderr: result.stderr.slice(0, 1000),
   });
-  ctx.onToolComplete?.(ctx.toolId, detail);
+  ctx.onToolComplete?.(
+    ctx.toolId,
+    detail,
+    result.timed_out || (exitCode !== null && exitCode !== 0) ? (result.stderr || detail) : undefined,
+    exitCode ?? (result.timed_out ? 1 : 0),
+  );
   const body = [
     `task_id: ${result.id}`,
     `command: ${result.command || '(unknown)'}`,
@@ -100,7 +105,7 @@ export function executeBackgroundRunCommandAction(
       index: ctx.index,
       exit_code: 1,
     });
-    ctx.onToolComplete?.(ctx.toolId, detail);
+    ctx.onToolComplete?.(ctx.toolId, detail, message, 1);
     return {
       index: ctx.index,
       observation: `### run_command (background) ${ctx.target}\nexit_code: 1\n\`\`\`\n[policy] ${message}\n\`\`\``,
@@ -169,7 +174,7 @@ export function executeBackgroundRunCommandAction(
       index: ctx.index,
       exit_code: 0,
     });
-    ctx.onToolComplete?.(ctx.toolId, `bg ${job.id}`);
+    ctx.onToolComplete?.(ctx.toolId, `bg ${job.id}`, undefined, 0);
     return {
       index: ctx.index,
       observation:
@@ -189,7 +194,7 @@ export function executeBackgroundRunCommandAction(
       index: ctx.index,
       exit_code: 1,
     });
-    ctx.onToolComplete?.(ctx.toolId, 'error');
+    ctx.onToolComplete?.(ctx.toolId, 'error', msg, 1);
     return {
       index: ctx.index,
       observation: `### run_command (background) ${ctx.target}\nexit_code: 1\n\`\`\`\n${msg}\n\`\`\``,

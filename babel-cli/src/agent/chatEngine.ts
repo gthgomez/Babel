@@ -3453,7 +3453,7 @@ export class ChatEngine {
           index: meta.index,
           exit_code: 1,
         });
-        callbacks.onToolComplete?.(toolId, 'hard-plan-mode');
+        callbacks?.onToolComplete?.(toolId, 'hard-plan-mode', 'blocked', 1);
         return { index: meta.index, observation: hardPlanGate.observation ?? '' };
       }
       const planGate = evaluatePlanThenExecuteGate({
@@ -3471,7 +3471,7 @@ export class ChatEngine {
           index: meta.index,
           exit_code: 1,
         });
-        callbacks.onToolComplete?.(toolId, 'plan-gate');
+        callbacks?.onToolComplete?.(toolId, 'plan-gate', 'blocked', 1);
         return { index: meta.index, observation: planGate.observation ?? '' };
       }
       const phaseGate = evaluatePhaseToolGate({
@@ -3494,7 +3494,7 @@ export class ChatEngine {
           index: meta.index,
           exit_code: 1,
         });
-        callbacks.onToolComplete?.(toolId, 'phase-gate');
+        callbacks?.onToolComplete?.(toolId, 'phase-gate', 'blocked', 1);
         return { index: meta.index, observation: phaseGate.observation ?? '' };
       }
 
@@ -3502,7 +3502,7 @@ export class ChatEngine {
       if (!recoveredAuthorization.allowed) {
         const detail = `[RECOVERY_RECONCILIATION_REQUIRED] ${recoveredAuthorization.message ?? 'Reconcile the prior unknown effect before retrying'}`;
         this.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1 });
-        callbacks.onToolComplete?.(toolId, 'reconciliation-required');
+        callbacks?.onToolComplete?.(toolId, 'reconciliation-required', 'blocked', 1);
         return { index: meta.index, observation: `### ${tool} ${target}\nexit_code: 1\n\`\`\`\n${detail}\n\`\`\`` };
       }
 
@@ -3569,7 +3569,12 @@ export class ChatEngine {
                 index: meta.index,
                 exit_code: implResult.success ? 0 : 1,
               });
-              callbacks.onToolComplete?.(toolId, details);
+              callbacks?.onToolComplete?.(
+                toolId,
+                details,
+                implResult.success ? undefined : (implResult.error || 'failed'),
+                implResult.success ? 0 : 1,
+              );
               if (implResult.success) {
                 callbacks.onSubAgentComplete?.({ id: subId, summary: details });
               } else {
@@ -3621,7 +3626,12 @@ export class ChatEngine {
               index: meta.index,
               exit_code: mutResult.success ? 0 : 1,
             });
-            callbacks.onToolComplete?.(toolId, details);
+            callbacks?.onToolComplete?.(
+              toolId,
+              details,
+              mutResult.success ? undefined : (mutResult.error || 'failed'),
+              mutResult.success ? 0 : 1,
+            );
             if (mutResult.success) {
               callbacks.onSubAgentComplete?.({ id: subId, summary: details });
             } else {
@@ -3641,7 +3651,7 @@ export class ChatEngine {
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             this.toolCallLog.push({ tool, target, detail: 'failed', error: 'error', index: meta.index, exit_code: 1 });
-            callbacks.onToolComplete?.(toolId, 'failed');
+            callbacks?.onToolComplete?.(toolId, 'failed', errMsg, 1);
             callbacks.onSubAgentFailed?.({ id: subId, error: errMsg });
             return {
               index: meta.index,
@@ -3686,7 +3696,7 @@ export class ChatEngine {
             index: meta.index,
             exit_code: 0,
           });
-          callbacks.onToolComplete?.(toolId, `${subResult.stepsExecuted} steps`);
+          callbacks?.onToolComplete?.(toolId, `${subResult.stepsExecuted} steps`, undefined, 0);
           callbacks.onSubAgentComplete?.({ id: subId, summary: `${subResult.stepsExecuted} steps` });
           return { index: meta.index, observation: findings };
         } catch (err) {
@@ -3699,7 +3709,7 @@ export class ChatEngine {
             index: meta.index,
             exit_code: 1,
           });
-          callbacks.onToolComplete?.(toolId, 'failed');
+          callbacks?.onToolComplete?.(toolId, 'failed', errMsg, 1);
           callbacks.onSubAgentFailed?.({ id: subId, error: errMsg });
           return {
             index: meta.index,
@@ -3730,7 +3740,12 @@ export class ChatEngine {
           stdout: mcpResult.stdout,
           stderr: mcpResult.stderr,
         });
-        callbacks.onToolComplete?.(toolId, detail);
+        callbacks?.onToolComplete?.(
+          toolId,
+          detail,
+          mcpResult.exit_code === 0 ? undefined : (mcpResult.stderr || detail),
+          mcpResult.exit_code ?? 0,
+        );
         return {
           index: meta.index,
           observation: formatChatToolObservation(action, {
@@ -3758,7 +3773,12 @@ export class ChatEngine {
           exit_code: webResult.exit_code,
           ...(webResult.exit_code !== 0 ? { error: 'failed' as const } : {}),
         });
-        callbacks.onToolComplete?.(toolId, detail);
+        callbacks?.onToolComplete?.(
+          toolId,
+          detail,
+          webResult.exit_code === 0 ? undefined : (webResult.stderr || detail),
+          webResult.exit_code ?? 0,
+        );
         return {
           index: meta.index,
           observation: formatChatToolObservation(action, {
@@ -3786,13 +3806,18 @@ export class ChatEngine {
           ...(lsp.stderr !== undefined ? { stderr: lsp.stderr } : {}),
           ...(lsp.failed ? { error: 'failed' as const } : {}),
         });
-        callbacks.onToolComplete?.(toolId, lsp.detail);
+        callbacks?.onToolComplete?.(
+          toolId,
+          lsp.detail,
+          lsp.failed ? (lsp.stderr || 'failed') : undefined,
+          lsp.exit_code ?? (lsp.failed ? 1 : 0),
+        );
         return { index: meta.index, observation: lsp.observation };
       }
 
       if (action.type === 'finish') {
         this.toolCallLog.push({ tool, target, detail: 'done', index: meta.index, exit_code: 0 });
-        callbacks.onToolComplete?.(toolId, 'done');
+        callbacks?.onToolComplete?.(toolId, 'done', undefined, 0);
         return { index: meta.index, observation: '' };
       }
 
@@ -3813,7 +3838,7 @@ export class ChatEngine {
             index: meta.index,
             exit_code: 0,
           });
-          callbacks.onToolComplete?.(toolId, 'read_limit');
+          callbacks?.onToolComplete?.(toolId, 'read_limit', undefined, 0);
           return {
             index: meta.index,
             observation: buildFullRereadSkipObservation(target, priorFull, maxFull),
@@ -3826,7 +3851,7 @@ export class ChatEngine {
           this.dedupeHitCount++;
           this.noteToolForReadThrash(tool);
           this.toolCallLog.push({ tool, target, detail: 'cached', index: meta.index, exit_code: 0 });
-          callbacks.onToolComplete?.(toolId, 'cached');
+          callbacks?.onToolComplete?.(toolId, 'cached', undefined, 0);
           return {
             index: meta.index,
             observation:
@@ -3881,7 +3906,12 @@ export class ChatEngine {
             tool, target, detail: 'error', error: gov.error ?? 'str_replace failed',
             index: meta.index, exit_code: gov.exit_code,
           });
-          callbacks.onToolComplete?.(toolId, gov.policyBlocked ? 'blocked' : 'error');
+          callbacks?.onToolComplete?.(
+            toolId,
+            gov.policyBlocked ? 'blocked' : 'error',
+            gov.error ?? (gov.policyBlocked ? 'blocked' : 'error'),
+            gov.exit_code,
+          );
           return { index: meta.index, observation: gov.observation };
         }
         try {
@@ -3903,7 +3933,7 @@ export class ChatEngine {
             ? { mutation_paths: [...gov.mutationPaths] }
             : {}),
         });
-        callbacks.onToolComplete?.(toolId, `line ${lineNumber}`);
+        callbacks?.onToolComplete?.(toolId, `line ${lineNumber}`, undefined, 0);
         callbacks.onFileChanged?.(
           gov.absolutePath,
           (action.new_str.match(/\n/g) ?? []).length,
@@ -3934,7 +3964,7 @@ export class ChatEngine {
           const secs = Math.round((Date.now() - rCached.timestamp) / 1000);
           this.dedupeHitCount++;
           this.toolCallLog.push({ tool, target, detail: 'cached', index: meta.index, exit_code: 0 });
-          callbacks.onToolComplete?.(toolId, 'cached');
+          callbacks?.onToolComplete?.(toolId, 'cached', undefined, 0);
           return {
             index: meta.index,
             observation:
@@ -3946,14 +3976,14 @@ export class ChatEngine {
         const rLines = rContent.split('\n');
         if (action.start_line > rLines.length) {
           this.toolCallLog.push({ tool, target, detail: 'error', error: 'start_line out of range', index: meta.index, exit_code: 1 });
-          callbacks.onToolComplete?.(toolId, 'error');
+          callbacks?.onToolComplete?.(toolId, 'error', 'start_line out of range', 1);
           return { index: meta.index, observation: `### read_range ${target}\nError: start_line (${action.start_line}) exceeds file length (${rLines.length})` };
         }
         const clampedEnd = Math.min(action.end_line, rLines.length);
         const selectedLines = rLines.slice(action.start_line - 1, clampedEnd);
         const numberedLines = selectedLines.map((line, i) => `${action.start_line + i}:${line}`).join('\n');
         this.toolCallLog.push({ tool, target, detail: `${selectedLines.length} lines`, index: meta.index, exit_code: 0 });
-        callbacks.onToolComplete?.(toolId, `${selectedLines.length} lines`);
+        callbacks?.onToolComplete?.(toolId, `${selectedLines.length} lines`, undefined, 0);
         return {
           index: meta.index,
           observation:
@@ -3970,7 +4000,7 @@ export class ChatEngine {
           .map(([id, t]) => `- [${t.status}] ${t.content} (${id})`)
           .join('\n');
         this.toolCallLog.push({ tool, target, detail: `${this.todos.size} todos`, index: meta.index, exit_code: 0 });
-        callbacks.onToolComplete?.(toolId, `${this.todos.size} todos`);
+        callbacks?.onToolComplete?.(toolId, `${this.todos.size} todos`, undefined, 0);
         return {
           index: meta.index,
           observation: `### todo_write\nexit_code: 0\n\`\`\`\n${formattedTodos}\n\`\`\``,
@@ -4013,7 +4043,7 @@ export class ChatEngine {
               exit_code: 1,
               error: 'capability_degraded',
             });
-            callbacks.onToolComplete?.(toolId, 'degraded_suppressed');
+            callbacks?.onToolComplete?.(toolId, 'degraded_suppressed', 'capability_degraded', 1);
             return { index: meta.index, observation };
           }
         }
@@ -4058,7 +4088,12 @@ export class ChatEngine {
             exit_code: cachedVerifier.receipt.exit_code,
             stdout: cachedVerifier.receipt.summary,
           });
-          callbacks.onToolComplete?.(toolId, `cached (exit ${cachedVerifier.receipt.exit_code})`);
+          callbacks?.onToolComplete?.(
+            toolId,
+            `cached (exit ${cachedVerifier.receipt.exit_code})`,
+            cachedVerifier.receipt.exit_code === 0 ? undefined : 'verifier failed',
+            cachedVerifier.receipt.exit_code,
+          );
           return {
             index: meta.index,
             observation:
@@ -4187,9 +4222,15 @@ export class ChatEngine {
       });
 
       if (result.policyBlocked) {
-        callbacks.onToolComplete?.(toolId, 'blocked');
+        callbacks?.onToolComplete?.(toolId, 'blocked', 'blocked', 1);
       } else {
-        callbacks.onToolComplete?.(toolId, detail);
+        const hasErr = lastResult && lastResult.exit_code !== 0;
+        callbacks?.onToolComplete?.(
+          toolId,
+          detail,
+          hasErr ? (lastResult?.stderr || 'failed') : undefined,
+          lastResult?.exit_code ?? 0,
+        );
 
         if (action.type === 'write_file' && !result.policyBlocked) {
           const diff = renderGitDiff(
@@ -4296,7 +4337,7 @@ export class ChatEngine {
         index: meta.index,
         exit_code: 1,
       });
-      callbacks.onToolComplete?.(toolId, 'error');
+      callbacks?.onToolComplete?.(toolId, 'error', err instanceof Error ? err.message : String(err), 1);
       return {
         index: meta.index,
         observation: `### ${tool} ${target}\nError: ${err instanceof Error ? err.message : String(err)}`,

@@ -52,7 +52,7 @@ export function logPlatformUnusableResult(input: {
   exitCode: number;
   meta: { index: number };
   toolId: number;
-  callbacks: { onToolComplete?: (id: number, detail?: string) => void };
+  callbacks: { onToolComplete?: (id: number, detail?: string, error?: string, exitCode?: number) => void };
 }): { index: number; observation: string } {
   input.toolCallLog.push({
     tool: input.tool,
@@ -62,7 +62,7 @@ export function logPlatformUnusableResult(input: {
     index: input.meta.index,
     exit_code: input.exitCode,
   });
-  input.callbacks.onToolComplete?.(input.toolId, 'platform_unusable');
+  input.callbacks.onToolComplete?.(input.toolId, 'platform_unusable', 'platform_unusable', input.exitCode);
   return {
     index: input.meta.index,
     observation: formatPlatformVerifierUnusableObservation(

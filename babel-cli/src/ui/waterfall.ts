@@ -1993,13 +1993,29 @@ export class ConversationalRenderer extends BaseRenderer {
     this._historyTranscript.completeToolCall(id, detail);
     this._syncCellViewport();
 
-    const hasError = Boolean(error || (exitCode !== undefined && exitCode !== 0));
+    const isExplicitError = Boolean(
+      error ||
+      (exitCode !== undefined && exitCode !== 0) ||
+      (detail && (
+        detail === 'blocked' ||
+        detail === 'error' ||
+        detail === 'failed' ||
+        detail === 'degraded_suppressed' ||
+        detail === 'platform_unusable' ||
+        detail === 'hard-plan-mode' ||
+        detail === 'plan-gate' ||
+        detail === 'phase-gate' ||
+        detail === 'reconciliation-required' ||
+        (detail.startsWith('exit ') && !detail.startsWith('exit 0'))
+      ))
+    );
+    const resolvedExitCode = exitCode !== undefined ? exitCode : isExplicitError ? 1 : 0;
     const summary: ToolExecutionSummary = {
       tool: pending.tool,
       target: pending.target,
-      exitCode: exitCode ?? (error ? 1 : 0),
+      exitCode: resolvedExitCode,
       ...(detail !== undefined ? { detail } : {}),
-      ...(error !== undefined ? { error } : {}),
+      ...(error !== undefined ? { error } : (isExplicitError ? { error: detail ?? 'failed' } : {})),
     };
 
     if (this.isTTY) {
@@ -2008,12 +2024,12 @@ export class ConversationalRenderer extends BaseRenderer {
           category: 'other' as const,
           count: 1,
           items: [summary],
-          hasErrors: hasError,
+          hasErrors: isExplicitError,
         };
         const formatted = formatToolGroupSummary(group, true);
         safeStdoutWrite(`\r${formatted}\n`);
         this._pushLinesToScrollback(formatted);
-      } else if (hasError) {
+      } else if (isExplicitError) {
         this._flushPendingToolExecutions();
         const group = groupToolExecutions([summary])[0] ?? {
           category: 'other' as const,
@@ -2042,7 +2058,14 @@ export class ConversationalRenderer extends BaseRenderer {
     deletions: number,
     diffContent?: string | null,
   ): void {
-    this._flushPendingToolExecutions();
+    if (this._pendingToolExecutions.length > 0) {
+      const hasNonEdits = this._pendingToolExecutions.some(
+        item => item.tool !== 'write_file' && item.tool !== 'str_replace' && item.tool !== 'apply_patch'
+      );
+      if (hasNonEdits) {
+        this._flushPendingToolExecutions();
+      }
+    }
     if (this.outputBroken) return;
     if (this.paused) return;
     this._store?.dispatch({ type: 'file:changed', filePath, additions, deletions });
