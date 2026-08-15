@@ -136,15 +136,15 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
 
       const id1 = renderer.onToolCallStart('read_file', 'src/a.ts');
       assert.ok(id1 > 0);
-      renderer.onToolCallComplete(id1, 'read 100 bytes');
+      renderer.onToolCallComplete(id1, 'read 100 bytes', undefined, 0);
 
       const id2 = renderer.onToolCallStart('read_file', 'src/b.ts');
       assert.ok(id2 > 0);
-      renderer.onToolCallComplete(id2, 'read 200 bytes');
+      renderer.onToolCallComplete(id2, 'read 200 bytes', undefined, 0);
 
       const id3 = renderer.onToolCallStart('read_file', 'src/c.ts');
       assert.ok(id3 > 0);
-      renderer.onToolCallComplete(id3, 'read 300 bytes');
+      renderer.onToolCallComplete(id3, 'read 300 bytes', undefined, 0);
 
       // Flush via answer chunk (start of assistant output)
       renderer.onAnswerChunk('I have inspected all files.');
@@ -152,6 +152,7 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
 
       const out = stripAnsi(chunks.join(''));
       assert.ok(out.includes('Read 3 files'), `Expected 'Read 3 files' in collapsed output, got: ${out}`);
+      assert.ok(!out.includes('unverified'), `Confirmed reads should not say unverified, got: ${out}`);
       assert.ok(!out.includes('Read 1 file'), `Should not contain individual 'Read 1 file' entries, got: ${out}`);
     } finally {
       process.stdout.write = originalWrite;
@@ -171,17 +172,17 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
       const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
       renderer.start();
 
-      // Group 1: 2 reads
+      // Group 1: 2 confirmed reads
       const r1 = renderer.onToolCallStart('read_file', 'src/config.ts');
-      renderer.onToolCallComplete(r1, 'read 50 bytes');
+      renderer.onToolCallComplete(r1, 'read 50 bytes', undefined, 0);
       const r2 = renderer.onToolCallStart('read_file', 'src/types.ts');
-      renderer.onToolCallComplete(r2, 'read 80 bytes');
+      renderer.onToolCallComplete(r2, 'read 80 bytes', undefined, 0);
 
-      // Group 2: 2 writes (category change triggers flush of group 1)
+      // Group 2: 2 confirmed writes (category change triggers flush of group 1)
       const w1 = renderer.onToolCallStart('write_file', 'src/a.ts');
-      renderer.onToolCallComplete(w1, 'wrote 10 lines');
+      renderer.onToolCallComplete(w1, 'wrote 10 lines', undefined, 0);
       const w2 = renderer.onToolCallStart('write_file', 'src/b.ts');
-      renderer.onToolCallComplete(w2, 'wrote 20 lines');
+      renderer.onToolCallComplete(w2, 'wrote 20 lines', undefined, 0);
 
       renderer.onSummary();
       renderer.stop();
@@ -189,6 +190,7 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
       const out = stripAnsi(chunks.join(''));
       assert.ok(out.includes('Read 2 files'), `Expected 'Read 2 files' in output, got: ${out}`);
       assert.ok(out.includes('Edited 2 files'), `Expected 'Edited 2 files' in output, got: ${out}`);
+      assert.ok(!out.includes('unverified'), `Confirmed groups should not say unverified, got: ${out}`);
     } finally {
       process.stdout.write = originalWrite;
     }
@@ -360,7 +362,10 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
     }
   });
 
-  test('production integration: true non-streaming execution chain with BABEL_STREAM_TOOLS=0 renders real tool failure truthfully', async () => {
+  test('production integration: runChatEngineOnce non-streaming callback-boundary integration preserves structured tool failure', async () => {
+    // Tests that BABEL_STREAM_TOOLS=0 selects non-streaming mode (isChatStreamingEnabled() === false),
+    // routes through runChatEngineOnce() -> engine.submitMessage(..., buildChatCallbacks(renderer)),
+    // and correctly preserves structured error / exitCode across the renderer boundary to output a failure line.
     const { isChatStreamingEnabled } = await import('../config/chatEngineLimits.js');
     const { runChatEngineOnce } = await import('../interactive/execution/chatCore.js');
     const { ConversationalRenderer } = await import('./waterfall.js');
@@ -388,7 +393,7 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
       const mockEngine: any = {
         submitMessage: async (task: string, callbacks: any) => {
           submitMessageCalled = true;
-          // Simulate real ChatEngine executing a failing command during non-streaming turn
+          // Emits structured failure over the non-streaming callback boundary
           const toolId = callbacks.onToolStart?.('run_command', 'git push origin main') ?? 1;
           callbacks.onToolComplete?.(toolId, 'plan-gate', 'blocked', 1);
           return {
@@ -442,7 +447,7 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
     }
   });
 
-  test('unknown result state remains unverified and never produces green success or exit 0', async () => {
+  test('unknown result state remains unverified in verbose mode and never produces green success or exit 0', async () => {
     const { ConversationalRenderer } = await import('./waterfall.js');
     const chunks: string[] = [];
     const originalWrite = process.stdout.write.bind(process.stdout);
@@ -467,6 +472,97 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
       assert.ok(out.includes('unverified'), `Expected 'unverified' status in output, got: ${out}`);
       assert.ok(!out.includes('✔'), `Should NOT contain success checkmark '✔', got: ${out}`);
       assert.ok(!out.includes('exit 0'), `Should NOT invent 'exit 0', got: ${out}`);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  });
+
+  test('collapsed unknown read summary includes unverified and does not claim confirmed success', async () => {
+    const { ConversationalRenderer } = await import('./waterfall.js');
+    const chunks: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
+      renderer.start();
+
+      const id1 = renderer.onToolCallStart('read_file', 'src/a.ts');
+      renderer.onToolCallComplete(id1, 'read 100 bytes'); // unknown
+
+      const id2 = renderer.onToolCallStart('read_file', 'src/b.ts');
+      renderer.onToolCallComplete(id2, 'read 200 bytes'); // unknown
+
+      renderer.onAnswerChunk('Done reading.');
+      renderer.stop();
+
+      const out = stripAnsi(chunks.join(''));
+      assert.ok(out.includes('Read 2 files (unverified)'), `Expected unverified read summary, got: ${out}`);
+      assert.ok(!out.includes('✔'), `Should NOT contain green success '✔', got: ${out}`);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  });
+
+  test('collapsed unknown command summary includes unverified and does not claim confirmed success', async () => {
+    const { ConversationalRenderer } = await import('./waterfall.js');
+    const chunks: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
+      renderer.start();
+
+      const id1 = renderer.onToolCallStart('run_command', 'echo a');
+      renderer.onToolCallComplete(id1, 'echoed a'); // unknown
+
+      const id2 = renderer.onToolCallStart('run_command', 'echo b');
+      renderer.onToolCallComplete(id2, 'echoed b'); // unknown
+
+      renderer.onAnswerChunk('Done running commands.');
+      renderer.stop();
+
+      const out = stripAnsi(chunks.join(''));
+      assert.ok(out.includes('Executed 2 commands (unverified)'), `Expected unverified command summary, got: ${out}`);
+      assert.ok(!out.includes('✔'), `Should NOT contain green success '✔', got: ${out}`);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  });
+
+  test('mixed read group with one unknown member contaminates group to unverified', async () => {
+    const { ConversationalRenderer } = await import('./waterfall.js');
+    const chunks: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
+      renderer.start();
+
+      // Confirmed read
+      const id1 = renderer.onToolCallStart('read_file', 'src/a.ts');
+      renderer.onToolCallComplete(id1, 'read 100 bytes', undefined, 0);
+
+      // Unknown read
+      const id2 = renderer.onToolCallStart('read_file', 'src/b.ts');
+      renderer.onToolCallComplete(id2, 'read 200 bytes');
+
+      renderer.onAnswerChunk('Done reading.');
+      renderer.stop();
+
+      const out = stripAnsi(chunks.join(''));
+      assert.ok(out.includes('Read 2 files (unverified)'), `Expected unverified group summary, got: ${out}`);
     } finally {
       process.stdout.write = originalWrite;
     }

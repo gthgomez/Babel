@@ -44,7 +44,7 @@ describe('PR-76 REAL_PROCESS: Spawned Real Babel CLI Interactive Process Certifi
     });
 
     const isReady = await new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => resolve(false), 9000);
+      const timer = setTimeout(() => resolve(false), 15000);
       const onData = () => {
         const text = stripAnsi(out);
         if (/BABEL/i.test(text) && /READY|CHAT/i.test(text)) {

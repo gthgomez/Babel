@@ -1124,8 +1124,8 @@ test('ConversationalRenderer: snapshot of TTY tool call interaction', () => {
         (r as unknown as { pendingToolCalls: Map<number, unknown> }).pendingToolCalls.keys(),
       );
       if (pendingKeys.length >= 2) {
-        r.onToolCallComplete(pendingKeys[0]!, '1.5 KB');
-        r.onToolCallComplete(pendingKeys[1]!, 'exit 0');
+        r.onToolCallComplete(pendingKeys[0]!, '1.5 KB', undefined, 0);
+        r.onToolCallComplete(pendingKeys[1]!, 'exit 0', undefined, 0);
       }
       r.onSummary();
       r.stop();

@@ -146,10 +146,14 @@ export function formatToolGroupSummary(
   let line = '';
   switch (group.category) {
     case 'read':
-      line = `  ${muted('○')} ${dim(`Read ${group.count} file${group.count > 1 ? 's' : ''}`)}`;
+      line = group.hasUnknowns
+        ? `  ${muted('○')} ${dim(`Read ${group.count} file${group.count > 1 ? 's' : ''} (unverified)`)}`
+        : `  ${muted('○')} ${dim(`Read ${group.count} file${group.count > 1 ? 's' : ''}`)}`;
       break;
     case 'search':
-      line = `  ${muted('○')} ${dim(`Searched workspace (${group.count} step${group.count > 1 ? 's' : ''})`)}`;
+      line = group.hasUnknowns
+        ? `  ${muted('○')} ${dim(`Searched workspace (${group.count} step${group.count > 1 ? 's' : ''}, unverified)`)}`
+        : `  ${muted('○')} ${dim(`Searched workspace (${group.count} step${group.count > 1 ? 's' : ''})`)}`;
       break;
     case 'edit':
       line = group.hasUnknowns
@@ -162,10 +166,14 @@ export function formatToolGroupSummary(
         : `  ${success('✔')} ${success('Ran tests & verifiers (exit 0)')}`;
       break;
     case 'command':
-      line = `  ${muted('○')} ${dim(`Executed ${group.count} command${group.count > 1 ? 's' : ''}`)}`;
+      line = group.hasUnknowns
+        ? `  ${muted('○')} ${dim(`Executed ${group.count} command${group.count > 1 ? 's' : ''} (unverified)`)}`
+        : `  ${muted('○')} ${dim(`Executed ${group.count} command${group.count > 1 ? 's' : ''}`)}`;
       break;
     default:
-      line = `  ${muted('○')} ${dim(`${group.items[0]?.tool ?? 'tool'} (${group.count})`)}`;
+      line = group.hasUnknowns
+        ? `  ${muted('○')} ${dim(`${group.items[0]?.tool ?? 'tool'} (${group.count}) (unverified)`)}`
+        : `  ${muted('○')} ${dim(`${group.items[0]?.tool ?? 'tool'} (${group.count})`)}`;
       break;
   }
 
