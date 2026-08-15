@@ -38,10 +38,18 @@ zero co-evolution debt. It maps Class A–D onto existing primitives: task-class
 - Env: `BABEL_AUTONOMY_CLASS=A|B|C|D` — consumed by `resolveChatTaskClass`
   (A→default, B→general_swe, C→governance, D→governance). Explicit
   `BABEL_CHAT_TASK_CLASS` wins. Additive; no behavior change when unset.
+- **V2 authority (ADR-014)**: `src/authority/` implements the AutonomyLease +
+  PDP — capability-based decisions with stable reason codes
+  (`ALLOW_SAFE_LOCAL` … `DENY_FORCE_PUSH_POLICY`), wired into the real
+  dispatch gate (`src/agent/toolExecutor.ts` `executeActionWithPolicy`).
+  Env: `BABEL_AUTONOMY_LEASE` (inline JSON) or `BABEL_AUTONOMY_LEASE_FILE`
+  (path; example: `config/autonomy-lease.example.json`). Additive: no lease →
+  legacy `decideAction` behavior unchanged; a broken lease fails LOUD at the
+  first decision.
 - Enforcement reality: Babel runs its own loop (API runners, native tool calls) —
   it does NOT delegate tool execution to Claude Code, so Claude Code's permission
-  layer is not Babel's enforcement. Preset selection seam for C/D (ask/deny) is
-  `chatEngine.ts:4119` (documented, not wired).
+  layer is not Babel's enforcement. The PDP is Babel's enforcement; preset
+  selection seam for C/D (ask/deny) is `chatEngine.ts:4119` (documented).
 
 ## High-risk files
 

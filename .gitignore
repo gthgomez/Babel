@@ -120,8 +120,9 @@ mcps/
 
 # ─── Editor / cursor ─────────────────────────────────────────────────────────
 .cursor/*
-# Project rules are version-controlled per Cursor docs (cursor.com/docs/context/rules)
+# Project rules + CLI permissions are version-controlled per Cursor docs
 !.cursor/rules/
+!.cursor/cli.json
 
 # ─── Factory campaign artifacts ──────────────────────────────────────────────
 plans/factory/

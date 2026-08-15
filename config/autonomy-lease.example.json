@@ -1,0 +1,65 @@
+{
+  "version": 2,
+  "leaseId": "example-lease",
+  "scope": {
+    "repository": "gthgomez/Babel",
+    "remote": "origin",
+    "worktree": "current",
+    "objective": "current_user_task"
+  },
+  "allowedCapabilities": [
+    "inspect_repository",
+    "search_repository",
+    "edit_task_files",
+    "create_task_branch",
+    "create_worktree",
+    "run_tests",
+    "run_build",
+    "run_lint",
+    "run_typecheck",
+    "run_local_command",
+    "stage_ship_set",
+    "commit_ship_set",
+    "push_feature_branch",
+    "pr_create_draft",
+    "pr_update_draft",
+    "pr_inspect",
+    "ci_inspect",
+    "ci_repair_in_scope",
+    "ci_rerun_transient",
+    "delete_task_temp"
+  ],
+  "branchPrefixes": ["feat/", "fix/", "refactor/", "docs/", "test/"],
+  "constraints": {
+    "protectedBranches": ["main"],
+    "forcePush": false,
+    "remoteRefDelete": false,
+    "releasePublish": false,
+    "productionDeploy": false,
+    "repositoryAdmin": false,
+    "secretsAccess": false,
+    "billing": false,
+    "destructiveDb": false,
+    "scopeExpansion": false
+  },
+  "budgets": {
+    "ciProductRepairRounds": 3,
+    "ciTransientReruns": 1,
+    "prRecreateRounds": 1,
+    "parallelAgents": 8
+  },
+  "gates": [
+    "merge",
+    "pr_mark_ready",
+    "release",
+    "production_deploy",
+    "repo_admin",
+    "security_policy_change",
+    "credential_access",
+    "destructive_data_delete",
+    "shared_history_rewrite",
+    "force_push",
+    "scope_expansion"
+  ],
+  "forbidden": ["expose_credentials"]
+}

@@ -43,6 +43,21 @@ import type { AgentAction } from './actions.js';
 import { modelToolNameToExecutor } from './canonicalToolMapping.js';
 import { emitAgentEvent } from './events.js';
 import { decideAction, type PermissionDecision, type PermissionPreset } from './policy.js';
+import { loadLeaseFromEnv, type AutonomyLease } from '../authority/lease.js';
+import { decideWithLease, type LeaseContext } from '../authority/wire.js';
+import type { BaselineManifest } from '../authority/integrity.js';
+import type { ReasonCode } from '../authority/reasonCodes.js';
+
+/**
+ * Active lease, cached for the process lifetime. A broken lease env fails
+ * LOUD at the first decision (fail-closed) rather than silently degrading.
+ */
+let cachedLease: AutonomyLease | null | undefined;
+function activeLease(): AutonomyLease | null {
+  if (cachedLease !== undefined) return cachedLease;
+  cachedLease = loadLeaseFromEnv();
+  return cachedLease;
+}
 
 const APPLY_PATCH_RELATIVE_PATH = '.babel-lite/apply.patch';
 
@@ -627,6 +642,12 @@ export async function executeActionWithPolicy(
     hostFallbackAllowed?: boolean;
     /** H4: explicit idempotency key for this invocation (defaults from action). */
     idempotencyKey?: string;
+    /** V2 authority: explicit lease override (defaults to the env lease). */
+    lease?: AutonomyLease | null;
+    /** V2 authority: policy-integrity baseline manifest (session-start snapshot). */
+    baseline?: BaselineManifest;
+    /** V2 authority: repo root used for baseline drift checks (defaults to cwd). */
+    baselineRepoRoot?: string;
     /** B2: final authorization check after policy/approval but before an effect ledger intent. */
     onDispatchAuthorized?: () => { allowed: boolean; message?: string };
     /** B2: invoked immediately before executor.execute after durable effect intent persistence. */
@@ -637,7 +658,22 @@ export async function executeActionWithPolicy(
   } = {},
 ): Promise<PolicyGatedExecutionResult> {
   const executor = deps.executor ?? defaultToolExecutor;
-  const decide = deps.decide ?? decideAction;
+  // V2 authority: the default decision path consults the PDP when a lease is
+  // active (env or explicit override). Additive — no lease → legacy behavior.
+  const leaseCtx: LeaseContext = {
+    lease: deps.lease !== undefined ? deps.lease : activeLease(),
+    ...(deps.baseline !== undefined
+      ? { baseline: { repoRoot: deps.baselineRepoRoot ?? '', manifest: deps.baseline } }
+      : {}),
+  };
+  let lastReasonCode: ReasonCode | '' = '';
+  const decide: typeof decideAction =
+    deps.decide ??
+    ((action, preset) => {
+      const r = decideWithLease(action, preset, leaseCtx);
+      lastReasonCode = r.reasonCode;
+      return r.decision;
+    });
   const budget = deps.budget ?? DEFAULT_TOOL_BUDGET;
 
   // ── H4 capability broker: classify + authorize before policy decide ──
@@ -760,6 +796,7 @@ export async function executeActionWithPolicy(
       preset,
       runId: context.runId,
       agentId: context.agentId,
+      ...(lastReasonCode ? { rule: lastReasonCode } : {}),
     });
     return {
       action,
