@@ -11,8 +11,21 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderStatusBar } from './statusBar.js';
+import {
+  renderStatusBar,
+  planStatusBarFields,
+  applyAttentionPreemption,
+  ATTENTION_PREEMPTION,
+  classifyStatusWidth,
+  classifyRateLimitAttention,
+  isDefaultStatusMode,
+} from './statusBar.js';
 import type { StatusBarState } from './statusBar.js';
+import {
+  getGlobalRateLimitState,
+  setGlobalRateLimitState,
+} from './rateLimitWidget.js';
+import type { RateLimitState } from './rateLimitWidget.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -53,20 +66,23 @@ function firstLineAnsi(text: string): string {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe('renderStatusBar — basic format', () => {
-  it('contains model, mode, and project name', () => {
-    const result = renderStatusBar(defaultState());
+  it('contains model identity at default width', () => {
+    const result = renderStatusBar(defaultState({ width: 80 }));
     const plain = stripAnsi(result);
     assert.ok(plain.includes('DeepSeek v4 Flash'));
-    assert.ok(plain.includes('default'));
-    assert.ok(plain.includes('my-project'));
+    assert.ok(!plain.includes('default'), 'default mode is shed');
+    assert.ok(!plain.includes('my-project'), 'project name is not persistent chrome');
   });
 
-  it('contains right-aligned token count, cost, and turn count', () => {
-    const result = renderStatusBar(defaultState());
-    const plain = stripAnsi(result);
-    assert.ok(plain.includes('45,000 tok'));
-    assert.ok(plain.includes('$0.1234'));
-    assert.ok(plain.includes('turn 42'));
+  it('shows cost and session tokens only at the Stage 0 bands that allow them', () => {
+    const wide = stripAnsi(renderStatusBar(defaultState({ width: 160 })));
+    assert.ok(wide.includes('45,000 tok'));
+    assert.ok(wide.includes('$0.1234'));
+    assert.ok(wide.includes('turn 42'));
+    const mid = stripAnsi(renderStatusBar(defaultState({ width: 100 })));
+    assert.ok(mid.includes('$0.1234'));
+    assert.ok(!mid.includes('45,000 tok'));
+    assert.ok(!mid.includes('turn 42'));
   });
 
   it('ends with a newline', () => {
@@ -93,7 +109,7 @@ describe('renderStatusBar — basic format', () => {
     assert.equal(line.length, 80);
   });
 
-  it('shows background tasks when provided', () => {
+  it('shows background tasks when provided at 80+', () => {
     const result = renderStatusBar(
       defaultState({
         backgroundTasks: [
@@ -112,24 +128,42 @@ describe('renderStatusBar — basic format', () => {
     );
     const plain = stripAnsi(result);
     assert.ok(plain.includes('Indexing'));
-    assert.ok(plain.includes('567'));
-    assert.ok(plain.includes('1234'));
+  });
+
+  it('sheds background tasks at width 60', () => {
+    const result = renderStatusBar(
+      defaultState({
+        backgroundTasks: [
+          {
+            id: '1',
+            label: 'Indexing',
+            status: 'running',
+            current: 567,
+            total: 1234,
+            progress: 45,
+            elapsedMs: 3200,
+          },
+        ],
+        width: 60,
+      }),
+    );
+    const plain = stripAnsi(result);
+    assert.ok(!plain.includes('Indexing'));
   });
 
   it('omits background tasks section when absent', () => {
     const result = renderStatusBar(defaultState({} as any));
     const plain = stripAnsi(result);
-    // The bar should still look normal
     assert.ok(plain.includes('DeepSeek'));
-    assert.ok(plain.includes('45,000 tok'));
   });
 
-  it('renders with zero tokens and zero cost', () => {
+  it('renders with zero tokens and zero cost at 160', () => {
     const result = renderStatusBar(
       defaultState({
         totalTokens: 0,
         totalCost: 0,
         turnCount: 0,
+        width: 160,
       }),
     );
     const plain = stripAnsi(result);
@@ -154,13 +188,12 @@ describe('renderStatusBar — truncation', () => {
       }),
     );
     const line = firstLine(result);
-    // Right-aligned info should still be present
-    assert.ok(line.includes('45,000'));
-    assert.ok(line.includes('turn'));
+    assert.ok(line.includes('VeryLong') || line.includes('…'));
+    assert.equal(result.replace(/\n$/, '').split('\n').length, 1);
     assert.ok(line.length <= 42);
   });
 
-  it('preserves right-aligned info under severe truncation', () => {
+  it('stays single-line under severe truncation', () => {
     const result = renderStatusBar(
       defaultState({
         model: 'ExtremelyLongModelNameThatWillGetTruncated',
@@ -170,8 +203,8 @@ describe('renderStatusBar — truncation', () => {
       }),
     );
     const line = firstLine(result);
-    // The right-aligned info is the most important part — it should survive
-    assert.ok(line.includes('tok') || line.includes('turn'));
+    assert.equal(line.length, 30);
+    assert.equal(result.replace(/\n$/, '').split('\n').length, 1);
   });
 
   it('uses ellipsis … for truncated content', () => {
@@ -308,15 +341,13 @@ describe('renderStatusBar — token context bar', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe('renderStatusBar — routing label', () => {
-  it('shows routing label next to model when set', () => {
+  it('sheds routing labels from the default status bar', () => {
     const result = renderStatusBar(
-      defaultState({ routingLabel: 'Flash·mutate' }),
+      defaultState({ routingLabel: 'Flash·mutate', width: 160 }),
     );
     const plain = stripAnsi(result);
-    assert.ok(plain.includes('mutate'));
-    const modelIdx = plain.indexOf('DeepSeek v4 Flash');
-    const labelIdx = plain.indexOf('mutate');
-    assert.ok(labelIdx > modelIdx);
+    assert.ok(plain.includes('DeepSeek v4 Flash'));
+    assert.ok(!plain.includes('mutate'));
   });
 
   it('does not show routing label when not set', () => {
@@ -335,7 +366,7 @@ describe('renderStatusBar — routing label', () => {
     assert.ok(!plain.includes('Pro·'));
   });
 
-  it('handles truncation with routing label present', () => {
+  it('handles truncation with routing label present (routing still shed)', () => {
     const result = renderStatusBar(
       defaultState({
         routingLabel: 'Pro·investigate',
@@ -344,9 +375,9 @@ describe('renderStatusBar — routing label', () => {
       }),
     );
     const line = firstLine(result);
-    assert.ok(line.includes('45,000'));
-    assert.ok(line.includes('turn'));
+    assert.ok(!line.includes('investigate'));
     assert.ok(line.length <= 42);
+    assert.equal(result.replace(/\n$/, '').split('\n').length, 1);
   });
 });
 
@@ -364,15 +395,17 @@ describe('Acceptance Tests T17–T20: Status Bar Refinements', () => {
     assert.ok(!failedBar.includes('\x1b[41m'), 'failed must NOT have red bg code');
   });
 
-  it('T18: Routing label deduplicates model tier name (Flash Flash·escalate -> Flash · escalate)', () => {
+  it('T18: Routing cue is shed (not a persistent default-chat field)', () => {
     const result = renderStatusBar(
       defaultState({
         model: 'DeepSeek V4 Flash',
         routingLabel: 'Flash·escalate',
+        width: 160,
       }),
     );
     const plain = stripAnsi(result);
-    assert.ok(plain.includes('DeepSeek V4 Flash · escalate'));
+    assert.ok(plain.includes('DeepSeek V4 Flash'));
+    assert.ok(!plain.includes('escalate'));
     assert.ok(!plain.includes('Flash Flash'));
   });
 
@@ -453,5 +486,775 @@ describe('Acceptance Tests T17–T20: Status Bar Refinements', () => {
     const plain = stripAnsi(renderStatusBar(state));
     // 50,000 / 200,000 (claude-sonnet-4-6) = 25% (NOT 50,000 / 1,000,000 = 5%)
     assert.ok(plain.includes('25%'), `Expected 25% calculated against activeContext.modelId limit, got: ${plain}`);
+  });
+});
+
+describe('status bar — explicit field shedding', () => {
+  it('classifies the frozen width bands', () => {
+    assert.equal(classifyStatusWidth(60), 60);
+    assert.equal(classifyStatusWidth(79), 60);
+    assert.equal(classifyStatusWidth(80), 80);
+    assert.equal(classifyStatusWidth(100), 100);
+    assert.equal(classifyStatusWidth(120), 120);
+    assert.equal(classifyStatusWidth(160), 160);
+    assert.ok(isDefaultStatusMode('default'));
+    assert.ok(isDefaultStatusMode('chat'));
+    assert.ok(!isDefaultStatusMode('deep'));
+  });
+
+  it('plans fields from the Stage 0 matrix instead of rendering everything', () => {
+    const at60 = planStatusBarFields(60, {
+      mode: 'default',
+      hasBranch: true,
+      hasBgTasks: true,
+      hasActiveRateLimit: true,
+    });
+    assert.equal(at60.showMode, false);
+    assert.equal(at60.showCost, false);
+    assert.equal(at60.showSessionTokens, false);
+    assert.equal(at60.showBranch, false);
+    assert.equal(at60.showTurn, false);
+    assert.equal(at60.showKg, false);
+    assert.equal(at60.showRouting, false);
+    assert.equal(at60.showBgTasks, false);
+    assert.equal(at60.showRateLimit, false);
+
+    const at80 = planStatusBarFields(80, {
+      mode: 'deep',
+      hasBranch: true,
+      hasBgTasks: true,
+      hasActiveRateLimit: false,
+    });
+    assert.equal(at80.showMode, true);
+    assert.equal(at80.showCost, false);
+    assert.equal(at80.showBgTasks, true);
+    assert.equal(at80.showRateLimit, false);
+
+    const at100 = planStatusBarFields(100, {
+      mode: 'default',
+      hasBranch: false,
+      hasBgTasks: false,
+      hasActiveRateLimit: false,
+    });
+    assert.equal(at100.showCost, true);
+    assert.equal(at100.showSessionTokens, false);
+    assert.equal(at100.showTurn, false);
+
+    const at120 = planStatusBarFields(120, {
+      mode: 'chat',
+      hasBranch: true,
+      hasBgTasks: false,
+      hasActiveRateLimit: false,
+    });
+    assert.equal(at120.showSessionTokens, true);
+    assert.equal(at120.showBranch, true);
+    assert.equal(at120.showTurn, false);
+
+    const at160 = planStatusBarFields(160, {
+      mode: 'plan',
+      hasBranch: true,
+      hasBgTasks: false,
+      hasActiveRateLimit: false,
+    });
+    assert.equal(at160.showTurn, true);
+    assert.equal(at160.showMode, true);
+  });
+
+  it('does not wrap at 60/80/100/120/160 and keeps model identity at 60/80', () => {
+    const widths = [60, 80, 100, 120, 160] as const;
+    for (const width of widths) {
+      const result = renderStatusBar(
+        defaultState({
+          width,
+          modelId: 'deepseek-v4-flash',
+          activeContext: {
+            tokens: 12_400,
+            modelId: 'deepseek-v4-flash',
+            source: 'provider',
+          },
+          gitBranch: 'feat/tui',
+          gitDirty: true,
+          knowledgeGraph: { status: 'ready', nodeCount: 1284 },
+          routingLabel: 'Flash·mutate',
+        }),
+      );
+      const line = firstLine(result);
+      assert.equal(line.length, width, `width ${width} padded`);
+      assert.equal(result.replace(/\n$/, '').split('\n').length, 1, `width ${width} must not wrap`);
+      assert.ok(!line.includes('kg'), `width ${width} sheds kg`);
+      assert.ok(!line.includes('mutate'), `width ${width} sheds routing`);
+      if (width >= 60) {
+        assert.ok(line.includes('DeepSeek'), `width ${width} keeps model identity: ${line}`);
+      }
+      if (width < 80) {
+        assert.ok(!line.includes('default'));
+        assert.ok(!line.includes('$0.1234'));
+      }
+      if (width < 100) {
+        assert.ok(!line.includes('$0.1234'), `width ${width} sheds cost`);
+      }
+      if (width < 120) {
+        assert.ok(!line.includes('45,000 tok'), `width ${width} sheds session tok`);
+        assert.ok(!line.includes('feat/tui'));
+      }
+      if (width < 160) {
+        assert.ok(!line.includes('turn 42'), `width ${width} sheds turn`);
+      }
+    }
+  });
+
+  it('keeps unknown model / unknown limit / unknown active context unknown', () => {
+    const unknownModel = firstLine(
+      renderStatusBar(
+        defaultState({
+          width: 80,
+          model: 'mystery-local',
+          modelId: 'mystery-local',
+          activeContext: { tokens: 800, modelId: 'mystery-local', source: 'unknown' },
+        }),
+      ),
+    );
+    assert.ok(unknownModel.includes('mystery-local'));
+    assert.ok(unknownModel.includes('[ctx ?]'));
+    assert.ok(!unknownModel.includes('%'));
+
+    const unknownActive = firstLine(
+      renderStatusBar(
+        defaultState({
+          width: 80,
+          modelId: 'deepseek-v4-flash',
+          activeContext: null,
+          activeContextTokens: undefined,
+        }),
+      ),
+    );
+    assert.ok(unknownActive.includes('[ctx ?]'));
+    assert.ok(!unknownActive.includes('%'));
+  });
+
+  it('keeps 1M windows readable and does not let helper model switch corrupt the denominator', () => {
+    const oneM = firstLine(
+      renderStatusBar(
+        defaultState({
+          width: 120,
+          model: 'DeepSeek V4 Pro',
+          modelId: 'deepseek-v4-pro',
+          activeContext: { tokens: 412_000, modelId: 'deepseek-v4-pro', source: 'provider' },
+        }),
+      ),
+    );
+    assert.ok(oneM.includes('41%'), oneM);
+
+    const switched = firstLine(
+      renderStatusBar(
+        defaultState({
+          width: 100,
+          model: 'DeepSeek V4 Flash',
+          modelId: 'deepseek-v4-flash',
+          activeContext: { tokens: 50_000, modelId: 'claude-sonnet-4-6', source: 'provider' },
+        }),
+      ),
+    );
+    assert.ok(switched.includes('25%'), switched);
+    assert.ok(!/\b5%/.test(switched), switched);
+  });
+
+  it('shows a long model name at width 60 without fabricating a percent', () => {
+    const line = firstLine(
+      renderStatusBar(
+        defaultState({
+          width: 60,
+          model: 'anthropic-claude-opus-4-8-preview-extended',
+          modelId: 'unknown-long-model',
+          activeContext: null,
+        }),
+      ),
+    );
+    assert.equal(line.length, 60);
+    assert.ok(line.includes('anthropic') || line.includes('…'));
+    assert.ok(line.includes('[ctx ?]') || line.includes('ctx'));
+  });
+});
+
+describe('status bar — attention-preemption policy', () => {
+  function withRateLimit(state: RateLimitState | null, fn: () => void): void {
+    const prev = getGlobalRateLimitState();
+    setGlobalRateLimitState(state);
+    try {
+      fn();
+    } finally {
+      setGlobalRateLimitState(prev);
+    }
+  }
+
+  it('classifies warning vs critical/exhausted attention', () => {
+    assert.equal(classifyRateLimitAttention(251, 1000), 'none');
+    assert.equal(classifyRateLimitAttention(200, 1000), 'warning');
+    assert.equal(classifyRateLimitAttention(50, 1000), 'critical');
+    assert.equal(classifyRateLimitAttention(0, 1000), 'critical');
+    assert.equal(classifyRateLimitAttention(10, 0), 'none');
+  });
+
+  it('keeps 60-col as model … context, and lets critical rate-limit take that right slot', () => {
+    const state = {
+      model: 'Flash',
+      modelId: 'deepseek-v4-flash',
+      width: 60,
+      activeContext: {
+        tokens: 12_400,
+        modelId: 'deepseek-v4-flash',
+        source: 'provider' as const,
+      },
+    };
+    const normal = firstLine(renderStatusBar(defaultState(state)));
+    assert.match(normal, /^Flash\s+\[/);
+    assert.ok(normal.includes('%') || normal.includes('ctx'), normal);
+    assert.ok(!normal.includes('API:'), normal);
+    assert.ok(!normal.includes('⛔'), normal);
+
+    withRateLimit(
+      { remaining: 0, limit: 1000, resetAt: new Date(Date.now() + 12 * 60_000) },
+      () => {
+        const critical = firstLine(renderStatusBar(defaultState(state)));
+        assert.match(critical, /^Flash\s+/);
+        assert.ok(critical.includes('⛔') || critical.includes('API:'), critical);
+        assert.ok(
+          !critical.includes('%') && !critical.includes('[ctx'),
+          `context must yield the 60-col right slot: ${critical}`,
+        );
+      },
+    );
+  });
+
+  it('lets critical rate-limit appear at 60; warning stays at 80+', () => {
+    const warn60 = planStatusBarFields(60, {
+      mode: 'default',
+      hasBranch: true,
+      hasBgTasks: true,
+      hasActiveRateLimit: true,
+      hasCriticalRateLimit: false,
+    });
+    assert.equal(warn60.showRateLimit, false);
+    assert.equal(warn60.showBgTasks, false);
+
+    const crit60 = planStatusBarFields(60, {
+      mode: 'default',
+      hasBranch: true,
+      hasBgTasks: true,
+      hasActiveRateLimit: true,
+      hasCriticalRateLimit: true,
+    });
+    assert.equal(crit60.showRateLimit, true);
+    assert.equal(crit60.showContext, false);
+    assert.equal(crit60.showBgTasks, false);
+    assert.equal(warn60.showContext, true);
+
+    const warn80 = planStatusBarFields(80, {
+      mode: 'deep',
+      hasBranch: true,
+      hasBgTasks: true,
+      hasActiveRateLimit: true,
+      hasCriticalRateLimit: false,
+    });
+    assert.equal(warn80.showRateLimit, true);
+    assert.equal(warn80.showContext, true);
+    assert.equal(warn80.showMode, false);
+    assert.equal(warn80.showBgTasks, false);
+
+    const crit80 = planStatusBarFields(80, {
+      mode: 'deep',
+      hasBranch: true,
+      hasBgTasks: true,
+      hasActiveRateLimit: true,
+      hasCriticalRateLimit: true,
+    });
+    assert.equal(crit80.showRateLimit, true);
+    assert.equal(crit80.showContext, true);
+    assert.equal(crit80.showMode, false);
+    assert.equal(crit80.showBgTasks, false);
+
+    const calm80 = planStatusBarFields(80, {
+      mode: 'deep',
+      hasBranch: true,
+      hasBgTasks: true,
+      hasActiveRateLimit: false,
+      hasCriticalRateLimit: false,
+    });
+    assert.equal(calm80.showMode, true);
+    assert.equal(calm80.showBgTasks, true);
+    assert.equal(calm80.showRateLimit, false);
+  });
+
+  it('names the preemption bands and drop order', () => {
+    assert.equal(ATTENTION_PREEMPTION.criticalRateLimitMinBand, 60);
+    assert.equal(ATTENTION_PREEMPTION.warningRateLimitMinBand, 80);
+    assert.equal(ATTENTION_PREEMPTION.contextYieldsBelowBand, 80);
+    assert.equal(ATTENTION_PREEMPTION.modeYieldsBelowBand, 100);
+    assert.equal(ATTENTION_PREEMPTION.bgTasksYieldBelowBand, 100);
+    assert.deepEqual(ATTENTION_PREEMPTION.displaceInOrder, [
+      'turn',
+      'sessionTokens',
+      'cost',
+      'bgTasks',
+      'rateLimit',
+    ]);
+  });
+
+  it('keeps 80-col as model · mode … context, and drops mode when attention is live', () => {
+    const state = {
+      model: 'Flash',
+      mode: 'deep',
+      modelId: 'deepseek-v4-flash',
+      width: 80,
+      activeContext: {
+        tokens: 12_400,
+        modelId: 'deepseek-v4-flash',
+        source: 'provider' as const,
+      },
+    };
+    const normal = firstLine(renderStatusBar(defaultState(state)));
+    assert.match(normal, /^Flash · deep\s+\[/);
+    assert.ok(normal.includes('%') || normal.includes('ctx'), normal);
+    assert.ok(!normal.includes('⛔'), normal);
+
+    withRateLimit(
+      { remaining: 0, limit: 1000, resetAt: new Date(Date.now() + 12 * 60_000) },
+      () => {
+        const attention = firstLine(renderStatusBar(defaultState(state)));
+        assert.match(attention, /^Flash\s+/);
+        assert.ok(!attention.includes(' · deep'), `mode yields at 80 when attention is live: ${attention}`);
+        assert.ok(attention.includes('⛔') || attention.includes('API:'), attention);
+        assert.ok(
+          attention.includes('%') || attention.includes('ctx'),
+          `context survives beside rate-limit at 80: ${attention}`,
+        );
+      },
+    );
+  });
+
+  it('drops whole slots instead of truncating a surviving concept', () => {
+    const packed = applyAttentionPreemption(
+      [
+        { slot: 'turn', text: 'turn 9999' },
+        { slot: 'rateLimit', text: 'API: 0/1000 ⛔ 12m' },
+        { slot: 'context', text: '[████████  50%]' },
+      ],
+      22,
+      true,
+    );
+    assert.ok(!packed.includes('…'), `must not mid-clip a slot: ${packed}`);
+    assert.ok(packed.includes('0/1000') || packed.includes('50%'), packed);
+    assert.ok(!packed.includes('turn'), packed);
+  });
+
+  it('displaces turn, session tokens, and cost before the context meter', () => {
+    const packed = applyAttentionPreemption(
+      [
+        { slot: 'sessionTokens', text: '999,999,999 tok' },
+        { slot: 'cost', text: '$12345.6789' },
+        { slot: 'turn', text: 'turn 9999' },
+        { slot: 'rateLimit', text: 'API: 0/1000 ⛔ 12m' },
+        { slot: 'context', text: '[████████  50%]' },
+      ],
+      40,
+      true,
+    );
+    assert.ok(packed.includes('50%'), `context should survive: ${packed}`);
+    assert.ok(packed.includes('0/1000'), `critical rate-limit should survive: ${packed}`);
+    assert.ok(!packed.includes('turn'), packed);
+    assert.ok(!packed.includes('tok'), packed);
+    assert.ok(!packed.includes('$12345'), packed);
+  });
+
+  it('shows exhausted rate-limit at width 60 in place of the context meter', () => {
+    withRateLimit(
+      { remaining: 0, limit: 1000, resetAt: new Date(Date.now() + 12 * 60_000) },
+      () => {
+        const line = firstLine(
+          renderStatusBar(
+            defaultState({
+              width: 60,
+              modelId: 'deepseek-v4-flash',
+              activeContext: {
+                tokens: 12_400,
+                modelId: 'deepseek-v4-flash',
+                source: 'provider',
+              },
+            }),
+          ),
+        );
+        assert.ok(line.length <= 60, `must not wrap: ${line.length}`);
+        assert.ok(
+          line.includes('0/1000') || line.includes('⛔'),
+          `expected exhausted rate-limit at 60: ${line}`,
+        );
+        assert.ok(
+          !line.includes('%') && !line.includes('[ctx'),
+          `context yields at 60 when rate-limit is critical: ${line}`,
+        );
+      },
+    );
+  });
+
+  it('keeps warning rate-limit shed at 60 and visible at 80', () => {
+    const state = {
+      remaining: 200,
+      limit: 1000,
+      resetAt: new Date(Date.now() + 60_000),
+    };
+    withRateLimit(state, () => {
+      const at60 = firstLine(
+        renderStatusBar(
+          defaultState({
+            width: 60,
+            modelId: 'deepseek-v4-flash',
+            activeContext: {
+              tokens: 12_400,
+              modelId: 'deepseek-v4-flash',
+              source: 'provider',
+            },
+          }),
+        ),
+      );
+      assert.ok(!at60.includes('⚠'), at60);
+      assert.ok(!at60.includes('200/1000'), at60);
+
+      const at80 = firstLine(
+        renderStatusBar(
+          defaultState({
+            width: 80,
+            modelId: 'deepseek-v4-flash',
+            activeContext: {
+              tokens: 12_400,
+              modelId: 'deepseek-v4-flash',
+              source: 'provider',
+            },
+          }),
+        ),
+      );
+      assert.ok(at80.includes('200/1000') || at80.includes('⚠'), at80);
+    });
+  });
+
+  it('drops cost before clipping the context meter when attention fields collide', () => {
+    withRateLimit(
+      { remaining: 0, limit: 1000, resetAt: new Date(Date.now() + 12 * 60_000) },
+      () => {
+        const line = firstLine(
+          renderStatusBar(
+            defaultState({
+              width: 80,
+              mode: 'deep',
+              model: 'DeepSeek v4 Flash',
+              totalCost: 12345.6789,
+              modelId: 'deepseek-v4-flash',
+              activeContext: {
+                tokens: 500_000,
+                modelId: 'deepseek-v4-flash',
+                source: 'provider',
+              },
+              backgroundTasks: [
+                {
+                  id: '1',
+                  label: 'Indexing-a-very-long-background-task-name',
+                  status: 'running',
+                  current: 567,
+                  total: 1234,
+                  progress: 45,
+                  elapsedMs: 3200,
+                },
+              ],
+            }),
+          ),
+        );
+        assert.ok(line.length <= 80, `must not wrap: ${line.length}`);
+        assert.ok(line.includes('50%') || line.includes('['), `context should survive: ${line}`);
+        assert.ok(
+          line.includes('0/1000') || line.includes('⛔'),
+          `critical rate-limit should survive: ${line}`,
+        );
+        assert.ok(!line.includes('$12345'), `cost is a 100-band field and must not displace attention: ${line}`);
+      },
+    );
+  });
+
+  describe('adversarial cases', () => {
+    const exhausted = {
+      remaining: 0,
+      limit: 1000,
+      resetAt: new Date(Date.now() + 12 * 60_000),
+    };
+    const warning = {
+      remaining: 200,
+      limit: 1000,
+      resetAt: new Date(Date.now() + 60_000),
+    };
+    const critical = {
+      remaining: 50,
+      limit: 1000,
+      resetAt: new Date(Date.now() + 3 * 60_000),
+    };
+    const idle = {
+      remaining: 800,
+      limit: 1000,
+      resetAt: new Date(Date.now() + 60_000),
+    };
+
+    function crowdedState(width: number, overrides: Partial<StatusBarState> = {}): StatusBarState {
+      return defaultState({
+        width,
+        model: 'DeepSeek v4 Flash',
+        mode: 'deep',
+        modelId: 'deepseek-v4-flash',
+        totalTokens: 999_999_999,
+        totalCost: 12345.6789,
+        turnCount: 9999,
+        gitBranch: 'feat/very-long-status-bar-branch-name',
+        gitDirty: true,
+        activeContext: {
+          tokens: 500_000,
+          modelId: 'deepseek-v4-flash',
+          source: 'provider',
+        },
+        backgroundTasks: [
+          {
+            id: '1',
+            label: 'Indexing-a-very-long-background-task-name',
+            status: 'running',
+            current: 567,
+            total: 1234,
+            progress: 45,
+            elapsedMs: 3200,
+          },
+        ],
+        ...overrides,
+      });
+    }
+
+    function hasIntactContext(line: string): boolean {
+      return /\[\s*.+\s+\d+%\s*\]/.test(line) || line.includes('[ctx ?]');
+    }
+
+    function hasIntactRateLimit(line: string): boolean {
+      return /0\/1000/.test(line) || line.includes('⛔');
+    }
+
+    function hasCriticalCue(line: string): boolean {
+      return line.includes('⛔') || line.includes('⚡');
+    }
+
+    function assertOneLine(rendered: string, width: number): string {
+      const contentLines = rendered.replace(/\n$/, '').split('\n');
+      assert.equal(contentLines.length, 1, `must not wrap: ${JSON.stringify(contentLines)}`);
+      const line = firstLine(rendered);
+      assert.ok(line.length <= width, `line ${line.length} > width ${width}: ${line}`);
+      return line;
+    }
+
+    it('width=60 + exhausted rate limit', () => {
+      withRateLimit(exhausted, () => {
+        const rendered = renderStatusBar(
+          defaultState({
+            width: 60,
+            model: 'Flash',
+            modelId: 'deepseek-v4-flash',
+            activeContext: {
+              tokens: 12_400,
+              modelId: 'deepseek-v4-flash',
+              source: 'provider',
+            },
+          }),
+        );
+        const line = assertOneLine(rendered, 60);
+        assert.ok(hasCriticalCue(line), `critical cue must survive: ${line}`);
+        assert.ok(hasIntactRateLimit(line), line);
+        assert.ok(!hasIntactContext(line), `context yields the 60-col right slot: ${line}`);
+      });
+    });
+
+    it('width=60 + very long model + critical rate limit', () => {
+      withRateLimit(critical, () => {
+        const rendered = renderStatusBar(
+          defaultState({
+            width: 60,
+            model: 'anthropic-claude-opus-4-8-preview-extended',
+            modelId: 'deepseek-v4-flash',
+            activeContext: {
+              tokens: 12_400,
+              modelId: 'deepseek-v4-flash',
+              source: 'provider',
+            },
+          }),
+        );
+        const line = assertOneLine(rendered, 60);
+        assert.ok(hasCriticalCue(line), `critical cue must survive a long model: ${line}`);
+        assert.ok(!line.includes('⚡…') && !line.includes('…50/'), line);
+        assert.ok(!hasIntactContext(line), line);
+      });
+    });
+
+    it('width=80 + rate-limit attention + background task + active context', () => {
+      withRateLimit(exhausted, () => {
+        const rendered = renderStatusBar(
+          crowdedState(80, {
+            model: 'Flash',
+            mode: 'deep',
+          }),
+        );
+        const line = assertOneLine(rendered, 80);
+        assert.ok(hasCriticalCue(line), `critical cue must survive: ${line}`);
+        assert.ok(hasIntactContext(line), `context stays at 80 beside rate-limit: ${line}`);
+        assert.ok(!line.includes(' · deep'), `mode yields at 80 under attention: ${line}`);
+      });
+    });
+
+    it('width=80 + long model + both attention sources', () => {
+      withRateLimit(exhausted, () => {
+        const rendered = renderStatusBar(
+          crowdedState(80, {
+            model: 'anthropic-claude-opus-4-8-preview-extended',
+            mode: 'deep',
+          }),
+        );
+        const line = assertOneLine(rendered, 80);
+        assert.ok(hasCriticalCue(line), `critical cue must survive both attention sources: ${line}`);
+        assert.ok(!line.includes(' · deep'), line);
+        assert.ok(!line.includes('⚡…') && !line.includes('⛔…'), line);
+        assert.ok(!line.includes('…%') && !line.includes('%…'), line);
+      });
+    });
+
+    it('treats width 79 as the 60-band: critical RL displaces context and mode stays shed', () => {
+      withRateLimit(exhausted, () => {
+        const line = firstLine(renderStatusBar(crowdedState(79)));
+        assert.ok(line.length <= 79, line);
+        assert.ok(!line.includes('deep'), line);
+        assert.ok(hasIntactRateLimit(line), line);
+        assert.ok(!hasIntactContext(line), `context must yield below 80: ${line}`);
+        assert.ok(!line.includes('…0/') && !line.includes('0/1…'), line);
+      });
+    });
+
+    it('keeps warning RL hidden at 79 and whole at 80', () => {
+      withRateLimit(warning, () => {
+        const at79 = firstLine(renderStatusBar(crowdedState(79, { mode: 'default', backgroundTasks: undefined })));
+        assert.ok(!at79.includes('⚠'), at79);
+        assert.ok(!at79.includes('200/1000'), at79);
+        assert.ok(hasIntactContext(at79), at79);
+
+        const at80 = firstLine(renderStatusBar(crowdedState(80, { mode: 'default', backgroundTasks: undefined })));
+        assert.ok(at80.includes('200/1000') || at80.includes('⚠'), at80);
+        assert.ok(hasIntactContext(at80), `context stays beside warning RL at 80: ${at80}`);
+        assert.ok(!at80.includes('200/1…'), at80);
+      });
+    });
+
+    it('never shows idle rate-limit at 60, 80, or 160', () => {
+      withRateLimit(idle, () => {
+        for (const width of [60, 80, 160] as const) {
+          const line = firstLine(renderStatusBar(crowdedState(width)));
+          assert.ok(!line.includes('800/1000'), `idle RL leaked at ${width}: ${line}`);
+          assert.ok(!line.includes('⛔'), line);
+          assert.ok(!line.includes('⚠'), line);
+        }
+      });
+    });
+
+    it('lets a long model shrink before a critical RL slot is mid-clipped at 60', () => {
+      withRateLimit(exhausted, () => {
+        const line = firstLine(
+          renderStatusBar(
+            crowdedState(60, {
+              model: 'anthropic-claude-opus-4-8-preview-extended',
+              mode: 'default',
+              backgroundTasks: undefined,
+            }),
+          ),
+        );
+        assert.ok(line.length <= 60, line);
+        assert.ok(hasIntactRateLimit(line), `rate-limit must survive whole: ${line}`);
+        assert.ok(!line.includes('…0/') && !line.includes('API:…'), line);
+        assert.ok(!hasIntactContext(line), line);
+      });
+    });
+
+    it('at 160 drops turn and session tokens before context or critical RL', () => {
+      withRateLimit(exhausted, () => {
+        const line = firstLine(renderStatusBar(crowdedState(160)));
+        assert.ok(line.length <= 160, line);
+        assert.ok(hasIntactRateLimit(line), line);
+        assert.ok(hasIntactContext(line), `context must remain a whole slot: ${line}`);
+        assert.ok(!line.includes('turn 9999'), `turn must yield first: ${line}`);
+        assert.ok(!line.includes('999,999,999 tok'), `session tokens must yield before context: ${line}`);
+        assert.ok(!line.includes('…%') && !line.includes('%…'), line);
+      });
+    });
+
+    it('lets bg tasks return at 100 once attention no longer occupies the 80-band', () => {
+      const calm100 = planStatusBarFields(100, {
+        mode: 'deep',
+        hasBranch: true,
+        hasBgTasks: true,
+        hasActiveRateLimit: false,
+      });
+      assert.equal(calm100.showBgTasks, true);
+      assert.equal(calm100.showMode, true);
+
+      const busy100 = planStatusBarFields(100, {
+        mode: 'deep',
+        hasBranch: true,
+        hasBgTasks: true,
+        hasActiveRateLimit: true,
+        hasCriticalRateLimit: true,
+      });
+      assert.equal(busy100.showBgTasks, true);
+      assert.equal(busy100.showMode, true);
+      assert.equal(busy100.showRateLimit, true);
+      assert.equal(busy100.showContext, true);
+
+      const busy80 = planStatusBarFields(80, {
+        mode: 'deep',
+        hasBranch: true,
+        hasBgTasks: true,
+        hasActiveRateLimit: true,
+        hasCriticalRateLimit: true,
+      });
+      assert.equal(busy80.showBgTasks, false);
+      assert.equal(busy80.showMode, false);
+    });
+
+    it('never lets end-truncation decide that context dies first', () => {
+      const packed = applyAttentionPreemption(
+        [
+          { slot: 'sessionTokens', text: '999,999,999 tok' },
+          { slot: 'cost', text: '$12345.6789' },
+          { slot: 'turn', text: 'turn 9999' },
+          { slot: 'bgTasks', text: '◌ Indexing-a-very-long-background-task-name 45%' },
+          { slot: 'rateLimit', text: 'API: 0/1000 ⛔ 12m' },
+          { slot: 'context', text: '[████████████  50%]' },
+        ],
+        48,
+        true,
+      );
+      assert.ok(!packed.includes('…'), packed);
+      assert.ok(packed.includes('50%'), `context survives as a whole slot: ${packed}`);
+      assert.ok(packed.includes('0/1000'), packed);
+      assert.ok(!packed.includes('turn'), packed);
+      assert.ok(!packed.includes('tok'), packed);
+      assert.ok(!packed.includes('$12345'), packed);
+      assert.ok(!packed.includes('Indexing'), packed);
+
+      const tighter = applyAttentionPreemption(
+        [
+          { slot: 'rateLimit', text: 'API: 0/1000 ⛔ 12m' },
+          { slot: 'context', text: '[████████████  50%]' },
+        ],
+        24,
+        true,
+      );
+      assert.ok(!tighter.includes('…'), tighter);
+      assert.ok(tighter.includes('0/1000'), `rate-limit stays whole when context yields: ${tighter}`);
+      assert.ok(!tighter.includes('50%'), tighter);
+    });
   });
 });

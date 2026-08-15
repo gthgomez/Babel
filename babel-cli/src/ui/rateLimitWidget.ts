@@ -286,6 +286,6 @@ export function getGlobalRateLimitState(): RateLimitState | null {
   return _globalRateLimitState;
 }
 
-export function setGlobalRateLimitState(state: RateLimitState): void {
+export function setGlobalRateLimitState(state: RateLimitState | null): void {
   _globalRateLimitState = state;
 }
