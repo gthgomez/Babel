@@ -205,7 +205,7 @@ export function getContextualNextActions(
     case 'INFRA_FAILURE':
       return ['Retry'];
     case 'AGENT_FAILURE':
-      return ['Inspect diagnostics'];
+      return ['Inspect diagnostics', 'Do not resume this session blindly'];
   }
 }
 

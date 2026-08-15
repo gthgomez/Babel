@@ -175,6 +175,8 @@ import {
   requiresRecoveredOutcomeReconciliation,
   type SessionEventLog,
 } from './sessionEvents.js';
+import { projectDurableToolBatch } from './toolExecutionIdentity.js';
+import { captureSessionEventAppendFailure } from './sessionEventDiagnostics.js';
 import { buildRepoMapPreamble } from './repoMapPreamble.js';
 import {
   requestChatActionApproval,
@@ -1459,7 +1461,9 @@ export class ChatEngine {
       }
     } catch (error) {
       // P0-D B4: unexpected throw must still finalize turn_ended on disk.
-      const message = error instanceof Error ? error.message : String(error);
+      const captured = captureSessionEventAppendFailure(error, this.engineRunDir);
+      const message = captured?.operatorMessage
+        ?? (error instanceof Error ? error.message : String(error));
       finalizeParityTurnSync(this.parity, this.engineRunDir, 'AGENT_FAILURE', 'failed');
       return this.buildResult('failed', cb, message);
     }
@@ -1584,6 +1588,8 @@ export class ChatEngine {
     for (let turn = 0; turn < maxTurns; turn++) {
       // Tier A: Track turn index for per-turn observability metadata
       this._turnIndex = turn;
+      // Never leak native tool-call IDs from a prior turn/batch into a new cycle.
+      this._streamNativeToolCallIds = [];
       // R9: Reset per-turn tamper flag
       this.tamperedThisTurn = false;
 
@@ -2279,71 +2285,58 @@ export class ChatEngine {
           );
         }
 
-        // Record progress + durable tool results (contentHash for re-read fidelity)
+        // Record progress + durable tool results (contentHash for re-read fidelity).
+        // Identity is the original action index, never completion-order slice position.
         const turnSlice = this.toolCallLog.slice(this._turnToolCallLogStart);
-        const resolveToolCallId = (idx: number): string => {
-          if (providerToolCallIds?.[idx]) return providerToolCallIds[idx]!;
-          if (this._streamNativeToolCallIds[idx]) return this._streamNativeToolCallIds[idx]!;
-          return `tool_call_${turn}_${idx}`;
-        };
-        const toolCalls = turnSlice.map((tc, idx) => {
-          let argsObj: Record<string, unknown> = { target: tc.target };
-          if (turnResult.type === 'tool_calls' && turnResult.actions[idx]) {
-            argsObj = {};
-            for (const [k, v] of Object.entries(turnResult.actions[idx]!)) {
-              if (k !== 'type') argsObj[k] = v;
-            }
-          }
-          return {
-            id: resolveToolCallId(idx),
-            type: 'function' as const,
-            function: {
-              name: tc.tool,
-              arguments: JSON.stringify(argsObj),
-            },
-          };
-        });
         const isReadTool = (name: string) =>
           name === 'read_file' ||
           name === 'file_read' ||
           name === 'read_range' ||
           name === 'grep';
-        parityRecordToolBatch(this.parity, {
-          at_turn: turn,
-          ...(turnResult.type === 'tool_calls' && turnResult.thinking
-            ? { thinking: turnResult.thinking }
+        const projected = projectDurableToolBatch({
+          turnSlice,
+          ...(turnResult.type === 'tool_calls'
+            ? { actions: turnResult.actions as Array<Record<string, unknown>> }
             : {}),
-          toolCalls,
-          results: turnSlice.map((tc, idx) => {
-            const content = tc.stdout ?? tc.stderr ?? tc.detail ?? '';
-            const base = {
-              tool_call_id: resolveToolCallId(idx),
-              tool_name: tc.tool,
-              content,
-              target: tc.target,
-              ...(tc.exit_code !== undefined ? { exit_code: tc.exit_code } : {}),
-            };
-            if (isReadTool(tc.tool) && content.length > 0) {
-              return {
-                ...base,
-                contentHash: createHash('sha256').update(content).digest('hex').slice(0, 16),
-              };
-            }
-            return base;
-          }),
-          patchAttempted: turnSlice.some(
-            (t) => isSuccessfulDirectMutation(t.tool, t.error) || t.tool === 'str_replace',
-          ),
-          patchFailed: turnSlice.some(
-            (t) => t.tool === 'str_replace' && t.error != null && t.error !== '',
-          ),
-          verifierChanged: turnSlice.some(
-            (t) => t.tool === 'run_command' || t.tool === 'test_run' || t.tool === 'shell_exec',
-          ),
-          // W2.2: propose+start already flushed before executeActions.
-          settleAlreadyProposed: turnResult.actions.length > 0,
-          // Do NOT pass every read as localizedPaths — re-reads use contentHash only.
+          turn,
+          batchId: `batch_${turn}_${this._turnToolCallLogStart}`,
+          ...(providerToolCallIds ? { providerToolCallIds } : {}),
+          streamNativeToolCallIds: this._streamNativeToolCallIds,
+          contentHashFor: (toolName, content) =>
+            isReadTool(toolName) && content.length > 0
+              ? createHash('sha256').update(content).digest('hex').slice(0, 16)
+              : undefined,
         });
+        try {
+          parityRecordToolBatch(this.parity, {
+            at_turn: turn,
+            ...(turnResult.type === 'tool_calls' && turnResult.thinking
+              ? { thinking: turnResult.thinking }
+              : {}),
+            toolCalls: projected.toolCalls,
+            results: projected.results,
+            patchAttempted: turnSlice.some(
+              (t) => isSuccessfulDirectMutation(t.tool, t.error) || t.tool === 'str_replace',
+            ),
+            patchFailed: turnSlice.some(
+              (t) => t.tool === 'str_replace' && t.error != null && t.error !== '',
+            ),
+            verifierChanged: turnSlice.some(
+              (t) => t.tool === 'run_command' || t.tool === 'test_run' || t.tool === 'shell_exec',
+            ),
+            // W2.2: propose+start already flushed before executeActions.
+            settleAlreadyProposed: turnResult.actions.length > 0,
+            // Do NOT pass every read as localizedPaths — re-reads use contentHash only.
+          });
+        } catch (err) {
+          const captured = captureSessionEventAppendFailure(err, this.engineRunDir);
+          this._streamNativeToolCallIds = [];
+          if (captured) {
+            yield this.streamFailed(captured.operatorMessage);
+            return;
+          }
+          throw err;
+        }
         this._streamNativeToolCallIds = [];
 
         // P0-E: zero-write shadow by default for coding classes (one-shot log);
@@ -3350,6 +3343,9 @@ export class ChatEngine {
                 this.executeOneAction(actions[index]!, toolContext, callbacks, {
                   index,
                   subAgentCounter: ++subAgentCounter,
+                  idempotencyKey:
+                    this._streamNativeToolCallIds[index] ??
+                    `tool_call_${this._turnIndex}_${index}`,
                 }),
               ),
             )),
@@ -3360,7 +3356,13 @@ export class ChatEngine {
           actions[batch.index]!,
           toolContext,
           callbacks,
-          { index: batch.index, subAgentCounter: ++subAgentCounter },
+          {
+            index: batch.index,
+            subAgentCounter: ++subAgentCounter,
+            idempotencyKey:
+              this._streamNativeToolCallIds[batch.index] ??
+              `tool_call_${this._turnIndex}_${batch.index}`,
+          },
         );
         allResults.push(result);
         if (isCircuitBreakerObservation(result.observation)) stopTerminal = true;

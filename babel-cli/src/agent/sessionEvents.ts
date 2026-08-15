@@ -14,6 +14,10 @@ import { join } from 'node:path';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import { classifyToolEffect, type ToolEffectClass } from '../executor/contracts.js';
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
+import {
+  buildToolLifecycleCausalityDiagnostic,
+  SessionEventLifecycleCausalityError,
+} from './sessionEventDiagnostics.js';
 
 export const SESSION_EVENT_SCHEMA_VERSION = 1 as const;
 export const SESSION_EVENTS_FILENAME = 'session-events.jsonl';
@@ -526,12 +530,21 @@ export function assertSessionEventToolLifecycleCausality(
   candidate: ToolLifecycleEvent,
   subject: string,
 ): void {
+  const reject = (reason: string): never => {
+    const diagnostic = buildToolLifecycleCausalityDiagnostic({
+      priorEvents,
+      candidate,
+      candidateSeq: priorEvents.length,
+      reason,
+    });
+    throw new SessionEventLifecycleCausalityError(`${subject}: ${reason}`, diagnostic);
+  };
   if (
     candidate.idempotency_key.trim().length === 0 ||
     candidate.tool_call_id.trim().length === 0 ||
     candidate.tool_name.trim().length === 0
   ) {
-    throw new Error(`${subject}: tool identifiers must be non-empty`);
+    reject('tool identifiers must be non-empty');
   }
   const history = priorEvents.filter(
     (event): event is ToolLifecycleEvent => isToolLifecycleEvent(event) && sameToolLifecycleOperation(event, candidate),
@@ -541,27 +554,27 @@ export function assertSessionEventToolLifecycleCausality(
   const terminals = history.filter(isTerminalToolLifecycleEvent);
 
   if (candidate.kind === 'tool_proposed') {
-    if (history.length > 0) throw new Error(`${subject}: tool_proposed must start a new tool lifecycle`);
+    if (history.length > 0) reject('tool_proposed must start a new tool lifecycle');
     return;
   }
   if (candidate.kind === 'tool_started') {
     if (proposals.length !== 1 || starts.length !== 0 || terminals.length !== 0) {
-      throw new Error(`${subject}: tool_started requires exactly one prior tool_proposed and no terminal`);
+      reject('tool_started requires exactly one prior tool_proposed and no terminal');
     }
     return;
   }
   if (terminals.length !== 0) {
-    throw new Error(`${subject}: tool lifecycle cannot record a terminal after a terminal`);
+    reject('tool lifecycle cannot record a terminal after a terminal');
   }
   const isNotStartedCancellation = candidate.kind === 'tool_cancelled' && candidate.recovery_state === 'TOOL_NOT_STARTED';
   if (isNotStartedCancellation) {
     if (proposals.length !== 1 || starts.length !== 0) {
-      throw new Error(`${subject}: TOOL_NOT_STARTED cancellation requires one prior tool_proposed and no tool_started`);
+      reject('TOOL_NOT_STARTED cancellation requires one prior tool_proposed and no tool_started');
     }
     return;
   }
   if (proposals.length !== 1 || starts.length !== 1) {
-    throw new Error(`${subject}: terminal tool event requires one prior tool_proposed and tool_started`);
+    reject('terminal tool event requires one prior tool_proposed and tool_started');
   }
 }
 type CompactionLifecycleEvent = Extract<
