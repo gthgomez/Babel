@@ -989,6 +989,11 @@ describe('status bar — attention-preemption policy', () => {
       limit: 1000,
       resetAt: new Date(Date.now() + 60_000),
     };
+    const critical = {
+      remaining: 50,
+      limit: 1000,
+      resetAt: new Date(Date.now() + 3 * 60_000),
+    };
     const idle = {
       remaining: 800,
       limit: 1000,
@@ -1033,6 +1038,91 @@ describe('status bar — attention-preemption policy', () => {
     function hasIntactRateLimit(line: string): boolean {
       return /0\/1000/.test(line) || line.includes('⛔');
     }
+
+    function hasCriticalCue(line: string): boolean {
+      return line.includes('⛔') || line.includes('⚡');
+    }
+
+    function assertOneLine(rendered: string, width: number): string {
+      const contentLines = rendered.replace(/\n$/, '').split('\n');
+      assert.equal(contentLines.length, 1, `must not wrap: ${JSON.stringify(contentLines)}`);
+      const line = firstLine(rendered);
+      assert.ok(line.length <= width, `line ${line.length} > width ${width}: ${line}`);
+      return line;
+    }
+
+    it('width=60 + exhausted rate limit', () => {
+      withRateLimit(exhausted, () => {
+        const rendered = renderStatusBar(
+          defaultState({
+            width: 60,
+            model: 'Flash',
+            modelId: 'deepseek-v4-flash',
+            activeContext: {
+              tokens: 12_400,
+              modelId: 'deepseek-v4-flash',
+              source: 'provider',
+            },
+          }),
+        );
+        const line = assertOneLine(rendered, 60);
+        assert.ok(hasCriticalCue(line), `critical cue must survive: ${line}`);
+        assert.ok(hasIntactRateLimit(line), line);
+        assert.ok(!hasIntactContext(line), `context yields the 60-col right slot: ${line}`);
+      });
+    });
+
+    it('width=60 + very long model + critical rate limit', () => {
+      withRateLimit(critical, () => {
+        const rendered = renderStatusBar(
+          defaultState({
+            width: 60,
+            model: 'anthropic-claude-opus-4-8-preview-extended',
+            modelId: 'deepseek-v4-flash',
+            activeContext: {
+              tokens: 12_400,
+              modelId: 'deepseek-v4-flash',
+              source: 'provider',
+            },
+          }),
+        );
+        const line = assertOneLine(rendered, 60);
+        assert.ok(hasCriticalCue(line), `critical cue must survive a long model: ${line}`);
+        assert.ok(!line.includes('⚡…') && !line.includes('…50/'), line);
+        assert.ok(!hasIntactContext(line), line);
+      });
+    });
+
+    it('width=80 + rate-limit attention + background task + active context', () => {
+      withRateLimit(exhausted, () => {
+        const rendered = renderStatusBar(
+          crowdedState(80, {
+            model: 'Flash',
+            mode: 'deep',
+          }),
+        );
+        const line = assertOneLine(rendered, 80);
+        assert.ok(hasCriticalCue(line), `critical cue must survive: ${line}`);
+        assert.ok(hasIntactContext(line), `context stays at 80 beside rate-limit: ${line}`);
+        assert.ok(!line.includes(' · deep'), `mode yields at 80 under attention: ${line}`);
+      });
+    });
+
+    it('width=80 + long model + both attention sources', () => {
+      withRateLimit(exhausted, () => {
+        const rendered = renderStatusBar(
+          crowdedState(80, {
+            model: 'anthropic-claude-opus-4-8-preview-extended',
+            mode: 'deep',
+          }),
+        );
+        const line = assertOneLine(rendered, 80);
+        assert.ok(hasCriticalCue(line), `critical cue must survive both attention sources: ${line}`);
+        assert.ok(!line.includes(' · deep'), line);
+        assert.ok(!line.includes('⚡…') && !line.includes('⛔…'), line);
+        assert.ok(!line.includes('…%') && !line.includes('%…'), line);
+      });
+    });
 
     it('treats width 79 as the 60-band: critical RL displaces context and mode stays shed', () => {
       withRateLimit(exhausted, () => {
