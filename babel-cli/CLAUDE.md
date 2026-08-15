@@ -26,6 +26,23 @@ Agent = Model + Harness
 - Completion: model proposes → honesty gate → **`kernel.completion.decide`**.
 - Plan is **read-only**; Deep is **governed** and may mutate when gates pass.
 
+## Autonomy contract (Class A–D)
+
+Cross-harness autonomy taxonomy ("autonomy limited by consequence, not capability") is
+encoded natively in `src/config/autonomyPolicy.ts` — pure module, no V9-lane imports,
+zero co-evolution debt. It maps Class A–D onto existing primitives: task-class tune
+(`chatTaskClass.ts`), permission presets (`src/agent/policy.ts`), approval sessions
+(`src/agent/approvalRequests.ts`), and the completion honesty gate
+(`src/agent/completionGatePolicy.ts`).
+
+- Env: `BABEL_AUTONOMY_CLASS=A|B|C|D` — consumed by `resolveChatTaskClass`
+  (A→default, B→general_swe, C→governance, D→governance). Explicit
+  `BABEL_CHAT_TASK_CLASS` wins. Additive; no behavior change when unset.
+- Enforcement reality: Babel runs its own loop (API runners, native tool calls) —
+  it does NOT delegate tool execution to Claude Code, so Claude Code's permission
+  layer is not Babel's enforcement. Preset selection seam for C/D (ask/deny) is
+  `chatEngine.ts:4119` (documented, not wired).
+
 ## High-risk files
 
 | Area | Paths |

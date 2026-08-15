@@ -1,0 +1,63 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(.env)",
+      "Read(//**/.env)",
+      "Read(.env.local)",
+      "Read(//**/.env.local)",
+      "Read(.env.development)",
+      "Read(//**/.env.development)",
+      "Read(.env.production)",
+      "Read(//**/.env.production)",
+      "Read(.env.staging)",
+      "Read(//**/.env.staging)",
+      "Read(.env.test)",
+      "Read(//**/.env.test)",
+      "Read(.env.*.local)",
+      "Read(//**/.env.*.local)",
+      "Edit(.env)",
+      "Edit(//**/.env)",
+      "Edit(.env.local)",
+      "Edit(//**/.env.local)",
+      "Edit(.env.development)",
+      "Edit(//**/.env.development)",
+      "Edit(.env.production)",
+      "Edit(//**/.env.production)",
+      "Edit(.env.staging)",
+      "Edit(//**/.env.staging)",
+      "Edit(.env.test)",
+      "Edit(//**/.env.test)",
+      "Edit(.env.*.local)",
+      "Edit(//**/.env.*.local)",
+      "Read(//**/*.env)",
+      "Edit(//**/*.env)",
+      "Read(./secrets/**)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/credentials)",
+      "Read(~/.git-credentials)",
+      "Read(~/.npmrc)",
+      "Read(~/.config/gh/hosts.yml)",
+      "Read(credentials.json)",
+      "Read(//**/*.pem)",
+      "Read(//**/*.p12)",
+      "Read(//**/*.pfx)",
+      "Read(//**/id_rsa)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/block-credential-read.sh",
+            "shell": "bash",
+            "timeout": 10,
+            "statusMessage": "Checking for credential-file references"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,40 @@
+---
+description: Babel autonomy policy for the Cursor agent — Classes A-D, completion contract, verification commands. AGENTS.md is the canonical policy source.
+alwaysApply: true
+---
+
+# Babel Autonomy Policy
+
+Autonomy is limited by consequence, not capability. **AGENTS.md** (repo root) is the canonical policy source; this file adapts it for the Cursor harness. Where these conflict, AGENTS.md wins.
+
+## Class A — Autonomous by default
+
+Do not ask before doing (within this repo): reading, searching, and editing files; formatting and linting; typecheck, build, test, local run, and debug; status and diff inspection; worktrees; bounded subagents; parallel research; evidence gathering; retry.
+
+## Class B — Verify, then proceed
+
+For larger changes (multi-file refactors, dependency upgrades, CI/build changes, schema changes, large formatting, public API changes): isolate, snapshot, implement, then run the repo verification suite below and inspect your own diff before declaring DONE. Independent review when consequences warrant.
+
+## Class C — Explicit approval required
+
+Never perform without explicit user approval: accessing live credentials; force-push or history rewrite; deleting significant user data, evidence, or unrelated work; publishing; releases; production deploys; IAM/billing; purchases; expensive fan-out; external messages; protected-branch merges; making private material public; destructive DB ops; disabling security controls.
+
+## Class D — Never
+
+Exposing API keys or credentials, bypassing credential protections, silently force-pushing or deleting, publishing private credentials, hiding failures, fabricating evidence, claiming tests passed when they did not.
+
+## Completion contract
+
+Before DONE: scope correctness, proportional verification, diff review, and evidence-labeled claims (DOCUMENTED / OBSERVED / VERIFIED / INFERRED / UNKNOWN).
+
+## Repo verification commands (Windows)
+
+- CLI: `cd babel-cli && npx tsc --noEmit && npm test`
+- Catalog/routing: `pwsh tools/validate-all.ps1`
+- Content policy: `pwsh tools/check-public-content-policy.ps1 -RepoRoot .`
+- Secret scan: `pwsh tools/run-public-secret-scan.ps1 -RepoRoot . -Strict -RequireExternalScanner`
+- Pre-push file-size budget: `pwsh tools/preflight-ratchet.ps1`
+
+## Credentials
+
+Never read `.env` or credential files. Treat config directories (e.g. `~/.cursor`, AppData Cursor dirs) as potentially containing session tokens — metadata-first inspection only.

@@ -34,9 +34,10 @@ This is the **public, canonical source** for the Babel coding agent (`gthgomez/B
 | CLI tests | `babel-cli/src/**/*.test.ts` |
 | CLI package scripts | `babel-cli/package.json` |
 | CI workflows | `.github/workflows/` |
-| Agent/skill lifecycle & execution rules | `AGENTS.md`, `.agents/rules/` (`05`-`09`), `.agents/skills/` |
+| Agent/skill lifecycle & execution rules | `AGENTS.md`, `.agents/rules/` (`05`-`10`), `.agents/skills/` |
 | **Ship set vs worktree / commit-all / sync main** | `.agents/rules/05-github-workflow.md` (OSS safety; never blind `git add -A`) |
 | Autonomous goal clearance & research delegation | `.agents/rules/06-autonomous-goal-clearance.md`, `.agents/rules/07-subagent-research-delegation.md` |
+| **Cross-harness autonomy policy (classes A–D, gates, verification)** | `.agents/rules/10-autonomy-policy.md` → `AGENT_AUTONOMY_POLICY.md` (canonical contract, supplied per session) |
 | Public docs (architecture, ADRs, guides, release) | `docs/` — start with `docs/README.md` |
 | **Runtime harness (normative)** | `docs/architecture/HARNESS_ARCHITECTURE_V1.md` |
 | **Runtime harness hardening (canonical roadmap)** | `docs/architecture/HARNESS_HARDENING_ROADMAP_V1.md` |
@@ -146,7 +147,7 @@ These are the most frequent tool failures observed across sessions. Follow them 
 
 1. **Always use absolute, forward-slash paths in Bash commands.** Windows backslash paths get their backslashes stripped inside bash (`C:\MyProject\...` becomes `C:MyProject...`). Use `C:/MyProject/...` or `/c/MyProject/...`.
 2. **Know where you are before `cd babel-cli`.** The npm workspace lives at `<repo-root>/babel-cli/`. `cd babel-cli` fails when the shell is already inside `babel-cli/` or anywhere other than repo root, and produces doubled paths like `babel-cli/babel-cli/src/...`. Prefer absolute paths: `cd <repo-root>/babel-cli`.
-3. **Scope searches — unscoped `rg`/Grep over the repo root times out.** Default to `babel-cli/src/` for runtime code, the specific prompt-layer directory for control-plane work. Never search `runs/`, `artifacts/`, `runtime/`, `node_modules/`, or `dist/`. The `.rgignore` file at repo root enforces these exclusions for ripgrep-based tools.
+3. **Search timeouts are a config bug, not a behavior rule.** Unscoped Glob/Grep over the repo root times out because Glob searches with `--no-ignore --hidden` — it ignores `.rgignore`/`.gitignore` and scans `node_modules/`, `runs/`, `artifacts/`, `runtime/`, and `dist/` at full depth. Fix the root cause: set `CLAUDE_CODE_GLOB_NO_IGNORE=false` (env) so Glob honors ignore files, and raise `CLAUDE_CODE_GLOB_TIMEOUT_SECONDS` if a genuinely large tree still needs it. For dot-directory or hidden-path discovery when Glob/Grep still fail or time out, use the `search-fast` skill (deterministic PowerShell fallback). Keep the scoped-search reminder only as fallback: when the target area is known, search within it (e.g. `babel-cli/src/` for runtime code, the prompt-layer directory for control-plane work) — `.rgignore` at repo root covers ripgrep-based tools.
 4. **Run the File Size Ratchet check before committing** (it is part of CI and fails late otherwise): run `pwsh tools/check-architectural-budget.ps1` before pushing when you touched large files.
 5. **Fanning out subagents that edit files: partition file ownership first.** Concurrent subagents editing the same file (historically `babel-cli/src/agent/chatEngine.ts`) cause "File has been modified since read" errors and merge conflicts. Assign each subagent a disjoint set of files, and confirm the worktree is clean before fan-out.
 6. **CI/PR checks via `gh`:** `gh pr view --json statusChecks` is invalid — the field is `statusCheckRollup`. `gh pr checks` exits 8 while checks are *pending*; that is not a failure. A brand-new branch may report "no checks reported" until the first workflow starts — wait and retry rather than diagnosing.
@@ -188,6 +189,7 @@ From session retrospective analysis: all 10 reviewed sessions deferred testing e
 | `/ci-dry-run` | Before pushing — run CI build+test in Docker |
 | `/catalog-validate-all` | After catalog/routing changes — run the validation trio |
 | `/branch-stack` | Working on sequential dependent feature branches |
+| `AGENT_AUTONOMY_POLICY.md` (contract, not a skill) | Cross-harness autonomy classes A–D, gates, escalation — repo anchor: `.agents/rules/10-autonomy-policy.md` |
 
 ## Tool-Use Patterns (learned from session data)
 

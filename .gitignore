@@ -102,10 +102,26 @@ mcps/
 
 # ─── Claude Code worktrees ───────────────────────────────────────────────────
 .claude/worktrees/
-/.claude/
+# .claude/ is gitignored wholesale; negate ONLY the subpaths we commit:
+#   - settings.json (permissions.deny + credential-read hook registration)
+#   - hooks/block-credential-read.sh
+#   - skills/search-fast/ (project skill)
+# settings.local.json stays ignored (personal overrides).
+# NOTE: contents-pattern (/*) not dir-pattern — git cannot re-include files
+# inside an excluded parent directory.
+/.claude/*
+!/.claude/settings.json
+!/.claude/hooks/
+!/.claude/hooks/block-credential-read.sh
+!/.claude/skills/
+/.claude/skills/*
+!/.claude/skills/search-fast/
+!/.claude/skills/search-fast/SKILL.md
 
 # ─── Editor / cursor ─────────────────────────────────────────────────────────
-.cursor/
+.cursor/*
+# Project rules are version-controlled per Cursor docs (cursor.com/docs/context/rules)
+!.cursor/rules/
 
 # ─── Factory campaign artifacts ──────────────────────────────────────────────
 plans/factory/
