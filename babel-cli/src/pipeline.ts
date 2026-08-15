@@ -90,7 +90,7 @@ import { executeExecutorTool } from './pipeline/executorToolDispatch.js';
 import {
   buildGroundingQaReject,
   buildTaskGrounding,
-  classifyTaskContract,
+  classifyDeliverableTaskClassification,
   collectPlanGroundingViolations,
   formatGroundingContext,
   hasPlaceholderProjectPath,
@@ -1922,7 +1922,7 @@ export async function _runBabelPipelineInternal(
       '11_exact_invariants.json',
       `${JSON.stringify(exactInvariantRegistry, null, 2)}\n`,
     );
-    const taskContract = classifyTaskContract(mergedTaskContext);
+    const taskContract = classifyDeliverableTaskClassification(mergedTaskContext);
     const taskGrounding = buildTaskGrounding(taskContract, inferProjectRoot(manifest));
     const planHandoff = loadPlanHandoff({
       repoPath: runtimeProjectRoot,

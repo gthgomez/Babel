@@ -80,6 +80,11 @@ import {
   type ChatTaskClass,
   type VerificationPolicy,
 } from '../config/chatTaskClass.js';
+import { resolveAutonomyOverride } from '../config/autonomyPolicy.js';
+import {
+  benchmarkAutoApproveEnabled,
+  resolveAutonomyPreset,
+} from './autonomyEnforcement.js';
 import {
   AUTO_CONTINUE_REFUSAL_MSG,
   buildAutoContinueBlockedReport,
@@ -4123,17 +4128,24 @@ export class ChatEngine {
 
       // Standard tool execution via policy gate
       const agentAction = mapChatActionToAgentAction(action);
-      const autoApproveMutations =
-        isBabelHeadlessEnv() ||
-        process.env['BABEL_BENCHMARK_AUTO_APPROVE'] === '1';
+      // P0-B: BABEL_BENCHMARK_AUTO_APPROVE is honored only inside an explicitly
+      // recognized benchmark/test execution mode (headless/CI, or
+      // BABEL_BENCHMARK_MODE=1). In an interactive TTY without the benchmark
+      // marker it is a no-op — it must not silently weaken interactive authority.
+      const benchmarkAutoApprove = benchmarkAutoApproveEnabled(process.env);
+      const autoApproveMutations = isBabelHeadlessEnv() || benchmarkAutoApprove;
+      // P0-A: an explicit human gate for autonomy Class C actions is wired only
+      // in interactive sessions; headless/benchmark contexts get deterministic deny.
+      const interactiveApproval =
+        !autoApproveMutations && process.stdout.isTTY && !process.env['CI'];
+      // P0-A: the permission preset follows the autonomy class instead of a
+      // hardcoded workspace_write: C → ask_before_mutation, D → read_only,
+      // A/B/unset → workspace_write. Plan mode stays read_only.
+      const autonomyClass = resolveAutonomyOverride(process.env)?.class ?? null;
+      const preset = resolveAutonomyPreset(this.executionProfile, autonomyClass);
       const result: PolicyGatedExecutionResult = await executeActionWithPolicy(
         agentAction,
-        // workspace_write = mutations auto-execute without user approval.
-        // Network-touching commands (curl, npm install) are still hard-denied.
-        // Future evolutions:
-        //   B — new 'auto' preset that allows everything (no approval, no denial)
-        //   C — BABEL_ALLOW_NETWORK_COMMANDS=1 env flag for graduated autonomy
-        this.executionProfile === 'plan' ? 'read_only' : 'workspace_write',
+        preset,
         toolContext,
         {
           executor: defaultToolExecutor,
@@ -4157,9 +4169,12 @@ export class ChatEngine {
           onDispatchAuthorized: () => this.recoveredOperationDispatchAuthorization(action),
           onBeforeExecutorExecute: () => this.persistToolStartedAtExecutorDispatch(action, meta),
           ...this.isolationBrokerFlags(),
+          ...(interactiveApproval
+            ? { onAutonomyClassCGate: requestChatActionApproval }
+            : {}),
           ...(autoApproveMutations
             ? { onAskApproval: async () => true }
-            : process.stdout.isTTY && !process.env['CI']
+            : interactiveApproval
               ? { onAskApproval: requestChatActionApproval }
               : {}),
         }

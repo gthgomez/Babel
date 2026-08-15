@@ -314,7 +314,10 @@ export async function runLiveControllerGoldenEpisode(input: {
   };
 
   const priorAutoApprove = process.env['BABEL_BENCHMARK_AUTO_APPROVE'];
+  // P0-B: benchmark auto-approval is valid only inside an explicitly marked
+  // benchmark execution mode.
   process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
+  process.env['BABEL_BENCHMARK_MODE'] = '1';
   try {
     const engine = new ChatEngine({
       task,

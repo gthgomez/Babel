@@ -198,6 +198,25 @@ export interface ProviderCapabilities {
   supportsStreaming: boolean;
   /** Whether the provider supports thinking/reasoning while tools are active. */
   thinkingWithTools: 'supported' | 'unsupported' | 'without_tool_choice' | 'unknown';
+  /**
+   * P1-C/D: provider-neutral reasoning-effort dial. `supported: false` means
+   * the provider has no effort control (record `unsupported` honestly — never
+   * fake support). Levels are provider-specific and MUST NOT be compared
+   * across providers as if equal compute.
+   */
+  reasoningEffort?: {
+    supported: boolean;
+    /** Provider-specific level names when supported (e.g. ['low','medium','high']). */
+    levels?: readonly string[];
+    /** How the mapping was determined (policy / provider / provider_default / unknown). */
+    source?: 'policy' | 'provider' | 'provider_default' | 'unknown';
+  };
+  /** P1-C: prompt caching — none / implicit (automatic provider KV) / explicit controls. */
+  promptCaching?: 'none' | 'implicit' | 'explicit';
+  /** P1-C: provider-native session/reasoning continuation (opaque carriers only). */
+  continuation?: 'none' | 'opaque';
+  /** P1-C: provider-native compaction. */
+  nativeCompaction?: boolean;
 }
 
 /**

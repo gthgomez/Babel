@@ -731,7 +731,10 @@ export async function runSameModelLlmFactorial(input: {
   ): Promise<EvalTaskResult> {
     const t0 = Date.now();
     const priorAutoApprove = process.env['BABEL_BENCHMARK_AUTO_APPROVE'];
+    // P0-B: benchmark auto-approval is valid only inside an explicitly marked
+    // benchmark execution mode.
     process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
+    process.env['BABEL_BENCHMARK_MODE'] = '1';
     try {
       const { ChatEngine } = await import('./chatEngine.js');
       const { OpenRouterApiRunner } = await import('../runners/openRouterApi.js');

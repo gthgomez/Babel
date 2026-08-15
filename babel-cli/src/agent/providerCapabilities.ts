@@ -66,6 +66,13 @@ const CAPABILITY_DEFAULTS: Record<string, Partial<ProviderCapabilities>> = {
     supportsParallelToolCalls: true,
     supportsStreaming: true,
     thinkingWithTools: 'unsupported',
+    // P1-C/D: DeepSeek context caching is automatic (prompt_cache hit/miss
+    // tokens are reported by the runner); no reasoning-effort dial is exposed
+    // (thinkingWithTools unsupported) — record unsupported honestly.
+    reasoningEffort: { supported: false, source: 'provider_default' },
+    promptCaching: 'implicit',
+    continuation: 'none',
+    nativeCompaction: false,
   },
   deepinfra: {
     maxOutputTokens: 8_192,
@@ -74,6 +81,10 @@ const CAPABILITY_DEFAULTS: Record<string, Partial<ProviderCapabilities>> = {
     supportsParallelToolCalls: true,
     supportsStreaming: true,
     thinkingWithTools: 'unsupported',
+    reasoningEffort: { supported: false, source: 'provider_default' },
+    promptCaching: 'implicit',
+    continuation: 'none',
+    nativeCompaction: false,
   },
   ollama: {
     maxOutputTokens: 4_096,
@@ -82,6 +93,10 @@ const CAPABILITY_DEFAULTS: Record<string, Partial<ProviderCapabilities>> = {
     supportsParallelToolCalls: false,
     supportsStreaming: true,
     thinkingWithTools: 'unsupported',
+    reasoningEffort: { supported: false, source: 'provider_default' },
+    promptCaching: 'none',
+    continuation: 'none',
+    nativeCompaction: false,
   },
 };
 
@@ -125,9 +140,62 @@ export function resolveProviderCapabilities(
     supportsParallelToolCalls: defaults.supportsParallelToolCalls ?? true,
     supportsStreaming: defaults.supportsStreaming ?? true,
     thinkingWithTools: defaults.thinkingWithTools ?? 'unknown',
+    reasoningEffort: defaults.reasoningEffort ?? { supported: false, source: 'unknown' },
+    promptCaching: defaults.promptCaching ?? 'none',
+    continuation: defaults.continuation ?? 'none',
+    nativeCompaction: defaults.nativeCompaction ?? false,
   };
 
   return { ...base, ...overrides, contextWindow: overrides?.contextWindow ?? base.contextWindow };
+}
+
+// ─── Reasoning-effort mapping (P1-D) ─────────────────────────────────────────
+
+/** Provider-neutral reasoning-effort dial. */
+export type BabelReasoningEffort = 'low' | 'medium' | 'high';
+
+export interface ReasoningEffortResolution {
+  /** The neutral effort requested by the task policy. */
+  requested: BabelReasoningEffort;
+  /** Effective provider level, or 'unsupported' when the provider has no dial. */
+  effective: BabelReasoningEffort | 'unsupported';
+  supportStatus: 'supported' | 'unsupported';
+  /** Where the capability record came from (provenance). */
+  mappingSource: 'policy' | 'provider' | 'provider_default' | 'unknown';
+}
+
+/**
+ * Resolve a neutral effort request against a provider's capability record.
+ *
+ * Provider level names are provider-specific — this maps the NEUTRAL dial onto
+ * the provider's advertised levels without pretending cross-provider levels are
+ * equivalent compute. Providers without a dial resolve to `unsupported`
+ * (honest), never to a faked level.
+ */
+export function mapReasoningEffort(
+  effort: BabelReasoningEffort,
+  caps: ProviderCapabilities,
+): ReasoningEffortResolution {
+  const source = caps.reasoningEffort?.source ?? 'unknown';
+  if (!caps.reasoningEffort?.supported) {
+    return { requested: effort, effective: 'unsupported', supportStatus: 'unsupported', mappingSource: source };
+  }
+  const levels = caps.reasoningEffort.levels;
+  if (levels && levels.length > 0 && !levels.includes(effort)) {
+    // Closest supported level (e.g. provider supports only low/high).
+    const fallback: BabelReasoningEffort =
+      effort === 'medium'
+        ? levels.includes('high')
+          ? 'high'
+          : levels.includes('low')
+            ? 'low'
+            : 'medium'
+        : levels.includes(effort)
+          ? effort
+          : (levels[0] as BabelReasoningEffort) ?? 'medium';
+    return { requested: effort, effective: fallback, supportStatus: 'supported', mappingSource: source };
+  }
+  return { requested: effort, effective: effort, supportStatus: 'supported', mappingSource: source };
 }
 
 export function contextBudgetForModel(modelId: string): ContextBudget {

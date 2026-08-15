@@ -15,7 +15,19 @@ interface RankedCandidate {
   candidateIdentifierLength: number;
 }
 
-export interface TaskContract {
+/**
+ * DeliverableTaskClassification — CLASSIFICATORY task analysis (P1-A).
+ *
+ * Distinguish from `TaskContractV1` (src/agent/taskContract.ts), which is the
+ * frozen EXECUTION authority (contract hash, acceptance criteria, budgets,
+ * effects, terminal-outcome allowlist). This type is a pre-execution
+ * classification of the deliverable shape (analysis vs evidence vs general,
+ * grounding, focus area). It is not an authority contract.
+ *
+ * P1-A decision: renamed from the ambiguous legacy name `TaskContract` to make
+ * the two concepts distinguishable; a deprecated alias is kept for compatibility.
+ */
+export interface DeliverableTaskClassification {
   deliverableRequired: boolean;
   taskClass: 'analysis_deliverable' | 'evidence_collection' | 'general';
   requestedOutputs: string[];
@@ -28,6 +40,13 @@ export interface TaskContract {
   rawTask: string;
   taskText: string;
 }
+
+/**
+ * @deprecated Ambiguous legacy name — use {@link DeliverableTaskClassification}.
+ * Do NOT confuse with the frozen execution authority `TaskContractV1`
+ * (src/agent/taskContract.ts). Kept as an alias for compatibility.
+ */
+export type TaskContract = DeliverableTaskClassification;
 
 export interface TaskGrounding {
   projectRoot: string;
@@ -346,7 +365,7 @@ function buildReferenceInventorySnippets(projectRoot: string, referenceRoots: st
 
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
-export function classifyTaskContract(taskText: unknown): TaskContract {
+export function classifyDeliverableTaskClassification(taskText: unknown): DeliverableTaskClassification {
   const normalized = normalizeTaskText(taskText);
   const isEvaluative =
     /\b(audit|review|critique|evaluate|evaluation|analyze|analyse|assess)\b/.test(normalized);
@@ -375,12 +394,12 @@ export function classifyTaskContract(taskText: unknown): TaskContract {
     requestsSuggestions ? 'recommendations' : '',
     requestsPlan ? 'prioritized_next_steps' : '',
   ]);
-  const taskClass: TaskContract['taskClass'] = deliverableRequired
+  const taskClass: DeliverableTaskClassification['taskClass'] = deliverableRequired
     ? 'analysis_deliverable'
     : evidenceOnlyAllowed
       ? 'evidence_collection'
       : 'general';
-  const deliverableStatus: TaskContract['deliverableStatus'] = evidenceOnlyAllowed
+  const deliverableStatus: DeliverableTaskClassification['deliverableStatus'] = evidenceOnlyAllowed
     ? 'evidence_only_allowed'
     : deliverableRequired
       ? 'deliverable_required'
@@ -416,7 +435,7 @@ export function hasPlaceholderProjectPath(projectPath: unknown): boolean {
 }
 
 export function getDeliverableStatus(
-  taskContract: TaskContract | null | undefined,
+  taskContract: DeliverableTaskClassification | null | undefined,
   swePlan: SwePlan | null | undefined,
 ): string {
   if (taskContract?.evidenceOnlyAllowed) {
@@ -432,14 +451,14 @@ export function getDeliverableStatus(
 }
 
 export function shouldRejectEvidenceOnlyPlan(
-  taskContract: TaskContract | null | undefined,
+  taskContract: DeliverableTaskClassification | null | undefined,
   swePlan: SwePlan | null | undefined,
 ): boolean {
   return getDeliverableStatus(taskContract, swePlan) === 'evidence_only_incomplete';
 }
 
 export function shouldApplyAndroidUiAuditHardening(
-  taskContract: TaskContract | null | undefined,
+  taskContract: DeliverableTaskClassification | null | undefined,
   manifest: OrchestratorManifest | null | undefined,
 ): boolean {
   if (manifest?.target_project !== 'example_mobile_suite') {
@@ -451,7 +470,7 @@ export function shouldApplyAndroidUiAuditHardening(
   return Boolean(taskContract?.deliverableRequired || taskContract?.evidenceOnlyAllowed);
 }
 
-export function getAndroidUiAuditHardening(taskContract: TaskContract | null | undefined): {
+export function getAndroidUiAuditHardening(taskContract: DeliverableTaskClassification | null | undefined): {
   domainId: string;
   requiredSkillIds: string[];
   requiredTaskOverlayIds: string[];
@@ -469,7 +488,7 @@ export function getAndroidUiAuditHardening(taskContract: TaskContract | null | u
 }
 
 export function shouldPreloadGroundedEvidence(
-  taskContract: TaskContract | null | undefined,
+  taskContract: DeliverableTaskClassification | null | undefined,
 ): boolean {
   return (
     taskContract?.focusArea === 'ui' && taskContract?.deliverableStatus === 'deliverable_required'
@@ -477,7 +496,7 @@ export function shouldPreloadGroundedEvidence(
 }
 
 export function buildDeliverableQaReject(
-  taskContract: TaskContract | null | undefined,
+  taskContract: DeliverableTaskClassification | null | undefined,
   userRequest: unknown,
 ): Partial<QaVerdict> {
   const outputs = taskContract?.requestedOutputs?.length
@@ -511,7 +530,7 @@ export function isDeliverableCompletenessReject(
 }
 
 export function buildTaskGrounding(
-  taskContract: TaskContract | null | undefined,
+  taskContract: DeliverableTaskClassification | null | undefined,
   projectRoot: string | null | undefined,
 ): TaskGrounding | null {
   if (
@@ -1033,7 +1052,7 @@ function extractReferencedPaths(step: StepLike): string[] {
 }
 
 export function collectPlanGroundingViolations(
-  taskContract: TaskContract | null | undefined,
+  taskContract: DeliverableTaskClassification | null | undefined,
   grounding: TaskGrounding | null | undefined,
   swePlan: SwePlan | null | undefined,
 ): string[] {

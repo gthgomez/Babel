@@ -137,12 +137,15 @@ describe('Live monomorphic ChatEngine loop', () => {
   before(() => {
     projectRoot = mkdtempSync(join(tmpdir(), 'babel-parity-live-'));
     writeFileSync(join(projectRoot, 'hello.txt'), 'hello world\n', 'utf-8');
+    // P0-B: benchmark auto-approval requires an explicit benchmark-mode marker.
     process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
+    process.env['BABEL_BENCHMARK_MODE'] = '1';
   });
 
   after(() => {
     rmSync(projectRoot, { recursive: true, force: true });
     delete process.env['BABEL_BENCHMARK_AUTO_APPROVE'];
+    delete process.env['BABEL_BENCHMARK_MODE'];
   });
 
   test('submitMessage and submitMessageStream share one loop and same outcome', async () => {

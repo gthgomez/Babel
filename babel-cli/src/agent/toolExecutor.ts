@@ -31,6 +31,8 @@ import {
   rollbackEffectTransaction,
   type EffectTransactionRecord,
 } from './capabilityBroker.js';
+import { classifyAutonomyAction } from '../config/autonomyPolicy.js';
+import { commandTextForAction, isCredentialTargetPath } from './autonomyEnforcement.js';
 
 import {
   executeTool,
@@ -611,6 +613,8 @@ export async function executeActionWithPolicy(
     budget?: ToolExecutionBudget;
     /** When policy returns `ask`, invoke this before blocking. Return true to execute. */
     onAskApproval?: (action: AgentAction) => Promise<boolean>;
+    /** P0-A: explicit gate for autonomy Class C actions (approval-sensitive). */
+    onAutonomyClassCGate?: (action: AgentAction) => Promise<boolean>;
     /** H4: optional completed idempotency keys for double-mutation deny. */
     completedIdempotencyKeys?: readonly string[];
     /** H4: optional protected paths. */
@@ -709,6 +713,84 @@ export async function executeActionWithPolicy(
         policyDecision: 'deny',
         policyBlocked: true,
       };
+    }
+  }
+
+  // ── Autonomy A–D classification (P0-A/C/D) ────────────────────────────
+  // The capability broker above classifies by tool NAME. This layer classifies
+  // by command SEMANTICS (run_command/test_run text) and by target PATH for
+  // credential stores, mapping onto the canonical A–D taxonomy:
+  //   Class D (credential exposure)   → deterministic deny, no approval path
+  //   Class C (external/public/destructive) → explicit gate
+  //                                      (onAutonomyClassCGate) or deterministic
+  //                                      deny when no gate is wired (headless,
+  //                                      benchmark, governed kernel).
+  // Class A/B actions pass through to the existing decideAction path unchanged.
+  if (!isControlAction) {
+    const autonomyClass = classifyAutonomyAction(toolName, commandTextForAction(action));
+    const target = targetPathFromAction(action);
+    const credentialTarget = target !== undefined && isCredentialTargetPath(target);
+    if (autonomyClass === 'd_forbidden' || credentialTarget) {
+      incrementBlocks(context.runId);
+      emitAgentEvent({
+        type: 'policy_decision',
+        action: toolName,
+        decision: 'deny',
+        preset,
+        runId: context.runId,
+        agentId: context.agentId,
+      });
+      return {
+        action,
+        terminal: isTerminalAgentAction(action),
+        results: [
+          {
+            exit_code: 1,
+            stdout: '',
+            stderr:
+              `[AUTONOMY_DENIED:CLASS_D] ` +
+              (credentialTarget
+                ? `Target path "${target}" is a credential store.`
+                : 'Command semantics expose credentials.') +
+              ' Class D actions require explicit exceptional operator instruction and are never auto-approved.',
+          },
+        ],
+        policyDecision: 'deny',
+        policyBlocked: true,
+      };
+    }
+    if (autonomyClass === 'c_gated') {
+      let approved = false;
+      if (deps.onAutonomyClassCGate) {
+        approved = await deps.onAutonomyClassCGate(action);
+      }
+      if (!approved) {
+        incrementBlocks(context.runId);
+        emitAgentEvent({
+          type: 'policy_decision',
+          action: toolName,
+          decision: 'deny',
+          preset,
+          runId: context.runId,
+          agentId: context.agentId,
+        });
+        return {
+          action,
+          terminal: isTerminalAgentAction(action),
+          results: [
+            {
+              exit_code: 1,
+              stdout: '',
+              stderr:
+                `[AUTONOMY_DENIED:CLASS_C_GATE] Command semantics require an explicit ` +
+                `gate and no approval is available in this context.`,
+            },
+          ],
+          policyDecision: 'deny',
+          policyBlocked: true,
+        };
+      }
+      // Approved: continue through the normal decideAction path below.
     }
   }
 

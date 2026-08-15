@@ -45,7 +45,7 @@ Expert senior software engineer specializing in TypeScript, Node.js, system arch
 - Chat mode provides conversational tool access without pipeline overhead
 - Deep mode invokes the full governed pipeline: plan, review, execute
 - All mutations are permission-gated and verifiable
-- Session identity is composed from multiple files: AGENTS.md (identity), CLAUDE.md (project rules), ENGINEERING.md (coding standards), and PROJECT_CONTEXT.md (system topology)
+- Session identity is composed from multiple files: AGENTS.md (identity), CLAUDE.md (project rules), ENGINEERING.md (coding standards), PROJECT_CONTEXT.md (system topology), and the cross-harness autonomy contract (see [`.agents/rules/10-autonomy-policy.md`](./.agents/rules/10-autonomy-policy.md))
 
 ## Startup
 
@@ -71,6 +71,7 @@ This is the **canonical public source** of Babel — an open-source coding agent
 - `.agents/rules/07-subagent-research-delegation.md` — sub-agent research delegation triggers
 - `.agents/rules/08-visual-variant-matrix.md` — visual variant matrix protocol for assets
 - `.agents/rules/09-credential-read-deny.md` — never Read/dump `.env` or credential files
+- `.agents/rules/10-autonomy-policy.md` — cross-harness autonomy contract (classes A–D, gates, verification; repo anchor for `AGENT_AUTONOMY_POLICY.md`)
 - `.agents/skills/` — reusable workflows for stack assembly, code review, and control-plane validation
 - `.githooks/` — optional pre-commit hooks (secret scan, machine path detection)
 - `GEMINI.md` — Gemini-specific operating style
@@ -94,6 +95,8 @@ Default stance:
   - `07-subagent-research-delegation.md` — Sub-agent research delegation triggers
   - `08-visual-variant-matrix.md` — Visual variant matrix protocol for assets
   - `09-credential-read-deny.md` — Credential / `.env` Read deny (tool + behavioral)
+  - `10-autonomy-policy.md` — Cross-harness autonomy contract (classes A–D, escalation gates)
+- Autonomy operates by consequence class, not capability removal — see `.agents/rules/10-autonomy-policy.md` and its canonical contract `AGENT_AUTONOMY_POLICY.md` (supplied per session; kept outside the public repo).
 - Use `.agents/skills/assemble-babel-stack/SKILL.md` when the task is about selecting Babel layers.
 - Prefer the smallest correct instruction stack over adding new layers.
 - Run `pwsh tools/check-public-content-policy.ps1 -RepoRoot .` and `pwsh tools/run-public-secret-scan.ps1 -RepoRoot . -Strict` before opening PRs.
@@ -109,3 +112,7 @@ Default stance:
 3. **Fresh Context Sync:** Re-verify project state, `implementation_plan.md`, or `roadmap.md` before executing multi-turn work to prevent stale plan drift.
 4. **Proportionate Verification:** Always verify changes via build check, automated test, or visual inspection before declaring completion (G4 Clearance).
 5. **Concise Handoff:** End sessions with: (a) Outcome summary, (b) Changed files, (c) Test results, and (d) Single highest-value next move.
+
+## Autonomy Policy
+
+Autonomy is limited by consequence, not capability. Work falls into classes **A** (autonomous by default), **B** (autonomous with automatic verification), **C** (explicit gate or deterministic boundary), and **D** (never without explicit exceptional instruction). Credential access is a hard boundary enforced by layered technical controls (tool-native deny, hooks, example files, env injection, synthetic fixtures, metadata-only inspection) — never by instruction alone. Verification is proportional to risk class, and the final diff is reviewed before completion. See [`.agents/rules/10-autonomy-policy.md`](./.agents/rules/10-autonomy-policy.md) (repo anchor) and `AGENT_AUTONOMY_POLICY.md` (canonical contract, supplied per session).

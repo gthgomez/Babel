@@ -65,11 +65,17 @@ export class CostTracker {
     cacheMissTokens?: number | null,
   ): number {
     const pricingEntry = getModelPricingByModelId(modelId);
+    // §21: pass cache hit/miss tokens through so the estimate honors cache-aware
+    // pricing (hit at 0.1×-style rates) instead of charging every input token at
+    // the full rate. Cache tokens are already tracked separately in the usage
+    // breakdown; this only fixes the cost computation.
     const estimate = estimateProviderUsageCost({
       provider: pricingEntry?.provider ?? null,
       modelId,
       promptTokens: inputTokens,
       completionTokens: outputTokens,
+      promptCacheHitTokens: cacheHitTokens ?? undefined,
+      promptCacheMissTokens: cacheMissTokens ?? undefined,
     });
     const pricing = PRICING[modelId] || { input: 0.5, output: 1.5 };
     const cost =

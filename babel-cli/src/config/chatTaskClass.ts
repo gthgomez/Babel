@@ -10,6 +10,7 @@
  */
 
 import type { ChatEngineLimits } from './chatEngineLimits.js';
+import { autonomyClassFromEnv, autonomyTaskClassFor } from './autonomyPolicy.js';
 
 /** Supported chat task classes (product-facing). */
 export type ChatTaskClass =
@@ -471,6 +472,12 @@ export function resolveChatTaskClass(opts?: {
 
   const fromEnv = normalizeChatTaskClass(env['BABEL_CHAT_TASK_CLASS']);
   if (fromEnv) return fromEnv;
+
+  // Cross-harness autonomy class (A–D): maps onto the native task-class tune.
+  // Additive and env-gated; explicit BABEL_CHAT_TASK_CLASS above wins (more
+  // specific). See autonomyPolicy.ts for the A–D contract and profiles.
+  const autonomyClass = autonomyClassFromEnv(env);
+  if (autonomyClass) return autonomyTaskClassFor(autonomyClass);
 
   if (auto && opts?.taskText && opts.taskText.trim()) {
     return classifyChatTaskClassFromText(opts.taskText);

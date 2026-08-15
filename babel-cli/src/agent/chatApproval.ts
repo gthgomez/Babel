@@ -27,6 +27,7 @@ import {
   type ApprovalCapability,
 } from './approvalRequests.js';
 import { isBabelHeadlessEnv } from '../utils/envFlags.js';
+import { benchmarkAutoApproveEnabled } from './autonomyEnforcement.js';
 
 function asConversationalRenderer(
   renderer: ReturnType<typeof getActiveRenderer>,
@@ -108,14 +109,18 @@ export async function requestChatActionApproval(action: AgentAction): Promise<bo
     return true;
   }
 
+  // P0-B: the benchmark auto-approve env is honored only inside an explicitly
+  // recognized benchmark/test execution mode; in any other context the
+  // headless/deny path applies (fail closed).
+  const benchmarkAutoApprove = benchmarkAutoApproveEnabled(process.env);
   const headless =
     isBabelHeadlessEnv() ||
     !process.stdout.isTTY ||
     process.env['CI'] === 'true' ||
-    process.env['BABEL_BENCHMARK_AUTO_APPROVE'] === '1';
+    benchmarkAutoApprove;
 
   if (headless) {
-    if (process.env['BABEL_BENCHMARK_AUTO_APPROVE'] === '1') {
+    if (benchmarkAutoApprove) {
       applyApprovalDecision(_approvalSession, req, 'allow_once');
       return true;
     }

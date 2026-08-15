@@ -4,6 +4,11 @@
  * package.json is special: only the `scripts` section is integrity-relevant.
  * Legitimate dependency / metadata edits (PAR-A03 class) must not set
  * verifier_tampered. Script rewrites and verifier script file edits still do.
+ *
+ * P1-H: also provides generic configuration-drift baselines for files that
+ * must remain stable during an autonomous run (model policy, autonomy policy,
+ * provider settings, verification policy). Same hashing machinery, explicit
+ * path list, no automatic revert — drift is evidence, not an action.
  */
 
 import { createHash } from 'node:crypto';
@@ -143,4 +148,47 @@ export function computeVerifierDependencyHashes(
   }
 
   return hashes;
+}
+
+// ─── P1-H: configuration-drift baseline ──────────────────────────────────────
+
+/**
+ * Repo-local harness configuration that should remain stable during an
+ * autonomous run. Extend deliberately; do NOT list files that are expected to
+ * change (task files, run dirs, transcripts, lockfiles during install).
+ */
+export const DEFAULT_CONFIG_DRIFT_PATHS: readonly string[] = [
+  'config/model-policy.json',
+  '.babel/task-envelope.json',
+] as const;
+
+/**
+ * Compute a baseline fingerprint of the given configuration files.
+ *
+ * Missing files are simply absent from the map (no baseline). `detectConfigDrift`
+ * reports only paths that WERE present at baseline and changed or disappeared.
+ */
+export function computeConfigBaselineHashes(
+  projectRoot: string,
+  configPaths: readonly string[] = DEFAULT_CONFIG_DRIFT_PATHS,
+): Record<string, string> {
+  const hashes: Record<string, string> = {};
+  for (const relativePath of configPaths) {
+    const absPath = join(projectRoot, relativePath);
+    if (existsSync(absPath)) {
+      hashes[relativePath] = hashVerifierTrackedContent(relativePath, readFileSync(absPath));
+    }
+  }
+  return hashes;
+}
+
+/**
+ * True when any baseline-tracked config file changed or was deleted.
+ * Same semantics as hasVerifierDependencyTamper (missing post = drift).
+ */
+export function detectConfigDrift(
+  baseline: Record<string, string>,
+  current: Record<string, string>,
+): boolean {
+  return hasVerifierDependencyTamper(baseline, current);
 }

@@ -29,6 +29,16 @@ import {
 
 const FILE_BOUNDARY_OPEN = (name: string) => `\n\n--- START OF FILE: ${name} ---\n\n`;
 const FILE_BOUNDARY_CLOSE = (name: string) => `\n\n--- END OF FILE: ${name} ---`;
+
+/**
+ * P1-F: single lazy-stub threshold for BOTH compile paths (async and sync).
+ *
+ * Previously the async path used 8,000 bytes and the sync path 6,000, so the
+ * same conceptual instruction stack could render different stub sets depending
+ * on the compilation path. One canonical constant makes compilation
+ * path-independent (reproducibility before caching).
+ */
+const LAZY_STUB_THRESHOLD_BYTES = 6_000;
 const TASK_BOUNDARY = '\n\n--- TASK CONTEXT ---\n\n';
 const COMPILER_CACHE_VERSION = 1;
 const __filename = fileURLToPath(import.meta.url);
@@ -263,8 +273,7 @@ export async function compileContext(
         }
       }
 
-      // P4 token optimization: lazy-load large skill files (>6 KB).
-      const LAZY_STUB_THRESHOLD_BYTES = 8_000;
+      // P4 token optimization: lazy-load large skill files (canonical threshold).
       if (filePath.includes('/02_Skills/') || filePath.includes('\\.compiled\\')) {
         try {
           const stat = statSync(filePath);
@@ -349,12 +358,11 @@ export function compileContextSync(
       }
     }
 
-    // P4 token optimization: lazy-load large skill files.
-    // Skills over 6 KB (~1,500 tokens) are automatically stubbed with a
+    // P4 token optimization: lazy-load large skill files (canonical threshold).
+    // Skills over the shared threshold are automatically stubbed with a
     // one-line description. The model can use file_read to expand them on demand.
     // Small skills and non-skill files (Behavioral OS, Domain, Adapters, Pipeline)
     // are always loaded fully — they're essential for correct behavior.
-    const LAZY_STUB_THRESHOLD_BYTES = 6_000;
     if (filePath.includes('/02_Skills/') || filePath.includes('\\.compiled\\')) {
       try {
         const stat = statSync(filePath);

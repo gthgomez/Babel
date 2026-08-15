@@ -122,6 +122,10 @@ export interface WaterfallOutcome {
   total_tokens?: number | null;
   /** Aggregate estimated provider cost across all attempts with pricing metadata. */
   total_estimated_cost_usd?: number | null;
+  /** P1-I: task class of the run producing this entry (routing-eval conditioning). */
+  task_class?: string;
+  /** P1-I: requested neutral reasoning effort, when the run policy set one. */
+  reasoning_effort?: string;
 }
 
 export interface WaterfallAttemptOutcome {
@@ -256,6 +260,19 @@ export interface RunOptions {
    * written to debug files on parse/validation failure when provided.
    */
   evidence?: EvidenceBundle;
+
+  /**
+   * P1-I: task class of the run, recorded on the waterfall telemetry entry so
+   * routing-eval conditioning (P(verified_success | worker, task_class)) can
+   * be built from evidence without guessing.
+   */
+  taskClass?: string;
+
+  /**
+   * P1-I: requested neutral reasoning effort (low|medium|high) when the run
+   * policy set one. Recorded on the telemetry entry, never faked.
+   */
+  reasoningEffort?: string;
 
   /**
    * Human-readable schema name for schema-failure evidence. Optional so older
@@ -1965,6 +1982,8 @@ export async function runWithFallback<T>(
       ...waterfallResult.outcome,
       stage: label,
       ts: new Date().toISOString(),
+      ...(options.taskClass ? { task_class: options.taskClass } : {}),
+      ...(options.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
     } satisfies WaterfallOutcome);
   }
 
@@ -2035,6 +2054,10 @@ export async function runWaterfallForSchemaFailureTest<T>(input: {
   evidence: EvidenceBundle;
   maxAttempts?: number;
   tiers: Array<{ name: string; runner: LlmRunner }>;
+  /** P1-I: recorded on the telemetry entry (same semantics as runWithFallback). */
+  taskClass?: string;
+  /** P1-I: recorded on the telemetry entry (same semantics as runWithFallback). */
+  reasoningEffort?: string;
 }): Promise<T> {
   const waterfall = input.tiers.map(
     (tier, index): TierSpec => ({
@@ -2058,6 +2081,8 @@ export async function runWaterfallForSchemaFailureTest<T>(input: {
     ...waterfallResult.outcome,
     stage: input.stage,
     ts: new Date().toISOString(),
+    ...(input.taskClass ? { task_class: input.taskClass } : {}),
+    ...(input.reasoningEffort ? { reasoning_effort: input.reasoningEffort } : {}),
   } satisfies WaterfallOutcome);
   return waterfallResult.result;
 }
