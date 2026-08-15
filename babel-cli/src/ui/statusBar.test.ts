@@ -14,10 +14,17 @@ import assert from 'node:assert/strict';
 import {
   renderStatusBar,
   planStatusBarFields,
+  packStatusBarRightCluster,
   classifyStatusWidth,
+  classifyRateLimitAttention,
   isDefaultStatusMode,
 } from './statusBar.js';
 import type { StatusBarState } from './statusBar.js';
+import {
+  getGlobalRateLimitState,
+  setGlobalRateLimitState,
+} from './rateLimitWidget.js';
+import type { RateLimitState } from './rateLimitWidget.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -665,5 +672,186 @@ describe('status bar — explicit field shedding', () => {
     assert.equal(line.length, 60);
     assert.ok(line.includes('anthropic') || line.includes('…'));
     assert.ok(line.includes('[ctx ?]') || line.includes('ctx'));
+  });
+});
+
+describe('status bar — dynamic attention hierarchy', () => {
+  function withRateLimit(state: RateLimitState | null, fn: () => void): void {
+    const prev = getGlobalRateLimitState();
+    setGlobalRateLimitState(state);
+    try {
+      fn();
+    } finally {
+      setGlobalRateLimitState(prev);
+    }
+  }
+
+  it('classifies warning vs critical/exhausted attention', () => {
+    assert.equal(classifyRateLimitAttention(251, 1000), 'none');
+    assert.equal(classifyRateLimitAttention(200, 1000), 'warning');
+    assert.equal(classifyRateLimitAttention(50, 1000), 'critical');
+    assert.equal(classifyRateLimitAttention(0, 1000), 'critical');
+    assert.equal(classifyRateLimitAttention(10, 0), 'none');
+  });
+
+  it('lets critical rate-limit appear at 60; warning stays at 80+', () => {
+    const warn60 = planStatusBarFields(60, {
+      mode: 'default',
+      hasBranch: true,
+      hasBgTasks: true,
+      hasActiveRateLimit: true,
+      hasCriticalRateLimit: false,
+    });
+    assert.equal(warn60.showRateLimit, false);
+    assert.equal(warn60.showBgTasks, false);
+
+    const crit60 = planStatusBarFields(60, {
+      mode: 'default',
+      hasBranch: true,
+      hasBgTasks: true,
+      hasActiveRateLimit: true,
+      hasCriticalRateLimit: true,
+    });
+    assert.equal(crit60.showRateLimit, true);
+    assert.equal(crit60.showBgTasks, false);
+
+    const warn80 = planStatusBarFields(80, {
+      mode: 'deep',
+      hasBranch: true,
+      hasBgTasks: true,
+      hasActiveRateLimit: true,
+      hasCriticalRateLimit: false,
+    });
+    assert.equal(warn80.showRateLimit, true);
+  });
+
+  it('drops turn, session tokens, and cost before the context meter', () => {
+    const packed = packStatusBarRightCluster(
+      [
+        { id: 'sessionTokens', text: '999,999,999 tok', priority: 20 },
+        { id: 'cost', text: '$12345.6789', priority: 30 },
+        { id: 'turn', text: 'turn 9999', priority: 10 },
+        { id: 'rateLimit', text: 'API: 0/1000 ⛔ 12m', priority: 90, pinned: true },
+        { id: 'context', text: '[████████  50%]', priority: 80, pinned: true },
+      ],
+      40,
+    );
+    assert.ok(packed.includes('50%'), `context should survive: ${packed}`);
+    assert.ok(packed.includes('0/1000'), `critical rate-limit should survive: ${packed}`);
+    assert.ok(!packed.includes('turn'), packed);
+    assert.ok(!packed.includes('tok'), packed);
+    assert.ok(!packed.includes('$12345'), packed);
+  });
+
+  it('shows exhausted rate-limit at width 60 without shedding the context meter', () => {
+    withRateLimit(
+      { remaining: 0, limit: 1000, resetAt: new Date(Date.now() + 12 * 60_000) },
+      () => {
+        const line = firstLine(
+          renderStatusBar(
+            defaultState({
+              width: 60,
+              modelId: 'deepseek-v4-flash',
+              activeContext: {
+                tokens: 12_400,
+                modelId: 'deepseek-v4-flash',
+                source: 'provider',
+              },
+            }),
+          ),
+        );
+        assert.ok(line.length <= 60, `must not wrap: ${line.length}`);
+        assert.ok(
+          line.includes('0/1000') || line.includes('⛔'),
+          `expected exhausted rate-limit at 60: ${line}`,
+        );
+        assert.ok(
+          line.includes('%') || line.includes('ctx'),
+          `expected context meter to remain at 60: ${line}`,
+        );
+      },
+    );
+  });
+
+  it('keeps warning rate-limit shed at 60 and visible at 80', () => {
+    const state = {
+      remaining: 200,
+      limit: 1000,
+      resetAt: new Date(Date.now() + 60_000),
+    };
+    withRateLimit(state, () => {
+      const at60 = firstLine(
+        renderStatusBar(
+          defaultState({
+            width: 60,
+            modelId: 'deepseek-v4-flash',
+            activeContext: {
+              tokens: 12_400,
+              modelId: 'deepseek-v4-flash',
+              source: 'provider',
+            },
+          }),
+        ),
+      );
+      assert.ok(!at60.includes('⚠'), at60);
+      assert.ok(!at60.includes('200/1000'), at60);
+
+      const at80 = firstLine(
+        renderStatusBar(
+          defaultState({
+            width: 80,
+            modelId: 'deepseek-v4-flash',
+            activeContext: {
+              tokens: 12_400,
+              modelId: 'deepseek-v4-flash',
+              source: 'provider',
+            },
+          }),
+        ),
+      );
+      assert.ok(at80.includes('200/1000') || at80.includes('⚠'), at80);
+    });
+  });
+
+  it('drops cost before clipping the context meter when attention fields collide', () => {
+    withRateLimit(
+      { remaining: 0, limit: 1000, resetAt: new Date(Date.now() + 12 * 60_000) },
+      () => {
+        const line = firstLine(
+          renderStatusBar(
+            defaultState({
+              width: 80,
+              mode: 'deep',
+              model: 'DeepSeek v4 Flash',
+              totalCost: 12345.6789,
+              modelId: 'deepseek-v4-flash',
+              activeContext: {
+                tokens: 500_000,
+                modelId: 'deepseek-v4-flash',
+                source: 'provider',
+              },
+              backgroundTasks: [
+                {
+                  id: '1',
+                  label: 'Indexing-a-very-long-background-task-name',
+                  status: 'running',
+                  current: 567,
+                  total: 1234,
+                  progress: 45,
+                  elapsedMs: 3200,
+                },
+              ],
+            }),
+          ),
+        );
+        assert.ok(line.length <= 80, `must not wrap: ${line.length}`);
+        assert.ok(line.includes('50%') || line.includes('['), `context should survive: ${line}`);
+        assert.ok(
+          line.includes('0/1000') || line.includes('⛔'),
+          `critical rate-limit should survive: ${line}`,
+        );
+        assert.ok(!line.includes('$12345'), `cost is a 100-band field and must not displace attention: ${line}`);
+      },
+    );
   });
 });
