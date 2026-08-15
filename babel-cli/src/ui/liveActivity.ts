@@ -47,9 +47,7 @@ export function classifyLiveActivity(event: LiveActivityEvent): LiveActivityKind
   if (EDIT_TOOLS.test(tool) || /edit|write|patch/i.test(type)) return 'editing';
   if (SHELL_TOOLS.test(tool) || /shell|command/i.test(type)) return 'shell';
   if (READ_TOOLS.test(tool) || /read|search|grep/i.test(type)) return 'reading';
-  if (tool || type) {
-    return 'shell';
-  }
+  // Unknown tool/type must fail neutral — never a confident Running/shell label.
   return null;
 }
 

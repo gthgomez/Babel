@@ -26,6 +26,25 @@ describe('live activity — real events only', () => {
     assert.equal(classifyLiveActivity({ type: '', tool: '' }), null);
   });
 
+  it('fails unknown tool/type events to neutral instead of confident Running', () => {
+    assert.equal(classifyLiveActivity({ tool: 'mystery_plugin', type: 'custom_unknown' }), null);
+    assert.equal(classifyLiveActivity({ type: 'frobnicate' }), null);
+    assert.equal(activityFromToolCall('mystery_plugin'), null);
+    assert.notEqual(classifyLiveActivity({ tool: 'run_command' }), null);
+  });
+
+  it('ConversationalRenderer records known tool activity and ignores unknown tools', async () => {
+    const { ConversationalRenderer } = await import('./waterfall.js');
+    resetLiveActivityForTests();
+    const renderer = new ConversationalRenderer({ isTTY: false, verboseMode: false });
+    renderer.start();
+    renderer.onToolCallStart('str_replace', 'src/ui/statusBar.ts');
+    assert.equal(getLastLiveActivity()?.kind, 'editing');
+    renderer.onToolCallStart('mystery_plugin', 'payload');
+    assert.equal(getLastLiveActivity()?.kind, 'editing', 'unknown tool must not overwrite with shell/Running');
+    renderer.stop();
+  });
+
   it('records last activity from a real tool event', () => {
     resetLiveActivityForTests();
     assert.equal(recordLiveActivity({ tool: 'write_file', target: 'a.ts' }), 'editing');

@@ -65,6 +65,7 @@ import {
   type ToolExecutionSummary,
 } from './toolPresentation.js';
 import { renderSubAgentOverlay, type SubAgentOverlayEntry } from './subAgentOverlay.js';
+import { recordLiveActivity } from './liveActivity.js';
 
 const SPINNER_FRAMES: readonly string[] = ['◐', '◓', '◑', '◒'];
 const FRAME_INTERVAL_MS = 200; // 5 FPS spinner tick
@@ -1916,6 +1917,7 @@ export class ConversationalRenderer extends BaseRenderer {
       this._leaveThinking('tool');
     }
     this._recordModelActivity();
+    recordLiveActivity({ tool, target });
 
     // If pending executions belong to a different category, flush them before starting new category
     if (this._pendingToolExecutions.length > 0) {
