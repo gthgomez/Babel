@@ -208,6 +208,7 @@ import type { ProgressController, ProgressSignal } from './progressController.js
 import { classifyShellCapability } from './progressController.js';
 import { classifyPhase, buildPhaseNudge, shouldNudge, type ChatPhase } from './chatPhaseNudge.js';
 import { isSuccessfulDirectMutation } from './mutationTools.js';
+import { ChatTurnTelemetryCollector, type ChatTurnTelemetryRecord } from './chatTurnTelemetry.js';
 import type { DiffCriticVerdict } from './diffCritic.js';
 import {
   evaluateTokenExplosionAfterTurn,
@@ -442,6 +443,7 @@ export type ChatEvent =
       turnRouting?: TurnRoutingReceipt[];
       observationTails?: Array<{ tool: string; target: string; exit_code?: number; tail: string }>;
       blockedAttempts?: import('./blockedAttemptLedger.js').BlockedAttempt[];
+      turnTelemetry?: ChatTurnTelemetryRecord;
     }
   | {
       type: 'failed';
@@ -451,8 +453,9 @@ export type ChatEvent =
       runDir?: string;
       /** Preserve INFRA_FAILURE vs AGENT_FAILURE when the engine already classified. */
       outcome?: import('../schemas/agentContracts.js').TerminalOutcome;
+      turnTelemetry?: ChatTurnTelemetryRecord;
     }
-  | { type: 'cancelled' }
+  | { type: 'cancelled'; turnTelemetry?: ChatTurnTelemetryRecord }
   | {
       type: 'progress_recovery';
       intervention: import('./progressController.js').ProgressInterventionLevel;
@@ -495,12 +498,15 @@ export interface ChatResult {
   promptFingerprint?: PromptFingerprint;
   /** Active input prompt tokens from latest single model invocation */
   lastRequestPromptTokens?: number | null;
+  /** Active completion output tokens from latest single model invocation */
+  lastRequestCompletionTokens?: number | null;
   /** Structured active context telemetry from latest provider invocation */
   activeContext?: {
     tokens: number;
     modelId: string;
     source: 'provider_prompt_tokens' | 'estimated' | 'unknown';
   } | null;
+  turnTelemetry?: ChatTurnTelemetryRecord;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────
@@ -597,6 +603,8 @@ export class ChatEngine {
   private apiTokenCount = 0;
   /** Prompt tokens from latest single model invocation in the active turn */
   private lastRequestPromptTokens: number | null = null;
+  /** Completion output tokens from latest single model invocation in the active turn */
+  private lastRequestCompletionTokens: number | null = null;
   private lastRequestModelId: string | null = null;
   /** R11: API-reported token count at the start of the current turn.
    *  Used to compute the per-round token delta for the token ceiling check. */
@@ -687,9 +695,15 @@ export class ChatEngine {
   private readonly runtimeInvariants: RuntimeInvariantRegistry<RequestReconstructionContext>;
   private failureBudgetTracker: FailureClassBudgetTracker = createFailureBudgetTrackerFromContract(null);
   private testWorkspaceRevisionHash?: string | null | undefined;
+  private currentTurnTelemetry: ChatTurnTelemetryCollector | null = null;
+  private lastTurnTelemetry: ChatTurnTelemetryRecord | null = null;
 
   public setTestWorkspaceRevisionHash(hash: string | null | undefined): void {
     this.testWorkspaceRevisionHash = hash;
+  }
+
+  public getLastTurnTelemetry(): ChatTurnTelemetryRecord | null {
+    return this.lastTurnTelemetry;
   }
 
   private get engineRunDir(): string {
@@ -868,30 +882,40 @@ export class ChatEngine {
   }
 
   private evaluateCompletionGate(turnResult: ChatTurn, taskIntent: TaskIntent): 'allow' | 'reject' {
-    const projectTestCommands = this.discoveredTestCommands
-      .map((entry) => entry.command)
-      .filter((command) => command.trim().length > 0);
-    const verifierInput = this.buildVerifierInput();
-    // H5: live workspace revision at gate time (not the receipt's own bound hash).
-    let currentWorkspaceRevisionHash: string | undefined =
-      this.testWorkspaceRevisionHash !== null ? (this.testWorkspaceRevisionHash ?? undefined) : undefined;
+    const verifStart = performance.now();
     try {
-      const paths = mutationPathsFromSessionEvents(this.parity.sessionEvents.events);
-      if (paths.length > 0) {
-        currentWorkspaceRevisionHash = RevisionManager.computeRevisionSync(
-          this.options.projectRoot,
-          paths,
-        ).compositeTreeHash;
-      }
-    } catch { /* best-effort */ }
-    return evaluateCompletionGateForEngine({
-      turnType: turnResult.type, taskIntent, task: this.options.task, taskClass: this.taskClass,
-      toolCallLog: this.toolCallLog, lastVerifierReceipt: this.lastVerifierReceipt,
-      executedVerifierLedger: verifierInput.executedVerifierLedger ?? null,
-      verifierEvidenceErrors: verifierInput.verifierEvidenceErrors ?? null,
-      requiredVerifierCommands: verifierInput.requiredVerifierCommands, projectTestCommands,
-      ...(currentWorkspaceRevisionHash ? { currentWorkspaceRevisionHash } : {}),
-    });
+      const projectTestCommands = this.discoveredTestCommands
+        .map((entry) => entry.command)
+        .filter((command) => command.trim().length > 0);
+      const verifierInput = this.buildVerifierInput();
+      // H5: live workspace revision at gate time (not the receipt's own bound hash).
+      let currentWorkspaceRevisionHash: string | undefined =
+        this.testWorkspaceRevisionHash !== null ? (this.testWorkspaceRevisionHash ?? undefined) : undefined;
+      try {
+        const paths = mutationPathsFromSessionEvents(this.parity.sessionEvents.events);
+        if (paths.length > 0) {
+          currentWorkspaceRevisionHash = RevisionManager.computeRevisionSync(
+            this.options.projectRoot,
+            paths,
+          ).compositeTreeHash;
+        }
+      } catch { /* best-effort */ }
+      return evaluateCompletionGateForEngine({
+        turnType: turnResult.type, taskIntent, task: this.options.task, taskClass: this.taskClass,
+        toolCallLog: this.toolCallLog, lastVerifierReceipt: this.lastVerifierReceipt,
+        executedVerifierLedger: verifierInput.executedVerifierLedger ?? null,
+        verifierEvidenceErrors: verifierInput.verifierEvidenceErrors ?? null,
+        requiredVerifierCommands: verifierInput.requiredVerifierCommands, projectTestCommands,
+        ...(currentWorkspaceRevisionHash ? { currentWorkspaceRevisionHash } : {}),
+      });
+    } finally {
+      const verifEnd = performance.now();
+      this.currentTurnTelemetry?.recordVerificationSpan(
+        Math.max(0, verifEnd - verifStart),
+        verifStart,
+        verifEnd,
+      );
+    }
   }
 
   private buildGateRejectUserMessage(): string {
@@ -944,15 +968,20 @@ export class ChatEngine {
     taskIntent: TaskIntent,
     opts?: { terminal?: boolean },
   ): Promise<'allow' | 'reject' | 'block'> {
-    const state = this.criticState(callbacks.onThought);
-    const decision = await runAsymmetricDiffCriticImpl(
-      state,
-      answer,
-      taskIntent,
-      opts,
-    );
-    this.applyCriticState(state);
-    return decision;
+    const criticSpan = this.currentTurnTelemetry?.startCriticSpan();
+    try {
+      const state = this.criticState(callbacks.onThought);
+      const decision = await runAsymmetricDiffCriticImpl(
+        state,
+        answer,
+        taskIntent,
+        opts,
+      );
+      this.applyCriticState(state);
+      return decision;
+    } finally {
+      criticSpan?.end();
+    }
   }
 
   private buildCriticBlockedReport(verdict: DiffCriticVerdict): BlockedReport {
@@ -1474,7 +1503,10 @@ export class ChatEngine {
     submitOpts?: SubmitMessageOptions,
   ): AsyncGenerator<ChatEvent, void, undefined> {
     this._cancelled = false;
+    this.currentTurnTelemetry = new ChatTurnTelemetryCollector(performance.now());
+    this.currentTurnTelemetry.markStarted();
     this.lastRequestPromptTokens = null;
+    this.lastRequestCompletionTokens = null;
     this.lastRequestModelId = null;
     // W0.3: fresh TurnRuntime per user submission (isolate counters by default).
     const runtime = this.applyUserSubmission({
@@ -1592,7 +1624,9 @@ export class ChatEngine {
       let _turnSpan: Span | null = _tracer.startSpan('babel.chat.turn');
 
       // Compact if needed; user-visible notice via stream event
+      const compactionSpan = this.currentTurnTelemetry?.startCompactionSpan();
       const compactInfo = await this.compactIfNeeded();
+      compactionSpan?.end();
       if (compactInfo) {
         yield { type: 'context_compacted', ...compactInfo };
       }
@@ -1624,6 +1658,7 @@ export class ChatEngine {
         // ── Text-tools path — simplified format for small local models ──────
         const systemPrompt = this.getOrBuildSystemPrompt('text');
         let rawText = '';
+        const providerStart = performance.now();
         try {
           for await (const chunk of runner.executeRawStream(
             prompt,
@@ -1632,11 +1667,24 @@ export class ChatEngine {
             this.providerRetryCallbacks(),
           )) {
             rawText += chunk;
+            this.currentTurnTelemetry?.markFirstToken();
             yield { type: 'answer_chunk', text: chunk };
           }
+          const providerEnd = performance.now();
+          this.currentTurnTelemetry?.recordProviderSpan(
+            Math.max(0, providerEnd - providerStart),
+            providerStart,
+            providerEnd,
+          );
           this.trackRunnerUsage(runner);
           turnResult = parseTextToolTurn(rawText);
         } catch (err: any) {
+          const providerEnd = performance.now();
+          this.currentTurnTelemetry?.recordProviderSpan(
+            Math.max(0, providerEnd - providerStart),
+            providerStart,
+            providerEnd,
+          );
           endSpan(_turnSpan, SpanStatusCode.ERROR);
           _turnSpan = null;
           const cancelled = this.emitCancelledIfOperatorAbort(err);
@@ -1662,6 +1710,7 @@ export class ChatEngine {
         const systemPrompt = this.getOrBuildSystemPrompt('native');
 
         this.assertNativeRequestMatchesDurable(providerMessages, systemPrompt, systemPrompt);
+        const providerStart = performance.now();
         try {
           for await (const event of runner.executeWithToolsStream(
             providerMessages,
@@ -1673,10 +1722,12 @@ export class ChatEngine {
           )) {
             switch (event.type) {
               case 'text_delta':
+                this.currentTurnTelemetry?.markFirstToken();
                 answerText += event.text;
                 yield { type: 'answer_chunk', text: event.text };
                 break;
               case 'thought_delta':
+                this.currentTurnTelemetry?.markFirstToken();
                 yield { type: 'thought', text: event.text };
                 break;
               case 'tool_use': {
@@ -1700,12 +1751,24 @@ export class ChatEngine {
               // 'done' is handled after the loop
             }
           }
+          const providerEnd = performance.now();
+          this.currentTurnTelemetry?.recordProviderSpan(
+            Math.max(0, providerEnd - providerStart),
+            providerStart,
+            providerEnd,
+          );
           this.trackRunnerUsage(runner);
           this._streamNativeToolCallIds = nativeToolCallIds;
           turnResult = nativeActions.length > 0
             ? { type: 'tool_calls', actions: nativeActions }
             : { type: 'completion', answer: answerText || 'OK' };
         } catch (err: any) {
+          const providerEnd = performance.now();
+          this.currentTurnTelemetry?.recordProviderSpan(
+            Math.max(0, providerEnd - providerStart),
+            providerStart,
+            providerEnd,
+          );
           const fb = yield* this.resolveFallbackOrFail(err, turn);
           if (!fb) {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
@@ -1722,6 +1785,7 @@ export class ChatEngine {
           nativeToolCallIds.length = 0;
           answerText = '';
           this.assertNativeRequestMatchesDurable(providerMessages, systemPrompt, undefined);
+          const fbStart = performance.now();
           try {
             for await (const event of fb.executeWithToolsStream(
               providerMessages,
@@ -1733,10 +1797,12 @@ export class ChatEngine {
             )) {
               switch (event.type) {
                 case 'text_delta':
+                  this.currentTurnTelemetry?.markFirstToken();
                   answerText += event.text;
                   yield { type: 'answer_chunk', text: event.text };
                   break;
                 case 'thought_delta':
+                  this.currentTurnTelemetry?.markFirstToken();
                   yield { type: 'thought', text: event.text };
                   break;
                 case 'tool_use': {
@@ -1759,15 +1825,28 @@ export class ChatEngine {
                   throw new Error(event.message);
               }
             }
+            const fbEnd = performance.now();
+            this.currentTurnTelemetry?.recordProviderSpan(
+              Math.max(0, fbEnd - fbStart),
+              fbStart,
+              fbEnd,
+            );
             this.trackRunnerUsage(fb);
             this._streamNativeToolCallIds = nativeToolCallIds;
             turnResult = nativeActions.length > 0
               ? { type: 'tool_calls', actions: nativeActions }
               : { type: 'completion', answer: answerText || 'OK' };
           } catch (fbErr: any) {
+            const fbEnd = performance.now();
+            this.currentTurnTelemetry?.recordProviderSpan(
+              Math.max(0, fbEnd - fbStart),
+              fbStart,
+              fbEnd,
+            );
             // If tools still fail, degrade to raw-text streaming
             yield { type: 'thought', text: 'Retrying without tools…' };
             let rawText = '';
+            const rawFbStart = performance.now();
             try {
               for await (const chunk of fb.executeRawStream(
                 prompt,
@@ -1776,11 +1855,24 @@ export class ChatEngine {
                 this.providerRetryCallbacks(),
               )) {
                 rawText += chunk;
+                this.currentTurnTelemetry?.markFirstToken();
                 yield { type: 'answer_chunk', text: chunk };
               }
+              const rawFbEnd = performance.now();
+              this.currentTurnTelemetry?.recordProviderSpan(
+                Math.max(0, rawFbEnd - rawFbStart),
+                rawFbStart,
+                rawFbEnd,
+              );
               this.trackRunnerUsage(fb);
               turnResult = this.parseChatTurnLenient(rawText);
             } catch (rawErr: any) {
+              const rawFbEnd = performance.now();
+              this.currentTurnTelemetry?.recordProviderSpan(
+                Math.max(0, rawFbEnd - rawFbStart),
+                rawFbStart,
+                rawFbEnd,
+              );
               endSpan(_turnSpan, SpanStatusCode.ERROR);
               _turnSpan = null;
               const cancelled = this.emitCancelledIfOperatorAbort(rawErr);
@@ -1796,6 +1888,7 @@ export class ChatEngine {
       } else {
         // ── Legacy prompt-based JSON path ─────────────────────────────────
         let rawText = '';
+        const legacyStart = performance.now();
         try {
           for await (const chunk of runner.executeRawStream(
             prompt,
@@ -1804,10 +1897,23 @@ export class ChatEngine {
             this.providerRetryCallbacks(),
           )) {
             rawText += chunk;
+            this.currentTurnTelemetry?.markFirstToken();
             yield { type: 'answer_chunk', text: chunk };
           }
+          const legacyEnd = performance.now();
+          this.currentTurnTelemetry?.recordProviderSpan(
+            Math.max(0, legacyEnd - legacyStart),
+            legacyStart,
+            legacyEnd,
+          );
           this.trackRunnerUsage(runner);
         } catch (err: any) {
+          const legacyEnd = performance.now();
+          this.currentTurnTelemetry?.recordProviderSpan(
+            Math.max(0, legacyEnd - legacyStart),
+            legacyStart,
+            legacyEnd,
+          );
           const fb = yield* this.resolveFallbackOrFail(err, turn);
           if (!fb) {
             endSpan(_turnSpan, SpanStatusCode.ERROR);
@@ -2080,6 +2186,7 @@ export class ChatEngine {
         });
 
         if (pcResult.transitioned) {
+          this.currentTurnTelemetry?.recordPolicyIntervention();
           yield {
             type: 'progress_recovery',
             intervention: pcResult.intervention,
@@ -2945,17 +3052,36 @@ export class ChatEngine {
       outcome,
       extra?.blockedReport ? 'blocked' : this.budgetExceeded ? 'budget_exhausted' : 'completed',
     );
+    const finalizedTelemetry = this.currentTurnTelemetry?.finalize({
+      turnId: String(this.parity.turnId ?? this._turnIndex),
+      taskClass: this.taskClass,
+      promptTokens: this.lastRequestPromptTokens,
+      completionTokens: this.lastRequestCompletionTokens,
+      cumulativeSessionTokens: globalCostTracker.getSessionSummary().totalTokens,
+    });
+    this.lastTurnTelemetry = finalizedTelemetry ?? null;
     return buildStreamDone(this.obsHandles(), answer, {
       outcome,
       ...(decision.finalOutcome === 'PLAN_COMPLETE' ? { planOutcome: 'PLAN_COMPLETE' as const } : {}),
       ...(this.budgetExceeded ? { budgetExceeded: true as const } : {}),
       ...(extra ?? {}),
+      ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
     });
   }
 
   private streamFailed(error: string) {
     finalizeParityTurnSync(this.parity, this.engineRunDir, 'AGENT_FAILURE', 'failed');
-    return buildStreamFailed(this.obsHandles(), error);
+    const finalizedTelemetry = this.currentTurnTelemetry?.finalize({
+      turnId: String(this.parity.turnId ?? this._turnIndex),
+      taskClass: this.taskClass,
+      promptTokens: this.lastRequestPromptTokens,
+      completionTokens: this.lastRequestCompletionTokens,
+      cumulativeSessionTokens: globalCostTracker.getSessionSummary().totalTokens,
+    });
+    this.lastTurnTelemetry = finalizedTelemetry ?? null;
+    return buildStreamFailed(this.obsHandles(), error, {
+      ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
+    });
   }
 
   getConversation(): ChatMessage[] {
@@ -3298,6 +3424,7 @@ export class ChatEngine {
     const target = chatActionTarget(action);
     const toolId = callbacks.onToolStart?.(tool, target) ?? -1;
     const restoreProjectRoot = pinProjectRootEnv(this.options.projectRoot);
+    const toolStart = performance.now();
 
     try {
       // Plan-then-execute + optional phase tool gates (before side effects)
@@ -4173,6 +4300,17 @@ export class ChatEngine {
         observation: `### ${tool} ${target}\nError: ${err instanceof Error ? err.message : String(err)}`,
       };
     } finally {
+      const toolEnd = performance.now();
+      const lastEntry = this.toolCallLog[this.toolCallLog.length - 1];
+      const success = !lastEntry?.error && (lastEntry?.exit_code === 0 || lastEntry?.exit_code === undefined);
+      this.currentTurnTelemetry?.recordToolSpan(
+        tool,
+        target,
+        Math.max(0, toolEnd - toolStart),
+        success,
+        toolStart,
+        toolEnd,
+      );
       restoreProjectRoot();
     }
   }
@@ -4296,6 +4434,7 @@ export class ChatEngine {
       metadata.completion_tokens !== null
     ) {
       this.lastRequestPromptTokens = metadata.prompt_tokens;
+      this.lastRequestCompletionTokens = metadata.completion_tokens;
       this.lastRequestModelId = metadata.provider_model_id;
       globalCostTracker.trackUsage(
         metadata.provider_model_id,
@@ -5030,6 +5169,7 @@ export class ChatEngine {
       answer: answer ?? '',
       usage: globalCostTracker.getSessionSummary(),
       lastRequestPromptTokens: this.lastRequestPromptTokens,
+      lastRequestCompletionTokens: this.lastRequestCompletionTokens,
       activeContext:
         this.lastRequestPromptTokens !== null && this.lastRequestPromptTokens !== undefined
           ? {
@@ -5047,6 +5187,7 @@ export class ChatEngine {
       ...(this.lastCriticReceipt ? { criticReceipt: this.lastCriticReceipt } : {}),
       ...(this.budgetExceeded ? { budgetExceeded: true as const } : {}),
       ...(this.gatePolicy ? { gatePolicy: this.gatePolicy } : {}),
+      ...(this.lastTurnTelemetry ? { turnTelemetry: this.lastTurnTelemetry } : {}),
       ...observabilityResultFields(this.obsHandles()),
     };
 

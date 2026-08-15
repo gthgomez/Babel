@@ -385,6 +385,7 @@ export async function executeChatTask(
         ? `exit ${verificationData.exit_code}: ${verificationData.commands.join(', ')}`
         : 'not_run',
       next: ctx.lastAssistantNext,
+      ...(result.turnTelemetry !== undefined ? { turn_telemetry: result.turnTelemetry } : {}),
     });
     // updateConversationMemory remaps TerminalOutcome onto legacy AskAnswer
     // statuses (CANCELLED → NEEDS_MORE_CONTEXT). Restore the operator-facing

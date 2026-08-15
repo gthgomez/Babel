@@ -123,6 +123,7 @@ export function terminalResultFromDoneEvent(
     criticReceipt?: ChatResult['criticReceipt'];
     verifierTampered?: boolean;
     turnRouting?: TurnRoutingReceipt[];
+    turnTelemetry?: import('../../agent/chatTurnTelemetry.js').ChatTurnTelemetryRecord;
   },
 ): ChatResult {
   // Prefer the engine's authoritative TerminalOutcome. Only recompute when
@@ -157,5 +158,6 @@ export function terminalResultFromDoneEvent(
     ...(opts?.criticReceipt ? { criticReceipt: opts.criticReceipt } : {}),
     ...(opts?.verifierTampered ? { verifierTampered: true as const } : {}),
     ...(opts?.turnRouting ? { turnRouting: opts.turnRouting } : {}),
+    ...(opts?.turnTelemetry !== undefined ? { turnTelemetry: opts.turnTelemetry } : {}),
   };
 }
