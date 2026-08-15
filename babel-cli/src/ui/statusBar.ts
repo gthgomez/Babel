@@ -101,15 +101,16 @@ export interface StatusBarRightPart {
 /**
  * Attention-preemption policy.
  *
- * The static shed matrix is the default. When something actually matters,
- * it may appear below its static band and take the slot of quieter chrome.
+ * When fields conflict, choose which concepts survive explicitly.
+ * Never let string truncation decide operational priority.
  *
  * Width 60:
  *   normal:    model                         context
  *   critical:  model                         ⛔ rate-limit
  *
- * At 60, critical/exhausted rate-limit displaces the context meter.
- * From 80 up, both may appear; `displaceInOrder` only runs if they still collide.
+ * Width 80:
+ *   normal:    model · deep                    context
+ *   attention: model             ⛔ rate-limit  context
  */
 export const ATTENTION_PREEMPTION = {
   /** Exhausted / critical rate-limit may break through to the 60-band. */
@@ -118,9 +119,13 @@ export const ATTENTION_PREEMPTION = {
   warningRateLimitMinBand: 80 as StatusWidthBand,
   /** Below this band, critical rate-limit takes the right-hand slot from context. */
   contextYieldsBelowBand: 80 as StatusWidthBand,
+  /** Below this band, live attention displaces non-default mode. */
+  modeYieldsBelowBand: 100 as StatusWidthBand,
+  /** Below this band, live attention displaces background tasks. */
+  bgTasksYieldBelowBand: 100 as StatusWidthBand,
   /**
    * First listed is dropped first when the right cluster still overflows.
-   * `rateLimit` is skipped while the signal is critical.
+   * `rateLimit` is skipped while attention is live. Context is last, never mid-string clipped.
    */
   displaceInOrder: [
     'turn',
@@ -157,12 +162,28 @@ function joinRightParts(parts: readonly StatusBarRightPart[]): string {
     .join('  ');
 }
 
+function rightClusterFits(parts: readonly StatusBarRightPart[], maxWidth: number): boolean {
+  return visibleLength(joinRightParts(parts)) <= maxWidth;
+}
+
+function dropRightSlot(parts: StatusBarRightPart[], slot: StatusBarRightSlot): void {
+  const idx = parts.findIndex((part) => part.slot === slot);
+  if (idx >= 0) parts.splice(idx, 1);
+}
+
+function isProtectedRightSlot(slot: StatusBarRightSlot, protectRateLimit: boolean): boolean {
+  if (slot === 'context') return true;
+  return slot === 'rateLimit' && protectRateLimit;
+}
+
 /**
- * Drop ATTENTION_PREEMPTION.displaceInOrder until the cluster fits.
+ * Drop whole concepts in ATTENTION_PREEMPTION.displaceInOrder until the cluster fits.
+ * Does not truncate slot strings — leftover overflow drops remaining unprotected
+ * slots, then context, rather than clipping a field mid-glyph.
  *
  * @param parts - Named right-cluster slots already selected by the static matrix
  * @param maxWidth - Visible-column budget for the right cluster
- * @param protectRateLimit - Keep the rate-limit slot (critical/exhausted)
+ * @param protectRateLimit - Keep the rate-limit slot while attention is live
  * @returns Joined right-cluster text
  */
 export function applyAttentionPreemption(
@@ -172,14 +193,20 @@ export function applyAttentionPreemption(
 ): string {
   const kept = parts.filter((part) => part.text.length > 0);
   for (const slot of ATTENTION_PREEMPTION.displaceInOrder) {
-    if (visibleLength(joinRightParts(kept)) <= maxWidth) break;
-    if (slot === 'rateLimit' && protectRateLimit) continue;
-    const idx = kept.findIndex((part) => part.slot === slot);
-    if (idx >= 0) kept.splice(idx, 1);
+    if (rightClusterFits(kept, maxWidth)) break;
+    if (isProtectedRightSlot(slot, protectRateLimit)) continue;
+    dropRightSlot(kept, slot);
   }
-  const packed = joinRightParts(kept);
-  if (visibleLength(packed) <= maxWidth) return packed;
-  return truncate(stripAnsi(packed), maxWidth);
+  if (!rightClusterFits(kept, maxWidth)) {
+    for (let i = kept.length - 1; i >= 0; i--) {
+      if (rightClusterFits(kept, maxWidth)) break;
+      const slot = kept[i]!.slot;
+      if (isProtectedRightSlot(slot, protectRateLimit)) continue;
+      kept.splice(i, 1);
+    }
+  }
+  if (!rightClusterFits(kept, maxWidth)) dropRightSlot(kept, 'context');
+  return joinRightParts(kept);
 }
 
 export interface StatusBarFieldPolicy {
@@ -220,21 +247,25 @@ export function planStatusBarFields(
   },
 ): StatusBarFieldPolicy {
   const band = classifyStatusWidth(width);
+  const attentionActive = Boolean(input.hasActiveRateLimit || input.hasCriticalRateLimit);
   const rateLimitMinBand = input.hasCriticalRateLimit
     ? ATTENTION_PREEMPTION.criticalRateLimitMinBand
     : ATTENTION_PREEMPTION.warningRateLimitMinBand;
   return {
     band,
-    showMode: !isDefaultStatusMode(input.mode) && band >= 80,
+    showMode: !isDefaultStatusMode(input.mode)
+      && band >= 80
+      && !(attentionActive && band < ATTENTION_PREEMPTION.modeYieldsBelowBand),
     showCost: band >= 100,
     showSessionTokens: band >= 120,
     showBranch: input.hasBranch && band >= 120,
     showTurn: band >= 160,
     showKg: false,
     showRouting: false,
-    showRateLimit: Boolean(input.hasActiveRateLimit || input.hasCriticalRateLimit)
-      && band >= rateLimitMinBand,
-    showBgTasks: input.hasBgTasks && band >= 80,
+    showRateLimit: attentionActive && band >= rateLimitMinBand,
+    showBgTasks: input.hasBgTasks
+      && band >= 80
+      && !(attentionActive && band < ATTENTION_PREEMPTION.bgTasksYieldBelowBand),
     showContext: !(
       input.hasCriticalRateLimit && band < ATTENTION_PREEMPTION.contextYieldsBelowBand
     ),
@@ -311,7 +342,7 @@ export function renderStatusBar(state: StatusBarState): string {
   const right = applyAttentionPreemption(
     rightParts,
     maxRight,
-    rateAttention === 'critical',
+    rateAttention !== 'none',
   );
 
   const leftLen = visibleLength(left);
