@@ -118,9 +118,10 @@ describe('review card — truthful terminal states', () => {
       verificationPolicy: 'none',
     });
     const text = stripAnsi(card.body);
-    assert.match(text, /\[Enter\] Continue/);
+    assert.doesNotMatch(text, /\[Enter\] Continue/);
     assert.doesNotMatch(text, /\[D\] Diff/);
     assert.doesNotMatch(text, /\[R\] Run verification/);
+    assert.doesNotMatch(text, /\nNext\n/);
   });
 
   it('T14: Mutating run with changed files provides Diff and Run verification actions', () => {
@@ -132,7 +133,7 @@ describe('review card — truthful terminal states', () => {
     const text = stripAnsi(card.body);
     assert.match(text, /\[D\] Diff/);
     assert.match(text, /\[R\] Run verification/);
-    assert.match(text, /\[Enter\] Continue/);
+    assert.doesNotMatch(text, /\[Enter\] Continue/);
   });
 
   it('T15: Read-only query with verificationPolicy: none omits Not run — not verified', () => {
@@ -175,6 +176,41 @@ describe('review card — truthful terminal states', () => {
     assert.doesNotMatch(text, /Not run — not verified/);
     assert.doesNotMatch(text, /\[D\] Diff/);
     assert.doesNotMatch(text, /\[R\] Run verification/);
-    assert.match(text, /\[Enter\] Continue/);
+    assert.doesNotMatch(text, /\[Enter\] Continue/);
+    assert.doesNotMatch(text, /\nNext\n/);
+  });
+
+  it('omits always-on Continue and zero cost; keeps taxonomy and real next actions', () => {
+    const readonly = presentChatReview({
+      outcome: 'NO_CHANGE_REQUIRED',
+      verificationPolicy: 'not_applicable',
+      costUsd: 0,
+      tokens: 0,
+      summary: 'Answered from repo facts.',
+    });
+    const readonlyText = stripAnsi(readonly.body);
+    assert.equal(readonly.kind, 'COMPLETE_UNVERIFIED');
+    assert.equal(readonly.looksLikeVerifiedSuccess, false);
+    assert.doesNotMatch(readonlyText, /Cost/);
+    assert.doesNotMatch(readonlyText, /Next/);
+    assert.doesNotMatch(readonlyText, /Not run — not verified/);
+
+    const failed = presentChatReview({
+      outcome: 'UNVERIFIED_PATCH',
+      changedFiles: ['src/a.ts'],
+      verification: { ran: true, passed: false, command: 'npm test', exitCode: 1 },
+      costUsd: 0.02,
+      tokens: 1200,
+    });
+    const failedText = stripAnsi(failed.body);
+    assert.equal(failed.kind, 'VERIFICATION_FAILED');
+    assert.match(failedText, /Verification failed/);
+    assert.match(failedText, /\[F\] Fix/);
+    assert.match(failedText, /\$0\.0200/);
+    assert.doesNotMatch(failedText, /\[Enter\] Continue/);
+
+    const cancelled = presentChatReview({ outcome: 'CANCELLED' });
+    assert.equal(cancelled.kind, 'CANCELLED');
+    assert.doesNotMatch(stripAnsi(cancelled.body), /\[Enter\] Continue/);
   });
 });
