@@ -66,15 +66,22 @@ test('benchmarkAutoApproveEnabled: honored in explicit benchmark mode', () => {
   );
 });
 
-test('benchmarkAutoApproveEnabled: honored in headless/CI', () => {
+test('benchmarkAutoApproveEnabled: headless/CI does not establish benchmark authority', () => {
+  // P0-4: headless/CI NEVER establishes benchmark authority — both
+  // BABEL_BENCHMARK_AUTO_APPROVE=1 and BABEL_BENCHMARK_MODE=1 are required.
   assert.equal(
     benchmarkAutoApproveEnabled({ BABEL_BENCHMARK_AUTO_APPROVE: '1', CI: 'true' }),
-    true,
+    false,
   );
   assert.equal(
     benchmarkAutoApproveEnabled({ BABEL_BENCHMARK_AUTO_APPROVE: '1', BABEL_HEADLESS: '1' }),
-    true,
+    false,
   );
+});
+
+test('benchmarkAutoApproveEnabled: benchmark mode without auto-approve fails closed', () => {
+  // P0-4: both flags are required — BABEL_BENCHMARK_MODE alone grants nothing.
+  assert.equal(benchmarkAutoApproveEnabled({ BABEL_BENCHMARK_MODE: '1' }), false);
 });
 
 test('benchmarkAutoApproveEnabled: interactive TTY without benchmark mode fails closed', () => {

@@ -10,7 +10,6 @@
  */
 
 import type { AgentAction } from './actions.js';
-import { isBabelHeadlessEnv } from '../utils/envFlags.js';
 import type { AutonomyClass } from '../config/autonomyPolicy.js';
 import type { PermissionPreset } from './policy.js';
 
@@ -73,17 +72,16 @@ export function resolveAutonomyPreset(
 // ─── Benchmark-mode gate (P0-B) ──────────────────────────────────────────────
 
 /**
- * True when BABEL_BENCHMARK_AUTO_APPROVE is honored.
+ * True when BABEL_BENCHMARK_AUTO_APPROVE is honored (P0-4 contract).
  *
- * The env var alone must NOT weaken interactive authority (P0-B): it is valid
- * only inside an explicitly recognized benchmark/test execution mode —
- * headless/CI (where no human can approve anyway) or an explicit
- * BABEL_BENCHMARK_MODE=1 benchmark run. In an interactive TTY without
- * BABEL_BENCHMARK_MODE, setting the env var is a no-op (fail closed).
+ * Benchmark auto-approve is valid ONLY when both BABEL_BENCHMARK_AUTO_APPROVE=1
+ * AND BABEL_BENCHMARK_MODE=1 are set. Headless/CI NEVER establishes benchmark
+ * authority, and an interactive TTY without BABEL_BENCHMARK_MODE fails closed —
+ * the env var alone must not weaken interactive authority.
  */
 export function benchmarkAutoApproveEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env['BABEL_BENCHMARK_AUTO_APPROVE'] !== '1') return false;
-  return isBabelHeadlessEnv(env) || env['BABEL_BENCHMARK_MODE'] === '1';
+  return env['BABEL_BENCHMARK_MODE'] === '1';
 }
 
 // ─── Command text extraction ─────────────────────────────────────────────────
