@@ -244,7 +244,9 @@ export function unwrapCommandWrappers(raw: string): string {
       const ps = /^(powershell|pwsh)$/i.test(base);
       const cmd = /^cmd$/i.test(base);
       if (shell) {
-        const ci = tokens.findIndex((t) => t === '-c');
+        // Combined short flags (`-lc`, `-ic`, `-sc`, `-ec`) carry the
+        // command token too — `bash -lc "cmd"` must unwrap like `-c`.
+        const ci = tokens.findIndex((t) => t === '-c' || /^-[a-z]*c[a-z]*$/i.test(t));
         if (ci !== -1 && ci + 1 < tokens.length) {
           current = tokens.slice(ci + 1).join(' ');
           unwrapped = true;
@@ -389,16 +391,27 @@ function decodeGit(tokens: string[]): DecodedCommand {
   if (verb === '') return cmd('unknown', 'unrecognized', { ambiguous: true });
 
   const hasForce = args.some(
-    (a) => a === '--force' || a === '-f' || a === '--force-with-lease' || a === '--mirror',
+    (a) =>
+      a === '--force' ||
+      a === '--mirror' ||
+      a.startsWith('--force-with-lease') ||
+      // Combined short flags (`-uf`, `-ff`, `-fu`) include force.
+      (a.startsWith('-') && /^-[a-zA-Z]*f[a-zA-Z]*$/.test(a)),
   );
   const hasDelete = args.some((a) => a === '--delete' || (a === '-d' && verb === 'push'));
 
   switch (verb) {
     case 'push': {
       const remote = args.find((a) => !a.startsWith('-')) ?? 'origin';
+      // `git push --all` / `--tags` publish every branch — scope expansion.
+      if (args.some((a) => a === '--all' || a === '--tags')) {
+        return cmd('scope_expansion', 'git_push', { remote, force: false, delete: false });
+      }
       const refspec = args.find((a) => !a.startsWith('-') && a.includes(':'));
       const plainRef = args.filter((a) => !a.startsWith('-') && !a.includes(':'))[1];
-      const plusForce = refspec !== undefined && refspec.startsWith('+');
+      const plusForce =
+        (refspec !== undefined && refspec.startsWith('+')) ||
+        args.some((a) => !a.startsWith('-') && a.startsWith('+'));
       const force = hasForce || plusForce;
       if (hasDelete || (refspec !== undefined && (refspec.startsWith(':') || refspec.endsWith(':')))) {
         return cmd('scope_expansion', 'git_push', { remote, force, delete: true });
@@ -429,7 +442,8 @@ function decodeGit(tokens: string[]): DecodedCommand {
     case 'rebase':
       return cmd('shared_history_rewrite', 'git_history_rewrite');
     case 'clean':
-      return args.some((a) => /^-f/.test(a))
+      // `-f` may be combined (`-xdf`, `-fd`) or written `--force`.
+      return args.some((a) => /^-[a-zA-Z]*f/.test(a) || a === '--force')
         ? cmd('destructive_data_delete', 'git_history_rewrite')
         : cmd('inspect_repository', 'read_local');
     case 'branch': {
@@ -611,7 +625,15 @@ function decodeNonGit(tokens: string[], raw: string): DecodedCommand {
 
   // Deletes.
   if (base === 'rm' || base === 'rmdir') {
-    return /-[a-zA-Z]*[rf][a-zA-Z]*[rf][a-zA-Z]*|--recursive|--force|\/s\b/i.test(raw)
+    // Force/recursive may be combined in one token (`-rf`, `-fr`) or
+    // spread across tokens (`rm -r -f artifacts`) — either form is
+    // destructive.
+    const shortFlags = raw.match(/(?:^|\s)-[a-zA-Z]+/g) ?? [];
+    const destructive =
+      /-[a-zA-Z]*[rf][a-zA-Z]*[rf][a-zA-Z]*|--recursive|--force|\/s\b/i.test(raw) ||
+      // Matches carry the leading separator (" -r") — anchor past it.
+      shortFlags.some((f) => /^\s*-[a-zA-Z]*[rf]/.test(f));
+    return destructive
       ? cmd('destructive_data_delete', 'delete_destructive')
       : cmd('run_local_command', 'delete_local');
   }
@@ -673,7 +695,19 @@ export function decodeCommand(command: string): DecodedCommand {
 
 /** Git-push gate per repo policy (rule 05: force / history / main). */
 export function isGatedGitPush(command: string): boolean {
-  const tokens = tokenize(command);
+  // Wrapper-aware: evaluate every unwrapped segment — the same normalization
+  // decodeCommand applies — so `bash -c "git push --force origin main"`
+  // gates exactly like the plain form.
+  const candidates = splitChains(command).flatMap((s) =>
+    splitChains(unwrapCommandWrappers(s)),
+  );
+  if (candidates.length === 0) return false;
+  return candidates.some(isGatedPushSegment);
+}
+
+/** Force/history/main push check for one unwrapped command segment. */
+function isGatedPushSegment(segment: string): boolean {
+  const tokens = tokenize(segment);
   // Same first-token normalization as decodeCommand: strip path prefixes and
   // `.exe` so wrapper forms (`C:\tools\git.exe push`, `/usr/bin/git push`)
   // resolve to base `git`.
@@ -688,11 +722,13 @@ export function isGatedGitPush(command: string): boolean {
     args.some(
       (a) =>
         a === '--force' ||
-        a === '-f' ||
-        a === '--force-with-lease' ||
         a === '--mirror' ||
         a === '--delete' ||
-        (a.startsWith('+') && a.includes(':')) ||
+        a === '--all' ||
+        a === '--tags' ||
+        a.startsWith('--force-with-lease') ||
+        (a.startsWith('-') && /^-[a-zA-Z]*f[a-zA-Z]*$/.test(a)) ||
+        (a.startsWith('+') && !a.startsWith('+-')) ||
         a.startsWith(':refs/') ||
         a === ':',
     ) || /\b(main|master)\b/.test(args.join(' '))

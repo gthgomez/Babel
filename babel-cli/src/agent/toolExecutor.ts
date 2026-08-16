@@ -640,8 +640,11 @@ export async function executeActionWithPolicy(
   // active (env or explicit override). Additive — no lease → legacy behavior.
   const leaseCtx: LeaseContext = {
     lease: deps.lease !== undefined ? deps.lease : activeLease(),
-    ...(deps.baseline !== undefined
-      ? { baseline: { repoRoot: deps.baselineRepoRoot ?? '', manifest: deps.baseline } }
+    // Drift checks need an explicit capture root: defaulting to the
+    // decision-time cwd would compare against the wrong tree (spurious
+    // DENY_POLICY_INTEGRITY_DRIFT → permanent lease invalidation).
+    ...(deps.baseline !== undefined && deps.baselineRepoRoot !== undefined
+      ? { baseline: { repoRoot: deps.baselineRepoRoot, manifest: deps.baseline } }
       : {}),
   };
   let lastReasonCode: ReasonCode | '' = '';
@@ -726,6 +729,34 @@ export async function executeActionWithPolicy(
     }
   }
 
+  // ── Circuit-breaker: entry check (before the A–D layer — a tripped
+  // session must terminate, not re-enter per-class denial paths) ────────
+  const limit = getCircuitBreakerLimit();
+  const currentBlocks = sessionBlocks.get(context.runId) ?? 0;
+  if (currentBlocks >= limit) {
+    emitAgentEvent({
+      type: 'circuit_breaker',
+      reason: `Session terminated: ${limit} consecutive policy blocks`,
+      consecutiveBlocks: currentBlocks,
+    });
+    return {
+      action,
+      terminal: true,
+      results: [
+        {
+          exit_code: 1,
+          stdout: '',
+          stderr:
+            `[CIRCUIT_BREAKER] Session terminated: ${currentBlocks} consecutive policy blocks. ` +
+            'This indicates the model is persistently attempting actions that policy disallows. ' +
+            'Restart the session to reset the circuit breaker.',
+        },
+      ],
+      policyDecision: 'deny',
+      policyBlocked: true,
+    };
+  }
+
   // ── Autonomy A–D classification (P0-A/C/D) ────────────────────────────
   // The capability broker above classifies by tool NAME. This layer classifies
   // by command SEMANTICS (run_command/test_run text) and by target PATH for
@@ -740,7 +771,13 @@ export async function executeActionWithPolicy(
   if (!isControlAction) {
     const autonomyClass = classifyAutonomyAction(toolName, commandTextForAction(action));
     const target = targetPathFromAction(action);
-    const credentialTarget = target !== undefined && isCredentialTargetPath(target);
+    // apply_patch has no single target path — inspect the patch headers so a
+    // patch touching a credential store denies like a direct write_file.
+    const patchCredentialTargets =
+      action.type === 'apply_patch' ? extractPatchRawTargets(action.patch) : [];
+    const credentialTarget =
+      (target !== undefined && isCredentialTargetPath(target)) ||
+      patchCredentialTargets.some((t) => t !== undefined && isCredentialTargetPath(t));
     if (autonomyClass === 'd_forbidden' || credentialTarget) {
       incrementBlocks(context.runId);
       emitAgentEvent({
@@ -750,6 +787,7 @@ export async function executeActionWithPolicy(
         preset,
         runId: context.runId,
         agentId: context.agentId,
+        rule: 'AUTONOMY_CLASS_D',
       });
       return {
         action,
@@ -784,6 +822,7 @@ export async function executeActionWithPolicy(
           preset,
           runId: context.runId,
           agentId: context.agentId,
+          rule: 'AUTONOMY_CLASS_C_GATE',
         });
         return {
           action,
@@ -803,33 +842,6 @@ export async function executeActionWithPolicy(
       }
       // Approved: continue through the authority decide path below.
     }
-  }
-
-  // ── Circuit-breaker: entry check ───────────────────────────────────
-  const limit = getCircuitBreakerLimit();
-  const currentBlocks = sessionBlocks.get(context.runId) ?? 0;
-  if (currentBlocks >= limit) {
-    emitAgentEvent({
-      type: 'circuit_breaker',
-      reason: `Session terminated: ${limit} consecutive policy blocks`,
-      consecutiveBlocks: currentBlocks,
-    });
-    return {
-      action,
-      terminal: true,
-      results: [
-        {
-          exit_code: 1,
-          stdout: '',
-          stderr:
-            `[CIRCUIT_BREAKER] Session terminated: ${currentBlocks} consecutive policy blocks. ` +
-            'This indicates the model is persistently attempting actions that policy disallows. ' +
-            'Restart the session to reset the circuit breaker.',
-        },
-      ],
-      policyDecision: 'deny',
-      policyBlocked: true,
-    };
   }
 
   let policyDecision = decide(action, preset);

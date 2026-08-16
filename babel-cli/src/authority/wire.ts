@@ -1,11 +1,14 @@
 /**
  * wire.ts — lease-aware decision composite for the tool dispatch PEP.
  *
- * Combines the legacy preset decision (decideAction) with the authority PDP:
- * deny-overrides-allow; ask beats allow; PDP 'verify' maps to 'allow' at
- * dispatch (the completion gate enforces the verify requirement — iteration
- * continues while checks are red). Emits agent audit events with the stable
- * reason code for every PDP decision.
+ * Combines the legacy preset decision (decideAction) with the authority PDP
+ * in a single precedence order — deny > ask > allow — so the strictest
+ * outcome wins from either layer: a read_only preset deny is never
+ * downgraded to an approval prompt, and an ask_before_mutation preset ask
+ * is never dropped by a PDP allow. PDP 'verify' maps to 'allow' at
+ * dispatch (the completion gate enforces the verify requirement —
+ * iteration continues while checks are red). Emits agent audit events with
+ * the stable reason code for every PDP decision.
  *
  * Integrity (MERGE_AND_FIX_P0):
  *  - When a lease AND a session-start baseline manifest are supplied, drift
@@ -150,16 +153,18 @@ export function decideWithLease(
     rule: pdp.reasonCode,
   });
 
-  // Map PDP outcome onto the legacy decision space (deny > ask > allow).
-  switch (pdp.outcome) {
-    case 'deny':
-      return { decision: 'deny', reasonCode: pdp.reasonCode };
-    case 'ask':
-      return { decision: 'ask', reasonCode: pdp.reasonCode };
-    case 'verify':
-      // Iteration continues; completion gate enforces VERIFY_BEFORE_PUBLICATION.
-      return { decision: legacy === 'deny' ? 'deny' : 'allow', reasonCode: pdp.reasonCode };
-    case 'allow':
-      return { decision: legacy === 'deny' ? 'deny' : 'allow', reasonCode: pdp.reasonCode };
+  // Combine legacy and PDP outcomes in a single precedence order
+  // (deny > ask > allow): the strictest outcome wins, so a read_only
+  // preset deny cannot be downgraded to an approval prompt by the PDP,
+  // and an ask_before_mutation preset ask is not silently dropped by a
+  // PDP allow. 'verify' maps to 'allow' at dispatch — the completion
+  // gate enforces the verify requirement.
+  const pdpDecision: PermissionDecision = pdp.outcome === 'verify' ? 'allow' : pdp.outcome;
+  if (legacy === 'deny' || pdpDecision === 'deny') {
+    return { decision: 'deny', reasonCode: pdp.reasonCode };
   }
+  if (legacy === 'ask' || pdpDecision === 'ask') {
+    return { decision: 'ask', reasonCode: pdp.reasonCode };
+  }
+  return { decision: 'allow', reasonCode: pdp.reasonCode };
 }

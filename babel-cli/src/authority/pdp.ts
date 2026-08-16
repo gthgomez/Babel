@@ -10,7 +10,7 @@
  */
 
 import { AutonomyLease } from './lease.js';
-import { CapabilityId, CAPABILITY_KINDS, isProtectedBranch } from './capabilities.js';
+import { CapabilityId, CAPABILITY_KINDS, isAllowedBranchPrefix, isProtectedBranch } from './capabilities.js';
 import { PolicyOutcome, ReasonCode } from './reasonCodes.js';
 
 export interface ActionRequest {
@@ -97,7 +97,24 @@ export function decideActionRequest(
     return { outcome: 'deny', reasonCode: 'DENY_LEASE_MISMATCH', rulesTriggered: triggered };
   }
 
-  // 5. Protected-branch write — ASK (human gate), never silent.
+  // 5. Capability kind + lease membership — fail-closed: a capability the
+  // lease never granted is DENIED, never promoted to an approval path.
+  const kind = CAPABILITY_KINDS[request.capability];
+
+  if (kind === 'forbidden') {
+    return { outcome: 'deny', reasonCode: 'DENY_CREDENTIAL_READ', rulesTriggered: ['capability.forbidden'] };
+  }
+
+  if ((kind === 'local' || kind === 'publication') && !lease.allowedCapabilities.includes(request.capability)) {
+    triggered.push('pdp.not_in_lease');
+    return {
+      outcome: 'deny',
+      reasonCode: 'DENY_UNKNOWN_EXTERNAL_SIDE_EFFECT',
+      rulesTriggered: triggered,
+    };
+  }
+
+  // 6. Protected-branch write — ASK (human gate), never silent.
   const dest = request.destinationBranch;
   if (dest && isProtectedBranch(dest, lease.constraints.protectedBranches)) {
     triggered.push('lease.constraints.protectedBranches');
@@ -106,26 +123,22 @@ export function decideActionRequest(
     }
   }
 
-  // 6. Capability kind resolution.
-  const kind = CAPABILITY_KINDS[request.capability];
-
-  if (kind === 'forbidden') {
-    return { outcome: 'deny', reasonCode: 'DENY_CREDENTIAL_READ', rulesTriggered: ['capability.forbidden'] };
+  // 7. Branch-prefix check — the lease's task-branch contract: pushes must
+  // land on an allowed prefix (`feat/`, `fix/`, …). Denied before any
+  // verify/allow so a non-task branch can never publish.
+  if (dest && !isAllowedBranchPrefix(dest, lease.branchPrefixes)) {
+    triggered.push('lease.branchPrefixes');
+    return {
+      outcome: 'deny',
+      reasonCode: 'DENY_BRANCH_PREFIX',
+      rulesTriggered: triggered,
+    };
   }
 
+  // 8. Gated capability resolution.
   if (kind === 'gated') {
     triggered.push(`lease.gates.${request.capability}`);
     return { outcome: 'ask', reasonCode: askCodeForCapability(request.capability), rulesTriggered: triggered };
-  }
-
-  // 7. Lease membership for local/publication capabilities.
-  if (!lease.allowedCapabilities.includes(request.capability)) {
-    triggered.push('pdp.not_in_lease');
-    return {
-      outcome: 'deny',
-      reasonCode: 'DENY_UNKNOWN_EXTERNAL_SIDE_EFFECT',
-      rulesTriggered: triggered,
-    };
   }
 
   if (kind === 'publication') {

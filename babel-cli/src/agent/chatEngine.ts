@@ -4156,6 +4156,17 @@ export class ChatEngine {
             : {}),
           onDispatchAuthorized: () => this.recoveredOperationDispatchAuthorization(action),
           onBeforeExecutorExecute: () => this.persistToolStartedAtExecutorDispatch(action, meta),
+          // P0-D Class C gate: interactive sessions approve via the same
+          // approval machinery as `ask`; plan mode, CI/headless, and
+          // benchmark-without-approval resolve to deterministic deny.
+          onAutonomyClassCGate:
+            this.executionProfile === 'plan'
+              ? async () => false
+              : autoApproveMutations
+                ? async () => true
+                : process.stdout.isTTY && !process.env['CI']
+                  ? requestChatActionApproval
+                  : async () => false,
           ...this.isolationBrokerFlags(),
           ...(autoApproveMutations
             ? { onAskApproval: async () => true }

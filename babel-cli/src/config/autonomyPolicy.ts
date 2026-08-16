@@ -125,8 +125,11 @@ const A_MUTATE_TOOLS = new Set([
  *  - 'unrecognized' and local classes → null (NOT forbidden).
  *  - Clearly external/public/destructive effects → c_gated (explicit gate).
  *  - Credential exposure → d_forbidden (never, without exceptional instruction).
- *  - Plain `git push` of a non-main branch stays autonomous (rule 05 autonomy
- *    contract); force / history-rewriting / main|master / --delete pushes gate.
+ *  - Plain `git push` of a non-main branch classifies a_autonomous at the
+ *    A–D layer (rule 05 autonomy contract); force / history-rewriting /
+ *    main|master / --delete pushes gate. Publication AUTHORITY still rests
+ *    with the lease/PDP: a class-A default lease denies publication
+ *    (pdp.not_in_lease), and B/C lease it as verify-gated.
  */
 export function autonomyClassForCommandSemantics(
   semantic: CommandSemanticClass,
@@ -416,10 +419,23 @@ const GATED_CAPABILITY_IDS: readonly CapabilityId[] = [
  * The A–D taxonomy is the consequence/UX layer; the lease is how a class is
  * expressed to the PDP (`authority/pdp.ts`). A/B/C scope progressively broader
  * autonomous capability; D allows read-only inspection only. Gated
- * capabilities are never `allowed` — they resolve to ASK (or deny when no
- * gate is wired). `repository` should be supplied by the caller; the
- * placeholder default makes repo-scoped decisions fail closed
- * (DENY_LEASE_MISMATCH) rather than silently broadening the lease.
+ * capabilities are never `allowed` — they resolve to ASK; real force pushes
+ * deny deterministically in every class because the PDP checks
+ * `constraints.forcePush` before the gated branch (C's contract — "explicit
+ * gate or deterministic boundary" — permits either).
+ *
+ * `repository` should be supplied by the caller. The placeholder default
+ * fails closed against any caller that supplies a real repo
+ * (DENY_LEASE_MISMATCH); the dispatch wire path (`actionRequestFromAction`)
+ * does not yet populate `request.repository`, so only remote mismatch fires
+ * through the wire today.
+ *
+ * Lease ids are static per class (`default-a`…`default-d`): baseline-drift
+ * invalidation is keyed by leaseId and permanent within the process, so
+ * long-lived sessions MUST supply a unique `leaseId`.
+ *
+ * `budgets` are declared but not yet enforced (DENY_BUDGET_EXHAUSTED exists
+ * in reasonCodes; no decision path emits it) — enforcement is a future seam.
  */
 export function defaultLeaseForAutonomyClass(
   cls: AutonomyClass,
