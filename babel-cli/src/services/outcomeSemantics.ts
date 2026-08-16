@@ -16,10 +16,12 @@
  *   visible checks pass, contract check fails
  *   → verified_success = false, false_completion = TRUE
  *
- * Pure module: no I/O, no V9-lane imports beyond a type-only TerminalOutcome.
+ * Pure module: no I/O, no V9-lane imports beyond type-only TerminalOutcome and
+ * type-only VerifierReceiptV2.
  */
 
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import type { VerifierReceiptV2 } from '../agent/verifierKernel.js';
 
 /** Failure domains — one of the canonical orthogonal facts. */
 export type FailureDomain =
@@ -192,15 +194,107 @@ export function resolveOutcome(dims: OutcomeDimensions): OutcomeResolution {
   };
 }
 
-/** Build dimensions from a coding-task evaluation input (see codingTaskSuccess.ts). */
-export function dimensionsFromCodingTaskInput(input: {
+/**
+ * Canonical verifier receipt accepted by the coding-task adapter.
+ *
+ * Either the H5 {@link VerifierReceiptV2} (preferred) or the runtime chat
+ * receipt shape (`BoundChatVerifierReceipt`-compatible: `authority` /
+ * `stale` / `boundRevision`). The adapter normalizes both; the two shapes
+ * only ever certify `verificationAuthoritative` / `verificationFresh`
+ * through the receipt — never through the bare `verifierOk` boolean.
+ */
+export type OutcomeVerifierReceipt =
+  | VerifierReceiptV2
+  | {
+      authority?: boolean;
+      stale?: boolean;
+      exit_code: number;
+      timed_out?: boolean;
+      signal?: string | null;
+      tests_failed?: number;
+      boundRevision?: { compositeTreeHash?: string } | null;
+    };
+
+/** Coding-task outcome source (see codingTaskSuccess.ts). */
+export interface CodingTaskOutcomeInput {
   terminalOutcome?: TerminalOutcome | null;
   statusText?: string | null;
   hasSuccessfulMutation: boolean;
   verifierOk?: boolean;
   requireVerifier?: boolean;
   declaredBlocked?: boolean;
-}): OutcomeDimensions {
+  /**
+   * Canonical verifier receipt. Authoritative/fresh/visible-check dimensions
+   * derive ONLY from this — never from `verifierOk` alone.
+   */
+  verifierReceipt?: OutcomeVerifierReceipt | null;
+  /**
+   * Live workspace revision hash at evaluation time. When supplied, the
+   * receipt's bound revision must match (fresh-for-current-revision). When
+   * omitted, the receipt's kernel-maintained freshness stands (the runtime
+   * refreshes staleness against the live workspace before consumers run).
+   */
+  workspaceRevisionHash?: string | null;
+  /**
+   * Completion-gate result for contract/hidden checks (T03-relevant).
+   * Explicit value wins; when absent, derived from the terminal outcome —
+   * the runtime only emits `VERIFIED_COMPLETE` when the completion gate
+   * authorized it, so that terminal outcome IS the gate result.
+   */
+  contractChecksPass?: boolean | null;
+  /** Independent review verdict (reviewer receipt); null = not run. */
+  independentReviewPass?: boolean | null;
+}
+
+interface NormalizedReceipt {
+  authoritative: boolean;
+  kernelFresh: boolean;
+  exit_code: number;
+  timed_out: boolean;
+  signal: string | null;
+  tests_failed: number;
+  revisionHash: string | null;
+}
+
+function normalizeReceipt(receipt: OutcomeVerifierReceipt): NormalizedReceipt {
+  if ('freshness' in receipt) {
+    // VerifierReceiptV2 (canonical H5 shape).
+    const revisionHash =
+      'compositeTreeHash' in receipt.workspace_revision
+        ? receipt.workspace_revision.compositeTreeHash || null
+        : null;
+    return {
+      authoritative: receipt.authoritative === true,
+      kernelFresh: receipt.freshness === 'fresh',
+      exit_code: receipt.exit_code,
+      timed_out: receipt.timed_out === true,
+      signal: receipt.signal ?? null,
+      tests_failed: receipt.tests_failed ?? 0,
+      revisionHash,
+    };
+  }
+  // Legacy runtime chat receipt (BoundChatVerifierReceipt-compatible).
+  return {
+    authoritative: receipt.authority === true,
+    kernelFresh: receipt.stale !== true,
+    exit_code: receipt.exit_code,
+    timed_out: receipt.timed_out === true,
+    signal: receipt.signal ?? null,
+    tests_failed: receipt.tests_failed ?? 0,
+    revisionHash: receipt.boundRevision?.compositeTreeHash ?? null,
+  };
+}
+
+/**
+ * Build dimensions from a coding-task evaluation input (see codingTaskSuccess.ts).
+ *
+ * "Derive, don't extend": a bare `verifierOk` boolean cannot certify that
+ * verification was authoritative or fresh — those dimensions require a real
+ * receipt (with authority metadata and kernel-maintained freshness), and are
+ * additionally bound to the workspace revision when one is supplied. Contract
+ * checks come from the completion-gate result, never from `verifierOk`.
+ */
+export function dimensionsFromCodingTaskInput(input: CodingTaskOutcomeInput): OutcomeDimensions {
   const status = (input.statusText ?? '').toUpperCase();
   const claimedComplete =
     input.declaredBlocked === true
@@ -211,16 +305,37 @@ export function dimensionsFromCodingTaskInput(input: {
           status === 'SUCCESS' ||
           input.terminalOutcome === 'VERIFIED_COMPLETE' ||
           input.terminalOutcome === 'UNVERIFIED_PATCH';
+  const receipt = input.verifierReceipt ?? null;
+  const hasReceipt = receipt !== null;
+  const normalized = hasReceipt ? normalizeReceipt(receipt) : null;
+  const verificationFresh =
+    hasReceipt &&
+    normalized!.kernelFresh &&
+    (input.workspaceRevisionHash == null ||
+      (normalized!.revisionHash !== null &&
+        normalized!.revisionHash === input.workspaceRevisionHash));
+  const visibleChecksPass = hasReceipt
+    ? normalized!.exit_code === 0 &&
+      !normalized!.timed_out &&
+      normalized!.signal === null &&
+      normalized!.tests_failed === 0
+    : input.verifierOk === true;
+  const contractChecksPass =
+    input.contractChecksPass !== undefined
+      ? input.contractChecksPass
+      : input.terminalOutcome === 'VERIFIED_COMPLETE'
+        ? true
+        : null;
   return {
     workerClaimedSuccess: claimedComplete,
     mutationProduced: input.hasSuccessfulMutation,
     verificationRequired: input.requireVerifier === true,
-    verificationAttempted: input.verifierOk !== undefined,
-    verificationAuthoritative: input.verifierOk !== undefined,
-    verificationFresh: input.verifierOk !== undefined,
-    visibleChecksPass: input.verifierOk === true,
-    contractChecksPass: null,
-    independentReviewPass: null,
+    verificationAttempted: hasReceipt || input.verifierOk !== undefined,
+    verificationAuthoritative: hasReceipt && normalized!.authoritative,
+    verificationFresh,
+    visibleChecksPass,
+    contractChecksPass,
+    independentReviewPass: input.independentReviewPass ?? null,
     terminalOutcome: input.terminalOutcome ?? null,
   };
 }

@@ -9,6 +9,7 @@ import { mkdirSync } from 'node:fs';
 import { readFile, writeFile, stat } from 'node:fs/promises';
 
 import { isBabelHeadlessEnv } from '../utils/envFlags.js';
+import { benchmarkAutoApproveEnabled } from './autonomyEnforcement.js';
 import { resolveProjectPath } from '../utils/projectPath.js';
 
 import { trace, SpanStatusCode, type Span } from '@opentelemetry/api';
@@ -3036,6 +3037,9 @@ export class ChatEngine {
       });
     }
     // P0-E: attach shadow later-succeeded summary before export (idempotent with buildResult).
+    // P0-F: wire the derived OutcomeDimensions — the real receipt (its `stale`
+    // flag was just refreshed against the live workspace by decideCompletion)
+    // and the completion-gate result (the final outcome IS the gate decision).
     recordPolicyShadowSessionOutcome(this.policyEventLog, {
       atTurn: this._turnIndex,
       hasSuccessfulMutation: hasMutation,
@@ -3045,6 +3049,8 @@ export class ChatEngine {
         verifierOk: this.lastVerifierReceipt?.exit_code === 0,
         requireVerifier: false,
         declaredBlocked: Boolean(extra?.blockedReport),
+        verifierReceipt: this.lastVerifierReceipt ?? null,
+        contractChecksPass: outcome === 'VERIFIED_COMPLETE' ? true : null,
       }),
       terminalOutcome: outcome,
     });
@@ -3881,7 +3887,7 @@ export class ChatEngine {
       // ── str_replace via governed mutation path (policy/checkpoint/cache) ──
       if (action.type === 'str_replace') {
         const autoApprove =
-          isBabelHeadlessEnv() || process.env['BABEL_BENCHMARK_AUTO_APPROVE'] === '1';
+          isBabelHeadlessEnv() || benchmarkAutoApproveEnabled();
         const gov = await governedStrReplace(
           { file_path: action.file_path, old_str: action.old_str, new_str: action.new_str },
           {
@@ -4124,8 +4130,7 @@ export class ChatEngine {
       // Standard tool execution via policy gate
       const agentAction = mapChatActionToAgentAction(action);
       const autoApproveMutations =
-        isBabelHeadlessEnv() ||
-        process.env['BABEL_BENCHMARK_AUTO_APPROVE'] === '1';
+        isBabelHeadlessEnv() || benchmarkAutoApproveEnabled();
       const result: PolicyGatedExecutionResult = await executeActionWithPolicy(
         agentAction,
         // workspace_write = mutations auto-execute without user approval.
@@ -5216,12 +5221,17 @@ export class ChatEngine {
 
     // P0-E: if any kill-switch ran in shadow mode, record whether the task
     // later succeeded (mutation / coding-task gate) for precision/recall.
+    // P0-F: wire the derived OutcomeDimensions — the real receipt (its `stale`
+    // flag was just refreshed against the live workspace by decideCompletion)
+    // and the completion-gate result (authoritativeOutcome IS the gate decision).
     const codingPassed = isCodingTaskSuccess({
       terminalOutcome: authoritativeOutcome,
       hasSuccessfulMutation: hasMutation,
       verifierOk: this.lastVerifierReceipt?.exit_code === 0,
       requireVerifier: false,
       declaredBlocked: Boolean(finalBlockedReport),
+      verifierReceipt: this.lastVerifierReceipt ?? null,
+      contractChecksPass: authoritativeOutcome === 'VERIFIED_COMPLETE' ? true : null,
     });
     recordPolicyShadowSessionOutcome(this.policyEventLog, {
       atTurn: this._turnIndex,

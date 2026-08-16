@@ -5,7 +5,29 @@ import {
   classifyCodingTaskGateDetailed,
   isCodingTaskSuccess,
 } from './codingTaskSuccess.js';
+import { buildVerifierReceiptV2 } from '../agent/verifierKernel.js';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
+
+/** Canonical H5 receipt for a green authoritative full-suite run (P0-F O05/O06 fixture). */
+function greenCanonicalReceipt(revisionHash = 'abc123') {
+  return buildVerifierReceiptV2({
+    receipt_id: 'gate-r1',
+    verifier_id: 'npm-test',
+    argv: ['npm', 'test'],
+    cwd: '.',
+    env_profile_hash: 'test-env',
+    started_at: '2026-08-15T00:00:00.000Z',
+    ended_at: '2026-08-15T00:00:01.000Z',
+    exit_code: 0,
+    stdout: 'ok',
+    stderr: '',
+    workspace_revision: { compositeTreeHash: revisionHash },
+    scope: 'full_suite',
+    command: 'npm test',
+    authoritative: true,
+    freshness: 'fresh',
+  });
+}
 
 function dims(overrides: Partial<OutcomeDimensions>): OutcomeDimensions {
   return {
@@ -163,12 +185,17 @@ test('outcome: non-authoritative verifier (agent-owned probe) → FALSE_COMPLETI
 // ─── Integration with the coding-task gate (§11 invariant) ──────────────────
 
 const G = {
+  // P0-F: verified success now requires the canonical receipt + workspace
+  // revision + completion-gate result — a bare verifierOk cannot certify.
   verifiedComplete: {
     terminalOutcome: 'VERIFIED_COMPLETE' as TerminalOutcome,
     statusText: 'COMPLETE',
     hasSuccessfulMutation: true,
     verifierOk: true,
     requireVerifier: true,
+    verifierReceipt: greenCanonicalReceipt(),
+    workspaceRevisionHash: 'abc123',
+    contractChecksPass: true,
   },
   legitUnverified: {
     terminalOutcome: 'UNVERIFIED_PATCH' as TerminalOutcome,
@@ -212,6 +239,21 @@ test('coding-gate invariant: generic pass ≠ verified_success', () => {
   assert.equal(verified.verdict, 'pass');
   assert.equal(verified.verifiedSuccess, true);
   assert.equal(verified.falseCompletion, false);
+});
+
+test('coding-gate: bare verifierOk cannot certify verified_success (P0-F O05)', () => {
+  // Same claim shape as G.verifiedComplete but WITHOUT receipt/revision/gate
+  // result — the legacy boolean must not fabricate authoritative/fresh.
+  const bare = classifyCodingTaskGateDetailed({
+    terminalOutcome: 'VERIFIED_COMPLETE' as TerminalOutcome,
+    statusText: 'COMPLETE',
+    hasSuccessfulMutation: true,
+    verifierOk: true,
+    requireVerifier: true,
+  });
+  assert.equal(bare.verdict, 'pass'); // legacy verdict unchanged
+  assert.equal(bare.verifiedSuccess, false); // not certified by a bare boolean
+  assert.equal(bare.falseCompletion, true); // claim implied verified success
 });
 
 test('coding-gate: claim + failing verifier is fail + FALSE_COMPLETION', () => {

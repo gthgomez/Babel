@@ -20,27 +20,22 @@ import {
 import {
   dimensionsFromCodingTaskInput,
   resolveOutcome,
+  type CodingTaskOutcomeInput,
   type OutcomeLabel,
 } from './outcomeSemantics.js';
 
 /** Gate verdict for coding-task evaluation (not smoke-honesty). */
 export type CodingTaskGateVerdict = 'pass' | 'fail' | 'diagnostic';
 
-export interface CodingTaskSuccessInput {
-  /** Honest terminal outcome when available. */
-  terminalOutcome?: TerminalOutcome | null;
-  /** Legacy payload status (ANSWER_READY, BLOCKED, …). */
-  statusText?: string | null;
+/**
+ * Coding-task success input. Extends the canonical outcome source so the
+ * detailed classification can derive the P0-F dimensions from a real
+ * verifier receipt + workspace revision + completion-gate result instead of
+ * the bare `verifierOk` boolean (regression-gate O05/O06).
+ */
+export interface CodingTaskSuccessInput extends CodingTaskOutcomeInput {
   /** Agent answer / blocked narrative. */
   answerText?: string | null;
-  /** True when the session produced at least one successful file mutation. */
-  hasSuccessfulMutation: boolean;
-  /** Verifier commands passed when run. */
-  verifierOk?: boolean;
-  /** When true, verifierOk must be true for pass (default false → patch without verifier can pass). */
-  requireVerifier?: boolean;
-  /** Explicit blocked_report present. */
-  declaredBlocked?: boolean;
 }
 
 /**
