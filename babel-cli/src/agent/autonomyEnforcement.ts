@@ -69,7 +69,7 @@ export function resolveAutonomyPreset(
   return 'workspace_write';
 }
 
-// ─── Benchmark-mode gate (P0-B) ──────────────────────────────────────────────
+// ─── Benchmark-mode gate (P0-4) ──────────────────────────────────────────────
 
 /**
  * True when BABEL_BENCHMARK_AUTO_APPROVE is honored (P0-4 contract).
