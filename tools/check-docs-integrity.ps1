@@ -72,14 +72,14 @@ function Add-Finding {
 
 function Get-RelativePath {
   param([string]$Path)
-  $rootWithSeparator = $RepoRoot.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
-  try {
-    $rootUri = [Uri]$rootWithSeparator
-    $pathUri = [Uri]$Path
-    return [Uri]::UnescapeDataString($rootUri.MakeRelativeUri($pathUri).ToString()).Replace('\', '/')
-  } catch {
-    return $Path
+  # String-based relativization (platform-independent): [Uri]::MakeRelativeUri throws on
+  # Linux for scheme-less absolute paths, which silently defeated the archive-README skip.
+  $rootNormalized = ($RepoRoot.TrimEnd('\', '/')).Replace('\', '/') + '/'
+  $pathNormalized = $Path.Replace('\', '/')
+  if ($pathNormalized.StartsWith($rootNormalized, [System.StringComparison]::OrdinalIgnoreCase)) {
+    return $pathNormalized.Substring($rootNormalized.Length)
   }
+  return $pathNormalized
 }
 
 function Normalize-Text {
