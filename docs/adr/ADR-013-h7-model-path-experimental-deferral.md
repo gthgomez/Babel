@@ -4,11 +4,30 @@ last_verified: 2026-08-06
 architecture_version: harness-v1
 -->
 
-# ADR-013 — H7 model-path factorial measurement path
+# ADR-013 — H7 Model-Path Factorial Measurement Scope
 
 > **Date**: 2026-08-06  
 > **Status**: Accepted (amended same day: model-path cells measured via OpenRouter)  
 > **Related**: [HARNESS_HARDENING_ROADMAP_V1.md](../architecture/HARNESS_HARDENING_ROADMAP_V1.md) §H7, [ADR-012](./ADR-012-canonical-harness-architecture-v1.md)
+
+---
+
+## Current state (2026-08-15)
+
+The same-day amendment resolved the title conflict: model-path measurement was initially
+**deferred** (no first-party keys), and later **limited same-model measurements became
+available** (OpenRouter).
+
+- **IMPLEMENTED / MEASURED:** local evaluation substrate; offline harness-factor factorial;
+  limited same-model LLM factorial (`runSameModelLlmFactorial`, fixed controls) where
+  actually evidenced.
+- **NOT PROVEN:** full multi-stage Deep pipeline factorial (the Deep cell uses ChatEngine
+  `executionProfile=deep`, not the full pipeline); broad SWE reliability lift; competitor
+  comparisons; generalized provider/model conclusions.
+
+Present-tense claims in the original text saying the model-path factorial is "explicitly
+deferred" refer to the *initial* state before the same-day amendment; the measured cells
+exist as scoped above.
 
 ---
 
@@ -46,7 +65,7 @@ Later in the same program, **OPENROUTER_API_KEY** became available. `runSameMode
 
 ### Positive
 
-- Honest maturity: offline harness-factor measured; model-path factorial explicitly deferred.
+- Honest maturity: offline harness-factor measured; model-path factorial measured only within the scoped same-model cells above.
 - H1–H6 program completion is not held hostage by missing API keys.
 - Clear reactivation path for H7 model-path evidence.
 

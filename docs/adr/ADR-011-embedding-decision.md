@@ -1,4 +1,4 @@
-# R2.5 — Embedding Provider Decision
+# ADR-011: Optional Embedding Provider with Local FTS Fallback
 
 <!--
 status: ACTIVE
@@ -6,7 +6,28 @@ last_verified: 2026-08-08
 -->
 > **Date**: 2026-07-03
 > **Source**: OSS-2 / R2.5 from the architectural audit
-> **Status**: Implemented — OpenAI embeddings are optional and FTS5 remains the fallback
+> **Status**: Implemented — external embeddings are optional and FTS5 remains the local fallback
+>
+> **Heading normalized 2026-08-15** (was "R2.5 — Embedding Provider Decision"). The original
+> provider-selection rationale is preserved below as historical evaluation evidence.
+
+---
+
+## 0. Durable decision (current)
+
+1. **External embeddings are optional.** Embeddings stay disabled until a valid embedding
+   API key is configured (`BABEL_EMBEDDING_API_KEY` / provider key; explicit disable via
+   `BABEL_EMBEDDING_DISABLE=1`).
+2. **FTS5 remains the local fallback.** Provider failure, rate limiting, missing keys, or
+   `sqlite-vec` load failure must never remove local search.
+3. **Embedding enablement is external content egress.** Do not enable embeddings for
+   repositories whose policy forbids sending content to an external service.
+4. **Vector dimension/configuration must remain schema-compatible.** The vec0 table
+   dimension is baked into the SQLite schema; changing it requires drop/recreate/re-index
+   (see §7).
+5. **Provider choice is not architecture.** `BABEL_EMBEDDING_BASE_URL` may select any
+   compatible provider; the initial OpenAI selection is historical evidence, not a
+   permanent architectural commitment.
 
 ---
 
@@ -39,9 +60,9 @@ semantic search unavailable.
 |--------|-----------|
 | **Dimension match** | `text-embedding-3-small` outputs 384-dim vectors by default — exact match with the existing vec0 table schema (`FLOAT[384]`) |
 | **API key exists** | An API key can be configured (listed as "Optional provider key for future/provider-specific surfaces") |
-| **Cost** | $0.02/1M tokens. Indexing a large project (~500 files × ~100K tokens/file = 50M tokens) costs **~$1.00**. Incremental re-indexing costs near zero. |
+| **Cost** | Historical evaluation input — see [Historical evaluation inputs](#historical-evaluation-inputs--2026-07-03) |
 | **No new dependencies** | Can call the REST API directly via `fetch` (already used extensively in the codebase). No SDK needed. |
-| **Latency** | ~100ms per call; batch API supports up to 2048 inputs per call |
+| **Latency** | Historical evaluation input — see [Historical evaluation inputs](#historical-evaluation-inputs--2026-07-03) |
 | **Maturity** | OpenAI embeddings are the industry default; behavior is well-understood and deterministic |
 
 ### Why not local/offline embedding?
@@ -105,9 +126,17 @@ The embedding path is **strictly additive** — it never blocks or degrades exis
 
 ---
 
-## 6. Cost Estimate
+## Historical evaluation inputs — 2026-07-03
 
-**One-time indexing cost** (per project):
+> **Non-normative; values may change.** Pricing, latency, batch sizes, and cost estimates
+> were evaluation inputs at decision time, not architecture facts. Do not cite them as
+> current provider facts.
+
+**Cost at evaluation time:** $0.02/1M tokens; indexing a large project (~500 files ×
+~100K tokens/file = 50M tokens) ≈ $1.00; incremental re-indexing near zero.
+**Latency at evaluation time:** ~100ms per call; batch API up to 2048 inputs per call.
+
+**One-time indexing cost estimate** (per project, at evaluation time):
 
 | Project size | Files | Tokens | Cost |
 |-------------|-------|--------|------|
@@ -115,11 +144,14 @@ The embedding path is **strictly additive** — it never blocks or degrades exis
 | Medium (~500 files) | 500 | ~50M | $1.00 |
 | Large (~2000 files) | 2000 | ~200M | $4.00 |
 
-**Per-query cost**: Negligible — one embedding call per `semantic_search` invocation (~10–100 tokens = $0.0000002–$0.000002).
+**Per-query cost**: Negligible — one embedding call per `semantic_search` invocation
+(~10–100 tokens = $0.0000002–$0.000002).
 
-**Incremental re-indexing**: Near zero — only newly added/changed files are re-embedded (`has_embedding = 0` increment).
+**Incremental re-indexing**: Near zero — only newly added/changed files are re-embedded
+(`has_embedding = 0` increment).
 
-**Monthly cost**: If a user runs indexing once and makes ~1000 semantic searches/month: ~$1.02/month.
+**Monthly cost**: If a user runs indexing once and makes ~1000 semantic searches/month:
+~$1.02/month.
 
 ---
 

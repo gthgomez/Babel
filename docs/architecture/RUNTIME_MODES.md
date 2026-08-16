@@ -59,10 +59,10 @@ Key source files:
 - `babel-cli/src/services/sessionCheckpoint.ts` — checkpoint/restore
 - `babel-cli/src/services/chatSessionIndex.ts` — session listing for resume
 
-### Editor / Chat Surface Mode
+### Editor / Chat Surface Mode (instruction-only use)
 
-When working in an editor, chat surface, or web chat, Babel
-operates as an instruction layer rather than a runtime. Tell the model:
+When working in an editor, chat surface, or web chat, Babel's prompt assets
+may be used as an **instruction layer** for another host/model. Tell the model:
 
 ```text
 Read BABEL_BIBLE.md and use Babel before planning or completing this task.
@@ -71,6 +71,18 @@ Read BABEL_BIBLE.md and use Babel before planning or completing this task.
 The model reads `BABEL_BIBLE.md`, selects the correct instruction layers from
 the prompt catalog, and follows the Standard Babel Workflow. Session lifecycle
 is handled by the editor/inference surface, not by Babel's TUI runtime.
+
+> **Critical distinction — instruction-only use is NOT Babel runtime use.**
+>
+> When the Babel process owns the run (`babel`, `babel plan`, `babel deep`, the
+> TUI/REPL, `babel run`), Babel owns the **tools, permissions, sessions,
+> completion, evidence, and verification** — the harness protections apply.
+>
+> When Babel prompt assets merely guide another host/model (editor, chat
+> surface, web chat), **Babel runtime protections do NOT automatically apply.**
+> The external host owns execution, permissions, isolation, and final actions.
+> Babel's completion honesty, evidence, and verification machinery do not
+> exist in that host unless the host provides equivalent protections itself.
 
 ### Advanced / CI
 

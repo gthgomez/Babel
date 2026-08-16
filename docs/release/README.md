@@ -2,21 +2,22 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-07-21
+last_verified: 2026-08-15
 -->
 
-> **Role**: Release checklists, content guidelines, and OSS readiness gates.
+> **Role**: Release policy, public-content rules, and release operations for the public canonical repository.
 
-## Active Release References
+## Release / Public Content
 
 | Document | Description |
 | :--- | :--- |
-| [PUBLIC_EXPORT_CHECKLIST.md](./PUBLIC_EXPORT_CHECKLIST.md) | **Public Content Guidelines**: Guidelines for what content belongs in the canonical repository. |
-| [PUBLIC_REPO_SANITIZATION_RULES.md](./PUBLIC_REPO_SANITIZATION_RULES.md) | **Public Repo Content Policy**: Rules governing what may be contributed to the public repo. |
-| [SURFACE_CLASSIFICATION_GATE.md](./SURFACE_CLASSIFICATION_GATE.md) | **Surface Classification Gate**: Classify content surfaces as development, internal, or public-release. |
-| [BABEL_OSS_READINESS_CHECKLIST.md](./BABEL_OSS_READINESS_CHECKLIST.md) | **OSS Readiness**: Open-source release readiness assessment. |
-| [PUBLIC_EXPORT_REPO_ROLE.md](./PUBLIC_EXPORT_REPO_ROLE.md) | **Public Repo Role**: Role and content guidelines for the canonical public repository. |
+| [**PUBLIC_REPO_CONTENT_POLICY.md**](./PUBLIC_REPO_CONTENT_POLICY.md) | **Normative public-content policy**: what may be contributed to the public repo. |
+| [PUBLIC_RELEASE_CHECKLIST.md](./PUBLIC_RELEASE_CHECKLIST.md) | Operational release checklist derived from the content policy. |
+| [RELEASE.md](./RELEASE.md) | Versioning, tags, pinning, changelog, security-release behavior. |
+| [SURFACE_CLASSIFICATION_GATE.md](./SURFACE_CLASSIFICATION_GATE.md) | Surface classification gate (development / internal_shared / public_release / release_artifact). |
 
-## Legacy Workflow Documents
+## Historical
 
-The legacy private-to-public export workflow documents (PRIVATE_TO_PUBLIC_WORKFLOW.md, BABEL_PUBLIC_BOOTSTRAP.md) have been removed. The project now uses Option A where the public GitHub repository (gthgomez/Babel) is the independent canonical source.
+Pre-open-source material is archived in [docs/archive/release/](../archive/release/)
+(`BABEL_OSS_READINESS_CHECKLIST.md` — HISTORICAL; `PUBLIC_EXPORT_REPO_ROLE.md` —
+SUPERSEDED by the content policy). Archived material is not current authority.

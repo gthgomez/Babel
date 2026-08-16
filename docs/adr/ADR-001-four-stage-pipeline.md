@@ -8,6 +8,13 @@ last_verified: 2026-07-03
 **Date:** 2026-06-19  
 **Deciders:** Babel team  
 
+> **Scope clarification (2026-08-15):** This ADR defines the governed multi-stage pipeline
+> used by **Deep** (`babel deep`). It does **not** require ChatEngine or every Babel
+> controller to execute through the four-stage pipeline. Chat (`babel "<task>"`) runs the
+> ChatEngine loop with the unified executor kernel; Plan runs the approval-first plan lane.
+> [ADR-012](./ADR-012-canonical-harness-architecture-v1.md) governs the current
+> three-controller architecture (chat / plan / deep).
+
 ## Context
 
 AI coding tools typically use a single-stage architecture: prompt → LLM response → execute. This is fast but has no safety checks between planning and execution. The model that generates the plan is the same model that executes it, with no independent verification.

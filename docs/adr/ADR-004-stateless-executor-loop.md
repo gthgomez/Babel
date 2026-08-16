@@ -8,6 +8,16 @@ last_verified: 2026-07-03
 **Date:** 2026-06-19  
 **Deciders:** Babel team  
 
+> **Scope amendment (2026-08-15):** The durable invariant of this ADR is that
+> **provider-native conversational state is not authoritative execution state**. The
+> unqualified sentence in Compliance ("All state is in the `executionHistory` string and the
+> in-memory `toolCallLog` array") describes the original executor-loop implementation and is
+> **no longer the full picture**: Babel now has durable task authority, event/session state,
+> checkpoints, revision identity, verifier receipts, budgets, evidence, and completion
+> authority (see [HARNESS_ARCHITECTURE_V1.md](../architecture/HARNESS_ARCHITECTURE_V1.md)).
+> Future provider-native continuation may be used as an optional opaque/cognitive capability
+> only if Babel-owned authoritative state remains independent.
+
 ## Context
 
 Multi-turn tool execution can be implemented as either: (1) a stateful agent loop (the model maintains internal state across turns, like the Anthropic SDK's message history), or (2) a stateless text-loop (execution history is accumulated as a string and appended to the prompt on each iteration).

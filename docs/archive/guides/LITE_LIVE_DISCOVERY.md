@@ -1,9 +1,16 @@
 # Lite Live Discovery Harness
 
 <!--
-status: ACTIVE
+status: HISTORICAL
 last_verified: 2026-07-03
 -->
+> **Archived (2026-08-15).** Test-harness history. This harness still exists internally
+> (`npm --prefix .\babel-cli run test:live-lite-discovery`) and exercises the retired
+> Lite verb lanes (`ask`, `do`, `fix`, `propose`, `review`) through the internal lite CLI.
+> Those verbs are **not** public CLI commands — the public surface is
+> `babel "<task>"`, `babel plan`, `babel deep`, `babel chat-headless`. Preserved as
+> test-harness evidence and history.
+
 Date: 2026-06-07
 
 This guide documents the Lite discovery harness that exercises read-only and mutation routing across a seeded parity fixture repo and an optional real-world checkout.
@@ -73,7 +80,7 @@ Discovery intentionally does **not** cover:
 
 ## Related guides
 
-- [Lite command contract](../LITE_COMMAND_CONTRACT.md) — daily verb semantics
+- [CLI command contract](../../CLI_COMMAND_CONTRACT.md) — current command semantics (the Lite-era verb semantics live in its Historical Context section)
 
 ## Manual repro
 

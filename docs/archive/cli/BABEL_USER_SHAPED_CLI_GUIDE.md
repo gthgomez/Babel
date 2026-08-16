@@ -1,8 +1,17 @@
 <!--
-status: ACTIVE
+status: SUPERSEDED
 last_verified: 2026-07-03
 -->
 # Babel User-Shaped CLI Guide
+
+> **Archived (2026-08-15).** This is a historical design-direction document from the
+> Lite-era CLI consolidation. Some guidance in it (e.g. keeping `bl`/`babel-lite` callable)
+> describes surfaces that have since been **removed**.
+>
+> Superseded by:
+> - [CLI_COMMAND_CONTRACT.md](../../CLI_COMMAND_CONTRACT.md)
+> - [CLI_QUICKSTART.md](../../CLI_QUICKSTART.md)
+> - [CHAT_MODE.md](../../CHAT_MODE.md)
 
 Date: 2026-05-31
 

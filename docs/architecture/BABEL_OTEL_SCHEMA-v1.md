@@ -14,7 +14,10 @@ last_verified: 2026-07-03
 -->
 # Babel OTel Schema v1
 
-Babel v10 Phase 1 adds additive OpenTelemetry tracing for the control plane. Tracing is disabled by default and can be enabled with `BABEL_OTEL_ENABLED=true`. When enabled, Babel emits safe lifecycle metadata only and writes `07_trace_context.json` into the run bundle for correlation.
+The Babel OTel schema v1 defines additive OpenTelemetry tracing for the control plane.
+Tracing is **optional and disabled by default**; it can be enabled with
+`BABEL_OTEL_ENABLED=true`. When enabled, Babel emits safe lifecycle metadata only and
+writes `07_trace_context.json` into the run bundle for correlation.
 
 ## Span Model
 
@@ -26,11 +29,11 @@ Babel v10 Phase 1 adds additive OpenTelemetry tracing for the control plane. Tra
 
 ## Safe Attributes
 
-Phase 1 prefers IDs, enums, booleans, counters, hashes, and normalized metadata. Representative attributes include orchestrator version, requested/effective pipeline mode, selected entry counts, hashed ordered entry IDs, token budget totals, QA verdict, Evidence Gate status, CI metadata, VCS metadata, and deploy metadata.
+The schema prefers IDs, enums, booleans, counters, hashes, and normalized metadata. Representative attributes include orchestrator version, requested/effective pipeline mode, selected entry counts, hashed ordered entry IDs, token budget totals, QA verdict, Evidence Gate status, CI metadata, VCS metadata, and deploy metadata.
 
 ## Baggage
 
-Phase 1 baggage is intentionally small:
+Baggage is intentionally small:
 
 - `babel.lane.id`
 - `babel.evidence_gate.status`

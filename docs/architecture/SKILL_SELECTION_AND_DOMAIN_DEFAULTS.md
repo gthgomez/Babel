@@ -1,13 +1,13 @@
-# Skill Catalog Loading And Domain Default Policy
+# Skill Selection And Domain Default Policy
 
 <!--
 status: ACTIVE
-last_verified: 2026-07-03
+last_verified: 2026-08-15
 -->
-This document records PR3 routing discipline for `skill_catalog` and `default_skill_ids`
-on domain architects. It complements `SKILL_SYSTEM_BRIDGE.md` (prompt vs package surfaces).
+This document records PR3 routing discipline for `default_skill_ids`
+on domain architects. It complements [SKILL_SYSTEM_BRIDGE.md](./SKILL_SYSTEM_BRIDGE.md) (prompt vs package surfaces).
 
-## `skill_catalog` (secondary index)
+## `skill_catalog` — eliminated secondary index (historical record)
 
 | Field | Policy |
 |-------|--------|
@@ -17,17 +17,18 @@ on domain architects. It complements `SKILL_SYSTEM_BRIDGE.md` (prompt vs package
 | **Selection** | *(was `discoverable` — the JIT skill selection use case is now served directly from `prompt_catalog.yaml`)* |
 | **Token budget** | *(reclaimed ~200 tokens)* |
 
-### When to load
+### Canonical catalog truth
 
-Load `skill_catalog` only when:
+`prompt_catalog.yaml` is the **sole authoritative catalog**. `02_Skills/Skill-Catalog.yaml` is a
+**generated mirror** of the same data — non-authoritative, regenerated from the catalog. Never
+edit the mirror as a source of truth, and never treat it as a second registry.
 
-- the operator or router needs the full skill id → path registry for JIT selection, or
-- a manifest explicitly includes `skill_catalog` in `instruction_stack.skill_ids` / config ids.
+### When the generated mirror may be used
 
-Do **not** treat it as part of the default backend, frontend, Android, or research stacks.
-`prompt_catalog.yaml` remains the canonical registry; `Skill-Catalog.yaml` is a generated mirror.
+Use `02_Skills/Skill-Catalog.yaml` only when a tool needs the full skill id → path registry for
+JIT selection without parsing `prompt_catalog.yaml`. It is a convenience index, not policy.
 
-### When not to load
+### When not to use it
 
 - Ordinary implementation tasks where domain `default_skill_ids` and explicit `skill_ids` suffice.
 - Token-budget-sensitive previews where +5k tokens would crowd out behavioral OS and domain shells.

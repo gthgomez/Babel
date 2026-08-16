@@ -1,16 +1,26 @@
 # Babel Lite
 
 <!--
-status: STALE
+status: SUPERSEDED
 last_verified: 2026-07-03
 -->
-> **2026-06-10:** User-facing CLI consolidated to `babel "<task>"`, `babel plan`, `babel deep`, `babel undo`. Removed `bl`/`lite`/`ask`/`do`/`fix` verbs exit with hints. Canonical contract: [LITE_COMMAND_CONTRACT.md](../LITE_COMMAND_CONTRACT.md).
+> **Archived (2026-08-15).** Historical Lite-era architecture. The Lite/Full product split
+> and the `AgentSession` session model it describes are retired. The daily lane is
+> ChatEngine (`babel "<task>"`); governed work is `babel deep`; completion/verification
+> authority is defined by the runtime harness.
+>
+> Superseded by:
+> - [CLI_COMMAND_CONTRACT.md](../../CLI_COMMAND_CONTRACT.md)
+> - [CHAT_MODE.md](../../CHAT_MODE.md)
+> - [HARNESS_ARCHITECTURE_V1.md](../../architecture/HARNESS_ARCHITECTURE_V1.md)
+>
+> **2026-06-10:** User-facing CLI consolidated to `babel "<task>"`, `babel plan`, `babel deep`, `babel undo`. Removed `bl`/`lite`/`ask`/`do`/`fix` verbs exit with hints. Canonical contract: [CLI_COMMAND_CONTRACT.md](../../CLI_COMMAND_CONTRACT.md).
 >
 > **2026-06-12:** TUI-hybrid Slices 2–3 shipped bounded verify→repair (`smallFix.ts`), live tool stream, REPL chat streaming, and run HUD prelude.
 
 Babel Lite is the underlying single-agent session model for Babel's companion workflow. The user-facing CLI teaches `babel "<task>"`, `babel plan`, and `babel deep` on top of that session model.
 
-Canonical contract: [docs/LITE_COMMAND_CONTRACT.md](../LITE_COMMAND_CONTRACT.md)
+Canonical contract: [CLI_COMMAND_CONTRACT.md](../../CLI_COMMAND_CONTRACT.md)
 
 It is not a replacement for general-purpose coding agents, not a provider-agnostic autonomous executor, and not proof of mutating live subagents. The current product target is a direct daily CLI: Lite is the front door, and intent decides the lane. Complex read-only planning can stay in Lite with read-only Spark critique; clear implementation work can route to fix or governed Full when risk warrants it. Full should become orchestration over isolated Lite sessions, not a separate mutating engine.
 
@@ -41,7 +51,7 @@ removed shims   bl / lite / ask / do / fix / full / propose / patch / review (ex
 
 Docs should teach `babel "<task>"`, `babel plan`, `babel deep`, and `babel undo` before advanced `babel run` forms. Removed `bl` / `lite` / `ask` / `do` / `fix` verbs exit with stderr hints — do not teach them as primary paths.
 
-Babel Full orchestration contract: [docs/architecture/BABEL_FULL_ORCHESTRATION.md](./BABEL_FULL_ORCHESTRATION.md)
+Babel Full orchestration contract: [BABEL_FULL_ORCHESTRATION.md](./BABEL_FULL_ORCHESTRATION.md) (archived)
 
 ## Provider-Contract Lite Status
 
@@ -73,7 +83,7 @@ The provider supplies reasoning; Babel owns authority over file access, command 
 
 ## Artifact Direction
 
-The target artifact layout is documented in [docs/LITE_COMMAND_CONTRACT.md](../LITE_COMMAND_CONTRACT.md). The important product rule is simpler than the exact file list:
+The target artifact layout is documented in [CLI_COMMAND_CONTRACT.md](../../CLI_COMMAND_CONTRACT.md) (Historical Context section). The important product rule is simpler than the exact file list:
 
 - read-only commands must not edit source files
 - proposal commands must not apply patches

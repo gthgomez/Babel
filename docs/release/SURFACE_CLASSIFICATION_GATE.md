@@ -43,8 +43,10 @@ Use for content intended for the public canonical repo.
 Use for release notes, README, `START_HERE.md`, examples, and other public-facing assets.
 
 - Optimize for clarity, first success, and safety
-- Keep `v9` as the visible runtime story
-- Do not describe `v8` as an active compatibility fallback
+- Teach the current CLI surfaces (`babel "<task>"`, `babel plan`, `babel deep`,
+  `babel chat-headless`) and the current runtime architecture; never teach removed
+  surfaces (Lite/Full/`bl`/Lite-era verbs) as active
+- Do not describe retired orchestrator versions (`v8`) as an active compatibility fallback
 - Do not add operator context or system-specific details
 
 ## Default Rule

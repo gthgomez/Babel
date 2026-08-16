@@ -108,5 +108,5 @@ node .\dist\index.js doctor
 - [docs/VISION.md](./docs/VISION.md) for current state and where Babel is going
 - [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md) for copy-paste CLI flows
 - [docs/architecture/ARCHITECTURE.md](./docs/architecture/ARCHITECTURE.md) for the technical shape
-- [docs/architecture/BABEL_LOCAL_MODE.md](./docs/architecture/BABEL_LOCAL_MODE.md) for runtime expectations
+- [docs/architecture/RUNTIME_MODES.md](./docs/architecture/RUNTIME_MODES.md) for runtime expectations
 - [BABEL_BIBLE.md](./BABEL_BIBLE.md) if you are wiring Babel into another model/client surface

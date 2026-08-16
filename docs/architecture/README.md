@@ -2,47 +2,47 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-08-05
+last_verified: 2026-08-15
 -->
 
 > **Role**: Architecture guides, layer model specifications, and execution contract documentation for Babel.
 
-## Start here (agents)
+## Canonical / Normative
 
 | Document | Description |
 | :--- | :--- |
-| [**HARNESS_ARCHITECTURE_V1.md**](./HARNESS_ARCHITECTURE_V1.md) | **Normative** runtime harness specification (`harness-v1`). Authority: canonical. |
-| [HARNESS_HARDENING_ROADMAP_V1.md](./HARNESS_HARDENING_ROADMAP_V1.md) | **Canonical implementation roadmap** under harness-v1: H0–H7 sequencing and exit gates. |
-| [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) | **Explanatory** short map — defers to V1. |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | **Prompt OS + system architecture**: six layers, catalog, V9 router, kernel headline. |
-| [../CHAT_MODE.md](../CHAT_MODE.md) | Default daily ChatEngine product path. |
-| [../guides/PORTABLE_AGENT_WORKFLOW_PLAN.md](../guides/PORTABLE_AGENT_WORKFLOW_PLAN.md) | Proposed portable workflow contract; non-normative and subordinate to `harness-v1`. |
-| [../adr/ADR-012-canonical-harness-architecture-v1.md](../adr/ADR-012-canonical-harness-architecture-v1.md) | Decision record for harness-v1 freeze. |
+| [**HARNESS_ARCHITECTURE_V1.md**](./HARNESS_ARCHITECTURE_V1.md) | **Normative** runtime harness specification (`harness-v1`). Authority: canonical. The single runtime-harness authority. |
+| [**HARNESS_HARDENING_ROADMAP_V1.md**](./HARNESS_HARDENING_ROADMAP_V1.md) | **Canonical implementation roadmap** under harness-v1: H0–H7 sequencing and exit gates. Subordinate to harness-v1. |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | **Prompt OS + system architecture**: six layers, catalog, router, kernel headline. Owns the Prompt OS layer model; must not redefine runtime invariants. |
+| [CLI_COMMAND_CONTRACT.md](../CLI_COMMAND_CONTRACT.md) | **Canonical user-facing CLI command contract.** |
 
-## Live architectural documentation
+## Active Explanatory / Reference
 
 | Document | Description |
 | :--- | :--- |
-| [HARNESS_ARCHITECTURE_V1.md](./HARNESS_ARCHITECTURE_V1.md) | **Normative harness contract** (modes, authority, invariants, gaps). |
-| [HARNESS_HARDENING_ROADMAP_V1.md](./HARNESS_HARDENING_ROADMAP_V1.md) | Canonical hardening sequence, research reconciliation, dependencies, and promotion gates. |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | High-level system architecture, layer model, router contracts, kernel. |
-| [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) | Explanatory harness map (not normative). |
-| [BABEL_LOCAL_MODE.md](./BABEL_LOCAL_MODE.md) | Local workspace surfaces, session lifecycle, editor integrations. |
-| [BABEL_FULL_ORCHESTRATION.md](./BABEL_FULL_ORCHESTRATION.md) | Full/Spark multi-agent product lane and proof gates (distinct from pipeline `deep` mutation path — see harness overview). |
-| [BABEL_LITE.md](./BABEL_LITE.md) | Lite session model (**status: STALE** — prefer [../LITE_COMMAND_CONTRACT.md](../LITE_COMMAND_CONTRACT.md) + ChatEngine docs). |
-| [BABEL_CLI_STAGE_WATERFALLS.md](./BABEL_CLI_STAGE_WATERFALLS.md) | Per-stage model waterfalls ↔ `model-policy.json`. |
-| [operator-status-taxonomy.md](./operator-status-taxonomy.md) | Doctor / env operator status codes. |
+| [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) | Explanatory harness map (not normative — never overrides harness-v1). |
+| [RUNTIME_MODES.md](./RUNTIME_MODES.md) | Runtime use vs instruction-only use, sessions, execution profiles. |
+| [STAGE_MODEL_POLICY.md](./STAGE_MODEL_POLICY.md) | Stage waterfalls, eligibility vs reordering, policy location. Mutable roster truth: `config/model-policy.json`. |
+| [REPO_LOCAL_INSTRUCTION_PRECEDENCE.md](./REPO_LOCAL_INSTRUCTION_PRECEDENCE.md) | Babel vs repo-local instruction surfaces. |
+| [SKILL_SYSTEM_BRIDGE.md](./SKILL_SYSTEM_BRIDGE.md) | Prompt skills (`02_Skills/`) vs package-style skills (`skills/`). |
+| [SKILL_SELECTION_AND_DOMAIN_DEFAULTS.md](./SKILL_SELECTION_AND_DOMAIN_DEFAULTS.md) | Domain default skill expansion; `prompt_catalog.yaml` sole catalog. |
 | [BABEL_OTEL_SCHEMA-v1.md](./BABEL_OTEL_SCHEMA-v1.md) | OpenTelemetry span schema for governed runs. |
-| [MCP_Adapter-v1.md](./MCP_Adapter-v1.md) | MCP control-plane adapter. |
-| [SKILL_SYSTEM_BRIDGE.md](./SKILL_SYSTEM_BRIDGE.md) | Prompt skills vs package skills. |
-| [SKILL_CATALOG_AND_DOMAIN_DEFAULTS.md](./SKILL_CATALOG_AND_DOMAIN_DEFAULTS.md) | Domain default skill expansion. |
-| [ROUTER_PLATFORM_FIELDS.md](./ROUTER_PLATFORM_FIELDS.md) | Platform routing fields. |
-| [BABEL_PROJECT_SYSTEM_INTEGRATION.md](./BABEL_PROJECT_SYSTEM_INTEGRATION.md) | Babel vs repo-local collaboration systems. |
+| [MCP_Adapter-v1.md](./MCP_Adapter-v1.md) | MCP control-plane adapter (read-only/introspection boundary). |
+| [OPERATOR_STATUS_TAXONOMY.md](../guides/OPERATOR_STATUS_TAXONOMY.md) | Doctor / env operator status codes. |
+| [MULTI_AGENT_ORCHESTRATION.md](./MULTI_AGENT_ORCHESTRATION.md) | Bounded agent teams (`babel agents`) — **EXPERIMENTAL**, non-normative. |
+| [PORTABLE_WORKFLOW_CONTRACT.md](../guides/PORTABLE_WORKFLOW_CONTRACT.md) | Portable workflow contract; non-normative, subordinate to `harness-v1`. |
+| [CHAT_MODE.md](../CHAT_MODE.md) | Default daily ChatEngine product path. |
 
 ## Related ADRs
 
-Pipeline and isolation decisions: `docs/adr/ADR-001` through `ADR-004`, `ADR-006`–`ADR-008`, `ADR-010`.
+All decisions: [docs/adr/README.md](../adr/README.md). Pipeline and isolation decisions:
+`ADR-001`–`ADR-004`, `ADR-006`–`ADR-008`, `ADR-010`; harness freeze: `ADR-012`; model-path
+measurement scope: `ADR-013`.
 
-## Archived architecture docs
+## Historical / Archived
 
-Historical spikes, process audits, and monolith rescope analysis are archived in the historical development repository and not included in this public release.
+Retired product/architecture documents live in [docs/archive/architecture/](../archive/architecture/)
+(`BABEL_LITE.md`, `BABEL_FULL_ORCHESTRATION.md`, `ROUTER_PLATFORM_FIELDS.md`). They are
+preserved for history and are **not** live architectural documentation. Lifecycle statuses
+on archived files (`SUPERSEDED` / `HISTORICAL`) state intent; see
+[docs/archive/README.md](../archive/README.md).

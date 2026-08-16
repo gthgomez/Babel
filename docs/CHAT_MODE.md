@@ -57,7 +57,7 @@ Chat mode uses a minimal prompt stack to keep context slim and latency low:
 1. **`behavioral_core_v11`** — Unified behavioral OS (state model, epistemic discipline, guard rules)
 2. **One domain architect** — Selected by task classification (e.g. `domain_swe_backend`, `domain_swe_frontend`)
 3. **Domain default skills** — Auto-expanded by the router per the domain's `default_skill_ids`
-4. **One model adapter** — Selected by `config/model-policy.json` waterfall (deepseek → qwen3 → scout)
+4. **One model adapter** — Selected by the `config/model-policy.json` waterfall (see [STAGE_MODEL_POLICY.md](./architecture/STAGE_MODEL_POLICY.md) for how eligibility/fallback works)
 
 **Not loaded in chat mode:**
 - ❌ v9 Orchestrator

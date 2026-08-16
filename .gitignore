@@ -127,11 +127,13 @@ mcps/
 plans/factory/
 
 # Internal-only documentation; do not add competitive or operator material to the public repo.
-docs/archive/
+# docs/archive/ is a tracked public surface (historical docs, 2026-08 reconciliation);
+# docs/status/audits/ is a tracked public audit chain; the rest of docs/status/ stays internal.
 docs/audit/
 docs/critiques/
 docs/plans/
 docs/research/
-docs/status/
+docs/status/*
+!docs/status/audits/
 docs/guides/PARITY_BENCHMARK.md
 docs/OSS_DOCS_CRITIQUE_2026-08-01.md

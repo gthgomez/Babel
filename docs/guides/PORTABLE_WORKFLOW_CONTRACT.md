@@ -5,18 +5,24 @@ Licensed under the MIT License
 -->
 
 ```yaml
-status: IMPLEMENTED_PHASE_0
+status: IMPLEMENTED
 authority: non-normative
 depends_on: harness-v1
-last_verified: 2026-08-08
+last_verified: 2026-08-15
 ```
 
-# Portable Agent Workflow Plan
+# Portable Workflow Contract
 
-> This document refines the portable workflow direction. It is a planning
-> contract, not a second runtime specification. The native Babel harness and
+> This document is the implemented subordinate contract for portable workflow
+> representations. It is a projection/request contract, **not** a second runtime
+> specification. The native Babel harness and
 > [HARNESS_ARCHITECTURE_V1.md](../architecture/HARNESS_ARCHITECTURE_V1.md)
 > remain authoritative.
+>
+> **Status note:** Phase 0 (closed schema graph, native-to-portable projections,
+> redaction, committed-only recovery) is implemented in
+> `babel-cli/src/portable/workflow.ts` — see §9. Sections 7–8 record the
+> implementation sequencing and exit gates that were met.
 
 ## 1. Boundary
 
@@ -35,8 +41,9 @@ The portable layer MUST NOT:
 - treat a model's completion claim as a terminal outcome; or
 - import private provider credentials or machine paths into an export.
 
-Portable records are projections or requests. Native records remain the source
-of truth and are referenced by stable IDs and hashes.
+**Invariant: portable workflow representations are projections/requests;
+native Babel authority remains authoritative.** Native records remain the
+source of truth and are referenced by stable IDs and hashes.
 
 ## 2. Closed v1 schema graph
 
@@ -274,7 +281,7 @@ Every export records its schema version and redaction profile. Importers reject
 unknown versions, unknown enum values, missing required hashes, and public
 exports containing denied fields.
 
-## 7. Phase 0 implementation order
+## 7. Phase 0 implementation order (completed — historical record)
 
 1. Add the closed schema graph and discriminated-union validation.
 2. Add native-to-portable adapters for task, stages, workers, receipts,
@@ -289,7 +296,7 @@ Phase 0 is not ready for coding if any type above remains undefined, any
 adapter creates a second authority, or a portable terminal can be stronger
 than its native evidence.
 
-## 8. Exit gates before runtime implementation
+## 8. Exit gates before runtime implementation (met — historical record)
 
 - The schema graph compiles with no unresolved references.
 - Every record has an explicit version and stable identity.

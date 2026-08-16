@@ -1,4 +1,9 @@
-# ADR-010: App-Server Protocol Sketch
+# ADR-010: App-Server Protocol Contract
+
+> Heading updated 2026-08-15 (was "App-Server Protocol Sketch"): the contract is now more
+> than a speculative sketch — the typed catalog and in-process host/client stubs exist —
+> while the standalone out-of-process app server remains partial. Original reasoning below
+> is preserved unchanged.
 
 <!--
 status: ACTIVE
@@ -24,11 +29,13 @@ The industry pattern is to separate agent and UI via a stdio JSON-RPC 2.0 proces
 hosts the agent while the TUI is a thin client. Babel should follow the same shape for
 architectural parity and to reuse established client patterns.
 
-Phase D1 is complete: the typed catalog and round-trip tests live under
-`babel-cli/src/protocol/`. D2 has an in-process JSON-RPC host/client stub used by
-the chat transport tests; a standalone stdio app-server and thin-client TUI remain
-future work. D3 owns durable thread-store integration. This ADR defines the message
-catalog shared by those surfaces.
+Current status: the typed message catalog and round-trip tests live under
+`babel-cli/src/protocol/` (the former "Phase D1" scope is complete). An in-process
+JSON-RPC host/client stub is used by the chat transport tests (former "Phase D2" stub
+scope is complete); a standalone out-of-process stdio app-server and thin-client TUI
+**remain future work**. Durable thread-store integration is owned by the thread-store
+contracts (`src/ui/historyCells/types.ts`). This ADR defines the message catalog shared
+by those surfaces.
 
 ## Decision
 
@@ -155,7 +162,8 @@ future bridges. `ChatEngine` should not depend on wire format.
 
 ## Compliance
 
-- Phase D1 exit: types in `src/protocol/` compile; `protocol.test.ts` passes. **Complete.**
-- D2 stub exit: in-process host/client contract tests cover the catalog. **Complete.**
-- D2 transport exit: REPL chat works with an out-of-process server; contract suite covers
-  every method and notification in this catalog. **Open.**
+- Typed catalog: types in `src/protocol/` compile; `protocol.test.ts` passes. **Complete.**
+- In-process host/client contract tests cover the catalog. **Complete.**
+- Out-of-process transport: REPL chat works with a standalone stdio server; contract suite
+  covers every method and notification in this catalog. **Open — do not claim a standalone
+  app server is live.**

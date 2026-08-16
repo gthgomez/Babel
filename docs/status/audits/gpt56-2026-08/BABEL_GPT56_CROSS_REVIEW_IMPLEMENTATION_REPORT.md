@@ -243,7 +243,7 @@ FILES_CHANGED: 17 modified (incl. costTracker.test.ts restored after accidental 
   13 new (src/agent/commandSemantics[.test].ts, autonomyEnforcement[.test].ts,
   authorityConformance.test.ts, services/outcomeSemantics[.test].ts, evidenceEnvelope[.test].ts,
   compiler.parity.test.ts, providerCapabilities.test.ts, configDrift.test.ts, execute.telemetry.test.ts).
-REPORT_PATH: docs/BABEL_GPT56_CROSS_REVIEW_IMPLEMENTATION_REPORT.md (uncommitted, per §31)
+REPORT_PATH: docs/status/audits/gpt56-2026-08/BABEL_GPT56_CROSS_REVIEW_IMPLEMENTATION_REPORT.md (was uncommitted at report time, per §31; relocated and tracked during the 2026-08-15 documentation reconciliation)
 NEXT_RECOMMENDED_ACTION: 1) stage/commit per operator policy; 2) run CI-gate suites
   (test:harness-acceptance, test:harness-runtime) on a clean runner; 3) fix the pre-existing
   adapter_codex_balanced catalog drift separately; 4) begin E1/E2/E4 on frozen tasks with the

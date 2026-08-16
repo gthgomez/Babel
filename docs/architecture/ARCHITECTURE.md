@@ -20,7 +20,13 @@ last_verified: 2026-08-03
 
 ## Overview
 
-Babel is an autonomous Coding Agent CLI with optional governed pipeline mode (Prompt OS). It assembles task-relevant instructions in a deterministic resolver/compiler path, then hands the compiled context to the runtime or model-facing layer. Current evidence supports the resolver/compiler, catalog, schema, status, rollback, verifier-contract, doctor, and local-test surfaces; it does not yet demonstrate production readiness or broad live-provider governance.
+Babel is a local coding-agent harness with a structured **Prompt OS** underneath. It
+assembles task-relevant instructions in a deterministic resolver/compiler path, then hands
+the compiled context to the runtime harness. Maturity is evidence-backed: the resolver/compiler,
+catalog, schema, status, rollback, verifier-contract, doctor, and local-test surfaces are
+implemented and covered by conformance tests; broad live-provider governance claims must be
+backed by saved run artifacts and verifier evidence (see the harness roadmap's evidence
+rules), not by model self-report.
 
 The core design principle: **separate what the model knows from how it behaves**. Behavioral rules (PLAN before ACT, execution gates, epistemic honesty) live in one layer. Domain knowledge (backend engineering, frontend patterns, compliance rules) lives in another. A third layer shapes model-specific output style. These layers compose — they do not override each other.
 
@@ -144,11 +150,15 @@ One per task. Shapes how the model formats and delivers its output:
 | ID                 | Model              | Purpose                                                                   |
 | ------------------ | ------------------ | ------------------------------------------------------------------------- |
 | `adapter_claude`   | Claude Sonnet/Opus | Suppresses over-helpfulness, enforces PLAN→ACT gating                     |
-| `adapter_fallback` | Fallback lane      | Ultra-terse output, dense algorithmic tasks                               |
-| `adapter_standard` | Standard lane      | Balanced output for multi-file refactors and architecture-sensitive edits |
-| `adapter_gemini`   | Gemini             | Optimized for long-context document synthesis and log analysis            |
+| `adapter_codex`    | Fallback lane      | Ultra-terse output for schema generation, dense algorithmic tasks         |
+| `adapter_deepseek_balanced` | DeepSeek   | Balanced output for multi-file refactors, frontend work, architecture-sensitive edits |
+| `adapter_gemini`   | Gemini             | Long-context synthesis and log analysis (1M+ token windows)              |
+| `adapter_nemotron` | Nemotron           | Adversarial QA with strict JSON output                                    |
+| `adapter_scout`    | Llama 4 Scout      | Structural orchestration for large context windows                        |
+| `adapter_qwen`     | Qwen 3             | Thinking/standard hybrid inference-mode management                        |
 
 Adapters are pure style — they contain no domain knowledge. They must not weaken Behavioral OS rules.
+The live adapter roster is defined by `prompt_catalog.yaml` (layer `03 — MODEL ADAPTERS`); this table mirrors it.
 
 ---
 
@@ -215,7 +225,7 @@ Output is a typed manifest:
     "behavioral_ids": ["behavioral_core_v11"],
     "domain_id": "domain_swe_backend",
     "skill_ids": ["skill_ts_zod", "skill_supabase_pg"],
-    "model_adapter_id": "adapter_standard",
+    "model_adapter_id": "adapter_deepseek_balanced",
     "project_overlay_id": "overlay_example_saas_backend",
     "task_overlay_ids": [],
     "pipeline_stage_ids": ["pipeline_qa_reviewer"]
@@ -242,10 +252,10 @@ The downstream resolver/compiler owns path resolution and prompt assembly. After
 When running via `babel-cli`, the assembled instruction stack flows through a four-stage pipeline:
 
 ```
-Stage 1: Orchestrator  → emits typed routing manifest (Llama-4-Scout primary, DeepSeek-V4-Flash / Qwen3-32B fallback)
-Stage 2: SWE Agent     → produces MINIMAL_ACTION_SET plan (Llama-4-Scout primary, DeepSeek-V4-Pro / Step-3.5-Flash / Qwen3-32B fallback)
-Stage 3: QA Reviewer   → adversarially audits plan (DeepSeek-V4-Pro primary, Nemotron-3-Super / Step-3.5-Flash / Qwen3-32B fallback)
-Stage 4: CLI Executor  → executes approved plan step-by-step (DeepSeek-V4-Pro primary, DeepSeek-V4-Flash / Llama-4-Scout / Qwen3-32B fallback)
+Stage 1: Orchestrator  → emits typed routing manifest
+Stage 2: SWE Agent     → produces MINIMAL_ACTION_SET plan
+Stage 3: QA Reviewer   → adversarially audits plan
+Stage 4: CLI Executor  → executes approved plan step-by-step
 ```
 
 Each stage uses a dedicated LLM waterfall — a priority-ordered list of runner tiers that cascade on failure. Waterfall chains are sourced from `config/model-policy.json` (the single source of truth for stage routing). Zod schemas validate every stage's JSON output before the pipeline advances.
@@ -254,7 +264,13 @@ The QA Reviewer operates on six audit layers: Evidence Gate, SFDIPOT coverage, N
 
 ### Evidence Limits
 
-The architecture above is implemented and locally tested in important parts, but it is not a production-readiness claim. Provider-backed pipeline tests may require API keys and can be skipped; live-model compliance with PLAN -> QA -> ACT must be proven with saved run artifacts before Babel is described as a reliable autonomous worker.
+The architecture above is implemented and covered by conformance and unit tests
+(`architectureConformance.test.ts`, harness-acceptance and harness-runtime suites). A
+passing test suite is not by itself a production-readiness claim: provider-backed live
+compliance with PLAN -> QA -> ACT must be proven with saved run artifacts and verifier
+evidence before Babel is described as a reliable autonomous worker. The harness roadmap
+(HARNESS_HARDENING_ROADMAP_V1.md) defines the evidence rules and promotion gates for
+maturity claims.
 
 ---
 

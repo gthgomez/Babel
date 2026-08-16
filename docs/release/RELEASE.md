@@ -32,8 +32,8 @@ treated as major changes.
 - **Signed tags**: deferred until a signing key is provisioned (post-1.0)
 - **Pre-release tags**: `v<version>-<label>` (e.g. `v1.0.0-rc1`)
 
-Pre-cutover rollback tag (`pre-option-a-cutover`) is protected by repository
-ruleset alongside `v*` tags.
+The legacy pre-cutover rollback tag (`pre-option-a-cutover`) is protected by
+repository ruleset alongside `v*` tags.
 
 ## Pinning
 
@@ -67,7 +67,7 @@ GitHub Release notes at release time.
 
 ## Release Process (Future)
 
-The following will be implemented as part of Option A Phase 4:
+The following remain future work:
 
 1. `tools/release.ps1` — automated script that:
    - Validates all CI gates (content policy, scrub, canonical independence, typecheck)
@@ -79,9 +79,8 @@ The following will be implemented as part of Option A Phase 4:
    passes all validation without a parent workspace or sibling repo
 
 **First public tag (`v0.1.0` and later) may ship without a consumer pin.**
-Shipping a tag makes the tree pinable. **Canonical cutover complete** (Option A)
-still requires a real external consumer to pin the tag + commit SHA and confirm
-it works. That pin is deferred until a product has used Babel substantially.
+Shipping a tag makes the tree pinable. A real external consumer pin (tag + commit
+SHA) is deferred until a product has used Babel substantially.
 
 ## Security Releases
 

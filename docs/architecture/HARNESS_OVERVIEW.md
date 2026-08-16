@@ -94,7 +94,7 @@ They do **not** share control loops. Chat is not “deep without QA”; deep is 
 | Stack | Slim chat stack | Same | Plan / catalog | Full catalog resolve |
 | Shared kernel | Yes | Yes | Yes | Yes |
 
-**Naming collision to avoid:** product “Full orchestration / Spark deep proof” wording in [BABEL_FULL_ORCHESTRATION.md](./BABEL_FULL_ORCHESTRATION.md) can describe a **read-only multi-agent proof lane**. Pipeline mode `deep` in `pipeline.ts` **does execute Stage 4 mutations** when gates pass. Treat those as related but not identical surfaces.
+**Naming collision to avoid:** the historical “Full orchestration / Spark deep proof” wording in [BABEL_FULL_ORCHESTRATION.md](../archive/architecture/BABEL_FULL_ORCHESTRATION.md) (archived) described a **read-only multi-agent proof lane**. Pipeline mode `deep` in `pipeline.ts` **does execute Stage 4 mutations** when gates pass. Treat those as related but not identical surfaces. The current bounded multi-agent capability is documented in [MULTI_AGENT_ORCHESTRATION.md](./MULTI_AGENT_ORCHESTRATION.md) (experimental, non-normative).
 
 **Lite / AgentSession:** historical Lite docs still mention `AgentSession`. The **canonical daily path** for current CLI is ChatEngine via `workflowCommands` → `runCliChatTask` / REPL `executeChatTask`. Prefer ChatEngine when reading code.
 
@@ -305,9 +305,9 @@ Maturity for public Babel is **architecturally advanced pre-1.0** on several dim
 | [ADR-012](../adr/ADR-012-canonical-harness-architecture-v1.md) | Decision record |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Layers, catalog, V9 pipeline overview |
 | [CHAT_MODE.md](../CHAT_MODE.md) | Chat product path |
-| [BABEL_LOCAL_MODE.md](./BABEL_LOCAL_MODE.md) | Surfaces and sessions |
-| [BABEL_FULL_ORCHESTRATION.md](./BABEL_FULL_ORCHESTRATION.md) | Full/Spark product lane |
-| [operator-status-taxonomy.md](./operator-status-taxonomy.md) | Doctor / env codes (not full runtime failure model) |
+| [RUNTIME_MODES.md](./RUNTIME_MODES.md) | Runtime vs instruction-only use, surfaces and sessions |
+| [MULTI_AGENT_ORCHESTRATION.md](./MULTI_AGENT_ORCHESTRATION.md) | Bounded agent teams (experimental, non-normative) |
+| [OPERATOR_STATUS_TAXONOMY.md](../guides/OPERATOR_STATUS_TAXONOMY.md) | Doctor / env codes (not full runtime failure model) |
 | ADRs 001–004, 006–008 | Pipeline + isolation decisions |
 | `examples/golden-harness/` | Golden + negative fixtures |
 | `babel-cli/README.md` | Evidence limits and package honesty |

@@ -2,8 +2,12 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-07-03
+last_verified: 2026-08-15
 -->
+> Moved from `docs/architecture/` (2026-08-15): this describes operator/doctor behavior,
+> not architecture authority. Runtime authority remains
+> [HARNESS_ARCHITECTURE_V1.md](../architecture/HARNESS_ARCHITECTURE_V1.md).
+
 Babel operator diagnostics separate command health from environment readiness so a missing shell, missing provider key, or absent build artifact is not reported as a generic repo failure.
 
 ## Doctor Result Levels

@@ -5,14 +5,21 @@ Licensed under the MIT License
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
-status: ACTIVE
+status: HISTORICAL
 last_verified: 2026-07-03
 -->
 
 # Migration Guide: Upgrading Babel Skills to OLS-MCC v4.2 Compliance
 
+> **Archived (2026-08-15).** Historical migration plan for the OLS-MCC v4.2 integration.
+> The durable authoring standards it enumerates (Boundaries, Failure Behavior, Strategic
+> Next Move, Handoff Declarations, Evidence Labels, Catalog conflict declarations) are now
+> owned by the OLS-MCC compiler skill (`04_Meta_Tools/OLS-MCC/ols-compiler/SKILL.md` and its
+> `references/` — v4.5 core and OLS Meta-Meta Standards). The dated migration tiers
+> ("next 2 weeks / next 4 weeks") are history, not active scheduling.
+
 **Date:** 2026-06-19
-**Status:** Active — apply to all new and modified skills
+**Status (historical):** Migration completed — the standards live on in the OLS-MCC v4.5+ skill surface.
 **Context:** The OLS-MCC meta-tool layer (`04_Meta_Tools/OLS-MCC/`) is now integrated into the repository. All skills in `02_Skills/` should be upgraded to meet OLS-MCC v4.2 PRODUCTION standards.
 
 ---

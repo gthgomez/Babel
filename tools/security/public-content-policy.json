@@ -1,23 +1,37 @@
 {
   "version": 1,
   "description": "Deterministic policy for public-facing content and canonical-repository independence.",
-  "active_extensions": [".md", ".yaml", ".yml", ".json", ".ts", ".js", ".ps1"],
-  "claim_extensions": [".md"],
+  "active_extensions": [
+    ".md",
+    ".yaml",
+    ".yml",
+    ".json",
+    ".ts",
+    ".js",
+    ".ps1"
+  ],
+  "claim_extensions": [
+    ".md"
+  ],
   "binary_asset_allowlist": [],
   "forbidden_generated_path_patterns": [
     "(?i)(^|/)(dist|runs|artifacts|coverage|scratch|\\.compiled|\\.cache)/",
     "(?i)(^|/)babel-benchmark-results\\.jsonl$"
   ],
   "generated_artifact_allowlist": [],
-  "excluded_path_prefixes": ["docs/archive/", "02_Domain_Architects/archive/", "02_Skills/archive/", "skills/"],
+  "excluded_path_prefixes": [
+    "docs/archive/",
+    "02_Domain_Architects/archive/",
+    "02_Skills/archive/",
+    "skills/",
+    "docs/status/audits/"
+  ],
   "excluded_paths": [],
   "forbidden_public_path_prefixes": [
-    "docs/archive/",
     "docs/audit/",
     "docs/critiques/",
     "docs/plans/",
-    "docs/research/",
-    "docs/status/"
+    "docs/research/"
   ],
   "forbidden_public_paths": [
     "docs/guides/PARITY_BENCHMARK.md",
@@ -264,9 +278,25 @@
     "category": "duplicate-active-title-version"
   },
   "canonical_independence": {
-    "required_startup_files": ["BABEL_BIBLE.md", "PROJECT_CONTEXT.md", "README.md", "prompt_catalog.yaml"],
-    "scan_extensions": [".md", ".yaml", ".yml", ".json", ".ts", ".js", ".ps1"],
-    "excluded_path_prefixes": ["docs/archive/", "02_Domain_Architects/archive/"],
+    "required_startup_files": [
+      "BABEL_BIBLE.md",
+      "PROJECT_CONTEXT.md",
+      "README.md",
+      "prompt_catalog.yaml"
+    ],
+    "scan_extensions": [
+      ".md",
+      ".yaml",
+      ".yml",
+      ".json",
+      ".ts",
+      ".js",
+      ".ps1"
+    ],
+    "excluded_path_prefixes": [
+      "docs/archive/",
+      "02_Domain_Architects/archive/"
+    ],
     "excluded_paths": [],
     "binary_asset_allowlist": [],
     "fixture_exceptions": [
@@ -306,7 +336,7 @@
         "rationale": "Negative removed-export fixture."
       },
       {
-      "id": "FIXTURE-CANONICAL-TEST-003",
+        "id": "FIXTURE-CANONICAL-TEST-003",
         "rule_id": "CANON003",
         "path": "tools/tests/test-public-prevention-gates.ps1",
         "pattern": "resolveProjectRoot\\(projectId, parent\\)|join\\(workspaceRoot, family, projectFolderName\\)",

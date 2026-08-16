@@ -120,11 +120,26 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
 
 ## What to use first
 
-1. `babel` — open the TUI  
-2. `babel plan "..."` — when you want a gated plan  
-3. `babel deep "..."` — when you want the heavy governed path  
-4. `babel doctor` — environment health  
-5. `babel mcp` — integrations  
+1. `babel` — open the TUI
+2. `babel "<task>"` — daily one-shot chat (read-only questions stay read-only)
+3. `babel plan "..."` — when you want a gated plan
+4. `babel deep "..."` — when you want the heavy governed path
+5. `babel doctor` — environment health
+6. `babel mcp` — integrations
+
+## Everyday safety surfaces
+
+- `babel undo` — restore the latest checkpoint from the most recent mutating run
+- `babel resume` — resume a retryable run and take the next action
+- `babel permissions` — inspect permission/approval state
+- `babel dry on` / `babel dry off` — dry-run mode: file writes are intercepted and logged instead of applied
+- `babel inspect ...` — inspect run evidence, sessions, and checkpoints
+
+`babel doctor --scope all --strict` runs the strict full health check.
+
+Chat is the daily implementation lane: `babel "<task>"` handles normal coding work.
+Use `babel deep` when you explicitly want the heavier governed pipeline
+(planning → QA review → executor with verification).
 
 ## Execution profile note (default `safe_repo`)
 

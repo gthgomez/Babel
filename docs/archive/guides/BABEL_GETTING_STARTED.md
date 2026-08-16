@@ -1,9 +1,19 @@
 # Babel — Getting Started Guide
 
 <!--
-status: ACTIVE
+status: SUPERSEDED
 last_verified: 2026-07-03
 -->
+> **Archived (2026-08-15).** Historical onboarding guide. Its "Use `babel deep` for all
+> implementation work" guidance is **retired**: chat (`babel "<task>"`) is the daily
+> implementation lane; `babel deep` is the explicit governed path. Its `babel permissions
+> <preset>` profile-switching example does not match the current permissions surface.
+>
+> Superseded by:
+> - [CLI_QUICKSTART.md](../../CLI_QUICKSTART.md)
+> - [CHAT_MODE.md](../../CHAT_MODE.md)
+> - [CLI_COMMAND_CONTRACT.md](../../CLI_COMMAND_CONTRACT.md)
+
 Babel is a governance-first daily coding CLI. This guide walks you from
 install to your first governed execution in under 10 minutes.
 

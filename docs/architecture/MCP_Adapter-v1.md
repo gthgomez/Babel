@@ -5,6 +5,9 @@ Licensed under the MIT License
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
+status: ACTIVE
+authority: mcp-v1-scoped (scoped specification for the MCP adapter surface only; the runtime harness authority remains HARNESS_ARCHITECTURE_V1.md)
+last_verified: 2026-08-15
 -->
 
 # Babel MCP Adapter v1
@@ -35,7 +38,7 @@ The adapter is for control-plane introspection only. It exists to let external h
 - No task routing or pipeline invocation
 - No raw prompt authoring or prompt mutation
 - No arbitrary filesystem browsing
-- No Local Mode policy mutation
+- No runtime policy mutation
 - Executor tool listings are metadata-only. Mutating tool metadata is hidden by default and, when explicitly requested with `include_mutating: true`, remains non-callable.
 
 ## Invocation Shape

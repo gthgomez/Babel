@@ -21,6 +21,7 @@ $validateCatalogScriptPath = Join-Path $Root 'tools\validate-catalog.ps1'
 $checkPublicScrubScriptPath = Join-Path $Root 'tools\check-public-scrub.ps1'
 $checkPublicContentPolicyScriptPath = Join-Path $Root 'tools\check-public-content-policy.ps1'
 $checkCanonicalIndependenceScriptPath = Join-Path $Root 'tools\check-canonical-independence.ps1'
+$checkDocsIntegrityScriptPath = Join-Path $Root 'tools\check-docs-integrity.ps1'
 $resolveLocalStackScriptPath = Join-Path $Root 'tools\resolve-local-stack.ps1'
 
 $preferredShell = Get-Command pwsh -ErrorAction SilentlyContinue
@@ -85,6 +86,10 @@ Invoke-Step -Label 'Public content policy' -Body {
 
 Invoke-Step -Label 'Canonical repository independence' -Body {
   & $shellPath -NoProfile -ExecutionPolicy Bypass -File $checkCanonicalIndependenceScriptPath -RepoRoot $Root
+}
+
+Invoke-Step -Label 'Docs integrity' -Body {
+  & $shellPath -NoProfile -ExecutionPolicy Bypass -File $checkDocsIntegrityScriptPath -RepoRoot $Root
 }
 
 if (-not (Test-Path -LiteralPath (Join-Path $cliRoot 'node_modules'))) {

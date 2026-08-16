@@ -1,9 +1,21 @@
 # Babel Full Orchestration Contract
 
 <!--
-status: ACTIVE
+status: SUPERSEDED
 last_verified: 2026-07-03
 -->
+> **Archived (2026-08-15).** Historical "Babel Full" product-identity document. Its claim
+> that `babel deep` is read-only does **not** describe the current runtime: `babel deep`
+> is the live governed pipeline with Stage 4 executor mutation. The bounded, tested
+> multi-agent capability that replaced the speculative Full manager/worker design is
+> documented in [MULTI_AGENT_ORCHESTRATION.md](../../architecture/MULTI_AGENT_ORCHESTRATION.md)
+> (experimental, non-normative). Runtime norms: [HARNESS_ARCHITECTURE_V1.md](../../architecture/HARNESS_ARCHITECTURE_V1.md).
+>
+> Superseded by:
+> - [HARNESS_ARCHITECTURE_V1.md](../../architecture/HARNESS_ARCHITECTURE_V1.md)
+> - [MULTI_AGENT_ORCHESTRATION.md](../../architecture/MULTI_AGENT_ORCHESTRATION.md)
+> - [CLI_COMMAND_CONTRACT.md](../../CLI_COMMAND_CONTRACT.md)
+
 Date: 2026-06-05 (refreshed 2026-06-29)
 
 ## Identity

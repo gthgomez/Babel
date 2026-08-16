@@ -8,6 +8,12 @@ last_verified: 2026-07-03
 **Date:** 2026-06-19  
 **Deciders:** Babel team  
 
+> **Amendment (2026-08-15):** The Zod runtime-validation decision stands. This ADR is not a
+> permanent inventory of supported model IDs — current provider/model support belongs to the
+> runtime registries/configuration (`config/model-policy.json` and the runner registry).
+> The `TargetModelSchema` enumeration listed below is an **example of the contract shape**,
+> not normative; the live set is maintained in code.
+
 ## Context
 
 The four-stage pipeline passes structured data between stages: the Orchestrator emits a manifest, the SWE Agent consumes it to produce a plan, the QA Reviewer audits the plan and emits a verdict, and the Executor consumes the plan and verdict.
@@ -24,7 +30,7 @@ Key schemas:
 - `QaVerdictSchema` / `FailureTagSchema` (27 tags) — Stage 3 output
 - `ExecutorTurnSchema` / `ExecutorReportSchema` — Stage 4 output
 - `PipelineModeSchema` (chat|plan|deep) — consolidated from legacy names (direct|verified|autonomous|parallel_swarm|manual)
-- `TargetModelSchema` (deepseek-v4-pro|deepseek-v4-flash|qwen3|scout|nemotron|step-flash|qwen3-32b)
+- `TargetModelSchema` — example enumeration (e.g. `deepseek-v4-pro|deepseek-v4-flash|qwen3|scout|nemotron|step-flash|qwen3-32b`); **non-normative example** — the live model set is maintained in `config/model-policy.json` and the runner registry
 
 The `runWithFallback()` function in `execute.ts` applies the schema after each LLM call. If validation fails, the error is fed back to the model for retry, or the waterfall falls through to the next provider.
 

@@ -9,10 +9,15 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 
 
 <!--
-status: ACTIVE
+status: HISTORICAL
 last_verified: 2026-07-03
 -->
 # Babel OSS Readiness Checklist
+
+> **Archived (2026-08-15).** Historical pre-open-source checklist. The public repository is
+> now the canonical source; the still-relevant release gates (clean clone, portability,
+> docs safety, catalog validation, release/version discipline, CI, public/private split,
+> clarity of positioning) are merged into [PUBLIC_RELEASE_CHECKLIST.md](../../release/PUBLIC_RELEASE_CHECKLIST.md).
 
 ## Goal
 

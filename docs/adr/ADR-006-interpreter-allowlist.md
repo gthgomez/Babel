@@ -8,6 +8,22 @@ last_verified: 2026-07-03
 **Date:** 2026-06-19  
 **Deciders:** Babel team  
 
+> **Amendment (2026-08-15):** Membership in the command allowlist is **not** sufficient
+> authority to execute. The ADR must be read as distinguishing:
+>
+> ```text
+> command known/allowlisted  !=  command authorized
+> ```
+>
+> Current authorization additionally depends on semantic effect classification
+> (effect classes in `executor/contracts.ts`), credential rules, destructive/public/costly
+> effect gates, approval policy (interactive, JIT approval, presets), execution profile
+> (e.g. `safe_repo` vs `dev_local`), capability policy, and sandbox/isolation
+> (H13 fail-closed behavior). The historical env-var approval language below
+> (`BABEL_ASK=true`) describes an early interactive-approval mechanism; the current approval
+> surface is the policy/preset machinery in `babel-cli/src/agent/policy.ts` and
+> `babel-cli/src/agent/approvalRequests.ts`. The original defense-in-depth reasoning stands.
+
 ## Context
 
 The CLI Executor needs to run shell commands to accomplish software engineering tasks: installing dependencies (`npm install`), running tests (`pytest`), building projects (`make`), executing scripts (`python script.py`). Blocking all interpreters would prevent these tasks. Allowing all interpreters would remove any security boundary.

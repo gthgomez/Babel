@@ -1,9 +1,18 @@
 # Public Repo Role and Guidelines
 
 <!--
-status: ACTIVE
+status: SUPERSEDED
 last_verified: 2026-07-24
 -->
+> **Archived (2026-08-15).** Historical predecessor of the consolidated public-content
+> policy. Its unique durable rule ("preserve the onboarding path, examples, and release
+> notes") and the content restrictions were merged into
+> [PUBLIC_REPO_CONTENT_POLICY.md](../../release/PUBLIC_REPO_CONTENT_POLICY.md).
+>
+> Superseded by:
+> - [PUBLIC_REPO_CONTENT_POLICY.md](../../release/PUBLIC_REPO_CONTENT_POLICY.md)
+> - [PUBLIC_RELEASE_CHECKLIST.md](../../release/PUBLIC_RELEASE_CHECKLIST.md)
+
 This document describes the role and content guidelines for the public canonical repository at github.com/gthgomez/Babel.
 
 The public repository is the independent canonical source for the Babel prompt operating system.

@@ -9,10 +9,15 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 
 
 <!--
-status: ACTIVE
+status: HISTORICAL
 last_verified: 2026-07-03
 -->
 # Router Platform Fields
+
+> **Archived (2026-08-15).** Historical design record for proposed platform-aware router
+> fields tied to old client/web surface concepts. Not current architecture authority;
+> preserved for design history. Routing authority today: [ARCHITECTURE.md](../../architecture/ARCHITECTURE.md)
+> and `prompt_catalog.yaml`; runtime routing: [HARNESS_ARCHITECTURE_V1.md](../../architecture/HARNESS_ARCHITECTURE_V1.md).
 
 ## Purpose
 

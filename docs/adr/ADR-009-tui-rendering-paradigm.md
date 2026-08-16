@@ -2,7 +2,7 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-07-03
+last_verified: 2026-08-15
 -->
 **Status:** Accepted  
 **Date:** 2026-06-26  
@@ -148,7 +148,7 @@ Currently:
 - `WaterfallRenderer` manages state entirely in instance fields with no state store.
 - Component tree widgets manage state internally via dirty flags and instance properties.
 
-Migrating `WaterfallRenderer` to use the same `StateStore` pattern (see task #30) would:
+Migrating `WaterfallRenderer` to use the same `StateStore` pattern would:
 - Enable cross-renderer state inspection and debugging.
 - Prepare for a shared `TuiState` shape that the component tree can also subscribe to.
 - Eliminate the last manual state-management site in the standalone renderers.
@@ -160,5 +160,13 @@ Migrating `WaterfallRenderer` to use the same `StateStore` pattern (see task #30
 - No new code should attempt to bridge or unify the two paradigms.
 - Function-based renderers remain the shared vocabulary — prefer adding a function renderer over
   adding a new Component or renderer when the output is purely data-driven string formatting.
-- The `StateStore` migration path is tracked separately (task #30). When that work begins, the
+- The `StateStore` migration path is tracked separately. When that work begins, the
   rendering paradigm boundary must remain intact.
+
+## Current status (2026-08-15)
+
+The hybrid paradigm holds after the TUI polish work: component tree → pull-based
+widgets/dialogs (`babel-cli/src/ui/component.ts`), standalone renderers → push-based
+streaming/live output (`chunkCoalescer`, renderer streaming), function renderers → shared
+formatting vocabulary. State management evolved with `stateMutationBus` /
+`thinkingState`; the paradigm boundary was not reopened.

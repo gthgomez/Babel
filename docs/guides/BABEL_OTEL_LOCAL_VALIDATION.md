@@ -16,7 +16,10 @@ last_verified: 2026-08-08
 
 ## Overview
 
-Babel Phase 1.5 activates the OpenTelemetry tracing foundation introduced in Phase 1. Tracing is **disabled by default** and observational only — it never affects routing, QA gates, or Behavioral OS semantics.
+Babel's OpenTelemetry tracing foundation (schema v1 — see
+[docs/architecture/BABEL_OTEL_SCHEMA-v1.md](../architecture/BABEL_OTEL_SCHEMA-v1.md)) is
+**optional, disabled by default, and observational** — it never affects routing, QA gates,
+or Behavioral OS semantics.
 
 When enabled, each `babel run` emits a `babel.run` root span (with child spans per pipeline stage) to an OTLP backend, and writes `07_trace_context.json` into the run bundle for offline correlation.
 
@@ -117,7 +120,7 @@ Managed enterprise policy can also force this safe-disable behavior by setting `
 - Token budget totals and warning severity
 - QA verdict (`PASS` / `REJECT`) and Evidence Gate status
 - CI/VCS metadata (repo, branch, SHA, PR number, deploy environment)
-- Session ID (if using Local Mode)
+- Session ID (when a Babel runtime session is attached)
 
 **Never traced:**
 - Raw prompt bodies or compiled prompt text
@@ -162,9 +165,11 @@ This test:
 
 ---
 
-## Next step before Phase 2
+## Production-validation requirements
 
-Confirm traces appear correctly across several real runs in the local Jaeger backend before beginning Phase 2 (Production Lanes). Key things to verify:
+Tracing remains observational and disabled by default; production adoption should require
+local validation first. Confirm traces appear correctly across several real runs in the
+local Jaeger backend before relying on tracing in production lanes. Key things to verify:
 
 1. All 5 span types appear in the waterfall for a verified-mode run
 2. QA verdict baggage (`babel.evidence_gate.status`) updates correctly
