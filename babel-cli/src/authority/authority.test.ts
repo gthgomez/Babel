@@ -50,6 +50,7 @@ function sampleLease(overrides: Partial<AutonomyLease> = {}): AutonomyLease {
         'ci_repair_in_scope',
         'ci_rerun_transient',
         'delete_task_temp',
+        'repo_create',
       ],
       branchPrefixes: ['feat/', 'fix/', 'refactor/', 'docs/', 'test/'],
       constraints: {
@@ -283,6 +284,19 @@ describe('git/gh command parsing (structured capability extraction)', () => {
   test('gh api GET pulls → pr_inspect', () => {
     assert.equal(parseGitCommand('gh api repos/gthgomez/Babel/pulls/1').capability, 'pr_inspect');
   });
+  test('gh repo create --private → repo_create, private visibility', () => {
+    const p = parseGitCommand('gh repo create my-project --private');
+    assert.equal(p.capability, 'repo_create');
+    assert.equal(p.visibility, 'private');
+  });
+  test('gh repo create --public → repo_create, public visibility', () => {
+    const p = parseGitCommand('gh repo create my-project --public');
+    assert.equal(p.capability, 'repo_create');
+    assert.equal(p.visibility, 'public');
+  });
+  test('gh repo create (default) → private', () => {
+    assert.equal(parseGitCommand('gh repo create my-project').visibility, 'private');
+  });
   test('ordinary non-git binary → run_local_command (local, bounded)', () => {
     assert.equal(parseGitCommand('pandoc -o out.pdf').capability, 'run_local_command');
   });
@@ -482,6 +496,27 @@ describe('wire: lease-aware dispatch composite', () => {
     const r = decideWithLease(runCmd('npm test'), 'workspace_write', ctx);
     assert.equal(r.decision, 'allow');
     assert.equal(r.reasonCode, 'ALLOW_SAFE_LOCAL');
+  });
+
+  test('gh repo create --private (in lease) → allow (verify at completion)', () => {
+    const r = decideWithLease(runCmd('gh repo create my-project --private'), 'workspace_write', ctx);
+    assert.equal(r.decision, 'allow');
+    assert.equal(r.reasonCode, 'VERIFY_BEFORE_PUBLICATION');
+  });
+
+  test('gh repo create --public → ask (ASK_PUBLIC_VISIBILITY) even when in lease', () => {
+    const r = decideWithLease(runCmd('gh repo create my-project --public'), 'workspace_write', ctx);
+    assert.equal(r.decision, 'ask');
+    assert.equal(r.reasonCode, 'ASK_PUBLIC_VISIBILITY');
+  });
+
+  test('repo_create not in lease → deny', () => {
+    const narrow = sampleLease({
+      allowedCapabilities: sampleLease().allowedCapabilities.filter((c) => c !== 'repo_create'),
+    });
+    const r = decideWithLease(runCmd('gh repo create my-project --private'), 'workspace_write', { lease: narrow });
+    assert.equal(r.decision, 'deny');
+    assert.equal(r.reasonCode, 'DENY_UNKNOWN_EXTERNAL_SIDE_EFFECT');
   });
 
   test('policy self-mutation: write to .claude/settings.json → deny even when lease allows edit', () => {

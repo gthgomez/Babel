@@ -22,6 +22,8 @@ export interface ParsedGitCommand {
   destinationBranch?: string;
   force: boolean;
   delete: boolean;
+  /** Repo visibility for repo_create ('public'|'internal' → gated by PDP). */
+  visibility?: 'public' | 'private' | 'internal';
   /** Set when the raw command was unparseable but privileged-looking. */
   ambiguous?: boolean;
 }
@@ -108,6 +110,26 @@ export function parseGitCommand(cmd: string): ParsedGitCommand {
         return { capability: 'production_deploy', force: false, delete: false };
       }
       return { capability: 'ci_inspect', force: false, delete: false };
+    }
+    if (sub === 'repo') {
+      const verb = t[2]?.toLowerCase();
+      if (verb === 'create') {
+        // Visibility is a deterministic gate: public/internal = making material
+        // public (Class C); private = bounded+reversible (lease-checked).
+        const visibility = t.includes('--public')
+          ? 'public'
+          : t.includes('--internal')
+            ? 'internal'
+            : 'private';
+        return {
+          capability: 'repo_create',
+          visibility,
+          force: false,
+          delete: false,
+        };
+      }
+      // gh repo view/list/clone = inspection/local
+      return { capability: 'inspect_repository', force: false, delete: false };
     }
     return { capability: 'unknown', force: false, delete: false, ambiguous: true };
   }

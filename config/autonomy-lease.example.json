@@ -27,7 +27,8 @@
     "ci_inspect",
     "ci_repair_in_scope",
     "ci_rerun_transient",
-    "delete_task_temp"
+    "delete_task_temp",
+    "repo_create"
   ],
   "branchPrefixes": ["feat/", "fix/", "refactor/", "docs/", "test/"],
   "constraints": {

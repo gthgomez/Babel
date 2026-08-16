@@ -35,6 +35,7 @@ export function actionRequestFromAction(action: AgentAction): ActionRequest | nu
       ...(parsed.remote !== undefined ? { remote: parsed.remote } : {}),
       ...(parsed.destinationBranch !== undefined ? { destinationBranch: parsed.destinationBranch } : {}),
       ...(parsed.sourceBranch !== undefined ? { sourceBranch: parsed.sourceBranch } : {}),
+      ...(parsed.visibility !== undefined ? { visibility: parsed.visibility } : {}),
       force: parsed.force,
       delete: parsed.delete,
     };

@@ -21,6 +21,8 @@ export interface ActionRequest {
   destinationBranch?: string;
   force?: boolean;
   delete?: boolean;
+  /** Repo visibility for repo_create (public/internal → deterministic ASK). */
+  visibility?: 'public' | 'private' | 'internal';
   /** Current branch of the agent's worktree (used for task-branch checks). */
   currentBranch?: string;
 }
@@ -104,6 +106,16 @@ export function decideActionRequest(
     if (request.capability === 'push_feature_branch' || request.capability === 'force_push') {
       return { outcome: 'ask', reasonCode: 'ASK_PROTECTED_BRANCH', rulesTriggered: triggered };
     }
+  }
+
+  // 5b. Repo creation visibility gate: public/internal = making material
+  // public (Class C) — deterministic ASK regardless of lease membership.
+  if (
+    request.capability === 'repo_create' &&
+    (request.visibility === 'public' || request.visibility === 'internal')
+  ) {
+    triggered.push('pdp.public_visibility');
+    return { outcome: 'ask', reasonCode: 'ASK_PUBLIC_VISIBILITY', rulesTriggered: triggered };
   }
 
   // 6. Capability kind resolution.

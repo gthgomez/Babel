@@ -30,6 +30,7 @@ export type CapabilityId =
   | 'ci_inspect'
   | 'ci_repair_in_scope'
   | 'ci_rerun_transient'
+  | 'repo_create'
   // Gated (Class C)
   | 'merge'
   | 'pr_mark_ready'
@@ -73,6 +74,10 @@ export const CAPABILITY_KINDS: Record<CapabilityId, CapabilityKind> = {
   ci_inspect: 'publication',
   ci_repair_in_scope: 'publication',
   ci_rerun_transient: 'publication',
+  // Repo creation is bounded+reversible when PRIVATE (publication-class, lease-
+  // checked). PUBLIC/INTERNAL visibility is a separate deterministic gate in
+  // the PDP (making material public is Class C — never silent).
+  repo_create: 'publication',
   merge: 'gated',
   pr_mark_ready: 'gated',
   release: 'gated',
