@@ -43,9 +43,26 @@ import type { AgentAction } from './actions.js';
 import { modelToolNameToExecutor } from './canonicalToolMapping.js';
 import { emitAgentEvent } from './events.js';
 import { decideAction, type PermissionDecision, type PermissionPreset } from './policy.js';
+import { commandTextForAction, isCredentialTargetPath } from './autonomyEnforcement.js';
 // Shared patch-target parser — one extractor for path-jail validation here
 // and governance integrity checking in authority/wire.ts.
 import { extractPatchRawTargets, extractPatchTargets } from '../authority/patchTargets.js';
+import { loadLeaseFromEnv, type AutonomyLease } from '../authority/lease.js';
+import { decideWithLease, type LeaseContext } from '../authority/wire.js';
+import type { BaselineManifest } from '../authority/integrity.js';
+import type { ReasonCode } from '../authority/reasonCodes.js';
+import { classifyAutonomyAction } from '../config/autonomyPolicy.js';
+
+/**
+ * Active lease, cached for the process lifetime. A broken lease env fails
+ * LOUD at the first decision (fail-closed) rather than silently degrading.
+ */
+let cachedLease: AutonomyLease | null | undefined;
+function activeLease(): AutonomyLease | null {
+  if (cachedLease !== undefined) return cachedLease;
+  cachedLease = loadLeaseFromEnv();
+  return cachedLease;
+}
 
 const APPLY_PATCH_RELATIVE_PATH = '.babel-lite/apply.patch';
 
@@ -585,6 +602,8 @@ export async function executeActionWithPolicy(
     budget?: ToolExecutionBudget;
     /** When policy returns `ask`, invoke this before blocking. Return true to execute. */
     onAskApproval?: (action: AgentAction) => Promise<boolean>;
+    /** P0-A: explicit gate for autonomy Class C actions (approval-sensitive). */
+    onAutonomyClassCGate?: (action: AgentAction) => Promise<boolean>;
     /** H4: optional completed idempotency keys for double-mutation deny. */
     completedIdempotencyKeys?: readonly string[];
     /** H4: optional protected paths. */
@@ -601,6 +620,12 @@ export async function executeActionWithPolicy(
     hostFallbackAllowed?: boolean;
     /** H4: explicit idempotency key for this invocation (defaults from action). */
     idempotencyKey?: string;
+    /** V2 authority: explicit lease override (defaults to the env lease). */
+    lease?: AutonomyLease | null;
+    /** V2 authority: policy-integrity baseline manifest (session-start snapshot). */
+    baseline?: BaselineManifest;
+    /** V2 authority: repo root used for baseline drift checks (defaults to cwd). */
+    baselineRepoRoot?: string;
     /** B2: final authorization check after policy/approval but before an effect ledger intent. */
     onDispatchAuthorized?: () => { allowed: boolean; message?: string };
     /** B2: invoked immediately before executor.execute after durable effect intent persistence. */
@@ -611,7 +636,22 @@ export async function executeActionWithPolicy(
   } = {},
 ): Promise<PolicyGatedExecutionResult> {
   const executor = deps.executor ?? defaultToolExecutor;
-  const decide = deps.decide ?? decideAction;
+  // V2 authority: the default decision path consults the PDP when a lease is
+  // active (env or explicit override). Additive — no lease → legacy behavior.
+  const leaseCtx: LeaseContext = {
+    lease: deps.lease !== undefined ? deps.lease : activeLease(),
+    ...(deps.baseline !== undefined
+      ? { baseline: { repoRoot: deps.baselineRepoRoot ?? '', manifest: deps.baseline } }
+      : {}),
+  };
+  let lastReasonCode: ReasonCode | '' = '';
+  const decide: typeof decideAction =
+    deps.decide ??
+    ((action, preset) => {
+      const r = decideWithLease(action, preset, leaseCtx);
+      lastReasonCode = r.reasonCode;
+      return r.decision;
+    });
   const budget = deps.budget ?? DEFAULT_TOOL_BUDGET;
 
   // ── H4 capability broker: classify + authorize before policy decide ──
@@ -686,6 +726,85 @@ export async function executeActionWithPolicy(
     }
   }
 
+  // ── Autonomy A–D classification (P0-A/C/D) ────────────────────────────
+  // The capability broker above classifies by tool NAME. This layer classifies
+  // by command SEMANTICS (run_command/test_run text) and by target PATH for
+  // credential stores, mapping onto the canonical A–D taxonomy:
+  //   Class D (credential exposure)   → deterministic deny, no approval path
+  //   Class C (external/public/destructive) → explicit gate
+  //                                      (onAutonomyClassCGate) or deterministic
+  //                                      deny when no gate is wired (headless,
+  //                                      benchmark, governed kernel).
+  // Class A/B actions pass through to the authority decide path unchanged
+  // (the lease-aware PDP composite below is the decision authority).
+  if (!isControlAction) {
+    const autonomyClass = classifyAutonomyAction(toolName, commandTextForAction(action));
+    const target = targetPathFromAction(action);
+    const credentialTarget = target !== undefined && isCredentialTargetPath(target);
+    if (autonomyClass === 'd_forbidden' || credentialTarget) {
+      incrementBlocks(context.runId);
+      emitAgentEvent({
+        type: 'policy_decision',
+        action: toolName,
+        decision: 'deny',
+        preset,
+        runId: context.runId,
+        agentId: context.agentId,
+      });
+      return {
+        action,
+        terminal: isTerminalAgentAction(action),
+        results: [
+          {
+            exit_code: 1,
+            stdout: '',
+            stderr:
+              `[AUTONOMY_DENIED:CLASS_D] ` +
+              (credentialTarget
+                ? `Target path "${target}" is a credential store.`
+                : 'Command semantics expose credentials.') +
+              ' Class D actions require explicit exceptional operator instruction and are never auto-approved.',
+          },
+        ],
+        policyDecision: 'deny',
+        policyBlocked: true,
+      };
+    }
+    if (autonomyClass === 'c_gated') {
+      let approved = false;
+      if (deps.onAutonomyClassCGate) {
+        approved = await deps.onAutonomyClassCGate(action);
+      }
+      if (!approved) {
+        incrementBlocks(context.runId);
+        emitAgentEvent({
+          type: 'policy_decision',
+          action: toolName,
+          decision: 'deny',
+          preset,
+          runId: context.runId,
+          agentId: context.agentId,
+        });
+        return {
+          action,
+          terminal: isTerminalAgentAction(action),
+          results: [
+            {
+              exit_code: 1,
+              stdout: '',
+              stderr:
+                `[AUTONOMY_DENIED:CLASS_C_GATE] Command semantics require an explicit ` +
+                `gate and no approval is available in this context.`,
+            },
+          ],
+          policyDecision: 'deny',
+          policyBlocked: true,
+        };
+      }
+      // Approved: continue through the authority decide path below.
+    }
+  }
+
   // ── Circuit-breaker: entry check ───────────────────────────────────
   const limit = getCircuitBreakerLimit();
   const currentBlocks = sessionBlocks.get(context.runId) ?? 0;
@@ -734,6 +853,7 @@ export async function executeActionWithPolicy(
       preset,
       runId: context.runId,
       agentId: context.agentId,
+      ...(lastReasonCode ? { rule: lastReasonCode } : {}),
     });
     return {
       action,

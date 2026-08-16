@@ -674,7 +674,12 @@ export function decodeCommand(command: string): DecodedCommand {
 /** Git-push gate per repo policy (rule 05: force / history / main). */
 export function isGatedGitPush(command: string): boolean {
   const tokens = tokenize(command);
-  const gi = tokens.findIndex((tok) => tok.toLowerCase().replace(/\.exe$/i, '') === 'git');
+  // Same first-token normalization as decodeCommand: strip path prefixes and
+  // `.exe` so wrapper forms (`C:\tools\git.exe push`, `/usr/bin/git push`)
+  // resolve to base `git`.
+  const gi = tokens.findIndex(
+    (tok) => tok.toLowerCase().replace(/^.*[\\/]/, '').replace(/\.exe$/i, '') === 'git',
+  );
   if (gi === -1) return false;
   const pushIdx = tokens.findIndex((tok, i) => i > gi && tok.toLowerCase() === 'push');
   if (pushIdx === -1) return false;

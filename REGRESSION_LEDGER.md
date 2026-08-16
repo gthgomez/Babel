@@ -11,6 +11,16 @@ canonical type-aware manifest (file/symlink/dir/missing, symlink-safe walk, dete
 drift evaluated before privileged decisions, `DENY_POLICY_INTEGRITY_DRIFT`, permanent lease
 invalidation. Baseline lifecycle capture remains a caller seam (session start) — step 5 wiring.
 
+One-gate composition (feat(authority) one-gate dispatch): #86 `decideWithLease` wiring ported into
+`executeActionWithPolicy` (lease composite + `activeLease()` env cache + baseline capture +
+reason-code rule propagation); #87 A–D dispatch layer restored (Class D deterministic deny,
+Class C gate via `onAutonomyClassCGate`, headless = deterministic deny); `autonomyPolicy.ts`
+reconciled (stale "next seam" comments removed, `defaultLeaseForAutonomyClass` A–D → lease);
+#87 `providerRegistry.ts` transplanted (authorityConformance certification: live lanes certified,
+dormant untested). Decoder fix: `isGatedGitPush` now strips executable path prefixes so wrapper
+forms (`C:\tools\git.exe push -f`, `/usr/bin/git push --force-with-lease`) classify as gated.
+Full gate batch at composition: **179 tests → 174 pass / 2 fail** (outcome O05/O06, next phase).
+
 ## Parser family — `convergence-parser.regression-gate.test.ts` (33)
 
 | ID | Invariant | Baseline | Current | Expected | Gap |
