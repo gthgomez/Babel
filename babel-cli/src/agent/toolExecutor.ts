@@ -43,6 +43,9 @@ import type { AgentAction } from './actions.js';
 import { modelToolNameToExecutor } from './canonicalToolMapping.js';
 import { emitAgentEvent } from './events.js';
 import { decideAction, type PermissionDecision, type PermissionPreset } from './policy.js';
+// Shared patch-target parser — one extractor for path-jail validation here
+// and governance integrity checking in authority/wire.ts.
+import { extractPatchRawTargets, extractPatchTargets } from '../authority/patchTargets.js';
 
 const APPLY_PATCH_RELATIVE_PATH = '.babel-lite/apply.patch';
 
@@ -175,19 +178,7 @@ function looksLikeTestCommand(command: string): boolean {
   );
 }
 
-// ─── Patch target extraction ─────────────────────────────────────────────
-
-/**
- * Parse unified diff headers to extract the set of files a patch would modify.
- * Returns absolute paths resolved against `projectRoot`, or empty array if
- * parsing fails (defense-in-depth: invalid patches are denied by validation
- * in executeActionWithPolicy, not here).
- */
-function extractPatchTargetPaths(patchContent: string, projectRoot: string): string[] {
-  return extractPatchRawTargets(patchContent).map((rawPath) =>
-    isAbsolute(rawPath) ? resolve(rawPath) : resolve(projectRoot, rawPath),
-  );
-}
+// ─── Patch target extraction (shared utility: authority/patchTargets.ts) ──
 
 /**
  * Validate patch content before application.
@@ -212,7 +203,7 @@ export function validatePatchContent(patchContent: string, projectRoot: string):
     violations.push('Patch contains no recognizable diff hunks');
   }
 
-  const targetPaths = extractPatchTargetPaths(patchContent, projectRoot);
+  const targetPaths = extractPatchTargets(patchContent, projectRoot);
   for (const target of targetPaths) {
     if (!isPathInside(projectRoot, target)) {
       violations.push(`Patch target outside project_root: ${target}`);
@@ -540,23 +531,6 @@ function pathsFromAgentAction(action: AgentAction): string[] {
   }
 }
 
-/**
- * Extract raw (unresolved) target paths from unified diff patch headers.
- * Returns paths as they appear in the diff (e.g. "src/file.ts" or "/absolute/path").
- * These are later resolved + validated by findOutOfScopeTarget / isPathInside.
- */
-function extractPatchRawTargets(patchContent: string): string[] {
-  const headerRe = /^[-+]{3}\s+([ab]\/)?(\S+)/gm;
-  const targets = new Set<string>();
-  let match: RegExpExecArray | null;
-  while ((match = headerRe.exec(patchContent)) !== null) {
-    const rawPath = match[2] ?? '';
-    if (!rawPath || rawPath === '/dev/null') continue;
-    targets.add(rawPath);
-  }
-  return [...targets];
-}
-
 function resolveScopedPath(projectRoot: string, rawPath: string): string {
   return isAbsolute(rawPath) ? resolve(rawPath) : resolve(projectRoot, rawPath);
 }
@@ -844,7 +818,7 @@ export async function executeActionWithPolicy(
   if (action.type === 'write_file') {
     txPaths = [isAbsolute(action.path) ? action.path : resolve(process.cwd(), action.path)];
   } else if (action.type === 'apply_patch') {
-    txPaths = extractPatchTargetPaths(action.patch, projectRootForScope(preset) ?? resolve(process.cwd()));
+    txPaths = extractPatchTargets(action.patch, projectRootForScope(preset) ?? resolve(process.cwd()));
   }
 
   let batchTx: Awaited<ReturnType<typeof WorkspaceTransactionManager.beginBatch>> | null = null;

@@ -7,6 +7,15 @@
  * continues while checks are red). Emits agent audit events with the stable
  * reason code for every PDP decision.
  *
+ * Integrity (MERGE_AND_FIX_P0):
+ *  - When a lease AND a session-start baseline manifest are supplied, drift
+ *    is evaluated BEFORE any privileged decision. Drift → deterministic deny
+ *    with DENY_POLICY_INTEGRITY_DRIFT, and the lease is PERMANENTLY
+ *    invalidated (every later decision denies) — a single drift event cannot
+ *    be papered over by one denied call.
+ *  - The self-mutation guard inspects REAL patch targets (shared
+ *    patchTargets extractor), never the raw diff body.
+ *
  * Additive: with no active lease, behavior is byte-identical to legacy
  * decideAction.
  */
@@ -18,13 +27,36 @@ import type { AutonomyLease } from './lease.js';
 import { decideActionRequest, type ActionRequest } from './pdp.js';
 import { parseGitCommand } from './gitCommand.js';
 import type { ReasonCode } from './reasonCodes.js';
-import { isGovernancePath } from './integrity.js';
+import { checkBaseline, isGovernancePath } from './integrity.js';
+import { extractPatchRawTargets } from './patchTargets.js';
 
 export interface LeaseContext {
   lease: AutonomyLease | null;
   /** Optional baseline manifest for policy-integrity checks (session-start snapshot). */
   baseline?: { repoRoot: string; manifest: import('./integrity.js').BaselineManifest };
 }
+
+// ─── Permanent drift invalidation ───────────────────────────────────────────
+
+/** Lease ids that have seen baseline drift — permanently denied. */
+const invalidatedLeases = new Set<string>();
+
+/** Permanently invalidate a lease after drift (fail-closed, no recovery path). */
+export function invalidateLease(leaseId: string): void {
+  invalidatedLeases.add(leaseId);
+}
+
+/** True once a lease has been invalidated by baseline drift. */
+export function isLeaseInvalidated(leaseId: string): boolean {
+  return invalidatedLeases.has(leaseId);
+}
+
+/** Test hook: clear the invalidation set (never call from runtime paths). */
+export function resetLeaseInvalidations(): void {
+  invalidatedLeases.clear();
+}
+
+// ─── Decision composite ─────────────────────────────────────────────────────
 
 /** Convert a shell command action into a structured ActionRequest (best-effort). */
 export function actionRequestFromAction(action: AgentAction): ActionRequest | null {
@@ -53,12 +85,39 @@ export function decideWithLease(
 ): { decision: PermissionDecision; reasonCode: ReasonCode | '' } {
   const legacy = decideAction(action, preset);
 
+  // Permanent drift lock: an invalidated lease denies every subsequent
+  // decision, before anything else is evaluated.
+  if (ctx.lease && isLeaseInvalidated(ctx.lease.leaseId)) {
+    return { decision: 'deny', reasonCode: 'DENY_POLICY_INTEGRITY_DRIFT' };
+  }
+
+  // Baseline drift evaluation before ANY privileged decision (fail-closed).
+  // The baseline is the immutable session-start snapshot — never recaptured.
+  if (ctx.lease && ctx.baseline) {
+    const drift = checkBaseline(ctx.baseline.repoRoot, ctx.baseline.manifest);
+    if (!drift.ok) {
+      invalidateLease(ctx.lease.leaseId);
+      emitAgentEvent({
+        type: 'policy_decision',
+        action: `${action.type}:integrity`,
+        decision: 'deny',
+        preset,
+        rule: 'DENY_POLICY_INTEGRITY_DRIFT',
+      });
+      return { decision: 'deny', reasonCode: 'DENY_POLICY_INTEGRITY_DRIFT' };
+    }
+  }
+
   // Policy self-mutation guard: mutating a governance path is denied outright
   // (DENY_POLICY_SELF_MUTATION) whenever a lease is active — even if the
-  // legacy preset would allow it.
+  // legacy preset would allow it. apply_patch targets are extracted from the
+  // diff headers via the shared extractor; the raw patch body is never fed to
+  // isGovernancePath.
   if (ctx.lease && (action.type === 'write_file' || action.type === 'apply_patch')) {
-    const path = action.type === 'write_file' ? action.path : action.patch;
-    if (path && isGovernancePath(path)) {
+    const targets =
+      action.type === 'apply_patch' ? extractPatchRawTargets(action.patch) : [action.path];
+    const governanceTarget = targets.find((t) => t && isGovernancePath(t));
+    if (governanceTarget) {
       emitAgentEvent({
         type: 'policy_decision',
         action: action.type,

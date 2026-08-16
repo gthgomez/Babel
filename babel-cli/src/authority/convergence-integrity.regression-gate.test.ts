@@ -17,7 +17,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildBaseline, checkBaseline } from './integrity.js';
@@ -25,11 +25,15 @@ import { decideWithLease } from './wire.js';
 import { parseLeaseJson, type AutonomyLease } from './lease.js';
 import type { AgentAction } from '../agent/actions.js';
 
-const lease = (
-  parseLeaseJson(
-    JSON.stringify({ version: 2, leaseId: 'regression-gate', scope: { repository: 'babel', remote: 'origin' } }),
-  ) as { ok: true; lease: AutonomyLease }
-).lease;
+function makeLease(leaseId: string): AutonomyLease {
+  return (
+    parseLeaseJson(
+      JSON.stringify({ version: 2, leaseId, scope: { repository: 'babel', remote: 'origin' } }),
+    ) as { ok: true; lease: AutonomyLease }
+  ).lease;
+}
+
+const lease = makeLease('regression-gate');
 
 function tmpRoot(): string {
   return mkdtempSync(join(tmpdir(), 'babel-gov-'));
@@ -101,6 +105,7 @@ test('P0-1: governance-file creation/deletion after baseline is detected', () =>
 
 test('P0-1: decideWithLease denies when the baseline has drifted', () => {
   const root = tmpRoot();
+  const driftLease = makeLease('regression-drift-1');
   try {
     const baseline = buildBaseline(root);
     // Governance file changes after the session-start snapshot.
@@ -108,12 +113,116 @@ test('P0-1: decideWithLease denies when the baseline has drifted', () => {
     const r = decideWithLease(
       { type: 'write_file', path: 'src/foo.ts' } as unknown as AgentAction,
       'workspace_write',
-      { lease, baseline: { repoRoot: root, manifest: baseline } },
+      { lease: driftLease, baseline: { repoRoot: root, manifest: baseline } },
     );
-    // Today: decideWithLease carries the baseline but never evaluates it — the
-    // decision is unaffected by drift. Fix: evaluate drift before privileged
-    // decisions and invalidate the lease/session (fail-closed).
     assert.equal(r.decision, 'deny');
+    assert.equal(r.reasonCode, 'DENY_POLICY_INTEGRITY_DRIFT');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ─── Expanded integrity contract (I06–I10) ─────────────────────────────────
+
+test('P0-1: regular file replaced by symlink is detected', (t) => {
+  const root = tmpRoot();
+  try {
+    writeFileSync(join(root, '.gitignore'), 'original');
+    const baseline = buildBaseline(root);
+    rmSync(join(root, '.gitignore'));
+    try {
+      symlinkSync('elsewhere', join(root, '.gitignore'));
+    } catch {
+      t.skip('symlink creation not permitted in this environment');
+      return;
+    }
+    const res = checkBaseline(root, baseline);
+    assert.equal(res.ok, false);
+    assert.ok(res.changed.includes('.gitignore'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('P0-1: symlink target change is detected', (t) => {
+  const root = tmpRoot();
+  try {
+    mkdirSync(join(root, 'babel-cli/src/authority'), { recursive: true });
+    try {
+      symlinkSync('target-a', join(root, 'babel-cli/src/authority/link'));
+    } catch {
+      t.skip('symlink creation not permitted in this environment');
+      return;
+    }
+    const baseline = buildBaseline(root);
+    rmSync(join(root, 'babel-cli/src/authority/link'));
+    symlinkSync('target-b', join(root, 'babel-cli/src/authority/link'));
+    const res = checkBaseline(root, baseline);
+    assert.equal(res.ok, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('P0-1: governance symlinks are recorded, never followed outside the repo', (t) => {
+  const root = tmpRoot();
+  const outside = tmpRoot();
+  try {
+    writeFileSync(join(outside, 'secret.txt'), 'outside content');
+    mkdirSync(join(root, 'babel-cli/src/authority'), { recursive: true });
+    try {
+      symlinkSync(outside, join(root, 'babel-cli/src/authority/ext'));
+    } catch {
+      t.skip('symlink creation not permitted in this environment');
+      return;
+    }
+    const baseline = buildBaseline(root);
+    const entry = baseline.entries.find((e) => e.path === 'babel-cli/src/authority/ext');
+    assert.ok(entry, 'symlink recorded in the manifest');
+    assert.equal(entry!.kind, 'symlink');
+    // Content change OUTSIDE the repo must not alter the manifest — the link
+    // target string is the fingerprint, and it is never followed.
+    writeFileSync(join(outside, 'secret.txt'), 'changed outside');
+    const res = checkBaseline(root, baseline);
+    assert.equal(res.ok, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('P0-1: new nested directory introduced is detected', () => {
+  const root = tmpRoot();
+  try {
+    mkdirSync(join(root, '.agents/rules'), { recursive: true });
+    const baseline = buildBaseline(root);
+    mkdirSync(join(root, '.agents/rules/new'), { recursive: true });
+    const res = checkBaseline(root, baseline);
+    assert.equal(res.ok, false);
+    assert.ok(res.changed.includes('.agents/rules/new'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('P0-1: drift permanently invalidates the lease (second decision still denies)', () => {
+  const root = tmpRoot();
+  const driftLease = makeLease('regression-drift-2');
+  try {
+    const baseline = buildBaseline(root);
+    writeFileSync(join(root, '.gitignore'), 'changed after baseline');
+    const ctx = { lease: driftLease, baseline: { repoRoot: root, manifest: baseline } };
+    const action = { type: 'write_file', path: 'src/foo.ts' } as unknown as AgentAction;
+
+    const first = decideWithLease(action, 'workspace_write', ctx);
+    assert.equal(first.decision, 'deny');
+    assert.equal(first.reasonCode, 'DENY_POLICY_INTEGRITY_DRIFT');
+
+    // Permanent: the lock denies every later decision — one drift event cannot
+    // be papered over by a single denied call.
+    const second = decideWithLease(action, 'workspace_write', ctx);
+    assert.equal(second.decision, 'deny');
+    assert.equal(second.reasonCode, 'DENY_POLICY_INTEGRITY_DRIFT');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
