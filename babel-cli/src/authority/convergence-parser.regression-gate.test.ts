@@ -14,7 +14,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseGitCommand } from './gitCommand.js';
-import { classifyCommandSemantics } from '../agent/commandSemantics.js';
+import { classifyCommandSemantics, splitChains } from '../agent/commandSemantics.js';
 
 // ─── git option-argument consumption ───────────────────────────────────────
 
@@ -105,4 +105,118 @@ test('P0-2: psql -c "DROP TABLE" is destructive_data_delete (guard)', () => {
   // Guard: #86's DANGEROUS_TOOL_PATTERNS text scan already catches embedded SQL —
   // the merged parser must keep this.
   assert.equal(p.capability, 'destructive_data_delete');
+});
+
+// ─── Git global options that consume a following token (L14–L17) ───────────
+
+test('L14 P0-2: git --git-dir <path> push — the path belongs to the option', () => {
+  const p = parseGitCommand('git --git-dir /repo push origin main');
+  assert.equal(p.capability, 'push_feature_branch');
+  assert.equal(p.force, false);
+});
+
+test('L15 P0-2: git --work-tree <path> push — the path belongs to the option', () => {
+  const p = parseGitCommand('git --work-tree /repo push origin main');
+  assert.equal(p.capability, 'push_feature_branch');
+});
+
+test('L16 P0-2: git --namespace <name> push — the name belongs to the option', () => {
+  const p = parseGitCommand('git --namespace foo push origin main');
+  assert.equal(p.capability, 'push_feature_branch');
+});
+
+test('L17 P0-2: git --config-env <key=ENV> push — the assignment belongs to the option', () => {
+  const p = parseGitCommand('git --config-env user.name=MY_NAME push origin main');
+  assert.equal(p.capability, 'push_feature_branch');
+});
+
+// ─── Git force / refspec family (L18–L23) ──────────────────────────────────
+
+test('L18 P0-2: git push -f is force_push (guard)', () => {
+  const p = parseGitCommand('git push -f origin feature');
+  assert.equal(p.capability, 'force_push');
+  assert.equal(p.force, true);
+});
+
+test('L19 P0-2: git push --force is force_push (guard)', () => {
+  const p = parseGitCommand('git push --force origin feature');
+  assert.equal(p.capability, 'force_push');
+  assert.equal(p.force, true);
+});
+
+test('L20 P0-2: git push --force-with-lease is force_push (guard)', () => {
+  const p = parseGitCommand('git push --force-with-lease origin feature');
+  assert.equal(p.capability, 'force_push');
+  assert.equal(p.force, true);
+});
+
+test('L21 P0-2: git push origin +HEAD:refs/heads/x is force_push', () => {
+  const p = parseGitCommand('git push origin +HEAD:refs/heads/x');
+  assert.equal(p.capability, 'force_push');
+  assert.equal(p.force, true);
+});
+
+test('L22 P0-2: git push origin :refs/heads/x is a delete (guard)', () => {
+  const p = parseGitCommand('git push origin :refs/heads/x');
+  assert.equal(p.capability, 'scope_expansion');
+  assert.equal(p.delete, true);
+});
+
+test('L23 P0-2: git push --delete origin x is a delete (guard)', () => {
+  const p = parseGitCommand('git push --delete origin x');
+  assert.equal(p.delete, true);
+});
+
+// ─── gh api method forms (L24–L28) ─────────────────────────────────────────
+
+test('L24 P0-2: gh api --method POST privileged endpoint is repo_admin (guard)', () => {
+  const p = parseGitCommand('gh api --method POST repos/foo/bar/releases');
+  assert.equal(p.capability, 'repo_admin');
+});
+
+test('L25 P0-2: gh api -X POST privileged endpoint is repo_admin (guard)', () => {
+  const p = parseGitCommand('gh api -X POST repos/foo/bar/releases');
+  assert.equal(p.capability, 'repo_admin');
+});
+
+test('L26 P0-2: gh api -XPOST attached form is repo_admin', () => {
+  const p = parseGitCommand('gh api -XPOST repos/foo/bar/releases');
+  assert.equal(p.capability, 'repo_admin');
+});
+
+test('L27 P0-2: gh api method after the endpoint is still found', () => {
+  const p = parseGitCommand('gh api repos/foo/bar/releases --method=POST');
+  assert.equal(p.capability, 'repo_admin');
+});
+
+// ─── Safe controls — recognized safe engineering must stay frictionless ────
+
+test('L28 P0-2: gh api GET stays pr_inspect (guard)', () => {
+  const p = parseGitCommand('gh api GET repos/foo/bar/pulls');
+  assert.equal(p.capability, 'pr_inspect');
+});
+
+test('L29 P0-2: git -C repo status is a safe local inspect', () => {
+  const p = parseGitCommand('git -C repo status');
+  assert.equal(p.capability, 'inspect_repository');
+});
+
+test('L30 P0-2: grep on a normal file is not a credential read', () => {
+  assert.equal(classifyCommandSemantics('grep something README.md'), 'unrecognized');
+  assert.equal(parseGitCommand('grep something README.md').capability, 'run_local_command');
+});
+
+test('L31 P0-2: Select-String on a normal file is not a credential read', () => {
+  assert.equal(classifyCommandSemantics('Select-String normal.txt'), 'unrecognized');
+  assert.equal(parseGitCommand('Select-String normal.txt').capability, 'run_local_command');
+});
+
+test('L32 P0-2: python -c with a quoted semicolon print is not a credential read', () => {
+  assert.equal(classifyCommandSemantics(`python -c "print(';')"`), 'unrecognized');
+});
+
+test('L33 P0-2: echo with quoted && stays one segment and is not a credential read', () => {
+  const semantic = classifyCommandSemantics(`echo "a && b"`);
+  assert.equal(semantic, 'unrecognized');
+  assert.deepEqual(splitChains(`echo "a && b"`), ['echo "a && b"']);
 });
