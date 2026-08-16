@@ -4,7 +4,7 @@ Frozen baseline for the authority-trust-boundary convergence branch.
 Every test is accounted for — a red turning green is a demonstrated fix;
 a red that disappears without a green is a regression to hunt.
 
-**Counts**: 49 tests · 2 red (outcome ×2) · 47 green · parser 33/33 · integrity 10/10.
+**Counts**: 49 tests · 0 red · 49 green · parser 33/33 · integrity 10/10 · outcome 6/6.
 
 Integrity fix (commit 8f…): shared `patchTargets.ts` extractor (toolExecutor + wire both consume it),
 canonical type-aware manifest (file/symlink/dir/missing, symlink-safe walk, deterministic sort),
@@ -20,6 +20,17 @@ reconciled (stale "next seam" comments removed, `defaultLeaseForAutonomyClass` A
 dormant untested). Decoder fix: `isGatedGitPush` now strips executable path prefixes so wrapper
 forms (`C:\tools\git.exe push -f`, `/usr/bin/git push --force-with-lease`) classify as gated.
 Full gate batch at composition: **179 tests → 174 pass / 2 fail** (outcome O05/O06, next phase).
+
+Outcome integration (O05/O06, GREEN): `dimensionsFromCodingTaskInput` now derives verificationAuthoritative/Fresh
+from a canonical verifier receipt (never `verifierOk` alone), contractChecksPass from the completion-gate
+result (VERIFIED_COMPLETE terminal / explicit field), and workspace-revision binding when supplied. Consumers
+wired (chatEngine streamDone/buildResult, agentBenchmark scoreChatParityCell). P0-4 benchmark authority:
+`benchmarkAutoApproveEnabled` requires BABEL_BENCHMARK_MODE=1 (headless/CI never establishes benchmark
+authority); chatApproval benchmark auto-approve gated on both flags. Transport conformance: structural suite
+(`src/runners/transportConformance.test.ts`, 12 tests) derives certification from code structure — no direct
+effect sinks in transports, kernel dispatcher routes every effectful call through the authority boundary,
+provider/adapter/registry triple-match; GAPs documented for codex full-auto, prompt staging, repair lane,
+provider-endpoint network. Full gate batch: **198 tests → 195 pass / 0 fail**.
 
 ## Parser family — `convergence-parser.regression-gate.test.ts` (33)
 
@@ -82,11 +93,11 @@ Full gate batch at composition: **179 tests → 174 pass / 2 fail** (outcome O05
 | O02 | non-authoritative verifier → FALSE_COMPLETION (kernel guard) | GREEN | GREEN | GREEN | — |
 | O03 | visible pass + contract fail → FALSE_COMPLETION (kernel guard) | GREEN | GREEN | GREEN | — |
 | O04 | accurate unverified patch NOT false completion (kernel guard) | GREEN | GREEN | GREEN | — |
-| O05 | adapter must not certify authoritative/fresh from `verifierOk` alone | RED | RED | GREEN | #87 |
-| O06 | adapter surfaces contract-check results | RED | RED | GREEN | #87 |
+| O05 | adapter must not certify authoritative/fresh from `verifierOk` alone | RED | **GREEN** | GREEN | #87 |
+| O06 | adapter surfaces contract-check results | RED | **GREEN** | GREEN | #87 |
 
 ## Verification state (branch commit 7effe24 + decoder work)
 
 - `tsc --noEmit` — clean
 - Parser gate + baseline suites (authority.test.ts 24, commandSemantics.test.ts 15, outcomeSemantics, codingTaskSuccess): 144/144 of the non-regression set
-- Red set: exactly I02–I05, O05–O06 (6) — the integrity/outcome fix phases, untouched by the parser work
+- Red set: exactly I02–I05, O05–O06 (6) — the integrity/outcome fix phases, untouched by the parser work; ALL now GREEN
