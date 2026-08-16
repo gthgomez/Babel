@@ -120,6 +120,8 @@ jobs:
         working-directory: babel-cli
       - name: Validate catalog
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/validate-catalog.ps1
+      - name: Check docs integrity
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-docs-integrity.ps1
 
   windows-portability:
     name: windows-portability
@@ -157,3 +159,5 @@ jobs:
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-content-policy.ps1 -RepoRoot .
       - name: Canonical independence (Windows)
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-canonical-independence.ps1 -RepoRoot .
+      - name: Docs integrity (Windows)
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-docs-integrity.ps1 -RepoRoot .

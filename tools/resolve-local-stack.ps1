@@ -4,12 +4,12 @@ param(
     [ValidateSet("frontend", "backend", "compliance", "devops", "research", "mobile", "game")]
     [string]$TaskCategory,
 
-    [ValidateSet("global", "example_saas_backend", "example_llm_router", "example_web_audit", "example_mobile_suite", "example_game_suite", "example_autonomous_agent")]
+    [ValidateSet("global", "example_saas_backend", "example_llm_router", "example_web_audit", "example_mobile_suite", "example_game_suite", "simlife", "godot_td", "example_finance_forecast", "app_test_babel", "AetherlynGameDraft", "aetherlyn", "AuditGuard", "Project_Android")]
     [string]$Project = "global",
 
     [string]$ProjectPath = "",
 
-    [ValidateSet("codex", "claude", "gemini")]
+    [ValidateSet("codex", "claude", "gemini", "deepseek")]
     [string]$Model = "codex",
 
     [ValidateSet("codex_extension", "claude_code", "gemini_cli", "chatgpt_web", "claude_web", "gemini_web", "vscode_chat", "other")]
@@ -90,6 +90,8 @@ function Get-BabelCatalogEntries {
                 Path = $null
                 Project = $null
                 Tags = @()
+                Dependencies = @()
+                FileExtensionGate = @()
                 DefaultSkillIds = @()
                 LoadPosition = $null
                 TokenBudget = $null
@@ -126,6 +128,34 @@ function Get-BabelCatalogEntries {
             } else {
                 $current.Tags = @(
                     $rawTags.Split(',') |
+                        ForEach-Object { $_.Trim().Trim('"') } |
+                        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                )
+            }
+            continue
+        }
+
+        if ($line -match '^\s+file_extension_gate:\s+\[(.*)\]\s*$') {
+            $rawGate = $matches[1].Trim()
+            if ([string]::IsNullOrWhiteSpace($rawGate)) {
+                $current.FileExtensionGate = @()
+            } else {
+                $current.FileExtensionGate = @(
+                    $rawGate.Split(',') |
+                        ForEach-Object { $_.Trim().Trim('"') } |
+                        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                )
+            }
+            continue
+        }
+
+        if ($line -match '^\s+dependencies:\s+\[(.*)\]\s*$') {
+            $rawDeps = $matches[1].Trim()
+            if ([string]::IsNullOrWhiteSpace($rawDeps)) {
+                $current.Dependencies = @()
+            } else {
+                $current.Dependencies = @(
+                    $rawDeps.Split(',') |
                         ForEach-Object { $_.Trim().Trim('"') } |
                         Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
                 )
@@ -246,6 +276,64 @@ function Get-EntryById {
     return $entry
 }
 
+# Mirrors the TS twin (stackResolver.CATALOG_ID_ALIASES): legacy ids normalize to
+# their current canonical ids before dependency/identity comparisons.
+$script:CatalogIdAliases = @{
+    "skill_gradle" = "skill_gradle_wrapper"
+    "skill_gradle_bootstrap" = "skill_gradle_wrapper"
+    "skill_bash_scripting" = "skill_unix_shell"
+    "skill_shell_scripting" = "skill_unix_shell"
+    "skill_git" = "skill_unix_shell"
+    "skill_git_operations" = "skill_unix_shell"
+    "skill_file_operations" = "skill_exact_output_schema"
+    "skill_cli_tooling" = "skill_nodejs_cli"
+    "skill_python" = "skill_python_backend"
+    "skill_python_scripting" = "skill_python_backend"
+    "skill_python_validation" = "skill_python_backend"
+    "skill_python_verification" = "skill_python_backend"
+    "skill_python_testing" = "skill_python_backend"
+    "skill_csv_writer" = "skill_exact_output_schema"
+    "skill_csv_output" = "skill_exact_output_schema"
+    "domain_android" = "domain_android_kotlin"
+    "domain_mobile" = "domain_android_kotlin"
+    "domain_mobile_suite" = "domain_android_kotlin"
+    "domain_game" = "domain_godot_game_dev"
+    "domain_game_dev" = "domain_godot_game_dev"
+    "domain_godot" = "domain_godot_game_dev"
+    "domain_godot_game" = "domain_godot_game_dev"
+    "skill_godot_ui" = "skill_godot_ui_runtime"
+    "skill_hd2d_rpg_ui" = "skill_godot_hd2d_rpg_ui"
+    "skill_octopath_ui" = "skill_godot_hd2d_rpg_ui"
+    "skill_godot_android" = "skill_godot_android_export"
+    "skill_godot_performance" = "skill_godot_performance_mobile"
+    "skill_android_tv_game" = "skill_android_tv_game_ux"
+    "overlay_terminal_bench_2" = "overlay_terminal_bench"
+    "behavioral_core_v10" = "behavioral_core_v11"
+    "behavioral_cognitive_micro_v7" = "behavioral_core_v11"
+    "behavioral_guard_v7" = "behavioral_core_v11"
+}
+
+function Convert-NormalizedCatalogId {
+    param([Parameter(Mandatory = $true)][string]$EntryId)
+    if ($script:CatalogIdAliases.ContainsKey($EntryId)) { return [string]$script:CatalogIdAliases[$EntryId] }
+    return $EntryId
+}
+
+function Test-HasFileWithExtension {
+    param(
+        [Parameter(Mandatory = $true)][string]$Directory,
+        [string[]]$Extensions
+    )
+    if (-not (Test-Path -LiteralPath $Directory)) { return $false }
+    foreach ($ext in $Extensions) {
+        if ([string]::IsNullOrWhiteSpace($ext)) { continue }
+        if (@(Get-ChildItem -LiteralPath $Directory -Recurse -File -Filter "*$($ext.Trim())" -ErrorAction SilentlyContinue).Count -gt 0) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Get-AlwaysLoadBehavioralEntries {
     param(
         [Parameter(Mandatory = $true)]
@@ -347,6 +435,8 @@ function Resolve-DefaultClientSurface {
         "codex" { "codex_extension" }
         "claude" { "claude_code" }
         "gemini" { "gemini_cli" }
+        # Native Babel CLI lane — no editor-specific surface; 'other' is the enum catch-all.
+        "deepseek" { "other" }
     }
     return $resolved
 }
@@ -362,8 +452,8 @@ function Get-LayerRank {
         "domain_architect" { return 2 }
         "skill" { return 3 }
         "project_overlay" { return 4 }
-        "task_overlay" { return 5 }
-        "model_adapter" { return 6 }
+        "model_adapter" { return 5 }
+        "task_overlay" { return 6 }
         "pipeline_stage" { return 7 }
         default { return 999 }
     }
@@ -790,15 +880,11 @@ $selectedCodexAdapterName = switch ($CodexAdapter) {
 }
 
 $selectedAdapterId = switch ($Model) {
-    "codex"  {
-        if ($selectedCodexAdapterName -eq "ultra") {
-            "adapter_codex"
-        } else {
-            "adapter_codex_balanced"
-        }
-    }
-    "claude" { "adapter_claude" }
-    "gemini" { "adapter_gemini" }
+    "codex"    { "adapter_codex" }
+    "deepseek" { "adapter_deepseek_balanced" }
+    "claude"   { "adapter_claude" }
+    "gemini"   { "adapter_gemini" }
+    default    { throw "Unsupported model '$Model' — add an adapter mapping in resolve-local-stack.ps1." }
 }
 
 $activeRepoPolicies = @()
@@ -886,9 +972,6 @@ if ($null -ne $resolverRankingPolicy -and $Model -eq "codex") {
     if ($preferredStackIds -contains "adapter_codex") {
         $selectedCodexAdapterName = "ultra"
         $selectedAdapterId = "adapter_codex"
-    } elseif ($preferredStackIds -contains "adapter_codex_balanced") {
-        $selectedCodexAdapterName = "balanced"
-        $selectedAdapterId = "adapter_codex_balanced"
     }
 }
 
@@ -959,7 +1042,7 @@ foreach ($entry in $baseEntries) {
         Layer = $entry.Layer
         LoadPosition = $entry.LoadPosition
         RelativePath = $entry.Path
-        FullPath = $entry.Path
+        FullPath = (Join-Path $Root $entry.Path)
         OrderIndex = $order++
     })
 }
@@ -973,7 +1056,7 @@ if ($Project -ne "global") {
             Layer = $entry.Layer
             LoadPosition = $entry.LoadPosition
             RelativePath = $entry.Path
-            FullPath = $entry.Path
+            FullPath = (Join-Path $Root $entry.Path)
             OrderIndex = $order++
         })
     }
@@ -992,36 +1075,31 @@ foreach ($overlayId in $selectedTaskOverlayIds) {
         Layer = $entry.Layer
         LoadPosition = $entry.LoadPosition
         RelativePath = $entry.Path
-        FullPath = $entry.Path
+        FullPath = (Join-Path $Root $entry.Path)
         OrderIndex = $order++
     })
 }
 
-switch ($PipelineMode) {
-    "verified" {
-        $entry = Get-EntryById -Entries $entries -Id "pipeline_qa_reviewer"
-        $selectedEntries.Add([PSCustomObject]@{
-            Id = $entry.Id
-            Layer = $entry.Layer
-            LoadPosition = $entry.LoadPosition
-            RelativePath = $entry.Path
-            FullPath = $entry.Path
-            OrderIndex = $order++
-        })
-    }
-    "autonomous" {
-        foreach ($id in @("pipeline_qa_reviewer", "pipeline_cli_executor")) {
-            $entry = Get-EntryById -Entries $entries -Id $id
-            $selectedEntries.Add([PSCustomObject]@{
-                Id = $entry.Id
-                Layer = $entry.Layer
-                LoadPosition = $entry.LoadPosition
-                RelativePath = $entry.Path
-                FullPath = $entry.Path
-                OrderIndex = $order++
-            })
-        }
-    }
+# Pipeline-stage selection mirrors the TS twin (localStackResolver):
+# deep (+ legacy verified/autonomous aliases) -> QA reviewer + CLI executor;
+# plan -> QA reviewer only.
+$pipelineStageIdsForMode = switch ($PipelineMode) {
+    "deep"        { @("pipeline_qa_reviewer", "pipeline_cli_executor") }
+    "verified"    { @("pipeline_qa_reviewer", "pipeline_cli_executor") }
+    "autonomous"  { @("pipeline_qa_reviewer", "pipeline_cli_executor") }
+    "plan"        { @("pipeline_qa_reviewer") }
+    default       { @() }
+}
+foreach ($stageId in $pipelineStageIdsForMode) {
+    $entry = Get-EntryById -Entries $entries -Id $stageId
+    $selectedEntries.Add([PSCustomObject]@{
+        Id = $entry.Id
+        Layer = $entry.Layer
+        LoadPosition = $entry.LoadPosition
+        RelativePath = $entry.Path
+        FullPath = (Join-Path $Root $entry.Path)
+        OrderIndex = $order++
+    })
 }
 
 $selectedEntries = @($selectedEntries |
@@ -1029,6 +1107,146 @@ $selectedEntries = @($selectedEntries |
         @{ Expression = { Get-LayerRank -Layer ([string]$_.Layer) } }, `
         @{ Expression = { if ($null -eq $_.LoadPosition) { [int]::MaxValue } else { [int]$_.LoadPosition } } }, `
         @{ Expression = { [int]$_.OrderIndex } })
+
+# Guard-presence assertion (mirrors the TS twin/stackResolver): when pipeline stages
+# are present, behavioral_core_v11 (which includes guard rules) must be in the stack.
+$hasPipelineStage = @($selectedEntries | Where-Object { $_.Layer -eq "pipeline_stage" }).Count -gt 0
+$hasBehavioralCore = @($selectedEntries | Where-Object { $_.Id -eq "behavioral_core_v11" }).Count -gt 0
+if ($hasPipelineStage -and -not $hasBehavioralCore) {
+    $guardEntry = Get-EntryById -Entries $entries -Id "behavioral_core_v11"
+    $selectedEntries += [PSCustomObject]@{
+        Id = $guardEntry.Id
+        Layer = $guardEntry.Layer
+        LoadPosition = $guardEntry.LoadPosition
+        RelativePath = $guardEntry.Path
+        FullPath = (Join-Path $Root $guardEntry.Path)
+        OrderIndex = $order++
+    }
+}
+
+$resolvedProjectPath = $null
+
+if (-not [string]::IsNullOrWhiteSpace($ProjectPath)) {
+    if (Test-Path $ProjectPath) {
+        $resolvedProjectPath = (Resolve-Path $ProjectPath).Path
+    } else {
+        Write-Error "Provided project path does not exist: $ProjectPath"
+        exit 1
+    }
+} elseif ($Project -ne "global") {
+    # Mirror the TS twin (localStackResolver.resolveProjectPath): scan family
+    # directories then the workspace root for a directory matching the project name.
+    $projectNameAliases = @{
+        "simlife"         = "SimLife"
+        "godot_td"        = "TowerDefenseGodot"
+        "aetherlyn"       = "AetherlynGameDraft"
+        "app_test_babel"  = "App-test-Babel"
+    }
+    $familyDirectories = @("Project_SaaS", "example_mobile_suite", "example_game_suite")
+    $workspaceRoot = Split-Path -Parent $Root
+    $canonicalDir = if ($projectNameAliases.ContainsKey($Project)) { [string]$projectNameAliases[$Project] } else { $Project }
+
+    $scanRoots = @()
+    foreach ($family in $familyDirectories) {
+        $familyPath = Join-Path $workspaceRoot $family
+        if (Test-Path -LiteralPath $familyPath) { $scanRoots += $familyPath }
+    }
+    $scanRoots += $workspaceRoot
+
+    foreach ($scanRoot in $scanRoots) {
+        $candidate = Join-Path $scanRoot $canonicalDir
+        if (Test-Path -LiteralPath $candidate) {
+            $resolvedProjectPath = (Resolve-Path -LiteralPath $candidate).Path
+            break
+        }
+    }
+}
+
+# File-extension gate (mirrors the TS twin: localStackResolver filteredOrderedEntries +
+# stackResolver "Fix 3"): skills with a file_extension_gate are skipped when no target
+# project path is resolved or no matching file exists under the project path / cwd.
+$gatedSkillIds = New-Object System.Collections.Generic.List[string]
+foreach ($selected in $selectedEntries) {
+    if ($selected.Layer -ne "skill") { continue }
+    $catalogEntry = Get-EntryById -Entries $entries -Id ([string]$selected.Id)
+    if (@($catalogEntry.FileExtensionGate).Count -eq 0) { continue }
+    $projectGatePassed = ($null -ne $resolvedProjectPath) -and (Test-HasFileWithExtension -Directory $resolvedProjectPath -Extensions @($catalogEntry.FileExtensionGate))
+    $cwdGatePassed = Test-HasFileWithExtension -Directory (Get-Location).Path -Extensions @($catalogEntry.FileExtensionGate)
+    if (-not $projectGatePassed -or -not $cwdGatePassed) {
+        $gatedSkillIds.Add([string]$selected.Id)
+    }
+}
+if ($gatedSkillIds.Count -gt 0) {
+    $gateFiltered = New-Object System.Collections.Generic.List[object]
+    foreach ($selected in $selectedEntries) {
+        if ($gatedSkillIds.Contains([string]$selected.Id)) { continue }
+        $gateFiltered.Add($selected)
+    }
+    $selectedEntries = $gateFiltered.ToArray()
+}
+
+# Position-aware skill ordering (mirrors the TS twin stackResolver "Fix 7"):
+# within the contiguous skill range, score skills (+10 if any tag overlaps the
+# domain's tags, +5 if the skill is in any dependency chain) and sort by score
+# descending (stable; higher relevance sits closer to the end = recency effect).
+$domainEntrySelected = $selectedEntries | Where-Object { $_.Layer -eq "domain_architect" } | Select-Object -First 1
+$domainTags = @()
+if ($null -ne $domainEntrySelected) {
+    $domainEntryCatalog = Get-EntryById -Entries $entries -Id ([string]$domainEntrySelected.Id)
+    $domainTags = @($domainEntryCatalog.Tags)
+}
+$dependencyIds = New-Object 'System.Collections.Generic.HashSet[string]'
+foreach ($selected in $selectedEntries) {
+    $catalogEntry = Get-EntryById -Entries $entries -Id ([string]$selected.Id)
+    foreach ($depId in @($catalogEntry.Dependencies)) {
+        [void]$dependencyIds.Add((Convert-NormalizedCatalogId -EntryId ([string]$depId)))
+    }
+}
+$skillStart = -1
+$skillEnd = -1
+for ($i = 0; $i -lt $selectedEntries.Count; $i++) {
+    if ($selectedEntries[$i].Layer -eq "skill") {
+        if ($skillStart -lt 0) { $skillStart = $i }
+        $skillEnd = $i
+    }
+}
+if ($skillStart -ge 0 -and $skillEnd -ge $skillStart) {
+    $scoredSlice = @()
+    foreach ($selected in $selectedEntries[$skillStart..$skillEnd]) {
+        $catalogEntry = Get-EntryById -Entries $entries -Id ([string]$selected.Id)
+        $score = 0
+        foreach ($tag in @($catalogEntry.Tags)) {
+            if ($domainTags -contains $tag) { $score += 10; break }
+        }
+        if ($dependencyIds.Contains((Convert-NormalizedCatalogId -EntryId ([string]$selected.Id)))) { $score += 5 }
+        $scoredSlice += [PSCustomObject]@{ Entry = $selected; Score = $score }
+    }
+    # NOTE: Sort-Object -Descending reverses tie order (not stable), unlike the TS
+    # twin's ES2019 stable sort — so sort ascending by negated score with an explicit
+    # original-index tiebreak to reproduce stable descending semantics exactly.
+    $indexedSlice = New-Object System.Collections.Generic.List[object]
+    $sliceIndex = 0
+    foreach ($scored in $scoredSlice) {
+        $indexedSlice.Add([PSCustomObject]@{
+            Entry = $scored.Entry
+            NegScore = -[int]$scored.Score
+            OrigIndex = $sliceIndex
+        })
+        $sliceIndex++
+    }
+    $sortedSlice = @($indexedSlice |
+        Sort-Object @{ Expression = { [int]$_.NegScore } }, @{ Expression = { [int]$_.OrigIndex } } |
+        ForEach-Object { $_.Entry })
+    $reordered = New-Object System.Collections.Generic.List[object]
+    for ($i = 0; $i -lt $selectedEntries.Count; $i++) {
+        if ($i -eq $skillStart) {
+            foreach ($entry in $sortedSlice) { $reordered.Add($entry) }
+        } elseif ($i -lt $skillStart -or $i -gt $skillEnd) {
+            $reordered.Add($selectedEntries[$i])
+        }
+    }
+    $selectedEntries = $reordered.ToArray()
+}
 
 for ($selectedIndex = 0; $selectedIndex -lt $selectedEntries.Count; $selectedIndex++) {
     $selected = $selectedEntries[$selectedIndex]
@@ -1041,17 +1259,6 @@ for ($selectedIndex = 0; $selectedIndex -lt $selectedEntries.Count; $selectedInd
         RelativePath = $selected.RelativePath
         FullPath = $selected.FullPath
         OrderIndex = $selectedIndex + 1
-    }
-}
-
-$resolvedProjectPath = $null
-
-if (-not [string]::IsNullOrWhiteSpace($ProjectPath)) {
-    if (Test-Path $ProjectPath) {
-        $resolvedProjectPath = (Resolve-Path $ProjectPath).Path
-    } else {
-        Write-Error "Provided project path does not exist: $ProjectPath"
-        exit 1
     }
 }
 
@@ -1081,20 +1288,21 @@ $compactKickoffActive = (
     [string]$kickoffPolicy.proposed_change.preset_id -eq "compact"
 )
 
+$babelEntrypoint = Join-Path $Root "BABEL_BIBLE.md"
 $kickoffPrompt = if ($compactKickoffActive) {
     if ($repoLocalSystemPresent) {
-        "Read BABEL_BIBLE.md, then this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM before planning or coding."
+        "Read $babelEntrypoint, then this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM before planning or coding."
     } elseif ($repoContextFiles.Count -gt 0) {
-        "Read BABEL_BIBLE.md, then this repo's PROJECT_CONTEXT.md before planning or coding."
+        "Read $babelEntrypoint, then this repo's PROJECT_CONTEXT.md before planning or coding."
     } else {
-        "Read BABEL_BIBLE.md before planning or coding."
+        "Read $babelEntrypoint before planning or coding."
     }
 } elseif ($repoLocalSystemPresent) {
-    "Read Babel's BABEL_BIBLE.md first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM/README_FOR_HUMANS_AND_LLMS.md before planning or coding."
+    "Read Babel's $babelEntrypoint first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM/README_FOR_HUMANS_AND_LLMS.md before planning or coding."
 } elseif ($repoContextFiles.Count -gt 0) {
-    "Read Babel's BABEL_BIBLE.md first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md before planning or coding."
+    "Read Babel's $babelEntrypoint first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md before planning or coding."
 } else {
-    "Read Babel's BABEL_BIBLE.md first and use Babel to select the right instruction stack for this task before planning or coding."
+    "Read Babel's $babelEntrypoint first and use Babel to select the right instruction stack for this task before planning or coding."
 }
 
 $verificationHints = @(Normalize-StringArray -Items $activeVerificationHints.ToArray())
@@ -1112,10 +1320,10 @@ $displayRepoContextFiles = @(
 )
 
 $result = [PSCustomObject]@{
-    BabelRoot = "."
-    LocalLearningRoot = "runs/local-learning"
+    BabelRoot = $Root
+    LocalLearningRoot = Join-Path $Root "runs/local-learning"
     Project = $Project
-    ProjectPath = $displayProjectPath
+    ProjectPath = $resolvedProjectPath
     TaskCategory = $TaskCategory
     Model = $Model
     ClientSurface = $resolvedClientSurface
@@ -1130,13 +1338,13 @@ $result = [PSCustomObject]@{
     SelectedCodexAdapter = if ($Model -eq "codex") { $selectedCodexAdapterName } else { $null }
     RecommendedTaskOverlayIds = @($selectedTaskOverlayIds)
     RecommendedSkillIds = @($selectedCognitionSkillIds)
-    BabelEntrypoint = "BABEL_BIBLE.md"
+    BabelEntrypoint = $babelEntrypoint
     BabelReferenceFiles = @(
-        "PROJECT_CONTEXT.md"
-        "prompt_catalog.yaml"
+        (Join-Path $Root "PROJECT_CONTEXT.md")
+        (Join-Path $Root "prompt_catalog.yaml")
     )
     SelectedStack = $selectedEntries
-    RepoContextFiles = $displayRepoContextFiles
+    RepoContextFiles = @($repoContextFiles)
     RepoLocalSystemPresent = $repoLocalSystemPresent
     PrecedenceRules = @(
         "Babel chooses the cross-project stack and operating mode."

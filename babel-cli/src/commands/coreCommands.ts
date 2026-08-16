@@ -1547,7 +1547,7 @@ export function registerCoreCommands(program: Command): void {
     )
     .option('--project <project>', 'Project overlay target', 'global')
     .option('--project-path <path>', 'Concrete project path for repo-local context detection')
-    .option('--model <model>', 'Model family: codex | claude | gemini', 'codex')
+    .option('--model <model>', 'Model family: codex | claude | gemini | deepseek', 'codex')
     .option('--client-surface <surface>', 'Client surface identifier')
     .option('--pipeline-mode <mode>', 'Pipeline mode: chat | chat-headless | plan | deep', 'chat')
     .option(

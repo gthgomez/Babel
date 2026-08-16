@@ -78,7 +78,7 @@ export type LocalProject =
   | 'AetherlynGameDraft'
   | 'aetherlyn';
 
-export type LocalModel = 'codex' | 'claude' | 'gemini';
+export type LocalModel = 'codex' | 'claude' | 'gemini' | 'deepseek';
 
 export type LocalPipelineMode = 'chat' | 'plan' | 'deep';
 
@@ -105,10 +105,17 @@ function normalizeModel(value: LocalModel | string | undefined): LocalModel {
   const normalized = String(value ?? 'codex')
     .trim()
     .toLowerCase();
-  if (normalized === 'codex' || normalized === 'claude' || normalized === 'gemini') {
+  if (
+    normalized === 'codex' ||
+    normalized === 'claude' ||
+    normalized === 'gemini' ||
+    normalized === 'deepseek'
+  ) {
     return normalized;
   }
-  throw new Error(`Invalid model "${value}". Expected "codex", "claude", or "gemini".`);
+  throw new Error(
+    `Invalid model "${value}". Expected "codex", "claude", "gemini", or "deepseek".`,
+  );
 }
 
 export interface LocalStackEntry {
@@ -301,6 +308,9 @@ function resolveDefaultClientSurface(model: LocalModel): string {
       return 'claude_code';
     case 'gemini':
       return 'gemini_cli';
+    case 'deepseek':
+      // Native Babel CLI lane — no editor-specific surface; 'other' is the enum catch-all.
+      return 'other';
   }
 }
 
@@ -764,12 +774,12 @@ export function resolveLocalStack(options: LocalStackResolveOptions): LocalStack
     options.codexAdapter === 'ultra' ? 'ultra' : 'balanced';
   let selectedAdapterId =
     model === 'codex'
-      ? selectedCodexAdapterName === 'ultra'
-        ? 'adapter_codex'
-        : 'adapter_codex'
-      : model === 'claude'
-        ? 'adapter_claude'
-        : 'adapter_gemini';
+      ? 'adapter_codex'
+      : model === 'deepseek'
+        ? 'adapter_deepseek_balanced'
+        : model === 'claude'
+          ? 'adapter_claude'
+          : 'adapter_gemini';
 
   const activeRepoPolicies =
     project !== 'global'

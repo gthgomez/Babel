@@ -31,19 +31,31 @@ interface Fixture {
   loadAllSkills?: boolean;
 }
 
+// NOTE: fixtures use global/example projects (or aliases that resolve to nothing on
+// any machine). Named projects that exist on the maintainer's workspace
+// (e.g. AuditGuard, Project_Android) trigger machine-content-dependent implicit-skill
+// detection in the TS resolver, which the legacy PS wrapper cannot reproduce — those
+// were replaced by deterministic equivalents in 2026-08-16. The in-process vs CLI
+// comparison still exercises every fixture against the twin.
 const FIXTURES: Fixture[] = [
   { taskCategory: 'frontend', project: 'global', model: 'codex', pipelineMode: 'chat' },
   { taskCategory: 'backend', project: 'example_saas_backend', model: 'codex', pipelineMode: 'deep' },
-  { taskCategory: 'compliance', project: 'AuditGuard', model: 'claude', pipelineMode: 'chat' },
-  { taskCategory: 'mobile', project: 'Project_Android', model: 'gemini', pipelineMode: 'deep' },
+  { taskCategory: 'compliance', project: 'global', model: 'claude', pipelineMode: 'chat' },
+  { taskCategory: 'mobile', project: 'global', model: 'gemini', pipelineMode: 'deep' },
   { taskCategory: 'game', project: 'godot_td', model: 'codex', pipelineMode: 'chat' },
   { taskCategory: 'research', project: 'global', model: 'codex', pipelineMode: 'deep' },
   { taskCategory: 'frontend', project: 'global', model: 'CODEX', pipelineMode: 'chat' },
+  { taskCategory: 'backend', project: 'global', model: 'deepseek', pipelineMode: 'deep' },
 ];
 
 function normalizeModel(model: string): LocalModel {
   const normalized = model.trim().toLowerCase();
-  if (normalized === 'codex' || normalized === 'claude' || normalized === 'gemini') {
+  if (
+    normalized === 'codex' ||
+    normalized === 'claude' ||
+    normalized === 'gemini' ||
+    normalized === 'deepseek'
+  ) {
     return normalized;
   }
   throw new Error(`Unsupported fixture model "${model}"`);

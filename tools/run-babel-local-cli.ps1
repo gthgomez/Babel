@@ -8,7 +8,7 @@ param(
     [string]$Project = "global",
 
     [Parameter(Mandatory = $true)]
-    [ValidateSet("codex", "claude", "gemini")]
+    [ValidateSet("codex", "claude", "gemini", "deepseek")]
     [string]$Model,
 
     [ValidateSet("direct", "verified", "autonomous", "manual")]
