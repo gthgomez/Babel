@@ -581,6 +581,21 @@ describe('Live chatApproval path', () => {
     assert.ok(getChatApprovalSession().history.some((h) => h.decision === 'deny'));
 
     process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1';
+    // P0-4: the benchmark var alone must NOT establish benchmark authority —
+    // headless/CI never grants it without BABEL_BENCHMARK_MODE=1. The write
+    // falls to headless resolution and is denied.
+    const notBenchmarked = await requestChatActionApproval({
+      type: 'write_file',
+      path: 'a.ts',
+      content: 'x',
+    });
+    assert.equal(notBenchmarked, false);
+    assert.ok(
+      !getChatApprovalSession().history.some((h) => h.decision === 'allow_once'),
+      'benchmark var alone must not auto-approve (P0-4)',
+    );
+
+    process.env['BABEL_BENCHMARK_MODE'] = '1';
     const allowed = await requestChatActionApproval({
       type: 'write_file',
       path: 'a.ts',
@@ -590,6 +605,7 @@ describe('Live chatApproval path', () => {
     assert.ok(getChatApprovalSession().history.some((h) => h.decision === 'allow_once'));
 
     delete process.env['BABEL_BENCHMARK_AUTO_APPROVE'];
+    delete process.env['BABEL_BENCHMARK_MODE'];
     delete process.env['CI'];
   });
 });
