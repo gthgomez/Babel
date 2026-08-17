@@ -2,10 +2,10 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-08-16
+last_verified: 2026-08-17
 -->
 
-Remote approval UI is **not** implemented. Local approval identity was audited and narrowly hardened so Stage 2 `ALLOW_ONCE` has something real to bind. Mobile `ALLOW_SESSION` remains forbidden.
+Remote V1 now exposes `ALLOW_ONCE` / `DENY` via `approval.decide` bound to the existing operation digest. Remote UI cannot create `ALLOW_SESSION`. Chat MCP remains a local TUI bypass; **remote** MCP is fail-closed (`AUTOMATED_VERIFIED`). Phone approval UX is `NOT_VERIFIED`.
 
 ## Ledger (current code)
 

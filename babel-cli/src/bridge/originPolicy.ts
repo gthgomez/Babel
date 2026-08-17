@@ -20,8 +20,9 @@ function parseOriginUrl(raw: string): URL | null {
 }
 
 function parseAllowed(raw: string): { protocol: string; hostname: string; anyPort: boolean; port: string } | null {
-  if (raw === '*' || raw.includes('*')) return null;
+  if (raw === '*') return null;
   const wildcardPort = raw.endsWith(':*');
+  if (!wildcardPort && raw.includes('*')) return null;
   const candidate = wildcardPort ? raw.slice(0, -2) : raw;
   const url = parseOriginUrl(candidate.includes('://') ? candidate : `http://${candidate}`);
   if (!url) return null;

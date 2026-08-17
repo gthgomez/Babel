@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+  <meta name="theme-color" content="#111111"/>
+  <meta name="application-name" content="Babel Remote"/>
+  <link rel="manifest" href="/ui/manifest.webmanifest"/>
+  <link rel="icon" href="/ui/icon.svg" type="image/svg+xml"/>
+  <link rel="stylesheet" href="/ui/styles.css"/>
+  <title>Babel Remote</title>
+</head>
+<body>
+  <header class="header">
+    <div>
+      <h1>Babel Remote</h1>
+      <p id="workspace" class="muted">workspace: —</p>
+    </div>
+    <div class="status-block">
+      <div id="host-state" data-testid="host-state">UNKNOWN</div>
+      <div id="thread-state" data-testid="thread-state">thread: NONE</div>
+      <div id="turn-state" data-testid="turn-state">turn: IDLE</div>
+    </div>
+  </header>
+
+  <section class="card" id="auth-card">
+    <h2>Authenticate</h2>
+    <label>Bearer token
+      <input id="token" type="password" autocomplete="off" spellcheck="false"/>
+    </label>
+    <label>Workspace root
+      <input id="root" autocomplete="off" placeholder="registered host workspace"/>
+    </label>
+    <div class="row">
+      <button id="connect" type="button">Connect</button>
+      <button id="reconnect" type="button" disabled>Reconnect</button>
+    </div>
+    <p class="muted">Token stays in memory for this page only. Reload requires re-auth.</p>
+  </section>
+
+  <section class="card">
+    <h2>Thread</h2>
+    <div class="row">
+      <button id="create" type="button" disabled>Create thread</button>
+      <button id="resume" type="button" disabled>Resume thread</button>
+    </div>
+    <label>Known thread id
+      <input id="thread-id" autocomplete="off"/>
+    </label>
+  </section>
+
+  <section class="card">
+    <h2>Composer</h2>
+    <textarea id="composer" placeholder="Paste the full Markdown/code prompt. This is structured UTF-8, not keystrokes." disabled></textarea>
+    <div class="row">
+      <button id="send" type="button" disabled>Send</button>
+      <button id="stop" type="button" disabled>Stop</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Current action</h2>
+    <p id="action-state">idle</p>
+  </section>
+
+  <section class="card hidden" id="approval-card">
+    <h2>Approval</h2>
+    <pre id="approval-body"></pre>
+    <div class="row">
+      <button id="allow-once" type="button">ALLOW ONCE</button>
+      <button id="deny" type="button">DENY</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Transcript</h2>
+    <div id="transcript" class="transcript"></div>
+  </section>
+
+  <section class="card">
+    <h2>Changed files</h2>
+    <pre id="files"></pre>
+    <button id="refresh-files" type="button" disabled>view changed files</button>
+  </section>
+
+  <section class="card">
+    <h2>Diff</h2>
+    <pre id="diff" class="diff"></pre>
+    <button id="refresh-diff" type="button" disabled>view diff</button>
+  </section>
+
+  <section class="card">
+    <h2>Verification</h2>
+    <p id="verification">NOT_VERIFIED</p>
+    <button id="refresh-verification" type="button" disabled>view verification</button>
+  </section>
+
+  <script src="/ui/state.js"></script>
+  <script src="/ui/render.js"></script>
+  <script src="/ui/app.js"></script>
+</body>
+</html>

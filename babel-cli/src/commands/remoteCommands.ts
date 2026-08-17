@@ -35,9 +35,9 @@ export function registerRemoteCommands(program: Command): void {
         port,
         allowedWorkspaceRoot: workspace,
         allowedOrigins: [
-          'http://127.0.0.1',
-          'http://localhost',
-          'https://localhost',
+          'http://127.0.0.1:*',
+          'http://localhost:*',
+          'https://localhost:*',
           ...extraOrigins,
         ],
       });

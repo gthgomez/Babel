@@ -9,6 +9,7 @@ import { after, before, describe, it } from 'node:test';
 import { ChatEngine } from '../agent/chatEngine.js';
 import { hashUserMessage } from '../protocol/messageIntegrity.js';
 import { BridgeServer } from './sessionServer.js';
+import { originAllowed } from './protocolGateway.js';
 
 function httpRequest(
   url: string,
@@ -315,5 +316,20 @@ describe('ADR-010 bridge gateway', () => {
     });
     assert.equal(typeof engine.submitMessageStream, 'function');
     assert.equal(typeof engine.cancel, 'function');
+  });
+});
+
+describe('originAllowed loopback wildcards', () => {
+  const allowed = ['http://127.0.0.1:*', 'http://localhost:*'];
+
+  it('accepts a browser Origin that includes the listen port', () => {
+    assert.equal(originAllowed('http://127.0.0.1:14601', allowed), true);
+    assert.equal(originAllowed('http://localhost:4545', allowed), true);
+    assert.equal(originAllowed('http://127.0.0.1', allowed), true);
+  });
+
+  it('rejects unapproved and lookalike origins', () => {
+    assert.equal(originAllowed('https://evil.example', allowed), false);
+    assert.equal(originAllowed('http://127.0.0.1.evil.example', allowed), false);
   });
 });

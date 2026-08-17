@@ -2,7 +2,7 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-08-16
+last_verified: 2026-08-17
 -->
 **Status:** Accepted for the protocol contract; runtime transport remains partial
 **Date:** 2026-06-30  
@@ -65,6 +65,9 @@ Large complete messages travel as HTTP JSON-RPC request bodies (`turn.submit.par
 | `turn.submit` | `thread_id`, `message`, optional `command_id` | `{ thread_id, turn_id }` | `ChatEngine.submitMessageStream()` |
 | `turn.cancel` | `thread_id` | `{ thread_id, turn_id, cancelled }` | `ChatEngine` abort / generation cancel |
 | `history.lookup` | `thread_id`, optional `cell_id`, `turn_id`, `limit`, `cursor` | `{ cells, cursor?, has_more? }` | D3 `loadThreadCells` with filters |
+| `approval.decide` | `approval_id`, `decision`, `thread_id`, `turn_id`, optional `operation_digest` | `{ approval_id, decision, consumed }` | Remote V1 consume of pending operation digest (`allow_once` / `deny` only) |
+| `workspace.changes` | `thread_id` | `{ available, files, diff, reason? }` | Existing Git status/diff in the thread project root |
+| `verification.lookup` | `thread_id` | `{ status, reason, has_machine_evidence }` | Stored machine evidence only; missing evidence is `NOT_VERIFIED` |
 
 #### Notifications (server → client, no `id` field)
 
@@ -122,6 +125,14 @@ may be added later as an optional transport behind the same message types.
 replace the stdio decision, does not promote WebSocket to semantic authority, and
 does not claim the D2 out-of-process TUI exit is complete. Historical rejection
 above remains the D1/D2 rationale.
+
+**Amendment (2026-08-17):** Babel Remote V1 adds backward-compatible methods
+`approval.decide`, `workspace.changes`, and `verification.lookup`. Pending
+approvals reuse the existing `permission.request` / `permission.respond`
+notifications with optional digest identity fields. V1 WebSocket credentials are
+short-lived tickets minted over authenticated HTTP; the long-lived bearer is not
+part of the V1 browser URL. These methods do not replace the catalog's existing
+thread/turn/history contract.
 
 ### gRPC / protobuf
 

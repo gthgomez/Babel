@@ -21,36 +21,59 @@ export const MAX_RPC_BYTES = 2 * 1024 * 1024;
 
 export type JsonRpcNotificationHandler = (payload: string) => void;
 
+interface GatewaySubscriber {
+  handler: JsonRpcNotificationHandler;
+  threadId?: string;
+}
+
+function notificationThreadId(notification: object): string | undefined {
+  const params = (notification as { params?: { thread_id?: unknown } }).params;
+  return typeof params?.thread_id === 'string' ? params.thread_id : undefined;
+}
+
 export class ProtocolGateway {
   readonly host: ProtocolHostState;
-  /** Stage 1: one trusted operator connection. */
-  private subscriber: JsonRpcNotificationHandler | null = null;
+  private subscribers = new Set<GatewaySubscriber>();
 
   constructor(options: {
     allowedWorkspaceRoot: string;
     engineFactory?: ProtocolHostState['engineFactory'];
+    remoteSurface?: boolean;
   }) {
     const allowedRoot = options.allowedWorkspaceRoot;
     this.host = createProtocolHostState({
       executeWithoutNotifications: true,
       projectRootGuard: (projectRoot) => assertAllowedProjectRoot(projectRoot, allowedRoot),
+      remoteSurface: options.remoteSurface !== false,
       ...(options.engineFactory ? { engineFactory: options.engineFactory } : {}),
     });
   }
 
-  subscribe(handler: JsonRpcNotificationHandler): () => void {
-    this.subscriber = handler;
+  subscribe(
+    handler: JsonRpcNotificationHandler,
+    options?: { threadId?: string },
+  ): () => void {
+    const subscriber: GatewaySubscriber = {
+      handler,
+      ...(options?.threadId !== undefined ? { threadId: options.threadId } : {}),
+    };
+    this.subscribers.add(subscriber);
     return () => {
-      if (this.subscriber === handler) this.subscriber = null;
+      this.subscribers.delete(subscriber);
     };
   }
 
   private fanout(notification: object): void {
-    if (!this.subscriber) return;
-    try {
-      this.subscriber(JSON.stringify(notification));
-    } catch {
-      this.subscriber = null;
+    const payload = JSON.stringify(notification);
+    const threadId = notificationThreadId(notification);
+    for (const subscriber of this.subscribers) {
+      if (!subscriber.threadId) continue;
+      if (threadId && subscriber.threadId !== threadId) continue;
+      try {
+        subscriber.handler(payload);
+      } catch {
+        /* drop disconnected subscribers */
+      }
     }
   }
 

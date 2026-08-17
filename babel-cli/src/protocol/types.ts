@@ -20,7 +20,10 @@ export type BabelProtocolMethod =
   | 'thread.resume'
   | 'turn.submit'
   | 'turn.cancel'
-  | 'history.lookup';
+  | 'history.lookup'
+  | 'approval.decide'
+  | 'workspace.changes'
+  | 'verification.lookup';
 
 /** Server-initiated JSON-RPC notifications (no response `id`). */
 export type BabelProtocolNotification =
@@ -37,6 +40,9 @@ export const BABEL_PROTOCOL_METHODS: readonly BabelProtocolMethod[] = [
   'turn.submit',
   'turn.cancel',
   'history.lookup',
+  'approval.decide',
+  'workspace.changes',
+  'verification.lookup',
 ] as const;
 
 export const BABEL_PROTOCOL_NOTIFICATIONS: readonly BabelProtocolNotification[] = [
@@ -153,6 +159,22 @@ export interface HistoryLookupParams {
   cursor?: string;
 }
 
+export interface ApprovalDecideParams {
+  approval_id: string;
+  decision: string;
+  thread_id: ThreadId;
+  turn_id: string;
+  operation_digest?: string;
+}
+
+export interface WorkspaceChangesParams {
+  thread_id: ThreadId;
+}
+
+export interface VerificationLookupParams {
+  thread_id: ThreadId;
+}
+
 // ─── Request results ──────────────────────────────────────────────────────────
 
 export interface ThreadCreateResult {
@@ -183,6 +205,30 @@ export interface HistoryLookupResult {
   has_more?: boolean;
 }
 
+export interface ApprovalDecideResult {
+  approval_id: string;
+  decision: 'allow_once' | 'deny';
+  consumed: boolean;
+}
+
+export interface WorkspaceFileChange {
+  path: string;
+  status: string;
+}
+
+export interface WorkspaceChangesResult {
+  available: boolean;
+  files: WorkspaceFileChange[];
+  diff: string;
+  reason?: string;
+}
+
+export interface VerificationLookupResult {
+  status: string;
+  reason: string;
+  has_machine_evidence: boolean;
+}
+
 // ─── Notification payloads ────────────────────────────────────────────────────
 
 export interface TurnEventParams {
@@ -203,6 +249,15 @@ export interface PermissionRequestParams {
   thread_id: ThreadId;
   permission: string;
   reason?: string;
+  approval_id?: string;
+  turn_id?: string;
+  action_type?: string;
+  command?: string;
+  cwd?: string;
+  target_path?: string;
+  operation_digest?: string;
+  allowed_decisions?: readonly ('allow_once' | 'deny')[];
+  expires_at?: string;
 }
 
 export interface PermissionRespondParams {

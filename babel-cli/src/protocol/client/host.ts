@@ -29,7 +29,16 @@ import type {
   TurnCancelResult,
   TurnEventParams,
   TurnSubmitResult,
+  ApprovalDecideResult,
+  WorkspaceChangesResult,
+  VerificationLookupResult,
 } from '../types.js';
+import { RemoteApprovalBroker, runOnRemoteSurface } from '../../bridge/remoteApproval.js';
+import { collectWorkspaceChanges } from '../../bridge/workspaceChanges.js';
+import {
+  mapVerificationEvidence,
+  type VerificationEvidence,
+} from '../../bridge/verificationMap.js';
 
 export interface ProtocolHostState {
   engines: Map<string, ChatEngine>;
@@ -43,12 +52,17 @@ export interface ProtocolHostState {
   idempotency: Map<string, { messageSha256: string; response: JsonRpcResponse }>;
   /** thread:turn → integrity of the message passed into ChatEngine.submitMessageStream */
   lastMessageIntegrity: Map<string, MessageIntegrity>;
+  /** Remote V1: bind ChatEngine tool/MCP authority to the loopback surface. */
+  remoteSurface: boolean;
+  approvalBroker: RemoteApprovalBroker;
+  verificationByThread: Map<string, VerificationEvidence>;
 }
 
 export function createProtocolHostState(options: {
   engineFactory?: (descriptor: SessionDescriptor) => ChatEngine;
   executeWithoutNotifications?: boolean;
   projectRootGuard?: (projectRoot: string) => string;
+  remoteSurface?: boolean;
 } = {}): ProtocolHostState {
   return {
     engines: new Map(),
@@ -59,6 +73,9 @@ export function createProtocolHostState(options: {
     ...(options.projectRootGuard ? { projectRootGuard: options.projectRootGuard } : {}),
     idempotency: new Map(),
     lastMessageIntegrity: new Map(),
+    remoteSurface: options.remoteSurface === true,
+    approvalBroker: new RemoteApprovalBroker(),
+    verificationByThread: new Map(),
   };
 }
 
@@ -228,8 +245,7 @@ export async function handleProtocolRequest(
         }
 
         if (onNotification || state.executeWithoutNotifications) {
-          // Launch turn in background
-          Promise.resolve().then(async () => {
+          const launchTurn = async () => {
             let seq = 0;
             try {
               // Hash immediately before the engine call — ChatEngine boundary.
@@ -280,7 +296,22 @@ export async function handleProtocolRequest(
                 });
               } catch { /* ignore */ }
             }
-          });
+          };
+          if (state.remoteSurface) {
+            const surface = {
+              broker: state.approvalBroker,
+              threadId: params.thread_id,
+              turnId: String(turnId),
+              failClosedMcp: true as const,
+              cwd: descriptor?.projectRoot ?? process.cwd(),
+              ...(onNotification
+                ? { notify: (notification: unknown) => onNotification(notification as never) }
+                : {}),
+            };
+            void runOnRemoteSurface(surface, () => launchTurn());
+          } else {
+            void launchTurn();
+          }
         }
 
         const result: TurnSubmitResult = { thread_id: params.thread_id, turn_id: turnId };
@@ -315,6 +346,9 @@ export async function handleProtocolRequest(
         }
         engine.cancel();
         const turnId = state.activeTurns.get(params.thread_id) ?? null;
+        if (turnId !== null) {
+          state.approvalBroker.cancelTurn(params.thread_id, String(turnId));
+        }
         state.activeTurns.delete(params.thread_id);
         const result: TurnCancelResult = {
           thread_id: params.thread_id,
@@ -354,6 +388,78 @@ export async function handleProtocolRequest(
         if (result.has_more && slice.length > 0) {
           result.cursor = slice[slice.length - 1]?.cell_id ?? '';
         }
+        return { jsonrpc: '2.0', id, result };
+      }
+      case 'approval.decide': {
+        const params = request.params;
+        if (!params) {
+          return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'Missing params');
+        }
+        const decided = state.approvalBroker.decide({
+          approval_id: params.approval_id,
+          decision: params.decision,
+          thread_id: params.thread_id,
+          turn_id: params.turn_id,
+          ...(params.operation_digest !== undefined
+            ? { operation_digest: params.operation_digest }
+            : {}),
+        });
+        if (!decided.ok) {
+          return errorResponse(
+            id,
+            BabelProtocolErrorCode.INVALID_PARAMS,
+            `approval.decide rejected: ${decided.error}`,
+          );
+        }
+        const result: ApprovalDecideResult = {
+          approval_id: decided.record.approval_id,
+          decision: params.decision === 'deny' ? 'deny' : 'allow_once',
+          consumed: decided.record.state === 'consumed' || decided.record.state === 'denied',
+        };
+        onNotification?.({
+          jsonrpc: '2.0',
+          method: 'permission.respond',
+          params: {
+            thread_id: params.thread_id,
+            permission: decided.record.operation.action_type,
+            granted: decided.record.state === 'consumed',
+          },
+        });
+        return { jsonrpc: '2.0', id, result };
+      }
+      case 'workspace.changes': {
+        const params = request.params;
+        if (!params) {
+          return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'Missing params');
+        }
+        if (!threadStoreExists(params.thread_id)) {
+          return errorResponse(
+            id,
+            BabelProtocolErrorCode.THREAD_NOT_FOUND,
+            `Thread not found: ${params.thread_id}`,
+          );
+        }
+        const descriptor =
+          state.descriptors.get(params.thread_id) ?? loadSessionDescriptor(params.thread_id);
+        const snapshot = collectWorkspaceChanges(descriptor?.projectRoot ?? process.cwd());
+        const result: WorkspaceChangesResult = {
+          available: snapshot.available,
+          files: snapshot.files,
+          diff: snapshot.diff,
+          ...(snapshot.reason !== undefined ? { reason: snapshot.reason } : {}),
+        };
+        return { jsonrpc: '2.0', id, result };
+      }
+      case 'verification.lookup': {
+        const params = request.params;
+        if (!params) {
+          return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'Missing params');
+        }
+        const stored = state.verificationByThread.get(params.thread_id);
+        const mapped = mapVerificationEvidence(
+          stored ?? { hasMachineEvidence: false },
+        );
+        const result: VerificationLookupResult = mapped;
         return { jsonrpc: '2.0', id, result };
       }
       default:

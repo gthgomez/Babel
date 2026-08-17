@@ -15,8 +15,10 @@
  *   DELETE /sessions/:id      — Stop and remove a session
  *   WS     /ws?sessionId=...  — ADR-010 JSON-RPC over WebSocket
  *
- * Authentication: Bearer token via `Authorization` header or `?token=` query
- * parameter (HMAC-SHA256, configurable via `~/.babel/bridge.json`).
+ * Authentication: Bearer token via `Authorization` header for HTTP.
+ * V1 WebSocket uses a short-lived single-use ticket from POST /ws/ticket.
+ * A legacy `?token=` query is accepted only for non-V1 tools and does not
+ * subscribe to turn events.
  *
  * Configuration:
  *   - Port:    BABEL_BRIDGE_PORT env var, or bridge.json port, or 4545
@@ -43,7 +45,8 @@ import { computeWsAcceptKey, createTransport, WebSocketTransport } from './trans
 import { sessionRunner } from './sessionRunner.js';
 import { assertLoopbackBind } from './bindGuard.js';
 import { ProtocolGateway, originAllowed, readLimitedBody } from './protocolGateway.js';
-import { REMOTE_UI_HTML } from './remoteUi.js';
+import { writeRemoteUiResponse } from './remoteUiAssets.js';
+import { WsTicketStore } from './wsTicket.js';
 import type { ProtocolHostState } from '../protocol/client/host.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -181,6 +184,7 @@ export class BridgeServer {
   private _port = DEFAULT_BRIDGE_PORT;
   readonly protocolGateway: ProtocolGateway;
   private readonly listenHost = '127.0.0.1';
+  readonly wsTickets = new WsTicketStore();
 
   /** Active WebSocket transports keyed by session ID. */
   private wsTransports = new Map<string, BridgeTransport>();
@@ -195,7 +199,13 @@ export class BridgeServer {
     const config = loadBridgeConfig();
     this.authToken =
       this.options.authToken ?? config.authToken ?? randomUUID();
-    this.allowedOrigins = this.options.allowedOrigins ?? config.allowedOrigins ?? ['*'];
+    this.allowedOrigins =
+      this.options.allowedOrigins ??
+      config.allowedOrigins ?? [
+        'http://127.0.0.1:*',
+        'http://localhost:*',
+        'https://localhost:*',
+      ];
     this.protocolGateway =
       this.options.protocolGateway ??
       new ProtocolGateway({
@@ -318,9 +328,9 @@ export class BridgeServer {
       return;
     }
 
-    if (pathname === '/ui' && req.method === 'GET') {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(REMOTE_UI_HTML);
+    if ((pathname === '/ui' || pathname.startsWith('/ui/')) && req.method === 'GET') {
+      if (writeRemoteUiResponse(pathname, res)) return;
+      errorResponse(res, 404, 'Not found');
       return;
     }
 
@@ -340,6 +350,15 @@ export class BridgeServer {
     }
 
     setCorsHeaders(res, req.headers['origin'], this.allowedOrigins);
+
+    if (pathname === '/ws/ticket') {
+      if (req.method !== 'POST') {
+        errorResponse(res, 405, 'Method not allowed');
+        return;
+      }
+      void this.handleMintTicket(req, res);
+      return;
+    }
 
     if (pathname === '/rpc') {
       if (req.method !== 'POST') {
@@ -387,6 +406,34 @@ export class BridgeServer {
   }
 
   // ── Session endpoints ─────────────────────────────────────────────────────
+
+  private async handleMintTicket(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = await readLimitedBody(req, 64 * 1024);
+    if (!body.ok) {
+      errorResponse(res, 413, body.error);
+      return;
+    }
+    let parsed: { session_id?: unknown; thread_id?: unknown };
+    try {
+      parsed = JSON.parse(body.body) as { session_id?: unknown; thread_id?: unknown };
+    } catch {
+      errorResponse(res, 400, 'Invalid JSON');
+      return;
+    }
+    if (typeof parsed.session_id !== 'string' || typeof parsed.thread_id !== 'string') {
+      errorResponse(res, 400, 'session_id and thread_id are required');
+      return;
+    }
+    if (!sessionRunner.getSession(parsed.session_id)) {
+      errorResponse(res, 404, `Session '${parsed.session_id}' not found`);
+      return;
+    }
+    const minted = this.wsTickets.mint({
+      sessionId: parsed.session_id,
+      threadId: parsed.thread_id,
+    });
+    jsonResponse(res, 200, minted);
+  }
 
   private async handleRpc(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const body = await readLimitedBody(req);
@@ -491,11 +538,9 @@ export class BridgeServer {
   /**
    * Handle an incoming WebSocket upgrade request.
    *
-   * Expected URL: /ws?sessionId=<id>&token=<auth-token>
-   *
-   * The session ID identifies which bridge session this WebSocket
-   * should connect to. The token can be provided as a query parameter
-   * or via the Authorization header (set by the WebSocket client).
+   * Expected V1 URL: /ws?sessionId=<id>&ticket=<short-lived-ticket>
+   * Legacy tools may still send Authorization or ?token= but that path
+   * does not subscribe to turn.event fan-out.
    */
   private handleWebSocketUpgrade(
     req: IncomingMessage,
@@ -517,17 +562,6 @@ export class BridgeServer {
       return;
     }
 
-    // Authenticate FIRST (token from query param or header)
-    const queryToken = parsedUrl.searchParams.get('token') ?? undefined;
-    const headerToken = extractBearerToken(req.headers['authorization']);
-    const providedToken = queryToken ?? headerToken;
-
-    if (!providedToken || !verifyToken(providedToken, this.authToken)) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      socket.destroy();
-      return;
-    }
-
     const origin = req.headers['origin'];
     if (!originAllowed(origin, this.allowedOrigins, socket.remoteAddress)) {
       socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
@@ -535,12 +569,36 @@ export class BridgeServer {
       return;
     }
 
-    // Extract session ID from query
+    const ticketValue = parsedUrl.searchParams.get('ticket') ?? undefined;
+    const queryToken = parsedUrl.searchParams.get('token') ?? undefined;
+    const headerToken = extractBearerToken(req.headers['authorization']);
     const sessionId = parsedUrl.searchParams.get('sessionId');
     if (!sessionId) {
       socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
       socket.destroy();
       return;
+    }
+
+    let subscribedThreadId: string | undefined;
+    if (ticketValue) {
+      const consumed = this.wsTickets.consume({
+        ticket: ticketValue,
+        sessionId,
+      });
+      if (!consumed.ok) {
+        const status = consumed.error === 'missing' || consumed.error === 'unknown' ? 401 : 403;
+        socket.write(`HTTP/1.1 ${status} Unauthorized\r\n\r\n`);
+        socket.destroy();
+        return;
+      }
+      subscribedThreadId = consumed.value.threadId;
+    } else {
+      const providedToken = queryToken ?? headerToken;
+      if (!providedToken || !verifyToken(providedToken, this.authToken)) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
     }
 
     // Verify the session exists
@@ -595,10 +653,13 @@ export class BridgeServer {
     this.transportGenerations.set(sessionId, generation);
 
     const unsub =
-      transport instanceof WebSocketTransport
-        ? this.protocolGateway.subscribe((payload) => {
-            transport.sendText(payload);
-          })
+      transport instanceof WebSocketTransport && subscribedThreadId
+        ? this.protocolGateway.subscribe(
+            (payload) => {
+              transport.sendText(payload);
+            },
+            { threadId: subscribedThreadId },
+          )
         : () => {};
 
     if (transport instanceof WebSocketTransport) {
