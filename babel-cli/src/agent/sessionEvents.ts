@@ -14,6 +14,10 @@ import { join } from 'node:path';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import { classifyToolEffect, type ToolEffectClass } from '../executor/contracts.js';
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
+import {
+  buildToolLifecycleCausalityDiagnostic,
+  SessionEventLifecycleCausalityError,
+} from './sessionEventDiagnostics.js';
 
 export const SESSION_EVENT_SCHEMA_VERSION = 1 as const;
 export const SESSION_EVENTS_FILENAME = 'session-events.jsonl';
@@ -110,6 +114,9 @@ export type SessionEvent =
       idempotency_key: string;
       effect_class?: ToolEffectClass;
       args_digest?: string;
+      action_index?: number;
+      batch_id?: string;
+      target_summary?: string;
     })
   | (SessionEventBase & {
       kind: 'tool_started';
@@ -117,6 +124,9 @@ export type SessionEvent =
       tool_name: string;
       idempotency_key: string;
       effect_class?: ToolEffectClass;
+      action_index?: number;
+      batch_id?: string;
+      target_summary?: string;
     })
   | (SessionEventBase & {
       kind: 'tool_completed';
@@ -125,6 +135,9 @@ export type SessionEvent =
       idempotency_key: string;
       exit_code?: number;
       output_digest?: string;
+      action_index?: number;
+      batch_id?: string;
+      target_summary?: string;
     })
   | (SessionEventBase & {
       kind: 'tool_failed';
@@ -133,6 +146,9 @@ export type SessionEvent =
       idempotency_key: string;
       exit_code?: number;
       error_preview?: string;
+      action_index?: number;
+      batch_id?: string;
+      target_summary?: string;
     })
   | (SessionEventBase & {
       kind: 'tool_cancelled';
@@ -144,6 +160,9 @@ export type SessionEvent =
       effect_class?: ToolEffectClass;
       reconciliation?: InterruptedToolRecovery['reconciliation'];
       args_digest?: string;
+      action_index?: number;
+      batch_id?: string;
+      target_summary?: string;
     })
   | (SessionEventBase & {
       /** Explicit, auditable authorization to retry one recovered unknown effect. */
@@ -526,12 +545,21 @@ export function assertSessionEventToolLifecycleCausality(
   candidate: ToolLifecycleEvent,
   subject: string,
 ): void {
+  const reject = (reason: string): never => {
+    const diagnostic = buildToolLifecycleCausalityDiagnostic({
+      priorEvents,
+      candidate,
+      candidateSeq: priorEvents.length,
+      reason,
+    });
+    throw new SessionEventLifecycleCausalityError(`${subject}: ${reason}`, diagnostic);
+  };
   if (
     candidate.idempotency_key.trim().length === 0 ||
     candidate.tool_call_id.trim().length === 0 ||
     candidate.tool_name.trim().length === 0
   ) {
-    throw new Error(`${subject}: tool identifiers must be non-empty`);
+    reject('tool identifiers must be non-empty');
   }
   const history = priorEvents.filter(
     (event): event is ToolLifecycleEvent => isToolLifecycleEvent(event) && sameToolLifecycleOperation(event, candidate),
@@ -541,27 +569,27 @@ export function assertSessionEventToolLifecycleCausality(
   const terminals = history.filter(isTerminalToolLifecycleEvent);
 
   if (candidate.kind === 'tool_proposed') {
-    if (history.length > 0) throw new Error(`${subject}: tool_proposed must start a new tool lifecycle`);
+    if (history.length > 0) reject('tool_proposed must start a new tool lifecycle');
     return;
   }
   if (candidate.kind === 'tool_started') {
     if (proposals.length !== 1 || starts.length !== 0 || terminals.length !== 0) {
-      throw new Error(`${subject}: tool_started requires exactly one prior tool_proposed and no terminal`);
+      reject('tool_started requires exactly one prior tool_proposed and no terminal');
     }
     return;
   }
   if (terminals.length !== 0) {
-    throw new Error(`${subject}: tool lifecycle cannot record a terminal after a terminal`);
+    reject('tool lifecycle cannot record a terminal after a terminal');
   }
   const isNotStartedCancellation = candidate.kind === 'tool_cancelled' && candidate.recovery_state === 'TOOL_NOT_STARTED';
   if (isNotStartedCancellation) {
     if (proposals.length !== 1 || starts.length !== 0) {
-      throw new Error(`${subject}: TOOL_NOT_STARTED cancellation requires one prior tool_proposed and no tool_started`);
+      reject('TOOL_NOT_STARTED cancellation requires one prior tool_proposed and no tool_started');
     }
     return;
   }
   if (proposals.length !== 1 || starts.length !== 1) {
-    throw new Error(`${subject}: terminal tool event requires one prior tool_proposed and tool_started`);
+    reject('terminal tool event requires one prior tool_proposed and tool_started');
   }
 }
 type CompactionLifecycleEvent = Extract<
@@ -752,6 +780,18 @@ export function recordProviderRetrySettled(
 ): SessionEvent {
   return appendSessionEvent(log, { kind: 'provider_retry_settled', ...input });
 }
+function toolCorrelationFields(input: {
+  action_index?: number;
+  batch_id?: string;
+  target_summary?: string;
+}): { action_index?: number; batch_id?: string; target_summary?: string } {
+  return {
+    ...(input.action_index !== undefined ? { action_index: input.action_index } : {}),
+    ...(input.batch_id !== undefined ? { batch_id: input.batch_id } : {}),
+    ...(input.target_summary !== undefined ? { target_summary: input.target_summary.slice(0, 240) } : {}),
+  };
+}
+
 export function recordToolProposed(
   log: SessionEventLog,
   input: {
@@ -761,6 +801,9 @@ export function recordToolProposed(
     idempotency_key?: string;
     effect_class?: ToolEffectClass;
     args_digest?: string;
+    action_index?: number;
+    batch_id?: string;
+    target_summary?: string;
   },
 ): SessionEvent {
   return appendSessionEvent(log, {
@@ -771,6 +814,7 @@ export function recordToolProposed(
     idempotency_key: input.idempotency_key ?? input.tool_call_id,
     ...(input.effect_class !== undefined ? { effect_class: input.effect_class } : {}),
     ...(input.args_digest !== undefined ? { args_digest: input.args_digest } : {}),
+    ...toolCorrelationFields(input),
   });
 }
 
@@ -782,6 +826,9 @@ export function recordToolStarted(
     tool_name: string;
     idempotency_key?: string;
     effect_class?: ToolEffectClass;
+    action_index?: number;
+    batch_id?: string;
+    target_summary?: string;
   },
 ): SessionEvent {
   return appendSessionEvent(log, {
@@ -791,6 +838,7 @@ export function recordToolStarted(
     tool_name: input.tool_name,
     idempotency_key: input.idempotency_key ?? input.tool_call_id,
     ...(input.effect_class !== undefined ? { effect_class: input.effect_class } : {}),
+    ...toolCorrelationFields(input),
   });
 }
 
@@ -810,9 +858,13 @@ export function recordToolTerminal(
     effect_class?: ToolEffectClass;
     reconciliation?: InterruptedToolRecovery['reconciliation'];
     args_digest?: string;
+    action_index?: number;
+    batch_id?: string;
+    target_summary?: string;
   },
 ): SessionEvent {
   const key = input.idempotency_key ?? input.tool_call_id;
+  const correlation = toolCorrelationFields(input);
   if (input.cancelled) {
     return appendSessionEvent(log, {
       kind: 'tool_cancelled',
@@ -825,6 +877,7 @@ export function recordToolTerminal(
       ...(input.effect_class !== undefined ? { effect_class: input.effect_class } : {}),
       ...(input.reconciliation !== undefined ? { reconciliation: input.reconciliation } : {}),
       ...(input.args_digest !== undefined ? { args_digest: input.args_digest } : {}),
+      ...correlation,
     });
   }
   const digest =
@@ -840,6 +893,7 @@ export function recordToolTerminal(
       ...(input.content !== undefined
         ? { error_preview: input.content.slice(0, 240) }
         : {}),
+      ...correlation,
     });
   }
   return appendSessionEvent(log, {
@@ -850,6 +904,7 @@ export function recordToolTerminal(
     idempotency_key: key,
     ...(input.exit_code !== undefined ? { exit_code: input.exit_code } : {}),
     ...(digest !== undefined ? { output_digest: digest } : {}),
+    ...correlation,
   });
 }
 
@@ -1235,6 +1290,15 @@ export function parseSessionEventLog(
     }
     if (ev.recovery_state !== undefined && (ev.kind !== 'tool_cancelled' || !recoveryStates.includes(ev.recovery_state as InterruptedToolRecoveryState))) {
       throw new Error(`Invalid session event at line ${index + 1}: recovery_state is invalid`)
+    }
+    if (ev.action_index !== undefined && (!Number.isInteger(ev.action_index) || (ev.action_index as number) < 0)) {
+      throw new Error(`Invalid session event at line ${index + 1}: action_index is invalid`)
+    }
+    if (ev.batch_id !== undefined && typeof ev.batch_id !== 'string') {
+      throw new Error(`Invalid session event at line ${index + 1}: batch_id must be a string`)
+    }
+    if (ev.target_summary !== undefined && typeof ev.target_summary !== 'string') {
+      throw new Error(`Invalid session event at line ${index + 1}: target_summary must be a string`)
     }
     if (ev.reconciliation !== undefined && (ev.kind !== 'tool_cancelled' || !reconciliationValues.includes(ev.reconciliation as InterruptedToolRecovery['reconciliation']))) {
       throw new Error(`Invalid session event at line ${index + 1}: reconciliation is invalid`)

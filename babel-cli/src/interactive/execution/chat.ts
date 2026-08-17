@@ -45,6 +45,7 @@ import { presentChatReview } from '../../ui/reviewCard.js';
 import { projectTurnViewState, renderProjectedReviewCard } from '../projection/turnViewProjector.js';
 import { rememberReviewDiff } from '../../ui/diffReview.js';
 import { isOperatorAbortError } from '../../agent/operatorAbort.js';
+import { isSessionConsistencyFailureMessage } from '../../agent/sessionEventDiagnostics.js';
 
 /**
  * Extract changed file paths from a ChatResult's tool-call log.
@@ -293,6 +294,7 @@ export async function executeChatTask(
           : undefined,
       costUsd: perRunCost,
       tokens: result.usage?.totalTokens,
+      sessionConsistencyFailure: isSessionConsistencyFailureMessage(result.answer),
     });
 
     if (convRenderer) {

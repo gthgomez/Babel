@@ -31,6 +31,10 @@ import {
   renderInspectStack,
   renderInspectSummary,
 } from '../ui/inspection.js';
+import {
+  formatSessionRunValidatorText,
+  validateSessionRun,
+} from '../agent/sessionRunValidator.js';
 import { renderProductBanner } from '../ui/renderers.js';
 import { warning, muted } from '../ui/theme.js';
 import { readRuntimeMode, writeRuntimeMode } from '../config/runtimeMode.js';
@@ -2704,6 +2708,7 @@ Examples:
   $ babel inspect run latest
   $ babel inspect summary --run latest
   $ babel inspect stack --run <run_dir>
+  $ babel inspect validate-run chat-<session-id>
 
 Notes:
   - These views are read-only and operate on already-created evidence bundles.
@@ -2791,6 +2796,33 @@ Notes:
       .action(async (runArg: string | undefined, options: { run?: string; project?: string }) => {
         handleInspectMode('outcome', runArg, options);
       }),
+  );
+
+  addInspectCommonOptions(
+    inspectCommand
+      .command('validate-run')
+      .argument('[run]', 'Chat session id, run directory, or latest')
+      .description('Validate a persisted chat run against the session-event lifecycle contract')
+      .option('--json', 'Emit structured JSON only')
+      .action(
+        (runArg: string | undefined, options: { run?: string; project?: string; json?: boolean }) => {
+          try {
+            const requested = options.run ?? runArg ?? 'latest';
+            const result = validateSessionRun(requested, {
+              ...(options.project ? { project: options.project } : {}),
+            });
+            if (options.json) {
+              process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+            } else {
+              process.stdout.write(`${formatSessionRunValidatorText(result)}\n`);
+            }
+            if (result.status !== 'PASS') process.exitCode = 1;
+          } catch (err: unknown) {
+            console.error(`Error during run validation: ${err instanceof Error ? err.message : String(err)}`);
+            process.exit(1);
+          }
+        },
+      ),
   );
 
   const checkpointCommand = program
