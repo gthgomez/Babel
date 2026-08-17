@@ -66,7 +66,7 @@ import {
   resolveCompactionModelId,
 } from './chatCompaction.js';
 import { runChatEngineCompaction } from './compactionCommit.js';
-import { initLiveAuthorityOnEngine, projectEngineLiveSession, restoreEngineSessionEvents, engineCanMutateKey } from './chatEngineLiveSession.js';
+import { initLiveAuthorityOnEngine, projectEngineLiveSession, restoreEngineSessionEvents, engineCanMutateKey, evaluateSubmitTaskAuthorityHalt } from './chatEngineLiveSession.js';
 import {
   AUTHORITY_SESSION_FILENAME,
   establishAuthoritySession,
@@ -1551,6 +1551,12 @@ export class ChatEngine {
     let allToolObservations = '';
 
     const resolvedIntent = runtime.taskIntent;
+
+    const authorityHalt = evaluateSubmitTaskAuthorityHalt(this.parity, userInput);
+    if (authorityHalt) {
+      yield authorityHalt;
+      return;
+    }
 
     // P1: open parity turn (loop + durable event log)
     const modelName =

@@ -69,14 +69,34 @@ export function initLiveAuthorityOnEngine(input: {
     refreshTaskAuthorityGate(input.parity, input.options.task);
 }
 
+function looksLikeClarificationAnswer(
+  task: string,
+  pending: { capability: string; options?: string[] },
+): boolean {
+  const trimmed = task.trim();
+  if (pending.options?.some((opt) => opt.toLowerCase() === trimmed.toLowerCase())) return true;
+  if (pending.capability === 'merge' || pending.capability === 'pr_mark_ready') {
+    return /^#?\d+$/.test(trimmed);
+  }
+  if (pending.capability === 'production_deploy') {
+    return /^(production|prod|staging|stage)$/i.test(trimmed);
+  }
+  if (pending.capability === 'force_push') {
+    return /^(feat|fix)\//.test(trimmed);
+  }
+  return false;
+}
+
 export function refreshTaskAuthorityGate(
   parity: ParityRuntime,
   task: string,
 ): HumanEscalationResult {
+  const pending = parity.pendingTaskClarification;
+  const usePending = pending !== undefined && looksLikeClarificationAnswer(task, pending);
   const gate = evaluateSessionTaskGate({
     task,
     lease: parity.authoritySession?.lease ?? null,
-    ...(parity.pendingTaskClarification ? { pending: parity.pendingTaskClarification } : {}),
+    ...(usePending && pending ? { pending } : {}),
   });
   parity.taskAuthorityGate = gate;
   if (gate.kind === 'clarification' && gate.clarity.outcome === 'needs_clarification') {
@@ -105,6 +125,26 @@ export function taskAuthorityHaltMessage(gate: HumanEscalationResult | undefined
     return { kind: 'deny', message: gate.reasonCode ?? 'DENY_MISSING_AUTHORITY' };
   }
   return null;
+}
+
+const ZERO_USAGE = {
+  totalCostUSD: 0,
+  totalInputTokens: 0,
+  totalOutputTokens: 0,
+  totalTokens: 0,
+  modelBreakdown: {},
+};
+
+/** Refresh the session gate and return a ChatEngine stream event when work must halt. */
+export function evaluateSubmitTaskAuthorityHalt(
+  parity: ParityRuntime,
+  task: string,
+): { type: 'failed'; error: string } | { type: 'done'; answer: string; usage: typeof ZERO_USAGE } | null {
+  const gate = refreshTaskAuthorityGate(parity, task);
+  const halt = taskAuthorityHaltMessage(gate);
+  if (!halt) return null;
+  if (halt.kind === 'deny') return { type: 'failed', error: halt.message };
+  return { type: 'done', answer: halt.message, usage: ZERO_USAGE };
 }
 
 export function projectEngineLiveSession(
