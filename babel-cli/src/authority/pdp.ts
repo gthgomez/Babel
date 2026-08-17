@@ -11,6 +11,7 @@
  */
 
 import { AutonomyLease } from './lease.js';
+import { evaluateLeaseTemporalValidity } from './leaseTime.js';
 import {
   CapabilityId,
   CAPABILITY_KINDS,
@@ -19,6 +20,11 @@ import {
   isProtectedBranch,
 } from './capabilities.js';
 import { PolicyOutcome, ReasonCode } from './reasonCodes.js';
+import {
+  branchAllowed,
+  environmentAllowed,
+  normalizePrNumber,
+} from './targetBinding.js';
 
 export interface ActionRequest {
   capability: CapabilityId;
@@ -71,8 +77,14 @@ export function askCodeForCapability(capability: CapabilityId): ReasonCode {
 export function decideActionRequest(
   request: ActionRequest,
   lease: AutonomyLease,
+  now: Date | number = Date.now(),
 ): PolicyDecision {
   const triggered: string[] = [];
+
+  const temporal = evaluateLeaseTemporalValidity(lease, now);
+  if (!temporal.ok) {
+    return { outcome: 'deny', reasonCode: temporal.reasonCode, rulesTriggered: ['lease.expiresAt'] };
+  }
 
   // 1. Forbidden (Class D) — always deny, regardless of lease contents.
   if (request.capability === 'expose_credentials') {
@@ -199,18 +211,28 @@ function privilegedConstraintDecision(
   const c = lease.constraints;
   switch (request.capability) {
     case 'merge':
-    case 'pr_mark_ready':
+    case 'pr_mark_ready': {
       if (request.repository && request.repository !== lease.scope.repository) {
         return { outcome: 'deny', reasonCode: 'DENY_LEASE_MISMATCH', rulesTriggered: [...triggered, 'pdp.repository_mismatch'] };
       }
+      const allowedPrs = c.allowedPullRequests ?? [];
+      if (request.target) {
+        const pr = normalizePrNumber(request.target);
+        if (pr === null || !allowedPrs.includes(pr)) {
+          return denyConstraint(triggered, 'lease.constraints.allowedPullRequests');
+        }
+      } else if (allowedPrs.length > 0) {
+        return denyConstraint(triggered, 'pdp.missing_pr_target');
+      }
       return null;
+    }
     case 'release':
       if (c.releasePublish !== true) return denyConstraint(triggered, 'lease.constraints.releasePublish');
       return null;
     case 'production_deploy':
       if (c.productionDeploy !== true) return denyConstraint(triggered, 'lease.constraints.productionDeploy');
       if (!request.environment) return denyConstraint(triggered, 'pdp.missing_environment');
-      if (!c.allowedEnvironments.includes(request.environment)) {
+      if (!environmentAllowed(request.environment, c.allowedEnvironments)) {
         return denyConstraint(triggered, 'lease.constraints.allowedEnvironments');
       }
       return null;
@@ -226,19 +248,38 @@ function privilegedConstraintDecision(
     case 'destructive_data_delete':
       if (c.destructiveDb !== true) return denyConstraint(triggered, 'lease.constraints.destructiveDb');
       return null;
-    case 'shared_history_rewrite':
+    case 'shared_history_rewrite': {
       if (c.historyRewrite !== true) return denyConstraint(triggered, 'lease.constraints.historyRewrite');
+      const rewriteTargets = c.allowedRewriteTargets ?? [];
+      const rewriteDest = request.destinationBranch ?? request.target;
+      if (rewriteDest && rewriteTargets.length > 0 && !branchAllowed(rewriteDest, rewriteTargets)) {
+        return denyConstraint(triggered, 'lease.constraints.allowedRewriteTargets');
+      }
       return null;
-    case 'force_push':
+    }
+    case 'force_push': {
       if (c.forcePush !== true) {
         triggered.push('lease.constraints.forcePush');
         return { outcome: 'deny', reasonCode: 'DENY_FORCE_PUSH_POLICY', rulesTriggered: triggered };
       }
       if (!request.destinationBranch) return denyConstraint(triggered, 'pdp.missing_branch');
+      const allowedBranches = c.allowedForcePushBranches ?? [];
+      if (!branchAllowed(request.destinationBranch, allowedBranches)) {
+        return denyConstraint(triggered, 'lease.constraints.allowedForcePushBranches');
+      }
       return null;
-    case 'scope_expansion':
+    }
+    case 'scope_expansion': {
       if (c.scopeExpansion !== true) return denyConstraint(triggered, 'lease.constraints.scopeExpansion');
+      if (request.delete) {
+        const allowedDeletes = c.allowedRemoteDeleteTargets ?? [];
+        const deleteTarget = request.destinationBranch ?? request.target;
+        if (deleteTarget && allowedDeletes.length > 0 && !branchAllowed(deleteTarget, allowedDeletes)) {
+          return denyConstraint(triggered, 'lease.constraints.allowedRemoteDeleteTargets');
+        }
+      }
       return null;
+    }
     default:
       return null;
   }

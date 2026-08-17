@@ -27,8 +27,9 @@ import type { AgentAction } from '../agent/actions.js';
 import { emitAgentEvent } from '../agent/events.js';
 import { decideAction, type PermissionDecision, type PermissionPreset } from '../agent/policy.js';
 import type { AutonomyLease } from './lease.js';
-import { decideActionRequest, type ActionRequest } from './pdp.js';
-import { parseGitCommand } from './gitCommand.js';
+import { evaluateLeaseTemporalValidity } from './leaseTime.js';
+import { decideActionRequest } from './pdp.js';
+import { actionRequestFromAction, isControlAgentAction } from './actionRequest.js';
 import { decodeCommand, isGatedGitPush, type CommandSemanticClass } from './commandDecoder.js';
 import type { ReasonCode } from './reasonCodes.js';
 import { checkBaseline, isAuthorityStatePath, isGovernancePath, repoRelativeFromCwd } from './integrity.js';
@@ -56,7 +57,11 @@ export interface LeaseContext {
   /** Execution cwd for relative action paths (defaults to baseline.repoRoot). */
   cwd?: string;
   authoritySession?: AuthoritySessionContext;
+  /** Injectable clock for lease expiry. */
+  now?: Date | number;
 }
+
+export { actionRequestFromAction } from './actionRequest.js';
 
 // ─── Permanent drift invalidation ───────────────────────────────────────────
 
@@ -80,21 +85,7 @@ export function resetLeaseInvalidations(): void {
 
 // ─── Decision composite ─────────────────────────────────────────────────────
 
-/** Convert a shell command action into a structured ActionRequest (best-effort). */
-export function actionRequestFromAction(action: AgentAction): ActionRequest | null {
-  if (action.type === 'run_command' || action.type === 'test_run') {
-    const parsed = parseGitCommand(action.command);
-    return {
-      capability: parsed.capability,
-      ...(parsed.remote !== undefined ? { remote: parsed.remote } : {}),
-      ...(parsed.destinationBranch !== undefined ? { destinationBranch: parsed.destinationBranch } : {}),
-      ...(parsed.sourceBranch !== undefined ? { sourceBranch: parsed.sourceBranch } : {}),
-      force: parsed.force,
-      delete: parsed.delete,
-    };
-  }
-  return null;
-}
+
 
 /**
  * Lease-aware decision. Returns the final PermissionDecision plus the reason
@@ -106,6 +97,8 @@ export function decideWithLease(
   ctx: LeaseContext,
 ): { decision: PermissionDecision; reasonCode: ReasonCode | '' } {
   const legacy = decideAction(action, preset);
+
+  const now = ctx.now ?? Date.now();
 
   if (ctx.authoritySession?.resumeFailure) {
     emitAgentEvent({
@@ -129,6 +122,20 @@ export function decideWithLease(
     }
     if (ctx.lease) invalidateLease(ctx.lease.leaseId);
     return { decision: 'deny', reasonCode: 'DENY_POLICY_INTEGRITY_DRIFT' };
+  }
+
+  if (ctx.lease) {
+    const temporal = evaluateLeaseTemporalValidity(ctx.lease, now);
+    if (!temporal.ok) {
+      emitAgentEvent({
+        type: 'policy_decision',
+        action: `${action.type}:lease_time`,
+        decision: 'deny',
+        preset,
+        rule: temporal.reasonCode,
+      });
+      return { decision: 'deny', reasonCode: temporal.reasonCode };
+    }
   }
 
   // Active lease requires a session-start baseline. Missing context is
@@ -225,10 +232,20 @@ export function decideWithLease(
 
   const req = actionRequestFromAction(action);
   if (!req) {
-    return { decision: legacy, reasonCode: '' };
+    if (isControlAgentAction(action)) {
+      return { decision: legacy, reasonCode: '' };
+    }
+    emitAgentEvent({
+      type: 'policy_decision',
+      action: `${action.type}:unmapped`,
+      decision: 'deny',
+      preset,
+      rule: 'DENY_MISSING_AUTHORITY',
+    });
+    return { decision: 'deny', reasonCode: 'DENY_MISSING_AUTHORITY' };
   }
 
-  const pdp = decideActionRequest(req, ctx.lease);
+  const pdp = decideActionRequest(req, ctx.lease, now);
 
   emitAgentEvent({
     type: 'policy_decision',

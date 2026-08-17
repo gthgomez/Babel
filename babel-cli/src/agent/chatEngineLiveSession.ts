@@ -20,6 +20,10 @@ import {
 } from './liveSessionBridge.js';
 import { paritySettleInterruptedOnResume } from './chatEngineParityBridge.js';
 import { AUTHORITY_SESSION_FILENAME, establishAuthoritySession } from '../authority/sessionContext.js';
+import {
+  evaluateSessionTaskGate,
+  type HumanEscalationResult,
+} from '../authority/taskClarity.js';
 import { join } from 'node:path';
 
 /** Minimal options slice — avoids circular import with chatEngine.ts. */
@@ -62,6 +66,45 @@ export function initLiveAuthorityOnEngine(input: {
         : [],
     });
     persistLiveSessionAuthority(input.engineRunDir, input.parity.liveAuthority);
+    refreshTaskAuthorityGate(input.parity, input.options.task);
+}
+
+export function refreshTaskAuthorityGate(
+  parity: ParityRuntime,
+  task: string,
+): HumanEscalationResult {
+  const gate = evaluateSessionTaskGate({
+    task,
+    lease: parity.authoritySession?.lease ?? null,
+    ...(parity.pendingTaskClarification ? { pending: parity.pendingTaskClarification } : {}),
+  });
+  parity.taskAuthorityGate = gate;
+  if (gate.kind === 'clarification' && gate.clarity.outcome === 'needs_clarification') {
+    const capability =
+      /deploy/i.test(task) ? 'production_deploy' : /force[-\s]?push/i.test(task) ? 'force_push' : 'merge';
+    parity.pendingTaskClarification = {
+      capability,
+      ...(gate.clarity.options ? { options: gate.clarity.options } : {}),
+    };
+  } else if (gate.kind !== 'clarification') {
+    delete parity.pendingTaskClarification;
+  }
+  return gate;
+}
+
+/** Non-null when ChatEngine must halt before tool dispatch. */
+export function taskAuthorityHaltMessage(gate: HumanEscalationResult | undefined): {
+  kind: 'clarification' | 'deny';
+  message: string;
+} | null {
+  if (!gate) return null;
+  if (gate.kind === 'clarification' && gate.clarity.outcome === 'needs_clarification') {
+    return { kind: 'clarification', message: gate.clarity.question };
+  }
+  if (gate.kind === 'deny') {
+    return { kind: 'deny', message: gate.reasonCode ?? 'DENY_MISSING_AUTHORITY' };
+  }
+  return null;
 }
 
 export function projectEngineLiveSession(

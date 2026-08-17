@@ -49,6 +49,10 @@ const LeaseSchema = z
         historyRewrite: z.boolean().default(false),
         allowedProtectedTargets: z.array(z.string()).default([]),
         allowedEnvironments: z.array(z.string()).default([]),
+        allowedPullRequests: z.array(z.number().int().positive()).default([]),
+        allowedForcePushBranches: z.array(z.string()).default([]),
+        allowedRewriteTargets: z.array(z.string()).default([]),
+        allowedRemoteDeleteTargets: z.array(z.string()).default([]),
       })
       .default({
         protectedBranches: ['main'],
@@ -65,6 +69,10 @@ const LeaseSchema = z
         historyRewrite: false,
         allowedProtectedTargets: [],
         allowedEnvironments: [],
+        allowedPullRequests: [],
+        allowedForcePushBranches: [],
+        allowedRewriteTargets: [],
+        allowedRemoteDeleteTargets: [],
       }),
     budgets: z
       .object({
@@ -142,6 +150,8 @@ export function validateLease(lease: AutonomyLease): LeaseParseResult {
 }
 
 /** Load the active lease from the environment. Absent → null (legacy mode). */
+export { evaluateLeaseTemporalValidity } from './leaseTime.js';
+
 export function loadLeaseFromEnv(env: NodeJS.ProcessEnv = process.env): AutonomyLease | null {
   const filePath = env['BABEL_AUTONOMY_LEASE_FILE'];
   const inline = env['BABEL_AUTONOMY_LEASE'];

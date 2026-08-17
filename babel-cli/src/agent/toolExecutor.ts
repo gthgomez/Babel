@@ -48,10 +48,14 @@ import { commandTextForAction, isCredentialTargetPath } from './autonomyEnforcem
 // and governance integrity checking in authority/wire.ts.
 import { extractPatchRawTargets, extractPatchTargets } from '../authority/patchTargets.js';
 import { loadLeaseFromEnv, type AutonomyLease } from '../authority/lease.js';
-import { decideWithLease, type LeaseContext } from '../authority/wire.js';
+import { decideWithLease, invalidateLease, type LeaseContext } from '../authority/wire.js';
 import type { BaselineManifest } from '../authority/integrity.js';
 import type { AuthoritySessionContext } from '../authority/sessionContext.js';
 import type { ReasonCode } from '../authority/reasonCodes.js';
+import {
+  reconcileGovernanceAfterEffect,
+  snapshotGovernanceBytes,
+} from '../authority/governanceReconcile.js';
 import { classifyAutonomyAction } from '../config/autonomyPolicy.js';
 
 /**
@@ -637,6 +641,8 @@ export async function executeActionWithPolicy(
     baseline?: BaselineManifest;
     /** V2 authority: repo root used for baseline drift checks. */
     baselineRepoRoot?: string;
+    /** Injectable clock for lease expiry. */
+    now?: Date | number;
     /** B2: final authorization check after policy/approval but before an effect ledger intent. */
     onDispatchAuthorized?: () => { allowed: boolean; message?: string };
     /** B2: invoked immediately before executor.execute after durable effect intent persistence. */
@@ -672,6 +678,7 @@ export async function executeActionWithPolicy(
       ? { cwd: session?.repoRoot || context.babelRoot }
       : {}),
     ...(session ? { authoritySession: session } : {}),
+    ...(deps.now !== undefined ? { now: deps.now } : {}),
   };
   let lastReasonCode: ReasonCode | '' = '';
   const decide: typeof decideAction =
@@ -1024,9 +1031,49 @@ export async function executeActionWithPolicy(
     }
   }
 
+  const mayMutateViaSubprocess =
+    action.type === 'run_command' || action.type === 'test_run' || action.type === 'apply_patch';
+  const governanceRepoRoot = session?.repoRoot || context.babelRoot;
+  const governanceSnapshot =
+    mayMutateViaSubprocess && governanceRepoRoot
+      ? snapshotGovernanceBytes(
+          governanceRepoRoot,
+          session?.persistPath ? [session.persistPath] : [],
+        )
+      : null;
+
   try {
     deps.onBeforeExecutorExecute?.();
     const execution = await executor.execute(action, context, budget);
+
+    if (governanceSnapshot && governanceRepoRoot) {
+      const recon = reconcileGovernanceAfterEffect({
+        repoRoot: governanceRepoRoot,
+        before: governanceSnapshot,
+        ...(session ? { session } : {}),
+      });
+      if (recon.mutated) {
+        incrementBlocks(context.runId);
+        if (session?.lease) invalidateLease(session.lease.leaseId);
+        return {
+          action,
+          terminal: false,
+          results: [
+            {
+              exit_code: 1,
+              stdout: '',
+              stderr:
+                `[DENY_POLICY_SELF_MUTATION] Subprocess mutated governance state ` +
+                `(${recon.changed.join(', ')}); bytes restored and authority session invalidated.`,
+            },
+          ],
+          policyDecision: 'deny',
+          policyBlocked: true,
+          reasonCode: 'DENY_POLICY_SELF_MUTATION',
+        };
+      }
+    }
+
     const toolFailed = execution.results.some((result) => result.exit_code !== 0);
 
     if (toolFailed) {

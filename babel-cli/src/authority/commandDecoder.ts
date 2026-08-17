@@ -81,6 +81,10 @@ export interface DecodedCommand {
   destinationBranch?: string;
   force: boolean;
   delete: boolean;
+  /** Concrete PR number or other target identity. */
+  target?: string;
+  /** Deploy/target environment when the command names one. */
+  environment?: string;
   /** Set when the raw command was unparseable but privileged-looking. */
   ambiguous?: boolean;
 }
@@ -332,6 +336,39 @@ const DANGEROUS_TOOL_PATTERNS: Array<{ re: RegExp; capability: CapabilityId; sem
 
 const TEST_RUNNER_RE =
   /^(?:pytest|npx\s+jest|npx\s+vitest|npx\s+mocha|cargo\s+test|go\s+test|dotnet\s+test|node\s+--test|tsx\s+--test|npm\s+test|npm\s+run\s+test)/i;
+const BUILD_RE =
+  /^(?:npm\s+run\s+build|pnpm\s+run\s+build|yarn\s+build|cargo\s+build|go\s+build|dotnet\s+build|make(?:\s|$))/i;
+const LINT_RE =
+  /^(?:npm\s+run\s+lint|pnpm\s+run\s+lint|yarn\s+lint|npx\s+eslint|eslint\b)/i;
+const TYPECHECK_RE =
+  /^(?:npx\s+tsc(?:\s+--noEmit)?|tsc\s+--noEmit|npm\s+run\s+typecheck|pnpm\s+run\s+typecheck)/i;
+
+function extractPrNumber(tokens: string[], startIdx: number): string | undefined {
+  for (let i = startIdx; i < tokens.length; i++) {
+    const tok = tokens[i]!;
+    if (tok.startsWith('-')) continue;
+    if (/^\d+$/.test(tok)) return tok;
+    if (/^#\d+$/.test(tok)) return tok.slice(1);
+  }
+  return undefined;
+}
+
+function inferDeployEnvironment(raw: string): string | undefined {
+  if (/(?:^|[\s=])--prod(?:uction)?(?:\s|$)/i.test(raw) || /\bproduction\b/i.test(raw)) {
+    return 'production';
+  }
+  if (/(?:^|[\s=])--stag(?:e|ing)(?:\s|$)/i.test(raw) || /\bstaging\b/i.test(raw)) {
+    return 'staging';
+  }
+  const envFlag = raw.match(/--env(?:ironment)?(?:=|\s+)(\S+)/i);
+  if (envFlag?.[1]) {
+    const v = envFlag[1].toLowerCase();
+    if (v === 'prod') return 'production';
+    if (v === 'stage') return 'staging';
+    return v;
+  }
+  return undefined;
+}
 
 // ─── Git global options that consume a following argument ───────────────────
 
@@ -553,8 +590,14 @@ function decodeGh(tokens: string[]): DecodedCommand {
       if (tokens.includes('--draft')) return cmd('pr_create_draft', 'create_pr');
       return cmd('pr_mark_ready', 'create_pr');
     }
-    if (verb === 'merge') return cmd('merge', 'git_push');
-    if (verb === 'ready') return cmd('pr_mark_ready', 'create_pr');
+    if (verb === 'merge') {
+      const pr = extractPrNumber(tokens, 3);
+      return cmd('merge', 'git_push', pr ? { target: pr } : {});
+    }
+    if (verb === 'ready') {
+      const pr = extractPrNumber(tokens, 3);
+      return cmd('pr_mark_ready', 'create_pr', pr ? { target: pr } : {});
+    }
     return cmd('pr_inspect', 'read_local');
   }
   if (sub === 'release') {
@@ -606,11 +649,20 @@ function decodeNonGit(tokens: string[], raw: string): DecodedCommand {
 
   // High-consequence tools.
   for (const { re, capability, semantic } of DANGEROUS_TOOL_PATTERNS) {
-    if (re.test(raw)) return cmd(capability, semantic);
+    if (re.test(raw)) {
+      if (capability === 'production_deploy') {
+        const environment = inferDeployEnvironment(raw);
+        return cmd(capability, semantic, environment ? { environment } : {});
+      }
+      return cmd(capability, semantic);
+    }
   }
 
-  // Test runners.
+  // Test / build / lint / typecheck runners.
   if (TEST_RUNNER_RE.test(raw)) return cmd('run_tests', 'test_local');
+  if (TYPECHECK_RE.test(raw)) return cmd('run_typecheck', 'test_local');
+  if (LINT_RE.test(raw)) return cmd('run_lint', 'test_local');
+  if (BUILD_RE.test(raw)) return cmd('run_build', 'test_local');
 
   // Package managers.
   if (base === 'npm' || base === 'pnpm' || base === 'yarn') {

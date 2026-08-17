@@ -26,7 +26,18 @@ import type { ToolContext } from '../localTools.js';
 function makeLease(leaseId: string): AutonomyLease {
   return (
     parseLeaseJson(
-      JSON.stringify({ version: 2, leaseId, scope: { repository: 'babel', remote: 'origin' } }),
+      JSON.stringify({
+        version: 2,
+        leaseId,
+        scope: { repository: 'babel', remote: 'origin' },
+        allowedCapabilities: [
+          'inspect_repository',
+          'search_repository',
+          'edit_task_files',
+          'run_tests',
+          'run_local_command',
+        ],
+      }),
     ) as { ok: true; lease: AutonomyLease }
   ).lease;
 }

@@ -111,6 +111,9 @@ export interface ParityRuntime {
   liveAuthority?: import('./liveSessionBridge.js').LiveSessionAuthority;
   /** Immutable session-start lease + governance baseline. */
   authoritySession?: import('../authority/sessionContext.js').AuthoritySessionContext;
+  /** Task-intent gate; cannot mint or widen lease authority. */
+  taskAuthorityGate?: import('../authority/taskClarity.js').HumanEscalationResult;
+  pendingTaskClarification?: { capability: import('../authority/capabilities.js').CapabilityId; options?: string[] };
   /** H2: last projected LiveSession (rebuilt on resume). */
   liveSession?: import('./liveSession.js').LiveSessionV1;
 }

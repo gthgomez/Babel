@@ -472,6 +472,10 @@ export function defaultLeaseForAutonomyClass(
       historyRewrite: false,
       allowedProtectedTargets: [],
       allowedEnvironments: [],
+      allowedPullRequests: [],
+      allowedForcePushBranches: [],
+      allowedRewriteTargets: [],
+      allowedRemoteDeleteTargets: [],
     },
     budgets: {
       ciProductRepairRounds: 3,

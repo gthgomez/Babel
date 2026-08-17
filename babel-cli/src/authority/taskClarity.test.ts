@@ -5,7 +5,12 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { resolveHumanEscalation } from './taskClarity.js';
+import {
+  applyClarificationResponse,
+  evaluateSessionTaskGate,
+  resolveHumanEscalation,
+} from './taskClarity.js';
+import { parseLeaseJson } from './lease.js';
 
 const CODING = [
   'inspect_repository',
@@ -135,4 +140,70 @@ test('clarification cannot expand a missing merge capability', () => {
   });
   assert.equal(r.kind, 'deny');
   assert.equal(r.reasonCode, 'DENY_MISSING_AUTHORITY');
+});
+
+test('merge these two utility functions is a normal coding task', () => {
+  const r = resolveHumanEscalation({
+    task: 'merge these two utility functions',
+    allowedCapabilities: CODING,
+  });
+  assert.equal(r.kind, 'autonomous');
+  assert.equal(r.clarity.outcome, 'clear');
+});
+
+test('Merge PR #88 with merge granted is autonomous (no human prompt)', () => {
+  const r = resolveHumanEscalation({
+    task: 'merge PR #88',
+    allowedCapabilities: [...PUBLICATION, 'merge'],
+  });
+  assert.equal(r.kind, 'autonomous');
+  assert.equal(r.clarity.outcome, 'clear');
+});
+
+test('answer production while lease only allows staging → DENY', () => {
+  const parsed = parseLeaseJson(
+    JSON.stringify({
+      version: 2,
+      leaseId: 'clarify',
+      scope: { repository: 'babel', remote: 'origin' },
+      allowedCapabilities: [...PUBLICATION, 'production_deploy'],
+      constraints: { productionDeploy: true, allowedEnvironments: ['staging'] },
+    }),
+  );
+  assert.ok(parsed.ok);
+  const d = applyClarificationResponse({
+    lease: parsed.lease,
+    intendedCapability: 'production_deploy',
+    chosenTarget: 'production',
+  });
+  assert.equal(d.outcome, 'deny');
+  assert.equal(d.reasonCode, 'DENY_CAPABILITY_CONSTRAINT');
+});
+
+test('evaluateSessionTaskGate: merge it with #88/#90 → clarification; production answer outside lease denies', () => {
+  const parsed = parseLeaseJson(
+    JSON.stringify({
+      version: 2,
+      leaseId: 'gate',
+      scope: { repository: 'babel', remote: 'origin' },
+      allowedCapabilities: [...PUBLICATION, 'merge', 'production_deploy'],
+      constraints: {
+        productionDeploy: true,
+        allowedEnvironments: ['staging'],
+        allowedPullRequests: [88, 90],
+      },
+    }),
+  );
+  assert.ok(parsed.ok);
+  const merge = evaluateSessionTaskGate({
+    task: 'merge it',
+    lease: parsed.lease,
+  });
+  assert.equal(merge.kind, 'clarification');
+  const deploy = evaluateSessionTaskGate({
+    task: 'production',
+    lease: parsed.lease,
+    pending: { capability: 'production_deploy', options: ['staging', 'production'] },
+  });
+  assert.equal(deploy.kind, 'deny');
 });

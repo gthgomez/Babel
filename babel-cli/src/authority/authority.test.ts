@@ -295,7 +295,9 @@ describe('git/gh command parsing (structured capability extraction)', () => {
     assert.equal(parseGitCommand('gh pr create --title x').capability, 'pr_mark_ready');
   });
   test('gh pr merge → merge', () => {
-    assert.equal(parseGitCommand('gh pr merge 5').capability, 'merge');
+    const p = parseGitCommand('gh pr merge 5');
+    assert.equal(p.capability, 'merge');
+    assert.equal(p.target, '5');
   });
   test('gh release create → release', () => {
     assert.equal(parseGitCommand('gh release create v1.0.0').capability, 'release');

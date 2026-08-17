@@ -38,6 +38,8 @@ export const REASON_CODES = [
   'DENY_CAPABILITY_CONSTRAINT',
   'DENY_BRANCH_PREFIX',
   'DENY_VERIFICATION_MISMATCH',
+  'DENY_LEASE_EXPIRED',
+  'DENY_LEASE_INVALID_TIME',
 ] as const;
 
 export type ReasonCode = (typeof REASON_CODES)[number];
@@ -69,6 +71,8 @@ export const REASON_CODE_OUTCOMES: Record<ReasonCode, PolicyOutcome> = {
   DENY_CAPABILITY_CONSTRAINT: 'deny',
   DENY_BRANCH_PREFIX: 'deny',
   DENY_VERIFICATION_MISMATCH: 'deny',
+  DENY_LEASE_EXPIRED: 'deny',
+  DENY_LEASE_INVALID_TIME: 'deny',
 };
 
 export function isReasonCode(value: string): value is ReasonCode {

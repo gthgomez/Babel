@@ -22,6 +22,10 @@ export interface ParsedGitCommand {
   destinationBranch?: string;
   force: boolean;
   delete: boolean;
+  /** Concrete PR number, path, or other target identity. */
+  target?: string;
+  /** Deploy/target environment when the command names one. */
+  environment?: string;
   /** Set when the raw command was unparseable but privileged-looking. */
   ambiguous?: boolean;
 }
@@ -36,6 +40,8 @@ export function parseGitCommand(cmd: string): ParsedGitCommand {
     ...(decoded.destinationBranch !== undefined ? { destinationBranch: decoded.destinationBranch } : {}),
     force: decoded.force,
     delete: decoded.delete,
+    ...(decoded.target !== undefined ? { target: decoded.target } : {}),
+    ...(decoded.environment !== undefined ? { environment: decoded.environment } : {}),
     ...(decoded.ambiguous === true ? { ambiguous: true } : {}),
   };
 }
