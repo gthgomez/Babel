@@ -30,13 +30,15 @@ import type { AutonomyLease } from './lease.js';
 import { decideActionRequest, type ActionRequest } from './pdp.js';
 import { parseGitCommand } from './gitCommand.js';
 import type { ReasonCode } from './reasonCodes.js';
-import { checkBaseline, isGovernancePath } from './integrity.js';
+import { checkBaseline, isGovernancePath, repoRelativeFromCwd } from './integrity.js';
 import { extractPatchRawTargets } from './patchTargets.js';
 
 export interface LeaseContext {
   lease: AutonomyLease | null;
-  /** Optional baseline manifest for policy-integrity checks (session-start snapshot). */
+  /** Session-start baseline. Required when a lease is active. */
   baseline?: { repoRoot: string; manifest: import('./integrity.js').BaselineManifest };
+  /** Execution cwd for relative action paths (defaults to baseline.repoRoot). */
+  cwd?: string;
 }
 
 // ─── Permanent drift invalidation ───────────────────────────────────────────
@@ -94,6 +96,19 @@ export function decideWithLease(
     return { decision: 'deny', reasonCode: 'DENY_POLICY_INTEGRITY_DRIFT' };
   }
 
+  // Active lease requires a session-start baseline. Missing context is
+  // fail-closed — callers must not authorize after omitting capture.
+  if (ctx.lease && !ctx.baseline) {
+    emitAgentEvent({
+      type: 'policy_decision',
+      action: `${action.type}:authority_context`,
+      decision: 'deny',
+      preset,
+      rule: 'DENY_AUTHORITY_CONTEXT_INCOMPLETE',
+    });
+    return { decision: 'deny', reasonCode: 'DENY_AUTHORITY_CONTEXT_INCOMPLETE' };
+  }
+
   // Baseline drift evaluation before ANY privileged decision (fail-closed).
   // The baseline is the immutable session-start snapshot — never recaptured.
   if (ctx.lease && ctx.baseline) {
@@ -115,10 +130,16 @@ export function decideWithLease(
   // (DENY_POLICY_SELF_MUTATION) whenever a lease is active — even if the
   // legacy preset would allow it. apply_patch targets are extracted from the
   // diff headers via the shared extractor; the raw patch body is never fed to
-  // isGovernancePath.
+  // isGovernancePath. Relative targets are resolved against execution cwd.
   if (ctx.lease && (action.type === 'write_file' || action.type === 'apply_patch')) {
-    const targets =
+    const rawTargets =
       action.type === 'apply_patch' ? extractPatchRawTargets(action.patch) : [action.path];
+    const repoRoot = ctx.baseline?.repoRoot;
+    const cwd = ctx.cwd ?? repoRoot;
+    const targets =
+      repoRoot && cwd
+        ? rawTargets.map((t) => repoRelativeFromCwd(cwd, repoRoot, t))
+        : rawTargets;
     const governanceTarget = targets.find((t) => t && isGovernancePath(t));
     if (governanceTarget) {
       emitAgentEvent({

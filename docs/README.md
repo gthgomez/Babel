@@ -13,7 +13,6 @@ This directory contains the active public documentation for Babel.
 - [Architecture](./architecture/ARCHITECTURE.md) describes Prompt OS layers, catalog, kernel, and the V9 pipeline.
 - [Architecture index](./architecture/README.md) lists all architecture guides.
 - [Canonical source decision](./adr/ADR-0001-canonical-public-source.md) records repository authority.
-- [Status & audits](./status/audits/) holds experiment-readiness and cross-review audit reports (GPT-5.6 2026-08).
 
 Root onboarding companions (outside this folder): [README.md](../README.md), [START_HERE.md](../START_HERE.md), [AGENTS.md](../AGENTS.md), [BABEL_BIBLE.md](../BABEL_BIBLE.md).
 

@@ -12,8 +12,12 @@ import { defaultLeaseForAutonomyClass } from './autonomyPolicy.js';
 import { parseLeaseJson, validateLease } from '../authority/lease.js';
 import { decideActionRequest } from '../authority/pdp.js';
 import { decideWithLease } from '../authority/wire.js';
+import { buildBaseline } from '../authority/integrity.js';
 import type { AgentAction } from '../agent/actions.js';
 import type { PermissionPreset } from '../agent/policy.js';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const CLASSES = ['A', 'B', 'C', 'D'] as const;
 type ClassName = (typeof CLASSES)[number];
@@ -101,6 +105,10 @@ test('decideWithLease: deny > ask > allow — preset deny beats PDP ask (Class D
   const d = leaseFor('D');
   const run: AgentAction = { type: 'run_command', command: 'gh pr merge 5' };
   const preset: PermissionPreset = 'read_only';
-  const result = decideWithLease(run, preset, { lease: d });
+  const root = mkdtempSync(join(tmpdir(), 'babel-autonomy-'));
+  const result = decideWithLease(run, preset, {
+    lease: d,
+    baseline: { repoRoot: root, manifest: buildBaseline(root) },
+  });
   assert.equal(result.decision, 'deny', 'read_only preset deny must beat PDP ask');
 });

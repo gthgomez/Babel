@@ -67,6 +67,7 @@ import {
 } from './chatCompaction.js';
 import { runChatEngineCompaction } from './compactionCommit.js';
 import { initLiveAuthorityOnEngine, projectEngineLiveSession, restoreEngineSessionEvents, engineCanMutateKey } from './chatEngineLiveSession.js';
+import { establishAuthoritySession } from '../authority/sessionContext.js';
 import { loadLiveSessionAuthorityStrict, persistLiveSessionAuthority } from './liveSessionBridge.js';
 import type { LiveSessionV1 } from './liveSession.js';
 import { applyHonestTaskOutcomeToCompletion, createFailureBudgetTrackerFromContract, type FailureClassBudgetTracker, type FailureCapsuleV1 } from './taskContract.js';
@@ -763,8 +764,12 @@ export class ChatEngine {
     }
     mkdirSync(this.engineRunDir, { recursive: true });
 
-    if (options.resumeExisting) this.parity.liveAuthority = loadLiveSessionAuthorityStrict(this.engineRunDir);
-    else initLiveAuthorityOnEngine({ parity: this.parity, options, taskClass: this.taskClass, executionProfile: this.executionProfile, engineRunDir: this.engineRunDir });
+    if (options.resumeExisting) {
+      this.parity.liveAuthority = loadLiveSessionAuthorityStrict(this.engineRunDir);
+      this.parity.authoritySession = establishAuthoritySession({
+        repoRoot: options.projectRoot,
+      });
+    } else initLiveAuthorityOnEngine({ parity: this.parity, options, taskClass: this.taskClass, executionProfile: this.executionProfile, engineRunDir: this.engineRunDir });
     this.failureBudgetTracker = createFailureBudgetTrackerFromContract(this.parity.liveAuthority?.taskContract);
     // Crash-safe patch persistence: write-through recovery file.
     this.patchRecoveryPath = join(this.engineRunDir, 'patches.recovery.log');
@@ -4158,6 +4163,9 @@ export class ChatEngine {
             : {}),
           ...(this.parity.liveAuthority?.taskContract.protected_paths
             ? { protectedPaths: this.parity.liveAuthority.taskContract.protected_paths }
+            : {}),
+          ...(this.parity.authoritySession
+            ? { authoritySession: this.parity.authoritySession }
             : {}),
           onDispatchAuthorized: () => this.recoveredOperationDispatchAuthorization(action),
           onBeforeExecutorExecute: () => this.persistToolStartedAtExecutorDispatch(action, meta),

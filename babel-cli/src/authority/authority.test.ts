@@ -7,7 +7,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, test } from 'node:test';
+import { after, describe, test } from 'node:test';
 import { parseLeaseJson, validateLease, loadLeaseFromEnv, type AutonomyLease } from './lease.js';
 import { decideActionRequest, askCodeForCapability } from './pdp.js';
 import { parseGitCommand } from './gitCommand.js';
@@ -19,9 +19,12 @@ import {
   classifyCiFailure,
   type CiController,
 } from './ciRepair.js';
-import { isGovernancePath } from './integrity.js';
+import { buildBaseline, isGovernancePath } from './integrity.js';
 import { decideWithLease } from './wire.js';
 import type { AgentAction } from '../agent/actions.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 function sampleLease(overrides: Partial<AutonomyLease> = {}): AutonomyLease {
   const base = parseLeaseJson(
@@ -416,7 +419,11 @@ describe('policy integrity (self-mutation guard)', () => {
 
 describe('wire: lease-aware dispatch composite', () => {
   const lease = sampleLease();
-  const ctx = { lease };
+  const baselineRoot = mkdtempSync(join(tmpdir(), 'babel-auth-'));
+  const ctx = { lease, baseline: { repoRoot: baselineRoot, manifest: buildBaseline(baselineRoot) } };
+  after(() => {
+    rmSync(baselineRoot, { recursive: true, force: true });
+  });
 
   test('no lease → legacy behavior identical', () => {
     const r = decideWithLease(runCmd('npm test'), 'workspace_write', { lease: null });

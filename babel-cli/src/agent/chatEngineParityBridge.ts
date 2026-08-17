@@ -109,6 +109,8 @@ export interface ParityRuntime {
   lastFailover: FailoverDecision | null;
   /** H2: policy-bound instruction + frozen task authority (in-memory + disk). */
   liveAuthority?: import('./liveSessionBridge.js').LiveSessionAuthority;
+  /** Immutable session-start lease + governance baseline. */
+  authoritySession?: import('../authority/sessionContext.js').AuthoritySessionContext;
   /** H2: last projected LiveSession (rebuilt on resume). */
   liveSession?: import('./liveSession.js').LiveSessionV1;
 }

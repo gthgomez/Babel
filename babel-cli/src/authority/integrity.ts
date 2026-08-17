@@ -27,7 +27,7 @@
 
 import { createHash } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
-import { join, relative, normalize, sep } from 'node:path';
+import { isAbsolute, join, relative, normalize, sep } from 'node:path';
 
 /** Repo-relative governance-sensitive paths (globs not supported — exact + dir prefixes). */
 export const GOVERNANCE_PATHS: readonly string[] = [
@@ -201,8 +201,8 @@ export function checkBaseline(repoRoot: string, manifest: BaselineManifest): Bas
   return { ok: changed.size === 0, changed: [...changed].sort(), current };
 }
 
-/** Path normalization helper used by callers for agent tool paths. */
+/** Resolve an action path against execution cwd, then make it repo-relative. */
 export function repoRelativeFromCwd(cwd: string, repoRoot: string, path: string): string {
-  const rel = relative(repoRoot, path).split(sep).join('/');
-  return rel.startsWith('..') ? path : rel;
+  const resolved = isAbsolute(path) ? path : join(cwd, path);
+  return relative(repoRoot, resolved).split(sep).join('/');
 }

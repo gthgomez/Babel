@@ -50,6 +50,7 @@ import { extractPatchRawTargets, extractPatchTargets } from '../authority/patchT
 import { loadLeaseFromEnv, type AutonomyLease } from '../authority/lease.js';
 import { decideWithLease, type LeaseContext } from '../authority/wire.js';
 import type { BaselineManifest } from '../authority/integrity.js';
+import type { AuthoritySessionContext } from '../authority/sessionContext.js';
 import type { ReasonCode } from '../authority/reasonCodes.js';
 import { classifyAutonomyAction } from '../config/autonomyPolicy.js';
 
@@ -150,6 +151,8 @@ export interface ToolExecutionResult {
 export interface PolicyGatedExecutionResult extends ToolExecutionResult {
   policyDecision: PermissionDecision;
   policyBlocked: boolean;
+  /** Authority reason when decideWithLease influenced the decision. */
+  reasonCode?: ReasonCode | '';
   mutationPaths?: string[] | undefined;
   preBatchHash?: Record<string, string> | undefined;
   postBatchHash?: Record<string, string> | undefined;
@@ -622,9 +625,14 @@ export async function executeActionWithPolicy(
     idempotencyKey?: string;
     /** V2 authority: explicit lease override (defaults to the env lease). */
     lease?: AutonomyLease | null;
-    /** V2 authority: policy-integrity baseline manifest (session-start snapshot). */
+    /**
+     * Frozen session authority. When present, lease + baseline come from this
+     * snapshot and per-call baseline refresh is ignored.
+     */
+    authoritySession?: AuthoritySessionContext;
+    /** V2 authority: policy-integrity baseline (tests / non-session callers). */
     baseline?: BaselineManifest;
-    /** V2 authority: repo root used for baseline drift checks (defaults to cwd). */
+    /** V2 authority: repo root used for baseline drift checks. */
     baselineRepoRoot?: string;
     /** B2: final authorization check after policy/approval but before an effect ledger intent. */
     onDispatchAuthorized?: () => { allowed: boolean; message?: string };
@@ -638,13 +646,27 @@ export async function executeActionWithPolicy(
   const executor = deps.executor ?? defaultToolExecutor;
   // V2 authority: the default decision path consults the PDP when a lease is
   // active (env or explicit override). Additive — no lease → legacy behavior.
+  const session = deps.authoritySession;
+  const lease = session
+    ? session.lease
+    : deps.lease !== undefined
+      ? deps.lease
+      : activeLease();
+  // Session-owned snapshot wins. Per-call baseline is only for tests /
+  // non-session callers — it cannot refresh a live session context.
+  const baseline =
+    session
+      ? session.baseline
+        ? { repoRoot: session.repoRoot, manifest: session.baseline }
+        : undefined
+      : deps.baseline !== undefined && deps.baselineRepoRoot !== undefined
+        ? { repoRoot: deps.baselineRepoRoot, manifest: deps.baseline }
+        : undefined;
   const leaseCtx: LeaseContext = {
-    lease: deps.lease !== undefined ? deps.lease : activeLease(),
-    // Drift checks need an explicit capture root: defaulting to the
-    // decision-time cwd would compare against the wrong tree (spurious
-    // DENY_POLICY_INTEGRITY_DRIFT → permanent lease invalidation).
-    ...(deps.baseline !== undefined && deps.baselineRepoRoot !== undefined
-      ? { baseline: { repoRoot: deps.baselineRepoRoot, manifest: deps.baseline } }
+    lease,
+    ...(baseline ? { baseline } : {}),
+    ...(session?.repoRoot || context.babelRoot
+      ? { cwd: session?.repoRoot || context.babelRoot }
       : {}),
   };
   let lastReasonCode: ReasonCode | '' = '';
@@ -881,6 +903,7 @@ export async function executeActionWithPolicy(
       ],
       policyDecision,
       policyBlocked: true,
+      ...(lastReasonCode ? { reasonCode: lastReasonCode } : {}),
     };
   }
 

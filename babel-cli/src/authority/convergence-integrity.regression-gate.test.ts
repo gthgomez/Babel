@@ -42,12 +42,17 @@ function tmpRoot(): string {
 // ─── Self-mutation guard ───────────────────────────────────────────────────
 
 test('P0-1: write_file to a governance path is denied (guard)', () => {
-  const r = decideWithLease(
-    { type: 'write_file', path: 'AGENTS.md' } as unknown as AgentAction,
-    'workspace_write',
-    { lease },
-  );
-  assert.equal(r.reasonCode, 'DENY_POLICY_SELF_MUTATION');
+  const root = tmpRoot();
+  try {
+    const r = decideWithLease(
+      { type: 'write_file', path: 'AGENTS.md' } as unknown as AgentAction,
+      'workspace_write',
+      { lease, baseline: { repoRoot: root, manifest: buildBaseline(root) } },
+    );
+    assert.equal(r.reasonCode, 'DENY_POLICY_SELF_MUTATION');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('P0-1: apply_patch mutating a governance path is denied', () => {
@@ -60,14 +65,17 @@ test('P0-1: apply_patch mutating a governance path is denied', () => {
     '-old governance content',
     '+new governance content',
   ].join('\n');
+  const root = tmpRoot();
+  try {
   const r = decideWithLease(
     { type: 'apply_patch', patch } as unknown as AgentAction,
     'workspace_write',
-    { lease },
+    { lease, baseline: { repoRoot: root, manifest: buildBaseline(root) } },
   );
-  // Today: the diff body is fed to isGovernancePath() and never matches → the
-  // patch proceeds past the guard.
   assert.equal(r.reasonCode, 'DENY_POLICY_SELF_MUTATION');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 // ─── Baseline fingerprinting ───────────────────────────────────────────────
@@ -223,6 +231,30 @@ test('P0-1: drift permanently invalidates the lease (second decision still denie
     const second = decideWithLease(action, 'workspace_write', ctx);
     assert.equal(second.decision, 'deny');
     assert.equal(second.reasonCode, 'DENY_POLICY_INTEGRITY_DRIFT');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('P0-1: lease without a session baseline fails closed', () => {
+  const r = decideWithLease(
+    { type: 'write_file', path: 'src/foo.ts' } as unknown as AgentAction,
+    'workspace_write',
+    { lease: makeLease('missing-baseline') },
+  );
+  assert.equal(r.decision, 'deny');
+  assert.equal(r.reasonCode, 'DENY_AUTHORITY_CONTEXT_INCOMPLETE');
+});
+
+test('P0-1: deleting a previously hashed governance file is detected', () => {
+  const root = tmpRoot();
+  try {
+    writeFileSync(join(root, '.gitignore'), 'keep');
+    const baseline = buildBaseline(root);
+    rmSync(join(root, '.gitignore'));
+    const res = checkBaseline(root, baseline);
+    assert.equal(res.ok, false);
+    assert.ok(res.changed.includes('.gitignore'));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
