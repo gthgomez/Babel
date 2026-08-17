@@ -19,7 +19,8 @@ import {
   canMutateWithIdempotencyKey,
 } from './liveSessionBridge.js';
 import { paritySettleInterruptedOnResume } from './chatEngineParityBridge.js';
-import { establishAuthoritySession } from '../authority/sessionContext.js';
+import { AUTHORITY_SESSION_FILENAME, establishAuthoritySession } from '../authority/sessionContext.js';
+import { join } from 'node:path';
 
 /** Minimal options slice — avoids circular import with chatEngine.ts. */
 export interface LiveAuthorityOptionsSlice {
@@ -45,6 +46,7 @@ export function initLiveAuthorityOnEngine(input: {
           : 'chat';
     input.parity.authoritySession = establishAuthoritySession({
       repoRoot: input.options.projectRoot,
+      persistPath: join(input.engineRunDir, AUTHORITY_SESSION_FILENAME),
     });
     input.parity.liveAuthority = resolveLiveSessionAuthority({
       mode,

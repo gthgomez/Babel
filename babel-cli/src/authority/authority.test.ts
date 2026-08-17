@@ -412,7 +412,10 @@ describe('policy integrity (self-mutation guard)', () => {
     assert.equal(isGovernancePath('.claude/hooks/block-credential-read.sh'), true);
     assert.equal(isGovernancePath('.agents/rules/09-credential-read-deny.md'), true);
     assert.equal(isGovernancePath('.github/workflows/ci.yml'), true);
-    assert.equal(isGovernancePath('babel-cli/src/agent/chatEngine.ts'), false);
+    assert.equal(isGovernancePath('babel-cli/src/agent/chatEngine.ts'), true);
+    assert.equal(isGovernancePath('babel-cli/src/agent/autonomyEnforcement.ts'), true);
+    assert.equal(isGovernancePath('babel-cli/src/agent/chatApproval.ts'), true);
+    assert.equal(isGovernancePath('babel-cli/src/utils/envFlags.ts'), true);
     assert.equal(isGovernancePath('src/main.ts'), false);
   });
 });

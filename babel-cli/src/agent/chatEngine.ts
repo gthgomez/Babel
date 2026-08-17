@@ -9,7 +9,7 @@ import { mkdirSync } from 'node:fs';
 import { readFile, writeFile, stat } from 'node:fs/promises';
 
 import { isBabelHeadlessEnv } from '../utils/envFlags.js';
-import { benchmarkAutoApproveEnabled } from './autonomyEnforcement.js';
+import { resolveClassCGateDecision } from './autonomyEnforcement.js';
 import { resolveProjectPath } from '../utils/projectPath.js';
 
 import { trace, SpanStatusCode, type Span } from '@opentelemetry/api';
@@ -67,7 +67,11 @@ import {
 } from './chatCompaction.js';
 import { runChatEngineCompaction } from './compactionCommit.js';
 import { initLiveAuthorityOnEngine, projectEngineLiveSession, restoreEngineSessionEvents, engineCanMutateKey } from './chatEngineLiveSession.js';
-import { establishAuthoritySession } from '../authority/sessionContext.js';
+import {
+  AUTHORITY_SESSION_FILENAME,
+  establishAuthoritySession,
+  restoreAuthoritySession,
+} from '../authority/sessionContext.js';
 import { loadLiveSessionAuthorityStrict, persistLiveSessionAuthority } from './liveSessionBridge.js';
 import type { LiveSessionV1 } from './liveSession.js';
 import { applyHonestTaskOutcomeToCompletion, createFailureBudgetTrackerFromContract, type FailureClassBudgetTracker, type FailureCapsuleV1 } from './taskContract.js';
@@ -766,8 +770,9 @@ export class ChatEngine {
 
     if (options.resumeExisting) {
       this.parity.liveAuthority = loadLiveSessionAuthorityStrict(this.engineRunDir);
-      this.parity.authoritySession = establishAuthoritySession({
+      this.parity.authoritySession = restoreAuthoritySession({
         repoRoot: options.projectRoot,
+        persistPath: join(this.engineRunDir, AUTHORITY_SESSION_FILENAME),
       });
     } else initLiveAuthorityOnEngine({ parity: this.parity, options, taskClass: this.taskClass, executionProfile: this.executionProfile, engineRunDir: this.engineRunDir });
     this.failureBudgetTracker = createFailureBudgetTrackerFromContract(this.parity.liveAuthority?.taskContract);
@@ -3891,8 +3896,10 @@ export class ChatEngine {
 
       // ── str_replace via governed mutation path (policy/checkpoint/cache) ──
       if (action.type === 'str_replace') {
-        const autoApprove =
-          isBabelHeadlessEnv() || benchmarkAutoApproveEnabled();
+        const classC = resolveClassCGateDecision({
+          executionProfile: this.executionProfile,
+          isTTY: Boolean(process.stdout.isTTY),
+        });
         const gov = await governedStrReplace(
           { file_path: action.file_path, old_str: action.old_str, new_str: action.new_str },
           {
@@ -3902,9 +3909,9 @@ export class ChatEngine {
             executor: defaultToolExecutor,
             onDispatchAuthorized: () => recoveredAuthorization,
             onBeforeExecutorExecute: () => this.persistToolStartedAtExecutorDispatch(action, meta),
-            ...(autoApprove
+            ...(classC === 'allow'
               ? { onAskApproval: async () => true }
-              : process.stdout.isTTY && !process.env['CI']
+              : classC === 'ask'
                 ? { onAskApproval: requestChatActionApproval }
                 : {}),
           },
@@ -4134,8 +4141,10 @@ export class ChatEngine {
 
       // Standard tool execution via policy gate
       const agentAction = mapChatActionToAgentAction(action);
-      const autoApproveMutations =
-        isBabelHeadlessEnv() || benchmarkAutoApproveEnabled();
+      const classC = resolveClassCGateDecision({
+        executionProfile: this.executionProfile,
+        isTTY: Boolean(process.stdout.isTTY),
+      });
       const result: PolicyGatedExecutionResult = await executeActionWithPolicy(
         agentAction,
         // workspace_write = mutations auto-execute without user approval.
@@ -4169,21 +4178,18 @@ export class ChatEngine {
             : {}),
           onDispatchAuthorized: () => this.recoveredOperationDispatchAuthorization(action),
           onBeforeExecutorExecute: () => this.persistToolStartedAtExecutorDispatch(action, meta),
-          // P0-D Class C gate: interactive sessions approve via the same
-          // approval machinery as `ask`; plan mode, CI/headless, and
-          // benchmark-without-approval resolve to deterministic deny.
+          // Class C / ask: only the explicit benchmark pair auto-approves.
+          // CI or BABEL_HEADLESS alone is deny.
           onAutonomyClassCGate:
-            this.executionProfile === 'plan'
-              ? async () => false
-              : autoApproveMutations
-                ? async () => true
-                : process.stdout.isTTY && !process.env['CI']
-                  ? requestChatActionApproval
-                  : async () => false,
+            classC === 'allow'
+              ? async () => true
+              : classC === 'ask'
+                ? requestChatActionApproval
+                : async () => false,
           ...this.isolationBrokerFlags(),
-          ...(autoApproveMutations
+          ...(classC === 'allow'
             ? { onAskApproval: async () => true }
-            : process.stdout.isTTY && !process.env['CI']
+            : classC === 'ask'
               ? { onAskApproval: requestChatActionApproval }
               : {}),
         }

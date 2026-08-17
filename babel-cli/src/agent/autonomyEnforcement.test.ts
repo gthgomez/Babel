@@ -5,6 +5,7 @@ import {
   commandTextForAction,
   isCredentialTargetPath,
   resolveAutonomyPreset,
+  resolveClassCGateDecision,
 } from './autonomyEnforcement.js';
 import type { AgentAction } from './actions.js';
 
@@ -82,6 +83,49 @@ test('benchmarkAutoApproveEnabled: headless/CI does not establish benchmark auth
 test('benchmarkAutoApproveEnabled: benchmark mode without auto-approve fails closed', () => {
   // P0-4: both flags are required — BABEL_BENCHMARK_MODE alone grants nothing.
   assert.equal(benchmarkAutoApproveEnabled({ BABEL_BENCHMARK_MODE: '1' }), false);
+});
+
+test('resolveClassCGateDecision: CI or headless alone never auto-approves', () => {
+  assert.equal(
+    resolveClassCGateDecision({ executionProfile: 'chat', isTTY: false, env: { CI: 'true' } }),
+    'deny',
+  );
+  assert.equal(
+    resolveClassCGateDecision({
+      executionProfile: 'chat',
+      isTTY: false,
+      env: { BABEL_HEADLESS: '1' },
+    }),
+    'deny',
+  );
+  assert.equal(
+    resolveClassCGateDecision({
+      executionProfile: 'chat',
+      isTTY: true,
+      env: { BABEL_BENCHMARK_AUTO_APPROVE: '1', CI: 'true' },
+    }),
+    'deny',
+  );
+  assert.equal(
+    resolveClassCGateDecision({
+      executionProfile: 'chat',
+      isTTY: true,
+      env: { BABEL_BENCHMARK_AUTO_APPROVE: '1' },
+    }),
+    'ask',
+  );
+  assert.equal(
+    resolveClassCGateDecision({
+      executionProfile: 'chat',
+      isTTY: false,
+      env: { BABEL_BENCHMARK_AUTO_APPROVE: '1', BABEL_BENCHMARK_MODE: '1' },
+    }),
+    'allow',
+  );
+  assert.equal(
+    resolveClassCGateDecision({ executionProfile: 'plan', isTTY: true, env: {} }),
+    'deny',
+  );
 });
 
 test('benchmarkAutoApproveEnabled: interactive TTY without benchmark mode fails closed', () => {

@@ -47,6 +47,17 @@ test('extracts rename and copy headers', () => {
   assert.ok(targets.includes('copy.ts'));
 });
 
+test('decodes Git C-style octal quoted governance paths', () => {
+  const encoded = '"\\056github/workflows/ci.yml"';
+  const patch = [
+    'diff --git "a/\\056github/workflows/ci.yml" "b/\\056github/workflows/ci.yml"',
+    `--- ${encoded}`,
+    `+++ ${encoded}`,
+  ].join('\n');
+  const targets = extractPatchRawTargets(patch);
+  assert.ok(targets.includes('.github/workflows/ci.yml'), targets.join(','));
+});
+
 test('repoRelativeFromCwd uses cwd, not process.cwd()', () => {
   const root = resolve('/tmp/repo-root');
   const cwd = join(root, 'babel-cli');

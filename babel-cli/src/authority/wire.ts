@@ -32,6 +32,7 @@ import { parseGitCommand } from './gitCommand.js';
 import type { ReasonCode } from './reasonCodes.js';
 import { checkBaseline, isGovernancePath, repoRelativeFromCwd } from './integrity.js';
 import { extractPatchRawTargets } from './patchTargets.js';
+import { markSessionInvalidated, type AuthoritySessionContext } from './sessionContext.js';
 
 export interface LeaseContext {
   lease: AutonomyLease | null;
@@ -39,6 +40,7 @@ export interface LeaseContext {
   baseline?: { repoRoot: string; manifest: import('./integrity.js').BaselineManifest };
   /** Execution cwd for relative action paths (defaults to baseline.repoRoot). */
   cwd?: string;
+  authoritySession?: AuthoritySessionContext;
 }
 
 // ─── Permanent drift invalidation ───────────────────────────────────────────
@@ -92,7 +94,14 @@ export function decideWithLease(
 
   // Permanent drift lock: an invalidated lease denies every subsequent
   // decision, before anything else is evaluated.
-  if (ctx.lease && isLeaseInvalidated(ctx.lease.leaseId)) {
+  if (
+    ctx.lease &&
+    (isLeaseInvalidated(ctx.lease.leaseId) || ctx.authoritySession?.invalidated === true)
+  ) {
+    if (ctx.authoritySession && !ctx.authoritySession.invalidated) {
+      markSessionInvalidated(ctx.authoritySession);
+    }
+    if (ctx.lease) invalidateLease(ctx.lease.leaseId);
     return { decision: 'deny', reasonCode: 'DENY_POLICY_INTEGRITY_DRIFT' };
   }
 
@@ -115,6 +124,7 @@ export function decideWithLease(
     const drift = checkBaseline(ctx.baseline.repoRoot, ctx.baseline.manifest);
     if (!drift.ok) {
       invalidateLease(ctx.lease.leaseId);
+      if (ctx.authoritySession) markSessionInvalidated(ctx.authoritySession);
       emitAgentEvent({
         type: 'policy_decision',
         action: `${action.type}:integrity`,

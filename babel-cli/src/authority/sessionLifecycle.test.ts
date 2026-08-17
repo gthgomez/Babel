@@ -12,7 +12,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseLeaseJson, type AutonomyLease } from './lease.js';
-import { establishAuthoritySession } from './sessionContext.js';
+import {
+  AUTHORITY_SESSION_FILENAME,
+  establishAuthoritySession,
+  restoreAuthoritySession,
+} from './sessionContext.js';
+import { join as pathJoin } from 'node:path';
 import { resetLeaseInvalidations } from './wire.js';
 import { createToolExecutor, executeActionWithPolicy } from '../agent/toolExecutor.js';
 import type { AgentAction } from '../agent/actions.js';
@@ -140,5 +145,48 @@ test('session context ignores a later caller-built baseline refresh', async () =
   } finally {
     resetLeaseInvalidations();
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('resume restores original baseline and invalidation; does not recapture', async () => {
+  resetLeaseInvalidations();
+  const root = tmpRoot();
+  const runDir = tmpRoot();
+  const persistPath = pathJoin(runDir, AUTHORITY_SESSION_FILENAME);
+  try {
+    writeFileSync(join(root, '.gitignore'), 'orig\n');
+    const session = establishAuthoritySession({
+      repoRoot: root,
+      lease: makeLease('resume-persist'),
+      persistPath,
+    });
+    writeFileSync(join(root, '.gitignore'), 'drifted\n');
+    const drifted = await executeActionWithPolicy(
+      { type: 'write_file', path: 'notes.txt', content: 'x\n' },
+      'workspace_write',
+      ctx(root),
+      { authoritySession: session, executor: dryExecutor(), onAskApproval: async () => true },
+    );
+    assert.equal(drifted.reasonCode, 'DENY_POLICY_INTEGRITY_DRIFT');
+    resetLeaseInvalidations();
+    const restored = restoreAuthoritySession({
+      repoRoot: root,
+      persistPath,
+      lease: makeLease('resume-persist'),
+    });
+    assert.equal(restored.invalidated, true);
+    assert.ok(restored.baseline);
+    const afterRestart = await executeActionWithPolicy(
+      { type: 'write_file', path: 'notes.txt', content: 'y\n' },
+      'workspace_write',
+      ctx(root),
+      { authoritySession: restored, executor: dryExecutor(), onAskApproval: async () => true },
+    );
+    assert.equal(afterRestart.policyBlocked, true);
+    assert.equal(afterRestart.reasonCode, 'DENY_POLICY_INTEGRITY_DRIFT');
+  } finally {
+    resetLeaseInvalidations();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(runDir, { recursive: true, force: true });
   }
 });

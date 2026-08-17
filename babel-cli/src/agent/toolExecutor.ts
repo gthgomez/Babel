@@ -668,6 +668,7 @@ export async function executeActionWithPolicy(
     ...(session?.repoRoot || context.babelRoot
       ? { cwd: session?.repoRoot || context.babelRoot }
       : {}),
+    ...(session ? { authoritySession: session } : {}),
   };
   let lastReasonCode: ReasonCode | '' = '';
   const decide: typeof decideAction =

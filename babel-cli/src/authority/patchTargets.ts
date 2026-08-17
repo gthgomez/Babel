@@ -13,15 +13,54 @@ import { isAbsolute, resolve } from 'node:path';
 
 function unquoteGitPath(raw: string): string {
   const trimmed = raw.trim();
-  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    return trimmed
-      .slice(1, -1)
-      .replace(/\\n/g, '\n')
-      .replace(/\\t/g, '\t')
-      .replace(/\\"/g, '"')
-      .replace(/\\\\/g, '\\');
+  if (!(trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+    return trimmed;
   }
-  return trimmed;
+  const inner = trimmed.slice(1, -1);
+  let out = '';
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch !== '\\') {
+      out += ch;
+      continue;
+    }
+    const next = inner[i + 1];
+    if (next === undefined) {
+      out += '\\';
+      break;
+    }
+    if (next === 'n') {
+      out += '\n';
+      i += 1;
+      continue;
+    }
+    if (next === 't') {
+      out += '\t';
+      i += 1;
+      continue;
+    }
+    if (next === '"' || next === '\\') {
+      out += next;
+      i += 1;
+      continue;
+    }
+    if (next >= '0' && next <= '7') {
+      let oct = next;
+      let j = i + 2;
+      while (oct.length < 3 && j < inner.length) {
+        const d = inner[j];
+        if (d === undefined || d < '0' || d > '7') break;
+        oct += d;
+        j += 1;
+      }
+      out += String.fromCharCode(parseInt(oct, 8));
+      i = j - 1;
+      continue;
+    }
+    out += next;
+    i += 1;
+  }
+  return out;
 }
 
 function stripAbPrefix(path: string): string {

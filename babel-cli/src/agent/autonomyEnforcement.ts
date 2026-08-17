@@ -12,6 +12,7 @@
 import type { AgentAction } from './actions.js';
 import type { AutonomyClass } from '../config/autonomyPolicy.js';
 import type { PermissionPreset } from './policy.js';
+import { isTruthyEnvFlag } from '../utils/envFlags.js';
 
 // ─── Credential-path protection (P0-C) ───────────────────────────────────────
 
@@ -82,6 +83,24 @@ export function resolveAutonomyPreset(
 export function benchmarkAutoApproveEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env['BABEL_BENCHMARK_AUTO_APPROVE'] !== '1') return false;
   return env['BABEL_BENCHMARK_MODE'] === '1';
+}
+
+export type ClassCGateResolution = 'allow' | 'ask' | 'deny';
+
+/**
+ * Class-C / privileged-mutation approval resolution.
+ * CI or BABEL_HEADLESS alone never auto-approves.
+ */
+export function resolveClassCGateDecision(input: {
+  executionProfile: string;
+  env?: NodeJS.ProcessEnv;
+  isTTY: boolean;
+}): ClassCGateResolution {
+  if (input.executionProfile === 'plan') return 'deny';
+  const env = input.env ?? process.env;
+  if (benchmarkAutoApproveEnabled(env)) return 'allow';
+  if (input.isTTY && !isTruthyEnvFlag(env['CI'])) return 'ask';
+  return 'deny';
 }
 
 // ─── Command text extraction ─────────────────────────────────────────────────

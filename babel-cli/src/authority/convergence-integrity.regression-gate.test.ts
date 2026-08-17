@@ -236,6 +236,28 @@ test('P0-1: drift permanently invalidates the lease (second decision still denie
   }
 });
 
+test('P0-1: octal-encoded apply_patch to a governance path is denied', () => {
+  const root = tmpRoot();
+  try {
+    const patch = [
+      'diff --git "a/\\056github/workflows/ci.yml" "b/\\056github/workflows/ci.yml"',
+      '--- "a/\\056github/workflows/ci.yml"',
+      '+++ "b/\\056github/workflows/ci.yml"',
+      '@@ -1 +1 @@',
+      '-old',
+      '+new',
+    ].join('\n');
+    const r = decideWithLease(
+      { type: 'apply_patch', patch } as unknown as AgentAction,
+      'workspace_write',
+      { lease, baseline: { repoRoot: root, manifest: buildBaseline(root) } },
+    );
+    assert.equal(r.reasonCode, 'DENY_POLICY_SELF_MUTATION');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('P0-1: lease without a session baseline fails closed', () => {
   const r = decideWithLease(
     { type: 'write_file', path: 'src/foo.ts' } as unknown as AgentAction,
