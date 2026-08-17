@@ -37,10 +37,13 @@ const stubExecutor = {
   execute: async () => ({ action: { type: 'run_command', command: 'ok' } as AgentAction, terminal: false, results: [{ exit_code: 0, stdout: 'ok', stderr: '' }] }),
 };
 
-async function dispatch(action: AgentAction, opts: { gate?: () => Promise<boolean> } = {}) {
+async function dispatch(
+  action: AgentAction,
+  opts: { onAskApproval?: (action: AgentAction) => Promise<boolean> } = {},
+) {
   return executeActionWithPolicy(action, 'workspace_write', freshCtx(), {
     executor: stubExecutor,
-    ...(opts.gate ? { onAutonomyClassCGate: opts.gate } : {}),
+    ...(opts.onAskApproval ? { onAskApproval: opts.onAskApproval } : {}),
   });
 }
 
@@ -102,13 +105,13 @@ test('conformance: force-push via wrapper executable is denied', async () => {
   DENIED(await dispatch({ type: 'run_command', command: '/usr/bin/git push --force-with-lease' }));
 });
 
-test('conformance: Class C human gate cannot mint missing force_push authority', async () => {
+test('conformance: onAskApproval cannot mint missing force_push authority', async () => {
   const denied = await dispatch({ type: 'run_command', command: 'git push --force origin main' });
   DENIED(denied);
 
   const stillDenied = await dispatch(
     { type: 'run_command', command: 'git push --force origin main' },
-    { gate: async () => true },
+    { onAskApproval: async () => true },
   );
   DENIED(stillDenied);
 });

@@ -607,13 +607,11 @@ export async function executeActionWithPolicy(
     executor?: ToolExecutor;
     decide?: typeof decideAction;
     budget?: ToolExecutionBudget;
-    /** When policy returns `ask`, invoke this before blocking. Return true to execute. */
-    onAskApproval?: (action: AgentAction) => Promise<boolean>;
     /**
-     * @deprecated Compatibility only. Privileged authorization is the lease/PDP.
-     * A callback here cannot mint authority the lease did not grant.
+     * Compatibility-only: honored only when the PDP/legacy composite already
+     * returned `ask`. Cannot mint a capability the lease denied.
      */
-    onAutonomyClassCGate?: (action: AgentAction) => Promise<boolean>;
+    onAskApproval?: (action: AgentAction) => Promise<boolean>;
     /** H4: optional completed idempotency keys for double-mutation deny. */
     completedIdempotencyKeys?: readonly string[];
     /** H4: optional protected paths. */
@@ -795,9 +793,8 @@ export async function executeActionWithPolicy(
   // by command SEMANTICS (run_command/test_run text) and by target PATH for
   // credential stores, mapping onto the canonical A–D taxonomy:
   //   Class D (credential exposure)   → deterministic deny, no approval path
-  //   Class C (external/public/destructive) → lease/PDP only.
-  //     Not in lease == deny. TTY/CI is not authority. Optional
-  //     onAutonomyClassCGate cannot mint a missing capability.
+  //   Class C (privileged)            → lease/PDP only. Missing membership
+  //     is deny. TTY/CI is not authority.
   // Class A/B actions pass through to the authority decide path unchanged
   // (the lease-aware PDP composite below is the decision authority).
   if (!isControlAction) {
