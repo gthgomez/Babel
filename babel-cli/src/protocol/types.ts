@@ -137,6 +137,8 @@ export interface ThreadResumeParams {
 export interface TurnSubmitParams {
   thread_id: ThreadId;
   message: string;
+  /** Optional client idempotency key. Same id + same message hash replays the prior result. */
+  command_id?: string;
 }
 
 export interface TurnCancelParams {

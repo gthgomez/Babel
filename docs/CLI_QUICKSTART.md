@@ -118,6 +118,17 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
   -Format json
 ```
 
+## 7. Remote serve (experimental loopback)
+
+Authenticated ADR-010 JSON-RPC on `127.0.0.1` only. Not a public server. Not a remote desktop.
+
+```powershell
+node .\dist\index.js remote serve --port 4545 --project $PWD
+# Tailscale Serve to that loopback port; never Funnel; never 0.0.0.0
+```
+
+Evidence and limits: [architecture/babel-remote/BABEL_REMOTE_SPIKE_RESULTS.md](./architecture/babel-remote/BABEL_REMOTE_SPIKE_RESULTS.md).
+
 ## What to use first
 
 1. `babel` — open the TUI  

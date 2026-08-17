@@ -15,6 +15,7 @@ import {
   registerCoreCommands,
 } from './commands/coreCommands.js';
 import { registerProjectCommands } from './commands/projectCommands.js';
+import { registerRemoteCommands } from './commands/remoteCommands.js';
 import { registerWorkflowCommands } from './commands/workflowCommands.js';
 
 export function runCli(argv: string[] = process.argv) {
@@ -33,6 +34,7 @@ export function runCli(argv: string[] = process.argv) {
   registerCoreCommands(program);
   registerProjectCommands(program);
   registerWorkflowCommands(program);
+  registerRemoteCommands(program);
   applyUserFocusedHelpTiers(program);
 
   const rewrittenArgv = rewriteArgv(argv);

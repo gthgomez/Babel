@@ -6,11 +6,14 @@
  * no Express or third-party HTTP libraries.
  *
  * Endpoints:
- *   POST   /sessions          — Create a new bridge session
+ *   GET    /health            — unauthenticated liveness (no secrets)
+ *   GET    /ui                — spike PWA (no secrets; token entered in UI)
+ *   POST   /rpc               — ADR-010 JSON-RPC (authenticated)
+ *   POST   /sessions          — Create a transport session
  *   GET    /sessions          — List active sessions
  *   GET    /sessions/:id      — Get session status
  *   DELETE /sessions/:id      — Stop and remove a session
- *   WS     /ws?sessionId=...  — WebSocket upgrade for bidirectional messaging
+ *   WS     /ws?sessionId=...  — ADR-010 JSON-RPC over WebSocket
  *
  * Authentication: Bearer token via `Authorization` header or `?token=` query
  * parameter (HMAC-SHA256, configurable via `~/.babel/bridge.json`).
@@ -25,7 +28,6 @@ import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 
 import type {
-  BridgeMessage,
   BridgeSession,
   BridgeTransport,
 } from './types.js';
@@ -37,9 +39,12 @@ import {
   persistBridgeConfig,
   DEFAULT_BRIDGE_PORT,
 } from './auth.js';
-import { computeWsAcceptKey, createTransport } from './transport.js';
-import { BridgeMessageRouter } from './messaging.js';
+import { computeWsAcceptKey, createTransport, WebSocketTransport } from './transport.js';
 import { sessionRunner } from './sessionRunner.js';
+import { assertLoopbackBind } from './bindGuard.js';
+import { ProtocolGateway, originAllowed, readLimitedBody } from './protocolGateway.js';
+import { REMOTE_UI_HTML } from './remoteUi.js';
+import type { ProtocolHostState } from '../protocol/client/host.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -50,6 +55,12 @@ export interface BridgeServerOptions {
   authToken?: string;
   /** Allowed origins for CORS. */
   allowedOrigins?: string[];
+  /** Registered workspace root for ADR-010 thread.create. */
+  allowedWorkspaceRoot?: string;
+  /** Injected protocol gateway (tests). */
+  protocolGateway?: ProtocolGateway;
+  /** Optional ChatEngine factory for ADR-010 (tests / remote serve). */
+  engineFactory?: ProtocolHostState['engineFactory'];
   /** Register a callback for server lifecycle events. */
   onListening?: (port: number) => void;
   onError?: (error: Error) => void;
@@ -175,12 +186,11 @@ export class BridgeServer {
   private allowedOrigins: string[];
   private _started = false;
   private _port = DEFAULT_BRIDGE_PORT;
+  readonly protocolGateway: ProtocolGateway;
+  private readonly listenHost = '127.0.0.1';
 
   /** Active WebSocket transports keyed by session ID. */
   private wsTransports = new Map<string, BridgeTransport>();
-
-  /** Message routers keyed by session ID. */
-  private routers = new Map<string, BridgeMessageRouter>();
 
   /** Generation counter per session — prevents stale transport onClose from destroying the active router. */
   private transportGenerations = new Map<string, number>();
@@ -193,6 +203,14 @@ export class BridgeServer {
     this.authToken =
       this.options.authToken ?? config.authToken ?? randomUUID();
     this.allowedOrigins = this.options.allowedOrigins ?? config.allowedOrigins ?? ['*'];
+    this.protocolGateway =
+      this.options.protocolGateway ??
+      new ProtocolGateway({
+        allowedWorkspaceRoot: this.options.allowedWorkspaceRoot ?? process.cwd(),
+        ...(this.options.engineFactory
+          ? { engineFactory: this.options.engineFactory }
+          : {}),
+      });
 
     this.server = createServer((req, res) => this.handleRequest(req, res));
 
@@ -224,6 +242,7 @@ export class BridgeServer {
       DEFAULT_BRIDGE_PORT;
 
     this._port = resolvedPort;
+    assertLoopbackBind(this.listenHost);
 
     return new Promise<void>((resolve, reject) => {
       this.server.on('listening', () => {
@@ -245,7 +264,7 @@ export class BridgeServer {
         reject(err);
       });
 
-      this.server.listen(resolvedPort, '127.0.0.1');
+      this.server.listen(resolvedPort, this.listenHost);
     });
   }
 
@@ -259,12 +278,6 @@ export class BridgeServer {
     }
     this.wsTransports.clear();
     this.transportGenerations.clear();
-
-    // Close all routers
-    for (const router of this.routers.values()) {
-      router.close();
-    }
-    this.routers.clear();
 
     // Shutdown session runner
     sessionRunner.shutdown();
@@ -303,6 +316,21 @@ export class BridgeServer {
 
     const { pathname } = parsedUrl;
 
+    if (pathname === '/health' && req.method === 'GET') {
+      jsonResponse(res, 200, {
+        ok: true,
+        bind: `${this.listenHost}:${this._port}`,
+        protocol: 'adr-010',
+      });
+      return;
+    }
+
+    if (pathname === '/ui' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(REMOTE_UI_HTML);
+      return;
+    }
+
     // CORS preflight
     if (req.method === 'OPTIONS') {
       setCorsHeaders(res, req.headers['origin'], this.allowedOrigins);
@@ -319,6 +347,20 @@ export class BridgeServer {
     }
 
     setCorsHeaders(res, req.headers['origin'], this.allowedOrigins);
+
+    if (pathname === '/rpc') {
+      if (req.method !== 'POST') {
+        errorResponse(res, 405, 'Method not allowed');
+        return;
+      }
+      const origin = req.headers['origin'];
+      if (origin && !originAllowed(origin, this.allowedOrigins)) {
+        errorResponse(res, 403, 'Origin not allowed');
+        return;
+      }
+      void this.handleRpc(req, res);
+      return;
+    }
 
     // Route requests
     switch (pathname) {
@@ -352,6 +394,20 @@ export class BridgeServer {
   }
 
   // ── Session endpoints ─────────────────────────────────────────────────────
+
+  private async handleRpc(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = await readLimitedBody(req);
+    if (!body.ok) {
+      jsonResponse(res, 413, {
+        jsonrpc: '2.0',
+        id: null,
+        error: { code: -32600, message: body.error },
+      });
+      return;
+    }
+    const response = await this.protocolGateway.dispatch(body.body);
+    jsonResponse(res, 200, response);
+  }
 
   private handleCreateSession(req: IncomingMessage, res: ServerResponse): void {
     // Read body
@@ -432,13 +488,6 @@ export class BridgeServer {
       this.wsTransports.delete(sessionId);
     }
     this.transportGenerations.delete(sessionId);
-
-    // Remove associated router
-    const router = this.routers.get(sessionId);
-    if (router) {
-      router.close();
-      this.routers.delete(sessionId);
-    }
 
     sessionRunner.removeSession(sessionId, 'client request');
     jsonResponse(res, 200, { status: 'removed', sessionId });
@@ -545,49 +594,29 @@ export class BridgeServer {
     const generation = (this.transportGenerations.get(sessionId) ?? 0) + 1;
     this.transportGenerations.set(sessionId, generation);
 
-    // Create or reuse a message router for this session
-    let router = this.routers.get(sessionId);
-    if (!router) {
-      router = new BridgeMessageRouter(sessionId);
-      this.routers.set(sessionId, router);
+    const unsub =
+      transport instanceof WebSocketTransport
+        ? this.protocolGateway.subscribe((payload) => {
+            transport.sendText(payload);
+          })
+        : () => {};
 
-      // Wire ingress: client → router → session runner
-      router.onIngress((msg) => {
-        sessionRunner.echoToClient(sessionId, msg);
+    if (transport instanceof WebSocketTransport) {
+      transport.onText((payload) => {
+        void this.protocolGateway.dispatch(payload).then((response) => {
+          transport.sendText(JSON.stringify(response));
+        });
       });
     }
 
-    // Re-register egress on every connection so the closure captures
-    // the current transport, not a stale first-connection reference.
-    router.onEgress((msg) => {
-      transport.send(msg);
-    });
-
-    // Attach client transport to router
-    router.attachClient(transport);
-
-    // Attach session-side transport to router (in-process for now)
-    const inprocTransport = createTransport({ type: 'inproc', sessionId });
-    router.attachSession(inprocTransport);
-
-    // Wire the inproc transport's ingress to the session runner
-    inprocTransport.onMessage((msg: BridgeMessage) => {
-      transport.send(msg);
-    });
-
-    // Update session transport type
     sessionRunner.updateSession(sessionId, { transport: 'ws' });
 
-    // Handle transport close
     const closeGeneration = generation;
     transport.onClose?.((_reason?: string) => {
-      // Only cleanup if this is still the active transport generation
       if (this.transportGenerations.get(sessionId) !== closeGeneration) return;
-
+      unsub();
       this.wsTransports.delete(sessionId);
       this.transportGenerations.delete(sessionId);
-      router?.close();
-      this.routers.delete(sessionId);
       sessionRunner.updateSession(sessionId, { status: 'idle' });
     });
   }

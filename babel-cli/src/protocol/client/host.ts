@@ -17,6 +17,8 @@ import {
 import type { JsonRpcRequest, JsonRpcResponse } from '../jsonRpc.js';
 import { isJsonRpcErrorResponse } from '../jsonRpc.js';
 import type { BabelProtocolRequest } from '../messages.js';
+import { mapChatEventToTurnStreamEvent } from '../mapChatEvent.js';
+import { hashUserMessage, type MessageIntegrity } from '../messageIntegrity.js';
 import type { ThreadCreateParams } from '../types.js';
 import { BabelProtocolErrorCode } from '../types.js';
 import type {
@@ -35,11 +37,18 @@ export interface ProtocolHostState {
   descriptors: Map<string, SessionDescriptor>;
   engineFactory: (descriptor: SessionDescriptor) => ChatEngine;
   executeWithoutNotifications: boolean;
+  /** Optional authorization handle — not a sandbox. */
+  projectRootGuard?: (projectRoot: string) => string;
+  /** command_id → { messageSha256, response } */
+  idempotency: Map<string, { messageSha256: string; response: JsonRpcResponse }>;
+  /** thread:turn → integrity of the message passed into ChatEngine.submitMessageStream */
+  lastMessageIntegrity: Map<string, MessageIntegrity>;
 }
 
 export function createProtocolHostState(options: {
   engineFactory?: (descriptor: SessionDescriptor) => ChatEngine;
   executeWithoutNotifications?: boolean;
+  projectRootGuard?: (projectRoot: string) => string;
 } = {}): ProtocolHostState {
   return {
     engines: new Map(),
@@ -47,6 +56,9 @@ export function createProtocolHostState(options: {
     descriptors: new Map(),
     engineFactory: options.engineFactory ?? defaultEngineFactory,
     executeWithoutNotifications: options.executeWithoutNotifications ?? false,
+    ...(options.projectRootGuard ? { projectRootGuard: options.projectRootGuard } : {}),
+    idempotency: new Map(),
+    lastMessageIntegrity: new Map(),
   };
 }
 
@@ -115,8 +127,20 @@ export async function handleProtocolRequest(
         if (!params) {
           return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'Missing params');
         }
+        let projectRoot = params.project_root;
+        try {
+          if (state.projectRootGuard) {
+            projectRoot = state.projectRootGuard(params.project_root);
+          }
+        } catch (err) {
+          return errorResponse(
+            id,
+            BabelProtocolErrorCode.INVALID_PARAMS,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
         const threadId = allocateThreadId();
-        const descriptor = descriptorFromCreate(threadId, params);
+        const descriptor = descriptorFromCreate(threadId, { ...params, project_root: projectRoot });
         ensureThread(threadId, { project_root: descriptor.projectRoot });
         writeSessionDescriptor(descriptor);
         state.descriptors.set(threadId, descriptor);
@@ -161,12 +185,29 @@ export async function handleProtocolRequest(
         if (!params) {
           return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'Missing params');
         }
+        if (typeof params.message !== 'string') {
+          return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'message must be a string');
+        }
         if (!threadStoreExists(params.thread_id)) {
           return errorResponse(
             id,
             BabelProtocolErrorCode.THREAD_NOT_FOUND,
             `Thread not found: ${params.thread_id}`,
           );
+        }
+        const integrity = hashUserMessage(params.message);
+        if (params.command_id) {
+          const prior = state.idempotency.get(`${params.thread_id}:${params.command_id}`);
+          if (prior) {
+            if (prior.messageSha256 !== integrity.sha256) {
+              return errorResponse(
+                id,
+                BabelProtocolErrorCode.INVALID_PARAMS,
+                'command_id reused with a different message',
+              );
+            }
+            return prior.response;
+          }
         }
         if (state.activeTurns.has(params.thread_id)) {
           return errorResponse(
@@ -177,6 +218,7 @@ export async function handleProtocolRequest(
         }
         const turnId = resolveNextTurnId(params.thread_id);
         state.activeTurns.set(params.thread_id, turnId);
+        state.lastMessageIntegrity.set(`${params.thread_id}:${turnId}`, integrity);
 
         const descriptor = state.descriptors.get(params.thread_id) ?? loadSessionDescriptor(params.thread_id);
         const engine = descriptor ? materializeEngine(state, descriptor) : state.engines.get(params.thread_id);
@@ -190,8 +232,12 @@ export async function handleProtocolRequest(
           Promise.resolve().then(async () => {
             let seq = 0;
             try {
+              // Hash immediately before the engine call — ChatEngine boundary.
+              const engineBoundary = hashUserMessage(params.message);
+              state.lastMessageIntegrity.set(`${params.thread_id}:${turnId}`, engineBoundary);
               for await (const event of engine.submitMessageStream(params.message)) {
-                // Ignore disconnect errors when writing
+                const mapped = mapChatEventToTurnStreamEvent(event);
+                if (!mapped) continue;
                 try {
                   onNotification?.({
                     jsonrpc: '2.0',
@@ -200,7 +246,7 @@ export async function handleProtocolRequest(
                       thread_id: params.thread_id,
                       turn_id: turnId,
                       seq: seq++,
-                      event: event as any, // Mapped ChatEvent -> TurnStreamEvent
+                      event: mapped,
                     }
                   });
                 } catch {
@@ -238,7 +284,14 @@ export async function handleProtocolRequest(
         }
 
         const result: TurnSubmitResult = { thread_id: params.thread_id, turn_id: turnId };
-        return { jsonrpc: '2.0', id, result };
+        const success: JsonRpcResponse = { jsonrpc: '2.0', id, result };
+        if (params.command_id) {
+          state.idempotency.set(`${params.thread_id}:${params.command_id}`, {
+            messageSha256: integrity.sha256,
+            response: success,
+          });
+        }
+        return success;
       }
       case 'turn.cancel': {
         const params = request.params;
@@ -251,6 +304,13 @@ export async function handleProtocolRequest(
             id,
             BabelProtocolErrorCode.THREAD_NOT_FOUND,
             `Thread not found: ${params.thread_id}`,
+          );
+        }
+        if (!state.activeTurns.has(params.thread_id)) {
+          return errorResponse(
+            id,
+            BabelProtocolErrorCode.TURN_NOT_IN_PROGRESS,
+            `No turn in progress for thread: ${params.thread_id}`,
           );
         }
         engine.cancel();

@@ -50,6 +50,7 @@ const KNOWN_TOP_LEVEL_COMMANDS = new Set([
   'resolve',
   'continue',
   'resume',
+  'remote',
   'apply',
   'smoke',
   'test',

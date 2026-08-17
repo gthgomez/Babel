@@ -12,6 +12,7 @@ This directory contains the active public documentation for Babel.
 - [TUI visual testing](./guides/BABEL_TUI_VISUAL_TESTING.md) defines the external Luna/computer-use contract for real Windows Terminal runs.
 - [Architecture](./architecture/ARCHITECTURE.md) describes Prompt OS layers, catalog, kernel, and the V9 pipeline.
 - [Architecture index](./architecture/README.md) lists all architecture guides.
+- [Babel Remote spike](./architecture/babel-remote/README.md) records the loopback ADR-010 / ChatEngine vertical slice (not a public remote-desktop product).
 - [Canonical source decision](./adr/ADR-0001-canonical-public-source.md) records repository authority.
 
 Root onboarding companions (outside this folder): [README.md](../README.md), [START_HERE.md](../START_HERE.md), [AGENTS.md](../AGENTS.md), [BABEL_BIBLE.md](../BABEL_BIBLE.md).
