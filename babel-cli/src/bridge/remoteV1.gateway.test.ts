@@ -521,5 +521,115 @@ describe('Babel Remote V1 gateway', () => {
     unsubB();
     unsubG();
   });
+
+  function wsUpgrade(path: string, extraHeaders: string[] = []): Promise<string> {
+    return new Promise((resolve) => {
+      const client = connect(PORT, '127.0.0.1', () => {
+        const key = Buffer.from('ws-legacy-bearer-key!!').toString('base64');
+        client.write(
+          [
+            `GET ${path} HTTP/1.1`,
+            'Host: 127.0.0.1',
+            'Upgrade: websocket',
+            'Connection: Upgrade',
+            `Sec-WebSocket-Key: ${key}`,
+            'Sec-WebSocket-Version: 13',
+            ...extraHeaders,
+            '',
+            '',
+          ].join('\r\n'),
+        );
+      });
+      let data = '';
+      client.on('data', (chunk: Buffer) => {
+        data += chunk.toString('utf8');
+        if (data.includes('\r\n\r\n')) {
+          client.destroy();
+          resolve(data);
+        }
+      });
+      setTimeout(() => {
+        client.destroy();
+        resolve(data);
+      }, 1500);
+    });
+  }
+
+  it('rejects bearer and query token WS upgrades when legacy compatibility is off', async () => {
+    const session = await httpRequest(`http://127.0.0.1:${PORT}/sessions`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const sessionId = (JSON.parse(session.body) as { sessionId: string }).sessionId;
+    const bearer = await wsUpgrade(`/ws?sessionId=${sessionId}`, [
+      `Authorization: Bearer ${TOKEN}`,
+    ]);
+    assert.match(bearer, /401/);
+    const query = await wsUpgrade(`/ws?sessionId=${sessionId}&token=${TOKEN}`);
+    assert.match(query, /401/);
+  });
+
+  it('accepts a valid ticket and rejects replay and wrong session', async () => {
+    const session = await httpRequest(`http://127.0.0.1:${PORT}/sessions`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const sessionId = (JSON.parse(session.body) as { sessionId: string }).sessionId;
+    const created = await rpc(
+      'thread.create',
+      { project_root: tmp, session_id: sessionId },
+      90,
+    );
+    const threadId = (created.json['result'] as { thread_id: string }).thread_id;
+    const minted = await httpRequest(`http://127.0.0.1:${PORT}/ws/ticket`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ session_id: sessionId, thread_id: threadId }),
+    });
+    const ticket = (JSON.parse(minted.body) as { ticket: string }).ticket;
+    const first = await wsUpgrade(`/ws?sessionId=${sessionId}&ticket=${ticket}`);
+    assert.match(first, /101 Switching Protocols/);
+    const replay = await wsUpgrade(`/ws?sessionId=${sessionId}&ticket=${ticket}`);
+    assert.match(replay, /401|403/);
+
+    const minted2 = await httpRequest(`http://127.0.0.1:${PORT}/ws/ticket`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ session_id: sessionId, thread_id: threadId }),
+    });
+    const ticket2 = (JSON.parse(minted2.body) as { ticket: string }).ticket;
+    const other = await httpRequest(`http://127.0.0.1:${PORT}/sessions`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const otherId = (JSON.parse(other.body) as { sessionId: string }).sessionId;
+    const wrongSession = await wsUpgrade(`/ws?sessionId=${otherId}&ticket=${ticket2}`);
+    assert.match(wrongSession, /401|403/);
+  });
+
+  it('legacy compatibility ON accepts header bearer only and does not subscribe', async () => {
+    const prev = process.env['BABEL_REMOTE_ALLOW_LEGACY_WS_BEARER'];
+    process.env['BABEL_REMOTE_ALLOW_LEGACY_WS_BEARER'] = '1';
+    try {
+      const session = await httpRequest(`http://127.0.0.1:${PORT}/sessions`, {
+        method: 'POST',
+        headers: auth,
+        body: JSON.stringify({ projectRoot: tmp }),
+      });
+      const sessionId = (JSON.parse(session.body) as { sessionId: string }).sessionId;
+      const header = await wsUpgrade(`/ws?sessionId=${sessionId}`, [
+        `Authorization: Bearer ${TOKEN}`,
+      ]);
+      assert.match(header, /101 Switching Protocols/);
+      const queryOnly = await wsUpgrade(`/ws?sessionId=${sessionId}&token=${TOKEN}`);
+      assert.match(queryOnly, /401/);
+    } finally {
+      if (prev === undefined) delete process.env['BABEL_REMOTE_ALLOW_LEGACY_WS_BEARER'];
+      else process.env['BABEL_REMOTE_ALLOW_LEGACY_WS_BEARER'] = prev;
+    }
+  });
 });
 

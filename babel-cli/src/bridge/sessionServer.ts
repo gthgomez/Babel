@@ -16,9 +16,9 @@
  *   WS     /ws?sessionId=...  — ADR-010 JSON-RPC over WebSocket
  *
  * Authentication: Bearer token via `Authorization` header for HTTP.
- * V1 WebSocket uses a short-lived single-use ticket from POST /ws/ticket.
- * A legacy `?token=` query is accepted only for non-V1 tools and does not
- * subscribe to turn events.
+ * V1 WebSocket requires a short-lived single-use ticket from POST /ws/ticket.
+ * Long-lived bearer / `?token=` upgrades are rejected unless
+ * BABEL_REMOTE_ALLOW_LEGACY_WS_BEARER=1 (header only; no thread events).
  *
  * Configuration:
  *   - Port:    BABEL_BRIDGE_PORT env var, or bridge.json port, or 4545
@@ -64,6 +64,13 @@ export interface BridgeServerOptions {
   protocolGateway?: ProtocolGateway;
   /** Optional ChatEngine factory for ADR-010 (tests / remote serve). */
   engineFactory?: ProtocolHostState['engineFactory'];
+  /**
+   * Accept a long-lived bearer header on `/ws` without a ticket.
+   * Default off. Env override: BABEL_REMOTE_ALLOW_LEGACY_WS_BEARER=1.
+   * Query `?token=` is never accepted. Legacy sockets do not receive
+   * thread-scoped turn.event fan-out.
+   */
+  allowLegacyWsBearer?: boolean;
   /** Register a callback for server lifecycle events. */
   onListening?: (port: number) => void;
   onError?: (error: Error) => void;
@@ -579,7 +586,6 @@ export class BridgeServer {
     }
 
     const ticketValue = parsedUrl.searchParams.get('ticket') ?? undefined;
-    const queryToken = parsedUrl.searchParams.get('token') ?? undefined;
     const headerToken = extractBearerToken(req.headers['authorization']);
     const sessionId = parsedUrl.searchParams.get('sessionId');
     if (!sessionId) {
@@ -587,6 +593,10 @@ export class BridgeServer {
       socket.destroy();
       return;
     }
+
+    const legacyBearer =
+      this.options.allowLegacyWsBearer === true ||
+      process.env['BABEL_REMOTE_ALLOW_LEGACY_WS_BEARER'] === '1';
 
     let subscribedThreadId: string | undefined;
     if (ticketValue) {
@@ -601,13 +611,13 @@ export class BridgeServer {
         return;
       }
       subscribedThreadId = consumed.value.threadId;
+    } else if (legacyBearer && headerToken && verifyToken(headerToken, this.authToken)) {
+      // Compatibility path: header bearer only. No thread-scoped events.
+      subscribedThreadId = undefined;
     } else {
-      const providedToken = queryToken ?? headerToken;
-      if (!providedToken || !verifyToken(providedToken, this.authToken)) {
-        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-        socket.destroy();
-        return;
-      }
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
     }
 
     // Verify the session exists
