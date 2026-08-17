@@ -116,8 +116,13 @@ export class ProtocolGateway {
     );
     if (parsed.method === 'thread.create' && 'result' in response) {
       const result = response.result as { thread_id?: unknown };
-      if (typeof result.thread_id === 'string') {
-        this.threadOwnership.registerExisting(result.thread_id);
+      const params = (parsed as { params?: { session_id?: unknown } }).params;
+      if (
+        typeof result.thread_id === 'string' &&
+        typeof params?.session_id === 'string' &&
+        params.session_id.length > 0
+      ) {
+        this.threadOwnership.bind(result.thread_id, params.session_id);
       }
     }
     return response;

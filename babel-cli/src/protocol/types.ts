@@ -133,6 +133,8 @@ export interface ThreadCreateParams {
   provider?: string;
   mode?: BabelMode;
   policy_profile?: string;
+  /** Bridge session that owns this thread for /ws/ticket mint. */
+  session_id?: string;
 }
 
 export interface ThreadResumeParams {

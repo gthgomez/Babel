@@ -141,14 +141,14 @@ describe('Babel Remote V1 gateway', () => {
   });
 
   it('mints a V1 ticket after auth and rejects missing/replayed tickets on WS', async () => {
-    const created = await rpc('thread.create', { project_root: tmp }, 20);
-    const threadId = (created.json['result'] as { thread_id: string }).thread_id;
     const session = await httpRequest(`http://127.0.0.1:${PORT}/sessions`, {
       method: 'POST',
       headers: auth,
       body: JSON.stringify({ projectRoot: tmp }),
     });
     const sessionId = (JSON.parse(session.body) as { sessionId: string }).sessionId;
+    const created = await rpc('thread.create', { project_root: tmp, session_id: sessionId }, 20);
+    const threadId = (created.json['result'] as { thread_id: string }).thread_id;
     const minted = await httpRequest(`http://127.0.0.1:${PORT}/ws/ticket`, {
       method: 'POST',
       headers: auth,
@@ -285,19 +285,6 @@ describe('Babel Remote V1 gateway', () => {
 
   it('allows the PWA Origin http://127.0.0.1:<port> on /rpc and /ws', async () => {
     const pageOrigin = `http://127.0.0.1:${PORT}`;
-    const created = await httpRequest(`http://127.0.0.1:${PORT}/rpc`, {
-      method: 'POST',
-      headers: { ...auth, Origin: pageOrigin },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 80,
-        method: 'thread.create',
-        params: { project_root: tmp },
-      }),
-    });
-    assert.equal(created.statusCode, 200);
-    const threadId = (JSON.parse(created.body) as { result: { thread_id: string } }).result
-      .thread_id;
     const session = await httpRequest(`http://127.0.0.1:${PORT}/sessions`, {
       method: 'POST',
       headers: { ...auth, Origin: pageOrigin },
@@ -305,6 +292,19 @@ describe('Babel Remote V1 gateway', () => {
     });
     assert.equal(session.statusCode, 201);
     const sessionId = (JSON.parse(session.body) as { sessionId: string }).sessionId;
+    const created = await httpRequest(`http://127.0.0.1:${PORT}/rpc`, {
+      method: 'POST',
+      headers: { ...auth, Origin: pageOrigin },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 80,
+        method: 'thread.create',
+        params: { project_root: tmp, session_id: sessionId },
+      }),
+    });
+    assert.equal(created.statusCode, 200);
+    const threadId = (JSON.parse(created.body) as { result: { thread_id: string } }).result
+      .thread_id;
     const minted = await httpRequest(`http://127.0.0.1:${PORT}/ws/ticket`, {
       method: 'POST',
       headers: { ...auth, Origin: pageOrigin },
@@ -412,10 +412,6 @@ describe('Babel Remote V1 gateway', () => {
   });
 
   it('mints a ticket only when the thread belongs to the session', async () => {
-    const createdA = await rpc('thread.create', { project_root: tmp }, 80);
-    const createdB = await rpc('thread.create', { project_root: tmp }, 81);
-    const threadA = (createdA.json['result'] as { thread_id: string }).thread_id;
-    const threadB = (createdB.json['result'] as { thread_id: string }).thread_id;
     const sessionA = await httpRequest(`http://127.0.0.1:${PORT}/sessions`, {
       method: 'POST',
       headers: auth,
@@ -428,6 +424,10 @@ describe('Babel Remote V1 gateway', () => {
     });
     const idA = (JSON.parse(sessionA.body) as { sessionId: string }).sessionId;
     const idB = (JSON.parse(sessionB.body) as { sessionId: string }).sessionId;
+    const createdA = await rpc('thread.create', { project_root: tmp, session_id: idA }, 80);
+    const createdB = await rpc('thread.create', { project_root: tmp, session_id: idB }, 81);
+    const threadA = (createdA.json['result'] as { thread_id: string }).thread_id;
+    const threadB = (createdB.json['result'] as { thread_id: string }).thread_id;
 
     const mintAA = await httpRequest(`http://127.0.0.1:${PORT}/ws/ticket`, {
       method: 'POST',
@@ -467,6 +467,16 @@ describe('Babel Remote V1 gateway', () => {
     assert.equal(stale.statusCode, 403);
     const replayFailed = server.wsTickets.consume({ ticket: 'never-minted', sessionId: idA });
     assert.equal(replayFailed.ok, false);
+
+    const orphan = await rpc('thread.create', { project_root: tmp }, 82);
+    const orphanId = (orphan.json['result'] as { thread_id: string }).thread_id;
+    const claim = await httpRequest(`http://127.0.0.1:${PORT}/ws/ticket`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ session_id: idA, thread_id: orphanId }),
+    });
+    assert.equal(claim.statusCode, 403);
+    assert.match(JSON.parse(claim.body).error, /unowned_thread/);
   });
 
   it('scoped fan-out drops missing and malformed thread_id', () => {
