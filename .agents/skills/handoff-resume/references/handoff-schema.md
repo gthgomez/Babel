@@ -83,7 +83,7 @@ Use these headings **exactly** (spelling and `##` / `###` level). Do not rename.
 - `path/to/file` — <role + state: done | in-progress | broken | planned>
 - `[read] path/to/file` — context only (not modified this session)
 - `[planned] path/to/file` — not created yet
-- `[external] C:/Users/.../path` — outside the git repo (user home, global skills, etc.)
+- `[external] <user-home>/path` — outside the git repo (user home, global skills, etc.)
 
 ## Open items
 ### Blockers
@@ -135,7 +135,7 @@ Allowed names (spelling exact):
 **Assumption:** <what must stay true>
 **Confidence:** HIGH
 **Revisit if:** <condition>
-**Falsifier:** <what would prove this wrong>
+**Falsifier:** <what would show this is wrong>
 ```
 
 Use a D-n block only when the decision is load-bearing. Compact one-liners (`- NextAuth v5 over raw OAuth. [DECIDED]`) are the default.
@@ -324,7 +324,7 @@ else:
     if base found and not is_shallow:
         DIVERGED
     elif base found and is_shallow:
-        UNKNOWN  # truncated history; cannot prove divergence safely
+        UNKNOWN  # truncated history; cannot establish divergence safely
     elif is_shallow:
         UNKNOWN  # no merge-base visible; may exist upstream
     else:
