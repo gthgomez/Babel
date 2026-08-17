@@ -15,6 +15,7 @@ import type { BabelProtocolRequest } from '../protocol/messages.js';
 import type { JsonRpcResponse } from '../protocol/jsonRpc.js';
 import { BabelProtocolErrorCode } from '../protocol/types.js';
 import { assertAllowedProjectRoot } from './workspaceBound.js';
+import { originAllowed as originAllowedStructured } from './originPolicy.js';
 
 export const MAX_RPC_BYTES = 2 * 1024 * 1024;
 
@@ -22,7 +23,8 @@ export type JsonRpcNotificationHandler = (payload: string) => void;
 
 export class ProtocolGateway {
   readonly host: ProtocolHostState;
-  private subscribers = new Set<JsonRpcNotificationHandler>();
+  /** Stage 1: one trusted operator connection. */
+  private subscriber: JsonRpcNotificationHandler | null = null;
 
   constructor(options: {
     allowedWorkspaceRoot: string;
@@ -37,20 +39,18 @@ export class ProtocolGateway {
   }
 
   subscribe(handler: JsonRpcNotificationHandler): () => void {
-    this.subscribers.add(handler);
+    this.subscriber = handler;
     return () => {
-      this.subscribers.delete(handler);
+      if (this.subscriber === handler) this.subscriber = null;
     };
   }
 
   private fanout(notification: object): void {
-    const payload = JSON.stringify(notification);
-    for (const handler of this.subscribers) {
-      try {
-        handler(payload);
-      } catch {
-        /* drop disconnected subscribers */
-      }
+    if (!this.subscriber) return;
+    try {
+      this.subscriber(JSON.stringify(notification));
+    } catch {
+      this.subscriber = null;
     }
   }
 
@@ -116,17 +116,7 @@ export function readLimitedBody(
 export function originAllowed(
   origin: string | undefined,
   allowedOrigins: string[],
+  remoteAddress?: string,
 ): boolean {
-  if (!origin) return true;
-  return allowedOrigins.some((ao) => {
-    if (ao === '*') return true;
-    if (ao.endsWith(':*')) {
-      const prefix = ao.slice(0, -2);
-      return origin.startsWith(prefix);
-    }
-    if (ao.startsWith('https://') && ao.includes('*.')) {
-      return false;
-    }
-    return ao === origin;
-  });
+  return originAllowedStructured(origin, allowedOrigins, remoteAddress);
 }

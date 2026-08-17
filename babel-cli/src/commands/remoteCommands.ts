@@ -21,7 +21,8 @@ export function registerRemoteCommands(program: Command): void {
       (value: string, previous: string[]) => [...previous, value],
       [] as string[],
     )
-    .action(async (options: { port?: string; project?: string; origin?: string[] }) => {
+    .option('--show-token', 'Print the bearer token (TTY only)')
+    .action(async (options: { port?: string; project?: string; origin?: string[]; showToken?: boolean }) => {
       const listenHost = assertRemoteListenConfig();
       const workspace = resolve(options.project ?? process.cwd());
       const port = Number(options.port ?? 4545);
@@ -46,8 +47,12 @@ export function registerRemoteCommands(program: Command): void {
       console.log(`health:    http://${listenHost}:${server.port}/health`);
       console.log(`ui:        http://${listenHost}:${server.port}/ui`);
       console.log(`rpc:       POST http://${listenHost}:${server.port}/rpc`);
-      console.log('Auth: Bearer token from ~/.babel/bridge.json (printed only to this TTY).');
-      console.log(`token:     ${server.token}`);
+      console.log('Auth: Bearer token from ~/.babel/bridge.json');
+      if (options.showToken && Boolean(process.stdout.isTTY)) {
+        console.log(`token:     ${server.token}`);
+      } else {
+        console.log('token:     (not printed; pass --show-token on a TTY to reveal)');
+      }
       console.log('');
       console.log('Reachability: expose loopback via Tailscale Serve, not Funnel:');
       console.log(`  tailscale serve --bg ${server.port}`);

@@ -132,14 +132,7 @@ function setCorsHeaders(
     res.setHeader('Access-Control-Allow-Origin', '*');
   } else {
     // Check if origin is allowed
-    const allowed = allowedOrigins.some((ao) => {
-      if (ao === '*') return true;
-      if (ao.endsWith(':*')) {
-        const prefix = ao.slice(0, -2);
-        return origin.startsWith(prefix);
-      }
-      return ao === origin;
-    });
+    const allowed = originAllowed(origin, allowedOrigins);
     res.setHeader(
       'Access-Control-Allow-Origin',
       allowed ? origin : 'null',
@@ -354,7 +347,7 @@ export class BridgeServer {
         return;
       }
       const origin = req.headers['origin'];
-      if (origin && !originAllowed(origin, this.allowedOrigins)) {
+      if (!originAllowed(origin, this.allowedOrigins, req.socket.remoteAddress)) {
         errorResponse(res, 403, 'Origin not allowed');
         return;
       }
@@ -531,6 +524,13 @@ export class BridgeServer {
 
     if (!providedToken || !verifyToken(providedToken, this.authToken)) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    const origin = req.headers['origin'];
+    if (!originAllowed(origin, this.allowedOrigins, socket.remoteAddress)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
       socket.destroy();
       return;
     }
