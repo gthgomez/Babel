@@ -151,13 +151,23 @@ describe('PDP decisions', () => {
     assert.equal(decideActionRequest({ capability: 'release' }, lease).reasonCode, 'DENY_MISSING_AUTHORITY');
   });
 
-  test('merge with explicit capability and unprotected dest → verify', () => {
+  test('merge with explicit capability and allowed PR target → verify', () => {
+    const granted = sampleLease({
+      allowedCapabilities: [...sampleLease().allowedCapabilities, 'merge'],
+      constraints: { ...sampleLease().constraints, allowedPullRequests: [88] },
+    });
+    const d = decideActionRequest({ capability: 'merge', target: '88' }, granted);
+    assert.equal(d.outcome, 'verify');
+    assert.equal(d.reasonCode, 'VERIFY_BEFORE_PUBLICATION');
+  });
+
+  test('merge with capability but empty allowlist or missing target → DENY', () => {
     const granted = sampleLease({
       allowedCapabilities: [...sampleLease().allowedCapabilities, 'merge'],
     });
-    const d = decideActionRequest({ capability: 'merge', destinationBranch: 'feat/x' }, granted);
-    assert.equal(d.outcome, 'verify');
-    assert.equal(d.reasonCode, 'VERIFY_BEFORE_PUBLICATION');
+    const bare = decideActionRequest({ capability: 'merge' }, granted);
+    assert.equal(bare.outcome, 'deny');
+    assert.equal(bare.reasonCode, 'DENY_CAPABILITY_CONSTRAINT');
   });
 
   test('release with capability but releasePublish false → DENY_CAPABILITY_CONSTRAINT', () => {

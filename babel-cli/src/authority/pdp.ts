@@ -216,13 +216,15 @@ function privilegedConstraintDecision(
         return { outcome: 'deny', reasonCode: 'DENY_LEASE_MISMATCH', rulesTriggered: [...triggered, 'pdp.repository_mismatch'] };
       }
       const allowedPrs = c.allowedPullRequests ?? [];
-      if (request.target) {
-        const pr = normalizePrNumber(request.target);
-        if (pr === null || !allowedPrs.includes(pr)) {
-          return denyConstraint(triggered, 'lease.constraints.allowedPullRequests');
-        }
-      } else if (allowedPrs.length > 0) {
+      if (allowedPrs.length === 0) {
+        return denyConstraint(triggered, 'pdp.missing_pr_allowlist');
+      }
+      if (!request.target) {
         return denyConstraint(triggered, 'pdp.missing_pr_target');
+      }
+      const pr = normalizePrNumber(request.target);
+      if (pr === null || !allowedPrs.includes(pr)) {
+        return denyConstraint(triggered, 'lease.constraints.allowedPullRequests');
       }
       return null;
     }

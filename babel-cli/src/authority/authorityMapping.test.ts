@@ -225,6 +225,42 @@ describe('exact target binding', () => {
     assert.equal(deny.reasonCode, 'DENY_CAPABILITY_CONSTRAINT');
   });
 
+  test('node -e / python -c wrapping gh merge or force-push is not run_local_command', () => {
+    const mergeWrap = parseGitCommand(`node -e "require('child_process').execSync('gh pr merge 90')"`);
+    assert.equal(mergeWrap.capability, 'merge');
+    assert.equal(mergeWrap.target, '90');
+    const forceWrap = parseGitCommand(`python -c "import os; os.system('git push --force origin main')"`);
+    assert.equal(forceWrap.capability, 'force_push');
+    const lease = leaseWith();
+    const ctx = ctxFor(lease);
+    const r = decideWithLease(
+      {
+        type: 'run_command',
+        command: `node -e "require('child_process').execSync('gh pr merge 90')"`,
+      },
+      'workspace_write',
+      ctx,
+    );
+    assert.equal(r.decision, 'deny');
+    const noLease = decideWithLease(
+      {
+        type: 'run_command',
+        command: `python -c "import os; os.system('git push --force origin main')"`,
+      },
+      'workspace_write',
+      { lease: null },
+    );
+    assert.equal(noLease.decision, 'deny');
+  });
+
+  test('test_run does not remap interpreter merge carrier to run_tests', () => {
+    const req = actionRequestFromAction({
+      type: 'test_run',
+      command: `node -e "require('child_process').execSync('gh pr merge 90')"`,
+    });
+    assert.equal(req?.capability, 'merge');
+  });
+
   test('production_deploy + production allowed + staging denies', () => {
     const lease = leaseWith({
       allowedCapabilities: [...leaseWith().allowedCapabilities, 'production_deploy'],

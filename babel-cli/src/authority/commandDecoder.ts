@@ -697,9 +697,73 @@ function decodeNonGit(tokens: string[], raw: string): DecodedCommand {
 
   if (TEST_RUNNER_RE.test(raw)) return cmd('run_tests', 'test_local');
 
+  const evalDecoded = decodeInterpreterEval(tokens);
+  if (evalDecoded) return evalDecoded;
+
   // Recognized safe/reversible local engineering (semantic stays
   // 'unrecognized' at the autonomy layer; the PDP/lease is the authority).
   return cmd('run_local_command', 'unrecognized');
+}
+
+const INTERPRETER_BASES = new Set([
+  'node',
+  'nodejs',
+  'python',
+  'python3',
+  'py',
+  'ruby',
+  'perl',
+  'deno',
+  'tsx',
+  'ts-node',
+]);
+
+function extractInterpreterEvalPayload(tokens: readonly string[]): string | null {
+  const base = (tokens[0] ?? '').replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase();
+  if (!INTERPRETER_BASES.has(base)) return null;
+  for (let i = 1; i < tokens.length; i++) {
+    const flag = tokens[i]!.toLowerCase();
+    if (flag === '-e' || flag === '-c' || flag === '--eval' || flag === '--command') {
+      return tokens[i + 1] ?? null;
+    }
+  }
+  return null;
+}
+
+function extractEmbeddedToolCommands(payload: string): string[] {
+  const found: string[] = [];
+  const re = /\b((?:git|gh|terraform|vercel|kubectl|helm|npm|pnpm|yarn)\s+[^'"\\;\n]+)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(payload)) !== null) {
+    found.push(match[1]!.trim());
+  }
+  return found;
+}
+
+/**
+ * node -e / python -c carriers must not become run_local_command when the
+ * payload embeds a privileged git/gh/deploy command.
+ */
+function decodeInterpreterEval(tokens: readonly string[]): DecodedCommand | null {
+  const payload = extractInterpreterEvalPayload(tokens);
+  if (!payload) return null;
+  const embedded = extractEmbeddedToolCommands(payload);
+  let best: DecodedCommand | null = null;
+  for (const fragment of embedded) {
+    const decoded = decodeCommand(fragment);
+    if (
+      decoded.capability === 'run_local_command' &&
+      decoded.semantic === 'unrecognized'
+    ) {
+      continue;
+    }
+    if (best === null) {
+      best = decoded;
+      continue;
+    }
+    best = moreSevere(decoded.semantic, best.semantic) === decoded.semantic ? decoded : best;
+  }
+  return best;
 }
 
 // ─── Entry point ────────────────────────────────────────────────────────────

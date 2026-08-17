@@ -49,7 +49,8 @@ export function actionRequestFromAction(action: AgentAction): ActionRequest | nu
       if (
         isPrivilegedCapability(decoded.capability) ||
         decoded.capability === 'expose_credentials' ||
-        decoded.capability === 'unknown'
+        decoded.capability === 'unknown' ||
+        decoded.capability === 'run_local_command'
       ) {
         return decoded;
       }

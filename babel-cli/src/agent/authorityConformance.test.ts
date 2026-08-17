@@ -105,6 +105,21 @@ test('conformance: force-push via wrapper executable is denied', async () => {
   DENIED(await dispatch({ type: 'run_command', command: '/usr/bin/git push --force-with-lease' }));
 });
 
+test('conformance: interpreter -e/-c cannot wrap privileged git/gh', async () => {
+  DENIED(
+    await dispatch({
+      type: 'run_command',
+      command: `node -e "require('child_process').execSync('gh pr merge 90')"`,
+    }),
+  );
+  DENIED(
+    await dispatch({
+      type: 'run_command',
+      command: `python -c "import os; os.system('git push --force origin main')"`,
+    }),
+  );
+});
+
 test('conformance: onAskApproval cannot mint missing force_push authority', async () => {
   const denied = await dispatch({ type: 'run_command', command: 'git push --force origin main' });
   DENIED(denied);

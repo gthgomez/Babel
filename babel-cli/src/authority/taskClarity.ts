@@ -329,11 +329,11 @@ export interface SessionTaskGateInput {
  */
 export function evaluateSessionTaskGate(input: SessionTaskGateInput): HumanEscalationResult {
   if (!input.lease) {
-    const clarity = assessTaskClarity({
+    return resolveHumanEscalation({
       task: input.task,
+      allowedCapabilities: [],
       ...(input.candidates ? { candidates: input.candidates } : {}),
     });
-    return { kind: 'autonomous', clarity };
   }
   const allowed = input.lease.allowedCapabilities;
   const leaseCandidates = candidatesFromLease(input.lease);
