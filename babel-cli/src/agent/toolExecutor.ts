@@ -605,7 +605,10 @@ export async function executeActionWithPolicy(
     budget?: ToolExecutionBudget;
     /** When policy returns `ask`, invoke this before blocking. Return true to execute. */
     onAskApproval?: (action: AgentAction) => Promise<boolean>;
-    /** P0-A: explicit gate for autonomy Class C actions (approval-sensitive). */
+    /**
+     * @deprecated Compatibility only. Privileged authorization is the lease/PDP.
+     * A callback here cannot mint authority the lease did not grant.
+     */
     onAutonomyClassCGate?: (action: AgentAction) => Promise<boolean>;
     /** H4: optional completed idempotency keys for double-mutation deny. */
     completedIdempotencyKeys?: readonly string[];
@@ -785,10 +788,9 @@ export async function executeActionWithPolicy(
   // by command SEMANTICS (run_command/test_run text) and by target PATH for
   // credential stores, mapping onto the canonical A–D taxonomy:
   //   Class D (credential exposure)   → deterministic deny, no approval path
-  //   Class C (external/public/destructive) → explicit gate
-  //                                      (onAutonomyClassCGate) or deterministic
-  //                                      deny when no gate is wired (headless,
-  //                                      benchmark, governed kernel).
+  //   Class C (external/public/destructive) → lease/PDP only.
+  //     Not in lease == deny. TTY/CI is not authority. Optional
+  //     onAutonomyClassCGate cannot mint a missing capability.
   // Class A/B actions pass through to the authority decide path unchanged
   // (the lease-aware PDP composite below is the decision authority).
   if (!isControlAction) {
@@ -831,40 +833,8 @@ export async function executeActionWithPolicy(
         policyBlocked: true,
       };
     }
-    if (autonomyClass === 'c_gated') {
-      let approved = false;
-      if (deps.onAutonomyClassCGate) {
-        approved = await deps.onAutonomyClassCGate(action);
-      }
-      if (!approved) {
-        incrementBlocks(context.runId);
-        emitAgentEvent({
-          type: 'policy_decision',
-          action: toolName,
-          decision: 'deny',
-          preset,
-          runId: context.runId,
-          agentId: context.agentId,
-          rule: 'AUTONOMY_CLASS_C_GATE',
-        });
-        return {
-          action,
-          terminal: isTerminalAgentAction(action),
-          results: [
-            {
-              exit_code: 1,
-              stdout: '',
-              stderr:
-                `[AUTONOMY_DENIED:CLASS_C_GATE] Command semantics require an explicit ` +
-                `gate and no approval is available in this context.`,
-            },
-          ],
-          policyDecision: 'deny',
-          policyBlocked: true,
-        };
-      }
-      // Approved: continue through the authority decide path below.
-    }
+    // Privileged (Class C) actions fall through to decideWithLease.
+    // Missing lease membership is DENY_MISSING_AUTHORITY, not ASK.
   }
 
   let policyDecision = decide(action, preset);
@@ -897,9 +867,11 @@ export async function executeActionWithPolicy(
         policyBlockedToolResult(
           action,
           policyDecision,
-          policyDecision === 'deny' && preset === 'ask_before_mutation'
-            ? 'User denied approval'
-            : undefined,
+          lastReasonCode
+            ? `Policy denied ${action.type}: ${lastReasonCode}`
+            : policyDecision === 'deny' && preset === 'ask_before_mutation'
+              ? 'User denied approval'
+              : undefined,
         ),
       ],
       policyDecision,

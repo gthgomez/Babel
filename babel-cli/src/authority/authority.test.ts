@@ -141,14 +141,32 @@ describe('PDP decisions', () => {
     assert.equal(d.reasonCode, 'VERIFY_BEFORE_PUBLICATION');
   });
 
-  test('merge → ASK_MERGE', () => {
+  test('merge without lease membership → DENY_MISSING_AUTHORITY', () => {
     const d = decideActionRequest({ capability: 'merge' }, lease);
-    assert.equal(d.outcome, 'ask');
-    assert.equal(d.reasonCode, 'ASK_MERGE');
+    assert.equal(d.outcome, 'deny');
+    assert.equal(d.reasonCode, 'DENY_MISSING_AUTHORITY');
   });
 
-  test('release → ASK_RELEASE', () => {
-    assert.equal(decideActionRequest({ capability: 'release' }, lease).reasonCode, 'ASK_RELEASE');
+  test('release without lease membership → DENY_MISSING_AUTHORITY', () => {
+    assert.equal(decideActionRequest({ capability: 'release' }, lease).reasonCode, 'DENY_MISSING_AUTHORITY');
+  });
+
+  test('merge with explicit capability and unprotected dest → verify', () => {
+    const granted = sampleLease({
+      allowedCapabilities: [...sampleLease().allowedCapabilities, 'merge'],
+    });
+    const d = decideActionRequest({ capability: 'merge', destinationBranch: 'feat/x' }, granted);
+    assert.equal(d.outcome, 'verify');
+    assert.equal(d.reasonCode, 'VERIFY_BEFORE_PUBLICATION');
+  });
+
+  test('release with capability but releasePublish false → DENY_CAPABILITY_CONSTRAINT', () => {
+    const granted = sampleLease({
+      allowedCapabilities: [...sampleLease().allowedCapabilities, 'release'],
+    });
+    const d = decideActionRequest({ capability: 'release' }, granted);
+    assert.equal(d.outcome, 'deny');
+    assert.equal(d.reasonCode, 'DENY_CAPABILITY_CONSTRAINT');
   });
 
   test('force push → DENY_FORCE_PUSH_POLICY regardless of lease membership', () => {
@@ -169,16 +187,24 @@ describe('PDP decisions', () => {
     assert.equal(d.reasonCode, 'DENY_LEASE_MISMATCH');
   });
 
-  test('protected branch push → ASK_PROTECTED_BRANCH', () => {
+  test('protected branch push without allowed target → DENY_PROTECTED_BRANCH', () => {
     const d = decideActionRequest({ capability: 'push_feature_branch', destinationBranch: 'main' }, lease);
-    assert.equal(d.outcome, 'ask');
-    assert.equal(d.reasonCode, 'ASK_PROTECTED_BRANCH');
+    assert.equal(d.outcome, 'deny');
+    assert.equal(d.reasonCode, 'DENY_PROTECTED_BRANCH');
   });
 
-  test('protected branch prefix (release/*) → ASK', () => {
+  test('protected branch prefix (release/*) without allowed target → DENY_PROTECTED_BRANCH', () => {
     const l = sampleLease({ constraints: { ...sampleLease().constraints, protectedBranches: ['main', 'release/*'] } });
     const d = decideActionRequest({ capability: 'push_feature_branch', destinationBranch: 'release/1.0' }, l);
-    assert.equal(d.reasonCode, 'ASK_PROTECTED_BRANCH');
+    assert.equal(d.reasonCode, 'DENY_PROTECTED_BRANCH');
+  });
+
+  test('protected branch push with allowedProtectedTargets → verify', () => {
+    const l = sampleLease({
+      constraints: { ...sampleLease().constraints, allowedProtectedTargets: ['main'] },
+    });
+    const d = decideActionRequest({ capability: 'push_feature_branch', destinationBranch: 'main' }, l);
+    assert.equal(d.outcome, 'verify');
   });
 
   test('local capability not in lease → DENY_UNKNOWN_EXTERNAL_SIDE_EFFECT', () => {
@@ -415,7 +441,10 @@ describe('policy integrity (self-mutation guard)', () => {
     assert.equal(isGovernancePath('babel-cli/src/agent/chatEngine.ts'), true);
     assert.equal(isGovernancePath('babel-cli/src/agent/autonomyEnforcement.ts'), true);
     assert.equal(isGovernancePath('babel-cli/src/agent/chatApproval.ts'), true);
+    assert.equal(isGovernancePath('babel-cli/src/agent/governedMutations.ts'), true);
     assert.equal(isGovernancePath('babel-cli/src/utils/envFlags.ts'), true);
+    assert.equal(isGovernancePath('runs/chat-sessions/abc/authority-session.json'), true);
+    assert.equal(isGovernancePath('runs/chat-sessions/abc/transcript.jsonl'), false);
     assert.equal(isGovernancePath('src/main.ts'), false);
   });
 });
@@ -452,16 +481,16 @@ describe('wire: lease-aware dispatch composite', () => {
     assert.equal(r.reasonCode, 'DENY_FORCE_PUSH_POLICY');
   });
 
-  test('git push to main → ask (ASK_PROTECTED_BRANCH)', () => {
+  test('git push to main → deny (DENY_PROTECTED_BRANCH)', () => {
     const r = decideWithLease(runCmd('git push origin HEAD:refs/heads/main'), 'workspace_write', ctx);
-    assert.equal(r.decision, 'ask');
-    assert.equal(r.reasonCode, 'ASK_PROTECTED_BRANCH');
+    assert.equal(r.decision, 'deny');
+    assert.equal(r.reasonCode, 'DENY_PROTECTED_BRANCH');
   });
 
-  test('gh pr merge → ask (ASK_MERGE)', () => {
+  test('gh pr merge without merge capability → deny (DENY_MISSING_AUTHORITY)', () => {
     const r = decideWithLease(runCmd('gh pr merge 5'), 'workspace_write', ctx);
-    assert.equal(r.decision, 'ask');
-    assert.equal(r.reasonCode, 'ASK_MERGE');
+    assert.equal(r.decision, 'deny');
+    assert.equal(r.reasonCode, 'DENY_MISSING_AUTHORITY');
   });
 
   test('cat .env (bash) → deny (credential)', () => {
@@ -482,10 +511,10 @@ describe('wire: lease-aware dispatch composite', () => {
     assert.equal(r.reasonCode, 'DENY_UNKNOWN_EXTERNAL_SIDE_EFFECT');
   });
 
-  test('known-dangerous tool (terraform apply) → ask (ASK_DEPLOY)', () => {
+  test('known-dangerous tool (terraform apply) → deny (DENY_MISSING_AUTHORITY)', () => {
     const r = decideWithLease(runCmd('terraform apply -auto-approve'), 'workspace_write', ctx);
-    assert.equal(r.decision, 'ask');
-    assert.equal(r.reasonCode, 'ASK_DEPLOY');
+    assert.equal(r.decision, 'deny');
+    assert.equal(r.reasonCode, 'DENY_MISSING_AUTHORITY');
   });
 
   test('ordinary unclassified command (npm test) → allow (local)', () => {

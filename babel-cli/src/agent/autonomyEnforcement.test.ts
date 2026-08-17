@@ -41,10 +41,10 @@ test('resolveAutonomyPreset: plan is always read_only', () => {
   assert.equal(resolveAutonomyPreset('plan', 'D'), 'read_only');
 });
 
-test('resolveAutonomyPreset: class D maps to read_only, C to ask_before_mutation', () => {
+test('resolveAutonomyPreset: class D maps to read_only, C to workspace_write', () => {
   assert.equal(resolveAutonomyPreset('chat', 'D'), 'read_only');
   assert.equal(resolveAutonomyPreset('deep', 'D'), 'read_only');
-  assert.equal(resolveAutonomyPreset('chat', 'C'), 'ask_before_mutation');
+  assert.equal(resolveAutonomyPreset('chat', 'C'), 'workspace_write');
 });
 
 test('resolveAutonomyPreset: A/B/unset keep workspace_write (status quo)', () => {
@@ -85,10 +85,10 @@ test('benchmarkAutoApproveEnabled: benchmark mode without auto-approve fails clo
   assert.equal(benchmarkAutoApproveEnabled({ BABEL_BENCHMARK_MODE: '1' }), false);
 });
 
-test('resolveClassCGateDecision: CI or headless alone never auto-approves', () => {
+test('resolveClassCGateDecision: TTY and headless make the same authority decision', () => {
   assert.equal(
     resolveClassCGateDecision({ executionProfile: 'chat', isTTY: false, env: { CI: 'true' } }),
-    'deny',
+    'authority',
   );
   assert.equal(
     resolveClassCGateDecision({
@@ -96,7 +96,7 @@ test('resolveClassCGateDecision: CI or headless alone never auto-approves', () =
       isTTY: false,
       env: { BABEL_HEADLESS: '1' },
     }),
-    'deny',
+    'authority',
   );
   assert.equal(
     resolveClassCGateDecision({
@@ -104,7 +104,7 @@ test('resolveClassCGateDecision: CI or headless alone never auto-approves', () =
       isTTY: true,
       env: { BABEL_BENCHMARK_AUTO_APPROVE: '1', CI: 'true' },
     }),
-    'deny',
+    'authority',
   );
   assert.equal(
     resolveClassCGateDecision({
@@ -112,7 +112,19 @@ test('resolveClassCGateDecision: CI or headless alone never auto-approves', () =
       isTTY: true,
       env: { BABEL_BENCHMARK_AUTO_APPROVE: '1' },
     }),
-    'ask',
+    'authority',
+  );
+  assert.equal(
+    resolveClassCGateDecision({
+      executionProfile: 'chat',
+      isTTY: true,
+      env: {},
+    }),
+    resolveClassCGateDecision({
+      executionProfile: 'chat',
+      isTTY: false,
+      env: { CI: 'true' },
+    }),
   );
   assert.equal(
     resolveClassCGateDecision({

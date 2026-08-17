@@ -448,13 +448,13 @@ test('transport: kernel dispatcher routes every effectful ToolCallRequest throug
   assert.equal(credentialWrite.exit_code, 1);
   assert.match(credentialWrite.stderr, /AUTONOMY_DENIED/);
 
-  // Destructive/external push — Class C gate denies headless.
+  // Destructive/external push — missing privileged authority denies headless.
   const forcePush = await kernel.tools.execute(
     { tool: 'shell_exec', command: 'git push --force origin main' },
     freshCtx(),
   );
   assert.equal(forcePush.exit_code, 1);
-  assert.match(forcePush.stderr, /AUTONOMY_DENIED/);
+  assert.match(forcePush.stderr, /DENY_|AUTONOMY_DENIED|Policy denied/);
 
   // Model-directed network intent — denied at the boundary; no network occurs.
   const networkIntent = await kernel.tools.execute(

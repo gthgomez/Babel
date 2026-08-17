@@ -3,14 +3,24 @@
  *
  * Baseline capture belongs at a trusted start boundary. Resume restores the
  * persisted snapshot and invalidation flag; it never recaptures a matching
- * baseline over a drifted tree.
+ * baseline over a drifted tree. Resume binds persisted lease identity and
+ * canonical repository identity; mismatches fail closed.
  */
 
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { loadLeaseFromEnv, type AutonomyLease } from './lease.js';
 import { buildBaseline, type BaselineManifest } from './integrity.js';
 
 export const AUTHORITY_SESSION_FILENAME = 'authority-session.json';
+
+export type AuthorityResumeFailure =
+  | 'lease_mismatch'
+  | 'repo_mismatch'
+  | 'persisted_lease_missing'
+  | 'active_lease_missing'
+  | 'malformed'
+  | 'schema';
 
 export interface AuthoritySessionContext {
   lease: AutonomyLease | null;
@@ -18,6 +28,7 @@ export interface AuthoritySessionContext {
   baseline: BaselineManifest | null;
   invalidated: boolean;
   persistPath?: string;
+  resumeFailure?: AuthorityResumeFailure;
 }
 
 interface PersistedAuthoritySession {
@@ -29,11 +40,35 @@ interface PersistedAuthoritySession {
 }
 
 export function canonicalizeRepoRoot(repoRoot: string): string {
+  const resolved = resolve(repoRoot);
   try {
-    return realpathSync(repoRoot);
+    return realpathSync(resolved);
   } catch {
-    return repoRoot;
+    return resolved;
   }
+}
+
+function failClosedResume(
+  persistPath: string,
+  repoRoot: string,
+  lease: AutonomyLease | null,
+  reason: AuthorityResumeFailure,
+): AuthoritySessionContext {
+  return {
+    lease,
+    repoRoot: canonicalizeRepoRoot(repoRoot),
+    baseline: null,
+    invalidated: true,
+    persistPath,
+    resumeFailure: reason,
+  };
+}
+
+function isUsableBaseline(baseline: unknown): baseline is BaselineManifest {
+  if (baseline === null || baseline === undefined) return true;
+  if (typeof baseline !== 'object') return false;
+  const rec = baseline as { entries?: unknown };
+  return Array.isArray(rec.entries);
 }
 
 export function persistAuthoritySession(ctx: AuthoritySessionContext): void {
@@ -48,6 +83,10 @@ export function persistAuthoritySession(ctx: AuthoritySessionContext): void {
   writeFileSync(ctx.persistPath, JSON.stringify(body), 'utf8');
 }
 
+/**
+ * Load persisted authority state. Callers MUST validate identity via
+ * `restoreAuthoritySession` — this helper does not bind lease/repo identity.
+ */
 export function loadPersistedAuthoritySession(
   persistPath: string,
   lease: AutonomyLease | null,
@@ -101,6 +140,7 @@ export function establishAuthoritySession(input: {
 /**
  * Resume: restore the original snapshot. Never recapture.
  * Missing persist + active lease → incomplete context (fail closed at decide).
+ * Mismatched lease or repository identity → invalidated + no baseline.
  */
 export function restoreAuthoritySession(input: {
   repoRoot: string;
@@ -108,13 +148,48 @@ export function restoreAuthoritySession(input: {
   lease?: AutonomyLease | null;
 }): AuthoritySessionContext {
   const lease = input.lease !== undefined ? input.lease : loadLeaseFromEnv();
-  const loaded = loadPersistedAuthoritySession(input.persistPath, lease);
-  if (loaded) return loaded;
+  const requestedRoot = canonicalizeRepoRoot(input.repoRoot);
+  if (!existsSync(input.persistPath)) {
+    return {
+      lease,
+      repoRoot: requestedRoot,
+      baseline: null,
+      invalidated: false,
+      persistPath: input.persistPath,
+    };
+  }
+  let parsed: PersistedAuthoritySession;
+  try {
+    parsed = JSON.parse(readFileSync(input.persistPath, 'utf8')) as PersistedAuthoritySession;
+  } catch {
+    return failClosedResume(input.persistPath, requestedRoot, lease, 'malformed');
+  }
+  if (parsed.schemaVersion !== 1) {
+    return failClosedResume(input.persistPath, requestedRoot, lease, 'schema');
+  }
+  if (!isUsableBaseline(parsed.baseline)) {
+    return failClosedResume(input.persistPath, requestedRoot, lease, 'malformed');
+  }
+  const persistedRoot = typeof parsed.repoRoot === 'string' ? canonicalizeRepoRoot(parsed.repoRoot) : '';
+  if (!persistedRoot || persistedRoot !== requestedRoot) {
+    return failClosedResume(input.persistPath, requestedRoot, lease, 'repo_mismatch');
+  }
+  const persistedLeaseId = parsed.leaseId ?? null;
+  const activeLeaseId = lease?.leaseId ?? null;
+  if (persistedLeaseId && !activeLeaseId) {
+    return failClosedResume(input.persistPath, requestedRoot, lease, 'active_lease_missing');
+  }
+  if (!persistedLeaseId && activeLeaseId) {
+    return failClosedResume(input.persistPath, requestedRoot, lease, 'persisted_lease_missing');
+  }
+  if (persistedLeaseId !== activeLeaseId) {
+    return failClosedResume(input.persistPath, requestedRoot, lease, 'lease_mismatch');
+  }
   return {
     lease,
-    repoRoot: canonicalizeRepoRoot(input.repoRoot),
-    baseline: null,
-    invalidated: false,
+    repoRoot: persistedRoot,
+    baseline: parsed.baseline ?? null,
+    invalidated: parsed.invalidated === true,
     persistPath: input.persistPath,
   };
 }

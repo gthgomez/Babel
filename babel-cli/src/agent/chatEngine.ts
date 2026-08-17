@@ -185,7 +185,6 @@ import { projectDurableToolBatch } from './toolExecutionIdentity.js';
 import { captureSessionEventAppendFailure } from './sessionEventDiagnostics.js';
 import { buildRepoMapPreamble } from './repoMapPreamble.js';
 import {
-  requestChatActionApproval,
   bindChatApprovalSession,
   getChatApprovalSession,
   setChatApprovalTurnId,
@@ -3898,7 +3897,6 @@ export class ChatEngine {
       if (action.type === 'str_replace') {
         const classC = resolveClassCGateDecision({
           executionProfile: this.executionProfile,
-          isTTY: Boolean(process.stdout.isTTY),
         });
         const gov = await governedStrReplace(
           { file_path: action.file_path, old_str: action.old_str, new_str: action.new_str },
@@ -3909,11 +3907,10 @@ export class ChatEngine {
             executor: defaultToolExecutor,
             onDispatchAuthorized: () => recoveredAuthorization,
             onBeforeExecutorExecute: () => this.persistToolStartedAtExecutorDispatch(action, meta),
-            ...(classC === 'allow'
-              ? { onAskApproval: async () => true }
-              : classC === 'ask'
-                ? { onAskApproval: requestChatActionApproval }
-                : {}),
+            ...(this.parity.authoritySession
+              ? { authoritySession: this.parity.authoritySession }
+              : {}),
+            ...(classC === 'allow' ? { onAskApproval: async () => true } : {}),
           },
         );
 
@@ -4143,7 +4140,6 @@ export class ChatEngine {
       const agentAction = mapChatActionToAgentAction(action);
       const classC = resolveClassCGateDecision({
         executionProfile: this.executionProfile,
-        isTTY: Boolean(process.stdout.isTTY),
       });
       const result: PolicyGatedExecutionResult = await executeActionWithPolicy(
         agentAction,
@@ -4178,20 +4174,10 @@ export class ChatEngine {
             : {}),
           onDispatchAuthorized: () => this.recoveredOperationDispatchAuthorization(action),
           onBeforeExecutorExecute: () => this.persistToolStartedAtExecutorDispatch(action, meta),
-          // Class C / ask: only the explicit benchmark pair auto-approves.
-          // CI or BABEL_HEADLESS alone is deny.
-          onAutonomyClassCGate:
-            classC === 'allow'
-              ? async () => true
-              : classC === 'ask'
-                ? requestChatActionApproval
-                : async () => false,
+          // Privileged ops: lease/PDP decides. Benchmark pair is the only
+          // remaining auto-approve exception. TTY is not authority.
           ...this.isolationBrokerFlags(),
-          ...(classC === 'allow'
-            ? { onAskApproval: async () => true }
-            : classC === 'ask'
-              ? { onAskApproval: requestChatActionApproval }
-              : {}),
+          ...(classC === 'allow' ? { onAskApproval: async () => true } : {}),
         }
       );
 

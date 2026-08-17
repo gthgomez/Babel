@@ -45,6 +45,10 @@ const LeaseSchema = z
         billing: z.boolean().default(false),
         destructiveDb: z.boolean().default(false),
         scopeExpansion: z.boolean().default(false),
+        securityPolicyChange: z.boolean().default(false),
+        historyRewrite: z.boolean().default(false),
+        allowedProtectedTargets: z.array(z.string()).default([]),
+        allowedEnvironments: z.array(z.string()).default([]),
       })
       .default({
         protectedBranches: ['main'],
@@ -57,6 +61,10 @@ const LeaseSchema = z
         billing: false,
         destructiveDb: false,
         scopeExpansion: false,
+        securityPolicyChange: false,
+        historyRewrite: false,
+        allowedProtectedTargets: [],
+        allowedEnvironments: [],
       }),
     budgets: z
       .object({

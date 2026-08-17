@@ -12,7 +12,6 @@
 import type { AgentAction } from './actions.js';
 import type { AutonomyClass } from '../config/autonomyPolicy.js';
 import type { PermissionPreset } from './policy.js';
-import { isTruthyEnvFlag } from '../utils/envFlags.js';
 
 // ─── Credential-path protection (P0-C) ───────────────────────────────────────
 
@@ -56,7 +55,7 @@ export function isCredentialTargetPath(path: string): boolean {
  *
  * The class contract (autonomyPolicy.ts AUTONOMY_PROFILES):
  *   D → read_only (mutations deterministically denied)
- *   C → ask_before_mutation (mutations hit the approval boundary)
+ *   C → workspace_write (privileged ops still require lease membership)
  *   A/B/unset → workspace_write (mutations auto-execute under verification)
  * Plan mode is always read_only (plan is a read-only surface).
  */
@@ -66,7 +65,6 @@ export function resolveAutonomyPreset(
 ): PermissionPreset {
   if (executionProfile === 'plan') return 'read_only';
   if (autonomyClass === 'D') return 'read_only';
-  if (autonomyClass === 'C') return 'ask_before_mutation';
   return 'workspace_write';
 }
 
@@ -85,22 +83,25 @@ export function benchmarkAutoApproveEnabled(env: NodeJS.ProcessEnv = process.env
   return env['BABEL_BENCHMARK_MODE'] === '1';
 }
 
-export type ClassCGateResolution = 'allow' | 'ask' | 'deny';
+export type ClassCGateResolution = 'allow' | 'ask' | 'deny' | 'authority';
 
 /**
- * Class-C / privileged-mutation approval resolution.
- * CI or BABEL_HEADLESS alone never auto-approves.
+ * Privileged-mutation resolution. TTY/CI/headless are not authority.
+ * Interactive and headless callers receive the same decision.
+ *
+ * `allow` is only the explicit benchmark pair. Everything else defers to
+ * the lease/PDP (`authority`) except plan mode (`deny`).
  */
 export function resolveClassCGateDecision(input: {
   executionProfile: string;
   env?: NodeJS.ProcessEnv;
-  isTTY: boolean;
+  /** @deprecated TTY is presentation context, not authority. Ignored. */
+  isTTY?: boolean;
 }): ClassCGateResolution {
   if (input.executionProfile === 'plan') return 'deny';
   const env = input.env ?? process.env;
   if (benchmarkAutoApproveEnabled(env)) return 'allow';
-  if (input.isTTY && !isTruthyEnvFlag(env['CI'])) return 'ask';
-  return 'deny';
+  return 'authority';
 }
 
 // ─── Command text extraction ─────────────────────────────────────────────────

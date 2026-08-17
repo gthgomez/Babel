@@ -3,14 +3,21 @@
  *
  * Pure, deterministic decision function: ActionRequest × AutonomyLease →
  * { outcome, reasonCode, rulesTriggered }. Fail-closed: unknown capability,
- * constraint violation, or lease mismatch → DENY with a reason code. Gated
- * capabilities → ASK with a specific code. Publication capabilities → VERIFY
- * (dispatch treats as allow; the completion gate enforces the verify
- * requirement). No I/O; fully unit-testable.
+ * constraint violation, or lease mismatch → DENY with a reason code.
+ * Privileged capabilities require explicit lease membership and
+ * capability-specific constraints — they never ASK. Publication capabilities
+ * → VERIFY (dispatch treats as allow; the completion gate enforces verify).
+ * No I/O; fully unit-testable.
  */
 
 import { AutonomyLease } from './lease.js';
-import { CapabilityId, CAPABILITY_KINDS, isAllowedBranchPrefix, isProtectedBranch } from './capabilities.js';
+import {
+  CapabilityId,
+  CAPABILITY_KINDS,
+  isAllowedBranchPrefix,
+  isPrivilegedCapability,
+  isProtectedBranch,
+} from './capabilities.js';
 import { PolicyOutcome, ReasonCode } from './reasonCodes.js';
 
 export interface ActionRequest {
@@ -23,6 +30,10 @@ export interface ActionRequest {
   delete?: boolean;
   /** Current branch of the agent's worktree (used for task-branch checks). */
   currentBranch?: string;
+  /** Deploy/target environment when the action names one. */
+  environment?: string;
+  /** Concrete target (PR number, path, branch) when not a dest branch. */
+  target?: string;
 }
 
 export interface PolicyDecision {
@@ -31,7 +42,7 @@ export interface PolicyDecision {
   rulesTriggered: string[];
 }
 
-/** Map a gated capability to its ASK reason code. */
+/** @deprecated ASK is no longer a PDP outcome. Retained for compatibility tests. */
 export function askCodeForCapability(capability: CapabilityId): ReasonCode {
   switch (capability) {
     case 'merge':
@@ -114,19 +125,29 @@ export function decideActionRequest(
     };
   }
 
-  // 6. Protected-branch write — ASK (human gate), never silent.
+  // 6. Protected-branch write — machine policy, never ASK.
   const dest = request.destinationBranch;
   if (dest && isProtectedBranch(dest, lease.constraints.protectedBranches)) {
     triggered.push('lease.constraints.protectedBranches');
-    if (request.capability === 'push_feature_branch' || request.capability === 'force_push') {
-      return { outcome: 'ask', reasonCode: 'ASK_PROTECTED_BRANCH', rulesTriggered: triggered };
+    const allowedTargets = lease.constraints.allowedProtectedTargets;
+    const destAllowed = allowedTargets.some((t) => t === dest);
+    if (
+      (request.capability === 'push_feature_branch' || request.capability === 'force_push' || request.capability === 'merge') &&
+      !destAllowed
+    ) {
+      return { outcome: 'deny', reasonCode: 'DENY_PROTECTED_BRANCH', rulesTriggered: triggered };
     }
   }
 
   // 7. Branch-prefix check — the lease's task-branch contract: pushes must
   // land on an allowed prefix (`feat/`, `fix/`, …). Denied before any
-  // verify/allow so a non-task branch can never publish.
-  if (dest && !isAllowedBranchPrefix(dest, lease.branchPrefixes)) {
+  // verify/allow so a non-task branch can never publish. Protected dests
+  // already authorized above skip this prefix check.
+  if (
+    dest &&
+    !isProtectedBranch(dest, lease.constraints.protectedBranches) &&
+    !isAllowedBranchPrefix(dest, lease.branchPrefixes)
+  ) {
     triggered.push('lease.branchPrefixes');
     return {
       outcome: 'deny',
@@ -135,10 +156,16 @@ export function decideActionRequest(
     };
   }
 
-  // 8. Gated capability resolution.
-  if (kind === 'gated') {
-    triggered.push(`lease.gates.${request.capability}`);
-    return { outcome: 'ask', reasonCode: askCodeForCapability(request.capability), rulesTriggered: triggered };
+  // 8. Privileged capability resolution — explicit lease membership + constraints.
+  if (kind === 'gated' || isPrivilegedCapability(request.capability)) {
+    if (!lease.allowedCapabilities.includes(request.capability)) {
+      triggered.push('pdp.not_in_lease');
+      return { outcome: 'deny', reasonCode: 'DENY_MISSING_AUTHORITY', rulesTriggered: triggered };
+    }
+    const constraint = privilegedConstraintDecision(request, lease, triggered);
+    if (constraint) return constraint;
+    triggered.push(`lease.allowedCapabilities.${request.capability}`);
+    return { outcome: 'verify', reasonCode: 'VERIFY_BEFORE_PUBLICATION', rulesTriggered: triggered };
   }
 
   if (kind === 'publication') {
@@ -152,4 +179,67 @@ export function decideActionRequest(
 
   triggered.push('lease.allowedCapabilities');
   return { outcome: 'allow', reasonCode: 'ALLOW_SAFE_LOCAL', rulesTriggered: triggered };
+}
+
+function denyConstraint(triggered: string[], rule: string): PolicyDecision {
+  triggered.push(rule);
+  return { outcome: 'deny', reasonCode: 'DENY_CAPABILITY_CONSTRAINT', rulesTriggered: triggered };
+}
+
+/**
+ * Capability-specific privileged constraints. Returns a deny decision when
+ * the lease grants the capability but the structured constraint is not met.
+ * Null means the constraint set is satisfied.
+ */
+function privilegedConstraintDecision(
+  request: ActionRequest,
+  lease: AutonomyLease,
+  triggered: string[],
+): PolicyDecision | null {
+  const c = lease.constraints;
+  switch (request.capability) {
+    case 'merge':
+    case 'pr_mark_ready':
+      if (request.repository && request.repository !== lease.scope.repository) {
+        return { outcome: 'deny', reasonCode: 'DENY_LEASE_MISMATCH', rulesTriggered: [...triggered, 'pdp.repository_mismatch'] };
+      }
+      return null;
+    case 'release':
+      if (c.releasePublish !== true) return denyConstraint(triggered, 'lease.constraints.releasePublish');
+      return null;
+    case 'production_deploy':
+      if (c.productionDeploy !== true) return denyConstraint(triggered, 'lease.constraints.productionDeploy');
+      if (!request.environment) return denyConstraint(triggered, 'pdp.missing_environment');
+      if (!c.allowedEnvironments.includes(request.environment)) {
+        return denyConstraint(triggered, 'lease.constraints.allowedEnvironments');
+      }
+      return null;
+    case 'repo_admin':
+      if (c.repositoryAdmin !== true) return denyConstraint(triggered, 'lease.constraints.repositoryAdmin');
+      return null;
+    case 'security_policy_change':
+      if (c.securityPolicyChange !== true) return denyConstraint(triggered, 'lease.constraints.securityPolicyChange');
+      return null;
+    case 'credential_access':
+      if (c.secretsAccess !== true) return denyConstraint(triggered, 'lease.constraints.secretsAccess');
+      return null;
+    case 'destructive_data_delete':
+      if (c.destructiveDb !== true) return denyConstraint(triggered, 'lease.constraints.destructiveDb');
+      return null;
+    case 'shared_history_rewrite':
+      if (c.historyRewrite !== true) return denyConstraint(triggered, 'lease.constraints.historyRewrite');
+      return null;
+    case 'force_push':
+      if (c.forcePush !== true) {
+        triggered.push('lease.constraints.forcePush');
+        return { outcome: 'deny', reasonCode: 'DENY_FORCE_PUSH_POLICY', rulesTriggered: triggered };
+      }
+      if (!request.destinationBranch) return denyConstraint(triggered, 'pdp.missing_branch');
+      return null;
+    case 'scope_expansion':
+      if (c.scopeExpansion !== true) return denyConstraint(triggered, 'lease.constraints.scopeExpansion');
+      return null;
+    default:
+      return null;
+  }
 }

@@ -4,7 +4,8 @@
  * are additive. Consumers (CLI, logs, harness adapters) match on code strings.
  */
 
-export type PolicyOutcome = 'allow' | 'verify' | 'ask' | 'deny';
+/** PDP outcomes. `ask` is deprecated and unreachable from the default coding path. */
+export type PolicyOutcome = 'allow' | 'verify' | 'deny' | 'ask';
 
 export const REASON_CODES = [
   // ALLOW
@@ -12,7 +13,7 @@ export const REASON_CODES = [
   'ALLOW_BOUNDED_PUBLICATION',
   // VERIFY
   'VERIFY_BEFORE_PUBLICATION',
-  // ASK
+  // ASK (deprecated compatibility codes — PDP no longer emits these)
   'ASK_PROTECTED_BRANCH',
   'ASK_MERGE',
   'ASK_RELEASE',
@@ -31,6 +32,10 @@ export const REASON_CODES = [
   'DENY_POLICY_SELF_MUTATION',
   'DENY_POLICY_INTEGRITY_DRIFT',
   'DENY_AUTHORITY_CONTEXT_INCOMPLETE',
+  'DENY_AUTHORITY_RESUME_MISMATCH',
+  'DENY_MISSING_AUTHORITY',
+  'DENY_PROTECTED_BRANCH',
+  'DENY_CAPABILITY_CONSTRAINT',
   'DENY_BRANCH_PREFIX',
   'DENY_VERIFICATION_MISMATCH',
 ] as const;
@@ -58,6 +63,10 @@ export const REASON_CODE_OUTCOMES: Record<ReasonCode, PolicyOutcome> = {
   DENY_POLICY_SELF_MUTATION: 'deny',
   DENY_POLICY_INTEGRITY_DRIFT: 'deny',
   DENY_AUTHORITY_CONTEXT_INCOMPLETE: 'deny',
+  DENY_AUTHORITY_RESUME_MISMATCH: 'deny',
+  DENY_MISSING_AUTHORITY: 'deny',
+  DENY_PROTECTED_BRANCH: 'deny',
+  DENY_CAPABILITY_CONSTRAINT: 'deny',
   DENY_BRANCH_PREFIX: 'deny',
   DENY_VERIFICATION_MISMATCH: 'deny',
 };

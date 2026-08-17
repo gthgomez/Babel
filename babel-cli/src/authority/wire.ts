@@ -30,7 +30,8 @@ import type { AutonomyLease } from './lease.js';
 import { decideActionRequest, type ActionRequest } from './pdp.js';
 import { parseGitCommand } from './gitCommand.js';
 import type { ReasonCode } from './reasonCodes.js';
-import { checkBaseline, isGovernancePath, repoRelativeFromCwd } from './integrity.js';
+import { checkBaseline, isAuthorityStatePath, isGovernancePath, repoRelativeFromCwd } from './integrity.js';
+import { CAPABILITY_KINDS, isPrivilegedCapability } from './capabilities.js';
 import { extractPatchRawTargets } from './patchTargets.js';
 import { markSessionInvalidated, type AuthoritySessionContext } from './sessionContext.js';
 
@@ -92,6 +93,17 @@ export function decideWithLease(
 ): { decision: PermissionDecision; reasonCode: ReasonCode | '' } {
   const legacy = decideAction(action, preset);
 
+  if (ctx.authoritySession?.resumeFailure) {
+    emitAgentEvent({
+      type: 'policy_decision',
+      action: `${action.type}:authority_resume`,
+      decision: 'deny',
+      preset,
+      rule: 'DENY_AUTHORITY_RESUME_MISMATCH',
+    });
+    return { decision: 'deny', reasonCode: 'DENY_AUTHORITY_RESUME_MISMATCH' };
+  }
+
   // Permanent drift lock: an invalidated lease denies every subsequent
   // decision, before anything else is evaluated.
   if (
@@ -150,7 +162,7 @@ export function decideWithLease(
       repoRoot && cwd
         ? rawTargets.map((t) => repoRelativeFromCwd(cwd, repoRoot, t))
         : rawTargets;
-    const governanceTarget = targets.find((t) => t && isGovernancePath(t));
+    const governanceTarget = targets.find((t) => t && (isGovernancePath(t) || isAuthorityStatePath(t)));
     if (governanceTarget) {
       emitAgentEvent({
         type: 'policy_decision',
@@ -164,6 +176,19 @@ export function decideWithLease(
   }
 
   if (!ctx.lease) {
+    const privilegedReq = actionRequestFromAction(action);
+    if (privilegedReq) {
+      const kind = CAPABILITY_KINDS[privilegedReq.capability];
+      if (kind === 'forbidden' || isPrivilegedCapability(privilegedReq.capability)) {
+        return {
+          decision: 'deny',
+          reasonCode:
+            privilegedReq.capability === 'expose_credentials'
+              ? 'DENY_CREDENTIAL_READ'
+              : 'DENY_MISSING_AUTHORITY',
+        };
+      }
+    }
     return { decision: legacy, reasonCode: '' };
   }
 

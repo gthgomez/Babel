@@ -66,7 +66,7 @@ export type AutonomyActionClass =
   | 'a_autonomous'
   /** Class B actions — autonomous but require automatic verification. */
   | 'b_verified'
-  /** Class C actions — require an explicit gate (approval / deterministic deny). */
+  /** Class C actions — privileged; require explicit machine authority, not a human prompt. */
   | 'c_gated'
   /** Class D actions — never without explicit exceptional instruction. */
   | 'd_forbidden';
@@ -266,7 +266,7 @@ export const AUTONOMY_PROFILES: Record<AutonomyClass, AutonomyProfile> = {
   },
   C: {
     class: 'C',
-    title: 'Explicit gate or deterministic boundary',
+    title: 'Privileged — explicit machine authority required',
     description:
       'Live credentials, force-push, history rewrite, deleting significant user ' +
       'data/evidence/unrelated work, publishing, releases, production deploy, ' +
@@ -274,17 +274,16 @@ export const AUTONOMY_PROFILES: Record<AutonomyClass, AutonomyProfile> = {
       'protected-branch merges, destructive DB ops, disabling security controls.',
     mapsToTaskClass: 'governance',
     verification: 'strict',
-    preset: 'ask_before_mutation',
+    preset: 'workspace_write',
     strictCritic: true,
     phaseGatedTools: true,
     restrictToolsOnPolicyFire: true,
-    approvalMode: 'ask',
-    mutationPolicy: 'ask',
+    approvalMode: 'auto',
+    mutationPolicy: 'enabled',
     enforcement:
       'task tune (governance: green verifier mandatory, phase gates, hard tool ' +
-      'restrict) + approval sessions (allow_once/allow_session/narrow_rule; ' +
-      'headless = deterministic deny) + dispatch A–D gate ' +
-      '(onAutonomyClassCGate, toolExecutor.executeActionWithPolicy).',
+      'restrict) + lease membership + capability-specific constraints ' +
+      '(missing authority = deny; TTY/CI is not an authority signal).',
   },
   D: {
     class: 'D',
@@ -398,7 +397,7 @@ const CLASS_D_READONLY_CAPABILITIES: readonly CapabilityId[] = [
   'search_repository',
 ];
 
-/** Gated capability set — never `allowed` in a default lease; resolves to ASK. */
+/** Privileged capability set — never `allowed` in a default lease; resolves to DENY. */
 const GATED_CAPABILITY_IDS: readonly CapabilityId[] = [
   'merge',
   'pr_mark_ready',
@@ -418,11 +417,11 @@ const GATED_CAPABILITY_IDS: readonly CapabilityId[] = [
  *
  * The A–D taxonomy is the consequence/UX layer; the lease is how a class is
  * expressed to the PDP (`authority/pdp.ts`). A/B/C scope progressively broader
- * autonomous capability; D allows read-only inspection only. Gated
- * capabilities are never `allowed` — they resolve to ASK; real force pushes
- * deny deterministically in every class because the PDP checks
- * `constraints.forcePush` before the gated branch (C's contract — "explicit
- * gate or deterministic boundary" — permits either).
+ * autonomous capability; D allows read-only inspection only. Privileged
+ * capabilities are never `allowed` in a default lease — they resolve to
+ * DENY_MISSING_AUTHORITY until a lease explicitly grants them plus the
+ * matching constraint. Real force pushes deny when `constraints.forcePush`
+ * is false.
  *
  * `repository` should be supplied by the caller. The placeholder default
  * fails closed against any caller that supplies a real repo
@@ -469,6 +468,10 @@ export function defaultLeaseForAutonomyClass(
       billing: false,
       destructiveDb: false,
       scopeExpansion: false,
+      securityPolicyChange: false,
+      historyRewrite: false,
+      allowedProtectedTargets: [],
+      allowedEnvironments: [],
     },
     budgets: {
       ciProductRepairRounds: 3,

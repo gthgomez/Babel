@@ -36,6 +36,7 @@ export const GOVERNANCE_PATHS: readonly string[] = [
   'babel-cli/src/config/autonomyPolicy.test.ts',
   'babel-cli/src/agent/policy.ts',
   'babel-cli/src/agent/toolExecutor.ts',
+  'babel-cli/src/agent/governedMutations.ts',
   'babel-cli/src/agent/completionGatePolicy.ts',
   'babel-cli/src/agent/autonomyEnforcement.ts',
   'babel-cli/src/agent/chatApproval.ts',
@@ -62,10 +63,22 @@ const normalizedGovernance = GOVERNANCE_PATHS.map((p) => normalize(p).replace(/\
 /** Is this repo-relative path governance-sensitive? */
 export function isGovernancePath(repoRelativePath: string): boolean {
   const norm = normalize(repoRelativePath).replace(/\\/g, '/');
+  if (isAuthorityStatePath(norm)) return true;
   return normalizedGovernance.some((g) => {
     if (g.endsWith('/')) return norm.startsWith(g) || norm === g.slice(0, -1);
     return norm === g || norm.startsWith(`${g}/`);
   });
+}
+
+/**
+ * Persisted authority-session state is trusted security state, not ordinary
+ * JSON the agent may rewrite. Match the filename anywhere and the canonical
+ * chat-session persist prefix.
+ */
+export function isAuthorityStatePath(repoRelativePath: string): boolean {
+  const norm = normalize(repoRelativePath).replace(/\\/g, '/');
+  const base = norm.split('/').pop() ?? '';
+  return base === 'authority-session.json' || norm.includes('/authority-session.json');
 }
 
 // ─── Canonical manifest ─────────────────────────────────────────────────────

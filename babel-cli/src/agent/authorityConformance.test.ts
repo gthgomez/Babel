@@ -91,10 +91,10 @@ test('conformance: adversarial bypass forms converge on the same authority (P0-E
 
 // ─── External/public/destructive effects hit the Class C gate (P0-D) ─────────
 
-test('conformance: force-push is denied when no gate is wired (headless)', async () => {
+test('conformance: force-push is denied when no lease grants it', async () => {
   const r = await dispatch({ type: 'run_command', command: 'git push --force origin main' });
   DENIED(r);
-  assert.match(r.results[0]?.stderr ?? '', /AUTONOMY_DENIED/);
+  assert.match(r.results[0]?.stderr ?? '', /DENY_|AUTONOMY_DENIED|Policy denied/);
 });
 
 test('conformance: force-push via wrapper executable is denied', async () => {
@@ -102,21 +102,15 @@ test('conformance: force-push via wrapper executable is denied', async () => {
   DENIED(await dispatch({ type: 'run_command', command: '/usr/bin/git push --force-with-lease' }));
 });
 
-test('conformance: Class C gate approves only through the explicit gate', async () => {
+test('conformance: Class C human gate cannot mint missing force_push authority', async () => {
   const denied = await dispatch({ type: 'run_command', command: 'git push --force origin main' });
   DENIED(denied);
 
-  const approved = await dispatch(
+  const stillDenied = await dispatch(
     { type: 'run_command', command: 'git push --force origin main' },
     { gate: async () => true },
   );
-  ALLOWED(approved);
-
-  const rejected = await dispatch(
-    { type: 'run_command', command: 'git push --force origin main' },
-    { gate: async () => false },
-  );
-  DENIED(rejected);
+  DENIED(stillDenied);
 });
 
 test('conformance: plain non-main push stays autonomous (rule 05)', async () => {

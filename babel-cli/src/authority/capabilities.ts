@@ -30,7 +30,7 @@ export type CapabilityId =
   | 'ci_inspect'
   | 'ci_repair_in_scope'
   | 'ci_rerun_transient'
-  // Gated (Class C)
+  // Privileged (Class C) — require explicit lease membership + constraints
   | 'merge'
   | 'pr_mark_ready'
   | 'release'
@@ -94,6 +94,11 @@ export const ALL_CAPABILITIES: readonly CapabilityId[] = Object.keys(
 
 export function isCapabilityId(value: string): value is CapabilityId {
   return value in CAPABILITY_KINDS;
+}
+
+/** Privileged / Class-C capabilities (kind remains `gated` for lease schema). */
+export function isPrivilegedCapability(capability: CapabilityId): boolean {
+  return CAPABILITY_KINDS[capability] === 'gated';
 }
 
 /**
