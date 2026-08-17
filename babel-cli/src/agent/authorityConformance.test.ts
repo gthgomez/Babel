@@ -113,6 +113,23 @@ test('conformance: Class C human gate cannot mint missing force_push authority',
   DENIED(stillDenied);
 });
 
+test('conformance: no-lease protected-branch push and draft PR are denied', async () => {
+  DENIED(await dispatch({ type: 'run_command', command: 'git push origin main' }));
+  DENIED(await dispatch({ type: 'run_command', command: 'git push origin master' }));
+  DENIED(await dispatch({ type: 'run_command', command: 'git push origin HEAD:refs/heads/main' }));
+  DENIED(await dispatch({ type: 'run_command', command: 'gh pr create --draft --title x' }));
+});
+
+test('conformance: no-lease write to authority-session.json is denied', async () => {
+  DENIED(
+    await dispatch({
+      type: 'write_file',
+      path: 'runs/chat-sessions/s1/authority-session.json',
+      content: '{}',
+    }),
+  );
+});
+
 test('conformance: plain non-main push stays autonomous (rule 05)', async () => {
   ALLOWED(await dispatch({ type: 'run_command', command: 'git push origin feature/task' }));
 });

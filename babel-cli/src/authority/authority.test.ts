@@ -463,6 +463,36 @@ describe('wire: lease-aware dispatch composite', () => {
     assert.equal(r.reasonCode, '');
   });
 
+  test('no lease: protected-branch push is denied', () => {
+    const r = decideWithLease(runCmd('git push origin main'), 'workspace_write', { lease: null });
+    assert.equal(r.decision, 'deny');
+    assert.equal(r.reasonCode, 'DENY_PROTECTED_BRANCH');
+    const master = decideWithLease(runCmd('git push origin master'), 'workspace_write', { lease: null });
+    assert.equal(master.decision, 'deny');
+    const refspec = decideWithLease(
+      runCmd('git push origin HEAD:refs/heads/main'),
+      'workspace_write',
+      { lease: null },
+    );
+    assert.equal(refspec.decision, 'deny');
+  });
+
+  test('no lease: draft PR and external message are denied', () => {
+    const pr = decideWithLease(runCmd('gh pr create --draft --title x'), 'workspace_write', { lease: null });
+    assert.equal(pr.decision, 'deny');
+    assert.equal(pr.reasonCode, 'DENY_MISSING_AUTHORITY');
+  });
+
+  test('no lease: write to authority-session.json is denied', () => {
+    const r = decideWithLease(
+      { type: 'write_file', path: 'runs/chat-sessions/s1/authority-session.json', content: '{}' },
+      'workspace_write',
+      { lease: null },
+    );
+    assert.equal(r.decision, 'deny');
+    assert.equal(r.reasonCode, 'DENY_POLICY_SELF_MUTATION');
+  });
+
   test('routine local command with lease → allow', () => {
     const r = decideWithLease(runCmd('npm test'), 'workspace_write', ctx);
     assert.equal(r.decision, 'allow');

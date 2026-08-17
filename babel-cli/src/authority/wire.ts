@@ -29,9 +29,23 @@ import { decideAction, type PermissionDecision, type PermissionPreset } from '..
 import type { AutonomyLease } from './lease.js';
 import { decideActionRequest, type ActionRequest } from './pdp.js';
 import { parseGitCommand } from './gitCommand.js';
+import { decodeCommand, isGatedGitPush, type CommandSemanticClass } from './commandDecoder.js';
 import type { ReasonCode } from './reasonCodes.js';
 import { checkBaseline, isAuthorityStatePath, isGovernancePath, repoRelativeFromCwd } from './integrity.js';
-import { CAPABILITY_KINDS, isPrivilegedCapability } from './capabilities.js';
+import { CAPABILITY_KINDS, isPrivilegedCapability, isProtectedBranch } from './capabilities.js';
+
+const DEFAULT_PROTECTED_BRANCHES = ['main', 'master'] as const;
+
+const NO_LEASE_DENIED_SEMANTICS = new Set<CommandSemanticClass>([
+  'create_pr',
+  'external_message',
+  'deploy',
+  'infrastructure_mutation',
+  'delete_destructive',
+  'git_history_rewrite',
+  'financial_external_effect',
+  'credential_access',
+]);
 import { extractPatchRawTargets } from './patchTargets.js';
 import { markSessionInvalidated, type AuthoritySessionContext } from './sessionContext.js';
 
@@ -148,12 +162,10 @@ export function decideWithLease(
     }
   }
 
-  // Policy self-mutation guard: mutating a governance path is denied outright
-  // (DENY_POLICY_SELF_MUTATION) whenever a lease is active — even if the
-  // legacy preset would allow it. apply_patch targets are extracted from the
-  // diff headers via the shared extractor; the raw patch body is never fed to
-  // isGovernancePath. Relative targets are resolved against execution cwd.
-  if (ctx.lease && (action.type === 'write_file' || action.type === 'apply_patch')) {
+  // Policy / authority-state self-mutation: denied on the agent write surface
+  // even when no lease is present. apply_patch targets come from diff headers,
+  // never the raw patch body.
+  if (action.type === 'write_file' || action.type === 'apply_patch') {
     const rawTargets =
       action.type === 'apply_patch' ? extractPatchRawTargets(action.patch) : [action.path];
     const repoRoot = ctx.baseline?.repoRoot;
@@ -184,6 +196,25 @@ export function decideWithLease(
           decision: 'deny',
           reasonCode:
             privilegedReq.capability === 'expose_credentials'
+              ? 'DENY_CREDENTIAL_READ'
+              : 'DENY_MISSING_AUTHORITY',
+        };
+      }
+      const dest = privilegedReq.destinationBranch;
+      if (dest && isProtectedBranch(dest, DEFAULT_PROTECTED_BRANCHES)) {
+        return { decision: 'deny', reasonCode: 'DENY_PROTECTED_BRANCH' };
+      }
+    }
+    if (action.type === 'run_command' || action.type === 'test_run') {
+      if (isGatedGitPush(action.command)) {
+        return { decision: 'deny', reasonCode: 'DENY_MISSING_AUTHORITY' };
+      }
+      const decoded = decodeCommand(action.command);
+      if (NO_LEASE_DENIED_SEMANTICS.has(decoded.semantic)) {
+        return {
+          decision: 'deny',
+          reasonCode:
+            decoded.semantic === 'credential_access'
               ? 'DENY_CREDENTIAL_READ'
               : 'DENY_MISSING_AUTHORITY',
         };
