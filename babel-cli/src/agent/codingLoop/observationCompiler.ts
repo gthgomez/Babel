@@ -6,7 +6,7 @@
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 
 export const OBSERVATION_HEAD_CHARS = 1800
 export const OBSERVATION_TAIL_CHARS = 1800
@@ -50,6 +50,8 @@ export interface CompileObservationInput {
   toolCallId?: string
   spillDir?: string
   writeSpill?: (name: string, content: string) => string
+  /** When true, do not persist a model-readable raw spill. */
+  denyRawSpill?: boolean
 }
 
 /**
@@ -453,10 +455,27 @@ function buildRawRecord(
   ].join('\n')
 }
 
+export function isCredentialDeniedOutput(stderr: string | undefined): boolean {
+  if (!stderr) return false
+  return /DENY_CREDENTIAL_READ|AUTONOMY_DENIED:CLASS_D|credential store/i.test(stderr)
+}
+
+export function resolveContainedSpillPath(spillDir: string, fileName: string): string | null {
+  const root = resolve(spillDir)
+  const safeName = sanitizeId(fileName)
+  const candidate = resolve(root, safeName)
+  const rel = relative(root, candidate)
+  if (rel.startsWith('..') || isAbsolute(rel)) return null
+  if (normalize(candidate) !== candidate && candidate.includes(`..${sep}`)) return null
+  return candidate
+}
+
 function persistSpillIfNeeded(
   input: CompileObservationInput,
   combined: string,
 ): string | undefined {
+  if (input.denyRawSpill === true) return undefined
+  if (isCredentialDeniedOutput(input.stderr)) return undefined
   const large =
     (input.stdout?.length ?? 0) + (input.stderr?.length ?? 0) >= OBSERVATION_SPILL_THRESHOLD
   if (!large) return undefined
@@ -465,16 +484,22 @@ function persistSpillIfNeeded(
     return input.writeSpill(name, combined)
   }
   if (input.spillDir) {
+    const path = resolveContainedSpillPath(input.spillDir, name)
+    if (!path) return undefined
     mkdirSync(input.spillDir, { recursive: true })
-    const path = join(input.spillDir, name)
-    writeFileSync(path, combined, 'utf8')
+    writeFileSync(path, combined, { encoding: 'utf8', mode: 0o600 })
     return path
   }
   return undefined
 }
 
+export function sanitizeSpillId(id: string): string {
+  return sanitizeId(id)
+}
+
 function sanitizeId(id: string): string {
-  return id.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80)
+  const cleaned = id.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/\.{2,}/g, '_').replace(/^\.+/, '')
+  return (cleaned.length > 0 ? cleaned : 'tool').slice(0, 80)
 }
 
 function clip(text: string, max: number): string {

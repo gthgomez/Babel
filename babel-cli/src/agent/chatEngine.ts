@@ -116,8 +116,10 @@ import {
   formatReadObservation,
   formatVerifierReceiptSummary,
   invalidateReadCacheForPath,
+  resetOneShotSnapshot,
   resolveNextTurnToolAccess,
   selectReadWindow,
+  snapshotOnce,
   upsertWorkingStateMessage,
   type ReadInjectionCache,
   type WorkingState,
@@ -642,6 +644,9 @@ export class ChatEngine {
    *  the tool schema to write+verify+todo+finish only (no read/exploration).
    *  Set by the stall restrict_tools intervention; cleared after one turn. */
   private restrictToolsNextTurn = false;
+  private logicalTurnToolPolicy: import('./codingLoop/oneShotToolPolicy.js').OneShotPolicySnapshot<
+    ReturnType<typeof resolveNextTurnToolAccess>
+  > = { taken: false };
   private _sessionStartTime = 0;
   private stallState: StallState = createStallDetector();
   private cachedSystemPromptLegacy: string | null = null;
@@ -1306,15 +1311,17 @@ export class ChatEngine {
 
   /** Whether the next model turn should use restricted mutate/verify tools. */
   private nextTurnToolPolicy() {
-    const stall = this.restrictToolsNextTurn;
-    const policy = resolveNextTurnToolAccess({
-      postWriteRestrict: this.postWriteRepairRestrict,
-      lastVerifierFailed: this.lastVerifierFailed,
-      stallRestrictOnce: stall,
-      taskClass: this.taskClass,
+    return snapshotOnce(this.logicalTurnToolPolicy, () => {
+      const stall = this.restrictToolsNextTurn;
+      const policy = resolveNextTurnToolAccess({
+        postWriteRestrict: this.postWriteRepairRestrict,
+        lastVerifierFailed: this.lastVerifierFailed,
+        stallRestrictOnce: stall,
+        taskClass: this.taskClass,
+      });
+      if (stall) this.restrictToolsNextTurn = false;
+      return policy;
     });
-    if (stall) this.restrictToolsNextTurn = false;
-    return policy;
   }
 
   /** Whether the next model turn should use restricted mutate/verify tools. */
@@ -1669,6 +1676,8 @@ export class ChatEngine {
         });
         return;
       }
+
+      resetOneShotSnapshot(this.logicalTurnToolPolicy);
 
       // ── OTel chat turn span ──
       const _tracer = trace.getTracer('babel-cli', '1.0.0');
@@ -4952,6 +4961,7 @@ export class ChatEngine {
     callbacks: ChatCallbacks,
     hooks: { onStreamedChunks?: (text: string) => void } = {},
   ): Promise<ChatTurn> {
+    resetOneShotSnapshot(this.logicalTurnToolPolicy);
     if (useNativeTools && typeof runner.executeWithToolsStream === 'function') {
       const nextTools = this.nextTurnToolPolicy();
       const restrictTools = nextTools.restrict;

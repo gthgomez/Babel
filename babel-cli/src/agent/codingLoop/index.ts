@@ -90,3 +90,9 @@ export {
 } from './navigation.js'
 
 export { decideProgressIntervention } from './progressSignals.js'
+
+export {
+  resetOneShotSnapshot,
+  snapshotOnce,
+  type OneShotPolicySnapshot,
+} from './oneShotToolPolicy.js'

@@ -9,6 +9,8 @@ import { normalizeReadCacheKey } from '../readThrashPolicy.js'
 
 /** Default first-window size when the model asks for an unbounded full read. */
 export const DEFAULT_READ_WINDOW_LINES = 200
+/** Hard cap for a single explicit read_range to prevent pathological injection. */
+export const EXPLICIT_RANGE_LINE_CAP = 1000
 
 export type ReadRangeRequest =
   | { kind: 'full' }
@@ -23,6 +25,10 @@ export interface ReadWindow {
   truncated: boolean
   remainingBefore: number
   remainingAfter: number
+  requestedStartLine?: number
+  requestedEndLine?: number
+  nextSuggestedStartLine?: number
+  nextSuggestedEndLine?: number
 }
 
 export interface ReadCacheEntry {
@@ -63,27 +69,30 @@ export function readPathKey(filePath: string, projectRoot?: string): string {
  * Select a documented line window from file text.
  *
  * Unbounded full reads of large files return only the first
- * `maxLines` and name what remains. Explicit ranges always return
- * every requested line when the start is in range — `maxLines` is
- * never applied to a range request. `truncated` means the returned
- * window is shorter than what was asked for, not that more file
- * exists outside a fully served range.
+ * `maxLines` and name what remains. Explicit ranges return every
+ * requested line up to `explicitRangeCap` (default 1000). `truncated`
+ * means the returned window is shorter than what was asked for.
  */
 export function selectReadWindow(
   content: string,
   request: ReadRangeRequest,
-  opts?: { maxLines?: number },
+  opts?: { maxLines?: number; explicitRangeCap?: number },
 ): ReadWindow {
   const rawLines = splitFileLines(content)
   const totalLines = rawLines.length
   const maxLines = opts?.maxLines ?? DEFAULT_READ_WINDOW_LINES
+  const explicitRangeCap = opts?.explicitRangeCap ?? EXPLICIT_RANGE_LINE_CAP
 
   let startLine: number
   let endLine: number
   let truncated: boolean
+  let requestedStartLine: number | undefined
+  let requestedEndLine: number | undefined
   if (request.kind === 'range') {
     const requestedStart = Math.max(1, Math.floor(request.startLine))
     const requestedEnd = Math.max(requestedStart, Math.floor(request.endLine))
+    requestedStartLine = requestedStart
+    requestedEndLine = requestedEnd
     startLine = requestedStart
     if (startLine > totalLines) {
       return {
@@ -95,11 +104,19 @@ export function selectReadWindow(
         truncated: true,
         remainingBefore: totalLines,
         remainingAfter: 0,
+        requestedStartLine,
+        requestedEndLine,
       }
     }
-    // Never cap an explicit range to DEFAULT_READ_WINDOW_LINES.
-    endLine = Math.min(requestedEnd, totalLines)
-    truncated = endLine < requestedEnd
+    const availableEnd = Math.min(requestedEnd, totalLines)
+    const uncappedCount = availableEnd - startLine + 1
+    if (uncappedCount > explicitRangeCap) {
+      endLine = startLine + explicitRangeCap - 1
+      truncated = true
+    } else {
+      endLine = availableEnd
+      truncated = requestedEnd > totalLines
+    }
   } else {
     startLine = 1
     endLine = Math.min(totalLines, maxLines)
@@ -112,6 +129,11 @@ export function selectReadWindow(
     .join('\n')
   const remainingBefore = startLine - 1
   const remainingAfter = Math.max(0, totalLines - endLine)
+  const nextSuggestedStartLine = remainingAfter > 0 ? endLine + 1 : undefined
+  const nextSuggestedEndLine =
+    nextSuggestedStartLine !== undefined
+      ? Math.min(totalLines, nextSuggestedStartLine + explicitRangeCap - 1)
+      : undefined
 
   return {
     startLine,
@@ -122,6 +144,10 @@ export function selectReadWindow(
     truncated,
     remainingBefore,
     remainingAfter,
+    ...(requestedStartLine !== undefined ? { requestedStartLine } : {}),
+    ...(requestedEndLine !== undefined ? { requestedEndLine } : {}),
+    ...(nextSuggestedStartLine !== undefined ? { nextSuggestedStartLine } : {}),
+    ...(nextSuggestedEndLine !== undefined ? { nextSuggestedEndLine } : {}),
   }
 }
 
@@ -134,6 +160,14 @@ export function formatReadWindowBanner(target: string, window: ReadWindow): stri
   if (window.remainingBefore > 0) around.push(`${window.remainingBefore} lines before`)
   if (window.remainingAfter > 0) around.push(`${window.remainingAfter} lines after`)
   const aroundText = around.length > 0 ? around.join(', ') : ''
+  const nextHint =
+    window.nextSuggestedStartLine !== undefined && window.nextSuggestedEndLine !== undefined
+      ? `; next suggested range ${window.nextSuggestedStartLine}-${window.nextSuggestedEndLine}`
+      : ''
+  const explicitRequested =
+    window.requestedStartLine !== undefined && window.requestedEndLine !== undefined
+      ? `${window.requestedStartLine}-${window.requestedEndLine}`
+      : undefined
 
   if (!window.truncated && aroundText.length === 0) {
     return `returned lines ${range} of ${window.totalLines} (complete file)`
@@ -142,6 +176,12 @@ export function formatReadWindowBanner(target: string, window: ReadWindow): stri
     return (
       `returned requested lines ${range} of ${window.totalLines} in full` +
       ` (${aroundText} remain; use read_range to inspect them)`
+    )
+  }
+  if (explicitRequested && explicitRequested !== range) {
+    return (
+      `requested range ${explicitRequested}; returned range ${range} of ${window.totalLines}` +
+      (aroundText ? ` (${aroundText} remain${nextHint})` : ` (requested range clipped${nextHint})`)
     )
   }
   return (

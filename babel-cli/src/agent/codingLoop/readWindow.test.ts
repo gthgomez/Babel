@@ -5,6 +5,7 @@ import {
   decideReadInjection,
   evaluateReadRequest,
   formatReadObservation,
+  formatReadWindowBanner,
   invalidateReadCacheForPath,
   makeReadInjectionKey,
   selectReadWindow,
@@ -88,6 +89,25 @@ describe('read window + injection keys (shipped)', () => {
     assert.match(obs, /^200:LINE_0200 content for fixture row 200$/m)
     assert.match(obs, /^250:LINE_0250 content for fixture row 250$/m)
     assert.equal((obs.match(/^2[0-4]\d:LINE_/gm) ?? []).length + (obs.match(/^250:LINE_/gm) ?? []).length, 51)
+  })
+
+  test('explicit 1-1000 is full when available; 1-1001 is capped; beyond EOF clips', () => {
+    const content = fixtureLines(1500)
+    const fullCap = selectReadWindow(content, { kind: 'range', startLine: 1, endLine: 1000 })
+    assert.equal(fullCap.lines.length, 1000)
+    assert.equal(fullCap.truncated, false)
+    const capped = selectReadWindow(content, { kind: 'range', startLine: 1, endLine: 1001 })
+    assert.equal(capped.lines.length, 1000)
+    assert.equal(capped.truncated, true)
+    assert.equal(capped.requestedEndLine, 1001)
+    assert.equal(capped.nextSuggestedStartLine, 1001)
+    const banner = formatReadWindowBanner('huge.ts', capped)
+    assert.match(banner, /requested range 1-1001/)
+    assert.match(banner, /returned range 1-1000/)
+    const pastEof = selectReadWindow(content, { kind: 'range', startLine: 1490, endLine: 2000 })
+    assert.equal(pastEof.endLine, 1500)
+    assert.equal(pastEof.truncated, true)
+    assert.equal(pastEof.lines.length, 11)
   })
 
   test('repeated identical full read may skip only after that same full request was served', () => {

@@ -131,6 +131,32 @@ describe('observation compiler (shipped formatChatToolObservation path)', () => 
     assert.match(formatCompiledObservation(compiled), /raw_output:/)
   })
 
+  test('toolCallId traversal becomes a safe filename and credential output does not spill', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'babel-obs-'))
+    const traversal = compileObservation({
+      tool: 'run_command',
+      target: 'npm test',
+      exitCode: 1,
+      stdout: 'x'.repeat(3000),
+      stderr: 'e',
+      spillDir: dir,
+      toolCallId: '../../etc/passwd',
+    })
+    assert.ok(traversal.rawSpillPath)
+    assert.ok(!traversal.rawSpillPath!.includes('..'))
+    assert.ok(traversal.rawSpillPath!.startsWith(dir))
+    const denied = compileObservation({
+      tool: 'run_command',
+      target: 'cat .env',
+      exitCode: 1,
+      stdout: 'x'.repeat(3000),
+      stderr: '[AUTONOMY_DENIED:CLASS_D] Target path ".env" is a credential store.',
+      spillDir: dir,
+      toolCallId: 'cred',
+    })
+    assert.equal(denied.rawSpillPath, undefined)
+  })
+
   test('verifier receipt keeps identity plus a compact meaningful summary', () => {
     const summary = formatVerifierReceiptSummary({
       verifierId: 'npm-test',
