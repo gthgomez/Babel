@@ -451,7 +451,23 @@ function decodeGit(tokens: string[]): DecodedCommand {
         args.some((a) => !a.startsWith('-') && a.startsWith('+'));
       const force = hasForce || plusForce;
       if (hasDelete || (refspec !== undefined && (refspec.startsWith(':') || refspec.endsWith(':')))) {
-        return cmd('scope_expansion', 'git_push', { remote, force, delete: true });
+        let deleteTarget: string | undefined;
+        if (refspec !== undefined && refspec.startsWith(':')) {
+          deleteTarget = refspec.slice(1);
+        } else if (refspec !== undefined && refspec.endsWith(':')) {
+          deleteTarget = refspec.replace(/^\+/, '').slice(0, -1);
+        } else if (hasDelete) {
+          const positional = args.filter((a) => !a.startsWith('-'));
+          deleteTarget = positional[1];
+        }
+        const dest = deleteTarget
+          ? {
+              destinationBranch: deleteTarget
+                .replace(/^refs\/heads\//, '')
+                .replace(/^heads\//, ''),
+            }
+          : {};
+        return cmd('scope_expansion', 'git_push', { remote, force, delete: true, ...dest });
       }
       let destinationBranch: string | undefined;
       if (refspec !== undefined) {
@@ -472,12 +488,28 @@ function decodeGit(tokens: string[]): DecodedCommand {
         return cmd('shared_history_rewrite', 'git_history_rewrite');
       }
       return cmd('commit_ship_set', 'git_commit');
-    case 'reset':
+    case 'reset': {
+      const resetDest = args.find((a) => !a.startsWith('-'));
       return args.includes('--hard')
-        ? cmd('shared_history_rewrite', 'git_history_rewrite')
+        ? cmd(
+            'shared_history_rewrite',
+            'git_history_rewrite',
+            resetDest ? { destinationBranch: resetDest } : {},
+          )
         : cmd('inspect_repository', 'read_local');
-    case 'rebase':
-      return cmd('shared_history_rewrite', 'git_history_rewrite');
+    }
+    case 'rebase': {
+      const ontoIdx = args.indexOf('--onto');
+      const rebaseDest =
+        ontoIdx >= 0 && args[ontoIdx + 1] && !args[ontoIdx + 1]!.startsWith('-')
+          ? args[ontoIdx + 1]
+          : args.find((a) => !a.startsWith('-'));
+      return cmd(
+        'shared_history_rewrite',
+        'git_history_rewrite',
+        rebaseDest ? { destinationBranch: rebaseDest } : {},
+      );
+    }
     case 'clean':
       // `-f` may be combined (`-xdf`, `-fd`) or written `--force`.
       return args.some((a) => /^-[a-zA-Z]*f/.test(a) || a === '--force')
@@ -494,7 +526,11 @@ function decodeGit(tokens: string[]): DecodedCommand {
     }
     case 'remote':
       if (args[0] === 'add' || args[0] === 'remove' || args[0] === 'set-url') {
-        return cmd('scope_expansion', 'git_history_rewrite', { delete: args[0] === 'remove' });
+        const remoteName = args[1] && !args[1].startsWith('-') ? args[1] : undefined;
+        return cmd('scope_expansion', 'git_history_rewrite', {
+          delete: args[0] === 'remove',
+          ...(remoteName ? { target: remoteName, destinationBranch: remoteName } : {}),
+        });
       }
       return cmd('inspect_repository', 'read_local');
     case 'fetch':

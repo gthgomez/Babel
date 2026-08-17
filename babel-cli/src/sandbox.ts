@@ -66,6 +66,7 @@ import {
   requestDependencyInstallApproval,
 } from './services/approvalQueue.js';
 import { getSafeEnv } from './utils/safeEnv.js';
+import { childEnvForSandbox } from './authority/unprivilegedChildEnv.js';
 import { contextAwareOperatorCheck } from './utils/cmdTokenizer.js';
 import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
@@ -1732,9 +1733,9 @@ export class SafeExecutor {
           executable: containerCommand.executable,
           args: containerCommand.args,
           cwd: this.projectRoot,
-          env: getSafeEnv(),
+          env: childEnvForSandbox(),
         }
-      : { executable: spawnCmd, args: spawnArgs, cwd: resolvedCwd, env: getSafeEnv() };
+      : { executable: spawnCmd, args: spawnArgs, cwd: resolvedCwd, env: childEnvForSandbox() };
   }
 
   /**

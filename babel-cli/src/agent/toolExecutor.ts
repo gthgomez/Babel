@@ -52,10 +52,13 @@ import { decideWithLease, invalidateLease, type LeaseContext } from '../authorit
 import type { BaselineManifest } from '../authority/integrity.js';
 import type { AuthoritySessionContext } from '../authority/sessionContext.js';
 import type { ReasonCode } from '../authority/reasonCodes.js';
+import { actionRequestFromAction } from '../authority/actionRequest.js';
+import { CAPABILITY_KINDS } from '../authority/capabilities.js';
 import {
   reconcileGovernanceAfterEffect,
   snapshotGovernanceBytes,
 } from '../authority/governanceReconcile.js';
+import { runWithUnprivilegedChildEnv } from '../authority/unprivilegedChildEnv.js';
 import { classifyAutonomyAction } from '../config/autonomyPolicy.js';
 
 /**
@@ -1041,7 +1044,12 @@ export async function executeActionWithPolicy(
 
   try {
     deps.onBeforeExecutorExecute?.();
-    const execution = await executor.execute(action, context, budget);
+    const mapped = actionRequestFromAction(action);
+    const isolateLocal =
+      mapped !== null && CAPABILITY_KINDS[mapped.capability] === 'local';
+    const execution = isolateLocal
+      ? await runWithUnprivilegedChildEnv(() => executor.execute(action, context, budget))
+      : await executor.execute(action, context, budget);
 
     if (governanceSnapshot && governanceRepoRoot) {
       const recon = reconcileGovernanceAfterEffect({
@@ -1052,6 +1060,10 @@ export async function executeActionWithPolicy(
       if (recon.mutated) {
         incrementBlocks(context.runId);
         if (session?.lease) invalidateLease(session.lease.leaseId);
+        const restoreNote =
+          recon.failed.length > 0
+            ? `restore failed (${recon.failed.map((f) => f.reason).join(', ')}); session invalidated`
+            : 'restored and authority session invalidated';
         return {
           action,
           terminal: false,
@@ -1061,7 +1073,7 @@ export async function executeActionWithPolicy(
               stdout: '',
               stderr:
                 `[DENY_POLICY_SELF_MUTATION] Subprocess mutated governance state ` +
-                `(${recon.changed.join(', ')}); bytes restored and authority session invalidated.`,
+                `(${recon.changed.join(', ')}); ${restoreNote}.`,
             },
           ],
           policyDecision: 'deny',

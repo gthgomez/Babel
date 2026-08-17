@@ -272,10 +272,12 @@ describe('git/gh command parsing (structured capability extraction)', () => {
     const p = parseGitCommand('git push origin :refs/heads/feat/x');
     assert.equal(p.capability, 'scope_expansion');
     assert.equal(p.delete, true);
+    assert.equal(p.destinationBranch, 'feat/x');
   });
   test('git push --delete origin feat/x → delete', () => {
     const p = parseGitCommand('git push --delete origin feat/x');
     assert.equal(p.delete, true);
+    assert.equal(p.destinationBranch, 'feat/x');
   });
   test('git commit --amend → shared_history_rewrite', () => {
     assert.equal(parseGitCommand('git commit --amend -m x').capability, 'shared_history_rewrite');

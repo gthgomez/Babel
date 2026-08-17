@@ -199,6 +199,30 @@ function denyConstraint(triggered: string[], rule: string): PolicyDecision {
 }
 
 /**
+ * Targetable privileged capabilities require: concrete target + non-empty
+ * allowlist + match. Empty allowlist is deny-all, never a wildcard.
+ *
+ * Gated capability audit:
+ *   A bind: merge, pr_mark_ready, force_push, production_deploy,
+ *           shared_history_rewrite, scope_expansion+delete
+ *   C repo-wide flag only: release, repo_admin, security_policy_change,
+ *           credential_access, destructive_data_delete (no narrower
+ *           target is reliably extractable without brittle parsing)
+ */
+function requireBoundTarget(
+  raw: string | undefined,
+  allowed: readonly string[],
+  triggered: string[],
+  rules: { missingTarget: string; missingAllowlist: string; mismatch: string },
+  match: (actual: string, allowed: readonly string[]) => boolean,
+): PolicyDecision | null {
+  if (!raw) return denyConstraint(triggered, rules.missingTarget);
+  if (allowed.length === 0) return denyConstraint(triggered, rules.missingAllowlist);
+  if (!match(raw, allowed)) return denyConstraint(triggered, rules.mismatch);
+  return null;
+}
+
+/**
  * Capability-specific privileged constraints. Returns a deny decision when
  * the lease grants the capability but the structured constraint is not met.
  * Null means the constraint set is satisfied.
@@ -233,6 +257,9 @@ function privilegedConstraintDecision(
       return null;
     case 'production_deploy':
       if (c.productionDeploy !== true) return denyConstraint(triggered, 'lease.constraints.productionDeploy');
+      if ((c.allowedEnvironments ?? []).length === 0) {
+        return denyConstraint(triggered, 'pdp.missing_environment_allowlist');
+      }
       if (!request.environment) return denyConstraint(triggered, 'pdp.missing_environment');
       if (!environmentAllowed(request.environment, c.allowedEnvironments)) {
         return denyConstraint(triggered, 'lease.constraints.allowedEnvironments');
@@ -252,33 +279,53 @@ function privilegedConstraintDecision(
       return null;
     case 'shared_history_rewrite': {
       if (c.historyRewrite !== true) return denyConstraint(triggered, 'lease.constraints.historyRewrite');
-      const rewriteTargets = c.allowedRewriteTargets ?? [];
-      const rewriteDest = request.destinationBranch ?? request.target;
-      if (rewriteDest && rewriteTargets.length > 0 && !branchAllowed(rewriteDest, rewriteTargets)) {
-        return denyConstraint(triggered, 'lease.constraints.allowedRewriteTargets');
-      }
-      return null;
+      return requireBoundTarget(
+        request.destinationBranch ?? request.target ?? request.currentBranch,
+        c.allowedRewriteTargets ?? [],
+        triggered,
+        {
+          missingTarget: 'pdp.missing_rewrite_target',
+          missingAllowlist: 'pdp.missing_rewrite_allowlist',
+          mismatch: 'lease.constraints.allowedRewriteTargets',
+        },
+        branchAllowed,
+      );
     }
     case 'force_push': {
       if (c.forcePush !== true) {
         triggered.push('lease.constraints.forcePush');
         return { outcome: 'deny', reasonCode: 'DENY_FORCE_PUSH_POLICY', rulesTriggered: triggered };
       }
-      if (!request.destinationBranch) return denyConstraint(triggered, 'pdp.missing_branch');
-      const allowedBranches = c.allowedForcePushBranches ?? [];
-      if (!branchAllowed(request.destinationBranch, allowedBranches)) {
-        return denyConstraint(triggered, 'lease.constraints.allowedForcePushBranches');
-      }
-      return null;
+      return requireBoundTarget(
+        request.destinationBranch,
+        c.allowedForcePushBranches ?? [],
+        triggered,
+        {
+          missingTarget: 'pdp.missing_branch',
+          missingAllowlist: 'pdp.missing_force_push_allowlist',
+          mismatch: 'lease.constraints.allowedForcePushBranches',
+        },
+        branchAllowed,
+      );
     }
     case 'scope_expansion': {
       if (c.scopeExpansion !== true) return denyConstraint(triggered, 'lease.constraints.scopeExpansion');
       if (request.delete) {
-        const allowedDeletes = c.allowedRemoteDeleteTargets ?? [];
-        const deleteTarget = request.destinationBranch ?? request.target;
-        if (deleteTarget && allowedDeletes.length > 0 && !branchAllowed(deleteTarget, allowedDeletes)) {
-          return denyConstraint(triggered, 'lease.constraints.allowedRemoteDeleteTargets');
+        if (c.remoteRefDelete !== true) {
+          triggered.push('lease.constraints.remoteRefDelete');
+          return { outcome: 'deny', reasonCode: 'DENY_HISTORY_REWRITE', rulesTriggered: triggered };
         }
+        return requireBoundTarget(
+          request.destinationBranch ?? request.target,
+          c.allowedRemoteDeleteTargets ?? [],
+          triggered,
+          {
+            missingTarget: 'pdp.missing_delete_target',
+            missingAllowlist: 'pdp.missing_delete_allowlist',
+            mismatch: 'lease.constraints.allowedRemoteDeleteTargets',
+          },
+          branchAllowed,
+        );
       }
       return null;
     }
