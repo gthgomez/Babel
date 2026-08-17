@@ -31,6 +31,10 @@ import type { ToolCallRequest } from '../localTools.js';
 import { targetBasename } from '../services/targetResolver.js';
 import { trimForPrompt } from '../services/liteProjectContext.js';
 import { normalizeModelToolName } from './canonicalToolMapping.js';
+import {
+  compileObservation,
+  formatCompiledObservation,
+} from './codingLoop/observationCompiler.js';
 
 // ─── Chat Tool Action Schema ──────────────────────────────────────────────
 
@@ -757,25 +761,48 @@ export function buildAnswerSynthesisPrompt(options: {
 
 // ─── Tool Observation Formatters ──────────────────────────────────────────
 
+const OBSERVATION_COMPILER_TOOLS = new Set([
+  'run_command',
+  'test_run',
+  'await_command',
+  'shell_exec',
+]);
+
 export function formatChatToolObservation(
   action: ChatToolAction,
   result: { stdout?: string; stderr?: string; exitCode?: number },
+  opts?: { spillDir?: string; toolCallId?: string },
 ): string {
   const tool = chatActionToolName(action);
   const target = chatActionTarget(action);
-  const body =
-    (result.stdout?.trim().length ?? 0) > 0
-      ? result.stdout!
-      : (result.stderr?.trim().length ?? 0) > 0
-        ? result.stderr!
-        : '(no output)';
+  const command = 'command' in action && typeof action.command === 'string' ? action.command : undefined;
+  if (OBSERVATION_COMPILER_TOOLS.has(tool)) {
+    return formatCompiledObservation(
+      compileObservation({
+        tool,
+        target,
+        ...(command !== undefined ? { command } : {}),
+        exitCode: result.exitCode ?? -1,
+        stdout: result.stdout ?? '',
+        stderr: result.stderr ?? '',
+        ...(opts?.spillDir !== undefined ? { spillDir: opts.spillDir } : {}),
+        ...(opts?.toolCallId !== undefined ? { toolCallId: opts.toolCallId } : {}),
+      }),
+    );
+  }
+  const stdout = result.stdout ?? '';
+  const stderr = result.stderr ?? '';
+  const chunks: string[] = [];
+  if (stdout.trim().length > 0) chunks.push(stdout);
+  if (stderr.trim().length > 0) chunks.push(`stderr:\n${stderr}`);
+  const body = chunks.length > 0 ? chunks.join('\n') : '(no output)';
   const exitCode = result.exitCode ?? -1;
 
   return [
     `### ${tool} ${target}`,
     `exit_code: ${exitCode}`,
     '```',
-    trimForPrompt(body, 2000),
+    trimForPrompt(body, 4000),
     '```',
   ].join('\n');
 }

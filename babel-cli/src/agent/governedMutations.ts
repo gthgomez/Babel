@@ -9,7 +9,8 @@
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 
-import { FileWriteMutex, findNearMissContext, fuzzyPatchAssist } from '../services/editReliability.js';
+import { FileWriteMutex, findNearMissContext } from '../services/editReliability.js';
+import { applyUniqueEdit, formatEditObservation } from './codingLoop/editApply.js';
 import type { ToolContext, ToolResult } from '../localTools.js';
 import type { MutationBatchReceipt } from '../services/workspaceTransactions.js';
 import type { AgentAction } from './actions.js';
@@ -93,48 +94,31 @@ export async function governedStrReplace(
     };
   }
 
-    const firstIdx = content.indexOf(input.old_str);
-    let newContent: string;
-    let lineNumber: number;
-
-    if (firstIdx === -1) {
-      const fuzzyContent = fuzzyPatchAssist(content, input.old_str, input.new_str ?? '');
-      if (fuzzyContent !== null) {
-        newContent = fuzzyContent;
-        lineNumber = content.substring(0, content.indexOf(input.old_str.trim().split('\n')[0] ?? '')).split('\n').length;
-      } else {
+    const applied = applyUniqueEdit({
+      content,
+      oldStr: input.old_str,
+      newStr: input.new_str,
+    });
+    if (!applied.ok) {
+      let obsMsg = formatEditObservation(target, applied);
+      if (applied.reason === 'not_found') {
         const candidates = findNearMissContext(content, input.old_str);
-        let errorMsg = 'str_replace: old_str not found';
-        let obsMsg = `### str_replace ${target}\nError: str_replace: old_str not found in file`;
         if (candidates.length > 0) {
           const topCandidate = candidates[0]!;
           obsMsg += `\n\nDiagnostic: Did you mean lines ${topCandidate.startLine}-${topCandidate.endLine}?\n\`\`\`\n${topCandidate.context}\n\`\`\``;
         }
-
-        return {
-          observation: obsMsg,
-          exit_code: 1,
-          error: errorMsg,
-          policyBlocked: false,
-          terminal: false,
-          absolutePath,
-        };
       }
-    } else {
-      const lastIdx = content.lastIndexOf(input.old_str);
-      if (firstIdx !== lastIdx) {
-        return {
-          observation: `### str_replace ${target}\nError: str_replace: old_str matches multiple locations — make it more specific`,
-          exit_code: 1,
-          error: 'str_replace: ambiguous match',
-          policyBlocked: false,
-          terminal: false,
-          absolutePath,
-        };
-      }
-      lineNumber = content.substring(0, firstIdx).split('\n').length;
-      newContent = content.replace(input.old_str, input.new_str);
+      return {
+        observation: obsMsg,
+        exit_code: 1,
+        error: applied.message,
+        policyBlocked: false,
+        terminal: false,
+        absolutePath,
+      };
     }
+    const newContent = applied.content;
+    const lineNumber = applied.startLine;
 
     const action: AgentAction = {
       type: 'write_file',
@@ -197,16 +181,8 @@ export async function governedStrReplace(
     };
   }
 
-  const previewLines = newContent.split('\n');
-  const pStart = Math.max(0, lineNumber - 2);
-  const pEnd = Math.min(previewLines.length, lineNumber + 3);
-  const preview = previewLines
-    .slice(pStart, pEnd)
-    .map((l, i) => `${pStart + i + 1}:${l}`)
-    .join('\n');
-
     return {
-      observation: `### str_replace ${target} (line ${lineNumber})\nexit_code: 0\n\`\`\`\n${preview}\n\`\`\``,
+      observation: formatEditObservation(target, applied),
       exit_code: 0,
       policyBlocked: false,
       terminal: result.terminal === true,

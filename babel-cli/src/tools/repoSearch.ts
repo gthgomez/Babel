@@ -16,6 +16,8 @@ export interface GrepMatch {
   path: string;
   line: number;
   text: string;
+  contextBefore?: string[];
+  contextAfter?: string[];
 }
 
 export interface GrepContentOptions {
@@ -196,10 +198,21 @@ export async function grepContent(
       if (!regex.test(line)) {
         continue;
       }
+      const contextBefore: string[] = [];
+      const contextAfter: string[] = [];
+      const ctx = options.contextLines ?? 2;
+      for (let c = Math.max(0, lineIndex - ctx); c < lineIndex; c++) {
+        contextBefore.push(`${c + 1}:${lines[c] ?? ''}`);
+      }
+      for (let c = lineIndex + 1; c <= lineIndex + ctx && c < lines.length; c++) {
+        contextAfter.push(`${c + 1}:${lines[c] ?? ''}`);
+      }
       matches.push({
         path: relativePath,
         line: lineIndex + 1,
         text: line.trim().slice(0, 200),
+        contextBefore,
+        contextAfter,
       });
       if (matches.length >= maxMatches) {
         return { matches, truncated: true };
@@ -262,9 +275,16 @@ export function formatGrepMatches(matches: GrepMatch[], truncated: boolean): str
   if (matches.length === 0) {
     return 'No matches found.';
   }
-  const lines = matches.map((match) => `${match.path}:${match.line}: ${match.text}`);
+  const lines: string[] = [];
+  for (const match of matches) {
+    lines.push(`${match.path}:${match.line}: ${match.text}`);
+    for (const c of match.contextBefore ?? []) lines.push(`  - ${c}`);
+    for (const c of match.contextAfter ?? []) lines.push(`  + ${c}`);
+  }
   if (truncated) {
-    lines.push('...[truncated after match limit]');
+    lines.push(`...[${matches.length} shown; truncated after match limit]`);
+  } else {
+    lines.push(`[${matches.length} match(es)]`);
   }
   return lines.join('\n');
 }
@@ -308,7 +328,7 @@ export async function handleGrepTool(
         ...(input.path !== undefined ? { path: input.path } : {}),
         ...(input.ignore_case === true ? { ignoreCase: true } : {}),
         ...(input.max_matches !== undefined ? { maxMatches: input.max_matches } : {}),
-        ...(input.context_lines !== undefined ? { contextLines: input.context_lines } : {}),
+        contextLines: input.context_lines ?? 2,
       },
       approvedReadRoots,
     );

@@ -203,7 +203,8 @@ export function buildPostWriteRepairMessage(input: {
     `(of ~${input.remainingWallSec}s left before the hard wall).`,
     'Do not re-explore the tree. Run project tests (pytest/npm test — not python -c probes),',
     'read only failing paths, and fix with str_replace until tests pass or env_blocked.',
-    'Tools are restricted to mutate + verify for the rest of this session.',
+    'Investigation tools (read/search/LSP/git) stay available — especially after a red verifier.',
+    'Prefer mutate + verify, but gather new evidence before repeating the same failing patch.',
   ].join(' ');
 }
 
