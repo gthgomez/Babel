@@ -224,3 +224,63 @@ describe('portable public redaction', () => {
     assert.match(serialized, /\[REDACTED\]/);
   });
 });
+
+describe('portable workflow manifest and golden synchronization', () => {
+  it('ensures exported golden manifest and fixtures match deterministic regeneration byte-for-byte (fails closed)', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const os = await import('node:os');
+    const { generateGoldenArtifacts } = await import('./goldenArtifacts.js');
+
+    const goldenDir = path.resolve(process.cwd(), '../docs/specs/golden');
+    assert.equal(
+      fs.existsSync(goldenDir),
+      true,
+      'Golden specs directory docs/specs/golden MUST exist',
+    );
+
+    const manifestPath = path.resolve(goldenDir, 'portable-workflow-v1.manifest.json');
+    assert.equal(
+      fs.existsSync(manifestPath),
+      true,
+      'portable-workflow-v1.manifest.json MUST exist',
+    );
+
+    const schemaPath = path.resolve(goldenDir, 'portable-workflow-v1.schema.json');
+    assert.equal(
+      fs.existsSync(schemaPath),
+      true,
+      'portable-workflow-v1.schema.json MUST exist',
+    );
+
+    const validFixturePath = path.resolve(goldenDir, 'portable-workflow-v1-valid.json');
+    assert.equal(
+      fs.existsSync(validFixturePath),
+      true,
+      'portable-workflow-v1-valid.json MUST exist',
+    );
+
+    // Generate into temp directory and compare byte-for-byte
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'babel-golden-check-'));
+    try {
+      const { files } = generateGoldenArtifacts(tmpDir);
+      for (const [filename, expectedContent] of Object.entries(files)) {
+        const committedFilePath = path.resolve(goldenDir, filename);
+        assert.equal(
+          fs.existsSync(committedFilePath),
+          true,
+          `Committed golden file '${filename}' MUST exist in docs/specs/golden`,
+        );
+        const committedContent = fs.readFileSync(committedFilePath, 'utf-8');
+        assert.equal(
+          committedContent,
+          expectedContent,
+          `Committed golden file '${filename}' must match regenerated canonical artifact byte-for-byte`,
+        );
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+

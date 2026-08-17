@@ -1,0 +1,8 @@
+{
+  "schema_version": "portable-workflow-v1",
+  "schema_source_file": "src/portable/workflow.ts",
+  "workflow_source_sha256": "428ebb3c441d60c158e4742fb6be6b84b9d21a588e915608f4403a12d6c87d4d",
+  "schema_artifact_sha256": "9752d9416902c4874d95648aae15ff244801f8c1c579e99c17b46c870a46aa1f",
+  "fixture_set_sha256": "c4776c961440de4d6f8360121e8f40401846afedb7519957c31af09ad0ba06e7",
+  "exported_at": "2026-08-08T12:00:00.000Z"
+}

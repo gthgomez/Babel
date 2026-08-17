@@ -1,0 +1,160 @@
+{
+  "version": "portable-workflow-v1",
+  "run": {
+    "version": "portable-workflow-v1",
+    "run_id": "run-valid-1",
+    "task": {
+      "task_id": "task-1",
+      "goal": "Validate portable workflow schemas against golden fixtures",
+      "acceptance_criteria": [
+        "Golden fixtures must validate with zero errors"
+      ],
+      "mutation_policy": "read_only",
+      "required_verifiers": [
+        "verifier-test-1"
+      ]
+    },
+    "authority": {
+      "native_kind": "task-contract",
+      "native_id": "task-contract-1",
+      "sha256": "5c9f363e444f666644120781c30c6f4d92c2ff0f4dbe646af9ba39c90d2d1a7c"
+    },
+    "stages": [
+      {
+        "stage_id": "stage-0",
+        "kind": "orient",
+        "status": "passed",
+        "input": {
+          "kind": "orient",
+          "task": {
+            "task_id": "task-1",
+            "goal": "Validate portable workflow schemas against golden fixtures",
+            "acceptance_criteria": [
+              "Golden fixtures must validate with zero errors"
+            ],
+            "mutation_policy": "read_only",
+            "required_verifiers": [
+              "verifier-test-1"
+            ]
+          }
+        },
+        "result": {
+          "kind": "integrate",
+          "verifier_receipts": [
+            {
+              "id": "receipt-1",
+              "status": "passed",
+              "verifier": {
+                "command": "npm run test:portable-workflow",
+                "command_sha256": "69ffa46089ce1de749c20127bd2ea3b970ff66ae212019b732587737783acedd",
+                "scope": [
+                  "src/portable/workflow.ts"
+                ],
+                "independent": true,
+                "clean_room": true
+              },
+              "bound_revision": {
+                "kind": "workspace-revision",
+                "composite_tree_hash": "720eaa4d74943ae08642bf8f60c30ff563f1f62a6dc57fd19d26a3e5c54b9370",
+                "source": "git"
+              },
+              "authority": {
+                "native_kind": "task-contract",
+                "native_id": "task-contract-1",
+                "sha256": "5c9f363e444f666644120781c30c6f4d92c2ff0f4dbe646af9ba39c90d2d1a7c"
+              },
+              "evidence": [
+                {
+                  "id": "ev-1",
+                  "kind": "event",
+                  "sha256": "1c0d9b2b6c5e6d4b36308119dd630198f1aea3122dbe8e49e25f79c6b096983e",
+                  "native_path": "logs/events.jsonl"
+                }
+              ],
+              "exit_code": 0,
+              "produced_at": "2026-08-08T12:00:00.000Z"
+            }
+          ],
+          "changed_refs": []
+        },
+        "workers": [
+          "worker-0"
+        ],
+        "evidence": [
+          {
+            "id": "ev-1",
+            "kind": "event",
+            "sha256": "1c0d9b2b6c5e6d4b36308119dd630198f1aea3122dbe8e49e25f79c6b096983e",
+            "native_path": "logs/events.jsonl"
+          }
+        ]
+      }
+    ],
+    "workers": [
+      {
+        "worker_id": "worker-0",
+        "stage_id": "stage-0",
+        "role": "primary",
+        "status": "passed",
+        "native_authority": {
+          "native_kind": "task-contract",
+          "native_id": "task-contract-1",
+          "sha256": "5c9f363e444f666644120781c30c6f4d92c2ff0f4dbe646af9ba39c90d2d1a7c"
+        },
+        "evidence": [
+          {
+            "id": "ev-1",
+            "kind": "event",
+            "sha256": "1c0d9b2b6c5e6d4b36308119dd630198f1aea3122dbe8e49e25f79c6b096983e",
+            "native_path": "logs/events.jsonl"
+          }
+        ]
+      },
+      {
+        "worker_id": "worker-1",
+        "stage_id": "stage-1",
+        "role": "verifier",
+        "status": "passed",
+        "native_authority": {
+          "native_kind": "task-contract",
+          "native_id": "task-contract-1",
+          "sha256": "5c9f363e444f666644120781c30c6f4d92c2ff0f4dbe646af9ba39c90d2d1a7c"
+        },
+        "evidence": [
+          {
+            "id": "ev-1",
+            "kind": "event",
+            "sha256": "1c0d9b2b6c5e6d4b36308119dd630198f1aea3122dbe8e49e25f79c6b096983e",
+            "native_path": "logs/events.jsonl"
+          }
+        ]
+      }
+    ],
+    "terminal": {
+      "kind": "completed_verified",
+      "receipts": [
+        "receipt-1"
+      ],
+      "revision": {
+        "kind": "workspace-revision",
+        "composite_tree_hash": "bbbc6cb51427f839caa90fc37ccbf481469471acc8e8cd81d337ac086b306427",
+        "source": "git"
+      }
+    },
+    "revision": {
+      "kind": "workspace-revision",
+      "composite_tree_hash": "bbbc6cb51427f839caa90fc37ccbf481469471acc8e8cd81d337ac086b306427",
+      "source": "git"
+    },
+    "evidence": [
+      {
+        "id": "ev-1",
+        "kind": "event",
+        "sha256": "1c0d9b2b6c5e6d4b36308119dd630198f1aea3122dbe8e49e25f79c6b096983e",
+        "native_path": "logs/events.jsonl"
+      }
+    ]
+  },
+  "redaction_profile": "public",
+  "exported_at": "2026-08-08T12:00:00.000Z"
+}
