@@ -99,13 +99,18 @@ function capabilityForAction(action: AgentAction): ApprovalCapability {
 export async function requestChatActionApproval(action: AgentAction): Promise<boolean> {
   const remote = getRemoteSurface();
   if (remote) {
-    return remote.broker.requestAllowOnce({
-      action,
-      thread_id: remote.threadId,
-      turn_id: remote.turnId,
-      cwd: remote.cwd,
-      ...(remote.notify ? { notify: remote.notify } : {}),
-    });
+    // Default remote supervision is clarification/lease, not ALLOW_ONCE.
+    // Optional operator mode keeps the digest-bound broker.
+    if (process.env['BABEL_REMOTE_OPERATOR_APPROVAL'] === '1') {
+      return remote.broker.requestAllowOnce({
+        action,
+        thread_id: remote.threadId,
+        turn_id: remote.turnId,
+        cwd: remote.cwd,
+        ...(remote.notify ? { notify: remote.notify } : {}),
+      });
+    }
+    return false;
   }
 
   const permissionAction = agentActionToPermissionAction(action);

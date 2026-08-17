@@ -428,6 +428,15 @@ export class BridgeServer {
       errorResponse(res, 404, `Session '${parsed.session_id}' not found`);
       return;
     }
+    const owned = this.protocolGateway.authorizeTicketMint({
+      sessionId: parsed.session_id,
+      threadId: parsed.thread_id,
+    });
+    if (!owned.ok) {
+      const status = owned.error === 'unknown_thread' ? 404 : 403;
+      errorResponse(res, status, `ticket mint denied: ${owned.error}`);
+      return;
+    }
     const minted = this.wsTickets.mint({
       sessionId: parsed.session_id,
       threadId: parsed.thread_id,

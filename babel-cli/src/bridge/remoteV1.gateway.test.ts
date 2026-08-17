@@ -410,5 +410,106 @@ describe('Babel Remote V1 gateway', () => {
       await local.stop();
     }
   });
+
+  it('mints a ticket only when the thread belongs to the session', async () => {
+    const createdA = await rpc('thread.create', { project_root: tmp }, 80);
+    const createdB = await rpc('thread.create', { project_root: tmp }, 81);
+    const threadA = (createdA.json['result'] as { thread_id: string }).thread_id;
+    const threadB = (createdB.json['result'] as { thread_id: string }).thread_id;
+    const sessionA = await httpRequest(`http://127.0.0.1:${PORT}/sessions`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const sessionB = await httpRequest(`http://127.0.0.1:${PORT}/sessions`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ projectRoot: tmp }),
+    });
+    const idA = (JSON.parse(sessionA.body) as { sessionId: string }).sessionId;
+    const idB = (JSON.parse(sessionB.body) as { sessionId: string }).sessionId;
+
+    const mintAA = await httpRequest(`http://127.0.0.1:${PORT}/ws/ticket`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ session_id: idA, thread_id: threadA }),
+    });
+    assert.equal(mintAA.statusCode, 200);
+
+    const mintBB = await httpRequest(`http://127.0.0.1:${PORT}/ws/ticket`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ session_id: idB, thread_id: threadB }),
+    });
+    assert.equal(mintBB.statusCode, 200);
+
+    const cross = await httpRequest(`http://127.0.0.1:${PORT}/ws/ticket`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ session_id: idA, thread_id: threadB }),
+    });
+    assert.equal(cross.statusCode, 403);
+    assert.equal(JSON.parse(cross.body).error.includes('owned_by_other'), true);
+
+    const unknown = await httpRequest(`http://127.0.0.1:${PORT}/ws/ticket`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ session_id: idA, thread_id: 'missing-thread' }),
+    });
+    assert.equal(unknown.statusCode, 404);
+
+    server.protocolGateway.threadOwnership.deactivate(threadA);
+    const stale = await httpRequest(`http://127.0.0.1:${PORT}/ws/ticket`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ session_id: idA, thread_id: threadA }),
+    });
+    assert.equal(stale.statusCode, 403);
+    const replayFailed = server.wsTickets.consume({ ticket: 'never-minted', sessionId: idA });
+    assert.equal(replayFailed.ok, false);
+  });
+
+  it('scoped fan-out drops missing and malformed thread_id', () => {
+    const seenA: string[] = [];
+    const seenB: string[] = [];
+    const seenGlobal: string[] = [];
+    const unsubA = server.protocolGateway.subscribe((p) => seenA.push(p), { threadId: 'thr-a' });
+    const unsubB = server.protocolGateway.subscribe((p) => seenB.push(p), { threadId: 'thr-b' });
+    const unsubG = server.protocolGateway.subscribe((p) => seenGlobal.push(p));
+    server.protocolGateway.emitNotification({
+      jsonrpc: '2.0',
+      method: 'turn.event',
+      params: { thread_id: 'thr-a', event: { type: 'thinking' } },
+    });
+    server.protocolGateway.emitNotification({
+      jsonrpc: '2.0',
+      method: 'turn.event',
+      params: { thread_id: 'thr-b', event: { type: 'thinking' } },
+    });
+    server.protocolGateway.emitNotification({
+      jsonrpc: '2.0',
+      method: 'turn.event',
+      params: {},
+    });
+    server.protocolGateway.emitNotification({
+      jsonrpc: '2.0',
+      method: 'turn.event',
+      params: { thread_id: 12 },
+    });
+    server.protocolGateway.emitNotification({
+      jsonrpc: '2.0',
+      method: 'status',
+      scope: 'global',
+      params: { ok: true },
+    });
+    assert.equal(seenA.length, 1);
+    assert.equal(seenB.length, 1);
+    assert.equal(seenA.some((l) => l.includes('thr-b')), false);
+    assert.equal(seenB.some((l) => l.includes('thr-a')), false);
+    assert.equal(seenGlobal.length, 1);
+    unsubA();
+    unsubB();
+    unsubG();
+  });
 });
 

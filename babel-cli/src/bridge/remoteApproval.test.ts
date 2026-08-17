@@ -161,7 +161,7 @@ describe('RemoteApprovalBroker', () => {
     if (!afterCancel.ok) assert.equal(afterCancel.error, 'cancelled');
   });
 
-  it('ALLOW_ONCE fails closed when the live action mutates after requestChatActionApproval', async () => {
+  it('ALLOW_ONCE fails closed when the live action mutates after requestAllowOnce', async () => {
     const broker = new RemoteApprovalBroker();
     const action = { type: 'write_file' as const, path: 'a.ts', content: 'hello' };
     const allowed = runOnRemoteSurface(
@@ -172,7 +172,13 @@ describe('RemoteApprovalBroker', () => {
         failClosedMcp: true,
         cwd: '/proj',
       },
-      () => requestChatActionApproval(action),
+      () =>
+        broker.requestAllowOnce({
+          action,
+          thread_id: 'thr-a',
+          turn_id: '1',
+          cwd: '/proj',
+        }),
     );
 
     let pending = broker.listPending('thr-a')[0];
