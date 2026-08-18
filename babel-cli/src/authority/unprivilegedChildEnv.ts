@@ -7,10 +7,20 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getSafeEnv } from '../utils/safeEnv.js';
+
+let emptyHooksDir: string | undefined;
+
+export function babelEmptyHooksDir(): string {
+  if (!emptyHooksDir) {
+    emptyHooksDir = mkdtempSync(join(tmpdir(), 'babel-empty-hooks-'));
+    mkdirSync(emptyHooksDir, { recursive: true });
+  }
+  return emptyHooksDir;
+}
 
 const unprivilegedAls = new AsyncLocalStorage<true>();
 
@@ -26,6 +36,7 @@ export function buildUnprivilegedChildEnv(env: NodeJS.ProcessEnv = process.env):
   const safe = getSafeEnv(env);
   const isolated = mkdtempSync(join(tmpdir(), 'babel-unpriv-gh-'));
   const emptyGitConfig = join(isolated, 'gitconfig.empty');
+  const hooksDir = babelEmptyHooksDir();
   return {
     ...safe,
     GH_CONFIG_DIR: isolated,
@@ -34,6 +45,9 @@ export function buildUnprivilegedChildEnv(env: NodeJS.ProcessEnv = process.env):
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_TERMINAL_PROMPT: '0',
     GH_PROMPT_DISABLED: '1',
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'core.hooksPath',
+    GIT_CONFIG_VALUE_0: hooksDir,
   };
 }
 

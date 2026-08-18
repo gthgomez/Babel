@@ -68,6 +68,7 @@ import {
 import { getSafeEnv } from './utils/safeEnv.js';
 import { childEnvForSandbox } from './authority/unprivilegedChildEnv.js';
 import { contextAwareOperatorCheck } from './utils/cmdTokenizer.js';
+import { classifyExecutionRisk, requiresDockerIsolation } from './authority/commandSpec.js';
 import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
 import { OutputBuffer } from './ui/outputBuffer.js';
@@ -572,7 +573,7 @@ export { isTransientSpawnError };
  *
  * For production use, restrict further via BABEL_ALLOWED_TOOLS env var.
  */
-const ALLOWED_COMMANDS = new Set([
+export const ALLOWED_COMMANDS = new Set([
   'npm',
   'node',
   'git',
@@ -601,6 +602,7 @@ const ALLOWED_COMMANDS = new Set([
   'ls',
   'findstr',
   'grep',
+  'ping',
 ]);
 
 /**
@@ -863,6 +865,20 @@ export function validateExecutorShellCommand(
       reason_code: 'command_allowlist_rejected',
       message: `Command rejected — "${cmdBase}" is not in the allowed command list for execution profile "${profile.name}".`,
       evidence: [command, cmdBase, profile.name],
+      command_base: cmdBase,
+    };
+  }
+
+  const classificationRoot = options.projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? '';
+  const classified = classifyExecutionRisk(
+    trimmed,
+    classificationRoot ? { repoRoot: classificationRoot } : {},
+  );
+  if (classified.executionRisk === 'forbidden') {
+    return {
+      reason_code: 'unclassified_executable',
+      message: `Command rejected — ${classified.reason ?? 'unclassified executable'}: "${trimmed}"`,
+      evidence: [command],
       command_base: cmdBase,
     };
   }
@@ -1661,6 +1677,23 @@ export class SafeExecutor {
       return policyDeniedResult(
         'isolation_unavailable',
         `[sandbox] isolation_unavailable: ${isolation.reason}`,
+        toolName,
+        [command],
+      );
+    }
+    const classified = classifyExecutionRisk(command, { repoRoot: this.projectRoot });
+    if (requiresDockerIsolation(classified.executionRisk) && isolation.kind !== 'docker') {
+      return policyDeniedResult(
+        'isolation_required',
+        `[sandbox] isolation_required: ${classified.base || command} executes project or container-only code and is denied on the host.`,
+        toolName,
+        [command, classified.executionRisk],
+      );
+    }
+    if (classified.executionRisk === 'forbidden') {
+      return policyDeniedResult(
+        'unclassified_executable',
+        `[sandbox] Command rejected — ${classified.reason ?? 'unclassified executable'}: "${command}"`,
         toolName,
         [command],
       );

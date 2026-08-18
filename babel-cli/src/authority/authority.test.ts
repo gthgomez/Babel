@@ -338,8 +338,8 @@ describe('git/gh command parsing (structured capability extraction)', () => {
   test('gh api GET pulls → pr_inspect', () => {
     assert.equal(parseGitCommand('gh api repos/gthgomez/Babel/pulls/1').capability, 'pr_inspect');
   });
-  test('ordinary non-git binary → run_local_command (local, bounded)', () => {
-    assert.equal(parseGitCommand('pandoc -o out.pdf').capability, 'run_local_command');
+  test('ordinary non-git binary → unknown (unclassified fail-closed)', () => {
+    assert.equal(parseGitCommand('pandoc -o out.pdf').capability, 'unknown');
   });
   test('empty command → unknown (fail-closed)', () => {
     assert.equal(parseGitCommand('').capability, 'unknown');

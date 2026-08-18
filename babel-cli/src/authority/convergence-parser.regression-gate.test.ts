@@ -18,17 +18,14 @@ import { classifyCommandSemantics, splitChains } from '../agent/commandSemantics
 
 // ─── git option-argument consumption ───────────────────────────────────────
 
-test('P0-2: git -C <path> consumes its argument; the verb is resolved', () => {
+test('P0-2: git -C <path> without a trusted repoRoot is denied', () => {
   const p = parseGitCommand('git -C /tmp/repo push origin main');
-  // Today: the skip loop leaves verb = '/tmp/repo' → unknown/ambiguous.
-  assert.equal(p.capability, 'push_feature_branch');
-  assert.equal(p.force, false);
+  assert.equal(p.capability, 'unknown');
 });
 
-test('P0-2: git -c <key=value> consumes its argument; the verb is resolved', () => {
+test('P0-2: git -c <key=value> is a denied execution-changing global', () => {
   const p = parseGitCommand('git -c alias.st=status status');
-  // Today: verb = 'alias.st=status' → unknown/ambiguous.
-  assert.equal(p.capability, 'inspect_repository');
+  assert.equal(p.capability, 'unknown');
 });
 
 // ─── Git force semantics ───────────────────────────────────────────────────
@@ -109,25 +106,24 @@ test('P0-2: psql -c "DROP TABLE" is destructive_data_delete (guard)', () => {
 
 // ─── Git global options that consume a following token (L14–L17) ───────────
 
-test('L14 P0-2: git --git-dir <path> push — the path belongs to the option', () => {
+test('L14 P0-2: git --git-dir is a denied execution-changing global', () => {
   const p = parseGitCommand('git --git-dir /repo push origin main');
-  assert.equal(p.capability, 'push_feature_branch');
-  assert.equal(p.force, false);
+  assert.equal(p.capability, 'unknown');
 });
 
-test('L15 P0-2: git --work-tree <path> push — the path belongs to the option', () => {
+test('L15 P0-2: git --work-tree is a denied execution-changing global', () => {
   const p = parseGitCommand('git --work-tree /repo push origin main');
-  assert.equal(p.capability, 'push_feature_branch');
+  assert.equal(p.capability, 'unknown');
 });
 
-test('L16 P0-2: git --namespace <name> push — the name belongs to the option', () => {
+test('L16 P0-2: git --namespace is a denied execution-changing global', () => {
   const p = parseGitCommand('git --namespace foo push origin main');
-  assert.equal(p.capability, 'push_feature_branch');
+  assert.equal(p.capability, 'unknown');
 });
 
-test('L17 P0-2: git --config-env <key=ENV> push — the assignment belongs to the option', () => {
+test('L17 P0-2: git --config-env is a denied execution-changing global', () => {
   const p = parseGitCommand('git --config-env user.name=MY_NAME push origin main');
-  assert.equal(p.capability, 'push_feature_branch');
+  assert.equal(p.capability, 'unknown');
 });
 
 // ─── Git force / refspec family (L18–L23) ──────────────────────────────────
@@ -196,9 +192,9 @@ test('L28 P0-2: gh api GET stays pr_inspect (guard)', () => {
   assert.equal(p.capability, 'pr_inspect');
 });
 
-test('L29 P0-2: git -C repo status is a safe local inspect', () => {
+test('L29 P0-2: git -C without a trusted repoRoot is denied', () => {
   const p = parseGitCommand('git -C repo status');
-  assert.equal(p.capability, 'inspect_repository');
+  assert.equal(p.capability, 'unknown');
 });
 
 test('L30 P0-2: grep on a normal file is not a credential read', () => {
@@ -208,7 +204,7 @@ test('L30 P0-2: grep on a normal file is not a credential read', () => {
 
 test('L31 P0-2: Select-String on a normal file is not a credential read', () => {
   assert.equal(classifyCommandSemantics('Select-String normal.txt'), 'unrecognized');
-  assert.equal(parseGitCommand('Select-String normal.txt').capability, 'run_local_command');
+  assert.equal(parseGitCommand('Select-String normal.txt').capability, 'unknown');
 });
 
 test('L32 P0-2: python -c with a quoted semicolon print is not a credential read', () => {

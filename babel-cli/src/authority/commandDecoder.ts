@@ -18,6 +18,12 @@
  */
 
 import { CAPABILITY_KINDS, type CapabilityId } from './capabilities.js';
+import {
+  classifyExecutionRisk,
+  classifyGitExecutionRisk,
+  normalizeExecutionBase,
+  requiresDockerIsolation,
+} from './commandSpec.js';
 
 // ─── Taxonomy (single source; commandSemantics.ts re-exports) ───────────────
 
@@ -428,7 +434,11 @@ function cmd(
 
 // ─── Git family ─────────────────────────────────────────────────────────────
 
-function decodeGit(tokens: string[]): DecodedCommand {
+function decodeGit(tokens: string[], repoRoot?: string): DecodedCommand {
+  const gitRisk = classifyGitExecutionRisk(tokens, repoRoot);
+  if (gitRisk.executionRisk === 'forbidden') {
+    return cmd('unknown', 'unrecognized', { ambiguous: true });
+  }
   const { verb, args } = gitVerbAndArgs(tokens);
   if (verb === '') return cmd('unknown', 'unrecognized', { ambiguous: true });
 
@@ -489,6 +499,9 @@ function decodeGit(tokens: string[]): DecodedCommand {
         : cmd('push_feature_branch', 'git_push', { remote, ...dest, force: false, delete: false });
     }
     case 'commit':
+      if (args.some((a) => a === '-S' || a === '--gpg-sign' || a.startsWith('--gpg-sign='))) {
+        return cmd('unknown', 'unrecognized', { ambiguous: true });
+      }
       if (args.includes('--amend')) {
         return cmd('shared_history_rewrite', 'git_history_rewrite');
       }
@@ -539,8 +552,9 @@ function decodeGit(tokens: string[]): DecodedCommand {
       }
       return cmd('inspect_repository', 'read_local');
     case 'fetch':
+      return cmd('run_local_command', 'write_local_reversible');
     case 'pull':
-      return cmd('inspect_repository', 'read_local');
+      return cmd('run_local_command', 'write_local_reversible', { requiresIsolation: true });
     case 'show':
     case 'cat-file': {
       const target = args.join(' ');
@@ -570,7 +584,7 @@ function decodeGit(tokens: string[]): DecodedCommand {
       if (args[0] === 'drop' || args[0] === 'clear') {
         return cmd('destructive_data_delete', 'git_history_rewrite', { delete: true });
       }
-      return cmd('inspect_repository', 'read_local');
+      return cmd('run_local_command', 'write_local_reversible');
     case 'tag':
       return cmd('release', 'deploy', { delete: args[0] === '-d' || args[0] === '--delete' });
     case 'merge':
@@ -660,6 +674,29 @@ function decodeGh(tokens: string[]): DecodedCommand {
 
 // ─── Non-git/gh family ──────────────────────────────────────────────────────
 
+function decodeHostDevice(tokens: string[]): DecodedCommand | null {
+  const base = normalizeExecutionBase(tokens[0] ?? '');
+  if (base === 'winget') {
+    const verb = (tokens[1] ?? '').toLowerCase();
+    if (verb === 'list' || verb === 'show' || verb === 'search') {
+      return cmd('inspect_host_environment', 'read_local');
+    }
+    return cmd('unknown', 'unrecognized', { ambiguous: true });
+  }
+  if (base === 'sdkmanager') {
+    if (tokens.some((t) => t === '--list' || t === 'list')) {
+      return cmd('inspect_host_environment', 'read_local');
+    }
+    return cmd('unknown', 'unrecognized', { ambiguous: true });
+  }
+  if (base === 'adb') {
+    const verb = (tokens[1] ?? '').toLowerCase();
+    if (verb === 'devices') return cmd('inspect_external_device', 'read_local');
+    return cmd('unknown', 'unrecognized', { ambiguous: true });
+  }
+  return null;
+}
+
 function decodeNonGit(tokens: string[], raw: string): DecodedCommand {
   const base = tokens[0]?.toLowerCase() ?? '';
 
@@ -704,6 +741,9 @@ function decodeNonGit(tokens: string[], raw: string): DecodedCommand {
   const evalDecoded = decodeInterpreterEval(tokens);
   if (evalDecoded) return evalDecoded;
 
+  const hostDevice = decodeHostDevice(tokens);
+  if (hostDevice) return hostDevice;
+
   // Test / build / lint / typecheck runners execute repository-controlled
   // code. Capability stays local for lease usability; execution is isolated.
   if (TEST_RUNNER_RE.test(raw)) return cmd('run_tests', 'test_local', { requiresIsolation: true });
@@ -746,6 +786,14 @@ function decodeNonGit(tokens: string[], raw: string): DecodedCommand {
 
   if (isArbitraryInterpreterInvocation(tokens)) {
     return cmd('run_arbitrary_code', 'unrecognized', { requiresIsolation: true });
+  }
+
+  const classified = classifyExecutionRisk(raw);
+  if (classified.executionRisk === 'forbidden') {
+    return cmd('unknown', 'unrecognized', { ambiguous: true });
+  }
+  if (requiresDockerIsolation(classified.executionRisk)) {
+    return cmd('run_local_command', 'unrecognized', { requiresIsolation: true });
   }
 
   // Recognized safe/reversible local engineering (semantic stays
@@ -855,12 +903,32 @@ function decodeInterpreterEval(tokens: readonly string[]): DecodedCommand | null
  * capability/fields are returned. Quote-aware: separators inside quotes are
  * not boundaries.
  */
-export function decodeCommand(command: string): DecodedCommand {
+const INSPECT_CAPABILITIES = new Set<CapabilityId | 'unknown'>([
+  'inspect_repository',
+  'inspect_host_environment',
+  'inspect_external_device',
+  'search_repository',
+  'pr_inspect',
+  'ci_inspect',
+]);
+
+function isEffectfulCapability(decoded: DecodedCommand): boolean {
+  if (decoded.requiresIsolation === true) return true;
+  if (INSPECT_CAPABILITIES.has(decoded.capability)) return false;
+  if (decoded.capability === 'unknown') return false;
+  if (decoded.capability === 'run_local_command') {
+    return decoded.semantic !== 'unrecognized' && decoded.semantic !== 'read_local';
+  }
+  return true;
+}
+
+export function decodeCommand(command: string, opts: { repoRoot?: string } = {}): DecodedCommand {
   const segments = splitChains(command);
   if (segments.length === 0) {
     return cmd('unknown', 'unrecognized', { ambiguous: true });
   }
   let best: DecodedCommand | null = null;
+  const effectful = new Set<string>();
   for (const segment of segments) {
     const normalized = unwrapCommandWrappers(segment);
     // Wrapper unwrap can expose an inner chain (`sh -c "a && b"` → `a && b`);
@@ -871,21 +939,41 @@ export function decodeCommand(command: string): DecodedCommand {
       // First-token normalization: strip path prefixes and .exe (Windows
       // forms like `C:\tools\git.exe push` resolve to base `git`).
       const firstBase =
-        tokens.length === 0 ? '' : tokens[0]!.replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase();
+        tokens.length === 0 ? '' : normalizeExecutionBase(tokens[0]!);
       const decoded =
         tokens.length === 0
           ? cmd('unknown', 'unrecognized', { ambiguous: true })
           : firstBase === 'git'
-            ? decodeGit(tokens)
+            ? decodeGit(tokens, opts.repoRoot)
             : firstBase === 'gh'
               ? decodeGh(tokens)
               : decodeNonGit(tokens, inner);
+      if (isEffectfulCapability(decoded)) {
+        effectful.add(decoded.capability);
+      }
       if (best === null) {
         best = decoded;
       } else {
-        best = moreSevere(decoded.semantic, best.semantic) === decoded.semantic ? decoded : best;
+        const prev: DecodedCommand = best;
+        const next: DecodedCommand = decoded;
+        const useDecoded = moreSevere(next.semantic, prev.semantic) === next.semantic;
+        best = {
+          ...(useDecoded ? next : prev),
+          requiresIsolation: prev.requiresIsolation === true || next.requiresIsolation === true,
+          force: prev.force || next.force,
+          delete: prev.delete || next.delete,
+          ambiguous: prev.ambiguous === true || next.ambiguous === true,
+        };
       }
     }
+  }
+  if (effectful.size > 1) {
+    return cmd('unknown', 'unrecognized', {
+      ambiguous: true,
+      requiresIsolation: best?.requiresIsolation === true,
+      force: best?.force === true,
+      delete: best?.delete === true,
+    });
   }
   return best ?? cmd('unknown', 'unrecognized', { ambiguous: true });
 }

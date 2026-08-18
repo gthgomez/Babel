@@ -139,13 +139,25 @@ export function decideActionRequest(
     return { outcome: 'deny', reasonCode: 'DENY_CREDENTIAL_READ', rulesTriggered: ['capability.forbidden'] };
   }
 
-  if ((kind === 'local' || kind === 'publication') && !lease.allowedCapabilities.includes(request.capability)) {
+  if (!lease.allowedCapabilities.includes(request.capability)) {
     triggered.push('pdp.not_in_lease');
+    if (kind === 'gated' || isPrivilegedCapability(request.capability)) {
+      return { outcome: 'deny', reasonCode: 'DENY_MISSING_AUTHORITY', rulesTriggered: triggered };
+    }
     return {
       outcome: 'deny',
       reasonCode: 'DENY_UNKNOWN_EXTERNAL_SIDE_EFFECT',
       rulesTriggered: triggered,
     };
+  }
+
+  if (requestRequiresIsolation(request) && request.isolationAvailable !== true) {
+    return denyConstraint(
+      triggered,
+      request.capability === 'run_arbitrary_code'
+        ? 'pdp.arbitrary_code_requires_isolation'
+        : 'pdp.project_code_requires_isolation',
+    );
   }
 
   // 6. Protected-branch write — machine policy, never ASK.
@@ -179,12 +191,8 @@ export function decideActionRequest(
     };
   }
 
-  // 8. Privileged capability resolution — explicit lease membership + constraints.
+  // 8. Privileged capability resolution — membership already checked.
   if (kind === 'gated' || isPrivilegedCapability(request.capability)) {
-    if (!lease.allowedCapabilities.includes(request.capability)) {
-      triggered.push('pdp.not_in_lease');
-      return { outcome: 'deny', reasonCode: 'DENY_MISSING_AUTHORITY', rulesTriggered: triggered };
-    }
     const constraint = privilegedConstraintDecision(request, lease, triggered);
     if (constraint) return constraint;
     triggered.push(`lease.allowedCapabilities.${request.capability}`);
@@ -198,10 +206,6 @@ export function decideActionRequest(
       reasonCode: 'VERIFY_BEFORE_PUBLICATION',
       rulesTriggered: triggered,
     };
-  }
-
-  if (requestRequiresIsolation(request) && request.isolationAvailable !== true) {
-    return denyConstraint(triggered, 'pdp.project_code_requires_isolation');
   }
 
   triggered.push('lease.allowedCapabilities');
@@ -325,12 +329,8 @@ function privilegedConstraintDecision(
         branchAllowed,
       );
     }
-    case 'run_arbitrary_code': {
-      if (request.isolationAvailable !== true) {
-        return denyConstraint(triggered, 'pdp.arbitrary_code_requires_isolation');
-      }
+    case 'run_arbitrary_code':
       return null;
-    }
     case 'scope_expansion': {
       if (c.scopeExpansion !== true) return denyConstraint(triggered, 'lease.constraints.scopeExpansion');
       if (request.delete) {

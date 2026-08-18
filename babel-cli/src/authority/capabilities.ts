@@ -20,6 +20,8 @@ export type CapabilityId =
   | 'run_typecheck'
   | 'run_local_command'
   | 'delete_task_temp'
+  | 'inspect_host_environment'
+  | 'inspect_external_device'
   // Bounded publication (Class B)
   | 'stage_ship_set'
   | 'commit_ship_set'
@@ -65,6 +67,8 @@ export const CAPABILITY_KINDS: Record<CapabilityId, CapabilityKind> = {
   // engineering (mission §12: raw shell remains useful for ordinary work).
   run_local_command: 'local',
   delete_task_temp: 'local',
+  inspect_host_environment: 'local',
+  inspect_external_device: 'local',
   stage_ship_set: 'publication',
   commit_ship_set: 'publication',
   push_feature_branch: 'publication',

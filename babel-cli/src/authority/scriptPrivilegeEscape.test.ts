@@ -43,8 +43,8 @@ test('decoder classifies interpreter scripts as run_arbitrary_code, not run_loca
   assert.equal(parseGitCommand('deno run x.ts').capability, 'run_arbitrary_code');
   assert.equal(parseGitCommand('pwsh -File evil.ps1').capability, 'run_arbitrary_code');
   assert.equal(parseGitCommand('node -e "console.log(1)"').capability, 'run_arbitrary_code');
-  assert.equal(parseGitCommand('pandoc -o out.pdf').capability, 'run_local_command');
-  assert.equal(parseGitCommand('pandoc -o out.js').capability, 'run_local_command');
+  assert.equal(parseGitCommand('pandoc -o out.pdf').capability, 'unknown');
+  assert.equal(parseGitCommand('pandoc -o out.js').capability, 'unknown');
   assert.equal(parseGitCommand('npm test').capability, 'run_tests');
 });
 

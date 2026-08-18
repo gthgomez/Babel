@@ -55,6 +55,10 @@ export const GOVERNANCE_PATHS: readonly string[] = [
   'GEMINI.md',
   '.gitignore',
   '.gitattributes',
+  '.git/hooks',
+  '.git/config',
+  '.git/config.worktree',
+  '.git/info/attributes',
   '.github/workflows',
 ];
 

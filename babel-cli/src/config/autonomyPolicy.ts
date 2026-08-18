@@ -376,6 +376,8 @@ const CLASS_A_LEASED_CAPABILITIES: readonly CapabilityId[] = [
   'run_typecheck',
   'run_local_command',
   'delete_task_temp',
+  'inspect_host_environment',
+  'inspect_external_device',
 ];
 
 /** Publication capability set added for Class B/C (still verify-gated by the PDP). */

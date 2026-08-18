@@ -33,8 +33,8 @@ export interface ParsedGitCommand {
 }
 
 /** Decode a command string into a structured ParsedGitCommand (fail-closed). */
-export function parseGitCommand(cmd: string): ParsedGitCommand {
-  const decoded = decodeCommand(cmd);
+export function parseGitCommand(cmd: string, opts: { repoRoot?: string } = {}): ParsedGitCommand {
+  const decoded = decodeCommand(cmd, opts);
   return {
     capability: decoded.capability === 'unknown' ? 'unknown' : decoded.capability,
     ...(decoded.remote !== undefined ? { remote: decoded.remote } : {}),
