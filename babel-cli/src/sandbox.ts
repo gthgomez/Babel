@@ -66,7 +66,7 @@ import {
   requestDependencyInstallApproval,
 } from './services/approvalQueue.js';
 import { getSafeEnv } from './utils/safeEnv.js';
-import { childEnvForSandbox } from './authority/unprivilegedChildEnv.js';
+import { childEnvForSandbox, hardenGitHostEnvironment } from './authority/unprivilegedChildEnv.js';
 import { contextAwareOperatorCheck } from './utils/cmdTokenizer.js';
 import { classifyExecutionRisk, requiresDockerIsolation } from './authority/commandSpec.js';
 import { sanitizePath } from './cli/constants.js';
@@ -602,7 +602,6 @@ export const ALLOWED_COMMANDS = new Set([
   'ls',
   'findstr',
   'grep',
-  'ping',
 ]);
 
 /**
@@ -1761,14 +1760,19 @@ export class SafeExecutor {
       }
     }
 
+    let env = childEnvForSandbox();
+    if (classified.effectFamily === 'git' && isolation.kind !== 'docker') {
+      env = hardenGitHostEnvironment(env);
+    }
+
     return containerCommand
       ? {
           executable: containerCommand.executable,
           args: containerCommand.args,
           cwd: this.projectRoot,
-          env: childEnvForSandbox(),
+          env,
         }
-      : { executable: spawnCmd, args: spawnArgs, cwd: resolvedCwd, env: childEnvForSandbox() };
+      : { executable: spawnCmd, args: spawnArgs, cwd: resolvedCwd, env };
   }
 
   /**

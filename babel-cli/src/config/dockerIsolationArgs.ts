@@ -73,11 +73,14 @@ export function validateDockerIsolationArgs(
       return { ok: false, reason: 'docker extra arg --device weakens isolation' };
     }
     if (lower === '--security-opt' || lower.startsWith('--security-opt=')) {
-      const value = (lower.startsWith('--security-opt=') ? tok.slice(tok.indexOf('=') + 1) : (tokens[i + 1] ?? '')).toLowerCase();
+      const value = (
+        inline ??
+        (!tok.includes('=') ? (tokens[i + 1] ?? '') : '')
+      ).toLowerCase();
       if (value.includes('unconfined') || value.includes('seccomp=unconfined')) {
         return { ok: false, reason: 'docker extra arg weakens seccomp' };
       }
-      if (!tok.includes('=')) i += 1;
+      if (!tok.includes('=') && inline === undefined) i += 1;
       continue;
     }
     if (lower === '-v' || lower === '--volume' || lower.startsWith('--volume=') || lower.startsWith('-v')) {

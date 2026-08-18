@@ -82,7 +82,8 @@ test('isGatedGitPush: force / main / master / delete only', () => {
 test('classifyCommandSemantics: history rewrite is detected', () => {
   assert.equal(classifyCommandSemantics('git reset --hard HEAD~2'), 'git_history_rewrite');
   assert.equal(classifyCommandSemantics('git rebase origin/main'), 'git_history_rewrite');
-  assert.equal(classifyCommandSemantics('git commit --amend'), 'git_history_rewrite');
+  assert.equal(classifyCommandSemantics('git commit --amend -m x'), 'git_history_rewrite');
+  assert.equal(classifyCommandSemantics('git commit --amend'), 'unrecognized');
   assert.equal(classifyCommandSemantics('git clean -fd'), 'git_history_rewrite');
   assert.equal(classifyCommandSemantics('git branch -D old'), 'git_history_rewrite');
 });

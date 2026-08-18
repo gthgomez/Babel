@@ -246,7 +246,7 @@ describe('H4 executeActionWithPolicy live capability gates', () => {
 
   it('captures shell pre/post revisions and policy linkage', async () => {
     const file = join(tmp, 'shell-mutated.txt');
-    const action: AgentAction = { type: 'run_command', command: 'synthetic mutation' };
+    const action: AgentAction = { type: 'run_command', command: 'echo synthetic-mutation' };
     const shellExecutor = {
       mapAction() { return []; },
       async execute() {
@@ -275,7 +275,7 @@ describe('H4 executeActionWithPolicy live capability gates', () => {
 
   it('marks failed shell effects for reconciliation with observed post state', async () => {
     const file = join(tmp, 'shell-failed.txt');
-    const action: AgentAction = { type: 'run_command', command: 'synthetic failure' };
+    const action: AgentAction = { type: 'run_command', command: 'echo synthetic-failure' };
     const shellExecutor = {
       mapAction() { return []; },
       async execute() {

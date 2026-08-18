@@ -16,11 +16,17 @@ import { parseLeaseJson } from './lease.js';
 import { decideWithLease } from './wire.js';
 import { executeActionWithPolicy, createToolExecutor } from '../agent/toolExecutor.js';
 import { establishAuthoritySession } from './sessionContext.js';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { after } from 'node:test';
+import { spawnSync } from 'node:child_process';
 import { validateDockerIsolationArgs } from '../config/dockerIsolationArgs.js';
 import { SafeExecutor, validateExecutorShellCommand } from '../sandbox.js';
+import { hardenGitHostEnvironment } from './unprivilegedChildEnv.js';
+
+if (!process.env['BABEL_ALLOW_HOST_FALLBACK'] && process.env['BABEL_DOCKER_DISABLE'] !== 'true') {
+  process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+}
 
 const roots: string[] = [];
 after(() => {
@@ -81,11 +87,12 @@ test('git global options that change execution fail closed', () => {
   assert.equal(parseGitCommand('git --config-env foo=BAR status').capability, 'unknown');
 });
 
-test('git -C inside repo is allowed', () => {
+test('git -C is forbidden even inside the repo', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-git-c-'));
   roots.push(root);
   const p = parseGitCommand(`git -C ${root} status`, { repoRoot: root });
-  assert.equal(p.capability, 'inspect_repository');
+  assert.equal(p.capability, 'unknown');
+  assert.equal(classifyExecutionRisk(`git -C ${root} status`, { repoRoot: root }).executionRisk, 'forbidden');
 });
 
 test('git fetch/pull/stash are not inspect_repository', () => {
@@ -96,6 +103,56 @@ test('git fetch/pull/stash are not inspect_repository', () => {
 
 test('git commit -S is unknown', () => {
   assert.equal(parseGitCommand('git commit -S -m x').capability, 'unknown');
+});
+
+test('git program-launch forms fail closed', () => {
+  const forbidden = [
+    'git rebase -x ./attack.sh HEAD~1',
+    'git rebase --exec ./attack.sh HEAD~1',
+    'git rebase --exec=./attack.sh HEAD~1',
+    'git rebase -i HEAD~1',
+    'git rebase --interactive HEAD~1',
+    'git rebase --gpg-sign HEAD~1',
+    'git merge -S main',
+    'git merge --gpg-sign main',
+    'git tag -s v1.0.0',
+    'git tag -u KEY v1.0.0',
+    'git tag --sign v1.0.0',
+    'git push --signed origin HEAD',
+    'git commit',
+    'git commit --amend',
+    'git commit -e -m x',
+  ];
+  for (const command of forbidden) {
+    const p = parseGitCommand(command);
+    assert.equal(p.capability, 'unknown', command);
+    assert.equal(classifyExecutionRisk(command).executionRisk, 'forbidden', command);
+  }
+  assert.equal(parseGitCommand('git commit -m x').capability, 'commit_ship_set');
+  assert.equal(parseGitCommand('git rebase HEAD~1').capability, 'shared_history_rewrite');
+});
+
+test('package-manager install commands require isolation', () => {
+  const parsed = parseLeaseJson(
+    JSON.stringify({
+      version: 2,
+      leaseId: 'pkg-iso',
+      scope: { repository: 'babel', remote: 'origin' },
+      allowedCapabilities: ['run_local_command'],
+    }),
+  );
+  assert.ok(parsed.ok);
+  for (const command of ['pip install .', 'uv pip install .', 'cargo install --path .', 'go install ./...']) {
+    const p = parseGitCommand(command);
+    assert.equal(p.requiresIsolation, true, command);
+    assert.equal(classifyExecutionRisk(command).executionRisk, 'project_code', command);
+    const denied = decideActionRequest(
+      { capability: p.capability, requiresIsolation: true },
+      parsed.lease,
+    );
+    assert.equal(denied.outcome, 'deny', command);
+    assert.ok(denied.rulesTriggered.includes('pdp.project_code_requires_isolation'), command);
+  }
 });
 
 test('heterogeneous effectful chains fail closed', () => {
@@ -191,6 +248,72 @@ test('wire+executor: merge+eval without isolation never invokes executeTool', as
   assert.equal(wire.decision, 'deny');
 });
 
+test('authorized git commit -m cannot execute hooksPath or default hooks', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-git-hook-'));
+  roots.push(root);
+  const git = (args: string[]) =>
+    spawnSync('git', args, { cwd: root, encoding: 'utf-8', windowsHide: true });
+  assert.equal(git(['init']).status, 0);
+  assert.equal(git(['config', 'user.email', 'babel-test@example.com']).status, 0);
+  assert.equal(git(['config', 'user.name', 'Babel Test']).status, 0);
+  assert.equal(git(['config', 'core.hooksPath', '.githooks']).status, 0);
+  mkdirSync(join(root, '.githooks'), { recursive: true });
+  mkdirSync(join(root, '.git', 'hooks'), { recursive: true });
+  const hookBody = '#!/bin/sh\necho ran > HOOK_RAN\nexit 1\n';
+  writeFileSync(join(root, '.githooks', 'pre-commit'), hookBody);
+  writeFileSync(join(root, '.git', 'hooks', 'pre-commit'), hookBody);
+  if (process.platform !== 'win32') {
+    chmodSync(join(root, '.githooks', 'pre-commit'), 0o755);
+    chmodSync(join(root, '.git', 'hooks', 'pre-commit'), 0o755);
+  }
+  writeFileSync(join(root, 'tracked.txt'), 'content\n');
+  assert.equal(git(['add', 'tracked.txt']).status, 0);
+
+  const hardened = hardenGitHostEnvironment({ PATH: process.env['PATH'], HOME: process.env['HOME'] });
+  assert.equal(hardened.GIT_CONFIG_KEY_0, 'core.hooksPath');
+  assert.ok(hardened.GIT_CONFIG_VALUE_0);
+
+  const persistPath = join(root, 'runs/s1/authority-session.json');
+  mkdirSync(dirname(persistPath), { recursive: true });
+  const parsed = parseLeaseJson(
+    JSON.stringify({
+      version: 2,
+      leaseId: 'commit-hooks',
+      scope: { repository: 'babel', remote: 'origin' },
+      allowedCapabilities: ['commit_ship_set', 'run_local_command'],
+    }),
+  );
+  assert.ok(parsed.ok);
+  const session = establishAuthoritySession({ repoRoot: root, lease: parsed.lease, persistPath });
+  const se = new SafeExecutor(root);
+  const executor = createToolExecutor({
+    executeTool: async (req) => {
+      if (req.tool === 'shell_exec' || req.tool === 'test_run') {
+        return se.shellExecAsync(req.command, root, 15_000);
+      }
+      return { exit_code: 1, stdout: '', stderr: `unexpected tool ${req.tool}` };
+    },
+  });
+  const run = await executeActionWithPolicy(
+    { type: 'run_command', command: 'git commit -m test' },
+    'workspace_write',
+    { agentId: 'hooks', runId: 'hooks-1', babelRoot: root },
+    { authoritySession: session, executor },
+  );
+  assert.equal(run.policyBlocked, false, run.results[0]?.stderr);
+  assert.equal(run.results[0]?.exit_code, 0, run.results[0]?.stderr);
+  assert.equal(existsSync(join(root, 'HOOK_RAN')), false);
+  const log = git(['log', '-1', '--pretty=%s']);
+  assert.equal(log.status, 0);
+  assert.match(log.stdout, /test/);
+
+  writeFileSync(join(root, 'second.txt'), 'more\n');
+  assert.equal(git(['add', 'second.txt']).status, 0);
+  const seResult = se.shellExec('git commit -m second', root, 15_000);
+  assert.equal(seResult.exit_code, 0, seResult.stderr);
+  assert.equal(existsSync(join(root, 'HOOK_RAN')), false);
+});
+
 test('SafeExecutor denies gradlew test on host profile without authority stack', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-se-gradle-'));
   roots.push(root);
@@ -222,6 +345,14 @@ test('docker extra args fail closed for host networking forms', () => {
   assert.equal(validateDockerIsolationArgs('--cap-add SYS_ADMIN').ok, false);
   assert.equal(validateDockerIsolationArgs('--cap-add=SYS_ADMIN').ok, false);
   assert.equal(validateDockerIsolationArgs('--read-only --user 1000:1000').ok, true);
+});
+
+test('docker extra args fail closed for equals and space security-opt unconfined', () => {
+  assert.equal(validateDockerIsolationArgs('--security-opt seccomp=unconfined').ok, false);
+  assert.equal(validateDockerIsolationArgs('--security-opt=seccomp=unconfined').ok, false);
+  assert.equal(validateDockerIsolationArgs('--security-opt apparmor=unconfined').ok, false);
+  assert.equal(validateDockerIsolationArgs('--security-opt=apparmor=unconfined').ok, false);
+  assert.equal(validateDockerIsolationArgs('--security-opt=no-new-privileges').ok, true);
 });
 
 describe('hostProcessSurface', () => {

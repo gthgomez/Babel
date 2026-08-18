@@ -7,8 +7,6 @@
  * closed.
  */
 
-import { resolve } from 'node:path';
-
 export type ExecutionRisk = 'intrinsic' | 'project_code' | 'container_only' | 'forbidden';
 
 export type EffectFamily =
@@ -49,7 +47,6 @@ export const COMMAND_SPECS: Readonly<Record<string, CommandSpec>> = {
   which: spec('intrinsic', 'none'),
   diff: spec('intrinsic', 'none'),
   env: spec('intrinsic', 'none'),
-  ping: spec('intrinsic', 'none'),
 
   git: spec('intrinsic', 'git'),
 
@@ -161,9 +158,102 @@ function consumeEqualsOrNext(tokens: string[], i: number): number {
   return i + 1;
 }
 
+function hasArg(args: readonly string[], pred: (a: string) => boolean): boolean {
+  return args.some(pred);
+}
+
+function shortClusterHas(args: readonly string[], letter: string): boolean {
+  const re = new RegExp(`^-[a-zA-Z]*${letter}[a-zA-Z]*$`);
+  return args.some((a) => re.test(a));
+}
+
+/**
+ * Git authority grants Git effects, not auxiliary-program execution.
+ * Multi-capability combinations (rebase + run_arbitrary_code) are out of
+ * scope; those forms fail closed here.
+ */
+function gitAuxiliaryProgramReason(verb: string, args: readonly string[]): string | undefined {
+  if (
+    hasArg(args, (a) => a === '-x' || a === '--exec' || a.startsWith('--exec=')) ||
+    (verb === 'rebase' && shortClusterHas(args, 'x'))
+  ) {
+    return 'git_exec_denied';
+  }
+  if (
+    hasArg(args, (a) => a === '-i' || a === '--interactive' || a.startsWith('--interactive=')) ||
+    (verb === 'rebase' && shortClusterHas(args, 'i'))
+  ) {
+    return 'git_interactive_denied';
+  }
+  if (verb === 'rebase' || verb === 'merge' || verb === 'commit') {
+    if (hasArg(args, (a) => a === '-S' || a === '--gpg-sign' || a.startsWith('--gpg-sign='))) {
+      return 'git_gpg_sign_denied';
+    }
+  }
+  if (verb === 'tag') {
+    if (
+      hasArg(
+        args,
+        (a) =>
+          a === '-s' ||
+          a === '--sign' ||
+          a === '-u' ||
+          a === '--local-user' ||
+          a.startsWith('--local-user='),
+      )
+    ) {
+      return 'git_sign_denied';
+    }
+  }
+  if (verb === 'push' && hasArg(args, (a) => a === '--signed' || a.startsWith('--signed='))) {
+    return 'git_sign_denied';
+  }
+  if (verb === 'merge' && hasArg(args, (a) => a === '-e' || a === '--edit')) {
+    return 'git_editor_denied';
+  }
+  if (verb === 'commit') {
+    if (
+      hasArg(
+        args,
+        (a) =>
+          a === '-e' ||
+          a === '--edit' ||
+          a === '-t' ||
+          a === '--template' ||
+          a.startsWith('--template=') ||
+          a === '-c' ||
+          a === '--reedit-message' ||
+          a.startsWith('--reedit-message='),
+      )
+    ) {
+      return 'git_editor_denied';
+    }
+    const hasMessage = hasArg(
+      args,
+      (a) =>
+        a === '-m' ||
+        a === '--message' ||
+        a.startsWith('--message=') ||
+        a === '-F' ||
+        a === '--file' ||
+        a.startsWith('--file=') ||
+        a === '-C' ||
+        a === '--reuse-message' ||
+        a.startsWith('--reuse-message=') ||
+        a === '--fixup' ||
+        a.startsWith('--fixup=') ||
+        a === '--squash' ||
+        a.startsWith('--squash=') ||
+        (/^-[a-zA-Z]*m[a-zA-Z]*$/.test(a) && !a.startsWith('--')),
+    );
+    if (!hasMessage) return 'git_editor_denied';
+  }
+  return undefined;
+}
+
 export function classifyGitExecutionRisk(
   tokens: readonly string[],
-  repoRoot?: string,
+  _repoRoot?: string,
 ): ClassifiedInvocation {
   const base = 'git';
   let i = 1;
@@ -178,22 +268,9 @@ export function classifyGitExecutionRisk(
       i += 1;
       continue;
     }
-    if (tok === '-C' || tok.startsWith('-C')) {
-      const pathTok = tok === '-C' ? tokens[i + 1] : tok.slice(2);
-      if (!pathTok) {
-        return { base, executionRisk: 'forbidden', effectFamily: 'git', reason: 'git_global_option_denied' };
-      }
-      if (!repoRoot) {
-        return { base, executionRisk: 'forbidden', effectFamily: 'git', reason: 'git_c_requires_repo' };
-      }
-      const resolved = resolve(repoRoot, pathTok);
-      const root = resolve(repoRoot);
-      if (resolved !== root && !resolved.startsWith(`${root}\\`) && !resolved.startsWith(`${root}/`)) {
-        return { base, executionRisk: 'forbidden', effectFamily: 'git', reason: 'git_c_outside_repo' };
-      }
-      i = tok === '-C' ? i + 2 : i + 1;
-      continue;
-    }
+    // `-C` is a global option (`git -C <path> …`). Lexical containment is
+    // not symlink-safe; deny every form. `git commit -C` is a verb flag
+    // and is parsed after this loop.
     if (gitGlobalDenied(tok)) {
       return { base, executionRisk: 'forbidden', effectFamily: 'git', reason: 'git_global_option_denied' };
     }
@@ -213,8 +290,9 @@ export function classifyGitExecutionRisk(
   }
 
   const args = tokens.slice(i + 1);
-  if (verb === 'commit' && args.some((a) => a === '-S' || a === '--gpg-sign' || a.startsWith('--gpg-sign='))) {
-    return { base, executionRisk: 'forbidden', effectFamily: 'git', reason: 'git_gpg_sign_denied' };
+  const aux = gitAuxiliaryProgramReason(verb, args);
+  if (aux) {
+    return { base, executionRisk: 'forbidden', effectFamily: 'git', reason: aux };
   }
   if (verb === 'pull') {
     return { base, executionRisk: 'project_code', effectFamily: 'git', reason: 'git_pull_requires_isolation' };

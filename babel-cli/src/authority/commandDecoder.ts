@@ -759,10 +759,16 @@ function decodeNonGit(tokens: string[], raw: string): DecodedCommand {
     return cmd('run_local_command', 'write_local_reversible', { requiresIsolation: true });
   }
   if (base === 'pip' || base === 'pip3' || base === 'poetry' || base === 'uv') {
-    if (/\b(install|add)\b/i.test(raw)) return cmd('run_local_command', 'install_dependency');
+    if (/\b(install|add)\b/i.test(raw)) {
+      return cmd('run_local_command', 'install_dependency', { requiresIsolation: true });
+    }
   }
-  if (base === 'go' && /\b(install|get)\b/i.test(raw)) return cmd('run_local_command', 'install_dependency');
-  if (base === 'cargo' && /\b(install|add)\b/i.test(raw)) return cmd('run_local_command', 'install_dependency');
+  if (base === 'go' && /\b(install|get)\b/i.test(raw)) {
+    return cmd('run_local_command', 'install_dependency', { requiresIsolation: true });
+  }
+  if (base === 'cargo' && /\b(install|add)\b/i.test(raw)) {
+    return cmd('run_local_command', 'install_dependency', { requiresIsolation: true });
+  }
 
   // Deletes.
   if (base === 'rm' || base === 'rmdir') {
@@ -912,6 +918,15 @@ const INSPECT_CAPABILITIES = new Set<CapabilityId | 'unknown'>([
   'ci_inspect',
 ]);
 
+function applyIsolationFloor(decoded: DecodedCommand, raw: string, repoRoot?: string): DecodedCommand {
+  if (decoded.requiresIsolation === true) return decoded;
+  const classified = classifyExecutionRisk(raw, repoRoot !== undefined ? { repoRoot } : {});
+  if (requiresDockerIsolation(classified.executionRisk)) {
+    return { ...decoded, requiresIsolation: true };
+  }
+  return decoded;
+}
+
 function isEffectfulCapability(decoded: DecodedCommand): boolean {
   if (decoded.requiresIsolation === true) return true;
   if (INSPECT_CAPABILITIES.has(decoded.capability)) return false;
@@ -940,14 +955,17 @@ export function decodeCommand(command: string, opts: { repoRoot?: string } = {})
       // forms like `C:\tools\git.exe push` resolve to base `git`).
       const firstBase =
         tokens.length === 0 ? '' : normalizeExecutionBase(tokens[0]!);
-      const decoded =
+      const decoded = applyIsolationFloor(
         tokens.length === 0
           ? cmd('unknown', 'unrecognized', { ambiguous: true })
           : firstBase === 'git'
             ? decodeGit(tokens, opts.repoRoot)
             : firstBase === 'gh'
               ? decodeGh(tokens)
-              : decodeNonGit(tokens, inner);
+              : decodeNonGit(tokens, inner),
+        inner,
+        opts.repoRoot,
+      );
       if (isEffectfulCapability(decoded)) {
         effectful.add(decoded.capability);
       }

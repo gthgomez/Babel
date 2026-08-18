@@ -54,3 +54,20 @@ export function buildUnprivilegedChildEnv(env: NodeJS.ProcessEnv = process.env):
 export function childEnvForSandbox(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return isUnprivilegedChildEnvActive() ? buildUnprivilegedChildEnv(env) : getSafeEnv(env);
 }
+
+/**
+ * Git host hardening is independent of the unprivileged-local capability
+ * wrapper. Publication/gated git (`commit`, `push`, `merge`, `tag`) must
+ * still be unable to execute repo or user hooks. This only overrides
+ * `core.hooksPath`; it does not strip HOME or credential helpers.
+ */
+export function hardenGitHostEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const hooksDir = babelEmptyHooksDir();
+  return {
+    ...env,
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'core.hooksPath',
+    GIT_CONFIG_VALUE_0: hooksDir,
+  };
+}
