@@ -50,11 +50,12 @@ import { extractPatchRawTargets, extractPatchTargets } from '../authority/patchT
 import { loadLeaseFromEnv, type AutonomyLease } from '../authority/lease.js';
 import { decideWithLease, invalidateLease, type LeaseContext } from '../authority/wire.js';
 import type { BaselineManifest } from '../authority/integrity.js';
-import type { AuthoritySessionContext } from '../authority/sessionContext.js';
+import { markSessionInvalidated, type AuthoritySessionContext } from '../authority/sessionContext.js';
 import type { ReasonCode } from '../authority/reasonCodes.js';
 import { actionRequestFromAction } from '../authority/actionRequest.js';
 import { CAPABILITY_KINDS } from '../authority/capabilities.js';
 import {
+  ProtectedInspectError,
   reconcileGovernanceAfterEffect,
   snapshotGovernanceBytes,
 } from '../authority/governanceReconcile.js';
@@ -680,6 +681,9 @@ export async function executeActionWithPolicy(
       : {}),
     ...(session ? { authoritySession: session } : {}),
     ...(deps.now !== undefined ? { now: deps.now } : {}),
+    ...(deps.isolationAvailable !== undefined
+      ? { isolationAvailable: deps.isolationAvailable }
+      : {}),
   };
   let lastReasonCode: ReasonCode | '' = '';
   const decide: typeof decideAction =
@@ -1034,17 +1038,58 @@ export async function executeActionWithPolicy(
   const mayMutateViaSubprocess =
     action.type === 'run_command' || action.type === 'test_run' || action.type === 'apply_patch';
   const governanceRepoRoot = session?.repoRoot || context.babelRoot;
-  const governanceSnapshot =
-    mayMutateViaSubprocess && governanceRepoRoot
-      ? snapshotGovernanceBytes(
-          governanceRepoRoot,
-          session?.persistPath ? [session.persistPath] : [],
-        )
-      : null;
+  let governanceSnapshot: ReturnType<typeof snapshotGovernanceBytes> | null = null;
+  if (mayMutateViaSubprocess && governanceRepoRoot) {
+    try {
+      governanceSnapshot = snapshotGovernanceBytes(
+        governanceRepoRoot,
+        session?.persistPath ? [session.persistPath] : [],
+      );
+    } catch (err) {
+      if (err instanceof ProtectedInspectError) {
+        incrementBlocks(context.runId);
+        if (session) markSessionInvalidated(session);
+        if (session?.lease) invalidateLease(session.lease.leaseId);
+        return {
+          action,
+          terminal: false,
+          results: [
+            {
+              exit_code: 1,
+              stdout: '',
+              stderr: `[DENY_POLICY_INTEGRITY_DRIFT] Governance inspect failed (${err.path}); session invalidated.`,
+            },
+          ],
+          policyDecision: 'deny',
+          policyBlocked: true,
+          reasonCode: 'DENY_POLICY_INTEGRITY_DRIFT',
+        };
+      }
+      throw err;
+    }
+  }
 
   try {
     deps.onBeforeExecutorExecute?.();
     const mapped = actionRequestFromAction(action);
+    if (mapped?.capability === 'run_arbitrary_code' && deps.isolationAvailable !== true) {
+      incrementBlocks(context.runId);
+      return {
+        action,
+        terminal: false,
+        results: [
+          {
+            exit_code: 1,
+            stdout: '',
+            stderr:
+              '[DENY_CAPABILITY_CONSTRAINT] Arbitrary interpreter/script execution requires an OS sandbox; host-user execution is denied.',
+          },
+        ],
+        policyDecision: 'deny',
+        policyBlocked: true,
+        reasonCode: 'DENY_CAPABILITY_CONSTRAINT',
+      };
+    }
     const isolateLocal =
       mapped !== null && CAPABILITY_KINDS[mapped.capability] === 'local';
     const execution = isolateLocal

@@ -80,6 +80,7 @@ function sampleLease(overrides: Partial<AutonomyLease> = {}): AutonomyLease {
         'shared_history_rewrite',
         'force_push',
         'scope_expansion',
+        'run_arbitrary_code',
       ],
       forbidden: ['expose_credentials'],
     }),

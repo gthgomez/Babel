@@ -219,6 +219,25 @@ describe('governance object restore', () => {
     assert.equal(inspectProtectedPath(missing, missing).kind, 'missing');
   });
 
+  test('non-ENOENT inspect errors fail closed instead of looking missing', () => {
+    const pdp = 'C:/repo/babel-cli/src/authority/pdp.ts';
+    const eacces = Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    const fs: ReconcileFs = {
+      lstatSync: () => {
+        throw eacces;
+      },
+      readFileSync: () => {
+        throw eacces;
+      },
+      writeFileSync: () => undefined,
+      mkdirSync: () => undefined,
+      rmSync: () => undefined,
+      readlinkSync: () => '',
+      symlinkSync: () => undefined,
+    };
+    assert.throws(() => inspectProtectedPath(pdp, pdp, fs), /governance inspect failed/);
+  });
+
   test('forced restoration failure surfaces and still invalidates', () => {
     const root = tempRoot();
     const pdp = join(root, 'babel-cli/src/authority/pdp.ts');

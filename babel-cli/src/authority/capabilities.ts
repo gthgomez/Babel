@@ -42,6 +42,7 @@ export type CapabilityId =
   | 'shared_history_rewrite'
   | 'force_push'
   | 'scope_expansion'
+  | 'run_arbitrary_code'
   // Denied (Class D) / unknown
   | 'expose_credentials'
   | 'unknown';
@@ -84,6 +85,7 @@ export const CAPABILITY_KINDS: Record<CapabilityId, CapabilityKind> = {
   shared_history_rewrite: 'gated',
   force_push: 'gated',
   scope_expansion: 'gated',
+  run_arbitrary_code: 'gated',
   expose_credentials: 'forbidden',
   unknown: 'forbidden',
 };

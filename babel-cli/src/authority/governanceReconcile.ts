@@ -71,6 +71,15 @@ function isNotFound(err: unknown): boolean {
   return Boolean(err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'ENOENT');
 }
 
+export class ProtectedInspectError extends Error {
+  readonly path: string;
+  constructor(path: string, cause: unknown) {
+    super(`governance inspect failed for ${path}: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = 'ProtectedInspectError';
+    this.path = path;
+  }
+}
+
 export function inspectProtectedPath(abs: string, key: string, fs: ReconcileFs = defaultFs): ProtectedSnapshot {
   try {
     const st = fs.lstatSync(abs);
@@ -92,7 +101,7 @@ export function inspectProtectedPath(abs: string, key: string, fs: ReconcileFs =
     return { kind: 'missing', key, abs };
   } catch (err) {
     if (isNotFound(err)) return { kind: 'missing', key, abs };
-    return { kind: 'missing', key, abs };
+    throw new ProtectedInspectError(abs, err);
   }
 }
 

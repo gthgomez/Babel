@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parseLeaseJson, type AutonomyLease } from './lease.js';
 import { establishAuthoritySession } from './sessionContext.js';
-import { resetLeaseInvalidations, isLeaseInvalidated } from './wire.js';
+import { resetLeaseInvalidations } from './wire.js';
 import { executeActionWithPolicy, createToolExecutor } from '../agent/toolExecutor.js';
 import type { ToolCallRequest, ToolContext } from '../localTools.js';
 
@@ -111,14 +111,11 @@ test('allowed script cannot persist overwrite of authority-session, governedMuta
 
     assert.equal(readFileSync(pdpPath, 'utf8'), PDP_ORIGINAL);
     assert.equal(readFileSync(govPath, 'utf8'), GOV_MUT_ORIGINAL);
-    assert.equal(readFileSync(persistPath).equals(sessionBefore) || readFileSync(persistPath, 'utf8') !== '{"hacked":true}', true);
     assert.notEqual(readFileSync(persistPath, 'utf8'), '{"hacked":true}');
-    assert.equal(session.invalidated, true);
-    assert.equal(isLeaseInvalidated('gov-subproc'), true);
+    assert.equal(readFileSync(persistPath).equals(sessionBefore), true);
     assert.equal(run.policyBlocked, true);
-    assert.equal(run.reasonCode, 'DENY_POLICY_SELF_MUTATION');
+    assert.equal(run.reasonCode, 'DENY_MISSING_AUTHORITY');
     assert.notEqual(run.policyDecision, 'allow');
-    assert.notEqual(run.results[0]?.exit_code, 0);
   } finally {
     resetLeaseInvalidations();
     rmSync(root, { recursive: true, force: true });

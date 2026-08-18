@@ -59,6 +59,11 @@ export interface LeaseContext {
   authoritySession?: AuthoritySessionContext;
   /** Injectable clock for lease expiry. */
   now?: Date | number;
+  /**
+   * True only when an OS sandbox will wrap arbitrary code. Defaults to false
+   * (fail closed). Host-user env stripping is not isolation.
+   */
+  isolationAvailable?: boolean;
 }
 
 export { actionRequestFromAction } from './actionRequest.js';
@@ -217,6 +222,9 @@ export function decideWithLease(
         return { decision: 'deny', reasonCode: 'DENY_MISSING_AUTHORITY' };
       }
       const decoded = decodeCommand(action.command);
+      if (decoded.capability === 'run_arbitrary_code') {
+        return { decision: 'deny', reasonCode: 'DENY_MISSING_AUTHORITY' };
+      }
       if (NO_LEASE_DENIED_SEMANTICS.has(decoded.semantic)) {
         return {
           decision: 'deny',
@@ -245,7 +253,16 @@ export function decideWithLease(
     return { decision: 'deny', reasonCode: 'DENY_MISSING_AUTHORITY' };
   }
 
-  const pdp = decideActionRequest(req, ctx.lease, now);
+  const pdp = decideActionRequest(
+    {
+      ...req,
+      ...(req.capability === 'run_arbitrary_code'
+        ? { isolationAvailable: ctx.isolationAvailable === true }
+        : {}),
+    },
+    ctx.lease,
+    now,
+  );
 
   emitAgentEvent({
     type: 'policy_decision',

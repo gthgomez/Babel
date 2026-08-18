@@ -410,6 +410,7 @@ const GATED_CAPABILITY_IDS: readonly CapabilityId[] = [
   'shared_history_rewrite',
   'force_push',
   'scope_expansion',
+  'run_arbitrary_code',
 ];
 
 /**

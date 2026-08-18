@@ -736,6 +736,10 @@ function decodeNonGit(tokens: string[], raw: string): DecodedCommand {
   const evalDecoded = decodeInterpreterEval(tokens);
   if (evalDecoded) return evalDecoded;
 
+  if (isArbitraryInterpreterInvocation(tokens)) {
+    return cmd('run_arbitrary_code', 'unrecognized');
+  }
+
   // Recognized safe/reversible local engineering (semantic stays
   // 'unrecognized' at the autonomy layer; the PDP/lease is the authority).
   return cmd('run_local_command', 'unrecognized');
@@ -752,7 +756,20 @@ const INTERPRETER_BASES = new Set([
   'deno',
   'tsx',
   'ts-node',
+  'bun',
 ]);
+
+const SCRIPT_FILE_RE = /\.(cjs|mjs|js|ts|tsx|jsx|py|rb|pl|ps1)$/i;
+
+function isArbitraryInterpreterInvocation(tokens: readonly string[]): boolean {
+  const base = (tokens[0] ?? '').replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase();
+  if (INTERPRETER_BASES.has(base)) return true;
+  if (base === 'pwsh' || base === 'powershell') {
+    return tokens.some((t) => t === '-File' || t === '-file' || SCRIPT_FILE_RE.test(t));
+  }
+  if (base === 'wscript' || base === 'cscript') return true;
+  return false;
+}
 
 function extractInterpreterEvalPayload(tokens: readonly string[]): string | null {
   const base = (tokens[0] ?? '').replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase();

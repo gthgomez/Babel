@@ -40,6 +40,11 @@ export interface ActionRequest {
   environment?: string;
   /** Concrete target (PR number, path, branch) when not a dest branch. */
   target?: string;
+  /**
+   * True only when an OS-level sandbox (currently Docker isolation) will
+   * actually wrap the child. Host-user execution is not isolation.
+   */
+  isolationAvailable?: boolean;
 }
 
 export interface PolicyDecision {
@@ -208,6 +213,8 @@ function denyConstraint(triggered: string[], rule: string): PolicyDecision {
  *   C repo-wide flag only: release, repo_admin, security_policy_change,
  *           credential_access, destructive_data_delete (no narrower
  *           target is reliably extractable without brittle parsing)
+ *   D fail-closed: run_arbitrary_code requires an OS sandbox; host-user
+ *           execution is never a grant path
  */
 function requireBoundTarget(
   raw: string | undefined,
@@ -307,6 +314,12 @@ function privilegedConstraintDecision(
         },
         branchAllowed,
       );
+    }
+    case 'run_arbitrary_code': {
+      if (request.isolationAvailable !== true) {
+        return denyConstraint(triggered, 'pdp.arbitrary_code_requires_isolation');
+      }
+      return null;
     }
     case 'scope_expansion': {
       if (c.scopeExpansion !== true) return denyConstraint(triggered, 'lease.constraints.scopeExpansion');

@@ -99,6 +99,7 @@ const LeaseSchema = z
       'shared_history_rewrite',
       'force_push',
       'scope_expansion',
+      'run_arbitrary_code',
     ]),
     forbidden: z.array(capabilityEnum).default(['expose_credentials']),
   })
