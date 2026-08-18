@@ -33,7 +33,12 @@ import { actionRequestFromAction, isControlAgentAction } from './actionRequest.j
 import { decodeCommand, isGatedGitPush, type CommandSemanticClass } from './commandDecoder.js';
 import type { ReasonCode } from './reasonCodes.js';
 import { checkBaseline, isAuthorityStatePath, isGovernancePath, repoRelativeFromCwd } from './integrity.js';
-import { CAPABILITY_KINDS, isPrivilegedCapability, isProtectedBranch } from './capabilities.js';
+import {
+  CAPABILITY_KINDS,
+  isPrivilegedCapability,
+  isProtectedBranch,
+  requestRequiresIsolation,
+} from './capabilities.js';
 
 const DEFAULT_PROTECTED_BRANCHES = ['main', 'master'] as const;
 
@@ -225,6 +230,16 @@ export function decideWithLease(
       if (decoded.capability === 'run_arbitrary_code') {
         return { decision: 'deny', reasonCode: 'DENY_MISSING_AUTHORITY' };
       }
+      if (
+        decoded.capability !== 'unknown' &&
+        requestRequiresIsolation({
+          capability: decoded.capability,
+          ...(decoded.requiresIsolation === true ? { requiresIsolation: true } : {}),
+        }) &&
+        ctx.isolationAvailable !== true
+      ) {
+        return { decision: 'deny', reasonCode: 'DENY_CAPABILITY_CONSTRAINT' };
+      }
       if (NO_LEASE_DENIED_SEMANTICS.has(decoded.semantic)) {
         return {
           decision: 'deny',
@@ -256,9 +271,7 @@ export function decideWithLease(
   const pdp = decideActionRequest(
     {
       ...req,
-      ...(req.capability === 'run_arbitrary_code'
-        ? { isolationAvailable: ctx.isolationAvailable === true }
-        : {}),
+      isolationAvailable: ctx.isolationAvailable === true,
     },
     ctx.lease,
     now,

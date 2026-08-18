@@ -165,7 +165,7 @@ test('conformance: destructive delete and deploy commands are gated', async () =
 test('conformance: local read / test / edit actions stay autonomous', async () => {
   ALLOWED(await dispatch({ type: 'read_file', path: 'src/index.ts' }));
   ALLOWED(await dispatch({ type: 'write_file', path: 'src/index.ts', content: 'x' }));
-  ALLOWED(await dispatch({ type: 'run_command', command: 'npm test' }));
+  DENIED(await dispatch({ type: 'run_command', command: 'npm test' }));
   ALLOWED(await dispatch({ type: 'run_command', command: 'git status' }));
   ALLOWED(await dispatch({ type: 'run_command', command: 'git commit -m "wip"' }));
 });

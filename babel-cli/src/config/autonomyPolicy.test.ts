@@ -80,7 +80,10 @@ test('defaultLeaseForAutonomyClass: determinism and leaseId override', () => {
 test('PDP: class leases decide their contract', () => {
   // A: local allow, publication deny (not in lease).
   const a = leaseFor('A');
-  assert.equal(decideActionRequest({ capability: 'run_tests' }, a).outcome, 'allow');
+  assert.equal(
+    decideActionRequest({ capability: 'run_tests', isolationAvailable: true }, a).outcome,
+    'allow',
+  );
   assert.equal(
     decideActionRequest({ capability: 'push_feature_branch', destinationBranch: 'feat/x' }, a)
       .outcome,

@@ -22,6 +22,7 @@ function fromParsedCommand(command: string): ActionRequest {
     ...(parsed.environment !== undefined ? { environment: parsed.environment } : {}),
     force: parsed.force,
     delete: parsed.delete,
+    ...(parsed.requiresIsolation === true ? { requiresIsolation: true } : {}),
   };
 }
 
@@ -54,7 +55,7 @@ export function actionRequestFromAction(action: AgentAction): ActionRequest | nu
       ) {
         return decoded;
       }
-      return { ...decoded, capability: 'run_tests' };
+      return { ...decoded, capability: 'run_tests', requiresIsolation: true };
     }
     case 'run_command':
       return fromParsedCommand(action.command);

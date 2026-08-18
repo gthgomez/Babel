@@ -28,6 +28,8 @@ export interface ParsedGitCommand {
   environment?: string;
   /** Set when the raw command was unparseable but privileged-looking. */
   ambiguous?: boolean;
+  /** True when execution runs repository-controlled code and needs a sandbox. */
+  requiresIsolation?: boolean;
 }
 
 /** Decode a command string into a structured ParsedGitCommand (fail-closed). */
@@ -43,5 +45,6 @@ export function parseGitCommand(cmd: string): ParsedGitCommand {
     ...(decoded.target !== undefined ? { target: decoded.target } : {}),
     ...(decoded.environment !== undefined ? { environment: decoded.environment } : {}),
     ...(decoded.ambiguous === true ? { ambiguous: true } : {}),
+    ...(decoded.requiresIsolation === true ? { requiresIsolation: true } : {}),
   };
 }

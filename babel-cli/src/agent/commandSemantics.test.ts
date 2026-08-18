@@ -31,7 +31,7 @@ test('classifyCommandSemantics: local read/test/write stay local', () => {
   assert.equal(classifyCommandSemantics('npm test'), 'test_local');
   assert.equal(classifyCommandSemantics('npx jest --runInBand'), 'test_local');
   assert.equal(classifyCommandSemantics('pytest tests/unit'), 'test_local');
-  assert.equal(classifyCommandSemantics('npm run build'), 'write_local_reversible');
+  assert.equal(classifyCommandSemantics('npm run build'), 'test_local');
   assert.equal(classifyCommandSemantics('git commit -m "fix"'), 'git_commit');
   assert.equal(classifyCommandSemantics('rm build/out.js'), 'delete_local');
   assert.equal(classifyCommandSemantics('node scripts/fix.mjs'), 'unrecognized');

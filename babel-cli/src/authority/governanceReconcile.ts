@@ -133,7 +133,8 @@ export function snapshotGovernanceBytes(
       if (entry.kind !== 'file' && entry.kind !== 'missing' && entry.kind !== 'symlink') continue;
       addAbs(join(repoRoot, entry.path), entry.path);
     }
-  } catch {
+  } catch (err) {
+    if (err instanceof ProtectedInspectError) throw err;
     /* baseline walk can fail on a temp tree — still snapshot extras */
   }
 

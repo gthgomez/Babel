@@ -17,7 +17,7 @@
  *    decode to gated/forbidden capabilities.
  */
 
-import type { CapabilityId } from './capabilities.js';
+import { CAPABILITY_KINDS, type CapabilityId } from './capabilities.js';
 
 // ─── Taxonomy (single source; commandSemantics.ts re-exports) ───────────────
 
@@ -87,6 +87,11 @@ export interface DecodedCommand {
   environment?: string;
   /** Set when the raw command was unparseable but privileged-looking. */
   ambiguous?: boolean;
+  /**
+   * True when execution runs repository-controlled code (test/build runners,
+   * package scripts, interpreter eval). PDP/executor require an OS sandbox.
+   */
+  requiresIsolation?: boolean;
 }
 
 // ─── Lexer ──────────────────────────────────────────────────────────────────
@@ -335,7 +340,7 @@ const DANGEROUS_TOOL_PATTERNS: Array<{ re: RegExp; capability: CapabilityId; sem
 ];
 
 const TEST_RUNNER_RE =
-  /^(?:pytest|npx\s+jest|npx\s+vitest|npx\s+mocha|cargo\s+test|go\s+test|dotnet\s+test|node\s+--test|tsx\s+--test|npm\s+test|npm\s+run\s+test)/i;
+  /^(?:pytest|python3?\s+-m\s+pytest|npx\s+jest|npx\s+vitest|npx\s+mocha|jest\b|vitest\b|mocha\b|cargo\s+test|go\s+test|dotnet\s+test|node\s+--test|tsx\s+--test|npm\s+test|npm\s+run\s+test|pnpm\s+(?:run\s+)?test|yarn\s+(?:run\s+)?test)/i;
 const BUILD_RE =
   /^(?:npm\s+run\s+build|pnpm\s+run\s+build|yarn\s+build|cargo\s+build|go\s+build|dotnet\s+build|make(?:\s|$))/i;
 const LINT_RE =
@@ -694,16 +699,24 @@ function decodeNonGit(tokens: string[], raw: string): DecodedCommand {
     }
   }
 
-  // Test / build / lint / typecheck runners.
-  if (TEST_RUNNER_RE.test(raw)) return cmd('run_tests', 'test_local');
-  if (TYPECHECK_RE.test(raw)) return cmd('run_typecheck', 'test_local');
-  if (LINT_RE.test(raw)) return cmd('run_lint', 'test_local');
-  if (BUILD_RE.test(raw)) return cmd('run_build', 'test_local');
+  // Interpreter eval is a capability floor. Detect it before test/build
+  // runners so `node -e "/* npm test */"` cannot downgrade to run_tests.
+  const evalDecoded = decodeInterpreterEval(tokens);
+  if (evalDecoded) return evalDecoded;
 
-  // Package managers.
+  // Test / build / lint / typecheck runners execute repository-controlled
+  // code. Capability stays local for lease usability; execution is isolated.
+  if (TEST_RUNNER_RE.test(raw)) return cmd('run_tests', 'test_local', { requiresIsolation: true });
+  if (TYPECHECK_RE.test(raw)) return cmd('run_typecheck', 'test_local', { requiresIsolation: true });
+  if (LINT_RE.test(raw)) return cmd('run_lint', 'test_local', { requiresIsolation: true });
+  if (BUILD_RE.test(raw)) return cmd('run_build', 'test_local', { requiresIsolation: true });
+
+  // Package managers. Script/lifecycle execution is project code.
   if (base === 'npm' || base === 'pnpm' || base === 'yarn') {
-    if (/\b(install|add|ci|dlx)\b/i.test(raw)) return cmd('run_local_command', 'install_dependency');
-    return cmd('run_local_command', 'write_local_reversible');
+    if (/\b(install|add|ci|dlx)\b/i.test(raw)) {
+      return cmd('run_local_command', 'install_dependency', { requiresIsolation: true });
+    }
+    return cmd('run_local_command', 'write_local_reversible', { requiresIsolation: true });
   }
   if (base === 'pip' || base === 'pip3' || base === 'poetry' || base === 'uv') {
     if (/\b(install|add)\b/i.test(raw)) return cmd('run_local_command', 'install_dependency');
@@ -731,13 +744,8 @@ function decodeNonGit(tokens: string[], raw: string): DecodedCommand {
       : cmd('run_local_command', 'delete_local');
   }
 
-  if (TEST_RUNNER_RE.test(raw)) return cmd('run_tests', 'test_local');
-
-  const evalDecoded = decodeInterpreterEval(tokens);
-  if (evalDecoded) return evalDecoded;
-
   if (isArbitraryInterpreterInvocation(tokens)) {
-    return cmd('run_arbitrary_code', 'unrecognized');
+    return cmd('run_arbitrary_code', 'unrecognized', { requiresIsolation: true });
   }
 
   // Recognized safe/reversible local engineering (semantic stays
@@ -793,28 +801,48 @@ function extractEmbeddedToolCommands(payload: string): string[] {
   return found;
 }
 
+const KIND_RANK: Record<string, number> = {
+  local: 0,
+  publication: 1,
+  gated: 2,
+  forbidden: 3,
+};
+
+function capabilityKindRank(capability: CapabilityId | 'unknown'): number {
+  if (capability === 'unknown') return KIND_RANK.forbidden ?? 3;
+  return KIND_RANK[CAPABILITY_KINDS[capability]] ?? 0;
+}
+
 /**
- * node -e / python -c carriers must not become run_local_command when the
- * payload embeds a privileged git/gh/deploy command.
+ * Arbitrary-code carrier is a floor. Embedded privileged actions may
+ * escalate; embedded local/benign text must never downgrade.
+ */
+function escalateFromArbitraryFloor(floor: DecodedCommand, embedded: DecodedCommand): DecodedCommand {
+  const floorRank = capabilityKindRank(floor.capability);
+  const embeddedRank = capabilityKindRank(embedded.capability);
+  if (embeddedRank < floorRank) {
+    return { ...floor, requiresIsolation: true };
+  }
+  if (embeddedRank > floorRank) {
+    return { ...embedded, requiresIsolation: true };
+  }
+  const winner =
+    moreSevere(embedded.semantic, floor.semantic) === embedded.semantic ? embedded : floor;
+  return { ...winner, requiresIsolation: true };
+}
+
+/**
+ * node -e / python -c carriers are run_arbitrary_code at minimum. Embedded
+ * git/gh/deploy text may escalate; npm test / git status may not downgrade.
  */
 function decodeInterpreterEval(tokens: readonly string[]): DecodedCommand | null {
   const payload = extractInterpreterEvalPayload(tokens);
-  if (!payload) return null;
+  if (payload === null) return null;
+  const floor = cmd('run_arbitrary_code', 'unrecognized', { requiresIsolation: true });
   const embedded = extractEmbeddedToolCommands(payload);
-  let best: DecodedCommand | null = null;
+  let best = floor;
   for (const fragment of embedded) {
-    const decoded = decodeCommand(fragment);
-    if (
-      decoded.capability === 'run_local_command' &&
-      decoded.semantic === 'unrecognized'
-    ) {
-      continue;
-    }
-    if (best === null) {
-      best = decoded;
-      continue;
-    }
-    best = moreSevere(decoded.semantic, best.semantic) === decoded.semantic ? decoded : best;
+    best = escalateFromArbitraryFloor(best, decodeCommand(fragment));
   }
   return best;
 }

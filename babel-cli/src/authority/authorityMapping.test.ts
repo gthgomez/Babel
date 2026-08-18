@@ -143,7 +143,13 @@ describe('lease missing capability → DENY on shipped decideWithLease', () => {
       'allow',
     );
     assert.equal(decideWithLease({ type: 'read_file', path: 'a.ts' }, 'workspace_write', ctx).decision, 'allow');
-    assert.equal(decideWithLease({ type: 'test_run', command: 'npm test' }, 'workspace_write', ctx).decision, 'allow');
+    assert.equal(
+      decideWithLease({ type: 'test_run', command: 'npm test' }, 'workspace_write', {
+        ...ctx,
+        isolationAvailable: true,
+      }).decision,
+      'allow',
+    );
   });
 
   test('missing edit_task_files + governed str_replace → DENY', async () => {

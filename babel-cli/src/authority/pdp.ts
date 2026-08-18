@@ -18,6 +18,7 @@ import {
   isAllowedBranchPrefix,
   isPrivilegedCapability,
   isProtectedBranch,
+  requestRequiresIsolation,
 } from './capabilities.js';
 import { PolicyOutcome, ReasonCode } from './reasonCodes.js';
 import {
@@ -45,6 +46,11 @@ export interface ActionRequest {
    * actually wrap the child. Host-user execution is not isolation.
    */
   isolationAvailable?: boolean;
+  /**
+   * Decoder-set when the command executes repository-controlled code even
+   * if the capability label is local (package scripts, some runners).
+   */
+  requiresIsolation?: boolean;
 }
 
 export interface PolicyDecision {
@@ -192,6 +198,10 @@ export function decideActionRequest(
       reasonCode: 'VERIFY_BEFORE_PUBLICATION',
       rulesTriggered: triggered,
     };
+  }
+
+  if (requestRequiresIsolation(request) && request.isolationAvailable !== true) {
+    return denyConstraint(triggered, 'pdp.project_code_requires_isolation');
   }
 
   triggered.push('lease.allowedCapabilities');

@@ -104,6 +104,26 @@ export function isPrivilegedCapability(capability: CapabilityId): boolean {
 }
 
 /**
+ * Capabilities whose execution runs repository-controlled code (test/build
+ * runners, package scripts, interpreter eval). They stay lease-local for
+ * usability but require an OS sandbox — host-user execution is deny.
+ */
+export const PROJECT_CODE_CAPABILITIES: ReadonlySet<CapabilityId> = new Set([
+  'run_tests',
+  'run_build',
+  'run_lint',
+  'run_typecheck',
+  'run_arbitrary_code',
+]);
+
+export function requestRequiresIsolation(request: {
+  capability: CapabilityId;
+  requiresIsolation?: boolean;
+}): boolean {
+  return request.requiresIsolation === true || PROJECT_CODE_CAPABILITIES.has(request.capability);
+}
+
+/**
  * Protected-branch check: is `branch` in the lease's protected set (exact
  * match or prefix wildcard, e.g. "main", "release/*").
  */

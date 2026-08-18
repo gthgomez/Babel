@@ -131,9 +131,20 @@ describe('PDP decisions', () => {
   const lease = sampleLease();
 
   test('local capability in lease → ALLOW_SAFE_LOCAL', () => {
-    const d = decideActionRequest({ capability: 'run_tests' }, lease);
+    const d = decideActionRequest({ capability: 'inspect_repository' }, lease);
     assert.equal(d.outcome, 'allow');
     assert.equal(d.reasonCode, 'ALLOW_SAFE_LOCAL');
+  });
+
+  test('run_tests without isolation is DENY even when leased', () => {
+    const denied = decideActionRequest({ capability: 'run_tests' }, lease);
+    assert.equal(denied.outcome, 'deny');
+    assert.ok(denied.rulesTriggered.includes('pdp.project_code_requires_isolation'));
+    const allowed = decideActionRequest(
+      { capability: 'run_tests', isolationAvailable: true },
+      lease,
+    );
+    assert.equal(allowed.outcome, 'allow');
   });
 
   test('publication capability in lease → VERIFY_BEFORE_PUBLICATION', () => {
@@ -473,9 +484,20 @@ describe('wire: lease-aware dispatch composite', () => {
   });
 
   test('no lease → legacy behavior identical', () => {
-    const r = decideWithLease(runCmd('npm test'), 'workspace_write', { lease: null });
+    const r = decideWithLease(runCmd('git status'), 'workspace_write', { lease: null });
     assert.equal(r.decision, 'allow');
     assert.equal(r.reasonCode, '');
+  });
+
+  test('no lease: project-code runners require isolation', () => {
+    const denied = decideWithLease(runCmd('npm test'), 'workspace_write', { lease: null });
+    assert.equal(denied.decision, 'deny');
+    assert.equal(denied.reasonCode, 'DENY_CAPABILITY_CONSTRAINT');
+    const allowed = decideWithLease(runCmd('npm test'), 'workspace_write', {
+      lease: null,
+      isolationAvailable: true,
+    });
+    assert.equal(allowed.decision, 'allow');
   });
 
   test('no lease: protected-branch push is denied', () => {
@@ -509,9 +531,20 @@ describe('wire: lease-aware dispatch composite', () => {
   });
 
   test('routine local command with lease → allow', () => {
-    const r = decideWithLease(runCmd('npm test'), 'workspace_write', ctx);
+    const r = decideWithLease(runCmd('git status'), 'workspace_write', ctx);
     assert.equal(r.decision, 'allow');
     assert.equal(r.reasonCode, 'ALLOW_SAFE_LOCAL');
+  });
+
+  test('npm test with lease but no isolation → deny', () => {
+    const denied = decideWithLease(runCmd('npm test'), 'workspace_write', ctx);
+    assert.equal(denied.decision, 'deny');
+    assert.equal(denied.reasonCode, 'DENY_CAPABILITY_CONSTRAINT');
+    const allowed = decideWithLease(runCmd('npm test'), 'workspace_write', {
+      ...ctx,
+      isolationAvailable: true,
+    });
+    assert.equal(allowed.decision, 'allow');
   });
 
   test('git push feature branch → allow (verify at completion)', () => {
@@ -562,8 +595,8 @@ describe('wire: lease-aware dispatch composite', () => {
     assert.equal(r.reasonCode, 'DENY_MISSING_AUTHORITY');
   });
 
-  test('ordinary unclassified command (npm test) → allow (local)', () => {
-    const r = decideWithLease(runCmd('npm test'), 'workspace_write', ctx);
+  test('ordinary unclassified command (git status) → allow (local)', () => {
+    const r = decideWithLease(runCmd('git status'), 'workspace_write', ctx);
     assert.equal(r.decision, 'allow');
     assert.equal(r.reasonCode, 'ALLOW_SAFE_LOCAL');
   });

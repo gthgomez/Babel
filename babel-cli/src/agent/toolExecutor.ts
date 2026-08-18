@@ -53,7 +53,7 @@ import type { BaselineManifest } from '../authority/integrity.js';
 import { markSessionInvalidated, type AuthoritySessionContext } from '../authority/sessionContext.js';
 import type { ReasonCode } from '../authority/reasonCodes.js';
 import { actionRequestFromAction } from '../authority/actionRequest.js';
-import { CAPABILITY_KINDS } from '../authority/capabilities.js';
+import { CAPABILITY_KINDS, requestRequiresIsolation } from '../authority/capabilities.js';
 import {
   ProtectedInspectError,
   reconcileGovernanceAfterEffect,
@@ -645,6 +645,8 @@ export async function executeActionWithPolicy(
     baselineRepoRoot?: string;
     /** Injectable clock for lease expiry. */
     now?: Date | number;
+    /** Test seam: inject governance inspect/restore filesystem. */
+    governanceFs?: import('../authority/governanceReconcile.js').ReconcileFs;
     /** B2: final authorization check after policy/approval but before an effect ledger intent. */
     onDispatchAuthorized?: () => { allowed: boolean; message?: string };
     /** B2: invoked immediately before executor.execute after durable effect intent persistence. */
@@ -1044,6 +1046,7 @@ export async function executeActionWithPolicy(
       governanceSnapshot = snapshotGovernanceBytes(
         governanceRepoRoot,
         session?.persistPath ? [session.persistPath] : [],
+        ...(deps.governanceFs ? [deps.governanceFs] : []),
       );
     } catch (err) {
       if (err instanceof ProtectedInspectError) {
@@ -1072,7 +1075,7 @@ export async function executeActionWithPolicy(
   try {
     deps.onBeforeExecutorExecute?.();
     const mapped = actionRequestFromAction(action);
-    if (mapped?.capability === 'run_arbitrary_code' && deps.isolationAvailable !== true) {
+    if (mapped && requestRequiresIsolation(mapped) && deps.isolationAvailable !== true) {
       incrementBlocks(context.runId);
       return {
         action,
@@ -1082,7 +1085,9 @@ export async function executeActionWithPolicy(
             exit_code: 1,
             stdout: '',
             stderr:
-              '[DENY_CAPABILITY_CONSTRAINT] Arbitrary interpreter/script execution requires an OS sandbox; host-user execution is denied.',
+              mapped.capability === 'run_arbitrary_code'
+                ? '[DENY_CAPABILITY_CONSTRAINT] Arbitrary interpreter/script execution requires an OS sandbox; host-user execution is denied.'
+                : '[DENY_CAPABILITY_CONSTRAINT] Commands that execute repository-controlled code require an OS sandbox; host-user execution is denied.',
           },
         ],
         policyDecision: 'deny',
@@ -1097,11 +1102,36 @@ export async function executeActionWithPolicy(
       : await executor.execute(action, context, budget);
 
     if (governanceSnapshot && governanceRepoRoot) {
-      const recon = reconcileGovernanceAfterEffect({
-        repoRoot: governanceRepoRoot,
-        before: governanceSnapshot,
-        ...(session ? { session } : {}),
-      });
+      let recon: ReturnType<typeof reconcileGovernanceAfterEffect>;
+      try {
+        recon = reconcileGovernanceAfterEffect({
+          repoRoot: governanceRepoRoot,
+          before: governanceSnapshot,
+          ...(session ? { session } : {}),
+          ...(deps.governanceFs ? { fs: deps.governanceFs } : {}),
+        });
+      } catch (err) {
+        if (err instanceof ProtectedInspectError) {
+          incrementBlocks(context.runId);
+          if (session) markSessionInvalidated(session);
+          if (session?.lease) invalidateLease(session.lease.leaseId);
+          return {
+            action,
+            terminal: false,
+            results: [
+              {
+                exit_code: 1,
+                stdout: '',
+                stderr: `[DENY_POLICY_INTEGRITY_DRIFT] Governance inspect failed (${err.path}); session invalidated.`,
+              },
+            ],
+            policyDecision: 'deny',
+            policyBlocked: true,
+            reasonCode: 'DENY_POLICY_INTEGRITY_DRIFT',
+          };
+        }
+        throw err;
+      }
       if (recon.mutated) {
         incrementBlocks(context.runId);
         if (session?.lease) invalidateLease(session.lease.leaseId);

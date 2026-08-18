@@ -149,3 +149,134 @@ test('node script with only run_local_command is denied before it can run', asyn
   );
   assert.equal(wire.decision, 'deny');
 });
+
+function codingLease() {
+  const parsed = parseLeaseJson(
+    JSON.stringify({
+      version: 2,
+      leaseId: 'coding-esc',
+      scope: { repository: 'babel', remote: 'origin' },
+      allowedCapabilities: ['inspect_repository', 'edit_task_files', 'run_tests', 'run_local_command'],
+    }),
+  );
+  assert.ok(parsed.ok);
+  return parsed.lease;
+}
+
+test('interpreter eval keeps run_arbitrary_code floor over embedded benign text', () => {
+  const cases = [
+    'node -e "/* npm test */ console.log(1)"',
+    "node -e \"console.log('npm test')\"",
+    'node -e "/* git status */ console.log(1)"',
+    'python -c "import os; os.system(\'npm test\')"',
+  ];
+  for (const command of cases) {
+    const parsed = parseGitCommand(command);
+    assert.equal(parsed.capability, 'run_arbitrary_code', command);
+    assert.equal(parsed.requiresIsolation, true, command);
+  }
+});
+
+test('interpreter eval may escalate to privileged embedded action', () => {
+  const parsed = parseGitCommand('node -e "/* gh pr merge 88 */ console.log(1)"');
+  assert.equal(parsed.capability, 'merge');
+  assert.equal(parsed.requiresIsolation, true);
+  assert.equal(parsed.target, '88');
+});
+
+test('test runners stay run_tests but require isolation', () => {
+  for (const command of [
+    'node --test tmp/attack.test.js',
+    'pytest attack.py',
+    'npm test',
+    'npx jest',
+    'jest attack.test.js',
+  ]) {
+    const parsed = parseGitCommand(command);
+    assert.equal(parsed.capability, 'run_tests', command);
+    assert.equal(parsed.requiresIsolation, true, command);
+  }
+  assert.equal(parseGitCommand('npm run build').capability, 'run_build');
+  assert.equal(parseGitCommand('npm run build').requiresIsolation, true);
+});
+
+test('write + node --test cannot execute on unrestricted host', async () => {
+  resetLeaseInvalidations();
+  const root = mkdtempSync(join(tmpdir(), 'babel-node-test-esc-'));
+  roots.push(root);
+  mkdirSync(join(root, 'tmp'), { recursive: true });
+  const persistPath = join(root, 'runs/s1/authority-session.json');
+  mkdirSync(persistPath.replace(/[\\/][^\\/]+$/, ''), { recursive: true });
+  const session = establishAuthoritySession({
+    repoRoot: root,
+    lease: codingLease(),
+    persistPath,
+  });
+
+  let executed = false;
+  const executor = createToolExecutor({
+    executeTool: async (req: ToolCallRequest) => {
+      if (req.tool === 'file_write' && typeof req.path === 'string' && typeof req.content === 'string') {
+        writeFileSync(join(root, req.path), req.content);
+        return { exit_code: 0, stdout: 'wrote', stderr: '' };
+      }
+      if (req.tool === 'shell_exec') {
+        executed = true;
+        return { exit_code: 0, stdout: 'should-not-run', stderr: '' };
+      }
+      return { exit_code: 1, stdout: '', stderr: `unexpected tool ${req.tool}` };
+    },
+  });
+
+  const writeScript = await executeActionWithPolicy(
+    { type: 'write_file', path: 'tmp/attack.test.js', content: 'require("fs").writeFileSync("pwned","1")\n' },
+    'workspace_write',
+    { agentId: 'esc', runId: 'node-test-1', babelRoot: root },
+    { authoritySession: session, executor },
+  );
+  assert.equal(writeScript.policyBlocked, false, writeScript.results[0]?.stderr ?? 'write');
+
+  const run = await executeActionWithPolicy(
+    { type: 'run_command', command: 'node --test tmp/attack.test.js' },
+    'workspace_write',
+    { agentId: 'esc', runId: 'node-test-2', babelRoot: root },
+    { authoritySession: session, executor, baselineRepoRoot: root, baseline: buildBaseline(root) },
+  );
+  assert.equal(run.policyBlocked, true);
+  assert.equal(run.reasonCode, 'DENY_CAPABILITY_CONSTRAINT');
+  assert.equal(executed, false);
+});
+
+test('npm test cannot execute on unrestricted host', async () => {
+  resetLeaseInvalidations();
+  const root = mkdtempSync(join(tmpdir(), 'babel-npm-test-esc-'));
+  roots.push(root);
+  const persistPath = join(root, 'runs/s1/authority-session.json');
+  mkdirSync(persistPath.replace(/[\\/][^\\/]+$/, ''), { recursive: true });
+  const session = establishAuthoritySession({
+    repoRoot: root,
+    lease: codingLease(),
+    persistPath,
+  });
+
+  let executed = false;
+  const executor = createToolExecutor({
+    executeTool: async (req: ToolCallRequest) => {
+      if (req.tool === 'shell_exec') {
+        executed = true;
+        return { exit_code: 0, stdout: 'should-not-run', stderr: '' };
+      }
+      return { exit_code: 1, stdout: '', stderr: `unexpected tool ${req.tool}` };
+    },
+  });
+
+  const run = await executeActionWithPolicy(
+    { type: 'run_command', command: 'npm test' },
+    'workspace_write',
+    { agentId: 'esc', runId: 'npm-test-1', babelRoot: root },
+    { authoritySession: session, executor, baselineRepoRoot: root, baseline: buildBaseline(root) },
+  );
+  assert.equal(run.policyBlocked, true);
+  assert.equal(run.reasonCode, 'DENY_CAPABILITY_CONSTRAINT');
+  assert.equal(executed, false);
+});
