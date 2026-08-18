@@ -115,13 +115,32 @@ test('git program-launch forms fail closed', () => {
     'git rebase --gpg-sign HEAD~1',
     'git merge -S main',
     'git merge --gpg-sign main',
+    'git merge --edit feature',
     'git tag -s v1.0.0',
     'git tag -u KEY v1.0.0',
     'git tag --sign v1.0.0',
+    'git tag -a v1.0.0',
+    'git tag --annotate v1.0.0',
+    'git tag -e -a v1.0.0 -m release',
     'git push --signed origin HEAD',
     'git commit',
     'git commit --amend',
     'git commit -e -m x',
+    'git branch --edit-description',
+    'git branch --edit-description feat/x',
+    'git config -e',
+    'git config --edit',
+    'git config core.editor ./attack',
+    'git config --local sequence.editor ./attack',
+    'git config core.sshCommand ./attack',
+    'git config credential.helper ./attack',
+    'git config gpg.program ./attack',
+    'git config commit.gpgSign true',
+    'git config tag.gpgSign true',
+    'git config core.hooksPath .githooks',
+    'git config alias.x !./attack',
+    'git config --add alias.foo !calc',
+    'git config filter.lfs.smudge ./attack',
   ];
   for (const command of forbidden) {
     const p = parseGitCommand(command);
@@ -130,6 +149,13 @@ test('git program-launch forms fail closed', () => {
   }
   assert.equal(parseGitCommand('git commit -m x').capability, 'commit_ship_set');
   assert.equal(parseGitCommand('git rebase HEAD~1').capability, 'shared_history_rewrite');
+  assert.equal(parseGitCommand('git tag -a v1.0.0 -m release').capability, 'release');
+  assert.equal(parseGitCommand('git tag --annotate v1 --message=release').capability, 'release');
+  assert.equal(parseGitCommand('git tag v1.0.0').capability, 'release');
+  assert.equal(parseGitCommand('git branch feat/x').capability, 'create_task_branch');
+  assert.equal(parseGitCommand('git config user.email babel@example.com').capability, 'repo_admin');
+  assert.equal(parseGitCommand('git config --get core.editor').capability, 'repo_admin');
+  assert.equal(parseGitCommand('git merge feature').capability, 'merge');
 });
 
 test('package-manager install commands require isolation', () => {
@@ -312,6 +338,147 @@ test('authorized git commit -m cannot execute hooksPath or default hooks', async
   const seResult = se.shellExec('git commit -m second', root, 15_000);
   assert.equal(seResult.exit_code, 0, seResult.stderr);
   assert.equal(existsSync(join(root, 'HOOK_RAN')), false);
+});
+
+test('raw git merge feature is classified as merge but denied before spawn', async () => {
+  const parsed = parseLeaseJson(
+    JSON.stringify({
+      version: 2,
+      leaseId: 'merge-no-target',
+      scope: { repository: 'babel', remote: 'origin' },
+      allowedCapabilities: ['merge'],
+      constraints: { allowedPullRequests: [88], repositoryAdmin: true },
+    }),
+  );
+  assert.ok(parsed.ok);
+  const decoded = parseGitCommand('git merge feature');
+  assert.equal(decoded.capability, 'merge');
+  assert.equal(decoded.target, undefined);
+  const denied = decideActionRequest(
+    { capability: decoded.capability, ...(decoded.target !== undefined ? { target: decoded.target } : {}) },
+    parsed.lease,
+  );
+  assert.equal(denied.outcome, 'deny');
+  assert.ok(denied.rulesTriggered.includes('pdp.missing_pr_target'));
+
+  const root = mkdtempSync(join(tmpdir(), 'babel-merge-deny-'));
+  roots.push(root);
+  const persistPath = join(root, 'runs/s1/authority-session.json');
+  mkdirSync(dirname(persistPath), { recursive: true });
+  const session = establishAuthoritySession({ repoRoot: root, lease: parsed.lease, persistPath });
+  let executed = false;
+  const executor = createToolExecutor({
+    executeTool: async () => {
+      executed = true;
+      return { exit_code: 0, stdout: 'nope', stderr: '' };
+    },
+  });
+  const run = await executeActionWithPolicy(
+    { type: 'run_command', command: 'git merge feature' },
+    'workspace_write',
+    { agentId: 'merge', runId: 'merge-1', babelRoot: root },
+    { authoritySession: session, executor },
+  );
+  assert.equal(run.policyBlocked, true);
+  assert.equal(run.reasonCode, 'DENY_CAPABILITY_CONSTRAINT');
+  assert.equal(executed, false);
+});
+
+test('repo_admin cannot write execution-bearing Git config', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-git-cfg-'));
+  roots.push(root);
+  const persistPath = join(root, 'runs/s1/authority-session.json');
+  mkdirSync(dirname(persistPath), { recursive: true });
+  const parsed = parseLeaseJson(
+    JSON.stringify({
+      version: 2,
+      leaseId: 'repo-admin-poison',
+      scope: { repository: 'babel', remote: 'origin' },
+      allowedCapabilities: ['repo_admin', 'commit_ship_set'],
+      constraints: { repositoryAdmin: true },
+    }),
+  );
+  assert.ok(parsed.ok);
+  const session = establishAuthoritySession({ repoRoot: root, lease: parsed.lease, persistPath });
+  let executed = false;
+  const executor = createToolExecutor({
+    executeTool: async () => {
+      executed = true;
+      return { exit_code: 0, stdout: 'nope', stderr: '' };
+    },
+  });
+  const run = await executeActionWithPolicy(
+    { type: 'run_command', command: 'git config core.editor ./attack-editor' },
+    'workspace_write',
+    { agentId: 'cfg', runId: 'cfg-1', babelRoot: root },
+    { authoritySession: session, executor },
+  );
+  assert.equal(run.policyBlocked, true, run.results[0]?.stderr);
+  assert.equal(executed, false);
+});
+
+test('authorized git commit -m does not run a configured signer', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-git-sign-'));
+  roots.push(root);
+  const git = (args: string[]) =>
+    spawnSync('git', args, { cwd: root, encoding: 'utf-8', windowsHide: true });
+  assert.equal(git(['init']).status, 0);
+  assert.equal(git(['config', 'user.email', 'babel-test@example.com']).status, 0);
+  assert.equal(git(['config', 'user.name', 'Babel Test']).status, 0);
+  const signer = join(root, process.platform === 'win32' ? 'fake-gpg.cmd' : 'fake-gpg.sh');
+  const sentinel = join(root, 'SIGNER_RAN');
+  if (process.platform === 'win32') {
+    writeFileSync(signer, `@echo off\r\necho ran>"${sentinel}"\r\nexit /b 0\r\n`);
+  } else {
+    writeFileSync(signer, `#!/bin/sh\necho ran > "${sentinel}"\nexit 0\n`);
+    chmodSync(signer, 0o755);
+  }
+  assert.equal(git(['config', 'commit.gpgSign', 'true']).status, 0);
+  assert.equal(git(['config', 'gpg.program', signer]).status, 0);
+  writeFileSync(join(root, 'signed.txt'), 'content\n');
+  assert.equal(git(['add', 'signed.txt']).status, 0);
+
+  const hardened = hardenGitHostEnvironment({ PATH: process.env['PATH'], HOME: process.env['HOME'] });
+  assert.equal(hardened.GIT_CONFIG_KEY_1, 'commit.gpgSign');
+  assert.equal(hardened.GIT_CONFIG_VALUE_1, 'false');
+
+  if (!process.env['BABEL_ALLOW_HOST_FALLBACK'] && process.env['BABEL_DOCKER_DISABLE'] !== 'true') {
+    process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+  }
+  const se = new SafeExecutor(root);
+  const result = se.shellExec('git commit -m signed', root, 15_000);
+  assert.equal(result.exit_code, 0, result.stderr);
+  assert.equal(existsSync(sentinel), false);
+});
+
+test('Git auxiliary-program surface is closed or deterministically suppressed', () => {
+  const mustForbid = [
+    'git branch --edit-description',
+    'git config --edit',
+    'git config -e',
+    'git config core.editor vim',
+    'git config alias.x !true',
+    'git tag -a v1',
+    'git tag --annotate v1',
+    'git tag -e -a v1 -m x',
+    'git rebase --exec true',
+    'git rebase -i HEAD',
+    'git commit',
+    'git commit -S -m x',
+  ];
+  for (const command of mustForbid) {
+    assert.equal(classifyExecutionRisk(command).executionRisk, 'forbidden', command);
+  }
+  const mustAllowDeterministic = [
+    ['git commit -m x', 'commit_ship_set'],
+    ['git tag -a v1 -m release', 'release'],
+    ['git branch feat/x', 'create_task_branch'],
+    ['git status', 'inspect_repository'],
+  ] as const;
+  for (const [command, capability] of mustAllowDeterministic) {
+    assert.equal(parseGitCommand(command).capability, capability, command);
+    assert.notEqual(classifyExecutionRisk(command).executionRisk, 'forbidden', command);
+  }
 });
 
 test('SafeExecutor denies gradlew test on host profile without authority stack', () => {

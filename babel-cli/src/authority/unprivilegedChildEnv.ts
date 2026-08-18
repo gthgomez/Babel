@@ -32,22 +32,36 @@ export function isUnprivilegedChildEnvActive(): boolean {
   return unprivilegedAls.getStore() === true;
 }
 
+function gitHostConfigOverrides(): NodeJS.ProcessEnv {
+  const hooksDir = babelEmptyHooksDir();
+  const noEditor = join(hooksDir, 'no-editor');
+  return {
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_MERGE_AUTOEDIT: 'no',
+    GIT_EDITOR: noEditor,
+    GIT_SEQUENCE_EDITOR: noEditor,
+    GIT_CONFIG_COUNT: '3',
+    GIT_CONFIG_KEY_0: 'core.hooksPath',
+    GIT_CONFIG_VALUE_0: hooksDir,
+    GIT_CONFIG_KEY_1: 'commit.gpgSign',
+    GIT_CONFIG_VALUE_1: 'false',
+    GIT_CONFIG_KEY_2: 'tag.gpgSign',
+    GIT_CONFIG_VALUE_2: 'false',
+  };
+}
+
 export function buildUnprivilegedChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const safe = getSafeEnv(env);
   const isolated = mkdtempSync(join(tmpdir(), 'babel-unpriv-gh-'));
   const emptyGitConfig = join(isolated, 'gitconfig.empty');
-  const hooksDir = babelEmptyHooksDir();
   return {
     ...safe,
     GH_CONFIG_DIR: isolated,
     GH_HOST: '',
     GIT_CONFIG_GLOBAL: emptyGitConfig,
     GIT_CONFIG_NOSYSTEM: '1',
-    GIT_TERMINAL_PROMPT: '0',
     GH_PROMPT_DISABLED: '1',
-    GIT_CONFIG_COUNT: '1',
-    GIT_CONFIG_KEY_0: 'core.hooksPath',
-    GIT_CONFIG_VALUE_0: hooksDir,
+    ...gitHostConfigOverrides(),
   };
 }
 
@@ -58,16 +72,13 @@ export function childEnvForSandbox(env: NodeJS.ProcessEnv = process.env): NodeJS
 /**
  * Git host hardening is independent of the unprivileged-local capability
  * wrapper. Publication/gated git (`commit`, `push`, `merge`, `tag`) must
- * still be unable to execute repo or user hooks. This only overrides
- * `core.hooksPath`; it does not strip HOME or credential helpers.
+ * still be unable to execute repo or user hooks or implicit signers.
+ * HOME and credential helpers stay intact so legitimate publication auth
+ * still works; execution-bearing Git config writes are denied separately.
  */
 export function hardenGitHostEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const hooksDir = babelEmptyHooksDir();
   return {
     ...env,
-    GIT_TERMINAL_PROMPT: '0',
-    GIT_CONFIG_COUNT: '1',
-    GIT_CONFIG_KEY_0: 'core.hooksPath',
-    GIT_CONFIG_VALUE_0: hooksDir,
+    ...gitHostConfigOverrides(),
   };
 }

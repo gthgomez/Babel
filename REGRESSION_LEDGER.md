@@ -64,7 +64,7 @@ provider-endpoint network. Full gate batch: **198 tests → 195 pass / 0 fail**.
 | L26 | `gh api -XPOST` attached form | RED | GREEN | GREEN | #86 |
 | L27 | `gh api … --method=POST` method after endpoint | RED | GREEN | GREEN | #86 |
 | L28 | `gh api GET` stays pr_inspect (safe control) | GREEN | GREEN | GREEN | — |
-| L29 | `git -C repo status` safe local inspect | RED | GREEN | GREEN | #86 |
+| L29 | `git -C` is forbidden (no lexical/symlink containment) | RED | GREEN | GREEN | #88 |
 | L30 | `grep something README.md` NOT credential | GREEN | GREEN | GREEN | — |
 | L31 | `Select-String normal.txt` NOT credential | GREEN | GREEN | GREEN | — |
 | L32 | `python -c "print(';')"` NOT credential | GREEN | GREEN | GREEN | — |

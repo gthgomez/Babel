@@ -167,6 +167,106 @@ function shortClusterHas(args: readonly string[], letter: string): boolean {
   return args.some((a) => re.test(a));
 }
 
+function gitHasMessageSource(args: readonly string[]): boolean {
+  return hasArg(
+    args,
+    (a) =>
+      a === '-m' ||
+      a === '--message' ||
+      a.startsWith('--message=') ||
+      a === '-F' ||
+      a === '--file' ||
+      a.startsWith('--file=') ||
+      a === '-C' ||
+      a === '--reuse-message' ||
+      a.startsWith('--reuse-message=') ||
+      a === '--fixup' ||
+      a.startsWith('--fixup=') ||
+      a === '--squash' ||
+      a.startsWith('--squash=') ||
+      (/^-[a-zA-Z]*m[a-zA-Z]*$/.test(a) && !a.startsWith('--')),
+  );
+}
+
+const GIT_CONFIG_VALUE_FLAGS = new Set(['--file', '-f', '--blob', '--type', '--default', '--comment']);
+const GIT_CONFIG_INSPECT_OR_UNSET = new Set([
+  '--get',
+  '--get-all',
+  '--get-regexp',
+  '--get-urlmatch',
+  '--list',
+  '-l',
+  '--unset',
+  '--unset-all',
+  '--remove-section',
+  '--rename-section',
+  '--name-only',
+  '--show-origin',
+  '--show-scope',
+]);
+
+const GIT_CONFIG_EXEC_EXACT = new Set([
+  'core.editor',
+  'sequence.editor',
+  'gui.editor',
+  'core.sshcommand',
+  'core.hookspath',
+  'credential.helper',
+  'gpg.program',
+  'core.fsmonitor',
+  'core.askpass',
+  'diff.external',
+  'diff.tool',
+  'merge.tool',
+  'interactive.difffilter',
+  'commit.gpgsign',
+  'tag.gpgsign',
+  'core.pager',
+]);
+
+function gitConfigWriteKey(args: readonly string[]): string | undefined {
+  const positionals: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === '--') {
+      positionals.push(...args.slice(i + 1));
+      break;
+    }
+    if (GIT_CONFIG_INSPECT_OR_UNSET.has(a) || a.startsWith('--get') || a.startsWith('--list')) {
+      return undefined;
+    }
+    if (GIT_CONFIG_VALUE_FLAGS.has(a)) {
+      i += 1;
+      continue;
+    }
+    if (
+      a.startsWith('--file=') ||
+      a.startsWith('--blob=') ||
+      a.startsWith('--type=') ||
+      a.startsWith('--default=') ||
+      a.startsWith('--comment=')
+    ) {
+      continue;
+    }
+    if (a.startsWith('-') && a !== '-') continue;
+    positionals.push(a);
+  }
+  return positionals[0];
+}
+
+function isExecutionBearingGitConfigKey(key: string): boolean {
+  const lower = key.toLowerCase();
+  if (GIT_CONFIG_EXEC_EXACT.has(lower)) return true;
+  if (lower.startsWith('alias.')) return true;
+  if (lower.startsWith('pager.')) return true;
+  if (/^filter\.[^.]+\.(clean|smudge|process)$/.test(lower)) return true;
+  if (/^(mergetool|difftool)\.[^.]+\.cmd$/.test(lower)) return true;
+  if (/^credential\.[^.]+\.helper$/.test(lower)) return true;
+  if (/^submodule\.[^.]+\.update$/.test(lower)) return true;
+  if (/^remote\.[^.]+\.(uploadpack|receivepack|vcs)$/.test(lower)) return true;
+  return false;
+}
+
 /**
  * Git authority grants Git effects, not auxiliary-program execution.
  * Multi-capability combinations (rebase + run_arbitrary_code) are out of
@@ -204,12 +304,32 @@ function gitAuxiliaryProgramReason(verb: string, args: readonly string[]): strin
     ) {
       return 'git_sign_denied';
     }
+    if (hasArg(args, (a) => a === '-e' || a === '--edit')) {
+      return 'git_editor_denied';
+    }
+    const annotating = hasArg(
+      args,
+      (a) => a === '-a' || a === '--annotate' || a.startsWith('--annotate=') || /^-[a-zA-Z]*a[a-zA-Z]*$/.test(a),
+    );
+    if (annotating && !gitHasMessageSource(args)) return 'git_editor_denied';
   }
   if (verb === 'push' && hasArg(args, (a) => a === '--signed' || a.startsWith('--signed='))) {
     return 'git_sign_denied';
   }
   if (verb === 'merge' && hasArg(args, (a) => a === '-e' || a === '--edit')) {
     return 'git_editor_denied';
+  }
+  if (verb === 'branch' && hasArg(args, (a) => a === '--edit-description' || a.startsWith('--edit-description='))) {
+    return 'git_editor_denied';
+  }
+  if (verb === 'config') {
+    if (hasArg(args, (a) => a === '-e' || a === '--edit')) {
+      return 'git_editor_denied';
+    }
+    const key = gitConfigWriteKey(args);
+    if (key && isExecutionBearingGitConfigKey(key)) {
+      return 'git_config_exec_denied';
+    }
   }
   if (verb === 'commit') {
     if (
@@ -228,25 +348,7 @@ function gitAuxiliaryProgramReason(verb: string, args: readonly string[]): strin
     ) {
       return 'git_editor_denied';
     }
-    const hasMessage = hasArg(
-      args,
-      (a) =>
-        a === '-m' ||
-        a === '--message' ||
-        a.startsWith('--message=') ||
-        a === '-F' ||
-        a === '--file' ||
-        a.startsWith('--file=') ||
-        a === '-C' ||
-        a === '--reuse-message' ||
-        a.startsWith('--reuse-message=') ||
-        a === '--fixup' ||
-        a.startsWith('--fixup=') ||
-        a === '--squash' ||
-        a.startsWith('--squash=') ||
-        (/^-[a-zA-Z]*m[a-zA-Z]*$/.test(a) && !a.startsWith('--')),
-    );
-    if (!hasMessage) return 'git_editor_denied';
+    if (!gitHasMessageSource(args)) return 'git_editor_denied';
   }
   return undefined;
 }
