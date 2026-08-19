@@ -19,7 +19,10 @@ import {
   type ToolExecutionBudget,
   type ToolExecutor,
 } from './toolExecutor.js';
-import { decideAction, type PermissionPreset } from './policy.js';
+import type { PermissionPreset } from './policy.js';
+import type { AuthoritySessionContext } from '../authority/sessionContext.js';
+import type { AutonomyLease } from '../authority/lease.js';
+import type { BaselineManifest } from '../authority/integrity.js';
 
 export interface StrReplaceInput {
   file_path: string;
@@ -64,6 +67,10 @@ export async function governedStrReplace(
     onAskApproval?: (action: AgentAction) => Promise<boolean>;
     onDispatchAuthorized?: () => { allowed: boolean; message?: string };
     onBeforeExecutorExecute?: () => void;
+    authoritySession?: AuthoritySessionContext;
+    lease?: AutonomyLease | null;
+    baseline?: BaselineManifest;
+    baselineRepoRoot?: string;
   },
 ): Promise<GovernedStrReplaceResult> {
   const preset = options.preset ?? 'workspace_write';
@@ -152,7 +159,11 @@ export async function governedStrReplace(
         ...(options.onAskApproval ? { onAskApproval: options.onAskApproval } : {}),
         ...(options.onDispatchAuthorized ? { onDispatchAuthorized: options.onDispatchAuthorized } : {}),
         ...(options.onBeforeExecutorExecute ? { onBeforeExecutorExecute: options.onBeforeExecutorExecute } : {}),
-        decide: decideAction,
+        ...(options.authoritySession ? { authoritySession: options.authoritySession } : {}),
+        ...(options.lease !== undefined ? { lease: options.lease } : {}),
+        ...(options.baseline && options.baselineRepoRoot
+          ? { baseline: options.baseline, baselineRepoRoot: options.baselineRepoRoot }
+          : {}),
       },
     );
   } finally {

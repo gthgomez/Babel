@@ -43,6 +43,35 @@ import type { AgentAction } from './actions.js';
 import { modelToolNameToExecutor } from './canonicalToolMapping.js';
 import { emitAgentEvent } from './events.js';
 import { decideAction, type PermissionDecision, type PermissionPreset } from './policy.js';
+import { commandTextForAction, isCredentialTargetPath } from './autonomyEnforcement.js';
+// Shared patch-target parser — one extractor for path-jail validation here
+// and governance integrity checking in authority/wire.ts.
+import { extractPatchRawTargets, extractPatchTargets } from '../authority/patchTargets.js';
+import { loadLeaseFromEnv, type AutonomyLease } from '../authority/lease.js';
+import { decideWithLease, invalidateLease, type LeaseContext } from '../authority/wire.js';
+import type { BaselineManifest } from '../authority/integrity.js';
+import { markSessionInvalidated, type AuthoritySessionContext } from '../authority/sessionContext.js';
+import type { ReasonCode } from '../authority/reasonCodes.js';
+import { actionRequestFromAction } from '../authority/actionRequest.js';
+import { CAPABILITY_KINDS, requestRequiresIsolation } from '../authority/capabilities.js';
+import {
+  ProtectedInspectError,
+  reconcileGovernanceAfterEffect,
+  snapshotGovernanceBytes,
+} from '../authority/governanceReconcile.js';
+import { runWithUnprivilegedChildEnv } from '../authority/unprivilegedChildEnv.js';
+import { classifyAutonomyAction } from '../config/autonomyPolicy.js';
+
+/**
+ * Active lease, cached for the process lifetime. A broken lease env fails
+ * LOUD at the first decision (fail-closed) rather than silently degrading.
+ */
+let cachedLease: AutonomyLease | null | undefined;
+function activeLease(): AutonomyLease | null {
+  if (cachedLease !== undefined) return cachedLease;
+  cachedLease = loadLeaseFromEnv();
+  return cachedLease;
+}
 
 const APPLY_PATCH_RELATIVE_PATH = '.babel-lite/apply.patch';
 
@@ -130,6 +159,8 @@ export interface ToolExecutionResult {
 export interface PolicyGatedExecutionResult extends ToolExecutionResult {
   policyDecision: PermissionDecision;
   policyBlocked: boolean;
+  /** Authority reason when decideWithLease influenced the decision. */
+  reasonCode?: ReasonCode | '';
   mutationPaths?: string[] | undefined;
   preBatchHash?: Record<string, string> | undefined;
   postBatchHash?: Record<string, string> | undefined;
@@ -175,19 +206,7 @@ function looksLikeTestCommand(command: string): boolean {
   );
 }
 
-// ─── Patch target extraction ─────────────────────────────────────────────
-
-/**
- * Parse unified diff headers to extract the set of files a patch would modify.
- * Returns absolute paths resolved against `projectRoot`, or empty array if
- * parsing fails (defense-in-depth: invalid patches are denied by validation
- * in executeActionWithPolicy, not here).
- */
-function extractPatchTargetPaths(patchContent: string, projectRoot: string): string[] {
-  return extractPatchRawTargets(patchContent).map((rawPath) =>
-    isAbsolute(rawPath) ? resolve(rawPath) : resolve(projectRoot, rawPath),
-  );
-}
+// ─── Patch target extraction (shared utility: authority/patchTargets.ts) ──
 
 /**
  * Validate patch content before application.
@@ -212,7 +231,7 @@ export function validatePatchContent(patchContent: string, projectRoot: string):
     violations.push('Patch contains no recognizable diff hunks');
   }
 
-  const targetPaths = extractPatchTargetPaths(patchContent, projectRoot);
+  const targetPaths = extractPatchTargets(patchContent, projectRoot);
   for (const target of targetPaths) {
     if (!isPathInside(projectRoot, target)) {
       violations.push(`Patch target outside project_root: ${target}`);
@@ -540,23 +559,6 @@ function pathsFromAgentAction(action: AgentAction): string[] {
   }
 }
 
-/**
- * Extract raw (unresolved) target paths from unified diff patch headers.
- * Returns paths as they appear in the diff (e.g. "src/file.ts" or "/absolute/path").
- * These are later resolved + validated by findOutOfScopeTarget / isPathInside.
- */
-function extractPatchRawTargets(patchContent: string): string[] {
-  const headerRe = /^[-+]{3}\s+([ab]\/)?(\S+)/gm;
-  const targets = new Set<string>();
-  let match: RegExpExecArray | null;
-  while ((match = headerRe.exec(patchContent)) !== null) {
-    const rawPath = match[2] ?? '';
-    if (!rawPath || rawPath === '/dev/null') continue;
-    targets.add(rawPath);
-  }
-  return [...targets];
-}
-
 function resolveScopedPath(projectRoot: string, rawPath: string): string {
   return isAbsolute(rawPath) ? resolve(rawPath) : resolve(projectRoot, rawPath);
 }
@@ -609,7 +611,10 @@ export async function executeActionWithPolicy(
     executor?: ToolExecutor;
     decide?: typeof decideAction;
     budget?: ToolExecutionBudget;
-    /** When policy returns `ask`, invoke this before blocking. Return true to execute. */
+    /**
+     * Compatibility-only: honored only when the PDP/legacy composite already
+     * returned `ask`. Cannot mint a capability the lease denied.
+     */
     onAskApproval?: (action: AgentAction) => Promise<boolean>;
     /** H4: optional completed idempotency keys for double-mutation deny. */
     completedIdempotencyKeys?: readonly string[];
@@ -627,6 +632,21 @@ export async function executeActionWithPolicy(
     hostFallbackAllowed?: boolean;
     /** H4: explicit idempotency key for this invocation (defaults from action). */
     idempotencyKey?: string;
+    /** V2 authority: explicit lease override (defaults to the env lease). */
+    lease?: AutonomyLease | null;
+    /**
+     * Frozen session authority. When present, lease + baseline come from this
+     * snapshot and per-call baseline refresh is ignored.
+     */
+    authoritySession?: AuthoritySessionContext;
+    /** V2 authority: policy-integrity baseline (tests / non-session callers). */
+    baseline?: BaselineManifest;
+    /** V2 authority: repo root used for baseline drift checks. */
+    baselineRepoRoot?: string;
+    /** Injectable clock for lease expiry. */
+    now?: Date | number;
+    /** Test seam: inject governance inspect/restore filesystem. */
+    governanceFs?: import('../authority/governanceReconcile.js').ReconcileFs;
     /** B2: final authorization check after policy/approval but before an effect ledger intent. */
     onDispatchAuthorized?: () => { allowed: boolean; message?: string };
     /** B2: invoked immediately before executor.execute after durable effect intent persistence. */
@@ -637,7 +657,44 @@ export async function executeActionWithPolicy(
   } = {},
 ): Promise<PolicyGatedExecutionResult> {
   const executor = deps.executor ?? defaultToolExecutor;
-  const decide = deps.decide ?? decideAction;
+  // V2 authority: the default decision path consults the PDP when a lease is
+  // active (env or explicit override). Additive — no lease → legacy behavior.
+  const session = deps.authoritySession;
+  const lease = session
+    ? session.lease
+    : deps.lease !== undefined
+      ? deps.lease
+      : activeLease();
+  // Session-owned snapshot wins. Per-call baseline is only for tests /
+  // non-session callers — it cannot refresh a live session context.
+  const baseline =
+    session
+      ? session.baseline
+        ? { repoRoot: session.repoRoot, manifest: session.baseline }
+        : undefined
+      : deps.baseline !== undefined && deps.baselineRepoRoot !== undefined
+        ? { repoRoot: deps.baselineRepoRoot, manifest: deps.baseline }
+        : undefined;
+  const leaseCtx: LeaseContext = {
+    lease,
+    ...(baseline ? { baseline } : {}),
+    ...(session?.repoRoot || context.babelRoot
+      ? { cwd: session?.repoRoot || context.babelRoot }
+      : {}),
+    ...(session ? { authoritySession: session } : {}),
+    ...(deps.now !== undefined ? { now: deps.now } : {}),
+    ...(deps.isolationAvailable !== undefined
+      ? { isolationAvailable: deps.isolationAvailable }
+      : {}),
+  };
+  let lastReasonCode: ReasonCode | '' = '';
+  const decide: typeof decideAction =
+    deps.decide ??
+    ((action, preset) => {
+      const r = decideWithLease(action, preset, leaseCtx);
+      lastReasonCode = r.reasonCode;
+      return r.decision;
+    });
   const budget = deps.budget ?? DEFAULT_TOOL_BUDGET;
 
   // ── H4 capability broker: classify + authorize before policy decide ──
@@ -712,7 +769,8 @@ export async function executeActionWithPolicy(
     }
   }
 
-  // ── Circuit-breaker: entry check ───────────────────────────────────
+  // ── Circuit-breaker: entry check (before the A–D layer — a tripped
+  // session must terminate, not re-enter per-class denial paths) ────────
   const limit = getCircuitBreakerLimit();
   const currentBlocks = sessionBlocks.get(context.runId) ?? 0;
   if (currentBlocks >= limit) {
@@ -739,6 +797,59 @@ export async function executeActionWithPolicy(
     };
   }
 
+  // ── Autonomy A–D classification (P0-A/C/D) ────────────────────────────
+  // The capability broker above classifies by tool NAME. This layer classifies
+  // by command SEMANTICS (run_command/test_run text) and by target PATH for
+  // credential stores, mapping onto the canonical A–D taxonomy:
+  //   Class D (credential exposure)   → deterministic deny, no approval path
+  //   Class C (privileged)            → lease/PDP only. Missing membership
+  //     is deny. TTY/CI is not authority.
+  // Class A/B actions pass through to the authority decide path unchanged
+  // (the lease-aware PDP composite below is the decision authority).
+  if (!isControlAction) {
+    const autonomyClass = classifyAutonomyAction(toolName, commandTextForAction(action));
+    const target = targetPathFromAction(action);
+    // apply_patch has no single target path — inspect the patch headers so a
+    // patch touching a credential store denies like a direct write_file.
+    const patchCredentialTargets =
+      action.type === 'apply_patch' ? extractPatchRawTargets(action.patch) : [];
+    const credentialTarget =
+      (target !== undefined && isCredentialTargetPath(target)) ||
+      patchCredentialTargets.some((t) => t !== undefined && isCredentialTargetPath(t));
+    if (autonomyClass === 'd_forbidden' || credentialTarget) {
+      incrementBlocks(context.runId);
+      emitAgentEvent({
+        type: 'policy_decision',
+        action: toolName,
+        decision: 'deny',
+        preset,
+        runId: context.runId,
+        agentId: context.agentId,
+        rule: 'AUTONOMY_CLASS_D',
+      });
+      return {
+        action,
+        terminal: isTerminalAgentAction(action),
+        results: [
+          {
+            exit_code: 1,
+            stdout: '',
+            stderr:
+              `[AUTONOMY_DENIED:CLASS_D] ` +
+              (credentialTarget
+                ? `Target path "${target}" is a credential store.`
+                : 'Command semantics expose credentials.') +
+              ' Class D actions require explicit exceptional operator instruction and are never auto-approved.',
+          },
+        ],
+        policyDecision: 'deny',
+        policyBlocked: true,
+      };
+    }
+    // Privileged (Class C) actions fall through to decideWithLease.
+    // Missing lease membership is DENY_MISSING_AUTHORITY, not ASK.
+  }
+
   let policyDecision = decide(action, preset);
   const policyDecisionId = randomUUID();
 
@@ -760,6 +871,7 @@ export async function executeActionWithPolicy(
       preset,
       runId: context.runId,
       agentId: context.agentId,
+      ...(lastReasonCode ? { rule: lastReasonCode } : {}),
     });
     return {
       action,
@@ -768,13 +880,16 @@ export async function executeActionWithPolicy(
         policyBlockedToolResult(
           action,
           policyDecision,
-          policyDecision === 'deny' && preset === 'ask_before_mutation'
-            ? 'User denied approval'
-            : undefined,
+          lastReasonCode
+            ? `Policy denied ${action.type}: ${lastReasonCode}`
+            : policyDecision === 'deny' && preset === 'ask_before_mutation'
+              ? 'User denied approval'
+              : undefined,
         ),
       ],
       policyDecision,
       policyBlocked: true,
+      ...(lastReasonCode ? { reasonCode: lastReasonCode } : {}),
     };
   }
 
@@ -844,7 +959,7 @@ export async function executeActionWithPolicy(
   if (action.type === 'write_file') {
     txPaths = [isAbsolute(action.path) ? action.path : resolve(process.cwd(), action.path)];
   } else if (action.type === 'apply_patch') {
-    txPaths = extractPatchTargetPaths(action.patch, projectRootForScope(preset) ?? resolve(process.cwd()));
+    txPaths = extractPatchTargets(action.patch, projectRootForScope(preset) ?? resolve(process.cwd()));
   }
 
   let batchTx: Awaited<ReturnType<typeof WorkspaceTransactionManager.beginBatch>> | null = null;
@@ -922,9 +1037,127 @@ export async function executeActionWithPolicy(
     }
   }
 
+  const mayMutateViaSubprocess =
+    action.type === 'run_command' || action.type === 'test_run' || action.type === 'apply_patch';
+  const governanceRepoRoot = session?.repoRoot || context.babelRoot;
+  let governanceSnapshot: ReturnType<typeof snapshotGovernanceBytes> | null = null;
+  if (mayMutateViaSubprocess && governanceRepoRoot) {
+    try {
+      governanceSnapshot = snapshotGovernanceBytes(
+        governanceRepoRoot,
+        session?.persistPath ? [session.persistPath] : [],
+        ...(deps.governanceFs ? [deps.governanceFs] : []),
+      );
+    } catch (err) {
+      if (err instanceof ProtectedInspectError) {
+        incrementBlocks(context.runId);
+        if (session) markSessionInvalidated(session);
+        if (session?.lease) invalidateLease(session.lease.leaseId);
+        return {
+          action,
+          terminal: false,
+          results: [
+            {
+              exit_code: 1,
+              stdout: '',
+              stderr: `[DENY_POLICY_INTEGRITY_DRIFT] Governance inspect failed (${err.path}); session invalidated.`,
+            },
+          ],
+          policyDecision: 'deny',
+          policyBlocked: true,
+          reasonCode: 'DENY_POLICY_INTEGRITY_DRIFT',
+        };
+      }
+      throw err;
+    }
+  }
+
   try {
     deps.onBeforeExecutorExecute?.();
-    const execution = await executor.execute(action, context, budget);
+    const mapped = actionRequestFromAction(action);
+    if (mapped && requestRequiresIsolation(mapped) && deps.isolationAvailable !== true) {
+      incrementBlocks(context.runId);
+      return {
+        action,
+        terminal: false,
+        results: [
+          {
+            exit_code: 1,
+            stdout: '',
+            stderr:
+              mapped.capability === 'run_arbitrary_code'
+                ? '[DENY_CAPABILITY_CONSTRAINT] Arbitrary interpreter/script execution requires an OS sandbox; host-user execution is denied.'
+                : '[DENY_CAPABILITY_CONSTRAINT] Commands that execute repository-controlled code require an OS sandbox; host-user execution is denied.',
+          },
+        ],
+        policyDecision: 'deny',
+        policyBlocked: true,
+        reasonCode: 'DENY_CAPABILITY_CONSTRAINT',
+      };
+    }
+    const isolateLocal =
+      mapped !== null && CAPABILITY_KINDS[mapped.capability] === 'local';
+    const execution = isolateLocal
+      ? await runWithUnprivilegedChildEnv(() => executor.execute(action, context, budget))
+      : await executor.execute(action, context, budget);
+
+    if (governanceSnapshot && governanceRepoRoot) {
+      let recon: ReturnType<typeof reconcileGovernanceAfterEffect>;
+      try {
+        recon = reconcileGovernanceAfterEffect({
+          repoRoot: governanceRepoRoot,
+          before: governanceSnapshot,
+          ...(session ? { session } : {}),
+          ...(deps.governanceFs ? { fs: deps.governanceFs } : {}),
+        });
+      } catch (err) {
+        if (err instanceof ProtectedInspectError) {
+          incrementBlocks(context.runId);
+          if (session) markSessionInvalidated(session);
+          if (session?.lease) invalidateLease(session.lease.leaseId);
+          return {
+            action,
+            terminal: false,
+            results: [
+              {
+                exit_code: 1,
+                stdout: '',
+                stderr: `[DENY_POLICY_INTEGRITY_DRIFT] Governance inspect failed (${err.path}); session invalidated.`,
+              },
+            ],
+            policyDecision: 'deny',
+            policyBlocked: true,
+            reasonCode: 'DENY_POLICY_INTEGRITY_DRIFT',
+          };
+        }
+        throw err;
+      }
+      if (recon.mutated) {
+        incrementBlocks(context.runId);
+        if (session?.lease) invalidateLease(session.lease.leaseId);
+        const restoreNote =
+          recon.failed.length > 0
+            ? `restore failed (${recon.failed.map((f) => f.reason).join(', ')}); session invalidated`
+            : 'restored and authority session invalidated';
+        return {
+          action,
+          terminal: false,
+          results: [
+            {
+              exit_code: 1,
+              stdout: '',
+              stderr:
+                `[DENY_POLICY_SELF_MUTATION] Subprocess mutated governance state ` +
+                `(${recon.changed.join(', ')}); ${restoreNote}.`,
+            },
+          ],
+          policyDecision: 'deny',
+          policyBlocked: true,
+          reasonCode: 'DENY_POLICY_SELF_MUTATION',
+        };
+      }
+    }
+
     const toolFailed = execution.results.some((result) => result.exit_code !== 0);
 
     if (toolFailed) {

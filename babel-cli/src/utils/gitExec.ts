@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { hardenGitHostEnvironment } from '../authority/unprivilegedChildEnv.js';
 
 export interface GitCommandResult {
   status: number | null;
@@ -43,7 +44,7 @@ export function buildGitEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Proces
     next['PATH'] = pathValue;
     next['Path'] = pathValue;
   }
-  return next;
+  return hardenGitHostEnvironment(next);
 }
 
 export function runGitCommand(

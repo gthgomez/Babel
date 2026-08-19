@@ -9,6 +9,7 @@ import { mkdirSync } from 'node:fs';
 import { readFile, writeFile, stat } from 'node:fs/promises';
 
 import { isBabelHeadlessEnv } from '../utils/envFlags.js';
+import { resolveClassCGateDecision } from './autonomyEnforcement.js';
 import { resolveProjectPath } from '../utils/projectPath.js';
 
 import { trace, SpanStatusCode, type Span } from '@opentelemetry/api';
@@ -65,7 +66,12 @@ import {
   resolveCompactionModelId,
 } from './chatCompaction.js';
 import { runChatEngineCompaction } from './compactionCommit.js';
-import { initLiveAuthorityOnEngine, projectEngineLiveSession, restoreEngineSessionEvents, engineCanMutateKey } from './chatEngineLiveSession.js';
+import { initLiveAuthorityOnEngine, projectEngineLiveSession, restoreEngineSessionEvents, engineCanMutateKey, evaluateSubmitTaskAuthorityHalt } from './chatEngineLiveSession.js';
+import {
+  AUTHORITY_SESSION_FILENAME,
+  establishAuthoritySession,
+  restoreAuthoritySession,
+} from '../authority/sessionContext.js';
 import { loadLiveSessionAuthorityStrict, persistLiveSessionAuthority } from './liveSessionBridge.js';
 import type { LiveSessionV1 } from './liveSession.js';
 import { applyHonestTaskOutcomeToCompletion, createFailureBudgetTrackerFromContract, type FailureClassBudgetTracker, type FailureCapsuleV1 } from './taskContract.js';
@@ -179,7 +185,6 @@ import { projectDurableToolBatch } from './toolExecutionIdentity.js';
 import { captureSessionEventAppendFailure } from './sessionEventDiagnostics.js';
 import { buildRepoMapPreamble } from './repoMapPreamble.js';
 import {
-  requestChatActionApproval,
   bindChatApprovalSession,
   getChatApprovalSession,
   setChatApprovalTurnId,
@@ -762,8 +767,13 @@ export class ChatEngine {
     }
     mkdirSync(this.engineRunDir, { recursive: true });
 
-    if (options.resumeExisting) this.parity.liveAuthority = loadLiveSessionAuthorityStrict(this.engineRunDir);
-    else initLiveAuthorityOnEngine({ parity: this.parity, options, taskClass: this.taskClass, executionProfile: this.executionProfile, engineRunDir: this.engineRunDir });
+    if (options.resumeExisting) {
+      this.parity.liveAuthority = loadLiveSessionAuthorityStrict(this.engineRunDir);
+      this.parity.authoritySession = restoreAuthoritySession({
+        repoRoot: options.projectRoot,
+        persistPath: join(this.engineRunDir, AUTHORITY_SESSION_FILENAME),
+      });
+    } else initLiveAuthorityOnEngine({ parity: this.parity, options, taskClass: this.taskClass, executionProfile: this.executionProfile, engineRunDir: this.engineRunDir });
     this.failureBudgetTracker = createFailureBudgetTrackerFromContract(this.parity.liveAuthority?.taskContract);
     // Crash-safe patch persistence: write-through recovery file.
     this.patchRecoveryPath = join(this.engineRunDir, 'patches.recovery.log');
@@ -1541,6 +1551,12 @@ export class ChatEngine {
     let allToolObservations = '';
 
     const resolvedIntent = runtime.taskIntent;
+
+    const authorityHalt = evaluateSubmitTaskAuthorityHalt(this.parity, userInput);
+    if (authorityHalt) {
+      yield authorityHalt;
+      return;
+    }
 
     // P1: open parity turn (loop + durable event log)
     const modelName =
@@ -3036,6 +3052,9 @@ export class ChatEngine {
       });
     }
     // P0-E: attach shadow later-succeeded summary before export (idempotent with buildResult).
+    // P0-F: wire the derived OutcomeDimensions — the real receipt (its `stale`
+    // flag was just refreshed against the live workspace by decideCompletion)
+    // and the completion-gate result (the final outcome IS the gate decision).
     recordPolicyShadowSessionOutcome(this.policyEventLog, {
       atTurn: this._turnIndex,
       hasSuccessfulMutation: hasMutation,
@@ -3045,6 +3064,8 @@ export class ChatEngine {
         verifierOk: this.lastVerifierReceipt?.exit_code === 0,
         requireVerifier: false,
         declaredBlocked: Boolean(extra?.blockedReport),
+        verifierReceipt: this.lastVerifierReceipt ?? null,
+        contractChecksPass: outcome === 'VERIFIED_COMPLETE' ? true : null,
       }),
       terminalOutcome: outcome,
     });
@@ -3880,8 +3901,9 @@ export class ChatEngine {
 
       // ── str_replace via governed mutation path (policy/checkpoint/cache) ──
       if (action.type === 'str_replace') {
-        const autoApprove =
-          isBabelHeadlessEnv() || process.env['BABEL_BENCHMARK_AUTO_APPROVE'] === '1';
+        const classC = resolveClassCGateDecision({
+          executionProfile: this.executionProfile,
+        });
         const gov = await governedStrReplace(
           { file_path: action.file_path, old_str: action.old_str, new_str: action.new_str },
           {
@@ -3891,11 +3913,10 @@ export class ChatEngine {
             executor: defaultToolExecutor,
             onDispatchAuthorized: () => recoveredAuthorization,
             onBeforeExecutorExecute: () => this.persistToolStartedAtExecutorDispatch(action, meta),
-            ...(autoApprove
-              ? { onAskApproval: async () => true }
-              : process.stdout.isTTY && !process.env['CI']
-                ? { onAskApproval: requestChatActionApproval }
-                : {}),
+            ...(this.parity.authoritySession
+              ? { authoritySession: this.parity.authoritySession }
+              : {}),
+            ...(classC === 'allow' ? { onAskApproval: async () => true } : {}),
           },
         );
 
@@ -4123,9 +4144,9 @@ export class ChatEngine {
 
       // Standard tool execution via policy gate
       const agentAction = mapChatActionToAgentAction(action);
-      const autoApproveMutations =
-        isBabelHeadlessEnv() ||
-        process.env['BABEL_BENCHMARK_AUTO_APPROVE'] === '1';
+      const classC = resolveClassCGateDecision({
+        executionProfile: this.executionProfile,
+      });
       const result: PolicyGatedExecutionResult = await executeActionWithPolicy(
         agentAction,
         // workspace_write = mutations auto-execute without user approval.
@@ -4154,14 +4175,15 @@ export class ChatEngine {
           ...(this.parity.liveAuthority?.taskContract.protected_paths
             ? { protectedPaths: this.parity.liveAuthority.taskContract.protected_paths }
             : {}),
+          ...(this.parity.authoritySession
+            ? { authoritySession: this.parity.authoritySession }
+            : {}),
           onDispatchAuthorized: () => this.recoveredOperationDispatchAuthorization(action),
           onBeforeExecutorExecute: () => this.persistToolStartedAtExecutorDispatch(action, meta),
+          // Privileged ops: lease/PDP decides. Benchmark pair is the only
+          // remaining auto-approve exception. TTY is not authority.
           ...this.isolationBrokerFlags(),
-          ...(autoApproveMutations
-            ? { onAskApproval: async () => true }
-            : process.stdout.isTTY && !process.env['CI']
-              ? { onAskApproval: requestChatActionApproval }
-              : {}),
+          ...(classC === 'allow' ? { onAskApproval: async () => true } : {}),
         }
       );
 
@@ -5205,12 +5227,17 @@ export class ChatEngine {
 
     // P0-E: if any kill-switch ran in shadow mode, record whether the task
     // later succeeded (mutation / coding-task gate) for precision/recall.
+    // P0-F: wire the derived OutcomeDimensions — the real receipt (its `stale`
+    // flag was just refreshed against the live workspace by decideCompletion)
+    // and the completion-gate result (authoritativeOutcome IS the gate decision).
     const codingPassed = isCodingTaskSuccess({
       terminalOutcome: authoritativeOutcome,
       hasSuccessfulMutation: hasMutation,
       verifierOk: this.lastVerifierReceipt?.exit_code === 0,
       requireVerifier: false,
       declaredBlocked: Boolean(finalBlockedReport),
+      verifierReceipt: this.lastVerifierReceipt ?? null,
+      contractChecksPass: authoritativeOutcome === 'VERIFIED_COMPLETE' ? true : null,
     });
     recordPolicyShadowSessionOutcome(this.policyEventLog, {
       atTurn: this._turnIndex,

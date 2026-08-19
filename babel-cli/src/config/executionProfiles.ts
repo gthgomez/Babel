@@ -141,7 +141,7 @@ const PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
     name: 'dev_local',
     dockerSandbox: false, // Performance-sensitive: avoid Docker overhead for local dev
     description:
-      'Local development profile with common language build tools enabled (host-local; no Docker; IndependentVerifier off by default).',
+      'Host-local profile without Docker. Intrinsic inspection commands only; project-code and container-only commands are denied. IndependentVerifier off by default.',
     commandAdditions: COMMON_LOCAL_BUILD_COMMANDS,
     allowedTools: [],
     disallowedTools: [],
@@ -150,8 +150,8 @@ const PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
         'Local development commands may be available; still prefer the smallest safe command set.',
       ],
       swe: [
-        'dev_local may use common project build tools such as pnpm, yarn, bun, cargo, go, dotnet, mvn, make, and cmake.',
-        'Do not install dependencies unless the task or approval flow explicitly requires it.',
+        'dev_local may run intrinsic host inspection commands (rg, git status, cat) without Docker.',
+        'Project-code execution (npm/cargo/go/java/gradle tests and builds) is denied without Docker isolation.',
       ],
       qa: ['Confirm local build-tool usage is necessary and bounded to the target project.'],
       executor: ['Use local build commands only when they directly verify the approved task.'],
@@ -307,7 +307,7 @@ const PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
     name: 'bench_local',
     dockerSandbox: false, // Performance-sensitive local benchmark profile
     description:
-      'Host-local bench sandbox: restricted tools (no web/mcp/shell_exec), high reasoning; IndependentVerifier off by default.',
+      'Host-local bench sandbox: intrinsic inspection only (no Docker). Project-code test/build commands are denied. IndependentVerifier off by default.',
     commandAdditions: COMMON_LOCAL_BUILD_COMMANDS,
     allowedTools: [
       'directory_list',

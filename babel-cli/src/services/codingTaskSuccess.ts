@@ -4,31 +4,38 @@
  * Coding-task success means a correct, verified (or explicitly unverified-with-patch)
  * outcome. Rich early BLOCKED artifacts are valuable diagnostics — they are never
  * treated as coding-task pass. See Codex harness parity plan P0-E and teardown HF-05.
+ *
+ * P0-F semantics note: the legacy `pass` verdict is "real completion with mutation
+ * (and verifier if required)". It is NOT synonymous with verified_success when
+ * `requireVerifier` is false — an UNVERIFIED_PATCH can legitimately be `pass`.
+ * Routing / eval consumers that need the verified dimension MUST use
+ * `classifyCodingTaskGateDetailed` (or `resolveOutcome`) so that
+ * generic_pass ≠ verified_success unless the contract defines them as equal.
  */
 
 import {
   isPassingOutcome,
   type TerminalOutcome,
 } from '../schemas/agentContracts.js';
+import {
+  dimensionsFromCodingTaskInput,
+  resolveOutcome,
+  type CodingTaskOutcomeInput,
+  type OutcomeLabel,
+} from './outcomeSemantics.js';
 
 /** Gate verdict for coding-task evaluation (not smoke-honesty). */
 export type CodingTaskGateVerdict = 'pass' | 'fail' | 'diagnostic';
 
-export interface CodingTaskSuccessInput {
-  /** Honest terminal outcome when available. */
-  terminalOutcome?: TerminalOutcome | null;
-  /** Legacy payload status (ANSWER_READY, BLOCKED, …). */
-  statusText?: string | null;
+/**
+ * Coding-task success input. Extends the canonical outcome source so the
+ * detailed classification can derive the P0-F dimensions from a real
+ * verifier receipt + workspace revision + completion-gate result instead of
+ * the bare `verifierOk` boolean (regression-gate O05/O06).
+ */
+export interface CodingTaskSuccessInput extends CodingTaskOutcomeInput {
   /** Agent answer / blocked narrative. */
   answerText?: string | null;
-  /** True when the session produced at least one successful file mutation. */
-  hasSuccessfulMutation: boolean;
-  /** Verifier commands passed when run. */
-  verifierOk?: boolean;
-  /** When true, verifierOk must be true for pass (default false → patch without verifier can pass). */
-  requireVerifier?: boolean;
-  /** Explicit blocked_report present. */
-  declaredBlocked?: boolean;
 }
 
 /**
@@ -108,4 +115,29 @@ export function classifyCodingTaskGate(input: CodingTaskSuccessInput): CodingTas
 /** Coding-task success predicate used by eval gates (never true for EARLY_BLOCK_RICH). */
 export function isCodingTaskSuccess(input: CodingTaskSuccessInput): boolean {
   return classifyCodingTaskGate(input) === 'pass';
+}
+
+/**
+ * P0-F: detailed coding-task classification exposing the canonical outcome
+ * dimensions (verified_success / false_completion / label) alongside the legacy
+ * verdict. Consumers that feed routing or evaluation statistics MUST use this
+ * (or resolveOutcome directly) so generic `pass` is never silently interpreted
+ * as verified_success.
+ */
+export function classifyCodingTaskGateDetailed(input: CodingTaskSuccessInput): {
+  verdict: CodingTaskGateVerdict;
+  verifiedSuccess: boolean;
+  falseCompletion: boolean;
+  label: OutcomeLabel;
+} {
+  const verdict = classifyCodingTaskGate(input);
+  const resolved = resolveOutcome(dimensionsFromCodingTaskInput(input));
+  // Keep the legacy verdict authoritative for the pass/fail/diagnostic gate and
+  // expose the canonical dimensions alongside it.
+  return {
+    verdict,
+    verifiedSuccess: resolved.verifiedSuccess,
+    falseCompletion: resolved.falseCompletion,
+    label: resolved.label,
+  };
 }

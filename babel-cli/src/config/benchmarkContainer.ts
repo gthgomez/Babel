@@ -2,6 +2,14 @@ import { spawnSync } from 'node:child_process';
 import { basename, join, relative, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { resolveExecutionProfile } from './executionProfiles.js';
+import { validateDockerIsolationArgs } from './dockerIsolationArgs.js';
+import { isProjectRelativeExecutable } from '../authority/commandSpec.js';
+import {
+  BABEL_CONTAINER_EMPTY_HOOKS_DIR,
+  BABEL_CONTAINER_NO_EDITOR,
+  babelEmptyHooksDir,
+  gitHostConfigOverrides,
+} from '../authority/unprivilegedChildEnv.js';
 
 export interface BenchmarkContainerCommandOptions {
   dockerImage: string;
@@ -252,6 +260,15 @@ export function evaluateGovernedIsolation(
     return { kind: 'host_profile', profile: profile.name };
   }
 
+  const extraArgs = validateDockerIsolationArgs(env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']);
+  if (!extraArgs.ok) {
+    return {
+      kind: 'fail_closed',
+      profile: profile.name,
+      reason: `unsafe BABEL_BENCHMARK_DOCKER_EXTRA_ARGS: ${extraArgs.reason}`,
+    };
+  }
+
   // Mirror shouldUseDockerSandbox against the provided env (testable without process pollution).
   const dockerDisabled = env['BABEL_DOCKER_DISABLE'] === 'true';
   const image = (dockerImage ?? env['BABEL_BENCHMARK_DOCKER_IMAGE'] ?? '').trim();
@@ -297,6 +314,9 @@ export function shouldUseDockerSandbox(
 ): boolean {
   // Explicit opt-out via env var
   if (process.env['BABEL_DOCKER_DISABLE'] === 'true') {
+    return false;
+  }
+  if (!validateDockerIsolationArgs().ok) {
     return false;
   }
 
@@ -366,9 +386,9 @@ function buildDockerRunCommonArgs(options: BenchmarkContainerCommandOptions): st
     '--security-opt=no-new-privileges',
   ];
 
-  const extraArgs = process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']?.trim();
-  if (extraArgs) {
-    args.push(...extraArgs.split(/\s+/).filter(Boolean));
+  const extra = validateDockerIsolationArgs();
+  if (extra.ok) {
+    args.push(...extra.args);
   }
 
   args.push(
@@ -376,19 +396,23 @@ function buildDockerRunCommonArgs(options: BenchmarkContainerCommandOptions): st
     `${dockerPath(options.projectRoot)}:/app`,
     '-w',
     containerWorkingDirectory(options.projectRoot, options.cwd),
-    options.dockerImage,
+    '-v',
+    `${dockerPath(babelEmptyHooksDir())}:${BABEL_CONTAINER_EMPTY_HOOKS_DIR}:ro`,
   );
+  const gitEnv = gitHostConfigOverrides({
+    hooksDir: BABEL_CONTAINER_EMPTY_HOOKS_DIR,
+    editorPath: BABEL_CONTAINER_NO_EDITOR,
+  });
+  for (const [key, value] of Object.entries(gitEnv)) {
+    if (value !== undefined) args.push('-e', `${key}=${value}`);
+  }
+  args.push(options.dockerImage);
 
   return args;
 }
 
 export function isBenchmarkProjectExecutableCommand(rawCommand: string): boolean {
-  const normalized = rawCommand.trim().replace(/\\/g, '/');
-  return (
-    normalized.startsWith('./') ||
-    normalized.startsWith('/project/') ||
-    normalized.startsWith('/app/')
-  );
+  return isProjectRelativeExecutable(rawCommand);
 }
 
 function shellQuote(value: string): string {

@@ -19,6 +19,12 @@ import {
   canMutateWithIdempotencyKey,
 } from './liveSessionBridge.js';
 import { paritySettleInterruptedOnResume } from './chatEngineParityBridge.js';
+import { AUTHORITY_SESSION_FILENAME, establishAuthoritySession } from '../authority/sessionContext.js';
+import {
+  evaluateSessionTaskGate,
+  type HumanEscalationResult,
+} from '../authority/taskClarity.js';
+import { join } from 'node:path';
 
 /** Minimal options slice — avoids circular import with chatEngine.ts. */
 export interface LiveAuthorityOptionsSlice {
@@ -42,6 +48,10 @@ export function initLiveAuthorityOnEngine(input: {
         : input.executionProfile === 'deep'
           ? 'deep'
           : 'chat';
+    input.parity.authoritySession = establishAuthoritySession({
+      repoRoot: input.options.projectRoot,
+      persistPath: join(input.engineRunDir, AUTHORITY_SESSION_FILENAME),
+    });
     input.parity.liveAuthority = resolveLiveSessionAuthority({
       mode,
       projectRoot: input.options.projectRoot,
@@ -56,6 +66,85 @@ export function initLiveAuthorityOnEngine(input: {
         : [],
     });
     persistLiveSessionAuthority(input.engineRunDir, input.parity.liveAuthority);
+    refreshTaskAuthorityGate(input.parity, input.options.task);
+}
+
+function looksLikeClarificationAnswer(
+  task: string,
+  pending: { capability: string; options?: string[] },
+): boolean {
+  const trimmed = task.trim();
+  if (pending.options?.some((opt) => opt.toLowerCase() === trimmed.toLowerCase())) return true;
+  if (pending.capability === 'merge' || pending.capability === 'pr_mark_ready') {
+    return /^#?\d+$/.test(trimmed);
+  }
+  if (pending.capability === 'production_deploy') {
+    return /^(production|prod|staging|stage)$/i.test(trimmed);
+  }
+  if (pending.capability === 'force_push') {
+    return /^(feat|fix)\//.test(trimmed);
+  }
+  return false;
+}
+
+export function refreshTaskAuthorityGate(
+  parity: ParityRuntime,
+  task: string,
+): HumanEscalationResult {
+  const pending = parity.pendingTaskClarification;
+  const usePending = pending !== undefined && looksLikeClarificationAnswer(task, pending);
+  const gate = evaluateSessionTaskGate({
+    task,
+    lease: parity.authoritySession?.lease ?? null,
+    ...(usePending && pending ? { pending } : {}),
+  });
+  parity.taskAuthorityGate = gate;
+  if (gate.kind === 'clarification' && gate.clarity.outcome === 'needs_clarification') {
+    const capability =
+      /deploy/i.test(task) ? 'production_deploy' : /force[-\s]?push/i.test(task) ? 'force_push' : 'merge';
+    parity.pendingTaskClarification = {
+      capability,
+      ...(gate.clarity.options ? { options: gate.clarity.options } : {}),
+    };
+  } else if (gate.kind !== 'clarification') {
+    delete parity.pendingTaskClarification;
+  }
+  return gate;
+}
+
+/** Non-null when ChatEngine must halt before tool dispatch. */
+export function taskAuthorityHaltMessage(gate: HumanEscalationResult | undefined): {
+  kind: 'clarification' | 'deny';
+  message: string;
+} | null {
+  if (!gate) return null;
+  if (gate.kind === 'clarification' && gate.clarity.outcome === 'needs_clarification') {
+    return { kind: 'clarification', message: gate.clarity.question };
+  }
+  if (gate.kind === 'deny') {
+    return { kind: 'deny', message: gate.reasonCode ?? 'DENY_MISSING_AUTHORITY' };
+  }
+  return null;
+}
+
+const ZERO_USAGE = {
+  totalCostUSD: 0,
+  totalInputTokens: 0,
+  totalOutputTokens: 0,
+  totalTokens: 0,
+  modelBreakdown: {},
+};
+
+/** Refresh the session gate and return a ChatEngine stream event when work must halt. */
+export function evaluateSubmitTaskAuthorityHalt(
+  parity: ParityRuntime,
+  task: string,
+): { type: 'failed'; error: string } | { type: 'done'; answer: string; usage: typeof ZERO_USAGE } | null {
+  const gate = refreshTaskAuthorityGate(parity, task);
+  const halt = taskAuthorityHaltMessage(gate);
+  if (!halt) return null;
+  if (halt.kind === 'deny') return { type: 'failed', error: halt.message };
+  return { type: 'done', answer: halt.message, usage: ZERO_USAGE };
 }
 
 export function projectEngineLiveSession(

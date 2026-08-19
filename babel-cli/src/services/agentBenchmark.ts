@@ -412,12 +412,19 @@ function scoreChatParityCell(input: {
   // Fix mode: triple-gate — agent must claim completion, verifier must pass, and files must be modified.
   // P0-E / HF-05: isCodingTaskSuccess rejects EARLY_BLOCK_RICH and empty-patch "passes".
   const mutationComplete = parityCorpusMutationComplete(input.corpusTask, input.projectRoot, input.verifierOk);
+  // P0-F: derive, don't extend — the corpus verifier is re-run by the harness
+  // against the FINAL workspace, so `verifierOk` here reflects a
+  // benchmark-owned authoritative receipt, never the agent's own claim.
   const codingOk = isCodingTaskSuccess({
     statusText: input.statusText,
     hasSuccessfulMutation: mutationComplete.ok,
     verifierOk: input.verifierOk,
     requireVerifier: true,
     declaredBlocked: false,
+    verifierReceipt: input.verifierOk
+      ? { exit_code: 0, authority: true, stale: false, boundRevision: null }
+      : null,
+    contractChecksPass: input.verifierOk ? true : null,
   });
   const success = claimedComplete && input.verifierOk && mutationComplete.ok && codingOk;
   const falseComplete = claimedComplete && mutationComplete.ok && !input.verifierOk;

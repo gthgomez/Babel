@@ -26,6 +26,7 @@ import {
   type ApprovalDecision,
   type ApprovalCapability,
 } from './approvalRequests.js';
+import { benchmarkAutoApproveEnabled } from './autonomyEnforcement.js';
 import { isBabelHeadlessEnv } from '../utils/envFlags.js';
 
 function asConversationalRenderer(
@@ -108,17 +109,18 @@ export async function requestChatActionApproval(action: AgentAction): Promise<bo
     return true;
   }
 
-  const headless =
-    isBabelHeadlessEnv() ||
-    !process.stdout.isTTY ||
-    process.env['CI'] === 'true' ||
-    process.env['BABEL_BENCHMARK_AUTO_APPROVE'] === '1';
+  // P0-4: benchmark auto-approve is valid ONLY when both
+  // BABEL_BENCHMARK_AUTO_APPROVE=1 and BABEL_BENCHMARK_MODE=1 are set, and it
+  // applies regardless of TTY state (a TTY benchmark run with MODE=1 is still
+  // a benchmark run). Headless/CI never establishes benchmark authority.
+  if (benchmarkAutoApproveEnabled()) {
+    applyApprovalDecision(_approvalSession, req, 'allow_once');
+    return true;
+  }
+
+  const headless = isBabelHeadlessEnv() || !process.stdout.isTTY || process.env['CI'] === 'true';
 
   if (headless) {
-    if (process.env['BABEL_BENCHMARK_AUTO_APPROVE'] === '1') {
-      applyApprovalDecision(_approvalSession, req, 'allow_once');
-      return true;
-    }
     const res = resolveApprovalHeadless(_approvalSession, req);
     return res.decision !== 'deny';
   }

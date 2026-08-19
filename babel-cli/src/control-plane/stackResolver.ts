@@ -293,6 +293,10 @@ const CATALOG_ID_ALIASES: Record<string, string> = {
   skill_godot_performance: 'skill_godot_performance_mobile',
   skill_android_tv_game: 'skill_android_tv_game_ux',
   overlay_terminal_bench_2: 'overlay_terminal_bench',
+  // Hallucinated adapter variants normalize to the canonical base adapter
+  // (the catalog ships adapter_codex / adapter_deepseek_balanced; the
+  // "_balanced" codex variant the LLM emits is a benchmark artifact).
+  adapter_codex_balanced: 'adapter_codex',
   behavioral_core_v10: 'behavioral_core_v11',
   behavioral_cognitive_micro_v7: 'behavioral_core_v11',
   behavioral_guard_v7: 'behavioral_core_v11',

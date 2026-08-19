@@ -1,6 +1,6 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { runGitCommand } from '../utils/gitExec.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -36,12 +36,7 @@ export interface GitFileStatus {
 // ─── Implementation ───────────────────────────────────────────────────────────
 
 function runGit(args: string[], cwd: string): { stdout: string; stderr: string; exitCode: number } {
-  const result = spawnSync('git', args, {
-    cwd,
-    encoding: 'utf-8',
-    timeout: 10_000,
-    windowsHide: true,
-  });
+  const result = runGitCommand(args, cwd, { timeoutMs: 10_000 });
   return {
     stdout: (result.stdout ?? '').trim(),
     stderr: (result.stderr ?? '').trim(),

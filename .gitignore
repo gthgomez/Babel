@@ -116,6 +116,8 @@ docs/audit/
 docs/critiques/
 docs/plans/
 docs/research/
-docs/status/
+# docs/status/audits/ is a tracked public audit chain; the rest of docs/status/ stays internal.
+docs/status/*
+!docs/status/audits/
 docs/guides/PARITY_BENCHMARK.md
 docs/OSS_DOCS_CRITIQUE_2026-08-01.md
