@@ -155,7 +155,8 @@ test('git program-launch forms fail closed', () => {
   assert.equal(parseGitCommand('git branch feat/x').capability, 'create_task_branch');
   assert.equal(parseGitCommand('git config user.email babel@example.com').capability, 'repo_admin');
   assert.equal(parseGitCommand('git config --get core.editor').capability, 'repo_admin');
-  assert.equal(parseGitCommand('git merge feature').capability, 'merge');
+  assert.equal(parseGitCommand('git merge --no-edit feature').capability, 'merge');
+  assert.equal(parseGitCommand('git merge feature').capability, 'unknown');
 });
 
 test('package-manager install commands require isolation', () => {
@@ -340,7 +341,7 @@ test('authorized git commit -m cannot execute hooksPath or default hooks', async
   assert.equal(existsSync(join(root, 'HOOK_RAN')), false);
 });
 
-test('raw git merge feature is classified as merge but denied before spawn', async () => {
+test('raw git merge feature is forbidden before spawn; --no-edit still needs a PR target', async () => {
   const parsed = parseLeaseJson(
     JSON.stringify({
       version: 2,
@@ -351,11 +352,14 @@ test('raw git merge feature is classified as merge but denied before spawn', asy
     }),
   );
   assert.ok(parsed.ok);
-  const decoded = parseGitCommand('git merge feature');
-  assert.equal(decoded.capability, 'merge');
-  assert.equal(decoded.target, undefined);
+  const raw = parseGitCommand('git merge feature');
+  assert.equal(raw.capability, 'unknown');
+  assert.equal(classifyExecutionRisk('git merge feature').reason, 'git_editor_denied');
+  const noEdit = parseGitCommand('git merge --no-edit feature');
+  assert.equal(noEdit.capability, 'merge');
+  assert.equal(noEdit.target, undefined);
   const denied = decideActionRequest(
-    { capability: decoded.capability, ...(decoded.target !== undefined ? { target: decoded.target } : {}) },
+    { capability: noEdit.capability, ...(noEdit.target !== undefined ? { target: noEdit.target } : {}) },
     parsed.lease,
   );
   assert.equal(denied.outcome, 'deny');
@@ -380,7 +384,6 @@ test('raw git merge feature is classified as merge but denied before spawn', asy
     { authoritySession: session, executor },
   );
   assert.equal(run.policyBlocked, true);
-  assert.equal(run.reasonCode, 'DENY_CAPABILITY_CONSTRAINT');
   assert.equal(executed, false);
 });
 
@@ -414,6 +417,16 @@ test('repo_admin cannot write execution-bearing Git config', async () => {
     { authoritySession: session, executor },
   );
   assert.equal(run.policyBlocked, true, run.results[0]?.stderr);
+  assert.equal(executed, false);
+
+  executed = false;
+  const includeRun = await executeActionWithPolicy(
+    { type: 'run_command', command: 'git config include.path ./evil.gitconfig' },
+    'workspace_write',
+    { agentId: 'cfg', runId: 'cfg-2', babelRoot: root },
+    { authoritySession: session, executor },
+  );
+  assert.equal(includeRun.policyBlocked, true, includeRun.results[0]?.stderr);
   assert.equal(executed, false);
 });
 
@@ -458,6 +471,13 @@ test('Git auxiliary-program surface is closed or deterministically suppressed', 
     'git config -e',
     'git config core.editor vim',
     'git config alias.x !true',
+    'git config include.path ./evil',
+    'git config includeIf.gitdir:/tmp.path ./evil',
+    'git config credential.https://github.com.helper !x',
+    'git config protocol.ext.allow always',
+    'git config core.gitProxy ./attack',
+    'git config --global user.email babel@example.com',
+    'git merge feature',
     'git tag -a v1',
     'git tag --annotate v1',
     'git tag -e -a v1 -m x',
@@ -465,15 +485,23 @@ test('Git auxiliary-program surface is closed or deterministically suppressed', 
     'git rebase -i HEAD',
     'git commit',
     'git commit -S -m x',
+    'env GIT_SSH_COMMAND=./attack git push origin feat/x',
+    'env -i git commit -m x',
   ];
   for (const command of mustForbid) {
     assert.equal(classifyExecutionRisk(command).executionRisk, 'forbidden', command);
   }
   const mustAllowDeterministic = [
     ['git commit -m x', 'commit_ship_set'],
+    ['git commit --amend --no-edit', 'shared_history_rewrite'],
     ['git tag -a v1 -m release', 'release'],
     ['git branch feat/x', 'create_task_branch'],
     ['git status', 'inspect_repository'],
+    ['git config user.email babel@example.com', 'repo_admin'],
+    ['git config --get core.editor', 'repo_admin'],
+    ['git config core.editor', 'repo_admin'],
+    ['git merge --no-edit feature', 'merge'],
+    ['env git status', 'inspect_repository'],
   ] as const;
   for (const [command, capability] of mustAllowDeterministic) {
     assert.equal(parseGitCommand(command).capability, capability, command);
@@ -621,7 +649,6 @@ const HOST_PROCESS_SURFACE = new Set([
   'services/worktreeIsolation.ts',
   'services/worktreeSafety.ts',
   'tools/auditUiTool.ts',
-  'tools/gitContext.ts',
   'tools/mcpTransport.ts',
   'tools/ripgrep.ts',
 ]);

@@ -32,9 +32,16 @@ export function isUnprivilegedChildEnvActive(): boolean {
   return unprivilegedAls.getStore() === true;
 }
 
-function gitHostConfigOverrides(): NodeJS.ProcessEnv {
-  const hooksDir = babelEmptyHooksDir();
-  const noEditor = join(hooksDir, 'no-editor');
+/** Bind-mount target so container Git sees the empty hooks dir. */
+export const BABEL_CONTAINER_EMPTY_HOOKS_DIR = '/babel-empty-hooks';
+export const BABEL_CONTAINER_NO_EDITOR = `${BABEL_CONTAINER_EMPTY_HOOKS_DIR}/no-editor`;
+
+export function gitHostConfigOverrides(opts?: {
+  hooksDir?: string;
+  editorPath?: string;
+}): NodeJS.ProcessEnv {
+  const hooksDir = opts?.hooksDir ?? babelEmptyHooksDir();
+  const noEditor = opts?.editorPath ?? join(hooksDir, 'no-editor');
   return {
     GIT_TERMINAL_PROMPT: '0',
     GIT_MERGE_AUTOEDIT: 'no',

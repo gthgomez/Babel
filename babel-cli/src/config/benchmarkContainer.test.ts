@@ -17,6 +17,10 @@ import {
   shouldUseDockerSandbox,
   getDockerUnavailableReason,
 } from './benchmarkContainer.js';
+import {
+  BABEL_CONTAINER_EMPTY_HOOKS_DIR,
+  BABEL_CONTAINER_NO_EDITOR,
+} from '../authority/unprivilegedChildEnv.js';
 
 test('benchmark container execution is gated by profile and docker image', () => {
   // Phase 3b requires isDockerAvailable() — enable for test
@@ -160,6 +164,39 @@ test('benchmark docker command mounts project at /app and preserves project exec
   const imageIdx = command.args.indexOf('example/task:latest');
   const tail = command.args.slice(imageIdx + 1);
   assert.deepEqual(tail, ['./cli_tool', 'weights.json', 'image.png']);
+});
+
+test('benchmark docker command injects Git host overlay into the container', () => {
+  const projectRoot = '/workspace/test/app';
+  const command = buildBenchmarkContainerCommand({
+    dockerImage: 'example/task:latest',
+    projectRoot,
+    cwd: projectRoot,
+    command: 'git commit -m signed',
+  });
+  const envPairs = new Map<string, string>();
+  for (let i = 0; i < command.args.length - 1; i++) {
+    if (command.args[i] === '-e') {
+      const pair = command.args[i + 1] ?? '';
+      const eq = pair.indexOf('=');
+      if (eq > 0) envPairs.set(pair.slice(0, eq), pair.slice(eq + 1));
+    }
+  }
+  assert.equal(envPairs.get('GIT_CONFIG_COUNT'), '3');
+  assert.equal(envPairs.get('GIT_CONFIG_KEY_1'), 'commit.gpgSign');
+  assert.equal(envPairs.get('GIT_CONFIG_VALUE_1'), 'false');
+  assert.equal(envPairs.get('GIT_CONFIG_KEY_2'), 'tag.gpgSign');
+  assert.equal(envPairs.get('GIT_CONFIG_VALUE_2'), 'false');
+  assert.equal(envPairs.get('GIT_CONFIG_VALUE_0'), BABEL_CONTAINER_EMPTY_HOOKS_DIR);
+  assert.equal(envPairs.get('GIT_EDITOR'), BABEL_CONTAINER_NO_EDITOR);
+  assert.equal(envPairs.get('GIT_MERGE_AUTOEDIT'), 'no');
+  const volumes = command.args
+    .map((arg, i) => (arg === '-v' ? command.args[i + 1] : undefined))
+    .filter((v): v is string => typeof v === 'string');
+  assert.ok(
+    volumes.some((v) => v.endsWith(`:${BABEL_CONTAINER_EMPTY_HOOKS_DIR}:ro`)),
+    `expected empty-hooks bind mount, got ${volumes.join(', ')}`,
+  );
 });
 
 test('benchmark docker command runs shell syntax inside the container shell', () => {

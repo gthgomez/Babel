@@ -184,6 +184,7 @@ function gitHasMessageSource(args: readonly string[]): boolean {
       a.startsWith('--fixup=') ||
       a === '--squash' ||
       a.startsWith('--squash=') ||
+      a === '--no-edit' ||
       (/^-[a-zA-Z]*m[a-zA-Z]*$/.test(a) && !a.startsWith('--')),
   );
 }
@@ -205,27 +206,40 @@ const GIT_CONFIG_INSPECT_OR_UNSET = new Set([
   '--show-scope',
 ]);
 
-const GIT_CONFIG_EXEC_EXACT = new Set([
-  'core.editor',
-  'sequence.editor',
-  'gui.editor',
-  'core.sshcommand',
-  'core.hookspath',
-  'credential.helper',
-  'gpg.program',
-  'core.fsmonitor',
-  'core.askpass',
-  'diff.external',
-  'diff.tool',
-  'merge.tool',
-  'interactive.difffilter',
-  'commit.gpgsign',
-  'tag.gpgsign',
-  'core.pager',
+/** Identity/hygiene keys only. Unknown writes fail closed (include.path, helpers, aliases). */
+const GIT_CONFIG_WRITE_ALLOWED = new Set([
+  'user.name',
+  'user.email',
+  'init.defaultbranch',
+  'core.autocrlf',
+  'core.filemode',
+  'core.ignorecase',
+  'core.longpaths',
+  'core.safecrlf',
+  'core.quotepath',
+  'pull.rebase',
+  'pull.ff',
+  'fetch.prune',
+  'color.ui',
 ]);
+
+function gitConfigHasExternalScope(args: readonly string[]): boolean {
+  return hasArg(
+    args,
+    (a) =>
+      a === '--global' ||
+      a === '--system' ||
+      a === '--file' ||
+      a === '-f' ||
+      a.startsWith('--file=') ||
+      a === '--blob' ||
+      a.startsWith('--blob='),
+  );
+}
 
 function gitConfigWriteKey(args: readonly string[]): string | undefined {
   const positionals: string[] = [];
+  let forceWrite = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a === '--') {
@@ -234,6 +248,10 @@ function gitConfigWriteKey(args: readonly string[]): string | undefined {
     }
     if (GIT_CONFIG_INSPECT_OR_UNSET.has(a) || a.startsWith('--get') || a.startsWith('--list')) {
       return undefined;
+    }
+    if (a === '--add' || a === '--replace-all' || a === '--replace-all=') {
+      forceWrite = true;
+      continue;
     }
     if (GIT_CONFIG_VALUE_FLAGS.has(a)) {
       i += 1;
@@ -251,20 +269,70 @@ function gitConfigWriteKey(args: readonly string[]): string | undefined {
     if (a.startsWith('-') && a !== '-') continue;
     positionals.push(a);
   }
-  return positionals[0];
+  if (positionals.length >= 2 || (forceWrite && positionals[0])) return positionals[0];
+  return undefined;
 }
 
-function isExecutionBearingGitConfigKey(key: string): boolean {
-  const lower = key.toLowerCase();
-  if (GIT_CONFIG_EXEC_EXACT.has(lower)) return true;
-  if (lower.startsWith('alias.')) return true;
-  if (lower.startsWith('pager.')) return true;
-  if (/^filter\.[^.]+\.(clean|smudge|process)$/.test(lower)) return true;
-  if (/^(mergetool|difftool)\.[^.]+\.cmd$/.test(lower)) return true;
-  if (/^credential\.[^.]+\.helper$/.test(lower)) return true;
-  if (/^submodule\.[^.]+\.update$/.test(lower)) return true;
-  if (/^remote\.[^.]+\.(uploadpack|receivepack|vcs)$/.test(lower)) return true;
-  return false;
+function isGitConfigWriteAllowed(key: string): boolean {
+  return GIT_CONFIG_WRITE_ALLOWED.has(key.toLowerCase());
+}
+
+const GIT_AUX_ENV_ASSIGNMENT = /^(GIT_|SSH_|GPG_|GNUPGHOME=)/i;
+
+function classifyEnvWrappedGit(
+  tokens: readonly string[],
+  repoRoot?: string,
+): ClassifiedInvocation | undefined {
+  if (normalizeExecutionBase(tokens[0] ?? '') !== 'env') return undefined;
+  const assignments: string[] = [];
+  let clearsEnvironment = false;
+  let i = 1;
+  while (i < tokens.length) {
+    const tok = tokens[i]!;
+    if (tok === '--') {
+      i += 1;
+      break;
+    }
+    if (tok.startsWith('-')) {
+      const flag = tok.toLowerCase();
+      if (flag === '-i' || flag === '--ignore-environment' || flag === '-0') {
+        clearsEnvironment = true;
+      }
+      if (flag === '-u' || flag === '--unset') {
+        const name = tokens[i + 1] ?? '';
+        if (GIT_AUX_ENV_ASSIGNMENT.test(`${name}=`)) {
+          return {
+            base: 'env',
+            executionRisk: 'forbidden',
+            effectFamily: 'git',
+            reason: 'git_env_injection_denied',
+          };
+        }
+        i += 2;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tok)) {
+      assignments.push(tok);
+      i += 1;
+      continue;
+    }
+    break;
+  }
+  if (i >= tokens.length) return undefined;
+  const rest = tokens.slice(i);
+  if (normalizeExecutionBase(rest[0] ?? '') !== 'git') return undefined;
+  if (clearsEnvironment || assignments.some((a) => GIT_AUX_ENV_ASSIGNMENT.test(a))) {
+    return {
+      base: 'env',
+      executionRisk: 'forbidden',
+      effectFamily: 'git',
+      reason: 'git_env_injection_denied',
+    };
+  }
+  return classifyGitExecutionRisk(rest, repoRoot);
 }
 
 /**
@@ -316,8 +384,13 @@ function gitAuxiliaryProgramReason(verb: string, args: readonly string[]): strin
   if (verb === 'push' && hasArg(args, (a) => a === '--signed' || a.startsWith('--signed='))) {
     return 'git_sign_denied';
   }
-  if (verb === 'merge' && hasArg(args, (a) => a === '-e' || a === '--edit')) {
-    return 'git_editor_denied';
+  if (verb === 'merge') {
+    if (hasArg(args, (a) => a === '-e' || a === '--edit')) {
+      return 'git_editor_denied';
+    }
+    if (!hasArg(args, (a) => a === '--no-edit')) {
+      return 'git_editor_denied';
+    }
   }
   if (verb === 'branch' && hasArg(args, (a) => a === '--edit-description' || a.startsWith('--edit-description='))) {
     return 'git_editor_denied';
@@ -326,8 +399,11 @@ function gitAuxiliaryProgramReason(verb: string, args: readonly string[]): strin
     if (hasArg(args, (a) => a === '-e' || a === '--edit')) {
       return 'git_editor_denied';
     }
+    if (gitConfigHasExternalScope(args)) {
+      return 'git_config_scope_denied';
+    }
     const key = gitConfigWriteKey(args);
-    if (key && isExecutionBearingGitConfigKey(key)) {
+    if (key && !isGitConfigWriteAllowed(key)) {
       return 'git_config_exec_denied';
     }
   }
@@ -422,6 +498,8 @@ export function classifyExecutionRisk(
     };
   }
   const tokens = splitTokens(trimmed);
+  const envWrapped = classifyEnvWrappedGit(tokens, opts.repoRoot);
+  if (envWrapped) return envWrapped;
   const base = normalizeExecutionBase(tokens[0] ?? '');
   if (base === 'git') return classifyGitExecutionRisk(tokens, opts.repoRoot);
   const found = COMMAND_SPECS[base];

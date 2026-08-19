@@ -1761,7 +1761,7 @@ export class SafeExecutor {
     }
 
     let env = childEnvForSandbox();
-    if (classified.effectFamily === 'git' && isolation.kind !== 'docker') {
+    if (classified.effectFamily === 'git') {
       env = hardenGitHostEnvironment(env);
     }
 

@@ -36,7 +36,7 @@ provider-endpoint network. Full gate batch: **198 tests → 195 pass / 0 fail**.
 
 | ID | Invariant | Baseline | Current | Expected | Gap |
 |----|-----------|----------|---------|----------|-----|
-| L01 | `git -C <path> push` — option arg consumed | RED | GREEN | GREEN | #86 |
+| L01 | `git -C <path> push` — global `-C` forbidden | RED | GREEN | GREEN | #88 |
 | L02 | `git -c <key=value>` — option arg consumed | RED | GREEN | GREEN | #86 |
 | L03 | `git push origin +HEAD:refs/heads/x` → force_push | RED | GREEN | GREEN | #86 |
 | L04 | `git push --mirror` → force | RED | GREEN | GREEN | #86 |
@@ -96,8 +96,8 @@ provider-endpoint network. Full gate batch: **198 tests → 195 pass / 0 fail**.
 | O05 | adapter must not certify authoritative/fresh from `verifierOk` alone | RED | **GREEN** | GREEN | #87 |
 | O06 | adapter surfaces contract-check results | RED | **GREEN** | GREEN | #87 |
 
-## Verification state (branch commit 7effe24 + decoder work)
+## Verification state
 
-- `tsc --noEmit` — clean
-- Parser gate + baseline suites (authority.test.ts 24, commandSemantics.test.ts 15, outcomeSemantics, codingTaskSuccess): 144/144 of the non-regression set
-- Red set: exactly I02–I05, O05–O06 (6) — the integrity/outcome fix phases, untouched by the parser work; ALL now GREEN
+- Parser L01/L29: `git -C` is forbidden (no lexical/symlink containment), including `git -C <path> push`
+- Git auxiliary-program class (#88): config writes are an identity-key allowlist; `--global`/`--file` fail closed; Docker Git receives the host overlay (`GIT_CONFIG_COUNT` + empty hooks bind-mount); `git merge` requires `--no-edit`
+- Exact-head Public Release Gate must be re-run on the SHA that contains this pass — do not cite an older green run

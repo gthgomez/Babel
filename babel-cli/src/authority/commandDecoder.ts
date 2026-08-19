@@ -945,6 +945,10 @@ export function decodeCommand(command: string, opts: { repoRoot?: string } = {})
   let best: DecodedCommand | null = null;
   const effectful = new Set<string>();
   for (const segment of segments) {
+    const outerRisk = classifyExecutionRisk(
+      segment,
+      opts.repoRoot !== undefined ? { repoRoot: opts.repoRoot } : {},
+    );
     const normalized = unwrapCommandWrappers(segment);
     // Wrapper unwrap can expose an inner chain (`sh -c "a && b"` → `a && b`);
     // re-split so every segment is decoded, not just the first.
@@ -955,7 +959,11 @@ export function decodeCommand(command: string, opts: { repoRoot?: string } = {})
       // forms like `C:\tools\git.exe push` resolve to base `git`).
       const firstBase =
         tokens.length === 0 ? '' : normalizeExecutionBase(tokens[0]!);
-      const decoded = applyIsolationFloor(
+      const outerBase = normalizeExecutionBase(tokenize(segment)[0] ?? '');
+      const decoded =
+        (outerBase === 'env' || outerBase === 'git') && outerRisk.executionRisk === 'forbidden'
+        ? cmd('unknown', 'unrecognized', { ambiguous: true })
+        : applyIsolationFloor(
         tokens.length === 0
           ? cmd('unknown', 'unrecognized', { ambiguous: true })
           : firstBase === 'git'
