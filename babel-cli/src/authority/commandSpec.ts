@@ -348,6 +348,18 @@ function gitAuxiliaryProgramReason(verb: string, args: readonly string[]): strin
     return 'git_exec_denied';
   }
   if (
+    hasArg(
+      args,
+      (a) =>
+        a === '--upload-pack' ||
+        a.startsWith('--upload-pack=') ||
+        a === '--receive-pack' ||
+        a.startsWith('--receive-pack='),
+    )
+  ) {
+    return 'git_exec_denied';
+  }
+  if (
     hasArg(args, (a) => a === '-i' || a === '--interactive' || a.startsWith('--interactive=')) ||
     (verb === 'rebase' && shortClusterHas(args, 'i'))
   ) {

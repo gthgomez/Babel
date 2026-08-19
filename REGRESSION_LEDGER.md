@@ -99,5 +99,5 @@ provider-endpoint network. Full gate batch: **198 tests → 195 pass / 0 fail**.
 ## Verification state
 
 - Parser L01/L29: `git -C` is forbidden (no lexical/symlink containment), including `git -C <path> push`
-- Git auxiliary-program class (#88): config writes are an identity-key allowlist; `--global`/`--file` fail closed; Docker Git receives the host overlay (`GIT_CONFIG_COUNT` + empty hooks bind-mount); `git merge` requires `--no-edit`
+- Git auxiliary-program class (#88): config writes are an identity-key allowlist; `--global`/`--file` fail closed; Docker Git receives the host overlay (`GIT_CONFIG_COUNT` + empty hooks bind-mount); `git merge` requires `--no-edit`; `--upload-pack`/`--receive-pack` fail closed
 - Exact-head Public Release Gate must be re-run on the SHA that contains this pass — do not cite an older green run

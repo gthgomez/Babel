@@ -141,6 +141,11 @@ test('git program-launch forms fail closed', () => {
     'git config alias.x !./attack',
     'git config --add alias.foo !calc',
     'git config filter.lfs.smudge ./attack',
+    'git fetch --upload-pack=./attack origin',
+    'git fetch --upload-pack ./attack origin',
+    'git push --receive-pack=./attack origin feat/x',
+    'git push --receive-pack ./attack origin feat/x',
+    'git pull --upload-pack=./attack origin',
   ];
   for (const command of forbidden) {
     const p = parseGitCommand(command);
@@ -487,6 +492,11 @@ test('Git auxiliary-program surface is closed or deterministically suppressed', 
     'git commit -S -m x',
     'env GIT_SSH_COMMAND=./attack git push origin feat/x',
     'env -i git commit -m x',
+    'git fetch --upload-pack=./attack origin',
+    'git fetch --upload-pack ./attack origin',
+    'git push --receive-pack=./attack origin feat/x',
+    'git push --receive-pack ./attack origin feat/x',
+    'git pull --upload-pack=./attack origin',
   ];
   for (const command of mustForbid) {
     assert.equal(classifyExecutionRisk(command).executionRisk, 'forbidden', command);
@@ -507,6 +517,83 @@ test('Git auxiliary-program surface is closed or deterministically suppressed', 
     assert.equal(parseGitCommand(command).capability, capability, command);
     assert.notEqual(classifyExecutionRisk(command).executionRisk, 'forbidden', command);
   }
+});
+
+test('git fetch --upload-pack and git push --receive-pack fail closed before spawn', async () => {
+  const commands = [
+    'git fetch --upload-pack=./attack origin',
+    'git fetch --upload-pack ./attack origin',
+    'git push --receive-pack=./attack origin feat/x',
+    'git push --receive-pack ./attack origin feat/x',
+    'git pull --upload-pack=./attack origin',
+  ];
+  for (const command of commands) {
+    assert.equal(classifyExecutionRisk(command).executionRisk, 'forbidden', command);
+    assert.equal(classifyExecutionRisk(command).reason, 'git_exec_denied', command);
+    assert.equal(parseGitCommand(command).capability, 'unknown', command);
+    assert.ok(validateExecutorShellCommand(command, process.platform, 'dev_local'), command);
+  }
+
+  const parsed = parseLeaseJson(
+    JSON.stringify({
+      version: 2,
+      leaseId: 'upload-pack-deny',
+      scope: { repository: 'babel', remote: 'origin' },
+      allowedCapabilities: ['run_local_command', 'push_feature_branch', 'commit_ship_set'],
+    }),
+  );
+  assert.ok(parsed.ok);
+  for (const command of commands) {
+    const p = parseGitCommand(command);
+    const denied = decideActionRequest({ capability: p.capability }, parsed.lease);
+    assert.equal(denied.outcome, 'deny', command);
+    assert.equal(denied.reasonCode, 'DENY_UNKNOWN_EXTERNAL_SIDE_EFFECT', command);
+  }
+
+  const root = mkdtempSync(join(tmpdir(), 'babel-upload-pack-'));
+  roots.push(root);
+  const persistPath = join(root, 'runs/s1/authority-session.json');
+  mkdirSync(dirname(persistPath), { recursive: true });
+  const session = establishAuthoritySession({ repoRoot: root, lease: parsed.lease, persistPath });
+  let executed = false;
+  const executor = createToolExecutor({
+    executeTool: async () => {
+      executed = true;
+      return { exit_code: 0, stdout: 'nope', stderr: '' };
+    },
+  });
+  for (const command of commands) {
+    executed = false;
+    const run = await executeActionWithPolicy(
+      { type: 'run_command', command },
+      'workspace_write',
+      { agentId: 'upack', runId: 'upack-1', babelRoot: root },
+      { authoritySession: session, executor },
+    );
+    assert.equal(run.policyBlocked, true, command);
+    assert.equal(executed, false, command);
+  }
+
+  const sentinel = join(root, 'HELPER_RAN');
+  const helper = join(root, process.platform === 'win32' ? 'attack.cmd' : 'attack.sh');
+  if (process.platform === 'win32') {
+    writeFileSync(helper, `@echo off\r\necho ran>"${sentinel}"\r\nexit /b 0\r\n`);
+  } else {
+    writeFileSync(helper, `#!/bin/sh\necho ran > "${sentinel}"\nexit 0\n`);
+    chmodSync(helper, 0o755);
+  }
+  if (!process.env['BABEL_ALLOW_HOST_FALLBACK'] && process.env['BABEL_DOCKER_DISABLE'] !== 'true') {
+    process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+  }
+  const se = new SafeExecutor(root);
+  const fetchCmd = `git fetch --upload-pack=${helper} origin`;
+  const fetchResult = se.shellExec(fetchCmd, root, 15_000);
+  assert.notEqual(fetchResult.exit_code, 0, fetchResult.stderr);
+  assert.equal(existsSync(sentinel), false);
+  const pushCmd = `git push --receive-pack=${helper} origin feat/x`;
+  const pushResult = se.shellExec(pushCmd, root, 15_000);
+  assert.notEqual(pushResult.exit_code, 0, pushResult.stderr);
+  assert.equal(existsSync(sentinel), false);
 });
 
 test('SafeExecutor denies gradlew test on host profile without authority stack', () => {
