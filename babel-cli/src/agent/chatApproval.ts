@@ -15,6 +15,8 @@ import type { ConversationalRenderer } from '../ui/waterfall.js';
 import { chatActionTarget } from './chatToolDefinitions.js';
 import type { ChatToolAction } from './chatToolDefinitions.js';
 import { isMcpChatAction } from './chatToolDefinitions.js';
+import { isBabelHeadlessEnv } from '../utils/envFlags.js';
+import { benchmarkAutoApproveEnabled } from './autonomyEnforcement.js';
 import {
   buildApprovalRequest,
   resolveApprovalHeadless,
@@ -26,8 +28,12 @@ import {
   type ApprovalDecision,
   type ApprovalCapability,
 } from './approvalRequests.js';
-import { benchmarkAutoApproveEnabled } from './autonomyEnforcement.js';
-import { isBabelHeadlessEnv } from '../utils/envFlags.js';
+import {
+  approvalOperationFromAgentAction,
+  approvalOperationFromChatTool,
+  digestApprovalOperation,
+  operationDigestMatches,
+} from './approvalOperation.js';
 
 function asConversationalRenderer(
   renderer: ReturnType<typeof getActiveRenderer>,
@@ -95,32 +101,58 @@ export async function requestChatActionApproval(action: AgentAction): Promise<bo
     return false;
   }
 
+  const cwd = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
+  const operation = approvalOperationFromAgentAction(action, {
+    thread_id: _approvalSession.thread_id,
+    turn_id: currentApprovalTurnId(),
+    cwd,
+  });
+  const operationDigest = digestApprovalOperation(operation);
+  const proposedScope = operation.target_path
+    ? `${capabilityForAction(action)}:${operation.target_path}:${operation.payload_sha256 ?? 'nopayload'}`
+    : `${capabilityForAction(action)}:${operation.command ?? action.type}:${operation.payload_sha256 ?? 'nopayload'}`;
   const req = buildApprovalRequest({
     thread_id: _approvalSession.thread_id,
     turn_id: currentApprovalTurnId(),
     command: commandForAction(action),
-    cwd: process.env['BABEL_PROJECT_ROOT'] ?? process.cwd(),
+    cwd,
     capability: capabilityForAction(action),
+    proposed_scope: proposedScope,
     reason: `Policy requires approval for ${action.type}`,
+    operation_digest: operationDigest,
   });
 
-  if (isPreApproved(_approvalSession, req)) {
+  const liveStillMatches = (): boolean =>
+    operationDigestMatches(
+      operationDigest,
+      approvalOperationFromAgentAction(action, {
+        thread_id: _approvalSession.thread_id,
+        turn_id: currentApprovalTurnId(),
+        cwd,
+      }),
+    );
+
+  if (isPreApproved(_approvalSession, req) && liveStillMatches()) {
     applyApprovalDecision(_approvalSession, req, 'allow_once');
     return true;
   }
 
-  // P0-4: benchmark auto-approve is valid ONLY when both
-  // BABEL_BENCHMARK_AUTO_APPROVE=1 and BABEL_BENCHMARK_MODE=1 are set, and it
-  // applies regardless of TTY state (a TTY benchmark run with MODE=1 is still
-  // a benchmark run). Headless/CI never establishes benchmark authority.
-  if (benchmarkAutoApproveEnabled()) {
+  // #88 P0-4: both AUTO_APPROVE and MODE are required. CI/headless never
+  // establish benchmark authority. #90: live operation must still match
+  // the digest bound to this approval.
+  if (benchmarkAutoApproveEnabled() && liveStillMatches()) {
     applyApprovalDecision(_approvalSession, req, 'allow_once');
     return true;
   }
 
-  const headless = isBabelHeadlessEnv() || !process.stdout.isTTY || process.env['CI'] === 'true';
+  const headless =
+    isBabelHeadlessEnv() || !process.stdout.isTTY || process.env['CI'] === 'true';
 
   if (headless) {
+    if (!liveStillMatches()) {
+      applyApprovalDecision(_approvalSession, req, 'deny');
+      return false;
+    }
     const res = resolveApprovalHeadless(_approvalSession, req);
     return res.decision !== 'deny';
   }
@@ -144,6 +176,10 @@ export async function requestChatActionApproval(action: AgentAction): Promise<bo
     try {
       conv?.showApprovalPending(action.type, target);
       const allowed = await promptPermissionDialog(permissionAction);
+      if (allowed && !liveStillMatches()) {
+        applyApprovalDecision(_approvalSession, req, 'deny');
+        return false;
+      }
       const decision: ApprovalDecision =
         allowed && process.env['BABEL_APPROVAL_SESSION'] === '1'
           ? 'allow_session'
@@ -190,15 +226,33 @@ export async function requestMcpApproval(action: ChatToolAction): Promise<boolea
     toolName: server,
     arguments: JSON.stringify(action, null, 2),
   };
+  const cwd = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
+  const operation = approvalOperationFromChatTool(action, {
+    thread_id: _approvalSession.thread_id,
+    turn_id: currentApprovalTurnId(),
+    cwd,
+  });
+  const operationDigest = digestApprovalOperation(operation);
   const req = buildApprovalRequest({
     thread_id: _approvalSession.thread_id,
     turn_id: currentApprovalTurnId(),
     command: `mcp:${server}`,
-    cwd: process.env['BABEL_PROJECT_ROOT'] ?? process.cwd(),
+    cwd,
     capability: 'mcp',
+    proposed_scope: `mcp:${server}:${operation.mcp_arguments_sha256 ?? 'noargs'}`,
     reason: `MCP call to ${server}`,
+    operation_digest: operationDigest,
   });
-  if (isPreApproved(_approvalSession, req)) return true;
+  const liveStillMatches = (): boolean =>
+    operationDigestMatches(
+      operationDigest,
+      approvalOperationFromChatTool(action, {
+        thread_id: _approvalSession.thread_id,
+        turn_id: currentApprovalTurnId(),
+        cwd,
+      }),
+    );
+  if (isPreApproved(_approvalSession, req) && liveStillMatches()) return true;
   if (isBabelHeadlessEnv() || !process.stdout.isTTY || process.env['CI'] === 'true') {
     return resolveApprovalHeadless(_approvalSession, req).decision !== 'deny';
   }
@@ -212,6 +266,10 @@ export async function requestMcpApproval(action: ChatToolAction): Promise<boolea
     try {
       conv?.showApprovalPending(action.type, server);
       const allowed = await promptPermissionDialog(permissionAction);
+      if (allowed && !liveStillMatches()) {
+        applyApprovalDecision(_approvalSession, req, 'deny');
+        return false;
+      }
       applyApprovalDecision(
         _approvalSession,
         req,

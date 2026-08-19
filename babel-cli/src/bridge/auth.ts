@@ -76,17 +76,11 @@ export function verifyToken(provided: string, expected: string): boolean {
   try {
     const providedBuf = Buffer.from(provided, 'utf8');
     const expectedBuf = Buffer.from(expected, 'utf8');
-
-    // Always call timingSafeEqual, regardless of length mismatch.
-    // Pad the shorter buffer to match the longer one so the comparison
-    // is constant-time in both length and content.
-    const maxLen = Math.max(providedBuf.length, expectedBuf.length);
-    const paddedProvided = Buffer.alloc(maxLen, 0);
-    const paddedExpected = Buffer.alloc(maxLen, 0);
-    providedBuf.copy(paddedProvided);
-    expectedBuf.copy(paddedExpected);
-
-    return timingSafeEqual(paddedProvided, paddedExpected);
+    if (providedBuf.length !== expectedBuf.length) {
+      timingSafeEqual(expectedBuf, expectedBuf);
+      return false;
+    }
+    return timingSafeEqual(providedBuf, expectedBuf);
   } catch {
     return false;
   }

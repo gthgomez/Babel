@@ -2,7 +2,7 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-08-08
+last_verified: 2026-08-16
 -->
 **Status:** Accepted for the protocol contract; runtime transport remains partial
 **Date:** 2026-06-30  
@@ -37,14 +37,22 @@ fixed message catalog in `babel-cli/src/protocol/`.
 
 ### Transport
 
-| Property | Value |
-|----------|-------|
-| Encoding | UTF-8, one JSON object per line (NDJSON) |
-| Direction | Client → server on stdin; server → client on stdout |
-| Framing | JSON-RPC 2.0 request/response; server-initiated notifications for streaming |
-| Version constant | `BABEL_PROTOCOL_VERSION = '1.0.0'` |
+The **semantic contract** is the message catalog below. Transports are not semantic authority.
+
+| Property | Stdio (original D1/D2 decision) | Loopback HTTP/WS (2026-08-16 amendment) |
+|----------|----------------------------------|------------------------------------------|
+| Encoding | UTF-8, one JSON object per line (NDJSON) | UTF-8 JSON-RPC objects |
+| Direction | Client → server on stdin; server → client on stdout | Client `POST /rpc`; server notifications on `WS /ws` |
+| Framing | JSON-RPC 2.0 request/response; server-initiated notifications for streaming | Same JSON-RPC catalog |
+| Version constant | `BABEL_PROTOCOL_VERSION = '1.0.0'` | Same |
+| Binding | Child process, no port | `127.0.0.1` only; application bearer auth |
+| Status | Open (standalone `babel-app-server` not shipped) | Partial (bridge gateway + tests; live Tailscale/phone/provider not claimed) |
 
 Stderr is reserved for human-readable server logs (not part of the protocol).
+
+Reachability (Tailscale Serve, etc.) is **outside this ADR**. Do not embed tailnet concepts in the catalog.
+
+Large complete messages travel as HTTP JSON-RPC request bodies (`turn.submit.params.message`), not as simulated keystrokes. WebSocket carries the same methods plus `turn.event` / `cell.committed` notifications. Optional `command_id` on `turn.submit` is an idempotency key, not a new method.
 
 ### Message catalog
 
@@ -54,7 +62,7 @@ Stderr is reserved for human-readable server logs (not part of the protocol).
 |--------|--------|--------|---------|
 | `thread.create` | `project_root`, optional `task`, `model` | `{ thread_id }` | D3 `createThread` + new `ChatEngine` |
 | `thread.resume` | `thread_id`, optional `project_root` | `{ thread_id, turn_count }` | D3 `loadThreadCells` + `ChatEngine` hydration |
-| `turn.submit` | `thread_id`, `message` | `{ thread_id, turn_id }` | `ChatEngine.submitMessageStream()` |
+| `turn.submit` | `thread_id`, `message`, optional `command_id` | `{ thread_id, turn_id }` | `ChatEngine.submitMessageStream()` |
 | `turn.cancel` | `thread_id` | `{ thread_id, turn_id, cancelled }` | `ChatEngine` abort / generation cancel |
 | `history.lookup` | `thread_id`, optional `cell_id`, `turn_id`, `limit`, `cursor` | `{ cells, cursor?, has_more? }` | D3 `loadThreadCells` with filters |
 
@@ -105,9 +113,15 @@ allocation. The standalone stdio process remains opt-in future work.
 
 ### WebSocket transport first
 
-Rejected for D1/D2 initial delivery. Stdio JSON-RPC requires no port binding
+Rejected for D1/D2 **initial delivery**. Stdio JSON-RPC requires no port binding
 and works naturally for `babel-tui` spawning `babel-app-server` as a child process. WebSocket
 may be added later as an optional transport behind the same message types.
+
+**Amendment (2026-08-16):** loopback HTTP `POST /rpc` plus authenticated WebSocket
+`/ws` now exist as that optional transport for Babel Remote Stage 1. This does not
+replace the stdio decision, does not promote WebSocket to semantic authority, and
+does not claim the D2 out-of-process TUI exit is complete. Historical rejection
+above remains the D1/D2 rationale.
 
 ### gRPC / protobuf
 
@@ -137,11 +151,16 @@ future bridges. `ChatEngine` should not depend on wire format.
 
 ### Non-goals (explicit)
 
-- Standalone `babel-app-server` process implementation
-- WebSocket or TCP socket transport
-- Authentication or multi-tenant session management
+- Standalone `babel-app-server` process implementation (still Open)
+- Public Internet binding, Tailscale Funnel, or `0.0.0.0` listeners
+- Authentication or multi-tenant session management as a product platform (loopback bearer auth is transport-only)
 - Wiring into `BabelRepl` or changing TUI runtime behavior
 - `thread.list`, fork/backtrack messages (Phase D4)
+- Treating Tailscale, ACP, or a REST `/api/v1` catalog as this protocol
+
+Historical non-goal “WebSocket or TCP socket transport” applied to D1/D2 initial
+delivery. Loopback HTTP/WS is recorded in the Transport amendment above; it is
+not a second catalog.
 
 ### Compliance
 
@@ -159,3 +178,5 @@ future bridges. `ChatEngine` should not depend on wire format.
 - D2 stub exit: in-process host/client contract tests cover the catalog. **Complete.**
 - D2 transport exit: REPL chat works with an out-of-process server; contract suite covers
   every method and notification in this catalog. **Open.**
+- Loopback HTTP/WS gateway for the same catalog (`babel remote serve`): **Partial**
+  (see `docs/architecture/babel-remote/`). Not a D2 transport exit.

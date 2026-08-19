@@ -168,4 +168,11 @@ describe('rewriteArgv', () => {
       '--json',
     ]);
   });
+
+  it('preserves remote serve instead of rewriting it into run', () => {
+    assert.deepEqual(
+      rewriteArgv(['node', 'babel', 'remote', 'serve', '--port', '4545', '--project', 'C:/tmp/ws']),
+      ['node', 'babel', 'remote', 'serve', '--port', '4545', '--project', 'C:/tmp/ws'],
+    );
+  });
 });

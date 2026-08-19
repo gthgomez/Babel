@@ -38,6 +38,7 @@ last_verified: 2026-08-05
 | [SKILL_CATALOG_AND_DOMAIN_DEFAULTS.md](./SKILL_CATALOG_AND_DOMAIN_DEFAULTS.md) | Domain default skill expansion. |
 | [ROUTER_PLATFORM_FIELDS.md](./ROUTER_PLATFORM_FIELDS.md) | Platform routing fields. |
 | [BABEL_PROJECT_SYSTEM_INTEGRATION.md](./BABEL_PROJECT_SYSTEM_INTEGRATION.md) | Babel vs repo-local collaboration systems. |
+| [babel-remote/BABEL_REMOTE_STAGE0_COVERAGE.md](./babel-remote/BABEL_REMOTE_STAGE0_COVERAGE.md) | Babel Remote Stage 0 vendor coverage and GO/NO_GO. |
 
 ## Related ADRs
 

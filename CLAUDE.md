@@ -38,6 +38,7 @@ This is the **public, canonical source** for the Babel coding agent (`gthgomez/B
 | **Ship set vs worktree / commit-all / sync main** | `.agents/rules/05-github-workflow.md` (OSS safety; never blind `git add -A`) |
 | Autonomous goal clearance & research delegation | `.agents/rules/06-autonomous-goal-clearance.md`, `.agents/rules/07-subagent-research-delegation.md` |
 | Public docs (architecture, ADRs, guides, release) | `docs/` — start with `docs/README.md` |
+| Babel Remote spike (loopback ADR-010) | `docs/architecture/babel-remote/` |
 | **Runtime harness (normative)** | `docs/architecture/HARNESS_ARCHITECTURE_V1.md` |
 | **Runtime harness hardening (canonical roadmap)** | `docs/architecture/HARNESS_HARDENING_ROADMAP_V1.md` |
 | Runtime harness (explanatory map) | `docs/architecture/HARNESS_OVERVIEW.md` |

@@ -367,6 +367,7 @@ export function createLinkedTransports(
 export class WebSocketTransport implements BridgeTransport {
   sessionId?: string | undefined;
   private handler: ((msg: BridgeMessage) => void) | null = null;
+  private textHandler: ((payload: string) => void) | null = null;
   private closeCb: ((reason?: string) => void) | null = null;
   private _closed = false;
   private frameBuffer = new FrameBuffer();
@@ -423,7 +424,11 @@ export class WebSocketTransport implements BridgeTransport {
 
   send(message: BridgeMessage): void {
     if (this._closed) return;
-    const payload = JSON.stringify(message);
+    this.sendText(JSON.stringify(message));
+  }
+
+  sendText(payload: string): void {
+    if (this._closed) return;
     const frame = buildWsTextFrame(payload);
     this.writeRaw(frame);
   }
@@ -432,6 +437,13 @@ export class WebSocketTransport implements BridgeTransport {
     this.handler = handler;
     return () => {
       this.handler = null;
+    };
+  }
+
+  onText(handler: (payload: string) => void): () => void {
+    this.textHandler = handler;
+    return () => {
+      this.textHandler = null;
     };
   }
 
@@ -476,6 +488,10 @@ export class WebSocketTransport implements BridgeTransport {
    * Deliver a raw text payload as a parsed BridgeMessage to the handler.
    */
   private deliver(payload: string): void {
+    if (this.textHandler) {
+      this.textHandler(payload);
+      return;
+    }
     try {
       const parsed = JSON.parse(payload) as unknown;
       this.handler?.(parsed as BridgeMessage);

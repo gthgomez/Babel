@@ -35,6 +35,8 @@ export interface ApprovalRequest {
   proposed_scope: string;
   reason: string;
   created_at: string;
+  /** SHA-256 of the canonical approval operation. Required for mutation-after-approval checks. */
+  operation_digest?: string;
 }
 
 export interface ApprovalResolution {
@@ -47,7 +49,7 @@ export interface ApprovalResolution {
 
 export interface ApprovalSessionState {
   thread_id: string;
-  /** Session-wide allows (capability or scope keys). */
+  /** Session-wide allows keyed by capability::proposed_scope (never a bare capability). */
   sessionAllows: Set<string>;
   /** Narrow reusable rules (glob-like substring match). */
   rules: string[];
@@ -88,6 +90,7 @@ export function buildApprovalRequest(input: {
   risk?: ApprovalRisk;
   proposed_scope?: string;
   reason: string;
+  operation_digest?: string;
 }): ApprovalRequest {
   return {
     request_id: randomUUID(),
@@ -102,6 +105,9 @@ export function buildApprovalRequest(input: {
       `${input.capability}:${input.command.split(/\s+/)[0] ?? '*'}`,
     reason: input.reason,
     created_at: new Date().toISOString(),
+    ...(input.operation_digest !== undefined
+      ? { operation_digest: input.operation_digest }
+      : {}),
   };
 }
 
@@ -144,7 +150,6 @@ export function isPreApproved(
     return false;
   }
   if (state.sessionAllows.has(scopeKey(req))) return true;
-  if (state.sessionAllows.has(req.capability)) return true;
   return state.rules.some((rule) => ruleMatchesRequest(rule, req));
 }
 
@@ -208,8 +213,9 @@ export function applyApprovalDecision(
   };
 
   if (decision === 'allow_session') {
+    // Scope-key only. Do not grant the entire capability — that over-approves
+    // unrelated commands/paths/payloads after a single allow.
     state.sessionAllows.add(scopeKey(req));
-    state.sessionAllows.add(req.capability);
   } else if (decision === 'narrow_rule') {
     const scope = narrowScope ?? req.proposed_scope;
     state.rules.push(scope);
