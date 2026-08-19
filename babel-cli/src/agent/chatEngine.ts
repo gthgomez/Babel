@@ -108,6 +108,23 @@ import {
   normalizeReadCacheKey,
   shouldSkipFullReread,
 } from './readThrashPolicy.js';
+import {
+  applyWorkingStateEvent,
+  createWorkingState,
+  decideReadInjection,
+  evaluateReadRequest,
+  formatReadObservation,
+  formatVerifierReceiptSummary,
+  invalidateReadCacheForPath,
+  resetOneShotSnapshot,
+  resolveNextTurnToolAccess,
+  selectReadWindow,
+  snapshotOnce,
+  upsertWorkingStateMessage,
+  type ReadInjectionCache,
+  type WorkingState,
+} from './codingLoop/index.js';
+import { ingestVerifierResult, rememberFullReadWindow } from './codingLoop/chatBindings.js';
 
 import { parseTextToolTurn } from './textToolParser.js';
 import {
@@ -224,7 +241,6 @@ import {
 import {
   applyExploreFuses as applyExploreFusesPolicy,
   buildPolicyTerminalBlockedReport,
-  resolveRestrictedToolMode,
   type ExploreFuseResult,
 } from './chatZeroWritePolicy.js';
 import { PolicyEventLog, type PolicyEvent } from './policyEventLog.js';
@@ -597,10 +613,13 @@ export class ChatEngine {
    */
   private postWriteRepairWallCapMs: number | null = null;
   /**
-   * After first write: keep tools restricted to act_or_verify for the rest of
-   * the session (no re-explore).
+   * After first write: wall/cost repair slice is active. Investigation tools
+   * stay available; a red verifier reopens targeted reinspection.
    */
   private postWriteRepairRestrict = false;
+  /** Last authoritative verifier failed (reopens investigation tools). */
+  private lastVerifierFailed = false;
+  private workingState: WorkingState = createWorkingState();
   /** Soft investigate-budget one-shot latch (synced via explore fuse state). */
   private investigateSoftNudgeDone = false;
   /** Cumulative exploration tools across the entire session (never resets).
@@ -625,6 +644,9 @@ export class ChatEngine {
    *  the tool schema to write+verify+todo+finish only (no read/exploration).
    *  Set by the stall restrict_tools intervention; cleared after one turn. */
   private restrictToolsNextTurn = false;
+  private logicalTurnToolPolicy: import('./codingLoop/oneShotToolPolicy.js').OneShotPolicySnapshot<
+    ReturnType<typeof resolveNextTurnToolAccess>
+  > = { taken: false };
   private _sessionStartTime = 0;
   private stallState: StallState = createStallDetector();
   private cachedSystemPromptLegacy: string | null = null;
@@ -660,7 +682,7 @@ export class ChatEngine {
    */
   private compactionConsecutiveFailures = 0;
   private static readonly MAX_COMPACTION_FAILURES = 3;
-  private readCache: Map<string, { hash: string; timestamp: number }> = new Map();
+  private readCache: ReadInjectionCache = new Map();
   private dedupeHitCount = 0;
   private writeCount = 0;
   /** R8: Verifier receipt cache — avoids re-running identical verifier commands
@@ -1233,7 +1255,7 @@ export class ChatEngine {
 
   /**
    * On first successful mutation: activate post-write repair mode —
-   * wall slice + cost slice + sticky act_or_verify tools + one nudge.
+   * wall slice + cost slice + one nudge. Investigation tools stay available.
    * Idempotent.
    */
   private applyPostWriteRepairBudget(): void {
@@ -1288,13 +1310,23 @@ export class ChatEngine {
   }
 
   /** Whether the next model turn should use restricted mutate/verify tools. */
+  private nextTurnToolPolicy() {
+    return snapshotOnce(this.logicalTurnToolPolicy, () => {
+      const stall = this.restrictToolsNextTurn;
+      const policy = resolveNextTurnToolAccess({
+        postWriteRestrict: this.postWriteRepairRestrict,
+        lastVerifierFailed: this.lastVerifierFailed,
+        stallRestrictOnce: stall,
+        taskClass: this.taskClass,
+      });
+      if (stall) this.restrictToolsNextTurn = false;
+      return policy;
+    });
+  }
+
+  /** Whether the next model turn should use restricted mutate/verify tools. */
   private shouldRestrictToolsThisTurn(): boolean {
-    if (this.postWriteRepairRestrict) return true;
-    if (this.restrictToolsNextTurn) {
-      this.restrictToolsNextTurn = false;
-      return true;
-    }
-    return false;
+    return this.nextTurnToolPolicy().restrict;
   }
 
   // ─── R11: Per-Round Token Ceiling ──────────────────────────────────────────
@@ -1645,6 +1677,8 @@ export class ChatEngine {
         return;
       }
 
+      resetOneShotSnapshot(this.logicalTurnToolPolicy);
+
       // ── OTel chat turn span ──
       const _tracer = trace.getTracer('babel-cli', '1.0.0');
       let _turnSpan: Span | null = _tracer.startSpan('babel.chat.turn');
@@ -1659,6 +1693,13 @@ export class ChatEngine {
 
       // C1: Inject current todo list into conversation before LLM call
       this.updateTodoSystemMessage();
+      if (!this.workingState.goal) {
+        this.workingState = applyWorkingStateEvent(this.workingState, {
+          type: 'set_goal',
+          goal: this.options.task.slice(0, 240),
+        });
+      }
+      this.conversation = upsertWorkingStateMessage(this.conversation, this.workingState);
 
       const runner = this.resolveRoutedRunner();
       const useNativeTools = this.shouldUseNativeTools(runner);
@@ -1722,12 +1763,11 @@ export class ChatEngine {
           return;
         }
       } else if (useNativeTools) {
-        const restrictTools = this.shouldRestrictToolsThisTurn();
+        const nextTools = this.nextTurnToolPolicy();
+        const restrictTools = nextTools.restrict;
         const toolDefs = restrictTools
           ? this.services.tools.buildRestrictedDefinitions(
-              this.postWriteRepairRestrict
-                ? 'act_or_verify'
-                : resolveRestrictedToolMode(this.hasAnyWrites()),
+              nextTools.mode === 'full' ? 'act_or_verify' : nextTools.mode,
             )
           : this.services.tools.buildDefinitions();
         const nativeActions: ChatToolAction[] = [];
@@ -3903,9 +3943,15 @@ export class ChatEngine {
           };
         }
         fileReadCacheHash = await this.hashFilePath(action.path);
-        const cached = this.readCache.get(pathKey);
-        if (cached && cached.hash === fileReadCacheHash) {
-          const secs = Math.round((Date.now() - cached.timestamp) / 1000);
+        const fullDecision = decideReadInjection({
+          pathKey,
+          fileHash: fileReadCacheHash,
+          request: { kind: 'full' },
+          cache: this.readCache,
+        });
+        if (fullDecision.skip) {
+          const cached = this.readCache.get(fullDecision.cacheKey);
+          const secs = cached ? Math.round((Date.now() - cached.timestamp) / 1000) : 0;
           this.dedupeHitCount++;
           this.noteToolForReadThrash(tool);
           this.toolCallLog.push({ tool, target, detail: 'cached', index: meta.index, exit_code: 0 });
@@ -3914,7 +3960,7 @@ export class ChatEngine {
             index: meta.index,
             observation:
               `### ${tool} ${target}\nexit_code: 0\n\`\`\`\n` +
-              `File ${target} unchanged since last read (${secs}s ago). Skipping re-injection.\n\`\`\``,
+              `File ${target} unchanged since last identical full read (${secs}s ago). Skipping re-injection.\n\`\`\``,
           };
         }
       }
@@ -3972,13 +4018,12 @@ export class ChatEngine {
           );
           return { index: meta.index, observation: gov.observation };
         }
-        try {
-          const newContent = await readFile(gov.absolutePath, 'utf-8');
-          this.readCache.set(this.readCacheKey(gov.absolutePath), {
-            hash: this.hashContent(newContent), timestamp: Date.now(),
-          });
-        } catch { /* best-effort */ }
+        invalidateReadCacheForPath(this.readCache, this.readCacheKey(gov.absolutePath));
         this.fullReadCounts.delete(this.readCacheKey(gov.absolutePath));
+        this.workingState = applyWorkingStateEvent(this.workingState, {
+          type: 'mutation',
+          path: gov.absolutePath,
+        });
         noteChatWorkspaceMutation(this as never);
         const lineNumber = gov.lineNumber ?? 0;
         this.toolCallLog.push({
@@ -4015,37 +4060,25 @@ export class ChatEngine {
         const rContent = await readFile(rPath, 'utf-8');
         const rHash = this.hashContent(rContent);
         const rKey = this.readCacheKey(rPath);
-        const rCached = this.readCache.get(rKey);
         // read_range does not bump fullReadCounts (line windows allowed)
         this.noteToolForReadThrash(tool);
-        if (rCached && rCached.hash === rHash) {
-          const secs = Math.round((Date.now() - rCached.timestamp) / 1000);
-          this.dedupeHitCount++;
-          this.toolCallLog.push({ tool, target, detail: 'cached', index: meta.index, exit_code: 0 });
-          callbacks?.onToolComplete?.(toolId, 'cached', undefined, 0);
-          return {
-            index: meta.index,
-            observation:
-              `### ${tool} ${target}\nexit_code: 0\n\`\`\`\n` +
-              `File ${target} unchanged since last read (${secs}s ago). Skipping re-injection.\n\`\`\``,
-          };
-        }
-        this.readCache.set(rKey, { hash: rHash, timestamp: Date.now() });
-        const rLines = rContent.split('\n');
-        if (action.start_line > rLines.length) {
+        const evaluated = evaluateReadRequest({
+          pathKey: rKey,
+          fileHash: rHash,
+          content: rContent,
+          request: { kind: 'range', startLine: action.start_line, endLine: action.end_line },
+          cache: this.readCache,
+        });
+        if (evaluated.window.lines.length === 0 && action.start_line > evaluated.window.totalLines) {
           this.toolCallLog.push({ tool, target, detail: 'error', error: 'start_line out of range', index: meta.index, exit_code: 1 });
           callbacks?.onToolComplete?.(toolId, 'error', 'start_line out of range', 1);
-          return { index: meta.index, observation: `### read_range ${target}\nError: start_line (${action.start_line}) exceeds file length (${rLines.length})` };
+          return { index: meta.index, observation: `### read_range ${target}\nError: start_line (${action.start_line}) exceeds file length (${evaluated.window.totalLines})` };
         }
-        const clampedEnd = Math.min(action.end_line, rLines.length);
-        const selectedLines = rLines.slice(action.start_line - 1, clampedEnd);
-        const numberedLines = selectedLines.map((line, i) => `${action.start_line + i}:${line}`).join('\n');
-        this.toolCallLog.push({ tool, target, detail: `${selectedLines.length} lines`, index: meta.index, exit_code: 0 });
-        callbacks?.onToolComplete?.(toolId, `${selectedLines.length} lines`, undefined, 0);
+        this.toolCallLog.push({ tool, target, detail: `${evaluated.window.lines.length} lines`, index: meta.index, exit_code: 0 });
+        callbacks?.onToolComplete?.(toolId, `${evaluated.window.lines.length} lines`, undefined, 0);
         return {
           index: meta.index,
-          observation:
-            `### read_range ${target} ${action.start_line}-${clampedEnd}\nexit_code: 0\n\`\`\`\n${numberedLines}\n\`\`\``,
+          observation: formatReadObservation('read_range', target, evaluated.window),
         };
       }
 
@@ -4228,13 +4261,22 @@ export class ChatEngine {
 
         const obsParts: string[] = [];
       for (const r of result.results) {
-        obsParts.push(
-          formatChatToolObservation(action, {
-            stdout: r.stdout,
-            stderr: r.stderr,
-            exitCode: r.exit_code,
-          }),
-        );
+        if (action.type === 'read_file') {
+          const window = selectReadWindow(r.stdout ?? '', { kind: 'full' });
+          obsParts.push(formatReadObservation('read_file', target, window));
+        } else {
+          obsParts.push(
+            formatChatToolObservation(
+              action,
+              {
+                stdout: r.stdout,
+                stderr: r.stderr,
+                exitCode: r.exit_code,
+              },
+              { spillDir: this.engineRunDir, toolCallId: String(toolId) },
+            ),
+          );
+        }
       }
 
       const lastResult = result.results[result.results.length - 1];
@@ -4299,12 +4341,12 @@ export class ChatEngine {
           const adds = (diff.match(/^\+[^+]/gm) ?? []).length;
           const dels = (diff.match(/^-[^-]/gm) ?? []).length;
           callbacks.onFileChanged?.(action.path, adds, dels, diff);
-          // R8: Seed read cache with written content so subsequent reads hit cache
-          this.readCache.set(this.readCacheKey(action.path), {
-            hash: this.hashContent(action.content),
-            timestamp: Date.now(),
-          });
+          invalidateReadCacheForPath(this.readCache, this.readCacheKey(action.path));
           this.fullReadCounts.delete(this.readCacheKey(action.path));
+          this.workingState = applyWorkingStateEvent(this.workingState, {
+            type: 'mutation',
+            path: action.path,
+          });
           noteChatWorkspaceMutation(this as never);
           // Crash-safe: persist patch to recovery log
           appendPatchRecovery(this.patchRecoveryPath ?? '', 'write_file', action.path, action.content);
@@ -4314,12 +4356,13 @@ export class ChatEngine {
           callbacks.onFileChanged?.(path, adds, dels, action.patch);
           // R8: Seed read cache after patch — hash the file on disk so
           // subsequent reads hit the dedupe cache.
-          try {
-            const patchedHash = await this.hashFilePath(path);
-            const pKey = this.readCacheKey(path);
-            this.readCache.set(pKey, { hash: patchedHash, timestamp: Date.now() });
-            this.fullReadCounts.delete(pKey);
-          } catch { /* file may not exist after patch — safe to skip */ }
+          const pKey = this.readCacheKey(path);
+          invalidateReadCacheForPath(this.readCache, pKey);
+          this.fullReadCounts.delete(pKey);
+          this.workingState = applyWorkingStateEvent(this.workingState, {
+            type: 'mutation',
+            path,
+          });
           noteChatWorkspaceMutation(this as never);
           // Crash-safe: persist patch to recovery log
           appendPatchRecovery(this.patchRecoveryPath ?? '', 'apply_patch', path, action.patch);
@@ -4341,12 +4384,29 @@ export class ChatEngine {
           }
           const receipt = await captureAndRecordVerifierReceipt({
             projectRoot: this.options.projectRoot, command: target, exitCode: lastResult.exit_code,
-            summary: (lastResult.stdout || '').slice(0, 200), mutationPaths: mutationPathsFromSessionEvents(this.parity.sessionEvents.events),
+            summary: formatVerifierReceiptSummary({
+              verifierId: target,
+              command: target,
+              exitCode: lastResult.exit_code,
+              stdout: lastResult.stdout,
+              stderr: lastResult.stderr,
+            }), mutationPaths: mutationPathsFromSessionEvents(this.parity.sessionEvents.events),
             sessionEvents: this.parity.sessionEvents, turnId: String(this.parity.turnId ?? this._turnIndex),
             ledger: this.executedVerifierLedger, cache: this.verifierReceiptCache, writeCount: this.writeCount,
           });
           if (receipt) {
             this.lastVerifierReceipt = receipt;
+            const ingested = ingestVerifierResult({
+              state: this.workingState,
+              tool: action.type,
+              target,
+              exitCode: lastResult.exit_code,
+              stdout: lastResult.stdout,
+              stderr: lastResult.stderr,
+              summary: receipt.summary ?? String(lastResult.exit_code),
+            });
+            this.workingState = ingested.state;
+            this.lastVerifierFailed = ingested.lastVerifierFailed;
           } else if (lastResult.exit_code === 0 && !confirmedShellMutation) {
             invalidateVerifierLedger(this as never, 'non-verifier shell command executed');
           }
@@ -4355,7 +4415,12 @@ export class ChatEngine {
         // B2: Update read cache after successful read_file execution
         if (action.type === 'read_file' && lastResult && lastResult.exit_code === 0 && fileReadCacheHash) {
           const pathKey = this.readCacheKey(action.path);
-          this.readCache.set(pathKey, { hash: fileReadCacheHash, timestamp: Date.now() });
+          rememberFullReadWindow(
+            this.readCache,
+            pathKey,
+            fileReadCacheHash,
+            lastResult.stdout ?? '',
+          );
           this.fullReadCounts.set(pathKey, (this.fullReadCounts.get(pathKey) ?? 0) + 1);
           this.noteToolForReadThrash(tool);
         } else if (
@@ -4896,13 +4961,13 @@ export class ChatEngine {
     callbacks: ChatCallbacks,
     hooks: { onStreamedChunks?: (text: string) => void } = {},
   ): Promise<ChatTurn> {
+    resetOneShotSnapshot(this.logicalTurnToolPolicy);
     if (useNativeTools && typeof runner.executeWithToolsStream === 'function') {
-      const restrictTools = this.shouldRestrictToolsThisTurn();
+      const nextTools = this.nextTurnToolPolicy();
+      const restrictTools = nextTools.restrict;
       const toolDefs = restrictTools
         ? this.services.tools.buildRestrictedDefinitions(
-            this.postWriteRepairRestrict
-              ? 'act_or_verify'
-              : resolveRestrictedToolMode(this.hasAnyWrites()),
+            nextTools.mode === 'full' ? 'act_or_verify' : nextTools.mode,
           )
         : this.services.tools.buildDefinitions();
       const nativeActions: ChatToolAction[] = [];

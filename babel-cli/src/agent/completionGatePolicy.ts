@@ -19,6 +19,7 @@ import {
   evaluateVerifierPromotion,
   type VerifierScope,
 } from './verifierKernel.js';
+import { isCatOrTypeCommand } from './codingLoop/verificationStages.js';
 
 /** Preserve ledger scope; never force targeted → full_suite (H5 live gate). */
 export function receiptScopeFromLedgerEntry(r: unknown): VerifierScope {
@@ -1067,6 +1068,12 @@ export function evaluateCompletionGateForEngine(opts: {
     verifierEvidenceErrors: opts.verifierEvidenceErrors ?? null,
   });
   if (!honesty.allow) return 'reject';
+  if (opts.lastVerifierReceipt && isCatOrTypeCommand(opts.lastVerifierReceipt.command)) {
+    return 'reject';
+  }
+  if (opts.lastVerifierReceipt && opts.lastVerifierReceipt.stale === true) {
+    return 'reject';
+  }
   // For 'required' policy: also check that when task asks for verifier,
   // the agent actually ran one (even if the receipt was non-zero and allowed).
   if (policy !== 'strict' && taskAsksForVerifier(opts.task)) {

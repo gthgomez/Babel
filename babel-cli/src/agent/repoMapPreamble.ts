@@ -63,6 +63,10 @@ export async function buildRepoMapPreamble(projectRoot: string): Promise<string>
     if (keyFiles.length > 0) {
       lines.push(`- Key files: ${keyFiles.join(', ')}`);
     }
+    const testDirs = topDirs.filter((d) => /test/i.test(d));
+    if (testDirs.length > 0) {
+      lines.push(`- Tests: ${testDirs.join(' ')}`);
+    }
 
     try {
       const pkgPath = join(projectRoot, 'package.json');

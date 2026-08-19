@@ -255,9 +255,17 @@ export class HeuristicTruncationStrategy implements CompactionStrategy {
       }
     }
 
+    const kept = messages.slice(startIdx);
+    const working = messages.filter(
+      (m) =>
+        m !== systemMsg &&
+        !kept.includes(m) &&
+        (m.name === 'working_state' ||
+          (typeof m.content === 'string' && m.content.includes('<!-- BABEL_WORKING_STATE -->'))),
+    );
     const result = systemMsg
-      ? [systemMsg, ...messages.slice(startIdx)]
-      : messages.slice(startIdx);
+      ? [systemMsg, ...working, ...kept]
+      : [...working, ...kept];
 
     return result;
   }

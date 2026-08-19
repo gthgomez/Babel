@@ -110,13 +110,14 @@ describe('computePostWriteRepairWallMs', () => {
     assert.equal(r.capMs, 600_000);
   });
 
-  test('buildPostWriteRepairMessage mentions act_or_verify intent', () => {
+  test('buildPostWriteRepairMessage mentions mutate + verify without lockout', () => {
     const msg = buildPostWriteRepairMessage({
       repairWindowSec: 120,
       remainingWallSec: 300,
     });
     assert.match(msg, /post-write repair window/i);
     assert.match(msg, /mutate \+ verify/i);
+    assert.match(msg, /Investigation tools/);
   });
 });
 
