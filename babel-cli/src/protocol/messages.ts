@@ -12,6 +12,12 @@ import type {
   CellCommittedParams,
   HistoryLookupParams,
   HistoryLookupResult,
+  ApprovalDecideParams,
+  ApprovalDecideResult,
+  WorkspaceChangesParams,
+  WorkspaceChangesResult,
+  VerificationLookupParams,
+  VerificationLookupResult,
   ThreadCreateParams,
   ThreadCreateResult,
   ThreadResumeParams,
@@ -50,13 +56,33 @@ export interface HistoryLookupRequest
 
 export interface HistoryLookupResponse extends JsonRpcSuccessResponse<HistoryLookupResult> {}
 
+export interface ApprovalDecideRequest
+  extends JsonRpcRequest<'approval.decide', ApprovalDecideParams> {}
+
+export interface ApprovalDecideResponse extends JsonRpcSuccessResponse<ApprovalDecideResult> {}
+
+export interface WorkspaceChangesRequest
+  extends JsonRpcRequest<'workspace.changes', WorkspaceChangesParams> {}
+
+export interface WorkspaceChangesResponse
+  extends JsonRpcSuccessResponse<WorkspaceChangesResult> {}
+
+export interface VerificationLookupRequest
+  extends JsonRpcRequest<'verification.lookup', VerificationLookupParams> {}
+
+export interface VerificationLookupResponse
+  extends JsonRpcSuccessResponse<VerificationLookupResult> {}
+
 /** Any client-originated JSON-RPC request in the catalog. */
 export type BabelProtocolRequest =
   | ThreadCreateRequest
   | ThreadResumeRequest
   | TurnSubmitRequest
   | TurnCancelRequest
-  | HistoryLookupRequest;
+  | HistoryLookupRequest
+  | ApprovalDecideRequest
+  | WorkspaceChangesRequest
+  | VerificationLookupRequest;
 
 /** Success response for any catalog method (error responses use JsonRpcErrorResponse). */
 export type BabelProtocolSuccessResponse =
@@ -64,7 +90,10 @@ export type BabelProtocolSuccessResponse =
   | ThreadResumeResponse
   | TurnSubmitResponse
   | TurnCancelResponse
-  | HistoryLookupResponse;
+  | HistoryLookupResponse
+  | ApprovalDecideResponse
+  | WorkspaceChangesResponse
+  | VerificationLookupResponse;
 
 // ─── Notifications ────────────────────────────────────────────────────────────
 
@@ -101,6 +130,9 @@ export interface BabelProtocolMethodMap {
   'turn.submit': { params: TurnSubmitParams; result: TurnSubmitResult };
   'turn.cancel': { params: TurnCancelParams; result: TurnCancelResult };
   'history.lookup': { params: HistoryLookupParams; result: HistoryLookupResult };
+  'approval.decide': { params: ApprovalDecideParams; result: ApprovalDecideResult };
+  'workspace.changes': { params: WorkspaceChangesParams; result: WorkspaceChangesResult };
+  'verification.lookup': { params: VerificationLookupParams; result: VerificationLookupResult };
 }
 
 export interface BabelProtocolNotificationMap {

@@ -189,6 +189,7 @@ import {
   getChatApprovalSession,
   setChatApprovalTurnId,
 } from './chatApproval.js';
+import { remoteMcpFailClosedObservation, remoteMcpIsFailClosed } from '../bridge/remoteApproval.js';
 import { deriveSubagentApprovalSession } from './approvalRequests.js';
 import { clearBackgroundShellRegistry, killAllBackgroundShells } from './backgroundShell.js';
 import {
@@ -3760,9 +3761,28 @@ export class ChatEngine {
       }
 
       if (isMcpChatAction(action)) {
-        // MCP calls execute without approval prompts in chat mode.
+        if (remoteMcpIsFailClosed()) {
+          const detail = remoteMcpFailClosedObservation(action.server);
+          this.toolCallLog.push({
+            tool,
+            target,
+            detail,
+            index: meta.index,
+            exit_code: 1,
+          });
+          callbacks?.onToolComplete?.(toolId, detail, detail, 1);
+          return {
+            index: meta.index,
+            observation: formatChatToolObservation(action, {
+              stdout: '',
+              stderr: detail,
+              exitCode: 1,
+            }),
+          };
+        }
+        // Local TUI: MCP calls execute without approval prompts in chat mode.
         // Safety is provided by the execution sandbox and circuit breaker,
-        // not by blocking the model mid-flow.
+        // not by blocking the model mid-flow. Remote does not inherit this bypass.
         const mcpResult = await executeTool(mapChatMcpActionToToolRequest(action), {
           ...toolContext,
           onBeforeDispatch: () => this.persistToolStartedAtExecutorDispatch(action, meta),

@@ -16,41 +16,72 @@ import type { JsonRpcResponse } from '../protocol/jsonRpc.js';
 import { BabelProtocolErrorCode } from '../protocol/types.js';
 import { assertAllowedProjectRoot } from './workspaceBound.js';
 import { originAllowed as originAllowedStructured } from './originPolicy.js';
+import { ThreadOwnershipRegistry, type ThreadOwnershipError } from './threadOwnership.js';
+import { threadStoreExists } from '../services/threadStore/threadStore.js';
 
 export const MAX_RPC_BYTES = 2 * 1024 * 1024;
 
 export type JsonRpcNotificationHandler = (payload: string) => void;
 
+interface GatewaySubscriber {
+  handler: JsonRpcNotificationHandler;
+  threadId?: string;
+}
+
+function notificationThreadId(notification: object): string | undefined {
+  const params = (notification as { params?: { thread_id?: unknown } }).params;
+  return typeof params?.thread_id === 'string' ? params.thread_id : undefined;
+}
+
 export class ProtocolGateway {
   readonly host: ProtocolHostState;
-  /** Stage 1: one trusted operator connection. */
-  private subscriber: JsonRpcNotificationHandler | null = null;
+  readonly threadOwnership = new ThreadOwnershipRegistry();
+  private subscribers = new Set<GatewaySubscriber>();
 
   constructor(options: {
     allowedWorkspaceRoot: string;
     engineFactory?: ProtocolHostState['engineFactory'];
+    remoteSurface?: boolean;
   }) {
     const allowedRoot = options.allowedWorkspaceRoot;
     this.host = createProtocolHostState({
       executeWithoutNotifications: true,
       projectRootGuard: (projectRoot) => assertAllowedProjectRoot(projectRoot, allowedRoot),
+      remoteSurface: options.remoteSurface !== false,
       ...(options.engineFactory ? { engineFactory: options.engineFactory } : {}),
     });
   }
 
-  subscribe(handler: JsonRpcNotificationHandler): () => void {
-    this.subscriber = handler;
+  subscribe(
+    handler: JsonRpcNotificationHandler,
+    options?: { threadId?: string },
+  ): () => void {
+    const subscriber: GatewaySubscriber = {
+      handler,
+      ...(options?.threadId !== undefined ? { threadId: options.threadId } : {}),
+    };
+    this.subscribers.add(subscriber);
     return () => {
-      if (this.subscriber === handler) this.subscriber = null;
+      this.subscribers.delete(subscriber);
     };
   }
 
   private fanout(notification: object): void {
-    if (!this.subscriber) return;
-    try {
-      this.subscriber(JSON.stringify(notification));
-    } catch {
-      this.subscriber = null;
+    const payload = JSON.stringify(notification);
+    const threadId = notificationThreadId(notification);
+    const isGlobal = (notification as { scope?: unknown }).scope === 'global';
+    for (const subscriber of this.subscribers) {
+      if (isGlobal) {
+        if (subscriber.threadId !== undefined) continue;
+      } else {
+        if (!subscriber.threadId) continue;
+        if (!threadId || subscriber.threadId !== threadId) continue;
+      }
+      try {
+        subscriber.handler(payload);
+      } catch {
+        /* drop disconnected subscribers */
+      }
     }
   }
 
@@ -76,8 +107,44 @@ export class ProtocolGateway {
         },
       };
     }
-    return handleProtocolRequest(parsed as BabelProtocolRequest, this.host, (notification) => {
-      this.fanout(notification);
+    const response = await handleProtocolRequest(
+      parsed as BabelProtocolRequest,
+      this.host,
+      (notification) => {
+        this.fanout(notification);
+      },
+    );
+    if (parsed.method === 'thread.create' && 'result' in response) {
+      const result = response.result as { thread_id?: unknown };
+      const params = (parsed as { params?: { session_id?: unknown } }).params;
+      if (
+        typeof result.thread_id === 'string' &&
+        typeof params?.session_id === 'string' &&
+        params.session_id.length > 0
+      ) {
+        this.threadOwnership.bind(result.thread_id, params.session_id);
+      }
+    }
+    return response;
+  }
+
+  /** Test helper: drive fan-out with a crafted notification. */
+  emitNotification(notification: object): void {
+    this.fanout(notification);
+  }
+
+  authorizeTicketMint(input: {
+    sessionId: string;
+    threadId: string;
+  }): { ok: true } | { ok: false; error: ThreadOwnershipError } {
+    const threadExists =
+      this.host.descriptors.has(input.threadId) ||
+      threadStoreExists(input.threadId) ||
+      this.threadOwnership.ownerOf(input.threadId) !== undefined;
+    return this.threadOwnership.authorizeMint({
+      threadId: input.threadId,
+      sessionId: input.sessionId,
+      threadExists,
     });
   }
 }

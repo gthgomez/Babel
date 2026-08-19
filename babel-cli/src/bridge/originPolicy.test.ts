@@ -9,6 +9,13 @@ test('allows loopback ports when policy lists host without port', () => {
   assert.equal(originAllowed('http://127.0.0.1:9999', loopback), true);
 });
 
+test('allows explicit :* port wildcards and still rejects lookalikes', () => {
+  const wildcard = ['http://127.0.0.1:*', 'http://localhost:*'];
+  assert.equal(originAllowed('http://127.0.0.1:14601', wildcard), true);
+  assert.equal(originAllowed('http://localhost:4545', wildcard), true);
+  assert.equal(originAllowed('http://127.0.0.1.evil.example:14601', wildcard), false);
+});
+
 test('denies lookalike hosts and schemes', () => {
   assert.equal(originAllowed('http://localhost.evil.example:4545', loopback), false);
   assert.equal(originAllowed('http://localhost@evil.example:4545', loopback), false);

@@ -2,7 +2,7 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-08-16
+last_verified: 2026-08-17
 -->
 
 Tailscale is reachability infrastructure. It is not part of ADR-010.
@@ -46,7 +46,7 @@ Operator must pass `--origin https://<magicdns-or-serve-host>` so the phone Orig
 ## Authentication notes
 
 - HTTP: `Authorization: Bearer <token>`.
-- WebSocket: query `token=` or Authorization header. Query tokens can leak via logs, Referer, and shell history. Documented risk; spike retains existing bridge behavior.
+- WebSocket V1: short-lived single-use ticket from authenticated `POST /ws/ticket`. The V1 PWA does not put the long-lived bearer in a URL. Legacy `?token=` still authenticates non-V1 tools but does not subscribe to `turn.event`. `AUTOMATED_VERIFIED` for ticket mint/consume/replay/expiry/scope.
 - `GET /health` is unauthenticated and must not include the token. VERIFIED.
 - `GET /ui` is unauthenticated HTML; the operator pastes the token in the page. XSS on that page would steal the token. The HTML is static and contains no secrets. PARTIALLY_VERIFIED (no adversarial HTML test).
 - CSRF: browsers send Origin on CORS POSTs. `/rpc` rejects non-allowlisted Origin when the header is present. curl without Origin still works with Bearer. Bearer-in-header is relatively CSRF-resistant; query-token WS is weaker.

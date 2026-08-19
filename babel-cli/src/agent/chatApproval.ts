@@ -34,6 +34,7 @@ import {
   digestApprovalOperation,
   operationDigestMatches,
 } from './approvalOperation.js';
+import { getRemoteSurface } from '../bridge/remoteApproval.js';
 
 function asConversationalRenderer(
   renderer: ReturnType<typeof getActiveRenderer>,
@@ -96,6 +97,22 @@ function capabilityForAction(action: AgentAction): ApprovalCapability {
  * Headless: deterministic deny unless pre-approved.
  */
 export async function requestChatActionApproval(action: AgentAction): Promise<boolean> {
+  const remote = getRemoteSurface();
+  if (remote) {
+    // Default remote supervision is clarification/lease, not ALLOW_ONCE.
+    // Optional operator mode keeps the digest-bound broker.
+    if (process.env['BABEL_REMOTE_OPERATOR_APPROVAL'] === '1') {
+      return remote.broker.requestAllowOnce({
+        action,
+        thread_id: remote.threadId,
+        turn_id: remote.turnId,
+        cwd: remote.cwd,
+        ...(remote.notify ? { notify: remote.notify } : {}),
+      });
+    }
+    return false;
+  }
+
   const permissionAction = agentActionToPermissionAction(action);
   if (!permissionAction) {
     return false;
@@ -218,6 +235,10 @@ export function approvalTargetForChatAction(action: ChatToolAction): string {
 /** JIT approval for MCP tool calls in chat mode. */
 export async function requestMcpApproval(action: ChatToolAction): Promise<boolean> {
   if (!isMcpChatAction(action)) {
+    return false;
+  }
+  const remote = getRemoteSurface();
+  if (remote?.failClosedMcp) {
     return false;
   }
   const server = action.server;

@@ -24,13 +24,13 @@ test('BABEL_PROTOCOL_VERSION is defined', () => {
 test('all protocol method strings are unique', () => {
   const methods = [...BABEL_PROTOCOL_METHODS];
   assert.equal(new Set(methods).size, methods.length);
-  assert.equal(methods.length, 5);
+  assert.equal(methods.length, 8);
 });
 
 test('all protocol notification strings are unique', () => {
   const notifications = [...BABEL_PROTOCOL_NOTIFICATIONS];
   assert.equal(new Set(notifications).size, notifications.length);
-  assert.equal(notifications.length, 2);
+  assert.equal(notifications.length, 6);
 });
 
 test('methods and notifications do not overlap', () => {
@@ -94,14 +94,24 @@ test('sample turn.event notification has no id field', () => {
 
 test('catalog method names match expected set', () => {
   assert.deepEqual([...BABEL_PROTOCOL_METHODS].sort(), [
+    'approval.decide',
     'history.lookup',
     'thread.create',
     'thread.resume',
     'turn.cancel',
     'turn.submit',
+    'verification.lookup',
+    'workspace.changes',
   ]);
 });
 
 test('catalog notification names match expected set', () => {
-  assert.deepEqual([...BABEL_PROTOCOL_NOTIFICATIONS].sort(), ['cell.committed', 'turn.event']);
+  assert.deepEqual([...BABEL_PROTOCOL_NOTIFICATIONS].sort(), [
+    'cell.committed',
+    'env_blocked',
+    'gate.rejected',
+    'permission.request',
+    'permission.respond',
+    'turn.event',
+  ]);
 });
