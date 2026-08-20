@@ -107,6 +107,13 @@ describe('ChatEngine.classifyChatTaskIntent', () => {
     assert.equal(ChatEngine.classifyChatTaskIntent('the login page is broken'), 'execute');
   });
 
+  test('classifies punctuation-only conversational pings as explain', () => {
+    assert.equal(ChatEngine.classifyChatTaskIntent('?'), 'explain');
+    assert.equal(ChatEngine.classifyChatTaskIntent('hello'), 'explain');
+    assert.equal(ChatEngine.classifyChatTaskIntent('thanks'), 'explain');
+    assert.equal(ChatEngine.classifyChatTaskIntent('who are you?'), 'explain');
+  });
+
   test('classifies can you explain question as explain', () => {
     assert.equal(
       ChatEngine.classifyChatTaskIntent('can you explain how middleware works?'),

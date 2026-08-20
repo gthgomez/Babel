@@ -110,12 +110,16 @@ import {
 } from './readThrashPolicy.js';
 import {
   applyWorkingStateEvent,
+  buildNoProgressStopMessage,
   createWorkingState,
   decideReadInjection,
+  decideTextOnlyTurnCompletion,
   evaluateReadRequest,
   formatReadObservation,
   formatVerifierReceiptSummary,
   invalidateReadCacheForPath,
+  isRepeatedNoProgressLoop,
+  remainingAnswerChunk,
   resetOneShotSnapshot,
   resolveNextTurnToolAccess,
   selectReadWindow,
@@ -227,7 +231,7 @@ import { runReadOnlyAgentLoop } from './lanes/readOnlyAgentLoop.js';
 import { runMutationAgentLoop } from './lanes/runMutationAgentLoop.js';
 import { runImplementWorktreeAgent } from './implementWorktreeAgent.js';
 import { executeTool, renderGitDiff, type ToolContext } from '../localTools.js';
-import { createStallDetector, updateStallState, getStallInterventionMessage, isTextOnlyLoop, buildTextOnlyLoopIntervention, buildTextOnlyLoopBlockedMessage, TEXT_ONLY_FORCE_BLOCKED_THRESHOLD } from './stallDetector.js';
+import { createStallDetector, updateStallState, getStallInterventionMessage, isTextOnlyLoop, buildTextOnlyLoopBlockedMessage, TEXT_ONLY_FORCE_BLOCKED_THRESHOLD } from './stallDetector.js';
 import type { StallState, StallIntervention } from './stallDetector.js';
 import type { ProgressController, ProgressSignal } from './progressController.js';
 import { classifyShellCapability } from './progressController.js';
@@ -911,6 +915,11 @@ export class ChatEngine {
       !/\b(and\s+(fix|edit|modify|change|update|write|patch|repair)|then\s+(fix|edit|modify)|fix\s+it)\b/i.test(task)
     )
       return 'explain';
+
+    // Conversational / greeting / punctuation-only turns are not execute tasks.
+    if (/^\s*([?!.]+|hi+|hello|hey|thanks|thank you|who are you\??)\s*$/i.test(task)) {
+      return 'explain';
+    }
 
     // Default: peer-engineer posture — assume user wants execution
     return 'execute';
@@ -1649,6 +1658,7 @@ export class ChatEngine {
       this.apiTokenCountAtTurnStart = this.apiTokenCount;
       // R11: Reset per-turn tool-call flag for auto-continue refusal
       this._hadToolCallsThisTurn = false;
+      let streamedAnswer = '';
 
       // Ensure repo map is available for subsequent turns that may rebuild system prompt
       if (turn === 0) await repoMapPromise;
@@ -1735,6 +1745,7 @@ export class ChatEngine {
           )) {
             rawText += chunk;
             this.currentTurnTelemetry?.markFirstToken();
+            streamedAnswer += chunk;
             yield { type: 'answer_chunk', text: chunk };
           }
           const providerEnd = performance.now();
@@ -1790,6 +1801,7 @@ export class ChatEngine {
               case 'text_delta':
                 this.currentTurnTelemetry?.markFirstToken();
                 answerText += event.text;
+                streamedAnswer += event.text;
                 yield { type: 'answer_chunk', text: event.text };
                 break;
               case 'thought_delta':
@@ -1865,6 +1877,7 @@ export class ChatEngine {
                 case 'text_delta':
                   this.currentTurnTelemetry?.markFirstToken();
                   answerText += event.text;
+                  streamedAnswer += event.text;
                   yield { type: 'answer_chunk', text: event.text };
                   break;
                 case 'thought_delta':
@@ -1922,6 +1935,7 @@ export class ChatEngine {
               )) {
                 rawText += chunk;
                 this.currentTurnTelemetry?.markFirstToken();
+                streamedAnswer += chunk;
                 yield { type: 'answer_chunk', text: chunk };
               }
               const rawFbEnd = performance.now();
@@ -1964,6 +1978,7 @@ export class ChatEngine {
           )) {
             rawText += chunk;
             this.currentTurnTelemetry?.markFirstToken();
+            streamedAnswer += chunk;
             yield { type: 'answer_chunk', text: chunk };
           }
           const legacyEnd = performance.now();
@@ -1994,6 +2009,7 @@ export class ChatEngine {
               this.abortController.signal,
             )) {
               rawText += chunk;
+              streamedAnswer += chunk;
               yield { type: 'answer_chunk', text: chunk };
             }
             this.trackRunnerUsage(fb);
@@ -2571,7 +2587,8 @@ export class ChatEngine {
         // declare BLOCKED even though no writes were made.
         const blockedReport = this.detectAndBuildBlockedReport(answer);
         if (blockedReport) {
-          yield { type: 'answer_chunk', text: answer };
+          const blockedRemainder = remainingAnswerChunk(streamedAnswer, answer);
+          if (blockedRemainder) yield { type: 'answer_chunk', text: blockedRemainder };
           this.conversation.push({ role: 'assistant', content: answer });
           _turnSpan.setAttribute('babel.chat.blocked', 'true');
           endSpan(_turnSpan, SpanStatusCode.OK);
@@ -2583,6 +2600,23 @@ export class ChatEngine {
         // Implementor I-03: refuse silent complete on execute with zero writes
         // (allow env_blocked answers through). Import errors after writes are not host env.
         const completionHasWrites = this.hasAnyWrites();
+
+        // Text-only completion (no tool request, no mutations) is a finished
+        // turn. Do not inject synthetic user messages and re-query the model.
+        const textOnlyDecision = decideTextOnlyTurnCompletion({
+          hadToolCallsThisIteration: this._hadToolCallsThisTurn,
+          hasAnyWrites: completionHasWrites,
+        });
+        if (textOnlyDecision.kind === 'complete') {
+          const remainder = remainingAnswerChunk(streamedAnswer, answer);
+          if (remainder) yield { type: 'answer_chunk', text: remainder };
+          this.conversation.push({ role: 'assistant', content: answer });
+          _turnSpan.setAttribute('babel.chat.turn', `${turn + 1}:text_complete`);
+          endSpan(_turnSpan, SpanStatusCode.OK);
+          _turnSpan = null;
+          yield this.streamDone(answer);
+          return;
+        }
         const envDetectOpts = { hasAnyWrites: completionHasWrites };
         const envBlocked =
           detectEnvBlockedFromText(answer, envDetectOpts) ||
@@ -2648,45 +2682,44 @@ export class ChatEngine {
           ...this.stallState,
           textOnlyTurns: this.stallState.textOnlyTurns + 1,
         };
-        if (isTextOnlyLoop(this.stallState)) {
+        if (
+          isTextOnlyLoop(this.stallState) ||
+          isRepeatedNoProgressLoop({
+            consecutiveTextOnlyIterations: this.stallState.textOnlyTurns,
+          })
+        ) {
           const hasAnyWrites = this.hasAnyWrites();
-          if (!hasAnyWrites && this.stallState.textOnlyTurns >= TEXT_ONLY_FORCE_BLOCKED_THRESHOLD) {
-            // 5+ text-only turns with zero writes — force BLOCKED.
-            _turnSpan.setAttribute('babel.chat.text_only_blocked', 'true');
-            endSpan(_turnSpan, SpanStatusCode.OK);
-            _turnSpan = null;
-            const textBlockedMsg = buildTextOnlyLoopBlockedMessage(this.stallState);
-            this.conversation.push({ role: 'assistant', content: answer });
-            this.conversation.push({ role: 'assistant', content: textBlockedMsg });
-            yield this.streamDone(textBlockedMsg, {
-              blockedReport: {
-                schema_version: 1 as const,
-                status: 'BLOCKED' as const,
-                reason: 'Agent produced only text responses without tool calls or file changes',
-                missing: 'Unable to determine — no tool calls were made',
-                checked: [
-                  {
-                    action: 'chat_turn',
-                    target: 'text_only_loop',
-                    finding: `${this.stallState.textOnlyTurns} consecutive turns with zero tool calls and zero writes`,
-                  },
-                ],
-              },
-              ...(this.verifierTampered ? { verifierTampered: true as const } : {}),
-            });
-            return;
-          }
-          // At threshold 3: inject force_status and continue the loop.
-          this.conversation.push({ role: 'assistant', content: answer });
-          this.conversation.push({
-            role: 'user',
-            content: buildTextOnlyLoopIntervention(this.stallState),
-          });
-          yield { type: 'thought', text: `[Text-only loop: ${this.stallState.textOnlyTurns} turns, escalating]` };
-          _turnSpan.setAttribute('babel.chat.text_only_turn', this.stallState.textOnlyTurns);
+          const forceBlocked =
+            !hasAnyWrites && this.stallState.textOnlyTurns >= TEXT_ONLY_FORCE_BLOCKED_THRESHOLD;
+          const stopMsg = forceBlocked
+            ? buildTextOnlyLoopBlockedMessage(this.stallState)
+            : buildNoProgressStopMessage(this.stallState.textOnlyTurns);
+          _turnSpan.setAttribute('babel.chat.text_only_blocked', 'true');
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
-          continue;
+          const remainder = remainingAnswerChunk(streamedAnswer, answer);
+          if (remainder) yield { type: 'answer_chunk', text: remainder };
+          this.conversation.push({ role: 'assistant', content: answer });
+          this.conversation.push({ role: 'assistant', content: stopMsg });
+          yield this.streamDone(stopMsg, {
+            blockedReport: {
+              schema_version: 1 as const,
+              status: 'BLOCKED' as const,
+              reason: forceBlocked
+                ? 'Agent produced only text responses without tool calls or file changes'
+                : stopMsg,
+              missing: 'Unable to determine — no tool calls were made',
+              checked: [
+                {
+                  action: 'chat_turn',
+                  target: 'text_only_loop',
+                  finding: `${this.stallState.textOnlyTurns} consecutive turns with zero tool calls and zero writes`,
+                },
+              ],
+            },
+            ...(this.verifierTampered ? { verifierTampered: true as const } : {}),
+          });
+          return;
         }
 
         // Execution gate: buffer streaming answer until gate check passes
@@ -2838,7 +2871,8 @@ export class ChatEngine {
           return;
         }
 
-        yield { type: 'answer_chunk', text: answer };
+        const remainder = remainingAnswerChunk(streamedAnswer, answer);
+        if (remainder) yield { type: 'answer_chunk', text: remainder };
         this.conversation.push({ role: 'assistant', content: answer });
         _turnSpan.setAttribute('babel.chat.turn', `${turn + 1}:completion`);
         if (this.lastCriticReceipt) {

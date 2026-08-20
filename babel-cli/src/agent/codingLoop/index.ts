@@ -92,6 +92,15 @@ export {
 export { decideProgressIntervention } from './progressSignals.js'
 
 export {
+  buildNoProgressStopMessage,
+  decideTextOnlyTurnCompletion,
+  isRepeatedNoProgressLoop,
+  remainingAnswerChunk,
+  NO_PROGRESS_STOP_THRESHOLD,
+  type TextOnlyTurnDecision,
+} from './turnCompletion.js'
+
+export {
   resetOneShotSnapshot,
   snapshotOnce,
   type OneShotPolicySnapshot,
