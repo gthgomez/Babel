@@ -1228,6 +1228,8 @@ import { conversationalToolLabel } from './toolDisplay.js';
 export class ConversationalRenderer extends BaseRenderer {
   private isTTY: boolean | undefined;
   private answerChunks: string[];
+  /** True after at least one answer_chunk in the current assistant generation. */
+  private _currentGenerationHasStream = false;
   private toolCallIndex: number;
   private pendingToolCalls: Map<number, { tool: string; target: string }>;
   private startTime: number;
@@ -1843,6 +1845,41 @@ export class ConversationalRenderer extends BaseRenderer {
     this._rawMode.disable();
   }
 
+  /**
+   * Seal the current streaming answer so the next generation cannot append
+   * onto the previous TTY cells / markdown accumulator.
+   */
+  private _sealStreamingAnswer(): void {
+    const hasStream =
+      this._currentGenerationHasStream || this._mdAccumulator.totalBytes > 0;
+    if (!hasStream) return;
+    this._historyTranscript.flushActive();
+    this._syncCellViewport();
+    if (this.isTTY) {
+      const d = this._mdAccumulator.finalize(renderMarkdown);
+      if (d) this._chunkCoalescer.push(d);
+      this._chunkCoalescer.flush();
+    }
+    this._mdAccumulator.reset();
+    this._currentGenerationHasStream = false;
+    if (this._twoRegion?.isHardwareMode) {
+      this._twoRegion.beginNewStreamingMessage();
+    } else if (this.isTTY) {
+      safeStdoutWrite('\n');
+    }
+  }
+
+  /** New model iteration (thinking) — commit any transient answer first. */
+  onThinking(): void {
+    if (this.outputBroken) return;
+    if (this.paused) return;
+    if (this._state === 'done' || this._state === 'failed') return;
+    this._sealStreamingAnswer();
+    this._state = 'thinking';
+    this._store?.dispatch({ type: 'state:transition', to: 'thinking' });
+    this._registerThinkingTicker();
+  }
+
   /** Stream a chunk of natural-language answer text — the primary output. */
   onAnswerChunk(chunk: string): void {
     if (this.outputBroken) return;
@@ -1853,6 +1890,7 @@ export class ConversationalRenderer extends BaseRenderer {
     // Fix: push BEFORE _recordActivity so the first chunk triggers
     // the 'thinking' → 'streaming' state transition.
     this.answerChunks.push(chunk);
+    this._currentGenerationHasStream = true;
     this._historyTranscript.onAnswerChunk(chunk);
     this._syncCellViewport();
     this._recordModelActivity();
@@ -1939,6 +1977,7 @@ export class ConversationalRenderer extends BaseRenderer {
     // Store accepted — now mutate renderer state
     this.toolCallCount++;
     this.pendingToolCalls.set(id, { tool, target });
+    this._sealStreamingAnswer();
     this._historyTranscript.beginToolCall(id, tool, target);
     this._syncCellViewport();
     if (this.isTTY) {
@@ -2328,6 +2367,7 @@ export class ConversationalRenderer extends BaseRenderer {
    *  Configures shimmer on the MarkdownAccumulator based on motion mode. */
   start(): void {
     this._historyTranscript.beginTurn();
+    this._currentGenerationHasStream = false;
     this._cellViewport.setWidth(process.stdout.columns ?? 80);
     this._syncCellViewport();
     this._state = 'thinking';

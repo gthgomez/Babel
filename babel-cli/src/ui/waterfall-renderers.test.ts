@@ -650,6 +650,51 @@ test('ConversationalRenderer: first answer chunk leaves thinking via stream path
   assert.match(stripAnsi(raw), /Hello from the model/);
 });
 
+test('ConversationalRenderer: thinking seam commits prior stream as a separate cell', () => {
+  const r = new ConversationalRenderer({ isTTY: false });
+  try {
+    r.start();
+    r.onAnswerChunk("I'm ");
+    r.onAnswerChunk('ready to help.');
+    r.onThinking();
+    r.onAnswerChunk("What's the task?");
+    r.stop();
+
+    const cells = r.getHistoryCellRecords();
+    const assistants = cells.filter((record) => record.kind === 'assistant_message');
+    assert.equal(assistants.length, 2, 'each model iteration must be its own committed message');
+    const texts = assistants.map((record) => {
+      const payload = record.payload as { message?: string };
+      return payload.message ?? '';
+    });
+    assert.equal(texts[0], "I'm ready to help.");
+    assert.equal(texts[1], "What's the task?");
+  } finally {
+    r.stop();
+  }
+});
+
+test('ConversationalRenderer: tool boundary does not concatenate the next assistant onto the first', () => {
+  const r = new ConversationalRenderer({ isTTY: false });
+  try {
+    r.start();
+    r.onAnswerChunk('Inspecting the file.');
+    const id = r.onToolCallStart('file_read', 'README.md');
+    r.onToolCallComplete(id, '12 B');
+    r.onThinking();
+    r.onAnswerChunk('Here is the answer.');
+    r.stop();
+
+    const cells = r.getHistoryCellRecords();
+    const assistants = cells.filter((record) => record.kind === 'assistant_message');
+    assert.equal(assistants.length, 2);
+    assert.equal((assistants[0]?.payload as { message?: string }).message, 'Inspecting the file.');
+    assert.equal((assistants[1]?.payload as { message?: string }).message, 'Here is the answer.');
+  } finally {
+    r.stop();
+  }
+});
+
 test('ConversationalRenderer: multiple tool calls in parallel tracked independently', () => {
   const r = new ConversationalRenderer({ isTTY: false });
   const { writes, restore } = interceptStdout();

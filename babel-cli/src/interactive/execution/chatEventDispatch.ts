@@ -31,6 +31,7 @@ export function dispatchChatEvent(
 
   switch (event.type) {
     case 'thinking':
+      sinks.convRenderer?.onThinking?.();
       break;
     case 'answer_chunk':
       sinks.convRenderer?.onAnswerChunk(event.text);
