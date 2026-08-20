@@ -33,7 +33,10 @@ export interface ReviewCardInput {
   verificationApplicability?: 'applicable' | 'not_applicable' | 'optional' | undefined;
   summary?: string | undefined;
   costUsd?: number | undefined;
+  /** Billed tokens for the same scope as `costUsd` (this turn). */
   tokens?: number | undefined;
+  /** Session-cumulative billed tokens. Shown only when larger than `tokens`. */
+  sessionTokens?: number | undefined;
   mutated?: boolean | undefined;
   nextActions?: string[] | undefined;
   /** Only for SESSION_EVENT_LIFECYCLE_CAUSALITY — not every AGENT_FAILURE. */
@@ -281,6 +284,14 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
     const bits: string[] = [];
     if (hasRealCost) bits.push(`$${input.costUsd!.toFixed(4)}`);
     if (hasRealTokens) bits.push(`${input.tokens} tok`);
+    const sessionTokens = input.sessionTokens;
+    if (
+      hasRealTokens &&
+      sessionTokens !== undefined &&
+      sessionTokens > (input.tokens ?? 0)
+    ) {
+      bits.push(`(session ${sessionTokens})`);
+    }
     lines.push(`${dim('Cost')}  ${bits.join('  ')}`);
   }
 

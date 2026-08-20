@@ -37,6 +37,17 @@ export interface SessionUsageSummary {
   modelBreakdown: Record<string, ModelUsage>;
 }
 
+/** This-turn billed usage from two session snapshots. Never negative. */
+export function usageDelta(
+  before: Pick<SessionUsageSummary, 'totalCostUSD' | 'totalTokens'>,
+  after: Pick<SessionUsageSummary, 'totalCostUSD' | 'totalTokens'>,
+): { costUsd: number; tokens: number } {
+  return {
+    costUsd: Math.max(0, after.totalCostUSD - before.totalCostUSD),
+    tokens: Math.max(0, after.totalTokens - before.totalTokens),
+  };
+}
+
 const PRICING: Record<string, { input: number; output: number }> = {
   ...Object.fromEntries(
     Object.values(MODEL_PRICING_REGISTRY).map((entry) => [

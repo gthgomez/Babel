@@ -8,7 +8,7 @@ import type { ReplContext } from '../context.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
 import { ChatEngine, type ChatEngineOptions } from '../../agent/chatEngine.js';
 import { ConversationalRenderer } from '../../ui/waterfall.js';
-import { globalCostTracker } from '../../services/costTracker.js';
+import { globalCostTracker, usageDelta } from '../../services/costTracker.js';
 
 import { error, muted } from '../../ui/theme.js';
 import { updateConversationMemory } from '../turns.js';
@@ -95,7 +95,8 @@ export async function executeChatTask(
   // Slice 2: do not re-activate PromptInput during the turn. A live composer
   // shares stdin with ConversationalRenderer and turns one Ctrl+C into
   // cancel + process-exit on ConPTY (raw 0x03 plus SIGINT).
-  const preRunCost = globalCostTracker.getSessionSummary().totalCostUSD;
+  const preRunUsage = globalCostTracker.getSessionSummary();
+  const preRunCost = preRunUsage.totalCostUSD;
   ctx.lastTargetRoot = target.targetRoot;
   ctx.lastWorkspaceRoot = target.workspaceRoot;
   ctx.state.lastRunTargetRoot = target.targetRoot;
@@ -215,8 +216,10 @@ export async function executeChatTask(
     // Collect changed files from the tool log for the summary display.
     const changedFiles = collectChangedFiles(result);
 
-    const postRunCost = globalCostTracker.getSessionSummary().totalCostUSD;
-    const perRunCost = Math.max(0, postRunCost - preRunCost);
+    const postRunUsage = globalCostTracker.getSessionSummary();
+    const postRunCost = postRunUsage.totalCostUSD;
+    const turnUsage = usageDelta(preRunUsage, postRunUsage);
+    const perRunCost = turnUsage.costUsd;
     const resolvedOutcome: TerminalOutcome =
       result.outcome ??
       (result.status === 'completed'
@@ -293,7 +296,8 @@ export async function executeChatTask(
           ? 'not_applicable'
           : undefined,
       costUsd: perRunCost,
-      tokens: result.usage?.totalTokens,
+      tokens: turnUsage.tokens,
+      sessionTokens: postRunUsage.totalTokens,
       sessionConsistencyFailure: isSessionConsistencyFailureMessage(result.answer),
     });
 
@@ -470,7 +474,12 @@ export async function executeChatTask(
           finalAnswer: 'Cancelled',
         },
       ]);
-      const review = renderProjectedReviewCard(projectedState);
+      const abortUsage = usageDelta(preRunUsage, globalCostTracker.getSessionSummary());
+      const review = renderProjectedReviewCard(projectedState, {
+        costUsd: abortUsage.costUsd,
+        tokens: abortUsage.tokens,
+        sessionTokens: globalCostTracker.getSessionSummary().totalTokens,
+      });
       if (convRenderer) {
         convRenderer.cancelRun();
       }
