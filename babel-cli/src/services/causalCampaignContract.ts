@@ -29,11 +29,15 @@ import { z } from 'zod';
 /** Bump when scorer semantics change (axes, eligibility, oracle hierarchy). */
 export const CAUSAL_SCORER_VERSION = 'causal-scorer-v1' as const;
 
-/** Stage 1 primary arms (ablations are Stage 2 only). */
+/** Stage 1 primary arms (ablations are Stage 2 only).
+ *  `raw_opencode` runs the external OpenCode CLI on the identical prepared
+ *  workspace WITHOUT Babel — the baseline arm for paired capability-transfer
+ *  measurement. See docs/roadmaps/OX_ALPHA_EXPERIMENTAL_PROGRAM.md. */
 export const CAUSAL_STAGE1_ARMS = [
   'babel_enforce',
   'babel_shadow',
   'babel_prompt_control',
+  'raw_opencode',
 ] as const;
 export type CausalStage1Arm = (typeof CAUSAL_STAGE1_ARMS)[number];
 
@@ -228,6 +232,10 @@ export function defaultArmConfig(arm: CausalStage1Arm): {
       return { prompt_delta_id: 'product_full', enforcement: 'shadow' };
     case 'babel_prompt_control':
       return { prompt_delta_id: 'product_minus_suppressive_v1', enforcement: 'shadow' };
+    case 'raw_opencode':
+      // External baseline: no Babel prompt delta, no shadow policy surface.
+      // `enforcement` is carried for schema/hash stability only.
+      return { prompt_delta_id: 'external_cli_none', enforcement: 'full' };
     default: {
       const _exhaustive: never = arm;
       return _exhaustive;
