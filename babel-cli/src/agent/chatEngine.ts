@@ -20,6 +20,7 @@ import { allocateThreadId } from '../services/threadStore/threadIds.js';
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
 import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
 import { OllamaApiRunner } from '../runners/ollamaApi.js';
+import { OpenCodeApiRunner } from '../runners/openCodeApi.js';
 import type { ProviderMessage, RunnerCallbacks } from '../runners/base.js';
 import { mapProviderMessagesToWire } from '../runners/providerMessages.js';
 import {
@@ -1662,11 +1663,13 @@ export class ChatEngine {
     // P1: open parity turn (loop + durable event log)
     const modelName =
       this.options.model ?? this.modelPolicy?.family ?? 'unknown';
-    const providerName = modelName.toLowerCase().includes('deepseek')
-      ? 'deepseek'
-      : modelName.toLowerCase().includes('ollama')
-        ? 'ollama'
-        : 'deepinfra';
+    const providerName = this.modelPolicy?.provider === 'opencode'
+      ? 'opencode'
+      : modelName.toLowerCase().includes('deepseek')
+        ? 'deepseek'
+        : modelName.toLowerCase().includes('ollama')
+          ? 'ollama'
+          : 'deepinfra';
     parityOnUserTurn(this.parity, {
       task: userInput,
       model: modelName,
@@ -4687,6 +4690,8 @@ export class ChatEngine {
           if (!offline) throw new Error('Cannot start live chat synthesis: DeepSeek runner is unavailable. Set DEEPSEEK_API_KEY in your environment.');
           this.synthesisRunner = new DeepInfraApiRunner(resolveFallbackModelId());
         }
+      } else if (provider === 'opencode' && modelId) {
+        this.synthesisRunner = new OpenCodeApiRunner(modelId);
       } else if (modelId) {
         if (!offline) assertDeepSeekLiveModelId(modelId, 'live chat synthesis');
         this.synthesisRunner = offline ? new DeepInfraApiRunner(modelId) : new DeepSeekApiRunner(modelId);
@@ -4903,6 +4908,18 @@ export class ChatEngine {
                 `  Use /model to see available providers.`,
             );
           }
+        }
+      } else if (provider === 'opencode' && modelId) {
+        // OpenCode Zen (e.g. ox-alpha-free): explicit backend-key opt-in.
+        try {
+          this.deliberationRunner = new OpenCodeApiRunner(modelId);
+        } catch (err) {
+          throw new Error(
+            `Cannot start chat: OpenCode runner failed to initialize.\n` +
+              `  ${err instanceof Error ? err.message : String(err)}\n` +
+              `  Set OPENCODE_API_KEY in your environment.\n` +
+              `  Use /model to see available providers.`,
+          );
         }
       } else if (modelId) {
         const offline = isOfflineChatMode();

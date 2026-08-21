@@ -12,9 +12,10 @@ import {
 } from '../agent/liteArtifacts.js';
 import { writeLiteTextArtifact } from '../lite/artifacts.js';
 import { runWithPrimaryOnlyFallback } from '../execute.js';
-import { resolveFamilyModelPolicy, type ResolvedModelPolicy } from '../modelPolicy.js';
+import { resolveFamilyModelPolicy, loadModelPolicyConfig, type ResolvedModelPolicy } from '../modelPolicy.js';
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
 import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
+import { OpenCodeApiRunner } from '../runners/openCodeApi.js';
 import type { RunnerInvocationMetadata } from '../runners/base.js';
 import { AskAnswerSchema, type AskAnswer } from '../schemas/agentContracts.js';
 import { globalCostTracker, type SessionUsageSummary } from './costTracker.js';
@@ -73,6 +74,32 @@ function askUsesLiveProvider(options: RunAskAnswerPathOptions): boolean {
     process.env['BABEL_OFFLINE'] !== 'true' &&
     !process.argv.includes('--offline')
   );
+}
+
+/**
+ * Shared ask-lane model resolution. Explicit backend keys whose provider is
+ * opencode bypass the DeepSeek-only live assertion: naming the backend key IS
+ * the operator opt-in to OpenCode Zen (they supply OPENCODE_API_KEY). Every
+ * other live selection stays on the DeepSeek-only lane.
+ */
+export function resolveAskModelPolicyWithLiveGate(
+  options: Pick<RunAskAnswerPathOptions, 'model' | 'modelTier' | 'allowExpensive'>,
+  liveOnly: boolean,
+  babelRoot: string = BABEL_ROOT,
+): ResolvedModelPolicy | undefined {
+  if (!options.model && !liveOnly) return undefined;
+  const configuredEntry =
+    options.model !== undefined
+      ? loadModelPolicyConfig(babelRoot).config.models?.[options.model]
+      : undefined;
+  const explicitOpenCodeRequest = configuredEntry?.provider === 'opencode';
+  return resolveFamilyModelPolicy({
+    family: options.model ?? 'DeepSeek',
+    ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
+    ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+    ...(explicitOpenCodeRequest ? {} : { liveOnly }),
+    babelRoot,
+  });
 }
 
 function taskMentionsTarget(task: string, projectRoot: string): boolean {
@@ -379,9 +406,11 @@ async function runDirectAsk(
 ): Promise<AskAnswer> {
   const provider = modelPolicy.provider;
   const runner =
-    provider === 'deepseek'
-      ? new DeepSeekApiRunner(modelPolicy.providerModelId)
-      : new DeepInfraApiRunner(modelPolicy.providerModelId);
+    provider === 'opencode'
+      ? new OpenCodeApiRunner(modelPolicy.providerModelId)
+      : provider === 'deepseek'
+        ? new DeepSeekApiRunner(modelPolicy.providerModelId)
+        : new DeepInfraApiRunner(modelPolicy.providerModelId);
   try {
     const callbacks = onChunk ? { onChunk } : undefined;
     const answer = await runner.execute(prompt, AskAnswerSchema, callbacks);
@@ -477,30 +506,25 @@ export async function runAskAnswerFastPath(
   const prompt = await buildAskPrompt(options);
 
   // Resolve model policy if a specific model was requested
-  const liveOnly = askUsesLiveProvider(options);
-  const modelPolicy = options.model || liveOnly
-    ? resolveFamilyModelPolicy({
-        family: options.model ?? 'DeepSeek',
-        ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
-        ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
-        liveOnly,
-        babelRoot: BABEL_ROOT,
-      })
-    : undefined;
+  const modelPolicy = resolveAskModelPolicyWithLiveGate(options, askUsesLiveProvider(options));
 
   let answer: AskAnswer;
   let errorRunDir: string | null = null;
 
   try {
     const isDirectApi =
-      modelPolicy?.provider === 'deepinfra' || modelPolicy?.provider === 'deepseek';
+      modelPolicy?.provider === 'deepinfra' ||
+      modelPolicy?.provider === 'deepseek' ||
+      modelPolicy?.provider === 'opencode';
 
     if (isDirectApi) {
       // Direct API call — structured JSON with schema validation
       const runner =
-        modelPolicy!.provider === 'deepseek'
-          ? new DeepSeekApiRunner(modelPolicy!.providerModelId)
-          : new DeepInfraApiRunner(modelPolicy!.providerModelId);
+        modelPolicy!.provider === 'opencode'
+          ? new OpenCodeApiRunner(modelPolicy!.providerModelId)
+          : modelPolicy!.provider === 'deepseek'
+            ? new DeepSeekApiRunner(modelPolicy!.providerModelId)
+            : new DeepInfraApiRunner(modelPolicy!.providerModelId);
 
       try {
         const callbacks = options.onChunk ? { onChunk: options.onChunk } : undefined;
@@ -612,21 +636,14 @@ export async function runAskAnswerPath(
   globalCostTracker.resetSession();
   evidence.writeCompiledContext('ask', prompt);
 
-  const liveOnly = askUsesLiveProvider(options);
-  const modelPolicy = options.model || liveOnly
-    ? resolveFamilyModelPolicy({
-        family: options.model ?? 'DeepSeek',
-        ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
-        ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
-        liveOnly,
-        babelRoot: BABEL_ROOT,
-      })
-    : undefined;
+  const modelPolicy = resolveAskModelPolicyWithLiveGate(options, askUsesLiveProvider(options));
 
   let answer: AskAnswer;
   try {
     const runAsk = (onChunk?: (chunk: string) => void) =>
-      modelPolicy?.provider === 'deepinfra' || modelPolicy?.provider === 'deepseek'
+      modelPolicy?.provider === 'deepinfra' ||
+      modelPolicy?.provider === 'deepseek' ||
+      modelPolicy?.provider === 'opencode'
         ? runDirectAsk(prompt, modelPolicy, evidence, onChunk)
         : runWithPrimaryOnlyFallback(prompt, AskAnswerSchema, {
             evidence,
