@@ -103,6 +103,7 @@ export function dispatchChatEvent(
       answer: 'Cancelled',
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
+      ...(event.turnTelemetry ? { turnTelemetry: event.turnTelemetry } : {}),
     };
   }
 

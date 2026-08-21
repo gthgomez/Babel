@@ -539,6 +539,23 @@ const SUB_AGENT_MAX_ROUNDS = 4;
 const TURN_TIMEOUT_MS = 120_000; // per-turn LLM call deadline
 const MAX_TOOL_CONCURRENCY = 6; // Prevent exhausting connection pools
 
+// ─── Conversational-turn detection ────────────────────────────────────────
+// Pure greetings / acknowledgements / punctuation-only turns ('?', 'hello',
+// 'thanks') carry no task content. They must not take the execute path:
+// execute-intent classification makes the zero-write completion refusal
+// re-query trivial turns until the turn budget is exhausted. Whole-input
+// match keeps action-bearing requests ('hi — fix the bug') on execute via
+// the verb checks in classifyChatTaskIntent.
+const CONVERSATIONAL_TURN_RE =
+  /^(?:(?:hi+|hello+|hey+|yo|sup|howdy|greetings|good\s*(?:morning|afternoon|evening|day)|hi\s+there|hello\s+there|thanks|thank\s*you|thankyou|thx|ty|ok(?:ay)?|cool|nice|great|awesome|perfect|got\s*it|sounds\s+good|bye|goodbye|see\s*ya)(?:[!,.?;:\s]+|$))+$/i;
+const PUNCTUATION_ONLY_TURN_RE = /^[\s\p{P}\p{S}\p{C}]*$/u;
+
+function isConversationalTurnText(task: string): boolean {
+  const t = task.trim();
+  if (!t || t.length > 32) return false;
+  return PUNCTUATION_ONLY_TURN_RE.test(t) || CONVERSATIONAL_TURN_RE.test(t);
+}
+
 // ─── ChatEngine ───────────────────────────────────────────────────────────
 
 export class ChatEngine {
@@ -875,6 +892,11 @@ export class ChatEngine {
   /** Classify user intent from the task text.
    *  Used to determine whether the execution gate should be active. */
   static classifyChatTaskIntent(task: string): TaskIntent {
+    // Conversational / non-actionable turns ('?', 'hello') are never execute
+    // tasks — there is nothing to mutate, and execute classification makes
+    // the implementor zero-write refusal loop re-query them until maxTurns.
+    if (isConversationalTurnText(task)) return 'explain';
+
     // Explicit markdown fenced code blocks or diff/patch snippets → execute
     if (/```(?:diff|patch|javascript|typescript|python|go|rust)\b/.test(task)) return 'execute';
 
@@ -1655,7 +1677,7 @@ export class ChatEngine {
       if (this._cancelled || this.abortController.signal.aborted) {
         // AC3: stream cancel path flushes disk (idempotent if cancel() already did)
         finalizeParityCancel(this.parity, this.engineRunDir);
-        yield { type: 'cancelled' };
+        yield this.streamCancelled();
         return;
       }
 
@@ -1720,6 +1742,10 @@ export class ChatEngine {
 
       let turnResult: ChatTurn;
       let toolsAnnouncedInStream = false;
+      // Visible answer text already emitted chunk-by-chunk by this turn's
+      // provider call. Terminal paths re-emit the full answer only when it
+      // differs — re-emitting identical text duplicates it in the TUI.
+      let streamedAnswerForTurn: string | null = null;
 
       if (useTextTools) {
         // ── Text-tools path — simplified format for small local models ──────
@@ -1744,6 +1770,7 @@ export class ChatEngine {
             providerEnd,
           );
           this.trackRunnerUsage(runner);
+          streamedAnswerForTurn = rawText;
           turnResult = parseTextToolTurn(rawText);
         } catch (err: any) {
           const providerEnd = performance.now();
@@ -1825,6 +1852,7 @@ export class ChatEngine {
           );
           this.trackRunnerUsage(runner);
           this._streamNativeToolCallIds = nativeToolCallIds;
+          streamedAnswerForTurn = answerText;
           turnResult = nativeActions.length > 0
             ? { type: 'tool_calls', actions: nativeActions }
             : { type: 'completion', answer: answerText || 'OK' };
@@ -1899,6 +1927,7 @@ export class ChatEngine {
             );
             this.trackRunnerUsage(fb);
             this._streamNativeToolCallIds = nativeToolCallIds;
+            streamedAnswerForTurn = answerText;
             turnResult = nativeActions.length > 0
               ? { type: 'tool_calls', actions: nativeActions }
               : { type: 'completion', answer: answerText || 'OK' };
@@ -1931,6 +1960,7 @@ export class ChatEngine {
                 rawFbEnd,
               );
               this.trackRunnerUsage(fb);
+              streamedAnswerForTurn = rawText;
               turnResult = this.parseChatTurnLenient(rawText);
             } catch (rawErr: any) {
               const rawFbEnd = performance.now();
@@ -2011,6 +2041,7 @@ export class ChatEngine {
         }
 
         turnResult = this.parseChatTurnLenient(rawText);
+        streamedAnswerForTurn = rawText;
       }
 
       // Item 7: end-of-turn token explosion on stream path (after LLM usage tracked)
@@ -2571,7 +2602,9 @@ export class ChatEngine {
         // declare BLOCKED even though no writes were made.
         const blockedReport = this.detectAndBuildBlockedReport(answer);
         if (blockedReport) {
-          yield { type: 'answer_chunk', text: answer };
+          if (streamedAnswerForTurn !== answer) {
+            yield { type: 'answer_chunk', text: answer };
+          }
           this.conversation.push({ role: 'assistant', content: answer });
           _turnSpan.setAttribute('babel.chat.blocked', 'true');
           endSpan(_turnSpan, SpanStatusCode.OK);
@@ -2580,70 +2613,12 @@ export class ChatEngine {
           return;
         }
 
-        // Implementor I-03: refuse silent complete on execute with zero writes
-        // (allow env_blocked answers through). Import errors after writes are not host env.
-        const completionHasWrites = this.hasAnyWrites();
-        const envDetectOpts = { hasAnyWrites: completionHasWrites };
-        const envBlocked =
-          detectEnvBlockedFromText(answer, envDetectOpts) ||
-          this.toolCallLog.some((t) =>
-            detectEnvBlockedFromText(
-              `${t.detail ?? ''} ${t.error ?? ''}`,
-              envDetectOpts,
-            ),
-          );
-        const completionPref = evaluateCompletionPrefersPatch({
-          executeIntent: resolvedIntent === 'execute',
-          hasAnyWrites: completionHasWrites,
-          envBlocked,
-        });
-        if (!completionPref.allowComplete && completionPref.message) {
-          this.conversation.push({ role: 'assistant', content: answer });
-          this.conversation.push({ role: 'user', content: completionPref.message });
-          yield {
-            type: 'thought',
-            text: '[Implementor: completion prefers patch — continuing]',
-          };
-          this.policyEventLog.record({
-            at_turn: this._turnIndex,
-            kind: 'progress_policy',
-            detail: 'completion_prefers_patch',
-          });
-          endSpan(_turnSpan, SpanStatusCode.OK);
-          _turnSpan = null;
-          continue;
-        }
-
-        // R11: Per-round token ceiling — force BLOCKED before the text-only
-        // counter if a single text turn burned > maxTokensPerRound.
-        const tokenCeilingBlocked = this.checkPerRoundTokenCeiling(false);
-        if (tokenCeilingBlocked) {
-          _turnSpan.setAttribute('babel.chat.token_ceiling_blocked', 'true');
-          endSpan(_turnSpan, SpanStatusCode.OK);
-          _turnSpan = null;
-          this.conversation.push({ role: 'assistant', content: answer });
-          this.conversation.push({ role: 'assistant', content: tokenCeilingBlocked });
-          yield this.streamDone(tokenCeilingBlocked, {
-            blockedReport: {
-              schema_version: 1 as const,
-              status: 'BLOCKED' as const,
-              reason: `Per-round token ceiling exceeded: ${this.apiTokenCount - this.apiTokenCountAtTurnStart} tokens with zero tool calls`,
-              missing: 'Agent produced only text — no tool calls were made',
-              checked: [
-                {
-                  action: 'token_ceiling',
-                  target: 'per_round_limit',
-                  finding: `${(this.apiTokenCount - this.apiTokenCountAtTurnStart).toLocaleString()} tokens this turn (limit: ${this.limits.maxTokensPerRound.toLocaleString()})`,
-                },
-              ],
-            },
-            ...(this.verifierTampered ? { verifierTampered: true as const } : {}),
-          });
-          return;
-        }
-
         // R11: Text-only loop guard — detect when the model produces only
-        // text/completion responses without any tool calls.
+        // text/completion responses without any tool calls. This must run
+        // BEFORE the implementor prefers-patch refusal below: the refusal
+        // continues unconditionally on every zero-write execute completion,
+        // which would starve this bounded escalation (force_status at 3,
+        // BLOCKED at 5) and re-query pure-text loops until maxTurns.
         this.stallState = {
           ...this.stallState,
           textOnlyTurns: this.stallState.textOnlyTurns + 1,
@@ -2687,6 +2662,67 @@ export class ChatEngine {
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
           continue;
+        }
+
+        // Implementor I-03: refuse silent complete on execute with zero writes
+        // (allow env_blocked answers through). Import errors after writes are not host env.
+        const completionHasWrites = this.hasAnyWrites();
+        const envDetectOpts = { hasAnyWrites: completionHasWrites };
+        const envBlocked =
+          detectEnvBlockedFromText(answer, envDetectOpts) ||
+          this.toolCallLog.some((t) =>
+            detectEnvBlockedFromText(
+              `${t.detail ?? ''} ${t.error ?? ''}`,
+              envDetectOpts,
+            ),
+          );
+        const completionPref = evaluateCompletionPrefersPatch({
+          executeIntent: resolvedIntent === 'execute',
+          hasAnyWrites: completionHasWrites,
+          envBlocked,
+        });
+        if (!completionPref.allowComplete && completionPref.message) {
+          this.conversation.push({ role: 'assistant', content: answer });
+          this.conversation.push({ role: 'user', content: completionPref.message });
+          yield {
+            type: 'thought',
+            text: '[Implementor: completion prefers patch — continuing]',
+          };
+          this.policyEventLog.record({
+            at_turn: this._turnIndex,
+            kind: 'progress_policy',
+            detail: 'completion_prefers_patch',
+          });
+          endSpan(_turnSpan, SpanStatusCode.OK);
+          _turnSpan = null;
+          continue;
+        }
+
+        // R11: Per-round token ceiling — force BLOCKED if a single text turn burned > maxTokensPerRound.
+        const tokenCeilingBlocked = this.checkPerRoundTokenCeiling(false);
+        if (tokenCeilingBlocked) {
+          _turnSpan.setAttribute('babel.chat.token_ceiling_blocked', 'true');
+          endSpan(_turnSpan, SpanStatusCode.OK);
+          _turnSpan = null;
+          this.conversation.push({ role: 'assistant', content: answer });
+          this.conversation.push({ role: 'assistant', content: tokenCeilingBlocked });
+          yield this.streamDone(tokenCeilingBlocked, {
+            blockedReport: {
+              schema_version: 1 as const,
+              status: 'BLOCKED' as const,
+              reason: `Per-round token ceiling exceeded: ${this.apiTokenCount - this.apiTokenCountAtTurnStart} tokens with zero tool calls`,
+              missing: 'Agent produced only text — no tool calls were made',
+              checked: [
+                {
+                  action: 'token_ceiling',
+                  target: 'per_round_limit',
+                  finding: `${(this.apiTokenCount - this.apiTokenCountAtTurnStart).toLocaleString()} tokens this turn (limit: ${this.limits.maxTokensPerRound.toLocaleString()})`,
+                },
+              ],
+            },
+            ...(this.verifierTampered ? { verifierTampered: true as const } : {}),
+          });
+          return;
         }
 
         // Execution gate: buffer streaming answer until gate check passes
@@ -2838,7 +2874,11 @@ export class ChatEngine {
           return;
         }
 
-        yield { type: 'answer_chunk', text: answer };
+        // Emit the final answer only when the streamed deltas did not already
+        // carry it — re-emitting identical text duplicates it in the TUI.
+        if (streamedAnswerForTurn !== answer) {
+          yield { type: 'answer_chunk', text: answer };
+        }
         this.conversation.push({ role: 'assistant', content: answer });
         _turnSpan.setAttribute('babel.chat.turn', `${turn + 1}:completion`);
         if (this.lastCriticReceipt) {
@@ -2925,7 +2965,7 @@ export class ChatEngine {
     if (this._cancelled || this.abortController.signal.aborted || isOperatorAbortError(err)) {
       this._cancelled = true;
       finalizeParityCancel(this.parity, this.engineRunDir);
-      return { type: 'cancelled' };
+      return this.streamCancelled();
     }
     return null;
   }
@@ -3148,6 +3188,28 @@ export class ChatEngine {
     return buildStreamFailed(this.obsHandles(), error, {
       ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
     });
+  }
+
+  /**
+   * Stream cancel helper — mirrors streamDone/streamFailed telemetry
+   * finalization. Without this, a cancelled turn reports no per-turn
+   * telemetry at all (first turn) or the PREVIOUS turn's stale record via
+   * buildResult, while session token totals still include the rounds that
+   * already ran — internally inconsistent cost/token reporting.
+   */
+  private streamCancelled(): ChatEvent {
+    const finalizedTelemetry = this.currentTurnTelemetry?.finalize({
+      turnId: String(this.parity.turnId ?? this._turnIndex),
+      taskClass: this.taskClass,
+      promptTokens: this.lastRequestPromptTokens,
+      completionTokens: this.lastRequestCompletionTokens,
+      cumulativeSessionTokens: globalCostTracker.getSessionSummary().totalTokens,
+    });
+    this.lastTurnTelemetry = finalizedTelemetry ?? null;
+    return {
+      type: 'cancelled',
+      ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
+    };
   }
 
   getConversation(): ChatMessage[] {
