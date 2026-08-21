@@ -350,6 +350,10 @@ function buildChatCallbacks(
     onThought: (thought: string) => {
       dispatchChatEvent({ type: 'thought', text: thought }, sinks);
     },
+    onGenerationBoundary: () => {
+      // Same renderer boundary the streaming dispatcher invokes on 'thinking'.
+      convRenderer?.onAnswerGenerationBoundary();
+    },
     onContextCompacted: (info) => {
       dispatchChatEvent(
         {

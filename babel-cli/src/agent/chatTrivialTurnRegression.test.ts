@@ -14,7 +14,7 @@
 
 import assert from 'node:assert/strict';
 import { after, describe, test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ChatEngine, reconcileStreamedAnswer, type ChatEvent } from './chatEngine.js';
@@ -440,6 +440,97 @@ describe('assistant stream segments at tool boundaries', () => {  test('answer â
       assert.equal(active?.payload?.message, 'Part B');
 
       renderer.stop();
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  });
+});
+
+describe('non-streaming path preserves generation boundaries', () => {
+  test('submitMessage adapter segments generations and tools like streaming', async () => {
+    const { ConversationalRenderer } = await import('../ui/waterfall.js');
+    const { runChatEngineOnce } = await import('../interactive/execution/chatCore.js');
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => true) as typeof process.stdout.write;
+    try {
+      const state = { calls: 0 };
+      const wsRoot = makeRoot();
+      // Real production file so the tool round executes through the genuine
+      // executor path and records real toolCallLog evidence.
+      mkdirSync(join(wsRoot, 'src'), { recursive: true });
+      writeFileSync(join(wsRoot, 'src', 'login.ts'), 'export const login = () => true\n', 'utf8');
+      const engine = new ChatEngine({
+        task: 'fix the login page',
+        projectRoot: wsRoot,
+        maxTurns: 6,
+      });
+      // Round 1 streams text (generation A). Round 2 emits tool_use. Round 3
+      // declares BLOCKED with tool evidence â€” an honest terminal that lets an
+      // execute-intent run finish without writes.
+      stubNativeRunner(engine, {
+        executeWithToolsStream: async function* () {
+          state.calls += 1;
+          if (state.calls === 1) {
+            yield { type: 'text_delta' as const, text: 'Generation A text.' };
+            yield { type: 'done' as const, finishReason: 'stop' };
+          } else if (state.calls === 2) {
+            yield {
+              type: 'tool_use' as const,
+              id: 't1',
+              name: 'read_file',
+              input: { path: 'src/login.ts' },
+            };
+            yield { type: 'done' as const, finishReason: 'tool_calls' };
+          } else {
+            yield {
+              type: 'text_delta' as const,
+              text: 'BLOCKED: src/login.ts is missing the required login export.',
+            };
+            yield { type: 'done' as const, finishReason: 'stop' };
+          }
+        },
+        getLastInvocationMetadata: () => null,
+      });
+      (engine as unknown as Record<string, unknown>)['shouldUseNativeTools'] = () => true;
+
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
+      renderer.start();
+
+      const result = await runChatEngineOnce({
+        task: 'fix the login page',
+        target: { targetRoot: wsRoot, workspaceRoot: null, project: null, source: 'cwd', cwd: wsRoot },
+        engine,
+        convRenderer: renderer,
+        useStreaming: false, // the BABEL_STREAM_TOOLS=off surface
+        taskIntent: 'execute',
+        preflightContext: '',
+      });
+
+      assert.ok(['completed', 'blocked'].includes(result.status), `unexpected status ${result.status}`);
+      assert.equal(state.calls, 3, `expected 3 provider rounds, got ${state.calls}`);
+
+      // Real lifecycle first: stop() flushes the active generation-B cell.
+      renderer.stop();
+
+      const committed = renderer.getCommittedHistoryCells();
+      const relevant = committed
+        .map((c) => c.kind)
+        .filter((k) => k === 'assistant_message' || k === 'tool_call');
+      assert.deepEqual(
+        relevant,
+        ['assistant_message', 'tool_call', 'assistant_message'],
+        `non-stream mode must segment generations AND tools like streaming, got: ${JSON.stringify(relevant)}`,
+      );
+      const messages = committed
+        .filter((c) => c.kind === 'assistant_message')
+        .map((c) => (c.payload as { message?: string }).message);
+      assert.equal(messages[0], 'Generation A text.');
+      assert.match(messages[1] ?? '', /BLOCKED:/);
+      assert.doesNotMatch(
+        messages.join('|'),
+        /Generation A text\.Generation/,
+        'generations must not concatenate in non-stream mode either',
+      );
     } finally {
       process.stdout.write = originalWrite;
     }

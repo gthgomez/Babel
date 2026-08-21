@@ -407,6 +407,12 @@ export interface ChatCallbacks {
   onToolComplete?: (id: number, detail?: string, error?: string, exitCode?: number) => void;
   onFileChanged?: (path: string, additions: number, deletions: number, content?: string) => void;
   onThought?: (thought: string) => void;
+  /**
+   * A new model generation is starting (engine 'thinking' event). Consumers
+   * must commit any in-flight streamed answer instead of concatenating onto
+   * it — keeps streaming and non-streaming presentation semantically equal.
+   */
+  onGenerationBoundary?: () => void;
   onContextCompacted?: (info: ContextCompactedInfo) => void;
   onSubAgentStart?: (info: { id: string; label: string; model?: string }) => void;
   onSubAgentComplete?: (info: { id: string; summary: string; tokens?: number }) => void;
@@ -1465,6 +1471,12 @@ export class ChatEngine {
         callbacks.onThought!(thought);
       };
     }
+    if (callbacks.onGenerationBoundary) {
+      cb.onGenerationBoundary = () => {
+        if (this.generationCounter !== generation) return;
+        callbacks.onGenerationBoundary!();
+      };
+    }
     if (callbacks.onContextCompacted) {
       cb.onContextCompacted = (info) => {
         if (this.generationCounter !== generation) return;
@@ -1523,6 +1535,11 @@ export class ChatEngine {
         switch (event.type) {
           case 'answer_chunk':
             cb.onAnswerChunk?.(event.text);
+            break;
+          case 'thinking':
+            // Generation boundary — the same semantic the streaming dispatcher
+            // forwards, so non-streaming presentation stays equivalent.
+            cb.onGenerationBoundary?.();
             break;
           case 'thought':
             cb.onThought?.(event.text);
