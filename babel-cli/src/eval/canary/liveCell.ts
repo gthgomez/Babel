@@ -26,6 +26,7 @@ export interface LiveCellOutcome {
   tokens: number | null
   cost_usd: number | null
   production_files: CleanRoomFile[]
+  deleted_production_paths: string[]
   production_mutated: boolean
   hidden_ok: boolean
   visible_ok: boolean | null
@@ -73,14 +74,36 @@ function oracleFiles(spec: CanaryTaskSpec): CleanRoomFile[] {
   return [{ relativePath: 'hidden.test.mjs', contents: spec.oracle_test }]
 }
 
-export function captureProductionFiles(spec: CanaryTaskSpec, root: string): CleanRoomFile[] {
-  const out: CleanRoomFile[] = []
+/**
+ * Faithful production-state capture for a canary workspace.
+ *
+ * - `files`: production paths present on disk (contents may equal start)
+ * - `deletedPaths`: declared production paths the agent REMOVED
+ *
+ * A deletion must never silently vanish from the candidate representation:
+ * the clean-room baseline would otherwise resurrect the file and could score
+ * destructive edits as success.
+ */
+export interface ProductionStateCapture {
+  files: CleanRoomFile[]
+  deletedPaths: string[]
+}
+
+export function captureProductionState(
+  spec: CanaryTaskSpec,
+  root: string,
+): ProductionStateCapture {
+  const files: CleanRoomFile[] = []
+  const deletedPaths: string[] = []
   for (const rel of spec.production_paths) {
     const full = join(root, rel)
-    if (!existsSync(full)) continue
-    out.push({ relativePath: rel, contents: readFileSync(full, 'utf8') })
+    if (!existsSync(full)) {
+      deletedPaths.push(rel)
+      continue
+    }
+    files.push({ relativePath: rel, contents: readFileSync(full, 'utf8') })
   }
-  return out
+  return { files, deletedPaths }
 }
 
 function usageFromPayload(payload: Record<string, unknown> | null): {
@@ -158,17 +181,23 @@ export function runLiveCanaryCell(input: {
   const claimed_complete =
     status === 'ANSWER_READY' || status === 'FIX_COMPLETE' || status === 'COMPLETE'
   const honest_block = status === 'BLOCKED' || Boolean(payload?.['blocked_report'])
-  const production_files = captureProductionFiles(input.spec, input.workspaceRoot)
-  const production_mutated = production_files.some((f) => {
+  const productionState = captureProductionState(input.spec, input.workspaceRoot)
+  const production_files = productionState.files
+  // A deletion IS a mutation — a removed production path must never be
+  // classified as "unchanged" for NO_CHANGE_REQUIRED-style contracts.
+  const production_mutated =
+    production_files.some((f) => {
+      const start = input.spec.files.find((s) => s.relativePath === f.relativePath)?.start
+      return start !== f.contents
+    }) || productionState.deletedPaths.length > 0
+  const candidateChanged = production_files.filter((f) => {
     const start = input.spec.files.find((s) => s.relativePath === f.relativePath)?.start
     return start !== f.contents
   })
   const grade = gradeInCleanRoom({
     startFiles: startFiles(input.spec),
-    candidateDiffFiles: production_files.filter((f) => {
-      const start = input.spec.files.find((s) => s.relativePath === f.relativePath)?.start
-      return start !== f.contents
-    }),
+    candidateDiffFiles: candidateChanged,
+    candidateDeletedPaths: productionState.deletedPaths,
     oracleFiles: oracleFiles(input.spec),
     verifierCommand: [process.execPath, 'hidden.test.mjs'],
   })
@@ -176,10 +205,8 @@ export function runLiveCanaryCell(input: {
   if (input.spec.visible_test) {
     visible_ok = gradeInCleanRoom({
       startFiles: startFiles(input.spec),
-      candidateDiffFiles: production_files.filter((f) => {
-        const start = input.spec.files.find((s) => s.relativePath === f.relativePath)?.start
-        return start !== f.contents
-      }),
+      candidateDiffFiles: candidateChanged,
+      candidateDeletedPaths: productionState.deletedPaths,
       oracleFiles: [{ relativePath: 'hidden.test.mjs', contents: input.spec.visible_test }],
       verifierCommand: [process.execPath, 'hidden.test.mjs'],
     }).hidden_ok
@@ -187,6 +214,9 @@ export function runLiveCanaryCell(input: {
   const usage = usageFromPayload(payload)
   if (cli.timedOut) notes.push('harness_timeout')
   notes.push(`cli_exit=${cli.exitCode}`, `status=${status ?? 'null'}`)
+  if (productionState.deletedPaths.length > 0) {
+    notes.push(`deleted=${productionState.deletedPaths.join(',')}`)
+  }
   const run_dir = typeof payload?.['run_dir'] === 'string' ? payload['run_dir'] : null
   return {
     status,
@@ -195,6 +225,7 @@ export function runLiveCanaryCell(input: {
     tokens: usage.tokens,
     cost_usd: usage.cost_usd,
     production_files,
+    deleted_production_paths: productionState.deletedPaths,
     production_mutated,
     hidden_ok: grade.hidden_ok,
     visible_ok,
