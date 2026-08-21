@@ -12,8 +12,20 @@ describe('provider credential hub', () => {
     const specs = listProviderSpecs()
     assert.deepEqual(
       specs.map((spec) => spec.id),
-      ['deepinfra', 'deepseek', 'openrouter', 'openai', 'anthropic', 'gemini', 'groq', 'ollama'],
+      [
+        'deepinfra',
+        'deepseek',
+        'opencode',
+        'openrouter',
+        'openai',
+        'anthropic',
+        'gemini',
+        'groq',
+        'ollama',
+      ],
     )
+    assert.equal(getProviderSpec('opencode').credentialEnvVar, 'OPENCODE_API_KEY')
+    assert.equal(getProviderSpec('opencode').protocol, 'openai_compatible')
     assert.equal(getProviderSpec('openrouter').credentialEnvVar, 'OPENROUTER_API_KEY')
     assert.deepEqual(
       getProviderCredentialStatus('openrouter', { OPENROUTER_API_KEY: 'synthetic-value' }),

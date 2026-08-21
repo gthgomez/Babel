@@ -128,6 +128,17 @@
       "verified_at": "2026-07-22",
       "expires_at": "2026-10-22",
       "selection_reason": "Documented reasoning API model."
+    },
+    "ox-alpha-free": {
+      "provider": "opencode",
+      "model_id": "x-preview-f-free",
+      "tier": "cheap",
+      "enabled": true,
+      "experimental": true,
+      "source_url": "https://opencode.ai/docs/zen/",
+      "verified_at": "2026-08-21",
+      "expires_at": "2026-11-21",
+      "selection_reason": "Free OpenCode Zen preview model (Ox Alpha Free); requires OPENCODE_API_KEY."
     }
   },
   "stages": {

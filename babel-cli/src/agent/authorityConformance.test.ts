@@ -196,7 +196,7 @@ test('conformance: live providers are authority-certified', () => {
     assert.equal(specs[live]!.authorityConformance, 'certified', `${live} must be certified`);
   }
   // Dormant providers must NOT be certified until they pass this suite.
-  for (const dormant of ['openai', 'anthropic', 'gemini', 'groq', 'openrouter'] as const) {
+  for (const dormant of ['openai', 'anthropic', 'gemini', 'groq', 'openrouter', 'opencode'] as const) {
     assert.equal(
       specs[dormant]!.authorityConformance,
       'untested',
