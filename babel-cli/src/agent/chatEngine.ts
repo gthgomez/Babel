@@ -556,6 +556,27 @@ function isConversationalTurnText(task: string): boolean {
   return PUNCTUATION_ONLY_TURN_RE.test(t) || CONVERSATIONAL_TURN_RE.test(t);
 }
 
+/**
+ * Reconcile an already-streamed answer with the final parsed answer so the
+ * renderer never displays duplicated text.
+ *
+ * - exact match → nothing left to emit
+ * - final extends the streamed prefix → emit only the missing suffix
+ *   ("Hello " streamed, "Hello world" final → emit "world")
+ * - zero stream / divergent or normalized final → emit the full answer once
+ *   (the only non-duplicating option without a renderer replace API)
+ */
+export function reconcileStreamedAnswer(
+  streamed: string | null,
+  final: string,
+): string | null {
+  if (!final) return null;
+  if (streamed === null || streamed === '') return final;
+  if (final === streamed) return null;
+  if (final.startsWith(streamed)) return final.slice(streamed.length);
+  return final;
+}
+
 // ─── ChatEngine ───────────────────────────────────────────────────────────
 
 export class ChatEngine {
@@ -2602,14 +2623,46 @@ export class ChatEngine {
         // declare BLOCKED even though no writes were made.
         const blockedReport = this.detectAndBuildBlockedReport(answer);
         if (blockedReport) {
-          if (streamedAnswerForTurn !== answer) {
-            yield { type: 'answer_chunk', text: answer };
+          const blockedDelta = reconcileStreamedAnswer(streamedAnswerForTurn, answer);
+          if (blockedDelta !== null) {
+            yield { type: 'answer_chunk', text: blockedDelta };
           }
           this.conversation.push({ role: 'assistant', content: answer });
           _turnSpan.setAttribute('babel.chat.blocked', 'true');
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
           yield this.streamDone(answer, { blockedReport });
+          return;
+        }
+
+        // R11: Per-round token ceiling — must run BEFORE any continuation
+        // mechanism (text-only guard, prefers-patch refusal). Both of those
+        // `continue` the loop and would otherwise starve this cost terminal:
+        // a single text round that burned > maxTokensPerRound must hard-stop
+        // immediately instead of being re-queried.
+        const tokenCeilingBlocked = this.checkPerRoundTokenCeiling(false);
+        if (tokenCeilingBlocked) {
+          _turnSpan.setAttribute('babel.chat.token_ceiling_blocked', 'true');
+          endSpan(_turnSpan, SpanStatusCode.OK);
+          _turnSpan = null;
+          this.conversation.push({ role: 'assistant', content: answer });
+          this.conversation.push({ role: 'assistant', content: tokenCeilingBlocked });
+          yield this.streamDone(tokenCeilingBlocked, {
+            blockedReport: {
+              schema_version: 1 as const,
+              status: 'BLOCKED' as const,
+              reason: `Per-round token ceiling exceeded: ${this.apiTokenCount - this.apiTokenCountAtTurnStart} tokens with zero tool calls`,
+              missing: 'Agent produced only text — no tool calls were made',
+              checked: [
+                {
+                  action: 'token_ceiling',
+                  target: 'per_round_limit',
+                  finding: `${(this.apiTokenCount - this.apiTokenCountAtTurnStart).toLocaleString()} tokens this turn (limit: ${this.limits.maxTokensPerRound.toLocaleString()})`,
+                },
+              ],
+            },
+            ...(this.verifierTampered ? { verifierTampered: true as const } : {}),
+          });
           return;
         }
 
@@ -2696,33 +2749,6 @@ export class ChatEngine {
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
           continue;
-        }
-
-        // R11: Per-round token ceiling — force BLOCKED if a single text turn burned > maxTokensPerRound.
-        const tokenCeilingBlocked = this.checkPerRoundTokenCeiling(false);
-        if (tokenCeilingBlocked) {
-          _turnSpan.setAttribute('babel.chat.token_ceiling_blocked', 'true');
-          endSpan(_turnSpan, SpanStatusCode.OK);
-          _turnSpan = null;
-          this.conversation.push({ role: 'assistant', content: answer });
-          this.conversation.push({ role: 'assistant', content: tokenCeilingBlocked });
-          yield this.streamDone(tokenCeilingBlocked, {
-            blockedReport: {
-              schema_version: 1 as const,
-              status: 'BLOCKED' as const,
-              reason: `Per-round token ceiling exceeded: ${this.apiTokenCount - this.apiTokenCountAtTurnStart} tokens with zero tool calls`,
-              missing: 'Agent produced only text — no tool calls were made',
-              checked: [
-                {
-                  action: 'token_ceiling',
-                  target: 'per_round_limit',
-                  finding: `${(this.apiTokenCount - this.apiTokenCountAtTurnStart).toLocaleString()} tokens this turn (limit: ${this.limits.maxTokensPerRound.toLocaleString()})`,
-                },
-              ],
-            },
-            ...(this.verifierTampered ? { verifierTampered: true as const } : {}),
-          });
-          return;
         }
 
         // Execution gate: buffer streaming answer until gate check passes
@@ -2874,10 +2900,12 @@ export class ChatEngine {
           return;
         }
 
-        // Emit the final answer only when the streamed deltas did not already
-        // carry it — re-emitting identical text duplicates it in the TUI.
-        if (streamedAnswerForTurn !== answer) {
-          yield { type: 'answer_chunk', text: answer };
+        // Emit only the not-yet-streamed remainder of the final answer —
+        // re-emitting identical or prefix-overlapping text duplicates it in
+        // the TUI (see reconcileStreamedAnswer).
+        const answerDelta = reconcileStreamedAnswer(streamedAnswerForTurn, answer);
+        if (answerDelta !== null) {
+          yield { type: 'answer_chunk', text: answerDelta };
         }
         this.conversation.push({ role: 'assistant', content: answer });
         _turnSpan.setAttribute('babel.chat.turn', `${turn + 1}:completion`);

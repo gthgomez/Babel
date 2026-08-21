@@ -95,7 +95,9 @@ export async function executeChatTask(
   // Slice 2: do not re-activate PromptInput during the turn. A live composer
   // shares stdin with ConversationalRenderer and turns one Ctrl+C into
   // cancel + process-exit on ConPTY (raw 0x03 plus SIGINT).
-  const preRunCost = globalCostTracker.getSessionSummary().totalCostUSD;
+  // Per-turn usage scope: capture the full session summary before the run so
+  // turn-scoped cost AND tokens are both derived as deltas of the same source.
+  const preRunUsage = globalCostTracker.getSessionSummary();
   ctx.lastTargetRoot = target.targetRoot;
   ctx.lastWorkspaceRoot = target.workspaceRoot;
   ctx.state.lastRunTargetRoot = target.targetRoot;
@@ -215,8 +217,14 @@ export async function executeChatTask(
     // Collect changed files from the tool log for the summary display.
     const changedFiles = collectChangedFiles(result);
 
-    const postRunCost = globalCostTracker.getSessionSummary().totalCostUSD;
-    const perRunCost = Math.max(0, postRunCost - preRunCost);
+    const postRunUsage = globalCostTracker.getSessionSummary();
+    const perRunCost = Math.max(0, postRunUsage.totalCostUSD - preRunUsage.totalCostUSD);
+    // Same-scope token delta — the review card must not mix a per-turn cost
+    // with session-cumulative tokens (result.usage.totalTokens is cumulative).
+    const perRunTokens = Math.max(
+      0,
+      postRunUsage.totalTokens - preRunUsage.totalTokens,
+    );
     const resolvedOutcome: TerminalOutcome =
       result.outcome ??
       (result.status === 'completed'
@@ -293,7 +301,7 @@ export async function executeChatTask(
           ? 'not_applicable'
           : undefined,
       costUsd: perRunCost,
-      tokens: result.usage?.totalTokens,
+      tokens: perRunTokens,
       sessionConsistencyFailure: isSessionConsistencyFailureMessage(result.answer),
     });
 
@@ -303,7 +311,7 @@ export async function executeChatTask(
       if (review.kind === 'VERIFIED_COMPLETE') {
         convRenderer.onSummary({
           status: 'pass',
-          costUSD: postRunCost,
+          costUSD: postRunUsage.totalCostUSD,
           perRunCost,
           changedFiles,
         });
@@ -313,7 +321,7 @@ export async function executeChatTask(
       } else if (review.kind === 'COMPLETE_UNVERIFIED') {
         convRenderer.onSummary({
           status: 'unverified',
-          costUSD: postRunCost,
+          costUSD: postRunUsage.totalCostUSD,
           perRunCost,
           changedFiles,
         });

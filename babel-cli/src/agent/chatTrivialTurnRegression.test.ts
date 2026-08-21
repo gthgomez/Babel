@@ -17,7 +17,7 @@ import { after, describe, test } from 'node:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ChatEngine, type ChatEvent } from './chatEngine.js';
+import { ChatEngine, reconcileStreamedAnswer, type ChatEvent } from './chatEngine.js';
 import { TEXT_ONLY_FORCE_BLOCKED_THRESHOLD } from './stallDetector.js';
 
 const roots: string[] = [];
@@ -145,6 +145,15 @@ describe('trivial text-only turns terminate normally', () => {
 });
 
 describe('streamed answers are not duplicated', () => {
+  test('reconcileStreamedAnswer covers exact, prefix, zero-stream, and divergent cases', () => {
+    assert.equal(reconcileStreamedAnswer('Hello world', 'Hello world'), null);
+    assert.equal(reconcileStreamedAnswer('Hello ', 'Hello world'), 'world');
+    assert.equal(reconcileStreamedAnswer(null, 'Hello world'), 'Hello world');
+    assert.equal(reconcileStreamedAnswer('', 'Hello world'), 'Hello world');
+    assert.equal(reconcileStreamedAnswer('raw noise', 'Normalized final'), 'Normalized final');
+    assert.equal(reconcileStreamedAnswer('anything', ''), null);
+  });
+
   test('final answer chunk is not re-emitted after live deltas', async () => {
     const state = { calls: 0 };
     const engine = new ChatEngine({
@@ -179,6 +188,73 @@ describe('streamed answers are not duplicated', () => {
     assert.equal(joined, done.answer, 'streamed text must equal the final answer exactly once');
   });
 
+  test('zero-stream completion emits the answer exactly once', async () => {
+    const state = { calls: 0 };
+    const engine = new ChatEngine({
+      task: 'hello',
+      projectRoot: makeRoot(),
+      maxTurns: 4,
+    });
+    // Truly zero visible deltas — the provider yields only a done marker.
+    stubNativeRunner(engine, {
+      executeWithToolsStream: async function* () {
+        state.calls += 1;
+        yield { type: 'done' as const, finishReason: 'stop' };
+      },
+      getLastInvocationMetadata: () => null,
+    });
+
+    const events = await collect(engine, 'hello', 'explain');
+    const chunks = events
+      .filter((e): e is Extract<ChatEvent, { type: 'answer_chunk' }> => e.type === 'answer_chunk')
+      .map((e) => e.text)
+      .filter((t) => t.length > 0);
+    const done = events.filter((e) => e.type === 'done').at(-1) as
+      | Extract<ChatEvent, { type: 'done' }>
+      | undefined;
+
+    assert.ok(done, 'expected done event');
+    assert.equal(chunks.length, 1, `expected a single emission for zero-stream, got ${JSON.stringify(chunks)}`);
+    assert.equal(chunks[0], done.answer);
+  });
+
+  test('normalized legacy JSON final emits only the parsed answer once', async () => {
+    const engine = new ChatEngine({
+      task: 'hello',
+      projectRoot: makeRoot(),
+      maxTurns: 4,
+    });
+    // Legacy path (no native tools): raw stream carries JSON wrapper; the
+    // lenient parser normalizes it to just the "answer" field.
+    const rawJson = '{"thinking":"internal","answer":"Normalized final"}';
+    stubNativeRunner(engine, {
+      executeRawStream: async function* () {
+        yield rawJson;
+      },
+      executeRaw: async () => rawJson,
+      getLastInvocationMetadata: () => null,
+    });
+    (engine as unknown as Record<string, unknown>)['shouldUseNativeTools'] = () => false;
+
+    const events = await collect(engine, 'hello', 'explain');
+    const chunks = events
+      .filter((e): e is Extract<ChatEvent, { type: 'answer_chunk' }> => e.type === 'answer_chunk')
+      .map((e) => e.text);
+    const joined = chunks.join('');
+    const done = events.filter((e) => e.type === 'done').at(-1) as
+      | Extract<ChatEvent, { type: 'done' }>
+      | undefined;
+
+    assert.ok(done, 'expected done event');
+    assert.equal(done.answer, 'Normalized final');
+    assert.equal(
+      chunks.filter((c) => c === 'Normalized final').length,
+      1,
+      `parsed answer must be emitted exactly once as its own chunk, got: ${JSON.stringify(chunks)}`,
+    );
+    assert.ok(joined.endsWith('Normalized final'));
+  });
+
   test('BLOCKED-declared completions are emitted once', async () => {
     const state = { calls: 0 };
     const engine = new ChatEngine({
@@ -207,6 +283,84 @@ describe('streamed answers are not duplicated', () => {
     assert.ok(done.blockedReport, 'expected structured blocked report');
     assert.equal(chunks.join(''), done.answer, 'answer text must appear exactly once');
     assert.equal(chunks.length, 1, `expected single emission, got ${chunks.length}`);
+  });
+});
+
+describe('per-round budget terminal precedes continuation mechanisms', () => {
+  test('a single over-limit text round hard-stops after one provider call', async () => {
+    const state = { calls: 0 };
+    const engine = new ChatEngine({
+      task: 'the login page is broken',
+      projectRoot: makeRoot(),
+      maxTurns: 8,
+    });
+    stubNativeRunner(engine, {
+      executeWithToolsStream: async function* () {
+        state.calls += 1;
+        yield { type: 'text_delta' as const, text: 'thinking out loud about the fix' };
+        yield { type: 'done' as const, finishReason: 'stop' };
+      },
+      getLastInvocationMetadata: () => ({
+        provider_model_id: 'test-model',
+        prompt_tokens: 250_000,
+        completion_tokens: 10_000,
+      }),
+    });
+
+    const events = await collect(engine, 'the login page is broken', 'execute');
+
+    assert.equal(
+      state.calls,
+      1,
+      `over-limit round must terminate immediately, got ${state.calls} provider calls`,
+    );
+    assert.equal(events.some((e) => e.type === 'cancelled'), false);
+    const done = events.filter((e) => e.type === 'done').at(-1) as
+      | Extract<ChatEvent, { type: 'done' }>
+      | undefined;
+    assert.ok(done, 'expected a terminal done event');
+    const budgetText = `${done.answer ?? ''} ${done.blockedReport?.reason ?? ''}`;
+    assert.match(
+      budgetText,
+      /token explosion|per-round token|tokens/i,
+      `expected an honest budget terminal, got: ${budgetText.slice(0, 200)}`,
+    );
+  });
+});
+
+describe('assistant stream segments at tool boundaries', () => {
+  test('answer → tool → answer produces separate transcript cells', async () => {
+    const { ConversationalRenderer } = await import('../ui/waterfall.js');
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => true) as typeof process.stdout.write;
+    try {
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
+      renderer.start();
+
+      renderer.onAnswerChunk('Part A');
+      const id = renderer.onToolCallStart('read_file', 'src/a.ts');
+      assert.ok(id > 0);
+      renderer.onToolCallComplete(id, 'read 10 bytes', undefined, 0);
+      renderer.onAnswerChunk('Part B');
+
+      const committed = renderer.getCommittedHistoryCells();
+      const kinds = committed.map((c) => c.kind);
+      assert.deepEqual(
+        kinds.filter((k) => k === 'assistant_message' || k === 'tool_call'),
+        ['assistant_message', 'tool_call'],
+        `tool boundary must segment cells instead of concatenating streams, got: ${JSON.stringify(kinds)}`,
+      );
+      // The second stream becomes the new active assistant cell.
+      const active = (renderer as unknown as {
+        _historyTranscript?: { getActiveRecord?: () => { kind: string; payload?: { message?: string } } | null };
+      })._historyTranscript?.getActiveRecord?.();
+      assert.equal(active?.kind, 'assistant_message');
+      assert.equal(active?.payload?.message, 'Part B');
+
+      renderer.stop();
+    } finally {
+      process.stdout.write = originalWrite;
+    }
   });
 });
 
