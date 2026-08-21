@@ -1,0 +1,76 @@
+{
+  "schema_version": 2,
+  "recovered_at": "2026-08-20",
+  "recovery_method": "exact_copy_from_maintainer_vault_catalog_then_sanitize",
+  "notes": [
+    "Agent and governance catalogs were absent from this public git history.",
+    "Exact JSON recovered from a maintainer vault checkout of the same catalogs.",
+    "Absolute machine paths were stripped from baseline artifacts before commit (terminal_bench roots normalized to repo-relative).",
+    "task-manifest.json carries NEW_CANONICAL_REPLACEMENT content for the canonical fixture section — that section is a new canonical definition, not historical truth.",
+    "sha256 fingerprints let future audits reconcile these files against vault snapshots byte-for-byte.",
+    "source_artifact identifiers reference the maintainer vault snapshot id; no private paths are recorded."
+  ],
+  "entries": {
+    "babel-agent-benchmark/manifest.json": {
+      "classification": "RECOVERED_EXACT",
+      "sha256": "2be3ecf00bab3a6d8f6c7e14bcf5c94c11d65e482e55d43499f88279687ec0d3",
+      "source_artifact": "maintainer-vault/babel-agent-benchmark/manifest.json",
+      "source_date": "2026-07-06",
+      "sanitized": false
+    },
+    "tool-adapters.json": {
+      "classification": "RECOVERED_EXACT",
+      "sha256": "5faf1f66610417ca0d638e23afcefb898a0ee00b5a52b71f004aa07b5a612e58",
+      "source_artifact": "maintainer-vault/tool-adapters.json",
+      "source_date": "2026-07-06",
+      "sanitized": false
+    },
+    "result.schema.json": {
+      "classification": "RECOVERED_EXACT",
+      "sha256": "0a18ccd5301ead5dafca241635090d3bfbb79487978ca6a7e1a0d6c9b3f13002",
+      "source_artifact": "maintainer-vault/result.schema.json",
+      "source_date": "2026-07-06",
+      "sanitized": false
+    },
+    "task-manifest.json": {
+      "classification": "RECOVERED_EXACT_PLUS_CANONICAL_ADDITION",
+      "sha256": "057eeef534f7569110d2357e0239eaedde2af966d47a5250f0f5bbfeec41dfb8",
+      "source_artifact": "maintainer-vault/task-manifest.json",
+      "source_date": "2026-07-06",
+      "sanitized": true,
+      "subentries": [
+        {
+          "selector": { "file": "task-manifest.json", "kind": "task_id", "value": "canonical" },
+          "classification": "NEW_CANONICAL_REPLACEMENT",
+          "source_artifact": "constructed-in-repo",
+          "source_date": "2026-08-20",
+          "sanitized": false,
+          "note": "newly authored canonical governance case — not historical truth; resolved by tasks[].task_id == 'canonical'"
+        }
+      ]
+    },
+    "fixtures/BLOCK-01/verify.mjs": {
+      "classification": "RECOVERED_EXACT",
+      "sha256": "b8e6a96f4fd955392ac17ca333ca62a4a1f0fb176d79c44a2590fd9e08f322b4",
+      "source_artifact": "maintainer-vault/fixtures/BLOCK-01/verify.mjs",
+      "source_date": "2026-07-06",
+      "sanitized": false
+    },
+    "baselines/baseline-R1-R6-2026-07-06.json": {
+      "classification": "RECOVERED_FROM_ARTIFACT",
+      "sha256": "ff8fec53c7523043fbfa5f2cdd89cc520739eba2a56ce2b866beb43b3c6990d4",
+      "source_artifact": "run-artifacts/r1-r6-baseline-2026-07-06",
+      "source_date": "2026-07-06",
+      "sanitized": true,
+      "note": "absolute terminal_bench machine paths replaced with repo-relative equivalents"
+    },
+    "baselines/baseline-T5.3-gov-d03-live-2026-07-09.json": {
+      "classification": "RECOVERED_FROM_ARTIFACT",
+      "sha256": "6b35f53d192f0b6c748132c222a86ba13c8f0a5894c198faf61a26e84587223c",
+      "source_artifact": "run-artifacts/t5.3-gov-d03-live-2026-07-09",
+      "source_date": "2026-07-09",
+      "sanitized": true,
+      "note": "recorded live-run artifact; results are historical observations, not capability claims"
+    }
+  }
+}

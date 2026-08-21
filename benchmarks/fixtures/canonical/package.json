@@ -1,0 +1,8 @@
+{
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "lint:check": "node lint-check.mjs",
+    "check:external": "missing-babel-benchmark-binary --version"
+  }
+}

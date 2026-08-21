@@ -86,6 +86,21 @@ test('external adapters produce unavailable records instead of fake failures', (
   assert.equal(result.evidence.commands_attempted.length, 0);
 });
 
+test('Zod governance result and JSON Schema stay aligned', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-governance-benchmark-'));
+  const summary = runGovernanceBenchmark({
+    tool: 'babel',
+    caseId: 'canonical',
+    runs: 1,
+    outputPath: join(root, 'results.jsonl'),
+    artifactDir: join(root, 'artifacts'),
+    fixtureRootBase: join(root, 'fixtures'),
+  });
+  const result = summary.results[0];
+  assert.ok(result);
+  assert.deepEqual(validateBenchmarkResultWithSchema(result), []);
+});
+
 test('benchmark report is public-safe and avoids global ranking claims', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-governance-benchmark-'));
   const outputPath = join(root, 'results.jsonl');
