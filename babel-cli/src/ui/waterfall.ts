@@ -1843,9 +1843,31 @@ export class ConversationalRenderer extends BaseRenderer {
     this._rawMode.disable();
   }
 
+  /**
+   * A new model generation is starting (engine 'thinking' event with no
+   * intervening tool call). The previous generation's streamed answer must
+   * not concatenate with the next one: commit it as its own history cell,
+   * flush + clear the live markdown view, and start a fresh summary segment.
+   */
+  onAnswerGenerationBoundary(): void {
+    if (this.outputBroken || this.paused) return;
+    if (this._state === 'done' || this._state === 'failed') return;
+    if (this.answerChunks.length === 0) return;
+    if (this.isTTY) {
+      // Flush held table lines and any coalesced deltas belonging to the old
+      // document BEFORE resetting, so stale ANSI never bleeds into the next.
+      const held = this._mdAccumulator.finalize(renderMarkdown);
+      if (held) this._chunkCoalescer.push(held);
+      this._chunkCoalescer.flush();
+    }
+    this._historyTranscript.flushActive();
+    this.answerChunks = [];
+    this._mdAccumulator.reset();
+    this._syncCellViewport();
+  }
+
   /** Stream a chunk of natural-language answer text — the primary output. */
-  onAnswerChunk(chunk: string): void {
-    if (this.outputBroken) return;
+  onAnswerChunk(chunk: string): void {    if (this.outputBroken) return;
     if (this.paused) return;
     if (this._state === 'done' || this._state === 'failed') return;
     if (!chunk) return;

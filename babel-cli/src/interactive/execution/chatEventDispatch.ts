@@ -31,6 +31,10 @@ export function dispatchChatEvent(
 
   switch (event.type) {
     case 'thinking':
+      // Generation boundary: a new model iteration is starting with no
+      // intervening tool call. The renderer must commit the previous
+      // generation's streamed answer instead of concatenating onto it.
+      sinks.convRenderer?.onAnswerGenerationBoundary();
       break;
     case 'answer_chunk':
       sinks.convRenderer?.onAnswerChunk(event.text);
@@ -103,6 +107,7 @@ export function dispatchChatEvent(
       answer: 'Cancelled',
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
+      ...(event.turnTelemetry ? { turnTelemetry: event.turnTelemetry } : {}),
     };
   }
 
