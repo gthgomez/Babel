@@ -23,20 +23,28 @@ export function isOfflineChatMode(): boolean {
   );
 }
 
-/** Resolve ChatEngine's model policy while applying live-only routing rules. */
+/** Resolve ChatEngine's model policy while applying live-only routing rules.
+ *  Explicit backend-key requests for the opencode provider are honored as a
+ *  direct operator opt-in to OpenCode Zen; every other live selection still
+ *  goes through the DeepSeek-only lane. */
 export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   policy: ResolvedModelPolicy;
   offline: boolean;
 } {
   const offline = isOfflineChatMode();
   const policyRootOptions = options.babelRoot ? { babelRoot: options.babelRoot } : {};
-  const requestedModelIsBackendKey =
-    options.model !== undefined &&
-    Boolean(loadModelPolicyConfig(options.babelRoot).config.models?.[options.model]);
+  const requestedBackendEntry =
+    options.model !== undefined
+      ? loadModelPolicyConfig(options.babelRoot).config.models?.[options.model]
+      : undefined;
+  const requestedModelIsBackendKey = Boolean(requestedBackendEntry);
+  // Explicit opencode requests skip the DeepSeek-only live assertion: naming
+  // the backend key IS the opt-in (operator supplies OPENCODE_API_KEY).
+  const explicitOpenCodeRequest = requestedBackendEntry?.provider === 'opencode';
   const policy = requestedModelIsBackendKey
     ? resolveModelByKey({
         key: options.model!,
-        liveOnly: !offline,
+        ...(explicitOpenCodeRequest ? {} : { liveOnly: !offline }),
         ...policyRootOptions,
       })
     : resolveFamilyModelPolicy({
