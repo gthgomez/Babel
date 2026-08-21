@@ -113,10 +113,9 @@ test('newly authored canonical material is never labeled as recovered truth', ()
   assert.equal(canonicalSub.source_artifact, 'constructed-in-repo')
 
   // And the parent does not claim pure exactness without acknowledging the addition.
-  assert.equal(
-    provenance.entries['task-manifest.json'].classification,
-    'RECOVERED_EXACT_PLUS_CANONICAL_ADDITION',
-  )
+  const parent = provenance.entries['task-manifest.json']
+  assert.ok(parent, 'task-manifest.json entry must exist')
+  assert.equal(parent.classification, 'RECOVERED_EXACT_PLUS_CANONICAL_ADDITION')
 })
 
 test('no machine-local paths leak into the provenance record', () => {
