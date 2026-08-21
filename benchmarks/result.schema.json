@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://babel.local/schemas/governance-benchmark-result.schema.json",
+  "title": "Babel governance benchmark result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "benchmark_id",
+    "task_id",
+    "run_id",
+    "run_index",
+    "category",
+    "tool",
+    "fixture",
+    "started_at",
+    "completed_at",
+    "latency_ms",
+    "timeout_ms",
+    "result_status",
+    "metrics",
+    "evidence",
+    "caveats"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "benchmark_id": { "type": "string", "minLength": 1 },
+    "task_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "run_index": { "type": "integer", "minimum": 1 },
+    "category": { "type": "string", "minLength": 1 },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "adapter_status", "availability", "execution_mode"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "adapter_status": { "type": "string", "minLength": 1 },
+        "availability": { "type": "string", "enum": ["available", "unavailable", "pending"] },
+        "execution_mode": { "type": "string", "minLength": 1 },
+        "version": { "type": ["string", "null"] }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repo_path",
+        "setup_command",
+        "setup_status",
+        "prompt_stack_id",
+        "prompt_stack_hash"
+      ],
+      "properties": {
+        "repo_path": { "type": "string", "minLength": 1 },
+        "setup_command": { "type": "string", "minLength": 1 },
+        "setup_status": { "type": "string", "enum": ["passed", "failed", "skipped"] },
+        "prompt_stack_id": { "type": "string", "minLength": 1 },
+        "prompt_stack_hash": { "type": "string", "minLength": 16 }
+      }
+    },
+    "started_at": { "type": "string", "minLength": 1 },
+    "completed_at": { "type": "string", "minLength": 1 },
+    "latency_ms": { "type": "integer", "minimum": 0 },
+    "timeout_ms": { "type": "integer", "minimum": 1 },
+    "result_status": { "type": "string", "enum": ["completed", "failed", "unavailable"] },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_success",
+        "false_complete",
+        "normalized_terminal_status",
+        "files_touched",
+        "unrelated_file_touch",
+        "dirty_worktree_preserved",
+        "rollback_required",
+        "rollback_attempted",
+        "rollback_succeeded",
+        "verifier_required",
+        "verifier_declared",
+        "verifier_executed",
+        "verifier_passed",
+        "verifier_evidence_quality",
+        "cost_usd",
+        "human_interventions",
+        "audit_trace_quality",
+        "prompt_injection_resisted",
+        "exact_instruction_fidelity"
+      ],
+      "properties": {
+        "task_success": { "type": "boolean" },
+        "false_complete": { "type": "boolean" },
+        "normalized_terminal_status": { "type": "string", "minLength": 1 },
+        "files_touched": { "type": "array", "items": { "type": "string" } },
+        "unrelated_file_touch": { "type": "boolean" },
+        "dirty_worktree_preserved": { "type": ["boolean", "null"] },
+        "rollback_required": { "type": "boolean" },
+        "rollback_attempted": { "type": "boolean" },
+        "rollback_succeeded": { "type": ["boolean", "null"] },
+        "verifier_required": { "type": "boolean" },
+        "verifier_declared": { "type": "boolean" },
+        "verifier_executed": { "type": "boolean" },
+        "verifier_passed": { "type": ["boolean", "null"] },
+        "verifier_evidence_quality": { "type": "string", "enum": ["none", "weak", "adequate", "strong"] },
+        "cost_usd": { "type": ["number", "null"], "minimum": 0 },
+        "human_interventions": { "type": "integer", "minimum": 0 },
+        "audit_trace_quality": { "type": "string", "enum": ["none", "weak", "adequate", "strong"] },
+        "prompt_injection_resisted": { "type": ["boolean", "null"] },
+        "exact_instruction_fidelity": { "type": ["string", "null"], "enum": ["pass", "fail", "not_applicable", null] }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifacts_dir",
+        "commands_attempted",
+        "verifier_outputs",
+        "audit_trace_files",
+        "notes"
+      ],
+      "properties": {
+        "artifacts_dir": { "type": "string", "minLength": 1 },
+        "commands_attempted": { "type": "array", "items": { "type": "string" } },
+        "verifier_outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["command", "exit_code", "stdout", "stderr"],
+            "properties": {
+              "command": { "type": "string" },
+              "exit_code": { "type": "integer" },
+              "stdout": { "type": "string" },
+              "stderr": { "type": "string" }
+            }
+          }
+        },
+        "audit_trace_files": { "type": "array", "items": { "type": "string" } },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "caveats": { "type": "array", "items": { "type": "string" } }
+  }
+}

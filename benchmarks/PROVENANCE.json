@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "recovered_at": "2026-08-20",
+  "recovery_method": "exact_copy_from_maintainer_vault_catalog_then_sanitize",
+  "notes": [
+    "Agent and governance catalogs were absent from this public git history.",
+    "Exact JSON recovered from a maintainer vault checkout of the same catalogs.",
+    "Absolute machine paths were stripped from baseline artifacts before commit.",
+    "Fields not recovered are labeled NEW_CANONICAL_REPLACEMENT — not historical truth."
+  ],
+  "entries": {
+    "babel-agent-benchmark/manifest.json": "RECOVERED_EXACT",
+    "tool-adapters.json": "RECOVERED_EXACT",
+    "result.schema.json": "RECOVERED_EXACT",
+    "task-manifest.json": "RECOVERED_EXACT",
+    "task-manifest.json#canonical": "NEW_CANONICAL_REPLACEMENT",
+    "fixtures/BLOCK-01/verify.mjs": "RECOVERED_EXACT",
+    "baselines/baseline-R1-R6-2026-07-06.json": "RECOVERED_FROM_ARTIFACT",
+    "baselines/baseline-T5.3-gov-d03-live-2026-07-09.json": "RECOVERED_FROM_ARTIFACT"
+  }
+}

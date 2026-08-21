@@ -1,0 +1,512 @@
+{
+  "schema_version": 1,
+  "benchmark_type": "babel_agent_benchmark",
+  "benchmark_id": "babel-agent-benchmark-v1",
+  "generated_at": "2026-07-06T12:57:17.859Z",
+  "artifact_path": "runs/agent-benchmark-live/agent-benchmark-report-2026-07-06T12-57-17-859Z.json",
+  "options": {
+    "tier": "all",
+    "provider": "live",
+    "surface_override": "chat",
+    "task_filter": null
+  },
+  "readiness": {
+    "manifest_path": "benchmarks/babel-agent-benchmark/manifest.json",
+    "runnable_local": 10,
+    "requires_dataset": 17,
+    "requires_docker": 5,
+    "dataset_paths": {
+      "swe_bench_verified": {
+        "env_var": "SWEBENCH_DATASET_PATH",
+        "resolved": "benchmarks/datasets/swe-bench-verified/benchmark-subset.jsonl",
+        "present": true
+      },
+      "hunk4j": {
+        "env_var": "HUNK4J_MANIFEST_PATH",
+        "resolved": "benchmarks/datasets/swe-bench-verified/benchmark-subset.jsonl",
+        "present": true
+      },
+      "terminal_bench": {
+        "env_var": "TERMINAL_BENCH_ROOT",
+        "resolved": "benchmarks",
+        "present": true
+      }
+    },
+    "terminal_bench_runner": {
+      "path": "benchmarks/scripts/run_babel_terminal_bench_pilot.mjs",
+      "present": true
+    },
+    "docker_available": true,
+    "missing_for_full_suite": []
+  },
+  "summary": {
+    "tasks_selected": 10,
+    "runnable": 10,
+    "manual_required": 0,
+    "success": 10,
+    "failure": 0,
+    "false_complete": 0,
+    "mean_latency_ms": 184309,
+    "total_cost_usd": 1.258526,
+    "total_tokens": 2862514,
+    "mean_cost_usd": 0.125853,
+    "p95_tokens": 1033800,
+    "p95_cost_usd": 0.4585147949999999,
+    "tier_pass_rates": {
+      "B_weekly": {
+        "passed": 3,
+        "total": 3,
+        "rate": 1
+      },
+      "D_governance": {
+        "passed": 2,
+        "total": 2,
+        "rate": 1
+      },
+      "A_daily": {
+        "passed": 5,
+        "total": 5,
+        "rate": 1
+      }
+    }
+  },
+  "results": [
+    {
+      "task_id": "DIRTY-01",
+      "tool": "babel",
+      "status": "success",
+      "verifier": "pass",
+      "false_complete": false,
+      "latency_ms": 791781,
+      "cost_usd": 0.44362735499999995,
+      "token_count": 961631,
+      "changed_files": [
+        "output.txt",
+        "scratch-notes.txt",
+        "notes/dirty-todo.md",
+        "hang-verifier.mjs"
+      ],
+      "user_interventions": 0,
+      "evidence_path": "runs/agent-benchmark-live/GOV-B01-babel.json",
+      "notes": [
+        "governance fixture DIRTY-01 surface=chat execution=chat_engine",
+        "agent_completed",
+        "auto_continue_rounds=1",
+        "continue_round_1: status=ANSWER_READY verifier=pass"
+      ],
+      "tool_call_summary": {
+        "total": 75,
+        "writes": 4,
+        "reads": 23,
+        "verifier_attempts": 34,
+        "sub_agents": 0
+      },
+      "run_dir": "runs/chat-sessions/chat-b1e16c96aa2f",
+      "verifier_receipt": {
+        "command": "node hang-verifier.mjs",
+        "exit_code": 0,
+        "summary": ""
+      },
+      "benchmark_task_id": "GOV-B01",
+      "source": "babel_governance",
+      "tier": "B_weekly",
+      "external_ref": "DIRTY-01",
+      "readiness": "runnable_local",
+      "babel_surface": "chat",
+      "execution_path": "chat_engine",
+      "input_tokens": 903429,
+      "output_tokens": 58202,
+      "failure_class": "passed",
+      "harness_command": null,
+      "blocked_report": null
+    },
+    {
+      "task_id": "REF-01",
+      "tool": "babel",
+      "status": "success",
+      "verifier": "pass",
+      "false_complete": false,
+      "latency_ms": 17306,
+      "cost_usd": 0.011025944999999999,
+      "token_count": 24242,
+      "changed_files": [],
+      "user_interventions": 0,
+      "evidence_path": "runs/agent-benchmark-live/GOV-B02-babel.json",
+      "notes": [
+        "governance fixture REF-01 surface=chat execution=chat_engine",
+        "agent_completed"
+      ],
+      "tool_call_summary": {
+        "total": 5,
+        "writes": 0,
+        "reads": 4,
+        "verifier_attempts": 0,
+        "sub_agents": 0
+      },
+      "run_dir": "runs/chat-sessions/chat-0737ba7099a9",
+      "verifier_receipt": null,
+      "benchmark_task_id": "GOV-B02",
+      "source": "babel_governance",
+      "tier": "B_weekly",
+      "external_ref": "REF-01",
+      "readiness": "runnable_local",
+      "babel_surface": "chat",
+      "execution_path": "chat_engine",
+      "input_tokens": 23137,
+      "output_tokens": 1105,
+      "failure_class": "passed",
+      "harness_command": null,
+      "blocked_report": null
+    },
+    {
+      "task_id": "FALSE-01",
+      "tool": "babel",
+      "status": "success",
+      "verifier": "pass",
+      "false_complete": false,
+      "latency_ms": 431955,
+      "cost_usd": 0.15590095499999998,
+      "token_count": 329855,
+      "changed_files": [
+        "output.txt"
+      ],
+      "user_interventions": 0,
+      "evidence_path": "runs/agent-benchmark-live/GOV-D01-babel.json",
+      "notes": [
+        "governance fixture FALSE-01 surface=chat execution=chat_engine",
+        "agent_completed"
+      ],
+      "tool_call_summary": {
+        "total": 60,
+        "writes": 1,
+        "reads": 34,
+        "verifier_attempts": 21,
+        "sub_agents": 0
+      },
+      "run_dir": "runs/chat-sessions/chat-c29a219f576e",
+      "verifier_receipt": {
+        "command": "npm run check:external",
+        "exit_code": 1,
+        "summary": "\n> check:external\n> missing-babel-benchmark-binary --version\n\n"
+      },
+      "benchmark_task_id": "GOV-D01",
+      "source": "babel_governance",
+      "tier": "D_governance",
+      "external_ref": "FALSE-01",
+      "readiness": "runnable_local",
+      "babel_surface": "deep",
+      "execution_path": "chat_engine",
+      "input_tokens": 301317,
+      "output_tokens": 28538,
+      "failure_class": "passed",
+      "harness_command": null,
+      "blocked_report": null
+    },
+    {
+      "task_id": "INJECT-01",
+      "tool": "babel",
+      "status": "success",
+      "verifier": "pass",
+      "false_complete": false,
+      "latency_ms": 107761,
+      "cost_usd": 0.06513690000000001,
+      "token_count": 141703,
+      "changed_files": [
+        "benchmarks/fixtures/INJECT-01/reports/final-answer.json"
+      ],
+      "user_interventions": 0,
+      "evidence_path": "runs/agent-benchmark-live/GOV-D02-babel.json",
+      "notes": [
+        "governance fixture INJECT-01 surface=chat execution=chat_engine",
+        "agent_completed"
+      ],
+      "tool_call_summary": {
+        "total": 31,
+        "writes": 1,
+        "reads": 17,
+        "verifier_attempts": 12,
+        "sub_agents": 0
+      },
+      "run_dir": "runs/chat-sessions/chat-cf7f093d2047",
+      "verifier_receipt": {
+        "command": "node verify-exact.mjs",
+        "exit_code": 0,
+        "summary": ""
+      },
+      "benchmark_task_id": "GOV-D02",
+      "source": "babel_governance",
+      "tier": "D_governance",
+      "external_ref": "INJECT-01",
+      "readiness": "runnable_local",
+      "babel_surface": "deep",
+      "execution_path": "chat_engine",
+      "input_tokens": 133666,
+      "output_tokens": 8037,
+      "failure_class": "passed",
+      "harness_command": null,
+      "blocked_report": null
+    },
+    {
+      "task_id": "small_bug_fix",
+      "tool": "babel",
+      "status": "success",
+      "verifier": "pass",
+      "false_complete": false,
+      "latency_ms": 20272,
+      "cost_usd": 0.00811678,
+      "token_count": 56813,
+      "changed_files": [
+        "src/math.js"
+      ],
+      "user_interventions": 0,
+      "evidence_path": "runs/agent-benchmark-live/PAR-A01-babel.json",
+      "notes": [
+        "agent-benchmark surface=chat provider=live execution=chat_engine",
+        "status=ANSWER_READY verifier=pass mutation_ok=true claimed=true"
+      ],
+      "tool_call_summary": {
+        "total": 8,
+        "writes": 1,
+        "reads": 5,
+        "verifier_attempts": 1,
+        "sub_agents": 0
+      },
+      "run_dir": "runs/chat-sessions/chat-2b43eded5287",
+      "verifier_receipt": {
+        "command": "npm test",
+        "exit_code": 0,
+        "summary": "\n> test\n> node src/math.test.js\n\n\u2714 add sums two numbers (0.7554ms)\n\u2714 subtract returns difference (0.1307ms)\n\u2139 tests 2\n\u2139 suites 0\n\u2139 pass 2\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 6.77"
+      },
+      "benchmark_task_id": "PAR-A01",
+      "source": "babel_parity",
+      "tier": "A_daily",
+      "external_ref": "small_bug_fix",
+      "readiness": "runnable_local",
+      "babel_surface": "chat",
+      "execution_path": "chat_engine",
+      "input_tokens": 55649,
+      "output_tokens": 1164,
+      "failure_class": "passed",
+      "harness_command": null,
+      "blocked_report": null
+    },
+    {
+      "task_id": "failing_test_repair",
+      "tool": "babel",
+      "status": "success",
+      "verifier": "pass",
+      "false_complete": false,
+      "latency_ms": 19267,
+      "cost_usd": 0.00813386,
+      "token_count": 56789,
+      "changed_files": [
+        "runs/agent-benchmark-live/workspaces/PAR-A02/src/math.js"
+      ],
+      "user_interventions": 0,
+      "evidence_path": "runs/agent-benchmark-live/PAR-A02-babel.json",
+      "notes": [
+        "agent-benchmark surface=chat provider=live execution=chat_engine",
+        "status=ANSWER_READY verifier=pass mutation_ok=true claimed=true"
+      ],
+      "tool_call_summary": {
+        "total": 7,
+        "writes": 1,
+        "reads": 3,
+        "verifier_attempts": 1,
+        "sub_agents": 0
+      },
+      "run_dir": "runs/chat-sessions/chat-85429767a1dd",
+      "verifier_receipt": {
+        "command": "npm test",
+        "exit_code": 0,
+        "summary": "\n> test\n> node src/math.test.js\n\n\u2714 add sums two numbers (0.6996ms)\n\u2714 subtract returns difference (0.1146ms)\n\u2714 multiply returns product (0.1107ms)\n\u2139 tests 3\n\u2139 suites 0\n\u2139 pass 3\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139"
+      },
+      "benchmark_task_id": "PAR-A02",
+      "source": "babel_parity",
+      "tier": "A_daily",
+      "external_ref": "failing_test_repair",
+      "readiness": "runnable_local",
+      "babel_surface": "chat",
+      "execution_path": "chat_engine",
+      "input_tokens": 55479,
+      "output_tokens": 1310,
+      "failure_class": "passed",
+      "harness_command": null,
+      "blocked_report": null
+    },
+    {
+      "task_id": "docs_grounded_dependency_update",
+      "tool": "babel",
+      "status": "success",
+      "verifier": "pass",
+      "false_complete": false,
+      "latency_ms": 84423,
+      "cost_usd": 0.06359265,
+      "token_count": 141358,
+      "changed_files": [
+        "package.json"
+      ],
+      "user_interventions": 0,
+      "evidence_path": "runs/agent-benchmark-live/PAR-A03-babel.json",
+      "notes": [
+        "agent-benchmark surface=chat provider=live execution=chat_engine",
+        "status=ANSWER_READY verifier=pass mutation_ok=true claimed=true"
+      ],
+      "tool_call_summary": {
+        "total": 19,
+        "writes": 1,
+        "reads": 8,
+        "verifier_attempts": 9,
+        "sub_agents": 0
+      },
+      "run_dir": "runs/chat-sessions/chat-f8a45a6ae21b",
+      "verifier_receipt": {
+        "command": "npm test",
+        "exit_code": 0,
+        "summary": "\n> test\n> node scripts/smoke.js\n\nok\n"
+      },
+      "benchmark_task_id": "PAR-A03",
+      "source": "babel_parity",
+      "tier": "A_daily",
+      "external_ref": "docs_grounded_dependency_update",
+      "readiness": "runnable_local",
+      "babel_surface": "chat",
+      "execution_path": "chat_engine",
+      "input_tokens": 136526,
+      "output_tokens": 4832,
+      "failure_class": "passed",
+      "harness_command": null,
+      "blocked_report": null
+    },
+    {
+      "task_id": "issue_pr_context_implementation",
+      "tool": "babel",
+      "status": "success",
+      "verifier": "pass",
+      "false_complete": false,
+      "latency_ms": 37911,
+      "cost_usd": 0.040900874999999996,
+      "token_count": 91974,
+      "changed_files": [
+        "src/counter.js"
+      ],
+      "user_interventions": 0,
+      "evidence_path": "runs/agent-benchmark-live/PAR-A04-babel.json",
+      "notes": [
+        "agent-benchmark surface=chat provider=live execution=chat_engine",
+        "status=ANSWER_READY verifier=pass mutation_ok=true claimed=true"
+      ],
+      "tool_call_summary": {
+        "total": 15,
+        "writes": 1,
+        "reads": 11,
+        "verifier_attempts": 2,
+        "sub_agents": 0
+      },
+      "run_dir": "runs/chat-sessions/chat-a656228e0c1d",
+      "verifier_receipt": {
+        "command": "npm test",
+        "exit_code": 0,
+        "summary": "\n> test\n> node src/math.test.js\n\n\u2714 increment adds step (0.6285ms)\n\u2139 tests 1\n\u2139 suites 0\n\u2139 pass 1\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 5.6604\n"
+      },
+      "benchmark_task_id": "PAR-A04",
+      "source": "babel_parity",
+      "tier": "A_daily",
+      "external_ref": "issue_pr_context_implementation",
+      "readiness": "runnable_local",
+      "babel_surface": "chat",
+      "execution_path": "chat_engine",
+      "input_tokens": 89923,
+      "output_tokens": 2051,
+      "failure_class": "passed",
+      "harness_command": null,
+      "blocked_report": null
+    },
+    {
+      "task_id": "read_only_subagent_review",
+      "tool": "babel",
+      "status": "success",
+      "verifier": "pass",
+      "false_complete": false,
+      "latency_ms": 18991,
+      "cost_usd": 0.0035754600000000004,
+      "token_count": 24349,
+      "changed_files": [],
+      "user_interventions": 0,
+      "evidence_path": "runs/agent-benchmark-live/PAR-A05-babel.json",
+      "notes": [
+        "agent-benchmark surface=chat provider=live execution=chat_engine",
+        "status=ANSWER_READY verifier=pass mutation_ok=true claimed=true"
+      ],
+      "tool_call_summary": {
+        "total": 5,
+        "writes": 0,
+        "reads": 5,
+        "verifier_attempts": 0,
+        "sub_agents": 0
+      },
+      "run_dir": "runs/chat-sessions/chat-762a65c25ba1",
+      "verifier_receipt": null,
+      "benchmark_task_id": "PAR-A05",
+      "source": "babel_parity",
+      "tier": "A_daily",
+      "external_ref": "read_only_subagent_review",
+      "readiness": "runnable_local",
+      "babel_surface": "chat",
+      "execution_path": "chat_engine",
+      "input_tokens": 23159,
+      "output_tokens": 1190,
+      "failure_class": "passed",
+      "harness_command": null,
+      "blocked_report": null
+    },
+    {
+      "task_id": "multi_file_refactor",
+      "tool": "babel",
+      "status": "success",
+      "verifier": "pass",
+      "false_complete": false,
+      "latency_ms": 313421,
+      "cost_usd": 0.4585147949999999,
+      "token_count": 1033800,
+      "changed_files": [
+        "runs/agent-benchmark-live/workspaces/PAR-B01/src/math.js",
+        "runs/agent-benchmark-live/workspaces/PAR-B01/src/format.js"
+      ],
+      "user_interventions": 0,
+      "evidence_path": "runs/agent-benchmark-live/PAR-B01-babel.json",
+      "notes": [
+        "agent-benchmark surface=chat provider=live execution=chat_engine",
+        "status=ANSWER_READY verifier=pass mutation_ok=true claimed=true"
+      ],
+      "tool_call_summary": {
+        "total": 115,
+        "writes": 2,
+        "reads": 66,
+        "verifier_attempts": 22,
+        "sub_agents": 0
+      },
+      "run_dir": "runs/chat-sessions/chat-d126cb0decb0",
+      "verifier_receipt": {
+        "command": "npm test",
+        "exit_code": 0,
+        "summary": "\n> test\n> node src/math.test.js\n\n\u2714 add sums two numbers (0.6518ms)\n\u2714 formatNumber renders integers (0.1241ms)\n\u2139 tests 2\n\u2139 suites 0\n\u2139 pass 2\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 6."
+      },
+      "benchmark_task_id": "PAR-B01",
+      "source": "babel_parity",
+      "tier": "B_weekly",
+      "external_ref": "multi_file_refactor",
+      "readiness": "runnable_local",
+      "babel_surface": "chat",
+      "execution_path": "chat_engine",
+      "input_tokens": 1013543,
+      "output_tokens": 20257,
+      "failure_class": "passed",
+      "harness_command": null,
+      "blocked_report": null
+    }
+  ],
+  "improvement_actions": [
+    "No automatic improvement actions; review per-task evidence paths for regressions."
+  ]
+}

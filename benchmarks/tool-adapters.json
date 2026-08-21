@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "adapters": [
+    {
+      "id": "babel",
+      "name": "Babel CLI",
+      "adapter_status": "runnable_local_deterministic",
+      "execution_mode": "babel_deterministic_model_boundary_assisted",
+      "availability": "available",
+      "notes": "Runs the local Babel governance benchmark adapter. This does not claim live-provider autonomous performance."
+    },
+    {
+      "id": "codex_cli",
+      "name": "Codex CLI",
+      "adapter_status": "placeholder_unimplemented",
+      "execution_mode": "external_cli_pending",
+      "availability": "pending",
+      "command_candidates": ["codex"],
+      "notes": "Configured as a future external adapter. Results must stay unavailable until a real runner exists."
+    },
+    {
+      "id": "claude_code",
+      "name": "Claude Code",
+      "adapter_status": "placeholder_unimplemented",
+      "execution_mode": "external_cli_pending",
+      "availability": "pending",
+      "command_candidates": ["claude"],
+      "notes": "Configured as a future external adapter. Results must stay unavailable until a real runner exists."
+    },
+    {
+      "id": "gemini_cli",
+      "name": "Gemini CLI",
+      "adapter_status": "placeholder_unimplemented",
+      "execution_mode": "external_cli_pending",
+      "availability": "pending",
+      "command_candidates": ["gemini"],
+      "notes": "Configured as a future external adapter. Results must stay unavailable until a real runner exists."
+    },
+    {
+      "id": "aider",
+      "name": "Aider",
+      "adapter_status": "placeholder_unimplemented",
+      "execution_mode": "external_cli_pending",
+      "availability": "pending",
+      "command_candidates": ["aider"],
+      "notes": "Configured as a future external adapter. Results must stay unavailable until a real runner exists."
+    },
+    {
+      "id": "openhands",
+      "name": "OpenHands",
+      "adapter_status": "placeholder_unimplemented",
+      "execution_mode": "external_cli_pending",
+      "availability": "pending",
+      "command_candidates": ["openhands", "openhands-cli"],
+      "notes": "Configured as a future external adapter. Results must stay unavailable until a real runner exists."
+    }
+  ]
+}
