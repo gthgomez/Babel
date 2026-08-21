@@ -218,14 +218,15 @@ describe('streamed answers are not duplicated', () => {
     assert.equal(chunks[0], done.answer);
   });
 
-  test('normalized legacy JSON final emits only the parsed answer once', async () => {
+  test('normalized legacy JSON final is buffered — parsed answer emitted exactly once', async () => {
     const engine = new ChatEngine({
       task: 'hello',
       projectRoot: makeRoot(),
       maxTurns: 4,
     });
-    // Legacy path (no native tools): raw stream carries JSON wrapper; the
-    // lenient parser normalizes it to just the "answer" field.
+    // Legacy path (no native tools): raw stream carries a JSON wrapper that
+    // the lenient parser normalizes. The raw text must NOT be live-streamed
+    // (it is not append-compatible with the parsed final answer).
     const rawJson = '{"thinking":"internal","answer":"Normalized final"}';
     stubNativeRunner(engine, {
       executeRawStream: async function* () {
@@ -240,19 +241,17 @@ describe('streamed answers are not duplicated', () => {
     const chunks = events
       .filter((e): e is Extract<ChatEvent, { type: 'answer_chunk' }> => e.type === 'answer_chunk')
       .map((e) => e.text);
-    const joined = chunks.join('');
     const done = events.filter((e) => e.type === 'done').at(-1) as
       | Extract<ChatEvent, { type: 'done' }>
       | undefined;
 
     assert.ok(done, 'expected done event');
     assert.equal(done.answer, 'Normalized final');
-    assert.equal(
-      chunks.filter((c) => c === 'Normalized final').length,
-      1,
-      `parsed answer must be emitted exactly once as its own chunk, got: ${JSON.stringify(chunks)}`,
+    assert.deepEqual(
+      chunks,
+      ['Normalized final'],
+      `buffered parse path must emit exactly the parsed answer once, got: ${JSON.stringify(chunks)}`,
     );
-    assert.ok(joined.endsWith('Normalized final'));
   });
 
   test('BLOCKED-declared completions are emitted once', async () => {
@@ -328,8 +327,91 @@ describe('per-round budget terminal precedes continuation mechanisms', () => {
   });
 });
 
-describe('assistant stream segments at tool boundaries', () => {
-  test('answer → tool → answer produces separate transcript cells', async () => {
+describe('generation boundaries (thinking without tools) segment streams', () => {
+  test('engine emits thinking between consecutive text-only generations', async () => {
+    const state = { calls: 0 };
+    const engine = new ChatEngine({
+      task: 'the login page is broken',
+      projectRoot: makeRoot(),
+      maxTurns: 3,
+    });
+    stubNativeRunner(engine, textOnlyRunner('Still reasoning about the approach.', state));
+
+    const events = await collect(engine, 'the login page is broken', 'execute');
+    const types = events.map((e) => e.type);
+    let found = false;
+    for (let i = 0; i < types.length && !found; i++) {
+      if (types[i] !== 'answer_chunk') continue;
+      for (let j = i + 1; j < types.length && !found; j++) {
+        if (types[j] === 'tool_start') break; // tool boundary is a different seam
+        if (types[j] !== 'thinking') continue;
+        for (let k = j + 1; k < types.length; k++) {
+          if (types[k] === 'answer_chunk') {
+            found = true; // chunkA … thinking … chunkB with no tool between
+            break;
+          }
+          if (types[k] === 'done' || types[k] === 'failed' || types[k] === 'cancelled') break;
+        }
+      }
+    }
+    assert.equal(
+      state.calls >= 2,
+      true,
+      `expected at least two generations, got ${state.calls} provider calls`,
+    );
+    assert.equal(found, true, `expected a thinking boundary between answer generations, got: ${types.join(',')}`);
+  });
+
+  test('dispatch forwards generation boundaries to the renderer', async () => {
+    const { dispatchChatEvent } = await import('../interactive/execution/chatEventDispatch.js');
+    const calls: string[] = [];
+    const fakeRenderer = {
+      onAnswerChunk: (t: string) => calls.push(`chunk:${t}`),
+      onAnswerGenerationBoundary: () => calls.push('boundary'),
+    } as never;
+    dispatchChatEvent({ type: 'answer_chunk', text: 'A' }, { convRenderer: fakeRenderer });
+    dispatchChatEvent({ type: 'thinking' }, { convRenderer: fakeRenderer });
+    dispatchChatEvent({ type: 'answer_chunk', text: 'B' }, { convRenderer: fakeRenderer });
+    assert.deepEqual(calls, ['chunk:A', 'boundary', 'chunk:B']);
+  });
+
+  test('renderer commits generation A and opens a fresh segment for B', async () => {
+    const { ConversationalRenderer } = await import('../ui/waterfall.js');
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => true) as typeof process.stdout.write;
+    try {
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
+      renderer.start();
+
+      renderer.onAnswerChunk('Generation A text.');
+      renderer.onAnswerGenerationBoundary();
+      renderer.onAnswerChunk('Generation B text.');
+
+      const committed = renderer.getCommittedHistoryCells();
+      const assistantCells = committed.filter((c) => c.kind === 'assistant_message');
+      assert.equal(assistantCells.length, 1, 'generation A must be committed as its own cell');
+      const payloadA = assistantCells[0]!.payload as { message?: string };
+      assert.equal(payloadA.message, 'Generation A text.');
+
+      // Live summary segment now contains only generation B.
+      const liveText = renderer.getAnswerText();
+      assert.match(liveText, /Generation B text\./);
+      assert.doesNotMatch(liveText, /Generation A text\./, 'generations must not concatenate');
+
+      const active = (renderer as unknown as {
+        _historyTranscript?: { getActiveRecord?: () => { kind: string; payload?: { message?: string } } | null };
+      })._historyTranscript?.getActiveRecord?.();
+      assert.equal(active?.kind, 'assistant_message');
+      assert.equal(active?.payload?.message, 'Generation B text.');
+
+      renderer.stop();
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  });
+});
+
+describe('assistant stream segments at tool boundaries', () => {  test('answer → tool → answer produces separate transcript cells', async () => {
     const { ConversationalRenderer } = await import('../ui/waterfall.js');
     const originalWrite = process.stdout.write.bind(process.stdout);
     process.stdout.write = ((chunk: unknown) => true) as typeof process.stdout.write;

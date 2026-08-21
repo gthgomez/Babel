@@ -563,8 +563,16 @@ function isConversationalTurnText(task: string): boolean {
  * - exact match → nothing left to emit
  * - final extends the streamed prefix → emit only the missing suffix
  *   ("Hello " streamed, "Hello world" final → emit "world")
- * - zero stream / divergent or normalized final → emit the full answer once
- *   (the only non-duplicating option without a renderer replace API)
+ * - zero stream → emit the full answer once
+ * - divergent/normalized final → emit the full answer once
+ *
+ * Divergence should not occur in practice: only native append-compatible
+ * paths stream live (final === concatenated deltas by construction), while
+ * parse/normalization paths (text-tools, legacy JSON, lenient fallbacks) are
+ * buffered and stream nothing. If a future path makes divergence reachable,
+ * the correct fix is buffering on that path or a renderer replacement event —
+ * appending after already-rendered divergent content duplicates user-visible
+ * text.
  */
 export function reconcileStreamedAnswer(
   streamed: string | null,
@@ -1770,6 +1778,9 @@ export class ChatEngine {
 
       if (useTextTools) {
         // ── Text-tools path — simplified format for small local models ──────
+        // Buffered: rawText may contain [TOOL:…] markers that parseTextToolTurn
+        // strips, so the final answer is not guaranteed append-compatible with
+        // the stream. The reconciled final answer is emitted at the terminal.
         const systemPrompt = this.getOrBuildSystemPrompt('text');
         let rawText = '';
         const providerStart = performance.now();
@@ -1782,7 +1793,6 @@ export class ChatEngine {
           )) {
             rawText += chunk;
             this.currentTurnTelemetry?.markFirstToken();
-            yield { type: 'answer_chunk', text: chunk };
           }
           const providerEnd = performance.now();
           this.currentTurnTelemetry?.recordProviderSpan(
@@ -1791,7 +1801,6 @@ export class ChatEngine {
             providerEnd,
           );
           this.trackRunnerUsage(runner);
-          streamedAnswerForTurn = rawText;
           turnResult = parseTextToolTurn(rawText);
         } catch (err: any) {
           const providerEnd = performance.now();
@@ -1959,7 +1968,8 @@ export class ChatEngine {
               fbStart,
               fbEnd,
             );
-            // If tools still fail, degrade to raw-text streaming
+            // If tools still fail, degrade to raw-text (buffered — the lenient
+            // parser may transform the final answer; not append-compatible).
             yield { type: 'thought', text: 'Retrying without tools…' };
             let rawText = '';
             const rawFbStart = performance.now();
@@ -1972,7 +1982,6 @@ export class ChatEngine {
               )) {
                 rawText += chunk;
                 this.currentTurnTelemetry?.markFirstToken();
-                yield { type: 'answer_chunk', text: chunk };
               }
               const rawFbEnd = performance.now();
               this.currentTurnTelemetry?.recordProviderSpan(
@@ -1981,7 +1990,6 @@ export class ChatEngine {
                 rawFbEnd,
               );
               this.trackRunnerUsage(fb);
-              streamedAnswerForTurn = rawText;
               turnResult = this.parseChatTurnLenient(rawText);
             } catch (rawErr: any) {
               const rawFbEnd = performance.now();
@@ -2004,6 +2012,8 @@ export class ChatEngine {
         }
       } else {
         // ── Legacy prompt-based JSON path ─────────────────────────────────
+        // Buffered: raw output is re-parsed (lenient JSON extraction), so the
+        // parsed final answer is not append-compatible with the raw stream.
         let rawText = '';
         const legacyStart = performance.now();
         try {
@@ -2015,7 +2025,6 @@ export class ChatEngine {
           )) {
             rawText += chunk;
             this.currentTurnTelemetry?.markFirstToken();
-            yield { type: 'answer_chunk', text: chunk };
           }
           const legacyEnd = performance.now();
           this.currentTurnTelemetry?.recordProviderSpan(
@@ -2045,7 +2054,7 @@ export class ChatEngine {
               this.abortController.signal,
             )) {
               rawText += chunk;
-              yield { type: 'answer_chunk', text: chunk };
+              this.currentTurnTelemetry?.markFirstToken();
             }
             this.trackRunnerUsage(fb);
           } catch (fbErr: any) {
@@ -2062,7 +2071,6 @@ export class ChatEngine {
         }
 
         turnResult = this.parseChatTurnLenient(rawText);
-        streamedAnswerForTurn = rawText;
       }
 
       // Item 7: end-of-turn token explosion on stream path (after LLM usage tracked)
