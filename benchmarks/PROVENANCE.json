@@ -33,12 +33,19 @@
       "sanitized": false
     },
     "task-manifest.json": {
-      "classification": "RECOVERED_EXACT",
+      "classification": "RECOVERED_EXACT_PLUS_CANONICAL_ADDITION",
       "sha256": "057eeef534f7569110d2357e0239eaedde2af966d47a5250f0f5bbfeec41dfb8",
       "source_artifact": "maintainer-vault/task-manifest.json",
       "source_date": "2026-07-06",
       "sanitized": true,
-      "note": "canonical fixture section is NEW_CANONICAL_REPLACEMENT, not historical truth"
+      "note": "recovered sections are exact; the canonical fixture section is newly constructed (see subsection entry)"
+    },
+    "task-manifest.json#/canonical": {
+      "classification": "NEW_CANONICAL_REPLACEMENT",
+      "source_artifact": "constructed-in-repo",
+      "source_date": "2026-08-20",
+      "sanitized": false,
+      "note": "newly authored canonical fixture definition — not historical truth; content covered by the whole-file sha256 above"
     },
     "fixtures/BLOCK-01/verify.mjs": {
       "classification": "RECOVERED_EXACT",
