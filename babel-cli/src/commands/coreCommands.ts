@@ -15,7 +15,7 @@ import { startInteractiveSession } from '../interactive.js';
 import { getShadowDiff } from '../services/shadowDiff.js';
 import { formatDoctorHuman, runDoctor, type DoctorScope } from '../doctor.js';
 import { formatEvalDoctorHuman, runEvalDoctor } from '../eval/evalDoctor.js';
-import { runCodingCanary } from '../eval/canary/runner.js';
+import { runCodingCanary, describeCanaryPlan } from '../eval/canary/runner.js';
 import { projectEvaluationEpisode } from '../eval/projectEpisode.js';
 import { validateRuntimeEnv } from '../config/runtimeEnv.js';
 import {
@@ -3720,8 +3720,8 @@ Commands include:
     .option('--task <id>', 'Single canary task id (C01–C10)')
     .option('--provider <p>', 'mock | live', 'mock')
     .option('--i-authorize-live', 'Required to spend live model tokens')
-    .option('--smoke', 'LIVE_SMOKE (default 1 trial); not aggregated as live capability')
-    .option('--trials <n>', 'Repeated trials (default 3 live baseline, 1 smoke)')
+    .option('--smoke', 'LIVE_SMOKE: C01 only, exactly one trial; not aggregated as live capability')
+    .option('--trials <n>', 'Repeated trials (default 3 live baseline; fixed 1 under --smoke)')
     .option('--model <id>', 'Chat model id (default deepseek-v4-flash)')
     .option('--json', 'Emit structured JSON only')
     .action((options: {
@@ -3735,8 +3735,18 @@ Commands include:
       model?: string
     }) => {
       if (options.plan) {
-        const payload = { schema_version: 1, suite: 'coding-canary', tasks: 10 };
-        printJsonOrHuman(payload, 'coding-canary: 10 tasks (mock merge gate)', options.json === true);
+        // Plan must describe the exact execution the same flags would run.
+        const parsedPlanTrials = options.trials ? Number.parseInt(options.trials, 10) : NaN;
+        const plan = describeCanaryPlan({
+          smoke: options.smoke === true,
+          ...(options.task ? { taskId: options.task } : {}),
+          ...(Number.isFinite(parsedPlanTrials) ? { trials: parsedPlanTrials } : {}),
+        });
+        printJsonOrHuman(
+          plan,
+          `coding-canary plan: ${plan.tasks} task(s) [${plan.task_ids.join(', ')}], ${plan.trials_per_task} trial(s) each`,
+          options.json === true,
+        );
         return;
       }
       const provider = options.provider === 'live' ? 'live' : 'mock';

@@ -243,6 +243,49 @@ function runLiveTrial(
 }
 
 /**
+ * Truthful plan description for `benchmark canary --plan` — mirrors the
+ * exact task/trial selection runCodingCanary will perform for the same
+ * flags, so JSON and human output can never promise a different execution.
+ */
+export function describeCanaryPlan(opts: {
+  smoke?: boolean
+  taskId?: string
+  trials?: number
+}): {
+  schema_version: 1
+  suite: 'coding-canary'
+  provider: 'mock' | 'live'
+  smoke: boolean
+  tasks: number
+  task_ids: string[]
+  trials_per_task: number
+  evidence_scope: EvidenceScope
+} {
+  const smoke = opts.smoke === true
+  if (smoke && opts.taskId && opts.taskId !== 'C01') {
+    throw new Error(
+      `--smoke is restricted to C01 (LIVE_SMOKE); refusing to plan "${opts.taskId}" under the smoke budget`,
+    )
+  }
+  const specs = opts.taskId
+    ? [getCanaryTask(opts.taskId)]
+    : smoke
+      ? [getCanaryTask('C01')]
+      : CANARY_TASKS
+  const trialsPerTask = smoke ? 1 : (opts.trials ?? 3)
+  return {
+    schema_version: 1,
+    suite: 'coding-canary',
+    provider: 'mock',
+    smoke,
+    tasks: specs.length,
+    task_ids: specs.map((s) => s.id),
+    trials_per_task: trialsPerTask,
+    evidence_scope: 'MOCK_ORCHESTRATION',
+  }
+}
+
+/**
  * Run the coding-loop canary. Mock path is MOCK_ORCHESTRATION and must not
  * aggregate into live coding success. Live requires authorizeLive.
  */
@@ -258,6 +301,11 @@ export function runCodingCanary(options: RunCanaryOptions): CanaryReport {
   if (smoke && options.taskId && options.taskId !== 'C01') {
     throw new Error(
       `--smoke is restricted to C01 (LIVE_SMOKE); refusing to run "${options.taskId}" under the smoke budget`,
+    )
+  }
+  if (smoke && options.trials !== undefined && options.trials !== 1) {
+    throw new Error(
+      `--smoke runs exactly one trial (LIVE_SMOKE contract); refusing trials=${options.trials}`,
     )
   }
   const specs =

@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { runCodingCanary } from '../src/eval/canary/runner.js'
+import { describeCanaryPlan, runCodingCanary } from '../src/eval/canary/runner.js'
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 // Host/CI environment wins: a repo-local .env only fills gaps, it must never
@@ -62,8 +62,13 @@ function main(): void {
     return
   }
   if (options.plan) {
-    const payload = { schema_version: 1, suite: 'coding-canary', tasks: 10, provider: options.provider }
-    process.stdout.write(JSON.stringify(payload, null, 2) + '\n')
+    // Plan must mirror the exact selection the same flags would execute.
+    const plan = describeCanaryPlan({
+      smoke: options.smoke,
+      ...(options.task ? { taskId: options.task } : {}),
+      ...(options.trials !== undefined ? { trials: options.trials } : {}),
+    })
+    process.stdout.write(JSON.stringify({ ...plan, provider: options.provider }, null, 2) + '\n')
     return
   }
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')

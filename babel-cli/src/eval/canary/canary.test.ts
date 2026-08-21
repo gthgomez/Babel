@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { interleaveTrials } from './interleave.js'
-import { contractSuccess, runCodingCanary } from './runner.js'
+import { contractSuccess, describeCanaryPlan, runCodingCanary } from './runner.js'
 import { uncertaintyForTrials } from './score.js'
 import { CANARY_TASKS, getCanaryTask } from './tasks.js'
 import { verifyCanaryTaskValidity } from './validity.js'
@@ -123,6 +123,43 @@ test('--smoke with a non-C01 explicit task is refused', () => {
     () => runCodingCanary({ provider: 'mock', smoke: true, taskId: 'C05' }),
     /smoke is restricted to C01/,
   )
+})
+
+test('--smoke with explicit trials != 1 is refused (spend contract)', () => {
+  assert.throws(
+    () => runCodingCanary({ provider: 'mock', smoke: true, trials: 50 }),
+    /exactly one trial/,
+  )
+  assert.throws(
+    () => runCodingCanary({ provider: 'mock', smoke: true, trials: 2 }),
+    /exactly one trial/,
+  )
+  // trials=1 is the only allowed explicit value.
+  const ok = runCodingCanary({ provider: 'mock', smoke: true, trials: 1 })
+  assert.equal(ok.trials.length, 1)
+})
+
+test('plan describes the exact execution for every flag combination', () => {
+  // Full suite.
+  const full = describeCanaryPlan({})
+  assert.equal(full.tasks, CANARY_TASKS.length)
+  assert.equal(full.task_ids.length, CANARY_TASKS.length)
+  assert.deepEqual(full.task_ids, CANARY_TASKS.map((t) => t.id))
+  assert.equal(full.trials_per_task, 3)
+
+  // Smoke → C01 only, one trial.
+  const smoke = describeCanaryPlan({ smoke: true })
+  assert.deepEqual(smoke.task_ids, ['C01'])
+  assert.equal(smoke.trials_per_task, 1)
+  assert.equal(smoke.smoke, true)
+
+  // Explicit single task → that task, default trials.
+  const single = describeCanaryPlan({ taskId: 'C05' })
+  assert.deepEqual(single.task_ids, ['C05'])
+  assert.equal(single.trials_per_task, 3)
+
+  // Plan refuses the same invalid combinations execution refuses.
+  assert.throws(() => describeCanaryPlan({ smoke: true, taskId: 'C05' }), /smoke is restricted/)
 })
 
 test('mock C01 gold patch is contract success and not live-aggregatable', () => {
