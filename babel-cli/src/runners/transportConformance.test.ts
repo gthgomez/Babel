@@ -70,6 +70,7 @@ const API_TRANSPORT_MODULES = [
   'geminiApi.ts',
   'groqApi.js',
   'openRouterApi.ts',
+  'openCodeApi.ts',
   'providerMessages.ts',
   'providerNormalize.ts',
   'credentialHub.ts',
@@ -123,6 +124,7 @@ const ADAPTER_INDEX: Readonly<Record<ProviderId, { module: string; adapterClass:
   deepseek: { module: 'deepSeekApi.ts', adapterClass: 'DeepSeekApiRunner' },
   deepinfra: { module: 'deepInfraApi.ts', adapterClass: 'DeepInfraApiRunner' },
   openrouter: { module: 'openRouterApi.ts', adapterClass: 'OpenRouterApiRunner' },
+  opencode: { module: 'openCodeApi.ts', adapterClass: 'OpenCodeApiRunner' },
   openai: { module: 'openAiApi.ts', adapterClass: 'OpenAiApiRunner' },
   anthropic: { module: 'apiFallback.ts', adapterClass: 'ApiFallbackRunner' },
   gemini: { module: 'geminiApi.ts', adapterClass: 'GeminiApiRunner' },
@@ -134,12 +136,13 @@ const ADAPTER_MODULE_OF_CLASS: Readonly<Record<string, { module: string }>> = Ob
   Object.values(ADAPTER_INDEX).map((entry) => [entry.adapterClass, { module: entry.module }]),
 );
 
-/** Adapter inheritance (OpenRouter/Ollama inherit the DeepInfra implementation). */
+/** Adapter inheritance (OpenRouter/Ollama/OpenCode inherit the DeepInfra implementation). */
 const CLASS_EXTENDS: Readonly<Record<string, string | null>> = {
   DeepSeekApiRunner: null,
   DeepInfraApiRunner: null,
   OllamaApiRunner: 'DeepInfraApiRunner',
   OpenRouterApiRunner: 'DeepInfraApiRunner',
+  OpenCodeApiRunner: 'DeepInfraApiRunner',
   OpenAiApiRunner: null,
   GeminiApiRunner: null,
   ApiFallbackRunner: null,
@@ -172,6 +175,7 @@ const EVIDENCE_EXPECTATIONS: Readonly<
   ollama: { protocol: 'ollama', requiresCredential: false },
   // Dormant providers carry no evidence expectations until they are vetted.
   openrouter: { protocol: 'openai_compatible', requiresCredential: true },
+  opencode: { protocol: 'openai_compatible', requiresCredential: true },
   openai: { protocol: 'openai_compatible', requiresCredential: true },
   anthropic: { protocol: 'anthropic', requiresCredential: true },
   gemini: { protocol: 'gemini', requiresCredential: true },

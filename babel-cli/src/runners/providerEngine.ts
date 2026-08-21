@@ -14,6 +14,7 @@ import { GeminiApiRunner } from './geminiApi.js'
 import { GroqApiRunner } from './groqApi.js'
 import { OllamaApiRunner } from './ollamaApi.js'
 import { OpenAiApiRunner } from './openAiApi.js'
+import { OpenCodeApiRunner } from './openCodeApi.js'
 import { OpenRouterApiRunner } from './openRouterApi.js'
 import {
   providerSupportsOperation,
@@ -67,6 +68,11 @@ function createAdapter(options: ProviderEngineOptions): RawLlmRunner {
       return new DeepSeekApiRunner(options.modelId, credential)
     case 'openrouter':
       return new OpenRouterApiRunner(options.modelId, options.sampling, {
+        ...(options.apiKeyEnvVar ? { apiKeyEnvVar: options.apiKeyEnvVar } : {}),
+        ...credential,
+      })
+    case 'opencode':
+      return new OpenCodeApiRunner(options.modelId, options.sampling, {
         ...(options.apiKeyEnvVar ? { apiKeyEnvVar: options.apiKeyEnvVar } : {}),
         ...credential,
       })

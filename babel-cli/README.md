@@ -85,9 +85,11 @@ one engine entry point without pretending that Anthropic, Gemini, and
 OpenAI-compatible HTTP bodies are identical.
 
 Canonical credential variables are `DEEPINFRA_API_KEY`, `DEEPSEEK_API_KEY`,
-`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`,
-and `GROQ_API_KEY`. Ollama is credential-free by default and uses
-`BABEL_OLLAMA_BASE_URL` for an optional endpoint override.
+`OPENCODE_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`GEMINI_API_KEY`, and `GROQ_API_KEY`. Ollama is credential-free by default and
+uses `BABEL_OLLAMA_BASE_URL` for an optional endpoint override. The `opencode`
+provider targets OpenCode Zen (`https://opencode.ai/zen/v1`) with an optional
+`BABEL_OPENCODE_BASE_URL` endpoint override.
 
 ## Daily Interactive Loop
 

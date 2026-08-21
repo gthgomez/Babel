@@ -2,6 +2,7 @@
 export const PROVIDER_IDS = [
   'deepinfra',
   'deepseek',
+  'opencode',
   'openrouter',
   'openai',
   'anthropic',
@@ -79,6 +80,14 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
   openrouter: {
     id: 'openrouter',
     credentialEnvVar: 'OPENROUTER_API_KEY',
+    protocol: 'openai_compatible',
+    requiresCredential: true,
+    operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
+    authorityConformance: 'untested',
+  },
+  opencode: {
+    id: 'opencode',
+    credentialEnvVar: 'OPENCODE_API_KEY',
     protocol: 'openai_compatible',
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
