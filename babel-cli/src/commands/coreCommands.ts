@@ -14,6 +14,9 @@ import { runBabelMcpServer } from '../mcp/server.js';
 import { startInteractiveSession } from '../interactive.js';
 import { getShadowDiff } from '../services/shadowDiff.js';
 import { formatDoctorHuman, runDoctor, type DoctorScope } from '../doctor.js';
+import { formatEvalDoctorHuman, runEvalDoctor } from '../eval/evalDoctor.js';
+import { runCodingCanary } from '../eval/canary/runner.js';
+import { projectEvaluationEpisode } from '../eval/projectEpisode.js';
 import { validateRuntimeEnv } from '../config/runtimeEnv.js';
 import {
   buildInspectManifestView,
@@ -3698,6 +3701,73 @@ Commands include:
     .description('Run local Babel benchmark suites')
     .action(() => {
       benchmarkCommand.help({ error: false });
+    });
+
+  benchmarkCommand
+    .command('doctor')
+    .description('Report evaluation catalog and dataset readiness without crashing on missing fixtures')
+    .option('--json', 'Emit structured JSON only')
+    .action((options: { json?: boolean }) => {
+      const report = runEvalDoctor();
+      printJsonOrHuman(report, formatEvalDoctorHuman(report), options.json === true);
+      if (!report.ok) process.exit(1);
+    });
+
+  benchmarkCommand
+    .command('canary')
+    .description('Run the coding-loop canary (mock/structural by default)')
+    .option('--plan', 'List canary contract without executing')
+    .option('--task <id>', 'Single canary task id (C01–C10)')
+    .option('--provider <p>', 'mock | live', 'mock')
+    .option('--i-authorize-live', 'Required to spend live model tokens')
+    .option('--smoke', 'LIVE_SMOKE (default 1 trial); not aggregated as live capability')
+    .option('--trials <n>', 'Repeated trials (default 3 live baseline, 1 smoke)')
+    .option('--model <id>', 'Chat model id (default deepseek-v4-flash)')
+    .option('--json', 'Emit structured JSON only')
+    .action((options: {
+      plan?: boolean
+      task?: string
+      provider?: string
+      json?: boolean
+      iAuthorizeLive?: boolean
+      smoke?: boolean
+      trials?: string
+      model?: string
+    }) => {
+      if (options.plan) {
+        const payload = { schema_version: 1, suite: 'coding-canary', tasks: 10 };
+        printJsonOrHuman(payload, 'coding-canary: 10 tasks (mock merge gate)', options.json === true);
+        return;
+      }
+      const provider = options.provider === 'live' ? 'live' : 'mock';
+      const parsedTrials = options.trials ? Number.parseInt(options.trials, 10) : NaN;
+      const report = runCodingCanary({
+        provider,
+        authorizeLive: options.iAuthorizeLive === true,
+        smoke: options.smoke === true,
+        ...(options.task ? { taskId: options.task } : {}),
+        ...(Number.isFinite(parsedTrials) ? { trials: parsedTrials } : {}),
+        ...(options.model ? { model: options.model } : {}),
+      });
+      printJsonOrHuman(report, `canary scope=${report.evidence_scope} contract=${report.contract_success_rate}`, options.json === true);
+    });
+
+  benchmarkCommand
+    .command('episode')
+    .description('Project an EvaluationEpisode from a run directory (forensic; degrades if jsonl missing)')
+    .argument('<runDir>', 'Run directory containing session/episode jsonl')
+    .option('--json', 'Emit structured JSON only')
+    .option('--task <id>', 'Task id label')
+    .action((runDir: string, options: { json?: boolean; task?: string }) => {
+      const episode = projectEvaluationEpisode({
+        runDir,
+        ...(options.task ? { task_id: options.task } : {}),
+      });
+      printJsonOrHuman(
+        episode,
+        `episode task=${episode.identity.task_id} claim_eligible=${episode.claim_eligible} confidence=${episode.diagnosis_confidence}`,
+        options.json === true,
+      );
     });
 
   benchmarkCommand

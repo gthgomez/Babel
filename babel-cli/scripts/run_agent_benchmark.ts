@@ -48,7 +48,7 @@ function printHelp(): void {
       '  --task <id>           Run a single benchmark task id',
       '  --provider <p>        mock | live (default: mock for local fixtures)',
       '  --live                Alias for --provider live --surface chat --runnable-only',
-      '  --full                Live full 32-task suite (SWE/HUNK/TB + local; requires Docker)',
+      '  --full                Live full 34-task suite (SWE/HUNK/TB + local; requires Docker)',
       '  --runnable-only         Skip external SWE/HUNK/TB tasks that need datasets/Docker',
       '  --surface <s>         chat | plan | deep (override manifest default)',
       '  --output <path>       Report JSON path',

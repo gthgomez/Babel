@@ -581,7 +581,8 @@ export function runBabelCli(
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ...options.env,
-    BABEL_ROOT: process.env['BABEL_ROOT'] || BABEL_ROOT,
+    // Variant BABEL_ROOT must win; never clobber options.env with the parent checkout.
+    BABEL_ROOT: options.env?.['BABEL_ROOT'] || process.env['BABEL_ROOT'] || BABEL_ROOT,
     BABEL_PROJECT_ROOT: options.projectRoot,
   };
   if (options.offlineDemo !== false) {
