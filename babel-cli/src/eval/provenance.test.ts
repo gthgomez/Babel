@@ -48,7 +48,12 @@ const provenance = JSON.parse(readFileSync(provenancePath, 'utf8')) as {
 }
 
 function sha256File(path: string): string {
-  return createHash('sha256').update(readFileSync(path)).digest('hex')
+  // Hash canonical repository content (LF), not platform working-tree bytes:
+  // Windows checkouts materialize CRLF, which would otherwise make every
+  // fingerprint platform-dependent.
+  return createHash('sha256')
+    .update(readFileSync(path).toString('utf8').replace(/\r\n/g, '\n'))
+    .digest('hex')
 }
 
 /** Entry keys are relative to benchmarks/. */
