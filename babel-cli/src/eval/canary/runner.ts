@@ -11,7 +11,7 @@ import { gradeInCleanRoom, type CleanRoomFile } from '../cleanRoomGrade.js'
 import type { EvidenceScope } from '../evalTypes.js'
 import { CANARY_TASKS, getCanaryTask } from './tasks.js'
 import { scoreCanaryTrials } from './score.js'
-import { verifyCanaryTaskValidity } from './validity.js'
+import { verifyCanaryTaskValidity, isLiveCanaryEligible } from './validity.js'
 import { LIVE_CANARY_DEFAULT_MODEL, materializeCanaryWorkspace, runLiveCanaryCell } from './liveCell.js'
 import type { CanaryReport, CanaryTaskSpec, CanaryTrialResult } from './types.js'
 
@@ -25,6 +25,12 @@ export interface RunCanaryOptions {
   /** LIVE_SMOKE (C01) vs LIVE_MODEL_CANARY (full). */
   smoke?: boolean
   model?: string
+  /**
+   * Task-spec override (test seam). Defaults to the shipped CANARY_TASKS.
+   * Invalid specs are never executed and never aggregated, regardless of
+   * provider — fail closed.
+   */
+  specs?: readonly CanaryTaskSpec[]
 }
 
 function startFiles(spec: CanaryTaskSpec): CleanRoomFile[] {
@@ -105,7 +111,6 @@ function runMockTrial(
   spec: CanaryTaskSpec,
   trial_index: number,
   evidenceScope: EvidenceScope,
-  validityLiveEligible: boolean,
 ): CanaryTrialResult {
   const t0 = Date.now()
   const agentRoot = join(tmpdir(), `babel-canary-agent-${randomUUID()}`)
@@ -155,7 +160,7 @@ function runMockTrial(
       tokens: 0,
       cost_usd: 0,
       wall_ms: Date.now() - t0,
-      notes: [`validity.live_eligible=${validityLiveEligible}`],
+      notes: ['validity.live_eligible=true'],
       code_fix_success: grade.hidden_ok && spec.intended_terminal === 'verified_behavioral_success',
       contract_success: false,
     }
@@ -172,7 +177,6 @@ function runLiveTrial(
   evidenceScope: EvidenceScope,
   evidenceDir: string | undefined,
   model: string,
-  validityLiveEligible: boolean,
 ): CanaryTrialResult {
   const t0 = Date.now()
   const agentRoot = join(tmpdir(), `babel-canary-live-${spec.id}-${trial_index}-${randomUUID()}`)
@@ -206,7 +210,7 @@ function runLiveTrial(
     cost_usd: live.cost_usd,
     wall_ms: Date.now() - t0,
     notes: [
-      `validity.live_eligible=${validityLiveEligible}`,
+      'validity.live_eligible=true',
       `model=${model}`,
       `mode=chat-headless`,
       ...live.notes,
@@ -242,7 +246,7 @@ export function runCodingCanary(options: RunCanaryOptions): CanaryReport {
   }
   const smoke = options.smoke === true
   const trialsN = options.trials ?? (smoke ? 1 : 3)
-  const specs = options.taskId ? [getCanaryTask(options.taskId)] : CANARY_TASKS
+  const specs = options.specs ?? (options.taskId ? [getCanaryTask(options.taskId)] : CANARY_TASKS)
   const evidenceScope: EvidenceScope =
     options.provider === 'live'
       ? smoke
@@ -259,12 +263,41 @@ export function runCodingCanary(options: RunCanaryOptions): CanaryReport {
     if (evidenceDir) {
       writeFileSync(join(evidenceDir, `${spec.id}-validity.json`), JSON.stringify(validity, null, 2))
     }
-    const eligible = validity.baseline_verified && validity.reference_verified && validity.oracle_stable
+    // Fail closed: a task whose oracle/baseline/reference validity is not
+    // proven must never run (live spend or mock) and must never reach the
+    // aggregation — otherwise a broken oracle could contaminate results.
+    if (!isLiveCanaryEligible(validity)) {
+      const reasons = [
+        ...(validity.baseline_verified ? [] : ['baseline_not_verified']),
+        ...(validity.reference_verified ? [] : ['reference_not_verified']),
+        ...(validity.oracle_stable ? [] : ['oracle_unstable']),
+      ].join('+')
+      trials.push({
+        task_id: spec.id,
+        trial_index: 0,
+        evidence_scope: evidenceScope,
+        contract_success: false,
+        code_fix_success: false,
+        hidden_ok: false,
+        visible_ok: null,
+        claimed_complete: false,
+        false_complete: false,
+        honest_block: false,
+        production_mutated: false,
+        tokens: null,
+        cost_usd: null,
+        wall_ms: 0,
+        notes: [`validity=NOT_CLAIM_ELIGIBLE`, `reasons=${reasons}`],
+        invalid_task: true,
+        invalid_reason: reasons,
+      })
+      continue
+    }
     for (let trial_index = 1; trial_index <= trialsN; trial_index += 1) {
       if (options.provider === 'live') {
-        trials.push(runLiveTrial(spec, trial_index, evidenceScope, evidenceDir, model, eligible))
+        trials.push(runLiveTrial(spec, trial_index, evidenceScope, evidenceDir, model))
       } else {
-        trials.push(runMockTrial(spec, trial_index, evidenceScope, eligible))
+        trials.push(runMockTrial(spec, trial_index, evidenceScope))
       }
     }
   }

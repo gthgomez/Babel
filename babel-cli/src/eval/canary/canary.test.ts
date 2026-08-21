@@ -4,9 +4,30 @@ import test from 'node:test'
 import { interleaveTrials } from './interleave.js'
 import { runCodingCanary } from './runner.js'
 import { uncertaintyForTrials } from './score.js'
-import { CANARY_TASKS } from './tasks.js'
+import { CANARY_TASKS, getCanaryTask } from './tasks.js'
 import { verifyCanaryTaskValidity } from './validity.js'
 import { isLiveSuccessScope } from '../evalTypes.js'
+import type { CanaryTaskSpec } from './types.js'
+
+/** Oracle intentionally contradicts the gold behavior → reference never verifies. */
+function makeIneligibleSpec(): CanaryTaskSpec {
+  return {
+    id: 'CX0',
+    title: 'broken oracle probe',
+    prompt: 'no-op',
+    intended_terminal: 'verified_behavioral_success',
+    files: [
+      {
+        relativePath: 'src/math.js',
+        start: 'export function add(a, b) {\n  return a + b\n}\n',
+        gold: 'export function add(a, b) {\n  return a + b\n}\n',
+      },
+    ],
+    oracle_test:
+      'import assert from "node:assert";\nconst { add } = await import("./src/math.js");\nassert.equal(add(1, 1), 3);\n',
+    production_paths: ['src/math.js'],
+  }
+}
 
 test('n=1 uncertainty is null', () => {
   assert.equal(uncertaintyForTrials(1), null)
@@ -56,4 +77,36 @@ test('every canary task has a validity receipt', () => {
 
 test('live provider is refused without authorization path', () => {
   assert.throws(() => runCodingCanary({ provider: 'live' }), /authorization/)
+})
+
+test('invalid tasks fail closed: never executed, never aggregated', () => {
+  const report = runCodingCanary({ provider: 'mock', specs: [makeIneligibleSpec()], trials: 2 })
+  assert.deepEqual(report.invalid_task_ids, ['CX0'])
+  assert.equal(report.tasks.length, 0, 'invalid task must not produce a scored task entry')
+  assert.equal(report.trials.length, 1, 'exactly one sentinel row for transparency')
+  const sentinel = report.trials[0]!
+  assert.equal(sentinel.invalid_task, true)
+  assert.equal(sentinel.tokens, null)
+  assert.equal(sentinel.cost_usd, null)
+  assert.match(sentinel.notes.join(' '), /NOT_CLAIM_ELIGIBLE/)
+  assert.match(sentinel.invalid_reason ?? '', /reference_not_verified/)
+  assert.equal(report.contract_success_rate, 0)
+  assert.equal(report.pass_at_1_estimate, 0)
+})
+
+test('valid tasks aggregate while invalid siblings stay excluded from rates', () => {
+  const report = runCodingCanary({
+    provider: 'mock',
+    specs: [getCanaryTask('C01'), makeIneligibleSpec()],
+    trials: 1,
+  })
+  assert.deepEqual(report.invalid_task_ids, ['CX0'])
+  assert.equal(report.tasks.length, 1)
+  assert.equal(report.tasks[0]!.task_id, 'C01')
+  assert.equal(report.contract_success_rate, 1)
+  assert.equal(
+    report.trials.filter((t) => t.task_id === 'CX0').length,
+    1,
+    'invalid sibling appears only as a sentinel row',
+  )
 })

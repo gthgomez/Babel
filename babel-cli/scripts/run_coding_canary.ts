@@ -6,7 +6,10 @@ import { fileURLToPath } from 'node:url'
 import { runCodingCanary } from '../src/eval/canary/runner.js'
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
-dotenvConfig({ path: join(packageRoot, '.env'), override: true, quiet: true })
+// Host/CI environment wins: a repo-local .env only fills gaps, it must never
+// override variables supplied by the invoking shell (credential/provider
+// configuration for a benchmark run must be the one the operator chose).
+dotenvConfig({ path: join(packageRoot, '.env'), override: false, quiet: true })
 
 function parseArgs(argv: string[]): {
   plan: boolean

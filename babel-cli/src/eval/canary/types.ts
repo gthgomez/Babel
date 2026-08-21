@@ -41,6 +41,12 @@ export interface CanaryTrialResult {
   cost_usd: number | null
   wall_ms: number
   notes: string[]
+  /**
+   * Fail-closed validity marker. Invalid tasks are never executed and never
+   * aggregated; the sentinel row exists only for report transparency.
+   */
+  invalid_task?: boolean
+  invalid_reason?: string
 }
 
 export interface CanaryTaskScore {
@@ -50,6 +56,8 @@ export interface CanaryTaskScore {
   single_trial_success_rate: number
   all_trials_reliable: boolean
   false_complete_count: number
+  /** Present when the task failed construction-time validity and was excluded. */
+  invalid_reason?: string
 }
 
 export interface CanaryReport {
@@ -62,4 +70,6 @@ export interface CanaryReport {
   false_complete_rate: number
   tasks: CanaryTaskScore[]
   trials: CanaryTrialResult[]
+  /** Task ids excluded from scoring because validity was not proven. */
+  invalid_task_ids: string[]
 }

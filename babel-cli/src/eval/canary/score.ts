@@ -10,8 +10,14 @@ export function scoreCanaryTrials(
   trials: CanaryTrialResult[],
   evidence_scope: EvidenceScope,
 ): CanaryReport {
+  // Fail-closed aggregation: sentinel rows from validity-excluded tasks are
+  // never scored. They stay in report.trials for transparency only.
+  const validTrials = trials.filter((t) => !t.invalid_task)
+  const invalidTaskIds = [
+    ...new Set(trials.filter((t) => t.invalid_task).map((t) => t.task_id)),
+  ]
   const byTask = new Map<string, CanaryTrialResult[]>()
-  for (const t of trials) {
+  for (const t of validTrials) {
     const list = byTask.get(t.task_id) ?? []
     list.push(t)
     byTask.set(t.task_id, list)
@@ -31,7 +37,7 @@ export function scoreCanaryTrials(
   const n = tasks.length || 1
   const passAt1 = tasks.reduce((s, t) => s + t.single_trial_success_rate, 0) / n
   const passHat3 = tasks.filter((t) => t.all_trials_reliable).length / n
-  const allTrials = trials
+  const allTrials = validTrials
   return {
     schema_version: 1,
     evidence_scope,
@@ -51,5 +57,6 @@ export function scoreCanaryTrials(
         : allTrials.filter((t) => t.false_complete).length / allTrials.length,
     tasks,
     trials,
+    invalid_task_ids: invalidTaskIds,
   }
 }

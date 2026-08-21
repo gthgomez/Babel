@@ -118,6 +118,9 @@ jobs:
       - name: Run required harness runtime suite
         run: npm run test:harness-runtime
         working-directory: babel-cli
+      - name: Run required benchmark/eval suite
+        run: npm run test:benchmark-eval
+        working-directory: babel-cli
       - name: Validate catalog
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/validate-catalog.ps1
 
@@ -146,6 +149,9 @@ jobs:
         working-directory: babel-cli
       - name: Run required harness runtime suite
         run: npm run test:harness-runtime
+        working-directory: babel-cli
+      - name: Run required benchmark/eval suite
+        run: npm run test:benchmark-eval
         working-directory: babel-cli
       - name: Validate catalog
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/validate-catalog.ps1
