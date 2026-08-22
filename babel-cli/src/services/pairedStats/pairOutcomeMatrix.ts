@@ -281,11 +281,22 @@ function summarizeArm(arm: string, sortedAttempts: readonly NormalizedAttemptOut
   let n_fail = 0;
   let n_null = 0;
   let harness: HarnessIdentity | undefined;
+  let heterogeneousHarness = false;
   for (const a of sortedAttempts) {
     if (a.success === true) n_pass += 1;
     else if (a.success === false) n_fail += 1;
     else n_null += 1;
-    if (harness === undefined && a.harness !== undefined) harness = a.harness;
+    if (a.harness !== undefined) {
+      if (harness === undefined) {
+        harness = a.harness;
+      } else if (
+        harness.name !== a.harness.name ||
+        harness.adapter_id !== a.harness.adapter_id ||
+        harness.version !== a.harness.version
+      ) {
+        heterogeneousHarness = true;
+      }
+    }
   }
   const resolved = n_pass + n_fail;
   const pass_rate = resolved > 0 ? n_pass / resolved : null;
@@ -297,7 +308,7 @@ function summarizeArm(arm: string, sortedAttempts: readonly NormalizedAttemptOut
     pass_rate,
     pass_rate_wilson_95: resolved > 0 ? wilsonScoreInterval(n_pass, resolved) : null,
   };
-  if (harness !== undefined) summary.harness = harness;
+  if (harness !== undefined && !heterogeneousHarness) summary.harness = harness;
   return summary;
 }
 

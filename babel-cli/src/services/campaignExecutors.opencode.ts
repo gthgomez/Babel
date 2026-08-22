@@ -62,6 +62,36 @@ export function createOpenCodeCliArmExecutor(options?: {
   return {
     id,
     supports,
+    preflight(request: ArmExecutionRequest) {
+      if (!supports(request.arm)) {
+        return {
+          ready: false,
+          reason: `executor does not support arm "${request.arm}"`,
+          signature: 'infra:unsupported_arm',
+        };
+      }
+      if (request.provider !== 'live') {
+        return {
+          ready: false,
+          reason: 'raw_opencode requires live provider (mock produces no genuine baseline)',
+          signature: 'live:skipped_mock_provider',
+        };
+      }
+      const apiKey =
+        request.env['OPENCODE_API_KEY']?.trim() ||
+        process.env['OPENCODE_API_KEY']?.trim() ||
+        '';
+      if (!apiKey) {
+        return {
+          ready: false,
+          reason:
+            'OPENCODE_API_KEY missing or empty — refusing raw_opencode launch (key value is never logged)',
+          signature: 'infra:missing_api_key',
+          missingCredentials: ['OPENCODE_API_KEY'],
+        };
+      }
+      return { ready: true };
+    },
     async execute(request: ArmExecutionRequest): Promise<ArmExecutionResult> {
       if (!supports(request.arm)) {
         return resultWith(id, {
@@ -78,7 +108,10 @@ export function createOpenCodeCliArmExecutor(options?: {
           launchError: 'raw_opencode requires live provider (mock produces no genuine baseline)',
         });
       }
-      const apiKey = request.env['OPENCODE_API_KEY']?.trim() ?? '';
+      const apiKey =
+        request.env['OPENCODE_API_KEY']?.trim() ||
+        process.env['OPENCODE_API_KEY']?.trim() ||
+        '';
       if (!apiKey) {
         return resultWith(id, {
           exitCode: null,
@@ -124,6 +157,25 @@ export function createOpenCodeCliArmExecutor(options?: {
           resolveRun(r);
         };
 
+        const terminateChild = (sig?: NodeJS.Signals | 'SIGKILL') => {
+          try {
+            if (sig) {
+              child.kill(sig);
+            } else {
+              child.kill();
+            }
+            if (process.platform === 'win32' && child.pid && !options?.spawnImpl) {
+              try {
+                nodeSpawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+              } catch {
+                /* ignore */
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+        };
+
         child.stdout?.on('data', (chunk: string | Buffer) => {
           stdout += typeof chunk === 'string' ? chunk : String(chunk);
         });
@@ -161,19 +213,11 @@ export function createOpenCodeCliArmExecutor(options?: {
         if (request.timeoutMs > 0) {
           timeoutTimer = setTimeout(() => {
             timedOut = true;
-            try {
-              child.kill();
-            } catch {
-              /* already dead */
-            }
+            terminateChild();
             escalationTimer = setTimeout(() => {
               const alive = child.exitCode == null && child.signalCode == null && !settled;
               if (!alive) return;
-              try {
-                child.kill('SIGKILL');
-              } catch {
-                /* ignore */
-              }
+              terminateChild('SIGKILL');
             }, KILL_ESCALATION_MS);
             escalationTimer.unref?.();
           }, request.timeoutMs);

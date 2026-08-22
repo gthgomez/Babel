@@ -601,10 +601,11 @@ function buildFinding(seed: FindingSeed, ctx: RunIdentityContext, seq: number): 
   if (refs.length === 0) {
     throw new TraceAuditInternalError(`${seed.signature}: finding constructed without evidence refs`);
   }
+  const slug = (ctx.attemptId ?? ctx.taskId ?? 'run').replace(/[^a-zA-Z0-9_-]/g, '_').slice(-24);
   const candidate = {
     schema_version: AUDIT_FINDING_SCHEMA_VERSION,
     kind: AUDIT_FINDING_KIND,
-    finding_id: `TA-${seed.signature}-${String(seq).padStart(2, '0')}`,
+    finding_id: `TA-${slug}-${seed.signature}-${String(seq).padStart(2, '0')}`,
     produced_at: ctx.producedAt,
     task_id: ctx.taskId,
     arm: ctx.arm,
@@ -689,16 +690,21 @@ function rationaleFor(label: HypothesisLabel, signature: TraceAuditSignature, re
 // ─── Signature detectors ─────────────────────────────────────────────────────
 
 function detectVerificationBlocked(events: readonly LoadedEvent[]): FindingSeed[] {
-  const firstMutationIdx = events.findIndex(isMutation);
+  let firstMutationIdx = -1;
+  let lastMutationIdx = -1;
+  for (let i = 0; i < events.length; i += 1) {
+    if (isMutation(events[i]!)) {
+      if (firstMutationIdx < 0) firstMutationIdx = i;
+      lastMutationIdx = i;
+    }
+  }
   if (firstMutationIdx < 0) return [];
-  // Policy streams flush at end of run, so "after the denial" is not directly
-  // observable; the honest post-condition is global: if ANY passing verifier
-  // receipt exists after the first mutation, verification was not ultimately
-  // blocked and this signature must not fire.
-  const hasPassingVerifierAfterMutation = events
-    .slice(firstMutationIdx + 1)
+  // Verification freshness: if ANY passing verifier receipt exists AFTER the
+  // last mutation, verification was not ultimately blocked.
+  const hasPassingVerifierAfterLastMutation = events
+    .slice(lastMutationIdx + 1)
     .some((e) => isPassingVerifier(e));
-  if (hasPassingVerifierAfterMutation) return [];
+  if (hasPassingVerifierAfterLastMutation) return [];
   const qualifying = new Map<string, { target: string; denials: LoadedEvent[]; earliest: number }>();
   for (let i = firstMutationIdx + 1; i < events.length; i += 1) {
     const event = events[i]!;
@@ -753,7 +759,24 @@ function detectUnverifiedCompletion(events: readonly LoadedEvent[]): FindingSeed
   const decisions = events.filter(successRequestedDecision);
   if (decisions.length === 0) return [];
   const decision = decisions[decisions.length - 1]!;
-  if (events.some((e) => isPassingVerifier(e))) return [];
+
+  let lastMutationIdx = -1;
+  for (let i = 0; i < events.length; i += 1) {
+    if (isMutation(events[i]!)) {
+      lastMutationIdx = i;
+    }
+  }
+
+  // If there are no mutations and outcome is legitimate NO_CHANGE_REQUIRED, do not flag.
+  const outcome = finalOutcome(events);
+  if (lastMutationIdx < 0 && outcome?.label === 'NO_CHANGE_REQUIRED') {
+    return [];
+  }
+
+  // Verifier freshness: check if there is a passing verifier AFTER the last mutation
+  const eventsAfterLastMutation = lastMutationIdx >= 0 ? events.slice(lastMutationIdx + 1) : events;
+  if (eventsAfterLastMutation.some((e) => isPassingVerifier(e))) return [];
+
   const failing = events.filter((e) => isFailingVerifier(e));
   const nearMiss =
     failing.some((e) => numOf(e, 'exit_code') === 1) ||

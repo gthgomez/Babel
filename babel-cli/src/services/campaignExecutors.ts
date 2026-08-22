@@ -43,9 +43,17 @@ export interface ArmExecutionResult {
   readonly launchError: string | null;
 }
 
+export interface ExecutorReadiness {
+  readonly ready: boolean;
+  readonly reason?: string;
+  readonly signature?: string;
+  readonly missingCredentials?: readonly string[];
+}
+
 export interface ArmExecutor {
   readonly id: string;
   supports(arm: CausalStage1Arm): boolean;
+  preflight?(request: ArmExecutionRequest): Promise<ExecutorReadiness> | ExecutorReadiness;
   execute(request: ArmExecutionRequest): Promise<ArmExecutionResult>;
 }
 
@@ -70,6 +78,34 @@ export function createBabelCliChatHeadlessArmExecutor(): ArmExecutor {
   return {
     id,
     supports: isBabelCliArm,
+    preflight(request) {
+      if (!isBabelCliArm(request.arm)) {
+        return {
+          ready: false,
+          reason: `executor does not support arm "${request.arm}"`,
+          signature: 'infra:unsupported_arm',
+        };
+      }
+      if (request.provider === 'live') {
+        const hasKey = Boolean(
+          request.env['DEEPSEEK_API_KEY']?.trim() ||
+            request.env['DEEPINFRA_API_KEY']?.trim() ||
+            request.env['OPENAI_API_KEY']?.trim() ||
+            process.env['DEEPSEEK_API_KEY']?.trim() ||
+            process.env['DEEPINFRA_API_KEY']?.trim() ||
+            process.env['OPENAI_API_KEY']?.trim(),
+        );
+        if (!hasKey) {
+          return {
+            ready: false,
+            reason: 'DEEPSEEK_API_KEY (or compatible) not set — refusing live cell',
+            signature: 'infra:missing_api_key',
+            missingCredentials: ['DEEPSEEK_API_KEY', 'DEEPINFRA_API_KEY', 'OPENAI_API_KEY'],
+          };
+        }
+      }
+      return { ready: true };
+    },
     async execute(request) {
       if (!isBabelCliArm(request.arm)) {
         return unsupported(id, request.arm);

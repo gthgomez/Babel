@@ -498,6 +498,9 @@ function applyAmendment(
   rec: EntryAmendedRecord,
   where: string,
 ): BottleneckLedgerEntry {
+  if (BOTTLENECK_ALLOWED_TRANSITIONS[current.status].length === 0) {
+    throw new Error(`entry ${rec.id} is terminal (${current.status}); amendments are closed (${where})`);
+  }
   const next: BottleneckLedgerEntry = structuredClone(current);
   for (const key of Object.keys(rec.patch)) {
     if (!AMENDABLE_PATCH_KEYS.includes(key)) {

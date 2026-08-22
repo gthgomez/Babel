@@ -1,7 +1,7 @@
-<!-- License: MIT — see LICENSE -->
+<!-- License: Apache-2.0 — see LICENSE -->
 <!--
 status: ACTIVE
-last_verified: 2026-08-21
+last_verified: 2026-08-22
 scope: Experimental program roadmap — not normative harness authority.
 Harness authority remains docs/architecture/HARNESS_ARCHITECTURE_V1.md.
 -->

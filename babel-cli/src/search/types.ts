@@ -556,11 +556,13 @@ export function scoreDominates(a: ScoreVector, b: ScoreVector): boolean {
     const av = a.metrics[name];
     const bv = b.metrics[name];
     if (av === undefined || bv === undefined) return false;
-    if (!Number.isFinite(av) || !Number.isFinite(bv)) return false;
-    const higher = a.higher_is_better[name];
-    if (typeof higher !== 'boolean') return false;
-    if (higher ? av < bv : av > bv) return false;
-    if (higher ? av > bv : av < bv) anyBetter = true;
+    const higherA = a.higher_is_better[name];
+    const higherB = b.higher_is_better[name];
+    if (typeof higherA !== 'boolean' || typeof higherB !== 'boolean' || higherA !== higherB) {
+      return false;
+    }
+    if (higherA ? av < bv : av > bv) return false;
+    if (higherA ? av > bv : av < bv) anyBetter = true;
   }
   return anyBetter;
 }

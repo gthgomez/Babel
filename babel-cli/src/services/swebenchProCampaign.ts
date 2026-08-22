@@ -41,6 +41,7 @@ import {
 import {
   createArmRegistry,
   createBabelCliChatHeadlessArmExecutor,
+  type ArmExecutionRequest,
   type ArmExecutionResult,
 } from './campaignExecutors.js';
 import { createOpenCodeCliArmExecutor } from './campaignExecutors.opencode.js';
@@ -1444,19 +1445,35 @@ export async function defaultRunLiveCell(
   const evidence_path = join(evidenceDir, 'live', `${stem}.json`);
   mkdirSync(dirname(evidence_path), { recursive: true });
 
-  if (provider === 'live' && !liveApiKeyPresent()) {
+  const arm = execCtx?.exp.arm ?? 'babel_enforce';
+  const executor = execCtx?.registry.resolve(arm) ?? createBabelCliChatHeadlessArmExecutor();
+  const preflightReq: ArmExecutionRequest = {
+    arm,
+    workspaceRoot: '',
+    prompt: '',
+    model,
+    provider,
+    env: process.env,
+    timeoutMs: options?.agentTimeoutMs ?? AGENT_TIMEOUT_MS,
+    cliEntry: resolveBabelCliEntry(),
+    spawnCwd: join(BABEL_ROOT, 'babel-cli'),
+  };
+  const readiness = executor.preflight ? await executor.preflight(preflightReq) : { ready: true };
+  if (!readiness.ready) {
+    const isMockSkip = readiness.signature === 'live:skipped_mock_provider';
     const result: CampaignCellResult = {
       instance_id: instance.instance_id,
       phase: 'live',
-      status: 'fail',
-      signature: 'infra:missing_api_key',
-      notes: ['DEEPSEEK_API_KEY (or compatible) not set — refusing live cell'],
+      status: isMockSkip ? 'skipped' : 'fail',
+      signature: readiness.signature ?? 'infra:missing_api_key',
+      notes: [readiness.reason ?? 'Executor preflight check failed'],
       patch_bytes: 0,
       gold_diff_ok: null,
       policy_events: [],
       has_shadow_summary: false,
       duration_ms: Math.round(performance.now() - started),
       evidence_path,
+      ...(execCtx ? experimentIdentityFields(execCtx.exp) : {}),
     };
     writeFileSync(evidence_path, JSON.stringify(result, null, 2), 'utf8');
     return result;
@@ -1598,8 +1615,6 @@ export async function defaultRunLiveCell(
   // plus identical env/productEnv, cwd=join(BABEL_ROOT,'babel-cli'),
   // cliEntry, and timeout handling. createBabelCliChatHeadlessArmExecutor
   // reproduces exactly that argv/env contract; do not change either side alone.
-  const arm = execCtx?.exp.arm ?? 'babel_enforce';
-  const executor = execCtx?.registry.resolve(arm) ?? null;
   if (!executor || !execCtx) {
     // Consistent failure handling: honest env-blocked cell without agent run.
     const failed: CampaignCellResult = {

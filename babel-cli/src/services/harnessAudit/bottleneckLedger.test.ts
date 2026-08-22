@@ -922,7 +922,7 @@ describe('preregistration freeze after shipping (M2 hardening)', () => {
     };
     assert.throws(
       () => foldLedgerRecords([openedRecord(), shippedRecord(), confirmed, flipAfterVerdict]),
-      /frozen preregistration field 'proposed_intervention\.preregistered_falsifier' while entry BB-001 is CONFIRMED/,
+      /entry BB-001 is terminal \(CONFIRMED\); amendments are closed|frozen preregistration field/,
     );
   });
 
@@ -962,6 +962,48 @@ describe('preregistration freeze after shipping (M2 hardening)', () => {
     assert.throws(
       () => lateStore.appendAmendment(opened.id, { effect_quantification: flippedDirection() }),
       /frozen preregistration field 'effect_quantification\.direction' while entry BB-001 is INTERVENTION_SHIPPED \(frozen null → attempted "worsens"\)/,
+    );
+  });
+
+  test('fold equivalence: fold rejects entry_amended on terminal CONFIRMED and FALSIFIED entries (102-I)', () => {
+    const confirmed: EntryTransitionedRecord = {
+      kind: 'entry_transitioned',
+      recorded_at: T2,
+      id: 'BB-001',
+      from: 'INTERVENTION_SHIPPED',
+      to: 'CONFIRMED',
+      at: T2,
+      reason: 'replay passed',
+      resolution: { rerun_manifest_sha: 'sha_rerun_001', replay_delta: 0.18 },
+    };
+    const falsified: EntryTransitionedRecord = {
+      kind: 'entry_transitioned',
+      recorded_at: T2,
+      id: 'BB-001',
+      from: 'INTERVENTION_SHIPPED',
+      to: 'FALSIFIED',
+      at: T2,
+      reason: 'replay failed',
+      resolution: { rerun_manifest_sha: 'sha_rerun_001', replay_delta: -0.18 },
+    };
+    const amendment: EntryAmendedRecord = {
+      kind: 'entry_amended',
+      recorded_at: T2,
+      id: 'BB-001',
+      at: T2,
+      patch: { claim: 'attempted post-terminal claim change' },
+    };
+
+    // 1. Fold must reject amendment on CONFIRMED
+    assert.throws(
+      () => foldLedgerRecords([openedRecord(), shippedRecord(), confirmed, amendment]),
+      /entry BB-001 is terminal \(CONFIRMED\); amendments are closed/,
+    );
+
+    // 2. Fold must reject amendment on FALSIFIED
+    assert.throws(
+      () => foldLedgerRecords([openedRecord(), shippedRecord(), falsified, amendment]),
+      /entry BB-001 is terminal \(FALSIFIED\); amendments are closed/,
     );
   });
 });

@@ -47,7 +47,7 @@ function audit(dir: string): { ok: true; findings: AuditFinding[] } | { ok: fals
 }
 
 function findBySignature(findings: AuditFinding[], signature: string): AuditFinding[] {
-  return findings.filter((f) => f.finding_id.startsWith(`TA-${signature}-`));
+  return findings.filter((f) => f.finding_id.includes(`-${signature}-`));
 }
 
 function assertContractValid(finding: unknown): void {
@@ -298,3 +298,103 @@ test('clean verified run produces zero findings (no false positives)', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('verifier freshness: mutation -> pass -> mutation -> completion detects UNVERIFIED_COMPLETION (102-J)', () => {
+  const t0 = '2026-08-21T10:00:00.000Z';
+  const t1 = '2026-08-21T10:01:00.000Z';
+  const t2 = '2026-08-21T10:02:00.000Z';
+  const t3 = '2026-08-21T10:03:00.000Z';
+  const t4 = '2026-08-21T10:04:00.000Z';
+
+  const sessionEvents = [
+    fixtures.sessionLine({ seq: 1, ts: t0, kind: 'mutation_batch', fields: { path_count: 1 } }),
+    fixtures.sessionLine({ seq: 2, ts: t1, kind: 'verifier_attempt', fields: { exit_code: 0, command_preview: 'pytest' } }),
+    fixtures.sessionLine({ seq: 3, ts: t2, kind: 'mutation_batch', fields: { path_count: 1 } }),
+    fixtures.sessionLine({ seq: 4, ts: t3, kind: 'completion_decision', fields: { allowed: true, requested_outcome: 'completed', final_outcome: 'completed' } }),
+    fixtures.sessionLine({ seq: 5, ts: t4, kind: 'turn_ended', fields: { outcome: 'VERIFIED_COMPLETE' } }),
+  ].join('\n');
+
+  const dir = writeFixture({ 'session-events.jsonl': sessionEvents });
+  try {
+    const res = audit(dir);
+    assert.equal(res.ok, true);
+    if (!res.ok) return;
+    const unverified = findBySignature(res.findings, 'UNVERIFIED_COMPLETION');
+    assert.equal(unverified.length, 1, 'must detect unverified completion when mutation follows pass');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('verifier freshness: mutation -> fail -> pass -> completion is verified (no finding) (102-J)', () => {
+  const t0 = '2026-08-21T10:00:00.000Z';
+  const t1 = '2026-08-21T10:01:00.000Z';
+  const t2 = '2026-08-21T10:02:00.000Z';
+  const t3 = '2026-08-21T10:03:00.000Z';
+
+  const sessionEvents = [
+    fixtures.sessionLine({ seq: 1, ts: t0, kind: 'mutation_batch', fields: { path_count: 1 } }),
+    fixtures.sessionLine({ seq: 2, ts: t1, kind: 'verifier_attempt', fields: { exit_code: 1, command_preview: 'pytest' } }),
+    fixtures.sessionLine({ seq: 3, ts: t2, kind: 'verifier_attempt', fields: { exit_code: 0, command_preview: 'pytest' } }),
+    fixtures.sessionLine({ seq: 4, ts: t3, kind: 'completion_decision', fields: { allowed: true, requested_outcome: 'completed' } }),
+  ].join('\n');
+
+  const dir = writeFixture({ 'session-events.jsonl': sessionEvents });
+  try {
+    const res = audit(dir);
+    assert.equal(res.ok, true);
+    if (!res.ok) return;
+    const unverified = findBySignature(res.findings, 'UNVERIFIED_COMPLETION');
+    assert.equal(unverified.length, 0, 'must not flag when pass follows last mutation');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('verifier freshness: mutation -> pass receipt on stale revision -> completion is unverified (102-J)', () => {
+  const t0 = '2026-08-21T10:00:00.000Z';
+  const t1 = '2026-08-21T10:01:00.000Z';
+  const t2 = '2026-08-21T10:02:00.000Z';
+
+  const sessionEvents = [
+    fixtures.sessionLine({ seq: 1, ts: t0, kind: 'mutation_batch', fields: { path_count: 1 } }),
+    fixtures.sessionLine({ seq: 2, ts: t1, kind: 'verifier_attempt', fields: { receipt: { exitCode: 0, stale: true }, command_preview: 'pytest' } }),
+    fixtures.sessionLine({ seq: 3, ts: t2, kind: 'completion_decision', fields: { allowed: true, requested_outcome: 'completed' } }),
+  ].join('\n');
+
+  const dir = writeFixture({ 'session-events.jsonl': sessionEvents });
+  try {
+    const res = audit(dir);
+    assert.equal(res.ok, true);
+    if (!res.ok) return;
+    const unverified = findBySignature(res.findings, 'UNVERIFIED_COMPLETION');
+    assert.equal(unverified.length, 1, 'stale pass receipt does not satisfy freshness');
+    assert.equal(unverified[0]?.near_miss, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('verifier freshness: no mutation + valid NO_CHANGE_REQUIRED produces zero findings (102-J)', () => {
+  const t0 = '2026-08-21T10:00:00.000Z';
+  const t1 = '2026-08-21T10:01:00.000Z';
+  const t2 = '2026-08-21T10:02:00.000Z';
+
+  const sessionEvents = [
+    fixtures.sessionLine({ seq: 1, ts: t0, kind: 'tool_completed', fields: { tool_name: 'read_file' } }),
+    fixtures.sessionLine({ seq: 2, ts: t1, kind: 'completion_decision', fields: { allowed: true, requested_outcome: 'no_change_required', final_outcome: 'no_change_required' } }),
+    fixtures.sessionLine({ seq: 3, ts: t2, kind: 'turn_ended', fields: { outcome: 'NO_CHANGE_REQUIRED' } }),
+  ].join('\n');
+
+  const dir = writeFixture({ 'session-events.jsonl': sessionEvents });
+  try {
+    const res = audit(dir);
+    assert.equal(res.ok, true);
+    if (!res.ok) return;
+    const unverified = findBySignature(res.findings, 'UNVERIFIED_COMPLETION');
+    assert.equal(unverified.length, 0, 'no-change completed run should not flag UNVERIFIED_COMPLETION');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
