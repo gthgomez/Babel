@@ -1,10 +1,10 @@
 <!--
 status: ACTIVE
-last_verified: 2026-08-21
+last_verified: 2026-08-22
 -->
 # Babel CLI Command Contract
 
-Date: 2026-06-05 (amended 2026-08-21)
+Date: 2026-06-05 (amended 2026-08-22)
 
 This document is the canonical user-facing command contract for Babel CLI.
 
@@ -34,7 +34,7 @@ babel
 -> babel-cli/src/commands/workflowCommands.ts
 ```
 
-Removed bins (`bl`, `babel-lite`) and removed verbs (`lite`, `ask`, `do`, `fix`, `full`, `propose`, `patch`, `review`) exit `1` with stderr hints. Bare `babel "<task>"` rewrites to hidden `daily` → `AgentSession`.
+Removed bins (`bl`, `babel-lite`) and the removed surface tokens (`lite`, `l`, `full`, `daily`) exit `1` with stderr hints before Commander dispatch. Bare `babel "<task>"` rewrites to `run --mode chat` and executes through the AgentSession loop. Unregistered daily verbs such as `ask`, `do`, `fix`, `propose`, or `patch` are not intercepted: they flow through the same bare-task rewrite into the chat lane as free-form task text. (`review` passes argv whitelisting but has no top-level registration, so Commander rejects it as an unknown command.)
 
 ## Target Commands
 
@@ -45,7 +45,7 @@ Removed bins (`bl`, `babel-lite`) and removed verbs (`lite`, `ask`, `do`, `fix`,
 | `babel deep "..."` | Run the heavier critique/refine/governed path for higher-risk work. | May mutate after governed plan and verification gates. | Implemented via governed pipeline execution. |
 | `babel undo` | Restore the last checkpoint or show recovery state. | Mutates only through explicit restore behavior. | Implemented via `undoLane` → `restoreCheckpoint`. |
 | `babel resume [run]` | Resume a retryable run. | May continue a prior mutation lane. | Implemented. |
-| removed `bl`, `lite`, `ask`, `do`, `fix`, `full`, `propose`, `review`, `patch` | One-release shim only. | N/A | Exit `1` with stderr hints; not executable. |
+| removed `bl`, `babel-lite`, `lite`, `l`, `full`, `daily` | Removed compatibility surface; no shim lane remains. | N/A | Exit `1` with stderr hints before Commander dispatch; not executable. Unregistered daily verbs (`ask`, `do`, `fix`, `propose`, `patch`) are instead absorbed as chat task text through the default bare-task routing. |
 
 ## Execution Modes: Demo vs Real
 
@@ -190,7 +190,7 @@ babel undo | babel resume | babel doctor
 babel advanced
 ```
 
-Removed compatibility verbs exit before Commander dispatch and print stderr hints pointing to the canonical commands.
+The six removed surface tokens (`lite`, `l`, `full`, `bl`, `babel-lite`, `daily`) exit `1` before Commander dispatch and print stderr hints pointing to the canonical commands. Other unregistered verbs are not intercepted and reach the chat lane as ordinary task text.
 
 Human terminal output uses plain Mode labels (for example "Read-only answer", "Scoped fix", "Governed deep execution") instead of internal lane ids (`lite_fix`, `deep_lane`).
 

@@ -32,6 +32,9 @@ git clone https://github.com/gthgomez/Babel.git
 cd Babel
 npm --prefix .\babel-cli ci
 npm --prefix .\babel-cli run build
+
+# macOS/Linux equivalent:
+npm --prefix ./babel-cli ci && npm --prefix ./babel-cli run build
 ```
 
 Authoritative package root is `babel-cli/`. There is no root `package.json`.
@@ -62,7 +65,7 @@ Default profile is **`safe_repo`**. It expects Docker isolation. Without
 Docker and a configured image (`BABEL_BENCHMARK_DOCKER_IMAGE`) it
 **fail-closes** unless you opt into host execution.
 
-For ordinary local coding:
+For ordinary local coding in repositories you trust:
 
 ```powershell
 $env:BABEL_EXECUTION_PROFILE = 'dev_local'

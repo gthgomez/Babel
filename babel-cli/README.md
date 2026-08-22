@@ -47,12 +47,25 @@ generated CLI source back into this package.
 
 From a clone of this repository (not an npm registry package). Node.js 22.5+.
 
+Throughout this file, `babel <command>` means `node .\babel-cli\dist\index.js <command>` run from the repository root, unless you have linked or installed the binary yourself (macOS/Linux: `./babel-cli/dist/index.js`).
+
 Windows PowerShell from the Babel repository root:
 
 ```powershell
 npm --prefix .\babel-cli ci
 npm --prefix .\babel-cli run build
 node .\babel-cli\dist\index.js doctor --json
+
+# macOS/Linux equivalent:
+npm --prefix ./babel-cli ci && npm --prefix ./babel-cli run build && node ./babel-cli/dist/index.js doctor --json
+```
+
+`dev_local` executes approved tools directly on your host with no container
+isolation. Use it only for repositories you own and code you have reviewed.
+For untrusted repositories or unreviewed code, stay on the isolated
+`safe_repo` profile.
+
+```powershell
 $env:BABEL_EXECUTION_PROFILE = 'dev_local'
 node .\babel-cli\dist\index.js interactive
 ```
@@ -120,6 +133,8 @@ Inside the REPL, the short path is:
 
 ## Developer workflow
 
+From inside `babel-cli/`:
+
 ```bash
 npm ci
 npm run typecheck
@@ -174,7 +189,7 @@ node dist/index.js run "Audit this repo" --execution-profile read_only_audit
 ```
 
 - `safe_repo` is the default guarded profile (`dockerSandbox: true`). After H13 it **fail-closes** without Docker daemon + image (`BABEL_BENCHMARK_DOCKER_IMAGE`) unless you escalate with `BABEL_ALLOW_HOST_FALLBACK=1` or `BABEL_DOCKER_DISABLE=true`.
-- `dev_local` is host-friendly (`dockerSandbox: false`); permits common local build tools such as pnpm, yarn, cargo, go, gcc, make, uv, and dotnet while keeping shell wrappers and destructive commands rejected. Prefer this for host-only day-to-day work.
+- `dev_local` is host-friendly (`dockerSandbox: false`); permits common local build tools such as pnpm, yarn, cargo, go, gcc, make, uv, and dotnet while keeping shell wrappers and destructive commands rejected. Prefer this for host-only day-to-day work. It runs tools directly on your host — do not point it at untrusted repositories or unreviewed code.
 - You can also set `BABEL_EXECUTION_PROFILE=dev_local` instead of the CLI flag.
 - `benchmark_container` is for Terminal-Bench style isolated tasks and relaxes benchmark-fixture QA posture without enabling host shell operators.
 - `scaffold` is for new project creation.

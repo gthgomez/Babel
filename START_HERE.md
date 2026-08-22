@@ -30,12 +30,21 @@ npm --prefix .\babel-cli run build
 node .\babel-cli\dist\index.js doctor
 ```
 
+macOS/Linux equivalent: `git clone https://github.com/gthgomez/Babel.git && cd Babel && npm --prefix ./babel-cli ci && npm --prefix ./babel-cli run build && node ./babel-cli/dist/index.js doctor`
+
 Copy `babel-cli/.env.example` to `babel-cli/.env` and set only the providers
 you use. Host or CI environment variables take precedence over that file.
 
 Before the first mutation, pick an execution profile. The default `safe_repo`
 profile expects Docker isolation and **fail-closes** without Docker and a
-configured image. For ordinary host coding:
+configured image.
+
+`dev_local` executes approved tools directly on your host with no container
+isolation. Use it only for repositories you own and code you have reviewed.
+For untrusted repositories or unreviewed code, stay on the isolated
+`safe_repo` profile.
+
+For ordinary host coding:
 
 ```powershell
 $env:BABEL_EXECUTION_PROFILE = 'dev_local'

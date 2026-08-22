@@ -143,6 +143,9 @@ cd Babel
 npm --prefix .\babel-cli ci
 npm --prefix .\babel-cli run build
 node .\babel-cli\dist\index.js doctor
+
+# macOS/Linux equivalent:
+npm --prefix ./babel-cli ci && npm --prefix ./babel-cli run build && node ./babel-cli/dist/index.js doctor
 ```
 
 Model-backed sessions need a configured provider. Credentials belong in your
@@ -172,7 +175,7 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
 
 Compare the result with the checked-in
 [backend manifest preview](./examples/manifest-previews/backend-deep.json).
-For integrations, `babel mcp` exposes the read-only control-plane surface.
+For integrations, `node .\babel-cli\dist\index.js mcp` exposes the read-only control-plane surface.
 
 This preview-first path is intentional: you can inspect what Babel would load
 before asking a model to act.

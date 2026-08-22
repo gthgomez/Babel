@@ -15,6 +15,8 @@ last_verified: 2026-08-04
 
 Chat mode is the default runtime mode — `babel "<task>"`. It is designed as a lightweight conversational coding agent loop. No v9 orchestrator, no waterfall stages, no QA review gate.
 
+Throughout this file, `babel <command>` denotes the CLI invoked from a source clone: `node .\babel-cli\dist\index.js <command>` from the repository root on Windows (macOS/Linux: `node ./babel-cli/dist/index.js`), or an installed/linked binary if you have one.
+
 When you type `babel "fix this bug"`, chat mode is what handles it: a multi-turn conversational loop with live tool access, context compaction, and JIT permission approval. It is the path of least resistance for daily coding.
 
 ## Interactive commands
@@ -167,7 +169,7 @@ Chat uses the same default execution profile as other run paths: **`safe_repo`**
 | Profile / control | Behavior |
 |-------------------|----------|
 | **`safe_repo` (default)** | Docker isolation required when the profile is active. Proceeds only if Docker is available **and** a sandbox image is configured (`BABEL_BENCHMARK_DOCKER_IMAGE`). Without daemon/image, shell execution **fail-closes** unless host escalation env is set. |
-| **`dev_local`** | Host-friendly local coding (`dockerSandbox: false`). No Docker requirement; use for day-to-day host work without isolation containers. |
+| **`dev_local`** | Host-friendly local coding (`dockerSandbox: false`). No Docker requirement; use for day-to-day host work without isolation containers; executes directly on your host — trusted repositories only. |
 | **`BABEL_ALLOW_HOST_FALLBACK=1`** | Explicit host escalation (preferred). Allows host execution when isolation would otherwise fail closed. Also accepts `true` / `yes`. |
 | **`BABEL_DOCKER_DISABLE=true`** | Legacy isolation opt-out; also counts as explicit host escalation under H13. Disables Docker sandbox selection for the process. |
 
