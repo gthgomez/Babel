@@ -27,6 +27,7 @@ $frontDoor = @(
   'docs/CHAT_MODE.md',
   'docs/VISION.md',
   'docs/BABEL_USER_SHAPED_CLI_GUIDE.md',
+  'docs/CLI_COMMAND_CONTRACT.md',
   'babel-cli/README.md'
 )
 
@@ -34,9 +35,9 @@ $stalePatterns = @(
   @{ Id = 'ID001'; Pattern = '(?i)Babel is a (layered )?prompt operating system'; Why = 'primary identity must be coding-agent harness' },
   @{ Id = 'ID002'; Pattern = '(?i)\bbl ask\b'; Why = 'removed compatibility shim; do not teach' },
   @{ Id = 'ID003'; Pattern = '(?i)babel-lite ask'; Why = 'removed compatibility shim; do not teach' },
-  @{ Id = 'ID004'; Pattern = '(?i)--mode autonomous\b'; Why = 'legacy mode; use deep' },
-  @{ Id = 'ID005'; Pattern = '(?i)-PipelineMode\s+verified\b'; Why = 'legacy mode; use deep' },
-  @{ Id = 'ID006'; Pattern = '(?i)-PipelineMode\s+direct\b'; Why = 'legacy mode; use chat' }
+  @{ Id = 'ID004'; Pattern = '(?i)--mode[= ]autonomous\b'; Why = 'legacy mode; use deep' },
+  @{ Id = 'ID005'; Pattern = '(?i)-PipelineMode[= ]verified\b'; Why = 'legacy mode; use deep' },
+  @{ Id = 'ID006'; Pattern = '(?i)-PipelineMode[= ]direct\b'; Why = 'legacy mode; use chat' }
 )
 
 $allowPattern = '(?i)legacy|maps to|compatibility|historical|was removed|deprecated|no longer|do not (use|teach)|not the current product'

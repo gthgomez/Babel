@@ -63,6 +63,10 @@ jobs:
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-content-policy.ps1 -RepoRoot .
       - name: Check canonical repository independence
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-canonical-independence.ps1 -RepoRoot .
+      - name: Check public identity vocabulary
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-identity.ps1 -RepoRoot .
+      - name: Test public identity vocabulary gates
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/tests/test-public-identity-vocabulary.ps1
 
   public-pr-metadata-tests:
     name: public-pr-metadata-tests
@@ -121,6 +125,12 @@ jobs:
       - name: Run required benchmark/eval suite
         run: npm run test:benchmark-eval
         working-directory: babel-cli
+      - name: Run required resolver contract suite
+        run: npm run test:resolver
+        working-directory: babel-cli
+      - name: Run control-plane resolution contract tests
+        run: npx tsx --no-warnings=ExperimentalWarning --test "src/control-plane/*.test.ts" src/controlPlaneResolution.test.ts
+        working-directory: babel-cli
       - name: Validate catalog
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/validate-catalog.ps1
 
@@ -153,6 +163,18 @@ jobs:
       - name: Run required benchmark/eval suite
         run: npm run test:benchmark-eval
         working-directory: babel-cli
+      - name: Run required resolver contract suite
+        run: npm run test:resolver
+        working-directory: babel-cli
+      - name: Run local stack parity suite
+        run: npm run test:local-stack-parity
+        working-directory: babel-cli
+      - name: Run manifest preview goldens
+        run: npm run test:manifest-preview
+        working-directory: babel-cli
+      - name: Run control-plane resolution contract tests
+        run: npx tsx --no-warnings=ExperimentalWarning --test "src/control-plane/*.test.ts" src/controlPlaneResolution.test.ts
+        working-directory: babel-cli
       - name: Validate catalog
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/validate-catalog.ps1
       - name: Public scrub (Windows)
@@ -161,5 +183,9 @@ jobs:
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/tests/test-public-prevention-gates.ps1
       - name: Public content policy (Windows)
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-content-policy.ps1 -RepoRoot .
+      - name: Check public identity vocabulary (Windows)
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-identity.ps1 -RepoRoot .
+      - name: Test public identity vocabulary gates (Windows)
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/tests/test-public-identity-vocabulary.ps1
       - name: Canonical independence (Windows)
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-canonical-independence.ps1 -RepoRoot .
