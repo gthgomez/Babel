@@ -32,8 +32,13 @@ export interface ReviewCardInput {
   verificationPolicy?: 'none' | 'required' | 'strict' | 'not_applicable' | undefined;
   verificationApplicability?: 'applicable' | 'not_applicable' | 'optional' | undefined;
   summary?: string | undefined;
+  /** Full assistant transcript; used to detect duplicated ReviewCard summaries. */
+  transcriptAnswer?: string | undefined;
   costUsd?: number | undefined;
+  /** Billed tokens for the same scope as `costUsd` (this turn). */
   tokens?: number | undefined;
+  /** Session-cumulative billed tokens. Shown only when larger than `tokens`. */
+  sessionTokens?: number | undefined;
   mutated?: boolean | undefined;
   nextActions?: string[] | undefined;
   /** Only for SESSION_EVENT_LIFECYCLE_CAUSALITY — not every AGENT_FAILURE. */
@@ -103,7 +108,7 @@ export function reviewTitleTone(
   isNotApplicable = false,
 ): ReviewTitleTone {
   if (isNotApplicable && (kind === 'COMPLETE_UNVERIFIED' || kind === 'VERIFIED_COMPLETE')) {
-    return 'muted';
+    return 'success';
   }
   switch (kind) {
     case 'VERIFIED_COMPLETE':
@@ -270,17 +275,26 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
     }
   }
 
-  if (input.summary?.trim()) {
+  const summaryText = resolveReviewSummary(input);
+  if (summaryText) {
     lines.push(dim('Summary'));
-    lines.push(`  ${input.summary.trim()}`);
+    lines.push(`  ${summaryText}`);
   }
 
   const hasRealCost = input.costUsd !== undefined && input.costUsd > 0;
   const hasRealTokens = input.tokens !== undefined && input.tokens > 0;
   if (hasRealCost || hasRealTokens) {
     const bits: string[] = [];
-    if (hasRealCost) bits.push(`$${input.costUsd!.toFixed(4)}`);
+    if (hasRealCost) bits.push(`$${input.costUsd!.toFixed(4)} this turn`);
     if (hasRealTokens) bits.push(`${input.tokens} tok`);
+    const sessionTokens = input.sessionTokens;
+    if (
+      hasRealTokens &&
+      sessionTokens !== undefined &&
+      sessionTokens > (input.tokens ?? 0)
+    ) {
+      bits.push(`(session ${sessionTokens})`);
+    }
     lines.push(`${dim('Cost')}  ${bits.join('  ')}`);
   }
 
@@ -308,6 +322,22 @@ export function reviewCardKindToken(kind: ReviewCardKind): string {
 
 export function presentChatReview(input: ReviewCardInput): ReviewCard {
   return buildReviewCard(input);
+}
+
+/**
+ * Keep a ReviewCard summary only when it is a distinct engineering note.
+ * Do not echo the streamed assistant transcript (including the historical
+ * 200-character prefix).
+ */
+export function resolveReviewSummary(input: ReviewCardInput): string | undefined {
+  const summary = input.summary?.trim();
+  if (!summary) return undefined;
+  const transcript = input.transcriptAnswer?.trim();
+  if (!transcript) return summary;
+  if (transcript === summary) return undefined;
+  if (transcript.startsWith(summary) && summary.length <= 200) return undefined;
+  if (summary === transcript.slice(0, 200)) return undefined;
+  return summary;
 }
 
 export const ALL_REVIEW_KINDS = KIND_ORDER;

@@ -115,9 +115,9 @@ describe('review-card tones stay truthful', () => {
     assert.equal(reviewTitleTone('AGENT_FAILURE'), 'error');
   });
 
-  it('paints not-applicable complete as muted, not success', () => {
-    assert.equal(reviewTitleTone('COMPLETE_UNVERIFIED', true), 'muted');
-    assert.equal(reviewTitleTone('VERIFIED_COMPLETE', true), 'muted');
+  it('paints not-applicable complete as neutral success, distinct from verified', () => {
+    assert.equal(reviewTitleTone('COMPLETE_UNVERIFIED', true), 'success');
+    assert.equal(reviewTitleTone('VERIFIED_COMPLETE', true), 'success');
     const card = presentChatReview({
       outcome: 'NO_CHANGE_REQUIRED',
       changedFiles: [],
@@ -137,9 +137,9 @@ describe('review-card tones stay truthful', () => {
         changedFiles: [],
         verificationPolicy: 'not_applicable',
       });
-      if (!card.body.includes(muted('✓ Complete'))) { console.error('missing muted title'); process.exit(2); }
+      if (!card.body.includes(success('✓ Complete'))) { console.error('missing success title'); process.exit(2); }
       if (muted('✓ Complete') === success('✓ Complete')) { console.error('color helpers collapsed'); process.exit(3); }
-      if (card.body.includes(success('✓ Complete'))) { console.error('used success paint'); process.exit(4); }
+      if (card.body.includes(muted('✓ Complete'))) { console.error('used muted paint'); process.exit(4); }
       process.stdout.write('ok');
     `);
     assert.equal(child.status, 0, child.stderr || child.stdout);

@@ -87,6 +87,18 @@ describe('MarkdownAccumulator streaming deltas', () => {
     assert.equal(acc.feed('.\n\nNext', identity), '.\n\nNext');
   });
 
+  it('append-only preserves paragraph breaks across chunk boundaries', () => {
+    const acc = new MarkdownAccumulator();
+    acc.setPaintPolicy('append-only');
+    let out = '';
+    out += acc.feed('...fixes directly.', identity);
+    out += acc.feed('\n\n', identity);
+    out += acc.feed('A few things I can help with.', identity);
+    assert.equal(/\x1b\[\d*A/.test(out), false);
+    assert.match(out, /directly\.\n\nA few things/);
+    assert.doesNotMatch(out, /directly\.A few/);
+  });
+
   it('append-only policy never emits cursor-up rewrites and keeps the intro once', () => {
     const acc = new MarkdownAccumulator();
     acc.setPaintPolicy('append-only');

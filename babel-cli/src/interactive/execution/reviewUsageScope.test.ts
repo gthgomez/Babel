@@ -115,4 +115,48 @@ describe('review card usage scope', () => {
       `session-cumulative tokens must not appear as the card's token figure:\n${out.slice(-800)}`,
     );
   });
+
+  test('conversational no-change card does not echo the assistant answer as Summary', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-review-summary-'));
+    roots.push(root);
+    const target = makeTarget(root);
+    const answer =
+      "I'm ready to help. What would you like me to work on? I can investigate code.";
+
+    const mockEngine = {
+      submitMessageStream: async function* (): AsyncGenerator<ChatEvent> {
+        yield { type: 'thinking' } as ChatEvent;
+        yield { type: 'answer_chunk', text: answer } as ChatEvent;
+        globalCostTracker.trackUsage('test-model', 30, 20);
+        const summary = globalCostTracker.getSessionSummary();
+        yield {
+          type: 'done',
+          answer,
+          usage: summary,
+          outcome: 'NO_CHANGE_REQUIRED',
+        } as ChatEvent;
+      },
+      abortTurn: () => undefined,
+      cancel: () => undefined,
+    };
+
+    const ctx = makeReplContext();
+    const logs: string[] = [];
+    const originalLog = console.log.bind(console);
+    console.log = (...args: unknown[]) => {
+      logs.push(args.map(String).join(' '));
+    };
+    try {
+      await executeChatTask(ctx, '?', '?', target, undefined, {
+        gatherPreflight: async () => undefined,
+        engineFactory: () => mockEngine as unknown as ChatEngineType,
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const out = stripAnsi(logs.join('\n'));
+    assert.doesNotMatch(out, /\nSummary\n/);
+    assert.match(out, /this turn/);
+  });
 });

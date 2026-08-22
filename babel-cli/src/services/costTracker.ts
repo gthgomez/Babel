@@ -25,6 +25,17 @@ export interface ProjectStats {
   modelBreakdown: Record<string, ModelUsage>;
 }
 
+/** This-turn billed usage from two session snapshots. Never negative. */
+export function usageDelta(
+  before: Pick<SessionUsageSummary, 'totalCostUSD' | 'totalTokens'>,
+  after: Pick<SessionUsageSummary, 'totalCostUSD' | 'totalTokens'>,
+): { costUsd: number; tokens: number } {
+  return {
+    costUsd: Math.max(0, after.totalCostUSD - before.totalCostUSD),
+    tokens: Math.max(0, after.totalTokens - before.totalTokens),
+  };
+}
+
 export interface SessionUsageSummary {
   totalCostUSD: number;
   totalInputTokens: number;

@@ -27,7 +27,8 @@ import { renderMarkdown, clearMdRenderCache } from './highlight.js';
 import { RawModeManager } from './rawMode.js';
 import { KeybindingManager } from './keybindings.js';
 import { FrameScheduler } from './frameScheduler.js';
-import { leaveThinking, type ThinkingExitReason } from './thinkingState.js';
+import { composeThinkingHud, leaveThinking, type ThinkingExitReason } from './thinkingState.js';
+import { canUseCursorRewrite } from './cursorRewritePolicy.js';
 import { MarkdownAccumulator } from './markdownAccumulator.js';
 import { backgroundTaskRegistry } from '../services/backgroundTaskRegistry.js';
 import { renderBackgroundTaskOverlay } from './backgroundTaskOverlay.js';
@@ -40,7 +41,7 @@ import { TwoRegionStreaming } from './twoRegionStreaming.js';
 import { AgentStreamManager, type AgentStreamEvent } from './agentProgress.js';
 import { getMotionMode, MotionMode } from './motion.js';
 import { renderUnseenDividerPill } from './unseenDivider.js';
-import { isWindowsTerminal } from './terminalProbe.js';
+
 import {
   StateStore,
   createTuiStore,
@@ -1228,6 +1229,10 @@ import { conversationalToolLabel } from './toolDisplay.js';
 export class ConversationalRenderer extends BaseRenderer {
   private isTTY: boolean | undefined;
   private answerChunks: string[];
+  /** True after at least one answer_chunk in the current assistant generation. */
+  private _currentGenerationHasStream = false;
+  /** True after turn metadata has been written; later assistant bytes are illegal. */
+  private _turnMetadataStarted = false;
   private toolCallIndex: number;
   private pendingToolCalls: Map<number, { tool: string; target: string }>;
   private startTime: number;
@@ -1491,13 +1496,20 @@ export class ConversationalRenderer extends BaseRenderer {
       this._twoRegion.onResize(height, width);
     }
 
-    const reflowed = this._mdAccumulator.reflow(width, renderMarkdown);
-    if (!reflowed) return;
-
     if (this._twoRegion?.isHardwareMode) {
-      this._twoRegion.replaceStreamingContent(reflowed);
+      const reflowedHw = this._mdAccumulator.reflow(width, renderMarkdown);
+      if (reflowedHw) this._twoRegion.replaceStreamingContent(reflowedHw);
       return;
     }
+
+    if (!canUseCursorRewrite()) {
+      // ConPTY cannot apply CUU/ED. Keep already-emitted cells; future wraps
+      // use the updated width. Do not desync lastRendered via a silent reflow.
+      return;
+    }
+
+    const reflowed = this._mdAccumulator.reflow(width, renderMarkdown);
+    if (!reflowed) return;
 
     const viewportRows = height;
     const cursorUp = Math.min(oldLines, Math.max(1, viewportRows - 1));
@@ -1556,28 +1568,15 @@ export class ConversationalRenderer extends BaseRenderer {
       );
     }
 
-    // Batch all writes into a single string to minimise OutputBuffer calls.
-    let output = `\r\x1b[K  ${indicator}  ${timer}`;
-
     const cols = process.stdout.columns ?? getTerminalWidth();
-    if (overlayLines.length > 0) {
-      for (const line of overlayLines) {
-        const fitted = truncate(stripAnsi(line), Math.max(1, cols - 2));
-        output += `\n${fitted}\x1b[K`;
-      }
-      // Move cursor back up to the thinking line for the next tick
-      output += `\x1b[${overlayLines.length}A`;
-      this._showingOverlayLines = overlayLines.length;
-    } else if (this._showingOverlayLines > 0) {
-      // All overlays gone — clear the previously shown rows
-      for (let i = 0; i < this._showingOverlayLines; i++) {
-        output += '\n\x1b[K';
-      }
-      output += `\x1b[${this._showingOverlayLines}A`;
-      this._showingOverlayLines = 0;
-    }
-
-    safeStdoutWrite(output);
+    const hud = composeThinkingHud({
+      indicatorLine: `  ${indicator}  ${timer}`,
+      overlayLines,
+      columns: cols,
+      previousOverlayLines: this._showingOverlayLines,
+    });
+    this._showingOverlayLines = hud.showingOverlayLines;
+    safeStdoutWrite(hud.output);
   }
 
   /** Leave the thinking state (on first answer chunk, tool call start, or turn finish/error).
@@ -1844,37 +1843,80 @@ export class ConversationalRenderer extends BaseRenderer {
   }
 
   /**
+   * Settle the active assistant stream.
+   *
+   * After this returns, no assistant bytes received before the call may be
+   * written to stdout again. Shared by end-of-turn, generation boundaries,
+   * and tool boundaries.
+   *
+   * @param persistHardwareRegion - when true (generation/tool seam), keep
+   *   DECSTBM active and open a fresh streaming message. When false
+   *   (end of turn), graduate and drop the hardware region.
+   */
+  finalizeAnswerStream(persistHardwareRegion = false): void {
+    const hasStream =
+      this._currentGenerationHasStream ||
+      this._mdAccumulator.totalBytes > 0 ||
+      this.answerChunks.length > 0;
+    if (hasStream) {
+      this._historyTranscript.flushActive();
+      this._syncCellViewport();
+      if (this.isTTY) {
+        const held = this._mdAccumulator.finalize(renderMarkdown);
+        if (held) this._chunkCoalescer.push(held);
+        this._chunkCoalescer.flush();
+      }
+      this._mdAccumulator.reset();
+      this._currentGenerationHasStream = false;
+      if (persistHardwareRegion) {
+        // Generation/tool seam: the next segment must start from a clean
+        // live buffer so answers never concatenate across boundaries.
+        this.answerChunks = [];
+        if (this._twoRegion?.isHardwareMode) this._twoRegion.beginNewStreamingMessage();
+      } else {
+        // End of turn: keep the settled text readable via getAnswerText() /
+        // getTranscript(). Further assistant writes are already forbidden by
+        // _turnMetadataStarted, and the hardware region graduates.
+        if (this._twoRegion?.isHardwareMode) this._twoRegion.commitStreaming();
+      }
+    } else if (this.isTTY) {
+      this._chunkCoalescer.flush();
+    }
+  }
+
+  /**
    * A new model generation is starting (engine 'thinking' event with no
-   * intervening tool call). The previous generation's streamed answer must
-   * not concatenate with the next one: commit it as its own history cell,
-   * flush + clear the live markdown view, and start a fresh summary segment.
+   * intervening tool call). Seal any in-flight streamed answer, then enter
+   * the thinking state for the next provider round.
    */
   onAnswerGenerationBoundary(): void {
     if (this.outputBroken || this.paused) return;
     if (this._state === 'done' || this._state === 'failed') return;
-    if (this.answerChunks.length === 0) return;
-    if (this.isTTY) {
-      // Flush held table lines and any coalesced deltas belonging to the old
-      // document BEFORE resetting, so stale ANSI never bleeds into the next.
-      const held = this._mdAccumulator.finalize(renderMarkdown);
-      if (held) this._chunkCoalescer.push(held);
-      this._chunkCoalescer.flush();
-    }
-    this._historyTranscript.flushActive();
-    this.answerChunks = [];
-    this._mdAccumulator.reset();
-    this._syncCellViewport();
+    const hadStream =
+      this._currentGenerationHasStream ||
+      this.answerChunks.length > 0 ||
+      this._mdAccumulator.totalBytes > 0;
+    this.finalizeAnswerStream(true);
+    if (!hadStream) return;
+    this._state = 'thinking';
+    this._store?.dispatch({ type: 'state:transition', to: 'thinking' });
+    this._lastActivityTime = Date.now();
+    if (this.isTTY) this._writeThinkingLine();
+    this._registerThinkingTicker();
   }
 
   /** Stream a chunk of natural-language answer text — the primary output. */
-  onAnswerChunk(chunk: string): void {    if (this.outputBroken) return;
+  onAnswerChunk(chunk: string): void {
+    if (this.outputBroken) return;
     if (this.paused) return;
     if (this._state === 'done' || this._state === 'failed') return;
+    if (this._turnMetadataStarted) return;
     if (!chunk) return;
     this._flushPendingToolExecutions();
     // Fix: push BEFORE _recordActivity so the first chunk triggers
     // the 'thinking' → 'streaming' state transition.
     this.answerChunks.push(chunk);
+    this._currentGenerationHasStream = true;
     this._historyTranscript.onAnswerChunk(chunk);
     this._syncCellViewport();
     this._recordModelActivity();
@@ -1961,6 +2003,7 @@ export class ConversationalRenderer extends BaseRenderer {
     // Store accepted — now mutate renderer state
     this.toolCallCount++;
     this.pendingToolCalls.set(id, { tool, target });
+    this.finalizeAnswerStream(true);
     this._historyTranscript.beginToolCall(id, tool, target);
     this._syncCellViewport();
     if (this.isTTY) {
@@ -2163,22 +2206,16 @@ export class ConversationalRenderer extends BaseRenderer {
     }
   }
 
-  /** End of run — show a clean summary line. */
-  onSummary({ costUSD, perRunCost }: SummaryOptions = {}): void {
+  /** End of run — elapsed/tool-count only. Turn cost lives on the ReviewCard. */
+  onSummary({ costUSD: _costUSD, perRunCost: _perRunCost }: SummaryOptions = {}): void {
+    this.finalizeAnswerStream(false);
     this._flushPendingToolExecutions();
     if (this.outputBroken) return;
+    this._turnMetadataStarted = true;
     if (this.isTTY) safeStdoutWrite('\r\x1b[K');
     const elapsed = formatElapsed(Date.now() - this.startTime);
     if (this.isTTY) {
       let output = `\n  ${dim('·')} ${muted(elapsed)}`;
-      if (typeof perRunCost === 'number') {
-        output += `  ${dim('·')} ${muted(`$${perRunCost.toFixed(4)}`)} this turn`;
-        if (typeof costUSD === 'number') {
-          output += `  ${dim('·')} ${muted(`$${costUSD.toFixed(4)} total`)}`;
-        }
-      } else if (typeof costUSD === 'number') {
-        output += `  ${dim('·')} ${muted(`$${costUSD.toFixed(4)}`)}`;
-      }
       if (this.toolCallCount > 0) {
         output += `  ${dim('·')} ${this.toolCallCount} tool call${this.toolCallCount !== 1 ? 's' : ''}`;
       }
@@ -2350,6 +2387,8 @@ export class ConversationalRenderer extends BaseRenderer {
    *  Configures shimmer on the MarkdownAccumulator based on motion mode. */
   start(): void {
     this._historyTranscript.beginTurn();
+    this._currentGenerationHasStream = false;
+    this._turnMetadataStarted = false;
     this._cellViewport.setWidth(process.stdout.columns ?? 80);
     this._syncCellViewport();
     this._state = 'thinking';
@@ -2364,12 +2403,7 @@ export class ConversationalRenderer extends BaseRenderer {
     const motionMode = getMotionMode();
     this._mdAccumulator.setShimmerEnabled(motionMode === MotionMode.Animated);
 
-    // ConPTY cannot apply cursor-up rewrites. Force append-only paint unless
-    // the operator explicitly opts back into CSI with BABEL_ANSWER_REWRITE=csi.
-    const rewriteOverride = (process.env['BABEL_ANSWER_REWRITE'] ?? '').toLowerCase();
-    if (rewriteOverride === 'append-only' || (rewriteOverride !== 'csi' && isWindowsTerminal())) {
-      this._mdAccumulator.setPaintPolicy('append-only');
-    }
+    this._mdAccumulator.setPaintPolicy(canUseCursorRewrite() ? 'csi' : 'append-only');
 
     // Set viewport dimensions for cursor-up clamping and CJK-aware
     // visual line counting in the markdown accumulator.
@@ -2431,14 +2465,10 @@ export class ConversationalRenderer extends BaseRenderer {
 
     this._historyTranscript.finishTurn();
     this._syncCellViewport();
-    // G3 finalize mid-table holdback, then flush coalescer
-    if (this.isTTY) { const d = this._mdAccumulator.finalize(renderMarkdown); if (d) this._chunkCoalescer.push(d); }
-    if (this._chunkCoalescer) { this._chunkCoalescer.flush(); this._chunkCoalescer.dispose(); }
+    this.finalizeAnswerStream(false);
+    if (this._chunkCoalescer) { this._chunkCoalescer.dispose(); }
 
-    // Graduate streaming content to scrollback and tear down the two-region
-    // hardware-scroll layout if it was active.
     if (this._twoRegion) {
-      this._twoRegion.commitStreaming();
       this._twoRegion.teardown();
       this._twoRegion = null;
       this._writeOutput = safeStdoutWrite;

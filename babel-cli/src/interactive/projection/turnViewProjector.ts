@@ -302,7 +302,7 @@ export function renderProjectedReviewCard(
       : proj.hasMutations
         ? { ran: false }
         : null,
-    summary: state.transcriptCell.assistantAnswer.slice(0, 200),
+    transcriptAnswer: state.transcriptCell.assistantAnswer,
     costUsd: state.statusBar.totalCostUsd,
     tokens: state.statusBar.cumulativeSessionTokens,
     ...overrides,
