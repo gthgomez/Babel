@@ -6,7 +6,7 @@
   "TaskCategory": "backend",
   "Model": "codex",
   "ClientSurface": "codex_extension",
-  "PipelineMode": "verified",
+  "PipelineMode": "deep",
   "PurposeResolutionMode": "provisional",
   "ProvisionalPurposeMode": "execution",
   "ProvisionalPurposeSource": "provisional_local_default",
@@ -17,85 +17,111 @@
   "SelectedCodexAdapter": "balanced",
   "RecommendedTaskOverlayIds": [],
   "RecommendedSkillIds": [],
-  "BabelEntrypoint": "BABEL_BIBLE.md",
+  "BabelEntrypoint": "INTEGRATION.md",
   "BabelReferenceFiles": [
     "PROJECT_CONTEXT.md",
     "prompt_catalog.yaml"
   ],
   "SelectedStack": [
     {
+      "Id": "behavioral_core_v11",
+      "Layer": "behavioral_os",
+      "LoadPosition": 1,
+      "TokenBudget": 600,
+      "RelativePath": "01_Behavioral_OS/OLS-v11-Core-Unified.md",
+      "FullPath": "01_Behavioral_OS/OLS-v11-Core-Unified.md",
+      "OrderIndex": 1
+    },
+    {
       "Id": "domain_swe_backend",
       "Layer": "domain_architect",
       "LoadPosition": 4,
+      "TokenBudget": 250,
       "RelativePath": "02_Domain_Architects/Clean_SWE_Backend-v7.md",
       "FullPath": "02_Domain_Architects/Clean_SWE_Backend-v7.md",
-      "OrderIndex": 1
+      "OrderIndex": 2
     },
     {
       "Id": "skill_ts_zod",
       "Layer": "skill",
       "LoadPosition": null,
-      "RelativePath": "02_Skills/Lang/TS-Zod-v1.md",
-      "FullPath": "02_Skills/Lang/TS-Zod-v1.md",
-      "OrderIndex": 2
+      "TokenBudget": 300,
+      "RelativePath": "02_Skills/Lang/TS-Zod-v2.md",
+      "FullPath": "02_Skills/Lang/TS-Zod-v2.md",
+      "OrderIndex": 3
     },
     {
       "Id": "skill_supabase_pg",
       "Layer": "skill",
       "LoadPosition": null,
-      "RelativePath": "02_Skills/DB/Supabase-PG-v1.md",
-      "FullPath": "02_Skills/DB/Supabase-PG-v1.md",
-      "OrderIndex": 3
+      "TokenBudget": 350,
+      "RelativePath": "02_Skills/DB/Supabase-PG-v2.md",
+      "FullPath": "02_Skills/DB/Supabase-PG-v2.md",
+      "OrderIndex": 4
     },
     {
       "Id": "skill_evidence_gathering",
       "Layer": "skill",
       "LoadPosition": null,
-      "RelativePath": "02_Skills/Governance/Evidence-Gathering-v1.md",
-      "FullPath": "02_Skills/Governance/Evidence-Gathering-v1.md",
-      "OrderIndex": 4
+      "TokenBudget": 350,
+      "RelativePath": "02_Skills/Governance/Evidence-Gathering-v2.md",
+      "FullPath": "02_Skills/Governance/Evidence-Gathering-v2.md",
+      "OrderIndex": 5
     },
     {
       "Id": "skill_bcdp_contracts",
       "Layer": "skill",
       "LoadPosition": null,
-      "RelativePath": "02_Skills/Governance/BCDP-Contracts-v1.md",
-      "FullPath": "02_Skills/Governance/BCDP-Contracts-v1.md",
-      "OrderIndex": 5
+      "TokenBudget": 350,
+      "RelativePath": "02_Skills/Governance/BCDP-Contracts-v2.md",
+      "FullPath": "02_Skills/Governance/BCDP-Contracts-v2.md",
+      "OrderIndex": 6
     },
     {
       "Id": "overlay_example_saas_backend",
       "Layer": "project_overlay",
       "LoadPosition": 6,
+      "TokenBudget": 325,
       "RelativePath": "05_Project_Overlays/Example-SaaS-Backend-Context.md",
       "FullPath": "05_Project_Overlays/Example-SaaS-Backend-Context.md",
-      "OrderIndex": 6
+      "OrderIndex": 7
     },
     {
-      "Id": "adapter_codex_balanced",
+      "Id": "adapter_codex",
       "Layer": "model_adapter",
       "LoadPosition": 8,
-      "RelativePath": "03_Model_Adapters/Codex_Balanced.md",
-      "FullPath": "03_Model_Adapters/Codex_Balanced.md",
-      "OrderIndex": 7
+      "TokenBudget": 100,
+      "RelativePath": "03_Model_Adapters/UltraTerse_Fallback.md",
+      "FullPath": "03_Model_Adapters/UltraTerse_Fallback.md",
+      "OrderIndex": 8
     },
     {
       "Id": "pipeline_qa_reviewer",
       "Layer": "pipeline_stage",
       "LoadPosition": 9,
-      "RelativePath": "02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md",
-      "FullPath": "02_Domain_Architects/QA_Adversarial_Reviewer-v1.0.md",
-      "OrderIndex": 8
+      "TokenBudget": 425,
+      "RelativePath": "07_Pipeline_Stages/QA_Adversarial_Reviewer-v1.0.md",
+      "FullPath": "07_Pipeline_Stages/QA_Adversarial_Reviewer-v1.0.md",
+      "OrderIndex": 9
+    },
+    {
+      "Id": "pipeline_cli_executor",
+      "Layer": "pipeline_stage",
+      "LoadPosition": 10,
+      "TokenBudget": 375,
+      "RelativePath": "07_Pipeline_Stages/CLI_Executor-v1.0.md",
+      "FullPath": "07_Pipeline_Stages/CLI_Executor-v1.0.md",
+      "OrderIndex": 10
     }
   ],
-  "RepoContextFiles": null,
+  "RepoContextFiles": [],
   "RepoLocalSystemPresent": false,
   "PrecedenceRules": [
     "Babel chooses the cross-project stack and operating mode.",
     "The repo-local collaboration system defines repo-specific invariants and startup rules.",
     "Repo-local invariants win for repo-specific conflicts."
   ],
-  "KickoffPrompt": "Read Babel's BABEL_BIBLE.md first and use Babel to select the right instruction stack for this task before planning or coding.",
+  "KickoffPrompt": "Read Babel's INTEGRATION.md first and use Babel to select the right instruction stack for this task before planning or coding.",
   "ActivePolicyIds": [],
   "PolicyVersionApplied": ""
 }

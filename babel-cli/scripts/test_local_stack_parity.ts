@@ -55,18 +55,41 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
+const ROOT_BACK = BABEL_ROOT.replace(/\//g, '\\');
+
+function toRepoRelative(value: string): string {
+  const normalized = value.replace(/\//g, '\\');
+  return normalized.startsWith(ROOT_BACK)
+    ? normalized.slice(ROOT_BACK.length).replace(/^\\/, '')
+    : normalized;
+}
+
+function stripRootInText(value: string): string {
+  return value.split(ROOT_BACK + '\\').join('').split(ROOT_BACK).join('');
+}
+
 function normalizeResult(value: LocalStackResolveResult): LocalStackResolveResult {
+  // Cross-layer order is part of the parity contract (load order).
+  // Intra-layer order may differ: the TS resolver applies relevance sorting
+  // within layers that tools/resolve-local-stack.ps1 does not implement yet,
+  // so entries are ordered by (layer, id) here to keep that gap out of scope.
+  const normalizedStack = value.SelectedStack.map(({ OrderIndex: _, ...entry }) => ({
+    ...entry,
+    FullPath: toRepoRelative(entry.FullPath),
+  })).sort((left, right) =>
+    left.Layer.localeCompare(right.Layer) ||
+    (left.Id ?? '').localeCompare(right.Id ?? ''),
+  );
   return {
     ...value,
-    ProjectPath: value.ProjectPath ? value.ProjectPath.replace(/\//g, '\\') : null,
-    SelectedStack: value.SelectedStack.map(({ OrderIndex: _, ...entry }) => ({
-      ...entry,
-      FullPath: entry.FullPath.replace(/\//g, '\\'),
-    })),
-    RepoContextFiles: value.RepoContextFiles.map(path => path.replace(/\//g, '\\')),
-    BabelEntrypoint: value.BabelEntrypoint.replace(/\//g, '\\'),
-    BabelReferenceFiles: value.BabelReferenceFiles.map(path => path.replace(/\//g, '\\')),
-    KickoffPrompt: value.KickoffPrompt.replace(/\//g, '\\'),
+    BabelRoot: '',
+    LocalLearningRoot: toRepoRelative(value.LocalLearningRoot),
+    ProjectPath: value.ProjectPath ? toRepoRelative(value.ProjectPath) : null,
+    SelectedStack: normalizedStack,
+    RepoContextFiles: value.RepoContextFiles.map(toRepoRelative),
+    BabelEntrypoint: toRepoRelative(value.BabelEntrypoint),
+    BabelReferenceFiles: value.BabelReferenceFiles.map(toRepoRelative),
+    KickoffPrompt: stripRootInText(value.KickoffPrompt.replace(/\//g, '\\')),
   };
 }
 
@@ -187,15 +210,15 @@ function main(): void {
     compareResults(`${label} in-process vs CLI`, inProcess, cli);
     compareResults(`${label} CLI vs PS wrapper`, cli, ps);
 
-    const expectedBible = join(BABEL_ROOT, 'BABEL_BIBLE.md').replace(/\//g, '\\');
+    const expectedIntegrationDoc = join(BABEL_ROOT, 'INTEGRATION.md').replace(/\//g, '\\');
     const kickoffNorm = cli.KickoffPrompt.replace(/\//g, '\\');
     assert(
-      cli.BabelEntrypoint.replace(/\//g, '\\') === expectedBible,
-      `${label}: BabelEntrypoint must be under babel root (${expectedBible})`,
+      cli.BabelEntrypoint.replace(/\//g, '\\') === expectedIntegrationDoc,
+      `${label}: BabelEntrypoint must be under babel root (${expectedIntegrationDoc})`,
     );
     assert(
-      kickoffNorm.includes(expectedBible),
-      `${label}: KickoffPrompt must reference bible path under babel root (${expectedBible})`,
+      kickoffNorm.includes(expectedIntegrationDoc),
+      `${label}: KickoffPrompt must reference integration doc path under babel root (${expectedIntegrationDoc})`,
     );
 
     console.log(`[local-stack-parity] pass ${label}`);

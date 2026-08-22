@@ -696,18 +696,18 @@ function buildKickoffPrompt(
   let kickoffPrompt: string;
   if (compactKickoffActive) {
     if (repoLocalSystemPresent) {
-      kickoffPrompt = `Read ${join(babelRoot, 'BABEL_BIBLE.md')}, then this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM before planning or coding.`;
+      kickoffPrompt = `Read ${join(babelRoot, 'INTEGRATION.md')}, then this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM before planning or coding.`;
     } else if (repoContextFiles.length > 0) {
-      kickoffPrompt = `Read ${join(babelRoot, 'BABEL_BIBLE.md')}, then this repo's PROJECT_CONTEXT.md before planning or coding.`;
+      kickoffPrompt = `Read ${join(babelRoot, 'INTEGRATION.md')}, then this repo's PROJECT_CONTEXT.md before planning or coding.`;
     } else {
-      kickoffPrompt = `Read ${join(babelRoot, 'BABEL_BIBLE.md')} before planning or coding.`;
+      kickoffPrompt = `Read ${join(babelRoot, 'INTEGRATION.md')} before planning or coding.`;
     }
   } else if (repoLocalSystemPresent) {
-    kickoffPrompt = `Read Babel's ${join(babelRoot, 'BABEL_BIBLE.md')} first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM/README_FOR_HUMANS_AND_LLMS.md before planning or coding.`;
+    kickoffPrompt = `Read Babel's ${join(babelRoot, 'INTEGRATION.md')} first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM/README_FOR_HUMANS_AND_LLMS.md before planning or coding.`;
   } else if (repoContextFiles.length > 0) {
-    kickoffPrompt = `Read Babel's ${join(babelRoot, 'BABEL_BIBLE.md')} first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md before planning or coding.`;
+    kickoffPrompt = `Read Babel's ${join(babelRoot, 'INTEGRATION.md')} first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md before planning or coding.`;
   } else {
-    kickoffPrompt = `Read Babel's ${join(babelRoot, 'BABEL_BIBLE.md')} first and use Babel to select the right instruction stack for this task before planning or coding.`;
+    kickoffPrompt = `Read Babel's ${join(babelRoot, 'INTEGRATION.md')} first and use Babel to select the right instruction stack for this task before planning or coding.`;
   }
 
   if (verificationHints.length > 0) {
@@ -975,7 +975,7 @@ export function resolveLocalStack(options: LocalStackResolveOptions): LocalStack
     SelectedCodexAdapter: model === 'codex' ? selectedCodexAdapterName : null,
     RecommendedTaskOverlayIds: selectedTaskOverlayIds,
     RecommendedSkillIds: selectedCognitionSkillIds,
-    BabelEntrypoint: join(babelRoot, 'BABEL_BIBLE.md'),
+    BabelEntrypoint: join(babelRoot, 'INTEGRATION.md'),
     BabelReferenceFiles: [
       join(babelRoot, 'PROJECT_CONTEXT.md'),
       join(babelRoot, 'prompt_catalog.yaml'),

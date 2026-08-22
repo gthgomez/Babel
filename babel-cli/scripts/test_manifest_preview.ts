@@ -50,12 +50,12 @@ const cases: PreviewCase[] = [
         expectedModel: 'codex',
     },
     {
-        label: 'mobile-direct',
+        label: 'mobile-chat',
         taskCategory: 'mobile',
         projectPrivate: 'example_mobile_suite',
         projectPublic: 'example_mobile_suite',
         pipelineMode: 'chat',
-        fixture: 'mobile-direct.json',
+        fixture: 'mobile-chat.json',
         expectedModel: 'codex',
     },
 ];

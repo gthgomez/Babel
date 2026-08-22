@@ -135,7 +135,7 @@ const LAYER_PRUNING_PRIORITY: Record<string, number> = {
   task_overlay: 4,
 };
 
-const DEFAULT_SAFETY_PATTERN = /Behavioral_OS|RULES_CORE|RULES_GUARD|BABEL_BIBLE|Evidence_Gathering|BCDP|Untrusted_Input|Security_Release|Compliance_Evidence|Autonomous_Agent|Prompt_Injection|governance/i;
+const DEFAULT_SAFETY_PATTERN = /Behavioral_OS|RULES_CORE|RULES_GUARD|BABEL_BIBLE|(^|[\/\\])INTEGRATION\.md$|Evidence_Gathering|BCDP|Untrusted_Input|Security_Release|Compliance_Evidence|Autonomous_Agent|Prompt_Injection|governance/i;
 
 /**
  * Prune a prompt manifest to stay within a token budget hard limit.

@@ -219,7 +219,7 @@ function detectRepoMarkers(repoPath: string): string[] {
     '.git',
     'AGENTS.md',
     'PROJECT_CONTEXT.md',
-    'BABEL_BIBLE.md',
+    'INTEGRATION.md',
     'prompt_catalog.yaml',
     'package.json',
     'babel-cli/package.json',

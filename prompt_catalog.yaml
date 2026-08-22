@@ -173,10 +173,11 @@ entries:
 
   - id: system_bible
     layer: entrypoint
-    path: BABEL_BIBLE.md
+    path: INTEGRATION.md
     description: >
-      Human-facing Babel entrypoint. Tells any model or operator how to use the
-      Babel system, which files are authoritative, and how to assemble a prompt
+      Model/integration-facing Babel entrypoint. Tells any model or operator how
+      to use the coding-agent harness, which files are authoritative, and how to
+      assemble a prompt
       stack from the catalog.
     status: active
     token_budget: 450
@@ -226,7 +227,7 @@ entries:
       Replaces v10 Core + v7 Cognitive Micro + v7 Guard.
     status: active
     load_position: 1
-    tags: [config:always_load, core, state_machine, guard, cognitive]
+    tags: [always_load, core, state_machine, guard, cognitive]
     token_budget: 600
 
   - id: behavioral_core_v10
@@ -241,7 +242,7 @@ entries:
     status: deprecated
     superseded_by: behavioral_core_v11
     load_position: 1
-    tags: [config:always_load, core, state_machine]
+    tags: [always_load, core, state_machine]
     token_budget: 450
 
 
@@ -256,7 +257,7 @@ entries:
     status: deprecated
     superseded_by: behavioral_core_v11
     load_position: 2
-    tags: [cognition:epistemic, cognitive, config:always_load]
+    tags: [cognition:epistemic, cognitive, always_load]
     token_budget: 150
 
   - id: behavioral_guard_v7

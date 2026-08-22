@@ -362,8 +362,8 @@ function Get-LayerRank {
         "domain_architect" { return 2 }
         "skill" { return 3 }
         "project_overlay" { return 4 }
-        "task_overlay" { return 5 }
-        "model_adapter" { return 6 }
+        "model_adapter" { return 5 }
+        "task_overlay" { return 6 }
         "pipeline_stage" { return 7 }
         default { return 999 }
     }
@@ -790,13 +790,7 @@ $selectedCodexAdapterName = switch ($CodexAdapter) {
 }
 
 $selectedAdapterId = switch ($Model) {
-    "codex"  {
-        if ($selectedCodexAdapterName -eq "ultra") {
-            "adapter_codex"
-        } else {
-            "adapter_codex_balanced"
-        }
-    }
+    "codex"  { "adapter_codex" }
     "claude" { "adapter_claude" }
     "gemini" { "adapter_gemini" }
 }
@@ -888,7 +882,7 @@ if ($null -ne $resolverRankingPolicy -and $Model -eq "codex") {
         $selectedAdapterId = "adapter_codex"
     } elseif ($preferredStackIds -contains "adapter_codex_balanced") {
         $selectedCodexAdapterName = "balanced"
-        $selectedAdapterId = "adapter_codex_balanced"
+        $selectedAdapterId = "adapter_codex"
     }
 }
 
@@ -998,7 +992,7 @@ foreach ($overlayId in $selectedTaskOverlayIds) {
 }
 
 switch ($PipelineMode) {
-    "verified" {
+    { $_ -in @("verified") } {
         $entry = Get-EntryById -Entries $entries -Id "pipeline_qa_reviewer"
         $selectedEntries.Add([PSCustomObject]@{
             Id = $entry.Id
@@ -1009,7 +1003,7 @@ switch ($PipelineMode) {
             OrderIndex = $order++
         })
     }
-    "autonomous" {
+    { $_ -in @("autonomous", "deep") } {
         foreach ($id in @("pipeline_qa_reviewer", "pipeline_cli_executor")) {
             $entry = Get-EntryById -Entries $entries -Id $id
             $selectedEntries.Add([PSCustomObject]@{
@@ -1083,18 +1077,18 @@ $compactKickoffActive = (
 
 $kickoffPrompt = if ($compactKickoffActive) {
     if ($repoLocalSystemPresent) {
-        "Read BABEL_BIBLE.md, then this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM before planning or coding."
+        "Read INTEGRATION.md, then this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM before planning or coding."
     } elseif ($repoContextFiles.Count -gt 0) {
-        "Read BABEL_BIBLE.md, then this repo's PROJECT_CONTEXT.md before planning or coding."
+        "Read INTEGRATION.md, then this repo's PROJECT_CONTEXT.md before planning or coding."
     } else {
-        "Read BABEL_BIBLE.md before planning or coding."
+        "Read INTEGRATION.md before planning or coding."
     }
 } elseif ($repoLocalSystemPresent) {
-    "Read Babel's BABEL_BIBLE.md first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM/README_FOR_HUMANS_AND_LLMS.md before planning or coding."
+    "Read Babel's INTEGRATION.md first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md and LLM_COLLABORATION_SYSTEM/README_FOR_HUMANS_AND_LLMS.md before planning or coding."
 } elseif ($repoContextFiles.Count -gt 0) {
-    "Read Babel's BABEL_BIBLE.md first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md before planning or coding."
+    "Read Babel's INTEGRATION.md first, use Babel to select the right instruction stack for this task, then read this repo's PROJECT_CONTEXT.md before planning or coding."
 } else {
-    "Read Babel's BABEL_BIBLE.md first and use Babel to select the right instruction stack for this task before planning or coding."
+    "Read Babel's INTEGRATION.md first and use Babel to select the right instruction stack for this task before planning or coding."
 }
 
 $verificationHints = @(Normalize-StringArray -Items $activeVerificationHints.ToArray())
@@ -1130,7 +1124,7 @@ $result = [PSCustomObject]@{
     SelectedCodexAdapter = if ($Model -eq "codex") { $selectedCodexAdapterName } else { $null }
     RecommendedTaskOverlayIds = @($selectedTaskOverlayIds)
     RecommendedSkillIds = @($selectedCognitionSkillIds)
-    BabelEntrypoint = "BABEL_BIBLE.md"
+    BabelEntrypoint = "INTEGRATION.md"
     BabelReferenceFiles = @(
         "PROJECT_CONTEXT.md"
         "prompt_catalog.yaml"

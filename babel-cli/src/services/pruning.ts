@@ -28,6 +28,7 @@ const MANDATORY_CRITICAL_PATTERNS = [
   /RULES_GUARD/i,
   /Behavioral_OS/i,
   /BABEL_BIBLE/i,
+  /(^|[\/\\])INTEGRATION\.md$/i,
 ];
 
 const isMandatoryCritical = (path: string): boolean =>
