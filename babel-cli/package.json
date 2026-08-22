@@ -2,7 +2,7 @@
   "name": "babel-cli",
   "version": "0.1.0",
   "description": "Local coding agent runtime for Babel — chat, plan, and deep modes with TUI/REPL",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "author": "Jonathan Gomez Aguilar",
   "repository": {
     "type": "git",

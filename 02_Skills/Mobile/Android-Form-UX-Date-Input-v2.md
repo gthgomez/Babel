@@ -1,7 +1,7 @@
 <!--
 Babel - Prompt Operating System
 Copyright (c) 2025-2026 Jonathan Gomez Aguilar
-Licensed under the MIT License
+Licensed under the Apache License, Version 2.0
 -->
 
 # Skill: Android Form UX and Date Input (v2.0)
