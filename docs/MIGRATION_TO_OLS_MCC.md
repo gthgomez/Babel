@@ -37,7 +37,7 @@ For each existing skill, verify these 8 items. Order by priority — top items h
 
 ### 1. Copyright Header (1 minute)
 
-Every skill file must start with the MIT license block:
+Every skill file must start with the Apache License 2.0 header block:
 
 ```markdown
 <!--

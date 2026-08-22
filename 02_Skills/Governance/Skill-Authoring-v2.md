@@ -61,7 +61,7 @@ Before creating a new skill, confirm it passes all four gates:
 
 Every Babel skill must include these sections (per OLS-MCC v4.2 PRODUCTION standards):
 
-1. **Copyright header** — license block, MIT + attribution
+1. **Copyright header** — license block, Apache License 2.0 + attribution
 2. **Metadata line** — Category, Status, Pairs with, Activation
 3. **Purpose** — Why this skill exists, what failure it prevents
 4. **Activation condition** — When to load (specific triggers)
