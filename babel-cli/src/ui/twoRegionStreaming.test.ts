@@ -59,6 +59,7 @@ describe('Lifecycle', () => {
   it('starts inactive', () => {
     const trs = new TwoRegionStreaming();
     assert.equal(trs.isActive, false);
+  });
 
   it('beginNewStreamingMessage stays active and clears the current message', () => {
     withEnv({ BABEL_SCROLL_REGIONS: '0' }, () => {
@@ -67,10 +68,10 @@ describe('Lifecycle', () => {
       trs.writeStreaming('first answer');
       trs.beginNewStreamingMessage();
       assert.equal(trs.isActive, true);
+      assert.equal(trs.getLogicalLines().length, 0, 'message buffer resets');
       trs.writeStreaming('second answer');
       trs.teardown();
     });
-  });
   });
 
   it('setup activates the stream', () => {
@@ -309,6 +310,68 @@ describe('Hardware mode', () => {
         assert.equal(copies, 1, 'commit must not write graduated content twice');
       } finally {
         mock.restore();
+      }
+    });
+  });
+
+  it('beginNewStreamingMessage graduates the tail via the scrollback margin so commit cannot wipe it', () => {
+    withEnv({ BABEL_SCROLL_REGIONS: '1' }, () => {
+      const trs = new TwoRegionStreaming();
+      const mock = mockStdoutWrite();
+      try {
+        // 50-row terminal, 12-row window → streamingTop=39, scroll region rows 1-38
+        trs.setup(50, 12);
+        mock.writes.length = 0;
+
+        // 20 lines against a 12-row window → 8 graduated by overflow,
+        // tail-line-8..tail-line-19 still ungraduated when the seal runs.
+        trs.replaceStreamingContent(
+          Array.from({ length: 20 }, (_, i) => `tail-line-${i}`).join('\n'),
+        );
+        assert.equal(trs.graduatedLineCount, 8);
+
+        trs.beginNewStreamingMessage();
+        const sealOutput = mock.writes.join('');
+
+        // The ungraduated tail must graduate through the hardware-scroll
+        // mechanism (bottom margin of the scrollback region, row 38), not be
+        // painted into the mutable streaming window (row 39) where the next
+        // seal or end-of-turn commitStreaming would erase it.
+        const marginPos = sealOutput.indexOf('\x1b[38;1H');
+        assert.ok(marginPos >= 0, 'scrollback-margin positioning must occur');
+        assert.ok(
+          sealOutput.slice(marginPos).includes('tail-line-8'),
+          'first ungraduated line must graduate at the scrollback margin',
+        );
+        assert.ok(sealOutput.includes('tail-line-19'), 'entire tail must graduate');
+        assert.equal(
+          sealOutput.includes('\x1b[39;1Htail'),
+          false,
+          'must not paint the tail into mutable window rows',
+        );
+        assert.equal(trs.getLogicalLines().length, 0, 'message buffer resets');
+
+        // The next generation streams into a clean window without reprinting
+        // the sealed message.
+        mock.writes.length = 0;
+        trs.writeStreaming('second generation');
+        const repaint = mock.writes.join('');
+        assert.ok(repaint.includes('second generation'), 'next generation paints normally');
+        assert.equal(repaint.includes('tail-line-8'), false, 'sealed message must not reprint');
+
+        // End-of-turn commit finds nothing left to graduate — the sealed
+        // message survives and is never rewritten or duplicated.
+        mock.writes.length = 0;
+        trs.commitStreaming();
+        const commitOutput = mock.writes.join('');
+        assert.equal(
+          commitOutput.includes('tail-line-8'),
+          false,
+          'commit must not re-write content already graduated at seal time',
+        );
+      } finally {
+        mock.restore();
+        trs.teardown();
       }
     });
   });

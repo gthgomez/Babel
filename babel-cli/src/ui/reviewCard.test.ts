@@ -223,6 +223,7 @@ describe('review card — truthful terminal states', () => {
     const cancelled = presentChatReview({ outcome: 'CANCELLED' });
     assert.equal(cancelled.kind, 'CANCELLED');
     assert.doesNotMatch(stripAnsi(cancelled.body), /\[Enter\] Continue/);
+  });
 
   it('pairs this-turn cost with this-turn tokens, not session totals', () => {
     const sameScope = presentChatReview({
@@ -244,5 +245,24 @@ describe('review card — truthful terminal states', () => {
     const mixedText = stripAnsi(mixed.body);
     assert.match(mixedText, /\$0\.0013  9286 tok  \(session 44682\)/);
   });
+
+  it('hides the session label on the first turn and when the session figure is not larger', () => {
+    // First turn: session cumulative equals this-turn tokens — no label.
+    const firstTurn = presentChatReview({
+      outcome: 'CANCELLED',
+      costUsd: 0.0013,
+      tokens: 50,
+      sessionTokens: 50,
+    });
+    assert.doesNotMatch(stripAnsi(firstTurn.body), /session/);
+
+    // A stale/smaller session figure can never display.
+    const smaller = presentChatReview({
+      outcome: 'CANCELLED',
+      costUsd: 0.0013,
+      tokens: 50,
+      sessionTokens: 20,
+    });
+    assert.doesNotMatch(stripAnsi(smaller.body), /session/);
   });
 });

@@ -35,7 +35,14 @@ export interface ReviewCardInput {
   costUsd?: number | undefined;
   /** Billed tokens for the same scope as `costUsd` (this turn). */
   tokens?: number | undefined;
-  /** Session-cumulative billed tokens. Shown only when larger than `tokens`. */
+  /**
+   * Session-cumulative billed tokens. Shown only when larger than `tokens`.
+   * Deliberate evolution of #95: #95 kept session totals on the status bar
+   * only, to stop the card mixing a per-turn cost with session-cumulative
+   * tokens as one unlabeled figure. This field re-introduces the session
+   * total as an explicitly labeled secondary figure `(session N)`; the
+   * card's primary token figure remains this-turn and shares cost's scope.
+   */
   sessionTokens?: number | undefined;
   mutated?: boolean | undefined;
   nextActions?: string[] | undefined;

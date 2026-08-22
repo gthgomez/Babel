@@ -259,6 +259,13 @@ export class TwoRegionStreaming {
    * Graduate the current assistant message to scrollback and start a fresh
    * streaming window. Keeps DECSTBM active so a later tool/iteration cannot
    * append onto the previous message's cells.
+   *
+   * The ungraduated tail must go through the same hardware-scroll mechanism
+   * as overflow graduation (_writeToScrollback, at the bottom margin of the
+   * scrollback region). Painting it into the streaming window instead would
+   * leave those rows exposed to the next _clearStreamingRows() — including
+   * the one in commitStreaming() — and wipe visible answer text before
+   * end-of-turn.
    */
   beginNewStreamingMessage(): void {
     if (!this._isActive) return;
@@ -270,13 +277,10 @@ export class TwoRegionStreaming {
     }
 
     const remaining = this.lines.slice(this.graduatedCount);
-    this._clearStreamingRows();
-    if (remaining.length > 0) {
-      this.buf.moveCursor(this.streamingTop, 1);
-      for (const line of remaining) {
-        this.buf.write(`${line}\n`);
-      }
+    for (const line of remaining) {
+      this._writeToScrollback(line);
     }
+    this._clearStreamingRows();
     this.lines = [];
     this.graduatedCount = 0;
   }

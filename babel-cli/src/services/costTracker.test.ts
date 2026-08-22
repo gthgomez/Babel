@@ -19,6 +19,7 @@ test('CostTracker prices direct DeepSeek v4 Pro with conservative cache-miss inp
   const cost = tracker.trackUsage('deepseek-v4-pro', 1000, 2000);
 
   assert.ok(Math.abs(cost - 0.002175) < 1e-12);
+});
 
 test('usageDelta is this-turn billed usage, never session totals', () => {
   const tracker = new CostTracker();
@@ -31,7 +32,6 @@ test('usageDelta is this-turn billed usage, never session totals', () => {
   assert.ok(turn.costUsd > 0);
   assert.ok(turn.tokens < after.totalTokens);
   assert.equal(after.totalTokens, before.totalTokens + turn.tokens);
-});
 });
 
 test('CostTracker uses the shared registry for DeepInfra model pricing', () => {
