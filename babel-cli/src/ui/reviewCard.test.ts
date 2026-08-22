@@ -9,6 +9,7 @@ import {
   looksLikeVerifiedSuccess,
   presentChatReview,
   reviewCardKindToken,
+  reviewTitleTone,
 } from './reviewCard.js';
 
 describe('review card — truthful terminal states', () => {
@@ -160,6 +161,50 @@ describe('review card — truthful terminal states', () => {
 
     assert.match(blockedText, /Verification blocked/);
     assert.match(failedText, /Verification failed/);
+  });
+
+  it('verification-N/A Complete uses success tone, not muted', () => {
+    assert.equal(reviewTitleTone('COMPLETE_UNVERIFIED', true), 'success');
+    assert.equal(reviewTitleTone('VERIFIED_COMPLETE', true), 'success');
+    assert.equal(reviewTitleTone('COMPLETE_UNVERIFIED', false), 'warning');
+  });
+
+  it('does not echo a 200-character transcript prefix as Summary', () => {
+    const answer =
+      "I'm ready to help. What would you like me to work on?\n\nI'm a conversational coding agent operating in `C:\\Workspace`. I can investigate code, diagnose issues, and apply fixes directly.\n\nA few things I can help with.";
+    const card = buildReviewCard({
+      outcome: 'NO_CHANGE_REQUIRED',
+      verificationApplicability: 'not_applicable',
+      summary: answer.slice(0, 200),
+      transcriptAnswer: answer,
+      costUsd: 0.001,
+      tokens: 50,
+    });
+    const text = stripAnsi(card.body);
+    assert.doesNotMatch(text, /^Summary$/m);
+    assert.doesNotMatch(text, /A few things I/);
+    assert.match(text, /\$0\.0010 this turn/);
+    assert.match(text, /50 tok/);
+    assert.doesNotMatch(text, /session/);
+  });
+
+  it('keeps a distinct engineering summary and labels session tokens when mixed-scope', () => {
+    const card = presentChatReview({
+      outcome: 'UNVERIFIED_PATCH',
+      changedFiles: ['src/a.ts'],
+      verification: { ran: false },
+      summary: 'Patched the login timeout.',
+      transcriptAnswer: 'I updated src/a.ts to raise the timeout and added a regression test.',
+      costUsd: 0.0013,
+      tokens: 9286,
+      sessionTokens: 44682,
+    });
+    const text = stripAnsi(card.body);
+    assert.match(text, /Summary/);
+    assert.match(text, /Patched the login timeout/);
+    assert.match(text, /\$0\.0013 this turn/);
+    assert.match(text, /9286 tok/);
+    assert.match(text, /\(session 44682\)/);
   });
 
   it('T16b: Read-only query with verificationApplicability: not_applicable displays clean Complete title', () => {

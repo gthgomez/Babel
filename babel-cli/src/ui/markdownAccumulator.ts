@@ -422,8 +422,13 @@ export class MarkdownAccumulator {
 
     // Case 3: earlier content diverged (markdown heading/list/table rewrite).
     if (this._paintPolicy === 'append-only') {
-      // ConPTY ignores CUU/ED. Keep already-printed cells; only append
-      // lines the host has not seen yet. Restyled earlier lines stay raw.
+      // ConPTY ignores CUU/ED. Keep already-printed cells.
+      // If the raw prefix is still intact, emit the exact suffix so
+      // paragraph breaks (`\n\n`) are not dropped.
+      if (newText.startsWith(oldText)) {
+        return newText.slice(oldText.length);
+      }
+      // Restyled earlier lines stay raw; append only newly added lines.
       if (newLines.length > oldLines.length) {
         return '\n' + newLines.slice(oldLines.length).join('\n');
       }
