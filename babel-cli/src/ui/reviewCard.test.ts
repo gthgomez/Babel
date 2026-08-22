@@ -223,5 +223,26 @@ describe('review card — truthful terminal states', () => {
     const cancelled = presentChatReview({ outcome: 'CANCELLED' });
     assert.equal(cancelled.kind, 'CANCELLED');
     assert.doesNotMatch(stripAnsi(cancelled.body), /\[Enter\] Continue/);
+
+  it('pairs this-turn cost with this-turn tokens, not session totals', () => {
+    const sameScope = presentChatReview({
+      outcome: 'CANCELLED',
+      costUsd: 0.0013,
+      tokens: 9286,
+    });
+    const sameText = stripAnsi(sameScope.body);
+    assert.match(sameText, /\$0\.0013/);
+    assert.match(sameText, /9286 tok/);
+    assert.doesNotMatch(sameText, /session/);
+
+    const mixed = presentChatReview({
+      outcome: 'CANCELLED',
+      costUsd: 0.0013,
+      tokens: 9286,
+      sessionTokens: 44682,
+    });
+    const mixedText = stripAnsi(mixed.body);
+    assert.match(mixedText, /\$0\.0013  9286 tok  \(session 44682\)/);
+  });
   });
 });

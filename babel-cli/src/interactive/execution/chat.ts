@@ -8,7 +8,7 @@ import type { ReplContext } from '../context.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
 import { ChatEngine, type ChatEngineOptions } from '../../agent/chatEngine.js';
 import { ConversationalRenderer } from '../../ui/waterfall.js';
-import { globalCostTracker } from '../../services/costTracker.js';
+import { globalCostTracker, usageDelta } from '../../services/costTracker.js';
 
 import { error, muted } from '../../ui/theme.js';
 import { updateConversationMemory } from '../turns.js';
@@ -218,13 +218,11 @@ export async function executeChatTask(
     const changedFiles = collectChangedFiles(result);
 
     const postRunUsage = globalCostTracker.getSessionSummary();
-    const perRunCost = Math.max(0, postRunUsage.totalCostUSD - preRunUsage.totalCostUSD);
-    // Same-scope token delta — the review card must not mix a per-turn cost
-    // with session-cumulative tokens (result.usage.totalTokens is cumulative).
-    const perRunTokens = Math.max(
-      0,
-      postRunUsage.totalTokens - preRunUsage.totalTokens,
-    );
+    // Cost and tokens share one scope: both are this-turn deltas of the same
+    // session snapshots. The card additionally labels the session total.
+    const turnUsage = usageDelta(preRunUsage, postRunUsage);
+    const perRunCost = turnUsage.costUsd;
+    const perRunTokens = turnUsage.tokens;
     const resolvedOutcome: TerminalOutcome =
       result.outcome ??
       (result.status === 'completed'
@@ -302,6 +300,7 @@ export async function executeChatTask(
           : undefined,
       costUsd: perRunCost,
       tokens: perRunTokens,
+      sessionTokens: postRunUsage.totalTokens,
       sessionConsistencyFailure: isSessionConsistencyFailureMessage(result.answer),
     });
 

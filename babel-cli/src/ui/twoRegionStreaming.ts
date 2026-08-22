@@ -256,6 +256,32 @@ export class TwoRegionStreaming {
   }
 
   /**
+   * Graduate the current assistant message to scrollback and start a fresh
+   * streaming window. Keeps DECSTBM active so a later tool/iteration cannot
+   * append onto the previous message's cells.
+   */
+  beginNewStreamingMessage(): void {
+    if (!this._isActive) return;
+
+    if (this.fallbackMode) {
+      this.lines = [];
+      this.graduatedCount = 0;
+      return;
+    }
+
+    const remaining = this.lines.slice(this.graduatedCount);
+    this._clearStreamingRows();
+    if (remaining.length > 0) {
+      this.buf.moveCursor(this.streamingTop, 1);
+      for (const line of remaining) {
+        this.buf.write(`${line}\n`);
+      }
+    }
+    this.lines = [];
+    this.graduatedCount = 0;
+  }
+
+  /**
    * Handle terminal resize.
    *
    * Recalculates the streaming area position and re-renders.

@@ -59,6 +59,18 @@ describe('Lifecycle', () => {
   it('starts inactive', () => {
     const trs = new TwoRegionStreaming();
     assert.equal(trs.isActive, false);
+
+  it('beginNewStreamingMessage stays active and clears the current message', () => {
+    withEnv({ BABEL_SCROLL_REGIONS: '0' }, () => {
+      const trs = new TwoRegionStreaming();
+      trs.setup(50);
+      trs.writeStreaming('first answer');
+      trs.beginNewStreamingMessage();
+      assert.equal(trs.isActive, true);
+      trs.writeStreaming('second answer');
+      trs.teardown();
+    });
+  });
   });
 
   it('setup activates the stream', () => {

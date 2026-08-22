@@ -170,6 +170,8 @@ export class BabelRepl {
     this.setupEventListeners();
   }
 
+  private lastIdleHeaderResizeAt = 0;
+
   private setupEventListeners(): void {
     process.stdout.on('resize', () => {
       const rows = process.stdout.rows || 24;
@@ -179,6 +181,11 @@ export class BabelRepl {
       // isRunning alone is wrong here: during bootstrap/picker it is always false,
       // so Windows Terminal init resize events would inject the BABEL banner mid-picker.
       if (!this.isRunning && !SessionPicker.isActive()) {
+        const now = Date.now();
+        if (now - this.lastIdleHeaderResizeAt < 400) {
+          return;
+        }
+        this.lastIdleHeaderResizeAt = now;
         const adapter = this.rl as unknown as {
           getInputText?: () => string;
           setInputText?: (text: string) => void;
