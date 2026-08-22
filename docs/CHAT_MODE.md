@@ -17,6 +17,25 @@ Chat mode is the default runtime mode — `babel "<task>"`. It is designed as a 
 
 When you type `babel "fix this bug"`, chat mode is what handles it: a multi-turn conversational loop with live tool access, context compaction, and JIT permission approval. It is the path of least resistance for daily coding.
 
+## Interactive commands
+
+Inside the TUI, `/help` is the canonical command list. Daily commands:
+
+```text
+/model         list or switch models
+/mode          chat / plan / deep
+/diff          inspect the latest changes
+/resume        continue a persisted conversation
+/permissions   show or set the approval profile
+/help          command guide
+```
+
+Also useful: `/dashboard`, `/theme`, `/palette`, `/cancel`, `/cost`,
+`/checkpoint`, `/restore`.
+
+Recovery split (intentional): CLI `babel undo` restores the last checkpoint.
+The TUI has no `/undo`; use `/checkpoint` and `/restore` in-session.
+
 ## How It Differs From Plan / Deep
 
 | Aspect | Chat | Plan | Deep | chat-headless |

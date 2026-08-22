@@ -2,20 +2,38 @@
 
 This directory contains the active public documentation for Babel.
 
-- [Vision](./VISION.md) describes current principles and public scope.
-- [CLI quick start](./CLI_QUICKSTART.md) covers the first local validation path.
-- [Chat mode](./CHAT_MODE.md) documents the default daily coding-agent loop.
-- [**Harness architecture v1**](./architecture/HARNESS_ARCHITECTURE_V1.md) is the **normative** runtime harness specification (`harness-v1`).
-- [Harness hardening roadmap v1](./architecture/HARNESS_HARDENING_ROADMAP_V1.md) is the single implementation sequence and acceptance-gate backlog under that specification.
-- [Harness overview](./architecture/HARNESS_OVERVIEW.md) is an explanatory map (not normative).
-- [Portable agent workflow plan](./guides/PORTABLE_AGENT_WORKFLOW_PLAN.md) defines the proposed cross-harness contract; it is subordinate to `harness-v1` and does not implement a second executor.
-- [TUI visual testing](./guides/BABEL_TUI_VISUAL_TESTING.md) defines the external Luna/computer-use contract for real Windows Terminal runs.
-- [Architecture](./architecture/ARCHITECTURE.md) describes Prompt OS layers, catalog, kernel, and the V9 pipeline.
-- [Architecture index](./architecture/README.md) lists all architecture guides.
-- [Babel Remote spike](./architecture/babel-remote/README.md) records the loopback ADR-010 / ChatEngine vertical slice (not a public remote-desktop product).
-- [Canonical source decision](./adr/ADR-0001-canonical-public-source.md) records repository authority.
+Babel is a local coding-agent harness. Chat is the default daily lane; Plan and
+Deep add stronger gates. The Prompt OS is the inspectable instruction
+architecture underneath.
 
-Root onboarding companions (outside this folder): [README.md](../README.md), [START_HERE.md](../START_HERE.md), [AGENTS.md](../AGENTS.md), [BABEL_BIBLE.md](../BABEL_BIBLE.md).
+## New to Babel
+
+- [Start Here](../START_HERE.md) — talk to Babel first; inspect the harness second
+- [CLI quick start](./CLI_QUICKSTART.md) — clone, credentials, doctor, Chat / Plan / Deep
+- [Using chat mode](./CHAT_MODE.md) — default daily runtime, slash commands, isolation
+- [Vision](./VISION.md) — product principles and public scope
+
+## Using Babel
+
+- [CLI command contract](./CLI_COMMAND_CONTRACT.md) — canonical verbs (`babel`, `plan`, `deep`, `undo`)
+- [User-shaped CLI guide](./BABEL_USER_SHAPED_CLI_GUIDE.md) — work-lane-first CLI philosophy
+- [TUI visual testing](./guides/BABEL_TUI_VISUAL_TESTING.md) — external Luna/computer-use contract
+
+## Integrating / contributing
+
+- [Integration guide](../INTEGRATION.md) — model-facing invocation contract
+- [Architecture](./architecture/ARCHITECTURE.md) — Prompt OS layers, catalog, V9 pipeline
+- [**Harness architecture v1**](./architecture/HARNESS_ARCHITECTURE_V1.md) — **normative** runtime harness specification (`harness-v1`)
+- [Harness hardening roadmap v1](./architecture/HARNESS_HARDENING_ROADMAP_V1.md) — H0–H7 implementation sequence
+- [Harness overview](./architecture/HARNESS_OVERVIEW.md) — explanatory map (not normative)
+- [Portable agent workflow plan](./guides/PORTABLE_AGENT_WORKFLOW_PLAN.md) — proposed cross-harness contract; subordinate to `harness-v1`
+- [Architecture index](./architecture/README.md) — all architecture guides
+- [Babel Remote spike](./architecture/babel-remote/README.md) — loopback ADR-010 / ChatEngine slice (not a public remote-desktop product)
+- [Canonical source decision](./adr/ADR-0001-canonical-public-source.md) — repository authority
+
+Root companions: [README.md](../README.md), [START_HERE.md](../START_HERE.md),
+[AGENTS.md](../AGENTS.md), [INTEGRATION.md](../INTEGRATION.md),
+[CONTRIBUTING.md](../CONTRIBUTING.md).
 
 Active guidance must describe the canonical repository and pass the public content,
-link, independence, and supplemental scrub checks before release.
+link, independence, identity, and supplemental scrub checks before release.

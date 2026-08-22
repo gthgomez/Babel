@@ -7,14 +7,14 @@ OS runtime. `src/` is source; `dist/` is generated output; `bin/babel.js` launch
 `dist/index.js`.
 
 This file is the agent-neutral package-local context. The repository-root
-`PROJECT_CONTEXT.md`, `BABEL_BIBLE.md`, and `prompt_catalog.yaml` remain
+`PROJECT_CONTEXT.md`, `INTEGRATION.md`, and `prompt_catalog.yaml` remain
 authoritative for Babel-wide control-plane rules.
 
 ## Startup Sequence
 
 From `babel-cli/`:
 
-1. Read `..\BABEL_BIBLE.md`.
+1. Read `..\INTEGRATION.md`.
 2. Read `..\PROJECT_CONTEXT.md`.
 3. Read `..\README.md`.
 4. Read `..\prompt_catalog.yaml`.

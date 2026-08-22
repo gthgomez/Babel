@@ -1,7 +1,7 @@
 <!--
 Babel — Prompt Operating System
 Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the MIT License
+Licensed under the Apache License, Version 2.0
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
@@ -13,7 +13,7 @@ Use this when asking GPT/Claude/Gemini on the web about Babel.
 
 ## Minimum Upload Pack
 
-1. `BABEL_BIBLE.md`
+1. `INTEGRATION.md`
 2. `PROJECT_CONTEXT.md`
 3. `prompt_catalog.yaml`
 4. The selected prompt files relevant to the task

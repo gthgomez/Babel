@@ -1,7 +1,7 @@
 <!--
 Babel — Prompt Operating System
 Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the MIT License
+Licensed under the Apache License, Version 2.0
 -->
 
 ```yaml
@@ -16,7 +16,7 @@ change_policy: ADR and conformance-test updates required
 
 > **Authority**: This document is the **single normative specification** for Babel’s runtime harness architecture (`architecture_version: harness-v1`).
 > **SUPERSEDES** conflicting or incomplete harness descriptions in `HARNESS_OVERVIEW.md`, mode guides, and package context for *runtime harness norms*.
-> **Does NOT replace** Prompt OS / product architecture in [ARCHITECTURE.md](./ARCHITECTURE.md), catalog authority in `prompt_catalog.yaml`, or product entry in [BABEL_BIBLE.md](../../BABEL_BIBLE.md).
+> **Does NOT replace** Prompt OS / product architecture in [ARCHITECTURE.md](./ARCHITECTURE.md), catalog authority in `prompt_catalog.yaml`, or product entry in [INTEGRATION.md](../../INTEGRATION.md).
 
 | Companion | Role |
 |-----------|------|

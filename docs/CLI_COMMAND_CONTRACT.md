@@ -1,12 +1,17 @@
 <!--
 status: ACTIVE
-last_verified: 2026-07-03
+last_verified: 2026-08-21
 -->
 # Babel CLI Command Contract
 
-Date: 2026-06-05 (amended 2026-06-07)
+Date: 2026-06-05 (amended 2026-08-21)
 
-This document is the canonical user-facing command contract for the simplified Babel CLI.
+This document is the canonical user-facing command contract for Babel CLI.
+
+**Lite is not the current product.** `bl` / `babel-lite` are removed shims
+that exit 1. Daily verbs are `babel "<task>"`, `babel plan`, `babel deep`,
+and `babel undo`. Historical Lite artifact paths (`runs/babel-lite/`) remain
+in this contract only as compatibility/history.
 
 Target product identity:
 
@@ -132,7 +137,7 @@ Not every command writes every file. The important contract is predictability:
 
 ## Fresh-Clone Proof Commands
 
-Run from a fresh checkout in PowerShell after `npm install`:
+Run from a fresh checkout in PowerShell after `npm --prefix .\babel-cli ci`:
 
 ```powershell
 npm --prefix .\babel-cli run build

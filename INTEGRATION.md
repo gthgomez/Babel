@@ -1,11 +1,11 @@
 <!--
-Babel — Prompt Operating System
+Babel — Coding Agent
 Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the MIT License
+Licensed under the Apache License, Version 2.0
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 -->
 
-# Babel Bible
+# Babel Integration Guide
 
 ## Purpose
 
@@ -15,7 +15,8 @@ public Babel repository.
 When a user says:
 
 - "Use Babel"
-- "Read the Babel Bible"
+- "Read the integration guide"
+- "Read INTEGRATION.md"
 - "Use the Babel system before doing the task"
 
 the model should read this file first, then follow the public Babel workflow before planning or implementing anything.
@@ -30,25 +31,27 @@ Treat this repo root as:
 
 Minimum first-read chain:
 
-1. `BABEL_BIBLE.md`
+1. `INTEGRATION.md`
 2. `PROJECT_CONTEXT.md`
 3. `README.md`
 4. `prompt_catalog.yaml`
 
 ## What This Repository Truthfully Is
 
-`gthgomez/Babel` is Babel's canonical public source and a runnable public-safe
-release surface.
+`gthgomez/Babel` is Babel's canonical public source: a local coding-agent harness
+whose Prompt OS is the inspectable instruction/control architecture underneath.
 
-Its strongest public surfaces are:
+Chat is the normal daily lane. Plan and Deep add progressively stronger planning
+and governance.
 
-- catalog validation
-- deterministic stack/manifest preview
-- read-only MCP inspection of the typed `v9` resolver lane
-- public examples and regression tests
-- public release and secret-scan gates
+Its primary public surface is the interactive coding-agent runtime:
 
-The larger pipeline harness is included and typechecked, but it is an advanced surface and may require local model tooling or credentials. Do not treat it as the canonical first success path.
+- a conversational **chat** loop in the terminal (the default daily path)
+- reviewable **plan** mode and governed **deep** mode for stronger gates
+- multi-turn sessions with resume, checkpoints, cost tracking, and recovery
+- permissioned file editing and verification inside real repositories
+
+Supporting inspection surfaces include catalog validation, deterministic stack/manifest previews, read-only MCP inspection of the typed `v9` resolver lane, public examples and regression tests, and public release and secret-scan gates. These inspection tools work without model credentials; model-backed sessions require local provider setup.
 
 For **runtime harness architecture** (Chat / Plan / Deep controllers, completion authority, isolation, verifiers), the normative document is `docs/architecture/HARNESS_ARCHITECTURE_V1.md`. Its one implementation sequence is `docs/architecture/HARNESS_HARDENING_ROADMAP_V1.md`. The daily interactive path is ChatEngine; Prompt OS layers and catalog remain documented in `docs/architecture/ARCHITECTURE.md` and `prompt_catalog.yaml`.
 
@@ -74,25 +77,30 @@ For a deterministic no-credentials proof path, prefer:
 
 ## Local Run Discipline
 
-For public onboarding, start with the preview and validation flow above.
+For public onboarding, start with the runtime path:
 
-If you want to use the advanced runtime harness:
+1. install `babel-cli` dependencies
+2. build `babel-cli` if you want the compiled `node dist` command path
+3. start the interactive TUI: `node .\babel-cli\dist\index.js interactive` (or use `tools/run-babel-local-cli.ps1`)
+4. configure a provider when you want model-backed sessions
 
-- install `babel-cli` dependencies first
-- build `babel-cli` if you want the compiled `node dist` command path
-- use `tools/run-babel-local-cli.ps1` or invoke `babel-cli` directly
+The no-credentials proof path remains available at any time:
+
+- `pwsh -File tools\validate-public-release.ps1`
+- `pwsh -File tools\resolve-local-stack.ps1 ...`
+- `babel mcp`
 
 The canonical repository does **not** assume private lifecycle scripts, private
 run-artifact trees, private activation contracts, or files from a parent
 workspace. Consumer-specific rules and overlays are optional external inputs.
 
-The public vision is to make prompt-stack selection inspectable, testable, and safe to integrate before model-backed execution begins.
+Babel's public vision is a trustworthy local coding agent whose operating instructions stay inspectable, testable, and safe to integrate before and during model-backed execution.
 
 ## What Babel Is
 
-Babel is a layered prompt operating system.
+Babel is an open-source, local coding-agent harness. Its daily interface is an interactive terminal session — chat by default, with plan and deep modes for stronger gates — that gives a model the context, tools, permissions, and verification needed to work inside a real repository.
 
-It separates:
+The harness is powered by an inspectable Prompt OS underneath. It separates:
 
 - behavioral rules
 - domain expertise

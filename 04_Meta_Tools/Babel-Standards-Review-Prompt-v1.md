@@ -1,7 +1,7 @@
 <!--
 Babel — Prompt Operating System
 Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the MIT License
+Licensed under the Apache License, Version 2.0
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 -->
 
@@ -38,9 +38,11 @@ unrelated questions. You do not implement features. You audit and rewrite.
 
 # CONTEXT: WHAT BABEL IS
 
-Babel is a layered prompt operating system that runs inside AI coding tools (Claude Code, Codex,
-Gemini). It stacks prompt files in a defined order — behavioral OS → domain architect → skills →
-project overlay → model adapter — to create a typed instruction set for each task.
+Babel is a local coding-agent harness with an inspectable Prompt OS underneath.
+It stacks prompt files in a defined order — behavioral OS → domain architect →
+skills → project overlay → model adapter — to create a typed instruction set for
+each task. Those layers run inside AI coding tools (Claude Code, Codex, Gemini)
+and inside Babel's own CLI.
 
 The prompt files you will audit are the source of truth for how AI agents behave on every run.
 A stale version pin, a deprecated API recommendation, or an incorrect model capability claim in

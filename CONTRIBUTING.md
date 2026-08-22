@@ -1,33 +1,59 @@
 <!--
-Babel — Prompt Operating System
+Babel — Coding Agent
 Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the MIT License
+Licensed under the Apache License, Version 2.0
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
-
-You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
 -->
 
 # Contributing
 
 ## Scope
 
-Babel is a prompt operating system, not a generic notes folder.
+Babel is a **local coding-agent harness** with an inspectable Prompt OS and
+governed execution. Treat runtime, prompt, verification, documentation, and UX
+changes as product changes — not as a notes folder.
 
-Treat changes to Babel like code changes:
-- make the smallest correct change
-- preserve layer boundaries
-- update the catalog when required
-- validate before opening a PR
+High-value surfaces:
+
+- TUI / Chat runtime
+- Plan and Deep
+- providers and tool execution
+- authority / policy
+- Prompt OS / catalog / routing
+- verification, recovery, and evidence
+- benchmarks / evals
+- docs and integrations
 
 This repository is Babel's canonical public source. Contributions merged here
 change the authoritative product; no external repository regenerates this source.
 Consumer-specific overlays and operational policy belong in the consumer
 repository or another documented external configuration location.
 
+## License
+
+Contributions are submitted under the **Apache License 2.0**. See [LICENSE](./LICENSE).
+
+Historical tagged releases that shipped under MIT remain MIT for those snapshots.
+This tree is Apache-2.0 going forward.
+
+## AI-assisted contributions
+
+AI-assisted contributions are allowed.
+
+An AI tool or model listed in commit metadata or a `Co-authored-by` trailer is
+**not** treated by Babel documentation as a human copyright contributor merely
+because of that attribution.
+
+The person submitting a change is responsible for reviewing it and having the
+rights necessary to submit it under Apache-2.0.
+
+This is repository policy, not legal advice. Do not rewrite historical
+`Co-authored-by` trailers.
+
 ## Before You Change Babel
 
 Read:
-1. [BABEL_BIBLE.md](./BABEL_BIBLE.md)
+1. [INTEGRATION.md](./INTEGRATION.md)
 2. [PROJECT_CONTEXT.md](./PROJECT_CONTEXT.md)
 3. [README.md](./README.md)
 4. [prompt_catalog.yaml](./prompt_catalog.yaml)
@@ -56,13 +82,15 @@ From the Babel root:
 powershell -ExecutionPolicy Bypass -File .\tools\validate-catalog.ps1
 pwsh -File .\tools\check-public-content-policy.ps1
 pwsh -File .\tools\check-canonical-independence.ps1
+pwsh -File .\tools\check-public-identity.ps1
 ```
 
 The content-policy check rejects disclosure-prone wording, machine-specific
 paths, unsupported absolute claims, duplicate active documents, and broken
 relative Markdown links. The canonical-independence check verifies that a clean
 clone does not require a parent workspace, sibling repository, or retired
-publication artifacts.
+publication artifacts. The identity check keeps front-door docs from reasserting
+obsolete product language.
 
 Maintainer pre-merge checklist:
 
@@ -140,17 +168,18 @@ The **same classes of leak will fail CI**. The hook just tells you faster.
 ## Pull Request Expectations
 
 A good Babel PR should explain:
-- what layer changed
+- what surface changed (TUI, chat, plan/deep, provider, catalog, docs, …)
 - why the change belongs in that layer
 - whether the change is reusable or project-specific
 - whether any router/catalog behavior changed
 - whether any `babel-cli/src/` changes require a corresponding prompt file update (co-evolution check)
-- whether content-policy and canonical-independence checks pass
+- whether content-policy, identity, and canonical-independence checks pass
 
 ## Suggested Commit Style
 
 Examples:
-- `router: add optional task overlay selection`
+- `fix(chat): keep tool identity stable across parallel completion`
+- `feat(tui): improve /diff review restore`
+- `docs: teach Chat before stack preview`
 - `catalog: register balanced codex adapter`
-- `overlay: add reusable frontend professionalism layer`
-- `meta: add role creation gate`
+- `test(cli): cover undo checkpoint restore`

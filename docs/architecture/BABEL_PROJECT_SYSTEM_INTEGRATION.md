@@ -1,7 +1,7 @@
 <!--
 Babel — Prompt Operating System
 Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the MIT License
+Licensed under the Apache License, Version 2.0
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
@@ -75,7 +75,7 @@ Trying to put all cross-project guidance into each repo would create duplication
 
 When the target repo has a local collaboration system, use this order:
 
-1. Read Babel's `BABEL_BIBLE.md`.
+1. Read Babel's `INTEGRATION.md`.
 2. Use Babel to select the stack.
 3. Read the target repo's `PROJECT_CONTEXT.md`.
 4. Read the target repo's `LLM_COLLABORATION_SYSTEM/README_FOR_HUMANS_AND_LLMS.md`.
@@ -180,5 +180,5 @@ then the safe default is:
 
 ## Related Files
 
-- [BABEL_BIBLE.md](../../BABEL_BIBLE.md)
+- [INTEGRATION.md](../../INTEGRATION.md)
 - [BABEL_LOCAL_MODE.md](./BABEL_LOCAL_MODE.md)

@@ -1,7 +1,7 @@
 <!--
-Babel — Prompt Operating System
+Babel — Coding Agent
 Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the MIT License
+Licensed under the Apache License, Version 2.0
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 -->
 
@@ -14,8 +14,8 @@ This repository is the canonical public source of Babel.
 It contains the authoritative public product and can be used and verified on its
 own:
 
-- the layered prompt library
-- the typed `v9` router contract
+- a runnable local coding-agent CLI with an interactive TUI (chat, plan, and deep modes)
+- the layered prompt library and typed `v9` router contract behind those modes
 - the catalog-driven resolver/compiler
 - a read-only MCP control-plane surface
 - public overlays, examples, release tooling, and security gates
@@ -26,12 +26,12 @@ This repo should be treated as a **runnable public-safe release surface**.
 
 Canonical public success means a new user can:
 
-1. install `babel-cli`
-2. validate the catalog and public scrub rules
-3. preview a resolved stack/manifest from the public catalog
-4. compare the result to deterministic proof artifacts in the repo
+1. build `babel-cli` and start the interactive TUI (`node .\babel-cli\dist\index.js interactive`)
+2. send a chat task and watch Babel inspect the repository, edit files with permission, and verify the result
+3. move to `plan` or `deep` when the task needs stronger gates
+4. validate the catalog and preview a resolved stack/manifest without an API key
 
-The full multi-agent pipeline harness is present, typechecked, and available for experimentation. It remains an advanced surface because real task execution depends on local model setup, credentials, and target-repo rules.
+Model-backed sessions depend on local provider setup and credentials; the catalog, resolver, and MCP inspection surfaces are fully usable without them.
 
 ## Public Vision
 
@@ -45,11 +45,15 @@ The public repo exists so contributors can:
 - connect external clients through read-only MCP
 - improve task execution behind explicit verification gates
 
-The community direction is preview first, evidence next, execution last.
+The public product direction is a usable coding-agent loop first, with
+inspectable stack preview, evidence, and governed execution as supporting
+harness surfaces. Technical flows may still inspect a resolved stack before
+governed execution; that is a control-plane invariant, not the product
+category.
 
 ## Required Startup Order
 
-1. Read `BABEL_BIBLE.md`
+1. Read `INTEGRATION.md`
 2. Read `PROJECT_CONTEXT.md`
 3. Read `README.md`
 4. Read `prompt_catalog.yaml`
@@ -68,7 +72,7 @@ or building a clean Babel clone.
 - **04_Meta_Tools:** Catalog/governance and MCP adapter docs.
 - **05_Project_Overlays:** Public example overlays only.
 - **06_Task_Overlays:** Public reusable task overlays and public example deltas.
-- **babel-cli:** Public runtime harness for resolver preview, read-only MCP, and advanced pipeline experimentation.
+- **babel-cli:** Public runtime harness for the interactive coding agent (chat, plan, deep), resolver preview, read-only MCP, and governed pipeline execution.
 - **AGENTS.md / `.agents/`:** Public agent identity, goal-clearance and GitHub workflow rules, and repo-local skills for stack assembly, code review, and control-plane validation.
 
 ## Key Contracts
@@ -86,6 +90,8 @@ or building a clean Babel clone.
 
 ## First-Success Surfaces
 
+- `babel-cli` interactive TUI (`node .\babel-cli\dist\index.js interactive`)
+- `babel doctor` environment health check
 - `tools/validate-public-release.ps1`
 - `tools/resolve-local-stack.ps1`
 - `babel mcp`

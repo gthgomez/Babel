@@ -1,7 +1,7 @@
 <!--
 Babel — Prompt Operating System
 Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the MIT License
+Licensed under the Apache License, Version 2.0
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 -->
 
@@ -13,7 +13,7 @@ last_verified: 2026-08-03
 # Babel Architecture
 
 > **Role**: Deep technical reference — how Babel works internally. Layer model, catalog system, router, pipeline, and layer precedence.
-> For what Babel is and how to invoke it, see [BABEL_BIBLE.md](../../BABEL_BIBLE.md).
+> For what Babel is and how to invoke it, see [INTEGRATION.md](../../INTEGRATION.md).
 > For AI-session navigation and invariants, see [CLAUDE.md](../../CLAUDE.md).
 > For the **runtime harness**, the normative specification is [HARNESS_ARCHITECTURE_V1.md](./HARNESS_ARCHITECTURE_V1.md).
 > [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) is an explanatory map only.

@@ -24,7 +24,7 @@ function Initialize-Fixture([string]$Name) {
   Copy-Item -LiteralPath $canonicalScript -Destination (Join-Path $root 'tools/check-canonical-independence.ps1')
   Copy-Item -LiteralPath $contentPolicy -Destination (Join-Path $root 'tools/security/public-content-policy.json')
   Copy-Item -LiteralPath $commonModule -Destination (Join-Path $root 'tools/security/tracked-scan-common.ps1')
-  @('BABEL_BIBLE.md', 'PROJECT_CONTEXT.md', 'README.md', 'prompt_catalog.yaml') | ForEach-Object {
+  @('INTEGRATION.md', 'PROJECT_CONTEXT.md', 'README.md', 'prompt_catalog.yaml') | ForEach-Object {
     Set-Content -LiteralPath (Join-Path $root $_) -Value ("# {0}`n" -f $_)
   }
   & git -C $root init --quiet
@@ -142,7 +142,7 @@ const inferred = join(workspaceRoot, family, projectFolderName)
   [IO.File]::WriteAllBytes((Join-Path $negative 'binary.dat'), [byte[]](0x41,0x00,0x42))
   [IO.File]::WriteAllBytes((Join-Path $negative 'invalid.txt'), [byte[]](0xC3,0x28))
   Set-Content -LiteralPath (Join-Path $negative 'large.txt') -Value ('x' * 1048577)
-  Remove-Item -LiteralPath (Join-Path $negative 'BABEL_BIBLE.md')
+  Remove-Item -LiteralPath (Join-Path $negative 'INTEGRATION.md')
   & git -C $negative add .
   & git -C $negative add -f ignored.jsonl
   $contentFail = Invoke-Gate (Join-Path $negative 'tools/check-public-content-policy.ps1') $negative
