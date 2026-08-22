@@ -71,19 +71,25 @@ Status: **in flight (foundation landed, executor implementation next)**
 
 ### W2 — Arms × replicates live loop (item 2)
 
-Status: **in flight**
+Status: **landed (wave 1)**
 
 - Exists: manifest builder already enumerates tasks × arms × replicates with
   per-replicate `pair_id` (`buildCampaignManifest`,
   `causalCampaignContract.ts:272`); `raw_opencode` added to
   `CAUSAL_STAGE1_ARMS` in foundation.
-- Gap: the live phase hardcodes `findAttemptForTaskArm(…, 'babel_enforce', 0)`
-  (`swebenchProCampaign.ts:1799,1829,1904`) — one arm, one replicate ever runs.
-- Build: loop live phase over `manifest.arms × replicate_id`; dispatch through
-  `ArmExecutor`; attempt lifecycle transitions per (task, arm, replicate);
-  cells carry `arm`/`replicate_id`.
+- Landed: live phase iterates `manifest.arms × replicate_id`; dispatch through
+  `ArmExecutor` registry; per-attempt lifecycle transitions; cells carry
+  `arm`/`replicate_id` plus resolved `HarnessIdentity`/`ExecutionProfile`;
+  attempt-scoped workspaces (`<bare>.<arm>.r<N>`) prevent cross-attempt
+  contamination (legacy `babel_enforce×r0` keeps the historical bare layout).
+- **Placebo refusal:** `babel_shadow` and `babel_prompt_control` are
+  hard-refused at selection time until their runtime wiring lands
+  (policy_mode/prompt_delta currently reach neither argv nor env — recording
+  those identities on byte-identical invocations would be silent invalidation).
+  Wiring them is the top W2 follow-up.
 - Acceptance: mock campaign with 2 arms × 2 replicates produces 4 expected
-  attempts per task, reconciled terminal, no orphans.
+  attempts per task, reconciled terminal, no orphans. *(covered by
+  swebenchProCampaign.test.ts two-arm×two-replicate fixtures)*
 
 ### W3 — Pair outcome matrix / delta estimator (item 3)
 
