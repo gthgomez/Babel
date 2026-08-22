@@ -54,6 +54,7 @@ describe('PR-76 REAL_PROCESS: Spawned Real Babel CLI Interactive Process Certifi
       };
       child.stdout.on('data', onData);
       child.stderr.on('data', onData);
+      onData();
     });
 
     try {

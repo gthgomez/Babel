@@ -313,6 +313,77 @@ describe('Hardware mode', () => {
     });
   });
 
+  it('beginNewStreamingMessage in hardware mode graduates generation A cleanly, preserves DECSTBM, and prevents overwrite by generation B', () => {
+    withEnv({ BABEL_SCROLL_REGIONS: '1' }, () => {
+      const trs = new TwoRegionStreaming();
+      const mock = mockStdoutWrite();
+      try {
+        trs.setup(50, 12);
+        assert.ok(trs.isHardwareMode, 'must be in hardware mode');
+        assert.equal(trs.isActive, true);
+
+        // 1. Generation A writes content
+        trs.writeStreaming('Message Generation Alpha line 1\nMessage Generation Alpha line 2');
+        mock.writes.length = 0;
+
+        // Transition: beginNewStreamingMessage()
+        trs.beginNewStreamingMessage();
+        const transitionOutput = mock.writes.join('');
+
+        // Assertion 1: Generation A was graduated to scrollback / terminal buffer upon transition
+        assert.ok(
+          transitionOutput.includes('Message Generation Alpha line 1') &&
+            transitionOutput.includes('Message Generation Alpha line 2'),
+          'generation A is graduated to terminal scrollback after beginNewStreamingMessage()',
+        );
+
+        // Assertion 3: DECSTBM remains active between generations
+        assert.equal(trs.isActive, true, 'streaming must stay active between generations');
+        assert.equal(trs.isHardwareMode, true, 'hardware mode must remain active between generations');
+        assert.deepEqual([...trs.getLogicalLines()], [], 'logical lines buffer must reset for generation B');
+
+        // 2. Generation B writes content
+        mock.writes.length = 0;
+        trs.writeStreaming('Message Generation Beta line 1\nMessage Generation Beta line 2');
+        const genBOutput = mock.writes.join('');
+
+        // Assertion 2: Generation B renders cleanly and cannot overwrite/concatenate onto A
+        assert.ok(
+          genBOutput.includes('Message Generation Beta line 1'),
+          'generation B renders in the fresh streaming area',
+        );
+        assert.equal(
+          genBOutput.includes('Alpha'),
+          false,
+          'generation B output must not concatenate or overwrite generation A',
+        );
+
+        // 3. Final commitStreaming()
+        mock.writes.length = 0;
+        trs.commitStreaming();
+        const commitOutput = mock.writes.join('');
+
+        // Assertion 4: final commitStreaming() graduates B and does not duplicate either message
+        assert.ok(
+          commitOutput.includes('Message Generation Beta line 1') &&
+            commitOutput.includes('Message Generation Beta line 2'),
+          'generation B is graduated at commitStreaming()',
+        );
+        assert.equal(
+          commitOutput.includes('Alpha'),
+          false,
+          'generation A must not be duplicated at final commitStreaming()',
+        );
+        const betaCopies = commitOutput.split('Message Generation Beta line 1').length - 1;
+        assert.equal(betaCopies, 1, 'generation B must appear exactly once in commitStreaming() output');
+        assert.equal(trs.isActive, false, 'streaming must be deactivated after commitStreaming()');
+      } finally {
+        mock.restore();
+        trs.teardown();
+      }
+    });
+  });
+
   it('getLogicalLines returns the snapshot after replaceStreamingContent', () => {
     withEnv({ BABEL_SCROLL_REGIONS: '1' }, () => {
       const trs = new TwoRegionStreaming();
