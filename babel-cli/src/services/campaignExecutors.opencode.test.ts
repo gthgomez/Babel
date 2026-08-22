@@ -178,6 +178,29 @@ describe('createOpenCodeCliArmExecutor', () => {
     assert.equal(r.launchError, null);
   });
 
+  test('timeout invokes taskkill tree cleanup on Windows with exact arguments (102-P)', async (t) => {
+    const { spawnImpl, calls } = makeFakeSpawn();
+    const taskkillCalls: Array<{ command: string; args: readonly string[] }> = [];
+    const taskkillImpl = (cmd: string, args: readonly string[]) => {
+      taskkillCalls.push({ command: cmd, args });
+    };
+
+    const exec = createOpenCodeCliArmExecutor({ spawnImpl, taskkillImpl });
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const pending = exec.execute(baseRequest({ timeoutMs: 1_000 }));
+    const child = calls[0]!.child;
+    child.pid = 98765;
+    t.mock.timers.tick(1_000);
+    child.emit('close', null, 'SIGTERM');
+    await pending;
+
+    if (process.platform === 'win32') {
+      assert.equal(taskkillCalls.length, 1);
+      assert.equal(taskkillCalls[0]?.command, 'taskkill');
+      assert.deepEqual(taskkillCalls[0]?.args, ['/pid', '98765', '/T', '/F']);
+    }
+  });
+
   test('error event yields launchError with null exit code and does not throw', async () => {
     const { spawnImpl, calls } = makeFakeSpawn();
     const exec = createOpenCodeCliArmExecutor({ spawnImpl });

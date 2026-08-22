@@ -556,6 +556,7 @@ export function scoreDominates(a: ScoreVector, b: ScoreVector): boolean {
     const av = a.metrics[name];
     const bv = b.metrics[name];
     if (av === undefined || bv === undefined) return false;
+    if (!Number.isFinite(av) || !Number.isFinite(bv)) return false;
     const higherA = a.higher_is_better[name];
     const higherB = b.higher_is_better[name];
     if (typeof higherA !== 'boolean' || typeof higherB !== 'boolean' || higherA !== higherB) {

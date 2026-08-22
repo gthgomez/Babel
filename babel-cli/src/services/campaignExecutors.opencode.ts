@@ -55,6 +55,7 @@ function resultWith(
 export function createOpenCodeCliArmExecutor(options?: {
   binaryPath?: string;
   spawnImpl?: typeof import('node:child_process').spawn;
+  taskkillImpl?: (command: string, args: readonly string[], options?: unknown) => unknown;
 }): ArmExecutor {
   const id = OPENCODE_CLI_RAW_EXECUTOR_ID;
   const spawnImpl = options?.spawnImpl ?? nodeSpawn;
@@ -164,9 +165,13 @@ export function createOpenCodeCliArmExecutor(options?: {
             } else {
               child.kill();
             }
-            if (process.platform === 'win32' && child.pid && !options?.spawnImpl) {
+            if (process.platform === 'win32' && child.pid) {
               try {
-                nodeSpawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+                if (options?.taskkillImpl) {
+                  options.taskkillImpl('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+                } else if (!options?.spawnImpl) {
+                  nodeSpawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+                }
               } catch {
                 /* ignore */
               }

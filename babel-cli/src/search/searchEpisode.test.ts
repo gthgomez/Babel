@@ -371,6 +371,20 @@ describe("scoreDominates", () => {
     };
     assert.strictEqual(scoreDominates(nanVector, throughputVector(1)), false);
     assert.strictEqual(scoreDominates(throughputVector(1), nanVector), false);
+
+    const posInfVector = {
+      metrics: { throughput_tops: Number.POSITIVE_INFINITY },
+      higher_is_better: { throughput_tops: true },
+    };
+    assert.strictEqual(scoreDominates(posInfVector, throughputVector(10)), false, 'positive infinity must be incomparable');
+    assert.strictEqual(scoreDominates(throughputVector(10), posInfVector), false, 'positive infinity on right must be incomparable');
+
+    const negInfVector = {
+      metrics: { throughput_tops: Number.NEGATIVE_INFINITY },
+      higher_is_better: { throughput_tops: true },
+    };
+    assert.strictEqual(scoreDominates(negInfVector, throughputVector(10)), false, 'negative infinity must be incomparable');
+    assert.strictEqual(scoreDominates(throughputVector(10), negInfVector), false, 'negative infinity on right must be incomparable');
   });
 
   it("ties and empty vectors dominate nothing", () => {
