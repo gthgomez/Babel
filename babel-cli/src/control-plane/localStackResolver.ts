@@ -640,7 +640,7 @@ function hasFileWithExtension(dir: string, extensions: string[]): boolean {
       const fullPath = join(dir, file);
       const stat = statSync(fullPath);
       if (stat.isDirectory()) {
-        if (file === 'node_modules' || file === '.git' || file === 'build' || file === '.gradle' || file === 'bin') {
+        if (file === 'node_modules' || file === '.git' || file === 'build' || file === '.gradle' || file === 'bin' || file === 'runs' || file === 'dist' || file === '.pytest_cache') {
           continue;
         }
         if (hasFileWithExtension(fullPath, extensions)) {

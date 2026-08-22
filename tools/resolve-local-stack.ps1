@@ -693,6 +693,8 @@ function Get-DomainDefaultSkillEntries {
     return @($defaultEntries.ToArray())
 }
 
+$script:fileGateScanCache = @{}
+
 function Test-FileGatePasses {
     # Mirrors hasFileWithExtension in src/control-plane/localStackResolver.ts:
     # a skill whose file_extension_gate lists extensions is skipped when no
@@ -710,30 +712,41 @@ function Test-FileGatePasses {
         return $true
     }
 
-    $excluded = @('node_modules', '.git', 'build', '.gradle', 'bin')
-    $stack = New-Object System.Collections.Generic.Stack[string]
-    $stack.Push($Root)
+    if (-not $script:fileGateScanCache.ContainsKey($Root)) {
+        $foundExtensions = New-Object System.Collections.Generic.HashSet[string]
+        $excluded = @('node_modules', '.git', 'build', '.gradle', 'bin', 'runs', 'dist', '.pytest_cache')
+        $stack = New-Object System.Collections.Generic.Stack[string]
+        $stack.Push($Root)
 
-    while ($stack.Count -gt 0) {
-        $dir = $stack.Pop()
-        try {
-            $children = Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop
-        } catch {
-            continue
-        }
-        foreach ($child in $children) {
-            if ($child.PSIsContainer) {
-                if ($excluded -contains $child.Name) {
-                    continue
-                }
-                $stack.Push($child.FullName)
+        while ($stack.Count -gt 0) {
+            $dir = $stack.Pop()
+            try {
+                $entries = [System.IO.Directory]::GetFileSystemEntries($dir)
+            } catch {
                 continue
             }
-            foreach ($gate in $Gates) {
-                if ($child.Name.ToLowerInvariant().EndsWith($gate.ToLowerInvariant())) {
-                    return $true
+            foreach ($entry in $entries) {
+                $name = [System.IO.Path]::GetFileName($entry)
+                if ([System.IO.Directory]::Exists($entry)) {
+                    if ($excluded -contains $name) {
+                        continue
+                    }
+                    $stack.Push($entry)
+                    continue
+                }
+                $ext = [System.IO.Path]::GetExtension($name).ToLowerInvariant()
+                if (-not [string]::IsNullOrEmpty($ext)) {
+                    $null = $foundExtensions.Add($ext)
                 }
             }
+        }
+        $script:fileGateScanCache[$Root] = $foundExtensions
+    }
+
+    $cachedExtensions = $script:fileGateScanCache[$Root]
+    foreach ($gate in $Gates) {
+        if ($cachedExtensions.Contains($gate.ToLowerInvariant())) {
+            return $true
         }
     }
 
