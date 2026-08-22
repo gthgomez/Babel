@@ -4,7 +4,9 @@ param(
     [ValidateSet("frontend", "backend", "compliance", "devops", "research", "mobile", "game")]
     [string]$TaskCategory,
 
-    [ValidateSet("global", "example_saas_backend", "example_llm_router", "example_web_audit", "example_mobile_suite", "example_game_suite", "example_autonomous_agent")]
+    # Free string, mirroring LocalProject = string in the TS resolver:
+    # unknown projects fall back to global behavior and catalog-driven
+    # overlay inference rather than failing validation.
     [string]$Project = "global",
 
     [string]$ProjectPath = "",
@@ -15,7 +17,10 @@ param(
     [ValidateSet("codex_extension", "claude_code", "gemini_cli", "chatgpt_web", "claude_web", "gemini_web", "vscode_chat", "other")]
     [string]$ClientSurface = "",
 
-    [ValidateSet("chat", "plan", "deep", "direct", "verified", "autonomous")]
+    # Canonical modes plus legacy aliases mirroring LEGACY_MODE_MAP in
+    # src/cli/constants.ts (verified->deep, manual->plan, direct->chat,
+    # autonomous->deep).
+    [ValidateSet("chat", "plan", "deep", "direct", "verified", "autonomous", "manual")]
     [string]$PipelineMode = "chat",
 
     [ValidateSet("auto", "balanced", "ultra")]
@@ -93,6 +98,7 @@ function Get-BabelCatalogEntries {
                 DefaultSkillIds = @()
                 LoadPosition = $null
                 TokenBudget = $null
+                FileExtensionGate = @()
                 Status = $null
             }
 
@@ -155,6 +161,20 @@ function Get-BabelCatalogEntries {
 
         if ($line -match '^\s+token_budget:\s+(.+)$') {
             $current.TokenBudget = [int]$matches[1].Trim()
+            continue
+        }
+
+        if ($line -match '^\s+file_extension_gate:\s+\[(.*)\]\s*$') {
+            $rawGates = $matches[1].Trim()
+            if ([string]::IsNullOrWhiteSpace($rawGates)) {
+                $current.FileExtensionGate = @()
+            } else {
+                $current.FileExtensionGate = @(
+                    $rawGates.Split(',') |
+                        ForEach-Object { $_.Trim().Trim('"') } |
+                        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                )
+            }
             continue
         }
 
@@ -673,6 +693,84 @@ function Get-DomainDefaultSkillEntries {
     return @($defaultEntries.ToArray())
 }
 
+function Test-FileGatePasses {
+    # Mirrors hasFileWithExtension in src/control-plane/localStackResolver.ts:
+    # a skill whose file_extension_gate lists extensions is skipped when no
+    # file with a matching extension exists under the current project root.
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$Gates,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Root
+    )
+
+    if ($Gates.Count -eq 0) {
+        return $true
+    }
+
+    $excluded = @('node_modules', '.git', 'build', '.gradle', 'bin')
+    $stack = New-Object System.Collections.Generic.Stack[string]
+    $stack.Push($Root)
+
+    while ($stack.Count -gt 0) {
+        $dir = $stack.Pop()
+        try {
+            $children = Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop
+        } catch {
+            continue
+        }
+        foreach ($child in $children) {
+            if ($child.PSIsContainer) {
+                if ($excluded -contains $child.Name) {
+                    continue
+                }
+                $stack.Push($child.FullName)
+                continue
+            }
+            foreach ($gate in $Gates) {
+                if ($child.Name.ToLowerInvariant().EndsWith($gate.ToLowerInvariant())) {
+                    return $true
+                }
+            }
+        }
+    }
+
+    return $false
+}
+
+function Get-GatedSkillEntries {
+    # Applies the file-extension gate to candidate skill entries, mirroring
+    # the Fix 3 gate in stackResolver.ts (gate-skipped skills are dropped
+    # before stack assembly).
+    param(
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject[]]$Entries,
+
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$SkillIds,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ProjectRoot
+    )
+
+    $gated = New-Object System.Collections.Generic.List[object]
+    foreach ($skillId in $SkillIds) {
+        if ([string]::IsNullOrWhiteSpace([string]$skillId)) {
+            continue
+        }
+        $entry = Get-EntryById -Entries $Entries -Id ([string]$skillId)
+        if (-not (Test-FileGatePasses -Gates @($entry.FileExtensionGate) -Root $ProjectRoot)) {
+            Write-Verbose "[gate-skip] Skipped skill `"$skillId`" because no files matching extensions [$(@($entry.FileExtensionGate) -join ', ')] found under project root `"$ProjectRoot`"."
+            continue
+        }
+        $gated.Add($entry)
+    }
+    return @($gated.ToArray())
+}
+
 function Read-JsonFile {
     param(
         [Parameter(Mandatory = $true)]
@@ -920,6 +1018,19 @@ $selectedCognitionSkillIds = @(
     }
 )
 
+# File-extension gating (mirrors stackResolver.ts Fix 3): candidate skills
+# whose gates have no matching files under the project root are dropped.
+$selectedCognitionSkillIds = @(
+    Get-GatedSkillEntries -Entries $entries -SkillIds $selectedCognitionSkillIds -ProjectRoot (Get-Location).Path |
+        ForEach-Object { $_.Id }
+)
+$domainDefaultSkillEntries = @(
+    Get-GatedSkillEntries `
+        -Entries $entries `
+        -SkillIds @((Get-DomainDefaultSkillEntries -Entries $entries -DomainId $domainIdMap[$TaskCategory]) | ForEach-Object { $_.Id }) `
+        -ProjectRoot (Get-Location).Path
+)
+
 $selectedEntries = New-Object System.Collections.Generic.List[object]
 $order = 1
 
@@ -934,14 +1045,7 @@ $baseEntries = @(
     @(
         Get-EntryById -Entries $entries -Id $domainIdMap[$TaskCategory]
     ) +
-    @(
-        foreach ($skillId in $selectedCognitionSkillIds) {
-            Get-EntryById -Entries $entries -Id $skillId
-        }
-    ) +
-    @(
-        Get-DomainDefaultSkillEntries -Entries $entries -DomainId $domainIdMap[$TaskCategory]
-    ) +
+    @($domainDefaultSkillEntries) +
     @(
         Get-EntryById -Entries $entries -Id $selectedAdapterId
     )
@@ -992,18 +1096,9 @@ foreach ($overlayId in $selectedTaskOverlayIds) {
 }
 
 switch ($PipelineMode) {
-    { $_ -in @("verified") } {
-        $entry = Get-EntryById -Entries $entries -Id "pipeline_qa_reviewer"
-        $selectedEntries.Add([PSCustomObject]@{
-            Id = $entry.Id
-            Layer = $entry.Layer
-            LoadPosition = $entry.LoadPosition
-            RelativePath = $entry.Path
-            FullPath = $entry.Path
-            OrderIndex = $order++
-        })
-    }
-    { $_ -in @("autonomous", "deep") } {
+    { $_ -in @("verified", "autonomous", "deep") } {
+        # Deep = governed execution. Legacy aliases 'verified' and 'autonomous'
+        # map to deep, mirroring LEGACY_MODE_MAP in src/cli/constants.ts.
         foreach ($id in @("pipeline_qa_reviewer", "pipeline_cli_executor")) {
             $entry = Get-EntryById -Entries $entries -Id $id
             $selectedEntries.Add([PSCustomObject]@{
@@ -1015,6 +1110,23 @@ switch ($PipelineMode) {
                 OrderIndex = $order++
             })
         }
+    }
+    { $_ -in @("manual", "plan") } {
+        # Plan = review-first. QA reviewer only; no execution pipeline.
+        # Legacy alias 'manual' maps to plan, mirroring LEGACY_MODE_MAP.
+        $entry = Get-EntryById -Entries $entries -Id "pipeline_qa_reviewer"
+        $selectedEntries.Add([PSCustomObject]@{
+            Id = $entry.Id
+            Layer = $entry.Layer
+            LoadPosition = $entry.LoadPosition
+            RelativePath = $entry.Path
+            FullPath = $entry.Path
+            OrderIndex = $order++
+        })
+    }
+    { $_ -in @("direct", "chat") } {
+        # Chat = default daily experience; resolves no execution pipeline.
+        # Legacy alias 'direct' maps to chat, mirroring LEGACY_MODE_MAP.
     }
 }
 

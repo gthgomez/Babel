@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import {
   ACTIVE_V9_BUDGET_POLICY,
+  DEFAULT_STACK_HARD_LIMIT,
   buildBudgetDiagnostics,
   budgetPolicyAppliesToInstructionStack,
   getEffectiveBudgetLimit,
@@ -143,14 +144,15 @@ const DEFAULT_SAFETY_PATTERN = /Behavioral_OS|RULES_CORE|RULES_GUARD|BABEL_BIBLE
  * priority-0 entries (behavioral_os, model_adapter, pipeline_stage).
  *
  * @param manifest - Array of manifest entries to potentially prune.
- * @param hardLimit - Maximum allowed token budget (default 3200).
+ * @param hardLimit - Maximum allowed token budget (default 3600, see
+ *   DEFAULT_STACK_HARD_LIMIT in budgetPolicy.ts).
  * @param safetyCriticalPatterns - RegExp; entries whose `filePath` or `id`
  *   match are never dropped (default matches Behavioral OS / RULES files).
  * @returns Pruned manifest, dropped entry IDs, and human-readable warnings.
  */
 export function budgetAwareManifestPrune(
   manifest: ManifestEntryForPruning[],
-  hardLimit: number = 3200,
+  hardLimit: number = DEFAULT_STACK_HARD_LIMIT,
   safetyCriticalPatterns?: RegExp,
 ): BudgetPruneResult {
   const safetyPattern = safetyCriticalPatterns ?? DEFAULT_SAFETY_PATTERN;
