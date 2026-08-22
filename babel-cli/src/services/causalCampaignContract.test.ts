@@ -30,7 +30,12 @@ function tmpEvidence(): string {
 
 function baseManifest(
   evidenceTasks: string[] = ['task_a', 'task_b'],
-  arms: ('babel_enforce' | 'babel_shadow' | 'babel_prompt_control')[] = ['babel_enforce'],
+  arms: (
+    | 'babel_enforce'
+    | 'babel_shadow'
+    | 'babel_prompt_control'
+    | 'raw_opencode'
+  )[] = ['babel_enforce'],
 ): CampaignManifest {
   return buildCampaignManifest({
     campaignId: 'test-campaign-001',
@@ -54,8 +59,13 @@ function baseManifest(
 
 describe('causalCampaignContract manifest', () => {
   test('builds expected attempts as task × arm × replicate (not infra+live rows)', () => {
-    const m = baseManifest(['t1'], ['babel_prompt_control', 'babel_shadow', 'babel_enforce']);
-    assert.equal(m.expected_attempts.length, 3);
+    const m = baseManifest(['t1'], [
+      'babel_prompt_control',
+      'babel_shadow',
+      'babel_enforce',
+      'raw_opencode',
+    ]);
+    assert.equal(m.expected_attempts.length, 4);
     assert.equal(m.causal_stage1_complete_design, true);
     assert.equal(m.identity.mode, 'chat-headless');
     assert.equal(m.identity.scorer_version, CAUSAL_SCORER_VERSION);
@@ -64,6 +74,36 @@ describe('causalCampaignContract manifest', () => {
     assert.deepEqual([...arms].sort(), [...CAUSAL_STAGE1_ARMS].sort());
     // Single pair_id shared across arms for same task×replicate
     assert.equal(new Set(m.expected_attempts.map((a) => a.pair_id)).size, 1);
+  });
+
+  test('raw_opencode arm config is hash-stable and distinct from babel arms', () => {
+    const m = baseManifest(['t1'], ['babel_enforce', 'raw_opencode']);
+    const byArm = new Map(m.expected_attempts.map((a) => [a.arm, a]));
+    const raw = byArm.get('raw_opencode');
+    const enforce = byArm.get('babel_enforce');
+    assert.ok(raw && enforce);
+    assert.notEqual(raw.arm_config_hash, enforce.arm_config_hash);
+    // Same arm+config always hashes identically.
+    const again = buildCampaignManifest({
+      campaignId: 'test-campaign-002',
+      createdAt: '2026-08-02T12:00:00.000Z',
+      taskIds: ['t1'],
+      arms: ['babel_enforce', 'raw_opencode'],
+      replicates: 1,
+      identity: {
+        babel_commit: 'abc123',
+        babel_branch: 'codex/reliable-executor-acceptance',
+        dirty_digest: 'clean',
+        project_root: '/tmp/fixture-project-root',
+        canonical_remote: 'https://github.com/gthgomez/Babel.git',
+        dataset_path: '/tmp/ds.jsonl',
+        dataset_sha256: 'deadbeef',
+        model: null,
+        provider: 'mock',
+      },
+    });
+    const rawAgain = again.expected_attempts.find((a) => a.arm === 'raw_opencode');
+    assert.equal(rawAgain?.arm_config_hash, raw.arm_config_hash);
   });
 
   test('reliability-only single arm is incomplete causal design', () => {

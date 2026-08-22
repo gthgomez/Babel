@@ -32,9 +32,25 @@ import {
 } from './agentBenchmarkHarness.js';
 import {
   ensureBabelCliDistReady,
+  parseCliJson,
   resolveBabelCliEntry,
-  runBabelCli,
+  buildCliFailureCapsule,
+  syntheticPayloadFromFailureCapsule,
+  type CliFailureCapsule,
 } from './liteTrustDemo.js';
+import {
+  createArmRegistry,
+  createBabelCliChatHeadlessArmExecutor,
+  type ArmExecutionRequest,
+  type ArmExecutionResult,
+} from './campaignExecutors.js';
+import { createOpenCodeCliArmExecutor } from './campaignExecutors.opencode.js';
+import {
+  executionProfileForArm,
+  harnessIdentityForArm,
+  type ExecutionProfile,
+  type HarnessIdentity,
+} from './experimentIdentity.js';
 import {
   applyDepPreflightEnv,
   packageHintFromRepo,
@@ -53,6 +69,7 @@ import {
 } from './verifierOverlay.js';
 import {
   buildCampaignManifest,
+  CAUSAL_STAGE1_ARMS,
   captureGitIdentity,
   findAttemptForTaskArm,
   hashFileSha256,
@@ -61,6 +78,7 @@ import {
   transitionAttempt,
   writeCampaignManifest,
   type CausalStage1Arm,
+  type ExpectedAttempt,
 } from './causalCampaignContract.js';
 import { buildCellTelemetryBundle } from '../agent/chatEngineObservability.js';
 import type { TurnRoutingReceipt } from '../agent/turnRoutingReceipt.js';
@@ -84,15 +102,33 @@ export interface SwebenchProInstanceRow extends SwebenchInstanceRow {
 /**
  * Keep native Windows extension/DLL paths short while retaining a stable,
  * collision-resistant mapping from evidence identity to workspace directory.
+ *
+ * B1 (attempt-scoped isolation): when an arm/replicate pair is supplied, every
+ * ExpectedAttempt maps to its OWN directory, so the existing
+ * `existsSync → checkout` logic guarantees a fresh checkout per attempt
+ * (test_patch baselines are committed into workspaces; a shared directory
+ * would let attempt N inherit attempt N−1's diff). Backward compatible: no
+ * arm/replicate args — or explicitly 'babel_enforce' × replicate 0 — keep the
+ * historical bare name so legacy evidence-dir layouts and infra→live disk
+ * reuse are unchanged.
  */
-export function workspaceDirectoryName(instanceId: string): string {
+export function workspaceDirectoryName(
+  instanceId: string,
+  arm?: CausalStage1Arm,
+  replicateId?: number,
+): string {
   const prefix =
     instanceId
       .trim()
       .replace(/[^A-Za-z0-9_-]+/g, '_')
       .slice(0, 20) || 'instance';
   const digest = createHash('sha256').update(instanceId).digest('hex').slice(0, 16);
-  return `${prefix}-${digest}`;
+  const effArm = arm ?? 'babel_enforce';
+  const effReplicate = replicateId ?? 0;
+  if (effArm === 'babel_enforce' && effReplicate === 0) {
+    return `${prefix}-${digest}`;
+  }
+  return `${prefix}-${digest}.${effArm}.r${effReplicate}`;
 }
 
 export type CampaignPhase = 'infra' | 'live';
@@ -160,6 +196,14 @@ export interface CampaignCellResult {
    */
   babel_authoritative_verifier?: boolean | null;
   babel_authoritative_verifier_command?: string | null;
+  /**
+   * W2: experiment identity of the manifest attempt this cell executed
+   * (live cells only; additive keys — see experimentIdentity.ts).
+   */
+  arm?: CausalStage1Arm;
+  replicate_id?: number;
+  arm_harness?: HarnessIdentity;
+  execution_profile?: ExecutionProfile;
 }
 
 export interface CampaignAbort {
@@ -219,11 +263,21 @@ export interface CampaignOptions {
   /**
    * Stage 1 causal arms to freeze in campaign-manifest.json.
    * Default: `['babel_enforce']` (reliability-only; not a complete causal design).
-   * Full causal Stage 1: `['babel_prompt_control','babel_shadow','babel_enforce']`.
+   * Placebo arms 'babel_shadow'/'babel_prompt_control' are REFUSED until their
+   * runtime wiring lands (assertSelectableStage1Arms); pair with 'raw_opencode'
+   * for the current two-arm design.
    */
   causalArms?: CausalStage1Arm[];
   /** Replicates per task×arm (default 1). */
   causalReplicates?: number;
+  /**
+   * W2: restrict live-phase execution to these arms (default undefined =
+   * legacy behavior: single 'babel_enforce' × replicate 0 per instance).
+   * Must be a subset of the arms frozen in campaign-manifest.json (causalArms).
+   */
+  arms?: CausalStage1Arm[];
+  /** W2: cap replicates per task×arm (default undefined = legacy single replicate). */
+  replicates?: number;
 }
 
 const DEFAULT_EARLY_STOP = 5;
@@ -1129,6 +1183,188 @@ function depPreflightEnabled(optionsDepPreflight?: boolean): boolean {
   return true;
 }
 
+// ─── W2: arms × replicates execution helpers ─────────────────────────────────
+
+type ArmExecutorRegistry = ReturnType<typeof createArmRegistry>;
+
+/**
+ * Live evidence file stem per attempt so multi-arm campaigns never collide on
+ * `${instance_id}.*` files. Legacy continuity: 'babel_enforce' × replicate 0
+ * keeps the historical bare instance_id stem.
+ */
+export function liveEvidenceStem(
+  instanceId: string,
+  arm: CausalStage1Arm,
+  replicateId: number,
+): string {
+  return arm === 'babel_enforce' && replicateId === 0
+    ? instanceId
+    : `${instanceId}.${arm}.r${replicateId}`;
+}
+
+/**
+ * B2: stage-1 placebo arms whose runtime wiring does not exist yet —
+ * policy_mode / prompt_delta reach neither argv nor env, so selecting them
+ * would launch byte-identical invocations while stamping false identity
+ * claims ('shadow', diagnostic profiles, prompt_delta) into evidence.
+ */
+const UNBAKED_STAGE1_ARMS: readonly CausalStage1Arm[] = [
+  'babel_shadow',
+  'babel_prompt_control',
+];
+
+/**
+ * Loud refusal over silent placebo runs: throws when any unbaked arm is
+ * selected. 'babel_enforce' + 'raw_opencode' remain selectable together.
+ */
+export function assertSelectableStage1Arms(arms: readonly CausalStage1Arm[]): void {
+  const unbaked = CAUSAL_STAGE1_ARMS.filter(
+    (a) => UNBAKED_STAGE1_ARMS.includes(a) && arms.includes(a),
+  );
+  if (unbaked.length === 0) return;
+  throw new Error(
+    `Refusing to select unimplemented stage-1 arm(s): ${unbaked.map((a) => `'${a}'`).join(', ')}. ` +
+      'Their runtime wiring is not implemented yet — policy_mode/prompt_delta reach neither argv nor env, ' +
+      "so every attempt would silently execute the full product invocation while recording false placebo identities. " +
+      "Selectable arms today: 'babel_enforce' and 'raw_opencode'. " +
+      'Track wiring in docs/roadmaps/OX_ALPHA_EXPERIMENTAL_PROGRAM.md (W2 follow-up).',
+  );
+}
+
+/** Additive cell-evidence keys derived from the manifest attempt being run. */
+function experimentIdentityFields(exp: ExpectedAttempt): {
+  arm: CausalStage1Arm;
+  replicate_id: number;
+  arm_harness: HarnessIdentity;
+  execution_profile: ExecutionProfile;
+} {
+  return {
+    arm: exp.arm,
+    replicate_id: exp.replicate_id,
+    arm_harness: harnessIdentityForArm(exp.arm),
+    execution_profile: executionProfileForArm(exp.arm),
+  };
+}
+
+/** Zero-cost honest skip cell for one selected attempt (infra-fail / mock raw). */
+function skippedLiveCell(
+  evidenceDir: string,
+  instanceId: string,
+  exp: ExpectedAttempt,
+  signature: string,
+  notes: string[],
+): CampaignCellResult {
+  return {
+    instance_id: instanceId,
+    phase: 'live',
+    status: 'skipped',
+    signature,
+    notes,
+    patch_bytes: 0,
+    gold_diff_ok: null,
+    policy_events: [],
+    has_shadow_summary: false,
+    duration_ms: 0,
+    evidence_path: join(
+      evidenceDir,
+      'live',
+      `${liveEvidenceStem(instanceId, exp.arm, exp.replicate_id)}.skipped.json`,
+    ),
+    ...experimentIdentityFields(exp),
+  };
+}
+
+/** Attempt lifecycle transition that never throws mid-campaign. */
+function terminalizeAttemptQuietly(
+  evidenceDir: string,
+  attemptId: string,
+  next: Parameters<typeof transitionAttempt>[2],
+): void {
+  try {
+    transitionAttempt(evidenceDir, attemptId, next);
+  } catch {
+    /* ignore illegal transition */
+  }
+}
+
+/** Minimal CliInvocationResult-shaped view over an executor result. */
+interface CompatCliResult {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  payload: Record<string, unknown> | null;
+  timedOut: boolean;
+  failureCapsule?: CliFailureCapsule;
+}
+
+/**
+ * Reconstruct the CLI result view from an ArmExecutionResult. Mirrors the
+ * post-processing inside runBabelCli (liteTrustDemo.ts: payload recovery via
+ * parseCliJson + failure capsule/synthetic payload on timeout or empty JSON)
+ * so ALL downstream parsing in this file stays byte-for-byte identical.
+ */
+function compatCliFromExecResult(exec: ArmExecutionResult, timeoutMs: number): CompatCliResult {
+  if (exec.launchError !== null) {
+    const capsule = buildCliFailureCapsule({
+      timedOut: false,
+      timeoutMs,
+      exitCode: 1,
+      signal: null,
+      errorName: 'LaunchError',
+      errorMessage: exec.launchError,
+      stdout: exec.stdout,
+      stderr: exec.stderr || exec.launchError,
+    });
+    return {
+      exitCode: exec.exitCode,
+      stdout: exec.stdout,
+      stderr: exec.stderr || exec.launchError,
+      payload: syntheticPayloadFromFailureCapsule(capsule),
+      timedOut: false,
+      failureCapsule: capsule,
+    };
+  }
+  let payload = parseCliJson(exec.stdout) ?? parseCliJson(exec.stderr);
+  let failureCapsule: CliFailureCapsule | undefined;
+  if (payload === null || exec.timedOut) {
+    failureCapsule = buildCliFailureCapsule({
+      timedOut: exec.timedOut,
+      timeoutMs,
+      exitCode: exec.exitCode ?? 1,
+      // m1 fidelity: keep what the executor actually observed. Real process
+      // signals are unknown through the ArmExecutor seam, so signal stays
+      // honestly null; timeouts and launch errors are preserved.
+      signal: null,
+      errorName: exec.timedOut ? 'timeout' : null,
+      errorMessage: exec.launchError ?? (exec.timedOut ? 'timeout' : null),
+      stdout: exec.stdout,
+      stderr: exec.stderr,
+    });
+    if (payload === null) {
+      payload = syntheticPayloadFromFailureCapsule(failureCapsule);
+    } else if (exec.timedOut && payload) {
+      // Timed out but had JSON — stamp the class for scorers (runBabelCli parity).
+      payload = {
+        ...payload,
+        failure_class_hint:
+          typeof payload['failure_class_hint'] === 'string'
+            ? payload['failure_class_hint']
+            : 'harness_timeout',
+        failure_capsule: failureCapsule,
+        budget_exceeded: true,
+      };
+    }
+  }
+  return {
+    exitCode: exec.exitCode,
+    stdout: exec.stdout,
+    stderr: exec.stderr,
+    payload,
+    timedOut: exec.timedOut,
+    ...(failureCapsule ? { failureCapsule } : {}),
+  };
+}
+
 /** Honest C2 terminal when workspace deps cannot be made ready. */
 function envBlockedPreflightCell(
   instance: SwebenchProInstanceRow,
@@ -1137,6 +1373,7 @@ function envBlockedPreflightCell(
   evidence_path: string,
   preflight: WorkspaceDepPreflightResult,
   extraNotes: string[] = [],
+  fileStem: string = instance.instance_id,
 ): CampaignCellResult {
   const result: CampaignCellResult = {
     instance_id: instance.instance_id,
@@ -1188,40 +1425,67 @@ function envBlockedPreflightCell(
     ),
     'utf8',
   );
-  writeFileSync(join(evidenceDir, 'live', `${instance.instance_id}.patch`), '', 'utf8');
+  writeFileSync(join(evidenceDir, 'live', `${fileStem}.patch`), '', 'utf8');
   return result;
 }
 
-function defaultRunLiveCell(
+/** Exported for harness-side verification seams (tests observe executor dispatch). */
+export async function defaultRunLiveCell(
   instance: SwebenchProInstanceRow,
   evidenceDir: string,
   provider: 'mock' | 'live',
   model: string,
   options?: Pick<CampaignOptions, 'depPreflight' | 'agentTimeoutMs' | 'failToPassTimeoutMs'>,
-): CampaignCellResult {
+  execCtx?: { registry: ArmExecutorRegistry; exp: ExpectedAttempt },
+): Promise<CampaignCellResult> {
   const started = performance.now();
-  const evidence_path = join(evidenceDir, 'live', `${instance.instance_id}.json`);
+  const stem = execCtx
+    ? liveEvidenceStem(instance.instance_id, execCtx.exp.arm, execCtx.exp.replicate_id)
+    : instance.instance_id;
+  const evidence_path = join(evidenceDir, 'live', `${stem}.json`);
   mkdirSync(dirname(evidence_path), { recursive: true });
 
-  if (provider === 'live' && !liveApiKeyPresent()) {
+  const arm = execCtx?.exp.arm ?? 'babel_enforce';
+  const executor = execCtx?.registry.resolve(arm) ?? createBabelCliChatHeadlessArmExecutor();
+  const preflightReq: ArmExecutionRequest = {
+    arm,
+    workspaceRoot: '',
+    prompt: '',
+    model,
+    provider,
+    env: process.env,
+    timeoutMs: options?.agentTimeoutMs ?? AGENT_TIMEOUT_MS,
+    cliEntry: resolveBabelCliEntry(),
+    spawnCwd: join(BABEL_ROOT, 'babel-cli'),
+  };
+  const readiness = executor.preflight ? await executor.preflight(preflightReq) : { ready: true };
+  if (!readiness.ready) {
+    const isMockSkip = readiness.signature === 'live:skipped_mock_provider';
     const result: CampaignCellResult = {
       instance_id: instance.instance_id,
       phase: 'live',
-      status: 'fail',
-      signature: 'infra:missing_api_key',
-      notes: ['DEEPSEEK_API_KEY (or compatible) not set — refusing live cell'],
+      status: isMockSkip ? 'skipped' : 'fail',
+      signature: readiness.signature ?? 'infra:missing_api_key',
+      notes: [readiness.reason ?? 'Executor preflight check failed'],
       patch_bytes: 0,
       gold_diff_ok: null,
       policy_events: [],
       has_shadow_summary: false,
       duration_ms: Math.round(performance.now() - started),
       evidence_path,
+      ...(execCtx ? experimentIdentityFields(execCtx.exp) : {}),
     };
     writeFileSync(evidence_path, JSON.stringify(result, null, 2), 'utf8');
     return result;
   }
 
-  const workspaceRoot = join(evidenceDir, 'workspaces', workspaceDirectoryName(instance.instance_id));
+  const workspaceRoot = join(
+    evidenceDir,
+    'workspaces',
+    // B1: attempt-scoped key — distinct (arm, replicate) ⇒ distinct fresh
+    // checkout; legacy babel_enforce×r0 keeps the historical bare name.
+    workspaceDirectoryName(instance.instance_id, execCtx?.exp.arm, execCtx?.exp.replicate_id),
+  );
   try {
     if (!existsSync(workspaceRoot)) {
       checkoutProRepo(instance, workspaceRoot);
@@ -1290,6 +1554,7 @@ function defaultRunLiveCell(
         evidence_path,
         preflight,
         patchNotes,
+        stem,
       );
     }
   } else {
@@ -1343,27 +1608,51 @@ function defaultRunLiveCell(
   // Never auto-raise cost for Pro campaign (no BABEL_CHAT_MAX_COST injection).
   delete productEnv['BABEL_CHAT_MAX_COST'];
 
-  const cli = runBabelCli(
-    [
-      'run',
-      '--mode',
-      'chat-headless',
-      ...(provider === 'live' ? (['--model', model] as const) : []),
-      '--json',
-      '--yes',
-      '--project-root',
-      workspaceRoot,
-      prompt,
-    ],
-    {
-      projectRoot: workspaceRoot,
-      offlineDemo: provider !== 'live',
-      cliEntry: resolveBabelCliEntry(),
-      cwd: join(BABEL_ROOT, 'babel-cli'),
-      env: productEnv,
-      timeoutMs: options?.agentTimeoutMs ?? AGENT_TIMEOUT_MS,
-      ensureDist: false,
-    },
+  // ── W2 executor seam: every arm launches through an ArmExecutor ────────────
+  // COMPARABILITY INVARIANT: for babel arms the wrapped invocation MUST stay
+  // byte-identical to the pre-seam direct call in this file — args
+  // ['run','--mode','chat-headless',('--model',model)?,'--json','--yes','--project-root',workspaceRoot,prompt]
+  // plus identical env/productEnv, cwd=join(BABEL_ROOT,'babel-cli'),
+  // cliEntry, and timeout handling. createBabelCliChatHeadlessArmExecutor
+  // reproduces exactly that argv/env contract; do not change either side alone.
+  if (!executor || !execCtx) {
+    // Consistent failure handling: honest env-blocked cell without agent run.
+    const failed: CampaignCellResult = {
+      instance_id: instance.instance_id,
+      phase: 'live',
+      status: 'fail',
+      signature: 'agent:env_blocked',
+      notes: [`no_executor_registered_for_arm=${arm}`],
+      patch_bytes: 0,
+      gold_diff_ok: false,
+      policy_events: [
+        { kind: 'env_blocked', detail: `no executor registered for arm ${arm}` },
+      ],
+      has_shadow_summary: false,
+      duration_ms: Math.round(performance.now() - started),
+      evidence_path,
+      cli_exit_code: null,
+      status_text: 'ENV_BLOCKED',
+      ...(execCtx ? experimentIdentityFields(execCtx.exp) : {}),
+    };
+    writeFileSync(evidence_path, JSON.stringify(failed, null, 2), 'utf8');
+    writeFileSync(join(evidenceDir, 'live', `${stem}.patch`), '', 'utf8');
+    return failed;
+  }
+  const exec = await executor.execute({
+    arm,
+    workspaceRoot,
+    prompt,
+    model,
+    provider,
+    env: productEnv,
+    timeoutMs: options?.agentTimeoutMs ?? AGENT_TIMEOUT_MS,
+    cliEntry: resolveBabelCliEntry(),
+    spawnCwd: join(BABEL_ROOT, 'babel-cli'),
+  });
+  const cli = compatCliFromExecResult(
+    exec,
+    options?.agentTimeoutMs ?? AGENT_TIMEOUT_MS,
   );
 
   const agentPatch = captureGitPatch(workspaceRoot);
@@ -1418,7 +1707,7 @@ function defaultRunLiveCell(
   // Persist failure capsule when CLI timed out / had no real JSON (ansible pilot).
   if (cli.failureCapsule) {
     writeFileSync(
-      join(evidenceDir, 'live', `${instance.instance_id}.failure-capsule.json`),
+      join(evidenceDir, 'live', `${stem}.failure-capsule.json`),
       JSON.stringify(cli.failureCapsule, null, 2),
       'utf8',
     );
@@ -1614,6 +1903,7 @@ function defaultRunLiveCell(
     scoreboard,
     babel_authoritative_verifier,
     babel_authoritative_verifier_command,
+    ...(execCtx ? experimentIdentityFields(execCtx.exp) : {}),
   };
 
   writeFileSync(
@@ -1651,7 +1941,7 @@ function defaultRunLiveCell(
   // Copy session policy log into campaign evidence for offline scoreboard
   if (runDir && existsSync(join(runDir, 'policy-events.jsonl'))) {
     writeFileSync(
-      join(evidenceDir, 'live', `${instance.instance_id}.policy-events.jsonl`),
+      join(evidenceDir, 'live', `${stem}.policy-events.jsonl`),
       readFileSync(join(runDir, 'policy-events.jsonl'), 'utf8'),
       'utf8',
     );
@@ -1659,7 +1949,7 @@ function defaultRunLiveCell(
 
   // Also drop patch alone for Pro gather_patches compatibility
   writeFileSync(
-    join(evidenceDir, 'live', `${instance.instance_id}.patch`),
+    join(evidenceDir, 'live', `${stem}.patch`),
     patch,
     'utf8',
   );
@@ -1680,6 +1970,12 @@ export async function runSwebenchProCampaign(
   if (!existsSync(datasetPath)) {
     throw new Error(`SWE-Bench Pro dataset missing: ${datasetPath}`);
   }
+  // B2 honesty gate: refuse placebo arms BEFORE any evidence artifact exists.
+  // Checked on both selection surfaces — frozen denominator (causalArms) and
+  // executed subset (arms) — so no manifest can freeze attempts that could
+  // only ever run as byte-identical placebos.
+  if (options.causalArms?.length) assertSelectableStage1Arms(options.causalArms);
+  if (options.arms?.length) assertSelectableStage1Arms(options.arms);
 
   const campaign_id =
     (options.now ?? new Date()).toISOString().replace(/[:.]/g, '-').slice(0, 19) +
@@ -1725,11 +2021,38 @@ export async function runSwebenchProCampaign(
   writeCampaignManifest(evidenceDir, causalManifest);
   seedQueuedAttempts(evidenceDir, causalManifest, options.now);
 
+  // ── W2: one ArmExecutor registry per campaign run ──────────────────────────
+  // Babel chat-headless executor serves all babel_* arms; the raw OpenCode CLI
+  // executor serves the external baseline arm. Executors own launch/capture
+  // only; workspace prep and verification remain in this harness.
+  const armRegistry = createArmRegistry();
+  armRegistry.register(createBabelCliChatHeadlessArmExecutor());
+  armRegistry.register(createOpenCodeCliArmExecutor());
+
   const cells: CampaignCellResult[] = [];
   let aborted: CampaignAbort | null = null;
   const policyJsonlPath = join(evidenceDir, 'policy-events.jsonl');
   writeFileSync(policyJsonlPath, '', 'utf8');
   const startedAt = new Date().toISOString();
+
+  // W2 attempt selection. Default (arms/replicates undefined) preserves legacy
+  // single-attempt runs exactly: 'babel_enforce' × replicate 0 per instance.
+  const requestedArms = options.arms;
+  const replicateCap = options.replicates;
+  const selectedAttemptsForInstance = (instanceId: string): ExpectedAttempt[] =>
+    causalManifest.expected_attempts.filter(
+      (exp) =>
+        exp.task_id === instanceId &&
+        (requestedArms === undefined
+          ? exp.arm === 'babel_enforce' && exp.replicate_id === 0
+          : requestedArms.includes(exp.arm)) &&
+        (replicateCap === undefined ? true : exp.replicate_id < replicateCap),
+    );
+  const totalLiveCells = instances.reduce(
+    (n, i) => n + selectedAttemptsForInstance(i.instance_id).length,
+    0,
+  );
+
   const heartbeat = (phase: SweProHeartbeat['phase'], instance: string | null, error: string | null = null) => {
     const evidenceFiles = ['infra', 'live']
       .map((part) => {
@@ -1749,7 +2072,9 @@ export async function runSwebenchProCampaign(
       started_at: startedAt,
       last_progress_at: new Date().toISOString(),
       completed_cells: cells.length,
-      total_cells: instances.length * (options.infraOnly ? 1 : 2),
+      total_cells: options.infraOnly
+        ? instances.length
+        : instances.length + totalLiveCells,
       evidence_files: evidenceFiles,
       last_error_class: error,
       process_state: phase === 'complete' ? 'complete' : 'running',
@@ -1757,40 +2082,50 @@ export async function runSwebenchProCampaign(
   };
   heartbeat('starting', null);
 
-  const runCell =
-    options.runCell ??
-    ((instance: SwebenchProInstanceRow, phase: CampaignPhase) => {
-      if (phase === 'infra') {
-        const idx = instances.findIndex((i) => i.instance_id === instance.instance_id);
-        const pull =
-          (options.dockerPullFirstK ?? 0) > 0 && idx >= 0 && idx < (options.dockerPullFirstK ?? 0);
-        return defaultRunInfraCell(instance, evidenceDir, pull);
-      }
-      return defaultRunLiveCell(
-        instance,
-        evidenceDir,
-        options.provider,
-        options.model ?? 'deepseek-v4-flash',
-        options.depPreflight === undefined
-          ? {
-              ...(options.agentTimeoutMs !== undefined
-                ? { agentTimeoutMs: options.agentTimeoutMs }
-                : {}),
-              ...(options.failToPassTimeoutMs !== undefined
-                ? { failToPassTimeoutMs: options.failToPassTimeoutMs }
-                : {}),
-            }
-          : {
-              depPreflight: options.depPreflight,
-              ...(options.agentTimeoutMs !== undefined
-                ? { agentTimeoutMs: options.agentTimeoutMs }
-                : {}),
-              ...(options.failToPassTimeoutMs !== undefined
-                ? { failToPassTimeoutMs: options.failToPassTimeoutMs }
-                : {}),
-            },
-      );
-    });
+  const liveCellOptions =
+    options.depPreflight === undefined
+      ? {
+          ...(options.agentTimeoutMs !== undefined
+            ? { agentTimeoutMs: options.agentTimeoutMs }
+            : {}),
+          ...(options.failToPassTimeoutMs !== undefined
+            ? { failToPassTimeoutMs: options.failToPassTimeoutMs }
+            : {}),
+        }
+      : {
+          depPreflight: options.depPreflight,
+          ...(options.agentTimeoutMs !== undefined
+            ? { agentTimeoutMs: options.agentTimeoutMs }
+            : {}),
+          ...(options.failToPassTimeoutMs !== undefined
+            ? { failToPassTimeoutMs: options.failToPassTimeoutMs }
+            : {}),
+        };
+  const runInfraCell = (instance: SwebenchProInstanceRow): CampaignCellResult => {
+    if (options.runCell) return options.runCell(instance, 'infra');
+    const idx = instances.findIndex((i) => i.instance_id === instance.instance_id);
+    const pull =
+      (options.dockerPullFirstK ?? 0) > 0 && idx >= 0 && idx < (options.dockerPullFirstK ?? 0);
+    return defaultRunInfraCell(instance, evidenceDir, pull);
+  };
+  // W2: one cell per (arm, replicate_id); lifecycle transitions target that
+  // attempt. Injected runCell fixtures stay arm-agnostic and are stamped here.
+  const runLiveAttempt = async (
+    instance: SwebenchProInstanceRow,
+    exp: ExpectedAttempt,
+  ): Promise<CampaignCellResult> => {
+    const base = options.runCell
+      ? options.runCell(instance, 'live')
+      : await defaultRunLiveCell(
+          instance,
+          evidenceDir,
+          options.provider,
+          options.model ?? 'deepseek-v4-flash',
+          liveCellOptions,
+          { registry: armRegistry, exp },
+        );
+    return { ...base, ...experimentIdentityFields(exp) };
+  };
 
   // ── Infra phase (substage of each attempt; not a separate capability row) ─
   let streak = { signature: null as string | null, count: 0, cell_ids: [] as string[] };
@@ -1808,7 +2143,7 @@ export async function runSwebenchProCampaign(
       }
     }
     heartbeat('infra', instance.instance_id);
-    const cell = runCell(instance, 'infra');
+    const cell = runInfraCell(instance);
     cells.push(cell);
     heartbeat('infra', instance.instance_id, cell.status === 'fail' ? cell.signature : null);
     const next = updateFailureStreak(streak, cell, earlyStopN, 'infra');
@@ -1819,103 +2154,101 @@ export async function runSwebenchProCampaign(
     }
   }
 
-  // ── Live phase ───────────────────────────────────────────────────────────
+  // ── Live phase: one cell per selected (arm, replicate_id) attempt (W2) ────
   if (!aborted && !options.infraOnly) {
     streak = { signature: null, count: 0, cell_ids: [] };
     const infraPassed = new Set(
       cells.filter((c) => c.phase === 'infra' && c.status === 'pass').map((c) => c.instance_id),
     );
+    let stopLive = false;
     for (const instance of instances) {
-      const exp = findAttemptForTaskArm(causalManifest, instance.instance_id, 'babel_enforce', 0);
+      if (stopLive) break;
+      const attempts = selectedAttemptsForInstance(instance.instance_id);
       if (!infraPassed.has(instance.instance_id)) {
-        const skippedPath = join(evidenceDir, 'live', `${instance.instance_id}.skipped.json`);
-        cells.push({
-          instance_id: instance.instance_id,
-          phase: 'live',
-          status: 'skipped',
-          signature: 'live:skipped_infra_fail',
-          notes: ['skipped because infra phase failed'],
-          patch_bytes: 0,
-          gold_diff_ok: null,
-          policy_events: [],
-          has_shadow_summary: false,
-          duration_ms: 0,
-          evidence_path: skippedPath,
-        });
-        if (exp) {
-          try {
-            transitionAttempt(evidenceDir, exp.attempt_id, {
-              lifecycle: 'terminal',
-              substage: 'done',
-              terminal_signature: 'live:skipped_infra_fail',
-              cell_evidence_path: skippedPath,
-            });
-          } catch {
-            /* ignore illegal transition */
-          }
-        }
-        continue;
-      }
-      if (exp) {
-        try {
-          transitionAttempt(evidenceDir, exp.attempt_id, {
-            lifecycle: 'running',
-            substage: 'live',
-          });
-        } catch {
-          /* ignore */
-        }
-      }
-      heartbeat('live', instance.instance_id);
-      const cell = runCell(instance, 'live');
-      cells.push(cell);
-      if (exp) {
-        try {
-          transitionAttempt(evidenceDir, exp.attempt_id, {
+        // One honest skipped cell per selected attempt; each attempt terminalized.
+        for (const exp of attempts) {
+          const cell = skippedLiveCell(
+            evidenceDir,
+            instance.instance_id,
+            exp,
+            'live:skipped_infra_fail',
+            ['skipped because infra phase failed'],
+          );
+          cells.push(cell);
+          terminalizeAttemptQuietly(evidenceDir, exp.attempt_id, {
             lifecycle: 'terminal',
             substage: 'done',
             terminal_signature: cell.signature,
             cell_evidence_path: cell.evidence_path,
           });
-        } catch {
-          /* ignore */
         }
+        continue;
       }
-      heartbeat('live', instance.instance_id, cell.status === 'fail' ? cell.signature : null);
-      // Append policy events for scoreboard
-      for (const pe of cell.policy_events) {
-        appendFileSync(
-          policyJsonlPath,
-          `${JSON.stringify({ ...pe, _instance_id: cell.instance_id })}\n`,
-          'utf8',
-        );
-      }
-      // Session boundary: if shadow summary missing but we have shadow kinds, still emit events
-      const next = updateFailureStreak(streak, cell, earlyStopN, 'live');
-      streak = { signature: next.signature, count: next.count, cell_ids: next.cell_ids };
-      if (next.abort) {
-        aborted = next.abort;
-        break;
+      for (const exp of attempts) {
+        // W2 honesty rule: mock provider never fabricates a raw baseline.
+        if (options.provider === 'mock' && exp.arm === 'raw_opencode') {
+          const cell = skippedLiveCell(
+            evidenceDir,
+            instance.instance_id,
+            exp,
+            'live:skipped_mock_provider',
+            ['raw_opencode requires live provider (mock produces no genuine baseline)'],
+          );
+          cells.push(cell);
+          terminalizeAttemptQuietly(evidenceDir, exp.attempt_id, {
+            lifecycle: 'terminal',
+            substage: 'done',
+            terminal_signature: cell.signature,
+            cell_evidence_path: cell.evidence_path,
+          });
+          continue;
+        }
+        terminalizeAttemptQuietly(evidenceDir, exp.attempt_id, {
+          lifecycle: 'running',
+          substage: 'live',
+        });
+        heartbeat('live', instance.instance_id);
+        const cell = await runLiveAttempt(instance, exp);
+        cells.push(cell);
+        terminalizeAttemptQuietly(evidenceDir, exp.attempt_id, {
+          lifecycle: 'terminal',
+          substage: 'done',
+          terminal_signature: cell.signature,
+          cell_evidence_path: cell.evidence_path,
+        });
+        heartbeat('live', instance.instance_id, cell.status === 'fail' ? cell.signature : null);
+        // Append policy events for scoreboard
+        for (const pe of cell.policy_events) {
+          appendFileSync(
+            policyJsonlPath,
+            `${JSON.stringify({ ...pe, _instance_id: cell.instance_id })}\n`,
+            'utf8',
+          );
+        }
+        // Session boundary: if shadow summary missing but we have shadow kinds, still emit events
+        const next = updateFailureStreak(streak, cell, earlyStopN, 'live');
+        streak = { signature: next.signature, count: next.count, cell_ids: next.cell_ids };
+        if (next.abort) {
+          aborted = next.abort;
+          stopLive = true;
+          break;
+        }
       }
     }
   } else if (!aborted && options.infraOnly) {
-    // Infra-only: each attempt ends after infra substage (terminal with infra signature).
+    // Infra-only: each selected attempt ends after the infra substage.
     for (const instance of instances) {
-      const exp = findAttemptForTaskArm(causalManifest, instance.instance_id, 'babel_enforce', 0);
       const infraCell = cells.find(
         (c) => c.instance_id === instance.instance_id && c.phase === 'infra',
       );
-      if (exp && infraCell) {
-        try {
-          transitionAttempt(evidenceDir, exp.attempt_id, {
-            lifecycle: 'terminal',
-            substage: 'done',
-            terminal_signature: infraCell.signature,
-            cell_evidence_path: infraCell.evidence_path,
-          });
-        } catch {
-          /* ignore */
-        }
+      if (!infraCell) continue;
+      for (const exp of selectedAttemptsForInstance(instance.instance_id)) {
+        terminalizeAttemptQuietly(evidenceDir, exp.attempt_id, {
+          lifecycle: 'terminal',
+          substage: 'done',
+          terminal_signature: infraCell.signature,
+          cell_evidence_path: infraCell.evidence_path,
+        });
       }
     }
   }
