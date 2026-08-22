@@ -59,7 +59,7 @@ function makeTypedManifest(overrides: Partial<ReturnType<typeof OrchestratorMani
       behavioral_ids: ['behavioral_core_v11'],
       domain_id: 'domain_swe_backend',
       skill_ids: [],
-      model_adapter_id: 'adapter_codex_balanced',
+      model_adapter_id: 'adapter_claude',
       project_overlay_id: null,
       task_overlay_ids: [],
       pipeline_stage_ids: ['pipeline_qa_reviewer'],
@@ -165,7 +165,7 @@ entries:
     conflicts:
       - skill_primary
     token_budget: 200
-  - id: adapter_codex_balanced
+  - id: adapter_claude
     layer: model_adapter
     path: 03_Model_Adapters/DeepSeek_Balanced.md
     status: active
@@ -194,7 +194,7 @@ entries:
         behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_backend',
         skill_ids: ['skill_conflicting'],
-        model_adapter_id: 'adapter_codex_balanced',
+        model_adapter_id: 'adapter_claude',
         project_overlay_id: null,
         task_overlay_ids: [],
         pipeline_stage_ids: ['pipeline_qa_reviewer'],
@@ -241,7 +241,7 @@ entries:
     conflicts: []
     token_budget: 250
     default_skill_ids: []
-  - id: adapter_codex_balanced
+  - id: adapter_claude
     layer: model_adapter
     path: 03_Model_Adapters/DeepSeek_Balanced.md
     status: active
@@ -270,7 +270,7 @@ entries:
           behavioral_ids: ['behavioral_core_v11'],
           domain_id: 'domain_swe_backend',
           skill_ids: ['skill_missing'],
-          model_adapter_id: 'adapter_codex_balanced',
+          model_adapter_id: 'adapter_claude',
           project_overlay_id: null,
           task_overlay_ids: [],
           pipeline_stage_ids: ['pipeline_qa_reviewer'],
@@ -285,9 +285,9 @@ entries:
       makeTypedManifest({
         instruction_stack: {
           behavioral_ids: ['behavioral_core_v11'],
-          domain_id: 'adapter_codex_balanced',
+          domain_id: 'adapter_claude',
           skill_ids: [],
-          model_adapter_id: 'adapter_codex_balanced',
+          model_adapter_id: 'adapter_claude',
           project_overlay_id: null,
           task_overlay_ids: [],
           pipeline_stage_ids: ['pipeline_qa_reviewer'],
@@ -345,7 +345,7 @@ entries:
     path: 02_Skills/Lang/Python-Backend-v1.md
     status: active
     token_budget: 100
-  - id: adapter_codex_balanced
+  - id: adapter_claude
     layer: model_adapter
     path: 03_Model_Adapters/DeepSeek_Balanced.md
     status: active
@@ -375,7 +375,7 @@ entries:
         behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_mobile_suite',
         skill_ids: ['skill_git_operations', 'skill_cli_tooling', 'skill_python_scripting'],
-        model_adapter_id: 'adapter_codex_balanced',
+        model_adapter_id: 'adapter_claude',
         project_overlay_id: null,
         task_overlay_ids: [],
         pipeline_stage_ids: ['pipeline_qa_reviewer'],
@@ -426,7 +426,7 @@ entries:
     conflicts: []
     token_budget: 250
     default_skill_ids: []
-  - id: adapter_codex_balanced
+  - id: adapter_claude
     layer: model_adapter
     path: 03_Model_Adapters/DeepSeek_Balanced.md
     status: active
@@ -472,7 +472,7 @@ entries:
         behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_frontend',
         skill_ids: [],
-        model_adapter_id: 'adapter_codex_balanced',
+        model_adapter_id: 'adapter_claude',
         project_overlay_id: 'task_frontend_professionalism',
         task_overlay_ids: [],
         pipeline_stage_ids: ['pipeline_qa_reviewer'],
@@ -497,7 +497,7 @@ entries:
         behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_frontend',
         skill_ids: [],
-        model_adapter_id: 'adapter_codex_balanced',
+        model_adapter_id: 'adapter_claude',
         project_overlay_id: 'overlay_auditguard_frontend_professionalism',
         task_overlay_ids: [],
         pipeline_stage_ids: ['pipeline_qa_reviewer'],
@@ -524,7 +524,7 @@ entries:
         behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_frontend',
         skill_ids: [],
-        model_adapter_id: 'adapter_codex_balanced',
+        model_adapter_id: 'adapter_claude',
         project_overlay_id: 'global',
         task_overlay_ids: [],
         pipeline_stage_ids: ['pipeline_qa_reviewer'],
@@ -573,7 +573,7 @@ entries:
     conflicts: []
     token_budget: 250
     default_skill_ids: []
-  - id: adapter_codex_balanced
+  - id: adapter_claude
     layer: model_adapter
     path: 03_Model_Adapters/DeepSeek_Balanced.md
     status: active
@@ -628,7 +628,7 @@ entries:
         behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_frontend',
         skill_ids: [],
-        model_adapter_id: 'adapter_codex_balanced',
+        model_adapter_id: 'adapter_claude',
         project_overlay_id: null,
         task_overlay_ids: ['task_example_saas_backend_frontend_professionalism'],
         pipeline_stage_ids: ['pipeline_qa_reviewer'],
@@ -684,7 +684,7 @@ entries:
     conflicts: []
     token_budget: 250
     default_skill_ids: []
-  - id: adapter_codex_balanced
+  - id: adapter_claude
     layer: model_adapter
     path: 03_Model_Adapters/DeepSeek_Balanced.md
     status: active
@@ -725,7 +725,7 @@ entries:
         behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_frontend',
         skill_ids: [],
-        model_adapter_id: 'adapter_codex_balanced',
+        model_adapter_id: 'adapter_claude',
         project_overlay_id: null,
         task_overlay_ids: ['overlay_audiguard_frontend_professionalism'],
         pipeline_stage_ids: ['pipeline_qa_reviewer'],
@@ -760,7 +760,7 @@ function runTokenBudgetFoundationTest(): void {
         behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_backend',
         skill_ids: [],
-        model_adapter_id: 'adapter_codex_balanced',
+        model_adapter_id: 'adapter_claude',
         project_overlay_id: null,
         task_overlay_ids: [],
         pipeline_stage_ids: ['pipeline_qa_reviewer'],
@@ -858,7 +858,7 @@ entries:
     path: 05_Project_Overlays/AuditGuard-Context.md
     status: active
     load_position: 6
-  - id: adapter_codex_balanced
+  - id: adapter_claude
     layer: model_adapter
     path: 03_Model_Adapters/DeepSeek_Balanced.md
     status: active
@@ -893,7 +893,7 @@ entries:
         behavioral_ids: ['behavioral_core_v11'],
         domain_id: 'domain_swe_frontend',
         skill_ids: ['skill_ui'],
-        model_adapter_id: 'adapter_codex_balanced',
+        model_adapter_id: 'adapter_claude',
         project_overlay_id: 'overlay_auditguard',
         task_overlay_ids: ['task_frontend_professionalism'],
         pipeline_stage_ids: ['pipeline_qa_reviewer'],
@@ -906,7 +906,7 @@ entries:
         'domain_swe_frontend',
         'skill_ui',
         'overlay_auditguard',
-        'adapter_codex_balanced',
+        'adapter_claude',
         'task_frontend_professionalism',
         'pipeline_qa_reviewer',
       ]),
@@ -938,16 +938,16 @@ function runCatalogRuntimeAlignmentTest(): void {
   for (const [id, position] of [
     ['domain_swe_backend', '4'],
     ['skill_adaptive_depth', '5'],
-    ['overlay_auditguard', '6'],
+    ['overlay_example_saas_backend', '6'],
     ['task_frontend_professionalism', '7'],
-    ['adapter_codex_balanced', '8'],
+    ['adapter_codex', '8'],
     ['pipeline_qa_reviewer', '9'],
     ['pipeline_cli_executor', '10'],
   ] as const) {
     assertEntryField(catalogText, id, 'load_position', position);
   }
 
-  for (const id of ['adapter_codex', 'adapter_codex_balanced']) {
+  for (const id of ['adapter_codex']) {
     const tagsLine = /tags:\s+\[(.+)\]/.exec(entryBlock(catalogText, id))?.[1] ?? '';
     assert(
       !/\b(openai|codex)\b/i.test(tagsLine),
