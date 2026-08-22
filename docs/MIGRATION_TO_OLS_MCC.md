@@ -1,7 +1,7 @@
 <!--
 Babel - Prompt Operating System
 Copyright (c) 2025-2026 Jonathan Gomez Aguilar
-Licensed under the MIT License
+Licensed under the Apache License, Version 2.0
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
@@ -37,13 +37,13 @@ For each existing skill, verify these 8 items. Order by priority — top items h
 
 ### 1. Copyright Header (1 minute)
 
-Every skill file must start with the MIT license block:
+Every skill file must start with the Apache License 2.0 header block:
 
 ```markdown
 <!--
 Babel — Prompt Operating System
 Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the MIT License
+Licensed under the Apache License, Version 2.0
 ...
 -->
 ```

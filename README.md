@@ -1,7 +1,7 @@
 # Babel
 
 [![Release](https://img.shields.io/github/v/release/gthgomez/Babel?display_name=tag&sort=semver)](https://github.com/gthgomez/Babel/releases/latest)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](./LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/gthgomez/Babel/typecheck.yml?branch=main&label=Public%20Release%20Gate)](https://github.com/gthgomez/Babel/actions)
 
 **Open-source agent harness for real software work.**
@@ -14,31 +14,96 @@ testable.
 
 > Babel is pre-1.0. The public checkout is runnable and typechecked, but model
 > choice, provider setup, sandboxing, and repository-specific execution policy
-> still matter. See [the chat-mode contract](./docs/CHAT_MODE.md) and
+> still matter. See [using chat mode](./docs/CHAT_MODE.md) and
 > [current vision](./docs/VISION.md) for the public product boundaries.
 
-## The short version
+## See Babel in action
 
-The default experience is a coding conversation in your terminal:
+<!-- TODO(maintainer): capture a real current TUI screenshot or recording to docs/assets/tui-chat.png and embed it here. Do not fabricate imagery. -->
+
+Illustrative transcript (not a live capture) of a chat turn in the Babel TUI:
+
+```text
+BABEL · READY · CHAT · MyProject · deepseek
+──────────────────────────────────────────────────
+
+You
+  Fix the failing webhook retry test and make sure
+  duplicate deliveries can't double-process payments.
+
+Babel
+  I'll inspect the webhook handler and its tests first.
+
+  ▸ Read src/webhooks/stripe.ts
+  ▸ Read tests/webhooks/stripe.test.ts
+  ▸ Search idempotency handling
+
+  Found it: retries re-run the handler without a delivery key...
+
+  ▸ Edited src/webhooks/stripe.ts
+  ▸ Edited tests/webhooks/stripe.test.ts
+  ▸ npm test -- stripe
+
+  ✓ 18 passed
+
+  Completed · 2 files changed · verified
+```
+
+**Chat is the default.** Talk to Babel like another engineer in your terminal.
+It can inspect your repository, use tools, edit files with permission, run
+verification, remember the conversation across turns, and pick up where it left
+off later.
+
+### Three modes, one product
+
+| Mode | What it feels like |
+|---|---|
+| **Chat** | Work normally. Ask questions, iterate, inspect files, make changes and verify them. |
+| **Plan** | Have Babel investigate and propose the implementation first. You approve before anything changes. |
+| **Deep** | The heavy-duty path for risky work. Babel plans, critiques its own plan, executes under stricter controls, and verifies the result. |
+
+Under the hood, Deep uses Babel's governed execution pipeline—but you don't
+need to know that to use it.
+
+### Inside a session
+
+Start the interactive TUI:
 
 ```powershell
 node .\babel-cli\dist\index.js interactive
 ```
 
-Or give Babel a task directly:
+Then just talk to it:
+
+```text
+> Explain this codebase
+> Fix the failing auth test
+> Review the changes you just made
+> Now simplify that implementation
+```
+
+Useful commands while you work:
+
+```text
+/model       switch models
+/mode        chat / plan / deep
+/diff        inspect the latest changes
+/resume      continue an earlier conversation
+/cost        inspect current usage
+/permissions change approval behavior
+/help        see everything
+```
+
+Or hand Babel a task directly:
 
 ```powershell
 node .\babel-cli\dist\index.js "Fix the failing webhook retry test"
-```
-
-Chat mode can inspect files, reason over the repository, use tools, make
-approved changes, and verify the result across multiple turns. When the task
-needs a stronger gate, move to a reviewable plan or the fully governed path:
-
-```powershell
 node .\babel-cli\dist\index.js plan "Split the auth module safely"
 node .\babel-cli\dist\index.js deep "Harden the migration path and verify it"
 ```
+
+Read [the complete chat-mode reference](./docs/CHAT_MODE.md) for routing,
+sessions, permissions, and advanced configuration.
 
 ## Why Babel
 
@@ -57,26 +122,20 @@ harness around that loop:
 The model supplies reasoning. The harness supplies the working context, tools,
 state, permissions, workflow, and proof around that reasoning.
 
-## Modes
+Chat is the default mode; headless chat serves scripts and CI:
 
-Chat is the default. The modes are different levels of structure around the
-same local coding-agent product:
+```powershell
+node .\babel-cli\dist\index.js chat --headless "Summarize the failing test"
+```
 
-| Mode | Command | Best for |
-|---|---|---|
-| **Chat** | `babel "task"` | Daily coding, exploration, iteration, and questions |
-| **Chat headless** | `babel chat --headless "task"` | Scripts, CI, and JSON-oriented automation |
-| **Plan** | `babel plan "task"` | A plan you can review before mutation |
-| **Deep** | `babel deep "task"` | Higher-risk implementation with the full governed pipeline |
-
-Read the complete [chat-mode contract](./docs/CHAT_MODE.md) for routing and
-runtime details. Legacy names remain accepted as aliases, but new integrations
-should use `chat`, `plan`, and `deep`.
+Legacy mode names remain accepted as aliases, but new integrations should use
+`chat`, `plan`, and `deep`.
 
 ## Quick start from source
 
 Babel is currently easiest to run from a clone of this repository. It requires
-Node.js 22+ for the CLI build.
+Node.js 22.5+ (`babel-cli` `engines.node`) for the CLI build. There is no
+published npm package for this CLI today; run it from a clone.
 
 ```powershell
 git clone https://github.com/gthgomez/Babel.git
@@ -84,12 +143,9 @@ cd Babel
 npm --prefix .\babel-cli ci
 npm --prefix .\babel-cli run build
 node .\babel-cli\dist\index.js doctor
-```
 
-Start the interactive TUI:
-
-```powershell
-node .\babel-cli\dist\index.js interactive
+# macOS/Linux equivalent:
+npm --prefix ./babel-cli ci && npm --prefix ./babel-cli run build && node ./babel-cli/dist/index.js doctor
 ```
 
 Model-backed sessions need a configured provider. Credentials belong in your
@@ -112,14 +168,14 @@ pwsh -File .\tools\validate-public-release.ps1
 pwsh -File .\tools\resolve-local-stack.ps1 `
   -TaskCategory backend `
   -Project example_saas_backend `
-  -Model deepseek `
-  -PipelineMode chat `
+  -Model codex `
+  -PipelineMode deep `
   -Format json
 ```
 
 Compare the result with the checked-in
-[backend manifest preview](./examples/manifest-previews/backend-verified.json).
-For integrations, `babel mcp` exposes the read-only control-plane surface.
+[backend manifest preview](./examples/manifest-previews/backend-deep.json).
+For integrations, `node .\babel-cli\dist\index.js mcp` exposes the read-only control-plane surface.
 
 This preview-first path is intentional: you can inspect what Babel would load
 before asking a model to act.
@@ -179,15 +235,15 @@ subagent teams, sandbox parity, or market parity are intentionally excluded.
 
 ## Documentation
 
-- [Start Here](./START_HERE.md) — first successful validation and preview
+- [Start Here](./START_HERE.md) — start using Babel, then inspect how it works
 - [CLI quickstart](./docs/CLI_QUICKSTART.md) — chat, plan, deep, doctor, and MCP
-- [Chat mode](./docs/CHAT_MODE.md) — the default daily runtime contract
+- [Using chat mode](./docs/CHAT_MODE.md) — the default daily runtime in depth
 - [Vision](./docs/VISION.md) — product principles and public scope
 - [Architecture](./docs/architecture/ARCHITECTURE.md) — system shape and layers
 - [Harness architecture](./docs/architecture/HARNESS_ARCHITECTURE_V1.md) — normative runtime contract
 - [Harness hardening roadmap](./docs/architecture/HARNESS_HARDENING_ROADMAP_V1.md) — canonical H0–H7 implementation sequence
 - [Portable agent workflow plan](./docs/guides/PORTABLE_AGENT_WORKFLOW_PLAN.md) — proposed cross-harness contract, subordinate to the native harness
-- [Babel Bible](./BABEL_BIBLE.md) — integration and model-facing invocation contract
+- [Integration guide](./INTEGRATION.md) — integration and model-facing invocation contract
 - [Contributing](./CONTRIBUTING.md)
 
 ## Contributing
@@ -205,6 +261,9 @@ fingerprints out of public docs and fixtures.
 
 ## License
 
-MIT. Use it, fork it, and build on it.
+Apache License 2.0. Use it, fork it, and build on it.
+
+Historical tagged releases that shipped under MIT remain MIT for those
+snapshots. This tree is Apache-2.0 going forward.
 
 Full text: [LICENSE](./LICENSE)

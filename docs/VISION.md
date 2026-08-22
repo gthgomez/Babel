@@ -14,20 +14,21 @@ This repository is Babel's canonical, community-safe public source.
 
 What works today from a fresh clone:
 
+- build the public CLI and start the interactive TUI
+- use the default conversational **chat** loop, with **plan** and **deep** for stronger gates
+- configure a local provider and run model-backed sessions when credentials are present
+- inspect, resume, and recover work (sessions, checkpoints, `undo`)
 - validate the public catalog and release surface
-- preview the selected stack for backend, frontend, mobile, game, research, compliance, and other task lanes
+- preview the selected Prompt OS stack for backend, frontend, mobile, and other lanes
 - inspect deterministic manifest previews from `prompt_catalog.yaml`
 - run a read-only MCP control-plane server
-- build and typecheck the public CLI
 - run public secret and scrub checks before release
-- use the default conversational chat loop, with plan and deep modes for stronger gates
 
 What is available but more advanced:
 
-- model-backed `babel run`
-- manual bridge and autonomous pipeline flows
-- local provider configuration
-- workspace-specific execution policy
+- `babel run` with explicit pipeline flags
+- experimental loopback remote serve
+- workspace-specific execution policy and Docker isolation profiles
 
 ## Product Principles
 
@@ -49,7 +50,7 @@ Public contributions are evaluated against four ongoing priorities:
 
 ## Compatibility Principles
 
-Babel is designed as a community prompt layer that can integrate with editors, CLIs, MCP clients, coding agents, and local workflows.
+Babel is designed as a local coding-agent harness whose inspectable Prompt OS can integrate with editors, CLIs, MCP clients, other agents, and local workflows.
 
 Public interfaces should remain:
 

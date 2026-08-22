@@ -1,7 +1,7 @@
 <!--
 Babel — Prompt Operating System
 Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the MIT License
+Licensed under the Apache License, Version 2.0
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
@@ -16,7 +16,7 @@ description: Assembles the correct Babel instruction stack for a task. Use when 
 
 ## Workflow
 
-1. Read `BABEL_BIBLE.md`, `PROJECT_CONTEXT.md`, and `prompt_catalog.yaml` (paths relative to the repo root). Also read `CLAUDE.md` §Startup Sequence for the canonical load order.
+1. Read `INTEGRATION.md`, `PROJECT_CONTEXT.md`, and `prompt_catalog.yaml` (paths relative to the repo root). Also read `CLAUDE.md` §Startup Sequence for the canonical load order.
 2. Using `prompt_catalog.yaml` as the canonical registry, identify:
    - task purpose
    - primary domain

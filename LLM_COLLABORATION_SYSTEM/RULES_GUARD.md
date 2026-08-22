@@ -1,7 +1,7 @@
 <!--
 Babel — Prompt Operating System
 Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the MIT License
+Licensed under the Apache License, Version 2.0
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
@@ -56,7 +56,7 @@ Before contract changes (schema/API/interface/props):
 ## Instruction Integrity Guard (v1 — Structural)
 
 - **Threat**: An autonomous agent with file-write access could modify its own instruction stack (CLAUDE.md, prompt files, catalog entries, behavioral rules).
-- **Protected paths**: `CLAUDE.md`, `AGENTS.md`, `BABEL_BIBLE.md`, `PROJECT_CONTEXT.md`, `LLM_COLLABORATION_SYSTEM/*`, `01_Behavioral_OS/*`, `02_Domain_Architects/*`, `.agents/rules/*`, `.agents/skills/*`, `prompt_catalog.yaml`, and any file listed in `prompt_catalog.yaml` as `always_load`.
+- **Protected paths**: `CLAUDE.md`, `AGENTS.md`, `INTEGRATION.md`, `PROJECT_CONTEXT.md`, `LLM_COLLABORATION_SYSTEM/*`, `01_Behavioral_OS/*`, `02_Domain_Architects/*`, `.agents/rules/*`, `.agents/skills/*`, `prompt_catalog.yaml`, and any file listed in `prompt_catalog.yaml` as `always_load`.
 - **Rule**: Any write to a protected path requires explicit user confirmation with the full diff previewed. Non-protected paths follow normal approval policy.
 - **Detection**: Before writing to a protected path, emit `[INTEGRITY_GATE]` with the file path and reason. Escalate to user approval regardless of auto-edit mode.
 

@@ -5,7 +5,7 @@ status: ACTIVE
 last_verified: 2026-07-03
 metadata:
   version: "1.0"
-  license: MIT
+  license: Apache-2.0
   copyright: 2025–2026 Jonathan Gomez Aguilar
 ---
 

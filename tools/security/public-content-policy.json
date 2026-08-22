@@ -264,7 +264,7 @@
     "category": "duplicate-active-title-version"
   },
   "canonical_independence": {
-    "required_startup_files": ["BABEL_BIBLE.md", "PROJECT_CONTEXT.md", "README.md", "prompt_catalog.yaml"],
+    "required_startup_files": ["INTEGRATION.md", "PROJECT_CONTEXT.md", "README.md", "prompt_catalog.yaml"],
     "scan_extensions": [".md", ".yaml", ".yml", ".json", ".ts", ".js", ".ps1"],
     "excluded_path_prefixes": ["docs/archive/", "02_Domain_Architects/archive/"],
     "excluded_paths": [],

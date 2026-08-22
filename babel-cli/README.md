@@ -2,15 +2,22 @@
 
 `babel-cli/` is the only authoritative CLI package root.
 
-## Evidence Baseline
+Babel CLI is the local coding-agent runtime for **Chat**, **Plan**, and **Deep**.
+The Prompt OS (catalog, resolver, typed contracts) is the inspectable control
+architecture underneath that runtime.
 
-Babel CLI is an experimental governance-first Prompt OS / CLI runtime with tested deterministic reliability components. The current evidence supports claims about catalog validation, typed contracts, resolver/compiler behavior, terminal status normalization, rollback/worktree safety, verifier-contract handling, doctor diagnostics, and local tests.
+This package is pre-1.0. Do not describe it as ready for unrestricted production
+use, as a safe autonomous worker for arbitrary repositories, or as equivalent to
+mature coding-agent CLIs. Evidence for live provider-backed governance remains
+limited because those pipeline tests can require credentials and may be skipped
+in normal local runs.
 
-Do not describe this package as ready for unrestricted production use, as a
-safe autonomous worker for arbitrary repositories, or as equivalent to mature
-coding-agent CLIs. Evidence for live provider-backed governance remains limited
-because those pipeline tests can require credentials and may be skipped in
-normal local runs.
+Deeper references:
+
+- [CLI quickstart](../docs/CLI_QUICKSTART.md)
+- [Chat mode](../docs/CHAT_MODE.md)
+- [Harness architecture](../docs/architecture/HARNESS_ARCHITECTURE_V1.md)
+- [CLI command contract](../docs/CLI_COMMAND_CONTRACT.md)
 
 ## Known Limitations
 
@@ -38,32 +45,53 @@ generated CLI source back into this package.
 
 ## First Five Minutes
 
+From a clone of this repository (not an npm registry package). Node.js 22.5+.
+
+Throughout this file, `babel <command>` means `node .\babel-cli\dist\index.js <command>` run from the repository root, unless you have linked or installed the binary yourself (macOS/Linux: `./babel-cli/dist/index.js`).
+
 Windows PowerShell from the Babel repository root:
 
 ```powershell
 npm --prefix .\babel-cli ci
 npm --prefix .\babel-cli run build
-node .\babel-cli\dist\index.js setup --json
 node .\babel-cli\dist\index.js doctor --json
-node .\babel-cli\dist\index.js context preview @file README.md --json
+
+# macOS/Linux equivalent:
+npm --prefix ./babel-cli ci && npm --prefix ./babel-cli run build && node ./babel-cli/dist/index.js doctor --json
 ```
 
-Expected shape:
+`dev_local` executes approved tools directly on your host with no container
+isolation. Use it only for repositories you own and code you have reviewed.
+For untrusted repositories or unreviewed code, stay on the isolated
+`safe_repo` profile.
 
-- `setup --json` reports `status: "pass"` or names the missing setup piece plus `next_command`.
-- `doctor --json` should report `status: "pass"` in a healthy workspace.
-- `context preview` is the first safe no-mutation probe; it does not run a model or edit files.
+```powershell
+$env:BABEL_EXECUTION_PROFILE = 'dev_local'
+node .\babel-cli\dist\index.js interactive
+```
+
+Then talk to Babel. One-shot instead of the TUI:
+
+```powershell
+node .\babel-cli\dist\index.js "Explain this repository"
+node .\babel-cli\dist\index.js plan "Split the auth module safely"
+node .\babel-cli\dist\index.js deep "Harden the migration path and verify it"
+```
+
+`setup --json` still reports missing setup pieces. `context preview` remains a
+safe no-mutation probe. Neither replaces starting a chat session.
 
 ## Model-Backed Smoke
 
-Use `babel models ping --json --model qwen3-32b` to verify the DeepInfra key and model reachability before a full pipeline run.
+Use `node .\babel-cli\dist\index.js models ping --json` to verify a configured
+provider before a full pipeline run.
 
-Autonomous dry-run smoke should keep mutations shadowed and avoid optional pruning unless explicitly enabled:
+Deep dry-run smoke should keep mutations shadowed and avoid optional pruning unless explicitly enabled:
 
 ```powershell
 $env:BABEL_DRY_RUN='true'
 $env:BABEL_DEEPINFRA_REQUEST_TIMEOUT_MS='120000'
-node --env-file=.\babel-cli\.env .\babel-cli\dist\index.js run --project example_mobile_reference --mode autonomous --json "Read PROJECT_CONTEXT.md and create a new file named babel-autonomous-smoke.txt containing one sentence that says the smoke test passed."
+node --env-file=.\babel-cli\.env .\babel-cli\dist\index.js run --project example_mobile_reference --mode deep --json "Read PROJECT_CONTEXT.md and create a new file named babel-deep-smoke.txt containing one sentence that says the smoke test passed."
 ```
 
 - `BABEL_DEEPINFRA_REQUEST_TIMEOUT_MS` is a per-request abort timeout; timed-out model calls cascade to the next configured backend. The default is `120000`.
@@ -104,6 +132,8 @@ Inside the REPL, the short path is:
 - `/mcp`, `/plugins`, and `/agents` when checking integrations or delegation surfaces.
 
 ## Developer workflow
+
+From inside `babel-cli/`:
 
 ```bash
 npm ci
@@ -154,12 +184,12 @@ verification evidence before changing source or making release decisions.
 
 ```bash
 node dist/index.js run "Fix failing tests" --execution-profile dev_local
-node dist/index.js run "Solve benchmark task" --execution-profile benchmark_container --mode autonomous
+node dist/index.js run "Solve benchmark task" --execution-profile benchmark_container --mode deep
 node dist/index.js run "Audit this repo" --execution-profile read_only_audit
 ```
 
 - `safe_repo` is the default guarded profile (`dockerSandbox: true`). After H13 it **fail-closes** without Docker daemon + image (`BABEL_BENCHMARK_DOCKER_IMAGE`) unless you escalate with `BABEL_ALLOW_HOST_FALLBACK=1` or `BABEL_DOCKER_DISABLE=true`.
-- `dev_local` is host-friendly (`dockerSandbox: false`); permits common local build tools such as pnpm, yarn, cargo, go, gcc, make, uv, and dotnet while keeping shell wrappers and destructive commands rejected. Prefer this for host-only day-to-day work.
+- `dev_local` is host-friendly (`dockerSandbox: false`); permits common local build tools such as pnpm, yarn, cargo, go, gcc, make, uv, and dotnet while keeping shell wrappers and destructive commands rejected. Prefer this for host-only day-to-day work. It runs tools directly on your host — do not point it at untrusted repositories or unreviewed code.
 - You can also set `BABEL_EXECUTION_PROFILE=dev_local` instead of the CLI flag.
 - `benchmark_container` is for Terminal-Bench style isolated tasks and relaxes benchmark-fixture QA posture without enabling host shell operators.
 - `scaffold` is for new project creation.

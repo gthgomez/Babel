@@ -1,7 +1,7 @@
 <!--
 Babel — Prompt Operating System
 Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the MIT License
+Licensed under the Apache License, Version 2.0
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
@@ -16,7 +16,9 @@ last_verified: 2026-07-03
 
 ## Goal
 
-Before open-sourcing, Babel should present as a portable, testable, model-agnostic instruction control plane for coding and research agents.
+Before open-sourcing, Babel should present as a local coding-agent harness
+with an inspectable Prompt OS / instruction control plane for coding and
+research agents.
 
 Babel should not look like:
 - a folder of private prompt notes
@@ -27,9 +29,9 @@ Babel should not look like:
 ## Target Open-Source Shape
 
 Babel should be understandable as:
-- a layered prompt operating system
-- a routing and instruction-assembly framework
-- a reusable control plane for multi-model agent workflows
+- a local terminal coding agent (Chat / Plan / Deep)
+- a harness with an inspectable Prompt OS underneath
+- a routing and instruction-assembly control plane for multi-model workflows
 
 ## Release Gate
 
@@ -77,7 +79,7 @@ An external user can understand and adopt Babel without sharing your workstation
 - [ ] `CONTRIBUTING.md`
 - [ ] `GOVERNANCE.md`
 - [ ] `PROJECT_CONTEXT.md`
-- [ ] `BABEL_BIBLE.md`
+- [ ] `INTEGRATION.md`
 - [ ] `.gitignore`
 - [ ] `.gitattributes`
 - [ ] CI validation workflow

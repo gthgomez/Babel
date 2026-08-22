@@ -1,7 +1,7 @@
 # CLAUDE.md — Babel (Public Canonical Source)
 
 > **Role**: Entry point for AI sessions in the Babel public repo (`gthgomez/Babel`). This is the **canonical OSS source of truth** for the Babel coding agent. Startup sequence, repo architecture, invariants, high-risk zones, and common task paths.
-> For what Babel is and how to invoke it, see [BABEL_BIBLE.md](./BABEL_BIBLE.md).
+> For what Babel is and how to invoke it, see [INTEGRATION.md](./INTEGRATION.md).
 > For deep technical architecture, see [docs/architecture/ARCHITECTURE.md](./docs/architecture/ARCHITECTURE.md).
 
 > **TL;DR**: You are in the Babel product repo. Don't break the V9 orchestrator, the prompt catalog, or Behavioral OS. Validate changes with `pwsh tools/validate-catalog.ps1`. For CLI code changes, run `cd babel-cli && npm test`.
@@ -18,7 +18,7 @@ This is the **public, canonical source** for the Babel coding agent (`gthgomez/B
 
 | You need… | Look in… |
 |-----------|----------|
-| What is Babel, how to invoke it | `BABEL_BIBLE.md` |
+| What is Babel, how to invoke it | `INTEGRATION.md` |
 | System topology, contracts, runtime | `PROJECT_CONTEXT.md` |
 | Full catalog of every prompt/skill/rule | `prompt_catalog.yaml` |
 | How the CLI routes tasks (the orchestrator) | `00_System_Router/OLS-v9-Orchestrator.md` |
@@ -52,7 +52,7 @@ This is the **public, canonical source** for the Babel coding agent (`gthgomez/B
 ## Repo Layer Architecture
 
 ```
-User-facing surface (README.md, BABEL_BIBLE.md)
+User-facing surface (README.md, INTEGRATION.md)
 Control plane (prompt layers assembled into instruction stacks):
   00_System_Router/     ← orchestrator + runtime contracts
   01_Behavioral_OS/     ← how the model behaves
@@ -75,21 +75,21 @@ Support:
   LLM_COLLABORATION_SYSTEM/ ← foundational rule documents
   .agents/              ← agent lifecycle rules + skills
 ```
-For the full layer model description and interpretation rules, see [BABEL_BIBLE.md](./BABEL_BIBLE.md) §Layer Model.
+For the full layer model description and interpretation rules, see [INTEGRATION.md](./INTEGRATION.md) §Layer Model.
 
 ## Startup Sequence
 
 **On every session start**, this file (CLAUDE.md) is your entry point — it covers invariants, high-risk zones, and common task paths.
 
 **When Babel control-plane work is requested** (`use Babel`, prompt-stack assembly, routing, catalog changes), load:
-1. `BABEL_BIBLE.md` — entrypoint, layer model, workflow
+1. `INTEGRATION.md` — entrypoint, layer model, workflow
 2. `PROJECT_CONTEXT.md` — system contracts and hot paths
 3. `prompt_catalog.yaml` — canonical source of truth for prompt versioning and file paths
 4. This file — invariants, high-risk zones, special rules, common task paths
 
 ## Babel Harness
 
-The TUI provides chat, plan, and deep modes with automatic session tracking, resume, and cost monitoring. For what Babel is and how to launch it, see [BABEL_BIBLE.md](./BABEL_BIBLE.md).
+The TUI provides chat, plan, and deep modes with automatic session tracking, resume, and cost monitoring. For what Babel is and how to launch it, see [INTEGRATION.md](./INTEGRATION.md).
 
 When working on the Babel control plane itself (prompt stack assembly, routing, catalog changes), load the relevant Babel layers per the [Startup Sequence](#startup-sequence) above. Do not improvise the Babel stack from memory.
 
@@ -225,7 +225,7 @@ After CLI source changes, use the targeted `babel-cli` checks listed in `babel-c
 **Key rules:**
 - Prefer adding indexes, labels, and docs lanes before moving many files.
 - **Documentation Co-Evolution**: When adding `.agents/rules/`, ADRs (`docs/adr/`), or public guides, update `CLAUDE.md` §Quick Traverse and the `README.md` index in the same change set. Internal audits, plans, research, and status ledgers belong outside this public repository. Run `pwsh tools/check-architectural-budget.ps1` before committing.
-- Do not move `AGENTS.md`, `PROJECT_CONTEXT.md`, `BABEL_BIBLE.md`, model adapters, or startup files without explicit approval.
+- Do not move `AGENTS.md`, `PROJECT_CONTEXT.md`, `INTEGRATION.md`, model adapters, or startup files without explicit approval.
 - Do not delete run evidence, generated artifacts, or snapshots just because they look noisy.
 - Generated paths (`runs/`, `artifacts/`, `runtime/`) can contain important evidence — do not delete or flatten without an explicit cleanup task.
 

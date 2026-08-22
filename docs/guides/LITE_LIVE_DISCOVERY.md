@@ -73,7 +73,7 @@ Discovery intentionally does **not** cover:
 
 ## Related guides
 
-- [Lite command contract](../LITE_COMMAND_CONTRACT.md) — daily verb semantics
+- [CLI command contract](../CLI_COMMAND_CONTRACT.md) — daily verb semantics
 
 ## Manual repro
 

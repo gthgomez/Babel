@@ -7,6 +7,14 @@ import type {
 
 export const DEFAULT_TOKEN_DRIFT_WARNING_TOLERANCE = 500;
 
+/**
+ * Default hard limit for instruction-stack token budgets. Raised from the
+ * V9-era 3200 to 3600 when behavioral `always_load` tagging was activated
+ * (see getEffectiveBudgetLimit); the canonical backend deep fixture with
+ * its always-load Behavioral OS layer and project overlay totals 3425.
+ */
+export const DEFAULT_STACK_HARD_LIMIT = 3600;
+
 export const ACTIVE_V9_BUDGET_POLICY: BudgetPolicy = {
   enabled: true,
   scope: {
@@ -78,7 +86,13 @@ export function resolveBudgetEvaluationTokens(input: {
  * Resolve the effective token budget hard limit from, in priority order:
  *   1. CLI override (`--budget` flag)
  *   2. BABEL_TOKEN_BUDGET environment variable
- *   3. Default (3200, matching ACTIVE_V9_BUDGET_POLICY.hard_limit)
+ *   3. Default (3600)
+ *
+ * The default was raised from the V9-era 3200 to 3600 when behavioral
+ * `always_load` tagging was activated: every resolved stack now honestly
+ * counts its mandatory Behavioral OS layer (~600 tokens) before pruning,
+ * so stacks that previously fit only because the layer was silently
+ * omitted must still resolve without evicting project context.
  *
  * @param env         - Environment variable source (defaults to `process.env`).
  * @param cliOverride - Explicit numeric override from the `--budget` CLI flag.
@@ -98,7 +112,7 @@ export function getEffectiveBudgetLimit(
       return parsed;
     }
   }
-  return 3200;
+  return DEFAULT_STACK_HARD_LIMIT;
 }
 
 export function buildBudgetDiagnostics(input: {

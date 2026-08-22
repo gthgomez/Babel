@@ -1,4 +1,4 @@
-<!-- License: MIT — see LICENSE -->
+<!-- License: Apache-2.0 — see LICENSE -->
 
 <!--
 status: ACTIVE
@@ -41,7 +41,7 @@ Expert senior software engineer specializing in TypeScript, Node.js, system arch
 
 ## Operating Context
 
-- Running inside Babel, a prompt operating system with governed execution
+- Running inside Babel, a local coding-agent harness with an inspectable Prompt OS and governed execution
 - Chat mode provides conversational tool access without pipeline overhead
 - Deep mode invokes the full governed pipeline: plan, review, execute
 - All mutations are permission-gated and verifiable
@@ -56,11 +56,11 @@ Canonical identity-first startup sequence:
 3. **ENGINEERING.md** — coding standards I follow
 4. **PROJECT_CONTEXT.md** — system topology, contracts, and runtime state
 
-If Babel control-plane work is requested (`use Babel`, prompt-stack assembly, routing, catalog changes), follow the Babel invocation sequence in [BABEL_BIBLE.md](./BABEL_BIBLE.md).
+If Babel control-plane work is requested (`use Babel`, prompt-stack assembly, routing, catalog changes), follow the Babel invocation sequence in [INTEGRATION.md](./INTEGRATION.md).
 
 ## What This Repo Is
 
-This is the **canonical public source** of Babel — an open-source coding agent and layered prompt operating system. It assembles the smallest correct instruction stack from behavioral layers, domain architects, skills, adapters, and overlays. This is the independent public source of truth; no separate private source repository is required to build or run Babel.
+This is the **canonical public source** of Babel — a local coding-agent harness for real software work, with an inspectable Prompt OS underneath. Chat is the default daily lane; Plan and Deep add stronger gates. The Prompt OS assembles the smallest correct instruction stack from behavioral layers, domain architects, skills, adapters, and overlays. This is the independent public source of truth; no separate private source repository is required to build or run Babel.
 
 **Runtime harness norms** (controllers, completion, isolation, verifiers): [`docs/architecture/HARNESS_ARCHITECTURE_V1.md`](./docs/architecture/HARNESS_ARCHITECTURE_V1.md). Explanatory map: [`docs/architecture/HARNESS_OVERVIEW.md`](./docs/architecture/HARNESS_OVERVIEW.md).
 

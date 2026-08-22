@@ -1,7 +1,7 @@
 <!--
 Babel — Prompt Operating System
 Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the MIT License
+Licensed under the Apache License, Version 2.0
 Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 
 You are explicitly encouraged to use, modify, fork, and build commercial products on top of this prompt layer.
@@ -65,10 +65,10 @@ When working in an editor, chat surface, or web chat, Babel
 operates as an instruction layer rather than a runtime. Tell the model:
 
 ```text
-Read BABEL_BIBLE.md and use Babel before planning or completing this task.
+Read INTEGRATION.md and use Babel before planning or completing this task.
 ```
 
-The model reads `BABEL_BIBLE.md`, selects the correct instruction layers from
+The model reads `INTEGRATION.md`, selects the correct instruction layers from
 the prompt catalog, and follows the Standard Babel Workflow. Session lifecycle
 is handled by the editor/inference surface, not by Babel's TUI runtime.
 
@@ -88,7 +88,7 @@ everyday terminal use.
 
 When Babel is invoked through an editor or chat surface, the model should:
 
-1. Read [BABEL_BIBLE.md](../../BABEL_BIBLE.md).
+1. Read [INTEGRATION.md](../../INTEGRATION.md).
 2. Read Babel's own [PROJECT_CONTEXT.md](../../PROJECT_CONTEXT.md) and [prompt_catalog.yaml](../../prompt_catalog.yaml) if stack selection is needed.
 3. Identify the target project.
 4. Load the appropriate Babel layers.

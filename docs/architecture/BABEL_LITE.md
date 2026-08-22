@@ -4,13 +4,13 @@
 status: STALE
 last_verified: 2026-07-03
 -->
-> **2026-06-10:** User-facing CLI consolidated to `babel "<task>"`, `babel plan`, `babel deep`, `babel undo`. Removed `bl`/`lite`/`ask`/`do`/`fix` verbs exit with hints. Canonical contract: [LITE_COMMAND_CONTRACT.md](../LITE_COMMAND_CONTRACT.md).
+> **2026-06-10:** User-facing CLI consolidated to `babel "<task>"`, `babel plan`, `babel deep`, `babel undo`. Removed `bl`/`lite`/`ask`/`do`/`fix` verbs exit with hints. Canonical contract: [CLI_COMMAND_CONTRACT.md](../CLI_COMMAND_CONTRACT.md).
 >
 > **2026-06-12:** TUI-hybrid Slices 2–3 shipped bounded verify→repair (`smallFix.ts`), live tool stream, REPL chat streaming, and run HUD prelude.
 
 Babel Lite is the underlying single-agent session model for Babel's companion workflow. The user-facing CLI teaches `babel "<task>"`, `babel plan`, and `babel deep` on top of that session model.
 
-Canonical contract: [docs/LITE_COMMAND_CONTRACT.md](../LITE_COMMAND_CONTRACT.md)
+Canonical contract: [docs/CLI_COMMAND_CONTRACT.md](../CLI_COMMAND_CONTRACT.md)
 
 It is not a replacement for general-purpose coding agents, not a provider-agnostic autonomous executor, and not proof of mutating live subagents. The current product target is a direct daily CLI: Lite is the front door, and intent decides the lane. Complex read-only planning can stay in Lite with read-only Spark critique; clear implementation work can route to fix or governed Full when risk warrants it. Full should become orchestration over isolated Lite sessions, not a separate mutating engine.
 
@@ -73,7 +73,7 @@ The provider supplies reasoning; Babel owns authority over file access, command 
 
 ## Artifact Direction
 
-The target artifact layout is documented in [docs/LITE_COMMAND_CONTRACT.md](../LITE_COMMAND_CONTRACT.md). The important product rule is simpler than the exact file list:
+The target artifact layout is documented in [docs/CLI_COMMAND_CONTRACT.md](../CLI_COMMAND_CONTRACT.md). The important product rule is simpler than the exact file list:
 
 - read-only commands must not edit source files
 - proposal commands must not apply patches

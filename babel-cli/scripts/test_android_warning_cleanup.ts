@@ -58,10 +58,10 @@ function buildManifest() {
       strict_conflict_mode: 'error',
       task_shape_profile: 'full',
     },
-    prompt_manifest: ['<BABEL_REPO_ROOT>\\BABEL_BIBLE.md'],
+    prompt_manifest: ['<BABEL_REPO_ROOT>\\INTEGRATION.md'],
     compiled_artifacts: {
       selected_entry_ids: ['behavioral_core_v11'],
-      prompt_manifest: ['<BABEL_REPO_ROOT>\\BABEL_BIBLE.md'],
+      prompt_manifest: ['<BABEL_REPO_ROOT>\\INTEGRATION.md'],
       token_budget_total: 1,
       token_budget_missing: [],
       token_budget_by_entry: { behavioral_core_v11: 1 },

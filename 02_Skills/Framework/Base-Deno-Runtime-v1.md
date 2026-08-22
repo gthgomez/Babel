@@ -1,7 +1,7 @@
 <!--
 Babel — Prompt Operating System
 Copyright © 2025–2026 Jonathan Gomez Aguilar
-Licensed under the MIT License
+Licensed under the Apache License, Version 2.0
 -->
 
 # Skill: Base Deno Runtime (v1.0)

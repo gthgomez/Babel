@@ -1,6 +1,6 @@
 # Repository Structure
 
-Babel is organized as a prompt operating system plus a local CLI and public validation lane.
+Babel is a local terminal coding agent and coding-agent harness: chat-first daily work by default, with a review-first plan lane and governed deep execution. It is organized around an inspectable prompt operating system — the underlying instruction architecture — plus a local CLI and public validation lane.
 
 This tree is the canonical public source. A clean clone must contain every file
 required by the startup chain and validation path; external consumer configuration

@@ -21,7 +21,7 @@ Typical result:
 Same request, but the model is told:
 
 ```text
-Read BABEL_BIBLE.md and use Babel before planning or completing this task.
+Read INTEGRATION.md and use Babel before planning or completing this task.
 ```
 
 Babel routes the task into a structured stack:
@@ -49,7 +49,7 @@ pwsh -File .\tools\resolve-local-stack.ps1 `
 
 Reference output:
 
-- `examples/manifest-previews/mobile-direct.json`
+- `examples/manifest-previews/mobile-chat.json`
 
 ## Takeaway
 

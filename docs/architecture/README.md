@@ -29,7 +29,7 @@ last_verified: 2026-08-05
 | [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) | Explanatory harness map (not normative). |
 | [BABEL_LOCAL_MODE.md](./BABEL_LOCAL_MODE.md) | Local workspace surfaces, session lifecycle, editor integrations. |
 | [BABEL_FULL_ORCHESTRATION.md](./BABEL_FULL_ORCHESTRATION.md) | Full/Spark multi-agent product lane and proof gates (distinct from pipeline `deep` mutation path — see harness overview). |
-| [BABEL_LITE.md](./BABEL_LITE.md) | Lite session model (**status: STALE** — prefer [../LITE_COMMAND_CONTRACT.md](../LITE_COMMAND_CONTRACT.md) + ChatEngine docs). |
+| [BABEL_LITE.md](./BABEL_LITE.md) | Lite session model (**status: STALE** — prefer [../CLI_COMMAND_CONTRACT.md](../CLI_COMMAND_CONTRACT.md) + ChatEngine docs). |
 | [BABEL_CLI_STAGE_WATERFALLS.md](./BABEL_CLI_STAGE_WATERFALLS.md) | Per-stage model waterfalls ↔ `model-policy.json`. |
 | [operator-status-taxonomy.md](./operator-status-taxonomy.md) | Doctor / env operator status codes. |
 | [BABEL_OTEL_SCHEMA-v1.md](./BABEL_OTEL_SCHEMA-v1.md) | OpenTelemetry span schema for governed runs. |

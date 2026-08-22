@@ -21,6 +21,7 @@ $validateCatalogScriptPath = Join-Path $Root 'tools\validate-catalog.ps1'
 $checkPublicScrubScriptPath = Join-Path $Root 'tools\check-public-scrub.ps1'
 $checkPublicContentPolicyScriptPath = Join-Path $Root 'tools\check-public-content-policy.ps1'
 $checkCanonicalIndependenceScriptPath = Join-Path $Root 'tools\check-canonical-independence.ps1'
+$checkPublicIdentityScriptPath = Join-Path $Root 'tools\check-public-identity.ps1'
 $resolveLocalStackScriptPath = Join-Path $Root 'tools\resolve-local-stack.ps1'
 
 $preferredShell = Get-Command pwsh -ErrorAction SilentlyContinue
@@ -62,6 +63,9 @@ if (-not (Test-Path -LiteralPath $checkPublicContentPolicyScriptPath)) {
 if (-not (Test-Path -LiteralPath $checkCanonicalIndependenceScriptPath)) {
   throw "Canonical independence script not found at $checkCanonicalIndependenceScriptPath"
 }
+if (-not (Test-Path -LiteralPath $checkPublicIdentityScriptPath)) {
+  throw "Public identity script not found at $checkPublicIdentityScriptPath"
+}
 
 Invoke-Step -Label 'Catalog validation' -Body {
   & $shellPath -NoProfile -ExecutionPolicy Bypass -File $validateCatalogScriptPath
@@ -87,6 +91,10 @@ Invoke-Step -Label 'Canonical repository independence' -Body {
   & $shellPath -NoProfile -ExecutionPolicy Bypass -File $checkCanonicalIndependenceScriptPath -RepoRoot $Root
 }
 
+Invoke-Step -Label 'Public identity vocabulary' -Body {
+  & $shellPath -NoProfile -ExecutionPolicy Bypass -File $checkPublicIdentityScriptPath -RepoRoot $Root
+}
+
 if (-not (Test-Path -LiteralPath (Join-Path $cliRoot 'node_modules'))) {
   Invoke-Step -Label 'Install babel-cli dependencies' -Body {
     Push-Location -LiteralPath $cliRoot
@@ -108,7 +116,7 @@ Invoke-Step -Label 'TypeScript typecheck' -Body {
 }
 
 Invoke-Step -Label 'Resolver smoke test' -Body {
-  & $shellPath -NoProfile -ExecutionPolicy Bypass -File $resolveLocalStackScriptPath -TaskCategory backend -Project example_saas_backend -Model codex -PipelineMode verified -Format json | Out-Null
+  & $shellPath -NoProfile -ExecutionPolicy Bypass -File $resolveLocalStackScriptPath -TaskCategory backend -Project example_saas_backend -Model codex -PipelineMode deep -Format json | Out-Null
 }
 
 Invoke-Step -Label 'Mobile resolver smoke test' -Body {

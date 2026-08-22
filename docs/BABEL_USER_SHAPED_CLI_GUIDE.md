@@ -1,12 +1,13 @@
 <!--
 status: ACTIVE
-last_verified: 2026-07-03
+last_verified: 2026-08-22
 -->
 # Babel User-Shaped CLI Guide
 
 Date: 2026-05-31
 
-This guide captures the product direction for making Babel and Babel Lite easier to use without weakening Babel's internal routing, evidence, and safety contracts.
+This guide captures the product direction for making Babel easier to use
+without weakening internal routing, evidence, and safety contracts.
 
 ## North Star
 
@@ -41,10 +42,10 @@ Teams that need a narrower local boundary can set `BABEL_OPENCLAW_APPROVED_ROOTS
 Teach the short commands first:
 
 ```powershell
-babel "why is this failing?"
-babel plan "how should we separate Babel and Lite?"
-babel "what should we implement next?"
-babel deep "harden the parser fix before applying it"
+node .\babel-cli\dist\index.js "why is this failing?"
+node .\babel-cli\dist\index.js plan "how should we split auth safely?"
+node .\babel-cli\dist\index.js "what should we implement next?"
+node .\babel-cli\dist\index.js deep "harden the parser fix before applying it"
 ```
 
 The intended behavior is:
@@ -52,38 +53,36 @@ The intended behavior is:
 - `babel plan` prepares an implementation plan, asks for approval, then applies and verifies in the same flow after approval.
 - `babel deep` is the explicit critique/refine/governed path for higher-risk work.
 
-Compatibility verbs such as `bl`, `ask`, `do`, `fix`, `full`, `propose`, and `review` can remain callable during transition, but they should not be the taught path.
+Removed surface tokens (`lite`, `l`, `full`, `bl`, `babel-lite`, `daily`) **exit 1** with stderr hints. Other legacy daily verbs were never registered: `ask`, `do`, `fix`, `propose`, and `patch` fall through to the chat lane as ordinary task text, and `review` is rejected as an unknown command. Do not teach any of them. Canonical contract: [CLI_COMMAND_CONTRACT.md](./CLI_COMMAND_CONTRACT.md).
 
-Fresh Clone and First-Run Guide:
+Fresh clone and first-run (source checkout; not an npm registry package):
+
+`dev_local` executes approved tools directly on your host with no container isolation. Use it only for repositories you own and code you have reviewed. For untrusted repositories or unreviewed code, stay on the isolated `safe_repo` profile (the default).
 
 ```powershell
 git clone <repo-url>
 cd <repo-directory>
-npm install
+npm --prefix .\babel-cli ci
 npm --prefix .\babel-cli run build
-babel "why is this failing?"
+node .\babel-cli\dist\index.js doctor
+$env:BABEL_EXECUTION_PROFILE = 'dev_local'
+node .\babel-cli\dist\index.js "why is this failing?"
 ```
 
-If the CLI entrypoint is missing on a fresh checkout, rerun:
+If `dist/index.js` is missing on a fresh checkout, rerun:
 
 ```powershell
 npm --prefix .\babel-cli run build
 ```
 
-That same command is the recovery path for missing `dist/` guidance in both `bl`/`babel-lite` wrappers.
-
-Keep these as compatibility or discoverability forms:
-
-```powershell
-bl ask "why is this failing?"
-babel-lite ask "why is this failing?"
-babel lite ask "why is this failing?"
-```
+`babel` on PATH only exists after you install/link the `babel-cli` package
+binary yourself. These docs do not assume that. The taught source command is
+`node .\babel-cli\dist\index.js`.
 
 The bare task shortcut is the primary default:
 
 ```powershell
-babel "fix failing tests"
+node .\babel-cli\dist\index.js "fix failing tests"
 ```
 
 Treat `babel run` as the advanced pipeline lane, not the first command a user has to learn:
@@ -98,7 +97,7 @@ Use it when the user explicitly needs pipeline modes, audit artifacts, JSON/even
 ## Command Design Rules
 
 - Prefer positional task text over required prompt flags.
-- Use obvious commands: `babel "<task>"`, `babel plan`, `babel deep`; keep older verbs only as compatibility.
+- Use obvious commands: `babel "<task>"`, `babel plan`, `babel deep`; older Lite-era verbs were removed from the surface, not kept as compatibility.
 - Teach command hierarchy in this order: `babel "<task>"`, then `babel plan`, then `babel deep`, then `babel run` for advanced pipeline control.
 - Let provider and mode defaults work automatically when the environment is already configured.
 - Show short progress and final outcomes by default.
@@ -121,7 +120,14 @@ Avoid opening with architecture terms such as control plane, manifest, verifier,
 
 ## Runtime Implementation Checklist
 
-The mainline CLI behavior routes dedicated Lite calls through `bl`, `babel-lite`, `babel lite`, and `babel l`, and exposes the same user verbs on the main `babel` entrypoint:
+**Historical reference (pre-convergence).** This checklist describes the retired
+babel-lite/pipeline-era surface and is kept for archaeology only. It does not
+describe the shipped CLI: the `bl`, `babel-lite`, `babel lite`, and `babel l`
+entry points now exit `1` with removal hints, and the verb-preservation bullets
+below no longer apply. The current daily surface is `babel "<task>"`,
+`babel plan`, `babel deep`, and `babel undo`/`resume`/`doctor`.
+
+The pre-convergence mainline CLI routed dedicated Lite calls through `bl`, `babel-lite`, `babel lite`, and `babel l`, and exposed the same user verbs on the main `babel` entrypoint:
 
 - Keep binary aliases in `babel-cli/package.json`: `bl` and `babel-lite`.
 - Keep `babel-cli/bin/babel-lite.js` delegating to the compiled CLI entrypoint.
@@ -140,7 +146,7 @@ The mainline CLI behavior routes dedicated Lite calls through `bl`, `babel-lite`
 
 ## Usability Benchmark
 
-Run the deterministic Lite-vs-full command-shape benchmark:
+Run the deterministic Lite-vs-full command-shape benchmark (the `lite` suite name is retained from the retired Lite era; it now compares daily default-path commands against full `babel run` shapes):
 
 ```powershell
 npm --prefix .\babel-cli run build
@@ -151,7 +157,7 @@ The benchmark checks fixture scenarios for:
 - the default path staying read-only for questions and action-capable for clear implementation tasks.
 - `plan` staying approval-first with user-facing output.
 - `deep` staying explicit and governed for higher-risk tasks.
-- compatibility verbs remaining callable without reclaiming the primary UX.
+- natural task text surviving routing so user intent is preserved end to end.
 - output contracts that include status, usage, changed files or run evidence, and next steps.
 
 ## Acceptance Criteria

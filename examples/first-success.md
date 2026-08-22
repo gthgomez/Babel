@@ -28,8 +28,8 @@ Example:
 pwsh -File .\tools\resolve-local-stack.ps1 `
   -TaskCategory backend `
   -Project example_saas_backend `
-  -Model deepseek `
-  -PipelineMode verified `
+  -Model codex `
+  -PipelineMode deep `
   -Format json
 ```
 
@@ -39,8 +39,8 @@ The output shows the resolved instruction stack and ordered manifest preview fro
 
 You can compare the result to:
 
-- `examples/manifest-previews/backend-verified.json`
-- `examples/manifest-previews/mobile-direct.json`
+- `examples/manifest-previews/backend-deep.json`
+- `examples/manifest-previews/mobile-chat.json`
 
 Matching the checked-in preview verifies, for this fixture and command:
 
@@ -56,4 +56,5 @@ After this check, choose one path:
 - read `docs/VISION.md` to understand the direction
 - read `docs/CLI_QUICKSTART.md` to use the CLI
 - run `babel mcp` to inspect Babel from another client
-- try `babel run` only after local model/provider setup is ready
+- start a chat session after local model/provider setup is ready:
+  `node .\babel-cli\dist\index.js interactive`
