@@ -26,12 +26,15 @@ import {
   muted,
   ghost,
   accent,
+  accentSecondary,
   bold,
   primary,
   success,
   warning,
   error,
   info,
+  identityPrimary,
+  identitySecondary,
   bgPanel,
   bgAccent,
   getEffectiveTerminalWidth,
@@ -313,10 +316,21 @@ export interface AgentStreamEvent {
  * Provides interleaved output with agent-colored prefixes so the
  * user can distinguish which agent produced each line.
  */
+/** Identity-only stylers. Must never include success, warning, or error. */
+export const AGENT_IDENTITY_STYLERS: ReadonlyArray<(t: string) => string> = [
+  identityPrimary,
+  identitySecondary,
+  accent,
+  accentSecondary,
+  info,
+  primary,
+  muted,
+];
+
 export class AgentStreamManager {
   private streams: Map<string, AgentStreamEvent[]> = new Map();
   private agentColors: Map<string, (t: string) => string> = new Map();
-  private colorPool: Array<(t: string) => string> = [accent, primary, info, success, warning];
+  private colorPool: Array<(t: string) => string> = [...AGENT_IDENTITY_STYLERS];
   private nextColor = 0;
 
   /** Register an agent with a unique color from the pool. */

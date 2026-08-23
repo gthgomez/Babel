@@ -28,6 +28,7 @@ import {
   ghost,
   getTerminalWidth,
   stripAnsi,
+  colorToken,
 } from './theme.js';
 import { sanitizeLlmOutput, sanitizeCodeLine } from './sanitize.js';
 import { isTreeSitterAvailable, highlightWithTreeSitter } from './treeSitterHighlight.js';
@@ -36,14 +37,21 @@ const HAS_COLOR = supportsColor();
 const ANSI_ITALIC_OPEN = '\x1b[3m';
 const ANSI_ITALIC_CLOSE = '\x1b[23m';
 
-// ─── ANSI codes ───────────────────────────────────────────────────────────────
-
-const BLUE = '\x1b[34m';
-const GREEN = '\x1b[32m';
-const CYAN = '\x1b[36m';
-const YELLOW = '\x1b[33m';
-const DIM = '\x1b[2m';
-const RESET = '\x1b[0m';
+function syntaxKeyword(text: string): string {
+  return colorToken('syntaxKeyword', text);
+}
+function syntaxType(text: string): string {
+  return colorToken('syntaxType', text);
+}
+function syntaxString(text: string): string {
+  return colorToken('syntaxString', text);
+}
+function syntaxNumber(text: string): string {
+  return colorToken('syntaxNumber', text);
+}
+function syntaxComment(text: string): string {
+  return colorToken('syntaxComment', text);
+}
 
 // ─── Token patterns ───────────────────────────────────────────────────────────
 
@@ -1253,7 +1261,7 @@ export function highlightLine(
   if (commentIdx >= 0 && !isInsideString(line, commentIdx)) {
     const code = line.slice(0, commentIdx);
     const comment = line.slice(commentIdx);
-    const result = highlightLine(code, lang) + DIM + comment + RESET;
+    const result = highlightLine(code, lang) + syntaxComment(comment);
     cacheHighlightResult(cacheKey, result);
     return result;
   }
@@ -1264,7 +1272,7 @@ export function highlightLine(
     if (ch === "'") {
       const end = line.indexOf("'", i + 1);
       if (end >= 0) {
-        result += GREEN + line.slice(i, end + 1) + RESET;
+        result += syntaxString(line.slice(i, end + 1));
         i = end + 1;
         continue;
       }
@@ -1272,7 +1280,7 @@ export function highlightLine(
     if (ch === '"') {
       const end = line.indexOf('"', i + 1);
       if (end >= 0) {
-        result += GREEN + line.slice(i, end + 1) + RESET;
+        result += syntaxString(line.slice(i, end + 1));
         i = end + 1;
         continue;
       }
@@ -1280,7 +1288,7 @@ export function highlightLine(
     if (ch === '`') {
       const end = line.indexOf('`', i + 1);
       if (end >= 0) {
-        result += YELLOW + line.slice(i, end + 1) + RESET;
+        result += syntaxString(line.slice(i, end + 1));
         i = end + 1;
         continue;
       }
@@ -1290,8 +1298,8 @@ export function highlightLine(
       while (i < line.length && /\w/.test(line[i] ?? '')) i++;
       const word = line.slice(start, i);
       const lookup = caseInsensitiveKeywords ? word.toLowerCase() : word;
-      if (typeSet.has(lookup) || typeSet.has(word)) result += CYAN + word + RESET;
-      else if (keywords.has(lookup) || keywords.has(word)) result += BLUE + word + RESET;
+      if (typeSet.has(lookup) || typeSet.has(word)) result += syntaxType(word);
+      else if (keywords.has(lookup) || keywords.has(word)) result += syntaxKeyword(word);
       else result += word;
       continue;
     }
@@ -1322,14 +1330,14 @@ function highlightYamlLine(line: string): string {
     const key = kvMatch[2] ?? '';
     const colon = kvMatch[3] ?? '';
     const rest = code.slice((indent + key + colon).length);
-    const coloredKey = `${indent}${BLUE}${key}${RESET}${colon}`;
+    const coloredKey = `${indent}${syntaxKeyword(key)}${colon}`;
     const trimmedRest = rest.trim();
     if (trimmedRest === 'true' || trimmedRest === 'false' || trimmedRest === 'null')
-      return coloredKey + ` ${CYAN}${trimmedRest}${RESET}` + comment;
+      return coloredKey + ` ${syntaxType(trimmedRest)}` + comment;
     if (/^-?\d+(\.\d+)?$/.test(trimmedRest))
-      return coloredKey + ` ${YELLOW}${trimmedRest}${RESET}` + comment;
+      return coloredKey + ` ${syntaxNumber(trimmedRest)}` + comment;
     if (trimmedRest.startsWith('"') || trimmedRest.startsWith("'"))
-      return coloredKey + ` ${GREEN}${rest}${RESET}` + comment;
+      return coloredKey + syntaxString(rest) + comment;
     return coloredKey + rest + comment;
   }
   const listMatch = code.match(/^(\s*)(-\s+)(.*)/);
@@ -1337,9 +1345,9 @@ function highlightYamlLine(line: string): string {
     const indent = listMatch[1] ?? '';
     const dash = listMatch[2] ?? '';
     const rest = listMatch[3] ?? '';
-    return `${indent}${CYAN}${dash}${RESET}${rest}` + comment;
+    return `${indent}${syntaxType(dash)}${rest}` + comment;
   }
-  if (code.trim().startsWith('#')) return DIM + line + RESET;
+  if (code.trim().startsWith('#')) return syntaxComment(line);
   return line;
 }
 
