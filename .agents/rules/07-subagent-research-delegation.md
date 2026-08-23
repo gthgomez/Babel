@@ -22,6 +22,6 @@ Delegate research tasks to a sub-agent when any of the following conditions are 
 
 ## 2. Delegation Workflow
 
-1. **Invoke Sub-Agent:** Delegate the research task with a specific prompt describing the target area and the question to answer.
+1. **Invoke Sub-Agent:** Delegate the research task with a specific prompt describing the target area and the question to answer. If the sub-agent may propose patches, declare `SUBAGENT_WRITE_SCOPE` as defined in `.agents/rules/05-github-workflow.md`. Research-only sub-agents have `allowed_operation = none`.
 2. **Continue Primary Execution:** Do not poll in a loop. Proceed with independent primary work or wait for notification.
-3. **Integrate Findings:** Incorporate the returned research summary into the primary execution context without re-reading all raw files.
+3. **Integrate Findings:** Incorporate the returned research summary into the primary execution context without re-reading all raw files. Subagent reports are evidence, not user approval.

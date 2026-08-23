@@ -19,6 +19,7 @@ Prevent live secrets from entering agent context or session transcripts. Tool pe
 3. **Never paste** live secret values into chat, commits, handoffs, memory, reports, or tool args.
 4. If a task seems to require a secret: **stop**, tell the operator which *variable name* is needed, and let them set it in the environment or a local untracked file outside agent reach.
 5. If a secret is accidentally loaded into context: **do not repeat it**; instruct the operator to **rotate** the affected keys; note session id only.
+6. If a secret is committed or pushed: follow `.agents/rules/05-github-workflow.md` §Pushed-secret incident. Treat the credential as compromised and rotate/revoke. This file does not authorize history rewrite; Git cleanup and credential containment are separate problems.
 
 ## Allowed alternatives
 
