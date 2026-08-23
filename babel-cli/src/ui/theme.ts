@@ -9,6 +9,7 @@ import {
   detectTerminalIdentity,
   getIdentityTrueColor,
 } from './terminalProbe.js';
+import { peekInjectedTerminalSize } from './observe/terminalTransport.js';
 
 // ── Color parse cache ──────────────────────────────────────────────────────
 // Same hex colors are parsed repeatedly per frame (every toneToAnsi call).
@@ -320,6 +321,8 @@ export function getTerminalWidth(
   fallback: number = 88,
   stream: NodeJS.WriteStream = process.stdout,
 ): number {
+  const injected = peekInjectedTerminalSize();
+  if (injected && injected.cols > 0) return injected.cols;
   const width = stream?.columns;
   if (typeof width === 'number' && Number.isFinite(width) && width > 0) {
     return width;

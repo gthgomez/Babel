@@ -6,6 +6,7 @@ import type { AgentAction } from '../agent/actions.js';
 import type { PermissionDialogConfig } from './dialog.js';
 import { PermissionDialog } from './dialog.js';
 import { OutputBuffer } from './outputBuffer.js';
+import { getTerminalTransport } from './observe/terminalTransport.js';
 import { DEC_2026_END } from './terminalEscapeSequences.js';
 import {
   initialInputArbiterState,
@@ -726,6 +727,12 @@ export class InputCoordinator {
 
   public startBuffering(): void {
     if (this.isBuffering) return;
+    const transport = getTerminalTransport();
+    if (transport?.isInstalled()) {
+      this.isBuffering = true;
+      transport.startBuffering();
+      return;
+    }
     this.isBuffering = true;
     this.buffer = [];
     this.bufferSize = 0;
@@ -792,6 +799,11 @@ export class InputCoordinator {
 
   public stopBuffering(): string {
     if (!this.isBuffering) return '';
+    const transport = getTerminalTransport();
+    if (transport?.isInstalled() && !this.originalStdoutWrite) {
+      this.isBuffering = false;
+      return transport.stopBuffering();
+    }
     this.isBuffering = false;
 
     if (this.originalStdoutWrite) {

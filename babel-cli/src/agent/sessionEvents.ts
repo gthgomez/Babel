@@ -22,6 +22,18 @@ import {
 export const SESSION_EVENT_SCHEMA_VERSION = 1 as const;
 export const SESSION_EVENTS_FILENAME = 'session-events.jsonl';
 
+type SessionEventObservationHook = (events: readonly SessionEvent[]) => void;
+let sessionEventObservationHook: SessionEventObservationHook | null = null;
+
+/**
+ * Optional TUI observation hook. Must not throw into the durable log path.
+ *
+ * @param hook Callback receiving the current event list, or null to clear
+ */
+export function setSessionEventObservationHook(hook: SessionEventObservationHook | null): void {
+  sessionEventObservationHook = hook;
+}
+
 /** Durable classification of a tool that was interrupted by process loss. */
 export type InterruptedToolRecoveryState = 'TOOL_NOT_STARTED' | 'TOOL_OUTCOME_UNKNOWN';
 
@@ -715,6 +727,13 @@ export function appendSessionEvent(
   const { kind: _k, turn_id: _t, ...rest } = event;
   const full = { ...rest, ...base } as SessionEvent;
   log.events.push(full);
+  if (sessionEventObservationHook) {
+    try {
+      sessionEventObservationHook(log.events);
+    } catch {
+      // Observation must never break durable session logging.
+    }
+  }
   return full;
 }
 

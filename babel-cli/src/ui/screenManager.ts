@@ -19,6 +19,7 @@ import { FrameScheduler } from './frameScheduler.js';
 import { renderCompactTokenBar, getContextLimit } from './tokenBar.js';
 import { ScrollbackBuffer } from './scrollback.js';
 import { OutputBuffer } from './outputBuffer.js';
+import { getObservedTerminalSize } from './observe/terminalTransport.js';
 import { shouldAvoidAltScreen } from './a11y.js';
 import { getGlobalRateLimitState, renderCompactRateLimit } from './rateLimitWidget.js';
 import { renderUnseenDividerPill } from './unseenDivider.js';
@@ -66,8 +67,9 @@ export class ScreenManager {
 
   constructor(initialState: ScreenState, statusFormat?: string) {
     this.state = { ...initialState };
-    this.rows = process.stdout.rows || 24;
-    this.cols = process.stdout.columns || 80;
+    const size = getObservedTerminalSize();
+    this.rows = size.rows;
+    this.cols = size.cols;
     this.contentTop = 2;
     this.contentBottom = this.rows - 2; // leaves rows N-1 (stats) and N (input)
     this.statsRow = this.rows - 1;
@@ -306,8 +308,9 @@ export class ScreenManager {
 
   /** Refresh terminal dimensions after resize, reflow content, and redraw. */
   refreshDimensions(): void {
-    this.rows = process.stdout.rows || 24;
-    this.cols = process.stdout.columns || 80;
+    const size = getObservedTerminalSize();
+    this.rows = size.rows;
+    this.cols = size.cols;
     this.contentBottom = this.rows - 2;
     this.statsRow = this.rows - 1;
     this.inputRow = this.rows;
