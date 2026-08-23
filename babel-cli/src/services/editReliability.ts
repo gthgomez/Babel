@@ -3,7 +3,19 @@ import * as fs from 'fs';
 export class FileWriteMutex {
   private static locks: Map<string, Promise<void>> = new Map();
 
-  static async runExclusive<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+  /**
+   * Serialize work per file path. This mutex is intentionally non-reentrant.
+   * Callers that already own the path lock must pass `{ alreadyHeld: true }`
+   * instead of nesting another acquisition.
+   */
+  static async runExclusive<T>(
+    filePath: string,
+    fn: () => Promise<T>,
+    options?: { alreadyHeld?: boolean },
+  ): Promise<T> {
+    if (options?.alreadyHeld === true) {
+      return fn();
+    }
     const currentLock = this.locks.get(filePath) || Promise.resolve();
     let releaseLock!: () => void;
     const nextLock = new Promise<void>(resolve => {

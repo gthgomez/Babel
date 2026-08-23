@@ -138,6 +138,8 @@ export async function governedStrReplace(
       preset,
       options.context,
       {
+        mutationRoot: options.projectRoot,
+        lockedMutationPaths: [absolutePath],
         ...(options.executor ? { executor: options.executor } : {}),
         ...(options.budget ? { budget: options.budget } : {}),
         ...(options.onAskApproval ? { onAskApproval: options.onAskApproval } : {}),

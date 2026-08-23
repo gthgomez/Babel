@@ -519,6 +519,21 @@ function policyBlockedToolResult(
   };
 }
 
+function mutationWorkspaceRoot(context: ToolContext, mutationRoot?: string): string {
+  const scoped = context as ToolContext & { projectRoot?: string; cwd?: string };
+  const raw =
+    mutationRoot ??
+    scoped.projectRoot ??
+    scoped.cwd ??
+    process.env['BABEL_PROJECT_ROOT'] ??
+    process.cwd();
+  return resolve(raw);
+}
+
+function resolveWriteFileMutationPath(actionPath: string, workspaceRoot: string): string {
+  return isAbsolute(actionPath) ? resolve(actionPath) : resolve(workspaceRoot, actionPath);
+}
+
 function projectRootForScope(preset: PermissionPreset): string | null {
   const raw = process.env['BABEL_PROJECT_ROOT'];
   if (raw?.trim()) return resolve(raw);
@@ -654,6 +669,13 @@ export async function executeActionWithPolicy(
     /** H4: task / plan-step linkage for effect transaction records. */
     taskId?: string;
     planStepId?: string;
+    /** Canonical root for write_file transaction snapshots. */
+    mutationRoot?: string;
+    /**
+     * Absolute paths whose FileWriteMutex is already held by the caller.
+     * Transaction snapshot/commit/rollback must not re-acquire these.
+     */
+    lockedMutationPaths?: readonly string[];
   } = {},
 ): Promise<PolicyGatedExecutionResult> {
   const executor = deps.executor ?? defaultToolExecutor;
@@ -955,20 +977,22 @@ export async function executeActionWithPolicy(
     };
   }
 
+  const workspaceRoot = mutationWorkspaceRoot(context, deps.mutationRoot);
   let txPaths: string[] = [];
   if (action.type === 'write_file') {
-    txPaths = [isAbsolute(action.path) ? action.path : resolve(process.cwd(), action.path)];
+    txPaths = [resolveWriteFileMutationPath(action.path, workspaceRoot)];
   } else if (action.type === 'apply_patch') {
-    txPaths = extractPatchTargets(action.patch, projectRootForScope(preset) ?? resolve(process.cwd()));
+    txPaths = extractPatchTargets(action.patch, projectRootForScope(preset) ?? workspaceRoot);
   }
 
   let batchTx: Awaited<ReturnType<typeof WorkspaceTransactionManager.beginBatch>> | null = null;
   let effectIntent: ReturnType<typeof recordEffectIntent> | null = null;
   let effectTx: EffectTransactionRecord | null = null;
-  const scopedContext = context as ToolContext & { projectRoot?: string; cwd?: string };
-  const workspaceRoot = scopedContext.projectRoot ?? scopedContext.cwd ?? process.cwd();
   if (txPaths.length > 0) {
-    batchTx = await WorkspaceTransactionManager.beginBatch(txPaths, { sessionId: context.runId });
+    batchTx = await WorkspaceTransactionManager.beginBatch(txPaths, {
+      sessionId: context.runId,
+      ...(deps.lockedMutationPaths ? { alreadyLockedPaths: deps.lockedMutationPaths } : {}),
+    });
     // H4: begin revision-linked effect transaction (linked to task/plan step/idempotency).
     effectTx = beginEffectTransaction({
       tool_name: action.type,

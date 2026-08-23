@@ -1,5 +1,6 @@
 import * as crypto from 'crypto';
 import { promises as fsPromises } from 'fs';
+import { resolve } from 'node:path';
 import { FileWriteMutex } from './editReliability.js';
 
 export interface MutationBatchTransaction {
@@ -13,6 +14,8 @@ export interface MutationBatchTransaction {
   postRevisionHash?: string;
   changedBytes: number;
   status: 'open' | 'committed' | 'rolled_back' | 'conflicted';
+  /** Paths whose mutation lock is already held by the caller. */
+  alreadyLockedPaths?: readonly string[];
 }
 
 export interface MutationBatchReceipt {
@@ -27,10 +30,19 @@ export interface MutationBatchReceipt {
   status: MutationBatchTransaction['status'];
 }
 
+function lockAlreadyHeld(path: string, held?: readonly string[]): boolean {
+  if (!held || held.length === 0) return false;
+  const key = resolve(path);
+  return held.some((candidate) => resolve(candidate) === key);
+}
+
 export class WorkspaceTransactionManager {
   private static latestBySession = new Map<string, MutationBatchTransaction>();
 
-  static async beginBatch(paths: string[], options: { sessionId?: string } = {}): Promise<MutationBatchTransaction> {
+  static async beginBatch(
+    paths: string[],
+    options: { sessionId?: string; alreadyLockedPaths?: readonly string[] } = {},
+  ): Promise<MutationBatchTransaction> {
     const preImages: Record<string, string | null> = {};
     const preBatchHash: Record<string, string> = {};
 
@@ -48,7 +60,7 @@ export class WorkspaceTransactionManager {
             throw e;
           }
         }
-      });
+      }, { alreadyHeld: lockAlreadyHeld(p, options.alreadyLockedPaths) });
     }
 
     const tx: MutationBatchTransaction = {
@@ -61,6 +73,7 @@ export class WorkspaceTransactionManager {
       preRevisionHash: this.revisionHash(preBatchHash),
       changedBytes: 0,
       status: 'open',
+      ...(options.alreadyLockedPaths ? { alreadyLockedPaths: options.alreadyLockedPaths } : {}),
     };
     return tx;
   }
@@ -80,7 +93,7 @@ export class WorkspaceTransactionManager {
             throw e;
           }
         }
-      });
+      }, { alreadyHeld: lockAlreadyHeld(p, tx.alreadyLockedPaths) });
     }
     tx.changedBytes = Object.keys(tx.preImages).reduce((total, path) => total + this.changedBytes(tx.preImages[path] ?? null, tx.postImages[path] ?? null), 0);
     tx.postRevisionHash = this.revisionHash(tx.postBatchHash);
@@ -126,7 +139,7 @@ export class WorkspaceTransactionManager {
             verification = false;
           }
         }
-      });
+      }, { alreadyHeld: lockAlreadyHeld(p, tx.alreadyLockedPaths) });
     }
 
     tx.status = verification ? 'rolled_back' : 'conflicted';
