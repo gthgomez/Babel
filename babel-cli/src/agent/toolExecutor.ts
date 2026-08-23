@@ -19,6 +19,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
+import { type FileLockContext } from '../services/editReliability.js';
 import { WorkspaceTransactionManager, type MutationBatchReceipt } from '../services/workspaceTransactions.js';
 import { classifyToolEffect } from '../executor/contracts.js';
 import { recordEffectIntent, recordEffectTerminal } from '../executor/effectLedger.js';
@@ -519,6 +520,21 @@ function policyBlockedToolResult(
   };
 }
 
+function mutationWorkspaceRoot(context: ToolContext, mutationRoot?: string): string {
+  const scoped = context as ToolContext & { projectRoot?: string; cwd?: string };
+  const raw =
+    mutationRoot ??
+    scoped.projectRoot ??
+    scoped.cwd ??
+    process.env['BABEL_PROJECT_ROOT'] ??
+    process.cwd();
+  return resolve(raw);
+}
+
+function resolveWriteFileMutationPath(actionPath: string, workspaceRoot: string): string {
+  return isAbsolute(actionPath) ? resolve(actionPath) : resolve(workspaceRoot, actionPath);
+}
+
 function projectRootForScope(preset: PermissionPreset): string | null {
   const raw = process.env['BABEL_PROJECT_ROOT'];
   if (raw?.trim()) return resolve(raw);
@@ -654,6 +670,13 @@ export async function executeActionWithPolicy(
     /** H4: task / plan-step linkage for effect transaction records. */
     taskId?: string;
     planStepId?: string;
+    /** Canonical root for write_file transaction snapshots. */
+    mutationRoot?: string;
+    /**
+     * Active lock context whose FileWriteMutex is already held by the caller.
+     * Transaction snapshot/commit/rollback must not re-acquire these.
+     */
+    lockContext?: FileLockContext | undefined;
   } = {},
 ): Promise<PolicyGatedExecutionResult> {
   const executor = deps.executor ?? defaultToolExecutor;
@@ -955,20 +978,22 @@ export async function executeActionWithPolicy(
     };
   }
 
+  const workspaceRoot = mutationWorkspaceRoot(context, deps.mutationRoot);
   let txPaths: string[] = [];
   if (action.type === 'write_file') {
-    txPaths = [isAbsolute(action.path) ? action.path : resolve(process.cwd(), action.path)];
+    txPaths = [resolveWriteFileMutationPath(action.path, workspaceRoot)];
   } else if (action.type === 'apply_patch') {
-    txPaths = extractPatchTargets(action.patch, projectRootForScope(preset) ?? resolve(process.cwd()));
+    txPaths = extractPatchTargets(action.patch, projectRootForScope(preset) ?? workspaceRoot);
   }
 
   let batchTx: Awaited<ReturnType<typeof WorkspaceTransactionManager.beginBatch>> | null = null;
   let effectIntent: ReturnType<typeof recordEffectIntent> | null = null;
   let effectTx: EffectTransactionRecord | null = null;
-  const scopedContext = context as ToolContext & { projectRoot?: string; cwd?: string };
-  const workspaceRoot = scopedContext.projectRoot ?? scopedContext.cwd ?? process.cwd();
   if (txPaths.length > 0) {
-    batchTx = await WorkspaceTransactionManager.beginBatch(txPaths, { sessionId: context.runId });
+    batchTx = await WorkspaceTransactionManager.beginBatch(txPaths, {
+      sessionId: context.runId,
+      ...(deps.lockContext ? { lockContext: deps.lockContext } : {}),
+    });
     // H4: begin revision-linked effect transaction (linked to task/plan step/idempotency).
     effectTx = beginEffectTransaction({
       tool_name: action.type,
@@ -1171,7 +1196,9 @@ export async function executeActionWithPolicy(
         if (batchTx) {
           let rollbackResult: 'success' | 'failed' | 'partial' = 'failed';
           try {
-            const undo = await WorkspaceTransactionManager.undoLastMutationBatch(batchTx);
+            const undo = await WorkspaceTransactionManager.undoLastMutationBatch(batchTx, {
+              lockContext: deps.lockContext,
+            });
             rollbackResult = undo.verification ? 'success' : 'partial';
           } catch {
             rollbackResult = 'failed';
@@ -1194,7 +1221,9 @@ export async function executeActionWithPolicy(
     }
 
     if (batchTx) {
-      batchTx = await WorkspaceTransactionManager.commitBatch(batchTx);
+      batchTx = await WorkspaceTransactionManager.commitBatch(batchTx, {
+        lockContext: deps.lockContext,
+      });
       if (effectIntent && context.runDir) {
         recordEffectTerminal(context.runDir, effectIntent, {
           status: 'completed',
@@ -1251,7 +1280,9 @@ export async function executeActionWithPolicy(
       let rollbackResult: 'success' | 'failed' | 'partial' = 'failed';
       if (batchTx) {
         try {
-          const undo = await WorkspaceTransactionManager.undoLastMutationBatch(batchTx);
+          const undo = await WorkspaceTransactionManager.undoLastMutationBatch(batchTx, {
+            lockContext: deps.lockContext,
+          });
           rollbackResult = undo.verification ? 'success' : 'partial';
         } catch {
           rollbackResult = 'failed';
