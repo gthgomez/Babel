@@ -15,6 +15,7 @@ import { describe, test } from 'node:test';
 
 import type { ToolContext, ToolResult } from '../localTools.js';
 import { FileWriteMutex } from '../services/editReliability.js';
+import { WorkspaceTransactionManager } from '../services/workspaceTransactions.js';
 import type { AgentAction } from './actions.js';
 import { governedStrReplace } from './governedMutations.js';
 import {
@@ -359,18 +360,303 @@ describe('governed mutation lock ownership and path root', { concurrency: false 
     }
   });
 
-  test('nested same-path FileWriteMutex.runExclusive deadlocks without alreadyHeld', async () => {
+  test('nested same-path FileWriteMutex.runExclusive deadlocks without lockContext and succeeds with lockContext', async () => {
     const key = `mutex-nested-${randomUUID()}`;
     let innerStarted = false;
-    const nested = FileWriteMutex.runExclusive(key, async () => {
-      await FileWriteMutex.runExclusive(key, async () => {
+    let innerTimedOut = false;
+    let innerFinishedPromise: Promise<void> | undefined;
+
+    await FileWriteMutex.runExclusive(key, async () => {
+      const innerPromise = FileWriteMutex.runExclusive(key, async () => {
         innerStarted = true;
       });
+      innerFinishedPromise = innerPromise;
+      try {
+        await withTimeout(innerPromise, 150, 'nested mutex without lockContext');
+      } catch (err: any) {
+        if (err instanceof Error && /timed out/.test(err.message)) {
+          innerTimedOut = true;
+        }
+      }
+      assert.equal(innerStarted, false, 'inner must not run while outer holds lock');
+      assert.equal(innerTimedOut, true, 'inner must time out while outer holds lock');
     });
-    await assert.rejects(
-      withTimeout(nested, 250, 'nested mutex without alreadyHeld'),
-      /timed out/,
+
+    // Wait for queued inner promise to drain cleanly after outer release
+    if (innerFinishedPromise) {
+      await withTimeout(innerFinishedPromise, DEADLOCK_MS, 'inner lock drain');
+    }
+
+    // With active lockContext, nested acquisition succeeds immediately
+    let innerWithContextRan = false;
+    await FileWriteMutex.runExclusive(key, async (handle) => {
+      await FileWriteMutex.runExclusive(key, async () => {
+        innerWithContextRan = true;
+      }, { lockContext: handle });
+    });
+    assert.equal(innerWithContextRan, true);
+  });
+
+  test('deferred undo after outer lock release reacquires lock and serializes against competing lock', async () => {
+    resetCircuitBreaker();
+    const dir = tmpRoot('babel-gov-lock-undo-compete-');
+    const fileName = `target-${randomUUID()}.ts`;
+    const targetPath = join(dir, fileName);
+    const sessionId = `session-undo-${randomUUID()}`;
+
+    try {
+      writeFileSync(targetPath, 'initial_content\n', 'utf8');
+
+      // 1. Successful governed mutation
+      const mutResult = await withTimeout(
+        governedStrReplace(
+          { file_path: fileName, old_str: 'initial_content', new_str: 'mutated_content' },
+          {
+            projectRoot: dir,
+            context: {
+              agentId: 'gov-lock',
+              runId: sessionId,
+              runDir: dir,
+              babelRoot: dir,
+            },
+            preset: 'workspace_write',
+            executor: writingExecutor(dir),
+          },
+        ),
+        DEADLOCK_MS,
+        'initial governedStrReplace for deferred undo test',
+      );
+      assert.equal(mutResult.exit_code, 0, mutResult.observation);
+      assert.equal(readFileSync(targetPath, 'utf8'), 'mutated_content\n');
+
+      // 2. Outer lock scope is now fully closed.
+      // 3. Start a competing lock on targetPath that holds the lock until explicitly released.
+      let competingLockAcquired = false;
+      let releaseCompetingLock!: () => void;
+      const competingHold = new Promise<void>((res) => {
+        releaseCompetingLock = res;
+      });
+
+      let competingFinished = false;
+      const competingPromise = FileWriteMutex.runExclusive(targetPath, async () => {
+        competingLockAcquired = true;
+        await competingHold;
+        writeFileSync(targetPath, 'competing_mutation\n', 'utf8');
+        competingFinished = true;
+      });
+
+      // Wait until competing lock is actively held
+      while (!competingLockAcquired) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      // 4. Trigger deferred undoLastMutationBatch(sessionId).
+      // Stale implementation would bypass the mutex because tx retained alreadyLockedPaths.
+      // Hardened implementation MUST queue behind the competing lock.
+      let undoFinished = false;
+      const undoPromise = WorkspaceTransactionManager.undoLastMutationBatch(sessionId).then((res) => {
+        undoFinished = true;
+        return res;
+      });
+
+      // Give the event loop time to attempt immediate unsynchronized write if buggy
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Assert undo has NOT executed while competing lock is active
+      assert.equal(undoFinished, false, 'undo must not bypass mutex or execute while competing lock is held');
+      assert.equal(competingFinished, false);
+
+      // 5. Release competing lock and let competing mutation finish
+      releaseCompetingLock();
+      await competingPromise;
+      assert.equal(competingFinished, true);
+
+      // 6. Now deferred undo acquires lock, executes, and restores initial content
+      const undoResult = await withTimeout(undoPromise, DEADLOCK_MS, 'deferred undo completion');
+      assert.equal(undoResult.verification, true);
+      assert.equal(undoFinished, true);
+      assert.equal(readFileSync(targetPath, 'utf8'), 'initial_content\n');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('normal deferred undo restores pre-images correctly with no outer lock alive', async () => {
+    resetCircuitBreaker();
+    const dir = tmpRoot('babel-gov-lock-undo-normal-');
+    const fileName = `target-${randomUUID()}.ts`;
+    const targetPath = join(dir, fileName);
+    const sessionId = `session-undo-norm-${randomUUID()}`;
+
+    try {
+      writeFileSync(targetPath, 'version_1\n', 'utf8');
+
+      const mutResult = await withTimeout(
+        governedStrReplace(
+          { file_path: fileName, old_str: 'version_1', new_str: 'version_2' },
+          {
+            projectRoot: dir,
+            context: {
+              agentId: 'gov-lock',
+              runId: sessionId,
+              runDir: dir,
+              babelRoot: dir,
+            },
+            preset: 'workspace_write',
+            executor: writingExecutor(dir),
+          },
+        ),
+        DEADLOCK_MS,
+        'governedStrReplace for normal undo',
+      );
+      assert.equal(mutResult.exit_code, 0, mutResult.observation);
+      assert.equal(readFileSync(targetPath, 'utf8'), 'version_2\n');
+
+      // Deferred undo by session ID
+      const undoResult = await withTimeout(
+        WorkspaceTransactionManager.undoLastMutationBatch(sessionId),
+        DEADLOCK_MS,
+        'normal deferred undo',
+      );
+      assert.equal(undoResult.verification, true);
+      assert.equal(readFileSync(targetPath, 'utf8'), 'version_1\n');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('canonical path alias serialization serializes lexically different paths to the same file', async () => {
+    const dir = tmpRoot('babel-gov-lock-alias-');
+    const fileName = 'target.ts';
+    const directPath = join(dir, fileName);
+    const aliasPath = join(dir, 'nested', '..', fileName);
+
+    try {
+      writeFileSync(directPath, 'alias_test\n', 'utf8');
+
+      let firstLockHeld = false;
+      let releaseFirstLock!: () => void;
+      const firstLockPromise = new Promise<void>((res) => {
+        releaseFirstLock = res;
+      });
+
+      let firstFinished = false;
+      const first = FileWriteMutex.runExclusive(directPath, async () => {
+        firstLockHeld = true;
+        await firstLockPromise;
+        firstFinished = true;
+      });
+
+      while (!firstLockHeld) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      let secondFinished = false;
+      const second = FileWriteMutex.runExclusive(aliasPath, async () => {
+        secondFinished = true;
+      });
+
+      await new Promise((r) => setTimeout(r, 100));
+      assert.equal(secondFinished, false, 'alias path must wait for direct path lock on same file');
+
+      releaseFirstLock();
+      await first;
+      await withTimeout(second, DEADLOCK_MS, 'alias lock completion');
+      assert.equal(firstFinished, true);
+      assert.equal(secondFinished, true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('FileWriteMutex cleans up lock map entries without memory leak', async () => {
+    const key = `cleanup-test-${randomUUID()}`;
+    assert.equal(FileWriteMutex.activeLockCount(), 0);
+
+    let ran = false;
+    await FileWriteMutex.runExclusive(key, async () => {
+      ran = true;
+    });
+
+    assert.equal(ran, true);
+    assert.equal(FileWriteMutex.activeLockCount(), 0, 'lock map must be empty after lock release');
+  });
+
+  test('FileWriteMutex rejects revoked, expired, or forged lockContext', async () => {
+    const key = `context-reject-${randomUUID()}`;
+
+    // 1. Unchecked boolean bypass is ignored and serialized
+    let blockerHeld = false;
+    let releaseBlocker!: () => void;
+    const blockerPromise = new Promise<void>((r) => {
+      releaseBlocker = r;
+    });
+
+    const blocker = FileWriteMutex.runExclusive(key, async () => {
+      blockerHeld = true;
+      await blockerPromise;
+    });
+
+    while (!blockerHeld) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    let bypassedRan = false;
+    const attempt = FileWriteMutex.runExclusive(
+      key,
+      async () => {
+        bypassedRan = true;
+      },
+      // Pass forged / legacy options
+      { lockContext: { holds: () => true, isActive: () => true } as any },
     );
-    assert.equal(innerStarted, false);
+
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(bypassedRan, false, 'forged lockContext must not bypass serialization');
+
+    releaseBlocker();
+    await blocker;
+    await withTimeout(attempt, DEADLOCK_MS, 'forged attempt finishes after blocker release');
+    assert.equal(bypassedRan, true);
+
+    // 2. Expired handle after runExclusive exits is inactive and cannot be reused
+    let capturedHandle: any;
+    await FileWriteMutex.runExclusive(key, async (h) => {
+      capturedHandle = h;
+      assert.equal(h.isActive(), true);
+    });
+    assert.equal(capturedHandle.isActive(), false);
+
+    // Reusing expired handle must not bypass
+    let secondBlockerHeld = false;
+    let releaseSecondBlocker!: () => void;
+    const secondBlockerPromise = new Promise<void>((r) => {
+      releaseSecondBlocker = r;
+    });
+    const secondBlocker = FileWriteMutex.runExclusive(key, async () => {
+      secondBlockerHeld = true;
+      await secondBlockerPromise;
+    });
+
+    while (!secondBlockerHeld) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    let expiredRan = false;
+    const expiredAttempt = FileWriteMutex.runExclusive(
+      key,
+      async () => {
+        expiredRan = true;
+      },
+      { lockContext: capturedHandle },
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(expiredRan, false, 'expired handle must not bypass serialization');
+
+    releaseSecondBlocker();
+    await secondBlocker;
+    await withTimeout(expiredAttempt, DEADLOCK_MS, 'expired attempt finishes after blocker');
+    assert.equal(expiredRan, true);
   });
 });

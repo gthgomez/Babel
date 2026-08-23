@@ -1,7 +1,7 @@
 import * as crypto from 'crypto';
 import { promises as fsPromises } from 'fs';
 import { resolve } from 'node:path';
-import { FileWriteMutex } from './editReliability.js';
+import { FileWriteMutex, type FileLockContext } from './editReliability.js';
 
 export interface MutationBatchTransaction {
   batchId: string;
@@ -14,8 +14,6 @@ export interface MutationBatchTransaction {
   postRevisionHash?: string;
   changedBytes: number;
   status: 'open' | 'committed' | 'rolled_back' | 'conflicted';
-  /** Paths whose mutation lock is already held by the caller. */
-  alreadyLockedPaths?: readonly string[];
 }
 
 export interface MutationBatchReceipt {
@@ -30,37 +28,35 @@ export interface MutationBatchReceipt {
   status: MutationBatchTransaction['status'];
 }
 
-function lockAlreadyHeld(path: string, held?: readonly string[]): boolean {
-  if (!held || held.length === 0) return false;
-  const key = resolve(path);
-  return held.some((candidate) => resolve(candidate) === key);
-}
-
 export class WorkspaceTransactionManager {
   private static latestBySession = new Map<string, MutationBatchTransaction>();
 
   static async beginBatch(
     paths: string[],
-    options: { sessionId?: string; alreadyLockedPaths?: readonly string[] } = {},
+    options: { sessionId?: string; lockContext?: FileLockContext | undefined } = {},
   ): Promise<MutationBatchTransaction> {
     const preImages: Record<string, string | null> = {};
     const preBatchHash: Record<string, string> = {};
 
     for (const p of paths) {
-      await FileWriteMutex.runExclusive(p, async () => {
-        try {
-          const content = await fsPromises.readFile(p, 'utf8');
-          preImages[p] = content;
-          preBatchHash[p] = this.hashString(content);
-        } catch (e: any) {
-          if (e.code === 'ENOENT') {
-            preImages[p] = null;
-            preBatchHash[p] = this.hashString('');
-          } else {
-            throw e;
+      await FileWriteMutex.runExclusive(
+        p,
+        async () => {
+          try {
+            const content = await fsPromises.readFile(p, 'utf8');
+            preImages[p] = content;
+            preBatchHash[p] = this.hashString(content);
+          } catch (e: any) {
+            if (e.code === 'ENOENT') {
+              preImages[p] = null;
+              preBatchHash[p] = this.hashString('');
+            } else {
+              throw e;
+            }
           }
-        }
-      }, { alreadyHeld: lockAlreadyHeld(p, options.alreadyLockedPaths) });
+        },
+        { lockContext: options.lockContext },
+      );
     }
 
     const tx: MutationBatchTransaction = {
@@ -73,73 +69,89 @@ export class WorkspaceTransactionManager {
       preRevisionHash: this.revisionHash(preBatchHash),
       changedBytes: 0,
       status: 'open',
-      ...(options.alreadyLockedPaths ? { alreadyLockedPaths: options.alreadyLockedPaths } : {}),
     };
     return tx;
   }
 
-  static async commitBatch(tx: MutationBatchTransaction): Promise<MutationBatchTransaction> {
+  static async commitBatch(
+    tx: MutationBatchTransaction,
+    options: { lockContext?: FileLockContext | undefined } = {},
+  ): Promise<MutationBatchTransaction> {
     for (const p of Object.keys(tx.preImages)) {
-      await FileWriteMutex.runExclusive(p, async () => {
-        try {
-          const content = await fsPromises.readFile(p, 'utf8');
-          tx.postImages[p] = content;
-          tx.postBatchHash[p] = this.hashString(content);
-        } catch (e: any) {
-          if (e.code === 'ENOENT') {
-            tx.postImages[p] = null;
-            tx.postBatchHash[p] = this.hashString('');
-          } else {
-            throw e;
+      await FileWriteMutex.runExclusive(
+        p,
+        async () => {
+          try {
+            const content = await fsPromises.readFile(p, 'utf8');
+            tx.postImages[p] = content;
+            tx.postBatchHash[p] = this.hashString(content);
+          } catch (e: any) {
+            if (e.code === 'ENOENT') {
+              tx.postImages[p] = null;
+              tx.postBatchHash[p] = this.hashString('');
+            } else {
+              throw e;
+            }
           }
-        }
-      }, { alreadyHeld: lockAlreadyHeld(p, tx.alreadyLockedPaths) });
+        },
+        { lockContext: options.lockContext },
+      );
     }
-    tx.changedBytes = Object.keys(tx.preImages).reduce((total, path) => total + this.changedBytes(tx.preImages[path] ?? null, tx.postImages[path] ?? null), 0);
+    tx.changedBytes = Object.keys(tx.preImages).reduce(
+      (total, path) => total + this.changedBytes(tx.preImages[path] ?? null, tx.postImages[path] ?? null),
+      0,
+    );
     tx.postRevisionHash = this.revisionHash(tx.postBatchHash);
     tx.status = 'committed';
     if (tx.sessionId) this.latestBySession.set(tx.sessionId, tx);
     return tx;
   }
 
-  static async undoLastMutationBatch(txOrSessionId: MutationBatchTransaction | string): Promise<{ restoredPaths: string[], verification: boolean }> {
+  static async undoLastMutationBatch(
+    txOrSessionId: MutationBatchTransaction | string,
+    options: { lockContext?: FileLockContext | undefined } = {},
+  ): Promise<{ restoredPaths: string[]; verification: boolean }> {
     const tx = typeof txOrSessionId === 'string' ? this.latestBySession.get(txOrSessionId) : txOrSessionId;
     if (!tx) return { restoredPaths: [], verification: false };
     const restoredPaths: string[] = [];
     let verification = true;
 
     for (const p of Object.keys(tx.preImages)) {
-      await FileWriteMutex.runExclusive(p, async () => {
-        const preImage = tx.preImages[p];
-        if (preImage === null || preImage === undefined) {
-          try {
-            await fsPromises.unlink(p);
-            restoredPaths.push(p);
-          } catch (e: any) {
-            if (e.code !== 'ENOENT') {
-              verification = false;
-            }
-          }
-        } else {
-          await fsPromises.writeFile(p, preImage, 'utf8');
-          restoredPaths.push(p);
-        }
-
-        try {
-          const content = await fsPromises.readFile(p, 'utf8');
-          if (this.hashString(content) !== tx.preBatchHash[p]) {
-            verification = false;
-          }
-        } catch (e: any) {
-          if (e.code === 'ENOENT') {
-            if (tx.preBatchHash[p] !== this.hashString('')) {
-              verification = false;
+      await FileWriteMutex.runExclusive(
+        p,
+        async () => {
+          const preImage = tx.preImages[p];
+          if (preImage === null || preImage === undefined) {
+            try {
+              await fsPromises.unlink(p);
+              restoredPaths.push(p);
+            } catch (e: any) {
+              if (e.code !== 'ENOENT') {
+                verification = false;
+              }
             }
           } else {
-            verification = false;
+            await fsPromises.writeFile(p, preImage, 'utf8');
+            restoredPaths.push(p);
           }
-        }
-      }, { alreadyHeld: lockAlreadyHeld(p, tx.alreadyLockedPaths) });
+
+          try {
+            const content = await fsPromises.readFile(p, 'utf8');
+            if (this.hashString(content) !== tx.preBatchHash[p]) {
+              verification = false;
+            }
+          } catch (e: any) {
+            if (e.code === 'ENOENT') {
+              if (tx.preBatchHash[p] !== this.hashString('')) {
+                verification = false;
+              }
+            } else {
+              verification = false;
+            }
+          }
+        },
+        { lockContext: options.lockContext },
+      );
     }
 
     tx.status = verification ? 'rolled_back' : 'conflicted';

@@ -1,37 +1,114 @@
 import * as fs from 'fs';
+import { resolve } from 'node:path';
+
+export function canonicalizeLockPath(filePath: string): string {
+  const resolved = resolve(filePath);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+const LOCK_HANDLE_TOKEN = Symbol('FileLockHandleToken');
+
+export interface FileLockHandle {
+  readonly path: string;
+  readonly canonicalPath: string;
+  isActive(): boolean;
+  holds(filePath: string): boolean;
+  /** @internal */
+  readonly [LOCK_HANDLE_TOKEN]?: boolean;
+}
+
+export type FileLockContext = FileLockHandle | readonly FileLockHandle[];
+
+class ActiveFileLockHandle implements FileLockHandle {
+  readonly [LOCK_HANDLE_TOKEN] = true;
+  private active = true;
+
+  constructor(
+    readonly path: string,
+    readonly canonicalPath: string,
+  ) {}
+
+  isActive(): boolean {
+    return this.active;
+  }
+
+  holds(filePath: string): boolean {
+    if (!this.active) return false;
+    return canonicalizeLockPath(filePath) === this.canonicalPath;
+  }
+
+  /** @internal */
+  revoke(): void {
+    this.active = false;
+  }
+}
+
+function isValidHandle(handle: unknown): handle is FileLockHandle {
+  if (typeof handle !== 'object' || handle === null) return false;
+  return (
+    (handle as Record<symbol, unknown>)[LOCK_HANDLE_TOKEN] === true &&
+    typeof (handle as { isActive?: unknown }).isActive === 'function' &&
+    (handle as { isActive: () => boolean }).isActive()
+  );
+}
+
+function isHeldByContext(
+  canonicalKey: string,
+  context?: FileLockContext,
+): boolean {
+  if (!context) return false;
+  if (Array.isArray(context)) {
+    return context.some((h) => isValidHandle(h) && h.holds(canonicalKey));
+  }
+  return isValidHandle(context) && context.holds(canonicalKey);
+}
 
 export class FileWriteMutex {
   private static locks: Map<string, Promise<void>> = new Map();
 
   /**
    * Serialize work per file path. This mutex is intentionally non-reentrant.
-   * Callers that already own the path lock must pass `{ alreadyHeld: true }`
-   * instead of nesting another acquisition.
+   * Callers that already own the path lock within the current active scope
+   * can pass their active `lockContext` (a `FileLockHandle` minted by `runExclusive`).
    */
   static async runExclusive<T>(
     filePath: string,
-    fn: () => Promise<T>,
-    options?: { alreadyHeld?: boolean },
+    fn: (lockHandle: FileLockHandle) => Promise<T>,
+    options?: { lockContext?: FileLockContext | undefined },
   ): Promise<T> {
-    if (options?.alreadyHeld === true) {
-      return fn();
+    const canonicalKey = canonicalizeLockPath(filePath);
+
+    if (isHeldByContext(canonicalKey, options?.lockContext)) {
+      const existingHandle = Array.isArray(options?.lockContext)
+        ? options?.lockContext.find((h) => isValidHandle(h) && h.holds(canonicalKey))!
+        : options?.lockContext!;
+      return await fn(existingHandle);
     }
-    const currentLock = this.locks.get(filePath) || Promise.resolve();
+
+    const currentLock = this.locks.get(canonicalKey) || Promise.resolve();
     let releaseLock!: () => void;
-    const nextLock = new Promise<void>(resolve => {
+    const nextLock = new Promise<void>((resolve) => {
       releaseLock = resolve;
     });
-    this.locks.set(filePath, currentLock.then(() => nextLock).catch(() => nextLock));
+    const tail = currentLock.then(() => nextLock, () => nextLock);
+    this.locks.set(canonicalKey, tail);
 
     await currentLock.catch(() => {});
+    const handle = new ActiveFileLockHandle(filePath, canonicalKey);
     try {
-      return await fn();
+      return await fn(handle);
     } finally {
+      handle.revoke();
       releaseLock();
-      if (this.locks.get(filePath) === nextLock) {
-        this.locks.delete(filePath);
+      if (this.locks.get(canonicalKey) === tail) {
+        this.locks.delete(canonicalKey);
       }
     }
+  }
+
+  /** Diagnostic / test helper: count of currently tracked lock keys. */
+  static activeLockCount(): number {
+    return this.locks.size;
   }
 }
 

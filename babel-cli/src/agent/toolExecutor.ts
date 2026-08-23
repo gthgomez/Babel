@@ -19,6 +19,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
+import { type FileLockContext } from '../services/editReliability.js';
 import { WorkspaceTransactionManager, type MutationBatchReceipt } from '../services/workspaceTransactions.js';
 import { classifyToolEffect } from '../executor/contracts.js';
 import { recordEffectIntent, recordEffectTerminal } from '../executor/effectLedger.js';
@@ -672,10 +673,10 @@ export async function executeActionWithPolicy(
     /** Canonical root for write_file transaction snapshots. */
     mutationRoot?: string;
     /**
-     * Absolute paths whose FileWriteMutex is already held by the caller.
+     * Active lock context whose FileWriteMutex is already held by the caller.
      * Transaction snapshot/commit/rollback must not re-acquire these.
      */
-    lockedMutationPaths?: readonly string[];
+    lockContext?: FileLockContext | undefined;
   } = {},
 ): Promise<PolicyGatedExecutionResult> {
   const executor = deps.executor ?? defaultToolExecutor;
@@ -991,7 +992,7 @@ export async function executeActionWithPolicy(
   if (txPaths.length > 0) {
     batchTx = await WorkspaceTransactionManager.beginBatch(txPaths, {
       sessionId: context.runId,
-      ...(deps.lockedMutationPaths ? { alreadyLockedPaths: deps.lockedMutationPaths } : {}),
+      ...(deps.lockContext ? { lockContext: deps.lockContext } : {}),
     });
     // H4: begin revision-linked effect transaction (linked to task/plan step/idempotency).
     effectTx = beginEffectTransaction({
@@ -1195,7 +1196,9 @@ export async function executeActionWithPolicy(
         if (batchTx) {
           let rollbackResult: 'success' | 'failed' | 'partial' = 'failed';
           try {
-            const undo = await WorkspaceTransactionManager.undoLastMutationBatch(batchTx);
+            const undo = await WorkspaceTransactionManager.undoLastMutationBatch(batchTx, {
+              lockContext: deps.lockContext,
+            });
             rollbackResult = undo.verification ? 'success' : 'partial';
           } catch {
             rollbackResult = 'failed';
@@ -1218,7 +1221,9 @@ export async function executeActionWithPolicy(
     }
 
     if (batchTx) {
-      batchTx = await WorkspaceTransactionManager.commitBatch(batchTx);
+      batchTx = await WorkspaceTransactionManager.commitBatch(batchTx, {
+        lockContext: deps.lockContext,
+      });
       if (effectIntent && context.runDir) {
         recordEffectTerminal(context.runDir, effectIntent, {
           status: 'completed',
@@ -1275,7 +1280,9 @@ export async function executeActionWithPolicy(
       let rollbackResult: 'success' | 'failed' | 'partial' = 'failed';
       if (batchTx) {
         try {
-          const undo = await WorkspaceTransactionManager.undoLastMutationBatch(batchTx);
+          const undo = await WorkspaceTransactionManager.undoLastMutationBatch(batchTx, {
+            lockContext: deps.lockContext,
+          });
           rollbackResult = undo.verification ? 'success' : 'partial';
         } catch {
           rollbackResult = 'failed';

@@ -78,7 +78,7 @@ export async function governedStrReplace(
   const absolutePath = resolveProjectPath(options.projectRoot, input.file_path);
   const target = input.file_path;
 
-  return await FileWriteMutex.runExclusive(absolutePath, async () => {
+  return await FileWriteMutex.runExclusive(absolutePath, async (lockHandle) => {
     let content: string;
     try {
       content = await readFile(absolutePath, 'utf-8');
@@ -139,7 +139,7 @@ export async function governedStrReplace(
       options.context,
       {
         mutationRoot: options.projectRoot,
-        lockedMutationPaths: [absolutePath],
+        lockContext: lockHandle,
         ...(options.executor ? { executor: options.executor } : {}),
         ...(options.budget ? { budget: options.budget } : {}),
         ...(options.onAskApproval ? { onAskApproval: options.onAskApproval } : {}),
