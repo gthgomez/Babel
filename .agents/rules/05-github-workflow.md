@@ -262,13 +262,16 @@ When the user asks to “sync local and main”, “catch up to main”, or equi
 
 ### Reset preconditions (executable)
 
-A backup branch preserves **committed** objects only. It does not preserve dirty tracked bytes. `exclude` (and `split` / `local-helper` tracked modifications) are not a license to destroy worktree content.
+A backup branch preserves **committed** objects only. It does not preserve dirty tracked bytes or untracked bytes. `exclude` (and `split` / `local-helper`) mean **do not ship**, not **safe to destroy**.
 
-Before any local-main hard reset:
+`git reset --hard <target>` discards tracked worktree changes and **deletes untracked files or directories that are in the way of writing tracked files** from `<target>`. `git diff --quiet` does not see untracked paths.
+
+Before any local-main hard reset, freeze `TARGET_SHA` (`git rev-parse origin/main` after fetch) and require:
 
 ```text
-TRACKED_WORKTREE_DIRTY == NO
-TRACKED_INDEX_DIRTY    == NO
+TRACKED_WORKTREE_DIRTY            == NO
+TRACKED_INDEX_DIRTY               == NO
+UNTRACKED_COLLISION_WITH_TARGET   == NO
 ```
 
 Measure with Git, not filenames:
@@ -276,24 +279,48 @@ Measure with Git, not filenames:
 ```powershell
 git diff --quiet                 # worktree vs index; nonzero => TRACKED_WORKTREE_DIRTY = YES
 git diff --cached --quiet        # index vs HEAD; nonzero => TRACKED_INDEX_DIRTY = YES
+git ls-tree -r --name-only -z TARGET_SHA
+git ls-files --others -z         # untracked, including ignored; --hard deletes ignored-in-the-way too
+git ls-files --cached -z
 ```
 
-If either is `YES`:
+`UNTRACKED_COLLISION_WITH_TARGET == YES` if any path `TARGET_SHA` will materialize:
 
-1. Preserve the exact tracked state using an approved mechanism
-2. Record a preservation receipt / OID
-3. Verify that object exists (`git cat-file -e <oid>` or equivalent)
-4. Re-check `TRACKED_WORKTREE_DIRTY` and `TRACKED_INDEX_DIRTY`
+- exists in the worktree and is **not** in `HEAD` (untracked or ignored file at that exact path); or
+- has a worktree prefix that exists as a non-directory and is not in `HEAD` (file blocking a directory Git needs to write); or
+- exists in the worktree as a directory while `TARGET_SHA` has a blob at that exact path (directory blocking a file).
+
+If tracked dirt **or** an untracked collision is `YES`:
+
+1. Preserve the exact bytes using an approved mechanism
+2. Record a **content-bound** `PRESERVATION_RECEIPT`
+3. Verify the receipt (below)
+4. Re-check all three preconditions
 5. Only then permit reset
 
-Approved preservation mechanisms (must produce a verifiable object):
+```text
+PRESERVATION_RECEIPT
+  paths[]
+  blob_oid[path]   = git hash-object -- <path>
+  container_oid    = commit or stash commit that stores those blobs
+```
 
-- the bytes already exist in a known commit OID
+A receipt is valid only when **all** of these hold:
+
+- `git cat-file -e <container_oid>`
+- for each path: `git cat-file -e <blob_oid>`
+- for each path: `git rev-parse <container_oid>:<path>` equals `blob_oid`
+
+`git cat-file -e` on a container OID alone is **not** proof it contains the dirty bytes.
+
+Approved preservation mechanisms (must produce a valid receipt):
+
+- the bytes already exist at `<existing-commit>:<path>` with matching `blob_oid`
 - a dedicated preservation commit on `backup/local-main-*` (or another named backup ref)
-- path-scoped stash whose stash commit OID was recorded (`git stash create` then `git stash store`, or equivalent) — untracked files must be accounted for explicitly
-- vault copy **plus** a Git object/receipt for any **tracked** bytes still in this worktree
+- path-scoped stash whose stash commit OID was recorded (`git stash create` / `git stash store`, including untracked when collisions exist)
+- vault copy **plus** a Git object/receipt whose `<container>:<path>` blob matches `hash-object` of the preserved bytes
 
-A preservation story without a verifiable object/receipt does **not** satisfy the gate. Do not stash the entire tree by default.
+A preservation story without a content-bound receipt does **not** satisfy the gate. Do not stash the entire tree by default.
 
 ### Switch failure is a first-class state
 
@@ -310,16 +337,16 @@ SWITCH_BLOCKED_BY_DIRTY_STATE
 
 ### Procedure
 
-1. `git fetch origin`
-2. Ensure every **tracked** worktree and index modification is clean **or** preserved with a verified receipt (not merely classified `exclude`)
+1. `git fetch origin` and freeze `TARGET_SHA=$(git rev-parse origin/main)`
+2. Ensure tracked worktree/index are clean **and** `UNTRACKED_COLLISION_WITH_TARGET == NO`, or every colliding/dirty path has a verified content-bound receipt (not merely classified `exclude`)
 3. If local `main` has commits not on `origin/main`, create a backup first:
    ```powershell
    git branch backup/local-main-YYYYMMDD-HHmm main
    ```
 4. `git switch main` without `--force`. On failure → `SWITCH_BLOCKED_BY_DIRTY_STATE`.
-5. Re-confirm tracked cleanliness. Only then:
+5. Re-confirm all three reset preconditions against `TARGET_SHA`. Only then:
    ```powershell
-   git reset --hard origin/main
+   git reset --hard TARGET_SHA
    ```
 6. Report the backup branch name, preservation receipts, and new `HEAD` in the session handoff
 7. Never force-push the backup or rewrite remote `main`
