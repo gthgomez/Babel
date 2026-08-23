@@ -33,7 +33,137 @@ const PINNED = {
   pinGeometry: true,
 }
 
+async function withFakeStreamWrites<T>(
+  run: (calls: { stdout: unknown[][]; stderr: unknown[][] }) => T | PromiseLike<T>,
+): Promise<T> {
+  const originalStdoutWrite = process.stdout.write
+  const originalStderrWrite = process.stderr.write
+  const calls = { stdout: [] as unknown[][], stderr: [] as unknown[][] }
+
+  process.stdout.write = ((...args: unknown[]) => {
+    calls.stdout.push(args)
+    const callback = typeof args[1] === 'function' ? args[1] : args[2]
+    if (typeof callback === 'function') callback()
+    return false
+  }) as typeof process.stdout.write
+  process.stderr.write = ((...args: unknown[]) => {
+    calls.stderr.push(args)
+    const callback = typeof args[1] === 'function' ? args[1] : args[2]
+    if (typeof callback === 'function') callback()
+    return true
+  }) as typeof process.stderr.write
+
+  try {
+    return await run(calls)
+  } finally {
+    process.stdout.write = originalStdoutWrite
+    process.stderr.write = originalStderrWrite
+  }
+}
+
 describe('TerminalTransport', () => {
+  it('forwards stdout/stderr writes unchanged and observes both streams after success', async () => {
+    await withFakeStreamWrites(async (calls) => {
+      const transport = installTerminalTransport(PINNED, 'tui-test-write-contract')
+      let chunkCount = 0
+      let flushCount = 0
+      let stdoutCallbackCount = 0
+      let stderrCallbackCount = 0
+      const stdoutCallback = () => {
+        stdoutCallbackCount += 1
+      }
+      const stderrCallback = () => {
+        stderrCallbackCount += 1
+      }
+      const buffer = Buffer.from('stderr-bytes')
+
+      try {
+        transport.onChunk((event) => {
+          chunkCount += 1
+          assert.equal(event.kind, 'visible')
+        })
+        transport.onFlush(() => {
+          flushCount += 1
+        })
+
+        const stdoutResult = process.stdout.write('stdout-bytes', 'utf8', stdoutCallback)
+        const stderrResult = process.stderr.write(buffer, stderrCallback)
+
+        assert.equal(stdoutResult, false)
+        assert.equal(stderrResult, true)
+        assert.equal(stdoutCallbackCount, 1)
+        assert.equal(stderrCallbackCount, 1)
+        assert.equal(calls.stdout.length, 1)
+        assert.equal(calls.stderr.length, 1)
+        assert.deepEqual(calls.stdout[0]?.slice(0, 2), ['stdout-bytes', 'utf8'])
+        assert.equal(calls.stdout[0]?.[2], stdoutCallback)
+        assert.equal(calls.stderr[0]?.[0], buffer)
+        assert.equal(calls.stderr[0]?.[1], stderrCallback)
+        assert.equal(chunkCount, 2)
+        assert.equal(flushCount, 2)
+        assert.deepEqual(
+          transport.drainVisibleLog().map((event) => [event.stream, event.bytes]),
+          [
+            ['stdout', 'stdout-bytes'],
+            ['stderr', 'stderr-bytes'],
+          ],
+        )
+      } finally {
+        uninstallTerminalTransport()
+      }
+    })
+  })
+
+  it('keeps the original stdout write and return value when chunk persistence throws', async () => {
+    await withFakeStreamWrites(async (calls) => {
+      const transport = installTerminalTransport(PINNED, 'tui-test-sync-failure')
+      let persistenceCalls = 0
+      try {
+        transport.onChunk(() => {
+          persistenceCalls += 1
+          assert.equal(calls.stdout.length, 1, 'original write must precede observation')
+          throw new Error('simulated persistence failure')
+        })
+
+        const result = process.stdout.write('still-visible')
+        process.stdout.write('still-visible-again')
+
+        assert.equal(result, false)
+        assert.equal(calls.stdout.length, 2)
+        assert.equal(calls.stdout[0]?.[0], 'still-visible')
+        assert.equal(calls.stdout[1]?.[0], 'still-visible-again')
+        assert.equal(persistenceCalls, 1)
+      } finally {
+        uninstallTerminalTransport()
+      }
+    })
+  })
+
+  it('keeps terminal output alive when frame persistence rejects asynchronously', async () => {
+    await withFakeStreamWrites(async (calls) => {
+      const transport = installTerminalTransport(PINNED, 'tui-test-async-failure')
+      try {
+        transport.onFlush(async () => {
+          await Promise.resolve()
+          throw new Error('simulated async persistence failure')
+        })
+
+        const result = process.stdout.write(Buffer.from('async-visible'))
+        await Promise.resolve()
+        await Promise.resolve()
+        process.stdout.write('after-async-failure')
+
+        assert.equal(result, false)
+        assert.equal(calls.stdout.length, 2)
+        assert.equal(calls.stdout[0]?.[0] instanceof Buffer, true)
+        assert.equal((calls.stdout[0]?.[0] as Buffer).toString(), 'async-visible')
+        assert.equal(calls.stdout[1]?.[0], 'after-async-failure')
+      } finally {
+        uninstallTerminalTransport()
+      }
+    })
+  })
+
   it('does X when Y: visible CSI 2A/2K mutates the cell grid not stripAnsi concatenation', () => {
     const transport = createTerminalTransport(PINNED, 'tui-test-vt')
     try {
@@ -181,5 +311,3 @@ describe('tuiSessionStore + inspect tui', () => {
     }
   })
 })
-
-

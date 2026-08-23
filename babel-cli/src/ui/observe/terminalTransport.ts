@@ -46,6 +46,8 @@ export interface TerminalWriteEvent {
   ts: number
 }
 
+type ObservationCallback<TArgs extends unknown[]> = (...args: TArgs) => void | PromiseLike<void>
+
 const DEFAULT_PROFILE: TerminalCapabilityProfile = {
   geometry: { cols: 120, rows: 40 },
   terminal: 'minimal',
@@ -121,11 +123,12 @@ export class TerminalTransport {
   private visibleLog: TerminalWriteEvent[] = []
   readonly sessionId: string
   private lastSemantic: ObservationSemanticState | null = null
-  private onVisibleFlush: ((snap: GridSnapshot, marks: ObservationWatermarks) => void) | null = null
-  private onVisibleChunk: ((ev: TerminalWriteEvent) => void) | null = null
+  private onVisibleFlush: ObservationCallback<[GridSnapshot, ObservationWatermarks]> | null = null
+  private onVisibleChunk: ObservationCallback<[TerminalWriteEvent]> | null = null
   private lastEmittedHash = ''
   private lastMarks: ObservationWatermarks | null = null
   private resizeListener: (() => void) | null = null
+  private observationDegraded = false
 
   constructor(profile: TerminalCapabilityProfile, sessionId: string) {
     this.profile = profile
@@ -160,7 +163,7 @@ export class TerminalTransport {
     return this.lastSemantic
   }
 
-  onFlush(cb: (snap: GridSnapshot, marks: ObservationWatermarks) => void): void {
+  onFlush(cb: (snap: GridSnapshot, marks: ObservationWatermarks) => void | PromiseLike<void>): void {
     this.onVisibleFlush = cb
   }
 
@@ -169,7 +172,7 @@ export class TerminalTransport {
    *
    * @param cb Chunk listener
    */
-  onChunk(cb: (ev: TerminalWriteEvent) => void): void {
+  onChunk(cb: (ev: TerminalWriteEvent) => void | PromiseLike<void>): void {
     this.onVisibleChunk = cb
   }
 
@@ -201,33 +204,28 @@ export class TerminalTransport {
   install(): void {
     if (installed && installed !== this) installed.uninstall()
     const self = this
-    process.stdout.write = function (chunk: unknown, encoding?: unknown, callback?: unknown): boolean {
-      const str = chunkToString(chunk)
-      if (self.buffering) {
-        self.buffer.push(str)
-        if (typeof callback === 'function') (callback as () => void)()
-        return true
-      }
-      self.releaseVisible(str, 'stdout', 'idle_flush')
-      if (typeof encoding === 'function') {
-        return self.originalStdout(chunk as never, encoding as never)
-      }
-      return self.originalStdout(chunk as never, encoding as never, callback as never)
-    } as typeof process.stdout.write
+    const wrapWrite = (
+      original: typeof process.stdout.write,
+      stream: 'stdout' | 'stderr',
+    ): typeof process.stdout.write =>
+      function (chunk: unknown, encoding?: unknown, callback?: unknown): boolean {
+        const str = chunkToString(chunk)
+        if (self.buffering) {
+          self.buffer.push(str)
+          const writeCallback = typeof encoding === 'function' ? encoding : callback
+          if (typeof writeCallback === 'function') (writeCallback as () => void)()
+          return true
+        }
 
-    process.stderr.write = function (chunk: unknown, encoding?: unknown, callback?: unknown): boolean {
-      const str = chunkToString(chunk)
-      if (self.buffering) {
-        self.buffer.push(str)
-        if (typeof callback === 'function') (callback as () => void)()
-        return true
-      }
-      self.releaseVisible(str, 'stderr', 'idle_flush')
-      if (typeof encoding === 'function') {
-        return self.originalStderr(chunk as never, encoding as never)
-      }
-      return self.originalStderr(chunk as never, encoding as never, callback as never)
-    } as typeof process.stderr.write
+        // The real stream write is authoritative. Observation is strictly post-write
+        // and fail-soft so persistence cannot suppress or alter terminal output.
+        const result = forwardWrite(original, arguments)
+        self.observeVisibleSafely(str, stream, 'idle_flush')
+        return result
+      } as typeof process.stdout.write
+
+    process.stdout.write = wrapWrite(self.originalStdout, 'stdout')
+    process.stderr.write = wrapWrite(self.originalStderr, 'stderr')
 
     if (!this.profile.pinGeometry) {
       this.resizeListener = () => {
@@ -272,7 +270,16 @@ export class TerminalTransport {
     stream: 'stdout' | 'stderr' = 'stdout',
     trigger: ObserveTrigger = 'idle_flush',
   ): void {
-    this.releaseVisible(bytes, stream, trigger)
+    this.observeVisibleSafely(bytes, stream, trigger)
+  }
+
+  private observeVisibleSafely(str: string, stream: 'stdout' | 'stderr', trigger: ObserveTrigger): void {
+    if (this.observationDegraded) return
+    try {
+      this.releaseVisible(str, stream, trigger)
+    } catch {
+      this.disableObservation()
+    }
   }
 
   private releaseVisible(str: string, stream: 'stdout' | 'stderr', trigger: ObserveTrigger): void {
@@ -286,7 +293,7 @@ export class TerminalTransport {
       ts: Date.now(),
     }
     this.visibleLog.push(ev)
-    this.onVisibleChunk?.(ev)
+    this.notifyObservation(this.onVisibleChunk, ev)
     const size = getObservedTerminalSize()
     const geo = this.grid.getGeometry()
     if (size.cols !== geo.cols || size.rows !== geo.rows) {
@@ -316,8 +323,29 @@ export class TerminalTransport {
     }
     this.lastEmittedHash = snap.hash
     this.lastMarks = marks
-    this.onVisibleFlush?.(snap, marks)
+    this.notifyObservation(this.onVisibleFlush, snap, marks)
     return { snap, marks }
+  }
+
+  private notifyObservation<TArgs extends unknown[]>(
+    callback: ObservationCallback<TArgs> | null,
+    ...args: TArgs
+  ): void {
+    if (this.observationDegraded || !callback) return
+    try {
+      const pending = callback(...args)
+      if (pending && typeof pending.then === 'function') {
+        void Promise.resolve(pending).catch(() => this.disableObservation())
+      }
+    } catch {
+      this.disableObservation()
+    }
+  }
+
+  private disableObservation(): void {
+    this.observationDegraded = true
+    this.onVisibleChunk = null
+    this.onVisibleFlush = null
   }
 
   drainIntentLog(): TerminalWriteEvent[] {
@@ -384,6 +412,12 @@ function chunkToString(chunk: unknown): string {
   if (typeof chunk === 'string') return chunk
   if (Buffer.isBuffer(chunk)) return chunk.toString('utf8')
   return String(chunk ?? '')
+}
+
+function forwardWrite(write: typeof process.stdout.write, args: IArguments): boolean {
+  if (args.length <= 1) return write(args[0] as never)
+  if (args.length === 2) return write(args[0] as never, args[1] as never)
+  return write(args[0] as never, args[1] as never, args[2] as never)
 }
 
 export { DEFAULT_PROFILE }
