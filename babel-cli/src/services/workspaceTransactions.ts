@@ -1,6 +1,5 @@
 import * as crypto from 'crypto';
 import { promises as fsPromises } from 'fs';
-import { resolve } from 'node:path';
 import { FileWriteMutex, type FileLockContext } from './editReliability.js';
 
 export interface MutationBatchTransaction {
