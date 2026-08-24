@@ -33,6 +33,19 @@ try {
   Assert-True ($checkerSource -notmatch 'ResponseHeadersVariable') 'checker must avoid unsupported response-header parameters'
   Assert-True ($checkerSource -match 'Net\.Http\.HttpClient') 'checker must use cross-platform HTTP handling'
   Assert-True ($checkerSource -match 'AuthenticationHeaderValue') 'checker must authenticate API requests explicitly'
+  $targetTypesMatch = [regex]::Match($workflowSource, '(?ms)^  pull_request_target:\s*\r?\n\s+types:\s*\[(?<events>[^\]]+)\]')
+  Assert-True $targetTypesMatch.Success 'workflow must declare pull_request_target activity types'
+  $targetEvents = $targetTypesMatch.Groups['events'].Value
+  foreach ($event in @('opened', 'reopened', 'synchronize', 'edited', 'ready_for_review')) {
+    Assert-True ($targetEvents -match "(?<![\w-])$([regex]::Escape($event))(?![\w-])") "pull_request_target must subscribe to $event"
+  }
+  Assert-True ($workflowSource -match '(?m)^  group:.*\$\{\{\s*github\.event_name\s*\}\}') 'workflow concurrency must remain event-specific'
+  $metadataJobMatch = [regex]::Match($workflowSource, '(?ms)^  public-pr-metadata:\s*(?<body>.*?)(?=^  [A-Za-z0-9_-]+:|\z)')
+  Assert-True $metadataJobMatch.Success 'workflow must retain the public-pr-metadata job'
+  $metadataJob = $metadataJobMatch.Groups['body'].Value
+  Assert-True ($metadataJob -match "(?m)^\s+if:\s*github\.event_name == 'pull_request_target'\s*$") 'public-pr-metadata must remain restricted to pull_request_target'
+  Assert-True ($metadataJob -match '(?m)^\s+ref:\s*\$\{\{\s*github\.event\.repository\.default_branch\s*\}\}\s*$') 'trusted metadata validation must check out the default branch'
+  Assert-True ($metadataJob -notmatch 'github\.event\.pull_request\.(head|ref|sha)') 'trusted metadata validation must not check out PR-controlled code'
   Assert-True ($workflowSource -match 'pull-requests:\s*read') 'trusted workflow must retain pull-request read permission'
   Assert-True ($workflowSource -match 'GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}') 'trusted workflow must export the GitHub token to the metadata checker'
 
