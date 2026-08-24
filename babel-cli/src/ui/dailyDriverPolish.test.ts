@@ -267,7 +267,7 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
     }
   });
 
-  test('production integration: direct ChatCallbacks non-streaming failure renders failure, never success', async () => {
+  test('production integration: blocked plan-gate is warning not execution failure', async () => {
     const { ConversationalRenderer } = await import('./waterfall.js');
     const chunks: string[] = [];
     const originalWrite = process.stdout.write.bind(process.stdout);
@@ -280,7 +280,6 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
       const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
       renderer.start();
 
-      // Direct non-streaming callback invocation: blocked tool with error and exit_code
       const id = renderer.onToolCallStart('run_command', 'git push origin main');
       assert.ok(id > 0);
       renderer.onToolCallComplete(id, 'plan-gate', 'blocked', 1);
@@ -288,16 +287,18 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
       renderer.stop();
 
       const out = stripAnsi(chunks.join(''));
-      assert.ok(out.includes('✖'), `Expected failure icon '✖' in non-streaming callback failure, got: ${out}`);
-      assert.ok(out.includes('git push origin main'), `Expected target in error output, got: ${out}`);
-      assert.ok(out.includes('failed (exit 1)'), `Expected 'failed (exit 1)' in output, got: ${out}`);
+      assert.ok(out.includes('⏸'), `Expected blocked icon in output, got: ${out}`);
+      assert.ok(out.includes('git push origin main'), `Expected target in output, got: ${out}`);
+      assert.ok(out.includes('plan-gate'), `Expected plan-gate reason in output, got: ${out}`);
+      assert.ok(!out.includes('failed (exit 1)'), `Blocked must not render as failed execution, got: ${out}`);
+      assert.ok(!out.includes('✖'), `Blocked must not use failure icon, got: ${out}`);
       assert.ok(!out.includes('✔'), `Should not contain success icon '✔', got: ${out}`);
     } finally {
       process.stdout.write = originalWrite;
     }
   });
 
-  test('production integration: fail-closed fallback converts missing exitCode with gate/blocked detail into failure', async () => {
+  test('production integration: hard-plan-mode detail-only is blocked not fabricated failure', async () => {
     const { ConversationalRenderer } = await import('./waterfall.js');
     const chunks: string[] = [];
     const originalWrite = process.stdout.write.bind(process.stdout);
@@ -310,7 +311,6 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
       const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
       renderer.start();
 
-      // Callback invocation with detail only (no error/exitCode parameters passed)
       const id = renderer.onToolCallStart('str_replace', 'src/auth.ts');
       assert.ok(id > 0);
       renderer.onToolCallComplete(id, 'hard-plan-mode');
@@ -318,9 +318,40 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
       renderer.stop();
 
       const out = stripAnsi(chunks.join(''));
-      assert.ok(out.includes('✖'), `Expected fail-closed failure icon '✖' for hard-plan-mode detail, got: ${out}`);
-      assert.ok(out.includes('src/auth.ts'), `Expected target in error output, got: ${out}`);
+      assert.ok(out.includes('⏸'), `Expected blocked icon for hard-plan-mode, got: ${out}`);
+      assert.ok(out.includes('src/auth.ts'), `Expected target in output, got: ${out}`);
+      assert.ok(out.includes('hard-plan-mode'), `Expected hard-plan-mode reason, got: ${out}`);
+      assert.ok(!out.includes('failed (exit'), `Must not fabricate a failed exit, got: ${out}`);
       assert.ok(!out.includes('Edited'), `Should not group as successful edit, got: ${out}`);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  });
+
+  test('production integration: actual nonzero exit still renders failure', async () => {
+    const { ConversationalRenderer } = await import('./waterfall.js');
+    const chunks: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      const renderer = new ConversationalRenderer({ isTTY: true, verboseMode: false });
+      renderer.start();
+
+      const id = renderer.onToolCallStart('run_command', 'npm test');
+      assert.ok(id > 0);
+      renderer.onToolCallComplete(id, 'exit 1', 'Command failed with exit code 1', 1);
+
+      renderer.stop();
+
+      const out = stripAnsi(chunks.join(''));
+      assert.ok(out.includes('✖'), `Expected failure icon, got: ${out}`);
+      assert.ok(out.includes('npm test'), `Expected target in output, got: ${out}`);
+      assert.ok(out.includes('failed (exit 1)'), `Expected failed exit text, got: ${out}`);
+      assert.ok(!out.includes('✔'), `Should not contain success icon, got: ${out}`);
     } finally {
       process.stdout.write = originalWrite;
     }
@@ -395,13 +426,13 @@ describe('PR-D: Daily-Driver Visual Polish & Tool Presentation', () => {
           submitMessageCalled = true;
           // Emits structured failure over the non-streaming callback boundary
           const toolId = callbacks.onToolStart?.('run_command', 'git push origin main') ?? 1;
-          callbacks.onToolComplete?.(toolId, 'plan-gate', 'blocked', 1);
+          callbacks.onToolComplete?.(toolId, 'exit 1', 'Command failed with exit code 1', 1);
           return {
             status: 'completed',
-            answer: 'Operation was blocked by plan-gate policy.',
+            answer: 'Verification failed.',
             outcome: 'SUCCESS',
             conversation: [],
-            toolCalls: [{ tool: 'run_command', target: 'git push origin main', error: 'blocked', exit_code: 1 }],
+            toolCalls: [{ tool: 'run_command', target: 'git push origin main', error: 'Command failed with exit code 1', exit_code: 1 }],
             usage: { totalCostUSD: 0, totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0 },
           };
         },

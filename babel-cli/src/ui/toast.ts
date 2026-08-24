@@ -28,6 +28,10 @@ import {
   warning,
   error,
   visibleLength,
+  bgSuccess,
+  bgWarning,
+  bgError,
+  bgPanel,
 } from './theme.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -229,13 +233,13 @@ export class ToastManager {
   private styleToast(type: ToastType, text: string): string {
     switch (type) {
       case 'success':
-        return `\x1b[42m\x1b[30m${text}\x1b[0m`;
+        return bgSuccess(text);
       case 'warning':
-        return `\x1b[43m\x1b[30m${text}\x1b[0m`;
+        return bgWarning(text);
       case 'error':
-        return `\x1b[41m\x1b[37m${text}\x1b[0m`;
+        return bgError(text);
       default:
-        return `\x1b[100m\x1b[37m${text}\x1b[0m`; // bright black bg
+        return bgPanel(text);
     }
   }
 

@@ -25,6 +25,7 @@ import {
   babelDuskDaltonized,
   babelDawnDaltonized,
   babelHc,
+  babelPrismNight,
 } from './tokens.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -118,7 +119,7 @@ test('babel-hc: AAA coverage (informational — AA is the gate)', () => {
 });
 
 test('ALL themes: textPrimary on background passes WCAG AA Large (3:1)', () => {
-  const themes = [babelDusk, babelDawn, babelDuskDaltonized, babelDawnDaltonized, babelHc];
+  const themes = [babelDusk, babelDawn, babelDuskDaltonized, babelDawnDaltonized, babelHc, babelPrismNight];
   for (const theme of themes) {
     const results = checkThemeContrast(theme);
     const textPairs = results.filter((r) => r.fgToken === 'textPrimary');
@@ -132,7 +133,7 @@ test('ALL themes: textPrimary on background passes WCAG AA Large (3:1)', () => {
 });
 
 test('ALL themes: textPrimary on panel passes WCAG AA Large (3:1)', () => {
-  const themes = [babelDusk, babelDawn, babelDuskDaltonized, babelDawnDaltonized, babelHc];
+  const themes = [babelDusk, babelDawn, babelDuskDaltonized, babelDawnDaltonized, babelHc, babelPrismNight];
   for (const theme of themes) {
     const results = checkThemeContrast(theme);
     const panelTextPairs = results.filter(

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 
 import { BabelEventBus } from '../pipeline.js';
-import { babelDusk, previewBuiltinTheme, resolveBuiltinTheme } from './tokens.js';
+import { babelDusk, babelPrismNight, previewBuiltinTheme, resolveBuiltinTheme } from './tokens.js';
 import {
   AppendOnlyRenderer,
   ConversationalRenderer,
@@ -57,6 +57,17 @@ test('babel-dusk resolves with exact truecolor and ANSI fallback values', () => 
   assert.equal(theme.ansiFallback.success, 114);
   assert.throws(() => resolveBuiltinTheme('graphite-cyan'), /Unknown Babel theme/);
   assert.match(previewBuiltinTheme('babel-dusk'), /babel-dusk/);
+});
+
+test('babel-prism-night is selectable and does not replace the dusk default name', () => {
+  const theme = resolveBuiltinTheme('babel-prism-night');
+  assert.equal(theme.name, 'babel-prism-night');
+  assert.equal(theme.trueColor.accent, '#7C8CFF');
+  assert.equal(theme.trueColor.activityTool, '#55C2E6');
+  assert.equal(theme.trueColor.activityModel, '#A78BFA');
+  assert.equal(theme.trueColor.syntaxKeyword, '#7C8CFF');
+  assert.notEqual(babelPrismNight.name, babelDusk.name);
+  assert.match(previewBuiltinTheme('babel-prism-night'), /babel-prism-night/);
 });
 
 test('babel-dusk ANSI fallback uses 256-color roles when color is forced', () => {

@@ -145,8 +145,17 @@ export function ghost(text: string): string {
 export function accent(text: string): string {
   return colorToken('accent', text);
 }
+export function accentSecondary(text: string): string {
+  return colorToken('accentSecondary', text);
+}
 export function accentBright(text: string): string {
   return colorToken('accent', text, { bold: true });
+}
+export function identityPrimary(text: string): string {
+  return colorToken('identityPrimary', text);
+}
+export function identitySecondary(text: string): string {
+  return colorToken('identitySecondary', text);
 }
 export function accentBlue(text: string): string {
   return colorToken('info', text);

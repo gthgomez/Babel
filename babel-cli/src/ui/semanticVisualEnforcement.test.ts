@@ -244,4 +244,26 @@ describe('tool presentation still distinguishes success / failure / unverified w
     assert.notEqual(successLine, failLine);
     assert.notEqual(failLine, unknownLine);
   });
+
+  it('does not paint blocked as failed even without color', () => {
+    const blockedLine = stripAnsi(
+      renderToolExecutionTrail(
+        [{ tool: 'run_command', target: 'git push', detail: 'blocked', error: 'blocked', exitCode: 1 }],
+        false,
+        80,
+      ),
+    );
+    const failLine = stripAnsi(
+      renderToolExecutionTrail(
+        [{ tool: 'run_command', target: 'npm test', exitCode: 1, status: 'failure' }],
+        false,
+        80,
+      ),
+    );
+    assert.match(blockedLine, /⏸/);
+    assert.match(blockedLine, /blocked/i);
+    assert.doesNotMatch(blockedLine, /failed/i);
+    assert.match(failLine, /✖/);
+    assert.notEqual(blockedLine, failLine);
+  });
 });

@@ -11,13 +11,18 @@ import {
   error,
   warning,
   muted,
-  info,
   dim,
   bold,
   truncate,
   visibleLength,
   getEffectiveTerminalWidth,
 } from './theme.js';
+import {
+  classifyToolPresentation,
+  type ToolPresentationStatus,
+} from './toolPresentationClassify.js';
+
+export { isKnownFailureDetail, classifyToolPresentation } from './toolPresentationClassify.js';
 
 export interface ToolExecutionSummary {
   tool: string;
@@ -26,7 +31,7 @@ export interface ToolExecutionSummary {
   durationMs?: number | undefined;
   error?: string | undefined;
   detail?: string | undefined;
-  status?: 'success' | 'failure' | 'unknown' | undefined;
+  status?: ToolPresentationStatus | undefined;
 }
 
 export interface CollapsedToolGroup {
@@ -34,23 +39,17 @@ export interface CollapsedToolGroup {
   count: number;
   items: ToolExecutionSummary[];
   hasErrors: boolean;
+  hasBlocked: boolean;
   hasUnknowns: boolean;
 }
 
-export function isKnownFailureDetail(detail: string | undefined): boolean {
-  if (!detail) return false;
-  return (
-    detail === 'blocked' ||
-    detail === 'error' ||
-    detail === 'failed' ||
-    detail === 'degraded_suppressed' ||
-    detail === 'platform_unusable' ||
-    detail === 'hard-plan-mode' ||
-    detail === 'plan-gate' ||
-    detail === 'phase-gate' ||
-    detail === 'reconciliation-required' ||
-    (detail.startsWith('exit ') && !detail.startsWith('exit 0'))
-  );
+function classifySummary(item: ToolExecutionSummary) {
+  return classifyToolPresentation({
+    detail: item.detail,
+    error: item.error,
+    exitCode: item.exitCode,
+    status: item.status,
+  });
 }
 
 export function groupToolExecutions(
@@ -74,18 +73,20 @@ export function groupToolExecutions(
       category = 'command';
     }
 
-    const isErr =
-      exec.status === 'failure' ||
-      (exec.exitCode !== undefined && exec.exitCode !== 0) ||
-      Boolean(exec.error) ||
-      isKnownFailureDetail(exec.detail);
-    const isUnk =
-      exec.status === 'unknown' ||
-      (exec.exitCode === undefined && !isErr && exec.status !== 'success');
+    const cls = classifySummary(exec);
+    const isErr = cls.isFailure;
+    const isBlocked = cls.isBlocked || cls.availability === 'unavailable';
+    const isUnk = cls.status === 'unknown' && !isBlocked;
 
-    // Group adjacent same-category executions unless they contain errors
     const lastGroup = groups.at(-1);
-    if (lastGroup && lastGroup.category === category && !isErr && !lastGroup.hasErrors) {
+    if (
+      lastGroup &&
+      lastGroup.category === category &&
+      !isErr &&
+      !isBlocked &&
+      !lastGroup.hasErrors &&
+      !lastGroup.hasBlocked
+    ) {
       lastGroup.count += 1;
       lastGroup.items.push(exec);
       if (isUnk) lastGroup.hasUnknowns = true;
@@ -95,12 +96,48 @@ export function groupToolExecutions(
         count: 1,
         items: [exec],
         hasErrors: isErr,
+        hasBlocked: isBlocked,
         hasUnknowns: isUnk,
       });
     }
   }
 
   return groups;
+}
+
+function formatExpandedItem(item: ToolExecutionSummary, termWidth: number): string {
+  const cls = classifySummary(item);
+  let icon: string;
+  let statusText: string;
+
+  if (cls.isBlocked) {
+    const reason = item.detail && item.detail !== 'blocked' ? item.detail : 'blocked';
+    icon = warning('⏸');
+    statusText = warning(reason);
+  } else if (cls.availability === 'unavailable') {
+    icon = warning('⏸');
+    statusText = warning(item.detail ?? 'unavailable');
+  } else if (cls.isFailure) {
+    icon = error('✖');
+    statusText = error(`failed (exit ${item.exitCode ?? 1})`);
+  } else if (cls.isSuccess) {
+    icon = success('✔');
+    statusText = muted('ok');
+  } else {
+    icon = muted('○');
+    statusText = muted('unverified');
+  }
+
+  const errSuffix = cls.isFailure && item.error ? ` (${item.error})` : '';
+  const rawLine = `  ${icon} ${dim(item.tool)} ${item.target} — ${statusText}${errSuffix}`;
+  if (visibleLength(rawLine) > termWidth) {
+    const staticLen = visibleLength(`  ${icon} ${dim(item.tool)}  — ${statusText}${errSuffix}`);
+    const budget = Math.max(4, termWidth - staticLen);
+    const truncatedTarget = truncate(item.target, budget);
+    const fittedLine = `  ${icon} ${dim(item.tool)} ${truncatedTarget} — ${statusText}${errSuffix}`;
+    return visibleLength(fittedLine) > termWidth ? truncate(fittedLine, termWidth) : fittedLine;
+  }
+  return rawLine;
 }
 
 export function formatToolGroupSummary(
@@ -110,39 +147,10 @@ export function formatToolGroupSummary(
 ): string {
   const termWidth = width ?? getEffectiveTerminalWidth();
 
-  if (verbose || group.hasErrors) {
-    // Expanded view for errors or verbose mode
-    return group.items
-      .map((item) => {
-        const isErr =
-          item.status === 'failure' ||
-          (item.exitCode !== undefined && item.exitCode !== 0) ||
-          Boolean(item.error) ||
-          isKnownFailureDetail(item.detail);
-        const isSuccess =
-          item.status === 'success' ||
-          (item.exitCode === 0 && !item.error && !isKnownFailureDetail(item.detail));
-        const icon = isErr ? error('✖') : isSuccess ? success('✔') : muted('○');
-        const statusText = isErr
-          ? error(`failed (exit ${item.exitCode ?? 1})`)
-          : isSuccess
-            ? muted('ok')
-            : muted('unverified');
-        const errSuffix = item.error ? ` (${item.error})` : '';
-        const rawLine = `  ${icon} ${dim(item.tool)} ${item.target} — ${statusText}${errSuffix}`;
-        if (visibleLength(rawLine) > termWidth) {
-          const staticLen = visibleLength(`  ${icon} ${dim(item.tool)}  — ${statusText}${errSuffix}`);
-          const budget = Math.max(4, termWidth - staticLen);
-          const truncatedTarget = truncate(item.target, budget);
-          const fittedLine = `  ${icon} ${dim(item.tool)} ${truncatedTarget} — ${statusText}${errSuffix}`;
-          return visibleLength(fittedLine) > termWidth ? truncate(fittedLine, termWidth) : fittedLine;
-        }
-        return rawLine;
-      })
-      .join('\n');
+  if (verbose || group.hasErrors || group.hasBlocked) {
+    return group.items.map((item) => formatExpandedItem(item, termWidth)).join('\n');
   }
 
-  // Collapsed summary for routine activity
   let line = '';
   switch (group.category) {
     case 'read':

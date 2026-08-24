@@ -60,9 +60,9 @@ import {
   type ConversationLivenessSnapshot,
 } from './conversationLiveness.js';
 import {
+  classifyToolPresentation,
   formatToolGroupSummary,
   groupToolExecutions,
-  isKnownFailureDetail,
   type ToolExecutionSummary,
 } from './toolPresentation.js';
 import { renderSubAgentOverlay, type SubAgentOverlayEntry } from './subAgentOverlay.js';
@@ -2061,32 +2061,15 @@ export class ConversationalRenderer extends BaseRenderer {
     this._historyTranscript.completeToolCall(id, detail);
     this._syncCellViewport();
 
-    const isExplicitError = Boolean(
-      error ||
-      (exitCode !== undefined && exitCode !== 0) ||
-      isKnownFailureDetail(detail)
-    );
-    const isExplicitSuccess = !isExplicitError && exitCode === 0 && error === undefined;
-    const status: 'success' | 'failure' | 'unknown' = isExplicitError
-      ? 'failure'
-      : isExplicitSuccess
-        ? 'success'
-        : 'unknown';
+    const classification = classifyToolPresentation({ detail, error, exitCode });
+    const isIntervention = classification.isFailure || classification.isBlocked || classification.availability === 'unavailable';
 
     const summary: ToolExecutionSummary = {
       tool: pending.tool,
       target: pending.target,
-      status,
-      ...(exitCode !== undefined
-        ? { exitCode }
-        : isExplicitError
-          ? { exitCode: 1 }
-          : {}),
-      ...(error !== undefined
-        ? { error }
-        : isExplicitError
-          ? { error: detail ?? 'failed' }
-          : {}),
+      status: classification.status,
+      ...(exitCode !== undefined ? { exitCode } : {}),
+      ...(error !== undefined ? { error } : {}),
       ...(detail !== undefined ? { detail } : {}),
     };
 
@@ -2096,19 +2079,21 @@ export class ConversationalRenderer extends BaseRenderer {
           category: 'other' as const,
           count: 1,
           items: [summary],
-          hasErrors: isExplicitError,
-          hasUnknowns: status === 'unknown',
+          hasErrors: classification.isFailure,
+          hasBlocked: classification.isBlocked || classification.availability === 'unavailable',
+          hasUnknowns: classification.status === 'unknown',
         };
         const formatted = formatToolGroupSummary(group, true);
         safeStdoutWrite(`\r${formatted}\n`);
         this._pushLinesToScrollback(formatted);
-      } else if (isExplicitError) {
+      } else if (isIntervention) {
         this._flushPendingToolExecutions();
         const group = groupToolExecutions([summary])[0] ?? {
           category: 'other' as const,
           count: 1,
           items: [summary],
-          hasErrors: true,
+          hasErrors: classification.isFailure,
+          hasBlocked: classification.isBlocked || classification.availability === 'unavailable',
           hasUnknowns: false,
         };
         const formatted = formatToolGroupSummary(group, false);
