@@ -5,6 +5,7 @@ import { Command } from 'commander';
 import { z } from 'zod';
 
 import { registerEvidenceProductSubcommands } from './evidenceProductCommands.js';
+import { registerInspectTuiCommand } from '../ui/observe/inspectTui.js';
 import { registerMaintenanceCommands } from './maintenanceCommands.js';
 import { printJsonErrorAndExit, printJsonOrHuman } from './output.js';
 import { registerShipCommand } from './shipCommands.js';
@@ -2712,6 +2713,8 @@ Examples:
   $ babel inspect summary --run latest
   $ babel inspect stack --run <run_dir>
   $ babel inspect validate-run chat-<session-id>
+  $ babel inspect tui latest
+  $ babel inspect tui --view screen
 
 Notes:
   - These views are read-only and operate on already-created evidence bundles.
@@ -2827,6 +2830,8 @@ Notes:
         },
       ),
   );
+
+  registerInspectTuiCommand(inspectCommand);
 
   const checkpointCommand = program
     .command('checkpoint')
