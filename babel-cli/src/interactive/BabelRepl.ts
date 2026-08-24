@@ -388,6 +388,15 @@ export class BabelRepl {
 // ─── Entrypoint ───────────────────────────────────────────────────────────────
 
 export async function startInteractiveSession(initialState?: Partial<SessionState>): Promise<void> {
+  const { startTuiObservation, writeTuiSessionRef, stopTuiObservation } = await import(
+    '../ui/observe/observeSession.js'
+  );
+  const sessionDir = startTuiObservation();
   const repl = new BabelRepl(initialState);
-  await repl.start();
+  if (sessionDir) writeTuiSessionRef(repl.interactiveSessionDir, sessionDir);
+  try {
+    await repl.start();
+  } finally {
+    stopTuiObservation();
+  }
 }

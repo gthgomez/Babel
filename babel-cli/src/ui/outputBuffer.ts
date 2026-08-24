@@ -19,6 +19,7 @@
 import { isA11yMode, sanitizeForA11y } from './a11y.js';
 import { probeTerminalCapabilities, terminalCapsCompat } from './terminalProbe.js';
 import { truncate, visibleLength } from './theme.js';
+import { getObservedTerminalSize, getTerminalTransport } from './observe/terminalTransport.js';
 
 // ── Error handling ──────────────────────────────────────────────────────────
 
@@ -289,6 +290,7 @@ export class OutputBuffer {
       return;
     }
     try {
+      getTerminalTransport()?.noteIntent(text, 'stdout');
       process.stdout.write(text);
     } catch (error: unknown) {
       if (isBrokenStdoutError(error)) {
@@ -321,7 +323,7 @@ export class OutputBuffer {
    * wrap onto the next row and collide with a later writeLine.
    */
   writeLine(row: number, col: number, text: string): void {
-    const columns = process.stdout.columns ?? 80;
+    const columns = getObservedTerminalSize().cols;
     const maxCols = Math.max(0, columns - Math.max(1, col) + 1);
     const clipped =
       maxCols <= 0
@@ -490,10 +492,7 @@ export class OutputBuffer {
    * Current known terminal size.
    */
   static getTerminalSize(): { cols: number; rows: number } {
-    return {
-      cols: process.stdout.columns ?? 88,
-      rows: process.stdout.rows ?? 24,
-    };
+    return getObservedTerminalSize();
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────
@@ -599,6 +598,7 @@ export class OutputBuffer {
       this._frameBytes += text.length;
     }
     try {
+      getTerminalTransport()?.noteIntent(text, 'stdout');
       process.stdout.write(output);
     } catch (error: unknown) {
       if (isBrokenStdoutError(error)) {
@@ -625,6 +625,7 @@ export class OutputBuffer {
       this._frameBytes += text.length;
     }
     try {
+      getTerminalTransport()?.noteIntent(text, 'stdout');
       process.stdout.write(output);
     } catch (error: unknown) {
       if (isBrokenStdoutError(error)) {

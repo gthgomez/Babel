@@ -1369,7 +1369,7 @@ export class ConversationalRenderer extends BaseRenderer {
     this._unseenCount = 0;
     this._userScrolledUp = false;
     this._historyTranscript = new HistoryTranscript();
-    this._cellViewport = new HistoryCellViewport(process.stdout.columns ?? 80);
+    this._cellViewport = new HistoryCellViewport(OutputBuffer.getTerminalSize().cols);
     this.scrollback = undefined;
     this.screenManager = undefined;
     this.taskLabel = undefined;
@@ -1568,7 +1568,7 @@ export class ConversationalRenderer extends BaseRenderer {
       );
     }
 
-    const cols = process.stdout.columns ?? getTerminalWidth();
+    const cols = OutputBuffer.getTerminalSize().cols;
     const hud = composeThinkingHud({
       indicatorLine: `  ${indicator}  ${timer}`,
       overlayLines,
@@ -2374,7 +2374,7 @@ export class ConversationalRenderer extends BaseRenderer {
     this._historyTranscript.beginTurn();
     this._currentGenerationHasStream = false;
     this._turnMetadataStarted = false;
-    this._cellViewport.setWidth(process.stdout.columns ?? 80);
+    this._cellViewport.setWidth(OutputBuffer.getTerminalSize().cols);
     this._syncCellViewport();
     this._state = 'thinking';
     this._store?.dispatch({ type: 'state:transition', to: 'thinking' });
@@ -2393,8 +2393,9 @@ export class ConversationalRenderer extends BaseRenderer {
     // Set viewport dimensions for cursor-up clamping and CJK-aware
     // visual line counting in the markdown accumulator.
     if (this.isTTY) {
-      this._mdAccumulator.setViewportHeight(process.stdout.rows ?? 24);
-      this._mdAccumulator.setTerminalWidth(process.stdout.columns ?? 80);
+      const size = OutputBuffer.getTerminalSize();
+      this._mdAccumulator.setViewportHeight(size.rows);
+      this._mdAccumulator.setTerminalWidth(size.cols);
     }
 
     // Set up two-region hardware-scroll streaming when the terminal supports it.
@@ -2405,7 +2406,8 @@ export class ConversationalRenderer extends BaseRenderer {
     // append a second copy of the answer.
     if (this.isTTY) {
       this._twoRegion = new TwoRegionStreaming();
-      this._twoRegion.setup(process.stdout.rows ?? 24, undefined, process.stdout.columns ?? 80);
+      const size = OutputBuffer.getTerminalSize();
+      this._twoRegion.setup(size.rows, undefined, size.cols);
     }
 
     if (this.isTTY) {

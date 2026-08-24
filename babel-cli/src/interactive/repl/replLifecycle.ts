@@ -13,6 +13,7 @@ import { listResumableSessions } from '../../services/chatSessionIndex.js';
 import { SessionPicker } from '../../ui/sessionPicker.js';
 import { OutputBuffer } from '../../ui/outputBuffer.js';
 import { InputCoordinator } from '../../ui/inputCoordinator.js';
+import { stopTuiObservation } from '../../ui/observe/observeSession.js';
 import { DEC_2026_END } from '../../ui/terminalEscapeSequences.js';
 import { primary, error, muted } from '../../ui/theme.js';
 import type { ReplContext } from '../context.js';
@@ -27,6 +28,11 @@ import { formatResumeHint, shouldForceResumePicker } from './startupResumeHint.j
  */
 export function restoreTerminalBeforeExit(): void {
   logUpdate.clear();
+  try {
+    stopTuiObservation();
+  } catch {
+    // Observation host may be unused.
+  }
   try {
     InputCoordinator.getInstance().emergencyRestore();
   } catch {
