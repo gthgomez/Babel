@@ -7,7 +7,7 @@ import { join } from 'node:path'
 
 import { BABEL_RUNS_DIR } from '../../cli/constants.js'
 import { setSessionEventObservationHook } from '../../agent/sessionEvents.js'
-import { reduceObservationSemantic } from './observationSemantic.js'
+import { createObservationSemanticReducer } from './observationSemantic.js'
 import {
   liveTerminalProfile,
   getTerminalTransport,
@@ -33,10 +33,15 @@ export function isTuiObserveEnabled(): boolean {
  */
 export function startTuiObservation(profile?: TerminalCapabilityProfile): string | null {
   if (!isTuiObserveEnabled()) return null
-  if (getTerminalTransport()?.isInstalled()) return getTerminalTransport()!.sessionId
+  const installed = getTerminalTransport()
+  if (installed?.isInstalled()) {
+    const sessionDir = tuiSessionDir(installed.sessionId)
+    mkdirSync(sessionDir, { recursive: true })
+    return sessionDir
+  }
   const transport = installTerminalTransport(profile ?? liveTerminalProfile())
   const sessionsRoot = join(BABEL_RUNS_DIR, 'tui-sessions')
-  const sessionDir = join(sessionsRoot, transport.sessionId)
+  const sessionDir = tuiSessionDir(transport.sessionId)
   mkdirSync(sessionDir, { recursive: true })
   const profileUsed = transport.getProfile()
   writeFileSync(
@@ -51,8 +56,24 @@ export function startTuiObservation(profile?: TerminalCapabilityProfile): string
   transport.onFlush((snap, marks) => {
     persistTuiFrame(sessionDir, snap, marks, transport.getSemantic())
   })
+  let observedEventCount = 0
+  let lastObservedEventId: string | null = null
+  let semanticReducer = createObservationSemanticReducer()
   setSessionEventObservationHook((events) => {
-    getTerminalTransport()?.setSemantic(reduceObservationSemantic(events))
+    const previousEvent = observedEventCount > 0 ? events[observedEventCount - 1] : undefined
+    if (events.length < observedEventCount || (previousEvent && previousEvent.event_id !== lastObservedEventId)) {
+      observedEventCount = 0
+      lastObservedEventId = null
+      semanticReducer = createObservationSemanticReducer()
+    }
+    for (let index = observedEventCount; index < events.length; index += 1) {
+      const event = events[index]
+      if (!event) continue
+      semanticReducer.apply(event)
+      lastObservedEventId = event.event_id
+    }
+    observedEventCount = events.length
+    getTerminalTransport()?.setSemantic(semanticReducer.current())
   })
   return sessionDir
 }

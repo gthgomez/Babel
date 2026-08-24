@@ -164,6 +164,27 @@ describe('TerminalTransport', () => {
     })
   })
 
+  it('keeps terminal output alive when retention cleanup throws', async () => {
+    await withFakeStreamWrites(async (calls) => {
+      const transport = installTerminalTransport(PINNED, 'tui-test-retention-failure')
+      try {
+        transport.onFlush(() => {
+          throw new Error('simulated retention cleanup failure')
+        })
+
+        const result = process.stdout.write('visible-before-cleanup-failure')
+        process.stdout.write('visible-after-cleanup-failure')
+
+        assert.equal(result, false)
+        assert.equal(calls.stdout.length, 2)
+        assert.equal(calls.stdout[0]?.[0], 'visible-before-cleanup-failure')
+        assert.equal(calls.stdout[1]?.[0], 'visible-after-cleanup-failure')
+      } finally {
+        uninstallTerminalTransport()
+      }
+    })
+  })
+
   it('does X when Y: visible CSI 2A/2K mutates the cell grid not stripAnsi concatenation', () => {
     const transport = createTerminalTransport(PINNED, 'tui-test-vt')
     try {

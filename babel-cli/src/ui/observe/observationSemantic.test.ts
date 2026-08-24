@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { reduceObservationSemantic } from './observationSemantic.js'
+import { createObservationSemanticReducer, reduceObservationSemantic } from './observationSemantic.js'
 import type { SessionEvent } from '../../agent/sessionEvents.js'
 
 function ev(partial: object): SessionEvent {
@@ -44,5 +44,31 @@ describe('reduceObservationSemantic', () => {
     ])
     assert.equal(state.workspaceMutationCount, 2)
     assert.deepEqual(state.changedPaths.sort(), ['a.ts', 'b.ts'])
+  })
+
+  it('matches full replay semantics at every prefix', () => {
+    const events: SessionEvent[] = [
+      ev({ kind: 'user_submitted', turn_id: 't1', task_preview: 'x' }),
+      ev({ kind: 'tool_proposed', tool_call_id: 'c1', tool_name: 'read_file', idempotency_key: 'c1' }),
+      ev({ kind: 'tool_completed', tool_call_id: 'c1', tool_name: 'read_file', idempotency_key: 'c1' }),
+      ev({ kind: 'mutation_batch', paths: ['src/a.ts'] }),
+      ev({
+        kind: 'completion_decision',
+        requested_outcome: 'VERIFIED_COMPLETE',
+        final_outcome: 'VERIFIED_COMPLETE',
+        allowed: true,
+        reason: 'done',
+        evidence_refs: [],
+        policy_version: 'test',
+      }),
+      ev({ kind: 'turn_ended', outcome: 'VERIFIED_COMPLETE', status: 'completed' }),
+      ev({ kind: 'turn_ended', status: 'blocked' }),
+    ]
+    const incremental = createObservationSemanticReducer()
+    for (let index = 0; index < events.length; index += 1) {
+      const actual = incremental.apply(events[index]!)
+      const expected = reduceObservationSemantic(events.slice(0, index + 1))
+      assert.deepEqual(actual, expected)
+    }
   })
 })

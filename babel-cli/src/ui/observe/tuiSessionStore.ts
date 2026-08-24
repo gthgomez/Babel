@@ -6,7 +6,16 @@
  */
 
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { dirname, join } from 'node:path'
 
 import { createVirtualCellGrid, type GridSnapshot } from './virtualCellGrid.js'
@@ -43,6 +52,13 @@ export interface TuiLatestPointer {
 }
 
 export const BYTE_BUDGET = 8 * 1024 * 1024
+const EVENT_LOG_BUDGET_FRACTION = 0.25
+const TERMINAL_EVENTS_FILENAME = 'terminal-events.jsonl'
+
+export interface TuiRetentionOptions {
+  /** Override the production budget for deterministic tests. */
+  byteBudget?: number
+}
 
 /**
  * Persist one immutable frame and swing latest.json atomically.
@@ -54,7 +70,9 @@ export function persistTuiFrame(
   snap: GridSnapshot,
   watermarks: ObservationWatermarks,
   semantic: ObservationSemanticState | null,
+  options: TuiRetentionOptions = {},
 ): TuiLatestPointer {
+  const byteBudget = resolveByteBudget(options.byteBudget)
   const framesDir = join(sessionDir, 'frames')
   mkdirSync(framesDir, { recursive: true })
   const id = String(watermarks.frameId).padStart(8, '0')
@@ -96,6 +114,7 @@ export function persistTuiFrame(
     },
   }
   atomicWriteJson(join(sessionDir, 'latest.json'), pointer)
+  enforceTuiSessionBudget(sessionDir, byteBudget)
   return pointer
 }
 
@@ -145,10 +164,15 @@ export function loadSessionsLatestPointer(sessionsRoot: string): string | null {
  * @param sessionDir Observation session directory
  * @param ev Visible write
  */
-export function appendTerminalVisibleEvent(sessionDir: string, ev: TerminalWriteEvent): void {
+export function appendTerminalVisibleEvent(
+  sessionDir: string,
+  ev: TerminalWriteEvent,
+  options: TuiRetentionOptions = {},
+): void {
   mkdirSync(sessionDir, { recursive: true })
   const line = `${JSON.stringify({ seq: ev.seq, stream: ev.stream, kind: ev.kind, bytes: ev.bytes, ts: ev.ts })}\n`
-  writeFileSync(join(sessionDir, 'terminal-events.jsonl'), line, { flag: 'a', encoding: 'utf8' })
+  writeFileSync(join(sessionDir, TERMINAL_EVENTS_FILENAME), line, { flag: 'a', encoding: 'utf8' })
+  enforceTuiSessionBudget(sessionDir, resolveByteBudget(options.byteBudget))
 }
 
 /**
@@ -175,12 +199,38 @@ export function replayVisibleEvents(
  * @param sessionDir Observation session directory
  */
 export function loadTerminalVisibleEvents(sessionDir: string): TerminalWriteEvent[] {
-  const path = join(sessionDir, 'terminal-events.jsonl')
+  const path = join(sessionDir, TERMINAL_EVENTS_FILENAME)
   if (!existsSync(path)) return []
   return readFileSync(path, 'utf8')
     .split('\n')
     .filter((line) => line.trim().length > 0)
     .map((line) => JSON.parse(line) as TerminalWriteEvent)
+}
+
+/**
+ * Enforce the deterministic per-session observation retention policy.
+ *
+ * The byte budget covers session metadata, the replay log, and immutable frame
+ * files. The newest frame and its pointer are always retained. The replay log
+ * receives at most one quarter of the budget; older complete frame pairs are
+ * then pruned oldest-first. If the newest frame plus required metadata alone
+ * exceeds the budget, that minimum usable state is retained.
+ *
+ * @param sessionDir tui-sessions/<id>
+ * @param byteBudget Maximum session artifact budget
+ */
+export function enforceTuiSessionBudget(sessionDir: string, byteBudget = BYTE_BUDGET): void {
+  const budget = resolveByteBudget(byteBudget)
+  const eventPath = join(sessionDir, TERMINAL_EVENTS_FILENAME)
+  compactEventLog(eventPath, Math.floor(budget * EVENT_LOG_BUDGET_FRACTION))
+
+  const latestFrameId = readLatestFrameId(sessionDir)
+  if (latestFrameId !== null) {
+    pruneOldFrames(sessionDir, latestFrameId, budget)
+  }
+
+  const nonEventBytes = getSessionBytes(sessionDir, false)
+  compactEventLog(eventPath, Math.max(0, budget - nonEventBytes))
 }
 
 function atomicWriteJson(path: string, value: unknown): void {
@@ -192,4 +242,114 @@ function atomicWriteText(path: string, text: string): void {
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(tmp, text, 'utf8')
   renameSync(tmp, path)
+}
+
+interface FrameRecord {
+  id: number
+  paths: string[]
+}
+
+function resolveByteBudget(byteBudget: number | undefined): number {
+  const resolved = byteBudget ?? BYTE_BUDGET
+  if (!Number.isInteger(resolved) || resolved <= 0) {
+    throw new RangeError(`TUI observation byte budget must be a positive integer: ${resolved}`)
+  }
+  return resolved
+}
+
+function readLatestFrameId(sessionDir: string): number | null {
+  const path = join(sessionDir, 'latest.json')
+  if (!existsSync(path)) return null
+  try {
+    const pointer = JSON.parse(readFileSync(path, 'utf8')) as Partial<TuiLatestPointer>
+    return typeof pointer.frameId === 'number' && Number.isInteger(pointer.frameId) ? pointer.frameId : null
+  } catch {
+    return null
+  }
+}
+
+function pruneOldFrames(sessionDir: string, latestFrameId: number, byteBudget: number): void {
+  let totalBytes = getSessionBytes(sessionDir, true)
+  if (totalBytes <= byteBudget) return
+
+  const framesDir = join(sessionDir, 'frames')
+  if (!existsSync(framesDir)) return
+  const frames = listFrameRecords(framesDir)
+  for (const frame of frames) {
+    if (totalBytes <= byteBudget) return
+    if (frame.id === latestFrameId) continue
+    for (const path of frame.paths) {
+      const size = fileBytes(path)
+      unlinkSync(path)
+      totalBytes -= size
+    }
+  }
+}
+
+function listFrameRecords(framesDir: string): FrameRecord[] {
+  const byId = new Map<number, string[]>()
+  for (const entry of readdirSync(framesDir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue
+    const match = /^(\d+)\.(?:json|txt)$/.exec(entry.name)
+    if (!match) continue
+    const id = Number(match[1])
+    const paths = byId.get(id) ?? []
+    paths.push(join(framesDir, entry.name))
+    byId.set(id, paths)
+  }
+  return [...byId.entries()]
+    .map(([id, paths]) => ({ id, paths: paths.sort() }))
+    .sort((a, b) => a.id - b.id)
+}
+
+function compactEventLog(path: string, maxBytes: number): void {
+  if (!existsSync(path)) return
+  const source = readFileSync(path, 'utf8')
+  if (Buffer.byteLength(source, 'utf8') <= maxBytes) return
+  if (maxBytes <= 0) {
+    atomicWriteText(path, '')
+    return
+  }
+
+  const lines = source
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => `${line}\n`)
+  const retained: string[] = []
+  let retainedBytes = 0
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]!
+    const lineBytes = Buffer.byteLength(line, 'utf8')
+    if (retainedBytes + lineBytes > maxBytes) break
+    retained.unshift(line)
+    retainedBytes += lineBytes
+  }
+  atomicWriteText(path, retained.join(''))
+}
+
+function getSessionBytes(sessionDir: string, includeEventLog: boolean): number {
+  if (!existsSync(sessionDir)) return 0
+  let total = 0
+  for (const entry of readdirSync(sessionDir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (entry.name !== 'frames') continue
+      const framesDir = join(sessionDir, entry.name)
+      for (const frame of readdirSync(framesDir, { withFileTypes: true })) {
+        if (frame.isFile()) total += fileBytes(join(framesDir, frame.name))
+      }
+      continue
+    }
+    if (entry.isFile() && (includeEventLog || entry.name !== TERMINAL_EVENTS_FILENAME)) {
+      total += fileBytes(join(sessionDir, entry.name))
+    }
+  }
+  return total
+}
+
+function fileBytes(path: string): number {
+  try {
+    return statSync(path).size
+  } catch {
+    return 0
+  }
 }
