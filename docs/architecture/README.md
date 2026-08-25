@@ -25,6 +25,8 @@ last_verified: 2026-08-05
 | :--- | :--- |
 | [HARNESS_ARCHITECTURE_V1.md](./HARNESS_ARCHITECTURE_V1.md) | **Normative harness contract** (modes, authority, invariants, gaps). |
 | [HARNESS_HARDENING_ROADMAP_V1.md](./HARNESS_HARDENING_ROADMAP_V1.md) | Canonical hardening sequence, research reconciliation, dependencies, and promotion gates. |
+| [BDNS_ARCHITECTURE_V1.md](./BDNS_ARCHITECTURE_V1.md) | Babel Debugging Nervous System contract: bounded independent observation, provenance, privacy, and merge sequence. |
+| [BDNS_INVENTORY_V1.md](./BDNS_INVENTORY_V1.md) | B0 inventory of process, workspace, evidence, diagnostic, TUI, and OTel boundaries. |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | High-level system architecture, layer model, router contracts, kernel. |
 | [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) | Explanatory harness map (not normative). |
 | [BABEL_LOCAL_MODE.md](./BABEL_LOCAL_MODE.md) | Local workspace surfaces, session lifecycle, editor integrations. |
