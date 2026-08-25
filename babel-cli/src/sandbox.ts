@@ -72,6 +72,7 @@ import { classifyExecutionRisk, requiresDockerIsolation } from './authority/comm
 import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
 import { OutputBuffer } from './ui/outputBuffer.js';
+import type { ProcessWitness, ProcessWitnessInput } from './diagnostics/bdns/processWitness.js';
 
 // ─── Shared result type ───────────────────────────────────────────────────────
 
@@ -408,9 +409,25 @@ export const PROCESS_ABORT_SETTLE_MS = 500;
 export function spawnCommandAsync(
   executable: string,
   args: string[],
-  options: { cwd: string; timeoutMs: number; env: NodeJS.ProcessEnv; signal?: AbortSignal },
+  options: {
+    cwd: string;
+    timeoutMs: number;
+    env: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    processWitness?: ProcessWitness;
+    processContext?: Pick<ProcessWitnessInput, 'sessionId' | 'turnId' | 'toolCallId' | 'toolName' | 'projectRoot'>;
+  },
 ): Promise<AsyncSpawnResult> {
+  const processInput: ProcessWitnessInput = {
+    executable,
+    args,
+    cwd: options.cwd,
+    timeoutMs: options.timeoutMs,
+    ...(options.processContext ?? {}),
+  };
+  const executionId = options.processWitness?.requested(processInput);
   if (options.signal?.aborted) {
+    if (executionId) options.processWitness?.cancelRequested(processInput, executionId);
     return Promise.resolve({
       status: 1,
       stdout: '',
@@ -424,6 +441,7 @@ export function spawnCommandAsync(
 
   return new Promise((resolveResult) => {
     let child: ChildProcessWithoutNullStreams;
+    let processStarted = false;
     try {
       child = spawn(executable, args, {
         cwd: options.cwd,
@@ -433,6 +451,7 @@ export function spawnCommandAsync(
         detached: process.platform !== 'win32',
       }) as ChildProcessWithoutNullStreams;
     } catch (err) {
+      if (executionId) options.processWitness?.failedToStart(processInput, executionId, err);
       resolveResult({
         status: 1,
         stdout: '',
@@ -444,6 +463,11 @@ export function spawnCommandAsync(
       });
       return;
     }
+
+    child.once('spawn', () => {
+      processStarted = true;
+      if (executionId) options.processWitness?.started(processInput, executionId, child.pid);
+    });
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
@@ -463,6 +487,17 @@ export function spawnCommandAsync(
       if (timeout) clearTimeout(timeout);
       if (abortSettle) clearTimeout(abortSettle);
       options.signal?.removeEventListener('abort', onAbort);
+      if (executionId) {
+        if (!processStarted && error) options.processWitness?.failedToStart(processInput, executionId, error);
+        else options.processWitness?.exited(processInput, executionId, {
+          exitCode: status,
+          stdoutBytes,
+          stderrBytes,
+          stdoutTruncated,
+          stderrTruncated,
+          ...(error ? { error: error.message } : {}),
+        });
+      }
       resolveResult({
         status,
         stdout: Buffer.concat(stdoutChunks).toString('utf8'),
@@ -476,6 +511,7 @@ export function spawnCommandAsync(
 
     const onAbort = () => {
       aborted = true;
+      if (executionId) options.processWitness?.cancelRequested(processInput, executionId);
       // Unblock the tool awaiter first (cancel p95). Defer tree-kill to the next
       // event-loop turn so spawnSync(taskkill) cannot hold the promise microtask
       // queue — otherwise Windows cancel latency is dominated by taskkill, not
@@ -483,12 +519,14 @@ export function spawnCommandAsync(
       finish(1, new Error(`spawn ${executable} aborted`));
       setImmediate(() => {
         terminateChildTree(child);
+        if (executionId) options.processWitness?.killed(processInput, executionId);
       });
     };
 
     if (options.timeoutMs > 0) {
       timeout = setTimeout(() => {
         timedOut = true;
+        if (executionId) options.processWitness?.timeout(processInput, executionId);
         terminateChildTree(child);
       }, options.timeoutMs);
       timeout.unref?.();
@@ -991,6 +1029,7 @@ export class SafeExecutor {
   private readonly projectRoot: string;
   private readonly shadowRoot: string | null;
   private readonly mode: ExecutorMode;
+  private readonly processWitness: ProcessWitness | undefined;
   /**
    * VCS: Approved read roots — reads may escape projectRoot into these dirs.
    * Populated from BABEL_OPENCLAW_APPROVED_ROOTS (or BABEL_ALLOWED_ROOTS) at construction.
@@ -1004,8 +1043,14 @@ export class SafeExecutor {
    *                     Resolved to absolute on construction.
    * @param mode         Current operational mode ('plan' | 'act').
    */
-  constructor(projectRoot: string, shadowRoot: string | null = null, mode: ExecutorMode = 'act') {
+  constructor(
+    projectRoot: string,
+    shadowRoot: string | null = null,
+    mode: ExecutorMode = 'act',
+    processWitness?: ProcessWitness,
+  ) {
     this.mode = mode;
+    this.processWitness = processWitness;
     const resolvedRoot = existsSync(projectRoot) ? realpathSync(projectRoot) : resolve(projectRoot);
     this.shadowRoot =
       shadowRoot && existsSync(shadowRoot)
@@ -1850,6 +1895,18 @@ export class SafeExecutor {
         timeoutMs,
         env: prepared.env,
         ...(signal ? { signal } : {}),
+        ...(this.processWitness
+          ? {
+              processWitness: this.processWitness,
+              processContext: {
+                projectRoot: this.projectRoot,
+                toolName,
+                ...(process.env['BABEL_SESSION_ID']
+                  ? { sessionId: process.env['BABEL_SESSION_ID'] }
+                  : {}),
+              },
+            }
+          : {}),
       });
       if (!result.error || result.aborted || !isTransientSpawnError(result.error.message)) break;
       transientRetryCount += 1;

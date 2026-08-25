@@ -18,6 +18,7 @@ import { resolve as pathResolve } from 'node:path';
 
 import { terminateChildTree } from '../sandbox.js';
 import { getSafeEnv } from '../utils/safeEnv.js';
+import { getDefaultProcessWitness, type ProcessWitness } from '../diagnostics/bdns/processWitness.js';
 
 /** Cap retained on the job record (same ballpark as SafeExecutor maxBuffer). */
 const MAX_OUTPUT_BYTES = 5 * 1024 * 1024;
@@ -58,6 +59,8 @@ export interface StartBackgroundShellInput {
   detached?: boolean;
   /** Owning engine/session id — lets killAllBackgroundShells target one engine. */
   ownerId?: string;
+  /** Optional explicit BDNS process witness; defaults to Babel's bounded witness. */
+  processWitness?: ProcessWitness;
 }
 
 export interface AwaitBackgroundShellResult {
@@ -175,8 +178,20 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
     input.timeoutMs !== undefined && input.timeoutMs > 0
       ? input.timeoutMs
       : DEFAULT_BACKGROUND_JOB_TIMEOUT_MS;
+  const processWitness = input.processWitness ?? getDefaultProcessWitness();
+  const processInput = {
+    executable: spawnCmd,
+    args: spawnArgs,
+    cwd,
+    toolName: 'background_shell',
+    timeoutMs,
+    ...(process.env['BABEL_SESSION_ID'] ? { sessionId: process.env['BABEL_SESSION_ID'] } : {}),
+  };
+  const processExecutionId = processWitness.requested(processInput);
 
   let child: ChildProcessWithoutNullStreams;
+  let processStarted = false;
+  let processExitRecorded = false;
   try {
     child = spawn(spawnCmd, spawnArgs, {
       cwd,
@@ -188,6 +203,7 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
       // shell: false — cmd.exe invoked directly on Windows (same as SafeExecutor).
     }) as ChildProcessWithoutNullStreams;
   } catch (err) {
+    processWitness.failedToStart(processInput, processExecutionId, err);
     job.status = 'failed';
     job.error = err instanceof Error ? err.message : String(err);
     job.exitCode = 1;
@@ -205,6 +221,8 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
     job.status = 'killed';
     job.error = `Background shell timed out after ${timeoutMs}ms`;
     job.exitCode = job.exitCode ?? 1;
+    processWitness.timeout(processInput, processExecutionId);
+    processWitness.killed(processInput, processExecutionId);
   }, timeoutMs);
   // Do not keep the process alive solely for idle job timers.
   if (typeof killTimer.unref === 'function') killTimer.unref();
@@ -218,12 +236,27 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
     job.stderr = appendCapped(job.stderr, chunk, 'stderr');
   });
 
+  child.once('spawn', () => {
+    processStarted = true;
+    processWitness.started(processInput, processExecutionId, child.pid);
+  });
+
   child.on('error', (err) => {
     clearTimeout(killTimer);
     if (job.status === 'running') {
       job.status = 'failed';
       job.error = err.message;
       job.exitCode = 1;
+    }
+    if (!processExitRecorded) {
+      processExitRecorded = true;
+      if (!processStarted) processWitness.failedToStart(processInput, processExecutionId, err);
+      else processWitness.exited(processInput, processExecutionId, {
+        exitCode: job.exitCode,
+        stdoutBytes: Buffer.byteLength(job.stdout, 'utf8'),
+        stderrBytes: Buffer.byteLength(job.stderr, 'utf8'),
+        error: err.message,
+      });
     }
     resolveDone();
   });
@@ -235,6 +268,16 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
       job.exitCode = code ?? 1;
     } else if (job.exitCode === null) {
       job.exitCode = code ?? 1;
+    }
+    if (!processExitRecorded) {
+      processExitRecorded = true;
+      processWitness.exited(processInput, processExecutionId, {
+        exitCode: job.exitCode,
+        stdoutBytes: Buffer.byteLength(job.stdout, 'utf8'),
+        stderrBytes: Buffer.byteLength(job.stderr, 'utf8'),
+        stdoutTruncated: job.stdout.includes('[background_shell] stdout truncated'),
+        stderrTruncated: job.stderr.includes('[background_shell] stderr truncated'),
+      });
     }
     resolveDone();
   });

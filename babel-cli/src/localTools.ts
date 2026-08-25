@@ -27,6 +27,7 @@
 import path from 'node:path';
 import { z } from 'zod';
 import { SafeExecutor } from './sandbox.js';
+import { getDefaultProcessWitness } from './diagnostics/bdns/processWitness.js';
 import type { ToolResult, ExecutorMode } from './sandbox.js';
 import { isDryRunEnabled } from './config/dryRun.js';
 import { readRuntimeMode, writeRuntimeMode } from './config/runtimeMode.js';
@@ -136,7 +137,7 @@ function getExecutor(): SafeExecutor {
   const root = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
   const shadowRoot = process.env['BABEL_SHADOW_ROOT'] || null;
   const mode = readRuntimeMode();
-  return new SafeExecutor(root, shadowRoot, mode);
+  return new SafeExecutor(root, shadowRoot, mode, getDefaultProcessWitness());
 }
 
 function getExecutorProjectRoot(): string {
