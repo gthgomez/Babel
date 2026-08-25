@@ -1,8 +1,10 @@
 import * as path from 'node:path';
-import stringWidth from 'string-width';
-import wrapAnsiLib from 'wrap-ansi';
 import { COLOR_TOKENS, FALLBACK_FG } from './tokens.js';
-import { graphemeTruncateToWidth, urlAwareWrapText } from './textUtils.js';
+import {
+  measureDisplayWidth,
+  truncateDisplay,
+  wrapDisplayLines,
+} from './textLayout.js';
 import {
   isWindowsTerminal,
   isLegacyWindowsConsole,
@@ -284,7 +286,7 @@ const STRIP_CACHE_MAX = 256;
 export function stripAnsi(text: string): string {
   const cached = stripAnsiCache.get(text);
   if (cached !== undefined) return cached;
-  const result = text.replace(/\[[0-9;]*m/g, '');
+  const result = text.replace(/\x1b\[[0-9;]*m/g, '');
   if (stripAnsiCache.size >= STRIP_CACHE_MAX) {
     const firstKey = stripAnsiCache.keys().next().value;
     if (firstKey !== undefined) stripAnsiCache.delete(firstKey);
@@ -296,7 +298,7 @@ export function stripAnsi(text: string): string {
 export function visibleLength(text: string): number {
   const cached = visibleLengthCache.get(text);
   if (cached !== undefined) return cached;
-  const result = stringWidth(stripAnsi(text));
+  const result = measureDisplayWidth(text);
   if (visibleLengthCache.size >= STRIP_CACHE_MAX) {
     const firstKey = visibleLengthCache.keys().next().value;
     if (firstKey !== undefined) visibleLengthCache.delete(firstKey);
@@ -381,18 +383,11 @@ export function isNarrowTerminal(threshold: number = 60): boolean {
 }
 
 export function truncate(text: string, maxWidth: number): string {
-  if (maxWidth <= 0) return '';
-  const plain = stripAnsi(text);
-  if (stringWidth(plain) <= maxWidth) return text;
-  if (maxWidth === 1) return '…';
-  const truncated = [...plain].slice(0, Math.max(0, maxWidth - 1)).join('') + '…';
-  // Re-apply leading ANSI open sequences so color isn't lost after truncation.
-  const openSeq = text.match(/^(\[[0-9;]*m)+/)?.[0];
-  return openSeq ? `${openSeq}${truncated}[39m` : truncated;
+  return truncateDisplay(text, maxWidth);
 }
 
 export function wrapText(text: string, maxWidth: number): string[] {
-  return wrapAnsiLib(String(text ?? ''), maxWidth, { hard: true }).split('\n');
+  return wrapDisplayLines(text, maxWidth, { longTokenPolicy: 'hard-wrap' });
 }
 
 /**
@@ -404,7 +399,7 @@ export function wrapText(text: string, maxWidth: number): string[] {
  * and any text that may contain clickable URLs.
  */
 export function urlAwareWrap(text: string, maxWidth: number): string[] {
-  return urlAwareWrapText(text, maxWidth);
+  return wrapDisplayLines(text, maxWidth, { longTokenPolicy: 'overflow' });
 }
 
 export function formatOverflow(

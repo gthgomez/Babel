@@ -58,6 +58,9 @@ const DEFAULT_PROFILE: TerminalCapabilityProfile = {
   pinGeometry: true,
 }
 
+const RAW_STDOUT_WRITE = process.stdout.write.bind(process.stdout)
+const RAW_STDERR_WRITE = process.stderr.write.bind(process.stderr)
+
 let installed: TerminalTransport | null = null
 let injectedSize: { cols: number; rows: number } | null = null
 
@@ -134,8 +137,8 @@ export class TerminalTransport {
     this.profile = profile
     this.sessionId = sessionId
     this.grid = createVirtualCellGrid(profile.geometry.cols, profile.geometry.rows)
-    this.originalStdout = process.stdout.write.bind(process.stdout)
-    this.originalStderr = process.stderr.write.bind(process.stderr)
+    this.originalStdout = RAW_STDOUT_WRITE
+    this.originalStderr = RAW_STDERR_WRITE
   }
 
   isInstalled(): boolean {
@@ -203,6 +206,8 @@ export class TerminalTransport {
 
   install(): void {
     if (installed && installed !== this) installed.uninstall()
+    this.originalStdout = process.stdout.write.bind(process.stdout)
+    this.originalStderr = process.stderr.write.bind(process.stderr)
     const self = this
     const wrapWrite = (
       original: typeof process.stdout.write,

@@ -28,6 +28,7 @@
 import { marked } from 'marked';
 import { stripAnsi, supportsColor, visibleLength } from './theme.js';
 import { getMotionMode, MotionMode, shimmerText } from './motion.js';
+import { scanFenceLine, type OpenFence } from './markdownFenceScanner.js';
 import { highlightWithTreeSitter, normalizeLanguage } from './treeSitterHighlight.js';
 import { TableHoldbackScanner } from './tableHoldback.js';
 
@@ -117,18 +118,17 @@ export class MarkdownAccumulator {
    */
   private _updateCodeBlockLanguage(): void {
     const lines = this.fullText.split('\n');
-    let inBlock = false;
-    let blockLang: string | null = null;
+    let currentFence: OpenFence | null = null;
     for (const line of lines) {
-      const m = line.match(/^(```|~~~)(\w*)/);
-      if (m) {
-        const fence = m[1]!;
-        const rest = line.slice(fence.length);
-        if (inBlock && !rest.trim()) { inBlock = false; blockLang = null; }
-        else if (!inBlock) { inBlock = true; blockLang = m[2] || null; }
-      }
+      const result = scanFenceLine(line, currentFence);
+      currentFence = result.fence;
     }
-    this._activeCodeBlockLanguage = inBlock ? blockLang : null;
+    this._activeCodeBlockLanguage = currentFence?.language || null;
+  }
+
+  /** Currently active syntax language inside an open code fence, or null. */
+  get activeCodeBlockLanguage(): string | null {
+    return this._activeCodeBlockLanguage;
   }
 
   // ── Shimmer control ──────────────────────────────────────────────────────

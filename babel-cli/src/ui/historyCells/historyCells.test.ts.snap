@@ -4,7 +4,7 @@
   "user long wrap": "  You    Please audit the entire babel-cli package for streaming regressions and\n         report any gaps in the competitive reference document.",
   "assistant short": "  Babel  A prompt operating system.",
   "assistant markdown": "  Babel  Use chat mode for conversational work.",
-  "assistant code fence": "  Babel  const x = 1;",
+  "assistant code fence": "  Babel    const x = 1;",
   "tool running": "  … Reading src/index.ts",
   "tool completed": "  ✓ Reading src/index.ts (1.2 KB)",
   "tool failed": "  ✗ Running npm test (exit 1)",

@@ -8,7 +8,13 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { stripControlSequences, sanitizeLlmOutput, sanitizeCodeLine } from './sanitize.js';
+import {
+  stripControlSequences,
+  sanitizeLlmOutput,
+  sanitizeCodeLine,
+  encodeHyperlink,
+  sanitizeHyperlinkUri,
+} from './sanitize.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // stripControlSequences
@@ -67,36 +73,28 @@ describe('stripControlSequences', () => {
     assert.equal(stripControlSequences('\x1b]4;0;rgb:ffff/ffff/ffff\x07'), '');
   });
 
-  // ── OSC 8 hyperlinks PRESERVED ────────────────────────────────────────────
+  // ── Raw OSC 8 hyperlinks stripped at trust boundary ────────────────────────
+  // Untrusted text never supplies terminal escape sequences. Babel alone emits OSC 8.
 
-  it('preserves OSC 8 hyperlinks (critical!)', () => {
+  it('strips raw OSC 8 hyperlinks at trust boundary', () => {
     const input = '\x1b]8;;https://example.com\x1b\\link text\x1b]8;;\x1b\\';
-    // Opener preserved, closer stripped
-    const expected = '\x1b]8;;https://example.com\x1b\\link text';
-    assert.equal(stripControlSequences(input), expected);
+    assert.equal(stripControlSequences(input), 'link text');
   });
 
-  it('preserves multiple OSC 8 hyperlinks in same text', () => {
+  it('strips multiple raw OSC 8 hyperlinks in same text', () => {
     const input =
       '\x1b]8;;https://a.com\x1b\\A\x1b]8;;\x1b\\ \x1b]8;;https://b.com\x1b\\B\x1b]8;;\x1b\\';
-    // Openers preserved, closers stripped, spaces between links preserved
-    const expected = '\x1b]8;;https://a.com\x1b\\A \x1b]8;;https://b.com\x1b\\B';
-    assert.equal(stripControlSequences(input), expected);
+    assert.equal(stripControlSequences(input), 'A B');
   });
 
-  it('preserves OSC 8 hyperlink with only URI (closer stripped per note)', () => {
-    // The spec says OSC 8 closers (ESC ] 8 ;; ESC \) are stripped.
-    // But hyperlinks with just the opener should still be preserved.
+  it('strips raw unclosed OSC 8 hyperlinks', () => {
     const input = '\x1b]8;;https://example.com\x1b\\click me';
-    const expected = '\x1b]8;;https://example.com\x1b\\click me';
-    assert.equal(stripControlSequences(input), expected);
+    assert.equal(stripControlSequences(input), 'click me');
   });
 
-  it('preserves text around OSC 8 hyperlinks', () => {
+  it('preserves text around stripped OSC 8 hyperlinks', () => {
     const input = 'before \x1b]8;;https://x.com\x1b\\link\x1b]8;;\x1b\\ after';
-    // Opener preserved, closer stripped, surrounding text preserved
-    const expected = 'before \x1b]8;;https://x.com\x1b\\link after';
-    assert.equal(stripControlSequences(input), expected);
+    assert.equal(stripControlSequences(input), 'before link after');
   });
 
   // ── DCS sequences ─────────────────────────────────────────────────────────
@@ -253,11 +251,9 @@ describe('sanitizeLlmOutput', () => {
     assert.equal(sanitizeLlmOutput('\x1b[31mred'), 'red');
   });
 
-  it('preserves OSC 8 hyperlinks', () => {
+  it('strips raw OSC 8 hyperlinks at trust boundary', () => {
     const input = '\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\';
-    // Opener preserved, closer stripped
-    const expected = '\x1b]8;;https://example.com\x1b\\link';
-    assert.equal(sanitizeLlmOutput(input), expected);
+    assert.equal(sanitizeLlmOutput(input), 'link');
   });
 
   it('strips mixed dangerous content', () => {
@@ -267,6 +263,44 @@ describe('sanitizeLlmOutput', () => {
 
   it('handles empty string', () => {
     assert.equal(sanitizeLlmOutput(''), '');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// sanitizeHyperlinkUri & encodeHyperlink
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('sanitizeHyperlinkUri', () => {
+  it('accepts valid https URL', () => {
+    assert.equal(sanitizeHyperlinkUri('https://example.com/docs'), 'https://example.com/docs');
+  });
+
+  it('accepts valid http URL', () => {
+    assert.equal(sanitizeHyperlinkUri('http://localhost:3000'), 'http://localhost:3000');
+  });
+
+  it('rejects javascript: URLs', () => {
+    assert.equal(sanitizeHyperlinkUri('javascript:alert(1)'), null);
+  });
+
+  it('rejects file: URLs', () => {
+    assert.equal(sanitizeHyperlinkUri('file:///etc/passwd'), null);
+  });
+
+  it('rejects data: URLs', () => {
+    assert.equal(sanitizeHyperlinkUri('data:text/html,<h1>hi</h1>'), null);
+  });
+});
+
+describe('encodeHyperlink', () => {
+  it('encodes safe OSC 8 hyperlink pair for valid URL', () => {
+    const encoded = encodeHyperlink('https://github.com', 'GitHub');
+    assert.equal(encoded, '\x1b]8;;https://github.com\x1b\\GitHub\x1b]8;;\x1b\\');
+  });
+
+  it('falls back to plaintext label for invalid URL', () => {
+    const encoded = encodeHyperlink('javascript:void(0)', 'Click');
+    assert.equal(encoded, 'Click');
   });
 });
 
