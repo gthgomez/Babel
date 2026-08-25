@@ -11,6 +11,7 @@ import {
   success,
   wrapText,
 } from '../theme.js';
+import { wrapPrefixedBlock } from '../textLayout.js';
 import type { HistoryCell } from './historyCell.js';
 import { conversationalToolLabel } from '../toolDisplay.js';
 import { renderUnseenDividerPill } from '../unseenDivider.js';
@@ -74,30 +75,16 @@ function wrapPrefixedBody(
   mode: HistoryRenderMode,
 ): string[] {
   if (width <= 0) return [];
-  const contentWidth = Math.max(1, width - USER_PREFIX_COLS);
   const header = `  ${accentBright(padRight(label, USER_PREFIX_COLS))}`;
   const renderedBody = mode === 'rich' ? renderMarkdown(body) : body;
-  const paragraphs = renderedBody.split('\n');
-  const lines: string[] = [];
-
-  for (let p = 0; p < paragraphs.length; p++) {
-    const paragraph = paragraphs[p] ?? '';
-    const wrapped = wrapText(paragraph, contentWidth);
-    for (let i = 0; i < wrapped.length; i++) {
-      if (p === 0 && i === 0) {
-        const first = wrapped[0] ?? '';
-        lines.push(header + first);
-      } else {
-        lines.push(BODY_INDENT + (wrapped[i] ?? ''));
-      }
-    }
-    if (wrapped.length === 0 && p === 0) {
-      lines.push(`${header}${muted('(empty)')}`);
-    }
-  }
-
-  if (lines.length === 0) {
-    lines.push(`${header}${muted('(empty)')}`);
+  const lines = wrapPrefixedBlock(renderedBody, {
+    firstPrefix: header,
+    continuationPrefix: BODY_INDENT,
+    width,
+    longTokenPolicy: 'hard-wrap',
+  });
+  if (lines.length === 0 || (lines.length === 1 && lines[0] === header)) {
+    return [`${header}${muted('(empty)')}`];
   }
   return lines;
 }

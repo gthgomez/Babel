@@ -71,6 +71,26 @@ export function getTreeSitterLanguages(): string[] {
   return [...grammarCache.keys()];
 }
 
+const parserCache = new Map<string, any>();
+
+function ensureParser(normLang: string): any | null {
+  if (!tsAvailable || !normLang) return null;
+  if (parserCache.has(normLang)) {
+    return parserCache.get(normLang) ?? null;
+  }
+  const grammar = ensureGrammar(normLang);
+  if (!grammar) return null;
+  try {
+    const parser = new tsModule();
+    parser.setLanguage(grammar);
+    parserCache.set(normLang, parser);
+    return parser;
+  } catch {
+    parserCache.set(normLang, null);
+    return null;
+  }
+}
+
 /**
  * Highlight `code` with tree-sitter, returning ANSI-styled text.
  *
@@ -81,12 +101,10 @@ export function highlightWithTreeSitter(code: string, language: string): string 
   if (!tsAvailable) return null;
 
   const normLang = normalizeLanguage(language);
-  const grammar = ensureGrammar(normLang);
-  if (!grammar) return null;
+  const parser = ensureParser(normLang);
+  if (!parser) return null;
 
   try {
-    const parser = new tsModule();
-    parser.setLanguage(grammar);
     const tree = parser.parse(code);
     const spans: ColorSpan[] = [];
 
@@ -95,6 +113,13 @@ export function highlightWithTreeSitter(code: string, language: string): string 
   } catch {
     return null;
   }
+}
+
+/**
+ * Highlight a multi-line code block with tree-sitter.
+ */
+export function highlightCodeBlock(code: string, language: string): string | null {
+  return highlightWithTreeSitter(code, language);
 }
 
 // ─── Language normalisation ─────────────────────────────────────────────────

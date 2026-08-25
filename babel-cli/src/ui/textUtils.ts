@@ -17,6 +17,8 @@
  * @module textUtils
  */
 
+import stringWidth from 'string-width';
+
 // ─── Grapheme cluster support ───────────────────────────────────────────────
 
 let _segmenter: Intl.Segmenter | null = null;
@@ -91,33 +93,13 @@ export function graphemeTruncateToWidth(
 ): string {
   if (maxWidth <= 0) return ellipsis;
 
-  const clusters = graphemeClusters(text);
+  const plain = text.replace(/\x1b\[[0-9;]*m/g, '');
+  const clusters = graphemeClusters(plain);
   let width = 0;
   const result: string[] = [];
 
   for (const cluster of clusters) {
-    // Estimate display width: CJK and emoji typically use 2 columns
-    const cp = cluster.codePointAt(0) ?? 0;
-    const clusterWidth =
-      (cp >= 0x1100 && cp <= 0x115f) || // Hangul Jamo
-      (cp >= 0x2329 && cp <= 0x232a) || // Misc technical
-      (cp >= 0x2e80 && cp <= 0xa4cf) || // CJK Radicals through Yi
-      (cp >= 0xac00 && cp <= 0xd7a3) || // Hangul Syllables
-      (cp >= 0xf900 && cp <= 0xfaff) || // CJK Compatibility
-      (cp >= 0xfe10 && cp <= 0xfe19) || // Vertical forms
-      (cp >= 0xfe30 && cp <= 0xfe6f) || // CJK Compatibility Forms
-      (cp >= 0xff01 && cp <= 0xff60) || // Fullwidth Forms
-      (cp >= 0xffe0 && cp <= 0xffe6) || // Fullwidth Signs
-      (cp >= 0x1f300 && cp <= 0x1f64f) || // Emoticons
-      (cp >= 0x1f680 && cp <= 0x1f6ff) || // Transport
-      (cp >= 0x1f900 && cp <= 0x1f9ff) || // Supplemental Symbols
-      (cp >= 0x1fa00 && cp <= 0x1fa6f) || // Chess Symbols
-      (cp >= 0x1fa70 && cp <= 0x1faff) || // Symbols Extended-A
-      (cp >= 0x20000 && cp <= 0x2fffd) || // CJK Extension B+
-      (cp >= 0x30000 && cp <= 0x3fffd) // CJK Extension G+
-        ? 2
-        : 1;
-
+    const clusterWidth = stringWidth(cluster);
     if (width + clusterWidth > maxWidth) {
       result.push(ellipsis);
       break;

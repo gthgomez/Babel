@@ -163,6 +163,14 @@ export class OutputBuffer {
 
   /** Reset the singleton (for testing or terminal restore). */
   static resetInstance(): void {
+    if (OutputBuffer.instance) {
+      if (OutputBuffer.instance._resizeTimer) {
+        clearTimeout(OutputBuffer.instance._resizeTimer);
+        OutputBuffer.instance._resizeTimer = null;
+      }
+      process.stdout.off('resize', OutputBuffer.instance._handleResize);
+      OutputBuffer.instance._resizeCallbacks = [];
+    }
     OutputBuffer.instance = null;
   }
 

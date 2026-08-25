@@ -7,6 +7,7 @@ import {
   visibleLength,
 } from './theme.js';
 import { renderMarkdown } from './highlight.js';
+import { wrapPrefixedBlock } from './textLayout.js';
 
 export interface ChatTurnRecord {
   role: 'user' | 'assistant';
@@ -19,30 +20,6 @@ export interface ChatTurnRecord {
 
 const DEFAULT_MAX_TURNS = 24;
 const DEFAULT_WRAP_WIDTH = 96;
-
-function wrapChatLine(text: string, indent: string, width: number): string[] {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return [];
-  }
-  const lines: string[] = [];
-  let current = '';
-  for (const word of normalized.split(' ')) {
-    const candidate = current.length === 0 ? word : `${current} ${word}`;
-    if (visibleLength(candidate) > width) {
-      if (current.length > 0) {
-        lines.push(`${indent}${current}`);
-      }
-      current = word;
-    } else {
-      current = candidate;
-    }
-  }
-  if (current.length > 0) {
-    lines.push(`${indent}${current}`);
-  }
-  return lines;
-}
 
 function formatTurnBody(turn: ChatTurnRecord): string {
   if (turn.role === 'user') {
@@ -59,12 +36,20 @@ export function renderChatTurn(turn: ChatTurnRecord, options: { wrapWidth?: numb
     40,
     Math.min(options.wrapWidth ?? DEFAULT_WRAP_WIDTH, getTerminalWidth() - 8),
   );
-  const header = `  ${accentBright(padRight(label, 7))}`;
-  const lines = wrapChatLine(body, '         ', width);
-  if (lines.length === 0) {
-    return `${header}${muted('(empty turn)')}`;
+  const firstPrefix = `  ${accentBright(padRight(label, 7))}`;
+  const continuationPrefix = '         ';
+
+  const lines = wrapPrefixedBlock(body, {
+    firstPrefix,
+    continuationPrefix,
+    width,
+    longTokenPolicy: 'hard-wrap',
+  });
+
+  if (lines.length === 0 || (lines.length === 1 && lines[0] === firstPrefix)) {
+    return `${firstPrefix}${muted('(empty turn)')}`;
   }
-  return [header + lines[0]!.slice(7), ...lines.slice(1)].join('\n');
+  return lines.join('\n');
 }
 
 export function renderChatTranscript(

@@ -7,18 +7,32 @@
  */
 
 import stringWidth from 'string-width'
+import { graphemeClusters } from '../textUtils.js'
+
+export type TerminalColor =
+  | { kind: 'default' }
+  | { kind: 'rgb'; r: number; g: number; b: number }
+  | { kind: 'indexed'; index: number }
 
 export interface CellAttr {
   bold: boolean
   dim: boolean
+  italic: boolean
   inverse: boolean
-  fg: string | null
-  bg: string | null
+  fg: TerminalColor
+  bg: TerminalColor
 }
 
 export interface Cell {
   ch: string
   width: 0 | 1 | 2
+  attr: CellAttr
+}
+
+export interface StyleRun {
+  row: number
+  startCol: number
+  endCol: number
   attr: CellAttr
 }
 
@@ -33,15 +47,21 @@ export interface GridSnapshot {
   scrollBottom: number
   lines: string[]
   hash: string
+  textHash: string
+  visualHash: string
   changedRows: number[]
+  textChangedRows: number[]
+  visualChangedRows: number[]
+  styleRuns: StyleRun[]
 }
 
 const DEFAULT_ATTR: CellAttr = {
   bold: false,
   dim: false,
+  italic: false,
   inverse: false,
-  fg: null,
-  bg: null,
+  fg: { kind: 'default' },
+  bg: { kind: 'default' },
 }
 
 function emptyCell(): Cell {
@@ -53,7 +73,32 @@ function makeBuffer(cols: number, rows: number): Cell[][] {
 }
 
 function cloneAttr(attr: CellAttr): CellAttr {
-  return { ...attr }
+  return {
+    bold: attr.bold,
+    dim: attr.dim,
+    italic: attr.italic,
+    inverse: attr.inverse,
+    fg: { ...attr.fg },
+    bg: { ...attr.bg },
+  }
+}
+
+function attrEqual(a: CellAttr, b: CellAttr): boolean {
+  if (a.bold !== b.bold || a.dim !== b.dim || a.italic !== b.italic || a.inverse !== b.inverse) {
+    return false
+  }
+  if (a.fg.kind !== b.fg.kind || a.bg.kind !== b.bg.kind) return false
+  if (a.fg.kind === 'indexed' && (b.fg as any).index !== a.fg.index) return false
+  if (a.bg.kind === 'indexed' && (b.bg as any).index !== a.bg.index) return false
+  if (a.fg.kind === 'rgb') {
+    const bFg = b.fg as { kind: 'rgb'; r: number; g: number; b: number }
+    if (a.fg.r !== bFg.r || a.fg.g !== bFg.g || a.fg.b !== bFg.b) return false
+  }
+  if (a.bg.kind === 'rgb') {
+    const bBg = b.bg as { kind: 'rgb'; r: number; g: number; b: number }
+    if (a.bg.r !== bBg.r || a.bg.g !== bBg.g || a.bg.b !== bBg.b) return false
+  }
+  return true
 }
 
 /**
@@ -82,7 +127,9 @@ export class VirtualCellGrid {
   private attr: CellAttr = { ...DEFAULT_ATTR }
   private pending = ''
   private lastLines: string[] = []
+  private lastVisualRowHashes: string[] = []
   private writeSeq = 0
+  private wrapPending = false
 
   constructor(cols: number, rows: number) {
     if (cols < 1 || rows < 1) {
@@ -118,6 +165,7 @@ export class VirtualCellGrid {
     this.scrollBottom = rows - 1
     this.cursorCol = Math.min(this.cursorCol, cols - 1)
     this.cursorRow = Math.min(this.cursorRow, rows - 1)
+    this.wrapPending = false
   }
 
   /** Apply a UTF-8 terminal byte chunk (may be a partial CSI). */
@@ -127,6 +175,7 @@ export class VirtualCellGrid {
     const text = this.pending + chunk
     this.pending = ''
     let i = 0
+
     while (i < text.length) {
       const code = text.charCodeAt(i)
       if (code === 0x1b) {
@@ -139,23 +188,26 @@ export class VirtualCellGrid {
         continue
       }
       if (code === 0x0d) {
+        this.wrapPending = false
         this.cursorCol = 0
         i += 1
         continue
       }
       if (code === 0x0a) {
-        // Babel emits Unix newlines as visual line starts (CR+LF).
+        this.wrapPending = false
         this.cursorCol = 0
         this.lineFeed()
         i += 1
         continue
       }
       if (code === 0x08) {
+        this.wrapPending = false
         this.cursorCol = Math.max(0, this.cursorCol - 1)
         i += 1
         continue
       }
       if (code === 0x09) {
+        this.wrapPending = false
         this.cursorCol = Math.min(this.cols - 1, (Math.floor(this.cursorCol / 8) + 1) * 8)
         i += 1
         continue
@@ -164,21 +216,72 @@ export class VirtualCellGrid {
         i += 1
         continue
       }
-      const grapheme = nextGrapheme(text, i)
-      this.putChar(grapheme.ch)
-      i += grapheme.len
+
+      // Extract grapheme cluster using Intl.Segmenter
+      const clusters = graphemeClusters(text.slice(i))
+      const firstCluster = clusters[0] || text[i]!
+      this.putChar(firstCluster)
+      i += firstCluster.length
     }
   }
 
   snapshot(): GridSnapshot {
     const buf = this.active()
     const lines = buf.map((row) => rowToString(row))
-    const changedRows: number[] = []
-    for (let r = 0; r < lines.length; r++) {
-      if (lines[r] !== this.lastLines[r]) changedRows.push(r)
+    const textChangedRows: number[] = []
+    const visualChangedRows: number[] = []
+    const currentVisualRowHashes: string[] = []
+    const styleRuns: StyleRun[] = []
+
+    for (let r = 0; r < this.rows; r++) {
+      const row = buf[r]!
+      if (lines[r] !== this.lastLines[r]) {
+        textChangedRows.push(r)
+      }
+
+      // Compute row visual hash & style runs
+      let visualRepr = ''
+      let currentRun: StyleRun | null = null
+
+      for (let c = 0; c < row.length; c++) {
+        const cell = row[c]!
+        const attrStr = `${cell.attr.bold ? 'B' : ''}${cell.attr.dim ? 'D' : ''}${cell.attr.italic ? 'I' : ''}${cell.attr.inverse ? 'V' : ''}${JSON.stringify(cell.attr.fg)}${JSON.stringify(cell.attr.bg)}`
+        visualRepr += `[${cell.ch}:${cell.width}:${attrStr}]`
+
+        if (cell.ch !== ' ' || cell.attr.fg.kind !== 'default' || cell.attr.bg.kind !== 'default') {
+          if (currentRun && attrEqual(currentRun.attr, cell.attr)) {
+            currentRun.endCol = c + (cell.width === 2 ? 2 : 1)
+          } else {
+            if (currentRun) styleRuns.push(currentRun)
+            currentRun = {
+              row: r,
+              startCol: c,
+              endCol: c + (cell.width === 2 ? 2 : 1),
+              attr: cloneAttr(cell.attr),
+            }
+          }
+        } else if (currentRun) {
+          styleRuns.push(currentRun)
+          currentRun = null
+        }
+      }
+      if (currentRun) {
+        styleRuns.push(currentRun)
+      }
+
+      const rowVisualHash = fnv1a(visualRepr)
+      currentVisualRowHashes.push(rowVisualHash)
+      if (rowVisualHash !== this.lastVisualRowHashes[r]) {
+        visualChangedRows.push(r)
+      }
     }
+
     this.lastLines = lines
-    const hash = fnv1a(lines.join('\n'))
+    this.lastVisualRowHashes = currentVisualRowHashes
+
+    const textHash = fnv1a(lines.join('\n'))
+    const visualHash = fnv1a(currentVisualRowHashes.join('\n'))
+
     return {
       cols: this.cols,
       rows: this.rows,
@@ -189,8 +292,13 @@ export class VirtualCellGrid {
       scrollTop: this.scrollTop,
       scrollBottom: this.scrollBottom,
       lines,
-      hash,
-      changedRows,
+      hash: textHash,
+      textHash,
+      visualHash,
+      changedRows: textChangedRows,
+      textChangedRows,
+      visualChangedRows,
+      styleRuns,
     }
   }
 
@@ -246,6 +354,7 @@ export class VirtualCellGrid {
   }
 
   private applyCsi(seq: string): void {
+    this.wrapPending = false
     const priv = seq[2] === '?'
     const body = seq.slice(priv ? 3 : 2, -1)
     const final = seq[seq.length - 1]
@@ -327,17 +436,56 @@ export class VirtualCellGrid {
       this.attr = { ...DEFAULT_ATTR }
       return
     }
-    for (const n of params) {
-      if (n === 0) this.attr = { ...DEFAULT_ATTR }
-      else if (n === 1) this.attr.bold = true
-      else if (n === 2) this.attr.dim = true
-      else if (n === 7) this.attr.inverse = true
-      else if (n === 22) {
+    for (let i = 0; i < params.length; i++) {
+      const n = params[i]!
+      if (n === 0) {
+        this.attr = { ...DEFAULT_ATTR }
+      } else if (n === 1) {
+        this.attr.bold = true
+      } else if (n === 2) {
+        this.attr.dim = true
+      } else if (n === 3) {
+        this.attr.italic = true
+      } else if (n === 7) {
+        this.attr.inverse = true
+      } else if (n === 22) {
         this.attr.bold = false
         this.attr.dim = false
-      } else if (n === 27) this.attr.inverse = false
-      else if (n === 39) this.attr.fg = null
-      else if (n === 49) this.attr.bg = null
+      } else if (n === 23) {
+        this.attr.italic = false
+      } else if (n === 27) {
+        this.attr.inverse = false
+      } else if (n === 39) {
+        this.attr.fg = { kind: 'default' }
+      } else if (n === 49) {
+        this.attr.bg = { kind: 'default' }
+      } else if (n === 38 || n === 48) {
+        const isFg = n === 38
+        const mode = params[i + 1]
+        if (mode === 5 && i + 2 < params.length) {
+          const index = params[i + 2]!
+          const color: TerminalColor = { kind: 'indexed', index }
+          if (isFg) this.attr.fg = color
+          else this.attr.bg = color
+          i += 2
+        } else if (mode === 2 && i + 4 < params.length) {
+          const r = params[i + 2]!
+          const g = params[i + 3]!
+          const b = params[i + 4]!
+          const color: TerminalColor = { kind: 'rgb', r, g, b }
+          if (isFg) this.attr.fg = color
+          else this.attr.bg = color
+          i += 4
+        }
+      } else if (n >= 30 && n <= 37) {
+        this.attr.fg = { kind: 'indexed', index: n - 30 }
+      } else if (n >= 40 && n <= 47) {
+        this.attr.bg = { kind: 'indexed', index: n - 40 }
+      } else if (n >= 90 && n <= 97) {
+        this.attr.fg = { kind: 'indexed', index: n - 90 + 8 }
+      } else if (n >= 100 && n <= 107) {
+        this.attr.bg = { kind: 'indexed', index: n - 100 + 8 }
+      }
     }
   }
 
@@ -387,10 +535,19 @@ export class VirtualCellGrid {
   private putChar(ch: string): void {
     const width = Math.max(0, Math.min(2, stringWidth(ch))) as 0 | 1 | 2
     if (width === 0) return
+
+    // If deferred autowrap was pending from the previous character, execute wrap now
+    if (this.wrapPending) {
+      this.cursorCol = 0
+      this.lineFeed()
+      this.wrapPending = false
+    }
+
     if (this.cursorCol + width > this.cols) {
       this.cursorCol = 0
       this.lineFeed()
     }
+
     const row = this.active()[this.cursorRow]
     if (!row) return
     row[this.cursorCol] = { ch, width, attr: cloneAttr(this.attr) }
@@ -398,9 +555,10 @@ export class VirtualCellGrid {
       row[this.cursorCol + 1] = { ch: '', width: 0, attr: cloneAttr(this.attr) }
     }
     this.cursorCol += width
+
+    // If cursor reached right margin, set wrapPending for DECAWM deferred autowrap
     if (this.cursorCol >= this.cols) {
-      this.cursorCol = 0
-      this.lineFeed()
+      this.wrapPending = true
     }
   }
 }
@@ -431,13 +589,6 @@ function rowToString(row: Cell[]): string {
     c += cell.width === 2 ? 2 : 1
   }
   return out.replace(/ +$/g, '')
-}
-
-function nextGrapheme(text: string, i: number): { ch: string; len: number } {
-  const cp = text.codePointAt(i)
-  if (cp === undefined) return { ch: '', len: 1 }
-  const len = cp > 0xffff ? 2 : 1
-  return { ch: text.slice(i, i + len), len }
 }
 
 function fnv1a(s: string): string {

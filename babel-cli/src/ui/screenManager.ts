@@ -25,6 +25,7 @@ import { getGlobalRateLimitState, renderCompactRateLimit } from './rateLimitWidg
 import { renderUnseenDividerPill } from './unseenDivider.js';
 import { PaneManager } from './paneManager.js';
 import type { HistoryCellViewport } from './historyCells/viewport.js';
+import { computeScreenLayout, type ScreenLayout, type ScreenMode } from './screenLayout.js';
 
 export interface ScreenState {
   model: string;
@@ -40,6 +41,7 @@ export interface ScreenState {
 export class ScreenManager {
   private rows: number;
   private cols: number;
+  private layout: ScreenLayout;
   private contentTop: number;
   private contentBottom: number;
   private statsRow: number;
@@ -70,13 +72,24 @@ export class ScreenManager {
     const size = getObservedTerminalSize();
     this.rows = size.rows;
     this.cols = size.cols;
-    this.contentTop = 2;
-    this.contentBottom = this.rows - 2; // leaves rows N-1 (stats) and N (input)
-    this.statsRow = this.rows - 1;
-    this.inputRow = this.rows;
+    this.layout = computeScreenLayout(this.rows, this.cols);
+    this.contentTop = this.layout.contentTop;
+    this.contentBottom = this.layout.contentBottom;
+    this.statsRow = this.layout.statsRow;
+    this.inputRow = this.layout.inputRow;
     this.buffer = new ScrollbackBuffer(10000, 10 * 1024 * 1024); // 10K lines, 10 MB
     this.statusFormat =
       statusFormat ?? process.env['BABEL_STATUS_FORMAT'] ?? ScreenManager.DEFAULT_STATUS_FORMAT;
+  }
+
+  /** Current screen layout calculation. */
+  getLayout(): ScreenLayout {
+    return this.layout;
+  }
+
+  /** Current active screen mode ('normal' | 'compact' | 'linear'). */
+  getMode(): ScreenMode {
+    return this.layout.mode;
   }
 
   /** Attach a HistoryCellViewport for O(viewport) transcript painting (B4). */
@@ -94,7 +107,7 @@ export class ScreenManager {
 
   /** Content-area row count (between top bar and stats line). */
   getContentHeight(): number {
-    return Math.max(0, this.contentBottom - this.contentTop + 1);
+    return this.layout.contentRowCount;
   }
 
   /** Set the scroll offset (lines scrolled above the viewport). */
@@ -138,12 +151,15 @@ export class ScreenManager {
   /** Initialize the layout. Call once at session start. */
   setup(): void {
     this.refreshDimensions();
+    if (this.layout.mode === 'linear') {
+      return;
+    }
     if (!shouldAvoidAltScreen()) {
       this.setScrollRegion();
       this.drawTopBar();
     }
     this.drawBottomStats();
-    if (!shouldAvoidAltScreen()) {
+    if (!shouldAvoidAltScreen() && this.layout.contentRowCount > 0) {
       OutputBuffer.getInstance().moveCursor(this.contentTop, 1);
     }
   }
@@ -187,6 +203,7 @@ export class ScreenManager {
 
   /** Draw the top bar — model · mode · project only. */
   drawTopBar(): void {
+    if (this.layout.mode === 'linear') return;
     const left = `${this.state.model || 'auto'} · ${this.state.mode} · ${this.state.project || 'Workspace'}`;
     const truncatedLeft = truncate(left, this.cols - 2);
     const rightPad = ' '.repeat(Math.max(0, this.cols - truncatedLeft.length - 2));
@@ -196,8 +213,10 @@ export class ScreenManager {
     if (useSync) buf.beginFrame();
     try {
       buf.write('\x1b[s');
-      buf.write(`\x1b[1;1H${headerBg(` ${truncatedLeft}${rightPad} `)}`);
-      buf.write(`\x1b[2;1H${dim('─'.repeat(this.cols))}`);
+      buf.write(`\x1b[${this.layout.titleRow};1H${headerBg(` ${truncatedLeft}${rightPad} `)}`);
+      if (this.layout.borderRow > 0) {
+        buf.write(`\x1b[${this.layout.borderRow};1H${dim('─'.repeat(this.cols))}`);
+      }
       buf.write('\x1b[u');
     } finally {
       if (useSync) buf.endFrame();
@@ -206,6 +225,7 @@ export class ScreenManager {
 
   /** Draw the bottom stats line (time · cost · tokens). */
   drawBottomStats(): void {
+    if (this.layout.mode === 'linear') return;
     const buf = OutputBuffer.getInstance();
     const useSync = OutputBuffer.supportsSyncUpdate();
     if (useSync) buf.beginFrame();
@@ -221,6 +241,7 @@ export class ScreenManager {
   }
 
   private drawBottomStatsInternal(elapsed: string, costDollars: number, tokens: number): void {
+    if (this.layout.mode === 'linear') return;
     const costStr = costDollars > 0 ? `$${costDollars.toFixed(4)}` : '$0.0000';
     const tokStr = tokens > 0 ? formatTokenCount(tokens) : '0 tok';
 
@@ -279,6 +300,7 @@ export class ScreenManager {
     this.unregisterStats = scheduler.scheduleComponent(
       'screen-stats',
       () => {
+        if (this.layout.mode === 'linear') return;
         this.liveElapsedMs = Date.now() - this.liveStartTime;
         this.drawBottomStatsInternal(
           formatElapsedShort(this.liveElapsedMs),
@@ -303,21 +325,33 @@ export class ScreenManager {
   /** Set ANSI scroll region to content area only. No-op in a11y mode. */
   private setScrollRegion(): void {
     if (shouldAvoidAltScreen()) return;
-    OutputBuffer.getInstance().setScrollRegion(this.contentTop, this.contentBottom);
+    if (this.layout.mode === 'normal' && this.layout.contentRowCount > 0) {
+      OutputBuffer.getInstance().setScrollRegion(this.contentTop, this.contentBottom);
+    }
   }
 
   /** Refresh terminal dimensions after resize, reflow content, and redraw. */
   refreshDimensions(): void {
+    const prevMode = this.layout ? this.layout.mode : null;
     const size = getObservedTerminalSize();
     this.rows = size.rows;
     this.cols = size.cols;
-    this.contentBottom = this.rows - 2;
-    this.statsRow = this.rows - 1;
-    this.inputRow = this.rows;
-    this.reflowContent();
-    this.setScrollRegion();
-    this.drawTopBar();
-    this.drawBottomStats();
+    this.layout = computeScreenLayout(this.rows, this.cols);
+    this.contentTop = this.layout.contentTop;
+    this.contentBottom = this.layout.contentBottom;
+    this.statsRow = this.layout.statsRow;
+    this.inputRow = this.layout.inputRow;
+
+    if (!shouldAvoidAltScreen() && prevMode === 'normal' && this.layout.mode !== 'normal') {
+      OutputBuffer.getInstance().resetScrollRegion();
+    }
+
+    if (this.layout.mode !== 'linear') {
+      this.reflowContent();
+      this.setScrollRegion();
+      this.drawTopBar();
+      this.drawBottomStats();
+    }
     PaneManager.instance.onTerminalResize(this.rows, this.cols);
   }
 

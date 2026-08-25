@@ -110,8 +110,14 @@ jobs:
       - name: Typecheck CLI
         run: npm run typecheck
         working-directory: babel-cli
+      - name: Build CLI
+        run: npm run build
+        working-directory: babel-cli
       - name: Check harness architecture package
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-harness-architecture.ps1
+      - name: Run required UI test suite
+        run: npm run test:ui
+        working-directory: babel-cli
       - name: Run required harness acceptance suite
         run: npm run test:harness-acceptance
         working-directory: babel-cli
@@ -142,8 +148,14 @@ jobs:
       - name: Typecheck CLI
         run: npm run typecheck
         working-directory: babel-cli
+      - name: Build CLI
+        run: npm run build
+        working-directory: babel-cli
       - name: Check harness architecture package
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-harness-architecture.ps1
+      - name: Run required UI test suite
+        run: npm run test:ui
+        working-directory: babel-cli
       - name: Run required harness acceptance suite
         run: npm run test:harness-acceptance
         working-directory: babel-cli

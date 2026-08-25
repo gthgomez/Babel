@@ -36,9 +36,10 @@ import {
   syntaxComment,
   syntaxFunction,
 } from './theme.js';
-import { sanitizeLlmOutput, sanitizeCodeLine } from './sanitize.js';
+import { sanitizeLlmOutput, sanitizeCodeLine, encodeHyperlink } from './sanitize.js';
 import { isTreeSitterAvailable, highlightWithTreeSitter } from './treeSitterHighlight.js';
 import { renderContentAwareTable, type MarkdownTableRow } from './tables.js';
+import { scanFenceLine, type OpenFence } from './markdownFenceScanner.js';
 const HAS_COLOR = supportsColor();
 const ANSI_ITALIC_OPEN = '\x1b[3m';
 const ANSI_ITALIC_CLOSE = '\x1b[23m';
@@ -1376,23 +1377,21 @@ export function langFromExtension(filePath: string): string {
 export function highlightCodeBlocks(text: string): string {
   const lines = text.split('\n');
   const result: string[] = [];
-  let inCodeBlock = false;
-  let codeLang = '';
+  let currentFence: OpenFence | null = null;
   for (const line of lines) {
-    const fenceMatch = line.match(/^```(\w*)/);
-    if (fenceMatch && !inCodeBlock) {
-      inCodeBlock = true;
-      codeLang = (fenceMatch[1] ?? '').toLowerCase();
+    const scan = scanFenceLine(line, currentFence);
+    if (scan.isOpener) {
+      currentFence = scan.fence;
       result.push(line);
       continue;
     }
-    if (inCodeBlock && line.trim() === '```') {
-      inCodeBlock = false;
-      codeLang = '';
+    if (scan.isCloser) {
+      currentFence = null;
       result.push(line);
       continue;
     }
-    if (inCodeBlock) {
+    if (currentFence) {
+      const codeLang = currentFence.language.toLowerCase();
       if (isRegexHighlightSupported(codeLang) || codeLang === 'ts' || codeLang === 'js') {
         result.push(highlightLine(line, codeLang));
       } else if (codeLang) result.push(dim(line));
@@ -1436,11 +1435,11 @@ export function renderMarkdown(text: string): string {
   const cached = mdRenderCache.get(text);
   if (cached !== undefined) return cached;
 
-  if (!HAS_COLOR) return text;
   if (!text) return '';
 
   // Sanitize LLM-produced text against terminal escape injection
   const safe = sanitizeLlmOutput(text);
+  if (!HAS_COLOR) return safe;
 
   // Fast-path — skip lexer for text with no markdown syntax
   if (!hasMarkdownSyntax(safe)) {
@@ -1593,7 +1592,7 @@ function renderInlineToken(token: InlineToken): string {
       const text = renderInlineTokens(link.tokens);
       // OSC 8 hyperlinks — Ctrl+Click in supporting terminals
       if (HAS_COLOR) {
-        return `\x1b]8;;${link.href}\x1b\\${text}\x1b]8;;\x1b\\ ${dim('(' + link.href + ')')}`;
+        return `${encodeHyperlink(link.href, text)} ${dim('(' + link.href + ')')}`;
       }
       return `${text} ${dim('(' + link.href + ')')}`;
     }
