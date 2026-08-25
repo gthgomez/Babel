@@ -74,6 +74,7 @@ import {
   type ValidMode,
 } from '../cli/constants.js';
 import { registerInternalTextProviderCommands } from './liteCommands.js';
+import { formatBdnsDiagnosticHuman, loadBdnsDiagnosticBundle } from '../diagnostics/bdns/reader.js';
 import {
   printDryRunState,
   readDryRunState,
@@ -2341,6 +2342,22 @@ Notes:
       );
     });
 
+  diagnoseCommand
+    .command('bdns')
+    .description('Diagnose bounded BDNS evidence for a run')
+    .argument('[run]', 'Run directory or latest', 'latest')
+    .option('--project <name>', 'Use latest run pointer for a specific project')
+    .option('--json', 'Emit structured JSON only')
+    .action(async (runArg: string, options: { project?: string; json?: boolean }) => {
+      const runDir = resolveInspectRunDir({
+        run: runArg,
+        project: options.project,
+        babelRunsDir: BABEL_RUNS_DIR,
+      });
+      const bundle = await loadBdnsDiagnosticBundle(runDir);
+      printJsonOrHuman(bundle, formatBdnsDiagnosticHuman(bundle), options.json === true);
+    });
+
   const modelsCommand = program
     .command('models')
     .description('Inspect and ping configured model backends')
@@ -2771,6 +2788,23 @@ Notes:
       .description('Inspect the summary artifact for a Babel run')
       .action(async (runArg: string | undefined, options: { run?: string; project?: string }) => {
         handleInspectMode('summary', runArg, options);
+      }),
+  );
+
+  addInspectCommonOptions(
+    inspectCommand
+      .command('bdns')
+      .argument('[run]', 'Run directory or latest')
+      .description('Inspect bounded BDNS evidence for a run')
+      .option('--json', 'Emit structured JSON only')
+      .action(async (runArg: string | undefined, options: { run?: string; project?: string; json?: boolean }) => {
+        const runDir = resolveInspectRunDir({
+          run: options.run ?? runArg ?? 'latest',
+          project: options.project,
+          babelRunsDir: BABEL_RUNS_DIR,
+        });
+        const bundle = await loadBdnsDiagnosticBundle(runDir);
+        printJsonOrHuman(bundle, formatBdnsDiagnosticHuman(bundle), options.json === true);
       }),
   );
 
