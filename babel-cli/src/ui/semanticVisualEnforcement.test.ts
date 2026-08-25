@@ -10,6 +10,7 @@
  * exercised in a FORCE_COLOR child that loads the same production modules.
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -265,5 +266,79 @@ describe('tool presentation still distinguishes success / failure / unverified w
     assert.doesNotMatch(blockedLine, /failed/i);
     assert.match(failLine, /✖/);
     assert.notEqual(blockedLine, failLine);
+  });
+});
+
+describe('syntax highlighting is governed by theme syntax tokens and decoupled from runtime severity', () => {
+  it('tree-sitter highlighting uses syntax tokens rather than runtime success/warning/error', () => {
+    const child = runColored(`
+      import { highlightWithTreeSitter, isTreeSitterAvailable } from './src/ui/treeSitterHighlight.ts';
+      import { syntaxString, syntaxNumber, success, warning, error } from './src/ui/theme.ts';
+      if (!isTreeSitterAvailable()) {
+        process.stdout.write('ok');
+        process.exit(0);
+      }
+      const stringResult = highlightWithTreeSitter('"hello"', 'ts');
+      const numResult = highlightWithTreeSitter('42', 'ts');
+      if (!stringResult || !numResult) {
+        console.error('highlight failed'); process.exit(2);
+      }
+      // String literal must match syntaxString, not runtime success
+      if (!stringResult.includes(syntaxString('"hello"'))) {
+        console.error('string literal missing syntaxString paint'); process.exit(3);
+      }
+      // Number literal must match syntaxNumber, not runtime warning
+      if (!numResult.includes(syntaxNumber('42'))) {
+        console.error('number literal missing syntaxNumber paint'); process.exit(4);
+      }
+      process.stdout.write('ok');
+    `);
+    assert.equal(child.status, 0, child.stderr || child.stdout);
+    assert.equal(child.stdout, 'ok');
+  });
+
+  it('regex/fallback highlighting uses syntax tokens rather than runtime severity', () => {
+    const child = runColored(`
+      import { highlightLine } from './src/ui/highlight.ts';
+      import { syntaxKeyword, syntaxType, syntaxString, syntaxComment, success, warning, error } from './src/ui/theme.ts';
+      const kwLine = highlightLine('return;', 'ts', { preferTreeSitter: false });
+      const strLine = highlightLine('"test"', 'ts', { preferTreeSitter: false });
+      const commentLine = highlightLine('// comment', 'ts', { preferTreeSitter: false });
+      if (!kwLine.includes(syntaxKeyword('return'))) {
+        console.error('keyword missing syntaxKeyword paint'); process.exit(2);
+      }
+      if (!strLine.includes(syntaxString('"test"'))) {
+        console.error('string missing syntaxString paint'); process.exit(3);
+      }
+      if (!commentLine.includes(syntaxComment('// comment'))) {
+        console.error('comment missing syntaxComment paint'); process.exit(4);
+      }
+      process.stdout.write('ok');
+    `);
+    assert.equal(child.status, 0, child.stderr || child.stdout);
+    assert.equal(child.stdout, 'ok');
+  });
+
+  it('changing active theme updates syntax token resolution', () => {
+    const child = runColored(`
+      import { setActiveTheme } from './src/ui/tokens.ts';
+      import { syntaxKeyword } from './src/ui/theme.ts';
+      setActiveTheme('babel-dusk');
+      const duskKw = syntaxKeyword('const');
+      setActiveTheme('babel-prism-night');
+      const prismKw = syntaxKeyword('const');
+      if (duskKw === prismKw) {
+        console.error('syntax token did not change with theme switch'); process.exit(2);
+      }
+      process.stdout.write('ok');
+    `);
+    assert.equal(child.status, 0, child.stderr || child.stdout);
+    assert.equal(child.stdout, 'ok');
+  });
+
+  it('static audit: treeSitterHighlight.ts does not import runtime severity helpers', () => {
+    const content = readFileSync(join(PKG_ROOT, 'src', 'ui', 'treeSitterHighlight.ts'), 'utf8');
+    const badImports = /import\s*\{[^}]*\b(success|warning|error)\b[^}]*\}\s*from\s*['"]\.\/theme\.js['"]/;
+    assert.equal(badImports.test(content), false, 'treeSitterHighlight.ts must not import runtime severity helpers (success, warning, error)');
   });
 });

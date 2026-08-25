@@ -29,6 +29,12 @@ import {
   getTerminalWidth,
   stripAnsi,
   colorToken,
+  syntaxKeyword,
+  syntaxType,
+  syntaxString,
+  syntaxNumber,
+  syntaxComment,
+  syntaxFunction,
 } from './theme.js';
 import { sanitizeLlmOutput, sanitizeCodeLine } from './sanitize.js';
 import { isTreeSitterAvailable, highlightWithTreeSitter } from './treeSitterHighlight.js';
@@ -36,22 +42,6 @@ import { renderContentAwareTable, type MarkdownTableRow } from './tables.js';
 const HAS_COLOR = supportsColor();
 const ANSI_ITALIC_OPEN = '\x1b[3m';
 const ANSI_ITALIC_CLOSE = '\x1b[23m';
-
-function syntaxKeyword(text: string): string {
-  return colorToken('syntaxKeyword', text);
-}
-function syntaxType(text: string): string {
-  return colorToken('syntaxType', text);
-}
-function syntaxString(text: string): string {
-  return colorToken('syntaxString', text);
-}
-function syntaxNumber(text: string): string {
-  return colorToken('syntaxNumber', text);
-}
-function syntaxComment(text: string): string {
-  return colorToken('syntaxComment', text);
-}
 
 // ─── Token patterns ───────────────────────────────────────────────────────────
 

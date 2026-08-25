@@ -10,18 +10,25 @@
  * required() calls are wrapped in try-catch so the module loads cleanly even
  * when no tree-sitter packages are present.
  *
- * Node types are mapped to Babel theme colors:
- *   Function/method  → accentBright
- *   Keyword          → primary
- *   String           → success
- *   Comment          → muted
- *   Type/class       → accent
- *   Number           → warning
+ * Node types are mapped to Babel theme syntax tokens:
+ *   Function/method  → syntaxFunction
+ *   Keyword          → syntaxKeyword
+ *   String           → syntaxString
+ *   Comment          → syntaxComment
+ *   Type/class       → syntaxType
+ *   Number           → syntaxNumber
  *   Identifier/var   → plain (no color)
  */
 
 import { createRequire } from 'node:module';
-import { accentBright, primary, success, muted, accent, warning } from './theme.js';
+import {
+  syntaxKeyword,
+  syntaxType,
+  syntaxString,
+  syntaxNumber,
+  syntaxComment,
+  syntaxFunction,
+} from './theme.js';
 
 // ─── Module-level state ─────────────────────────────────────────────────────
 
@@ -286,7 +293,7 @@ function getNodeColor(node: any): ((text: string) => string) | null {
       case 'raw_string_literal':
       case 'f_string':
       case 'f_string_fragment':
-        return success;
+        return syntaxString;
 
       // ── Comments ──
       case 'comment':
@@ -294,7 +301,7 @@ function getNodeColor(node: any): ((text: string) => string) | null {
       case 'block_comment':
       case 'doc_comment':
       case 'hash_bang_line':
-        return muted;
+        return syntaxComment;
 
       // ── Numbers ──
       case 'number':
@@ -303,7 +310,7 @@ function getNodeColor(node: any): ((text: string) => string) | null {
       case 'decimal':
       case 'real_float_literal':
       case 'escape_sequence':
-        return warning;
+        return syntaxNumber;
 
       // ── Types / classes ──
       case 'type_identifier':
@@ -312,20 +319,20 @@ function getNodeColor(node: any): ((text: string) => string) | null {
       case 'class_identifier':
       case 'interface_identifier':
       case 'enum_identifier':
-        return accent;
+        return syntaxType;
 
       // ── Functions ──
       case 'function_identifier':
       case 'method_identifier':
       case 'function_name':
       case 'method_name':
-        return accentBright;
+        return syntaxFunction;
     }
     return null;
   }
 
   // Anonymous leaf node — check if it is a keyword
-  if (KEYWORDS.has(type)) return primary;
+  if (KEYWORDS.has(type)) return syntaxKeyword;
 
   return null;
 }
