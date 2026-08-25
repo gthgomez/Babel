@@ -18,20 +18,45 @@ import {
   buildToolLifecycleCausalityDiagnostic,
   SessionEventLifecycleCausalityError,
 } from './sessionEventDiagnostics.js';
+import {
+  createBdnsObservationBus,
+  type BdnsObservationBus,
+} from '../diagnostics/bdns/observationBus.js';
 
 export const SESSION_EVENT_SCHEMA_VERSION = 1 as const;
 export const SESSION_EVENTS_FILENAME = 'session-events.jsonl';
 
-type SessionEventObservationHook = (events: readonly SessionEvent[]) => void;
-let sessionEventObservationHook: SessionEventObservationHook | null = null;
+type SessionEventObservationHook = (event: SessionEvent) => void | Promise<void>;
+const sessionEventObservationBus = createBdnsObservationBus<SessionEvent>({ maxQueue: 256 });
+let sessionEventObservationUnsubscribe: (() => void) | null = null;
 
 /**
  * Optional TUI observation hook. Must not throw into the durable log path.
  *
- * @param hook Callback receiving the current event list, or null to clear
+ * @param hook Callback receiving the newly appended event, or null to clear
  */
 export function setSessionEventObservationHook(hook: SessionEventObservationHook | null): void {
-  sessionEventObservationHook = hook;
+  sessionEventObservationUnsubscribe?.();
+  sessionEventObservationUnsubscribe = hook
+    ? sessionEventObservationBus.subscribe({ id: 'legacy-tui-observer', onObservation: (observation) => hook(observation.payload) })
+    : null;
+}
+
+/** Subscribe to bounded asynchronous canonical session-event observations. */
+export function subscribeSessionEventObservation(
+  hook: SessionEventObservationHook,
+  options: { id?: string; maxQueue?: number } = {},
+): () => void {
+  return sessionEventObservationBus.subscribe({
+    ...(options.id !== undefined ? { id: options.id } : {}),
+    ...(options.maxQueue !== undefined ? { maxQueue: options.maxQueue } : {}),
+    onObservation: (observation) => hook(observation.payload),
+  });
+}
+
+/** Flush the bounded global compatibility observation queue before shutdown. */
+export function flushSessionEventObservations(timeoutMs = 1_000): Promise<boolean> {
+  return sessionEventObservationBus.flush(timeoutMs).then(() => true);
 }
 
 /** Durable classification of a tool that was interrupted by process loss. */
@@ -484,6 +509,8 @@ export interface SessionEventLog {
   nextSeq: number;
   /** Paths already flushed to disk (for dual-write append efficiency). */
   flushedThroughSeq: number;
+  /** Runtime-only bounded observation bus; never serialized into the durable log. */
+  observationBus?: BdnsObservationBus<SessionEvent>;
 }
 
 export type SessionEventLogLoadResult =
@@ -511,6 +538,7 @@ export function createSessionEventLog(sessionId?: string): SessionEventLog {
     events: [],
     nextSeq: 0,
     flushedThroughSeq: -1,
+    observationBus: createBdnsObservationBus<SessionEvent>({ maxQueue: 256 }),
   };
 }
 
@@ -727,13 +755,20 @@ export function appendSessionEvent(
   const { kind: _k, turn_id: _t, ...rest } = event;
   const full = { ...rest, ...base } as SessionEvent;
   log.events.push(full);
-  if (sessionEventObservationHook) {
-    try {
-      sessionEventObservationHook(log.events);
-    } catch {
-      // Observation must never break durable session logging.
-    }
-  }
+  const observation = {
+    schemaVersion: 1 as const,
+    source: 'canonical' as const,
+    kind: 'canonical_event' as const,
+    correlation: {
+      sessionId: full.session_id,
+      ...(full.turn_id ? { turnId: full.turn_id } : {}),
+      canonicalEventId: full.event_id,
+    },
+    evidenceState: 'complete' as const,
+    payload: full,
+  };
+  log.observationBus?.publish(observation);
+  sessionEventObservationBus.publish(observation);
   return full;
 }
 
@@ -1400,6 +1435,7 @@ export function parseSessionEventLog(
     events,
     nextSeq: maxSeq + 1,
     flushedThroughSeq: maxSeq,
+    observationBus: createBdnsObservationBus<SessionEvent>({ maxQueue: 256 }),
   };
 }
 
