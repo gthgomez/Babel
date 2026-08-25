@@ -115,4 +115,3 @@ outcomes, workspace transactions, and EvidenceGraph remain authoritative in
 their existing domains. BDNS may attach provenance-preserving observations and
 diagnoses, but it cannot promote an inference into a canonical fact, mutate
 user files, or make execution depend on observer success.
-

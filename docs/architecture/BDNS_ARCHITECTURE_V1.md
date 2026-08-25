@@ -175,4 +175,3 @@ The campaign is intentionally serialized:
 Each slice must pass focused tests and exact-head review before the next
 slice's assumptions are treated as available. If a later slice would require
 violating this contract, the campaign stops for architecture revision.
-
