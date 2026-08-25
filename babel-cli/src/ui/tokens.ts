@@ -9,9 +9,9 @@ export interface ThemeDefinition {
 function presentationTrueColor(core: Record<string, string>): Record<string, string> {
   return {
     syntaxKeyword: core['accent'] ?? '',
-    syntaxType: core['info'] ?? '',
+    syntaxType: core['accentSecondary'] ?? '',
     syntaxString: core['accentStrong'] ?? '',
-    syntaxNumber: core['warning'] ?? '',
+    syntaxNumber: core['accentSecondary'] ?? '',
     syntaxComment: core['textGhost'] ?? '',
     syntaxFunction: core['textPrimary'] ?? '',
     identityPrimary: core['accent'] ?? '',
@@ -24,9 +24,9 @@ function presentationTrueColor(core: Record<string, string>): Record<string, str
 function presentationFallback(core: Record<string, number>): Record<string, number> {
   return {
     syntaxKeyword: core['accent'] ?? 183,
-    syntaxType: core['info'] ?? 117,
+    syntaxType: core['accentSecondary'] ?? 147,
     syntaxString: core['accentStrong'] ?? 134,
-    syntaxNumber: core['warning'] ?? 221,
+    syntaxNumber: core['accentSecondary'] ?? 147,
     syntaxComment: core['textGhost'] ?? 60,
     syntaxFunction: core['textPrimary'] ?? 255,
     identityPrimary: core['accent'] ?? 183,
@@ -45,8 +45,8 @@ function defineTheme(
   return {
     name,
     mode,
-    trueColor: { ...trueColor, ...presentationTrueColor(trueColor) },
-    ansiFallback: { ...ansiFallback, ...presentationFallback(ansiFallback) },
+    trueColor: { ...presentationTrueColor(trueColor), ...trueColor },
+    ansiFallback: { ...presentationFallback(ansiFallback), ...ansiFallback },
   };
 }
 

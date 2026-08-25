@@ -84,7 +84,7 @@ test('highlightWithTreeSitter with empty string returns unchanged', () => {
 
 const SUBPROCESS_CWD = process.cwd();
 
-function subprocessEval(scriptBody: string): string {
+function subprocessEval(scriptBody: string): any {
   const script = [`import { highlightLine } from './src/ui/highlight.js';`, scriptBody].join('\n');
 
   const result = spawnSync(process.execPath, ['--import', 'tsx', '-e', script], {
@@ -146,4 +146,25 @@ test('highlightLine with unsupported TS language falls back to regex', () => {
   );
   assertHasAnsi(out);
   assertTextContent(out, 'def foo():');
+});
+
+test('tree-sitter highlighting uses syntax tokens rather than runtime success/warning', () => {
+  const out = subprocessEval(`
+    import { highlightWithTreeSitter, isTreeSitterAvailable } from './src/ui/treeSitterHighlight.js';
+    import { syntaxString, syntaxNumber, success, warning } from './src/ui/theme.js';
+    if (!isTreeSitterAvailable()) {
+      console.log(JSON.stringify({ skipped: true }));
+    } else {
+      const s = highlightWithTreeSitter('"hello"', 'typescript');
+      const n = highlightWithTreeSitter('42', 'typescript');
+      console.log(JSON.stringify({
+        hasSyntaxString: s ? s.includes(syntaxString('"hello"')) : false,
+        hasSyntaxNumber: n ? n.includes(syntaxNumber('42')) : false,
+      }));
+    }
+  `);
+  if (!out.skipped) {
+    assert.equal(out.hasSyntaxString, true, 'String literal must be styled with syntaxString');
+    assert.equal(out.hasSyntaxNumber, true, 'Numeric literal must be styled with syntaxNumber');
+  }
 });

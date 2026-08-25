@@ -185,6 +185,27 @@ export function error(text: string): string {
   return colorToken('error', text, { bold: true });
 }
 
+// ── Syntax highlighting tokens ────────────────────────────────────
+
+export function syntaxKeyword(text: string): string {
+  return colorToken('syntaxKeyword', text);
+}
+export function syntaxType(text: string): string {
+  return colorToken('syntaxType', text);
+}
+export function syntaxString(text: string): string {
+  return colorToken('syntaxString', text);
+}
+export function syntaxNumber(text: string): string {
+  return colorToken('syntaxNumber', text);
+}
+export function syntaxComment(text: string): string {
+  return colorToken('syntaxComment', text);
+}
+export function syntaxFunction(text: string): string {
+  return colorToken('syntaxFunction', text);
+}
+
 // ── Background colors ─────────────────────────────────────────────
 
 // Apply a background color from the theme using the given token name
