@@ -3,12 +3,13 @@
 import { join } from 'node:path'
 import {
   flushSessionEventObservations,
-  subscribeSessionEventObservation,
-  type SessionEvent,
+  subscribeSessionEventBdnsObservation,
 } from '../../agent/sessionEvents.js'
 import { BdnsDiagnostics } from './diagnostics.js'
 import { BdnsDiagnosticStore } from './diagnosticStore.js'
+import { projectCanonicalEventMetadata } from './evidenceCandidate.js'
 import { getDefaultProcessWitness, type ProcessWitness } from './processWitness.js'
+import type { BdnsObservation } from './types.js'
 import { WorkspaceWitness } from './workspaceWitness.js'
 
 export interface BdnsRuntimeOptions {
@@ -43,37 +44,28 @@ export class BdnsRuntime {
       root: options.workspaceRoot,
       diagnosticRoot: options.diagnosticRoot ?? join(options.runDir, 'diagnostics', 'bdns'),
     })
-    this.unsubscribeCanonical = subscribeSessionEventObservation((event: SessionEvent) => {
-      if (event.session_id !== options.sessionId) return
-      const observation = {
-        schemaVersion: 1 as const,
-        observerSequence: event.seq,
-        source: 'canonical' as const,
-        kind: 'canonical_event' as const,
+    this.unsubscribeCanonical = subscribeSessionEventBdnsObservation((observation) => {
+      const sessionId = observation.correlation.sessionId
+      if (sessionId && sessionId !== options.sessionId) return
+      const metadata = projectCanonicalEventMetadata(observation.payload)
+      this.ingest({
+        ...observation,
         correlation: {
-          sessionId: event.session_id,
-          ...(event.turn_id ? { turnId: event.turn_id } : {}),
-          canonicalEventId: event.event_id,
+          ...observation.correlation,
+          ...(metadata.toolCallId ? { toolCallId: observation.correlation.toolCallId ?? metadata.toolCallId } : {}),
         },
-        wallTime: event.ts,
-        monotonicTimeMs: event.seq,
-        evidenceState: 'complete' as const,
-        payload: event,
-      }
-      this.diagnostics.recordObservation(observation)
-      this.store.appendObservation(observation)
+        payload: metadata,
+      })
     }, { id: `bdns-canonical-${options.sessionId}`, maxQueue: 256 })
     this.unsubscribeProcess = this.processWitness.subscribe((observation) => {
       const sessionId = observation.correlation.sessionId
       if (sessionId && sessionId !== options.sessionId) return
-      this.diagnostics.recordObservation(observation)
-      this.store.appendObservation(observation)
+      this.ingest(observation)
     }, { id: `bdns-process-${options.sessionId}`, maxQueue: 256 })
     this.unsubscribeWorkspace = this.workspaceWitness.bus.subscribe({
       id: `bdns-workspace-${options.sessionId}`,
       onObservation: (observation) => {
-        this.diagnostics.recordObservation(observation)
-        this.store.appendObservation(observation)
+        this.ingest(observation)
       },
     })
   }
@@ -90,21 +82,40 @@ export class BdnsRuntime {
     if (incident) this.store.appendIncident(incident)
   }
 
+  /**
+   * Persist the current bounded bundle without disposing subscribers.
+   * Canonical callers must not await this on the hot path.
+   */
+  async flushPersistence(): Promise<void> {
+    if (this.closed) return
+    await flushSessionEventObservations()
+    await this.processWitness.bus.flush()
+    await this.workspaceWitness.bus.flush()
+    if (this.store.health().failures > 0) {
+      const incident = this.diagnostics.recordPersistenceDegraded({}, this.store.health().lastError)
+      if (incident) this.store.appendIncident(incident)
+    }
+    this.store.writeSummary(this.diagnostics.summary())
+    await this.store.flush()
+  }
+
   /** Flush and dispose session-owned observers without affecting execution. */
   async close(): Promise<boolean> {
     if (this.closed) return true
+    await this.flushPersistence()
     this.closed = true
-    await flushSessionEventObservations()
     this.unsubscribeCanonical()
     this.unsubscribeProcess()
     this.unsubscribeWorkspace()
-    await this.processWitness.bus.flush()
-    await this.workspaceWitness.bus.flush()
-    this.store.writeSummary(this.diagnostics.summary())
-    await this.store.flush()
     await this.workspaceWitness.close()
     const storeClosed = await this.store.close()
     return storeClosed && this.store.health().failures === 0
+  }
+
+  private ingest(observation: BdnsObservation): void {
+    const incident = this.diagnostics.recordObservation(observation)
+    this.store.appendObservation(observation)
+    if (incident) this.store.appendIncident(incident)
   }
 }
 

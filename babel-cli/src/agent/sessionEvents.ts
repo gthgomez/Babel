@@ -22,6 +22,7 @@ import {
   createBdnsObservationBus,
   type BdnsObservationBus,
 } from '../diagnostics/bdns/observationBus.js';
+import type { BdnsObservation } from '../diagnostics/bdns/types.js';
 
 export const SESSION_EVENT_SCHEMA_VERSION = 1 as const;
 export const SESSION_EVENTS_FILENAME = 'session-events.jsonl';
@@ -54,9 +55,26 @@ export function subscribeSessionEventObservation(
   });
 }
 
+/**
+ * Subscribe to the BDNS envelope for canonical session events.
+ *
+ * Observer sequence, wall-clock, and monotonic timestamps come from the bus
+ * (BDNS ingestion order), not from canonical `seq`.
+ */
+export function subscribeSessionEventBdnsObservation(
+  hook: (observation: BdnsObservation<SessionEvent>) => void | Promise<void>,
+  options: { id?: string; maxQueue?: number } = {},
+): () => void {
+  return sessionEventObservationBus.subscribe({
+    ...(options.id !== undefined ? { id: options.id } : {}),
+    ...(options.maxQueue !== undefined ? { maxQueue: options.maxQueue } : {}),
+    onObservation: hook,
+  });
+}
+
 /** Flush the bounded global compatibility observation queue before shutdown. */
 export function flushSessionEventObservations(timeoutMs = 1_000): Promise<boolean> {
-  return sessionEventObservationBus.flush(timeoutMs).then(() => true);
+  return sessionEventObservationBus.flush(timeoutMs);
 }
 
 /** Durable classification of a tool that was interrupted by process loss. */

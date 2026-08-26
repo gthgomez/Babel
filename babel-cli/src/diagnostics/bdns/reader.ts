@@ -67,6 +67,7 @@ export function formatBdnsDiagnosticHuman(bundle: BdnsDiagnosticBundle): string 
     `Evidence: ${String(summary?.evidenceState ?? 'unknown')}`,
     `Observations: ${String(summary?.observations ?? bundle.observations.length)}`,
     `Incidents: ${String(summary?.incidents ?? bundle.incidents.length)}`,
+    `Evidence candidates: ${String(Array.isArray(summary?.evidenceCandidates) ? summary.evidenceCandidates.length : 0)}`,
   ]
   if (bundle.errors.length > 0) lines.push(`Storage errors: ${bundle.errors.join('; ')}`)
   const hypotheses = Array.isArray(summary?.hypotheses) ? summary.hypotheses : []

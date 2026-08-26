@@ -1,17 +1,27 @@
 /** Cross-plane BDNS correlation and bounded incident projection. */
 
 import { randomUUID } from 'node:crypto'
+import {
+  projectCanonicalEventMetadata,
+  toEvidenceCandidateFromIncident,
+  toEvidenceCandidateFromObservation,
+  type BdnsEvidenceCandidate,
+  type CanonicalEventMetadata,
+} from './evidenceCandidate.js'
 import { toSafeBdnsValue } from './serialization.js'
 import type { BdnsCorrelation, BdnsFact, BdnsHealth, BdnsIncident, BdnsObservation } from './types.js'
 import type { BdnsIncidentCategory, BdnsEvidenceState } from './types.js'
 
 const MAX_OBSERVATIONS = 2_048
 const MAX_INCIDENTS = 128
+const MAX_CANDIDATES = 512
+const MAX_PAIRINGS = 256
 
 export interface BdnsDiagnosticSummary {
   schemaVersion: 1
   observations: number
   incidents: number
+  evidenceCandidates: BdnsEvidenceCandidate[]
   evidenceState: BdnsEvidenceState
   facts: BdnsFact[]
   hypotheses: string[]
@@ -38,12 +48,24 @@ export class BdnsDiagnostics {
   private readonly incidents: BdnsIncident[] = []
   private readonly facts: BdnsFact[] = []
   private readonly hypotheses: string[] = []
+  private readonly candidates: BdnsEvidenceCandidate[] = []
+  private readonly processByToolCall = new Map<string, { exitCode: number | null; evidenceState: BdnsEvidenceState; sequence?: number }>()
+  private readonly canonicalByToolCall = new Map<string, { outcome: ProcessOutcomeReconciliationInput['canonicalOutcome'] }>()
+  private readonly reconciledToolCalls = new Set<string>()
   private dropped = 0
   private truncated = 0
 
-  /** Attach one generic observation without making it semantic truth. */
-  recordObservation<T>(observation: BdnsObservation<T>): void {
-    const safe = { ...observation, payload: toSafeBdnsValue(observation.payload) }
+  /**
+   * Attach one observation as a fact/candidate without making it semantic truth.
+   *
+   * @param observation Bounded observation envelope
+   * @returns Incident created by cross-plane pairing, if any
+   */
+  recordObservation<T>(observation: BdnsObservation<T>): BdnsIncident | null {
+    const payload = observation.source === 'canonical'
+      ? projectCanonicalEventMetadata(observation.payload)
+      : toSafeBdnsValue(observation.payload)
+    const safe = { ...observation, payload }
     this.observations.push(safe)
     if (this.observations.length > MAX_OBSERVATIONS) {
       this.observations.shift()
@@ -57,6 +79,8 @@ export class BdnsDiagnostics {
       evidenceRefs: [`observation:${observation.observerSequence}`],
     })
     if (this.facts.length > MAX_OBSERVATIONS) this.facts.shift()
+    this.pushCandidate(toEvidenceCandidateFromObservation(safe))
+    return this.maybeReconcileProcessOutcome(safe)
   }
 
   /** Reconcile canonical and process outcomes without overwriting either. */
@@ -126,17 +150,34 @@ export class BdnsDiagnostics {
     this.dropped += health.dropped
     if (health.evidenceState === 'complete') return null
     return this.addIncident({
-      category: health.subscriberFailures > 0 ? 'PERSISTENCE_DEGRADED' : 'OBSERVER_DATA_LOSS',
+      category: 'OBSERVER_DATA_LOSS',
       correlation,
       facts: [{
         source: 'observer',
-        statement: `observer health is ${health.evidenceState}; dropped=${health.dropped}; coalesced=${health.coalesced}`,
+        statement: `observer health is ${health.evidenceState}; dropped=${health.dropped}; coalesced=${health.coalesced}; subscriberFailures=${health.subscriberFailures}`,
         evidenceRefs: ['observer:health'],
       }],
       inferences: ['Some diagnostic evidence is incomplete.'],
       hypotheses: [],
       confidence: 'high',
       evidenceState: health.evidenceState,
+    })
+  }
+
+  /** Record persistence-store degradation separately from observer failure. */
+  recordPersistenceDegraded(correlation: BdnsCorrelation = {}, detail?: string): BdnsIncident | null {
+    return this.addIncident({
+      category: 'PERSISTENCE_DEGRADED',
+      correlation,
+      facts: [{
+        source: 'persistence',
+        statement: detail ?? 'diagnostic store reported persistence_degraded',
+        evidenceRefs: ['persistence:health'],
+      }],
+      inferences: ['Durable diagnostic evidence may be incomplete.'],
+      hypotheses: [],
+      confidence: 'high',
+      evidenceState: 'partial',
     })
   }
 
@@ -151,6 +192,7 @@ export class BdnsDiagnostics {
       schemaVersion: 1,
       observations: this.observations.length,
       incidents: this.incidents.length,
+      evidenceCandidates: this.candidates.slice(-64),
       evidenceState,
       facts: this.facts.slice(-64),
       hypotheses: this.hypotheses.slice(-32),
@@ -179,6 +221,76 @@ export class BdnsDiagnostics {
     this.incidents.push(incident)
     if (this.incidents.length > MAX_INCIDENTS) this.incidents.shift()
     this.hypotheses.push(...incident.hypotheses)
+    this.pushCandidate(toEvidenceCandidateFromIncident(incident))
     return incident
+  }
+
+  private pushCandidate(candidate: BdnsEvidenceCandidate): void {
+    this.candidates.push(candidate)
+    if (this.candidates.length > MAX_CANDIDATES) this.candidates.shift()
+  }
+
+  private maybeReconcileProcessOutcome(observation: BdnsObservation): BdnsIncident | null {
+    const toolCallId = observation.correlation.toolCallId
+      ?? (isCanonicalMetadata(observation.payload) ? observation.payload.toolCallId : undefined)
+    if (!toolCallId) return null
+    this.rememberProcessFact(observation, toolCallId)
+    this.rememberCanonicalFact(observation, toolCallId)
+    if (this.reconciledToolCalls.has(toolCallId)) return null
+    const processFact = this.processByToolCall.get(toolCallId)
+    const canonicalFact = this.canonicalByToolCall.get(toolCallId)
+    if (!processFact || !canonicalFact) return null
+    this.reconciledToolCalls.add(toolCallId)
+    return this.reconcileProcessOutcome({
+      correlation: { ...observation.correlation, toolCallId },
+      canonicalOutcome: canonicalFact.outcome,
+      processExitCode: processFact.exitCode,
+      processEvidenceState: processFact.evidenceState,
+      ...(processFact.sequence === undefined ? {} : { processObservationSequence: processFact.sequence }),
+      processEvidenceRef: `observation:${String(processFact.sequence ?? observation.observerSequence)}`,
+    })
+  }
+
+  private rememberProcessFact(observation: BdnsObservation, toolCallId: string): void {
+    if (observation.source !== 'process') return
+    const payload = observation.payload && typeof observation.payload === 'object'
+      ? observation.payload as { exitCode?: number | null }
+      : {}
+    const exitCode = observation.kind === 'process_failed_to_start'
+      ? 1
+      : observation.kind === 'process_timeout' || observation.kind === 'process_killed'
+        ? 1
+        : observation.kind === 'process_exited'
+          ? (payload.exitCode ?? null)
+          : undefined
+    if (exitCode === undefined) return
+    this.processByToolCall.set(toolCallId, {
+      exitCode,
+      evidenceState: observation.evidenceState,
+      sequence: observation.observerSequence,
+    })
+    trimMap(this.processByToolCall, MAX_PAIRINGS)
+  }
+
+  private rememberCanonicalFact(observation: BdnsObservation, toolCallId: string): void {
+    if (observation.source !== 'canonical') return
+    const metadata = isCanonicalMetadata(observation.payload)
+      ? observation.payload
+      : projectCanonicalEventMetadata(observation.payload)
+    if (!metadata.canonicalOutcome) return
+    this.canonicalByToolCall.set(toolCallId, { outcome: metadata.canonicalOutcome })
+    trimMap(this.canonicalByToolCall, MAX_PAIRINGS)
+  }
+}
+
+function isCanonicalMetadata(value: unknown): value is CanonicalEventMetadata {
+  return Boolean(value && typeof value === 'object' && typeof (value as CanonicalEventMetadata).kind === 'string')
+}
+
+function trimMap<K, V>(map: Map<K, V>, max: number): void {
+  while (map.size > max) {
+    const first = map.keys().next().value
+    if (first === undefined) return
+    map.delete(first)
   }
 }
