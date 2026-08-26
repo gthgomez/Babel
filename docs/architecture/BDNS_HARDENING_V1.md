@@ -20,17 +20,17 @@ when a local test or repository check exercises it.
 | Bounded diagnostic reads | VERIFIED | Reader caps summary/JSONL file size and JSONL record count | Corrupt or oversized artifacts are reported as unavailable/corrupt, not repaired |
 | OTel independence | VERIFIED | Architecture contract and existing OTel tests preserve local operation without export | No external trace enrichment is available when OTel is disabled |
 | Windows portability | PARTIAL | Typecheck and focused tests run on Windows; path classification is explicit and workspace-root jailed | Full CI-equivalent Windows/public-release gates remain required before merge |
-| Normal-session enablement | PARTIAL | Runtime factory and `diagnose bdns`/`inspect bdns` surfaces are available; process witness is wired into local async execution | Automatic construction/closure of a session-owned BDNS runtime for every ChatEngine path is not yet complete |
+| Normal-session enablement | VERIFIED | `sessionAttach.test.ts` constructs a session-owned runtime from `finalizeParityTurnSync` and writes a bounded bundle; process `toolCallId` is forwarded through `executeActionWithPolicy` → `shellExecAsync` | Persistence is flushed after canonical event flush and is not awaited on the hot path; ChatEngine still does not own an explicit dispose hook |
 
 ## Enablement decision
 
-BDNS is **diagnostic opt-in at the persistence layer** for this boundary. The
-bounded process witness and canonical observation plumbing are safe to leave
-available, but a session must explicitly construct `BdnsRuntime` to persist a
-complete diagnostic bundle. This avoids creating a second lifecycle owner in
-the existing ChatEngine shutdown path before its async finalization contract
-is changed and tested.
+BDNS persistence is **session-owned and attached at the canonical flush choke
+point**. `flushSessionEventsRequired` schedules a fail-soft `BdnsRuntime`
+construct/flush after session-event durability. Canonical finalize does not
+await BDNS. Process observations carry `sessionId` and `toolCallId` when the
+policy executor has an idempotency key.
 
-The next promotion gate is to attach one runtime to the canonical session
-owner, close it after canonical event flush, and prove that normal CLI runs
-produce a bounded bundle without delaying or changing execution outcomes.
+Do not expand BDNS into a telemetry platform, incident dashboard, or B9–B11
+debugging campaign. Persistence and operator surfaces stay thin. The next
+major campaign is Executable Acceptance V0, which may consume
+`EvidenceCandidateV1` records without giving BDNS authority to define success.
