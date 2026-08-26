@@ -121,6 +121,7 @@
     "test:benchmark-eval": "tsx --no-warnings=ExperimentalWarning --test src/services/governanceBenchmark.test.ts \"src/eval/**/*.test.ts\"",
     "test:harness-acceptance": "tsx --no-warnings=ExperimentalWarning --test src/executor/architectureConformance.test.ts",
     "test:portable-workflow": "tsx --no-warnings=ExperimentalWarning --test src/portable/workflow.test.ts",
+    "test:acceptance-v0-fixture": "tsx --no-warnings=ExperimentalWarning scripts/run_acceptance_v0_fixture.ts",
     "test:proof-learning": "tsx --no-warnings=ExperimentalWarning --test src/services/proof.test.ts src/services/learning.test.ts src/commands/userCommandSmoke.test.ts",
     "test:prompts": "npx promptfoo eval --config promptfoo/config.yaml",
     "test:prompts:ci": "npx promptfoo eval --config promptfoo/config.yaml --output promptfoo/results.json --max-concurrency 3",
