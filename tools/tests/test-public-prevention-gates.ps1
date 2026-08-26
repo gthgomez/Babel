@@ -10,10 +10,13 @@ $canonicalScript = Join-Path $repoRoot 'tools/check-canonical-independence.ps1'
 $scrubScript = Join-Path $repoRoot 'tools/check-public-scrub.ps1'
 $contentPolicy = Join-Path $repoRoot 'tools/security/public-content-policy.json'
 $scrubPolicy = Join-Path $repoRoot 'tools/security/policy.json'
-$commonModule = Join-Path $repoRoot 'tools/security/tracked-scan-common.ps1'
+$commonModule = Join-Path $repoRoot 'tools/security/tracked-scan-common.psm1'
+$gitCandidate = 'C:\Program Files\Git\cmd\git.exe'
+$git = if (Test-Path -LiteralPath $gitCandidate -PathType Leaf) { $gitCandidate } else { (Get-Command git -ErrorAction Stop).Source }
 $pcontFixtureRoot = Join-Path $repoRoot 'tools/tests/fixtures/pcont007'
-$shell = (Get-Command pwsh -ErrorAction Stop).Source
-$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("babel-public-gates-{0}" -f [guid]::NewGuid().ToString('N'))
+$pwshCandidate = 'C:\Program Files\PowerShell\7\pwsh.exe'
+$shell = if (Test-Path -LiteralPath $pwshCandidate -PathType Leaf) { $pwshCandidate } else { (Get-Command pwsh -ErrorAction Stop).Source }
+$tempRoot = Join-Path $repoRoot (".codex-public-gates-{0}" -f [guid]::NewGuid().ToString('N'))
 
 function Assert-True([bool]$Condition, [string]$Message) {
   if (-not $Condition) { throw "ASSERTION FAILED: $Message" }
@@ -24,19 +27,33 @@ function Initialize-Fixture([string]$Name) {
   Copy-Item -LiteralPath $contentScript -Destination (Join-Path $root 'tools/check-public-content-policy.ps1')
   Copy-Item -LiteralPath $canonicalScript -Destination (Join-Path $root 'tools/check-canonical-independence.ps1')
   Copy-Item -LiteralPath $contentPolicy -Destination (Join-Path $root 'tools/security/public-content-policy.json')
-  Copy-Item -LiteralPath $commonModule -Destination (Join-Path $root 'tools/security/tracked-scan-common.ps1')
+  Copy-Item -LiteralPath $commonModule -Destination (Join-Path $root 'tools/security/tracked-scan-common.psm1')
   @('INTEGRATION.md', 'PROJECT_CONTEXT.md', 'README.md', 'prompt_catalog.yaml') | ForEach-Object {
     Set-Content -LiteralPath (Join-Path $root $_) -Value ("# {0}`n" -f $_)
   }
-  & git -C $root init --quiet
-  & git -C $root config user.email 'fixture@example.invalid'
-  & git -C $root config user.name 'Fixture Runner'
+  & $git -C $root init --quiet
+  & $git -C $root config user.email 'fixture@example.invalid'
+  & $git -C $root config user.name 'Fixture Runner'
   return $root
 }
-function Invoke-Gate([string]$Script, [string]$Root) {
-  $output = @(& $shell -NoProfile -File $Script -RepoRoot $Root -OutputFormat json 2>&1)
-  return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = ($output -join "`n") }
+function Invoke-Gate([string]$Script, [string]$Root, [switch]$WarningsAsErrors) {
+  $scriptLiteral = $Script.Replace("'", "''")
+  $rootLiteral = $Root.Replace("'", "''")
+  $warningsArgument = if ($WarningsAsErrors) { ' -WarningsAsErrors' } else { '' }
+  $exitCode = 0
+  $output = @(& $shell -NoProfile -Command "& '$scriptLiteral' -RepoRoot '$rootLiteral' -OutputFormat json$warningsArgument" 2>&1)
+  if (Get-Variable -Name LASTEXITCODE -ErrorAction SilentlyContinue) { $exitCode = $LASTEXITCODE }
+  return [pscustomobject]@{ ExitCode = $exitCode; Text = ($output -join "`n") }
 }
+function Invoke-Script([string]$Script, [string]$Root, [string]$Arguments = '') {
+  $scriptLiteral = $Script.Replace("'", "''")
+  $rootLiteral = $Root.Replace("'", "''")
+  $exitCode = 0
+  $output = @(& $shell -NoProfile -Command "& '$scriptLiteral' -RepoRoot '$rootLiteral' $Arguments" 2>&1)
+  if (Get-Variable -Name LASTEXITCODE -ErrorAction SilentlyContinue) { $exitCode = $LASTEXITCODE }
+  return [pscustomobject]@{ ExitCode = $exitCode; Text = ($output -join "`n") }
+}
+
 function Invoke-PCONT007Corpus {
   $fixtures = @(Get-ChildItem -LiteralPath $pcontFixtureRoot -Filter '*.txt' -File -Recurse | Sort-Object FullName)
   Assert-True ($fixtures.Count -gt 0) 'PCONT007 fixture corpus is empty'
@@ -46,7 +63,7 @@ function Invoke-PCONT007Corpus {
     $caseRoot = Initialize-Fixture ("pcont007-{0}-{1}" -f $category, $fixture.BaseName)
     $caseText = (Get-Content -Raw -LiteralPath $fixture.FullName).TrimEnd()
     Set-Content -LiteralPath (Join-Path $caseRoot 'sample.md') -Value ("# Fixture`n{0}`n" -f $caseText)
-    & git -C $caseRoot add .
+    & $git -C $caseRoot add .
     $result = Invoke-Gate (Join-Path $caseRoot 'tools/check-public-content-policy.ps1') $caseRoot
     $json = ConvertFrom-Json $result.Text
     $hasPCONT007 = @($json.findings | Where-Object id -eq 'PCONT007').Count -gt 0
@@ -63,7 +80,7 @@ function Invoke-PCONT007Corpus {
 try {
   $positive = Initialize-Fixture 'positive'
   Set-Content -LiteralPath (Join-Path $positive 'guide.md') -Value "# Valid Guide`n[Read the README](README.md)`nMeasured and verified guidance.`n"
-  & git -C $positive add .
+  & $git -C $positive add .
   $contentPass = Invoke-Gate (Join-Path $positive 'tools/check-public-content-policy.ps1') $positive
   Assert-True ($contentPass.ExitCode -eq 0) "positive content fixture failed: $($contentPass.Text)"
   $canonicalPass = Invoke-Gate (Join-Path $positive 'tools/check-canonical-independence.ps1') $positive
@@ -71,7 +88,7 @@ try {
   $forbiddenPath = Initialize-Fixture 'forbidden-public-path'
   New-Item -ItemType Directory -Path (Join-Path $forbiddenPath 'docs/audit') -Force | Out-Null
   Set-Content -LiteralPath (Join-Path $forbiddenPath 'docs/audit/internal.md') -Value '# Internal audit'
-  & git -C $forbiddenPath add .
+  & $git -C $forbiddenPath add .
   $forbiddenPathResult = Invoke-Gate (Join-Path $forbiddenPath 'tools/check-public-content-policy.ps1') $forbiddenPath
   Assert-True ($forbiddenPathResult.ExitCode -eq 1) 'forbidden public document path unexpectedly passed'
   Assert-True (@((ConvertFrom-Json $forbiddenPathResult.Text).findings.id) -contains 'PCONT013') 'forbidden public document path did not produce PCONT013'
@@ -92,7 +109,7 @@ try {
   Copy-Item -LiteralPath $scrubPolicy -Destination (Join-Path $gpguardDocs 'tools/security/policy.json')
   Set-Content -LiteralPath (Join-Path $gpguardDocs 'gpcguard-guide.md') -Value "# GPCGuard Integration`nBabel is used by GPCGuard for autonomous agent orchestration.`nRefer to the GPCGuard integration guide for setup steps.`n[GPCGuard docs](https://example.com)`n"
   Set-Content -LiteralPath (Join-Path $gpguardDocs 'package.json') -Value '{ "name": "fixture", "private": true }'
-  & git -C $gpguardDocs add .
+  & $git -C $gpguardDocs add .
   $gpguardContent = Invoke-Gate (Join-Path $gpguardDocs 'tools/check-public-content-policy.ps1') $gpguardDocs
   Assert-True ($gpguardContent.ExitCode -eq 0) "GPCGuard in doc unexpectedly failed content-policy: $($gpguardContent.Text)"
   $gpguardCanonical = Invoke-Gate (Join-Path $gpguardDocs 'tools/check-canonical-independence.ps1') $gpguardDocs
@@ -107,10 +124,10 @@ try {
   Copy-Item -LiteralPath $scrubPolicy -Destination (Join-Path $gpguardLockfile 'tools/security/policy.json')
   Set-Content -LiteralPath (Join-Path $gpguardLockfile 'package.json') -Value '{ "name": "fixture", "private": true }'
   Set-Content -LiteralPath (Join-Path $gpguardLockfile 'package-lock.json') -Value '{ "name": "fixture", "lockfileVersion": 3, "packages": { "node_modules/gpcguard": { "resolved": "file:../GPCGuard", "integrity": "sha512-fake" } } }'
-  & git -C $gpguardLockfile add .
-  $gpguardLockfileScrub = @(& $shell -NoProfile -File (Join-Path $gpguardLockfile 'tools/check-public-scrub.ps1') -RepoRoot $gpguardLockfile 2>&1)
-  Assert-True ($LASTEXITCODE -eq 1) "GPCGuard in lockfile: scrub should FAIL on file: dependency fingerprint but exited 0"
-  $gpguardLockfileText = $gpguardLockfileScrub -join "`n"
+  & $git -C $gpguardLockfile add .
+  $gpguardLockfileResult = Invoke-Script (Join-Path $gpguardLockfile 'tools/check-public-scrub.ps1') $gpguardLockfile
+  Assert-True ($gpguardLockfileResult.ExitCode -eq 1) "GPCGuard in lockfile: scrub should FAIL on file: dependency fingerprint but exited 0"
+  $gpguardLockfileText = $gpguardLockfileResult.Text
   Assert-True ($gpguardLockfileText -match 'local file dependency') "GPCGuard in lockfile: 'file:' pattern not reported"
   Assert-True ($gpguardLockfileText -match 'private dependency fingerprint') "GPCGuard in lockfile: forbidden dependency fingerprint not reported"
 
@@ -119,14 +136,14 @@ try {
   $vibe = Initialize-Fixture 'vibe'
   $vibeTerm = "vibe" + "coding"
   Set-Content -LiteralPath (Join-Path $vibe 'notes.md') -Value "# Design Notes`nWe adopted $vibeTerm practices during prototyping.`n"
-  & git -C $vibe add .
+  & $git -C $vibe add .
   $vibeWarn = Invoke-Gate (Join-Path $vibe 'tools/check-public-content-policy.ps1') $vibe
   Assert-True ($vibeWarn.ExitCode -eq 0) "PCONT012 warning should exit 0 but got $($vibeWarn.ExitCode)"
   Assert-True (($vibeWarn.Text -join "`n") -match 'PCONT012') "PCONT012 warning not reported in output: $($vibeWarn.Text)"
   Assert-True (($vibeWarn.Text -join "`n") -match 'warn') 'PCONT012 output missing warning indicator'
-  $vibeError = @(& $shell -NoProfile -File (Join-Path $vibe 'tools/check-public-content-policy.ps1') -RepoRoot $vibe -WarningsAsErrors -OutputFormat json 2>&1)
-  Assert-True ($LASTEXITCODE -eq 1) 'PCONT012 -WarningsAsErrors should exit 1 but got 0'
-  Assert-True (($vibeError -join "`n") -match 'PCONT012') 'PCONT012 not in -WarningsAsErrors findings'
+  $vibeError = Invoke-Gate (Join-Path $vibe 'tools/check-public-content-policy.ps1') $vibe -WarningsAsErrors
+  Assert-True ($vibeError.ExitCode -eq 1) 'PCONT012 -WarningsAsErrors should exit 1 but got 0'
+  Assert-True ($vibeError.Text -match 'PCONT012') 'PCONT012 not in -WarningsAsErrors findings'
 
   $negative = Initialize-Fixture 'negative'
   $machinePath = 'C:' + '\Users\someone\project'
@@ -166,8 +183,8 @@ const inferred = join(workspaceRoot, family, projectFolderName)
   [IO.File]::WriteAllBytes((Join-Path $negative 'invalid.txt'), [byte[]](0xC3,0x28))
   Set-Content -LiteralPath (Join-Path $negative 'large.txt') -Value ('x' * 1048577)
   Remove-Item -LiteralPath (Join-Path $negative 'INTEGRATION.md')
-  & git -C $negative add .
-  & git -C $negative add -f ignored.jsonl
+  & $git -C $negative add .
+  & $git -C $negative add -f ignored.jsonl
   $contentFail = Invoke-Gate (Join-Path $negative 'tools/check-public-content-policy.ps1') $negative
   Assert-True ($contentFail.ExitCode -eq 1) 'negative content fixture unexpectedly passed'
   $contentIds = @((ConvertFrom-Json $contentFail.Text).findings.id)
@@ -185,8 +202,8 @@ const inferred = join(workspaceRoot, family, projectFolderName)
   Assert-True ($null -ne $pcontFinding) 'PCONT007 contract fixture did not produce a finding'
   $findingFields = @($pcontFinding.PSObject.Properties.Name)
   Assert-True (($findingFields -join ',') -eq 'id,category,path,line,severity') "default JSON finding schema changed: $($findingFields -join ',')"
-  $humanOutput = @(& $shell -NoProfile -File (Join-Path $negative 'tools/check-public-content-policy.ps1') -RepoRoot $negative 2>&1)
-  $humanText = $humanOutput -join "`n"
+  $humanResult = Invoke-Script (Join-Path $negative 'tools/check-public-content-policy.ps1') $negative
+  $humanText = $humanResult.Text
   Assert-True ($humanText -match 'clear_unsupported_claim') 'PCONT007 human diagnostics omitted classification'
   Assert-True ($humanText -match 'matched:') 'PCONT007 human diagnostics omitted matched span'
   Assert-True ($humanText -notmatch 'someone') 'PCONT007 human diagnostics exposed source text'
@@ -204,7 +221,7 @@ const inferred = join(workspaceRoot, family, projectFolderName)
   New-Item -ItemType Directory -Path (Join-Path $scrubRoot 'tools/security') -Force | Out-Null
   Copy-Item -LiteralPath $scrubScript -Destination (Join-Path $scrubRoot 'tools/check-public-scrub.ps1')
   Copy-Item -LiteralPath $scrubPolicy -Destination (Join-Path $scrubRoot 'tools/security/policy.json')
-  Copy-Item -LiteralPath $commonModule -Destination (Join-Path $scrubRoot 'tools/security/tracked-scan-common.ps1')
+  Copy-Item -LiteralPath $commonModule -Destination (Join-Path $scrubRoot 'tools/security/tracked-scan-common.psm1')
   Add-Content -LiteralPath (Join-Path $scrubRoot 'tools/check-public-scrub.ps1') -Value '# FixtureMarkerXYZ'
   New-Item -ItemType Directory -Path (Join-Path $scrubRoot '.github') -Force | Out-Null
   Set-Content -LiteralPath (Join-Path $scrubRoot '.github/hidden.yml') -Value 'value: FixtureMarkerXYZ'
@@ -212,35 +229,42 @@ const inferred = join(workspaceRoot, family, projectFolderName)
   Set-Content -LiteralPath (Join-Path $scrubRoot 'ignored.txt') -Value 'FixtureMarkerXYZ'
   $supplemental = Join-Path $tempRoot 'supplemental.json'
   Set-Content -LiteralPath $supplemental -Value '{"forbidden_private_identifiers":["FixtureMarkerXYZ"],"forbidden_dependency_fingerprints":[]}'
-  & git -C $scrubRoot init --quiet
-  & git -C $scrubRoot config user.email 'fixture@example.invalid'
-  & git -C $scrubRoot config user.name 'Fixture Runner'
-  & git -C $scrubRoot add .
-  & git -C $scrubRoot add -f ignored.txt
+  & $git -C $scrubRoot init --quiet
+  & $git -C $scrubRoot config user.email 'fixture@example.invalid'
+  & $git -C $scrubRoot config user.name 'Fixture Runner'
+  & $git -C $scrubRoot add .
+  & $git -C $scrubRoot add -f ignored.txt
   $env:BABEL_PRIVATE_SCRUB_POLICY_PATH = (Join-Path $tempRoot 'missing.json')
-  $scrubOutput = @(& $shell -NoProfile -File (Join-Path $scrubRoot 'tools/check-public-scrub.ps1') -RepoRoot $scrubRoot -SupplementalPolicyPath $supplemental 2>&1)
-  $scrubExit = $LASTEXITCODE
+  $supplementalLiteral = $supplemental.Replace("'", "''")
+  $scrubResult = Invoke-Script (Join-Path $scrubRoot 'tools/check-public-scrub.ps1') $scrubRoot "-SupplementalPolicyPath '$supplementalLiteral'"
+  $scrubOutput = $scrubResult.Text
+  $scrubExit = $scrubResult.ExitCode
+
   Assert-True ($scrubExit -eq 1) 'supplemental scan did not inspect its own scanner file'
   Assert-True (($scrubOutput -join "`n") -notmatch 'FixtureMarkerXYZ') 'supplemental finding exposed the matched value'
   Assert-True (($scrubOutput -join "`n") -match 'identifier: tools/check-public-scrub.ps1:') 'supplemental finding omitted redacted path and line'
   Assert-True (($scrubOutput -join "`n") -match 'identifier: .github/hidden.yml:') 'supplemental scan skipped a hidden tracked file'
   Assert-True (($scrubOutput -join "`n") -match 'identifier: ignored.txt:') 'supplemental scan skipped a forced ignored tracked file'
 
-  $missingOutput = @(& $shell -NoProfile -File (Join-Path $scrubRoot 'tools/check-public-scrub.ps1') -RepoRoot $scrubRoot 2>&1)
-  Assert-True ($LASTEXITCODE -ne 0) 'configured missing supplemental policy did not fail closed'
+  $missingResult = Invoke-Script (Join-Path $scrubRoot 'tools/check-public-scrub.ps1') $scrubRoot
+  $missingOutput = $missingResult.Text
+  Assert-True ($missingResult.ExitCode -ne 0) 'configured missing supplemental policy did not fail closed'
   Assert-True (($missingOutput -join "`n") -notmatch [regex]::Escape($env:BABEL_PRIVATE_SCRUB_POLICY_PATH)) 'missing supplemental failure exposed its configured path'
   Remove-Item Env:BABEL_PRIVATE_SCRUB_POLICY_PATH -ErrorAction SilentlyContinue
-  $requiredMissingOutput = @(& $shell -NoProfile -File (Join-Path $scrubRoot 'tools/check-public-scrub.ps1') -RepoRoot $scrubRoot -RequireSupplementalPolicy 2>&1)
-  Assert-True ($LASTEXITCODE -ne 0) 'required supplemental policy absence did not fail closed'
+  $requiredMissingResult = Invoke-Script (Join-Path $scrubRoot 'tools/check-public-scrub.ps1') $scrubRoot '-RequireSupplementalPolicy'
+  Assert-True ($requiredMissingResult.ExitCode -ne 0) 'required supplemental policy absence did not fail closed'
   $malformedPolicy = Join-Path $tempRoot 'malformed-supplemental.json'
   Set-Content -LiteralPath $malformedPolicy -Value '{'
-  $malformedOutput = @(& $shell -NoProfile -File (Join-Path $scrubRoot 'tools/check-public-scrub.ps1') -RepoRoot $scrubRoot -SupplementalPolicyPath $malformedPolicy 2>&1)
-  Assert-True ($LASTEXITCODE -ne 0) 'malformed supplemental policy did not fail closed'
+  $malformedLiteral = $malformedPolicy.Replace("'", "''")
+  $malformedResult = Invoke-Script (Join-Path $scrubRoot 'tools/check-public-scrub.ps1') $scrubRoot "-SupplementalPolicyPath '$malformedLiteral'"
+  $malformedOutput = $malformedResult.Text
+  Assert-True ($malformedResult.ExitCode -ne 0) 'malformed supplemental policy did not fail closed'
   Assert-True (($malformedOutput -join "`n") -notmatch [regex]::Escape($malformedPolicy)) 'malformed supplemental failure exposed its configured path'
   $emptyPolicy = Join-Path $tempRoot 'empty-supplemental.json'
   Set-Content -LiteralPath $emptyPolicy -Value '{"forbidden_private_identifiers":[],"forbidden_dependency_fingerprints":[]}'
-  $emptyOutput = @(& $shell -NoProfile -File (Join-Path $scrubRoot 'tools/check-public-scrub.ps1') -RepoRoot $scrubRoot -SupplementalPolicyPath $emptyPolicy -RequireSupplementalPolicy 2>&1)
-  Assert-True ($LASTEXITCODE -ne 0) 'required empty supplemental policy did not fail closed'
+  $emptyLiteral = $emptyPolicy.Replace("'", "''")
+  $emptyResult = Invoke-Script (Join-Path $scrubRoot 'tools/check-public-scrub.ps1') $scrubRoot "-SupplementalPolicyPath '$emptyLiteral' -RequireSupplementalPolicy"
+  Assert-True ($emptyResult.ExitCode -ne 0) 'required empty supplemental policy did not fail closed'
 
   Write-Host 'Public prevention gate fixture tests passed.' -ForegroundColor Green
 } finally {

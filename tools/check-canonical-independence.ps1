@@ -13,15 +13,15 @@ if ([string]::IsNullOrWhiteSpace($PolicyPath)) { $PolicyPath = Join-Path $RepoRo
 if (-not (Test-Path -LiteralPath $PolicyPath -PathType Leaf)) { throw "Canonical independence policy not found: $PolicyPath" }
 try { $policy = Get-Content -Raw -LiteralPath $PolicyPath | ConvertFrom-Json } catch { throw "Canonical independence policy is malformed: $PolicyPath" }
 $config = $policy.canonical_independence
-$commonModule = Join-Path $RepoRoot 'tools/security/tracked-scan-common.ps1'
+$commonModule = Join-Path $RepoRoot 'tools/security/tracked-scan-common.psm1'
 if (-not (Test-Path -LiteralPath $commonModule -PathType Leaf)) { throw "Tracked scan module not found: $commonModule" }
-. $commonModule
+Import-Module -Name $commonModule -Force
 
-$findings = [Collections.Generic.List[object]]::new()
+$findings = @()
 function Add-Finding([string]$Id, [string]$Category, [string]$Path, [int]$Line) {
-  $findings.Add([pscustomobject]@{ id = $Id; category = $Category; path = $Path; line = $Line })
+  $script:findings += [pscustomobject]@{ id = $Id; category = $Category; path = $Path; line = $Line }
 }
-$validTemporaryExceptions = [Collections.Generic.List[object]]::new()
+$validTemporaryExceptions = @()
 foreach ($entry in @($config.temporary_exceptions)) {
   $requiredMetadata = @('id', 'rule_id', 'path', 'pattern', 'rationale', 'evidence', 'expires', 'replacement_pr')
   $isValid = $true
@@ -33,7 +33,7 @@ foreach ($entry in @($config.temporary_exceptions)) {
     if (-not [datetime]::TryParseExact([string]$entry.expires, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$expiry)) { $isValid = $false }
     elseif ($expiry.Date -lt [datetime]::UtcNow.Date) { $isValid = $false }
   }
-  if ($isValid) { $validTemporaryExceptions.Add($entry) }
+  if ($isValid) { $validTemporaryExceptions += $entry }
   else { Add-Finding 'CCFG001' 'invalid-temporary-exception' 'tools/security/public-content-policy.json' 0 }
 }
 function Test-IsTemporarilyExcepted([string]$RuleId, [string]$Path, [string]$Line) {
@@ -42,18 +42,18 @@ function Test-IsTemporarilyExcepted([string]$RuleId, [string]$Path, [string]$Lin
   }
   return $false
 }
-$validFixtureExceptions = [Collections.Generic.List[object]]::new()
+$validFixtureExceptions = @()
 foreach ($entry in @($config.fixture_exceptions)) {
   if (-not [string]::IsNullOrWhiteSpace([string]$entry.id) -and -not [string]::IsNullOrWhiteSpace([string]$entry.rule_id) -and
       -not [string]::IsNullOrWhiteSpace([string]$entry.path) -and -not [string]::IsNullOrWhiteSpace([string]$entry.pattern) -and
-      -not [string]::IsNullOrWhiteSpace([string]$entry.rationale)) { $validFixtureExceptions.Add($entry) }
+      -not [string]::IsNullOrWhiteSpace([string]$entry.rationale)) { $validFixtureExceptions += $entry }
   else { Add-Finding 'CCFG002' 'invalid-fixture-exception' 'tools/security/public-content-policy.json' 0 }
 }
-$validBinaryAllowlist = [Collections.Generic.List[object]]::new()
+$validBinaryAllowlist = @()
 foreach ($entry in @($config.binary_asset_allowlist)) {
   if (($entry.PSObject.Properties.Name -contains 'path') -and ($entry.PSObject.Properties.Name -contains 'sha256') -and
       ($entry.PSObject.Properties.Name -contains 'rationale') -and -not [string]::IsNullOrWhiteSpace([string]$entry.path) -and [string]$entry.sha256 -match '^[0-9a-fA-F]{64}$' -and
-      -not [string]::IsNullOrWhiteSpace([string]$entry.rationale)) { $validBinaryAllowlist.Add($entry) }
+      -not [string]::IsNullOrWhiteSpace([string]$entry.rationale)) { $validBinaryAllowlist += $entry }
   else { Add-Finding 'CCFG003' 'invalid-binary-asset-allowlist' 'tools/security/public-content-policy.json' 0 }
 }
 function Test-IsExcluded([string]$Path) {
