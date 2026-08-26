@@ -54,7 +54,7 @@ Babel already owns **completion**. It does not yet own **what success means**.
 That is now the differentiated bet. Provenance, permission boundaries, AI-BOMs,
 session hash chains, and adversarial verification prompting are being
 productized around Babel. "Ask the model to falsify its own work" is already a
-portable skill (Prove It). The harder, still-uncommoditized problem is
+portable adversarial verification skill. The harder, still-uncommoditized problem is
 runtime-enforced separation of authority:
 
 ```text
@@ -86,7 +86,7 @@ brain.
 | Compiler output is hidden from the implementor by default | V0 flag to reveal for debug only                                                       | Otherwise the implementor optimizes the contract instead of the task                                                            |
 | Sufficiency engine is deterministic                       | No LLM judge in V0                                                                     | A second model reviewer is not independent acceptance                                                                           |
 | BDNS is a sensor, not a judge                             | Consume `EvidenceCandidateV1` only                                                     | Invariants 11 and 12 from the BDNS campaign                                                                                     |
-| Prove It is a baseline arm, not a Babel feature           | Same model + Prove It skill vs Acceptance V0                                           | If V0 cannot beat that cheap baseline on consequential false completions, kill or shrink the architecture                       |
+| Adversarial verification is a baseline arm, not a Babel feature | Same model plus an adversarial verification skill vs Acceptance V0                  | If V0 cannot beat that cheap baseline on consequential false completions, kill or shrink the architecture                       |
 | Promotion is measured                                     | V0 never writes kernel completion                                                      | A later campaign may consult sufficiency only after pre-registered lift                                                         |
 | Start on Chat/headless experimental path                  | Not a Deep-mode rewrite                                                                | Deep already has a verifier contract. The semantic gap is largest on daily Chat                                                 |
 
@@ -547,7 +547,7 @@ Reuse the existing arms × replicates / paired-delta infrastructure and pair by
 Pre-register hidden oracles and the candidate set before reveal. Report raw
 counts and paired deltas for false-accept detection, true-accept, false
 rejection, insufficient evidence, escalation, coverage, tokens, latency, and
-wall time. A post-hoc Prove It detector is optional and is not a prevention arm.
+wall time. A post-hoc adversarial verification detector is optional and is not a prevention arm.
 
 `acceptance/campaign.ts` is the pure cell-coordination boundary. It verifies
 the frozen dataset and manifest, refuses design-only or excluded populations,
@@ -564,7 +564,7 @@ Run only if A7a demonstrates meaningful discrimination lift. Compare:
 | Arm                   | Meaning                                                            |
 | --------------------- | ------------------------------------------------------------------ |
 | `babel_control`       | Current Babel                                                      |
-| `prove_it_prompt`     | Same model plus the adversarial Prove It skill/prompt              |
+| `prove_it_prompt`     | Same model plus an adversarial verification skill/prompt           |
 | `acceptance_v0_gated` | Acceptance V0 gating on a high-assurance experimental profile only |
 
 Measure consequential false completion, true completion, false rejection,
@@ -690,7 +690,7 @@ Each PR is independently reviewable. Do not stack A7 on an unmerged A5.
 | P4  | feat(acceptance): evidence admission from receipts and BDNS candidates | P3         | `acceptance/evidenceAdmission.ts` + tests           | A4            |
 | P5  | feat(acceptance): deterministic sufficiency engine                     | P4         | `acceptance/sufficiency.ts` + golden tables         | A5            |
 | P6  | feat(acceptance): opt-in run artifacts                                 | P5         | thin inspect/record glue, **not** chatEngine growth | A6            |
-| P7  | feat(eval): blinded acceptance arms vs Prove It                        | P6         | experimental program wiring, preregistered cells    | A7            |
+| P7  | feat(eval): blinded acceptance arms vs adversarial verification         | P6         | experimental program wiring, preregistered cells    | A7            |
 | P8  | docs: A8 promotion / kill record                                       | P7         | campaign addendum                                   | A8            |
 
 P6 must not add more than a small attach helper. If ChatEngine would grow,
@@ -722,7 +722,7 @@ right **first merge**. Shipping it as one architecture would repeat the
 failure mode the moat research warned about: building a heavier verification
 prompt and calling it independence.
 
-Prove It already commoditizes "ask better adversarial questions." Babel should
+Adversarial verification already covers "ask better adversarial questions." Babel should
 only keep this campaign if A7 shows lift on hidden, consequential false
 completions. Until then, treat V0 as an experiment with a kill switch, sitting
 beside the kernel rather than inside it.

@@ -172,7 +172,7 @@ criterion.
 |   # | Preregistered criterion                                                                                             | Status     |
 | --: | ------------------------------------------------------------------------------------------------------------------- | ---------- |
 |   1 | Acceptance does not materially improve consequential false-accept detection versus an independent frontier reviewer | UNRESOLVED |
-|   2 | Gated Acceptance does not reduce consequential false completion versus the Prove It prevention baseline             | UNRESOLVED |
+|   2 | Gated Acceptance does not reduce consequential false completion versus the adversarial verification prevention baseline | UNRESOLVED |
 |   3 | False rejection exceeds the preregistered bound                                                                     | UNRESOLVED |
 |   4 | Escalation burden exceeds the preregistered bound                                                                   | UNRESOLVED |
 |   5 | Contract compilation repeatedly paraphrases without falsifiable semantic value                                      | UNRESOLVED |
