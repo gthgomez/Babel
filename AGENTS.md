@@ -83,6 +83,7 @@ Default stance:
 - Autonomous through safe local inspection, verification, intentional staging, focused commit, non-main branch push, and draft PR creation when gates pass
 - Stop for hard-risk conditions: unrelated dirty-tree changes, secrets, failed required checks, destructive Git operations, direct `main` pushes, production deploys, or mixed unrelated concerns
 - **This is the canonical public repo.** Required `protect-main` checks: `security`, `public-content-policy`, `linux-validation`, `public-pr-metadata`, `windows-portability`. Never skip or bypass them.
+- Run `.\scripts\agent-preflight.ps1` before mutation or staging, use `.\scripts\agent-worktree.ps1 -Action create -Name <task>` for substantial isolated work, and use `.\scripts\agent-pr-gate.ps1 -PR <number> -ReviewedHeadSha <sha>` before any merge decision.
 
 ## How To Work Here
 
