@@ -18,20 +18,20 @@ function Invoke-AgentProcess {
     [Parameter(Mandatory = $true)][string]$WorkingDirectory
   )
 
-  $output = [System.Collections.Generic.List[string]]::new()
+  $output = @()
   $exitCode = 127
   try {
     Push-Location -LiteralPath $WorkingDirectory
     try {
       foreach ($line in @(& $FilePath @Arguments 2>&1)) {
-        $output.Add([string]$line)
+        $output += [string]$line
       }
       $exitCode = $LASTEXITCODE
     } finally {
       Pop-Location
     }
   } catch {
-    $output.Add($_.Exception.Message)
+    $output += $_.Exception.Message
   }
   return [pscustomobject]@{
     exitCode = $exitCode
@@ -129,7 +129,7 @@ function Get-AgentStatusSnapshot {
   $result = Invoke-AgentGit -GitPath $GitPath -RepoRoot $RepoRoot -Arguments @('status', '--porcelain=v2', '--branch', '--untracked-files=all')
   $lines = @($result.output | ForEach-Object { [string]$_ })
   $entries = @($lines | Where-Object { -not $_.StartsWith('#') -and -not [string]::IsNullOrWhiteSpace($_) })
-  $dirtyPaths = [System.Collections.Generic.List[string]]::new()
+  $dirtyPaths = @()
   $stagedCount = 0
   $unstagedCount = 0
 
@@ -153,7 +153,7 @@ function Get-AgentStatusSnapshot {
         if ($xy.Length -ge 2 -and $xy[1] -ne '.') { $unstagedCount++ }
       }
     }
-    if (-not [string]::IsNullOrWhiteSpace($path)) { $dirtyPaths.Add($path) }
+    if (-not [string]::IsNullOrWhiteSpace($path)) { $dirtyPaths += $path }
   }
 
   $branch = ($lines | Where-Object { $_.StartsWith('# branch.head ') } | Select-Object -First 1)
@@ -239,3 +239,21 @@ function Write-AgentResult {
   }
   Write-Output ($Result | ConvertTo-Json -Depth 20)
 }
+
+Export-ModuleMember -Function @(
+  'Set-AgentNonInteractiveEnvironment',
+  'Invoke-AgentProcess',
+  'Get-AgentCommandPath',
+  'Get-AgentGitText',
+  'Invoke-AgentGit',
+  'Invoke-AgentGh',
+  'Get-AgentRemoteUrl',
+  'ConvertTo-AgentAbsolutePath',
+  'Get-AgentRemoteSlug',
+  'Test-AgentRemoteCredentialFree',
+  'Test-AgentSha',
+  'Get-AgentStatusSnapshot',
+  'Get-AgentWorktreeTopology',
+  'Get-AgentCredentialIsolation',
+  'Write-AgentResult'
+)

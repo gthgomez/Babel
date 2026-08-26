@@ -10,16 +10,16 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-. (Join-Path $PSScriptRoot 'agent-git-common.ps1')
+Import-Module (Join-Path $PSScriptRoot 'agent-git-common.psm1') -Force
 
 $resolvedRepoRoot = $null
-$blockers = [System.Collections.Generic.List[string]]::new()
+$blockers = @()
 
 try {
   $resolvedRepoRoot = (Resolve-Path -LiteralPath $RepoRoot -ErrorAction Stop).Path
   $envState = Set-AgentNonInteractiveEnvironment
   if (-not (Test-Path -LiteralPath $GitPath -PathType Leaf)) {
-    $blockers.Add('git_executable_unavailable')
+    $blockers += 'git_executable_unavailable'
     throw "Git executable not found: $GitPath"
   }
 
@@ -32,19 +32,19 @@ try {
       [StringComparison]::OrdinalIgnoreCase
     )
   }
-  if (-not $rootMatches) { $blockers.Add('wrong_repository_root') }
+  if (-not $rootMatches) { $blockers += 'wrong_repository_root' }
 
   $status = Get-AgentStatusSnapshot -GitPath $GitPath -RepoRoot $resolvedRepoRoot
-  if (-not $status.commandOk) { $blockers.Add('git_status_failed') }
+  if (-not $status.commandOk) { $blockers += 'git_status_failed' }
   $head = Get-AgentGitText -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('rev-parse', 'HEAD')
   $branchResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('symbolic-ref', '--quiet', '--short', 'HEAD')
   $branch = if ($branchResult.exitCode -eq 0) { $branchResult.text.Trim() } else { $null }
   $remoteUrl = Get-AgentRemoteUrl -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Remote $ExpectedRemote
   $remoteSlug = Get-AgentRemoteSlug -RemoteUrl $remoteUrl
   if (-not [string]::Equals($remoteSlug, $ExpectedRepository, [StringComparison]::OrdinalIgnoreCase)) {
-    $blockers.Add('unexpected_origin_repository')
+    $blockers += 'unexpected_origin_repository'
   }
-  if (-not (Test-AgentRemoteCredentialFree -RemoteUrl $remoteUrl)) { $blockers.Add('token_bearing_remote_url') }
+  if (-not (Test-AgentRemoteCredentialFree -RemoteUrl $remoteUrl)) { $blockers += 'token_bearing_remote_url' }
 
   $upstream = Get-AgentGitText -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}')
   $ahead = $null

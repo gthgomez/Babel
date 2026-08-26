@@ -17,13 +17,13 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-. (Join-Path $PSScriptRoot 'agent-git-common.ps1')
+Import-Module (Join-Path $PSScriptRoot 'agent-git-common.psm1') -Force
 
 $resolvedRepoRoot = $null
 $ghResolvedPath = $GhPath
 $checks = [ordered]@{}
-$blockers = [System.Collections.Generic.List[string]]::new()
-$warnings = [System.Collections.Generic.List[string]]::new()
+$blockers = @()
+$warnings = @()
 $localHead = $null
 $originMain = $null
 $prData = $null
@@ -36,12 +36,12 @@ function Add-AgentCheck {
     [string]$Blocker = ''
   )
   $checks[$Name] = $Passed
-  if (-not $Passed -and -not [string]::IsNullOrWhiteSpace($Blocker)) { $blockers.Add($Blocker) }
+  if (-not $Passed -and -not [string]::IsNullOrWhiteSpace($Blocker)) { $script:blockers += $Blocker }
 }
 
 function Add-AgentWarning {
   param([Parameter(Mandatory = $true)][string]$Message)
-  if (-not $warnings.Contains($Message)) { $warnings.Add($Message) }
+  if ($script:warnings -notcontains $Message) { $script:warnings += $Message }
 }
 
 function Test-AgentCheckName {
@@ -183,7 +183,7 @@ try {
   }
   if ($null -ne $ciApi -and $null -ne $ciApi.check_runs) { $checkRuns = @($ciApi.check_runs) }
   $ciHeadMatch = $checkRuns.Count -gt 0
-  $requiredResults = [System.Collections.Generic.List[object]]::new()
+  $requiredResults = @()
   $requiredChecksGreen = $true
   foreach ($required in $RequiredCheck) {
     $candidate = $checkRuns | Where-Object { Test-AgentCheckName -Actual ([string]$_.name) -Expected $required } | Select-Object -First 1
@@ -191,14 +191,14 @@ try {
     if ($null -eq $candidate -or -not $candidateHeadOk) { $ciHeadMatch = $false }
     $passed = $null -ne $candidate -and $candidateHeadOk -and [string]::Equals([string]$candidate.status, 'completed', [StringComparison]::OrdinalIgnoreCase) -and [string]::Equals([string]$candidate.conclusion, 'success', [StringComparison]::OrdinalIgnoreCase)
     if (-not $passed) { $requiredChecksGreen = $false }
-    $requiredResults.Add([ordered]@{
+    $requiredResults += [ordered]@{
       name = $required
       found = $null -ne $candidate
       status = if ($null -ne $candidate) { [string]$candidate.status } else { $null }
       conclusion = if ($null -ne $candidate) { [string]$candidate.conclusion } else { $null }
       headSha = if ($null -ne $candidate) { [string]$candidate.head_sha } else { $null }
       passed = $passed
-    })
+    }
   }
   Add-AgentCheck -Name 'CI_HEAD_MATCH' -Passed $ciHeadMatch -Blocker 'ci_not_bound_to_pr_head'
   Add-AgentCheck -Name 'REQUIRED_CHECKS_GREEN' -Passed $requiredChecksGreen -Blocker 'required_checks_not_green'

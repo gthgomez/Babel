@@ -133,12 +133,12 @@ try {
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('worktree', 'remove', $worktree.path) | Out-Null
 
   $prJson = '{"number":42,"url":"https://github.com/gthgomez/Babel/pull/42","state":"OPEN","isDraft":false,"baseRefName":"main","baseRefOid":"' + $mainSha + '","headRefName":"agent/fixture","headRefOid":"' + $headSha + '","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","isCrossRepository":false,"headRepositoryOwner":{"login":"gthgomez"},"headRepository":{"nameWithOwner":"gthgomez/Babel"}}'
-  $checkItems = [System.Collections.Generic.List[string]]::new()
-  $checkItems.Add(('{"name":"security","status":"completed","conclusion":"success","head_sha":"' + $headSha + '"}'))
-  $checkItems.Add(('{"name":"public-content-policy","status":"completed","conclusion":"success","head_sha":"' + $headSha + '"}'))
-  $checkItems.Add(('{"name":"linux-validation","status":"completed","conclusion":"success","head_sha":"' + $headSha + '"}'))
-  $checkItems.Add(('{"name":"public-pr-metadata","status":"completed","conclusion":"success","head_sha":"' + $headSha + '"}'))
-  $checkItems.Add(('{"name":"windows-portability","status":"completed","conclusion":"success","head_sha":"' + $headSha + '"}'))
+  $checkItems = @()
+  $checkItems += '{"name":"security","status":"completed","conclusion":"success","head_sha":"' + $headSha + '"}'
+  $checkItems += '{"name":"public-content-policy","status":"completed","conclusion":"success","head_sha":"' + $headSha + '"}'
+  $checkItems += '{"name":"linux-validation","status":"completed","conclusion":"success","head_sha":"' + $headSha + '"}'
+  $checkItems += '{"name":"public-pr-metadata","status":"completed","conclusion":"success","head_sha":"' + $headSha + '"}'
+  $checkItems += '{"name":"windows-portability","status":"completed","conclusion":"success","head_sha":"' + $headSha + '"}'
   $checkJson = '{"check_runs":[' + ($checkItems -join ',') + ']}'
   @(
     'param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)',

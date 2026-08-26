@@ -17,12 +17,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-. (Join-Path $PSScriptRoot 'agent-git-common.ps1')
+Import-Module (Join-Path $PSScriptRoot 'agent-git-common.psm1') -Force
 
 $resolvedRepoRoot = $null
 $checks = [ordered]@{}
-$blockers = [System.Collections.Generic.List[string]]::new()
-$warnings = [System.Collections.Generic.List[string]]::new()
+$blockers = @()
+$warnings = @()
 $statusSnapshot = $null
 $topology = $null
 $credential = $null
@@ -43,13 +43,13 @@ function Add-AgentCheck {
   )
   $checks[$Name] = $Passed
   if (-not $Passed -and -not [string]::IsNullOrWhiteSpace($Blocker)) {
-    $blockers.Add($Blocker)
+    $script:blockers += $Blocker
   }
 }
 
 function Add-AgentWarning {
   param([Parameter(Mandatory = $true)][string]$Message)
-  if (-not $warnings.Contains($Message)) { $warnings.Add($Message) }
+  if ($script:warnings -notcontains $Message) { $script:warnings += $Message }
 }
 
 try {
