@@ -26,6 +26,75 @@ $commonModule = Join-Path $RepoRoot 'tools/security/tracked-scan-common.ps1'
 if (-not (Test-Path -LiteralPath $commonModule -PathType Leaf)) { throw "Tracked scan module not found: $commonModule" }
 . $commonModule
 
+function Get-PCONT007Classification {
+  param(
+    [Parameter(Mandatory = $true)][string]$Line,
+    [Parameter(Mandatory = $true)]$Policy
+  )
+  $certaintySpans = @([regex]::Matches($Line, [string]$Policy.absolute_claim.pattern))
+  if ($certaintySpans.Count -eq 0) {
+    return [pscustomobject]@{ classification = 'none'; spans = @(); unqualified_spans = @() }
+  }
+
+  $qualifiedSpans = @()
+  foreach ($pattern in @($Policy.absolute_claim.qualified_patterns)) {
+    if ([string]::IsNullOrWhiteSpace([string]$pattern)) { continue }
+    $qualifiedSpans += @([regex]::Matches($Line, [string]$pattern))
+  }
+  $isAmbiguous = $false
+  foreach ($pattern in @($Policy.absolute_claim.ambiguous_context_patterns)) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$pattern) -and $Line -match [string]$pattern) {
+      $isAmbiguous = $true
+      break
+    }
+  }
+
+  $spans = @()
+  $unqualifiedSpans = @()
+  foreach ($span in $certaintySpans) {
+    $spanEnd = $span.Index + $span.Length
+    $qualified = $false
+    foreach ($qualifiedSpan in $qualifiedSpans) {
+      $qualifiedEnd = $qualifiedSpan.Index + $qualifiedSpan.Length
+      if ($span.Index -ge $qualifiedSpan.Index -and $spanEnd -le $qualifiedEnd) {
+        $qualified = $true
+        break
+      }
+    }
+    $spanClassification = if ($qualified) { 'qualified_limitation' } elseif ($isAmbiguous) { 'ambiguous_certainty_claim' } else { 'clear_unsupported_claim' }
+    $detail = [pscustomobject]@{
+      text = $span.Value
+      index = $span.Index
+      length = $span.Length
+      classification = $spanClassification
+      qualified = $qualified
+    }
+    $spans += $detail
+    if (-not $qualified) { $unqualifiedSpans += $detail }
+  }
+  $classification = if ($unqualifiedSpans.Count -eq 0) { 'qualified_limitation' } elseif (@($unqualifiedSpans | Where-Object classification -eq 'clear_unsupported_claim').Count -gt 0) { 'clear_unsupported_claim' } else { 'ambiguous_certainty_claim' }
+  return [pscustomobject]@{ classification = $classification; spans = $spans; unqualified_spans = $unqualifiedSpans }
+}
+
+function Test-PCONT007SpanAllowlisted {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Line,
+    [Parameter(Mandatory = $true)]$Span,
+    [Parameter(Mandatory = $true)]$Policy
+  )
+  foreach ($entry in @($Policy.absolute_claim.allowlist)) {
+    if ([string]::IsNullOrWhiteSpace([string]$entry.rationale) -or [string]::IsNullOrWhiteSpace([string]$entry.evidence)) { continue }
+    if ($Path -notlike [string]$entry.path) { continue }
+    foreach ($allowSpan in @([regex]::Matches($Line, [string]$entry.pattern))) {
+      $allowEnd = $allowSpan.Index + $allowSpan.Length
+      $spanEnd = $Span.Index + $Span.Length
+      if ($Span.Index -ge $allowSpan.Index -and $spanEnd -le $allowEnd) { return $true }
+    }
+  }
+  return $false
+}
+
 function Convert-ToRelativePath {
   param([string]$Path)
   $rootWithSeparator = $RepoRoot.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
@@ -52,6 +121,7 @@ function Get-TrackedActiveFiles {
 
 $findings = [Collections.Generic.List[object]]::new()
 $warnings = [Collections.Generic.List[object]]::new()
+$pc007Diagnostics = @{}
 function Add-Finding {
   param([string]$Id, [string]$Category, [string]$Path, [int]$Line, [string]$Severity = 'error')
   $entry = [pscustomobject]@{ id = $Id; category = $Category; path = $Path; line = $Line; severity = $Severity }
@@ -150,13 +220,14 @@ foreach ($file in @(Get-TrackedActiveFiles)) {
       }
     }
 
-    if (-not $isHistorical -and @($policy.claim_extensions) -contains $file.Extension -and $line -match [string]$policy.absolute_claim.pattern) {
-      $allowed = $false
-      foreach ($entry in @($policy.absolute_claim.allowlist)) {
-        if ([string]::IsNullOrWhiteSpace([string]$entry.rationale) -or [string]::IsNullOrWhiteSpace([string]$entry.evidence)) { continue }
-        if ($file.Relative -like [string]$entry.path -and $line -match [string]$entry.pattern) { $allowed = $true; break }
-      }
-      if (-not $allowed) {
+    if (-not $isHistorical -and @($policy.claim_extensions) -contains $file.Extension) {
+      $pc007 = Get-PCONT007Classification -Line $line -Policy $policy
+      $unallowedSpans = @($pc007.unqualified_spans | Where-Object { -not (Test-PCONT007SpanAllowlisted -Path $file.Relative -Line $line -Span $_ -Policy $policy) })
+      if ($unallowedSpans.Count -gt 0) {
+        $pc007Diagnostics["{0}:{1}" -f $file.Relative, $lineNumber] = [pscustomobject]@{
+          classification = if (@($unallowedSpans | Where-Object classification -eq 'clear_unsupported_claim').Count -gt 0) { 'clear_unsupported_claim' } else { 'ambiguous_certainty_claim' }
+          matched = @($unallowedSpans | ForEach-Object { $_.text })
+        }
         Add-Finding -Id ([string]$policy.absolute_claim.id) -Category ([string]$policy.absolute_claim.category) -Path $file.Relative -Line $lineNumber
       }
     }
@@ -204,7 +275,15 @@ if ($OutputFormat -eq 'json') {
 } else {
   if ($errors.Count -gt 0) {
     Write-Host 'Public content policy errors:' -ForegroundColor Red
-    $errors | ForEach-Object { Write-Host ("  {0} [{1}] {2}:{3}" -f $_.id, $_.category, $_.path, $_.line) }
+    $errors | ForEach-Object {
+      $detail = if ($_.id -eq 'PCONT007') { $pc007Diagnostics["{0}:{1}" -f $_.path, $_.line] } else { $null }
+      if ($detail) {
+        Write-Host ("  {0} [{1}] {2}:{3} ({4}; matched: {5})" -f $_.id, $_.category, $_.path, $_.line, $detail.classification, ($detail.matched -join ', '))
+        Write-Host '    Rewrite with evidence-scoped language; qualified limitations such as "does not establish" are permitted.'
+      } else {
+        Write-Host ("  {0} [{1}] {2}:{3}" -f $_.id, $_.category, $_.path, $_.line)
+      }
+    }
   }
   if ($warnOrdered.Count -gt 0) {
     Write-Host 'Public content policy warnings:' -ForegroundColor Yellow

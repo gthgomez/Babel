@@ -1,0 +1,1 @@
+While not technically guaranteed, this is always correct.

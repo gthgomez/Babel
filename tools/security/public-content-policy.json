@@ -162,6 +162,15 @@
     "id": "PCONT007",
     "category": "unsupported-absolute-claim",
     "pattern": "(?i)\\b(production[- ]ready|guarantee(?:d|s)?|proves?|always correct|eliminates? layout shift)\\b",
+    "qualified_patterns": [
+      "(?i)\\b(?:does\\s+not|doesn't|cannot|can't|not)\\s+(?:[A-Za-z]+\\s+){0,1}(?:production[- ]ready|guarantee(?:d|s)?|proves?|always correct|eliminates? layout shift)\\b"
+    ],
+    "ambiguous_context_patterns": [
+      "(?i)\\?",
+      "(?i)^\\s*(?:never|do\\s+not|don't|avoid|please)\\b",
+      "(?i)\\b(?:api|documentation|docs?|reference|term|identifier|function|method)\\b",
+      "(?i)^\\s*[>\\\"'`]"
+    ],
     "allowlist": [
       {
         "path": "02_Skills/Governance/*",
