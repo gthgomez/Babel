@@ -6,7 +6,6 @@ import type { CanaryTrialResult } from "../eval/canary/types.js";
 import { buildAcceptanceInputSnapshot } from "./artifacts.js";
 import { compileAcceptance } from "./compiler.js";
 import {
-  admitBdnsEvidenceCandidate,
   admitInterpretedEvidence,
 } from "./evidenceAdmission.js";
 import { planOracles } from "./oraclePlanner.js";
