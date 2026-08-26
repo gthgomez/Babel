@@ -28,7 +28,7 @@ if (-not (Test-Path -LiteralPath $commonModule -PathType Leaf)) { throw "Tracked
 
 function Get-PCONT007Classification {
   param(
-    [Parameter(Mandatory = $true)][string]$Line,
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Line,
     [Parameter(Mandatory = $true)]$Policy
   )
   $certaintySpans = @([regex]::Matches($Line, [string]$Policy.absolute_claim.pattern))
@@ -79,7 +79,7 @@ function Get-PCONT007Classification {
 function Test-PCONT007SpanAllowlisted {
   param(
     [Parameter(Mandatory = $true)][string]$Path,
-    [Parameter(Mandatory = $true)][string]$Line,
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Line,
     [Parameter(Mandatory = $true)]$Span,
     [Parameter(Mandatory = $true)]$Policy
   )
