@@ -20,7 +20,7 @@ The entries distinguish directly recorded facts from diagnostic hypotheses.
 | Process cancellation or timeout | PARTIAL | Explicit bridge emits cancel/timeout/killed facts | Outcome requires reconciliation / medium | Background kill paths need a future caller-owned correlation bridge |
 | Declared write changes target | VERIFIED | Targeted before/after metadata and hash differ | Corroborated mutation / high | Hash is bounded for large files |
 | Undeclared targeted mutation | VERIFIED | Changed path is absent from declared intent | `UNDECLARED_WORKSPACE_MUTATION` / high | Only paths supplied to the bounded witness are evaluated |
-| Watcher unavailable or silent | VERIFIED | Reconciliation marks watcher source unavailable; hash evidence remains independent | Unknown from watcher alone | No watcher event never proves no mutation |
+| Watcher unavailable or silent | VERIFIED | Reconciliation marks watcher source unavailable; hash evidence remains independent | Unknown from watcher alone | Watcher silence is inconclusive and does not establish that no mutation occurred |
 | Diagnostic writer unavailable | VERIFIED | Store records `persistence_degraded`; caller continues | Persistence degraded / high | Pending records at process crash can still be lost |
 | OTel disabled | VERIFIED by architecture and existing OTel tests | Local correlation model has no OTel dependency | Local diagnostics remain valid | External trace enrichment is absent |
 | Insufficient evidence | VERIFIED | Unknown canonical outcome and no process exit create no incident | Root cause unknown / honest | More evidence must be collected by an operator or later run |
@@ -29,7 +29,6 @@ The entries distinguish directly recorded facts from diagnostic hypotheses.
 
 Canonical Babel events can identify an explicit non-zero tool result. BDNS adds
 value when an independently witnessed process outcome disagrees, when bounded
-workspace metadata proves an undeclared change, or when it records that its own
+workspace metadata provides evidence of an undeclared change, or when it records that its own
 evidence was lost. In cases where the canonical record already explains the
 failure, BDNS should corroborate rather than emit duplicate incidents.
-

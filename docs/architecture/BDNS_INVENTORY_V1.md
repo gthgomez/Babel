@@ -70,8 +70,8 @@ boundary adds a typed bridge.
 | Evidence source | What Babel knows | What Babel must not assume |
 | --- | --- | --- |
 | `WorkspaceTransactionManager` | Declared paths, pre/post images and hashes, revision hashes, changed bytes, rollback status | It covers command-induced or out-of-band changes that were not in the declared batch |
-| `SessionEvent` `mutation_batch` | The canonical caller's declared mutation receipt and status | It proves intent and receipt publication, not every filesystem mutation |
-| File writes in `agent/codingLoop`, `agent/toolExecutor`, and services | Specific mutation paths at explicit call sites | A successful write call alone proves durable on-disk state |
+| `SessionEvent` `mutation_batch` | The canonical caller's declared mutation receipt and status | It records declared intent and receipt publication, not every filesystem mutation |
+| File writes in `agent/codingLoop`, `agent/toolExecutor`, and services | Specific mutation paths at explicit call sites | A successful write call alone is insufficient evidence of durable on-disk state |
 | Git state (`worktreeSafety`, `gitExec`, revision receipts) | Revision and changed-path information where a Git workspace exists | Git status is available, complete, or authoritative for non-Git workspaces |
 | Existing daemon file watcher | Debounced add/change signals for configured daemon rules | No watcher event means nothing changed |
 | TUI session store / run evidence | BDNS-owned diagnostic artifacts and UI observation | Presentation artifacts define semantic outcomes |

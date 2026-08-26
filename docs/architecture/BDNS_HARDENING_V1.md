@@ -32,5 +32,5 @@ the existing ChatEngine shutdown path before its async finalization contract
 is changed and tested.
 
 The next promotion gate is to attach one runtime to the canonical session
-owner, close it after canonical event flush, and prove that normal CLI runs
+owner, close it after canonical event flush, and test whether normal CLI runs
 produce a bounded bundle without delaying or changing execution outcomes.
