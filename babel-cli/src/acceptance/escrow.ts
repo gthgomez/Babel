@@ -8,6 +8,7 @@ import {
 } from "../agent/taskContract.js";
 import { canonicalJson, sha256Canonical } from "./canonical.js";
 import { deepFreeze } from "./freeze.js";
+import { assertDurableValueSafe } from "../utils/redaction.js";
 
 export const ACCEPTANCE_BUNDLE_SCHEMA_VERSION = 1 as const;
 export const ACCEPTANCE_BUNDLE_MAX_BYTES = 128 * 1024;
@@ -199,6 +200,11 @@ export function validateAcceptanceBundleV1(value: unknown): string[] {
     return parsed.error.issues.map((issue) => issue.path.join(".") || "$");
   const bundle = parsed.data;
   const errors: string[] = [];
+  try {
+    assertDurableValueSafe(bundle, "acceptance_bundle");
+  } catch {
+    errors.push("durable_secret");
+  }
   const ids = [
     ...requirementIds(bundle.builder_visible),
     ...requirementIds(bundle.restricted),

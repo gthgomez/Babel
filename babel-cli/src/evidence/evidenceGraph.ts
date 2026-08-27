@@ -7,6 +7,11 @@ import {
   type TaskContractV1,
 } from "../agent/taskContract.js";
 import {
+  trustedIdentityHasCapability,
+  type TrustedExecutionContextV1,
+  type TrustedExecutionResolver,
+} from "../authority/trustedExecution.js";
+import {
   validateAcceptanceBundleForContractV1,
   type AcceptanceBundleV1,
 } from "../acceptance/escrow.js";
@@ -68,6 +73,8 @@ export interface EvidenceNode {
     | "system";
   /** Structured identity; producer_role alone is never a certification credential. */
   producer_identity?: EvidenceProducerIdentityV1;
+  /** Opaque supervisor-issued identity reference used by V1.1 certification. */
+  producer_identity_ref?: string;
 }
 
 export type EvidenceProducerRole =
@@ -83,6 +90,11 @@ export interface EvidenceProducerIdentityV1 {
   endpoint_id: string;
   role: EvidenceProducerRole;
   execution_domain: string;
+}
+
+export interface VerifierReceiptEvidenceV1 {
+  schema_version: 1;
+  receipt: RevisionBoundReceipt;
 }
 
 export interface EvidenceEdge {
@@ -124,22 +136,42 @@ const CERTIFYING_TYPES: ReadonlySet<EvidenceNodeType> = new Set([
   "ci_result",
 ]);
 
-function producerIdentityError(node: EvidenceNode): string | undefined {
-  const identity = node.producer_identity;
-  if (!identity || typeof identity !== "object")
-    return "certifying evidence requires a structured producer identity";
+function producerIdentityError(
+  node: EvidenceNode,
+  context: TrustedExecutionContextV1,
+  resolver: TrustedExecutionResolver,
+): string | undefined {
+  const identityRef = node.producer_identity_ref;
+  if (!identityRef)
+    return "certifying evidence requires a supervisor-issued identity reference";
+  if (identityRef !== context.execution_identity_ref)
+    return "evidence identity is not the identity bound to the trusted context";
+  const identity = resolver.resolveExecutionIdentity(identityRef);
+  if (!identity) return "evidence identity is unknown, expired, or revoked";
+  if (!["verifier", "observer", "system"].includes(identity.role))
+    return "evidence identity is not independently authorized to certify";
+  if (identity.task_id !== context.task_id)
+    return "evidence identity task binding does not match";
+  if (identity.contract_hash !== context.contract_hash)
+    return "evidence identity contract binding does not match";
+  if (!trustedIdentityHasCapability(identity, "certify_evidence"))
+    return "evidence identity lacks the certify_evidence capability";
   if (
-    !["agent_endpoint", "execution_identity"].includes(identity.kind) ||
-    typeof identity.endpoint_id !== "string" ||
-    !/^[A-Za-z0-9][A-Za-z0-9:_./-]{2,127}$/.test(identity.endpoint_id) ||
-    typeof identity.execution_domain !== "string" ||
-    identity.execution_domain.trim().length === 0 ||
-    !["verifier", "observer", "system"].includes(identity.role)
-  ) {
-    return "certifying evidence producer identity is malformed or not independent";
-  }
+    identity.role === "verifier" &&
+    identity.execution_domain !== "isolated-verifier"
+  )
+    return "verifier identity execution domain is not authorized";
+  const claimed = node.producer_identity;
+  if (
+    claimed &&
+    (claimed.kind !== "execution_identity" ||
+      claimed.endpoint_id !== identity.endpoint_id ||
+      claimed.role !== identity.role ||
+      claimed.execution_domain !== identity.execution_domain)
+  )
+    return "descriptive producer identity contradicts trusted identity";
   if (node.producer_role !== undefined && node.producer_role !== identity.role)
-    return "producer_role does not match producer_identity";
+    return "producer_role does not match trusted identity";
   return undefined;
 }
 
@@ -170,23 +202,52 @@ function requirementAcceptsNode(
 function certifyingEvidenceError(
   node: EvidenceNode,
   requirementType: string,
+  context: TrustedExecutionContextV1,
+  resolver: TrustedExecutionResolver,
 ): string | undefined {
   if (!CERTIFYING_TYPES.has(node.type))
     return `${node.type} is not a certifying evidence type`;
-  const identityError = producerIdentityError(node);
+  const identityError = producerIdentityError(node, context, resolver);
   if (identityError) return identityError;
   if (!requirementAcceptsNode(node.type, requirementType))
     return `${node.type} is incompatible with ${requirementType}`;
   if (!node.data || typeof node.data !== "object" || Array.isArray(node.data))
     return "certifying evidence data is malformed";
   const data = node.data as Record<string, unknown>;
-  if (node.type !== "runtime_observation" && data["exit_code"] !== 0)
-    return "certifying evidence has a non-zero exit_code";
   if (node.type === "verifier_receipt") {
-    if (!data["boundRevision"] || data["exitCode"] !== 0)
-      return "verifier receipt is not a passing revision-bound receipt";
+    if (data["schema_version"] !== 1 || !data["receipt"])
+      return "verifier receipt must use the canonical V1 receipt schema";
+    const receipt = data["receipt"] as Partial<RevisionBoundReceipt>;
+    if (
+      typeof receipt.receiptId !== "string" ||
+      typeof receipt.command !== "string" ||
+      !Number.isInteger(receipt.exitCode) ||
+      !receipt.boundRevision ||
+      typeof receipt.boundRevision !== "object"
+    )
+      return "verifier receipt is malformed";
+    if (receipt.exitCode !== 0 || receipt.stale === true)
+      return "verifier receipt is not a current passing receipt";
+    if (
+      receipt.boundRevision.gitCommitHash !== null &&
+      receipt.boundRevision.gitCommitHash !== context.candidate_sha
+    )
+      return "verifier receipt revision does not match the trusted candidate";
+    if (context.project_root) {
+      const stale = RevisionManager.isReceiptStaleSync(
+        receipt as RevisionBoundReceipt,
+        context.project_root,
+      );
+      if (stale.stale)
+        return (
+          "verifier receipt is stale" +
+          (stale.reason ? ": " + stale.reason : "")
+        );
+    }
     return undefined;
   }
+  if (node.type !== "runtime_observation" && data["exit_code"] !== 0)
+    return "certifying evidence has a non-zero exit_code";
   const status = String(data["status"] ?? "").toLowerCase();
   const passingStatus =
     node.type === "ci_result"
@@ -395,11 +456,31 @@ export function parseEvidenceGraphV1(raw: string): EvidenceGraphDocumentV1 {
 export function evaluateCompletionGateV1(input: {
   contract: TaskContractV1;
   graph: EvidenceGraph;
-  repository: string;
-  candidate_sha: string;
+  repository?: string;
+  candidate_sha?: string;
   acceptance_bundle?: AcceptanceBundleV1;
+  /** Trusted dependency supplied by the supervisor, never by evidence data. */
+  trusted_resolver?: TrustedExecutionResolver;
+  /** Opaque context reference resolved outside the evidence graph. */
+  trusted_context_ref?: string;
 }): CompletionEvaluationV1 {
-  const contractErrors = validateTaskContractV1ForCompletion(input.contract);
+  const trustedResolver = input.trusted_resolver;
+  const trustedContext =
+    trustedResolver && input.trusted_context_ref
+      ? trustedResolver.resolveExecutionContext(input.trusted_context_ref)
+      : undefined;
+  if (!trustedResolver || !trustedContext) {
+    return {
+      status: "UNKNOWN",
+      verified: false,
+      satisfied_requirements: [],
+      missing_requirements: [],
+      errors: ["trusted_execution_context:missing_or_invalid"],
+    };
+  }
+  const contractErrors = validateTaskContractV1ForCompletion(input.contract, {
+    trustedAuthorityResolver: trustedResolver,
+  });
   if (contractErrors.length > 0) {
     return {
       status: "UNKNOWN",
@@ -407,6 +488,39 @@ export function evaluateCompletionGateV1(input: {
       satisfied_requirements: [],
       missing_requirements: [],
       errors: contractErrors.map((error) => `contract:${error}`),
+    };
+  }
+  const contextErrors: string[] = [];
+  if (trustedContext.task_id !== input.contract.task_id)
+    contextErrors.push("task_id");
+  if (trustedContext.contract_hash !== input.contract.contract_hash)
+    contextErrors.push("contract_hash");
+  if (trustedContext.base_sha !== input.contract.base_sha)
+    contextErrors.push("base_sha");
+  if (
+    input.contract.scope.repository &&
+    input.contract.scope.repository !== trustedContext.repository
+  )
+    contextErrors.push("repository");
+  if (
+    input.repository !== undefined &&
+    input.repository !== trustedContext.repository
+  )
+    contextErrors.push("caller_repository");
+  if (
+    input.candidate_sha !== undefined &&
+    input.candidate_sha !== trustedContext.candidate_sha
+  )
+    contextErrors.push("caller_candidate_sha");
+  if (contextErrors.length > 0) {
+    return {
+      status: "UNKNOWN",
+      verified: false,
+      satisfied_requirements: [],
+      missing_requirements: input.contract.acceptance
+        .filter((requirement) => requirement.required)
+        .map((requirement) => requirement.id),
+      errors: contextErrors.map((error) => `trusted_context:${error}`),
     };
   }
   const bundleErrors = input.acceptance_bundle
@@ -449,9 +563,9 @@ export function evaluateCompletionGateV1(input: {
       const mismatch = bindingError(node.binding, {
         taskId: input.contract.task_id,
         contractHash: input.contract.contract_hash,
-        repository: input.repository,
-        baseSha: input.contract.base_sha,
-        candidateSha: input.candidate_sha,
+        repository: trustedContext.repository,
+        baseSha: trustedContext.base_sha,
+        candidateSha: trustedContext.candidate_sha,
       });
       if (mismatch) {
         hasUnknown = true;
@@ -461,6 +575,8 @@ export function evaluateCompletionGateV1(input: {
       const certificationError = certifyingEvidenceError(
         node,
         requirement.type,
+        trustedContext,
+        trustedResolver,
       );
       if (certificationError) {
         if (
@@ -470,6 +586,11 @@ export function evaluateCompletionGateV1(input: {
           !Array.isArray(node.data) &&
           (((node.data as Record<string, unknown>)["exit_code"] !== undefined &&
             (node.data as Record<string, unknown>)["exit_code"] !== 0) ||
+            ((node.data as Record<string, unknown>)["schema_version"] === 1 &&
+              typeof (node.data as Record<string, unknown>)["receipt"] ===
+                "object" &&
+              (node.data as { receipt?: { exitCode?: unknown } }).receipt
+                ?.exitCode !== 0) ||
             String(
               (node.data as Record<string, unknown>)["status"] ?? "",
             ).toLowerCase() === "failed")

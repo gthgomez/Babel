@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  assertDurableValueSafe,
+  sanitizeDurableString,
+} from "../utils/redaction.js";
 
 export const FAILURE_ATTRIBUTION_VERSION = 1 as const;
 
@@ -137,25 +141,51 @@ export function attributeFailureV1(input: {
   ].filter((item) => item !== category);
   return {
     schema_version: FAILURE_ATTRIBUTION_VERSION,
-    failure_id: input.failure_id,
+    failure_id: sanitizeDurableString(input.failure_id, "failure.failure_id"),
     category,
     confidence,
-    evidence: input.evidence.map((item) => ({ ...item })),
+    evidence: input.evidence.map((item) => ({
+      ...item,
+      evidence_id: sanitizeDurableString(item.evidence_id, "failure.evidence_id"),
+      detail: sanitizeDurableString(item.detail, "failure.evidence.detail"),
+    })),
     alternative_hypotheses: alternatives,
-    task_id: input.task_id,
-    contract_hash: input.contract_hash,
-    model: input.model ?? null,
-    harness: input.harness ?? null,
-    environment: input.environment ?? null,
-    tool_capabilities: [...(input.tool_capabilities ?? [])],
-    base_sha: input.base_sha ?? null,
-    candidate_sha: input.candidate_sha ?? null,
+    task_id: sanitizeDurableString(input.task_id, "failure.task_id"),
+    contract_hash: sanitizeDurableString(input.contract_hash, "failure.contract_hash"),
+    model:
+      input.model === null || input.model === undefined
+        ? null
+        : sanitizeDurableString(input.model, "failure.model"),
+    harness:
+      input.harness === null || input.harness === undefined
+        ? null
+        : sanitizeDurableString(input.harness, "failure.harness"),
+    environment:
+      input.environment === null || input.environment === undefined
+        ? null
+        : sanitizeDurableString(input.environment, "failure.environment"),
+    tool_capabilities: [...(input.tool_capabilities ?? [])].map((item) =>
+      sanitizeDurableString(item, "failure.tool_capabilities"),
+    ),
+    base_sha:
+      input.base_sha === null || input.base_sha === undefined
+        ? null
+        : sanitizeDurableString(input.base_sha, "failure.base_sha"),
+    candidate_sha:
+      input.candidate_sha === null || input.candidate_sha === undefined
+        ? null
+        : sanitizeDurableString(input.candidate_sha, "failure.candidate_sha"),
   };
 }
 
 export function validateFailureAttributionV1(value: unknown): string[] {
   const parsed = FailureAttributionV1Schema.safeParse(value);
-  return parsed.success
-    ? []
-    : parsed.error.issues.map((issue) => issue.path.join(".") || "$");
+  if (!parsed.success)
+    return parsed.error.issues.map((issue) => issue.path.join(".") || "$");
+  try {
+    assertDurableValueSafe(parsed.data, "failure_attribution");
+    return [];
+  } catch {
+    return ["durable_secret"];
+  }
 }

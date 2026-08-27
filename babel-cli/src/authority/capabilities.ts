@@ -18,6 +18,7 @@ export type CapabilityId =
   | 'run_build'
   | 'run_lint'
   | 'run_typecheck'
+  | 'certify_evidence'
   | 'run_local_command'
   | 'delete_task_temp'
   | 'inspect_host_environment'
@@ -61,6 +62,7 @@ export const CAPABILITY_KINDS: Record<CapabilityId, CapabilityKind> = {
   run_build: 'local',
   run_lint: 'local',
   run_typecheck: 'local',
+  certify_evidence: 'local',
   // Unclassified non-git/gh shell commands: bounded, reversible, task-scoped
   // by the harness sandbox → local. The PDP's fail-closed rule applies to
   // unknown PRIVILEGED actions (git/gh/credential surfaces), not routine

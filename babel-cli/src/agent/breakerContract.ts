@@ -9,6 +9,10 @@ import {
   type TaskContractV1,
 } from "./taskContract.js";
 import type { EvidenceNode } from "../evidence/evidenceGraph.js";
+import {
+  assertDurableValueSafe,
+  sanitizeDurableString,
+} from "../utils/redaction.js";
 
 export const BREAKER_CONTRACT_VERSION = 1 as const;
 export const BREAKER_READ_ONLY_CAPABILITIES: readonly CapabilityId[] = [
@@ -123,15 +127,31 @@ export function buildBreakerContractV1(input: {
   }
   return {
     schema_version: BREAKER_CONTRACT_VERSION,
-    breaker_id: input.breaker_id,
+    breaker_id: sanitizeDurableString(input.breaker_id, "breaker_id"),
     role: "breaker",
-    task_id: input.taskContract.task_id,
+    task_id: sanitizeDurableString(input.taskContract.task_id, "breaker.task_id"),
     contract_hash: input.taskContract.contract_hash,
-    repository: input.repository,
-    base_sha: input.base_sha ?? input.taskContract.base_sha,
-    candidate_sha: input.candidate_sha,
-    acceptance: [...input.taskContract.acceptance],
-    relevant_evidence: [...(input.relevant_evidence ?? [])],
+    repository: sanitizeDurableString(input.repository, "breaker.repository"),
+    base_sha:
+      input.base_sha === null || input.base_sha === undefined
+        ? input.taskContract.base_sha
+        : sanitizeDurableString(input.base_sha, "breaker.base_sha"),
+    candidate_sha: sanitizeDurableString(input.candidate_sha, "breaker.candidate_sha"),
+    acceptance: input.taskContract.acceptance.map((requirement) => ({
+      ...requirement,
+      id: sanitizeDurableString(requirement.id, "breaker.acceptance.id"),
+      description: sanitizeDurableString(
+        requirement.description,
+        "breaker.acceptance.description",
+      ),
+      verification_strategy: sanitizeDurableString(
+        requirement.verification_strategy,
+        "breaker.acceptance.verification_strategy",
+      ),
+    })),
+    relevant_evidence: [...(input.relevant_evidence ?? [])].map((evidence) =>
+      sanitizeDurableString(evidence, "breaker.relevant_evidence"),
+    ),
     capabilities: BREAKER_READ_ONLY_CAPABILITIES,
     execution_domain: "isolated-sandbox",
     project_code_execution: true,
@@ -161,16 +181,29 @@ export function createBreakerFindingV1(input: {
       "Breaker findings require a structured requirement, counterexample, and reproduction.",
     );
   }
-  return {
-    finding_id: input.finding_id,
+  const finding = {
+    finding_id: sanitizeDurableString(input.finding_id, "breaker.finding_id"),
     severity: input.severity,
-    contract_requirement: input.contract_requirement,
-    counterexample: input.counterexample,
-    reproduction: input.reproduction,
-    evidence: [...input.evidence],
+    contract_requirement: sanitizeDurableString(
+      input.contract_requirement,
+      "breaker.contract_requirement",
+    ),
+    counterexample: sanitizeDurableString(
+      input.counterexample,
+      "breaker.counterexample",
+    ),
+    reproduction: sanitizeDurableString(
+      input.reproduction,
+      "breaker.reproduction",
+    ),
+    evidence: input.evidence.map((evidence) =>
+      sanitizeDurableString(evidence, "breaker.evidence"),
+    ),
     confidence: input.confidence ?? "unknown",
     status: input.status ?? "open",
   };
+  assertDurableValueSafe(finding, "breaker_finding");
+  return finding;
 }
 
 /** The breaker consumes structured inputs; no builder transcript is part of this boundary. */

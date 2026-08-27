@@ -17,9 +17,13 @@ import {
   ALL_CAPABILITIES,
   type CapabilityId,
 } from "../authority/capabilities.js";
+import type { TrustedExecutionResolver } from "../authority/trustedExecution.js";
 import { sha256Canonical } from "../acceptance/canonical.js";
 import { deepFreeze } from "../acceptance/freeze.js";
-import { redactSecrets } from "../utils/redaction.js";
+import {
+  hasDurableSecretLikeText,
+  sanitizeDurableString,
+} from "../utils/redaction.js";
 
 export const TASK_CONTRACT_VERSION = 1 as const;
 
@@ -70,6 +74,8 @@ export interface TaskAuthorityV1 {
   /** Existing Babel capability IDs are the authority vocabulary. */
   capabilities: CapabilityId[];
   source: "derived_policy" | "repository_policy" | "explicit_user_authority";
+  /** Opaque supervisor-issued grant reference; provenance text is not a grant. */
+  grant_ref?: string;
 }
 
 export type FailureClass =
@@ -203,6 +209,11 @@ export interface BuildTaskContractInput {
   scope?: { paths: string[]; repository?: string };
   risk?: TaskRisk;
   authority?: Partial<TaskAuthorityV1>;
+  /** A supervisor-resolved grant used only for explicit user authority. */
+  trusted_authority?: {
+    grant_ref: string;
+    resolver: TrustedExecutionResolver;
+  };
   provenance?: TaskContractProvenanceRecord[];
   base_sha?: string | null;
   baseline_reproduction?: string;
@@ -295,6 +306,7 @@ export const TaskContractV1Schema = z
           "repository_policy",
           "explicit_user_authority",
         ]),
+        grant_ref: z.string().min(1).optional(),
       })
       .optional(),
     acceptance: z
@@ -444,11 +456,11 @@ export function validateTaskContractV1(value: unknown): string[] {
       records.some(
         (record) =>
           record["kind"] === "explicit_user_authority" &&
-          (!String(record["ref"] ?? "").startsWith("user:") ||
-            typeof record["ref"] !== "string"),
+          (typeof record["ref"] !== "string" ||
+            !String(record["ref"]).startsWith("grant:")),
       )
     ) {
-      errors.push("provenance.authority_impersonation");
+      errors.push("provenance.untrusted_user_authority");
     }
     if (
       records.some(
@@ -466,10 +478,18 @@ export function validateTaskContractV1(value: unknown): string[] {
         (record) =>
           record["kind"] === "explicit_user_authority" &&
           typeof record["ref"] === "string" &&
-          record["ref"].startsWith("user:"),
+          record["ref"].startsWith("grant:"),
       )
     ) {
       errors.push("authority.explicit_user_authority_unbound");
+    }
+    if (
+      (candidate["authority"] as { source?: unknown } | undefined)?.source ===
+        "explicit_user_authority" &&
+      typeof (candidate["authority"] as { grant_ref?: unknown } | undefined)
+        ?.grant_ref !== "string"
+    ) {
+      errors.push("authority.grant_ref");
     }
     const durableValues = [
       candidate["goal"],
@@ -492,10 +512,27 @@ export function validateTaskContractV1(value: unknown): string[] {
             (record) => record.ref,
           )
         : []),
+      (candidate["scope"] as { repository?: unknown } | undefined)
+        ?.repository,
+      ...(Array.isArray(candidate["acceptance"])
+        ? (candidate["acceptance"] as Array<Record<string, unknown>>).flatMap(
+            (item) => [item["id"], item["verification_strategy"]],
+          )
+        : []),
+      (candidate["baseline_verifier_state"] as
+        | { command?: unknown; summary?: unknown }
+        | undefined)?.command,
+      (candidate["baseline_verifier_state"] as
+        | { command?: unknown; summary?: unknown }
+        | undefined)?.summary,
+      candidate["source"],
+      candidate["base_sha"],
+      (candidate["authority"] as { grant_ref?: unknown } | undefined)
+        ?.grant_ref,
     ];
     if (
       durableValues.some(
-        (item) => typeof item === "string" && hasDurableSecret(item),
+        (item) => typeof item === "string" && hasDurableSecretLikeText(item),
       )
     )
       errors.push("durable_secret");
@@ -523,15 +560,42 @@ export function validateTaskContractV1(value: unknown): string[] {
 }
 
 /** Strict V1 completion validation; legacy V0 fixture contracts may be empty. */
-export function validateTaskContractV1ForCompletion(value: unknown): string[] {
+export function validateTaskContractV1ForCompletion(
+  value: unknown,
+  options: { trustedAuthorityResolver?: TrustedExecutionResolver } = {},
+): string[] {
   const errors = validateTaskContractV1(value);
   if (errors.length > 0) return errors;
-  const candidate = value as { acceptance?: Array<{ required?: boolean }> };
+  const candidate = value as TaskContractV1;
   if (
     !candidate.acceptance ||
     candidate.acceptance.filter((item) => item.required === true).length === 0
   ) {
     errors.push("acceptance.required");
+  }
+  if (candidate.authority?.source === "explicit_user_authority") {
+    const grantRef = candidate.authority.grant_ref;
+    const grant = grantRef
+      ? options.trustedAuthorityResolver?.resolveAuthorityGrant(grantRef)
+      : undefined;
+    if (!grant) {
+      errors.push("authority.grant_unknown_or_inactive");
+    } else {
+      if (grant.source !== "explicit_user") errors.push("authority.grant_source");
+      if (grant.task_id !== null && grant.task_id !== candidate.task_id)
+        errors.push("authority.grant_task_id");
+      if (
+        grant.contract_hash !== null &&
+        grant.contract_hash !== candidate.contract_hash
+      )
+        errors.push("authority.grant_contract_hash");
+      if (
+        candidate.authority.capabilities.some(
+          (capability) => !grant.capabilities.includes(capability),
+        )
+      )
+        errors.push("authority.grant_capability_widening");
+    }
   }
   return errors;
 }
@@ -548,7 +612,9 @@ export function buildTaskContractV1(
     ...(input.acceptance
       ? rawAcceptance.map((item) => ({
           ...item,
+          id: durableText(item.id),
           description: durableText(item.description),
+          verification_strategy: durableText(item.verification_strategy),
         }))
       : acceptanceCriteria.map((description, index) => ({
           id: `acceptance:${index + 1}`,
@@ -573,9 +639,33 @@ export function buildTaskContractV1(
     );
   }
   const createdAt = new Date().toISOString();
+  const trustedGrant = input.trusted_authority
+    ? input.trusted_authority.resolver.resolveAuthorityGrant(
+        input.trusted_authority.grant_ref,
+      )
+    : undefined;
+  if (input.trusted_authority && !trustedGrant) {
+    throw new Error("Unknown or inactive trusted authority grant.");
+  }
+  const authoritySource =
+    input.authority?.source ??
+    (trustedGrant ? "explicit_user_authority" : "derived_policy");
+  if (authoritySource === "explicit_user_authority" && !trustedGrant) {
+    throw new Error("Explicit user authority requires a trusted authority grant.");
+  }
+  if (
+    trustedGrant &&
+    input.authority?.grant_ref &&
+    input.authority.grant_ref !== trustedGrant.grant_ref
+  ) {
+    throw new Error("TaskContract authority grant reference mismatch.");
+  }
   const provenanceRecords = [
     { kind: "user_goal" as const, ref: "user_request" },
     { kind: "derived_acceptance" as const, ref: "acceptance_criteria" },
+    ...(trustedGrant
+      ? [{ kind: "explicit_user_authority" as const, ref: trustedGrant.grant_ref }]
+      : []),
     ...(input.provenance ?? []),
   ].map((record) => ({
     ...record,
@@ -592,8 +682,10 @@ export function buildTaskContractV1(
   const body = {
     schema_version: TASK_CONTRACT_VERSION,
     task_id:
-      input.task_id ??
-      `task:${sha256Canonical({ mode: input.mode, user_request: input.user_request }).slice(0, 24)}`,
+      durableText(
+        input.task_id ??
+          `task:${sha256Canonical({ mode: input.mode, user_request: input.user_request }).slice(0, 24)}`,
+      ),
     mode: input.mode,
     task_class: input.task_class ?? "unknown",
     goal: durableText(input.goal ?? input.user_request),
@@ -605,23 +697,30 @@ export function buildTaskContractV1(
     acceptance_criteria: acceptanceCriteria,
     non_goals: [...(input.non_goals ?? [])].map(durableText),
     scope: {
-      paths: [...(input.scope?.paths ?? input.allowed_paths ?? ["**/*"])],
+      paths: [
+        ...(input.scope?.paths ?? input.allowed_paths ?? ["**/*"]),
+      ].map(durableText),
       ...(input.scope?.repository
-        ? { repository: input.scope.repository }
+        ? { repository: durableText(input.scope.repository) }
         : {}),
     },
     risk: input.risk ?? "unknown",
     authority: {
       capabilities: [
-        ...(input.authority?.capabilities ?? ["inspect_repository"]),
+        ...(input.authority?.capabilities ??
+          trustedGrant?.capabilities ?? ["inspect_repository"]),
       ],
-      source: input.authority?.source ?? "derived_policy",
+      source: authoritySource,
+      ...(trustedGrant ? { grant_ref: trustedGrant.grant_ref } : {}),
     },
     acceptance,
     created_at: createdAt,
-    base_sha: input.base_sha ?? null,
-    allowed_paths: [...(input.allowed_paths ?? ["**/*"])],
-    protected_paths: [...(input.protected_paths ?? [])],
+    base_sha:
+      input.base_sha === null || input.base_sha === undefined
+        ? null
+        : durableText(input.base_sha),
+    allowed_paths: [...(input.allowed_paths ?? ["**/*"])].map(durableText),
+    protected_paths: [...(input.protected_paths ?? [])].map(durableText),
     verifier_requirements: [...(input.verifier_requirements ?? [])].map(
       durableText,
     ),
@@ -649,9 +748,33 @@ export function buildTaskContractV1(
       ? { baseline_reproduction: durableText(input.baseline_reproduction) }
       : {}),
     ...(input.baseline_verifier_state
-      ? { baseline_verifier_state: input.baseline_verifier_state }
+      ? {
+          baseline_verifier_state: {
+            ...(input.baseline_verifier_state.command
+              ? {
+                  command: durableText(input.baseline_verifier_state.command),
+                }
+              : {}),
+            ...(input.baseline_verifier_state.exit_code !== undefined
+              ? { exit_code: input.baseline_verifier_state.exit_code }
+              : {}),
+            ...(input.baseline_verifier_state.summary
+              ? {
+                  summary: durableText(input.baseline_verifier_state.summary),
+                }
+              : {}),
+          },
+        }
       : {}),
   };
+  if (
+    trustedGrant &&
+    body.authority.capabilities.some(
+      (capability) => !trustedGrant.capabilities.includes(capability),
+    )
+  ) {
+    throw new Error("TaskContract authority exceeds the trusted grant.");
+  }
   const contract_hash = hashContractBody({ ...body, provenance });
   return {
     ...body,
@@ -673,10 +796,16 @@ export function freezeTaskContract(contract: TaskContractV1): TaskContractV1 {
 export function withAcceptanceCriteria(
   contract: TaskContractV1,
   criteria: string[],
+  options: { trustedAuthorityResolver?: TrustedExecutionResolver } = {},
 ): TaskContractV1 {
   if (contract.frozen) {
     throw new Error(
       `TaskContractV1 ${contract.contract_id} is frozen; acceptance criteria cannot drift`,
+    );
+  }
+  if (contract.authority.grant_ref && !options.trustedAuthorityResolver) {
+    throw new Error(
+      "Rebuilding an explicitly authorized TaskContract requires the trusted authority resolver.",
     );
   }
   const next = buildTaskContractV1({
@@ -704,6 +833,14 @@ export function withAcceptanceCriteria(
     scope: contract.scope,
     risk: contract.risk,
     authority: contract.authority,
+    ...(contract.authority.grant_ref
+      ? {
+          trusted_authority: {
+            grant_ref: contract.authority.grant_ref,
+            resolver: options.trustedAuthorityResolver!,
+          },
+        }
+      : {}),
     base_sha: contract.base_sha,
     provenance: contract.provenance.records,
     ...(contract.baseline_reproduction
@@ -718,26 +855,8 @@ export function withAcceptanceCriteria(
   return next;
 }
 
-const DURABLE_SECRET_PATTERNS = [
-  /\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\s*[:=]\s*[^\s,;]+/iu,
-  /\bBearer\s+[A-Za-z0-9._~+/-]{12,}/u,
-  /\b(?:sk|rk)-[A-Za-z0-9][A-Za-z0-9_-]{16,}\b/u,
-  /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/u,
-];
-
 function durableText(value: string): string {
-  const redacted = redactSecrets(value);
-  if (hasDurableSecret(redacted)) {
-    throw new Error("TaskContract contains secret-like durable content.");
-  }
-  return redacted;
-}
-
-function hasDurableSecret(value: string): boolean {
-  return DURABLE_SECRET_PATTERNS.some((pattern) => {
-    pattern.lastIndex = 0;
-    return pattern.test(value);
-  });
+  return sanitizeDurableString(value, "TaskContract");
 }
 
 /** Whether a terminal outcome is allowed by the contract. */

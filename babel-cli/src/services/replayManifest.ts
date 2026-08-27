@@ -11,7 +11,11 @@ import { z } from "zod";
 
 import { canonicalJson, sha256Canonical } from "../acceptance/canonical.js";
 import type { CompletionStatusV1 } from "../evidence/evidenceGraph.js";
-import { redactSecrets } from "../utils/redaction.js";
+import {
+  assertDurableValueSafe,
+  redactSecrets,
+  sanitizeDurableString,
+} from "../utils/redaction.js";
 import {
   FAILURE_CATEGORIES,
   type FailureCategoryV1,
@@ -86,6 +90,8 @@ function redactScalar(
     (typeof value === "string" && SECRET_VALUE.test(value))
   )
     return "[REDACTED]";
+  if (typeof value === "string")
+    return sanitizeDurableString(value, "replay." + key);
   if (
     value === null ||
     typeof value === "string" ||
@@ -137,7 +143,7 @@ export function buildReplayManifestV1(input: {
     tool_profile: input.tool_profile ?? null,
     feature_flags: featureFlags,
     verification_commands: [...(input.verification_commands ?? [])].map(
-      (command) => redactSecrets(command),
+      (command) => sanitizeDurableString(command, "replay.verification_command"),
     ),
     verification_result: input.verification_result ?? null,
     failure_classification: input.failure_classification ?? null,
@@ -169,6 +175,11 @@ export function parseReplayManifestV1(
     };
   const manifest = parsed.data as ReplayManifestV1;
   const errors: string[] = [];
+  try {
+    assertDurableValueSafe(manifest, "replay_manifest");
+  } catch {
+    errors.push("durable_secret");
+  }
   if (
     manifest.verification_commands.some(
       (command) => redactSecrets(command) !== command,

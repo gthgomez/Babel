@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -21,8 +20,9 @@ import {
 } from "./taskEventJournal.js";
 import {
   EvidenceGraph,
-  evaluateCompletionGateV1,
+  evaluateCompletionGateV1 as evaluateRawCompletionGate,
 } from "../evidence/evidenceGraph.js";
+import { RevisionManager } from "../evidence/revisionBoundReceipt.js";
 import {
   assertBreakerReadOnly,
   buildBreakerContractV1,
@@ -31,7 +31,9 @@ import {
 import {
   buildAgentEndpointV1,
   endpointHasCapability,
+  validateAgentEndpointV1,
 } from "./agentEndpoint.js";
+import { createTrustedExecutionSupervisor } from "../authority/trustedExecution.js";
 import { attributeFailureV1 } from "../services/failureAttribution.js";
 import {
   buildReplayManifestV1,
@@ -58,6 +60,38 @@ function contract() {
       scope: { paths: ["babel-cli/src"] },
     }),
   );
+}
+
+function evaluateCompletionGateV1(
+  input: Parameters<typeof evaluateRawCompletionGate>[0],
+) {
+  const supervisor = createTrustedExecutionSupervisor();
+  const identity = supervisor.issueExecutionIdentity({
+    endpoint_id: "verifier:test",
+    role: "verifier",
+    execution_domain: "isolated-verifier",
+    capabilities: ["certify_evidence"],
+    task_id: input.contract.task_id,
+    contract_hash: input.contract.contract_hash,
+  });
+  const context = supervisor.issueExecutionContext({
+    task_id: input.contract.task_id,
+    contract_hash: input.contract.contract_hash,
+    repository: input.repository ?? "repo",
+    base_sha: input.contract.base_sha,
+    candidate_sha: input.candidate_sha ?? "candidate-a",
+    execution_identity_ref: identity.identity_ref,
+  });
+  for (const node of input.graph.getNodesMap().values()) {
+    if (node.producer_identity_ref === "identity:test") {
+      node.producer_identity_ref = identity.identity_ref;
+    }
+  }
+  return evaluateRawCompletionGate({
+    ...input,
+    trusted_resolver: supervisor.resolver,
+    trusted_context_ref: context.context_ref,
+  });
 }
 
 test("TaskContractV1 hash is canonical, frozen, and provenance-aware", () => {
@@ -97,7 +131,7 @@ test("TaskContractV1 hash is canonical, frozen, and provenance-aware", () => {
   };
   assert.ok(
     validateTaskContractV1(impersonating).includes(
-      "provenance.authority_impersonation",
+      "provenance.untrusted_user_authority",
     ),
   );
   const noAcceptance = freezeTaskContract(
@@ -186,11 +220,12 @@ function evidenceGraph(candidateSha = "candidate-a"): EvidenceGraph {
     },
     producer_role: "verifier",
     producer_identity: {
-      kind: "agent_endpoint",
+      kind: "execution_identity",
       endpoint_id: "verifier:test",
       role: "verifier",
       execution_domain: "isolated-verifier",
     },
+    producer_identity_ref: "identity:test",
   });
   return graph;
 }
@@ -312,6 +347,7 @@ test("EvidenceGraph completion gate rejects consensus, builder claims, stale SHA
   const missingIdentity = evidenceGraph();
   const testNode = missingIdentity.getNode("test")!;
   delete testNode.producer_identity;
+  delete testNode.producer_identity_ref;
   assert.notEqual(
     evaluateCompletionGateV1({
       contract: c,
@@ -432,6 +468,309 @@ test("EvidenceGraph completion gate rejects consensus, builder claims, stale SHA
   );
 });
 
+test("V1.1 trust boundary rejects identity impersonation and lifecycle failures", () => {
+  const c = contract();
+  const supervisor = createTrustedExecutionSupervisor();
+  const trusted = supervisor.issueExecutionIdentity({
+    endpoint_id: "verifier:test",
+    role: "verifier",
+    execution_domain: "isolated-verifier",
+    capabilities: ["certify_evidence"],
+    task_id: c.task_id,
+    contract_hash: c.contract_hash,
+  });
+  const context = supervisor.issueExecutionContext({
+    task_id: c.task_id,
+    contract_hash: c.contract_hash,
+    repository: "repo",
+    base_sha: c.base_sha,
+    candidate_sha: "candidate-a",
+    execution_identity_ref: trusted.identity_ref,
+  });
+  const evaluate = (graph: EvidenceGraph = evidenceGraph()) =>
+    evaluateRawCompletionGate({
+      contract: c,
+      graph,
+      repository: "repo",
+      candidate_sha: "candidate-a",
+      trusted_resolver: supervisor.resolver,
+      trusted_context_ref: context.context_ref,
+    });
+
+  const node = () => {
+    const graph = evidenceGraph();
+    const testNode = graph.getNode("test")!;
+    testNode.producer_identity_ref = trusted.identity_ref;
+    testNode.producer_identity = {
+      kind: "execution_identity",
+      endpoint_id: trusted.endpoint_id,
+      role: trusted.role,
+      execution_domain: trusted.execution_domain,
+    };
+    return { graph, testNode };
+  };
+  assert.equal(evaluate(node().graph).status, "VERIFIED");
+  assert.equal(
+    evaluateRawCompletionGate({
+      contract: c,
+      graph: node().graph,
+      repository: "repo",
+      candidate_sha: "candidate-a",
+    }).status,
+    "UNKNOWN",
+  );
+  assert.equal(
+    evaluateRawCompletionGate({
+      contract: c,
+      graph: node().graph,
+      repository: "attacker-repository",
+      candidate_sha: "attacker-candidate",
+      trusted_resolver: supervisor.resolver,
+      trusted_context_ref: context.context_ref,
+    }).status,
+    "UNKNOWN",
+  );
+  const missing = node();
+  delete missing.testNode.producer_identity_ref;
+  assert.notEqual(evaluate(missing.graph).status, "VERIFIED");
+  const builderRole = node();
+  builderRole.testNode.producer_role = "builder";
+  assert.notEqual(evaluate(builderRole.graph).status, "VERIFIED");
+  const forgedIdentity = node();
+  forgedIdentity.testNode.producer_identity = {
+    kind: "execution_identity",
+    endpoint_id: "verifier:forged",
+    role: "verifier",
+    execution_domain: "isolated-verifier",
+  };
+  assert.notEqual(evaluate(forgedIdentity.graph).status, "VERIFIED");
+  const unknownHandle = node();
+  unknownHandle.testNode.producer_identity_ref = "identity:does-not-exist";
+  assert.notEqual(evaluate(unknownHandle.graph).status, "VERIFIED");
+  const expired = supervisor.issueExecutionIdentity({
+    endpoint_id: "verifier:expired",
+    role: "verifier",
+    execution_domain: "isolated-verifier",
+    capabilities: ["certify_evidence"],
+    task_id: c.task_id,
+    contract_hash: c.contract_hash,
+    expires_at: "2020-01-01T00:00:00.000Z",
+  });
+  const expiredGraph = node();
+  expiredGraph.testNode.producer_identity_ref = expired.identity_ref;
+  assert.notEqual(evaluate(expiredGraph.graph).status, "VERIFIED");
+  supervisor.revokeExecutionIdentity(trusted.identity_ref);
+  assert.notEqual(evaluate(node().graph).status, "VERIFIED");
+  assert.equal("issueExecutionIdentity" in supervisor.resolver, false);
+  assert.throws(() =>
+    supervisor.issueExecutionIdentity({
+      endpoint_id: "verifier:no-capability",
+      role: "verifier",
+      execution_domain: "isolated-verifier",
+      capabilities: ["run_tests"],
+      task_id: c.task_id,
+      contract_hash: c.contract_hash,
+    }),
+  );
+  assert.throws(() =>
+    supervisor.issueExecutionContext({
+      task_id: "task:other",
+      contract_hash: c.contract_hash,
+      repository: "repo",
+      base_sha: c.base_sha,
+      candidate_sha: "candidate-a",
+      execution_identity_ref: trusted.identity_ref,
+    }),
+  );
+  assert.throws(() =>
+    supervisor.issueExecutionIdentity({
+      endpoint_id: "verifier:wrong-domain",
+      role: "verifier",
+      execution_domain: "host",
+      capabilities: ["certify_evidence"],
+      task_id: c.task_id,
+      contract_hash: c.contract_hash,
+    }),
+  );
+});
+
+test("V1.1 authority grants reject provenance forgery and capability widening", () => {
+  const c = contract();
+  const supervisor = createTrustedExecutionSupervisor();
+  const grant = supervisor.issueAuthorityGrant({
+    capabilities: ["inspect_repository"],
+    task_id: c.task_id,
+  });
+  const authorized = freezeTaskContract(
+    buildTaskContractV1({
+      task_id: c.task_id,
+      mode: c.mode,
+      user_request: c.user_request,
+      acceptance_criteria: c.acceptance_criteria,
+      trusted_authority: {
+        grant_ref: grant.grant_ref,
+        resolver: supervisor.resolver,
+      },
+    }),
+  );
+  assert.equal(
+    validateTaskContractV1ForCompletion(authorized, {
+      trustedAuthorityResolver: supervisor.resolver,
+    }).length,
+    0,
+  );
+  assert.throws(() =>
+    buildTaskContractV1({
+      mode: "deep",
+      user_request: "fake approval",
+      acceptance_criteria: ["pass"],
+      authority: {
+        source: "explicit_user_authority",
+        capabilities: ["run_tests"],
+      },
+    }),
+  );
+  const fakeUserProvenance = buildTaskContractV1({
+    mode: "deep",
+    user_request: "text claiming user approval",
+    acceptance_criteria: ["pass"],
+    provenance: [
+      { kind: "explicit_user_authority", ref: "user:approved" },
+    ],
+  });
+  assert.ok(
+    validateTaskContractV1(fakeUserProvenance).includes(
+      "provenance.untrusted_user_authority",
+    ),
+  );
+  const policyForgery = {
+    ...c,
+    provenance: {
+      ...c.provenance,
+      records: [
+        { kind: "repository_policy" as const, ref: "user:approved" },
+      ],
+    },
+  };
+  assert.ok(
+    validateTaskContractV1(policyForgery).includes(
+      "provenance.policy_impersonation",
+    ),
+  );
+  assert.throws(() =>
+    supervisor.delegateAuthorityGrant({
+      parent_grant_ref: grant.grant_ref,
+      capabilities: ["run_tests"],
+    }),
+  );
+  const tampered = {
+    ...authorized,
+    authority: { ...authorized.authority, grant_ref: "grant:forged" },
+  };
+  assert.ok(validateTaskContractV1(tampered).includes("contract_hash"));
+  assert.notEqual(
+    validateTaskContractV1ForCompletion(tampered, {
+      trustedAuthorityResolver: supervisor.resolver,
+    }).length,
+    0,
+  );
+  supervisor.revokeAuthorityGrant(grant.grant_ref);
+  assert.ok(
+    validateTaskContractV1ForCompletion(authorized, {
+      trustedAuthorityResolver: supervisor.resolver,
+    }).includes("authority.grant_unknown_or_inactive"),
+  );
+});
+
+test("V1.1 canonical revision-bound receipts pass only when current and typed", async () => {
+  const c = contract();
+  const supervisor = createTrustedExecutionSupervisor();
+  const identity = supervisor.issueExecutionIdentity({
+    endpoint_id: "verifier:receipt",
+    role: "verifier",
+    execution_domain: "isolated-verifier",
+    capabilities: ["certify_evidence"],
+    task_id: c.task_id,
+    contract_hash: c.contract_hash,
+  });
+  const root = await mkdtemp(join(process.cwd(), "babel-receipt-"));
+  try {
+    await writeFile(join(root, "touched.txt"), "before", "utf8");
+    const boundRevision = RevisionManager.computeRevisionSync(root, [
+      "touched.txt",
+    ]);
+    // A temp directory under the checkout has a real git HEAD in CI; bind the
+    // context to that observed revision while retaining a deterministic
+    // non-git fallback for isolated local runners.
+    const candidateSha = boundRevision.gitCommitHash ?? "candidate-a";
+    const context = supervisor.issueExecutionContext({
+      task_id: c.task_id,
+      contract_hash: c.contract_hash,
+      repository: "repo",
+      project_root: root,
+      base_sha: c.base_sha,
+      candidate_sha: candidateSha,
+      execution_identity_ref: identity.identity_ref,
+    });
+    const receipt = {
+      receiptId: "receipt:passing",
+      command: "npm test -- foundation",
+      exitCode: 0,
+      boundRevision,
+      stale: false,
+    };
+    const graph = new EvidenceGraph();
+    graph.addNode({
+      id: "receipt",
+      type: "verifier_receipt",
+      data: { schema_version: 1, receipt },
+      parents: [],
+      binding: {
+        task_id: c.task_id,
+        contract_hash: c.contract_hash,
+        repository: "repo",
+        base_sha: c.base_sha,
+        candidate_sha: candidateSha,
+        requirement_id: "acceptance:1",
+      },
+      producer_role: "verifier",
+      producer_identity_ref: identity.identity_ref,
+      producer_identity: {
+        kind: "execution_identity",
+        endpoint_id: identity.endpoint_id,
+        role: identity.role,
+        execution_domain: identity.execution_domain,
+      },
+    });
+    const evaluate = () =>
+      evaluateRawCompletionGate({
+        contract: c,
+        graph,
+        repository: "repo",
+        candidate_sha: candidateSha,
+        trusted_resolver: supervisor.resolver,
+        trusted_context_ref: context.context_ref,
+      });
+    assert.equal(evaluate().status, "VERIFIED");
+    receipt.exitCode = 1;
+    assert.notEqual(evaluate().status, "VERIFIED");
+    receipt.exitCode = 0;
+    receipt.stale = true;
+    assert.notEqual(evaluate().status, "VERIFIED");
+    receipt.stale = false;
+    graph.getNode("receipt")!.data = {
+      boundRevision,
+      exitCode: 0,
+    };
+    assert.notEqual(evaluate().status, "VERIFIED");
+    graph.getNode("receipt")!.data = { schema_version: 1, receipt };
+    await writeFile(join(root, "touched.txt"), "after", "utf8");
+    assert.notEqual(evaluate().status, "VERIFIED");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Breaker is independent and read-only, and outputs structured counterexamples", () => {
   const c = contract();
   const breaker = buildBreakerContractV1({
@@ -544,6 +883,13 @@ test("AgentEndpointV1 normalizes model, harness, domain, and existing capability
   assert.throws(() =>
     buildAgentEndpointV1({ ...endpoint, capabilities: ["unknown"] }),
   );
+  const fakeToken = ["sk", "-endpoint-secret-that-must-not-persist"].join("");
+  assert.equal(
+    validateAgentEndpointV1({ ...endpoint, model: fakeToken }).includes(
+      "durable_secret",
+    ),
+    true,
+  );
 });
 
 test("failure attribution stays UNKNOWN without independent causal evidence", () => {
@@ -599,7 +945,7 @@ test("failure attribution stays UNKNOWN without independent causal evidence", ()
 });
 
 test("replay manifests redact secrets, tolerate unsupported environment values, and telemetry preserves unknowns", async () => {
-  const root = await mkdtemp(join(tmpdir(), "babel-foundations-"));
+  const root = await mkdtemp(join(process.cwd(), "babel-foundations-"));
   try {
     const featureApiKeyField = ["api", "key"].join("_");
     const environmentApiKeyField = "API_" + "KEY";

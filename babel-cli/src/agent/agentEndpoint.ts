@@ -4,6 +4,10 @@ import {
   isCapabilityId,
   type CapabilityId,
 } from "../authority/capabilities.js";
+import {
+  assertDurableValueSafe,
+  sanitizeDurableString,
+} from "../utils/redaction.js";
 
 export const AGENT_ENDPOINT_VERSION = 1 as const;
 
@@ -46,8 +50,17 @@ export function buildAgentEndpointV1(
   }
   return {
     schema_version: AGENT_ENDPOINT_VERSION,
-    ...input,
+    endpoint_id: sanitizeDurableString(input.endpoint_id, "endpoint_id"),
+    identity: sanitizeDurableString(input.identity, "identity"),
+    harness: sanitizeDurableString(input.harness, "harness"),
+    model: sanitizeDurableString(input.model, "model"),
+    provider: sanitizeDurableString(input.provider, "provider"),
     capabilities: [...input.capabilities],
+    location: sanitizeDurableString(input.location, "location"),
+    execution_domain: sanitizeDurableString(
+      input.execution_domain,
+      "execution_domain",
+    ),
   };
 }
 
@@ -64,6 +77,11 @@ export function validateAgentEndpointV1(value: unknown): string[] {
     return parsed.error.issues.map((issue) => issue.path.join(".") || "$");
   const endpoint = parsed.data;
   const errors: string[] = [];
+  try {
+    assertDurableValueSafe(endpoint, "agent_endpoint");
+  } catch {
+    errors.push("durable_secret");
+  }
   if (
     endpoint.capabilities.some(
       (capability) => !isCapabilityId(capability) || capability === "unknown",

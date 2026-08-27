@@ -4,6 +4,10 @@ import { z } from "zod";
 
 import type { AgentEndpointV1 } from "../agent/agentEndpoint.js";
 import type { CompletionStatusV1 } from "../evidence/evidenceGraph.js";
+import {
+  assertDurableValueSafe,
+  sanitizeDurableString,
+} from "../utils/redaction.js";
 
 export const RELIABILITY_TELEMETRY_VERSION = 1 as const;
 export const RELIABILITY_TELEMETRY_FILENAME = "reliability-telemetry.jsonl";
@@ -70,13 +74,32 @@ export function buildReliabilityTelemetryV1(input: {
 }): ReliabilityTelemetryV1 {
   const record: ReliabilityTelemetryV1 = {
     schema_version: RELIABILITY_TELEMETRY_VERSION,
-    run_id: input.run_id,
-    task_id: input.task_id,
-    task_class: input.task_class ?? null,
-    risk: input.risk ?? null,
-    model: input.model ?? input.endpoint?.model ?? null,
-    harness: input.harness ?? input.endpoint?.harness ?? null,
-    tool_profile: input.tool_profile ?? null,
+    run_id: sanitizeDurableString(input.run_id, "telemetry.run_id"),
+    task_id: sanitizeDurableString(input.task_id, "telemetry.task_id"),
+    task_class:
+      input.task_class === null || input.task_class === undefined
+        ? null
+        : sanitizeDurableString(input.task_class, "telemetry.task_class"),
+    risk:
+      input.risk === null || input.risk === undefined
+        ? null
+        : sanitizeDurableString(input.risk, "telemetry.risk"),
+    model:
+      input.model === null || input.model === undefined
+        ? input.endpoint?.model === undefined
+          ? null
+          : sanitizeDurableString(input.endpoint.model, "telemetry.model")
+        : sanitizeDurableString(input.model, "telemetry.model"),
+    harness:
+      input.harness === null || input.harness === undefined
+        ? input.endpoint?.harness === undefined
+          ? null
+          : sanitizeDurableString(input.endpoint.harness, "telemetry.harness")
+        : sanitizeDurableString(input.harness, "telemetry.harness"),
+    tool_profile:
+      input.tool_profile === null || input.tool_profile === undefined
+        ? null
+        : sanitizeDurableString(input.tool_profile, "telemetry.tool_profile"),
     success: input.success ?? null,
     verification_result: input.verification_result ?? null,
     attempt_count: input.attempt_count ?? null,
@@ -107,6 +130,7 @@ export function appendReliabilityTelemetryV1(
   const errors = validateReliabilityTelemetryV1(record);
   if (errors.length > 0)
     throw new Error(`Invalid reliability telemetry: ${errors.join(", ")}`);
+  assertDurableValueSafe(record, "reliability_telemetry");
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, `${JSON.stringify(record)}\n`, "utf8");
 }
@@ -131,6 +155,7 @@ export function loadReliabilityTelemetryV1(
         throw new Error(
           `Invalid reliability telemetry at line ${index + 1}: ${errors.join(", ")}`,
         );
+      assertDurableValueSafe(value, "reliability_telemetry");
       return value as ReliabilityTelemetryV1;
     });
 }

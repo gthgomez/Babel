@@ -9,7 +9,11 @@ import {
 import { dirname } from "node:path";
 
 import { canonicalJson, sha256Canonical } from "../acceptance/canonical.js";
-import { redactEvidenceValue } from "../utils/redaction.js";
+import {
+  assertDurableValueSafe,
+  redactEvidenceValue,
+  sanitizeDurableString,
+} from "../utils/redaction.js";
 
 export const TASK_EVENT_SCHEMA_VERSION = 1 as const;
 export const TASK_EVENTS_FILENAME = "task-events.jsonl";
@@ -124,6 +128,11 @@ function checkEvent(
   } catch {
     errors.push("payload");
   }
+  try {
+    assertDurableValueSafe(event, "event");
+  } catch {
+    errors.push("durable_secret");
+  }
   if (
     !/^[0-9a-f]{64}$/.test(event.payload_hash) ||
     event.payload_hash !== sha256Canonical(event.payload)
@@ -185,15 +194,16 @@ export class TaskEventJournal {
     event_id?: string;
     timestamp?: string;
   }): TaskEventV1 {
+    assertDurableValueSafe(input.payload ?? {}, "payload");
     const payload = redactEvidenceValue({ ...(input.payload ?? {}) });
     assertSafePayload(payload);
     const withoutHash: Omit<TaskEventV1, "event_hash"> = {
       event_version: TASK_EVENT_SCHEMA_VERSION,
-      event_id: input.event_id ?? randomUUID(),
+      event_id: sanitizeDurableString(input.event_id ?? randomUUID(), "event_id"),
       task_id: this.state.task_id,
       sequence: this.state.events.length,
       timestamp: input.timestamp ?? new Date().toISOString(),
-      actor: input.actor,
+      actor: sanitizeDurableString(input.actor, "actor"),
       event_type: input.event_type,
       payload,
       payload_hash: sha256Canonical(payload),
