@@ -8,6 +8,7 @@ import vm from 'node:vm';
 import { appendTranscriptEvent, htmlLooksUnsafeForInnerHtml } from './remoteUiRender.js';
 import { shouldCacheRemoteUiRequest } from './remoteUiCachePolicy.js';
 import { remoteUiFileForPath } from './remoteUiAssets.js';
+import { getRemoteUiFixtureScenario, startRemoteUiFixtureServer } from './remoteUiFixture.js';
 
 const uiDir = join(dirname(fileURLToPath(import.meta.url)), 'remote-ui');
 
@@ -67,8 +68,8 @@ describe('remote UI policy and assets', () => {
     const html = readFileSync(join(uiDir, 'index.html'), 'utf8');
     const app = readFileSync(join(uiDir, 'app.js'), 'utf8');
     const sw = readFileSync(join(uiDir, 'sw.js'), 'utf8');
-    assert.match(html, /ALLOW ONCE/);
-    assert.match(html, /DENY/);
+    assert.match(html, /Allow once/i);
+    assert.match(html, /Deny/i);
     assert.doesNotMatch(html, /ALLOW_SESSION/);
     assert.match(html, /host-state/);
     assert.match(html, /composer/);
@@ -80,6 +81,24 @@ describe('remote UI policy and assets', () => {
     assert.match(sw, /NETWORK_ONLY/);
     assert.ok(remoteUiFileForPath('/ui'));
     assert.equal(remoteUiFileForPath('/rpc'), null);
+  });
+
+  it('keeps deterministic fixture mode separate from the production UI route', async () => {
+    const scenario = getRemoteUiFixtureScenario('approval-required');
+    assert.equal(scenario.approval, 'PENDING');
+    assert.equal(remoteUiFileForPath('/fixture'), null);
+    const fixture = await startRemoteUiFixtureServer();
+    try {
+      const response = await fetch(`${fixture.url}/config?scenario=approval-required`);
+      assert.equal(response.status, 200);
+      const payload = await response.json() as { mode: string; scenario: { id: string } };
+      assert.equal(payload.mode, 'remote-ui-fixture');
+      assert.equal(payload.scenario.id, 'approval-required');
+      const productionRoute = await fetch(`${fixture.url.replace(/\/fixture$/, '')}/rpc`);
+      assert.equal(productionRoute.status, 404);
+    } finally {
+      await fixture.close();
+    }
   });
 
   it('loads UI scripts in a browser-like environment without Node module/require', () => {
@@ -116,5 +135,32 @@ describe('remote UI policy and assets', () => {
     }
     const state = sandbox['BabelRemoteState'] as { apply: (m: string, from: string, ev: string) => string };
     assert.equal(state.apply('host', 'UNKNOWN', 'start'), 'CONNECTING');
+  });
+
+  it('classifies settled JSON-RPC errors separately from malformed responses', () => {
+    const sandbox: Record<string, unknown> = { window: {} };
+    sandbox['window'] = sandbox;
+    sandbox['globalThis'] = sandbox;
+    vm.runInContext(
+      readFileSync(join(uiDir, 'state.js'), 'utf8'),
+      vm.createContext(sandbox),
+      { filename: 'state.js' },
+    );
+    const state = sandbox['BabelRemoteState'] as {
+      classifyRpcResponse: (payload: unknown) => { kind: string; responseSettled: boolean };
+    };
+    const success = state.classifyRpcResponse({ jsonrpc: '2.0', id: 1, result: { turn_id: 4 } });
+    assert.equal(success.kind, 'success');
+    assert.equal(success.responseSettled, true);
+    const rejected = state.classifyRpcResponse({ jsonrpc: '2.0', id: 1, error: { code: -32001, message: 'rejected' } });
+    assert.equal(rejected.kind, 'rejected');
+    assert.equal(rejected.responseSettled, true);
+    const nullResult = state.classifyRpcResponse({ jsonrpc: '2.0', id: 1, result: null });
+    assert.equal(nullResult.kind, 'success');
+    assert.equal(nullResult.responseSettled, true);
+    const malformed = state.classifyRpcResponse({ jsonrpc: '2.0', id: 1 });
+    assert.equal(malformed.kind, 'malformed');
+    assert.equal(malformed.responseSettled, false);
+    assert.equal(state.classifyRpcResponse({ jsonrpc: '2.0', id: 1, result: {}, error: {} }).kind, 'malformed');
   });
 });

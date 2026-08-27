@@ -121,3 +121,5 @@ docs/status/*
 !docs/status/audits/
 docs/guides/PARITY_BENCHMARK.md
 docs/OSS_DOCS_CRITIQUE_2026-08-01.md
+# Deterministic Remote UI browser artifacts (review locally or upload in CI).
+/artifacts/remote-ui/

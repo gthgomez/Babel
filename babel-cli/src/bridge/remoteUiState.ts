@@ -63,7 +63,7 @@ const TURN_TRANSITIONS: Record<TurnUiState, readonly string[]> = {
   SUBMITTING: ['ack', 'fail', 'unknown'],
   ACKNOWLEDGED: ['stream', 'complete', 'fail', 'cancel'],
   STREAMING: ['complete', 'fail', 'cancel'],
-  CANCELLING: ['complete', 'fail'],
+  CANCELLING: ['complete', 'fail', 'unknown'],
   COMPLETED: ['submit'],
   FAILED: ['submit'],
   UNKNOWN: ['recover', 'fail', 'complete'],

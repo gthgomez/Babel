@@ -7,6 +7,7 @@ V1 productizes the same path into a supervisory PWA.
 |---|---|
 | [BABEL_REMOTE_V1_IMPLEMENTATION.md](./BABEL_REMOTE_V1_IMPLEMENTATION.md) | V1 control plane and shipped surfaces |
 | [BABEL_REMOTE_V1_CERTIFICATION.md](./BABEL_REMOTE_V1_CERTIFICATION.md) | V1 evidence classes (not a marketing sheet) |
+| [BABEL_REMOTE_V1_UI_VALIDATION.md](./BABEL_REMOTE_V1_UI_VALIDATION.md) | Deterministic browser harness, visual artifacts, and physical Android checklist |
 | [BABEL_REMOTE_STAGE0_COVERAGE.md](./BABEL_REMOTE_STAGE0_COVERAGE.md) | Vendor coverage, uncovered workflow, GO/NO_GO |
 | [BABEL_REMOTE_REPO_RECONCILIATION.md](./BABEL_REMOTE_REPO_RECONCILIATION.md) | ADR-010 vs bridge vs ChatEngine |
 | [BABEL_REMOTE_SECURITY_MODEL.md](./BABEL_REMOTE_SECURITY_MODEL.md) | Trust boundaries, loopback, auth |

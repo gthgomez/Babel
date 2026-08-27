@@ -23,6 +23,16 @@ phone / mobile browser
 
 `babel remote serve` still fail-closes for `0.0.0.0` and Funnel flags.
 
+## UI validation surface
+
+The installable PWA remains the production UI. `babel remote ui-benchmark` is a
+separate, read-only loopback fixture server that serves the same shell at
+`/fixture` and deterministic scenario data at `/fixture/config`. It never
+creates a BridgeServer session, accepts bearer credentials, opens a WebSocket,
+calls a provider, or mutates a workspace. The browser harness uses it to emit
+focused screenshots under `artifacts/remote-ui/` and assert responsive/layout
+invariants. See [BABEL_REMOTE_V1_UI_VALIDATION.md](./BABEL_REMOTE_V1_UI_VALIDATION.md).
+
 ## V1 additions
 
 | Area | What shipped |

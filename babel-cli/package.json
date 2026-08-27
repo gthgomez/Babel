@@ -130,6 +130,7 @@
     "test:chat-perf": "tsx --no-warnings=ExperimentalWarning --test src/agent/chatPerformanceScenarios.test.ts",
     "test:projection": "tsx --no-warnings=ExperimentalWarning --test src/interactive/projection/**/*.test.ts",
     "test:ui": "node scripts/run_ui_tests.mjs",
+    "test:remote-ui": "node scripts/remote_ui_visual.mjs",
     "test:ui:coverage": "node scripts/run_ui_tests.mjs --experimental-test-coverage",
     "test:ui:update": "UPDATE_SNAPSHOTS=1 npm run test:ui",
     "test:contrast": "tsx --no-warnings=ExperimentalWarning --test src/ui/contrast.test.ts",
@@ -173,6 +174,7 @@
     "knip": "^6.17.1",
     "prettier": "^3.8.5",
     "promptfoo": "^0.121.17",
+    "playwright": "^1.61.1",
     "tsx": "^4.19.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.62.0"
