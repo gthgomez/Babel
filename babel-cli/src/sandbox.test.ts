@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { SafeExecutor, isTransientSpawnError, validateExecutorShellCommand } from './sandbox.js';
+import { ProcessWitness } from './diagnostics/bdns/processWitness.js';
 import {
   setDockerAvailableForTest,
   resetDockerAvailabilityCache,
@@ -828,6 +829,36 @@ test('spawn with non-zero exit code does not receive transient spawn error marke
       `Spawn error marker should not appear for non-zero exit codes, got: ${result.stderr}`,
     );
   } finally {
+    fixture.cleanup();
+  }
+});
+
+test('shellExecAsync correlates process witness observations with toolCallId', async () => {
+  const fixture = makeFixture();
+  const witness = new ProcessWitness();
+  try {
+    const kinds: string[] = [];
+    const ids: Array<string | undefined> = [];
+    witness.subscribe((observation) => {
+      kinds.push(observation.kind);
+      ids.push(observation.correlation.toolCallId);
+    }, { id: 'sandbox-toolcall' });
+    const executor = new SafeExecutor(fixture.projectRoot, null, 'act', witness);
+    const result = await executor.shellExecAsync(
+      'echo ok',
+      '.',
+      5_000,
+      'shell_exec',
+      undefined,
+      { sessionId: 'session-shell', toolCallId: 'tool-shell-1' },
+    );
+    assert.equal(result.exit_code, 0);
+    await witness.bus.flush();
+    assert.ok(kinds.includes('process_requested'));
+    assert.ok(kinds.includes('process_exited'));
+    assert.ok(ids.includes('tool-shell-1'));
+  } finally {
+    await witness.close();
     fixture.cleanup();
   }
 });

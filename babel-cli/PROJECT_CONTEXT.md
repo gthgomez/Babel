@@ -56,6 +56,8 @@ a clean Babel clone.
 | Sandbox / profiles | `sandbox.ts`, `config/executionProfiles.ts` |
 | Worktree safety | `services/worktreeSafety.ts`, `services/workspaceTransactions.ts` |
 | Required verifiers (pipeline) | `services/requiredVerifierContract.ts` |
+| BDNS observation | `diagnostics/bdns/` (subordinate to `docs/architecture/BDNS_ARCHITECTURE_V1.md`) |
+| Executable acceptance (local experimental recording) | `acceptance/` (subordinate to `docs/architecture/EXECUTABLE_ACCEPTANCE_V0.md`; must not change kernel completion in V0) |
 
 **Invariant:** the model proposes; `executorKernel.completion.decide` owns final terminal honesty for execute modes. This file records **implementation context** and MUST NOT redefine target architecture norms.
 

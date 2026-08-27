@@ -29,6 +29,7 @@ last_verified: 2026-08-05
 | [BDNS_INVENTORY_V1.md](./BDNS_INVENTORY_V1.md) | B0 inventory of process, workspace, evidence, diagnostic, TUI, and OTel boundaries. |
 | [BDNS_FAULT_MATRIX_V1.md](./BDNS_FAULT_MATRIX_V1.md) | Seeded fault diagnosis matrix and differential-value acceptance evidence. |
 | [BDNS_HARDENING_V1.md](./BDNS_HARDENING_V1.md) | B8 bounded-soak, privacy, storage, portability, and enablement gates. |
+| [EXECUTABLE_ACCEPTANCE_V0.md](./EXECUTABLE_ACCEPTANCE_V0.md) | Proposed Executable Acceptance V0 campaign: patch-blind claims, sufficiency, and blinded experiment. Non-normative; subordinate to harness-v1. |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | High-level system architecture, layer model, router contracts, kernel. |
 | [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) | Explanatory harness map (not normative). |
 | [BABEL_LOCAL_MODE.md](./BABEL_LOCAL_MODE.md) | Local workspace surfaces, session lifecycle, editor integrations. |

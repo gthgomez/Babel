@@ -1122,9 +1122,14 @@ export async function executeActionWithPolicy(
     }
     const isolateLocal =
       mapped !== null && CAPABILITY_KINDS[mapped.capability] === 'local';
+    const executionContext: ToolContext = {
+      ...context,
+      sessionId: context.sessionId ?? context.runId,
+      ...(idempotencyKey ? { toolCallId: context.toolCallId ?? idempotencyKey } : {}),
+    };
     const execution = isolateLocal
-      ? await runWithUnprivilegedChildEnv(() => executor.execute(action, context, budget))
-      : await executor.execute(action, context, budget);
+      ? await runWithUnprivilegedChildEnv(() => executor.execute(action, executionContext, budget))
+      : await executor.execute(action, executionContext, budget);
 
     if (governanceSnapshot && governanceRepoRoot) {
       let recon: ReturnType<typeof reconcileGovernanceAfterEffect>;

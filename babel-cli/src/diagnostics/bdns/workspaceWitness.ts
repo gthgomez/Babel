@@ -2,7 +2,7 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
-import { relative, resolve, sep } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { createBdnsObservationBus, type BdnsObservationBus } from './observationBus.js'
 import type { BdnsCorrelation, BdnsEvidenceState } from './types.js'
 
@@ -44,13 +44,17 @@ function hashBytes(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
+function isInside(root: string, target: string): boolean {
+  const rel = relative(root, target)
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+}
+
 function normalizeRelative(root: string, input: string): string {
   const absolute = resolve(root, input)
-  const rel = relative(root, absolute)
-  if (rel === '..' || rel.startsWith(`..${sep}`) || rel.includes(`..${sep}`)) {
+  if (!isInside(root, absolute)) {
     throw new Error(`workspace witness path escapes root: ${input}`)
   }
-  return rel || '.'
+  return relative(root, absolute) || '.'
 }
 
 function changed(before: WorkspacePathSnapshot, after: WorkspacePathSnapshot): boolean {
@@ -85,7 +89,7 @@ export class WorkspaceWitness {
     const snapshots: WorkspacePathSnapshot[] = []
     for (const input of selected) {
       const path = normalizeRelative(this.root, input)
-      if (this.diagnosticRoot && resolve(this.root, path).startsWith(`${this.diagnosticRoot}${sep}`)) continue
+      if (this.diagnosticRoot && isInside(this.diagnosticRoot, resolve(this.root, path))) continue
       const absolute = resolve(this.root, path)
       try {
         const stats = await fs.stat(absolute)
@@ -97,10 +101,15 @@ export class WorkspaceWitness {
           modifiedMs: stats.mtimeMs,
         }
         if (stats.isFile()) {
-          const content = await fs.readFile(absolute)
-          const bounded = content.subarray(0, this.maxHashBytes)
-          snapshot.hash = hashBytes(bounded)
-          if (content.length > this.maxHashBytes) snapshot.hashTruncated = true
+          const handle = await fs.open(absolute, 'r')
+          try {
+            const bounded = Buffer.alloc(Math.min(this.maxHashBytes, stats.size))
+            const { bytesRead } = await handle.read(bounded, 0, bounded.length, 0)
+            snapshot.hash = hashBytes(bounded.subarray(0, bytesRead))
+            if (stats.size > this.maxHashBytes) snapshot.hashTruncated = true
+          } finally {
+            await handle.close()
+          }
         }
         snapshots.push(snapshot)
       } catch (error) {
@@ -115,7 +124,7 @@ export class WorkspaceWitness {
   /** Record a watcher signal as a non-authoritative observation. */
   recordWatcherSignal(path: string, event: 'add' | 'change' | 'unlink' | 'rename', correlation: BdnsCorrelation = {}): void {
     const normalized = normalizeRelative(this.root, path)
-    if (this.diagnosticRoot && resolve(this.root, normalized).startsWith(`${this.diagnosticRoot}${sep}`)) return
+    if (this.diagnosticRoot && isInside(this.diagnosticRoot, resolve(this.root, normalized))) return
     this.bus.publish({
       schemaVersion: 1,
       source: 'watcher',

@@ -40,3 +40,18 @@ test('detects an undeclared targeted mutation', async () => {
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('hashes only a bounded prefix of large files', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'bdns-workspace-'))
+  try {
+    const file = join(root, 'large.bin')
+    await writeFile(file, Buffer.alloc(8_192, 7))
+    const witness = new WorkspaceWitness({ root, maxHashBytes: 64 })
+    const [snapshot] = await witness.capture(['large.bin'])
+    assert.equal(snapshot?.hashTruncated, true)
+    assert.equal(snapshot?.sizeBytes, 8_192)
+    assert.equal(typeof snapshot?.hash, 'string')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

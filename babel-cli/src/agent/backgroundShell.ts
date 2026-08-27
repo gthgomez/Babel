@@ -59,6 +59,8 @@ export interface StartBackgroundShellInput {
   detached?: boolean;
   /** Owning engine/session id — lets killAllBackgroundShells target one engine. */
   ownerId?: string;
+  /** Canonical tool-call id for BDNS process correlation. */
+  toolCallId?: string;
   /** Optional explicit BDNS process witness; defaults to Babel's bounded witness. */
   processWitness?: ProcessWitness;
 }
@@ -179,13 +181,15 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
       ? input.timeoutMs
       : DEFAULT_BACKGROUND_JOB_TIMEOUT_MS;
   const processWitness = input.processWitness ?? getDefaultProcessWitness();
+  const sessionId = input.ownerId ?? process.env['BABEL_SESSION_ID'];
   const processInput = {
     executable: spawnCmd,
     args: spawnArgs,
     cwd,
     toolName: 'background_shell',
     timeoutMs,
-    ...(process.env['BABEL_SESSION_ID'] ? { sessionId: process.env['BABEL_SESSION_ID'] } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(input.toolCallId ? { toolCallId: input.toolCallId } : {}),
   };
   const processExecutionId = processWitness.requested(processInput);
 
