@@ -11,6 +11,7 @@ $scrubScript = Join-Path $repoRoot 'tools/check-public-scrub.ps1'
 $contentPolicy = Join-Path $repoRoot 'tools/security/public-content-policy.json'
 $scrubPolicy = Join-Path $repoRoot 'tools/security/policy.json'
 $commonModule = Join-Path $repoRoot 'tools/security/tracked-scan-common.ps1'
+$pcontFixtureRoot = Join-Path $repoRoot 'tools/tests/fixtures/pcont007'
 $shell = (Get-Command pwsh -ErrorAction Stop).Source
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("babel-public-gates-{0}" -f [guid]::NewGuid().ToString('N'))
 
@@ -35,6 +36,28 @@ function Initialize-Fixture([string]$Name) {
 function Invoke-Gate([string]$Script, [string]$Root) {
   $output = @(& $shell -NoProfile -File $Script -RepoRoot $Root -OutputFormat json 2>&1)
   return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = ($output -join "`n") }
+}
+function Invoke-PCONT007Corpus {
+  $fixtures = @(Get-ChildItem -LiteralPath $pcontFixtureRoot -Filter '*.txt' -File -Recurse | Sort-Object FullName)
+  Assert-True ($fixtures.Count -gt 0) 'PCONT007 fixture corpus is empty'
+  foreach ($fixture in $fixtures) {
+    $relative = $fixture.FullName.Substring($pcontFixtureRoot.Length).TrimStart('\', '/')
+    $category = ($relative -split '[\\/]')[0]
+    $caseRoot = Initialize-Fixture ("pcont007-{0}-{1}" -f $category, $fixture.BaseName)
+    $caseText = (Get-Content -Raw -LiteralPath $fixture.FullName).TrimEnd()
+    Set-Content -LiteralPath (Join-Path $caseRoot 'sample.md') -Value ("# Fixture`n{0}`n" -f $caseText)
+    & git -C $caseRoot add .
+    $result = Invoke-Gate (Join-Path $caseRoot 'tools/check-public-content-policy.ps1') $caseRoot
+    $json = ConvertFrom-Json $result.Text
+    $hasPCONT007 = @($json.findings | Where-Object id -eq 'PCONT007').Count -gt 0
+    if ($category -eq 'allow') {
+      Assert-True ($result.ExitCode -eq 0) "PCONT007 allow fixture failed: $relative :: $($result.Text)"
+      Assert-True (-not $hasPCONT007) "PCONT007 allow fixture produced a finding: $relative"
+    } else {
+      Assert-True ($result.ExitCode -eq 1) "PCONT007 reject fixture passed: $relative"
+      Assert-True $hasPCONT007 "PCONT007 fixture did not produce PCONT007: $relative"
+    }
+  }
 }
 
 try {
@@ -158,6 +181,17 @@ const inferred = join(workspaceRoot, family, projectFolderName)
   Assert-True (@($contentFindings | Where-Object path -eq 'ignored.jsonl').Count -gt 0) 'forced ignored JSONL file was not scanned'
   Assert-True (@($contentFindings | Where-Object id -eq 'PCONT004').Count -ge 2) 'malformed public identifier variants were not all detected'
   Assert-True ($contentFail.Text -notmatch 'someone') 'content finding output exposed source text'
+  $pcontFinding = @((ConvertFrom-Json $contentFail.Text).findings | Where-Object id -eq 'PCONT007') | Select-Object -First 1
+  Assert-True ($null -ne $pcontFinding) 'PCONT007 contract fixture did not produce a finding'
+  $findingFields = @($pcontFinding.PSObject.Properties.Name)
+  Assert-True (($findingFields -join ',') -eq 'id,category,path,line,severity') "default JSON finding schema changed: $($findingFields -join ',')"
+  $humanOutput = @(& $shell -NoProfile -File (Join-Path $negative 'tools/check-public-content-policy.ps1') -RepoRoot $negative 2>&1)
+  $humanText = $humanOutput -join "`n"
+  Assert-True ($humanText -match 'clear_unsupported_claim') 'PCONT007 human diagnostics omitted classification'
+  Assert-True ($humanText -match 'matched:') 'PCONT007 human diagnostics omitted matched span'
+  Assert-True ($humanText -notmatch 'someone') 'PCONT007 human diagnostics exposed source text'
+
+  Invoke-PCONT007Corpus
 
   $canonicalFail = Invoke-Gate (Join-Path $negative 'tools/check-canonical-independence.ps1') $negative
   Assert-True ($canonicalFail.ExitCode -eq 1) 'negative canonical fixture unexpectedly passed'

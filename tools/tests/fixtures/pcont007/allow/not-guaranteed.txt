@@ -1,0 +1,1 @@
+The API behavior is not guaranteed to be seekable.
