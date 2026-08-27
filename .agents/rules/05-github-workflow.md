@@ -152,6 +152,26 @@ Proceed only when the manager can reconcile subagent evidence. If reviewers disa
 
 ## Required Preflight
 
+For the public canonical checkout, run the committed machine-readable gate before
+the lower-level inspection commands:
+
+```powershell
+.\scripts\agent-preflight.ps1
+```
+
+It establishes the Git and `gh` executable paths, non-interactive environment,
+repo-local GitHub CLI credential provider, expected repository, authentication,
+fetchability, current/base SHAs, and worktree state. `-AllowDirtyWorktree` is
+inspection-only and never makes a dirty tree mutation- or push-ready. Use
+`.\scripts\agent-worktree.ps1 -Action create -Name <task>` for substantial work.
+
+Agents must not modify global Git configuration, Windows Credential Manager, SSH
+configuration, stored GitHub credentials, or repository remotes to bypass auth.
+Repo-local credential-helper changes are allowed only when explicitly in scope.
+Never put tokens in prompts, remotes, config, logs, scripts, or commits. Set
+`GIT_TERMINAL_PROMPT=0`, `GIT_EDITOR=true`, and `GH_PROMPT_DISABLED=1` for
+non-interactive runs; use an explicit editor when a workflow needs one.
+
 Before staging or committing:
 
 ```powershell
@@ -428,6 +448,19 @@ Dual workflows can leave **cancelled** or **skipped** twins next to a **successf
 `pull_request_target` jobs must never execute or source PR-controlled code while privileged credentials or secrets are available. Checkout must remain trusted-base content unless a dedicated security design documents a safer exception.
 
 These are the expected Babel PR gates under the current workflow/ruleset configuration. Verify the actual checks attached to the PR SHA before claiming CI coverage.
+
+For a merge decision, use the committed exact-SHA gate after recording the
+reviewed head:
+
+```powershell
+.\scripts\agent-pr-gate.ps1 -PR <number> -ReviewedHeadSha <reviewed-sha>
+```
+
+Proceed only on `MERGE_READY`. The gate binds the reviewed head, remote branch
+head, PR head, commit-scoped check runs, PR base, and current `origin/main`; it
+also checks worktree state, mergeability, draft/cross-repository status, review
+approval, and the configured required checks. A green check from another SHA is
+not evidence for the current PR head.
 
 ## Staging Contract
 

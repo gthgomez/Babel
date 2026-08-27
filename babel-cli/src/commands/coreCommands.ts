@@ -1,24 +1,24 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 
-import { Command } from 'commander';
-import { z } from 'zod';
+import { Command } from "commander";
+import { z } from "zod";
 
-import { registerEvidenceProductSubcommands } from './evidenceProductCommands.js';
-import { registerInspectTuiCommand } from '../ui/observe/inspectTui.js';
-import { registerMaintenanceCommands } from './maintenanceCommands.js';
-import { printJsonErrorAndExit, printJsonOrHuman } from './output.js';
-import { registerShipCommand } from './shipCommands.js';
-import { registerSkillCommands } from './skillCommands.js';
-import { BabelEventBus, runBabelPipeline } from '../pipeline.js';
-import { runBabelMcpServer } from '../mcp/server.js';
-import { startInteractiveSession } from '../interactive.js';
-import { getShadowDiff } from '../services/shadowDiff.js';
-import { formatDoctorHuman, runDoctor, type DoctorScope } from '../doctor.js';
-import { formatEvalDoctorHuman, runEvalDoctor } from '../eval/evalDoctor.js';
-import { runCodingCanary, describeCanaryPlan } from '../eval/canary/runner.js';
-import { projectEvaluationEpisode } from '../eval/projectEpisode.js';
-import { validateRuntimeEnv } from '../config/runtimeEnv.js';
+import { registerEvidenceProductSubcommands } from "./evidenceProductCommands.js";
+import { registerInspectTuiCommand } from "../ui/observe/inspectTui.js";
+import { registerMaintenanceCommands } from "./maintenanceCommands.js";
+import { printJsonErrorAndExit, printJsonOrHuman } from "./output.js";
+import { registerShipCommand } from "./shipCommands.js";
+import { registerSkillCommands } from "./skillCommands.js";
+import { BabelEventBus, runBabelPipeline } from "../pipeline.js";
+import { runBabelMcpServer } from "../mcp/server.js";
+import { startInteractiveSession } from "../interactive.js";
+import { getShadowDiff } from "../services/shadowDiff.js";
+import { formatDoctorHuman, runDoctor, type DoctorScope } from "../doctor.js";
+import { formatEvalDoctorHuman, runEvalDoctor } from "../eval/evalDoctor.js";
+import { runCodingCanary, describeCanaryPlan } from "../eval/canary/runner.js";
+import { projectEvaluationEpisode } from "../eval/projectEpisode.js";
+import { validateRuntimeEnv } from "../config/runtimeEnv.js";
 import {
   buildInspectManifestView,
   buildInspectOutcomeView,
@@ -27,31 +27,37 @@ import {
   buildInspectSummaryView,
   loadInspectBundle,
   resolveInspectRunDir,
-} from '../inspect/loaders.js';
+} from "../inspect/loaders.js";
 import {
   renderInspectManifest,
   renderInspectOutcome,
   renderInspectRun,
   renderInspectStack,
   renderInspectSummary,
-} from '../ui/inspection.js';
+} from "../ui/inspection.js";
 import {
   formatSessionRunValidatorText,
   validateSessionRun,
-} from '../agent/sessionRunValidator.js';
-import { renderProductBanner } from '../ui/renderers.js';
-import { warning, muted } from '../ui/theme.js';
-import { readRuntimeMode, writeRuntimeMode } from '../config/runtimeMode.js';
-import { getExecutorToolRegistrySnapshot, getExecutorToolSnapshot } from '../localTools.js';
+} from "../agent/sessionRunValidator.js";
+import { renderProductBanner } from "../ui/renderers.js";
+import { warning, muted } from "../ui/theme.js";
+import { readRuntimeMode, writeRuntimeMode } from "../config/runtimeMode.js";
+import {
+  getExecutorToolRegistrySnapshot,
+  getExecutorToolSnapshot,
+} from "../localTools.js";
 import {
   findCheckpoint,
   formatCheckpointInspect,
   formatCheckpointList,
   listCheckpoints,
   restoreCheckpoint,
-} from '../services/checkpoints.js';
-import type { ExecutorToolSnapshot } from '../tools/executorRegistry.js';
-import { buildToolCatalog, formatToolCatalogHuman } from '../tools/toolCatalog.js';
+} from "../services/checkpoints.js";
+import type { ExecutorToolSnapshot } from "../tools/executorRegistry.js";
+import {
+  buildToolCatalog,
+  formatToolCatalogHuman,
+} from "../tools/toolCatalog.js";
 import {
   APPROVAL_PROFILE_DEFINITIONS,
   APPROVAL_PROFILES,
@@ -59,53 +65,64 @@ import {
   readApprovalProfileStatus,
   writeApprovalProfile,
   type ApprovalProfileStatus,
-} from '../config/approvalProfiles.js';
+} from "../config/approvalProfiles.js";
 import {
   getMcpServersConfigPath,
   readMcpServers,
   removeMcpServer,
   upsertMcpServer,
-} from '../config/mcpServers.js';
+} from "../config/mcpServers.js";
 import {
   BABEL_ROOT,
   BABEL_RUNS_DIR,
   VALID_MODES,
   resolveMode,
   type ValidMode,
-} from '../cli/constants.js';
-import { registerInternalTextProviderCommands } from './liteCommands.js';
-import { formatBdnsDiagnosticHuman, loadBdnsDiagnosticBundle } from '../diagnostics/bdns/reader.js';
+} from "../cli/constants.js";
+import { registerInternalTextProviderCommands } from "./liteCommands.js";
+import {
+  formatBdnsDiagnosticHuman,
+  loadBdnsDiagnosticBundle,
+} from "../diagnostics/bdns/reader.js";
+import { readAcceptanceArtifacts } from "../acceptance/recording.js";
 import {
   printDryRunState,
   readDryRunState,
   readLatestRunPointer,
   resolveProjectRoot,
   writeDryRunState,
-} from '../cli/helpers.js';
-import { resolveModelByKey } from '../modelPolicy.js';
-import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
-import { resolveProviderCredential } from '../runners/credentialHub.js';
-import type { ProviderId } from '../runners/providerRegistry.js';
+} from "../cli/helpers.js";
+import { resolveModelByKey } from "../modelPolicy.js";
+import { DeepSeekApiRunner } from "../runners/deepSeekApi.js";
+import { resolveProviderCredential } from "../runners/credentialHub.js";
+import type { ProviderId } from "../runners/providerRegistry.js";
 import {
   prepareContextInjection,
   summarizeContextInjection,
-} from '../services/contextInjection.js';
-import { runCiReview, formatCiReviewHuman } from '../services/ciReview.js';
-import { runGitDraft, formatGitDraftHuman, type GitDraftKind } from '../services/gitDrafts.js';
+} from "../services/contextInjection.js";
+import { runCiReview, formatCiReviewHuman } from "../services/ciReview.js";
+import {
+  runGitDraft,
+  formatGitDraftHuman,
+  type GitDraftKind,
+} from "../services/gitDrafts.js";
 import {
   createGitBranch,
   createGitCommit,
   createGitPullRequest,
   formatGitMutationHuman,
-} from '../services/gitMutations.js';
-import { buildEventStreamContract } from '../services/eventStream.js';
+} from "../services/gitMutations.js";
+import { buildEventStreamContract } from "../services/eventStream.js";
 import {
   buildIdeBridgeContract,
   buildIdeBridgeSnapshot,
   formatIdeBridgeSnapshotHuman,
-} from '../services/ideBridge.js';
-import { buildRunStats, formatRunStatsHuman } from '../services/runStats.js';
-import { formatProofStatusHuman, writeProofArtifacts } from '../services/proof.js';
+} from "../services/ideBridge.js";
+import { buildRunStats, formatRunStatsHuman } from "../services/runStats.js";
+import {
+  formatProofStatusHuman,
+  writeProofArtifacts,
+} from "../services/proof.js";
 import {
   formatLessonCandidateHuman,
   formatLessonEvalHuman,
@@ -117,7 +134,7 @@ import {
   testLessonCandidate,
   writeLessonCandidate,
   writeLearningFailureRecord,
-} from '../services/learning.js';
+} from "../services/learning.js";
 import {
   createSchedule,
   deleteSchedule,
@@ -126,7 +143,7 @@ import {
   listSchedules,
   runScheduleNow,
   type ScheduleJobType,
-} from '../services/schedules.js';
+} from "../services/schedules.js";
 import {
   disablePlugin,
   enablePlugin,
@@ -134,7 +151,7 @@ import {
   formatPluginInspectHuman,
   formatPluginListHuman,
   loadPluginRegistry,
-} from '../services/plugins.js';
+} from "../services/plugins.js";
 import {
   buildSubagentIsolationContract,
   formatAgentListHuman,
@@ -146,43 +163,55 @@ import {
   mergeAgentRun,
   restoreAgentMerge,
   runAgentTeamFromFile,
-} from '../services/agentTeams.js';
+} from "../services/agentTeams.js";
 import {
   detectContextFingerprintDrift,
   readExecutorSessionContext,
   summarizeExecutorSessionContext,
-} from '../services/sessionContext.js';
-import { formatProductBenchmarkHuman, runProductBenchmark } from '../services/productBenchmark.js';
+} from "../services/sessionContext.js";
+import {
+  formatProductBenchmarkHuman,
+  runProductBenchmark,
+} from "../services/productBenchmark.js";
 import {
   formatProductionBenchmarkHuman,
   runProductionBenchmark,
-} from '../services/productionBenchmark.js';
-import { formatParityBenchmarkHuman, runParityBenchmark } from '../services/parityBenchmark.js';
+} from "../services/productionBenchmark.js";
+import {
+  formatParityBenchmarkHuman,
+  runParityBenchmark,
+} from "../services/parityBenchmark.js";
 import {
   formatCalibrationBenchmarkHuman,
   runCalibrationBenchmark,
   runCalibrationBenchmarkLive,
   renderCalibrationCurveAscii,
-} from '../services/calibrationBenchmark.js';
+} from "../services/calibrationBenchmark.js";
 import {
   formatInjectionBenchmarkHuman,
   runInjectionBenchmark,
   runInjectionBenchmarkLive,
-} from '../services/injectionBenchmark.js';
+} from "../services/injectionBenchmark.js";
 import {
   buildLiteUsabilityReport,
   formatLiteUsabilityReportHuman,
-} from '../services/liteUsability.js';
+} from "../services/liteUsability.js";
 import {
   formatCliSmokeBenchmarkHuman,
   runCliSmokeBenchmark,
-} from '../services/cliSmokeBenchmark.js';
-import { buildRealTaskPilotReport, formatRealTaskPilotHuman } from '../services/realTaskPilot.js';
-import { formatSkillDoctorHuman, runSkillDoctor } from '../services/skillForge.js';
+} from "../services/cliSmokeBenchmark.js";
+import {
+  buildRealTaskPilotReport,
+  formatRealTaskPilotHuman,
+} from "../services/realTaskPilot.js";
+import {
+  formatSkillDoctorHuman,
+  runSkillDoctor,
+} from "../services/skillForge.js";
 import {
   buildBenchmarkImprovementLoopReport,
   formatBenchmarkImprovementLoopHuman,
-} from '../services/benchmarkImprovementLoop.js';
+} from "../services/benchmarkImprovementLoop.js";
 import {
   formatLocalStackResolveHuman,
   resolveLocalStack,
@@ -191,19 +220,19 @@ import {
   type LocalPipelineMode,
   type LocalProject,
   type LocalTaskCategory,
-} from '../control-plane/localStackResolver.js';
+} from "../control-plane/localStackResolver.js";
 import {
   analyzeTerminalBenchRun,
   formatBenchmarkRunAnalysisHuman,
-} from '../services/benchmarkAnalysis.js';
+} from "../services/benchmarkAnalysis.js";
 import {
   buildBenchmarkRepairReport,
   formatBenchmarkRepairHuman,
-} from '../services/benchmarkRepair.js';
+} from "../services/benchmarkRepair.js";
 import {
   formatBenchmarkRepairLoopHuman,
   runBenchmarkRepairLoop,
-} from '../services/benchmarkRepairLoop.js';
+} from "../services/benchmarkRepairLoop.js";
 import {
   approveAgentJob,
   createAgentJob,
@@ -217,7 +246,7 @@ import {
   updateAgentJob,
   writeAgentJobReport,
   type AgentJob,
-} from '../services/agentJobs.js';
+} from "../services/agentJobs.js";
 import {
   APPROVAL_STATUSES,
   approveApproval,
@@ -230,21 +259,21 @@ import {
   requestModelEscalationApproval,
   type ApprovalRecord,
   type ApprovalStatus,
-} from '../services/approvalQueue.js';
+} from "../services/approvalQueue.js";
 import {
   evaluateCompletionVerification,
   type CompletionVerificationGate,
-} from '../services/completionVerification.js';
+} from "../services/completionVerification.js";
 import {
   diagnoseRun,
   formatHaltDiagnosisHuman,
   type HaltDiagnosis,
-} from '../services/haltDiagnosis.js';
+} from "../services/haltDiagnosis.js";
 import {
   formatEscalationRecommendationHuman,
   recommendModelEscalation,
-} from '../services/modelEscalationRules.js';
-import { verifyWorkspaceProject } from '../services/workspaceManager.js';
+} from "../services/modelEscalationRules.js";
+import { verifyWorkspaceProject } from "../services/workspaceManager.js";
 
 const TOP_LEVEL_HELP_TEXT = `
 Examples:
@@ -278,42 +307,68 @@ Notes:
 
 export function applyProgramMetadata(program: Command): void {
   program
-    .name('babel')
-    .description('Babel Multi-Agent OS — local runtime harness for multi-repo workspaces')
-    .version('1.0.0')
-    .addHelpText('after', TOP_LEVEL_HELP_TEXT);
+    .name("babel")
+    .description(
+      "Babel Multi-Agent OS — local runtime harness for multi-repo workspaces",
+    )
+    .version("1.0.0")
+    .addHelpText("after", TOP_LEVEL_HELP_TEXT);
 }
 
 const DEFAULT_HELP_COMMANDS = new Set([
-  'setup',
-  'doctor',
-  'dry',
-  'permissions',
-  'interactive',
-  'plan',
-  'deep',
-  'undo',
-  'resume',
-  'inspect',
-  'advanced',
+  "setup",
+  "doctor",
+  "dry",
+  "permissions",
+  "interactive",
+  "plan",
+  "deep",
+  "undo",
+  "resume",
+  "inspect",
+  "advanced",
 ]);
 
 const ADVANCED_HELP_GROUPS: Array<[string, string[]]> = [
-  ['Primary CLI', ['plan', 'deep', 'resume', 'undo', 'inspect', 'doctor']],
-  ['Compatibility', ['do', 'fix', 'ask', 'propose', 'review', 'lite']],
-  ['Advanced pipeline', ['run']],
-  ['Readiness', ['setup', 'doctor', 'simplify', 'docs', 'dry', 'permissions', 'models']],
+  ["Primary CLI", ["plan", "deep", "resume", "undo", "inspect", "doctor"]],
+  ["Compatibility", ["do", "fix", "ask", "propose", "review", "lite"]],
+  ["Advanced pipeline", ["run"]],
   [
-    'Evidence',
-    ['prove', 'learn', 'evidence', 'inspect', 'session', 'checkpoint', 'diagnose', 'stats'],
+    "Readiness",
+    ["setup", "doctor", "simplify", "docs", "dry", "permissions", "models"],
   ],
-  ['Delivery', ['ship', 'git', 'ci', 'schedule', 'jobs']],
-  ['Benchmarks', ['benchmark', 'smoke', 'test']],
-  ['Project tools', ['files', 'verify', 'diff', 'repo-map', 'onboard-project', 'create']],
-  ['Extensions', ['plugins', 'agents', 'skill', 'codex']],
   [
-    'Internals',
-    ['internals', 'mcp', 'mode', 'tools', 'events', 'context', 'escalation', 'shadow-diff'],
+    "Evidence",
+    [
+      "prove",
+      "learn",
+      "evidence",
+      "inspect",
+      "session",
+      "checkpoint",
+      "diagnose",
+      "stats",
+    ],
+  ],
+  ["Delivery", ["ship", "git", "ci", "schedule", "jobs"]],
+  ["Benchmarks", ["benchmark", "smoke", "test"]],
+  [
+    "Project tools",
+    ["files", "verify", "diff", "repo-map", "onboard-project", "create"],
+  ],
+  ["Extensions", ["plugins", "agents", "skill", "codex"]],
+  [
+    "Internals",
+    [
+      "internals",
+      "mcp",
+      "mode",
+      "tools",
+      "events",
+      "context",
+      "escalation",
+      "shadow-diff",
+    ],
   ],
 ];
 
@@ -328,7 +383,7 @@ function formatHelpGroups(
   title: string,
   groups: Array<[string, string[]]>,
 ): string {
-  const lines = [title, ''];
+  const lines = [title, ""];
   for (const [group, names] of groups) {
     lines.push(`${group}:`);
     for (const name of names) {
@@ -337,19 +392,19 @@ function formatHelpGroups(
         continue;
       }
       const aliases = command.aliases();
-      const aliasText = aliases.length > 0 ? ` (${aliases.join(', ')})` : '';
+      const aliasText = aliases.length > 0 ? ` (${aliases.join(", ")})` : "";
       const description =
-        command.name() === 'run'
-          ? 'Advanced pipeline lane: explicit modes, audit, output, and tool/model controls'
-          : command.name() === 'deep'
-            ? 'Heavy governance path: critique, refine, implement, and verify'
+        command.name() === "run"
+          ? "Advanced pipeline lane: explicit modes, audit, output, and tool/model controls"
+          : command.name() === "deep"
+            ? "Heavy governance path: critique, refine, implement, and verify"
             : command.description();
       lines.push(`  ${command.name()}${aliasText} - ${description}`);
     }
-    lines.push('');
+    lines.push("");
   }
   lines.push('Tip: run "babel <command> --help" for command-specific options.');
-  return lines.join('\n');
+  return lines.join("\n");
 }
 
 export function applyUserFocusedHelpTiers(program: Command): void {
@@ -360,10 +415,10 @@ export function applyUserFocusedHelpTiers(program: Command): void {
   }
 
   program
-    .command('advanced')
-    .description('Show advanced Babel command groups')
+    .command("advanced")
+    .description("Show advanced Babel command groups")
     .addHelpText(
-      'after',
+      "after",
       `
 Notes:
   - Prefer babel "<task>", babel plan, and babel deep for daily work.
@@ -373,20 +428,42 @@ Notes:
 `,
     )
     .action(() => {
-      console.log(formatHelpGroups(program, 'Babel Advanced Commands', ADVANCED_HELP_GROUPS));
+      console.log(
+        formatHelpGroups(
+          program,
+          "Babel Advanced Commands",
+          ADVANCED_HELP_GROUPS,
+        ),
+      );
     });
 
   const internalsCommand = program
-    .command('internals')
-    .description('Show internal command groups')
+    .command("internals")
+    .description("Show internal command groups")
     .action(() => {
       console.log(
-        formatHelpGroups(program, 'Babel Internal Commands', [
-          ['Control plane', ['mcp', 'mode', 'tools', 'events', 'context']],
-          ['Runtime evidence', ['inspect', 'session', 'checkpoint', 'stats', 'diagnose']],
-          ['Automation', ['agents', 'plugins', 'schedule', 'jobs', 'approvals', 'escalation']],
-          ['Legacy compatibility', ['resume', 'apply', 'smoke', 'test', 'shadow-diff']],
-          ['Text provider lane', ['text-provider']],
+        formatHelpGroups(program, "Babel Internal Commands", [
+          ["Control plane", ["mcp", "mode", "tools", "events", "context"]],
+          [
+            "Runtime evidence",
+            ["inspect", "session", "checkpoint", "stats", "diagnose"],
+          ],
+          [
+            "Automation",
+            [
+              "agents",
+              "plugins",
+              "schedule",
+              "jobs",
+              "approvals",
+              "escalation",
+            ],
+          ],
+          [
+            "Legacy compatibility",
+            ["resume", "apply", "smoke", "test", "shadow-diff"],
+          ],
+          ["Text provider lane", ["text-provider"]],
         ]),
       );
     });
@@ -395,12 +472,15 @@ Notes:
   registerInternalTextProviderCommands(program);
 }
 
-function exitWithRuntimeValidationFailure(message: string, jsonOutput: boolean): never {
+function exitWithRuntimeValidationFailure(
+  message: string,
+  jsonOutput: boolean,
+): never {
   if (jsonOutput) {
     process.stdout.write(
       `${JSON.stringify(
         {
-          status: 'fail',
+          status: "fail",
           error: message,
         },
         null,
@@ -414,7 +494,9 @@ function exitWithRuntimeValidationFailure(message: string, jsonOutput: boolean):
   process.exit(1);
 }
 
-export function validateRuntimeEnvForCommand(options: { json?: boolean } = {}): void {
+export function validateRuntimeEnvForCommand(
+  options: { json?: boolean } = {},
+): void {
   try {
     validateRuntimeEnv();
   } catch (error: unknown) {
@@ -425,22 +507,28 @@ export function validateRuntimeEnvForCommand(options: { json?: boolean } = {}): 
 
 export function printBanner(): void {
   const runtimeMode = readRuntimeMode();
-  const isDryRun = process.env['BABEL_DRY_RUN'] === 'true';
+  const isDryRun = process.env["BABEL_DRY_RUN"] === "true";
 
-  const modeTag = runtimeMode === 'plan' ? warning(' [PLANNING]') : '';
-  const dryTag = isDryRun ? muted(' [DRY RUN]') : '';
+  const modeTag = runtimeMode === "plan" ? warning(" [PLANNING]") : "";
+  const dryTag = isDryRun ? muted(" [DRY RUN]") : "";
 
   process.stdout.write(
-    renderProductBanner('Multi-Agent OS Runtime Harness', `${modeTag}${dryTag}`) + '\n',
+    renderProductBanner(
+      "Multi-Agent OS Runtime Harness",
+      `${modeTag}${dryTag}`,
+    ) + "\n",
   );
 }
 
-function handleDryMode(action: 'status' | 'on' | 'off', options: { json?: boolean }): void {
+function handleDryMode(
+  action: "status" | "on" | "off",
+  options: { json?: boolean },
+): void {
   try {
     const state =
-      action === 'on'
+      action === "on"
         ? writeDryRunState(true)
-        : action === 'off'
+        : action === "off"
           ? writeDryRunState(false)
           : readDryRunState();
     printDryRunState(state, options.json === true);
@@ -450,7 +538,7 @@ function handleDryMode(action: 'status' | 'on' | 'off', options: { json?: boolea
       process.stdout.write(
         `${JSON.stringify(
           {
-            status: 'fail',
+            status: "fail",
             error: message,
           },
           null,
@@ -470,37 +558,43 @@ function describePermissionProfile(status: ApprovalProfileStatus): {
   cost: string;
   approval: string;
 } {
-  if (status.profile === 'suggest') {
-    return {
-      action: 'Babel will explain and plan, but file edits and commands stay simulated.',
-      scope: ['read project files', 'draft plans', 'show proposed edits without writing them'],
-      cost: 'No local mutation cost. Remote model calls may still use configured provider credits.',
-      approval: 'You approve before any real edit or command run.',
-    };
-  }
-  if (status.profile === 'full-auto') {
+  if (status.profile === "suggest") {
     return {
       action:
-        'Babel may edit files and run checks inside the trusted workspace without repeated prompts.',
+        "Babel will explain and plan, but file edits and commands stay simulated.",
       scope: [
-        'edit in-scope project files',
-        'run local verifiers such as npm test',
-        'keep sandbox and provider boundaries active',
+        "read project files",
+        "draft plans",
+        "show proposed edits without writing them",
       ],
-      cost: 'Configured provider calls may use credits; expensive model tiers still require explicit opt-in.',
+      cost: "No local mutation cost. Remote model calls may still use configured provider credits.",
+      approval: "You approve before any real edit or command run.",
+    };
+  }
+  if (status.profile === "full-auto") {
+    return {
+      action:
+        "Babel may edit files and run checks inside the trusted workspace without repeated prompts.",
+      scope: [
+        "edit in-scope project files",
+        "run local verifiers such as npm test",
+        "keep sandbox and provider boundaries active",
+      ],
+      cost: "Configured provider calls may use credits; expensive model tiers still require explicit opt-in.",
       approval:
-        'Only outside-workspace, network, dependency, or high-cost boundaries should interrupt the flow.',
+        "Only outside-workspace, network, dependency, or high-cost boundaries should interrupt the flow.",
     };
   }
   return {
-    action: 'Babel may edit files and run local checks inside the selected project.',
+    action:
+      "Babel may edit files and run local checks inside the selected project.",
     scope: [
-      'edit in-scope project files',
-      'run local verifiers such as npm test',
-      'write recovery evidence for failures',
+      "edit in-scope project files",
+      "run local verifiers such as npm test",
+      "write recovery evidence for failures",
     ],
-    cost: 'Configured provider calls may use credits; expensive model tiers still require explicit opt-in.',
-    approval: 'Trusted workspace work should not ask redundant approvals.',
+    cost: "Configured provider calls may use credits; expensive model tiers still require explicit opt-in.",
+    approval: "Trusted workspace work should not ask redundant approvals.",
   };
 }
 
@@ -520,22 +614,27 @@ export function buildApprovalProfilePayload(
   };
 }
 
-function printApprovalProfileStatus(status: ApprovalProfileStatus, json: boolean): void {
+function printApprovalProfileStatus(
+  status: ApprovalProfileStatus,
+  json: boolean,
+): void {
   const payload = buildApprovalProfilePayload(status);
   if (json) {
     process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     return;
   }
 
-  console.log(`What will happen: ${payload['action']}`);
-  console.log(`Scope: ${(payload['scope'] as string[]).join('; ')}`);
-  console.log(`Cost: ${payload['cost']}`);
-  console.log(`Approval: ${payload['approval']}`);
+  console.log(`What will happen: ${payload["action"]}`);
+  console.log(`Scope: ${(payload["scope"] as string[]).join("; ")}`);
+  console.log(`Cost: ${payload["cost"]}`);
+  console.log(`Approval: ${payload["approval"]}`);
   console.log(`Profile: ${status.profile}`);
   console.log(`Config: ${status.profilePath}`);
-  console.log('');
-  if (status.profile === 'custom') {
-    console.log('Current runtime controls do not exactly match a named approval profile.');
+  console.log("");
+  if (status.profile === "custom") {
+    console.log(
+      "Current runtime controls do not exactly match a named approval profile.",
+    );
   } else {
     console.log(APPROVAL_PROFILE_DEFINITIONS[status.profile].description);
   }
@@ -546,26 +645,32 @@ function handlePermissionsCommand(
   options: { json?: boolean },
 ): void {
   try {
-    if (!profileArg || profileArg.trim().toLowerCase() === 'status') {
-      printApprovalProfileStatus(readApprovalProfileStatus(), options.json === true);
+    if (!profileArg || profileArg.trim().toLowerCase() === "status") {
+      printApprovalProfileStatus(
+        readApprovalProfileStatus(),
+        options.json === true,
+      );
       return;
     }
 
     const profile = parseApprovalProfile(profileArg);
     if (!profile) {
       throw new Error(
-        `Invalid approval profile "${profileArg}". Valid values: ${APPROVAL_PROFILES.join(', ')}`,
+        `Invalid approval profile "${profileArg}". Valid values: ${APPROVAL_PROFILES.join(", ")}`,
       );
     }
 
-    printApprovalProfileStatus(writeApprovalProfile(profile), options.json === true);
+    printApprovalProfileStatus(
+      writeApprovalProfile(profile),
+      options.json === true,
+    );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     if (options.json) {
       process.stdout.write(
         `${JSON.stringify(
           {
-            status: 'fail',
+            status: "fail",
             error: message,
           },
           null,
@@ -579,23 +684,35 @@ function handlePermissionsCommand(
   }
 }
 
-function parseApprovalStatus(value: string | undefined): ApprovalStatus | 'all' {
-  const normalized = String(value ?? 'all')
+function parseApprovalStatus(
+  value: string | undefined,
+): ApprovalStatus | "all" {
+  const normalized = String(value ?? "all")
     .trim()
     .toLowerCase();
-  if (normalized === 'all' || APPROVAL_STATUSES.includes(normalized as ApprovalStatus)) {
-    return normalized as ApprovalStatus | 'all';
+  if (
+    normalized === "all" ||
+    APPROVAL_STATUSES.includes(normalized as ApprovalStatus)
+  ) {
+    return normalized as ApprovalStatus | "all";
   }
   throw new Error(
-    `Invalid approval status "${value}". Valid values: all, ${APPROVAL_STATUSES.join(', ')}`,
+    `Invalid approval status "${value}". Valid values: all, ${APPROVAL_STATUSES.join(", ")}`,
   );
 }
 
-function printApprovalRequestRequired(status: string, record: ApprovalRecord, json: boolean): void {
+function printApprovalRequestRequired(
+  status: string,
+  record: ApprovalRecord,
+  json: boolean,
+): void {
   const payload = {
     status,
     approval: record,
-    next: [`babel approvals approve ${record.id}`, 'Re-run the blocked command after approval.'],
+    next: [
+      `babel approvals approve ${record.id}`,
+      "Re-run the blocked command after approval.",
+    ],
   };
   printJsonOrHuman(
     payload,
@@ -604,7 +721,10 @@ function printApprovalRequestRequired(status: string, record: ApprovalRecord, js
   );
 }
 
-function parseValidMode(value: string | undefined, fallback: ValidMode = 'chat'): ValidMode {
+function parseValidMode(
+  value: string | undefined,
+  fallback: ValidMode = "chat",
+): ValidMode {
   const raw = String(value ?? fallback)
     .trim()
     .toLowerCase();
@@ -616,34 +736,37 @@ function parseValidMode(value: string | undefined, fallback: ValidMode = 'chat')
 }
 
 function parseSemicolonCommands(raw: string | undefined): string[] {
-  return String(raw ?? '')
-    .split(';')
+  return String(raw ?? "")
+    .split(";")
     .map((command) => command.trim())
     .filter((command) => command.length > 0);
 }
 
 async function withJobEnv<T>(job: AgentJob, run: () => Promise<T>): Promise<T> {
-  const previousProfile = process.env['BABEL_EXECUTION_PROFILE'];
-  const previousProjectRoot = process.env['BABEL_PROJECT_ROOT'];
-  const previousAllowedRoots = process.env['BABEL_ALLOWED_ROOTS'];
+  const previousProfile = process.env["BABEL_EXECUTION_PROFILE"];
+  const previousProjectRoot = process.env["BABEL_PROJECT_ROOT"];
+  const previousAllowedRoots = process.env["BABEL_ALLOWED_ROOTS"];
 
-  process.env['BABEL_EXECUTION_PROFILE'] = job.execution_profile;
+  process.env["BABEL_EXECUTION_PROFILE"] = job.execution_profile;
   if (job.project_root) {
-    process.env['BABEL_PROJECT_ROOT'] = job.project_root;
+    process.env["BABEL_PROJECT_ROOT"] = job.project_root;
   }
   if (job.approved_roots.length > 0) {
-    process.env['BABEL_ALLOWED_ROOTS'] = job.approved_roots.join(',');
+    process.env["BABEL_ALLOWED_ROOTS"] = job.approved_roots.join(",");
   }
 
   try {
     return await run();
   } finally {
-    if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
-    else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
-    if (previousProjectRoot === undefined) delete process.env['BABEL_PROJECT_ROOT'];
-    else process.env['BABEL_PROJECT_ROOT'] = previousProjectRoot;
-    if (previousAllowedRoots === undefined) delete process.env['BABEL_ALLOWED_ROOTS'];
-    else process.env['BABEL_ALLOWED_ROOTS'] = previousAllowedRoots;
+    if (previousProfile === undefined)
+      delete process.env["BABEL_EXECUTION_PROFILE"];
+    else process.env["BABEL_EXECUTION_PROFILE"] = previousProfile;
+    if (previousProjectRoot === undefined)
+      delete process.env["BABEL_PROJECT_ROOT"];
+    else process.env["BABEL_PROJECT_ROOT"] = previousProjectRoot;
+    if (previousAllowedRoots === undefined)
+      delete process.env["BABEL_ALLOWED_ROOTS"];
+    else process.env["BABEL_ALLOWED_ROOTS"] = previousAllowedRoots;
   }
 }
 
@@ -657,7 +780,7 @@ async function runAgentJobNow(jobId: string): Promise<AgentJob> {
   if (!existing) {
     throw new Error(`Job not found: ${jobId}`);
   }
-  if (existing.status === 'paused') {
+  if (existing.status === "paused") {
     throw new Error(`Job is paused: ${jobId}`);
   }
   if (jobRequiresApproval(existing)) {
@@ -666,14 +789,14 @@ async function runAgentJobNow(jobId: string): Promise<AgentJob> {
       escalation: existing.escalation,
     });
     return updateAgentJob(existing.id, {
-      status: 'waiting_approval',
+      status: "waiting_approval",
       diagnosis,
       error: diagnosis.headline,
     });
   }
 
   const running = updateAgentJob(existing.id, {
-    status: 'running',
+    status: "running",
     error: null,
   });
 
@@ -687,23 +810,28 @@ async function runAgentJobNow(jobId: string): Promise<AgentJob> {
         ...(running.execution_profile
           ? { executionProfile: running.execution_profile as never }
           : {}),
-        ...(running.model_tier === 'escalation' ? { allowExpensive: true } : {}),
+        ...(running.model_tier === "escalation"
+          ? { allowExpensive: true }
+          : {}),
         eventBus,
       }),
     );
 
     const verification =
-      result.status === 'COMPLETE' && running.project_root
+      result.status === "COMPLETE" && running.project_root
         ? verifyWorkspaceProject(running.project_root, {
-            ...(running.verify_commands.length > 0 ? { commands: running.verify_commands } : {}),
+            ...(running.verify_commands.length > 0
+              ? { commands: running.verify_commands }
+              : {}),
           })
         : null;
-    const completionGate: CompletionVerificationGate = evaluateCompletionVerification({
-      pipelineStatus: result.status,
-      executionProfile: running.execution_profile,
-      projectRoot: running.project_root,
-      verification,
-    });
+    const completionGate: CompletionVerificationGate =
+      evaluateCompletionVerification({
+        pipelineStatus: result.status,
+        executionProfile: running.execution_profile,
+        projectRoot: running.project_root,
+        verification,
+      });
     const diagnosis: HaltDiagnosis = diagnoseRun({
       runDir: result.runDir,
       pipelineStatus: result.status,
@@ -711,28 +839,31 @@ async function runAgentJobNow(jobId: string): Promise<AgentJob> {
       escalation: running.escalation,
     });
     const status =
-      completionGate.status === 'fail'
-        ? 'verification_failed'
-        : result.status === 'COMPLETE'
-          ? 'complete'
-          : 'failed';
+      completionGate.status === "fail"
+        ? "verification_failed"
+        : result.status === "COMPLETE"
+          ? "complete"
+          : "failed";
     const updated = updateAgentJob(running.id, {
       status,
       run_dir: result.runDir,
       pipeline_status: result.status,
       completion_verification: completionGate,
       diagnosis,
-      error: status === 'failed' || status === 'verification_failed' ? diagnosis.headline : null,
+      error:
+        status === "failed" || status === "verification_failed"
+          ? diagnosis.headline
+          : null,
     });
     return writeAgentJobReport(updated);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     const diagnosis = diagnoseRun({
-      pipelineStatus: 'FAILED',
+      pipelineStatus: "FAILED",
       escalation: running.escalation,
     });
     const updated = updateAgentJob(running.id, {
-      status: 'failed',
+      status: "failed",
       diagnosis,
       error: message,
     });
@@ -746,7 +877,7 @@ async function handleModelsPing(options: {
   allowExpensive?: boolean;
 }): Promise<void> {
   const startedAt = Date.now();
-  const requestedModel = options.model?.trim() || 'deepseek-v4-flash';
+  const requestedModel = options.model?.trim() || "deepseek-v4-flash";
 
   try {
     const resolved = resolveModelByKey({
@@ -755,24 +886,37 @@ async function handleModelsPing(options: {
       liveOnly: true,
       babelRoot: BABEL_ROOT,
     });
-    if (!process.env['DEEPSEEK_API_KEY']?.trim()) {
-      throw new Error('[LIVE_MODEL_POLICY] DEEPSEEK_API_KEY is required for model ping.');
+    if (!process.env["DEEPSEEK_API_KEY"]?.trim()) {
+      throw new Error(
+        "[LIVE_MODEL_POLICY] DEEPSEEK_API_KEY is required for model ping.",
+      );
     }
     const runner = new DeepSeekApiRunner(resolved.providerModelId);
     const schema = z.object({ ok: z.literal(true) });
-    await runner.execute('Return exactly this JSON object and nothing else: {"ok":true}', schema);
+    await runner.execute(
+      'Return exactly this JSON object and nothing else: {"ok":true}',
+      schema,
+    );
     const metadata = runner.getLastInvocationMetadata();
     const payload = {
-      status: 'pass',
+      status: "pass",
       requested_model: requestedModel,
       backend_key: resolved.resolvedBackendKey,
       provider: resolved.provider,
       provider_model_id: resolved.providerModelId,
       latency_ms: metadata?.latency_ms ?? Date.now() - startedAt,
-      request_timeout_ms: Number(process.env['BABEL_DEEPSEEK_REQUEST_TIMEOUT_MS'] ?? '120000'),
-      request_max_retries: Number(process.env['BABEL_DEEPSEEK_REQUEST_MAX_RETRIES'] ?? '4'),
-      stream_idle_timeout_ms: Number(process.env['BABEL_DEEPSEEK_STREAM_IDLE_TIMEOUT_MS'] ?? '60000'),
-      stream_max_retries: Number(process.env['BABEL_DEEPSEEK_STREAM_MAX_RETRIES'] ?? '1'),
+      request_timeout_ms: Number(
+        process.env["BABEL_DEEPSEEK_REQUEST_TIMEOUT_MS"] ?? "120000",
+      ),
+      request_max_retries: Number(
+        process.env["BABEL_DEEPSEEK_REQUEST_MAX_RETRIES"] ?? "4",
+      ),
+      stream_idle_timeout_ms: Number(
+        process.env["BABEL_DEEPSEEK_STREAM_IDLE_TIMEOUT_MS"] ?? "60000",
+      ),
+      stream_max_retries: Number(
+        process.env["BABEL_DEEPSEEK_STREAM_MAX_RETRIES"] ?? "1",
+      ),
     };
 
     if (options.json) {
@@ -784,7 +928,7 @@ async function handleModelsPing(options: {
     }
   } catch (err: unknown) {
     const payload = {
-      status: 'fail',
+      status: "fail",
       requested_model: requestedModel,
       latency_ms: Date.now() - startedAt,
       error: err instanceof Error ? err.message : String(err),
@@ -801,7 +945,7 @@ async function handleModelsPing(options: {
 function printMcpServers(options: { json?: boolean; status?: boolean }): void {
   const servers = readMcpServers();
   const payload = {
-    status: 'ok',
+    status: "ok",
     config_path: getMcpServersConfigPath(),
     count: Object.keys(servers).length,
     servers,
@@ -812,22 +956,29 @@ function printMcpServers(options: { json?: boolean; status?: boolean }): void {
     return;
   }
 
-  console.log(options.status ? 'MCP registry status:' : 'Configured MCP servers:');
+  console.log(
+    options.status ? "MCP registry status:" : "Configured MCP servers:",
+  );
   console.log(`Config: ${payload.config_path}`);
   for (const [name, server] of Object.entries(servers)) {
-    console.log(`  ${name.padEnd(16)} ${server.command} ${server.args.join(' ')}`.trimEnd());
+    console.log(
+      `  ${name.padEnd(16)} ${server.command} ${server.args.join(" ")}`.trimEnd(),
+    );
   }
 }
 
-function printEvidenceStatus(options: { json?: boolean; project?: string }): void {
+function printEvidenceStatus(options: {
+  json?: boolean;
+  project?: string;
+}): void {
   const latest = readLatestRunPointer(options.project);
   const payload = {
-    status: latest ? 'ok' : 'no_latest_run',
+    status: latest ? "ok" : "no_latest_run",
     latest_run: latest,
     commands: [
-      'babel doctor --scope all',
-      'babel inspect run latest',
-      'babel inspect summary --run latest',
+      "babel doctor --scope all",
+      "babel inspect run latest",
+      "babel inspect summary --run latest",
     ],
   };
 
@@ -836,24 +987,24 @@ function printEvidenceStatus(options: { json?: boolean; project?: string }): voi
     return;
   }
 
-  console.log('Evidence surfaces:');
-  console.log('  doctor          workspace, repo, and export health checks');
-  console.log('  inspect run     complete evidence bundle view');
-  console.log('  inspect summary concise run summary');
-  console.log('  evidence open   implementor run diagnose (W3)');
-  console.log('  evidence export portable evidence bundle (W3)');
-  console.log('  evidence scorecard  Grok-shadow prove + FP dashboard (W3.3)');
+  console.log("Evidence surfaces:");
+  console.log("  doctor          workspace, repo, and export health checks");
+  console.log("  inspect run     complete evidence bundle view");
+  console.log("  inspect summary concise run summary");
+  console.log("  evidence open   implementor run diagnose (W3)");
+  console.log("  evidence export portable evidence bundle (W3)");
+  console.log("  evidence scorecard  Grok-shadow prove + FP dashboard (W3.3)");
   if (latest) {
     console.log(`\nLatest run: ${latest.run_dir}`);
     console.log(`Project: ${latest.project}`);
   } else {
-    console.log('\nNo latest run pointer found yet.');
+    console.log("\nNo latest run pointer found yet.");
   }
 }
 
 function parseToolList(raw: string | undefined): string[] {
-  return String(raw ?? '')
-    .split(',')
+  return String(raw ?? "")
+    .split(",")
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
 }
@@ -869,7 +1020,9 @@ function printExecutorToolList(options: {
 }): void {
   const tools = getExecutorToolRegistrySnapshot();
   const showCatalog =
-    options.policy === true || options.whyDisabled === true || options.capabilities === true;
+    options.policy === true ||
+    options.whyDisabled === true ||
+    options.capabilities === true;
   const catalog = showCatalog
     ? buildToolCatalog(tools, {
         executionProfile: options.executionProfile,
@@ -883,13 +1036,15 @@ function printExecutorToolList(options: {
     process.stdout.write(
       `${JSON.stringify(
         {
-          status: 'ok',
+          status: "ok",
           count: tools.length,
           tools,
           ...(showCatalog
             ? {
                 execution_profile:
-                  options.executionProfile ?? process.env['BABEL_EXECUTION_PROFILE'] ?? 'safe_repo',
+                  options.executionProfile ??
+                  process.env["BABEL_EXECUTION_PROFILE"] ??
+                  "safe_repo",
                 catalog,
               }
             : {}),
@@ -906,32 +1061,37 @@ function printExecutorToolList(options: {
     return;
   }
 
-  console.log('Executor tool registry:');
+  console.log("Executor tool registry:");
   for (const tool of tools) {
-    const safety = tool.mutating ? 'mutating' : 'read-only';
+    const safety = tool.mutating ? "mutating" : "read-only";
     console.log(
       `  ${tool.name.padEnd(16)} ${tool.category.padEnd(12)} ${safety.padEnd(9)} ${tool.description}`,
     );
   }
 }
 
-function printExecutorToolInspect(tool: ExecutorToolSnapshot, json: boolean): void {
+function printExecutorToolInspect(
+  tool: ExecutorToolSnapshot,
+  json: boolean,
+): void {
   if (json) {
-    process.stdout.write(`${JSON.stringify({ status: 'ok', tool }, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ status: "ok", tool }, null, 2)}\n`,
+    );
     return;
   }
 
   console.log(`Tool: ${tool.name}`);
   console.log(`  Category: ${tool.category}`);
-  console.log(`  Mutating: ${tool.mutating ? 'yes' : 'no'}`);
+  console.log(`  Mutating: ${tool.mutating ? "yes" : "no"}`);
   console.log(`  Dry run:  ${tool.dryRunBehavior}`);
   console.log(
-    `  Required: ${tool.input.required.length > 0 ? tool.input.required.join(', ') : '(none)'}`,
+    `  Required: ${tool.input.required.length > 0 ? tool.input.required.join(", ") : "(none)"}`,
   );
   console.log(
-    `  Optional: ${tool.input.optional.length > 0 ? tool.input.optional.join(', ') : '(none)'}`,
+    `  Optional: ${tool.input.optional.length > 0 ? tool.input.optional.join(", ") : "(none)"}`,
   );
-  console.log(`  Policy:   ${tool.policyTags.join(', ')}`);
+  console.log(`  Policy:   ${tool.policyTags.join(", ")}`);
   console.log(`  ${tool.description}`);
 }
 
@@ -945,7 +1105,7 @@ function handleExecutorToolInspect(
       process.stdout.write(
         `${JSON.stringify(
           {
-            status: 'not_found',
+            status: "not_found",
             tool: name,
           },
           null,
@@ -953,7 +1113,9 @@ function handleExecutorToolInspect(
         )}\n`,
       );
     } else {
-      console.error(`Unknown tool "${name}". Run "babel tools list" to see available tools.`);
+      console.error(
+        `Unknown tool "${name}". Run "babel tools list" to see available tools.`,
+      );
     }
     process.exit(1);
   }
@@ -964,7 +1126,7 @@ function handleExecutorToolInspect(
     })[0];
     if (options.json === true) {
       process.stdout.write(
-        `${JSON.stringify({ status: 'ok', tool, catalog_entry: catalogEntry }, null, 2)}\n`,
+        `${JSON.stringify({ status: "ok", tool, catalog_entry: catalogEntry }, null, 2)}\n`,
       );
       return;
     }
@@ -990,8 +1152,8 @@ function safeReadJson(path: string): Record<string, unknown> | null {
   }
 
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as unknown;
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    const parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : null;
   } catch {
@@ -999,112 +1161,130 @@ function safeReadJson(path: string): Record<string, unknown> | null {
   }
 }
 
-function getStringField(record: Record<string, unknown> | null, key: string): string | null {
+function getStringField(
+  record: Record<string, unknown> | null,
+  key: string,
+): string | null {
   const value = record?.[key];
-  return typeof value === 'string' && value.length > 0 ? value : null;
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 function readSessionSummary(runDir: string): SessionSummary {
-  const manifest = safeReadJson(join(runDir, '01_manifest.json'));
-  const runtimeTelemetry = safeReadJson(join(runDir, '06_runtime_telemetry.json'));
-  const executionReport = safeReadJson(join(runDir, '04_execution_report.json'));
+  const manifest = safeReadJson(join(runDir, "01_manifest.json"));
+  const runtimeTelemetry = safeReadJson(
+    join(runDir, "06_runtime_telemetry.json"),
+  );
+  const executionReport = safeReadJson(
+    join(runDir, "04_execution_report.json"),
+  );
   const stats = existsSync(runDir) ? statSync(runDir) : null;
 
   return {
     run_dir: runDir,
     run_id: basename(runDir),
-    project: getStringField(manifest, 'target_project'),
-    task: getStringField(manifest, 'task_summary') ?? getStringField(manifest, 'user_request'),
+    project: getStringField(manifest, "target_project"),
+    task:
+      getStringField(manifest, "task_summary") ??
+      getStringField(manifest, "user_request"),
     status:
-      getStringField(runtimeTelemetry, 'final_outcome') ??
-      getStringField(executionReport, 'status'),
+      getStringField(runtimeTelemetry, "final_outcome") ??
+      getStringField(executionReport, "status"),
     updated_at: stats ? stats.mtime.toISOString() : null,
   };
 }
 
-function listSessionSummaries(options: { project?: string; limit?: number }): SessionSummary[] {
+function listSessionSummaries(options: {
+  project?: string;
+  limit?: number;
+}): SessionSummary[] {
   if (!existsSync(BABEL_RUNS_DIR)) {
     return [];
   }
 
   return readdirSync(BABEL_RUNS_DIR, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
     .map((entry) => join(BABEL_RUNS_DIR, entry.name))
-    .filter((runDir) => existsSync(join(runDir, '01_manifest.json')))
+    .filter((runDir) => existsSync(join(runDir, "01_manifest.json")))
     .map(readSessionSummary)
     .sort((left, right) =>
-      String(right.updated_at ?? '').localeCompare(String(left.updated_at ?? '')),
+      String(right.updated_at ?? "").localeCompare(
+        String(left.updated_at ?? ""),
+      ),
     )
-    .filter((summary) => !options.project || summary.project === options.project)
+    .filter(
+      (summary) => !options.project || summary.project === options.project,
+    )
     .slice(0, options.limit ?? 10);
 }
 
 function printSessionSummary(summary: SessionSummary, json: boolean): void {
   if (json) {
-    process.stdout.write(`${JSON.stringify({ status: 'ok', session: summary }, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ status: "ok", session: summary }, null, 2)}\n`,
+    );
     return;
   }
 
-  console.log('Latest Babel session:');
+  console.log("Latest Babel session:");
   console.log(`  Run:     ${summary.run_dir}`);
-  console.log(`  Project: ${summary.project ?? '(unknown)'}`);
-  console.log(`  Status:  ${summary.status ?? '(unknown)'}`);
-  console.log(`  Task:    ${summary.task ?? '(unknown)'}`);
+  console.log(`  Project: ${summary.project ?? "(unknown)"}`);
+  console.log(`  Status:  ${summary.status ?? "(unknown)"}`);
+  console.log(`  Task:    ${summary.task ?? "(unknown)"}`);
 }
 
 function printSessionList(sessions: SessionSummary[], json: boolean): void {
   if (json) {
     process.stdout.write(
-      `${JSON.stringify({ status: 'ok', count: sessions.length, sessions }, null, 2)}\n`,
+      `${JSON.stringify({ status: "ok", count: sessions.length, sessions }, null, 2)}\n`,
     );
     return;
   }
 
   if (sessions.length === 0) {
-    console.log('No Babel sessions found.');
+    console.log("No Babel sessions found.");
     return;
   }
 
-  console.log('Recent Babel sessions:');
+  console.log("Recent Babel sessions:");
   for (const session of sessions) {
     console.log(`  ${session.run_id}`);
-    console.log(`    Project: ${session.project ?? '(unknown)'}`);
-    console.log(`    Status:  ${session.status ?? '(unknown)'}`);
+    console.log(`    Project: ${session.project ?? "(unknown)"}`);
+    console.log(`    Status:  ${session.status ?? "(unknown)"}`);
     console.log(`    Run:     ${session.run_dir}`);
   }
 }
 
 function addDryModeOptions(command: Command): Command {
-  return command.option('--json', 'Emit structured JSON only');
+  return command.option("--json", "Emit structured JSON only");
 }
 
 function addInspectCommonOptions(command: Command): Command {
   return command
-    .option('--run <run>', 'Run directory or latest')
-    .option('--project <name>', 'Filter latest run pointer by project');
+    .option("--run <run>", "Run directory or latest")
+    .option("--project <name>", "Filter latest run pointer by project");
 }
 
 function renderInspectView(
-  kind: 'run' | 'summary' | 'stack' | 'manifest' | 'outcome',
+  kind: "run" | "summary" | "stack" | "manifest" | "outcome",
   runDir: string,
 ): string {
   const bundle = loadInspectBundle(runDir);
   switch (kind) {
-    case 'run':
+    case "run":
       return renderInspectRun(buildInspectRunView(bundle));
-    case 'summary':
+    case "summary":
       return renderInspectSummary(buildInspectSummaryView(bundle));
-    case 'stack':
+    case "stack":
       return renderInspectStack(buildInspectStackView(bundle));
-    case 'manifest':
+    case "manifest":
       return renderInspectManifest(buildInspectManifestView(bundle));
-    case 'outcome':
+    case "outcome":
       return renderInspectOutcome(buildInspectOutcomeView(bundle));
   }
 }
 
 function handleInspectMode(
-  kind: 'run' | 'summary' | 'stack' | 'manifest' | 'outcome',
+  kind: "run" | "summary" | "stack" | "manifest" | "outcome",
   runArg: string | undefined,
   options: { run?: string; project?: string },
 ): void {
@@ -1116,7 +1296,9 @@ function handleInspectMode(
     });
     process.stdout.write(`${renderInspectView(kind, resolvedRunDir)}\n`);
   } catch (err: unknown) {
-    console.error(`Error during inspection: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(
+      `Error during inspection: ${err instanceof Error ? err.message : String(err)}`,
+    );
     process.exit(1);
   }
 }
@@ -1126,9 +1308,9 @@ function resolveProofRunArg(
   options: { last?: boolean; run?: string },
 ): string {
   if (options.last === true) {
-    return 'latest';
+    return "latest";
   }
-  return options.run ?? runArg ?? 'latest';
+  return options.run ?? runArg ?? "latest";
 }
 
 function resolveProofRunDir(
@@ -1144,7 +1326,7 @@ function resolveProofRunDir(
   if (existsSync(resolved)) {
     return resolved;
   }
-  if (!requested.includes('/') && !requested.includes('\\')) {
+  if (!requested.includes("/") && !requested.includes("\\")) {
     const runIdCandidate = join(BABEL_RUNS_DIR, requested);
     if (existsSync(runIdCandidate)) {
       return runIdCandidate;
@@ -1164,7 +1346,7 @@ function handleProofReport(
       process.stdout.write(
         `${JSON.stringify(
           {
-            status: 'ok',
+            status: "ok",
             proof_status_path: artifacts.proofStatusPath,
             report_path: artifacts.reportPath,
             proof: artifacts.proof,
@@ -1177,7 +1359,10 @@ function handleProofReport(
     }
     process.stdout.write(`${formatProofStatusHuman(artifacts.proof)}\n`);
   } catch (err: unknown) {
-    printJsonErrorAndExit(err instanceof Error ? err.message : String(err), options.json === true);
+    printJsonErrorAndExit(
+      err instanceof Error ? err.message : String(err),
+      options.json === true,
+    );
   }
 }
 
@@ -1196,14 +1381,14 @@ function handleLearnFromRun(
     const proofArtifacts = writeProofArtifacts(resolvedRunDir);
     const learningRoot = options.learningRoot
       ? resolve(options.learningRoot)
-      : join(BABEL_ROOT, 'learning');
+      : join(BABEL_ROOT, "learning");
     const learningArtifacts = writeLearningFailureRecord({
       runDir: resolvedRunDir,
       learningRoot,
       proof: proofArtifacts.proof,
     });
     const payload = {
-      status: 'ok',
+      status: "ok",
       learning_root: learningRoot,
       failure_record_path: learningArtifacts.failureRecordPath,
       proof_status_path: proofArtifacts.proofStatusPath,
@@ -1216,7 +1401,10 @@ function handleLearnFromRun(
       options.json === true,
     );
   } catch (err: unknown) {
-    printJsonErrorAndExit(err instanceof Error ? err.message : String(err), options.json === true);
+    printJsonErrorAndExit(
+      err instanceof Error ? err.message : String(err),
+      options.json === true,
+    );
   }
 }
 
@@ -1227,55 +1415,58 @@ function handleLearnInspect(
   try {
     const learningRoot = options.learningRoot
       ? resolve(options.learningRoot)
-      : join(BABEL_ROOT, 'learning');
+      : join(BABEL_ROOT, "learning");
     const result = readLearningArtifact({
       id: artifactId,
       learningRoot,
     });
     const artifact = result.artifact;
     const payload =
-      artifact.kind === 'failure'
+      artifact.kind === "failure"
         ? {
-            status: 'ok',
+            status: "ok",
             learning_root: learningRoot,
-            artifact_type: 'failure',
+            artifact_type: "failure",
             artifact_path: artifact.path,
             failure: artifact.record,
           }
-        : artifact.kind === 'lesson'
+        : artifact.kind === "lesson"
           ? {
-              status: 'ok',
+              status: "ok",
               learning_root: learningRoot,
-              artifact_type: 'lesson',
+              artifact_type: "lesson",
               artifact_path: artifact.path,
               lesson: artifact.record,
             }
-          : artifact.kind === 'eval'
+          : artifact.kind === "eval"
             ? {
-                status: 'ok',
+                status: "ok",
                 learning_root: learningRoot,
-                artifact_type: 'eval',
+                artifact_type: "eval",
                 artifact_path: artifact.path,
                 eval: artifact.record,
               }
             : {
-                status: 'ok',
+                status: "ok",
                 learning_root: learningRoot,
-                artifact_type: 'mutation',
+                artifact_type: "mutation",
                 artifact_path: artifact.path,
                 mutation: artifact.record,
               };
     const human =
-      artifact.kind === 'failure'
+      artifact.kind === "failure"
         ? formatLearningFailureHuman(artifact.record)
-        : artifact.kind === 'lesson'
+        : artifact.kind === "lesson"
           ? formatLessonCandidateHuman(artifact.record)
-          : artifact.kind === 'eval'
+          : artifact.kind === "eval"
             ? formatLessonEvalHuman(artifact.record)
             : formatMutationPackageHuman(artifact.record);
     printJsonOrHuman(payload, human, options.json === true);
   } catch (err: unknown) {
-    printJsonErrorAndExit(err instanceof Error ? err.message : String(err), options.json === true);
+    printJsonErrorAndExit(
+      err instanceof Error ? err.message : String(err),
+      options.json === true,
+    );
   }
 }
 
@@ -1286,20 +1477,27 @@ function handleLearnPropose(
   try {
     const learningRoot = options.learningRoot
       ? resolve(options.learningRoot)
-      : join(BABEL_ROOT, 'learning');
+      : join(BABEL_ROOT, "learning");
     const result = writeLessonCandidate({
       failureId,
       learningRoot,
     });
     const payload = {
-      status: 'ok',
+      status: "ok",
       learning_root: learningRoot,
       lesson_candidate_path: result.lessonCandidatePath,
       lesson: result.lesson,
     };
-    printJsonOrHuman(payload, formatLessonCandidateHuman(result.lesson), options.json === true);
+    printJsonOrHuman(
+      payload,
+      formatLessonCandidateHuman(result.lesson),
+      options.json === true,
+    );
   } catch (err: unknown) {
-    printJsonErrorAndExit(err instanceof Error ? err.message : String(err), options.json === true);
+    printJsonErrorAndExit(
+      err instanceof Error ? err.message : String(err),
+      options.json === true,
+    );
   }
 }
 
@@ -1310,7 +1508,7 @@ function handleLearnTest(
   try {
     const learningRoot = options.learningRoot
       ? resolve(options.learningRoot)
-      : join(BABEL_ROOT, 'learning');
+      : join(BABEL_ROOT, "learning");
     const result = testLessonCandidate({
       lessonId,
       learningRoot,
@@ -1321,12 +1519,19 @@ function handleLearnTest(
       eval_record_path: result.evalRecordPath,
       eval: result.evalRecord,
     };
-    printJsonOrHuman(payload, formatLessonEvalHuman(result.evalRecord), options.json === true);
-    if (result.evalRecord.status !== 'passed') {
+    printJsonOrHuman(
+      payload,
+      formatLessonEvalHuman(result.evalRecord),
+      options.json === true,
+    );
+    if (result.evalRecord.status !== "passed") {
       process.exit(1);
     }
   } catch (err: unknown) {
-    printJsonErrorAndExit(err instanceof Error ? err.message : String(err), options.json === true);
+    printJsonErrorAndExit(
+      err instanceof Error ? err.message : String(err),
+      options.json === true,
+    );
   }
 }
 
@@ -1336,24 +1541,33 @@ function handleLearnPromote(
 ): void {
   try {
     if (options.shadow !== true) {
-      throw new Error('Only shadow promotion is supported. Re-run with --shadow.');
+      throw new Error(
+        "Only shadow promotion is supported. Re-run with --shadow.",
+      );
     }
     const learningRoot = options.learningRoot
       ? resolve(options.learningRoot)
-      : join(BABEL_ROOT, 'learning');
+      : join(BABEL_ROOT, "learning");
     const result = promoteLessonToShadow({
       lessonId,
       learningRoot,
     });
     const payload = {
-      status: 'ok',
+      status: "ok",
       learning_root: learningRoot,
       active_lesson_path: result.activeLessonPath,
       lesson: result.lesson,
     };
-    printJsonOrHuman(payload, formatLessonCandidateHuman(result.lesson), options.json === true);
+    printJsonOrHuman(
+      payload,
+      formatLessonCandidateHuman(result.lesson),
+      options.json === true,
+    );
   } catch (err: unknown) {
-    printJsonErrorAndExit(err instanceof Error ? err.message : String(err), options.json === true);
+    printJsonErrorAndExit(
+      err instanceof Error ? err.message : String(err),
+      options.json === true,
+    );
   }
 }
 
@@ -1364,8 +1578,8 @@ function handleLearnPackage(
   try {
     const learningRoot = options.learningRoot
       ? resolve(options.learningRoot)
-      : join(BABEL_ROOT, 'learning');
-    const target = options.target ?? 'project-verifier-contract';
+      : join(BABEL_ROOT, "learning");
+    const target = options.target ?? "project-verifier-contract";
     const result = generateMutationPackage({
       lessonId,
       learningRoot,
@@ -1373,7 +1587,7 @@ function handleLearnPackage(
       repoRoot: BABEL_ROOT,
     });
     const payload = {
-      status: 'ok',
+      status: "ok",
       learning_root: learningRoot,
       mutation_package_dir: result.mutationPackageDir,
       mutation_package_path: result.mutationPackagePath,
@@ -1385,7 +1599,10 @@ function handleLearnPackage(
       options.json === true,
     );
   } catch (err: unknown) {
-    printJsonErrorAndExit(err instanceof Error ? err.message : String(err), options.json === true);
+    printJsonErrorAndExit(
+      err instanceof Error ? err.message : String(err),
+      options.json === true,
+    );
   }
 }
 
@@ -1397,15 +1614,22 @@ class ActionableCommandError extends Error {
   readonly payload: Record<string, unknown>;
   readonly human: string;
 
-  constructor(message: string, payload: Record<string, unknown>, human: string) {
+  constructor(
+    message: string,
+    payload: Record<string, unknown>,
+    human: string,
+  ) {
     super(message);
-    this.name = 'ActionableCommandError';
+    this.name = "ActionableCommandError";
     this.payload = payload;
     this.human = human;
   }
 }
 
-function printActionableErrorAndExit(error: ActionableCommandError, json: boolean): never {
+function printActionableErrorAndExit(
+  error: ActionableCommandError,
+  json: boolean,
+): never {
   printJsonOrHuman(error.payload, error.human, json);
   process.exit(1);
 }
@@ -1414,7 +1638,10 @@ function printCommandErrorAndExit(error: unknown, json: boolean): never {
   if (error instanceof ActionableCommandError) {
     printActionableErrorAndExit(error, json);
   }
-  printJsonErrorAndExit(error instanceof Error ? error.message : String(error), json);
+  printJsonErrorAndExit(
+    error instanceof Error ? error.message : String(error),
+    json,
+  );
 }
 
 function resolveRunForReadOnlyCommand(
@@ -1422,7 +1649,7 @@ function resolveRunForReadOnlyCommand(
   project: string | undefined,
 ): string {
   return resolveInspectRunDir({
-    run: run ?? 'latest',
+    run: run ?? "latest",
     project,
     babelRunsDir: BABEL_RUNS_DIR,
   });
@@ -1430,32 +1657,34 @@ function resolveRunForReadOnlyCommand(
 
 function printSetupChecklist(options: { json?: boolean }): void {
   const payload = {
-    status: 'ok',
-    kind: 'first_five_minutes',
+    status: "ok",
+    kind: "first_five_minutes",
     first_five_minutes: [
       {
-        step: 'install_dependencies',
-        command: 'npm --prefix .\\babel-cli ci',
+        step: "install_dependencies",
+        command: "npm --prefix .\\babel-cli ci",
       },
       {
-        step: 'build_cli',
-        command: 'npm --prefix .\\babel-cli run build',
+        step: "build_cli",
+        command: "npm --prefix .\\babel-cli run build",
       },
       {
-        step: 'diagnose_workspace',
-        command: 'node .\\babel-cli\\dist\\index.js doctor --json',
+        step: "diagnose_workspace",
+        command: "node .\\babel-cli\\dist\\index.js doctor --json",
       },
       {
-        step: 'safe_context_probe',
-        command: 'node .\\babel-cli\\dist\\index.js context preview @file README.md --json',
+        step: "safe_context_probe",
+        command:
+          "node .\\babel-cli\\dist\\index.js context preview @file README.md --json",
       },
       {
-        step: 'terminal_daily_profile',
-        command: 'set BABEL_DAILY_PROFILE=terminal',
-        note: 'Keeps daily CLI tasks on lite lanes unless you explicitly use babel deep or repo-wide risk applies.',
+        step: "terminal_daily_profile",
+        command: "set BABEL_DAILY_PROFILE=terminal",
+        note: "Keeps daily CLI tasks on lite lanes unless you explicitly use babel deep or repo-wide risk applies.",
       },
     ],
-    next_command: 'node .\\babel-cli\\dist\\index.js context preview @file README.md --json',
+    next_command:
+      "node .\\babel-cli\\dist\\index.js context preview @file README.md --json",
     mutates_workspace: false,
     remote_side_effects: false,
   };
@@ -1465,9 +1694,10 @@ function printSetupChecklist(options: { json?: boolean }): void {
     return;
   }
 
-  console.log('Babel first five minutes');
+  console.log("Babel first five minutes");
   for (const item of payload.first_five_minutes) {
-    const note = 'note' in item && typeof item.note === 'string' ? ` — ${item.note}` : '';
+    const note =
+      "note" in item && typeof item.note === "string" ? ` — ${item.note}` : "";
     console.log(`  ${item.step}: ${item.command}${note}`);
   }
 }
@@ -1481,7 +1711,7 @@ function printSessionResume(
     const sessionSummary = readSessionSummary(runDir);
     const context = readExecutorSessionContext(runDir);
     const payload = {
-      status: 'ok',
+      status: "ok",
       run_dir: runDir,
       session: sessionSummary,
       model_context: summarizeExecutorSessionContext(context),
@@ -1498,79 +1728,100 @@ function printSessionResume(
       ],
     };
     const humanLines = [
-      'Babel Session Resume',
+      "Babel Session Resume",
       `Run: ${runDir}`,
-      `Status: ${sessionSummary.status ?? 'unknown'}`,
-      `Model context: ${payload.model_context.available ? 'available' : 'not available'}`,
+      `Status: ${sessionSummary.status ?? "unknown"}`,
+      `Model context: ${payload.model_context.available ? "available" : "not available"}`,
     ];
     if (payload.context_drift) {
       humanLines.push(`Context fingerprint: ${payload.context_drift.message}`);
     }
-    printJsonOrHuman(
-      payload,
-      humanLines.join('\n'),
+    printJsonOrHuman(payload, humanLines.join("\n"), options.json === true);
+  } catch (err: unknown) {
+    printJsonErrorAndExit(
+      err instanceof Error ? err.message : String(err),
       options.json === true,
     );
-  } catch (err: unknown) {
-    printJsonErrorAndExit(err instanceof Error ? err.message : String(err), options.json === true);
   }
 }
 
 export function resolveBenchmarkProvider(providerInput: string): {
-  provider: ProviderId
-  apiKey: string
-  defaultModel: string
+  provider: ProviderId;
+  apiKey: string;
+  defaultModel: string;
 } {
-  if (providerInput !== 'deepseek') {
+  if (providerInput !== "deepseek") {
     throw new Error(
       `[LIVE_MODEL_POLICY] Live benchmarks require the direct DeepSeek provider; received "${providerInput}".`,
     );
   }
-  const provider: ProviderId = 'deepseek';
-  const defaultModel = 'deepseek-v4-flash';
+  const provider: ProviderId = "deepseek";
+  const defaultModel = "deepseek-v4-flash";
   const apiKey = resolveProviderCredential(provider);
   if (!apiKey) {
     throw new Error(
-      '[LIVE_MODEL_POLICY] Live benchmarks require DEEPSEEK_API_KEY before execution.',
+      "[LIVE_MODEL_POLICY] Live benchmarks require DEEPSEEK_API_KEY before execution.",
     );
   }
-  return { provider, apiKey, defaultModel }
+  return { provider, apiKey, defaultModel };
 }
 
 export function registerCoreCommands(program: Command): void {
-  program.option('--experimental', 'Enable experimental features (daemon, goal loop)');
+  program.option(
+    "--experimental",
+    "Enable experimental features (daemon, goal loop)",
+  );
 
   program
-    .command('resolve')
+    .command("resolve")
     .description(
-      'Resolve a Babel Local Mode instruction stack using the canonical TypeScript resolver',
+      "Resolve a Babel Local Mode instruction stack using the canonical TypeScript resolver",
     )
     .option(
-      '--task-category <category>',
-      'Task category: frontend | backend | compliance | devops | research | mobile | game',
-      'frontend',
+      "--task-category <category>",
+      "Task category: frontend | backend | compliance | devops | research | mobile | game",
+      "frontend",
     )
-    .option('--project <project>', 'Project overlay target', 'global')
-    .option('--project-path <path>', 'Concrete project path for repo-local context detection')
-    .option('--model <model>', 'Model family: codex | claude | gemini', 'codex')
-    .option('--client-surface <surface>', 'Client surface identifier')
-    .option('--pipeline-mode <mode>', 'Pipeline mode: chat | chat-headless | plan | deep', 'chat')
+    .option("--project <project>", "Project overlay target", "global")
     .option(
-      '--codex-adapter <adapter>',
-      'Codex adapter preference: auto | balanced | ultra',
-      'auto',
+      "--project-path <path>",
+      "Concrete project path for repo-local context detection",
     )
-    .option('--task-overlay-id <id...>', 'Additional task overlay id or alias')
-    .option('--task-prompt <prompt>', 'Task prompt used for purpose and skill inference')
+    .option("--model <model>", "Model family: codex | claude | gemini", "codex")
+    .option("--client-surface <surface>", "Client surface identifier")
     .option(
-      '--purpose-mode <mode>',
-      'Purpose mode: execution | verification | learning | exploration | audit',
+      "--pipeline-mode <mode>",
+      "Pipeline mode: chat | chat-headless | plan | deep",
+      "chat",
     )
-    .option('--disable-recommended-task-overlays', 'Disable automatic task overlay recommendations')
-    .option('--load-all-skills', 'Emergency/debug override: load every active skill')
-    .option('--local-learning-root <path>', 'Local learning root for active policies')
-    .option('--babel-root <path>', 'Babel repository root', BABEL_ROOT)
-    .option('--json', 'Emit structured JSON only')
+    .option(
+      "--codex-adapter <adapter>",
+      "Codex adapter preference: auto | balanced | ultra",
+      "auto",
+    )
+    .option("--task-overlay-id <id...>", "Additional task overlay id or alias")
+    .option(
+      "--task-prompt <prompt>",
+      "Task prompt used for purpose and skill inference",
+    )
+    .option(
+      "--purpose-mode <mode>",
+      "Purpose mode: execution | verification | learning | exploration | audit",
+    )
+    .option(
+      "--disable-recommended-task-overlays",
+      "Disable automatic task overlay recommendations",
+    )
+    .option(
+      "--load-all-skills",
+      "Emergency/debug override: load every active skill",
+    )
+    .option(
+      "--local-learning-root <path>",
+      "Local learning root for active policies",
+    )
+    .option("--babel-root <path>", "Babel repository root", BABEL_ROOT)
+    .option("--json", "Emit structured JSON only")
     .action(
       (options: {
         taskCategory?: string;
@@ -1591,22 +1842,36 @@ export function registerCoreCommands(program: Command): void {
       }) => {
         try {
           const result = resolveLocalStack({
-            taskCategory: (options.taskCategory ?? 'frontend') as LocalTaskCategory,
-            project: (options.project ?? 'global') as LocalProject,
-            ...(options.projectPath ? { projectPath: options.projectPath } : {}),
-            model: (options.model ?? 'codex') as LocalModel,
-            ...(options.clientSurface ? { clientSurface: options.clientSurface } : {}),
-            pipelineMode: (options.pipelineMode ?? 'chat') as LocalPipelineMode,
-            codexAdapter: (options.codexAdapter ?? 'auto') as LocalCodexAdapter,
+            taskCategory: (options.taskCategory ??
+              "frontend") as LocalTaskCategory,
+            project: (options.project ?? "global") as LocalProject,
+            ...(options.projectPath
+              ? { projectPath: options.projectPath }
+              : {}),
+            model: (options.model ?? "codex") as LocalModel,
+            ...(options.clientSurface
+              ? { clientSurface: options.clientSurface }
+              : {}),
+            pipelineMode: (options.pipelineMode ?? "chat") as LocalPipelineMode,
+            codexAdapter: (options.codexAdapter ?? "auto") as LocalCodexAdapter,
             taskOverlayIds: options.taskOverlayId ?? [],
             ...(options.taskPrompt ? { taskPrompt: options.taskPrompt } : {}),
-            ...(options.purposeMode ? { purposeMode: options.purposeMode as never } : {}),
-            disableRecommendedTaskOverlays: options.disableRecommendedTaskOverlays === true,
+            ...(options.purposeMode
+              ? { purposeMode: options.purposeMode as never }
+              : {}),
+            disableRecommendedTaskOverlays:
+              options.disableRecommendedTaskOverlays === true,
             loadAllSkills: options.loadAllSkills === true,
-            ...(options.localLearningRoot ? { localLearningRoot: options.localLearningRoot } : {}),
+            ...(options.localLearningRoot
+              ? { localLearningRoot: options.localLearningRoot }
+              : {}),
             babelRoot: resolve(options.babelRoot ?? BABEL_ROOT),
           });
-          printJsonOrHuman(result, formatLocalStackResolveHuman(result), options.json === true);
+          printJsonOrHuman(
+            result,
+            formatLocalStackResolveHuman(result),
+            options.json === true,
+          );
         } catch (err: unknown) {
           printJsonErrorAndExit(
             err instanceof Error ? err.message : String(err),
@@ -1617,17 +1882,17 @@ export function registerCoreCommands(program: Command): void {
     );
 
   program
-    .command('setup')
-    .description('Show the read-only first-five-minutes setup checklist')
-    .option('--json', 'Emit structured JSON only')
+    .command("setup")
+    .description("Show the read-only first-five-minutes setup checklist")
+    .option("--json", "Emit structured JSON only")
     .action((options: { json?: boolean }) => {
       printSetupChecklist(options);
     });
 
   program
-    .command('mode')
-    .description('View or set the current runtime mode (plan or act)')
-    .argument('[newMode]', 'Target mode: "plan" or "act"')
+    .command("mode")
+    .description("View or set the current runtime mode (plan or act)")
+    .argument("[newMode]", 'Target mode: "plan" or "act"')
     .action((newMode) => {
       if (!newMode) {
         const current = readRuntimeMode();
@@ -1635,7 +1900,7 @@ export function registerCoreCommands(program: Command): void {
         return;
       }
 
-      if (newMode !== 'plan' && newMode !== 'act') {
+      if (newMode !== "plan" && newMode !== "act") {
         console.error('Error: Mode must be "plan" or "act"');
         process.exit(1);
       }
@@ -1645,21 +1910,29 @@ export function registerCoreCommands(program: Command): void {
     });
 
   program
-    .command('doctor')
-    .description('Everyday diagnostic: run Babel workspace health and integrity checks')
-    .option('--json', 'Emit structured JSON only')
-    .option('--strict', 'Treat warnings as fatal in the overall result')
-    .option('--strict-enterprise', 'Require explicit managed enterprise policy controls')
-    .option('--verbose', 'Include additional diagnostic details')
-    .option('--repair-pointers', 'Remove stale runs/.latest*.json pointers before evidence checks')
-    .option(
-      '--scope <scope>',
-      'Check scope: all | env | workspace | repos | export | enterprise',
-      'all',
+    .command("doctor")
+    .description(
+      "Everyday diagnostic: run Babel workspace health and integrity checks",
     )
-    .option('--skills', 'Run Skill Forge checks')
+    .option("--json", "Emit structured JSON only")
+    .option("--strict", "Treat warnings as fatal in the overall result")
+    .option(
+      "--strict-enterprise",
+      "Require explicit managed enterprise policy controls",
+    )
+    .option("--verbose", "Include additional diagnostic details")
+    .option(
+      "--repair-pointers",
+      "Remove stale runs/.latest*.json pointers before evidence checks",
+    )
+    .option(
+      "--scope <scope>",
+      "Check scope: all | env | workspace | repos | export | enterprise",
+      "all",
+    )
+    .option("--skills", "Run Skill Forge checks")
     .addHelpText(
-      'after',
+      "after",
       `
 Examples:
   $ babel doctor
@@ -1684,20 +1957,33 @@ Examples:
 
         if (options.skills === true) {
           const report = runSkillDoctor(BABEL_ROOT);
-          printJsonOrHuman(report, formatSkillDoctorHuman(report), options.json === true);
-          if (report.status === 'fail') {
+          printJsonOrHuman(
+            report,
+            formatSkillDoctorHuman(report),
+            options.json === true,
+          );
+          if (report.status === "fail") {
             process.exit(1);
           }
           return;
         }
 
-        const scope = (options.scope ?? 'all') as DoctorScope;
-        if (!['all', 'env', 'workspace', 'repos', 'export', 'enterprise'].includes(scope)) {
+        const scope = (options.scope ?? "all") as DoctorScope;
+        if (
+          ![
+            "all",
+            "env",
+            "workspace",
+            "repos",
+            "export",
+            "enterprise",
+          ].includes(scope)
+        ) {
           if (options.json) {
             process.stdout.write(
               `${JSON.stringify(
                 {
-                  status: 'fail',
+                  status: "fail",
                   error: `[babel] Invalid doctor scope "${options.scope}". Valid values: all, env, workspace, repos, export, enterprise`,
                 },
                 null,
@@ -1728,7 +2014,7 @@ Examples:
             console.log(formatDoctorHuman(result, options.verbose === true));
           }
 
-          if (result.status === 'fail') {
+          if (result.status === "fail") {
             process.exit(1);
           }
         } catch (err: unknown) {
@@ -1736,7 +2022,7 @@ Examples:
             process.stdout.write(
               `${JSON.stringify(
                 {
-                  status: 'fail',
+                  status: "fail",
                   error: err instanceof Error ? err.message : String(err),
                 },
                 null,
@@ -1758,14 +2044,16 @@ Examples:
   registerSkillCommands(program);
 
   program
-    .command('shadow-diff')
-    .description('Compare the current dry-run shadow root with the live project')
+    .command("shadow-diff")
+    .description(
+      "Compare the current dry-run shadow root with the live project",
+    )
     .option(
-      '-p, --project <name>',
-      'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_suite | godot_td)',
+      "-p, --project <name>",
+      "Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_suite | godot_td)",
     )
     .addHelpText(
-      'after',
+      "after",
       `
 Examples:
   $ babel shadow-diff
@@ -1777,7 +2065,7 @@ Notes:
 `,
     )
     .action(async (options: { project?: string }) => {
-      let projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
+      let projectRoot = process.env["BABEL_PROJECT_ROOT"] ?? process.cwd();
 
       if (options.project) {
         const resolved = resolveProjectRoot(options.project);
@@ -1790,29 +2078,33 @@ Notes:
         }
       }
 
-      const shadowRoot = process.env['BABEL_SHADOW_ROOT'];
+      const shadowRoot = process.env["BABEL_SHADOW_ROOT"];
 
       if (!shadowRoot) {
-        console.error('Dry-run shadowing is not active. Run "babel dry on" to enable it.');
+        console.error(
+          'Dry-run shadowing is not active. Run "babel dry on" to enable it.',
+        );
         process.exit(1);
       }
 
       const result = getShadowDiff(shadowRoot, projectRoot);
-      if (result.status === 'error') {
+      if (result.status === "error") {
         console.error(`Could not compare file differences: ${result.error}`);
         process.exit(1);
       }
 
       if (result.diff) {
-        process.stdout.write(result.diff + '\n');
+        process.stdout.write(result.diff + "\n");
       }
     });
 
   const dryCommand = program
-    .command('dry')
-    .description('Everyday safety toggle: control persisted dry-run mode for the local CLI')
+    .command("dry")
+    .description(
+      "Everyday safety toggle: control persisted dry-run mode for the local CLI",
+    )
     .addHelpText(
-      'after',
+      "after",
       `
 Examples:
   $ babel dry status --json
@@ -1825,43 +2117,48 @@ Notes:
 `,
     )
     .action(async () => {
-      handleDryMode('status', {});
+      handleDryMode("status", {});
     });
 
   addDryModeOptions(
     dryCommand
-      .command('status')
-      .description('Show current dry-run mode state')
+      .command("status")
+      .description("Show current dry-run mode state")
       .action(async (options: { json?: boolean }) => {
-        handleDryMode('status', options);
+        handleDryMode("status", options);
       }),
   );
 
   addDryModeOptions(
     dryCommand
-      .command('on')
-      .description('Persist dry-run mode as on')
+      .command("on")
+      .description("Persist dry-run mode as on")
       .action(async (options: { json?: boolean }) => {
-        handleDryMode('on', options);
+        handleDryMode("on", options);
       }),
   );
 
   addDryModeOptions(
     dryCommand
-      .command('off')
-      .description('Persist dry-run mode as off')
+      .command("off")
+      .description("Persist dry-run mode as off")
       .action(async (options: { json?: boolean }) => {
-        handleDryMode('off', options);
+        handleDryMode("off", options);
       }),
   );
 
   program
-    .command('permissions')
-    .description('View or set approval/autonomy profile (suggest | auto-edit | full-auto)')
-    .argument('[profile]', 'Approval profile: status | suggest | auto-edit | full-auto')
-    .option('--json', 'Emit structured JSON only')
+    .command("permissions")
+    .description(
+      "View or set approval/autonomy profile (suggest | auto-edit | full-auto)",
+    )
+    .argument(
+      "[profile]",
+      "Approval profile: status | suggest | auto-edit | full-auto",
+    )
+    .option("--json", "Emit structured JSON only")
     .addHelpText(
-      'after',
+      "after",
       `
 Examples:
   $ babel permissions
@@ -1879,12 +2176,12 @@ Notes:
     });
 
   const approvalsCommand = program
-    .command('approvals')
+    .command("approvals")
     .description(
-      'Manage approval requests for installs, unattended jobs, and expensive model escalation',
+      "Manage approval requests for installs, unattended jobs, and expensive model escalation",
     )
     .addHelpText(
-      'after',
+      "after",
       `
 Examples:
   $ babel approvals list --json
@@ -1899,21 +2196,25 @@ Notes:
 `,
     )
     .action(() => {
-      const records = listApprovals({ status: 'pending' });
+      const records = listApprovals({ status: "pending" });
       process.stdout.write(`${formatApprovalListHuman(records)}\n`);
     });
 
   approvalsCommand
-    .command('list')
-    .description('List approval requests')
-    .option('--status <status>', `Filter: all | ${APPROVAL_STATUSES.join(' | ')}`, 'all')
-    .option('--json', 'Emit structured JSON only')
+    .command("list")
+    .description("List approval requests")
+    .option(
+      "--status <status>",
+      `Filter: all | ${APPROVAL_STATUSES.join(" | ")}`,
+      "all",
+    )
+    .option("--json", "Emit structured JSON only")
     .action((options: { status?: string; json?: boolean }) => {
       try {
         const status = parseApprovalStatus(options.status);
         const records = listApprovals({ status });
         printJsonOrHuman(
-          { status: 'ok', count: records.length, approvals: records },
+          { status: "ok", count: records.length, approvals: records },
           formatApprovalListHuman(records),
           options.json === true,
         );
@@ -1926,37 +2227,40 @@ Notes:
     });
 
   approvalsCommand
-    .command('inspect')
-    .description('Inspect one approval request')
-    .argument('<id>', 'Approval id')
-    .option('--json', 'Emit structured JSON only')
+    .command("inspect")
+    .description("Inspect one approval request")
+    .argument("<id>", "Approval id")
+    .option("--json", "Emit structured JSON only")
     .action((id: string, options: { json?: boolean }) => {
       const record = inspectApproval(id);
       if (!record) {
-        printJsonErrorAndExit(`Approval request not found: ${id}`, options.json === true);
+        printJsonErrorAndExit(
+          `Approval request not found: ${id}`,
+          options.json === true,
+        );
       }
       printJsonOrHuman(
-        { status: 'ok', approval: record },
+        { status: "ok", approval: record },
         formatApprovalHuman(record),
         options.json === true,
       );
     });
 
   approvalsCommand
-    .command('approve')
-    .description('Approve a pending request')
-    .argument('<id>', 'Approval id')
-    .option('--ttl-hours <hours>', 'Hours before the approval expires', '24')
-    .option('--json', 'Emit structured JSON only')
+    .command("approve")
+    .description("Approve a pending request")
+    .argument("<id>", "Approval id")
+    .option("--ttl-hours <hours>", "Hours before the approval expires", "24")
+    .option("--json", "Emit structured JSON only")
     .action((id: string, options: { ttlHours?: string; json?: boolean }) => {
       try {
-        const ttlHours = Number.parseInt(options.ttlHours ?? '24', 10);
+        const ttlHours = Number.parseInt(options.ttlHours ?? "24", 10);
         if (!Number.isFinite(ttlHours) || ttlHours <= 0) {
-          throw new Error('--ttl-hours must be a positive integer.');
+          throw new Error("--ttl-hours must be a positive integer.");
         }
         const record = approveApproval(id, { ttlHours });
         printJsonOrHuman(
-          { status: 'ok', approval: record },
+          { status: "ok", approval: record },
           formatApprovalHuman(record),
           options.json === true,
         );
@@ -1969,15 +2273,15 @@ Notes:
     });
 
   approvalsCommand
-    .command('deny')
-    .description('Deny a pending request')
-    .argument('<id>', 'Approval id')
-    .option('--json', 'Emit structured JSON only')
+    .command("deny")
+    .description("Deny a pending request")
+    .argument("<id>", "Approval id")
+    .option("--json", "Emit structured JSON only")
     .action((id: string, options: { json?: boolean }) => {
       try {
         const record = denyApproval(id);
         printJsonOrHuman(
-          { status: 'ok', approval: record },
+          { status: "ok", approval: record },
           formatApprovalHuman(record),
           options.json === true,
         );
@@ -1990,15 +2294,19 @@ Notes:
     });
 
   approvalsCommand
-    .command('request-install')
-    .description('Create or reuse a dependency-install approval request')
+    .command("request-install")
+    .description("Create or reuse a dependency-install approval request")
     .requiredOption(
-      '--command <command>',
+      "--command <command>",
       'Exact install command to approve, such as "npm install"',
     )
-    .option('--project-root <path>', 'Project root scope')
-    .option('--execution-profile <profile>', 'Execution profile scope', 'opencalw_manager')
-    .option('--json', 'Emit structured JSON only')
+    .option("--project-root <path>", "Project root scope")
+    .option(
+      "--execution-profile <profile>",
+      "Execution profile scope",
+      "opencalw_manager",
+    )
+    .option("--json", "Emit structured JSON only")
     .action(
       (options: {
         command?: string;
@@ -2008,12 +2316,12 @@ Notes:
       }) => {
         try {
           const request = requestDependencyInstallApproval({
-            command: options.command ?? '',
+            command: options.command ?? "",
             projectRoot: options.projectRoot ?? null,
-            executionProfile: options.executionProfile ?? 'opencalw_manager',
+            executionProfile: options.executionProfile ?? "opencalw_manager",
           });
           printApprovalRequestRequired(
-            request.created ? 'approval_requested' : 'approval_existing',
+            request.created ? "approval_requested" : "approval_existing",
             request.record,
             options.json === true,
           );
@@ -2027,13 +2335,16 @@ Notes:
     );
 
   approvalsCommand
-    .command('request-escalation')
-    .description('Create or reuse a model-escalation approval request')
-    .requiredOption('--task <task>', 'Exact task text that will be re-run after approval')
-    .option('--model <model>', 'Requested model family or backend')
-    .option('--model-tier <tier>', 'Requested model tier', 'escalation')
-    .option('--project-root <path>', 'Project root scope')
-    .option('--json', 'Emit structured JSON only')
+    .command("request-escalation")
+    .description("Create or reuse a model-escalation approval request")
+    .requiredOption(
+      "--task <task>",
+      "Exact task text that will be re-run after approval",
+    )
+    .option("--model <model>", "Requested model family or backend")
+    .option("--model-tier <tier>", "Requested model tier", "escalation")
+    .option("--project-root <path>", "Project root scope")
+    .option("--json", "Emit structured JSON only")
     .action(
       (options: {
         task?: string;
@@ -2044,13 +2355,13 @@ Notes:
       }) => {
         try {
           const request = requestModelEscalationApproval({
-            task: options.task ?? '',
+            task: options.task ?? "",
             model: options.model ?? null,
-            modelTier: options.modelTier ?? 'escalation',
+            modelTier: options.modelTier ?? "escalation",
             projectRoot: options.projectRoot ?? null,
           });
           printApprovalRequestRequired(
-            request.created ? 'approval_requested' : 'approval_existing',
+            request.created ? "approval_requested" : "approval_existing",
             request.record,
             options.json === true,
           );
@@ -2064,10 +2375,10 @@ Notes:
     );
 
   const jobsCommand = program
-    .command('jobs')
-    .description('Manage unattended OpenClaw/Babel workspace jobs')
+    .command("jobs")
+    .description("Manage unattended OpenClaw/Babel workspace jobs")
     .addHelpText(
-      'after',
+      "after",
       `
 Examples:
   $ babel jobs create "Fix tests" --project-root /tmp/scratch\\hello-cli --json
@@ -2089,18 +2400,29 @@ Notes:
     });
 
   jobsCommand
-    .command('create')
-    .description('Create a resumable OpenClaw/Babel job')
-    .argument('<task...>', 'Task prompt')
-    .option('--id <id>', 'Stable job id')
-    .option('--project-root <path>', 'Approved project root')
-    .option('--execution-profile <profile>', 'Execution profile', 'opencalw_manager')
-    .option('--mode <mode>', `Pipeline mode: ${VALID_MODES.join(' | ')}`, 'chat')
-    .option('--model <model>', 'Optional model family override')
-    .option('--model-tier <tier>', 'Optional model tier override')
-    .option('--verify <commands>', 'Semicolon-separated verification commands')
-    .option('--no-auto-escalate', 'Do not create escalation approvals from hard-task rules')
-    .option('--json', 'Emit structured JSON only')
+    .command("create")
+    .description("Create a resumable OpenClaw/Babel job")
+    .argument("<task...>", "Task prompt")
+    .option("--id <id>", "Stable job id")
+    .option("--project-root <path>", "Approved project root")
+    .option(
+      "--execution-profile <profile>",
+      "Execution profile",
+      "opencalw_manager",
+    )
+    .option(
+      "--mode <mode>",
+      `Pipeline mode: ${VALID_MODES.join(" | ")}`,
+      "chat",
+    )
+    .option("--model <model>", "Optional model family override")
+    .option("--model-tier <tier>", "Optional model tier override")
+    .option("--verify <commands>", "Semicolon-separated verification commands")
+    .option(
+      "--no-auto-escalate",
+      "Do not create escalation approvals from hard-task rules",
+    )
+    .option("--json", "Emit structured JSON only")
     .action(
       (
         taskParts: string[],
@@ -2119,16 +2441,22 @@ Notes:
         try {
           const job = createAgentJob({
             ...(options.id ? { id: options.id } : {}),
-            task: taskParts.join(' '),
+            task: taskParts.join(" "),
             mode: parseValidMode(options.mode),
-            executionProfile: options.executionProfile ?? 'opencalw_manager',
-            ...(options.projectRoot ? { projectRoot: options.projectRoot } : {}),
+            executionProfile: options.executionProfile ?? "opencalw_manager",
+            ...(options.projectRoot
+              ? { projectRoot: options.projectRoot }
+              : {}),
             ...(options.model ? { model: options.model } : {}),
             ...(options.modelTier ? { modelTier: options.modelTier } : {}),
             verifyCommands: parseSemicolonCommands(options.verify),
             autoEscalate: options.autoEscalate !== false,
           });
-          printJsonOrHuman({ status: 'ok', job }, formatAgentJobHuman(job), options.json === true);
+          printJsonOrHuman(
+            { status: "ok", job },
+            formatAgentJobHuman(job),
+            options.json === true,
+          );
         } catch (err: unknown) {
           printJsonErrorAndExit(
             err instanceof Error ? err.message : String(err),
@@ -2139,47 +2467,51 @@ Notes:
     );
 
   jobsCommand
-    .command('list')
-    .description('List jobs')
-    .option('--json', 'Emit structured JSON only')
+    .command("list")
+    .description("List jobs")
+    .option("--json", "Emit structured JSON only")
     .action((options: { json?: boolean }) => {
       const payload = listAgentJobs();
       printJsonOrHuman(
-        { status: 'ok', ...payload },
+        { status: "ok", ...payload },
         formatAgentJobListHuman(payload),
         options.json === true,
       );
     });
 
   jobsCommand
-    .command('status')
-    .description('Inspect one job')
-    .argument('<id>', 'Job id')
-    .option('--json', 'Emit structured JSON only')
+    .command("status")
+    .description("Inspect one job")
+    .argument("<id>", "Job id")
+    .option("--json", "Emit structured JSON only")
     .action((id: string, options: { json?: boolean }) => {
       const job = getAgentJob(id);
       if (!job) {
         printJsonErrorAndExit(`Job not found: ${id}`, options.json === true);
       }
-      printJsonOrHuman({ status: 'ok', job }, formatAgentJobHuman(job), options.json === true);
+      printJsonOrHuman(
+        { status: "ok", job },
+        formatAgentJobHuman(job),
+        options.json === true,
+      );
     });
 
   jobsCommand
-    .command('approve')
-    .description('Approve all pending approvals for a job')
-    .argument('<id>', 'Job id')
-    .option('--ttl-hours <hours>', 'Hours before approvals expire', '24')
-    .option('--json', 'Emit structured JSON only')
+    .command("approve")
+    .description("Approve all pending approvals for a job")
+    .argument("<id>", "Job id")
+    .option("--ttl-hours <hours>", "Hours before approvals expire", "24")
+    .option("--json", "Emit structured JSON only")
     .action((id: string, options: { ttlHours?: string; json?: boolean }) => {
       try {
-        const ttlHours = Number.parseInt(options.ttlHours ?? '24', 10);
+        const ttlHours = Number.parseInt(options.ttlHours ?? "24", 10);
         if (!Number.isFinite(ttlHours) || ttlHours <= 0) {
-          throw new Error('--ttl-hours must be a positive integer.');
+          throw new Error("--ttl-hours must be a positive integer.");
         }
         const result = approveAgentJob(id, { ttlHours });
         printJsonOrHuman(
-          { status: 'ok', job: result.job, approvals: result.approvals },
-          `${formatAgentJobHuman(result.job)}\n\nApproved: ${result.approvals.map((record) => record.id).join(', ') || '(none)'}`,
+          { status: "ok", job: result.job, approvals: result.approvals },
+          `${formatAgentJobHuman(result.job)}\n\nApproved: ${result.approvals.map((record) => record.id).join(", ") || "(none)"}`,
           options.json === true,
         );
       } catch (err: unknown) {
@@ -2191,14 +2523,18 @@ Notes:
     });
 
   jobsCommand
-    .command('pause')
-    .description('Pause a queued job')
-    .argument('<id>', 'Job id')
-    .option('--json', 'Emit structured JSON only')
+    .command("pause")
+    .description("Pause a queued job")
+    .argument("<id>", "Job id")
+    .option("--json", "Emit structured JSON only")
     .action((id: string, options: { json?: boolean }) => {
       try {
         const job = pauseAgentJob(id);
-        printJsonOrHuman({ status: 'ok', job }, formatAgentJobHuman(job), options.json === true);
+        printJsonOrHuman(
+          { status: "ok", job },
+          formatAgentJobHuman(job),
+          options.json === true,
+        );
       } catch (err: unknown) {
         printJsonErrorAndExit(
           err instanceof Error ? err.message : String(err),
@@ -2208,14 +2544,18 @@ Notes:
     });
 
   jobsCommand
-    .command('resume')
-    .description('Return a paused or approval-satisfied job to queued state')
-    .argument('<id>', 'Job id')
-    .option('--json', 'Emit structured JSON only')
+    .command("resume")
+    .description("Return a paused or approval-satisfied job to queued state")
+    .argument("<id>", "Job id")
+    .option("--json", "Emit structured JSON only")
     .action((id: string, options: { json?: boolean }) => {
       try {
         const job = resumeAgentJob(id);
-        printJsonOrHuman({ status: 'ok', job }, formatAgentJobHuman(job), options.json === true);
+        printJsonOrHuman(
+          { status: "ok", job },
+          formatAgentJobHuman(job),
+          options.json === true,
+        );
       } catch (err: unknown) {
         printJsonErrorAndExit(
           err instanceof Error ? err.message : String(err),
@@ -2225,10 +2565,10 @@ Notes:
     });
 
   jobsCommand
-    .command('run')
-    .description('Run or resume one job now')
-    .argument('<id>', 'Job id')
-    .option('--json', 'Emit structured JSON only')
+    .command("run")
+    .description("Run or resume one job now")
+    .argument("<id>", "Job id")
+    .option("--json", "Emit structured JSON only")
     .action(async (id: string, options: { json?: boolean }) => {
       try {
         const job = await runAgentJobNow(id);
@@ -2237,7 +2577,7 @@ Notes:
           formatAgentJobHuman(job),
           options.json === true,
         );
-        if (job.status !== 'complete') {
+        if (job.status !== "complete") {
           process.exit(1);
         }
       } catch (err: unknown) {
@@ -2249,10 +2589,10 @@ Notes:
     });
 
   jobsCommand
-    .command('report')
-    .description('Write and print a job report')
-    .argument('<id>', 'Job id')
-    .option('--json', 'Emit structured JSON only')
+    .command("report")
+    .description("Write and print a job report")
+    .argument("<id>", "Job id")
+    .option("--json", "Emit structured JSON only")
     .action((id: string, options: { json?: boolean }) => {
       try {
         const job = getAgentJob(id);
@@ -2261,7 +2601,7 @@ Notes:
         }
         const reported = writeAgentJobReport(job);
         printJsonOrHuman(
-          { status: 'ok', job: reported },
+          { status: "ok", job: reported },
           formatAgentJobHuman(reported),
           options.json === true,
         );
@@ -2274,53 +2614,53 @@ Notes:
     });
 
   const escalationCommand = program
-    .command('escalation')
-    .description('Inspect model escalation routing recommendations')
+    .command("escalation")
+    .description("Inspect model escalation routing recommendations")
     .action(() => {
       escalationCommand.help({ error: false });
     });
 
   escalationCommand
-    .command('recommend')
-    .description('Explain whether a task should use the escalation tier')
-    .argument('<task...>', 'Task text')
-    .option('--json', 'Emit structured JSON only')
+    .command("recommend")
+    .description("Explain whether a task should use the escalation tier")
+    .argument("<task...>", "Task text")
+    .option("--json", "Emit structured JSON only")
     .action((taskParts: string[], options: { json?: boolean }) => {
-      const task = taskParts.join(' ');
+      const task = taskParts.join(" ");
       const recommendation = recommendModelEscalation({ task });
       printJsonOrHuman(
-        { status: 'ok', recommendation },
+        { status: "ok", recommendation },
         formatEscalationRecommendationHuman(recommendation),
         options.json === true,
       );
     });
 
   const diagnoseCommand = program
-    .command('diagnose')
-    .description('Diagnose Babel run/job halts and next actions')
+    .command("diagnose")
+    .description("Diagnose Babel run/job halts and next actions")
     .action(() => {
       diagnoseCommand.help({ error: false });
     });
 
   diagnoseCommand
-    .command('run')
-    .description('Diagnose a run directory')
-    .argument('<run>', 'Run directory')
-    .option('--json', 'Emit structured JSON only')
+    .command("run")
+    .description("Diagnose a run directory")
+    .argument("<run>", "Run directory")
+    .option("--json", "Emit structured JSON only")
     .action((runDir: string, options: { json?: boolean }) => {
       const diagnosis = diagnoseRun({ runDir });
       printJsonOrHuman(
-        { status: 'ok', diagnosis },
+        { status: "ok", diagnosis },
         formatHaltDiagnosisHuman(diagnosis),
         options.json === true,
       );
     });
 
   diagnoseCommand
-    .command('job')
-    .description('Diagnose a job')
-    .argument('<id>', 'Job id')
-    .option('--json', 'Emit structured JSON only')
+    .command("job")
+    .description("Diagnose a job")
+    .argument("<id>", "Job id")
+    .option("--json", "Emit structured JSON only")
     .action((id: string, options: { json?: boolean }) => {
       const job = getAgentJob(id);
       if (!job) {
@@ -2331,38 +2671,44 @@ Notes:
         diagnoseRun({
           runDir: job.run_dir,
           pipelineStatus: job.pipeline_status,
-          approvalRequired: job.status === 'waiting_approval',
+          approvalRequired: job.status === "waiting_approval",
           verification: job.completion_verification,
           escalation: job.escalation,
         });
       printJsonOrHuman(
-        { status: 'ok', diagnosis },
+        { status: "ok", diagnosis },
         formatHaltDiagnosisHuman(diagnosis),
         options.json === true,
       );
     });
 
   diagnoseCommand
-    .command('bdns')
-    .description('Diagnose bounded BDNS evidence for a run')
-    .argument('[run]', 'Run directory or latest', 'latest')
-    .option('--project <name>', 'Use latest run pointer for a specific project')
-    .option('--json', 'Emit structured JSON only')
-    .action(async (runArg: string, options: { project?: string; json?: boolean }) => {
-      const runDir = resolveInspectRunDir({
-        run: runArg,
-        project: options.project,
-        babelRunsDir: BABEL_RUNS_DIR,
-      });
-      const bundle = await loadBdnsDiagnosticBundle(runDir);
-      printJsonOrHuman(bundle, formatBdnsDiagnosticHuman(bundle), options.json === true);
-    });
+    .command("bdns")
+    .description("Diagnose bounded BDNS evidence for a run")
+    .argument("[run]", "Run directory or latest", "latest")
+    .option("--project <name>", "Use latest run pointer for a specific project")
+    .option("--json", "Emit structured JSON only")
+    .action(
+      async (runArg: string, options: { project?: string; json?: boolean }) => {
+        const runDir = resolveInspectRunDir({
+          run: runArg,
+          project: options.project,
+          babelRunsDir: BABEL_RUNS_DIR,
+        });
+        const bundle = await loadBdnsDiagnosticBundle(runDir);
+        printJsonOrHuman(
+          bundle,
+          formatBdnsDiagnosticHuman(bundle),
+          options.json === true,
+        );
+      },
+    );
 
   const modelsCommand = program
-    .command('models')
-    .description('Inspect and ping configured model backends')
+    .command("models")
+    .description("Inspect and ping configured model backends")
     .addHelpText(
-      'after',
+      "after",
       `
 Examples:
   $ babel models ping
@@ -2378,26 +2724,37 @@ Notes:
     });
 
   modelsCommand
-    .command('ping')
-    .description('Ping one configured model backend with a tiny JSON request')
-    .option('--model <key>', 'Model backend key to ping', 'qwen3-32b')
-    .option('--allow-expensive', 'Approve an expensive or policy-blocked backend for this run')
-    .option('--json', 'Emit structured JSON only')
-    .action(async (options: { model?: string; json?: boolean; allowExpensive?: boolean }) => {
-      validateRuntimeEnvForCommand({ json: options.json === true });
-      await handleModelsPing(options);
-    });
+    .command("ping")
+    .description("Ping one configured model backend with a tiny JSON request")
+    .option("--model <key>", "Model backend key to ping", "qwen3-32b")
+    .option(
+      "--allow-expensive",
+      "Approve an expensive or policy-blocked backend for this run",
+    )
+    .option("--json", "Emit structured JSON only")
+    .action(
+      async (options: {
+        model?: string;
+        json?: boolean;
+        allowExpensive?: boolean;
+      }) => {
+        validateRuntimeEnvForCommand({ json: options.json === true });
+        await handleModelsPing(options);
+      },
+    );
 
   program
-    .command('prove')
-    .description('Prove whether a Babel run earned its completion claim from evidence')
-    .argument('[run]', 'Run directory or latest', 'latest')
-    .option('--last', 'Use latest run pointer')
-    .option('--run <run>', 'Run directory or latest')
-    .option('--project <name>', 'Use latest run pointer for a specific project')
-    .option('--json', 'Emit structured JSON only')
+    .command("prove")
+    .description(
+      "Prove whether a Babel run earned its completion claim from evidence",
+    )
+    .argument("[run]", "Run directory or latest", "latest")
+    .option("--last", "Use latest run pointer")
+    .option("--run <run>", "Run directory or latest")
+    .option("--project <name>", "Use latest run pointer for a specific project")
+    .option("--json", "Emit structured JSON only")
     .addHelpText(
-      'after',
+      "after",
       `
 Examples:
   $ babel prove --last
@@ -2412,17 +2769,22 @@ Notes:
     .action(
       (
         runArg: string | undefined,
-        options: { last?: boolean; run?: string; project?: string; json?: boolean },
+        options: {
+          last?: boolean;
+          run?: string;
+          project?: string;
+          json?: boolean;
+        },
       ) => {
         handleProofReport(runArg, options);
       },
     );
 
   const learnCommand = program
-    .command('learn')
-    .description('Create reviewed learning artifacts from Babel run evidence')
+    .command("learn")
+    .description("Create reviewed learning artifacts from Babel run evidence")
     .addHelpText(
-      'after',
+      "after",
       `
 Examples:
   $ babel learn from-run --last
@@ -2444,14 +2806,14 @@ Notes:
     });
 
   learnCommand
-    .command('from-run')
-    .description('Create a structured learning failure record from a Babel run')
-    .argument('[run]', 'Run directory, run id, or latest', 'latest')
-    .option('--last', 'Use latest run pointer')
-    .option('--run <run>', 'Run directory, run id, or latest')
-    .option('--project <name>', 'Use latest run pointer for a specific project')
-    .option('--learning-root <path>', 'Directory for learning artifacts')
-    .option('--json', 'Emit structured JSON only')
+    .command("from-run")
+    .description("Create a structured learning failure record from a Babel run")
+    .argument("[run]", "Run directory, run id, or latest", "latest")
+    .option("--last", "Use latest run pointer")
+    .option("--run <run>", "Run directory, run id, or latest")
+    .option("--project <name>", "Use latest run pointer for a specific project")
+    .option("--learning-root <path>", "Directory for learning artifacts")
+    .option("--json", "Emit structured JSON only")
     .action(
       (
         runArg: string | undefined,
@@ -2468,76 +2830,108 @@ Notes:
     );
 
   learnCommand
-    .command('propose')
-    .description('Create a scoped lesson candidate from a learning failure record')
-    .argument('<failure-id>', 'Failure record id, run id, or direct .failure.json path')
-    .option('--learning-root <path>', 'Directory for learning artifacts')
-    .option('--json', 'Emit structured JSON only')
-    .action((failureId: string, options: { learningRoot?: string; json?: boolean }) => {
-      handleLearnPropose(failureId, options);
-    });
-
-  learnCommand
-    .command('test')
-    .description('Run the static stored-evidence eval gate for a lesson candidate')
-    .argument('<lesson-id>', 'Lesson candidate id or direct candidate path')
-    .option('--learning-root <path>', 'Directory for learning artifacts')
-    .option('--json', 'Emit structured JSON only')
-    .action((lessonId: string, options: { learningRoot?: string; json?: boolean }) => {
-      handleLearnTest(lessonId, options);
-    });
-
-  learnCommand
-    .command('promote')
-    .description('Promote a passing lesson candidate to advisory shadow mode')
-    .argument('<lesson-id>', 'Lesson candidate id or direct candidate path')
-    .option('--shadow', 'Promote to advisory shadow mode')
-    .option('--learning-root <path>', 'Directory for learning artifacts')
-    .option('--json', 'Emit structured JSON only')
+    .command("propose")
+    .description(
+      "Create a scoped lesson candidate from a learning failure record",
+    )
+    .argument(
+      "<failure-id>",
+      "Failure record id, run id, or direct .failure.json path",
+    )
+    .option("--learning-root <path>", "Directory for learning artifacts")
+    .option("--json", "Emit structured JSON only")
     .action(
-      (lessonId: string, options: { shadow?: boolean; learningRoot?: string; json?: boolean }) => {
+      (
+        failureId: string,
+        options: { learningRoot?: string; json?: boolean },
+      ) => {
+        handleLearnPropose(failureId, options);
+      },
+    );
+
+  learnCommand
+    .command("test")
+    .description(
+      "Run the static stored-evidence eval gate for a lesson candidate",
+    )
+    .argument("<lesson-id>", "Lesson candidate id or direct candidate path")
+    .option("--learning-root <path>", "Directory for learning artifacts")
+    .option("--json", "Emit structured JSON only")
+    .action(
+      (
+        lessonId: string,
+        options: { learningRoot?: string; json?: boolean },
+      ) => {
+        handleLearnTest(lessonId, options);
+      },
+    );
+
+  learnCommand
+    .command("promote")
+    .description("Promote a passing lesson candidate to advisory shadow mode")
+    .argument("<lesson-id>", "Lesson candidate id or direct candidate path")
+    .option("--shadow", "Promote to advisory shadow mode")
+    .option("--learning-root <path>", "Directory for learning artifacts")
+    .option("--json", "Emit structured JSON only")
+    .action(
+      (
+        lessonId: string,
+        options: { shadow?: boolean; learningRoot?: string; json?: boolean },
+      ) => {
         handleLearnPromote(lessonId, options);
       },
     );
 
   learnCommand
-    .command('package')
-    .description('Generate a review-only mutation package from a passing project lesson')
-    .argument('<lesson-id>', 'Lesson candidate id or direct candidate path')
-    .requiredOption(
-      '--target <target>',
-      'Mutation target type: project-verifier-contract or project-overlay',
+    .command("package")
+    .description(
+      "Generate a review-only mutation package from a passing project lesson",
     )
-    .option('--learning-root <path>', 'Directory for learning artifacts')
-    .option('--json', 'Emit structured JSON only')
+    .argument("<lesson-id>", "Lesson candidate id or direct candidate path")
+    .requiredOption(
+      "--target <target>",
+      "Mutation target type: project-verifier-contract or project-overlay",
+    )
+    .option("--learning-root <path>", "Directory for learning artifacts")
+    .option("--json", "Emit structured JSON only")
     .action(
-      (lessonId: string, options: { target?: string; learningRoot?: string; json?: boolean }) => {
+      (
+        lessonId: string,
+        options: { target?: string; learningRoot?: string; json?: boolean },
+      ) => {
         handleLearnPackage(lessonId, options);
       },
     );
 
   learnCommand
-    .command('inspect')
+    .command("inspect")
     .description(
-      'Read a learning failure, lesson candidate, shadow lesson, eval record, or mutation package',
+      "Read a learning failure, lesson candidate, shadow lesson, eval record, or mutation package",
     )
     .argument(
-      '<artifact-id>',
-      'Failure id, lesson id, mutation id, or direct learning artifact path',
+      "<artifact-id>",
+      "Failure id, lesson id, mutation id, or direct learning artifact path",
     )
-    .option('--learning-root <path>', 'Directory for learning artifacts')
-    .option('--json', 'Emit structured JSON only')
-    .action((artifactId: string, options: { learningRoot?: string; json?: boolean }) => {
-      handleLearnInspect(artifactId, options);
-    });
+    .option("--learning-root <path>", "Directory for learning artifacts")
+    .option("--json", "Emit structured JSON only")
+    .action(
+      (
+        artifactId: string,
+        options: { learningRoot?: string; json?: boolean },
+      ) => {
+        handleLearnInspect(artifactId, options);
+      },
+    );
 
   const evidenceCommand = program
-    .command('evidence')
-    .description('Show the evidence-first command surfaces and latest run pointer')
-    .option('--json', 'Emit structured JSON only')
-    .option('--project <name>', 'Use latest run pointer for a specific project')
+    .command("evidence")
+    .description(
+      "Show the evidence-first command surfaces and latest run pointer",
+    )
+    .option("--json", "Emit structured JSON only")
+    .option("--project <name>", "Use latest run pointer for a specific project")
     .addHelpText(
-      'after',
+      "after",
       `
 Examples:
   $ babel evidence
@@ -2555,10 +2949,10 @@ Examples:
   registerEvidenceProductSubcommands(evidenceCommand);
 
   const toolsCommand = program
-    .command('tools')
-    .description('Inspect the executor tool registry')
+    .command("tools")
+    .description("Inspect the executor tool registry")
     .addHelpText(
-      'after',
+      "after",
       `
 Examples:
   $ babel tools list
@@ -2578,23 +2972,29 @@ Notes:
     });
 
   toolsCommand
-    .command('list')
-    .description('List registered executor tools')
-    .option('--json', 'Emit structured JSON only')
-    .option('--policy', 'Include current policy decision for each tool')
-    .option('--why-disabled', 'Alias for --policy that emphasizes disabled reasons')
+    .command("list")
+    .description("List registered executor tools")
+    .option("--json", "Emit structured JSON only")
+    .option("--policy", "Include current policy decision for each tool")
     .option(
-      '--capabilities',
-      'Include capability broker entries such as archive and bundle inspection',
+      "--why-disabled",
+      "Alias for --policy that emphasizes disabled reasons",
     )
     .option(
-      '--execution-profile <profile>',
-      'Evaluate policy/capabilities for an execution profile',
+      "--capabilities",
+      "Include capability broker entries such as archive and bundle inspection",
     )
-    .option('--allowed-tools <tools>', 'Comma-separated run-level allowed tool names to simulate')
     .option(
-      '--disallowed-tools <tools>',
-      'Comma-separated run-level disallowed tool names to simulate',
+      "--execution-profile <profile>",
+      "Evaluate policy/capabilities for an execution profile",
+    )
+    .option(
+      "--allowed-tools <tools>",
+      "Comma-separated run-level allowed tool names to simulate",
+    )
+    .option(
+      "--disallowed-tools <tools>",
+      "Comma-separated run-level disallowed tool names to simulate",
     )
     .action(
       (options: {
@@ -2611,23 +3011,33 @@ Notes:
     );
 
   toolsCommand
-    .command('inspect')
-    .description('Inspect one registered executor tool')
-    .argument('<name>', 'Executor tool name')
-    .option('--json', 'Emit structured JSON only')
-    .option('--policy', 'Include current policy decision for this tool')
-    .option('--execution-profile <profile>', 'Evaluate policy for an execution profile')
+    .command("inspect")
+    .description("Inspect one registered executor tool")
+    .argument("<name>", "Executor tool name")
+    .option("--json", "Emit structured JSON only")
+    .option("--policy", "Include current policy decision for this tool")
+    .option(
+      "--execution-profile <profile>",
+      "Evaluate policy for an execution profile",
+    )
     .action(
-      (name: string, options: { json?: boolean; policy?: boolean; executionProfile?: string }) => {
+      (
+        name: string,
+        options: {
+          json?: boolean;
+          policy?: boolean;
+          executionProfile?: string;
+        },
+      ) => {
         handleExecutorToolInspect(name, options);
       },
     );
 
   const sessionCommand = program
-    .command('session')
-    .description('Read-only session views backed by Babel run evidence')
+    .command("session")
+    .description("Read-only session views backed by Babel run evidence")
     .addHelpText(
-      'after',
+      "after",
       `
 Examples:
   $ babel session latest
@@ -2643,17 +3053,17 @@ Notes:
     .action(() => {
       const latest = readLatestRunPointer();
       if (!latest) {
-        console.error('[babel] No latest session pointer found.');
+        console.error("[babel] No latest session pointer found.");
         process.exit(1);
       }
       printSessionSummary(readSessionSummary(latest.run_dir), false);
     });
 
   sessionCommand
-    .command('latest')
-    .description('Show the latest evidence-backed session')
-    .option('--project <name>', 'Use latest run pointer for a specific project')
-    .option('--json', 'Emit structured JSON only')
+    .command("latest")
+    .description("Show the latest evidence-backed session")
+    .option("--project <name>", "Use latest run pointer for a specific project")
+    .option("--json", "Emit structured JSON only")
     .action((options: { project?: string; json?: boolean }) => {
       const latest = readLatestRunPointer(options.project);
       if (!latest) {
@@ -2661,7 +3071,7 @@ Notes:
           process.stdout.write(
             `${JSON.stringify(
               {
-                status: 'no_latest_session',
+                status: "no_latest_session",
                 project: options.project ?? null,
               },
               null,
@@ -2670,22 +3080,25 @@ Notes:
           );
         } else {
           console.error(
-            `[babel] No latest session pointer found${options.project ? ` for ${options.project}` : ''}.`,
+            `[babel] No latest session pointer found${options.project ? ` for ${options.project}` : ""}.`,
           );
         }
         process.exit(1);
       }
-      printSessionSummary(readSessionSummary(latest.run_dir), options.json === true);
+      printSessionSummary(
+        readSessionSummary(latest.run_dir),
+        options.json === true,
+      );
     });
 
   sessionCommand
-    .command('list')
-    .description('List recent evidence-backed sessions')
-    .option('--project <name>', 'Filter by manifest target project')
-    .option('--limit <n>', 'Maximum sessions to show', '10')
-    .option('--json', 'Emit structured JSON only')
+    .command("list")
+    .description("List recent evidence-backed sessions")
+    .option("--project <name>", "Filter by manifest target project")
+    .option("--limit <n>", "Maximum sessions to show", "10")
+    .option("--json", "Emit structured JSON only")
     .action((options: { project?: string; limit?: string; json?: boolean }) => {
-      const limit = Number.parseInt(options.limit ?? '10', 10);
+      const limit = Number.parseInt(options.limit ?? "10", 10);
       const sessions = listSessionSummaries({
         ...(options.project !== undefined ? { project: options.project } : {}),
         limit: Number.isFinite(limit) && limit > 0 ? limit : 10,
@@ -2694,34 +3107,46 @@ Notes:
     });
 
   sessionCommand
-    .command('resume')
-    .description('Resolve a run id/latest pointer into recovery metadata')
-    .argument('[run]', 'Run directory or latest', 'latest')
-    .option('--project <name>', 'Use latest run pointer for a specific project')
-    .option('--json', 'Emit structured JSON only')
-    .action((runArg: string | undefined, options: { project?: string; json?: boolean }) => {
-      printSessionResume(runArg, options);
-    });
+    .command("resume")
+    .description("Resolve a run id/latest pointer into recovery metadata")
+    .argument("[run]", "Run directory or latest", "latest")
+    .option("--project <name>", "Use latest run pointer for a specific project")
+    .option("--json", "Emit structured JSON only")
+    .action(
+      (
+        runArg: string | undefined,
+        options: { project?: string; json?: boolean },
+      ) => {
+        printSessionResume(runArg, options);
+      },
+    );
 
   sessionCommand
-    .command('inspect')
-    .description('Inspect a session summary via existing evidence-bundle inspection')
-    .argument('[run]', 'Run directory or latest')
-    .option('--project <name>', 'Use latest run pointer for a specific project')
+    .command("inspect")
+    .description(
+      "Inspect a session summary via existing evidence-bundle inspection",
+    )
+    .argument("[run]", "Run directory or latest")
+    .option("--project <name>", "Use latest run pointer for a specific project")
     .action((runArg: string | undefined, options: { project?: string }) => {
-      handleInspectMode('summary', runArg ?? 'latest', options);
+      handleInspectMode("summary", runArg ?? "latest", options);
     });
 
   const inspectCommand = program
-    .command('inspect')
-    .description('Read-only run inspection surfaces for existing Babel evidence bundles')
-    .option('--last', 'Use latest run pointer')
-    .option('--report', 'Generate proof_status.json and BABEL_RUN_REPORT.md for a run')
-    .option('--run <run>', 'Run directory or latest')
-    .option('--project <name>', 'Use latest run pointer for a specific project')
-    .option('--json', 'Emit structured JSON only')
+    .command("inspect")
+    .description(
+      "Read-only run inspection surfaces for existing Babel evidence bundles",
+    )
+    .option("--last", "Use latest run pointer")
+    .option(
+      "--report",
+      "Generate proof_status.json and BABEL_RUN_REPORT.md for a run",
+    )
+    .option("--run <run>", "Run directory or latest")
+    .option("--project <name>", "Use latest run pointer for a specific project")
+    .option("--json", "Emit structured JSON only")
     .addHelpText(
-      'after',
+      "after",
       `
 Examples:
   $ babel inspect --last --report
@@ -2756,15 +3181,22 @@ Notes:
 
   addInspectCommonOptions(
     inspectCommand
-      .command('report')
-      .argument('[run]', 'Run directory or latest')
-      .description('Generate proof_status.json and BABEL_RUN_REPORT.md for a Babel run')
-      .option('--last', 'Use latest run pointer')
-      .option('--json', 'Emit structured JSON only')
+      .command("report")
+      .argument("[run]", "Run directory or latest")
+      .description(
+        "Generate proof_status.json and BABEL_RUN_REPORT.md for a Babel run",
+      )
+      .option("--last", "Use latest run pointer")
+      .option("--json", "Emit structured JSON only")
       .action(
         async (
           runArg: string | undefined,
-          options: { run?: string; project?: string; last?: boolean; json?: boolean },
+          options: {
+            run?: string;
+            project?: string;
+            last?: boolean;
+            json?: boolean;
+          },
         ) => {
           handleProofReport(runArg, options);
         },
@@ -2773,92 +3205,171 @@ Notes:
 
   addInspectCommonOptions(
     inspectCommand
-      .command('run')
-      .argument('[run]', 'Run directory or latest')
-      .description('Inspect a complete Babel run bundle')
-      .action(async (runArg: string | undefined, options: { run?: string; project?: string }) => {
-        handleInspectMode('run', runArg, options);
-      }),
-  );
-
-  addInspectCommonOptions(
-    inspectCommand
-      .command('summary')
-      .argument('[run]', 'Run directory or latest')
-      .description('Inspect the summary artifact for a Babel run')
-      .action(async (runArg: string | undefined, options: { run?: string; project?: string }) => {
-        handleInspectMode('summary', runArg, options);
-      }),
-  );
-
-  addInspectCommonOptions(
-    inspectCommand
-      .command('bdns')
-      .argument('[run]', 'Run directory or latest')
-      .description('Inspect bounded BDNS evidence for a run')
-      .option('--json', 'Emit structured JSON only')
-      .action(async (runArg: string | undefined, options: { run?: string; project?: string; json?: boolean }) => {
-        const runDir = resolveInspectRunDir({
-          run: options.run ?? runArg ?? 'latest',
-          project: options.project,
-          babelRunsDir: BABEL_RUNS_DIR,
-        });
-        const bundle = await loadBdnsDiagnosticBundle(runDir);
-        printJsonOrHuman(bundle, formatBdnsDiagnosticHuman(bundle), options.json === true);
-      }),
-  );
-
-  addInspectCommonOptions(
-    inspectCommand
-      .command('stack')
-      .argument('[run]', 'Run directory or latest')
-      .description('Inspect the resolved instruction stack for a Babel run')
-      .action(async (runArg: string | undefined, options: { run?: string; project?: string }) => {
-        handleInspectMode('stack', runArg, options);
-      }),
-  );
-
-  addInspectCommonOptions(
-    inspectCommand
-      .command('manifest')
-      .argument('[run]', 'Run directory or latest')
-      .description('Inspect the artifact manifest for a Babel run')
-      .action(async (runArg: string | undefined, options: { run?: string; project?: string }) => {
-        handleInspectMode('manifest', runArg, options);
-      }),
-  );
-
-  addInspectCommonOptions(
-    inspectCommand
-      .command('outcome')
-      .argument('[run]', 'Run directory or latest')
-      .description('Inspect the derived outcome for a Babel run')
-      .action(async (runArg: string | undefined, options: { run?: string; project?: string }) => {
-        handleInspectMode('outcome', runArg, options);
-      }),
-  );
-
-  addInspectCommonOptions(
-    inspectCommand
-      .command('validate-run')
-      .argument('[run]', 'Chat session id, run directory, or latest')
-      .description('Validate a persisted chat run against the session-event lifecycle contract')
-      .option('--json', 'Emit structured JSON only')
+      .command("run")
+      .argument("[run]", "Run directory or latest")
+      .description("Inspect a complete Babel run bundle")
       .action(
-        (runArg: string | undefined, options: { run?: string; project?: string; json?: boolean }) => {
+        async (
+          runArg: string | undefined,
+          options: { run?: string; project?: string },
+        ) => {
+          handleInspectMode("run", runArg, options);
+        },
+      ),
+  );
+
+  addInspectCommonOptions(
+    inspectCommand
+      .command("summary")
+      .argument("[run]", "Run directory or latest")
+      .description("Inspect the summary artifact for a Babel run")
+      .action(
+        async (
+          runArg: string | undefined,
+          options: { run?: string; project?: string },
+        ) => {
+          handleInspectMode("summary", runArg, options);
+        },
+      ),
+  );
+
+  addInspectCommonOptions(
+    inspectCommand
+      .command("bdns")
+      .argument("[run]", "Run directory or latest")
+      .description("Inspect bounded BDNS evidence for a run")
+      .option("--json", "Emit structured JSON only")
+      .action(
+        async (
+          runArg: string | undefined,
+          options: { run?: string; project?: string; json?: boolean },
+        ) => {
+          const runDir = resolveInspectRunDir({
+            run: options.run ?? runArg ?? "latest",
+            project: options.project,
+            babelRunsDir: BABEL_RUNS_DIR,
+          });
+          const bundle = await loadBdnsDiagnosticBundle(runDir);
+          printJsonOrHuman(
+            bundle,
+            formatBdnsDiagnosticHuman(bundle),
+            options.json === true,
+          );
+        },
+      ),
+  );
+
+  addInspectCommonOptions(
+    inspectCommand
+      .command("acceptance")
+      .argument("[run]", "Run directory or latest")
+      .description(
+        "Inspect redacted Acceptance V0 recording artifacts for a run",
+      )
+      .option("--json", "Emit structured JSON only")
+      .action(
+        async (
+          runArg: string | undefined,
+          options: { run?: string; project?: string; json?: boolean },
+        ) => {
+          const runDir = resolveInspectRunDir({
+            run: options.run ?? runArg ?? "latest",
+            project: options.project,
+            babelRunsDir: BABEL_RUNS_DIR,
+          });
+          const bundle = readAcceptanceArtifacts(runDir);
+          if (!bundle) {
+            printJsonOrHuman(
+              { status: "missing", runDir },
+              `No Acceptance V0 recording found for ${runDir}`,
+              options.json === true,
+            );
+            return;
+          }
+          printJsonOrHuman(
+            bundle,
+            `Acceptance V0 recording for ${runDir}\n${JSON.stringify(bundle, null, 2)}`,
+            options.json === true,
+          );
+        },
+      ),
+  );
+
+  addInspectCommonOptions(
+    inspectCommand
+      .command("stack")
+      .argument("[run]", "Run directory or latest")
+      .description("Inspect the resolved instruction stack for a Babel run")
+      .action(
+        async (
+          runArg: string | undefined,
+          options: { run?: string; project?: string },
+        ) => {
+          handleInspectMode("stack", runArg, options);
+        },
+      ),
+  );
+
+  addInspectCommonOptions(
+    inspectCommand
+      .command("manifest")
+      .argument("[run]", "Run directory or latest")
+      .description("Inspect the artifact manifest for a Babel run")
+      .action(
+        async (
+          runArg: string | undefined,
+          options: { run?: string; project?: string },
+        ) => {
+          handleInspectMode("manifest", runArg, options);
+        },
+      ),
+  );
+
+  addInspectCommonOptions(
+    inspectCommand
+      .command("outcome")
+      .argument("[run]", "Run directory or latest")
+      .description("Inspect the derived outcome for a Babel run")
+      .action(
+        async (
+          runArg: string | undefined,
+          options: { run?: string; project?: string },
+        ) => {
+          handleInspectMode("outcome", runArg, options);
+        },
+      ),
+  );
+
+  addInspectCommonOptions(
+    inspectCommand
+      .command("validate-run")
+      .argument("[run]", "Chat session id, run directory, or latest")
+      .description(
+        "Validate a persisted chat run against the session-event lifecycle contract",
+      )
+      .option("--json", "Emit structured JSON only")
+      .action(
+        (
+          runArg: string | undefined,
+          options: { run?: string; project?: string; json?: boolean },
+        ) => {
           try {
-            const requested = options.run ?? runArg ?? 'latest';
+            const requested = options.run ?? runArg ?? "latest";
             const result = validateSessionRun(requested, {
               ...(options.project ? { project: options.project } : {}),
             });
             if (options.json) {
               process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
             } else {
-              process.stdout.write(`${formatSessionRunValidatorText(result)}\n`);
+              process.stdout.write(
+                `${formatSessionRunValidatorText(result)}\n`,
+              );
             }
-            if (result.status !== 'PASS') process.exitCode = 1;
+            if (result.status !== "PASS") process.exitCode = 1;
           } catch (err: unknown) {
-            console.error(`Error during run validation: ${err instanceof Error ? err.message : String(err)}`);
+            console.error(
+              `Error during run validation: ${err instanceof Error ? err.message : String(err)}`,
+            );
             process.exit(1);
           }
         },
@@ -2868,10 +3379,10 @@ Notes:
   registerInspectTuiCommand(inspectCommand);
 
   const checkpointCommand = program
-    .command('checkpoint')
-    .description('List, inspect, or restore pre-mutation checkpoints')
+    .command("checkpoint")
+    .description("List, inspect, or restore pre-mutation checkpoints")
     .addHelpText(
-      'after',
+      "after",
       `
 Examples:
   $ babel checkpoint list --run latest
@@ -2881,11 +3392,11 @@ Examples:
     );
 
   checkpointCommand
-    .command('list')
-    .description('List checkpoints for a run')
-    .option('--run <run>', 'Run directory or latest', 'latest')
-    .option('--project <project>', 'Project-scoped latest pointer')
-    .option('--json', 'Emit structured JSON only')
+    .command("list")
+    .description("List checkpoints for a run")
+    .option("--run <run>", "Run directory or latest", "latest")
+    .option("--project <project>", "Project-scoped latest pointer")
+    .option("--json", "Emit structured JSON only")
     .action((options: { run?: string; project?: string; json?: boolean }) => {
       try {
         const runDir = resolveInspectRunDir({
@@ -2908,102 +3419,139 @@ Examples:
     });
 
   checkpointCommand
-    .command('inspect')
-    .argument('<checkpointId>', 'Checkpoint id')
-    .description('Inspect a checkpoint record')
-    .option('--run <run>', 'Run directory or latest')
-    .option('--json', 'Emit structured JSON only')
-    .action((checkpointId: string, options: { run?: string; json?: boolean }) => {
-      try {
-        const resolved = options.run
-          ? findCheckpoint(checkpointId, { runDir: options.run })
-          : findCheckpoint(checkpointId, { runsDir: BABEL_RUNS_DIR });
-        if (options.json) {
-          process.stdout.write(`${JSON.stringify(resolved.record, null, 2)}\n`);
-        } else {
-          process.stdout.write(`${formatCheckpointInspect(resolved.record)}\n`);
-        }
-      } catch (err: unknown) {
-        console.error(`Checkpoint error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
-      }
-    });
-
-  checkpointCommand
-    .command('restore')
-    .argument('<checkpointId>', 'Checkpoint id')
-    .description('Restore files captured by a checkpoint')
-    .option('--run <run>', 'Run directory or latest')
-    .option('--force', 'Restore even if current files differ from the checkpoint post-write state')
-    .option('--json', 'Emit structured JSON only')
-    .action((checkpointId: string, options: { run?: string; force?: boolean; json?: boolean }) => {
-      try {
-        const runDir = options.run
-          ? resolveInspectRunDir({ run: options.run, babelRunsDir: BABEL_RUNS_DIR })
-          : undefined;
-        const resolved = runDir
-          ? findCheckpoint(checkpointId, { runDir })
-          : findCheckpoint(checkpointId, { runsDir: BABEL_RUNS_DIR });
-        const result = restoreCheckpoint(resolved.record, { force: options.force === true });
-        if (options.json) {
-          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-        } else {
-          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-        }
-        if (result.status !== 'restored') {
+    .command("inspect")
+    .argument("<checkpointId>", "Checkpoint id")
+    .description("Inspect a checkpoint record")
+    .option("--run <run>", "Run directory or latest")
+    .option("--json", "Emit structured JSON only")
+    .action(
+      (checkpointId: string, options: { run?: string; json?: boolean }) => {
+        try {
+          const resolved = options.run
+            ? findCheckpoint(checkpointId, { runDir: options.run })
+            : findCheckpoint(checkpointId, { runsDir: BABEL_RUNS_DIR });
+          if (options.json) {
+            process.stdout.write(
+              `${JSON.stringify(resolved.record, null, 2)}\n`,
+            );
+          } else {
+            process.stdout.write(
+              `${formatCheckpointInspect(resolved.record)}\n`,
+            );
+          }
+        } catch (err: unknown) {
+          console.error(
+            `Checkpoint error: ${err instanceof Error ? err.message : String(err)}`,
+          );
           process.exit(1);
         }
-      } catch (err: unknown) {
-        console.error(`Checkpoint error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
-      }
-    });
+      },
+    );
+
+  checkpointCommand
+    .command("restore")
+    .argument("<checkpointId>", "Checkpoint id")
+    .description("Restore files captured by a checkpoint")
+    .option("--run <run>", "Run directory or latest")
+    .option(
+      "--force",
+      "Restore even if current files differ from the checkpoint post-write state",
+    )
+    .option("--json", "Emit structured JSON only")
+    .action(
+      (
+        checkpointId: string,
+        options: { run?: string; force?: boolean; json?: boolean },
+      ) => {
+        try {
+          const runDir = options.run
+            ? resolveInspectRunDir({
+                run: options.run,
+                babelRunsDir: BABEL_RUNS_DIR,
+              })
+            : undefined;
+          const resolved = runDir
+            ? findCheckpoint(checkpointId, { runDir })
+            : findCheckpoint(checkpointId, { runsDir: BABEL_RUNS_DIR });
+          const result = restoreCheckpoint(resolved.record, {
+            force: options.force === true,
+          });
+          if (options.json) {
+            process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+          } else {
+            process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+          }
+          if (result.status !== "restored") {
+            process.exit(1);
+          }
+        } catch (err: unknown) {
+          console.error(
+            `Checkpoint error: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          process.exit(1);
+        }
+      },
+    );
 
   program
-    .command('interactive')
-    .alias('app')
-    .description('Default: enter persistent interactive Babel session (REPL)')
-    .option('-p, --project <name>', 'Default project for this session')
-    .option('--mode <mode>', 'Default mode for this session', 'chat')
-    .option('--resume [sessionId]', 'Resume a prior session (latest if omitted)')
-    .option('--resume-picker', 'Show the session picker at startup (off by default)')
+    .command("interactive")
+    .alias("app")
+    .description("Default: enter persistent interactive Babel session (REPL)")
+    .option("-p, --project <name>", "Default project for this session")
+    .option("--mode <mode>", "Default mode for this session", "chat")
+    .option(
+      "--resume [sessionId]",
+      "Resume a prior session (latest if omitted)",
+    )
+    .option(
+      "--resume-picker",
+      "Show the session picker at startup (off by default)",
+    )
     .addHelpText(
-      'after',
+      "after",
       `
 Interactive slash command map:
   /checkpoint, /restore, /session
   /mcp, /plugins, /plugin, /agents
 `,
     )
-    .action(async (options: {
-      project?: string;
-      mode?: string;
-      resume?: string | boolean;
-      resumePicker?: boolean;
-    }) => {
-      try {
-        if (options.resumePicker) process.env['BABEL_RESUME_PICKER'] = '1';
-        if (options.resume !== undefined) {
-          process.env['BABEL_RESUME_SESSION'] =
-            options.resume === true || options.resume === '' ? 'latest' : String(options.resume);
+    .action(
+      async (options: {
+        project?: string;
+        mode?: string;
+        resume?: string | boolean;
+        resumePicker?: boolean;
+      }) => {
+        try {
+          if (options.resumePicker) process.env["BABEL_RESUME_PICKER"] = "1";
+          if (options.resume !== undefined) {
+            process.env["BABEL_RESUME_SESSION"] =
+              options.resume === true || options.resume === ""
+                ? "latest"
+                : String(options.resume);
+          }
+          await startInteractiveSession({
+            ...(options.project !== undefined
+              ? { project: options.project }
+              : {}),
+            mode: options.mode as never,
+          });
+        } catch (err: unknown) {
+          console.error(
+            `Interactive session error: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          process.exit(1);
         }
-        await startInteractiveSession({
-          ...(options.project !== undefined ? { project: options.project } : {}),
-          mode: options.mode as never,
-        });
-      } catch (err: unknown) {
-        console.error(
-          `Interactive session error: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        process.exit(1);
-      }
-    });
+      },
+    );
 
   const mcpCommand = program
-    .command('mcp')
-    .description('Manage MCP server registry or run the Babel MCP control-plane server over stdio')
+    .command("mcp")
+    .description(
+      "Manage MCP server registry or run the Babel MCP control-plane server over stdio",
+    )
     .addHelpText(
-      'after',
+      "after",
       `
 Examples:
   $ babel mcp list
@@ -3019,32 +3567,36 @@ Notes:
       try {
         await runBabelMcpServer();
       } catch (err: unknown) {
-        console.error(`MCP error: ${err instanceof Error ? err.message : String(err)}`);
+        console.error(
+          `MCP error: ${err instanceof Error ? err.message : String(err)}`,
+        );
         process.exit(1);
       }
     });
 
   mcpCommand
-    .command('doctor')
-    .description('Diagnose MCP registry, transport, auth, timeout, and schema policy')
-    .option('--json', 'Emit structured JSON only')
+    .command("doctor")
+    .description(
+      "Diagnose MCP registry, transport, auth, timeout, and schema policy",
+    )
+    .option("--json", "Emit structured JSON only")
     .action((options: { json?: boolean }) => {
       const servers = readMcpServers();
       const payload = {
-        status: 'ok',
+        status: "ok",
         config_path: getMcpServersConfigPath(),
         server_count: Object.keys(servers).length,
         servers,
         transport_policy: {
-          supported: ['stdio'],
-          http_oauth: 'not_enabled',
+          supported: ["stdio"],
+          http_oauth: "not_enabled",
         },
         auth_policy: {
-          env_passthrough: 'scrubbed',
+          env_passthrough: "scrubbed",
           secret_redaction: true,
         },
         timeout_policy: {
-          default_ms: Number(process.env['BABEL_MCP_TIMEOUT_MS'] ?? '10000'),
+          default_ms: Number(process.env["BABEL_MCP_TIMEOUT_MS"] ?? "10000"),
         },
         schema_policy: {
           lazy_loading: true,
@@ -3059,51 +3611,53 @@ Notes:
       printJsonOrHuman(
         payload,
         [
-          'Babel MCP Doctor',
+          "Babel MCP Doctor",
           `Config: ${payload.config_path}`,
           `Servers: ${payload.server_count}`,
-          'Schema policy: lazy loading, bounded tool search',
-          'External content policy: MCP content is untrusted',
-        ].join('\n'),
+          "Schema policy: lazy loading, bounded tool search",
+          "External content policy: MCP content is untrusted",
+        ].join("\n"),
         options.json === true,
       );
     });
 
   mcpCommand
-    .command('serve')
-    .description('Run the read-only Babel MCP control-plane server over stdio')
+    .command("serve")
+    .description("Run the read-only Babel MCP control-plane server over stdio")
     .action(async () => {
       try {
         await runBabelMcpServer();
       } catch (err: unknown) {
-        console.error(`MCP error: ${err instanceof Error ? err.message : String(err)}`);
+        console.error(
+          `MCP error: ${err instanceof Error ? err.message : String(err)}`,
+        );
         process.exit(1);
       }
     });
 
   mcpCommand
-    .command('list')
-    .description('List configured MCP servers')
-    .option('--json', 'Emit structured JSON only')
+    .command("list")
+    .description("List configured MCP servers")
+    .option("--json", "Emit structured JSON only")
     .action((options: { json?: boolean }) => {
       printMcpServers(options);
     });
 
   mcpCommand
-    .command('status')
-    .description('Show MCP registry path and configured server count')
-    .option('--json', 'Emit structured JSON only')
+    .command("status")
+    .description("Show MCP registry path and configured server count")
+    .option("--json", "Emit structured JSON only")
     .action((options: { json?: boolean }) => {
       printMcpServers({ ...options, status: true });
     });
 
   mcpCommand
-    .command('add')
-    .description('Add or update an MCP server registry entry')
-    .argument('<name>', 'Logical server name used in mcp_request.server')
-    .argument('<command>', 'Executable to spawn')
-    .argument('[args...]', 'Arguments passed to the executable')
-    .option('--json', 'Emit structured JSON only')
+    .command("add")
+    .description("Add or update an MCP server registry entry")
+    .argument("<name>", "Logical server name used in mcp_request.server")
+    .argument("<command>", "Executable to spawn")
+    .argument("[args...]", "Arguments passed to the executable")
+    .option("--json", "Emit structured JSON only")
     .action(
       (
         name: string,
@@ -3112,10 +3666,13 @@ Notes:
         options: { json?: boolean },
       ) => {
         try {
-          const servers = upsertMcpServer(name, { command: commandValue, args: args ?? [] });
+          const servers = upsertMcpServer(name, {
+            command: commandValue,
+            args: args ?? [],
+          });
           const payload = {
-            status: 'ok',
-            action: 'upsert',
+            status: "ok",
+            action: "upsert",
             name,
             config_path: getMcpServersConfigPath(),
             server: servers[name],
@@ -3129,7 +3686,7 @@ Notes:
           const message = err instanceof Error ? err.message : String(err);
           if (options.json) {
             process.stdout.write(
-              `${JSON.stringify({ status: 'fail', error: message }, null, 2)}\n`,
+              `${JSON.stringify({ status: "fail", error: message }, null, 2)}\n`,
             );
           } else {
             console.error(`MCP error: ${message}`);
@@ -3140,28 +3697,32 @@ Notes:
     );
 
   mcpCommand
-    .command('remove')
-    .description('Remove an MCP server registry entry')
-    .argument('<name>', 'Logical server name to remove')
-    .option('--json', 'Emit structured JSON only')
+    .command("remove")
+    .description("Remove an MCP server registry entry")
+    .argument("<name>", "Logical server name to remove")
+    .option("--json", "Emit structured JSON only")
     .action((name: string, options: { json?: boolean }) => {
       try {
         removeMcpServer(name);
         const payload = {
-          status: 'ok',
-          action: 'remove',
+          status: "ok",
+          action: "remove",
           name,
           config_path: getMcpServersConfigPath(),
         };
         if (options.json) {
           process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
         } else {
-          console.log(`MCP server "${name}" removed from ${payload.config_path}`);
+          console.log(
+            `MCP server "${name}" removed from ${payload.config_path}`,
+          );
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         if (options.json) {
-          process.stdout.write(`${JSON.stringify({ status: 'fail', error: message }, null, 2)}\n`);
+          process.stdout.write(
+            `${JSON.stringify({ status: "fail", error: message }, null, 2)}\n`,
+          );
         } else {
           console.error(`MCP error: ${message}`);
         }
@@ -3170,56 +3731,73 @@ Notes:
     });
 
   const contextCommand = program
-    .command('context')
-    .description('Preview bounded @file and @directory context attachments')
+    .command("context")
+    .description("Preview bounded @file and @directory context attachments")
     .action(() => {
       contextCommand.help({ error: false });
     });
 
   contextCommand
-    .command('preview')
-    .description('Preview context attachments without starting a run')
-    .argument('<refs...>', '@file/@directory references, for example: @file README.md')
-    .option('--project-root <path>', 'Project root for attachment resolution', process.cwd())
-    .option('--json', 'Emit structured JSON only')
-    .action((refs: string[], options: { projectRoot?: string; json?: boolean }) => {
-      try {
-        const task = refs.join(' ');
-        const result = prepareContextInjection(task, {
-          projectRoot: options.projectRoot ?? process.cwd(),
-        });
-        printJsonOrHuman(result, summarizeContextInjection(result), options.json === true);
-      } catch (err: unknown) {
-        printJsonErrorAndExit(
-          err instanceof Error ? err.message : String(err),
-          options.json === true,
-        );
-      }
-    });
+    .command("preview")
+    .description("Preview context attachments without starting a run")
+    .argument(
+      "<refs...>",
+      "@file/@directory references, for example: @file README.md",
+    )
+    .option(
+      "--project-root <path>",
+      "Project root for attachment resolution",
+      process.cwd(),
+    )
+    .option("--json", "Emit structured JSON only")
+    .action(
+      (refs: string[], options: { projectRoot?: string; json?: boolean }) => {
+        try {
+          const task = refs.join(" ");
+          const result = prepareContextInjection(task, {
+            projectRoot: options.projectRoot ?? process.cwd(),
+          });
+          printJsonOrHuman(
+            result,
+            summarizeContextInjection(result),
+            options.json === true,
+          );
+        } catch (err: unknown) {
+          printJsonErrorAndExit(
+            err instanceof Error ? err.message : String(err),
+            options.json === true,
+          );
+        }
+      },
+    );
 
   const eventsCommand = program
-    .command('events')
-    .description('Inspect structured JSON event stream contracts')
+    .command("events")
+    .description("Inspect structured JSON event stream contracts")
     .action(() => {
       eventsCommand.help({ error: false });
     });
 
   eventsCommand
-    .command('schema')
-    .description('Print the read-only JSONL event stream contract')
-    .option('--json', 'Emit structured JSON only')
+    .command("schema")
+    .description("Print the read-only JSONL event stream contract")
+    .option("--json", "Emit structured JSON only")
     .action((options: { json?: boolean }) => {
       const contract = buildEventStreamContract();
-      printJsonOrHuman(contract, JSON.stringify(contract, null, 2), options.json === true);
+      printJsonOrHuman(
+        contract,
+        JSON.stringify(contract, null, 2),
+        options.json === true,
+      );
     });
 
   eventsCommand
-    .command('ide-bridge')
-    .description('Print a read-only IDE bridge snapshot for a run')
-    .argument('[run]', 'Run directory or latest', 'latest')
-    .option('--project <name>', 'Use latest run pointer for a specific project')
-    .option('--contract-only', 'Print only the read-only bridge contract')
-    .option('--json', 'Emit structured JSON only')
+    .command("ide-bridge")
+    .description("Print a read-only IDE bridge snapshot for a run")
+    .argument("[run]", "Run directory or latest", "latest")
+    .option("--project <name>", "Use latest run pointer for a specific project")
+    .option("--contract-only", "Print only the read-only bridge contract")
+    .option("--json", "Emit structured JSON only")
     .action(
       (
         runArg: string | undefined,
@@ -3228,12 +3806,20 @@ Notes:
         try {
           if (options.contractOnly === true) {
             const contract = buildIdeBridgeContract();
-            printJsonOrHuman(contract, JSON.stringify(contract, null, 2), options.json === true);
+            printJsonOrHuman(
+              contract,
+              JSON.stringify(contract, null, 2),
+              options.json === true,
+            );
             return;
           }
           const runDir = resolveRunForReadOnlyCommand(runArg, options.project);
           const snapshot = buildIdeBridgeSnapshot(runDir);
-          printJsonOrHuman(snapshot, formatIdeBridgeSnapshotHuman(snapshot), options.json === true);
+          printJsonOrHuman(
+            snapshot,
+            formatIdeBridgeSnapshotHuman(snapshot),
+            options.json === true,
+          );
         } catch (err: unknown) {
           printJsonErrorAndExit(
             err instanceof Error ? err.message : String(err),
@@ -3244,83 +3830,108 @@ Notes:
     );
 
   const statsCommand = program
-    .command('stats')
-    .description('Derive stats from existing evidence bundles')
+    .command("stats")
+    .description("Derive stats from existing evidence bundles")
     .action(() => {
       statsCommand.help({ error: false });
     });
 
   statsCommand
-    .command('run')
-    .description('Derive run stats from an evidence bundle')
-    .argument('[run]', 'Run directory or latest', 'latest')
-    .option('--project <name>', 'Use latest run pointer for a specific project')
-    .option('--json', 'Emit structured JSON only')
-    .action((runArg: string | undefined, options: { project?: string; json?: boolean }) => {
-      try {
-        const runDir = resolveRunForReadOnlyCommand(runArg, options.project);
-        const stats = buildRunStats(runDir);
-        printJsonOrHuman(stats, formatRunStatsHuman(stats), options.json === true);
-      } catch (err: unknown) {
-        printJsonErrorAndExit(
-          err instanceof Error ? err.message : String(err),
-          options.json === true,
-        );
-      }
-    });
+    .command("run")
+    .description("Derive run stats from an evidence bundle")
+    .argument("[run]", "Run directory or latest", "latest")
+    .option("--project <name>", "Use latest run pointer for a specific project")
+    .option("--json", "Emit structured JSON only")
+    .action(
+      (
+        runArg: string | undefined,
+        options: { project?: string; json?: boolean },
+      ) => {
+        try {
+          const runDir = resolveRunForReadOnlyCommand(runArg, options.project);
+          const stats = buildRunStats(runDir);
+          printJsonOrHuman(
+            stats,
+            formatRunStatsHuman(stats),
+            options.json === true,
+          );
+        } catch (err: unknown) {
+          printJsonErrorAndExit(
+            err instanceof Error ? err.message : String(err),
+            options.json === true,
+          );
+        }
+      },
+    );
 
   const pluginsCommand = program
-    .command('plugins')
-    .description('Inspect and manage runtime plugins behind policy gates')
+    .command("plugins")
+    .description("Inspect and manage runtime plugins behind policy gates")
     .action(() => {
       const registry = loadPluginRegistry();
       process.stdout.write(`${formatPluginListHuman(registry)}\n`);
     });
 
   pluginsCommand
-    .command('list')
-    .description('List discovered runtime plugins')
-    .option('--json', 'Emit structured JSON only')
+    .command("list")
+    .description("List discovered runtime plugins")
+    .option("--json", "Emit structured JSON only")
     .action((options: { json?: boolean }) => {
       const registry = loadPluginRegistry();
-      printJsonOrHuman(registry, formatPluginListHuman(registry), options.json === true);
+      printJsonOrHuman(
+        registry,
+        formatPluginListHuman(registry),
+        options.json === true,
+      );
     });
 
   pluginsCommand
-    .command('doctor')
-    .description('Diagnose runtime plugin manifests and trust gates')
-    .option('--json', 'Emit structured JSON only')
+    .command("doctor")
+    .description("Diagnose runtime plugin manifests and trust gates")
+    .option("--json", "Emit structured JSON only")
     .action((options: { json?: boolean }) => {
       const registry = loadPluginRegistry();
-      printJsonOrHuman(registry, formatPluginDoctorHuman(registry), options.json === true);
-      if (registry.status === 'fail') {
+      printJsonOrHuman(
+        registry,
+        formatPluginDoctorHuman(registry),
+        options.json === true,
+      );
+      if (registry.status === "fail") {
         process.exit(1);
       }
     });
 
   pluginsCommand
-    .command('inspect')
-    .description('Inspect one plugin')
-    .argument('<id>', 'Plugin id')
-    .option('--json', 'Emit structured JSON only')
+    .command("inspect")
+    .description("Inspect one plugin")
+    .argument("<id>", "Plugin id")
+    .option("--json", "Emit structured JSON only")
     .action((id: string, options: { json?: boolean }) => {
       const registry = loadPluginRegistry();
       const plugin = registry.plugins.find((entry) => entry.manifest.id === id);
       if (!plugin) {
         printJsonErrorAndExit(`Plugin not found: ${id}`, options.json === true);
       }
-      printJsonOrHuman(plugin, formatPluginInspectHuman(plugin), options.json === true);
+      printJsonOrHuman(
+        plugin,
+        formatPluginInspectHuman(plugin),
+        options.json === true,
+      );
     });
 
   pluginsCommand
-    .command('enable')
-    .description('Enable a plugin id in local plugin config')
-    .argument('<id>', 'Plugin id')
-    .option('--json', 'Emit structured JSON only')
+    .command("enable")
+    .description("Enable a plugin id in local plugin config")
+    .argument("<id>", "Plugin id")
+    .option("--json", "Emit structured JSON only")
     .action((id: string, options: { json?: boolean }) => {
       try {
         const config = enablePlugin(id);
-        printJsonOrHuman({ status: 'ok', config }, `Enabled plugin ${id}`, options.json === true);
+        printJsonOrHuman(
+          { status: "ok", config },
+          `Enabled plugin ${id}`,
+          options.json === true,
+        );
       } catch (err: unknown) {
         printJsonErrorAndExit(
           err instanceof Error ? err.message : String(err),
@@ -3330,14 +3941,18 @@ Notes:
     });
 
   pluginsCommand
-    .command('disable')
-    .description('Disable a plugin id in local plugin config')
-    .argument('<id>', 'Plugin id')
-    .option('--json', 'Emit structured JSON only')
+    .command("disable")
+    .description("Disable a plugin id in local plugin config")
+    .argument("<id>", "Plugin id")
+    .option("--json", "Emit structured JSON only")
     .action((id: string, options: { json?: boolean }) => {
       try {
         const config = disablePlugin(id);
-        printJsonOrHuman({ status: 'ok', config }, `Disabled plugin ${id}`, options.json === true);
+        printJsonOrHuman(
+          { status: "ok", config },
+          `Disabled plugin ${id}`,
+          options.json === true,
+        );
       } catch (err: unknown) {
         printJsonErrorAndExit(
           err instanceof Error ? err.message : String(err),
@@ -3347,41 +3962,49 @@ Notes:
     });
 
   const agentsCommand = program
-    .command('agents')
-    .description('Inspect and run spec-contract agent teams')
+    .command("agents")
+    .description("Inspect and run spec-contract agent teams")
     .action(() => {
       const index = listAgentRuns();
       process.stdout.write(`${formatAgentListHuman(index)}\n`);
     });
 
   agentsCommand
-    .command('list')
-    .description('List prior agent-team runs')
-    .option('--json', 'Emit structured JSON only')
+    .command("list")
+    .description("List prior agent-team runs")
+    .option("--json", "Emit structured JSON only")
     .action((options: { json?: boolean }) => {
       const index = listAgentRuns();
-      printJsonOrHuman(index, formatAgentListHuman(index), options.json === true);
+      printJsonOrHuman(
+        index,
+        formatAgentListHuman(index),
+        options.json === true,
+      );
     });
 
   agentsCommand
-    .command('contract')
-    .description('Print the live-subagent isolation contract')
-    .option('--json', 'Emit structured JSON only')
+    .command("contract")
+    .description("Print the live-subagent isolation contract")
+    .option("--json", "Emit structured JSON only")
     .action((options: { json?: boolean }) => {
       const contract = buildSubagentIsolationContract();
-      printJsonOrHuman(contract, JSON.stringify(contract, null, 2), options.json === true);
+      printJsonOrHuman(
+        contract,
+        JSON.stringify(contract, null, 2),
+        options.json === true,
+      );
     });
 
   agentsCommand
-    .command('run')
-    .description('Run an agent-team spec file')
-    .argument('<spec>', 'Path to agent-team spec JSON')
-    .option('--json', 'Emit structured JSON only')
+    .command("run")
+    .description("Run an agent-team spec file")
+    .argument("<spec>", "Path to agent-team spec JSON")
+    .option("--json", "Emit structured JSON only")
     .action((spec: string, options: { json?: boolean }) => {
       try {
         const run = runAgentTeamFromFile(spec);
         printJsonOrHuman(run, formatAgentRunHuman(run), options.json === true);
-        if (run.status === 'failed') {
+        if (run.status === "failed") {
           process.exit(1);
         }
       } catch (err: unknown) {
@@ -3393,10 +4016,10 @@ Notes:
     });
 
   agentsCommand
-    .command('inspect')
-    .description('Inspect an agent-team run')
-    .argument('<idOrPath>', 'Agent-team run id or path')
-    .option('--json', 'Emit structured JSON only')
+    .command("inspect")
+    .description("Inspect an agent-team run")
+    .argument("<idOrPath>", "Agent-team run id or path")
+    .option("--json", "Emit structured JSON only")
     .action((idOrPath: string, options: { json?: boolean }) => {
       try {
         const run = inspectAgentRun(idOrPath);
@@ -3410,15 +4033,19 @@ Notes:
     });
 
   agentsCommand
-    .command('merge')
-    .description('Merge a ready agent-team run')
-    .argument('<idOrPath>', 'Agent-team run id or path')
-    .option('--json', 'Emit structured JSON only')
+    .command("merge")
+    .description("Merge a ready agent-team run")
+    .argument("<idOrPath>", "Agent-team run id or path")
+    .option("--json", "Emit structured JSON only")
     .action((idOrPath: string, options: { json?: boolean }) => {
       try {
         const report = mergeAgentRun(idOrPath);
-        printJsonOrHuman(report, formatAgentMergeHuman(report), options.json === true);
-        if (report.status === 'failed') {
+        printJsonOrHuman(
+          report,
+          formatAgentMergeHuman(report),
+          options.json === true,
+        );
+        if (report.status === "failed") {
           process.exit(1);
         }
       } catch (err: unknown) {
@@ -3430,15 +4057,19 @@ Notes:
     });
 
   agentsCommand
-    .command('restore')
-    .description('Restore files from an agent-team merge pre-merge snapshot')
-    .argument('<idOrPath>', 'Agent-team run id or path')
-    .option('--json', 'Emit structured JSON only')
+    .command("restore")
+    .description("Restore files from an agent-team merge pre-merge snapshot")
+    .argument("<idOrPath>", "Agent-team run id or path")
+    .option("--json", "Emit structured JSON only")
     .action((idOrPath: string, options: { json?: boolean }) => {
       try {
         const report = restoreAgentMerge(idOrPath);
-        printJsonOrHuman(report, formatAgentMergeRestoreHuman(report), options.json === true);
-        if (report.status === 'failed') {
+        printJsonOrHuman(
+          report,
+          formatAgentMergeRestoreHuman(report),
+          options.json === true,
+        );
+        if (report.status === "failed") {
           process.exit(1);
         }
       } catch (err: unknown) {
@@ -3450,34 +4081,40 @@ Notes:
     });
 
   const scheduleCommand = program
-    .command('schedule')
-    .description('Manage local schedules; mutating run-now jobs require explicit gates')
+    .command("schedule")
+    .description(
+      "Manage local schedules; mutating run-now jobs require explicit gates",
+    )
     .action(() => {
       const payload = listSchedules();
       process.stdout.write(`${formatScheduleListHuman(payload)}\n`);
     });
 
   scheduleCommand
-    .command('list')
-    .description('List local schedules')
-    .option('--json', 'Emit structured JSON only')
+    .command("list")
+    .description("List local schedules")
+    .option("--json", "Emit structured JSON only")
     .action((options: { json?: boolean }) => {
       const payload = listSchedules();
-      printJsonOrHuman(payload, formatScheduleListHuman(payload), options.json === true);
+      printJsonOrHuman(
+        payload,
+        formatScheduleListHuman(payload),
+        options.json === true,
+      );
     });
 
   scheduleCommand
-    .command('create')
-    .description('Create a local schedule entry')
-    .argument('<id>', 'Schedule id')
-    .argument('<jobType>', 'Job type')
-    .option('--project-root <path>', 'Project root used by the scheduled job')
-    .option('--base-ref <ref>', 'Optional base ref for review/draft jobs')
-    .option('--branch <name>', 'Branch name for git_branch_create')
-    .option('--message <message>', 'Commit message for git_commit_create')
-    .option('--pr-title <title>', 'PR title for git_pr_create')
-    .option('--pr-body <body>', 'PR body for git_pr_create')
-    .option('--json', 'Emit structured JSON only')
+    .command("create")
+    .description("Create a local schedule entry")
+    .argument("<id>", "Schedule id")
+    .argument("<jobType>", "Job type")
+    .option("--project-root <path>", "Project root used by the scheduled job")
+    .option("--base-ref <ref>", "Optional base ref for review/draft jobs")
+    .option("--branch <name>", "Branch name for git_branch_create")
+    .option("--message <message>", "Commit message for git_commit_create")
+    .option("--pr-title <title>", "PR title for git_pr_create")
+    .option("--pr-body <body>", "PR body for git_pr_create")
+    .option("--json", "Emit structured JSON only")
     .action(
       (
         id: string,
@@ -3496,7 +4133,9 @@ Notes:
           const schedule = createSchedule({
             id,
             jobType: jobType as ScheduleJobType,
-            ...(options.projectRoot ? { projectRoot: options.projectRoot } : {}),
+            ...(options.projectRoot
+              ? { projectRoot: options.projectRoot }
+              : {}),
             ...(options.baseRef ? { baseRef: options.baseRef } : {}),
             ...(options.branch ? { branchName: options.branch } : {}),
             ...(options.message ? { commitMessage: options.message } : {}),
@@ -3504,7 +4143,7 @@ Notes:
             ...(options.prBody ? { prBody: options.prBody } : {}),
           });
           printJsonOrHuman(
-            { status: 'ok', schedule },
+            { status: "ok", schedule },
             `Created schedule ${schedule.id}`,
             options.json === true,
           );
@@ -3518,83 +4157,102 @@ Notes:
     );
 
   scheduleCommand
-    .command('run-now')
+    .command("run-now")
     .description(
-      'Run a schedule immediately; mutating jobs require --allow-mutate and execute in an isolated project copy',
+      "Run a schedule immediately; mutating jobs require --allow-mutate and execute in an isolated project copy",
     )
-    .argument('<id>', 'Schedule id')
-    .option('--allow-mutate', 'Allow mutating scheduled jobs inside an isolated project copy')
-    .option('--json', 'Emit structured JSON only')
+    .argument("<id>", "Schedule id")
+    .option(
+      "--allow-mutate",
+      "Allow mutating scheduled jobs inside an isolated project copy",
+    )
+    .option("--json", "Emit structured JSON only")
     .addHelpText(
-      'after',
+      "after",
       `
 Notes:
   - Mutating scheduled jobs require --allow-mutate.
   - Mutating jobs run inside an isolated project copy.
 `,
     )
-    .action((id: string, options: { allowMutate?: boolean; json?: boolean }) => {
-      try {
-        const record = runScheduleNow(id, { allowMutate: options.allowMutate === true });
-        printJsonOrHuman(record, formatScheduleRunHuman(record), options.json === true);
-        if (record.status === 'fail') {
-          process.exit(1);
+    .action(
+      (id: string, options: { allowMutate?: boolean; json?: boolean }) => {
+        try {
+          const record = runScheduleNow(id, {
+            allowMutate: options.allowMutate === true,
+          });
+          printJsonOrHuman(
+            record,
+            formatScheduleRunHuman(record),
+            options.json === true,
+          );
+          if (record.status === "fail") {
+            process.exit(1);
+          }
+        } catch (err: unknown) {
+          printJsonErrorAndExit(
+            err instanceof Error ? err.message : String(err),
+            options.json === true,
+          );
         }
-      } catch (err: unknown) {
-        printJsonErrorAndExit(
-          err instanceof Error ? err.message : String(err),
-          options.json === true,
-        );
-      }
-    });
+      },
+    );
 
   scheduleCommand
-    .command('delete')
-    .description('Delete a local schedule entry')
-    .argument('<id>', 'Schedule id')
-    .option('--json', 'Emit structured JSON only')
+    .command("delete")
+    .description("Delete a local schedule entry")
+    .argument("<id>", "Schedule id")
+    .option("--json", "Emit structured JSON only")
     .action((id: string, options: { json?: boolean }) => {
       const result = deleteSchedule(id);
       printJsonOrHuman(
         result,
-        result.deleted ? `Deleted schedule ${id}` : `No schedule found for ${id}`,
+        result.deleted
+          ? `Deleted schedule ${id}`
+          : `No schedule found for ${id}`,
         options.json === true,
       );
     });
 
   const ciCommand = program
-    .command('ci')
-    .description('Read-only CI and review evidence surfaces')
+    .command("ci")
+    .description("Read-only CI and review evidence surfaces")
     .action(() => {
       ciCommand.help({ error: false });
     });
 
   ciCommand
-    .command('review')
-    .description('Write deterministic read-only CI review evidence')
-    .option('--project-root <path>', 'Project root to review', process.cwd())
-    .option('--base-ref <ref>', 'Optional base ref')
-    .option('--json', 'Emit structured JSON only')
-    .action((options: { projectRoot?: string; baseRef?: string; json?: boolean }) => {
-      try {
-        const report = runCiReview({
-          projectRoot: options.projectRoot ?? process.cwd(),
-          ...(options.baseRef ? { baseRef: options.baseRef } : {}),
-        });
-        printJsonOrHuman(report, formatCiReviewHuman(report), options.json === true);
-      } catch (err: unknown) {
-        printJsonErrorAndExit(
-          err instanceof Error ? err.message : String(err),
-          options.json === true,
-        );
-      }
-    });
+    .command("review")
+    .description("Write deterministic read-only CI review evidence")
+    .option("--project-root <path>", "Project root to review", process.cwd())
+    .option("--base-ref <ref>", "Optional base ref")
+    .option("--json", "Emit structured JSON only")
+    .action(
+      (options: { projectRoot?: string; baseRef?: string; json?: boolean }) => {
+        try {
+          const report = runCiReview({
+            projectRoot: options.projectRoot ?? process.cwd(),
+            ...(options.baseRef ? { baseRef: options.baseRef } : {}),
+          });
+          printJsonOrHuman(
+            report,
+            formatCiReviewHuman(report),
+            options.json === true,
+          );
+        } catch (err: unknown) {
+          printJsonErrorAndExit(
+            err instanceof Error ? err.message : String(err),
+            options.json === true,
+          );
+        }
+      },
+    );
 
   const gitCommand = program
-    .command('git')
-    .description('Draft and governed Git delivery surfaces')
+    .command("git")
+    .description("Draft and governed Git delivery surfaces")
     .addHelpText(
-      'after',
+      "after",
       `
 Commands include:
   diff-summary, commit-draft, pr-draft
@@ -3605,86 +4263,83 @@ Commands include:
       gitCommand.help({ error: false });
     });
 
-  const registerGitDraftCommand = (name: string, kind: GitDraftKind, description: string): void => {
+  const registerGitDraftCommand = (
+    name: string,
+    kind: GitDraftKind,
+    description: string,
+  ): void => {
     gitCommand
       .command(name)
       .description(description)
-      .option('--project-root <path>', 'Project root to inspect', process.cwd())
-      .option('--base-ref <ref>', 'Optional base ref')
-      .option('--json', 'Emit structured JSON only')
-      .action((options: { projectRoot?: string; baseRef?: string; json?: boolean }) => {
-        try {
-          const report = runGitDraft(kind, {
-            projectRoot: options.projectRoot ?? process.cwd(),
-            ...(options.baseRef ? { baseRef: options.baseRef } : {}),
-          });
-          printJsonOrHuman(report, formatGitDraftHuman(report), options.json === true);
-        } catch (err: unknown) {
-          printJsonErrorAndExit(
-            err instanceof Error ? err.message : String(err),
-            options.json === true,
-          );
-        }
-      });
+      .option("--project-root <path>", "Project root to inspect", process.cwd())
+      .option("--base-ref <ref>", "Optional base ref")
+      .option("--json", "Emit structured JSON only")
+      .action(
+        (options: {
+          projectRoot?: string;
+          baseRef?: string;
+          json?: boolean;
+        }) => {
+          try {
+            const report = runGitDraft(kind, {
+              projectRoot: options.projectRoot ?? process.cwd(),
+              ...(options.baseRef ? { baseRef: options.baseRef } : {}),
+            });
+            printJsonOrHuman(
+              report,
+              formatGitDraftHuman(report),
+              options.json === true,
+            );
+          } catch (err: unknown) {
+            printJsonErrorAndExit(
+              err instanceof Error ? err.message : String(err),
+              options.json === true,
+            );
+          }
+        },
+      );
   };
 
   registerGitDraftCommand(
-    'diff-summary',
-    'diff_summary',
-    'Draft a diff summary without mutating Git',
+    "diff-summary",
+    "diff_summary",
+    "Draft a diff summary without mutating Git",
   );
   registerGitDraftCommand(
-    'commit-draft',
-    'commit_draft',
-    'Draft a commit message without committing',
+    "commit-draft",
+    "commit_draft",
+    "Draft a commit message without committing",
   );
-  registerGitDraftCommand('pr-draft', 'pr_draft', 'Draft PR metadata without opening a PR');
+  registerGitDraftCommand(
+    "pr-draft",
+    "pr_draft",
+    "Draft PR metadata without opening a PR",
+  );
 
   gitCommand
-    .command('branch-create')
-    .description('Create a local branch and write evidence')
-    .argument('<branch>', 'Branch name')
-    .option('--project-root <path>', 'Project root', process.cwd())
-    .option('--from <ref>', 'Source ref', 'HEAD')
-    .option('--json', 'Emit structured JSON only')
-    .action((branch: string, options: { projectRoot?: string; from?: string; json?: boolean }) => {
-      try {
-        const report = createGitBranch({
-          branchName: branch,
-          projectRoot: options.projectRoot ?? process.cwd(),
-          ...(options.from ? { fromRef: options.from } : {}),
-        });
-        printJsonOrHuman(report, formatGitMutationHuman(report), options.json === true);
-        if (report.action.status === 'failed') {
-          process.exit(1);
-        }
-      } catch (err: unknown) {
-        printJsonErrorAndExit(
-          err instanceof Error ? err.message : String(err),
-          options.json === true,
-        );
-      }
-    });
-
-  gitCommand
-    .command('commit-create')
-    .description('Create a local commit and write evidence')
-    .option('--project-root <path>', 'Project root', process.cwd())
-    .option('--message <message>', 'Commit message')
-    .option('--stage <mode>', 'Stage mode: staged | tracked | all', 'staged')
-    .option('--json', 'Emit structured JSON only')
+    .command("branch-create")
+    .description("Create a local branch and write evidence")
+    .argument("<branch>", "Branch name")
+    .option("--project-root <path>", "Project root", process.cwd())
+    .option("--from <ref>", "Source ref", "HEAD")
+    .option("--json", "Emit structured JSON only")
     .action(
-      (options: { projectRoot?: string; message?: string; stage?: string; json?: boolean }) => {
+      (
+        branch: string,
+        options: { projectRoot?: string; from?: string; json?: boolean },
+      ) => {
         try {
-          const stage =
-            options.stage === 'tracked' || options.stage === 'all' ? options.stage : 'staged';
-          const report = createGitCommit({
+          const report = createGitBranch({
+            branchName: branch,
             projectRoot: options.projectRoot ?? process.cwd(),
-            stageMode: stage,
-            ...(options.message ? { message: options.message } : {}),
+            ...(options.from ? { fromRef: options.from } : {}),
           });
-          printJsonOrHuman(report, formatGitMutationHuman(report), options.json === true);
-          if (report.action.status === 'failed') {
+          printJsonOrHuman(
+            report,
+            formatGitMutationHuman(report),
+            options.json === true,
+          );
+          if (report.action.status === "failed") {
             process.exit(1);
           }
         } catch (err: unknown) {
@@ -3697,13 +4352,56 @@ Commands include:
     );
 
   gitCommand
-    .command('pr-create')
-    .description('Plan PR creation by default; remote creation requires --allow-remote')
-    .option('--project-root <path>', 'Project root', process.cwd())
-    .option('--title <title>', 'PR title')
-    .option('--body <body>', 'PR body')
-    .option('--allow-remote', 'Allow gh pr create remote side effect')
-    .option('--json', 'Emit structured JSON only')
+    .command("commit-create")
+    .description("Create a local commit and write evidence")
+    .option("--project-root <path>", "Project root", process.cwd())
+    .option("--message <message>", "Commit message")
+    .option("--stage <mode>", "Stage mode: staged | tracked | all", "staged")
+    .option("--json", "Emit structured JSON only")
+    .action(
+      (options: {
+        projectRoot?: string;
+        message?: string;
+        stage?: string;
+        json?: boolean;
+      }) => {
+        try {
+          const stage =
+            options.stage === "tracked" || options.stage === "all"
+              ? options.stage
+              : "staged";
+          const report = createGitCommit({
+            projectRoot: options.projectRoot ?? process.cwd(),
+            stageMode: stage,
+            ...(options.message ? { message: options.message } : {}),
+          });
+          printJsonOrHuman(
+            report,
+            formatGitMutationHuman(report),
+            options.json === true,
+          );
+          if (report.action.status === "failed") {
+            process.exit(1);
+          }
+        } catch (err: unknown) {
+          printJsonErrorAndExit(
+            err instanceof Error ? err.message : String(err),
+            options.json === true,
+          );
+        }
+      },
+    );
+
+  gitCommand
+    .command("pr-create")
+    .description(
+      "Plan PR creation by default; remote creation requires --allow-remote",
+    )
+    .option("--project-root <path>", "Project root", process.cwd())
+    .option("--title <title>", "PR title")
+    .option("--body <body>", "PR body")
+    .option("--allow-remote", "Allow gh pr create remote side effect")
+    .option("--json", "Emit structured JSON only")
     .action(
       (options: {
         projectRoot?: string;
@@ -3719,8 +4417,12 @@ Commands include:
             ...(options.body ? { body: options.body } : {}),
             allowRemote: options.allowRemote === true,
           });
-          printJsonOrHuman(report, formatGitMutationHuman(report), options.json === true);
-          if (report.action.status === 'failed') {
+          printJsonOrHuman(
+            report,
+            formatGitMutationHuman(report),
+            options.json === true,
+          );
+          if (report.action.status === "failed") {
             process.exit(1);
           }
         } catch (err: unknown) {
@@ -3735,78 +4437,104 @@ Commands include:
   registerShipCommand(program);
 
   const benchmarkCommand = program
-    .command('benchmark')
-    .alias('bench')
-    .description('Run local Babel benchmark suites')
+    .command("benchmark")
+    .alias("bench")
+    .description("Run local Babel benchmark suites")
     .action(() => {
       benchmarkCommand.help({ error: false });
     });
 
   benchmarkCommand
-    .command('doctor')
-    .description('Report evaluation catalog and dataset readiness without crashing on missing fixtures')
-    .option('--json', 'Emit structured JSON only')
+    .command("doctor")
+    .description(
+      "Report evaluation catalog and dataset readiness without crashing on missing fixtures",
+    )
+    .option("--json", "Emit structured JSON only")
     .action((options: { json?: boolean }) => {
       const report = runEvalDoctor();
-      printJsonOrHuman(report, formatEvalDoctorHuman(report), options.json === true);
+      printJsonOrHuman(
+        report,
+        formatEvalDoctorHuman(report),
+        options.json === true,
+      );
       if (!report.ok) process.exit(1);
     });
 
   benchmarkCommand
-    .command('canary')
-    .description('Run the coding-loop canary (mock/structural by default)')
-    .option('--plan', 'List canary contract without executing')
-    .option('--task <id>', 'Single canary task id (C01–C10)')
-    .option('--provider <p>', 'mock | live', 'mock')
-    .option('--i-authorize-live', 'Required to spend live model tokens')
-    .option('--smoke', 'LIVE_SMOKE: C01 only, exactly one trial; not aggregated as live capability')
-    .option('--trials <n>', 'Repeated trials (default 3 live baseline; fixed 1 under --smoke)')
-    .option('--model <id>', 'Chat model id (default deepseek-v4-flash)')
-    .option('--json', 'Emit structured JSON only')
-    .action((options: {
-      plan?: boolean
-      task?: string
-      provider?: string
-      json?: boolean
-      iAuthorizeLive?: boolean
-      smoke?: boolean
-      trials?: string
-      model?: string
-    }) => {
-      if (options.plan) {
-        // Plan must describe the exact execution the same flags would run.
-        const parsedPlanTrials = options.trials ? Number.parseInt(options.trials, 10) : NaN;
-        const plan = describeCanaryPlan({
+    .command("canary")
+    .description("Run the coding-loop canary (mock/structural by default)")
+    .option("--plan", "List canary contract without executing")
+    .option("--task <id>", "Single canary task id (C01–C13)")
+    .option("--provider <p>", "mock | live", "mock")
+    .option("--i-authorize-live", "Required to spend live model tokens")
+    .option(
+      "--smoke",
+      "LIVE_SMOKE: C01 only, exactly one trial; not aggregated as live capability",
+    )
+    .option(
+      "--trials <n>",
+      "Repeated trials (default 3 live baseline; fixed 1 under --smoke)",
+    )
+    .option("--model <id>", "Chat model id (default deepseek-v4-flash)")
+    .option("--json", "Emit structured JSON only")
+    .action(
+      (options: {
+        plan?: boolean;
+        task?: string;
+        provider?: string;
+        json?: boolean;
+        iAuthorizeLive?: boolean;
+        smoke?: boolean;
+        trials?: string;
+        model?: string;
+      }) => {
+        if (options.plan) {
+          // Plan must describe the exact execution the same flags would run.
+          const parsedPlanTrials = options.trials
+            ? Number.parseInt(options.trials, 10)
+            : NaN;
+          const plan = describeCanaryPlan({
+            smoke: options.smoke === true,
+            ...(options.task ? { taskId: options.task } : {}),
+            ...(Number.isFinite(parsedPlanTrials)
+              ? { trials: parsedPlanTrials }
+              : {}),
+          });
+          printJsonOrHuman(
+            plan,
+            `coding-canary plan: ${plan.tasks} task(s) [${plan.task_ids.join(", ")}], ${plan.trials_per_task} trial(s) each`,
+            options.json === true,
+          );
+          return;
+        }
+        const provider = options.provider === "live" ? "live" : "mock";
+        const parsedTrials = options.trials
+          ? Number.parseInt(options.trials, 10)
+          : NaN;
+        const report = runCodingCanary({
+          provider,
+          authorizeLive: options.iAuthorizeLive === true,
           smoke: options.smoke === true,
           ...(options.task ? { taskId: options.task } : {}),
-          ...(Number.isFinite(parsedPlanTrials) ? { trials: parsedPlanTrials } : {}),
+          ...(Number.isFinite(parsedTrials) ? { trials: parsedTrials } : {}),
+          ...(options.model ? { model: options.model } : {}),
         });
         printJsonOrHuman(
-          plan,
-          `coding-canary plan: ${plan.tasks} task(s) [${plan.task_ids.join(', ')}], ${plan.trials_per_task} trial(s) each`,
+          report,
+          `canary scope=${report.evidence_scope} contract=${report.contract_success_rate}`,
           options.json === true,
         );
-        return;
-      }
-      const provider = options.provider === 'live' ? 'live' : 'mock';
-      const parsedTrials = options.trials ? Number.parseInt(options.trials, 10) : NaN;
-      const report = runCodingCanary({
-        provider,
-        authorizeLive: options.iAuthorizeLive === true,
-        smoke: options.smoke === true,
-        ...(options.task ? { taskId: options.task } : {}),
-        ...(Number.isFinite(parsedTrials) ? { trials: parsedTrials } : {}),
-        ...(options.model ? { model: options.model } : {}),
-      });
-      printJsonOrHuman(report, `canary scope=${report.evidence_scope} contract=${report.contract_success_rate}`, options.json === true);
-    });
+      },
+    );
 
   benchmarkCommand
-    .command('episode')
-    .description('Project an EvaluationEpisode from a run directory (forensic; degrades if jsonl missing)')
-    .argument('<runDir>', 'Run directory containing session/episode jsonl')
-    .option('--json', 'Emit structured JSON only')
-    .option('--task <id>', 'Task id label')
+    .command("episode")
+    .description(
+      "Project an EvaluationEpisode from a run directory (forensic; degrades if jsonl missing)",
+    )
+    .argument("<runDir>", "Run directory containing session/episode jsonl")
+    .option("--json", "Emit structured JSON only")
+    .option("--task <id>", "Task id label")
     .action((runDir: string, options: { json?: boolean; task?: string }) => {
       const episode = projectEvaluationEpisode({
         runDir,
@@ -3820,15 +4548,15 @@ Commands include:
     });
 
   benchmarkCommand
-    .command('smoke')
-    .description('Run a small Babel vs Babel Lite smoke benchmark')
-    .option('--live', 'Call the configured provider and run the CLI cases')
-    .option('--modes <modes>', 'Comma-separated modes: babel,bl', 'babel,bl')
-    .option('--model <model>', 'Model family for live provider-backed cases')
-    .option('--model-tier <tier>', 'Model tier for live provider-backed cases')
-    .option('--timeout-ms <n>', 'Per-case timeout in milliseconds', '420000')
-    .option('--output-dir <path>', 'Benchmark artifact output directory')
-    .option('--json', 'Emit structured JSON only')
+    .command("smoke")
+    .description("Run a small Babel vs Babel Lite smoke benchmark")
+    .option("--live", "Call the configured provider and run the CLI cases")
+    .option("--modes <modes>", "Comma-separated modes: babel,bl", "babel,bl")
+    .option("--model <model>", "Model family for live provider-backed cases")
+    .option("--model-tier <tier>", "Model tier for live provider-backed cases")
+    .option("--timeout-ms <n>", "Per-case timeout in milliseconds", "420000")
+    .option("--output-dir <path>", "Benchmark artifact output directory")
+    .option("--json", "Emit structured JSON only")
     .action(
       (options: {
         live?: boolean;
@@ -3839,16 +4567,20 @@ Commands include:
         outputDir?: string;
         json?: boolean;
       }) => {
-        const timeoutMs = Number.parseInt(options.timeoutMs ?? '420000', 10);
+        const timeoutMs = Number.parseInt(options.timeoutMs ?? "420000", 10);
         const report = runCliSmokeBenchmark({
           live: options.live === true,
-          modes: (options.modes ?? 'babel,bl').split(','),
+          modes: (options.modes ?? "babel,bl").split(","),
           ...(options.model ? { model: options.model } : {}),
           ...(options.modelTier ? { modelTier: options.modelTier } : {}),
           timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : 420_000,
           ...(options.outputDir ? { outputDir: options.outputDir } : {}),
         });
-        printJsonOrHuman(report, formatCliSmokeBenchmarkHuman(report), options.json === true);
+        printJsonOrHuman(
+          report,
+          formatCliSmokeBenchmarkHuman(report),
+          options.json === true,
+        );
         if (report.summary.failed > 0) {
           process.exit(1);
         }
@@ -3856,99 +4588,136 @@ Commands include:
     );
 
   benchmarkCommand
-    .command('lite')
-    .description('Compare Babel Lite daily commands against full Babel command shapes')
-    .option('--json', 'Emit structured JSON only')
-    .option('--output-dir <path>', 'Benchmark artifact output directory')
-    .option('--fixture <path>', 'Override Lite usability fixture path')
-    .action((options: { json?: boolean; outputDir?: string; fixture?: string }) => {
-      const report = buildLiteUsabilityReport({
-        ...(options.outputDir ? { outputDir: options.outputDir } : {}),
-        ...(options.fixture ? { fixturePath: options.fixture } : {}),
-      });
-      printJsonOrHuman(report, formatLiteUsabilityReportHuman(report), options.json === true);
-      if (report.summary.fail > 0) {
-        process.exit(1);
-      }
-    });
+    .command("lite")
+    .description(
+      "Compare Babel Lite daily commands against full Babel command shapes",
+    )
+    .option("--json", "Emit structured JSON only")
+    .option("--output-dir <path>", "Benchmark artifact output directory")
+    .option("--fixture <path>", "Override Lite usability fixture path")
+    .action(
+      (options: { json?: boolean; outputDir?: string; fixture?: string }) => {
+        const report = buildLiteUsabilityReport({
+          ...(options.outputDir ? { outputDir: options.outputDir } : {}),
+          ...(options.fixture ? { fixturePath: options.fixture } : {}),
+        });
+        printJsonOrHuman(
+          report,
+          formatLiteUsabilityReportHuman(report),
+          options.json === true,
+        );
+        if (report.summary.fail > 0) {
+          process.exit(1);
+        }
+      },
+    );
 
   benchmarkCommand
-    .command('real-tasks')
-    .description('Prepare a non-mutating pilot checklist for real repo tasks')
-    .option('--project-root <path>', 'Project root to pilot against', '.')
-    .option('--output-dir <path>', 'Pilot artifact output directory')
-    .option('--json', 'Emit structured JSON only')
-    .action((options: { projectRoot?: string; outputDir?: string; json?: boolean }) => {
-      const report = buildRealTaskPilotReport({
-        ...(options.projectRoot ? { projectRoot: options.projectRoot } : {}),
-        ...(options.outputDir ? { outputDir: options.outputDir } : {}),
-      });
-      printJsonOrHuman(report, formatRealTaskPilotHuman(report), options.json === true);
-    });
+    .command("real-tasks")
+    .description("Prepare a non-mutating pilot checklist for real repo tasks")
+    .option("--project-root <path>", "Project root to pilot against", ".")
+    .option("--output-dir <path>", "Pilot artifact output directory")
+    .option("--json", "Emit structured JSON only")
+    .action(
+      (options: {
+        projectRoot?: string;
+        outputDir?: string;
+        json?: boolean;
+      }) => {
+        const report = buildRealTaskPilotReport({
+          ...(options.projectRoot ? { projectRoot: options.projectRoot } : {}),
+          ...(options.outputDir ? { outputDir: options.outputDir } : {}),
+        });
+        printJsonOrHuman(
+          report,
+          formatRealTaskPilotHuman(report),
+          options.json === true,
+        );
+      },
+    );
 
   benchmarkCommand
-    .command('product')
-    .description('Run the Babel CLI product-gap benchmark')
-    .option('--json', 'Emit structured JSON only')
-    .option('--output-dir <path>', 'Benchmark artifact output directory')
+    .command("product")
+    .description("Run the Babel CLI product-gap benchmark")
+    .option("--json", "Emit structured JSON only")
+    .option("--output-dir <path>", "Benchmark artifact output directory")
     .action((options: { json?: boolean; outputDir?: string }) => {
       const report = runProductBenchmark({
         ...(options.outputDir ? { outputDir: options.outputDir } : {}),
       });
-      printJsonOrHuman(report, formatProductBenchmarkHuman(report), options.json === true);
+      printJsonOrHuman(
+        report,
+        formatProductBenchmarkHuman(report),
+        options.json === true,
+      );
       if (report.summary.fail > 0 || report.summary.not_implemented > 0) {
         process.exit(1);
       }
     });
 
   benchmarkCommand
-    .command('parity')
-    .description('Create the Phase 12 comparative parity benchmark artifact')
-    .option('--json', 'Emit structured JSON only')
-    .option('--output-dir <path>', 'Benchmark artifact output directory')
-    .option('--fixture <path>', 'Measured parity results fixture JSON')
-    .action((options: { json?: boolean; outputDir?: string; fixture?: string }) => {
-      const report = runParityBenchmark({
-        ...(options.outputDir ? { outputDir: options.outputDir } : {}),
-        ...(options.fixture ? { fixturePath: options.fixture } : {}),
-      });
-      printJsonOrHuman(report, formatParityBenchmarkHuman(report), options.json === true);
-    });
+    .command("parity")
+    .description("Create the Phase 12 comparative parity benchmark artifact")
+    .option("--json", "Emit structured JSON only")
+    .option("--output-dir <path>", "Benchmark artifact output directory")
+    .option("--fixture <path>", "Measured parity results fixture JSON")
+    .action(
+      (options: { json?: boolean; outputDir?: string; fixture?: string }) => {
+        const report = runParityBenchmark({
+          ...(options.outputDir ? { outputDir: options.outputDir } : {}),
+          ...(options.fixture ? { fixturePath: options.fixture } : {}),
+        });
+        printJsonOrHuman(
+          report,
+          formatParityBenchmarkHuman(report),
+          options.json === true,
+        );
+      },
+    );
 
   benchmarkCommand
-    .command('production')
-    .description('Create the scoped production-readiness proof benchmark artifact')
-    .option('--json', 'Emit structured JSON only')
-    .option('--output-dir <path>', 'Benchmark artifact output directory')
-    .option('--proof-root <path>', 'Production proof artifact root')
-    .action((options: { json?: boolean; outputDir?: string; proofRoot?: string }) => {
-      const report = runProductionBenchmark({
-        ...(options.outputDir ? { outputDir: options.outputDir } : {}),
-        ...(options.proofRoot ? { proofRoot: options.proofRoot } : {}),
-      });
-      printJsonOrHuman(report, formatProductionBenchmarkHuman(report), options.json === true);
-    });
-
-  benchmarkCommand
-    .command('calibration')
+    .command("production")
     .description(
-      'Run the Evidence Label calibration benchmark (OLS-MCC P2(b))',
+      "Create the scoped production-readiness proof benchmark artifact",
     )
-    .option('--json', 'Emit structured JSON only')
-    .option('--output-dir <path>', 'Benchmark artifact output directory')
-    .option('--tasks <n>', 'Number of test tasks to run (default: all)', '23')
-    .option('--live', 'Run with live DeepSeek LLM calls (uses DEEPSEEK_API_KEY)')
-    .option('--model <model>', 'Model ID for live mode (provider shorthand)')
-    .option('--delay-ms <n>', 'Delay between LLM calls in ms', '500')
+    .option("--json", "Emit structured JSON only")
+    .option("--output-dir <path>", "Benchmark artifact output directory")
+    .option("--proof-root <path>", "Production proof artifact root")
+    .action(
+      (options: { json?: boolean; outputDir?: string; proofRoot?: string }) => {
+        const report = runProductionBenchmark({
+          ...(options.outputDir ? { outputDir: options.outputDir } : {}),
+          ...(options.proofRoot ? { proofRoot: options.proofRoot } : {}),
+        });
+        printJsonOrHuman(
+          report,
+          formatProductionBenchmarkHuman(report),
+          options.json === true,
+        );
+      },
+    );
+
+  benchmarkCommand
+    .command("calibration")
+    .description("Run the Evidence Label calibration benchmark (OLS-MCC P2(b))")
+    .option("--json", "Emit structured JSON only")
+    .option("--output-dir <path>", "Benchmark artifact output directory")
+    .option("--tasks <n>", "Number of test tasks to run (default: all)", "23")
     .option(
-      '--provider <name>',
-      'LLM provider: deepseek only for live runs',
-      'deepseek',
+      "--live",
+      "Run with live DeepSeek LLM calls (uses DEEPSEEK_API_KEY)",
+    )
+    .option("--model <model>", "Model ID for live mode (provider shorthand)")
+    .option("--delay-ms <n>", "Delay between LLM calls in ms", "500")
+    .option(
+      "--provider <name>",
+      "LLM provider: deepseek only for live runs",
+      "deepseek",
     )
     .option(
-      '--label-mode <mode>',
-      'Label comparison mode: numerical-vs-none (default) or numerical-vs-categorical (P1 variant)',
-      'numerical-vs-none',
+      "--label-mode <mode>",
+      "Label comparison mode: numerical-vs-none (default) or numerical-vs-categorical (P1 variant)",
+      "numerical-vs-none",
     )
     .action(
       async (options: {
@@ -3962,16 +4731,18 @@ Commands include:
         labelMode?: string;
       }) => {
         try {
-          const labelMode = (options.labelMode === 'numerical-vs-none' || options.labelMode === 'numerical-vs-categorical')
-            ? options.labelMode
-            : undefined;
+          const labelMode =
+            options.labelMode === "numerical-vs-none" ||
+            options.labelMode === "numerical-vs-categorical"
+              ? options.labelMode
+              : undefined;
           if (options.live) {
             const { provider, apiKey, defaultModel } = resolveBenchmarkProvider(
-              options.provider ?? 'deepseek',
+              options.provider ?? "deepseek",
             );
 
             const model = options.model ?? defaultModel;
-            const delayMs = Number.parseInt(options.delayMs ?? '500', 10);
+            const delayMs = Number.parseInt(options.delayMs ?? "500", 10);
             const taskCount = options.tasks
               ? Number.parseInt(options.tasks, 10)
               : undefined;
@@ -3982,74 +4753,92 @@ Commands include:
               ...(labelMode ? { labelMode } : {}),
               delayMs: Number.isFinite(delayMs) ? delayMs : 500,
               llmCall: async (prompt: string): Promise<string> => {
-                if (provider === 'anthropic') {
-                  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'x-api-key': apiKey,
-                      'anthropic-version': '2023-06-01',
+                if (provider === "anthropic") {
+                  const resp = await fetch(
+                    "https://api.anthropic.com/v1/messages",
+                    {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        "x-api-key": apiKey,
+                        "anthropic-version": "2023-06-01",
+                      },
+                      body: JSON.stringify({
+                        model,
+                        max_tokens: 1024,
+                        temperature: 0,
+                        messages: [{ role: "user", content: prompt }],
+                      }),
                     },
-                    body: JSON.stringify({
-                      model,
-                      max_tokens: 1024,
-                      temperature: 0,
-                      messages: [{ role: 'user', content: prompt }],
-                    }),
-                  });
+                  );
                   if (!resp.ok) {
-                    const errBody = await resp.text().catch(() => 'unknown');
-                    throw new Error(`${provider} API error ${resp.status}: ${errBody}`);
+                    const errBody = await resp.text().catch(() => "unknown");
+                    throw new Error(
+                      `${provider} API error ${resp.status}: ${errBody}`,
+                    );
                   }
                   const data = (await resp.json()) as {
                     content: Array<{ type: string; text: string }>;
                   };
-                  return data.content?.[0]?.text ?? '';
-                } else if (provider === 'gemini') {
-                  const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'x-goog-api-key': apiKey,
+                  return data.content?.[0]?.text ?? "";
+                } else if (provider === "gemini") {
+                  const resp = await fetch(
+                    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+                    {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": apiKey,
+                      },
+                      body: JSON.stringify({
+                        contents: [{ parts: [{ text: prompt }] }],
+                        generationConfig: {
+                          temperature: 0,
+                          maxOutputTokens: 1024,
+                        },
+                      }),
                     },
-                    body: JSON.stringify({
-                      contents: [{ parts: [{ text: prompt }] }],
-                      generationConfig: { temperature: 0, maxOutputTokens: 1024 },
-                    }),
-                  });
+                  );
                   if (!resp.ok) {
-                    const errBody = await resp.text().catch(() => 'unknown');
-                    throw new Error(`${provider} API error ${resp.status}: ${errBody}`);
+                    const errBody = await resp.text().catch(() => "unknown");
+                    throw new Error(
+                      `${provider} API error ${resp.status}: ${errBody}`,
+                    );
                   }
                   const data = (await resp.json()) as {
-                    candidates?: Array<{ content?: { parts?: Array<{ text: string }> } }>;
+                    candidates?: Array<{
+                      content?: { parts?: Array<{ text: string }> };
+                    }>;
                   };
-                  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+                  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
                 } else {
-                  const apiUrl = provider === 'deepseek'
-                    ? 'https://api.deepseek.com/v1/chat/completions'
-                    : 'https://api.deepinfra.com/v1/openai/chat/completions';
+                  const apiUrl =
+                    provider === "deepseek"
+                      ? "https://api.deepseek.com/v1/chat/completions"
+                      : "https://api.deepinfra.com/v1/openai/chat/completions";
                   const resp = await fetch(apiUrl, {
-                    method: 'POST',
+                    method: "POST",
                     headers: {
-                      'Content-Type': 'application/json',
+                      "Content-Type": "application/json",
                       Authorization: `Bearer ${apiKey}`,
                     },
                     body: JSON.stringify({
                       model,
-                      messages: [{ role: 'user', content: prompt }],
+                      messages: [{ role: "user", content: prompt }],
                       max_tokens: 1024,
                       temperature: 0,
                     }),
                   });
                   if (!resp.ok) {
-                    const errBody = await resp.text().catch(() => 'unknown');
-                    throw new Error(`${provider} API error ${resp.status}: ${errBody}`);
+                    const errBody = await resp.text().catch(() => "unknown");
+                    throw new Error(
+                      `${provider} API error ${resp.status}: ${errBody}`,
+                    );
                   }
                   const data = (await resp.json()) as {
                     choices: Array<{ message: { content: string } }>;
                   };
-                  return data.choices[0]?.message?.content ?? '';
+                  return data.choices[0]?.message?.content ?? "";
                 }
               },
             });
@@ -4058,7 +4847,7 @@ Commands include:
               formatCalibrationBenchmarkHuman(report),
               options.json === true,
             );
-            if (report.summary.verdict === 'REFUTED') {
+            if (report.summary.verdict === "REFUTED") {
               process.exit(1);
             }
           } else {
@@ -4068,7 +4857,9 @@ Commands include:
               : undefined;
             const report = runCalibrationBenchmark({
               ...(options.outputDir ? { outputDir: options.outputDir } : {}),
-              ...(offlineTaskCount !== undefined ? { taskCount: offlineTaskCount } : {}),
+              ...(offlineTaskCount !== undefined
+                ? { taskCount: offlineTaskCount }
+                : {}),
               ...(labelMode ? { labelMode } : {}),
             });
             printJsonOrHuman(
@@ -4087,29 +4878,32 @@ Commands include:
     );
 
   benchmarkCommand
-    .command('injection')
+    .command("injection")
     .description(
-      'Run the Authority Order injection resistance benchmark (OLS-MCC P0)',
+      "Run the Authority Order injection resistance benchmark (OLS-MCC P0)",
     )
-    .option('--json', 'Emit structured JSON only')
-    .option('--output-dir <path>', 'Benchmark artifact output directory')
-    .option('--tasks <n>', 'Number of test tasks to run (default: all)', '36')
-    .option('--live', 'Run with live DeepSeek LLM calls (uses DEEPSEEK_API_KEY)')
-    .option('--model <model>', 'Model ID for live mode (provider shorthand)')
-    .option('--delay-ms <n>', 'Delay between LLM calls in ms', '500')
+    .option("--json", "Emit structured JSON only")
+    .option("--output-dir <path>", "Benchmark artifact output directory")
+    .option("--tasks <n>", "Number of test tasks to run (default: all)", "36")
     .option(
-      '--provider <name>',
-      'LLM provider: deepseek only for live runs',
-      'deepseek',
+      "--live",
+      "Run with live DeepSeek LLM calls (uses DEEPSEEK_API_KEY)",
     )
+    .option("--model <model>", "Model ID for live mode (provider shorthand)")
+    .option("--delay-ms <n>", "Delay between LLM calls in ms", "500")
     .option(
-      '--variant <v1|v2>',
-      'Authority Order variant to test (default: v2 hardened)',
-      'v2',
+      "--provider <name>",
+      "LLM provider: deepseek only for live runs",
+      "deepseek",
     )
     .option(
-      '--multi-turn-defense',
-      'Enable Conversation Boundary Marker defense against multi-turn erosion attacks',
+      "--variant <v1|v2>",
+      "Authority Order variant to test (default: v2 hardened)",
+      "v2",
+    )
+    .option(
+      "--multi-turn-defense",
+      "Enable Conversation Boundary Marker defense against multi-turn erosion attacks",
     )
     .action(
       async (options: {
@@ -4126,11 +4920,11 @@ Commands include:
         try {
           if (options.live) {
             const { provider, apiKey, defaultModel } = resolveBenchmarkProvider(
-              options.provider ?? 'deepseek',
+              options.provider ?? "deepseek",
             );
 
             const model = options.model ?? defaultModel;
-            const delayMs = Number.parseInt(options.delayMs ?? '500', 10);
+            const delayMs = Number.parseInt(options.delayMs ?? "500", 10);
             const taskCount = options.tasks
               ? Number.parseInt(options.tasks, 10)
               : undefined;
@@ -4138,78 +4932,98 @@ Commands include:
               modelId: model,
               ...(taskCount !== undefined ? { taskCount } : {}),
               ...(options.outputDir ? { outputDir: options.outputDir } : {}),
-              aoVariant: (options.variant === 'v1' ? 'v1' : 'v2') as 'v1' | 'v2',
+              aoVariant: (options.variant === "v1" ? "v1" : "v2") as
+                | "v1"
+                | "v2",
               multiTurnDefense: options.multiTurnDefense === true,
               delayMs: Number.isFinite(delayMs) ? delayMs : 500,
               llmCall: async (prompt: string): Promise<string> => {
-                if (provider === 'anthropic') {
-                  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'x-api-key': apiKey,
-                      'anthropic-version': '2023-06-01',
+                if (provider === "anthropic") {
+                  const resp = await fetch(
+                    "https://api.anthropic.com/v1/messages",
+                    {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        "x-api-key": apiKey,
+                        "anthropic-version": "2023-06-01",
+                      },
+                      body: JSON.stringify({
+                        model,
+                        max_tokens: 1024,
+                        temperature: 0,
+                        messages: [{ role: "user", content: prompt }],
+                      }),
                     },
-                    body: JSON.stringify({
-                      model,
-                      max_tokens: 1024,
-                      temperature: 0,
-                      messages: [{ role: 'user', content: prompt }],
-                    }),
-                  });
+                  );
                   if (!resp.ok) {
-                    const errBody = await resp.text().catch(() => 'unknown');
-                    throw new Error(`${provider} API error ${resp.status}: ${errBody}`);
+                    const errBody = await resp.text().catch(() => "unknown");
+                    throw new Error(
+                      `${provider} API error ${resp.status}: ${errBody}`,
+                    );
                   }
                   const data = (await resp.json()) as {
                     content: Array<{ type: string; text: string }>;
                   };
-                  return data.content?.[0]?.text ?? '';
-                } else if (provider === 'gemini') {
-                  const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'x-goog-api-key': apiKey,
+                  return data.content?.[0]?.text ?? "";
+                } else if (provider === "gemini") {
+                  const resp = await fetch(
+                    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+                    {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": apiKey,
+                      },
+                      body: JSON.stringify({
+                        contents: [{ parts: [{ text: prompt }] }],
+                        generationConfig: {
+                          temperature: 0,
+                          maxOutputTokens: 1024,
+                        },
+                      }),
                     },
-                    body: JSON.stringify({
-                      contents: [{ parts: [{ text: prompt }] }],
-                      generationConfig: { temperature: 0, maxOutputTokens: 1024 },
-                    }),
-                  });
+                  );
                   if (!resp.ok) {
-                    const errBody = await resp.text().catch(() => 'unknown');
-                    throw new Error(`${provider} API error ${resp.status}: ${errBody}`);
+                    const errBody = await resp.text().catch(() => "unknown");
+                    throw new Error(
+                      `${provider} API error ${resp.status}: ${errBody}`,
+                    );
                   }
                   const data = (await resp.json()) as {
-                    candidates?: Array<{ content?: { parts?: Array<{ text: string }> } }>;
+                    candidates?: Array<{
+                      content?: { parts?: Array<{ text: string }> };
+                    }>;
                   };
-                  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+                  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
                 } else {
-                  const apiUrl = provider === 'deepseek'
-                    ? 'https://api.deepseek.com/v1/chat/completions'
-                    : 'https://api.deepinfra.com/v1/openai/chat/completions';
+                  const apiUrl =
+                    provider === "deepseek"
+                      ? "https://api.deepseek.com/v1/chat/completions"
+                      : "https://api.deepinfra.com/v1/openai/chat/completions";
                   const resp = await fetch(apiUrl, {
-                    method: 'POST',
+                    method: "POST",
                     headers: {
-                      'Content-Type': 'application/json',
+                      "Content-Type": "application/json",
                       Authorization: `Bearer ${apiKey}`,
                     },
                     body: JSON.stringify({
                       model,
-                      messages: [{ role: 'user', content: prompt }],
+                      messages: [{ role: "user", content: prompt }],
                       max_tokens: 1024,
                       temperature: 0,
                     }),
                   });
                   if (!resp.ok) {
-                    const errBody = await resp.text().catch(() => 'unknown');
-                    throw new Error(`${provider} API error ${resp.status}: ${errBody}`);
+                    const errBody = await resp.text().catch(() => "unknown");
+                    throw new Error(
+                      `${provider} API error ${resp.status}: ${errBody}`,
+                    );
                   }
                   const data = (await resp.json()) as {
                     choices: Array<{ message: { content: string } }>;
                   };
-                  return data.choices[0]?.message?.content ?? '';
+                  return data.choices[0]?.message?.content ?? "";
                 }
               },
             });
@@ -4218,7 +5032,7 @@ Commands include:
               formatInjectionBenchmarkHuman(report),
               options.json === true,
             );
-            if (report.summary.verdict === 'REFUTED') {
+            if (report.summary.verdict === "REFUTED") {
               process.exit(1);
             }
           } else {
@@ -4228,8 +5042,12 @@ Commands include:
               : undefined;
             const report = runInjectionBenchmark({
               ...(options.outputDir ? { outputDir: options.outputDir } : {}),
-              ...(offlineTaskCount !== undefined ? { taskCount: offlineTaskCount } : {}),
-              aoVariant: (options.variant === 'v1' ? 'v1' : 'v2') as 'v1' | 'v2',
+              ...(offlineTaskCount !== undefined
+                ? { taskCount: offlineTaskCount }
+                : {}),
+              aoVariant: (options.variant === "v1" ? "v1" : "v2") as
+                | "v1"
+                | "v2",
               multiTurnDefense: options.multiTurnDefense === true,
             });
             printJsonOrHuman(
@@ -4248,21 +5066,29 @@ Commands include:
     );
 
   benchmarkCommand
-    .command('analyze')
-    .description('Analyze a Terminal-Bench run and emit a Codex repair work packet')
-    .argument('[run]', 'Run directory, result.json path, or latest', 'latest')
-    .option('--json', 'Emit structured JSON only')
-    .option('--benchmarks-root <path>', 'Benchmarks workspace root')
-    .option('--suite <name>', 'Terminal-Bench suite for latest lookup', 'pilot10')
+    .command("analyze")
+    .description(
+      "Analyze a Terminal-Bench run and emit a Codex repair work packet",
+    )
+    .argument("[run]", "Run directory, result.json path, or latest", "latest")
+    .option("--json", "Emit structured JSON only")
+    .option("--benchmarks-root <path>", "Benchmarks workspace root")
+    .option(
+      "--suite <name>",
+      "Terminal-Bench suite for latest lookup",
+      "pilot10",
+    )
     .action(
       (
         runArg: string | undefined,
         options: { json?: boolean; benchmarksRoot?: string; suite?: string },
       ) => {
         try {
-          const run = resolveBenchmarkAnalyzeRun(runArg ?? 'latest', {
-            ...(options.benchmarksRoot ? { benchmarksRoot: options.benchmarksRoot } : {}),
-            suite: options.suite ?? 'pilot10',
+          const run = resolveBenchmarkAnalyzeRun(runArg ?? "latest", {
+            ...(options.benchmarksRoot
+              ? { benchmarksRoot: options.benchmarksRoot }
+              : {}),
+            suite: options.suite ?? "pilot10",
           });
           const analysis = analyzeTerminalBenchRun({ run });
           printJsonOrHuman(
@@ -4277,16 +5103,27 @@ Commands include:
     );
 
   benchmarkCommand
-    .command('repair')
+    .command("repair")
     .description(
-      'Generate a focused benchmark repair plan and prompt from a failed Terminal-Bench run',
+      "Generate a focused benchmark repair plan and prompt from a failed Terminal-Bench run",
     )
-    .argument('[run]', 'Run directory, result.json path, or latest', 'latest')
-    .option('--json', 'Emit structured JSON only')
-    .option('--benchmarks-root <path>', 'Benchmarks workspace root')
-    .option('--suite <name>', 'Terminal-Bench suite for latest lookup', 'pilot10')
-    .option('--max-tasks <n>', 'Full pilot task count for generated command', '10')
-    .option('--output-dir <path>', 'Repair report/prompt artifact output directory')
+    .argument("[run]", "Run directory, result.json path, or latest", "latest")
+    .option("--json", "Emit structured JSON only")
+    .option("--benchmarks-root <path>", "Benchmarks workspace root")
+    .option(
+      "--suite <name>",
+      "Terminal-Bench suite for latest lookup",
+      "pilot10",
+    )
+    .option(
+      "--max-tasks <n>",
+      "Full pilot task count for generated command",
+      "10",
+    )
+    .option(
+      "--output-dir <path>",
+      "Repair report/prompt artifact output directory",
+    )
     .action(
       (
         runArg: string | undefined,
@@ -4299,18 +5136,26 @@ Commands include:
         },
       ) => {
         try {
-          const run = resolveBenchmarkAnalyzeRun(runArg ?? 'latest', {
-            ...(options.benchmarksRoot ? { benchmarksRoot: options.benchmarksRoot } : {}),
-            suite: options.suite ?? 'pilot10',
+          const run = resolveBenchmarkAnalyzeRun(runArg ?? "latest", {
+            ...(options.benchmarksRoot
+              ? { benchmarksRoot: options.benchmarksRoot }
+              : {}),
+            suite: options.suite ?? "pilot10",
           });
           const report = buildBenchmarkRepairReport({
             run,
             ...(options.outputDir ? { outputDir: options.outputDir } : {}),
-            ...(options.benchmarksRoot ? { benchmarksRoot: options.benchmarksRoot } : {}),
-            suite: options.suite ?? 'pilot10',
+            ...(options.benchmarksRoot
+              ? { benchmarksRoot: options.benchmarksRoot }
+              : {}),
+            suite: options.suite ?? "pilot10",
             maxTasks: parsePositiveIntOption(options.maxTasks, 10),
           });
-          printJsonOrHuman(report, formatBenchmarkRepairHuman(report), options.json === true);
+          printJsonOrHuman(
+            report,
+            formatBenchmarkRepairHuman(report),
+            options.json === true,
+          );
         } catch (err: unknown) {
           printCommandErrorAndExit(err, options.json === true);
         }
@@ -4318,47 +5163,75 @@ Commands include:
     );
 
   benchmarkCommand
-    .command('repair-run')
-    .description('Execute an iterative benchmark repair packet in an isolated workspace')
-    .argument('[run]', 'Run directory, result.json path, or latest', 'latest')
-    .option('--json', 'Emit structured JSON only')
-    .option('--benchmarks-root <path>', 'Benchmarks workspace root')
-    .option('--suite <name>', 'Terminal-Bench suite for latest lookup', 'pilot10')
-    .option('--max-tasks <n>', 'Full pilot task count for generated command', '10')
-    .option('--max-iterations <n>', 'Maximum repair/check/targeted cycles', '5')
-    .option('--model <model>', 'Optional model family override for Babel repair and targeted rerun')
-    .option('--model-tier <tier>', 'Model tier for Babel repair and targeted rerun', 'cheap')
+    .command("repair-run")
+    .description(
+      "Execute an iterative benchmark repair packet in an isolated workspace",
+    )
+    .argument("[run]", "Run directory, result.json path, or latest", "latest")
+    .option("--json", "Emit structured JSON only")
+    .option("--benchmarks-root <path>", "Benchmarks workspace root")
     .option(
-      '--execution-profile <profile>',
-      'Execution profile for repair mode',
-      'benchmark_container',
+      "--suite <name>",
+      "Terminal-Bench suite for latest lookup",
+      "pilot10",
     )
     .option(
-      '--deepinfra-timeout-ms <n>',
-      'DeepInfra per-request timeout for repair and targeted rerun',
-      '240000',
+      "--max-tasks <n>",
+      "Full pilot task count for generated command",
+      "10",
+    )
+    .option("--max-iterations <n>", "Maximum repair/check/targeted cycles", "5")
+    .option(
+      "--model <model>",
+      "Optional model family override for Babel repair and targeted rerun",
     )
     .option(
-      '--waterfall-timeout-ms <n>',
-      'Aggregate waterfall timeout for repair and targeted rerun',
-      '720000',
-    )
-    .option('--verifier-timeout-ms <n>', 'Local Docker verifier timeout', '1200000')
-    .option('--targeted-timeout-ms <n>', 'Outer timeout for targeted benchmark rerun', '1800000')
-    .option('--output-dir <path>', 'Repair-loop artifact output directory')
-    .option(
-      '--dry-run',
-      'Prepare workspace and commands without running Babel, Docker verifier, or targeted benchmark',
+      "--model-tier <tier>",
+      "Model tier for Babel repair and targeted rerun",
+      "cheap",
     )
     .option(
-      '--skip-babel-repair',
-      'Do not run Babel repair mode; useful for verifying an existing workspace/checkpoint',
+      "--execution-profile <profile>",
+      "Execution profile for repair mode",
+      "benchmark_container",
     )
-    .option('--skip-local-verifier', 'Do not run the local Docker verifier')
-    .option('--skip-targeted', 'Do not run the targeted Terminal-Bench rerun after local pass')
     .option(
-      '--fail-on-unresolved',
-      'Exit non-zero unless the loop reaches a local or targeted pass',
+      "--deepinfra-timeout-ms <n>",
+      "DeepInfra per-request timeout for repair and targeted rerun",
+      "240000",
+    )
+    .option(
+      "--waterfall-timeout-ms <n>",
+      "Aggregate waterfall timeout for repair and targeted rerun",
+      "720000",
+    )
+    .option(
+      "--verifier-timeout-ms <n>",
+      "Local Docker verifier timeout",
+      "1200000",
+    )
+    .option(
+      "--targeted-timeout-ms <n>",
+      "Outer timeout for targeted benchmark rerun",
+      "1800000",
+    )
+    .option("--output-dir <path>", "Repair-loop artifact output directory")
+    .option(
+      "--dry-run",
+      "Prepare workspace and commands without running Babel, Docker verifier, or targeted benchmark",
+    )
+    .option(
+      "--skip-babel-repair",
+      "Do not run Babel repair mode; useful for verifying an existing workspace/checkpoint",
+    )
+    .option("--skip-local-verifier", "Do not run the local Docker verifier")
+    .option(
+      "--skip-targeted",
+      "Do not run the targeted Terminal-Bench rerun after local pass",
+    )
+    .option(
+      "--fail-on-unresolved",
+      "Exit non-zero unless the loop reaches a local or targeted pass",
     )
     .action(
       async (
@@ -4390,34 +5263,56 @@ Commands include:
           if (!dryRun && !skipBabelRepair) {
             validateRuntimeEnvForCommand({ json: options.json === true });
           }
-          const run = resolveBenchmarkAnalyzeRun(runArg ?? 'latest', {
-            ...(options.benchmarksRoot ? { benchmarksRoot: options.benchmarksRoot } : {}),
-            suite: options.suite ?? 'pilot10',
+          const run = resolveBenchmarkAnalyzeRun(runArg ?? "latest", {
+            ...(options.benchmarksRoot
+              ? { benchmarksRoot: options.benchmarksRoot }
+              : {}),
+            suite: options.suite ?? "pilot10",
           });
           const report = await runBenchmarkRepairLoop({
             run,
             ...(options.outputDir ? { outputDir: options.outputDir } : {}),
-            ...(options.benchmarksRoot ? { benchmarksRoot: options.benchmarksRoot } : {}),
-            suite: options.suite ?? 'pilot10',
+            ...(options.benchmarksRoot
+              ? { benchmarksRoot: options.benchmarksRoot }
+              : {}),
+            suite: options.suite ?? "pilot10",
             maxTasks: parsePositiveIntOption(options.maxTasks, 10),
             maxIterations: parsePositiveIntOption(options.maxIterations, 5),
             ...(options.model ? { model: options.model } : {}),
             ...(options.modelTier ? { modelTier: options.modelTier } : {}),
-            ...(options.executionProfile ? { executionProfile: options.executionProfile } : {}),
-            deepInfraTimeoutMs: parsePositiveIntOption(options.deepinfraTimeoutMs, 240000),
-            waterfallTimeoutMs: parsePositiveIntOption(options.waterfallTimeoutMs, 720000),
-            verifierTimeoutMs: parsePositiveIntOption(options.verifierTimeoutMs, 1200000),
-            targetedTimeoutMs: parsePositiveIntOption(options.targetedTimeoutMs, 1800000),
+            ...(options.executionProfile
+              ? { executionProfile: options.executionProfile }
+              : {}),
+            deepInfraTimeoutMs: parsePositiveIntOption(
+              options.deepinfraTimeoutMs,
+              240000,
+            ),
+            waterfallTimeoutMs: parsePositiveIntOption(
+              options.waterfallTimeoutMs,
+              720000,
+            ),
+            verifierTimeoutMs: parsePositiveIntOption(
+              options.verifierTimeoutMs,
+              1200000,
+            ),
+            targetedTimeoutMs: parsePositiveIntOption(
+              options.targetedTimeoutMs,
+              1800000,
+            ),
             dryRun,
             skipBabelRepair,
             skipLocalVerifier: options.skipLocalVerifier === true,
             skipTargeted: options.skipTargeted === true,
           });
-          printJsonOrHuman(report, formatBenchmarkRepairLoopHuman(report), options.json === true);
+          printJsonOrHuman(
+            report,
+            formatBenchmarkRepairLoopHuman(report),
+            options.json === true,
+          );
           if (
             options.failOnUnresolved === true &&
-            report.status !== 'targeted_passed' &&
-            report.status !== 'passed_local'
+            report.status !== "targeted_passed" &&
+            report.status !== "passed_local"
           ) {
             process.exit(1);
           }
@@ -4431,43 +5326,59 @@ Commands include:
     );
 
   benchmarkCommand
-    .command('loop')
-    .description('Run the local readiness gate and plan the Terminal-Bench improvement loop')
-    .option('--json', 'Emit structured JSON only')
-    .option('--benchmarks-root <path>', 'Benchmarks workspace root')
-    .option('--suite <name>', 'Terminal-Bench suite', 'pilot10')
-    .option('--readiness <profile>', 'Readiness profile: fast, full, release', 'full')
-    .option('--max-tasks <n>', 'Full pilot task count', '10')
-    .option('--min-passes <n>', 'Promotion threshold for the full pilot', '5')
-    .option('--target-task <name>', 'Task to use for the next targeted canary')
-    .option('--model-tier <tier>', 'Model tier for generated benchmark commands', 'cheap')
+    .command("loop")
+    .description(
+      "Run the local readiness gate and plan the Terminal-Bench improvement loop",
+    )
+    .option("--json", "Emit structured JSON only")
+    .option("--benchmarks-root <path>", "Benchmarks workspace root")
+    .option("--suite <name>", "Terminal-Bench suite", "pilot10")
     .option(
-      '--deepinfra-timeout-ms <n>',
-      'DeepInfra per-request timeout for generated benchmark commands',
-      '240000',
+      "--readiness <profile>",
+      "Readiness profile: fast, full, release",
+      "full",
+    )
+    .option("--max-tasks <n>", "Full pilot task count", "10")
+    .option("--min-passes <n>", "Promotion threshold for the full pilot", "5")
+    .option("--target-task <name>", "Task to use for the next targeted canary")
+    .option(
+      "--model-tier <tier>",
+      "Model tier for generated benchmark commands",
+      "cheap",
     )
     .option(
-      '--waterfall-timeout-ms <n>',
-      'Aggregate waterfall timeout for generated benchmark commands',
-      '720000',
-    )
-    .option('--deadline <iso>', 'Wall-clock deadline for generated benchmark commands')
-    .option(
-      '--min-remaining-ms <n>',
-      'Minimum remaining deadline budget before starting benchmark work',
-      '0',
+      "--deepinfra-timeout-ms <n>",
+      "DeepInfra per-request timeout for generated benchmark commands",
+      "240000",
     )
     .option(
-      '--job-slug <slug>',
-      'Stable job slug used in generated benchmark commands',
-      'improvement-loop',
+      "--waterfall-timeout-ms <n>",
+      "Aggregate waterfall timeout for generated benchmark commands",
+      "720000",
     )
-    .option('--output-dir <path>', 'Loop report artifact output directory')
     .option(
-      '--skip-local-checks',
-      'Inspect benchmark history without running local readiness commands',
+      "--deadline <iso>",
+      "Wall-clock deadline for generated benchmark commands",
     )
-    .option('--fail-on-unready', 'Exit non-zero when promotion readiness is not yet achieved')
+    .option(
+      "--min-remaining-ms <n>",
+      "Minimum remaining deadline budget before starting benchmark work",
+      "0",
+    )
+    .option(
+      "--job-slug <slug>",
+      "Stable job slug used in generated benchmark commands",
+      "improvement-loop",
+    )
+    .option("--output-dir <path>", "Loop report artifact output directory")
+    .option(
+      "--skip-local-checks",
+      "Inspect benchmark history without running local readiness commands",
+    )
+    .option(
+      "--fail-on-unready",
+      "Exit non-zero when promotion readiness is not yet achieved",
+    )
     .action(
       (options: {
         json?: boolean;
@@ -4489,15 +5400,23 @@ Commands include:
       }) => {
         try {
           const report = buildBenchmarkImprovementLoopReport({
-            ...(options.benchmarksRoot ? { benchmarksRoot: options.benchmarksRoot } : {}),
+            ...(options.benchmarksRoot
+              ? { benchmarksRoot: options.benchmarksRoot }
+              : {}),
             ...(options.suite ? { suite: options.suite } : {}),
             readinessProfile: parseReadinessProfileOption(options.readiness),
             maxTasks: parsePositiveIntOption(options.maxTasks, 10),
             minFullPasses: parsePositiveIntOption(options.minPasses, 5),
             ...(options.targetTask ? { targetTask: options.targetTask } : {}),
             ...(options.modelTier ? { modelTier: options.modelTier } : {}),
-            deepInfraTimeoutMs: parsePositiveIntOption(options.deepinfraTimeoutMs, 240000),
-            waterfallTimeoutMs: parsePositiveIntOption(options.waterfallTimeoutMs, 720000),
+            deepInfraTimeoutMs: parsePositiveIntOption(
+              options.deepinfraTimeoutMs,
+              240000,
+            ),
+            waterfallTimeoutMs: parsePositiveIntOption(
+              options.waterfallTimeoutMs,
+              720000,
+            ),
             ...(options.deadline ? { deadlineAt: options.deadline } : {}),
             minRemainingMs: parsePositiveIntOption(options.minRemainingMs, 0),
             ...(options.jobSlug ? { jobSlug: options.jobSlug } : {}),
@@ -4510,8 +5429,9 @@ Commands include:
             options.json === true,
           );
           if (
-            report.local_readiness.status === 'fail' ||
-            (options.failOnUnready === true && report.readiness_gate.status === 'fail')
+            report.local_readiness.status === "fail" ||
+            (options.failOnUnready === true &&
+              report.readiness_gate.status === "fail")
           ) {
             process.exit(1);
           }
@@ -4526,164 +5446,190 @@ Commands include:
 
   // ── Memory management commands ──────────────────────────────────────────
   const memoryCommand = program
-    .command('memory')
-    .description('Manage persistent project memories from Babel runs')
+    .command("memory")
+    .description("Manage persistent project memories from Babel runs")
     .action(() => {
       memoryCommand.help({ error: false });
     });
 
   memoryCommand
-    .command('list')
-    .description('List all project memories')
-    .option('--project-root <path>', 'Project root', process.cwd())
-    .option('--json', 'Emit structured JSON only')
+    .command("list")
+    .description("List all project memories")
+    .option("--project-root <path>", "Project root", process.cwd())
+    .option("--json", "Emit structured JSON only")
     .action(async (options: { projectRoot?: string; json?: boolean }) => {
-      const { readProjectMemories } = await import('../services/memoryExtraction.js');
+      const { readProjectMemories } =
+        await import("../services/memoryExtraction.js");
       const entries = readProjectMemories(options.projectRoot);
       if (options.json) {
         console.log(JSON.stringify(entries, null, 2));
       } else {
         if (entries.length === 0) {
-          console.log('No project memories found.');
+          console.log("No project memories found.");
           return;
         }
         const now = new Date();
         for (const entry of entries) {
-          const age = Math.floor((now.getTime() - new Date(entry.date).getTime()) / 86_400_000);
-          const stale = age > (entry.staleDays || 30) ? ' [STALE]' : '';
-          console.log(`[${entry.date}] ${entry.topic} (${entry.impact})${stale}`);
+          const age = Math.floor(
+            (now.getTime() - new Date(entry.date).getTime()) / 86_400_000,
+          );
+          const stale = age > (entry.staleDays || 30) ? " [STALE]" : "";
           console.log(
-            `  ${entry.content.slice(0, 120)}${entry.content.length > 120 ? '...' : ''}\n`,
+            `[${entry.date}] ${entry.topic} (${entry.impact})${stale}`,
+          );
+          console.log(
+            `  ${entry.content.slice(0, 120)}${entry.content.length > 120 ? "..." : ""}\n`,
           );
         }
       }
     });
 
   memoryCommand
-    .command('query')
-    .description('Search project memories by keyword')
-    .argument('<term>', 'Search term')
-    .option('--project-root <path>', 'Project root', process.cwd())
-    .option('--json', 'Emit structured JSON only')
-    .action(async (term: string, options: { projectRoot?: string; json?: boolean }) => {
-      const { queryMemories } = await import('../services/memoryExtraction.js');
-      const results = queryMemories(options.projectRoot, term);
-      if (options.json) {
-        console.log(JSON.stringify(results, null, 2));
-      } else {
-        if (results.length === 0) {
-          console.log(`No memories match "${term}".`);
-          return;
+    .command("query")
+    .description("Search project memories by keyword")
+    .argument("<term>", "Search term")
+    .option("--project-root <path>", "Project root", process.cwd())
+    .option("--json", "Emit structured JSON only")
+    .action(
+      async (
+        term: string,
+        options: { projectRoot?: string; json?: boolean },
+      ) => {
+        const { queryMemories } =
+          await import("../services/memoryExtraction.js");
+        const results = queryMemories(options.projectRoot, term);
+        if (options.json) {
+          console.log(JSON.stringify(results, null, 2));
+        } else {
+          if (results.length === 0) {
+            console.log(`No memories match "${term}".`);
+            return;
+          }
+          for (const entry of results) {
+            console.log(`[${entry.date}] ${entry.topic} (${entry.impact})`);
+            console.log(
+              `  ${entry.content.slice(0, 200)}${entry.content.length > 200 ? "..." : ""}\n`,
+            );
+          }
         }
-        for (const entry of results) {
-          console.log(`[${entry.date}] ${entry.topic} (${entry.impact})`);
-          console.log(
-            `  ${entry.content.slice(0, 200)}${entry.content.length > 200 ? '...' : ''}\n`,
-          );
-        }
-      }
-    });
+      },
+    );
 
   memoryCommand
-    .command('prune')
-    .description('Remove stale memories older than N days')
-    .option('--max-age <days>', 'Maximum age in days', '30')
-    .option('--project-root <path>', 'Project root', process.cwd())
+    .command("prune")
+    .description("Remove stale memories older than N days")
+    .option("--max-age <days>", "Maximum age in days", "30")
+    .option("--project-root <path>", "Project root", process.cwd())
     .action(async (options: { maxAge?: string; projectRoot?: string }) => {
-      const { pruneStaleMemories } = await import('../services/memoryExtraction.js');
-      const maxAge = Number.parseInt(options.maxAge ?? '30', 10) || 30;
+      const { pruneStaleMemories } =
+        await import("../services/memoryExtraction.js");
+      const maxAge = Number.parseInt(options.maxAge ?? "30", 10) || 30;
       const pruned = pruneStaleMemories(options.projectRoot, maxAge);
       console.log(
         pruned > 0
           ? `Pruned ${pruned} stale memories (older than ${maxAge} days).`
-          : 'No stale memories to prune.',
+          : "No stale memories to prune.",
       );
     });
 
   memoryCommand
-    .command('log')
-    .description('Write a daily log entry for the current session')
-    .argument('<summary...>', 'Summary of today work')
-    .option('--project-root <path>', 'Project root', process.cwd())
-    .action(async (summaryParts: string[], options: { projectRoot?: string }) => {
-      const { writeDailyLog } = await import('../services/memoryExtraction.js');
-      const summary = summaryParts.join(' ');
-      writeDailyLog(options.projectRoot, summary);
-      console.log('Daily log entry written.');
-    });
+    .command("log")
+    .description("Write a daily log entry for the current session")
+    .argument("<summary...>", "Summary of today work")
+    .option("--project-root <path>", "Project root", process.cwd())
+    .action(
+      async (summaryParts: string[], options: { projectRoot?: string }) => {
+        const { writeDailyLog } =
+          await import("../services/memoryExtraction.js");
+        const summary = summaryParts.join(" ");
+        writeDailyLog(options.projectRoot, summary);
+        console.log("Daily log entry written.");
+      },
+    );
 
   // ── File history commands ────────────────────────────────────────────────
   const historyCommand = program
-    .command('history')
-    .description('Show file change history from Babel runs')
+    .command("history")
+    .description("Show file change history from Babel runs")
     .action(() => {
       historyCommand.help({ error: false });
     });
 
   historyCommand
-    .command('file')
-    .description('Show which runs touched a specific file')
-    .argument('<path>', 'File path relative to project root')
-    .option('--project-root <path>', 'Project root', process.cwd())
-    .option('--json', 'Emit structured JSON only')
-    .action(async (filePath: string, options: { projectRoot?: string; json?: boolean }) => {
-      const { getFileHistory } = await import('../services/fileHistory.js');
-      const results = getFileHistory(filePath, options.projectRoot);
-      if (options.json) {
-        console.log(JSON.stringify(results, null, 2));
-      } else {
-        if (results.length === 0) {
-          console.log(`No history found for "${filePath}".`);
-          return;
+    .command("file")
+    .description("Show which runs touched a specific file")
+    .argument("<path>", "File path relative to project root")
+    .option("--project-root <path>", "Project root", process.cwd())
+    .option("--json", "Emit structured JSON only")
+    .action(
+      async (
+        filePath: string,
+        options: { projectRoot?: string; json?: boolean },
+      ) => {
+        const { getFileHistory } = await import("../services/fileHistory.js");
+        const results = getFileHistory(filePath, options.projectRoot);
+        if (options.json) {
+          console.log(JSON.stringify(results, null, 2));
+        } else {
+          if (results.length === 0) {
+            console.log(`No history found for "${filePath}".`);
+            return;
+          }
+          for (const history of results) {
+            const fileRecord = history.files.find(
+              (f) => f.path === filePath || f.path.endsWith(filePath),
+            );
+            const changed = fileRecord?.changed ? "modified" : "read";
+            console.log(
+              `[${history.timestamp}] ${history.runId} — ${changed} (${history.files.filter((f) => f.changed).length} files changed total)`,
+            );
+          }
         }
-        for (const history of results) {
-          const fileRecord = history.files.find(
-            (f) => f.path === filePath || f.path.endsWith(filePath),
-          );
-          const changed = fileRecord?.changed ? 'modified' : 'read';
-          console.log(
-            `[${history.timestamp}] ${history.runId} — ${changed} (${history.files.filter((f) => f.changed).length} files changed total)`,
-          );
-        }
-      }
-    });
+      },
+    );
 
   historyCommand
-    .command('task')
-    .description('Show files touched by a specific run')
-    .argument('<run-id>', 'Run ID')
-    .option('--project-root <path>', 'Project root', process.cwd())
-    .option('--json', 'Emit structured JSON only')
-    .action(async (runId: string, options: { projectRoot?: string; json?: boolean }) => {
-      const { getTaskFileHistory } = await import('../services/fileHistory.js');
-      const history = getTaskFileHistory(runId, options.projectRoot);
-      if (options.json) {
-        console.log(JSON.stringify(history, null, 2));
-      } else {
-        if (!history) {
-          console.log(`No history found for run "${runId}".`);
-          return;
+    .command("task")
+    .description("Show files touched by a specific run")
+    .argument("<run-id>", "Run ID")
+    .option("--project-root <path>", "Project root", process.cwd())
+    .option("--json", "Emit structured JSON only")
+    .action(
+      async (
+        runId: string,
+        options: { projectRoot?: string; json?: boolean },
+      ) => {
+        const { getTaskFileHistory } =
+          await import("../services/fileHistory.js");
+        const history = getTaskFileHistory(runId, options.projectRoot);
+        if (options.json) {
+          console.log(JSON.stringify(history, null, 2));
+        } else {
+          if (!history) {
+            console.log(`No history found for run "${runId}".`);
+            return;
+          }
+          console.log(`Run: ${history.runId}  [${history.timestamp}]`);
+          for (const file of history.files) {
+            const status = file.changed ? "CHANGED" : "UNCHANGED";
+            console.log(`  ${status}  ${file.path}`);
+          }
         }
-        console.log(`Run: ${history.runId}  [${history.timestamp}]`);
-        for (const file of history.files) {
-          const status = file.changed ? 'CHANGED' : 'UNCHANGED';
-          console.log(`  ${status}  ${file.path}`);
-        }
-      }
-    });
+      },
+    );
 
   // ── Plan mode commands ───────────────────────────────────────────────────
   program
-    .command('create-plan')
-    .description('Create an implementation plan without executing it')
-    .argument('<task...>', 'Task description')
-    .option('--project <name>', 'Target project')
+    .command("create-plan")
+    .description("Create an implementation plan without executing it")
+    .argument("<task...>", "Task description")
+    .option("--project <name>", "Target project")
     .action(async (taskParts: string[], options: { project?: string }) => {
       try {
-        const task = taskParts.join(' ');
-        const { runBabelPipeline } = await import('../pipeline.js');
-        const pipelineOptions: Record<string, unknown> = { mode: 'plan' };
-        if (options.project) pipelineOptions['project'] = options.project;
+        const task = taskParts.join(" ");
+        const { runBabelPipeline } = await import("../pipeline.js");
+        const pipelineOptions: Record<string, unknown> = { mode: "plan" };
+        if (options.project) pipelineOptions["project"] = options.project;
         const result = await runBabelPipeline(task, pipelineOptions as any);
         console.log(`Plan created. Run directory: ${result.runDir}`);
         if (result.manualPromptPath) {
@@ -4699,31 +5645,40 @@ Commands include:
     });
 
   program
-    .command('review-plan')
-    .description('Show plan summary from a plan run directory')
-    .argument('<plan-dir>', 'Plan run directory path')
+    .command("review-plan")
+    .description("Show plan summary from a plan run directory")
+    .argument("<plan-dir>", "Plan run directory path")
     .action(async (planDir: string) => {
       try {
-        const planPath = join(planDir, 'model_plan.json');
+        const planPath = join(planDir, "model_plan.json");
         if (!existsSync(planPath)) {
           console.error(`No plan found at ${planPath}`);
           process.exit(1);
         }
-        const plan = JSON.parse(readFileSync(planPath, 'utf-8')) as Record<string, unknown>;
-        console.log(`Plan: ${plan['task_summary'] ?? 'Unknown'}`);
+        const plan = JSON.parse(readFileSync(planPath, "utf-8")) as Record<
+          string,
+          unknown
+        >;
+        console.log(`Plan: ${plan["task_summary"] ?? "Unknown"}`);
         console.log(`Run Dir: ${planDir}`);
-        const steps = plan['minimal_action_set'] as Array<Record<string, unknown>> | undefined;
+        const steps = plan["minimal_action_set"] as
+          | Array<Record<string, unknown>>
+          | undefined;
         if (steps) {
           console.log(`\nSteps (${steps.length}):`);
           for (const step of steps) {
-            console.log(`  ${step['step']}. ${step['tool']}: ${step['target']}`);
+            console.log(
+              `  ${step["step"]}. ${step["tool"]}: ${step["target"]}`,
+            );
           }
         }
-        const allowed = plan['out_of_scope'] as string[] | undefined;
+        const allowed = plan["out_of_scope"] as string[] | undefined;
         if (allowed && allowed.length > 0) {
-          console.log(`\nOut of scope: ${allowed.join(', ')}`);
+          console.log(`\nOut of scope: ${allowed.join(", ")}`);
         }
-        console.log(`\nReview the plan above, then use "babel apply-plan ${planDir}" to execute.`);
+        console.log(
+          `\nReview the plan above, then use "babel apply-plan ${planDir}" to execute.`,
+        );
       } catch (error: any) {
         console.error(`Plan review failed: ${error.message}`);
         process.exit(1);
@@ -4731,16 +5686,18 @@ Commands include:
     });
 
   program
-    .command('apply-plan')
-    .description('Execute a saved plan in verified mode')
-    .argument('<plan-dir>', 'Plan run directory path')
-    .option('--lock <files>', 'Comma-separated locked files')
+    .command("apply-plan")
+    .description("Execute a saved plan in verified mode")
+    .argument("<plan-dir>", "Plan run directory path")
+    .option("--lock <files>", "Comma-separated locked files")
     .action(async (planDir: string, options: { lock?: string }) => {
       try {
-        const { runBabelPipeline } = await import('../pipeline.js');
-        const pipelineOptions: Record<string, unknown> = { mode: 'deep' };
+        const { runBabelPipeline } = await import("../pipeline.js");
+        const pipelineOptions: Record<string, unknown> = { mode: "deep" };
         if (options.lock)
-          pipelineOptions['lockedFiles'] = options.lock.split(',').map((f) => f.trim());
+          pipelineOptions["lockedFiles"] = options.lock
+            .split(",")
+            .map((f) => f.trim());
         const result = await runBabelPipeline(planDir, pipelineOptions as any);
         console.log(`Plan applied. Status: ${result.status}`);
         console.log(`Run directory: ${result.runDir}`);
@@ -4752,25 +5709,28 @@ Commands include:
 
   // ── Daemon commands (Phase 4A) ──────────────────────────────────────────
   program
-    .command('daemon')
-    .description('Manage the Babel background daemon')
-    .hook('preAction', (thisCommand) => {
+    .command("daemon")
+    .description("Manage the Babel background daemon")
+    .hook("preAction", (thisCommand) => {
       const opts = thisCommand.parent?.opts();
-      if (!opts?.experimental && !process.env['BABEL_DAEMON_ENABLED']) {
+      if (!opts?.experimental && !process.env["BABEL_DAEMON_ENABLED"]) {
         console.warn(
-          'Note: daemon features are under active development. Use --experimental to suppress this warning.',
+          "Note: daemon features are under active development. Use --experimental to suppress this warning.",
         );
       }
     })
     .addCommand(
-      new Command('start')
-        .description('Start the daemon process (auto-spawns if not running)')
+      new Command("start")
+        .description("Start the daemon process (auto-spawns if not running)")
         .action(async () => {
-          const { ensureDaemon, pingDaemon } = await import('../daemon/client.js');
+          const { ensureDaemon, pingDaemon } =
+            await import("../daemon/client.js");
           try {
             await ensureDaemon();
             const ping = await pingDaemon();
-            console.log(`Daemon running. PID: ${ping.pid}, Uptime: ${ping.uptime}s`);
+            console.log(
+              `Daemon running. PID: ${ping.pid}, Uptime: ${ping.uptime}s`,
+            );
           } catch (err: any) {
             console.error(`Failed to start daemon: ${err.message}`);
             process.exit(1);
@@ -4778,51 +5738,58 @@ Commands include:
         }),
     )
     .addCommand(
-      new Command('restart').description('Restart the daemon process').action(async () => {
-        const { ipcRequest } = await import('../daemon/ipc.js');
-        const { ensureDaemon, pingDaemon } = await import('../daemon/client.js');
-        try {
-          // Graceful shutdown via IPC
+      new Command("restart")
+        .description("Restart the daemon process")
+        .action(async () => {
+          const { ipcRequest } = await import("../daemon/ipc.js");
+          const { ensureDaemon, pingDaemon } =
+            await import("../daemon/client.js");
           try {
-            await ipcRequest('shutdown', undefined, { timeoutMs: 2000 });
-            console.log('Previous daemon stopped.');
-            // Brief pause to let PID file get cleaned up
-            await new Promise((r) => setTimeout(r, 500));
-          } catch {
-            /* daemon may not be running — that's fine */
+            // Graceful shutdown via IPC
+            try {
+              await ipcRequest("shutdown", undefined, { timeoutMs: 2000 });
+              console.log("Previous daemon stopped.");
+              // Brief pause to let PID file get cleaned up
+              await new Promise((r) => setTimeout(r, 500));
+            } catch {
+              /* daemon may not be running — that's fine */
+            }
+            // Auto-spawn a new one
+            await ensureDaemon();
+            const ping = await pingDaemon();
+            console.log(`Daemon restarted. PID: ${ping.pid}`);
+          } catch (err: any) {
+            console.error(`Failed to restart daemon: ${err.message}`);
+            process.exit(1);
           }
-          // Auto-spawn a new one
-          await ensureDaemon();
-          const ping = await pingDaemon();
-          console.log(`Daemon restarted. PID: ${ping.pid}`);
-        } catch (err: any) {
-          console.error(`Failed to restart daemon: ${err.message}`);
-          process.exit(1);
-        }
-      }),
+        }),
     )
     .addCommand(
-      new Command('stop').description('Stop the daemon process').action(async () => {
-        const { stopDaemon } = await import('../daemon.js');
-        stopDaemon();
-      }),
+      new Command("stop")
+        .description("Stop the daemon process")
+        .action(async () => {
+          const { stopDaemon } = await import("../daemon.js");
+          stopDaemon();
+        }),
     )
     .addCommand(
-      new Command('status')
-        .description('Show daemon status')
-        .option('--json', 'Emit structured JSON only')
+      new Command("status")
+        .description("Show daemon status")
+        .option("--json", "Emit structured JSON only")
         .action(async (options: { json?: boolean }) => {
-          const { getDaemonStatus } = await import('../daemon.js');
+          const { getDaemonStatus } = await import("../daemon.js");
           const status = getDaemonStatus();
           if (options.json) {
             console.log(JSON.stringify(status, null, 2));
           } else {
-            console.log(`Daemon: ${status.running ? 'RUNNING' : 'STOPPED'}`);
+            console.log(`Daemon: ${status.running ? "RUNNING" : "STOPPED"}`);
             if (status.running) {
               console.log(`  PID: ${status.pid}`);
-              console.log(`  Uptime: ${Math.floor(status.uptime / 60)}m ${status.uptime % 60}s`);
+              console.log(
+                `  Uptime: ${Math.floor(status.uptime / 60)}m ${status.uptime % 60}s`,
+              );
               console.log(`  Queue: ${status.queueSize} tasks`);
-              console.log(`  Active: ${status.activeTask ?? '(idle)'}`);
+              console.log(`  Active: ${status.activeTask ?? "(idle)"}`);
             }
           }
         }),
@@ -4830,15 +5797,24 @@ Commands include:
 
   // ── Headless execution (Phase 4B) ───────────────────────────────────────
   program
-    .command('exec')
-    .description('Execute a task in headless/CI mode (non-interactive, JSON output)')
-    .argument('<task...>', 'Task description')
-    .option('--project <name>', 'Target project')
-    .option('--mode <mode>', 'Pipeline mode: deep (or chat | chat-headless | plan)', 'deep')
-    .option('--background', 'Enqueue as background task via daemon')
-    .option('--budget <tokens>', 'Token budget ceiling')
-    .option('--reasoning-effort <level>', 'Model reasoning effort: low | medium | high')
-    .option('--json', 'Emit structured JSON only')
+    .command("exec")
+    .description(
+      "Execute a task in headless/CI mode (non-interactive, JSON output)",
+    )
+    .argument("<task...>", "Task description")
+    .option("--project <name>", "Target project")
+    .option(
+      "--mode <mode>",
+      "Pipeline mode: deep (or chat | chat-headless | plan)",
+      "deep",
+    )
+    .option("--background", "Enqueue as background task via daemon")
+    .option("--budget <tokens>", "Token budget ceiling")
+    .option(
+      "--reasoning-effort <level>",
+      "Model reasoning effort: low | medium | high",
+    )
+    .option("--json", "Emit structured JSON only")
     .action(
       async (
         taskParts: string[],
@@ -4852,11 +5828,12 @@ Commands include:
         },
       ) => {
         try {
-          const task = taskParts.join(' ');
+          const task = taskParts.join(" ");
 
           if (options.background) {
-            const { ensureDaemon, pingDaemon } = await import('../daemon/client.js');
-            const { ipcRequest } = await import('../daemon/ipc.js');
+            const { ensureDaemon, pingDaemon } =
+              await import("../daemon/client.js");
+            const { ipcRequest } = await import("../daemon/ipc.js");
 
             // Auto-spawn daemon if not running
             try {
@@ -4871,16 +5848,20 @@ Commands include:
             }
 
             // Enqueue via IPC
-            const result = (await ipcRequest('queue.enqueue', {
+            const result = (await ipcRequest("queue.enqueue", {
               task,
-              mode: options.mode ?? 'deep',
+              mode: options.mode ?? "deep",
               projectRoot: options.project ?? null,
             })) as { job_id: string; status: string };
 
             if (options.json) {
               console.log(
                 JSON.stringify(
-                  { status: 'queued', job_id: result.job_id, job_status: result.status },
+                  {
+                    status: "queued",
+                    job_id: result.job_id,
+                    job_status: result.status,
+                  },
                   null,
                   2,
                 ),
@@ -4892,38 +5873,45 @@ Commands include:
             return;
           }
 
-          const { runBabelPipeline } = await import('../pipeline.js');
-          process.env['BABEL_HEADLESS'] = 'true';
-          if (options.budget) process.env['BABEL_TOKEN_BUDGET'] = options.budget;
+          const { runBabelPipeline } = await import("../pipeline.js");
+          process.env["BABEL_HEADLESS"] = "true";
+          if (options.budget)
+            process.env["BABEL_TOKEN_BUDGET"] = options.budget;
 
           if (options.reasoningEffort !== undefined) {
             const effort = options.reasoningEffort.toLowerCase();
-            if (effort === 'low' || effort === 'medium' || effort === 'high') {
-              process.env['BABEL_REASONING_EFFORT'] = effort;
+            if (effort === "low" || effort === "medium" || effort === "high") {
+              process.env["BABEL_REASONING_EFFORT"] = effort;
             }
           }
 
           const result = await runBabelPipeline(task, {
-            mode: (options.mode as ValidMode) ?? 'deep',
+            mode: (options.mode as ValidMode) ?? "deep",
             ...(options.project ? { project: options.project } : {}),
           });
 
           if (options.json) {
-            console.log(JSON.stringify({ status: result.status, runDir: result.runDir }, null, 2));
+            console.log(
+              JSON.stringify(
+                { status: result.status, runDir: result.runDir },
+                null,
+                2,
+              ),
+            );
           } else {
             console.log(`Status: ${result.status}`);
             console.log(`Run: ${result.runDir}`);
           }
 
           const exitCode =
-            result.status === 'COMPLETE' ||
-            result.status === 'COMPLETE_NO_MODIFICATION' ||
-            result.status === 'SMALL_FIX_COMPLETE' ||
-            result.status === 'READ_ONLY_MODE_NO_EXECUTOR'
+            result.status === "COMPLETE" ||
+            result.status === "COMPLETE_NO_MODIFICATION" ||
+            result.status === "SMALL_FIX_COMPLETE" ||
+            result.status === "READ_ONLY_MODE_NO_EXECUTOR"
               ? 0
-              : result.status === 'QA_REJECTED_MAX_LOOPS'
+              : result.status === "QA_REJECTED_MAX_LOOPS"
                 ? 2
-                : result.status === 'EXECUTOR_HALTED'
+                : result.status === "EXECUTOR_HALTED"
                   ? 1
                   : 3;
           process.exit(exitCode);
@@ -4936,14 +5924,18 @@ Commands include:
 
   // ── Goal loop (P1.1 — experimental) ────────────────────────────────────
   program
-    .command('goal')
-    .description('Run an autonomous goal loop (experimental)')
-    .argument('<goal...>', 'Goal description')
-    .option('--max-iterations <n>', 'Maximum iterations (default: 5)', '5')
-    .option('--budget <tokens>', 'Token budget ceiling')
-    .option('--mode <mode>', 'Pipeline mode: deep (or chat | chat-headless | plan)', 'deep')
-    .option('--project <name>', 'Target project')
-    .option('--json', 'Emit structured JSON only')
+    .command("goal")
+    .description("Run an autonomous goal loop (experimental)")
+    .argument("<goal...>", "Goal description")
+    .option("--max-iterations <n>", "Maximum iterations (default: 5)", "5")
+    .option("--budget <tokens>", "Token budget ceiling")
+    .option(
+      "--mode <mode>",
+      "Pipeline mode: deep (or chat | chat-headless | plan)",
+      "deep",
+    )
+    .option("--project <name>", "Target project")
+    .option("--json", "Emit structured JSON only")
     .action(
       async (
         goalParts: string[],
@@ -4956,18 +5948,23 @@ Commands include:
         },
       ) => {
         try {
-          if (!program.opts().experimental && !process.env['BABEL_DAEMON_ENABLED']) {
-            console.error('babel goal requires --experimental.');
+          if (
+            !program.opts().experimental &&
+            !process.env["BABEL_DAEMON_ENABLED"]
+          ) {
+            console.error("babel goal requires --experimental.");
             process.exit(1);
           }
 
-          const goal = goalParts.join(' ');
-          const { runGoalLoop } = await import('../services/goalLoop.js');
+          const goal = goalParts.join(" ");
+          const { runGoalLoop } = await import("../services/goalLoop.js");
 
           const result = await runGoalLoop(goal, {
             maxIterations: parsePositiveIntOption(options.maxIterations, 5),
-            ...(options.budget ? { tokenBudget: parseInt(options.budget, 10) } : {}),
-            mode: (options.mode as ValidMode) ?? 'deep',
+            ...(options.budget
+              ? { tokenBudget: parseInt(options.budget, 10) }
+              : {}),
+            mode: (options.mode as ValidMode) ?? "deep",
             ...(options.project ? { project: options.project } : {}),
           });
 
@@ -4979,14 +5976,17 @@ Commands include:
             console.log(`Iterations: ${result.iterations.length}`);
             for (const it of result.iterations) {
               const icon =
-                it.status === 'COMPLETE' ||
-                it.status === 'COMPLETE_NO_MODIFICATION' ||
-                it.status === 'SMALL_FIX_COMPLETE'
-                  ? '✅'
-                  : it.status === 'QA_REJECTED_MAX_LOOPS' || it.status === 'EXECUTOR_HALTED'
-                    ? '❌'
-                    : '⏭️';
-              console.log(`  ${icon} #${it.iteration}: ${it.status} — ${it.summary}`);
+                it.status === "COMPLETE" ||
+                it.status === "COMPLETE_NO_MODIFICATION" ||
+                it.status === "SMALL_FIX_COMPLETE"
+                  ? "✅"
+                  : it.status === "QA_REJECTED_MAX_LOOPS" ||
+                      it.status === "EXECUTOR_HALTED"
+                    ? "❌"
+                    : "⏭️";
+              console.log(
+                `  ${icon} #${it.iteration}: ${it.status} — ${it.summary}`,
+              );
             }
             if (result.finalRunDir) {
               console.log(`\nFinal run: ${result.finalRunDir}`);
@@ -4994,7 +5994,7 @@ Commands include:
             }
           }
 
-          process.exit(result.status === 'goal_met' ? 0 : 1);
+          process.exit(result.status === "goal_met" ? 0 : 1);
         } catch (error: any) {
           console.error(JSON.stringify({ error: error.message }));
           process.exit(3);
@@ -5003,31 +6003,44 @@ Commands include:
     );
 }
 
-function parsePositiveIntOption(value: string | undefined, fallback: number): number {
-  const parsed = Number.parseInt(value ?? '', 10);
+function parsePositiveIntOption(
+  value: string | undefined,
+  fallback: number,
+): number {
+  const parsed = Number.parseInt(value ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function parseReadinessProfileOption(value: string | undefined): 'fast' | 'full' | 'release' {
-  const normalized = String(value ?? 'full')
+function parseReadinessProfileOption(
+  value: string | undefined,
+): "fast" | "full" | "release" {
+  const normalized = String(value ?? "full")
     .trim()
     .toLowerCase();
-  if (normalized === 'fast' || normalized === 'full' || normalized === 'release') {
+  if (
+    normalized === "fast" ||
+    normalized === "full" ||
+    normalized === "release"
+  ) {
     return normalized;
   }
-  throw new Error(`Invalid readiness profile "${value}". Valid values: fast, full, release`);
+  throw new Error(
+    `Invalid readiness profile "${value}". Valid values: fast, full, release`,
+  );
 }
 
 export function resolveBenchmarkAnalyzeRun(
   raw: string,
   options: { benchmarksRoot?: string; suite: string },
 ): string {
-  if (raw !== 'latest') {
+  if (raw !== "latest") {
     return resolve(raw);
   }
   const workspaceRoot = dirname(BABEL_ROOT);
-  const benchmarksRoot = resolve(options.benchmarksRoot ?? join(workspaceRoot, 'benchmarks'));
-  const resultRoot = join(benchmarksRoot, 'runs', 'terminal-bench-2');
+  const benchmarksRoot = resolve(
+    options.benchmarksRoot ?? join(workspaceRoot, "benchmarks"),
+  );
+  const resultRoot = join(benchmarksRoot, "runs", "terminal-bench-2");
   if (!existsSync(resultRoot)) {
     throw buildMissingBenchmarkResultRootError({
       benchmarksRoot,
@@ -5042,7 +6055,10 @@ export function resolveBenchmarkAnalyzeRun(
       metadata: readBenchmarkResultMetadata(path),
     }))
     .filter((entry) => entry.metadata.isJobResult)
-    .filter((entry) => entry.metadata.suite === null || entry.metadata.suite === options.suite)
+    .filter(
+      (entry) =>
+        entry.metadata.suite === null || entry.metadata.suite === options.suite,
+    )
     .sort((left, right) => right.mtimeMs - left.mtimeMs)[0];
   if (!latest) {
     throw new Error(
@@ -5060,16 +6076,16 @@ function buildMissingBenchmarkResultRootError(input: {
   const loopCommand = `node .\\babel-cli\\dist\\index.js benchmark loop --readiness full --suite ${input.suite} --json`;
   const analyzeCommand = `node .\\babel-cli\\dist\\index.js benchmark analyze latest --suite ${input.suite} --json`;
   const payload = {
-    status: 'blocked',
-    reason: 'terminal_bench_result_root_missing',
+    status: "blocked",
+    reason: "terminal_bench_result_root_missing",
     error: `Terminal-Bench result root not found: ${input.resultRoot}`,
     benchmarks_root: input.benchmarksRoot,
     expected_result_root: input.resultRoot,
     suite: input.suite,
     next: [
-      'Create or configure the Terminal-Bench results root.',
-      'Run a full benchmark loop to establish the baseline.',
-      'Re-run benchmark analyze latest after the result.json exists.',
+      "Create or configure the Terminal-Bench results root.",
+      "Run a full benchmark loop to establish the baseline.",
+      "Re-run benchmark analyze latest after the result.json exists.",
     ],
     commands: {
       run_full_baseline: loopCommand,
@@ -5077,41 +6093,47 @@ function buildMissingBenchmarkResultRootError(input: {
     },
   };
   const human = [
-    'Benchmark analysis blocked',
+    "Benchmark analysis blocked",
     `Reason: Terminal-Bench result root is missing.`,
     `Expected: ${input.resultRoot}`,
-    '',
-    'Next:',
+    "",
+    "Next:",
     `- ${payload.next[0]}`,
     `- ${loopCommand}`,
     `- ${analyzeCommand}`,
-  ].join('\n');
+  ].join("\n");
   return new ActionableCommandError(String(payload.error), payload, human);
 }
 
-function collectBenchmarkResultPaths(dir: string, out: string[] = []): string[] {
+function collectBenchmarkResultPaths(
+  dir: string,
+  out: string[] = [],
+): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const fullPath = join(dir, entry.name);
     if (entry.isDirectory()) {
       collectBenchmarkResultPaths(fullPath, out);
-    } else if (entry.name === 'result.json') {
+    } else if (entry.name === "result.json") {
       out.push(fullPath);
     }
   }
   return out;
 }
 
-function readBenchmarkResultMetadata(path: string): { suite: string | null; isJobResult: boolean } {
+function readBenchmarkResultMetadata(path: string): {
+  suite: string | null;
+  isJobResult: boolean;
+} {
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const record = parsed as Record<string, unknown>;
-      const suite = record['suite'];
+      const suite = record["suite"];
       return {
-        suite: typeof suite === 'string' ? suite : null,
+        suite: typeof suite === "string" ? suite : null,
         isJobResult:
-          record['summary'] !== undefined &&
-          (Array.isArray(record['results']) || Array.isArray(record['trials'])),
+          record["summary"] !== undefined &&
+          (Array.isArray(record["results"]) || Array.isArray(record["trials"])),
       };
     }
   } catch {
