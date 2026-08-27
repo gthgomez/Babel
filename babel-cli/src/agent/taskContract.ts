@@ -19,6 +19,7 @@ import {
 } from "../authority/capabilities.js";
 import { sha256Canonical } from "../acceptance/canonical.js";
 import { deepFreeze } from "../acceptance/freeze.js";
+import { redactSecrets } from "../utils/redaction.js";
 
 export const TASK_CONTRACT_VERSION = 1 as const;
 
@@ -226,12 +227,21 @@ const DEFAULT_ALLOWED_TERMINALS: TerminalOutcome[] = [
 
 type ContractBody = Omit<
   TaskContractV1,
-  "contract_id" | "contract_hash" | "frozen" | "provenance"
+  "contract_id" | "contract_hash" | "frozen"
 >;
 
 function hashContractBody(c: ContractBody): string {
-  const { created_at: _createdAt, ...stable } = c;
-  return sha256Canonical(stable).slice(0, 32);
+  const { created_at: _createdAt, provenance, ...stable } = c;
+  const boundProvenance = {
+    records: provenance.records,
+    ...(provenance.parent_contract_id
+      ? { parent_contract_id: provenance.parent_contract_id }
+      : {}),
+  };
+  return sha256Canonical({ ...stable, provenance: boundProvenance }).slice(
+    0,
+    32,
+  );
 }
 
 function legacyContractBody(
@@ -289,25 +299,27 @@ export const TaskContractV1Schema = z
       .optional(),
     acceptance: z
       .array(
-        z.object({
-          id: z.string().min(1),
-          description: z.string().min(1),
-          type: z.enum([
-            "unit_test",
-            "integration_test",
-            "e2e",
-            "build",
-            "lint",
-            "typecheck",
-            "security",
-            "policy",
-            "manual",
-            "runtime",
-            "custom",
-          ]),
-          required: z.boolean(),
-          verification_strategy: z.string().min(1),
-        }),
+        z
+          .object({
+            id: z.string().min(1),
+            description: z.string().min(1),
+            type: z.enum([
+              "unit_test",
+              "integration_test",
+              "e2e",
+              "build",
+              "lint",
+              "typecheck",
+              "security",
+              "policy",
+              "manual",
+              "runtime",
+              "custom",
+            ]),
+            required: z.boolean(),
+            verification_strategy: z.string().min(1),
+          })
+          .strict(),
       )
       .optional(),
     created_at: z.string().datetime().optional(),
@@ -336,7 +348,15 @@ export function validateTaskContractV1(value: unknown): string[] {
           ),
       ),
     ) as ContractBody;
-    computed = hashContractBody(modernBody);
+    const candidateProvenance = candidate["provenance"];
+    const safeProvenance =
+      candidateProvenance && typeof candidateProvenance === "object"
+        ? (candidateProvenance as TaskContractV1["provenance"])
+        : ({ records: [] } as unknown as TaskContractV1["provenance"]);
+    computed = hashContractBody({
+      ...modernBody,
+      provenance: safeProvenance,
+    });
   } else {
     const legacyBody = legacyContractBody(candidate);
     computed = createHash("sha256")
@@ -351,34 +371,152 @@ export function validateTaskContractV1(value: unknown): string[] {
   )
     errors.push("contract_id");
   if (hasV1Fields) {
+    const allowedKeys = new Set([
+      "schema_version",
+      "task_id",
+      "contract_id",
+      "contract_hash",
+      "mode",
+      "task_class",
+      "goal",
+      "required_behaviors",
+      "invariants",
+      "user_request",
+      "acceptance_criteria",
+      "non_goals",
+      "scope",
+      "risk",
+      "authority",
+      "acceptance",
+      "created_at",
+      "base_sha",
+      "allowed_paths",
+      "protected_paths",
+      "verifier_requirements",
+      "budgets",
+      "allowed_effects",
+      "allowed_terminal_outcomes",
+      "baseline_reproduction",
+      "baseline_verifier_state",
+      "provenance",
+      "frozen",
+    ]);
+    for (const key of Object.keys(candidate)) {
+      if (!allowedKeys.has(key)) errors.push(`unknown.${key}`);
+    }
     const provenance = candidate["provenance"];
+    const provenanceRecordValues =
+      provenance && typeof provenance === "object"
+        ? (provenance as Record<string, unknown>)["records"]
+        : undefined;
+    const records = Array.isArray(provenanceRecordValues)
+      ? (provenanceRecordValues as Array<Record<string, unknown>>)
+      : [];
     if (
       !provenance ||
       typeof provenance !== "object" ||
-      !Array.isArray((provenance as Record<string, unknown>)["records"])
+      !Array.isArray(provenanceRecordValues)
     )
       errors.push("provenance.records");
+    for (const [index, record] of records.entries()) {
+      if (
+        !record ||
+        typeof record["kind"] !== "string" ||
+        ![
+          "user_goal",
+          "repository_policy",
+          "derived_acceptance",
+          "risk_analysis",
+          "explicit_user_authority",
+        ].includes(record["kind"]) ||
+        typeof record["ref"] !== "string"
+      ) {
+        errors.push(`provenance.records.${index}`);
+      }
+    }
     const authority = candidate["authority"] as { capabilities?: unknown };
     const capabilities = Array.isArray(authority?.capabilities)
       ? authority.capabilities
       : [];
     if (capabilities.includes("unknown"))
       errors.push("authority.capabilities.unknown");
-    const records = Array.isArray(
-      (provenance as Record<string, unknown> | null)?.["records"],
-    )
-      ? ((provenance as Record<string, unknown>)["records"] as Array<
-          Record<string, unknown>
-        >)
-      : [];
     if (
       records.some(
         (record) =>
           record["kind"] === "explicit_user_authority" &&
-          /repository|policy/i.test(String(record["ref"])),
+          (!String(record["ref"] ?? "").startsWith("user:") ||
+            typeof record["ref"] !== "string"),
       )
     ) {
       errors.push("provenance.authority_impersonation");
+    }
+    if (
+      records.some(
+        (record) =>
+          record["kind"] === "repository_policy" &&
+          String(record["ref"] ?? "").startsWith("user:"),
+      )
+    ) {
+      errors.push("provenance.policy_impersonation");
+    }
+    if (
+      (candidate["authority"] as { source?: unknown } | undefined)?.source ===
+        "explicit_user_authority" &&
+      !records.some(
+        (record) =>
+          record["kind"] === "explicit_user_authority" &&
+          typeof record["ref"] === "string" &&
+          record["ref"].startsWith("user:"),
+      )
+    ) {
+      errors.push("authority.explicit_user_authority_unbound");
+    }
+    const durableValues = [
+      candidate["goal"],
+      candidate["user_request"],
+      ...(Array.isArray(candidate["acceptance_criteria"])
+        ? candidate["acceptance_criteria"]
+        : []),
+      ...(Array.isArray(candidate["required_behaviors"])
+        ? candidate["required_behaviors"]
+        : []),
+      ...(Array.isArray(candidate["invariants"])
+        ? candidate["invariants"]
+        : []),
+      ...(Array.isArray(candidate["non_goals"]) ? candidate["non_goals"] : []),
+      ...(Array.isArray(candidate["verifier_requirements"])
+        ? candidate["verifier_requirements"]
+        : []),
+      ...(Array.isArray(provenanceRecordValues)
+        ? (provenanceRecordValues as Array<{ ref?: unknown }>).map(
+            (record) => record.ref,
+          )
+        : []),
+    ];
+    if (
+      durableValues.some(
+        (item) => typeof item === "string" && hasDurableSecret(item),
+      )
+    )
+      errors.push("durable_secret");
+    const acceptance = candidate["acceptance"];
+    const criteria = candidate["acceptance_criteria"];
+    if (Array.isArray(acceptance) && Array.isArray(criteria)) {
+      const ids = acceptance.map((item) =>
+        String((item as Record<string, unknown>)["id"]),
+      );
+      if (new Set(ids).size !== ids.length)
+        errors.push("acceptance.duplicate_id");
+      if (
+        acceptance.length !== criteria.length ||
+        acceptance.some(
+          (item, index) =>
+            (item as Record<string, unknown>)["description"] !==
+            criteria[index],
+        )
+      ) {
+        errors.push("acceptance.reconciliation");
+      }
     }
   }
   return errors;
@@ -401,19 +539,56 @@ export function validateTaskContractV1ForCompletion(value: unknown): string[] {
 export function buildTaskContractV1(
   input: BuildTaskContractInput,
 ): TaskContractV1 {
-  const acceptanceCriteria = [...(input.acceptance_criteria ?? [])];
+  const rawAcceptance = input.acceptance ?? [];
+  const acceptanceCriteria = [
+    ...(input.acceptance_criteria ??
+      (input.acceptance ? rawAcceptance.map((item) => item.description) : [])),
+  ].map((value) => durableText(value));
   const acceptance = [
-    ...(input.acceptance ??
-      acceptanceCriteria.map((description, index) => ({
-        id: `acceptance:${index + 1}`,
-        description,
-        type: "custom" as const,
-        required: true,
-        verification_strategy:
-          "independent evidence bound to the candidate revision",
-      }))),
+    ...(input.acceptance
+      ? rawAcceptance.map((item) => ({
+          ...item,
+          description: durableText(item.description),
+        }))
+      : acceptanceCriteria.map((description, index) => ({
+          id: `acceptance:${index + 1}`,
+          description,
+          type: "custom" as const,
+          required: true,
+          verification_strategy:
+            "independent evidence bound to the candidate revision",
+        }))),
   ];
+  if (new Set(acceptanceCriteria).size !== acceptanceCriteria.length) {
+    throw new Error("TaskContract acceptance criteria must be unique.");
+  }
+  if (
+    acceptance.length !== acceptanceCriteria.length ||
+    acceptance.some(
+      (item, index) => item.description !== acceptanceCriteria[index],
+    )
+  ) {
+    throw new Error(
+      "TaskContract acceptance must reconcile with acceptance_criteria.",
+    );
+  }
   const createdAt = new Date().toISOString();
+  const provenanceRecords = [
+    { kind: "user_goal" as const, ref: "user_request" },
+    { kind: "derived_acceptance" as const, ref: "acceptance_criteria" },
+    ...(input.provenance ?? []),
+  ].map((record) => ({
+    ...record,
+    ref: durableText(record.ref),
+  }));
+  const provenance = {
+    created_at: createdAt,
+    source: durableText(input.source ?? "taskContract.build"),
+    records: provenanceRecords,
+    ...(input.parent_contract_id
+      ? { parent_contract_id: durableText(input.parent_contract_id) }
+      : {}),
+  };
   const body = {
     schema_version: TASK_CONTRACT_VERSION,
     task_id:
@@ -421,12 +596,14 @@ export function buildTaskContractV1(
       `task:${sha256Canonical({ mode: input.mode, user_request: input.user_request }).slice(0, 24)}`,
     mode: input.mode,
     task_class: input.task_class ?? "unknown",
-    goal: input.goal ?? input.user_request,
-    required_behaviors: [...(input.required_behaviors ?? acceptanceCriteria)],
-    invariants: [...(input.invariants ?? [])],
-    user_request: input.user_request,
+    goal: durableText(input.goal ?? input.user_request),
+    required_behaviors: [
+      ...(input.required_behaviors ?? acceptanceCriteria),
+    ].map(durableText),
+    invariants: [...(input.invariants ?? [])].map(durableText),
+    user_request: durableText(input.user_request),
     acceptance_criteria: acceptanceCriteria,
-    non_goals: [...(input.non_goals ?? [])],
+    non_goals: [...(input.non_goals ?? [])].map(durableText),
     scope: {
       paths: [...(input.scope?.paths ?? input.allowed_paths ?? ["**/*"])],
       ...(input.scope?.repository
@@ -445,7 +622,9 @@ export function buildTaskContractV1(
     base_sha: input.base_sha ?? null,
     allowed_paths: [...(input.allowed_paths ?? ["**/*"])],
     protected_paths: [...(input.protected_paths ?? [])],
-    verifier_requirements: [...(input.verifier_requirements ?? [])],
+    verifier_requirements: [...(input.verifier_requirements ?? [])].map(
+      durableText,
+    ),
     budgets: {
       ...(input.max_turns !== undefined ? { max_turns: input.max_turns } : {}),
       ...(input.max_tokens !== undefined
@@ -467,29 +646,18 @@ export function buildTaskContractV1(
       ...(input.allowed_terminal_outcomes ?? DEFAULT_ALLOWED_TERMINALS),
     ],
     ...(input.baseline_reproduction
-      ? { baseline_reproduction: input.baseline_reproduction }
+      ? { baseline_reproduction: durableText(input.baseline_reproduction) }
       : {}),
     ...(input.baseline_verifier_state
       ? { baseline_verifier_state: input.baseline_verifier_state }
       : {}),
   };
-  const contract_hash = hashContractBody(body);
+  const contract_hash = hashContractBody({ ...body, provenance });
   return {
     ...body,
     contract_id: `tc1:${contract_hash.slice(0, 16)}:${randomUUID().slice(0, 8)}`,
     contract_hash,
-    provenance: {
-      created_at: createdAt,
-      source: input.source ?? "taskContract.build",
-      records: [
-        { kind: "user_goal", ref: "user_request" },
-        { kind: "derived_acceptance", ref: "acceptance_criteria" },
-        ...(input.provenance ?? []),
-      ],
-      ...(input.parent_contract_id
-        ? { parent_contract_id: input.parent_contract_id }
-        : {}),
-    },
+    provenance,
     frozen: false,
   };
 }
@@ -520,10 +688,6 @@ export function withAcceptanceCriteria(
     required_behaviors: contract.required_behaviors,
     invariants: contract.invariants,
     acceptance_criteria: criteria,
-    acceptance: contract.acceptance.map((requirement, index) => ({
-      ...requirement,
-      description: criteria[index] ?? requirement.description,
-    })),
     non_goals: contract.non_goals,
     allowed_paths: contract.allowed_paths,
     protected_paths: contract.protected_paths,
@@ -552,6 +716,28 @@ export function withAcceptanceCriteria(
     parent_contract_id: contract.contract_id,
   });
   return next;
+}
+
+const DURABLE_SECRET_PATTERNS = [
+  /\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\s*[:=]\s*[^\s,;]+/iu,
+  /\bBearer\s+[A-Za-z0-9._~+/-]{12,}/u,
+  /\b(?:sk|rk)-[A-Za-z0-9][A-Za-z0-9_-]{16,}\b/u,
+  /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/u,
+];
+
+function durableText(value: string): string {
+  const redacted = redactSecrets(value);
+  if (hasDurableSecret(redacted)) {
+    throw new Error("TaskContract contains secret-like durable content.");
+  }
+  return redacted;
+}
+
+function hasDurableSecret(value: string): boolean {
+  return DURABLE_SECRET_PATTERNS.some((pattern) => {
+    pattern.lastIndex = 0;
+    return pattern.test(value);
+  });
 }
 
 /** Whether a terminal outcome is allowed by the contract. */

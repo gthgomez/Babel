@@ -2,7 +2,19 @@ import {
   RevisionBoundReceipt,
   RevisionManager,
 } from "./revisionBoundReceipt.js";
-import type { TaskContractV1 } from "../agent/taskContract.js";
+import {
+  validateTaskContractV1ForCompletion,
+  type TaskContractV1,
+} from "../agent/taskContract.js";
+import {
+  validateAcceptanceBundleForContractV1,
+  type AcceptanceBundleV1,
+} from "../acceptance/escrow.js";
+import { canonicalJson } from "../acceptance/canonical.js";
+import { redactEvidenceValue } from "../utils/redaction.js";
+
+export const EVIDENCE_GRAPH_SCHEMA_VERSION = 1 as const;
+export const EVIDENCE_GRAPH_MAX_BYTES = 256 * 1024;
 
 export type EvidenceNodeType =
   | "claim"
@@ -54,6 +66,23 @@ export interface EvidenceNode {
     | "verifier"
     | "observer"
     | "system";
+  /** Structured identity; producer_role alone is never a certification credential. */
+  producer_identity?: EvidenceProducerIdentityV1;
+}
+
+export type EvidenceProducerRole =
+  | "builder"
+  | "reviewer"
+  | "breaker"
+  | "verifier"
+  | "observer"
+  | "system";
+
+export interface EvidenceProducerIdentityV1 {
+  kind: "agent_endpoint" | "execution_identity";
+  endpoint_id: string;
+  role: EvidenceProducerRole;
+  execution_domain: string;
 }
 
 export interface EvidenceEdge {
@@ -78,24 +107,101 @@ export interface CompletionEvaluationV1 {
   errors: string[];
 }
 
-function isPassingEvidence(data: unknown): boolean {
-  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
-  const record = data as Record<string, unknown>;
-  if (record["exit_code"] !== undefined && record["exit_code"] !== 0)
-    return false;
-  if (record["passed"] === true || record["verified"] === true) return true;
-  return [
-    "pass",
-    "passed",
-    "success",
-    "succeeded",
-    "verified",
-    "green",
-  ].includes(
-    String(
-      record["status"] ?? record["result"] ?? record["outcome"],
-    ).toLowerCase(),
-  );
+export interface EvidenceGraphDocumentV1 {
+  schema_version: typeof EVIDENCE_GRAPH_SCHEMA_VERSION;
+  task_id: string;
+  contract_hash: string;
+  nodes: EvidenceNode[];
+  edges: EvidenceEdge[];
+}
+
+const CERTIFYING_TYPES: ReadonlySet<EvidenceNodeType> = new Set([
+  "test_result",
+  "build_result",
+  "command_result",
+  "verifier_receipt",
+  "runtime_observation",
+  "ci_result",
+]);
+
+function producerIdentityError(node: EvidenceNode): string | undefined {
+  const identity = node.producer_identity;
+  if (!identity || typeof identity !== "object")
+    return "certifying evidence requires a structured producer identity";
+  if (
+    !["agent_endpoint", "execution_identity"].includes(identity.kind) ||
+    typeof identity.endpoint_id !== "string" ||
+    !/^[A-Za-z0-9][A-Za-z0-9:_./-]{2,127}$/.test(identity.endpoint_id) ||
+    typeof identity.execution_domain !== "string" ||
+    identity.execution_domain.trim().length === 0 ||
+    !["verifier", "observer", "system"].includes(identity.role)
+  ) {
+    return "certifying evidence producer identity is malformed or not independent";
+  }
+  if (node.producer_role !== undefined && node.producer_role !== identity.role)
+    return "producer_role does not match producer_identity";
+  return undefined;
+}
+
+function requirementAcceptsNode(
+  type: EvidenceNodeType,
+  requirementType: string,
+): boolean {
+  if (type === "test_result")
+    return ["unit_test", "integration_test", "e2e", "custom"].includes(
+      requirementType,
+    );
+  if (type === "build_result") return requirementType === "build";
+  if (type === "ci_result")
+    return [
+      "security",
+      "policy",
+      "custom",
+      "unit_test",
+      "integration_test",
+      "e2e",
+      "build",
+    ].includes(requirementType);
+  if (type === "runtime_observation") return requirementType === "runtime";
+  if (type === "command_result") return requirementType === "custom";
+  return true;
+}
+
+function certifyingEvidenceError(
+  node: EvidenceNode,
+  requirementType: string,
+): string | undefined {
+  if (!CERTIFYING_TYPES.has(node.type))
+    return `${node.type} is not a certifying evidence type`;
+  const identityError = producerIdentityError(node);
+  if (identityError) return identityError;
+  if (!requirementAcceptsNode(node.type, requirementType))
+    return `${node.type} is incompatible with ${requirementType}`;
+  if (!node.data || typeof node.data !== "object" || Array.isArray(node.data))
+    return "certifying evidence data is malformed";
+  const data = node.data as Record<string, unknown>;
+  if (node.type !== "runtime_observation" && data["exit_code"] !== 0)
+    return "certifying evidence has a non-zero exit_code";
+  if (node.type === "verifier_receipt") {
+    if (!data["boundRevision"] || data["exitCode"] !== 0)
+      return "verifier receipt is not a passing revision-bound receipt";
+    return undefined;
+  }
+  const status = String(data["status"] ?? "").toLowerCase();
+  const passingStatus =
+    node.type === "ci_result"
+      ? status === "success" || status === "passed"
+      : node.type === "runtime_observation"
+        ? status === "observed" && data["passed"] === true
+        : status === "passed" || status === "success";
+  if (!passingStatus && data["passed"] !== true)
+    return "certifying evidence does not contain a typed passing result";
+  if (
+    node.type === "command_result" &&
+    typeof data["verifier_kind"] !== "string"
+  )
+    return "command_result requires an explicit verifier_kind";
+  return undefined;
 }
 
 function bindingError(
@@ -104,6 +210,7 @@ function bindingError(
     taskId: string;
     contractHash: string;
     repository: string;
+    baseSha: string | null;
     candidateSha: string;
   },
 ): string | undefined {
@@ -114,6 +221,8 @@ function bindingError(
     return "evidence contract_hash does not match";
   if (binding.repository !== input.repository)
     return "evidence repository does not match";
+  if (binding.base_sha !== input.baseSha)
+    return "evidence base_sha does not match";
   if (binding.candidate_sha !== input.candidateSha)
     return "evidence candidate_sha is stale";
   return undefined;
@@ -152,6 +261,23 @@ export class EvidenceGraph {
   validate(): { valid: boolean; errors: string[] } {
     const errors: string[] = [];
     for (const node of this.nodes.values()) {
+      if (
+        !node.id ||
+        (!CERTIFYING_TYPES.has(node.type) &&
+          ![
+            "claim",
+            "patch",
+            "env_state",
+            "critic_approval",
+            "source_reference",
+            "artifact",
+            "review_finding",
+            "challenge",
+            "contract_requirement",
+          ].includes(node.type))
+      ) {
+        errors.push(`Invalid evidence node: ${node.id}`);
+      }
       for (const parentId of node.parents) {
         if (!this.nodes.has(parentId))
           errors.push(`Dangling parent: ${node.id} -> ${parentId}`);
@@ -210,13 +336,96 @@ export class EvidenceGraph {
   }
 }
 
+export function serializeEvidenceGraphV1(input: {
+  graph: EvidenceGraph;
+  task_id: string;
+  contract_hash: string;
+}): string {
+  const validation = input.graph.validate();
+  if (!validation.valid)
+    throw new Error(`Invalid evidence graph: ${validation.errors.join(", ")}`);
+  const document: EvidenceGraphDocumentV1 = {
+    schema_version: EVIDENCE_GRAPH_SCHEMA_VERSION,
+    task_id: input.task_id,
+    contract_hash: input.contract_hash,
+    nodes: redactEvidenceValue(Array.from(input.graph.getNodesMap().values())),
+    edges: input.graph.getEdges(),
+  };
+  const serialized = `${canonicalJson(document)}\n`;
+  if (Buffer.byteLength(serialized, "utf8") > EVIDENCE_GRAPH_MAX_BYTES)
+    throw new Error(
+      `Evidence graph exceeds ${EVIDENCE_GRAPH_MAX_BYTES} bytes.`,
+    );
+  return serialized;
+}
+
+export function parseEvidenceGraphV1(raw: string): EvidenceGraphDocumentV1 {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw) as unknown;
+  } catch (error) {
+    throw new Error(
+      `Invalid evidence graph JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Invalid evidence graph document.");
+  const document = value as Partial<EvidenceGraphDocumentV1>;
+  if (canonicalJson(redactEvidenceValue(value)) !== canonicalJson(value))
+    throw new Error("Evidence graph contains durable secret-like content.");
+  if (
+    document.schema_version !== EVIDENCE_GRAPH_SCHEMA_VERSION ||
+    typeof document.task_id !== "string" ||
+    typeof document.contract_hash !== "string" ||
+    !Array.isArray(document.nodes) ||
+    !Array.isArray(document.edges)
+  ) {
+    throw new Error("Invalid evidence graph schema.");
+  }
+  const graph = new EvidenceGraph();
+  for (const node of document.nodes) graph.addNode(node);
+  for (const edge of document.edges) graph.addEdge(edge);
+  const validation = graph.validate();
+  if (!validation.valid)
+    throw new Error(`Invalid evidence graph: ${validation.errors.join(", ")}`);
+  return document as EvidenceGraphDocumentV1;
+}
+
 /** Deterministic V1 gate: required acceptance needs current, independent evidence. */
 export function evaluateCompletionGateV1(input: {
   contract: TaskContractV1;
   graph: EvidenceGraph;
   repository: string;
   candidate_sha: string;
+  acceptance_bundle?: AcceptanceBundleV1;
 }): CompletionEvaluationV1 {
+  const contractErrors = validateTaskContractV1ForCompletion(input.contract);
+  if (contractErrors.length > 0) {
+    return {
+      status: "UNKNOWN",
+      verified: false,
+      satisfied_requirements: [],
+      missing_requirements: [],
+      errors: contractErrors.map((error) => `contract:${error}`),
+    };
+  }
+  const bundleErrors = input.acceptance_bundle
+    ? validateAcceptanceBundleForContractV1(
+        input.acceptance_bundle,
+        input.contract,
+      )
+    : [];
+  if (bundleErrors.length > 0) {
+    return {
+      status: "UNKNOWN",
+      verified: false,
+      satisfied_requirements: [],
+      missing_requirements: input.contract.acceptance
+        .filter((requirement) => requirement.required)
+        .map((requirement) => requirement.id),
+      errors: bundleErrors.map((error) => `acceptance_bundle:${error}`),
+    };
+  }
   const graphValidation = input.graph.validate();
   const errors = [...graphValidation.errors];
   const required = input.contract.acceptance.filter(
@@ -228,33 +437,20 @@ export function evaluateCompletionGateV1(input: {
   let hasContradiction = false;
 
   for (const requirement of required) {
-    const candidates = input.graph
-      .getNodesByType("test_result")
-      .concat(input.graph.getNodesByType("build_result"))
-      .concat(input.graph.getNodesByType("command_result"))
-      .concat(input.graph.getNodesByType("verifier_receipt"))
-      .concat(input.graph.getNodesByType("runtime_observation"))
-      .concat(input.graph.getNodesByType("ci_result"))
-      .concat(input.graph.getNodesByType("source_reference"))
-      .concat(input.graph.getNodesByType("artifact"))
-      .concat(input.graph.getNodesByType("challenge"))
-      .concat(input.graph.getNodesByType("review_finding"))
-      .filter((node) => node.binding?.requirement_id === requirement.id);
+    const candidates = Array.from(input.graph.getNodesMap().values()).filter(
+      (node) => node.binding?.requirement_id === requirement.id,
+    );
     if (candidates.length === 0) {
       missing.push(requirement.id);
       continue;
     }
     let supported = false;
     for (const node of candidates) {
-      if (node.producer_role === "builder") {
-        hasUnknown = true;
-        errors.push(`${node.id}: builder evidence cannot self-certify`);
-        continue;
-      }
       const mismatch = bindingError(node.binding, {
         taskId: input.contract.task_id,
         contractHash: input.contract.contract_hash,
         repository: input.repository,
+        baseSha: input.contract.base_sha,
         candidateSha: input.candidate_sha,
       });
       if (mismatch) {
@@ -262,9 +458,27 @@ export function evaluateCompletionGateV1(input: {
         errors.push(`${node.id}: ${mismatch}`);
         continue;
       }
-      if (!isPassingEvidence(node.data)) {
-        hasContradiction = true;
-        errors.push(`${node.id}: required evidence is failed or contradictory`);
+      const certificationError = certifyingEvidenceError(
+        node,
+        requirement.type,
+      );
+      if (certificationError) {
+        if (
+          CERTIFYING_TYPES.has(node.type) &&
+          typeof node.data === "object" &&
+          node.data !== null &&
+          !Array.isArray(node.data) &&
+          (((node.data as Record<string, unknown>)["exit_code"] !== undefined &&
+            (node.data as Record<string, unknown>)["exit_code"] !== 0) ||
+            String(
+              (node.data as Record<string, unknown>)["status"] ?? "",
+            ).toLowerCase() === "failed")
+        ) {
+          hasContradiction = true;
+        } else {
+          hasUnknown = true;
+        }
+        errors.push(`${node.id}: ${certificationError}`);
         continue;
       }
       supported = true;

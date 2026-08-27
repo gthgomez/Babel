@@ -7,9 +7,14 @@ import test from "node:test";
 import {
   buildTaskContractV1,
   freezeTaskContract,
+  withAcceptanceCriteria,
   validateTaskContractV1,
   validateTaskContractV1ForCompletion,
 } from "./taskContract.js";
+import {
+  buildAcceptanceBundleV1,
+  validateAcceptanceBundleForContractV1,
+} from "../acceptance/escrow.js";
 import {
   createTaskEventJournal,
   parseTaskEventJournal,
@@ -180,6 +185,12 @@ function evidenceGraph(candidateSha = "candidate-a"): EvidenceGraph {
       requirement_id: "acceptance:1",
     },
     producer_role: "verifier",
+    producer_identity: {
+      kind: "agent_endpoint",
+      endpoint_id: "verifier:test",
+      role: "verifier",
+      execution_domain: "isolated-verifier",
+    },
   });
   return graph;
 }
@@ -230,6 +241,99 @@ test("EvidenceGraph completion gate rejects consensus, builder claims, stale SHA
     false,
   );
 
+  const genericSuccess = new EvidenceGraph();
+  for (const type of ["artifact", "challenge", "review_finding"] as const) {
+    genericSuccess.addNode({
+      id: type,
+      type,
+      data: { status: "success", verified: true },
+      parents: [],
+      binding: {
+        task_id: c.task_id,
+        contract_hash: c.contract_hash,
+        repository: "repo",
+        base_sha: c.base_sha,
+        candidate_sha: "candidate-a",
+        requirement_id: "acceptance:1",
+      },
+      producer_role: "verifier",
+      producer_identity: {
+        kind: "agent_endpoint",
+        endpoint_id: "verifier:test",
+        role: "verifier",
+        execution_domain: "isolated-verifier",
+      },
+    });
+  }
+  assert.notEqual(
+    evaluateCompletionGateV1({
+      contract: c,
+      graph: genericSuccess,
+      repository: "repo",
+      candidate_sha: "candidate-a",
+    }).status,
+    "VERIFIED",
+  );
+
+  for (const bindingChange of [
+    { task_id: "task:other" },
+    { contract_hash: "f".repeat(32) },
+    { repository: "other-repo" },
+    { candidate_sha: "candidate-old" },
+  ]) {
+    const stale = evidenceGraph();
+    stale.getNode("test")!.binding = {
+      ...stale.getNode("test")!.binding!,
+      ...bindingChange,
+    };
+    assert.notEqual(
+      evaluateCompletionGateV1({
+        contract: c,
+        graph: stale,
+        repository: "repo",
+        candidate_sha: "candidate-a",
+      }).status,
+      "VERIFIED",
+    );
+  }
+
+  const malformedResult = evidenceGraph();
+  malformedResult.getNode("test")!.data = { status: "success" };
+  assert.notEqual(
+    evaluateCompletionGateV1({
+      contract: c,
+      graph: malformedResult,
+      repository: "repo",
+      candidate_sha: "candidate-a",
+    }).status,
+    "VERIFIED",
+  );
+
+  const missingIdentity = evidenceGraph();
+  const testNode = missingIdentity.getNode("test")!;
+  delete testNode.producer_identity;
+  assert.notEqual(
+    evaluateCompletionGateV1({
+      contract: c,
+      graph: missingIdentity,
+      repository: "repo",
+      candidate_sha: "candidate-a",
+    }).status,
+    "VERIFIED",
+  );
+
+  const wrongBase = evidenceGraph();
+  wrongBase.getNode("test")!.binding!.base_sha = "wrong-base";
+  assert.notEqual(
+    evaluateCompletionGateV1({
+      contract: c,
+      graph: wrongBase,
+      repository: "repo",
+      candidate_sha: "candidate-a",
+    }).status,
+    "VERIFIED",
+  );
+
   assert.equal(
     evaluateCompletionGateV1({
       contract: c,
@@ -264,6 +368,12 @@ test("EvidenceGraph completion gate rejects consensus, builder claims, stale SHA
       candidate_sha: "candidate-a",
       requirement_id: "acceptance:1",
     },
+    producer_identity: {
+      kind: "agent_endpoint",
+      endpoint_id: "verifier:test",
+      role: "verifier",
+      execution_domain: "isolated-verifier",
+    },
   });
   assert.equal(
     evaluateCompletionGateV1({
@@ -292,6 +402,34 @@ test("EvidenceGraph completion gate rejects consensus, builder claims, stale SHA
     }).verified,
     false,
   );
+
+  const invalidContract = { ...c, contract_hash: "0".repeat(32) };
+  assert.equal(
+    evaluateCompletionGateV1({
+      contract: invalidContract,
+      graph: evidenceGraph(),
+      repository: "repo",
+      candidate_sha: "candidate-a",
+    }).status,
+    "UNKNOWN",
+  );
+
+  const spoofed = evidenceGraph();
+  spoofed.getNode("test")!.producer_identity = {
+    kind: "agent_endpoint",
+    endpoint_id: "verifier:test",
+    role: "builder",
+    execution_domain: "isolated-verifier",
+  };
+  assert.notEqual(
+    evaluateCompletionGateV1({
+      contract: c,
+      graph: spoofed,
+      repository: "repo",
+      candidate_sha: "candidate-a",
+    }).status,
+    "VERIFIED",
+  );
 });
 
 test("Breaker is independent and read-only, and outputs structured counterexamples", () => {
@@ -304,6 +442,12 @@ test("Breaker is independent and read-only, and outputs structured counterexampl
   });
   assert.equal(breaker.mutation_allowed, false);
   assert.throws(() => assertBreakerReadOnly(["edit_task_files"]));
+  assert.throws(() => assertBreakerReadOnly(["run_tests"]));
+  assert.doesNotThrow(() =>
+    assertBreakerReadOnly(["run_tests"], {
+      execution_domain: "isolated-sandbox",
+    }),
+  );
   const finding = createBreakerFindingV1({
     finding_id: "finding:1",
     severity: "high",
@@ -316,6 +460,73 @@ test("Breaker is independent and read-only, and outputs structured counterexampl
   });
   assert.equal(finding.status, "reproduced");
   assert.equal("reasoning" in finding, false);
+});
+
+test("acceptance escrow partitions frozen acceptance and restricted criteria gate completion", () => {
+  const c = contract();
+  const bundle = buildAcceptanceBundleV1({
+    taskContract: c,
+    builder_visible: [],
+    restricted: [...c.acceptance],
+  });
+  assert.deepEqual(validateAcceptanceBundleForContractV1(bundle, c), []);
+  assert.throws(() =>
+    buildAcceptanceBundleV1({
+      taskContract: c,
+      builder_visible: [],
+      restricted: [{ ...c.acceptance[0]!, description: "drift" }],
+    }),
+  );
+  const graph = evidenceGraph();
+  const missingBundle = {
+    ...bundle,
+    builder_visible: [],
+    restricted: [],
+  };
+  const missing = evaluateCompletionGateV1({
+    contract: c,
+    graph,
+    repository: "repo",
+    candidate_sha: "candidate-a",
+    acceptance_bundle: missingBundle,
+  });
+  assert.notEqual(missing.status, "VERIFIED");
+});
+
+test("acceptance reconciliation creates new immutable structured requirements", () => {
+  const c = buildTaskContractV1({
+    mode: "deep",
+    user_request: "acceptance reconciliation",
+    acceptance_criteria: ["one"],
+  });
+  const appended = withAcceptanceCriteria(c, ["one", "two"]);
+  assert.deepEqual(
+    appended.acceptance.map((item) => item.description),
+    ["one", "two"],
+  );
+  assert.notEqual(appended.contract_hash, c.contract_hash);
+  assert.throws(() =>
+    withAcceptanceCriteria(freezeTaskContract(c), ["changed"]),
+  );
+});
+
+test("contract validation fails closed for provenance tampering and durable secrets", () => {
+  const c = contract();
+  const tampered = {
+    ...c,
+    provenance: {
+      ...c.provenance,
+      records: [...c.provenance.records, { kind: "user_goal", ref: "changed" }],
+    },
+  };
+  assert.ok(validateTaskContractV1(tampered).includes("contract_hash"));
+  const secret = ["sk", "-durable-secret-value-that-must-not-persist"].join("");
+  const redacted = buildTaskContractV1({
+    mode: "deep",
+    user_request: `Do not persist ${secret}`,
+    acceptance_criteria: ["a verifier passes"],
+  });
+  assert.equal(redacted.user_request.includes(secret), false);
 });
 
 test("AgentEndpointV1 normalizes model, harness, domain, and existing capability vocabulary", () => {
@@ -392,8 +603,14 @@ test("replay manifests redact secrets, tolerate unsupported environment values, 
   try {
     const featureApiKeyField = ["api", "key"].join("_");
     const environmentApiKeyField = "API_" + "KEY";
-    const fakeFeatureApiKey = ["sk", "-feature-secret-that-must-not-persist"].join("");
-    const fakeEnvironmentApiKey = ["sk", "-secret-value-that-must-not-persist"].join("");
+    const fakeFeatureApiKey = [
+      "sk",
+      "-feature-secret-that-must-not-persist",
+    ].join("");
+    const fakeEnvironmentApiKey = [
+      "sk",
+      "-secret-value-that-must-not-persist",
+    ].join("");
     const manifest = buildReplayManifestV1({
       task_id: "task:test-foundations",
       contract_hash: contract().contract_hash,

@@ -76,6 +76,34 @@ function requirementIds(
   return requirements.map((requirement) => requirement.id);
 }
 
+/** Validate that a persisted bundle is an exact partition of frozen acceptance. */
+export function validateAcceptanceBundleForContractV1(
+  bundle: AcceptanceBundleV1,
+  contract: TaskContractV1,
+): string[] {
+  const errors = validateAcceptanceBundleV1(bundle);
+  if (bundle.task_id !== contract.task_id) errors.push("task_id");
+  if (bundle.contract_hash !== contract.contract_hash)
+    errors.push("contract_hash");
+  const expected = new Map(
+    contract.acceptance.map((requirement) => [
+      requirement.id,
+      canonicalJson(requirement),
+    ]),
+  );
+  const actual = [...bundle.builder_visible, ...bundle.restricted];
+  if (actual.length !== expected.size) errors.push("acceptance.partition");
+  for (const requirement of actual) {
+    if (expected.get(requirement.id) !== canonicalJson(requirement))
+      errors.push(`acceptance.drift.${requirement.id}`);
+  }
+  for (const id of expected.keys()) {
+    if (!actual.some((requirement) => requirement.id === id))
+      errors.push(`acceptance.missing.${id}`);
+  }
+  return [...new Set(errors)];
+}
+
 function assertBoundTaskContract(contract: TaskContractV1): void {
   if (
     contract.schema_version !== TASK_CONTRACT_VERSION ||
@@ -103,6 +131,12 @@ export function buildAcceptanceBundleV1(input: {
     ...(input.builder_visible ?? input.taskContract.acceptance),
   ];
   const restricted = [...(input.restricted ?? [])];
+  const contractById = new Map(
+    input.taskContract.acceptance.map((requirement) => [
+      requirement.id,
+      requirement,
+    ]),
+  );
   const ids = [
     ...requirementIds(builderVisible),
     ...requirementIds(restricted),
@@ -111,6 +145,22 @@ export function buildAcceptanceBundleV1(input: {
     throw new Error(
       "Acceptance escrow requirement IDs must be unique across views.",
     );
+  }
+  if (
+    ids.length !== contractById.size ||
+    ids.some((id) => !contractById.has(id))
+  ) {
+    throw new Error(
+      "Acceptance escrow must partition the frozen contract acceptance exactly.",
+    );
+  }
+  for (const requirement of [...builderVisible, ...restricted]) {
+    const canonical = contractById.get(requirement.id);
+    if (JSON.stringify(canonical) !== JSON.stringify(requirement)) {
+      throw new Error(
+        `Acceptance escrow requirement drift rejected: ${requirement.id}`,
+      );
+    }
   }
   const createdAt = input.created_at ?? new Date().toISOString();
   const base = {

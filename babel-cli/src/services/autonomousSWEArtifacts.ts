@@ -14,7 +14,10 @@ import {
   createTaskEventJournal,
   TASK_EVENTS_FILENAME,
 } from "../agent/taskEventJournal.js";
-import { EvidenceGraph } from "../evidence/evidenceGraph.js";
+import {
+  EvidenceGraph,
+  serializeEvidenceGraphV1,
+} from "../evidence/evidenceGraph.js";
 import {
   buildReplayManifestV1,
   serializeReplayManifestV1,
@@ -24,6 +27,7 @@ import {
   buildReliabilityTelemetryV1,
   RELIABILITY_TELEMETRY_FILENAME,
 } from "../telemetry/reliability.js";
+import { redactEvidenceValue } from "../utils/redaction.js";
 
 export interface AutonomousSWEArtifactPathsV1 {
   directory: string;
@@ -43,7 +47,11 @@ export interface AutonomousSWEArtifactResultV1 {
 }
 
 function writeJson(path: string, value: unknown): void {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  writeFileSync(
+    path,
+    `${JSON.stringify(redactEvidenceValue(value), null, 2)}\n`,
+    "utf8",
+  );
 }
 
 /**
@@ -173,13 +181,15 @@ export function writeAutonomousSWEArtifactsV1(input: {
     "utf8",
   );
   journal.save(paths.task_events);
-  writeJson(paths.evidence_graph, {
-    schema_version: 1,
-    task_id: taskContract.task_id,
-    contract_hash: taskContract.contract_hash,
-    nodes: Array.from(graph.getNodesMap().values()),
-    edges: graph.getEdges(),
-  });
+  writeFileSync(
+    paths.evidence_graph,
+    serializeEvidenceGraphV1({
+      graph,
+      task_id: taskContract.task_id,
+      contract_hash: taskContract.contract_hash,
+    }),
+    "utf8",
+  );
   writeFileSync(
     paths.replay_manifest,
     serializeReplayManifestV1(replayManifest),

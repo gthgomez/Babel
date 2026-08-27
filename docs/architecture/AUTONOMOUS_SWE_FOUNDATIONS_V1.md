@@ -34,7 +34,8 @@ The trust rules are:
 - Delegation does not widen the receiving environment's capabilities.
 - Repository policy is provenance, not explicit user authorization.
 - Chat transcripts are context; structured artifacts are authoritative.
-- Secrets and raw credentials are excluded from durable artifacts.
+- Durable serializers redact known credential-shaped values; contract creation
+  rejects values that remain secret-shaped when policy redaction is disabled.
 
 ## TaskContractV1
 
@@ -48,13 +49,16 @@ The authority vocabulary reuses Babel's existing `CapabilityId` registry. The
 contract does not introduce a second permission system. `freezeTaskContract`
 deep-freezes the returned object; changing requirements requires a new contract
 revision. Canonical hashing sorts object keys recursively and excludes only
-volatile identity/provenance fields. `validateTaskContractV1` retains legacy
+volatile identity and provenance metadata. Provenance records and the
+authority source are content-bound. `validateTaskContractV1` retains legacy
 V0 fixture compatibility; `validateTaskContractV1ForCompletion` is the strict
 V1 completion boundary and requires a required acceptance item.
 
 Provenance records distinguish `user_goal`, `repository_policy`,
 `derived_acceptance`, `risk_analysis`, and `explicit_user_authority`. A policy
-file cannot be relabeled as explicit user authority.
+file cannot be relabeled as explicit user authority. Explicit authority uses a
+structured `user:` provenance reference; this is structural V1 provenance, not
+a cryptographic signature.
 
 ## Acceptance escrow
 
@@ -91,10 +95,13 @@ task ID, contract hash, repository, base SHA, candidate SHA, requirement ID,
 and artifact hash. Dangling references are invalid.
 
 `evaluateCompletionGateV1` is deterministic and deliberately narrow. Required
-acceptance requirements can be satisfied only by current, passing evidence from
-an independent verifier/observer/reviewer/system role. Builder claims,
-critic approvals, majority agreement, missing provenance, stale SHA, failed
-tests, and contradictory findings cannot certify completion. Outcomes are
+acceptance requirements can be satisfied only by current, typed passing
+`test_result`, `build_result`, `ci_result`, `command_result` with an explicit
+verifier kind, `runtime_observation`, or revision-bound `verifier_receipt`.
+Those nodes require a structured verifier/observer/system producer identity; a
+free-form role label is not an identity credential. Builder claims, critic
+approvals, majority agreement, missing provenance, stale base/candidate SHA,
+failed tests, and contradictory findings cannot certify completion. Outcomes are
 `UNVERIFIED`, `PARTIAL`, `FAILED`, `VERIFIED`, or `UNKNOWN`.
 
 The existing revision-bound receipt and acceptance V0 evaluators remain in
@@ -109,10 +116,12 @@ metadata, acceptance requirements, and selected evidence. It does not require
 the builder's chain-of-thought or confidence narrative. Its question is “How
 can I make this fail?” rather than “Does this diff look correct?”
 
-The Breaker capability set is limited to inspection, search, and safe verifier
-commands. `assertBreakerReadOnly` rejects mutation, publication, credential,
-arbitrary-code, and unknown capabilities. V1 defines the role contract only;
-it does not create an autonomous swarm or a mutation-capable breaker.
+The Breaker capability set is limited to inspection, search, and verifier
+commands. Tests/builds execute project code, so the contract requires an
+`isolated-sandbox` execution domain. `assertBreakerReadOnly` rejects mutation,
+publication, credential, arbitrary-code, and unknown capabilities. V1 defines
+the role contract only; it does not create an autonomous swarm or a
+mutation-capable breaker.
 
 ## Failure attribution
 
@@ -128,7 +137,9 @@ evidence preserves alternative hypotheses instead of inventing certainty.
 inputs: task/contract/repository/SHA identity, model, harness, tool profile,
 feature flags, verification commands, outcome, failure class, and safe
 environment metadata. Known secret keys and token-shaped values are redacted;
-unsupported environment values become an explicit marker. Schema/version/hash
+unsupported environment values become an explicit marker. The task contract,
+event, and Full artifact serializers apply the same durable-secret boundary;
+raw task text is not written by the Full artifact adapter. Schema/version/hash
 errors return a failed parse result.
 
 ## Reliability telemetry and AgentEndpoint

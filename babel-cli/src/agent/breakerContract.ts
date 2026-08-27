@@ -1,4 +1,8 @@
-import type { CapabilityId } from "../authority/capabilities.js";
+import {
+  PROJECT_CODE_CAPABILITIES,
+  isCapabilityId,
+  type CapabilityId,
+} from "../authority/capabilities.js";
 import {
   validateTaskContractV1ForCompletion,
   type AcceptanceRequirementV1,
@@ -15,6 +19,9 @@ export const BREAKER_READ_ONLY_CAPABILITIES: readonly CapabilityId[] = [
   "run_lint",
   "run_typecheck",
 ];
+const BREAKER_ALLOWED_CAPABILITIES = new Set<CapabilityId>(
+  BREAKER_READ_ONLY_CAPABILITIES,
+);
 
 export type BreakerSeverity = "low" | "medium" | "high" | "critical";
 export type BreakerFindingStatus =
@@ -35,6 +42,10 @@ export interface BreakerContractV1 {
   acceptance: AcceptanceRequirementV1[];
   relevant_evidence: string[];
   capabilities: readonly CapabilityId[];
+  execution_domain: "isolated-sandbox";
+  project_code_execution: true;
+  credential_access: false;
+  publication_allowed: false;
   mutation_allowed: false;
 }
 
@@ -49,30 +60,35 @@ export interface BreakerFindingV1 {
   status: BreakerFindingStatus;
 }
 
-function isMutationCapability(capability: CapabilityId): boolean {
-  return [
-    "edit_task_files",
-    "create_task_branch",
-    "create_worktree",
-    "push_feature_branch",
-    "commit_ship_set",
-    "stage_ship_set",
-    "pr_create_draft",
-    "merge",
-    "production_deploy",
-    "credential_access",
-    "run_arbitrary_code",
-    "unknown",
-  ].includes(capability);
-}
-
 /** Validate that a breaker remains independently read-only even if a caller delegates mutation. */
 export function assertBreakerReadOnly(
-  capabilities: readonly CapabilityId[],
+  capabilities: readonly string[],
+  options: { execution_domain?: string } = {},
 ): void {
-  if (capabilities.some(isMutationCapability)) {
+  const unknown = capabilities.filter(
+    (capability) => !isCapabilityId(capability),
+  );
+  if (unknown.length > 0 || capabilities.includes("unknown")) {
+    throw new Error("Breaker authority widening rejected: unknown capability.");
+  }
+  if (
+    capabilities.some(
+      (capability) =>
+        !BREAKER_ALLOWED_CAPABILITIES.has(capability as CapabilityId),
+    )
+  ) {
     throw new Error(
       "Breaker authority widening rejected: the BREAKER role is read-only.",
+    );
+  }
+  if (
+    capabilities.some((capability) =>
+      PROJECT_CODE_CAPABILITIES.has(capability as CapabilityId),
+    ) &&
+    options.execution_domain !== "isolated-sandbox"
+  ) {
+    throw new Error(
+      "Breaker project-code execution requires an isolated-sandbox execution domain.",
     );
   }
 }
@@ -93,7 +109,9 @@ export function buildBreakerContractV1(input: {
       `Breaker requires a valid frozen task contract: ${contractErrors.join(", ")}`,
     );
   }
-  assertBreakerReadOnly(BREAKER_READ_ONLY_CAPABILITIES);
+  assertBreakerReadOnly(BREAKER_READ_ONLY_CAPABILITIES, {
+    execution_domain: "isolated-sandbox",
+  });
   if (
     !input.breaker_id.trim() ||
     !input.repository.trim() ||
@@ -115,6 +133,10 @@ export function buildBreakerContractV1(input: {
     acceptance: [...input.taskContract.acceptance],
     relevant_evidence: [...(input.relevant_evidence ?? [])],
     capabilities: BREAKER_READ_ONLY_CAPABILITIES,
+    execution_domain: "isolated-sandbox",
+    project_code_execution: true,
+    credential_access: false,
+    publication_allowed: false,
     mutation_allowed: false,
   };
 }

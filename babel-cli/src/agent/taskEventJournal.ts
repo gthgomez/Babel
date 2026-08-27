@@ -9,6 +9,7 @@ import {
 import { dirname } from "node:path";
 
 import { canonicalJson, sha256Canonical } from "../acceptance/canonical.js";
+import { redactEvidenceValue } from "../utils/redaction.js";
 
 export const TASK_EVENT_SCHEMA_VERSION = 1 as const;
 export const TASK_EVENTS_FILENAME = "task-events.jsonl";
@@ -58,7 +59,7 @@ export interface TaskEventJournalState {
 const SECRET_KEY =
   /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|cookie|credential|password|private[_-]?key|secret|token)/i;
 const SECRET_VALUE =
-  /(?:^|\b)(?:sk|rk)-[A-Za-z0-9_-]{12,}|(?:bearer\s+)[A-Za-z0-9._-]{12,}/i;
+  /(?:^|\b)(?:sk|rk)-[A-Za-z0-9_-]{12,}|(?:bearer\s+)[A-Za-z0-9._-]{12,}|(?:api[_-]?key|password|secret|token)\s*[:=]\s*[^\s,;}]+/i;
 
 function assertSafePayload(
   value: unknown,
@@ -184,7 +185,7 @@ export class TaskEventJournal {
     event_id?: string;
     timestamp?: string;
   }): TaskEventV1 {
-    const payload = { ...(input.payload ?? {}) };
+    const payload = redactEvidenceValue({ ...(input.payload ?? {}) });
     assertSafePayload(payload);
     const withoutHash: Omit<TaskEventV1, "event_hash"> = {
       event_version: TASK_EVENT_SCHEMA_VERSION,

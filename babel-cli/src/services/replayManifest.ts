@@ -11,6 +11,7 @@ import { z } from "zod";
 
 import { canonicalJson, sha256Canonical } from "../acceptance/canonical.js";
 import type { CompletionStatusV1 } from "../evidence/evidenceGraph.js";
+import { redactSecrets } from "../utils/redaction.js";
 import {
   FAILURE_CATEGORIES,
   type FailureCategoryV1,
@@ -135,7 +136,9 @@ export function buildReplayManifestV1(input: {
     harness: input.harness ?? null,
     tool_profile: input.tool_profile ?? null,
     feature_flags: featureFlags,
-    verification_commands: [...(input.verification_commands ?? [])],
+    verification_commands: [...(input.verification_commands ?? [])].map(
+      (command) => redactSecrets(command),
+    ),
     verification_result: input.verification_result ?? null,
     failure_classification: input.failure_classification ?? null,
     environment,
@@ -166,6 +169,12 @@ export function parseReplayManifestV1(
     };
   const manifest = parsed.data as ReplayManifestV1;
   const errors: string[] = [];
+  if (
+    manifest.verification_commands.some(
+      (command) => redactSecrets(command) !== command,
+    )
+  )
+    errors.push("durable_secret");
   if (sha256Canonical(stableManifestBody(manifest)) !== manifest.manifest_hash)
     errors.push("manifest_hash");
   if (
