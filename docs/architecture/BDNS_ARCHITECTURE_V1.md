@@ -117,8 +117,8 @@ Each BDNS record is versioned and carries:
 - an explicit evidence state;
 - a bounded, redacted payload.
 
-Observer sequence means **BDNS ingestion order only**. It does not by itself establish that
-the operating system or independent sources observed events in causal order.
+Observer sequence means **BDNS ingestion order only**. It does not establish
+that the operating system or independent sources observed events in causal order.
 Process start/end facts, canonical event ids, monotonic timestamps, and
 correlation ids are retained separately so a diagnostic can state what is
 known without overclaiming causality.

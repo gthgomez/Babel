@@ -21,7 +21,7 @@ The entries distinguish directly recorded facts from diagnostic hypotheses.
 | Declared write changes target | VERIFIED | Targeted before/after metadata and hash differ | Corroborated mutation / high | HIGH | HIGH | HIGH | Hash is bounded for large files |
 | Undeclared targeted mutation | VERIFIED | Changed path is absent from declared intent | `UNDECLARED_WORKSPACE_MUTATION` / high | HIGH | HIGH | HIGH | Only paths supplied to the bounded witness are evaluated |
 | Missing expected mutation | VERIFIED by workspace reconciliation | Declared path did not change in targeted snapshots | `MISSING_EXPECTED_MUTATION` / high | HIGH | HIGH | HIGH | No-op writes with identical content are indistinguishable from missed writes |
-| Watcher unavailable or silent | VERIFIED | Reconciliation marks watcher source unavailable; hash evidence remains independent | Unknown from watcher alone | HIGH | HIGH | MEDIUM | No watcher event is not sufficient evidence that no mutation occurred |
+| Watcher unavailable or silent | VERIFIED | Reconciliation marks watcher source unavailable; hash evidence remains independent | Unknown from watcher alone | HIGH | HIGH | MEDIUM | Watcher silence is inconclusive and does not establish that no mutation occurred |
 | Diagnostic writer unavailable | VERIFIED | Store records `persistence_degraded`; caller continues | Persistence degraded / high | HIGH | HIGH | LOW | Pending records at process crash can still be lost |
 | OTel disabled | VERIFIED by architecture and existing OTel tests | Local correlation model has no OTel dependency | Local diagnostics remain valid | MEDIUM | HIGH | LOW | External trace enrichment is absent |
 | Terminal ordering anomaly | PARTIAL | Terminal observation remains a presentation witness | Task-dependent / medium | HIGH | MEDIUM | TASK-DEPENDENT | Not every TUI anomaly should become acceptance evidence |
@@ -31,7 +31,7 @@ The entries distinguish directly recorded facts from diagnostic hypotheses.
 
 Canonical Babel events can identify an explicit non-zero tool result. BDNS adds
 value when an independently witnessed process outcome disagrees, when bounded
-workspace metadata indicates an undeclared change, or when it records that its own
+workspace metadata provides evidence of an undeclared change, or when it records that its own
 evidence was lost. In cases where the canonical record already explains the
 failure, BDNS should corroborate rather than emit duplicate incidents.
 
