@@ -186,7 +186,19 @@ try {
   $requiredResults = @()
   $requiredChecksGreen = $true
   foreach ($required in $RequiredCheck) {
-    $candidate = $checkRuns | Where-Object { Test-AgentCheckName -Actual ([string]$_.name) -Expected $required } | Select-Object -First 1
+    $namedCandidates = @($checkRuns | Where-Object { Test-AgentCheckName -Actual ([string]$_.name) -Expected $required })
+    $candidate = $namedCandidates |
+      Where-Object {
+        [string]::Equals([string]$_.head_sha, $prHead, [StringComparison]::OrdinalIgnoreCase) -and
+        [string]::Equals([string]$_.status, 'completed', [StringComparison]::OrdinalIgnoreCase) -and
+        [string]::Equals([string]$_.conclusion, 'success', [StringComparison]::OrdinalIgnoreCase)
+      } |
+      Select-Object -First 1
+    if ($null -eq $candidate) {
+      $candidate = $namedCandidates |
+        Where-Object { [string]::Equals([string]$_.head_sha, $prHead, [StringComparison]::OrdinalIgnoreCase) } |
+        Select-Object -First 1
+    }
     $candidateHeadOk = $null -ne $candidate -and [string]::Equals([string]$candidate.head_sha, $prHead, [StringComparison]::OrdinalIgnoreCase)
     if ($null -eq $candidate -or -not $candidateHeadOk) { $ciHeadMatch = $false }
     $passed = $null -ne $candidate -and $candidateHeadOk -and [string]::Equals([string]$candidate.status, 'completed', [StringComparison]::OrdinalIgnoreCase) -and [string]::Equals([string]$candidate.conclusion, 'success', [StringComparison]::OrdinalIgnoreCase)
