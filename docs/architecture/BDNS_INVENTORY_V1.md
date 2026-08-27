@@ -25,6 +25,30 @@ filesystem or process surveillance outside the boundaries listed here.
 | OTel | `babel-cli/src/telemetry/tracing.ts` | Optional trace/span correlation | External correlation enrichment only | Disabled by default; unavailable exporters must not affect local correctness |
 | Doctor/inspect/diagnose | `babel-cli/src/doctor.ts`, `babel-cli/src/commands/coreCommands.ts`, `babel-cli/src/inspect/` | Operator-facing inspection | Presentation of existing evidence | Read-only reports; command failures are surfaced |
 
+## Evidence provenance inventory
+
+For every evidence plane, record whether it can later define acceptance. This
+is an evidence contamination map, not a new execution graph.
+
+| Source | Origin | Patch visibility | Producer role | Revision binding | Semantic authority | Future use |
+| --- | --- | --- | --- | --- | --- | --- |
+| Original task / user prompt | pre-implementation | none | human | none | acceptance | acceptance semantics |
+| Baseline tests and existing behavior | pre-implementation | none | independent verifier | workspace state | verifier / acceptance | oracle evidence |
+| Canonical session events | during implementation | candidate visible | canonical runtime | none | diagnostic only | evidence candidate |
+| Process witness | during implementation | candidate visible | independent observer | none | diagnostic only | evidence candidate |
+| Workspace witness / watcher | during / post implementation | candidate visible | independent observer | workspace state | diagnostic only | evidence candidate |
+| Workspace transactions | during implementation | candidate visible | canonical runtime | exact revision when present | diagnostic only | evidence candidate |
+| Candidate patch / agent explanation | during implementation | candidate visible | implementor | exact revision | none | acceptance prohibited |
+| Clean-room / authoritative verifier | post-implementation | candidate visible | independent verifier | exact revision | verifier | claim evidence |
+| Oracle created before the patch | pre-implementation | none | independent verifier | baseline revision | acceptance | acceptance semantics |
+| Oracle result after the patch | post-implementation | candidate visible | independent verifier | exact revision | verifier | claim evidence |
+| TUI / terminal observation | during implementation | candidate visible | independent observer | none | diagnostic only | evidence candidate |
+| OTel traces | during implementation | unknown | independent observer | none | none | correlation only |
+| BDNS incidents | during / post implementation | candidate visible | independent observer | none | diagnostic only | evidence candidate |
+
+BDNS-owned files remain excluded from the workspace watch set and have no
+semantic authority.
+
 ## Process creation inventory
 
 The repository has many subprocess calls because it supports the CLI, shell

@@ -1,4 +1,8 @@
-/** Stable BDNS observation, evidence, and diagnostic contracts. */
+/** Stable BDNS observation, evidence, and diagnostic contracts.
+ *
+ * Evidence candidates live in `evidenceCandidate.ts`. BDNS must never emit
+ * `claimSatisfied`, `acceptanceVerdict`, or `requirementMet`.
+ */
 
 export const BDNS_SCHEMA_VERSION = 1 as const
 

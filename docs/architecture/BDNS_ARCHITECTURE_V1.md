@@ -54,6 +54,43 @@ canonical execution ──> canonical events / receipts / semantic state
 No canonical path may await a BDNS subscriber, persistence write, watcher
 operation, Git scan, or incident construction.
 
+## Invariant 11 — Observation is not acceptance
+
+BDNS produces diagnostic facts and evidence candidates. It does not independently
+decide whether a behavioral requirement is satisfied.
+
+```text
+FACT → DIAGNOSTIC HYPOTHESIS → EVIDENCE CANDIDATE
+        → [acceptance system] → CLAIM EVIDENCE → ACCEPTANCE VERDICT
+```
+
+A process exit code, workspace hash change, or incident category is not an
+acceptance verdict. `claimSatisfied`, `acceptanceVerdict`, and `requirementMet`
+are forbidden on BDNS records.
+
+BDNS epistemics answer "what happened?". Acceptance epistemics answer "what
+must be true?". Those vocabularies must not be merged.
+
+## Invariant 12 — Downstream observation cannot define success
+
+Information derived from the candidate implementation, implementor output,
+post-change verification, or BDNS observations may not alter frozen acceptance
+semantics.
+
+```text
+PRE-IMPLEMENTATION                    POST-IMPLEMENTATION
+task / baseline / policies            implementation / patch / tests
+        │                             process events / workspace evidence
+        ▼                             BDNS observations
+AcceptanceInputSnapshot                       │
+        ▼                                     ▼
+AcceptanceContract  ════ FROZEN ════   evidence only
+```
+
+No arrow may flow from BDNS back into "what did the original task require?".
+`BDNS → acceptance evidence` is allowed. `BDNS → acceptance semantics` is
+forbidden.
+
 ## Evidence vocabulary
 
 - **FACT** — a directly recorded value from a named source, such as a
@@ -131,6 +168,17 @@ An incident carries facts, inferences, optional hypotheses, confidence, and
 evidence health as separate fields. It never overwrites the source facts.
 Insufficient evidence produces `UNKNOWN`, not a fabricated root cause.
 
+## Evidence candidate seam
+
+BDNS does not attach itself to the current EvidenceGraph schema. It emits a
+narrow `EvidenceCandidateV1` record that later acceptance work can admit,
+ignore, or link. A candidate carries producer role, independence, patch
+visibility, implementation origin, evidence health, and a bounded payload. It
+does not carry requirement ids or verdicts.
+
+Claim-evidence linking, oracle planning, and sufficiency decisions belong to
+the later Executable Acceptance campaign, not to BDNS.
+
 ## Persistence and retention
 
 Diagnostic persistence is local, versioned, redacted, session-owned, size
@@ -175,3 +223,8 @@ The campaign is intentionally serialized:
 Each slice must pass focused tests and exact-head review before the next
 slice's assumptions are treated as available. If a later slice would require
 violating this contract, the campaign stops for architecture revision.
+
+Do not create B9–B11 because interesting debugging opportunities appear. B5
+persistence and B6 operator surfaces stay deliberately thin. The next major
+campaign after B8 is Executable Acceptance, which may consume BDNS evidence
+candidates without giving BDNS semantic authority.

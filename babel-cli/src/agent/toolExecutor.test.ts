@@ -737,4 +737,25 @@ describe('circuit breaker (S1)', () => {
     assert.equal(getCircuitBreakerState(context.runId).tripped, false);
     assert.equal(getCircuitBreakerState(context.runId).consecutiveBlocks, 0);
   });
+
+  it('forwards idempotencyKey as toolCallId on the execution context', async () => {
+    let seen: ToolContext | undefined
+    const result = await executeActionWithPolicy(
+      { type: 'read_file', path: 'a.ts' },
+      'workspace_write',
+      context,
+      {
+        idempotencyKey: 'tool-call-9',
+        executor: createToolExecutor({
+          executeTool: async (_request, toolContext) => {
+            seen = toolContext
+            return { exit_code: 0, stdout: 'ok', stderr: '' }
+          },
+        }),
+      },
+    )
+    assert.notEqual(result.policyBlocked, true)
+    assert.equal(seen?.toolCallId, 'tool-call-9')
+    assert.equal(seen?.sessionId, context.runId)
+  });
 });

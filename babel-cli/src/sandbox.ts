@@ -1883,12 +1883,14 @@ export class SafeExecutor {
     timeoutMs: number,
     toolName = 'shell_exec',
     signal?: AbortSignal,
+    processContext?: Pick<ProcessWitnessInput, 'sessionId' | 'turnId' | 'toolCallId'>,
   ): Promise<ToolResult> {
     const prepared = this.prepareShellExecution(command, cwd, toolName);
     if ('exit_code' in prepared) return prepared;
 
     let transientRetryCount = 0;
     let result: AsyncSpawnResult;
+    const sessionId = processContext?.sessionId ?? process.env['BABEL_SESSION_ID'];
     while (true) {
       result = await spawnCommandAsync(prepared.executable, prepared.args, {
         cwd: prepared.cwd,
@@ -1901,9 +1903,9 @@ export class SafeExecutor {
               processContext: {
                 projectRoot: this.projectRoot,
                 toolName,
-                ...(process.env['BABEL_SESSION_ID']
-                  ? { sessionId: process.env['BABEL_SESSION_ID'] }
-                  : {}),
+                ...(sessionId ? { sessionId } : {}),
+                ...(processContext?.turnId ? { turnId: processContext.turnId } : {}),
+                ...(processContext?.toolCallId ? { toolCallId: processContext.toolCallId } : {}),
               },
             }
           : {}),
@@ -1950,7 +1952,8 @@ export class SafeExecutor {
     cwd: string,
     timeoutMs: number,
     signal?: AbortSignal,
+    processContext?: Pick<ProcessWitnessInput, 'sessionId' | 'turnId' | 'toolCallId'>,
   ): Promise<ToolResult> {
-    return this.shellExecAsync(command, cwd, timeoutMs, 'test_run', signal);
+    return this.shellExecAsync(command, cwd, timeoutMs, 'test_run', signal, processContext);
   }
 }

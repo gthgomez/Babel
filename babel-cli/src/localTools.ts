@@ -116,6 +116,12 @@ export interface ToolContext {
   signal?: AbortSignal;
   /** Called after local validation/cache gates, immediately before a real tool handler dispatches. */
   onBeforeDispatch?: () => void;
+  /** Canonical session id for BDNS process correlation; defaults to runId. */
+  sessionId?: string;
+  /** Canonical tool-call / idempotency key for BDNS process correlation. */
+  toolCallId?: string;
+  /** Canonical turn id when the caller has one. */
+  turnId?: string;
 }
 
 // ─── Dry-run gate ─────────────────────────────────────────────────────────────
@@ -138,6 +144,18 @@ function getExecutor(): SafeExecutor {
   const shadowRoot = process.env['BABEL_SHADOW_ROOT'] || null;
   const mode = readRuntimeMode();
   return new SafeExecutor(root, shadowRoot, mode, getDefaultProcessWitness());
+}
+
+function processContextFromToolContext(context: ToolContext): {
+  sessionId?: string;
+  turnId?: string;
+  toolCallId?: string;
+} {
+  return {
+    sessionId: context.sessionId ?? context.runId,
+    ...(context.turnId ? { turnId: context.turnId } : {}),
+    ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}),
+  };
 }
 
 function getExecutorProjectRoot(): string {
@@ -566,7 +584,7 @@ function handleFileDelete(req: Extract<ToolCallRequest, { tool: 'file_delete' }>
 
 async function handleGitReset(
   req: Extract<ToolCallRequest, { tool: 'git_reset' }>,
-  signal?: AbortSignal,
+  context: ToolContext,
 ): Promise<ToolResult> {
   refreshDryRunState();
   const target = req.target ?? '';
@@ -585,13 +603,14 @@ async function handleGitReset(
     getExecutorProjectRoot(),
     30_000,
     'shell_exec',
-    signal,
+    context.signal,
+    processContextFromToolContext(context),
   );
 }
 
 async function handleGitPush(
   req: Extract<ToolCallRequest, { tool: 'git_push' }>,
-  signal?: AbortSignal,
+  context: ToolContext,
 ): Promise<ToolResult> {
   refreshDryRunState();
   const remote = req.remote ?? 'origin';
@@ -611,13 +630,14 @@ async function handleGitPush(
     getExecutorProjectRoot(),
     60_000,
     'shell_exec',
-    signal,
+    context.signal,
+    processContextFromToolContext(context),
   );
 }
 
 async function handleShellExec(
   req: Extract<ToolCallRequest, { tool: 'shell_exec' }>,
-  signal?: AbortSignal,
+  context: ToolContext,
 ): Promise<ToolResult> {
   refreshDryRunState();
   if (DRY_RUN) {
@@ -634,13 +654,14 @@ async function handleShellExec(
     req.working_directory ?? getExecutorProjectRoot(),
     (req.timeout_seconds ?? 120) * 1000,
     'shell_exec',
-    signal,
+    context.signal,
+    processContextFromToolContext(context),
   );
 }
 
 async function handleTestRun(
   req: Extract<ToolCallRequest, { tool: 'test_run' }>,
-  signal?: AbortSignal,
+  context: ToolContext,
 ): Promise<ToolResult> {
   refreshDryRunState();
   if (DRY_RUN) {
@@ -656,7 +677,8 @@ async function handleTestRun(
     req.command,
     req.working_directory ?? getExecutorProjectRoot(),
     (req.timeout_seconds ?? 300) * 1000,
-    signal,
+    context.signal,
+    processContextFromToolContext(context),
   );
 }
 
@@ -925,7 +947,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     policyTags: ['execute', 'vcs', 'destructive'],
     input: { required: [], optional: ['target', 'hard'] },
     handler: (req, context) =>
-      handleGitReset(req as Extract<ToolCallRequest, { tool: 'git_reset' }>, context.signal),
+      handleGitReset(req as Extract<ToolCallRequest, { tool: 'git_reset' }>, context),
   },
   {
     name: 'git_push',
@@ -936,7 +958,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     policyTags: ['execute', 'vcs', 'destructive', 'network'],
     input: { required: [], optional: ['remote', 'branch', 'force'] },
     handler: (req, context) =>
-      handleGitPush(req as Extract<ToolCallRequest, { tool: 'git_push' }>, context.signal),
+      handleGitPush(req as Extract<ToolCallRequest, { tool: 'git_push' }>, context),
   },
   {
     name: 'shell_exec',
@@ -947,7 +969,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     policyTags: ['execute', 'shell'],
     input: { required: ['command'], optional: ['working_directory', 'timeout_seconds'] },
     handler: (req, context) =>
-      handleShellExec(req as Extract<ToolCallRequest, { tool: 'shell_exec' }>, context.signal),
+      handleShellExec(req as Extract<ToolCallRequest, { tool: 'shell_exec' }>, context),
   },
   {
     name: 'test_run',
@@ -958,7 +980,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     policyTags: ['execute', 'test'],
     input: { required: ['command'], optional: ['working_directory', 'timeout_seconds'] },
     handler: (req, context) =>
-      handleTestRun(req as Extract<ToolCallRequest, { tool: 'test_run' }>, context.signal),
+      handleTestRun(req as Extract<ToolCallRequest, { tool: 'test_run' }>, context),
   },
   {
     name: 'mcp_request',
