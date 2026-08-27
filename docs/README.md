@@ -25,8 +25,10 @@ architecture underneath.
 - [Architecture](./architecture/ARCHITECTURE.md) — Prompt OS layers, catalog, V9 pipeline
 - [**Harness architecture v1**](./architecture/HARNESS_ARCHITECTURE_V1.md) — **normative** runtime harness specification (`harness-v1`)
 - [Harness hardening roadmap v1](./architecture/HARNESS_HARDENING_ROADMAP_V1.md) — H0–H7 implementation sequence
+- [Executable Acceptance V0](./architecture/EXECUTABLE_ACCEPTANCE_V0.md) — proposed next campaign after BDNS; non-normative
 - [Harness overview](./architecture/HARNESS_OVERVIEW.md) — explanatory map (not normative)
 - [Portable agent workflow plan](./guides/PORTABLE_AGENT_WORKFLOW_PLAN.md) — proposed cross-harness contract; subordinate to `harness-v1`
+- [Agent Git operations](./guides/AGENT_GIT_OPERATIONS.md) — preflight, isolated worktrees, exact-SHA PR gate, and non-interactive GitHub CLI workflow
 - [Architecture index](./architecture/README.md) — all architecture guides
 - [Babel Remote spike](./architecture/babel-remote/README.md) — loopback ADR-010 / ChatEngine slice (not a public remote-desktop product)
 - [Canonical source decision](./adr/ADR-0001-canonical-public-source.md) — repository authority

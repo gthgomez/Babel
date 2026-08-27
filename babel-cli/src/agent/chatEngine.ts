@@ -4230,7 +4230,7 @@ export class ChatEngine {
         return executeBackgroundRunCommandAction(action, {
           projectRoot: this.options.projectRoot, tool, target, toolId,
           index: meta.index,
-          ownerId: this.engineRunId,
+          ownerId: this.engineRunId, toolCallId: meta.idempotencyKey,
           pushLog: (entry) => this.toolCallLog.push(entry),
           onToolComplete: callbacks.onToolComplete,
           onBeforeSpawn: () => this.persistToolStartedAtExecutorDispatch(action, meta),

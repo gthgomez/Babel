@@ -68,6 +68,12 @@ import {
   resolveStackBudgetForClass,
   type ChatCompiledStack,
 } from '../../agent/chatStackCompile.js';
+import {
+  isAcceptanceRecordingEnabled,
+  prepareAcceptanceRecording,
+  recordAcceptanceArtifacts,
+  type AcceptanceRecordingBundleV0,
+} from '../../acceptance/index.js';
 
 export type { ChatStreamEvent };
 export type ChatEngineFactory = (opts: ChatEngineOptions) => ChatEngine;
@@ -474,6 +480,25 @@ export async function runChatEngineOnce(input: {
       ...(input.executionProfile ? { executionProfile: input.executionProfile } : {}),
     });
 
+  // Acceptance V0 is an opt-in recording lane. Build the patch-blind snapshot
+  // before the first model turn; the kernel and TerminalOutcome stay untouched.
+  let acceptanceBundle: AcceptanceRecordingBundleV0 | null = null;
+  if (isAcceptanceRecordingEnabled()) {
+    try {
+      const taskContract = engine.getTaskContract();
+      if (taskContract) {
+        const revision = await runGitCommandAsync(['rev-parse', 'HEAD'], input.target.targetRoot, { timeoutMs: 2_000 });
+        acceptanceBundle = prepareAcceptanceRecording({
+          taskContract,
+          ...(revision.status === 0 && revision.stdout.trim() ? { baselineGitHead: revision.stdout.trim() } : {}),
+        });
+      }
+    } catch {
+      // Acceptance recording is experimental and must fail soft for Chat.
+      acceptanceBundle = null;
+    }
+  }
+
   const convRenderer = input.convRenderer ?? null;
   let protocolSession: ProtocolTurnSession | null = null;
   let turnPersistence: TurnPersistence | null = null;
@@ -567,6 +592,10 @@ export async function runChatEngineOnce(input: {
     } catch {
       // best-effort telemetry
     }
+  }
+
+  if (acceptanceBundle && result.runDir) {
+    recordAcceptanceArtifacts(result.runDir, acceptanceBundle);
   }
 
   return result;

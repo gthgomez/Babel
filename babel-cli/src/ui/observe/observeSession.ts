@@ -56,23 +56,14 @@ export function startTuiObservation(profile?: TerminalCapabilityProfile): string
   transport.onFlush((snap, marks) => {
     persistTuiFrame(sessionDir, snap, marks, transport.getSemantic())
   })
-  let observedEventCount = 0
-  let lastObservedEventId: string | null = null
+  let lastObservedSeq = -1
   let semanticReducer = createObservationSemanticReducer()
   setSessionEventObservationHook((events) => {
-    const previousEvent = observedEventCount > 0 ? events[observedEventCount - 1] : undefined
-    if (events.length < observedEventCount || (previousEvent && previousEvent.event_id !== lastObservedEventId)) {
-      observedEventCount = 0
-      lastObservedEventId = null
+    if (events.seq <= lastObservedSeq) {
       semanticReducer = createObservationSemanticReducer()
     }
-    for (let index = observedEventCount; index < events.length; index += 1) {
-      const event = events[index]
-      if (!event) continue
-      semanticReducer.apply(event)
-      lastObservedEventId = event.event_id
-    }
-    observedEventCount = events.length
+    semanticReducer.apply(events)
+    lastObservedSeq = events.seq
     getTerminalTransport()?.setSemantic(semanticReducer.current())
   })
   return sessionDir

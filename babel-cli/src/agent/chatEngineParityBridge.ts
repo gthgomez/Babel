@@ -60,6 +60,7 @@ import {
   syncAndFlushEpisodeFromSession,
   type EpisodeEventLog,
 } from '../evidence/episodeStream.js';
+import { bindBdnsAfterCanonicalFlush } from '../diagnostics/bdns/sessionAttach.js';
 import {
   createApprovalSession,
   type ApprovalSessionState,
@@ -855,6 +856,11 @@ function flushSessionEventsRequired(
 ): void {
   flushSessionEventLogStrict(runDir, rt.sessionEvents);
   flushEpisodeStreamBestEffort(rt, runDir, context);
+  void bindBdnsAfterCanonicalFlush({
+    sessionId: rt.sessionEvents.session_id,
+    runDir,
+    workspaceRoot: process.env['BABEL_PROJECT_ROOT'] ?? process.cwd(),
+  }).catch(() => undefined);
 }
 
 /**

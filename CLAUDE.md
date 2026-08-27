@@ -42,6 +42,8 @@ This is the **public, canonical source** for the Babel coding agent (`gthgomez/B
 | **Runtime harness (normative)** | `docs/architecture/HARNESS_ARCHITECTURE_V1.md` |
 | **Runtime harness hardening (canonical roadmap)** | `docs/architecture/HARNESS_HARDENING_ROADMAP_V1.md` |
 | Runtime harness (explanatory map) | `docs/architecture/HARNESS_OVERVIEW.md` |
+| Debugging observation contract | `docs/architecture/BDNS_ARCHITECTURE_V1.md` + `BDNS_INVENTORY_V1.md` + `BDNS_FAULT_MATRIX_V1.md` + `BDNS_HARDENING_V1.md` |
+| Executable Acceptance V0 (local experimental recording) | `docs/architecture/EXECUTABLE_ACCEPTANCE_V0.md` |
 | Portable workflow contract (proposed, non-normative) | `docs/guides/PORTABLE_AGENT_WORKFLOW_PLAN.md` |
 | Prompt OS layers + catalog + V9 pipeline | `docs/architecture/ARCHITECTURE.md` |
 | babel-cli package ops (CLI coding / routing pointer) | `babel-cli/CLAUDE.md` |

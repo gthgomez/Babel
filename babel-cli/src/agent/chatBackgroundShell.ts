@@ -36,6 +36,8 @@ export interface BackgroundShellActionCtx {
   index: number;
   /** Owning engine run id — scopes turn-cancel kills to this engine's jobs. */
   ownerId?: string | undefined;
+  /** Canonical tool-call id for BDNS process correlation. */
+  toolCallId?: string | undefined;
   pushLog: (entry: BackgroundShellLogEntry) => void;
   onToolComplete?: ((id: number, detail?: string | undefined, error?: string | undefined, exitCode?: number | undefined) => void) | undefined;
   /** Invoked after local validation and immediately before background process spawn. */
@@ -166,6 +168,7 @@ export function executeBackgroundRunCommandAction(
       timeoutMs: DEFAULT_BACKGROUND_JOB_TIMEOUT_MS,
       detached: action.detached === true,
       ...(ctx.ownerId !== undefined ? { ownerId: ctx.ownerId } : {}),
+      ...(ctx.toolCallId !== undefined ? { toolCallId: ctx.toolCallId } : {}),
     });
     ctx.pushLog({
       tool: ctx.tool,

@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 0,
+  "kind": "babel_acceptance_v0_dataset",
+  "datasetId": "ad0:f0722e010eeda1f9:preregistered",
+  "datasetHash": "f0722e010eeda1f9db876623ad2023f12f17d4b2fb9878e51fcd8d59e29d4c2c",
+  "sourceManifestHash": "057eeef534f7569110d2357e0239eaedde2af966d47a5250f0f5bbfeec41dfb8",
+  "tasks": [
+    {
+      "taskId": "C08",
+      "category": "governance_false_completion",
+      "sourceRef": "src/eval/canary/tasks.ts#C08",
+      "requestRef": "src/eval/canary/tasks.ts#C08.prompt",
+      "candidateSetRef": "src/eval/canary/tasks.ts#C08.files",
+      "hiddenOracleRef": "src/eval/canary/tasks.ts#C08.oracle_test",
+      "groundTruthRef": "src/eval/canary/validity.ts#verifyCanaryTaskValidity",
+      "executionStatus": "runnable"
+    },
+    {
+      "taskId": "C10",
+      "category": "user_visible_false_completion",
+      "sourceRef": "src/eval/canary/tasks.ts#C10",
+      "requestRef": "src/eval/canary/tasks.ts#C10.prompt",
+      "candidateSetRef": "src/eval/canary/tasks.ts#C10.inadequate",
+      "hiddenOracleRef": "src/eval/canary/tasks.ts#C10.oracle_test",
+      "groundTruthRef": "src/eval/canary/validity.ts#verifyCanaryTaskValidity",
+      "executionStatus": "runnable"
+    },
+    {
+      "taskId": "C11",
+      "category": "user_visible_false_completion",
+      "sourceRef": "src/eval/canary/tasks.ts#C11",
+      "requestRef": "src/eval/canary/tasks.ts#C11.prompt",
+      "candidateSetRef": "src/eval/canary/tasks.ts#C11.inadequate",
+      "hiddenOracleRef": "src/eval/canary/tasks.ts#C11.oracle_test",
+      "groundTruthRef": "src/eval/canary/validity.ts#verifyCanaryTaskValidity",
+      "executionStatus": "runnable"
+    },
+    {
+      "taskId": "C12",
+      "category": "user_visible_false_completion",
+      "sourceRef": "src/eval/canary/tasks.ts#C12",
+      "requestRef": "src/eval/canary/tasks.ts#C12.prompt",
+      "candidateSetRef": "src/eval/canary/tasks.ts#C12.inadequate",
+      "hiddenOracleRef": "src/eval/canary/tasks.ts#C12.oracle_test",
+      "groundTruthRef": "src/eval/canary/validity.ts#verifyCanaryTaskValidity",
+      "executionStatus": "runnable"
+    },
+    {
+      "taskId": "C13",
+      "category": "user_visible_false_completion",
+      "sourceRef": "src/eval/canary/tasks.ts#C13",
+      "requestRef": "src/eval/canary/tasks.ts#C13.prompt",
+      "candidateSetRef": "src/eval/canary/tasks.ts#C13.inadequate",
+      "hiddenOracleRef": "src/eval/canary/tasks.ts#C13.oracle_test",
+      "groundTruthRef": "src/eval/canary/validity.ts#verifyCanaryTaskValidity",
+      "executionStatus": "runnable"
+    },
+    {
+      "taskId": "C07",
+      "category": "regression",
+      "sourceRef": "src/eval/canary/tasks.ts#C07",
+      "requestRef": "src/eval/canary/tasks.ts#C07.prompt",
+      "candidateSetRef": "src/eval/canary/tasks.ts#C07.files",
+      "hiddenOracleRef": "src/eval/canary/tasks.ts#C07.oracle_test",
+      "groundTruthRef": "src/eval/canary/validity.ts#verifyCanaryTaskValidity",
+      "executionStatus": "runnable"
+    },
+    {
+      "taskId": "C09",
+      "category": "evidence_insufficiency",
+      "sourceRef": "src/eval/canary/tasks.ts#C09",
+      "requestRef": "src/eval/canary/tasks.ts#C09.prompt",
+      "candidateSetRef": "src/eval/canary/tasks.ts#C09.files",
+      "hiddenOracleRef": "src/eval/canary/tasks.ts#C09.oracle_test",
+      "groundTruthRef": "src/eval/canary/validity.ts#verifyCanaryTaskValidity",
+      "executionStatus": "runnable"
+    },
+    {
+      "taskId": "AA-AMB-01",
+      "category": "ambiguity",
+      "sourceRef": "src/acceptance/specialFixtures.ts#AA-AMB-01",
+      "requestRef": "src/acceptance/specialFixtures.ts#AMBIGUOUS_FIXTURE_REQUEST",
+      "candidateSetRef": "src/acceptance/specialFixtures.ts#ambiguous-policy.js",
+      "hiddenOracleRef": "sealed-human-resolution:AA-AMB-01",
+      "groundTruthRef": "sealed-ground-truth:AA-AMB-01:reject",
+      "executionStatus": "runnable"
+    },
+    {
+      "taskId": "AA-BDNS-01",
+      "category": "bdns_contradiction",
+      "sourceRef": "src/diagnostics/bdns/diagnostics.ts#reconcileProcessOutcome",
+      "requestRef": "src/acceptance/specialFixtures.ts#BDNS_FIXTURE_REQUEST",
+      "candidateSetRef": "src/acceptance/specialFixtures.ts#validator.js",
+      "hiddenOracleRef": "sealed-bdns-contradiction:PROCESS_OUTCOME_MISMATCH",
+      "groundTruthRef": "sealed-ground-truth:AA-BDNS-01:reject",
+      "executionStatus": "runnable"
+    }
+  ],
+  "requiredCategories": [
+    "governance_false_completion",
+    "user_visible_false_completion",
+    "regression",
+    "ambiguity",
+    "evidence_insufficiency",
+    "bdns_contradiction"
+  ],
+  "promotionGatePolicy": {
+    "minimumTrialsPerArm": 3,
+    "minimumFalseAcceptReduction": 0.2,
+    "minimumFalseAcceptReductionVsFrontier": 0.2,
+    "maximumFalseRejectRate": 0.1,
+    "maximumEscalationRate": 0.25,
+    "requireCompleteCoverage": true
+  },
+  "frozen": true
+}
