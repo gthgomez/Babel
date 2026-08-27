@@ -2,59 +2,299 @@ import {
   RevisionBoundReceipt,
   RevisionManager,
 } from "./revisionBoundReceipt.js";
+import {
+  validateTaskContractV1ForCompletion,
+  type TaskContractV1,
+} from "../agent/taskContract.js";
+import {
+  validateAcceptanceBundleForContractV1,
+  type AcceptanceBundleV1,
+} from "../acceptance/escrow.js";
+import { canonicalJson } from "../acceptance/canonical.js";
+import { redactEvidenceValue } from "../utils/redaction.js";
+
+export const EVIDENCE_GRAPH_SCHEMA_VERSION = 1 as const;
+export const EVIDENCE_GRAPH_MAX_BYTES = 256 * 1024;
 
 export type EvidenceNodeType =
   | "claim"
   | "patch"
   | "verifier_receipt"
   | "env_state"
-  | "critic_approval";
+  | "critic_approval"
+  | "test_result"
+  | "build_result"
+  | "command_result"
+  | "source_reference"
+  | "artifact"
+  | "review_finding"
+  | "challenge"
+  | "runtime_observation"
+  | "ci_result"
+  | "contract_requirement";
+
+export type EvidenceRelation =
+  | "supports"
+  | "contradicts"
+  | "verifies"
+  | "challenges"
+  | "satisfies"
+  | "produced_by"
+  | "applies_to"
+  | "derived_from";
+
+export interface EvidenceBindingV1 {
+  task_id: string;
+  contract_hash: string;
+  repository: string;
+  base_sha: string | null;
+  candidate_sha: string;
+  requirement_id?: string;
+  artifact_hash?: string;
+}
 
 export interface EvidenceNode {
   id: string;
   type: EvidenceNodeType;
-  data: any;
+  data: unknown;
   parents: string[];
+  binding?: EvidenceBindingV1;
+  producer_role?:
+    | "builder"
+    | "reviewer"
+    | "breaker"
+    | "verifier"
+    | "observer"
+    | "system";
+  /** Structured identity; producer_role alone is never a certification credential. */
+  producer_identity?: EvidenceProducerIdentityV1;
+}
+
+export type EvidenceProducerRole =
+  | "builder"
+  | "reviewer"
+  | "breaker"
+  | "verifier"
+  | "observer"
+  | "system";
+
+export interface EvidenceProducerIdentityV1 {
+  kind: "agent_endpoint" | "execution_identity";
+  endpoint_id: string;
+  role: EvidenceProducerRole;
+  execution_domain: string;
+}
+
+export interface EvidenceEdge {
+  id: string;
+  from: string;
+  to: string;
+  relation: EvidenceRelation;
+}
+
+export type CompletionStatusV1 =
+  | "UNVERIFIED"
+  | "PARTIAL"
+  | "FAILED"
+  | "VERIFIED"
+  | "UNKNOWN";
+
+export interface CompletionEvaluationV1 {
+  status: CompletionStatusV1;
+  verified: boolean;
+  satisfied_requirements: string[];
+  missing_requirements: string[];
+  errors: string[];
+}
+
+export interface EvidenceGraphDocumentV1 {
+  schema_version: typeof EVIDENCE_GRAPH_SCHEMA_VERSION;
+  task_id: string;
+  contract_hash: string;
+  nodes: EvidenceNode[];
+  edges: EvidenceEdge[];
+}
+
+const CERTIFYING_TYPES: ReadonlySet<EvidenceNodeType> = new Set([
+  "test_result",
+  "build_result",
+  "command_result",
+  "verifier_receipt",
+  "runtime_observation",
+  "ci_result",
+]);
+
+function producerIdentityError(node: EvidenceNode): string | undefined {
+  const identity = node.producer_identity;
+  if (!identity || typeof identity !== "object")
+    return "certifying evidence requires a structured producer identity";
+  if (
+    !["agent_endpoint", "execution_identity"].includes(identity.kind) ||
+    typeof identity.endpoint_id !== "string" ||
+    !/^[A-Za-z0-9][A-Za-z0-9:_./-]{2,127}$/.test(identity.endpoint_id) ||
+    typeof identity.execution_domain !== "string" ||
+    identity.execution_domain.trim().length === 0 ||
+    !["verifier", "observer", "system"].includes(identity.role)
+  ) {
+    return "certifying evidence producer identity is malformed or not independent";
+  }
+  if (node.producer_role !== undefined && node.producer_role !== identity.role)
+    return "producer_role does not match producer_identity";
+  return undefined;
+}
+
+function requirementAcceptsNode(
+  type: EvidenceNodeType,
+  requirementType: string,
+): boolean {
+  if (type === "test_result")
+    return ["unit_test", "integration_test", "e2e", "custom"].includes(
+      requirementType,
+    );
+  if (type === "build_result") return requirementType === "build";
+  if (type === "ci_result")
+    return [
+      "security",
+      "policy",
+      "custom",
+      "unit_test",
+      "integration_test",
+      "e2e",
+      "build",
+    ].includes(requirementType);
+  if (type === "runtime_observation") return requirementType === "runtime";
+  if (type === "command_result") return requirementType === "custom";
+  return true;
+}
+
+function certifyingEvidenceError(
+  node: EvidenceNode,
+  requirementType: string,
+): string | undefined {
+  if (!CERTIFYING_TYPES.has(node.type))
+    return `${node.type} is not a certifying evidence type`;
+  const identityError = producerIdentityError(node);
+  if (identityError) return identityError;
+  if (!requirementAcceptsNode(node.type, requirementType))
+    return `${node.type} is incompatible with ${requirementType}`;
+  if (!node.data || typeof node.data !== "object" || Array.isArray(node.data))
+    return "certifying evidence data is malformed";
+  const data = node.data as Record<string, unknown>;
+  if (node.type !== "runtime_observation" && data["exit_code"] !== 0)
+    return "certifying evidence has a non-zero exit_code";
+  if (node.type === "verifier_receipt") {
+    if (!data["boundRevision"] || data["exitCode"] !== 0)
+      return "verifier receipt is not a passing revision-bound receipt";
+    return undefined;
+  }
+  const status = String(data["status"] ?? "").toLowerCase();
+  const passingStatus =
+    node.type === "ci_result"
+      ? status === "success" || status === "passed"
+      : node.type === "runtime_observation"
+        ? status === "observed" && data["passed"] === true
+        : status === "passed" || status === "success";
+  if (!passingStatus && data["passed"] !== true)
+    return "certifying evidence does not contain a typed passing result";
+  if (
+    node.type === "command_result" &&
+    typeof data["verifier_kind"] !== "string"
+  )
+    return "command_result requires an explicit verifier_kind";
+  return undefined;
+}
+
+function bindingError(
+  binding: EvidenceBindingV1 | undefined,
+  input: {
+    taskId: string;
+    contractHash: string;
+    repository: string;
+    baseSha: string | null;
+    candidateSha: string;
+  },
+): string | undefined {
+  if (!binding) return "evidence is missing content provenance";
+  if (binding.task_id !== input.taskId)
+    return "evidence task_id does not match";
+  if (binding.contract_hash !== input.contractHash)
+    return "evidence contract_hash does not match";
+  if (binding.repository !== input.repository)
+    return "evidence repository does not match";
+  if (binding.base_sha !== input.baseSha)
+    return "evidence base_sha does not match";
+  if (binding.candidate_sha !== input.candidateSha)
+    return "evidence candidate_sha is stale";
+  return undefined;
 }
 
 export class EvidenceGraph {
-  private nodes: Map<string, EvidenceNode> = new Map();
+  private readonly nodes: Map<string, EvidenceNode> = new Map();
+  private readonly edges: Map<string, EvidenceEdge> = new Map();
 
-  addNode(node: EvidenceNode) {
-    this.nodes.set(node.id, node);
+  addNode(node: EvidenceNode): void {
+    if (this.nodes.has(node.id))
+      throw new Error(`Evidence node already exists: ${node.id}`);
+    this.nodes.set(node.id, { ...node, parents: [...node.parents] });
+  }
+
+  addEdge(edge: EvidenceEdge): void {
+    if (this.edges.has(edge.id))
+      throw new Error(`Evidence edge already exists: ${edge.id}`);
+    this.edges.set(edge.id, { ...edge });
   }
 
   getNode(id: string): EvidenceNode | undefined {
     return this.nodes.get(id);
   }
-
   getNodesByType(type: EvidenceNodeType): EvidenceNode[] {
-    return Array.from(this.nodes.values()).filter((n) => n.type === type);
+    return Array.from(this.nodes.values()).filter((node) => node.type === type);
   }
-
   getNodesMap(): Map<string, EvidenceNode> {
     return this.nodes;
   }
+  getEdges(): EvidenceEdge[] {
+    return Array.from(this.edges.values());
+  }
 
-  /**
-   * Sync graph validation for Chat finalize (streamDone/buildResult are sync).
-   * Async wrapper delegates here — RevisionManager now has isReceiptStaleSync.
-   */
-  evaluateGraphSync(projectRoot: string): { valid: boolean; errors: string[] } {
+  /** Validate graph references without converting malformed data into success. */
+  validate(): { valid: boolean; errors: string[] } {
     const errors: string[] = [];
-
-    // Check for missing dependencies (broken DAG links)
     for (const node of this.nodes.values()) {
+      if (
+        !node.id ||
+        (!CERTIFYING_TYPES.has(node.type) &&
+          ![
+            "claim",
+            "patch",
+            "env_state",
+            "critic_approval",
+            "source_reference",
+            "artifact",
+            "review_finding",
+            "challenge",
+            "contract_requirement",
+          ].includes(node.type))
+      ) {
+        errors.push(`Invalid evidence node: ${node.id}`);
+      }
       for (const parentId of node.parents) {
-        if (!this.nodes.has(parentId)) {
-          errors.push(
-            `Broken link: Node ${node.id} references missing parent ${parentId}`,
-          );
-        }
+        if (!this.nodes.has(parentId))
+          errors.push(`Dangling parent: ${node.id} -> ${parentId}`);
       }
     }
+    for (const edge of this.edges.values()) {
+      if (!this.nodes.has(edge.from))
+        errors.push(`Dangling edge source: ${edge.id}`);
+      if (!this.nodes.has(edge.to))
+        errors.push(`Dangling edge target: ${edge.id}`);
+    }
+    return { valid: errors.length === 0, errors };
+  }
 
-    // Check for stale verifier receipts (revision recheck when boundRevision present)
+  /** Existing Chat completion validation, retained for compatibility. */
+  evaluateGraphSync(projectRoot: string): { valid: boolean; errors: string[] } {
+    const errors = [...this.validate().errors];
     const receipts = this.getNodesByType("verifier_receipt");
     for (const receiptNode of receipts) {
       const receipt = receiptNode.data as RevisionBoundReceipt;
@@ -75,24 +315,18 @@ export class EvidenceGraph {
         },
         projectRoot,
       );
-      if (stale) {
-        errors.push(`Stale receipt ${receipt.receiptId ?? receiptNode.id}: ${reason}`);
-      }
+      if (stale)
+        errors.push(
+          `Stale receipt ${receipt.receiptId ?? receiptNode.id}: ${reason}`,
+        );
     }
-
-    // Check for unverified claims (claims with no child verifier_receipt)
-    const claims = this.getNodesByType("claim");
-    for (const claim of claims) {
-      const hasReceipt = receipts.some((r) => r.parents.includes(claim.id));
-      if (!hasReceipt) {
-        errors.push(`Unverified claim: ${claim.id}`);
-      }
+    for (const claim of this.getNodesByType("claim")) {
+      const hasReceipt = receipts.some((receipt) =>
+        receipt.parents.includes(claim.id),
+      );
+      if (!hasReceipt) errors.push(`Unverified claim: ${claim.id}`);
     }
-
-    return {
-      valid: errors.length === 0,
-      errors,
-    };
+    return { valid: errors.length === 0, errors };
   }
 
   async evaluateGraph(
@@ -100,4 +334,202 @@ export class EvidenceGraph {
   ): Promise<{ valid: boolean; errors: string[] }> {
     return this.evaluateGraphSync(projectRoot);
   }
+}
+
+export function serializeEvidenceGraphV1(input: {
+  graph: EvidenceGraph;
+  task_id: string;
+  contract_hash: string;
+}): string {
+  const validation = input.graph.validate();
+  if (!validation.valid)
+    throw new Error(`Invalid evidence graph: ${validation.errors.join(", ")}`);
+  const document: EvidenceGraphDocumentV1 = {
+    schema_version: EVIDENCE_GRAPH_SCHEMA_VERSION,
+    task_id: input.task_id,
+    contract_hash: input.contract_hash,
+    nodes: redactEvidenceValue(Array.from(input.graph.getNodesMap().values())),
+    edges: input.graph.getEdges(),
+  };
+  const serialized = `${canonicalJson(document)}\n`;
+  if (Buffer.byteLength(serialized, "utf8") > EVIDENCE_GRAPH_MAX_BYTES)
+    throw new Error(
+      `Evidence graph exceeds ${EVIDENCE_GRAPH_MAX_BYTES} bytes.`,
+    );
+  return serialized;
+}
+
+export function parseEvidenceGraphV1(raw: string): EvidenceGraphDocumentV1 {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw) as unknown;
+  } catch (error) {
+    throw new Error(
+      `Invalid evidence graph JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Invalid evidence graph document.");
+  const document = value as Partial<EvidenceGraphDocumentV1>;
+  if (canonicalJson(redactEvidenceValue(value)) !== canonicalJson(value))
+    throw new Error("Evidence graph contains durable secret-like content.");
+  if (
+    document.schema_version !== EVIDENCE_GRAPH_SCHEMA_VERSION ||
+    typeof document.task_id !== "string" ||
+    typeof document.contract_hash !== "string" ||
+    !Array.isArray(document.nodes) ||
+    !Array.isArray(document.edges)
+  ) {
+    throw new Error("Invalid evidence graph schema.");
+  }
+  const graph = new EvidenceGraph();
+  for (const node of document.nodes) graph.addNode(node);
+  for (const edge of document.edges) graph.addEdge(edge);
+  const validation = graph.validate();
+  if (!validation.valid)
+    throw new Error(`Invalid evidence graph: ${validation.errors.join(", ")}`);
+  return document as EvidenceGraphDocumentV1;
+}
+
+/** Deterministic V1 gate: required acceptance needs current, independent evidence. */
+export function evaluateCompletionGateV1(input: {
+  contract: TaskContractV1;
+  graph: EvidenceGraph;
+  repository: string;
+  candidate_sha: string;
+  acceptance_bundle?: AcceptanceBundleV1;
+}): CompletionEvaluationV1 {
+  const contractErrors = validateTaskContractV1ForCompletion(input.contract);
+  if (contractErrors.length > 0) {
+    return {
+      status: "UNKNOWN",
+      verified: false,
+      satisfied_requirements: [],
+      missing_requirements: [],
+      errors: contractErrors.map((error) => `contract:${error}`),
+    };
+  }
+  const bundleErrors = input.acceptance_bundle
+    ? validateAcceptanceBundleForContractV1(
+        input.acceptance_bundle,
+        input.contract,
+      )
+    : [];
+  if (bundleErrors.length > 0) {
+    return {
+      status: "UNKNOWN",
+      verified: false,
+      satisfied_requirements: [],
+      missing_requirements: input.contract.acceptance
+        .filter((requirement) => requirement.required)
+        .map((requirement) => requirement.id),
+      errors: bundleErrors.map((error) => `acceptance_bundle:${error}`),
+    };
+  }
+  const graphValidation = input.graph.validate();
+  const errors = [...graphValidation.errors];
+  const required = input.contract.acceptance.filter(
+    (requirement) => requirement.required,
+  );
+  const satisfied: string[] = [];
+  const missing: string[] = [];
+  let hasUnknown = false;
+  let hasContradiction = false;
+
+  for (const requirement of required) {
+    const candidates = Array.from(input.graph.getNodesMap().values()).filter(
+      (node) => node.binding?.requirement_id === requirement.id,
+    );
+    if (candidates.length === 0) {
+      missing.push(requirement.id);
+      continue;
+    }
+    let supported = false;
+    for (const node of candidates) {
+      const mismatch = bindingError(node.binding, {
+        taskId: input.contract.task_id,
+        contractHash: input.contract.contract_hash,
+        repository: input.repository,
+        baseSha: input.contract.base_sha,
+        candidateSha: input.candidate_sha,
+      });
+      if (mismatch) {
+        hasUnknown = true;
+        errors.push(`${node.id}: ${mismatch}`);
+        continue;
+      }
+      const certificationError = certifyingEvidenceError(
+        node,
+        requirement.type,
+      );
+      if (certificationError) {
+        if (
+          CERTIFYING_TYPES.has(node.type) &&
+          typeof node.data === "object" &&
+          node.data !== null &&
+          !Array.isArray(node.data) &&
+          (((node.data as Record<string, unknown>)["exit_code"] !== undefined &&
+            (node.data as Record<string, unknown>)["exit_code"] !== 0) ||
+            String(
+              (node.data as Record<string, unknown>)["status"] ?? "",
+            ).toLowerCase() === "failed")
+        ) {
+          hasContradiction = true;
+        } else {
+          hasUnknown = true;
+        }
+        errors.push(`${node.id}: ${certificationError}`);
+        continue;
+      }
+      supported = true;
+    }
+    if (supported) satisfied.push(requirement.id);
+    else if (!missing.includes(requirement.id)) missing.push(requirement.id);
+  }
+
+  if (hasContradiction)
+    return {
+      status: "FAILED",
+      verified: false,
+      satisfied_requirements: satisfied,
+      missing_requirements: missing,
+      errors,
+    };
+  if (
+    required.length > 0 &&
+    satisfied.length === required.length &&
+    !hasUnknown &&
+    errors.length === 0
+  ) {
+    return {
+      status: "VERIFIED",
+      verified: true,
+      satisfied_requirements: satisfied,
+      missing_requirements: [],
+      errors: [],
+    };
+  }
+  if (hasUnknown && satisfied.length === 0)
+    return {
+      status: "UNKNOWN",
+      verified: false,
+      satisfied_requirements: satisfied,
+      missing_requirements: missing,
+      errors,
+    };
+  if (satisfied.length > 0)
+    return {
+      status: "PARTIAL",
+      verified: false,
+      satisfied_requirements: satisfied,
+      missing_requirements: missing,
+      errors,
+    };
+  return {
+    status: "UNVERIFIED",
+    verified: false,
+    satisfied_requirements: satisfied,
+    missing_requirements: missing,
+    errors,
+  };
 }

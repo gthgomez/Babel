@@ -6,32 +6,81 @@
  * mode-specific; this contract is the shared authority boundary.
  */
 
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from "node:crypto";
+import { z } from "zod";
 import {
   terminalOutcomeExitCode,
   type TerminalOutcome,
-} from '../schemas/agentContracts.js';
-import type { BabelMode, ToolEffectClass } from '../executor/contracts.js';
+} from "../schemas/agentContracts.js";
+import type { BabelMode, ToolEffectClass } from "../executor/contracts.js";
+import {
+  ALL_CAPABILITIES,
+  type CapabilityId,
+} from "../authority/capabilities.js";
+import { sha256Canonical } from "../acceptance/canonical.js";
+import { deepFreeze } from "../acceptance/freeze.js";
+import { redactSecrets } from "../utils/redaction.js";
 
 export const TASK_CONTRACT_VERSION = 1 as const;
 
 export type TaskClass =
-  | 'general_swe'
-  | 'quick_fix'
-  | 'investigate'
-  | 'governance'
-  | 'plan_only'
-  | 'unknown';
+  | "general_swe"
+  | "quick_fix"
+  | "investigate"
+  | "governance"
+  | "plan_only"
+  | "unknown";
+
+export type TaskRisk = "low" | "medium" | "high" | "critical" | "unknown";
+
+export type TaskContractProvenanceKind =
+  | "user_goal"
+  | "repository_policy"
+  | "derived_acceptance"
+  | "risk_analysis"
+  | "explicit_user_authority";
+
+export interface TaskContractProvenanceRecord {
+  kind: TaskContractProvenanceKind;
+  ref: string;
+}
+
+export type AcceptanceRequirementType =
+  | "unit_test"
+  | "integration_test"
+  | "e2e"
+  | "build"
+  | "lint"
+  | "typecheck"
+  | "security"
+  | "policy"
+  | "manual"
+  | "runtime"
+  | "custom";
+
+export interface AcceptanceRequirementV1 {
+  id: string;
+  description: string;
+  type: AcceptanceRequirementType;
+  required: boolean;
+  verification_strategy: string;
+}
+
+export interface TaskAuthorityV1 {
+  /** Existing Babel capability IDs are the authority vocabulary. */
+  capabilities: CapabilityId[];
+  source: "derived_policy" | "repository_policy" | "explicit_user_authority";
+}
 
 export type FailureClass =
-  | 'task'
-  | 'context'
-  | 'implementation'
-  | 'verifier'
-  | 'infrastructure'
-  | 'policy'
-  | 'provider'
-  | 'budget';
+  | "task"
+  | "context"
+  | "implementation"
+  | "verifier"
+  | "infrastructure"
+  | "policy"
+  | "provider"
+  | "budget";
 
 export interface FailureCapsuleV1 {
   failure_class: FailureClass;
@@ -39,7 +88,11 @@ export interface FailureCapsuleV1 {
   message: string;
   retryable: boolean;
   /** Which recovery budget this failure consumes. */
-  budget_key: 'implementation_repair' | 'infra_retry' | 'provider_retry' | 'none';
+  budget_key:
+    | "implementation_repair"
+    | "infra_retry"
+    | "provider_retry"
+    | "none";
   evidence_refs: string[];
   at: string;
 }
@@ -59,34 +112,48 @@ export const DEFAULT_FAILURE_CLASS_BUDGETS: FailureClassBudgets = {
 
 export function budgetKeyForFailureClass(
   fc: FailureClass,
-): FailureCapsuleV1['budget_key'] {
+): FailureCapsuleV1["budget_key"] {
   switch (fc) {
-    case 'implementation':
-    case 'task':
-      return 'implementation_repair';
-    case 'infrastructure':
-    case 'verifier':
-      return 'infra_retry';
-    case 'provider':
-      return 'provider_retry';
-    case 'policy':
-    case 'context':
-    case 'budget':
-      return 'none';
+    case "implementation":
+    case "task":
+      return "implementation_repair";
+    case "infrastructure":
+    case "verifier":
+      return "infra_retry";
+    case "provider":
+      return "provider_retry";
+    case "policy":
+    case "context":
+    case "budget":
+      return "none";
   }
 }
 
 export interface TaskContractV1 {
   schema_version: typeof TASK_CONTRACT_VERSION;
+  /** Durable task identity; independent from transport and contract revision. */
+  task_id: string;
   /** Immutable contract identity. */
   contract_id: string;
   /** Content hash of frozen fields (acceptance, non-goals, paths, effects). */
   contract_hash: string;
   mode: BabelMode;
   task_class: TaskClass;
+  goal: string;
+  required_behaviors: string[];
+  invariants: string[];
   user_request: string;
   acceptance_criteria: string[];
   non_goals: string[];
+  scope: {
+    paths: string[];
+    repository?: string;
+  };
+  risk: TaskRisk;
+  authority: TaskAuthorityV1;
+  acceptance: AcceptanceRequirementV1[];
+  created_at: string;
+  base_sha: string | null;
   allowed_paths: string[];
   protected_paths: string[];
   verifier_requirements: string[];
@@ -107,6 +174,7 @@ export interface TaskContractV1 {
   provenance: {
     created_at: string;
     source: string;
+    records: TaskContractProvenanceRecord[];
     parent_contract_id?: string;
   };
   /** True once freeze() has been called — acceptance cannot drift. */
@@ -116,8 +184,13 @@ export interface TaskContractV1 {
 export interface BuildTaskContractInput {
   mode: BabelMode;
   user_request: string;
+  task_id?: string;
+  goal?: string;
   task_class?: TaskClass;
+  required_behaviors?: string[];
+  invariants?: string[];
   acceptance_criteria?: string[];
+  acceptance?: AcceptanceRequirementV1[];
   non_goals?: string[];
   allowed_paths?: string[];
   protected_paths?: string[];
@@ -127,110 +200,471 @@ export interface BuildTaskContractInput {
   failure_class_budgets?: Partial<FailureClassBudgets>;
   allowed_effects?: ToolEffectClass[];
   allowed_terminal_outcomes?: TerminalOutcome[];
+  scope?: { paths: string[]; repository?: string };
+  risk?: TaskRisk;
+  authority?: Partial<TaskAuthorityV1>;
+  provenance?: TaskContractProvenanceRecord[];
+  base_sha?: string | null;
   baseline_reproduction?: string;
-  baseline_verifier_state?: TaskContractV1['baseline_verifier_state'];
+  baseline_verifier_state?: TaskContractV1["baseline_verifier_state"];
   source?: string;
   parent_contract_id?: string;
 }
 
 const DEFAULT_ALLOWED_TERMINALS: TerminalOutcome[] = [
-  'VERIFIED_COMPLETE',
-  'UNVERIFIED_PATCH',
-  'BLOCKED_EXTERNAL',
-  'BLOCKED_POLICY',
-  'BUDGET_EXHAUSTED',
-  'CANCELLED',
-  'INFRA_FAILURE',
-  'AGENT_FAILURE',
-  'NO_CHANGE_REQUIRED',
-  'INVALID_TASK',
-  'NEEDS_HUMAN_DECISION',
+  "VERIFIED_COMPLETE",
+  "UNVERIFIED_PATCH",
+  "BLOCKED_EXTERNAL",
+  "BLOCKED_POLICY",
+  "BUDGET_EXHAUSTED",
+  "CANCELLED",
+  "INFRA_FAILURE",
+  "AGENT_FAILURE",
+  "NO_CHANGE_REQUIRED",
+  "INVALID_TASK",
+  "NEEDS_HUMAN_DECISION",
 ];
 
-function hashContractBody(c: Omit<TaskContractV1, 'contract_id' | 'contract_hash' | 'frozen' | 'provenance'>): string {
-  const payload = JSON.stringify({
-    mode: c.mode,
-    task_class: c.task_class,
-    user_request: c.user_request,
-    acceptance_criteria: c.acceptance_criteria,
-    non_goals: c.non_goals,
-    allowed_paths: c.allowed_paths,
-    protected_paths: c.protected_paths,
-    verifier_requirements: c.verifier_requirements,
-    budgets: c.budgets,
-    allowed_effects: c.allowed_effects,
-    allowed_terminal_outcomes: c.allowed_terminal_outcomes,
-    baseline_reproduction: c.baseline_reproduction ?? null,
-    baseline_verifier_state: c.baseline_verifier_state ?? null,
-  });
-  return createHash('sha256').update(payload).digest('hex').slice(0, 32);
+type ContractBody = Omit<
+  TaskContractV1,
+  "contract_id" | "contract_hash" | "frozen"
+>;
+
+function hashContractBody(c: ContractBody): string {
+  const { created_at: _createdAt, provenance, ...stable } = c;
+  const boundProvenance = {
+    records: provenance.records,
+    ...(provenance.parent_contract_id
+      ? { parent_contract_id: provenance.parent_contract_id }
+      : {}),
+  };
+  return sha256Canonical({ ...stable, provenance: boundProvenance }).slice(
+    0,
+    32,
+  );
 }
+
+function legacyContractBody(
+  c: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    mode: c["mode"],
+    task_class: c["task_class"],
+    user_request: c["user_request"],
+    acceptance_criteria: c["acceptance_criteria"],
+    non_goals: c["non_goals"],
+    allowed_paths: c["allowed_paths"],
+    protected_paths: c["protected_paths"],
+    verifier_requirements: c["verifier_requirements"],
+    budgets: c["budgets"],
+    allowed_effects: c["allowed_effects"],
+    allowed_terminal_outcomes: c["allowed_terminal_outcomes"],
+    baseline_reproduction: c["baseline_reproduction"] ?? null,
+    baseline_verifier_state: c["baseline_verifier_state"] ?? null,
+  };
+}
+
+export const TaskContractV1Schema = z
+  .object({
+    schema_version: z.literal(TASK_CONTRACT_VERSION),
+    task_id: z.string().min(1).optional(),
+    contract_id: z.string().min(1),
+    contract_hash: z.string().regex(/^[0-9a-f]{32,64}$/),
+    mode: z.enum(["chat", "plan", "deep"]),
+    task_class: z.string().min(1),
+    goal: z.string().min(1).optional(),
+    required_behaviors: z.array(z.string()).optional(),
+    invariants: z.array(z.string()).optional(),
+    user_request: z.string().min(1),
+    acceptance_criteria: z.array(z.string()),
+    non_goals: z.array(z.string()),
+    scope: z
+      .object({
+        paths: z.array(z.string()).min(1),
+        repository: z.string().optional(),
+      })
+      .optional(),
+    risk: z.enum(["low", "medium", "high", "critical", "unknown"]).optional(),
+    authority: z
+      .object({
+        capabilities: z.array(
+          z.enum(ALL_CAPABILITIES as unknown as [string, ...string[]]),
+        ),
+        source: z.enum([
+          "derived_policy",
+          "repository_policy",
+          "explicit_user_authority",
+        ]),
+      })
+      .optional(),
+    acceptance: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1),
+            description: z.string().min(1),
+            type: z.enum([
+              "unit_test",
+              "integration_test",
+              "e2e",
+              "build",
+              "lint",
+              "typecheck",
+              "security",
+              "policy",
+              "manual",
+              "runtime",
+              "custom",
+            ]),
+            required: z.boolean(),
+            verification_strategy: z.string().min(1),
+          })
+          .strict(),
+      )
+      .optional(),
+    created_at: z.string().datetime().optional(),
+    base_sha: z.string().nullable().optional(),
+  })
+  .passthrough();
 
 /** Validate the frozen identity of a persisted task contract. */
-export function validateTaskContractV1(value: TaskContractV1): string[] {
-  const errors: string[] = []
-  if (value.schema_version !== TASK_CONTRACT_VERSION) errors.push('schema_version')
-  if (value.frozen !== true) errors.push('not_frozen')
-  const { contract_id: _id, contract_hash: _hash, frozen: _frozen, provenance: _provenance, ...body } = value
-  const computed = hashContractBody(body)
-  if (value.contract_hash !== computed) errors.push('contract_hash')
-  if (!value.contract_id?.startsWith(`tc1:${computed.slice(0, 16)}:`)) errors.push('contract_id')
-  return errors
+export function validateTaskContractV1(value: unknown): string[] {
+  const parsed = TaskContractV1Schema.safeParse(value);
+  if (!parsed.success)
+    return parsed.error.issues.map((issue) => issue.path.join(".") || "$");
+  const candidate = parsed.data as unknown as Record<string, unknown>;
+  const errors: string[] = [];
+  if (candidate["frozen"] !== true) errors.push("not_frozen");
+  const hasV1Fields =
+    typeof candidate["task_id"] === "string" &&
+    candidate["acceptance"] !== undefined;
+  let computed: string;
+  if (hasV1Fields) {
+    const modernBody = Object.fromEntries(
+      Object.entries(candidate).filter(
+        ([key]) =>
+          !["contract_id", "contract_hash", "frozen", "provenance"].includes(
+            key,
+          ),
+      ),
+    ) as ContractBody;
+    const candidateProvenance = candidate["provenance"];
+    const safeProvenance =
+      candidateProvenance && typeof candidateProvenance === "object"
+        ? (candidateProvenance as TaskContractV1["provenance"])
+        : ({ records: [] } as unknown as TaskContractV1["provenance"]);
+    computed = hashContractBody({
+      ...modernBody,
+      provenance: safeProvenance,
+    });
+  } else {
+    const legacyBody = legacyContractBody(candidate);
+    computed = createHash("sha256")
+      .update(JSON.stringify(legacyBody), "utf8")
+      .digest("hex")
+      .slice(0, 32);
+  }
+  if (candidate["contract_hash"] !== computed) errors.push("contract_hash");
+  if (
+    typeof candidate["contract_id"] !== "string" ||
+    !candidate["contract_id"].startsWith(`tc1:${computed.slice(0, 16)}:`)
+  )
+    errors.push("contract_id");
+  if (hasV1Fields) {
+    const allowedKeys = new Set([
+      "schema_version",
+      "task_id",
+      "contract_id",
+      "contract_hash",
+      "mode",
+      "task_class",
+      "goal",
+      "required_behaviors",
+      "invariants",
+      "user_request",
+      "acceptance_criteria",
+      "non_goals",
+      "scope",
+      "risk",
+      "authority",
+      "acceptance",
+      "created_at",
+      "base_sha",
+      "allowed_paths",
+      "protected_paths",
+      "verifier_requirements",
+      "budgets",
+      "allowed_effects",
+      "allowed_terminal_outcomes",
+      "baseline_reproduction",
+      "baseline_verifier_state",
+      "provenance",
+      "frozen",
+    ]);
+    for (const key of Object.keys(candidate)) {
+      if (!allowedKeys.has(key)) errors.push(`unknown.${key}`);
+    }
+    const provenance = candidate["provenance"];
+    const provenanceRecordValues =
+      provenance && typeof provenance === "object"
+        ? (provenance as Record<string, unknown>)["records"]
+        : undefined;
+    const records = Array.isArray(provenanceRecordValues)
+      ? (provenanceRecordValues as Array<Record<string, unknown>>)
+      : [];
+    if (
+      !provenance ||
+      typeof provenance !== "object" ||
+      !Array.isArray(provenanceRecordValues)
+    )
+      errors.push("provenance.records");
+    for (const [index, record] of records.entries()) {
+      if (
+        !record ||
+        typeof record["kind"] !== "string" ||
+        ![
+          "user_goal",
+          "repository_policy",
+          "derived_acceptance",
+          "risk_analysis",
+          "explicit_user_authority",
+        ].includes(record["kind"]) ||
+        typeof record["ref"] !== "string"
+      ) {
+        errors.push(`provenance.records.${index}`);
+      }
+    }
+    const authority = candidate["authority"] as { capabilities?: unknown };
+    const capabilities = Array.isArray(authority?.capabilities)
+      ? authority.capabilities
+      : [];
+    if (capabilities.includes("unknown"))
+      errors.push("authority.capabilities.unknown");
+    if (
+      records.some(
+        (record) =>
+          record["kind"] === "explicit_user_authority" &&
+          (!String(record["ref"] ?? "").startsWith("user:") ||
+            typeof record["ref"] !== "string"),
+      )
+    ) {
+      errors.push("provenance.authority_impersonation");
+    }
+    if (
+      records.some(
+        (record) =>
+          record["kind"] === "repository_policy" &&
+          String(record["ref"] ?? "").startsWith("user:"),
+      )
+    ) {
+      errors.push("provenance.policy_impersonation");
+    }
+    if (
+      (candidate["authority"] as { source?: unknown } | undefined)?.source ===
+        "explicit_user_authority" &&
+      !records.some(
+        (record) =>
+          record["kind"] === "explicit_user_authority" &&
+          typeof record["ref"] === "string" &&
+          record["ref"].startsWith("user:"),
+      )
+    ) {
+      errors.push("authority.explicit_user_authority_unbound");
+    }
+    const durableValues = [
+      candidate["goal"],
+      candidate["user_request"],
+      ...(Array.isArray(candidate["acceptance_criteria"])
+        ? candidate["acceptance_criteria"]
+        : []),
+      ...(Array.isArray(candidate["required_behaviors"])
+        ? candidate["required_behaviors"]
+        : []),
+      ...(Array.isArray(candidate["invariants"])
+        ? candidate["invariants"]
+        : []),
+      ...(Array.isArray(candidate["non_goals"]) ? candidate["non_goals"] : []),
+      ...(Array.isArray(candidate["verifier_requirements"])
+        ? candidate["verifier_requirements"]
+        : []),
+      ...(Array.isArray(provenanceRecordValues)
+        ? (provenanceRecordValues as Array<{ ref?: unknown }>).map(
+            (record) => record.ref,
+          )
+        : []),
+    ];
+    if (
+      durableValues.some(
+        (item) => typeof item === "string" && hasDurableSecret(item),
+      )
+    )
+      errors.push("durable_secret");
+    const acceptance = candidate["acceptance"];
+    const criteria = candidate["acceptance_criteria"];
+    if (Array.isArray(acceptance) && Array.isArray(criteria)) {
+      const ids = acceptance.map((item) =>
+        String((item as Record<string, unknown>)["id"]),
+      );
+      if (new Set(ids).size !== ids.length)
+        errors.push("acceptance.duplicate_id");
+      if (
+        acceptance.length !== criteria.length ||
+        acceptance.some(
+          (item, index) =>
+            (item as Record<string, unknown>)["description"] !==
+            criteria[index],
+        )
+      ) {
+        errors.push("acceptance.reconciliation");
+      }
+    }
+  }
+  return errors;
 }
 
-export function buildTaskContractV1(input: BuildTaskContractInput): TaskContractV1 {
+/** Strict V1 completion validation; legacy V0 fixture contracts may be empty. */
+export function validateTaskContractV1ForCompletion(value: unknown): string[] {
+  const errors = validateTaskContractV1(value);
+  if (errors.length > 0) return errors;
+  const candidate = value as { acceptance?: Array<{ required?: boolean }> };
+  if (
+    !candidate.acceptance ||
+    candidate.acceptance.filter((item) => item.required === true).length === 0
+  ) {
+    errors.push("acceptance.required");
+  }
+  return errors;
+}
+
+export function buildTaskContractV1(
+  input: BuildTaskContractInput,
+): TaskContractV1 {
+  const rawAcceptance = input.acceptance ?? [];
+  const acceptanceCriteria = [
+    ...(input.acceptance_criteria ??
+      (input.acceptance ? rawAcceptance.map((item) => item.description) : [])),
+  ].map((value) => durableText(value));
+  const acceptance = [
+    ...(input.acceptance
+      ? rawAcceptance.map((item) => ({
+          ...item,
+          description: durableText(item.description),
+        }))
+      : acceptanceCriteria.map((description, index) => ({
+          id: `acceptance:${index + 1}`,
+          description,
+          type: "custom" as const,
+          required: true,
+          verification_strategy:
+            "independent evidence bound to the candidate revision",
+        }))),
+  ];
+  if (new Set(acceptanceCriteria).size !== acceptanceCriteria.length) {
+    throw new Error("TaskContract acceptance criteria must be unique.");
+  }
+  if (
+    acceptance.length !== acceptanceCriteria.length ||
+    acceptance.some(
+      (item, index) => item.description !== acceptanceCriteria[index],
+    )
+  ) {
+    throw new Error(
+      "TaskContract acceptance must reconcile with acceptance_criteria.",
+    );
+  }
+  const createdAt = new Date().toISOString();
+  const provenanceRecords = [
+    { kind: "user_goal" as const, ref: "user_request" },
+    { kind: "derived_acceptance" as const, ref: "acceptance_criteria" },
+    ...(input.provenance ?? []),
+  ].map((record) => ({
+    ...record,
+    ref: durableText(record.ref),
+  }));
+  const provenance = {
+    created_at: createdAt,
+    source: durableText(input.source ?? "taskContract.build"),
+    records: provenanceRecords,
+    ...(input.parent_contract_id
+      ? { parent_contract_id: durableText(input.parent_contract_id) }
+      : {}),
+  };
   const body = {
     schema_version: TASK_CONTRACT_VERSION,
+    task_id:
+      input.task_id ??
+      `task:${sha256Canonical({ mode: input.mode, user_request: input.user_request }).slice(0, 24)}`,
     mode: input.mode,
-    task_class: input.task_class ?? 'unknown',
-    user_request: input.user_request,
-    acceptance_criteria: [...(input.acceptance_criteria ?? [])],
-    non_goals: [...(input.non_goals ?? [])],
-    allowed_paths: [...(input.allowed_paths ?? ['**/*'])],
+    task_class: input.task_class ?? "unknown",
+    goal: durableText(input.goal ?? input.user_request),
+    required_behaviors: [
+      ...(input.required_behaviors ?? acceptanceCriteria),
+    ].map(durableText),
+    invariants: [...(input.invariants ?? [])].map(durableText),
+    user_request: durableText(input.user_request),
+    acceptance_criteria: acceptanceCriteria,
+    non_goals: [...(input.non_goals ?? [])].map(durableText),
+    scope: {
+      paths: [...(input.scope?.paths ?? input.allowed_paths ?? ["**/*"])],
+      ...(input.scope?.repository
+        ? { repository: input.scope.repository }
+        : {}),
+    },
+    risk: input.risk ?? "unknown",
+    authority: {
+      capabilities: [
+        ...(input.authority?.capabilities ?? ["inspect_repository"]),
+      ],
+      source: input.authority?.source ?? "derived_policy",
+    },
+    acceptance,
+    created_at: createdAt,
+    base_sha: input.base_sha ?? null,
+    allowed_paths: [...(input.allowed_paths ?? ["**/*"])],
     protected_paths: [...(input.protected_paths ?? [])],
-    verifier_requirements: [...(input.verifier_requirements ?? [])],
+    verifier_requirements: [...(input.verifier_requirements ?? [])].map(
+      durableText,
+    ),
     budgets: {
       ...(input.max_turns !== undefined ? { max_turns: input.max_turns } : {}),
-      ...(input.max_tokens !== undefined ? { max_tokens: input.max_tokens } : {}),
+      ...(input.max_tokens !== undefined
+        ? { max_tokens: input.max_tokens }
+        : {}),
       failure_class_budgets: {
         ...DEFAULT_FAILURE_CLASS_BUDGETS,
         ...input.failure_class_budgets,
       },
     },
-    allowed_effects: [...(input.allowed_effects ?? [
-      'read_only',
-      'idempotent',
-      'reconcilable_mutation',
-    ])],
+    allowed_effects: [
+      ...(input.allowed_effects ?? [
+        "read_only",
+        "idempotent",
+        "reconcilable_mutation",
+      ]),
+    ],
     allowed_terminal_outcomes: [
       ...(input.allowed_terminal_outcomes ?? DEFAULT_ALLOWED_TERMINALS),
     ],
     ...(input.baseline_reproduction
-      ? { baseline_reproduction: input.baseline_reproduction }
+      ? { baseline_reproduction: durableText(input.baseline_reproduction) }
       : {}),
     ...(input.baseline_verifier_state
       ? { baseline_verifier_state: input.baseline_verifier_state }
       : {}),
   };
-  const contract_hash = hashContractBody(body);
+  const contract_hash = hashContractBody({ ...body, provenance });
   return {
     ...body,
     contract_id: `tc1:${contract_hash.slice(0, 16)}:${randomUUID().slice(0, 8)}`,
     contract_hash,
-    provenance: {
-      created_at: new Date().toISOString(),
-      source: input.source ?? 'taskContract.build',
-      ...(input.parent_contract_id
-        ? { parent_contract_id: input.parent_contract_id }
-        : {}),
-    },
+    provenance,
     frozen: false,
   };
 }
 
 /** Freeze contract — subsequent acceptance/path mutations throw. */
 export function freezeTaskContract(contract: TaskContractV1): TaskContractV1 {
-  return { ...contract, frozen: true };
+  return deepFreeze({ ...contract, frozen: true });
 }
 
 /**
@@ -246,9 +680,13 @@ export function withAcceptanceCriteria(
     );
   }
   const next = buildTaskContractV1({
+    task_id: contract.task_id,
     mode: contract.mode,
+    goal: contract.goal,
     user_request: contract.user_request,
     task_class: contract.task_class,
+    required_behaviors: contract.required_behaviors,
+    invariants: contract.invariants,
     acceptance_criteria: criteria,
     non_goals: contract.non_goals,
     allowed_paths: contract.allowed_paths,
@@ -263,16 +701,43 @@ export function withAcceptanceCriteria(
     failure_class_budgets: contract.budgets.failure_class_budgets,
     allowed_effects: contract.allowed_effects,
     allowed_terminal_outcomes: contract.allowed_terminal_outcomes,
+    scope: contract.scope,
+    risk: contract.risk,
+    authority: contract.authority,
+    base_sha: contract.base_sha,
+    provenance: contract.provenance.records,
     ...(contract.baseline_reproduction
       ? { baseline_reproduction: contract.baseline_reproduction }
       : {}),
     ...(contract.baseline_verifier_state
       ? { baseline_verifier_state: contract.baseline_verifier_state }
       : {}),
-    source: 'withAcceptanceCriteria',
+    source: "withAcceptanceCriteria",
     parent_contract_id: contract.contract_id,
   });
   return next;
+}
+
+const DURABLE_SECRET_PATTERNS = [
+  /\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\s*[:=]\s*[^\s,;]+/iu,
+  /\bBearer\s+[A-Za-z0-9._~+/-]{12,}/u,
+  /\b(?:sk|rk)-[A-Za-z0-9][A-Za-z0-9_-]{16,}\b/u,
+  /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/u,
+];
+
+function durableText(value: string): string {
+  const redacted = redactSecrets(value);
+  if (hasDurableSecret(redacted)) {
+    throw new Error("TaskContract contains secret-like durable content.");
+  }
+  return redacted;
+}
+
+function hasDurableSecret(value: string): boolean {
+  return DURABLE_SECRET_PATTERNS.some((pattern) => {
+    pattern.lastIndex = 0;
+    return pattern.test(value);
+  });
 }
 
 /** Whether a terminal outcome is allowed by the contract. */
@@ -294,9 +759,9 @@ export function decideHonestTaskOutcome(input: {
   needsHuman: boolean;
   planMode?: boolean;
 }): TerminalOutcome | null {
-  if (input.taskInvalid) return 'INVALID_TASK';
-  if (input.needsHuman) return 'NEEDS_HUMAN_DECISION';
-  if (input.acceptanceAlreadyMet) return 'NO_CHANGE_REQUIRED';
+  if (input.taskInvalid) return "INVALID_TASK";
+  if (input.needsHuman) return "NEEDS_HUMAN_DECISION";
+  if (input.acceptanceAlreadyMet) return "NO_CHANGE_REQUIRED";
   if (input.planMode) return null; // plan uses PLAN_COMPLETE via kernel, not executor VC
   return null;
 }
@@ -324,8 +789,8 @@ export function applyHonestTaskOutcomeToCompletion(input: {
     input.acceptanceAlreadyMet === true ||
     (c.baseline_verifier_state?.exit_code === 0 &&
       !input.hasMutation &&
-      (input.requestedOutcome === 'VERIFIED_COMPLETE' ||
-        input.requestedOutcome === 'UNVERIFIED_PATCH'));
+      (input.requestedOutcome === "VERIFIED_COMPLETE" ||
+        input.requestedOutcome === "UNVERIFIED_PATCH"));
 
   const honest = decideHonestTaskOutcome({
     contract: c,
@@ -337,17 +802,17 @@ export function applyHonestTaskOutcomeToCompletion(input: {
   if (honest) return honest;
 
   // Plan mode must never surface executor VERIFIED_COMPLETE
-  if (input.planMode && input.requestedOutcome === 'VERIFIED_COMPLETE') {
-    return 'UNVERIFIED_PATCH';
+  if (input.planMode && input.requestedOutcome === "VERIFIED_COMPLETE") {
+    return "UNVERIFIED_PATCH";
   }
 
   // Frozen contract: mutating work that is not allowed should not claim VC
   if (
     input.hasMutation &&
-    c.allowed_effects.every((e) => e === 'read_only') &&
-    input.requestedOutcome === 'VERIFIED_COMPLETE'
+    c.allowed_effects.every((e) => e === "read_only") &&
+    input.requestedOutcome === "VERIFIED_COMPLETE"
   ) {
-    return 'BLOCKED_POLICY';
+    return "BLOCKED_POLICY";
   }
 
   return input.requestedOutcome;
@@ -383,7 +848,7 @@ export class FailureClassBudgetTracker {
    */
   consume(failure: FailureCapsuleV1): boolean {
     const key = failure.budget_key;
-    if (key === 'none') return false;
+    if (key === "none") return false;
     if (this.remaining[key] <= 0) return false;
     this.remaining[key] -= 1;
     return true;
@@ -391,7 +856,7 @@ export class FailureClassBudgetTracker {
 
   canConsume(failure: FailureCapsuleV1): boolean {
     const key = failure.budget_key;
-    if (key === 'none') return false;
+    if (key === "none") return false;
     return this.remaining[key] > 0;
   }
 }
@@ -407,7 +872,8 @@ export function makeFailureCapsule(
     code,
     message,
     retryable:
-      opts?.retryable ?? (failure_class !== 'policy' && failure_class !== 'task'),
+      opts?.retryable ??
+      (failure_class !== "policy" && failure_class !== "task"),
     budget_key: budgetKeyForFailureClass(failure_class),
     evidence_refs: opts?.evidence_refs ?? [],
     at: new Date().toISOString(),
@@ -439,10 +905,8 @@ export function buildTerminalSurfaceAgreement(
   },
 ): TerminalSurfaceAgreement {
   // Lazy import avoided — callers should pass live mappers in production tests.
-  const userFacing =
-    mappers?.userFacingStatus?.(outcome) ?? outcome;
-  const exit =
-    mappers?.exitCode?.(outcome) ?? terminalOutcomeExitCode(outcome);
+  const userFacing = mappers?.userFacingStatus?.(outcome) ?? outcome;
+  const exit = mappers?.exitCode?.(outcome) ?? terminalOutcomeExitCode(outcome);
   return {
     outcome,
     exit_code: exit,
@@ -454,9 +918,7 @@ export function buildTerminalSurfaceAgreement(
 }
 
 /** True when headless/persistence share outcome and exits agree. */
-export function surfacesAgreeOnTerminal(
-  a: TerminalSurfaceAgreement,
-): boolean {
+export function surfacesAgreeOnTerminal(a: TerminalSurfaceAgreement): boolean {
   return (
     a.headless_json_outcome === a.persistence_outcome &&
     a.headless_json_outcome === a.outcome &&
