@@ -77,7 +77,7 @@ IMPLICATION: Spike uses serve-time registered root (workspaceBound.ts).
 Android browser/PWA (or curl)
 to Tailscale Serve HTTPS (reachability; NOT_VERIFIED this session)
 to http://127.0.0.1:port BridgeServer (loopback only)
-to POST /rpc or WS /ws?sessionId=&token= (transport)
+to POST /rpc or WS /ws?sessionId=<session-token> (transport)
 to ProtocolGateway.dispatch
 to handleProtocolRequest (ADR-010)
 to thread.create or turn.submit
