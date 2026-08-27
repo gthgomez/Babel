@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import {
   hostStateAfterTransportEvent,
+  reconcileAfterProtocolError,
   reconcileAfterSubmitFailure,
 } from './remoteReconnect.js';
 import {
@@ -39,6 +40,40 @@ describe('remote reconnect and UI state', () => {
     });
     assert.equal(accepted.shouldResubmit, false);
     assert.equal(accepted.next, 'history.lookup');
+  });
+
+  it('keeps settled rejection distinct and leaves a failed turn retryable', () => {
+    const rejected = reconcileAfterSubmitFailure({
+      responseSettled: true,
+      hostReachable: true,
+      commandId: 'cmd-rejected',
+    });
+    assert.equal(rejected.ambiguity, 'rejected');
+    assert.equal(rejected.host, 'ONLINE');
+    assert.equal(rejected.shouldResubmit, false);
+    assert.equal(rejected.next, 'wait');
+    assert.notEqual(rejected.ambiguity, 'ambiguous_network');
+
+    assert.equal(transitionTurn('FAILED', 'submit'), 'SUBMITTING');
+    assert.equal(canSendTurn('FAILED', 'FAILED'), true);
+  });
+
+  it('degrades observation after malformed protocol data without auto-resubmitting', () => {
+    const active = reconcileAfterProtocolError({ host: 'ONLINE', activeTurn: true });
+    assert.deepEqual(active, {
+      host: 'RECONNECTING',
+      turn: 'UNKNOWN',
+      thread: 'FAILED',
+      requiresReconnect: true,
+    });
+
+    const idle = reconcileAfterProtocolError({ host: 'ONLINE', activeTurn: false });
+    assert.deepEqual(idle, {
+      host: 'RECONNECTING',
+      turn: 'UNCHANGED',
+      thread: 'UNCHANGED',
+      requiresReconnect: true,
+    });
   });
 
   it('rejects illegal host/turn/approval transitions and double-send', () => {

@@ -32,6 +32,18 @@ export interface SubmitReconcileResult {
   reason: string;
 }
 
+export interface ProtocolErrorRecoveryInput {
+  host: HostConnectionState;
+  activeTurn: boolean;
+}
+
+export interface ProtocolErrorRecoveryResult {
+  host: HostConnectionState;
+  turn: 'UNKNOWN' | 'UNCHANGED';
+  thread: 'FAILED' | 'UNCHANGED';
+  requiresReconnect: true;
+}
+
 export function reconcileAfterSubmitFailure(input: SubmitReconcileInput): SubmitReconcileResult {
   if (!input.hostReachable) {
     return {
@@ -66,6 +78,23 @@ export function reconcileAfterSubmitFailure(input: SubmitReconcileInput): Submit
     shouldResubmit: false,
     next: input.commandId ? 'thread.resume' : 'show_unavailable',
     reason: 'Submit response was lost; state is UNKNOWN and must not auto-resubmit',
+  };
+}
+
+/**
+ * A malformed recognized message invalidates state observation, not transport
+ * reachability. Keep idle state visible but require reconnect; an active turn
+ * becomes UNKNOWN and its thread fails closed so the client cannot present a
+ * trustworthy running state.
+ */
+export function reconcileAfterProtocolError(
+  input: ProtocolErrorRecoveryInput,
+): ProtocolErrorRecoveryResult {
+  return {
+    host: input.host === 'OFFLINE' ? 'OFFLINE' : 'RECONNECTING',
+    turn: input.activeTurn ? 'UNKNOWN' : 'UNCHANGED',
+    thread: input.activeTurn ? 'FAILED' : 'UNCHANGED',
+    requiresReconnect: true,
   };
 }
 
