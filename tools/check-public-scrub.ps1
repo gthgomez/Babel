@@ -28,7 +28,7 @@ function Test-ValidRegexList {
   param([object[]]$Values)
   foreach ($value in @($Values)) {
     if ($value -isnot [string] -or [string]::IsNullOrWhiteSpace([string]$value)) { return $false }
-    try { [regex]::new([string]$value) | Out-Null } catch { return $false }
+    try { [void]('' -match [string]$value) } catch { return $false }
   }
   return $true
 }
@@ -113,9 +113,9 @@ if ($allowedPublicProjectNames.Count -gt 0) {
 }
 $supplementalPatterns = @($supplementalPrivateIdentifiers)
 Write-Verbose ("Loaded {0} public and {1} supplemental identifier patterns." -f $patterns.Count, $supplementalPatterns.Count)
-$commonModule = Join-Path $RepoRoot 'tools/security/tracked-scan-common.ps1'
+$commonModule = Join-Path $RepoRoot 'tools/security/tracked-scan-common.psm1'
 if (-not (Test-Path -LiteralPath $commonModule -PathType Leaf)) { throw "Tracked scan module not found: $commonModule" }
-. $commonModule
+Import-Module -Name $commonModule -Force
 $inventory = Get-TrackedScanInventory -RepoRoot $RepoRoot -BinaryAllowlist @($syncPolicy.binary_asset_allowlist)
 
 function Is-LegacyPlaceholderFinding {
@@ -144,10 +144,10 @@ function Get-ShannonEntropy {
 }
 
 
-$hardFindings = New-Object System.Collections.Generic.List[string]
-$warningFindings = New-Object System.Collections.Generic.List[string]
+$hardFindings = @()
+$warningFindings = @()
 foreach ($issue in @($inventory.issues)) {
-  $hardFindings.Add(("unscannable-tracked-file: {0}:0 ({1})" -f $issue.path, $issue.reason))
+  $hardFindings += ("unscannable-tracked-file: {0}:0 ({1})" -f $issue.path, $issue.reason)
 }
 
 function Write-ScrubReport {
@@ -226,13 +226,13 @@ function Get-LeakSearchResults {
   if ($SearchPatterns.Count -eq 0) {
     return @{ Results = @(); ExitCode = 1; Engine = 'none' }
   }
-  $results = New-Object System.Collections.Generic.List[string]
+  $results = @()
   foreach ($record in @($inventory.records)) {
     for ($index = 0; $index -lt $record.lines.Count; $index++) {
       $line = [string]$record.lines[$index]
       if ($line -match ($SearchPatterns -join '|')) {
         $excepted = Test-PolicyException -Exceptions @($syncPolicy.identifier_exceptions) -RuleId 'identifier' -Path $record.path -Line $line
-        if (-not $excepted) { $results.Add(("{0}:{1}:" -f $record.path, ($index + 1))) }
+        if (-not $excepted) { $results += ("{0}:{1}:" -f $record.path, ($index + 1)) }
       }
     }
   }
@@ -254,7 +254,7 @@ $forbiddenFiles = Get-PublicScrubFiles | Where-Object {
 if ($forbiddenFiles) {
   foreach ($file in $forbiddenFiles) {
     $relative = $file.FullName.Substring((Get-Location).Path.Length).TrimStart('\', '/').Replace('\', '/')
-    $hardFindings.Add($relative);
+    $hardFindings += $relative;
   }
   Write-Host 'Forbidden .env* files found in the public repository:' -ForegroundColor Yellow
   $forbiddenFiles | ForEach-Object {
@@ -282,7 +282,7 @@ $keyPatternRules = @(
   @{ Label = 'JWT token'; Pattern = 'eyJ[0-9A-Za-z\-_]{10,}\.[0-9A-Za-z\-_]{10,}\.[0-9A-Za-z\-_]{10,}' }
 )
 
-$secretFindings = New-Object System.Collections.Generic.List[string]
+$secretFindings = @()
 
 $allDependencyFingerprints = @($forbiddenDependencyFingerprints) + @($supplementalDependencyFingerprints)
 $fingerprintAlternation = if ($allDependencyFingerprints.Count -gt 0) {
@@ -309,7 +309,7 @@ foreach ($file in Get-PublicScrubFiles) {
     $lineNumber++
     foreach ($rule in $lockfileSafetyRules) {
       if ($line -match $rule.Pattern) {
-        $secretFindings.Add(("{0}:{1}: lockfile safety violation ({2})" -f $relative, $lineNumber, $rule.Label))
+        $secretFindings += ("{0}:{1}: lockfile safety violation ({2})" -f $relative, $lineNumber, $rule.Label)
       }
     }
   }
@@ -329,14 +329,14 @@ foreach ($file in Get-PublicScrubFiles) {
       if ($line -match "^\s*$escapedName\s*=\s*(.+?)\s*$") {
         $value = $Matches[1].Trim().Trim('"''')
         if ($value -and -not ($entry.Value -contains $value)) {
-          $secretFindings.Add(("{0}:{1}: suspicious {2} assignment" -f $relative, $lineNumber, $entry.Key))
+          $secretFindings += ("{0}:{1}: suspicious {2} assignment" -f $relative, $lineNumber, $entry.Key)
         }
       }
     }
 
     foreach ($rule in $keyPatternRules) {
       if ($line -match $rule.Pattern) {
-        $secretFindings.Add(("{0}:{1}: {2} pattern" -f $relative, $lineNumber, $rule.Label))
+        $secretFindings += ("{0}:{1}: {2} pattern" -f $relative, $lineNumber, $rule.Label)
       }
     }
 
@@ -370,7 +370,7 @@ foreach ($file in Get-PublicScrubFiles) {
       }
       $entropy = Get-ShannonEntropy -String $token
       if ($entropy -gt 4.6) {
-        $secretFindings.Add(("{0}:{1}: potential high-entropy secret detected (length: {2}, entropy: {3:N2})" -f $relative, $lineNumber, $token.Length, $entropy))
+        $secretFindings += ("{0}:{1}: potential high-entropy secret detected (length: {2}, entropy: {3:N2})" -f $relative, $lineNumber, $token.Length, $entropy)
       }
     }
   }
@@ -382,20 +382,20 @@ foreach ($line in $results) {
     $path = $Matches[1]
     $lineNumber = $Matches[2]
     if (Is-LegacyPlaceholderFinding $path) {
-      $warningFindings.Add(("identifier: {0}:{1}" -f $path, $lineNumber))
+      $warningFindings += ("identifier: {0}:{1}" -f $path, $lineNumber)
       continue;
     }
-    $hardFindings.Add(("identifier: {0}:{1}" -f $path, $lineNumber))
+    $hardFindings += ("identifier: {0}:{1}" -f $path, $lineNumber)
     continue
   }
-  $hardFindings.Add('identifier: path unavailable')
+  $hardFindings += 'identifier: path unavailable'
 }
 if ($secretFindings.Count -gt 0) {
-  $secretFindings | ForEach-Object { $hardFindings.Add($_) }
+  $secretFindings | ForEach-Object { $script:hardFindings += $_ }
 }
 
 if ($Strict -and $warningFindings.Count -gt 0) {
-  $warningFindings | ForEach-Object { $hardFindings.Add("strict mode promoted warning: $_") }
+  $warningFindings | ForEach-Object { $script:hardFindings += "strict mode promoted warning: $_" }
 }
 
 if ($hardFindings.Count -gt 0) {

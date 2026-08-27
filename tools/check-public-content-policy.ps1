@@ -22,9 +22,9 @@ try {
 } catch {
   throw "Public content policy is malformed: $PolicyPath"
 }
-$commonModule = Join-Path $RepoRoot 'tools/security/tracked-scan-common.ps1'
+$commonModule = Join-Path $RepoRoot 'tools/security/tracked-scan-common.psm1'
 if (-not (Test-Path -LiteralPath $commonModule -PathType Leaf)) { throw "Tracked scan module not found: $commonModule" }
-. $commonModule
+Import-Module -Name $commonModule -Force
 
 function Get-PCONT007Classification {
   param(
@@ -119,31 +119,31 @@ function Get-TrackedActiveFiles {
   }
 }
 
-$findings = [Collections.Generic.List[object]]::new()
-$warnings = [Collections.Generic.List[object]]::new()
+$findings = @()
+$warnings = @()
 $pc007Diagnostics = @{}
 function Add-Finding {
   param([string]$Id, [string]$Category, [string]$Path, [int]$Line, [string]$Severity = 'error')
   $entry = [pscustomobject]@{ id = $Id; category = $Category; path = $Path; line = $Line; severity = $Severity }
   if ($WarningsAsErrors -or $Severity -eq 'error') {
-    $findings.Add($entry)
+    $script:findings += $entry
   } else {
-    $warnings.Add($entry)
+    $script:warnings += $entry
   }
 }
-$validBinaryAllowlist = [Collections.Generic.List[object]]::new()
+$validBinaryAllowlist = @()
 foreach ($entry in @($policy.binary_asset_allowlist)) {
   if (($entry.PSObject.Properties.Name -contains 'path') -and ($entry.PSObject.Properties.Name -contains 'sha256') -and
       ($entry.PSObject.Properties.Name -contains 'rationale') -and -not [string]::IsNullOrWhiteSpace([string]$entry.path) -and [string]$entry.sha256 -match '^[0-9a-fA-F]{64}$' -and
-      -not [string]::IsNullOrWhiteSpace([string]$entry.rationale)) { $validBinaryAllowlist.Add($entry) }
+      -not [string]::IsNullOrWhiteSpace([string]$entry.rationale)) { $validBinaryAllowlist += $entry }
   else { Add-Finding -Id 'PCFG003' -Category 'invalid-binary-asset-allowlist' -Path 'tools/security/public-content-policy.json' -Line 0 }
 }
-$validGeneratedAllowlist = [Collections.Generic.List[object]]::new()
+$validGeneratedAllowlist = @()
 foreach ($entry in @($policy.generated_artifact_allowlist)) {
   if (@('path','producer','sanitization','regeneration','rationale' | Where-Object { $entry.PSObject.Properties.Name -notcontains $_ }).Count -eq 0 -and
       -not [string]::IsNullOrWhiteSpace([string]$entry.path) -and -not [string]::IsNullOrWhiteSpace([string]$entry.producer) -and
       -not [string]::IsNullOrWhiteSpace([string]$entry.sanitization) -and -not [string]::IsNullOrWhiteSpace([string]$entry.regeneration) -and
-      -not [string]::IsNullOrWhiteSpace([string]$entry.rationale)) { $validGeneratedAllowlist.Add($entry) }
+      -not [string]::IsNullOrWhiteSpace([string]$entry.rationale)) { $validGeneratedAllowlist += $entry }
   else { Add-Finding -Id 'PCFG004' -Category 'invalid-generated-artifact-allowlist' -Path 'tools/security/public-content-policy.json' -Line 0 }
 }
 $inventory = Get-TrackedScanInventory -RepoRoot $RepoRoot -BinaryAllowlist @($validBinaryAllowlist)
@@ -173,7 +173,7 @@ foreach ($record in @($inventory.records)) {
   }
 }
 
-$validTemporaryExceptions = [Collections.Generic.List[object]]::new()
+$validTemporaryExceptions = @()
 foreach ($entry in @($policy.temporary_exceptions)) {
   $requiredMetadata = @('id', 'rule_id', 'path', 'pattern', 'rationale', 'evidence', 'expires', 'replacement_pr')
   $isValid = $true
@@ -185,7 +185,7 @@ foreach ($entry in @($policy.temporary_exceptions)) {
     if (-not [datetime]::TryParseExact([string]$entry.expires, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$expiry)) { $isValid = $false }
     elseif ($expiry.Date -lt [datetime]::UtcNow.Date) { $isValid = $false }
   }
-  if ($isValid) { $validTemporaryExceptions.Add($entry) }
+  if ($isValid) { $validTemporaryExceptions += $entry }
   else { Add-Finding -Id 'PCFG001' -Category 'invalid-temporary-exception' -Path 'tools/security/public-content-policy.json' -Line 0 }
 }
 function Test-IsTemporarilyExcepted {
@@ -195,11 +195,11 @@ function Test-IsTemporarilyExcepted {
   }
   return $false
 }
-$validFixtureExceptions = [Collections.Generic.List[object]]::new()
+$validFixtureExceptions = @()
 foreach ($entry in @($policy.fixture_exceptions)) {
   if (-not [string]::IsNullOrWhiteSpace([string]$entry.id) -and -not [string]::IsNullOrWhiteSpace([string]$entry.rule_id) -and
       -not [string]::IsNullOrWhiteSpace([string]$entry.path) -and -not [string]::IsNullOrWhiteSpace([string]$entry.pattern) -and
-      -not [string]::IsNullOrWhiteSpace([string]$entry.rationale)) { $validFixtureExceptions.Add($entry) }
+      -not [string]::IsNullOrWhiteSpace([string]$entry.rationale)) { $validFixtureExceptions += $entry }
   else { Add-Finding -Id 'PCFG002' -Category 'invalid-fixture-exception' -Path 'tools/security/public-content-policy.json' -Line 0 }
 }
 
@@ -235,8 +235,8 @@ foreach ($file in @(Get-TrackedActiveFiles)) {
     if (-not $isHistorical -and $file.Extension -eq '.md') {
       if (-not $hasTitle -and $line -match '^#\s+(.+?)\s*$') {
         $titleKey = $Matches[1].Trim().ToLowerInvariant() -replace '\s+', ' '
-        if (-not $titles.ContainsKey($titleKey)) { $titles[$titleKey] = [Collections.Generic.List[object]]::new() }
-        $titles[$titleKey].Add([pscustomobject]@{ Path = $file.Relative; Line = $lineNumber })
+        if (-not $titles.ContainsKey($titleKey)) { $titles[$titleKey] = @() }
+        $titles[$titleKey] = @($titles[$titleKey]) + @([pscustomobject]@{ Path = $file.Relative; Line = $lineNumber })
         $hasTitle = $true
       }
       foreach ($match in [regex]::Matches($line, '!?(?<!\\)\[[^\]]*\]\(([^)]+)\)')) {
