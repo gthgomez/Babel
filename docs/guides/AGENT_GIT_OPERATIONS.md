@@ -89,6 +89,8 @@ After review and CI are available, run:
 
 ```powershell
 .\scripts\agent-pr-gate.ps1 -PR 110 -ReviewedHeadSha <reviewed-sha> -RiskTier HIGH -IndependentReviewReceiptPath <receipt> -MergeAuthorized
+
+`-BootstrapRepairAuthorized` is reserved for the documented gate-repair self-gating transition and records its exception; it is not a general check bypass.
 ```
 
 The result is either `MERGE_READY` or `BLOCKED` and includes the reviewed head, PR head, remote branch head, exact-head CI resolutions, PR base, current `origin/main`, active GitHub ruleset policy, independent technical review state, merge-authority state, worktree state, and blockers. Required status contexts are read from the active `protect-main` ruleset rather than assumed locally. HIGH and CRITICAL risk tiers require an exact-head independent review receipt; `-MergeAuthorized` is an explicit current-task authorization and is never inferred from CI or review evidence. Use `-AllowedPath` when an explicit changed-path allowlist is part of the review, and `-RequireIsolatedWorktree` when the gate must reject a canonical checkout.

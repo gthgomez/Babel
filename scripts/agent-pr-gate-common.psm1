@@ -210,4 +210,4 @@ function Get-AgentReviewPolicyVerdict {
   }
 }
 
-Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Resolve-AgentRequiredCheck, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue
+Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue

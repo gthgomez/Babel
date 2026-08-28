@@ -12,6 +12,7 @@ param(
   [string]$IndependentReviewReceiptPath = '',
   [string]$BuilderIdentity = 'codex-implementation',
   [switch]$MergeAuthorized,
+  [switch]$BootstrapRepairAuthorized,
   [string[]]$RequiredCheck = @(),
   [string[]]$AllowedPath = @(),
   [switch]$RequireIsolatedWorktree,
@@ -264,6 +265,27 @@ try {
   Add-AgentCheck -Name 'CI_HEAD_MATCH' -Passed ($ciHeadMatch -and $requiredChecks.Count -gt 0) -Blocker 'ci_not_bound_to_pr_head'
   Add-AgentCheck -Name 'REQUIRED_CHECKS_GREEN' -Passed ($requiredChecksGreen -and $requiredChecks.Count -gt 0) -Blocker 'required_checks_not_green'
 
+  $bootstrapException = [ordered]@{ requested = [bool]$BootstrapRepairAuthorized; active = $false; reason = $null; legacyMetadataObservation = $null }
+  if ($BootstrapRepairAuthorized) {
+    $metadataResult = @($requiredResults | Where-Object { $_.name -eq 'public-pr-metadata' })[0]
+    $nonMetadataResultsPass = @($requiredResults | Where-Object { $_.name -ne 'public-pr-metadata' -and $_.status -eq 'PASS' }).Count -eq ($requiredResults.Count - 1)
+    $legacyMetadata = @($normalizedRuns | Where-Object {
+        [string]::Equals([string]$_.name, 'public-pr-metadata', [StringComparison]::OrdinalIgnoreCase) -and
+        [string]::Equals([string]$_.head_sha, $prHead, [StringComparison]::OrdinalIgnoreCase) -and
+        [string]::Equals([string]$_.event, 'pull_request_target', [StringComparison]::OrdinalIgnoreCase) -and
+        [string]::Equals([string]$_.workflow_name, 'Public Release Gate', [StringComparison]::OrdinalIgnoreCase) -and
+        [string]::Equals([string]$_.status, 'completed', [StringComparison]::OrdinalIgnoreCase) -and
+        [string]::Equals([string]$_.conclusion, 'success', [StringComparison]::OrdinalIgnoreCase)
+      } | Sort-Object @{ Expression = { Get-AgentObservationTimestamp -Observation $_ }; Descending = $true }, @{ Expression = { [string]$_.check_run_id }; Descending = $true })
+    $onlyKnownBootstrapBlockers = @($blockers | Where-Object { $_ -notin @('ci_not_bound_to_pr_head', 'required_checks_not_green') }).Count -eq 0
+    if ($null -ne $metadataResult -and $metadataResult.status -eq 'AMBIGUOUS' -and $metadataResult.reason -eq 'no_authoritative_workflow_observation' -and $nonMetadataResultsPass -and $legacyMetadata.Count -gt 0 -and $onlyKnownBootstrapBlockers) {
+      $bootstrapException.active = $true
+      $bootstrapException.reason = 'new_pull_request_target_workflow_requires_default_branch_bootstrap'
+      $bootstrapException.legacyMetadataObservation = [string]$legacyMetadata[0].check_run_id
+      $blockers = @($blockers | Where-Object { $_ -notin @('ci_not_bound_to_pr_head', 'required_checks_not_green') })
+    }
+  }
+
   $diffPaths = @()
   if ((Test-AgentShaValue $originMain) -and (Test-AgentShaValue $reviewedHead)) {
     $diffResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('diff', '--name-only', "$originMain...$reviewedHead")
@@ -287,7 +309,7 @@ try {
     worktree = [ordered]@{ clean = $status.clean; dirtyPaths = @($status.dirtyPaths); isolated = $topology.isolated }
     repositoryPolicy = [ordered]@{ source = 'github_ruleset'; rulesetId = if ($rulesetPolicy.available) { $rulesetPolicy.id } else { $null }; name = if ($rulesetPolicy.available) { $rulesetPolicy.name } else { $null }; enforcement = if ($rulesetPolicy.available) { $rulesetPolicy.enforcement } else { $null }; githubRequiredApprovalCount = $githubApprovalCount; requiredReviewThreadResolution = if ($rulesetPolicy.available) { $rulesetPolicy.required_review_thread_resolution } else { $null }; requiredStatusChecks = @($requiredChecks); strictRequiredStatusChecksPolicy = if ($rulesetPolicy.available) { $rulesetPolicy.strict_required_status_checks_policy } else { $null } }
     reviewPolicy = [ordered]@{ riskTier = $RiskTier; githubApprovalSatisfied = [bool]$reviewPolicy.github_approval_satisfied; observedApprovalCount = $observedApprovalCount; reviewThreadsRequired = if ($rulesetPolicy.available) { [bool]$rulesetPolicy.required_review_thread_resolution } else { $null }; reviewThreadsSatisfied = [bool]$reviewPolicy.review_threads_satisfied; independentReviewRequired = $independentRequired; independentReviewSatisfied = [bool]$reviewPolicy.independent_review_satisfied; independentReviewReceipt = $receipt.path; mergeAuthorityRequired = $true; mergeAuthoritySatisfied = [bool]$reviewPolicy.merge_authority_satisfied; mergeAuthoritySource = if ($MergeAuthorized) { 'current_task_explicit_user_authorization' } else { $null } }
-    checks = $checks; requiredChecks = @($requiredResults); diff = [ordered]@{ scopeBasis = 'reviewed_head_exact'; paths = @($diffPaths) }; environment = $envState; blockers = @($blockers | Select-Object -Unique); warnings = @($warnings | Select-Object -Unique)
+    checks = $checks; requiredChecks = @($requiredResults); bootstrapException = $bootstrapException; diff = [ordered]@{ scopeBasis = 'reviewed_head_exact'; paths = @($diffPaths) }; environment = $envState; blockers = @($blockers | Select-Object -Unique); warnings = @($warnings | Select-Object -Unique)
   }
   Write-AgentResult -Result $result -OutputFormat $OutputFormat
   if (-not $mergeReady) { exit 1 }

@@ -140,3 +140,10 @@ PR_HEAD_CREATED -> LOCAL_VERIFIED -> INDEPENDENT_REVIEWED
 Every meaningful SHA change invalidates prior review and CI evidence. Autonomous
 mutation, autonomous merge-train execution, rollback, deployment, credential
 delegation, and self-modification are not enabled by this document.
+
+The repair PR itself has one explicit bootstrap path: `-BootstrapRepairAuthorized`
+may be supplied only after the frozen-base gate has been run and its sole
+remaining blockers are the proven old approval mismatch and the new
+target-workflow authority gap. The gate records the exception, requires all
+other dimensions plus a successful exact-head legacy metadata result, and never
+treats the mode as a general check bypass.
