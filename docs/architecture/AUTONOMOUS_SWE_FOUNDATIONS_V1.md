@@ -157,17 +157,21 @@ mode is an explicit verifier choice. Deleted files are represented as
 stale. The composite hash is checked rather than trusted from JSON alone.
 
 Independent review uses `independent_review_receipt_v2`. A supervisor review
-lane issues a single-use challenge and signs the bound receipt with Ed25519.
-The merge gate verifies the signature against a public-key registry anchored
-to the immutable PR base, not the candidate branch. Receipts bind repository,
+lane issues a single-use challenge whose current state is signed by a dedicated
+supervisor Ed25519 key. The reviewer signs the receipt with a separate reviewer
+key. The merge gate verifies both keys against public registries anchored to the
+immutable PR base, not the candidate branch. Receipts bind repository,
 PR, task, run, contract, base, head, reviewer class/mode, builder, scope,
 timestamp, challenge, verdict, findings, and authority provenance. The
 challenge ledger is a durable canonical document with atomic replacement,
-state hashing, explicit `ISSUED`/`CONSUMED`/`EXPIRED`/`REVOKED` status, and a
-signed-receipt hash on consumed records. The trusted verifier validates the
-ledger binding as well as the receipt signature. A public key must be
-provisioned by the trusted review-lane owner; the empty registry in this branch
-intentionally does not authorize any reviewer until the bootstrap transition.
+state hashing, explicit `ISSUED`/`CONSUMED`/`EXPIRED`/`REVOKED` status, signed
+state transitions, and a signed-receipt hash on consumed records. The trusted
+verifier validates the ledger binding, supervisor state signatures, and receipt
+signature. A public key must be provisioned by the trusted review-lane owner;
+the empty registry in this branch intentionally does not authorize any reviewer
+until the bootstrap transition. Signed records prevent rehash-and-rewrite
+attacks; rollback detection still requires the supervisor's append-only storage
+boundary and is not claimed from a plain file hash alone.
 
 The Breaker lane is executable as a read-only contract with inspection/search
 and allowed verification capabilities, no credentials, no publication, and no
@@ -175,8 +179,10 @@ mutation. It returns structured findings or `UNKNOWN`. A current unresolved
 HIGH/CRITICAL Breaker finding produces `BLOCKED`; the Breaker never receives
 merge authority. `executeIsolatedBreakerProcessV1` runs the permitted command
 in a separate process against a disposable snapshot, strips secrets from its
-environment, and fingerprints the snapshot before and after execution. The
-legacy callback helper remains a test/local primitive and is not an
+environment, and fingerprints the snapshot before and after execution. This is
+a practical process boundary, not a container, ACL, network namespace, or OS
+attestation; the current V1 adapter cannot claim full hostile-process isolation.
+The legacy callback helper remains a test/local primitive and is not an
 independently trusted Breaker result.
 
 Evidence graphs seal after serialization and reject later mutation through the

@@ -44,6 +44,12 @@ export interface ReviewChallengeRecordV1 extends ReviewChallengeV1 {
   reviewer_class: IndependentReviewerClassV1;
   status: ReviewChallengeStatusV1;
   authority_provenance: { issuer: "supervisor_review_lane"; key_id: string };
+  /** Current challenge state is authenticated by a distinct supervisor key. */
+  supervisor_signature: {
+    algorithm: "ed25519";
+    key_id: string;
+    value: string;
+  };
   consumed_at?: string;
   revoked_at?: string;
   receipt_hash?: string;
@@ -125,6 +131,32 @@ function challengeDigest(challenge: ReviewChallengeV1): string {
   });
 }
 
+function challengeSigningBytes(record: ReviewChallengeRecordV1): Buffer {
+  const { supervisor_signature: _signature, ...unsigned } = record;
+  return Buffer.from(canonicalJson(unsigned), "utf8");
+}
+
+function signChallengeRecord(
+  record: Omit<ReviewChallengeRecordV1, "supervisor_signature">,
+  keyId: string,
+  privateKey: KeyObject | string,
+): ReviewChallengeRecordV1 {
+  const signed = {
+    ...record,
+    supervisor_signature: {
+      algorithm: "ed25519" as const,
+      key_id: keyId,
+      value: "",
+    },
+  };
+  signed.supervisor_signature.value = sign(
+    null,
+    challengeSigningBytes(signed),
+    privateKey,
+  ).toString("base64url");
+  return signed;
+}
+
 function ledgerHash(challenges: readonly ReviewChallengeRecordV1[]): string {
   return sha256Canonical(challenges);
 }
@@ -200,7 +232,11 @@ function readLedger(filePath: string): ReviewChallengeLedgerV1 {
       throw new Error("Review challenge ledger contains invalid bindings.");
     if (
       challenge.authority_provenance.issuer !== "supervisor_review_lane" ||
-      !challenge.authority_provenance.key_id
+      !challenge.authority_provenance.key_id ||
+      !challenge.supervisor_signature ||
+      challenge.supervisor_signature.algorithm !== "ed25519" ||
+      !challenge.supervisor_signature.key_id ||
+      !/^[A-Za-z0-9_-]{40,}$/.test(challenge.supervisor_signature.value)
     )
       throw new Error(
         "Review challenge ledger authority provenance is invalid.",
@@ -263,8 +299,10 @@ function assertChallenge(
 
 /** Create a supervisor-held challenge and signer for an independent reviewer lane. */
 export function createIndependentReviewAuthorityV1(input: {
-  key_id: string;
-  private_key: KeyObject | string;
+  reviewer_key_id: string;
+  reviewer_private_key: KeyObject | string;
+  supervisor_key_id: string;
+  supervisor_private_key: KeyObject | string;
   ledger_path: string;
 }): {
   issueChallenge(
@@ -289,8 +327,12 @@ export function createIndependentReviewAuthorityV1(input: {
   revokeChallenge(challengeId: string): void;
   getChallenge(challengeId: string): ReviewChallengeRecordV1 | undefined;
 } {
-  if (!input.key_id.trim())
-    throw new Error("Review authority key_id is required.");
+  if (!input.reviewer_key_id.trim() || !input.reviewer_private_key)
+    throw new Error("Reviewer signing key is required.");
+  if (!input.supervisor_key_id.trim() || !input.supervisor_private_key)
+    throw new Error("Separate supervisor signing key is required.");
+  if (input.reviewer_key_id === input.supervisor_key_id)
+    throw new Error("Reviewer and supervisor keys must be distinct.");
   if (!input.ledger_path.trim())
     throw new Error("Review challenge ledger_path is required.");
   if (!fs.existsSync(path.resolve(input.ledger_path)))
@@ -324,8 +366,7 @@ export function createIndependentReviewAuthorityV1(input: {
         challenge_id: `challenge:${randomBytes(32).toString("hex")}`,
       };
       const ledger = readLedger(input.ledger_path);
-      writeLedger(input.ledger_path, [
-        ...ledger.challenges,
+      const record = signChallengeRecord(
         {
           ...challenge,
           repository: challengeInput.repository,
@@ -336,10 +377,13 @@ export function createIndependentReviewAuthorityV1(input: {
           status: "ISSUED",
           authority_provenance: {
             issuer: "supervisor_review_lane",
-            key_id: input.key_id,
+            key_id: input.supervisor_key_id,
           },
         },
-      ]);
+        input.supervisor_key_id,
+        input.supervisor_private_key,
+      );
+      writeLedger(input.ledger_path, [...ledger.challenges, record]);
       return Object.freeze(challenge);
     },
     issueReceipt(receiptInput): IndependentReviewReceiptV2 {
@@ -357,12 +401,15 @@ export function createIndependentReviewAuthorityV1(input: {
         throw new Error("Review challenge has been tampered with.");
       const now = Date.now();
       if (Date.parse(record.expires_at) <= now) {
+        const expired = signChallengeRecord(
+          { ...record, status: "EXPIRED" },
+          input.supervisor_key_id,
+          input.supervisor_private_key,
+        );
         writeLedger(
           input.ledger_path,
           ledger.challenges.map((candidate) =>
-            candidate.challenge_id === record.challenge_id
-              ? { ...candidate, status: "EXPIRED" }
-              : candidate,
+            candidate.challenge_id === record.challenge_id ? expired : candidate,
           ),
         );
         throw new Error("Review challenge is expired.");
@@ -399,31 +446,38 @@ export function createIndependentReviewAuthorityV1(input: {
         blocking_findings: [...(receiptInput.blocking_findings ?? [])],
         authority_provenance: {
           issuer: "supervisor_review_lane",
-          key_id: input.key_id,
+          key_id: input.supervisor_key_id,
           challenge_id: challenge.challenge_id,
         },
-        signature: { algorithm: "ed25519", key_id: input.key_id, value: "" },
+        signature: {
+          algorithm: "ed25519",
+          key_id: input.reviewer_key_id,
+          value: "",
+        },
       };
       receipt.signature.value = sign(
         null,
         signingBytes(receipt),
-        input.private_key,
+        input.reviewer_private_key,
       ).toString("base64url");
       // The signed receipt hash is written in the same atomic ledger
       // transition that consumes the challenge. A second receipt can never
       // be minted for this challenge, including after a restart.
       const receiptHash = sha256Canonical(receipt);
+      const consumed = signChallengeRecord(
+        {
+          ...record,
+          status: "CONSUMED",
+          consumed_at: new Date(now).toISOString(),
+          receipt_hash: receiptHash,
+        },
+        input.supervisor_key_id,
+        input.supervisor_private_key,
+      );
       writeLedger(
         input.ledger_path,
         ledger.challenges.map((candidate) =>
-          candidate.challenge_id === record.challenge_id
-            ? {
-                ...candidate,
-                status: "CONSUMED",
-                consumed_at: new Date(now).toISOString(),
-                receipt_hash: receiptHash,
-              }
-            : candidate,
+          candidate.challenge_id === record.challenge_id ? consumed : candidate,
         ),
       );
       return Object.freeze(receipt);
@@ -438,16 +492,15 @@ export function createIndependentReviewAuthorityV1(input: {
         throw new Error(
           `Cannot revoke ${record.status.toLowerCase()} review challenge.`,
         );
+      const revoked = signChallengeRecord(
+        { ...record, status: "REVOKED", revoked_at: new Date().toISOString() },
+        input.supervisor_key_id,
+        input.supervisor_private_key,
+      );
       writeLedger(
         input.ledger_path,
         ledger.challenges.map((candidate) =>
-          candidate.challenge_id === challengeId
-            ? {
-                ...candidate,
-                status: "REVOKED",
-                revoked_at: new Date().toISOString(),
-              }
-            : candidate,
+          candidate.challenge_id === challengeId ? revoked : candidate,
         ),
       );
     },
@@ -462,8 +515,79 @@ export function createIndependentReviewAuthorityV1(input: {
 /** Validate a durable challenge ledger before a trusted review process uses it. */
 export function validateReviewChallengeLedgerV1(
   filePath: string,
+  supervisorPublicKeys?: ReadonlyMap<string, KeyObject | string>,
 ): ReviewChallengeLedgerV1 {
-  return readLedger(filePath);
+  const ledger = readLedger(filePath);
+  if (supervisorPublicKeys) {
+    for (const record of ledger.challenges) {
+      const key = supervisorPublicKeys.get(record.supervisor_signature.key_id);
+      if (
+        !key ||
+        record.authority_provenance.key_id !== record.supervisor_signature.key_id ||
+        !verify(
+          null,
+          challengeSigningBytes(record),
+          key,
+          Buffer.from(record.supervisor_signature.value, "base64url"),
+        )
+      )
+        throw new Error("Review challenge supervisor signature invalid.");
+    }
+  }
+  return ledger;
+}
+
+/**
+ * Validate both signatures and the durable single-use state for a receipt.
+ * The legacy receipt-only validator intentionally cannot establish challenge
+ * provenance; trusted gate callers must use this function (or the equivalent
+ * base-rooted verifier) with both immutable key registries.
+ */
+export function validateAuthenticatedIndependentReviewReceiptV1(
+  receipt: unknown,
+  reviewerPublicKeys: ReadonlyMap<string, KeyObject | string>,
+  supervisorPublicKeys: ReadonlyMap<string, KeyObject | string>,
+  ledgerPath: string,
+  expected: ReviewValidationExpectationV1,
+): string[] {
+  const errors = validateIndependentReviewReceiptV1(
+    receipt,
+    reviewerPublicKeys,
+    expected,
+  );
+  let ledger: ReviewChallengeLedgerV1;
+  try {
+    ledger = validateReviewChallengeLedgerV1(ledgerPath, supervisorPublicKeys);
+  } catch {
+    return [...errors, "review_challenge_ledger_untrusted"];
+  }
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt))
+    return [...errors, "receipt_shape"];
+  const candidate = receipt as Partial<IndependentReviewReceiptV2>;
+  const challenge = ledger.challenges.find(
+    (record) => record.challenge_id === candidate.challenge_id,
+  );
+  if (!challenge) return [...errors, "review_challenge_unknown"];
+  if (challenge.status !== "CONSUMED") errors.push("review_challenge_not_consumed");
+  if (challenge.receipt_hash !== sha256Canonical(candidate))
+    errors.push("review_receipt_not_bound_to_consumed_challenge");
+  for (const field of [
+    "repository",
+    "pr_number",
+    "task_id",
+    "run_id",
+    "contract_hash",
+    "base_sha",
+    "head_sha",
+    "builder_id",
+    "reviewer_class",
+  ] as const) {
+    if (challenge[field] !== candidate[field])
+      errors.push(`review_challenge_${field}_mismatch`);
+  }
+  if (Date.parse(challenge.expires_at) <= (expected.now ?? Date.now()))
+    errors.push("review_challenge_expired");
+  return [...new Set(errors)];
 }
 
 /** Verify signed independent-review provenance and all semantic bindings. */
@@ -570,8 +694,11 @@ export function validateIndependentReviewReceiptV1(
     )
   )
     errors.push("signature_invalid");
-  if (candidate.authority_provenance?.key_id !== keyId)
-    errors.push("authority_key_mismatch");
+  if (
+    typeof candidate.authority_provenance?.key_id !== "string" ||
+    candidate.authority_provenance.key_id.length === 0
+  )
+    errors.push("authority_key_missing");
   if (
     candidate.verdict !== "APPROVE" &&
     candidate.verdict !== "BLOCK" &&

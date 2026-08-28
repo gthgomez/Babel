@@ -3,6 +3,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { sha256Canonical } from "../acceptance/canonical.js";
 
 import {
   loadTrustedExecutionSupervisorV1,
@@ -163,10 +164,13 @@ test("revision evidence rejects empty or unsafe scopes and distinguishes explici
 
 test("independent review requires supervisor challenge, semantic bindings, and an asymmetric signature", () => {
   const keys = generateKeyPairSync("ed25519");
+  const supervisorKeys = generateKeyPairSync("ed25519");
   const ledgerFile = tempFile("review-ledger");
   const authority = createIndependentReviewAuthorityV1({
-    key_id: "reviewer-test-key",
-    private_key: keys.privateKey,
+    reviewer_key_id: "reviewer-test-key",
+    reviewer_private_key: keys.privateKey,
+    supervisor_key_id: "supervisor-test-key",
+    supervisor_private_key: supervisorKeys.privateKey,
     ledger_path: ledgerFile,
   });
   try {
@@ -272,10 +276,13 @@ test("independent review requires supervisor challenge, semantic bindings, and a
 
 test("review challenge ledger is durable, expiring, single-use, revocable, and fail-closed", () => {
   const keys = generateKeyPairSync("ed25519");
+  const supervisorKeys = generateKeyPairSync("ed25519");
   const ledgerFile = tempFile("review-ledger-adversarial");
   const authority = createIndependentReviewAuthorityV1({
-    key_id: "reviewer-test-key",
-    private_key: keys.privateKey,
+    reviewer_key_id: "reviewer-test-key",
+    reviewer_private_key: keys.privateKey,
+    supervisor_key_id: "supervisor-test-key",
+    supervisor_private_key: supervisorKeys.privateKey,
     ledger_path: ledgerFile,
   });
   const base = {
@@ -310,8 +317,10 @@ test("review challenge ledger is durable, expiring, single-use, revocable, and f
       "CONSUMED",
     );
     const afterRestart = createIndependentReviewAuthorityV1({
-      key_id: "reviewer-test-key",
-      private_key: keys.privateKey,
+      reviewer_key_id: "reviewer-test-key",
+      reviewer_private_key: keys.privateKey,
+      supervisor_key_id: "supervisor-test-key",
+      supervisor_private_key: supervisorKeys.privateKey,
       ledger_path: ledgerFile,
     });
     assert.equal(
@@ -389,12 +398,27 @@ test("review challenge ledger is durable, expiring, single-use, revocable, and f
     const raw = readFileSync(ledgerFile, "utf8");
     writeFileSync(
       ledgerFile,
-      raw.replace("reviewer-test-key", "attacker-key"),
+      raw.replace("supervisor-test-key", "attacker-key"),
       "utf8",
     );
     assert.throws(
       () => validateReviewChallengeLedgerV1(ledgerFile),
       /state hash mismatch/,
+    );
+    const forged = JSON.parse(raw.replace("supervisor-test-key", "supervisor-test-key")) as {
+      challenges: Array<Record<string, unknown>>;
+      state_hash: string;
+    };
+    forged.challenges[0]!.status = "ISSUED";
+    forged.state_hash = sha256Canonical(forged.challenges);
+    writeFileSync(ledgerFile, JSON.stringify(forged), "utf8");
+    assert.throws(
+      () =>
+        validateReviewChallengeLedgerV1(
+          ledgerFile,
+          new Map([["supervisor-test-key", supervisorKeys.publicKey]]),
+        ),
+      /supervisor signature invalid/,
     );
   } finally {
     if (existsSync(ledgerFile)) rmSync(ledgerFile, { force: true });

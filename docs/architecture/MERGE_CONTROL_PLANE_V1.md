@@ -93,20 +93,26 @@ reviewer_id, reviewer_class, review_mode, reviewed_at, challenge_id, builder_id
 reviewed_scope, verdict, blocking_findings, authority_provenance, signature
 ```
 
-The receipt is signed by the supervisor-owned independent review lane with
-Ed25519. Its public verification key is loaded from the immutable PR base;
-candidate-controlled key registries are not trusted. A supervisor-issued,
-durable, single-use challenge is recorded in an atomic ledger, and the
-consumed record stores the hash of the one signed receipt. The trusted verifier
-checks both the immutable-base verifier implementation and the ledger binding;
-ordinary replay, restart replay, expiry, and revocation therefore fail closed.
+The receipt is signed by the supervisor-owned independent review lane with a
+reviewer Ed25519 key. Its public verification key is loaded from the immutable
+PR base; candidate-controlled key registries are not trusted. A separate
+supervisor Ed25519 key signs each durable challenge state, so a reviewer or
+builder cannot mint a challenge by writing a record and recomputing the plain
+state hash. The consumed record stores the hash of the one signed receipt. The
+trusted verifier checks both immutable-base registries, the base-rooted
+verifier implementation, the supervisor state signature, and the ledger
+binding. Ordinary forgery, expiry, revocation, and state rollback attempts fail
+closed; protection against restoring an older whole file still depends on the
+trusted supervisor's append-only storage boundary.
 The receipt must be exact-head and exact-base bound, have a non-empty explicit
 file/repository scope, have no blocking findings, use `APPROVE`, and identify a
 reviewer distinct from the builder. Signature verification authenticates the
 receipt to an authorized review key; it does not by itself establish that the
 reviewer was substantively correct or grant merge authority. The branch's
-empty key registry is intentionally fail-closed until an operator provisions a
-trusted public key through the one-time bootstrap transition.
+empty key registry is intentionally fail-closed until an operator provisions
+trusted public keys through the one-time bootstrap transition. The generic gate
+cannot invoke bootstrap mode; the bounded operator script requires PR 121, an
+exact approved head, the pre-root base, and an exact path allowlist.
 
 Initial policy: LOW may use CI plus exact-head review under repository policy;
 MEDIUM is policy-dependent; HIGH and CRITICAL require an independent exact-head
@@ -120,8 +126,10 @@ serialized evidence fields are claims checked against that port, never a source
 of registry authority. Assignment state is durable, hash-checked, task/run/
 contract-bound, and restored through the supervisor bootstrap. The module
 boundary is enforced for normal package consumers; OS-level process isolation
-and external attestation remain deployment responsibilities. Mutating workers
-remain disabled.
+and external attestation remain deployment responsibilities. Same-process
+hostile code can still load source files absent from package exports, so
+AUTH-001 is a normal-consumer boundary rather than a complete hostile-process
+boundary. Mutating workers remain disabled.
 
 Review-thread pagination is fail-closed: all pages are fetched, and a missing
 cursor when `hasNextPage` is true is unreadable rather than resolved. The gate
