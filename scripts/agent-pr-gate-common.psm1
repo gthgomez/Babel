@@ -135,8 +135,12 @@ function Resolve-AgentRequiredCheck {
 function Get-AgentIndependentReviewReceiptHash {
   param([Parameter(Mandatory = $true)][object]$Receipt)
   $payload = [ordered]@{}
-  foreach ($property in @($Receipt.PSObject.Properties)) {
-    if ($property.Name -ne 'artifact_hash') { $payload[$property.Name] = $property.Value }
+  $fieldOrder = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'reviewer_id', 'reviewer_class', 'review_mode', 'reviewed_at', 'scope', 'findings', 'blocking_findings', 'verdict', 'builder_id')
+  foreach ($field in $fieldOrder) {
+    $property = $Receipt.PSObject.Properties[$field]
+    if ($null -ne $property) {
+      if ($field -in @('scope', 'findings', 'blocking_findings')) { $payload[$field] = @($property.Value) } else { $payload[$field] = $property.Value }
+    }
   }
   $canonical = $payload | ConvertTo-Json -Depth 50 -Compress
   $bytes = [Text.Encoding]::UTF8.GetBytes($canonical)
