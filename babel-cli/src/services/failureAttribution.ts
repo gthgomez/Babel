@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 
 export const FAILURE_ATTRIBUTION_VERSION = 1 as const;
 
@@ -31,6 +32,11 @@ export interface FailureEvidenceV1 {
     | "model_self_report";
   detail: string;
   supports_category: FailureCategoryV1 | null;
+  /** Provenance is optional for compatibility, but required for high confidence. */
+  producer_id?: string;
+  source_domain?: string;
+  run_id?: string;
+  observation_id?: string;
 }
 
 export interface FailureAttributionV1 {
@@ -66,6 +72,10 @@ const evidenceSchema = z
     supports_category: z
       .enum(FAILURE_CATEGORIES as unknown as [string, ...string[]])
       .nullable(),
+    producer_id: z.string().min(1).optional(),
+    source_domain: z.string().min(1).optional(),
+    run_id: z.string().min(1).optional(),
+    observation_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -109,9 +119,29 @@ export function attributeFailureV1(input: {
     (item) =>
       item.source !== "model_self_report" && item.supports_category !== null,
   );
+  const uniqueCausal = [
+    ...new Map(
+      causal.map((item) => [
+        item.observation_id
+          ? `${item.source_domain ?? "unknown"}|${item.run_id ?? "unknown"}|${item.observation_id}`
+          : createHash("sha256")
+              .update(
+                JSON.stringify({
+                  source: item.source,
+                  detail: item.detail,
+                  supports_category: item.supports_category,
+                  source_domain: item.source_domain ?? null,
+                  run_id: item.run_id ?? null,
+                }),
+              )
+              .digest("hex"),
+        item,
+      ]),
+    ).values(),
+  ];
   const categories = [
     ...new Set(
-      causal
+      uniqueCausal
         .map((item) => item.supports_category)
         .filter(
           (category): category is FailureCategoryV1 =>
@@ -120,10 +150,23 @@ export function attributeFailureV1(input: {
     ),
   ];
   const category = categories.length === 1 ? categories[0]! : "UNKNOWN";
+  const independentProvenance = new Set(
+    uniqueCausal
+      .filter(
+        (item) =>
+          item.producer_id &&
+          item.source_domain &&
+          item.run_id &&
+          item.observation_id,
+      )
+      .map(
+        (item) => `${item.producer_id}|${item.source_domain}|${item.run_id}`,
+      ),
+  );
   const confidence =
     category === "UNKNOWN"
       ? "unknown"
-      : categories.length === 1 && causal.length > 1
+      : categories.length === 1 && independentProvenance.size > 1
         ? "high"
         : "medium";
   const alternatives = [

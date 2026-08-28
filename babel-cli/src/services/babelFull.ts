@@ -58,6 +58,8 @@ export interface BabelFullRunResult {
     enabled: false;
     reason: string;
   };
+  foundation_artifacts_status: "ok" | "error";
+  foundation_artifacts_error?: string;
   foundation_artifacts?: AutonomousSWEArtifactResultV1;
 }
 
@@ -67,6 +69,9 @@ export interface BabelFullRunOptions {
   agentsMode?: LiteFullAgentsMode;
   runsRoot?: string;
   now?: Date;
+  foundationArtifactsWriter?: (
+    input: Parameters<typeof writeAutonomousSWEArtifactsV1>[0],
+  ) => AutonomousSWEArtifactResultV1;
 }
 
 export interface SparkSynthesis {
@@ -510,14 +515,23 @@ export function runBabelFullPlan(
   const agentsMode = options.agentsMode ?? "read-only";
   mkdirSync(runDir, { recursive: true });
 
-  const foundationArtifacts = writeAutonomousSWEArtifactsV1({
-    runDir,
-    task,
-    run_id: runId,
-    project_root: projectRoot,
-    harness: "babel-full",
-    tool_profile: "read-only-proof",
-  });
+  let foundationArtifacts: AutonomousSWEArtifactResultV1 | undefined;
+  let foundationArtifactsError: string | undefined;
+  try {
+    foundationArtifacts = (
+      options.foundationArtifactsWriter ?? writeAutonomousSWEArtifactsV1
+    )({
+      runDir,
+      task,
+      run_id: runId,
+      project_root: projectRoot,
+      harness: "babel-full",
+      tool_profile: "read-only-proof",
+    });
+  } catch (error) {
+    foundationArtifactsError =
+      error instanceof Error ? error.message : String(error);
+  }
 
   const routeDecisionPath = join(runDir, "route_decision.json");
   writeJson(routeDecisionPath, options.routeDecision);
@@ -605,7 +619,13 @@ export function runBabelFullPlan(
       reason:
         "This proof batch allows read-only Spark agents only; governed execution remains lead-owned.",
     },
-    foundation_artifacts: foundationArtifacts,
+    foundation_artifacts_status: foundationArtifactsError ? "error" : "ok",
+    ...(foundationArtifactsError
+      ? { foundation_artifacts_error: foundationArtifactsError }
+      : {}),
+    ...(foundationArtifacts
+      ? { foundation_artifacts: foundationArtifacts }
+      : {}),
   };
   writeJson(join(runDir, "full_result.json"), result);
   return result;

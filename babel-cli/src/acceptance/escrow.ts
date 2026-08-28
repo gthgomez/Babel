@@ -46,6 +46,19 @@ const requirementSchema = z
     ]),
     required: z.boolean(),
     verification_strategy: z.string().min(1),
+    verification: z
+      .object({
+        kind: z.string().min(1),
+        verifier_id: z.string().min(1),
+        command_hash: z
+          .string()
+          .regex(/^[0-9a-f]{32,64}$/)
+          .optional(),
+        target: z.string().min(1).optional(),
+        execution_profile: z.string().min(1).optional(),
+        artifact_expectations: z.array(z.string().min(1)).optional(),
+      })
+      .strict(),
   })
   .strict();
 
@@ -197,7 +210,7 @@ export function validateAcceptanceBundleV1(value: unknown): string[] {
   const parsed = AcceptanceBundleV1Schema.safeParse(value);
   if (!parsed.success)
     return parsed.error.issues.map((issue) => issue.path.join(".") || "$");
-  const bundle = parsed.data;
+  const bundle = parsed.data as unknown as AcceptanceBundleV1;
   const errors: string[] = [];
   const ids = [
     ...requirementIds(bundle.builder_visible),

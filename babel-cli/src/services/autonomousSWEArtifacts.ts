@@ -130,6 +130,7 @@ export function writeAutonomousSWEArtifactsV1(input: {
       data: { description: requirement.description },
       parents: [],
       binding: {
+        run_id: input.run_id,
         task_id: taskContract.task_id,
         contract_hash: taskContract.contract_hash,
         repository: input.project_root ?? "<unspecified-project>",
