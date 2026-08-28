@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "keys": {
+    "trusted-reviewer-ed25519-v1": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA/DbUFXdSmpB1aaT8JiUZnn0riDg2hsV5eY0YbPeGGCI=\n-----END PUBLIC KEY-----\n"
+  }
+}
