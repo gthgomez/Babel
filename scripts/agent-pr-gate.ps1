@@ -111,8 +111,9 @@ function Get-AgentReviewThreadStatus {
   $repository = Get-AgentLocalValue -Object $data -Name 'repository'
   $pullRequest = Get-AgentLocalValue -Object $repository -Name 'pullRequest'
   $reviewThreads = Get-AgentLocalValue -Object $pullRequest -Name 'reviewThreads'
-  $nodes = @(Get-AgentLocalValue -Object $reviewThreads -Name 'nodes')
-  if ($null -eq $reviewThreads -or $null -eq (Get-AgentLocalValue -Object $reviewThreads -Name 'nodes')) { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = 'review_threads_shape_invalid' } }
+  $nodesProperty = if ($null -ne $reviewThreads) { $reviewThreads.PSObject.Properties['nodes'] } else { $null }
+  if ($null -eq $nodesProperty) { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = 'review_threads_shape_invalid' } }
+  $nodes = @($nodesProperty.Value)
   $unresolved = @($nodes | Where-Object { -not [bool]$_.isResolved })
   return [pscustomobject]@{ available = $true; resolved = $unresolved.Count -eq 0; count = $nodes.Count; unresolved = $unresolved.Count; error = '' }
 }
