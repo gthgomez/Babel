@@ -9,6 +9,18 @@ import {
   type TaskContractV1,
 } from "./taskContract.js";
 import type { EvidenceNode } from "../evidence/evidenceGraph.js";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 export const BREAKER_CONTRACT_VERSION = 1 as const;
 export const BREAKER_READ_ONLY_CAPABILITIES: readonly CapabilityId[] = [
@@ -231,6 +243,111 @@ export async function executeBreakerLaneV1(input: {
       status: "UNKNOWN",
       findings: [],
     };
+  }
+}
+
+function directoryFingerprint(root: string): string {
+  const entries: string[] = [];
+  const visit = (current: string, relative: string): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      if (entry.name === ".git" || entry.name === "node_modules") continue;
+      const child = join(current, entry.name);
+      const childRelative = relative ? `${relative}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) visit(child, childRelative);
+      else if (entry.isFile())
+        entries.push(
+          `${childRelative}:${createHash("sha256").update(readFileSync(child)).digest("hex")}`,
+        );
+    }
+  };
+  visit(root, "");
+  return createHash("sha256").update(entries.sort().join("\n")).digest("hex");
+}
+
+/** Run a Breaker outside the builder process against a disposable snapshot. */
+export async function executeIsolatedBreakerProcessV1(input: {
+  contract: BreakerContractV1;
+  project_root: string;
+  executable: string;
+  args: readonly string[];
+  timeout_ms?: number;
+}): Promise<BreakerReportV1> {
+  const unknown = (): BreakerReportV1 => ({
+    schema_version: BREAKER_CONTRACT_VERSION,
+    breaker_id: input.contract.breaker_id,
+    task_id: input.contract.task_id,
+    run_id: input.contract.run_id,
+    contract_hash: input.contract.contract_hash,
+    candidate_sha: input.contract.candidate_sha,
+    status: "UNKNOWN",
+    findings: [],
+  });
+  try {
+    assertBreakerReadOnly(input.contract.capabilities, {
+      execution_domain: input.contract.execution_domain,
+    });
+    if (
+      !existsSync(input.project_root) ||
+      input.contract.mutation_allowed ||
+      input.contract.credential_access
+    )
+      return unknown();
+    const sandbox = mkdtempSync(join(tmpdir(), "babel-breaker-"));
+    try {
+      const snapshot = join(sandbox, "project");
+      cpSync(input.project_root, snapshot, {
+        recursive: true,
+        force: false,
+        filter: (source) => {
+          const name = source.split(/[\\/]/).pop();
+          return name !== ".git" && name !== "node_modules";
+        },
+      });
+      const before = directoryFingerprint(snapshot);
+      const result = spawnSync(input.executable, [...input.args], {
+        cwd: snapshot,
+        shell: false,
+        windowsHide: true,
+        timeout: input.timeout_ms ?? 120_000,
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH ?? "",
+          SystemRoot: process.env.SystemRoot ?? "",
+          TEMP: sandbox,
+          TMP: sandbox,
+          BABEL_BREAKER_READ_ONLY: "1",
+          BABEL_BREAKER_TASK_ID: input.contract.task_id,
+          BABEL_BREAKER_RUN_ID: input.contract.run_id,
+          BABEL_BREAKER_CONTRACT_HASH: input.contract.contract_hash,
+          BABEL_BREAKER_CANDIDATE_SHA: input.contract.candidate_sha,
+        },
+      });
+      if (
+        before !== directoryFingerprint(snapshot) ||
+        result.error ||
+        result.status !== 0
+      )
+        return unknown();
+      const report = JSON.parse(
+        `${result.stdout ?? ""}`.trim(),
+      ) as Partial<BreakerReportV1>;
+      if (
+        report.schema_version !== BREAKER_CONTRACT_VERSION ||
+        report.breaker_id !== input.contract.breaker_id ||
+        report.task_id !== input.contract.task_id ||
+        report.run_id !== input.contract.run_id ||
+        report.contract_hash !== input.contract.contract_hash ||
+        report.candidate_sha !== input.contract.candidate_sha ||
+        !["PASS", "FINDINGS", "UNKNOWN"].includes(report.status ?? "") ||
+        !Array.isArray(report.findings)
+      )
+        return unknown();
+      return report as BreakerReportV1;
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true });
+    }
+  } catch {
+    return unknown();
   }
 }
 

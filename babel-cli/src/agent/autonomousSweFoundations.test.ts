@@ -32,11 +32,7 @@ import {
   EvidenceGraph,
   evaluateCompletionGateV1 as evaluateCompletionGateV1Raw,
 } from "../evidence/evidenceGraph.js";
-import {
-  createTrustedExecutionSupervisorV1,
-  getAuthoritativeTrustedExecutionIssuerV1,
-  getAuthoritativeTrustedExecutionReadPortV1,
-} from "../evidence/trustedExecutionIdentity.js";
+import { createTrustedExecutionSupervisorV1 } from "../authority/trustedExecutionSupervisor.js";
 import {
   assertBreakerReadOnly,
   buildBreakerContractV1,
@@ -101,9 +97,9 @@ function trustedExecutionFor(
   runId = "run:test-foundations",
   endpoint = verifierEndpoint(),
 ) {
-  const issuer = getAuthoritativeTrustedExecutionIssuerV1();
+  const issuer = authoritativeTestSupervisor;
   const role = c.acceptance[0]?.type === "runtime" ? "observer" : "verifier";
-  if (!issuer.get(runId, endpoint.endpoint_id)) {
+  if (!issuer.read.get(runId, endpoint.endpoint_id)) {
     issuer.assign({
       run_id: runId,
       task_id: c.task_id,
@@ -112,8 +108,10 @@ function trustedExecutionFor(
       endpoint,
     });
   }
-  return getAuthoritativeTrustedExecutionReadPortV1();
+  return authoritativeTestSupervisor.read;
 }
+
+const authoritativeTestSupervisor = createTrustedExecutionSupervisorV1();
 
 function trustedExecution() {
   return trustedExecutionFor(contract());
@@ -582,7 +580,7 @@ test("V1 certification requires an orchestrator-assigned producer identity", () 
   );
   const wrongTaskEndpoint = verifierEndpoint();
   const otherTaskSupervisor = createTrustedExecutionSupervisorV1();
-  const otherTaskRegistry = otherTaskSupervisor.issuer;
+  const otherTaskRegistry = otherTaskSupervisor;
   otherTaskRegistry.assign({
     run_id: "run:test-foundations",
     task_id: "task:other",

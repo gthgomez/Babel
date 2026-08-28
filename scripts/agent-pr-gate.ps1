@@ -10,6 +10,7 @@ param(
   [string]$ReviewedHeadSha = '',
   [ValidateSet('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')][string]$RiskTier = 'HIGH',
   [string]$IndependentReviewReceiptPath = '',
+  [string]$ReviewChallengeLedgerPath = '',
   [string]$BuilderIdentity = 'codex-implementation',
   [string]$TaskId = '',
   [string]$RunId = '',
@@ -154,6 +155,9 @@ function Read-AgentIndependentReceipt {
   $path = $IndependentReviewReceiptPath
   if ([string]::IsNullOrWhiteSpace($path)) { $path = Join-Path $resolvedRepoRoot ".babel/merge-reviews/pr-$PR.json" }
   if (-not [IO.Path]::IsPathRooted($path)) { $path = Join-Path $resolvedRepoRoot $path }
+  $ledgerPath = $ReviewChallengeLedgerPath
+  if ([string]::IsNullOrWhiteSpace($ledgerPath)) { $ledgerPath = Join-Path $resolvedRepoRoot '.babel/merge-reviews/review-challenge-ledger.json' }
+  if (-not [IO.Path]::IsPathRooted($ledgerPath)) { $ledgerPath = Join-Path $resolvedRepoRoot $ledgerPath }
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return [pscustomobject]@{ path = $path; valid = $false; errors = @('independent_review_receipt_missing') } }
   try { $receipt = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json } catch { return [pscustomobject]@{ path = $path; valid = $false; errors = @('independent_review_receipt_malformed') } }
   $validation = Test-AgentIndependentReviewReceipt -Receipt $receipt -Repository $ExpectedRepository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -BuilderIdentity $BuilderIdentity -TaskId $TaskId -RunId $RunId -ContractHash $ContractHash
@@ -178,13 +182,26 @@ function Read-AgentIndependentReceipt {
       $errors += 'node_executable_unavailable_for_review_signature'
       return [pscustomobject]@{ path = $path; valid = $false; errors = $errors }
     }
-    $verifyScript = Join-Path $resolvedRepoRoot 'scripts/verify-independent-review.mjs'
-    $verifyResult = Invoke-AgentProcess -FilePath $nodePath -WorkingDirectory $resolvedRepoRoot -Arguments @($verifyScript, '--receipt', $path, '--keys', $keyPath)
-    $signatureResult = $null
-    try { $signatureResult = $verifyResult.text | ConvertFrom-Json } catch { $signatureResult = $null }
-    if ($verifyResult.exitCode -ne 0 -or $null -eq $signatureResult -or -not [bool]$signatureResult.valid) {
-      $errors += if ($null -ne $signatureResult -and $null -ne $signatureResult.errors) { @($signatureResult.errors) } else { 'review_signature_unverified' }
+    # The verifier is trusted code. Materialize it from the immutable base
+    # commit; never execute the candidate checkout's verifier implementation.
+    $verifierPath = Join-Path ([IO.Path]::GetTempPath()) ('babel-trusted-review-verifier-{0}-{1}.mjs' -f $PID, ([guid]::NewGuid().ToString('N')))
+    $verifierSpec = '{0}:scripts/verify-independent-review.mjs' -f $BaseSha
+    $verifierResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('show', $verifierSpec)
+    if ($verifierResult.exitCode -ne 0 -or [string]::IsNullOrWhiteSpace($verifierResult.text)) {
+      $errors += 'trusted_base_verifier_unavailable'
       return [pscustomobject]@{ path = $path; valid = $false; errors = $errors }
+    }
+    try {
+      Set-Content -LiteralPath $verifierPath -Value $verifierResult.text -Encoding utf8NoBOM
+      $verifyResult = Invoke-AgentProcess -FilePath $nodePath -WorkingDirectory ([IO.Path]::GetTempPath()) -Arguments @($verifierPath, '--receipt', $path, '--keys', $keyPath, '--ledger', $ledgerPath)
+      $signatureResult = $null
+      try { $signatureResult = $verifyResult.text | ConvertFrom-Json } catch { $signatureResult = $null }
+      if ($verifyResult.exitCode -ne 0 -or $null -eq $signatureResult -or -not [bool]$signatureResult.valid) {
+        $errors += if ($null -ne $signatureResult -and $null -ne $signatureResult.errors) { @($signatureResult.errors) } else { 'review_signature_unverified' }
+        return [pscustomobject]@{ path = $path; valid = $false; errors = $errors }
+      }
+    } finally {
+      if (Test-Path -LiteralPath $verifierPath -PathType Leaf) { Remove-Item -LiteralPath $verifierPath -Force -ErrorAction SilentlyContinue }
     }
   } finally {
     if (Test-Path -LiteralPath $keyPath -PathType Leaf) { Remove-Item -LiteralPath $keyPath -Force -ErrorAction SilentlyContinue }

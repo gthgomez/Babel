@@ -108,14 +108,16 @@ Each acceptance requirement retains its human-readable
 Certifying evidence is bound to that spec's canonical hash and verifier ID;
 matching a requirement ID with an unrelated passing test is insufficient.
 
-`TrustedExecutionRegistryV1` is constructed only by the supervisor factory and
-is exposed to evidence consumers through a branded read port. Assignment,
-revocation, completion, and persistence are on the separate supervisor issuer
-port. Builder identities cannot be assigned as certifying producers. Evidence
-without a matching active assignment, capability, role, domain, task, contract,
-or run is rejected. This is a real in-process ownership boundary against
-ordinary builder-facing code, but it is not an OS sandbox or cryptographic
-attestation boundary; a compromised Babel process remains out of scope.
+Trusted execution is split between `src/authority/` and the public evidence
+module. The trusted supervisor owns assignment, revocation, completion, and
+persistence; workers receive only a branded read port. The authority module and
+its constructor are excluded from the package export map, and the public
+evidence module does not export an issuer or read-port constructor. Builder
+identities cannot be assigned as certifying producers. Evidence without a
+matching active assignment, capability, role, domain, task, contract, or run is
+rejected. This is a package/module access boundary, not an OS sandbox or
+cryptographic attestation boundary; a compromised process that bypasses the
+deployment boundary remains out of scope.
 
 `evaluateCompletionGateV1` is deterministic and deliberately narrow. Required
 acceptance requirements can be satisfied only by current, typed passing
@@ -160,17 +162,22 @@ The merge gate verifies the signature against a public-key registry anchored
 to the immutable PR base, not the candidate branch. Receipts bind repository,
 PR, task, run, contract, base, head, reviewer class/mode, builder, scope,
 timestamp, challenge, verdict, findings, and authority provenance. The
-challenge ledger is currently process-local, so cross-process replay requires
-a future durable challenge ledger. A public key must be provisioned by the
-trusted review-lane owner; the empty registry in this branch intentionally
-does not authorize any reviewer.
+challenge ledger is a durable canonical document with atomic replacement,
+state hashing, explicit `ISSUED`/`CONSUMED`/`EXPIRED`/`REVOKED` status, and a
+signed-receipt hash on consumed records. The trusted verifier validates the
+ledger binding as well as the receipt signature. A public key must be
+provisioned by the trusted review-lane owner; the empty registry in this branch
+intentionally does not authorize any reviewer until the bootstrap transition.
 
 The Breaker lane is executable as a read-only contract with inspection/search
 and allowed verification capabilities, no credentials, no publication, and no
 mutation. It returns structured findings or `UNKNOWN`. A current unresolved
 HIGH/CRITICAL Breaker finding produces `BLOCKED`; the Breaker never receives
-merge authority. The callback boundary is in-process and therefore still
-needs a future OS/container enforcement layer for hostile code.
+merge authority. `executeIsolatedBreakerProcessV1` runs the permitted command
+in a separate process against a disposable snapshot, strips secrets from its
+environment, and fingerprints the snapshot before and after execution. The
+legacy callback helper remains a test/local primitive and is not an
+independently trusted Breaker result.
 
 Evidence graphs seal after serialization and reject later mutation through the
 normal API. Certifying edges are bound to exact task/run/contract/repository,
@@ -195,7 +202,10 @@ commands. Tests/builds execute project code, so the contract requires an
 `isolated-sandbox` execution domain. `assertBreakerReadOnly` rejects mutation,
 publication, credential, arbitrary-code, and unknown capabilities. V1 defines
 the role contract only; it does not create an autonomous swarm or a
-mutation-capable breaker.
+mutation-capable breaker. The isolated process adapter is the only path whose
+result is eligible for an independent Breaker claim: it requires exact
+task/run/contract and candidate bindings and returns `UNKNOWN` on process,
+output, or snapshot-integrity failure.
 
 ## Failure attribution
 

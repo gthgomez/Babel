@@ -96,14 +96,17 @@ reviewed_scope, verdict, blocking_findings, authority_provenance, signature
 The receipt is signed by the supervisor-owned independent review lane with
 Ed25519. Its public verification key is loaded from the immutable PR base;
 candidate-controlled key registries are not trusted. A supervisor-issued,
-single-use challenge prevents ordinary replay within that authority process.
+durable, single-use challenge is recorded in an atomic ledger, and the
+consumed record stores the hash of the one signed receipt. The trusted verifier
+checks both the immutable-base verifier implementation and the ledger binding;
+ordinary replay, restart replay, expiry, and revocation therefore fail closed.
 The receipt must be exact-head and exact-base bound, have a non-empty explicit
 file/repository scope, have no blocking findings, use `APPROVE`, and identify a
 reviewer distinct from the builder. Signature verification authenticates the
 receipt to an authorized review key; it does not by itself establish that the
-reviewer was substantively correct or grant merge authority. The current
-challenge ledger is process-local and the branch's empty key registry is
-intentionally fail-closed until an operator provisions a trusted public key.
+reviewer was substantively correct or grant merge authority. The branch's
+empty key registry is intentionally fail-closed until an operator provisions a
+trusted public key through the one-time bootstrap transition.
 
 Initial policy: LOW may use CI plus exact-head review under repository policy;
 MEDIUM is policy-dependent; HIGH and CRITICAL require an independent exact-head
@@ -111,13 +114,14 @@ receipt; CRITICAL also requires explicit current-task merge authority.
 
 ## Trusted execution ownership
 
-The `TrustedExecutionRegistryV1` used by V1 completion evaluation is created by
-the supervisor factory and exposed to consumers through a branded read-only
-port. Only the supervisor issuer port can assign, revoke, complete, or persist
-state. Serialized evidence fields are claims checked against that registry,
-never a source of registry authority. Assignment state is durable and
-tamper-evident, but not externally authenticated; the process boundary is the
-remaining trust limitation. Mutating workers remain disabled.
+The trusted execution authority is created and restored only by the
+`src/authority/` supervisor module. Consumers receive a branded read-only port;
+serialized evidence fields are claims checked against that port, never a source
+of registry authority. Assignment state is durable, hash-checked, task/run/
+contract-bound, and restored through the supervisor bootstrap. The module
+boundary is enforced for normal package consumers; OS-level process isolation
+and external attestation remain deployment responsibilities. Mutating workers
+remain disabled.
 
 Review-thread pagination is fail-closed: all pages are fetched, and a missing
 cursor when `hasNextPage` is true is unreadable rather than resolved. The gate

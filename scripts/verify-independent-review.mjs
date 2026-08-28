@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { createPublicKey, verify } from "node:crypto";
+import { createHash, createPublicKey, verify } from "node:crypto";
 
 function canonicalize(value) {
   if (
@@ -21,13 +21,20 @@ function parseArg(name) {
   return index >= 0 ? process.argv[index + 1] : undefined;
 }
 
+function digest(value) {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalize(value)), "utf8")
+    .digest("hex");
+}
+
 const receiptPath = parseArg("--receipt");
 const keysPath = parseArg("--keys");
-if (!receiptPath || !keysPath) {
+const ledgerPath = parseArg("--ledger");
+if (!receiptPath || !keysPath || !ledgerPath) {
   console.log(
     JSON.stringify({
       valid: false,
-      errors: ["receipt_or_key_registry_path_missing"],
+      errors: ["receipt_key_registry_or_ledger_path_missing"],
     }),
   );
   process.exit(1);
@@ -36,6 +43,7 @@ if (!receiptPath || !keysPath) {
 const errors = [];
 let receipt;
 let registry;
+let ledger;
 try {
   receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
 } catch {
@@ -46,9 +54,55 @@ try {
 } catch {
   errors.push("review_key_registry_malformed");
 }
-if (!receipt || !registry) {
+try {
+  ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+} catch {
+  errors.push("review_challenge_ledger_malformed");
+}
+if (!receipt || !registry || !ledger) {
   console.log(JSON.stringify({ valid: false, errors }));
   process.exit(1);
+}
+
+if (
+  ledger.schema_version !== 1 ||
+  ledger.kind !== "independent_review_challenge_ledger_v1" ||
+  !Array.isArray(ledger.challenges) ||
+  typeof ledger.state_hash !== "string" ||
+  ledger.state_hash !== digest(ledger.challenges)
+)
+  errors.push("review_challenge_ledger_integrity_invalid");
+
+const challenge = ledger.challenges.find(
+  (candidate) => candidate.challenge_id === receipt.challenge_id,
+);
+if (!challenge) errors.push("review_challenge_unknown");
+else {
+  if (challenge.status !== "CONSUMED")
+    errors.push("review_challenge_not_consumed");
+  if (challenge.receipt_hash !== digest(receipt))
+    errors.push("review_receipt_not_bound_to_consumed_challenge");
+  for (const field of [
+    "repository",
+    "pr_number",
+    "task_id",
+    "run_id",
+    "contract_hash",
+    "base_sha",
+    "head_sha",
+    "builder_id",
+    "reviewer_class",
+  ]) {
+    if (challenge[field] !== receipt[field])
+      errors.push(`review_challenge_${field}_mismatch`);
+  }
+  if (Date.parse(challenge.expires_at) <= Date.now())
+    errors.push("review_challenge_expired");
+  if (
+    challenge.authority_provenance?.issuer !== "supervisor_review_lane" ||
+    challenge.authority_provenance?.key_id !== receipt.signature?.key_id
+  )
+    errors.push("review_challenge_authority_invalid");
 }
 
 const keyId = receipt.signature?.key_id;

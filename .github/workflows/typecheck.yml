@@ -84,6 +84,9 @@ jobs:
       - name: Typecheck CLI
         run: npm run typecheck
         working-directory: babel-cli
+      - name: Run autonomous SWE trust bootstrap tests
+        run: npm run test:autonomous-swe-trust
+        working-directory: babel-cli
       - name: Build CLI
         run: npm run build
         working-directory: babel-cli
@@ -126,6 +129,9 @@ jobs:
         working-directory: babel-cli
       - name: Typecheck CLI
         run: npm run typecheck
+        working-directory: babel-cli
+      - name: Run autonomous SWE trust bootstrap tests
+        run: npm run test:autonomous-swe-trust
         working-directory: babel-cli
       - name: Build CLI
         run: npm run build
