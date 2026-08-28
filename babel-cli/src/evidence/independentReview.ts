@@ -187,6 +187,18 @@ function readLedger(filePath: string): ReviewChallengeLedgerV1 {
         "Review challenge ledger contains an invalid or duplicate challenge.",
       );
     if (
+      !(["ISSUED", "CONSUMED", "EXPIRED", "REVOKED"] as const).includes(
+        challenge.status,
+      ) ||
+      !(["independent_readonly", "independent_breaker"] as const).includes(
+        challenge.reviewer_class,
+      ) ||
+      Number.isNaN(Date.parse(challenge.issued_at)) ||
+      Number.isNaN(Date.parse(challenge.expires_at)) ||
+      Date.parse(challenge.expires_at) <= Date.parse(challenge.issued_at)
+    )
+      throw new Error("Review challenge ledger contains invalid bindings.");
+    if (
       challenge.authority_provenance.issuer !== "supervisor_review_lane" ||
       !challenge.authority_provenance.key_id
     )
@@ -293,6 +305,13 @@ export function createIndependentReviewAuthorityV1(input: {
     ): ReviewChallengeV1 {
       if (!challengeInput.repository.trim())
         throw new Error("Review challenge repository is required.");
+      if (
+        Number.isNaN(Date.parse(challengeInput.issued_at)) ||
+        Number.isNaN(Date.parse(challengeInput.expires_at)) ||
+        Date.parse(challengeInput.expires_at) <=
+          Date.parse(challengeInput.issued_at)
+      )
+        throw new Error("Review challenge timestamps are invalid.");
       const challenge: ReviewChallengeV1 = {
         task_id: challengeInput.task_id,
         run_id: challengeInput.run_id,
