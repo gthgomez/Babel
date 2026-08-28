@@ -58,6 +58,26 @@ if (
 )
   errors.push("review_challenge_ledger_integrity_invalid");
 
+const challengeIds = new Set();
+for (const record of ledger.challenges) {
+  if (
+    !record ||
+    typeof record.challenge_id !== "string" ||
+    challengeIds.has(record.challenge_id) ||
+    !["ISSUED", "CONSUMED", "EXPIRED", "REVOKED"].includes(record.status) ||
+    !["independent_readonly", "independent_breaker"].includes(record.reviewer_class) ||
+    Number.isNaN(Date.parse(record.issued_at)) ||
+    Number.isNaN(Date.parse(record.expires_at)) ||
+    Date.parse(record.expires_at) <= Date.parse(record.issued_at) ||
+    record.authority_provenance?.issuer !== "supervisor_review_lane" ||
+    typeof record.authority_provenance?.key_id !== "string"
+  ) {
+    errors.push("review_challenge_ledger_schema_invalid");
+    break;
+  }
+  challengeIds.add(record.challenge_id);
+}
+
 const challenge = ledger.challenges.find(
   (candidate) => candidate.challenge_id === receipt.challenge_id,
 );
