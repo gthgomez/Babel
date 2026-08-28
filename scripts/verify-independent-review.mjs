@@ -29,8 +29,9 @@ function parseArg(name) {
 const receiptPath = parseArg("--receipt");
 const keysPath = parseArg("--keys");
 const ledgerPath = parseArg("--ledger");
-if (!receiptPath || !keysPath || !ledgerPath) {
-  console.log(JSON.stringify({ valid: false, errors: ["receipt_key_registry_or_ledger_path_missing"] }));
+const supervisorKeysPath = parseArg("--supervisor-keys");
+if (!receiptPath || !keysPath || !ledgerPath || !supervisorKeysPath) {
+  console.log(JSON.stringify({ valid: false, errors: ["receipt_key_registry_or_ledger_or_supervisor_registry_missing"] }));
   process.exit(1);
 }
 
@@ -38,13 +39,16 @@ const errors = [];
 let receipt;
 let registry;
 let ledger;
+let supervisorRegistry;
 try { receipt = JSON.parse(readFileSync(receiptPath, "utf8")); }
 catch { errors.push("receipt_malformed"); }
 try { registry = JSON.parse(readFileSync(keysPath, "utf8")); }
 catch { errors.push("review_key_registry_malformed"); }
 try { ledger = JSON.parse(readFileSync(ledgerPath, "utf8")); }
 catch { errors.push("review_challenge_ledger_malformed"); }
-if (!receipt || !registry || !ledger) {
+try { supervisorRegistry = JSON.parse(readFileSync(supervisorKeysPath, "utf8")); }
+catch { errors.push("supervisor_key_registry_malformed"); }
+if (!receipt || !registry || !ledger || !supervisorRegistry) {
   console.log(JSON.stringify({ valid: false, errors }));
   process.exit(1);
 }
@@ -70,12 +74,26 @@ for (const record of ledger.challenges) {
     Number.isNaN(Date.parse(record.expires_at)) ||
     Date.parse(record.expires_at) <= Date.parse(record.issued_at) ||
     record.authority_provenance?.issuer !== "supervisor_review_lane" ||
-    typeof record.authority_provenance?.key_id !== "string"
+    typeof record.authority_provenance?.key_id !== "string" ||
+    record.supervisor_signature?.algorithm !== "ed25519" ||
+    typeof record.supervisor_signature?.key_id !== "string" ||
+    typeof record.supervisor_signature?.value !== "string"
   ) {
     errors.push("review_challenge_ledger_schema_invalid");
     break;
   }
   challengeIds.add(record.challenge_id);
+  const { supervisor_signature: _supervisorSignature, ...unsignedRecord } = record;
+  const supervisorPem = supervisorRegistry.schema_version === 1 && supervisorRegistry.keys && typeof supervisorRegistry.keys[record.supervisor_signature.key_id] === "string"
+    ? supervisorRegistry.keys[record.supervisor_signature.key_id] : undefined;
+  if (!supervisorPem || record.authority_provenance.key_id !== record.supervisor_signature.key_id) {
+    errors.push("review_challenge_supervisor_key_not_authorized");
+  } else {
+    try {
+      const valid = verify(null, Buffer.from(JSON.stringify(canonicalize(unsignedRecord)), "utf8"), createPublicKey(supervisorPem), Buffer.from(record.supervisor_signature.value, "base64url"));
+      if (!valid) errors.push("review_challenge_supervisor_signature_invalid");
+    } catch { errors.push("review_challenge_supervisor_signature_invalid"); }
+  }
 }
 
 const challenge = ledger.challenges.find(
@@ -94,7 +112,8 @@ else {
   if (Date.parse(challenge.expires_at) <= Date.now()) errors.push("review_challenge_expired");
   if (
     challenge.authority_provenance?.issuer !== "supervisor_review_lane" ||
-    challenge.authority_provenance?.key_id !== receipt.signature?.key_id
+    challenge.authority_provenance?.key_id !== challenge.supervisor_signature?.key_id ||
+    receipt.authority_provenance?.key_id !== challenge.supervisor_signature?.key_id
   ) errors.push("review_challenge_authority_invalid");
 }
 

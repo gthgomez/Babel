@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "keys": {
+    "trusted-supervisor-ed25519-v1": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAf/kj\nGjD0MMyp5yTPOdaVWw/3qXs\nOq1og/+eki1CRaF0=\n-----END PUBLIC KEY-----\n"
+  }
+}

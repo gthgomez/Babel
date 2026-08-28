@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
   "keys": {
-    "trusted-reviewer-ed25519-v1": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA/DbU\nFXdSmpB1aaT8JiUZnn0r\niDg2hsV5eY0YbPeGGCI=\n-----END PUBLIC KEY-----\n"
+    "trusted-reviewer-ed25519-v2": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAkITl\n1z7GovVYnEV3iZ8237Oe\ngrRjMiyVzK3618i5hOw=\n-----END PUBLIC KEY-----\n"
   }
 }

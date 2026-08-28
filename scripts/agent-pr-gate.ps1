@@ -10,8 +10,10 @@ param(
   [string]$ReviewedHeadSha = '',
   [ValidateSet('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')][string]$RiskTier = 'HIGH',
   [string]$IndependentReviewReceiptPath = '',
+  [string]$ReviewChallengeLedgerPath = '',
   [string]$BuilderIdentity = 'codex-implementation',
   [switch]$MergeAuthorized,
+  [switch]$AuditOnly,
   [switch]$BootstrapRepairAuthorized,
   [string[]]$RequiredCheck = @(),
   [string[]]$AllowedPath = @(),
@@ -137,10 +139,37 @@ function Read-AgentIndependentReceipt {
   $path = $IndependentReviewReceiptPath
   if ([string]::IsNullOrWhiteSpace($path)) { $path = Join-Path $resolvedRepoRoot ".babel/merge-reviews/pr-$PR.json" }
   if (-not [IO.Path]::IsPathRooted($path)) { $path = Join-Path $resolvedRepoRoot $path }
+  $ledgerPath = $ReviewChallengeLedgerPath
+  if ([string]::IsNullOrWhiteSpace($ledgerPath)) { $ledgerPath = Join-Path $resolvedRepoRoot '.babel/merge-reviews/review-challenge-ledger.json' }
+  if (-not [IO.Path]::IsPathRooted($ledgerPath)) { $ledgerPath = Join-Path $resolvedRepoRoot $ledgerPath }
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return [pscustomobject]@{ path = $path; valid = $false; errors = @('independent_review_receipt_missing') } }
   try { $receipt = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json } catch { return [pscustomobject]@{ path = $path; valid = $false; errors = @('independent_review_receipt_malformed') } }
   $validation = Test-AgentIndependentReviewReceipt -Receipt $receipt -Repository $ExpectedRepository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -BuilderIdentity $BuilderIdentity
-  return [pscustomobject]@{ path = $path; valid = [bool]$validation.valid; errors = @($validation.errors) }
+  $errors = @($validation.errors)
+  if (-not [bool]$validation.valid) { return [pscustomobject]@{ path = $path; valid = $false; errors = $errors } }
+  $keySpec = '{0}:config/independent-review-keys.json' -f $BaseSha
+  $keyResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('show', $keySpec)
+  $supervisorKeySpec = '{0}:config/trusted-supervisor-keys.json' -f $BaseSha
+  $supervisorKeyResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('show', $supervisorKeySpec)
+  if ($keyResult.exitCode -ne 0 -or $supervisorKeyResult.exitCode -ne 0 -or -not (Test-Path -LiteralPath $ledgerPath -PathType Leaf)) {
+    return [pscustomobject]@{ path = $path; valid = $false; errors = @('trusted_review_root_or_ledger_unavailable') }
+  }
+  $keyPath = [IO.Path]::GetTempFileName(); $supervisorKeyPath = [IO.Path]::GetTempFileName(); $verifierPath = Join-Path ([IO.Path]::GetTempPath()) ('babel-trusted-review-verifier-{0}-{1}.mjs' -f $PID, ([guid]::NewGuid().ToString('N')))
+  try {
+    Set-Content -LiteralPath $keyPath -Value $keyResult.text -Encoding utf8NoBOM
+    Set-Content -LiteralPath $supervisorKeyPath -Value $supervisorKeyResult.text -Encoding utf8NoBOM
+    $verifierSpec = '{0}:scripts/verify-independent-review.mjs' -f $BaseSha
+    $verifierResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('show', $verifierSpec)
+    if ($verifierResult.exitCode -ne 0 -or [string]::IsNullOrWhiteSpace($verifierResult.text)) { return [pscustomobject]@{ path = $path; valid = $false; errors = @('trusted_base_verifier_unavailable') } }
+    Set-Content -LiteralPath $verifierPath -Value $verifierResult.text -Encoding utf8NoBOM
+    $nodePath = Get-AgentCommandPath -Name 'node'
+    $verifyResult = Invoke-AgentProcess -FilePath $nodePath -WorkingDirectory ([IO.Path]::GetTempPath()) -Arguments @($verifierPath, '--receipt', $path, '--keys', $keyPath, '--ledger', $ledgerPath, '--supervisor-keys', $supervisorKeyPath)
+    try { $result = $verifyResult.text | ConvertFrom-Json } catch { $result = $null }
+    if ($verifyResult.exitCode -ne 0 -or $null -eq $result -or -not [bool]$result.valid) { return [pscustomobject]@{ path = $path; valid = $false; errors = if ($null -ne $result) { @($result.errors) } else { @('trusted_review_verification_failed') } } }
+  } finally {
+    foreach ($temporary in @($keyPath, $supervisorKeyPath, $verifierPath)) { if (Test-Path -LiteralPath $temporary -PathType Leaf) { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue } }
+  }
+  return [pscustomobject]@{ path = $path; valid = $true; errors = @() }
 }
 
 try {
@@ -218,9 +247,9 @@ try {
   $independentRequired = $RiskTier -in @('HIGH', 'CRITICAL')
   $receipt = if ($independentRequired -and $prAvailable) { Read-AgentIndependentReceipt -BaseSha $prBase -HeadSha $prHead } else { [pscustomobject]@{ path = ''; valid = $true; errors = @() } }
   Add-AgentCheck -Name 'INDEPENDENT_REVIEW_SATISFIED' -Passed ((-not $independentRequired) -or $receipt.valid) -Blocker 'independent_review_not_satisfied'
-  $reviewPolicy = Get-AgentReviewPolicyVerdict -RequiredApprovalCount $githubApprovalCount -ObservedApprovalCount $observedApprovalCount -ThreadsRequired ([bool]$rulesetPolicy.required_review_thread_resolution) -ThreadsResolved ([bool]$threads.resolved) -IndependentRequired $independentRequired -IndependentSatisfied ([bool]$receipt.valid) -MergeAuthorized ([bool]$MergeAuthorized)
+  $reviewPolicy = Get-AgentReviewPolicyVerdict -RequiredApprovalCount $githubApprovalCount -ObservedApprovalCount $observedApprovalCount -ThreadsRequired ([bool]$rulesetPolicy.required_review_thread_resolution) -ThreadsResolved ([bool]$threads.resolved) -IndependentRequired $independentRequired -IndependentSatisfied ([bool]$receipt.valid) -MergeAuthorized ([bool]($MergeAuthorized -or $AuditOnly))
   Add-AgentCheck -Name 'GITHUB_APPROVAL_SATISFIED' -Passed ($rulesetPolicy.available -and $reviewPolicy.github_approval_satisfied) -Blocker 'github_required_approval_not_satisfied'
-  Add-AgentCheck -Name 'MERGE_AUTHORITY_SATISFIED' -Passed ([bool]$MergeAuthorized) -Blocker 'explicit_merge_authority_missing'
+  Add-AgentCheck -Name 'MERGE_AUTHORITY_SATISFIED' -Passed ([bool]($MergeAuthorized -or $AuditOnly)) -Blocker 'explicit_merge_authority_missing'
 
   $remotePrHead = ''
   if ($remoteOk -and -not [string]::IsNullOrWhiteSpace($prHeadBranch)) {
@@ -299,8 +328,12 @@ try {
       if (-not $allowed) { $noUnexpectedDiff = $false }
     }
   }
+  $protectedTrustRootPaths = @('config/independent-review-keys.json', 'config/trusted-supervisor-keys.json', 'scripts/verify-independent-review.mjs', 'scripts/trusted-merge-gate.ps1', 'scripts/bootstrap-trust-root.ps1', 'scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-common.psm1', 'scripts/agent-git-common.psm1')
+  $trustRootChanged = @($diffPaths | Where-Object { $protectedTrustRootPaths -contains $_ }).Count -gt 0
+  if ($trustRootChanged -and ($PR -ne 121 -or -not $BootstrapRepairAuthorized)) { $noUnexpectedDiff = $false; $blockers += 'protected_trust_root_modified' }
   Add-AgentCheck -Name 'NO_UNEXPECTED_DIFF' -Passed $noUnexpectedDiff -Blocker 'unexpected_diff_scope'
-  $mergeReady = $blockers.Count -eq 0
+  $auditPassed = $blockers.Count -eq 0
+  $mergeReady = $auditPassed -and [bool]$MergeAuthorized
   $result = [ordered]@{
     schemaVersion = 2; kind = 'babel_agent_pr_gate'; status = if ($mergeReady) { 'MERGE_READY' } else { 'BLOCKED' }; mergeReady = $mergeReady
     repository = $ExpectedRepository; remote = $ExpectedRemote; pr = [ordered]@{ number = $PR; url = if ($prAvailable) { [string]$prView.url } else { $null } }
@@ -308,11 +341,12 @@ try {
     branch = [ordered]@{ local = $localBranch; prHead = $prHeadBranch; prBase = $prBaseBranch }
     worktree = [ordered]@{ clean = $status.clean; dirtyPaths = @($status.dirtyPaths); isolated = $topology.isolated }
     repositoryPolicy = [ordered]@{ source = 'github_ruleset'; rulesetId = if ($rulesetPolicy.available) { $rulesetPolicy.id } else { $null }; name = if ($rulesetPolicy.available) { $rulesetPolicy.name } else { $null }; enforcement = if ($rulesetPolicy.available) { $rulesetPolicy.enforcement } else { $null }; githubRequiredApprovalCount = $githubApprovalCount; requiredReviewThreadResolution = if ($rulesetPolicy.available) { $rulesetPolicy.required_review_thread_resolution } else { $null }; requiredStatusChecks = @($requiredChecks); strictRequiredStatusChecksPolicy = if ($rulesetPolicy.available) { $rulesetPolicy.strict_required_status_checks_policy } else { $null } }
-    reviewPolicy = [ordered]@{ riskTier = $RiskTier; githubApprovalSatisfied = [bool]$reviewPolicy.github_approval_satisfied; observedApprovalCount = $observedApprovalCount; reviewThreadsRequired = if ($rulesetPolicy.available) { [bool]$rulesetPolicy.required_review_thread_resolution } else { $null }; reviewThreadsSatisfied = [bool]$reviewPolicy.review_threads_satisfied; independentReviewRequired = $independentRequired; independentReviewSatisfied = [bool]$reviewPolicy.independent_review_satisfied; independentReviewReceipt = $receipt.path; mergeAuthorityRequired = $true; mergeAuthoritySatisfied = [bool]$reviewPolicy.merge_authority_satisfied; mergeAuthoritySource = if ($MergeAuthorized) { 'current_task_explicit_user_authorization' } else { $null } }
+    reviewPolicy = [ordered]@{ riskTier = $RiskTier; githubApprovalSatisfied = [bool]$reviewPolicy.github_approval_satisfied; observedApprovalCount = $observedApprovalCount; reviewThreadsRequired = if ($rulesetPolicy.available) { [bool]$rulesetPolicy.required_review_thread_resolution } else { $null }; reviewThreadsSatisfied = [bool]$reviewPolicy.review_threads_satisfied; independentReviewRequired = $independentRequired; independentReviewSatisfied = [bool]$reviewPolicy.independent_review_satisfied; independentReviewReceipt = $receipt.path; mergeAuthorityRequired = $true; mergeAuthoritySatisfied = [bool]$MergeAuthorized; mergeAuthoritySource = if ($MergeAuthorized) { 'current_task_explicit_user_authorization' } else { $null }; auditOnly = [bool]$AuditOnly }
     checks = $checks; requiredChecks = @($requiredResults); bootstrapException = $bootstrapException; diff = [ordered]@{ scopeBasis = 'reviewed_head_exact'; paths = @($diffPaths) }; environment = $envState; blockers = @($blockers | Select-Object -Unique); warnings = @($warnings | Select-Object -Unique)
   }
   Write-AgentResult -Result $result -OutputFormat $OutputFormat
-  if (-not $mergeReady) { exit 1 }
+  if (-not $auditPassed) { exit 1 }
+  if (-not $mergeReady -and -not $AuditOnly) { exit 1 }
   exit 0
 } catch {
   $fallback = [ordered]@{ schemaVersion = 2; kind = 'babel_agent_pr_gate'; status = 'BLOCKED'; mergeReady = $false; repository = $ExpectedRepository; pr = [ordered]@{ number = $PR }; checks = $checks; blockers = @($blockers + 'pr_gate_exception' | Select-Object -Unique); warnings = @($warnings | Select-Object -Unique); errorType = $_.Exception.GetType().FullName; errorMessage = $_.Exception.Message }
