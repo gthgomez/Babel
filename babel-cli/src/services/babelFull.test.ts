@@ -135,3 +135,27 @@ test("Babel Full can disable read-only agents while preserving route artifacts",
   assert.deepEqual(result.spark_agents, []);
   assert.equal(existsSync(join(result.run_dir, "route_decision.json")), true);
 });
+
+test("Babel Full exposes additive foundation-artifact failure without killing planning", () => {
+  const root = mkdtempSync(join(tmpdir(), "babel-full-artifact-error-"));
+  const routeDecision = routeLiteOrFull(
+    "Plan a read-only architecture review",
+    {
+      requestedVerb: "full",
+    },
+  );
+  const result = runBabelFullPlan("Plan a read-only architecture review", {
+    routeDecision,
+    runsRoot: join(root, "runs"),
+    foundationArtifactsWriter: () => {
+      throw new Error("artifact writer unavailable");
+    },
+  });
+  assert.equal(result.status, "FULL_PLAN_READY");
+  assert.equal(result.foundation_artifacts_status, "error");
+  assert.equal(
+    result.foundation_artifacts_error,
+    "artifact writer unavailable",
+  );
+  assert.equal(result.mutation_subagents.enabled, false);
+});

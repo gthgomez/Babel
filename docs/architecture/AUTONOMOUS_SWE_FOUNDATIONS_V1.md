@@ -60,6 +60,12 @@ file cannot be relabeled as explicit user authority. Explicit authority uses a
 structured `user:` provenance reference; this is structural V1 provenance, not
 a cryptographic signature.
 
+Completion authority is stricter than compatibility parsing. A V1 completion
+contract must contain the complete frozen contract shape, including scope,
+authority, provenance, budgets, acceptance specifications, and `base_sha`.
+Legacy-shaped contracts may remain readable by compatibility callers, but are
+never implicitly upgraded to V1 `VERIFIED` authority.
+
 ## Acceptance escrow
 
 `babel-cli/src/acceptance/escrow.ts` adds `AcceptanceBundleV1` around the
@@ -91,13 +97,30 @@ record, while this journal is the durable task control-plane projection.
 
 `babel-cli/src/evidence/evidenceGraph.ts` extends the existing graph with typed
 node kinds, relationship edges, and `EvidenceBindingV1`. Bindings can include
-task ID, contract hash, repository, base SHA, candidate SHA, requirement ID,
-and artifact hash. Dangling references are invalid.
+run ID, task ID, contract hash, repository, base SHA, candidate SHA,
+requirement ID, and artifact hash. Dangling references are invalid.
+
+Each acceptance requirement retains its human-readable
+`verification_strategy` and also carries a structured `verification` spec.
+Certifying evidence is bound to that spec's canonical hash and verifier ID;
+matching a requirement ID with an unrelated passing test is insufficient.
+
+`TrustedExecutionRegistryV1` is the orchestrator-owned producer boundary. It
+records task/run/contract association, endpoint, role, execution domain,
+capabilities, and assignment time. The evidence node may reference that
+assignment but cannot self-create or relabel it. Builder identities cannot be
+assigned as certifying producers. Evidence without a matching trusted
+assignment, capability, role, domain, task, contract, or run is rejected.
 
 `evaluateCompletionGateV1` is deterministic and deliberately narrow. Required
 acceptance requirements can be satisfied only by current, typed passing
-`test_result`, `build_result`, `ci_result`, `command_result` with an explicit
-verifier kind, `runtime_observation`, or revision-bound `verifier_receipt`.
+evidence from an explicit acceptance-type matrix: test results for unit,
+integration, and E2E requirements; build results for builds; command results
+for lint/typecheck/custom requirements; security/policy results for those
+requirements; runtime observations for runtime requirements; and qualifying
+CI or revision-bound verifier receipts where their frozen verifier spec
+matches. `manual` requirements have no automatic proof path and require a
+future trusted human-attestation primitive.
 Those nodes require a structured verifier/observer/system producer identity; a
 free-form role label is not an identity credential. Builder claims, critic
 approvals, majority agreement, missing provenance, stale base/candidate SHA,
@@ -128,8 +151,11 @@ mutation-capable breaker.
 `babel-cli/src/services/failureAttribution.ts` records a typed failure category,
 confidence, evidence, alternatives, and task/model/harness/environment/SHA
 metadata. Independent evidence must support a category before attribution can
-be specific. A model self-diagnosis alone produces `UNKNOWN`; competing causal
-evidence preserves alternative hypotheses instead of inventing certainty.
+be specific. Evidence provenance distinguishes evidence, producer, source
+domain, execution, and observation identities; duplicate or same-execution
+records do not create independence. A model self-diagnosis alone produces
+`UNKNOWN`; competing causal evidence preserves alternative hypotheses instead
+of inventing certainty.
 
 ## Replay manifest
 
@@ -139,8 +165,10 @@ feature flags, verification commands, outcome, failure class, and safe
 environment metadata. Known secret keys and token-shaped values are redacted;
 unsupported environment values become an explicit marker. The task contract,
 event, and Full artifact serializers apply the same durable-secret boundary;
-raw task text is not written by the Full artifact adapter. Schema/version/hash
-errors return a failed parse result.
+raw task text is not written by the Full artifact adapter. Load-time parsing
+applies the same secret checks to commands, feature flags, and environment as
+manifest construction. Schema/version/hash errors return a failed parse
+result.
 
 ## Reliability telemetry and AgentEndpoint
 
@@ -165,6 +193,12 @@ telemetry. Existing human output and route semantics remain unchanged.
 `mutation_subagents.enabled` remains `false`. Full's existing read-only Spark
 reviewers and governed lead-lane boundary are preserved. Remote WebSocket,
 Remote PWA, and Remote fixture surfaces are intentionally untouched.
+
+Foundation artifacts are additive in this read-only planning lane. If their
+writer fails, the plan still returns with `foundation_artifacts_status: error`
+and `foundation_artifacts_error`; the failure is exposed and is not silently
+swallowed. This lane does not claim those artifacts are mandatory to execute a
+planning run.
 
 ## Roadmap (documented, not implemented here)
 

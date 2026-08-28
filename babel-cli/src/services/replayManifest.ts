@@ -175,6 +175,12 @@ export function parseReplayManifestV1(
     )
   )
     errors.push("durable_secret");
+  for (const [key, value] of Object.entries(manifest.feature_flags)) {
+    if (redactScalar(key, value) !== value) errors.push("durable_secret");
+  }
+  for (const [key, value] of Object.entries(manifest.environment)) {
+    if (redactScalar(key, value) !== value) errors.push("durable_secret");
+  }
   if (sha256Canonical(stableManifestBody(manifest)) !== manifest.manifest_hash)
     errors.push("manifest_hash");
   if (

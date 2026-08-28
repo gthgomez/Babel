@@ -1,17 +1,23 @@
 import {
   RevisionBoundReceipt,
   RevisionManager,
+  validateRevisionBoundReceipt,
 } from "./revisionBoundReceipt.js";
 import {
   validateTaskContractV1ForCompletion,
   type TaskContractV1,
+  type AcceptanceRequirementV1,
 } from "../agent/taskContract.js";
 import {
   validateAcceptanceBundleForContractV1,
   type AcceptanceBundleV1,
 } from "../acceptance/escrow.js";
-import { canonicalJson } from "../acceptance/canonical.js";
+import { canonicalJson, sha256Canonical } from "../acceptance/canonical.js";
 import { redactEvidenceValue } from "../utils/redaction.js";
+import {
+  requiredCapabilityForAcceptanceType,
+  type TrustedExecutionRegistryV1,
+} from "./trustedExecutionIdentity.js";
 
 export const EVIDENCE_GRAPH_SCHEMA_VERSION = 1 as const;
 export const EVIDENCE_GRAPH_MAX_BYTES = 256 * 1024;
@@ -31,6 +37,8 @@ export type EvidenceNodeType =
   | "challenge"
   | "runtime_observation"
   | "ci_result"
+  | "security_result"
+  | "policy_result"
   | "contract_requirement";
 
 export type EvidenceRelation =
@@ -44,6 +52,7 @@ export type EvidenceRelation =
   | "derived_from";
 
 export interface EvidenceBindingV1 {
+  run_id: string;
   task_id: string;
   contract_hash: string;
   repository: string;
@@ -122,6 +131,8 @@ const CERTIFYING_TYPES: ReadonlySet<EvidenceNodeType> = new Set([
   "verifier_receipt",
   "runtime_observation",
   "ci_result",
+  "security_result",
+  "policy_result",
 ]);
 
 function producerIdentityError(node: EvidenceNode): string | undefined {
@@ -147,53 +158,83 @@ function requirementAcceptsNode(
   type: EvidenceNodeType,
   requirementType: string,
 ): boolean {
-  if (type === "test_result")
-    return ["unit_test", "integration_test", "e2e", "custom"].includes(
-      requirementType,
-    );
-  if (type === "build_result") return requirementType === "build";
-  if (type === "ci_result")
-    return [
-      "security",
-      "policy",
-      "custom",
-      "unit_test",
-      "integration_test",
-      "e2e",
-      "build",
-    ].includes(requirementType);
-  if (type === "runtime_observation") return requirementType === "runtime";
-  if (type === "command_result") return requirementType === "custom";
-  return true;
+  const matrix: Record<string, EvidenceNodeType[]> = {
+    unit_test: ["test_result", "ci_result", "verifier_receipt"],
+    integration_test: ["test_result", "ci_result", "verifier_receipt"],
+    e2e: ["test_result", "ci_result", "verifier_receipt"],
+    build: ["build_result", "ci_result", "verifier_receipt"],
+    lint: ["command_result", "ci_result", "verifier_receipt"],
+    typecheck: ["command_result", "ci_result", "verifier_receipt"],
+    security: ["security_result", "ci_result", "verifier_receipt"],
+    policy: ["policy_result", "ci_result", "verifier_receipt"],
+    runtime: ["runtime_observation"],
+    custom: ["command_result", "test_result", "ci_result", "verifier_receipt"],
+    manual: [],
+  };
+  return matrix[requirementType]?.includes(type) ?? false;
+}
+
+function verificationSpecHash(requirement: AcceptanceRequirementV1): string {
+  return sha256Canonical(requirement.verification);
+}
+
+function verifierSpecError(
+  node: EvidenceNode,
+  requirement: AcceptanceRequirementV1,
+): string | undefined {
+  if (!node.data || typeof node.data !== "object" || Array.isArray(node.data))
+    return "certifying evidence data is malformed";
+  const data = node.data as Record<string, unknown>;
+  if (data["verifier_spec_hash"] !== verificationSpecHash(requirement))
+    return "evidence verifier specification is stale or mismatched";
+  if (data["verifier_id"] !== requirement.verification.verifier_id)
+    return "evidence verifier_id does not match the frozen requirement";
+  if (
+    requirement.verification.command_hash !== undefined &&
+    data["command_hash"] !== requirement.verification.command_hash
+  )
+    return "evidence command_hash does not match the frozen verifier";
+  if (
+    requirement.verification.target !== undefined &&
+    data["target"] !== requirement.verification.target
+  )
+    return "evidence target does not match the frozen verifier";
+  return undefined;
 }
 
 function certifyingEvidenceError(
   node: EvidenceNode,
-  requirementType: string,
+  requirement: AcceptanceRequirementV1,
 ): string | undefined {
   if (!CERTIFYING_TYPES.has(node.type))
     return `${node.type} is not a certifying evidence type`;
   const identityError = producerIdentityError(node);
   if (identityError) return identityError;
-  if (!requirementAcceptsNode(node.type, requirementType))
-    return `${node.type} is incompatible with ${requirementType}`;
+  if (!requirementAcceptsNode(node.type, requirement.type))
+    return `${node.type} is incompatible with ${requirement.type}`;
+  const verifierError = verifierSpecError(node, requirement);
+  if (verifierError) return verifierError;
   if (!node.data || typeof node.data !== "object" || Array.isArray(node.data))
     return "certifying evidence data is malformed";
   const data = node.data as Record<string, unknown>;
+  if (node.type === "verifier_receipt") {
+    return undefined;
+  }
   if (node.type !== "runtime_observation" && data["exit_code"] !== 0)
     return "certifying evidence has a non-zero exit_code";
-  if (node.type === "verifier_receipt") {
-    if (!data["boundRevision"] || data["exitCode"] !== 0)
-      return "verifier receipt is not a passing revision-bound receipt";
+  if (node.type === "runtime_observation") {
+    if (
+      String(data["status"] ?? "").toLowerCase() !== "observed" ||
+      data["passed"] !== true
+    )
+      return "runtime observation is not a passing observation";
     return undefined;
   }
   const status = String(data["status"] ?? "").toLowerCase();
   const passingStatus =
     node.type === "ci_result"
       ? status === "success" || status === "passed"
-      : node.type === "runtime_observation"
-        ? status === "observed" && data["passed"] === true
-        : status === "passed" || status === "success";
+      : status === "passed" || status === "success";
   if (!passingStatus && data["passed"] !== true)
     return "certifying evidence does not contain a typed passing result";
   if (
@@ -208,6 +249,7 @@ function bindingError(
   binding: EvidenceBindingV1 | undefined,
   input: {
     taskId: string;
+    runId: string;
     contractHash: string;
     repository: string;
     baseSha: string | null;
@@ -225,6 +267,7 @@ function bindingError(
     return "evidence base_sha does not match";
   if (binding.candidate_sha !== input.candidateSha)
     return "evidence candidate_sha is stale";
+  if (binding.run_id !== input.runId) return "evidence run_id does not match";
   return undefined;
 }
 
@@ -397,6 +440,9 @@ export function evaluateCompletionGateV1(input: {
   graph: EvidenceGraph;
   repository: string;
   candidate_sha: string;
+  run_id: string;
+  trusted_execution: TrustedExecutionRegistryV1;
+  project_root?: string;
   acceptance_bundle?: AcceptanceBundleV1;
 }): CompletionEvaluationV1 {
   const contractErrors = validateTaskContractV1ForCompletion(input.contract);
@@ -448,6 +494,7 @@ export function evaluateCompletionGateV1(input: {
     for (const node of candidates) {
       const mismatch = bindingError(node.binding, {
         taskId: input.contract.task_id,
+        runId: input.run_id,
         contractHash: input.contract.contract_hash,
         repository: input.repository,
         baseSha: input.contract.base_sha,
@@ -458,11 +505,54 @@ export function evaluateCompletionGateV1(input: {
         errors.push(`${node.id}: ${mismatch}`);
         continue;
       }
-      const certificationError = certifyingEvidenceError(
-        node,
+      const certificationError = certifyingEvidenceError(node, requirement);
+      const requiredCapability = requiredCapabilityForAcceptanceType(
         requirement.type,
       );
-      if (certificationError) {
+      const registryResult = certificationError
+        ? null
+        : input.trusted_execution.authorize({
+            run_id: input.run_id,
+            task_id: input.contract.task_id,
+            contract_hash: input.contract.contract_hash,
+            endpoint_id: node.producer_identity?.endpoint_id ?? "",
+            role: node.producer_identity?.role ?? "system",
+            execution_domain: node.producer_identity?.execution_domain ?? "",
+            ...(requiredCapability
+              ? { required_capability: requiredCapability }
+              : {}),
+          });
+      const trustedError =
+        registryResult && !registryResult.authorized
+          ? `trusted producer rejected: ${registryResult.error}`
+          : undefined;
+      const receiptErrors =
+        !certificationError && !trustedError && node.type === "verifier_receipt"
+          ? validateRevisionBoundReceipt(node.data)
+          : [];
+      const staleReceipt =
+        receiptErrors.length === 0 &&
+        node.type === "verifier_receipt" &&
+        input.project_root
+          ? RevisionManager.isReceiptStaleSync(
+              node.data as RevisionBoundReceipt,
+              input.project_root,
+            )
+          : { stale: false };
+      const effectiveCertificationError =
+        certificationError ??
+        trustedError ??
+        (receiptErrors.length > 0
+          ? `malformed revision-bound receipt: ${receiptErrors.join(", ")}`
+          : staleReceipt.stale
+            ? `stale revision-bound receipt: ${staleReceipt.reason ?? "unknown"}`
+            : node.type === "verifier_receipt" && !input.project_root
+              ? "revision-bound receipt cannot be rechecked without project_root"
+              : node.type === "verifier_receipt" &&
+                  (node.data as RevisionBoundReceipt).exitCode !== 0
+                ? "verifier receipt has a non-zero exitCode"
+                : undefined);
+      if (effectiveCertificationError) {
         if (
           CERTIFYING_TYPES.has(node.type) &&
           typeof node.data === "object" &&
@@ -470,6 +560,10 @@ export function evaluateCompletionGateV1(input: {
           !Array.isArray(node.data) &&
           (((node.data as Record<string, unknown>)["exit_code"] !== undefined &&
             (node.data as Record<string, unknown>)["exit_code"] !== 0) ||
+            (node.type === "verifier_receipt" &&
+              (node.data as Record<string, unknown>)["exitCode"] !==
+                undefined &&
+              (node.data as Record<string, unknown>)["exitCode"] !== 0) ||
             String(
               (node.data as Record<string, unknown>)["status"] ?? "",
             ).toLowerCase() === "failed")
@@ -478,7 +572,7 @@ export function evaluateCompletionGateV1(input: {
         } else {
           hasUnknown = true;
         }
-        errors.push(`${node.id}: ${certificationError}`);
+        errors.push(`${node.id}: ${effectiveCertificationError}`);
         continue;
       }
       supported = true;

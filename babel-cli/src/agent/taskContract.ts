@@ -58,13 +58,28 @@ export type AcceptanceRequirementType =
   | "runtime"
   | "custom";
 
+export interface VerificationSpecV1 {
+  kind: string;
+  verifier_id: string;
+  command_hash?: string;
+  target?: string;
+  execution_profile?: string;
+  artifact_expectations?: string[];
+}
+
 export interface AcceptanceRequirementV1 {
   id: string;
   description: string;
   type: AcceptanceRequirementType;
   required: boolean;
   verification_strategy: string;
+  verification: VerificationSpecV1;
 }
+
+export type AcceptanceRequirementInputV1 = Omit<
+  AcceptanceRequirementV1,
+  "verification"
+> & { verification?: VerificationSpecV1 };
 
 export interface TaskAuthorityV1 {
   /** Existing Babel capability IDs are the authority vocabulary. */
@@ -190,7 +205,7 @@ export interface BuildTaskContractInput {
   required_behaviors?: string[];
   invariants?: string[];
   acceptance_criteria?: string[];
-  acceptance?: AcceptanceRequirementV1[];
+  acceptance?: AcceptanceRequirementInputV1[];
   non_goals?: string[];
   allowed_paths?: string[];
   protected_paths?: string[];
@@ -318,6 +333,20 @@ export const TaskContractV1Schema = z
             ]),
             required: z.boolean(),
             verification_strategy: z.string().min(1),
+            verification: z
+              .object({
+                kind: z.string().min(1),
+                verifier_id: z.string().min(1),
+                command_hash: z
+                  .string()
+                  .regex(/^[0-9a-f]{32,64}$/)
+                  .optional(),
+                target: z.string().min(1).optional(),
+                execution_profile: z.string().min(1).optional(),
+                artifact_expectations: z.array(z.string().min(1)).optional(),
+              })
+              .strict()
+              .optional(),
           })
           .strict(),
       )
@@ -326,6 +355,109 @@ export const TaskContractV1Schema = z
     base_sha: z.string().nullable().optional(),
   })
   .passthrough();
+
+/** Strict schema used only by the V1 completion authority. */
+export const TaskContractV1StrictSchema = TaskContractV1Schema.extend({
+  task_id: z.string().min(1),
+  goal: z.string().min(1),
+  required_behaviors: z.array(z.string()),
+  invariants: z.array(z.string()),
+  scope: z
+    .object({
+      paths: z.array(z.string()).min(1),
+      repository: z.string().optional(),
+    })
+    .strict(),
+  risk: z.enum(["low", "medium", "high", "critical", "unknown"]),
+  authority: z
+    .object({
+      capabilities: z.array(
+        z.enum(ALL_CAPABILITIES as unknown as [string, ...string[]]),
+      ),
+      source: z.enum([
+        "derived_policy",
+        "repository_policy",
+        "explicit_user_authority",
+      ]),
+    })
+    .strict(),
+  acceptance: z.array(
+    z
+      .object({
+        id: z.string().min(1),
+        description: z.string().min(1),
+        type: z.enum([
+          "unit_test",
+          "integration_test",
+          "e2e",
+          "build",
+          "lint",
+          "typecheck",
+          "security",
+          "policy",
+          "manual",
+          "runtime",
+          "custom",
+        ]),
+        required: z.boolean(),
+        verification_strategy: z.string().min(1),
+        verification: z
+          .object({
+            kind: z.string().min(1),
+            verifier_id: z.string().min(1),
+            command_hash: z
+              .string()
+              .regex(/^[0-9a-f]{32,64}$/)
+              .optional(),
+            target: z.string().min(1).optional(),
+            execution_profile: z.string().min(1).optional(),
+            artifact_expectations: z.array(z.string().min(1)).optional(),
+          })
+          .strict(),
+      })
+      .strict(),
+  ),
+  created_at: z.string().datetime(),
+  base_sha: z.string().nullable(),
+  allowed_paths: z.array(z.string()),
+  protected_paths: z.array(z.string()),
+  verifier_requirements: z.array(z.string()),
+  budgets: z
+    .object({
+      max_turns: z.number().int().positive().optional(),
+      max_tokens: z.number().int().positive().optional(),
+      failure_class_budgets: z.object({
+        implementation_repair: z.number().int().nonnegative(),
+        infra_retry: z.number().int().nonnegative(),
+        provider_retry: z.number().int().nonnegative(),
+      }),
+    })
+    .strict(),
+  allowed_effects: z.array(z.string()),
+  allowed_terminal_outcomes: z.array(z.string()),
+  provenance: z
+    .object({
+      created_at: z.string().datetime(),
+      source: z.string().min(1),
+      records: z.array(
+        z
+          .object({
+            kind: z.enum([
+              "user_goal",
+              "repository_policy",
+              "derived_acceptance",
+              "risk_analysis",
+              "explicit_user_authority",
+            ]),
+            ref: z.string().min(1),
+          })
+          .strict(),
+      ),
+      parent_contract_id: z.string().min(1).optional(),
+    })
+    .strict(),
+  frozen: z.literal(true),
+}).strict();
 
 /** Validate the frozen identity of a persisted task contract. */
 export function validateTaskContractV1(value: unknown): string[] {
@@ -524,7 +656,10 @@ export function validateTaskContractV1(value: unknown): string[] {
 
 /** Strict V1 completion validation; legacy V0 fixture contracts may be empty. */
 export function validateTaskContractV1ForCompletion(value: unknown): string[] {
-  const errors = validateTaskContractV1(value);
+  const strict = TaskContractV1StrictSchema.safeParse(value);
+  if (!strict.success)
+    return strict.error.issues.map((issue) => issue.path.join(".") || "$");
+  const errors = validateTaskContractV1(strict.data);
   if (errors.length > 0) return errors;
   const candidate = value as { acceptance?: Array<{ required?: boolean }> };
   if (
@@ -544,11 +679,16 @@ export function buildTaskContractV1(
     ...(input.acceptance_criteria ??
       (input.acceptance ? rawAcceptance.map((item) => item.description) : [])),
   ].map((value) => durableText(value));
-  const acceptance = [
+  const acceptance: AcceptanceRequirementV1[] = [
     ...(input.acceptance
       ? rawAcceptance.map((item) => ({
           ...item,
           description: durableText(item.description),
+          verification: item.verification ?? {
+            kind: item.type,
+            verifier_id: `verifier:${item.type}:${sha256Canonical(item.verification_strategy).slice(0, 16)}`,
+            command_hash: sha256Canonical(item.verification_strategy),
+          },
         }))
       : acceptanceCriteria.map((description, index) => ({
           id: `acceptance:${index + 1}`,
@@ -557,6 +697,11 @@ export function buildTaskContractV1(
           required: true,
           verification_strategy:
             "independent evidence bound to the candidate revision",
+          verification: {
+            kind: "custom",
+            verifier_id: `verifier:custom:${index + 1}`,
+            command_hash: sha256Canonical(description),
+          },
         }))),
   ];
   if (new Set(acceptanceCriteria).size !== acceptanceCriteria.length) {
