@@ -3,6 +3,7 @@ param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$env:GIT_ALLOW_PROTOCOL = 'file'
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
@@ -31,13 +32,17 @@ function Invoke-TestGit {
   } finally {
     Pop-Location
   }
-  if ($exitCode -ne 0 -and -not $IgnoreFailure) { throw "git failed ($exitCode): $($output -join ' ')" }
+  if ($exitCode -ne 0 -and -not $IgnoreFailure) { throw "git failed ($exitCode) [$($Arguments -join ' ')]: $($output -join ' ')" }
   return (($output -join "`n").Trim())
 }
 
 function Invoke-TestScript {
   param([Parameter(Mandatory = $true)][string]$Script, [Parameter(Mandatory = $true)][string[]]$Arguments)
-  $output = @(& $pwsh -NoProfile -File $Script @Arguments 2>&1 | ForEach-Object { [string]$_ })
+  $quotedArguments = @($Arguments | ForEach-Object {
+      if ([string]$_ -match '^-[A-Za-z]') { [string]$_ } else { "'$(($_ -replace "'", "''"))'" }
+    }) -join ' '
+  $command = "& '$($Script -replace "'", "''")' $quotedArguments"
+  $output = @(& $pwsh -NoLogo -NoProfile -Command $command 2>&1 | ForEach-Object { [string]$_ })
   return [pscustomobject]@{
     exitCode = $LASTEXITCODE
     text = ($output -join "`n")
@@ -55,16 +60,20 @@ try {
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('add', 'README.md') | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('commit', '-m', 'fixture base') | Out-Null
   $mainSha = Invoke-TestGit -WorkingDirectory $fixture -Arguments @('rev-parse', 'HEAD')
+  Copy-Item -Path (Join-Path $fixture '.git\objects\*') -Destination (Join-Path $remote 'objects') -Recurse -Force
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('remote', 'add', 'origin', 'https://github.com/gthgomez/Babel.git') | Out-Null
-  $mappedRemote = ([IO.Path]::GetFullPath($remote)).Replace('\', '/')
+  $mappedRemote = 'file:///' + ([IO.Path]::GetFullPath($remote)).Replace('\', '/')
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', "url.$mappedRemote.insteadOf", 'https://github.com/gthgomez/Babel.git') | Out-Null
-  Invoke-TestGit -WorkingDirectory $fixture -Arguments @('push', 'origin', 'main') | Out-Null
+  Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', "url.$mappedRemote.insteadOf", 'https://github.com/gthgomez/Babel') | Out-Null
+  Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', 'protocol.file.allow', 'always') | Out-Null
+  Invoke-TestGit -WorkingDirectory $remote -Arguments @('update-ref', 'refs/heads/main', $mainSha) | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('switch', '-c', 'agent/fixture') | Out-Null
   Set-Content -LiteralPath (Join-Path $fixture 'change.txt') -Value 'change' -Encoding utf8
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('add', 'change.txt') | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('commit', '-m', 'fixture change') | Out-Null
   $headSha = Invoke-TestGit -WorkingDirectory $fixture -Arguments @('rev-parse', 'HEAD')
-  Invoke-TestGit -WorkingDirectory $fixture -Arguments @('push', 'origin', 'HEAD:refs/heads/agent/fixture') | Out-Null
+  Copy-Item -Path (Join-Path $fixture '.git\objects\*') -Destination (Join-Path $remote 'objects') -Recurse -Force
+  Invoke-TestGit -WorkingDirectory $remote -Arguments @('update-ref', 'refs/heads/agent/fixture', $headSha) | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', '--local', '--unset-all', 'credential.helper') -IgnoreFailure | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', '--local', '--add', 'credential.helper', '') | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', '--local', '--add', 'credential.helper', '!gh auth git-credential') | Out-Null
@@ -132,13 +141,16 @@ try {
   Assert-AgentTest ([bool]$isolatedPreflight.checks.CREDENTIAL_PROVIDER_GH) 'isolated preflight should inherit repo-local gh credentials'
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('worktree', 'remove', $worktree.path) | Out-Null
 
-  $prJson = '{"number":42,"url":"https://github.com/gthgomez/Babel/pull/42","state":"OPEN","isDraft":false,"baseRefName":"main","baseRefOid":"' + $mainSha + '","headRefName":"agent/fixture","headRefOid":"' + $headSha + '","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","isCrossRepository":false,"headRepositoryOwner":{"login":"gthgomez"},"headRepository":{"nameWithOwner":"gthgomez/Babel"}}'
+  $prJson = '{"number":42,"url":"https://github.com/gthgomez/Babel/pull/42","state":"OPEN","isDraft":false,"baseRefName":"main","baseRefOid":"' + $mainSha + '","headRefName":"agent/fixture","headRefOid":"' + $headSha + '","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","reviews":[],"isCrossRepository":false,"headRepositoryOwner":{"login":"gthgomez"},"headRepository":{"nameWithOwner":"gthgomez/Babel"}}'
+  $rulesetList = '[{"id":19597161,"name":"protect-main","enforcement":"active"}]'
+  $rulesetDetail = '{"id":19597161,"name":"protect-main","enforcement":"active","rules":[{"type":"pull_request","parameters":{"required_approving_review_count":0,"required_review_thread_resolution":true,"require_code_owner_review":false,"allowed_merge_methods":["merge","squash","rebase"]}},{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":false,"required_status_checks":[{"context":"security"},{"context":"public-content-policy"},{"context":"linux-validation"},{"context":"public-pr-metadata"},{"context":"windows-portability"}]}}],"bypass_actors":[]}'
+  $graphqlJson = '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}'
   $checkItems = @()
-  $checkItems += '{"name":"security","status":"completed","conclusion":"success","head_sha":"' + $headSha + '"}'
-  $checkItems += '{"name":"public-content-policy","status":"completed","conclusion":"success","head_sha":"' + $headSha + '"}'
-  $checkItems += '{"name":"linux-validation","status":"completed","conclusion":"success","head_sha":"' + $headSha + '"}'
-  $checkItems += '{"name":"public-pr-metadata","status":"completed","conclusion":"success","head_sha":"' + $headSha + '"}'
-  $checkItems += '{"name":"windows-portability","status":"completed","conclusion":"success","head_sha":"' + $headSha + '"}'
+  $checkItems += '{"id":101,"name":"security","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"101","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
+  $checkItems += '{"id":102,"name":"public-content-policy","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"102","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
+  $checkItems += '{"id":103,"name":"linux-validation","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"103","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
+  $checkItems += '{"id":104,"name":"public-pr-metadata","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request_target","workflow_name":"Public PR Metadata","workflow_id":"workflow-2","workflow_run_id":"104","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
+  $checkItems += '{"id":105,"name":"windows-portability","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"105","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
   $checkJson = '{"check_runs":[' + ($checkItems -join ',') + ']}'
   @(
     'param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)',
@@ -146,6 +158,9 @@ try {
     'if ($Arguments.Count -gt 1 -and $Arguments[0] -eq "auth" -and $Arguments[1] -eq "status") { exit 0 }',
     'if ($Arguments.Count -gt 1 -and $Arguments[0] -eq "repo" -and $Arguments[1] -eq "view") { Write-Output ''{"nameWithOwner":"gthgomez/Babel","defaultBranchRef":{"name":"main"}}''; exit 0 }',
     "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'pr' -and `$Arguments[1] -eq 'view') { Write-Output '$prJson'; exit 0 }",
+    "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'api' -and `$Arguments[1] -eq 'graphql') { Write-Output '$graphqlJson'; exit 0 }",
+    "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'api' -and `$Arguments[1] -like '*rulesets/19597161') { Write-Output '$rulesetDetail'; exit 0 }",
+    "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'api' -and `$Arguments[1] -like '*rulesets?per_page=*') { Write-Output '$rulesetList'; exit 0 }",
     "if (`$Arguments.Count -gt 0 -and `$Arguments[0] -eq 'api') { Write-Output '$checkJson'; exit 0 }",
     'exit 1') | Set-Content -LiteralPath $fakeGh -Encoding utf8
 
@@ -158,7 +173,9 @@ try {
     '-RepoRoot', $fixture,
     '-GitPath', $git,
     '-GhPath', $fakeGh,
-    '-ReviewedHeadSha', $headSha
+    '-ReviewedHeadSha', $headSha,
+    '-RiskTier', 'LOW',
+    '-MergeAuthorized'
   )
   Assert-AgentTest ($gateRun.exitCode -eq 0) "PR gate should pass: $($gateRun.text)"
   $gate = $gateRun.text | ConvertFrom-Json
@@ -175,7 +192,9 @@ try {
     '-RepoRoot', $fixture,
     '-GitPath', $git,
     '-GhPath', $fakeGh,
-    '-ReviewedHeadSha', $zeroSha
+    '-ReviewedHeadSha', $zeroSha,
+    '-RiskTier', 'LOW',
+    '-MergeAuthorized'
   )
   Assert-AgentTest ($blockedRun.exitCode -eq 1) 'PR gate should block a reviewed-head mismatch'
   $blocked = $blockedRun.text | ConvertFrom-Json
