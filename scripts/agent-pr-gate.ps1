@@ -106,19 +106,33 @@ function Get-AgentWorkflowMetadata {
 function Get-AgentReviewThreadStatus {
   $parts = $ExpectedRepository.Split('/', 2)
   if ($parts.Count -ne 2) { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = 'repository_slug_invalid' } }
-  $query = 'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}}}}}'
-  $result = Invoke-AgentGh -GhPath $ghResolvedPath -RepoRoot $resolvedRepoRoot -Arguments @('api', 'graphql', '-f', "query=$query", '-F', "owner=$($parts[0])", '-F', "name=$($parts[1])", '-F', "number=$PR")
-  if ($result.exitCode -ne 0) { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = 'review_threads_unreadable' } }
-  try { $graph = $result.text | ConvertFrom-Json } catch { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = 'review_threads_malformed' } }
-  $data = Get-AgentLocalValue -Object $graph -Name 'data'
-  $repository = Get-AgentLocalValue -Object $data -Name 'repository'
-  $pullRequest = Get-AgentLocalValue -Object $repository -Name 'pullRequest'
-  $reviewThreads = Get-AgentLocalValue -Object $pullRequest -Name 'reviewThreads'
-  $nodesProperty = if ($null -ne $reviewThreads) { $reviewThreads.PSObject.Properties['nodes'] } else { $null }
-  if ($null -eq $nodesProperty) { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = 'review_threads_shape_invalid' } }
-  $nodes = @($nodesProperty.Value)
-  $unresolved = @($nodes | Where-Object { -not [bool]$_.isResolved })
-  return [pscustomobject]@{ available = $true; resolved = $unresolved.Count -eq 0; count = $nodes.Count; unresolved = $unresolved.Count; error = '' }
+  $after = $null
+  $pages = @()
+  do {
+    if ($null -eq $after) {
+      $query = 'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage endCursor}}}}}'
+      $arguments = @('api', 'graphql', '-f', "query=$query", '-F', "owner=$($parts[0])", '-F', "name=$($parts[1])", '-F', "number=$PR")
+    } else {
+      $query = 'query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{isResolved} pageInfo{hasNextPage endCursor}}}}}'
+      $arguments = @('api', 'graphql', '-f', "query=$query", '-F', "owner=$($parts[0])", '-F', "name=$($parts[1])", '-F', "number=$PR", '-f', "after=$after")
+    }
+    $result = Invoke-AgentGh -GhPath $ghResolvedPath -RepoRoot $resolvedRepoRoot -Arguments $arguments
+    if ($result.exitCode -ne 0) { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = 'review_threads_unreadable' } }
+    try { $graph = $result.text | ConvertFrom-Json } catch { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = 'review_threads_malformed' } }
+    $data = Get-AgentLocalValue -Object $graph -Name 'data'
+    $repository = Get-AgentLocalValue -Object $data -Name 'repository'
+    $pullRequest = Get-AgentLocalValue -Object $repository -Name 'pullRequest'
+    $reviewThreads = Get-AgentLocalValue -Object $pullRequest -Name 'reviewThreads'
+    $pageInfo = if ($null -ne $reviewThreads) { Get-AgentLocalValue -Object $reviewThreads -Name 'pageInfo' } else { $null }
+    $nodesProperty = if ($null -ne $reviewThreads) { $reviewThreads.PSObject.Properties['nodes'] } else { $null }
+    if ($null -eq $nodesProperty -or $null -eq $pageInfo) { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = 'review_threads_shape_invalid' } }
+    $pages += $reviewThreads
+    $hasNext = [bool](Get-AgentLocalValue -Object $pageInfo -Name 'hasNextPage')
+    $nextCursor = [string](Get-AgentLocalValue -Object $pageInfo -Name 'endCursor')
+    if ($hasNext -and [string]::IsNullOrWhiteSpace($nextCursor)) { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = 'review_threads_pagination_incomplete' } }
+    $after = if ($hasNext) { $nextCursor } else { $null }
+  } while ($null -ne $after)
+  return Resolve-AgentReviewThreadPages -Pages $pages
 }
 
 function Get-AgentLatestApprovalCount {
