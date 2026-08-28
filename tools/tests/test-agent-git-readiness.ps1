@@ -167,6 +167,7 @@ try {
   Assert-AgentTest ([bool]$gate.checks.REMOTE_HEAD_MATCH) 'PR gate should bind remote branch to PR head'
   Assert-AgentTest ([bool]$gate.checks.CI_HEAD_MATCH) 'PR gate should bind CI to PR head'
   Assert-AgentTest ([bool]$gate.checks.REQUIRED_CHECKS_GREEN) 'PR gate should require all configured checks'
+  Assert-AgentTest ([bool]$gate.checks.REVIEW_DECISION_APPROVED) 'PR gate should require an approved independent review decision'
   Assert-AgentTest ([bool]$gate.checks.BASE_NOT_INVALIDATED) 'PR gate should verify the base SHA'
 
   $zeroSha = [string]::new('0', 40)

@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
+import { z } from 'zod';
 
 export interface WorkspaceRevision {
   gitCommitHash: string | null;
@@ -10,6 +11,19 @@ export interface WorkspaceRevision {
   fileHashes: Record<string, string>;
   capturedAt: number;
 }
+
+/** Strict runtime schema for the revision portion of canonical V1.1 receipts. */
+export const WorkspaceRevisionSchema = z
+  .object({
+    gitCommitHash: z.string().regex(/^[a-f0-9]{40}$/i).nullable(),
+    compositeTreeHash: z.string().regex(/^[a-f0-9]{64}$/i),
+    fileHashes: z.record(
+      z.string().min(1),
+      z.union([z.string().regex(/^[a-f0-9]{64}$/i), z.literal('deleted')]),
+    ),
+    capturedAt: z.number().int().finite().nonnegative(),
+  })
+  .strict();
 
 export interface RevisionBoundReceipt {
   receiptId: string;
@@ -21,6 +35,27 @@ export interface RevisionBoundReceipt {
   authoritySource?: string;
   staleReason?: string;
 }
+
+/** Strict runtime schema for canonical V1.1 verifier receipt evidence. */
+export const VerifierReceiptEvidenceV1Schema = z
+  .object({
+    schema_version: z.literal(1),
+    receipt: z
+      .object({
+        receiptId: z.string().trim().min(1),
+        command: z.string().trim().min(1),
+        exitCode: z.number().int(),
+        boundRevision: WorkspaceRevisionSchema,
+        stale: z.boolean(),
+        staleReason: z.string().optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
+export type VerifierReceiptEvidenceV1 = z.infer<
+  typeof VerifierReceiptEvidenceV1Schema
+>;
 
 function hashFileContent(content: Buffer | string): string {
   return crypto.createHash('sha256').update(content).digest('hex');
@@ -61,11 +96,7 @@ function compareRevisions(
   if (bound.compositeTreeHash !== current.compositeTreeHash) {
     return { stale: true, reason: 'Composite tree hash mismatch' };
   }
-  if (
-    bound.gitCommitHash !== null &&
-    current.gitCommitHash !== null &&
-    bound.gitCommitHash !== current.gitCommitHash
-  ) {
+  if (bound.gitCommitHash !== current.gitCommitHash) {
     return { stale: true, reason: 'Git commit changed after verification' };
   }
   return { stale: false };

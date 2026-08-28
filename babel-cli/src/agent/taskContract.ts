@@ -17,7 +17,10 @@ import {
   ALL_CAPABILITIES,
   type CapabilityId,
 } from "../authority/capabilities.js";
-import type { TrustedExecutionResolver } from "../authority/trustedExecution.js";
+import {
+  getAuthoritativeTrustedExecutionResolver,
+  type TrustedExecutionResolver,
+} from "../authority/trustedExecution.js";
 import { sha256Canonical } from "../acceptance/canonical.js";
 import { deepFreeze } from "../acceptance/freeze.js";
 import {
@@ -564,6 +567,8 @@ export function validateTaskContractV1ForCompletion(
   value: unknown,
   options: { trustedAuthorityResolver?: TrustedExecutionResolver } = {},
 ): string[] {
+  void options;
+  const trustedAuthorityResolver = getAuthoritativeTrustedExecutionResolver();
   const errors = validateTaskContractV1(value);
   if (errors.length > 0) return errors;
   const candidate = value as TaskContractV1;
@@ -576,7 +581,7 @@ export function validateTaskContractV1ForCompletion(
   if (candidate.authority?.source === "explicit_user_authority") {
     const grantRef = candidate.authority.grant_ref;
     const grant = grantRef
-      ? options.trustedAuthorityResolver?.resolveAuthorityGrant(grantRef)
+      ? trustedAuthorityResolver.resolveAuthorityGrant(grantRef)
       : undefined;
     if (!grant) {
       errors.push("authority.grant_unknown_or_inactive");

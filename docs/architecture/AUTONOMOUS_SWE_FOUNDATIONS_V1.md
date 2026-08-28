@@ -52,11 +52,25 @@ V1.1 separates three things that V1 represented with similarly shaped fields:
    output cannot create one. Explicit-user grants are checked for source,
    lifecycle, task/session/contract binding, and capability subset.
 
-The same supervisor issues a trusted execution context containing repository,
-project root, task, contract hash, base revision, candidate revision, execution
-identity, and optional authority grant. The V1.1 completion gate requires this
-context and returns `UNKNOWN` when it is absent, inactive, or inconsistent;
-independent caller strings are not a trust fallback.
+The registry primitive is `createTrustedExecutionSupervisor`, but it is not an
+authority root. Babel's trusted controller boundary creates one module-owned
+`autonomousSWETrustHost` registry. That host owns identity, grant, context, and
+revocation state; only the orchestration layer should receive its issuance
+surface. Worker-facing evidence contains opaque identity/context references but
+does not receive a supervisor or a resolver. The completion evaluator captures
+the host's read-only resolver internally, so caller input cannot select an
+alternate supervisor, fake resolver, or copied resolver shape. A caller-created
+supervisor remains a useful registry primitive for isolated tests, but it is
+never authoritative for completion.
+
+The authoritative host issues a trusted execution context containing
+repository, project root, task, contract hash, base revision, candidate
+identity, execution identity, optional supervisor-captured candidate revision,
+and optional authority grant. The V1.1 completion gate requires this context
+and returns `UNKNOWN` when it is absent, inactive, or inconsistent; independent
+caller strings and supplied resolver values are not a trust fallback. This is
+supervisor/registry-based trust, not cryptographic identity or signed
+attestation.
 
 ## TaskContractV1
 
@@ -133,14 +147,49 @@ context is `UNKNOWN`, never verified.
 
 Revision-bound receipts use the canonical V1.1 shape
 `{ schema_version: 1, receipt: { receiptId, command, exitCode, boundRevision,
-stale } }`. The receipt branch validates `exitCode`, current revision binding,
-staleness, and the same trusted identity/context bindings as other certifying
-evidence. The legacy untyped `exit_code` path is retained only for other typed
-evidence kinds; it is not used to loosely normalize verifier receipts.
+stale } }`. `VerifierReceiptEvidenceV1Schema` strictly validates the envelope,
+receipt, revision hashes, file-hash map, tombstone values, and capture time
+before any receipt reaches `RevisionManager`; malformed receipts produce
+non-certifying structured results rather than exceptions. The receipt branch
+validates `exitCode`, current revision binding, staleness, and the same trusted
+identity/context bindings as other certifying evidence. The legacy untyped
+`exit_code` path is retained only for other typed evidence kinds; it is not used
+to loosely normalize verifier receipts.
+
+For a committed candidate, `boundRevision.gitCommitHash` must be a valid Git
+SHA equal to the trusted context's candidate SHA. If a project root is present,
+the live Git/file revision is rechecked. A committed receipt without either a
+trusted captured candidate revision or a trusted project root is `UNKNOWN`.
+For an uncommitted candidate, `gitCommitHash` must be `null`, `candidate_sha`
+must equal the supervisor-bound composite tree hash, and the receipt's complete
+file-hash identity must equal the trusted context's candidate revision. A null
+Git hash without that trusted workspace proof is never sufficient. If live
+validation is requested but no trusted project root is available, the gate
+returns `UNKNOWN` unless the supervisor-bound candidate revision supplies the
+stronger direct proof.
 
 The existing revision-bound receipt and acceptance V0 evaluators remain in
 place for current callers; the V1 gate adds a task/contract/SHA-bound primitive
 without changing normal CLI semantics.
+
+Delegated grants are valid only while every ancestor is active. Delegation
+requires exact task, session, and contract bindings, a capability subset, and
+an expiry no later than the parent expiry. Resolution walks the full ancestor
+chain with a visited set, rejecting missing parents, inactive/revoked/expired
+ancestors, widening, binding drift, malformed links, and cycles.
+
+## PR gate terminology
+
+The GitHub `protect-main` ruleset is a repository protection mechanism. At the
+time of the V1.1 trust-root review it has no configured pull-request review
+count rule; its required checks and other repository settings must be inspected
+separately from Babel's agent gate.
+
+`scripts/agent-pr-gate.ps1` intentionally imposes the stronger internal
+condition `REVIEW_DECISION_APPROVED`. This means GitHub's pull-request review
+decision is approved by an independent reviewer before the autonomous release
+path is considered ready. The condition is Babel policy; it must not be
+described as proof that the GitHub ruleset itself requires an approving review.
 
 ## Breaker role
 
@@ -239,5 +288,6 @@ attestation for the supervisor registry,
 full CI/device replay, automatic reliability ranking, and a scheduler or
 unbounded agent loop. V1.1 is a foundation for those future stages, not a claim
 that those capabilities exist. The current supervisor registry is an in-process
-trust boundary and must be hosted outside an untrusted builder; external
-identity infrastructure and hardware-backed attestation are not implemented.
+trust boundary owned by Babel's authoritative host; external identity
+infrastructure, cryptographic signing, and hardware-backed attestation are not
+implemented. Mutating subagents remain disabled.

@@ -1,12 +1,14 @@
 import {
   RevisionBoundReceipt,
   RevisionManager,
+  VerifierReceiptEvidenceV1Schema,
 } from "./revisionBoundReceipt.js";
 import {
   validateTaskContractV1ForCompletion,
   type TaskContractV1,
 } from "../agent/taskContract.js";
 import {
+  getAuthoritativeTrustedExecutionResolver,
   trustedIdentityHasCapability,
   type TrustedExecutionContextV1,
   type TrustedExecutionResolver,
@@ -127,6 +129,24 @@ export interface EvidenceGraphDocumentV1 {
   edges: EvidenceEdge[];
 }
 
+function sameRevisionIdentity(
+  left: RevisionBoundReceipt["boundRevision"],
+  right: RevisionBoundReceipt["boundRevision"],
+): boolean {
+  const leftFiles = Object.keys(left.fileHashes).sort();
+  const rightFiles = Object.keys(right.fileHashes).sort();
+  return (
+    left.gitCommitHash === right.gitCommitHash &&
+    left.compositeTreeHash === right.compositeTreeHash &&
+    leftFiles.length === rightFiles.length &&
+    leftFiles.every(
+      (file, index) =>
+        file === rightFiles[index] &&
+        left.fileHashes[file] === right.fileHashes[file],
+    )
+  );
+}
+
 const CERTIFYING_TYPES: ReadonlySet<EvidenceNodeType> = new Set([
   "test_result",
   "build_result",
@@ -215,27 +235,42 @@ function certifyingEvidenceError(
     return "certifying evidence data is malformed";
   const data = node.data as Record<string, unknown>;
   if (node.type === "verifier_receipt") {
-    if (data["schema_version"] !== 1 || !data["receipt"])
-      return "verifier receipt must use the canonical V1 receipt schema";
-    const receipt = data["receipt"] as Partial<RevisionBoundReceipt>;
-    if (
-      typeof receipt.receiptId !== "string" ||
-      typeof receipt.command !== "string" ||
-      !Number.isInteger(receipt.exitCode) ||
-      !receipt.boundRevision ||
-      typeof receipt.boundRevision !== "object"
-    )
-      return "verifier receipt is malformed";
+    const parsed = VerifierReceiptEvidenceV1Schema.safeParse(data);
+    if (!parsed.success) return "verifier receipt is malformed";
+    const receipt: RevisionBoundReceipt = {
+      receiptId: parsed.data.receipt.receiptId,
+      command: parsed.data.receipt.command,
+      exitCode: parsed.data.receipt.exitCode,
+      boundRevision: parsed.data.receipt.boundRevision,
+      stale: parsed.data.receipt.stale,
+      ...(parsed.data.receipt.staleReason !== undefined
+        ? { staleReason: parsed.data.receipt.staleReason }
+        : {}),
+    };
     if (receipt.exitCode !== 0 || receipt.stale === true)
       return "verifier receipt is not a current passing receipt";
+    if (receipt.boundRevision.gitCommitHash !== null) {
+      if (receipt.boundRevision.gitCommitHash !== context.candidate_sha)
+        return "verifier receipt revision does not match the trusted candidate";
+      if (!context.project_root && !context.candidate_revision)
+        return "verifier receipt has no trusted live or captured revision proof";
+    } else {
+      if (!context.candidate_revision)
+        return "uncommitted verifier receipt lacks trusted workspace revision proof";
+      if (
+        context.candidate_revision.gitCommitHash !== null ||
+        !sameRevisionIdentity(receipt.boundRevision, context.candidate_revision)
+      )
+        return "uncommitted verifier receipt does not match the trusted workspace revision";
+    }
     if (
-      receipt.boundRevision.gitCommitHash !== null &&
-      receipt.boundRevision.gitCommitHash !== context.candidate_sha
+      context.candidate_revision &&
+      !sameRevisionIdentity(receipt.boundRevision, context.candidate_revision)
     )
-      return "verifier receipt revision does not match the trusted candidate";
+      return "verifier receipt does not match the trusted candidate revision";
     if (context.project_root) {
       const stale = RevisionManager.isReceiptStaleSync(
-        receipt as RevisionBoundReceipt,
+        receipt,
         context.project_root,
       );
       if (stale.stale)
@@ -358,22 +393,23 @@ export class EvidenceGraph {
     const errors = [...this.validate().errors];
     const receipts = this.getNodesByType("verifier_receipt");
     for (const receiptNode of receipts) {
-      const receipt = receiptNode.data as RevisionBoundReceipt;
-      if (!receipt?.boundRevision) {
-        errors.push(
-          `Verifier receipt ${receiptNode.id} missing boundRevision for H7 recheck`,
-        );
+      const parsed = VerifierReceiptEvidenceV1Schema.safeParse(receiptNode.data);
+      if (!parsed.success) {
+        errors.push(`Malformed verifier receipt ${receiptNode.id}`);
         continue;
       }
+      const receipt: RevisionBoundReceipt = {
+        receiptId: parsed.data.receipt.receiptId,
+        command: parsed.data.receipt.command,
+        exitCode: parsed.data.receipt.exitCode,
+        boundRevision: parsed.data.receipt.boundRevision,
+        stale: parsed.data.receipt.stale,
+        ...(parsed.data.receipt.staleReason !== undefined
+          ? { staleReason: parsed.data.receipt.staleReason }
+          : {}),
+      };
       const { stale, reason } = RevisionManager.isReceiptStaleSync(
-        {
-          receiptId: receipt.receiptId ?? receiptNode.id,
-          command: receipt.command ?? "",
-          exitCode: receipt.exitCode ?? 1,
-          boundRevision: receipt.boundRevision,
-          stale: receipt.stale === true,
-          ...(receipt.staleReason ? { staleReason: receipt.staleReason } : {}),
-        },
+        receipt,
         projectRoot,
       );
       if (stale)
@@ -459,17 +495,17 @@ export function evaluateCompletionGateV1(input: {
   repository?: string;
   candidate_sha?: string;
   acceptance_bundle?: AcceptanceBundleV1;
-  /** Trusted dependency supplied by the supervisor, never by evidence data. */
+  /** Legacy compatibility input; it is deliberately ignored. */
   trusted_resolver?: TrustedExecutionResolver;
   /** Opaque context reference resolved outside the evidence graph. */
   trusted_context_ref?: string;
 }): CompletionEvaluationV1 {
-  const trustedResolver = input.trusted_resolver;
+  const trustedResolver = getAuthoritativeTrustedExecutionResolver();
   const trustedContext =
-    trustedResolver && input.trusted_context_ref
+    input.trusted_context_ref
       ? trustedResolver.resolveExecutionContext(input.trusted_context_ref)
       : undefined;
-  if (!trustedResolver || !trustedContext) {
+  if (!trustedContext) {
     return {
       status: "UNKNOWN",
       verified: false,
@@ -579,7 +615,11 @@ export function evaluateCompletionGateV1(input: {
         trustedResolver,
       );
       if (certificationError) {
+        const malformedReceipt =
+          node.type === "verifier_receipt" &&
+          !VerifierReceiptEvidenceV1Schema.safeParse(node.data).success;
         if (
+          !malformedReceipt &&
           CERTIFYING_TYPES.has(node.type) &&
           typeof node.data === "object" &&
           node.data !== null &&

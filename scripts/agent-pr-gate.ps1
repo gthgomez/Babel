@@ -161,7 +161,7 @@ try {
   Add-AgentCheck -Name 'NO_DRAFT' -Passed ($prAvailable -and (-not [bool]$prView.isDraft)) -Blocker 'pr_is_draft'
   Add-AgentCheck -Name 'MERGEABLE' -Passed ($prAvailable -and [string]::Equals([string]$prView.mergeable, 'MERGEABLE', [StringComparison]::OrdinalIgnoreCase)) -Blocker 'pr_not_mergeable'
   Add-AgentCheck -Name 'MERGE_STATE_CLEAN' -Passed ($prAvailable -and [string]::Equals([string]$prView.mergeStateStatus, 'CLEAN', [StringComparison]::OrdinalIgnoreCase)) -Blocker 'pr_merge_state_not_clean'
-  Add-AgentCheck -Name 'NO_UNRESOLVED_REVIEWS' -Passed ($prAvailable -and [string]::Equals([string]$prView.reviewDecision, 'APPROVED', [StringComparison]::OrdinalIgnoreCase)) -Blocker 'reviews_not_approved'
+  Add-AgentCheck -Name 'REVIEW_DECISION_APPROVED' -Passed ($prAvailable -and [string]::Equals([string]$prView.reviewDecision, 'APPROVED', [StringComparison]::OrdinalIgnoreCase)) -Blocker 'review_decision_not_approved'
 
   $remotePrHead = $null
   $remotePrHeadResult = $null

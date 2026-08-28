@@ -22,7 +22,10 @@ import {
   EvidenceGraph,
   evaluateCompletionGateV1 as evaluateRawCompletionGate,
 } from "../evidence/evidenceGraph.js";
-import { RevisionManager } from "../evidence/revisionBoundReceipt.js";
+import {
+  RevisionManager,
+  VerifierReceiptEvidenceV1Schema,
+} from "../evidence/revisionBoundReceipt.js";
 import {
   assertBreakerReadOnly,
   buildBreakerContractV1,
@@ -33,7 +36,11 @@ import {
   endpointHasCapability,
   validateAgentEndpointV1,
 } from "./agentEndpoint.js";
-import { createTrustedExecutionSupervisor } from "../authority/trustedExecution.js";
+import {
+  autonomousSWETrustHost,
+  createTrustedExecutionSupervisor,
+  getAuthoritativeTrustedExecutionResolver,
+} from "../authority/trustedExecution.js";
 import { attributeFailureV1 } from "../services/failureAttribution.js";
 import {
   buildReplayManifestV1,
@@ -65,7 +72,7 @@ function contract() {
 function evaluateCompletionGateV1(
   input: Parameters<typeof evaluateRawCompletionGate>[0],
 ) {
-  const supervisor = createTrustedExecutionSupervisor();
+  const supervisor = autonomousSWETrustHost;
   const identity = supervisor.issueExecutionIdentity({
     endpoint_id: "verifier:test",
     role: "verifier",
@@ -89,7 +96,6 @@ function evaluateCompletionGateV1(
   }
   return evaluateRawCompletionGate({
     ...input,
-    trusted_resolver: supervisor.resolver,
     trusted_context_ref: context.context_ref,
   });
 }
@@ -470,7 +476,7 @@ test("EvidenceGraph completion gate rejects consensus, builder claims, stale SHA
 
 test("V1.1 trust boundary rejects identity impersonation and lifecycle failures", () => {
   const c = contract();
-  const supervisor = createTrustedExecutionSupervisor();
+  const supervisor = autonomousSWETrustHost;
   const trusted = supervisor.issueExecutionIdentity({
     endpoint_id: "verifier:test",
     role: "verifier",
@@ -493,7 +499,6 @@ test("V1.1 trust boundary rejects identity impersonation and lifecycle failures"
       graph,
       repository: "repo",
       candidate_sha: "candidate-a",
-      trusted_resolver: supervisor.resolver,
       trusted_context_ref: context.context_ref,
     });
 
@@ -525,7 +530,7 @@ test("V1.1 trust boundary rejects identity impersonation and lifecycle failures"
       graph: node().graph,
       repository: "attacker-repository",
       candidate_sha: "attacker-candidate",
-      trusted_resolver: supervisor.resolver,
+      trusted_resolver: createTrustedExecutionSupervisor().resolver,
       trusted_context_ref: context.context_ref,
     }).status,
     "UNKNOWN",
@@ -561,7 +566,7 @@ test("V1.1 trust boundary rejects identity impersonation and lifecycle failures"
   assert.notEqual(evaluate(expiredGraph.graph).status, "VERIFIED");
   supervisor.revokeExecutionIdentity(trusted.identity_ref);
   assert.notEqual(evaluate(node().graph).status, "VERIFIED");
-  assert.equal("issueExecutionIdentity" in supervisor.resolver, false);
+  assert.equal("issueExecutionIdentity" in getAuthoritativeTrustedExecutionResolver(), false);
   assert.throws(() =>
     supervisor.issueExecutionIdentity({
       endpoint_id: "verifier:no-capability",
@@ -594,9 +599,156 @@ test("V1.1 trust boundary rejects identity impersonation and lifecycle failures"
   );
 });
 
+test("authoritative completion rejects caller-created and substituted trust roots", () => {
+  const c = contract();
+  const foreign = createTrustedExecutionSupervisor();
+  const foreignIdentity = foreign.issueExecutionIdentity({
+    endpoint_id: "verifier:foreign",
+    role: "verifier",
+    execution_domain: "isolated-verifier",
+    capabilities: ["certify_evidence"],
+    task_id: c.task_id,
+    contract_hash: c.contract_hash,
+  });
+  const foreignContext = foreign.issueExecutionContext({
+    task_id: c.task_id,
+    contract_hash: c.contract_hash,
+    repository: "repo",
+    base_sha: c.base_sha,
+    candidate_sha: "candidate-a",
+    execution_identity_ref: foreignIdentity.identity_ref,
+  });
+  const foreignGraph = evidenceGraph();
+  foreignGraph.getNode("test")!.producer_identity_ref = foreignIdentity.identity_ref;
+
+  const result = evaluateRawCompletionGate({
+    contract: c,
+    graph: foreignGraph,
+    repository: "repo",
+    candidate_sha: "candidate-a",
+    trusted_resolver: foreign.resolver,
+    trusted_context_ref: foreignContext.context_ref,
+  });
+  assert.equal(result.status, "UNKNOWN");
+  assert.equal(result.verified, false);
+
+  const fakeResolver = {
+    resolveExecutionIdentity: () => foreignIdentity,
+    resolveAuthorityGrant: () => undefined,
+    resolveExecutionContext: () => foreignContext,
+  };
+  const substituted = evaluateRawCompletionGate({
+    contract: c,
+    graph: foreignGraph,
+    repository: "repo",
+    candidate_sha: "candidate-a",
+    trusted_resolver: fakeResolver,
+    trusted_context_ref: foreignContext.context_ref,
+  });
+  assert.equal(substituted.status, "UNKNOWN");
+  assert.match(substituted.errors.join("\n"), /trusted_execution_context/);
+
+  const trustedIdentity = autonomousSWETrustHost.issueExecutionIdentity({
+    endpoint_id: "verifier:host",
+    role: "verifier",
+    execution_domain: "isolated-verifier",
+    capabilities: ["certify_evidence"],
+    task_id: c.task_id,
+    contract_hash: c.contract_hash,
+  });
+  const trustedContext = autonomousSWETrustHost.issueExecutionContext({
+    task_id: c.task_id,
+    contract_hash: c.contract_hash,
+    repository: "repo",
+    base_sha: c.base_sha,
+    candidate_sha: "candidate-a",
+    execution_identity_ref: trustedIdentity.identity_ref,
+  });
+  const trustedGraph = evidenceGraph();
+  trustedGraph.getNode("test")!.producer_identity_ref = trustedIdentity.identity_ref;
+  trustedGraph.getNode("test")!.producer_identity = {
+    kind: "execution_identity",
+    endpoint_id: trustedIdentity.endpoint_id,
+    role: trustedIdentity.role,
+    execution_domain: trustedIdentity.execution_domain,
+  };
+  assert.equal(
+    evaluateRawCompletionGate({
+      contract: c,
+      graph: trustedGraph,
+      repository: "repo",
+      candidate_sha: "candidate-a",
+      trusted_context_ref: trustedContext.context_ref,
+    }).status,
+    "VERIFIED",
+  );
+  assert.equal("issueExecutionIdentity" in getAuthoritativeTrustedExecutionResolver(), false);
+});
+
+test("delegated authority is bounded by capability, binding, and ancestor lifecycle", () => {
+  const supervisor = createTrustedExecutionSupervisor();
+  const parent = supervisor.issueAuthorityGrant({
+    capabilities: ["inspect_repository", "run_tests"],
+    task_id: "task:delegation",
+    session_id: "session:delegation",
+    contract_hash: "contract:delegation",
+    expires_at: "2026-08-30T00:00:00.000Z",
+  });
+  const child = supervisor.delegateAuthorityGrant({
+    parent_grant_ref: parent.grant_ref,
+    capabilities: ["run_tests"],
+    expires_at: "2026-08-29T00:00:00.000Z",
+  });
+  const grandchild = supervisor.delegateAuthorityGrant({
+    parent_grant_ref: child.grant_ref,
+    capabilities: ["run_tests"],
+  });
+  assert.equal(supervisor.resolveAuthorityGrant(child.grant_ref)?.grant_ref, child.grant_ref);
+  assert.equal(supervisor.resolveAuthorityGrant(grandchild.grant_ref)?.grant_ref, grandchild.grant_ref);
+  assert.equal(
+    supervisor.resolveAuthorityGrant(
+      child.grant_ref,
+      new Date("2026-08-31T00:00:00.000Z"),
+    ),
+    undefined,
+  );
+  assert.throws(() =>
+    supervisor.delegateAuthorityGrant({
+      parent_grant_ref: parent.grant_ref,
+      capabilities: ["run_tests"],
+      expires_at: "2100-01-01T00:00:00.000Z",
+    }),
+  );
+  assert.throws(() =>
+    supervisor.delegateAuthorityGrant({
+      parent_grant_ref: parent.grant_ref,
+      capabilities: ["run_tests"],
+      task_id: "task:other",
+    }),
+  );
+  assert.throws(() =>
+    supervisor.delegateAuthorityGrant({
+      parent_grant_ref: parent.grant_ref,
+      capabilities: ["run_tests"],
+      session_id: "session:other",
+    }),
+  );
+  assert.throws(() =>
+    supervisor.delegateAuthorityGrant({
+      parent_grant_ref: parent.grant_ref,
+      capabilities: ["run_tests"],
+      contract_hash: "contract:other",
+    }),
+  );
+  supervisor.revokeAuthorityGrant(parent.grant_ref);
+  assert.equal(supervisor.resolveAuthorityGrant(child.grant_ref), undefined);
+  assert.equal(supervisor.resolveAuthorityGrant(grandchild.grant_ref), undefined);
+  assert.equal(supervisor.resolveAuthorityGrant("grant:missing"), undefined);
+});
+
 test("V1.1 authority grants reject provenance forgery and capability widening", () => {
   const c = contract();
-  const supervisor = createTrustedExecutionSupervisor();
+  const supervisor = autonomousSWETrustHost;
   const grant = supervisor.issueAuthorityGrant({
     capabilities: ["inspect_repository"],
     task_id: c.task_id,
@@ -609,13 +761,13 @@ test("V1.1 authority grants reject provenance forgery and capability widening", 
       acceptance_criteria: c.acceptance_criteria,
       trusted_authority: {
         grant_ref: grant.grant_ref,
-        resolver: supervisor.resolver,
+        resolver: getAuthoritativeTrustedExecutionResolver(),
       },
     }),
   );
   assert.equal(
     validateTaskContractV1ForCompletion(authorized, {
-      trustedAuthorityResolver: supervisor.resolver,
+      trustedAuthorityResolver: getAuthoritativeTrustedExecutionResolver(),
     }).length,
     0,
   );
@@ -670,21 +822,21 @@ test("V1.1 authority grants reject provenance forgery and capability widening", 
   assert.ok(validateTaskContractV1(tampered).includes("contract_hash"));
   assert.notEqual(
     validateTaskContractV1ForCompletion(tampered, {
-      trustedAuthorityResolver: supervisor.resolver,
+      trustedAuthorityResolver: getAuthoritativeTrustedExecutionResolver(),
     }).length,
     0,
   );
   supervisor.revokeAuthorityGrant(grant.grant_ref);
   assert.ok(
     validateTaskContractV1ForCompletion(authorized, {
-      trustedAuthorityResolver: supervisor.resolver,
+      trustedAuthorityResolver: getAuthoritativeTrustedExecutionResolver(),
     }).includes("authority.grant_unknown_or_inactive"),
   );
 });
 
 test("V1.1 canonical revision-bound receipts pass only when current and typed", async () => {
   const c = contract();
-  const supervisor = createTrustedExecutionSupervisor();
+  const supervisor = autonomousSWETrustHost;
   const identity = supervisor.issueExecutionIdentity({
     endpoint_id: "verifier:receipt",
     role: "verifier",
@@ -702,7 +854,8 @@ test("V1.1 canonical revision-bound receipts pass only when current and typed", 
     // A temp directory under the checkout has a real git HEAD in CI; bind the
     // context to that observed revision while retaining a deterministic
     // non-git fallback for isolated local runners.
-    const candidateSha = boundRevision.gitCommitHash ?? "candidate-a";
+    const candidateSha =
+      boundRevision.gitCommitHash ?? boundRevision.compositeTreeHash;
     const context = supervisor.issueExecutionContext({
       task_id: c.task_id,
       contract_hash: c.contract_hash,
@@ -710,6 +863,7 @@ test("V1.1 canonical revision-bound receipts pass only when current and typed", 
       project_root: root,
       base_sha: c.base_sha,
       candidate_sha: candidateSha,
+      candidate_revision: boundRevision,
       execution_identity_ref: identity.identity_ref,
     });
     const receipt = {
@@ -748,7 +902,6 @@ test("V1.1 canonical revision-bound receipts pass only when current and typed", 
         graph,
         repository: "repo",
         candidate_sha: candidateSha,
-        trusted_resolver: supervisor.resolver,
         trusted_context_ref: context.context_ref,
       });
     assert.equal(evaluate().status, "VERIFIED");
@@ -769,6 +922,197 @@ test("V1.1 canonical revision-bound receipts pass only when current and typed", 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("canonical verifier receipts fail closed for malformed and unbound revisions", () => {
+  const c = contract();
+  const identity = autonomousSWETrustHost.issueExecutionIdentity({
+    endpoint_id: "verifier:receipt-adversarial",
+    role: "verifier",
+    execution_domain: "isolated-verifier",
+    capabilities: ["certify_evidence"],
+    task_id: c.task_id,
+    contract_hash: c.contract_hash,
+  });
+  const revision = {
+    gitCommitHash: "a".repeat(40),
+    compositeTreeHash: "b".repeat(64),
+    fileHashes: { "touched.txt": "c".repeat(64) },
+    capturedAt: Date.now(),
+  };
+  const context = autonomousSWETrustHost.issueExecutionContext({
+    task_id: c.task_id,
+    contract_hash: c.contract_hash,
+    repository: "repo",
+    base_sha: c.base_sha,
+    candidate_sha: revision.gitCommitHash,
+    candidate_revision: revision,
+    execution_identity_ref: identity.identity_ref,
+  });
+  const receipt = {
+    receiptId: "receipt:adversarial",
+    command: "npm test -- foundation",
+    exitCode: 0,
+    boundRevision: revision,
+    stale: false,
+  };
+  const evaluateData = (
+    data: unknown,
+    contextRef = context.context_ref,
+    candidateSha = revision.gitCommitHash,
+  ): ReturnType<typeof evaluateRawCompletionGate> => {
+    const graph = new EvidenceGraph();
+    graph.addNode({
+      id: "receipt",
+      type: "verifier_receipt",
+      data,
+      parents: [],
+      binding: {
+        task_id: c.task_id,
+        contract_hash: c.contract_hash,
+        repository: "repo",
+        base_sha: c.base_sha,
+        candidate_sha: candidateSha,
+        requirement_id: "acceptance:1",
+      },
+      producer_identity_ref: identity.identity_ref,
+    });
+    return evaluateRawCompletionGate({
+      contract: c,
+      graph,
+      repository: "repo",
+      candidate_sha: candidateSha,
+      trusted_context_ref: contextRef,
+    });
+  };
+  const assertNotVerified = (
+    data: unknown,
+    contextRef = context.context_ref,
+    candidateSha = revision.gitCommitHash,
+  ): void => {
+    assert.doesNotThrow(() => evaluateData(data, contextRef, candidateSha));
+    assert.notEqual(evaluateData(data, contextRef, candidateSha).status, "VERIFIED");
+  };
+
+  assert.equal(
+    VerifierReceiptEvidenceV1Schema.safeParse({ schema_version: 1, receipt }).success,
+    true,
+  );
+  assert.equal(evaluateData({ schema_version: 1, receipt }).status, "VERIFIED");
+  assertNotVerified({ schema_version: 1, receipt: { ...receipt, exitCode: 1 } });
+  assertNotVerified({ schema_version: 1, receipt: { ...receipt, stale: true } });
+  assertNotVerified({ schema_version: 1, receipt: { ...receipt, receiptId: undefined } });
+  assertNotVerified({ schema_version: 1, receipt: { ...receipt, command: undefined } });
+  assertNotVerified({ schema_version: 1, receipt: { ...receipt, boundRevision: undefined } });
+  assertNotVerified({
+    schema_version: 1,
+    receipt: { ...receipt, boundRevision: { ...revision, fileHashes: undefined } },
+  });
+  assertNotVerified({
+    schema_version: 1,
+    receipt: { ...receipt, boundRevision: { ...revision, fileHashes: [] } },
+  });
+  assertNotVerified({
+    schema_version: 1,
+    receipt: {
+      ...receipt,
+      boundRevision: { ...revision, compositeTreeHash: undefined },
+    },
+  });
+  assertNotVerified({
+    schema_version: 1,
+    receipt: { ...receipt, boundRevision: { ...revision, capturedAt: "now" } },
+  });
+  assertNotVerified({
+    schema_version: 1,
+    receipt: {
+      ...receipt,
+      boundRevision: { ...revision, gitCommitHash: "d".repeat(40) },
+    },
+  });
+  assertNotVerified({
+    schema_version: 1,
+    receipt: {
+      ...receipt,
+      boundRevision: { ...revision, compositeTreeHash: "d".repeat(64) },
+    },
+  });
+  assertNotVerified({ schema_version: 1, receipt: { ...receipt, extra: true } });
+  assertNotVerified({ schema_version: 2, receipt });
+
+  const noLiveContext = autonomousSWETrustHost.issueExecutionContext({
+    task_id: c.task_id,
+    contract_hash: c.contract_hash,
+    repository: "repo",
+    base_sha: c.base_sha,
+    candidate_sha: revision.gitCommitHash,
+    execution_identity_ref: identity.identity_ref,
+  });
+  assertNotVerified({ schema_version: 1, receipt }, noLiveContext.context_ref);
+
+  const nullRevision = {
+    gitCommitHash: null,
+    compositeTreeHash: "e".repeat(64),
+    fileHashes: { "touched.txt": "f".repeat(64) },
+    capturedAt: Date.now(),
+  };
+  const nullContext = autonomousSWETrustHost.issueExecutionContext({
+    task_id: c.task_id,
+    contract_hash: c.contract_hash,
+    repository: "repo",
+    base_sha: c.base_sha,
+    candidate_sha: nullRevision.compositeTreeHash,
+    execution_identity_ref: identity.identity_ref,
+  });
+  const nullGraph = new EvidenceGraph();
+  nullGraph.addNode({
+    id: "null-receipt",
+    type: "verifier_receipt",
+    data: { schema_version: 1, receipt: { ...receipt, boundRevision: nullRevision } },
+    parents: [],
+    binding: {
+      task_id: c.task_id,
+      contract_hash: c.contract_hash,
+      repository: "repo",
+      base_sha: c.base_sha,
+      candidate_sha: nullRevision.compositeTreeHash,
+      requirement_id: "acceptance:1",
+    },
+    producer_identity_ref: identity.identity_ref,
+  });
+  const unbound = evaluateRawCompletionGate({
+    contract: c,
+    graph: nullGraph,
+    repository: "repo",
+    candidate_sha: nullRevision.compositeTreeHash,
+    trusted_context_ref: nullContext.context_ref,
+  });
+  assert.equal(unbound.status, "UNKNOWN");
+  assert.equal(unbound.verified, false);
+
+  const liveRevision = RevisionManager.computeRevisionSync(process.cwd(), []);
+  const changedHeadRevision = {
+    ...liveRevision,
+    gitCommitHash: "0".repeat(40),
+  };
+  const changedHeadContext = autonomousSWETrustHost.issueExecutionContext({
+    task_id: c.task_id,
+    contract_hash: c.contract_hash,
+    repository: "repo",
+    project_root: process.cwd(),
+    base_sha: c.base_sha,
+    candidate_sha: changedHeadRevision.gitCommitHash,
+    candidate_revision: changedHeadRevision,
+    execution_identity_ref: identity.identity_ref,
+  });
+  assertNotVerified(
+    {
+      schema_version: 1,
+      receipt: { ...receipt, boundRevision: changedHeadRevision },
+    },
+    changedHeadContext.context_ref,
+    changedHeadRevision.gitCommitHash,
+  );
 });
 
 test("Breaker is independent and read-only, and outputs structured counterexamples", () => {

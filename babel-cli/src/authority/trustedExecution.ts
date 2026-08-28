@@ -13,6 +13,10 @@ import {
   isCapabilityId,
   type CapabilityId,
 } from './capabilities.js'
+import {
+  WorkspaceRevisionSchema,
+  type WorkspaceRevision,
+} from '../evidence/revisionBoundReceipt.js'
 
 export const TRUSTED_EXECUTION_SCHEMA_VERSION = 1 as const
 
@@ -62,6 +66,7 @@ export interface TrustedExecutionContextV1 {
   project_root: string | null
   base_sha: string | null
   candidate_sha: string
+  candidate_revision: WorkspaceRevision | null
   session_id: string | null
   execution_identity_ref: string
   authority_grant_ref: string | null
@@ -126,6 +131,7 @@ export interface TrustedExecutionSupervisor extends TrustedExecutionResolver {
     project_root?: string | null
     base_sha?: string | null
     candidate_sha: string
+    candidate_revision?: WorkspaceRevision | null
     session_id?: string | null
     execution_identity_ref: string
     authority_grant_ref?: string | null
@@ -136,6 +142,21 @@ export interface TrustedExecutionSupervisor extends TrustedExecutionResolver {
   revokeAuthorityGrant(grantRef: string, at?: string): void
   revokeExecutionContext(contextRef: string, at?: string): void
 }
+
+/**
+ * Babel-owned authority host surface. It intentionally exposes no resolver;
+ * completion obtains the resolver from the module-owned host registry.
+ */
+export type TrustedExecutionHost = Pick<
+  TrustedExecutionSupervisor,
+  | 'issueExecutionIdentity'
+  | 'issueAuthorityGrant'
+  | 'delegateAuthorityGrant'
+  | 'issueExecutionContext'
+  | 'revokeExecutionIdentity'
+  | 'revokeAuthorityGrant'
+  | 'revokeExecutionContext'
+>
 
 function nowValue(now: Date | number = Date.now()): number {
   return typeof now === 'number' ? now : now.getTime()
@@ -181,7 +202,15 @@ function freezeGrant(grant: TrustedAuthorityGrantV1): TrustedAuthorityGrantV1 {
 }
 
 function freezeContext(context: TrustedExecutionContextV1): TrustedExecutionContextV1 {
-  return Object.freeze({ ...context })
+  return Object.freeze({
+    ...context,
+    candidate_revision: context.candidate_revision
+      ? Object.freeze({
+          ...context.candidate_revision,
+          fileHashes: Object.freeze({ ...context.candidate_revision.fileHashes }),
+        })
+      : null,
+  })
 }
 
 function assertBinding(
@@ -210,8 +239,33 @@ export function createTrustedExecutionSupervisor(): TrustedExecutionSupervisor {
     grantRef: string,
     now: Date | number = Date.now(),
   ): TrustedAuthorityGrantV1 | undefined => {
-    const grant = grants.get(grantRef)
-    return grant && isActive(grant, now) ? grant : undefined
+    const visited = new Set<string>()
+    let currentRef: string | null = grantRef
+    let child: TrustedAuthorityGrantV1 | undefined
+    while (currentRef !== null) {
+      if (visited.has(currentRef)) return undefined
+      visited.add(currentRef)
+      const current = grants.get(currentRef)
+      if (!current || !isActive(current, now)) return undefined
+      if (child) {
+        if (
+          child.capabilities.some(
+            (capability) => !current.capabilities.includes(capability),
+          ) ||
+          child.task_id !== current.task_id ||
+          child.session_id !== current.session_id ||
+          child.contract_hash !== current.contract_hash ||
+          (current.expires_at !== null &&
+            (child.expires_at === null ||
+              Date.parse(child.expires_at) > Date.parse(current.expires_at)))
+        ) {
+          return undefined
+        }
+      }
+      child = current
+      currentRef = current.parent_grant_ref
+    }
+    return grants.get(grantRef)
   }
   const resolveExecutionContext = (
     contextRef: string,
@@ -308,6 +362,13 @@ export function createTrustedExecutionSupervisor(): TrustedExecutionSupervisor {
         expires_at: input.expires_at ?? parent.expires_at,
         revoked_at: null,
       })
+      if (
+        parent.expires_at !== null &&
+        (grant.expires_at === null ||
+          Date.parse(grant.expires_at) > Date.parse(parent.expires_at))
+      ) {
+        throw new Error('Delegated authority cannot outlive its parent grant.')
+      }
       grants.set(grant.grant_ref, grant)
       return grant
     },
@@ -316,6 +377,18 @@ export function createTrustedExecutionSupervisor(): TrustedExecutionSupervisor {
       const contractHash = requireText(input.contract_hash, 'contract_hash')
       const repository = requireText(input.repository, 'repository')
       const candidateSha = requireText(input.candidate_sha, 'candidate_sha')
+      const candidateRevision = input.candidate_revision
+        ? WorkspaceRevisionSchema.parse(input.candidate_revision)
+        : null
+      if (
+        candidateRevision &&
+        ((candidateRevision.gitCommitHash !== null &&
+          candidateRevision.gitCommitHash !== candidateSha) ||
+          (candidateRevision.gitCommitHash === null &&
+            candidateRevision.compositeTreeHash !== candidateSha))
+      ) {
+        throw new Error('Trusted execution candidate revision does not match candidate_sha.')
+      }
       const identity = resolveExecutionIdentity(input.execution_identity_ref)
       if (!identity) throw new Error('Cannot bind context to an unknown or inactive identity.')
       assertBinding('identity task', identity.task_id, taskId)
@@ -337,6 +410,7 @@ export function createTrustedExecutionSupervisor(): TrustedExecutionSupervisor {
         project_root: input.project_root ?? null,
         base_sha: input.base_sha ?? null,
         candidate_sha: candidateSha,
+        candidate_revision: candidateRevision,
         session_id: input.session_id ?? null,
         execution_identity_ref: input.execution_identity_ref,
         authority_grant_ref: input.authority_grant_ref ?? null,
@@ -368,4 +442,22 @@ export function trustedIdentityHasCapability(
   capability: CapabilityId,
 ): boolean {
   return identity.capabilities.includes(capability)
+}
+
+const authoritativeSupervisor = createTrustedExecutionSupervisor()
+
+/** Babel's trusted controller boundary for V1.1 authority issuance. */
+export const autonomousSWETrustHost: TrustedExecutionHost = Object.freeze({
+  issueExecutionIdentity: authoritativeSupervisor.issueExecutionIdentity,
+  issueAuthorityGrant: authoritativeSupervisor.issueAuthorityGrant,
+  delegateAuthorityGrant: authoritativeSupervisor.delegateAuthorityGrant,
+  issueExecutionContext: authoritativeSupervisor.issueExecutionContext,
+  revokeExecutionIdentity: authoritativeSupervisor.revokeExecutionIdentity,
+  revokeAuthorityGrant: authoritativeSupervisor.revokeAuthorityGrant,
+  revokeExecutionContext: authoritativeSupervisor.revokeExecutionContext,
+})
+
+/** Internal read-only dependency used by authoritative completion paths. */
+export function getAuthoritativeTrustedExecutionResolver(): TrustedExecutionResolver {
+  return authoritativeSupervisor.resolver
 }
