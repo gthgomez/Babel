@@ -82,12 +82,15 @@ recording. Escrow is an additive access-boundary primitive.
 ## Durable task events
 
 `babel-cli/src/agent/taskEventJournal.ts` provides a task-level JSONL journal
-with schema version, durable task identity, contiguous sequence, payload hash,
-previous-event hash, and event hash. It covers task/contract/plan/assignment,
-execution, tool, artifact, claim, verification, challenge, failure, and
-terminal events. Parsing validates schema, sequence, task identity, payload
-size, secret-like fields, and the full hash chain. Saving uses a temporary file
-and atomic rename; reload rejects corruption rather than creating success.
+with schema version, durable task/run/contract identity, contiguous sequence,
+payload hash, previous-event hash, and event hash. It covers
+task/contract/plan/assignment, execution, tool, artifact, claim, verification,
+challenge, failure, and terminal events. Parsing validates schema, sequence,
+task/run/contract identity, payload size, secret-like fields, and the full hash
+chain. Saving fsyncs a temporary file before atomic rename; reload rejects
+corruption rather than creating success. This is tamper-evident durability,
+not authenticated history: the current process/storage boundary does not yet
+provide an external signing anchor.
 
 This task journal complements Babel's existing `SessionEventV1` and
 hash-linked `episode-events.jsonl`: session events remain the runtime lifecycle
@@ -105,12 +108,14 @@ Each acceptance requirement retains its human-readable
 Certifying evidence is bound to that spec's canonical hash and verifier ID;
 matching a requirement ID with an unrelated passing test is insufficient.
 
-`TrustedExecutionRegistryV1` is the orchestrator-owned producer boundary. It
-records task/run/contract association, endpoint, role, execution domain,
-capabilities, and assignment time. The evidence node may reference that
-assignment but cannot self-create or relabel it. Builder identities cannot be
-assigned as certifying producers. Evidence without a matching trusted
-assignment, capability, role, domain, task, contract, or run is rejected.
+`TrustedExecutionRegistryV1` is constructed only by the supervisor factory and
+is exposed to evidence consumers through a branded read port. Assignment,
+revocation, completion, and persistence are on the separate supervisor issuer
+port. Builder identities cannot be assigned as certifying producers. Evidence
+without a matching active assignment, capability, role, domain, task, contract,
+or run is rejected. This is a real in-process ownership boundary against
+ordinary builder-facing code, but it is not an OS sandbox or cryptographic
+attestation boundary; a compromised Babel process remains out of scope.
 
 `evaluateCompletionGateV1` is deterministic and deliberately narrow. Required
 acceptance requirements can be satisfied only by current, typed passing
@@ -125,11 +130,57 @@ Those nodes require a structured verifier/observer/system producer identity; a
 free-form role label is not an identity credential. Builder claims, critic
 approvals, majority agreement, missing provenance, stale base/candidate SHA,
 failed tests, and contradictory findings cannot certify completion. Outcomes are
-`UNVERIFIED`, `PARTIAL`, `FAILED`, `VERIFIED`, or `UNKNOWN`.
+`UNVERIFIED`, `PARTIAL`, `FAILED`, `BLOCKED`, `VERIFIED`, or `UNKNOWN`.
 
 The existing revision-bound receipt and acceptance V0 evaluators remain in
 place for current callers; the V1 gate adds a task/contract/SHA-bound primitive
 without changing normal CLI semantics.
+
+## PR-B trust and durability closure
+
+Trusted execution assignments are persisted as a versioned canonical document
+with per-record and state hashes. Writes fsync a temporary file before rename.
+Reload validates schema, hashes, duplicate keys, known capabilities, and
+optional task/run/contract expectations; malformed, truncated, tampered,
+widened, or incompatible state fails closed. These hashes provide integrity and
+tamper evidence, not independent authentication of the writer.
+
+Revision-bound evidence requires an explicit non-empty `files` scope or an
+explicit `repository` scope. File scopes are canonicalized, root-contained,
+duplicate-free, and matched exactly by their file hashes. Repository scope is
+represented by its own kind and is never inferred from an empty file list.
+Required Git mode fails when the revision cannot be established; optional Git
+mode is an explicit verifier choice. Deleted files are represented as
+`deleted`; renamed files are a new canonical scope and make the old receipt
+stale. The composite hash is checked rather than trusted from JSON alone.
+
+Independent review uses `independent_review_receipt_v2`. A supervisor review
+lane issues a single-use challenge and signs the bound receipt with Ed25519.
+The merge gate verifies the signature against a public-key registry anchored
+to the immutable PR base, not the candidate branch. Receipts bind repository,
+PR, task, run, contract, base, head, reviewer class/mode, builder, scope,
+timestamp, challenge, verdict, findings, and authority provenance. The
+challenge ledger is currently process-local, so cross-process replay requires
+a future durable challenge ledger. A public key must be provisioned by the
+trusted review-lane owner; the empty registry in this branch intentionally
+does not authorize any reviewer.
+
+The Breaker lane is executable as a read-only contract with inspection/search
+and allowed verification capabilities, no credentials, no publication, and no
+mutation. It returns structured findings or `UNKNOWN`. A current unresolved
+HIGH/CRITICAL Breaker finding produces `BLOCKED`; the Breaker never receives
+merge authority. The callback boundary is in-process and therefore still
+needs a future OS/container enforcement layer for hostile code.
+
+Evidence graphs seal after serialization and reject later mutation through the
+normal API. Certifying edges are bound to exact task/run/contract/repository,
+base and candidate revision, requirement, producer identity, verifier
+specification, and artifact references where supplied. Current failures and
+contradictory evidence cannot be voted away: a relevant failure yields
+`FAILED`, unresolved high-severity Breaker findings yield `BLOCKED`, stale or
+unrecheckable evidence yields `UNKNOWN`, and only exact, trusted, passing
+evidence can yield `VERIFIED`. This is deterministic evidence semantics, not a
+claim that every producer is independently authenticated.
 
 ## Breaker role
 

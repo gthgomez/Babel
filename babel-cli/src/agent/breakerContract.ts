@@ -35,12 +35,13 @@ export interface BreakerContractV1 {
   breaker_id: string;
   role: "breaker";
   task_id: string;
+  run_id: string;
   contract_hash: string;
   repository: string;
   base_sha: string | null;
   candidate_sha: string;
-  acceptance: AcceptanceRequirementV1[];
-  relevant_evidence: string[];
+  acceptance: readonly AcceptanceRequirementV1[];
+  relevant_evidence: readonly string[];
   capabilities: readonly CapabilityId[];
   execution_domain: "isolated-sandbox";
   project_code_execution: true;
@@ -58,6 +59,17 @@ export interface BreakerFindingV1 {
   evidence: string[];
   confidence: "low" | "medium" | "high" | "unknown";
   status: BreakerFindingStatus;
+}
+
+export interface BreakerReportV1 {
+  schema_version: typeof BREAKER_CONTRACT_VERSION;
+  breaker_id: string;
+  task_id: string;
+  run_id: string;
+  contract_hash: string;
+  candidate_sha: string;
+  status: "PASS" | "FINDINGS" | "UNKNOWN";
+  findings: BreakerFindingV1[];
 }
 
 /** Validate that a breaker remains independently read-only even if a caller delegates mutation. */
@@ -99,6 +111,7 @@ export function buildBreakerContractV1(input: {
   repository: string;
   base_sha?: string | null;
   candidate_sha: string;
+  run_id?: string;
   relevant_evidence?: string[];
 }): BreakerContractV1 {
   const contractErrors = validateTaskContractV1ForCompletion(
@@ -126,6 +139,7 @@ export function buildBreakerContractV1(input: {
     breaker_id: input.breaker_id,
     role: "breaker",
     task_id: input.taskContract.task_id,
+    run_id: input.run_id ?? "run:breaker",
     contract_hash: input.taskContract.contract_hash,
     repository: input.repository,
     base_sha: input.base_sha ?? input.taskContract.base_sha,
@@ -171,6 +185,53 @@ export function createBreakerFindingV1(input: {
     confidence: input.confidence ?? "unknown",
     status: input.status ?? "open",
   };
+}
+
+/** Execute the read-only Breaker lane against frozen context. */
+export async function executeBreakerLaneV1(input: {
+  contract: BreakerContractV1;
+  inspect: (
+    context: Readonly<BreakerContractV1>,
+  ) => Promise<readonly BreakerFindingV1[]>;
+}): Promise<BreakerReportV1> {
+  try {
+    assertBreakerReadOnly(input.contract.capabilities, {
+      execution_domain: input.contract.execution_domain,
+    });
+    const findings = [
+      ...(await input.inspect(
+        Object.freeze({
+          ...input.contract,
+          acceptance: Object.freeze([...input.contract.acceptance]),
+          relevant_evidence: Object.freeze([
+            ...input.contract.relevant_evidence,
+          ]),
+          capabilities: Object.freeze([...input.contract.capabilities]),
+        }),
+      )),
+    ];
+    return {
+      schema_version: BREAKER_CONTRACT_VERSION,
+      breaker_id: input.contract.breaker_id,
+      task_id: input.contract.task_id,
+      run_id: input.contract.run_id,
+      contract_hash: input.contract.contract_hash,
+      candidate_sha: input.contract.candidate_sha,
+      status: findings.length > 0 ? "FINDINGS" : "PASS",
+      findings,
+    };
+  } catch {
+    return {
+      schema_version: BREAKER_CONTRACT_VERSION,
+      breaker_id: input.contract.breaker_id,
+      task_id: input.contract.task_id,
+      run_id: input.contract.run_id,
+      contract_hash: input.contract.contract_hash,
+      candidate_sha: input.contract.candidate_sha,
+      status: "UNKNOWN",
+      findings: [],
+    };
+  }
 }
 
 /** The breaker consumes structured inputs; no builder transcript is part of this boundary. */

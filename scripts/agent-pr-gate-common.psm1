@@ -55,6 +55,13 @@ function Get-AgentObservationTimestamp {
   return $parsed
 }
 
+function Get-AgentNumericIdentity {
+  param([AllowNull()][object]$Value)
+  $text = [string]$Value
+  if ($text -match '(?<!\d)(\d+)$') { return [int64]$Matches[1] }
+  return [int64]0
+}
+
 function Resolve-AgentRequiredCheck {
   param(
     [Parameter(Mandatory = $true)][object[]]$Observations,
@@ -107,6 +114,8 @@ function Resolve-AgentRequiredCheck {
   $ordered = @($eligible | Sort-Object `
       @{ Expression = { Get-AgentObservationTimestamp -Observation $_ }; Descending = $true }, `
       @{ Expression = { [int64]($(if ([string]$_.workflow_run_attempt -match '^\d+$') { $_.workflow_run_attempt } else { 0 })) }; Descending = $true }, `
+      @{ Expression = { Get-AgentNumericIdentity -Value $_.workflow_run_id }; Descending = $true }, `
+      @{ Expression = { Get-AgentNumericIdentity -Value $_.check_run_id }; Descending = $true }, `
       @{ Expression = { [string]$_.workflow_run_id }; Descending = $true }, `
       @{ Expression = { [string]$_.check_run_id }; Descending = $true })
   $selected = $ordered[0]
@@ -132,20 +141,26 @@ function Resolve-AgentRequiredCheck {
   }
 }
 
-function Get-AgentIndependentReviewReceiptHash {
-  param([Parameter(Mandatory = $true)][object]$Receipt)
-  $payload = [ordered]@{}
-  $fieldOrder = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'reviewer_id', 'reviewer_class', 'review_mode', 'reviewed_at', 'scope', 'findings', 'blocking_findings', 'verdict', 'builder_id')
-  foreach ($field in $fieldOrder) {
-    $property = $Receipt.PSObject.Properties[$field]
-    if ($null -ne $property) {
-      if ($field -in @('scope', 'findings', 'blocking_findings')) { $payload[$field] = @($property.Value) } else { $payload[$field] = $property.Value }
+function Resolve-AgentReviewThreadPages {
+  param([Parameter(Mandatory = $true)][object[]]$Pages)
+  $count = 0
+  $unresolved = 0
+  foreach ($page in $Pages) {
+    $nodesProperty = if ($null -ne $page) { $page.PSObject.Properties['nodes'] } else { $null }
+    $pageInfo = Get-AgentPropertyValue -Object $page -Name 'pageInfo'
+    if ($null -eq $nodesProperty -or $null -eq $pageInfo) {
+      return [pscustomobject]@{ available = $false; resolved = $false; count = $count; unresolved = $unresolved; error = 'review_threads_shape_invalid' }
+    }
+    $nodes = @($nodesProperty.Value)
+    $count += $nodes.Count
+    $unresolved += @($nodes | Where-Object { -not [bool]$_.isResolved }).Count
+    $hasNext = [bool](Get-AgentPropertyValue -Object $pageInfo -Name 'hasNextPage')
+    $cursor = [string](Get-AgentPropertyValue -Object $pageInfo -Name 'endCursor')
+    if ($hasNext -and [string]::IsNullOrWhiteSpace($cursor)) {
+      return [pscustomobject]@{ available = $false; resolved = $false; count = $count; unresolved = $unresolved; error = 'review_threads_pagination_incomplete' }
     }
   }
-  $canonical = $payload | ConvertTo-Json -Depth 50 -Compress
-  $bytes = [Text.Encoding]::UTF8.GetBytes($canonical)
-  $digest = [Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
-  return ([BitConverter]::ToString($digest) -replace '-', '').ToLowerInvariant()
+  return [pscustomobject]@{ available = $true; resolved = $unresolved -eq 0; count = $count; unresolved = $unresolved; error = '' }
 }
 
 function Test-AgentIndependentReviewReceipt {
@@ -155,7 +170,8 @@ function Test-AgentIndependentReviewReceipt {
     [Parameter(Mandatory = $true)][int]$PR,
     [Parameter(Mandatory = $true)][string]$BaseSha,
     [Parameter(Mandatory = $true)][string]$HeadSha,
-    [Parameter(Mandatory = $true)][string]$BuilderIdentity
+    [Parameter(Mandatory = $true)][string]$BuilderIdentity,
+    [string]$TaskId = '', [string]$RunId = '', [string]$ContractHash = ''
   )
 
   $errors = @()
@@ -169,23 +185,51 @@ function Test-AgentIndependentReviewReceipt {
   $verdict = Get-AgentPropertyValue -Object $Receipt -Name 'verdict'
   $scope = Get-AgentPropertyValue -Object $Receipt -Name 'scope'
   $blockingFindings = Get-AgentPropertyValue -Object $Receipt -Name 'blocking_findings'
-  $artifactHash = Get-AgentPropertyValue -Object $Receipt -Name 'artifact_hash'
-  if ([string]$schemaVersion -ne '1') { $errors += 'receipt_schema_version_invalid' }
-  if (-not [string]::Equals([string]$kind, 'independent_review_receipt_v1', [StringComparison]::OrdinalIgnoreCase)) { $errors += 'receipt_kind_invalid' }
+  $receiptTaskId = Get-AgentPropertyValue -Object $Receipt -Name 'task_id'
+  $receiptRunId = Get-AgentPropertyValue -Object $Receipt -Name 'run_id'
+  $receiptContractHash = Get-AgentPropertyValue -Object $Receipt -Name 'contract_hash'
+  $reviewerClass = Get-AgentPropertyValue -Object $Receipt -Name 'reviewer_class'
+  $reviewMode = Get-AgentPropertyValue -Object $Receipt -Name 'review_mode'
+  $reviewedAt = Get-AgentPropertyValue -Object $Receipt -Name 'reviewed_at'
+  $challengeId = Get-AgentPropertyValue -Object $Receipt -Name 'challenge_id'
+  $authority = Get-AgentPropertyValue -Object $Receipt -Name 'authority_provenance'
+  $reviewedScope = Get-AgentPropertyValue -Object $Receipt -Name 'reviewed_scope'
+  $signature = Get-AgentPropertyValue -Object $Receipt -Name 'signature'
+  if ([string]$schemaVersion -ne '2') { $errors += 'receipt_schema_version_invalid' }
+  if (-not [string]::Equals([string]$kind, 'independent_review_receipt_v2', [StringComparison]::OrdinalIgnoreCase)) { $errors += 'receipt_kind_invalid' }
   if (-not [string]::Equals([string]$repositoryValue, $Repository, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'receipt_repository_mismatch' }
   if ([string]$prNumber -ne [string]$PR) { $errors += 'receipt_pr_mismatch' }
   if (-not [string]::Equals([string]$baseValue, $BaseSha, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'receipt_base_mismatch' }
   if (-not [string]::Equals([string]$headValue, $HeadSha, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'receipt_head_mismatch' }
+  if ([string]::IsNullOrWhiteSpace([string]$receiptTaskId)) { $errors += 'receipt_task_missing' }
+  if ([string]::IsNullOrWhiteSpace([string]$receiptRunId)) { $errors += 'receipt_run_missing' }
+  if ([string]::IsNullOrWhiteSpace([string]$receiptContractHash)) { $errors += 'receipt_contract_missing' }
+  if (-not [string]::IsNullOrWhiteSpace($TaskId) -and $receiptTaskId -ne $TaskId) { $errors += 'receipt_task_mismatch' }
+  if (-not [string]::IsNullOrWhiteSpace($RunId) -and $receiptRunId -ne $RunId) { $errors += 'receipt_run_mismatch' }
+  if (-not [string]::IsNullOrWhiteSpace($ContractHash) -and $receiptContractHash -ne $ContractHash) { $errors += 'receipt_contract_mismatch' }
   if ([string]::IsNullOrWhiteSpace([string]$reviewerId) -or [string]::Equals([string]$reviewerId, $BuilderIdentity, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'reviewer_not_independent_from_builder' }
-  if (-not [string]::Equals([string]$verdict, 'APPROVE', [StringComparison]::OrdinalIgnoreCase)) { $errors += 'independent_review_not_approved' }
-  if (@($scope).Count -eq 0) { $errors += 'independent_review_scope_empty' }
-  if (@($blockingFindings).Count -gt 0) { $errors += 'independent_review_has_blocking_findings' }
-  if ([string]$artifactHash -notmatch '^[0-9a-fA-F]{64}$') { $errors += 'independent_review_artifact_hash_invalid' }
-  if ([string]$artifactHash -match '^[0-9a-fA-F]{64}$') {
-    $expectedHash = Get-AgentIndependentReviewReceiptHash -Receipt $Receipt
-    if (-not [string]::Equals([string]$artifactHash, $expectedHash, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'independent_review_artifact_hash_mismatch' }
+  if ([string]$reviewerClass -notin @('independent_readonly', 'independent_breaker')) { $errors += 'reviewer_class_invalid' }
+  if ([string]$reviewMode -notin @('exact_head', 'exact_revision')) { $errors += 'review_mode_invalid' }
+  $reviewedAtParsed = [DateTimeOffset]::MinValue
+  if ([string]::IsNullOrWhiteSpace([string]$reviewedAt) -or -not [DateTimeOffset]::TryParse([string]$reviewedAt, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$reviewedAtParsed)) { $errors += 'reviewed_at_invalid' }
+  elseif ($reviewedAtParsed -gt [DateTimeOffset]::UtcNow.AddMinutes(5) -or $reviewedAtParsed -lt [DateTimeOffset]::UtcNow.AddDays(-1)) { $errors += 'reviewed_at_stale_or_future' }
+  if ($null -eq $reviewedScope -or $null -eq $reviewedScope.PSObject.Properties['kind']) { $errors += 'reviewed_scope_invalid' }
+  else {
+    $scopeKind = [string]$reviewedScope.kind
+    if ($scopeKind -eq 'files') {
+      $scopePaths = @($reviewedScope.paths)
+      if ($scopePaths.Count -eq 0) { $errors += 'reviewed_scope_empty' }
+      $normalizedScope = @($scopePaths | ForEach-Object { ([string]$_).Replace('\', '/') })
+      if ((@($normalizedScope | Sort-Object -Unique).Count) -ne $normalizedScope.Count) { $errors += 'reviewed_scope_duplicate' }
+      if (@($normalizedScope | Where-Object { $_ -match '^(?:/|[A-Za-z]:)|(^|/)\.\.(?:/|$)' }).Count -gt 0) { $errors += 'reviewed_scope_unsafe_path' }
+    } elseif ($scopeKind -ne 'repository') { $errors += 'reviewed_scope_kind_invalid' }
   }
-  $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'reviewer_id', 'reviewer_class', 'review_mode', 'reviewed_at', 'scope', 'findings', 'blocking_findings', 'verdict', 'artifact_hash', 'builder_id')
+  if (-not [string]::Equals([string](Get-AgentPropertyValue -Object $authority -Name 'issuer'), 'supervisor_review_lane', [StringComparison]::OrdinalIgnoreCase)) { $errors += 'authority_provenance_invalid' }
+  if ([string]::IsNullOrWhiteSpace([string](Get-AgentPropertyValue -Object $authority -Name 'key_id')) -or [string]::IsNullOrWhiteSpace([string]$challengeId) -or [string](Get-AgentPropertyValue -Object $authority -Name 'challenge_id') -ne [string]$challengeId) { $errors += 'authority_provenance_missing_challenge_or_key' }
+  if (-not [string]::Equals([string]$verdict, 'APPROVE', [StringComparison]::OrdinalIgnoreCase)) { $errors += 'independent_review_not_approved' }
+  if (@($blockingFindings).Count -gt 0) { $errors += 'independent_review_has_blocking_findings' }
+  if ($null -eq $signature -or [string]$signature.algorithm -ne 'ed25519' -or [string]::IsNullOrWhiteSpace([string]$signature.key_id) -or [string]$signature.value -notmatch '^[A-Za-z0-9_-]{40,}$') { $errors += 'independent_review_signature_missing_or_invalid' }
+  $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'task_id', 'run_id', 'contract_hash', 'base_sha', 'head_sha', 'reviewer_id', 'reviewer_class', 'review_mode', 'reviewed_at', 'challenge_id', 'builder_id', 'reviewed_scope', 'verdict', 'blocking_findings', 'authority_provenance', 'signature')
   foreach ($property in @($Receipt.PSObject.Properties.Name)) {
     if ($allowed -notcontains [string]$property) { $errors += "receipt_unknown_field:$property" }
   }
@@ -210,4 +254,4 @@ function Get-AgentReviewPolicyVerdict {
   }
 }
 
-Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue
+Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Get-AgentNumericIdentity, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentReviewPolicyVerdict, Test-AgentShaValue

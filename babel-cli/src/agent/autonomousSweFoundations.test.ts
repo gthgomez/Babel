@@ -32,7 +32,11 @@ import {
   EvidenceGraph,
   evaluateCompletionGateV1 as evaluateCompletionGateV1Raw,
 } from "../evidence/evidenceGraph.js";
-import { TrustedExecutionRegistryV1 } from "../evidence/trustedExecutionIdentity.js";
+import {
+  createTrustedExecutionSupervisorV1,
+  getAuthoritativeTrustedExecutionIssuerV1,
+  getAuthoritativeTrustedExecutionReadPortV1,
+} from "../evidence/trustedExecutionIdentity.js";
 import {
   assertBreakerReadOnly,
   buildBreakerContractV1,
@@ -72,10 +76,10 @@ function contract() {
   );
 }
 
-function verifierEndpoint() {
+function verifierEndpoint(endpoint_id = "verifier:test") {
   return buildAgentEndpointV1({
-    endpoint_id: "verifier:test",
-    identity: "verifier:test",
+    endpoint_id,
+    identity: endpoint_id,
     harness: "babel",
     model: "test",
     provider: "test",
@@ -97,15 +101,18 @@ function trustedExecutionFor(
   runId = "run:test-foundations",
   endpoint = verifierEndpoint(),
 ) {
-  const registry = new TrustedExecutionRegistryV1();
-  registry.assign({
-    run_id: runId,
-    task_id: c.task_id,
-    contract_hash: c.contract_hash,
-    role: c.acceptance[0]?.type === "runtime" ? "observer" : "verifier",
-    endpoint,
-  });
-  return registry;
+  const issuer = getAuthoritativeTrustedExecutionIssuerV1();
+  const role = c.acceptance[0]?.type === "runtime" ? "observer" : "verifier";
+  if (!issuer.get(runId, endpoint.endpoint_id)) {
+    issuer.assign({
+      run_id: runId,
+      task_id: c.task_id,
+      contract_hash: c.contract_hash,
+      role,
+      endpoint,
+    });
+  }
+  return getAuthoritativeTrustedExecutionReadPortV1();
 }
 
 function trustedExecution() {
@@ -187,7 +194,10 @@ test("TaskContractV1 hash is canonical, frozen, and provenance-aware", () => {
 });
 
 test("TaskEventJournal is durable, ordered, hash-linked, and fail-closed", () => {
-  const journal = createTaskEventJournal("task:events");
+  const journal = createTaskEventJournal("task:events", {
+    run_id: "run:events",
+    contract_hash: "contract:events",
+  });
   const apiKeyField = ["api", "key"].join("_");
   const fakeApiKey = ["sk", "-this-must-not-persist"].join("");
   journal.append({
@@ -571,7 +581,8 @@ test("V1 certification requires an orchestrator-assigned producer identity", () 
     verifierEndpoint(),
   );
   const wrongTaskEndpoint = verifierEndpoint();
-  const otherTaskRegistry = new TrustedExecutionRegistryV1();
+  const otherTaskSupervisor = createTrustedExecutionSupervisorV1();
+  const otherTaskRegistry = otherTaskSupervisor.issuer;
   otherTaskRegistry.assign({
     run_id: "run:test-foundations",
     task_id: "task:other",
@@ -586,7 +597,7 @@ test("V1 certification requires an orchestrator-assigned producer identity", () 
       repository: "repo",
       candidate_sha: "candidate-a",
       run_id: "run:test-foundations",
-      trusted_execution: otherTaskRegistry,
+      trusted_execution: otherTaskSupervisor.read,
     }).status,
     "VERIFIED",
   );
@@ -798,6 +809,12 @@ test("acceptance type matrix is explicit and fail-closed", () => {
   for (const item of cases) {
     const c = typedContract(item.type);
     const requirement = c.acceptance[0]!;
+    const runId = `run:${item.type}`;
+    const trusted = trustedExecutionFor(
+      c,
+      runId,
+      verifierEndpoint(`verifier:${item.type}`),
+    );
     const makeGraph = (evidenceType: string, candidateSha = "candidate-a") => {
       const graph = new EvidenceGraph();
       const data: Record<string, unknown> = {
@@ -815,7 +832,7 @@ test("acceptance type matrix is explicit and fail-closed", () => {
         data,
         parents: [],
         binding: {
-          run_id: "run:test-foundations",
+          run_id: runId,
           task_id: c.task_id,
           contract_hash: c.contract_hash,
           repository: "repo",
@@ -826,7 +843,7 @@ test("acceptance type matrix is explicit and fail-closed", () => {
         producer_role: item.type === "runtime" ? "observer" : "verifier",
         producer_identity: {
           kind: "agent_endpoint",
-          endpoint_id: "verifier:test",
+          endpoint_id: `verifier:${item.type}`,
           role: item.type === "runtime" ? "observer" : "verifier",
           execution_domain: "isolated-verifier",
         },
@@ -838,8 +855,8 @@ test("acceptance type matrix is explicit and fail-closed", () => {
       graph: makeGraph(item.evidenceType),
       repository: "repo",
       candidate_sha: "candidate-a",
-      run_id: "run:test-foundations",
-      trusted_execution: trustedExecutionFor(c),
+      run_id: runId,
+      trusted_execution: trusted,
     });
     if (item.type === "manual") assert.notEqual(allowed.status, "VERIFIED");
     else assert.equal(allowed.status, "VERIFIED", item.type);
@@ -851,8 +868,8 @@ test("acceptance type matrix is explicit and fail-closed", () => {
         graph: disallowed,
         repository: "repo",
         candidate_sha: "candidate-a",
-        run_id: "run:test-foundations",
-        trusted_execution: trustedExecutionFor(c),
+        run_id: runId,
+        trusted_execution: trusted,
       }).status,
       "VERIFIED",
     );
@@ -868,8 +885,8 @@ test("acceptance type matrix is explicit and fail-closed", () => {
           graph: failed,
           repository: "repo",
           candidate_sha: "candidate-a",
-          run_id: "run:test-foundations",
-          trusted_execution: trustedExecutionFor(c),
+          run_id: runId,
+          trusted_execution: trusted,
         }).status,
         "VERIFIED",
       );
@@ -881,8 +898,8 @@ test("acceptance type matrix is explicit and fail-closed", () => {
           graph: malformed,
           repository: "repo",
           candidate_sha: "candidate-a",
-          run_id: "run:test-foundations",
-          trusted_execution: trustedExecutionFor(c),
+          run_id: runId,
+          trusted_execution: trusted,
         }).status,
         "VERIFIED",
       );
@@ -892,8 +909,8 @@ test("acceptance type matrix is explicit and fail-closed", () => {
           graph: makeGraph(item.evidenceType, "candidate-old"),
           repository: "repo",
           candidate_sha: "candidate-a",
-          run_id: "run:test-foundations",
-          trusted_execution: trustedExecutionFor(c),
+          run_id: runId,
+          trusted_execution: trusted,
         }).status,
         "VERIFIED",
       );
@@ -924,6 +941,7 @@ test("Breaker is independent and read-only, and outputs structured counterexampl
     taskContract: c,
     repository: "repo",
     candidate_sha: "candidate-a",
+    run_id: "run:test-foundations",
   });
   assert.equal(breaker.mutation_allowed, false);
   assert.throws(() => assertBreakerReadOnly(["edit_task_files"]));

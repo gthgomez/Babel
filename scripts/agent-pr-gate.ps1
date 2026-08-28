@@ -11,6 +11,9 @@ param(
   [ValidateSet('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')][string]$RiskTier = 'HIGH',
   [string]$IndependentReviewReceiptPath = '',
   [string]$BuilderIdentity = 'codex-implementation',
+  [string]$TaskId = '',
+  [string]$RunId = '',
+  [string]$ContractHash = '',
   [switch]$MergeAuthorized,
   [switch]$BootstrapRepairAuthorized,
   [string[]]$RequiredCheck = @(),
@@ -104,19 +107,33 @@ function Get-AgentWorkflowMetadata {
 function Get-AgentReviewThreadStatus {
   $parts = $ExpectedRepository.Split('/', 2)
   if ($parts.Count -ne 2) { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = 'repository_slug_invalid' } }
-  $query = 'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}}}}}'
-  $result = Invoke-AgentGh -GhPath $ghResolvedPath -RepoRoot $resolvedRepoRoot -Arguments @('api', 'graphql', '-f', "query=$query", '-F', "owner=$($parts[0])", '-F', "name=$($parts[1])", '-F', "number=$PR")
-  if ($result.exitCode -ne 0) { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = 'review_threads_unreadable' } }
-  try { $graph = $result.text | ConvertFrom-Json } catch { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = 'review_threads_malformed' } }
-  $data = Get-AgentLocalValue -Object $graph -Name 'data'
-  $repository = Get-AgentLocalValue -Object $data -Name 'repository'
-  $pullRequest = Get-AgentLocalValue -Object $repository -Name 'pullRequest'
-  $reviewThreads = Get-AgentLocalValue -Object $pullRequest -Name 'reviewThreads'
-  $nodesProperty = if ($null -ne $reviewThreads) { $reviewThreads.PSObject.Properties['nodes'] } else { $null }
-  if ($null -eq $nodesProperty) { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = 'review_threads_shape_invalid' } }
-  $nodes = @($nodesProperty.Value)
-  $unresolved = @($nodes | Where-Object { -not [bool]$_.isResolved })
-  return [pscustomobject]@{ available = $true; resolved = $unresolved.Count -eq 0; count = $nodes.Count; unresolved = $unresolved.Count; error = '' }
+  $after = $null
+  $pages = @()
+  do {
+    if ($null -eq $after) {
+      $query = 'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage endCursor}}}}}'
+      $arguments = @('api', 'graphql', '-f', "query=$query", '-F', "owner=$($parts[0])", '-F', "name=$($parts[1])", '-F', "number=$PR")
+    } else {
+      $query = 'query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{isResolved} pageInfo{hasNextPage endCursor}}}}}'
+      $arguments = @('api', 'graphql', '-f', "query=$query", '-F', "owner=$($parts[0])", '-F', "name=$($parts[1])", '-F', "number=$PR", '-f', "after=$after")
+    }
+    $result = Invoke-AgentGh -GhPath $ghResolvedPath -RepoRoot $resolvedRepoRoot -Arguments $arguments
+    if ($result.exitCode -ne 0) { return [pscustomobject]@{ available = $false; resolved = $false; count = $count; unresolved = $unresolved; error = 'review_threads_unreadable' } }
+    try { $graph = $result.text | ConvertFrom-Json } catch { return [pscustomobject]@{ available = $false; resolved = $false; count = $count; unresolved = $unresolved; error = 'review_threads_malformed' } }
+    $data = Get-AgentLocalValue -Object $graph -Name 'data'
+    $repository = Get-AgentLocalValue -Object $data -Name 'repository'
+    $pullRequest = Get-AgentLocalValue -Object $repository -Name 'pullRequest'
+    $reviewThreads = Get-AgentLocalValue -Object $pullRequest -Name 'reviewThreads'
+    if ($null -eq $reviewThreads) { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; unresolved = 0; error = 'review_threads_shape_invalid' } }
+    $pages += $reviewThreads
+    $pageInfo = Get-AgentLocalValue -Object $reviewThreads -Name 'pageInfo'
+    if ($null -eq $reviewThreads.PSObject.Properties['nodes'] -or $null -eq $pageInfo) { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; unresolved = 0; error = 'review_threads_shape_invalid' } }
+    $hasNext = [bool](Get-AgentLocalValue -Object $pageInfo -Name 'hasNextPage')
+    $nextCursor = [string](Get-AgentLocalValue -Object $pageInfo -Name 'endCursor')
+    if ($hasNext -and [string]::IsNullOrWhiteSpace($nextCursor)) { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; unresolved = 0; error = 'review_threads_pagination_incomplete' } }
+    $after = if ($hasNext) { $nextCursor } else { $null }
+  } while ($null -ne $after)
+  return Resolve-AgentReviewThreadPages -Pages $pages
 }
 
 function Get-AgentLatestApprovalCount {
@@ -139,8 +156,40 @@ function Read-AgentIndependentReceipt {
   if (-not [IO.Path]::IsPathRooted($path)) { $path = Join-Path $resolvedRepoRoot $path }
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return [pscustomobject]@{ path = $path; valid = $false; errors = @('independent_review_receipt_missing') } }
   try { $receipt = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json } catch { return [pscustomobject]@{ path = $path; valid = $false; errors = @('independent_review_receipt_malformed') } }
-  $validation = Test-AgentIndependentReviewReceipt -Receipt $receipt -Repository $ExpectedRepository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -BuilderIdentity $BuilderIdentity
-  return [pscustomobject]@{ path = $path; valid = [bool]$validation.valid; errors = @($validation.errors) }
+  $validation = Test-AgentIndependentReviewReceipt -Receipt $receipt -Repository $ExpectedRepository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -BuilderIdentity $BuilderIdentity -TaskId $TaskId -RunId $RunId -ContractHash $ContractHash
+  $errors = @($validation.errors)
+  if (-not [bool]$validation.valid) { return [pscustomobject]@{ path = $path; valid = $false; errors = $errors } }
+
+  # The reviewer key registry is read from the immutable PR base, never from
+  # the candidate head. A builder may add a public key-shaped file to its
+  # branch, but that cannot authorize its own review lane.
+  $keySpec = '{0}:config/independent-review-keys.json' -f $BaseSha
+  $keyResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('show', $keySpec)
+  if ($keyResult.exitCode -ne 0 -or [string]::IsNullOrWhiteSpace($keyResult.text)) {
+    $errors += 'review_key_registry_unavailable_from_base'
+    return [pscustomobject]@{ path = $path; valid = $false; errors = $errors }
+  }
+  $keyPath = [IO.Path]::GetTempFileName()
+  try {
+    Set-Content -LiteralPath $keyPath -Value $keyResult.text -Encoding utf8NoBOM
+    $nodePath = ''
+    try { $nodePath = Get-AgentCommandPath -Name 'node' } catch { $nodePath = '' }
+    if ([string]::IsNullOrWhiteSpace($nodePath)) {
+      $errors += 'node_executable_unavailable_for_review_signature'
+      return [pscustomobject]@{ path = $path; valid = $false; errors = $errors }
+    }
+    $verifyScript = Join-Path $resolvedRepoRoot 'scripts/verify-independent-review.mjs'
+    $verifyResult = Invoke-AgentProcess -FilePath $nodePath -WorkingDirectory $resolvedRepoRoot -Arguments @($verifyScript, '--receipt', $path, '--keys', $keyPath)
+    $signatureResult = $null
+    try { $signatureResult = $verifyResult.text | ConvertFrom-Json } catch { $signatureResult = $null }
+    if ($verifyResult.exitCode -ne 0 -or $null -eq $signatureResult -or -not [bool]$signatureResult.valid) {
+      $errors += if ($null -ne $signatureResult -and $null -ne $signatureResult.errors) { @($signatureResult.errors) } else { 'review_signature_unverified' }
+      return [pscustomobject]@{ path = $path; valid = $false; errors = $errors }
+    }
+  } finally {
+    if (Test-Path -LiteralPath $keyPath -PathType Leaf) { Remove-Item -LiteralPath $keyPath -Force -ErrorAction SilentlyContinue }
+  }
+  return [pscustomobject]@{ path = $path; valid = $true; errors = @() }
 }
 
 try {
