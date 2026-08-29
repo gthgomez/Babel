@@ -83,6 +83,17 @@ const CAPABILITY_DEFAULTS: Record<string, Partial<ProviderCapabilities>> = {
     supportsStreaming: true,
     thinkingWithTools: 'unsupported',
   },
+  openrouter: {
+    maxOutputTokens: 131_072,
+    supportsThinking: true,
+    supportsToolChoice: true,
+    supportsParallelToolCalls: true,
+    supportsStreaming: true,
+    // OpenRouter exposes the model's reasoning/tool surface, but this
+    // campaign has not yet established that GLM reasoning is reliable while
+    // tools are active. Keep the uncertainty visible to routing.
+    thinkingWithTools: 'unknown',
+  },
 };
 
 function inferProvider(modelId: string): string {
@@ -92,6 +103,7 @@ function inferProvider(modelId: string): string {
   if (m.includes('qwen') || m.includes('llama') || m.includes('deepinfra')) {
     return 'deepinfra';
   }
+  if (m === 'z-ai/glm-5.3-flash') return 'openrouter';
   return 'unknown';
 }
 

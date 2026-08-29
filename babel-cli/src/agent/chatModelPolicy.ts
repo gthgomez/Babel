@@ -1,7 +1,9 @@
 import {
+  LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS,
   loadModelPolicyConfig,
   resolveFamilyModelPolicy,
   resolveModelByKey,
+  resolveOpenRouterDeepSeekBackendKey,
   getAvailableModels,
   type ResolvedModelPolicy,
 } from '../modelPolicy.js';
@@ -24,31 +26,41 @@ export function isOfflineChatMode(): boolean {
 }
 
 /** Resolve ChatEngine's model policy while applying live-only routing rules.
- *  Explicit backend-key requests for the opencode provider are honored as a
- *  direct operator opt-in to OpenCode Zen; every other live selection still
- *  goes through the DeepSeek-only lane. */
+ *  Explicit OpenRouter/GLM and OpenCode requests are resolved as their named
+ *  provider routes; the default live DeepSeek lane uses OpenRouter. */
 export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   policy: ResolvedModelPolicy;
   offline: boolean;
 } {
   const offline = isOfflineChatMode();
   const policyRootOptions = options.babelRoot ? { babelRoot: options.babelRoot } : {};
-  const requestedBackendEntry =
-    options.model !== undefined
-      ? loadModelPolicyConfig(options.babelRoot).config.models?.[options.model]
-      : undefined;
+  const configuredModels = loadModelPolicyConfig(options.babelRoot).config.models ?? {};
+  const selectedModel = !offline
+    ? resolveOpenRouterDeepSeekBackendKey(options.model ?? '') ??
+      (options.model === undefined ? LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS[0] : options.model)
+    : options.model;
+  const requestedBackendKey = selectedModel === undefined
+    ? undefined
+    : configuredModels[selectedModel]
+      ? selectedModel
+      : Object.entries(configuredModels).find(
+          ([, entry]) => entry.model_id === selectedModel,
+        )?.[0];
+  const requestedBackendEntry = requestedBackendKey
+    ? configuredModels[requestedBackendKey]
+    : undefined;
   const requestedModelIsBackendKey = Boolean(requestedBackendEntry);
   // Explicit opencode requests skip the DeepSeek-only live assertion: naming
   // the backend key IS the opt-in (operator supplies OPENCODE_API_KEY).
   const explicitOpenCodeRequest = requestedBackendEntry?.provider === 'opencode';
   const policy = requestedModelIsBackendKey
     ? resolveModelByKey({
-        key: options.model!,
+        key: requestedBackendKey!,
         ...(explicitOpenCodeRequest ? {} : { liveOnly: !offline }),
         ...policyRootOptions,
       })
     : resolveFamilyModelPolicy({
-        family: offline ? 'Ollama' : (options.model ?? 'DeepSeek'),
+      family: offline ? 'Ollama' : (selectedModel ?? 'DeepSeek'),
         ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
         ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
         liveOnly: !offline,
@@ -73,5 +85,7 @@ export function resolveFallbackModelId(): string {
   } catch {
     // Policy unavailable: use the direct DeepSeek live default.
   }
-  return 'deepseek-v4-flash';
+  return isOfflineChatMode()
+    ? 'deepseek-v4-flash'
+    : 'deepseek/deepseek-v4-flash-0731';
 }

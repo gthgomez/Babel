@@ -97,6 +97,7 @@ export async function captureAndRecordVerifierReceipt(input: {
   ledger: BoundChatVerifierReceipt[];
   cache: Map<string, { receipt: BoundChatVerifierReceipt; writeCountAtCache: number }>;
   writeCount: number;
+  toolCallId?: string;
 }): Promise<BoundChatVerifierReceipt | null> {
   const receipt = await captureChatVerifierReceipt(input);
   if (!receipt) return null;
@@ -106,6 +107,7 @@ export async function captureAndRecordVerifierReceipt(input: {
     command_preview: input.command,
     authoritative: true,
     exit_code: input.exitCode,
+    ...(input.toolCallId !== undefined ? { tool_call_id: input.toolCallId } : {}),
     receipt,
   });
   input.cache.set(input.command, { receipt, writeCountAtCache: input.writeCount });

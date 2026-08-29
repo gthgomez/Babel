@@ -12,6 +12,13 @@
 
 import type { CausalStage1Arm } from './causalCampaignContract.js';
 import { runBabelCli } from './liteTrustDemo.js';
+import {
+  LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS,
+  LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS,
+  LIVE_OPENROUTER_BACKEND_KEY,
+  LIVE_OPENROUTER_MODEL_ID,
+  resolveOpenRouterDeepSeekBackendKey,
+} from '../modelPolicy.js';
 
 export const BABEL_CLI_CHAT_HEADLESS_EXECUTOR_ID = 'babel_cli_chat_headless' as const;
 export const OPENCODE_CLI_RAW_EXECUTOR_ID = 'opencode_cli_raw' as const;
@@ -87,20 +94,33 @@ export function createBabelCliChatHeadlessArmExecutor(): ArmExecutor {
         };
       }
       if (request.provider === 'live') {
+        const isGlm =
+          request.model === LIVE_OPENROUTER_MODEL_ID ||
+          request.model === LIVE_OPENROUTER_BACKEND_KEY;
+        const isOpenRouterDeepSeek =
+          request.model === null ||
+          (LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS as readonly string[]).includes(request.model) ||
+          (LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS as readonly string[]).includes(request.model) ||
+          resolveOpenRouterDeepSeekBackendKey(request.model ?? '') !== null;
+        if (!isGlm && !isOpenRouterDeepSeek) {
+          return {
+            ready: false,
+            reason:
+              `[LIVE_MODEL_POLICY] campaign live cells require exact GLM or OpenRouter DeepSeek routes; ` +
+              `received "${request.model}"`,
+            signature: 'policy:unapproved_live_route',
+          };
+        }
+        const credentialNames = ['OPENROUTER_API_KEY'];
         const hasKey = Boolean(
-          request.env['DEEPSEEK_API_KEY']?.trim() ||
-            request.env['DEEPINFRA_API_KEY']?.trim() ||
-            request.env['OPENAI_API_KEY']?.trim() ||
-            process.env['DEEPSEEK_API_KEY']?.trim() ||
-            process.env['DEEPINFRA_API_KEY']?.trim() ||
-            process.env['OPENAI_API_KEY']?.trim(),
+          credentialNames.some((name) => request.env[name]?.trim()),
         );
         if (!hasKey) {
           return {
             ready: false,
-            reason: 'DEEPSEEK_API_KEY (or compatible) not set — refusing live cell',
+            reason: `${credentialNames.join(' or ')} not set — refusing live cell`,
             signature: 'infra:missing_api_key',
-            missingCredentials: ['DEEPSEEK_API_KEY', 'DEEPINFRA_API_KEY', 'OPENAI_API_KEY'],
+            missingCredentials: credentialNames,
           };
         }
       }

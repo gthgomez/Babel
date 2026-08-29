@@ -11,6 +11,10 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from 'node:path';
 
 import { computeHarnessBoundaryCounters } from '../agent/chatEngineObservability.js';
+import type {
+  AttributionConfidence,
+  AttributionFamily,
+} from './causalAttribution.js';
 import { CAUSAL_SCORER_VERSION } from './causalCampaignContract.js';
 
 // ─── Predeclared analysis plan ───────────────────────────────────────────────
@@ -38,6 +42,9 @@ export const LIVE_CANARY_PLAN = {
     'turns_to_first_write',
     'successful_write_tool_count',
     'budget_signature',
+    'causal_attribution_coverage',
+    'unknown_attribution_rate',
+    'evidence_loss_rate',
     'derived_eligibility',
   ],
   note: 'Small-N paired counts only; no generalized suppression rate. Official evaluator optional.',
@@ -171,6 +178,8 @@ export interface ImprovementHypothesis {
 
 export interface LiveCellSummary {
   instance_id: string;
+  arm?: string;
+  replicate_id?: number;
   phase: string;
   status: string | null;
   signature: string | null;
@@ -190,6 +199,12 @@ export interface LiveCellSummary {
   effort_sent: string | null;
   effort_observed: string | null;
   budget_signature: string | null;
+  attribution_status?: 'ok' | 'unknown' | null;
+  attribution_family?: AttributionFamily | null;
+  attribution_code?: string | null;
+  attribution_confidence?: AttributionConfidence | null;
+  model_blame_permitted?: boolean | null;
+  attribution_unknowns?: string[];
   source: string;
 }
 
@@ -245,6 +260,15 @@ export interface ImprovementLedger {
     turns_to_first_write_samples: number[];
   };
   budget_signatures: Record<string, number>;
+  attribution: {
+    cells_with_attribution: number;
+    unknown_attribution_cells: number;
+    unknown_attribution_rate: number | null;
+    model_blame_permitted_cells: number;
+    evidence_loss_cells: number;
+    evidence_loss_rate: number | null;
+    families: Record<string, number>;
+  };
   derived_eligibility: {
     artifact_valid: boolean | null;
     campaign_complete: boolean | null;
@@ -262,6 +286,8 @@ export interface ImprovementLedger {
 
 type LooseCell = {
   instance_id?: string;
+  arm?: string;
+  replicate_id?: number;
   phase?: string;
   status?: string;
   signature?: string;
@@ -289,7 +315,25 @@ type LooseCell = {
   };
   status_text?: string | null;
   cli_payload?: Record<string, unknown>;
+  causal_attribution?: {
+    status?: 'ok' | 'unknown';
+    attribution?: {
+      family?: string;
+      code?: string;
+      confidence?: string;
+      model_blame_permitted?: boolean;
+      unknowns?: string[];
+    };
+  };
 };
+
+function evidenceCellKey(cell: Pick<LooseCell, 'instance_id' | 'arm' | 'replicate_id'>): string {
+  return [
+    cell.instance_id ?? 'unknown',
+    cell.arm ?? '',
+    typeof cell.replicate_id === 'number' ? String(cell.replicate_id) : '',
+  ].join('\u0000');
+}
 
 function safeReadJson(path: string): unknown | null {
   if (!existsSync(path)) return null;
@@ -324,6 +368,78 @@ function isLivePhase(phase: string | undefined): boolean {
   return phase === 'live' || phase === undefined || phase === '';
 }
 
+function adaptCanaryCliEvidence(raw: Record<string, unknown>, source: string): LooseCell | null {
+  if (typeof raw.instance_id === 'string') return raw as LooseCell;
+  const payload = raw.payload;
+  if (!payload || typeof payload !== 'object') return null;
+  const match = /(?:^|[\\/])?(C\d+)-t(\d+)-cli\.json$/i.exec(source);
+  if (!match) return null;
+  const taskId = match[1]!;
+  const trialId = match[2]!;
+  const cliPayload = payload as Record<string, unknown>;
+  const patchReality =
+    cliPayload.patch_reality && typeof cliPayload.patch_reality === 'object'
+      ? (cliPayload.patch_reality as Record<string, unknown>)
+      : null;
+  const changedFiles = Array.isArray(patchReality?.changed_files) ? patchReality.changed_files : [];
+  const status = typeof cliPayload.status === 'string' ? cliPayload.status : undefined;
+  const policyEvents = Array.isArray(raw.policy_events)
+    ? raw.policy_events
+    : Array.isArray(cliPayload.policy_events)
+      ? cliPayload.policy_events
+      : [];
+  const causalAttribution =
+    raw.causal_attribution && typeof raw.causal_attribution === 'object'
+      ? (raw.causal_attribution as NonNullable<LooseCell['causal_attribution']>)
+      : null;
+  const writeCount =
+    typeof cliPayload.write_count === 'number'
+      ? cliPayload.write_count
+      : typeof patchReality?.tool_write_count === 'number'
+        ? patchReality.tool_write_count
+        : 0;
+  const patchPresent = changedFiles.length > 0 || patchReality?.empty_patch === false;
+  const notes = [
+    `source=${source}`,
+    `trial_index=${Number(trialId)}`,
+    `patch_bytes_source=${patchPresent ? 'changed_files' : 'empty_patch'}`,
+  ];
+  return {
+    instance_id: `${taskId.toUpperCase()}-t${trialId}`,
+    arm: 'live',
+    replicate_id: Number(trialId),
+    phase: 'live',
+    ...(status !== undefined ? { status, signature: `agent:${status.toLowerCase()}` } : {}),
+    // The headless canary payload records changed files and empty/non-empty
+    // state, but not a byte-sized git diff. Use a non-zero sentinel for a
+    // proven changed candidate; never mistake a missing byte metric for an
+    // empty patch in the improvement ledger.
+    patch_bytes: patchPresent ? 1 : 0,
+    fail_to_pass_ok: status === 'ANSWER_READY' || status === 'FIX_COMPLETE' || status === 'COMPLETE',
+    fail_to_pass_class: status ? (status === 'ANSWER_READY' ? 'pass' : status.toLowerCase()) : null,
+    notes,
+    policy_events: policyEvents as Array<{ kind?: string; at_turn?: number; detail?: string }>,
+    telemetry: {
+      boundary: {
+        successful_write_tool_count: writeCount,
+        turns_to_first_applied_write:
+          typeof cliPayload.tools_before_first_write === 'number'
+            ? cliPayload.tools_before_first_write
+            : null,
+        force_mutate_count: typeof cliPayload.force_mutate_count === 'number' ? cliPayload.force_mutate_count : 0,
+        force_mutate_shadow_count:
+          typeof cliPayload.force_mutate_shadow_count === 'number' ? cliPayload.force_mutate_shadow_count : 0,
+        zero_write_shadow_count:
+          typeof cliPayload.zero_write_shadow_count === 'number' ? cliPayload.zero_write_shadow_count : 0,
+        zero_write_hard_stop_count:
+          typeof cliPayload.zero_write_hard_stop_count === 'number' ? cliPayload.zero_write_hard_stop_count : 0,
+      },
+    },
+    cli_payload: cliPayload,
+    ...(causalAttribution ? { causal_attribution: causalAttribution } : {}),
+  };
+}
+
 function loadLiveCells(evidenceDir: string): Array<LooseCell & { _source: string }> {
   const byKey = new Map<string, LooseCell & { _source: string }>();
 
@@ -334,27 +450,42 @@ function loadLiveCells(evidenceDir: string): Array<LooseCell & { _source: string
       if (!c.instance_id) continue;
       if (!isLivePhase(c.phase) && c.phase !== 'live') continue;
       if (c.phase !== 'live') continue;
-      byKey.set(c.instance_id, { ...c, _source: 'campaign-report.json' });
+      byKey.set(evidenceCellKey(c), { ...c, _source: 'campaign-report.json' });
     }
   }
 
   const liveDir = join(evidenceDir, 'live');
+  const liveSources: Array<{ name: string; path: string; source: string }> = [];
   if (existsSync(liveDir)) {
     for (const name of readdirSync(liveDir)) {
+      liveSources.push({ name, path: join(liveDir, name), source: `live/${name}` });
+    }
+  }
+  // Accept the pre-live/ layout emitted by the first canary persistence
+  // implementation so existing bundles remain analyzable after upgrade.
+  if (existsSync(evidenceDir)) {
+    for (const name of readdirSync(evidenceDir)) {
+      if (name.endsWith('-cli.json')) {
+        liveSources.push({ name, path: join(evidenceDir, name), source: name });
+      }
+    }
+  }
+  for (const { name, path, source } of liveSources) {
       if (!name.endsWith('.json')) continue;
       if (name.endsWith('.failure-capsule.json')) continue;
       if (name.endsWith('.policy-events.jsonl')) continue;
-      const path = join(liveDir, name);
-      const raw = safeReadJson(path) as LooseCell | null;
+      const rawValue = safeReadJson(path);
+      const raw = rawValue && typeof rawValue === 'object'
+        ? adaptCanaryCliEvidence(rawValue as Record<string, unknown>, source) ?? rawValue as LooseCell
+        : null;
       if (!raw?.instance_id) continue;
       // Prefer richer live cell files over report row when both exist
-      const prev = byKey.get(raw.instance_id);
+      const prev = byKey.get(evidenceCellKey(raw));
       const hasTelemetry = Boolean(raw.telemetry);
       const prevHasTelemetry = Boolean(prev?.telemetry);
       if (!prev || (hasTelemetry && !prevHasTelemetry) || (raw.policy_events?.length ?? 0) > (prev.policy_events?.length ?? 0)) {
-        byKey.set(raw.instance_id, { ...raw, phase: raw.phase ?? 'live', _source: `live/${name}` });
+        byKey.set(evidenceCellKey(raw), { ...raw, phase: raw.phase ?? 'live', _source: source });
       }
-    }
   }
 
   return [...byKey.values()];
@@ -370,7 +501,7 @@ function noteValue(notes: string[] | undefined, key: string): string | null {
 }
 
 function resolvePolicyEvents(
-  cell: LooseCell,
+  cell: LooseCell & { _source: string },
   evidenceDir: string,
   rootPolicyEvents: Array<{ kind?: string; at_turn?: number; detail?: string }>,
 ): Array<{ kind?: string; at_turn?: number; detail?: string }> {
@@ -378,7 +509,10 @@ function resolvePolicyEvents(
     return cell.policy_events;
   }
   if (cell.instance_id) {
-    const perCell = join(evidenceDir, 'live', `${cell.instance_id}.policy-events.jsonl`);
+    const sourceFile = cell._source.startsWith('live/')
+      ? cell._source.replace(/\.json$/, '.policy-events.jsonl')
+      : `live/${cell.instance_id}.policy-events.jsonl`;
+    const perCell = join(evidenceDir, sourceFile);
     const fromFile = loadPolicyEventsJsonl(perCell);
     if (fromFile.length > 0) return fromFile;
   }
@@ -439,6 +573,8 @@ function summarizeCell(
   const signature = cell.signature ?? null;
   return {
     instance_id: cell.instance_id ?? 'unknown',
+    ...(cell.arm !== undefined ? { arm: cell.arm } : {}),
+    ...(typeof cell.replicate_id === 'number' ? { replicate_id: cell.replicate_id } : {}),
     phase: cell.phase ?? 'live',
     status: cell.status ?? null,
     signature,
@@ -471,6 +607,34 @@ function summarizeCell(
     effort_sent: effort?.sent_reasoning_effort ?? null,
     effort_observed: effort?.observed_reasoning_effort ?? null,
     budget_signature: budgetSignatureFromCell(cell, signature),
+    attribution_status: cell.causal_attribution?.status ?? null,
+    attribution_family:
+      cell.causal_attribution?.attribution?.family === 'model' ||
+      cell.causal_attribution?.attribution?.family === 'harness' ||
+      cell.causal_attribution?.attribution?.family === 'environment' ||
+      cell.causal_attribution?.attribution?.family === 'provider' ||
+      cell.causal_attribution?.attribution?.family === 'task' ||
+      cell.causal_attribution?.attribution?.family === 'verifier' ||
+      cell.causal_attribution?.attribution?.family === 'budget' ||
+      cell.causal_attribution?.attribution?.family === 'unknown'
+        ? cell.causal_attribution.attribution.family
+        : null,
+    attribution_code: cell.causal_attribution?.attribution?.code ?? null,
+    attribution_confidence:
+      cell.causal_attribution?.attribution?.confidence === 'high' ||
+      cell.causal_attribution?.attribution?.confidence === 'medium' ||
+      cell.causal_attribution?.attribution?.confidence === 'low'
+        ? cell.causal_attribution.attribution.confidence
+        : null,
+    model_blame_permitted:
+      typeof cell.causal_attribution?.attribution?.model_blame_permitted === 'boolean'
+        ? cell.causal_attribution.attribution.model_blame_permitted
+        : null,
+    attribution_unknowns: Array.isArray(cell.causal_attribution?.attribution?.unknowns)
+      ? cell.causal_attribution.attribution.unknowns.filter(
+          (value): value is string => typeof value === 'string',
+        )
+      : [],
     source: cell._source,
   };
 }
@@ -723,6 +887,11 @@ export function analyzeLiveEvidenceDir(evidenceDir: string): ImprovementLedger {
   let cellsWithEffort = 0;
   let cellsAliased = 0;
   const effortSamples: ImprovementLedger['effort']['requested_sent_observed'] = [];
+  let cellsWithAttribution = 0;
+  let unknownAttributionCells = 0;
+  let modelBlamePermittedCells = 0;
+  let evidenceLossCells = 0;
+  const attributionFamilies: Record<string, number> = {};
 
   for (const c of cell_summaries) {
     increment(signatures_histogram, c.signature ?? 'null');
@@ -754,6 +923,26 @@ export function analyzeLiveEvidenceDir(evidenceDir: string): ImprovementLedger {
       });
     }
     if (c.effort_aliased === true) cellsAliased += 1;
+    if (c.attribution_status !== null && c.attribution_status !== undefined) {
+      cellsWithAttribution += 1;
+    }
+    const attributionFamily = c.attribution_family ?? 'unknown';
+    increment(attributionFamilies, attributionFamily);
+    if (
+      c.attribution_status === null ||
+      c.attribution_status === 'unknown' ||
+      attributionFamily === 'unknown'
+    ) {
+      unknownAttributionCells += 1;
+    }
+    if (c.model_blame_permitted === true) modelBlamePermittedCells += 1;
+    if (
+      c.attribution_unknowns?.some((unknown) =>
+        /evidence|reference|delivery|context|session event/i.test(unknown),
+      )
+    ) {
+      evidenceLossCells += 1;
+    }
   }
 
   const n = cell_summaries.length;
@@ -842,6 +1031,15 @@ export function analyzeLiveEvidenceDir(evidenceDir: string): ImprovementLedger {
       turns_to_first_write_samples: ttfSamples,
     },
     budget_signatures,
+    attribution: {
+      cells_with_attribution: cellsWithAttribution,
+      unknown_attribution_cells: unknownAttributionCells,
+      unknown_attribution_rate: n > 0 ? unknownAttributionCells / n : null,
+      model_blame_permitted_cells: modelBlamePermittedCells,
+      evidence_loss_cells: evidenceLossCells,
+      evidence_loss_rate: n > 0 ? evidenceLossCells / n : null,
+      families: attributionFamilies,
+    },
     derived_eligibility,
     cell_summaries,
     hypotheses,
@@ -907,6 +1105,19 @@ export function formatImprovementLedgerMarkdown(ledger: ImprovementLedger): stri
   lines.push(
     `- cells with effort telemetry: ${ledger.effort.cells_with_effort_telemetry}`,
     `- cells effort_aliased: ${ledger.effort.cells_effort_aliased}`,
+  );
+
+  lines.push(
+    '',
+    '## Causal attribution coverage',
+    '',
+    `- cells with attribution: ${ledger.attribution.cells_with_attribution} / ${ledger.n}`,
+    `- unknown attribution: ${ledger.attribution.unknown_attribution_cells} / ${ledger.n}`,
+    `- unknown attribution rate (small-N): ${ledger.attribution.unknown_attribution_rate ?? 'n/a'}`,
+    `- evidence-loss cells: ${ledger.attribution.evidence_loss_cells} / ${ledger.n}`,
+    `- evidence-loss rate (small-N): ${ledger.attribution.evidence_loss_rate ?? 'n/a'}`,
+    `- model-blame-permitted cells: ${ledger.attribution.model_blame_permitted_cells}`,
+    `- families: ${JSON.stringify(ledger.attribution.families)}`,
   );
   for (const e of ledger.effort.requested_sent_observed) {
     lines.push(

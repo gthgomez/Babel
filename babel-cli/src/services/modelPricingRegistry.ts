@@ -1,4 +1,4 @@
-export type PricingProvider = 'deepinfra' | 'deepseek';
+export type PricingProvider = 'deepinfra' | 'deepseek' | 'openrouter';
 export type CostPrecision = 'exact' | 'conservative' | 'unknown';
 
 export interface ModelPricingEntry {
@@ -39,6 +39,7 @@ export interface UsageCostEstimate {
 export const DEEPSEEK_PRICING_SOURCE_URL = 'https://api-docs.deepseek.com/quick_start/pricing/';
 export const DEEPINFRA_PRICING_SOURCE_URL =
   'https://docs.deepinfra.com/api-reference/models/models-list';
+export const OPENROUTER_PRICING_SOURCE_URL = 'https://openrouter.ai/api/v1/models';
 export const MODEL_PRICING_VERIFIED_AT = '2026-06-04';
 
 export const DEEPSEEK_SUPPORTED_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro'] as const;
@@ -116,6 +117,14 @@ export const MODEL_PRICING_REGISTRY: Record<string, ModelPricingEntry> = {
     sourceUrl: DEEPSEEK_PRICING_SOURCE_URL,
     verifiedAt: MODEL_PRICING_VERIFIED_AT,
     cacheInputDiscountAvailable: true,
+  },
+  'openrouter:z-ai/glm-5.3-flash': {
+    provider: 'openrouter',
+    modelId: 'z-ai/glm-5.3-flash',
+    inputCostPer1M: 0.075,
+    outputCostPer1M: 0.25,
+    sourceUrl: OPENROUTER_PRICING_SOURCE_URL,
+    verifiedAt: '2026-08-26',
   },
 };
 

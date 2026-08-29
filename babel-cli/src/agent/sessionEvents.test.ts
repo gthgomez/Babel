@@ -11,6 +11,10 @@ import {
   appendSessionEvent,
   recordUserSubmitted,
   recordModelStarted,
+  recordModelInputReceipt,
+  recordModelInvocationPhase,
+  recordCapabilityBindingReceipt,
+  recordModelResultDelivery,
   recordProviderRetryScheduled,
   recordProviderRetrySettled,
   recordCompactionStarted,
@@ -39,6 +43,7 @@ import {
   SESSION_EVENT_SCHEMA_VERSION,
   SESSION_EVENTS_FILENAME,
 } from './sessionEvents.js';
+import { buildModelRouteReceipt, hashRouteReference } from './modelRouteReceipt.js';
 
 describe('SessionEventV1 schema', () => {
   test('append user → tools → turn_ended with monotonic seq', () => {
@@ -743,6 +748,240 @@ test('persists content-free provider retry schedule and settlement', () => {
   ]);
   assert.equal((restored.events[1] as any).backoff_ms, 250);
   assert.equal((restored.events[2] as any).outcome, 'succeeded');
+});
+
+test('round-trips causal model input and result-delivery receipts', () => {
+  const log = createSessionEventLog('model-lifecycle-session');
+  const digest = 'a'.repeat(64);
+  recordUserSubmitted(log, {
+    turn_id: 'turn-model',
+    task: 'prove the exact model route',
+    model: 'z-ai/glm-5.3-flash',
+    provider: 'openrouter',
+  });
+  recordModelInputReceipt(log, {
+    turn_id: 'turn-model',
+    inference_id: 'inference-1',
+    provider: 'openrouter',
+    requested_model_id: 'z-ai/glm-5.3-flash',
+    normalized_model_id: 'z-ai/glm-5.3-flash',
+    sent_model_id: 'z-ai/glm-5.3-flash',
+    input_digest: digest,
+    input_ref: 'thread_events.json',
+    input_message_count: 3,
+    route_receipt: buildModelRouteReceipt({
+      projectRef: hashRouteReference('project'),
+      taskRef: hashRouteReference('prove the exact model route'),
+      runRef: 'run-1',
+      contractRef: 'chat',
+      inferenceId: 'inference-1',
+      executionStage: 'chat',
+      requestedModelSelector: 'z-ai/glm-5.3-flash',
+      normalizedBabelModel: 'z-ai/glm-5.3-flash',
+      provider: 'openrouter',
+      exactModelIdSent: 'z-ai/glm-5.3-flash',
+      timestamp: '2026-08-28T00:00:00.000Z',
+    }),
+  });
+  recordCapabilityBindingReceipt(log, {
+    turn_id: 'turn-model',
+    inference_id: 'inference-1',
+    provider: 'openrouter',
+    capability: 'write_file',
+    advertised: true,
+    authorized: null,
+    effective: null,
+    evidence_ref: 'thread_events.json',
+  });
+  recordModelResultDelivery(log, {
+    turn_id: 'turn-model',
+    inference_id: 'inference-1',
+    provider: 'openrouter',
+    model: 'z-ai/glm-5.3-flash',
+    status: 'delivered',
+    observed_model_id: 'z-ai/glm-5.3-flash',
+    upstream_provider: 'ExampleProvider',
+    output_digest: digest,
+    route_receipt: buildModelRouteReceipt({
+      projectRef: hashRouteReference('project'),
+      taskRef: hashRouteReference('prove the exact model route'),
+      runRef: 'run-1',
+      contractRef: 'chat',
+      inferenceId: 'inference-1',
+      executionStage: 'chat',
+      requestedModelSelector: 'z-ai/glm-5.3-flash',
+      normalizedBabelModel: 'z-ai/glm-5.3-flash',
+      provider: 'openrouter',
+      exactModelIdSent: 'z-ai/glm-5.3-flash',
+      observedModelId: 'z-ai/glm-5.3-flash',
+      upstreamProvider: 'ExampleProvider',
+      retryCount: 1,
+      timestamp: '2026-08-28T00:00:01.000Z',
+    }),
+  });
+  recordToolProposed(log, {
+    turn_id: 'turn-model',
+    tool_call_id: 'verify-1',
+    tool_name: 'run_command',
+  });
+  recordToolStarted(log, {
+    turn_id: 'turn-model',
+    tool_call_id: 'verify-1',
+    tool_name: 'run_command',
+  });
+  recordToolTerminal(log, {
+    turn_id: 'turn-model',
+    tool_call_id: 'verify-1',
+    tool_name: 'run_command',
+    exit_code: 0,
+    content: 'passed',
+  });
+  recordVerifierAttempt(log, {
+    turn_id: 'turn-model',
+    command_preview: 'npm test',
+    authoritative: true,
+    exit_code: 0,
+    tool_call_id: 'verify-1',
+  });
+
+  const restored = parseSessionEventLog(serializeSessionEventLog(log), 'model-lifecycle-session');
+  assert.deepEqual(restored.events.map((event) => event.kind), [
+    'user_submitted', 'model_input_receipt', 'capability_binding_receipt', 'model_result_delivery',
+    'tool_proposed', 'tool_started', 'tool_completed', 'verifier_attempt',
+  ]);
+  const input = restored.events[1]!;
+  assert.equal(input.kind, 'model_input_receipt');
+  if (input.kind === 'model_input_receipt') {
+    assert.equal(input.input_digest, digest);
+    assert.equal(input.input_message_count, 3);
+    assert.equal(input.route_receipt?.execution_stage, 'chat');
+  }
+  const capability = restored.events[2]!;
+  assert.equal(capability.kind, 'capability_binding_receipt');
+  if (capability.kind === 'capability_binding_receipt') {
+    assert.equal(capability.capability, 'write_file');
+    assert.equal(capability.authorized, null);
+    assert.equal(capability.effective, null);
+  }
+  const result = restored.events[3]!;
+  assert.equal(result.kind, 'model_result_delivery');
+  if (result.kind === 'model_result_delivery') {
+    assert.equal(result.observed_model_id, 'z-ai/glm-5.3-flash');
+    assert.equal(result.upstream_provider, 'ExampleProvider');
+    assert.equal(result.route_receipt?.observed_model_id, 'z-ai/glm-5.3-flash');
+    assert.equal(result.route_receipt?.upstream_provider, 'ExampleProvider');
+    assert.equal(result.route_receipt?.retry_count, 1);
+  }
+  const verifier = restored.events.at(-1)!;
+  assert.equal(verifier.kind, 'verifier_attempt');
+  if (verifier.kind === 'verifier_attempt') {
+    assert.equal(verifier.tool_call_id, 'verify-1');
+  }
+});
+
+test('round-trips provider invocation phases and rejects orphan phases', () => {
+  const log = createSessionEventLog('model-phase-session');
+  recordModelInputReceipt(log, {
+    turn_id: 'turn-phase', inference_id: 'inference-phase', provider: 'openrouter',
+    requested_model_id: 'z-ai/glm-5.3-flash', normalized_model_id: 'z-ai/glm-5.3-flash',
+    sent_model_id: 'z-ai/glm-5.3-flash', input_digest: 'c'.repeat(64), input_ref: 'thread_events.json',
+  });
+  recordModelInvocationPhase(log, {
+    turn_id: 'turn-phase', inference_id: 'inference-phase', provider: 'openrouter',
+    model: 'z-ai/glm-5.3-flash', phase: 'request_created',
+  });
+  recordModelInvocationPhase(log, {
+    turn_id: 'turn-phase', inference_id: 'inference-phase', provider: 'openrouter',
+    model: 'z-ai/glm-5.3-flash', phase: 'request_dispatched', status_code: 200,
+  });
+  recordModelInvocationPhase(log, {
+    turn_id: 'turn-phase', inference_id: 'inference-phase', provider: 'openrouter',
+    model: 'z-ai/glm-5.3-flash', phase: 'response_started', status_code: 200,
+  });
+  recordModelInvocationPhase(log, {
+    turn_id: 'turn-phase', inference_id: 'inference-phase', provider: 'openrouter',
+    model: 'z-ai/glm-5.3-flash', phase: 'first_byte',
+  });
+  recordModelInvocationPhase(log, {
+    turn_id: 'turn-phase', inference_id: 'inference-phase', provider: 'openrouter',
+    model: 'z-ai/glm-5.3-flash', phase: 'stream_completed',
+  });
+
+  const restored = parseSessionEventLog(serializeSessionEventLog(log), 'model-phase-session');
+  assert.deepEqual(
+    restored.events.filter((event) => event.kind === 'model_invocation_phase').map((event) => event.phase),
+    ['request_created', 'request_dispatched', 'response_started', 'first_byte', 'stream_completed'],
+  );
+
+  const orphan = createSessionEventLog('orphan-phase');
+  assert.throws(() => recordModelInvocationPhase(orphan, {
+    turn_id: 'turn-phase', inference_id: 'missing-input', provider: 'openrouter',
+    model: 'z-ai/glm-5.3-flash', phase: 'request_created',
+  }), /matching model input receipt/);
+});
+
+test('rejects duplicate or mismatched model lifecycle receipts', () => {
+  const log = createSessionEventLog('model-lifecycle-causal');
+  recordModelInputReceipt(log, {
+    turn_id: 'turn-model', inference_id: 'inference-1', provider: 'openrouter',
+    requested_model_id: 'z-ai/glm-5.3-flash', normalized_model_id: 'z-ai/glm-5.3-flash',
+    sent_model_id: 'z-ai/glm-5.3-flash', input_digest: 'b'.repeat(64), input_ref: 'thread_events.json',
+  });
+  assert.throws(() => recordModelInputReceipt(log, {
+    turn_id: 'turn-model', inference_id: 'inference-1', provider: 'openrouter',
+    requested_model_id: 'z-ai/glm-5.3-flash', normalized_model_id: 'z-ai/glm-5.3-flash',
+    sent_model_id: 'z-ai/glm-5.3-flash', input_digest: 'b'.repeat(64), input_ref: 'thread_events.json',
+  }), /duplicated/);
+  assert.throws(() => recordModelResultDelivery(log, {
+    turn_id: 'turn-model', inference_id: 'inference-1', provider: 'deepseek',
+    model: 'deepseek-v4-flash', status: 'failed',
+  }), /identity does not match/);
+
+  const missingToolResult = createSessionEventLog('missing-tool-result');
+  assert.throws(() => recordModelInputReceipt(missingToolResult, {
+    turn_id: 'turn-model', inference_id: 'inference-with-missing-tool', provider: 'openrouter',
+    requested_model_id: 'z-ai/glm-5.3-flash', normalized_model_id: 'z-ai/glm-5.3-flash',
+    sent_model_id: 'z-ai/glm-5.3-flash', input_digest: 'd'.repeat(64), input_ref: 'thread_events.json',
+    delivered_tool_call_ids: ['tool-without-terminal'],
+  }), /has no prior terminal result/);
+});
+
+test('rejects verifier receipts whose tool result cannot be reconstructed', () => {
+  const log = createSessionEventLog('orphan-verifier');
+  recordVerifierAttempt(log, {
+    turn_id: 'turn-verifier',
+    command_preview: 'npm test',
+    authoritative: true,
+    exit_code: 0,
+    tool_call_id: 'missing-verifier-result',
+  });
+  assert.throws(
+    () => parseSessionEventLog(serializeSessionEventLog(log), 'orphan-verifier'),
+    /must match exactly one terminal tool result/,
+  );
+});
+
+test('round-trips OpenRouter retry evidence through the durable parser', () => {
+  const log = createSessionEventLog('openrouter-retry-session');
+  recordUserSubmitted(log, {
+    turn_id: 'turn-openrouter',
+    task: 'run the exact GLM route',
+    model: 'z-ai/glm-5.3-flash',
+    provider: 'openrouter',
+  });
+  recordProviderRetryScheduled(log, {
+    turn_id: 'turn-openrouter', provider: 'openrouter', model: 'z-ai/glm-5.3-flash',
+    attempt: 2, reason: 'server_error', backoff_ms: 200,
+  });
+  recordProviderRetrySettled(log, {
+    turn_id: 'turn-openrouter', provider: 'openrouter', model: 'z-ai/glm-5.3-flash',
+    attempt: 2, outcome: 'succeeded',
+  });
+
+  const restored = parseSessionEventLog(serializeSessionEventLog(log), 'openrouter-retry-session');
+  assert.equal(restored.events[1]!.kind, 'provider_retry_scheduled');
+  assert.equal((restored.events[1] as any).provider, 'openrouter');
+  assert.equal((restored.events[2] as any).model, 'z-ai/glm-5.3-flash');
 });
 test('rejects orphaned or overlapping provider retry schedules on durable reload', () => {
   const log = createSessionEventLog('retry-causal');

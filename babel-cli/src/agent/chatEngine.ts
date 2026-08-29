@@ -21,10 +21,18 @@ import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
 import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
 import { OllamaApiRunner } from '../runners/ollamaApi.js';
 import { OpenCodeApiRunner } from '../runners/openCodeApi.js';
-import type { ProviderMessage, RunnerCallbacks } from '../runners/base.js';
+import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
+import type {
+  ProviderInvocationStarted,
+  ProviderMessage,
+  RunnerCallbacks,
+} from '../runners/base.js';
 import { mapProviderMessagesToWire } from '../runners/providerMessages.js';
 import {
-  assertDeepSeekLiveModelId,
+  assertLiveModelId,
+  LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS,
+  LIVE_OPENROUTER_MODEL_ID,
+  resolveOpenRouterDeepSeekModelId,
   type ResolvedModelPolicy,
 } from '../modelPolicy.js';
 import {
@@ -53,10 +61,7 @@ import {
   type ChatOperatorMode,
   type ChatPlanExecuteHandoff,
 } from './planExecuteMode.js';
-import {
-  detectEnvBlockedFromText,
-  evaluateCompletionPrefersPatch,
-} from './implementorPolicy.js';
+import { detectEnvBlockedFromText, evaluateCompletionPrefersPatch } from './implementorPolicy.js';
 import { evaluatePhaseToolGate } from './phaseToolPolicy.js';
 import { extractJson } from '../utils/extractJson.js';
 import type { BlockedReport, TerminalOutcome } from '../schemas/agentContracts.js';
@@ -67,20 +72,31 @@ import {
   resolveCompactionModelId,
 } from './chatCompaction.js';
 import { runChatEngineCompaction } from './compactionCommit.js';
-import { initLiveAuthorityOnEngine, projectEngineLiveSession, restoreEngineSessionEvents, engineCanMutateKey, evaluateSubmitTaskAuthorityHalt } from './chatEngineLiveSession.js';
+import {
+  initLiveAuthorityOnEngine,
+  projectEngineLiveSession,
+  restoreEngineSessionEvents,
+  engineCanMutateKey,
+  evaluateSubmitTaskAuthorityHalt,
+} from './chatEngineLiveSession.js';
 import {
   AUTHORITY_SESSION_FILENAME,
   establishAuthoritySession,
   restoreAuthoritySession,
 } from '../authority/sessionContext.js';
-import { loadLiveSessionAuthorityStrict, persistLiveSessionAuthority } from './liveSessionBridge.js';
-import type { LiveSessionV1 } from './liveSession.js';
-import { applyHonestTaskOutcomeToCompletion, createFailureBudgetTrackerFromContract, type FailureClassBudgetTracker, type FailureCapsuleV1 } from './taskContract.js';
-import { getGlobalTokenTracker } from '../ui/tokenHistory.js';
 import {
-  resolveChatEngineLimits,
-  type ChatEngineLimits,
-} from '../config/chatEngineLimits.js';
+  loadLiveSessionAuthorityStrict,
+  persistLiveSessionAuthority,
+} from './liveSessionBridge.js';
+import type { LiveSessionV1 } from './liveSession.js';
+import {
+  applyHonestTaskOutcomeToCompletion,
+  createFailureBudgetTrackerFromContract,
+  type FailureClassBudgetTracker,
+  type FailureCapsuleV1,
+} from './taskContract.js';
+import { getGlobalTokenTracker } from '../ui/tokenHistory.js';
+import { resolveChatEngineLimits, type ChatEngineLimits } from '../config/chatEngineLimits.js';
 import {
   resolveChatTaskClass,
   getChatTaskTune,
@@ -143,10 +159,7 @@ import {
   type ChatToolAction,
   type ChatTurn,
 } from './chatToolDefinitions.js';
-import {
-  type ChatEngineServices,
-  type ChatExecutionProfile,
-} from './chatEngineServices.js';
+import { type ChatEngineServices, type ChatExecutionProfile } from './chatEngineServices.js';
 import { createExecutorKernel, type ExecutorKernel } from '../executor/kernel.js';
 import {
   evaluateChatCompletionProof,
@@ -189,8 +202,14 @@ import {
 } from './chatEngineParityBridge.js';
 import { isOperatorAbortError } from './operatorAbort.js';
 import {
-  loadSessionEventLogForResume, loadSessionEventLogIfPresentForResume,
+  loadSessionEventLogForResume,
+  loadSessionEventLogIfPresentForResume,
   recordCompletionDecision,
+  recordCapabilityBindingReceipt,
+  recordModelInputReceipt,
+  recordModelInvocationPhase,
+  recordModelResultDelivery,
+  recordProviderFailureReceipt,
   recordModelFailover,
   recordMutationBatch,
   recordProgressRecovery,
@@ -219,6 +238,8 @@ import {
   type RuntimeInvariantMode,
 } from './runtimeInvariants.js';
 import { createHash } from 'node:crypto';
+import { buildContextManifest, type ContextDeliveryMode } from './contextManifest.js';
+import { buildModelRouteReceipt, hashRouteReference, type ModelRouteStage } from './modelRouteReceipt.js';
 import {
   executeAwaitCommandAction,
   executeBackgroundRunCommandAction,
@@ -228,7 +249,15 @@ import { runReadOnlyAgentLoop } from './lanes/readOnlyAgentLoop.js';
 import { runMutationAgentLoop } from './lanes/runMutationAgentLoop.js';
 import { runImplementWorktreeAgent } from './implementWorktreeAgent.js';
 import { executeTool, renderGitDiff, type ToolContext } from '../localTools.js';
-import { createStallDetector, updateStallState, getStallInterventionMessage, isTextOnlyLoop, buildTextOnlyLoopIntervention, buildTextOnlyLoopBlockedMessage, TEXT_ONLY_FORCE_BLOCKED_THRESHOLD } from './stallDetector.js';
+import {
+  createStallDetector,
+  updateStallState,
+  getStallInterventionMessage,
+  isTextOnlyLoop,
+  buildTextOnlyLoopIntervention,
+  buildTextOnlyLoopBlockedMessage,
+  TEXT_ONLY_FORCE_BLOCKED_THRESHOLD,
+} from './stallDetector.js';
 import type { StallState, StallIntervention } from './stallDetector.js';
 import type { ProgressController, ProgressSignal } from './progressController.js';
 import { classifyShellCapability } from './progressController.js';
@@ -236,9 +265,7 @@ import { classifyPhase, buildPhaseNudge, shouldNudge, type ChatPhase } from './c
 import { isSuccessfulDirectMutation } from './mutationTools.js';
 import { ChatTurnTelemetryCollector, type ChatTurnTelemetryRecord } from './chatTurnTelemetry.js';
 import type { DiffCriticVerdict } from './diffCritic.js';
-import {
-  evaluateTokenExplosionAfterTurn,
-} from './budgetKillPolicy.js';
+import { evaluateTokenExplosionAfterTurn } from './budgetKillPolicy.js';
 import {
   applyExploreFuses as applyExploreFusesPolicy,
   buildPolicyTerminalBlockedReport,
@@ -253,15 +280,9 @@ import {
 } from './policyShadow.js';
 import { isCodingTaskSuccess } from '../services/codingTaskSuccess.js';
 import { BlockedAttemptLedger } from './blockedAttemptLedger.js';
-import {
-  TurnRoutingReceiptLog,
-  type TurnRoutingReceipt,
-} from './turnRoutingReceipt.js';
+import { TurnRoutingReceiptLog, type TurnRoutingReceipt } from './turnRoutingReceipt.js';
 import { resolvePhaseModelName } from './phaseModelRouting.js';
-import {
-  ObservationTailBuffer,
-  resolveObservationTailChars,
-} from './observationTails.js';
+import { ObservationTailBuffer, resolveObservationTailChars } from './observationTails.js';
 import {
   buildPromptFingerprint,
   buildStreamDone,
@@ -327,10 +348,7 @@ import {
   resolveEngineRequiredVerifiers,
   restorePersistedVerifierEvidence,
 } from './chatEngineVerifierAdapter.js';
-import {
-  beginUserSubmission,
-  type TurnRuntimeSnapshot,
-} from './turnRuntime.js';
+import { beginUserSubmission, type TurnRuntimeSnapshot } from './turnRuntime.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -426,7 +444,12 @@ export interface ChatCallbacks {
 export type StreamEvent =
   | { type: 'text_delta'; text: string }
   | { type: 'thought_delta'; text: string }
-  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+  | {
+      type: 'tool_use';
+      id: string;
+      name: string;
+      input: Record<string, unknown>;
+    }
   | { type: 'done'; finishReason: string }
   | { type: 'error'; message: string };
 
@@ -435,7 +458,14 @@ export type ChatEvent =
   | { type: 'thinking' }
   | { type: 'answer_chunk'; text: string }
   | { type: 'tool_start'; tool: string; target: string }
-  | { type: 'tool_complete'; tool: string; target: string; detail?: string; error?: string; exitCode?: number }
+  | {
+      type: 'tool_complete';
+      tool: string;
+      target: string;
+      detail?: string;
+      error?: string;
+      exitCode?: number;
+    }
   | { type: 'thought'; text: string }
   | {
       type: 'context_compacted';
@@ -462,9 +492,18 @@ export type ChatEvent =
       outcome?: TerminalOutcome;
       planOutcome?: 'PLAN_COMPLETE';
       budgetExceeded?: boolean;
-      toolCalls?: Array<{ tool: string; target: string; detail?: string; error?: string }>;
+      toolCalls?: Array<{
+        tool: string;
+        target: string;
+        detail?: string;
+        error?: string;
+      }>;
       runDir?: string;
-      verifierReceipt?: { command: string; exit_code: number; summary: string } | null;
+      verifierReceipt?: {
+        command: string;
+        exit_code: number;
+        summary: string;
+      } | null;
       blockedReport?: BlockedReport | null;
       /** R9: Whether the agent modified a verifier dependency file. */
       verifierTampered?: boolean;
@@ -472,7 +511,12 @@ export type ChatEvent =
       criticReceipt?: DiffCriticVerdict | null;
       policyEvents?: PolicyEvent[];
       turnRouting?: TurnRoutingReceipt[];
-      observationTails?: Array<{ tool: string; target: string; exit_code?: number; tail: string }>;
+      observationTails?: Array<{
+        tool: string;
+        target: string;
+        exit_code?: number;
+        tail: string;
+      }>;
       blockedAttempts?: import('./blockedAttemptLedger.js').BlockedAttempt[];
       turnTelemetry?: ChatTurnTelemetryRecord;
     }
@@ -480,7 +524,12 @@ export type ChatEvent =
       type: 'failed';
       error: string;
       /** Present when tools ran before failure (turn-limit / stall kill / etc.). */
-      toolCalls?: Array<{ tool: string; target: string; detail?: string; error?: string }>;
+      toolCalls?: Array<{
+        tool: string;
+        target: string;
+        detail?: string;
+        error?: string;
+      }>;
       runDir?: string;
       /** Preserve INFRA_FAILURE vs AGENT_FAILURE when the engine already classified. */
       outcome?: import('../schemas/agentContracts.js').TerminalOutcome;
@@ -505,7 +554,12 @@ export interface ChatResult {
   answer: string;
   usage: SessionUsageSummary;
   conversation: ChatMessage[];
-  toolCalls?: Array<{ tool: string; target: string; detail?: string; error?: string }>;
+  toolCalls?: Array<{
+    tool: string;
+    target: string;
+    detail?: string;
+    error?: string;
+  }>;
   runDir?: string;
   verifierReceipt?: {
     command: string;
@@ -523,9 +577,18 @@ export interface ChatResult {
   /** Tier A3: Per-turn routing receipts. */
   turnRouting?: TurnRoutingReceipt[];
   /** Tier A5: Last-N tool observation tails. */
-  observationTails?: Array<{ tool: string; target: string; exit_code?: number; tail: string }>;
+  observationTails?: Array<{
+    tool: string;
+    target: string;
+    exit_code?: number;
+    tail: string;
+  }>;
   /** Tier A1: Aggregate counts derived from the tool call log. */
-  toolCallAggregates?: { tool_call_count: number; write_count: number; verifier_attempt_count: number };
+  toolCallAggregates?: {
+    tool_call_count: number;
+    write_count: number;
+    verifier_attempt_count: number;
+  };
   promptFingerprint?: PromptFingerprint;
   /** Active input prompt tokens from latest single model invocation */
   lastRequestPromptTokens?: number | null;
@@ -581,10 +644,7 @@ function isConversationalTurnText(task: string): boolean {
  * appending after already-rendered divergent content duplicates user-visible
  * text.
  */
-export function reconcileStreamedAnswer(
-  streamed: string | null,
-  final: string,
-): string | null {
+export function reconcileStreamedAnswer(streamed: string | null, final: string): string | null {
   if (!final) return null;
   if (streamed === null || streamed === '') return final;
   if (final === streamed) return null;
@@ -607,9 +667,24 @@ export class ChatEngine {
   /** Mutable: P0-C re-resolves limits on isolated user submissions (task class change). */
   private limits: ChatEngineLimits;
   private modelPolicy: ResolvedModelPolicy | undefined;
-  private synthesisRunner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | null = null;
-  private deliberationRunner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | null = null;
-  private fallbackRunner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | null = null;
+  private synthesisRunner:
+    | DeepInfraApiRunner
+    | DeepSeekApiRunner
+    | OllamaApiRunner
+    | OpenRouterApiRunner
+    | null = null;
+  private deliberationRunner:
+    | DeepInfraApiRunner
+    | DeepSeekApiRunner
+    | OllamaApiRunner
+    | OpenRouterApiRunner
+    | null = null;
+  private fallbackRunner:
+    | DeepInfraApiRunner
+    | DeepSeekApiRunner
+    | OllamaApiRunner
+    | OpenRouterApiRunner
+    | null = null;
   private toolCallLog: Array<{
     tool: string;
     target: string;
@@ -761,8 +836,18 @@ export class ChatEngine {
   private forceMutateTurnsOverride: number | null = null;
   private operatorMode: ChatOperatorMode = 'default';
   private _lastPhase: ChatPhase | null = null;
-  private investigateRunner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | null = null;
-  private mutateRunner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | null = null;
+  private investigateRunner:
+    | DeepInfraApiRunner
+    | DeepSeekApiRunner
+    | OllamaApiRunner
+    | OpenRouterApiRunner
+    | null = null;
+  private mutateRunner:
+    | DeepInfraApiRunner
+    | DeepSeekApiRunner
+    | OllamaApiRunner
+    | OpenRouterApiRunner
+    | null = null;
   private repetitionDetector: RepetitionDetector;
   private policyEventLog = new PolicyEventLog(); // A2: policy event log
   private blockedAttemptLedger = new BlockedAttemptLedger(); // B3
@@ -776,7 +861,8 @@ export class ChatEngine {
   /** P1–P3 live parity runtime (loop / progress / event log / approvals). */
   private parity: ParityRuntime;
   private readonly runtimeInvariants: RuntimeInvariantRegistry<RequestReconstructionContext>;
-  private failureBudgetTracker: FailureClassBudgetTracker = createFailureBudgetTrackerFromContract(null);
+  private failureBudgetTracker: FailureClassBudgetTracker =
+    createFailureBudgetTrackerFromContract(null);
   private testWorkspaceRevisionHash?: string | null | undefined;
   private currentTurnTelemetry: ChatTurnTelemetryCollector | null = null;
   private lastTurnTelemetry: ChatTurnTelemetryRecord | null = null;
@@ -849,8 +935,17 @@ export class ChatEngine {
         repoRoot: options.projectRoot,
         persistPath: join(this.engineRunDir, AUTHORITY_SESSION_FILENAME),
       });
-    } else initLiveAuthorityOnEngine({ parity: this.parity, options, taskClass: this.taskClass, executionProfile: this.executionProfile, engineRunDir: this.engineRunDir });
-    this.failureBudgetTracker = createFailureBudgetTrackerFromContract(this.parity.liveAuthority?.taskContract);
+    } else
+      initLiveAuthorityOnEngine({
+        parity: this.parity,
+        options,
+        taskClass: this.taskClass,
+        executionProfile: this.executionProfile,
+        engineRunDir: this.engineRunDir,
+      });
+    this.failureBudgetTracker = createFailureBudgetTrackerFromContract(
+      this.parity.liveAuthority?.taskContract,
+    );
     // Crash-safe patch persistence: write-through recovery file.
     this.patchRecoveryPath = join(this.engineRunDir, 'patches.recovery.log');
 
@@ -861,7 +956,8 @@ export class ChatEngine {
     // P-4.2 / Gap-2: structured memory dir with task relevance, else BABEL.md.
     const babelMd = readProjectMemoryStructured(this.options.projectRoot, this.options.task);
     if (babelMd) {
-      this.options.systemContext = babelMd + (this.options.systemContext ? '\n\n' + this.options.systemContext : '');
+      this.options.systemContext =
+        babelMd + (this.options.systemContext ? '\n\n' + this.options.systemContext : '');
     }
 
     // Task-class playbook inject for REPL/chat (benchmark path already had this).
@@ -902,6 +998,18 @@ export class ChatEngine {
       ...(process.env['BABEL_ROOT'] ? { babelRoot: process.env['BABEL_ROOT'] } : {}),
     });
     this.modelPolicy = modelPolicy;
+    // Exact experimental routes are campaign boundaries: phase-specific
+    // environment overrides must not recruit another provider/model.
+    if (
+      this.modelPolicy.provider === 'openrouter' &&
+      this.modelPolicy.providerModelId === LIVE_OPENROUTER_MODEL_ID
+    ) {
+      this.limits = {
+        ...this.limits,
+        investigateModel: LIVE_OPENROUTER_MODEL_ID,
+        mutateModel: LIVE_OPENROUTER_MODEL_ID,
+      };
+    }
     // Text-tools / offline mode: override limits for small local models.
     // gemma3:4b has ~4K practical attention ceiling and ~6K VRAM headroom.
     // We compact aggressively to keep the model within its effective range.
@@ -939,11 +1047,19 @@ export class ChatEngine {
     // Explicit read-only / no-edit directives → explain
     // MUST be checked before execute verb patterns so "fix this without editing
     // files" routes to explain, not execute.
-    if (/\b(without\s+(editing|modifying|changing|writing|touching)|read[- ]only|do\s+not\s+(edit|modify|change|write))\b/i.test(task))
+    if (
+      /\b(without\s+(editing|modifying|changing|writing|touching)|read[- ]only|do\s+not\s+(edit|modify|change|write))\b/i.test(
+        task,
+      )
+    )
       return 'explain';
 
     // Fix/implement/create verbs → execute
-    if (/\b(fix|repair|implement|resolve|patch|refactor|migrate|upgrade|update\s+dependency)\b/i.test(task))
+    if (
+      /\b(fix|repair|implement|resolve|patch|refactor|migrate|upgrade|update\s+dependency)\b/i.test(
+        task,
+      )
+    )
       return 'execute';
     if (/\b(create|write|build|add|make)\s+(a|the|this|an?)\b/i.test(task)) return 'execute';
     if (/\b(run|execute)\s+(npm\s+test|pytest|tests?|the\s+test)\b/i.test(task)) return 'execute';
@@ -952,10 +1068,13 @@ export class ChatEngine {
 
     // Question/understanding patterns → explain
     if (
-      /^(what|how|why|does|can\s+you\s+explain|describe|tell\s+me\s+about|show\s+me\s+how)\b/i.test(task)
+      /^(what|how|why|does|can\s+you\s+explain|describe|tell\s+me\s+about|show\s+me\s+how)\b/i.test(
+        task,
+      )
     )
       return 'explain';
-    if (/\b(explain|what\s+does|how\s+does|what\s+is|document|summarize)\b/i.test(task)) return 'explain';
+    if (/\b(explain|what\s+does|how\s+does|what\s+is|document|summarize)\b/i.test(task))
+      return 'explain';
     if (
       /\b(review|audit|analyze|diagnose|inspect|check|find|locate|search|look\s+for|compare|contrast|evaluate|assess|report\s+(tradeoffs|findings|back|on))\b(?!.*\b(and\s+fix|then\s+fix|fix\s+it)\b)/i.test(
         task,
@@ -966,7 +1085,9 @@ export class ChatEngine {
     // Read-only file inspection verbs → explain (unless paired with edit intent)
     if (
       /\b(read|list|show|cat|head|tail|display|print|output)\b/i.test(task) &&
-      !/\b(and\s+(fix|edit|modify|change|update|write|patch|repair)|then\s+(fix|edit|modify)|fix\s+it)\b/i.test(task)
+      !/\b(and\s+(fix|edit|modify|change|update|write|patch|repair)|then\s+(fix|edit|modify)|fix\s+it)\b/i.test(
+        task,
+      )
     )
       return 'explain';
 
@@ -983,7 +1104,9 @@ export class ChatEngine {
       const verifierInput = this.buildVerifierInput();
       // H5: live workspace revision at gate time (not the receipt's own bound hash).
       let currentWorkspaceRevisionHash: string | undefined =
-        this.testWorkspaceRevisionHash !== null ? (this.testWorkspaceRevisionHash ?? undefined) : undefined;
+        this.testWorkspaceRevisionHash !== null
+          ? (this.testWorkspaceRevisionHash ?? undefined)
+          : undefined;
       try {
         const paths = mutationPathsFromSessionEvents(this.parity.sessionEvents.events);
         if (paths.length > 0) {
@@ -992,13 +1115,20 @@ export class ChatEngine {
             paths,
           ).compositeTreeHash;
         }
-      } catch { /* best-effort */ }
+      } catch {
+        /* best-effort */
+      }
       return evaluateCompletionGateForEngine({
-        turnType: turnResult.type, taskIntent, task: this.options.task, taskClass: this.taskClass,
-        toolCallLog: this.toolCallLog, lastVerifierReceipt: this.lastVerifierReceipt,
+        turnType: turnResult.type,
+        taskIntent,
+        task: this.options.task,
+        taskClass: this.taskClass,
+        toolCallLog: this.toolCallLog,
+        lastVerifierReceipt: this.lastVerifierReceipt,
         executedVerifierLedger: verifierInput.executedVerifierLedger ?? null,
         verifierEvidenceErrors: verifierInput.verifierEvidenceErrors ?? null,
-        requiredVerifierCommands: verifierInput.requiredVerifierCommands, projectTestCommands,
+        requiredVerifierCommands: verifierInput.requiredVerifierCommands,
+        projectTestCommands,
         ...(currentWorkspaceRevisionHash ? { currentWorkspaceRevisionHash } : {}),
       });
     } finally {
@@ -1042,7 +1172,21 @@ export class ChatEngine {
       cancelled: this._cancelled,
       abortController: this.abortController,
       turnTimeoutMs: TURN_TIMEOUT_MS,
+      ...(this.modelPolicy?.providerModelId
+        ? { primaryModel: this.modelPolicy.providerModelId }
+        : {}),
       resolveDeliberationRunner: () => this.resolveDeliberationRunner(),
+      providerCallbacks: this.providerRetryCallbacks({
+        deliveryMode: 'text',
+        conversationState: this.conversation,
+        userTaskPrompt: this.options.task,
+        // The critic receives a synthesized text prompt, not provider-native
+        // tool messages. Record that boundary explicitly so preservation is
+        // determinable even when the run had earlier tool calls.
+        expectedPriorEventIds: [],
+        deliveredPriorEventIds: [],
+        executionStage: 'critic',
+      }),
       trackRunnerUsage: (runner) => this.trackRunnerUsage(runner),
       ...(onThought ? { onThought } : {}),
     };
@@ -1064,12 +1208,7 @@ export class ChatEngine {
     const criticSpan = this.currentTurnTelemetry?.startCriticSpan();
     try {
       const state = this.criticState(callbacks.onThought);
-      const decision = await runAsymmetricDiffCriticImpl(
-        state,
-        answer,
-        taskIntent,
-        opts,
-      );
+      const decision = await runAsymmetricDiffCriticImpl(state, answer, taskIntent, opts);
       this.applyCriticState(state);
       return decision;
     } finally {
@@ -1127,11 +1266,7 @@ export class ChatEngine {
     return this.buildResult(
       'budget_exhausted',
       callbacks,
-      formatBudgetKillAnswer(
-        reason,
-        this.toolCallLog,
-        this.lastCriticReceipt?.verdict ?? null,
-      ),
+      formatBudgetKillAnswer(reason, this.toolCallLog, this.lastCriticReceipt?.verdict ?? null),
     );
   }
 
@@ -1157,13 +1292,18 @@ export class ChatEngine {
     this.restrictToolsNextTurn = state.restrictToolsNextTurn;
   }
 
-  private hasAnyWrites(): boolean { return sessionHasAnyWrites(this.toolCallLog); }
+  private hasAnyWrites(): boolean {
+    return sessionHasAnyWrites(this.toolCallLog);
+  }
 
   /**
    * Build the synchronous proof summary passed to the shared completion
    * authority. Uses SessionEventV1 + bound receipts, then kernel evaluateEvidenceSync.
    */
-  private buildCompletionProof(hasMutation: boolean): { compliant: boolean; errors?: string[] } {
+  private buildCompletionProof(hasMutation: boolean): {
+    compliant: boolean;
+    errors?: string[];
+  } {
     return evaluateChatCompletionProof({
       projectRoot: this.options.projectRoot,
       hasMutation,
@@ -1174,7 +1314,9 @@ export class ChatEngine {
     });
   }
 
-  private readCacheKey(filePath: string): string { return normalizeReadCacheKey(filePath, this.options.projectRoot); }
+  private readCacheKey(filePath: string): string {
+    return normalizeReadCacheKey(filePath, this.options.projectRoot);
+  }
 
   private noteToolForReadThrash(tool: string, opts?: { error?: string; detail?: string }): void {
     if (isSuccessfulDirectMutation(tool, opts?.error)) {
@@ -1183,7 +1325,11 @@ export class ChatEngine {
       this.toolsWithoutWrite = 0;
       return;
     }
-    if (tool === 'sub_agent' && opts?.error !== 'blocked' && /[1-9]\d*\s+changed/.test(opts?.detail ?? '')) {
+    if (
+      tool === 'sub_agent' &&
+      opts?.error !== 'blocked' &&
+      /[1-9]\d*\s+changed/.test(opts?.detail ?? '')
+    ) {
       this.consecutiveReadOnlyTools = 0;
       this.consecutiveNonMutatingShells = 0;
       this.toolsWithoutWrite = 0;
@@ -1209,9 +1355,13 @@ export class ChatEngine {
     }
   }
 
-  private buildRejectionMessage(): string { return buildGateRejectionMessage(this.toolCallLog); }
+  private buildRejectionMessage(): string {
+    return buildGateRejectionMessage(this.toolCallLog);
+  }
 
-  private currentTurnHasMutation(): boolean { return turnHasMutation(this.toolCallLog, this._turnToolCallLogStart); }
+  private currentTurnHasMutation(): boolean {
+    return turnHasMutation(this.toolCallLog, this._turnToolCallLogStart);
+  }
 
   /** Force-mutate + read-thrash + cumulative exploration fuses (shared submit/stream). */
   private applyExploreFuses(executeIntent: boolean): ExploreFuseResult {
@@ -1260,12 +1410,17 @@ export class ChatEngine {
   /** Snapshot for Tier A observability helpers (keeps chatEngine thin). */
   private obsHandles(): ObservabilityHandles {
     return {
-      toolCallLog: this.toolCallLog, engineRunDir: this.engineRunDir,
-      lastVerifierReceipt: this.lastVerifierReceipt, policyEventLog: this.policyEventLog,
-      routingReceiptLog: this.routingReceiptLog, observationTails: this.observationTails,
+      toolCallLog: this.toolCallLog,
+      engineRunDir: this.engineRunDir,
+      lastVerifierReceipt: this.lastVerifierReceipt,
+      policyEventLog: this.policyEventLog,
+      routingReceiptLog: this.routingReceiptLog,
+      observationTails: this.observationTails,
       blockedAttemptLedger: this.blockedAttemptLedger,
-      logIndexToTurn: this._logIndexToTurn, turnIndex: this._turnIndex,
-      turnToolCallLogStart: this._turnToolCallLogStart, lastPhase: this._lastPhase,
+      logIndexToTurn: this._logIndexToTurn,
+      turnIndex: this._turnIndex,
+      turnToolCallLogStart: this._turnToolCallLogStart,
+      lastPhase: this._lastPhase,
     };
   }
 
@@ -1321,8 +1476,7 @@ export class ChatEngine {
     // Only for execute-style classes that must verify (not pure investigate).
     if (this.taskClass === 'investigate') return;
 
-    const elapsedMs =
-      this._sessionStartTime > 0 ? Date.now() - this._sessionStartTime : 0;
+    const elapsedMs = this._sessionStartTime > 0 ? Date.now() - this._sessionStartTime : 0;
     const { capMs, repairWindowMs } = computePostWriteRepairWallMs({
       elapsedMs,
       sessionMaxWallMs: this.limits.maxWallMs,
@@ -1347,10 +1501,7 @@ export class ChatEngine {
       });
     }
 
-    const remainingWallSec = Math.max(
-      0,
-      Math.round((this.limits.maxWallMs - elapsedMs) / 1000),
-    );
+    const remainingWallSec = Math.max(0, Math.round((this.limits.maxWallMs - elapsedMs) / 1000));
     const repairWindowSec = Math.round(repairWindowMs / 1000);
     const msg = buildPostWriteRepairMessage({
       repairWindowSec,
@@ -1419,8 +1570,7 @@ export class ChatEngine {
     if (!resolveStallInterventionsEnabled(this.taskClass)) {
       return null;
     }
-    const isReadOnly =
-      this.taskClass === 'quick_inspect' || this.taskClass === 'investigate';
+    const isReadOnly = this.taskClass === 'quick_inspect' || this.taskClass === 'investigate';
     const stallShadow = resolveStallShadowMode(this.taskClass);
     const intervention = getStallInterventionMessage(
       this.stallState,
@@ -1576,8 +1726,8 @@ export class ChatEngine {
     } catch (error) {
       // P0-D B4: unexpected throw must still finalize turn_ended on disk.
       const captured = captureSessionEventAppendFailure(error, this.engineRunDir);
-      const message = captured?.operatorMessage
-        ?? (error instanceof Error ? error.message : String(error));
+      const message =
+        captured?.operatorMessage ?? (error instanceof Error ? error.message : String(error));
       finalizeParityTurnSync(this.parity, this.engineRunDir, 'AGENT_FAILURE', 'failed');
       return this.buildResult('failed', cb, message);
     }
@@ -1589,19 +1739,10 @@ export class ChatEngine {
       return this.buildResult('failed', cb, terminal.error ?? 'Stream failed');
     }
     if (terminal.blockedReport) {
-      return this.buildResult(
-        'blocked',
-        cb,
-        terminal.answer,
-        terminal.blockedReport,
-      );
+      return this.buildResult('blocked', cb, terminal.answer, terminal.blockedReport);
     }
     // Preserve budget_exhausted status from streamDone (do not collapse to completed).
-    if (
-      terminal.budgetExceeded ||
-      terminal.outcome === 'BUDGET_EXHAUSTED' ||
-      this.budgetExceeded
-    ) {
+    if (terminal.budgetExceeded || terminal.outcome === 'BUDGET_EXHAUSTED' || this.budgetExceeded) {
       this.budgetExceeded = true;
       return this.buildResult('budget_exhausted', cb, terminal.answer);
     }
@@ -1610,7 +1751,6 @@ export class ChatEngine {
     }
     return this.buildResult('completed', cb, terminal.answer);
   }
-
 
   /** #1 Async generator: yields typed ChatEvents as the conversation progresses.
    *  Callers use `for await (const event of engine.submitMessageStream(...))`.
@@ -1630,12 +1770,14 @@ export class ChatEngine {
     const runtime = this.applyUserSubmission({
       userInput,
       ...(taskIntent !== undefined ? { taskIntent } : {}),
-      ...(submitOpts?.continueTask !== undefined
-        ? { continueTask: submitOpts.continueTask }
-        : {}),
+      ...(submitOpts?.continueTask !== undefined ? { continueTask: submitOpts.continueTask } : {}),
     });
     this.conversation.push({ role: 'user', content: userInput });
-    if (this.options.intentPlanUserMessage) this.conversation.push({ role: 'user', content: this.options.intentPlanUserMessage });
+    if (this.options.intentPlanUserMessage)
+      this.conversation.push({
+        role: 'user',
+        content: this.options.intentPlanUserMessage,
+      });
     // Implementor: inject plan→execute handoff once at first user message of session.
     if (this.planHandoff && this._turnIndex === 0) {
       this.conversation.push({
@@ -1661,15 +1803,21 @@ export class ChatEngine {
     }
 
     // P1: open parity turn (loop + durable event log)
+    // Record the resolved provider/model, not the backend shorthand supplied
+    // by the caller. This is the first durable route fact for exact-lock runs;
+    // later runner metadata records what was actually sent and observed.
     const modelName =
-      this.options.model ?? this.modelPolicy?.family ?? 'unknown';
-    const providerName = this.modelPolicy?.provider === 'opencode'
-      ? 'opencode'
-      : modelName.toLowerCase().includes('deepseek')
+      this.modelPolicy?.providerModelId ??
+      this.options.model ??
+      this.modelPolicy?.family ??
+      'unknown';
+    const providerName =
+      this.modelPolicy?.provider ??
+      (modelName.toLowerCase().includes('deepseek')
         ? 'deepseek'
         : modelName.toLowerCase().includes('ollama')
           ? 'ollama'
-          : 'deepinfra';
+          : 'deepinfra');
     parityOnUserTurn(this.parity, {
       task: userInput,
       model: modelName,
@@ -1684,11 +1832,16 @@ export class ChatEngine {
     setChatApprovalTurnId(this.parity.turnId);
 
     // R4: Fire-and-forget repo map generation, awaited before first LLM call
-    const repoMapPromise = this.repoMapCache === null
-      ? this.generateRepoMap().then(map => {
-          if (map) this.repoMapCache = map;
-        }).catch(() => { /* best-effort */ })
-      : Promise.resolve();
+    const repoMapPromise =
+      this.repoMapCache === null
+        ? this.generateRepoMap()
+            .then((map) => {
+              if (map) this.repoMapCache = map;
+            })
+            .catch(() => {
+              /* best-effort */
+            })
+        : Promise.resolve();
 
     if (this.conversation.length === 1 || this.conversation[0]?.role !== 'system') {
       // R4: Await repo map first so it's included in the system prompt
@@ -1809,7 +1962,12 @@ export class ChatEngine {
             prompt,
             systemPrompt,
             this.abortController.signal,
-            this.providerRetryCallbacks(),
+            this.providerRetryCallbacks({
+              deliveryMode: 'text',
+              conversationState: prompt,
+              systemPolicyPrompt: systemPrompt,
+              executionStage: 'chat',
+            }),
           )) {
             rawText += chunk;
             this.currentTurnTelemetry?.markFirstToken();
@@ -1861,7 +2019,14 @@ export class ChatEngine {
             systemPrompt,
             this.abortController.signal,
             restrictTools ? 'required' : 'auto',
-            this.providerRetryCallbacks(),
+            this.providerRetryCallbacks({
+              deliveryMode: 'native',
+              conversationState: providerMessages,
+              systemPolicyPrompt: systemPrompt,
+              userTaskPrompt: prompt,
+              toolSchema: toolDefs,
+              executionStage: 'chat',
+            }),
           )) {
             switch (event.type) {
               case 'text_delta':
@@ -1903,9 +2068,10 @@ export class ChatEngine {
           this.trackRunnerUsage(runner);
           this._streamNativeToolCallIds = nativeToolCallIds;
           streamedAnswerForTurn = answerText;
-          turnResult = nativeActions.length > 0
-            ? { type: 'tool_calls', actions: nativeActions }
-            : { type: 'completion', answer: answerText || 'OK' };
+          turnResult =
+            nativeActions.length > 0
+              ? { type: 'tool_calls', actions: nativeActions }
+              : { type: 'completion', answer: answerText || 'OK' };
         } catch (err: any) {
           const providerEnd = performance.now();
           this.currentTurnTelemetry?.recordProviderSpan(
@@ -1937,7 +2103,14 @@ export class ChatEngine {
               undefined,
               this.abortController.signal,
               undefined,
-              this.providerRetryCallbacks(),
+              this.providerRetryCallbacks({
+                deliveryMode: 'native',
+                conversationState: providerMessages,
+                userTaskPrompt: prompt,
+                toolSchema: toolDefs,
+                executionStage: 'chat',
+                substitutionOrFallback: true,
+              }),
             )) {
               switch (event.type) {
                 case 'text_delta':
@@ -1978,9 +2151,10 @@ export class ChatEngine {
             this.trackRunnerUsage(fb);
             this._streamNativeToolCallIds = nativeToolCallIds;
             streamedAnswerForTurn = answerText;
-            turnResult = nativeActions.length > 0
-              ? { type: 'tool_calls', actions: nativeActions }
-              : { type: 'completion', answer: answerText || 'OK' };
+            turnResult =
+              nativeActions.length > 0
+                ? { type: 'tool_calls', actions: nativeActions }
+                : { type: 'completion', answer: answerText || 'OK' };
           } catch (fbErr: any) {
             const fbEnd = performance.now();
             this.currentTurnTelemetry?.recordProviderSpan(
@@ -1998,7 +2172,12 @@ export class ChatEngine {
                 prompt,
                 undefined,
                 this.abortController.signal,
-                this.providerRetryCallbacks(),
+                this.providerRetryCallbacks({
+                  deliveryMode: 'text',
+                  conversationState: prompt,
+                  executionStage: 'chat',
+                  substitutionOrFallback: true,
+                }),
               )) {
                 rawText += chunk;
                 this.currentTurnTelemetry?.markFirstToken();
@@ -2041,7 +2220,11 @@ export class ChatEngine {
             prompt,
             undefined,
             this.abortController.signal,
-            this.providerRetryCallbacks(),
+            this.providerRetryCallbacks({
+              deliveryMode: 'text',
+              conversationState: prompt,
+              executionStage: 'chat',
+            }),
           )) {
             rawText += chunk;
             this.currentTurnTelemetry?.markFirstToken();
@@ -2072,6 +2255,12 @@ export class ChatEngine {
               prompt,
               undefined,
               this.abortController.signal,
+              this.providerRetryCallbacks({
+                deliveryMode: 'text',
+                conversationState: prompt,
+                executionStage: 'chat',
+                substitutionOrFallback: true,
+              }),
             )) {
               rawText += chunk;
               this.currentTurnTelemetry?.markFirstToken();
@@ -2102,7 +2291,12 @@ export class ChatEngine {
       });
       if (streamExplosion.abort) {
         // Tier A2: Record token explosion event before aborting
-        recordPolicyEvent(this.policyEventLog, this._turnIndex, 'token_explosion', `tokens_this_turn=${streamExplosion.tokensThisTurn}`);
+        recordPolicyEvent(
+          this.policyEventLog,
+          this._turnIndex,
+          'token_explosion',
+          `tokens_this_turn=${streamExplosion.tokensThisTurn}`,
+        );
         endSpan(_turnSpan, SpanStatusCode.OK);
         _turnSpan = null;
         const kill = await this.handleBudgetKill(
@@ -2128,11 +2322,16 @@ export class ChatEngine {
         if (turnResult.thinking && this.stallState.interventionLevel >= 3) {
           const thinkingBlocked = this.detectAndBuildBlockedReport(turnResult.thinking);
           if (thinkingBlocked) {
-            this.conversation.push({ role: 'assistant', content: turnResult.thinking });
+            this.conversation.push({
+              role: 'assistant',
+              content: turnResult.thinking,
+            });
             _turnSpan.setAttribute('babel.chat.blocked', 'true');
             endSpan(_turnSpan, SpanStatusCode.OK);
             _turnSpan = null;
-            yield this.streamDone(turnResult.thinking, { blockedReport: thinkingBlocked });
+            yield this.streamDone(turnResult.thinking, {
+              blockedReport: thinkingBlocked,
+            });
             return;
           }
         }
@@ -2158,10 +2357,7 @@ export class ChatEngine {
           if (this._streamNativeToolCallIds[idx]) return this._streamNativeToolCallIds[idx]!;
           return `tool_call_${turn}_${idx}`;
         });
-        if (
-          this._streamNativeToolCallIds.length === 0 &&
-          turnResult.actions.length > 0
-        ) {
+        if (this._streamNativeToolCallIds.length === 0 && turnResult.actions.length > 0) {
           this._streamNativeToolCallIds = settleCallIds;
         }
         if (turnResult.actions.length > 0) {
@@ -2225,7 +2421,10 @@ export class ChatEngine {
         for (const action of turnResult.actions) {
           const tool = chatActionToolName(action);
           const target = chatActionTarget(action);
-          this.repetitionDetector.record({ type: tool, fingerprint: `${tool}:${target}` });
+          this.repetitionDetector.record({
+            type: tool,
+            fingerprint: `${tool}:${target}`,
+          });
         }
         const streamLoopResult = this.repetitionDetector.detect();
         if (streamLoopResult.loop) {
@@ -2303,14 +2502,8 @@ export class ChatEngine {
         }
 
         // Mid-loop heuristic critic (stream path)
-        if (
-          this.currentTurnHasMutation() ||
-          (this.hasAnyWrites() && this.lastVerifierReceipt)
-        ) {
-          this.maybeInjectMidLoopHeuristicCritic(
-            { onThought: () => {} },
-            resolvedIntent,
-          );
+        if (this.currentTurnHasMutation() || (this.hasAnyWrites() && this.lastVerifierReceipt)) {
+          this.maybeInjectMidLoopHeuristicCritic({ onThought: () => {} }, resolvedIntent);
         }
 
         const exploreFuses = this.applyExploreFuses(resolvedIntent === 'execute');
@@ -2324,18 +2517,22 @@ export class ChatEngine {
 
         // W3 Phase 3 Progress and Recovery Controller
         const signals: ProgressSignal[] = [];
-        if (turnCallsStr.some(tc => isSuccessfulDirectMutation(tc.tool, tc.error))) {
+        if (turnCallsStr.some((tc) => isSuccessfulDirectMutation(tc.tool, tc.error))) {
           signals.push('production_mutation');
         }
 
         const isTextOnly = turnCallsStr.length === 0;
         const pcResult = this.progressController.scoreTurn(signals, isTextOnly, this.gateStrikes);
-        recordProgressRecovery(this.parity.sessionEvents, String(this.parity.turnId ?? this._turnIndex), {
-          intervention: pcResult.intervention,
-          score: pcResult.score,
-          signals,
-          reason: 'turn_scored',
-        });
+        recordProgressRecovery(
+          this.parity.sessionEvents,
+          String(this.parity.turnId ?? this._turnIndex),
+          {
+            intervention: pcResult.intervention,
+            score: pcResult.score,
+            signals,
+            reason: 'turn_scored',
+          },
+        );
 
         if (pcResult.transitioned) {
           this.currentTurnTelemetry?.recordPolicyIntervention();
@@ -2344,7 +2541,7 @@ export class ChatEngine {
             intervention: pcResult.intervention,
             source: 'progress_controller',
             score: pcResult.score,
-            message: `Transitioned to ${pcResult.intervention}`
+            message: `Transitioned to ${pcResult.intervention}`,
           };
         }
 
@@ -2355,7 +2552,12 @@ export class ChatEngine {
         );
         // Tier A2: Record phase change event
         if (streamPhase !== this._lastPhase && streamPhase !== null) {
-          recordPolicyEvent(this.policyEventLog, this._turnIndex, 'phase_change', `${this._lastPhase ?? 'start'}→${streamPhase}`);
+          recordPolicyEvent(
+            this.policyEventLog,
+            this._turnIndex,
+            'phase_change',
+            `${this._lastPhase ?? 'start'}→${streamPhase}`,
+          );
         }
         this._lastPhase = streamPhase;
         const isReadOnlyInspection =
@@ -2384,22 +2586,31 @@ export class ChatEngine {
           _turnSpan.setAttribute('babel.chat.tamper_blocked', 'true');
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
-          const tamperAnswer = await this.synthesizeAnswer(
-            allToolObservations, { onAnswerChunk: (_chunk: string) => {} },
-          ).catch(() => '');
+          const tamperAnswer = await this.synthesizeAnswer(allToolObservations, {
+            onAnswerChunk: (_chunk: string) => {},
+          }).catch(() => '');
           const tamperBlocked = tamperAnswer
             ? this.detectAndBuildBlockedReport(tamperAnswer)
             : null;
           const finalTamperAnswer = tamperBlocked
             ? tamperAnswer
             : `BLOCKED: Verifier integrity compromised — ${this.tamperCount} verifier dependency files were modified. The task cannot be completed honestly.`;
-          this.conversation.push({ role: 'assistant', content: finalTamperAnswer });
-          yield this.streamDone(finalTamperAnswer, { blockedReport: tamperBlocked ?? null, verifierTampered: true });
+          this.conversation.push({
+            role: 'assistant',
+            content: finalTamperAnswer,
+          });
+          yield this.streamDone(finalTamperAnswer, {
+            blockedReport: tamperBlocked ?? null,
+            verifierTampered: true,
+          });
           return;
         }
         if (tamperEscalation) {
           this.conversation.push({ role: 'user', content: tamperEscalation });
-          yield { type: 'thought', text: `[Tamper escalation: ${this.tamperCount} violations]` };
+          yield {
+            type: 'thought',
+            text: `[Tamper escalation: ${this.tamperCount} violations]`,
+          };
         }
 
         // R2: Escalating stall intervention — kill routed through parity arbiter
@@ -2418,7 +2629,10 @@ export class ChatEngine {
             role: 'user',
             content: stallIntervention.message,
           });
-          yield { type: 'thought', text: `[Stall intervention: ${stallIntervention.level}]` };
+          yield {
+            type: 'thought',
+            text: `[Stall intervention: ${stallIntervention.level}]`,
+          };
         }
         if (stallIntervention?.level === 'kill') {
           recordPolicyEvent(
@@ -2433,10 +2647,7 @@ export class ChatEngine {
         // Identity is the original action index, never completion-order slice position.
         const turnSlice = this.toolCallLog.slice(this._turnToolCallLogStart);
         const isReadTool = (name: string) =>
-          name === 'read_file' ||
-          name === 'file_read' ||
-          name === 'read_range' ||
-          name === 'grep';
+          name === 'read_file' || name === 'file_read' || name === 'read_range' || name === 'grep';
         const projected = projectDurableToolBatch({
           turnSlice,
           ...(turnResult.type === 'tool_calls'
@@ -2507,13 +2718,8 @@ export class ChatEngine {
         const sessionHasWrites = this.hasAnyWrites();
         const envBlockedSignal = (() => {
           for (const t of turnSlice) {
-            const blob = [t.detail, t.error, t.stdout, t.stderr]
-              .filter(Boolean)
-              .join('\n');
-            if (
-              blob &&
-              detectEnvBlockedFromText(blob, { hasAnyWrites: sessionHasWrites })
-            ) {
+            const blob = [t.detail, t.error, t.stdout, t.stderr].filter(Boolean).join('\n');
+            if (blob && detectEnvBlockedFromText(blob, { hasAnyWrites: sessionHasWrites })) {
               return blob.replace(/\s+/g, ' ').trim().slice(0, 220);
             }
           }
@@ -2528,14 +2734,17 @@ export class ChatEngine {
           explorationFuseMessage: exploreFuses.explorationFuseMessage,
           shellSoftMessage: exploreFuses.shellSoftMessage,
           investigateBudgetMessage: exploreFuses.investigateBudgetMessage,
-          readOnlyHardCapTerminal: isReadOnlyInspection ? exploreFuses.investigateHardCapTerminal : null,
-          investigateHardCapTerminal: !isReadOnlyInspection ? exploreFuses.investigateHardCapTerminal : null,
+          readOnlyHardCapTerminal: isReadOnlyInspection
+            ? exploreFuses.investigateHardCapTerminal
+            : null,
+          investigateHardCapTerminal: !isReadOnlyInspection
+            ? exploreFuses.investigateHardCapTerminal
+            : null,
           stallMessage:
             stallIntervention && stallIntervention.level !== 'kill'
               ? stallIntervention.message
               : null,
-          stallKillMessage:
-            stallIntervention?.level === 'kill' ? stallIntervention.message : null,
+          stallKillMessage: stallIntervention?.level === 'kill' ? stallIntervention.message : null,
           zeroWriteCandidate: zeroWriteDecision.arbiterMessage,
           zeroWriteTerminalMessage: zeroWriteDecision.terminalMessage,
           envBlockedSignal,
@@ -2558,7 +2767,8 @@ export class ChatEngine {
 
           // Read-only inspection hard cap: synthesize gathered evidence into a final informational answer
           if (
-            (arb.policySource === 'investigate_hard_cap' || arb.policySource === 'read_only_hard_cap') &&
+            (arb.policySource === 'investigate_hard_cap' ||
+              arb.policySource === 'read_only_hard_cap') &&
             isReadOnlyInspection
           ) {
             let synthAnswer = '';
@@ -2608,16 +2818,20 @@ export class ChatEngine {
             const killAnswer = await this.synthesizeAnswer(allToolObservations, {
               onAnswerChunk: (_chunk: string) => {},
             }).catch(() => '');
-            const killBlocked = killAnswer
-              ? this.detectAndBuildBlockedReport(killAnswer)
-              : null;
+            const killBlocked = killAnswer ? this.detectAndBuildBlockedReport(killAnswer) : null;
             if (killBlocked) {
-              this.conversation.push({ role: 'assistant', content: killAnswer });
+              this.conversation.push({
+                role: 'assistant',
+                content: killAnswer,
+              });
               yield this.streamDone(killAnswer, { blockedReport: killBlocked });
               return;
             }
           }
-          this.conversation.push({ role: 'assistant', content: arb.terminalAnswer });
+          this.conversation.push({
+            role: 'assistant',
+            content: arb.terminalAnswer,
+          });
           yield this.streamDone(arb.terminalAnswer, {
             blockedReport: buildPolicyTerminalBlockedReport(
               arb.policySource ?? 'progress_terminal',
@@ -2636,7 +2850,8 @@ export class ChatEngine {
         persistPolicyEventsJsonl(this.engineRunDir, this.policyEventLog);
 
         _turnSpan.setAttribute('babel.chat.turn', `${turn + 1}:tool_calls`);
-        endSpan(_turnSpan, SpanStatusCode.OK); _turnSpan = null;
+        endSpan(_turnSpan, SpanStatusCode.OK);
+        _turnSpan = null;
         continue;
       }
 
@@ -2644,7 +2859,11 @@ export class ChatEngine {
         const answer = turnResult.answer;
 
         if (this.parity.turnId) {
-          this.services.conversation.recordAssistantMessage(this.parity.eventLog, this.parity.turnId, answer);
+          this.services.conversation.recordAssistantMessage(
+            this.parity.eventLog,
+            this.parity.turnId,
+            answer,
+          );
         }
 
         // R1: Check for BLOCKED declaration before the gate — the agent may
@@ -2674,7 +2893,10 @@ export class ChatEngine {
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
           this.conversation.push({ role: 'assistant', content: answer });
-          this.conversation.push({ role: 'assistant', content: tokenCeilingBlocked });
+          this.conversation.push({
+            role: 'assistant',
+            content: tokenCeilingBlocked,
+          });
           yield this.streamDone(tokenCeilingBlocked, {
             blockedReport: {
               schema_version: 1 as const,
@@ -2713,7 +2935,10 @@ export class ChatEngine {
             _turnSpan = null;
             const textBlockedMsg = buildTextOnlyLoopBlockedMessage(this.stallState);
             this.conversation.push({ role: 'assistant', content: answer });
-            this.conversation.push({ role: 'assistant', content: textBlockedMsg });
+            this.conversation.push({
+              role: 'assistant',
+              content: textBlockedMsg,
+            });
             yield this.streamDone(textBlockedMsg, {
               blockedReport: {
                 schema_version: 1 as const,
@@ -2738,7 +2963,10 @@ export class ChatEngine {
             role: 'user',
             content: buildTextOnlyLoopIntervention(this.stallState),
           });
-          yield { type: 'thought', text: `[Text-only loop: ${this.stallState.textOnlyTurns} turns, escalating]` };
+          yield {
+            type: 'thought',
+            text: `[Text-only loop: ${this.stallState.textOnlyTurns} turns, escalating]`,
+          };
           _turnSpan.setAttribute('babel.chat.text_only_turn', this.stallState.textOnlyTurns);
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
@@ -2752,10 +2980,7 @@ export class ChatEngine {
         const envBlocked =
           detectEnvBlockedFromText(answer, envDetectOpts) ||
           this.toolCallLog.some((t) =>
-            detectEnvBlockedFromText(
-              `${t.detail ?? ''} ${t.error ?? ''}`,
-              envDetectOpts,
-            ),
+            detectEnvBlockedFromText(`${t.detail ?? ''} ${t.error ?? ''}`, envDetectOpts),
           );
         const completionPref = evaluateCompletionPrefersPatch({
           executeIntent: resolvedIntent === 'execute',
@@ -2764,7 +2989,10 @@ export class ChatEngine {
         });
         if (!completionPref.allowComplete && completionPref.message) {
           this.conversation.push({ role: 'assistant', content: answer });
-          this.conversation.push({ role: 'user', content: completionPref.message });
+          this.conversation.push({
+            role: 'user',
+            content: completionPref.message,
+          });
           yield {
             type: 'thought',
             text: '[Implementor: completion prefers patch — continuing]',
@@ -2803,7 +3031,10 @@ export class ChatEngine {
             endSpan(_turnSpan, SpanStatusCode.OK);
             _turnSpan = null;
             this.conversation.push({ role: 'assistant', content: answer });
-            this.conversation.push({ role: 'assistant', content: AUTO_CONTINUE_REFUSAL_MSG });
+            this.conversation.push({
+              role: 'assistant',
+              content: AUTO_CONTINUE_REFUSAL_MSG,
+            });
             yield this.streamDone(AUTO_CONTINUE_REFUSAL_MSG, {
               blockedReport: buildAutoContinueBlockedReport(),
               ...(this.verifierTampered ? { verifierTampered: true as const } : {}),
@@ -2825,19 +3056,23 @@ export class ChatEngine {
 
             // W3 Phase 3 Progress and Recovery Controller
             const pcResult = this.progressController.scoreTurn([], true, this.gateStrikes);
-            recordProgressRecovery(this.parity.sessionEvents, String(this.parity.turnId ?? this._turnIndex), {
-              intervention: pcResult.intervention,
-              score: pcResult.score,
-              signals: ['text_only_turn', 'gate_rejection'],
-              reason: 'completion_gate_rejection',
-            });
+            recordProgressRecovery(
+              this.parity.sessionEvents,
+              String(this.parity.turnId ?? this._turnIndex),
+              {
+                intervention: pcResult.intervention,
+                score: pcResult.score,
+                signals: ['text_only_turn', 'gate_rejection'],
+                reason: 'completion_gate_rejection',
+              },
+            );
             if (pcResult.transitioned) {
               yield {
                 type: 'progress_recovery',
                 intervention: pcResult.intervention,
                 source: 'progress_controller',
                 score: pcResult.score,
-                message: `Gate strike threshold escalated to ${pcResult.intervention}`
+                message: `Gate strike threshold escalated to ${pcResult.intervention}`,
               };
             }
 
@@ -2879,9 +3114,7 @@ export class ChatEngine {
           // Inject critic feedback so the model knows WHY and can fix it.
           const receipt = this.lastCriticReceipt;
           if (receipt?.reasons?.length) {
-            const reasons = receipt.reasons
-              .map((r, i) => `${i + 1}. ${r}`)
-              .join('\n');
+            const reasons = receipt.reasons.map((r, i) => `${i + 1}. ${r}`).join('\n');
             this.conversation.push({ role: 'assistant', content: answer });
             this.conversation.push({
               role: 'user',
@@ -2960,7 +3193,9 @@ export class ChatEngine {
     // that bypasses the write/verifier gate.
     const maxTurnBlockedReport = this.detectAndBuildBlockedReport(maxTurnAnswer);
     if (maxTurnBlockedReport) {
-      yield this.streamDone(maxTurnAnswer, { blockedReport: maxTurnBlockedReport });
+      yield this.streamDone(maxTurnAnswer, {
+        blockedReport: maxTurnBlockedReport,
+      });
       return;
     }
 
@@ -3026,7 +3261,6 @@ export class ChatEngine {
     return null;
   }
 
-
   /**
    * Abort the in-flight turn without touching the input arbiter.
    * TUI hosts dispatch ctrl_c themselves, then call this so a second
@@ -3091,28 +3325,53 @@ export class ChatEngine {
     }
   }
 
-  getInstructionManifest() { return this.parity.liveAuthority?.instructionManifest ?? null; }
-  getTaskContract() { return this.parity.liveAuthority?.taskContract ?? null; }
-  getLiveSession(c?: { turns?: number; tokens?: number; repair_attempts?: number; infra_retries?: number }): LiveSessionV1 { return projectEngineLiveSession(this.parity, c); }
-  canMutateIdempotencyKey(key: string): boolean { return engineCanMutateKey(this.parity, key); }
-  consumeFailureBudget(failure: FailureCapsuleV1): boolean { return this.failureBudgetTracker.consume(failure); }
-  getFailureBudgets() { return this.failureBudgetTracker.remainingBudgets(); }
+  getInstructionManifest() {
+    return this.parity.liveAuthority?.instructionManifest ?? null;
+  }
+  getTaskContract() {
+    return this.parity.liveAuthority?.taskContract ?? null;
+  }
+  getLiveSession(c?: {
+    turns?: number;
+    tokens?: number;
+    repair_attempts?: number;
+    infra_retries?: number;
+  }): LiveSessionV1 {
+    return projectEngineLiveSession(this.parity, c);
+  }
+  canMutateIdempotencyKey(key: string): boolean {
+    return engineCanMutateKey(this.parity, key);
+  }
+  consumeFailureBudget(failure: FailureCapsuleV1): boolean {
+    return this.failureBudgetTracker.consume(failure);
+  }
+  getFailureBudgets() {
+    return this.failureBudgetTracker.remainingBudgets();
+  }
   /** H4: isolation + dirty-tree flags for the capability broker. */
   private isolationBrokerFlags() {
     return resolveIsolationBrokerFlags(this.options.projectRoot);
   }
   restoreEventLog(log: import('./threadEventLog.js').ThreadEventLog): void {
-    this.parity.eventLog = log; this.clearVerifierEvidenceState();
+    this.parity.eventLog = log;
+    this.clearVerifierEvidenceState();
     const lastTurn = [...log.events].reverse().find((e) => e.kind === 'turn_started');
     if (lastTurn) this.parity.turnId = lastTurn.turn_id;
   }
   /** W2.2+H2: restore session events, settle interrupted tools, reload authority, reproject LiveSession. */
   restoreSessionEvents(log: SessionEventLog, options?: { runDir?: string }): number {
     this.clearVerifierEvidenceState();
-    const interrupted = restoreEngineSessionEvents({ parity: this.parity, log, runDir: options?.runDir ?? this.engineRunDir });
+    const interrupted = restoreEngineSessionEvents({
+      parity: this.parity,
+      log,
+      runDir: options?.runDir ?? this.engineRunDir,
+    });
     this.restorePersistedVerifierEvidence(log);
     const repairGuidance = resumedToolRecoveryGuidance(this.parity.sessionEvents);
-    if (repairGuidance && !this.conversation.some((message) => message.content === repairGuidance)) {
+    if (
+      repairGuidance &&
+      !this.conversation.some((message) => message.content === repairGuidance)
+    ) {
       this.conversation.push({ role: 'system', content: repairGuidance });
     }
     return interrupted;
@@ -3123,18 +3382,43 @@ export class ChatEngine {
     return loaded ? this.restoreSessionEvents(loaded, { runDir: targetDir }) : 0;
   }
 
-  public getResolvedRequiredVerifiers(): string[] { return resolveEngineRequiredVerifiers({ task: this.options.task, projectTestCommands: this.discoveredTestCommands.map((e) => e.command), requiredVerifierCommands: this.options.requiredVerifierCommands ?? null }); }
+  public getResolvedRequiredVerifiers(): string[] {
+    return resolveEngineRequiredVerifiers({
+      task: this.options.task,
+      projectTestCommands: this.discoveredTestCommands.map((e) => e.command),
+      requiredVerifierCommands: this.options.requiredVerifierCommands ?? null,
+    });
+  }
 
-  private clearVerifierEvidenceState(): void { this.executedVerifierLedger = []; this.lastVerifierReceipt = null; this.verifierReceiptCache.clear(); this.platformUnusableVerifiers.clear(); this.verifierDependencyHashes.clear(); }
+  private clearVerifierEvidenceState(): void {
+    this.executedVerifierLedger = [];
+    this.lastVerifierReceipt = null;
+    this.verifierReceiptCache.clear();
+    this.platformUnusableVerifiers.clear();
+    this.verifierDependencyHashes.clear();
+  }
 
-  private restorePersistedVerifierEvidence(log: SessionEventLog): void { this.lastVerifierReceipt = restorePersistedVerifierEvidence(log, this.executedVerifierLedger); }
+  private restorePersistedVerifierEvidence(log: SessionEventLog): void {
+    this.lastVerifierReceipt = restorePersistedVerifierEvidence(log, this.executedVerifierLedger);
+  }
 
   /** Build the single canonical verifier input shared by every completion gate. */
-  private buildVerifierInput(): ReturnType<typeof prepareKernelVerifierInput> & { requiredVerifierCommands: string[] } { return { ...prepareKernelVerifierInput(this.lastVerifierReceipt, this.executedVerifierLedger), requiredVerifierCommands: this.getResolvedRequiredVerifiers() }; }
+  private buildVerifierInput(): ReturnType<typeof prepareKernelVerifierInput> & {
+    requiredVerifierCommands: string[];
+  } {
+    return {
+      ...prepareKernelVerifierInput(this.lastVerifierReceipt, this.executedVerifierLedger),
+      requiredVerifierCommands: this.getResolvedRequiredVerifiers(),
+    };
+  }
 
-  private decideCompletion(requestedOutcome: TerminalOutcome | 'PLAN_COMPLETE', hasMutation: boolean) {
+  private decideCompletion(
+    requestedOutcome: TerminalOutcome | 'PLAN_COMPLETE',
+    hasMutation: boolean,
+  ) {
     refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, this.lastVerifierReceipt);
-    for (const receipt of this.executedVerifierLedger) refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, receipt);
+    for (const receipt of this.executedVerifierLedger)
+      refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, receipt);
     const verifierInput = this.buildVerifierInput();
 
     return this.executorKernel.completion.decide({
@@ -3147,10 +3431,16 @@ export class ChatEngine {
       verifierEvidenceErrors: verifierInput.verifierEvidenceErrors,
       requiredVerifierCommands: verifierInput.requiredVerifierCommands,
       toolCallLog: toGateToolLog(this.toolCallLog),
-      ...(this.lastVerifierReceipt?.boundRevision ? { workspaceRevision: this.lastVerifierReceipt.boundRevision } : {}),
-      proof: requestedOutcome === 'VERIFIED_COMPLETE'
-        ? this.buildCompletionProof(hasMutation)
-        : { compliant: false, errors: ['requested outcome was not verified'] },
+      ...(this.lastVerifierReceipt?.boundRevision
+        ? { workspaceRevision: this.lastVerifierReceipt.boundRevision }
+        : {}),
+      proof:
+        requestedOutcome === 'VERIFIED_COMPLETE'
+          ? this.buildCompletionProof(hasMutation)
+          : {
+              compliant: false,
+              errors: ['requested outcome was not verified'],
+            },
     });
   }
 
@@ -3168,20 +3458,34 @@ export class ChatEngine {
   ) {
     const hasMutation = this.hasAnyWrites();
     let requestedOutcome = computeTerminalOutcome({
-      finalStatus: extra?.blockedReport ? 'blocked' : this.budgetExceeded ? 'budget_exhausted' : 'completed',
+      finalStatus: extra?.blockedReport
+        ? 'blocked'
+        : this.budgetExceeded
+          ? 'budget_exhausted'
+          : 'completed',
       budgetExceeded: this.budgetExceeded,
       lastVerifierReceipt: this.lastVerifierReceipt,
       blockedReport: extra?.blockedReport,
       hasAnyWrites: hasMutation,
     });
-    requestedOutcome = applyHonestTaskOutcomeToCompletion({ contract: this.parity.liveAuthority?.taskContract, requestedOutcome, hasMutation, planMode: this.executionProfile === 'plan' });
-    const planCompletion = this.executionProfile === 'plan' && !extra?.blockedReport && !this.budgetExceeded;
-    const decision = this.decideCompletion(planCompletion ? 'PLAN_COMPLETE' : requestedOutcome, hasMutation);
-    const outcome = decision.finalOutcome === 'PLAN_COMPLETE' ? 'UNVERIFIED_PATCH' : decision.finalOutcome;
-    if (decision.finalOutcome === 'PLAN_COMPLETE') {
-      recordCompletionDecision(this.parity.sessionEvents, String(this.parity.turnId ?? this._turnIndex), {
+    requestedOutcome = applyHonestTaskOutcomeToCompletion({
+      contract: this.parity.liveAuthority?.taskContract,
+      requestedOutcome,
+      hasMutation,
+      planMode: this.executionProfile === 'plan',
+    });
+    const planCompletion =
+      this.executionProfile === 'plan' && !extra?.blockedReport && !this.budgetExceeded;
+    const decision = this.decideCompletion(
+      planCompletion ? 'PLAN_COMPLETE' : requestedOutcome,
+      hasMutation,
+    );
+    const outcome =
+      decision.finalOutcome === 'PLAN_COMPLETE' ? 'UNVERIFIED_PATCH' : decision.finalOutcome;
+    {
+      this.recordCompletionDecisionOnce({
         requestedOutcome: decision.requestedOutcome,
-        finalOutcome: decision.finalOutcome,
+        finalOutcome: outcome,
         allowed: decision.allowed,
         reason: decision.reason,
         evidenceRefs: decision.evidenceRefs,
@@ -3224,7 +3528,9 @@ export class ChatEngine {
     this.lastTurnTelemetry = finalizedTelemetry ?? null;
     return buildStreamDone(this.obsHandles(), answer, {
       outcome,
-      ...(decision.finalOutcome === 'PLAN_COMPLETE' ? { planOutcome: 'PLAN_COMPLETE' as const } : {}),
+      ...(decision.finalOutcome === 'PLAN_COMPLETE'
+        ? { planOutcome: 'PLAN_COMPLETE' as const }
+        : {}),
       ...(this.budgetExceeded ? { budgetExceeded: true as const } : {}),
       ...(extra ?? {}),
       ...(finalizedTelemetry ? { turnTelemetry: finalizedTelemetry } : {}),
@@ -3281,9 +3587,12 @@ export class ChatEngine {
     if (this.parity.eventLog.events.length > 0 || this.parity.sessionEvents.events.length > 0) {
       throw new Error('Cannot change ChatEngine run identity after durable events exist');
     }
-    const authority = this.parity.liveAuthority; this.engineRunId = runId;
-    this.parity = createParityRuntime(runId); if (authority) this.parity.liveAuthority = authority;
-    mkdirSync(this.engineRunDir, { recursive: true }); if (authority) persistLiveSessionAuthority(this.engineRunDir, authority);
+    const authority = this.parity.liveAuthority;
+    this.engineRunId = runId;
+    this.parity = createParityRuntime(runId);
+    if (authority) this.parity.liveAuthority = authority;
+    mkdirSync(this.engineRunDir, { recursive: true });
+    if (authority) persistLiveSessionAuthority(this.engineRunDir, authority);
     this.failureBudgetTracker = createFailureBudgetTrackerFromContract(authority?.taskContract);
   }
 
@@ -3395,19 +3704,32 @@ export class ChatEngine {
       this.limits = resolveChatEngineLimits(
         {
           ...(this.options.maxTurns !== undefined ? { maxTurns: this.options.maxTurns } : {}),
-          ...(this.options.maxConversationMessages !== undefined ? { maxConversationMessages: this.options.maxConversationMessages } : {}),
-          ...(this.options.maxEstimatedTokens !== undefined ? { maxEstimatedTokens: this.options.maxEstimatedTokens } : {}),
-          ...(this.options.maxTokensPerRound !== undefined ? { maxTokensPerRound: this.options.maxTokensPerRound } : {}),
+          ...(this.options.maxConversationMessages !== undefined
+            ? { maxConversationMessages: this.options.maxConversationMessages }
+            : {}),
+          ...(this.options.maxEstimatedTokens !== undefined
+            ? { maxEstimatedTokens: this.options.maxEstimatedTokens }
+            : {}),
+          ...(this.options.maxTokensPerRound !== undefined
+            ? { maxTokensPerRound: this.options.maxTokensPerRound }
+            : {}),
         },
         undefined,
         { taskClass: runtime.taskClass, taskText: runtime.taskText },
       );
+      if (
+        this.modelPolicy?.provider === 'openrouter' &&
+        this.modelPolicy.providerModelId === LIVE_OPENROUTER_MODEL_ID
+      ) {
+        this.limits = {
+          ...this.limits,
+          investigateModel: LIVE_OPENROUTER_MODEL_ID,
+          mutateModel: LIVE_OPENROUTER_MODEL_ID,
+        };
+      }
       // Playbook / todo gate re-evaluate for the new task text.
       this.activePlaybook = selectPlaybookForChatTask(runtime.taskText) ?? null;
-      this.requireTodoBeforeMutate = shouldRequireTodoPlan(
-        runtime.taskText,
-        this.activePlaybook,
-      );
+      this.requireTodoBeforeMutate = shouldRequireTodoPlan(runtime.taskText, this.activePlaybook);
       // System prompt may embed class/playbook hints — rebuild next LLM call.
       this.clearSystemPromptCache();
     }
@@ -3423,8 +3745,12 @@ export class ChatEngine {
     return runtime;
   }
 
-  getTurnRuntimeSnapshot(): TurnRuntimeSnapshot | null { return this.lastTurnRuntime ? this.snapshotPreviousForBegin() : null; }
-  getWriteCount(): number { return this.writeCount; }
+  getTurnRuntimeSnapshot(): TurnRuntimeSnapshot | null {
+    return this.lastTurnRuntime ? this.snapshotPreviousForBegin() : null;
+  }
+  getWriteCount(): number {
+    return this.writeCount;
+  }
 
   private snapshotPreviousForBegin(): TurnRuntimeSnapshot | null {
     if (!this.lastTurnRuntime) return null;
@@ -3464,10 +3790,7 @@ export class ChatEngine {
    * @throws if the transcript file is missing, unreadable, or contains
    *         unparseable JSON lines.
    */
-  static async restore(
-    engineRunId: string,
-    options: ChatEngineOptions,
-  ): Promise<ChatEngine> {
+  static async restore(engineRunId: string, options: ChatEngineOptions): Promise<ChatEngine> {
     const transcriptPath = layoutTranscriptPath(engineRunId);
     const { readFile } = await import('node:fs/promises');
     const content = await readFile(transcriptPath, 'utf-8');
@@ -3475,8 +3798,13 @@ export class ChatEngine {
       .split('\n')
       .filter((line) => line.trim() !== '')
       .map((line) => JSON.parse(line));
-    const sessionDir = chatSessionDir(engineRunId), sessionLog = loadSessionEventLogForResume(sessionDir, engineRunId)
-    const engine = new ChatEngine({ ...options, runId: engineRunId, resumeExisting: true });
+    const sessionDir = chatSessionDir(engineRunId),
+      sessionLog = loadSessionEventLogForResume(sessionDir, engineRunId);
+    const engine = new ChatEngine({
+      ...options,
+      runId: engineRunId,
+      resumeExisting: true,
+    });
     engine.conversation = messages;
     engine.restoreSessionEvents(sessionLog, { runDir: sessionDir });
     engine.clearVerifierEvidenceState();
@@ -3497,7 +3825,11 @@ export class ChatEngine {
   private async executeActions(
     actions: ChatToolAction[],
     callbacks: ChatCallbacks,
-  ): Promise<{ observations: string; observationList: string[]; count: number }> {
+  ): Promise<{
+    observations: string;
+    observationList: string[];
+    count: number;
+  }> {
     const toolContext: ToolContext = {
       agentId: `chat-${this.engineRunId}`,
       runId: this.engineRunId,
@@ -3511,9 +3843,7 @@ export class ChatEngine {
       orderChatToolActions(
         actions.map((a) => ({
           type: a.type,
-          ...(a.type === 'sub_agent'
-            ? { mutation: (a as { mutation?: boolean }).mutation }
-            : {}),
+          ...(a.type === 'sub_agent' ? { mutation: (a as { mutation?: boolean }).mutation } : {}),
         })),
       ),
     );
@@ -3533,26 +3863,20 @@ export class ChatEngine {
                   index,
                   subAgentCounter: ++subAgentCounter,
                   idempotencyKey:
-                    this._streamNativeToolCallIds[index] ??
-                    `tool_call_${this._turnIndex}_${index}`,
+                    this._streamNativeToolCallIds[index] ?? `tool_call_${this._turnIndex}_${index}`,
                 }),
               ),
             )),
           );
         }
       } else {
-        const result = await this.executeOneAction(
-          actions[batch.index]!,
-          toolContext,
-          callbacks,
-          {
-            index: batch.index,
-            subAgentCounter: ++subAgentCounter,
-            idempotencyKey:
-              this._streamNativeToolCallIds[batch.index] ??
-              `tool_call_${this._turnIndex}_${batch.index}`,
-          },
-        );
+        const result = await this.executeOneAction(actions[batch.index]!, toolContext, callbacks, {
+          index: batch.index,
+          subAgentCounter: ++subAgentCounter,
+          idempotencyKey:
+            this._streamNativeToolCallIds[batch.index] ??
+            `tool_call_${this._turnIndex}_${batch.index}`,
+        });
         allResults.push(result);
         if (isCircuitBreakerObservation(result.observation)) stopTerminal = true;
       }
@@ -3565,31 +3889,49 @@ export class ChatEngine {
       return hit?.observation ?? '';
     });
     return {
-      observations: allResults.map((r) => r.observation).filter(Boolean).join('\n\n'),
+      observations: allResults
+        .map((r) => r.observation)
+        .filter(Boolean)
+        .join('\n\n'),
       observationList,
       count: allResults.length,
     };
   }
 
   /** Persist tool_started immediately before the policy-gated executor performs the effect. */
-  private persistToolStartedAtExecutorDispatch(action: ChatToolAction, meta: { index: number; idempotencyKey?: string }): void {
-    const idempotencyKey = meta.idempotencyKey ?? this._streamNativeToolCallIds[meta.index] ?? `tool_call_${this._turnIndex}_${meta.index}`;
-    paritySettleToolStarted(this.parity, {
-      id: idempotencyKey,
-      name: chatActionToolName(action),
-      action_index: meta.index,
-      ...(this._activeToolBatchId ? { batch_id: this._activeToolBatchId } : {}),
-      target_summary: chatActionTarget(action),
-    }, this.engineRunDir);
+  private persistToolStartedAtExecutorDispatch(
+    action: ChatToolAction,
+    meta: { index: number; idempotencyKey?: string },
+  ): void {
+    const idempotencyKey =
+      meta.idempotencyKey ??
+      this._streamNativeToolCallIds[meta.index] ??
+      `tool_call_${this._turnIndex}_${meta.index}`;
+    paritySettleToolStarted(
+      this.parity,
+      {
+        id: idempotencyKey,
+        name: chatActionToolName(action),
+        action_index: meta.index,
+        ...(this._activeToolBatchId ? { batch_id: this._activeToolBatchId } : {}),
+        target_summary: chatActionTarget(action),
+      },
+      this.engineRunDir,
+    );
   }
 
   /** Block a fresh tool-call id from replaying an equivalent unknown external/non-idempotent effect. */
-  private recoveredOperationDispatchAuthorization(action: ChatToolAction): { allowed: boolean; message?: string } {
+  private recoveredOperationDispatchAuthorization(action: ChatToolAction): {
+    allowed: boolean;
+    message?: string;
+  } {
     const fingerprint = operationFingerprint(chatActionToolName(action), action);
-    if (!requiresRecoveredOutcomeReconciliation(this.parity.sessionEvents, fingerprint)) return { allowed: true };
+    if (!requiresRecoveredOutcomeReconciliation(this.parity.sessionEvents, fingerprint))
+      return { allowed: true };
     return {
       allowed: false,
-      message: 'Equivalent recovered effect has TOOL_OUTCOME_UNKNOWN; inspect/reconcile its state, then require an explicit durable reconciliation authorization before retrying this fingerprint.',
+      message:
+        'Equivalent recovered effect has TOOL_OUTCOME_UNKNOWN; inspect/reconcile its state, then require an explicit durable reconciliation authorization before retrying this fingerprint.',
     };
   }
 
@@ -3603,14 +3945,26 @@ export class ChatEngine {
     reconciliationRef: string,
   ): void {
     const fingerprint = operationFingerprint(chatActionToolName(action), action);
-    if (!requiresRecoveredOutcomeReconciliation(this.parity.sessionEvents, fingerprint, recoveredIdempotencyKey)) {
-      throw new Error('No matching unreconciled TOOL_OUTCOME_UNKNOWN effect exists for this authorization.');
+    if (
+      !requiresRecoveredOutcomeReconciliation(
+        this.parity.sessionEvents,
+        fingerprint,
+        recoveredIdempotencyKey,
+      )
+    ) {
+      throw new Error(
+        'No matching unreconciled TOOL_OUTCOME_UNKNOWN effect exists for this authorization.',
+      );
     }
-    parityAuthorizeRecoveredOutcomeRetry(this.parity, {
-      recoveredIdempotencyKey,
-      operationFingerprint: fingerprint,
-      reconciliationRef,
-    }, this.engineRunDir);
+    parityAuthorizeRecoveredOutcomeRetry(
+      this.parity,
+      {
+        recoveredIdempotencyKey,
+        operationFingerprint: fingerprint,
+        reconciliationRef,
+      },
+      this.engineRunDir,
+    );
   }
 
   private async executeOneAction(
@@ -3651,7 +4005,10 @@ export class ChatEngine {
           exit_code: 1,
         });
         callbacks?.onToolComplete?.(toolId, 'hard-plan-mode', 'blocked', 1);
-        return { index: meta.index, observation: hardPlanGate.observation ?? '' };
+        return {
+          index: meta.index,
+          observation: hardPlanGate.observation ?? '',
+        };
       }
       const planGate = evaluatePlanThenExecuteGate({
         toolName: tool,
@@ -3698,9 +4055,19 @@ export class ChatEngine {
       const recoveredAuthorization = this.recoveredOperationDispatchAuthorization(action);
       if (!recoveredAuthorization.allowed) {
         const detail = `[RECOVERY_RECONCILIATION_REQUIRED] ${recoveredAuthorization.message ?? 'Reconcile the prior unknown effect before retrying'}`;
-        this.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1 });
+        this.toolCallLog.push({
+          tool,
+          target,
+          detail,
+          error: 'blocked',
+          index: meta.index,
+          exit_code: 1,
+        });
         callbacks?.onToolComplete?.(toolId, 'reconciliation-required', 'blocked', 1);
-        return { index: meta.index, observation: `### ${tool} ${target}\nexit_code: 1\n\`\`\`\n${detail}\n\`\`\`` };
+        return {
+          index: meta.index,
+          observation: `### ${tool} ${target}\nexit_code: 1\n\`\`\`\n${detail}\n\`\`\``,
+        };
       }
 
       if (action.type === 'sub_agent') {
@@ -3712,24 +4079,27 @@ export class ChatEngine {
         // Cancelling the parent cascades; cancelling a sibling does not.
         const childController = new AbortController();
         const onParentAbort = () => childController.abort();
-        this.abortController.signal.addEventListener('abort', onParentAbort, { once: true });
+        this.abortController.signal.addEventListener('abort', onParentAbort, {
+          once: true,
+        });
 
         // Subagent approval session cannot exceed parent permission ceiling
         const parentApproval = getChatApprovalSession();
         const childCeiling = mutationEnabled
           ? (['shell', 'write', 'other'] as const)
           : (['other'] as const);
-        const childApproval = deriveSubagentApprovalSession(
-          parentApproval,
-          subId,
-          [...childCeiling],
-        );
+        const childApproval = deriveSubagentApprovalSession(parentApproval, subId, [
+          ...childCeiling,
+        ]);
         const restoreApproval = () => bindChatApprovalSession(parentApproval);
         bindChatApprovalSession(childApproval);
 
         // Mutation sub-agent path (W2.1: git worktree + write_scope allowlist)
         if (mutationEnabled) {
-          callbacks.onSubAgentStart?.({ id: subId, label: action.task.slice(0, 60) });
+          callbacks.onSubAgentStart?.({
+            id: subId,
+            label: action.task.slice(0, 60),
+          });
           try {
             // Prefer implement-worktree isolation when write_scope is declared.
             // Empty write_scope still routes through the legacy in-tree loop so
@@ -3744,7 +4114,12 @@ export class ChatEngine {
                   task: action.task,
                   writeScope,
                   maxRounds: SUB_AGENT_MAX_ROUNDS,
-                  ...((action as any).model ? { model: (action as any).model as string } : {}),
+                  ...(((action as any).model ?? this.modelPolicy?.providerModelId)
+                    ? {
+                        model: ((action as any).model ??
+                          this.modelPolicy?.providerModelId) as string,
+                      }
+                    : {}),
                 },
                 {
                   projectRoot: this.options.projectRoot,
@@ -3769,7 +4144,7 @@ export class ChatEngine {
               callbacks?.onToolComplete?.(
                 toolId,
                 details,
-                implResult.success ? undefined : (implResult.error || 'failed'),
+                implResult.success ? undefined : implResult.error || 'failed',
                 implResult.success ? 0 : 1,
               );
               if (implResult.success) {
@@ -3811,7 +4186,11 @@ export class ChatEngine {
               maxRounds: SUB_AGENT_MAX_ROUNDS,
               abortSignal: childController.signal,
               runDir: join(this.engineRunDir, subId),
-              ...((action as any).model ? { model: (action as any).model as string } : {}),
+              ...((action as any).model || this.modelPolicy?.providerModelId
+                ? {
+                    model: ((action as any).model ?? this.modelPolicy?.providerModelId) as string,
+                  }
+                : {}),
             });
             const details = mutResult.success
               ? `${mutResult.stepsExecuted} steps, ${mutResult.changedFiles.length} changed`
@@ -3826,7 +4205,7 @@ export class ChatEngine {
             callbacks?.onToolComplete?.(
               toolId,
               details,
-              mutResult.success ? undefined : (mutResult.error || 'failed'),
+              mutResult.success ? undefined : mutResult.error || 'failed',
               mutResult.success ? 0 : 1,
             );
             if (mutResult.success) {
@@ -3841,13 +4220,20 @@ export class ChatEngine {
               `### sub_agent ${subId}: ${action.task}`,
               `status: ${mutResult.success ? 'success' : 'failed'}`,
               `steps: ${mutResult.stepsExecuted}`,
-              `changed_files: ${mutResult.changedFiles.map(f => f.path).join(', ') || 'none'}`,
+              `changed_files: ${mutResult.changedFiles.map((f) => f.path).join(', ') || 'none'}`,
               mutResult.summary,
             ].join('\n');
             return { index: meta.index, observation: findings };
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
-            this.toolCallLog.push({ tool, target, detail: 'failed', error: 'error', index: meta.index, exit_code: 1 });
+            this.toolCallLog.push({
+              tool,
+              target,
+              detail: 'failed',
+              error: 'error',
+              index: meta.index,
+              exit_code: 1,
+            });
             callbacks?.onToolComplete?.(toolId, 'failed', errMsg, 1);
             callbacks.onSubAgentFailed?.({ id: subId, error: errMsg });
             return {
@@ -3861,7 +4247,10 @@ export class ChatEngine {
         }
 
         // Read-only sub-agent path (existing)
-        callbacks.onSubAgentStart?.({ id: subId, label: action.task.slice(0, 60) });
+        callbacks.onSubAgentStart?.({
+          id: subId,
+          label: action.task.slice(0, 60),
+        });
         try {
           this.persistToolStartedAtExecutorDispatch(action, meta);
           const subResult = await runReadOnlyAgentLoop({
@@ -3879,7 +4268,8 @@ export class ChatEngine {
             maxRounds: SUB_AGENT_MAX_ROUNDS,
             preset: 'read_only',
             abortSignal: childController.signal,
-            ...((action as any).model ? { model: (action as any).model as string } : {}),
+            model:
+              ((action as any).model as string | undefined) ?? this.modelPolicy?.providerModelId,
           } as any);
           const findings = formatSubAgentFindings(subId, action.task, {
             observations: subResult.observations,
@@ -3894,7 +4284,10 @@ export class ChatEngine {
             exit_code: 0,
           });
           callbacks?.onToolComplete?.(toolId, `${subResult.stepsExecuted} steps`, undefined, 0);
-          callbacks.onSubAgentComplete?.({ id: subId, summary: `${subResult.stepsExecuted} steps` });
+          callbacks.onSubAgentComplete?.({
+            id: subId,
+            summary: `${subResult.stepsExecuted} steps`,
+          });
           return { index: meta.index, observation: findings };
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
@@ -3945,8 +4338,7 @@ export class ChatEngine {
           ...toolContext,
           onBeforeDispatch: () => this.persistToolStartedAtExecutorDispatch(action, meta),
         });
-        const detail =
-          mcpResult.exit_code === 0 ? 'ok' : `exit ${mcpResult.exit_code ?? -1}`;
+        const detail = mcpResult.exit_code === 0 ? 'ok' : `exit ${mcpResult.exit_code ?? -1}`;
         this.toolCallLog.push({
           tool,
           target,
@@ -3959,7 +4351,7 @@ export class ChatEngine {
         callbacks?.onToolComplete?.(
           toolId,
           detail,
-          mcpResult.exit_code === 0 ? undefined : (mcpResult.stderr || detail),
+          mcpResult.exit_code === 0 ? undefined : mcpResult.stderr || detail,
           mcpResult.exit_code ?? 0,
         );
         return {
@@ -3973,10 +4365,10 @@ export class ChatEngine {
       }
 
       if (action.type === 'web_search' || action.type === 'web_fetch') {
-        const webResult = await executeTool(
-          mapChatWebActionToToolRequest(action),
-          { ...toolContext, onBeforeDispatch: () => this.persistToolStartedAtExecutorDispatch(action, meta) },
-        );
+        const webResult = await executeTool(mapChatWebActionToToolRequest(action), {
+          ...toolContext,
+          onBeforeDispatch: () => this.persistToolStartedAtExecutorDispatch(action, meta),
+        });
         const detail =
           webResult.exit_code === 0
             ? formatResultDetail(action, webResult)
@@ -3992,7 +4384,7 @@ export class ChatEngine {
         callbacks?.onToolComplete?.(
           toolId,
           detail,
-          webResult.exit_code === 0 ? undefined : (webResult.stderr || detail),
+          webResult.exit_code === 0 ? undefined : webResult.stderr || detail,
           webResult.exit_code ?? 0,
         );
         return {
@@ -4009,7 +4401,10 @@ export class ChatEngine {
       if (action.type === 'lsp') {
         const lsp = await executeLspChatToolAction({
           action,
-          toolContext: { ...toolContext, onBeforeDispatch: () => this.persistToolStartedAtExecutorDispatch(action, meta) },
+          toolContext: {
+            ...toolContext,
+            onBeforeDispatch: () => this.persistToolStartedAtExecutorDispatch(action, meta),
+          },
           executeTool,
         });
         this.toolCallLog.push({
@@ -4025,14 +4420,20 @@ export class ChatEngine {
         callbacks?.onToolComplete?.(
           toolId,
           lsp.detail,
-          lsp.failed ? (lsp.stderr || 'failed') : undefined,
+          lsp.failed ? lsp.stderr || 'failed' : undefined,
           lsp.exit_code ?? (lsp.failed ? 1 : 0),
         );
         return { index: meta.index, observation: lsp.observation };
       }
 
       if (action.type === 'finish') {
-        this.toolCallLog.push({ tool, target, detail: 'done', index: meta.index, exit_code: 0 });
+        this.toolCallLog.push({
+          tool,
+          target,
+          detail: 'done',
+          index: meta.index,
+          exit_code: 0,
+        });
         callbacks?.onToolComplete?.(toolId, 'done', undefined, 0);
         return { index: meta.index, observation: '' };
       }
@@ -4044,7 +4445,12 @@ export class ChatEngine {
         const pathKey = this.readCacheKey(action.path);
         const maxFull = getChatTaskTune(this.taskClass).maxFullReadsPerFile;
         const priorFull = this.fullReadCounts.get(pathKey) ?? 0;
-        if (shouldSkipFullReread({ fullReadCount: priorFull, maxFullReads: maxFull })) {
+        if (
+          shouldSkipFullReread({
+            fullReadCount: priorFull,
+            maxFullReads: maxFull,
+          })
+        ) {
           this.dedupeHitCount++;
           this.noteToolForReadThrash(tool);
           this.toolCallLog.push({
@@ -4072,7 +4478,13 @@ export class ChatEngine {
           const secs = cached ? Math.round((Date.now() - cached.timestamp) / 1000) : 0;
           this.dedupeHitCount++;
           this.noteToolForReadThrash(tool);
-          this.toolCallLog.push({ tool, target, detail: 'cached', index: meta.index, exit_code: 0 });
+          this.toolCallLog.push({
+            tool,
+            target,
+            detail: 'cached',
+            index: meta.index,
+            exit_code: 0,
+          });
           callbacks?.onToolComplete?.(toolId, 'cached', undefined, 0);
           return {
             index: meta.index,
@@ -4089,7 +4501,11 @@ export class ChatEngine {
           executionProfile: this.executionProfile,
         });
         const gov = await governedStrReplace(
-          { file_path: action.file_path, old_str: action.old_str, new_str: action.new_str },
+          {
+            file_path: action.file_path,
+            old_str: action.old_str,
+            new_str: action.new_str,
+          },
           {
             projectRoot: this.options.projectRoot,
             context: toolContext,
@@ -4113,7 +4529,9 @@ export class ChatEngine {
               ? {
                   batch_id: gov.mutationReceipt.batchId,
                   starting_revision: gov.mutationReceipt.startingRevision,
-                  ...(gov.mutationReceipt.endingRevision ? { ending_revision: gov.mutationReceipt.endingRevision } : {}),
+                  ...(gov.mutationReceipt.endingRevision
+                    ? { ending_revision: gov.mutationReceipt.endingRevision }
+                    : {}),
                   changed_bytes: gov.mutationReceipt.changedBytes,
                   status: gov.mutationReceipt.status,
                   pre_image_hashes: gov.mutationReceipt.preImageHashes,
@@ -4125,8 +4543,12 @@ export class ChatEngine {
 
         if (gov.exit_code !== 0) {
           this.toolCallLog.push({
-            tool, target, detail: 'error', error: gov.error ?? 'str_replace failed',
-            index: meta.index, exit_code: gov.exit_code,
+            tool,
+            target,
+            detail: 'error',
+            error: gov.error ?? 'str_replace failed',
+            index: meta.index,
+            exit_code: gov.exit_code,
           });
           callbacks?.onToolComplete?.(
             toolId,
@@ -4166,7 +4588,9 @@ export class ChatEngine {
         const tamperWarning = this.checkVerifierTamper(gov.absolutePath);
         if (tamperWarning) strObs += `\n\n### verifier_integrity\n${tamperWarning}`;
         appendPatchRecovery(
-          this.patchRecoveryPath ?? '', 'str_replace', action.file_path,
+          this.patchRecoveryPath ?? '',
+          'str_replace',
+          action.file_path,
           `old=${action.old_str.slice(0, 200)}\nnew=${action.new_str.slice(0, 200)}`,
         );
         return { index: meta.index, observation: strObs };
@@ -4184,15 +4608,38 @@ export class ChatEngine {
           pathKey: rKey,
           fileHash: rHash,
           content: rContent,
-          request: { kind: 'range', startLine: action.start_line, endLine: action.end_line },
+          request: {
+            kind: 'range',
+            startLine: action.start_line,
+            endLine: action.end_line,
+          },
           cache: this.readCache,
         });
-        if (evaluated.window.lines.length === 0 && action.start_line > evaluated.window.totalLines) {
-          this.toolCallLog.push({ tool, target, detail: 'error', error: 'start_line out of range', index: meta.index, exit_code: 1 });
+        if (
+          evaluated.window.lines.length === 0 &&
+          action.start_line > evaluated.window.totalLines
+        ) {
+          this.toolCallLog.push({
+            tool,
+            target,
+            detail: 'error',
+            error: 'start_line out of range',
+            index: meta.index,
+            exit_code: 1,
+          });
           callbacks?.onToolComplete?.(toolId, 'error', 'start_line out of range', 1);
-          return { index: meta.index, observation: `### read_range ${target}\nError: start_line (${action.start_line}) exceeds file length (${evaluated.window.totalLines})` };
+          return {
+            index: meta.index,
+            observation: `### read_range ${target}\nError: start_line (${action.start_line}) exceeds file length (${evaluated.window.totalLines})`,
+          };
         }
-        this.toolCallLog.push({ tool, target, detail: `${evaluated.window.lines.length} lines`, index: meta.index, exit_code: 0 });
+        this.toolCallLog.push({
+          tool,
+          target,
+          detail: `${evaluated.window.lines.length} lines`,
+          index: meta.index,
+          exit_code: 0,
+        });
         callbacks?.onToolComplete?.(toolId, `${evaluated.window.lines.length} lines`, undefined, 0);
         return {
           index: meta.index,
@@ -4203,12 +4650,21 @@ export class ChatEngine {
       // ── B1: todo_write — merge-patch task list ─────────────────────
       if (action.type === 'todo_write') {
         for (const item of action.todos) {
-          this.todos.set(item.id, { content: item.content, status: item.status });
+          this.todos.set(item.id, {
+            content: item.content,
+            status: item.status,
+          });
         }
         const formattedTodos = [...this.todos.entries()]
           .map(([id, t]) => `- [${t.status}] ${t.content} (${id})`)
           .join('\n');
-        this.toolCallLog.push({ tool, target, detail: `${this.todos.size} todos`, index: meta.index, exit_code: 0 });
+        this.toolCallLog.push({
+          tool,
+          target,
+          detail: `${this.todos.size} todos`,
+          index: meta.index,
+          exit_code: 0,
+        });
         callbacks?.onToolComplete?.(toolId, `${this.todos.size} todos`, undefined, 0);
         return {
           index: meta.index,
@@ -4219,7 +4675,10 @@ export class ChatEngine {
       // Background shell — handlers in chatBackgroundShell.ts (size ratchet)
       if (action.type === 'await_command') {
         return executeAwaitCommandAction(action, {
-          projectRoot: this.options.projectRoot, tool, target, toolId,
+          projectRoot: this.options.projectRoot,
+          tool,
+          target,
+          toolId,
           index: meta.index,
           pushLog: (entry) => this.toolCallLog.push(entry),
           onToolComplete: callbacks.onToolComplete,
@@ -4228,9 +4687,13 @@ export class ChatEngine {
       }
       if (action.type === 'run_command' && action.background === true) {
         return executeBackgroundRunCommandAction(action, {
-          projectRoot: this.options.projectRoot, tool, target, toolId,
+          projectRoot: this.options.projectRoot,
+          tool,
+          target,
+          toolId,
           index: meta.index,
-          ownerId: this.engineRunId, toolCallId: meta.idempotencyKey,
+          ownerId: this.engineRunId,
+          toolCallId: meta.idempotencyKey,
           pushLog: (entry) => this.toolCallLog.push(entry),
           onToolComplete: callbacks.onToolComplete,
           onBeforeSpawn: () => this.persistToolStartedAtExecutorDispatch(action, meta),
@@ -4241,7 +4704,9 @@ export class ChatEngine {
       if ('command' in action && typeof action.command === 'string') {
         const classification = classifyShellCapability(action.type, action.command);
         if (classification.isRecursiveEnum) {
-          const capState = this.progressController.getCapabilityState('shell.recursive_enumeration');
+          const capState = this.progressController.getCapabilityState(
+            'shell.recursive_enumeration',
+          );
           if (capState === 'DEGRADED' || capState === 'UNAVAILABLE') {
             const observation = `### ${tool} ${target}\nexit_code: 1\n\`\`\`\n[BABEL ADVISORY] Recursive shell command suppressed: shell.recursive_enumeration is DEGRADED due to repeated failures. Use the list_dir / directory_list tool instead for reliable filesystem inspection.\n\`\`\``;
             this.toolCallLog.push({
@@ -4266,8 +4731,13 @@ export class ChatEngine {
       ) {
         const prior = this.verifierReceiptCache.get(target)?.receipt.exit_code ?? 3221225794;
         return logPlatformUnusableResult({
-          toolCallLog: this.toolCallLog, tool, target, exitCode: prior,
-          meta, toolId, callbacks,
+          toolCallLog: this.toolCallLog,
+          tool,
+          target,
+          exitCode: prior,
+          meta,
+          toolId,
+          callbacks,
         });
       }
 
@@ -4275,23 +4745,25 @@ export class ChatEngine {
       // and no writes have occurred since, return the cached receipt instead
       // of re-executing. This collapses repeated identical verifier runs.
       // Fatal Windows exits are not soft-cached: mark unusable and fail-fast.
-      if (
-        (action.type === 'run_command' || action.type === 'test_run') &&
-        target
-      ) {
+      if ((action.type === 'run_command' || action.type === 'test_run') && target) {
         const cachedVerifier = this.verifierReceiptCache.get(target);
         if (cachedVerifier && cachedVerifier.writeCountAtCache === this.writeCount) {
           if (isFatalWindowsProcessExit(cachedVerifier.receipt.exit_code)) {
             this.platformUnusableVerifiers.add(target);
             return logPlatformUnusableResult({
-              toolCallLog: this.toolCallLog, tool, target,
+              toolCallLog: this.toolCallLog,
+              tool,
+              target,
               exitCode: cachedVerifier.receipt.exit_code,
-              meta, toolId, callbacks,
+              meta,
+              toolId,
+              callbacks,
             });
           }
           this.dedupeHitCount++;
           this.toolCallLog.push({
-            tool, target,
+            tool,
+            target,
             detail: `cached receipt (exit ${cachedVerifier.receipt.exit_code})`,
             index: meta.index,
             exit_code: cachedVerifier.receipt.exit_code,
@@ -4344,7 +4816,9 @@ export class ChatEngine {
             ? { taskId: this.parity.liveAuthority.taskContract.contract_id }
             : {}),
           ...(this.parity.liveAuthority?.taskContract.protected_paths
-            ? { protectedPaths: this.parity.liveAuthority.taskContract.protected_paths }
+            ? {
+                protectedPaths: this.parity.liveAuthority.taskContract.protected_paths,
+              }
             : {}),
           ...(this.parity.authoritySession
             ? { authoritySession: this.parity.authoritySession }
@@ -4355,29 +4829,31 @@ export class ChatEngine {
           // remaining auto-approve exception. TTY is not authority.
           ...this.isolationBrokerFlags(),
           ...(classC === 'allow' ? { onAskApproval: async () => true } : {}),
-        }
+        },
       );
 
       if (result.mutationPaths && result.mutationPaths.length > 0) {
-          recordMutationBatch(this.parity.sessionEvents, this.parity.turnId ?? 'unknown', {
-            paths: result.mutationPaths,
-            pre_hash: Object.values(result.preBatchHash ?? {}).join(','),
-            post_hash: Object.values(result.postBatchHash ?? {}).join(','),
-            ...(result.mutationReceipt
-              ? {
-                  batch_id: result.mutationReceipt.batchId,
-                  starting_revision: result.mutationReceipt.startingRevision,
-                  ...(result.mutationReceipt.endingRevision ? { ending_revision: result.mutationReceipt.endingRevision } : {}),
-                  changed_bytes: result.mutationReceipt.changedBytes,
-                  status: result.mutationReceipt.status,
-                  pre_image_hashes: result.mutationReceipt.preImageHashes,
-                  post_image_hashes: result.mutationReceipt.postImageHashes,
-                }
-              : {}),
-          });
-        }
+        recordMutationBatch(this.parity.sessionEvents, this.parity.turnId ?? 'unknown', {
+          paths: result.mutationPaths,
+          pre_hash: Object.values(result.preBatchHash ?? {}).join(','),
+          post_hash: Object.values(result.postBatchHash ?? {}).join(','),
+          ...(result.mutationReceipt
+            ? {
+                batch_id: result.mutationReceipt.batchId,
+                starting_revision: result.mutationReceipt.startingRevision,
+                ...(result.mutationReceipt.endingRevision
+                  ? { ending_revision: result.mutationReceipt.endingRevision }
+                  : {}),
+                changed_bytes: result.mutationReceipt.changedBytes,
+                status: result.mutationReceipt.status,
+                pre_image_hashes: result.mutationReceipt.preImageHashes,
+                post_image_hashes: result.mutationReceipt.postImageHashes,
+              }
+            : {}),
+        });
+      }
 
-        const obsParts: string[] = [];
+      const obsParts: string[] = [];
       for (const r of result.results) {
         if (action.type === 'read_file') {
           const window = selectReadWindow(r.stdout ?? '', { kind: 'full' });
@@ -4399,10 +4875,16 @@ export class ChatEngine {
 
       const lastResult = result.results[result.results.length - 1];
       if (lastResult) {
-        if (lastResult.exit_code !== 0 || (lastResult.stdout.trim() === '' && lastResult.stderr.trim() !== '')) {
+        if (
+          lastResult.exit_code !== 0 ||
+          (lastResult.stdout.trim() === '' && lastResult.stderr.trim() !== '')
+        ) {
           const rec = this.progressController.recordFailure({
             tool: action.type,
-            commandSnippet: 'command' in action && typeof action.command === 'string' ? action.command : undefined,
+            commandSnippet:
+              'command' in action && typeof action.command === 'string'
+                ? action.command
+                : undefined,
             exitCode: lastResult.exit_code,
             emptyStdout: lastResult.stdout.trim() === '',
           });
@@ -4411,7 +4893,8 @@ export class ChatEngine {
           }
         } else if (lastResult.exit_code === 0) {
           this.progressController.recordSuccess('tool.' + action.type);
-          const cmd = 'command' in action && typeof action.command === 'string' ? action.command : undefined;
+          const cmd =
+            'command' in action && typeof action.command === 'string' ? action.command : undefined;
           const classification = classifyShellCapability(action.type, cmd);
           if (classification.isRecursiveEnum) {
             this.progressController.recordSuccess('shell.recursive_enumeration');
@@ -4432,7 +4915,11 @@ export class ChatEngine {
         detail,
         index: meta.index,
         ...(lastResult
-          ? { exit_code: lastResult.exit_code, stdout: lastResult.stdout, stderr: lastResult.stderr }
+          ? {
+              exit_code: lastResult.exit_code,
+              stdout: lastResult.stdout,
+              stderr: lastResult.stderr,
+            }
           : {}),
         ...(result.policyBlocked ? { error: 'blocked' as const } : {}),
         ...(result.mutationPaths && result.mutationPaths.length > 0
@@ -4447,7 +4934,7 @@ export class ChatEngine {
         callbacks?.onToolComplete?.(
           toolId,
           detail,
-          hasErr ? (lastResult?.stderr || 'failed') : undefined,
+          hasErr ? lastResult?.stderr || 'failed' : undefined,
           lastResult?.exit_code ?? 0,
         );
 
@@ -4467,7 +4954,12 @@ export class ChatEngine {
           });
           noteChatWorkspaceMutation(this as never);
           // Crash-safe: persist patch to recovery log
-          appendPatchRecovery(this.patchRecoveryPath ?? '', 'write_file', action.path, action.content);
+          appendPatchRecovery(
+            this.patchRecoveryPath ?? '',
+            'write_file',
+            action.path,
+            action.content,
+          );
         } else if (action.type === 'apply_patch' && !result.policyBlocked) {
           const { adds, dels } = countPatchStats(action.patch);
           const path = primaryPatchPath(action.patch);
@@ -4491,7 +4983,10 @@ export class ChatEngine {
         // shell action without paths is indeterminate and only invalidates prior
         // verifier evidence.
         if ((action.type === 'run_command' || action.type === 'test_run') && lastResult) {
-          const confirmedShellMutation = lastResult.exit_code === 0 && result.mutationPaths !== undefined && result.mutationPaths.length > 0;
+          const confirmedShellMutation =
+            lastResult.exit_code === 0 &&
+            result.mutationPaths !== undefined &&
+            result.mutationPaths.length > 0;
           if (confirmedShellMutation) {
             noteChatWorkspaceMutation(this as never);
           }
@@ -4501,16 +4996,26 @@ export class ChatEngine {
             this.platformUnusableVerifiers.add(target);
           }
           const receipt = await captureAndRecordVerifierReceipt({
-            projectRoot: this.options.projectRoot, command: target, exitCode: lastResult.exit_code,
+            projectRoot: this.options.projectRoot,
+            command: target,
+            exitCode: lastResult.exit_code,
             summary: formatVerifierReceiptSummary({
               verifierId: target,
               command: target,
               exitCode: lastResult.exit_code,
               stdout: lastResult.stdout,
               stderr: lastResult.stderr,
-            }), mutationPaths: mutationPathsFromSessionEvents(this.parity.sessionEvents.events),
-            sessionEvents: this.parity.sessionEvents, turnId: String(this.parity.turnId ?? this._turnIndex),
-            ledger: this.executedVerifierLedger, cache: this.verifierReceiptCache, writeCount: this.writeCount,
+            }),
+            mutationPaths: mutationPathsFromSessionEvents(this.parity.sessionEvents.events),
+            sessionEvents: this.parity.sessionEvents,
+            turnId: String(this.parity.turnId ?? this._turnIndex),
+            ledger: this.executedVerifierLedger,
+            cache: this.verifierReceiptCache,
+            writeCount: this.writeCount,
+            toolCallId:
+              meta.idempotencyKey ??
+              this._streamNativeToolCallIds[meta.index] ??
+              `tool_call_${this._turnIndex}_${meta.index}`,
           });
           if (receipt) {
             this.lastVerifierReceipt = receipt;
@@ -4531,7 +5036,12 @@ export class ChatEngine {
         }
 
         // B2: Update read cache after successful read_file execution
-        if (action.type === 'read_file' && lastResult && lastResult.exit_code === 0 && fileReadCacheHash) {
+        if (
+          action.type === 'read_file' &&
+          lastResult &&
+          lastResult.exit_code === 0 &&
+          fileReadCacheHash
+        ) {
           const pathKey = this.readCacheKey(action.path);
           rememberFullReadWindow(
             this.readCache,
@@ -4552,10 +5062,15 @@ export class ChatEngine {
       }
 
       // R3a: Post-edit static check after successful write/apply_patch
-      if ((action.type === 'write_file' || action.type === 'apply_patch') && !result.policyBlocked && lastResult?.exit_code === 0) {
-        const editPath = action.type === 'write_file'
-          ? (action as any).path
-          : primaryPatchPath((action as any).patch);
+      if (
+        (action.type === 'write_file' || action.type === 'apply_patch') &&
+        !result.policyBlocked &&
+        lastResult?.exit_code === 0
+      ) {
+        const editPath =
+          action.type === 'write_file'
+            ? (action as any).path
+            : primaryPatchPath((action as any).patch);
         if (editPath) {
           const staticResult = await this.runPostEditStaticCheck(editPath);
           if (staticResult) {
@@ -4579,7 +5094,12 @@ export class ChatEngine {
         index: meta.index,
         exit_code: 1,
       });
-      callbacks?.onToolComplete?.(toolId, 'error', err instanceof Error ? err.message : String(err), 1);
+      callbacks?.onToolComplete?.(
+        toolId,
+        'error',
+        err instanceof Error ? err.message : String(err),
+        1,
+      );
       return {
         index: meta.index,
         observation: `### ${tool} ${target}\nError: ${err instanceof Error ? err.message : String(err)}`,
@@ -4587,7 +5107,8 @@ export class ChatEngine {
     } finally {
       const toolEnd = performance.now();
       const lastEntry = this.toolCallLog[this.toolCallLog.length - 1];
-      const success = !lastEntry?.error && (lastEntry?.exit_code === 0 || lastEntry?.exit_code === undefined);
+      const success =
+        !lastEntry?.error && (lastEntry?.exit_code === 0 || lastEntry?.exit_code === undefined);
       this.currentTurnTelemetry?.recordToolSpan(
         tool,
         target,
@@ -4622,9 +5143,10 @@ export class ChatEngine {
 
       // Tools whose output content the model needs to ingest
       if (entry.stdout && ['read_file', 'grep', 'glob', 'list_dir'].includes(entry.tool)) {
-        const truncated = entry.stdout.length > 3000
-          ? entry.stdout.slice(0, 3000) + '\n... [truncated]'
-          : entry.stdout;
+        const truncated =
+          entry.stdout.length > 3000
+            ? entry.stdout.slice(0, 3000) + '\n... [truncated]'
+            : entry.stdout;
         parts.push(`[RESULT] ${entry.tool}:${entry.target}\n${truncated}`);
         continue;
       }
@@ -4677,35 +5199,73 @@ export class ChatEngine {
       const modelId = this.modelPolicy?.providerModelId;
       const offline = isOfflineChatMode();
       if (provider === 'ollama' && modelId) {
-        if (!offline) throw new Error('[LIVE_MODEL_POLICY] Ollama is not a valid live chat provider.');
+        if (!offline)
+          throw new Error('[LIVE_MODEL_POLICY] Ollama is not a valid live chat provider.');
         try {
           this.synthesisRunner = new OllamaApiRunner(modelId);
         } catch {
           this.synthesisRunner = new DeepInfraApiRunner(resolveFallbackModelId());
         }
       } else if (provider === 'deepseek' && modelId) {
+        if (!offline) {
+          throw new Error(
+            '[LIVE_MODEL_POLICY] Direct DeepSeek live calls are disabled; use the OpenRouter DeepSeek control route.',
+          );
+        }
         try {
           this.synthesisRunner = new DeepSeekApiRunner(modelId);
         } catch {
-          if (!offline) throw new Error('Cannot start live chat synthesis: DeepSeek runner is unavailable. Set DEEPSEEK_API_KEY in your environment.');
+          if (!offline)
+            throw new Error(
+              'Cannot start live chat synthesis: DeepSeek runner is unavailable. Set DEEPSEEK_API_KEY in your environment.',
+            );
           this.synthesisRunner = new DeepInfraApiRunner(resolveFallbackModelId());
         }
       } else if (provider === 'opencode' && modelId) {
         this.synthesisRunner = new OpenCodeApiRunner(modelId);
+      } else if (provider === 'openrouter' && modelId) {
+        try {
+          this.synthesisRunner = new OpenRouterApiRunner(modelId);
+        } catch {
+          throw new Error(
+            'Cannot start live chat synthesis: OpenRouter runner is unavailable. Set OPENROUTER_API_KEY in your environment.',
+          );
+        }
       } else if (modelId) {
-        if (!offline) assertDeepSeekLiveModelId(modelId, 'live chat synthesis');
-        this.synthesisRunner = offline ? new DeepInfraApiRunner(modelId) : new DeepSeekApiRunner(modelId);
+        if (!offline) {
+          assertLiveModelId(modelId, 'live chat synthesis');
+          const routedModel = resolveOpenRouterDeepSeekModelId(modelId);
+          if (!routedModel) {
+            throw new Error(
+              '[LIVE_MODEL_POLICY] Live chat synthesis requires an OpenRouter-approved model route.',
+            );
+          }
+          this.synthesisRunner = new OpenRouterApiRunner(routedModel);
+        } else {
+          this.synthesisRunner = new DeepInfraApiRunner(modelId);
+        }
       } else {
-        this.synthesisRunner = offline ? new DeepInfraApiRunner(resolveFallbackModelId()) : new DeepSeekApiRunner('deepseek-v4-flash');
+        this.synthesisRunner = offline
+          ? new DeepInfraApiRunner(resolveFallbackModelId())
+          : new OpenRouterApiRunner(LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0]);
       }
     }
 
     const runnerCallbacks: RunnerCallbacks | undefined = callbacks.onAnswerChunk
       ? {
+          ...this.providerRetryCallbacks({
+            deliveryMode: 'text',
+            conversationState: prompt,
+            executionStage: 'synthesis',
+          }),
           onChunk: callbacks.onAnswerChunk,
           ...(callbacks.onThought ? { onThought: callbacks.onThought } : {}),
         }
-      : undefined;
+      : this.providerRetryCallbacks({
+          deliveryMode: 'text',
+          conversationState: prompt,
+          executionStage: 'synthesis',
+        });
     const answer = await this.executeWithTimeout(this.synthesisRunner, prompt, runnerCallbacks);
     this.trackRunnerUsage(this.synthesisRunner);
     return answer;
@@ -4713,7 +5273,9 @@ export class ChatEngine {
 
   /** Record token usage from a runner invocation into the global cost tracker.
    *  #12: Also accumulates API-reported token counts for accurate estimation. */
-  private trackRunnerUsage(runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner): void {
+  private trackRunnerUsage(
+    runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner,
+  ): void {
     const metadata = runner.getLastInvocationMetadata?.();
     if (
       metadata?.provider_model_id &&
@@ -4745,15 +5307,16 @@ export class ChatEngine {
 
       // Tier A3: Push per-turn routing receipt
       pushRoutingReceiptFromMetadata(
-        this.routingReceiptLog, this._turnIndex, this._lastPhase, metadata,
+        this.routingReceiptLog,
+        this._turnIndex,
+        this._lastPhase,
+        metadata,
       );
     }
   }
 
   /** H1 compaction: delegates to runChatEngineCompaction (atomic commit path). */
-  private async compactIfNeeded(
-    callbacks?: ChatCallbacks,
-  ): Promise<ContextCompactedInfo | null> {
+  private async compactIfNeeded(callbacks?: ChatCallbacks): Promise<ContextCompactedInfo | null> {
     const host: import('./compactionCommit.js').ChatEngineCompactionHost = {
       conversation: this.conversation,
       options: this.options,
@@ -4763,13 +5326,15 @@ export class ChatEngine {
       writeCount: this.writeCount,
       turnIndex: this._turnIndex,
       toolCallLog: this.toolCallLog,
-      ...(this.lastVerifierReceipt
-        ? { lastVerifierReceipt: this.lastVerifierReceipt }
-        : {}),
+      ...(this.lastVerifierReceipt ? { lastVerifierReceipt: this.lastVerifierReceipt } : {}),
       progress: this.parity.progress,
       threadLog: this.parity.eventLog,
       sessionLog: this.parity.sessionEvents,
       turnId: this.parity.turnId,
+      providerCallbacks: this.providerRetryCallbacks({
+        deliveryMode: this.shouldUseTextTools() ? 'text' : 'native',
+        executionStage: 'compaction',
+      }),
       shouldUseTextTools: () => this.shouldUseTextTools(),
       compactHeuristic: () => {
         this.compactConversation();
@@ -4887,6 +5452,11 @@ export class ChatEngine {
           );
         }
       } else if (provider === 'deepseek' && modelId) {
+        if (!isOfflineChatMode()) {
+          throw new Error(
+            '[LIVE_MODEL_POLICY] Direct DeepSeek live calls are disabled; use the OpenRouter DeepSeek control route.',
+          );
+        }
         try {
           this.deliberationRunner = new DeepSeekApiRunner(modelId);
         } catch (err) {
@@ -4921,23 +5491,50 @@ export class ChatEngine {
               `  Use /model to see available providers.`,
           );
         }
+      } else if (provider === 'openrouter' && modelId) {
+        try {
+          this.deliberationRunner = new OpenRouterApiRunner(modelId);
+        } catch (err) {
+          throw new Error(
+            `Cannot start chat: OpenRouter runner failed to initialize.\n` +
+              `  ${err instanceof Error ? err.message : String(err)}\n` +
+              `  Set OPENROUTER_API_KEY in your environment.\n` +
+              `  Use /model to see available models.`,
+          );
+        }
       } else if (modelId) {
         const offline = isOfflineChatMode();
-        if (!offline) assertDeepSeekLiveModelId(modelId, 'live chat');
+        if (!offline) {
+          assertLiveModelId(modelId, 'live chat');
+          const routedModel = resolveOpenRouterDeepSeekModelId(modelId);
+          if (!routedModel) {
+            throw new Error(
+              '[LIVE_MODEL_POLICY] Live chat requires an OpenRouter-approved model route.',
+            );
+          }
+          this.deliberationRunner = new OpenRouterApiRunner(routedModel);
+          return this.deliberationRunner;
+        }
         try {
-          this.deliberationRunner = offline ? new DeepInfraApiRunner(modelId) : new DeepSeekApiRunner(modelId);
+          this.deliberationRunner = offline
+            ? new DeepInfraApiRunner(modelId)
+            : new DeepSeekApiRunner(modelId);
         } catch (err) {
-          throw new Error(`Cannot start chat: ${offline ? 'DeepInfra' : 'DeepSeek'} runner failed to initialize.\n  ${err instanceof Error ? err.message : String(err)}\n  Set ${offline ? 'DEEPINFRA_API_KEY' : 'DEEPSEEK_API_KEY'} in your environment.\n  Use /model to see available providers.`);
+          throw new Error(
+            `Cannot start chat: ${offline ? 'DeepInfra' : 'DeepSeek'} runner failed to initialize.\n  ${err instanceof Error ? err.message : String(err)}\n  Set ${offline ? 'DEEPINFRA_API_KEY' : 'DEEPSEEK_API_KEY'} in your environment.\n  Use /model to see available providers.`,
+          );
         }
       } else {
         // No model configured — resolve from policy default tier.
         const fallbackId = resolveFallbackModelId();
         try {
-          this.deliberationRunner = new DeepSeekApiRunner(isOfflineChatMode() ? fallbackId : 'deepseek-v4-flash');
+          this.deliberationRunner = isOfflineChatMode()
+            ? new DeepSeekApiRunner(fallbackId)
+            : new OpenRouterApiRunner(LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0]);
         } catch {
           if (!isOfflineChatMode()) {
             throw new Error(
-              'Cannot start live chat: DeepSeek runner is unavailable. Set DEEPSEEK_API_KEY in your environment.',
+              'Cannot start live chat: OpenRouter DeepSeek runner is unavailable. Set OPENROUTER_API_KEY in your environment.',
             );
           }
           try {
@@ -4962,29 +5559,209 @@ export class ChatEngine {
    * and the Promise.race rejects with a descriptive error.
    */
   /** Persist provider retry facts without exposing provider payloads in durable state. */
-  private providerRetryCallbacks(): RunnerCallbacks {
+  private providerRetryCallbacks(context: {
+    deliveryMode?: ContextDeliveryMode;
+    conversationState?: unknown;
+    systemPolicyPrompt?: unknown;
+    userTaskPrompt?: unknown;
+    toolSchema?: unknown;
+    promptInputTokenCount?: number | null;
+    contextTruncated?: boolean | null;
+    expectedPriorEventIds?: readonly string[];
+    deliveredPriorEventIds?: readonly string[];
+    executionStage?: ModelRouteStage;
+    contractRef?: string;
+    substitutionOrFallback?: boolean;
+  } = {}): RunnerCallbacks {
+    let startedInvocation: ProviderInvocationStarted | null = null;
+    let retryCount = 0;
     return {
-      onRetry: (event) => {
-        parityRecordProviderRetry(this.parity, {
+      onInvocationStarted: (event) => {
+        if (!this.parity.turnId) return;
+        startedInvocation = event;
+        retryCount = 0;
+        const derivedExpectedPriorEventIds = this.parity.sessionEvents.events
+          .filter(
+            (prior) =>
+              prior.kind === 'tool_completed' ||
+              prior.kind === 'tool_failed' ||
+              prior.kind === 'tool_cancelled',
+          )
+          .map((prior) => prior.tool_call_id);
+        const compactionEvents = this.parity.sessionEvents.events.filter(
+          (prior) =>
+            prior.kind === 'compaction_summary' ||
+            prior.kind === 'compaction_committed',
+        );
+        const expectedPriorEventIds = context.expectedPriorEventIds ?? derivedExpectedPriorEventIds;
+        const deliveredPriorEventIds =
+          context.deliveredPriorEventIds ??
+          event.delivered_tool_call_ids ??
+          (context.deliveryMode === 'text' ? expectedPriorEventIds : undefined);
+        const contextManifest = buildContextManifest({
+          inferenceId: event.inference_id,
+          conversationState: context.conversationState ?? this.conversation,
+          systemPolicyPrompt: context.systemPolicyPrompt,
+          userTaskPrompt: context.userTaskPrompt ?? this.options.task,
+          toolSchema: context.toolSchema,
+          expectedPriorEventIds,
+          ...(deliveredPriorEventIds !== undefined
+            ? { deliveredPriorEventIds }
+            : {}),
+          deliveryMode:
+            context.deliveryMode ??
+            (event.delivered_tool_call_ids !== undefined ? 'native' : 'unknown'),
+          compactionOccurred: compactionEvents.length > 0,
+          compactionInputState: compactionEvents.map((compaction) => ({
+            operation_id: compaction.operation_id,
+            kind: compaction.kind,
+          })),
+          preservedEventIds: compactionEvents.flatMap(
+            (compaction) => compaction.preserved_tool_call_ids,
+          ),
+          promptInputTokenCount: context.promptInputTokenCount ?? null,
+          contextTruncated: context.contextTruncated ?? null,
+        });
+        const routeReceipt = buildModelRouteReceipt({
+          projectRef: hashRouteReference(this.options.projectRoot),
+          taskRef: hashRouteReference(this.options.task),
+          runRef: this.engineRunDir,
+          contractRef: context.contractRef ?? 'chat',
+          inferenceId: event.inference_id,
+          executionStage: context.executionStage ?? 'chat',
+          requestedModelSelector: event.requested_model_id,
+          normalizedBabelModel: event.normalized_model_id,
+          provider: event.provider,
+          exactModelIdSent: event.sent_model_id,
+          observedModelId: null,
+          upstreamProvider: null,
+          substitutionOrFallback: context.substitutionOrFallback ?? false,
+        });
+        recordModelInputReceipt(this.parity.sessionEvents, {
+          turn_id: this.parity.turnId,
+          inference_id: event.inference_id,
+          provider: event.provider,
+          requested_model_id: event.requested_model_id,
+          normalized_model_id: event.normalized_model_id,
+          sent_model_id: event.sent_model_id,
+          input_digest: event.input_digest,
+          input_ref: join(this.engineRunDir, 'thread_events.json'),
+          ...(event.input_message_count !== undefined
+            ? { input_message_count: event.input_message_count }
+            : {}),
+          ...(event.delivered_tool_call_ids !== undefined
+            ? { delivered_tool_call_ids: [...event.delivered_tool_call_ids] }
+            : {}),
+          context_manifest: contextManifest,
+          route_receipt: routeReceipt,
+        });
+        for (const capability of event.capability_bindings ?? []) {
+          recordCapabilityBindingReceipt(this.parity.sessionEvents, {
+            turn_id: this.parity.turnId,
+            inference_id: event.inference_id,
+            provider: event.provider,
+            capability: capability.capability,
+            advertised: capability.advertised,
+            authorized: capability.authorized,
+            effective: capability.effective,
+            ...(capability.evidence_ref !== undefined
+              ? { evidence_ref: capability.evidence_ref }
+              : {}),
+          });
+        }
+        checkpointParityEventLog(this.parity, this.engineRunDir);
+      },
+      onInvocationCompleted: (event) => {
+        if (!this.parity.turnId) return;
+        const observedRouteReceipt = startedInvocation
+          ? buildModelRouteReceipt({
+              projectRef: hashRouteReference(this.options.projectRoot),
+              taskRef: hashRouteReference(this.options.task),
+              runRef: this.engineRunDir,
+              contractRef: context.contractRef ?? 'chat',
+              inferenceId: event.inference_id,
+              executionStage: context.executionStage ?? 'chat',
+              requestedModelSelector: startedInvocation.requested_model_id,
+              normalizedBabelModel: startedInvocation.normalized_model_id,
+              provider: startedInvocation.provider,
+              exactModelIdSent: startedInvocation.sent_model_id,
+              observedModelId: event.observed_model_id ?? null,
+              upstreamProvider: event.upstream_provider ?? null,
+              retryCount,
+              substitutionOrFallback: context.substitutionOrFallback ?? false,
+            })
+          : undefined;
+        recordModelResultDelivery(this.parity.sessionEvents, {
+          turn_id: this.parity.turnId,
+          inference_id: event.inference_id,
           provider: event.provider,
           model: event.model,
-          attempt: event.attempt,
-          reason: event.reason,
-          backoffMs: event.backoff_ms,
-        }, this.engineRunDir);
+          status: event.status,
+          ...(event.observed_model_id !== undefined
+            ? { observed_model_id: event.observed_model_id }
+            : {}),
+          ...(event.upstream_provider !== undefined
+            ? { upstream_provider: event.upstream_provider }
+            : {}),
+          ...(event.output_digest !== undefined ? { output_digest: event.output_digest } : {}),
+          ...(observedRouteReceipt ? { route_receipt: observedRouteReceipt } : {}),
+        });
+        checkpointParityEventLog(this.parity, this.engineRunDir);
+      },
+      onProviderFailure: (receipt) => {
+        if (!this.parity.turnId || !startedInvocation) return;
+        recordProviderFailureReceipt(this.parity.sessionEvents, {
+          turn_id: this.parity.turnId,
+          inference_id: startedInvocation.inference_id,
+          provider: startedInvocation.provider,
+          model: startedInvocation.sent_model_id,
+          receipt,
+        });
+        checkpointParityEventLog(this.parity, this.engineRunDir);
+      },
+      onInvocationPhase: (event) => {
+        if (!this.parity.turnId) return;
+        recordModelInvocationPhase(this.parity.sessionEvents, {
+          turn_id: this.parity.turnId,
+          inference_id: event.inference_id,
+          provider: event.provider,
+          model: event.model,
+          phase: event.phase,
+          ...(event.status_code !== undefined ? { status_code: event.status_code } : {}),
+          ...(event.detail !== undefined ? { detail: event.detail } : {}),
+        });
+        checkpointParityEventLog(this.parity, this.engineRunDir);
+      },
+      onRetry: (event) => {
+        retryCount += 1;
+        parityRecordProviderRetry(
+          this.parity,
+          {
+            provider: event.provider,
+            model: event.model,
+            attempt: event.attempt,
+            reason: event.reason,
+            backoffMs: event.backoff_ms,
+          },
+          this.engineRunDir,
+        );
       },
       onRetrySettled: (event) => {
-        paritySettleProviderRetry(this.parity, {
-          provider: event.provider,
-          model: event.model,
-          attempt: event.attempt,
-          outcome: event.outcome,
-        }, this.engineRunDir);
+        paritySettleProviderRetry(
+          this.parity,
+          {
+            provider: event.provider,
+            model: event.model,
+            attempt: event.attempt,
+            outcome: event.outcome,
+          },
+          this.engineRunDir,
+        );
       },
     };
   }
   private async executeWithTimeout(
-    runner: DeepInfraApiRunner | DeepSeekApiRunner,
+    runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner,
     prompt: string,
     callbacks: RunnerCallbacks | undefined,
     systemPrompt?: string,
@@ -5022,13 +5799,38 @@ export class ChatEngine {
     }
   }
 
-  private resolveFallbackRunner(): DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | null {
-    if (!this.options.fallbackModel) return null;
-    if (!isOfflineChatMode()) {
-      assertDeepSeekLiveModelId(this.options.fallbackModel, 'live chat fallback');
+  private resolveFallbackRunner():
+    | DeepInfraApiRunner
+    | DeepSeekApiRunner
+    | OllamaApiRunner
+    | OpenRouterApiRunner
+    | null {
+    if (
+      !isOfflineChatMode() &&
+      this.modelPolicy?.provider === 'openrouter' &&
+      this.modelPolicy.providerModelId
+    ) {
       if (!this.fallbackRunner) {
         try {
-          this.fallbackRunner = new DeepSeekApiRunner(this.options.fallbackModel);
+          // Campaign invariant: an exact GLM run may retry the same model, but
+          // may not silently fail over to a different provider/model.
+          this.fallbackRunner = new OpenRouterApiRunner(this.modelPolicy.providerModelId);
+        } catch {
+          return null;
+        }
+      }
+      return this.fallbackRunner;
+    }
+    if (!this.options.fallbackModel) return null;
+    if (!isOfflineChatMode()) {
+      assertLiveModelId(this.options.fallbackModel, 'live chat fallback');
+      const routedModel = resolveOpenRouterDeepSeekModelId(this.options.fallbackModel);
+      if (!routedModel) {
+        return null;
+      }
+      if (!this.fallbackRunner) {
+        try {
+          this.fallbackRunner = new OpenRouterApiRunner(routedModel);
         } catch {
           return null;
         }
@@ -5107,11 +5909,20 @@ export class ChatEngine {
       const systemPrompt = this.getOrBuildSystemPrompt('native');
 
       for await (const event of runner.executeWithToolsStream(
-        Array.isArray(promptOrMessages) ? promptOrMessages : [{ role: 'user', content: promptOrMessages }] as ProviderMessage[],
+        Array.isArray(promptOrMessages)
+          ? promptOrMessages
+          : ([{ role: 'user', content: promptOrMessages }] as ProviderMessage[]),
         toolDefs,
         systemPrompt,
         this.abortController.signal,
         restrictTools ? 'required' : 'auto',
+        this.providerRetryCallbacks({
+          deliveryMode: 'native',
+          conversationState: promptOrMessages,
+          systemPolicyPrompt: systemPrompt,
+          toolSchema: toolDefs,
+          executionStage: 'chat',
+        }),
       )) {
         switch (event.type) {
           case 'text_delta':
@@ -5149,7 +5960,17 @@ export class ChatEngine {
     // ── Text-tools path — simplified format for small local models ──────────
     if (this.shouldUseTextTools()) {
       const systemPrompt = this.getOrBuildSystemPrompt('text');
-      const rawText = await this.executeWithTimeout(runner, promptOrMessages as string, undefined, systemPrompt);
+      const rawText = await this.executeWithTimeout(
+        runner,
+        promptOrMessages as string,
+        this.providerRetryCallbacks({
+          deliveryMode: 'text',
+          conversationState: promptOrMessages,
+          systemPolicyPrompt: systemPrompt,
+          executionStage: 'chat',
+        }),
+        systemPrompt,
+      );
       const turn = parseTextToolTurn(rawText);
       this.trackRunnerUsage(runner);
       return turn;
@@ -5157,8 +5978,13 @@ export class ChatEngine {
 
     let streamedChunks = '';
     let looksLikeJson = false;
-    const deliberationCallbacks =
-      callbacks.onThought || callbacks.onAnswerChunk
+    const deliberationCallbacks: RunnerCallbacks = {
+      ...this.providerRetryCallbacks({
+        deliveryMode: 'text',
+        conversationState: promptOrMessages,
+        executionStage: 'chat',
+      }),
+      ...(callbacks.onThought || callbacks.onAnswerChunk
         ? {
             onChunk: (chunk: string) => {
               streamedChunks += chunk;
@@ -5173,12 +5999,19 @@ export class ChatEngine {
               }
             },
             ...(callbacks.onThought
-              ? { onThought: (thought: string) => callbacks.onThought?.(thought) }
+              ? {
+                  onThought: (thought: string) => callbacks.onThought?.(thought),
+                }
               : {}),
           }
-        : undefined;
+        : {}),
+    };
 
-    const rawText = await this.executeWithTimeout(runner, promptOrMessages as string, deliberationCallbacks);
+    const rawText = await this.executeWithTimeout(
+      runner,
+      promptOrMessages as string,
+      deliberationCallbacks,
+    );
     this.trackRunnerUsage(runner);
     return this.parseChatTurnLenient(rawText);
   }
@@ -5194,7 +6027,11 @@ export class ChatEngine {
   private async *resolveFallbackOrFail(
     err: any,
     turn: number,
-  ): AsyncGenerator<ChatEvent, DeepInfraApiRunner | DeepSeekApiRunner | null, undefined> {
+  ): AsyncGenerator<
+    ChatEvent,
+    DeepInfraApiRunner | DeepSeekApiRunner | OpenRouterApiRunner | null,
+    undefined
+  > {
     const cancelled = this.emitCancelledIfOperatorAbort(err);
     if (cancelled) {
       yield cancelled;
@@ -5207,9 +6044,27 @@ export class ChatEngine {
     // Runtime Pro → Flash failover with visible reason (not verification)
     const modelId = this.options.model ?? 'deepseek-v4-pro';
     const decision = parityTryFailover(this.parity, modelId, err);
+    const exactGlmLocked =
+      this.modelPolicy?.provider === 'openrouter' &&
+      this.modelPolicy.providerModelId === LIVE_OPENROUTER_MODEL_ID;
+    if (exactGlmLocked && decision) {
+      // The exact GLM campaign is provider/model locked. A generic Pro→Flash
+      // decision must never cross that boundary into DeepSeek.
+      yield this.streamFailed(
+        `${err.message} [LIVE_MODEL_POLICY] exact GLM route refuses provider substitution`,
+      );
+      return null;
+    }
     let fb = this.resolveFallbackRunner();
     if (!fb && decision) {
-      fb = new DeepSeekApiRunner(decision.toModel);
+      const routedModel = resolveOpenRouterDeepSeekModelId(decision.toModel);
+      if (!routedModel) {
+        yield this.streamFailed(
+          `${err.message} [LIVE_MODEL_POLICY] failover route is not OpenRouter-approved`,
+        );
+        return null;
+      }
+      fb = new OpenRouterApiRunner(routedModel);
       this.fallbackRunner = fb;
       this.policyEventLog.record({
         at_turn: this._turnIndex,
@@ -5233,9 +6088,7 @@ export class ChatEngine {
     }
     yield {
       type: 'thought',
-      text: decision
-        ? `[Failover] ${decision.reason}`
-        : 'Retrying with fallback model…',
+      text: decision ? `[Failover] ${decision.reason}` : 'Retrying with fallback model…',
     };
     return fb;
   }
@@ -5315,7 +6168,15 @@ export class ChatEngine {
     return warning;
   }
 
-  private applyTamperEscalation(): string | null { return applyTamperEscalationFn({ tamperedThisTurn: this.tamperedThisTurn, tamperCount: this.tamperCount }, this.stallState); }
+  private applyTamperEscalation(): string | null {
+    return applyTamperEscalationFn(
+      {
+        tamperedThisTurn: this.tamperedThisTurn,
+        tamperCount: this.tamperCount,
+      },
+      this.stallState,
+    );
+  }
 
   private buildVerifierBlockedReport(reason: string): BlockedReport {
     return {
@@ -5327,7 +6188,9 @@ export class ChatEngine {
     };
   }
 
-  private hashContent(content: string): string { return hashContentFn(content); }
+  private hashContent(content: string): string {
+    return hashContentFn(content);
+  }
 
   private async hashFilePath(filePath: string): Promise<string> {
     try {
@@ -5341,14 +6204,18 @@ export class ChatEngine {
 
   /** B4: Resolve runner with phase-aware model routing.
    *  Model-name resolution extracted to phaseModelRouting.ts for testability. */
-  private resolveRoutedRunner(): DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner {
+  private resolveRoutedRunner():
+    | DeepInfraApiRunner
+    | DeepSeekApiRunner
+    | OllamaApiRunner
+    | OpenRouterApiRunner {
     const modelName = resolvePhaseModelName(this._lastPhase, {
       investigateModel: this.limits.investigateModel,
       mutateModel: this.limits.mutateModel,
     });
     if (!modelName) return this.resolveDeliberationRunner();
     if (!isOfflineChatMode()) {
-      assertDeepSeekLiveModelId(modelName, 'live chat phase routing');
+      assertLiveModelId(modelName, 'live chat phase routing');
     }
     const isInvestigate = !this._lastPhase || this._lastPhase === 'investigate';
     if (isInvestigate) {
@@ -5394,7 +6261,28 @@ export class ChatEngine {
     }
   }
 
-  private detectAndBuildBlockedReport(answer: string): BlockedReport | null { return detectBlockedReportFromAnswer(answer, this.toolCallLog); }
+  private detectAndBuildBlockedReport(answer: string): BlockedReport | null {
+    return detectBlockedReportFromAnswer(answer, this.toolCallLog);
+  }
+
+  /** Persist exactly one authoritative completion decision for this turn. */
+  private recordCompletionDecisionOnce(decision: {
+    requestedOutcome: string;
+    finalOutcome: string;
+    allowed: boolean;
+    reason: string;
+    evidenceRefs: string[];
+    policyVersion: string;
+  }): void {
+    const turnId = String(this.parity.turnId ?? this._turnIndex);
+    if (
+      this.parity.sessionEvents.events.some(
+        (event) => event.kind === 'completion_decision' && event.turn_id === turnId,
+      )
+    )
+      return;
+    recordCompletionDecision(this.parity.sessionEvents, turnId, decision);
+  }
 
   private buildResult(
     status: ChatResult['status'],
@@ -5406,14 +6294,23 @@ export class ChatEngine {
     // provided (e.g., the detection ran in a code path that didn't provide it),
     // promote the status to 'blocked' and generate the report here.
     const hasBlocked = !!(answer && /\bBLOCKED\b/.test(answer));
-    const finalStatus = (status === 'completed' || status === 'failed') && hasBlocked
-      ? 'blocked' as const
-      : status;
-    const finalBlockedReport = (finalStatus === 'blocked' && !blockedReport)
-      ? this.detectAndBuildBlockedReport(answer ?? '')
-      : blockedReport;
+    const finalStatus =
+      (status === 'completed' || status === 'failed') && hasBlocked ? ('blocked' as const) : status;
+    const finalBlockedReport =
+      finalStatus === 'blocked' && !blockedReport
+        ? this.detectAndBuildBlockedReport(answer ?? '')
+        : blockedReport;
 
-    if (this.cachedSystemPromptNative) stashEngineFingerprint(this.engineRunId, buildPromptFingerprint({ systemPrompt: this.cachedSystemPromptNative, taskClass: this.taskClass, tune: getChatTaskTune(this.taskClass), playbookId: this.activePlaybook?.id ?? null }));
+    if (this.cachedSystemPromptNative)
+      stashEngineFingerprint(
+        this.engineRunId,
+        buildPromptFingerprint({
+          systemPrompt: this.cachedSystemPromptNative,
+          taskClass: this.taskClass,
+          tune: getChatTaskTune(this.taskClass),
+          playbookId: this.activePlaybook?.id ?? null,
+        }),
+      );
 
     // Compute truthful TerminalOutcome from status and runtime state.
     const hasMutation = this.hasAnyWrites();
@@ -5424,15 +6321,25 @@ export class ChatEngine {
       blockedReport: finalBlockedReport,
       hasAnyWrites: hasMutation,
     });
-    outcome = applyHonestTaskOutcomeToCompletion({ contract: this.parity.liveAuthority?.taskContract, requestedOutcome: outcome, hasMutation, planMode: this.executionProfile === 'plan' });
+    outcome = applyHonestTaskOutcomeToCompletion({
+      contract: this.parity.liveAuthority?.taskContract,
+      requestedOutcome: outcome,
+      hasMutation,
+      planMode: this.executionProfile === 'plan',
+    });
     const planCompletion = this.executionProfile === 'plan' && finalStatus === 'completed';
-    const kernelDecision = this.decideCompletion(planCompletion ? 'PLAN_COMPLETE' : outcome, hasMutation);
+    const kernelDecision = this.decideCompletion(
+      planCompletion ? 'PLAN_COMPLETE' : outcome,
+      hasMutation,
+    );
     const authoritativeOutcome: TerminalOutcome =
       kernelDecision && kernelDecision.finalOutcome !== 'PLAN_COMPLETE'
         ? kernelDecision.finalOutcome
-        : planCompletion ? 'UNVERIFIED_PATCH' : outcome;
+        : planCompletion
+          ? 'UNVERIFIED_PATCH'
+          : outcome;
     if (kernelDecision) {
-      recordCompletionDecision(this.parity.sessionEvents, String(this.parity.turnId ?? this._turnIndex), {
+      this.recordCompletionDecisionOnce({
         requestedOutcome: kernelDecision.requestedOutcome,
         finalOutcome: authoritativeOutcome,
         allowed: kernelDecision.allowed,
@@ -5469,7 +6376,9 @@ export class ChatEngine {
     const result: ChatResult = {
       status: finalStatus,
       outcome: authoritativeOutcome,
-      ...(kernelDecision?.finalOutcome === 'PLAN_COMPLETE' ? { planOutcome: 'PLAN_COMPLETE' as const } : {}),
+      ...(kernelDecision?.finalOutcome === 'PLAN_COMPLETE'
+        ? { planOutcome: 'PLAN_COMPLETE' as const }
+        : {}),
       answer: answer ?? '',
       usage: globalCostTracker.getSessionSummary(),
       lastRequestPromptTokens: this.lastRequestPromptTokens,
@@ -5519,7 +6428,9 @@ export class ChatEngine {
             ? `${this.lastVerifierReceipt.command} → exit ${this.lastVerifierReceipt.exit_code}`
             : null,
         });
-      } catch { /* write-back must never fail the turn */ }
+      } catch {
+        /* write-back must never fail the turn */
+      }
     }
 
     return result;

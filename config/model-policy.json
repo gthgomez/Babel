@@ -92,6 +92,67 @@
       "enabled": true,
       "selection_reason": "Backend mapping for the documented Qwen runner."
     },
+    "glm-5.3-flash": {
+      "provider": "openrouter",
+      "model_id": "z-ai/glm-5.3-flash",
+      "tier": "standard",
+      "context_window": 1310720,
+      "max_output_tokens": 131072,
+      "estimated_cost_per_1m_input": 0.075,
+      "estimated_cost_per_1m_output": 0.25,
+      "source_url": "https://openrouter.ai/api/v1/models",
+      "verified_at": "2026-08-26",
+      "expires_at": "2026-11-26",
+      "enabled": true,
+      "experimental": true,
+      "native_tool_use": true,
+      "capabilities": [
+        "coding",
+        "reasoning",
+        "fast"
+      ],
+      "selection_reason": "Explicit experimental live-reliability campaign route for the exact z-ai/glm-5.3-flash model via OpenRouter.",
+      "notes": [
+        "Not a default family or stage route.",
+        "Do not substitute another provider or model when this backend is requested."
+      ]
+    },
+    "deepseek-v4-flash-openrouter": {
+      "provider": "openrouter",
+      "model_id": "deepseek/deepseek-v4-flash-0731",
+      "tier": "cheap",
+      "enabled": true,
+      "experimental": true,
+      "context_window": 1310720,
+      "max_output_tokens": 131072,
+      "estimated_cost_per_1m_input": 0.03,
+      "estimated_cost_per_1m_output": 0.1,
+      "source_url": "https://openrouter.ai/deepseek/deepseek-v4-flash-0731",
+      "verified_at": "2026-08-28",
+      "expires_at": "2026-11-27",
+      "selection_reason": "OpenRouter-only DeepSeek control route; do not use the direct DeepSeek credential for live experiments.",
+      "notes": [
+        "Explicit control route, not a default family or stage route.",
+        "Provider is OpenRouter; model identity is the exact DeepSeek V4 Flash 0731 slug."
+      ]
+    },
+    "deepseek-v4-pro-openrouter": {
+      "provider": "openrouter",
+      "model_id": "deepseek/deepseek-v4-pro",
+      "tier": "standard",
+      "enabled": true,
+      "experimental": true,
+      "context_window": 1000000,
+      "max_output_tokens": 384000,
+      "source_url": "https://openrouter.ai/deepseek/deepseek-v4-pro",
+      "verified_at": "2026-08-27",
+      "expires_at": "2026-11-27",
+      "selection_reason": "OpenRouter-only DeepSeek control route; do not use the direct DeepSeek credential for live experiments.",
+      "notes": [
+        "Explicit control route, not a default family or stage route.",
+        "Provider is OpenRouter; model identity is the DeepSeek V4 Pro slug."
+      ]
+    },
     "deepseek": {
       "provider": "deepseek",
       "model_id": "deepseek-v4-pro",

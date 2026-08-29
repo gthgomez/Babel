@@ -7,6 +7,7 @@
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import { classifyToolEffect } from '../executor/contracts.js';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
+import type { ProviderId } from '../runners/providerRegistry.js';
 import {
   initialAgentLoopState,
   reduceAgentLoop,
@@ -40,6 +41,7 @@ import {
 import {
   createSessionEventLog,
   recordUserSubmitted,
+  recordModelStarted,
   recordProviderRetryScheduled,
   recordProviderRetrySettled,
   recordToolProposed,
@@ -180,13 +182,18 @@ export function parityOnUserTurn(
     projectRoot: input.projectRoot,
     ...(input.taskClass !== undefined ? { taskClass: input.taskClass } : {}),
   });
+  recordModelStarted(rt.sessionEvents, {
+    turn_id: rt.turnId,
+    model: input.model,
+    provider: input.provider,
+  });
 }
 
 /** Dual-write provider retry lifecycle facts at the ChatEngine persistence boundary. */
 export function parityRecordProviderRetry(
   rt: ParityRuntime,
   input: {
-    provider: 'deepinfra' | 'deepseek';
+    provider: ProviderId;
     model: string;
     attempt: number;
     reason: 'transport' | 'timeout' | 'rate_limit' | 'server_error' | 'stream_idle';
@@ -210,7 +217,7 @@ export function parityRecordProviderRetry(
 export function paritySettleProviderRetry(
   rt: ParityRuntime,
   input: {
-    provider: 'deepinfra' | 'deepseek';
+    provider: ProviderId;
     model: string;
     attempt: number;
     outcome: 'succeeded' | 'failed' | 'cancelled';
