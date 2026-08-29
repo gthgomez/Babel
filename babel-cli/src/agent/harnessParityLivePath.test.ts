@@ -40,7 +40,14 @@ import {
 } from '../ui/inputCoordinator.js';
 import { compileChatStackForRun, getLastChatCompiledStack } from '../interactive/execution/chatCore.js';
 import { decideProToFlashFailover } from './providerCapabilities.js';
-import { parityTryFailover, parityRecordToolBatch } from './chatEngineParityBridge.js';
+import {
+  createParityRuntime,
+  parityOnUserTurn,
+  parityTryFailover,
+  parityRecordToolBatch,
+  paritySettleProposeTools,
+  paritySettleUnexecutedTools,
+} from './chatEngineParityBridge.js';
 import {
   deriveSubagentApprovalSession,
   createApprovalSession,
@@ -143,6 +150,32 @@ describe('Live monomorphic ChatEngine loop', () => {
   after(() => {
     rmSync(projectRoot, { recursive: true, force: true });
     delete process.env['BABEL_BENCHMARK_AUTO_APPROVE'];
+  });
+
+  test('settles proposed-only actions as TOOL_NOT_STARTED', () => {
+    const runtime = createParityRuntime('unexecuted-tool-settlement');
+    parityOnUserTurn(runtime, {
+      task: 'settle skipped tool',
+      model: 'deepseek-v4-flash',
+      provider: 'deepseek',
+      projectRoot,
+    });
+    paritySettleProposeTools(runtime, [
+      {
+        id: 'call_skipped',
+        name: 'read_file',
+        action_index: 1,
+        batch_id: 'batch_0_0',
+        target_summary: 'src/missing.ts',
+      },
+    ]);
+
+    assert.equal(paritySettleUnexecutedTools(runtime), 1);
+    const cancelled = runtime.sessionEvents.events.find(
+      (event) => event.kind === 'tool_cancelled' && event.tool_call_id === 'call_skipped',
+    );
+    assert.ok(cancelled && cancelled.kind === 'tool_cancelled');
+    assert.equal(cancelled.recovery_state, 'TOOL_NOT_STARTED');
   });
 
   test('submitMessage and submitMessageStream share one loop and same outcome', async () => {

@@ -373,6 +373,19 @@ export function paritySettleInterruptedOnResume(
   return marked.length;
 }
 
+/**
+ * Close proposals that were skipped after the executor stopped a tool batch
+ * early (for example after a circuit breaker or abort). These calls never
+ * crossed the dispatch boundary, so they are explicitly TOOL_NOT_STARTED.
+ */
+export function paritySettleUnexecutedTools(
+  rt: ParityRuntime,
+  runDir?: string,
+  reason = 'interrupted_before_dispatch',
+): number {
+  return paritySettleInterruptedOnResume(rt, runDir, reason);
+}
+
 export function parityRecordToolBatch(
   rt: ParityRuntime,
   input: {
