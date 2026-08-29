@@ -680,6 +680,7 @@ function collectSpawnFiles(srcRoot: string): string[] {
 /** Production (non-test) files that spawn child processes. Update when adding a site. */
 const HOST_PROCESS_SURFACE = new Set([
   'agent/backgroundShell.ts',
+  'agent/breakerContract.ts',
   'agent/capabilityBroker.ts',
   'agent/chatEngineSupport.ts',
   'agent/diffCritic.ts',
