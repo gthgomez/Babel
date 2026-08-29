@@ -17,6 +17,7 @@ import { allocateThreadId } from '../services/threadStore/threadIds.js';
 import { isSuccessfulDirectMutation } from './mutationTools.js';
 import { runImplementWorktreeAgent } from './implementWorktreeAgent.js';
 import { join } from 'node:path';
+import { isOfflineChatMode } from './chatModelPolicy.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -78,7 +79,8 @@ export class AgentRunCoordinator {
     this.projectRoot = options.projectRoot;
     this.parentAbortSignal = options.parentAbortSignal;
     this.runDir = options.runDir ?? join(options.projectRoot, '.babel', 'runs', 'agents');
-    this.modelRouter = options.modelRouter ?? new ModelRouter();
+    this.modelRouter =
+      options.modelRouter ?? new ModelRouter({ liveOnly: !isOfflineChatMode() });
   }
 
   // ── Public API ────────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@
 
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
 import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
+import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
 import type { BlockedReport } from '../schemas/agentContracts.js';
 import { isSweChatProfileEnabled } from '../config/chatEngineLimits.js';
 import {
@@ -23,7 +24,13 @@ import { formatBudgetExceededAnswer } from './budgetKillPolicy.js';
 import { isSuccessfulDirectMutation } from './mutationTools.js';
 import type { ChatMessage } from './chatToolDefinitions.js';
 import { isOfflineChatMode } from './chatModelPolicy.js';
-import { assertDeepSeekLiveModelId } from '../modelPolicy.js';
+import {
+  LIVE_OPENROUTER_BACKEND_KEY,
+  LIVE_OPENROUTER_MODEL_ID,
+  assertLiveModelId,
+  resolveOpenRouterDeepSeekModelId,
+} from '../modelPolicy.js';
+import type { RunnerCallbacks } from '../runners/base.js';
 
 export type CriticToolLogEntry = {
   tool: string;
@@ -257,7 +264,7 @@ export function mutationTargetsFromLog(toolCallLog: CriticToolLogEntry[]): strin
     .filter((t, i, arr) => arr.indexOf(t) === i);
 }
 
-export type CriticRunner = DeepInfraApiRunner | DeepSeekApiRunner;
+export type CriticRunner = DeepInfraApiRunner | DeepSeekApiRunner | OpenRouterApiRunner;
 
 export function resolveOrCreateCriticRunner(
   modelId: string,
@@ -265,14 +272,30 @@ export function resolveOrCreateCriticRunner(
   fallback: () => CriticRunner,
 ): { runner: CriticRunner; cache: CriticRunner } {
   if (cached) return { runner: cached, cache: cached };
-  if (!isOfflineChatMode()) assertDeepSeekLiveModelId(modelId, 'live chat diff critic');
+  if (!isOfflineChatMode()) assertLiveModelId(modelId, 'live chat diff critic');
   const lower = modelId.toLowerCase();
+  const isGlm = modelId === LIVE_OPENROUTER_MODEL_ID || modelId === LIVE_OPENROUTER_BACKEND_KEY;
+  const openRouterDeepSeekModel = resolveOpenRouterDeepSeekModelId(modelId);
   let runner: CriticRunner;
   try {
-    runner = lower.includes('deepseek')
+    runner = openRouterDeepSeekModel
+      ? new OpenRouterApiRunner(openRouterDeepSeekModel)
+      : isGlm
+      ? new OpenRouterApiRunner(LIVE_OPENROUTER_MODEL_ID)
+      : lower.includes('deepseek')
       ? new DeepSeekApiRunner(modelId)
       : new DeepInfraApiRunner(modelId);
   } catch {
+    if (isGlm) {
+      throw new Error(
+        '[LIVE_MODEL_POLICY] Exact GLM critic route could not initialize OpenRouter; refusing silent model substitution.',
+      );
+    }
+    if (openRouterDeepSeekModel && !isOfflineChatMode()) {
+      throw new Error(
+        '[LIVE_MODEL_POLICY] Live OpenRouter critic route could not initialize; refusing direct-provider substitution.',
+      );
+    }
     try {
       runner = new DeepSeekApiRunner('deepseek-v4-flash');
     } catch {
@@ -288,14 +311,30 @@ export function resolveOrCreateCriticProRunner(
   flashFallback: () => CriticRunner,
 ): { runner: CriticRunner; cache: CriticRunner } {
   if (cached) return { runner: cached, cache: cached };
-  if (!isOfflineChatMode()) assertDeepSeekLiveModelId(modelId, 'live chat pro diff critic');
+  if (!isOfflineChatMode()) assertLiveModelId(modelId, 'live chat pro diff critic');
   const lower = modelId.toLowerCase();
+  const isGlm = modelId === LIVE_OPENROUTER_MODEL_ID || modelId === LIVE_OPENROUTER_BACKEND_KEY;
+  const openRouterDeepSeekModel = resolveOpenRouterDeepSeekModelId(modelId);
   let runner: CriticRunner;
   try {
-    runner = lower.includes('deepseek')
+    runner = openRouterDeepSeekModel
+      ? new OpenRouterApiRunner(openRouterDeepSeekModel)
+      : isGlm
+      ? new OpenRouterApiRunner(LIVE_OPENROUTER_MODEL_ID)
+      : lower.includes('deepseek')
       ? new DeepSeekApiRunner(modelId)
       : new DeepInfraApiRunner(modelId);
   } catch {
+    if (isGlm) {
+      throw new Error(
+        '[LIVE_MODEL_POLICY] Exact GLM pro-critic route could not initialize OpenRouter; refusing silent model substitution.',
+      );
+    }
+    if (openRouterDeepSeekModel && !isOfflineChatMode()) {
+      throw new Error(
+        '[LIVE_MODEL_POLICY] Live OpenRouter pro-critic route could not initialize; refusing direct-provider substitution.',
+      );
+    }
     runner = flashFallback();
   }
   return { runner, cache: runner };
@@ -313,6 +352,7 @@ export async function executeCriticWithTimeout(
     abortController: AbortController;
     timeoutMs: number;
   },
+  callbacks?: RunnerCallbacks,
 ): Promise<string> {
   if (session.cancelled || session.abortController.signal.aborted) {
     throw new Error('Critic aborted: session already cancelled');
@@ -326,7 +366,7 @@ export async function executeCriticWithTimeout(
 
   const execPromise = runner.executeRaw(
     prompt,
-    undefined,
+    callbacks,
     systemPrompt,
     criticController.signal,
   );
@@ -369,7 +409,11 @@ export interface AsymmetricCriticState {
   cancelled: boolean;
   abortController: AbortController;
   turnTimeoutMs: number;
-  resolveDeliberationRunner: () => CriticRunner;
+  /** Primary implementor model; keeps the critic on the fixed campaign model. */
+  primaryModel?: string;
+  resolveDeliberationRunner: (modelId?: string) => CriticRunner;
+  /** Provider lifecycle callbacks for secondary critic inferences. */
+  providerCallbacks?: RunnerCallbacks;
   trackRunnerUsage: (runner: CriticRunner) => void;
   onThought?: ((msg: string) => void) | undefined;
 }
@@ -432,7 +476,7 @@ export async function runAsymmetricDiffCritic(
     const mutationTargets = mutationTargetsFromLog(state.toolCallLog);
     const collected = collectWorkspacePatch(state.projectRoot, { mutationTargets });
 
-    const modelId = resolveDiffCriticModel();
+    const modelId = resolveDiffCriticModel(state.primaryModel);
     const flashResolved = resolveOrCreateCriticRunner(
       modelId,
       state.criticRunner,
@@ -441,7 +485,7 @@ export async function runAsymmetricDiffCritic(
     state.criticRunner = flashResolved.cache;
     const runner = flashResolved.runner;
 
-    const proModelId = resolveDiffCriticProModel();
+    const proModelId = resolveDiffCriticProModel(state.primaryModel);
     const sweTier = isSweCriticTierEnabled() || isSweChatProfileEnabled();
     state.onThought?.('[Diff critic: reviewing patch vs task…]');
 
@@ -470,6 +514,7 @@ export async function runAsymmetricDiffCritic(
           prompt,
           systemPrompt,
           session,
+          state.providerCallbacks,
         );
         state.trackRunnerUsage(runner);
         return text;
@@ -487,7 +532,7 @@ export async function runAsymmetricDiffCritic(
             state.criticProRunner,
             () =>
               resolveOrCreateCriticRunner(
-                resolveDiffCriticModel(),
+                resolveDiffCriticModel(state.primaryModel),
                 state.criticRunner,
                 state.resolveDeliberationRunner,
               ).runner,
@@ -499,6 +544,7 @@ export async function runAsymmetricDiffCritic(
             prompt,
             systemPrompt,
             session,
+            state.providerCallbacks,
           );
           state.trackRunnerUsage(proRunner);
           return text;

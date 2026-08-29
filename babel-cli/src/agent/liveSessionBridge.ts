@@ -151,7 +151,27 @@ function writeJsonAtomic(path: string, value: unknown): void {
   const tempPath = `${path}.${randomUUID()}.tmp`
   try {
     writeFileSync(tempPath, JSON.stringify(value, null, 2), 'utf-8')
-    renameSync(tempPath, path)
+    // Windows security/indexing processes can briefly hold the destination
+    // after a synchronous write. Keep the durable rename atomic, but absorb a
+    // bounded transient lock instead of turning authority initialization into
+    // a false session failure.
+    let lastError: unknown
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      try {
+        renameSync(tempPath, path)
+        lastError = undefined
+        break
+      } catch (error: unknown) {
+        lastError = error
+        const code =
+          typeof error === 'object' && error !== null && 'code' in error
+            ? String((error as { code?: unknown }).code)
+            : ''
+        if (!['EPERM', 'EACCES', 'EBUSY'].includes(code) || attempt === 5) throw error
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 * 2 ** attempt)
+      }
+    }
+    if (lastError !== undefined) throw lastError
   } finally {
     try {
       rmSync(tempPath, { force: true })

@@ -2,7 +2,7 @@
 param(
   [Parameter(Mandatory = $true)][int]$PR,
   [string]$RepoRoot = (Join-Path $PSScriptRoot '..'),
-  [string]$GitPath = (Join-Path $env:ProgramFiles 'Git\cmd\git.exe'),
+  [string]$GitPath = '',
   [string]$GhPath = '',
   [string]$ExpectedRemote = 'origin',
   [string]$ExpectedRepository = 'gthgomez/Babel',
@@ -189,6 +189,7 @@ function Read-AgentIndependentReceipt {
 try {
   $resolvedRepoRoot = (Resolve-Path -LiteralPath $RepoRoot -ErrorAction Stop).Path
   $envState = Set-AgentNonInteractiveEnvironment
+  if ([string]::IsNullOrWhiteSpace($GitPath)) { $GitPath = Get-AgentCommandPath -Name 'git' }
   if ([string]::IsNullOrWhiteSpace($ghResolvedPath)) { try { $ghResolvedPath = Get-AgentCommandPath -Name 'gh' } catch { $ghResolvedPath = '' } }
   $gitAvailable = Test-Path -LiteralPath $GitPath -PathType Leaf
   Add-AgentCheck -Name 'GIT_EXECUTABLE' -Passed $gitAvailable -Blocker 'git_executable_unavailable'

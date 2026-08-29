@@ -7,6 +7,7 @@
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import { classifyToolEffect } from '../executor/contracts.js';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
+import type { ProviderId } from '../runners/providerRegistry.js';
 import {
   initialAgentLoopState,
   reduceAgentLoop,
@@ -40,6 +41,7 @@ import {
 import {
   createSessionEventLog,
   recordUserSubmitted,
+  recordModelStarted,
   recordProviderRetryScheduled,
   recordProviderRetrySettled,
   recordToolProposed,
@@ -180,14 +182,20 @@ export function parityOnUserTurn(
     projectRoot: input.projectRoot,
     ...(input.taskClass !== undefined ? { taskClass: input.taskClass } : {}),
   });
+  recordModelStarted(rt.sessionEvents, {
+    turn_id: rt.turnId,
+    model: input.model,
+    provider: input.provider,
+  });
 }
 
 /** Dual-write provider retry lifecycle facts at the ChatEngine persistence boundary. */
 export function parityRecordProviderRetry(
   rt: ParityRuntime,
   input: {
-    provider: 'deepinfra' | 'deepseek';
+    provider: ProviderId;
     model: string;
+    inferenceId?: string;
     attempt: number;
     reason: 'transport' | 'timeout' | 'rate_limit' | 'server_error' | 'stream_idle';
     backoffMs: number;
@@ -197,6 +205,7 @@ export function parityRecordProviderRetry(
   if (!rt.turnId) return;
   recordProviderRetryScheduled(rt.sessionEvents, {
     turn_id: rt.turnId,
+    ...(input.inferenceId !== undefined ? { inference_id: input.inferenceId } : {}),
     provider: input.provider,
     model: input.model,
     attempt: input.attempt,
@@ -210,8 +219,9 @@ export function parityRecordProviderRetry(
 export function paritySettleProviderRetry(
   rt: ParityRuntime,
   input: {
-    provider: 'deepinfra' | 'deepseek';
+    provider: ProviderId;
     model: string;
+    inferenceId?: string;
     attempt: number;
     outcome: 'succeeded' | 'failed' | 'cancelled';
   },
@@ -220,6 +230,7 @@ export function paritySettleProviderRetry(
   if (!rt.turnId) return;
   recordProviderRetrySettled(rt.sessionEvents, {
     turn_id: rt.turnId,
+    ...(input.inferenceId !== undefined ? { inference_id: input.inferenceId } : {}),
     provider: input.provider,
     model: input.model,
     attempt: input.attempt,
@@ -360,6 +371,19 @@ export function paritySettleInterruptedOnResume(
     flushSessionEventsRequired(rt, runDir, 'settle-resume-interrupted');
   }
   return marked.length;
+}
+
+/**
+ * Close proposals that were skipped after the executor stopped a tool batch
+ * early (for example after a circuit breaker or abort). These calls never
+ * crossed the dispatch boundary, so they are explicitly TOOL_NOT_STARTED.
+ */
+export function paritySettleUnexecutedTools(
+  rt: ParityRuntime,
+  runDir?: string,
+  reason = 'interrupted_before_dispatch',
+): number {
+  return paritySettleInterruptedOnResume(rt, runDir, reason);
 }
 
 export function parityRecordToolBatch(

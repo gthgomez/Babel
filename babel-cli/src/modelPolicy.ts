@@ -23,17 +23,120 @@ export const LIVE_DEEPSEEK_BACKEND_KEYS = [
   'deepseek-v4-pro',
 ] as const;
 
+/** Explicit live campaign route for the exact GLM model under test. */
+export const LIVE_OPENROUTER_BACKEND_KEY = 'glm-5.3-flash' as const;
+export const LIVE_OPENROUTER_MODEL_ID = 'z-ai/glm-5.3-flash' as const;
+
+/** OpenRouter-only DeepSeek control routes. Direct DeepSeek credentials are
+ * intentionally not used by live benchmark/canary entrypoints. */
+export const LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS = [
+  'deepseek-v4-flash-openrouter',
+  'deepseek-v4-pro-openrouter',
+] as const;
+export const LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS = [
+  'deepseek/deepseek-v4-flash-0731',
+  'deepseek/deepseek-v4-pro',
+] as const;
+export const LIVE_OPENROUTER_API_BASE = 'https://openrouter.ai/api/v1/chat/completions' as const;
+
+/** Map the historical DeepSeek selector to the OpenRouter-only control key. */
+export function resolveOpenRouterDeepSeekBackendKey(modelId: string):
+  | (typeof LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS)[number]
+  | null {
+  switch (modelId.trim()) {
+    case 'deepseek':
+    case 'deepseek-v4-pro':
+    case 'deepseek/deepseek-v4-pro':
+    case 'deepseek-v4-pro-openrouter':
+      return 'deepseek-v4-pro-openrouter';
+    case 'deepseek-v4-flash':
+    case 'deepseek/deepseek-v4-flash':
+    case 'deepseek/deepseek-v4-flash-0731':
+    case 'deepseek-v4-flash-openrouter':
+      return 'deepseek-v4-flash-openrouter';
+    default:
+      return null;
+  }
+}
+
+export function resolveOpenRouterDeepSeekModelId(modelId: string): string | null {
+  const backendKey = resolveOpenRouterDeepSeekBackendKey(modelId);
+  if (!backendKey) return null;
+  return backendKey === 'deepseek-v4-pro-openrouter'
+    ? LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[1]
+    : LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0];
+}
+
+/**
+ * Build the child-process environment for a live DeepSeek control. The
+ * returned environment deliberately removes direct-provider credentials and
+ * switches auxiliary compaction/critic calls to the same OpenRouter model.
+ */
+export function buildOpenRouterDeepSeekLiveEnv(
+  base: NodeJS.ProcessEnv = process.env,
+  model: string = LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0],
+): NodeJS.ProcessEnv {
+  const routedModel = resolveOpenRouterDeepSeekModelId(model);
+  if (!routedModel) {
+    throw new Error(
+      `[LIVE_MODEL_POLICY] OpenRouter DeepSeek live environment requires an approved selector; received "${model}".`,
+    );
+  }
+  const env: NodeJS.ProcessEnv = {
+    ...base,
+    BABEL_LITE_OFFLINE: '0',
+    BABEL_COMPACTION_MODEL: routedModel,
+    BABEL_COMPACTION_API_BASE: LIVE_OPENROUTER_API_BASE,
+    BABEL_DIFF_CRITIC_MODEL: routedModel,
+  };
+  if (env['OPENROUTER_API_KEY']) {
+    env['BABEL_COMPACTION_API_KEY'] = env['OPENROUTER_API_KEY'];
+  }
+  delete env['DEEPSEEK_API_KEY'];
+  delete env['BABEL_BENCHMARK_DEEPSEEK_ONLY'];
+  return env;
+}
+
 export type LiveDeepSeekBackendKey = (typeof LIVE_DEEPSEEK_BACKEND_KEYS)[number];
 
 export function isDeepSeekLiveModelId(modelId: string): boolean {
   return (LIVE_DEEPSEEK_BACKEND_KEYS as readonly string[]).includes(modelId.trim());
 }
 
+export function isOpenRouterDeepSeekLiveModelId(modelId: string): boolean {
+  return resolveOpenRouterDeepSeekBackendKey(modelId) !== null;
+}
+
 export function assertDeepSeekLiveModelId(modelId: string, context = 'live run'): void {
-  if (isDeepSeekLiveModelId(modelId)) return;
+  if (isDeepSeekLiveModelId(modelId) || isOpenRouterDeepSeekLiveModelId(modelId)) return;
   throw new Error(
-    `[LIVE_MODEL_POLICY] ${context} requires deepseek-v4-flash or deepseek-v4-pro; ` +
+    `[LIVE_MODEL_POLICY] ${context} requires an approved DeepSeek v4 Flash/Pro route; ` +
       `received "${modelId}".`,
+  );
+}
+
+export function isLiveModelId(modelId: string): boolean {
+  const normalized = modelId.trim();
+  return (
+    isDeepSeekLiveModelId(normalized) ||
+    isOpenRouterDeepSeekLiveModelId(normalized) ||
+    (LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS as readonly string[]).includes(normalized) ||
+    normalized === LIVE_OPENROUTER_BACKEND_KEY ||
+    normalized === LIVE_OPENROUTER_MODEL_ID
+  );
+}
+
+export function assertLiveModelId(modelId: string, context = 'live run'): void {
+  if (isLiveModelId(modelId)) return;
+  throw new Error(
+    `[LIVE_MODEL_POLICY] ${context} received an unapproved live model "${modelId}"; ` +
+      `supported exact live ids are ${[
+        ...LIVE_DEEPSEEK_BACKEND_KEYS,
+        ...LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS,
+        ...LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS,
+        LIVE_OPENROUTER_BACKEND_KEY,
+        LIVE_OPENROUTER_MODEL_ID,
+      ].join(', ')}.`,
   );
 }
 
@@ -189,11 +292,48 @@ export function isDeepSeekLiveBackend(
   );
 }
 
+export function isOpenRouterDeepSeekLiveBackend(
+  entry: Pick<ResolvedModelPolicyEntry, 'backendKey' | 'provider' | 'providerModelId'>,
+): boolean {
+  return (
+    entry.provider === 'openrouter' &&
+    (
+      (LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS as readonly string[]).includes(entry.backendKey) ||
+      (LIVE_DEEPSEEK_BACKEND_KEYS as readonly string[]).includes(entry.backendKey) ||
+      entry.backendKey === 'deepseek'
+    ) &&
+    (LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS as readonly string[]).includes(entry.providerModelId)
+  );
+}
+
+export function isLiveModelBackend(
+  entry: Pick<ResolvedModelPolicyEntry, 'backendKey' | 'provider' | 'providerModelId'>,
+): boolean {
+  if (isDeepSeekLiveBackend(entry)) return true;
+  if (isOpenRouterDeepSeekLiveBackend(entry)) return true;
+  return (
+    entry.provider === 'openrouter' &&
+    entry.backendKey === LIVE_OPENROUTER_BACKEND_KEY &&
+    entry.providerModelId === LIVE_OPENROUTER_MODEL_ID
+  );
+}
+
+export function assertLiveModelBackend(
+  entry: Pick<ResolvedModelPolicyEntry, 'backendKey' | 'provider' | 'providerModelId'>,
+  context = 'live run',
+): void {
+  if (isLiveModelBackend(entry)) return;
+  throw new Error(
+    `[LIVE_MODEL_POLICY] ${context} received an unapproved live backend ` +
+      `"${entry.backendKey}" resolving to ${entry.provider}/${entry.providerModelId}.`,
+  );
+}
+
 export function assertDeepSeekLiveBackend(
   entry: Pick<ResolvedModelPolicyEntry, 'backendKey' | 'provider' | 'providerModelId'>,
   context = 'live run',
 ): void {
-  if (isDeepSeekLiveBackend(entry)) return;
+  if (isDeepSeekLiveBackend(entry) || isOpenRouterDeepSeekLiveBackend(entry)) return;
   throw new Error(
     `[LIVE_MODEL_POLICY] ${context} requires DeepSeek v4 Flash or v4 Pro; ` +
       `backend "${entry.backendKey}" resolves to ${entry.provider}/${entry.providerModelId}.`,
@@ -363,6 +503,19 @@ export function loadModelPolicyConfig(babelRoot = DEFAULT_BABEL_ROOT): {
   return { path: policyPath, config: parsed as ModelPolicyConfig };
 }
 
+/** Resolve a backend key from either its configured key or exact model id. */
+export function resolveModelPolicyBackendKey(
+  modelOrBackendKey: string,
+  babelRoot?: string,
+): string | undefined {
+  const { config } = loadModelPolicyConfig(babelRoot);
+  const normalized = modelOrBackendKey.trim().toLowerCase();
+  if (config.models?.[normalized]) return normalized;
+  return Object.entries(config.models ?? {}).find(
+    ([, entry]) => entry.model_id.trim().toLowerCase() === normalized,
+  )?.[0];
+}
+
 function getCostEstimationDefaults(config: ModelPolicyConfig): {
   inputTokens: number;
   outputTokens: number;
@@ -424,6 +577,17 @@ function getResolvedEntry(
     ...(entry.native_tool_use !== undefined ? { nativeToolUse: entry.native_tool_use } : {}),
     ...(Array.isArray(entry.capabilities) ? { capabilities: [...entry.capabilities] } : {}),
   };
+}
+
+function mapLiveDeepSeekEntry(
+  config: ModelPolicyConfig,
+  entry: ResolvedModelPolicyEntry,
+  hardFail: boolean,
+): ResolvedModelPolicyEntry {
+  if (!isDeepSeekLiveBackend(entry)) return entry;
+  const openRouterKey = resolveOpenRouterDeepSeekBackendKey(entry.backendKey);
+  if (!openRouterKey || !config.models?.[openRouterKey]) return entry;
+  return getResolvedEntry(config, openRouterKey, hardFail) ?? entry;
 }
 
 function parseDateOnly(value: string | undefined): number | null {
@@ -542,21 +706,27 @@ function resolveStagePolicies(
     const stageConfig = config.stages?.[stage];
     if (!stageConfig) continue;
 
-    const primaryEntry = getResolvedEntry(config, stageConfig.primary_backend_key, hardFail);
-    if (!primaryEntry) {
+    const primaryEntryRaw = getResolvedEntry(config, stageConfig.primary_backend_key, hardFail);
+    if (!primaryEntryRaw) {
       throw new Error(
         `Unable to resolve primary stage backend "${stageConfig.primary_backend_key}" for stage "${stage}".`,
       );
     }
+    const primaryEntry = liveOnly
+      ? mapLiveDeepSeekEntry(config, primaryEntryRaw, hardFail)
+      : primaryEntryRaw;
 
     const orderedBackends: ResolvedModelPolicyEntry[] = [];
     const seenBackendKeys = new Set<string>();
     for (const backendKey of stageConfig.ordered_backend_keys ?? []) {
       if (seenBackendKeys.has(backendKey)) continue;
-      const resolvedEntry = getResolvedEntry(config, backendKey, hardFail);
+      const resolvedEntryRaw = getResolvedEntry(config, backendKey, hardFail);
+      const resolvedEntry = resolvedEntryRaw && liveOnly
+        ? mapLiveDeepSeekEntry(config, resolvedEntryRaw, hardFail)
+        : resolvedEntryRaw;
       if (!resolvedEntry || !resolvedEntry.enabled) continue;
       orderedBackends.push(resolvedEntry);
-      seenBackendKeys.add(backendKey);
+      seenBackendKeys.add(resolvedEntry.backendKey);
     }
 
     if (!seenBackendKeys.has(primaryEntry.backendKey)) {
@@ -567,7 +737,9 @@ function resolveStagePolicies(
       isEnterpriseModelAllowed(entry),
     );
     const allowedBackends = liveOnly
-      ? enterpriseAllowedBackends.filter((entry) => isDeepSeekLiveBackend(entry))
+      ? enterpriseAllowedBackends.filter(
+          (entry) => isDeepSeekLiveBackend(entry) || isOpenRouterDeepSeekLiveBackend(entry),
+        )
       : enterpriseAllowedBackends;
     if (allowedBackends.length === 0) {
       if (liveOnly) {
@@ -630,9 +802,15 @@ export function resolveModelByKey(options: {
   const hardFail = config.hard_fail_on_unknown_model !== false;
 
   const normalizedRequestedKey = options.key.trim().toLowerCase();
-  const modelKey = config.models?.[normalizedRequestedKey]
-    ? normalizedRequestedKey
-    : resolveVendorAliasKey(config, normalizedRequestedKey);
+  const liveMappedKey = options.liveOnly === true
+    ? resolveOpenRouterDeepSeekBackendKey(normalizedRequestedKey)
+    : null;
+  const candidateKey = liveMappedKey && config.models?.[liveMappedKey]
+    ? liveMappedKey
+    : normalizedRequestedKey;
+  const modelKey = config.models?.[candidateKey]
+    ? candidateKey
+    : resolveVendorAliasKey(config, candidateKey);
 
   const resolvedBackend = getResolvedEntry(config, modelKey, hardFail);
   if (!resolvedBackend) {
@@ -643,7 +821,7 @@ export function resolveModelByKey(options: {
     throw new Error(`Model policy backend "${modelKey}" is disabled.`);
   }
   if (options.liveOnly === true) {
-    assertDeepSeekLiveBackend(resolvedBackend);
+    assertLiveModelBackend(resolvedBackend);
   }
   assertEnterpriseModelAllowed(resolvedBackend, options.allowExpensive === true);
 
@@ -673,7 +851,17 @@ export function resolveModelByKey(options: {
     );
   }
 
-  const stagePolicies = resolveStagePolicies(config, hardFail, options.liveOnly === true);
+  const stagePolicies =
+    modelKey === LIVE_OPENROUTER_BACKEND_KEY
+      ? MODEL_POLICY_STAGES.map((stage) => ({
+          stage,
+          primaryBackendKey: resolvedBackend.backendKey,
+          primaryProvider: resolvedBackend.provider,
+          primaryProviderModelId: resolvedBackend.providerModelId,
+          orderedBackends: [resolvedBackend],
+          selectionReason: 'Exact experimental GLM route is locked across all phases.',
+        }))
+      : resolveStagePolicies(config, hardFail, options.liveOnly === true);
 
   return {
     policyPath,
@@ -749,12 +937,15 @@ export function resolveFamilyModelPolicy(options: {
 
   const selectedTier = normalizeTier(config.default_tier, 'cheap');
   const effectiveTier = normalizeTier(options.requestedTier, selectedTier);
-  const backendKey = familyDefaults[effectiveTier];
-  if (!backendKey) {
+  const configuredBackendKey = familyDefaults[effectiveTier];
+  if (!configuredBackendKey) {
     throw new Error(
       `Model policy family "${options.family}" has no backend configured for tier "${effectiveTier}".`,
     );
   }
+  const backendKey = options.liveOnly
+    ? resolveOpenRouterDeepSeekBackendKey(configuredBackendKey) ?? configuredBackendKey
+    : configuredBackendKey;
 
   const blockedWithoutOptIn = new Set(config.policy?.blocked_without_explicit_opt_in ?? []);
   const allowedDefaultTiers = (config.policy?.allowed_default_tiers ?? MODEL_POLICY_TIERS)
@@ -771,7 +962,7 @@ export function resolveFamilyModelPolicy(options: {
     throw new Error(`Model policy backend "${backendKey}" is disabled and cannot be selected.`);
   }
   if (options.liveOnly === true) {
-    assertDeepSeekLiveBackend(resolvedBackend, `live family "${options.family}"`);
+    assertLiveModelBackend(resolvedBackend, `live family "${options.family}"`);
   }
   assertEnterpriseModelAllowed(resolvedBackend, options.allowExpensive === true);
 
@@ -814,12 +1005,18 @@ export function resolveFamilyModelPolicy(options: {
   const seenBackendKeys = new Set<string>();
 
   for (const tier of orderedTiers) {
-    const tierBackendKey = familyDefaults[tier];
+    const configuredTierBackendKey = familyDefaults[tier];
+    const tierBackendKey = options.liveOnly && configuredTierBackendKey
+      ? resolveOpenRouterDeepSeekBackendKey(configuredTierBackendKey) ?? configuredTierBackendKey
+      : configuredTierBackendKey;
     if (!tierBackendKey || seenBackendKeys.has(tierBackendKey)) {
       continue;
     }
 
-    const resolvedTierEntry = getResolvedEntry(config, tierBackendKey, hardFail);
+    const resolvedTierEntryRaw = getResolvedEntry(config, tierBackendKey, hardFail);
+    const resolvedTierEntry = resolvedTierEntryRaw && options.liveOnly
+      ? mapLiveDeepSeekEntry(config, resolvedTierEntryRaw, hardFail)
+      : resolvedTierEntryRaw;
     if (!resolvedTierEntry) {
       continue;
     }
@@ -976,4 +1173,3 @@ export function getNormalizedModelCapabilities(
     return null;
   }
 }
-

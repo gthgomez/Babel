@@ -7,9 +7,6 @@ param(
   [string]$IndependentReviewReceiptPath = '',
   [string]$ReviewChallengeLedgerPath = '',
   [string]$BuilderIdentity = 'codex-implementation',
-  [string]$TaskId = '',
-  [string]$RunId = '',
-  [string]$ContractHash = '',
   [switch]$MergeAuthorized,
   [switch]$AuditOnly,
   [switch]$RequireIsolatedWorktree,
@@ -44,8 +41,7 @@ try {
     '-PR', $PR, '-RepoRoot', $resolvedRepo, '-ReviewedHeadSha', $ReviewedHeadSha,
     '-IndependentReviewReceiptPath', $IndependentReviewReceiptPath,
     '-ReviewChallengeLedgerPath', $ReviewChallengeLedgerPath,
-    '-BuilderIdentity', $BuilderIdentity, '-TaskId', $TaskId, '-RunId', $RunId,
-    '-ContractHash', $ContractHash, '-OutputFormat', $OutputFormat
+    '-BuilderIdentity', $BuilderIdentity, '-OutputFormat', $OutputFormat
   )
   if ($MergeAuthorized) { $args += '-MergeAuthorized' }
   if ($AuditOnly) { $args += '-AuditOnly' }

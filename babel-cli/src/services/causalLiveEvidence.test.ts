@@ -123,6 +123,16 @@ describe('analyzeLiveEvidenceDir', () => {
                 turns_to_first_applied_write: null,
               },
             },
+            causal_attribution: {
+              status: 'unknown',
+              attribution: {
+                family: 'unknown',
+                code: 'insufficient_evidence',
+                confidence: 'low',
+                model_blame_permitted: false,
+                unknowns: ['evidence_complete'],
+              },
+            },
           },
         ],
       }),
@@ -156,6 +166,16 @@ describe('analyzeLiveEvidenceDir', () => {
             zero_write_hard_stop_count: 0,
             successful_write_tool_count: 0,
             turns_to_first_applied_write: null,
+          },
+        },
+        causal_attribution: {
+          status: 'unknown',
+          attribution: {
+            family: 'unknown',
+            code: 'insufficient_evidence',
+            confidence: 'low',
+            model_blame_permitted: false,
+            unknowns: ['evidence_complete'],
           },
         },
       }),
@@ -202,6 +222,13 @@ describe('analyzeLiveEvidenceDir', () => {
     assert.ok((ledger.signatures_histogram['agent:budget_exhausted'] ?? 0) >= 1);
     assert.ok(ledger.force_mutate_signals.force_mutate_shadow_total >= 1);
     assert.equal(ledger.force_mutate_signals.cells_zero_patch_and_force_mutate_shadow, 1);
+    assert.equal(ledger.attribution.cells_with_attribution, 1);
+    assert.equal(ledger.attribution.unknown_attribution_cells, 1);
+    assert.equal(ledger.attribution.unknown_attribution_rate, 1);
+    assert.equal(ledger.attribution.evidence_loss_cells, 1);
+    assert.equal(ledger.attribution.evidence_loss_rate, 1);
+    assert.equal(ledger.attribution.model_blame_permitted_cells, 0);
+    assert.equal(ledger.attribution.families.unknown, 1);
 
     const thrash = ledger.hypotheses.find((h) => h.id === 'zero_patch_force_mutate_shadow_thrash');
     assert.ok(thrash, 'expected zero_patch_force_mutate_shadow_thrash hypothesis');
@@ -215,6 +242,7 @@ describe('analyzeLiveEvidenceDir', () => {
 
     const written = writeImprovementLedger(dir, ledger);
     assert.ok(written.markdown.includes('zero_patch_force_mutate_shadow_thrash'));
+    assert.match(readFileSync(written.markdownPath, 'utf8'), /Causal attribution coverage/);
     const reloaded = JSON.parse(readFileSync(written.jsonPath, 'utf8')) as { n: number };
     assert.equal(reloaded.n, 1);
   });
@@ -248,5 +276,57 @@ describe('analyzeLiveEvidenceDir', () => {
     assert.ok(ranked.length >= 2);
     assert.equal(ranked[0]!.id, 'zero_patch_force_mutate_shadow_thrash');
     assert.equal(ranked[0]!.rank, 1);
+  });
+
+  test('keeps replicated arms separate when task ids are identical', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'causal-live-attempts-'));
+    const liveDir = join(dir, 'live');
+    mkdirSync(liveDir, { recursive: true });
+    const makeCell = (arm: string, replicate_id: number, family: string) => ({
+      instance_id: 'same-task',
+      arm,
+      replicate_id,
+      phase: 'live',
+      status: 'fail',
+      signature: `agent:${family}`,
+      patch_bytes: 0,
+      policy_events: [],
+      causal_attribution: {
+        status: 'ok',
+        attribution: {
+          family,
+          code: `${family}_failure`,
+          confidence: 'high',
+          model_blame_permitted: false,
+          unknowns: [],
+        },
+      },
+    });
+    writeFileSync(
+      join(liveDir, 'same-task.babel_enforce.r0.json'),
+      JSON.stringify(makeCell('babel_enforce', 0, 'harness')),
+      'utf8',
+    );
+    writeFileSync(
+      join(liveDir, 'same-task.babel_shadow.r0.json'),
+      JSON.stringify(makeCell('babel_shadow', 0, 'environment')),
+      'utf8',
+    );
+
+    const ledger = analyzeLiveEvidenceDir(dir);
+    assert.equal(ledger.n, 2);
+    assert.equal(ledger.attribution.cells_with_attribution, 2);
+    assert.equal(ledger.attribution.unknown_attribution_cells, 0);
+    assert.equal(ledger.attribution.families.harness, 1);
+    assert.equal(ledger.attribution.families.environment, 1);
+    assert.deepEqual(
+      ledger.cell_summaries
+        .map((cell) => [cell.arm, cell.replicate_id] as const)
+        .sort(([left], [right]) => String(left).localeCompare(String(right))),
+      [
+        ['babel_enforce', 0],
+        ['babel_shadow', 0],
+      ],
+    );
   });
 });

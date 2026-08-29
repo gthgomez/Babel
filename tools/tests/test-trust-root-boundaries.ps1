@@ -9,7 +9,11 @@ foreach ($component in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-com
   if ($launcher -notmatch [regex]::Escape($component)) { throw "Trusted launcher omits $component" }
 }
 if ($launcher -notmatch 'agent-pr-gate\.ps1') { throw 'Trusted launcher does not invoke the base-rooted gate.' }
+foreach ($unsupported in @('-TaskId', '-RunId', '-ContractHash')) {
+  if ($launcher -match [regex]::Escape($unsupported)) { throw "Trusted launcher forwards unsupported gate parameter: $unsupported" }
+}
 $gate = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot 'scripts/agent-pr-gate.ps1')
+if (-not $gate.Contains("[string]`$GitPath = ''")) { throw 'Base-rooted gate uses a platform-specific Git default.' }
 foreach ($required in @('reviewThreads\(first:100,after:\$after\)', 'pageInfo\{hasNextPage endCursor\}', 'review_threads_pagination_incomplete')) {
   if ($gate -notmatch $required) { throw "Base-rooted gate is missing full review-thread pagination: $required" }
 }
