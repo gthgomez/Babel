@@ -189,6 +189,7 @@ import {
   paritySettleProviderRetry,
   parityRecordToolBatch,
   paritySettleProposeTools,
+  paritySettleUnexecutedTools,
   paritySettleToolStarted,
   parityAuthorizeRecoveredOutcomeRetry,
   parityArbitrateCycle,
@@ -2693,6 +2694,12 @@ export class ChatEngine {
           }
           throw err;
         }
+
+        // The executor may stop before all proposed actions run (circuit
+        // breaker, abort, or a terminal policy result). Settle skipped
+        // proposals after executed results have been projected, otherwise
+        // in-flight started actions would be mistaken for skipped actions.
+        paritySettleUnexecutedTools(this.parity, this.engineRunDir);
         this._streamNativeToolCallIds = [];
         this._activeToolBatchId = null;
 
