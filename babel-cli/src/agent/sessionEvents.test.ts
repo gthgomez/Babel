@@ -1002,3 +1002,35 @@ test('rejects orphaned or overlapping provider retry schedules on durable reload
     turn_id: 'turn-retry', provider: 'deepinfra', model: 'model-a', attempt: 2, outcome: 'failed',
   }), /unmatched prior schedule/);
 });
+
+test('scopes retry lifecycle causality to the exact model inference', () => {
+  const log = createSessionEventLog('retry-inference-scope');
+  recordUserSubmitted(log, { turn_id: 'turn-retry', task: 'retry causally' });
+  recordProviderRetryScheduled(log, {
+    turn_id: 'turn-retry', inference_id: 'inference-a', provider: 'openrouter', model: 'model-a',
+    attempt: 2, reason: 'rate_limit', backoff_ms: 100,
+  });
+  recordProviderRetrySettled(log, {
+    turn_id: 'turn-retry', inference_id: 'inference-a', provider: 'openrouter', model: 'model-a',
+    attempt: 2, outcome: 'failed',
+  });
+  recordProviderRetryScheduled(log, {
+    turn_id: 'turn-retry', inference_id: 'inference-b', provider: 'openrouter', model: 'model-a',
+    attempt: 2, reason: 'rate_limit', backoff_ms: 100,
+  });
+  recordProviderRetrySettled(log, {
+    turn_id: 'turn-retry', inference_id: 'inference-b', provider: 'openrouter', model: 'model-a',
+    attempt: 2, outcome: 'succeeded',
+  });
+
+  const restored = parseSessionEventLog(serializeSessionEventLog(log), 'retry-inference-scope');
+  assert.deepEqual(
+    restored.events
+      .filter(
+        (event) =>
+          event.kind === 'provider_retry_scheduled' || event.kind === 'provider_retry_settled',
+      )
+      .map((event) => event.inference_id),
+    ['inference-a', 'inference-a', 'inference-b', 'inference-b'],
+  );
+});
