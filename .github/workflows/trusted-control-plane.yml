@@ -1,0 +1,50 @@
+name: Trusted Control Plane
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: trusted-control-plane-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  trusted-control-plane:
+    name: trusted-control-plane
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout immutable base
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Materialize candidate as data only
+        shell: pwsh
+        env:
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags origin $env:CANDIDATE_SHA
+          git worktree add --detach "$env:GITHUB_WORKSPACE/candidate" $env:CANDIDATE_SHA
+      - name: Run base-rooted merge audit
+        shell: pwsh
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          pwsh -NoProfile -NonInteractive -File scripts/trusted-merge-gate.ps1 `
+            -PR ([int]$env:PR_NUMBER) `
+            -BaseSha $env:BASE_SHA `
+            -RepoRoot "$env:GITHUB_WORKSPACE/candidate" `
+            -ReviewedHeadSha $env:HEAD_SHA `
+            -AuditOnly `
+            -RequireIsolatedWorktree `
+            -OutputFormat json
+      - name: Test trusted-root boundary
+        shell: pwsh
+        run: pwsh -NoProfile -NonInteractive -File tools/tests/test-trust-root-boundaries.ps1 -RepoRoot .
