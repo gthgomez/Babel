@@ -5739,6 +5739,7 @@ export class ChatEngine {
           {
             provider: event.provider,
             model: event.model,
+            ...(startedInvocation ? { inferenceId: startedInvocation.inference_id } : {}),
             attempt: event.attempt,
             reason: event.reason,
             backoffMs: event.backoff_ms,
@@ -5752,6 +5753,7 @@ export class ChatEngine {
           {
             provider: event.provider,
             model: event.model,
+            ...(startedInvocation ? { inferenceId: startedInvocation.inference_id } : {}),
             attempt: event.attempt,
             outcome: event.outcome,
           },

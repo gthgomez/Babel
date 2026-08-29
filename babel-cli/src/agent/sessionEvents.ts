@@ -229,6 +229,8 @@ export type SessionEvent =
     })
   | (SessionEventBase & {
       kind: 'provider_retry_scheduled';
+      /** Exact model invocation whose retry sequence this event belongs to. */
+      inference_id?: string;
       provider: ProviderId;
       model: string;
       attempt: number;
@@ -237,6 +239,8 @@ export type SessionEvent =
     })
   | (SessionEventBase & {
       kind: 'provider_retry_settled';
+      /** Exact model invocation whose retry sequence this event belongs to. */
+      inference_id?: string;
       provider: ProviderId;
       model: string;
       attempt: number;
@@ -802,7 +806,12 @@ export function assertProviderRetryLifecycleCausality(
   subject: string,
 ): void {
   const sameRetry = (event: ProviderRetryLifecycleEvent): boolean =>
-    event.turn_id === candidate.turn_id && event.provider === candidate.provider && event.model === candidate.model;
+    event.turn_id === candidate.turn_id &&
+    event.provider === candidate.provider &&
+    event.model === candidate.model &&
+    (candidate.inference_id === undefined
+      ? event.inference_id === undefined
+      : event.inference_id === candidate.inference_id);
   const history = priorEvents.filter(
     (event): event is ProviderRetryLifecycleEvent => isProviderRetryLifecycleEvent(event) && sameRetry(event),
   );
@@ -1246,6 +1255,7 @@ export function recordProviderRetryScheduled(
   log: SessionEventLog,
   input: {
     turn_id: string;
+    inference_id?: string;
     provider: ProviderId;
     model: string;
     attempt: number;
@@ -1261,6 +1271,7 @@ export function recordProviderRetrySettled(
   log: SessionEventLog,
   input: {
     turn_id: string;
+    inference_id?: string;
     provider: ProviderId;
     model: string;
     attempt: number;
@@ -1805,6 +1816,9 @@ export function parseSessionEventLog(
       throw new Error(`Invalid session event at line ${index + 1}: reconciliation is invalid`)
     }
     if (ev.kind === 'provider_retry_scheduled') {
+      if (ev.inference_id !== undefined && (typeof ev.inference_id !== 'string' || ev.inference_id.length === 0)) {
+        throw new Error(`Invalid session event at line ${index + 1}: provider retry inference_id is invalid`)
+      }
       if (!(PROVIDER_IDS as readonly string[]).includes(ev.provider as string) ||
         !['transport', 'timeout', 'rate_limit', 'server_error', 'stream_idle'].includes(ev.reason as string) ||
         !Number.isInteger(ev.attempt) || (ev.attempt as number) < 2 ||
@@ -1813,6 +1827,9 @@ export function parseSessionEventLog(
       }
     }
     if (ev.kind === 'provider_retry_settled') {
+      if (ev.inference_id !== undefined && (typeof ev.inference_id !== 'string' || ev.inference_id.length === 0)) {
+        throw new Error(`Invalid session event at line ${index + 1}: provider retry inference_id is invalid`)
+      }
       if (!(PROVIDER_IDS as readonly string[]).includes(ev.provider as string) ||
         !['succeeded', 'failed', 'cancelled'].includes(ev.outcome as string) ||
         !Number.isInteger(ev.attempt) || (ev.attempt as number) < 2) {
@@ -2030,6 +2047,9 @@ export function parseSessionEventLog(
       (event): event is Extract<SessionEvent, { kind: 'provider_retry_settled' }> =>
         event.kind === 'provider_retry_settled' && event.turn_id === scheduled.turn_id &&
         event.provider === scheduled.provider && event.model === scheduled.model &&
+        (scheduled.inference_id === undefined
+          ? event.inference_id === undefined
+          : event.inference_id === scheduled.inference_id) &&
         event.attempt === scheduled.attempt,
     );
     if (settlements.length !== 1) {

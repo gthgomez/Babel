@@ -195,6 +195,7 @@ export function parityRecordProviderRetry(
   input: {
     provider: ProviderId;
     model: string;
+    inferenceId?: string;
     attempt: number;
     reason: 'transport' | 'timeout' | 'rate_limit' | 'server_error' | 'stream_idle';
     backoffMs: number;
@@ -204,6 +205,7 @@ export function parityRecordProviderRetry(
   if (!rt.turnId) return;
   recordProviderRetryScheduled(rt.sessionEvents, {
     turn_id: rt.turnId,
+    ...(input.inferenceId !== undefined ? { inference_id: input.inferenceId } : {}),
     provider: input.provider,
     model: input.model,
     attempt: input.attempt,
@@ -219,6 +221,7 @@ export function paritySettleProviderRetry(
   input: {
     provider: ProviderId;
     model: string;
+    inferenceId?: string;
     attempt: number;
     outcome: 'succeeded' | 'failed' | 'cancelled';
   },
@@ -227,6 +230,7 @@ export function paritySettleProviderRetry(
   if (!rt.turnId) return;
   recordProviderRetrySettled(rt.sessionEvents, {
     turn_id: rt.turnId,
+    ...(input.inferenceId !== undefined ? { inference_id: input.inferenceId } : {}),
     provider: input.provider,
     model: input.model,
     attempt: input.attempt,
