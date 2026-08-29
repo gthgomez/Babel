@@ -1,8 +1,8 @@
 /**
  * Slice 6 — Provider-free paired Stage 1 arm matrix.
  *
- * Runs Stage 1 arms `{babel_prompt_control, babel_shadow, babel_enforce}` on
- * identical fixture tasks with pair_id / replicate_id / arm_order, resource
+ * Runs all Stage 1 arms `{babel_prompt_control, babel_shadow, babel_enforce,
+ * raw_opencode}` on identical fixture tasks with pair_id / replicate_id / arm_order, resource
  * parity accounting, and observed-model parity gating for the paired causal
  * estimate.
  *
@@ -10,7 +10,7 @@
  * live causal claims about production harness behavior.
  */
 
-import { join } from 'node:path';
+import { join } from "node:path";
 
 import {
   CAUSAL_SCORER_VERSION,
@@ -18,7 +18,7 @@ import {
   makePairId,
   writeJsonAtomic,
   type CausalStage1Arm,
-} from './causalCampaignContract.js';
+} from "./causalCampaignContract.js";
 import {
   detectHarnessSuppressed,
   detectHonestyCatch,
@@ -28,24 +28,25 @@ import {
   runTrustedFixtureVerifier,
   type FixtureOracleResult,
   type ScriptedTranscript,
-} from './causalMeasurementFixtures.js';
+} from "./causalMeasurementFixtures.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-export const PAIRED_MATRIX_KIND = 'babel_causal_paired_matrix' as const;
+export const PAIRED_MATRIX_KIND = "babel_causal_paired_matrix" as const;
 
-/** Fixed Stage 1 arm order for paired matrix (control → shadow → enforce). */
+/** Fixed Stage 1 arm order for paired matrix (control → shadow → enforce → raw). */
 export const PAIRED_MATRIX_FIXED_ARM_ORDER: readonly CausalStage1Arm[] = [
-  'babel_prompt_control',
-  'babel_shadow',
-  'babel_enforce',
+  "babel_prompt_control",
+  "babel_shadow",
+  "babel_enforce",
+  "raw_opencode",
 ] as const;
 
 /** Default fixture task used when options.taskIds is omitted. */
-export const DEFAULT_PAIRED_TASK_IDS = ['fixture_paired_task_0'] as const;
+export const DEFAULT_PAIRED_TASK_IDS = ["fixture_paired_task_0"] as const;
 
 /** Simulated baseline model for provider-free parity (all arms share unless overridden). */
-export const DEFAULT_OBSERVED_MODEL_ID = 'fixture-model-baseline' as const;
+export const DEFAULT_OBSERVED_MODEL_ID = "fixture-model-baseline" as const;
 
 /** Simulated per-arm spend budget (USD) for resource-parity accounting. */
 export const DEFAULT_SIMULATED_COST_USD = 0.012 as const;
@@ -98,8 +99,8 @@ export type PairedMatrixReport = {
   schema_version: 1;
   kind: typeof PAIRED_MATRIX_KIND;
   scorer_version: string;
-  mode: 'chat-headless';
-  substrate: 'provider_free_fixtures';
+  mode: "chat-headless";
+  substrate: "provider_free_fixtures";
   blocks: PairedBlockResult[];
   /**
    * Integer event counts only — no generalized suppression rate float claim
@@ -200,29 +201,47 @@ function transcriptForArm(
   arm: CausalStage1Arm,
   plan: BlockTranscriptPlan,
 ): ScriptedTranscript {
-  if (plan.honesty && arm === 'babel_prompt_control') {
-    return { ...FALSE_COMPLETE_TRANSCRIPT, arm: 'babel_prompt_control' };
+  if (plan.honesty && arm === "babel_prompt_control") {
+    return { ...FALSE_COMPLETE_TRANSCRIPT, arm: "babel_prompt_control" };
   }
-  if (plan.suppressEnforce && arm === 'babel_enforce') {
-    return { ...INJECTED_BOUNDARY_TRANSCRIPT, arm: 'babel_enforce' };
+  if (plan.suppressEnforce && arm === "babel_enforce") {
+    return { ...INJECTED_BOUNDARY_TRANSCRIPT, arm: "babel_enforce" };
   }
-  // control / shadow known-good; enforce known-good when not suppressed
-  if (arm === 'babel_shadow') {
-    return { ...KNOWN_GOOD_TRANSCRIPT, arm: 'babel_shadow', id: 'fixture_known_good_shadow' };
+  // control / shadow / raw known-good; enforce known-good when not suppressed
+  if (arm === "babel_shadow") {
+    return {
+      ...KNOWN_GOOD_TRANSCRIPT,
+      arm: "babel_shadow",
+      id: "fixture_known_good_shadow",
+    };
   }
-  if (arm === 'babel_enforce') {
-    return { ...KNOWN_GOOD_TRANSCRIPT, arm: 'babel_enforce', id: 'fixture_known_good_enforce' };
+  if (arm === "babel_enforce") {
+    return {
+      ...KNOWN_GOOD_TRANSCRIPT,
+      arm: "babel_enforce",
+      id: "fixture_known_good_enforce",
+    };
   }
-  return { ...KNOWN_GOOD_TRANSCRIPT, arm: 'babel_prompt_control' };
+  if (arm === "raw_opencode") {
+    return {
+      ...KNOWN_GOOD_TRANSCRIPT,
+      arm: "raw_opencode",
+      id: "fixture_known_good_raw_opencode",
+    };
+  }
+  return { ...KNOWN_GOOD_TRANSCRIPT, arm: "babel_prompt_control" };
 }
 
-function signatureForOracle(oracle: FixtureOracleResult, arm: CausalStage1Arm): string {
+function signatureForOracle(
+  oracle: FixtureOracleResult,
+  arm: CausalStage1Arm,
+): string {
   if (oracle.verified_pass) return `fixture:oracle_pass:${arm}`;
   return `fixture:oracle_non_pass:${arm}:${oracle.reason}`;
 }
 
 function stableEffortKey(effort: unknown): string {
-  if (effort === undefined) return '__undefined__';
+  if (effort === undefined) return "__undefined__";
   try {
     return JSON.stringify(effort);
   } catch {
@@ -240,7 +259,9 @@ function evaluateBlock(input: {
   maxTurns: number;
   maxResponses: number;
   observedModelBaseline: string | null;
-  armModelOverrides: Partial<Record<CausalStage1Arm, ArmModelOverride>> | undefined;
+  armModelOverrides:
+    | Partial<Record<CausalStage1Arm, ArmModelOverride>>
+    | undefined;
   simulatedCostUsd: number;
   forceModelMismatchOnEnforce: boolean;
 }): PairedBlockResult {
@@ -258,8 +279,8 @@ function evaluateBlock(input: {
         ? override.observed_model_id
         : input.observedModelBaseline;
 
-    if (input.forceModelMismatchOnEnforce && arm === 'babel_enforce') {
-      observed_model_id = 'fixture-model-MISMATCH';
+    if (input.forceModelMismatchOnEnforce && arm === "babel_enforce") {
+      observed_model_id = "fixture-model-MISMATCH";
     }
 
     const simulated_cost_usd =
@@ -285,12 +306,12 @@ function evaluateBlock(input: {
   // Ensure all Stage 1 arms are present even if arm_order was partial (defensive)
   const completeArms = CAUSAL_STAGE1_ARMS.every((a) => arms[a] != null);
 
-  const control = arms['babel_prompt_control'];
-  const enforce = arms['babel_enforce'];
+  const control = arms["babel_prompt_control"];
+  const enforce = arms["babel_enforce"];
 
   const controlOracle: FixtureOracleResult = {
     verified_pass: control?.oracle_pass === true,
-    reason: control?.signature ?? 'missing_control',
+    reason: control?.signature ?? "missing_control",
   };
   const enforceNonPassInput: { non_pass: boolean; signature?: string } = {
     non_pass: enforce?.non_pass === true,
@@ -298,14 +319,17 @@ function evaluateBlock(input: {
   if (enforce?.signature !== undefined) {
     enforceNonPassInput.signature = enforce.signature;
   }
-  const suppressSignal = detectHarnessSuppressed(controlOracle, enforceNonPassInput);
+  const suppressSignal = detectHarnessSuppressed(
+    controlOracle,
+    enforceNonPassInput,
+  );
 
   let honesty_catch = false;
   if (input.plan.honesty && control) {
     // Honesty path: false-complete control + babel correct reject (fixture wiring)
     const honestyOracle = runTrustedFixtureVerifier({
       ...FALSE_COMPLETE_TRANSCRIPT,
-      arm: 'babel_prompt_control',
+      arm: "babel_prompt_control",
     });
     const honestySignal = detectHonestyCatch(
       FALSE_COMPLETE_TRANSCRIPT.claimed_complete === true,
@@ -339,7 +363,9 @@ function evaluateBlock(input: {
     if (anyEffort && effortKey !== baselineEffort) {
       // If control had no effort override, baselineEffort is __undefined__;
       // mismatch when another arm set effort_summary.
-      const controlEffort = stableEffortKey(arms['babel_prompt_control']?.effort_summary);
+      const controlEffort = stableEffortKey(
+        arms["babel_prompt_control"]?.effort_summary,
+      );
       if (effortKey !== controlEffort) {
         model_parity_ok = false;
         break;
@@ -395,7 +421,7 @@ export function runProviderFreePairedMatrix(
     ? [...options.taskIds]
     : [...DEFAULT_PAIRED_TASK_IDS];
   const replicates = options?.replicates ?? 1;
-  if (replicates < 1) throw new Error('replicates must be >= 1');
+  if (replicates < 1) throw new Error("replicates must be >= 1");
 
   const shuffleArmOrder = options?.shuffleArmOrder === true;
   const seed = options?.seed ?? 1;
@@ -403,20 +429,22 @@ export function runProviderFreePairedMatrix(
 
   const maxTurns = options?.maxTurns ?? DEFAULT_MAX_TURNS;
   const maxResponses = options?.maxResponses ?? DEFAULT_MAX_RESPONSES;
-  const injectSuppressionOnEnforce = options?.injectSuppressionOnEnforce !== false;
+  const injectSuppressionOnEnforce =
+    options?.injectSuppressionOnEnforce !== false;
   const injectHonestyCatch = options?.injectHonestyCatch === true;
   const injectModelMismatch = options?.injectModelMismatch === true;
   const observedModelBaseline =
     options?.observedModelBaseline !== undefined
       ? options.observedModelBaseline
       : DEFAULT_OBSERVED_MODEL_ID;
-  const simulatedCostUsd = options?.simulatedCostUsd ?? DEFAULT_SIMULATED_COST_USD;
+  const simulatedCostUsd =
+    options?.simulatedCostUsd ?? DEFAULT_SIMULATED_COST_USD;
 
   const blocks: PairedBlockResult[] = [];
   const notes: string[] = [
-    'provider_free_fixtures: measurement substrate only; not live causal claims',
+    "provider_free_fixtures: measurement substrate only; not live causal claims",
     `scorer_version=${CAUSAL_SCORER_VERSION}`,
-    `arm_order_mode=${shuffleArmOrder ? `shuffled_seed_${seed}` : 'fixed'}`,
+    `arm_order_mode=${shuffleArmOrder ? `shuffled_seed_${seed}` : "fixed"}`,
   ];
 
   let suppressionInjected = false;
@@ -424,8 +452,7 @@ export function runProviderFreePairedMatrix(
 
   for (let r = 0; r < replicates; r += 1) {
     for (const taskId of taskIds) {
-      const suppressThis =
-        injectSuppressionOnEnforce && !suppressionInjected;
+      const suppressThis = injectSuppressionOnEnforce && !suppressionInjected;
       if (suppressThis) suppressionInjected = true;
 
       const mismatchThis = injectModelMismatch && !mismatchInjected;
@@ -452,7 +479,7 @@ export function runProviderFreePairedMatrix(
   }
 
   if (injectHonestyCatch) {
-    const honestyTaskId = 'fixture_paired_honesty';
+    const honestyTaskId = "fixture_paired_honesty";
     const honestyReplicate = 0;
     const armOrder = resolveArmOrder(shuffleArmOrder, rng);
     const honestyBlock = evaluateBlock({
@@ -473,21 +500,23 @@ export function runProviderFreePairedMatrix(
       forceModelMismatchOnEnforce: false,
     });
     blocks.push(honestyBlock);
-    notes.push('honesty_catch block appended (FALSE_COMPLETE control + babel reject)');
+    notes.push(
+      "honesty_catch block appended (FALSE_COMPLETE control + babel reject)",
+    );
   }
 
   if (injectSuppressionOnEnforce) {
     notes.push(
       suppressionInjected
-        ? 'injectSuppressionOnEnforce: first non-honesty block enforce=INJECTED_BOUNDARY'
-        : 'injectSuppressionOnEnforce requested but no primary block available',
+        ? "injectSuppressionOnEnforce: first non-honesty block enforce=INJECTED_BOUNDARY"
+        : "injectSuppressionOnEnforce requested but no primary block available",
     );
   }
   if (injectModelMismatch) {
     notes.push(
       mismatchInjected
-        ? 'injectModelMismatch: first block enforce observed_model_id mismatched'
-        : 'injectModelMismatch requested but no primary block available',
+        ? "injectModelMismatch: first block enforce observed_model_id mismatched"
+        : "injectModelMismatch requested but no primary block available",
     );
   }
 
@@ -496,13 +525,17 @@ export function runProviderFreePairedMatrix(
     harness_suppressed: blocks.filter((b) => b.harness_suppressed).length,
     honesty_catch: blocks.filter((b) => b.honesty_catch).length,
     model_mismatch: blocks.filter((b) => !b.model_parity_ok).length,
-    included_in_estimate: blocks.filter((b) => b.included_in_paired_causal_estimate).length,
+    included_in_estimate: blocks.filter(
+      (b) => b.included_in_paired_causal_estimate,
+    ).length,
   };
 
   // Invariant: counts are integers (no lone rate field on this report)
   for (const [k, v] of Object.entries(paired_counts)) {
     if (!Number.isInteger(v) || v < 0) {
-      throw new Error(`paired_counts.${k} must be a non-negative integer, got ${v}`);
+      throw new Error(
+        `paired_counts.${k} must be a non-negative integer, got ${v}`,
+      );
     }
   }
 
@@ -510,15 +543,15 @@ export function runProviderFreePairedMatrix(
     schema_version: 1,
     kind: PAIRED_MATRIX_KIND,
     scorer_version: CAUSAL_SCORER_VERSION,
-    mode: 'chat-headless',
-    substrate: 'provider_free_fixtures',
+    mode: "chat-headless",
+    substrate: "provider_free_fixtures",
     blocks,
     paired_counts,
     notes,
   };
 
   if (options?.evidenceDir) {
-    const path = join(options.evidenceDir, 'paired-matrix-report.json');
+    const path = join(options.evidenceDir, "paired-matrix-report.json");
     notes.push(`wrote ${path}`);
     writeJsonAtomic(path, report);
   }
@@ -531,7 +564,7 @@ export function runProviderFreePairedMatrix(
  * Useful for tests asserting spend / allowance fields without re-running matrix.
  */
 export function computeResourceParityView(
-  arms: Record<string, Pick<PairedArmResult, 'simulated_cost_usd'>>,
+  arms: Record<string, Pick<PairedArmResult, "simulated_cost_usd">>,
   allowance: { max_turns: number; max_responses: number },
 ): ResourceParityView {
   const equal_total_spend_usd: Record<string, number> = {};

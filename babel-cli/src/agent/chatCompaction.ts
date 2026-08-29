@@ -28,7 +28,9 @@
  *   - Compaction failure falls back to heuristic truncation
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import type { RunnerCallbacks } from '../runners/base.js';
+import type { ProviderId } from '../runners/providerRegistry.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -54,6 +56,8 @@ export interface CompactionOptions {
   targetTokens?: number;
   /** Abort signal for cancellation */
   signal?: AbortSignal;
+  /** Bounded provider lifecycle receipts for the summarizer inference. */
+  callbacks?: RunnerCallbacks;
 }
 
 export interface CompactionStrategy {
@@ -292,6 +296,7 @@ interface CompactionApiResult {
   summary: string;
   inputTokens: number;
   outputTokens: number;
+  observedModelId?: string | null;
 }
 
 /**
@@ -417,7 +422,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
   /**
    * Resolve the API key for the compaction LLM.
    * Checks environment variables in order: BABEL_COMPACTION_API_KEY,
-   * DEEPINFRA_API_KEY, ANTHROPIC_API_KEY.
+   * OPENROUTER_API_KEY, DEEPINFRA_API_KEY, ANTHROPIC_API_KEY.
    *
    * Uses || (not ??) so that empty string "" is treated as unset,
    * matching the convention in every other API runner in the codebase
@@ -426,6 +431,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
   private resolveApiKey(): string | undefined {
     return (
       process.env['BABEL_COMPACTION_API_KEY'] ||
+      process.env['OPENROUTER_API_KEY'] ||
       process.env['DEEPINFRA_API_KEY'] ||
       process.env['ANTHROPIC_API_KEY']
     );
@@ -438,18 +444,22 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
   private resolveCompactionConfig(): { apiKey: string | undefined; baseUrl: string } {
     const apiKey =
       process.env['BABEL_COMPACTION_API_KEY'] ||
+      process.env['OPENROUTER_API_KEY'] ||
       process.env['DEEPINFRA_API_KEY'] ||
       process.env['ANTHROPIC_API_KEY'];
 
     let baseUrl = process.env['BABEL_COMPACTION_API_BASE'];
     if (!baseUrl) {
-      const hasAnthropicKey =
+      const hasExplicitCompactionKey =
         process.env['BABEL_COMPACTION_API_KEY'] ||
         process.env['ANTHROPIC_API_KEY'];
+      const hasOpenRouterKey = process.env['OPENROUTER_API_KEY'];
       baseUrl =
-        hasAnthropicKey && !process.env['DEEPINFRA_API_KEY']
+        hasExplicitCompactionKey && !process.env['DEEPINFRA_API_KEY']
           ? 'https://api.anthropic.com'
-          : 'https://api.deepinfra.com/v1/openai/chat/completions';
+          : hasOpenRouterKey && !process.env['DEEPINFRA_API_KEY']
+            ? 'https://openrouter.ai/api/v1/chat/completions'
+            : 'https://api.deepinfra.com/v1/openai/chat/completions';
     }
     return { apiKey, baseUrl };
   }
@@ -469,7 +479,9 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     return (
       options.model ??
       process.env['BABEL_COMPACTION_MODEL'] ??
-      DEFAULT_COMPACTION_CONFIG.compactionModel
+      (process.env['OPENROUTER_API_KEY'] && !process.env['DEEPINFRA_API_KEY']
+        ? 'deepseek/deepseek-v4-flash-0731'
+        : DEFAULT_COMPACTION_CONFIG.compactionModel)
     );
   }
 
@@ -496,9 +508,16 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     const prompt = buildCompactionPrompt(toCompact, targetTokens);
 
     if (isAnthropic) {
-      return this.callAnthropicApi(prompt, model, apiKey, signal);
+      return this.callAnthropicApi(prompt, model, apiKey, signal, options.callbacks);
     }
-    return this.callOpenAiCompatibleApi(prompt, model, apiKey, baseUrl, signal);
+    return this.callOpenAiCompatibleApi(
+      prompt,
+      model,
+      apiKey,
+      baseUrl,
+      signal,
+      options.callbacks,
+    );
   }
 
   /**
@@ -510,6 +529,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     apiKey: string,
     baseUrl: string,
     signal?: AbortSignal,
+    callbacks?: RunnerCallbacks,
   ): Promise<CompactionApiResult> {
     const timeoutMs = 30_000; // compaction should be fast
     const controller = new AbortController();
@@ -521,6 +541,52 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
       signal.addEventListener('abort', onExternalAbort, { once: true });
     }
 
+    const provider: ProviderId = baseUrl.toLowerCase().includes('openrouter')
+      ? 'openrouter'
+      : 'deepinfra';
+    const inferenceId = randomUUID();
+    const requestBody = {
+      model,
+      max_tokens: this.maxSummaryTokens,
+      temperature: 0.3,
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a precise conversation summarizer. Output only the structured summary with no additional commentary.',
+        },
+        { role: 'user', content: prompt },
+      ],
+    };
+    const inputDigest = createHash('sha256')
+      .update(JSON.stringify(requestBody))
+      .digest('hex');
+    const phase = (
+      phaseName: Parameters<NonNullable<RunnerCallbacks['onInvocationPhase']>>[0]['phase'],
+      statusCode?: number,
+      detail?: string,
+    ): void => {
+      callbacks?.onInvocationPhase?.({
+        inference_id: inferenceId,
+        provider,
+        model,
+        phase: phaseName,
+        ...(statusCode !== undefined ? { status_code: statusCode } : {}),
+        ...(detail !== undefined ? { detail } : {}),
+      });
+    };
+    callbacks?.onInvocationStarted?.({
+      inference_id: inferenceId,
+      provider,
+      requested_model_id: model,
+      normalized_model_id: model,
+      sent_model_id: model,
+      input_digest: inputDigest,
+    });
+    phase('request_created');
+    phase('request_dispatched');
+    let responseStarted = false;
+    let failurePhaseRecorded = false;
+    let completed = false;
     try {
       const response = await fetch(baseUrl, {
         method: 'POST',
@@ -529,40 +595,68 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          model,
-          max_tokens: this.maxSummaryTokens,
-          temperature: 0.3, // low but non-zero for creative summarization
-          messages: [
-            {
-              role: 'system',
-              content: 'You are a precise conversation summarizer. Output only the structured summary with no additional commentary.',
-            },
-            { role: 'user', content: prompt },
-          ],
-        }),
+        body: JSON.stringify(requestBody),
       });
+      responseStarted = true;
+      phase('response_started', response.status);
 
       if (!response.ok) {
         const body = await response.text().catch(() => '');
+        phase('provider_error', response.status, `http_${response.status}`);
+        failurePhaseRecorded = true;
         throw new Error(`Compaction API error (${response.status}): ${body.slice(0, 200)}`);
       }
 
       const data = (await response.json()) as {
         choices?: Array<{ message?: { content?: string } }>;
         usage?: { prompt_tokens?: number; completion_tokens?: number };
+        model?: string;
       };
+      phase('first_byte');
 
       const summary = data?.choices?.[0]?.message?.content ?? '';
       if (!summary.trim()) {
+        phase('response_normalization_failed', undefined, 'empty_summary');
+        failurePhaseRecorded = true;
         throw new Error('Compaction API returned empty summary');
       }
+
+      phase('response_normalized');
+      callbacks?.onInvocationCompleted?.({
+        inference_id: inferenceId,
+        provider,
+        model,
+        status: 'delivered',
+        observed_model_id: typeof data.model === 'string' ? data.model : null,
+        output_digest: createHash('sha256').update(summary.trim()).digest('hex'),
+      });
+      completed = true;
 
       return {
         summary: summary.trim(),
         inputTokens: data?.usage?.prompt_tokens ?? 0,
         outputTokens: data?.usage?.completion_tokens ?? 0,
+        observedModelId: typeof data.model === 'string' ? data.model : null,
       };
+    } catch (error) {
+      if (!completed) {
+        if (!failurePhaseRecorded) {
+          phase(
+            responseStarted ? 'response_normalization_failed' : 'provider_error',
+            undefined,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+        callbacks?.onInvocationCompleted?.({
+          inference_id: inferenceId,
+          provider,
+          model,
+          status: 'failed',
+          observed_model_id: null,
+        });
+        completed = true;
+      }
+      throw error;
     } finally {
       clearTimeout(timeout);
       if (signal && onExternalAbort) {
@@ -579,6 +673,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     model: string,
     apiKey: string,
     signal?: AbortSignal,
+    callbacks?: RunnerCallbacks,
   ): Promise<CompactionApiResult> {
     const timeoutMs = 30_000;
     const controller = new AbortController();
@@ -590,6 +685,45 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
       signal.addEventListener('abort', onExternalAbort, { once: true });
     }
 
+    const provider: ProviderId = 'anthropic';
+    const inferenceId = randomUUID();
+    const requestBody = {
+      model,
+      max_tokens: this.maxSummaryTokens,
+      temperature: 0.3,
+      system: 'You are a precise conversation summarizer. Output only the structured summary with no additional commentary.',
+      messages: [{ role: 'user', content: prompt }],
+    };
+    const inputDigest = createHash('sha256')
+      .update(JSON.stringify(requestBody))
+      .digest('hex');
+    const phase = (
+      phaseName: Parameters<NonNullable<RunnerCallbacks['onInvocationPhase']>>[0]['phase'],
+      statusCode?: number,
+      detail?: string,
+    ): void => {
+      callbacks?.onInvocationPhase?.({
+        inference_id: inferenceId,
+        provider,
+        model,
+        phase: phaseName,
+        ...(statusCode !== undefined ? { status_code: statusCode } : {}),
+        ...(detail !== undefined ? { detail } : {}),
+      });
+    };
+    callbacks?.onInvocationStarted?.({
+      inference_id: inferenceId,
+      provider,
+      requested_model_id: model,
+      normalized_model_id: model,
+      sent_model_id: model,
+      input_digest: inputDigest,
+    });
+    phase('request_created');
+    phase('request_dispatched');
+    let responseStarted = false;
+    let failurePhaseRecorded = false;
+    let completed = false;
     try {
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -599,24 +733,24 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
           'anthropic-version': '2023-06-01',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          model,
-          max_tokens: this.maxSummaryTokens,
-          temperature: 0.3,
-          system: 'You are a precise conversation summarizer. Output only the structured summary with no additional commentary.',
-          messages: [{ role: 'user', content: prompt }],
-        }),
+        body: JSON.stringify(requestBody),
       });
+      responseStarted = true;
+      phase('response_started', response.status);
 
       if (!response.ok) {
         const body = await response.text().catch(() => '');
+        phase('provider_error', response.status, `http_${response.status}`);
+        failurePhaseRecorded = true;
         throw new Error(`Compaction Anthropic API error (${response.status}): ${body.slice(0, 200)}`);
       }
 
       const data = (await response.json()) as {
         content?: Array<{ type: string; text?: string }>;
         usage?: { input_tokens?: number; output_tokens?: number };
+        model?: string;
       };
+      phase('first_byte');
 
       const summary =
         data?.content
@@ -625,14 +759,47 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
           .join('\n') ?? '';
 
       if (!summary.trim()) {
+        phase('response_normalization_failed', undefined, 'empty_summary');
+        failurePhaseRecorded = true;
         throw new Error('Compaction Anthropic API returned empty summary');
       }
+
+      phase('response_normalized');
+      callbacks?.onInvocationCompleted?.({
+        inference_id: inferenceId,
+        provider,
+        model,
+        status: 'delivered',
+        observed_model_id: typeof data.model === 'string' ? data.model : null,
+        output_digest: createHash('sha256').update(summary.trim()).digest('hex'),
+      });
+      completed = true;
 
       return {
         summary: summary.trim(),
         inputTokens: data?.usage?.input_tokens ?? 0,
         outputTokens: data?.usage?.output_tokens ?? 0,
+        observedModelId: typeof data.model === 'string' ? data.model : null,
       };
+    } catch (error) {
+      if (!completed) {
+        if (!failurePhaseRecorded) {
+          phase(
+            responseStarted ? 'response_normalization_failed' : 'provider_error',
+            undefined,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+        callbacks?.onInvocationCompleted?.({
+          inference_id: inferenceId,
+          provider,
+          model,
+          status: 'failed',
+          observed_model_id: null,
+        });
+        completed = true;
+      }
+      throw error;
     } finally {
       clearTimeout(timeout);
       if (signal && onExternalAbort) {
@@ -796,7 +963,9 @@ export function resolveCompactionModelId(input: {
     return input.providerModelId.trim();
   }
   // Family alone is not a provider model id — fall through to default.
-  return DEFAULT_COMPACTION_CONFIG.compactionModel;
+  return process.env['OPENROUTER_API_KEY'] && !process.env['DEEPINFRA_API_KEY']
+    ? 'deepseek/deepseek-v4-flash-0731'
+    : DEFAULT_COMPACTION_CONFIG.compactionModel;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

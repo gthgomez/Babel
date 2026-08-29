@@ -57,7 +57,7 @@ export type ScriptedToolStep = {
 
 export type ScriptedTranscript = {
   id: string;
-  arm: 'babel_prompt_control' | 'babel_shadow' | 'babel_enforce';
+  arm: 'babel_prompt_control' | 'babel_shadow' | 'babel_enforce' | 'raw_opencode';
   steps: ScriptedToolStep[];
   claimed_complete?: boolean;
 };

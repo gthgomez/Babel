@@ -12,6 +12,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { ChatMessage } from './chatCompaction.js';
 import { estimateTokens } from './chatCompaction.js';
+import type { RunnerCallbacks } from '../runners/base.js';
+import { LIVE_OPENROUTER_MODEL_ID } from '../modelPolicy.js';
 import {
   appendThreadEvent,
   type ThreadEventLog,
@@ -458,6 +460,7 @@ export interface ChatEngineCompactionHost {
         model: string;
         maxTokens: number;
         signal?: AbortSignal;
+        callbacks?: RunnerCallbacks;
       },
     ): Promise<{
       messages: ChatMessage[];
@@ -489,6 +492,8 @@ export interface ChatEngineCompactionHost {
   threadLog: ThreadEventLog;
   sessionLog: SessionEventLog;
   turnId: string | null;
+  /** Provider lifecycle callbacks for the LLM summarizer inference. */
+  providerCallbacks?: RunnerCallbacks;
   shouldUseTextTools: () => boolean;
   compactHeuristic: () => void;
   checkpoint: () => Promise<void>;
@@ -537,6 +542,12 @@ export async function runChatEngineCompaction(
     host.modelPolicy?.family ??
     'deepseek-v4-pro';
   const tokenTriggered = host.shouldCompactByTokens(tokenEstimate, modelId);
+  const reserve = host.shouldUseTextTools()
+    ? host.textToolsReserve
+    : host.reserveTokens;
+  const compactionNeeded =
+    tokenTriggered ||
+    tokenEstimate > host.limits.maxEstimatedTokens - reserve;
   const applyHeuristic = async (): Promise<void> => {
     const prior = [...host.conversation]
     host.compactHeuristic();
@@ -552,23 +563,25 @@ export async function runChatEngineCompaction(
   };
 
   if (host.compactionManager) {
-    const reserve = host.shouldUseTextTools()
-      ? host.textToolsReserve
-      : host.reserveTokens;
-    if (tokenTriggered || tokenEstimate > host.limits.maxEstimatedTokens - reserve) {
+    if (compactionNeeded) {
       try {
+        const exactLockedGlm =
+          host.modelPolicy?.providerModelId === LIVE_OPENROUTER_MODEL_ID;
         const mgr = await host.compactionManager.compactWithResult(host.conversation, {
           model: host.resolveModel({
             ...(host.modelPolicy?.providerModelId
               ? { providerModelId: host.modelPolicy.providerModelId }
               : {}),
             ...(host.modelPolicy?.family ? { family: host.modelPolicy.family } : {}),
-            ...(process.env['BABEL_COMPACTION_MODEL']
+            ...(!exactLockedGlm && process.env['BABEL_COMPACTION_MODEL']
               ? { explicitModel: process.env['BABEL_COMPACTION_MODEL'] }
-              : {}),
+              : exactLockedGlm
+                ? { explicitModel: LIVE_OPENROUTER_MODEL_ID }
+                : {}),
           }),
           maxTokens: host.limits.maxEstimatedTokens,
           signal: host.abortSignal,
+          ...(host.providerCallbacks ? { callbacks: host.providerCallbacks } : {}),
         });
         if (mgr.changed) {
           const threadEventCountBefore = host.threadLog.events.length;
@@ -634,7 +647,7 @@ export async function runChatEngineCompaction(
         await applyHeuristic();
       }
     }
-  } else {
+  } else if (compactionNeeded) {
     await applyHeuristic();
   }
 

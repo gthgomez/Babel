@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import test from "node:test";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 import { interleaveTrials } from "./interleave.js";
 import {
@@ -182,9 +185,73 @@ test("--smoke with explicit trials != 1 is refused (spend contract)", () => {
   assert.equal(ok.trials.length, 1);
 });
 
+test("live canary refuses an unapproved model before any task executes", () => {
+  const previous = process.env["OPENROUTER_API_KEY"];
+  try {
+    process.env["OPENROUTER_API_KEY"] = "synthetic-test-key";
+    assert.throws(
+      () => runCodingCanary({
+        provider: "live",
+        authorizeLive: true,
+        model: "unapproved-model",
+      }),
+      /unapproved live model/,
+    );
+  } finally {
+    if (previous === undefined) delete process.env["OPENROUTER_API_KEY"];
+    else process.env["OPENROUTER_API_KEY"] = previous;
+  }
+});
+
+test("GLM live canary requires the OpenRouter credential, not a DeepSeek key", () => {
+  const previousDeepSeek = process.env["DEEPSEEK_API_KEY"];
+  const previousOpenRouter = process.env["OPENROUTER_API_KEY"];
+  try {
+    process.env["DEEPSEEK_API_KEY"] = "synthetic-deepseek-key";
+    delete process.env["OPENROUTER_API_KEY"];
+    assert.throws(
+      () => runCodingCanary({
+        provider: "live",
+        authorizeLive: true,
+        model: "z-ai/glm-5.3-flash",
+      }),
+      /OPENROUTER_API_KEY is not set/,
+    );
+  } finally {
+    if (previousDeepSeek === undefined) delete process.env["DEEPSEEK_API_KEY"];
+    else process.env["DEEPSEEK_API_KEY"] = previousDeepSeek;
+    if (previousOpenRouter === undefined) delete process.env["OPENROUTER_API_KEY"];
+    else process.env["OPENROUTER_API_KEY"] = previousOpenRouter;
+  }
+});
+
+test("legacy live DeepSeek canary selectors require OpenRouter and never direct credentials", () => {
+  const previousDeepSeek = process.env["DEEPSEEK_API_KEY"];
+  const previousOpenRouter = process.env["OPENROUTER_API_KEY"];
+  try {
+    process.env["DEEPSEEK_API_KEY"] = "synthetic-deepseek-key";
+    delete process.env["OPENROUTER_API_KEY"];
+    assert.throws(
+      () => runCodingCanary({
+        provider: "live",
+        authorizeLive: true,
+        model: "deepseek-v4-pro",
+      }),
+      /OPENROUTER_API_KEY is not set/,
+    );
+  } finally {
+    if (previousDeepSeek === undefined) delete process.env["DEEPSEEK_API_KEY"];
+    else process.env["DEEPSEEK_API_KEY"] = previousDeepSeek;
+    if (previousOpenRouter === undefined) delete process.env["OPENROUTER_API_KEY"];
+    else process.env["OPENROUTER_API_KEY"] = previousOpenRouter;
+  }
+});
+
 test("plan describes the exact execution for every flag combination", () => {
   // Full suite.
   const full = describeCanaryPlan({});
+  assert.equal(full.provider, "mock");
+  assert.equal(full.model, "deepseek-v4-flash-openrouter");
   assert.equal(full.tasks, CANARY_TASKS.length);
   assert.equal(full.task_ids.length, CANARY_TASKS.length);
   assert.deepEqual(
@@ -199,9 +266,42 @@ test("plan describes the exact execution for every flag combination", () => {
   assert.equal(smoke.trials_per_task, 1);
   assert.equal(smoke.smoke, true);
 
+  const glmLive = describeCanaryPlan({
+    provider: "live",
+    model: "z-ai/glm-5.3-flash",
+    taskId: "C01",
+    trials: 1,
+  });
+  assert.equal(glmLive.provider, "live");
+  assert.equal(glmLive.model, "z-ai/glm-5.3-flash");
+  assert.equal(glmLive.evidence_scope, "LIVE_MODEL_CANARY");
+  const glmBackendKeyLive = describeCanaryPlan({
+    provider: "live",
+    model: "glm-5.3-flash",
+    taskId: "C01",
+    trials: 1,
+  });
+  assert.equal(glmBackendKeyLive.model, "z-ai/glm-5.3-flash");
+  const deepSeekLegacyLive = describeCanaryPlan({
+    provider: "live",
+    model: "deepseek-v4-pro",
+    taskId: "C01",
+    trials: 1,
+  });
+  assert.equal(deepSeekLegacyLive.model, "deepseek/deepseek-v4-pro");
+
   // Explicit single task → that task, default trials.
   const single = describeCanaryPlan({ taskId: "C05" });
   assert.deepEqual(single.task_ids, ["C05"]);
+  const selected = describeCanaryPlan({
+    taskIds: ["C01", "C02"],
+    trials: 1,
+  });
+  assert.deepEqual(selected.task_ids, ["C01", "C02"]);
+  assert.throws(
+    () => describeCanaryPlan({ taskId: "C01", taskIds: ["C02"] }),
+    /either --task or --tasks/,
+  );
   assert.equal(single.trials_per_task, 3);
 
   // Plan refuses the same invalid combinations execution refuses.
@@ -215,6 +315,22 @@ test("mock C01 gold patch is contract success and not live-aggregatable", () => 
   const c01 = runCodingCanary({ provider: "mock", taskId: "C01", trials: 3 });
   assert.equal(c01.tasks[0]!.all_trials_reliable, true);
   assert.equal(c01.trials[0]!.code_fix_success, true);
+});
+
+test("canary cleans disposable workspaces under an explicit temp root", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "babel-canary-temp-root-"));
+  try {
+    const report = runCodingCanary({
+      provider: "mock",
+      taskId: "C08",
+      trials: 1,
+      tempRoot,
+    });
+    assert.equal(report.trials.length, 1);
+    assert.deepEqual(readdirSync(tempRoot), []);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("every canary task has a validity receipt", () => {
