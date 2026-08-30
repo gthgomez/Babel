@@ -121,6 +121,10 @@ describe('episodeStream schema + append', () => {
       kind: 'recovery',
       type: 'progress_recovery',
     });
+    assert.deepEqual(mapSessionKindToEpisode('capability_binding_receipt'), {
+      kind: 'session',
+      type: 'capability_binding_receipt',
+    });
     assert.deepEqual(mapSessionKindToEpisode('turn_ended'), {
       kind: 'turn',
       type: 'turn_ended',

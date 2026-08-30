@@ -66,6 +66,30 @@ test('DeepSeek API runner calls the direct OpenAI-compatible endpoint', async ()
   assert.ok(Math.abs((metadata?.estimated_cost_usd ?? 0) - 0.00064512) < 1e-12);
 });
 
+test('DeepSeek API runner normalizes a JSON completion when stream callback is present', async () => {
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
+  const chunks: string[] = [];
+
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        choices: [{ message: { content: '{"ok":true}' } }],
+        usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+      }),
+      { status: 200 },
+    )) as typeof fetch;
+
+  const result = await new DeepSeekApiRunner('deepseek-v4-flash').execute(
+    'return ok',
+    z.object({ ok: z.literal(true) }),
+    { onChunk: (chunk) => { chunks.push(chunk); } },
+  );
+
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(chunks, ['{"ok":true}']);
+});
+
 test('DeepSeek API runner retries retryable HTTP failures', async () => {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
@@ -217,6 +241,41 @@ test('DeepSeek API runner executeWithToolsStream yields tool_use for native tool
   assert.equal(metadata?.provider, 'deepseek');
   assert.equal(metadata?.prompt_tokens, 10);
   assert.equal(metadata?.completion_tokens, 5);
+});
+
+test('DeepSeek native stream rejects malformed tool arguments with a terminal receipt', async () => {
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
+
+  globalThis.fetch = (async () =>
+    makeSseResponse([
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"bad_call","type":"function","function":{"name":"read_file","arguments":"{\\"path\\":"}}]}}]}',
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}',
+      'data: [DONE]',
+    ])) as typeof fetch;
+
+  const runner = new DeepSeekApiRunner('deepseek-v4-flash');
+  const events: any[] = [];
+  const phases: string[] = [];
+  const completions: string[] = [];
+  for await (const event of runner.executeWithToolsStream(
+    [{ role: 'user', content: 'read the file' }],
+    [],
+    undefined,
+    undefined,
+    undefined,
+    {
+      onInvocationPhase: (event) => phases.push(event.phase),
+      onInvocationCompleted: (event) => completions.push(event.status),
+    },
+  )) {
+    events.push(event);
+  }
+
+  assert.deepEqual(events.map((event) => event.type), ['error']);
+  assert.match(events[0]!.message, /Malformed arguments/);
+  assert.ok(phases.includes('response_normalization_failed'));
+  assert.deepEqual(completions, ['failed']);
 });
 
 test('DeepSeek native POST retains the durable committed compaction capsule', async () => {
@@ -400,6 +459,8 @@ test('DeepSeek native tool stream emits a complete retry lifecycle', async () =>
   let calls = 0;
   const scheduled: any[] = [];
   const settled: any[] = [];
+  const lifecycle: any[] = [];
+  const phases: any[] = [];
   globalThis.fetch = (async () => {
     calls += 1;
     if (calls === 1) return new Response('retry later', { status: 503 });
@@ -407,13 +468,30 @@ test('DeepSeek native tool stream emits a complete retry lifecycle', async () =>
   }) as typeof fetch;
   const events: string[] = [];
   for await (const event of new DeepSeekApiRunner('deepseek-v4-flash').executeWithToolsStream!(
-    [{ role: 'user', content: 'hello' }], [], undefined, undefined, 'auto', {
+    [{ role: 'user', content: 'hello' }], [{
+      type: 'function',
+      function: { name: 'read_file', description: 'Read a file', parameters: { type: 'object' } },
+    }], undefined, undefined, 'auto', {
       onRetry: (event) => scheduled.push(event),
       onRetrySettled: (event) => settled.push(event),
+      onInvocationStarted: (event) => lifecycle.push(['started', event]),
+      onInvocationCompleted: (event) => lifecycle.push(['completed', event]),
+      onInvocationPhase: (event) => phases.push(event.phase),
     },
   )) events.push(event.type);
   assert.equal(calls, 2);
   assert.deepEqual(scheduled.map((event) => event.attempt), [2]);
   assert.deepEqual(settled.map((event) => [event.attempt, event.outcome]), [[2, 'succeeded']]);
+  assert.equal(lifecycle.length, 2);
+  assert.equal(lifecycle[0]![0], 'started');
+  assert.equal(lifecycle[1]![0], 'completed');
+  assert.equal(lifecycle[1]![1].status, 'delivered');
+  assert.match(lifecycle[0]![1].input_digest, /^[a-f0-9]{64}$/);
+  assert.deepEqual(lifecycle[0]![1].capability_bindings, [{
+    capability: 'read_file', advertised: true, authorized: null, effective: null,
+  }]);
+  for (const phase of ['request_created', 'request_dispatched', 'response_started', 'first_byte', 'stream_completed']) {
+    assert.ok(phases.includes(phase), `missing provider phase ${phase}`);
+  }
   assert.ok(events.includes('text_delta'));
 });

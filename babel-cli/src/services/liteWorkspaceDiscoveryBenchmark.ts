@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
 import { isPathInside } from './targetResolver.js';
 import { resolveBabelCliEntry, runBabelCli } from './liteTrustDemo.js';
+import { buildOpenRouterDeepSeekLiveEnv } from '../modelPolicy.js';
 import type { VaguenessCheckResult } from './liteVaguenessBenchmark.js';
 import { scoreVaguenessScenario, type VaguenessScenario } from './liteVaguenessBenchmark.js';
 
@@ -552,9 +553,10 @@ function invokeDiscoveryCli(
     projectRoot,
     cliEntry,
     offlineDemo: provider === 'mock',
-    env: {
-      BABEL_DAILY_PROFILE: 'terminal',
-    },
+    env:
+      provider === 'live'
+        ? { ...buildOpenRouterDeepSeekLiveEnv(), BABEL_DAILY_PROFILE: 'terminal' }
+        : { BABEL_DAILY_PROFILE: 'terminal' },
   });
 }
 

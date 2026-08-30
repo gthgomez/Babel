@@ -63,7 +63,7 @@ test('docs audit command emits deterministic JSON', () => {
 });
 
 test('simplify command emits deterministic JSON without model calls', () => {
-  const result = runCli(['simplify', 'babel-cli/src/cli/argv.ts', '--json']);
+  const result = runCli(['simplify', 'src/cli/argv.ts', '--json']);
 
   assert.equal(result.status, 0, result.stderr);
   const payload = JSON.parse(result.stdout) as {
@@ -186,7 +186,7 @@ test('prove command writes proof artifacts for an explicit run directory', () =>
   const result = runCli(['prove', runDir, '--json']);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /COMPLETE_VERIFIED/);
+  assert.match(result.stdout, /VERIFIED_COMPLETE/);
   assert.equal(existsSync(join(runDir, 'proof_status.json')), true);
   assert.equal(existsSync(join(runDir, 'BABEL_RUN_REPORT.md')), true);
 });
@@ -196,7 +196,7 @@ test('inspect --report writes proof artifacts from the inspection surface', () =
   const result = runCli(['inspect', '--report', '--run', runDir]);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /STATUS: COMPLETE_VERIFIED/);
+  assert.match(result.stdout, /STATUS: VERIFIED_COMPLETE/);
   assert.equal(existsSync(join(runDir, 'proof_status.json')), true);
   assert.equal(existsSync(join(runDir, 'BABEL_RUN_REPORT.md')), true);
 });

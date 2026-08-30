@@ -26,6 +26,26 @@ function Invoke-Checker([string]$Title, [string]$Body, [string[]]$Messages, [str
   return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = ($output -join "`n") }
 }
 
+function Remove-TestTempRoot {
+  for ($attempt = 0; $attempt -lt 8; $attempt++) {
+    if (-not (Test-Path -LiteralPath $tempRoot)) { return }
+    try {
+      Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction Stop
+      return
+    } catch {
+      if ($attempt -eq 7 -and (Test-Path -LiteralPath $tempRoot)) {
+        # Windows scanners can briefly hold the synthetic event file. The
+        # assertions have already completed; do not turn transient cleanup
+        # contention into a false policy-test failure.
+        Write-Warning "Synthetic PR metadata fixture cleanup was deferred: $tempRoot"
+        return
+      }
+      if ($attempt -eq 7) { return }
+      Start-Sleep -Milliseconds (100 + (100 * $attempt))
+    }
+  }
+}
+
 try {
   $checkerSource = Get-Content -LiteralPath $checker -Raw
   $workflowSource = Get-Content -LiteralPath $workflow -Raw
@@ -44,10 +64,11 @@ try {
   Assert-True $metadataJobMatch.Success 'workflow must retain the public-pr-metadata job'
   $metadataJob = $metadataJobMatch.Groups['body'].Value
   Assert-True ($metadataJob -match "(?m)^\s+if:\s*github\.event_name == 'pull_request_target'\s*$") 'public-pr-metadata must remain restricted to pull_request_target'
-  Assert-True ($metadataJob -match '(?m)^\s+ref:\s*\$\{\{\s*github\.event\.repository\.default_branch\s*\}\}\s*$') 'trusted metadata validation must check out the default branch'
-  Assert-True ($metadataJob -notmatch 'github\.event\.pull_request\.(head|ref|sha)') 'trusted metadata validation must not check out PR-controlled code'
+  Assert-True ($metadataJob -match '(?m)^\s+ref:\s*\$\{\{\s*github\.event\.pull_request\.base\.sha\s*\}\}\s*$') 'trusted metadata validation must check out the exact PR base SHA'
+  Assert-True ($metadataJob -notmatch 'github\.event\.pull_request\.(head\.sha|head\.ref|head\.label|ref)') 'trusted metadata validation must not check out PR-controlled code'
   Assert-True ($workflowSource -match 'pull-requests:\s*read') 'trusted workflow must retain pull-request read permission'
-  Assert-True ($workflowSource -match 'GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}') 'trusted workflow must export the GitHub token to the metadata checker'
+  Assert-True ($metadataJob -match '(?ms)Check public PR metadata.*?env:\s*\r?\n\s+GH_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}') 'trusted workflow must scope GH_TOKEN to the metadata checker step'
+  Assert-True ($metadataJob -notmatch 'GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}') 'trusted workflow must not use the legacy token variable'
 
   $syntheticIdentifier = 'fixture-' + 'internal-identifier'
   $supplemental = New-SupplementalPolicy @([regex]::Escape($syntheticIdentifier))
@@ -121,5 +142,5 @@ try {
 
   Write-Host 'Public PR metadata policy tests passed.' -ForegroundColor Green
 } finally {
-  if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
+  Remove-TestTempRoot
 }

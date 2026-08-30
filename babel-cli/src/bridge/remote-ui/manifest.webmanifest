@@ -4,8 +4,8 @@
   "start_url": "/ui/",
   "scope": "/ui/",
   "display": "standalone",
-  "background_color": "#111111",
-  "theme_color": "#111111",
+  "background_color": "#0B0D12",
+  "theme_color": "#0B0D12",
   "icons": [
     {
       "src": "/ui/icon.svg",

@@ -23,7 +23,7 @@ function makeRunDir(name: string): string {
   return runDir;
 }
 
-test('buildProofStatus marks changed run with passing verifier as COMPLETE_VERIFIED', () => {
+test('buildProofStatus marks changed run with passing verifier as VERIFIED_COMPLETE', () => {
   const runDir = makeRunDir('verified');
   writeFileSync(
     join(runDir, '06_runtime_telemetry.json'),
@@ -57,7 +57,7 @@ test('buildProofStatus marks changed run with passing verifier as COMPLETE_VERIF
 
   const proof = buildProofStatus(runDir);
 
-  assert.equal(proof.proof_status, 'COMPLETE_VERIFIED');
+  assert.equal(proof.proof_status, 'VERIFIED_COMPLETE');
   assert.equal(proof.execution_happened, true);
   assert.equal(proof.tests_run, true);
   assert.equal(proof.tests_passed, true);
@@ -140,7 +140,7 @@ test('buildProofStatus reads numerically latest QA verdict artifact', () => {
   const proof = buildProofStatus(runDir);
 
   assert.equal(proof.qa_passed, true);
-  assert.equal(proof.proof_status, 'COMPLETE_VERIFIED');
+  assert.equal(proof.proof_status, 'VERIFIED_COMPLETE');
 });
 
 test('writeProofArtifacts refuses to write into non-run directories', () => {

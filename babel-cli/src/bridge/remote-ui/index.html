@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
-  <meta name="theme-color" content="#111111"/>
+  <meta name="theme-color" content="#0b0d12"/>
   <meta name="application-name" content="Babel Remote"/>
   <link rel="manifest" href="/ui/manifest.webmanifest"/>
   <link rel="icon" href="/ui/icon.svg" type="image/svg+xml"/>
@@ -11,90 +11,111 @@
   <title>Babel Remote</title>
 </head>
 <body>
-  <header class="header">
-    <div>
-      <h1>Babel Remote</h1>
-      <p id="workspace" class="muted">workspace: —</p>
-    </div>
-    <div class="status-block">
-      <div id="host-state" data-testid="host-state">UNKNOWN</div>
-      <div id="thread-state" data-testid="thread-state">thread: NONE</div>
-      <div id="turn-state" data-testid="turn-state">turn: IDLE</div>
-    </div>
-  </header>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/ui/" aria-label="Babel Remote home">
+        <span class="brand-mark" aria-hidden="true">B</span>
+        <span><strong>Babel</strong><small>REMOTE</small></span>
+      </a>
+      <div class="topbar-status">
+        <span id="connection-dot" class="status-dot" aria-hidden="true"></span>
+        <span id="connection-copy">Host status unknown</span>
+        <button id="reconnect" class="button button-quiet" type="button" disabled>Reconnect</button>
+      </div>
+    </header>
 
-  <section class="card" id="auth-card">
-    <h2>Authenticate</h2>
-    <label>Bearer token
-      <input id="token" type="password" autocomplete="off" spellcheck="false"/>
-    </label>
-    <label>Workspace root
-      <input id="root" autocomplete="off" placeholder="registered host workspace"/>
-    </label>
-    <div class="row">
-      <button id="connect" type="button">Connect</button>
-      <button id="reconnect" type="button" disabled>Reconnect</button>
-    </div>
-    <p class="muted">Token stays in memory for this page only. Reload requires re-auth.</p>
-  </section>
+    <main>
+      <section class="hero" aria-labelledby="page-title">
+        <p class="eyebrow">SUPERVISORY CONSOLE</p>
+        <h1 id="page-title">Ship from anywhere.</h1>
+        <p class="hero-copy">A focused window into the Babel host. Your phone observes structured work while the host keeps control of credentials, files, execution, and approvals.</p>
+      </section>
 
-  <section class="card">
-    <h2>Thread</h2>
-    <div class="row">
-      <button id="create" type="button" disabled>Create thread</button>
-      <button id="resume" type="button" disabled>Resume thread</button>
-    </div>
-    <label>Known thread id
-      <input id="thread-id" autocomplete="off"/>
-    </label>
-  </section>
+      <section class="overview-grid" aria-label="Session overview">
+        <article id="host-card" class="status-card status-card-accent">
+          <div class="card-kicker"><span class="status-dot" aria-hidden="true"></span>HOST</div>
+          <strong id="host-state" data-testid="host-state">UNKNOWN</strong>
+          <p id="host-detail">Reachability has not been established.</p>
+        </article>
+        <article id="thread-card" class="status-card">
+          <div class="card-kicker">THREAD</div>
+          <strong id="thread-state" data-testid="thread-state">No active thread</strong>
+          <p id="thread-detail">Create or resume a session to begin.</p>
+        </article>
+        <article id="turn-card" class="status-card">
+          <div class="card-kicker">TURN</div>
+          <strong id="turn-state" data-testid="turn-state">IDLE</strong>
+          <p id="turn-detail">Ready when the host and thread are ready.</p>
+        </article>
+      </section>
 
-  <section class="card">
-    <h2>Composer</h2>
-    <textarea id="composer" placeholder="Paste the full Markdown/code prompt. This is structured UTF-8, not keystrokes." disabled></textarea>
-    <div class="row">
-      <button id="send" type="button" disabled>Send</button>
-      <button id="stop" type="button" disabled>Stop</button>
-    </div>
-  </section>
+      <section id="workspace-card" class="surface workspace-card" aria-labelledby="workspace-heading">
+        <div class="section-heading">
+          <div><p class="eyebrow">CONTROLLED WORKSPACE</p><h2 id="workspace-heading">Current session</h2></div>
+          <span id="harness-label" class="pill">Babel native</span>
+        </div>
+        <dl class="session-facts">
+          <div><dt>Workspace</dt><dd id="workspace">—</dd></div>
+          <div><dt>Thread</dt><dd id="thread-id-display">—</dd></div>
+        </dl>
+        <details id="auth-card" class="auth-panel">
+          <summary>Connection settings</summary>
+          <p class="muted">The bearer token stays in memory for this page only. Reload requires re-authentication.</p>
+          <label for="token">Bearer token</label>
+          <input id="token" type="password" autocomplete="off" spellcheck="false"/>
+          <label for="root">Workspace root</label>
+          <input id="root" autocomplete="off" placeholder="registered host workspace"/>
+          <div class="button-row"><button id="connect" class="button button-primary" type="button">Connect</button><button id="create" class="button" type="button" disabled>Create thread</button><button id="resume" class="button" type="button" disabled>Resume thread</button></div>
+          <label for="thread-id">Known thread id</label>
+          <input id="thread-id" autocomplete="off"/>
+        </details>
+      </section>
 
-  <section class="card">
-    <h2>Current action</h2>
-    <p id="action-state">idle</p>
-  </section>
+      <section id="approval-card" class="surface approval-card hidden" aria-labelledby="approval-heading" role="alert">
+        <div class="approval-heading"><span class="warning-icon" aria-hidden="true">!</span><div><p class="eyebrow">ACTION PAUSED</p><h2 id="approval-heading">Review before allowing</h2></div></div>
+        <p class="approval-copy">This operation needs a one-time decision. Check the exact target and digest; a decision never grants a session-wide permission.</p>
+        <dl id="approval-details" class="approval-details"></dl>
+        <div class="button-row approval-actions"><button id="allow-once" class="button button-allow" type="button">Allow once</button><button id="deny" class="button button-danger" type="button">Deny</button></div>
+      </section>
 
-  <section class="card hidden" id="approval-card">
-    <h2>Approval</h2>
-    <pre id="approval-body"></pre>
-    <div class="row">
-      <button id="allow-once" type="button">ALLOW ONCE</button>
-      <button id="deny" type="button">DENY</button>
-    </div>
-  </section>
+      <section class="surface action-card" aria-labelledby="action-heading">
+        <div class="section-heading"><div><p class="eyebrow">LIVE ACTIVITY</p><h2 id="action-heading">What Babel is doing</h2></div><span id="action-state-badge" class="pill pill-neutral">Idle</span></div>
+        <p id="action-state" class="action-title">Ready for your next instruction</p>
+        <p id="action-detail" class="muted">The host is connected and no turn is running.</p>
+      </section>
 
-  <section class="card">
-    <h2>Transcript</h2>
-    <div id="transcript" class="transcript"></div>
-  </section>
+      <section class="surface composer-card" aria-labelledby="composer-heading">
+        <div class="section-heading"><div><p class="eyebrow">STRUCTURED INPUT</p><h2 id="composer-heading">Send an instruction</h2></div><span id="composer-hint" class="muted">UTF-8 payload</span></div>
+        <label class="sr-only" for="composer">Prompt for Babel</label>
+        <textarea id="composer" rows="5" placeholder="Paste a prompt, code, or command context…" disabled></textarea>
+        <div class="composer-footer"><span id="composer-status" class="muted">Connect to enable the composer.</span><div class="button-row"><button id="send" class="button button-primary" type="button" disabled>Send</button><button id="stop" class="button button-danger" type="button" disabled>Stop</button></div></div>
+      </section>
 
-  <section class="card">
-    <h2>Changed files</h2>
-    <pre id="files"></pre>
-    <button id="refresh-files" type="button" disabled>view changed files</button>
-  </section>
+      <section class="surface transcript-card" aria-labelledby="transcript-heading">
+        <div class="section-heading"><div><p class="eyebrow">SESSION LOG</p><h2 id="transcript-heading">Transcript</h2></div><span id="transcript-count" class="pill pill-neutral">0 events</span></div>
+        <div id="transcript" class="transcript" role="log" aria-live="polite" aria-label="Remote session transcript"></div>
+      </section>
 
-  <section class="card">
-    <h2>Diff</h2>
-    <pre id="diff" class="diff"></pre>
-    <button id="refresh-diff" type="button" disabled>view diff</button>
-  </section>
+      <section class="detail-grid" aria-label="Review details">
+        <article class="surface detail-card" aria-labelledby="files-heading">
+          <div class="section-heading"><div><p class="eyebrow">WORKSPACE</p><h2 id="files-heading">Changed files</h2></div><span id="files-count" class="pill pill-neutral">0</span></div>
+          <div id="files" class="file-list" aria-live="polite"><p class="empty-state">No changed files loaded.</p></div>
+          <button id="refresh-files" class="button button-quiet" type="button" disabled>View changed files</button>
+        </article>
+        <article class="surface detail-card" aria-labelledby="verification-heading">
+          <div class="section-heading"><div><p class="eyebrow">EVIDENCE</p><h2 id="verification-heading">Verification</h2></div><span id="verification-badge" class="pill pill-neutral">NOT VERIFIED</span></div>
+          <p id="verification" class="verification-copy">No verification has been recorded for this thread.</p>
+          <button id="refresh-verification" class="button button-quiet" type="button" disabled>View verification</button>
+        </article>
+      </section>
 
-  <section class="card">
-    <h2>Verification</h2>
-    <p id="verification">NOT_VERIFIED</p>
-    <button id="refresh-verification" type="button" disabled>view verification</button>
-  </section>
-
+      <section class="surface diff-card" aria-labelledby="diff-heading">
+        <div class="section-heading"><div><p class="eyebrow">REVIEW</p><h2 id="diff-heading">Diff</h2></div><button id="refresh-diff" class="button button-quiet" type="button" disabled>View diff</button></div>
+        <pre id="diff" class="diff" tabindex="0">No diff loaded yet.</pre>
+      </section>
+    </main>
+    <footer class="footer"><span>Babel Remote V1</span><span>Host-authoritative · private network</span></footer>
+  </div>
   <script src="/ui/state.js"></script>
   <script src="/ui/render.js"></script>
   <script src="/ui/app.js"></script>

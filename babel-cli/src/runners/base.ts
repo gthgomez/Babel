@@ -40,6 +40,8 @@
 
 import type { ZodType } from 'zod';
 import type { CostPrecision } from '../services/modelPricingRegistry.js';
+import type { ProviderId } from './providerRegistry.js';
+import type { ContextManifestV1 } from '../agent/contextManifest.js';
 
 export type StructuredOutputFailureKind =
   | 'invalid_json'
@@ -99,6 +101,13 @@ export function buildStructuredOutputError(
 export interface RunnerInvocationMetadata {
   provider: string | null;
   provider_model_id: string | null;
+  /** Model identity at each observable routing boundary. */
+  requested_model_id?: string | null;
+  normalized_model_id?: string | null;
+  sent_model_id?: string | null;
+  observed_model_id?: string | null;
+  /** Upstream provider identity when the gateway exposes it. */
+  upstream_provider?: string | null;
   latency_ms: number | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;
@@ -122,6 +131,21 @@ export interface RunnerInvocationMetadata {
    * (P0-B: Pro reasoning is not silently disabled without a routing reason).
    */
   thinking_disabled_reason?: string | null;
+  /** Capability-aware execution provenance for qualification/campaign receipts. */
+  execution_envelope_hash?: string | null;
+  wire_policy_hash?: string | null;
+  requested_output_budget?: number | null;
+  effective_output_budget?: number | null;
+  actual_reasoning_tokens?: number | null;
+  normalized_finish_reason?: string | null;
+  failure_attribution?: string | null;
+  babel_attempt?: number | null;
+  openrouter_router_attempt?: number | null;
+  upstream_attempt?: number | null;
+  actual_endpoint_id?: string | null;
+  fallback_status?: 'none' | 'occurred' | 'unknown' | null;
+  router_metadata_hash?: string | null;
+  context_transformation_occurred?: boolean | null;
 }
 
 export type RunnerProgressState =
@@ -138,7 +162,7 @@ export interface RunnerProgressEvent {
 
 /** Content-free durable telemetry for a bounded provider retry. */
 export interface ProviderRetryEvent {
-  provider: 'deepinfra' | 'deepseek';
+  provider: ProviderId;
   model: string;
   /** The upcoming request attempt, starting at 2 for the first retry. */
   attempt: number;
@@ -151,12 +175,135 @@ export interface ProviderRetrySettlement extends Pick<ProviderRetryEvent, 'provi
   outcome: 'succeeded' | 'failed' | 'cancelled';
 }
 
+/** Content-free lifecycle receipt for one provider inference. */
+export interface ProviderInvocationStarted {
+  inference_id: string;
+  provider: ProviderId;
+  requested_model_id: string;
+  normalized_model_id: string;
+  sent_model_id: string;
+  input_digest: string;
+  input_message_count?: number;
+  /** Capability state attached to this exact provider input. */
+  capability_bindings?: ProviderCapabilityBinding[];
+  /** Tool-result IDs present in the delivered provider message sequence. */
+  delivered_tool_call_ids?: string[];
+  /** Redacted context-preservation evidence for this exact inference. */
+  context_manifest?: ContextManifestV1;
+  execution_envelope_hash?: string;
+  wire_policy_hash?: string;
+  requested_output_budget?: number | null;
+  effective_output_budget?: number | null;
+}
+
+export interface ProviderCapabilityBinding {
+  capability: string;
+  advertised: boolean;
+  /** Null means the current policy/authority state was not observable here. */
+  authorized: boolean | null;
+  /** Null means environment usability was not probed before dispatch. */
+  effective: boolean | null;
+  evidence_ref?: string;
+}
+
+/** Content-free terminal receipt for one provider inference. */
+export interface ProviderInvocationCompleted {
+  inference_id: string;
+  provider: ProviderId;
+  model: string;
+  status: 'delivered' | 'failed';
+  observed_model_id?: string | null;
+  /** Upstream provider identity when the gateway exposes it. */
+  upstream_provider?: string | null;
+  output_digest?: string | null;
+  normalized_finish_reason?: string | null;
+  failure_attribution?: string | null;
+  actual_endpoint_id?: string | null;
+  fallback_status?: 'none' | 'occurred' | 'unknown' | null;
+  router_metadata_hash?: string | null;
+  openrouter_router_attempt?: number | null;
+  /** Durable evidence for a failed provider invocation. Payloads are never stored. */
+  failure_receipt?: ProviderFailureReceipt;
+  failure_class?: string | null;
+  failure_stage?: ProviderFailureStage | null;
+  provider_request_id?: string | null;
+  api_error_code?: string | null;
+  http_status?: number | null;
+  actual_attempt?: number | null;
+  max_attempts?: number | null;
+  stream?: boolean;
+  inference_started?: boolean;
+  partial_model_output?: boolean;
+  retryable?: boolean;
+  tool_call_count?: number | null;
+  requested_output_budget?: number | null;
+  effective_output_budget?: number | null;
+  wire_policy_hash?: string | null;
+  execution_envelope_hash?: string | null;
+}
+
+export type ProviderFailureStage =
+  | 'request'
+  | 'response'
+  | 'stream'
+  | 'response_normalization'
+  | 'unknown';
+
+/** Content-free failure evidence that can be persisted safely in session logs. */
+export interface ProviderFailureReceipt {
+  inference_id: string;
+  provider: ProviderId;
+  model: string;
+  provider_request_id: string | null;
+  observed_upstream: string | null;
+  http_status: number | null;
+  api_error_code: string | null;
+  failure_class: string;
+  actual_attempt: number;
+  max_attempts: number;
+  stream: boolean;
+  failure_stage: ProviderFailureStage;
+  inference_started: boolean;
+  partial_model_output: boolean;
+  tool_call_count: number;
+  requested_output_budget: number | null;
+  effective_output_budget: number | null;
+  wire_policy_hash: string | null;
+  execution_envelope_hash: string | null;
+  output_digest: string;
+  retryable: boolean;
+}
+
+export type ProviderInvocationPhase =
+  | 'request_created'
+  | 'request_dispatched'
+  | 'response_started'
+  | 'first_byte'
+  | 'stream_progress'
+  | 'stream_completed'
+  | 'provider_error'
+  | 'response_normalized'
+  | 'response_normalization_failed';
+
+/** Content-free phase evidence for one provider invocation. */
+export interface ProviderInvocationPhaseEvent {
+  inference_id: string;
+  provider: ProviderId;
+  model: string;
+  phase: ProviderInvocationPhase;
+  status_code?: number;
+  detail?: string;
+}
+
 export interface RunnerCallbacks {
   onChunk?: (chunk: string) => void | Promise<void>;
   onProgress?: (event: RunnerProgressEvent) => void;
   onThought?: (thought: string) => void;
   onRetry?: (event: ProviderRetryEvent) => void;
   onRetrySettled?: (event: ProviderRetrySettlement) => void;
+  onInvocationStarted?: (event: ProviderInvocationStarted) => void;
+  onInvocationCompleted?: (event: ProviderInvocationCompleted) => void;
+  onInvocationPhase?: (event: ProviderInvocationPhaseEvent) => void;
 }
 
 // ─── Native Function-Calling Types ───────────────────────────────────────────

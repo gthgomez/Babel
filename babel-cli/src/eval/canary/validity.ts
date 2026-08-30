@@ -39,6 +39,7 @@ function cmd(): string[] {
 export function verifyCanaryTaskValidity(
   spec: CanaryTaskSpec,
   repeats = 2,
+  options?: { tempRoot?: string },
 ): TaskValidityReceipt {
   const notes: string[] = [];
   const verifier_digest = createHash("sha256")
@@ -50,6 +51,7 @@ export function verifyCanaryTaskValidity(
       candidateDiffFiles: [],
       oracleFiles: oracle(spec),
       verifierCommand: cmd(),
+      ...(options?.tempRoot ? { cwdHint: options.tempRoot } : {}),
     }),
   );
   const referenceRuns = Array.from({ length: repeats }, () =>
@@ -58,6 +60,7 @@ export function verifyCanaryTaskValidity(
       candidateDiffFiles: goldFiles(spec),
       oracleFiles: oracle(spec),
       verifierCommand: cmd(),
+      ...(options?.tempRoot ? { cwdHint: options.tempRoot } : {}),
     }),
   );
 
@@ -87,6 +90,7 @@ export function verifyCanaryTaskValidity(
             { relativePath: "hidden.test.mjs", contents: spec.visible_test },
           ],
           verifierCommand: cmd(),
+          ...(options?.tempRoot ? { cwdHint: options.tempRoot } : {}),
         })
       : null;
     const hid = gradeInCleanRoom({
@@ -94,6 +98,7 @@ export function verifyCanaryTaskValidity(
       candidateDiffFiles: inadequate,
       oracleFiles: oracle(spec),
       verifierCommand: cmd(),
+      ...(options?.tempRoot ? { cwdHint: options.tempRoot } : {}),
     });
     baseline_verified = vis?.hidden_ok === true && hid.hidden_ok === false;
     reference_verified = referenceRuns.every((r) => r.hidden_ok);

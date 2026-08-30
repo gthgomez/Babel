@@ -7,9 +7,16 @@ import { describe, test } from 'node:test';
 import {
   buildCellTelemetryBundle,
   computeHarnessBoundaryCounters,
+  makeChatRunner,
   pushRoutingReceiptFromMetadata,
 } from './chatEngineObservability.js';
 import { TurnRoutingReceiptLog } from './turnRoutingReceipt.js';
+import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
+
+test('GLM backend key creates the exact OpenRouter phase runner', () => {
+  const runner = makeChatRunner('glm-5.3-flash');
+  assert.ok(runner instanceof OpenRouterApiRunner);
+});
 
 describe('pushRoutingReceiptFromMetadata', () => {
   test('preserves requested/normalized/sent/observed effort (DeepSeek medium→high)', () => {

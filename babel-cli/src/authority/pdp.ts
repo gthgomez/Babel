@@ -46,6 +46,8 @@ export interface ActionRequest {
    * actually wrap the child. Host-user execution is not isolation.
    */
   isolationAvailable?: boolean;
+  /** True only when an explicit host execution boundary is permitted. */
+  hostFallbackAllowed?: boolean;
   /**
    * Decoder-set when the command executes repository-controlled code even
    * if the capability label is local (package scripts, some runners).
@@ -151,7 +153,11 @@ export function decideActionRequest(
     };
   }
 
-  if (requestRequiresIsolation(request) && request.isolationAvailable !== true) {
+  if (
+    requestRequiresIsolation(request) &&
+    request.isolationAvailable !== true &&
+    request.hostFallbackAllowed !== true
+  ) {
     return denyConstraint(
       triggered,
       request.capability === 'run_arbitrary_code'

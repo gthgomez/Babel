@@ -14,7 +14,9 @@ import {
 
 function withApprovedRoots<T>(roots: string[], run: () => T): T {
   const previous = process.env['BABEL_OPENCLAW_APPROVED_ROOTS'];
+  const previousHostFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
   process.env['BABEL_OPENCLAW_APPROVED_ROOTS'] = roots.join(';');
+  process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
   try {
     return run();
   } finally {
@@ -22,6 +24,11 @@ function withApprovedRoots<T>(roots: string[], run: () => T): T {
       delete process.env['BABEL_OPENCLAW_APPROVED_ROOTS'];
     } else {
       process.env['BABEL_OPENCLAW_APPROVED_ROOTS'] = previous;
+    }
+    if (previousHostFallback === undefined) {
+      delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+    } else {
+      process.env['BABEL_ALLOW_HOST_FALLBACK'] = previousHostFallback;
     }
   }
 }

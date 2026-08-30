@@ -11,6 +11,8 @@ import {
   resolveStagePolicyRoutes,
   validateModelPolicyMetadataFreshness,
   assertDeepSeekLiveModelId,
+  assertLiveModelId,
+  buildOpenRouterDeepSeekLiveEnv,
   getNormalizedModelCapabilities,
 } from './modelPolicy.js';
 
@@ -373,6 +375,24 @@ test('DeepSeek live policy accepts Flash/Pro and rejects legacy providers', () =
   const root = createLiveRoutingPolicyRoot();
   assertDeepSeekLiveModelId('deepseek-v4-flash');
   assertDeepSeekLiveModelId('deepseek-v4-pro');
+  assertLiveModelId('z-ai/glm-5.3-flash');
+  assertLiveModelId('deepseek/deepseek-v4-flash');
+  assertDeepSeekLiveModelId('deepseek/deepseek-v4-flash');
+  const glm = resolveModelByKey({ key: 'glm-5.3-flash', liveOnly: true });
+  assert.equal(glm.provider, 'openrouter');
+  assert.equal(glm.providerModelId, 'z-ai/glm-5.3-flash');
+  const deepseekOpenRouter = resolveModelByKey({
+    key: 'deepseek-v4-flash-openrouter',
+    liveOnly: true,
+  });
+  assert.equal(deepseekOpenRouter.provider, 'openrouter');
+  assert.equal(deepseekOpenRouter.providerModelId, 'deepseek/deepseek-v4-flash-0731');
+  const legacyLiveDeepSeek = resolveModelByKey({
+    key: 'deepseek-v4-flash',
+    liveOnly: true,
+  });
+  assert.equal(legacyLiveDeepSeek.provider, 'openrouter');
+  assert.equal(legacyLiveDeepSeek.providerModelId, 'deepseek/deepseek-v4-flash-0731');
   assert.throws(() => assertDeepSeekLiveModelId('Qwen/Qwen3'), /LIVE_MODEL_POLICY/);
 
   const routes = resolveStagePolicyRoutes({ babelRoot: root, liveOnly: true });
@@ -391,6 +411,37 @@ test('DeepSeek live policy accepts Flash/Pro and rejects legacy providers', () =
   );
   assert.throws(() => resolveModelByKey({ key: 'qwen3', babelRoot: root, liveOnly: true }), /LIVE_MODEL_POLICY/);
   assert.throws(() => resolveModelByKey({ key: 'deepinfra-model', babelRoot: root, liveOnly: true }), /LIVE_MODEL_POLICY/);
+});
+
+test('generic live DeepSeek family resolution uses OpenRouter-only backends', () => {
+  const policy = resolveFamilyModelPolicy({ family: 'DeepSeek', liveOnly: true });
+  assert.equal(policy.provider, 'openrouter');
+  assert.equal(policy.resolvedBackendKey, 'deepseek-v4-pro-openrouter');
+  assert.equal(policy.providerModelId, 'deepseek/deepseek-v4-pro');
+  assert.ok(policy.waterfall.every((entry) => entry.provider === 'openrouter'));
+});
+
+test('OpenRouter DeepSeek live environment removes direct credentials and pins auxiliary calls', () => {
+  const env = buildOpenRouterDeepSeekLiveEnv(
+    {
+      OPENROUTER_API_KEY: 'fixture-router-key',
+      DEEPSEEK_API_KEY: 'synthetic-direct-key',
+      BABEL_BENCHMARK_DEEPSEEK_ONLY: '1',
+    },
+    'deepseek-v4-pro',
+  );
+
+  assert.equal(env.OPENROUTER_API_KEY, 'fixture-router-key');
+  assert.equal(env.DEEPSEEK_API_KEY, undefined);
+  assert.equal(env.BABEL_BENCHMARK_DEEPSEEK_ONLY, undefined);
+  assert.equal(env.BABEL_COMPACTION_API_BASE, 'https://openrouter.ai/api/v1/chat/completions');
+  assert.equal(env.BABEL_COMPACTION_MODEL, 'deepseek/deepseek-v4-pro');
+  assert.equal(env.BABEL_DIFF_CRITIC_MODEL, 'deepseek/deepseek-v4-pro');
+  assert.equal(env.BABEL_COMPACTION_API_KEY, 'fixture-router-key');
+  assert.throws(
+    () => buildOpenRouterDeepSeekLiveEnv({}, 'unapproved-model'),
+    /OpenRouter DeepSeek live environment requires an approved selector/,
+  );
 });
 
 test('canonical model capabilities resolve DeepSeek V4 Flash and Pro 1M context / 384k output with true provenance', () => {
@@ -438,4 +489,3 @@ test('unknown context models like qwen3 have context budget 0 and do not compact
   assert.equal(shouldCompactByTokens(1_024, 'qwen3'), false);
   assert.equal(shouldCompactByTokens(50_000, 'qwen3'), false);
 });
-

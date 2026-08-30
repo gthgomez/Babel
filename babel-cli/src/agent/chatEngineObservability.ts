@@ -9,13 +9,19 @@ import type { ChatMessage } from './chatToolDefinitions.js';
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
 import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
 import { OllamaApiRunner } from '../runners/ollamaApi.js';
+import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
 import { globalCostTracker, type SessionUsageSummary } from '../services/costTracker.js';
 import type { BlockedReport, TerminalOutcome } from '../schemas/agentContracts.js';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
 import type { ChatToolAction } from './chatToolDefinitions.js';
 import { chatActionToolName } from './chatToolDefinitions.js';
 import { isOfflineChatMode } from './chatModelPolicy.js';
-import { assertDeepSeekLiveModelId } from '../modelPolicy.js';
+import {
+  LIVE_OPENROUTER_BACKEND_KEY,
+  LIVE_OPENROUTER_MODEL_ID,
+  assertLiveModelId,
+  resolveOpenRouterDeepSeekModelId,
+} from '../modelPolicy.js';
 import type { DiffCriticVerdict } from './diffCritic.js';
 import { computeToolCallAggregates, type ToolCallAggregates } from './toolCallExport.js';
 import type { PolicyEvent, PolicyEventKind, PolicyEventLog } from './policyEventLog.js';
@@ -919,10 +925,22 @@ export function pushProviderTurnMessages(input: {
  *  Extracted from ChatEngine._makeRunner to keep chatEngine.ts under size ratchet. */
 export function makeChatRunner(
   modelName: string,
-): DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner {
-  if (!isOfflineChatMode()) assertDeepSeekLiveModelId(modelName, 'live chat phase routing');
+): DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner {
+  if (!isOfflineChatMode()) assertLiveModelId(modelName, 'live chat phase routing');
   const isDS = modelName.toLowerCase().includes('deepseek');
   const isOL = modelName.toLowerCase().includes('ollama') || modelName.includes(':');
+  if (modelName === LIVE_OPENROUTER_MODEL_ID || modelName === LIVE_OPENROUTER_BACKEND_KEY) {
+    return new OpenRouterApiRunner(LIVE_OPENROUTER_MODEL_ID);
+  }
+  const openRouterDeepSeekModel = resolveOpenRouterDeepSeekModelId(modelName);
+  if (openRouterDeepSeekModel && !isOfflineChatMode()) {
+    return new OpenRouterApiRunner(openRouterDeepSeekModel);
+  }
+  if (isDS && !isOfflineChatMode()) {
+    throw new Error(
+      '[LIVE_MODEL_POLICY] Direct DeepSeek live calls are disabled; use the OpenRouter DeepSeek control route.',
+    );
+  }
   return isOL ? new OllamaApiRunner(modelName)
     : isDS ? new DeepSeekApiRunner(modelName)
     : new DeepInfraApiRunner(modelName);

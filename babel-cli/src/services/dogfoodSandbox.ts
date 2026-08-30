@@ -62,7 +62,9 @@ function createDogfoodRunDir(projectRoot: string): { runId: string; runDir: stri
 }
 
 function copyProjectSnapshot(projectRoot: string, workspaceRoot: string): void {
-  mkdirSync(workspaceRoot, { recursive: true });
+  // On Windows, recursively copying a directory into a pre-created destination
+  // can terminate the Node process with STATUS_STACK_BUFFER_OVERRUN. Let cpSync
+  // create the destination directory itself.
   cpSync(projectRoot, workspaceRoot, {
     recursive: true,
     force: true,
@@ -107,6 +109,7 @@ export async function runDogfoodApply(options: RunDogfoodOptions): Promise<Dogfo
   const previousDryRun = process.env['BABEL_DRY_RUN'];
   const previousDryRunSource = process.env['BABEL_DRY_RUN_SOURCE'];
   const previousShadowRoot = process.env['BABEL_SHADOW_ROOT'];
+  const previousHostFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
 
   try {
     const planHandoff = loadPlanHandoff({
@@ -122,7 +125,10 @@ export async function runDogfoodApply(options: RunDogfoodOptions): Promise<Dogfo
       workspaceRoot = join(projectRoot, '.babel', 'worktrees', runId);
       prepareGitWorktree(projectRoot, workspaceRoot);
     } else {
-      workspaceRoot = join(tmpdir(), 'babel-dogfood-shadow', runId);
+      // Keep the unique workspace directly under the temp root. A shared
+      // `babel-dogfood-shadow` parent can inherit restrictive Windows ACLs
+      // after an earlier elevated run, making realpathSync fail with EPERM.
+      workspaceRoot = join(tmpdir(), `babel-dogfood-shadow-${runId}`);
       if (existsSync(workspaceRoot)) {
         rmSync(workspaceRoot, { recursive: true, force: true });
       }
@@ -131,6 +137,11 @@ export async function runDogfoodApply(options: RunDogfoodOptions): Promise<Dogfo
     }
 
     process.env['BABEL_PROJECT_ROOT'] = workspaceRoot;
+    if ((options.provider ?? 'mock') === 'mock') {
+      // Mock dogfood runs execute against the disposable local workspace. Keep
+      // the host escalation explicit and scoped to this run.
+      process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+    }
 
     const fixResult = await runSmallFixPath({
       task: options.task,
@@ -183,6 +194,7 @@ export async function runDogfoodApply(options: RunDogfoodOptions): Promise<Dogfo
     restoreEnvValue('BABEL_DRY_RUN', previousDryRun);
     restoreEnvValue('BABEL_DRY_RUN_SOURCE', previousDryRunSource);
     restoreEnvValue('BABEL_SHADOW_ROOT', previousShadowRoot);
+    restoreEnvValue('BABEL_ALLOW_HOST_FALLBACK', previousHostFallback);
     releaseLock(projectRoot, BABEL_ROOT, runId);
   }
 }

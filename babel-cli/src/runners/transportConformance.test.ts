@@ -164,7 +164,7 @@ const OPERATION_METHOD: Readonly<Record<ProviderOperation, RegExp>> = {
  * structural check below. Certifying a new provider means adding it here AND
  * to ADAPTER_INDEX AND wiring it in providerEngine.ts — all enforced.
  */
-const EVIDENCE_VETTED_PROVIDERS: readonly ProviderId[] = ['deepseek', 'deepinfra', 'ollama'];
+const EVIDENCE_VETTED_PROVIDERS: readonly ProviderId[] = ['deepseek', 'deepinfra', 'ollama', 'openrouter'];
 
 /** Independent evidence record — registry claims must agree with it. */
 const EVIDENCE_EXPECTATIONS: Readonly<
@@ -173,8 +173,8 @@ const EVIDENCE_EXPECTATIONS: Readonly<
   deepseek: { protocol: 'deepseek', requiresCredential: true },
   deepinfra: { protocol: 'openai_compatible', requiresCredential: true },
   ollama: { protocol: 'ollama', requiresCredential: false },
-  // Dormant providers carry no evidence expectations until they are vetted.
   openrouter: { protocol: 'openai_compatible', requiresCredential: true },
+  // Dormant providers carry no evidence expectations until they are vetted.
   opencode: { protocol: 'openai_compatible', requiresCredential: true },
   openai: { protocol: 'openai_compatible', requiresCredential: true },
   anthropic: { protocol: 'anthropic', requiresCredential: true },

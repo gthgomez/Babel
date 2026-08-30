@@ -23,16 +23,33 @@ function makeProgram(): Command {
 }
 
 describe('Babel CLI command registration', () => {
-  it('enforces DeepSeek-only live benchmark provider selection', () => {
+  it('allows the DeepSeek control and exact GLM/OpenRouter campaign routes', () => {
     const previousKey = process.env['DEEPSEEK_API_KEY'];
-    process.env['DEEPSEEK_API_KEY'] = 'test-key';
+    const previousRouterKey = process.env['OPENROUTER_API_KEY'];
+    delete process.env['DEEPSEEK_API_KEY'];
+    process.env['OPENROUTER_API_KEY'] = 'test-router-key';
     try {
-      assert.equal(resolveBenchmarkProvider('deepseek').defaultModel, 'deepseek-v4-flash');
+      const deepseek = resolveBenchmarkProvider('deepseek');
+      assert.equal(deepseek.provider, 'openrouter');
+      assert.equal(deepseek.defaultModel, 'deepseek/deepseek-v4-flash-0731');
+      assert.equal(
+        resolveBenchmarkProvider('openrouter', 'deepseek-v4-pro').defaultModel,
+        'deepseek/deepseek-v4-pro',
+      );
+      const glm = resolveBenchmarkProvider('openrouter');
+      assert.equal(glm.provider, 'openrouter');
+      assert.equal(glm.defaultModel, 'z-ai/glm-5.3-flash');
+      assert.throws(
+        () => resolveBenchmarkProvider('deepseek', 'qwen3'),
+        /approved DeepSeek v4 Flash\/Pro selectors/,
+      );
       assert.throws(() => resolveBenchmarkProvider('deepinfra'), /LIVE_MODEL_POLICY/);
       assert.throws(() => resolveBenchmarkProvider('qwen3'), /LIVE_MODEL_POLICY/);
     } finally {
       if (previousKey === undefined) delete process.env['DEEPSEEK_API_KEY'];
       else process.env['DEEPSEEK_API_KEY'] = previousKey;
+      if (previousRouterKey === undefined) delete process.env['OPENROUTER_API_KEY'];
+      else process.env['OPENROUTER_API_KEY'] = previousRouterKey;
     }
   });
 

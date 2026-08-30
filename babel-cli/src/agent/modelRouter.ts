@@ -18,7 +18,11 @@ import {
   type ProviderOperation,
 } from '../runners/providerRegistry.js';
 import { getProviderCredentialStatus } from '../runners/credentialHub.js';
-import { loadModelPolicyConfig } from '../modelPolicy.js';
+import {
+  LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS,
+  loadModelPolicyConfig,
+  resolveOpenRouterDeepSeekBackendKey,
+} from '../modelPolicy.js';
 import type { ModelPolicyModelEntry } from '../modelPolicy.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -40,6 +44,8 @@ export interface ModelRouterOptions {
   defaultBackendKey?: string;
   /** Operation required from automatically selected providers. */
   requiredOperation?: ProviderOperation;
+  /** Route legacy DeepSeek selectors through the OpenRouter live control. */
+  liveOnly?: boolean;
 }
 
 // ─── ModelRouter ────────────────────────────────────────────────────────────
@@ -49,10 +55,12 @@ export class ModelRouter {
   private readonly defaultBackendKey: string;
   private readonly modelConfig: ReturnType<typeof loadModelPolicyConfig>;
   private readonly requiredOperation: ProviderOperation;
+  private readonly liveOnly: boolean;
 
   constructor(options: ModelRouterOptions = {}) {
     this.modelConfig = loadModelPolicyConfig();
     this.requiredOperation = options.requiredOperation ?? 'structured';
+    this.liveOnly = options.liveOnly === true;
     this.defaultBackendKey = options.defaultBackendKey ?? this.resolveDefaultBackendKey();
   }
 
@@ -100,11 +108,19 @@ export class ModelRouter {
 
   private createRoute(key: string): ModelRoute {
     const models = this.modelConfig.config.models;
-    const backend: ModelPolicyModelEntry | undefined = models?.[key];
+    const liveBackendKey = this.liveOnly ? resolveOpenRouterDeepSeekBackendKey(key) : null;
+    const effectiveKey = liveBackendKey ?? key;
+    const backend: ModelPolicyModelEntry | undefined = models?.[effectiveKey];
     if (!backend) {
       throw new Error(
-        `[ModelRouter] Unknown backend key "${key}". ` +
+        `[ModelRouter] Unknown backend key "${effectiveKey}". ` +
           `Available: ${Object.keys(models ?? {}).join(', ')}`,
+      );
+    }
+
+    if (this.liveOnly && backend.provider === 'deepseek') {
+      throw new Error(
+        `[LIVE_MODEL_POLICY] Direct DeepSeek live sub-agent route "${key}" could not be mapped to OpenRouter.`,
       );
     }
 
@@ -124,6 +140,11 @@ export class ModelRouter {
   }
 
   private resolveDefaultBackendKey(): string {
+    if (this.liveOnly) {
+      const preferred = LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS[0];
+      if (this.modelConfig.config.models?.[preferred]) return preferred;
+    }
+
     // Pick the cheapest enabled model from the policy.
     const models = this.modelConfig.config.models;
     if (!models) return 'scout';

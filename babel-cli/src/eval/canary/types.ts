@@ -1,4 +1,5 @@
 import type { EvidenceScope } from "../evalTypes.js";
+import type { CausalRunWhyReport } from "../../services/causalAttribution.js";
 
 export type CanaryIntendedTerminal =
   | "verified_behavioral_success"
@@ -22,6 +23,8 @@ export interface CanaryTaskSpec {
   files: CanaryFileSpec[];
   oracle_test: string;
   visible_test?: string;
+  /** Public focused verifier exposed to the live agent workspace. */
+  public_test?: string;
   production_paths: string[];
 }
 
@@ -29,6 +32,14 @@ export interface CanaryTrialResult {
   task_id: string;
   trial_index: number;
   evidence_scope: EvidenceScope;
+  provider?: string;
+  model?: string;
+  /** Terminal ChatEngine status, retained separately from verifier contract success. */
+  status?: string | null;
+  baseline_sha?: string | null;
+  harness_sha?: string | null;
+  run_dir?: string | null;
+  evidence_path?: string;
   contract_success: boolean;
   code_fix_success: boolean;
   hidden_ok: boolean;
@@ -49,6 +60,7 @@ export interface CanaryTrialResult {
    */
   invalid_task?: boolean;
   invalid_reason?: string;
+  causal_attribution?: CausalRunWhyReport;
 }
 
 export interface CanaryTaskScore {

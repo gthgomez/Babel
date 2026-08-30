@@ -1,20 +1,18 @@
 (function () {
   const S = window.BabelRemoteState;
   const R = window.BabelRemoteRender;
-  const tokenEl = document.getElementById('token');
-  const rootEl = document.getElementById('root');
-  const composer = document.getElementById('composer');
-  const threadInput = document.getElementById('thread-id');
-  const transcript = document.getElementById('transcript');
-  const approvalCard = document.getElementById('approval-card');
-  const approvalBody = document.getElementById('approval-body');
+  const byId = function (id) { return document.getElementById(id); };
+  const tokenEl = byId('token');
+  const rootEl = byId('root');
+  const composer = byId('composer');
+  const threadInput = byId('thread-id');
+  const transcript = byId('transcript');
 
   const memory = {
     token: '',
     sessionId: '',
     threadId: '',
     turnId: null,
-    commandId: '',
     pendingApproval: null,
     lastCommandId: '',
     lastMessage: '',
@@ -26,67 +24,69 @@
   let approval = 'NONE';
   let socket = null;
   let sendInFlight = false;
+  const MAX_TRANSCRIPT_EVENTS = 200;
 
-  function setHost(event) {
-    host = S.apply('host', host, event);
-    renderChrome();
+  function label(value) {
+    return String(value || 'UNKNOWN').replaceAll('_', ' ');
   }
-  function setThread(event) {
-    thread = S.apply('thread', thread, event);
-    renderChrome();
+
+  function appendEvent(event) {
+    R.appendTranscriptEvent(transcript, event);
+    while (transcript.children.length > MAX_TRANSCRIPT_EVENTS) transcript.removeChild(transcript.firstElementChild);
+    R.setText(byId('transcript-count'), transcript.children.length + ' events');
   }
-  function setTurn(event) {
-    turn = S.apply('turn', turn, event);
-    renderChrome();
-  }
-  function setApproval(event) {
-    approval = S.apply('approval', approval, event);
-    renderChrome();
+
+  function transition(machine, current, event) {
+    try { return S.apply(machine, current, event); } catch (error) { return current; }
   }
 
   function renderChrome() {
-    R.setText(document.getElementById('host-state'), host);
-    R.setText(document.getElementById('thread-state'), 'thread: ' + thread + (memory.threadId ? ' ' + memory.threadId : ''));
-    R.setText(document.getElementById('turn-state'), 'turn: ' + turn);
-    R.setText(document.getElementById('workspace'), 'workspace: ' + (rootEl.value || '—'));
-    document.getElementById('create').disabled = !memory.token;
-    document.getElementById('resume').disabled = !memory.token;
-    document.getElementById('send').disabled = !S.canSendTurn(thread, turn) || !memory.token || sendInFlight;
-    document.getElementById('stop').disabled = !S.canCancelTurn(turn);
-    document.getElementById('reconnect').disabled = !memory.token;
-    document.getElementById('composer').disabled = !memory.token;
-    document.getElementById('refresh-files').disabled = !memory.token || !memory.threadId;
-    document.getElementById('refresh-diff').disabled = !memory.token || !memory.threadId;
-    document.getElementById('refresh-verification').disabled = !memory.token || !memory.threadId;
-    approvalCard.classList.toggle('hidden', approval !== 'PENDING' && approval !== 'ALLOWING' && approval !== 'DENYING');
+    R.setText(byId('host-state'), label(host));
+    R.setText(byId('host-detail'), host === 'ONLINE' ? 'Private host reachable.' : host === 'RECONNECTING' ? 'Recovering without resubmitting.' : 'Reachability is not confirmed.');
+    R.setText(byId('thread-state'), thread === 'NONE' ? 'No active thread' : label(thread));
+    R.setText(byId('thread-detail'), thread === 'READY' ? 'Session is ready for a structured prompt.' : thread === 'NONE' ? 'Create or resume a session to begin.' : 'Thread state: ' + label(thread));
+    R.setText(byId('turn-state'), label(turn));
+    R.setText(byId('turn-detail'), turn === 'UNKNOWN' ? 'Outcome is ambiguous. Do not resubmit automatically.' : label(turn) + ' turn state.');
+    R.setText(byId('thread-id-display'), memory.threadId || 'No active thread');
+    R.setText(byId('workspace'), rootEl.value || '—');
+    R.setText(byId('connection-copy'), host === 'ONLINE' ? 'Host connected' : 'Host ' + label(host).toLowerCase());
+    document.querySelectorAll('.topbar-status .status-dot, #host-card .status-dot').forEach(function (dot) {
+      dot.className = 'status-dot ' + String(host).toLowerCase();
+    });
+    byId('create').disabled = !memory.token;
+    byId('resume').disabled = !memory.token;
+    byId('send').disabled = !S.canSendTurn(thread, turn) || !memory.token || sendInFlight;
+    byId('stop').disabled = !S.canCancelTurn(turn);
+    byId('reconnect').disabled = !memory.token;
+    composer.disabled = !memory.token;
+    byId('refresh-files').disabled = !memory.token || !memory.threadId;
+    byId('refresh-diff').disabled = !memory.token || !memory.threadId;
+    byId('refresh-verification').disabled = !memory.token || !memory.threadId;
+    R.setText(byId('action-state-badge'), label(turn));
+    R.setText(byId('action-state'), byId('action-state').textContent || 'Ready for your next instruction');
+    R.setText(byId('composer-status'), !memory.token ? 'Connect to enable the composer.' : !memory.threadId ? 'Create or resume a thread.' : S.canSendTurn(thread, turn) ? 'Ready to send.' : 'Turn is ' + label(turn).toLowerCase() + '.');
+    if (approval === 'NONE' || approval === 'RESOLVED' || approval === 'STALE' || approval === 'EXPIRED') byId('approval-card').classList.add('hidden');
   }
 
   function authHeaders() {
-    return {
-      'Content-Type': 'application/json',
-      Authorization: 'Bearer ' + memory.token,
-    };
+    return { 'Content-Type': 'application/json', Authorization: 'Bearer ' + memory.token };
   }
 
   async function rpc(method, params, id) {
-    const res = await fetch('/rpc', {
+    const response = await fetch('/rpc', {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ jsonrpc: '2.0', id: id || Date.now(), method: method, params: params }),
     });
-    if (!res.ok) throw new Error('rpc ' + res.status);
-    return res.json();
+    if (!response.ok) throw new Error('rpc ' + response.status);
+    return response.json();
   }
 
   async function ensureSession() {
     if (memory.sessionId) return memory.sessionId;
-    const res = await fetch('/sessions', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ projectRoot: rootEl.value }),
-    });
-    if (!res.ok) throw new Error('session auth failed');
-    const json = await res.json();
+    const response = await fetch('/sessions', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ projectRoot: rootEl.value }) });
+    if (!response.ok) throw new Error('session auth failed');
+    const json = await response.json();
     if (!json.sessionId) throw new Error('session missing');
     memory.sessionId = json.sessionId;
     return memory.sessionId;
@@ -94,248 +94,264 @@
 
   async function mintTicket() {
     const sessionId = await ensureSession();
-    const res = await fetch('/ws/ticket', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ session_id: sessionId, thread_id: memory.threadId }),
-    });
-    if (!res.ok) throw new Error('ticket mint failed');
-    return res.json();
+    const response = await fetch('/ws/ticket', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ session_id: sessionId, thread_id: memory.threadId }) });
+    if (!response.ok) throw new Error('ticket mint failed');
+    return response.json();
   }
 
   function connectSocket(ticket) {
-    if (socket) {
-      socket.close();
-      socket = null;
-    }
+    if (socket) socket.close();
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const url = proto + '://' + location.host + '/ws?sessionId=' + encodeURIComponent(memory.sessionId) + '&ticket=' + encodeURIComponent(ticket.ticket);
     socket = new WebSocket(url);
-    socket.onopen = function () {
-      try { setHost('open'); } catch (e) { /* already online */ }
-    };
-    socket.onclose = function () {
-      try { setHost('close'); } catch (e) { /* ignore illegal */ }
-    };
-    socket.onerror = function () {
-      try { setHost('error'); } catch (e) { /* ignore */ }
-    };
-    socket.onmessage = function (ev) {
-      let msg;
-      try { msg = JSON.parse(ev.data); } catch { return; }
-      if (msg.method === 'turn.event' && msg.params) {
-        const event = msg.params.event || {};
-        if (turn === 'ACKNOWLEDGED' || turn === 'SUBMITTING') {
-          try { setTurn('stream'); } catch (e) { /* ignore */ }
+    socket.onopen = function () { host = transition('host', host, 'open'); renderChrome(); };
+    socket.onclose = function () { host = transition('host', host, 'close'); renderChrome(); };
+    socket.onerror = function () { host = transition('host', host, 'error'); renderChrome(); };
+    socket.onmessage = function (event) {
+      let message;
+      try { message = JSON.parse(event.data); } catch (error) { appendEvent({ type: 'protocol_error', error: 'Invalid server message ignored.' }); return; }
+      if (message.method === 'turn.event' && message.params) {
+        const item = message.params.event || {};
+        if (turn === 'ACKNOWLEDGED' || turn === 'SUBMITTING') turn = transition('turn', turn, 'stream');
+        if (thread === 'READY') thread = transition('thread', thread, 'submit');
+        appendEvent(item);
+        if (item.type === 'tool_start') {
+          R.setText(byId('action-state'), item.tool || 'Working');
+          R.setText(byId('action-detail'), item.target || 'Structured tool activity');
         }
-        if (thread === 'READY') {
-          try { setThread('submit'); } catch (e) { /* ignore */ }
-        }
-        R.appendTranscriptEvent(transcript, event);
-        if (event.type === 'tool_start') {
-          R.setText(document.getElementById('action-state'), (event.tool || 'tool') + ' ' + (event.target || ''));
-        }
-        if (event.type === 'done') {
-          try { setTurn('complete'); } catch (e) { /* ignore */ }
-          try { setThread('ready'); } catch (e) { /* ignore */ }
-        }
-        if (event.type === 'failed') {
-          try { setTurn('fail'); } catch (e) { /* ignore */ }
-          try { setThread('fail'); } catch (e) { /* ignore */ }
-        }
-        if (event.type === 'cancelled') {
-          try { setTurn('complete'); } catch (e) { /* ignore */ }
-          try { setThread('ready'); } catch (e) { /* ignore */ }
-        }
-        if (event.type === 'file_changed') {
-          document.getElementById('files').textContent += (event.path || '') + '\n';
-        }
+        if (item.type === 'done') { turn = transition('turn', turn, 'complete'); thread = transition('thread', thread, 'ready'); }
+        if (item.type === 'failed') { turn = transition('turn', turn, 'fail'); thread = transition('thread', thread, 'fail'); }
+        if (item.type === 'cancelled') { turn = transition('turn', turn, 'complete'); thread = transition('thread', thread, 'ready'); }
+        if (item.type === 'file_changed') appendEvent({ type: 'file_changed', text: item.path || '' });
+        renderChrome();
       }
-      if (msg.method === 'permission.request' && msg.params) {
-        memory.pendingApproval = msg.params;
-        if (approval === 'NONE' || approval === 'RESOLVED' || approval === 'STALE' || approval === 'EXPIRED') {
-          setApproval('pending');
-        }
-        if (thread === 'RUNNING' || thread === 'READY') {
-          try { setThread('waiting_approval'); } catch (e) { /* ignore */ }
-        }
-        const shown = [
-          'action: ' + (msg.params.action_type || msg.params.permission || ''),
-          'command: ' + (msg.params.command || ''),
-          'cwd: ' + (msg.params.cwd || ''),
-          'path: ' + (msg.params.target_path || ''),
-          'digest: ' + (msg.params.operation_digest || ''),
-        ].join('\n');
-        R.setText(approvalBody, shown);
+      if (message.method === 'permission.request' && message.params) {
+        memory.pendingApproval = message.params;
+        approval = transition('approval', approval, 'pending');
+        if (thread === 'RUNNING' || thread === 'READY') thread = transition('thread', thread, 'waiting_approval');
+        R.renderApproval({
+          actionType: message.params.action_type || message.params.permission,
+          command: message.params.command,
+          cwd: message.params.cwd,
+          targetPath: message.params.target_path,
+          digest: message.params.operation_digest,
+        });
+        renderChrome();
       }
     };
   }
 
   async function observeThread() {
-    if (!memory.threadId) return;
-    const ticket = await mintTicket();
-    connectSocket(ticket);
+    if (memory.threadId) connectSocket(await mintTicket());
   }
 
-  document.getElementById('connect').onclick = async function () {
+  async function connect() {
     memory.token = tokenEl.value;
     tokenEl.value = '';
     try {
-      setHost('start');
+      host = transition('host', host, 'start');
+      renderChrome();
       const health = await fetch('/health');
       const json = await health.json();
       if (!json.ok) throw new Error('health');
       await ensureSession();
-      setHost('open');
-    } catch (e) {
-      try { setHost('error'); } catch (err) { /* ignore */ }
+      host = transition('host', host, 'open');
+      R.setText(byId('action-state'), 'Connected to Babel host');
+      R.setText(byId('action-detail'), 'Create or resume a thread to begin.');
+    } catch (error) {
+      host = transition('host', host, 'error');
+      appendEvent({ type: 'connection', error: 'Connection failed. Check the host and private route.' });
     }
     renderChrome();
-  };
+  }
 
-  document.getElementById('reconnect').onclick = async function () {
+  async function reconnect() {
     try {
-      if (host === 'ONLINE') setHost('close');
-      if (host === 'UNKNOWN' || host === 'OFFLINE') setHost('start');
+      if (host === 'ONLINE') host = transition('host', host, 'close');
+      if (host === 'UNKNOWN' || host === 'OFFLINE') host = transition('host', host, 'start');
+      renderChrome();
       await observeThread();
       if (memory.threadId) {
-        setThread('recover');
+        thread = transition('thread', thread, 'recover');
         await rpc('thread.resume', { thread_id: memory.threadId, project_root: rootEl.value });
         const history = await rpc('history.lookup', { thread_id: memory.threadId });
         const cells = (history.result && history.result.cells) || [];
-        R.setText(transcript, '');
-        cells.forEach(function (cell) {
-          R.appendTranscriptEvent(transcript, { type: cell.kind || 'cell', text: JSON.stringify(cell.payload || {}) });
-        });
-        setThread('ready');
+        transcript.textContent = '';
+        cells.forEach(function (cell) { appendEvent({ type: cell.kind || 'cell', text: JSON.stringify(cell.payload || {}) }); });
+        thread = transition('thread', thread, 'ready');
       }
-    } catch (e) {
-      try { setHost('error'); } catch (err) { /* ignore */ }
+      host = transition('host', host, 'open');
+    } catch (error) {
+      host = transition('host', host, 'health_fail');
+      appendEvent({ type: 'connection', error: 'Reconnect failed. The state remains fail-closed.' });
     }
-  };
-
-  document.getElementById('create').onclick = async function () {
-    try {
-      setThread('create');
-      const r = await rpc('thread.create', { project_root: rootEl.value });
-      memory.threadId = r.result && r.result.thread_id;
-      threadInput.value = memory.threadId || '';
-      setThread('ready');
-      await observeThread();
-    } catch (e) {
-      try { setThread('fail'); } catch (err) { /* ignore */ }
-    }
-  };
-
-  document.getElementById('resume').onclick = async function () {
-    try {
-      setThread('resume');
-      memory.threadId = threadInput.value;
-      const r = await rpc('thread.resume', { thread_id: memory.threadId, project_root: rootEl.value });
-      if (r.error) throw new Error(r.error.message);
-      setThread('ready');
-      await observeThread();
-    } catch (e) {
-      try { setThread('fail'); } catch (err) { /* ignore */ }
-    }
-  };
-
-  document.getElementById('send').onclick = async function () {
-    if (sendInFlight || !S.canSendTurn(thread, turn)) return;
-    sendInFlight = true;
     renderChrome();
+  }
+
+  async function createThread() {
+    try {
+      thread = transition('thread', thread, 'create');
+      const result = await rpc('thread.create', { project_root: rootEl.value });
+      memory.threadId = result.result && result.result.thread_id;
+      threadInput.value = memory.threadId || '';
+      thread = transition('thread', thread, 'ready');
+      await observeThread();
+    } catch (error) { thread = transition('thread', thread, 'fail'); appendEvent({ type: 'failed', error: 'Thread creation failed.' }); }
+    renderChrome();
+  }
+
+  async function resumeThread() {
+    try {
+      thread = transition('thread', thread, 'resume');
+      memory.threadId = threadInput.value;
+      const result = await rpc('thread.resume', { thread_id: memory.threadId, project_root: rootEl.value });
+      if (result.error) throw new Error(result.error.message);
+      thread = transition('thread', thread, 'ready');
+      await observeThread();
+    } catch (error) { thread = transition('thread', thread, 'fail'); appendEvent({ type: 'failed', error: 'Thread resume failed.' }); }
+    renderChrome();
+  }
+
+  async function send() {
+    if (sendInFlight || !S.canSendTurn(thread, turn)) return;
+    if (!composer.value.trim()) { R.setText(byId('composer-status'), 'Write an instruction before sending.'); return; }
+    sendInFlight = true;
     const message = composer.value;
     const commandId = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now());
     memory.lastCommandId = commandId;
     memory.lastMessage = message;
+    appendEvent({ type: 'user', role: 'user', text: message });
     try {
-      setTurn('submit');
-      setThread('submit');
-      const r = await rpc('turn.submit', {
-        thread_id: memory.threadId,
-        message: message,
-        command_id: commandId,
-      });
-      if (r.error) {
-        setTurn('fail');
-        R.appendTranscriptEvent(transcript, { type: 'failed', error: r.error.message });
-      } else {
-        memory.turnId = r.result.turn_id;
-        setTurn('ack');
-      }
-    } catch (e) {
-      const decision = S.reconcileAfterSubmitFailure({
-        responseSettled: false,
-        commandId: commandId,
-        hostReachable: host === 'ONLINE',
-      });
-      if (decision.ambiguity === 'ambiguous_network') {
-        try { setTurn('unknown'); } catch (err) { /* ignore */ }
-      } else {
-        try { setTurn('fail'); } catch (err) { /* ignore */ }
-      }
-      R.appendTranscriptEvent(transcript, { type: 'failed', error: 'Submit status ' + decision.ambiguity + '; not auto-resubmitted' });
+      turn = transition('turn', turn, 'submit');
+      thread = transition('thread', thread, 'submit');
+      renderChrome();
+      const result = await rpc('turn.submit', { thread_id: memory.threadId, message: message, command_id: commandId });
+      if (result.error) throw new Error(result.error.message);
+      memory.turnId = result.result.turn_id;
+      turn = transition('turn', turn, 'ack');
+    } catch (error) {
+      const decision = S.reconcileAfterSubmitFailure({ responseSettled: false, commandId: commandId, hostReachable: host === 'ONLINE' });
+      turn = transition('turn', turn, decision.ambiguity === 'ambiguous_network' ? 'unknown' : 'fail');
+      appendEvent({ type: 'failed', error: 'Submit status ' + decision.ambiguity + '; not auto-resubmitted.' });
     } finally {
       sendInFlight = false;
       renderChrome();
     }
-  };
+  }
 
-  document.getElementById('stop').onclick = async function () {
+  async function stop() {
     if (!S.canCancelTurn(turn)) return;
-    try {
-      setTurn('cancel');
-      await rpc('turn.cancel', { thread_id: memory.threadId });
-    } catch (e) {
-      try { setTurn('fail'); } catch (err) { /* ignore */ }
-    }
-  };
+    try { turn = transition('turn', turn, 'cancel'); renderChrome(); await rpc('turn.cancel', { thread_id: memory.threadId }); }
+    catch (error) { turn = transition('turn', turn, 'fail'); appendEvent({ type: 'failed', error: 'Cancel status unknown.' }); renderChrome(); }
+  }
 
   async function decide(decision) {
     if (!memory.pendingApproval || approval !== 'PENDING') return;
-    setApproval(decision === 'allow_once' ? 'allow' : 'deny');
-    const r = await rpc('approval.decide', {
+    approval = transition('approval', approval, decision === 'allow_once' ? 'allow' : 'deny');
+    renderChrome();
+    const result = await rpc('approval.decide', {
       approval_id: memory.pendingApproval.approval_id,
       decision: decision,
       thread_id: memory.pendingApproval.thread_id || memory.threadId,
       turn_id: String(memory.pendingApproval.turn_id || memory.turnId || ''),
       operation_digest: memory.pendingApproval.operation_digest,
     });
-    if (r.error) {
-      setApproval('stale');
-      R.appendTranscriptEvent(transcript, { type: 'failed', error: r.error.message });
+    if (result.error) {
+      approval = transition('approval', approval, 'stale');
+      appendEvent({ type: 'failed', error: result.error.message });
     } else {
-      setApproval('resolve');
+      approval = transition('approval', approval, 'resolve');
       memory.pendingApproval = null;
-      try { setThread('running'); } catch (e) { /* ignore */ }
+      thread = transition('thread', thread, 'running');
+      appendEvent({ type: 'permission', role: 'system', text: decision === 'allow_once' ? 'ALLOW ONCE recorded.' : 'DENY recorded. No mutation was performed.' });
     }
+    renderChrome();
   }
 
-  document.getElementById('allow-once').onclick = function () { decide('allow_once'); };
-  document.getElementById('deny').onclick = function () { decide('deny'); };
-
-  document.getElementById('refresh-files').onclick = async function () {
-    const r = await rpc('workspace.changes', { thread_id: memory.threadId });
-    const files = (r.result && r.result.files) || [];
-    R.setText(document.getElementById('files'), files.map(function (f) { return (f.status || '') + ' ' + (f.path || ''); }).join('\n'));
-  };
-  document.getElementById('refresh-diff').onclick = async function () {
-    const r = await rpc('workspace.changes', { thread_id: memory.threadId });
-    R.setText(document.getElementById('diff'), (r.result && r.result.diff) || '');
-  };
-  document.getElementById('refresh-verification').onclick = async function () {
-    const r = await rpc('verification.lookup', { thread_id: memory.threadId });
-    const snap = r.result || { status: 'NOT_VERIFIED' };
-    R.setText(document.getElementById('verification'), snap.status + ' — ' + (snap.reason || ''));
-  };
-
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/ui/sw.js', { scope: '/ui/' }).catch(function () { /* install optional */ });
+  function installNormalHandlers() {
+    byId('connect').onclick = connect;
+    byId('reconnect').onclick = reconnect;
+    byId('create').onclick = createThread;
+    byId('resume').onclick = resumeThread;
+    byId('send').onclick = send;
+    byId('stop').onclick = stop;
+    byId('allow-once').onclick = function () { decide('allow_once'); };
+    byId('deny').onclick = function () { decide('deny'); };
+    byId('refresh-files').onclick = async function () {
+      try {
+        const result = await rpc('workspace.changes', { thread_id: memory.threadId });
+        const files = (result.result && result.result.files) || [];
+        R.renderFiles(files);
+      } catch (error) { appendEvent({ type: 'failed', error: 'Changed files unavailable.' }); }
+    };
+    byId('refresh-diff').onclick = async function () {
+      try {
+        const result = await rpc('workspace.changes', { thread_id: memory.threadId });
+        R.setText(byId('diff'), result.result && result.result.diff || 'No diff available.');
+      } catch (error) { appendEvent({ type: 'failed', error: 'Diff unavailable.' }); }
+    };
+    byId('refresh-verification').onclick = async function () {
+      try {
+        const result = await rpc('verification.lookup', { thread_id: memory.threadId });
+        const snapshot = result.result || { status: 'NOT_VERIFIED', reason: 'No verification recorded.' };
+        R.setVerification(snapshot);
+      } catch (error) { appendEvent({ type: 'failed', error: 'Verification unavailable.' }); }
+    };
+    rootEl.oninput = renderChrome;
+    renderChrome();
   }
 
-  window.BabelRemoteApp = {
-    getState: function () { return { host: host, thread: thread, turn: turn, approval: approval }; },
-    memoryHasToken: function () { return Boolean(memory.token); },
-  };
-  renderChrome();
+  function installFixtureHandlers(scenario) {
+    let current = scenario;
+    function redraw() { R.renderFixture(current); }
+    byId('reconnect').disabled = false;
+    byId('reconnect').onclick = function () {
+      current = Object.assign({}, current, { host: 'ONLINE', action: 'Session recovered', actionDetail: 'History was reconciled. No request was resubmitted.', reconnectLabel: 'Connected' });
+      redraw();
+    };
+    byId('send').onclick = function () {
+      if (!composer.value.trim()) return;
+      current = Object.assign({}, current, { thread: 'RUNNING', turn: 'STREAMING', action: 'Streaming response', actionDetail: 'Fixture response is streaming; no provider was called.', transcript: current.transcript.concat([{ type: 'user', role: 'user', text: composer.value }, { type: 'answer_chunk', role: 'assistant', text: 'Deterministic fixture response. No network or provider call was made.' }]) });
+      redraw();
+    };
+    byId('stop').onclick = function () {
+      current = Object.assign({}, current, { thread: 'READY', turn: 'COMPLETED', action: 'Turn canceled', actionDetail: 'Cancellation is represented locally in fixture mode.', transcript: current.transcript.concat([{ type: 'cancelled', role: 'system', text: 'Turn canceled.' }]) });
+      redraw();
+    };
+    byId('allow-once').onclick = function () {
+      current = Object.assign({}, current, { approval: 'RESOLVED', thread: 'RUNNING', action: 'One-time approval recorded', actionDetail: 'The fixture shows the safe approval transition without executing a mutation.', transcript: current.transcript.concat([{ type: 'permission', role: 'system', text: 'ALLOW ONCE recorded. No real action was executed.' }]) });
+      redraw();
+    };
+    byId('deny').onclick = function () {
+      current = Object.assign({}, current, { approval: 'RESOLVED', thread: 'READY', turn: 'COMPLETED', action: 'Action denied', actionDetail: 'The requested operation was not executed.', transcript: current.transcript.concat([{ type: 'permission', role: 'system', text: 'DENY recorded. No mutation was performed.' }]) });
+      redraw();
+    };
+    byId('refresh-files').onclick = redraw;
+    byId('refresh-diff').onclick = redraw;
+    byId('refresh-verification').onclick = redraw;
+    composer.oninput = function () { R.setText(byId('composer-status'), composer.value.length + ' characters ready'); };
+    window.BabelRemoteApp = { getState: function () { return { host: current.host, thread: current.thread, turn: current.turn, approval: current.approval }; }, memoryHasToken: function () { return false; }, fixture: true };
+    redraw();
+  }
+
+  async function boot() {
+    if (location.pathname === '/fixture' || location.pathname === '/fixture/') {
+      const requested = new URLSearchParams(location.search).get('scenario') || 'connected-idle';
+      const response = await fetch('/fixture/config?scenario=' + encodeURIComponent(requested));
+      if (!response.ok) throw new Error('fixture config unavailable');
+      const payload = await response.json();
+      if (payload.mode !== 'remote-ui-fixture' || !payload.scenario) throw new Error('invalid fixture mode');
+      installFixtureHandlers(payload.scenario);
+      return;
+    }
+    installNormalHandlers();
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/ui/sw.js', { scope: '/ui/' }).catch(function () { /* optional install */ });
+    window.BabelRemoteApp = { getState: function () { return { host: host, thread: thread, turn: turn, approval: approval }; }, memoryHasToken: function () { return Boolean(memory.token); } };
+  }
+
+  boot().catch(function () {
+    R.setText(byId('connection-copy'), 'Fixture or host unavailable');
+    R.setText(byId('action-state'), 'Unable to load Remote');
+    R.setText(byId('action-detail'), 'The client failed closed before opening a session.');
+  });
 })();

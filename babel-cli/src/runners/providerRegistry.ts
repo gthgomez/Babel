@@ -75,16 +75,16 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
     authorityConformance: 'certified',
   },
-  // Dormant / legacy transports — NOT authority-certified. They must pass the
-  // authority-conformance suite before being revived into a live lane.
   openrouter: {
     id: 'openrouter',
     credentialEnvVar: 'OPENROUTER_API_KEY',
     protocol: 'openai_compatible',
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
-    authorityConformance: 'untested',
+    authorityConformance: 'certified',
   },
+  // Dormant / legacy transports — NOT authority-certified. They must pass the
+  // authority-conformance suite before being revived into a live lane.
   opencode: {
     id: 'opencode',
     credentialEnvVar: 'OPENCODE_API_KEY',

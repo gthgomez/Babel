@@ -19,6 +19,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { resolveChatTaskTune } from '../config/chatTaskClass.js';
+import { LIVE_OPENROUTER_MODEL_ID } from '../modelPolicy.js';
 import { isBabelHeadlessEnv } from '../utils/envFlags.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────
@@ -87,16 +88,24 @@ export function isDiffCriticEnabled(): boolean {
   return isBabelHeadlessEnv();
 }
 
-export function resolveDiffCriticModel(): string {
+export function resolveDiffCriticModel(primaryModel?: string): string {
   const fromEnv = process.env['BABEL_DIFF_CRITIC_MODEL']?.trim();
+  // Certification runs pin GLM end-to-end. An operator-provided critic model
+  // must not silently turn that run into a mixed-model experiment.
+  if (primaryModel?.trim() === LIVE_OPENROUTER_MODEL_ID) return primaryModel.trim();
   if (fromEnv) return fromEnv;
+  if (primaryModel?.trim()) return primaryModel.trim();
   return 'deepseek-v4-flash';
 }
 
 /** Pro / second-tier critic model (SWE hard cells). */
-export function resolveDiffCriticProModel(): string {
+export function resolveDiffCriticProModel(primaryModel?: string): string {
   const fromEnv = process.env['BABEL_DIFF_CRITIC_PRO_MODEL']?.trim();
+  if (primaryModel?.trim() === LIVE_OPENROUTER_MODEL_ID) return primaryModel.trim();
   if (fromEnv) return fromEnv;
+  if (primaryModel?.trim() && !primaryModel.toLowerCase().includes('deepseek')) {
+    return primaryModel.trim();
+  }
   return 'deepseek-v4-pro';
 }
 

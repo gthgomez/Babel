@@ -191,12 +191,12 @@ test('conformance: live providers are authority-certified', () => {
     assert.ok(specs[id], `provider ${id} registered`);
   }
   // The live lanes today (per execute.ts liveOnly filtering and modelPolicy):
-  // deepseek, deepinfra, ollama. They must be certified.
-  for (const live of ['deepseek', 'deepinfra', 'ollama'] as const) {
+  // deepseek, deepinfra, ollama, and the explicit GLM OpenRouter route.
+  for (const live of ['deepseek', 'deepinfra', 'ollama', 'openrouter'] as const) {
     assert.equal(specs[live]!.authorityConformance, 'certified', `${live} must be certified`);
   }
   // Dormant providers must NOT be certified until they pass this suite.
-  for (const dormant of ['openai', 'anthropic', 'gemini', 'groq', 'openrouter', 'opencode'] as const) {
+  for (const dormant of ['openai', 'anthropic', 'gemini', 'groq', 'opencode'] as const) {
     assert.equal(
       specs[dormant]!.authorityConformance,
       'untested',

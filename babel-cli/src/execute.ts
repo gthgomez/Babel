@@ -2,8 +2,9 @@
  * execute.ts — Per-Stage LLM Waterfall Executor
  *
  * Implements four dedicated waterfalls, one per pipeline stage.
- * Live runs are restricted to direct DeepSeek API runners; legacy DeepInfra
- * tiers remain available for offline tests and compatibility. No CLI runners.
+ * Live runs are restricted to approved OpenRouter DeepSeek or exact GLM routes;
+ * legacy direct DeepSeek/DeepInfra tiers remain available for offline tests and
+ * compatibility. No CLI runners.
  *
  * Model selection is loaded from config/model-policy.json. Pricing and
  * capability notes belong in that config with source_url / verified_at /
@@ -37,7 +38,8 @@
  *
  * Environment variables:
  *   DEEPINFRA_API_KEY          — Required for legacy/offline DeepInfra tiers.
- *   DEEPSEEK_API_KEY           — Required for live DeepSeek tiers.
+ *   DEEPSEEK_API_KEY           — Direct-provider compatibility only; not used by live controls.
+ *   OPENROUTER_API_KEY         — Required for live DeepSeek and GLM/OpenRouter tiers.
  *   BABEL_DEEPINFRA_TOKENS     — max_tokens for DeepInfra responses. Default: 8096
  *   BABEL_WATERFALL_TIMEOUT_MS — aggregate wall-clock timeout per stage waterfall. Default: 180000
  *   BABEL_DISABLE_API_FALLBACK — Set to "true" to halt after first tier failure.
@@ -49,6 +51,7 @@ import type { ZodType } from 'zod';
 // Babel system uses API runners across all stages.
 import { DeepInfraApiRunner } from './runners/deepInfraApi.js';
 import { DeepSeekApiRunner } from './runners/deepSeekApi.js';
+import { OpenRouterApiRunner } from './runners/openRouterApi.js';
 import type {
   LlmRunner,
   RunnerInvocationMetadata,
@@ -68,7 +71,11 @@ import { BabelEventBus } from './pipeline/logging.js';
 
 export { clearRoutingCache };
 import {
+  assertLiveModelId,
+  LIVE_OPENROUTER_BACKEND_KEY,
+  resolveOpenRouterDeepSeekBackendKey,
   resolveModelByKey,
+  resolveModelPolicyBackendKey,
   resolveStagePolicyRoutes,
   type ResolvedModelPolicyEntry,
 } from './modelPolicy.js';
@@ -154,13 +161,15 @@ export interface WaterfallAttemptOutcome {
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
-const DISABLE_API_FALLBACK = process.env['BABEL_DISABLE_API_FALLBACK'] === 'true';
+const DISABLE_API_FALLBACK =
+  process.env['BABEL_DISABLE_API_FALLBACK'] === 'true';
 const DEFAULT_WATERFALL_TIMEOUT_MS = 180_000;
 const AGGREGATE_WATERFALL_TIMEOUT_PREFIX = '[waterfall-timeout]';
 
 function resolveAggregateWaterfallTimeoutMs(): number {
   const raw = Number(
-    process.env['BABEL_WATERFALL_TIMEOUT_MS'] ?? `${DEFAULT_WATERFALL_TIMEOUT_MS}`,
+    process.env['BABEL_WATERFALL_TIMEOUT_MS'] ??
+      `${DEFAULT_WATERFALL_TIMEOUT_MS}`,
   );
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_WATERFALL_TIMEOUT_MS;
 }
@@ -170,12 +179,16 @@ function resolveAggregateWaterfallTimeoutMs(): number {
 // Only triggers when within 30s of the current deadline — idle streams don't
 // get extensions.
 const HEARTBEAT_EXTENSION_MS = (() => {
-  const raw = Number(process.env['BABEL_WATERFALL_HEARTBEAT_EXTENSION_MS'] ?? '60000');
+  const raw = Number(
+    process.env['BABEL_WATERFALL_HEARTBEAT_EXTENSION_MS'] ?? '60000',
+  );
   return Number.isFinite(raw) && raw > 0 ? raw : 60000;
 })();
 // Hard cap on the extended deadline, measured from the waterfall start time.
 const MAX_EXTENDED_TIMEOUT_MS = (() => {
-  const raw = Number(process.env['BABEL_WATERFALL_MAX_EXTENDED_MS'] ?? '600000');
+  const raw = Number(
+    process.env['BABEL_WATERFALL_MAX_EXTENDED_MS'] ?? '600000',
+  );
   return Number.isFinite(raw) && raw > 0 ? raw : 600000;
 })();
 
@@ -316,7 +329,8 @@ export interface RunOptions {
   liveOnly?: boolean;
 }
 
-export const RELIABILITY_REPAIR_PROOF_MARKER = '[BABEL_RELIABILITY_AUTONOMOUS_LIVE_FAIL_THEN_PASS]';
+export const RELIABILITY_REPAIR_PROOF_MARKER =
+  '[BABEL_RELIABILITY_AUTONOMOUS_LIVE_FAIL_THEN_PASS]';
 
 /**
  * Offline fixture scenario selector.
@@ -327,7 +341,9 @@ export const RELIABILITY_REPAIR_PROOF_MARKER = '[BABEL_RELIABILITY_AUTONOMOUS_LI
  *   - "evidence_loop": SWE emits EVIDENCE_REQUEST, then replans after evidence
  */
 function getOfflineScenario(): string {
-  return process.env['BABEL_PIPELINE_V9_OFFLINE_SCENARIO']?.trim() || 'happy_path';
+  return (
+    process.env['BABEL_PIPELINE_V9_OFFLINE_SCENARIO']?.trim() || 'happy_path'
+  );
 }
 
 /** Module-level counter for tracking QA calls across the pipeline lifecycle. */
@@ -343,7 +359,9 @@ export function resetOfflineQaCallCount(): void {
 }
 
 function detectPipelineV9OfflineLane(prompt: string): 'frontend' | 'backend' {
-  return /regression frontend verified lane/i.test(prompt) ? 'frontend' : 'backend';
+  return /regression frontend verified lane/i.test(prompt)
+    ? 'frontend'
+    : 'backend';
 }
 
 function buildOtelOfflineOrchestratorManifest(
@@ -406,7 +424,9 @@ function buildOtelOfflineOrchestratorManifest(
   };
 }
 
-function buildPipelineV9OfflineOrchestratorManifest(prompt: string): Record<string, unknown> {
+function buildPipelineV9OfflineOrchestratorManifest(
+  prompt: string,
+): Record<string, unknown> {
   const repoRoot = process.env['BABEL_PROJECT_ROOT']?.trim() || process.cwd();
   // The orchestrator prompt is a compiled document containing examples and
   // catalog text. Preserve only the caller's task in the fixture manifest so
@@ -414,9 +434,10 @@ function buildPipelineV9OfflineOrchestratorManifest(prompt: string): Record<stri
   // bindings.
   const taskContext = prompt.lastIndexOf('--- TASK CONTEXT ---');
   const taskSection = taskContext >= 0 ? prompt.slice(taskContext) : prompt;
-  const taskMatch = /Task:\s*([\s\S]*?)(?:\r?\nPreferred project:|\r?\nPreferred pipeline mode:|$)/i.exec(
-    taskSection,
-  );
+  const taskMatch =
+    /Task:\s*([\s\S]*?)(?:\r?\nPreferred project:|\r?\nPreferred pipeline mode:|$)/i.exec(
+      taskSection,
+    );
   const userRequest = taskMatch?.[1]?.trim() || 'Offline pipeline fixture.';
   const base = buildOtelOfflineOrchestratorManifest('deep', repoRoot);
   return {
@@ -436,12 +457,15 @@ function buildOtelOfflineSwePlan(): Record<string, unknown> {
   return {
     plan_version: '1.0',
     plan_type: 'IMPLEMENTATION_PLAN',
-    task_summary: 'OBJECTIVE: Exercise OTel tracing without leaking prompt contents.',
+    task_summary:
+      'OBJECTIVE: Exercise OTel tracing without leaking prompt contents.',
     known_facts: [
       'The orchestrator emitted a typed v9 manifest.',
       'The tracing test needs a valid QA PASS path.',
     ],
-    assumptions: ['A single safe read-only step is sufficient for autonomous executor validation.'],
+    assumptions: [
+      'A single safe read-only step is sufficient for autonomous executor validation.',
+    ],
     risks: [
       {
         risk: 'The executor completion could become schema-invalid without a verified step.',
@@ -452,7 +476,8 @@ function buildOtelOfflineSwePlan(): Record<string, unknown> {
     minimal_action_set: [
       {
         step: 1,
-        description: 'Inspect the compiled manifest artifact for trace coverage.',
+        description:
+          'Inspect the compiled manifest artifact for trace coverage.',
         tool: 'file_read',
         target: 'runs/latest/01_manifest.json',
         rationale: 'Provides one safe executor step before completion.',
@@ -476,12 +501,15 @@ function buildPipelineV9OfflineSwePlan(lane: 'frontend' | 'backend') {
       'The orchestrator emitted a typed v9 manifest in uncompiled form.',
       'The compiler must populate prompt_manifest before the SWE stage runs.',
     ],
-    assumptions: ['This regression fixture only needs to verify routing and QA coherence.'],
+    assumptions: [
+      'This regression fixture only needs to verify routing and QA coherence.',
+    ],
     risks: [
       {
         risk: 'The typed stack could fail to compile before the worker runs.',
         likelihood: 'low',
-        mitigation: 'Assert the written manifest is compiled before checking SWE and QA artifacts.',
+        mitigation:
+          'Assert the written manifest is compiled before checking SWE and QA artifacts.',
       },
     ],
     minimal_action_set: [
@@ -502,7 +530,10 @@ function buildPipelineV9OfflineSwePlan(lane: 'frontend' | 'backend') {
   };
 }
 
-function personalizeOfflineSwePlan(prompt: string, lane: 'frontend' | 'backend') {
+function personalizeOfflineSwePlan(
+  prompt: string,
+  lane: 'frontend' | 'backend',
+) {
   const plan = buildPipelineV9OfflineSwePlan(lane);
   const parityFixMap = readParityOfflineFixMap();
   if (parityFixMap !== null) {
@@ -513,7 +544,8 @@ function personalizeOfflineSwePlan(prompt: string, lane: 'frontend' | 'backend')
         description: `Apply the offline parity fixture repair to ${target}.`,
         tool: 'file_write',
         target,
-        rationale: 'Writes the fixture-provided repair through the governed executor path.',
+        rationale:
+          'Writes the fixture-provided repair through the governed executor path.',
         reversible: true,
         verification: 'The fixture verifier passes after the file write.',
       })),
@@ -523,7 +555,10 @@ function personalizeOfflineSwePlan(prompt: string, lane: 'frontend' | 'backend')
   if (!target) return plan;
   return {
     ...plan,
-    minimal_action_set: plan.minimal_action_set.map((step) => ({ ...step, target })),
+    minimal_action_set: plan.minimal_action_set.map((step) => ({
+      ...step,
+      target,
+    })),
   };
 }
 
@@ -532,7 +567,8 @@ function readParityOfflineFixMap(): Record<string, string> | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+      return null;
     const entries = Object.entries(parsed).filter(
       ([path, content]) => path.length > 0 && typeof content === 'string',
     );
@@ -542,14 +578,18 @@ function readParityOfflineFixMap(): Record<string, string> | null {
   }
 }
 
-function buildParityOfflineExecutorResponse(prompt: string): Record<string, unknown> | null {
+function buildParityOfflineExecutorResponse(
+  prompt: string,
+): Record<string, unknown> | null {
   const fixMap = readParityOfflineFixMap();
   if (fixMap === null) return null;
 
   const history = prompt.includes('### EXECUTION HISTORY SO FAR:')
     ? prompt.slice(prompt.indexOf('### EXECUTION HISTORY SO FAR:'))
     : '';
-  const completedCount = (history.match(/<tool-result tool="file_write"/g) ?? []).length;
+  const completedCount = (
+    history.match(/<tool-result tool="file_write"/g) ?? []
+  ).length;
   const next = Object.entries(fixMap)[completedCount];
   if (!next) {
     return { type: 'completion', status: 'EXECUTION_COMPLETE' };
@@ -583,7 +623,8 @@ function buildPipelineV9OfflineQaReject(lane: 'frontend' | 'backend') {
       {
         tag: 'AMBIGUOUS_PLAN',
         severity: 'blocker',
-        description: 'Offline fixture: simulated QA rejection for integration test.',
+        description:
+          'Offline fixture: simulated QA rejection for integration test.',
         step_index: 0,
       },
     ],
@@ -628,29 +669,58 @@ export function buildPipelineV9OfflineFixtureResponse(
   if ((stage as string) === 'orchestrator') {
     return buildPipelineV9OfflineOrchestratorManifest(prompt);
   }
-  const isEpisodeIntegration = process.env['BABEL_EPISODE_STREAM_INTEGRATION'] === '1' || /BABEL_EPISODE_STREAM_INTEGRATION/i.test(prompt);
+  const isEpisodeIntegration =
+    process.env['BABEL_EPISODE_STREAM_INTEGRATION'] === '1' ||
+    /BABEL_EPISODE_STREAM_INTEGRATION/i.test(prompt);
   if (isEpisodeIntegration && stage === 'planning') {
     const plan = buildPipelineV9OfflineSwePlan('backend');
-    return { ...plan, minimal_action_set: [{ ...plan.minimal_action_set[0], target: 'src/evidence/episodeStream.ts' }] };
+    return {
+      ...plan,
+      minimal_action_set: [
+        {
+          ...plan.minimal_action_set[0],
+          target: 'src/evidence/episodeStream.ts',
+        },
+      ],
+    };
   }
   if (isEpisodeIntegration && stage === 'qa') {
-    return { verdict: 'PASS', overall_confidence: 5, notes: 'Episode stream integration fixture passed QA.' };
+    return {
+      verdict: 'PASS',
+      overall_confidence: 5,
+      notes: 'Episode stream integration fixture passed QA.',
+    };
   }
-  if (isEpisodeIntegration && (stage === 'executor' || prompt.includes('EXECUTION HISTORY'))) {
-    const hasSuccessfulRead = /file_read[^\n]*src\/evidence\/episodeStream\.ts[^\n]*\r?\nExit code: 0/.test(prompt);
+  if (
+    isEpisodeIntegration &&
+    (stage === 'executor' || prompt.includes('EXECUTION HISTORY'))
+  ) {
+    const hasSuccessfulRead =
+      /file_read[^\n]*src\/evidence\/episodeStream\.ts[^\n]*\r?\nExit code: 0/.test(
+        prompt,
+      );
     return hasSuccessfulRead
       ? { type: 'completion', status: 'EXECUTION_COMPLETE' }
-      : { type: 'tool_call', thinking: 'Read the episode stream source before completing.', tool: 'file_read', path: 'src/evidence/episodeStream.ts' };
+      : {
+          type: 'tool_call',
+          thinking: 'Read the episode stream source before completing.',
+          tool: 'file_read',
+          path: 'src/evidence/episodeStream.ts',
+        };
   }
-  const isOtelRegression = /otel regression|otel verified lane|otel autonomous lane/i.test(prompt);
+  const isOtelRegression =
+    /otel regression|otel verified lane|otel autonomous lane/i.test(prompt);
 
   if (isOtelRegression) {
     if (
       stage === 'orchestrator' ||
-      prompt.includes('Analyze the task below and output the orchestration manifest')
+      prompt.includes(
+        'Analyze the task below and output the orchestration manifest',
+      )
     ) {
       const mode = 'deep';
-      const repoRoot = process.env['BABEL_PROJECT_ROOT']?.trim() || process.cwd();
+      const repoRoot =
+        process.env['BABEL_PROJECT_ROOT']?.trim() || process.cwd();
       return buildOtelOfflineOrchestratorManifest(mode, repoRoot);
     }
     if (stage === 'planning' || prompt.includes('produce the SWE Plan')) {
@@ -665,7 +735,8 @@ export function buildPipelineV9OfflineFixtureResponse(
     }
     if (stage === 'executor') {
       const historyIndex = prompt.indexOf('EXECUTION HISTORY');
-      const executionHistory = historyIndex >= 0 ? prompt.slice(historyIndex) : '';
+      const executionHistory =
+        historyIndex >= 0 ? prompt.slice(historyIndex) : '';
       if (
         !/\[Step 1\] file_read[^\n]*runs\/latest\/01_manifest\.json\r?\nExit code: 0/.test(
           executionHistory,
@@ -673,7 +744,8 @@ export function buildPipelineV9OfflineFixtureResponse(
       ) {
         return {
           type: 'tool_call',
-          thinking: 'OTel offline fixture: read the compiled manifest before completing.',
+          thinking:
+            'OTel offline fixture: read the compiled manifest before completing.',
           tool: 'file_read',
           path: 'runs/latest/01_manifest.json',
         };
@@ -692,7 +764,10 @@ export function buildPipelineV9OfflineFixtureResponse(
   if (stage === 'planning' || prompt.includes('produce the SWE Plan')) {
     if (scenario === 'evidence_loop') {
       // Check if this is a replan after evidence gathering
-      if (prompt.includes('EVIDENCE_REQUEST') || prompt.includes('evidence gathered')) {
+      if (
+        prompt.includes('EVIDENCE_REQUEST') ||
+        prompt.includes('evidence gathered')
+      ) {
         return buildPipelineV9OfflineSwePlan(lane);
       }
       return buildPipelineV9OfflineEvidencePlan(lane);
@@ -764,10 +839,14 @@ export function buildReliabilityRepairProofExecutorResponse(
     /\[Step \d+\] file_write\s+[^\r\n]*src\/math\.js\r?\nExit code: 0/g,
   );
   const verifierExitCodes = getReliabilityRepairProofVerifierExitCodes(prompt);
-  const failedVerifierCount = verifierExitCodes.filter((code) => code !== 0).length;
+  const failedVerifierCount = verifierExitCodes.filter(
+    (code) => code !== 0,
+  ).length;
   const lastVerifierExitCode = verifierExitCodes[verifierExitCodes.length - 1];
-  const hasFailureCapsule = /Failure capsule id:\s*repair_failure_capsule_attempt_\d+/.test(prompt);
-  const forceStillFail = process.env['BABEL_RELIABILITY_REPAIR_PROOF_FORCE_STILL_FAIL'] === 'true';
+  const hasFailureCapsule =
+    /Failure capsule id:\s*repair_failure_capsule_attempt_\d+/.test(prompt);
+  const forceStillFail =
+    process.env['BABEL_RELIABILITY_REPAIR_PROOF_FORCE_STILL_FAIL'] === 'true';
 
   if (fileReadCount === 0) {
     return {
@@ -786,14 +865,17 @@ export function buildReliabilityRepairProofExecutorResponse(
         'Deterministic reliability proof model-boundary response: attempt 1 writes the wrong implementation through file_write.',
       tool: 'file_write',
       path: 'src/math.js',
-      content: ['export function add(a, b) {', '  return a * b;', '}', ''].join('\n'),
+      content: ['export function add(a, b) {', '  return a * b;', '}', ''].join(
+        '\n',
+      ),
     };
   }
 
   if (writeCount > verifierExitCodes.length) {
     return {
       type: 'tool_call',
-      thinking: 'Run the verifier through the normal test_run path before completing.',
+      thinking:
+        'Run the verifier through the normal test_run path before completing.',
       tool: 'test_run',
       command: 'node --test',
       working_directory: '.',
@@ -827,7 +909,9 @@ export function buildReliabilityRepairProofExecutorResponse(
             '}',
             '',
           ].join('\n')
-        : ['export function add(a, b) {', '  return a + b;', '}', ''].join('\n'),
+        : ['export function add(a, b) {', '  return a + b;', '}', ''].join(
+            '\n',
+          ),
     };
   }
 
@@ -842,7 +926,8 @@ export function buildReliabilityRepairProofExecutorResponse(
     type: 'completion',
     status: 'EXECUTION_HALTED',
     halt_tag: 'STEP_VERIFICATION_FAIL',
-    condition: 'Reliability repair proof reached an unexpected executor prompt state.',
+    condition:
+      'Reliability repair proof reached an unexpected executor prompt state.',
   };
 }
 
@@ -1013,6 +1098,16 @@ function tierSpecFromPolicyEntry(entry: ResolvedModelPolicyEntry): TierSpec {
     };
   }
 
+  if (entry.provider === 'openrouter') {
+    return {
+      kind: 'api',
+      name: getPolicyDisplayName(entry),
+      provider: entry.provider,
+      backendKey: entry.backendKey,
+      factory: () => new OpenRouterApiRunner(entry.providerModelId),
+    };
+  }
+
   if (entry.provider !== 'deepinfra') {
     throw new Error(
       `Unsupported stage policy provider "${entry.provider}" for backend "${entry.backendKey}".`,
@@ -1028,7 +1123,10 @@ function tierSpecFromPolicyEntry(entry: ResolvedModelPolicyEntry): TierSpec {
   };
 }
 
-function resolvePolicyWaterfall(stage: PipelineStage, liveOnly = false): TierSpec[] | null {
+function resolvePolicyWaterfall(
+  stage: PipelineStage,
+  liveOnly = false,
+): TierSpec[] | null {
   const routes = resolveStagePolicyRoutes({ liveOnly });
   const route = routes.find((candidate) => candidate.stage === stage);
   if (!route) return null;
@@ -1063,7 +1161,11 @@ const RATE_LIMIT_SIGNALS = [
   'too many requests',
 ] as const;
 
-const SPAWN_ERROR_SIGNALS = ['not found in path', 'is not recognized as an', 'enoent'] as const;
+const SPAWN_ERROR_SIGNALS = [
+  'not found in path',
+  'is not recognized as an',
+  'enoent',
+] as const;
 
 const STRUCTURED_OUTPUT_FAILURE_SIGNALS = [
   'zod validation failed',
@@ -1071,7 +1173,11 @@ const STRUCTURED_OUTPUT_FAILURE_SIGNALS = [
   'failed to parse api response as json',
 ] as const;
 
-const REQUEST_TIMEOUT_SIGNALS = ['request timeout', 'aborterror', 'aborted'] as const;
+const REQUEST_TIMEOUT_SIGNALS = [
+  'request timeout',
+  'aborterror',
+  'aborted',
+] as const;
 
 function isImmediateCascade(err: Error): boolean {
   const msg = err.message.toLowerCase();
@@ -1155,9 +1261,15 @@ export function buildStructuredOutputRetryPrompt(
   error: Error,
   options: StructuredOutputRetryPromptOptions = {},
 ): string {
-  const errorSummary = redactSecrets(error.message.replace(/\s+/g, ' ').slice(0, 1200));
-  const schemaName = options.schemaName ?? inferSchemaNameFromStage(options.stage);
-  const stageGuidance = buildStageStructuredOutputGuidance(options.stage, schemaName);
+  const errorSummary = redactSecrets(
+    error.message.replace(/\s+/g, ' ').slice(0, 1200),
+  );
+  const schemaName =
+    options.schemaName ?? inferSchemaNameFromStage(options.stage);
+  const stageGuidance = buildStageStructuredOutputGuidance(
+    options.stage,
+    schemaName,
+  );
   const shadowHints = options.shadowHints ?? [];
   return [
     prompt,
@@ -1207,7 +1319,10 @@ async function raceWithTimeout<T>(
     return await Promise.race([
       promise,
       new Promise<T>((_, reject) => {
-        timeoutHandle = setTimeout(() => reject(buildTimeoutError()), timeoutMs);
+        timeoutHandle = setTimeout(
+          () => reject(buildTimeoutError()),
+          timeoutMs,
+        );
       }),
     ]);
   } finally {
@@ -1281,7 +1396,9 @@ function cloneInvocationMetadata(
   };
 }
 
-function getRunnerInvocationMetadata(runner: LlmRunner): RunnerInvocationMetadata | null {
+function getRunnerInvocationMetadata(
+  runner: LlmRunner,
+): RunnerInvocationMetadata | null {
   return cloneInvocationMetadata(runner.getLastInvocationMetadata?.());
 }
 
@@ -1316,7 +1433,8 @@ function buildAttemptOutcome(
     input_cost_per_1m: metadata?.input_cost_per_1m ?? null,
     output_cost_per_1m: metadata?.output_cost_per_1m ?? null,
     input_cache_hit_cost_per_1m: metadata?.input_cache_hit_cost_per_1m ?? null,
-    input_cache_miss_cost_per_1m: metadata?.input_cache_miss_cost_per_1m ?? null,
+    input_cache_miss_cost_per_1m:
+      metadata?.input_cache_miss_cost_per_1m ?? null,
     schema_failure_entry_id: schemaFailureEntryId,
     ttft_ms: metadata?.ttft_ms ?? null,
     generation_ms: metadata?.generation_ms ?? null,
@@ -1354,7 +1472,8 @@ async function runWaterfall<T>(
   systemPrompt?: string,
   signal?: AbortSignal,
 ): Promise<WaterfallRunResult<T>> {
-  const verboseFallbackLogs = process.env['BABEL_VERBOSE_WATERFALLS'] === 'true' || !evidence;
+  const verboseFallbackLogs =
+    process.env['BABEL_VERBOSE_WATERFALLS'] === 'true' || !evidence;
   const startedAtMs = Date.now();
   let lastError: Error | null = null;
   const tiersSkipped: string[] = [];
@@ -1386,7 +1505,12 @@ async function runWaterfall<T>(
   const ensureTimeRemaining = (phase: string): number => {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
-      throw buildAggregateWaterfallTimeoutError(label, aggregateTimeoutMs, startedAtMs, phase);
+      throw buildAggregateWaterfallTimeoutError(
+        label,
+        aggregateTimeoutMs,
+        startedAtMs,
+        phase,
+      );
     }
     return remainingMs;
   };
@@ -1422,7 +1546,9 @@ async function runWaterfall<T>(
             new_model: next.name,
             ...(lastError?.message ? { reason: lastError.message } : {}),
           });
-          eventBus.logLine(`[babel:${label}] Using backup route: cascading to ${next.name}`);
+          eventBus.logLine(
+            `[babel:${label}] Using backup route: cascading to ${next.name}`,
+          );
         }
         if (verboseFallbackLogs) {
           console.warn(
@@ -1440,7 +1566,9 @@ async function runWaterfall<T>(
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        const remainingMs = ensureTimeRemaining(`running tier ${spec.name} attempt ${attempt}`);
+        const remainingMs = ensureTimeRemaining(
+          `running tier ${spec.name} attempt ${attempt}`,
+        );
 
         const runnerCallbacks: RunnerCallbacks = {
           onChunk: (chunk: string) => {
@@ -1549,13 +1677,22 @@ async function runWaterfall<T>(
             tiers_skipped: [...tiersSkipped],
             cascade_reason: cascadeReason,
             attempts_detail: attemptsDetail,
-            total_latency_ms: sumAttemptMetric(attemptsDetail, (entry) => entry.latency_ms),
-            total_prompt_tokens: sumAttemptMetric(attemptsDetail, (entry) => entry.prompt_tokens),
+            total_latency_ms: sumAttemptMetric(
+              attemptsDetail,
+              (entry) => entry.latency_ms,
+            ),
+            total_prompt_tokens: sumAttemptMetric(
+              attemptsDetail,
+              (entry) => entry.prompt_tokens,
+            ),
             total_completion_tokens: sumAttemptMetric(
               attemptsDetail,
               (entry) => entry.completion_tokens,
             ),
-            total_tokens: sumAttemptMetric(attemptsDetail, (entry) => entry.total_tokens),
+            total_tokens: sumAttemptMetric(
+              attemptsDetail,
+              (entry) => entry.total_tokens,
+            ),
             total_estimated_cost_usd: sumAttemptMetric(
               attemptsDetail,
               (entry) => entry.estimated_cost_usd,
@@ -1692,10 +1829,14 @@ async function runWaterfall<T>(
             new_model: next.name,
             ...(lastError?.message ? { reason: lastError.message } : {}),
           });
-          eventBus.logLine(`[babel:${label}] Using backup route: cascading to ${next.name}`);
+          eventBus.logLine(
+            `[babel:${label}] Using backup route: cascading to ${next.name}`,
+          );
         }
         if (verboseFallbackLogs) {
-          console.warn(`[babel:${label}] ${spec.name} failed. Cascading to ${next.name}...`);
+          console.warn(
+            `[babel:${label}] ${spec.name} failed. Cascading to ${next.name}...`,
+          );
         }
       }
     }
@@ -1748,8 +1889,10 @@ export async function runWithFallback<T>(
   // doesn't provide one, use a lightweight in-memory bundle that writes to
   // a deterministic per-session directory so failures are never silent.
   const evidence =
-    options.evidence ?? EvidenceBundle.inMemory(options.schemaName ?? 'schema-failure');
-  const liveOnly = options.liveOnly ?? process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1';
+    options.evidence ??
+    EvidenceBundle.inMemory(options.schemaName ?? 'schema-failure');
+  const liveOnly =
+    options.liveOnly ?? process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1';
   let waterfall = resolveWaterfall(options.stage, options.mode, liveOnly);
   if (options.fallbackPolicy === 'primary_only') {
     waterfall = waterfall.slice(0, 1);
@@ -1759,32 +1902,46 @@ export async function runWithFallback<T>(
   // bypass the stage-based waterfall and create a single-tier waterfall
   // with a direct runner for that model.
   if (options.model) {
+    if (liveOnly) {
+      assertLiveModelId(options.model, 'live model override');
+    }
     const { config } = loadModelPolicyConfig();
-    const backend = config.models?.[options.model];
-    if (backend) {
-      const resolved = resolveModelByKey({ key: options.model, liveOnly });
+    const routedModel = liveOnly
+      ? resolveOpenRouterDeepSeekBackendKey(options.model) ?? options.model
+      : options.model;
+    const backendKey = resolveModelPolicyBackendKey(routedModel);
+    const backend = backendKey ? config.models?.[backendKey] : undefined;
+    if (backendKey && backend) {
+      const resolved = resolveModelByKey({ key: backendKey, liveOnly });
       const factory =
         backend.provider === 'deepseek'
           ? () => new DeepSeekApiRunner(backend.model_id)
-          : () => new DeepInfraApiRunner(backend.model_id);
+          : backend.provider === 'openrouter'
+            ? () => new OpenRouterApiRunner(backend.model_id)
+            : () => new DeepInfraApiRunner(backend.model_id);
       waterfall = [
         {
           kind: 'api',
-          name: options.model,
+          name: backendKey,
           provider: resolved.provider,
-          backendKey: options.model,
+          backendKey,
           factory,
         },
       ];
     }
-    // If the model key is unknown, fall through to the normal waterfall.
-    // The caller should validate the key before invoking runWithFallback.
+    // Live model overrides are validated above and must resolve to an
+    // approved route; they cannot silently fall through to another model.
   }
   if (liveOnly) {
-    waterfall = waterfall.filter((tier) => tier.provider === 'deepseek');
+    waterfall = waterfall.filter(
+      (tier) =>
+        tier.provider === 'openrouter' &&
+        (tier.backendKey === LIVE_OPENROUTER_BACKEND_KEY ||
+          tier.backendKey?.endsWith('-openrouter') === true),
+    );
     if (waterfall.length === 0) {
       throw new Error(
-        '[LIVE_MODEL_POLICY] No direct DeepSeek tier is available for this live stage.',
+        '[LIVE_MODEL_POLICY] No approved live tier is available for this live stage.',
       );
     }
   }
@@ -1792,11 +1949,10 @@ export async function runWithFallback<T>(
   const effectiveStage = resolveEffectiveStage(options.stage, options.mode);
   const schemaName = options.schemaName ?? inferSchemaNameFromStage(label);
   const aggregateTimeoutMs = resolveAggregateWaterfallTimeoutMs();
-  const deterministicReliabilityProofResponse = buildReliabilityRepairProofExecutorResponse(
-    prompt,
-    options,
-  );
-  const pipelineV9OfflineFixtureResponse = buildPipelineV9OfflineFixtureResponse(prompt, options);
+  const deterministicReliabilityProofResponse =
+    buildReliabilityRepairProofExecutorResponse(prompt, options);
+  const pipelineV9OfflineFixtureResponse =
+    buildPipelineV9OfflineFixtureResponse(prompt, options);
 
   if (pipelineV9OfflineFixtureResponse !== null) {
     const result = schema.parse(pipelineV9OfflineFixtureResponse);
@@ -1878,7 +2034,9 @@ export async function runWithFallback<T>(
         total_estimated_cost_usd: null,
       } satisfies WaterfallOutcome);
     }
-    console.log(`[babel:${label}] ✓ deterministic repair proof model-boundary response`);
+    console.log(
+      `[babel:${label}] ✓ deterministic repair proof model-boundary response`,
+    );
     return result;
   }
 
@@ -1889,7 +2047,9 @@ export async function runWithFallback<T>(
 
   if (startTierIndex === undefined) {
     const routingOpts =
-      options.dynamicRouting !== undefined ? { enabled: options.dynamicRouting } : undefined;
+      options.dynamicRouting !== undefined
+        ? { enabled: options.dynamicRouting }
+        : undefined;
 
     const decision = selectBestTierForStage(
       effectiveStage,
@@ -1914,15 +2074,23 @@ export async function runWithFallback<T>(
 
   // Stamp canonical indices before reordering so runWaterfall can always
   // report the original tier slot in logs and telemetry.
-  const stampedWaterfall = waterfall.map((spec, i) => ({ ...spec, originalIndex: i }));
-  let orderedWaterfall = reorderWaterfallByStartIndex(stampedWaterfall, startTierIndex);
+  const stampedWaterfall = waterfall.map((spec, i) => ({
+    ...spec,
+    originalIndex: i,
+  }));
+  let orderedWaterfall = reorderWaterfallByStartIndex(
+    stampedWaterfall,
+    startTierIndex,
+  );
 
   // ── Smart Planner tier skipping ──────────────────────────────────────────
   // Remove tiers whose backend key matches a skip entry. This runs AFTER
   // dynamic routing reordering and startTierIndex adjustment so it can
   // strip weak tiers regardless of where they ended up in the order.
   if (options.skipTierNames && options.skipTierNames.length > 0) {
-    const skipSet = new Set(options.skipTierNames.map((n) => n.toLowerCase().trim()));
+    const skipSet = new Set(
+      options.skipTierNames.map((n) => n.toLowerCase().trim()),
+    );
     const filtered = orderedWaterfall.filter((spec) => {
       const key = (spec.backendKey ?? spec.name).toLowerCase().trim();
       return !skipSet.has(key);
@@ -1935,7 +2103,9 @@ export async function runWithFallback<T>(
     }
     if (filtered.length < orderedWaterfall.length) {
       const skipped = orderedWaterfall
-        .filter((spec) => skipSet.has((spec.backendKey ?? spec.name).toLowerCase().trim()))
+        .filter((spec) =>
+          skipSet.has((spec.backendKey ?? spec.name).toLowerCase().trim()),
+        )
         .map((s) => s.name)
         .join(', ');
       if (options.eventBus) {
@@ -2008,14 +2178,22 @@ export async function runDirectAsk<T>(
     signal?: AbortSignal;
   } = {},
 ): Promise<T> {
-  const runner = new DeepSeekApiRunner('deepseek-v4-flash');
+  const runner = new OpenRouterApiRunner('deepseek/deepseek-v4-flash-0731');
 
   let lastError: Error | null = null;
   const maxAttempts = options.maxAttempts ?? 2;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const callbacks = options.onChunk ? { onChunk: options.onChunk } : undefined;
-      const result = await runner.execute(prompt, schema, callbacks, undefined, options.signal);
+      const callbacks = options.onChunk
+        ? { onChunk: options.onChunk }
+        : undefined;
+      const result = await runner.execute(
+        prompt,
+        schema,
+        callbacks,
+        undefined,
+        options.signal,
+      );
       return result;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));

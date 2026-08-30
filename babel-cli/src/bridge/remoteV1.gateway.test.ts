@@ -131,8 +131,8 @@ describe('Babel Remote V1 gateway', () => {
     assert.match(health.body, /127\.0\.0\.1/);
     const ui = await httpRequest(`http://127.0.0.1:${PORT}/ui`);
     assert.equal(ui.statusCode, 200);
-    assert.match(ui.body, /ALLOW ONCE/);
-    assert.match(ui.body, /DENY/);
+    assert.match(ui.body, /Allow once/i);
+    assert.match(ui.body, /Deny/i);
     assert.doesNotMatch(ui.body, /ALLOW_SESSION/);
     assert.doesNotMatch(ui.body, new RegExp(TOKEN));
     const app = await httpRequest(`http://127.0.0.1:${PORT}/ui/app.js`);
@@ -632,4 +632,3 @@ describe('Babel Remote V1 gateway', () => {
     }
   });
 });
-

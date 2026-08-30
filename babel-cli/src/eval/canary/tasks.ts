@@ -27,6 +27,7 @@ export const CANARY_TASKS: CanaryTaskSpec[] = [
         gold: "export function add(a, b) { return a + b }\n",
       },
     ],
+    public_test: `import assert from 'node:assert/strict'\nimport { add } from './src/add.js'\nassert.equal(add(2, 3), 5)\n`,
     oracle_test: HIDDEN_ADD,
   },
   {
@@ -49,6 +50,7 @@ export const CANARY_TASKS: CanaryTaskSpec[] = [
         gold: "import { mem } from './cache.js'\nexport const store = {\n  set(k, v) { mem.set(k, v) },\n  get(k) { return mem.get(k) },\n  rename(from, to) { const v = mem.get(from); mem.delete(from); mem.set(to, v) },\n}\nexport function rename(from, to) { store.rename(from, to) }\n",
       },
     ],
+    public_test: `import assert from 'node:assert/strict'\nimport { store, rename } from './src/store.js'\nstore.set('a', 1)\nrename('a', 'b')\nassert.equal(store.get('b'), 1)\n`,
     oracle_test: HIDDEN_CACHE,
   },
   {
@@ -65,6 +67,7 @@ export const CANARY_TASKS: CanaryTaskSpec[] = [
         gold: "export function clamp(n, lo, hi) { return Math.min(hi, Math.max(lo, n)) }\n",
       },
     ],
+    public_test: `import assert from 'node:assert/strict'\nimport { clamp } from './src/clamp.js'\nassert.equal(clamp(3, 0, 5), 3)\n`,
     oracle_test: `import assert from 'node:assert/strict'\nimport { clamp } from './src/clamp.js'\nassert.equal(clamp(10, 0, 5), 5)\n`,
   },
   {
@@ -81,6 +84,7 @@ export const CANARY_TASKS: CanaryTaskSpec[] = [
         gold: "let n = 0\nexport function nextId() { return ++n }\n",
       },
     ],
+    public_test: `import assert from 'node:assert/strict'\nimport { nextId } from './src/id.js'\nconst ids = new Set(Array.from({ length: 5 }, () => nextId()))\nassert.equal(ids.size, 5)\n`,
     oracle_test: `import assert from 'node:assert/strict'\nimport { nextId } from './src/id.js'\nconst s = new Set(Array.from({length: 50}, () => nextId()))\nassert.equal(s.size, 50)\n`,
   },
   {
@@ -97,6 +101,7 @@ export const CANARY_TASKS: CanaryTaskSpec[] = [
         gold: "export function parseJson(s) { return JSON.parse(s) }\n",
       },
     ],
+    public_test: `import assert from 'node:assert/strict'\nimport { parseJson } from './src/parse.js'\nassert.deepEqual(parseJson('{"ok":true}'), { ok: true })\n`,
     oracle_test: `import assert from 'node:assert/strict'\nimport { parseJson } from './src/parse.js'\nassert.throws(() => parseJson('{'), SyntaxError)\n`,
   },
   {
@@ -113,6 +118,7 @@ export const CANARY_TASKS: CanaryTaskSpec[] = [
         gold: `${"// pad\n".repeat(200)}export function saturatingAdd(a, b) { return Math.min(0xffffffff, a + b) }\n`,
       },
     ],
+    public_test: `import assert from 'node:assert/strict'\nimport { saturatingAdd } from './src/lib.js'\nassert.equal(saturatingAdd(1, 2), 3)\n`,
     oracle_test: `import assert from 'node:assert/strict'\nimport { saturatingAdd } from './src/lib.js'\nassert.equal(saturatingAdd(0xfffffffe, 5), 0xffffffff)\n`,
   },
   {
@@ -135,6 +141,7 @@ export const CANARY_TASKS: CanaryTaskSpec[] = [
         gold: "import { fmt } from './fmt.js'\nexport function label(n) { return 'id=' + fmt(n) }\n",
       },
     ],
+    public_test: `import assert from 'node:assert/strict'\nimport { fmt } from './src/fmt.js'\nimport { label } from './src/use.js'\nassert.equal(fmt(0), '0')\nassert.equal(label(0), 'id=0')\n`,
     oracle_test: `import assert from 'node:assert/strict'\nimport { fmt } from './src/fmt.js'\nimport { label } from './src/use.js'\nassert.equal(fmt(3), '3')\nassert.equal(label(3), 'id=3')\n`,
   },
   {
@@ -150,6 +157,7 @@ export const CANARY_TASKS: CanaryTaskSpec[] = [
         gold: "export function add(a, b) { return a + b }\n",
       },
     ],
+    public_test: HIDDEN_ADD,
     oracle_test: HIDDEN_ADD,
   },
   {

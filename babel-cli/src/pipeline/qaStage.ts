@@ -22,7 +22,8 @@ import {
 } from '../agent/lanes/adversarialQALane.js';
 import type { AdversarialQAInput } from '../agent/lanes/adversarialQALane.js';
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
-import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
+import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
+import { LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS } from '../modelPolicy.js';
 import { QaVerdictSchema } from '../schemas/agentContracts.js';
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
 import type { z } from 'zod';
@@ -86,7 +87,7 @@ export async function runAdversarialQaGate(
     const advRunner =
       process.env['BABEL_PIPELINE_V9_OFFLINE'] === '1'
         ? new DeepInfraApiRunner(modelId)
-        : new DeepSeekApiRunner('deepseek-v4-pro');
+        : new OpenRouterApiRunner(LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[1]);
     const advVerdict = await advRunner.execute(advPrompt, QaVerdictSchema);
 
     // Write adversarial verdict to evidence directory

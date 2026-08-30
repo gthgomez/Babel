@@ -231,6 +231,41 @@ test('DeepInfra API runner executeWithToolsStream yields tool_use for native too
   assert.equal(metadata?.completion_tokens, 5);
 });
 
+test('DeepInfra native stream rejects malformed tool arguments with a terminal receipt', async () => {
+  process.env['DEEPINFRA_API_KEY'] = 'test-key';
+  const { DeepInfraApiRunner } = await import('./deepInfraApi.js');
+
+  globalThis.fetch = (async () =>
+    makeSseResponse([
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"bad_call","type":"function","function":{"name":"read_file","arguments":"{\\"path\\":"}}]}}]}',
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}',
+      'data: [DONE]',
+    ])) as typeof fetch;
+
+  const runner = new DeepInfraApiRunner('deepseek-ai/DeepSeek-V3-0324');
+  const events: any[] = [];
+  const phases: string[] = [];
+  const completions: string[] = [];
+  for await (const event of runner.executeWithToolsStream(
+    [{ role: 'user', content: 'read the file' }],
+    [],
+    undefined,
+    undefined,
+    undefined,
+    {
+      onInvocationPhase: (event) => phases.push(event.phase),
+      onInvocationCompleted: (event) => completions.push(event.status),
+    },
+  )) {
+    events.push(event);
+  }
+
+  assert.deepEqual(events.map((event) => event.type), ['error']);
+  assert.match(events[0]!.message, /Malformed arguments/);
+  assert.ok(phases.includes('response_normalization_failed'));
+  assert.deepEqual(completions, ['failed']);
+});
+
 test('DeepInfra API runner executeWithToolsStream yields text_delta for completion', async () => {
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
   const { DeepInfraApiRunner } = await import('./deepInfraApi.js');

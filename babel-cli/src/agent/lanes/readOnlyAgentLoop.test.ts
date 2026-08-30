@@ -81,6 +81,40 @@ describe('runReadOnlyAgentLoop', () => {
     assert.ok(result.sessionLoopSteps.some((step) => step.phase === 'finish'));
   });
 
+  it('keeps the read-only authority and restores process state after executor failure', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-readonly-loop-failure-'));
+    const previousProjectRoot = process.env['BABEL_PROJECT_ROOT'];
+    const previousNoIndexWrites = process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'];
+    process.env['BABEL_PROJECT_ROOT'] = 'sentinel-project-root';
+    process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'] = 'sentinel-index-policy';
+    const throwingExecutor = mockExecutor({});
+    throwingExecutor.execute = async () => {
+      throw new Error('synthetic executor failure');
+    };
+
+    await assert.rejects(
+      () => runReadOnlyAgentLoop({
+        verb: 'fix',
+        task: 'inspect safely',
+        projectRoot: root,
+        toolContext: { agentId: 'test-failure', runId: 'run-failure', babelRoot: root },
+        provider: 'mock',
+        useDeterministicMock: true,
+        // This must not widen the read port into a writable lane.
+        preset: 'workspace_write',
+        executor: throwingExecutor,
+      }),
+      /synthetic executor failure/,
+    );
+
+    assert.equal(process.env['BABEL_PROJECT_ROOT'], 'sentinel-project-root');
+    assert.equal(process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'], 'sentinel-index-policy');
+    if (previousProjectRoot === undefined) delete process.env['BABEL_PROJECT_ROOT'];
+    else process.env['BABEL_PROJECT_ROOT'] = previousProjectRoot;
+    if (previousNoIndexWrites === undefined) delete process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'];
+    else process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'] = previousNoIndexWrites;
+  });
+
   it('mock discovery reads PROJECT_CONTEXT and stack manifests when present', async () => {
     const root = mkdtempSync(join(tmpdir(), 'babel-readonly-anchor-loop-'));
     writeFileSync(join(root, 'PROJECT_CONTEXT.md'), '# Context\n', 'utf-8');

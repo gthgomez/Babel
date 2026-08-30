@@ -9,6 +9,7 @@ $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
 $git = Join-Path $env:ProgramFiles 'Git\cmd\git.exe'
 $tempRoot = Join-Path $repoRoot ('.tmp-agent-git-readiness-' + [Guid]::NewGuid().ToString('N'))
 $fakeGh = Join-Path $tempRoot 'fake-gh.ps1'
+$fakeGhAuthFailure = Join-Path $tempRoot 'fake-gh-auth-failure.ps1'
 $remote = Join-Path $tempRoot 'remote.git'
 $fixture = Join-Path $tempRoot 'fixture'
 $worktrees = Join-Path $tempRoot 'worktrees'
@@ -181,6 +182,25 @@ try {
   $blocked = $blockedRun.text | ConvertFrom-Json
   Assert-AgentTest ([string]$blocked.status -eq 'BLOCKED') 'mismatched review should report BLOCKED'
   Assert-AgentTest (@($blocked.blockers) -contains 'reviewed_head_does_not_match_pr_head') 'mismatched review should identify its blocker'
+
+  @(
+    'param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)',
+    'if ($Arguments.Count -gt 0 -and $Arguments[0] -eq "--version") { Write-Output "gh version 2.97.0"; exit 0 }',
+    'if ($Arguments.Count -gt 1 -and $Arguments[0] -eq "auth" -and $Arguments[1] -eq "status") { exit 1 }',
+    'exit 1') | Set-Content -LiteralPath $fakeGhAuthFailure -Encoding utf8
+  $authFailureRun = Invoke-TestScript -Script $prGateScript -Arguments @(
+    '-PR', '42',
+    '-RepoRoot', $fixture,
+    '-GitPath', $git,
+    '-GhPath', $fakeGhAuthFailure,
+    '-ReviewedHeadSha', $headSha
+  )
+  Assert-AgentTest ($authFailureRun.exitCode -eq 1) 'PR gate should block a GitHub authentication failure'
+  $authFailure = $authFailureRun.text | ConvertFrom-Json
+  Assert-AgentTest ([string]$authFailure.status -eq 'BLOCKED') 'auth failure should report BLOCKED'
+  Assert-AgentTest (-not [bool]$authFailure.mergeReady) 'auth failure must not report mergeReady'
+  Assert-AgentTest (@($authFailure.blockers) -contains 'github_auth_failed') 'auth failure should identify github_auth_failed'
+  Assert-AgentTest ($authFailureRun.text -notmatch 'PropertyNotFound') 'auth failure must not produce a secondary property exception'
 
   Write-Output 'agent-git-readiness: PASS'
   exit 0

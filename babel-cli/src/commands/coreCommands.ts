@@ -1,4 +1,11 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 import { Command } from "commander";
@@ -17,6 +24,18 @@ import { getShadowDiff } from "../services/shadowDiff.js";
 import { formatDoctorHuman, runDoctor, type DoctorScope } from "../doctor.js";
 import { formatEvalDoctorHuman, runEvalDoctor } from "../eval/evalDoctor.js";
 import { runCodingCanary, describeCanaryPlan } from "../eval/canary/runner.js";
+import {
+  GLM_CERTIFICATION_STAGES,
+  evaluateGlmCertification,
+  loadGlmCertificationStages,
+  loadGlmSessionLog,
+  writeGlmCertificationReport,
+  type GlmCertificationStage,
+} from "../eval/glmCertification.js";
+import {
+  buildCausalAttributionReport,
+  formatCausalAttributionHuman,
+} from "../services/causalAttribution.js";
 import { projectEvaluationEpisode } from "../eval/projectEpisode.js";
 import { validateRuntimeEnv } from "../config/runtimeEnv.js";
 import {
@@ -39,6 +58,10 @@ import {
   formatSessionRunValidatorText,
   validateSessionRun,
 } from "../agent/sessionRunValidator.js";
+import {
+  inspectSessionEventLogFromDir,
+  type SessionEventLog,
+} from "../agent/sessionEvents.js";
 import { renderProductBanner } from "../ui/renderers.js";
 import { warning, muted } from "../ui/theme.js";
 import { readRuntimeMode, writeRuntimeMode } from "../config/runtimeMode.js";
@@ -92,8 +115,13 @@ import {
   resolveProjectRoot,
   writeDryRunState,
 } from "../cli/helpers.js";
-import { resolveModelByKey } from "../modelPolicy.js";
-import { DeepSeekApiRunner } from "../runners/deepSeekApi.js";
+import {
+  LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS,
+  LIVE_OPENROUTER_MODEL_ID,
+  resolveModelByKey,
+  resolveOpenRouterDeepSeekBackendKey,
+} from "../modelPolicy.js";
+import { OpenRouterApiRunner } from "../runners/openRouterApi.js";
 import { resolveProviderCredential } from "../runners/credentialHub.js";
 import type { ProviderId } from "../runners/providerRegistry.js";
 import {
@@ -875,23 +903,43 @@ async function handleModelsPing(options: {
   model?: string;
   json?: boolean;
   allowExpensive?: boolean;
+  evidenceDir?: string;
 }): Promise<void> {
   const startedAt = Date.now();
-  const requestedModel = options.model?.trim() || "deepseek-v4-flash";
+  const requestedModel = options.model?.trim() || "deepseek-v4-flash-openrouter";
 
   try {
+    // Live DeepSeek controls are routed through OpenRouter. Keep accepting the
+    // historical selector so existing commands cannot accidentally re-enable
+    // the direct DEEPSEEK_API_KEY path.
+    const routedModelKey =
+      resolveOpenRouterDeepSeekBackendKey(requestedModel) ?? requestedModel;
     const resolved = resolveModelByKey({
-      key: requestedModel,
+      key: routedModelKey,
       allowExpensive: options.allowExpensive === true,
       liveOnly: true,
       babelRoot: BABEL_ROOT,
     });
-    if (!process.env["DEEPSEEK_API_KEY"]?.trim()) {
-      throw new Error(
-        "[LIVE_MODEL_POLICY] DEEPSEEK_API_KEY is required for model ping.",
-      );
-    }
-    const runner = new DeepSeekApiRunner(resolved.providerModelId);
+    const runner =
+      resolved.provider === "openrouter"
+        ? (() => {
+            if (!process.env["OPENROUTER_API_KEY"]?.trim()) {
+              throw new Error(
+                "[LIVE_MODEL_POLICY] OPENROUTER_API_KEY is required for OpenRouter model ping.",
+              );
+            }
+            return new OpenRouterApiRunner(resolved.providerModelId);
+          })()
+        : (() => {
+            if (resolved.provider === "deepseek") {
+              throw new Error(
+                "[LIVE_MODEL_POLICY] Direct DeepSeek live calls are disabled; use the OpenRouter DeepSeek control route.",
+              );
+            }
+            throw new Error(
+              `[LIVE_MODEL_POLICY] Unsupported live ping provider "${resolved.provider}".`,
+            );
+          })();
     const schema = z.object({ ok: z.literal(true) });
     await runner.execute(
       'Return exactly this JSON object and nothing else: {"ok":true}',
@@ -919,6 +967,24 @@ async function handleModelsPing(options: {
       ),
     };
 
+    if (options.evidenceDir) {
+      const evidenceDir = resolve(options.evidenceDir);
+      mkdirSync(evidenceDir, { recursive: true });
+      writeFileSync(
+        join(evidenceDir, "model-ping.json"),
+        `${JSON.stringify(
+          {
+            schema_version: 1,
+            kind: "babel_model_ping_evidence",
+            evidence_scope: "LIVE_C0",
+            ...payload,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+    }
     if (options.json) {
       process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     } else {
@@ -933,12 +999,33 @@ async function handleModelsPing(options: {
       latency_ms: Date.now() - startedAt,
       error: err instanceof Error ? err.message : String(err),
     };
+    if (options.evidenceDir) {
+      const evidenceDir = resolve(options.evidenceDir);
+      mkdirSync(evidenceDir, { recursive: true });
+      writeFileSync(
+        join(evidenceDir, "model-ping.json"),
+        `${JSON.stringify(
+          {
+            schema_version: 1,
+            kind: "babel_model_ping_evidence",
+            evidence_scope: "LIVE_C0",
+            ...payload,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+    }
     if (options.json) {
       process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     } else {
       console.error(`Model check failed: ${payload.error}`);
     }
-    process.exit(1);
+    // Let pending provider/transport handles settle before the process exits.
+    // Forced exit here can produce a misleading Windows libuv shutdown
+    // assertion after an otherwise correctly reported provider error.
+    process.exitCode = 1;
   }
 }
 
@@ -1300,6 +1387,38 @@ function handleInspectMode(
       `Error during inspection: ${err instanceof Error ? err.message : String(err)}`,
     );
     process.exit(1);
+  }
+}
+
+function handleWhyInspection(
+  runArg: string | undefined,
+  options: { run?: string; project?: string; json?: boolean },
+): void {
+  try {
+    const runDir = resolveInspectRunDir({
+      run: options.run ?? runArg ?? "latest",
+      project: options.project,
+      babelRunsDir: BABEL_RUNS_DIR,
+    });
+    const loaded = inspectSessionEventLogFromDir(runDir);
+    const report = buildCausalAttributionReport({
+      runDir,
+      log: loaded.kind === "valid" ? loaded.log : null,
+      ...(loaded.kind === "invalid" ? { loadError: loaded.error.message } : {}),
+      ...(loaded.kind === "missing"
+        ? { loadError: `session event log missing at ${loaded.path}` }
+        : {}),
+    });
+    printJsonOrHuman(
+      report,
+      formatCausalAttributionHuman(report),
+      options.json === true,
+    );
+  } catch (err: unknown) {
+    printJsonErrorAndExit(
+      err instanceof Error ? err.message : String(err),
+      options.json === true,
+    );
   }
 }
 
@@ -1745,22 +1864,51 @@ function printSessionResume(
   }
 }
 
-export function resolveBenchmarkProvider(providerInput: string): {
+export function resolveBenchmarkProvider(
+  providerInput: string,
+  requestedModel?: string,
+): {
   provider: ProviderId;
   apiKey: string;
   defaultModel: string;
 } {
-  if (providerInput !== "deepseek") {
+  if (providerInput !== "deepseek" && providerInput !== "openrouter") {
     throw new Error(
-      `[LIVE_MODEL_POLICY] Live benchmarks require the direct DeepSeek provider; received "${providerInput}".`,
+      `[LIVE_MODEL_POLICY] Live benchmarks support DeepSeek controls and GLM through OpenRouter; received "${providerInput}".`,
     );
   }
-  const provider: ProviderId = "deepseek";
-  const defaultModel = "deepseek-v4-flash";
+
+  const deepSeekBackend = requestedModel
+    ? resolveOpenRouterDeepSeekBackendKey(requestedModel)
+    : providerInput === "deepseek"
+      ? "deepseek-v4-flash-openrouter"
+      : null;
+  const isDeepSeekControl = providerInput === "deepseek" || deepSeekBackend !== null;
+  const defaultModel = isDeepSeekControl
+    ? deepSeekBackend === "deepseek-v4-pro-openrouter"
+      ? LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[1]
+      : LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0]
+    : LIVE_OPENROUTER_MODEL_ID;
+  if (requestedModel && !isDeepSeekControl) {
+    const isGlm = requestedModel === LIVE_OPENROUTER_MODEL_ID || requestedModel === "glm-5.3-flash";
+    if (providerInput !== "openrouter" || !isGlm) {
+      throw new Error(
+        `[LIVE_MODEL_POLICY] OpenRouter live benchmarks accept only ${LIVE_OPENROUTER_MODEL_ID} or the approved DeepSeek control route; received "${requestedModel}".`,
+      );
+    }
+  }
+  if (providerInput === "deepseek" && requestedModel && !deepSeekBackend) {
+    throw new Error(
+      `[LIVE_MODEL_POLICY] DeepSeek live controls accept only the approved DeepSeek v4 Flash/Pro selectors; received "${requestedModel}".`,
+    );
+  }
+  // DeepSeek controls intentionally use the OpenRouter credential and
+  // endpoint. The direct DEEPSEEK_API_KEY path is not a live benchmark path.
+  const provider = "openrouter" as const;
   const apiKey = resolveProviderCredential(provider);
   if (!apiKey) {
     throw new Error(
-      "[LIVE_MODEL_POLICY] Live benchmarks require DEEPSEEK_API_KEY before execution.",
+      "[LIVE_MODEL_POLICY] Live benchmarks require OPENROUTER_API_KEY before execution.",
     );
   }
   return { provider, apiKey, defaultModel };
@@ -2712,7 +2860,7 @@ Notes:
       `
 Examples:
   $ babel models ping
-  $ babel models ping --model qwen3-32b --json
+  $ babel models ping --model deepseek-v4-flash-openrouter --json
 
 Notes:
   - Ping validates the configured key, policy route, provider reachability, and JSON response parsing.
@@ -2726,10 +2874,22 @@ Notes:
   modelsCommand
     .command("ping")
     .description("Ping one configured model backend with a tiny JSON request")
-    .option("--model <key>", "Model backend key to ping", "qwen3-32b")
+    .option(
+      "--model <key>",
+      "Model backend key to ping (default: OpenRouter DeepSeek Flash)",
+      "deepseek-v4-flash-openrouter",
+    )
+    .option(
+      "--i-authorize-live",
+      "Required before making a live provider request",
+    )
     .option(
       "--allow-expensive",
       "Approve an expensive or policy-blocked backend for this run",
+    )
+    .option(
+      "--evidence-dir <path>",
+      "Persist a redacted C0 model-ping receipt under this directory",
     )
     .option("--json", "Emit structured JSON only")
     .action(
@@ -2737,7 +2897,14 @@ Notes:
         model?: string;
         json?: boolean;
         allowExpensive?: boolean;
+        iAuthorizeLive?: boolean;
+        evidenceDir?: string;
       }) => {
+        if (options.iAuthorizeLive !== true) {
+          throw new Error(
+            "Live model ping requires explicit operator authorization; re-run with --i-authorize-live.",
+          );
+        }
         validateRuntimeEnvForCommand({ json: options.json === true });
         await handleModelsPing(options);
       },
@@ -3142,6 +3309,10 @@ Notes:
       "--report",
       "Generate proof_status.json and BABEL_RUN_REPORT.md for a run",
     )
+    .option(
+      "--why",
+      "Derive evidence-backed failure attribution from session events",
+    )
     .option("--run <run>", "Run directory or latest")
     .option("--project <name>", "Use latest run pointer for a specific project")
     .option("--json", "Emit structured JSON only")
@@ -3167,12 +3338,17 @@ Notes:
       async (options: {
         last?: boolean;
         report?: boolean;
+        why?: boolean;
         run?: string;
         project?: string;
         json?: boolean;
       }) => {
         if (options.report === true) {
           handleProofReport(undefined, options);
+          return;
+        }
+        if (options.why === true) {
+          handleWhyInspection(undefined, options);
           return;
         }
         inspectCommand.help({ error: false });
@@ -3199,6 +3375,31 @@ Notes:
           },
         ) => {
           handleProofReport(runArg, options);
+        },
+      ),
+  );
+
+  addInspectCommonOptions(
+    inspectCommand
+      .command("why")
+      .argument("[run]", "Run directory or latest")
+      .description(
+        "Derive evidence-backed failure attribution without assigning unsupported model blame",
+      )
+      .option("--json", "Emit structured JSON only")
+      .action(
+        (
+          runArg: string | undefined,
+          options: { run?: string; project?: string; json?: boolean },
+          command: Command,
+        ) => {
+          handleWhyInspection(runArg, {
+            ...options,
+            json:
+              options.json === true ||
+              command.opts().json === true ||
+              command.parent?.opts().json === true,
+          });
         },
       ),
   );
@@ -4465,6 +4666,10 @@ Commands include:
     .description("Run the coding-loop canary (mock/structural by default)")
     .option("--plan", "List canary contract without executing")
     .option("--task <id>", "Single canary task id (C01–C13)")
+    .option(
+      "--tasks <ids>",
+      "Comma-separated canary task ids for one aggregate run",
+    )
     .option("--provider <p>", "mock | live", "mock")
     .option("--i-authorize-live", "Required to spend live model tokens")
     .option(
@@ -4475,18 +4680,24 @@ Commands include:
       "--trials <n>",
       "Repeated trials (default 3 live baseline; fixed 1 under --smoke)",
     )
-    .option("--model <id>", "Chat model id (default deepseek-v4-flash)")
+    .option("--model <id>", "Chat model id (default deepseek-v4-flash-openrouter via OpenRouter)")
+    .option(
+      "--evidence-dir <path>",
+      "Persist per-cell evidence and the aggregate canary report",
+    )
     .option("--json", "Emit structured JSON only")
     .action(
       (options: {
         plan?: boolean;
         task?: string;
+        tasks?: string;
         provider?: string;
         json?: boolean;
         iAuthorizeLive?: boolean;
         smoke?: boolean;
         trials?: string;
         model?: string;
+        evidenceDir?: string;
       }) => {
         if (options.plan) {
           // Plan must describe the exact execution the same flags would run.
@@ -4494,11 +4705,21 @@ Commands include:
             ? Number.parseInt(options.trials, 10)
             : NaN;
           const plan = describeCanaryPlan({
+            provider: options.provider === "live" ? "live" : "mock",
             smoke: options.smoke === true,
             ...(options.task ? { taskId: options.task } : {}),
+            ...(options.tasks
+              ? {
+                  taskIds: options.tasks
+                    .split(",")
+                    .map((id) => id.trim())
+                    .filter(Boolean),
+                }
+              : {}),
             ...(Number.isFinite(parsedPlanTrials)
               ? { trials: parsedPlanTrials }
               : {}),
+            ...(options.model ? { model: options.model } : {}),
           });
           printJsonOrHuman(
             plan,
@@ -4516,14 +4737,174 @@ Commands include:
           authorizeLive: options.iAuthorizeLive === true,
           smoke: options.smoke === true,
           ...(options.task ? { taskId: options.task } : {}),
+          ...(options.tasks
+            ? {
+                taskIds: options.tasks
+                  .split(",")
+                  .map((id) => id.trim())
+                  .filter(Boolean),
+              }
+            : {}),
           ...(Number.isFinite(parsedTrials) ? { trials: parsedTrials } : {}),
           ...(options.model ? { model: options.model } : {}),
+          ...(options.evidenceDir
+            ? { evidenceDir: resolve(options.evidenceDir) }
+            : {}),
         });
+        if (options.evidenceDir) {
+          const evidenceDir = resolve(options.evidenceDir);
+          mkdirSync(evidenceDir, { recursive: true });
+          writeFileSync(
+            join(evidenceDir, "canary-report.json"),
+            `${JSON.stringify(report, null, 2)}\n`,
+            "utf8",
+          );
+        }
         printJsonOrHuman(
           report,
           `canary scope=${report.evidence_scope} contract=${report.contract_success_rate}`,
           options.json === true,
         );
+      },
+    );
+
+  benchmarkCommand
+    .command("glm-cert")
+    .description(
+      "Evaluate persisted exact-GLM evidence against the C0–C6 certification ladder",
+    )
+    .option(
+      "--plan",
+      "Print the certification stages and gates without reading evidence",
+    )
+    .option("--run-dir <path>", "Run directory containing session-events.jsonl")
+    .option(
+      "--stages-dir <path>",
+      "Root containing C0..C6 subdirectories with persisted session logs",
+    )
+    .option(
+      "--stage <stage>",
+      "Stage represented by --run-dir (default C0)",
+      "C0",
+    )
+    .option(
+      "--evidence-dir <path>",
+      "Directory for the persisted certification report",
+    )
+    .option("--write-report", "Write glm-certification-report.json and .md")
+    .option("--json", "Emit structured JSON only")
+    .action(
+      (options: {
+        plan?: boolean;
+        runDir?: string;
+        stagesDir?: string;
+        stage?: string;
+        evidenceDir?: string;
+        writeReport?: boolean;
+        json?: boolean;
+      }) => {
+        if (options.plan) {
+          const plan = {
+            kind: "babel_glm_certification_plan",
+            model: "z-ai/glm-5.3-flash",
+            provider: "openrouter",
+            stages: GLM_CERTIFICATION_STAGES,
+            entry_gate: "exact provider/model route is configured",
+            advancement_rule:
+              "each stage must have persisted evidence and pass before advancing",
+            c0_c4_rule: "C0–C4 must all be green before broad live testing",
+          };
+          printJsonOrHuman(
+            plan,
+            `GLM certification stages: ${GLM_CERTIFICATION_STAGES.join(", ")}`,
+            options.json === true,
+          );
+          return;
+        }
+        if (!options.runDir) {
+          if (!options.stagesDir) {
+            throw new Error(
+              "benchmark glm-cert requires --run-dir or --stages-dir, or use --plan",
+            );
+          }
+        }
+        if (options.runDir && options.stagesDir) {
+          throw new Error(
+            "benchmark glm-cert accepts either --run-dir or --stages-dir, not both",
+          );
+        }
+        let stages: Partial<
+          Record<GlmCertificationStage, readonly SessionEventLog[]>
+        >;
+        let evidenceRefs: Partial<
+          Record<GlmCertificationStage, readonly string[]>
+        >;
+        let referenceRoots: Partial<
+          Record<GlmCertificationStage, readonly string[]>
+        >;
+        let reportRoot: string;
+        let loadedStages: GlmCertificationStage[];
+        let missingStages: GlmCertificationStage[];
+        if (options.stagesDir) {
+          const bundle = loadGlmCertificationStages(resolve(options.stagesDir));
+          stages = bundle.stages;
+          evidenceRefs = bundle.evidence_refs;
+          referenceRoots = bundle.reference_roots;
+          reportRoot = bundle.root;
+          loadedStages = bundle.loaded_stages;
+          missingStages = bundle.missing_stages;
+        } else {
+          const stage = (
+            options.stage ?? "C0"
+          ).toUpperCase() as GlmCertificationStage;
+          if (
+            !(GLM_CERTIFICATION_STAGES as readonly string[]).includes(stage)
+          ) {
+            throw new Error(
+              `benchmark glm-cert received invalid stage "${options.stage}"`,
+            );
+          }
+          const runDir = resolve(options.runDir!);
+          const log = loadGlmSessionLog(runDir);
+          if (!log) {
+            throw new Error(
+              `benchmark glm-cert found no session-events.jsonl under ${runDir}`,
+            );
+          }
+          stages = { [stage]: [log] };
+          evidenceRefs = { [stage]: [runDir] };
+          referenceRoots = { [stage]: [runDir] };
+          reportRoot = runDir;
+          loadedStages = [stage];
+          missingStages = GLM_CERTIFICATION_STAGES.filter(
+            (candidate) => candidate !== stage,
+          );
+        }
+        const evaluatedReport = evaluateGlmCertification({
+          stages,
+          evidence_refs: evidenceRefs,
+          reference_roots: referenceRoots,
+        });
+        const report = {
+          ...evaluatedReport,
+          certification_inputs: {
+            loaded_stages: loadedStages,
+            missing_stages: missingStages,
+          },
+        };
+        let reportPaths: { jsonPath: string; markdownPath: string } | undefined;
+        if (options.writeReport) {
+          reportPaths = writeGlmCertificationReport(
+            resolve(options.evidenceDir ?? dirname(reportRoot)),
+            report,
+          );
+        }
+        printJsonOrHuman(
+          reportPaths ? { ...report, report_paths: reportPaths } : report,
+          `GLM certification status=${report.overall_status} C0-C4=${report.c0_c4_green}`,
+          options.json === true,
+        );
+        if (report.overall_status !== "pass") process.exitCode = 1;
       },
     );
 
@@ -4705,13 +5086,13 @@ Commands include:
     .option("--tasks <n>", "Number of test tasks to run (default: all)", "23")
     .option(
       "--live",
-      "Run with live DeepSeek LLM calls (uses DEEPSEEK_API_KEY)",
+      "Run with live DeepSeek LLM calls through OpenRouter (uses OPENROUTER_API_KEY)",
     )
     .option("--model <model>", "Model ID for live mode (provider shorthand)")
     .option("--delay-ms <n>", "Delay between LLM calls in ms", "500")
     .option(
       "--provider <name>",
-      "LLM provider: deepseek only for live runs",
+      "LLM provider: DeepSeek control through OpenRouter or OpenRouter GLM",
       "deepseek",
     )
     .option(
@@ -4739,6 +5120,7 @@ Commands include:
           if (options.live) {
             const { provider, apiKey, defaultModel } = resolveBenchmarkProvider(
               options.provider ?? "deepseek",
+              options.model,
             );
 
             const model = options.model ?? defaultModel;
@@ -4812,10 +5194,12 @@ Commands include:
                   };
                   return data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
                 } else {
-                  const apiUrl =
-                    provider === "deepseek"
-                      ? "https://api.deepseek.com/v1/chat/completions"
-                      : "https://api.deepinfra.com/v1/openai/chat/completions";
+                  if (provider !== "openrouter") {
+                    throw new Error(
+                      `[LIVE_MODEL_POLICY] Calibration live calls must use OpenRouter; received ${provider}.`,
+                    );
+                  }
+                  const apiUrl = "https://openrouter.ai/api/v1/chat/completions";
                   const resp = await fetch(apiUrl, {
                     method: "POST",
                     headers: {
@@ -4887,13 +5271,13 @@ Commands include:
     .option("--tasks <n>", "Number of test tasks to run (default: all)", "36")
     .option(
       "--live",
-      "Run with live DeepSeek LLM calls (uses DEEPSEEK_API_KEY)",
+      "Run with live DeepSeek LLM calls through OpenRouter (uses OPENROUTER_API_KEY)",
     )
     .option("--model <model>", "Model ID for live mode (provider shorthand)")
     .option("--delay-ms <n>", "Delay between LLM calls in ms", "500")
     .option(
       "--provider <name>",
-      "LLM provider: deepseek only for live runs",
+      "LLM provider: DeepSeek control through OpenRouter or OpenRouter GLM",
       "deepseek",
     )
     .option(
@@ -4921,6 +5305,7 @@ Commands include:
           if (options.live) {
             const { provider, apiKey, defaultModel } = resolveBenchmarkProvider(
               options.provider ?? "deepseek",
+              options.model,
             );
 
             const model = options.model ?? defaultModel;
@@ -4997,10 +5382,12 @@ Commands include:
                   };
                   return data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
                 } else {
-                  const apiUrl =
-                    provider === "deepseek"
-                      ? "https://api.deepseek.com/v1/chat/completions"
-                      : "https://api.deepinfra.com/v1/openai/chat/completions";
+                  if (provider !== "openrouter") {
+                    throw new Error(
+                      `[LIVE_MODEL_POLICY] Injection live calls must use OpenRouter; received ${provider}.`,
+                    );
+                  }
+                  const apiUrl = "https://openrouter.ai/api/v1/chat/completions";
                   const resp = await fetch(apiUrl, {
                     method: "POST",
                     headers: {

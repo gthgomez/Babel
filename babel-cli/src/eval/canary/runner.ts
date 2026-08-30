@@ -6,6 +6,7 @@ import {
   mkdirSync,
   writeFileSync,
   rmSync,
+  mkdtempSync,
   existsSync,
   readdirSync,
   statSync,
@@ -14,6 +15,14 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
+import {
+  assertLiveModelId,
+  LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS,
+  LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS,
+  LIVE_OPENROUTER_BACKEND_KEY,
+  LIVE_OPENROUTER_MODEL_ID,
+  resolveOpenRouterDeepSeekModelId,
+} from "../../modelPolicy.js";
 
 import { gradeInCleanRoom, type CleanRoomFile } from "../cleanRoomGrade.js";
 import type { EvidenceScope } from "../evalTypes.js";
@@ -30,10 +39,16 @@ import type {
   CanaryTaskSpec,
   CanaryTrialResult,
 } from "./types.js";
+import {
+  assertBroaderCampaignAllowed,
+  type ChatCalibrationReadiness,
+} from "../../services/chatCalibration.js";
+import type { OpenRouterRoutingPolicy } from "../../runners/openRouterApi.js";
 
 export interface RunCanaryOptions {
   provider: "mock" | "live";
   taskId?: string;
+  taskIds?: readonly string[];
   trials?: number;
   evidenceDir?: string;
   /** Required for provider=live. */
@@ -47,6 +62,41 @@ export interface RunCanaryOptions {
    * provider — fail closed.
    */
   specs?: readonly CanaryTaskSpec[];
+  /** Required when a live invocation exceeds the 24-cell calibration gate. */
+  broaderCalibrationReadiness?: ChatCalibrationReadiness;
+  /** Explicit OpenRouter routing controls for scientific cells. */
+  openRouterRouting?: OpenRouterRoutingPolicy;
+  /**
+   * Optional writable parent for disposable canary workspaces. Live campaign
+   * launchers should provide a campaign-local path instead of relying on the
+   * host OS temp directory, which may be unavailable or cleanup-restricted.
+   */
+  tempRoot?: string;
+}
+
+function resolveCanarySpecs(input: {
+  taskId?: string;
+  taskIds?: readonly string[];
+  smoke: boolean;
+}): CanaryTaskSpec[] {
+  if (input.taskId && input.taskIds) {
+    throw new Error("canary accepts either --task or --tasks, not both");
+  }
+  const requestedIds = input.taskIds ?? (input.taskId ? [input.taskId] : null);
+  if (requestedIds && requestedIds.length === 0) {
+    throw new Error("canary requires at least one task id when --tasks is supplied");
+  }
+  if (
+    input.smoke &&
+    requestedIds &&
+    (requestedIds.length !== 1 || requestedIds[0] !== "C01")
+  ) {
+    throw new Error(
+      `--smoke is restricted to C01 (LIVE_SMOKE); refusing task selection under the smoke budget`,
+    );
+  }
+  if (requestedIds) return requestedIds.map((id) => getCanaryTask(id));
+  return input.smoke ? [getCanaryTask("C01")] : CANARY_TASKS;
 }
 
 function startFiles(spec: CanaryTaskSpec): CleanRoomFile[] {
@@ -150,10 +200,41 @@ export function contractSuccess(
   return row.hidden_ok;
 }
 
-function liveApiKeyPresent(): boolean {
-  return Boolean(
-    process.env["DEEPSEEK_API_KEY"]?.trim() ||
-    process.env["OPENROUTER_API_KEY"]?.trim(),
+function requiredLiveCredential(_model: string): "OPENROUTER_API_KEY" {
+  // Every accepted live canary route is normalized to OpenRouter before this
+  // check. Keep the return type single-valued so a future selector cannot
+  // accidentally reintroduce direct DeepSeek credential selection.
+  return "OPENROUTER_API_KEY";
+}
+
+function isOpenRouterLiveModel(model: string): boolean {
+  return (
+    model === LIVE_OPENROUTER_MODEL_ID ||
+    model === LIVE_OPENROUTER_BACKEND_KEY ||
+    (LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS as readonly string[]).includes(model) ||
+    (LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS as readonly string[]).includes(model)
+  );
+}
+
+function assertLiveCanaryModel(model: string, context: string): void {
+  if (isOpenRouterLiveModel(model)) return;
+  assertLiveModelId(model, context);
+}
+
+/**
+ * Normalize accepted legacy selectors before a live cell is launched. The
+ * plan may preserve the operator's spelling, but the provider request must
+ * always receive the OpenRouter model id so a direct DeepSeek credential can
+ * never be selected accidentally.
+ */
+function normalizeLiveExecutionModel(model: string): string {
+  if (model === LIVE_OPENROUTER_BACKEND_KEY) return LIVE_OPENROUTER_MODEL_ID;
+  if (model === LIVE_OPENROUTER_MODEL_ID) return model;
+  const routed = resolveOpenRouterDeepSeekModelId(model);
+  if (routed) return routed;
+  assertLiveModelId(model, "live canary");
+  throw new Error(
+    `[LIVE_MODEL_POLICY] Live canary selector "${model}" is not an OpenRouter control route.`,
   );
 }
 
@@ -161,10 +242,12 @@ function runMockTrial(
   spec: CanaryTaskSpec,
   trial_index: number,
   evidenceScope: EvidenceScope,
+  tempRoot?: string,
 ): CanaryTrialResult {
   const t0 = Date.now();
-  const agentRoot = join(tmpdir(), `babel-canary-agent-${randomUUID()}`);
-  mkdirSync(agentRoot, { recursive: true });
+  const agentRoot = mkdtempSync(
+    join(tempRoot ?? tmpdir(), `babel-canary-agent-${randomUUID()}-`),
+  );
   try {
     for (const f of startFiles(spec)) {
       const full = join(agentRoot, f.relativePath);
@@ -196,6 +279,7 @@ function runMockTrial(
       candidateDiffFiles: patch,
       oracleFiles: oracleFiles(spec),
       verifierCommand: [process.execPath, "hidden.test.mjs"],
+      ...(tempRoot ? { cwdHint: tempRoot } : {}),
     });
     let visible_ok: boolean | null = null;
     if (spec.visible_test) {
@@ -206,6 +290,7 @@ function runMockTrial(
           { relativePath: "hidden.test.mjs", contents: spec.visible_test },
         ],
         verifierCommand: [process.execPath, "hidden.test.mjs"],
+        ...(tempRoot ? { cwdHint: tempRoot } : {}),
       }).hidden_ok;
     }
     const false_complete =
@@ -243,73 +328,98 @@ function runLiveTrial(
   evidenceScope: EvidenceScope,
   evidenceDir: string | undefined,
   model: string,
+  taskFeasible: boolean,
+  openRouterRouting: OpenRouterRoutingPolicy | undefined,
+  tempRoot?: string,
 ): CanaryTrialResult {
   const t0 = Date.now();
-  const agentRoot = join(
-    tmpdir(),
-    `babel-canary-live-${spec.id}-${trial_index}-${randomUUID()}`,
-  );
-  mkdirSync(agentRoot, { recursive: true });
-  materializeCanaryWorkspace(spec, agentRoot);
-  const listed = listRelative(agentRoot);
-  if (listed.includes("hidden.test.mjs")) {
-    throw new Error(`oracle leaked into agent workspace for ${spec.id}`);
-  }
-  const evidencePath = evidenceDir
-    ? join(evidenceDir, `${spec.id}-t${trial_index}-cli.json`)
-    : join(agentRoot, "cli.json");
-  const live = runLiveCanaryCell({
-    spec,
-    workspaceRoot: agentRoot,
-    model,
-    evidencePath,
-  });
-  const false_complete =
-    live.claimed_complete && !live.honest_block && !live.hidden_ok;
-  const row: CanaryTrialResult = {
-    task_id: spec.id,
-    trial_index,
-    evidence_scope: evidenceScope,
-    hidden_ok: live.hidden_ok,
-    visible_ok: live.visible_ok,
-    claimed_complete: live.claimed_complete,
-    false_complete,
-    honest_block: live.honest_block,
-    production_mutated: live.production_mutated,
-    candidate_state_hash: candidateStateHash(
-      live.production_files,
-      live.deleted_production_paths,
+  const agentRoot = mkdtempSync(
+    join(
+      tempRoot ?? tmpdir(),
+      `babel-canary-live-${spec.id}-${trial_index}-${randomUUID()}-`,
     ),
-    tokens: live.tokens,
-    cost_usd: live.cost_usd,
-    wall_ms: Date.now() - t0,
-    notes: [
-      "validity.live_eligible=true",
-      `model=${model}`,
-      `mode=chat-headless`,
-      ...live.notes,
-    ],
-    code_fix_success:
-      live.hidden_ok &&
-      spec.intended_terminal === "verified_behavioral_success",
-    contract_success: false,
-  };
-  row.contract_success = contractSuccess(spec, row);
-  if (evidenceDir && existsSync(agentRoot)) {
-    writeFileSync(
-      join(evidenceDir, `${spec.id}-t${trial_index}-workspace-files.json`),
-      JSON.stringify(
-        live.production_files.map((f) => ({
-          path: f.relativePath,
-          bytes: f.contents.length,
-        })),
-        null,
-        2,
+  );
+  try {
+    materializeCanaryWorkspace(spec, agentRoot);
+    const listed = listRelative(agentRoot);
+    if (listed.includes("hidden.test.mjs")) {
+      throw new Error(`oracle leaked into agent workspace for ${spec.id}`);
+    }
+    const evidencePath = evidenceDir
+      ? join(evidenceDir, "live", `${spec.id}-t${trial_index}-cli.json`)
+      : join(agentRoot, "cli.json");
+    const live = runLiveCanaryCell({
+      spec,
+      workspaceRoot: agentRoot,
+      model,
+      evidencePath,
+      provider: isOpenRouterLiveModel(model)
+        ? 'openrouter'
+        : 'deepseek',
+      taskFeasible,
+      ...(openRouterRouting ? { openRouterRouting } : {}),
+    });
+    const false_complete =
+      live.claimed_complete && !live.honest_block && !live.hidden_ok;
+    const row: CanaryTrialResult = {
+      task_id: spec.id,
+      trial_index,
+      evidence_scope: evidenceScope,
+      provider: isOpenRouterLiveModel(model)
+        ? 'openrouter'
+        : 'deepseek',
+      model,
+      status: live.status,
+      baseline_sha: live.baseline_sha,
+      harness_sha: live.harness_sha,
+      run_dir: live.run_dir,
+      evidence_path: live.evidence_path,
+      causal_attribution: live.causal_attribution,
+      hidden_ok: live.hidden_ok,
+      visible_ok: live.visible_ok,
+      claimed_complete: live.claimed_complete,
+      false_complete,
+      honest_block: live.honest_block,
+      production_mutated: live.production_mutated,
+      candidate_state_hash: candidateStateHash(
+        live.production_files,
+        live.deleted_production_paths,
       ),
-    );
+      tokens: live.tokens,
+      cost_usd: live.cost_usd,
+      wall_ms: Date.now() - t0,
+      notes: [
+        "validity.live_eligible=true",
+        `model=${model}`,
+        `mode=chat-headless`,
+        ...live.notes,
+      ],
+      code_fix_success:
+        live.hidden_ok &&
+        spec.intended_terminal === "verified_behavioral_success",
+      contract_success: false,
+    };
+    row.contract_success = contractSuccess(spec, row);
+    if (evidenceDir) {
+      writeFileSync(
+        join(evidenceDir, "live", `${spec.id}-t${trial_index}-workspace-files.json`),
+        JSON.stringify(
+          live.production_files.map((f) => ({
+            path: f.relativePath,
+            bytes: f.contents.length,
+          })),
+          null,
+          2,
+        ),
+      );
+    }
+    return row;
+  } finally {
+    // Cleanup is unconditional, including provider/spawn failures before a
+    // live outcome can be constructed. The path was created by mkdtempSync
+    // under the caller-selected parent and is therefore narrowly scoped.
+    rmSync(agentRoot, { recursive: true, force: true });
   }
-  rmSync(agentRoot, { recursive: true, force: true });
-  return row;
 }
 
 /**
@@ -318,13 +428,17 @@ function runLiveTrial(
  * flags, so JSON and human output can never promise a different execution.
  */
 export function describeCanaryPlan(opts: {
+  provider?: "mock" | "live";
   smoke?: boolean;
   taskId?: string;
+  taskIds?: readonly string[];
   trials?: number;
+  model?: string;
 }): {
   schema_version: 1;
   suite: "coding-canary";
   provider: "mock" | "live";
+  model: string;
   smoke: boolean;
   tasks: number;
   task_ids: string[];
@@ -332,26 +446,34 @@ export function describeCanaryPlan(opts: {
   evidence_scope: EvidenceScope;
 } {
   const smoke = opts.smoke === true;
-  if (smoke && opts.taskId && opts.taskId !== "C01") {
-    throw new Error(
-      `--smoke is restricted to C01 (LIVE_SMOKE); refusing to plan "${opts.taskId}" under the smoke budget`,
-    );
-  }
-  const specs = opts.taskId
-    ? [getCanaryTask(opts.taskId)]
-    : smoke
-      ? [getCanaryTask("C01")]
-      : CANARY_TASKS;
+  const provider = opts.provider ?? "mock";
+  const requestedModel = opts.model ?? LIVE_CANARY_DEFAULT_MODEL;
+  const model =
+    provider === "live"
+      ? normalizeLiveExecutionModel(requestedModel)
+      : requestedModel;
+  if (provider === "live") assertLiveCanaryModel(requestedModel, "live canary plan");
+  const specs = resolveCanarySpecs({
+    ...(opts.taskId ? { taskId: opts.taskId } : {}),
+    ...(opts.taskIds ? { taskIds: opts.taskIds } : {}),
+    smoke,
+  });
   const trialsPerTask = smoke ? 1 : (opts.trials ?? 3);
   return {
     schema_version: 1,
     suite: "coding-canary",
-    provider: "mock",
+    provider,
+    model,
     smoke,
     tasks: specs.length,
     task_ids: specs.map((s) => s.id),
     trials_per_task: trialsPerTask,
-    evidence_scope: "MOCK_ORCHESTRATION",
+    evidence_scope:
+      provider === "live"
+        ? smoke
+          ? "LIVE_SMOKE"
+          : "LIVE_MODEL_CANARY"
+        : "MOCK_ORCHESTRATION",
   };
 }
 
@@ -365,18 +487,8 @@ export function runCodingCanary(options: RunCanaryOptions): CanaryReport {
       "Live canary requires explicit operator authorization and is not the PR2 merge gate",
     );
   }
-  if (options.provider === "live" && !liveApiKeyPresent()) {
-    throw new Error(
-      "Live canary refused: DEEPSEEK_API_KEY (or OPENROUTER_API_KEY) is not set",
-    );
-  }
   const smoke = options.smoke === true;
   const trialsN = options.trials ?? (smoke ? 1 : 3);
-  if (smoke && options.taskId && options.taskId !== "C01") {
-    throw new Error(
-      `--smoke is restricted to C01 (LIVE_SMOKE); refusing to run "${options.taskId}" under the smoke budget`,
-    );
-  }
   if (smoke && options.trials !== undefined && options.trials !== 1) {
     throw new Error(
       `--smoke runs exactly one trial (LIVE_SMOKE contract); refusing trials=${options.trials}`,
@@ -384,24 +496,66 @@ export function runCodingCanary(options: RunCanaryOptions): CanaryReport {
   }
   const specs =
     options.specs ??
-    (options.taskId
-      ? [getCanaryTask(options.taskId)]
-      : smoke
-        ? [getCanaryTask("C01")]
-        : CANARY_TASKS);
+    resolveCanarySpecs({
+      ...(options.taskId ? { taskId: options.taskId } : {}),
+      ...(options.taskIds ? { taskIds: options.taskIds } : {}),
+      smoke,
+    });
   const evidenceScope: EvidenceScope =
     options.provider === "live"
       ? smoke
         ? "LIVE_SMOKE"
         : "LIVE_MODEL_CANARY"
       : "MOCK_ORCHESTRATION";
-  const model = options.model ?? LIVE_CANARY_DEFAULT_MODEL;
+  const requestedModel = options.model ?? LIVE_CANARY_DEFAULT_MODEL;
+  const model =
+    options.provider === "live"
+      ? normalizeLiveExecutionModel(requestedModel)
+      : requestedModel;
+  if (options.provider === "live") {
+    assertLiveCanaryModel(requestedModel, "live canary");
+    const credential = requiredLiveCredential(model);
+    if (!process.env[credential]?.trim()) {
+      throw new Error(`Live canary refused: ${credential} is not set for ${model}`);
+    }
+  }
+  const requestedCells = specs.length * trialsN;
+  if (options.provider === "live" && requestedCells > 24) {
+    assertBroaderCampaignAllowed(options.broaderCalibrationReadiness ?? {
+      status: "blocked",
+      campaign_id: "chat-calibration-v1",
+      cell_count: 0,
+      completed_cells: 0,
+      unknown_attribution_cells: 0,
+      unknown_attribution_rate: null,
+      context_preservation_known_cells: 0,
+      route_identity_known_cells: 0,
+      task_feasibility_known_cells: 0,
+      capability_authorization_known_cells: 0,
+      tool_terminal_known_cells: 0,
+      result_delivery_known_cells: 0,
+      verification_revision_known_cells: 0,
+      silent_model_substitution_cells: 0,
+      unclassified_runtime_crash_cells: 0,
+      blockers: ["no completed 24-cell calibration readiness receipt was supplied"],
+    });
+  }
   const evidenceDir = options.evidenceDir;
-  if (evidenceDir) mkdirSync(evidenceDir, { recursive: true });
+  if (evidenceDir) {
+    mkdirSync(evidenceDir, { recursive: true });
+    // The causal evidence loader treats live/ as the canonical per-cell
+    // namespace. Keep validity and summary files at the bundle root, while
+    // placing raw live cells and their companion artifacts under live/.
+    mkdirSync(join(evidenceDir, "live"), { recursive: true });
+  }
 
   const trials: CanaryTrialResult[] = [];
   for (const spec of specs) {
-    const validity = verifyCanaryTaskValidity(spec, 2);
+    const validity = verifyCanaryTaskValidity(
+      spec,
+      2,
+      options.tempRoot ? { tempRoot: options.tempRoot } : undefined,
+    );
     if (evidenceDir) {
       writeFileSync(
         join(evidenceDir, `${spec.id}-validity.json`),
@@ -441,10 +595,19 @@ export function runCodingCanary(options: RunCanaryOptions): CanaryReport {
     for (let trial_index = 1; trial_index <= trialsN; trial_index += 1) {
       if (options.provider === "live") {
         trials.push(
-          runLiveTrial(spec, trial_index, evidenceScope, evidenceDir, model),
+          runLiveTrial(
+            spec,
+            trial_index,
+            evidenceScope,
+            evidenceDir,
+            model,
+            validity.baseline_verified && validity.reference_verified && validity.oracle_stable,
+            options.openRouterRouting,
+            options.tempRoot,
+          ),
         );
       } else {
-        trials.push(runMockTrial(spec, trial_index, evidenceScope));
+        trials.push(runMockTrial(spec, trial_index, evidenceScope, options.tempRoot));
       }
     }
   }

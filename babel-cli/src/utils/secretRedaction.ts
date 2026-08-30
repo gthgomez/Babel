@@ -107,9 +107,15 @@ export function redactSecretsDeep<T>(input: T): T {
  */
 export function containsSecrets(input: string): boolean {
   for (const { pattern } of SECRET_PATTERNS) {
+    // Several patterns are global so they can redact multiple occurrences;
+    // reset their cursor before each standalone test to keep this predicate
+    // deterministic across repeated calls.
+    pattern.lastIndex = 0;
     if (pattern.test(input)) {
+      pattern.lastIndex = 0;
       return true;
     }
+    pattern.lastIndex = 0;
   }
   return false;
 }

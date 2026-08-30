@@ -12,6 +12,10 @@ import {
   writeParityCorpusRepo,
 } from '../src/services/parityCorpus.js';
 import { runBabelCli } from '../src/services/liteTrustDemo.js';
+import {
+  buildOpenRouterDeepSeekLiveEnv,
+  LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS,
+} from '../src/modelPolicy.js';
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_TASK_ID = 'small_bug_fix';
@@ -132,7 +136,7 @@ function defaultEvidenceDir(): string {
 }
 
 function hasLiveProviderCredentials(): boolean {
-  return Boolean(process.env['DEEPSEEK_API_KEY']?.trim());
+  return Boolean(process.env['OPENROUTER_API_KEY']?.trim());
 }
 
 async function runMockProbe(options: CliOptions, evidencePath: string): Promise<ProbeEvidence> {
@@ -185,7 +189,7 @@ async function runLiveDeepProbe(options: CliOptions, evidencePath: string): Prom
       execution_mode: null,
       run_dir: null,
       evidence_path: evidencePath,
-      notes: ['skipped — set DEEPSEEK_API_KEY for live deep probe'],
+      notes: ['skipped — set OPENROUTER_API_KEY for live deep probe'],
     };
     writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
     return evidence;
@@ -199,6 +203,8 @@ async function runLiveDeepProbe(options: CliOptions, evidencePath: string): Prom
     const cli = runBabelCli([
       'deep',
       '--json',
+      '--model',
+      LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS[0],
       '--project-root',
       projectRoot,
       '--execution-profile',
@@ -208,6 +214,7 @@ async function runLiveDeepProbe(options: CliOptions, evidencePath: string): Prom
       projectRoot,
       cliEntry: resolveBabelCliEntry(),
       offlineDemo: false,
+      env: buildOpenRouterDeepSeekLiveEnv(),
     });
 
     const payload = cli.payload;

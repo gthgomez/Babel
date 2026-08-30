@@ -310,6 +310,8 @@ describe('LLMSummarizeCompaction', () => {
   it('canApply returns false when no API key available', () => {
     const savedKey = process.env['BABEL_COMPACTION_API_KEY'];
     delete process.env['BABEL_COMPACTION_API_KEY'];
+    const savedOr = process.env['OPENROUTER_API_KEY'];
+    delete process.env['OPENROUTER_API_KEY'];
     const savedDi = process.env['DEEPINFRA_API_KEY'];
     delete process.env['DEEPINFRA_API_KEY'];
     const savedAn = process.env['ANTHROPIC_API_KEY'];
@@ -320,6 +322,7 @@ describe('LLMSummarizeCompaction', () => {
 
     // Restore
     if (savedKey) process.env['BABEL_COMPACTION_API_KEY'] = savedKey;
+    if (savedOr) process.env['OPENROUTER_API_KEY'] = savedOr;
     if (savedDi) process.env['DEEPINFRA_API_KEY'] = savedDi;
     if (savedAn) process.env['ANTHROPIC_API_KEY'] = savedAn;
 
@@ -363,6 +366,8 @@ describe('LLMSummarizeCompaction', () => {
   it('falls back gracefully when API call fails', async () => {
     const savedKey = process.env['BABEL_COMPACTION_API_KEY'];
     delete process.env['BABEL_COMPACTION_API_KEY'];
+    const savedOr = process.env['OPENROUTER_API_KEY'];
+    delete process.env['OPENROUTER_API_KEY'];
     const savedDi = process.env['DEEPINFRA_API_KEY'];
     delete process.env['DEEPINFRA_API_KEY'];
     const savedAn = process.env['ANTHROPIC_API_KEY'];
@@ -377,6 +382,7 @@ describe('LLMSummarizeCompaction', () => {
 
     // Restore
     if (savedKey) process.env['BABEL_COMPACTION_API_KEY'] = savedKey;
+    if (savedOr) process.env['OPENROUTER_API_KEY'] = savedOr;
     if (savedDi) process.env['DEEPINFRA_API_KEY'] = savedDi;
     if (savedAn) process.env['ANTHROPIC_API_KEY'] = savedAn;
 
@@ -530,6 +536,54 @@ describe('CompactionManager', () => {
 // ─── 9. Integration: CompactionManager + Real Strategies ──────────────────
 
 describe('CompactionManager integration', () => {
+  it('records bounded lifecycle callbacks for an exact OpenRouter compaction inference', async () => {
+    const savedKey = process.env['BABEL_COMPACTION_API_KEY'];
+    const savedBase = process.env['BABEL_COMPACTION_API_BASE'];
+    const savedModel = process.env['BABEL_COMPACTION_MODEL'];
+    const originalFetch = globalThis.fetch;
+    const phases: string[] = [];
+    const completions: Array<{ status: string; observed: string | null | undefined }> = [];
+    process.env['BABEL_COMPACTION_API_KEY'] = 'synthetic-router-key';
+    process.env['BABEL_COMPACTION_API_BASE'] = 'https://openrouter.ai/api/v1/chat/completions';
+    process.env['BABEL_COMPACTION_MODEL'] = 'z-ai/glm-5.3-flash';
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          model: 'z-ai/glm-5.3-flash',
+          choices: [{ message: { content: 'KEY_DECISIONS:\n- preserve verifier state' } }],
+          usage: { prompt_tokens: 8, completion_tokens: 4 },
+        }),
+        { status: 200 },
+      )) as typeof fetch;
+    try {
+      const strategy = new LLMSummarizeCompaction({ keepRecentMessages: 2 });
+      const messages = makeLongConversation(5);
+      const result = await strategy.compact(messages, {
+        model: 'z-ai/glm-5.3-flash',
+        maxTokens: 100,
+        callbacks: {
+          onInvocationPhase: (event) => phases.push(event.phase),
+          onInvocationCompleted: (event) =>
+            completions.push({ status: event.status, observed: event.observed_model_id }),
+        },
+      });
+      assert.ok(result.length < messages.length);
+      assert.ok(phases.includes('request_created'));
+      assert.ok(phases.includes('response_normalized'));
+      assert.deepStrictEqual(completions, [
+        { status: 'delivered', observed: 'z-ai/glm-5.3-flash' },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (savedKey === undefined) delete process.env['BABEL_COMPACTION_API_KEY'];
+      else process.env['BABEL_COMPACTION_API_KEY'] = savedKey;
+      if (savedBase === undefined) delete process.env['BABEL_COMPACTION_API_BASE'];
+      else process.env['BABEL_COMPACTION_API_BASE'] = savedBase;
+      if (savedModel === undefined) delete process.env['BABEL_COMPACTION_MODEL'];
+      else process.env['BABEL_COMPACTION_MODEL'] = savedModel;
+    }
+  });
+
   it('uses LLM compaction when available and within limits', async () => {
     const savedKey = process.env['BABEL_COMPACTION_API_KEY'];
     process.env['BABEL_COMPACTION_API_KEY'] = 'test-key';

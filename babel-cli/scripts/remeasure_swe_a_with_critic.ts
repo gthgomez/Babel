@@ -5,7 +5,7 @@
  *   # Offline A09-class acceptance (no API keys):
  *   npx tsx scripts/remeasure_swe_a_with_critic.ts --a09-acceptance
  *
- *   # Live single cell (requires DEEPSEEK_API_KEY + datasets):
+ *   # Live single cell (requires OPENROUTER_API_KEY + datasets):
  *   npx tsx scripts/remeasure_swe_a_with_critic.ts --task SWE-A09
  *
  *   # Live SWE-A breadth (A01–A10):
@@ -20,6 +20,11 @@ import { mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+
+import {
+  buildOpenRouterDeepSeekLiveEnv,
+  LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS,
+} from '../src/modelPolicy.js';
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = join(packageRoot, '..');
@@ -72,11 +77,11 @@ function printHelp(): void {
       'Env:',
       '  BABEL_DIFF_CRITIC=1 (forced)',
       '  BABEL_HEADLESS=1 (forced)',
-      '  BABEL_DIFF_CRITIC_MODEL (default deepseek-v4-flash)',
+      `  BABEL_DIFF_CRITIC_MODEL (default ${LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS[0]})`,
       '  BABEL_CLI_DIST_GATE=ensure|fail|warn|off (default ensure on live)',
       '  BABEL_CLI_ENTRY=path (optional override; skips dist gate)',
       '  BABEL_CHAT_MAX_WALL_MS (optional; omit to use general_swe 600s)',
-      '  DEEPSEEK_API_KEY for live cells',
+      '  OPENROUTER_API_KEY for live cells',
       '',
     ].join('\n'),
   );
@@ -120,7 +125,7 @@ function runLiveTask(taskId: string, evidenceDir: string): {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const outPath = join(evidenceDir, `${taskId}-${stamp}.json`);
   const env = {
-    ...process.env,
+    ...buildOpenRouterDeepSeekLiveEnv(process.env),
     BABEL_HEADLESS: '1',
     BABEL_DIFF_CRITIC: '1',
     CI: process.env['CI'] ?? '1',
@@ -297,7 +302,7 @@ async function main(): Promise<void> {
     generated_at: new Date().toISOString(),
     critic: {
       enabled: true,
-      model: process.env['BABEL_DIFF_CRITIC_MODEL'] ?? 'deepseek-v4-flash',
+    model: process.env['BABEL_DIFF_CRITIC_MODEL'] ?? LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS[0],
     },
     baseline_reference: 'benchmarks/baselines/baseline-T1.4-swe-a-breadth-2026-07-08.json',
     exit_criterion:

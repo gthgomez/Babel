@@ -141,6 +141,7 @@ export async function runPlanLane(context: AgentLaneContext): Promise<PlanLaneRe
     ...(context.provider === 'mock' || context.provider === 'live'
       ? { provider: context.provider }
       : {}),
+    ...(context.model !== undefined ? { model: context.model } : {}),
     useDeterministicMock: useLocalMockPlan,
     ...(context.toolStream !== undefined ? { toolStream: context.toolStream } : {}),
   });
@@ -184,6 +185,7 @@ export async function runPlanLane(context: AgentLaneContext): Promise<PlanLaneRe
         stage: 'planning',
         schemaName: 'LitePlanAnswerSchema',
         maxCliAttempts: 2,
+        ...(context.model !== undefined ? { model: context.model } : {}),
       });
   const schemaNormalizations = consumeLiteSchemaNormalizations();
   if (schemaNormalizations.length > 0) {
