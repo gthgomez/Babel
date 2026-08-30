@@ -20,8 +20,9 @@ npm run build
 npm run test:remote-ui
 ```
 
-This proves the real Remote PWA shell renders at the checked viewport sizes,
-fixture scenarios are reproducible without credentials, screenshots are emitted
+This provides automated evidence that the real Remote PWA shell renders at the
+checked viewport sizes, fixture scenarios are reproducible without credentials,
+screenshots are emitted
 under `artifacts/remote-ui/<scenario>/<viewport>.png`, and the browser harness
 checks:
 
@@ -60,8 +61,8 @@ Run the actual authenticated bridge separately:
 node .\dist\index.js remote serve --project <workspace-root> --origin https://<tailscale-serve-host>
 ```
 
-This class can prove a real browser connection to `babel remote serve`, bearer
-authentication, short-lived WebSocket tickets, ADR-010 protocol behavior,
+This class can provide evidence for a real browser connection to `babel remote
+serve`, bearer authentication, short-lived WebSocket tickets, ADR-010 protocol behavior,
 ChatEngine/provider turns, structured transcript events, changed files, diffs,
 approvals, and verification. It requires local provider setup when exercising a
 model-backed turn. It must remain on the private route: Tailscale Serve is
