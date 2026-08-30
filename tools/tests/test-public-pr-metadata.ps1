@@ -6,7 +6,8 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $checker = Join-Path $repoRoot 'tools/check-public-pr-metadata.ps1'
-$workflow = Join-Path $repoRoot '.github/workflows/typecheck.yml'
+$trustedWorkflow = Join-Path $repoRoot '.github/workflows/public-pr-metadata.yml'
+$ordinaryWorkflow = Join-Path $repoRoot '.github/workflows/typecheck.yml'
 $policy = Join-Path $repoRoot 'tools/security/public-pr-metadata-policy.json'
 $shell = (Get-Command pwsh -ErrorAction Stop).Source
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("babel-pr-metadata-{0}" -f [guid]::NewGuid().ToString('N'))
@@ -48,25 +49,27 @@ function Remove-TestTempRoot {
 
 try {
   $checkerSource = Get-Content -LiteralPath $checker -Raw
-  $workflowSource = Get-Content -LiteralPath $workflow -Raw
+  $trustedWorkflowSource = Get-Content -LiteralPath $trustedWorkflow -Raw
+  $ordinaryWorkflowSource = Get-Content -LiteralPath $ordinaryWorkflow -Raw
   Assert-True ($checkerSource -match "response\.Headers\.GetValues\('Link'\)") 'checker must tolerate commit responses without a Link header under strict mode'
   Assert-True ($checkerSource -notmatch 'ResponseHeadersVariable') 'checker must avoid unsupported response-header parameters'
   Assert-True ($checkerSource -match 'Net\.Http\.HttpClient') 'checker must use cross-platform HTTP handling'
   Assert-True ($checkerSource -match 'AuthenticationHeaderValue') 'checker must authenticate API requests explicitly'
-  $targetTypesMatch = [regex]::Match($workflowSource, '(?ms)^  pull_request_target:\s*\r?\n\s+types:\s*\[(?<events>[^\]]+)\]')
+  Assert-True ($ordinaryWorkflowSource -notmatch 'pull_request_target') 'ordinary validation workflow must not own privileged pull_request_target jobs'
+  $targetTypesMatch = [regex]::Match($trustedWorkflowSource, '(?ms)^  pull_request_target:\s*\r?\n\s+types:\s*\[(?<events>[^\]]+)\]')
   Assert-True $targetTypesMatch.Success 'workflow must declare pull_request_target activity types'
   $targetEvents = $targetTypesMatch.Groups['events'].Value
   foreach ($event in @('opened', 'reopened', 'synchronize', 'edited', 'ready_for_review')) {
     Assert-True ($targetEvents -match "(?<![\w-])$([regex]::Escape($event))(?![\w-])") "pull_request_target must subscribe to $event"
   }
-  Assert-True ($workflowSource -match '(?m)^  group:.*\$\{\{\s*github\.event_name\s*\}\}') 'workflow concurrency must remain event-specific'
-  $metadataJobMatch = [regex]::Match($workflowSource, '(?ms)^  public-pr-metadata:\s*(?<body>.*?)(?=^  [A-Za-z0-9_-]+:|\z)')
+  Assert-True ($trustedWorkflowSource -match '(?m)^  group:.*\$\{\{\s*github\.event_name\s*\}\}') 'trusted workflow concurrency must remain event-specific'
+  $metadataJobMatch = [regex]::Match($trustedWorkflowSource, '(?ms)^  public-pr-metadata:\s*(?<body>.*?)(?=^  [A-Za-z0-9_-]+:|\z)')
   Assert-True $metadataJobMatch.Success 'workflow must retain the public-pr-metadata job'
   $metadataJob = $metadataJobMatch.Groups['body'].Value
   Assert-True ($metadataJob -match "(?m)^\s+if:\s*github\.event_name == 'pull_request_target'\s*$") 'public-pr-metadata must remain restricted to pull_request_target'
   Assert-True ($metadataJob -match '(?m)^\s+ref:\s*\$\{\{\s*github\.event\.pull_request\.base\.sha\s*\}\}\s*$') 'trusted metadata validation must check out the exact PR base SHA'
   Assert-True ($metadataJob -notmatch 'github\.event\.pull_request\.(head\.sha|head\.ref|head\.label|ref)') 'trusted metadata validation must not check out PR-controlled code'
-  Assert-True ($workflowSource -match 'pull-requests:\s*read') 'trusted workflow must retain pull-request read permission'
+  Assert-True ($trustedWorkflowSource -match 'pull-requests:\s*read') 'trusted workflow must retain pull-request read permission'
   Assert-True ($metadataJob -match '(?ms)Check public PR metadata.*?env:\s*\r?\n\s+GH_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}') 'trusted workflow must scope GH_TOKEN to the metadata checker step'
   Assert-True ($metadataJob -notmatch 'GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}') 'trusted workflow must not use the legacy token variable'
 

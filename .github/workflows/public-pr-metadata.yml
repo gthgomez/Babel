@@ -1,0 +1,32 @@
+name: Public PR Metadata
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-pr-metadata-${{ github.event.pull_request.number }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  public-pr-metadata:
+    name: public-pr-metadata
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Check public PR metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BABEL_PRIVATE_METADATA_POLICY_B64: ${{ secrets.BABEL_PRIVATE_METADATA_POLICY_B64 }}
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-pr-metadata.ps1 -RepoRoot . -RequireSupplementalPolicy

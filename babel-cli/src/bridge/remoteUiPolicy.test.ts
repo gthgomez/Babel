@@ -136,4 +136,31 @@ describe('remote UI policy and assets', () => {
     const state = sandbox['BabelRemoteState'] as { apply: (m: string, from: string, ev: string) => string };
     assert.equal(state.apply('host', 'UNKNOWN', 'start'), 'CONNECTING');
   });
+
+  it('classifies settled JSON-RPC errors separately from malformed responses', () => {
+    const sandbox: Record<string, unknown> = { window: {} };
+    sandbox['window'] = sandbox;
+    sandbox['globalThis'] = sandbox;
+    vm.runInContext(
+      readFileSync(join(uiDir, 'state.js'), 'utf8'),
+      vm.createContext(sandbox),
+      { filename: 'state.js' },
+    );
+    const state = sandbox['BabelRemoteState'] as {
+      classifyRpcResponse: (payload: unknown) => { kind: string; responseSettled: boolean };
+    };
+    const success = state.classifyRpcResponse({ jsonrpc: '2.0', id: 1, result: { turn_id: 4 } });
+    assert.equal(success.kind, 'success');
+    assert.equal(success.responseSettled, true);
+    const rejected = state.classifyRpcResponse({ jsonrpc: '2.0', id: 1, error: { code: -32001, message: 'rejected' } });
+    assert.equal(rejected.kind, 'rejected');
+    assert.equal(rejected.responseSettled, true);
+    const nullResult = state.classifyRpcResponse({ jsonrpc: '2.0', id: 1, result: null });
+    assert.equal(nullResult.kind, 'success');
+    assert.equal(nullResult.responseSettled, true);
+    const malformed = state.classifyRpcResponse({ jsonrpc: '2.0', id: 1 });
+    assert.equal(malformed.kind, 'malformed');
+    assert.equal(malformed.responseSettled, false);
+    assert.equal(state.classifyRpcResponse({ jsonrpc: '2.0', id: 1, result: {}, error: {} }).kind, 'malformed');
+  });
 });

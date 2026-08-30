@@ -1,4 +1,8 @@
 (function (root) {
+  function isRecord(value) {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  }
+
   const HOST = {
     UNKNOWN: ['start', 'health_fail'],
     CONNECTING: ['open', 'error', 'health_fail'],
@@ -20,7 +24,7 @@
     SUBMITTING: ['ack', 'fail', 'unknown'],
     ACKNOWLEDGED: ['stream', 'complete', 'fail', 'cancel'],
     STREAMING: ['complete', 'fail', 'cancel'],
-    CANCELLING: ['complete', 'fail'],
+    CANCELLING: ['complete', 'fail', 'unknown'],
     COMPLETED: ['submit'],
     FAILED: ['submit'],
     UNKNOWN: ['recover', 'fail', 'complete'],
@@ -99,10 +103,40 @@
     return { host: 'UNKNOWN', shouldResubmit: false, ambiguity: 'ambiguous_network' };
   }
 
+  function reconcileAfterProtocolError(input) {
+    const activeTurn = Boolean(input.activeTurn);
+    return {
+      host: input.host === 'OFFLINE' ? 'OFFLINE' : 'RECONNECTING',
+      turn: activeTurn ? 'UNKNOWN' : 'UNCHANGED',
+      thread: activeTurn ? 'FAILED' : 'UNCHANGED',
+      requiresReconnect: true,
+    };
+  }
+
+  function classifyRpcResponse(payload) {
+    const hasResult = isRecord(payload) && Object.prototype.hasOwnProperty.call(payload, 'result');
+    const hasError = isRecord(payload) && Object.prototype.hasOwnProperty.call(payload, 'error');
+    if (!isRecord(payload) || payload.jsonrpc !== '2.0' || hasResult === hasError) {
+      return { kind: 'malformed', responseSettled: false };
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, 'error')) {
+      if (!isRecord(payload.error)) return { kind: 'malformed', responseSettled: false };
+      return {
+        kind: 'rejected',
+        responseSettled: true,
+        message: typeof payload.error.message === 'string' ? payload.error.message : 'Request rejected by host',
+        code: typeof payload.error.code === 'number' ? payload.error.code : undefined,
+      };
+    }
+    return { kind: 'success', responseSettled: true };
+  }
+
   root.BabelRemoteState = {
     apply: apply,
     canSendTurn: canSendTurn,
     canCancelTurn: canCancelTurn,
     reconcileAfterSubmitFailure: reconcileAfterSubmitFailure,
+    reconcileAfterProtocolError: reconcileAfterProtocolError,
+    classifyRpcResponse: classifyRpcResponse,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -2,8 +2,6 @@ name: Public Release Gate
 
 on:
   pull_request:
-  pull_request_target:
-    types: [opened, reopened, synchronize, edited, ready_for_review]
   push:
     branches:
       - main
@@ -12,16 +10,12 @@ permissions:
   contents: read
 
 concurrency:
-  # Include event_name so pull_request and pull_request_target do not cancel
-  # each other. Both fire on PR open/sync; without this, the metadata-only
-  # pull_request_target run cancels real protect-main validation jobs.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   security:
     name: security
-    if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -53,7 +47,6 @@ jobs:
 
   public-content-policy:
     name: public-content-policy
-    if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -75,30 +68,8 @@ jobs:
       - name: Test public PR metadata policy
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/tests/test-public-pr-metadata.ps1
 
-  public-pr-metadata:
-    name: public-pr-metadata
-    if: github.event_name == 'pull_request_target'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          # The metadata checker must run from the exact trusted PR base,
-          # not from a moving default branch ref.
-          ref: ${{ github.event.pull_request.base.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-      - name: Check public PR metadata
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BABEL_PRIVATE_METADATA_POLICY_B64: ${{ secrets.BABEL_PRIVATE_METADATA_POLICY_B64 }}
-        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-pr-metadata.ps1 -RepoRoot . -RequireSupplementalPolicy
-
   linux-validation:
     name: linux-validation
-    if: github.event_name != 'pull_request_target'
     needs: [security, public-content-policy]
     runs-on: ubuntu-latest
     steps:
@@ -149,7 +120,6 @@ jobs:
 
   windows-portability:
     name: windows-portability
-    if: github.event_name != 'pull_request_target'
     needs: [security, public-content-policy]
     runs-on: windows-latest
     steps:
