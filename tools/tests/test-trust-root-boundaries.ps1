@@ -9,6 +9,7 @@ foreach ($component in @('scripts/agent-pr-gate.ps1', 'scripts/agent-pr-gate-com
   if ($launcher -notmatch [regex]::Escape($component)) { throw "Trusted launcher omits $component" }
 }
 if ($launcher -notmatch 'agent-pr-gate\.ps1') { throw 'Trusted launcher does not invoke the base-rooted gate.' }
+if ($launcher -notmatch '\$pwshCommand = Get-Command pwsh -ErrorAction Stop') { throw 'Trusted launcher uses a non-portable PowerShell path.' }
 foreach ($unsupported in @('-TaskId', '-RunId', '-ContractHash')) {
   if ($launcher -match [regex]::Escape($unsupported)) { throw "Trusted launcher forwards unsupported gate parameter: $unsupported" }
 }
