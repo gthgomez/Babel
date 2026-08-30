@@ -451,7 +451,7 @@ function scriptGate(input: {
       : 'Package scripts do not expose test:live-governance:required.',
     next_action: matched
       ? null
-      : 'Add test:live-governance:required and make it fail when DEEPSEEK_API_KEY is absent.',
+      : 'Add test:live-governance:required and make it fail when OPENROUTER_API_KEY is absent.',
   });
 }
 

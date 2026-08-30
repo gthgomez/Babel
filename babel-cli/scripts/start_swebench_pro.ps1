@@ -38,7 +38,7 @@ New-Item -ItemType Directory -Force -Path $evidencePath | Out-Null
 # Profile defaults (see .agents/skills/swe-pro-campaign/references/profiles.md)
 $provider = 'mock'
 $infraOnly = $false
-$defaultModel = 'deepseek-v4-flash'
+$defaultModel = 'deepseek-v4-flash-openrouter'
 $defaultLimit = 3
 $defaultEarlyStop = 5
 $defaultAgentTimeoutMs = 1500000
@@ -95,8 +95,8 @@ if (Test-Path -LiteralPath $envFile) {
   }
 }
 
-if ($provider -eq 'live' -and [string]::IsNullOrWhiteSpace($env:DEEPSEEK_API_KEY)) {
-  throw "Profile $Profile requires DEEPSEEK_API_KEY in the environment or babel-cli/.env (value not logged)."
+if ($provider -eq 'live' -and [string]::IsNullOrWhiteSpace($env:OPENROUTER_API_KEY)) {
+  throw "Profile $Profile requires OPENROUTER_API_KEY in the environment or babel-cli/.env (value not logged)."
 }
 
 # Honesty dual scoreboard for all skill-started campaigns

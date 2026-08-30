@@ -61,6 +61,7 @@ jobs:
 
   public-pr-metadata-tests:
     name: public-pr-metadata-tests
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -87,16 +88,23 @@ jobs:
       - name: Build CLI
         run: npm run build
         working-directory: babel-cli
-      - name: Install pinned Playwright Chromium
-        run: npx --no-install playwright install --with-deps chromium
+      - name: Install Chromium for Remote UI browser checks
+        run: npx playwright install --with-deps chromium
         working-directory: babel-cli
+      - name: Run Remote UI visual and responsive checks
+        run: npm run test:remote-ui
+        working-directory: babel-cli
+      - name: Upload Remote UI screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: remote-ui-screenshots-linux
+          path: artifacts/remote-ui
+          if-no-files-found: ignore
       - name: Check harness architecture package
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-harness-architecture.ps1
       - name: Run required UI test suite
         run: npm run test:ui
-        working-directory: babel-cli
-      - name: Run required Remote UI browser suite
-        run: npm run test:remote-ui
         working-directory: babel-cli
       - name: Run required harness acceptance suite
         run: npm run test:harness-acceptance

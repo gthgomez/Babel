@@ -7,6 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
 import { resolveBabelCliEntry, runBabelCli } from './liteTrustDemo.js';
 import type { ParityToolResult } from './parityBenchmark.js';
+import {
+  buildOpenRouterDeepSeekLiveEnv,
+  LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS,
+} from '../modelPolicy.js';
 
 export type ParityCorpusRunMode = 'fix' | 'ask' | 'worker-loop';
 export type ParityCorpusProvider = 'mock' | 'live';
@@ -74,6 +78,8 @@ export interface RunParityBabelCellOptions {
   keepWorkspace?: boolean;
   projectRoot?: string;
   humanSummary?: boolean;
+  /** OpenRouter DeepSeek backend/model selector for live cells. */
+  model?: string;
 }
 
 function resolveParityProvider(options: RunParityBabelCellOptions): ParityCorpusProvider {
@@ -95,6 +101,13 @@ function parityCliBase(
   timeoutMs: number;
 } {
   const provider = resolveParityProvider(options);
+  const liveEnv =
+    provider === 'live'
+      ? buildOpenRouterDeepSeekLiveEnv(
+          process.env,
+          options.model ?? LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS[0],
+        )
+      : undefined;
   return {
     projectRoot,
     offlineDemo: provider === 'mock',
@@ -110,7 +123,9 @@ function parityCliBase(
             BABEL_DAEMON_ENABLED: 'false',
           },
         }
-      : {}),
+      : liveEnv
+        ? { env: liveEnv }
+        : {}),
   };
 }
 
@@ -135,6 +150,9 @@ function parityCommandArgs(
     // unsupported flag to the canonical run command.
     '--project-root',
     projectRoot,
+    ...(resolveParityProvider(options) === 'live'
+      ? ['--model', options.model ?? LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS[0]]
+      : []),
     ...extraArgs,
     task,
   ];

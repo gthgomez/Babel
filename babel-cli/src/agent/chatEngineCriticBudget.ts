@@ -411,7 +411,7 @@ export interface AsymmetricCriticState {
   turnTimeoutMs: number;
   /** Primary implementor model; keeps the critic on the fixed campaign model. */
   primaryModel?: string;
-  resolveDeliberationRunner: (modelId?: string) => CriticRunner;
+  resolveDeliberationRunner: () => CriticRunner;
   /** Provider lifecycle callbacks for secondary critic inferences. */
   providerCallbacks?: RunnerCallbacks;
   trackRunnerUsage: (runner: CriticRunner) => void;

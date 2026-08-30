@@ -189,7 +189,6 @@ import {
   paritySettleProviderRetry,
   parityRecordToolBatch,
   paritySettleProposeTools,
-  paritySettleUnexecutedTools,
   paritySettleToolStarted,
   parityAuthorizeRecoveredOutcomeRetry,
   parityArbitrateCycle,
@@ -210,7 +209,6 @@ import {
   recordModelInputReceipt,
   recordModelInvocationPhase,
   recordModelResultDelivery,
-  recordProviderFailureReceipt,
   recordModelFailover,
   recordMutationBatch,
   recordProgressRecovery,
@@ -2694,12 +2692,6 @@ export class ChatEngine {
           }
           throw err;
         }
-
-        // The executor may stop before all proposed actions run (circuit
-        // breaker, abort, or a terminal policy result). Settle skipped
-        // proposals after executed results have been projected, otherwise
-        // in-flight started actions would be mistaken for skipped actions.
-        paritySettleUnexecutedTools(this.parity, this.engineRunDir);
         this._streamNativeToolCallIds = [];
         this._activeToolBatchId = null;
 
@@ -5711,18 +5703,46 @@ export class ChatEngine {
             ? { upstream_provider: event.upstream_provider }
             : {}),
           ...(event.output_digest !== undefined ? { output_digest: event.output_digest } : {}),
+          ...(event.failure_receipt !== undefined
+            ? { failure_receipt: event.failure_receipt }
+            : {}),
+          ...(event.failure_class !== undefined ? { failure_class: event.failure_class } : {}),
+          ...(event.failure_stage !== undefined ? { failure_stage: event.failure_stage } : {}),
+          ...(event.provider_request_id !== undefined
+            ? { provider_request_id: event.provider_request_id }
+            : {}),
+          ...(event.api_error_code !== undefined
+            ? { api_error_code: event.api_error_code }
+            : {}),
+          ...(event.http_status !== undefined ? { http_status: event.http_status } : {}),
+          ...(event.actual_attempt !== undefined
+            ? { actual_attempt: event.actual_attempt }
+            : {}),
+          ...(event.max_attempts !== undefined ? { max_attempts: event.max_attempts } : {}),
+          ...(event.stream !== undefined ? { stream: event.stream } : {}),
+          ...(event.inference_started !== undefined
+            ? { inference_started: event.inference_started }
+            : {}),
+          ...(event.partial_model_output !== undefined
+            ? { partial_model_output: event.partial_model_output }
+            : {}),
+          ...(event.retryable !== undefined ? { retryable: event.retryable } : {}),
+          ...(event.tool_call_count !== undefined
+            ? { tool_call_count: event.tool_call_count }
+            : {}),
+          ...(event.requested_output_budget !== undefined
+            ? { requested_output_budget: event.requested_output_budget }
+            : {}),
+          ...(event.effective_output_budget !== undefined
+            ? { effective_output_budget: event.effective_output_budget }
+            : {}),
+          ...(event.wire_policy_hash !== undefined
+            ? { wire_policy_hash: event.wire_policy_hash }
+            : {}),
+          ...(event.execution_envelope_hash !== undefined
+            ? { execution_envelope_hash: event.execution_envelope_hash }
+            : {}),
           ...(observedRouteReceipt ? { route_receipt: observedRouteReceipt } : {}),
-        });
-        checkpointParityEventLog(this.parity, this.engineRunDir);
-      },
-      onProviderFailure: (receipt) => {
-        if (!this.parity.turnId || !startedInvocation) return;
-        recordProviderFailureReceipt(this.parity.sessionEvents, {
-          turn_id: this.parity.turnId,
-          inference_id: startedInvocation.inference_id,
-          provider: startedInvocation.provider,
-          model: startedInvocation.sent_model_id,
-          receipt,
         });
         checkpointParityEventLog(this.parity, this.engineRunDir);
       },
@@ -5746,7 +5766,6 @@ export class ChatEngine {
           {
             provider: event.provider,
             model: event.model,
-            ...(startedInvocation ? { inferenceId: startedInvocation.inference_id } : {}),
             attempt: event.attempt,
             reason: event.reason,
             backoffMs: event.backoff_ms,
@@ -5760,7 +5779,6 @@ export class ChatEngine {
           {
             provider: event.provider,
             model: event.model,
-            ...(startedInvocation ? { inferenceId: startedInvocation.inference_id } : {}),
             attempt: event.attempt,
             outcome: event.outcome,
           },

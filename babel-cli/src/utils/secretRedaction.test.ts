@@ -7,12 +7,19 @@ import { redactSecrets, redactSecretsDeep, containsSecrets } from './secretRedac
 // (GitHub push protection blocks realistic sk- tokens).
 
 const FAKE_SK = 'sk-your_XXXXXXXXXXXXXXXXXXXX';
+const FAKE_ROUTER_KEY = 'sk-or-v1_fake-ABC123_xyz9876543210';
 const FAKE_ENV_VALUE = 'fixture_secret_value_for_redaction_tests_only';
 
 test('redactSecrets masks sk- prefixed API keys', () => {
   const input = FAKE_SK;
   const result = redactSecrets(input);
   assert.ok(!result.includes('UNITTEST_ONLY_FAKE_KEY_XXXXXX'));
+  assert.ok(result.includes('_REDACTED_'));
+});
+
+test('redactSecrets handles mixed alphanumeric keys containing underscores and hyphens', () => {
+  const result = redactSecrets(`OPENROUTER_API_KEY=${FAKE_ROUTER_KEY}`);
+  assert.ok(!result.includes(FAKE_ROUTER_KEY));
   assert.ok(result.includes('_REDACTED_'));
 });
 
@@ -51,6 +58,11 @@ test('containsSecrets detects API key patterns', () => {
   assert.equal(containsSecrets(FAKE_SK), true);
   assert.equal(containsSecrets('DEEPSEEK_API_KEY=abc123'), true);
   assert.equal(containsSecrets('normal text without secrets'), false);
+});
+
+test('containsSecrets is stable across repeated global-regex checks', () => {
+  assert.equal(containsSecrets(FAKE_ROUTER_KEY), true);
+  assert.equal(containsSecrets(FAKE_ROUTER_KEY), true);
 });
 
 test('redactSecretsDeep handles nested objects', () => {

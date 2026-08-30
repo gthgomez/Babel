@@ -121,12 +121,63 @@ function Test-AgentSha {
   return (-not [string]::IsNullOrWhiteSpace($Value)) -and ($Value -match '^[0-9a-fA-F]{40}$')
 }
 
+function Get-AgentProperty {
+  param(
+    [AllowNull()][object]$Object,
+    [Parameter(Mandatory = $true)][string]$Name,
+    [AllowNull()][object]$Default = $null
+  )
+  if ($null -eq $Object) { return $Default }
+  $property = $Object.PSObject.Properties[$Name]
+  if ($null -eq $property) { return $Default }
+  return $property.Value
+}
+
+function Invoke-AgentStatusProbe {
+  param(
+    [Parameter(Mandatory = $true)][string]$GitPath,
+    [Parameter(Mandatory = $true)][string]$RepoRoot
+  )
+  $output = @()
+  $exitCode = 127
+  try {
+    Push-Location -LiteralPath $RepoRoot
+    try {
+      $output = @(& $GitPath 'status' '--porcelain=v2' '--branch' '--untracked-files=all' 2>&1 | ForEach-Object { [string]$_ })
+      $exitCode = $LASTEXITCODE
+    } finally {
+      Pop-Location
+    }
+  } catch {
+    $output = @($_.Exception.Message)
+  }
+  return [pscustomobject]@{
+    exitCode = $exitCode
+    output = @($output)
+    text = ($output -join "`n")
+  }
+}
+
 function Get-AgentStatusSnapshot {
   param(
     [Parameter(Mandatory = $true)][string]$GitPath,
     [Parameter(Mandatory = $true)][string]$RepoRoot
   )
-  $result = Invoke-AgentGit -GitPath $GitPath -RepoRoot $RepoRoot -Arguments @('status', '--porcelain=v2', '--branch', '--untracked-files=all')
+  $result = Invoke-AgentStatusProbe -GitPath $GitPath -RepoRoot $RepoRoot
+  # A concurrent fetch/worktree maintenance operation can briefly make a
+  # status probe fail. Retry the same read-only probe with bounded backoff
+  # before declaring the checkout uninspectable.
+  $probe = 1
+  while ($result.exitCode -ne 0 -and $probe -le 5) {
+    Start-Sleep -Milliseconds (100 * $probe)
+    $retryResult = Invoke-AgentStatusProbe -GitPath $GitPath -RepoRoot $RepoRoot
+    if ($retryResult.exitCode -eq 0) {
+      $result = $retryResult
+      break
+    }
+    $result = $retryResult
+    $probe++
+  }
   $lines = @($result.output | ForEach-Object { [string]$_ })
   $entries = @($lines | Where-Object { -not $_.StartsWith('#') -and -not [string]::IsNullOrWhiteSpace($_) })
   $dirtyPaths = @()
@@ -252,6 +303,7 @@ Export-ModuleMember -Function @(
   'Get-AgentRemoteSlug',
   'Test-AgentRemoteCredentialFree',
   'Test-AgentSha',
+  'Get-AgentProperty',
   'Get-AgentStatusSnapshot',
   'Get-AgentWorktreeTopology',
   'Get-AgentCredentialIsolation',

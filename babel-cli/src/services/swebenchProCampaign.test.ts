@@ -23,6 +23,7 @@ import {
   classifyFailToPassResult,
   defaultRunLiveCell,
   ensureShadowSummaryForCampaign,
+  liveApiKeyPresent,
   liveEvidenceStem,
   resolveProTestPathHint,
   resolveSweProPassMode,
@@ -82,6 +83,23 @@ function seedGitWorkspace(ws: string): void {
 }
 
 describe('swebenchProCampaign early-stop', () => {
+  test('liveApiKeyPresent refuses unknown selectors instead of accepting direct-provider keys', () => {
+    assert.equal(
+      liveApiKeyPresent(
+        {
+          DEEPSEEK_API_KEY: 'synthetic-direct-key',
+          DEEPINFRA_API_KEY: 'synthetic-deepinfra-key',
+        },
+        'qwen3',
+      ),
+      false,
+    );
+    assert.equal(
+      liveApiKeyPresent({ OPENROUTER_API_KEY: 'fixture-router-key' }, 'deepseek-v4-flash'),
+      true,
+    );
+  });
+
   test('workspace directory names stay short and stable for Windows paths', () => {
     const instanceId = 'instance_internetarchive__openlibrary-' + 'a'.repeat(120);
     const first = workspaceDirectoryName(instanceId);
@@ -302,6 +320,67 @@ describe('swebenchProCampaign early-stop', () => {
   test('packageHintFromRepo aligns with Pro repo leaves', () => {
     assert.equal(packageHintFromRepo('internetarchive/openlibrary'), 'openlibrary');
     assert.equal(packageHintFromRepo('qutebrowser/qutebrowser'), 'qutebrowser');
+  });
+
+  test('live preflight blocks persist UNKNOWN causal attribution without a run directory', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'swe-pro-causal-preflight-'));
+    const evidenceDir = join(dir, 'evidence');
+    const instance: SwebenchProInstanceRow = {
+      instance_id: 'causal_preflight_instance',
+      repo: 'example/repo',
+      base_commit: 'deadbeef',
+      problem_statement: 'inspect the fixture',
+      patch: '',
+    };
+    const registry = createArmRegistry();
+    const blockedExecutor: ArmExecutor = {
+      id: 'blocked-preflight',
+      supports: (arm) => arm === 'babel_enforce',
+      preflight: () => ({
+        ready: false,
+        signature: 'infra:missing_api_key',
+        reason: 'synthetic credential block',
+      }),
+      execute: async () => ({
+        executorId: 'blocked-preflight',
+        exitCode: null,
+        timedOut: false,
+        stdout: '',
+        stderr: '',
+        launchError: null,
+      }),
+    };
+    registry.register(blockedExecutor);
+
+    const result = await defaultRunLiveCell(
+      instance,
+      evidenceDir,
+      'live',
+      'z-ai/glm-5.3-flash',
+      { depPreflight: false },
+      {
+        registry,
+        exp: {
+          attempt_id: 'att_causal_preflight',
+          pair_id: 'pair_causal_preflight',
+          task_id: instance.instance_id,
+          arm: 'babel_enforce',
+          replicate_id: 0,
+          arm_order: 0,
+          arm_config_hash: 'hash',
+        },
+      },
+    );
+
+    assert.equal(result.signature, 'infra:missing_api_key');
+    assert.equal(result.causal_attribution?.status, 'unknown');
+    assert.equal(result.causal_attribution?.attribution.family, 'unknown');
+    assert.equal(result.causal_attribution?.attribution.model_blame_permitted, false);
+    const evidence = JSON.parse(readFileSync(result.evidence_path, 'utf8')) as {
+      causal_attribution?: { status?: string; attribution?: { family?: string } };
+    };
+    assert.equal(evidence.causal_attribution?.status, 'unknown');
+    assert.equal(evidence.causal_attribution?.attribution?.family, 'unknown');
   });
 
   test('campaign aborts live after 5 same signature (injected cells)', async () => {
@@ -745,6 +824,10 @@ describe('swebenchProCampaign early-stop', () => {
       arm_harness?: { name: string; adapter_id: string; version: null };
       execution_profile?: { policy_mode?: string; diagnostic?: boolean };
       cli_payload?: { status?: string; argv?: string[]; cwd?: string };
+      causal_attribution?: {
+        status?: string;
+        attribution?: { family?: string; model_blame_permitted?: boolean };
+      };
     };
     // Structured experiment identity stamped into the cell evidence JSON.
     assert.equal(evidence.arm, 'babel_enforce');
@@ -757,6 +840,9 @@ describe('swebenchProCampaign early-stop', () => {
     assert.equal(evidence.execution_profile?.policy_mode, 'full');
     // Compat layer recovered the payload from executor stdout (parse parity).
     assert.equal(evidence.cli_payload?.status, 'ANSWER_READY');
+    assert.equal(evidence.causal_attribution?.status, 'unknown');
+    assert.equal(evidence.causal_attribution?.attribution?.family, 'unknown');
+    assert.equal(evidence.causal_attribution?.attribution?.model_blame_permitted, false);
     // Pre-seam argv contract, byte-for-byte (mock provider → no --model flag):
     // ['run','--mode','chat-headless','--json','--yes','--project-root',ws,prompt]
     const argv = evidence.cli_payload?.argv ?? [];
@@ -1004,7 +1090,7 @@ describe('swebenchProCampaign early-stop', () => {
         rowFor('capsule_a', 'please run normally'),
         evidenceDir,
         'mock',
-        'm',
+        'deepseek-v4-flash-openrouter',
         { depPreflight: false },
         { registry, exp: expFor('capsule_a', 'babel_enforce') },
       );
@@ -1012,7 +1098,7 @@ describe('swebenchProCampaign early-stop', () => {
         rowFor('capsule_b', 'LAUNCH_FAIL please'),
         evidenceDir,
         'mock',
-        'm',
+        'deepseek-v4-flash-openrouter',
         { depPreflight: false },
         { registry, exp: expFor('capsule_b', 'raw_opencode') },
       );

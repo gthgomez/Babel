@@ -2,13 +2,13 @@
 /**
  * jit_exercise.ts — JIT Exercise Harness
  *
- * Live streaming exercise that sends a task prompt to the DeepSeek API,
+ * Live streaming exercise that sends a task prompt to DeepSeek through OpenRouter,
  * pipes each SSE delta through IncrementalToolDetector, auto-approves
  * read-only tool intents, auto-denies mutating ones, and writes evidence
  * artifacts to evidence/jit-exercise-<timestamp>/.
  *
  * Usage: tsx --no-warnings=ExperimentalWarning scripts/jit_exercise.ts
- * Env:   DEEPSEEK_API_KEY  (required for live execution)
+ * Env:   OPENROUTER_API_KEY  (required for live execution)
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -20,12 +20,15 @@ import {
   JitDenialError,
 } from '../src/ui/incrementalToolDetector.js';
 import type { PartialToolIntent } from '../src/ui/incrementalToolDetector.js';
-import { DeepSeekApiRunner } from '../src/runners/deepSeekApi.js';
+import {
+  LIVE_OPENROUTER_API_BASE,
+  LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS,
+} from '../src/modelPolicy.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const API_URL = 'https://api.deepseek.com/v1/chat/completions';
-const MODEL = 'deepseek-v4-flash';
+const API_URL = LIVE_OPENROUTER_API_BASE;
+const MODEL = LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0];
 
 const READ_ONLY_TOOLS = new Set([
   'file_read',
@@ -106,20 +109,19 @@ function timestampDir(): string {
 
 async function main(): Promise<void> {
   // 1. Check API key before anything else (graceful skip path)
-  const apiKey = process.env['DEEPSEEK_API_KEY'];
+  const apiKey = process.env['OPENROUTER_API_KEY'];
   if (!apiKey) {
     console.log();
-    console.log('  DEEPSEEK_API_KEY not set — skipping live exercise');
-    console.log('  Set DEEPSEEK_API_KEY in your environment to run the JIT exercise');
-    console.log('  against the live DeepSeek API.');
+    console.log('  OPENROUTER_API_KEY not set — skipping live exercise');
+    console.log('  Set OPENROUTER_API_KEY in your environment to run the JIT exercise');
+    console.log('  against the live OpenRouter DeepSeek control.');
     console.log();
     process.exit(0);
   }
 
   // 2. Instantiate runner (validates key + model)
   console.log();
-  console.log('  [JIT EXERCISE] Creating DeepSeekApiRunner...');
-  const runner = new DeepSeekApiRunner(MODEL);
+  console.log('  [JIT EXERCISE] Using OpenRouter DeepSeek control...');
 
   // 3. State
   const events: DetectorEvent[] = [];
@@ -149,7 +151,7 @@ async function main(): Promise<void> {
     },
   );
 
-  // 5. Stream chat completion via direct API call (no response_format constraint so
+  // 5. Stream chat completion via OpenRouter (no response_format constraint so
   //    the model can emit raw <|tool_start|> markers the detector can find)
   console.log('  [JIT EXERCISE] Streaming completion...');
 

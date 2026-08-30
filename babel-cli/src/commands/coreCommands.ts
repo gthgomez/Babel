@@ -906,8 +906,7 @@ async function handleModelsPing(options: {
   evidenceDir?: string;
 }): Promise<void> {
   const startedAt = Date.now();
-  const requestedModel =
-    options.model?.trim() || "deepseek-v4-flash-openrouter";
+  const requestedModel = options.model?.trim() || "deepseek-v4-flash-openrouter";
 
   try {
     // Live DeepSeek controls are routed through OpenRouter. Keep accepting the
@@ -1884,17 +1883,14 @@ export function resolveBenchmarkProvider(
     : providerInput === "deepseek"
       ? "deepseek-v4-flash-openrouter"
       : null;
-  const isDeepSeekControl =
-    providerInput === "deepseek" || deepSeekBackend !== null;
+  const isDeepSeekControl = providerInput === "deepseek" || deepSeekBackend !== null;
   const defaultModel = isDeepSeekControl
     ? deepSeekBackend === "deepseek-v4-pro-openrouter"
       ? LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[1]
       : LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0]
     : LIVE_OPENROUTER_MODEL_ID;
   if (requestedModel && !isDeepSeekControl) {
-    const isGlm =
-      requestedModel === LIVE_OPENROUTER_MODEL_ID ||
-      requestedModel === "glm-5.3-flash";
+    const isGlm = requestedModel === LIVE_OPENROUTER_MODEL_ID || requestedModel === "glm-5.3-flash";
     if (providerInput !== "openrouter" || !isGlm) {
       throw new Error(
         `[LIVE_MODEL_POLICY] OpenRouter live benchmarks accept only ${LIVE_OPENROUTER_MODEL_ID} or the approved DeepSeek control route; received "${requestedModel}".`,
@@ -3378,10 +3374,7 @@ Notes:
             json?: boolean;
           },
         ) => {
-          handleWhyInspection(runArg, {
-            ...options,
-            json: options.json === true,
-          });
+          handleProofReport(runArg, options);
         },
       ),
   );
@@ -4687,10 +4680,7 @@ Commands include:
       "--trials <n>",
       "Repeated trials (default 3 live baseline; fixed 1 under --smoke)",
     )
-    .option(
-      "--model <id>",
-      "Chat model id (default deepseek-v4-flash-openrouter via OpenRouter)",
-    )
+    .option("--model <id>", "Chat model id (default deepseek-v4-flash-openrouter via OpenRouter)")
     .option(
       "--evidence-dir <path>",
       "Persist per-cell evidence and the aggregate canary report",
@@ -5209,8 +5199,7 @@ Commands include:
                       `[LIVE_MODEL_POLICY] Calibration live calls must use OpenRouter; received ${provider}.`,
                     );
                   }
-                  const apiUrl =
-                    "https://openrouter.ai/api/v1/chat/completions";
+                  const apiUrl = "https://openrouter.ai/api/v1/chat/completions";
                   const resp = await fetch(apiUrl, {
                     method: "POST",
                     headers: {
@@ -5398,8 +5387,7 @@ Commands include:
                       `[LIVE_MODEL_POLICY] Injection live calls must use OpenRouter; received ${provider}.`,
                     );
                   }
-                  const apiUrl =
-                    "https://openrouter.ai/api/v1/chat/completions";
+                  const apiUrl = "https://openrouter.ai/api/v1/chat/completions";
                   const resp = await fetch(apiUrl, {
                     method: "POST",
                     headers: {

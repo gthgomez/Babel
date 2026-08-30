@@ -19,6 +19,7 @@ import {
 import { scanFenceLine } from './markdownFenceScanner.js';
 import { MarkdownAccumulator } from './markdownAccumulator.js';
 import { renderMarkdown, highlightCodeBlocks } from './highlight.js';
+import { stripAnsi } from './theme.js';
 import { createVirtualCellGrid } from './observe/virtualCellGrid.js';
 import { computeScreenLayout } from './screenLayout.js';
 import { ScreenManager } from './screenManager.js';
@@ -316,8 +317,9 @@ describe('CommonMark Markdown Code Fence Scanner & Streaming Accumulator', () =>
   it('highlightCodeBlocks uses shared scanFenceLine for multi-word info strings and tildes', () => {
     const raw = '``` js title="app.js"\nconst x = 1;\n```\n~~~ python\ny = 2\n~~~';
     const highlighted = highlightCodeBlocks(raw);
-    assert.ok(highlighted.includes('const x = 1;'));
-    assert.ok(highlighted.includes('y = 2'));
+    const plain = stripAnsi(highlighted);
+    assert.ok(plain.includes('const x = 1;'));
+    assert.ok(plain.includes('y = 2'));
   });
 });
 

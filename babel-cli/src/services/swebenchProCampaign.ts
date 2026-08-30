@@ -46,6 +46,15 @@ import {
 } from './campaignExecutors.js';
 import { createOpenCodeCliArmExecutor } from './campaignExecutors.opencode.js';
 import {
+  LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS,
+  LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS,
+  LIVE_OPENROUTER_BACKEND_KEY,
+  LIVE_OPENROUTER_MODEL_ID,
+  buildOpenRouterDeepSeekLiveEnv,
+  resolveOpenRouterDeepSeekBackendKey,
+  resolveOpenRouterDeepSeekModelId,
+} from '../modelPolicy.js';
+import {
   executionProfileForArm,
   harnessIdentityForArm,
   type ExecutionProfile,
@@ -83,6 +92,11 @@ import {
 import { buildCellTelemetryBundle } from '../agent/chatEngineObservability.js';
 import type { TurnRoutingReceipt } from '../agent/turnRoutingReceipt.js';
 import { writeDerivedCampaignState } from './causalCampaignValidator.js';
+import {
+  buildCausalAttributionReport,
+  type CausalRunWhyReport,
+} from './causalAttribution.js';
+import { inspectSessionEventLogFromDir } from '../agent/sessionEvents.js';
 
 export const SWE_PRO_CAMPAIGN_SCHEMA = 1 as const;
 
@@ -204,6 +218,8 @@ export interface CampaignCellResult {
   replicate_id?: number;
   arm_harness?: HarnessIdentity;
   execution_profile?: ExecutionProfile;
+  /** Canonical read-only causal projection for this cell's agent run. */
+  causal_attribution?: CausalRunWhyReport;
 }
 
 export interface CampaignAbort {
@@ -543,12 +559,22 @@ export function updateFailureStreak(
   return { signature, count, cell_ids, abort: null };
 }
 
-export function liveApiKeyPresent(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(
-    env['DEEPSEEK_API_KEY']?.trim() ||
-      env['DEEPINFRA_API_KEY']?.trim() ||
-      env['OPENAI_API_KEY']?.trim(),
-  );
+export function liveApiKeyPresent(
+  env: NodeJS.ProcessEnv = process.env,
+  model?: string | null,
+): boolean {
+  if (
+    model === undefined ||
+    model === LIVE_OPENROUTER_MODEL_ID ||
+    model === LIVE_OPENROUTER_BACKEND_KEY ||
+    resolveOpenRouterDeepSeekBackendKey(model ?? '') !== null
+  ) {
+    return Boolean(env['OPENROUTER_API_KEY']?.trim());
+  }
+  // SWE-Pro live cells are intentionally limited to the exact GLM route and
+  // OpenRouter DeepSeek controls. Do not let an unknown selector use a
+  // legacy direct-provider credential as a readiness signal.
+  return false;
 }
 
 function checkoutProRepo(instance: SwebenchProInstanceRow, repoRoot: string): void {
@@ -1000,6 +1026,24 @@ function extractPolicyEvents(
   return [];
 }
 
+function causalAttributionForRun(
+  runDir: string | null,
+  missingReason: string,
+): CausalRunWhyReport {
+  if (!runDir) {
+    return buildCausalAttributionReport({ log: null, loadError: missingReason });
+  }
+  const loaded = inspectSessionEventLogFromDir(runDir);
+  return buildCausalAttributionReport({
+    runDir,
+    log: loaded.kind === 'valid' ? loaded.log : null,
+    ...(loaded.kind === 'invalid' ? { loadError: loaded.error.message } : {}),
+    ...(loaded.kind === 'missing'
+      ? { loadError: `session event log missing at ${loaded.path}` }
+      : {}),
+  });
+}
+
 const SHADOW_KIND_RE =
   /^(zero_write_shadow|force_mutate_shadow|read_thrash_shadow|exploration_shadow|stall_shadow_kill)$/;
 
@@ -1097,7 +1141,7 @@ export function loadPolicyEventsJsonl(
   return events;
 }
 
-function benchmarkBabelEnv(provider: 'mock' | 'live'): NodeJS.ProcessEnv {
+function benchmarkBabelEnv(provider: 'mock' | 'live', model?: string): NodeJS.ProcessEnv {
   const base: NodeJS.ProcessEnv = {
     ...process.env,
     CI: '1',
@@ -1109,9 +1153,25 @@ function benchmarkBabelEnv(provider: 'mock' | 'live'): NodeJS.ProcessEnv {
     ...(provider === 'live' ? { BABEL_LITE_OFFLINE: '0' } : {}),
   };
   if (provider === 'live') {
-    delete base['DEEPINFRA_API_KEY'];
-    base['BABEL_BENCHMARK_DEEPSEEK_ONLY'] = '1';
-    base['BABEL_COMPACTION_MODEL'] = 'deepseek-v4-flash';
+    const isGlm = model === LIVE_OPENROUTER_MODEL_ID || model === LIVE_OPENROUTER_BACKEND_KEY;
+    const isOpenRouterDeepSeek =
+      model === undefined || resolveOpenRouterDeepSeekBackendKey(model) !== null;
+    if (isOpenRouterDeepSeek) {
+      return buildOpenRouterDeepSeekLiveEnv(base, model ?? LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0]);
+    } else if (!isGlm) {
+      throw new Error(
+        `[LIVE_MODEL_POLICY] Live SWE-Pro campaign received an unapproved model route: ${model ?? '(unset)'}.`,
+      );
+    } else {
+      // Every auxiliary model call in an exact GLM campaign must remain on GLM.
+      delete base['BABEL_BENCHMARK_DEEPSEEK_ONLY'];
+      delete base['DEEPSEEK_API_KEY'];
+      base['BABEL_COMPACTION_MODEL'] = LIVE_OPENROUTER_MODEL_ID;
+      base['BABEL_COMPACTION_API_BASE'] = 'https://openrouter.ai/api/v1/chat/completions';
+      if (base['OPENROUTER_API_KEY']) {
+        base['BABEL_COMPACTION_API_KEY'] = base['OPENROUTER_API_KEY'];
+      }
+    }
   }
   return base;
 }
@@ -1407,6 +1467,10 @@ function envBlockedPreflightCell(
     evidence_path,
     cli_exit_code: null,
     status_text: 'ENV_BLOCKED',
+    causal_attribution: causalAttributionForRun(
+      null,
+      'live campaign cell was blocked before a session run directory existed',
+    ),
   };
   writeFileSync(
     evidence_path,
@@ -1474,6 +1538,10 @@ export async function defaultRunLiveCell(
       duration_ms: Math.round(performance.now() - started),
       evidence_path,
       ...(execCtx ? experimentIdentityFields(execCtx.exp) : {}),
+      causal_attribution: causalAttributionForRun(
+        null,
+        readiness.reason ?? 'live campaign executor preflight failed before a session run directory existed',
+      ),
     };
     writeFileSync(evidence_path, JSON.stringify(result, null, 2), 'utf8');
     return result;
@@ -1508,6 +1576,10 @@ export async function defaultRunLiveCell(
       has_shadow_summary: false,
       duration_ms: Math.round(performance.now() - started),
       evidence_path,
+      causal_attribution: causalAttributionForRun(
+        null,
+        'live campaign checkout failed before a session run directory existed',
+      ),
     };
     writeFileSync(evidence_path, JSON.stringify(result, null, 2), 'utf8');
     return result;
@@ -1566,8 +1638,8 @@ export async function defaultRunLiveCell(
   // Product general_swe budgets only — do not inflate turns/cost for "benchmark max".
   // Allow operator env to raise caps; strip harness-only MAX_TURNS default of 250
   // when unset so chatTaskClass general_swe (250/3.0/10min) is the sole source of truth.
-  const baseEnv = benchmarkBabelEnv(provider);
-  let productEnv = buildSweAgentChatEnv(baseEnv);
+  const baseEnv = benchmarkBabelEnv(provider, model);
+  let productEnv = buildSweAgentChatEnv(baseEnv, process.env, model);
   if (depEnvPatch) {
     productEnv = applyDepPreflightEnv(productEnv, depEnvPatch);
   }
@@ -1634,6 +1706,10 @@ export async function defaultRunLiveCell(
       cli_exit_code: null,
       status_text: 'ENV_BLOCKED',
       ...(execCtx ? experimentIdentityFields(execCtx.exp) : {}),
+      causal_attribution: causalAttributionForRun(
+        null,
+        `live campaign cell had no executor for arm ${arm}`,
+      ),
     };
     writeFileSync(evidence_path, JSON.stringify(failed, null, 2), 'utf8');
     writeFileSync(join(evidenceDir, 'live', `${stem}.patch`), '', 'utf8');
@@ -1757,6 +1833,10 @@ export async function defaultRunLiveCell(
 
   const runDir =
     typeof payload?.['run_dir'] === 'string' ? (payload['run_dir'] as string) : null;
+  const causal_attribution = causalAttributionForRun(
+    runDir,
+    'live campaign cell did not return a run directory',
+  );
 
   let policy_events = extractPolicyEvents(payload, workspaceRoot);
   policy_events = ensureShadowSummaryForCampaign(policy_events, {
@@ -1904,6 +1984,7 @@ export async function defaultRunLiveCell(
     babel_authoritative_verifier,
     babel_authoritative_verifier_command,
     ...(execCtx ? experimentIdentityFields(execCtx.exp) : {}),
+    causal_attribution,
   };
 
   writeFileSync(
@@ -1931,6 +2012,7 @@ export async function defaultRunLiveCell(
         },
         cli_payload: payload,
         run_dir: runDir,
+        causal_attribution,
       },
       null,
       2,
@@ -2014,7 +2096,9 @@ export async function runSwebenchProCampaign(
       canonical_remote: gitId.canonical_remote,
       dataset_path: datasetPath,
       dataset_sha256: hashFileSha256(datasetPath),
-      model: options.provider === 'live' ? (options.model ?? 'deepseek-v4-flash') : null,
+      model: options.provider === 'live'
+        ? (options.model ?? 'deepseek-v4-flash-openrouter')
+        : null,
       provider: options.provider,
     },
   });
@@ -2120,7 +2204,7 @@ export async function runSwebenchProCampaign(
           instance,
           evidenceDir,
           options.provider,
-          options.model ?? 'deepseek-v4-flash',
+          options.model ?? 'deepseek-v4-flash-openrouter',
           liveCellOptions,
           { registry: armRegistry, exp },
         );

@@ -3,7 +3,7 @@
  * Maps workflow `--provider live|mock` to text-lane ids (`auto` | `mock`) and fix providers.
  */
 
-export type LiteWorkflowProvider = 'live' | 'mock';
+export type LiteWorkflowProvider = "live" | "mock";
 
 export interface LiteProviderAdapterOptions {
   provider?: string;
@@ -22,7 +22,9 @@ export interface ResolvedLiteProviders {
 export interface LiteProviderAdapter {
   resolve(options?: LiteProviderAdapterOptions): ResolvedLiteProviders;
   resolveTextProviderId(options?: LiteProviderAdapterOptions): string;
-  resolveFixProvider(options?: LiteProviderAdapterOptions): LiteWorkflowProvider;
+  resolveFixProvider(
+    options?: LiteProviderAdapterOptions,
+  ): LiteWorkflowProvider;
 }
 
 export function normalizeLiteWorkflowProvider(
@@ -32,35 +34,38 @@ export function normalizeLiteWorkflowProvider(
     return undefined;
   }
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'mock') {
-    return 'mock';
+  if (normalized === "mock") {
+    return "mock";
   }
-  if (normalized === 'live') {
-    return 'live';
+  if (normalized === "live") {
+    return "live";
   }
   throw new Error(`Invalid provider "${value}". Valid values: live, mock`);
 }
 
 export function resolveLiteProviders(
-  options: Pick<LiteProviderAdapterOptions, 'provider'>,
+  options: Pick<LiteProviderAdapterOptions, "provider">,
   env: NodeJS.ProcessEnv = process.env,
 ): ResolvedLiteProviders {
   const explicit = normalizeLiteWorkflowProvider(options.provider);
   let fixProvider: LiteWorkflowProvider;
-  if (explicit === 'live') {
-    fixProvider = 'live';
-  } else if (explicit === 'mock') {
-    fixProvider = 'mock';
-  } else if (env['BABEL_LITE_OFFLINE'] === '1' || env['BABEL_SMALL_FIX_PROVIDER'] === 'mock') {
-    fixProvider = 'mock';
+  if (explicit === "live") {
+    fixProvider = "live";
+  } else if (explicit === "mock") {
+    fixProvider = "mock";
+  } else if (
+    env["BABEL_LITE_OFFLINE"] === "1" ||
+    env["BABEL_SMALL_FIX_PROVIDER"] === "mock"
+  ) {
+    fixProvider = "mock";
   } else {
-    fixProvider = 'live';
+    fixProvider = "live";
   }
 
   return {
     fixProvider,
-    textProviderId: fixProvider === 'mock' ? 'mock' : 'auto',
-    offlineDemo: fixProvider === 'mock',
+    textProviderId: fixProvider === "mock" ? "mock" : "auto",
+    offlineDemo: fixProvider === "mock",
   };
 }
 
@@ -69,7 +74,7 @@ export const normalizeSmallFixProvider = normalizeLiteWorkflowProvider;
 
 /** @deprecated Use resolveLiteProviders().fixProvider — kept for workflow command tests. */
 export function resolveSmallFixProviderForCommand(
-  options: Pick<LiteProviderAdapterOptions, 'provider'>,
+  options: Pick<LiteProviderAdapterOptions, "provider">,
   env: NodeJS.ProcessEnv = process.env,
 ): LiteWorkflowProvider {
   return resolveLiteProviders(options, env).fixProvider;
@@ -81,7 +86,11 @@ export function createLiteProviderAdapter(
   return {
     resolve(options) {
       return resolveLiteProviders(
-        { ...(options?.provider !== undefined ? { provider: options.provider } : {}) },
+        {
+          ...(options?.provider !== undefined
+            ? { provider: options.provider }
+            : {}),
+        },
         options?.env ?? env,
       );
     },
@@ -97,14 +106,16 @@ export function createLiteProviderAdapter(
 export interface LiteOfflineEnvSnapshot {
   previousSmallFixProvider: string | undefined;
   previousLiteOffline: string | undefined;
+  previousHostFallback: string | undefined;
 }
 
 export function snapshotLiteOfflineEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): LiteOfflineEnvSnapshot {
   return {
-    previousSmallFixProvider: env['BABEL_SMALL_FIX_PROVIDER'],
-    previousLiteOffline: env['BABEL_LITE_OFFLINE'],
+    previousSmallFixProvider: env["BABEL_SMALL_FIX_PROVIDER"],
+    previousLiteOffline: env["BABEL_LITE_OFFLINE"],
+    previousHostFallback: env["BABEL_ALLOW_HOST_FALLBACK"],
   };
 }
 
@@ -112,9 +123,12 @@ export function applyLiteOfflineEnv(
   fixProvider: LiteWorkflowProvider,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
-  if (fixProvider === 'mock') {
-    env['BABEL_SMALL_FIX_PROVIDER'] = 'mock';
-    env['BABEL_LITE_OFFLINE'] = '1';
+  if (fixProvider === "mock") {
+    env["BABEL_SMALL_FIX_PROVIDER"] = "mock";
+    env["BABEL_LITE_OFFLINE"] = "1";
+    // Offline fixtures execute in the local test workspace. Make that
+    // environment boundary explicit instead of relying on inherited state.
+    env["BABEL_ALLOW_HOST_FALLBACK"] = "1";
   }
 }
 
@@ -123,17 +137,24 @@ export function restoreLiteOfflineEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): void {
   if (snapshot.previousSmallFixProvider === undefined) {
-    delete env['BABEL_SMALL_FIX_PROVIDER'];
+    delete env["BABEL_SMALL_FIX_PROVIDER"];
   } else {
-    env['BABEL_SMALL_FIX_PROVIDER'] = snapshot.previousSmallFixProvider;
+    env["BABEL_SMALL_FIX_PROVIDER"] = snapshot.previousSmallFixProvider;
   }
   if (snapshot.previousLiteOffline === undefined) {
-    delete env['BABEL_LITE_OFFLINE'];
+    delete env["BABEL_LITE_OFFLINE"];
   } else {
-    env['BABEL_LITE_OFFLINE'] = snapshot.previousLiteOffline;
+    env["BABEL_LITE_OFFLINE"] = snapshot.previousLiteOffline;
+  }
+  if (snapshot.previousHostFallback === undefined) {
+    delete env["BABEL_ALLOW_HOST_FALLBACK"];
+  } else {
+    env["BABEL_ALLOW_HOST_FALLBACK"] = snapshot.previousHostFallback;
   }
 }
 
 export function providerUsesOfflineEnv(verb: string): boolean {
-  return verb === 'fix' || verb === 'propose' || verb === 'patch' || verb === 'diff';
+  return (
+    verb === "fix" || verb === "propose" || verb === "patch" || verb === "diff"
+  );
 }

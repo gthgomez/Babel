@@ -12,9 +12,19 @@ import {
 } from '../agent/liteArtifacts.js';
 import { writeLiteTextArtifact } from '../lite/artifacts.js';
 import { runWithPrimaryOnlyFallback } from '../execute.js';
-import { resolveFamilyModelPolicy, loadModelPolicyConfig, type ResolvedModelPolicy } from '../modelPolicy.js';
+import {
+  LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS,
+  resolveFamilyModelPolicy,
+  resolveModelByKey,
+  resolveModelPolicyBackendKey,
+  resolveOpenRouterDeepSeekBackendKey,
+  resolveOpenRouterDeepSeekModelId,
+  loadModelPolicyConfig,
+  type ResolvedModelPolicy,
+} from '../modelPolicy.js';
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
 import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
+import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
 import { OpenCodeApiRunner } from '../runners/openCodeApi.js';
 import type { RunnerInvocationMetadata } from '../runners/base.js';
 import { AskAnswerSchema, type AskAnswer } from '../schemas/agentContracts.js';
@@ -77,25 +87,44 @@ function askUsesLiveProvider(options: RunAskAnswerPathOptions): boolean {
 }
 
 /**
- * Shared ask-lane model resolution. Explicit backend keys whose provider is
- * opencode bypass the DeepSeek-only live assertion: naming the backend key IS
- * the operator opt-in to OpenCode Zen (they supply OPENCODE_API_KEY). Every
- * other live selection stays on the DeepSeek-only lane.
+ * Shared ask-lane model resolution. Explicit configured backend keys resolve
+ * through the same live-only model policy as ChatEngine, including the exact
+ * experimental GLM/OpenRouter route. OpenCode remains an explicit opt-in.
  */
 export function resolveAskModelPolicyWithLiveGate(
-  options: Pick<RunAskAnswerPathOptions, 'model' | 'modelTier' | 'allowExpensive'>,
+  options: Pick<
+    RunAskAnswerPathOptions,
+    'model' | 'modelTier' | 'allowExpensive'
+  >,
   liveOnly: boolean,
   babelRoot: string = BABEL_ROOT,
 ): ResolvedModelPolicy | undefined {
   if (!options.model && !liveOnly) return undefined;
-  const configuredEntry =
-    options.model !== undefined
-      ? loadModelPolicyConfig(babelRoot).config.models?.[options.model]
-      : undefined;
+  const selectedModel = liveOnly
+    ? resolveOpenRouterDeepSeekBackendKey(options.model ?? '') ??
+      (options.model ?? LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS[0])
+    : options.model;
+  const backendKey = selectedModel
+    ? resolveModelPolicyBackendKey(selectedModel, babelRoot)
+    : undefined;
+  const configuredEntry = backendKey
+    ? loadModelPolicyConfig(babelRoot).config.models?.[backendKey]
+    : undefined;
+  const explicitDirectRequest = Boolean(backendKey);
   const explicitOpenCodeRequest = configuredEntry?.provider === 'opencode';
+  if (explicitDirectRequest && backendKey) {
+    return resolveModelByKey({
+      key: backendKey,
+      ...(explicitOpenCodeRequest ? {} : { liveOnly }),
+      ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+      babelRoot,
+    });
+  }
   return resolveFamilyModelPolicy({
-    family: options.model ?? 'DeepSeek',
-    ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
+    family: selectedModel ?? 'DeepSeek',
+    ...(options.modelTier !== undefined
+      ? { requestedTier: options.modelTier }
+      : {}),
     ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
     ...(explicitOpenCodeRequest ? {} : { liveOnly }),
     babelRoot,
@@ -107,13 +136,17 @@ function taskMentionsTarget(task: string, projectRoot: string): boolean {
   return base.length > 0 && task.toLowerCase().includes(base.toLowerCase());
 }
 
-async function readProjectSummary(options: RunAskAnswerPathOptions): Promise<string> {
+async function readProjectSummary(
+  options: RunAskAnswerPathOptions,
+): Promise<string> {
   if (!options.projectRoot) {
     return 'No project root was provided. Answer from the task text and Babel CLI context only.';
   }
   return readLiteProjectContext({
     projectRoot: options.projectRoot,
-    ...(options.workspaceRoot !== undefined ? { workspaceRoot: options.workspaceRoot } : {}),
+    ...(options.workspaceRoot !== undefined
+      ? { workspaceRoot: options.workspaceRoot }
+      : {}),
     task: options.task,
     maxCharsPerFile: 1800,
   });
@@ -166,9 +199,14 @@ function summarizeTargetFromReadme(projectRoot: string): string | null {
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter((line) => line.length > 0 && !line.startsWith('```'));
-    const title = lines.find((line) => /^#\s+/.test(line))?.replace(/^#+\s*/, '');
+    const title = lines
+      .find((line) => /^#\s+/.test(line))
+      ?.replace(/^#+\s*/, '');
     const description = lines.find(
-      (line) => !line.startsWith('#') && !line.startsWith('|') && !line.startsWith('- '),
+      (line) =>
+        !line.startsWith('#') &&
+        !line.startsWith('|') &&
+        !line.startsWith('- '),
     );
     if (title && description) {
       const cleanDescription = description.replace(/\*\*/g, '');
@@ -205,7 +243,8 @@ export function applyAskGroundingReview(
   const basenameMatch = taskMentionsTarget(options.task, projectRoot);
   const absenceClaim = hasAbsenceClaim(answer);
   const localSummary = summarizeTargetFromReadme(projectRoot);
-  const contradiction = absenceClaim && (basenameMatch || localSummary !== null);
+  const contradiction =
+    absenceClaim && (basenameMatch || localSummary !== null);
   if (!contradiction) {
     return {
       answer,
@@ -230,7 +269,8 @@ export function applyAskGroundingReview(
       answer: repairedAnswer,
       facts: [`${targetName} exists at ${projectRoot}.`, ...answer.facts],
       assumptions: answer.assumptions.filter(
-        (assumption) => !/absence|absent|not currently part|not recognized/i.test(assumption),
+        (assumption) =>
+          !/absence|absent|not currently part|not recognized/i.test(assumption),
       ),
       evidence: [
         {
@@ -262,10 +302,9 @@ export function applyAskGroundingReview(
 export function safeParseAskAnswer(raw: unknown): AskAnswer {
   const result = AskAnswerSchema.safeParse(raw);
   if (result.success) return result.data;
-  const obj = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Record<
-    string,
-    unknown
-  >;
+  const obj = (
+    raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
+  ) as Record<string, unknown>;
   return {
     schema_version: 1,
     status: 'ANSWER_READY',
@@ -316,7 +355,11 @@ function writeLatestRunPointer(runDir: string, project?: string): void {
     mkdirSync(BABEL_RUNS_DIR, { recursive: true });
     writeFileSync(join(BABEL_RUNS_DIR, '.latest.json'), payload, 'utf-8');
     if (project) {
-      writeFileSync(join(BABEL_RUNS_DIR, `.latest.${project}.json`), payload, 'utf-8');
+      writeFileSync(
+        join(BABEL_RUNS_DIR, `.latest.${project}.json`),
+        payload,
+        'utf-8',
+      );
     }
   } catch (err) {
     logDetail(
@@ -364,8 +407,10 @@ function appendDirectRunnerTelemetry(
         pricing_verified_at: metadata?.pricing_verified_at ?? null,
         input_cost_per_1m: metadata?.input_cost_per_1m ?? null,
         output_cost_per_1m: metadata?.output_cost_per_1m ?? null,
-        input_cache_hit_cost_per_1m: metadata?.input_cache_hit_cost_per_1m ?? null,
-        input_cache_miss_cost_per_1m: metadata?.input_cache_miss_cost_per_1m ?? null,
+        input_cache_hit_cost_per_1m:
+          metadata?.input_cache_hit_cost_per_1m ?? null,
+        input_cache_miss_cost_per_1m:
+          metadata?.input_cache_miss_cost_per_1m ?? null,
         ttft_ms: metadata?.ttft_ms ?? null,
         generation_ms: metadata?.generation_ms ?? null,
         validation_ms: metadata?.validation_ms ?? null,
@@ -379,7 +424,10 @@ function appendDirectRunnerTelemetry(
   });
 }
 
-function makeRecoverableRunError(message: string, runDir: string): RecoverableRunError {
+function makeRecoverableRunError(
+  message: string,
+  runDir: string,
+): RecoverableRunError {
   const error = new Error(message) as RecoverableRunError;
   error.runDir = runDir;
   error.supportPath = runDir;
@@ -398,19 +446,40 @@ function failureCodeForError(error: unknown): string {
   return 'provider_request_failed';
 }
 
+function createAskRunner(
+  modelPolicy: ResolvedModelPolicy,
+  liveOnly: boolean,
+): DeepInfraApiRunner | DeepSeekApiRunner | OpenRouterApiRunner | OpenCodeApiRunner {
+  if (modelPolicy.provider === 'opencode') {
+    return new OpenCodeApiRunner(modelPolicy.providerModelId);
+  }
+  if (modelPolicy.provider === 'openrouter') {
+    return new OpenRouterApiRunner(modelPolicy.providerModelId);
+  }
+  if (modelPolicy.provider === 'deepseek') {
+    if (liveOnly) {
+      const routedModel = resolveOpenRouterDeepSeekModelId(modelPolicy.providerModelId);
+      if (!routedModel) {
+        throw new Error(
+          '[LIVE_MODEL_POLICY] Direct DeepSeek live calls are disabled; use the OpenRouter DeepSeek control route.',
+        );
+      }
+      return new OpenRouterApiRunner(routedModel);
+    }
+    return new DeepSeekApiRunner(modelPolicy.providerModelId);
+  }
+  return new DeepInfraApiRunner(modelPolicy.providerModelId);
+}
+
 async function runDirectAsk(
   prompt: string,
   modelPolicy: ResolvedModelPolicy,
   evidence: EvidenceBundle,
+  liveOnly: boolean,
   onChunk?: (chunk: string) => void,
 ): Promise<AskAnswer> {
   const provider = modelPolicy.provider;
-  const runner =
-    provider === 'opencode'
-      ? new OpenCodeApiRunner(modelPolicy.providerModelId)
-      : provider === 'deepseek'
-        ? new DeepSeekApiRunner(modelPolicy.providerModelId)
-        : new DeepInfraApiRunner(modelPolicy.providerModelId);
+  const runner = createAskRunner(modelPolicy, liveOnly);
   try {
     const callbacks = onChunk ? { onChunk } : undefined;
     const answer = await runner.execute(prompt, AskAnswerSchema, callbacks);
@@ -506,7 +575,10 @@ export async function runAskAnswerFastPath(
   const prompt = await buildAskPrompt(options);
 
   // Resolve model policy if a specific model was requested
-  const modelPolicy = resolveAskModelPolicyWithLiveGate(options, askUsesLiveProvider(options));
+  const modelPolicy = resolveAskModelPolicyWithLiveGate(
+    options,
+    askUsesLiveProvider(options),
+  );
 
   let answer: AskAnswer;
   let errorRunDir: string | null = null;
@@ -515,23 +587,27 @@ export async function runAskAnswerFastPath(
     const isDirectApi =
       modelPolicy?.provider === 'deepinfra' ||
       modelPolicy?.provider === 'deepseek' ||
+      modelPolicy?.provider === 'openrouter' ||
       modelPolicy?.provider === 'opencode';
 
     if (isDirectApi) {
       // Direct API call — structured JSON with schema validation
-      const runner =
-        modelPolicy!.provider === 'opencode'
-          ? new OpenCodeApiRunner(modelPolicy!.providerModelId)
-          : modelPolicy!.provider === 'deepseek'
-            ? new DeepSeekApiRunner(modelPolicy!.providerModelId)
-            : new DeepInfraApiRunner(modelPolicy!.providerModelId);
+      const runner = createAskRunner(
+        modelPolicy!,
+        askUsesLiveProvider(options),
+      );
 
       try {
-        const callbacks = options.onChunk ? { onChunk: options.onChunk } : undefined;
+        const callbacks = options.onChunk
+          ? { onChunk: options.onChunk }
+          : undefined;
         answer = await runner.execute(prompt, AskAnswerSchema, callbacks);
       } catch (error: unknown) {
         // Schema failure while streaming: retry without streaming
-        if (options.onChunk && failureCodeForError(error) === 'provider_schema_invalid') {
+        if (
+          options.onChunk &&
+          failureCodeForError(error) === 'provider_schema_invalid'
+        ) {
           options.onStreamReset?.();
           answer = await runner.execute(prompt, AskAnswerSchema, undefined);
         } else {
@@ -575,7 +651,10 @@ export async function runAskAnswerFastPath(
       message.includes('DeepSeek') ||
       message.includes('DEEPSEEK_API_KEY')
     ) {
-      message = `${message}\n\n[Recovery Hint] Direct DeepSeek request failed. Please check your DEEPSEEK_API_KEY. Alternatively, run with babel ask --deep <task> for the full discovery path.`;
+      const routeHint = modelPolicy?.provider === 'openrouter'
+        ? 'OpenRouter DeepSeek request failed. Please check your OPENROUTER_API_KEY.'
+        : 'Direct DeepSeek request failed. Please check the configured direct-provider credential.';
+      message = `${message}\n\n[Recovery Hint] ${routeHint} Alternatively, run with babel ask --deep <task> for the full discovery path.`;
     } else {
       message = `${message}\n\n[Recovery Hint] Fast ask path failed. Retry with babel ask --deep <task> for the full discovery path (includes automated backup routes).`;
     }
@@ -583,7 +662,10 @@ export async function runAskAnswerFastPath(
   }
 
   // Apply grounding review for structured JSON answers
-  const grounding = applyAskGroundingReview(answer, { ...options, projectRoot: repoPath });
+  const grounding = applyAskGroundingReview(answer, {
+    ...options,
+    projectRoot: repoPath,
+  });
   answer = grounding.answer;
 
   const usageSummary = globalCostTracker.getSessionSummary();
@@ -602,7 +684,10 @@ export async function runAskAnswerPath(
   options: RunAskAnswerPathOptions,
 ): Promise<AskAnswerPathResult> {
   const repoPath = resolveLiteRepoRoot(options.projectRoot);
-  const { run: liteRun, evidence } = beginLiteEvidenceSession({ command: 'ask', repoPath });
+  const { run: liteRun, evidence } = beginLiteEvidenceSession({
+    command: 'ask',
+    repoPath,
+  });
   writeLiteRequest(liteRun, {
     schema_version: 1,
     command: 'ask',
@@ -629,22 +714,35 @@ export async function runAskAnswerPath(
     ...(options.provider === 'mock' || options.provider === 'live'
       ? { provider: options.provider }
       : {}),
+    ...(options.model !== undefined ? { model: options.model } : {}),
     useDeterministicMock: useDeterministicDiscovery,
-    ...(options.toolStream !== undefined ? { toolStream: options.toolStream } : {}),
+    ...(options.toolStream !== undefined
+      ? { toolStream: options.toolStream }
+      : {}),
   });
   const prompt = await buildAskPrompt(options, discovery.observations);
   globalCostTracker.resetSession();
   evidence.writeCompiledContext('ask', prompt);
 
-  const modelPolicy = resolveAskModelPolicyWithLiveGate(options, askUsesLiveProvider(options));
+  const modelPolicy = resolveAskModelPolicyWithLiveGate(
+    options,
+    askUsesLiveProvider(options),
+  );
 
   let answer: AskAnswer;
   try {
     const runAsk = (onChunk?: (chunk: string) => void) =>
       modelPolicy?.provider === 'deepinfra' ||
       modelPolicy?.provider === 'deepseek' ||
+      modelPolicy?.provider === 'openrouter' ||
       modelPolicy?.provider === 'opencode'
-        ? runDirectAsk(prompt, modelPolicy, evidence, onChunk)
+        ? runDirectAsk(
+            prompt,
+            modelPolicy,
+            evidence,
+            askUsesLiveProvider(options),
+            onChunk,
+          )
         : runWithPrimaryOnlyFallback(prompt, AskAnswerSchema, {
             evidence,
             stage: 'orchestrator',
@@ -655,7 +753,10 @@ export async function runAskAnswerPath(
     try {
       answer = await runAsk(options.onChunk);
     } catch (error: unknown) {
-      if (options.onChunk && failureCodeForError(error) === 'provider_schema_invalid') {
+      if (
+        options.onChunk &&
+        failureCodeForError(error) === 'provider_schema_invalid'
+      ) {
         options.onStreamReset?.();
         evidence.writeDebugFile(
           'ask_stream_retry.json',
@@ -682,12 +783,18 @@ export async function runAskAnswerPath(
       message.includes('DeepSeek') ||
       message.includes('DEEPSEEK_API_KEY')
     ) {
-      message = `${message}\n\n[Recovery Hint] Direct DeepSeek request failed. Please check your DEEPSEEK_API_KEY. Alternatively, run in Full Babel mode (governed mode) if backup routes and automated cascading are desired.`;
+      const routeHint = modelPolicy?.provider === 'openrouter'
+        ? 'OpenRouter DeepSeek request failed. Please check your OPENROUTER_API_KEY.'
+        : 'Direct DeepSeek request failed. Please check the configured direct-provider credential.';
+      message = `${message}\n\n[Recovery Hint] ${routeHint} Alternatively, run in Full Babel mode (governed mode) if backup routes and automated cascading are desired.`;
     } else {
       message = `${message}\n\n[Recovery Hint] Stage execution failed under 'primary_only' policy. Please ensure the primary provider API key is set, or run in Full Babel mode (governed mode) to allow backup cascades.`;
     }
     const failureCode = failureCodeForError(error);
-    const failureCapsulePath = join(evidence.runDir, 'ask_failure_capsule.json');
+    const failureCapsulePath = join(
+      evidence.runDir,
+      'ask_failure_capsule.json',
+    );
     evidence.writeDebugFile(
       'ask_failure_capsule.json',
       `${JSON.stringify(
@@ -763,7 +870,10 @@ export async function runAskAnswerPath(
       : answer.status === 'NEEDS_MORE_CONTEXT'
         ? 'blocked'
         : 'fail';
-  const grounding = applyAskGroundingReview(answer, { ...options, projectRoot: repoPath });
+  const grounding = applyAskGroundingReview(answer, {
+    ...options,
+    projectRoot: repoPath,
+  });
   answer = grounding.answer;
   const verifyStatus: 'pass' | 'fail' | 'blocked' =
     grounding.review.status === 'repaired' || grounding.review.status === 'pass'
@@ -795,7 +905,10 @@ export async function runAskAnswerPath(
     )}\n`,
   );
 
-  evidence.writeDebugFile('ask_answer.json', `${JSON.stringify(answer, null, 2)}\n`);
+  evidence.writeDebugFile(
+    'ask_answer.json',
+    `${JSON.stringify(answer, null, 2)}\n`,
+  );
   evidence.writeExecutionLog({
     status: 'ANSWER_READY',
     stage_status: 'ASK_COMPLETE',
@@ -823,7 +936,8 @@ export async function runAskAnswerPath(
         parseable_json_stdout_required: true,
         attempt_safety_summary_path: null,
         repair_attempt_timeline_path: null,
-        condition_summary: answer.status === 'ANSWER_READY' ? null : answer.summary,
+        condition_summary:
+          answer.status === 'ANSWER_READY' ? null : answer.summary,
         verifier_contract: null,
       },
       null,
@@ -846,14 +960,21 @@ export async function runAskAnswerPath(
     task: options.task,
     mutation_policy: 'read_only',
   });
-  writeLiteTextArtifact(liteRun, 'response.md', answer.answer || answer.summary);
+  writeLiteTextArtifact(
+    liteRun,
+    'response.md',
+    answer.answer || answer.summary,
+  );
   writeLatestRunPointer(evidence.runDir, options.project);
 
   const usageSummary =
     costLedger.entries.length > 0
       ? usageSummaryFromCostLedger(costLedger)
       : globalCostTracker.getSessionSummary();
-  evidence.writeDebugFile('ask_usage.json', `${JSON.stringify(usageSummary, null, 2)}\n`);
+  evidence.writeDebugFile(
+    'ask_usage.json',
+    `${JSON.stringify(usageSummary, null, 2)}\n`,
+  );
 
   return {
     status: answer.status,

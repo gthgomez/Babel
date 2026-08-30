@@ -68,7 +68,7 @@ import {
 import { getSafeEnv } from './utils/safeEnv.js';
 import { childEnvForSandbox, hardenGitHostEnvironment } from './authority/unprivilegedChildEnv.js';
 import { contextAwareOperatorCheck } from './utils/cmdTokenizer.js';
-import { classifyExecutionRisk, requiresDockerIsolation } from './authority/commandSpec.js';
+import { classifyExecutionRisk } from './authority/commandSpec.js';
 import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
 import { OutputBuffer } from './ui/outputBuffer.js';
@@ -1726,14 +1726,10 @@ export class SafeExecutor {
       );
     }
     const classified = classifyExecutionRisk(command, { repoRoot: this.projectRoot });
-    if (requiresDockerIsolation(classified.executionRisk) && isolation.kind !== 'docker') {
-      return policyDeniedResult(
-        'isolation_required',
-        `[sandbox] isolation_required: ${classified.base || command} executes project or container-only code and is denied on the host.`,
-        toolName,
-        [command, classified.executionRisk],
-      );
-    }
+    // evaluateGovernedIsolation has already failed closed when a Docker-only
+    // profile lacks isolation and no explicit escalation exists. A returned
+    // host_profile or host_escalated decision is therefore an intentional,
+    // auditable host boundary and must be honored for project commands too.
     if (classified.executionRisk === 'forbidden') {
       return policyDeniedResult(
         'unclassified_executable',

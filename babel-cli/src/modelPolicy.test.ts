@@ -424,20 +424,20 @@ test('generic live DeepSeek family resolution uses OpenRouter-only backends', ()
 test('OpenRouter DeepSeek live environment removes direct credentials and pins auxiliary calls', () => {
   const env = buildOpenRouterDeepSeekLiveEnv(
     {
-      OPENROUTER_API_KEY: 'synthetic-openrouter-key',
+      OPENROUTER_API_KEY: 'fixture-router-key',
       DEEPSEEK_API_KEY: 'synthetic-direct-key',
       BABEL_BENCHMARK_DEEPSEEK_ONLY: '1',
     },
     'deepseek-v4-pro',
   );
 
-  assert.equal(env.OPENROUTER_API_KEY, 'synthetic-openrouter-key');
+  assert.equal(env.OPENROUTER_API_KEY, 'fixture-router-key');
   assert.equal(env.DEEPSEEK_API_KEY, undefined);
   assert.equal(env.BABEL_BENCHMARK_DEEPSEEK_ONLY, undefined);
   assert.equal(env.BABEL_COMPACTION_API_BASE, 'https://openrouter.ai/api/v1/chat/completions');
   assert.equal(env.BABEL_COMPACTION_MODEL, 'deepseek/deepseek-v4-pro');
   assert.equal(env.BABEL_DIFF_CRITIC_MODEL, 'deepseek/deepseek-v4-pro');
-  assert.equal(env.BABEL_COMPACTION_API_KEY, 'synthetic-openrouter-key');
+  assert.equal(env.BABEL_COMPACTION_API_KEY, 'fixture-router-key');
   assert.throws(
     () => buildOpenRouterDeepSeekLiveEnv({}, 'unapproved-model'),
     /OpenRouter DeepSeek live environment requires an approved selector/,

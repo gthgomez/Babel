@@ -6,11 +6,11 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $checker = Join-Path $repoRoot 'tools/check-public-pr-metadata.ps1'
-$workflow = Join-Path $repoRoot '.github/workflows/typecheck.yml'
 $trustedWorkflow = Join-Path $repoRoot '.github/workflows/public-pr-metadata.yml'
+$ordinaryWorkflow = Join-Path $repoRoot '.github/workflows/typecheck.yml'
 $policy = Join-Path $repoRoot 'tools/security/public-pr-metadata-policy.json'
 $shell = (Get-Command pwsh -ErrorAction Stop).Source
-$tempRoot = Join-Path $repoRoot ('.tmp-public-pr-metadata-' + [guid]::NewGuid().ToString('N'))
+$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("babel-pr-metadata-{0}" -f [guid]::NewGuid().ToString('N'))
 
 function Assert-True([bool]$Condition, [string]$Message) {
   if (-not $Condition) { throw "ASSERTION FAILED: $Message" }
@@ -19,44 +19,59 @@ function New-SupplementalPolicy([string[]]$Identifiers) {
   $json = @{ forbidden_private_identifiers = $Identifiers } | ConvertTo-Json -Compress
   return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
 }
-function Invoke-Checker([string]$Title, [string]$Body, [string[]]$Messages, [string]$SupplementalPolicy = '', [switch]$RequireSupplementalPolicy, [switch]$UseEvent) {
-  if ($UseEvent) {
-    $args = @('-NoProfile', '-File', $checker, '-PolicyPath', $policy, '-CommitMessages') + $Messages + @('-OutputFormat', 'json')
-  } else {
-    $args = @('-NoProfile', '-File', $checker, '-PolicyPath', $policy, '-Title', $Title, '-Body', $Body, '-CommitMessages') + $Messages + @('-OutputFormat', 'json')
-  }
+function Invoke-Checker([string]$Title, [string]$Body, [string[]]$Messages, [string]$SupplementalPolicy = '', [switch]$RequireSupplementalPolicy) {
+  $args = @('-NoProfile', '-File', $checker, '-PolicyPath', $policy, '-Title', $Title, '-Body', $Body, '-CommitMessages') + $Messages + @('-OutputFormat', 'json')
   if ($RequireSupplementalPolicy) { $args += '-RequireSupplementalPolicy' }
   if ($SupplementalPolicy) { $args += @('-SupplementalPolicyBase64', $SupplementalPolicy) }
-  $commandArgs = @($args | Select-Object -Skip 2 | ForEach-Object {
-      if ([string]$_ -match '^-[A-Za-z]') { [string]$_ } else { "'$(($_ -replace "'", "''"))'" }
-    }) -join ' '
-  $command = "& '$($checker -replace "'", "''")' $commandArgs"
-  $output = @(& $shell -NoLogo -NoProfile -Command $command 2>&1)
+  $output = @(& $shell @args 2>&1)
   return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = ($output -join "`n") }
+}
+
+function Remove-TestTempRoot {
+  for ($attempt = 0; $attempt -lt 8; $attempt++) {
+    if (-not (Test-Path -LiteralPath $tempRoot)) { return }
+    try {
+      Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction Stop
+      return
+    } catch {
+      if ($attempt -eq 7 -and (Test-Path -LiteralPath $tempRoot)) {
+        # Windows scanners can briefly hold the synthetic event file. The
+        # assertions have already completed; do not turn transient cleanup
+        # contention into a false policy-test failure.
+        Write-Warning "Synthetic PR metadata fixture cleanup was deferred: $tempRoot"
+        return
+      }
+      if ($attempt -eq 7) { return }
+      Start-Sleep -Milliseconds (100 + (100 * $attempt))
+    }
+  }
 }
 
 try {
   $checkerSource = Get-Content -LiteralPath $checker -Raw
-  $workflowSource = Get-Content -LiteralPath $workflow -Raw
   $trustedWorkflowSource = Get-Content -LiteralPath $trustedWorkflow -Raw
+  $ordinaryWorkflowSource = Get-Content -LiteralPath $ordinaryWorkflow -Raw
   Assert-True ($checkerSource -match "response\.Headers\.GetValues\('Link'\)") 'checker must tolerate commit responses without a Link header under strict mode'
   Assert-True ($checkerSource -notmatch 'ResponseHeadersVariable') 'checker must avoid unsupported response-header parameters'
   Assert-True ($checkerSource -match 'Net\.Http\.HttpClient') 'checker must use cross-platform HTTP handling'
   Assert-True ($checkerSource -match 'AuthenticationHeaderValue') 'checker must authenticate API requests explicitly'
+  Assert-True ($ordinaryWorkflowSource -notmatch 'pull_request_target') 'ordinary validation workflow must not own privileged pull_request_target jobs'
   $targetTypesMatch = [regex]::Match($trustedWorkflowSource, '(?ms)^  pull_request_target:\s*\r?\n\s+types:\s*\[(?<events>[^\]]+)\]')
   Assert-True $targetTypesMatch.Success 'workflow must declare pull_request_target activity types'
   $targetEvents = $targetTypesMatch.Groups['events'].Value
   foreach ($event in @('opened', 'reopened', 'synchronize', 'edited', 'ready_for_review')) {
     Assert-True ($targetEvents -match "(?<![\w-])$([regex]::Escape($event))(?![\w-])") "pull_request_target must subscribe to $event"
   }
-  Assert-True ($workflowSource -notmatch 'pull_request_target') 'ordinary validation workflow must not own privileged pull_request_target jobs'
+  Assert-True ($trustedWorkflowSource -match '(?m)^  group:.*\$\{\{\s*github\.event_name\s*\}\}') 'trusted workflow concurrency must remain event-specific'
   $metadataJobMatch = [regex]::Match($trustedWorkflowSource, '(?ms)^  public-pr-metadata:\s*(?<body>.*?)(?=^  [A-Za-z0-9_-]+:|\z)')
   Assert-True $metadataJobMatch.Success 'workflow must retain the public-pr-metadata job'
   $metadataJob = $metadataJobMatch.Groups['body'].Value
-  Assert-True ($metadataJob -match '(?m)^\s+ref:\s*\$\{\{\s*github\.event\.repository\.default_branch\s*\}\}\s*$') 'trusted metadata validation must check out the default branch'
-  Assert-True ($metadataJob -notmatch 'github\.event\.pull_request\.(head|ref|sha)') 'trusted metadata validation must not check out PR-controlled code'
+  Assert-True ($metadataJob -match "(?m)^\s+if:\s*github\.event_name == 'pull_request_target'\s*$") 'public-pr-metadata must remain restricted to pull_request_target'
+  Assert-True ($metadataJob -match '(?m)^\s+ref:\s*\$\{\{\s*github\.event\.pull_request\.base\.sha\s*\}\}\s*$') 'trusted metadata validation must check out the exact PR base SHA'
+  Assert-True ($metadataJob -notmatch 'github\.event\.pull_request\.(head\.sha|head\.ref|head\.label|ref)') 'trusted metadata validation must not check out PR-controlled code'
   Assert-True ($trustedWorkflowSource -match 'pull-requests:\s*read') 'trusted workflow must retain pull-request read permission'
-  Assert-True ($trustedWorkflowSource -match 'GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}') 'trusted workflow must export the GitHub token to the metadata checker'
+  Assert-True ($metadataJob -match '(?ms)Check public PR metadata.*?env:\s*\r?\n\s+GH_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}') 'trusted workflow must scope GH_TOKEN to the metadata checker step'
+  Assert-True ($metadataJob -notmatch 'GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}') 'trusted workflow must not use the legacy token variable'
 
   $syntheticIdentifier = 'fixture-' + 'internal-identifier'
   $supplemental = New-SupplementalPolicy @([regex]::Escape($syntheticIdentifier))
@@ -107,17 +122,17 @@ try {
   $previousEventPath = $env:GITHUB_EVENT_PATH
   try {
     $env:GITHUB_EVENT_PATH = $eventPath
-    $eventPass = Invoke-Checker -Messages @('docs: update guide') -SupplementalPolicy $supplemental -RequireSupplementalPolicy -UseEvent
-    Assert-True ($eventPass.ExitCode -eq 0) "pull-request event metadata unexpectedly failed: $($eventPass.Text)"
+    $eventPass = @(& $shell -NoProfile -File $checker -PolicyPath $policy -CommitMessages @('docs: update guide') -SupplementalPolicyBase64 $supplemental -RequireSupplementalPolicy -OutputFormat json 2>&1)
+    Assert-True ($LASTEXITCODE -eq 0) "pull-request event metadata unexpectedly failed: $($eventPass -join ' ')"
 
     $invalidEvent = @{
       repository = @{ owner = @{ login = 'invalid/owner' }; name = 'public-repo' }
       pull_request = @{ number = 42; title = 'docs: update guide'; body = 'Public documentation update.' }
     } | ConvertTo-Json -Depth 5
     Set-Content -LiteralPath $eventPath -Value $invalidEvent
-    $invalidEventResult = Invoke-Checker -Messages @('docs: update guide') -SupplementalPolicy $supplemental -RequireSupplementalPolicy -UseEvent
-    Assert-True ($invalidEventResult.ExitCode -ne 0) 'invalid repository identity unexpectedly passed'
-    Assert-True ($invalidEventResult.Text -notmatch 'invalid/owner') 'invalid repository identity was exposed'
+    $invalidEventResult = @(& $shell -NoProfile -File $checker -PolicyPath $policy -CommitMessages @('docs: update guide') -SupplementalPolicyBase64 $supplemental -RequireSupplementalPolicy -OutputFormat json 2>&1)
+    Assert-True ($LASTEXITCODE -ne 0) 'invalid repository identity unexpectedly passed'
+    Assert-True (($invalidEventResult -join "`n") -notmatch 'invalid/owner') 'invalid repository identity was exposed'
   } finally {
     $env:GITHUB_EVENT_PATH = $previousEventPath
   }
@@ -129,19 +144,6 @@ try {
   Assert-True ($timeoutResult.Text -notmatch [regex]::Escape($timeoutValue)) 'regex timeout failure output exposed matched content'
 
   Write-Host 'Public PR metadata policy tests passed.' -ForegroundColor Green
-  exit 0
 } finally {
-  if (Test-Path -LiteralPath $tempRoot) {
-    $removed = $false
-    foreach ($attempt in 1..5) {
-      try {
-        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction Stop
-        $removed = $true
-        break
-      } catch {
-        Start-Sleep -Milliseconds 200
-      }
-    }
-    if (-not $removed -and (Test-Path -LiteralPath $tempRoot)) { Write-Warning 'Temporary metadata fixture cleanup was deferred by the host.' }
-  }
+  Remove-TestTempRoot
 }

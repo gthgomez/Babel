@@ -500,6 +500,16 @@ describe('wire: lease-aware dispatch composite', () => {
     assert.equal(allowed.decision, 'allow');
   });
 
+  test('no lease: explicit host fallback permits project-code runners', () => {
+    const allowed = decideWithLease(runCmd('npm test'), 'workspace_write', {
+      lease: null,
+      isolationAvailable: false,
+      hostFallbackAllowed: true,
+    });
+    assert.equal(allowed.decision, 'allow');
+    assert.equal(allowed.reasonCode, '');
+  });
+
   test('no lease: protected-branch push is denied', () => {
     const r = decideWithLease(runCmd('git push origin main'), 'workspace_write', { lease: null });
     assert.equal(r.decision, 'deny');

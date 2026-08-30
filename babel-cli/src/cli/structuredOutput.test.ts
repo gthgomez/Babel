@@ -550,7 +550,7 @@ describe('Babel Lite result output', () => {
     const human = stripAnsi(formatRunResultHuman(payload));
     assert.match(
       human,
-      /^Babel Ask Ready\n\nTarget:\n\/tmp\/babel-repo\n\nAnswer:\nBabel is a prompt operating system/,
+      /^Babel Ask Ready\n\nTarget:\n<BABEL_REPO_ROOT>\n\nAnswer:\nBabel is a prompt operating system/,
     );
     assert.deepEqual(payload['scope'], {
       project_root: '<BABEL_REPO_ROOT>',

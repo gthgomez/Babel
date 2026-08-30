@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "third-party-enterprise-blocked",
+  "name": "Third-Party Enterprise Policy Fixture",
+  "version": "0.1.0",
+  "description": "Public proof fixture used to verify enterprise trust-policy blocking.",
+  "trust_level": "local_mutating",
+  "tools": [],
+  "slash_commands": [],
+  "prompt_skills": [],
+  "mcp_servers": [],
+  "hooks": []
+}

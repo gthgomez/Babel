@@ -246,6 +246,7 @@ export async function runReportLane(context: AgentLaneContext): Promise<ReportLa
     ...(context.provider === 'mock' || context.provider === 'live'
       ? { provider: context.provider }
       : {}),
+    ...(context.model !== undefined ? { model: context.model } : {}),
     useDeterministicMock: useLocalMockReport,
     ...(context.toolStream !== undefined ? { toolStream: context.toolStream } : {}),
   });
@@ -289,6 +290,7 @@ export async function runReportLane(context: AgentLaneContext): Promise<ReportLa
         stage: 'planning',
         schemaName: 'LiteReportAnswerSchema',
         maxCliAttempts: 2,
+        ...(context.model !== undefined ? { model: context.model } : {}),
       });
   const schemaNormalizations = consumeLiteSchemaNormalizations();
   if (schemaNormalizations.length > 0) {

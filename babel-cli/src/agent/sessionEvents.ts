@@ -177,6 +177,14 @@ export type SessionEvent =
       route_receipt?: ModelRouteReceiptV1;
     })
   | (SessionEventBase & {
+      /** Secret-free, hashed provider failure evidence for one inference. */
+      kind: 'provider_failure_receipt';
+      inference_id: string;
+      provider: ProviderId;
+      model: string;
+      receipt: ProviderFailureReceiptV1;
+    })
+  | (SessionEventBase & {
       /** Content-free provider lifecycle phase for one exact inference. */
       kind: 'model_invocation_phase';
       inference_id: string;
@@ -206,15 +214,46 @@ export type SessionEvent =
       /** Upstream gateway provider identity, when exposed by the provider. */
       upstream_provider?: string | null;
       output_digest?: string | null;
+      failure_receipt?: {
+        inference_id: string;
+        provider: ProviderId;
+        model: string;
+        provider_request_id: string | null;
+        observed_upstream: string | null;
+        http_status: number | null;
+        api_error_code: string | null;
+        failure_class: string;
+        actual_attempt: number;
+        max_attempts: number;
+        stream: boolean;
+        failure_stage: 'request' | 'response' | 'stream' | 'response_normalization' | 'unknown';
+        inference_started: boolean;
+        partial_model_output: boolean;
+        tool_call_count: number;
+        requested_output_budget: number | null;
+        effective_output_budget: number | null;
+        wire_policy_hash: string | null;
+        execution_envelope_hash: string | null;
+        output_digest: string;
+        retryable: boolean;
+      };
+      failure_class?: string | null;
+      failure_stage?: 'request' | 'response' | 'stream' | 'response_normalization' | 'unknown' | null;
+      provider_request_id?: string | null;
+      api_error_code?: string | null;
+      http_status?: number | null;
+      actual_attempt?: number | null;
+      max_attempts?: number | null;
+      stream?: boolean;
+      inference_started?: boolean;
+      partial_model_output?: boolean;
+      retryable?: boolean;
+      tool_call_count?: number | null;
+      requested_output_budget?: number | null;
+      effective_output_budget?: number | null;
+      wire_policy_hash?: string | null;
+      execution_envelope_hash?: string | null;
       route_receipt?: ModelRouteReceiptV1;
-    })
-  | (SessionEventBase & {
-      /** Secret-free, hashed provider failure evidence for one inference. */
-      kind: 'provider_failure_receipt';
-      inference_id: string;
-      provider: ProviderId;
-      model: string;
-      receipt: ProviderFailureReceiptV1;
     })
   | (SessionEventBase & {
       /** Advertised/authorized/effective capability state for one inference. */
@@ -229,8 +268,6 @@ export type SessionEvent =
     })
   | (SessionEventBase & {
       kind: 'provider_retry_scheduled';
-      /** Exact model invocation whose retry sequence this event belongs to. */
-      inference_id?: string;
       provider: ProviderId;
       model: string;
       attempt: number;
@@ -239,8 +276,6 @@ export type SessionEvent =
     })
   | (SessionEventBase & {
       kind: 'provider_retry_settled';
-      /** Exact model invocation whose retry sequence this event belongs to. */
-      inference_id?: string;
       provider: ProviderId;
       model: string;
       attempt: number;
@@ -806,12 +841,7 @@ export function assertProviderRetryLifecycleCausality(
   subject: string,
 ): void {
   const sameRetry = (event: ProviderRetryLifecycleEvent): boolean =>
-    event.turn_id === candidate.turn_id &&
-    event.provider === candidate.provider &&
-    event.model === candidate.model &&
-    (candidate.inference_id === undefined
-      ? event.inference_id === undefined
-      : event.inference_id === candidate.inference_id);
+    event.turn_id === candidate.turn_id && event.provider === candidate.provider && event.model === candidate.model;
   const history = priorEvents.filter(
     (event): event is ProviderRetryLifecycleEvent => isProviderRetryLifecycleEvent(event) && sameRetry(event),
   );
@@ -1206,9 +1236,41 @@ export function recordModelResultDelivery(
     observed_model_id?: string | null;
     upstream_provider?: string | null;
     output_digest?: string | null;
+    failure_receipt?: Extract<SessionEvent, { kind: 'model_result_delivery' }>['failure_receipt'];
+    failure_class?: string | null;
+    failure_stage?: 'request' | 'response' | 'stream' | 'response_normalization' | 'unknown' | null;
+    provider_request_id?: string | null;
+    api_error_code?: string | null;
+    http_status?: number | null;
+    actual_attempt?: number | null;
+    max_attempts?: number | null;
+    stream?: boolean;
+    inference_started?: boolean;
+    partial_model_output?: boolean;
+    retryable?: boolean;
+    tool_call_count?: number | null;
+    requested_output_budget?: number | null;
+    effective_output_budget?: number | null;
+    wire_policy_hash?: string | null;
+    execution_envelope_hash?: string | null;
     route_receipt?: ModelRouteReceiptV1;
   },
 ): SessionEvent {
+  if (input.status === 'failed' && input.failure_receipt === undefined) {
+    const priorInput = log.events.find(
+      (event): event is Extract<SessionEvent, { kind: 'model_input_receipt' }> =>
+        event.kind === 'model_input_receipt' &&
+        event.turn_id === input.turn_id &&
+        event.inference_id === input.inference_id,
+    );
+    if (priorInput && (priorInput.provider !== input.provider || priorInput.sent_model_id !== input.model)) {
+      throw new Error('Invalid appended session event: model result delivery identity does not match its input receipt');
+    }
+    throw new Error('model result delivery failure requires a provider failure receipt');
+  }
+  if (input.status === 'delivered' && input.failure_receipt !== undefined) {
+    throw new Error('delivered model result cannot carry a provider failure receipt');
+  }
   return appendSessionEvent(log, {
     kind: 'model_result_delivery',
     turn_id: input.turn_id,
@@ -1223,6 +1285,41 @@ export function recordModelResultDelivery(
       ? { upstream_provider: input.upstream_provider }
       : {}),
     ...(input.output_digest !== undefined ? { output_digest: input.output_digest } : {}),
+    ...(input.failure_receipt !== undefined
+      ? { failure_receipt: structuredClone(input.failure_receipt) }
+      : {}),
+    ...(input.failure_class !== undefined ? { failure_class: input.failure_class } : {}),
+    ...(input.failure_stage !== undefined ? { failure_stage: input.failure_stage } : {}),
+    ...(input.provider_request_id !== undefined
+      ? { provider_request_id: input.provider_request_id }
+      : {}),
+    ...(input.api_error_code !== undefined ? { api_error_code: input.api_error_code } : {}),
+    ...(input.http_status !== undefined ? { http_status: input.http_status } : {}),
+    ...(input.actual_attempt !== undefined ? { actual_attempt: input.actual_attempt } : {}),
+    ...(input.max_attempts !== undefined ? { max_attempts: input.max_attempts } : {}),
+    ...(input.stream !== undefined ? { stream: input.stream } : {}),
+    ...(input.inference_started !== undefined
+      ? { inference_started: input.inference_started }
+      : {}),
+    ...(input.partial_model_output !== undefined
+      ? { partial_model_output: input.partial_model_output }
+      : {}),
+    ...(input.retryable !== undefined ? { retryable: input.retryable } : {}),
+    ...(input.tool_call_count !== undefined
+      ? { tool_call_count: input.tool_call_count }
+      : {}),
+    ...(input.requested_output_budget !== undefined
+      ? { requested_output_budget: input.requested_output_budget }
+      : {}),
+    ...(input.effective_output_budget !== undefined
+      ? { effective_output_budget: input.effective_output_budget }
+      : {}),
+    ...(input.wire_policy_hash !== undefined
+      ? { wire_policy_hash: input.wire_policy_hash }
+      : {}),
+    ...(input.execution_envelope_hash !== undefined
+      ? { execution_envelope_hash: input.execution_envelope_hash }
+      : {}),
     ...(input.route_receipt !== undefined
       ? { route_receipt: structuredClone(input.route_receipt) }
       : {}),
@@ -1255,7 +1352,6 @@ export function recordProviderRetryScheduled(
   log: SessionEventLog,
   input: {
     turn_id: string;
-    inference_id?: string;
     provider: ProviderId;
     model: string;
     attempt: number;
@@ -1271,7 +1367,6 @@ export function recordProviderRetrySettled(
   log: SessionEventLog,
   input: {
     turn_id: string;
-    inference_id?: string;
     provider: ProviderId;
     model: string;
     attempt: number;
@@ -1751,8 +1846,7 @@ export function parseSessionEventLog(
       model_input_receipt: ['inference_id', 'provider', 'requested_model_id', 'normalized_model_id', 'sent_model_id', 'input_digest', 'input_ref'],
       model_invocation_phase: ['inference_id', 'provider', 'model', 'phase'],
       capability_binding_receipt: ['inference_id', 'provider', 'capability', 'advertised', 'authorized', 'effective'],
-      model_result_delivery: ['inference_id', 'provider', 'model', 'status'],
-      provider_failure_receipt: ['inference_id', 'provider', 'model', 'receipt'],
+      model_result_delivery: ['inference_id', 'provider', 'model', 'status'], provider_failure_receipt: ['inference_id', 'provider', 'model', 'receipt'],
       provider_retry_scheduled: ['provider', 'model', 'attempt', 'reason', 'backoff_ms'],
       provider_retry_settled: ['provider', 'model', 'attempt', 'outcome'],
       tool_proposed: ['tool_call_id', 'tool_name', 'idempotency_key'],
@@ -1816,9 +1910,6 @@ export function parseSessionEventLog(
       throw new Error(`Invalid session event at line ${index + 1}: reconciliation is invalid`)
     }
     if (ev.kind === 'provider_retry_scheduled') {
-      if (ev.inference_id !== undefined && (typeof ev.inference_id !== 'string' || ev.inference_id.length === 0)) {
-        throw new Error(`Invalid session event at line ${index + 1}: provider retry inference_id is invalid`)
-      }
       if (!(PROVIDER_IDS as readonly string[]).includes(ev.provider as string) ||
         !['transport', 'timeout', 'rate_limit', 'server_error', 'stream_idle'].includes(ev.reason as string) ||
         !Number.isInteger(ev.attempt) || (ev.attempt as number) < 2 ||
@@ -1827,9 +1918,6 @@ export function parseSessionEventLog(
       }
     }
     if (ev.kind === 'provider_retry_settled') {
-      if (ev.inference_id !== undefined && (typeof ev.inference_id !== 'string' || ev.inference_id.length === 0)) {
-        throw new Error(`Invalid session event at line ${index + 1}: provider retry inference_id is invalid`)
-      }
       if (!(PROVIDER_IDS as readonly string[]).includes(ev.provider as string) ||
         !['succeeded', 'failed', 'cancelled'].includes(ev.outcome as string) ||
         !Number.isInteger(ev.attempt) || (ev.attempt as number) < 2) {
@@ -1892,6 +1980,126 @@ export function parseSessionEventLog(
           !/^[a-f0-9]{64}$/.test(ev.output_digest as string))
       ) {
         throw new Error(`Invalid session event at line ${index + 1}: model result delivery is invalid`)
+      }
+      const failureReceipt = ev.failure_receipt as Record<string, unknown> | undefined;
+      const isRecord = failureReceipt !== null &&
+        typeof failureReceipt === 'object' &&
+        !Array.isArray(failureReceipt);
+      const isNullableString = (value: unknown): boolean =>
+        value === null || typeof value === 'string';
+      const isNullableNonnegativeFiniteNumber = (value: unknown): boolean =>
+        value === null ||
+        (typeof value === 'number' && Number.isFinite(value) && value >= 0);
+      const isNullableSha256 = (value: unknown): boolean =>
+        value === null || (typeof value === 'string' && /^[a-f0-9]{64}$/.test(value));
+      if (failureReceipt !== undefined) {
+        const receiptFieldsValid =
+          isRecord &&
+          failureReceipt.inference_id === ev.inference_id &&
+          failureReceipt.provider === ev.provider &&
+          failureReceipt.model === ev.model &&
+          isNullableString(failureReceipt.provider_request_id) &&
+          isNullableString(failureReceipt.observed_upstream) &&
+          (failureReceipt.http_status === null ||
+            (Number.isInteger(failureReceipt.http_status) &&
+              (failureReceipt.http_status as number) >= 100 &&
+              (failureReceipt.http_status as number) <= 599)) &&
+          isNullableString(failureReceipt.api_error_code) &&
+          typeof failureReceipt.failure_class === 'string' &&
+          ['request', 'response', 'stream', 'response_normalization', 'unknown']
+            .includes(failureReceipt.failure_stage as string) &&
+          Number.isInteger(failureReceipt.actual_attempt) &&
+          Number.isInteger(failureReceipt.max_attempts) &&
+          (failureReceipt.actual_attempt as number) >= 1 &&
+          (failureReceipt.max_attempts as number) >= 1 &&
+          (failureReceipt.actual_attempt as number) <= (failureReceipt.max_attempts as number) &&
+          typeof failureReceipt.stream === 'boolean' &&
+          typeof failureReceipt.inference_started === 'boolean' &&
+          typeof failureReceipt.partial_model_output === 'boolean' &&
+          typeof failureReceipt.retryable === 'boolean' &&
+          Number.isInteger(failureReceipt.tool_call_count) &&
+          (failureReceipt.tool_call_count as number) >= 0 &&
+          isNullableNonnegativeFiniteNumber(failureReceipt.requested_output_budget) &&
+          isNullableNonnegativeFiniteNumber(failureReceipt.effective_output_budget) &&
+          isNullableSha256(failureReceipt.wire_policy_hash) &&
+          isNullableSha256(failureReceipt.execution_envelope_hash) &&
+          typeof failureReceipt.output_digest === 'string' &&
+          /^[a-f0-9]{64}$/.test(failureReceipt.output_digest) &&
+          failureReceipt.retryable === false;
+        if (!receiptFieldsValid || ev.status !== 'failed') {
+          throw new Error(`Invalid session event at line ${index + 1}: provider failure receipt is invalid`)
+        }
+      } else if (ev.status === 'failed') {
+        throw new Error(`Invalid session event at line ${index + 1}: failed model result is missing provider failure receipt`)
+      }
+      for (const [field, expectedType] of [
+        ['failure_class', 'string'],
+        ['failure_stage', 'string'],
+        ['provider_request_id', 'string'],
+        ['api_error_code', 'string'],
+      ] as const) {
+        const value = ev[field];
+        if (value !== undefined && value !== null && typeof value !== expectedType) {
+          throw new Error(`Invalid session event at line ${index + 1}: ${field} is invalid`)
+        }
+      }
+      for (const field of ['http_status', 'actual_attempt', 'max_attempts', 'tool_call_count'] as const) {
+        const value = ev[field];
+        if (value !== undefined && value !== null && (!Number.isInteger(value) || (value as number) < 0)) {
+          throw new Error(`Invalid session event at line ${index + 1}: ${field} is invalid`)
+        }
+      }
+      for (const field of ['stream', 'inference_started', 'partial_model_output', 'retryable'] as const) {
+        const value = ev[field];
+        if (value !== undefined && typeof value !== 'boolean') {
+          throw new Error(`Invalid session event at line ${index + 1}: ${field} is invalid`)
+        }
+      }
+      for (const [field, expectedType] of [
+        ['requested_output_budget', 'number'],
+        ['effective_output_budget', 'number'],
+      ] as const) {
+        const value = ev[field];
+        if (
+          value !== undefined && value !== null &&
+          (typeof value !== expectedType || !Number.isFinite(value as number) || (value as number) < 0)
+        ) {
+          throw new Error(`Invalid session event at line ${index + 1}: ${field} is invalid`)
+        }
+      }
+      for (const field of ['wire_policy_hash', 'execution_envelope_hash'] as const) {
+        const value = ev[field];
+        if (
+          value !== undefined && value !== null &&
+          (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value))
+        ) {
+          throw new Error(`Invalid session event at line ${index + 1}: ${field} is invalid`)
+        }
+      }
+      if (failureReceipt !== undefined) {
+        const pairedFields = [
+          ['failure_class', 'failure_class'],
+          ['failure_stage', 'failure_stage'],
+          ['provider_request_id', 'provider_request_id'],
+          ['api_error_code', 'api_error_code'],
+          ['http_status', 'http_status'],
+          ['actual_attempt', 'actual_attempt'],
+          ['max_attempts', 'max_attempts'],
+          ['stream', 'stream'],
+          ['inference_started', 'inference_started'],
+          ['partial_model_output', 'partial_model_output'],
+          ['retryable', 'retryable'],
+          ['tool_call_count', 'tool_call_count'],
+          ['requested_output_budget', 'requested_output_budget'],
+          ['effective_output_budget', 'effective_output_budget'],
+          ['wire_policy_hash', 'wire_policy_hash'],
+          ['execution_envelope_hash', 'execution_envelope_hash'],
+        ] as const;
+        for (const [eventField, receiptField] of pairedFields) {
+          if (ev[eventField] !== undefined && ev[eventField] !== failureReceipt[receiptField]) {
+            throw new Error(`Invalid session event at line ${index + 1}: ${eventField} does not match provider failure receipt`)
+          }
+        }
       }
       if (ev.route_receipt !== undefined) {
         try {
@@ -1962,11 +2170,21 @@ export function parseSessionEventLog(
       }
     }
     if (ev.kind === 'provider_failure_receipt') {
-      assertProviderFailureReceiptCausality(
-        events,
-        ev as unknown as ProviderFailureReceiptEvent,
-        `Invalid session event at line ${index + 1}`,
-      )
+      if (
+        !(PROVIDER_IDS as readonly string[]).includes(ev.provider as string) ||
+        typeof ev.inference_id !== 'string' || ev.inference_id.length === 0 ||
+        typeof ev.model !== 'string' || ev.model.length === 0 ||
+        typeof ev.receipt !== 'object' || ev.receipt === null || Array.isArray(ev.receipt)
+      ) {
+        throw new Error(`Invalid session event at line ${index + 1}: provider failure receipt is invalid`)
+      }
+      try {
+        validateProviderFailureReceipt(ev.receipt)
+      } catch (error) {
+        throw new Error(
+          `Invalid session event at line ${index + 1}: provider failure receipt is invalid: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
     }
     if (ev.kind === 'recovery_reconciled' &&
       (typeof ev.reconciliation_ref !== 'string' || !/^[A-Za-z0-9._:/#-]{1,160}$/.test(ev.reconciliation_ref))) {
@@ -2021,6 +2239,13 @@ export function parseSessionEventLog(
         `Invalid session event at line ${index + 1}`,
       )
     }
+    if (ev.kind === 'provider_failure_receipt') {
+      assertProviderFailureReceiptCausality(
+        events,
+        ev as unknown as ProviderFailureReceiptEvent,
+        `Invalid session event at line ${index + 1}`,
+      )
+    }
     if (ev.kind === 'recovery_reconciled') {
       assertRecoveryReconciliationCausality(
         events,
@@ -2047,9 +2272,6 @@ export function parseSessionEventLog(
       (event): event is Extract<SessionEvent, { kind: 'provider_retry_settled' }> =>
         event.kind === 'provider_retry_settled' && event.turn_id === scheduled.turn_id &&
         event.provider === scheduled.provider && event.model === scheduled.model &&
-        (scheduled.inference_id === undefined
-          ? event.inference_id === undefined
-          : event.inference_id === scheduled.inference_id) &&
         event.attempt === scheduled.attempt,
     );
     if (settlements.length !== 1) {

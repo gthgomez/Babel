@@ -15,8 +15,8 @@ foreach ($unsupported in @('-TaskId', '-RunId', '-ContractHash')) {
 }
 $gate = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot 'scripts/agent-pr-gate.ps1')
 if (-not $gate.Contains("[string]`$GitPath = ''")) { throw 'Base-rooted gate uses a platform-specific Git default.' }
-foreach ($required in @('reviewThreads\(first:100,after:\$after\)', 'pageInfo\{hasNextPage endCursor\}', 'review_threads_pagination_incomplete')) {
-  if ($gate -notmatch $required) { throw "Base-rooted gate is missing full review-thread pagination: $required" }
+foreach ($required in @('REVIEWED_HEAD_INPUT', 'reviewed_head_sha_required', 'Get-AgentProperty', 'status.*porcelain=v2')) {
+  if ($gate -notmatch $required) { throw "Base-rooted gate is missing exact-head/property-safe readiness logic: $required" }
 }
 if ($launcher -match 'BootstrapRepairAuthorized') { throw 'Generic trusted gate exposes bootstrap bypass.' }
 foreach ($required in @('PR -ne 121', 'ApprovedHeadSha', 'BaseSha', 'unauthorized path', 'trust root exists')) {

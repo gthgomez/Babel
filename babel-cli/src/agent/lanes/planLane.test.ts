@@ -8,10 +8,8 @@ import { describe, it } from 'node:test';
 import { runPlanLane } from './planLane.js';
 import { stripAnsi } from '../../ui/theme.js';
 
-const hasDeepSeekKey = !!process.env['DEEPSEEK_API_KEY'];
-
-describe('runPlanLane', () => {
-  it('uses DeepSeek Pro planning and writes artifacts without mutating repo source files', { skip: !hasDeepSeekKey }, async () => {
+describe('runPlanLane', { concurrency: false }, () => {
+  it('uses DeepSeek Pro planning and writes artifacts without mutating repo source files', { concurrency: false }, async () => {
     const repo = mkdtempSync(join(tmpdir(), 'babel-plan-lane-'));
     const source = join(repo, 'sample.txt');
     const originalFetch = globalThis.fetch;
@@ -21,13 +19,14 @@ describe('runPlanLane', () => {
     const beforeHash = createHash('sha256').update(readFileSync(source)).digest('hex');
     let requestedModel = '';
     try {
-      delete process.env['DEEPSEEK_API_KEY'];
+      process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
       process.env['DEEPINFRA_API_KEY'] = 'test-key';
       globalThis.fetch = (async (_input, init) => {
         const body = JSON.parse(String(init?.body ?? '{}')) as { model?: string };
         requestedModel = body.model ?? '';
         return new Response(
           JSON.stringify({
+            model: 'deepseek/deepseek-v4-flash-0731',
             choices: [
               {
                 message: {
@@ -127,18 +126,19 @@ describe('runPlanLane', () => {
     }
   });
 
-  it('normalizes NEED_MORE_CONTEXT typo and empty summary from live providers', { skip: !hasDeepSeekKey }, async () => {
+  it('normalizes NEED_MORE_CONTEXT typo and empty summary from live providers', { concurrency: false }, async () => {
     const repo = mkdtempSync(join(tmpdir(), 'babel-plan-lane-typo-'));
     writeFileSync(join(repo, 'README.md'), '# Sample\nA tiny repo.\n', 'utf-8');
     const originalFetch = globalThis.fetch;
     const originalDeepSeekKey = process.env['DEEPSEEK_API_KEY'];
     const originalDeepInfraKey = process.env['DEEPINFRA_API_KEY'];
     try {
-      delete process.env['DEEPSEEK_API_KEY'];
+      process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
       process.env['DEEPINFRA_API_KEY'] = 'test-key';
       globalThis.fetch = (async () =>
         new Response(
           JSON.stringify({
+            model: 'deepseek/deepseek-v4-flash-0731',
             choices: [
               {
                 message: {
@@ -189,7 +189,7 @@ describe('runPlanLane', () => {
     }
   });
 
-  it('normalizes object-shaped plan arrays from live providers', { skip: !hasDeepSeekKey }, async () => {
+  it('normalizes object-shaped plan arrays from live providers', { concurrency: false }, async () => {
     const repo = mkdtempSync(join(tmpdir(), 'babel-plan-lane-objects-'));
     const source = join(repo, 'sample.txt');
     const originalFetch = globalThis.fetch;
@@ -197,11 +197,12 @@ describe('runPlanLane', () => {
     const originalDeepInfraKey = process.env['DEEPINFRA_API_KEY'];
     writeFileSync(source, 'before\n', 'utf-8');
     try {
-      delete process.env['DEEPSEEK_API_KEY'];
+      process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
       process.env['DEEPINFRA_API_KEY'] = 'test-key';
       globalThis.fetch = (async () =>
         new Response(
           JSON.stringify({
+            model: 'deepseek/deepseek-v4-flash-0731',
             choices: [
               {
                 message: {
