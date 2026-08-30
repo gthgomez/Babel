@@ -132,6 +132,21 @@ export interface RunnerInvocationMetadata {
    * (P0-B: Pro reasoning is not silently disabled without a routing reason).
    */
   thinking_disabled_reason?: string | null;
+  /** Capability-aware execution provenance for qualification/campaign receipts. */
+  execution_envelope_hash?: string | null;
+  wire_policy_hash?: string | null;
+  requested_output_budget?: number | null;
+  effective_output_budget?: number | null;
+  actual_reasoning_tokens?: number | null;
+  normalized_finish_reason?: string | null;
+  failure_attribution?: string | null;
+  babel_attempt?: number | null;
+  openrouter_router_attempt?: number | null;
+  upstream_attempt?: number | null;
+  actual_endpoint_id?: string | null;
+  fallback_status?: 'none' | 'occurred' | 'unknown' | null;
+  router_metadata_hash?: string | null;
+  context_transformation_occurred?: boolean | null;
 }
 
 export type RunnerProgressState =
@@ -176,6 +191,10 @@ export interface ProviderInvocationStarted {
   delivered_tool_call_ids?: string[];
   /** Redacted context-preservation evidence for this exact inference. */
   context_manifest?: ContextManifestV1;
+  execution_envelope_hash?: string;
+  wire_policy_hash?: string;
+  requested_output_budget?: number | null;
+  effective_output_budget?: number | null;
 }
 
 export interface ProviderCapabilityBinding {
@@ -198,6 +217,12 @@ export interface ProviderInvocationCompleted {
   /** Upstream provider identity when the gateway exposes it. */
   upstream_provider?: string | null;
   output_digest?: string | null;
+  normalized_finish_reason?: string | null;
+  failure_attribution?: string | null;
+  actual_endpoint_id?: string | null;
+  fallback_status?: 'none' | 'occurred' | 'unknown' | null;
+  router_metadata_hash?: string | null;
+  openrouter_router_attempt?: number | null;
 }
 
 export type ProviderInvocationPhase =
@@ -230,7 +255,6 @@ export interface RunnerCallbacks {
   onInvocationStarted?: (event: ProviderInvocationStarted) => void;
   onInvocationCompleted?: (event: ProviderInvocationCompleted) => void;
   onInvocationPhase?: (event: ProviderInvocationPhaseEvent) => void;
-  /** Receives one secret-safe terminal receipt for each failed inference. */
   onProviderFailure?: (receipt: ProviderFailureReceiptV1) => void;
 }
 

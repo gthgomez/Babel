@@ -62,6 +62,11 @@ export interface VerificationSpecV1 {
   kind: string;
   verifier_id: string;
   command_hash?: string;
+  /** Executable identity is distinct from the human-readable strategy. */
+  executable_id?: string;
+  argv?: string[];
+  working_directory?: string;
+  environment_policy?: string;
   target?: string;
   execution_profile?: string;
   artifact_expectations?: string[];
@@ -341,6 +346,10 @@ export const TaskContractV1Schema = z
                   .string()
                   .regex(/^[0-9a-f]{32,64}$/)
                   .optional(),
+                executable_id: z.string().min(1).optional(),
+                argv: z.array(z.string()).min(1).optional(),
+                working_directory: z.string().min(1).optional(),
+                environment_policy: z.string().min(1).optional(),
                 target: z.string().min(1).optional(),
                 execution_profile: z.string().min(1).optional(),
                 artifact_expectations: z.array(z.string().min(1)).optional(),
@@ -409,6 +418,10 @@ export const TaskContractV1StrictSchema = TaskContractV1Schema.extend({
               .string()
               .regex(/^[0-9a-f]{32,64}$/)
               .optional(),
+            executable_id: z.string().min(1).optional(),
+            argv: z.array(z.string()).min(1).optional(),
+            working_directory: z.string().min(1).optional(),
+            environment_policy: z.string().min(1).optional(),
             target: z.string().min(1).optional(),
             execution_profile: z.string().min(1).optional(),
             artifact_expectations: z.array(z.string().min(1)).optional(),

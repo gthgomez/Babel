@@ -4,6 +4,8 @@ import type { ProviderId } from "./providerRegistry.js";
 
 /** Provider failure classes recorded by the live inference boundary. */
 export const PROVIDER_FAILURE_CLASSES = [
+  "HTTP_402",
+  "HTTP_408",
   "HTTP_429",
   "HTTP_4XX_OTHER",
   "HTTP_5XX",
@@ -53,6 +55,11 @@ export interface ProviderFailureReceiptV1 {
   tool_calls_emitted: number;
   task_verified: boolean | null;
   subsequent_recovery: boolean | null;
+  requested_output_budget?: number | null;
+  effective_output_budget?: number | null;
+  wire_policy_hash?: string | null;
+  execution_envelope_hash?: string | null;
+  output_digest?: string | null;
   receipt_hash: string;
 }
 
@@ -77,6 +84,11 @@ export interface ProviderFailureReceiptInput {
   toolCallsEmitted: number;
   taskVerified?: boolean | null;
   subsequentRecovery?: boolean | null;
+  requestedOutputBudget?: number | null;
+  effectiveOutputBudget?: number | null;
+  wirePolicyHash?: string | null;
+  executionEnvelopeHash?: string | null;
+  outputDigest?: string | null;
   receiptId?: string;
 }
 
@@ -119,6 +131,11 @@ export function buildProviderFailureReceipt(
     tool_calls_emitted: input.toolCallsEmitted,
     task_verified: input.taskVerified ?? null,
     subsequent_recovery: input.subsequentRecovery ?? null,
+    ...(input.requestedOutputBudget === undefined ? {} : { requested_output_budget: input.requestedOutputBudget }),
+    ...(input.effectiveOutputBudget === undefined ? {} : { effective_output_budget: input.effectiveOutputBudget }),
+    ...(input.wirePolicyHash === undefined ? {} : { wire_policy_hash: input.wirePolicyHash }),
+    ...(input.executionEnvelopeHash === undefined ? {} : { execution_envelope_hash: input.executionEnvelopeHash }),
+    ...(input.outputDigest === undefined ? {} : { output_digest: input.outputDigest }),
   };
   const receiptHash = createHash("sha256")
     .update(JSON.stringify(unsigned), "utf8")
@@ -181,6 +198,8 @@ export function normalizeProviderFailureClass(input: {
   stream?: boolean;
 }): ProviderFailureClass {
   const status = input.httpStatus ?? null;
+  if (status === 402) return "HTTP_402";
+  if (status === 408) return "HTTP_408";
   if (status === 429) return "HTTP_429";
   if (status !== null && status >= 400 && status < 500) return "HTTP_4XX_OTHER";
   if (status !== null && status >= 500) return "HTTP_5XX";

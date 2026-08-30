@@ -15,8 +15,9 @@ import {
 import { canonicalJson, sha256Canonical } from "../acceptance/canonical.js";
 import { redactEvidenceValue } from "../utils/redaction.js";
 import {
+  isTrustedExecutionReadPort,
   requiredCapabilityForAcceptanceType,
-  type TrustedExecutionRegistryV1,
+  type TrustedExecutionReadPortV1,
 } from "./trustedExecutionIdentity.js";
 
 export const EVIDENCE_GRAPH_SCHEMA_VERSION = 1 as const;
@@ -105,6 +106,7 @@ export type CompletionStatusV1 =
   | "UNVERIFIED"
   | "PARTIAL"
   | "FAILED"
+  | "BLOCKED"
   | "VERIFIED"
   | "UNKNOWN";
 
@@ -199,6 +201,33 @@ function verifierSpecError(
     data["target"] !== requirement.verification.target
   )
     return "evidence target does not match the frozen verifier";
+  for (const field of [
+    "executable_id",
+    "working_directory",
+    "environment_policy",
+  ] as const) {
+    if (
+      requirement.verification[field] !== undefined &&
+      data[field] !== requirement.verification[field]
+    )
+      return `evidence ${field} does not match the frozen verifier`;
+  }
+  if (requirement.verification.argv !== undefined) {
+    if (
+      !Array.isArray(data["argv"]) ||
+      canonicalJson(data["argv"]) !==
+        canonicalJson(requirement.verification.argv)
+    )
+      return "evidence argv does not match the frozen verifier";
+    if (
+      data["command_hash"] !==
+      sha256Canonical({
+        executable_id: requirement.verification.executable_id,
+        argv: requirement.verification.argv,
+      })
+    )
+      return "evidence command_hash is not bound to the executable argv";
+  }
   return undefined;
 }
 
@@ -274,30 +303,49 @@ function bindingError(
 export class EvidenceGraph {
   private readonly nodes: Map<string, EvidenceNode> = new Map();
   private readonly edges: Map<string, EvidenceEdge> = new Map();
+  private sealed = false;
 
   addNode(node: EvidenceNode): void {
+    if (this.sealed) throw new Error("Evidence graph is sealed and immutable.");
     if (this.nodes.has(node.id))
       throw new Error(`Evidence node already exists: ${node.id}`);
     this.nodes.set(node.id, { ...node, parents: [...node.parents] });
   }
 
   addEdge(edge: EvidenceEdge): void {
+    if (this.sealed) throw new Error("Evidence graph is sealed and immutable.");
     if (this.edges.has(edge.id))
       throw new Error(`Evidence edge already exists: ${edge.id}`);
     this.edges.set(edge.id, { ...edge });
   }
 
   getNode(id: string): EvidenceNode | undefined {
-    return this.nodes.get(id);
+    const node = this.nodes.get(id);
+    return node && this.sealed ? { ...node, parents: [...node.parents] } : node;
   }
   getNodesByType(type: EvidenceNodeType): EvidenceNode[] {
-    return Array.from(this.nodes.values()).filter((node) => node.type === type);
+    const nodes = Array.from(this.nodes.values()).filter(
+      (node) => node.type === type,
+    );
+    return this.sealed
+      ? nodes.map((node) => ({ ...node, parents: [...node.parents] }))
+      : nodes;
   }
-  getNodesMap(): Map<string, EvidenceNode> {
-    return this.nodes;
+  getNodesMap(): ReadonlyMap<string, EvidenceNode> {
+    return new Map(
+      Array.from(this.nodes.entries()).map(([id, node]) => [
+        id,
+        this.sealed ? { ...node, parents: [...node.parents] } : node,
+      ]),
+    );
   }
   getEdges(): EvidenceEdge[] {
-    return Array.from(this.edges.values());
+    return Array.from(this.edges.values()).map((edge) => ({ ...edge }));
+  }
+
+  /** Seal an admitted graph so later evidence is represented by a new graph. */
+  seal(): void {
+    this.sealed = true;
   }
 
   /** Validate graph references without converting malformed data into success. */
@@ -394,6 +442,7 @@ export function serializeEvidenceGraphV1(input: {
     nodes: redactEvidenceValue(Array.from(input.graph.getNodesMap().values())),
     edges: input.graph.getEdges(),
   };
+  input.graph.seal();
   const serialized = `${canonicalJson(document)}\n`;
   if (Buffer.byteLength(serialized, "utf8") > EVIDENCE_GRAPH_MAX_BYTES)
     throw new Error(
@@ -441,10 +490,21 @@ export function evaluateCompletionGateV1(input: {
   repository: string;
   candidate_sha: string;
   run_id: string;
-  trusted_execution: TrustedExecutionRegistryV1;
+  trusted_execution: TrustedExecutionReadPortV1;
   project_root?: string;
   acceptance_bundle?: AcceptanceBundleV1;
 }): CompletionEvaluationV1 {
+  if (!isTrustedExecutionReadPort(input.trusted_execution)) {
+    return {
+      status: "UNKNOWN",
+      verified: false,
+      satisfied_requirements: [],
+      missing_requirements: input.contract.acceptance
+        .filter((requirement) => requirement.required)
+        .map((requirement) => requirement.id),
+      errors: ["trusted_execution: unbranded or caller-fabricated read port"],
+    };
+  }
   const contractErrors = validateTaskContractV1ForCompletion(input.contract);
   if (contractErrors.length > 0) {
     return {
@@ -481,6 +541,47 @@ export function evaluateCompletionGateV1(input: {
   const missing: string[] = [];
   let hasUnknown = false;
   let hasContradiction = false;
+
+  const currentBreakerBlockers = Array.from(
+    input.graph.getNodesMap().values(),
+  ).filter((node) => {
+    if (
+      node.type !== "review_finding" ||
+      node.producer_identity?.role !== "breaker"
+    )
+      return false;
+    if (
+      bindingError(node.binding, {
+        taskId: input.contract.task_id,
+        runId: input.run_id,
+        contractHash: input.contract.contract_hash,
+        repository: input.repository,
+        baseSha: input.contract.base_sha,
+        candidateSha: input.candidate_sha,
+      })
+    )
+      return false;
+    const data = node.data as Record<string, unknown> | null;
+    const severity = String(data?.["severity"] ?? "").toLowerCase();
+    const status = String(data?.["status"] ?? "").toLowerCase();
+    return (
+      (severity === "high" || severity === "critical") &&
+      !["resolved", "dismissed"].includes(status)
+    );
+  });
+  if (currentBreakerBlockers.length > 0) {
+    return {
+      status: "BLOCKED",
+      verified: false,
+      satisfied_requirements: [],
+      missing_requirements: input.contract.acceptance
+        .filter((requirement) => requirement.required)
+        .map((requirement) => requirement.id),
+      errors: currentBreakerBlockers.map(
+        (node) => `${node.id}: unresolved high-severity Breaker finding`,
+      ),
+    };
+  }
 
   for (const requirement of required) {
     const candidates = Array.from(input.graph.getNodesMap().values()).filter(

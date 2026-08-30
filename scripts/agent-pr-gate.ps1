@@ -12,6 +12,9 @@ param(
   [string]$IndependentReviewReceiptPath = '',
   [string]$ReviewChallengeLedgerPath = '',
   [string]$BuilderIdentity = 'codex-implementation',
+  [string]$TaskId = '',
+  [string]$RunId = '',
+  [string]$ContractHash = '',
   [switch]$MergeAuthorized,
   [switch]$AuditOnly,
   [switch]$BootstrapRepairAuthorized,
@@ -158,7 +161,7 @@ function Read-AgentIndependentReceipt {
   if (-not [IO.Path]::IsPathRooted($ledgerPath)) { $ledgerPath = Join-Path $resolvedRepoRoot $ledgerPath }
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return [pscustomobject]@{ path = $path; valid = $false; errors = @('independent_review_receipt_missing') } }
   try { $receipt = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json } catch { return [pscustomobject]@{ path = $path; valid = $false; errors = @('independent_review_receipt_malformed') } }
-  $validation = Test-AgentIndependentReviewReceipt -Receipt $receipt -Repository $ExpectedRepository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -BuilderIdentity $BuilderIdentity
+  $validation = Test-AgentIndependentReviewReceipt -Receipt $receipt -Repository $ExpectedRepository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -BuilderIdentity $BuilderIdentity -TaskId $TaskId -RunId $RunId -ContractHash $ContractHash
   $errors = @($validation.errors)
   if (-not [bool]$validation.valid) { return [pscustomobject]@{ path = $path; valid = $false; errors = $errors } }
   $keySpec = '{0}:config/independent-review-keys.json' -f $BaseSha

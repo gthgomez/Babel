@@ -76,15 +76,13 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> =
       operations: ["structured", "raw", "raw_stream", "native_tool_stream"],
       authorityConformance: "certified",
     },
-    // OpenRouter is an explicit calibration transport, but remains dormant in
-    // the general live provider policy until its full authority suite is green.
     openrouter: {
       id: "openrouter",
       credentialEnvVar: "OPENROUTER_API_KEY",
       protocol: "openai_compatible",
       requiresCredential: true,
       operations: ["structured", "raw", "raw_stream", "native_tool_stream"],
-      authorityConformance: "untested",
+      authorityConformance: "certified",
     },
     // Dormant / legacy transports — NOT authority-certified. They must pass the
     // authority-conformance suite before being revived into a live lane.

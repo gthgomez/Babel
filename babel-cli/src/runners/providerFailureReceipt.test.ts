@@ -70,6 +70,22 @@ test("provider failure receipts are hashed and secret-safe", () => {
   );
 });
 
+test('safe retry policy stops when the configured attempt budget is exhausted', () => {
+  const cases = [
+    { httpStatus: 429, failureClass: 'HTTP_429' as const, attempt: 1, maximumAttempts: 2, expected: true },
+    { httpStatus: 429, failureClass: 'HTTP_429' as const, attempt: 2, maximumAttempts: 2, expected: false },
+    { httpStatus: 500, failureClass: 'HTTP_5XX' as const, attempt: 1, maximumAttempts: 3, expected: true },
+    { httpStatus: 500, failureClass: 'HTTP_5XX' as const, attempt: 3, maximumAttempts: 3, expected: false },
+  ];
+  for (const testCase of cases) {
+    assert.equal(
+      isSafeProviderRetry({ ...testCase, partialModelOutput: false }),
+      testCase.expected,
+      `${testCase.httpStatus} attempt ${testCase.attempt}/${testCase.maximumAttempts}`,
+    );
+  }
+});
+
 test("provider failure receipts are causally linked in the durable session log", () => {
   const receipt = buildProviderFailureReceipt({
     provider: "openrouter",

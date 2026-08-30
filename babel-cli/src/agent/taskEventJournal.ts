@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
+  closeSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -41,6 +44,8 @@ export interface TaskEventV1 {
   event_version: typeof TASK_EVENT_SCHEMA_VERSION;
   event_id: string;
   task_id: string;
+  run_id: string;
+  contract_hash: string;
   sequence: number;
   timestamp: string;
   actor: string;
@@ -53,7 +58,14 @@ export interface TaskEventV1 {
 
 export interface TaskEventJournalState {
   task_id: string;
+  run_id: string;
+  contract_hash: string;
   events: TaskEventV1[];
+}
+
+export interface TaskEventJournalContextV1 {
+  run_id: string;
+  contract_hash: string;
 }
 
 const SECRET_KEY =
@@ -107,6 +119,8 @@ function checkEvent(
   event: TaskEventV1,
   previous: TaskEventV1 | undefined,
   expectedTaskId: string,
+  expectedRunId: string,
+  expectedContractHash: string,
   expectedSequence: number,
 ): string[] {
   const errors: string[] = [];
@@ -114,6 +128,9 @@ function checkEvent(
     errors.push("event_version");
   if (!event.event_id || !event.task_id || event.task_id !== expectedTaskId)
     errors.push("identity");
+  if (!event.run_id || event.run_id !== expectedRunId) errors.push("run_id");
+  if (!event.contract_hash || event.contract_hash !== expectedContractHash)
+    errors.push("contract_hash");
   if (event.sequence !== expectedSequence) errors.push("sequence");
   if (!event.timestamp || Number.isNaN(Date.parse(event.timestamp)))
     errors.push("timestamp");
@@ -145,6 +162,8 @@ export function validateTaskEventJournal(
 ): string[] {
   const errors: string[] = [];
   if (!value.task_id.trim()) errors.push("task_id");
+  if (!value.run_id.trim()) errors.push("run_id");
+  if (!value.contract_hash.trim()) errors.push("contract_hash");
   const ids = new Set<string>();
   let previous: TaskEventV1 | undefined;
   value.events.forEach((event, index) => {
@@ -152,9 +171,14 @@ export function validateTaskEventJournal(
       errors.push(`events.${index}.event_id_duplicate`);
     ids.add(event.event_id);
     errors.push(
-      ...checkEvent(event, previous, value.task_id, index).map(
-        (error) => `events.${index}.${error}`,
-      ),
+      ...checkEvent(
+        event,
+        previous,
+        value.task_id,
+        value.run_id,
+        value.contract_hash,
+        index,
+      ).map((error) => `events.${index}.${error}`),
     );
     previous = event;
   });
@@ -164,8 +188,17 @@ export function validateTaskEventJournal(
 export class TaskEventJournal {
   private readonly state: TaskEventJournalState;
 
-  constructor(taskId: string, events: readonly TaskEventV1[] = []) {
-    this.state = { task_id: taskId, events: [...events] };
+  constructor(
+    taskId: string,
+    context: TaskEventJournalContextV1,
+    events: readonly TaskEventV1[] = [],
+  ) {
+    this.state = {
+      task_id: taskId,
+      run_id: context.run_id,
+      contract_hash: context.contract_hash,
+      events: [...events],
+    };
     const errors = validateTaskEventJournal(this.state);
     if (errors.length > 0)
       throw new Error(`Invalid task event journal: ${errors.join(", ")}`);
@@ -191,6 +224,8 @@ export class TaskEventJournal {
       event_version: TASK_EVENT_SCHEMA_VERSION,
       event_id: input.event_id ?? randomUUID(),
       task_id: this.state.task_id,
+      run_id: this.state.run_id,
+      contract_hash: this.state.contract_hash,
       sequence: this.state.events.length,
       timestamp: input.timestamp ?? new Date().toISOString(),
       actor: input.actor,
@@ -204,6 +239,8 @@ export class TaskEventJournal {
       event,
       this.state.events.at(-1),
       this.state.task_id,
+      this.state.run_id,
+      this.state.contract_hash,
       this.state.events.length,
     );
     if (errors.length > 0)
@@ -225,7 +262,13 @@ export class TaskEventJournal {
     const temporaryPath = `${path}.${randomUUID()}.tmp`;
     mkdirSync(dirname(path), { recursive: true });
     try {
-      writeFileSync(temporaryPath, this.serialize(), "utf8");
+      const fd = openSync(temporaryPath, "w");
+      try {
+        writeFileSync(fd, this.serialize(), "utf8");
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
       renameSync(temporaryPath, path);
     } finally {
       try {
@@ -237,14 +280,21 @@ export class TaskEventJournal {
   }
 }
 
-export function createTaskEventJournal(taskId: string): TaskEventJournal {
+export function createTaskEventJournal(
+  taskId: string,
+  context: TaskEventJournalContextV1,
+): TaskEventJournal {
   if (!taskId.trim()) throw new Error("Task event journal requires a task_id");
-  return new TaskEventJournal(taskId);
+  if (!context.run_id.trim() || !context.contract_hash.trim())
+    throw new Error("Task event journal requires run_id and contract_hash");
+  return new TaskEventJournal(taskId, context);
 }
 
 export function parseTaskEventJournal(
   raw: string,
   expectedTaskId?: string,
+  expectedRunId?: string,
+  expectedContractHash?: string,
 ): TaskEventJournal {
   const events: TaskEventV1[] = [];
   for (const [index, line] of raw.split(/\r?\n/).entries()) {
@@ -263,12 +313,27 @@ export function parseTaskEventJournal(
   }
   const taskId = expectedTaskId ?? events[0]?.task_id;
   if (!taskId) throw new Error("Task event journal has no task_id");
-  return new TaskEventJournal(taskId, events);
+  const runId = expectedRunId ?? events[0]?.run_id;
+  const contractHash = expectedContractHash ?? events[0]?.contract_hash;
+  if (!runId || !contractHash)
+    throw new Error("Task event journal has no run_id or contract_hash");
+  return new TaskEventJournal(
+    taskId,
+    { run_id: runId, contract_hash: contractHash },
+    events,
+  );
 }
 
 export function loadTaskEventJournal(
   path: string,
   expectedTaskId?: string,
+  expectedRunId?: string,
+  expectedContractHash?: string,
 ): TaskEventJournal {
-  return parseTaskEventJournal(readFileSync(path, "utf8"), expectedTaskId);
+  return parseTaskEventJournal(
+    readFileSync(path, "utf8"),
+    expectedTaskId,
+    expectedRunId,
+    expectedContractHash,
+  );
 }

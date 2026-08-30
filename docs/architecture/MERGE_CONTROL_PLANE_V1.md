@@ -17,7 +17,7 @@ record:
 - PR state: open, non-draft, same-repository, mergeable, and clean merge state
 - repository policy: the active `protect-main` ruleset read from GitHub
 - CI: required contexts resolved only from the exact head with workflow authority
-- technical review: an exact-head `independent_review_receipt_v1` for HIGH and
+- technical review: an exact-head signed `independent_review_receipt_v2` for HIGH and
   CRITICAL risk tiers
 - merge authority: an explicit current-task authorization switch, never inferred
   from CI, a review receipt, PR text, or agent output
@@ -67,7 +67,8 @@ For each required context the resolver:
 3. ignores non-authoritative duplicate twins;
 4. requires check identity, timestamps, and workflow lineage;
 5. selects the latest authoritative execution deterministically by timestamps,
-   attempt, run ID, and check ID;
+   numeric attempt, numeric run ID, numeric check ID, and stable string
+   tie-breakers;
 6. treats a later failure as failure, a later success as success, and pending as
    blocked; and
 7. fails closed for missing or ambiguous authority.
@@ -85,20 +86,33 @@ misleading skipped twins for ordinary validation contexts.
 The current receipt shape is:
 
 ```text
-schema_version: 1
-kind: independent_review_receipt_v1
-repository, pr_number, base_sha, head_sha
-reviewer_id, reviewer_class, review_mode, reviewed_at
-scope[], findings[], blocking_findings[], verdict, artifact_hash, builder_id
+schema_version: 2
+kind: independent_review_receipt_v2
+repository, pr_number, task_id, run_id, contract_hash, base_sha, head_sha
+reviewer_id, reviewer_class, review_mode, reviewed_at, challenge_id, builder_id
+reviewed_scope, verdict, blocking_findings, authority_provenance, signature
 ```
 
-`artifact_hash` is the SHA-256 of the canonical JSON payload with
-`artifact_hash` omitted. The receipt must be exact-head and exact-base bound,
-have a non-empty scope, have no blocking findings, use `APPROVE`, and identify a
-reviewer distinct from the builder. This is a structured repository-local or
-agent-generated receipt, not a cryptographic signature and not user merge
-authority. A future signed reviewer can replace the receipt without changing the
-gate dimensions.
+The receipt is signed by the supervisor-owned independent review lane with a
+reviewer Ed25519 key. Its public verification key is loaded from the immutable
+PR base; candidate-controlled key registries are not trusted. A separate
+supervisor Ed25519 key signs each durable challenge state, so a reviewer or
+builder cannot mint a challenge by writing a record and recomputing the plain
+state hash. The consumed record stores the hash of the one signed receipt. The
+trusted verifier checks both immutable-base registries, the base-rooted
+verifier implementation, the supervisor state signature, and the ledger
+binding. Ordinary forgery, expiry, revocation, and state rollback attempts fail
+closed; protection against restoring an older whole file still depends on the
+trusted supervisor's append-only storage boundary.
+The receipt must be exact-head and exact-base bound, have a non-empty explicit
+file/repository scope, have no blocking findings, use `APPROVE`, and identify a
+reviewer distinct from the builder. Signature verification authenticates the
+receipt to an authorized review key; it does not by itself establish that the
+reviewer was substantively correct or grant merge authority. The branch's
+empty key registry is intentionally fail-closed until an operator provisions
+trusted public keys through the one-time bootstrap transition. The generic gate
+cannot invoke bootstrap mode; the bounded operator script requires PR 121, an
+exact approved head, the pre-root base, and an exact path allowlist.
 
 Initial policy: LOW may use CI plus exact-head review under repository policy;
 MEDIUM is policy-dependent; HIGH and CRITICAL require an independent exact-head
@@ -106,13 +120,20 @@ receipt; CRITICAL also requires explicit current-task merge authority.
 
 ## Trusted execution ownership
 
-The `TrustedExecutionRegistryV1` used by V1 completion evaluation is an
-orchestrator-owned capability. Candidate or builder execution may submit evidence
-through a narrow interface, but may not create, populate, replace, or mutate the
-authoritative registry. Serialized evidence fields are claims to be checked
-against that registry, never a source of registry authority. The current V1
-implementation keeps mutating workers disabled; the ownership boundary is
-documented so later sandbox work cannot accidentally reverse it.
+The trusted execution authority is created and restored only by the
+`src/authority/` supervisor module. Consumers receive a branded read-only port;
+serialized evidence fields are claims checked against that port, never a source
+of registry authority. Assignment state is durable, hash-checked, task/run/
+contract-bound, and restored through the supervisor bootstrap. The module
+boundary is enforced for normal package consumers; OS-level process isolation
+and external attestation remain deployment responsibilities. Same-process
+hostile code can still load source files absent from package exports, so
+AUTH-001 is a normal-consumer boundary rather than a complete hostile-process
+boundary. Mutating workers remain disabled.
+
+Review-thread pagination is fail-closed: all pages are fetched, and a missing
+cursor when `hasNextPage` is true is unreadable rather than resolved. The gate
+does not report a complete result from a truncated 100-item page.
 
 ## Closure reporting
 

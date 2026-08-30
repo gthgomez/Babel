@@ -95,7 +95,10 @@ export function writeAutonomousSWEArtifactsV1(input: {
     }),
   );
   const acceptanceBundle = buildAcceptanceBundleV1({ taskContract });
-  const journal = createTaskEventJournal(taskContract.task_id);
+  const journal = createTaskEventJournal(taskContract.task_id, {
+    run_id: input.run_id,
+    contract_hash: taskContract.contract_hash,
+  });
   const timestamp = taskContract.created_at;
   journal.append({
     event_type: "task.created",

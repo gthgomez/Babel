@@ -84,8 +84,14 @@ jobs:
       - name: Typecheck CLI
         run: npm run typecheck
         working-directory: babel-cli
+      - name: Run autonomous SWE trust bootstrap tests
+        run: npm run test:autonomous-swe-trust
+        working-directory: babel-cli
       - name: Build CLI
         run: npm run build
+        working-directory: babel-cli
+      - name: Run provider hardening suite
+        run: npm run test:provider-hardening
         working-directory: babel-cli
       - name: Install pinned Playwright Chromium
         run: npx --no-install playwright install --with-deps chromium
@@ -127,8 +133,14 @@ jobs:
       - name: Typecheck CLI
         run: npm run typecheck
         working-directory: babel-cli
+      - name: Run autonomous SWE trust bootstrap tests
+        run: npm run test:autonomous-swe-trust
+        working-directory: babel-cli
       - name: Build CLI
         run: npm run build
+        working-directory: babel-cli
+      - name: Run provider hardening suite
+        run: npm run test:provider-hardening
         working-directory: babel-cli
       - name: Check harness architecture package
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-harness-architecture.ps1

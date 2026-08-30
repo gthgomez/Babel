@@ -5443,7 +5443,11 @@ export class ChatEngine {
    *  When no model is configured, uses the policy default tier instead of
    *  a hardcoded fallback. Surfaces missing-API-key errors with clear
    *  diagnostics and falls back across providers when possible. */
-  private resolveDeliberationRunner(): DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner {
+  private resolveDeliberationRunner():
+    | DeepInfraApiRunner
+    | DeepSeekApiRunner
+    | OllamaApiRunner
+    | OpenRouterApiRunner {
     if (!this.deliberationRunner) {
       const provider = this.modelPolicy?.provider;
       const modelId = this.modelPolicy?.providerModelId;
@@ -5871,7 +5875,7 @@ export class ChatEngine {
    * appendSystemPrompt, projectRoot).
    */
   private shouldUseNativeTools(
-    runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner,
+    runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner,
   ): boolean {
     // Ollama models generally don't support native OpenAI tool calling.
     // The legacy JSON path handles tool use via prompt formatting instead.
@@ -5898,7 +5902,7 @@ export class ChatEngine {
    * Single-turn deliberation — native tool_use when supported, else legacy JSON parse.
    */
   private async deliberateTurn(
-    runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner,
+    runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner,
     promptOrMessages: string | ProviderMessage[],
     useNativeTools: boolean,
     callbacks: ChatCallbacks,

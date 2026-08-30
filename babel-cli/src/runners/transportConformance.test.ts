@@ -70,6 +70,7 @@ const API_TRANSPORT_MODULES = [
   'geminiApi.ts',
   'groqApi.js',
   'openRouterApi.ts',
+  'openAiCompatibleApi.ts',
   'openCodeApi.ts',
   'providerMessages.ts',
   'providerNormalize.ts',
@@ -133,16 +134,20 @@ const ADAPTER_INDEX: Readonly<Record<ProviderId, { module: string; adapterClass:
 };
 
 const ADAPTER_MODULE_OF_CLASS: Readonly<Record<string, { module: string }>> = Object.fromEntries(
-  Object.values(ADAPTER_INDEX).map((entry) => [entry.adapterClass, { module: entry.module }]),
+  [
+    ...Object.values(ADAPTER_INDEX).map((entry) => [entry.adapterClass, { module: entry.module }] as const),
+    ['OpenAICompatibleApiRunner', { module: 'openAiCompatibleApi.ts' }] as const,
+  ],
 );
 
-/** Adapter inheritance (OpenRouter/Ollama/OpenCode inherit the DeepInfra implementation). */
+/** Adapter inheritance (OpenRouter uses the neutral transport; legacy wrappers retain compatibility). */
 const CLASS_EXTENDS: Readonly<Record<string, string | null>> = {
   DeepSeekApiRunner: null,
-  DeepInfraApiRunner: null,
+  DeepInfraApiRunner: 'OpenAICompatibleApiRunner',
   OllamaApiRunner: 'DeepInfraApiRunner',
-  OpenRouterApiRunner: 'DeepInfraApiRunner',
+  OpenRouterApiRunner: 'OpenAICompatibleApiRunner',
   OpenCodeApiRunner: 'DeepInfraApiRunner',
+  OpenAICompatibleApiRunner: null,
   OpenAiApiRunner: null,
   GeminiApiRunner: null,
   ApiFallbackRunner: null,

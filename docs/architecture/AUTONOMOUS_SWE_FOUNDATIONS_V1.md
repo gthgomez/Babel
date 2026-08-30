@@ -82,12 +82,15 @@ recording. Escrow is an additive access-boundary primitive.
 ## Durable task events
 
 `babel-cli/src/agent/taskEventJournal.ts` provides a task-level JSONL journal
-with schema version, durable task identity, contiguous sequence, payload hash,
-previous-event hash, and event hash. It covers task/contract/plan/assignment,
-execution, tool, artifact, claim, verification, challenge, failure, and
-terminal events. Parsing validates schema, sequence, task identity, payload
-size, secret-like fields, and the full hash chain. Saving uses a temporary file
-and atomic rename; reload rejects corruption rather than creating success.
+with schema version, durable task/run/contract identity, contiguous sequence,
+payload hash, previous-event hash, and event hash. It covers
+task/contract/plan/assignment, execution, tool, artifact, claim, verification,
+challenge, failure, and terminal events. Parsing validates schema, sequence,
+task/run/contract identity, payload size, secret-like fields, and the full hash
+chain. Saving fsyncs a temporary file before atomic rename; reload rejects
+corruption rather than creating success. This is tamper-evident durability,
+not authenticated history: the current process/storage boundary does not yet
+provide an external signing anchor.
 
 This task journal complements Babel's existing `SessionEventV1` and
 hash-linked `episode-events.jsonl`: session events remain the runtime lifecycle
@@ -105,12 +108,16 @@ Each acceptance requirement retains its human-readable
 Certifying evidence is bound to that spec's canonical hash and verifier ID;
 matching a requirement ID with an unrelated passing test is insufficient.
 
-`TrustedExecutionRegistryV1` is the orchestrator-owned producer boundary. It
-records task/run/contract association, endpoint, role, execution domain,
-capabilities, and assignment time. The evidence node may reference that
-assignment but cannot self-create or relabel it. Builder identities cannot be
-assigned as certifying producers. Evidence without a matching trusted
-assignment, capability, role, domain, task, contract, or run is rejected.
+Trusted execution is split between `src/authority/` and the public evidence
+module. The trusted supervisor owns assignment, revocation, completion, and
+persistence; workers receive only a branded read port. The authority module and
+its constructor are excluded from the package export map, and the public
+evidence module does not export an issuer or read-port constructor. Builder
+identities cannot be assigned as certifying producers. Evidence without a
+matching active assignment, capability, role, domain, task, contract, or run is
+rejected. This is a package/module access boundary, not an OS sandbox or
+cryptographic attestation boundary; a compromised process that bypasses the
+deployment boundary remains out of scope.
 
 `evaluateCompletionGateV1` is deterministic and deliberately narrow. Required
 acceptance requirements can be satisfied only by current, typed passing
@@ -125,11 +132,68 @@ Those nodes require a structured verifier/observer/system producer identity; a
 free-form role label is not an identity credential. Builder claims, critic
 approvals, majority agreement, missing provenance, stale base/candidate SHA,
 failed tests, and contradictory findings cannot certify completion. Outcomes are
-`UNVERIFIED`, `PARTIAL`, `FAILED`, `VERIFIED`, or `UNKNOWN`.
+`UNVERIFIED`, `PARTIAL`, `FAILED`, `BLOCKED`, `VERIFIED`, or `UNKNOWN`.
 
 The existing revision-bound receipt and acceptance V0 evaluators remain in
 place for current callers; the V1 gate adds a task/contract/SHA-bound primitive
 without changing normal CLI semantics.
+
+## PR-B trust and durability closure
+
+Trusted execution assignments are persisted as a versioned canonical document
+with per-record and state hashes. Writes fsync a temporary file before rename.
+Reload validates schema, hashes, duplicate keys, known capabilities, and
+optional task/run/contract expectations; malformed, truncated, tampered,
+widened, or incompatible state fails closed. These hashes provide integrity and
+tamper evidence, not independent authentication of the writer.
+
+Revision-bound evidence requires an explicit non-empty `files` scope or an
+explicit `repository` scope. File scopes are canonicalized, root-contained,
+duplicate-free, and matched exactly by their file hashes. Repository scope is
+represented by its own kind and is never inferred from an empty file list.
+Required Git mode fails when the revision cannot be established; optional Git
+mode is an explicit verifier choice. Deleted files are represented as
+`deleted`; renamed files are a new canonical scope and make the old receipt
+stale. The composite hash is checked rather than trusted from JSON alone.
+
+Independent review uses `independent_review_receipt_v2`. A supervisor review
+lane issues a single-use challenge whose current state is signed by a dedicated
+supervisor Ed25519 key. The reviewer signs the receipt with a separate reviewer
+key. The merge gate verifies both keys against public registries anchored to the
+immutable PR base, not the candidate branch. Receipts bind repository,
+PR, task, run, contract, base, head, reviewer class/mode, builder, scope,
+timestamp, challenge, verdict, findings, and authority provenance. The
+challenge ledger is a durable canonical document with atomic replacement,
+state hashing, explicit `ISSUED`/`CONSUMED`/`EXPIRED`/`REVOKED` status, signed
+state transitions, and a signed-receipt hash on consumed records. The trusted
+verifier validates the ledger binding, supervisor state signatures, and receipt
+signature. A public key must be provisioned by the trusted review-lane owner;
+the empty registry in this branch intentionally does not authorize any reviewer
+until the bootstrap transition. Signed records prevent rehash-and-rewrite
+attacks; rollback detection still requires the supervisor's append-only storage
+boundary and is not claimed from a plain file hash alone.
+
+The Breaker lane is executable as a read-only contract with inspection/search
+and allowed verification capabilities, no credentials, no publication, and no
+mutation. It returns structured findings or `UNKNOWN`. A current unresolved
+HIGH/CRITICAL Breaker finding produces `BLOCKED`; the Breaker never receives
+merge authority. `executeIsolatedBreakerProcessV1` runs the permitted command
+in a separate process against a disposable snapshot, strips secrets from its
+environment, and fingerprints the snapshot before and after execution. This is
+a practical process boundary, not a container, ACL, network namespace, or OS
+attestation; the current V1 adapter cannot claim full hostile-process isolation.
+The legacy callback helper remains a test/local primitive and is not an
+independently trusted Breaker result.
+
+Evidence graphs seal after serialization and reject later mutation through the
+normal API. Certifying edges are bound to exact task/run/contract/repository,
+base and candidate revision, requirement, producer identity, verifier
+specification, and artifact references where supplied. Current failures and
+contradictory evidence cannot be voted away: a relevant failure yields
+`FAILED`, unresolved high-severity Breaker findings yield `BLOCKED`, stale or
+unrecheckable evidence yields `UNKNOWN`, and only exact, trusted, passing
+evidence can yield `VERIFIED`. This is deterministic evidence semantics, not a
+claim that every producer is independently authenticated.
 
 ## Breaker role
 
@@ -144,7 +208,10 @@ commands. Tests/builds execute project code, so the contract requires an
 `isolated-sandbox` execution domain. `assertBreakerReadOnly` rejects mutation,
 publication, credential, arbitrary-code, and unknown capabilities. V1 defines
 the role contract only; it does not create an autonomous swarm or a
-mutation-capable breaker.
+mutation-capable breaker. The isolated process adapter is the only path whose
+result is eligible for an independent Breaker claim: it requires exact
+task/run/contract and candidate bindings and returns `UNKNOWN` on process,
+output, or snapshot-integrity failure.
 
 ## Failure attribution
 
