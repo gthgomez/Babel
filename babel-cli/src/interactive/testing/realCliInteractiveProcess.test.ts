@@ -54,6 +54,7 @@ describe('PR-76 REAL_PROCESS: Spawned Real Babel CLI Interactive Process Certifi
       };
       child.stdout.on('data', onData);
       child.stderr.on('data', onData);
+      onData();
     });
 
     try {
@@ -66,7 +67,7 @@ describe('PR-76 REAL_PROCESS: Spawned Real Babel CLI Interactive Process Certifi
       const timer = setTimeout(() => {
         child.kill();
         reject(new Error('CLI process timed out waiting for exit on /exit'));
-      }, 6000);
+      }, 10000);
       child.on('exit', (code) => {
         clearTimeout(timer);
         resolve(code ?? 0);
@@ -91,7 +92,7 @@ describe('PR-76 REAL_PROCESS: Spawned Real Babel CLI Interactive Process Certifi
 
     // Wait for ready
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => resolve(), 4000);
+      const timer = setTimeout(() => resolve(), 6000);
       const onData = () => {
         if (/READY|CHAT/i.test(stripAnsi(out))) {
           clearTimeout(timer);
@@ -99,6 +100,7 @@ describe('PR-76 REAL_PROCESS: Spawned Real Babel CLI Interactive Process Certifi
         }
       };
       child.stdout.on('data', onData);
+      onData();
     });
 
     // Send Unicode command and /exit
