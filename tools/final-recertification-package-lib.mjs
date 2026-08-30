@@ -170,10 +170,15 @@ function validateChangedFileList(path, text, errors) {
 
 function validateSemanticEntry(path, type, buffer, errors) {
   const text = readText(buffer)
-  if (buffer.byteLength === 0) {
+  const emptyIsMeaningful = path === 'tool-events.jsonl' || path.endsWith('/tool-events.jsonl')
+  if (buffer.byteLength === 0 && !emptyIsMeaningful) {
     errors.push(`${path}: evidence file is empty`)
     return
   }
+  // A no-tool live cell legitimately emits an empty tool-event stream. Its
+  // absence of tool calls is represented by the empty file plus the cell
+  // manifest; do not treat that negative observation as missing evidence.
+  if (buffer.byteLength === 0 && emptyIsMeaningful) return
   if (hasForbiddenEvidenceSignature(text) && type !== 'source-snapshot') {
     errors.push(`${path}: evidence contains a forbidden help/error signature`)
   }
