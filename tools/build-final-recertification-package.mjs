@@ -43,6 +43,7 @@ const SOURCE_EVIDENCE_PATHS = [
   'babel-cli/src/services/liteTrustDemo.ts',
   'babel-cli/src/eval/canary/liveCell.ts',
   'babel-cli/src/eval/canary/canary.test.ts',
+  'babel-cli/scripts/run_model_intelligence_live_qualification.ts',
   'babel-cli/src/runners/openRouterApi.ts',
   'babel-cli/src/runners/openRouterApi.test.ts',
 ]
