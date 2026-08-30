@@ -152,3 +152,17 @@ test('final recertification package rejects non-canonical manifest paths', () =>
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('final recertification package accepts an explicitly empty no-tool stream', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-final-package-empty-tool-events-'))
+  try {
+    writeFixture(root, {
+      ...baseFiles(),
+      'live-eval/L01/glm/tool-events.jsonl': '',
+    })
+    const result = validateDirectory(root)
+    assert.equal(result.status, 'PASS')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
