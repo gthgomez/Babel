@@ -159,6 +159,7 @@ export function mapSessionKindToEpisode(
     case 'model_invocation_phase':
     case 'capability_binding_receipt':
     case 'model_result_delivery':
+    case 'provider_failure_receipt':
       return { kind: 'session', type: kind };
     case 'compaction_started':
     case 'compaction_summary':

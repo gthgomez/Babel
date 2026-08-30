@@ -29,6 +29,10 @@ import {
   validateModelRouteReceipt,
   type ModelRouteReceiptV1,
 } from './modelRouteReceipt.js';
+import {
+  validateProviderFailureReceipt,
+  type ProviderFailureReceiptV1,
+} from '../runners/providerFailureReceipt.js';
 
 export const SESSION_EVENT_SCHEMA_VERSION = 1 as const;
 export const SESSION_EVENTS_FILENAME = 'session-events.jsonl';
@@ -105,6 +109,7 @@ export type SessionEventKind =
   | 'model_invocation_phase'
   | 'capability_binding_receipt'
   | 'model_result_delivery'
+  | 'provider_failure_receipt'
   | 'provider_retry_scheduled'
   | 'provider_retry_settled'
   | 'tool_proposed'
@@ -170,6 +175,14 @@ export type SessionEvent =
       delivered_tool_call_ids?: string[];
       context_manifest?: ContextManifestV1;
       route_receipt?: ModelRouteReceiptV1;
+    })
+  | (SessionEventBase & {
+      /** Secret-free, hashed provider failure evidence for one inference. */
+      kind: 'provider_failure_receipt';
+      inference_id: string;
+      provider: ProviderId;
+      model: string;
+      receipt: ProviderFailureReceiptV1;
     })
   | (SessionEventBase & {
       /** Content-free provider lifecycle phase for one exact inference. */
@@ -910,6 +923,45 @@ type CapabilityBindingLifecycleEvent = Extract<SessionEvent, { kind: 'capability
 
 type ModelInvocationPhaseEvent = Extract<SessionEvent, { kind: 'model_invocation_phase' }>;
 
+type ProviderFailureReceiptEvent = Extract<SessionEvent, { kind: 'provider_failure_receipt' }>;
+
+/** Ensure provider failure evidence is attached to one exact failed inference. */
+export function assertProviderFailureReceiptCausality(
+  priorEvents: readonly SessionEvent[],
+  candidate: ProviderFailureReceiptEvent,
+  subject: string,
+): void {
+  try {
+    validateProviderFailureReceipt(candidate.receipt);
+  } catch (error) {
+    throw new Error(`${subject}: provider failure receipt is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (
+    candidate.receipt.local_request_id !== candidate.inference_id ||
+    candidate.receipt.provider !== candidate.provider ||
+    candidate.receipt.exact_model_id !== candidate.model
+  ) {
+    throw new Error(`${subject}: provider failure receipt identity does not match its event`);
+  }
+  const matchingInputs = priorEvents.filter(
+    (event): event is Extract<SessionEvent, { kind: 'model_input_receipt' }> =>
+      event.kind === 'model_input_receipt' &&
+      event.turn_id === candidate.turn_id &&
+      event.inference_id === candidate.inference_id,
+  );
+  if (matchingInputs.length !== 1) {
+    throw new Error(`${subject}: provider failure receipt requires one matching model input receipt`);
+  }
+  if (priorEvents.some(
+    (event) =>
+      event.kind === 'provider_failure_receipt' &&
+      event.turn_id === candidate.turn_id &&
+      event.inference_id === candidate.inference_id,
+  )) {
+    throw new Error(`${subject}: provider failure receipt is duplicated`);
+  }
+}
+
 /** Ensure phase evidence is attached to an already-recorded provider input. */
 export function assertModelInvocationPhaseCausality(
   priorEvents: readonly SessionEvent[],
@@ -984,6 +1036,13 @@ export function appendSessionEvent(
     assertModelInvocationPhaseCausality(
       log.events,
       event as unknown as ModelInvocationPhaseEvent,
+      'Invalid appended session event',
+    );
+  }
+  if (event.kind === 'provider_failure_receipt') {
+    assertProviderFailureReceiptCausality(
+      log.events,
+      event as unknown as ProviderFailureReceiptEvent,
       'Invalid appended session event',
     );
   }
@@ -1264,6 +1323,27 @@ export function recordModelResultDelivery(
     ...(input.route_receipt !== undefined
       ? { route_receipt: structuredClone(input.route_receipt) }
       : {}),
+  });
+}
+
+/** Persist one secret-free provider failure receipt before result delivery settles. */
+export function recordProviderFailureReceipt(
+  log: SessionEventLog,
+  input: {
+    turn_id: string;
+    inference_id: string;
+    provider: ProviderId;
+    model: string;
+    receipt: ProviderFailureReceiptV1;
+  },
+): SessionEvent {
+  return appendSessionEvent(log, {
+    kind: 'provider_failure_receipt',
+    turn_id: input.turn_id,
+    inference_id: input.inference_id,
+    provider: input.provider,
+    model: input.model,
+    receipt: structuredClone(input.receipt),
   });
 }
 
@@ -1722,7 +1802,7 @@ export function parseSessionEventLog(
   let sessionId = '';
   let maxSeq = -1;
   const knownKinds = new Set<SessionEventKind>([
-    'user_submitted', 'model_started', 'model_input_receipt', 'model_invocation_phase', 'capability_binding_receipt', 'model_result_delivery', 'provider_retry_scheduled', 'provider_retry_settled', 'tool_proposed', 'tool_started',
+    'user_submitted', 'model_started', 'model_input_receipt', 'model_invocation_phase', 'capability_binding_receipt', 'model_result_delivery', 'provider_failure_receipt', 'provider_retry_scheduled', 'provider_retry_settled', 'tool_proposed', 'tool_started',
     'tool_completed', 'tool_failed', 'tool_cancelled', 'recovery_reconciled', 'mutation_batch',
     'verifier_attempt', 'gate_decision', 'policy_intervened', 'progress_recovery',
     'completion_decision', 'model_failover', 'compaction_started', 'compaction_summary', 'compaction_committed', 'compaction_created', 'turn_ended',
@@ -1766,7 +1846,7 @@ export function parseSessionEventLog(
       model_input_receipt: ['inference_id', 'provider', 'requested_model_id', 'normalized_model_id', 'sent_model_id', 'input_digest', 'input_ref'],
       model_invocation_phase: ['inference_id', 'provider', 'model', 'phase'],
       capability_binding_receipt: ['inference_id', 'provider', 'capability', 'advertised', 'authorized', 'effective'],
-      model_result_delivery: ['inference_id', 'provider', 'model', 'status'],
+      model_result_delivery: ['inference_id', 'provider', 'model', 'status'], provider_failure_receipt: ['inference_id', 'provider', 'model', 'receipt'],
       provider_retry_scheduled: ['provider', 'model', 'attempt', 'reason', 'backoff_ms'],
       provider_retry_settled: ['provider', 'model', 'attempt', 'outcome'],
       tool_proposed: ['tool_call_id', 'tool_name', 'idempotency_key'],
@@ -1780,6 +1860,7 @@ export function parseSessionEventLog(
       approval_decision: ['request_id', 'decision'], repair_attempt: ['failure_class', 'attempt'],
     }
     const arrayFields = new Set(['paths', 'signals', 'evidence_refs', 'raw_observation_refs', 'preserved_tool_call_ids', 'delivered_tool_call_ids'])
+    const objectFields = new Set(['receipt'])
     const booleanFields = new Set(['authoritative', 'allowed', 'advertised'])
     const nullableBooleanFields = new Set(['authorized', 'effective'])
     const numberFields = new Set(['score', 'attempt', 'backoff_ms', 'replaces_thread_seq_start', 'replaces_thread_seq_end', 'replaces_message_count', 'status_code'])
@@ -1798,7 +1879,7 @@ export function parseSessionEventLog(
       if (numberFields.has(field) && typeof fieldValue !== 'number') {
         throw new Error(`Invalid session event at line ${index + 1}: ${field} must be a number`)
       }
-      if (!arrayFields.has(field) && !booleanFields.has(field) && !nullableBooleanFields.has(field) && !numberFields.has(field) && typeof fieldValue !== 'string') {
+      if (!arrayFields.has(field) && !objectFields.has(field) && !booleanFields.has(field) && !nullableBooleanFields.has(field) && !numberFields.has(field) && typeof fieldValue !== 'string') {
         throw new Error(`Invalid session event at line ${index + 1}: ${field} must be a string`)
       }
     }
@@ -2039,6 +2120,23 @@ export function parseSessionEventLog(
         }
       }
     }
+    if (ev.kind === 'provider_failure_receipt') {
+      if (
+        !(PROVIDER_IDS as readonly string[]).includes(ev.provider as string) ||
+        typeof ev.inference_id !== 'string' || ev.inference_id.length === 0 ||
+        typeof ev.model !== 'string' || ev.model.length === 0 ||
+        typeof ev.receipt !== 'object' || ev.receipt === null || Array.isArray(ev.receipt)
+      ) {
+        throw new Error(`Invalid session event at line ${index + 1}: provider failure receipt is invalid`)
+      }
+      try {
+        validateProviderFailureReceipt(ev.receipt)
+      } catch (error) {
+        throw new Error(
+          `Invalid session event at line ${index + 1}: provider failure receipt is invalid: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+    }
     if (ev.kind === 'capability_binding_receipt') {
       if (
         !(PROVIDER_IDS as readonly string[]).includes(ev.provider as string) ||
@@ -2069,6 +2167,23 @@ export function parseSessionEventLog(
         (ev.detail !== undefined && (typeof ev.detail !== 'string' || ev.detail.length > 160))
       ) {
         throw new Error(`Invalid session event at line ${index + 1}: model invocation phase is invalid`)
+      }
+    }
+    if (ev.kind === 'provider_failure_receipt') {
+      if (
+        !(PROVIDER_IDS as readonly string[]).includes(ev.provider as string) ||
+        typeof ev.inference_id !== 'string' || ev.inference_id.length === 0 ||
+        typeof ev.model !== 'string' || ev.model.length === 0 ||
+        typeof ev.receipt !== 'object' || ev.receipt === null || Array.isArray(ev.receipt)
+      ) {
+        throw new Error(`Invalid session event at line ${index + 1}: provider failure receipt is invalid`)
+      }
+      try {
+        validateProviderFailureReceipt(ev.receipt)
+      } catch (error) {
+        throw new Error(
+          `Invalid session event at line ${index + 1}: provider failure receipt is invalid: ${error instanceof Error ? error.message : String(error)}`,
+        )
       }
     }
     if (ev.kind === 'recovery_reconciled' &&
@@ -2121,6 +2236,13 @@ export function parseSessionEventLog(
       assertModelInvocationPhaseCausality(
         events,
         ev as unknown as ModelInvocationPhaseEvent,
+        `Invalid session event at line ${index + 1}`,
+      )
+    }
+    if (ev.kind === 'provider_failure_receipt') {
+      assertProviderFailureReceiptCausality(
+        events,
+        ev as unknown as ProviderFailureReceiptEvent,
         `Invalid session event at line ${index + 1}`,
       )
     }

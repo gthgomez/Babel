@@ -2,12 +2,16 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
 
-import type { EvidenceProducerRole } from "../acceptance/types.js";
 import { sha256Canonical } from "../acceptance/canonical.js";
+import {
+  validateAgentEndpointV1,
+  type AgentEndpointV1,
+} from "../agent/agentEndpoint.js";
 import {
   isCapabilityId,
   type CapabilityId,
 } from "../authority/capabilities.js";
+import type { EvidenceProducerRole } from "./evidenceGraph.js";
 export { isTrustedExecutionReadPort } from "../authority/trustedExecutionPort.js";
 
 export type TrustedExecutionLifecycle =
@@ -53,6 +57,137 @@ export interface TrustedExecutionReadPortV1 {
     endpointId: string,
   ): TrustedExecutionAssignmentV1 | undefined;
   assignmentsForRun(runId: string): TrustedExecutionAssignmentV1[];
+}
+
+/**
+ * In-process orchestrator registry retained for the V1 evidence-graph API.
+ * The registry owns assignment creation; persisted state remains validated by
+ * the read-port loader below and cannot be promoted by candidate data.
+ */
+export class TrustedExecutionRegistryV1 {
+  private readonly assignments = new Map<
+    string,
+    TrustedExecutionAssignmentV1
+  >();
+
+  assign(input: {
+    run_id: string;
+    task_id: string;
+    contract_hash: string;
+    endpoint: AgentEndpointV1;
+    role: EvidenceProducerRole;
+    execution_domain?: string;
+    assigned_at?: string;
+  }): TrustedExecutionAssignmentV1 {
+    for (const [value, name] of [
+      [input.run_id, "run_id"],
+      [input.task_id, "task_id"],
+      [input.contract_hash, "contract_hash"],
+    ] as const) {
+      if (typeof value !== "string" || value.trim().length === 0) {
+        throw new Error(`Trusted execution ${name} is required.`);
+      }
+    }
+    const endpointErrors = validateAgentEndpointV1(input.endpoint);
+    if (endpointErrors.length > 0) {
+      throw new Error(`Invalid trusted endpoint: ${endpointErrors.join(", ")}`);
+    }
+    if (input.role === "builder") {
+      throw new Error("A builder cannot be assigned as a certifying producer.");
+    }
+    const executionDomain =
+      input.execution_domain ?? input.endpoint.execution_domain;
+    if (typeof executionDomain !== "string" || executionDomain.trim().length === 0) {
+      throw new Error("Trusted execution execution_domain is required.");
+    }
+    const assignedAt = input.assigned_at ?? new Date().toISOString();
+    const body = {
+      run_id: input.run_id,
+      task_id: input.task_id,
+      contract_hash: input.contract_hash,
+      endpoint_id: input.endpoint.endpoint_id,
+      role: input.role,
+      execution_domain: executionDomain,
+      capabilities: [...input.endpoint.capabilities],
+      assigned_at: assignedAt,
+      lifecycle: "active" as const,
+      authority_provenance: "supervisor_issued" as const,
+    };
+    const assignmentId = sha256Canonical({
+      run_id: body.run_id,
+      task_id: body.task_id,
+      contract_hash: body.contract_hash,
+      endpoint_id: body.endpoint_id,
+      role: body.role,
+      execution_domain: body.execution_domain,
+      capabilities: body.capabilities,
+      assigned_at: body.assigned_at,
+    });
+    const assignment = {
+      ...body,
+      assignment_id: assignmentId,
+      record_hash: trustedExecutionRecordHash({
+        assignment_id: assignmentId,
+        ...body,
+      }),
+    } satisfies TrustedExecutionAssignmentV1;
+    const key = assignmentKey(assignment.run_id, assignment.endpoint_id);
+    if (this.assignments.has(key)) {
+      throw new Error(`Trusted execution assignment already exists: ${key}`);
+    }
+    const frozen = cloneAssignment(assignment);
+    this.assignments.set(key, frozen);
+    return frozen;
+  }
+
+  get(
+    runId: string,
+    endpointId: string,
+  ): TrustedExecutionAssignmentV1 | undefined {
+    const assignment = this.assignments.get(assignmentKey(runId, endpointId));
+    return assignment ? cloneAssignment(assignment) : undefined;
+  }
+
+  authorize(input: AuthorizeTrustedProducerInputV1): {
+    authorized: boolean;
+    error?: string;
+    assignment?: TrustedExecutionAssignmentV1;
+  } {
+    const assignment = this.get(input.run_id, input.endpoint_id);
+    if (!assignment) {
+      return { authorized: false, error: "endpoint is not trusted for this run" };
+    }
+    if (assignment.lifecycle !== "active") {
+      return {
+        authorized: false,
+        error: `trusted assignment is ${assignment.lifecycle}`,
+      };
+    }
+    if (
+      assignment.task_id !== input.task_id ||
+      assignment.contract_hash !== input.contract_hash ||
+      assignment.role !== input.role ||
+      assignment.execution_domain !== input.execution_domain
+    ) {
+      return { authorized: false, error: "trusted assignment binding mismatch" };
+    }
+    if (
+      input.required_capability &&
+      !assignment.capabilities.includes(input.required_capability)
+    ) {
+      return {
+        authorized: false,
+        error: `trusted endpoint lacks ${input.required_capability}`,
+      };
+    }
+    return { authorized: true, assignment };
+  }
+
+  assignmentsForRun(runId: string): TrustedExecutionAssignmentV1[] {
+    return [...this.assignments.values()]
+      .filter((assignment) => assignment.run_id === runId)
+      .map(cloneAssignment);
+  }
 }
 
 export interface TrustedExecutionPersistenceContextV1 {

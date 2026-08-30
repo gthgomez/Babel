@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentEndpointV1 } from "../agent/agentEndpoint.js";
 import { validateAgentEndpointV1 } from "../agent/agentEndpoint.js";
-import type { EvidenceProducerRole } from "../acceptance/types.js";
+import type { EvidenceProducerRole } from "../evidence/evidenceGraph.js";
 import {
   TRUSTED_EXECUTION_SCHEMA_VERSION,
   TrustedExecutionPersistenceSchemaV1,
