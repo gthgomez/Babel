@@ -31,7 +31,9 @@ import { redactHeaders, redactProviderBody } from '../src/intelligence/providerE
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = resolve(packageRoot, '..')
-dotenvConfig({ path: join(packageRoot, '.env'), override: false, quiet: true })
+if (process.env['BABEL_DISABLE_DOTENV'] !== '1') {
+  dotenvConfig({ path: join(packageRoot, '.env'), override: false, quiet: true })
+}
 
 const MODELS = {
   glm: 'z-ai/glm-5.3-flash',
