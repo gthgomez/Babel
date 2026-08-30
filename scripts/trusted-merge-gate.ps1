@@ -20,8 +20,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $git = (Get-Command git -ErrorAction Stop).Source
-$pwsh = Join-Path $PSHOME 'pwsh.exe'
-if (-not (Test-Path -LiteralPath $pwsh -PathType Leaf)) { throw 'Trusted PowerShell runtime unavailable.' }
+$pwshCommand = Get-Command pwsh -ErrorAction Stop
+$pwsh = $pwshCommand.Path
+if ([string]::IsNullOrWhiteSpace($pwsh) -or -not (Test-Path -LiteralPath $pwsh -PathType Leaf)) { throw 'Trusted PowerShell runtime unavailable.' }
 if ($BaseSha -notmatch '^[0-9a-fA-F]{40}$') { throw 'BaseSha must be an exact commit SHA.' }
 $resolvedRepo = (Resolve-Path -LiteralPath $RepoRoot -ErrorAction Stop).Path
 $materialized = Join-Path ([IO.Path]::GetTempPath()) ('babel-trusted-gate-' + [guid]::NewGuid().ToString('N'))
