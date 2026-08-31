@@ -92,23 +92,36 @@ try {
   Assert-AgentGateTest ([bool]$zeroReview.merge_authority_satisfied) 'merge authority must remain a separate dimension'
 
   $receipt = [pscustomobject][ordered]@{
-    schema_version = 1; kind = 'independent_review_receipt_v1'; repository = 'gthgomez/Babel'; pr_number = 118
-    base_sha = $otherHead; head_sha = $head; reviewer_id = 'codex-reviewer'; reviewer_class = 'independent_readonly'
-    review_mode = 'exact_head'; reviewed_at = '2026-08-28T10:05:00Z'; scope = @('scripts/agent-pr-gate.ps1')
-    findings = @(); blocking_findings = @(); verdict = 'APPROVE'; artifact_hash = ''; builder_id = 'codex-implementation'
+    schema_version = 2; kind = 'independent_review_receipt_v2'; repository = 'gthgomez/Babel'; pr_number = 118
+    task_id = 'task-118'; run_id = 'run-118'; contract_hash = ('c' * 64); base_sha = $otherHead; head_sha = $head
+    reviewer_id = 'codex-reviewer'; reviewer_class = 'independent_readonly'; review_mode = 'exact_head'
+    reviewed_at = (Get-Date).ToUniversalTime().ToString('o'); challenge_id = 'challenge-118'; builder_id = 'codex-implementation'
+    reviewed_scope = @{ kind = 'files'; paths = @('scripts/agent-pr-gate.ps1') }; verdict = 'APPROVE'; blocking_findings = @()
+    authority_provenance = @{ issuer = 'supervisor_review_lane'; key_id = 'trusted-supervisor-ed25519-v1'; challenge_id = 'challenge-118' }
+    signature = @{ algorithm = 'ed25519'; key_id = 'trusted-reviewer-ed25519-v2'; value = ('s' * 64) }
   }
-  $receipt.artifact_hash = Get-AgentIndependentReviewReceiptHash -Receipt $receipt
   $validReceipt = Test-AgentIndependentReviewReceipt -Receipt $receipt -Repository 'gthgomez/Babel' -PR 118 -BaseSha $otherHead -HeadSha $head -BuilderIdentity 'codex-implementation'
-  Assert-AgentGateTest ([bool]$validReceipt.valid) 'well-formed exact-head independent receipt must validate'
+  Assert-AgentGateTest ([bool]$validReceipt.valid) ("well-formed exact-head independent receipt must validate: $($validReceipt.errors -join ',')")
   $wrongHeadReceipt = $receipt | ConvertTo-Json -Depth 20 | ConvertFrom-Json
   $wrongHeadReceipt.head_sha = $otherHead
   $wrongHead = Test-AgentIndependentReviewReceipt -Receipt $wrongHeadReceipt -Repository 'gthgomez/Babel' -PR 118 -BaseSha $otherHead -HeadSha $head -BuilderIdentity 'codex-implementation'
   Assert-AgentGateTest (-not [bool]$wrongHead.valid) 'independent receipt for another head must be rejected'
   $builderReceipt = $receipt | ConvertTo-Json -Depth 20 | ConvertFrom-Json
   $builderReceipt.reviewer_id = 'codex-implementation'
-  $builderReceipt.artifact_hash = Get-AgentIndependentReviewReceiptHash -Receipt $builderReceipt
   $builderReview = Test-AgentIndependentReviewReceipt -Receipt $builderReceipt -Repository 'gthgomez/Babel' -PR 118 -BaseSha $otherHead -HeadSha $head -BuilderIdentity 'codex-implementation'
   Assert-AgentGateTest (-not [bool]$builderReview.valid) 'builder-issued independent review must be rejected'
+
+  $detached = Test-AgentIntentionalDetachedCandidate -IsDetached $true -AllowIntentionalDetachedCandidate $true -RequireIsolatedWorktree $true -LocalHead $head -ReviewedHead $head
+  Assert-AgentGateTest ([bool]$detached.accepted) 'exact isolated detached candidates must be accepted when explicitly authorized'
+  $detachedWrongHead = Test-AgentIntentionalDetachedCandidate -IsDetached $true -AllowIntentionalDetachedCandidate $true -RequireIsolatedWorktree $true -LocalHead $head -ReviewedHead $otherHead
+  Assert-AgentGateTest (-not [bool]$detachedWrongHead.accepted) 'detached candidates with a different head must be rejected'
+  $detachedOperator = Test-AgentIntentionalDetachedCandidate -IsDetached $true -AllowIntentionalDetachedCandidate $false -RequireIsolatedWorktree $true -LocalHead $head -ReviewedHead $head
+  Assert-AgentGateTest (-not [bool]$detachedOperator.accepted) 'operator detached checkouts must remain rejected without opt-in'
+
+  $selfPending = Resolve-AgentTrustedMergeState -RunningTrustedSelfCheck $true -MergeStateStatus 'BLOCKED' -Mergeable 'MERGEABLE'
+  Assert-AgentGateTest ([bool]$selfPending.accepted) 'trusted self-check must not deadlock on its own pending required status'
+  $conflict = Resolve-AgentTrustedMergeState -RunningTrustedSelfCheck $true -MergeStateStatus 'DIRTY' -Mergeable 'CONFLICTING'
+  Assert-AgentGateTest (-not [bool]$conflict.accepted) 'real merge conflicts must remain blocking'
 
   Write-Output 'agent-pr-gate: PASS'
   exit 0

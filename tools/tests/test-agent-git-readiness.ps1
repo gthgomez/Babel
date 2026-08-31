@@ -84,6 +84,7 @@ try {
     'if ($Arguments.Count -gt 0 -and $Arguments[0] -eq "--version") { Write-Output "gh version 2.97.0"; exit 0 }',
     'if ($Arguments.Count -gt 1 -and $Arguments[0] -eq "auth" -and $Arguments[1] -eq "status") { exit 0 }',
     'if ($Arguments.Count -gt 1 -and $Arguments[0] -eq "repo" -and $Arguments[1] -eq "view") { Write-Output ''{"nameWithOwner":"gthgomez/Babel","defaultBranchRef":{"name":"main"}}''; exit 0 }',
+    'if ($Arguments.Count -gt 1 -and $Arguments[0] -eq "api" -and $Arguments[1] -eq "repos/gthgomez/Babel") { Write-Output "gthgomez/Babel"; exit 0 }',
     'exit 1') | Set-Content -LiteralPath $fakeGh -Encoding utf8
 
   $preflightScript = Join-Path $repoRoot 'scripts\agent-preflight.ps1'
@@ -145,7 +146,7 @@ try {
   $prJson = '{"number":42,"url":"https://github.com/gthgomez/Babel/pull/42","state":"OPEN","isDraft":false,"baseRefName":"main","baseRefOid":"' + $mainSha + '","headRefName":"agent/fixture","headRefOid":"' + $headSha + '","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","reviews":[],"isCrossRepository":false,"headRepositoryOwner":{"login":"gthgomez"},"headRepository":{"nameWithOwner":"gthgomez/Babel"}}'
   $rulesetList = '[{"id":19597161,"name":"protect-main","enforcement":"active"}]'
   $rulesetDetail = '{"id":19597161,"name":"protect-main","enforcement":"active","rules":[{"type":"pull_request","parameters":{"required_approving_review_count":0,"required_review_thread_resolution":true,"require_code_owner_review":false,"allowed_merge_methods":["merge","squash","rebase"]}},{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":false,"required_status_checks":[{"context":"security"},{"context":"public-content-policy"},{"context":"linux-validation"},{"context":"public-pr-metadata"},{"context":"windows-portability"}]}}],"bypass_actors":[]}'
-  $graphqlJson = '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}'
+  $graphqlJson = '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
   $checkItems = @()
   $checkItems += '{"id":101,"name":"security","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"101","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
   $checkItems += '{"id":102,"name":"public-content-policy","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"102","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
@@ -158,6 +159,7 @@ try {
     'if ($Arguments.Count -gt 0 -and $Arguments[0] -eq "--version") { Write-Output "gh version 2.97.0"; exit 0 }',
     'if ($Arguments.Count -gt 1 -and $Arguments[0] -eq "auth" -and $Arguments[1] -eq "status") { exit 0 }',
     'if ($Arguments.Count -gt 1 -and $Arguments[0] -eq "repo" -and $Arguments[1] -eq "view") { Write-Output ''{"nameWithOwner":"gthgomez/Babel","defaultBranchRef":{"name":"main"}}''; exit 0 }',
+    'if ($Arguments.Count -gt 1 -and $Arguments[0] -eq "api" -and $Arguments[1] -eq "repos/gthgomez/Babel") { Write-Output "gthgomez/Babel"; exit 0 }',
     "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'pr' -and `$Arguments[1] -eq 'view') { Write-Output '$prJson'; exit 0 }",
     "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'api' -and `$Arguments[1] -eq 'graphql') { Write-Output '$graphqlJson'; exit 0 }",
     "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'api' -and `$Arguments[1] -like '*rulesets/19597161') { Write-Output '$rulesetDetail'; exit 0 }",

@@ -30,6 +30,24 @@ jobs:
         run: |
           git fetch --no-tags origin $env:CANDIDATE_SHA
           git worktree add --detach "$env:GITHUB_WORKSPACE/candidate" $env:CANDIDATE_SHA
+      - name: Run behavioral trust-plane integration
+        shell: pwsh
+        run: pwsh -NoProfile -NonInteractive -File tools/tests/test-trusted-control-plane-integration.ps1
+      - name: Materialize signed review receipt handoff
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          pwsh -NoProfile -NonInteractive -File scripts/materialize-independent-review-receipt.ps1 `
+            -PR ([int]$env:PR_NUMBER) `
+            -Repository 'gthgomez/Babel' `
+            -BaseSha $env:BASE_SHA `
+            -HeadSha $env:HEAD_SHA `
+            -OutputPath "$env:GITHUB_WORKSPACE/candidate/.babel/merge-reviews/pr-$env:PR_NUMBER.json" `
+            -LedgerOutputPath "$env:GITHUB_WORKSPACE/candidate/.babel/merge-reviews/review-challenge-ledger.json"
       - name: Run base-rooted merge audit
         shell: pwsh
         env:
@@ -46,6 +64,7 @@ jobs:
             -ReviewedHeadSha $env:HEAD_SHA `
             -AuditOnly `
             -RequireIsolatedWorktree `
+            -AllowIntentionalDetachedCandidate `
             -OutputFormat json
       - name: Test trusted-root boundary
         shell: pwsh

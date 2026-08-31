@@ -17,8 +17,8 @@ record:
 - PR state: open, non-draft, same-repository, mergeable, and clean merge state
 - repository policy: the active `protect-main` ruleset read from GitHub
 - CI: required contexts resolved only from the exact head with workflow authority
-- technical review: an exact-head `independent_review_receipt_v1` for HIGH and
-  CRITICAL risk tiers
+- technical review: an exact-head, signed `independent_review_receipt_v2` plus
+  its signed challenge ledger for HIGH and CRITICAL risk tiers
 - merge authority: an explicit current-task authorization switch, never inferred
   from CI, a review receipt, PR text, or agent output
 - scope: exact diff paths and optional path allowlist
@@ -85,20 +85,26 @@ misleading skipped twins for ordinary validation contexts.
 The current receipt shape is:
 
 ```text
-schema_version: 1
-kind: independent_review_receipt_v1
-repository, pr_number, base_sha, head_sha
-reviewer_id, reviewer_class, review_mode, reviewed_at
-scope[], findings[], blocking_findings[], verdict, artifact_hash, builder_id
+schema_version: 2
+kind: independent_review_receipt_v2
+repository, pr_number, task_id, run_id, contract_hash, base_sha, head_sha
+reviewer_id, reviewer_class, review_mode, reviewed_at, challenge_id, builder_id
+reviewed_scope, verdict, blocking_findings, authority_provenance, signature
 ```
 
-`artifact_hash` is the SHA-256 of the canonical JSON payload with
-`artifact_hash` omitted. The receipt must be exact-head and exact-base bound,
-have a non-empty scope, have no blocking findings, use `APPROVE`, and identify a
-reviewer distinct from the builder. This is a structured repository-local or
-agent-generated receipt, not a cryptographic signature and not user merge
-authority. A future signed reviewer can replace the receipt without changing the
-gate dimensions.
+The receipt must be exact-head and exact-base bound, have a non-empty reviewed
+scope, have no blocking findings, use `APPROVE`, identify a reviewer distinct
+from the builder, and carry an Ed25519 signature plus supervisor challenge
+provenance. The challenge ledger binds the review request and response to the
+same repository, PR, base, and head. Cryptographic verification is performed by
+`scripts/verify-independent-review.mjs` against the trusted key configuration;
+the receipt remains technical evidence and never becomes user merge authority.
+
+The trusted `pull_request_target` workflow checks out immutable base code and
+uses `scripts/materialize-independent-review-receipt.ps1` to extract exactly one
+head-matching receipt and challenge ledger from PR comments. Missing or multiple
+handoffs are materialized as verifier-visible transport errors. Comment text is
+untrusted transport data, not authority.
 
 Initial policy: LOW may use CI plus exact-head review under repository policy;
 MEDIUM is policy-dependent; HIGH and CRITICAL require an independent exact-head

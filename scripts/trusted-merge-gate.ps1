@@ -10,6 +10,7 @@ param(
   [switch]$MergeAuthorized,
   [switch]$AuditOnly,
   [switch]$RequireIsolatedWorktree,
+  [switch]$AllowIntentionalDetachedCandidate,
   [ValidateSet('json', 'text')][string]$OutputFormat = 'json'
 )
 
@@ -47,6 +48,7 @@ try {
   if ($MergeAuthorized) { $args += '-MergeAuthorized' }
   if ($AuditOnly) { $args += '-AuditOnly' }
   if ($RequireIsolatedWorktree) { $args += '-RequireIsolatedWorktree' }
+  if ($AllowIntentionalDetachedCandidate) { $args += '-AllowIntentionalDetachedCandidate' }
   & $pwsh @args
   exit $LASTEXITCODE
 } finally {

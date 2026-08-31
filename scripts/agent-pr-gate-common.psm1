@@ -5,7 +5,9 @@ function Get-AgentPropertyValue {
     [Parameter(Mandatory = $true)][AllowNull()][object]$Object,
     [Parameter(Mandatory = $true)][string]$Name
   )
-  if ($null -eq $Object -or $null -eq $Object.PSObject.Properties[$Name]) { return $null }
+  if ($null -eq $Object) { return $null }
+  if ($Object -is [System.Collections.IDictionary] -and $Object.Contains($Name)) { return $Object[$Name] }
+  if ($null -eq $Object.PSObject.Properties[$Name]) { return $null }
   return $Object.PSObject.Properties[$Name].Value
 }
 
@@ -60,6 +62,39 @@ function Get-AgentNumericIdentity {
   $text = [string]$Value
   if ($text -match '(?<!\d)(\d+)$') { return [int64]$Matches[1] }
   return [int64]0
+}
+
+function Test-AgentIntentionalDetachedCandidate {
+  param(
+    [Parameter(Mandatory = $true)][bool]$IsDetached,
+    [Parameter(Mandatory = $true)][bool]$AllowIntentionalDetachedCandidate,
+    [Parameter(Mandatory = $true)][bool]$RequireIsolatedWorktree,
+    [Parameter(Mandatory = $true)][string]$LocalHead,
+    [Parameter(Mandatory = $true)][string]$ReviewedHead
+  )
+  if (-not $AllowIntentionalDetachedCandidate) { return [pscustomobject]@{ accepted = $false; reason = 'detached_candidate_opt_in_missing' } }
+  if (-not $IsDetached) { return [pscustomobject]@{ accepted = $false; reason = 'candidate_is_not_detached' } }
+  if (-not $RequireIsolatedWorktree) { return [pscustomobject]@{ accepted = $false; reason = 'detached_candidate_not_isolated' } }
+  if (-not (Test-AgentShaValue -Value $LocalHead) -or -not (Test-AgentShaValue -Value $ReviewedHead)) { return [pscustomobject]@{ accepted = $false; reason = 'detached_candidate_sha_invalid' } }
+  if (-not [string]::Equals($LocalHead, $ReviewedHead, [StringComparison]::OrdinalIgnoreCase)) { return [pscustomobject]@{ accepted = $false; reason = 'detached_candidate_sha_mismatch' } }
+  return [pscustomobject]@{ accepted = $true; reason = 'intentional_exact_sha_candidate' }
+}
+
+function Resolve-AgentTrustedMergeState {
+  param(
+    [Parameter(Mandatory = $true)][bool]$RunningTrustedSelfCheck,
+    [Parameter(Mandatory = $true)][string]$MergeStateStatus,
+    [Parameter(Mandatory = $true)][string]$Mergeable
+  )
+  if ([string]::Equals($MergeStateStatus, 'CLEAN', [StringComparison]::OrdinalIgnoreCase)) {
+    return [pscustomobject]@{ accepted = $true; reason = 'merge_state_clean' }
+  }
+  if ($RunningTrustedSelfCheck -and
+      [string]::Equals($MergeStateStatus, 'BLOCKED', [StringComparison]::OrdinalIgnoreCase) -and
+      [string]::Equals($Mergeable, 'MERGEABLE', [StringComparison]::OrdinalIgnoreCase)) {
+    return [pscustomobject]@{ accepted = $true; reason = 'trusted_self_check_pending_is_deferred' }
+  }
+  return [pscustomobject]@{ accepted = $false; reason = 'merge_state_not_clean' }
 }
 
 function Resolve-AgentRequiredCheck {
@@ -188,6 +223,7 @@ function Test-AgentIndependentReviewReceipt {
   $receiptTaskId = Get-AgentPropertyValue -Object $Receipt -Name 'task_id'
   $receiptRunId = Get-AgentPropertyValue -Object $Receipt -Name 'run_id'
   $receiptContractHash = Get-AgentPropertyValue -Object $Receipt -Name 'contract_hash'
+  $builderId = Get-AgentPropertyValue -Object $Receipt -Name 'builder_id'
   $reviewerClass = Get-AgentPropertyValue -Object $Receipt -Name 'reviewer_class'
   $reviewMode = Get-AgentPropertyValue -Object $Receipt -Name 'review_mode'
   $reviewedAt = Get-AgentPropertyValue -Object $Receipt -Name 'reviewed_at'
@@ -204,6 +240,8 @@ function Test-AgentIndependentReviewReceipt {
   if ([string]::IsNullOrWhiteSpace([string]$receiptTaskId)) { $errors += 'receipt_task_missing' }
   if ([string]::IsNullOrWhiteSpace([string]$receiptRunId)) { $errors += 'receipt_run_missing' }
   if ([string]::IsNullOrWhiteSpace([string]$receiptContractHash)) { $errors += 'receipt_contract_missing' }
+  elseif ([string]$receiptContractHash -notmatch '^[0-9a-fA-F]{64}$') { $errors += 'receipt_contract_invalid' }
+  if (-not [string]::Equals([string]$builderId, $BuilderIdentity, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'receipt_builder_mismatch' }
   if (-not [string]::IsNullOrWhiteSpace($TaskId) -and $receiptTaskId -ne $TaskId) { $errors += 'receipt_task_mismatch' }
   if (-not [string]::IsNullOrWhiteSpace($RunId) -and $receiptRunId -ne $RunId) { $errors += 'receipt_run_mismatch' }
   if (-not [string]::IsNullOrWhiteSpace($ContractHash) -and $receiptContractHash -ne $ContractHash) { $errors += 'receipt_contract_mismatch' }
@@ -213,11 +251,12 @@ function Test-AgentIndependentReviewReceipt {
   $reviewedAtParsed = [DateTimeOffset]::MinValue
   if ([string]::IsNullOrWhiteSpace([string]$reviewedAt) -or -not [DateTimeOffset]::TryParse([string]$reviewedAt, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$reviewedAtParsed)) { $errors += 'reviewed_at_invalid' }
   elseif ($reviewedAtParsed -gt [DateTimeOffset]::UtcNow.AddMinutes(5) -or $reviewedAtParsed -lt [DateTimeOffset]::UtcNow.AddDays(-1)) { $errors += 'reviewed_at_stale_or_future' }
-  if ($null -eq $reviewedScope -or $null -eq $reviewedScope.PSObject.Properties['kind']) { $errors += 'reviewed_scope_invalid' }
+  $scopeKindValue = Get-AgentPropertyValue -Object $reviewedScope -Name 'kind'
+  if ($null -eq $reviewedScope -or [string]::IsNullOrWhiteSpace([string]$scopeKindValue)) { $errors += 'reviewed_scope_invalid' }
   else {
-    $scopeKind = [string]$reviewedScope.kind
+    $scopeKind = [string]$scopeKindValue
     if ($scopeKind -eq 'files') {
-      $scopePaths = @($reviewedScope.paths)
+      $scopePaths = @(Get-AgentPropertyValue -Object $reviewedScope -Name 'paths')
       if ($scopePaths.Count -eq 0) { $errors += 'reviewed_scope_empty' }
       $normalizedScope = @($scopePaths | ForEach-Object { ([string]$_).Replace('\', '/') })
       if ((@($normalizedScope | Sort-Object -Unique).Count) -ne $normalizedScope.Count) { $errors += 'reviewed_scope_duplicate' }
@@ -230,7 +269,7 @@ function Test-AgentIndependentReviewReceipt {
   if (@($blockingFindings).Count -gt 0) { $errors += 'independent_review_has_blocking_findings' }
   if ($null -eq $signature -or [string]$signature.algorithm -ne 'ed25519' -or [string]::IsNullOrWhiteSpace([string]$signature.key_id) -or [string]$signature.value -notmatch '^[A-Za-z0-9_-]{40,}$') { $errors += 'independent_review_signature_missing_or_invalid' }
   $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'task_id', 'run_id', 'contract_hash', 'base_sha', 'head_sha', 'reviewer_id', 'reviewer_class', 'review_mode', 'reviewed_at', 'challenge_id', 'builder_id', 'reviewed_scope', 'verdict', 'blocking_findings', 'authority_provenance', 'signature')
-  foreach ($property in @($Receipt.PSObject.Properties.Name)) {
+  foreach ($property in @($Receipt.PSObject.Properties | ForEach-Object { [string]$_.Name })) {
     if ($allowed -notcontains [string]$property) { $errors += "receipt_unknown_field:$property" }
   }
   return [pscustomobject][ordered]@{ valid = $errors.Count -eq 0; errors = @($errors) }
@@ -254,4 +293,4 @@ function Get-AgentReviewPolicyVerdict {
   }
 }
 
-Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Get-AgentNumericIdentity, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentReviewPolicyVerdict, Test-AgentShaValue
+Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Get-AgentNumericIdentity, Test-AgentIntentionalDetachedCandidate, Resolve-AgentTrustedMergeState, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentReviewPolicyVerdict, Test-AgentShaValue

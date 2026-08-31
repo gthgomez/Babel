@@ -5,8 +5,9 @@ status: ACTIVE
 last_verified: 2026-08-30
 -->
 
-This record is a live GitHub snapshot, not a final merge claim. It must be
-refreshed after the final candidate head exists.
+This record is a historical reconciliation record. The canonical recovery
+candidate is now tracked separately as PR #133; this file preserves the earlier
+#120/#126 evidence without claiming that either PR was merged.
 
 ## Observed bindings
 
@@ -15,9 +16,22 @@ refreshed after the final candidate head exists.
 | #120 | OPEN, not draft | `09882fa839253e9615a1e95ec6cd4fe81edb7871` | `73fda8d46e0cd85706d225551793946557e5c7c5` | CONFLICTING / DIRTY | superseded by the reconciled #126 candidate after final certification |
 | #126 | OPEN, draft | `a997d877e8342759afefc3ca9257eb6d4d9a38a2` | `e029ca2c762cccbc9f21681ba562327e23350850` | MERGEABLE / BLOCKED | primary consolidation candidate |
 
-At the same observation, `origin/main` was
-`a997d877e8342759afefc3ca9257eb6d4d9a38a2`. The open-PR query returned #120
-and #126; no other open PR was included in that query.
+At the original observation, `origin/main` was
+`a997d877e8342759afefc3ca9257eb6d4d9a38a2`. A fresh observation on 2026-08-30
+found `origin/main` at `c91be8ff901769958691f505b6a4fb3a0b8cd4ed` and PR #133 as
+the canonical recovery candidate. Those later facts supersede the snapshot
+above for merge planning, but do not rewrite its historical evidence.
+
+## Later candidate comparison
+
+PR #129 changed one material path:
+`babel-cli/src/interactive/testing/realCliInteractiveProcess.test.ts`.
+Direct local comparison of the #129 head with the #133 head shows that path is
+present in #133 and its readiness handling is carried forward with additional
+timeout, stream, and deterministic-exit changes. Therefore #133 supersedes the
+#129 content for consolidation purposes, subject to exact-head CI and trust
+certification. PR #129 remains an external open draft until an authorized
+operator reconciles or closes it.
 
 ## Determination: Case A
 
