@@ -36,7 +36,7 @@ $localHead = $null
 $originMain = $null
 $prView = $null
 $rulesetPolicy = $null
-$checkRuns = @()
+[object[]]$checkRuns = @()
 
 function Add-AgentCheck {
   param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][bool]$Passed, [string]$Blocker = '')
@@ -197,7 +197,12 @@ try {
   $ghAvailable = -not [string]::IsNullOrWhiteSpace($ghResolvedPath) -and (Test-Path -LiteralPath $ghResolvedPath -PathType Leaf)
   Add-AgentCheck -Name 'GH_EXECUTABLE' -Passed $ghAvailable -Blocker 'gh_executable_unavailable'
   $authOk = $false
-  if ($ghAvailable) { $authResult = Invoke-AgentGh -GhPath $ghResolvedPath -RepoRoot $resolvedRepoRoot -Arguments @('auth', 'status', '--hostname', 'github.com'); $authOk = $authResult.exitCode -eq 0 }
+  if ($ghAvailable) {
+    # `gh auth status` reports local login state, which is not the same as
+    # proving that the Actions token can perform the API read this gate needs.
+    $authResult = Invoke-AgentGh -GhPath $ghResolvedPath -RepoRoot $resolvedRepoRoot -Arguments @('api', "repos/$ExpectedRepository", '--jq', '.full_name')
+    $authOk = $authResult.exitCode -eq 0 -and [string]::Equals($authResult.text.Trim(), $ExpectedRepository, [StringComparison]::OrdinalIgnoreCase)
+  }
   Add-AgentCheck -Name 'AUTH_OK' -Passed $authOk -Blocker 'github_auth_failed'
   $remoteUrl = Get-AgentRemoteUrl -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Remote $ExpectedRemote
   $remoteSlug = Get-AgentRemoteSlug -RemoteUrl $remoteUrl
