@@ -111,7 +111,12 @@ function Wait-AgentRequiredChecksReady {
   param(
     [Parameter(Mandatory = $true)][string[]]$RequiredChecks,
     [Parameter(Mandatory = $true)][string]$TargetSha,
-    [int]$MaxAttempts = 90,
+    # Linux/Windows validation is sequenced behind the public policy workflow;
+    # the observed Windows certification can therefore start several minutes
+    # after this gate. Keep polling exact-head runs with a bounded 30-minute
+    # ceiling so the gate synchronizes with the required jobs without weakening
+    # their terminal/conclusion/authority checks.
+    [int]$MaxAttempts = 180,
     [int]$DelaySeconds = 10
   )
   $waitFor = @($RequiredChecks | Where-Object { -not [string]::Equals([string]$_, 'trusted-control-plane', [StringComparison]::OrdinalIgnoreCase) })
