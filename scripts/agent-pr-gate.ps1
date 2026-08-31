@@ -107,6 +107,37 @@ function Get-AgentWorkflowMetadata {
   return $metadata
 }
 
+function Wait-AgentRequiredChecksReady {
+  param(
+    [Parameter(Mandatory = $true)][string[]]$RequiredChecks,
+    [Parameter(Mandatory = $true)][string]$TargetSha,
+    [int]$MaxAttempts = 90,
+    [int]$DelaySeconds = 10
+  )
+  $waitFor = @($RequiredChecks | Where-Object { -not [string]::Equals([string]$_, 'trusted-control-plane', [StringComparison]::OrdinalIgnoreCase) })
+  if ($waitFor.Count -eq 0) { return [pscustomobject]@{ ready = $true; attempts = 0; reason = 'no_peer_checks_to_wait_for' } }
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    $ciResult = Get-AgentJsonFromGh -Arguments @('api', "repos/$ExpectedRepository/commits/$TargetSha/check-runs?per_page=100")
+    if ($ciResult.available) {
+      [object[]]$runs = @($ciResult.value.check_runs)
+      $allTerminal = $true
+      foreach ($required in $waitFor) {
+        $matching = @($runs | Where-Object {
+            [string]$_.head_sha -eq $TargetSha -and
+            (([string]$_.name) -eq $required -or ([string]$_.name).StartsWith("$required /", [StringComparison]::OrdinalIgnoreCase) -or ([string]$_.name).StartsWith("${required}:", [StringComparison]::OrdinalIgnoreCase))
+          })
+        if ($matching.Count -eq 0 -or @($matching | Where-Object { [string]$_.status -ne 'completed' }).Count -gt 0) {
+          $allTerminal = $false
+          break
+        }
+      }
+      if ($allTerminal) { return [pscustomobject]@{ ready = $true; attempts = $attempt; reason = 'all_peer_required_checks_terminal' } }
+    }
+    if ($attempt -lt $MaxAttempts) { Start-Sleep -Seconds $DelaySeconds }
+  }
+  return [pscustomobject]@{ ready = $false; attempts = $MaxAttempts; reason = 'required_check_wait_timeout' }
+}
+
 function Get-AgentReviewThreadStatus {
   $parts = $ExpectedRepository.Split('/', 2)
   if ($parts.Count -ne 2) { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = 'repository_slug_invalid' } }
@@ -264,6 +295,8 @@ try {
   Add-AgentCheck -Name 'ACTIVE_RULESET_READABLE' -Passed ([bool]$rulesetPolicy.available) -Blocker 'active_ruleset_unreadable'
   $requiredChecks = if ($rulesetPolicy.available) { @($rulesetPolicy.required_status_checks) } else { @() }
   if ($requiredChecks.Count -eq 0) { $blockers += 'required_status_checks_unreadable' }
+  $requiredChecksReady = if ($rulesetPolicy.available -and $authOk -and (Test-AgentShaValue $prHead)) { Wait-AgentRequiredChecksReady -RequiredChecks $requiredChecks -TargetSha $prHead } else { [pscustomobject]@{ ready = $false; attempts = 0; reason = 'required_check_wait_prerequisite_missing' } }
+  Add-AgentCheck -Name 'REQUIRED_CHECKS_READY' -Passed ([bool]$requiredChecksReady.ready) -Blocker 'required_check_wait_timeout'
   $githubApprovalCount = if ($rulesetPolicy.available) { [int]$rulesetPolicy.required_approving_review_count } else { -1 }
   $observedApprovalCount = if ($prAvailable) { Get-AgentLatestApprovalCount -PRData $prView } else { 0 }
   $threads = if ($rulesetPolicy.available -and $rulesetPolicy.required_review_thread_resolution) { Get-AgentReviewThreadStatus } else { [pscustomobject]@{ available = $true; resolved = $true; count = 0; unresolved = 0; error = '' } }
