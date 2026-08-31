@@ -82,6 +82,21 @@ try {
   $case11 = Resolve-AgentRequiredCheck -Observations @($duplicate, $duplicate2) -RequiredName 'security' @policyArgs
   Assert-AgentGateTest ($case11.status -eq 'AMBIGUOUS') 'duplicate check identities must fail closed'
 
+  $threadPages = @(
+    [pscustomobject]@{
+      nodes = @([pscustomobject]@{ isResolved = $true }, [pscustomobject]@{ isResolved = $true })
+      pageInfo = [pscustomobject]@{ hasNextPage = $true; endCursor = 'cursor-1' }
+    },
+    [pscustomobject]@{
+      nodes = @([pscustomobject]@{ isResolved = $true })
+      pageInfo = [pscustomobject]@{ hasNextPage = $false; endCursor = $null }
+    }
+  )
+  $resolvedThreads = Resolve-AgentReviewThreadPages -Pages $threadPages
+  Assert-AgentGateTest ([bool]$resolvedThreads.available -and [bool]$resolvedThreads.resolved -and $resolvedThreads.count -eq 3 -and $resolvedThreads.unresolved -eq 0) 'paginated resolved review threads must remain available and resolved'
+  $malformedThreads = Resolve-AgentReviewThreadPages -Pages @([pscustomobject]@{ nodes = @(); pageInfo = [pscustomobject]@{ hasNextPage = $true; endCursor = '' } })
+  Assert-AgentGateTest (-not [bool]$malformedThreads.available -and $malformedThreads.error -eq 'review_threads_pagination_incomplete') 'incomplete review-thread pagination must fail closed'
+
   $zeroReview = Get-AgentReviewPolicyVerdict -RequiredApprovalCount 0 -ObservedApprovalCount 0 -ThreadsRequired $true -ThreadsResolved $true -IndependentRequired $true -IndependentSatisfied $true -MergeAuthorized $true
   Assert-AgentGateTest ([bool]$zeroReview.github_approval_satisfied) 'zero GitHub approvals must satisfy the GitHub approval dimension'
   $oneReview = Get-AgentReviewPolicyVerdict -RequiredApprovalCount 1 -ObservedApprovalCount 0 -ThreadsRequired $false -ThreadsResolved $true -IndependentRequired $false -IndependentSatisfied $false -MergeAuthorized $true

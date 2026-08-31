@@ -18,6 +18,12 @@ if (-not $gate.Contains("[string]`$GitPath = ''")) { throw 'Base-rooted gate use
 foreach ($required in @('reviewThreads\(first:100,after:\$after\)', 'pageInfo\{hasNextPage endCursor\}', 'review_threads_pagination_incomplete')) {
   if ($gate -notmatch $required) { throw "Base-rooted gate is missing full review-thread pagination: $required" }
 }
+foreach ($required in @('Get-AgentRulesetPolicy', 'RiskTier', 'IndependentReviewReceiptPath', 'ReviewChallengeLedgerPath', 'MergeAuthorized', 'AuditOnly', 'BootstrapRepairAuthorized', 'schemaVersion = 2', 'gh api', '[object[]]$checkRuns')) {
+  if ($gate -notmatch [regex]::Escape($required)) { throw "Base-rooted gate is missing trusted capability: $required" }
+}
+$common = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot 'scripts/agent-pr-gate-common.psm1')
+if ($common -notmatch 'function Resolve-AgentReviewThreadPages') { throw 'Common gate module is missing review-thread page resolver.' }
+if ($common -notmatch 'Export-ModuleMember.*Resolve-AgentReviewThreadPages') { throw 'Common gate module does not export review-thread page resolver.' }
 if ($launcher -match 'BootstrapRepairAuthorized') { throw 'Generic trusted gate exposes bootstrap bypass.' }
 foreach ($required in @('PR -ne 121', 'ApprovedHeadSha', 'BaseSha', 'unauthorized path', 'trust root exists')) {
   if ($bootstrap -notmatch [regex]::Escape($required)) { throw "Bootstrap boundary check missing: $required" }

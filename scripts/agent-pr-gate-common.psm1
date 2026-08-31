@@ -132,6 +132,28 @@ function Resolve-AgentRequiredCheck {
   }
 }
 
+function Resolve-AgentReviewThreadPages {
+  param([Parameter(Mandatory = $true)][object[]]$Pages)
+  $count = 0
+  $unresolved = 0
+  foreach ($page in $Pages) {
+    $nodesProperty = if ($null -ne $page) { $page.PSObject.Properties['nodes'] } else { $null }
+    $pageInfo = Get-AgentPropertyValue -Object $page -Name 'pageInfo'
+    if ($null -eq $nodesProperty -or $null -eq $pageInfo) {
+      return [pscustomobject]@{ available = $false; resolved = $false; count = $count; unresolved = $unresolved; error = 'review_threads_shape_invalid' }
+    }
+    $nodes = @($nodesProperty.Value)
+    $count += $nodes.Count
+    $unresolved += @($nodes | Where-Object { -not [bool]$_.isResolved }).Count
+    $hasNext = [bool](Get-AgentPropertyValue -Object $pageInfo -Name 'hasNextPage')
+    $cursor = [string](Get-AgentPropertyValue -Object $pageInfo -Name 'endCursor')
+    if ($hasNext -and [string]::IsNullOrWhiteSpace($cursor)) {
+      return [pscustomobject]@{ available = $false; resolved = $false; count = $count; unresolved = $unresolved; error = 'review_threads_pagination_incomplete' }
+    }
+  }
+  return [pscustomobject]@{ available = $true; resolved = $unresolved -eq 0; count = $count; unresolved = $unresolved; error = '' }
+}
+
 function Get-AgentIndependentReviewReceiptHash {
   param([Parameter(Mandatory = $true)][object]$Receipt)
   $payload = [ordered]@{}
@@ -210,4 +232,4 @@ function Get-AgentReviewPolicyVerdict {
   }
 }
 
-Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue
+Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue
