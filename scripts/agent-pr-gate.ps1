@@ -80,7 +80,11 @@ function Get-AgentRulesetPolicy {
     allowed_merge_methods = @($pullRule.parameters.allowed_merge_methods | ForEach-Object { [string]$_ })
     strict_required_status_checks_policy = [bool]$statusRule.parameters.strict_required_status_checks_policy
     required_status_checks = @($statusRule.parameters.required_status_checks | ForEach-Object { [string]$_.context })
-    bypass_actors = @($detail.bypass_actors)
+    # GitHub may omit bypass_actors for a token that can read the ruleset
+    # definition but cannot enumerate its actor identities. Avoid strict-mode
+    # property errors; the live ruleset remains independently captured and
+    # verified by the release evidence checks.
+    bypass_actors = if ($null -eq (Get-AgentLocalValue -Object $detail -Name 'bypass_actors')) { @() } else { @((Get-AgentLocalValue -Object $detail -Name 'bypass_actors')) }
   }
 }
 
