@@ -27,7 +27,7 @@ $warnings = @()
 $localHead = $null
 $originMain = $null
 $prData = $null
-$checkRuns = @()
+[object[]]$checkRuns = @()
 
 function Add-AgentCheck {
   param(
@@ -86,7 +86,9 @@ try {
 
   $authOk = $false
   if ($ghAvailable) {
-    $authResult = Invoke-AgentGh -GhPath $ghResolvedPath -RepoRoot $resolvedRepoRoot -Arguments @('auth', 'status', '--hostname', 'github.com')
+    # GH_TOKEN is the supported non-interactive GitHub Actions credential;
+    # auth status may not treat that environment credential as a login.
+    $authResult = Invoke-AgentGh -GhPath $ghResolvedPath -RepoRoot $resolvedRepoRoot -Arguments @('api', "repos/$ExpectedRepository", '--jq', '.full_name')
     $authOk = (Get-AgentProperty -Object $authResult -Name 'exitCode' -Default 127) -eq 0
   }
   Add-AgentCheck -Name 'AUTH_OK' -Passed $authOk -Blocker 'github_auth_failed'
@@ -212,8 +214,8 @@ try {
     }
   }
   $ciRunsValue = Get-AgentProperty -Object $ciApi -Name 'check_runs' -Default $null
-  if ($null -ne $ciRunsValue) { $checkRuns = @($ciRunsValue) }
-  $ciHeadMatch = $checkRuns.Count -gt 0
+  if ($null -ne $ciRunsValue) { $checkRuns = [object[]]@($ciRunsValue) }
+  $ciHeadMatch = @($checkRuns).Count -gt 0
   $requiredResults = @()
   $requiredChecksGreen = $true
   foreach ($required in $RequiredCheck) {
