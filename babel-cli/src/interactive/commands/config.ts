@@ -13,7 +13,12 @@ import {
   MODE_ALIAS_TO_RUNTIME,
   MODEL_ALIASES,
 } from '../types.js';
-import { resolveModelByKey, getAvailableModels } from '../../modelPolicy.js';
+import {
+  resolveModelByKey,
+  getAvailableModels,
+  resolveOpenRouterDeepSeekBackendKey,
+} from '../../modelPolicy.js';
+import { isOfflineChatMode } from '../../agent/chatModelPolicy.js';
 import { globalCostTracker } from '../../services/costTracker.js';
 import { VALID_MODES } from '../../cli/constants.js';
 import { getRecentRuns } from '../utils.js';
@@ -244,8 +249,11 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
       // Check alias shorthand before resolving by key
       const aliasResolution = resolveModelAlias(requested);
       const targetKey = aliasResolution?.resolvedKey ?? requested;
+      const liveTargetKey = !isOfflineChatMode()
+        ? resolveOpenRouterDeepSeekBackendKey(targetKey) ?? targetKey
+        : targetKey;
 
-      const resolved = resolveModelByKey({ key: targetKey });
+      const resolved = resolveModelByKey({ key: liveTargetKey });
       ctx.state.model = resolved.resolvedBackendKey;
       ctx.state.resolvedModelId = resolved.providerModelId;
       ctx.state = {

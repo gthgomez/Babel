@@ -8,13 +8,13 @@ import { describe, it } from 'node:test';
 import { AgentSession } from './session.js';
 import { stripAnsi } from '../ui/theme.js';
 
-const hasDeepSeekKey = !!process.env['DEEPSEEK_API_KEY'];
 const originalFetch = globalThis.fetch;
 const originalDeepSeekApiKey = process.env['DEEPSEEK_API_KEY'];
 const originalDeepInfraApiKey = process.env['DEEPINFRA_API_KEY'];
+const originalHostFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
 
 function mockDeepSeekAskResponse(): void {
-  delete process.env['DEEPSEEK_API_KEY'];
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
   globalThis.fetch = (async () =>
     new Response(
@@ -43,7 +43,7 @@ function mockDeepSeekAskResponse(): void {
 }
 
 function mockDeepSeekPlanResponse(): void {
-  delete process.env['DEEPSEEK_API_KEY'];
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
   globalThis.fetch = (async () =>
     new Response(
@@ -77,7 +77,7 @@ function mockDeepSeekPlanResponse(): void {
 }
 
 function mockDeepSeekReportResponse(): void {
-  delete process.env['DEEPSEEK_API_KEY'];
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
   globalThis.fetch = (async () =>
     new Response(
@@ -121,10 +121,15 @@ function restoreDeepSeekMock(): void {
   } else {
     process.env['DEEPINFRA_API_KEY'] = originalDeepInfraApiKey;
   }
+  if (originalHostFallback === undefined) {
+    delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+  } else {
+    process.env['BABEL_ALLOW_HOST_FALLBACK'] = originalHostFallback;
+  }
 }
 
-describe('AgentSession', () => {
-  it('runs plan lane without manual bridge status', { concurrency: false, skip: !hasDeepSeekKey }, async () => {
+describe('AgentSession', { concurrency: false }, () => {
+  it('runs plan lane without manual bridge status', { concurrency: false }, async () => {
     const repo = mkdtempSync(join(tmpdir(), 'babel-session-plan-'));
     try {
       mockDeepSeekPlanResponse();
@@ -142,7 +147,7 @@ describe('AgentSession', () => {
     }
   });
 
-  it('runs ask lane via fast path', { concurrency: false, skip: !hasDeepSeekKey }, async () => {
+  it('runs ask lane via fast path', { concurrency: false }, async () => {
     const repo = mkdtempSync(join(tmpdir(), 'babel-session-ask-loop-'));
     try {
       const { writeFileSync } = await import('node:fs');
@@ -258,6 +263,7 @@ describe('AgentSession', () => {
           provider: 'mock',
           workerChain: true,
         });
+        process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
         const result = await session.run();
         assert.equal(result.exitCode, 0);
         assert.equal((result.payload as { status?: string }).status, 'WORKER_LOOP_COMPLETE');
@@ -269,7 +275,7 @@ describe('AgentSession', () => {
 
   it(
     'runs complex bl do with read-only Spark parallel review then plan lane',
-    { concurrency: false, skip: !hasDeepSeekKey },
+    { concurrency: false },
     async () => {
       const repo = mkdtempSync(join(tmpdir(), 'babel-session-spark-do-'));
       try {
@@ -311,7 +317,7 @@ describe('AgentSession', () => {
     },
   );
 
-  it('routes read-only comparison do tasks to report lane', { concurrency: false, skip: !hasDeepSeekKey }, async () => {
+  it('routes read-only comparison do tasks to report lane', { concurrency: false }, async () => {
     const repo = mkdtempSync(join(tmpdir(), 'babel-session-report-do-'));
     try {
       mockDeepSeekReportResponse();
@@ -392,6 +398,7 @@ describe('AgentSession', () => {
           projectRoot: repo,
           provider: 'mock',
         });
+        process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
         const result = await session.run();
         assert.equal(result.exitCode, 0);
         const payload = result.payload as {

@@ -563,6 +563,8 @@ export function runBabelCli(
     offlineDemo?: boolean;
     cwd?: string;
     timeoutMs?: number;
+    /** Environment keys that must not cross into the child process. */
+    unsetEnv?: readonly string[];
     /**
      * When set, enforce P0 dist freshness before spawn.
      * Prefer harness paths set this to true/`ensure` so dirty source is not measured via stale dist.
@@ -585,6 +587,9 @@ export function runBabelCli(
     BABEL_ROOT: options.env?.['BABEL_ROOT'] || process.env['BABEL_ROOT'] || BABEL_ROOT,
     BABEL_PROJECT_ROOT: options.projectRoot,
   };
+  for (const name of options.unsetEnv ?? []) {
+    delete env[name];
+  }
   if (options.offlineDemo !== false) {
     env['BABEL_LITE_OFFLINE'] = '1';
     env['BABEL_SMALL_FIX_PROVIDER'] = 'mock';

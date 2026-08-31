@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
 import { readParityCorpusTask, writeParityCorpusRepo } from './parityCorpus.js';
 import { resolveBabelCliEntry, runBabelCli } from './liteTrustDemo.js';
+import { buildOpenRouterDeepSeekLiveEnv } from '../modelPolicy.js';
 
 export type VaguenessTier = 'L1_minimal' | 'L2_intent' | 'L3_scope' | 'L4_followup';
 export type VaguenessCategory = 'ask' | 'plan' | 'explore' | 'fix' | 'propose';
@@ -458,9 +459,10 @@ function invokeScenarioCli(
     projectRoot,
     cliEntry,
     offlineDemo: provider === 'mock',
-    env: {
-      BABEL_DAILY_PROFILE: 'terminal',
-    },
+    env:
+      provider === 'live'
+        ? { ...buildOpenRouterDeepSeekLiveEnv(), BABEL_DAILY_PROFILE: 'terminal' }
+        : { BABEL_DAILY_PROFILE: 'terminal' },
   });
 }
 

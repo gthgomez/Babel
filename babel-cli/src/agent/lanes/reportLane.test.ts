@@ -7,7 +7,6 @@ import { describe, it } from 'node:test';
 import { runReportLane } from './reportLane.js';
 import { stripAnsi } from '../../ui/theme.js';
 
-const hasDeepSeekKey = !!process.env['DEEPSEEK_API_KEY'];
 const originalFetch = globalThis.fetch;
 const originalDeepSeekKey = process.env['DEEPSEEK_API_KEY'];
 const originalDeepInfraKey = process.env['DEEPINFRA_API_KEY'];
@@ -26,7 +25,7 @@ function restoreFetch(): void {
   }
 }
 
-describe('runReportLane', () => {
+describe('runReportLane', { concurrency: false }, () => {
   it('writes a deterministic offline compare report with concrete findings', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'babel-report-lane-compare-'));
     try {
@@ -116,7 +115,7 @@ describe('runReportLane', () => {
     }
   });
 
-  it('writes a read-only report with normalized provider arrays', { skip: !hasDeepSeekKey }, async () => {
+  it('writes a read-only report with normalized provider arrays', { concurrency: false }, async () => {
     const repo = mkdtempSync(join(tmpdir(), 'babel-report-lane-'));
     try {
       writeFileSync(join(repo, 'README.md'), '# Test Repo\n', 'utf-8');
@@ -124,6 +123,7 @@ describe('runReportLane', () => {
       globalThis.fetch = (async () =>
         new Response(
           JSON.stringify({
+            model: 'deepseek/deepseek-v4-pro',
             choices: [
               {
                 message: {

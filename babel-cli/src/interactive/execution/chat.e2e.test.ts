@@ -27,14 +27,11 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { ChatEngine } from '../../agent/chatEngine.js';
+import { skipIfLiveTestsNotAuthorized } from '../../test-helpers/apiKeyCheck.js';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Check whether the default provider (DeepSeek) is available. */
-function hasLiveProvider(): boolean {
-  return Boolean(process.env['DEEPSEEK_API_KEY']);
-}
-
 /** Create a temp directory with known fixtures for a single test. */
 function createE2eEnv(): { root: string; cleanup: () => void } {
   const root = mkdtempSync(join(tmpdir(), 'babel-chat-e2e-'));
@@ -62,7 +59,7 @@ const E2E_TIMEOUT = 180_000;
 
 test(
   'chat E2E: ≥2 turns with tool call, answer reaches stdout',
-  { skip: !hasLiveProvider(), timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -132,7 +129,7 @@ test(
 
 test(
   'chat E2E: tool use observable in conversation history',
-  { skip: !hasLiveProvider(), timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -168,7 +165,7 @@ test(
 
 test(
   'chat E2E: multi-turn context retention',
-  { skip: !hasLiveProvider(), timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {

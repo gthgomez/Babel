@@ -9,6 +9,13 @@ import { resumeExecution } from './resumeExecution.js';
 
 const originalFetch = globalThis.fetch;
 const originalApiKey = process.env['DEEPINFRA_API_KEY'];
+const originalHostFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
+
+test.beforeEach(() => {
+  // Recovery fixtures rerun a disposable verifier on the host. Production
+  // remains fail-closed; this test boundary is explicit.
+  process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+});
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -16,6 +23,11 @@ test.afterEach(() => {
     delete process.env['DEEPINFRA_API_KEY'];
   } else {
     process.env['DEEPINFRA_API_KEY'] = originalApiKey;
+  }
+  if (originalHostFallback === undefined) {
+    delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+  } else {
+    process.env['BABEL_ALLOW_HOST_FALLBACK'] = originalHostFallback;
   }
 });
 

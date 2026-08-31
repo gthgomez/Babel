@@ -119,8 +119,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (options.provider === 'live' && !process.env['DEEPSEEK_API_KEY']?.trim()) {
-    throw new Error('Live parity corpus requires DEEPSEEK_API_KEY in babel-cli/.env');
+  if (options.provider === 'live' && !process.env['OPENROUTER_API_KEY']?.trim()) {
+    throw new Error('Live parity corpus requires OPENROUTER_API_KEY in babel-cli/.env');
   }
 
   const manifest = readParityCorpusManifest();

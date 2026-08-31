@@ -2,8 +2,8 @@
 /**
  * Live governance test entrypoint.
  *
- * For --required-deepseek, this now runs the focused breadth harness and falls
- * back to replay/offline mode when DEEPSEEK_API_KEY is unavailable.
+ * For --required-deepseek, this now runs the focused breadth harness through
+ * OpenRouter and falls back to replay/offline mode when OPENROUTER_API_KEY is unavailable.
  */
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
@@ -38,7 +38,7 @@ function runNpmScript(scriptName) {
 
 const requiredDeepSeek = process.argv.includes('--required-deepseek');
 const isReplayMode = requiredDeepSeek
-  ? (process.env.BABEL_LIVE_GOVERNANCE_OFFLINE === '1' || !Boolean(process.env.DEEPSEEK_API_KEY))
+  ? (process.env.BABEL_LIVE_GOVERNANCE_OFFLINE === '1' || !Boolean(process.env.OPENROUTER_API_KEY))
   : false;
 
 if (requiredDeepSeek) {
@@ -46,22 +46,22 @@ if (requiredDeepSeek) {
   process.env.BABEL_LIVE_GOVERNANCE_OFFLINE = isReplayMode ? '1' : '0';
 }
 
-if (process.env.DEEPSEEK_API_KEY && !requiredDeepSeek && !isReplayMode) {
-  process.env.BABEL_LIVE_GOVERNANCE_PROVIDER = 'deepseek';
+if (process.env.OPENROUTER_API_KEY && !requiredDeepSeek && !isReplayMode) {
+  process.env.BABEL_LIVE_GOVERNANCE_PROVIDER = 'openrouter';
 } else {
   delete process.env.BABEL_LIVE_GOVERNANCE_PROVIDER;
 }
 
 const provider = requiredDeepSeek
   ? {
-    id: process.env.DEEPSEEK_API_KEY && !isReplayMode ? 'deepseek' : 'replay',
-    envKeyName: isReplayMode ? 'REPLAY_ONLY' : 'DEEPSEEK_API_KEY',
+    id: process.env.OPENROUTER_API_KEY && !isReplayMode ? 'openrouter' : 'replay',
+    envKeyName: isReplayMode ? 'REPLAY_ONLY' : 'OPENROUTER_API_KEY',
     modelPolicyPath: process.env.BABEL_MODEL_POLICY_PATH,
   }
-  : (process.env.DEEPSEEK_API_KEY
+  : (process.env.OPENROUTER_API_KEY
     ? {
-      id: 'deepseek',
-      envKeyName: 'DEEPSEEK_API_KEY',
+      id: 'openrouter',
+      envKeyName: 'OPENROUTER_API_KEY',
       modelPolicyPath: process.env.BABEL_MODEL_POLICY_PATH,
     }
     : null);
@@ -72,7 +72,7 @@ if (!provider) {
     console.error('[test:live-governance:required] failed — no governance provider is available');
     process.exit(1);
   }
-    console.log('[test:live-governance] skipped — DEEPSEEK_API_KEY not set');
+    console.log('[test:live-governance] skipped — OPENROUTER_API_KEY not set');
   console.log('  Run offline replay: npm run test:governance-replay');
   process.exit(0);
 }
@@ -93,5 +93,5 @@ if (requiredDeepSeek) {
   process.exit(0);
 }
 runNpmScript('test:pipeline-v9');
-console.log('[test:live-governance] OTel regression skipped for direct DeepSeek live proof; run test:otel-tracing separately.');
+console.log('[test:live-governance] OTel regression skipped for direct provider live proof; run test:otel-tracing separately.');
 console.log('[test:live-governance] passed');

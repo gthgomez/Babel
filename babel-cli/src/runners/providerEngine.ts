@@ -21,6 +21,7 @@ import {
   type ProviderId,
   type ProviderOperation,
 } from './providerRegistry.js'
+import type { ResolvedExecutionEnvelope } from '../intelligence/types.js'
 
 interface RawLlmRunner extends LlmRunner {
   executeRaw?: (
@@ -43,12 +44,15 @@ export interface ProviderEngineOptions {
   apiKeyEnvVar?: string
   explicitCredential?: string
   env?: NodeJS.ProcessEnv
+  /** Optional immutable capability-resolved policy for this invocation lane. */
+  executionEnvelope?: ResolvedExecutionEnvelope
 }
 
 function createAdapter(options: ProviderEngineOptions): RawLlmRunner {
   const credential = {
     ...(options.explicitCredential ? { explicitCredential: options.explicitCredential } : {}),
     ...(options.env ? { env: options.env } : {}),
+    ...(options.executionEnvelope ? { executionEnvelope: options.executionEnvelope } : {}),
   }
   const runtimeOptions = {
     modelId: options.modelId,

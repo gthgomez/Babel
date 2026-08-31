@@ -38,6 +38,8 @@ export interface SmallFixMutationLoopInput {
   executor?: ToolExecutor;
   /** Defaults to `presetForVerb('fix')` — workspace_write in production. */
   preset?: PermissionPreset;
+  /** Explicit operator-approved host fallback when Docker isolation is unavailable. */
+  hostFallbackAllowed?: boolean;
   decide?: typeof decideAction;
 }
 
@@ -135,7 +137,12 @@ export async function runSmallFixMutationLoop(
     writeAction,
     preset,
     input.toolContext,
-    policyDeps,
+    {
+      ...policyDeps,
+      ...(input.hostFallbackAllowed !== undefined
+        ? { hostFallbackAllowed: input.hostFallbackAllowed }
+        : {}),
+    },
   );
   steps.push(stepFromExecution('act', writeExecution));
 
@@ -178,7 +185,12 @@ export async function runSmallFixMutationLoop(
     verifyAction,
     preset,
     input.toolContext,
-    policyDeps,
+    {
+      ...policyDeps,
+      ...(input.hostFallbackAllowed !== undefined
+        ? { hostFallbackAllowed: input.hostFallbackAllowed }
+        : {}),
+    },
   );
   steps.push(stepFromExecution('verify', verifyExecution));
 

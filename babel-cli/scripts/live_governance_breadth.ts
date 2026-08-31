@@ -7,7 +7,7 @@ import { z } from 'zod';
 
 import { buildCostLedger } from '../src/services/costLedger.js';
 import { loadBabelCliEnv } from '../src/config/envBootstrap.js';
-import { DeepSeekApiRunner } from '../src/runners/deepSeekApi.js';
+import { OpenRouterApiRunner } from '../src/runners/openRouterApi.js';
 import type { RunnerInvocationMetadata } from '../src/runners/base.js';
 import { resolveStagePolicyRoutes } from '../src/modelPolicy.js';
 import {
@@ -131,10 +131,10 @@ function validatePolicy(): StagePolicy[] {
   }
   const byStage = new Map(resolved.map((route) => [route.stage, route]));
   const required: Array<[string, string]> = [
-    ['orchestrator', 'deepseek-v4-flash'],
-    ['planning', 'deepseek-v4-flash'],
-    ['executor', 'deepseek-v4-flash'],
-    ['qa', 'deepseek-v4-pro'],
+    ['orchestrator', 'deepseek/deepseek-v4-flash'],
+    ['planning', 'deepseek/deepseek-v4-flash'],
+    ['executor', 'deepseek/deepseek-v4-flash'],
+    ['qa', 'deepseek/deepseek-v4-pro'],
   ];
 
   for (const [stage, expectedModel] of required) {
@@ -145,6 +145,11 @@ function validatePolicy(): StagePolicy[] {
     if (route.primaryProviderModelId !== expectedModel) {
       throw new Error(
         `[live-governance-breadth] Stage "${stage}" must use ${expectedModel} but policy resolves to ${route.primaryProviderModelId}.`,
+      );
+    }
+    if (route.primaryProvider !== 'openrouter') {
+      throw new Error(
+        `[live-governance-breadth] Stage "${stage}" must use OpenRouter for DeepSeek controls but resolves to ${route.primaryProvider}.`,
       );
     }
   }
@@ -592,7 +597,7 @@ async function collectProviderMetadata(
     }
 
     try {
-      const runner = new DeepSeekApiRunner(route.primaryProviderModelId);
+      const runner = new OpenRouterApiRunner(route.primaryProviderModelId);
       await runner.execute(
         'Return exactly {"status":"ok","stage":"live_governance_breadth"} as JSON. No markdown.',
         ProbeSchema,
@@ -677,7 +682,7 @@ async function main(): Promise<void> {
   const fixtures = readFixtures();
   const policyRoutes = validatePolicy();
   const replayMode = process.env['BABEL_LIVE_GOVERNANCE_OFFLINE'] === '1'
-    || !Boolean(process.env['DEEPSEEK_API_KEY']);
+    || !Boolean(process.env['OPENROUTER_API_KEY']);
   const metadataByModel: Record<string, RunnerInvocationMetadata | null> = await collectProviderMetadata(
     replayMode,
     policyRoutes,
@@ -782,16 +787,16 @@ async function main(): Promise<void> {
     schema_version: 1,
     artifact_type: 'babel_production_live_governance_breadth_proof',
     status: overallPass ? 'pass' : 'fail',
-    claim_scope: 'Focused DeepSeek live-governance breadth harness',
-    provider: replayMode ? 'recorded_replay' : 'deepseek',
+    claim_scope: 'Focused DeepSeek-through-OpenRouter live-governance breadth harness',
+    provider: replayMode ? 'recorded_replay' : 'openrouter',
     required_command: 'npm --prefix .\\babel-cli run test:live-governance:required',
     model_policy: {
       path: policyPath,
       stages: {
-        orchestrator: 'deepseek-v4-flash',
-        planning: 'deepseek-v4-flash',
-        executor: 'deepseek-v4-flash',
-        qa: 'deepseek-v4-pro',
+        orchestrator: 'deepseek/deepseek-v4-flash',
+        planning: 'deepseek/deepseek-v4-flash',
+        executor: 'deepseek/deepseek-v4-flash',
+        qa: 'deepseek/deepseek-v4-pro',
       },
     },
     checks: {
@@ -803,7 +808,7 @@ async function main(): Promise<void> {
     run_context: {
       fixture_set_id: fixtures.fixture_set_id,
       provider_mode_hint: replayMode ? fixtures.live_provider_unavailable_artifact : fixtures.provider_mode,
-      live_key_present: Boolean(process.env['DEEPSEEK_API_KEY']),
+      live_key_present: Boolean(process.env['OPENROUTER_API_KEY']),
       generated_with_replay: replayMode,
     },
     generated_at: new Date().toISOString(),

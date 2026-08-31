@@ -82,10 +82,10 @@ function Get-PullRequestCommits {
   try {
     $uri = [Uri]$Url
     if ($uri.Scheme -ne 'https' -or $uri.Host -ne 'api.github.com' -or $uri.AbsolutePath -ne $ExpectedPath) { throw 'invalid endpoint' }
-    if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) { throw 'missing token' }
+    if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw 'missing token' }
     $commits = [Collections.Generic.List[object]]::new()
     $client = [Net.Http.HttpClient]::new()
-    $client.DefaultRequestHeaders.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $env:GITHUB_TOKEN)
+    $client.DefaultRequestHeaders.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $env:GH_TOKEN)
     $client.DefaultRequestHeaders.Accept.Add([Net.Http.Headers.MediaTypeWithQualityHeaderValue]::new('application/vnd.github+json'))
     $client.DefaultRequestHeaders.Add('X-GitHub-Api-Version', '2022-11-28')
     $client.DefaultRequestHeaders.UserAgent.ParseAdd('Babel-public-metadata-check')

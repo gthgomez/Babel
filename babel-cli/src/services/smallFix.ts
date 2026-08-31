@@ -1,7 +1,20 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from 'node:path';
 
 import { z } from 'zod';
 
@@ -17,7 +30,13 @@ import {
 } from '../agent/liteArtifacts.js';
 import { findCheckpoint, restoreCheckpoint } from './checkpoints.js';
 import { runWithPrimaryOnlyFallback } from '../execute.js';
-import { resolveFamilyModelPolicy, type ResolvedModelPolicy } from '../modelPolicy.js';
+import {
+  resolveFamilyModelPolicy,
+  resolveModelByKey,
+  resolveModelPolicyBackendKey,
+  resolveOpenRouterDeepSeekBackendKey,
+  type ResolvedModelPolicy,
+} from '../modelPolicy.js';
 import {
   runFixDiscoveryPhase,
   shouldAttemptFixDiscovery,
@@ -35,6 +54,7 @@ import {
 import type { RunnerInvocationMetadata } from '../runners/base.js';
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
 import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
+import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
 import { globalCostTracker, type SessionUsageSummary } from './costTracker.js';
 import { buildCostLedger, usageSummaryFromCostLedger } from './costLedger.js';
 import type { SparkSynthesis } from './babelFull.js';
@@ -42,6 +62,7 @@ import type { LiteFixProgressReporter } from '../ui/liteFixProgress.js';
 import type { LiteToolStreamSink } from '../ui/liteToolStream.js';
 import type { ToolCallLog } from '../schemas/agentContracts.js';
 import { buildVerifierContractArtifacts } from './requiredVerifierContract.js';
+import { isHostIsolationEscalationAllowed } from '../config/benchmarkContainer.js';
 
 const SmallFixAnswerSchema = z.object({
   schema_version: z.literal(1).catch(1),
@@ -83,7 +104,9 @@ export type SmallFixExecutionMode = 'live' | 'offline_demo';
 
 export const DEFAULT_SMALL_FIX_MAX_REPAIR_ATTEMPTS = 3;
 
-export function resolveSmallFixMaxRepairAttempts(env: NodeJS.ProcessEnv = process.env): number {
+export function resolveSmallFixMaxRepairAttempts(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
   const raw = env['BABEL_SMALL_FIX_MAX_REPAIR_ATTEMPTS'];
   if (raw) {
     const parsed = Number.parseInt(raw, 10);
@@ -145,7 +168,10 @@ export function resolveSmallFixProvider(
   if (options.provider === 'mock') {
     return 'mock';
   }
-  if (env['BABEL_LITE_OFFLINE'] === '1' || env['BABEL_SMALL_FIX_PROVIDER'] === 'mock') {
+  if (
+    env['BABEL_LITE_OFFLINE'] === '1' ||
+    env['BABEL_SMALL_FIX_PROVIDER'] === 'mock'
+  ) {
     return 'mock';
   }
   return 'live';
@@ -196,14 +222,20 @@ function normalizeText(value: string): string {
 }
 
 function hashText(value: string): string {
-  return createHash('sha256').update(normalizeText(value), 'utf-8').digest('hex');
+  return createHash('sha256')
+    .update(normalizeText(value), 'utf-8')
+    .digest('hex');
 }
 
 function byteLengthUtf8(value: string): number {
   return Buffer.byteLength(value, 'utf-8');
 }
 
-function buildChangesDiff(targetFile: string, before: string, after: string): string {
+function buildChangesDiff(
+  targetFile: string,
+  before: string,
+  after: string,
+): string {
   const beforeLines = normalizeText(before).split('\n');
   const afterLines = normalizeText(after).split('\n');
   if (
@@ -239,7 +271,10 @@ function buildChangesDiff(targetFile: string, before: string, after: string): st
   return `${lines.join('\n')}\n`;
 }
 
-function writeJsonArtifact(path: string, payload: Record<string, unknown>): void {
+function writeJsonArtifact(
+  path: string,
+  payload: Record<string, unknown>,
+): void {
   writeFileSync(path, `${JSON.stringify(payload, null, 2)}\n`, 'utf-8');
 }
 
@@ -253,10 +288,16 @@ function extractVerifierCommand(task: string): string | null {
     /\brun\s+([A-Za-z0-9_.\-\\/]+(?:\s+[A-Za-z0-9_.\-\\/]+){0,3})\s+before\s+(?:completing|completion|finishing)/i,
   );
   const candidate = explicit?.[1]?.trim().replace(/[.。]+$/, '');
-  if (candidate && LOCAL_VERIFIER_COMMANDS.some((pattern) => pattern.test(candidate))) {
+  if (
+    candidate &&
+    LOCAL_VERIFIER_COMMANDS.some((pattern) => pattern.test(candidate))
+  ) {
     return candidate;
   }
-  if (/\bfailing\s+(?:node\s+)?test\b/i.test(task) && /\bnpm\s+test\b/i.test(task)) {
+  if (
+    /\bfailing\s+(?:node\s+)?test\b/i.test(task) &&
+    /\bnpm\s+test\b/i.test(task)
+  ) {
     return 'npm test';
   }
   return null;
@@ -277,7 +318,11 @@ function readPackageTestCommand(projectRoot: string): string | null {
   }
 }
 
-function collectCandidateFiles(projectRoot: string, dir = projectRoot, depth = 0): string[] {
+function collectCandidateFiles(
+  projectRoot: string,
+  dir = projectRoot,
+  depth = 0,
+): string[] {
   if (depth > 4 || !existsSync(dir)) {
     return [];
   }
@@ -311,10 +356,15 @@ function taskDescriptor(task: string): string | null {
   return match?.[1] ?? null;
 }
 
-function sourceForTestFile(projectRoot: string, testFile: string): string | null {
+function sourceForTestFile(
+  projectRoot: string,
+  testFile: string,
+): string | null {
   const candidates = [
     testFile.replace(/(?:\.test|\.spec)(\.[^.]+)$/i, '$1'),
-    testFile.replace(/__tests__\//i, '').replace(/(?:\.test|\.spec)(\.[^.]+)$/i, '$1'),
+    testFile
+      .replace(/__tests__\//i, '')
+      .replace(/(?:\.test|\.spec)(\.[^.]+)$/i, '$1'),
   ].filter((candidate) => candidate !== testFile);
   for (const candidate of candidates) {
     if (existsSync(resolve(projectRoot, candidate))) {
@@ -341,7 +391,9 @@ function inferTargetFile(task: string, projectRoot: string): string | null {
 
   const descriptor = taskDescriptor(task);
   const files = collectCandidateFiles(projectRoot);
-  const testFiles = files.filter((file) => /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(file));
+  const testFiles = files.filter((file) =>
+    /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(file),
+  );
   const candidates = new Set<string>();
 
   if (descriptor) {
@@ -349,7 +401,10 @@ function inferTargetFile(task: string, projectRoot: string): string | null {
       const base = basename(file)
         .replace(/\.[^.]+$/, '')
         .toLowerCase();
-      if (base === descriptor.toLowerCase() && !/\.(?:test|spec)$/i.test(base)) {
+      if (
+        base === descriptor.toLowerCase() &&
+        !/\.(?:test|spec)$/i.test(base)
+      ) {
         candidates.add(file);
       }
     }
@@ -372,15 +427,23 @@ function inferTargetFile(task: string, projectRoot: string): string | null {
 export type { SmallFixScope } from './fixScopeResolver.js';
 
 function isTestLikePath(path: string): boolean {
-  return /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(path) || /(?:^|\/)tests?\//i.test(path);
+  return (
+    /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(path) ||
+    /(?:^|\/)tests?\//i.test(path)
+  );
 }
 
-function detectDualFileSmallFix(task: string, projectRoot: string): SmallFixScope | null {
+function detectDualFileSmallFix(
+  task: string,
+  projectRoot: string,
+): SmallFixScope | null {
   const explicitPaths = extractExplicitFilePaths(task)
     .map((path) => normalizeRelativePath(path))
     .filter((path) => {
       const absolutePath = resolve(projectRoot, path);
-      return isInsideRoot(projectRoot, absolutePath) && existsSync(absolutePath);
+      return (
+        isInsideRoot(projectRoot, absolutePath) && existsSync(absolutePath)
+      );
     });
 
   if (explicitPaths.length < 2) {
@@ -393,7 +456,8 @@ function detectDualFileSmallFix(task: string, projectRoot: string): SmallFixScop
     return null;
   }
 
-  const verifierCommand = extractVerifierCommand(task) ?? 'npm --prefix ./babel-cli run typecheck';
+  const verifierCommand =
+    extractVerifierCommand(task) ?? 'npm --prefix ./babel-cli run typecheck';
   return {
     mode: 'dual',
     sourceFile: sourceFiles[0]!,
@@ -419,12 +483,16 @@ export function detectSmallFix(
   if (options.forcedTargetFile) {
     const targetFile = normalizeRelativePath(options.forcedTargetFile);
     const verifierCommand =
-      extractVerifierCommand(options.task) ?? readPackageTestCommand(projectRoot);
+      extractVerifierCommand(options.task) ??
+      readPackageTestCommand(projectRoot);
     if (!verifierCommand) {
       return null;
     }
     const absoluteTarget = resolve(projectRoot, targetFile);
-    if (!isInsideRoot(projectRoot, absoluteTarget) || !existsSync(absoluteTarget)) {
+    if (
+      !isInsideRoot(projectRoot, absoluteTarget) ||
+      !existsSync(absoluteTarget)
+    ) {
       return null;
     }
     return { mode: 'single', targetFile, verifierCommand, projectRoot };
@@ -441,14 +509,19 @@ export function detectSmallFix(
     return null;
   }
   const absoluteTarget = resolve(projectRoot, targetFile);
-  if (!isInsideRoot(projectRoot, absoluteTarget) || !existsSync(absoluteTarget)) {
+  if (
+    !isInsideRoot(projectRoot, absoluteTarget) ||
+    !existsSync(absoluteTarget)
+  ) {
     return null;
   }
   return { mode: 'single', targetFile, verifierCommand, projectRoot };
 }
 
 function trimForPrompt(value: string, maxChars: number): string {
-  return value.length <= maxChars ? value : `${value.slice(0, maxChars)}\n...[truncated]`;
+  return value.length <= maxChars
+    ? value
+    : `${value.slice(0, maxChars)}\n...[truncated]`;
 }
 
 function readNearbyTests(projectRoot: string, targetFile: string): string {
@@ -460,14 +533,21 @@ function readNearbyTests(projectRoot: string, targetFile: string): string {
     if (!entry.isFile()) {
       continue;
     }
-    if (!/\.(test|spec)\.[cm]?[jt]s$/i.test(entry.name) && !entry.name.includes(`${base}.test`)) {
+    if (
+      !/\.(test|spec)\.[cm]?[jt]s$/i.test(entry.name) &&
+      !entry.name.includes(`${base}.test`)
+    ) {
       continue;
     }
     const abs = join(dir, entry.name);
     const rel = normalizeRelativePath(relative(projectRoot, abs));
-    snippets.push(`## ${rel}\n${trimForPrompt(readFileSync(abs, 'utf-8'), 4000)}`);
+    snippets.push(
+      `## ${rel}\n${trimForPrompt(readFileSync(abs, 'utf-8'), 4000)}`,
+    );
   }
-  return snippets.length > 0 ? snippets.join('\n\n') : 'No nearby test files were found.';
+  return snippets.length > 0
+    ? snippets.join('\n\n')
+    : 'No nearby test files were found.';
 }
 
 function buildPrompt(input: {
@@ -528,8 +608,10 @@ function buildRepairPrompt(input: {
   discoveryObservations?: string;
 }): string {
   const verifierOutput =
-    [input.verifierStdout.trim(), input.verifierStderr.trim()].filter(Boolean).join('\n').trim() ||
-    '(no verifier output captured)';
+    [input.verifierStdout.trim(), input.verifierStderr.trim()]
+      .filter(Boolean)
+      .join('\n')
+      .trim() || '(no verifier output captured)';
   return [
     '# Babel Small Fix — Repair Attempt',
     '',
@@ -560,32 +642,46 @@ function buildRepairPrompt(input: {
   ].join('\n');
 }
 
-function liveProviderEnvKey(): 'DEEPSEEK_API_KEY' {
-  return 'DEEPSEEK_API_KEY';
+function liveProviderEnvKey(
+  provider?: string,
+): 'DEEPSEEK_API_KEY' | 'OPENROUTER_API_KEY' {
+  return provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'DEEPSEEK_API_KEY';
 }
 
 function assertLiveProviderCredential(
   provider?: string,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
-  if (provider !== 'deepseek') {
+  if (provider !== 'openrouter') {
     throw new Error(
-      `[LIVE_MODEL_POLICY] live small fix requires a DeepSeek model; received ${provider ?? 'no provider'}.`,
+      `[LIVE_MODEL_POLICY] live small fix requires an OpenRouter DeepSeek/GLM route; received ${provider ?? 'no provider'}.`,
     );
   }
-  if (!env['DEEPSEEK_API_KEY']?.trim()) {
+  const envKey = liveProviderEnvKey(provider);
+  if (!env[envKey]?.trim()) {
     throw new Error(
-      `[smallFix] DEEPSEEK_API_KEY is not set. Add it to your .env file or environment for live bl fix.`,
+      `[smallFix] ${envKey} is not set. Add it to your .env file or environment for live fix.`,
     );
   }
 }
 
-export function classifySmallFixProviderFailure(error: unknown): {
+export function classifySmallFixProviderFailure(
+  error: unknown,
+  provider?: string,
+): {
   failureCode: string;
   message: string;
   next: string[];
 } {
   const message = error instanceof Error ? error.message : String(error);
+  if (/OPENROUTER_API_KEY is not set/i.test(message)) {
+    return {
+      failureCode: 'credential_missing',
+      message:
+        'OPENROUTER_API_KEY is not set. Direct GLM/OpenRouter requires OPENROUTER_API_KEY in environment or .env.',
+      next: ['check OPENROUTER_API_KEY', 'babel undo'],
+    };
+  }
   if (
     /DEEPSEEK_API_KEY is not set/i.test(message) ||
     (/deepseek/i.test(message) && /API_KEY is not set/i.test(message))
@@ -604,28 +700,47 @@ export function classifySmallFixProviderFailure(error: unknown): {
   ) {
     return {
       failureCode: 'credential_missing',
-      message: 'DEEPINFRA_API_KEY is not set. Live bl fix requires a DeepInfra API key.',
+      message:
+        'DEEPINFRA_API_KEY is not set. Live bl fix requires a DeepInfra API key.',
       next: ['check DEEPINFRA_API_KEY', 'babel undo'],
     };
   }
   if (
     /network error/i.test(message) ||
     /request timeout/i.test(message) ||
-    /ECONNREFUSED|ENOTFOUND|fetch failed|ETIMEDOUT|socket hang up/i.test(message)
+    /ECONNREFUSED|ENOTFOUND|fetch failed|ETIMEDOUT|socket hang up/i.test(
+      message,
+    )
   ) {
-    const isDeepSeek = /\[deepSeekApi\]/i.test(message) || /DEEPSEEK_API_KEY/i.test(message);
+    const isDeepSeek =
+      /\[deepSeekApi\]/i.test(message) || /DEEPSEEK_API_KEY/i.test(message);
     return {
       failureCode: 'provider_network_failed',
       message,
-      next: [isDeepSeek ? 'check DEEPSEEK_API_KEY' : 'check DEEPINFRA_API_KEY', 'babel undo'],
+      next: [
+        provider === 'openrouter'
+          ? 'check OPENROUTER_API_KEY'
+          : isDeepSeek
+            ? 'check DEEPSEEK_API_KEY'
+            : 'check DEEPINFRA_API_KEY',
+        'babel undo',
+      ],
     };
   }
   if (/timeout/i.test(message)) {
-    const isDeepSeek = /\[deepSeekApi\]/i.test(message) || /DEEPSEEK_API_KEY/i.test(message);
+    const isDeepSeek =
+      /\[deepSeekApi\]/i.test(message) || /DEEPSEEK_API_KEY/i.test(message);
     return {
       failureCode: 'provider_timeout',
       message,
-      next: [isDeepSeek ? 'check DEEPSEEK_API_KEY' : 'check DEEPINFRA_API_KEY', 'babel undo'],
+      next: [
+        provider === 'openrouter'
+          ? 'check OPENROUTER_API_KEY'
+          : isDeepSeek
+            ? 'check DEEPSEEK_API_KEY'
+            : 'check DEEPINFRA_API_KEY',
+        'babel undo',
+      ],
     };
   }
   if (/zod|schema|invalid json|parse/i.test(message)) {
@@ -642,11 +757,19 @@ export function classifySmallFixProviderFailure(error: unknown): {
       next: ['check DEEPSEEK_API_KEY', 'check DEEPINFRA_API_KEY', 'babel undo'],
     };
   }
-  const isDeepSeek = /\[deepSeekApi\]/i.test(message) || /DEEPSEEK_API_KEY/i.test(message);
+  const isDeepSeek =
+    /\[deepSeekApi\]/i.test(message) || /DEEPSEEK_API_KEY/i.test(message);
   return {
     failureCode: 'provider_request_failed',
     message,
-    next: [isDeepSeek ? 'check DEEPSEEK_API_KEY' : 'check DEEPINFRA_API_KEY', 'babel undo'],
+    next: [
+      provider === 'openrouter'
+        ? 'check OPENROUTER_API_KEY'
+        : isDeepSeek
+          ? 'check DEEPSEEK_API_KEY'
+          : 'check DEEPINFRA_API_KEY',
+      'babel undo',
+    ],
   };
 }
 
@@ -671,7 +794,13 @@ const LITE_TRUST_DEMO_FIXTURE_DIR = join(
   'fixtures',
   'lite-trust-demo',
 );
-const PARITY_CORPUS_FIXTURE_DIR = join(BABEL_ROOT, 'babel-cli', 'src', 'fixtures', 'parity-corpus');
+const PARITY_CORPUS_FIXTURE_DIR = join(
+  BABEL_ROOT,
+  'babel-cli',
+  'src',
+  'fixtures',
+  'parity-corpus',
+);
 
 function listLiteTrustDemoFixturePaths(): string[] {
   const paths = [join(LITE_TRUST_DEMO_FIXTURE_DIR, 'scenario.json')];
@@ -692,7 +821,9 @@ function listParityCorpusFixturePaths(): string[] {
     return [];
   }
   try {
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as { tasks?: string[] };
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as {
+      tasks?: string[];
+    };
     if (!Array.isArray(manifest.tasks)) {
       return [];
     }
@@ -757,7 +888,10 @@ function offlineDemoAnswerFromFixture(
       }
     } else {
       const extraFile = parsed.files?.[detected.targetFile];
-      if (typeof extraFile?.broken !== 'string' || typeof extraFile.fixed !== 'string') {
+      if (
+        typeof extraFile?.broken !== 'string' ||
+        typeof extraFile.fixed !== 'string'
+      ) {
         return null;
       }
       brokenImplementation = extraFile.broken;
@@ -774,16 +908,23 @@ function offlineDemoAnswerFromFixture(
         return null;
       }
       const targetPath = resolve(options.projectRoot, detected.targetFile);
-      if (!existsSync(targetPath) || readFileSync(targetPath, 'utf-8') !== brokenImplementation) {
+      if (
+        !existsSync(targetPath) ||
+        readFileSync(targetPath, 'utf-8') !== brokenImplementation
+      ) {
         return null;
       }
       // Guard: verify the fixture's fixed_implementation exports cover all
       // functions exported by the on-disk broken file. Prevents mock-fixture
       // mismatches when the project has tests for functions the fixture doesn't
       // know about (e.g. dynamically-generated subtract test alongside the add fixture).
-      const onDiskExports = extractExportedFunctionNames(readFileSync(targetPath, 'utf-8'));
+      const onDiskExports = extractExportedFunctionNames(
+        readFileSync(targetPath, 'utf-8'),
+      );
       const fixtureExports = extractExportedFunctionNames(replacement);
-      const missingExports = onDiskExports.filter((n) => !fixtureExports.includes(n));
+      const missingExports = onDiskExports.filter(
+        (n) => !fixtureExports.includes(n),
+      );
       if (missingExports.length > 0) {
         return null;
       }
@@ -865,16 +1006,20 @@ function appendDirectSmallFixTelemetry(input: {
         prompt_tokens: input.metadata?.prompt_tokens ?? null,
         completion_tokens: input.metadata?.completion_tokens ?? null,
         total_tokens: input.metadata?.total_tokens ?? null,
-        prompt_cache_hit_tokens: input.metadata?.prompt_cache_hit_tokens ?? null,
-        prompt_cache_miss_tokens: input.metadata?.prompt_cache_miss_tokens ?? null,
+        prompt_cache_hit_tokens:
+          input.metadata?.prompt_cache_hit_tokens ?? null,
+        prompt_cache_miss_tokens:
+          input.metadata?.prompt_cache_miss_tokens ?? null,
         estimated_cost_usd: input.metadata?.estimated_cost_usd ?? null,
         cost_precision: input.metadata?.cost_precision ?? null,
         pricing_source_url: input.metadata?.pricing_source_url ?? null,
         pricing_verified_at: input.metadata?.pricing_verified_at ?? null,
         input_cost_per_1m: input.metadata?.input_cost_per_1m ?? null,
         output_cost_per_1m: input.metadata?.output_cost_per_1m ?? null,
-        input_cache_hit_cost_per_1m: input.metadata?.input_cache_hit_cost_per_1m ?? null,
-        input_cache_miss_cost_per_1m: input.metadata?.input_cache_miss_cost_per_1m ?? null,
+        input_cache_hit_cost_per_1m:
+          input.metadata?.input_cache_hit_cost_per_1m ?? null,
+        input_cache_miss_cost_per_1m:
+          input.metadata?.input_cache_miss_cost_per_1m ?? null,
         ttft_ms: input.metadata?.ttft_ms ?? null,
         generation_ms: input.metadata?.generation_ms ?? null,
         validation_ms: input.metadata?.validation_ms ?? null,
@@ -901,15 +1046,32 @@ async function runSmallFixModel(
 }> {
   const provider = resolveSmallFixProvider(options);
   const liveOnly = provider === 'live';
-  const modelPolicy = options.model || liveOnly
-    ? resolveFamilyModelPolicy({
-        family: options.model ?? 'DeepSeek',
-        ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
-        ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
-        liveOnly,
-        babelRoot: BABEL_ROOT,
-      })
+  const selectedModel = liveOnly
+    ? resolveOpenRouterDeepSeekBackendKey(options.model ?? '') ??
+      (options.model ?? 'deepseek-v4-flash-openrouter')
+    : options.model;
+  const selectedBackendKey = selectedModel
+    ? resolveModelPolicyBackendKey(selectedModel, BABEL_ROOT)
     : undefined;
+  const modelPolicy =
+    selectedModel || liveOnly
+      ? selectedBackendKey
+        ? resolveModelByKey({
+            key: selectedBackendKey,
+            ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+            liveOnly,
+            babelRoot: BABEL_ROOT,
+          })
+        : resolveFamilyModelPolicy({
+          family: selectedModel ?? 'DeepSeek',
+          ...(options.modelTier !== undefined
+            ? { requestedTier: options.modelTier }
+            : {}),
+          ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+          liveOnly,
+          babelRoot: BABEL_ROOT,
+        })
+      : undefined;
 
   if (provider === 'live') {
     assertLiveProviderCredential(modelPolicy?.provider);
@@ -932,12 +1094,23 @@ async function runSmallFixModel(
     return { answer: offlineAnswer, executionMode: 'offline_demo' };
   }
 
-  if (modelPolicy?.provider === 'deepinfra' || modelPolicy?.provider === 'deepseek') {
+  if (
+    modelPolicy?.provider === 'deepinfra' ||
+    modelPolicy?.provider === 'deepseek' ||
+    modelPolicy?.provider === 'openrouter'
+  ) {
     const policyProvider = modelPolicy.provider;
+    if (policyProvider === 'deepseek' && liveOnly) {
+      throw new Error(
+        '[LIVE_MODEL_POLICY] Direct DeepSeek live calls are disabled; use the OpenRouter DeepSeek control route.',
+      );
+    }
     const runner =
       policyProvider === 'deepseek'
         ? new DeepSeekApiRunner(modelPolicy.providerModelId)
-        : new DeepInfraApiRunner(modelPolicy.providerModelId);
+        : policyProvider === 'openrouter'
+          ? new OpenRouterApiRunner(modelPolicy.providerModelId)
+          : new DeepInfraApiRunner(modelPolicy.providerModelId);
     try {
       const answer = await runner.execute(prompt, SmallFixAnswerSchema);
       const metadata = runner.getLastInvocationMetadata?.() ?? null;
@@ -976,12 +1149,16 @@ async function runSmallFixModel(
     }
   }
 
-  const answer = await runWithPrimaryOnlyFallback(prompt, SmallFixAnswerSchema, {
-    evidence,
-    stage: 'executor',
-    schemaName: 'SmallFixAnswerSchema',
-    maxCliAttempts: 1,
-  });
+  const answer = await runWithPrimaryOnlyFallback(
+    prompt,
+    SmallFixAnswerSchema,
+    {
+      evidence,
+      stage: 'executor',
+      schemaName: 'SmallFixAnswerSchema',
+      maxCliAttempts: 1,
+    },
+  );
   return {
     answer,
     ...(modelPolicy !== undefined ? { modelPolicy } : {}),
@@ -989,7 +1166,9 @@ async function runSmallFixModel(
   };
 }
 
-export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFixResult> {
+export async function runSmallFixPath(
+  options: SmallFixOptions,
+): Promise<SmallFixResult> {
   if (isAmbiguousBroadRefactor(options.task)) {
     return {
       status: 'SMALL_FIX_NOT_APPLICABLE',
@@ -1004,7 +1183,9 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
       ? loadPlanHandoff({
           repoPath: options.projectRoot,
           task: options.task,
-          ...(options.planRunId !== undefined ? { planRunId: options.planRunId } : {}),
+          ...(options.planRunId !== undefined
+            ? { planRunId: options.planRunId }
+            : {}),
         })
       : null);
   let detected = detectSmallFix(options);
@@ -1036,7 +1217,10 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
     };
   }
 
-  if ((detected.mode === 'dual' || detected.mode === 'multi') && !options.forcedTargetFile) {
+  if (
+    (detected.mode === 'dual' || detected.mode === 'multi') &&
+    !options.forcedTargetFile
+  ) {
     const targets = listSequentialFixTargets(detected);
     const verifierCommand = detected.verifierCommand;
 
@@ -1071,7 +1255,9 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
 
     for (const file of targets) {
       const filePath = resolve(detected.projectRoot, file);
-      const content = existsSync(filePath) ? readFileSync(filePath, 'utf-8') : '';
+      const content = existsSync(filePath)
+        ? readFileSync(filePath, 'utf-8')
+        : '';
       originalContents.set(file, content);
       originalHashes.set(file, hashText(content));
       originalByteLengths.set(file, byteLengthUtf8(content));
@@ -1094,7 +1280,10 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
       )}\n`,
     );
 
-    const scopeBeforePath = join(evidence.runDir, 'small_fix_scope_before.json');
+    const scopeBeforePath = join(
+      evidence.runDir,
+      'small_fix_scope_before.json',
+    );
     writeJsonArtifact(scopeBeforePath, {
       schema_version: 1,
       scope_artifact_type: 'small_fix_scope_before_mutation',
@@ -1102,7 +1291,8 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
       project_root: detected.projectRoot,
       inferred_scope: 'multi_file_coordinated_scope',
       normalized: true,
-      next_step_hint: 'run small-fix checkpoint restore after verification if needed',
+      next_step_hint:
+        'run small-fix checkpoint restore after verification if needed',
     });
 
     // 1. Initial Mutation Loop: edit each file sequentially (without running verifier between edits)
@@ -1125,7 +1315,9 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
             : {}),
         });
 
-        const modelResult = await runSmallFixModel(prompt, evidence, options, { targetFile });
+        const modelResult = await runSmallFixModel(prompt, evidence, options, {
+          targetFile,
+        });
         currentContents.set(targetFile, modelResult.answer.replacement_content);
         if (modelResult.modelPolicy) {
           modelPolicy = modelResult.modelPolicy;
@@ -1137,14 +1329,24 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
 
         // Write file locally
         const filePath = resolve(detected.projectRoot, targetFile);
-        writeFileSync(filePath, modelResult.answer.replacement_content, 'utf-8');
+        writeFileSync(
+          filePath,
+          modelResult.answer.replacement_content,
+          'utf-8',
+        );
       }
     } catch (error: unknown) {
       options.progress?.finish('fail', 'Model call failed');
-      const classified = classifySmallFixProviderFailure(error);
+      const classified = classifySmallFixProviderFailure(
+        error,
+        resolveSmallFixProvider(options) === 'live' ? 'openrouter' : undefined,
+      );
       const message = classified.message;
       const failureCode = classified.failureCode;
-      const failureCapsulePath = join(evidence.runDir, 'small_fix_failure_capsule.json');
+      const failureCapsulePath = join(
+        evidence.runDir,
+        'small_fix_failure_capsule.json',
+      );
       evidence.writeDebugFile(
         'small_fix_failure_capsule.json',
         `${JSON.stringify(
@@ -1161,7 +1363,14 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
             project_root: detected.projectRoot,
             target_file: targets[0],
             verifier_command: verifierCommand,
-            credential_env_key: failureCode === 'credential_missing' ? liveProviderEnvKey() : null,
+            credential_env_key:
+              failureCode === 'credential_missing'
+                ? liveProviderEnvKey(
+                    /OPENROUTER_API_KEY/i.test(message)
+                      ? 'openrouter'
+                      : undefined,
+                  )
+                : null,
             next_recommended_operator_action: classified.next.join('; '),
           },
           null,
@@ -1213,19 +1422,28 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
         }),
       );
       writeLatestRunPointers(evidence.runDir, options.project ?? 'global');
-      throw makeRecoverableRunError(message, evidence.runDir, failureCode, classified.next);
+      throw makeRecoverableRunError(
+        message,
+        evidence.runDir,
+        failureCode,
+        classified.next,
+      );
     }
 
     // 2. Shared Verifier Run & Coordinated Repair Loop
     const maxRepairAttempts =
       options.maxRepairAttempts ??
-      (resolveSmallFixProvider(options) === 'mock' ? 1 : resolveSmallFixMaxRepairAttempts());
+      (resolveSmallFixProvider(options) === 'mock'
+        ? 1
+        : resolveSmallFixMaxRepairAttempts());
     const repairTimeline: SmallFixRepairAttemptRecord[] = [];
 
     // Run verifier initially
     const verifierRun = spawnSync(
       process.platform === 'win32' ? 'cmd.exe' : 'sh',
-      process.platform === 'win32' ? ['/d', '/s', '/c', verifierCommand] : ['-c', verifierCommand],
+      process.platform === 'win32'
+        ? ['/d', '/s', '/c', verifierCommand]
+        : ['-c', verifierCommand],
       { cwd: detected.projectRoot, encoding: 'utf-8', timeout: 30_000 },
     );
     let verifierExit = verifierRun.status ?? 1;
@@ -1287,7 +1505,11 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
 
         // Write file locally
         const filePath = resolve(detected.projectRoot, targetFile);
-        writeFileSync(filePath, repairModel.answer.replacement_content, 'utf-8');
+        writeFileSync(
+          filePath,
+          repairModel.answer.replacement_content,
+          'utf-8',
+        );
       }
 
       // Rerun verifier after repair
@@ -1303,7 +1525,10 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
       verifierStderr = nextRun.stderr ?? '';
     }
 
-    const repairTimelinePath = join(evidence.runDir, 'repair_attempt_timeline.json');
+    const repairTimelinePath = join(
+      evidence.runDir,
+      'repair_attempt_timeline.json',
+    );
     writeJsonArtifact(repairTimelinePath, {
       schema_version: 1,
       artifact_type: 'babel_small_fix_repair_timeline',
@@ -1315,7 +1540,10 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
 
     // Post-execution: checkpoint rollback if failed
     if (!verifierOk) {
-      options.progress?.report('verify', `Verification failed. Rolling back changes…`);
+      options.progress?.report(
+        'verify',
+        `Verification failed. Rolling back changes…`,
+      );
       for (const [file, content] of originalContents) {
         const filePath = resolve(detected.projectRoot, file);
         writeFileSync(filePath, content, 'utf-8');
@@ -1397,7 +1625,9 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
       usageSummary,
       ...(modelPolicy !== undefined ? { modelPolicy } : {}),
       executionMode,
-      sessionLoopSteps: [...(discoveryBundle?.discovery.sessionLoopSteps ?? [])],
+      sessionLoopSteps: [
+        ...(discoveryBundle?.discovery.sessionLoopSteps ?? []),
+      ],
     };
   }
   let targetFile: string;
@@ -1411,7 +1641,8 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
   } else {
     return {
       status: 'SMALL_FIX_NOT_APPLICABLE',
-      reason: 'Multi-file small fix must run through sequential or coordinated passes.',
+      reason:
+        'Multi-file small fix must run through sequential or coordinated passes.',
     };
   }
 
@@ -1430,7 +1661,9 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
     target_file: targetFile,
     verifier_command: verifierCommand,
     ...(planHandoff ? { plan_handoff_run_id: planHandoff.planRunId } : {}),
-    ...(options.sparkSynthesis ? { spark_synthesis: options.sparkSynthesis } : {}),
+    ...(options.sparkSynthesis
+      ? { spark_synthesis: options.sparkSynthesis }
+      : {}),
   });
   if (options.sparkSynthesis) {
     evidence.writeDebugFile(
@@ -1484,7 +1717,8 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
     bytes_before: originalByteLength,
     sha256_before: originalHash,
     normalized: true,
-    next_step_hint: 'run small-fix checkpoint restore after verification if needed',
+    next_step_hint:
+      'run small-fix checkpoint restore after verification if needed',
   });
 
   let answer: SmallFixAnswer;
@@ -1492,17 +1726,25 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
   let executionMode: SmallFixExecutionMode = 'live';
   try {
     options.progress?.report('model', 'Calling model…');
-    const modelResult = await runSmallFixModel(prompt, evidence, options, { targetFile });
+    const modelResult = await runSmallFixModel(prompt, evidence, options, {
+      targetFile,
+    });
     answer = modelResult.answer;
     modelPolicy = modelResult.modelPolicy;
     executionMode = modelResult.executionMode ?? 'live';
     options.progress?.report('model', 'Model patch ready');
   } catch (error: unknown) {
     options.progress?.finish('fail', 'Model call failed');
-    const classified = classifySmallFixProviderFailure(error);
+    const classified = classifySmallFixProviderFailure(
+      error,
+      resolveSmallFixProvider(options) === 'live' ? 'openrouter' : undefined,
+    );
     const message = classified.message;
     const failureCode = classified.failureCode;
-    const failureCapsulePath = join(evidence.runDir, 'small_fix_failure_capsule.json');
+    const failureCapsulePath = join(
+      evidence.runDir,
+      'small_fix_failure_capsule.json',
+    );
     evidence.writeDebugFile(
       'small_fix_failure_capsule.json',
       `${JSON.stringify(
@@ -1519,7 +1761,14 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
           project_root: detected.projectRoot,
           target_file: targetFile,
           verifier_command: verifierCommand,
-          credential_env_key: failureCode === 'credential_missing' ? liveProviderEnvKey() : null,
+          credential_env_key:
+            failureCode === 'credential_missing'
+              ? liveProviderEnvKey(
+                  /OPENROUTER_API_KEY/i.test(message)
+                    ? 'openrouter'
+                    : undefined,
+                )
+              : null,
           next_recommended_operator_action: classified.next.join('; '),
         },
         null,
@@ -1571,9 +1820,17 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
       }),
     );
     writeLatestRunPointers(evidence.runDir, options.project ?? 'global');
-    throw makeRecoverableRunError(message, evidence.runDir, failureCode, classified.next);
+    throw makeRecoverableRunError(
+      message,
+      evidence.runDir,
+      failureCode,
+      classified.next,
+    );
   }
-  evidence.writeDebugFile('small_fix_answer.json', `${JSON.stringify(answer, null, 2)}\n`);
+  evidence.writeDebugFile(
+    'small_fix_answer.json',
+    `${JSON.stringify(answer, null, 2)}\n`,
+  );
 
   options.progress?.report('patch', `Applying patch to ${targetFile}`);
   const toolContext = {
@@ -1584,7 +1841,9 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
   };
   const maxRepairAttempts =
     options.maxRepairAttempts ??
-    (resolveSmallFixProvider(options) === 'mock' ? 1 : resolveSmallFixMaxRepairAttempts());
+    (resolveSmallFixProvider(options) === 'mock'
+      ? 1
+      : resolveSmallFixMaxRepairAttempts());
   const repairTimeline: SmallFixRepairAttemptRecord[] = [];
   let currentAnswer = answer;
   let mutationLoop = await runSmallFixMutationLoop({
@@ -1593,6 +1852,7 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
     verifierCommand,
     replacementContent: currentAnswer.replacement_content,
     toolContext,
+    hostFallbackAllowed: isHostIsolationEscalationAllowed(),
   });
 
   for (let attempt = 1; attempt <= maxRepairAttempts; attempt += 1) {
@@ -1605,20 +1865,24 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
       writeResultAttempt &&
       writeResultAttempt.exit_code === 0,
     );
-    const attemptStatus: SmallFixRepairAttemptRecord['status'] = mutationLoop.policyBlocked
-      ? 'blocked'
-      : !writeResultAttempt || writeResultAttempt.exit_code !== 0
-        ? 'write_failed'
-        : verifyPassed
-          ? 'passed'
-          : 'failed';
+    const attemptStatus: SmallFixRepairAttemptRecord['status'] =
+      mutationLoop.policyBlocked
+        ? 'blocked'
+        : !writeResultAttempt || writeResultAttempt.exit_code !== 0
+          ? 'write_failed'
+          : verifyPassed
+            ? 'passed'
+            : 'failed';
     repairTimeline.push({
       attempt,
       status: attemptStatus,
       verifier_exit_code: testResultAttempt?.exit_code ?? null,
       verifier_stdout_summary: testResultAttempt?.stdout?.slice(0, 500) ?? null,
       verifier_stderr_summary: testResultAttempt?.stderr?.slice(0, 500) ?? null,
-      changed_files: writeResultAttempt && writeResultAttempt.exit_code === 0 ? [targetFile] : [],
+      changed_files:
+        writeResultAttempt && writeResultAttempt.exit_code === 0
+          ? [targetFile]
+          : [],
     });
 
     if (
@@ -1672,10 +1936,14 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
       verifierCommand,
       replacementContent: currentAnswer.replacement_content,
       toolContext,
+      hostFallbackAllowed: isHostIsolationEscalationAllowed(),
     });
   }
 
-  const repairTimelinePath = join(evidence.runDir, 'repair_attempt_timeline.json');
+  const repairTimelinePath = join(
+    evidence.runDir,
+    'repair_attempt_timeline.json',
+  );
   writeJsonArtifact(repairTimelinePath, {
     schema_version: 1,
     artifact_type: 'babel_small_fix_repair_timeline',
@@ -1716,7 +1984,9 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
           exit_codes: step.toolResults.map((result) => result.exit_code),
         })),
         repair_attempts: repairTimeline.length,
-        ...(discoveryBundle ? { discovery_steps: discoveryBundle.discovery.sessionLoopSteps } : {}),
+        ...(discoveryBundle
+          ? { discovery_steps: discoveryBundle.discovery.sessionLoopSteps }
+          : {}),
       },
       null,
       2,
@@ -1735,8 +2005,12 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
     writeResult &&
     Array.isArray(writeResult.checkpoint_ids) &&
     writeResult.checkpoint_ids.length > 0
-      ? typeof writeResult.checkpoint_ids[writeResult.checkpoint_ids.length - 1] === 'string'
-        ? (writeResult.checkpoint_ids[writeResult.checkpoint_ids.length - 1] as string)
+      ? typeof writeResult.checkpoint_ids[
+          writeResult.checkpoint_ids.length - 1
+        ] === 'string'
+        ? (writeResult.checkpoint_ids[
+            writeResult.checkpoint_ids.length - 1
+          ] as string)
         : null
       : null;
   let afterContent = originalContent;
@@ -1802,7 +2076,11 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
       checkpointRecord.changed_files = changedFiles;
       checkpointRecord.changed = true;
     }
-    checks.push(changedFiles.length > 0 ? `updated ${targetFile}` : `no changes to ${targetFile}`);
+    checks.push(
+      changedFiles.length > 0
+        ? `updated ${targetFile}`
+        : `no changes to ${targetFile}`,
+    );
     evidence.writeDebugFile(
       'changes.diff',
       buildChangesDiff(targetFile, originalContent, afterContent),
@@ -1829,7 +2107,9 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
     options.progress?.report('verify', `Running ${verifierCommand}…`);
     evidence.writeDebugFile('small_fix_verifier_stdout.log', testResult.stdout);
     evidence.writeDebugFile('small_fix_verifier_stderr.log', testResult.stderr);
-    checks.push(`${verifierCommand}: ${testResult.exit_code === 0 ? 'passed' : 'failed'}`);
+    checks.push(
+      `${verifierCommand}: ${testResult.exit_code === 0 ? 'passed' : 'failed'}`,
+    );
     options.progress?.report(
       'verify',
       `${verifierCommand}: ${testResult.exit_code === 0 ? 'passed' : 'failed'}`,
@@ -1837,11 +2117,15 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
     if (testResult.exit_code !== 0) {
       status = 'SMALL_FIX_FAILED';
       if (repairTimeline.length >= maxRepairAttempts) {
-        checks.push(`repair budget exhausted (${maxRepairAttempts} attempt(s))`);
+        checks.push(
+          `repair budget exhausted (${maxRepairAttempts} attempt(s))`,
+        );
       }
       if (options.rollbackOnFail === true && preMutationCheckpointId) {
         try {
-          const { record } = findCheckpoint(preMutationCheckpointId, { runDir: evidence.runDir });
+          const { record } = findCheckpoint(preMutationCheckpointId, {
+            runDir: evidence.runDir,
+          });
           const restore = restoreCheckpoint(record);
           if (restore.status === 'restored') {
             changedFiles = [];
@@ -1916,9 +2200,13 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
     })) ?? [];
   const mutationStepOffset = discoveryToolLog.length;
   const executionReport = {
-    status: status === 'SMALL_FIX_COMPLETE' ? 'EXECUTION_COMPLETE' : 'EXECUTION_HALTED',
+    status:
+      status === 'SMALL_FIX_COMPLETE'
+        ? 'EXECUTION_COMPLETE'
+        : 'EXECUTION_HALTED',
     stage_status: status,
-    steps_executed: discoveryToolLog.length + (testResult ? 2 : writeResult ? 1 : 0),
+    steps_executed:
+      discoveryToolLog.length + (testResult ? 2 : writeResult ? 1 : 0),
     tool_call_log: [
       ...discoveryToolLog,
       ...(writeResult
@@ -1976,8 +2264,12 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
     `${JSON.stringify(verifierContract.summary, null, 2)}\n`,
   );
 
-  let reasonCategory = status === 'SMALL_FIX_COMPLETE' ? 'small_fix_complete' : 'small_fix_failed';
-  if (status === 'SMALL_FIX_COMPLETE' && !verifierContract.summary.verifierCompletionSatisfied) {
+  let reasonCategory =
+    status === 'SMALL_FIX_COMPLETE' ? 'small_fix_complete' : 'small_fix_failed';
+  if (
+    status === 'SMALL_FIX_COMPLETE' &&
+    !verifierContract.summary.verifierCompletionSatisfied
+  ) {
     status = 'SMALL_FIX_FAILED';
     reasonCategory = 'verifier_contract';
     if (verifierContract.summary.missingRequiredVerifiers.length > 0) {
@@ -2027,11 +2319,16 @@ export async function runSmallFixPath(options: SmallFixOptions): Promise<SmallFi
           : 'Inspect verifier output and rerun with the verified pipeline if needed.',
     parseable_json_stdout_required: true,
     attempt_safety_summary_path: null,
-    repair_attempt_timeline_path: repairTimeline.length > 0 ? repairTimelinePath : null,
-    condition_summary: status === 'SMALL_FIX_COMPLETE' ? null : checks.join('; '),
+    repair_attempt_timeline_path:
+      repairTimeline.length > 0 ? repairTimelinePath : null,
+    condition_summary:
+      status === 'SMALL_FIX_COMPLETE' ? null : checks.join('; '),
     verifier_contract: verifierContract.summary,
   };
-  evidence.writeDebugFile('terminal_status_summary.json', `${JSON.stringify(terminal, null, 2)}\n`);
+  evidence.writeDebugFile(
+    'terminal_status_summary.json',
+    `${JSON.stringify(terminal, null, 2)}\n`,
+  );
   evidence.writeWaterfallTelemetry();
   const costLedger = buildCostLedger({
     runId: evidence.runId,

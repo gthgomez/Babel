@@ -31,7 +31,7 @@ test('GLM campaign preflight requires OpenRouter rather than accepting DeepSeek'
 
   const openRouter = await executor.preflight?.({
     ...baseRequest,
-    env: { OPENROUTER_API_KEY: 'synthetic-openrouter-key' },
+    env: { OPENROUTER_API_KEY: 'fixture-router-key' },
   });
   assert.deepEqual(openRouter, { ready: true });
 });

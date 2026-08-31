@@ -180,21 +180,37 @@ export async function handleSemanticSearch(
   req: Extract<ToolCallRequest, { tool: 'semantic_search' }>,
 ): Promise<ToolResult> {
   try {
-    // ── Lazily register embedding function on first semantic search ──
-    if (!embeddingRegistered) {
-      embeddingRegistered = true;
-      const provider = createEmbeddingProvider();
-      if (provider) {
-        globalIndexer.setEmbeddingFunction((text) =>
-          provider.embedTexts([text]).then((vs) => vs[0]!),
-        );
+    const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
+    const readOnlyNoIndexWrites = process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'] === '1';
+
+    if (readOnlyNoIndexWrites) {
+      // A read-only lane may use an index that it opened and owns already,
+      // but must not create a database, walk the project, or initialize the
+      // vector extension as a side effect of answering a search request.
+      if (globalIndexer.indexedProjectRoot !== path.resolve(projectRoot)) {
+        return {
+          exit_code: 1,
+          stdout: '',
+          stderr: 'Semantic search unavailable: no already-open index for this project in the read-only lane.',
+        };
       }
+    } else {
+      // ── Lazily register embedding function on first semantic search ──
+      if (!embeddingRegistered) {
+        embeddingRegistered = true;
+        const provider = createEmbeddingProvider();
+        if (provider) {
+          globalIndexer.setEmbeddingFunction((text) =>
+            provider.embedTexts([text]).then((vs) => vs[0]!),
+          );
+        }
+      }
+      await ensureSemanticIndexForProject(projectRoot);
     }
 
-    const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
-    await ensureSemanticIndexForProject(projectRoot);
-
-    const hits = await globalIndexer.searchWithEmbedding(req.query, req.limit ?? 5);
+    const hits = readOnlyNoIndexWrites
+      ? globalIndexer.search(req.query, req.limit ?? 5)
+      : await globalIndexer.searchWithEmbedding(req.query, req.limit ?? 5);
 
     return {
       exit_code: 0,

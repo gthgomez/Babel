@@ -9,7 +9,7 @@ const DEFAULT_TAIL_CHARS = 2048;
 // Common secret patterns to redact
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/([A-Za-z0-9+/]{40,}={0,2})/g, '[REDACTED_TOKEN]'],
-  [/(sk-[A-Za-z0-9]{20,})/gi, '[REDACTED_API_KEY]'],
+  [/(sk-[A-Za-z0-9][A-Za-z0-9_-]{19,})/gi, '[REDACTED_API_KEY]'],
   [/(AIza[0-9A-Za-z\-_]{35})/g, '[REDACTED_API_KEY]'],
   [/(-----BEGIN (?:RSA |EC )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC )?PRIVATE KEY-----)/g, '[REDACTED_PRIVATE_KEY]'],
   [/(eyJ[A-Za-z0-9\-_]+\.eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+)/g, '[REDACTED_JWT]'],

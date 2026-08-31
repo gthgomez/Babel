@@ -19,6 +19,7 @@ import { runUndoLane } from './undoLane.js';
 const originalFetch = globalThis.fetch;
 const originalApiKey = process.env['DEEPINFRA_API_KEY'];
 const originalDeepSeekApiKey = process.env['DEEPSEEK_API_KEY'];
+const originalHostFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
 
 function writeNodeFixture(root: string, implementation: string): void {
   mkdirSync(join(root, 'src'), { recursive: true });
@@ -53,9 +54,12 @@ function writeNodeFixture(root: string, implementation: string): void {
 
 function mockSmallFixResponse(replacementContent: string): void {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  // The fixture verifies the host-local small-fix/undo path; make that escalation explicit.
+  process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
   globalThis.fetch = (async () =>
     new Response(
       JSON.stringify({
+        model: 'deepseek/deepseek-v4-pro',
         choices: [
           {
             message: {
@@ -147,6 +151,11 @@ describe('runUndoLane', () => {
         } else {
           process.env['DEEPSEEK_API_KEY'] = originalDeepSeekApiKey;
         }
+        if (originalHostFallback === undefined) {
+          delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+        } else {
+          process.env['BABEL_ALLOW_HOST_FALLBACK'] = originalHostFallback;
+        }
         rmSync(repo, { recursive: true, force: true });
       }
     },
@@ -206,6 +215,11 @@ describe('runUndoLane', () => {
           delete process.env['DEEPSEEK_API_KEY'];
         } else {
           process.env['DEEPSEEK_API_KEY'] = originalDeepSeekApiKey;
+        }
+        if (originalHostFallback === undefined) {
+          delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+        } else {
+          process.env['BABEL_ALLOW_HOST_FALLBACK'] = originalHostFallback;
         }
         rmSync(repoA, { recursive: true, force: true });
         rmSync(repoB, { recursive: true, force: true });

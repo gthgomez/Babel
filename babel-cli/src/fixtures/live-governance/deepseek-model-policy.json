@@ -17,19 +17,19 @@
   },
   "selection_policy": {
     "cheap": {
-      "selection_reason": "Live governance proof routes all stages to direct DeepSeek for provider-backed evidence."
+      "selection_reason": "Live governance proof routes all stages to DeepSeek through OpenRouter for provider-backed evidence."
     },
     "standard": {
-      "selection_reason": "Direct DeepSeek governance proof lane."
+      "selection_reason": "OpenRouter DeepSeek governance proof lane."
     },
     "triage": {
-      "selection_reason": "Direct DeepSeek governance proof lane."
+      "selection_reason": "OpenRouter DeepSeek governance proof lane."
     },
     "fallback": {
-      "selection_reason": "Direct DeepSeek governance proof lane."
+      "selection_reason": "OpenRouter DeepSeek governance proof lane."
     },
     "escalation": {
-      "selection_reason": "Direct DeepSeek governance proof lane."
+      "selection_reason": "OpenRouter DeepSeek governance proof lane."
     }
   },
   "family_defaults": {
@@ -92,28 +92,28 @@
   },
   "models": {
     "deepseek-v4-flash": {
-      "provider": "deepseek",
-      "model_id": "deepseek-v4-flash",
-      "source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
-      "verified_at": "2026-06-04",
-      "expires_at": "2026-09-04",
+      "provider": "openrouter",
+      "model_id": "deepseek/deepseek-v4-flash",
+      "source_url": "https://openrouter.ai/deepseek/deepseek-v4-flash",
+      "verified_at": "2026-08-27",
+      "expires_at": "2026-11-27",
       "tier": "standard",
       "capabilities": ["json", "planning", "qa", "coding"],
       "estimated_cost_per_1m_input": 0.14,
       "estimated_cost_per_1m_output": 0.28,
-      "selection_reason": "Current direct DeepSeek model used to prove the live governance lane without DeepInfra mediation. Input estimate uses cache-miss pricing; runner metadata uses cache-hit/cache-miss splits when reported."
+      "selection_reason": "Current DeepSeek model used through OpenRouter to prove the live governance lane."
     },
     "deepseek-v4-pro": {
-      "provider": "deepseek",
-      "model_id": "deepseek-v4-pro",
-      "source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
-      "verified_at": "2026-06-04",
-      "expires_at": "2026-09-04",
+      "provider": "openrouter",
+      "model_id": "deepseek/deepseek-v4-pro",
+      "source_url": "https://openrouter.ai/deepseek/deepseek-v4-pro",
+      "verified_at": "2026-08-27",
+      "expires_at": "2026-11-27",
       "tier": "escalation",
       "capabilities": ["json", "planning", "qa", "coding"],
       "estimated_cost_per_1m_input": 0.435,
       "estimated_cost_per_1m_output": 0.87,
-      "selection_reason": "Reserved for the hardest live governance proof stage only; Flash remains the default for lower-judgment stages to control cost."
+      "selection_reason": "Reserved for the hardest live governance proof stage only; Flash remains the default for lower-judgment stages to control cost, both through OpenRouter."
     }
   },
   "stages": {

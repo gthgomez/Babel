@@ -6,14 +6,9 @@
  * waterfalls; this runner covers current direct DeepSeek v4 models.
  */
 
-import { createHash, randomUUID } from "node:crypto";
-import type { ZodType } from "zod";
-import {
-  parseRetryAfterHeader,
-  isRetryableStatus,
-  normalizeFinishReason,
-  classifyProviderError,
-} from "./providerNormalize.js";
+import { createHash, randomUUID } from 'node:crypto';
+import type { ZodType } from 'zod';
+import { parseRetryAfterHeader, isRetryableStatus, normalizeFinishReason, classifyProviderError } from './providerNormalize.js';
 import {
   type LlmRunner,
   type ProviderMessage,
@@ -23,76 +18,55 @@ import {
   type ToolDefinition,
   type ToolStreamEvent,
   buildStructuredOutputError,
-} from "./base.js";
-import { mapProviderMessagesToWire } from "./providerMessages.js";
-import {
-  assertSupportedDeepSeekModel,
-  type DeepSeekModelId,
-} from "../services/deepSeekPricing.js";
-import { estimateProviderUsageCost } from "../services/modelPricingRegistry.js";
-import { extractJson } from "../utils/extractJson.js";
-import {
-  JitDenialError,
-  PolicyBlockedDuplicateError,
-} from "../ui/incrementalToolDetector.js";
-import {
-  createVcrRecorder,
-  createVcrPlayer,
-  type VcrRecorder,
-} from "../services/streamingVcr.js";
-import { parseRateLimitHeaders } from "../ui/rateLimitWidget.js";
-import { resolveProviderCredential } from "./credentialHub.js";
+} from './base.js';
+import { mapProviderMessagesToWire } from './providerMessages.js';
+import { assertSupportedDeepSeekModel, type DeepSeekModelId } from '../services/deepSeekPricing.js';
+import { estimateProviderUsageCost } from '../services/modelPricingRegistry.js';
+import { extractJson } from '../utils/extractJson.js';
+import { JitDenialError, PolicyBlockedDuplicateError } from '../ui/incrementalToolDetector.js';
+import { createVcrRecorder, createVcrPlayer, type VcrRecorder } from '../services/streamingVcr.js';
+import { parseRateLimitHeaders } from '../ui/rateLimitWidget.js';
+import { resolveProviderCredential } from './credentialHub.js';
 import {
   buildProviderFailureReceipt,
-  isSafeProviderRetry,
-  normalizeProviderFailureClass,
-  type ProviderFailureStage,
-} from "./providerFailureReceipt.js";
+  providerErrorCodeFromBody,
+  providerRequestIdFromResponse,
+  type ProviderFailureDetails,
+} from './providerFailureReceipt.js';
 
-const MAX_TOKENS = readPositiveIntEnv("BABEL_DEEPSEEK_TOKENS", 32000);
-const REQUEST_TIMEOUT_MS = readPositiveIntEnv(
-  "BABEL_DEEPSEEK_REQUEST_TIMEOUT_MS",
-  120_000,
-);
-const REQUEST_MAX_RETRIES = readPositiveIntEnv(
-  "BABEL_DEEPSEEK_REQUEST_MAX_RETRIES",
-  3,
-  10,
-);
-const STREAM_IDLE_TIMEOUT_MS = readPositiveIntEnv(
-  "BABEL_DEEPSEEK_STREAM_IDLE_TIMEOUT_MS",
-  120_000,
-);
+const MAX_TOKENS = readPositiveIntEnv('BABEL_DEEPSEEK_TOKENS', 32000);
+const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
+const DEFAULT_REQUEST_MAX_RETRIES = 3;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
 const RETRY_BASE_DELAY_MS = 200;
-const API_URL = "https://api.deepseek.com/v1/chat/completions";
+const API_URL = 'https://api.deepseek.com/v1/chat/completions';
 
-const VALID_REASONING_EFFORTS = new Set(["low", "medium", "high", "max"]);
+const VALID_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'max']);
 
 function resolveReasoningEffort(): string | undefined {
-  const raw = process.env["BABEL_REASONING_EFFORT"]?.trim().toLowerCase();
+  const raw = process.env['BABEL_REASONING_EFFORT']?.trim().toLowerCase();
   return raw && VALID_REASONING_EFFORTS.has(raw) ? raw : undefined;
 }
 
 const SYSTEM_PROMPT =
-  "You are executing a Babel pipeline agent. " +
-  "Follow all instructions in the user message exactly. " +
-  "Your response MUST be a single valid JSON object only - " +
-  "no markdown, no explanation, no code fences. " +
-  "Output only raw JSON.";
+  'You are executing a Babel pipeline agent. ' +
+  'Follow all instructions in the user message exactly. ' +
+  'Your response MUST be a single valid JSON object only - ' +
+  'no markdown, no explanation, no code fences. ' +
+  'Output only raw JSON.';
 
 const CHAT_SYSTEM_PROMPT =
-  "You are an expert software engineer in a terminal chat session. " +
-  "Answer the user conversationally in natural language. " +
-  "Use tools to read files and gather context as needed. " +
-  "Be concise but thorough. Use markdown for formatting. " +
-  "Do NOT output JSON — respond in plain natural language.";
+  'You are an expert software engineer in a terminal chat session. ' +
+  'Answer the user conversationally in natural language. ' +
+  'Use tools to read files and gather context as needed. ' +
+  'Be concise but thorough. Use markdown for formatting. ' +
+  'Do NOT output JSON — respond in plain natural language.';
 
 interface ChatChoice {
   message?: { content?: string | null };
 }
 
 interface ChatResponse {
-  id?: string;
   choices?: ChatChoice[];
   usage?: {
     prompt_tokens?: number;
@@ -103,62 +77,27 @@ interface ChatResponse {
   };
 }
 
-function providerRequestId(
-  response: Response | null,
-  body?: ChatResponse | null,
-): string | null {
-  const header = response?.headers.get("x-request-id");
-  if (header && header.trim()) return header.trim().slice(0, 200);
-  return typeof body?.id === "string" && body.id.length > 0
-    ? body.id.slice(0, 200)
-    : null;
-}
-
-function providerApiErrorCode(body: string): string | null {
-  try {
-    const parsed = JSON.parse(body) as {
-      error?: { code?: unknown } | unknown;
-      code?: unknown;
-    };
-    const code =
-      typeof parsed.error === "object" && parsed.error !== null
-        ? (parsed.error as { code?: unknown }).code
-        : parsed.code;
-    return typeof code === "string" && code.length > 0
-      ? code.slice(0, 120)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 function normalizeTokenCount(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function buildInvocationMetadata(
   model: string,
   latencyMs: number,
-  usage?: ChatResponse["usage"],
+  usage?: ChatResponse['usage'],
   ttftMs?: number | null,
   generationMs?: number | null,
   validationMs?: number | null,
 ): RunnerInvocationMetadata {
   const promptTokens = normalizeTokenCount(usage?.prompt_tokens);
   const completionTokens = normalizeTokenCount(usage?.completion_tokens);
-  const promptCacheHitTokens = normalizeTokenCount(
-    usage?.prompt_cache_hit_tokens,
-  );
-  const promptCacheMissTokens = normalizeTokenCount(
-    usage?.prompt_cache_miss_tokens,
-  );
+  const promptCacheHitTokens = normalizeTokenCount(usage?.prompt_cache_hit_tokens);
+  const promptCacheMissTokens = normalizeTokenCount(usage?.prompt_cache_miss_tokens);
   const totalTokens =
     normalizeTokenCount(usage?.total_tokens) ??
-    (promptTokens !== null && completionTokens !== null
-      ? promptTokens + completionTokens
-      : null);
+    (promptTokens !== null && completionTokens !== null ? promptTokens + completionTokens : null);
   const estimate = estimateProviderUsageCost({
-    provider: "deepseek",
+    provider: 'deepseek',
     modelId: model,
     promptTokens,
     completionTokens,
@@ -167,7 +106,7 @@ function buildInvocationMetadata(
   });
 
   return {
-    provider: "deepseek",
+    provider: 'deepseek',
     provider_model_id: model,
     latency_ms: latencyMs,
     prompt_tokens: promptTokens,
@@ -190,36 +129,28 @@ function buildInvocationMetadata(
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted)
-    return Promise.reject(new DOMException("Request cancelled", "AbortError"));
+  if (signal?.aborted) return Promise.reject(new DOMException('Request cancelled', 'AbortError'));
   return new Promise((resolveSleep, reject) => {
     const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
+      signal?.removeEventListener('abort', onAbort);
       resolveSleep();
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
-      reject(new DOMException("Request cancelled", "AbortError"));
+      reject(new DOMException('Request cancelled', 'AbortError'));
     };
-    signal?.addEventListener("abort", onAbort, { once: true });
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 
-function readPositiveIntEnv(
-  name: string,
-  fallback: number,
-  max?: number,
-): number {
-  const parsed = Number(process.env[name] ?? "");
-  const value =
-    Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+function readPositiveIntEnv(name: string, fallback: number, max?: number): number {
+  const parsed = Number(process.env[name] ?? '');
+  const value = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
   return max ? Math.min(value, max) : value;
 }
 
 function retryDelayMs(attempt: number, response?: Response): number {
-  const retryAfter = parseRetryAfterHeader(
-    response?.headers.get("retry-after"),
-  );
+  const retryAfter = parseRetryAfterHeader(response?.headers.get('retry-after'));
   if (retryAfter !== null) {
     return Math.min(retryAfter * 1000, 30_000);
   }
@@ -228,12 +159,35 @@ function retryDelayMs(attempt: number, response?: Response): number {
   return Math.min(exponential + jitter, 5_000);
 }
 
+function getStreamIdleTimeoutMs(): number {
+  return readPositiveIntEnv(
+    'BABEL_DEEPSEEK_STREAM_IDLE_TIMEOUT_MS',
+    DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  );
+}
+
+function getRequestTimeoutMs(): number {
+  return readPositiveIntEnv(
+    'BABEL_DEEPSEEK_REQUEST_TIMEOUT_MS',
+    DEFAULT_REQUEST_TIMEOUT_MS,
+  );
+}
+
+function getRequestMaxRetries(): number {
+  return readPositiveIntEnv(
+    'BABEL_DEEPSEEK_REQUEST_MAX_RETRIES',
+    DEFAULT_REQUEST_MAX_RETRIES,
+    10,
+  );
+}
+
+
 function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
+  return error instanceof Error && error.name === 'AbortError';
 }
 
 async function readErrorBody(response: Response): Promise<string> {
-  return (await response.text().catch(() => "")).slice(0, 200);
+  return (await response.text().catch(() => '')).slice(0, 200);
 }
 
 async function readStreamingResponse(
@@ -243,23 +197,31 @@ async function readStreamingResponse(
   state: {
     ttftMs: number | null;
     generationMs: number | null;
-    usage: ChatResponse["usage"] | null;
+    usage: ChatResponse['usage'] | null;
+    partialModelOutput: boolean;
+    outputReceipt: string;
+    sawDone: boolean;
   },
   vcrRecorder?: VcrRecorder,
   onFirstByte?: () => void,
   onStreamProgress?: (bytes: number) => void,
 ): Promise<string> {
   if (!response.body) {
-    throw new Error("[deepSeekApi] Streaming response had no body.");
+    throw new Error('[deepSeekApi] Streaming response had no body.');
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  let text = "";
-  let buffer = "";
+  let text = '';
+  let buffer = '';
   let firstChunkReceived = false;
   let totalBytes = 0;
   let lastContentChunkAt = Date.now();
-  let terminalMarkerSeen = false;
+  const idleTimeoutMs = getStreamIdleTimeoutMs();
+  const recordOutput = (kind: string, value: string): void => {
+    if (!value) return;
+    state.partialModelOutput = true;
+    state.outputReceipt += `${kind}:${value}\n`;
+  };
 
   while (true) {
     // Wrap reader.read() with a timeout so a silent network stall
@@ -268,14 +230,14 @@ async function readStreamingResponse(
     const read = reader.read();
     const idle = new Promise<never>((_, reject) => {
       readTimeout = setTimeout(() => {
-        reader.cancel().catch(() => {});
         reject(
           new Error(
-            `[deepSeekApi] stream read timeout after ${STREAM_IDLE_TIMEOUT_MS}ms ` +
+            `[deepSeekApi] stream read timeout after ${idleTimeoutMs}ms ` +
               `(no bytes received)`,
           ),
         );
-      }, STREAM_IDLE_TIMEOUT_MS);
+        reader.cancel().catch(() => {});
+      }, idleTimeoutMs);
     });
     const { done, value } = await Promise.race([read, idle]).finally(() => {
       if (readTimeout) clearTimeout(readTimeout);
@@ -289,10 +251,10 @@ async function readStreamingResponse(
     // during long reasoning, but bytes arriving don't mean progress is being
     // made. Track the last time actual content (or reasoning) arrived, and
     // abort if the stream has been idle for too long.
-    if (Date.now() - lastContentChunkAt > STREAM_IDLE_TIMEOUT_MS) {
+    if (Date.now() - lastContentChunkAt > idleTimeoutMs) {
       reader.cancel().catch(() => {});
       throw new Error(
-        `[deepSeekApi] stream idle timeout after ${STREAM_IDLE_TIMEOUT_MS}ms ` +
+        `[deepSeekApi] stream idle timeout after ${idleTimeoutMs}ms ` +
           `(last content chunk at ${new Date(lastContentChunkAt).toISOString()})`,
       );
     }
@@ -302,7 +264,7 @@ async function readStreamingResponse(
       state.ttftMs = Date.now() - startedAt;
       onFirstByte?.();
       if (callbacks?.onProgress) {
-        callbacks.onProgress({ state: "Receiving response" });
+        callbacks.onProgress({ state: 'Receiving response' });
       }
     }
 
@@ -315,7 +277,7 @@ async function readStreamingResponse(
     // discarding it as a non-SSE line.  Genuine SSE always starts with
     // `data:` (or a keepalive comment), so this branch is unambiguous.
     const nonSseProbe = buffer.trimStart();
-    if (nonSseProbe.startsWith("{")) {
+    if (nonSseProbe.startsWith('{')) {
       let rawJson = buffer;
       while (true) {
         const remainder = await reader.read();
@@ -331,24 +293,26 @@ async function readStreamingResponse(
             message?: { content?: unknown };
             delta?: { content?: unknown; reasoning_content?: unknown };
           }>;
-          usage?: ChatResponse["usage"];
+          usage?: ChatResponse['usage'];
         };
         const choice = json.choices?.[0];
         const content =
-          typeof choice?.message?.content === "string"
+          typeof choice?.message?.content === 'string'
             ? choice.message.content
-            : typeof choice?.delta?.content === "string"
+            : typeof choice?.delta?.content === 'string'
               ? choice.delta.content
-              : "";
+              : '';
         const reasoning =
-          typeof choice?.delta?.reasoning_content === "string"
+          typeof choice?.delta?.reasoning_content === 'string'
             ? choice.delta.reasoning_content
-            : "";
-        if (reasoning && callbacks?.onThought) {
-          callbacks.onThought(reasoning);
+            : '';
+        if (reasoning) {
+          recordOutput('reasoning', reasoning);
+          callbacks?.onThought?.(reasoning);
         }
         if (content) {
           lastContentChunkAt = Date.now();
+          recordOutput('text', content);
           text += content;
           if (callbacks?.onChunk) {
             await callbacks.onChunk(content);
@@ -358,10 +322,7 @@ async function readStreamingResponse(
         state.generationMs = Date.now() - startedAt - (state.ttftMs ?? 0);
         return text;
       } catch (err) {
-        if (
-          err instanceof JitDenialError ||
-          err instanceof PolicyBlockedDuplicateError
-        ) {
+        if (err instanceof JitDenialError || err instanceof PolicyBlockedDuplicateError) {
           reader.cancel().catch(() => {});
           throw err;
         }
@@ -370,35 +331,35 @@ async function readStreamingResponse(
       }
     }
 
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
 
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
-      if (trimmed.startsWith("data: ")) {
+      if (trimmed.startsWith('data: ')) {
         vcrRecorder?.record(trimmed);
         const data = trimmed.slice(6).trim();
-        if (data === "[DONE]") {
-          terminalMarkerSeen = true;
+        if (data === '[DONE]') {
+          state.sawDone = true;
           continue;
         }
         try {
           const json = JSON.parse(data) as {
-            choices?: Array<{
-              delta?: { content?: string; reasoning_content?: string };
-            }>;
-            usage?: ChatResponse["usage"];
+            choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>;
+            usage?: ChatResponse['usage'];
           };
-          const delta = json.choices?.[0]?.delta?.content || "";
-          const reasoning = json.choices?.[0]?.delta?.reasoning_content || "";
+          const delta = json.choices?.[0]?.delta?.content || '';
+          const reasoning = json.choices?.[0]?.delta?.reasoning_content || '';
           if (reasoning || delta) {
             lastContentChunkAt = Date.now();
           }
-          if (reasoning && callbacks?.onThought) {
-            callbacks.onThought(reasoning);
+          if (reasoning) {
+            recordOutput('reasoning', reasoning);
+            callbacks?.onThought?.(reasoning);
           }
           if (delta) {
+            recordOutput('text', delta);
             text += delta;
             if (callbacks?.onChunk) {
               await callbacks.onChunk(delta);
@@ -408,10 +369,7 @@ async function readStreamingResponse(
             state.usage = json.usage;
           }
         } catch (err) {
-          if (
-            err instanceof JitDenialError ||
-            err instanceof PolicyBlockedDuplicateError
-          ) {
+          if (err instanceof JitDenialError || err instanceof PolicyBlockedDuplicateError) {
             reader.cancel().catch(() => {});
             throw err;
           }
@@ -421,28 +379,26 @@ async function readStreamingResponse(
     }
   }
 
-  if (buffer.startsWith("data: ")) {
+  if (buffer.startsWith('data: ')) {
     vcrRecorder?.record(buffer);
     const data = buffer.slice(6).trim();
-    if (data === "[DONE]") {
-      terminalMarkerSeen = true;
-    } else {
+    if (data !== '[DONE]') {
       try {
         const json = JSON.parse(data) as {
-          choices?: Array<{
-            delta?: { content?: string; reasoning_content?: string };
-          }>;
-          usage?: ChatResponse["usage"];
+          choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>;
+          usage?: ChatResponse['usage'];
         };
-        const delta = json.choices?.[0]?.delta?.content || "";
-        const reasoning = json.choices?.[0]?.delta?.reasoning_content || "";
+        const delta = json.choices?.[0]?.delta?.content || '';
+        const reasoning = json.choices?.[0]?.delta?.reasoning_content || '';
         if (reasoning || delta) {
           lastContentChunkAt = Date.now();
         }
-        if (reasoning && callbacks?.onThought) {
-          callbacks.onThought(reasoning);
+        if (reasoning) {
+          recordOutput('reasoning', reasoning);
+          callbacks?.onThought?.(reasoning);
         }
         if (delta) {
+          recordOutput('text', delta);
           text += delta;
           if (callbacks?.onChunk) {
             await callbacks.onChunk(delta);
@@ -452,10 +408,7 @@ async function readStreamingResponse(
           state.usage = json.usage;
         }
       } catch (err) {
-        if (
-          err instanceof JitDenialError ||
-          err instanceof PolicyBlockedDuplicateError
-        ) {
+        if (err instanceof JitDenialError || err instanceof PolicyBlockedDuplicateError) {
           reader.cancel().catch(() => {});
           throw err;
         }
@@ -464,12 +417,12 @@ async function readStreamingResponse(
     }
   }
 
-  if (!terminalMarkerSeen) {
-    throw new Error(
-      "[deepSeekApi] incomplete stream: terminal marker was not received",
-    );
-  }
+  state.sawDone = state.sawDone || buffer.trim() === 'data: [DONE]';
+
   state.generationMs = Date.now() - startedAt - (state.ttftMs ?? 0);
+  if (!state.sawDone) {
+    throw new Error('[deepSeekApi] stream closed before terminal [DONE] marker');
+  }
   return text;
 }
 
@@ -479,17 +432,16 @@ export class DeepSeekApiRunner implements LlmRunner {
   private lastInvocationMetadata: RunnerInvocationMetadata | null = null;
 
   constructor(
-    model = "deepseek-v4-flash",
+    model = 'deepseek-v4-flash',
     credential: { explicitCredential?: string; env?: NodeJS.ProcessEnv } = {},
   ) {
-    const key = resolveProviderCredential("deepseek", credential);
-    if (key === null)
-      throw new Error("[deepSeekApi] credential resolution failed");
+    const key = resolveProviderCredential('deepseek', credential);
+    if (key === null) throw new Error('[deepSeekApi] credential resolution failed');
     // Validate expected provider shape without including any secret fragment.
-    if (!key.startsWith("sk-")) {
+    if (!key.startsWith('sk-')) {
       throw new Error(
-        "[deepSeekApi] DEEPSEEK_API_KEY has an invalid format. " +
-          "Check the host environment and babel-cli/.env precedence.",
+        '[deepSeekApi] DEEPSEEK_API_KEY has an invalid format. ' +
+          'Check the host environment and babel-cli/.env precedence.',
       );
     }
     this.apiKey = key;
@@ -520,104 +472,110 @@ export class DeepSeekApiRunner implements LlmRunner {
     streamState: {
       ttftMs: number | null;
       generationMs: number | null;
-      usage: ChatResponse["usage"] | null;
+      usage: ChatResponse['usage'] | null;
+      partialModelOutput: boolean;
+      outputReceipt: string;
+      sawDone: boolean;
     };
   }> {
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
     if (callbacks?.onProgress) {
-      callbacks.onProgress({ state: "Contacting model" });
+      callbacks.onProgress({ state: 'Contacting model' });
     }
 
     const isStreaming = !!callbacks?.onChunk;
+    const requestTimeoutMs = getRequestTimeoutMs();
+    const requestMaxRetries = getRequestMaxRetries();
 
     const buildBody = () => {
       const effort = resolveReasoningEffort();
-      const thinkingEnabled =
-        process.env["BABEL_DEEPSEEK_THINKING"] !== "disabled";
+      const thinkingEnabled = process.env['BABEL_DEEPSEEK_THINKING'] !== 'disabled';
       return JSON.stringify({
         model: this.model,
         max_tokens: MAX_TOKENS,
         temperature: 0,
-        ...(raw ? {} : { response_format: { type: "json_object" as const } }),
+        ...(raw ? {} : { response_format: { type: 'json_object' as const } }),
         stream: isStreaming,
         ...(isStreaming ? { stream_options: { include_usage: true } } : {}),
         ...(effort ? { reasoning_effort: effort } : {}),
-        thinking: { type: thinkingEnabled ? "enabled" : "disabled" },
+        thinking: { type: thinkingEnabled ? 'enabled' : 'disabled' },
         messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: prompt },
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: prompt },
         ],
       });
     };
     const inferenceId = randomUUID();
     const requestBody = buildBody();
-    let failureNotified = false;
-    let lastAttempt = 1;
-    let lastHttpStatus: number | null = null;
-    let lastApiErrorCode: string | null = null;
-    let lastFailureMessage = "provider invocation failed";
-    let lastFailureStage: ProviderFailureStage = "request";
-    let lastResponse: Response | null = null;
-    let lastResponseBody: ChatResponse | null = null;
     callbacks?.onInvocationStarted?.({
       inference_id: inferenceId,
-      provider: "deepseek",
+      provider: 'deepseek',
       requested_model_id: this.model,
       normalized_model_id: this.model,
       sent_model_id: this.model,
-      input_digest: createHash("sha256").update(requestBody).digest("hex"),
+      input_digest: createHash('sha256').update(requestBody).digest('hex'),
       input_message_count: 2,
     });
+    let completionSent = false;
+    let lastAttempt = 0;
     const notifyCompleted = (
-      status: "delivered" | "failed",
+      status: 'delivered' | 'failed',
       outputText: string,
+      options: {
+        observedModelId?: string | null;
+        actualAttempt?: number;
+        details?: ProviderFailureDetails;
+        failureStage?: import('./base.js').ProviderFailureStage;
+        partialModelOutput?: boolean;
+        toolCallCount?: number;
+        outputMaterial?: string;
+      } = {},
     ): void => {
-      if (status === "failed" && !failureNotified) {
-        failureNotified = true;
-        const failureClass = normalizeProviderFailureClass({
-          httpStatus: lastHttpStatus,
-          message: lastFailureMessage,
-          stage: lastFailureStage,
-          stream: isStreaming,
-        });
-        callbacks?.onProviderFailure?.(
-          buildProviderFailureReceipt({
-            provider: "deepseek",
-            exactModelId: this.model,
-            localRequestId: inferenceId,
-            openrouterRequestId: providerRequestId(
-              lastResponse,
-              lastResponseBody,
-            ),
-            httpStatus: lastHttpStatus,
-            apiErrorCode: lastApiErrorCode,
-            normalizedFailureClass: failureClass,
-            message: lastFailureMessage,
-            retryable: isSafeProviderRetry({
-              httpStatus: lastHttpStatus,
-              failureClass,
-              attempt: lastAttempt,
-              maximumAttempts: REQUEST_MAX_RETRIES,
-              partialModelOutput: outputText.length > 0,
-            }),
-            retryAttempt: lastAttempt,
-            maximumAttempts: REQUEST_MAX_RETRIES,
-            stream: isStreaming,
-            failureStage: lastFailureStage,
-            inferenceStarted: true,
-            partialModelOutput: outputText.length > 0,
-            toolCallsEmitted: 0,
-          }),
-        );
-      }
+      if (completionSent) return;
+      completionSent = true;
+      const failureReceipt =
+        status === 'failed'
+          ? buildProviderFailureReceipt({
+              inferenceId,
+              provider: 'deepseek',
+              model: this.model,
+              details: options.details ?? {},
+              observedUpstream: null,
+              actualAttempt: options.actualAttempt ?? lastAttempt,
+              maxAttempts: requestMaxRetries,
+              stream: isStreaming,
+              failureStage: options.failureStage ?? 'unknown',
+              inferenceStarted: true,
+              partialModelOutput: options.partialModelOutput ?? false,
+              toolCallCount: options.toolCallCount,
+              outputMaterial: options.outputMaterial ?? outputText,
+            })
+          : undefined;
       callbacks?.onInvocationCompleted?.({
         inference_id: inferenceId,
-        provider: "deepseek",
+        provider: 'deepseek',
         model: this.model,
         status,
-        observed_model_id: null,
-        output_digest: createHash("sha256").update(outputText).digest("hex"),
+        observed_model_id: options.observedModelId ?? null,
+        output_digest: createHash('sha256').update(outputText).digest('hex'),
+        ...(failureReceipt === undefined
+          ? {}
+          : {
+              failure_receipt: failureReceipt,
+              failure_class: failureReceipt.failure_class,
+              failure_stage: failureReceipt.failure_stage,
+              provider_request_id: failureReceipt.provider_request_id,
+              api_error_code: failureReceipt.api_error_code,
+              http_status: failureReceipt.http_status,
+              actual_attempt: failureReceipt.actual_attempt,
+              max_attempts: failureReceipt.max_attempts,
+              stream: failureReceipt.stream,
+              inference_started: failureReceipt.inference_started,
+              partial_model_output: failureReceipt.partial_model_output,
+              retryable: failureReceipt.retryable,
+              tool_call_count: failureReceipt.tool_call_count,
+            }),
       });
     };
     const notifyPhase = (
@@ -627,58 +585,62 @@ export class DeepSeekApiRunner implements LlmRunner {
     ): void => {
       callbacks?.onInvocationPhase?.({
         inference_id: inferenceId,
-        provider: "deepseek",
+        provider: 'deepseek',
         model: this.model,
         phase,
         ...(statusCode !== undefined ? { status_code: statusCode } : {}),
         ...(detail !== undefined ? { detail } : {}),
       });
     };
-    notifyPhase("request_created");
+    notifyPhase('request_created');
 
     // ── VCR playback mode ──────────────────────────────────────────────────────
     const vcrPlayer = createVcrPlayer();
     if (vcrPlayer) {
       const lines = await vcrPlayer.readAllLines();
-      let text = "";
+      let text = '';
       const streamState = {
         ttftMs: null as number | null,
         generationMs: null as number | null,
-        usage: null as ChatResponse["usage"] | null,
+        usage: null as ChatResponse['usage'] | null,
+        partialModelOutput: false,
+        outputReceipt: '',
+        sawDone: false,
       };
       let firstChunkReceived = false;
       for (const line of lines) {
-        if (line.startsWith("data: ")) {
+        if (line.startsWith('data: ')) {
           const data = line.slice(6).trim();
-          if (data === "[DONE]") {
-            streamState.generationMs =
-              Date.now() - startedAt - (streamState.ttftMs ?? 0);
+          if (data === '[DONE]') {
+            streamState.sawDone = true;
+            streamState.generationMs = Date.now() - startedAt - (streamState.ttftMs ?? 0);
             break;
           }
           try {
             const json = JSON.parse(data) as {
-              choices?: Array<{
-                delta?: { content?: string; reasoning_content?: string };
-              }>;
-              usage?: ChatResponse["usage"];
+              choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>;
+              usage?: ChatResponse['usage'];
             };
             if (
               !firstChunkReceived &&
-              (json.choices?.[0]?.delta?.content ||
-                json.choices?.[0]?.delta?.reasoning_content)
+              (json.choices?.[0]?.delta?.content || json.choices?.[0]?.delta?.reasoning_content)
             ) {
               firstChunkReceived = true;
               streamState.ttftMs = Date.now() - startedAt;
               if (callbacks?.onProgress) {
-                callbacks.onProgress({ state: "Receiving response" });
+                callbacks.onProgress({ state: 'Receiving response' });
               }
             }
-            const delta = json.choices?.[0]?.delta?.content || "";
-            const reasoning = json.choices?.[0]?.delta?.reasoning_content || "";
-            if (reasoning && callbacks?.onThought) {
-              callbacks.onThought(reasoning);
+            const delta = json.choices?.[0]?.delta?.content || '';
+            const reasoning = json.choices?.[0]?.delta?.reasoning_content || '';
+            if (reasoning) {
+              streamState.partialModelOutput = true;
+              streamState.outputReceipt += `reasoning:${reasoning}\n`;
+              callbacks?.onThought?.(reasoning);
             }
             if (delta) {
+              streamState.partialModelOutput = true;
+              streamState.outputReceipt += `text:${delta}\n`;
               text += delta;
               if (callbacks?.onChunk) {
                 await callbacks.onChunk(delta);
@@ -702,169 +664,132 @@ export class DeepSeekApiRunner implements LlmRunner {
     let response: Response | null = null;
     let lastError: Error | null = null;
     let retryAttempt: number | null = null;
-    const settleRetry = (
-      outcome: "succeeded" | "failed" | "cancelled",
-    ): void => {
+    const settleRetry = (outcome: 'succeeded' | 'failed' | 'cancelled'): void => {
       if (retryAttempt === null) return;
       callbacks?.onRetrySettled?.({
-        provider: "deepseek",
-        model: this.model,
-        attempt: retryAttempt,
-        outcome,
+        provider: 'deepseek', model: this.model, attempt: retryAttempt, outcome,
       });
       retryAttempt = null;
     };
 
-    for (let attempt = 1; attempt <= REQUEST_MAX_RETRIES; attempt += 1) {
+    for (let attempt = 1; attempt <= requestMaxRetries; attempt += 1) {
+      lastAttempt = attempt;
       const controller = new AbortController();
       if (signal) {
-        signal.addEventListener("abort", () => controller.abort(), {
-          once: true,
-        });
+        signal.addEventListener('abort', () => controller.abort(), { once: true });
       }
-      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
       try {
-        lastAttempt = attempt;
-        notifyPhase("request_dispatched", undefined, `attempt ${attempt}`);
+        notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
         response = await fetch(API_URL, {
-          method: "POST",
+          method: 'POST',
           signal: controller.signal,
           headers: {
             Authorization: `Bearer ${this.apiKey}`,
-            "Content-Type": "application/json",
+            'Content-Type': 'application/json',
           },
           body: requestBody,
         });
       } catch (err) {
-        lastFailureStage = "request";
-        lastFailureMessage = isAbortError(err)
-          ? `request timeout after ${REQUEST_TIMEOUT_MS}ms`
-          : `network error: ${err instanceof Error ? err.message : String(err)}`;
-        this.lastInvocationMetadata = buildInvocationMetadata(
-          this.model,
-          Date.now() - startedAt,
-        );
+        this.lastInvocationMetadata = buildInvocationMetadata(this.model, Date.now() - startedAt);
         lastError = new Error(
           isAbortError(err)
-            ? `[deepSeekApi] request timeout after ${REQUEST_TIMEOUT_MS}ms (${this.model})`
+            ? `[deepSeekApi] request timeout after ${requestTimeoutMs}ms (${this.model})`
             : `[deepSeekApi] Network error (${this.model}): ${err instanceof Error ? err.message : String(err)}`,
         );
-        if (attempt < REQUEST_MAX_RETRIES) {
+        if (attempt < requestMaxRetries) {
           if (callbacks?.onProgress) {
             callbacks.onProgress({
-              state: "Retrying response",
+              state: 'Retrying response',
               details: `attempt ${attempt} failed`,
             });
           }
           const retryDelay = retryDelayMs(attempt);
-          settleRetry("failed");
+          settleRetry('failed');
           retryAttempt = attempt + 1;
-          callbacks?.onRetry?.({
-            provider: "deepseek",
-            model: this.model,
-            attempt: retryAttempt,
-            reason: isAbortError(err) ? "timeout" : "transport",
-            backoff_ms: retryDelay,
-          });
+          callbacks?.onRetry?.({ provider: 'deepseek', model: this.model, attempt: retryAttempt, reason: isAbortError(err) ? 'timeout' : 'transport', backoff_ms: retryDelay });
           await sleep(retryDelay, signal).catch((error: unknown) => {
-            if (isAbortError(error)) settleRetry("cancelled");
+            if (isAbortError(error)) settleRetry('cancelled');
             throw error;
           });
           continue;
         }
-        settleRetry("failed");
-        notifyPhase(
-          "provider_error",
-          undefined,
-          isAbortError(lastError) ? "timeout" : "transport",
-        );
-        notifyCompleted("failed", "");
+        settleRetry('failed');
+        notifyPhase('provider_error', undefined, isAbortError(err) ? 'timeout' : 'transport');
+        notifyCompleted('failed', '', {
+          actualAttempt: attempt,
+          details: { message: lastError.message },
+          failureStage: 'request',
+        });
         throw lastError;
       } finally {
         clearTimeout(timeout);
       }
 
-      notifyPhase("response_started", response.status);
-      lastResponse = response;
-      lastHttpStatus = response.status;
-      if (
-        response.ok ||
-        !isRetryableStatus(response.status) ||
-        attempt === REQUEST_MAX_RETRIES
-      ) {
+      notifyPhase('response_started', response.status);
+      if (response.ok || !isRetryableStatus(response.status) || attempt === requestMaxRetries) {
         break;
       }
       if (callbacks?.onProgress) {
-        callbacks.onProgress({
-          state: "Retrying response",
-          details: `HTTP ${response.status}`,
-        });
+        callbacks.onProgress({ state: 'Retrying response', details: `HTTP ${response.status}` });
       }
       const retryDelay = retryDelayMs(attempt, response);
-      settleRetry("failed");
-      retryAttempt = attempt + 1;
-      callbacks?.onRetry?.({
-        provider: "deepseek",
-        model: this.model,
-        attempt: retryAttempt,
-        reason:
-          response.status === 429
-            ? "rate_limit"
-            : response.status === 408
-              ? "timeout"
-              : "server_error",
-        backoff_ms: retryDelay,
-      });
+      settleRetry('failed');
+          retryAttempt = attempt + 1;
+      callbacks?.onRetry?.({ provider: 'deepseek', model: this.model, attempt: retryAttempt, reason: response.status === 429 ? 'rate_limit' : response.status === 408 ? 'timeout' : 'server_error', backoff_ms: retryDelay });
       await sleep(retryDelay, signal).catch((error: unknown) => {
-        if (isAbortError(error)) settleRetry("cancelled");
-        throw error;
-      });
+            if (isAbortError(error)) settleRetry('cancelled');
+            throw error;
+          });
     }
 
     if (!response) {
-      lastFailureStage = "request";
-      lastFailureMessage = lastError?.message ?? "no response received";
-      notifyCompleted("failed", "");
+      notifyPhase('provider_error', undefined, 'no_response');
+      notifyCompleted('failed', '', {
+        actualAttempt: lastAttempt,
+        details: { message: lastError?.message ?? 'no response' },
+        failureStage: 'request',
+      });
       throw (
         lastError ??
-        new Error(
-          `[deepSeekApi] request failed before receiving a response (${this.model})`,
-        )
+        new Error(`[deepSeekApi] request failed before receiving a response (${this.model})`)
       );
     }
 
     if (!response.ok) {
-      settleRetry("failed");
+      settleRetry('failed');
       const body = await readErrorBody(response);
-      lastResponse = response;
-      lastHttpStatus = response.status;
-      lastApiErrorCode = providerApiErrorCode(body);
-      lastFailureStage = "http_response";
-      lastFailureMessage = body || `HTTP ${response.status}`;
-      this.lastInvocationMetadata = buildInvocationMetadata(
-        this.model,
-        Date.now() - startedAt,
-      );
-      notifyPhase("provider_error", response.status, "http_error");
-      notifyCompleted("failed", body);
+      this.lastInvocationMetadata = buildInvocationMetadata(this.model, Date.now() - startedAt);
+      notifyPhase('provider_error', response.status, 'http_error');
+      notifyCompleted('failed', body, {
+        actualAttempt: lastAttempt,
+        details: {
+          status: response.status,
+          message: body,
+          apiErrorCode: providerErrorCodeFromBody(body),
+          providerRequestId: providerRequestIdFromResponse(response),
+        },
+        failureStage: 'response',
+      });
       const retryNote = isRetryableStatus(response.status)
-        ? ` after ${REQUEST_MAX_RETRIES} attempt(s)`
-        : "";
-      throw new Error(
-        `[deepSeekApi] HTTP ${response.status}${retryNote} (${this.model}): ${body}`,
-      );
+        ? ` after ${requestMaxRetries} attempt(s)`
+        : '';
+      throw new Error(`[deepSeekApi] HTTP ${response.status}${retryNote} (${this.model}): ${body}`);
     }
 
-    settleRetry("succeeded");
+    settleRetry('succeeded');
 
-    parseRateLimitHeaders(response.headers, "deepseek");
+    parseRateLimitHeaders(response.headers, 'deepseek');
 
     // ── Read response (streaming or non-streaming) ────────────────────────────
-    let text = "";
+    let text = '';
     const streamState = {
       ttftMs: null as number | null,
       generationMs: null as number | null,
-      usage: null as ChatResponse["usage"] | null,
+      usage: null as ChatResponse['usage'] | null,
+      partialModelOutput: false,
+      outputReceipt: '',
+      sawDone: false,
     };
 
     if (isStreaming) {
@@ -877,26 +802,30 @@ export class DeepSeekApiRunner implements LlmRunner {
           startedAt,
           streamState,
           vcrRecorder ?? undefined,
-          () => notifyPhase("first_byte"),
+          () => notifyPhase('first_byte'),
           (bytes) => {
             if (progressPhaseCount < 32) {
               progressPhaseCount += 1;
-              notifyPhase("stream_progress", undefined, `bytes=${bytes}`);
+              notifyPhase('stream_progress', undefined, `bytes=${bytes}`);
             }
           },
         );
       } catch (err) {
-        lastFailureStage = "stream";
-        lastFailureMessage = err instanceof Error ? err.message : String(err);
-        this.lastInvocationMetadata = buildInvocationMetadata(
-          this.model,
-          Date.now() - startedAt,
-        );
-        notifyPhase("provider_error", undefined, "stream");
-        notifyCompleted("failed", text);
+        this.lastInvocationMetadata = buildInvocationMetadata(this.model, Date.now() - startedAt);
+        notifyPhase('provider_error', undefined, 'stream');
+        notifyCompleted('failed', text, {
+          actualAttempt: lastAttempt,
+          details: {
+            message: err instanceof Error ? err.message : String(err),
+            providerRequestId: providerRequestIdFromResponse(response),
+          },
+          failureStage: 'stream',
+          partialModelOutput: streamState.partialModelOutput,
+          outputMaterial: streamState.outputReceipt,
+        });
         throw buildStructuredOutputError({
-          failure_kind: "failed_to_parse_api_json",
-          provider: "deepseek",
+          failure_kind: 'failed_to_parse_api_json',
+          provider: 'deepseek',
           model: this.model,
           message: `[deepSeekApi] Streaming reading failed: ${String(err)}`,
           raw_output: text,
@@ -906,32 +835,27 @@ export class DeepSeekApiRunner implements LlmRunner {
         vcrRecorder?.close();
       }
     } else {
-      let rawDataText = "";
+      let rawDataText = '';
       let data: ChatResponse;
       try {
         rawDataText = await response.text();
-        if (rawDataText.length > 0) notifyPhase("first_byte");
+        if (rawDataText.length > 0) notifyPhase('first_byte');
         data = JSON.parse(rawDataText) as ChatResponse;
-        lastResponseBody = data;
         streamState.usage = data.usage;
-        text = data?.choices?.[0]?.message?.content ?? "";
+        text = data?.choices?.[0]?.message?.content ?? '';
       } catch (err) {
-        lastFailureStage = "normalization";
-        lastFailureMessage = err instanceof Error ? err.message : String(err);
-        this.lastInvocationMetadata = buildInvocationMetadata(
-          this.model,
-          Date.now() - startedAt,
-        );
-        notifyPhase("provider_error", undefined, "response_parse");
-        notifyPhase(
-          "response_normalization_failed",
-          undefined,
-          "response_parse",
-        );
-        notifyCompleted("failed", rawDataText);
+        this.lastInvocationMetadata = buildInvocationMetadata(this.model, Date.now() - startedAt);
+        notifyPhase('provider_error', undefined, 'response_parse');
+        notifyPhase('response_normalization_failed', undefined, 'response_parse');
+        notifyCompleted('failed', rawDataText, {
+          actualAttempt: lastAttempt,
+          details: { message: err instanceof Error ? err.message : String(err) },
+          failureStage: 'response_normalization',
+          outputMaterial: rawDataText,
+        });
         throw buildStructuredOutputError({
-          failure_kind: "failed_to_parse_api_json",
-          provider: "deepseek",
+          failure_kind: 'failed_to_parse_api_json',
+          provider: 'deepseek',
           model: this.model,
           message: `[deepSeekApi] Failed to parse API response as JSON: ${String(err)}`,
           raw_output: rawDataText,
@@ -940,9 +864,9 @@ export class DeepSeekApiRunner implements LlmRunner {
       }
     }
 
-    if (isStreaming) notifyPhase("stream_completed");
-    notifyPhase("response_normalized");
-    notifyCompleted("delivered", text);
+    if (isStreaming) notifyPhase('stream_completed');
+    notifyPhase('response_normalized');
+    notifyCompleted('delivered', text);
     return { text, startedAt, streamState };
   }
 
@@ -962,14 +886,14 @@ export class DeepSeekApiRunner implements LlmRunner {
     );
 
     if (callbacks?.onProgress) {
-      callbacks.onProgress({ state: "Validating response" });
+      callbacks.onProgress({ state: 'Validating response' });
     }
     const validationStartedAt = Date.now();
 
     if (!text.trim()) {
       throw buildStructuredOutputError({
-        failure_kind: "empty_response",
-        provider: "deepseek",
+        failure_kind: 'empty_response',
+        provider: 'deepseek',
         model: this.model,
         message: `[deepSeekApi] Empty response from model "${this.model}".`,
         raw_output: text,
@@ -981,8 +905,8 @@ export class DeepSeekApiRunner implements LlmRunner {
       parsed = extractJson(text);
     } catch (err) {
       throw buildStructuredOutputError({
-        failure_kind: "invalid_json",
-        provider: "deepseek",
+        failure_kind: 'invalid_json',
+        provider: 'deepseek',
         model: this.model,
         message:
           `[deepSeekApi] invalid json (${this.model}): ` +
@@ -1006,8 +930,8 @@ export class DeepSeekApiRunner implements LlmRunner {
 
     if (!result.success) {
       throw buildStructuredOutputError({
-        failure_kind: "zod_validation_failed",
-        provider: "deepseek",
+        failure_kind: 'zod_validation_failed',
+        provider: 'deepseek',
         model: this.model,
         message: `[deepSeekApi] Zod validation failed (${this.model}):\n${result.error.toString()}`,
         raw_output: text,
@@ -1043,8 +967,8 @@ export class DeepSeekApiRunner implements LlmRunner {
 
     if (!text.trim()) {
       throw buildStructuredOutputError({
-        failure_kind: "empty_response",
-        provider: "deepseek",
+        failure_kind: 'empty_response',
+        provider: 'deepseek',
         model: this.model,
         message: `[deepSeekApi] Empty response from model "${this.model}".`,
         raw_output: text,
@@ -1137,11 +1061,14 @@ export class DeepSeekApiRunner implements LlmRunner {
     tools: ToolDefinition[],
     systemPrompt?: string,
     signal?: AbortSignal,
-    toolChoice?: "auto" | "required",
+    toolChoice?: 'auto' | 'required',
     callbacks?: RunnerCallbacks,
   ): AsyncGenerator<ToolStreamEvent, void, undefined> {
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
+    const requestTimeoutMs = getRequestTimeoutMs();
+    const requestMaxRetries = getRequestMaxRetries();
+    const streamIdleTimeoutMs = getStreamIdleTimeoutMs();
 
     // Track thinking routing for lastInvocationMetadata (P0-B honesty).
     let thinkingDisabledReason: string | null = null;
@@ -1151,22 +1078,21 @@ export class DeepSeekApiRunner implements LlmRunner {
       // DeepSeek API: "Thinking mode does not support this tool_choice" (HTTP 400).
       // Capability matrix says thinkingWithTools is 'unsupported' for DeepSeek.
       // Override: BABEL_DEEPSEEK_THINKING_WITH_TOOLS=1 (experimental; may 400).
-      const wantThinking =
-        process.env["BABEL_DEEPSEEK_THINKING"] !== "disabled";
+      const wantThinking = process.env['BABEL_DEEPSEEK_THINKING'] !== 'disabled';
       const allowThinkingWithTools =
-        process.env["BABEL_DEEPSEEK_THINKING_WITH_TOOLS"] === "1";
+        process.env['BABEL_DEEPSEEK_THINKING_WITH_TOOLS'] === '1';
       // resolveProviderCapabilities('deepseek-*').thinkingWithTools === 'unsupported'
       // unless experimental env forces the interleaved path.
       const thinkingEnabled = wantThinking && allowThinkingWithTools;
       if (wantThinking && !allowThinkingWithTools) {
         thinkingDisabledReason =
-          "thinkingWithTools=unsupported: DeepSeek rejects tool_choice with thinking; set BABEL_DEEPSEEK_THINKING_WITH_TOOLS=1 to force experimental path";
+          'thinkingWithTools=unsupported: DeepSeek rejects tool_choice with thinking; set BABEL_DEEPSEEK_THINKING_WITH_TOOLS=1 to force experimental path';
       } else if (!wantThinking) {
-        thinkingDisabledReason = "BABEL_DEEPSEEK_THINKING=disabled";
+        thinkingDisabledReason = 'BABEL_DEEPSEEK_THINKING=disabled';
       } else {
         thinkingDisabledReason = null;
       }
-      const choice = (toolChoice ?? "auto") as "auto" | "required";
+      const choice = (toolChoice ?? 'auto') as 'auto' | 'required';
       return JSON.stringify({
         model: this.model,
         max_tokens: MAX_TOKENS,
@@ -1177,34 +1103,20 @@ export class DeepSeekApiRunner implements LlmRunner {
         // When thinking is forced on with tools, omit tool_choice (API rejects it).
         ...(thinkingEnabled ? {} : { tool_choice: choice }),
         ...(effort ? { reasoning_effort: effort } : {}),
-        thinking: {
-          type: thinkingEnabled ? ("enabled" as const) : ("disabled" as const),
-        },
-        messages: mapProviderMessagesToWire(
-          messages,
-          CHAT_SYSTEM_PROMPT,
-          systemPrompt,
-        ),
+        thinking: { type: thinkingEnabled ? 'enabled' as const : 'disabled' as const },
+        messages: mapProviderMessagesToWire(messages, CHAT_SYSTEM_PROMPT, systemPrompt),
       });
     };
 
     const inferenceId = randomUUID();
     const requestBody = buildBody();
-    let failureNotified = false;
-    let lastAttempt = 1;
-    let lastHttpStatus: number | null = null;
-    let lastApiErrorCode: string | null = null;
-    let lastFailureMessage = "provider invocation failed";
-    let lastFailureStage: ProviderFailureStage = "request";
-    let lastResponse: Response | null = null;
-    let lastResponseBody: ChatResponse | null = null;
     callbacks?.onInvocationStarted?.({
       inference_id: inferenceId,
-      provider: "deepseek",
+      provider: 'deepseek',
       requested_model_id: this.model,
       normalized_model_id: this.model,
       sent_model_id: this.model,
-      input_digest: createHash("sha256").update(requestBody).digest("hex"),
+      input_digest: createHash('sha256').update(requestBody).digest('hex'),
       input_message_count: messages.length + 1,
       capability_bindings: tools.map((tool) => ({
         capability: tool.function.name,
@@ -1213,60 +1125,68 @@ export class DeepSeekApiRunner implements LlmRunner {
         effective: null,
       })),
       delivered_tool_call_ids: messages.flatMap((message) =>
-        message.role === "tool" && message.tool_call_id
-          ? [message.tool_call_id]
-          : [],
+        message.role === 'tool' && message.tool_call_id ? [message.tool_call_id] : [],
       ),
     });
+    let completionSent = false;
+    let lastAttempt = 0;
     const notifyCompleted = (
-      status: "delivered" | "failed",
+      status: 'delivered' | 'failed',
       outputText: string,
+      options: {
+        observedModelId?: string | null;
+        actualAttempt?: number;
+        details?: ProviderFailureDetails;
+        failureStage?: import('./base.js').ProviderFailureStage;
+        partialModelOutput?: boolean;
+        toolCallCount?: number;
+        outputMaterial?: string;
+      } = {},
     ): void => {
-      if (status === "failed" && !failureNotified) {
-        failureNotified = true;
-        const failureClass = normalizeProviderFailureClass({
-          httpStatus: lastHttpStatus,
-          message: lastFailureMessage,
-          stage: lastFailureStage,
-          stream: true,
-        });
-        callbacks?.onProviderFailure?.(
-          buildProviderFailureReceipt({
-            provider: "deepseek",
-            exactModelId: this.model,
-            localRequestId: inferenceId,
-            openrouterRequestId: providerRequestId(
-              lastResponse,
-              lastResponseBody,
-            ),
-            httpStatus: lastHttpStatus,
-            apiErrorCode: lastApiErrorCode,
-            normalizedFailureClass: failureClass,
-            message: lastFailureMessage,
-            retryable: isSafeProviderRetry({
-              httpStatus: lastHttpStatus,
-              failureClass,
-              attempt: lastAttempt,
-              maximumAttempts: REQUEST_MAX_RETRIES,
-              partialModelOutput: outputText.length > 0,
-            }),
-            retryAttempt: lastAttempt,
-            maximumAttempts: REQUEST_MAX_RETRIES,
-            stream: true,
-            failureStage: lastFailureStage,
-            inferenceStarted: true,
-            partialModelOutput: outputText.length > 0,
-            toolCallsEmitted: 0,
-          }),
-        );
-      }
+      if (completionSent) return;
+      completionSent = true;
+      const failureReceipt =
+        status === 'failed'
+          ? buildProviderFailureReceipt({
+              inferenceId,
+              provider: 'deepseek',
+              model: this.model,
+              details: options.details ?? {},
+              observedUpstream: null,
+              actualAttempt: options.actualAttempt ?? lastAttempt,
+              maxAttempts: requestMaxRetries,
+              stream: true,
+              failureStage: options.failureStage ?? 'unknown',
+              inferenceStarted: true,
+              partialModelOutput: options.partialModelOutput ?? false,
+              toolCallCount: options.toolCallCount,
+              outputMaterial: options.outputMaterial ?? outputText,
+            })
+          : undefined;
       callbacks?.onInvocationCompleted?.({
         inference_id: inferenceId,
-        provider: "deepseek",
+        provider: 'deepseek',
         model: this.model,
         status,
-        observed_model_id: null,
-        output_digest: createHash("sha256").update(outputText).digest("hex"),
+        observed_model_id: options.observedModelId ?? null,
+        output_digest: createHash('sha256').update(outputText).digest('hex'),
+        ...(failureReceipt === undefined
+          ? {}
+          : {
+              failure_receipt: failureReceipt,
+              failure_class: failureReceipt.failure_class,
+              failure_stage: failureReceipt.failure_stage,
+              provider_request_id: failureReceipt.provider_request_id,
+              api_error_code: failureReceipt.api_error_code,
+              http_status: failureReceipt.http_status,
+              actual_attempt: failureReceipt.actual_attempt,
+              max_attempts: failureReceipt.max_attempts,
+              stream: failureReceipt.stream,
+              inference_started: failureReceipt.inference_started,
+              partial_model_output: failureReceipt.partial_model_output,
+              retryable: failureReceipt.retryable,
+              tool_call_count: failureReceipt.tool_call_count,
+            }),
       });
     };
     const notifyPhase = (
@@ -1276,196 +1196,166 @@ export class DeepSeekApiRunner implements LlmRunner {
     ): void => {
       callbacks?.onInvocationPhase?.({
         inference_id: inferenceId,
-        provider: "deepseek",
+        provider: 'deepseek',
         model: this.model,
         phase,
         ...(statusCode !== undefined ? { status_code: statusCode } : {}),
         ...(detail !== undefined ? { detail } : {}),
       });
     };
-    notifyPhase("request_created");
+    notifyPhase('request_created');
 
     // ── HTTP request loop (with retries) ─────────────────────────────────
     let response: Response | null = null;
     let lastError: Error | null = null;
     let retryAttempt: number | null = null;
-    const settleRetry = (
-      outcome: "succeeded" | "failed" | "cancelled",
-    ): void => {
+    const settleRetry = (outcome: 'succeeded' | 'failed' | 'cancelled'): void => {
       if (retryAttempt === null) return;
       callbacks?.onRetrySettled?.({
-        provider: "deepseek",
-        model: this.model,
-        attempt: retryAttempt,
-        outcome,
+        provider: 'deepseek', model: this.model, attempt: retryAttempt, outcome,
       });
       retryAttempt = null;
     };
 
-    for (let attempt = 1; attempt <= REQUEST_MAX_RETRIES; attempt += 1) {
+    for (let attempt = 1; attempt <= requestMaxRetries; attempt += 1) {
+      lastAttempt = attempt;
       const controller = new AbortController();
       if (signal) {
-        signal.addEventListener("abort", () => controller.abort(), {
-          once: true,
-        });
+        signal.addEventListener('abort', () => controller.abort(), { once: true });
       }
-      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
       try {
-        lastAttempt = attempt;
-        notifyPhase("request_dispatched", undefined, `attempt ${attempt}`);
+        notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
         response = await fetch(API_URL, {
-          method: "POST",
+          method: 'POST',
           signal: controller.signal,
           headers: {
             Authorization: `Bearer ${this.apiKey}`,
-            "Content-Type": "application/json",
+            'Content-Type': 'application/json',
           },
           body: requestBody,
         });
       } catch (err) {
-        lastFailureStage = "request";
-        lastFailureMessage = isAbortError(err)
-          ? `request timeout after ${REQUEST_TIMEOUT_MS}ms`
-          : `network error: ${err instanceof Error ? err.message : String(err)}`;
-        this.lastInvocationMetadata = buildInvocationMetadata(
-          this.model,
-          Date.now() - startedAt,
-        );
+        this.lastInvocationMetadata = buildInvocationMetadata(this.model, Date.now() - startedAt);
         lastError = new Error(
           isAbortError(err)
-            ? `[deepSeekApi] request timeout after ${REQUEST_TIMEOUT_MS}ms (${this.model})`
+            ? `[deepSeekApi] request timeout after ${requestTimeoutMs}ms (${this.model})`
             : `[deepSeekApi] Network error (${this.model}): ${err instanceof Error ? err.message : String(err)}`,
         );
-        if (attempt < REQUEST_MAX_RETRIES) {
+        if (attempt < requestMaxRetries) {
           const retryDelay = retryDelayMs(attempt);
-          settleRetry("failed");
+          settleRetry('failed');
           retryAttempt = attempt + 1;
-          callbacks?.onRetry?.({
-            provider: "deepseek",
-            model: this.model,
-            attempt: retryAttempt,
-            reason: isAbortError(err) ? "timeout" : "transport",
-            backoff_ms: retryDelay,
-          });
+          callbacks?.onRetry?.({ provider: 'deepseek', model: this.model, attempt: retryAttempt, reason: isAbortError(err) ? 'timeout' : 'transport', backoff_ms: retryDelay });
           await sleep(retryDelay, signal).catch((error: unknown) => {
-            if (isAbortError(error)) settleRetry("cancelled");
+            if (isAbortError(error)) settleRetry('cancelled');
             throw error;
           });
           continue;
         }
-        settleRetry("failed");
-        notifyPhase(
-          "provider_error",
-          undefined,
-          isAbortError(lastError) ? "timeout" : "transport",
-        );
-        notifyCompleted("failed", "");
-        yield { type: "error", message: lastError.message };
+        settleRetry('failed');
+        notifyPhase('provider_error', undefined, isAbortError(err) ? 'timeout' : 'transport');
+        notifyCompleted('failed', '', {
+          actualAttempt: attempt,
+          details: { message: lastError.message },
+          failureStage: 'request',
+        });
+        yield { type: 'error', message: lastError.message };
         return;
       } finally {
         clearTimeout(timeout);
       }
 
-      notifyPhase("response_started", response.status);
-      lastResponse = response;
-      lastHttpStatus = response.status;
-      if (
-        response.ok ||
-        !isRetryableStatus(response.status) ||
-        attempt === REQUEST_MAX_RETRIES
-      ) {
+      notifyPhase('response_started', response.status);
+      if (response.ok || !isRetryableStatus(response.status) || attempt === requestMaxRetries) {
         break;
       }
       const retryDelay = retryDelayMs(attempt, response);
-      settleRetry("failed");
-      retryAttempt = attempt + 1;
-      callbacks?.onRetry?.({
-        provider: "deepseek",
-        model: this.model,
-        attempt: retryAttempt,
-        reason:
-          response.status === 429
-            ? "rate_limit"
-            : response.status === 408
-              ? "timeout"
-              : "server_error",
-        backoff_ms: retryDelay,
-      });
+      settleRetry('failed');
+          retryAttempt = attempt + 1;
+      callbacks?.onRetry?.({ provider: 'deepseek', model: this.model, attempt: retryAttempt, reason: response.status === 429 ? 'rate_limit' : response.status === 408 ? 'timeout' : 'server_error', backoff_ms: retryDelay });
       await sleep(retryDelay, signal).catch((error: unknown) => {
-        if (isAbortError(error)) settleRetry("cancelled");
-        throw error;
-      });
+            if (isAbortError(error)) settleRetry('cancelled');
+            throw error;
+          });
     }
 
     if (!response) {
-      lastFailureStage = "request";
-      lastFailureMessage = lastError?.message ?? "no response received";
-      notifyPhase("provider_error", undefined, "no_response");
-      notifyCompleted("failed", "");
-      yield {
-        type: "error",
-        message: lastError?.message ?? "[deepSeekApi] No response received",
-      };
+      notifyPhase('provider_error', undefined, 'no_response');
+      notifyCompleted('failed', '', {
+        actualAttempt: lastAttempt,
+        details: { message: lastError?.message ?? 'no response' },
+        failureStage: 'request',
+      });
+      yield { type: 'error', message: lastError?.message ?? '[deepSeekApi] No response received' };
       return;
     }
 
     if (!response.ok) {
-      settleRetry("failed");
+      settleRetry('failed');
       const body = await readErrorBody(response);
-      lastResponse = response;
-      lastHttpStatus = response.status;
-      lastApiErrorCode = providerApiErrorCode(body);
-      lastFailureStage = "http_response";
-      lastFailureMessage = body || `HTTP ${response.status}`;
-      this.lastInvocationMetadata = buildInvocationMetadata(
-        this.model,
-        Date.now() - startedAt,
-      );
-      notifyPhase("provider_error", response.status, "http_error");
-      notifyCompleted("failed", body);
-      yield {
-        type: "error",
-        message: `[deepSeekApi] HTTP ${response.status} (${this.model}): ${body}`,
-      };
+      this.lastInvocationMetadata = buildInvocationMetadata(this.model, Date.now() - startedAt);
+      notifyPhase('provider_error', response.status, 'http_error');
+      notifyCompleted('failed', body, {
+        actualAttempt: lastAttempt,
+        details: {
+          status: response.status,
+          message: body,
+          apiErrorCode: providerErrorCodeFromBody(body),
+          providerRequestId: providerRequestIdFromResponse(response),
+        },
+        failureStage: 'response',
+      });
+      yield { type: 'error', message: `[deepSeekApi] HTTP ${response.status} (${this.model}): ${body}` };
       return;
     }
 
-    settleRetry("succeeded");
+    settleRetry('succeeded');
 
-    parseRateLimitHeaders(response.headers, "deepseek");
+    parseRateLimitHeaders(response.headers, 'deepseek');
 
     // ── SSE streaming with tool call accumulation ────────────────────────
     if (!response.body) {
-      notifyPhase("provider_error", undefined, "missing_stream_body");
-      notifyCompleted("failed", "");
-      yield {
-        type: "error",
-        message: "[deepSeekApi] Streaming response had no body.",
-      };
+      notifyPhase('provider_error', undefined, 'missing_stream_body');
+      notifyCompleted('failed', '', {
+        actualAttempt: lastAttempt,
+        details: { status: response.status, message: 'missing streaming response body' },
+        failureStage: 'stream',
+      });
+      yield { type: 'error', message: '[deepSeekApi] Streaming response had no body.' };
       return;
     }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = "";
+    let buffer = '';
     let firstChunkReceived = false;
     let totalBytes = 0;
     let progressPhaseCount = 0;
 
     // Accumulate tool call arguments that arrive incrementally across SSE chunks
-    const pendingToolCalls = new Map<
-      number,
-      { id: string; name: string; arguments: string }
-    >();
-    let outputReceipt = "";
+    const pendingToolCalls = new Map<number, { id: string; name: string; arguments: string }>();
+    let outputReceipt = '';
+    let partialModelOutput = false;
+    let toolCallCount = 0;
     let invocationFailed = false;
-    let terminalMarkerSeen = false;
+    let sawDone = false;
 
     const streamState: {
       ttftMs: number | null;
       generationMs: number | null;
-      usage: ChatResponse["usage"] | null;
-    } = { ttftMs: null, generationMs: null, usage: null };
+      usage: ChatResponse['usage'] | null;
+      partialModelOutput: boolean;
+      outputReceipt: string;
+      sawDone: boolean;
+    } = {
+      ttftMs: null,
+      generationMs: null,
+      usage: null,
+      partialModelOutput: false,
+      outputReceipt: '',
+      sawDone: false,
+    };
 
     try {
       let finishReason: string | null = null;
@@ -1475,13 +1365,11 @@ export class DeepSeekApiRunner implements LlmRunner {
         const read = reader.read();
         const idle = new Promise<never>((_, reject) => {
           readTimeout = setTimeout(() => {
-            reader.cancel().catch(() => {});
             reject(
-              new Error(
-                `[deepSeekApi] stream read timeout after ${STREAM_IDLE_TIMEOUT_MS}ms`,
-              ),
+              new Error(`[deepSeekApi] stream read timeout after ${streamIdleTimeoutMs}ms`),
             );
-          }, STREAM_IDLE_TIMEOUT_MS);
+            reader.cancel().catch(() => {});
+          }, streamIdleTimeoutMs);
         });
 
         let done: boolean;
@@ -1494,14 +1382,19 @@ export class DeepSeekApiRunner implements LlmRunner {
           value = result.value;
         } catch (err) {
           invocationFailed = true;
-          lastFailureStage = "stream";
-          lastFailureMessage = err instanceof Error ? err.message : String(err);
-          notifyPhase("provider_error", undefined, "stream");
-          notifyCompleted("failed", outputReceipt);
-          yield {
-            type: "error",
-            message: err instanceof Error ? err.message : String(err),
-          };
+          notifyPhase('provider_error', undefined, 'stream');
+          notifyCompleted('failed', outputReceipt, {
+            actualAttempt: lastAttempt,
+            details: {
+              message: err instanceof Error ? err.message : String(err),
+              providerRequestId: providerRequestIdFromResponse(response),
+            },
+            failureStage: 'stream',
+            partialModelOutput,
+            toolCallCount,
+            outputMaterial: outputReceipt,
+          });
+          yield { type: 'error', message: err instanceof Error ? err.message : String(err) };
           return;
         }
 
@@ -1510,28 +1403,29 @@ export class DeepSeekApiRunner implements LlmRunner {
         totalBytes += value?.byteLength ?? 0;
         if (progressPhaseCount < 32) {
           progressPhaseCount += 1;
-          notifyPhase("stream_progress", undefined, `bytes=${totalBytes}`);
+          notifyPhase('stream_progress', undefined, `bytes=${totalBytes}`);
         }
 
         if (!firstChunkReceived) {
           firstChunkReceived = true;
           streamState.ttftMs = Date.now() - startedAt;
-          notifyPhase("first_byte");
+          notifyPhase('first_byte');
         }
 
         const chunk = decoder.decode(value, { stream: true });
         buffer += chunk;
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
 
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed) continue;
-          if (!trimmed.startsWith("data: ")) continue;
+          if (!trimmed.startsWith('data: ')) continue;
 
           const data = trimmed.slice(6).trim();
-          if (data === "[DONE]") {
-            terminalMarkerSeen = true;
+          if (data === '[DONE]') {
+            sawDone = true;
+            streamState.sawDone = true;
             continue;
           }
 
@@ -1550,7 +1444,7 @@ export class DeepSeekApiRunner implements LlmRunner {
                 };
                 finish_reason?: string | null;
               }>;
-              usage?: ChatResponse["usage"];
+              usage?: ChatResponse['usage'];
             };
 
             const choice = json.choices?.[0];
@@ -1560,13 +1454,20 @@ export class DeepSeekApiRunner implements LlmRunner {
 
             // Reasoning content (e.g. DeepSeek's thinking tokens)
             if (delta?.reasoning_content) {
-              yield { type: "thought_delta", text: delta.reasoning_content };
+              partialModelOutput = true;
+              streamState.partialModelOutput = true;
+              outputReceipt += `reasoning:${delta.reasoning_content}\n`;
+              streamState.outputReceipt = outputReceipt;
+              yield { type: 'thought_delta', text: delta.reasoning_content };
             }
 
             // Text content
             if (delta?.content) {
+              partialModelOutput = true;
+              streamState.partialModelOutput = true;
               outputReceipt += delta.content;
-              yield { type: "text_delta", text: delta.content };
+              streamState.outputReceipt = outputReceipt;
+              yield { type: 'text_delta', text: delta.content };
             }
 
             // Native tool call deltas — accumulate arguments incrementally
@@ -1574,19 +1475,29 @@ export class DeepSeekApiRunner implements LlmRunner {
               for (const tc of delta.tool_calls) {
                 const idx = tc.index;
                 if (!pendingToolCalls.has(idx)) {
-                  pendingToolCalls.set(idx, {
-                    id: "",
-                    name: "",
-                    arguments: "",
-                  });
+                  pendingToolCalls.set(idx, { id: '', name: '', arguments: '' });
+                  toolCallCount += 1;
                 }
                 const acc = pendingToolCalls.get(idx)!;
-                if (tc.id) acc.id = tc.id;
-                if (tc.function?.name) acc.name = tc.function.name;
-                if (tc.function?.arguments) {
-                  acc.arguments += tc.function.arguments;
-                  outputReceipt += tc.function.arguments;
+                if (tc.id) {
+                  acc.id = tc.id;
+                  partialModelOutput = true;
+                  streamState.partialModelOutput = true;
+                  outputReceipt += `tool_id:${tc.id}\n`;
                 }
+                if (tc.function?.name) {
+                  acc.name = tc.function.name;
+                  partialModelOutput = true;
+                  streamState.partialModelOutput = true;
+                  outputReceipt += `tool_name:${tc.function.name}\n`;
+                }
+                if (tc.function?.arguments) {
+                  partialModelOutput = true;
+                  streamState.partialModelOutput = true;
+                  acc.arguments += tc.function.arguments;
+                  outputReceipt += `tool_arguments:${tc.function.arguments}\n`;
+                }
+                streamState.outputReceipt = outputReceipt;
               }
             }
 
@@ -1606,96 +1517,85 @@ export class DeepSeekApiRunner implements LlmRunner {
       }
 
       // Process remaining buffered SSE line
-      if (buffer.startsWith("data: ")) {
+      buffer += decoder.decode();
+      if (buffer.trim().replace(/\r$/, '') === 'data: [DONE]') {
+        sawDone = true;
+        streamState.sawDone = true;
+      }
+      if (buffer.startsWith('data: ')) {
         const data = buffer.slice(6).trim();
-        if (data === "[DONE]") {
-          terminalMarkerSeen = true;
-        } else {
+        if (data !== '[DONE]') {
           try {
             const json = JSON.parse(data) as {
               choices?: Array<{ finish_reason?: string | null }>;
-              usage?: ChatResponse["usage"];
+              usage?: ChatResponse['usage'];
             };
             if (json.usage) {
               streamState.usage = json.usage;
             }
             if (json.choices?.[0]?.finish_reason) {
-              finishReason = normalizeFinishReason(
-                json.choices[0].finish_reason,
-              );
+              finishReason = normalizeFinishReason(json.choices[0].finish_reason);
             }
-          } catch {
-            /* ignore */
-          }
+          } catch { /* ignore */ }
         }
       }
 
-      if (!terminalMarkerSeen) {
-        invocationFailed = true;
-        lastFailureStage = "stream";
-        lastFailureMessage =
-          "incomplete stream: terminal marker was not received";
-        notifyPhase("provider_error", undefined, "incomplete_stream");
-        notifyCompleted("failed", outputReceipt);
-        yield { type: "error", message: `[deepSeekApi] ${lastFailureMessage}` };
-        return;
+      if (!sawDone) {
+        throw new Error('[deepSeekApi] stream closed before terminal [DONE] marker');
       }
 
-      streamState.generationMs =
-        Date.now() - startedAt - (streamState.ttftMs ?? 0);
+      streamState.generationMs = Date.now() - startedAt - (streamState.ttftMs ?? 0);
 
       // ── Yield accumulated tool calls ──────────────────────────────────
-      if (
-        (finishReason === "tool_calls" || pendingToolCalls.size > 0) &&
-        pendingToolCalls.size > 0
-      ) {
+      if ((finishReason === 'tool_calls' || pendingToolCalls.size > 0) && pendingToolCalls.size > 0) {
         for (const [, acc] of pendingToolCalls) {
           let input: Record<string, unknown> = {};
           if (acc.arguments) {
             try {
               const parsed = JSON.parse(acc.arguments) as unknown;
-              if (
-                !parsed ||
-                typeof parsed !== "object" ||
-                Array.isArray(parsed)
-              ) {
-                throw new Error("tool arguments must be a JSON object");
+              if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                throw new Error('tool arguments must be a JSON object');
               }
               input = parsed as Record<string, unknown>;
             } catch (error) {
               invocationFailed = true;
-              lastFailureStage = "normalization";
-              lastFailureMessage =
-                error instanceof Error ? error.message : String(error);
-              notifyPhase(
-                "response_normalization_failed",
-                undefined,
-                "tool_arguments",
-              );
-              notifyCompleted("failed", outputReceipt);
+              notifyPhase('response_normalization_failed', undefined, 'tool_arguments');
+              notifyCompleted('failed', outputReceipt, {
+                actualAttempt: lastAttempt,
+                details: { message: error instanceof Error ? error.message : String(error) },
+                failureStage: 'response_normalization',
+                partialModelOutput,
+                toolCallCount,
+                outputMaterial: outputReceipt,
+              });
               yield {
-                type: "error",
-                message: `[deepSeekApi] Malformed arguments for tool ${acc.name || "<unknown>"}: ${error instanceof Error ? error.message : String(error)}`,
+                type: 'error',
+                message: `[deepSeekApi] Malformed arguments for tool ${acc.name || '<unknown>'}: ${error instanceof Error ? error.message : String(error)}`,
               };
               return;
             }
           }
-          yield { type: "tool_use", id: acc.id, name: acc.name, input };
+          yield { type: 'tool_use', id: acc.id, name: acc.name, input };
         }
-        yield { type: "done", finishReason: finishReason ?? "tool_calls" };
+        yield { type: 'done', finishReason: finishReason ?? 'tool_calls' };
       } else {
-        yield { type: "done", finishReason: finishReason ?? "stop" };
+        yield { type: 'done', finishReason: finishReason ?? 'stop' };
       }
     } catch (err) {
       invocationFailed = true;
-      lastFailureStage = "stream";
-      lastFailureMessage = err instanceof Error ? err.message : String(err);
-      notifyPhase("provider_error", undefined, "stream");
-      notifyCompleted("failed", outputReceipt);
-      yield {
-        type: "error",
-        message: err instanceof Error ? err.message : String(err),
-      };
+      notifyPhase('provider_error', undefined, 'stream');
+      notifyCompleted('failed', outputReceipt, {
+        actualAttempt: lastAttempt,
+        details: {
+          message: err instanceof Error ? err.message : String(err),
+          providerRequestId: providerRequestIdFromResponse(response),
+        },
+        failureStage: 'stream',
+        partialModelOutput,
+        toolCallCount,
+        outputMaterial: outputReceipt,
+      });
+      yield { type: 'error', message: err instanceof Error ? err.message : String(err) };
     }
 
     const meta = buildInvocationMetadata(
@@ -1710,9 +1610,18 @@ export class DeepSeekApiRunner implements LlmRunner {
     }
     this.lastInvocationMetadata = meta;
     if (!invocationFailed) {
-      notifyPhase("stream_completed");
-      notifyPhase("response_normalized");
-      notifyCompleted("delivered", outputReceipt);
+      notifyPhase('stream_completed');
+      notifyPhase('response_normalized');
+      notifyCompleted('delivered', outputReceipt);
+    } else {
+      notifyCompleted('failed', outputReceipt, {
+        actualAttempt: lastAttempt,
+        details: { message: 'stream invocation failed' },
+        failureStage: 'stream',
+        partialModelOutput,
+        toolCallCount,
+        outputMaterial: outputReceipt,
+      });
     }
   }
 }

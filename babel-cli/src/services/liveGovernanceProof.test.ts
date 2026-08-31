@@ -72,15 +72,15 @@ const proofRoot =
   join(babelRoot, 'runs', 'reports', 'babel-live-governance-proof-artifacts');
 
 function liveProviderKeyState(): {
-  provider: 'deepseek' | 'deepinfra' | null;
+  provider: 'openrouter' | 'deepinfra' | null;
   keyPresent: boolean;
   modeWithKey: string;
 } {
-  if (process.env['DEEPSEEK_API_KEY']) {
+  if (process.env['OPENROUTER_API_KEY']) {
     return {
-      provider: 'deepseek',
+      provider: 'openrouter',
       keyPresent: true,
-      modeWithKey: 'recorded_replay_with_deepseek_key_available',
+      modeWithKey: 'recorded_replay_with_openrouter_key_available',
     };
   }
   if (process.env['DEEPINFRA_API_KEY']) {
@@ -489,9 +489,9 @@ test('recorded-provider governance proof scenarios', async (t) => {
     artifact_type: 'babel_live_governance_provider_mode',
     fixture_set_id: fixtures.fixture_set_id,
     requested_live_provider: true,
-    preferred_provider: 'deepseek',
+    preferred_provider: 'openrouter',
     selected_live_provider: liveProvider.provider,
-    deepseek_api_key_present: Boolean(process.env['DEEPSEEK_API_KEY']),
+    openrouter_api_key_present: Boolean(process.env['OPENROUTER_API_KEY']),
     deepinfra_api_key_present: Boolean(process.env['DEEPINFRA_API_KEY']),
     mode_used: liveProvider.keyPresent
       ? liveProvider.modeWithKey

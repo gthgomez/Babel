@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "third-party-readonly",
+  "name": "Third-Party Read-Only Fixture",
+  "version": "0.1.0",
+  "description": "Public proof fixture for a read-only third-party plugin.",
+  "trust_level": "read_only",
+  "tools": [],
+  "slash_commands": [],
+  "prompt_skills": [],
+  "mcp_servers": [],
+  "hooks": []
+}
