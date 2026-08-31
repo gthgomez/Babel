@@ -25,6 +25,7 @@ $common = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot 'scripts/agent-pr-g
 if ($common -notmatch 'function Resolve-AgentReviewThreadPages') { throw 'Common gate module is missing review-thread page resolver.' }
 if ($common -notmatch 'Export-ModuleMember.*Resolve-AgentReviewThreadPages') { throw 'Common gate module does not export review-thread page resolver.' }
 if ($launcher -match 'BootstrapRepairAuthorized') { throw 'Generic trusted gate exposes bootstrap bypass.' }
+if ($gate -match '\$detail\.bypass_actors') { throw 'Trusted gate must not directly dereference optional ruleset bypass_actors.' }
 foreach ($required in @('PR -ne 121', 'ApprovedHeadSha', 'BaseSha', 'unauthorized path', 'trust root exists')) {
   if ($bootstrap -notmatch [regex]::Escape($required)) { throw "Bootstrap boundary check missing: $required" }
 }
