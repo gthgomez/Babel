@@ -122,8 +122,6 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
     }),
   );
 
-  ctx.rl.prompt();
-
   const consumeRelease = (): void => {
     const token = release;
     release = null;
@@ -221,4 +219,9 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
       inPaste: ctx.inPaste,
     });
   });
+
+  // Install input listeners before advertising an interactive prompt. This
+  // prevents commands written immediately after startup from being lost in
+  // the gap between prompt output and readline listener registration.
+  ctx.rl.prompt();
 }
