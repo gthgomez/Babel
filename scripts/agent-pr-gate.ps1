@@ -341,10 +341,22 @@ try {
   $requiredResults = @()
   $requiredChecksGreen = $true
   $ciHeadMatch = $true
+  $runningTrustedControlPlane = [string]::Equals([string]$env:GITHUB_ACTIONS, 'true', [StringComparison]::OrdinalIgnoreCase) -and
+    [string]::Equals([string]$env:GITHUB_EVENT_NAME, 'pull_request_target', [StringComparison]::OrdinalIgnoreCase) -and
+    [string]::Equals([string]$env:GITHUB_WORKFLOW, 'Trusted Control Plane', [StringComparison]::OrdinalIgnoreCase) -and
+    [string]::Equals([string]$env:GITHUB_JOB, 'trusted-control-plane', [StringComparison]::OrdinalIgnoreCase)
   foreach ($required in $requiredChecks) {
-    $event = if ([string]::Equals($required, 'public-pr-metadata', [StringComparison]::OrdinalIgnoreCase)) { 'pull_request_target' } else { 'pull_request' }
-    $workflow = if ([string]::Equals($required, 'public-pr-metadata', [StringComparison]::OrdinalIgnoreCase)) { 'Public PR Metadata' } else { 'Public Release Gate' }
-    $resolution = Resolve-AgentRequiredCheck -Observations $normalizedRuns -RequiredName $required -TargetSha $prHead -AuthorityEvent $event -AuthorityWorkflowName $workflow
+    $isSelfCheck = [string]::Equals($required, 'trusted-control-plane', [StringComparison]::OrdinalIgnoreCase)
+    if ($isSelfCheck -and $runningTrustedControlPlane) {
+      # This job cannot observe its own completed check-run while executing.
+      # GitHub records this check as successful only after this audit exits 0;
+      # all peer checks remain resolved through the normal authoritative path.
+      $resolution = [pscustomobject][ordered]@{ status = 'PASS'; reason = 'self_check_deferred_to_current_job_result'; required = $required; selected = $null; candidates = @(); ignored = @() }
+    } else {
+      $event = if ([string]::Equals($required, 'public-pr-metadata', [StringComparison]::OrdinalIgnoreCase)) { 'pull_request_target' } else { 'pull_request' }
+      $workflow = if ([string]::Equals($required, 'public-pr-metadata', [StringComparison]::OrdinalIgnoreCase)) { 'Public PR Metadata' } else { 'Public Release Gate' }
+      $resolution = Resolve-AgentRequiredCheck -Observations $normalizedRuns -RequiredName $required -TargetSha $prHead -AuthorityEvent $event -AuthorityWorkflowName $workflow
+    }
     if ($resolution.status -ne 'PASS') { $requiredChecksGreen = $false; $ciHeadMatch = $false }
     $selected = Get-AgentLocalValue -Object $resolution -Name 'selected'
     $candidateIds = Get-AgentLocalValue -Object $resolution -Name 'candidates'
