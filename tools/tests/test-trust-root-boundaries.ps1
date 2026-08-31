@@ -22,7 +22,7 @@ if ($launcher -match 'BootstrapRepairAuthorized') { throw 'Generic trusted gate 
 foreach ($required in @('reviewThreads\(first:100,after:\$after\)', 'pageInfo\{hasNextPage endCursor\}', 'review_threads_pagination_incomplete')) {
   if ($gate -notmatch $required) { throw "Base-rooted gate is missing full review-thread pagination: $required" }
 }
-foreach ($required in @('Get-AgentRulesetPolicy', 'RiskTier', 'IndependentReviewReceiptPath', 'ReviewChallengeLedgerPath', 'MergeAuthorized', 'AuditOnly', 'BootstrapRepairAuthorized', 'schemaVersion = 2', 'Invoke-AgentGh', '[object[]]$checkRuns', 'Wait-AgentRequiredChecksReady', 'required_check_wait_timeout')) {
+foreach ($required in @('Get-AgentRulesetPolicy', 'RiskTier', 'IndependentReviewReceiptPath', 'ReviewChallengeLedgerPath', 'MergeAuthorized', 'AuditOnly', 'BootstrapRepairAuthorized', 'schemaVersion = 2', 'Invoke-AgentGh', '[object[]]$checkRuns', 'Wait-AgentRequiredChecksReady', 'MaxAttempts = 180', 'GITHUB_WORKFLOW', 'GITHUB_JOB', 'self_check_deferred_to_current_job_result', 'required_check_wait_timeout')) {
   if ($gate -notmatch [regex]::Escape($required)) { throw "Base-rooted gate is missing trusted capability: $required" }
 }
 $common = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot 'scripts/agent-pr-gate-common.psm1')

@@ -364,6 +364,10 @@ try {
   $requiredResults = @()
   $requiredChecksGreen = $true
   $ciHeadMatch = $true
+  $runningTrustedControlPlane = [string]::Equals([string]$env:GITHUB_ACTIONS, 'true', [StringComparison]::OrdinalIgnoreCase) -and
+    [string]::Equals([string]$env:GITHUB_EVENT_NAME, 'pull_request_target', [StringComparison]::OrdinalIgnoreCase) -and
+    [string]::Equals([string]$env:GITHUB_WORKFLOW, 'Trusted Control Plane', [StringComparison]::OrdinalIgnoreCase) -and
+    [string]::Equals([string]$env:GITHUB_JOB, 'trusted-control-plane', [StringComparison]::OrdinalIgnoreCase)
   foreach ($required in $requiredChecks) {
     $isSelfCheck = [string]::Equals($required, 'trusted-control-plane', [StringComparison]::OrdinalIgnoreCase)
     if ($isSelfCheck -and $runningTrustedControlPlane) {
