@@ -36,6 +36,8 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Only the trusted base-rooted audit receives the GitHub token.
+          GH_TOKEN: ${{ github.token }}
         run: |
           pwsh -NoProfile -NonInteractive -File scripts/trusted-merge-gate.ps1 `
             -PR ([int]$env:PR_NUMBER) `
