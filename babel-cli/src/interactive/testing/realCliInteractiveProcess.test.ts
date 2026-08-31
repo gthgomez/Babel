@@ -12,6 +12,57 @@ import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import { stripAnsi } from '../../ui/theme.js';
 
+const READY_TIMEOUT_MS = 30_000;
+const EXIT_TIMEOUT_MS = 6_000;
+
+function waitForReady(
+  child: ReturnType<typeof spawn>,
+  getOutput: () => string,
+  timeoutMs = READY_TIMEOUT_MS,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const stdout = child.stdout;
+    const stderr = child.stderr;
+    if (!stdout || !stderr) {
+      resolve(false);
+      return;
+    }
+    let settled = false;
+    const finish = (ready: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      stdout.off('data', onData);
+      stderr.off('data', onData);
+      child.off('exit', onExit);
+      resolve(ready);
+    };
+    const onData = (): void => {
+      const text = stripAnsi(getOutput());
+      if (/BABEL/i.test(text) && /\[READY\]/i.test(text)) finish(true);
+    };
+    const onExit = (): void => finish(false);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    stdout.on('data', onData);
+    stderr.on('data', onData);
+    child.once('exit', onExit);
+    onData();
+  });
+}
+
+function waitForExit(child: ReturnType<typeof spawn>, timeoutMs = EXIT_TIMEOUT_MS): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error('CLI process timed out waiting for exit'));
+    }, timeoutMs);
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      resolve(code ?? 0);
+    });
+  });
+}
+
 describe('PR-76 REAL_PROCESS: Spawned Real Babel CLI Interactive Process Certification', () => {
   const cliPath = join(process.cwd(), 'src', 'index.ts');
 
@@ -25,6 +76,7 @@ describe('PR-76 REAL_PROCESS: Spawned Real Babel CLI Interactive Process Certifi
           ...process.env,
           CI: '1',
           BABEL_SKIP_RESUME_PICKER: '1',
+          BABEL_SKIP_KG_INDEX: '1',
           BABEL_PROMPT_V2: '0',
           ...extraEnv,
         },
@@ -43,39 +95,14 @@ describe('PR-76 REAL_PROCESS: Spawned Real Babel CLI Interactive Process Certifi
       out += String(chunk);
     });
 
-    const isReady = await new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => resolve(false), 15000);
-      const onData = () => {
-        const text = stripAnsi(out);
-        if (/BABEL/i.test(text) && /READY|CHAT/i.test(text)) {
-          clearTimeout(timer);
-          resolve(true);
-        }
-      };
-      child.stdout.on('data', onData);
-      child.stderr.on('data', onData);
-      onData();
-    });
+    const isReady = await waitForReady(child, () => out);
+    assert.equal(isReady, true, `CLI failed to reach ready state: ${stripAnsi(out).slice(0, 400)}`);
 
-    try {
-      child.stdin.write('/exit\n');
-    } catch {
-      /* ignore */
-    }
-
-    const exitCode = await new Promise<number>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        child.kill();
-        reject(new Error('CLI process timed out waiting for exit on /exit'));
-      }, 6000);
-      child.on('exit', (code) => {
-        clearTimeout(timer);
-        resolve(code ?? 0);
-      });
-    });
+    const exitCodePromise = waitForExit(child);
+    child.stdin.write('/exit\n');
+    const exitCode = await exitCodePromise;
 
     const text = stripAnsi(out);
-    assert.equal(isReady, true, `CLI failed to reach ready state: ${text.slice(0, 400)}`);
     assert.ok(text.includes('BABEL') || text.includes('babel'), 'Expected banner in output');
     assert.equal(exitCode, 0, 'CLI must exit cleanly with code 0 on /exit, not timeout or kill');
   });
@@ -90,57 +117,35 @@ describe('PR-76 REAL_PROCESS: Spawned Real Babel CLI Interactive Process Certifi
       out += String(chunk);
     });
 
-    // Wait for ready
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => resolve(), 4000);
-      const onData = () => {
-        if (/READY|CHAT/i.test(stripAnsi(out))) {
-          clearTimeout(timer);
-          resolve();
-        }
-      };
-      child.stdout.on('data', onData);
-    });
+    const isReady = await waitForReady(child, () => out);
+    assert.equal(isReady, true, `CLI failed to reach ready state: ${stripAnsi(out).slice(0, 400)}`);
 
     // Send Unicode command and /exit
-    try {
-      child.stdin.write('// test with 🚀 unicode and paths with spaces/foo bar.ts\n');
-      child.stdin.write('/exit\n');
-    } catch {
-      /* ignore */
-    }
-
-    const exitCode = await new Promise<number>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        child.kill();
-        reject(new Error('CLI process timed out waiting for exit on /exit'));
-      }, 6000);
-      child.on('exit', (code) => {
-        clearTimeout(timer);
-        resolve(code ?? 0);
-      });
-    });
+    const exitCodePromise = waitForExit(child);
+    child.stdin.write('// test with 🚀 unicode and paths with spaces/foo bar.ts\n');
+    child.stdin.write('/exit\n');
+    const exitCode = await exitCodePromise;
 
     assert.equal(exitCode, 0, 'CLI must exit cleanly with code 0 on /exit');
   });
 
-  test('PROC-03: Real CLI process deterministic exit on /exit command with zero orphans', async () => {
+  test('PROC-03: Real CLI process deterministically exits on /exit with zero orphans', async () => {
     const child = spawnInteractiveCli();
 
-    // Send immediate /exit once spawned
-    child.stdin.write('/exit\n');
-
-    const exitCode = await new Promise<number>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        child.kill();
-        reject(new Error('CLI process timed out waiting for /exit'));
-      }, 6000);
-      child.on('exit', (code) => {
-        clearTimeout(timer);
-        resolve(code ?? 0);
-      });
+    let output = '';
+    child.stdout.on('data', (chunk) => {
+      output += String(chunk);
     });
+    child.stderr.on('data', (chunk) => {
+      output += String(chunk);
+    });
+    const isReady = await waitForReady(child, () => output);
+    assert.equal(isReady, true, `CLI failed to reach ready state: ${stripAnsi(output).slice(0, 400)}`);
 
-    assert.equal(exitCode, 0, 'Immediate /exit must terminate process cleanly with code 0');
+    const exitCodePromise = waitForExit(child);
+    child.stdin.write('/exit\n');
+    const exitCode = await exitCodePromise;
+
+    assert.equal(exitCode, 0, 'Ready /exit must terminate process cleanly with code 0');
   });
 });

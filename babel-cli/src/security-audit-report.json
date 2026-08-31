@@ -266,3 +266,4 @@
     "The SGR mouse prefix check at keyInput.ts:312-316 uses hardcoded byte values referencing the SGR_MOUSE_PREFIX constant defined at line 249 (ESC [ <). If a CSI sequence begins with ESC [ and the parameter portion starts with < (0x3C), it could be spuriously consumed as a mouse sequence even if it is a valid CSI sequence with different semantics. Are there any real terminal sequences that start with ESC [ < that would be lost?"
   ]
 }
+}
