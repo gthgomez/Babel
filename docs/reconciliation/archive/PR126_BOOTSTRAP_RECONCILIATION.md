@@ -1,7 +1,7 @@
 <!--
 status: ARCHIVED_SUPERSEDED
 archived: 2026-09-04
-superseded_by: docs/reconciliation/BABEL_PR_RECONCILIATION_CURRENT.md
+superseded_by: ../BABEL_PR_RECONCILIATION_CURRENT.md
 -->
 
 # PR #126 Bootstrap Reconciliation
