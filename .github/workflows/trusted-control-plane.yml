@@ -30,12 +30,31 @@ jobs:
         run: |
           git fetch --no-tags origin $env:CANDIDATE_SHA
           git worktree add --detach "$env:GITHUB_WORKSPACE/candidate" $env:CANDIDATE_SHA
+      - name: Stage review evidence from PR comments (transport only)
+        shell: pwsh
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Only the trusted base-rooted transport receives the GitHub token.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pwsh -NoProfile -NonInteractive -File scripts/materialize-independent-review-receipt.ps1 `
+            -PR ([int]$env:PR_NUMBER) `
+            -Repository "$env:GITHUB_REPOSITORY" `
+            -BaseSha $env:BASE_SHA `
+            -HeadSha $env:HEAD_SHA `
+            -EvidenceDirectory "$env:RUNNER_TEMP/review-evidence"
       - name: Run base-rooted merge audit
         shell: pwsh
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Owner-controlled escalation: set this repository variable to 1 to
+          # require a signed independent review receipt for every PR. The
+          # protected trust root always requires one regardless of this value.
+          BABEL_REQUIRE_SIGNED_REVIEW: ${{ vars.BABEL_REQUIRE_SIGNED_REVIEW }}
           # Only the trusted base-rooted audit receives the GitHub token.
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -44,9 +63,15 @@ jobs:
             -BaseSha $env:BASE_SHA `
             -RepoRoot "$env:GITHUB_WORKSPACE/candidate" `
             -ReviewedHeadSha $env:HEAD_SHA `
+            -IndependentReviewReceiptPath "$env:RUNNER_TEMP/review-evidence/receipt.json" `
+            -ReviewChallengeLedgerPath "$env:RUNNER_TEMP/review-evidence/ledger.json" `
+            -AutonomousReviewEvidencePath "$env:RUNNER_TEMP/review-evidence/ai-review.json" `
+            -TrustRootUpgradeAuthorizationPath "$env:RUNNER_TEMP/review-evidence/trust-upgrade.json" `
             -AuditOnly `
             -RequireIsolatedWorktree `
             -OutputFormat json
       - name: Test trusted-root boundary
         shell: pwsh
-        run: pwsh -NoProfile -NonInteractive -File tools/tests/test-trust-root-boundaries.ps1 -RepoRoot .
+        run: |
+          pwsh -NoProfile -NonInteractive -File tools/tests/test-trust-root-boundaries.ps1 -RepoRoot . `
+            && node tools/tests/test-trust-root-upgrade.mjs

@@ -6,6 +6,8 @@ param(
   [Parameter(Mandatory = $true)][string]$ReviewedHeadSha,
   [string]$IndependentReviewReceiptPath = '',
   [string]$ReviewChallengeLedgerPath = '',
+  [string]$AutonomousReviewEvidencePath = '',
+  [string]$TrustRootUpgradeAuthorizationPath = '',
   [string]$BuilderIdentity = 'codex-implementation',
   [switch]$MergeAuthorized,
   [switch]$AuditOnly,
@@ -42,6 +44,8 @@ try {
     '-PR', $PR, '-RepoRoot', $resolvedRepo, '-ReviewedHeadSha', $ReviewedHeadSha,
     '-IndependentReviewReceiptPath', $IndependentReviewReceiptPath,
     '-ReviewChallengeLedgerPath', $ReviewChallengeLedgerPath,
+    '-AutonomousReviewEvidencePath', $AutonomousReviewEvidencePath,
+    '-TrustRootUpgradeAuthorizationPath', $TrustRootUpgradeAuthorizationPath,
     '-BuilderIdentity', $BuilderIdentity, '-OutputFormat', $OutputFormat
   )
   if ($MergeAuthorized) { $args += '-MergeAuthorized' }
@@ -50,5 +54,6 @@ try {
   & $pwsh @args
   exit $LASTEXITCODE
 } finally {
-  Remove-Item -LiteralPath $materialized -Recurse -Force -ErrorAction SilentlyContinue
+  try { Remove-Item -LiteralPath $materialized -Recurse -Force -ErrorAction Stop } catch { # best-effort cleanup; never mask the audit result
+  }
 }
