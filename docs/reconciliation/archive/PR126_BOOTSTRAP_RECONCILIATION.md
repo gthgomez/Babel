@@ -12,7 +12,7 @@ last_verified: 2026-08-30
 -->
 
 The current live binding is recorded in
-[`docs/architecture/PR120_PR126_RECONCILIATION.md`](docs/architecture/PR120_PR126_RECONCILIATION.md).
+[`docs/architecture/PR120_PR126_RECONCILIATION.md`](PR120_PR126_RECONCILIATION.md).
 At that snapshot, #126 targets `main` at
 `a997d877e8342759afefc3ca9257eb6d4d9a38a2` and its head is
 `e029ca2c762cccbc9f21681ba562327e23350850`.
