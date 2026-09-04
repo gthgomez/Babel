@@ -38,8 +38,8 @@ review-thread resolution required; deletion and non-fast-forward protected.
 | #128 | `7e80571c…` | SUPERSEDED | none — zero changed files outside #133's set | #133 lineage | conflicts with main | CLOSE_SUPERSEDED |
 | #129 | `9805502a…` | SUPERSEDED | intended CLI-readiness stabilization commit `9805502` is superseded by #133's stronger `realCliInteractiveProcess.test.ts` rewrite (ready gating, `BABEL_SKIP_KG_INDEX`, fail-fast); 10 other commits are historical benchmark/experimental work already merged to main byte-identical | #133 lineage | conflicts with main; branch polluted with unrelated commits (one stale `campaignExecutors.ts` where main is newer) | CLOSE_SUPERSEDED |
 | #130 | `41ddded8…` | SUPERSEDED | none — zero changed files outside #133's set | #133 lineage | conflicts with main; contains a simplified trust gate deliberately not adopted by main's repair | CLOSE_SUPERSEDED |
-| #133 | `9038551311…` | MERGE_REPLACED_BY_SUCCESSORS | the 194-file product/runtime consolidation (Model Intelligence, provider reliability, trusted-execution evidence, CLI readiness, tooling) — rebuilt as clean successor content on the post-#138 main; #133's own trust-file changes are NOT carried | product successor PR(s) built from post-#138 main | failing `linux-validation`/`windows-portability` (28 snapshot tests updated without the renderer change they presupposed), failing `trusted-control-plane` (structural deadlock) | CLOSE_SUPERSEDED_BY_SUCCESSORS after successors land |
-| #138 | replaced by `a922fb2…` (branch `codex/trust-root-upgrade-v1-20260904`) | TRUST_SUCCESSOR_REBUILT | TrustRootUpgradeV1 protocol, workflow-integration fixes, adversarial + offline end-to-end trust tests, [`TRUST_ROOT_UPGRADE.md`](../architecture/TRUST_ROOT_UPGRADE.md) | — | pre-upgrade verifier cannot authorize a trust-root change by construction; merged via the documented one-time bounded exception (PR-#127 mechanism) | MERGE (trust successor) |
+| #133 | `9038551311…` | MERGED_VIA_SUCCESSOR (#139; merge commit da1e3e6) | the 194-file product/runtime consolidation (Model Intelligence, provider reliability, trusted-execution evidence, CLI readiness, tooling) — rebuilt as clean successor content on the post-#138 main; #133's own trust-file changes are NOT carried | product successor PR(s) built from post-#138 main | failing `linux-validation`/`windows-portability` (28 snapshot tests updated without the renderer change they presupposed), failing `trusted-control-plane` (structural deadlock) | MERGED_VIA_SUCCESSOR — commits reached main through #139; own trust changes and CI regressions not carried (see BABEL_CANONICAL_RECONCILIATION_FINAL.md) |
+| #138 | replaced by `a922fb2…` (branch `codex/trust-root-upgrade-v1-20260904`) | TRUST_SUCCESSOR_REBUILT | TrustRootUpgradeV1 protocol, workflow-integration fixes, adversarial + offline end-to-end trust tests, [`TRUST_ROOT_UPGRADE.md`](../architecture/TRUST_ROOT_UPGRADE.md) | — | pre-upgrade verifier cannot authorize a trust-root change by construction; merged via the documented one-time bounded exception (PR-#127 mechanism) | MERGED as 31e7d7e via the documented one-time bounded exception |
 
 ## Valuable work preservation matrix
 
@@ -86,3 +86,10 @@ Archived under [`archive/`](./archive/) with `ARCHIVED_SUPERSEDED` headers (cont
 `ADDITIONAL_FINDINGS.md` became
 [`docs/architecture/MODEL_INTELLIGENCE_ADDITIONAL_FINDINGS.md`](../architecture/MODEL_INTELLIGENCE_ADDITIONAL_FINDINGS.md)
 (content preserved, canonical location).
+
+## Campaign completion note (2026-09-04)
+
+The campaign concluded with #139 merged (main `da1e3e6932241a9ef5eaba9854f4b7c45471fa51`),
+zero open PRs, all required checks green with no exception, and the first
+green `trusted-control-plane` run in repository history. Final report:
+[`BABEL_CANONICAL_RECONCILIATION_FINAL.md`](./BABEL_CANONICAL_RECONCILIATION_FINAL.md).
