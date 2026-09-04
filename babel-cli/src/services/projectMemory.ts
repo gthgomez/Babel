@@ -148,7 +148,10 @@ export function sanitizeMemoryText(raw: string, maxLen: number): string {
     .trim();
   // Redact common secret-shaped tokens (not exhaustive — user still reviews proposals)
   text = text
-    .replace(/\b(sk|pk|rk|api|token|secret|password|passwd|bearer)[-_]?[A-Za-z0-9]{8,}\b/gi, '[redacted]')
+    .replace(
+      /\b(sk|pk|rk|api|token|secret|password|passwd|bearer)[-_]?[A-Za-z0-9_-]{8,}\b/gi,
+      '[redacted]',
+    )
     .replace(/\b[A-Za-z0-9_-]{20,}={0,2}\b/g, (m) =>
       /[A-Za-z]/.test(m) && /\d/.test(m) ? '[redacted]' : m,
     );

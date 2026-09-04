@@ -6,9 +6,11 @@ import { describe, it } from 'node:test';
 
 import {
   handleMemoryQuery,
+  handleSemanticSearch,
   handleMemoryStore,
   resetChronicleStoreForTests,
 } from './chronicleMemory.js';
+import { globalIndexer } from '../services/indexer.js';
 
 async function withChronicleEnv<T>(
   env: Record<string, string | undefined>,
@@ -105,6 +107,27 @@ describe('Chronicle memory backends', () => {
 
         assert.equal(result.exit_code, 1);
         assert.match(result.stderr, /Invalid BABEL_CHRONICLE_BACKEND/);
+      },
+    );
+  });
+
+  it('does not create or rebuild a semantic index from the read-only lane', async () => {
+    const projectRoot = path.join(tmpdir(), `babel-read-only-semantic-${Date.now()}`);
+    const previousRoot = globalIndexer.indexedProjectRoot;
+    await withChronicleEnv(
+      {
+        BABEL_PROJECT_ROOT: projectRoot,
+        BABEL_READ_ONLY_NO_INDEX_WRITE: '1',
+      },
+      async () => {
+        const result = await handleSemanticSearch({
+          tool: 'semantic_search',
+          query: 'anything',
+        });
+
+        assert.equal(result.exit_code, 1);
+        assert.match(result.stderr, /read-only lane/);
+        assert.equal(globalIndexer.indexedProjectRoot, previousRoot);
       },
     );
   });

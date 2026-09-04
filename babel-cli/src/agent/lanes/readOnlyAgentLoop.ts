@@ -1,6 +1,11 @@
 /**
  * Read-only agent tool loop for ask/plan/report lanes (Wave A).
  *
+ * This module is the authoritative in-process read-port factory: it fixes the
+ * typed policy to `read_only`, scopes project-root state, and disables index
+ * warming while the loop is active. That is an application invariant inside
+ * this process, not a hostile-process or OS security boundary.
+ *
  * Bounded multi-turn: provider actions → parseAgentActions → executeActionWithPolicy
  * → observations for synthesis prompt + session_loop_steps + tool_call_log.
  */
@@ -10,14 +15,12 @@ import {
   buildDiscoveryAnchorWarmupActions,
   resolveDiscoveryAnchorPaths,
 } from '../../services/discoveryAnchors.js';
-import { ensureSemanticIndexForProject } from '../../tools/chronicleMemory.js';
 import type { EvidenceBundle } from '../../evidence.js';
 import { runWithPrimaryOnlyFallback } from '../../execute.js';
 import type { ToolCallLog } from '../../schemas/agentContracts.js';
 import type { ToolContext, ToolResult } from '../../localTools.js';
 import { AgentActionsEnvelopeSchema, parseAgentActions, type AgentAction } from '../actions.js';
 import type { LiteSessionVerb } from '../contracts.js';
-import { presetForVerb } from '../policy.js';
 import type { PermissionPreset } from '../policy.js';
 import { buildSessionLoopSteps, type SmallFixLoopStep } from './smallFixLoop.js';
 import {
@@ -328,7 +331,9 @@ async function resolveLiveActionTurn(
 export async function runReadOnlyAgentLoop(
   input: ReadOnlyAgentLoopInput,
 ): Promise<ReadOnlyAgentLoopResult> {
-  const preset = input.preset ?? presetForVerb(input.verb);
+  // This lane is a read port. Caller-supplied presets must not widen its
+  // authority (especially for the fix-discovery verb).
+  const preset: PermissionPreset = 'read_only';
   const executor = input.executor ?? defaultToolExecutor;
   const maxRounds = input.maxRounds ?? DEFAULT_READ_ONLY_LOOP_MAX_ROUNDS;
   const anchorPaths = resolveDiscoveryAnchorPaths(input.projectRoot, input.seedPaths);
@@ -339,14 +344,14 @@ export async function runReadOnlyAgentLoop(
 
   const steps: SmallFixLoopStep[] = [];
   const previousProjectRoot = process.env['BABEL_PROJECT_ROOT'];
+  const previousNoIndexWrites = process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'];
   process.env['BABEL_PROJECT_ROOT'] = input.projectRoot;
-  try {
-    await ensureSemanticIndexForProject(input.projectRoot);
-  } catch {
-    // Discovery can still proceed with list/read/grep/glob even if indexing fails.
-  }
+  // Semantic indexing creates/updates SQLite state. Read-only discovery may
+  // query an already-open index, but must never warm or rebuild one.
+  process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'] = '1';
 
-  if (useDeterministicMock) {
+  try {
+    if (useDeterministicMock) {
     const mockActions = buildDeterministicMockActions(anchorPaths, input.verb);
     const batch = await executeActionBatch(
       mockActions,
@@ -368,13 +373,8 @@ export async function runReadOnlyAgentLoop(
       policyBlocked: batch.policyBlocked,
       blockedReason: batch.blockedReason,
     };
-    if (previousProjectRoot === undefined) {
-      delete process.env['BABEL_PROJECT_ROOT'];
-    } else {
-      process.env['BABEL_PROJECT_ROOT'] = previousProjectRoot;
-    }
     return mockResult;
-  }
+    }
 
   let priorObservations = '';
   let round = 0;
@@ -407,11 +407,6 @@ export async function runReadOnlyAgentLoop(
       policyBlocked,
       blockedReason,
     };
-    if (previousProjectRoot === undefined) {
-      delete process.env['BABEL_PROJECT_ROOT'];
-    } else {
-      process.env['BABEL_PROJECT_ROOT'] = previousProjectRoot;
-    }
     return warmupBlockedResult;
   }
 
@@ -484,12 +479,19 @@ export async function runReadOnlyAgentLoop(
     policyBlocked,
     blockedReason,
   };
-  if (previousProjectRoot === undefined) {
-    delete process.env['BABEL_PROJECT_ROOT'];
-  } else {
-    process.env['BABEL_PROJECT_ROOT'] = previousProjectRoot;
+    return loopResult;
+  } finally {
+    if (previousProjectRoot === undefined) {
+      delete process.env['BABEL_PROJECT_ROOT'];
+    } else {
+      process.env['BABEL_PROJECT_ROOT'] = previousProjectRoot;
+    }
+    if (previousNoIndexWrites === undefined) {
+      delete process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'];
+    } else {
+      process.env['BABEL_READ_ONLY_NO_INDEX_WRITE'] = previousNoIndexWrites;
+    }
   }
-  return loopResult;
 }
 
 export function mergeDiscoveryAndSynthesisSessionSteps(input: {

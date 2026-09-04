@@ -33,7 +33,12 @@ function streamingChatResponse(content: string): Response {
     new ReadableStream({
       start(controller) {
         controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n`),
+          encoder.encode(
+            `data: ${JSON.stringify({
+              model: 'deepseek/deepseek-v4-flash-0731',
+              choices: [{ delta: { content } }],
+            })}\n`,
+          ),
         );
         controller.enqueue(encoder.encode('data: [DONE]\n'));
         controller.close();
@@ -100,6 +105,7 @@ test('streamed ask retries non-streaming after schema failure without preserving
   const fixture = makeRelicRunFixture();
   const originalFetch = globalThis.fetch;
   const originalDeepSeekKey = process.env['DEEPSEEK_API_KEY'];
+  const originalOpenRouterKey = process.env['OPENROUTER_API_KEY'];
   const originalDeepInfraKey = process.env['DEEPINFRA_API_KEY'];
   const previousOffline = process.env['BABEL_LITE_OFFLINE'];
   let calls = 0;
@@ -108,6 +114,7 @@ test('streamed ask retries non-streaming after schema failure without preserving
   const requestBodies: Array<{ stream?: boolean; model?: string }> = [];
   try {
     process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+    process.env['OPENROUTER_API_KEY'] = 'sk-test-router-key';
     process.env['DEEPINFRA_API_KEY'] = 'test-key';
     process.env['BABEL_LITE_OFFLINE'] = '1';
     globalThis.fetch = (async (_input, init) => {
@@ -121,6 +128,7 @@ test('streamed ask retries non-streaming after schema failure without preserving
       }
       return new Response(
         JSON.stringify({
+          model: 'deepseek/deepseek-v4-flash-0731',
           choices: [
             {
               message: {
@@ -163,7 +171,7 @@ test('streamed ask retries non-streaming after schema failure without preserving
 
     assert.equal(calls, 2);
     assert.equal(requestBodies[0]?.stream, true);
-    assert.equal(requestBodies[0]?.model, 'deepseek-v4-flash');
+    assert.equal(requestBodies[0]?.model, 'deepseek/deepseek-v4-flash-0731');
     assert.equal(requestBodies[1]?.stream, false);
     assert.equal(resetCalled, true);
     assert.equal(streamedText, '');
@@ -179,6 +187,11 @@ test('streamed ask retries non-streaming after schema failure without preserving
       delete process.env['DEEPINFRA_API_KEY'];
     } else {
       process.env['DEEPINFRA_API_KEY'] = originalDeepInfraKey;
+    }
+    if (originalOpenRouterKey === undefined) {
+      delete process.env['OPENROUTER_API_KEY'];
+    } else {
+      process.env['OPENROUTER_API_KEY'] = originalOpenRouterKey;
     }
     if (previousOffline === undefined) {
       delete process.env['BABEL_LITE_OFFLINE'];

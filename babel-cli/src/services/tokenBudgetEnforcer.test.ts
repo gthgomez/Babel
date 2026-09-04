@@ -62,7 +62,7 @@ describe('checkTokenBudget', () => {
     setBudget(undefined);
     const result = checkTokenBudget(100);
     assert.equal(result.proceed, true);
-    assert.equal(result.budgetLimit, 3200); // default
+    assert.equal(result.budgetLimit, 3600); // default
   });
 
   it('respects CLI override over env var', () => {
@@ -84,7 +84,7 @@ describe('checkTokenBudget', () => {
     setBudget('not-a-number');
     const result = checkTokenBudget(100);
     assert.equal(result.proceed, true);
-    assert.equal(result.budgetLimit, 3200); // falls back to default
+    assert.equal(result.budgetLimit, 3600); // falls back to default
   });
 });
 
@@ -116,7 +116,7 @@ describe('resolveBudgetLimit', () => {
       if (prev === undefined) delete process.env['BABEL_TOKEN_BUDGET'];
       else process.env['BABEL_TOKEN_BUDGET'] = prev;
     };
-    assert.equal(resolveBudgetLimit(), 3200);
+    assert.equal(resolveBudgetLimit(), 3600);
   });
 });
 

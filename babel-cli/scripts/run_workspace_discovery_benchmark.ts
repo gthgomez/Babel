@@ -137,7 +137,7 @@ function parseArgs(argv: string[]): CliOptions {
 }
 
 function hasLiveProviderKey(): boolean {
-  return Boolean(process.env['DEEPSEEK_API_KEY']);
+  return Boolean(process.env['OPENROUTER_API_KEY']);
 }
 
 async function main(): Promise<void> {
@@ -147,7 +147,7 @@ async function main(): Promise<void> {
     return;
   }
   if (options.provider === 'live' && !hasLiveProviderKey()) {
-    throw new Error('Live workspace discovery requires DEEPSEEK_API_KEY.');
+    throw new Error('Live workspace discovery requires OPENROUTER_API_KEY.');
   }
 
   const report = runWorkspaceDiscoveryBenchmark({

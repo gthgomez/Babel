@@ -42,7 +42,6 @@ import type { ZodType } from 'zod';
 import type { CostPrecision } from '../services/modelPricingRegistry.js';
 import type { ProviderId } from './providerRegistry.js';
 import type { ContextManifestV1 } from '../agent/contextManifest.js';
-import type { ProviderFailureReceiptV1 } from './providerFailureReceipt.js';
 
 export type StructuredOutputFailureKind =
   | 'invalid_json'
@@ -132,6 +131,21 @@ export interface RunnerInvocationMetadata {
    * (P0-B: Pro reasoning is not silently disabled without a routing reason).
    */
   thinking_disabled_reason?: string | null;
+  /** Capability-aware execution provenance for qualification/campaign receipts. */
+  execution_envelope_hash?: string | null;
+  wire_policy_hash?: string | null;
+  requested_output_budget?: number | null;
+  effective_output_budget?: number | null;
+  actual_reasoning_tokens?: number | null;
+  normalized_finish_reason?: string | null;
+  failure_attribution?: string | null;
+  babel_attempt?: number | null;
+  openrouter_router_attempt?: number | null;
+  upstream_attempt?: number | null;
+  actual_endpoint_id?: string | null;
+  fallback_status?: 'none' | 'occurred' | 'unknown' | null;
+  router_metadata_hash?: string | null;
+  context_transformation_occurred?: boolean | null;
 }
 
 export type RunnerProgressState =
@@ -176,6 +190,10 @@ export interface ProviderInvocationStarted {
   delivered_tool_call_ids?: string[];
   /** Redacted context-preservation evidence for this exact inference. */
   context_manifest?: ContextManifestV1;
+  execution_envelope_hash?: string;
+  wire_policy_hash?: string;
+  requested_output_budget?: number | null;
+  effective_output_budget?: number | null;
 }
 
 export interface ProviderCapabilityBinding {
@@ -198,6 +216,62 @@ export interface ProviderInvocationCompleted {
   /** Upstream provider identity when the gateway exposes it. */
   upstream_provider?: string | null;
   output_digest?: string | null;
+  normalized_finish_reason?: string | null;
+  failure_attribution?: string | null;
+  actual_endpoint_id?: string | null;
+  fallback_status?: 'none' | 'occurred' | 'unknown' | null;
+  router_metadata_hash?: string | null;
+  openrouter_router_attempt?: number | null;
+  /** Durable evidence for a failed provider invocation. Payloads are never stored. */
+  failure_receipt?: ProviderFailureReceipt;
+  failure_class?: string | null;
+  failure_stage?: ProviderFailureStage | null;
+  provider_request_id?: string | null;
+  api_error_code?: string | null;
+  http_status?: number | null;
+  actual_attempt?: number | null;
+  max_attempts?: number | null;
+  stream?: boolean;
+  inference_started?: boolean;
+  partial_model_output?: boolean;
+  retryable?: boolean;
+  tool_call_count?: number | null;
+  requested_output_budget?: number | null;
+  effective_output_budget?: number | null;
+  wire_policy_hash?: string | null;
+  execution_envelope_hash?: string | null;
+}
+
+export type ProviderFailureStage =
+  | 'request'
+  | 'response'
+  | 'stream'
+  | 'response_normalization'
+  | 'unknown';
+
+/** Content-free failure evidence that can be persisted safely in session logs. */
+export interface ProviderFailureReceipt {
+  inference_id: string;
+  provider: ProviderId;
+  model: string;
+  provider_request_id: string | null;
+  observed_upstream: string | null;
+  http_status: number | null;
+  api_error_code: string | null;
+  failure_class: string;
+  actual_attempt: number;
+  max_attempts: number;
+  stream: boolean;
+  failure_stage: ProviderFailureStage;
+  inference_started: boolean;
+  partial_model_output: boolean;
+  tool_call_count: number;
+  requested_output_budget: number | null;
+  effective_output_budget: number | null;
+  wire_policy_hash: string | null;
+  execution_envelope_hash: string | null;
+  output_digest: string;
+  retryable: boolean;
 }
 
 export type ProviderInvocationPhase =
@@ -230,8 +304,6 @@ export interface RunnerCallbacks {
   onInvocationStarted?: (event: ProviderInvocationStarted) => void;
   onInvocationCompleted?: (event: ProviderInvocationCompleted) => void;
   onInvocationPhase?: (event: ProviderInvocationPhaseEvent) => void;
-  /** Receives one secret-safe terminal receipt for each failed inference. */
-  onProviderFailure?: (receipt: ProviderFailureReceiptV1) => void;
 }
 
 // ─── Native Function-Calling Types ───────────────────────────────────────────

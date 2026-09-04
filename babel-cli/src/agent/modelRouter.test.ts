@@ -16,3 +16,22 @@ test('ModelRouter constructs declared DeepInfra routes through ProviderEngine', 
     else process.env['DEEPINFRA_API_KEY'] = previous
   }
 })
+
+test('ModelRouter maps legacy DeepSeek selectors to OpenRouter in live mode', () => {
+  const previousRouter = process.env['OPENROUTER_API_KEY']
+  const previousDeepSeek = process.env['DEEPSEEK_API_KEY']
+  process.env['OPENROUTER_API_KEY'] = 'fixture-router-key'
+  process.env['DEEPSEEK_API_KEY'] = 'synthetic-direct-key'
+  try {
+    const route = new ModelRouter({ liveOnly: true }).resolve('deepseek-v4-flash')
+    assert.equal(route.provider, 'openrouter')
+    assert.equal(route.modelId, 'deepseek/deepseek-v4-flash-0731')
+    assert.equal(route.runner.provider, 'openrouter')
+    assert.equal(route.runner.modelId, 'deepseek/deepseek-v4-flash-0731')
+  } finally {
+    if (previousRouter === undefined) delete process.env['OPENROUTER_API_KEY']
+    else process.env['OPENROUTER_API_KEY'] = previousRouter
+    if (previousDeepSeek === undefined) delete process.env['DEEPSEEK_API_KEY']
+    else process.env['DEEPSEEK_API_KEY'] = previousDeepSeek
+  }
+})

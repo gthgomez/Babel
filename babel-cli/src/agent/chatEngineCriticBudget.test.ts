@@ -10,13 +10,21 @@ import {
   buildPostWriteRepairMessage,
   computeCriticRepairCostCap,
   computePostWriteRepairWallMs,
+  executeCriticWithTimeout,
   hasAnyWrites,
   POST_WRITE_REPAIR_WALL_MAX_MS,
   POST_WRITE_REPAIR_WALL_MIN_MS,
+  resolveOrCreateCriticProRunner,
+  resolveOrCreateCriticRunner,
   runAsymmetricDiffCritic,
   type AsymmetricCriticState,
   type CriticRunner,
 } from './chatEngineCriticBudget.js';
+import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
+import type { RunnerCallbacks } from '../runners/base.js';
+
+const EXACT_GLM_MODEL = 'z-ai/glm-5.3-flash';
+const GLM_BACKEND_KEY = 'glm-5.3-flash';
 
 function restoreEnv(key: string, value: string | undefined): void {
   if (value === undefined) delete process.env[key];
@@ -45,6 +53,72 @@ function baseState(
     ...overrides,
   };
 }
+
+test('critic forwards provider lifecycle callbacks to its isolated runner', async () => {
+  let observed = false;
+  const runner = {
+    executeRaw: async (
+      _prompt: string,
+      callbacks?: RunnerCallbacks,
+    ): Promise<string> => {
+      callbacks?.onInvocationPhase?.({
+        inference_id: 'critic-inference',
+        provider: 'openrouter',
+        model: 'z-ai/glm-5.3-flash',
+        phase: 'response_normalized',
+      });
+      return '{"verdict":"pass","confidence":0.9,"reasons":["ok"]}';
+    },
+  } as unknown as CriticRunner;
+
+  await executeCriticWithTimeout(
+    runner,
+    'review this patch',
+    undefined,
+    {
+      cancelled: false,
+      abortController: new AbortController(),
+      timeoutMs: 5_000,
+    },
+    {
+      onInvocationPhase: () => {
+        observed = true;
+      },
+    },
+  );
+  assert.equal(observed, true);
+});
+
+test('exact GLM critic phases ignore mixed-model overrides and stay on OpenRouter', () => {
+  const previousFlash = process.env['BABEL_DIFF_CRITIC_MODEL'];
+  const previousPro = process.env['BABEL_DIFF_CRITIC_PRO_MODEL'];
+  process.env['BABEL_DIFF_CRITIC_MODEL'] = 'deepseek-v4-flash';
+  process.env['BABEL_DIFF_CRITIC_PRO_MODEL'] = 'deepseek-v4-pro';
+  try {
+    const noFallback = (): CriticRunner => {
+      throw new Error('fallback must not be reached for exact GLM');
+    };
+    const flash = resolveOrCreateCriticRunner(EXACT_GLM_MODEL, null, noFallback);
+    const pro = resolveOrCreateCriticProRunner(EXACT_GLM_MODEL, null, noFallback);
+    assert.ok(flash.runner instanceof OpenRouterApiRunner);
+    assert.ok(pro.runner instanceof OpenRouterApiRunner);
+  } finally {
+    if (previousFlash === undefined) delete process.env['BABEL_DIFF_CRITIC_MODEL'];
+    else process.env['BABEL_DIFF_CRITIC_MODEL'] = previousFlash;
+    if (previousPro === undefined) delete process.env['BABEL_DIFF_CRITIC_PRO_MODEL'];
+    else process.env['BABEL_DIFF_CRITIC_PRO_MODEL'] = previousPro;
+  }
+});
+
+test('GLM backend key is normalized to the exact OpenRouter critic route', () => {
+  const noFallback = (): CriticRunner => {
+    throw new Error('fallback must not be reached for exact GLM');
+  };
+  const flash = resolveOrCreateCriticRunner(GLM_BACKEND_KEY, null, noFallback);
+  const pro = resolveOrCreateCriticProRunner(GLM_BACKEND_KEY, null, noFallback);
+  assert.ok(flash.runner instanceof OpenRouterApiRunner);
+  assert.ok(pro.runner instanceof OpenRouterApiRunner);
+});
 
 describe('buildCriticSkipReceipt', () => {
   test('emits skip verdict with reason codes', () => {

@@ -24,6 +24,7 @@ import {
   buildStructuredOutputRetryPrompt,
   isStructuredOutputFailure,
   resetOfflineQaCallCount,
+  runWithFallback,
   runWaterfallForSchemaFailureTest,
 } from './execute.js';
 import type { RunOptions, PipelineStage } from './execute.js';
@@ -112,6 +113,65 @@ test('resolveAggregateWaterfallTimeoutMs: validates finite positive and returns 
     process.env['BABEL_WATERFALL_TIMEOUT_MS'] = previous;
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('explicit GLM stage policy uses the exact OpenRouter route', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousKey = process.env['OPENROUTER_API_KEY'];
+  let requestedModel = '';
+  try {
+    process.env['OPENROUTER_API_KEY'] = 'synthetic-router-key';
+    globalThis.fetch = (async (_input, init) => {
+      requestedModel = String(
+        (JSON.parse(String(init?.body ?? '{}')) as { model?: string }).model ?? '',
+      );
+      const newline = String.fromCharCode(10);
+      return new Response(
+        [
+          `data: ${JSON.stringify({
+            model: 'z-ai/glm-5.3-flash',
+            choices: [{ delta: { content: JSON.stringify({ ok: true }) } }],
+          })}`,
+          `data: ${JSON.stringify({
+            model: 'z-ai/glm-5.3-flash',
+            choices: [],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          })}`,
+          'data: [DONE]',
+          '',
+        ].join(newline),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    const result = await runWithFallback(
+      'respond',
+      z.object({ ok: z.literal(true) }),
+      {
+        model: 'glm-5.3-flash',
+        liveOnly: true,
+        fallbackPolicy: 'primary_only',
+        stage: 'executor',
+      },
+    );
+    assert.deepEqual(result, { ok: true });
+    assert.equal(requestedModel, 'z-ai/glm-5.3-flash');
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousKey === undefined) delete process.env['OPENROUTER_API_KEY'];
+    else process.env['OPENROUTER_API_KEY'] = previousKey;
+  }
+});
+
+test('unknown live model overrides fail closed before the stage waterfall', async () => {
+  await assert.rejects(
+    () => runWithFallback(
+      'respond',
+      z.object({ ok: z.literal(true) }),
+      { model: 'unknown-live-model', liveOnly: true, stage: 'executor' },
+    ),
+    /unapproved live model/,
+  );
 });
 
 // ─── isStructuredOutputFailure (exported) ───────────────────────────────────────

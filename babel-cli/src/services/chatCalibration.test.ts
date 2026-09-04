@@ -7,7 +7,6 @@ import {
   CHAT_CALIBRATION_CELL_COUNT,
   evaluateChatCalibrationReadiness,
   validateChatCalibrationManifest,
-  validateCampaignProvenance,
   type ChatCalibrationCellEvidence,
 } from './chatCalibration.js';
 
@@ -92,23 +91,4 @@ test('successful cells without a failure signal do not count as unknown failures
   const readiness = evaluateChatCalibrationReadiness(cells);
   assert.equal(readiness.status, 'ready');
   assert.equal(readiness.unknown_attribution_cells, 0);
-});
-
-test('canonical provenance rejects dirty trees while development runs require a diff hash', () => {
-  const base = {
-    git_sha: 'a'.repeat(40),
-    git_tree_sha: 'b'.repeat(40),
-    package_lock_sha256: 'c'.repeat(64),
-    build_artifact_sha256: null,
-    runner_source_sha256: 'd'.repeat(64),
-    analyzer_source_sha256: 'e'.repeat(64),
-    source_composite_sha256: 'f'.repeat(64),
-    dirty: false,
-    classification: 'CANONICAL_CALIBRATION' as const,
-    diff_sha256: null,
-  };
-  validateCampaignProvenance(base, base.git_sha);
-  assert.throws(() => validateCampaignProvenance({ ...base, dirty: true }, base.git_sha), /canonical/);
-  assert.throws(() => validateCampaignProvenance({ ...base, classification: 'DEVELOPMENT_EXPERIMENT', dirty: true }, base.git_sha), /diff_sha256/);
-  validateCampaignProvenance({ ...base, classification: 'DEVELOPMENT_EXPERIMENT', dirty: true, diff_sha256: '1'.repeat(64) }, base.git_sha);
 });

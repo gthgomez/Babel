@@ -135,10 +135,10 @@ $checks['git_available'] = $gitOk
 if (-not $gitOk) { $failures.Add('git_unavailable') }
 
 # Live credential presence (boolean only)
-$liveKeyPresent = -not [string]::IsNullOrWhiteSpace($env:DEEPSEEK_API_KEY)
+$liveKeyPresent = -not [string]::IsNullOrWhiteSpace($env:OPENROUTER_API_KEY)
 $checks['live_credential_present'] = $liveKeyPresent
 if ($RequireLiveCredential -and -not $liveKeyPresent) {
-  $failures.Add('DEEPSEEK_API_KEY_missing')
+  $failures.Add('OPENROUTER_API_KEY_missing')
 }
 
 # Evidence path length

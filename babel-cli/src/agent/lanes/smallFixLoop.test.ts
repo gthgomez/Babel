@@ -8,6 +8,10 @@ import type { ToolCallRequest, ToolContext, ToolResult } from '../../localTools.
 import { createToolExecutor } from '../toolExecutor.js';
 import { runSmallFixMutationLoop } from './smallFixLoop.js';
 
+const originalProjectRoot = process.env['BABEL_PROJECT_ROOT'];
+const originalLive = process.env['BABEL_LIVE'];
+const originalHostFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
+
 const context: ToolContext = {
   agentId: 'small-fix-loop-test',
   runId: 'run-loop',
@@ -52,6 +56,9 @@ describe('runSmallFixMutationLoop', () => {
       writeNodeFixture(root, 'export const add = () => 0;\n');
       process.env['BABEL_PROJECT_ROOT'] = root;
       process.env['BABEL_LIVE'] = 'true';
+      // This fixture intentionally executes npm on the host; declare test-only escalation to both
+      // the policy layer and the sandbox transport.
+      process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
 
       const result = await runSmallFixMutationLoop({
         targetFile: 'src/math.js',
@@ -59,11 +66,16 @@ describe('runSmallFixMutationLoop', () => {
         verifierCommand: 'npm test',
         replacementContent: 'export const add = (a, b) => a + b;\n',
         toolContext: context,
+        hostFallbackAllowed: true,
       });
 
       assert.equal(result.policyBlocked, false);
       assert.equal(result.writeResult?.exit_code, 0);
-      assert.equal(result.testResult?.exit_code, 0);
+      assert.equal(
+        result.testResult?.exit_code,
+        0,
+        result.testResult?.stderr || result.testResult?.stdout || 'verifier returned no output',
+      );
       assert.equal(
         readFileSync(join(root, 'src', 'math.js'), 'utf-8'),
         'export const add = (a, b) => a + b;\n',
@@ -77,7 +89,12 @@ describe('runSmallFixMutationLoop', () => {
       assert.equal(result.steps[1]?.policyDecision, 'allow');
       assert.equal(result.steps[2]?.policyDecision, 'allow');
     } finally {
-      delete process.env['BABEL_LIVE'];
+      if (originalProjectRoot === undefined) delete process.env['BABEL_PROJECT_ROOT'];
+      else process.env['BABEL_PROJECT_ROOT'] = originalProjectRoot;
+      if (originalLive === undefined) delete process.env['BABEL_LIVE'];
+      else process.env['BABEL_LIVE'] = originalLive;
+      if (originalHostFallback === undefined) delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+      else process.env['BABEL_ALLOW_HOST_FALLBACK'] = originalHostFallback;
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -115,6 +132,8 @@ describe('runSmallFixMutationLoop', () => {
         'export const add = () => 0;\n',
       );
     } finally {
+      if (originalProjectRoot === undefined) delete process.env['BABEL_PROJECT_ROOT'];
+      else process.env['BABEL_PROJECT_ROOT'] = originalProjectRoot;
       rmSync(root, { recursive: true, force: true });
     }
   });

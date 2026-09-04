@@ -66,6 +66,7 @@ export async function runFixDiscoveryPhase(
     ...(options.provider === 'mock' || options.provider === 'live'
       ? { provider: options.provider }
       : {}),
+    ...(options.model !== undefined ? { model: options.model } : {}),
     preset: 'read_only',
     maxRounds: 4,
     ...(options.toolStream !== undefined ? { toolStream: options.toolStream } : {}),

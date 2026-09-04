@@ -690,7 +690,7 @@ export async function runLiveSparkRiskReview(
   const isOffline =
     options.provider === "mock" ||
     process.env["BABEL_LITE_OFFLINE"] === "1" ||
-    !process.env["DEEPSEEK_API_KEY"];
+    !process.env["OPENROUTER_API_KEY"];
 
   if (isOffline) {
     // Synthetic fallback — same quality as existing Spark findings

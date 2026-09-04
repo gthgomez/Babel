@@ -1,22 +1,19 @@
-import assert from "node:assert/strict";
-import { describe, it } from "node:test";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { Command } from "commander";
+import { Command } from 'commander';
 
-import { BABEL_ROOT } from "../cli/constants.js";
+import { BABEL_ROOT } from '../cli/constants.js';
 import {
   applyUserFocusedHelpTiers,
   buildApprovalProfilePayload,
   resolveBenchmarkProvider,
   resolveBenchmarkAnalyzeRun,
-} from "./coreCommands.js";
-import {
-  classifyDoTask,
-  registerWorkflowCommands,
-} from "./workflowCommands.js";
+} from './coreCommands.js';
+import { classifyDoTask, registerWorkflowCommands } from './workflowCommands.js';
 
 function makeProgram(): Command {
   const program = new Command();
@@ -25,113 +22,102 @@ function makeProgram(): Command {
   return program;
 }
 
-describe("Babel CLI command registration", () => {
-  it("enforces the OpenRouter-only DeepSeek control route for live benchmarks", () => {
-    const previousKey = process.env["DEEPSEEK_API_KEY"];
-    process.env["DEEPSEEK_API_KEY"] = "test-key";
+describe('Babel CLI command registration', () => {
+  it('allows the DeepSeek control and exact GLM/OpenRouter campaign routes', () => {
+    const previousKey = process.env['DEEPSEEK_API_KEY'];
+    const previousRouterKey = process.env['OPENROUTER_API_KEY'];
+    delete process.env['DEEPSEEK_API_KEY'];
+    process.env['OPENROUTER_API_KEY'] = 'test-router-key';
     try {
+      const deepseek = resolveBenchmarkProvider('deepseek');
+      assert.equal(deepseek.provider, 'openrouter');
+      assert.equal(deepseek.defaultModel, 'deepseek/deepseek-v4-flash-0731');
       assert.equal(
-        resolveBenchmarkProvider("deepseek").defaultModel,
-        "deepseek/deepseek-v4-flash-0731",
+        resolveBenchmarkProvider('openrouter', 'deepseek-v4-pro').defaultModel,
+        'deepseek/deepseek-v4-pro',
       );
+      const glm = resolveBenchmarkProvider('openrouter');
+      assert.equal(glm.provider, 'openrouter');
+      assert.equal(glm.defaultModel, 'z-ai/glm-5.3-flash');
       assert.throws(
-        () => resolveBenchmarkProvider("deepinfra"),
-        /LIVE_MODEL_POLICY/,
+        () => resolveBenchmarkProvider('deepseek', 'qwen3'),
+        /approved DeepSeek v4 Flash\/Pro selectors/,
       );
-      assert.throws(
-        () => resolveBenchmarkProvider("qwen3"),
-        /LIVE_MODEL_POLICY/,
-      );
+      assert.throws(() => resolveBenchmarkProvider('deepinfra'), /LIVE_MODEL_POLICY/);
+      assert.throws(() => resolveBenchmarkProvider('qwen3'), /LIVE_MODEL_POLICY/);
     } finally {
-      if (previousKey === undefined) delete process.env["DEEPSEEK_API_KEY"];
-      else process.env["DEEPSEEK_API_KEY"] = previousKey;
+      if (previousKey === undefined) delete process.env['DEEPSEEK_API_KEY'];
+      else process.env['DEEPSEEK_API_KEY'] = previousKey;
+      if (previousRouterKey === undefined) delete process.env['OPENROUTER_API_KEY'];
+      else process.env['OPENROUTER_API_KEY'] = previousRouterKey;
     }
   });
 
-  it("registers plan and deep commands, and verifies removed Lite commands are not registered", () => {
+  it('registers plan and deep commands, and verifies removed Lite commands are not registered', () => {
     const program = makeProgram();
-    const plan = program.commands.find((command) => command.name() === "plan");
-    const deep = program.commands.find((command) => command.name() === "deep");
+    const plan = program.commands.find((command) => command.name() === 'plan');
+    const deep = program.commands.find((command) => command.name() === 'deep');
     assert.ok(plan);
     assert.ok(deep);
     assert.equal(
-      program.commands.some((command) => command.name() === "daily"),
+      program.commands.some((command) => command.name() === 'daily'),
       false,
     );
     assert.equal(
-      program.commands.some((command) => command.name() === "undo"),
+      program.commands.some((command) => command.name() === 'undo'),
       true,
     );
     assert.equal(
-      program.commands.some((command) => command.name() === "review"),
+      program.commands.some((command) => command.name() === 'review'),
       false,
     );
     assert.equal(
-      program.commands.some((command) => command.name() === "lite"),
+      program.commands.some((command) => command.name() === 'lite'),
       false,
     );
-    assert.equal(deep.aliases().includes("full"), false);
+    assert.equal(deep.aliases().includes('full'), false);
   });
 
-  it("tells fresh clones the repo-root build command when dist output is missing", () => {
-    const liteBin = readFileSync(
-      join(BABEL_ROOT, "babel-cli", "bin", "babel-lite.js"),
-      "utf-8",
-    );
-    const fullBin = readFileSync(
-      join(BABEL_ROOT, "babel-cli", "bin", "babel.js"),
-      "utf-8",
-    );
+  it('tells fresh clones the repo-root build command when dist output is missing', () => {
+    const liteBin = readFileSync(join(BABEL_ROOT, 'babel-cli', 'bin', 'babel-lite.js'), 'utf-8');
+    const fullBin = readFileSync(join(BABEL_ROOT, 'babel-cli', 'bin', 'babel.js'), 'utf-8');
 
-    assert.equal(liteBin.includes("was removed"), true);
-    assert.equal(
-      fullBin.includes("npm --prefix .\\\\babel-cli run build"),
-      true,
-    );
+    assert.equal(liteBin.includes('was removed'), true);
+    assert.equal(fullBin.includes('npm --prefix .\\\\babel-cli run build'), true);
   });
 
-  it("keeps deep and plan user-facing without execution-profile", () => {
+  it('keeps deep and plan user-facing without execution-profile', () => {
     const program = makeProgram();
-    const topLevelDeep = program.commands.find(
-      (command) => command.name() === "deep",
-    );
-    const topLevelPlan = program.commands.find(
-      (command) => command.name() === "plan",
-    );
+    const topLevelDeep = program.commands.find((command) => command.name() === 'deep');
+    const topLevelPlan = program.commands.find((command) => command.name() === 'plan');
     assert.ok(topLevelDeep);
     assert.ok(topLevelPlan);
-    assert.ok(
-      topLevelDeep.options.some((option) => option.long === "--project-root"),
-    );
-    assert.ok(topLevelDeep.options.some((option) => option.long === "--json"));
+    assert.ok(topLevelDeep.options.some((option) => option.long === '--project-root'));
+    assert.ok(topLevelDeep.options.some((option) => option.long === '--json'));
     assert.equal(
-      topLevelDeep.options.some(
-        (option) => option.long === "--execution-profile",
-      ),
+      topLevelDeep.options.some((option) => option.long === '--execution-profile'),
       false,
     );
     assert.equal(
-      topLevelPlan.options.some(
-        (option) => option.long === "--execution-profile",
-      ),
+      topLevelPlan.options.some((option) => option.long === '--execution-profile'),
       false,
     );
   });
 
-  it("registers undo with project scoping options", () => {
+  it('registers undo with project scoping options', () => {
     const program = makeProgram();
-    const undo = program.commands.find((command) => command.name() === "undo");
+    const undo = program.commands.find((command) => command.name() === 'undo');
     assert.ok(undo);
-    assert.ok(undo.options.some((option) => option.long === "--project"));
-    assert.ok(undo.options.some((option) => option.long === "--project-root"));
-    assert.ok(undo.options.some((option) => option.long === "--json"));
+    assert.ok(undo.options.some((option) => option.long === '--project'));
+    assert.ok(undo.options.some((option) => option.long === '--project-root'));
+    assert.ok(undo.options.some((option) => option.long === '--json'));
   });
 
-  it("keeps default help focused while exposing advanced tiers", () => {
+  it('keeps default help focused while exposing advanced tiers', () => {
     const program = makeProgram();
     applyUserFocusedHelpTiers(program);
 
-    let help = "";
+    let help = '';
     program.configureOutput({
       writeOut: (value) => {
         help += value;
@@ -141,7 +127,7 @@ describe("Babel CLI command registration", () => {
       },
     });
 
-    assert.throws(() => program.parse(["node", "babel", "--help"]));
+    assert.throws(() => program.parse(['node', 'babel', '--help']));
     assert.match(help, /plan .*Prepare a plan/i);
     assert.match(help, /deep .*governed apply-and-verify path/i);
     assert.match(help, /advanced .*advanced Babel command groups/i);
@@ -155,85 +141,65 @@ describe("Babel CLI command registration", () => {
     );
   });
 
-  it("classifies do requests into ask, plan, patch, or fix lanes", () => {
-    assert.equal(classifyDoTask("Explain this repo without editing."), "ask");
-    assert.equal(classifyDoTask("Summarize this module."), "ask");
-    assert.equal(classifyDoTask("What is the active Lite entrypoint?"), "ask");
-    assert.equal(classifyDoTask("How does the checkpoint flow work?"), "ask");
-    assert.equal(classifyDoTask("Plan a safe migration path."), "plan");
-    assert.equal(
-      classifyDoTask("Compare these implementation approaches."),
-      "plan",
-    );
-    assert.equal(
-      classifyDoTask("Propose a patch for the Lite help text."),
-      "patch",
-    );
-    assert.equal(
-      classifyDoTask("Generate a diff proposal for the Lite help text."),
-      "patch",
-    );
+  it('classifies do requests into ask, plan, patch, or fix lanes', () => {
+    assert.equal(classifyDoTask('Explain this repo without editing.'), 'ask');
+    assert.equal(classifyDoTask('Summarize this module.'), 'ask');
+    assert.equal(classifyDoTask('What is the active Lite entrypoint?'), 'ask');
+    assert.equal(classifyDoTask('How does the checkpoint flow work?'), 'ask');
+    assert.equal(classifyDoTask('Plan a safe migration path.'), 'plan');
+    assert.equal(classifyDoTask('Compare these implementation approaches.'), 'plan');
+    assert.equal(classifyDoTask('Propose a patch for the Lite help text.'), 'patch');
+    assert.equal(classifyDoTask('Generate a diff proposal for the Lite help text.'), 'patch');
     assert.equal(
       classifyDoTask(
-        "Fix the failing test. Only edit src/math.js. Run npm test before completing.",
+        'Fix the failing test. Only edit src/math.js. Run npm test before completing.',
       ),
-      "fix",
+      'fix',
     );
-    assert.equal(classifyDoTask("Update the Lite help text."), "fix");
-    assert.equal(classifyDoTask("Implement the Lite help text update."), "fix");
-    assert.equal(classifyDoTask("Look at the Lite help text."), "plan");
+    assert.equal(classifyDoTask('Update the Lite help text.'), 'fix');
+    assert.equal(classifyDoTask('Implement the Lite help text update.'), 'fix');
+    assert.equal(classifyDoTask('Look at the Lite help text.'), 'plan');
   });
 
-  it("describes permissions in user terms before policy labels", () => {
+  it('describes permissions in user terms before policy labels', () => {
     const payload = buildApprovalProfilePayload({
-      profile: "auto-edit",
-      runtimeMode: "act",
+      profile: 'auto-edit',
+      runtimeMode: 'act',
       dryRun: {
         persisted: false,
         sessionOverride: null,
         effective: false,
-        runtimeFlagsPath: "config/runtime-flags.json",
-        source: "persisted",
+        runtimeFlagsPath: 'config/runtime-flags.json',
+        source: 'persisted',
       },
-      profilePath: "config/approval-profile.json",
+      profilePath: 'config/approval-profile.json',
     });
 
-    assert.match(String(payload["action"]), /edit files and run local checks/i);
-    assert.deepEqual(payload["scope"], [
-      "edit in-scope project files",
-      "run local verifiers such as npm test",
-      "write recovery evidence for failures",
+    assert.match(String(payload['action']), /edit files and run local checks/i);
+    assert.deepEqual(payload['scope'], [
+      'edit in-scope project files',
+      'run local verifiers such as npm test',
+      'write recovery evidence for failures',
     ]);
     assert.match(
-      String(payload["approval"]),
+      String(payload['approval']),
       /Trusted workspace work should not ask redundant approvals/i,
     );
-    assert.equal(payload["profile"], "auto-edit");
+    assert.equal(payload['profile'], 'auto-edit');
   });
 
-  it("reports missing Terminal-Bench latest roots as actionable setup blockers", () => {
-    const root = mkdtempSync(join(tmpdir(), "babel-missing-benchmark-root-"));
+  it('reports missing Terminal-Bench latest roots as actionable setup blockers', () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-missing-benchmark-root-'));
     assert.throws(
-      () =>
-        resolveBenchmarkAnalyzeRun("latest", {
-          benchmarksRoot: root,
-          suite: "pilot10",
-        }),
+      () => resolveBenchmarkAnalyzeRun('latest', { benchmarksRoot: root, suite: 'pilot10' }),
       (error: unknown) => {
         assert.equal(error instanceof Error, true);
-        assert.equal(
-          (error as { name?: string }).name,
-          "ActionableCommandError",
-        );
-        const payload = (error as { payload?: Record<string, unknown> })
-          .payload;
-        assert.equal(payload?.["status"], "blocked");
-        assert.equal(payload?.["reason"], "terminal_bench_result_root_missing");
-        assert.match(
-          String(payload?.["expected_result_root"]),
-          /terminal-bench-2/,
-        );
-        assert.match(JSON.stringify(payload?.["commands"]), /benchmark loop/);
+        assert.equal((error as { name?: string }).name, 'ActionableCommandError');
+        const payload = (error as { payload?: Record<string, unknown> }).payload;
+        assert.equal(payload?.['status'], 'blocked');
+        assert.equal(payload?.['reason'], 'terminal_bench_result_root_missing');
+        assert.match(String(payload?.['expected_result_root']), /terminal-bench-2/);
+        assert.match(JSON.stringify(payload?.['commands']), /benchmark loop/);
         return true;
       },
     );

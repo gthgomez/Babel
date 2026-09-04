@@ -69,6 +69,8 @@ export interface LeaseContext {
    * (fail closed). Host-user env stripping is not isolation.
    */
   isolationAvailable?: boolean;
+  /** Explicit host-profile/escalation fallback when Docker is unavailable. */
+  hostFallbackAllowed?: boolean;
 }
 
 export { actionRequestFromAction } from './actionRequest.js';
@@ -235,8 +237,10 @@ export function decideWithLease(
         requestRequiresIsolation({
           capability: decoded.capability,
           ...(decoded.requiresIsolation === true ? { requiresIsolation: true } : {}),
+          ...(ctx.hostFallbackAllowed === true ? { hostFallbackAllowed: true } : {}),
         }) &&
-        ctx.isolationAvailable !== true
+        ctx.isolationAvailable !== true &&
+        ctx.hostFallbackAllowed !== true
       ) {
         return { decision: 'deny', reasonCode: 'DENY_CAPABILITY_CONSTRAINT' };
       }
@@ -272,6 +276,7 @@ export function decideWithLease(
     {
       ...req,
       isolationAvailable: ctx.isolationAvailable === true,
+      hostFallbackAllowed: ctx.hostFallbackAllowed === true,
     },
     ctx.lease,
     now,

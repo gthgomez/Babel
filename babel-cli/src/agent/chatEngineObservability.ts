@@ -17,9 +17,9 @@ import type { ChatToolAction } from './chatToolDefinitions.js';
 import { chatActionToolName } from './chatToolDefinitions.js';
 import { isOfflineChatMode } from './chatModelPolicy.js';
 import {
-  assertLiveModelId,
   LIVE_OPENROUTER_BACKEND_KEY,
   LIVE_OPENROUTER_MODEL_ID,
+  assertLiveModelId,
   resolveOpenRouterDeepSeekModelId,
 } from '../modelPolicy.js';
 import type { DiffCriticVerdict } from './diffCritic.js';
@@ -926,20 +926,21 @@ export function pushProviderTurnMessages(input: {
 export function makeChatRunner(
   modelName: string,
 ): DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner {
-  const normalizedModelName = modelName.trim().toLowerCase();
-  if (!isOfflineChatMode()) {
-    assertLiveModelId(modelName, 'live chat phase routing');
-    if (normalizedModelName === LIVE_OPENROUTER_BACKEND_KEY || normalizedModelName === LIVE_OPENROUTER_MODEL_ID) {
-      return new OpenRouterApiRunner(LIVE_OPENROUTER_MODEL_ID);
-    }
-    const routedDeepSeekModel = resolveOpenRouterDeepSeekModelId(modelName);
-    if (routedDeepSeekModel) return new OpenRouterApiRunner(routedDeepSeekModel);
-    throw new Error(
-      `[LIVE_MODEL_POLICY] live chat phase routing could not resolve an OpenRouter route for "${modelName}".`,
-    );
-  }
+  if (!isOfflineChatMode()) assertLiveModelId(modelName, 'live chat phase routing');
   const isDS = modelName.toLowerCase().includes('deepseek');
   const isOL = modelName.toLowerCase().includes('ollama') || modelName.includes(':');
+  if (modelName === LIVE_OPENROUTER_MODEL_ID || modelName === LIVE_OPENROUTER_BACKEND_KEY) {
+    return new OpenRouterApiRunner(LIVE_OPENROUTER_MODEL_ID);
+  }
+  const openRouterDeepSeekModel = resolveOpenRouterDeepSeekModelId(modelName);
+  if (openRouterDeepSeekModel && !isOfflineChatMode()) {
+    return new OpenRouterApiRunner(openRouterDeepSeekModel);
+  }
+  if (isDS && !isOfflineChatMode()) {
+    throw new Error(
+      '[LIVE_MODEL_POLICY] Direct DeepSeek live calls are disabled; use the OpenRouter DeepSeek control route.',
+    );
+  }
   return isOL ? new OllamaApiRunner(modelName)
     : isDS ? new DeepSeekApiRunner(modelName)
     : new DeepInfraApiRunner(modelName);

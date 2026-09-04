@@ -20,6 +20,14 @@ import {
 import { buildSweFirstMoveCard } from '../agent/firstMoveCard.js';
 import { renderFailureCard, renderSuccessCard } from '../agent/failureCard.js';
 import type { FailureCardInput } from '../agent/failureCard.js';
+import {
+  LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS,
+  LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS,
+  LIVE_OPENROUTER_BACKEND_KEY,
+  LIVE_OPENROUTER_MODEL_ID,
+  resolveOpenRouterDeepSeekBackendKey,
+  resolveOpenRouterDeepSeekModelId,
+} from '../modelPolicy.js';
 
 export type { PlaybookDefinition } from './playbooks/playbookService.js';
 
@@ -39,22 +47,22 @@ export interface HarnessRunOptions {
   surface: AgentBenchmarkSurface;
   datasetPath?: string;
   tbRoot?: string;
-  model?: 'deepseek-v4-pro' | 'deepseek-v4-flash';
+  model?: string;
 }
 
 export function resolveBenchmarkDeepSeekModel(
   task: AgentBenchmarkTask,
-): 'deepseek-v4-pro' | 'deepseek-v4-flash' {
+): 'deepseek-v4-pro-openrouter' | 'deepseek-v4-flash-openrouter' {
   // External harness tasks (SWE-bench, HUNK4J, Terminal-Bench) always need the
   // full pro model — flash can't handle real-world repo-scale debugging.
   if (task.source !== 'babel_parity' && task.source !== 'babel_governance') {
-    return 'deepseek-v4-pro';
+    return 'deepseek-v4-pro-openrouter';
   }
   // Local parity/governance tasks: flash is sufficient for simple edits.
   if (task.tier === 'A_daily' && task.difficulty === 'easy') {
-    return 'deepseek-v4-flash';
+    return 'deepseek-v4-flash-openrouter';
   }
-  return 'deepseek-v4-pro';
+  return 'deepseek-v4-pro-openrouter';
 }
 
 export interface HarnessCellPayload {
@@ -82,15 +90,44 @@ const TB_AGENT_TIMEOUT_MS = 15 * 60 * 1000;
 export function buildSweAgentChatEnv(
   providerEnv: NodeJS.ProcessEnv,
   env: NodeJS.ProcessEnv = process.env,
+  model?: string,
 ): NodeJS.ProcessEnv {
   const wall = env['BABEL_CHAT_MAX_WALL_MS']?.trim();
+  const isGlm = model === LIVE_OPENROUTER_MODEL_ID || model === LIVE_OPENROUTER_BACKEND_KEY;
+  const isOpenRouterDeepSeek =
+    model === undefined || resolveOpenRouterDeepSeekBackendKey(model) !== null;
+  if (model !== undefined && !isGlm && !isOpenRouterDeepSeek) {
+    throw new Error(
+      `[LIVE_MODEL_POLICY] Live SWE harness received an unapproved model route: ${model}.`,
+    );
+  }
+  const effectiveProviderEnv = { ...providerEnv };
+  if (isGlm || isOpenRouterDeepSeek) {
+    // An OpenRouter live control must never inherit direct-provider keys or
+    // the direct-provider-only benchmark switch.
+    delete effectiveProviderEnv['DEEPINFRA_API_KEY'];
+    delete effectiveProviderEnv['DEEPSEEK_API_KEY'];
+    delete effectiveProviderEnv['BABEL_BENCHMARK_DEEPSEEK_ONLY'];
+  }
+  const investigateModel = isGlm
+    ? LIVE_OPENROUTER_MODEL_ID
+    : isOpenRouterDeepSeek
+      ? LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0]
+      : resolveOpenRouterDeepSeekModelId(model ?? '') ?? LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0];
+  const mutateModel = isGlm
+    ? LIVE_OPENROUTER_MODEL_ID
+    : isOpenRouterDeepSeek
+      ? LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[1]
+      : resolveOpenRouterDeepSeekModelId(model ?? '') ?? LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[1];
   return {
-    ...providerEnv,
+    ...effectiveProviderEnv,
     // P-5: Phase-based tiered routing — Flash explores (3.1x cheaper input),
     // Pro mutates/verifies. Phase auto-switches after first write. Proven
     // 29% cost reduction on SWE-A01 (771K tok / $0.36 vs 1.1M / $0.50).
-    BABEL_CHAT_INVESTIGATE_MODEL: 'deepseek-v4-flash',
-    BABEL_CHAT_MUTATE_MODEL: 'deepseek-v4-pro',
+    BABEL_CHAT_INVESTIGATE_MODEL: investigateModel,
+    BABEL_CHAT_MUTATE_MODEL: mutateModel,
+    BABEL_OPENROUTER_ALLOW_FALLBACKS: '0',
+    BABEL_OPENROUTER_REQUIRE_PARAMETERS: '1',
     // Product class: general_swe wall is 600s unless BABEL_CHAT_MAX_WALL_MS is set.
     BABEL_CHAT_SWE_PROFILE: '1',
     BABEL_CHAT_TASK_CLASS: 'general_swe',
@@ -104,9 +141,11 @@ export function buildSweAgentChatEnv(
     BABEL_CHAT_STALL_TURNS: '25',
     // Idea 14: force asymmetric diff critic on SWE/HUNK external cells.
     BABEL_DIFF_CRITIC: '1',
-    BABEL_DIFF_CRITIC_MODEL: env['BABEL_DIFF_CRITIC_MODEL'] ?? 'deepseek-v4-flash',
+    BABEL_DIFF_CRITIC_MODEL:
+      env['BABEL_DIFF_CRITIC_MODEL'] ?? investigateModel,
     BABEL_DIFF_CRITIC_SWE_TIER: '1',
-    BABEL_DIFF_CRITIC_PRO_MODEL: env['BABEL_DIFF_CRITIC_PRO_MODEL'] ?? 'deepseek-v4-pro',
+    BABEL_DIFF_CRITIC_PRO_MODEL:
+      env['BABEL_DIFF_CRITIC_PRO_MODEL'] ?? mutateModel,
   };
 }
 
@@ -410,15 +449,38 @@ export function buildSweIssuePrompt(
   return sections.join('\n').trim();
 }
 
-function deepSeekOnlyLiveEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function deepSeekOnlyLiveEnv(base: NodeJS.ProcessEnv, model?: string): NodeJS.ProcessEnv {
   const env = { ...base };
+  const isGlm = model === LIVE_OPENROUTER_MODEL_ID || model === LIVE_OPENROUTER_BACKEND_KEY;
+  const isOpenRouterDeepSeek =
+    model === undefined || resolveOpenRouterDeepSeekBackendKey(model) !== null;
+  if (isGlm || isOpenRouterDeepSeek) {
+    delete env['DEEPINFRA_API_KEY'];
+    delete env['DEEPSEEK_API_KEY'];
+    delete env['BABEL_BENCHMARK_DEEPSEEK_ONLY'];
+    env['BABEL_COMPACTION_MODEL'] = isGlm
+      ? LIVE_OPENROUTER_MODEL_ID
+      : resolveOpenRouterDeepSeekModelId(model ?? '') ?? LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0];
+    env['BABEL_COMPACTION_API_BASE'] = 'https://openrouter.ai/api/v1/chat/completions';
+    if (env['OPENROUTER_API_KEY']) {
+      env['BABEL_COMPACTION_API_KEY'] = env['OPENROUTER_API_KEY'];
+    }
+    return env;
+  }
+  if (base['BABEL_LITE_OFFLINE'] !== '1') {
+    throw new Error(
+      `[LIVE_MODEL_POLICY] Live benchmark received an unapproved model route: ${model ?? '(unset)'}.`,
+    );
+  }
+  // Offline compatibility fixtures may still exercise the legacy direct
+  // DeepSeek switch. Never allow that branch when the caller is live.
   delete env['DEEPINFRA_API_KEY'];
   env['BABEL_BENCHMARK_DEEPSEEK_ONLY'] = '1';
-  env['BABEL_COMPACTION_MODEL'] = 'deepseek-v4-flash';
+  env['BABEL_COMPACTION_MODEL'] = LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0];
   return env;
 }
 
-function benchmarkBabelEnv(provider: 'mock' | 'live'): NodeJS.ProcessEnv {
+function benchmarkBabelEnv(provider: 'mock' | 'live', model?: string): NodeJS.ProcessEnv {
   const base: NodeJS.ProcessEnv = {
     ...process.env,
     CI: '1',
@@ -429,7 +491,7 @@ function benchmarkBabelEnv(provider: 'mock' | 'live'): NodeJS.ProcessEnv {
     BABEL_ALLOW_INTERPRETER_EVAL: '1',
     ...(provider === 'live' ? { BABEL_LITE_OFFLINE: '0' } : {}),
   };
-  return provider === 'live' ? deepSeekOnlyLiveEnv(base) : base;
+  return provider === 'live' ? deepSeekOnlyLiveEnv(base, model) : base;
 }
 
 function babelModeArgs(
@@ -439,7 +501,7 @@ function babelModeArgs(
 ): string[] {
   const liveModel =
     provider === 'live'
-      ? (['--model', model ?? 'deepseek-v4-pro'] as const)
+      ? (['--model', model ?? 'deepseek-v4-pro-openrouter'] as const)
       : [];
   if (surface === 'chat') {
     // Pre-test lock: headless hardGate + mutation auto-approve for SWE cells.
@@ -929,7 +991,7 @@ export async function runSwebenchAgentCell(
       offlineDemo: provider !== 'live',
       cliEntry: resolveBabelCliEntry(),
       cwd: join(BABEL_ROOT, 'babel-cli'),
-      env: buildSweAgentChatEnv(benchmarkBabelEnv(provider)),
+      env: buildSweAgentChatEnv(benchmarkBabelEnv(provider, model), process.env, model),
       timeoutMs: SWE_AGENT_TIMEOUT_MS,
       ensureDist: false, // already enforced above once per cell
     },
@@ -1060,7 +1122,7 @@ export async function runSwebenchAgentCell(
   const modelsUsed =
     modelsSeen.size > 0
       ? [...modelsSeen]
-      : ['deepseek-v4-pro', 'deepseek-v4-flash'];
+      : ['deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash'];
 
   // Last tools from toolCalls payload
   const toolCalls: Array<{ tool?: string; target?: string }> =
@@ -1314,7 +1376,7 @@ export async function runTerminalBenchAgentCell(
       BABEL_HEADLESS: '1',
       BABEL_BENCHMARK_AUTO_APPROVE: '1',
       ...(provider === 'live' ? { BABEL_LITE_OFFLINE: '0' } : {}),
-    }),
+    }, model),
     windowsHide: true,
   });
 

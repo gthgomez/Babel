@@ -5,6 +5,14 @@ import { dirname, join, resolve } from 'node:path';
 import { z } from 'zod';
 
 import { BABEL_ROOT, BABEL_RUNS_DIR } from '../cli/constants.js';
+import {
+  LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS,
+  LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS,
+  LIVE_OPENROUTER_BACKEND_KEY,
+  LIVE_OPENROUTER_MODEL_ID,
+  resolveOpenRouterDeepSeekBackendKey,
+  resolveOpenRouterDeepSeekModelId,
+} from '../modelPolicy.js';
 import { loadBenchmarkManifest, type BenchmarkTask } from './governanceBenchmark.js';
 import type { ParityToolResult } from './parityBenchmark.js';
 import {
@@ -321,27 +329,53 @@ function invokeAgentBabelCli(
   args: string[],
   projectRoot: string,
   provider: 'mock' | 'live',
+  model?: string,
 ): ReturnType<typeof runBabelCli> {
   return runBabelCli(args, {
     projectRoot,
     offlineDemo: provider !== 'live',
     cliEntry: resolveBabelCliEntry(),
     cwd: babelCliCwd(),
-    env: liveChatEnv(provider),
+    env: liveChatEnv(provider, model),
   });
 }
 
-function deepSeekOnlyLiveEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function deepSeekOnlyLiveEnv(base: NodeJS.ProcessEnv, model?: string): NodeJS.ProcessEnv {
   const env = { ...base };
-  delete env['DEEPINFRA_API_KEY'];
-  env['BABEL_BENCHMARK_DEEPSEEK_ONLY'] = '1';
-  env['BABEL_COMPACTION_MODEL'] = 'deepseek-v4-flash';
-  return env;
+  const isGlm = model === LIVE_OPENROUTER_MODEL_ID || model === LIVE_OPENROUTER_BACKEND_KEY;
+  const isOpenRouterDeepSeek =
+    model === undefined || resolveOpenRouterDeepSeekBackendKey(model) !== null;
+  if (isGlm || isOpenRouterDeepSeek) {
+    delete env['DEEPINFRA_API_KEY'];
+    delete env['DEEPSEEK_API_KEY'];
+    delete env['BABEL_BENCHMARK_DEEPSEEK_ONLY'];
+    env['BABEL_COMPACTION_MODEL'] = isGlm
+      ? LIVE_OPENROUTER_MODEL_ID
+      : resolveOpenRouterDeepSeekModelId(model ?? '') ?? LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0];
+    env['BABEL_COMPACTION_API_BASE'] = 'https://openrouter.ai/api/v1/chat/completions';
+    env['BABEL_OPENROUTER_ALLOW_FALLBACKS'] = '0';
+    env['BABEL_OPENROUTER_REQUIRE_PARAMETERS'] = '1';
+    env['BABEL_DIFF_CRITIC_MODEL'] = isGlm
+      ? LIVE_OPENROUTER_MODEL_ID
+      : resolveOpenRouterDeepSeekModelId(model ?? '') ?? LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0];
+    if (env['OPENROUTER_API_KEY']) {
+      env['BABEL_COMPACTION_API_KEY'] = env['OPENROUTER_API_KEY'];
+    }
+    return env;
+  }
+  throw new Error(
+    `[LIVE_MODEL_POLICY] Live benchmark received an unapproved model route: ${model ?? '(unset)'}.`,
+  );
 }
 
-function liveChatEnv(provider: 'mock' | 'live'): NodeJS.ProcessEnv {
+function liveChatEnv(provider: 'mock' | 'live', model?: string): NodeJS.ProcessEnv {
   // P1.4: parity with SWE harness env (task class, critic, interpreter eval).
   // Do not default BABEL_CHAT_MAX_WALL_MS — leave task-class walls intact unless set.
+  const liveCriticModel =
+    model === LIVE_OPENROUTER_MODEL_ID || model === LIVE_OPENROUTER_BACKEND_KEY
+      ? LIVE_OPENROUTER_MODEL_ID
+      : resolveOpenRouterDeepSeekModelId(model ?? '') ??
+        LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0];
   const base: NodeJS.ProcessEnv = {
     ...process.env,
     CI: '1',
@@ -354,11 +388,13 @@ function liveChatEnv(provider: 'mock' | 'live'): NodeJS.ProcessEnv {
     BABEL_CHAT_SWE_PROFILE: process.env['BABEL_CHAT_SWE_PROFILE'] ?? '1',
     BABEL_DIFF_CRITIC: process.env['BABEL_DIFF_CRITIC'] ?? '1',
     BABEL_DIFF_CRITIC_MODEL:
-      process.env['BABEL_DIFF_CRITIC_MODEL'] ?? 'deepseek-v4-flash',
+      provider === 'live'
+        ? liveCriticModel
+        : process.env['BABEL_DIFF_CRITIC_MODEL'] ?? 'deepseek-v4-flash',
     BABEL_DIFF_CRITIC_SWE_TIER: process.env['BABEL_DIFF_CRITIC_SWE_TIER'] ?? '1',
     ...(provider === 'live' ? { BABEL_LITE_OFFLINE: '0' } : {}),
   };
-  return provider === 'live' ? deepSeekOnlyLiveEnv(base) : base;
+  return provider === 'live' ? deepSeekOnlyLiveEnv(base, model) : base;
 }
 
 function paritySeedIntact(
@@ -896,6 +932,7 @@ async function runParityAgentCell(
     ],
     projectRoot,
     provider,
+    model,
   );
   let verifierOk = runParityCorpusVerifier(projectRoot, corpusTask.verifier_command) === 0;
   let statusText = typeof cli.payload?.['status'] === 'string' ? cli.payload['status'] : null;
@@ -989,6 +1026,7 @@ async function runParityAgentCell(
       ],
       projectRoot,
       provider,
+      model,
     );
     verifierOk = runParityCorpusVerifier(projectRoot, corpusTask.verifier_command) === 0;
     statusText = typeof cli.payload?.['status'] === 'string' ? cli.payload['status'] : null;
@@ -1154,6 +1192,7 @@ async function runGovernanceAgentCell(
     ],
     fixtureRoot,
     provider,
+    model,
   );
 
   let verifierOk = runVerifierCommands(fixtureRoot, govTask.allowed_verifier_commands);
@@ -1232,6 +1271,7 @@ async function runGovernanceAgentCell(
       ],
       fixtureRoot,
       provider,
+      model,
     );
     verifierOk = runVerifierCommands(fixtureRoot, govTask.allowed_verifier_commands);
     statusText = typeof cli.payload?.['status'] === 'string' ? cli.payload['status'] : null;

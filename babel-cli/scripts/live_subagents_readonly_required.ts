@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 import { loadBabelCliEnv } from '../src/config/envBootstrap.js';
-import { DeepSeekApiRunner } from '../src/runners/deepSeekApi.js';
+import { OpenRouterApiRunner } from '../src/runners/openRouterApi.js';
+import { LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS } from '../src/modelPolicy.js';
 import { runBabelFullPlan } from '../src/services/babelFull.js';
 import { routeLiteOrFull } from '../src/services/liteFullRouter.js';
 
@@ -27,8 +28,8 @@ function writeJson(path: string, value: unknown): void {
 }
 
 async function main(): Promise<void> {
-  if (!process.env['DEEPSEEK_API_KEY']) {
-    throw new Error('[live-subagents-readonly] DEEPSEEK_API_KEY is required for read-only live subagent proof.');
+  if (!process.env['OPENROUTER_API_KEY']) {
+    throw new Error('[live-subagents-readonly] OPENROUTER_API_KEY is required for read-only live subagent proof.');
   }
 
   const task = 'Use read-only Spark agents to harden the Babel production proof plan without file writes.';
@@ -39,12 +40,12 @@ async function main(): Promise<void> {
     agentsMode: 'read-only',
   });
 
-  const flash = new DeepSeekApiRunner('deepseek-v4-flash');
+  const flash = new OpenRouterApiRunner(LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0]);
   await flash.execute(
     'Return exactly {"status":"ok","proof":"readonly_subagents"} as JSON. No markdown.',
     ProbeSchema,
   );
-  const pro = new DeepSeekApiRunner('deepseek-v4-pro');
+  const pro = new OpenRouterApiRunner(LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[1]);
   await pro.execute(
     'QA check: return exactly {"status":"ok","proof":"readonly_subagents"} as JSON. No markdown.',
     ProbeSchema,
@@ -55,7 +56,7 @@ async function main(): Promise<void> {
     schema_version: 1,
     artifact_type: 'live_subagents_readonly_sanitized_evidence',
     generated_at: generatedAt,
-    provider: 'deepseek',
+    provider: 'openrouter',
     model_policy: {
       flash: ['read_only_spark_evidence'],
       pro: ['qa_review'],
