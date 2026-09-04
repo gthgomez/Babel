@@ -11,18 +11,41 @@ import { stripAnsi } from '../ui/theme.js';
 const originalFetch = globalThis.fetch;
 const originalDeepSeekApiKey = process.env['DEEPSEEK_API_KEY'];
 const originalDeepInfraApiKey = process.env['DEEPINFRA_API_KEY'];
+const originalOpenRouterApiKey = process.env['OPENROUTER_API_KEY'];
 const originalHostFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
+
+function openRouterMockResponse(contentBody: Record<string, unknown>, init: RequestInit | undefined): Response {
+  // Canonical live routes go through OpenRouter; the mock echoes the
+  // requested model id back as the observed upstream identity so the
+  // fail-closed LIVE_MODEL_POLICY identity check sees a certified route.
+  const requestedModel = (() => {
+    try {
+      const raw = typeof init?.body === 'string' ? init.body : '';
+      return raw ? (JSON.parse(raw) as { model?: string }).model ?? 'mock/openrouter-model' : 'mock/openrouter-model';
+    } catch {
+      return 'mock/openrouter-model';
+    }
+  })();
+  return new Response(
+    JSON.stringify({
+      model: requestedModel,
+      choices: [
+        {
+          message: { content: JSON.stringify(contentBody) },
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    }),
+    { status: 200 },
+  );
+}
 
 function mockDeepSeekAskResponse(): void {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
-  globalThis.fetch = (async () =>
-    new Response(
-      JSON.stringify({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({
+  process.env['OPENROUTER_API_KEY'] = 'sk-or-test-key';
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+    openRouterMockResponse({
                 schema_version: 1,
                 status: 'ANSWER_READY',
                 summary: 'The project is a local workspace.',
@@ -32,26 +55,15 @@ function mockDeepSeekAskResponse(): void {
                 assumptions: [],
                 evidence: [{ source: 'README.md', summary: 'Project title found in README.' }],
                 next: [],
-              }),
-            },
-          },
-        ],
-        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-      }),
-      { status: 200 },
-    )) as typeof fetch;
+              }, init)) as typeof fetch;
 }
 
 function mockDeepSeekPlanResponse(): void {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
-  globalThis.fetch = (async () =>
-    new Response(
-      JSON.stringify({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({
+  process.env['OPENROUTER_API_KEY'] = 'sk-or-test-key';
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+    openRouterMockResponse({
                 schema_version: 1,
                 status: 'PLAN_READY',
                 summary: 'Prepared a read-only plan.',
@@ -66,26 +78,15 @@ function mockDeepSeekPlanResponse(): void {
                 risks: [],
                 verification: ['npm test'],
                 next: ['Review plan.md in the artifact directory.'],
-              }),
-            },
-          },
-        ],
-        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-      }),
-      { status: 200 },
-    )) as typeof fetch;
+              }, init)) as typeof fetch;
 }
 
 function mockDeepSeekReportResponse(): void {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
-  globalThis.fetch = (async () =>
-    new Response(
-      JSON.stringify({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({
+  process.env['OPENROUTER_API_KEY'] = 'sk-or-test-key';
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+    openRouterMockResponse({
                 schema_version: 1,
                 status: 'REPORT_READY',
                 summary: 'Compared the implementation paths.',
@@ -99,14 +100,7 @@ function mockDeepSeekReportResponse(): void {
                 limitations: [],
                 verification: [],
                 next: ['Use babel plan for follow-up implementation.'],
-              }),
-            },
-          },
-        ],
-        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-      }),
-      { status: 200 },
-    )) as typeof fetch;
+              }, init)) as typeof fetch;
 }
 
 function restoreDeepSeekMock(): void {
