@@ -18,6 +18,8 @@ import type { SwePlan, QaVerdictPass, QaVerdictReject } from '../schemas/agentCo
 const originalFetch = globalThis.fetch;
 const originalApiKey = process.env['DEEPINFRA_API_KEY'];
 const originalAdversarial = process.env['BABEL_ADVERSARIAL_REVIEW'];
+const originalOffline = process.env['BABEL_PIPELINE_V9_OFFLINE'];
+const originalFallback = process.env['BABEL_ADVERSARIAL_QA_FALLBACK'];
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -31,6 +33,16 @@ test.afterEach(() => {
   } else {
     process.env['BABEL_ADVERSARIAL_REVIEW'] = originalAdversarial;
   }
+  if (originalOffline === undefined) {
+    delete process.env['BABEL_PIPELINE_V9_OFFLINE'];
+  } else {
+    process.env['BABEL_PIPELINE_V9_OFFLINE'] = originalOffline;
+  }
+  if (originalFallback === undefined) {
+    delete process.env['BABEL_ADVERSARIAL_QA_FALLBACK'];
+  } else {
+    process.env['BABEL_ADVERSARIAL_QA_FALLBACK'] = originalFallback;
+  }
 });
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -42,7 +54,13 @@ function makeSwePlan(overrides: Partial<SwePlan> = {}): SwePlan {
     task_summary: 'Fix the subtract function to return a + b instead of a - b',
     known_facts: ['src/math.js contains a subtract function'],
     assumptions: ['The function should return the sum'],
-    risks: [{ risk: 'May break callers', likelihood: 'low', mitigation: 'Verify with tests' }],
+    risks: [
+      {
+        risk: 'May break callers',
+        likelihood: 'low',
+        mitigation: 'Verify with tests',
+      },
+    ],
     minimal_action_set: [
       {
         step: 1,
@@ -69,7 +87,11 @@ function makeRejectVerdict(): QaVerdictReject {
     verdict: 'REJECT',
     failure_count: 1,
     failures: [
-      { tag: 'SFDIPOT-P', condition: 'No verification step before file write', confidence: 4 },
+      {
+        tag: 'SFDIPOT-P',
+        condition: 'No verification step before file write',
+        confidence: 4,
+      },
     ],
     overall_confidence: 3,
     proposed_fix_strategy: 'Add a verification step.',
@@ -94,6 +116,12 @@ function mockFetchError(message: string) {
   return (async () => {
     throw new Error(message);
   }) as typeof fetch;
+}
+
+/** Use the mocked DeepInfra transport explicitly; never depend on a live key. */
+function useMockedDeepInfra(): void {
+  process.env['DEEPINFRA_API_KEY'] = 'test-key';
+  process.env['BABEL_PIPELINE_V9_OFFLINE'] = '1';
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────────────────
@@ -145,7 +173,7 @@ test('runAdversarialQaGate returns { passed: true } when env var is set to false
 });
 
 test('runAdversarialQaGate activates when BABEL_ADVERSARIAL_REVIEW=true and returns PASS on agreement', async () => {
-  process.env['DEEPINFRA_API_KEY'] = 'test-key';
+  useMockedDeepInfra();
   process.env['BABEL_ADVERSARIAL_REVIEW'] = 'true';
 
   // Adversarial model agrees with original PASS
@@ -174,7 +202,7 @@ test('runAdversarialQaGate activates when BABEL_ADVERSARIAL_REVIEW=true and retu
 });
 
 test('runAdversarialQaGate returns { passed: false } when adversarial model finds new failures', async () => {
-  process.env['DEEPINFRA_API_KEY'] = 'test-key';
+  useMockedDeepInfra();
   process.env['BABEL_ADVERSARIAL_REVIEW'] = 'true';
 
   // Adversarial model finds a new issue the original reviewer missed
@@ -205,7 +233,7 @@ test('runAdversarialQaGate returns { passed: false } when adversarial model find
 });
 
 test('runAdversarialQaGate adds new failures beyond original REJECT verdict', async () => {
-  process.env['DEEPINFRA_API_KEY'] = 'test-key';
+  useMockedDeepInfra();
   process.env['BABEL_ADVERSARIAL_REVIEW'] = 'true';
 
   // Adversarial finds an ADDITIONAL failure beyond the original
@@ -235,7 +263,7 @@ test('runAdversarialQaGate adds new failures beyond original REJECT verdict', as
 });
 
 test('runAdversarialQaGate handles runner error by rejecting with halt fallback (F1 fix, default)', async () => {
-  process.env['DEEPINFRA_API_KEY'] = 'test-key';
+  useMockedDeepInfra();
   process.env['BABEL_ADVERSARIAL_REVIEW'] = 'true';
   // Default: BABEL_ADVERSARIAL_QA_FALLBACK is unset → 'halt' (reject on error)
 
@@ -265,7 +293,7 @@ test('runAdversarialQaGate handles runner error by rejecting with halt fallback 
 });
 
 test('runAdversarialQaGate handles runner error with warn fallback (old behavior opt-in)', async () => {
-  process.env['DEEPINFRA_API_KEY'] = 'test-key';
+  useMockedDeepInfra();
   process.env['BABEL_ADVERSARIAL_REVIEW'] = 'true';
   process.env['BABEL_ADVERSARIAL_QA_FALLBACK'] = 'warn';
 
@@ -292,12 +320,11 @@ test('runAdversarialQaGate handles runner error with warn fallback (old behavior
     assert.ok(logMessages.some((m) => m.includes('Allowing primary verdict to stand')));
   } finally {
     rmSync(runDir, { recursive: true, force: true });
-    delete process.env['BABEL_ADVERSARIAL_QA_FALLBACK'];
   }
 });
 
 test('runAdversarialQaGate handles runner error with skip fallback (silent, least safe)', async () => {
-  process.env['DEEPINFRA_API_KEY'] = 'test-key';
+  useMockedDeepInfra();
   process.env['BABEL_ADVERSARIAL_REVIEW'] = 'true';
   process.env['BABEL_ADVERSARIAL_QA_FALLBACK'] = 'skip';
 
@@ -322,12 +349,11 @@ test('runAdversarialQaGate handles runner error with skip fallback (silent, leas
     assert.equal(result.reason, 'adversarial_review_skipped');
   } finally {
     rmSync(runDir, { recursive: true, force: true });
-    delete process.env['BABEL_ADVERSARIAL_QA_FALLBACK'];
   }
 });
 
 test('runAdversarialQaGate writes evidence JSON to run directory', async () => {
-  process.env['DEEPINFRA_API_KEY'] = 'test-key';
+  useMockedDeepInfra();
   process.env['BABEL_ADVERSARIAL_REVIEW'] = 'true';
 
   globalThis.fetch = mockFetchResponse('{"verdict":"PASS","overall_confidence":5}');
@@ -351,7 +377,7 @@ test('runAdversarialQaGate writes evidence JSON to run directory', async () => {
 });
 
 test('runAdversarialQaGate uses step-flash model (not nemotron) after Phase 1A swap', async () => {
-  process.env['DEEPINFRA_API_KEY'] = 'test-key';
+  useMockedDeepInfra();
   process.env['BABEL_ADVERSARIAL_REVIEW'] = 'true';
 
   // Verify the model mapping resolves step-flash correctly

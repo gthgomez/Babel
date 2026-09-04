@@ -63,7 +63,7 @@ describe('chatRevisionBinding', () => {
       await fs.writeFile(path.join(tempDir, rel), 'v2');
       refreshChatVerifierReceiptStalenessSync(tempDir, receipt);
       assert.strictEqual(receipt.stale, true);
-      assert.match(receipt.staleReason ?? '', /File modified after verification/);
+      assert.match(receipt.staleReason ?? '', /Composite tree hash mismatch|File modified after verification/);
 
       const honesty = evaluateExecuteCompletionHonesty({
         hasWrite: true,

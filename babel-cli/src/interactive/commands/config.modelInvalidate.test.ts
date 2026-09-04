@@ -9,6 +9,7 @@ import {
   handleProject,
   handleRetarget,
 } from './config.js';
+import { resolveSessionModel } from '../session.js';
 
 function makeCtx(partial?: Partial<ReplContext>): ReplContext {
   const state: ReplContext['state'] = {
@@ -93,4 +94,32 @@ test('P0-C: /model clear leaves state ready for route-selected model', () => {
   handleModel(ctx, ['clear']);
   assert.equal(ctx.chatEngine, undefined);
   assert.equal(ctx.state.model, undefined);
+});
+
+test('live /model DeepSeek selectors persist the OpenRouter control route', () => {
+  const previousOffline = process.env['BABEL_OFFLINE'];
+  delete process.env['BABEL_OFFLINE'];
+  try {
+    const ctx = makeCtx();
+    handleModel(ctx, ['deepseek-v4-pro']);
+    assert.equal(ctx.state.model, 'deepseek-v4-pro-openrouter');
+    assert.equal(ctx.state.resolvedModelId, 'deepseek/deepseek-v4-pro');
+  } finally {
+    if (previousOffline === undefined) delete process.env['BABEL_OFFLINE'];
+    else process.env['BABEL_OFFLINE'] = previousOffline;
+  }
+});
+
+test('restored live DeepSeek session state is normalized to OpenRouter', () => {
+  const previousOffline = process.env['BABEL_OFFLINE'];
+  delete process.env['BABEL_OFFLINE'];
+  try {
+    const ctx = makeCtx({ state: { ...makeCtx().state, model: 'deepseek-v4-flash' } });
+    resolveSessionModel(ctx);
+    assert.equal(ctx.state.model, 'deepseek-v4-flash-openrouter');
+    assert.equal(ctx.state.resolvedModelId, 'deepseek/deepseek-v4-flash');
+  } finally {
+    if (previousOffline === undefined) delete process.env['BABEL_OFFLINE'];
+    else process.env['BABEL_OFFLINE'] = previousOffline;
+  }
 });

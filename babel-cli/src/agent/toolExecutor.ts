@@ -606,7 +606,11 @@ function readOnlyScopeViolation(action: AgentAction, preset: PermissionPreset): 
 
 function readOnlyEffectViolation(action: AgentAction, preset: PermissionPreset): string | null {
   if (preset !== 'read_only') return null;
-  const effectClass = classifyToolEffect(action.type);
+  // The model-facing `search` action is normalized to the executor's
+  // `semantic_search` tool. Classify the canonical tool here too, otherwise
+  // the read-only lane incorrectly rejects its own search capability as an
+  // unknown external side effect.
+  const effectClass = classifyToolEffect(action.type === 'search' ? 'semantic_search' : action.type);
   return effectClass === 'read_only'
     ? null
     : `Plan/read-only policy denied ${action.type}: effect class ${effectClass} is not read-only`;
@@ -708,6 +712,9 @@ export async function executeActionWithPolicy(
     ...(deps.now !== undefined ? { now: deps.now } : {}),
     ...(deps.isolationAvailable !== undefined
       ? { isolationAvailable: deps.isolationAvailable }
+      : {}),
+    ...(deps.hostFallbackAllowed !== undefined
+      ? { hostFallbackAllowed: deps.hostFallbackAllowed }
       : {}),
   };
   let lastReasonCode: ReasonCode | '' = '';
@@ -1100,7 +1107,16 @@ export async function executeActionWithPolicy(
   try {
     deps.onBeforeExecutorExecute?.();
     const mapped = actionRequestFromAction(action);
-    if (mapped && requestRequiresIsolation(mapped) && deps.isolationAvailable !== true) {
+    // An explicit host_profile/host_escalated boundary is a supported fallback
+    // when Docker isolation is unavailable. The isolation broker has already
+    // resolved and recorded that boundary; only fail closed when neither an
+    // isolated executor nor an explicitly permitted host fallback exists.
+    if (
+      mapped &&
+      requestRequiresIsolation(mapped) &&
+      deps.isolationAvailable !== true &&
+      deps.hostFallbackAllowed !== true
+    ) {
       incrementBlocks(context.runId);
       return {
         action,

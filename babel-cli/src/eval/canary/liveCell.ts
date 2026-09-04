@@ -427,6 +427,11 @@ export function runLiveCanaryCell(input: {
   openRouterRouting?: OpenRouterRoutingPolicy
 }): LiveCellOutcome {
   const notes: string[] = []
+  if (input.openRouterRouting?.allowFallbacks === true) {
+    throw new Error(
+      '[LIVE_MODEL_POLICY] Live canary forbids OpenRouter fallback routing when exact model identity is required.',
+    )
+  }
   const prompt = [
     input.spec.prompt,
     'Work only in this project root. Edit production source if needed.',
@@ -452,11 +457,14 @@ export function runLiveCanaryCell(input: {
       cwd: join(BABEL_ROOT, 'babel-cli'),
       timeoutMs: LIVE_AGENT_TIMEOUT_MS,
       ensureDist: true,
+      unsetEnv: ['DEEPINFRA_API_KEY', 'DEEPSEEK_API_KEY', 'BABEL_BENCHMARK_DEEPSEEK_ONLY'],
       env: {
         BABEL_ROOT,
         // The canary workspace is disposable and its shell boundary is
         // explicitly recorded as host execution when Docker is unavailable.
         BABEL_ALLOW_HOST_FALLBACK: '1',
+        BABEL_OPENROUTER_ALLOW_FALLBACKS: '0',
+        BABEL_OPENROUTER_REQUIRE_PARAMETERS: '1',
         ...(input.openRouterRouting?.allowFallbacks !== undefined
           ? { BABEL_OPENROUTER_ALLOW_FALLBACKS: input.openRouterRouting.allowFallbacks ? '1' : '0' }
           : {}),

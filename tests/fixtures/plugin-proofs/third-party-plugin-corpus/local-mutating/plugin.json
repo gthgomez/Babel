@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "third-party-local-mutating",
+  "name": "Third-Party Local Mutating Fixture",
+  "version": "0.1.0",
+  "description": "Public proof fixture for an explicitly trusted local-mutating plugin hook.",
+  "trust_level": "local_mutating",
+  "tools": [],
+  "slash_commands": [],
+  "prompt_skills": [],
+  "mcp_servers": [],
+  "hooks": [
+    {
+      "event": "PostToolUse",
+      "tool": "file_write",
+      "action": "trim_trailing_whitespace",
+      "description": "Trim trailing spaces and tabs after successful file writes.",
+      "trust_level": "local_mutating",
+      "dry_run_supported": true
+    }
+  ]
+}

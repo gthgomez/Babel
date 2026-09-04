@@ -18,7 +18,16 @@ import { readLiteTrustDemoFixture, resolveLiteTrustDemoFixturePath } from './lit
 const originalFetch = globalThis.fetch;
 const originalApiKey = process.env['DEEPINFRA_API_KEY'];
 const originalDeepSeekApiKey = process.env['DEEPSEEK_API_KEY'];
+const originalOpenRouterApiKey = process.env['OPENROUTER_API_KEY'];
 const originalProjectRoot = process.env['BABEL_PROJECT_ROOT'];
+const originalHostFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
+
+test.beforeEach(() => {
+  // These tests execute disposable temporary projects on the host. Production
+  // remains fail-closed; the fixture boundary is explicitly authorized here.
+  process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+  process.env['OPENROUTER_API_KEY'] = 'sk-test-router-key';
+});
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -32,10 +41,20 @@ test.afterEach(() => {
   } else {
     process.env['DEEPSEEK_API_KEY'] = originalDeepSeekApiKey;
   }
+  if (originalOpenRouterApiKey === undefined) {
+    delete process.env['OPENROUTER_API_KEY'];
+  } else {
+    process.env['OPENROUTER_API_KEY'] = originalOpenRouterApiKey;
+  }
   if (originalProjectRoot === undefined) {
     delete process.env['BABEL_PROJECT_ROOT'];
   } else {
     process.env['BABEL_PROJECT_ROOT'] = originalProjectRoot;
+  }
+  if (originalHostFallback === undefined) {
+    delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+  } else {
+    process.env['BABEL_ALLOW_HOST_FALLBACK'] = originalHostFallback;
   }
 });
 
@@ -71,7 +90,10 @@ function writeNodeFixture(root: string, implementation: string): void {
 }
 
 function mockSmallFixResponse(replacementContent: string): void {
-  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  process.env['OPENROUTER_API_KEY'] = 'sk-test-router-key';
+  // Synthetic provider tests still execute the disposable fixture on the
+  // host when Docker is unavailable; make that boundary explicit.
+  process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
   globalThis.fetch = (async () =>
     new Response(
       JSON.stringify({
@@ -304,14 +326,14 @@ test('classifySmallFixProviderFailure maps credential and network errors to reco
 });
 
 test(
-  'small-fix live path fails with structured recoverable error when DEEPSEEK_API_KEY is missing',
+  'small-fix live path fails with structured recoverable error when OPENROUTER_API_KEY is missing',
   { concurrency: false },
   async () => {
     const root = mkdtempSync(join(tmpdir(), 'babel-small-fix-credential-'));
     try {
       writeNodeFixture(root, 'export const add = () => 0;\n');
       process.env['BABEL_PROJECT_ROOT'] = root;
-      delete process.env['DEEPSEEK_API_KEY'];
+      delete process.env['OPENROUTER_API_KEY'];
 
       await assert.rejects(
         () =>
@@ -326,7 +348,7 @@ test(
           assert.ok(error instanceof SmallFixRecoverableError);
           assert.equal(error.failureCode, 'credential_missing');
           assert.equal(error.recoverable, true);
-          assert.deepEqual(error.next, ['check DEEPSEEK_API_KEY', 'babel undo']);
+          assert.deepEqual(error.next, ['check OPENROUTER_API_KEY', 'babel undo']);
           assert.ok(error.runDir.replace(/\\/g, '/').includes('runs/babel-lite'));
           assert.equal(existsSync(join(error.runDir, 'small_fix_failure_capsule.json')), true);
           return true;
@@ -363,7 +385,7 @@ test(
         (error: unknown) => {
           assert.ok(error instanceof SmallFixRecoverableError);
           assert.equal(error.failureCode, 'provider_network_failed');
-          assert.deepEqual(error.next, ['check DEEPSEEK_API_KEY', 'babel undo']);
+          assert.deepEqual(error.next, ['check OPENROUTER_API_KEY', 'babel undo']);
           return true;
         },
       );

@@ -4,6 +4,11 @@
   "allowed_js_source_files": [
     "src/inspect/loaders.js",
     "src/runners/groqApi.js",
+    "src/taskCompletion.js",
+    "src/bridge/remote-ui/app.js",
+    "src/bridge/remote-ui/render.js",
+    "src/bridge/remote-ui/state.js",
+    "src/bridge/remote-ui/sw.js",
     "src/ui/badges.js",
     "src/ui/inspection.js",
     "src/ui/progress.js",

@@ -2,11 +2,6 @@ import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { SessionEvent, SessionEventLog } from "../agent/sessionEvents.js";
 import { validateContextManifest } from "../agent/contextManifest.js";
-import {
-  collectCalibrationEvidenceRefs,
-  deriveCalibrationOutcome,
-  type CalibrationEvidenceRef,
-} from "./chatCalibrationOutcome.js";
 
 /**
  * Evidence-backed failure attribution for live model experiments.
@@ -47,7 +42,6 @@ export interface CausalAttributionEvidence {
   task_failure?: string | null;
   verifier_failure?: string | null;
   budget_failure?: string | null;
-  authority_contradiction?: boolean;
 }
 
 export interface CausalAttribution {
@@ -58,7 +52,6 @@ export interface CausalAttribution {
   evidence: string[];
   counterevidence: string[];
   unknowns: string[];
-  evidence_refs?: CalibrationEvidenceRef[];
 }
 
 export interface CausalRunWhyReport {
@@ -80,12 +73,6 @@ export interface CausalRunWhyReport {
     compaction_count: number;
   };
   attribution: CausalAttribution;
-  task_outcome?: string;
-  session_outcome?: string;
-  runtime_integrity?: string;
-  causal_failure?: string;
-  impact?: "TASK_OUTCOME_AFFECTED" | "TASK_OUTCOME_UNAFFECTED";
-  evidence_refs?: CalibrationEvidenceRef[];
 }
 
 function unknownFields(input: CausalAttributionEvidence): string[] {
@@ -122,21 +109,6 @@ export function attributeCausalFailure(
 ): CausalAttribution {
   const unknown = baseUnknowns(input);
   if (!input.evidence_complete) return unknown;
-
-  if (input.authority_contradiction) {
-    return {
-      ...unknown,
-      family: "harness",
-      code: "authority_contradiction",
-      confidence: "high",
-      evidence: [
-        "capability authorization receipts contradict durable policy or execution evidence",
-      ],
-      counterevidence: [
-        "the contradiction prevents a clean model-versus-harness comparison",
-      ],
-    };
-  }
 
   if (input.provider_failure) {
     return {
@@ -238,9 +210,7 @@ export function attributeCausalFailure(
       family: "harness",
       code: input.execution_failure,
       confidence: "high",
-      evidence: [
-        "authorization existed but the executor did not cross the start boundary",
-      ],
+      evidence: ["authorization existed but the executor did not cross the start boundary"],
     };
   }
   if (input.result_delivered === false) {
@@ -340,25 +310,27 @@ function capabilityState(
 ): boolean | null {
   if (bindings.length === 0) return null;
   const states = bindings.map((binding) => {
+    if (binding[field] !== null) return binding[field];
+    if (field === "advertised") return null;
+
     const proposed = events.filter(
       (event): event is Extract<SessionEvent, { kind: "tool_proposed" }> =>
-        event.kind === "tool_proposed" &&
-        event.tool_name === binding.capability,
+        event.kind === "tool_proposed" && event.tool_name === binding.capability,
     );
+    if (proposed.length === 0) return null;
     const proposedIds = new Set(proposed.map((event) => event.tool_call_id));
+    const started = events.some(
+      (event): event is Extract<SessionEvent, { kind: "tool_started" }> =>
+        event.kind === "tool_started" && proposedIds.has(event.tool_call_id),
+    );
     const preDispatchDenied = events.some(
-      (event): event is Extract<SessionEvent, { kind: "tool_cancelled" }> =>
+      (
+        event,
+      ): event is Extract<SessionEvent, { kind: "tool_cancelled" }> =>
         event.kind === "tool_cancelled" &&
         proposedIds.has(event.tool_call_id) &&
         event.recovery_state === "TOOL_NOT_STARTED" &&
         /pre_dispatch_denied_or_invalid/i.test(event.reason ?? ""),
-    );
-    if (field === "authorized" && preDispatchDenied) return false;
-    if (binding[field] !== null) return binding[field];
-    if (field === "advertised") return null;
-    const started = events.some(
-      (event): event is Extract<SessionEvent, { kind: "tool_started" }> =>
-        event.kind === "tool_started" && proposedIds.has(event.tool_call_id),
     );
     if (preDispatchDenied) return false;
     if (field === "authorized") return started ? true : null;
@@ -391,25 +363,6 @@ function capabilityState(
   return null;
 }
 
-function authorityContradiction(events: readonly SessionEvent[]): boolean {
-  const deniedCapabilities = new Set(
-    events
-      .filter(
-        (event): event is Extract<SessionEvent, { kind: "tool_cancelled" }> =>
-          event.kind === "tool_cancelled" &&
-          event.recovery_state === "TOOL_NOT_STARTED" &&
-          /pre_dispatch_denied_or_invalid/i.test(event.reason ?? ""),
-      )
-      .map((event) => event.tool_name),
-  );
-  return events.some(
-    (event) =>
-      event.kind === "capability_binding_receipt" &&
-      event.authorized === true &&
-      deniedCapabilities.has(event.capability),
-  );
-}
-
 function relevantBindings(
   events: readonly SessionEvent[],
 ): Extract<SessionEvent, { kind: "capability_binding_receipt" }>[] {
@@ -436,19 +389,14 @@ function relevantBindings(
 function contextPreserved(events: readonly SessionEvent[]): boolean | null {
   const inputManifests = events
     .filter(
-      (
-        event,
-      ): event is Extract<SessionEvent, { kind: "model_input_receipt" }> =>
-        event.kind === "model_input_receipt" &&
-        event.context_manifest !== undefined,
+      (event): event is Extract<SessionEvent, { kind: "model_input_receipt" }> =>
+        event.kind === "model_input_receipt" && event.context_manifest !== undefined,
     )
     .map((event) => event.context_manifest!);
   if (inputManifests.length > 0) {
     try {
       inputManifests.forEach(validateContextManifest);
-      const statuses = inputManifests.map(
-        (manifest) => manifest.preservation_status,
-      );
+      const statuses = inputManifests.map((manifest) => manifest.preservation_status);
       if (statuses.some((status) => status === false)) return false;
       if (statuses.every((status) => status === true)) return true;
     } catch {
@@ -503,13 +451,10 @@ function routeCorrect(events: readonly SessionEvent[]): boolean | null {
     return false;
   }
   const results = events.filter(
-    (
-      event,
-    ): event is Extract<SessionEvent, { kind: "model_result_delivery" }> =>
+    (event): event is Extract<SessionEvent, { kind: "model_result_delivery" }> =>
       event.kind === "model_result_delivery" && event.observed_model_id != null,
   );
-  if (results.some((result) => result.observed_model_id !== result.model))
-    return false;
+  if (results.some((result) => result.observed_model_id !== result.model)) return false;
   return results.length === inputs.length ? true : null;
 }
 
@@ -650,9 +595,6 @@ export function buildCausalAttributionReport(input: {
       : {}),
     ...(environmentFailure ? { environment_failure: environmentFailure } : {}),
     ...(budgetFailure ? { budget_failure: "budget_exhausted" } : {}),
-    ...(authorityContradiction(events)
-      ? { authority_contradiction: true }
-      : {}),
   });
   if (!inputReferencesResolvable) {
     attribution = {
@@ -665,64 +607,6 @@ export function buildCausalAttributionReport(input: {
   const terminal = [...events]
     .reverse()
     .find((event) => event.kind === "turn_ended");
-  const evidenceRefs = collectCalibrationEvidenceRefs(events);
-  const terminalOutcome =
-    terminal?.kind === "turn_ended" ? terminal.outcome : null;
-  const verifierSuccessful = events.some(
-    (event) =>
-      event.kind === "verifier_attempt" &&
-      (event.exit_code === undefined || event.exit_code === 0),
-  );
-  const orthogonal = deriveCalibrationOutcome(
-    {
-      status: terminalOutcome,
-      contract_success: terminalOutcome === "VERIFIED_COMPLETE",
-      hidden_ok: verifierSuccessful,
-      production_mutated: events.some(
-        (event) => event.kind === "mutation_batch",
-      ),
-    },
-    {
-      schema_version: 1,
-      kind: "babel_causal_attribution_report",
-      status: evidenceComplete ? "ok" : "unknown",
-      terminal_outcome: terminalOutcome,
-      event_count: events.length,
-      lifecycle: {
-        inference_count: inputs.length,
-        delivered_result_count: results.filter(
-          (result) => result.status === "delivered",
-        ).length,
-        failed_result_count: results.filter(
-          (result) => result.status === "failed",
-        ).length,
-        tool_proposal_count: events.filter(
-          (event) => event.kind === "tool_proposed",
-        ).length,
-        tool_terminal_count: events.filter(
-          (event) =>
-            event.kind === "tool_completed" ||
-            event.kind === "tool_failed" ||
-            event.kind === "tool_cancelled",
-        ).length,
-        mutation_count: events.filter(
-          (event) => event.kind === "mutation_batch",
-        ).length,
-        verifier_count: events.filter(
-          (event) => event.kind === "verifier_attempt",
-        ).length,
-        compaction_count: events.filter(
-          (event) =>
-            event.kind === "compaction_started" ||
-            event.kind === "compaction_summary" ||
-            event.kind === "compaction_committed",
-        ).length,
-      },
-      attribution,
-    },
-    evidenceRefs,
-  );
-  const attributionWithRefs = { ...attribution, evidence_refs: evidenceRefs };
   return {
     schema_version: 1,
     kind: "babel_causal_attribution_report",
@@ -731,7 +615,7 @@ export function buildCausalAttributionReport(input: {
     ...(input.log?.session_id !== undefined
       ? { session_id: input.log.session_id }
       : {}),
-    terminal_outcome: terminalOutcome,
+    terminal_outcome: terminal?.kind === "turn_ended" ? terminal.outcome : null,
     event_count: events.length,
     lifecycle: {
       inference_count: inputs.length,
@@ -764,17 +648,11 @@ export function buildCausalAttributionReport(input: {
     },
     attribution: input.loadError
       ? {
-          ...attributionWithRefs,
+          ...attribution,
           evidence: [],
           unknowns: [...new Set([...attribution.unknowns, input.loadError])],
         }
-      : attributionWithRefs,
-    task_outcome: orthogonal.task_outcome,
-    session_outcome: orthogonal.session_outcome,
-    runtime_integrity: orthogonal.runtime_integrity,
-    causal_failure: orthogonal.causal_failure,
-    impact: orthogonal.impact,
-    evidence_refs: evidenceRefs,
+      : attribution,
   };
 }
 
@@ -784,12 +662,7 @@ export function formatCausalAttributionHuman(
   const attribution = report.attribution;
   const lines = [
     "Why stopped?",
-    `Task outcome: ${report.task_outcome ?? "unknown"}`,
-    `Session outcome: ${report.session_outcome ?? report.terminal_outcome ?? "unknown"}`,
-    `Runtime integrity: ${report.runtime_integrity ?? "unknown"}`,
     `Primary attribution: ${attribution.family.toUpperCase()}_${attribution.code.toUpperCase()}`,
-    `Causal failure: ${report.causal_failure ?? "unknown"}`,
-    `Task impact: ${report.impact ?? "unknown"}`,
     `Confidence: ${attribution.confidence}`,
     `Model blame permitted: ${attribution.model_blame_permitted ? "yes" : "no"}`,
     `Terminal outcome: ${report.terminal_outcome ?? "unknown"}`,
@@ -798,15 +671,6 @@ export function formatCausalAttributionHuman(
     `  inferences=${report.lifecycle.inference_count} results_delivered=${report.lifecycle.delivered_result_count} results_failed=${report.lifecycle.failed_result_count}`,
     `  tools=${report.lifecycle.tool_proposal_count} terminals=${report.lifecycle.tool_terminal_count} mutations=${report.lifecycle.mutation_count} verifiers=${report.lifecycle.verifier_count}`,
   ];
-  if (report.evidence_refs && report.evidence_refs.length > 0) {
-    lines.push(
-      "",
-      "Evidence refs:",
-      ...report.evidence_refs
-        .slice(0, 20)
-        .map((ref) => `- seq=${ref.seq} ${ref.event_type} ${ref.event_id}`),
-    );
-  }
   if (attribution.evidence.length > 0) {
     lines.push(
       "",

@@ -9,7 +9,7 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 
 # Skill: Ops Observability Protocol (v1.1)
 
-> **DEPRECATED — Superseded by [Ops-Observability-v2.md](./Ops-Observability-v2.md) (2026-06-19).**
+> **DEPRECATED — Superseded by [Ops-Observability-v2.md](../Ops-Observability-v2.md) (2026-06-19).**
 > v2 synthesizes this plan-time DESIGN mode with the new runtime OBSERVE mode (activation tracing,
 > tool call logging, cost tracking, drift detection, example_saas_backend evidence bundles). This file is
 > preserved for reference only. Do not load for new tasks — use v2 instead.

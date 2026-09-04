@@ -30,6 +30,7 @@ import test from 'node:test';
 import { runMutationAgentLoop } from './runMutationAgentLoop.js';
 import type { WorktreeRollbackSummary } from '../../services/worktreeSafety.js';
 import type { ToolCallLog } from '../../schemas/agentContracts.js';
+import { skipIfLiveTestsNotAuthorized } from '../../test-helpers/apiKeyCheck.js';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -49,12 +50,6 @@ function toolIs(entry: ToolCallLog, name: string): boolean {
  * Check whether a real LLM provider is available in the environment.
  * The executor waterfall uses DeepInfra (DEEPINFRA_API_KEY) as its primary tier.
  */
-function hasLiveProvider(): boolean {
-  return Boolean(
-    process.env['DEEPINFRA_API_KEY'] || process.env['DEEPSEEK_API_KEY'],
-  );
-}
-
 /** Create a temp directory with known fixtures for a single test. */
 function createE2eEnv(): { root: string; cleanup: () => void } {
   const root = mkdtempSync(join(tmpdir(), 'babel-mut-e2e-'));
@@ -88,7 +83,7 @@ const E2E_TIMEOUT = 120_000;
 
 test(
   'completes a simple write task with the real LLM',
-  { skip: !hasLiveProvider(), timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -126,7 +121,7 @@ test(
 
 test(
   'performs a read-then-write flow with the real LLM',
-  { skip: !hasLiveProvider(), timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -176,7 +171,7 @@ test(
 
 test(
   'performs multi-round exploration with the real LLM',
-  { skip: !hasLiveProvider(), timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -230,7 +225,7 @@ test(
 
 test(
   'respects write scope when writing to allowed paths',
-  { skip: !hasLiveProvider(), timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -265,7 +260,7 @@ test(
 
 test(
   'blocks writes outside the declared write scope',
-  { skip: !hasLiveProvider(), timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -313,7 +308,7 @@ test(
 
 test(
   'cancels via AbortController with real LLM',
-  { skip: !hasLiveProvider(), timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -352,7 +347,7 @@ test(
 
 test(
   'handles read-only mode (empty writeScope) with real LLM',
-  { skip: !hasLiveProvider(), timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {
@@ -393,7 +388,7 @@ test(
 
 test(
   'rollback function returns a valid summary after successful write',
-  { skip: !hasLiveProvider(), timeout: E2E_TIMEOUT },
+  { skip: skipIfLiveTestsNotAuthorized, timeout: E2E_TIMEOUT },
   async () => {
     const { root, cleanup } = createE2eEnv();
     try {

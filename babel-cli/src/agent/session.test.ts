@@ -8,21 +8,44 @@ import { describe, it } from 'node:test';
 import { AgentSession } from './session.js';
 import { stripAnsi } from '../ui/theme.js';
 
-const hasDeepSeekKey = !!process.env['DEEPSEEK_API_KEY'];
 const originalFetch = globalThis.fetch;
 const originalDeepSeekApiKey = process.env['DEEPSEEK_API_KEY'];
 const originalDeepInfraApiKey = process.env['DEEPINFRA_API_KEY'];
+const originalOpenRouterApiKey = process.env['OPENROUTER_API_KEY'];
+const originalHostFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
+
+function openRouterMockResponse(contentBody: Record<string, unknown>, init: RequestInit | undefined): Response {
+  // Canonical live routes go through OpenRouter; the mock echoes the
+  // requested model id back as the observed upstream identity so the
+  // fail-closed LIVE_MODEL_POLICY identity check sees a certified route.
+  const requestedModel = (() => {
+    try {
+      const raw = typeof init?.body === 'string' ? init.body : '';
+      return raw ? (JSON.parse(raw) as { model?: string }).model ?? 'mock/openrouter-model' : 'mock/openrouter-model';
+    } catch {
+      return 'mock/openrouter-model';
+    }
+  })();
+  return new Response(
+    JSON.stringify({
+      model: requestedModel,
+      choices: [
+        {
+          message: { content: JSON.stringify(contentBody) },
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    }),
+    { status: 200 },
+  );
+}
 
 function mockDeepSeekAskResponse(): void {
-  delete process.env['DEEPSEEK_API_KEY'];
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
-  globalThis.fetch = (async () =>
-    new Response(
-      JSON.stringify({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({
+  process.env['OPENROUTER_API_KEY'] = 'sk-or-test-key';
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+    openRouterMockResponse({
                 schema_version: 1,
                 status: 'ANSWER_READY',
                 summary: 'The project is a local workspace.',
@@ -32,26 +55,15 @@ function mockDeepSeekAskResponse(): void {
                 assumptions: [],
                 evidence: [{ source: 'README.md', summary: 'Project title found in README.' }],
                 next: [],
-              }),
-            },
-          },
-        ],
-        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-      }),
-      { status: 200 },
-    )) as typeof fetch;
+              }, init)) as typeof fetch;
 }
 
 function mockDeepSeekPlanResponse(): void {
-  delete process.env['DEEPSEEK_API_KEY'];
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
-  globalThis.fetch = (async () =>
-    new Response(
-      JSON.stringify({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({
+  process.env['OPENROUTER_API_KEY'] = 'sk-or-test-key';
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+    openRouterMockResponse({
                 schema_version: 1,
                 status: 'PLAN_READY',
                 summary: 'Prepared a read-only plan.',
@@ -66,26 +78,15 @@ function mockDeepSeekPlanResponse(): void {
                 risks: [],
                 verification: ['npm test'],
                 next: ['Review plan.md in the artifact directory.'],
-              }),
-            },
-          },
-        ],
-        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-      }),
-      { status: 200 },
-    )) as typeof fetch;
+              }, init)) as typeof fetch;
 }
 
 function mockDeepSeekReportResponse(): void {
-  delete process.env['DEEPSEEK_API_KEY'];
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
-  globalThis.fetch = (async () =>
-    new Response(
-      JSON.stringify({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({
+  process.env['OPENROUTER_API_KEY'] = 'sk-or-test-key';
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+    openRouterMockResponse({
                 schema_version: 1,
                 status: 'REPORT_READY',
                 summary: 'Compared the implementation paths.',
@@ -99,14 +100,7 @@ function mockDeepSeekReportResponse(): void {
                 limitations: [],
                 verification: [],
                 next: ['Use babel plan for follow-up implementation.'],
-              }),
-            },
-          },
-        ],
-        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-      }),
-      { status: 200 },
-    )) as typeof fetch;
+              }, init)) as typeof fetch;
 }
 
 function restoreDeepSeekMock(): void {
@@ -121,10 +115,15 @@ function restoreDeepSeekMock(): void {
   } else {
     process.env['DEEPINFRA_API_KEY'] = originalDeepInfraApiKey;
   }
+  if (originalHostFallback === undefined) {
+    delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+  } else {
+    process.env['BABEL_ALLOW_HOST_FALLBACK'] = originalHostFallback;
+  }
 }
 
-describe('AgentSession', () => {
-  it('runs plan lane without manual bridge status', { concurrency: false, skip: !hasDeepSeekKey }, async () => {
+describe('AgentSession', { concurrency: false }, () => {
+  it('runs plan lane without manual bridge status', { concurrency: false }, async () => {
     const repo = mkdtempSync(join(tmpdir(), 'babel-session-plan-'));
     try {
       mockDeepSeekPlanResponse();
@@ -142,7 +141,7 @@ describe('AgentSession', () => {
     }
   });
 
-  it('runs ask lane via fast path', { concurrency: false, skip: !hasDeepSeekKey }, async () => {
+  it('runs ask lane via fast path', { concurrency: false }, async () => {
     const repo = mkdtempSync(join(tmpdir(), 'babel-session-ask-loop-'));
     try {
       const { writeFileSync } = await import('node:fs');
@@ -258,6 +257,7 @@ describe('AgentSession', () => {
           provider: 'mock',
           workerChain: true,
         });
+        process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
         const result = await session.run();
         assert.equal(result.exitCode, 0);
         assert.equal((result.payload as { status?: string }).status, 'WORKER_LOOP_COMPLETE');
@@ -269,7 +269,7 @@ describe('AgentSession', () => {
 
   it(
     'runs complex bl do with read-only Spark parallel review then plan lane',
-    { concurrency: false, skip: !hasDeepSeekKey },
+    { concurrency: false },
     async () => {
       const repo = mkdtempSync(join(tmpdir(), 'babel-session-spark-do-'));
       try {
@@ -311,7 +311,7 @@ describe('AgentSession', () => {
     },
   );
 
-  it('routes read-only comparison do tasks to report lane', { concurrency: false, skip: !hasDeepSeekKey }, async () => {
+  it('routes read-only comparison do tasks to report lane', { concurrency: false }, async () => {
     const repo = mkdtempSync(join(tmpdir(), 'babel-session-report-do-'));
     try {
       mockDeepSeekReportResponse();
@@ -392,6 +392,7 @@ describe('AgentSession', () => {
           projectRoot: repo,
           provider: 'mock',
         });
+        process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
         const result = await session.run();
         assert.equal(result.exitCode, 0);
         const payload = result.payload as {

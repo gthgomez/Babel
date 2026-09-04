@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { runSmallFixPath, SmallFixRecoverableError } from '../src/services/smallFix.js';
+import { LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS } from '../src/modelPolicy.js';
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 dotenvConfig({
@@ -14,7 +15,7 @@ dotenvConfig({
 });
 
 function hasLiveProviderCredentials(): boolean {
-  return Boolean(process.env['DEEPSEEK_API_KEY']?.trim());
+  return Boolean(process.env['OPENROUTER_API_KEY']?.trim());
 }
 
 function writeNodeFixture(root: string): void {
@@ -38,7 +39,7 @@ function writeNodeFixture(root: string): void {
 
 async function main(): Promise<void> {
   if (!hasLiveProviderCredentials()) {
-    console.log('[test:live-small-fix:optional] skipped — set DEEPSEEK_API_KEY');
+    console.log('[test:live-small-fix:optional] skipped — set OPENROUTER_API_KEY');
     return;
   }
 
@@ -50,7 +51,7 @@ async function main(): Promise<void> {
     const result = await runSmallFixPath({
       projectRoot: root,
       provider: 'live',
-      model: 'deepseek',
+      model: LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS[0],
       modelTier: 'standard',
       task: 'Fix the failing Node test. Only edit src/math.js. Run npm test before completing.',
     });

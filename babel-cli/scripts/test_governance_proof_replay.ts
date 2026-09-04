@@ -40,8 +40,8 @@ interface ProofSummary {
 }
 
 function liveProviderKeyStatus(): string {
-  if (process.env['DEEPSEEK_API_KEY']) {
-    return 'DEEPSEEK_API_KEY present (replay still offline)';
+  if (process.env['OPENROUTER_API_KEY']) {
+    return 'OPENROUTER_API_KEY present (replay still offline)';
   }
   if (process.env['DEEPINFRA_API_KEY']) {
     return 'DEEPINFRA_API_KEY present (replay still offline)';
@@ -82,7 +82,7 @@ function main(): void {
     if (result.stderr) process.stderr.write(result.stderr);
 
     const summaryPath = join(proofRoot, 'proof-summary.json');
-    const liveKeyPresent = Boolean(process.env['DEEPSEEK_API_KEY'] || process.env['DEEPINFRA_API_KEY']);
+    const liveKeyPresent = Boolean(process.env['OPENROUTER_API_KEY'] || process.env['DEEPINFRA_API_KEY']);
 
     if (result.status !== 0) {
       console.error(

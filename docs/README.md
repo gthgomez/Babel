@@ -30,6 +30,7 @@ architecture underneath.
 - [Portable agent workflow plan](./guides/PORTABLE_AGENT_WORKFLOW_PLAN.md) — proposed cross-harness contract; subordinate to `harness-v1`
 - [Agent Git operations](./guides/AGENT_GIT_OPERATIONS.md) — preflight, isolated worktrees, exact-SHA PR gate, and non-interactive GitHub CLI workflow
 - [Architecture index](./architecture/README.md) — all architecture guides
+- [Model intelligence & qualification](./architecture/MODEL_INTELLIGENCE_QUALIFICATION_V1.md) — capability-aware profiles, envelopes, evidence, and campaign gates
 - [Babel Remote spike](./architecture/babel-remote/README.md) — loopback ADR-010 / ChatEngine slice (not a public remote-desktop product)
 - [Canonical source decision](./adr/ADR-0001-canonical-public-source.md) — repository authority
 

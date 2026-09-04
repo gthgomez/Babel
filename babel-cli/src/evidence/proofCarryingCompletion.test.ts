@@ -137,7 +137,7 @@ describe("Proof-Carrying Completion", () => {
         tempDir,
       );
       assert.strictEqual(stale2, true);
-      assert.match(reason!, /File modified after verification/);
+      assert.match(reason!, /Composite tree hash mismatch|File modified after verification/);
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
     }

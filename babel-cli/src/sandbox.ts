@@ -1726,12 +1726,27 @@ export class SafeExecutor {
       );
     }
     const classified = classifyExecutionRisk(command, { repoRoot: this.projectRoot });
+    // Project-or-container-only commands stay denied on host profiles even
+    // when the governed isolation decision resolved to a host kind — unless
+    // the operator explicitly authorized a host fallback for this run. The
+    // explicit escalation keeps host execution auditable instead of making it
+    // the silent default for Docker-only risk classes.
+    const hostFallbackAuthorized = ['1', 'true', 'yes'].includes(
+      (process.env['BABEL_ALLOW_HOST_FALLBACK'] ?? '').toLowerCase(),
+    );
     if (requiresDockerIsolation(classified.executionRisk) && isolation.kind !== 'docker') {
-      return policyDeniedResult(
-        'isolation_required',
-        `[sandbox] isolation_required: ${classified.base || command} executes project or container-only code and is denied on the host.`,
-        toolName,
-        [command, classified.executionRisk],
+      if (!hostFallbackAuthorized) {
+        return policyDeniedResult(
+          'isolation_required',
+          `[sandbox] isolation_required: ${classified.base || command} executes project or container-only code and is denied on the host.`,
+          toolName,
+          [command, classified.executionRisk],
+        );
+      }
+      // Explicit host fallback: keep the auditable boundary visible at the
+      // point of execution instead of silently honoring the env var.
+      console.warn(
+        `[sandbox] host fallback authorized for project-or-container-only command "${classified.base || command}" (BABEL_ALLOW_HOST_FALLBACK is set)`,
       );
     }
     if (classified.executionRisk === 'forbidden') {
