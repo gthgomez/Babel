@@ -80,7 +80,7 @@ review-thread resolution required; deletion and non-fast-forward protected.
 
 ## Recovery documentation archived
 
-Moved to [`archive/`](./archive/) with `ARCHIVED_SUPERSEDED` headers:
+Archived under [`archive/`](./archive/) with `ARCHIVED_SUPERSEDED` headers (content carried onto main from the superseded recovery branches; this PR introduces these files new on main):
 `PR126_BOOTSTRAP_RECONCILIATION.md`, `PR120_PR126_RECONCILIATION.md`,
 `REPOSITORY_CONSOLIDATION_LEDGER.md`, `TRUST_ORDER_ANALYSIS.md`.
 `ADDITIONAL_FINDINGS.md` became

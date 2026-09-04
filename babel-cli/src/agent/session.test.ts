@@ -44,7 +44,7 @@ function mockDeepSeekAskResponse(): void {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
   process.env['OPENROUTER_API_KEY'] = 'sk-or-test-key';
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
     openRouterMockResponse({
                 schema_version: 1,
                 status: 'ANSWER_READY',
@@ -62,7 +62,7 @@ function mockDeepSeekPlanResponse(): void {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
   process.env['OPENROUTER_API_KEY'] = 'sk-or-test-key';
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
     openRouterMockResponse({
                 schema_version: 1,
                 status: 'PLAN_READY',
@@ -85,7 +85,7 @@ function mockDeepSeekReportResponse(): void {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
   process.env['OPENROUTER_API_KEY'] = 'sk-or-test-key';
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
     openRouterMockResponse({
                 schema_version: 1,
                 status: 'REPORT_READY',
