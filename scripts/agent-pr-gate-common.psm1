@@ -157,7 +157,7 @@ function Resolve-AgentReviewThreadPages {
 function Get-AgentIndependentReviewReceiptHash {
   param([Parameter(Mandatory = $true)][object]$Receipt)
   $payload = [ordered]@{}
-  $fieldOrder = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'reviewer_id', 'reviewer_class', 'review_mode', 'reviewed_at', 'scope', 'findings', 'blocking_findings', 'verdict', 'builder_id')
+  $fieldOrder = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'reviewer_id', 'reviewer_class', 'review_mode', 'reviewed_at', 'scope', 'findings', 'blocking_findings', 'verdict', 'builder_id', 'challenge_id', 'task_id', 'run_id', 'contract_hash', 'authority_provenance')
   foreach ($field in $fieldOrder) {
     $property = $Receipt.PSObject.Properties[$field]
     if ($null -ne $property) {
@@ -207,9 +207,57 @@ function Test-AgentIndependentReviewReceipt {
     $expectedHash = Get-AgentIndependentReviewReceiptHash -Receipt $Receipt
     if (-not [string]::Equals([string]$artifactHash, $expectedHash, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'independent_review_artifact_hash_mismatch' }
   }
-  $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'reviewer_id', 'reviewer_class', 'review_mode', 'reviewed_at', 'scope', 'findings', 'blocking_findings', 'verdict', 'artifact_hash', 'builder_id')
+  $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'reviewer_id', 'reviewer_class', 'review_mode', 'reviewed_at', 'scope', 'findings', 'blocking_findings', 'verdict', 'artifact_hash', 'builder_id', 'challenge_id', 'task_id', 'run_id', 'contract_hash', 'authority_provenance', 'signature')
   foreach ($property in @($Receipt.PSObject.Properties.Name)) {
     if ($allowed -notcontains [string]$property) { $errors += "receipt_unknown_field:$property" }
+  }
+  return [pscustomobject][ordered]@{ valid = $errors.Count -eq 0; errors = @($errors) }
+}
+
+function Get-AgentNumstatDigest {
+  param(
+    [Parameter(Mandatory = $true)][string[]]$NumstatLines
+  )
+  $canonical = (@($NumstatLines) | Sort-Object) -join "`n"
+  $bytes = [Text.Encoding]::UTF8.GetBytes($canonical)
+  $digest = [Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
+  return ([BitConverter]::ToString($digest) -replace '-', '').ToLowerInvariant()
+}
+
+function Test-AgentAutonomousReviewEvidence {
+  param(
+    [Parameter(Mandatory = $true)][object]$Evidence,
+    [Parameter(Mandatory = $true)][string]$Repository,
+    [Parameter(Mandatory = $true)][int]$PR,
+    [Parameter(Mandatory = $true)][string]$BaseSha,
+    [Parameter(Mandatory = $true)][string]$HeadSha,
+    [Parameter(Mandatory = $true)][string]$BuilderIdentity,
+    [Parameter(Mandatory = $true)][string]$ExpectedNumstatDigest
+  )
+
+  # Autonomous review evidence is analysis provenance, not a signed
+  # certification. It is accepted only for candidates that do not modify the
+  # protected trust root; trust-root changes always require a signed receipt
+  # and a supervisor-signed upgrade authorization.
+  $errors = @()
+  if ([string]$Evidence.schema_version -ne '1') { $errors += 'autonomous_evidence_schema_version_invalid' }
+  if (-not [string]::Equals([string]$Evidence.kind, 'autonomous_review_evidence_v1', [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_kind_invalid' }
+  if (-not [string]::Equals([string]$Evidence.repository, $Repository, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_repository_mismatch' }
+  if ([string]$Evidence.pr_number -ne [string]$PR) { $errors += 'autonomous_evidence_pr_mismatch' }
+  if (-not [string]::Equals([string]$Evidence.base_sha, $BaseSha, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_base_mismatch' }
+  if (-not [string]::Equals([string]$Evidence.head_sha, $HeadSha, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_head_mismatch' }
+  $reviewerId = [string]$Evidence.reviewer_id
+  if ([string]::IsNullOrWhiteSpace($reviewerId) -or [string]::Equals($reviewerId, $BuilderIdentity, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_reviewer_not_independent_from_builder' }
+  if ([string]::IsNullOrWhiteSpace([string]$Evidence.reviewer_class)) { $errors += 'autonomous_evidence_reviewer_class_missing' }
+  if (-not [string]::Equals([string]$Evidence.verdict, 'APPROVE', [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_not_approved' }
+  if (@($Evidence.scope).Count -eq 0) { $errors += 'autonomous_evidence_scope_empty' }
+  if (@($Evidence.blocking_findings).Count -gt 0) { $errors += 'autonomous_evidence_has_blocking_findings' }
+  $parsedReviewedAt = [DateTimeOffset]::MinValue
+  if ([string]::IsNullOrWhiteSpace([string]$Evidence.reviewed_at) -or -not [DateTimeOffset]::TryParse([string]$Evidence.reviewed_at, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$parsedReviewedAt)) { $errors += 'autonomous_evidence_reviewed_at_invalid' }
+  if (-not [string]::Equals([string]$Evidence.diff_numstat_digest, $ExpectedNumstatDigest, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_diff_numstat_digest_mismatch' }
+  $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'reviewer_id', 'reviewer_class', 'review_mode', 'reviewed_at', 'scope', 'findings', 'blocking_findings', 'verdict', 'builder_id', 'diff_numstat_digest')
+  foreach ($property in @($Evidence.PSObject.Properties.Name)) {
+    if ($allowed -notcontains [string]$property) { $errors += "autonomous_evidence_unknown_field:$property" }
   }
   return [pscustomobject][ordered]@{ valid = $errors.Count -eq 0; errors = @($errors) }
 }
@@ -232,4 +280,4 @@ function Get-AgentReviewPolicyVerdict {
   }
 }
 
-Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue
+Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue, Get-AgentNumstatDigest, Test-AgentAutonomousReviewEvidence
