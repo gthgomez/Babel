@@ -681,6 +681,9 @@ function collectSpawnFiles(srcRoot: string): string[] {
 const HOST_PROCESS_SURFACE = new Set([
   'agent/backgroundShell.ts',
   'agent/breakerContract.ts',
+  'bridge/workspaceChanges.ts',
+  'eval/canary/liveCell.ts',
+  'eval/cleanRoomGrade.ts',
   'agent/capabilityBroker.ts',
   'agent/chatEngineSupport.ts',
   'agent/diffCritic.ts',
