@@ -600,7 +600,11 @@ test('SafeExecutor denies gradlew test on host profile without authority stack',
   const root = mkdtempSync(join(tmpdir(), 'babel-se-gradle-'));
   roots.push(root);
   const prev = process.env['BABEL_EXECUTION_PROFILE'];
+  const prevHostFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
   process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
+  // This test proves the no-escalation denial path, so an explicit host
+  // fallback inherited from another test's environment must not leak in.
+  delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
   try {
     const se = new SafeExecutor(root);
     const result = se.shellExec('gradlew test', root, 5_000);
@@ -609,6 +613,8 @@ test('SafeExecutor denies gradlew test on host profile without authority stack',
   } finally {
     if (prev === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
     else process.env['BABEL_EXECUTION_PROFILE'] = prev;
+    if (prevHostFallback === undefined) delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+    else process.env['BABEL_ALLOW_HOST_FALLBACK'] = prevHostFallback;
   }
 });
 

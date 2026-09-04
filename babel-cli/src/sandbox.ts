@@ -1726,7 +1726,19 @@ export class SafeExecutor {
       );
     }
     const classified = classifyExecutionRisk(command, { repoRoot: this.projectRoot });
-    if (requiresDockerIsolation(classified.executionRisk) && isolation.kind !== 'docker') {
+    // Project-or-container-only commands stay denied on host profiles even
+    // when the governed isolation decision resolved to a host kind — unless
+    // the operator explicitly authorized a host fallback for this run. The
+    // explicit escalation keeps host execution auditable instead of making it
+    // the silent default for Docker-only risk classes.
+    const hostFallbackAuthorized =
+      process.env['BABEL_ALLOW_HOST_FALLBACK'] === '1' ||
+      process.env['BABEL_ALLOW_HOST_FALLBACK'] === 'true';
+    if (
+      requiresDockerIsolation(classified.executionRisk) &&
+      isolation.kind !== 'docker' &&
+      !hostFallbackAuthorized
+    ) {
       return policyDeniedResult(
         'isolation_required',
         `[sandbox] isolation_required: ${classified.base || command} executes project or container-only code and is denied on the host.`,
