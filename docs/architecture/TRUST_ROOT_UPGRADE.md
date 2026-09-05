@@ -205,6 +205,70 @@ force the CERTIFIED tier for **all** PRs by setting the repository variable
 `BABEL_REQUIRE_SIGNED_REVIEW=1` (read by the workflow from `vars`), which is
 the supported steady state once signing custody is provisioned to CI.
 
+## Canonical PR review lifecycle
+
+The trusted workflow re-evaluates the gate on `pull_request_target`
+(opened/synchronize/reopened) **and** on `issue_comment` (created) events, so
+the standard lifecycle no longer requires close/reopen:
+
+1. candidate implementation stabilizes; ordinary CI runs;
+2. an isolated read-only reviewer reviews the exact candidate head;
+3. blocking findings are fixed and the reviewer final pass covers the exact
+   final head;
+4. review evidence bound to the exact base/head/`diff_numstat_digest` is
+   posted as a PR comment (transport only, comment bodies are untrusted
+   data, fetched and binding-validated by the base-rooted gate);
+5. the PR transitions to ready for review; the evidence comment (from the
+   repository owner or the PR author) triggers automatic gate re-evaluation;
+6. all gates pass; merge.
+
+Constraints that keep the `issue_comment` trigger safe: only comments on a
+pull request qualify; only the repository owner or the PR author can trigger
+re-evaluation (arbitrary accounts cannot spend Actions minutes); gate
+coordinates are resolved from the live PR state via the API, never from the
+comment; the candidate remains materialized read-only data, and the checkout
+remains the immutable base commit. Close/reopen remains a fallback, not the
+standard flow.
+
+## Missing-evidence semantics (fail closed, never crash)
+
+Untrusted or incomplete evidence must produce a deterministic BLOCKED result,
+never an unhandled strict-mode exception. Required behavior, regression-tested
+by `tools/tests/test-agent-pr-gate-evidence.ps1` (wired into the
+`linux-validation` job):
+
+- no evidence comment: deterministic `autonomous_review_evidence_missing`;
+- transport-error stub (missing or ambiguous): mapped to deterministic
+  BLOCKED reasons, never validated as if it were evidence;
+- empty object, missing/unsupported `schema_version`, missing fields,
+  malformed or non-object JSON: deterministic validation errors;
+- wrong repository/PR/base/head/`diff_numstat_digest`, builder == reviewer,
+  non-APPROVE verdict, blocking findings: deterministic BLOCKED;
+- genuine internal implementation failures only: `pr_gate_exception`.
+
+## AUTONOMOUS review assurance: what is verified vs asserted
+
+AUTONOMOUS evidence is evidence accepted under repository policy, not a
+cryptographic certification, and must be described as exactly this:
+
+- **Mechanically verified** by the base-rooted gate: document schema and
+  allowed field set; reviewer id non-empty and != builder id; reviewer class
+  present; verdict APPROVE; no blocking findings; valid `reviewed_at`
+  timestamp; exact base/head SHA binding; `diff_numstat_digest` over
+  `git diff --numstat base...head`; transport via the base-rooted
+  materializer (comment fetched with the gate token, binding re-checked).
+- **Procedurally asserted, not cryptographically verified**: that the reviewer
+  actually executed in an isolated process; that its filesystem access was
+  truly read-only; that it had no hidden channel to the builder; that it held
+  no signing authority. These properties are declared by the evidence
+  `reviewer_class`/`review_mode` and by policy; the gate cannot prove them
+  from the document alone. Documentation and reports must not represent them
+  as verified.
+
+CERTIFIED review carries strictly stronger authority: an ed25519-signed
+receipt bound to a supervisor-signed consumed challenge, verified against
+owner-controlled key registries. Neither tier may be weakened to close a PR.
+
 ## One-time migration record (this PR)
 
 This PR itself modifies the trust root, so it cannot be authorized by the

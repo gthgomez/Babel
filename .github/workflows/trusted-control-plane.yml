@@ -3,54 +3,113 @@ name: Trusted Control Plane
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
+  # Re-evaluate the gate after a review-evidence comment lands, so the normal
+  # lifecycle is: post evidence -> gate re-runs -> merge. Comment bodies are
+  # never read by this workflow; the base-rooted gate fetches and validates
+  # them as untrusted data through the same transport as before.
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
   pull-requests: read
 
 concurrency:
-  group: trusted-control-plane-${{ github.event.pull_request.number }}
+  group: trusted-control-plane-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: true
 
 jobs:
+  gate-coordinates:
+    name: resolve-gate-coordinates
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.resolve.outputs.skip }}
+      pr: ${{ steps.resolve.outputs.pr }}
+      base: ${{ steps.resolve.outputs.base }}
+      head: ${{ steps.resolve.outputs.head }}
+    steps:
+      - name: Resolve gate coordinates
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_FROM_EVENT: ${{ github.event.pull_request.number }}
+          BASE_FROM_EVENT: ${{ github.event.pull_request.base.sha }}
+          HEAD_FROM_EVENT: ${{ github.event.pull_request.head.sha }}
+          PR_FROM_COMMENT: ${{ github.event.issue.number }}
+          IS_PR_COMMENT: ${{ github.event.issue.pull_request != null }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "issue_comment" ]; then
+            # pull_request_target: trust the event's own coordinates, exactly
+            # as before. The base SHA is the only checkout ref; the candidate
+            # is materialized as data.
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "pr=$PR_FROM_EVENT" >> "$GITHUB_OUTPUT"
+            echo "base=$BASE_FROM_EVENT" >> "$GITHUB_OUTPUT"
+            echo "head=$HEAD_FROM_EVENT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # issue_comment: evaluate only comments on a pull request, and only
+          # from the repository owner or the PR author, so arbitrary accounts
+          # cannot spend Actions minutes. The comment body itself stays
+          # untrusted data read (and signature-verified) by the base-rooted
+          # gate transport.
+          if [ "$IS_PR_COMMENT" != "true" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          pr_author="$(gh api "repos/$REPOSITORY/pulls/$PR_FROM_COMMENT" --jq .user.login)"
+          if [ "$COMMENT_AUTHOR" != "$REPOSITORY_OWNER" ] && [ "$COMMENT_AUTHOR" != "$pr_author" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # Resolve coordinates from the live PR state via the API (never from
+          # the comment): the gate re-verifies all bindings authoritatively.
+          base="$(gh api "repos/$REPOSITORY/pulls/$PR_FROM_COMMENT" --jq .base.sha)"
+          head="$(gh api "repos/$REPOSITORY/pulls/$PR_FROM_COMMENT" --jq .head.sha)"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "pr=$PR_FROM_COMMENT" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+
   trusted-control-plane:
     name: trusted-control-plane
+    needs: gate-coordinates
+    if: needs.gate-coordinates.outputs.skip != 'true'
     runs-on: ubuntu-latest
+    env:
+      GATE_PR: ${{ needs.gate-coordinates.outputs.pr }}
+      GATE_BASE: ${{ needs.gate-coordinates.outputs.base }}
+      GATE_HEAD: ${{ needs.gate-coordinates.outputs.head }}
     steps:
       - name: Checkout immutable base
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ needs.gate-coordinates.outputs.base }}
           fetch-depth: 0
           persist-credentials: false
       - name: Materialize candidate as data only
         shell: pwsh
-        env:
-          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          git fetch --no-tags origin $env:CANDIDATE_SHA
-          git worktree add --detach "$env:GITHUB_WORKSPACE/candidate" $env:CANDIDATE_SHA
+          git fetch --no-tags origin $env:GATE_HEAD
+          git worktree add --detach "$env:GITHUB_WORKSPACE/candidate" $env:GATE_HEAD
       - name: Stage review evidence from PR comments (transport only)
         shell: pwsh
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           # Only the trusted base-rooted transport receives the GitHub token.
           GH_TOKEN: ${{ github.token }}
         run: |
           pwsh -NoProfile -NonInteractive -File scripts/materialize-independent-review-receipt.ps1 `
-            -PR ([int]$env:PR_NUMBER) `
+            -PR ([int]$env:GATE_PR) `
             -Repository "$env:GITHUB_REPOSITORY" `
-            -BaseSha $env:BASE_SHA `
-            -HeadSha $env:HEAD_SHA `
+            -BaseSha $env:GATE_BASE `
+            -HeadSha $env:GATE_HEAD `
             -EvidenceDirectory "$env:RUNNER_TEMP/review-evidence"
       - name: Run base-rooted merge audit
         shell: pwsh
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           # Owner-controlled escalation: set this repository variable to 1 to
           # require a signed independent review receipt for every PR. The
           # protected trust root always requires one regardless of this value.
@@ -59,10 +118,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           pwsh -NoProfile -NonInteractive -File scripts/trusted-merge-gate.ps1 `
-            -PR ([int]$env:PR_NUMBER) `
-            -BaseSha $env:BASE_SHA `
+            -PR ([int]$env:GATE_PR) `
+            -BaseSha $env:GATE_BASE `
             -RepoRoot "$env:GITHUB_WORKSPACE/candidate" `
-            -ReviewedHeadSha $env:HEAD_SHA `
+            -ReviewedHeadSha $env:GATE_HEAD `
             -IndependentReviewReceiptPath "$env:RUNNER_TEMP/review-evidence/receipt.json" `
             -ReviewChallengeLedgerPath "$env:RUNNER_TEMP/review-evidence/ledger.json" `
             -AutonomousReviewEvidencePath "$env:RUNNER_TEMP/review-evidence/ai-review.json" `

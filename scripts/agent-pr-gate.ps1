@@ -237,6 +237,11 @@ function Read-AgentAutonomousReviewEvidence {
   if (-not [IO.Path]::IsPathRooted($path)) { $path = Join-Path $resolvedRepoRoot $path }
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return [pscustomobject]@{ path = $path; valid = $false; errors = @('autonomous_review_evidence_missing') } }
   try { $evidence = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json } catch { return [pscustomobject]@{ path = $path; valid = $false; errors = @('autonomous_review_evidence_malformed') } }
+  # A transport_error stub means the transport found no (or ambiguous) bound
+  # evidence: fail closed deterministically instead of validating the stub.
+  $stub = Test-AgentEvidenceTransportStub -Document $evidence
+  if ($stub -eq 'missing') { return [pscustomobject]@{ path = $path; valid = $false; errors = @('autonomous_review_evidence_missing') } }
+  if ($stub -eq 'ambiguous') { return [pscustomobject]@{ path = $path; valid = $false; errors = @('autonomous_review_evidence_ambiguous') } }
   $numstatResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('diff', '--numstat', "$BaseSha...$HeadSha")
   if ($numstatResult.exitCode -ne 0) { return [pscustomobject]@{ path = $path; valid = $false; errors = @('autonomous_review_numstat_unavailable') } }
   $expectedDigest = Get-AgentNumstatDigest -NumstatLines @($numstatResult.output)

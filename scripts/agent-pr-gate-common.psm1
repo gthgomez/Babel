@@ -208,7 +208,9 @@ function Test-AgentIndependentReviewReceipt {
     if (-not [string]::Equals([string]$artifactHash, $expectedHash, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'independent_review_artifact_hash_mismatch' }
   }
   $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'reviewer_id', 'reviewer_class', 'review_mode', 'reviewed_at', 'scope', 'findings', 'blocking_findings', 'verdict', 'artifact_hash', 'builder_id', 'challenge_id', 'task_id', 'run_id', 'contract_hash', 'authority_provenance', 'signature')
-  foreach ($property in @($Receipt.PSObject.Properties.Name)) {
+  # Enumerate names via the pipeline: member enumeration of `.Name` throws
+  # under strict mode when the property collection is empty ({} receipts).
+  foreach ($property in @($Receipt.PSObject.Properties | ForEach-Object { $_.Name })) {
     if ($allowed -notcontains [string]$property) { $errors += "receipt_unknown_field:$property" }
   }
   return [pscustomobject][ordered]@{ valid = $errors.Count -eq 0; errors = @($errors) }
@@ -224,9 +226,24 @@ function Get-AgentNumstatDigest {
   return ([BitConverter]::ToString($digest) -replace '-', '').ToLowerInvariant()
 }
 
+function Test-AgentEvidenceTransportStub {
+  param([AllowNull()][object]$Document)
+
+  # The evidence transport writes a transport_error stub document when no
+  # (or an ambiguous) bound evidence comment exists. Such a stub is untrusted
+  # input describing transport state, never review evidence: callers must map
+  # it to a deterministic BLOCKED reason instead of validating it.
+  if ($null -eq $Document -or $Document -isnot [System.Management.Automation.PSCustomObject]) { return $null }
+  $transportError = Get-AgentPropertyValue -Object $Document -Name 'transport_error'
+  if ($null -eq $transportError) { return $null }
+  $value = [string]$transportError
+  if ($value -like '*_handoff_ambiguous') { return 'ambiguous' }
+  return 'missing'
+}
+
 function Test-AgentAutonomousReviewEvidence {
   param(
-    [Parameter(Mandatory = $true)][object]$Evidence,
+    [Parameter(Mandatory = $true)][AllowNull()][object]$Evidence,
     [Parameter(Mandatory = $true)][string]$Repository,
     [Parameter(Mandatory = $true)][int]$PR,
     [Parameter(Mandatory = $true)][string]$BaseSha,
@@ -239,25 +256,39 @@ function Test-AgentAutonomousReviewEvidence {
   # certification. It is accepted only for candidates that do not modify the
   # protected trust root; trust-root changes always require a signed receipt
   # and a supervisor-signed upgrade authorization.
+  #
+  # The evidence document is untrusted input: every property is read through
+  # the null-safe accessor so that missing, malformed, or wrong-shape
+  # documents produce deterministic BLOCKED errors and never an unhandled
+  # strict-mode exception.
   $errors = @()
-  if ([string]$Evidence.schema_version -ne '1') { $errors += 'autonomous_evidence_schema_version_invalid' }
-  if (-not [string]::Equals([string]$Evidence.kind, 'autonomous_review_evidence_v1', [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_kind_invalid' }
-  if (-not [string]::Equals([string]$Evidence.repository, $Repository, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_repository_mismatch' }
-  if ([string]$Evidence.pr_number -ne [string]$PR) { $errors += 'autonomous_evidence_pr_mismatch' }
-  if (-not [string]::Equals([string]$Evidence.base_sha, $BaseSha, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_base_mismatch' }
-  if (-not [string]::Equals([string]$Evidence.head_sha, $HeadSha, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_head_mismatch' }
-  $reviewerId = [string]$Evidence.reviewer_id
+  $evidenceObject = if ($null -ne $Evidence -and $Evidence -is [System.Management.Automation.PSCustomObject]) { $Evidence } else { $null }
+  if ($null -eq $evidenceObject) { $errors += 'autonomous_evidence_malformed' }
+  if ([string](Get-AgentPropertyValue -Object $evidenceObject -Name 'schema_version') -ne '1') { $errors += 'autonomous_evidence_schema_version_invalid' }
+  if (-not [string]::Equals([string](Get-AgentPropertyValue -Object $evidenceObject -Name 'kind'), 'autonomous_review_evidence_v1', [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_kind_invalid' }
+  if (-not [string]::Equals([string](Get-AgentPropertyValue -Object $evidenceObject -Name 'repository'), $Repository, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_repository_mismatch' }
+  if ([string](Get-AgentPropertyValue -Object $evidenceObject -Name 'pr_number') -ne [string]$PR) { $errors += 'autonomous_evidence_pr_mismatch' }
+  if (-not [string]::Equals([string](Get-AgentPropertyValue -Object $evidenceObject -Name 'base_sha'), $BaseSha, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_base_mismatch' }
+  if (-not [string]::Equals([string](Get-AgentPropertyValue -Object $evidenceObject -Name 'head_sha'), $HeadSha, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_head_mismatch' }
+  $reviewerId = [string](Get-AgentPropertyValue -Object $evidenceObject -Name 'reviewer_id')
   if ([string]::IsNullOrWhiteSpace($reviewerId) -or [string]::Equals($reviewerId, $BuilderIdentity, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_reviewer_not_independent_from_builder' }
-  if ([string]::IsNullOrWhiteSpace([string]$Evidence.reviewer_class)) { $errors += 'autonomous_evidence_reviewer_class_missing' }
-  if (-not [string]::Equals([string]$Evidence.verdict, 'APPROVE', [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_not_approved' }
-  if (@($Evidence.scope).Count -eq 0) { $errors += 'autonomous_evidence_scope_empty' }
-  if (@($Evidence.blocking_findings).Count -gt 0) { $errors += 'autonomous_evidence_has_blocking_findings' }
+  if ([string]::IsNullOrWhiteSpace([string](Get-AgentPropertyValue -Object $evidenceObject -Name 'reviewer_class'))) { $errors += 'autonomous_evidence_reviewer_class_missing' }
+  if (-not [string]::Equals([string](Get-AgentPropertyValue -Object $evidenceObject -Name 'verdict'), 'APPROVE', [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_not_approved' }
+  $scope = Get-AgentPropertyValue -Object $evidenceObject -Name 'scope'
+  if ($null -eq $scope -or @($scope).Count -eq 0) { $errors += 'autonomous_evidence_scope_empty' }
+  $blockingFindings = Get-AgentPropertyValue -Object $evidenceObject -Name 'blocking_findings'
+  if ($null -ne $blockingFindings -and @($blockingFindings).Count -gt 0) { $errors += 'autonomous_evidence_has_blocking_findings' }
   $parsedReviewedAt = [DateTimeOffset]::MinValue
-  if ([string]::IsNullOrWhiteSpace([string]$Evidence.reviewed_at) -or -not [DateTimeOffset]::TryParse([string]$Evidence.reviewed_at, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$parsedReviewedAt)) { $errors += 'autonomous_evidence_reviewed_at_invalid' }
-  if (-not [string]::Equals([string]$Evidence.diff_numstat_digest, $ExpectedNumstatDigest, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_diff_numstat_digest_mismatch' }
-  $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'reviewer_id', 'reviewer_class', 'review_mode', 'reviewed_at', 'scope', 'findings', 'blocking_findings', 'verdict', 'builder_id', 'diff_numstat_digest')
-  foreach ($property in @($Evidence.PSObject.Properties.Name)) {
-    if ($allowed -notcontains [string]$property) { $errors += "autonomous_evidence_unknown_field:$property" }
+  $reviewedAt = [string](Get-AgentPropertyValue -Object $evidenceObject -Name 'reviewed_at')
+  if ([string]::IsNullOrWhiteSpace($reviewedAt) -or -not [DateTimeOffset]::TryParse($reviewedAt, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$parsedReviewedAt)) { $errors += 'autonomous_evidence_reviewed_at_invalid' }
+  if (-not [string]::Equals([string](Get-AgentPropertyValue -Object $evidenceObject -Name 'diff_numstat_digest'), $ExpectedNumstatDigest, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_diff_numstat_digest_mismatch' }
+  if ($null -ne $evidenceObject) {
+    $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'reviewer_id', 'reviewer_class', 'review_mode', 'reviewed_at', 'scope', 'findings', 'blocking_findings', 'verdict', 'builder_id', 'diff_numstat_digest')
+    # Enumerate names via the pipeline: member enumeration of `.Name` throws
+    # under strict mode when the property collection is empty ({} documents).
+    foreach ($property in @($evidenceObject.PSObject.Properties | ForEach-Object { $_.Name })) {
+      if ($allowed -notcontains [string]$property) { $errors += "autonomous_evidence_unknown_field:$property" }
+    }
   }
   return [pscustomobject][ordered]@{ valid = $errors.Count -eq 0; errors = @($errors) }
 }
@@ -280,4 +311,4 @@ function Get-AgentReviewPolicyVerdict {
   }
 }
 
-Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue, Get-AgentNumstatDigest, Test-AgentAutonomousReviewEvidence
+Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue, Get-AgentNumstatDigest, Test-AgentAutonomousReviewEvidence, Test-AgentEvidenceTransportStub

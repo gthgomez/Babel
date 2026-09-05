@@ -86,6 +86,8 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
         working-directory: babel-cli
+      - name: Test gate evidence regression matrix
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/tests/test-agent-pr-gate-evidence.ps1
       - name: Typecheck CLI
         run: npm run typecheck
         working-directory: babel-cli
