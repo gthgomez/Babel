@@ -64,6 +64,11 @@ import {
 } from "../agent/sessionEvents.js";
 import { renderProductBanner } from "../ui/renderers.js";
 import { warning, muted } from "../ui/theme.js";
+import {
+  renderAvailableModelsTable,
+  renderModelDetail,
+  resolveModelSnapshot,
+} from "../interactive/commands/modelDetail.js";
 import { readRuntimeMode, writeRuntimeMode } from "../config/runtimeMode.js";
 import {
   getExecutorToolRegistrySnapshot,
@@ -2859,16 +2864,31 @@ Notes:
       "after",
       `
 Examples:
+  $ babel models list
   $ babel models ping
   $ babel models ping --model deepseek-v4-flash-openrouter --json
 
 Notes:
+  - List shows the active model, provider route, context/cost, and fallback chain.
   - Ping validates the configured key, policy route, provider reachability, and JSON response parsing.
   - Disabled or policy-blocked models fail before making a provider request.
 `,
     )
     .action(() => {
       modelsCommand.help();
+    });
+
+  modelsCommand
+    .command("list")
+    .description("Show the active model, route detail, and configured backends")
+    .action(() => {
+      const snapshot = resolveModelSnapshot();
+      if (!snapshot) {
+        console.log("Model policy could not be resolved. Run `babel doctor` for details.");
+        return;
+      }
+      console.log(renderModelDetail(snapshot));
+      console.log(renderAvailableModelsTable());
     });
 
   modelsCommand

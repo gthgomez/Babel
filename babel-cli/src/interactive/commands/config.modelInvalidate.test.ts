@@ -117,7 +117,8 @@ test('restored live DeepSeek session state is normalized to OpenRouter', () => {
     const ctx = makeCtx({ state: { ...makeCtx().state, model: 'deepseek-v4-flash' } });
     resolveSessionModel(ctx);
     assert.equal(ctx.state.model, 'deepseek-v4-flash-openrouter');
-    assert.equal(ctx.state.resolvedModelId, 'deepseek/deepseek-v4-flash');
+    // Canonical policy pins the dated OpenRouter revision (config/model-policy.json).
+    assert.equal(ctx.state.resolvedModelId, 'deepseek/deepseek-v4-flash-0731');
   } finally {
     if (previousOffline === undefined) delete process.env['BABEL_OFFLINE'];
     else process.env['BABEL_OFFLINE'] = previousOffline;

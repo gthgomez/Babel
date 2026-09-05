@@ -33,6 +33,6 @@
   "doctor mixed": "\nBABEL · workspace integrity and runtime readiness\nDoctor\n\n▌ STATUS · diagnostic summary ───────────────────────────────────────────────────────\n  Workspace  /var/tmp/project\n  Mode       full\n  Scope      all\n  Overall    [BLOCKED] WARNING",
   "doctor all pass verbose": "\nBABEL · workspace integrity and runtime readiness\nDoctor\n\n▌ STATUS · diagnostic summary ───────────────────────────────────────────────────────\n  Workspace  /var/tmp/project\n  Mode       quick\n  Scope      terminal\n  Overall    [PASS] PASS",
   "operator header full": "\nBABEL · [PENDING] · AUTO · babel · Claude Opus 4.8 · turn 5\n╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n",
-  "operator header minimal": "\nBABEL · [READY] · CHAT · global · Qwen 3 32B\n╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n",
+  "operator header minimal": "\nBABEL · [READY] · CHAT · global · auto\n╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n",
   "keybindings display": "Keybindings (default):\n  palette.open-command-palette: (not bound)\n  pager.quit: q, Escape, Ctrl+C\n  Global bindings resolved: yes"
 }

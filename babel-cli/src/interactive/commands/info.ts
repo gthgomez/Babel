@@ -11,6 +11,7 @@ import * as path from 'node:path';
 import type { ReplContext } from '../context.js';
 import { describeVisibleMode } from '../types.js';
 import { getRecentRuns } from '../utils.js';
+import { nextFallbackEntry, resolveModelSnapshot } from './modelDetail.js';
 import { globalCostTracker } from '../../services/costTracker.js';
 import { buildRunStats, formatRunStatsHuman } from '../../services/runStats.js';
 import { runDoctor, formatDoctorHuman } from '../../doctor.js';
@@ -64,8 +65,19 @@ export function handleStatus(ctx: ReplContext, _args: string[]): void {
     `    ${muted(padRight('Model', 10))} ${ctx.state.model ? accentBright(ctx.state.model) : muted('(route-selected)')}`,
   );
   console.log(`    ${muted(padRight('Profile', 10))} ${accentBright(permissions.profile)}`);
-  if (ctx.state.resolvedModelId) {
-    console.log(`    ${muted(padRight('Provider', 10))} ${muted(ctx.state.resolvedModelId)}`);
+  const snapshot = resolveModelSnapshot(ctx.state.model);
+  if (snapshot) {
+    console.log(
+      `    ${muted(padRight('Provider', 10))} ${accentBright(snapshot.policy.provider)} ${muted('→')} ${muted(snapshot.policy.providerModelId)}`,
+    );
+    const fallback = nextFallbackEntry(snapshot.policy);
+    if (fallback) {
+      console.log(
+        `    ${muted(padRight('Fallback', 10))} ${muted(fallback.backendKey)}`,
+      );
+    }
+  } else if (ctx.state.resolvedModelId) {
+    console.log(`    ${muted(padRight('Route', 10))} ${muted(ctx.state.resolvedModelId)}`);
   }
   if (ctx.state.approximateCostPerRunUsd !== undefined) {
     console.log(

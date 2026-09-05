@@ -109,7 +109,7 @@ export const INTERACTIVE_COMMAND_GROUPS = [
       ['/mode [name]', 'List or switch mode — chat (default), chat-headless (CI/headless), plan (ask-first), deep (governed)'],
       ['/execute-plan', 'Stage plan → implement handoff (after hard-plan)'],
       ['/why-stopped', 'Explain last run terminal (phase-gate / policy)'],
-      ['/model [key]', 'List models, or set active model'],
+      ['/model [show|why|health|<key>]', 'Model detail, why it was chosen, route health, list, or set active model'],
       ['/project [name]', 'Set project context or clear it'],
       ['/target', 'Show current target root'],
       ['/retarget [path]', 'Override target root for this session'],
