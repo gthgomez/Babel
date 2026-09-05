@@ -25,12 +25,13 @@ Core invariants:
 
 ## Current custody state (2026-09-05 audit)
 
-Registered public authorities (public registries on `main`):
+Registered public authorities (public registries on `main`; the registry
+files are the authoritative source of the exact public key material):
 
-| Role | Key ID | SPKI SHA-256 fingerprint (public) |
+| Role | Key ID | Registry |
 | --- | --- | --- |
-| Independent reviewer | `trusted-reviewer-ed25519-v2` | `lP6PaQdhH4F2SXCpNzmnZYcY0Ma3E6WkZgmf7fqkYDs=` |
-| Supervisor | `trusted-supervisor-ed25519-v1` | `ewkJURAPyMyK1++wSXxFCfUh4jtg4QJgJ/XW/jaUGzk=` |
+| Independent reviewer | `trusted-reviewer-ed25519-v2` | `config/independent-review-keys.json` |
+| Supervisor | `trusted-supervisor-ed25519-v1` | `config/trusted-supervisor-keys.json` |
 
 Custody classification for both private authorities: **UNKNOWN** (leaning
 unprovisioned). Evidence, from the 2026-09-05 audit:
