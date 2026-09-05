@@ -22,6 +22,13 @@ import { isOfflineChatMode } from '../../agent/chatModelPolicy.js';
 import { globalCostTracker } from '../../services/costTracker.js';
 import { VALID_MODES } from '../../cli/constants.js';
 import { getRecentRuns } from '../utils.js';
+import {
+  renderModelDetail,
+  renderModelHealth,
+  renderModelWhy,
+  resolveModelSnapshot,
+  resetModelSnapshotCache,
+} from './modelDetail.js';
 import { loadInspectBundle, buildInspectRunView } from '../../inspect/loaders.js';
 import { renderInspectRun } from '../../ui/inspection.js';
 import {
@@ -243,8 +250,32 @@ export function handleRetarget(ctx: ReplContext, args: string[]): void {
 // ── Model ────────────────────────────────────────────────────────────────────
 
 export function handleModel(ctx: ReplContext, args: string[]): void {
-  if (args[0] && args[0].toLowerCase() !== 'clear') {
-    const requested = args[0].toLowerCase();
+  const sub = args[0]?.toLowerCase();
+  if (sub === 'show') {
+    const snapshot = resolveModelSnapshot(ctx.state.model);
+    if (!snapshot) {
+      console.log(muted('\n  Model policy could not be resolved — run /doctor for details.'));
+    } else {
+      console.log(renderModelDetail(snapshot));
+    }
+    return;
+  }
+  if (sub === 'why') {
+    console.log(
+      renderModelWhy({
+        sessionModel: ctx.state.model,
+        lastRoutingLabel: ctx.lastRoutingLabel,
+        lastRunDir: ctx.lastRunDir,
+      }),
+    );
+    return;
+  }
+  if (sub === 'health') {
+    console.log(renderModelHealth(ctx.state.model));
+    return;
+  }
+  if (sub && sub !== 'clear') {
+    const requested = sub;
     try {
       // Check alias shorthand before resolving by key
       const aliasResolution = resolveModelAlias(requested);
@@ -263,6 +294,7 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
           : {}),
       };
       ctx.saveSessionState();
+      resetModelSnapshotCache();
 
       // Invalidate stale engine so the next turn uses the new model/provider
       ctx.chatEngine = undefined;
@@ -306,6 +338,7 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
     delete (ctx.state as any).resolvedModelId;
     delete (ctx.state as any).approximateCostPerRunUsd;
     ctx.saveSessionState();
+    resetModelSnapshotCache();
     // Invalidate stale engine so the next turn uses route-selected model
     ctx.chatEngine = undefined;
     console.log(primary('\n  Model cleared — route-selected enabled'));
@@ -322,7 +355,16 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
         ),
       );
     } else {
-      console.log(muted('\n  No model set — using auto (policy default tier)'));
+      const snapshot = resolveModelSnapshot(undefined);
+      if (snapshot) {
+        console.log(
+          primary(
+            `\n  Current model: ${accentBright(snapshot.policy.resolvedBackendKey)} ${muted(`(auto · ${snapshot.policy.provider} → ${snapshot.policy.providerModelId})`)}`,
+          ),
+        );
+      } else {
+        console.log(muted('\n  No model set — using auto (route-selected default)'));
+      }
     }
     console.log(primary('\n  Available Models:'));
     const available = getAvailableModels()
@@ -339,7 +381,7 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
     console.log(primary('\n  Model Aliases:'));
     console.log(aliases);
     console.log(
-      muted(`\n  Use '/model <key>' or '<alias>' to select, or '/model clear' to reset.`),
+      muted(`\n  Use '/model show|why|health' for detail, '/model <key>' or '<alias>' to select, '/model clear' to reset.`),
     );
   }
 }

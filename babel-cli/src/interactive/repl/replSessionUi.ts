@@ -8,6 +8,7 @@ import { renderStatusBar } from '../../ui/statusBar.js';
 import { getGitInfo } from '../../ui/gitInfo.js';
 import { getCachedIndexStatus } from '../../services/knowledgeGraphIndexer.js';
 import { OutputBuffer } from '../../ui/outputBuffer.js';
+import { resolveStatusBarModelLabel } from '../commands/modelDetail.js';
 import type { ReplContext } from '../context.js';
 
 export function printIdleHeader(ctx: ReplContext): void {
@@ -15,6 +16,9 @@ export function printIdleHeader(ctx: ReplContext): void {
     ...ctx.state,
     turnCount: ctx.turnCounter,
     resolvedModelId: ctx.state.resolvedModelId || ctx.state.model,
+    // Never display a model the policy didn't resolve — fall back to the
+    // resolved default key, then the honest 'auto' label.
+    model: ctx.state.model || resolveStatusBarModelLabel(undefined),
   } as Record<string, unknown>);
   const runtimePlan = readRuntimeMode() === 'plan';
   const sessionPlan = ctx.state.mode === 'plan';
@@ -38,7 +42,7 @@ export function renderTurnStatusBar(ctx: ReplContext): void {
   }
 
   const barState: Parameters<typeof renderStatusBar>[0] = {
-    model: humanizeModelId(ctx.state.model ?? 'qwen3-32b'),
+    model: humanizeModelId(resolveStatusBarModelLabel(ctx.state.model)),
     ...(ctx.state.resolvedModelId !== undefined ? { modelId: ctx.state.resolvedModelId } : {}),
     mode: describeVisibleMode(ctx.state.mode).toLowerCase(),
     project: ctx.state.project ?? 'global',

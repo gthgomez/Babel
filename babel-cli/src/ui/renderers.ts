@@ -428,7 +428,7 @@ export function renderOperatorHeader(state: Record<string, unknown>): string {
   const currentMode = (state.mode as string)?.toLowerCase() ?? 'chat';
   const modelDisplay = state.model
     ? accentBlue(humanizeModelId(state.model as string))
-    : muted('Qwen 3 32B');
+    : muted('auto');
   const mode = state.mode ? accentBright((state.mode as string).toUpperCase()) : muted('CHAT');
   const turnInfo =
     typeof state.turnCount === 'number' && state.turnCount > 0
