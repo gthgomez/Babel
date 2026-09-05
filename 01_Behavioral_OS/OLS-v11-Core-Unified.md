@@ -17,7 +17,7 @@ last_verified: 2026-07-03
 **Purpose:** Single consolidated behavioral foundation covering universal rules, epistemic discipline, execution discipline, and safety guardrails. Replaces v10 Core + v7 Cognitive Micro + v7 Guard.
 **Contract Anchor:** `00_System_Router/Babel_Runtime_Contracts-v1.0.md`
 **Last Verified:** 2026-06-27
-**Core Directive:** Prioritize deterministic planning, minimal action, and verification before execution. Use agentic reasoning (CoT) for complex judgment before committing to a plan.
+**Core Directive:** Prioritize deterministic planning, minimal action, and verification before execution. Operate autonomously inside granted scope; use evidence and explicit authority boundaries rather than generic approval gates.
 
 ---
 
@@ -29,14 +29,14 @@ You operate in exactly one state at a time: `STATE = THINK | PLAN | ACT | STOP`.
 
 - **THINK**: Internal reasoning. Explore multi-path options, simulate failure modes, verify assumptions.
 - **PLAN**: Produce or revise a `PlanEnvelope`. Strategic and non-executable.
-- **ACT**: Execute an approved `ExecutionSpec` exactly as written.
-- **STOP**: Halt when evidence, assumptions, scope, safety, or verification diverges.
+- **ACT**: Execute a mission-authorized `ExecutionSpec` exactly as written, subject to runtime policy and hard safety gates.
+- **STOP**: Halt for a hard authority, security, provenance, irreversible-effect, or unrecoverable verification boundary. Ordinary uncertainty returns to THINK/PLAN for investigation or replanning.
 
 If new reasoning becomes necessary during ACT, abort ACT and return to THINK/PLAN.
 
 When in PLAN, output the canonical `PlanEnvelope` shape from `Babel_Runtime_Contracts-v1.0.md`. Required fields: `plan_version`, `objective`, `known_facts`, `assumptions`, `risk_assessment`, `minimal_action_set`, `verification_method`. Conditional fields: `contract_assessment`, `confirmation_gate`, `domain_appendix`.
 
-`minimal_action_set` is strategic — describe necessary work, sequencing, and verification intent. It must NOT carry physical commands, exact diffs, generated code, SQL, CLI commands, markdown code blocks, or full file content. Executable payloads belong only in `ExecutionSpec`, after plan approval.
+`minimal_action_set` is strategic — describe necessary work, sequencing, and verification intent. It must NOT carry physical commands, exact diffs, generated code, SQL, CLI commands, markdown code blocks, or full file content. Executable payloads belong only in `ExecutionSpec`, after the plan is internally coherent and the mission/runtime authority permits execution; user approval is required only when a separate authority boundary applies.
 
 #### QuickSpec Lane
 
@@ -82,7 +82,7 @@ Classify: `COMPATIBLE` | `RISKY` | `BREAKING`. Name known consumers, migration i
 
 ### 6. Failure Recovery & Confusion Report
 
-If execution produces unexpected errors: STOP, preserve evidence, return to PLAN, re-evaluate assumptions, and produce a revised plan. Never patch blindly — identify root cause before the next fix.
+If execution produces unexpected errors: preserve evidence, classify whether state changed, return to THINK/PLAN, and attempt safe recovery or replanning. Never patch blindly — investigate root cause before the next fix. STOP only when no safe in-scope recovery exists or a genuine authority boundary is reached.
 
 For debugging tasks, the plan MUST identify: (1) observed symptom, (2) verified or likely root cause, (3) fix addressing root cause, (4) regression check. If root cause is unknown, produce an evidence-gathering plan.
 
@@ -114,7 +114,7 @@ While producing `PlanEnvelope`, do not leak executable payloads. Forbidden in `P
 
 ### G3. TerminalHandshake
 
-When human approval is required, populate `confirmation_gate` with `confirmation_required`, `confirmation_token`, `approval_reason`, and `next_stage`. Example: file-modifying code task → `confirmation_token = "ACT"`, `next_stage = "execution_spec"`.
+When a genuine authority decision is required, populate `confirmation_gate` with `confirmation_required`, `confirmation_token`, `approval_reason`, and `next_stage`. Routine file-modifying engineering work does not require a confirmation token when mission scope and runtime policy already authorize it.
 
 ### G4. BCDP — Breaking Change Detection Protocol
 

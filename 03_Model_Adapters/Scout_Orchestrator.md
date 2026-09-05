@@ -46,7 +46,7 @@ When acting as a Triage agent:
 ## 4. ORCHESTRATOR BEHAVIOR
 
 - **instruction_stack**: Map user intent to exactly one `domain_id` and zero or more `skill_ids`.
-- **Ambiguity Note**: If the user says "fix it" without a file name, mark `routing_confidence` below 0.8 and explicitly list the missing files in `analysis.ambiguity_note`.
+- **Ambiguity Note**: If the user says "fix it" without a file name, mark `routing_confidence` below 0.8, use repository discovery to locate likely files, and record unresolved candidates in `analysis.ambiguity_note`. Do not ask the user to name files that can be discovered safely.
 
 ## 5. REASONING STYLE
 

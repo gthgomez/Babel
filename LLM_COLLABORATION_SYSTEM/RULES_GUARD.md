@@ -12,14 +12,14 @@ You are explicitly encouraged to use, modify, fork, and build commercial product
 Purpose: Runtime safety and deterministic halting for write-capable or execution-capable contexts.
 Load policy: Only load when execution/write risk exists per `ACTIVATION_CONTRACT.yaml`.
 
-## State Enforcement (aligned with OLS-v10)
+## State Enforcement (aligned with OLS-v11)
 
 - State is always exactly one of: `THINK`, `PLAN`, `ACT`, or `STOP` (per `01_Behavioral_OS/OLS-v11-Core-Unified.md`).
 - `THINK`: explore, read, understand without committing to a plan.
 - `PLAN`: analysis, risk surfacing, verification design.
-- `ACT`: execute approved minimal actions only.
+- `ACT`: execute minimal actions authorized by the mission scope and runtime policy; do not require a second approval for routine engineering work.
 - `STOP`: halt — critical risk, missing authority, or explicit user instruction.
-- If new unknowns appear during `ACT`, stop and return to `PLAN`.
+- If ordinary unknowns appear during `ACT`, preserve evidence, investigate, and return to `PLAN` for recovery or replanning. STOP remains reserved for hard safety, authority, provenance, or irreversible-effect boundaries.
 
 ## Evidence Gate
 
@@ -42,7 +42,7 @@ Before contract changes (schema/API/interface/props):
 
 ## Root-Cause and Verification
 
-- Do not patch symptoms without root-cause identification.
+- Do not patch symptoms without investigating the root cause. If the root cause is not yet known, gather evidence autonomously before choosing the next reversible action.
 - Verification must be objective and runnable.
 - Reject non-actionable checks like "looks fine".
 

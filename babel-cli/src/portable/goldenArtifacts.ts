@@ -645,8 +645,11 @@ export function generateGoldenArtifacts(outDir: string = resolve(process.cwd(), 
   writeFileSync(resolve(outDir, 'portable-workflow-v1.schema.json'), schemaStr, 'utf-8');
 
   // Derive source file sha256
+  // Hash the EOL-normalized source text: the manifest pins canonical
+  // content, not checkout bytes (a CRLF checkout must produce the same
+  // hash as the LF-committed manifest).
   const workflowTsPath = resolve(process.cwd(), 'src/portable/workflow.ts');
-  const workflowTsContent = readFileSync(workflowTsPath);
+  const workflowTsContent = readFileSync(workflowTsPath, 'utf-8').replace(/\r\n/g, '\n');
   const workflowSourceSha256 = hash(workflowTsContent);
 
   const fixtureSetSha256 = hash(

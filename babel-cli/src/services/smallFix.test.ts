@@ -94,9 +94,20 @@ function mockSmallFixResponse(replacementContent: string): void {
   // Synthetic provider tests still execute the disposable fixture on the
   // host when Docker is unavailable; make that boundary explicit.
   process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
-  globalThis.fetch = (async () =>
-    new Response(
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    // The live policy certifies exact-route responses only: echo the model
+    // identity the runner actually sent (validateObservedModelId rejects
+    // substitution), so the fixture stays correct across policy re-routes.
+    let sentModel = 'deepseek/deepseek-v4-flash-0731';
+    try {
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : null;
+      if (body && typeof body.model === 'string') sentModel = body.model;
+    } catch {
+      /* keep fallback identity */
+    }
+    return new Response(
       JSON.stringify({
+        model: sentModel,
         choices: [
           {
             message: {
@@ -112,7 +123,8 @@ function mockSmallFixResponse(replacementContent: string): void {
         usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
       }),
       { status: 200 },
-    )) as typeof fetch;
+    );
+  }) as typeof fetch;
 }
 
 test('small-fix detection accepts explicit one-file local test repairs', () => {
@@ -516,14 +528,24 @@ test(
       writeNodeFixture(root, 'export const add = () => 0;\n');
       process.env['BABEL_PROJECT_ROOT'] = root;
       process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
-      globalThis.fetch = (async () => {
+      globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
         modelCalls += 1;
+        // Echo the sent model identity: the exact-live-route policy rejects
+        // responses whose observed model differs from the request.
+        let sentModel = 'deepseek/deepseek-v4-flash-0731';
+        try {
+          const body = typeof init?.body === 'string' ? JSON.parse(init.body) : null;
+          if (body && typeof body.model === 'string') sentModel = body.model;
+        } catch {
+          /* keep fallback identity */
+        }
         const replacementContent =
           modelCalls === 1
             ? 'export const add = () => 0;\n'
             : 'export const add = (a, b) => a + b;\n';
         return new Response(
           JSON.stringify({
+            model: sentModel,
             choices: [
               {
                 message: {

@@ -30,5 +30,5 @@ last_verified: 2026-07-03
 ## Skill Porting & Catalog Management
 
 - **Multi-Language Gating:** For platform-bridging skills (JNI, Sockets, AAudio/Oboe), the `file_extension_gate` must include both Kotlin and C++ file extensions (e.g. `[".kt", ".cpp", ".h"]`) to ensure activation across JVM and native NDK source scopes.
-- **Commit Integrity:** Stage and commit new skills and catalog changes locally to the current task branch immediately upon verification instead of leaving the workspace dirty.
+- **Commit Integrity:** Do not stage or commit merely because files are new. When the mission explicitly grants local commit authority, stage only the deterministic ship set after verification and staged-diff review; otherwise leave the worktree available for review. Follow `.agents/rules/05-github-workflow.md` for remote operations.
 - **Walkthrough Veracity:** Walkthroughs must detail only the mutations completed in the current session. They must not claim credit for pre-existing work and must explicitly identify legacy files that are intentional standalones (without a `v2` equivalent).
