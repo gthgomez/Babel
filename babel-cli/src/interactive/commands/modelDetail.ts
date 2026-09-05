@@ -24,6 +24,7 @@ import {
   type ResolvedModelPolicyEntry,
 } from '../../modelPolicy.js';
 import { getProviderCredentialStatus } from '../../runners/credentialHub.js';
+import { redactSecrets } from '../../utils/redaction.js';
 import { getRecentRuns } from '../utils.js';
 import { accentBright, muted, padRight, warning } from '../../ui/theme.js';
 
@@ -95,18 +96,20 @@ export interface LastRouteFacts {
 interface SnapshotCacheKey {
   sessionModel: string;
   offline: boolean;
+  policyPath: string;
   mtimeMs: number;
   size: number;
 }
 
 let snapshotCache: { key: SnapshotCacheKey; snapshot: ModelSnapshot | null } | null = null;
 
-function policyFileStamp(): { mtimeMs: number; size: number } {
+function policyFileStamp(): { path: string; mtimeMs: number; size: number } {
+  const policyPath = getPolicyPath();
   try {
-    const stats = fs.statSync(getPolicyPath());
-    return { mtimeMs: stats.mtimeMs, size: stats.size };
+    const stats = fs.statSync(policyPath);
+    return { path: policyPath, mtimeMs: stats.mtimeMs, size: stats.size };
   } catch {
-    return { mtimeMs: -1, size: -1 };
+    return { path: policyPath, mtimeMs: -1, size: -1 };
   }
 }
 
@@ -121,6 +124,7 @@ export function resolveModelSnapshot(sessionModel?: string): ModelSnapshot | nul
   const key: SnapshotCacheKey = {
     sessionModel: sessionModel ?? '',
     offline,
+    policyPath: stamp.path,
     mtimeMs: stamp.mtimeMs,
     size: stamp.size,
   };
@@ -334,11 +338,11 @@ export function renderModelWhy(input: ModelWhyInput = {}): string {
     const skipped = Array.isArray(wf.tiers_skipped) ? wf.tiers_skipped : [];
     if ((wf.tier_index ?? 0) > 0 || skipped.length > 0) {
       lines.push(
-        `    ${muted(padRight('Last run', 14))} ${warning(`fallback used — succeeded on '${wf.tier_succeeded ?? 'unknown'}'`)}${context}${skipped.length > 0 ? muted(` after ${skipped.join(', ')} (${wf.cascade_reason ?? 'reason not recorded'})`) : ''}`,
+        `    ${muted(padRight('Last run', 14))} ${warning(`fallback used — succeeded on '${wf.tier_succeeded ?? 'unknown'}'`)}${context}${skipped.length > 0 ? muted(` after ${skipped.join(', ')} (${wf.cascade_reason ? redactSecrets(wf.cascade_reason) : 'reason not recorded'})`) : ''} ${muted('(historical)')}`,
       );
     } else if (wf.tier_succeeded) {
       lines.push(
-        `    ${muted(padRight('Last run', 14))} first-tier success on ${accentBright(wf.tier_succeeded)}${context}`,
+        `    ${muted(padRight('Last run', 14))} first-tier success on ${accentBright(wf.tier_succeeded)}${context} ${muted('(historical)')}`,
       );
     }
     const upstream = lastObservedUpstream(wf);
@@ -403,10 +407,7 @@ function describeCredential(
  * One observation tier for the resolved backend, built only from run-bundle
  * evidence. Never issues network traffic and never claims reachability.
  */
-function describeObservations(
-  policy: ResolvedModelPolicy,
-  facts: LastRouteFacts | null,
-): { text: string; isWarning: boolean } | null {
+function describeObservations(facts: LastRouteFacts | null): { text: string; isWarning: boolean } | null {
   const wf = facts?.lastWaterfall ?? null;
   if (!wf) {
     return facts
@@ -419,19 +420,27 @@ function describeObservations(
   const lastFailure = [...attempts].reverse().find((a) => a.succeeded === false);
   if (lastSuccess) {
     return {
-      text: `success on '${lastSuccess.tier_name ?? wf.tier_succeeded ?? 'unknown'}'${context}${lastSuccess.upstream_provider ? muted(` — upstream '${lastSuccess.upstream_provider}'`) : ''}`,
+      text: `success on '${lastSuccess.tier_name ?? wf.tier_succeeded ?? 'unknown'}'${context}${lastSuccess.upstream_provider ? muted(` — upstream '${lastSuccess.upstream_provider}'`) : ''} (historical)`,
       isWarning: false,
     };
   }
   if (lastFailure) {
-    const detail = lastFailure.error_summary ? ` — ${lastFailure.error_summary.slice(0, 120)}` : '';
-    return { text: `failure on '${lastFailure.tier_name ?? 'unknown'}'${context}${detail}`, isWarning: true };
+    const detail = lastFailure.error_summary
+      ? ` — ${redactSecrets(lastFailure.error_summary.slice(0, 120))}`
+      : '';
+    return {
+      text: `failure on '${lastFailure.tier_name ?? 'unknown'}'${context}${detail} (historical)`,
+      isWarning: true,
+    };
   }
   if (wf.tier_succeeded) {
-    return { text: `success on '${wf.tier_succeeded}'${context}`, isWarning: false };
+    return { text: `success on '${wf.tier_succeeded}'${context} (historical)`, isWarning: false };
   }
   if ((wf.tier_index ?? 0) > 0) {
-    return { text: `fallback used${context}${wf.cascade_reason ? ` (${wf.cascade_reason})` : ''}`, isWarning: true };
+    return {
+      text: `fallback used${context}${wf.cascade_reason ? ` (${redactSecrets(wf.cascade_reason)})` : ''} (historical)`,
+      isWarning: true,
+    };
   }
   return { text: `no attempt-level observations in the most recent run bundle${context}`, isWarning: false };
 }
@@ -496,7 +505,7 @@ export function renderModelHealthForSnapshot(
     `    ${muted(padRight('Qualification', 14))} ${muted('not recorded — no live qualification evidence exists for this route')}`,
   );
   const facts = readLastRouteFacts(options.lastRunDir);
-  const observations = describeObservations(policy, facts);
+  const observations = describeObservations(facts);
   if (observations) {
     lines.push(
       `    ${muted(padRight('Observed', 14))} ${observations.isWarning ? warning(observations.text) : observations.text}${observations.isWarning ? '' : muted(' (historical)')}`,
@@ -511,7 +520,7 @@ export function renderModelHealthForSnapshot(
     lines.push(`    ${muted(padRight('Receipts', 14))} ${warning(receiptSummary)}`);
   }
   lines.push(
-    `    ${muted(padRight('Reachability', 14))} ${muted('live reachability not checked — no probe has been run')}`,
+    `    ${muted(padRight('Reachability', 14))} ${muted('live reachability not checked by this surface')}`,
   );
   lines.push(
     muted(`    To verify live: babel models ping --i-authorize-live --model ${policy.resolvedBackendKey}`),
@@ -570,7 +579,12 @@ export function renderModelDetail(snapshot: ModelSnapshot): string {
   if (policy.nativeToolUse) contextParts.push('native tools');
   lines.push(`    ${muted(padRight('Context', 10))} ${contextParts.join(' · ')}`);
   const costParts: string[] = [];
-  if (policy.approximateCostPerRunUsd !== undefined) {
+  // The per-run estimate is derived from the per-M costs; when the policy
+  // publishes neither, the resolver's ~$0.0000/run default is a fabricated
+  // zero, not a fact — unknown cost stays unknown.
+  const hasPublishedCost =
+    policy.estimatedCostPer1MInput !== undefined || policy.estimatedCostPer1MOutput !== undefined;
+  if (policy.approximateCostPerRunUsd !== undefined && hasPublishedCost) {
     costParts.push(`~$${policy.approximateCostPerRunUsd.toFixed(4)}/run`);
   }
   if (policy.estimatedCostPer1MInput !== undefined) {

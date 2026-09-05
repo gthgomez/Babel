@@ -629,6 +629,28 @@ test('model detail: a policy without cost metadata says so instead of rendering 
   assert.match(output, /cost unknown/);
 });
 
+test('model detail: production resolver shape (per-run estimate with no per-M inputs) never renders $0', () => {
+  // modelPolicy resolvers compute approximateCostPerRunUsd with `?? 0` inputs
+  // and set it unconditionally — this is the shape real policies produce for
+  // models with unpublished cost metadata.
+  const snapshot = {
+    source: 'auto' as const,
+    offline: false,
+    policy: makePolicy({ approximateCostPerRunUsd: 0 }),
+  };
+  const output = renderModelDetail(snapshot);
+  assert.doesNotMatch(output, /\$0\.0000\/run/);
+  assert.doesNotMatch(output, /~\$0/);
+  assert.match(output, /cost unknown/);
+  // With at least one published per-M cost, the per-run estimate is a fact.
+  const withCost = {
+    source: 'auto' as const,
+    offline: false,
+    policy: makePolicy({ approximateCostPerRunUsd: 0.0004, estimatedCostPer1MOutput: 0.18 }),
+  };
+  assert.match(renderModelDetail(withCost), /~\$0\.0004\/run/);
+});
+
 // ── Finding E: provider / gateway / upstream terminology is precise ─────────
 
 test('why: observed upstream is labeled historical; unexposed upstream says not recorded', () => {
