@@ -3,7 +3,7 @@
 **Status:** ACTIVE
 **Scope:** Default engineering behavior for Babel agents operating inside a granted repository and mission scope.
 **Authority:** This document clarifies agent behavior. Runtime enforcement, security controls, repository policy, and explicit user authority remain higher-order constraints.
-**Enforced counterpart:** `babel-cli/src/config/autonomyPolicy.ts` (with `autonomyEnforcement.ts`) implements the runtime authority taxonomy (Classes A–D), leases, and dispatch-time enforcement. This prose policy and that enforced taxonomy describe the same contract from two sides; where wording differs, the runtime is authoritative and this document must not be read as granting capabilities the enforced classes do not allow.
+**Enforced counterpart:** `babel-cli/src/config/autonomyPolicy.ts` (with `babel-cli/src/agent/autonomyEnforcement.ts`) implements the runtime authority taxonomy (Classes A–D), leases, and dispatch-time enforcement. This prose policy and that enforced taxonomy describe the same contract from two sides; where wording differs, the runtime is authoritative and this document must not be read as granting capabilities the enforced classes do not allow.
 
 ## Autonomous by default
 

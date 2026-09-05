@@ -98,7 +98,7 @@ filename similarity.
 SALVAGE_EXACT 24 · SALVAGE_ADAPT 5 · MISSING_CANONICAL 4 · DOC_ONLY_VALUE 2
 (some items carry two labels where a doc is both missing-canonical and
 adapted; every recovered file is accounted for exactly once by destination:
-PR-A 17 files, PR-B 22 files, PR-C 0 recovered files). No recovered item was
+PR-A 17 files, PR-B 23 files (11 untracked + 12 tracked) — all 40 recovered files accounted for; PR-A additionally carries its own authored additions on two of those files (CLAUDE.md invariants 7-9, the typecheck.yml drift-guard step), declared in the PR body). No recovered item was
 classified REJECT and none was silently discarded; the two adaptations are
 recorded above with their rationale.
 

@@ -64,7 +64,7 @@ Stop/go: **CAMPAIGN_READY_TO_EXECUTE** (Plan §E).
 The first post-#138 trust-plane re-certification was **PR #139** ("feat:
 product/runtime consolidation on the canonical trust plane", head
 `c5d533f04`, based directly on post-#138 main `31e7d7e0e`): its
-`trusted-control-plane` run completed **success** at 2026-09-04T19:33:20Z.
+`trusted-control-plane` run completed **success** at 2026-09-04T19:33:58Z (started 19:33:20Z).
 Earlier campaign notes that described #141 as "the first PR on the new main
 to pass the trust plane end-to-end" were wrong. Accurate distinctions:
 

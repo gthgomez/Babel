@@ -12,6 +12,10 @@
 //      phase-table rows (first/only/never before) — verified claims belong
 //      in prose with evidence.
 //
+// Known scope limits (deliberate, for a 7-row terse table): the marker-mixing
+// check covers only COMPLETE+IN PROGRESS, and the superlative regex matches
+// superlative-then-PR-reference ordering only.
+//
 // Exit 0 = consistent; exit 1 = violations (listed).
 
 import { readFileSync } from 'node:fs';
