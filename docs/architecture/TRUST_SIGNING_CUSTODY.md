@@ -228,8 +228,9 @@ old key valid + new key introduced
   compromised key, add the replacement, file the incident report, and
   re-certify any trust state resting on artifacts signed by the compromised
   key.
-- **Expiration policy:** keys carry no mandatory crypto expiry (the verifier
-  has none today); policy expiry is procedural — rotate on any suspected
+- **Expiration policy:** keys carry no mandatory crypto expiry at the key
+  level (the registry has none; the verifiers do enforce per-artifact
+  `expires_at`); policy expiry is procedural — rotate on any suspected
   exposure, at minimum annually, and always when an owner device or token
   holding custody is replaced.
 

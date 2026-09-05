@@ -17,6 +17,12 @@ Core principle:
 > lost key is an inconvenience, not a permanent deadlock — and it must be
 > strictly harder to run than the ceremony it replaces.
 
+Sanctioning: break-glass is legitimate **only when TrustRootUpgradeV1 is
+impossible** — the signing authority itself is lost, compromised, or
+corrupted beyond use. Any trust-root change that *can* ride the ordinary
+ceremony must ride the ordinary ceremony; recovery is the deadlock exit, not
+a shortcut lane.
+
 ## Triggers
 
 | Scenario | Entry state |
@@ -26,7 +32,7 @@ Core principle:
 | Both keys lost | `AUTHORITY_UNAVAILABLE_DETECTED` |
 | Suspected compromise (either key) | `AUTHORITY_UNAVAILABLE_DETECTED` (compromise variant: immediate retire, no overlap window) |
 | Registry corruption (invalid registry on `main`) | `RECOVERY_DECLARED` |
-| Signing service unavailable but keys intact | *not* a recovery trigger — fix or replace the service (custody doc); custody is UNKNOWN, not lost |
+| Signing service unavailable but keys intact | *not* a recovery trigger — fix or replace the service (custody doc); key custody is intact, not lost |
 
 ## Recovery authentication — what establishes owner authority?
 
@@ -122,7 +128,10 @@ Modeled on the bounded #138 migration, improved with the following tightenings:
    (`GET /repos/{owner}/{repo}/rulesets` for each active ruleset) and stored
    in the incident report.
 4. **Exception:** remove exactly one required check (`trusted-control-plane`)
-   from exactly the `protect-main` ruleset, for exactly this PR. No bypass
+   from exactly the `protect-main` ruleset, for exactly this PR. Note the
+   platform reality: a ruleset's required checks apply to **all** open PRs
+   targeting `main`, so the exception window is repo-wide — the incident
+   report must record that no other PR merged during the window. No bypass
    actors are added; no other check is touched; the exception window is
    measured and recorded.
 5. **Merge:** the recovery PR merges only when all remaining required checks
@@ -130,8 +139,12 @@ Modeled on the bounded #138 migration, improved with the following tightenings:
 6. **Restore:** the ruleset is restored immediately after merge and verified
    byte-for-byte against the snapshot. Any drift is an incident.
 7. **Verify:** the new authority completes one full end-to-end signing cycle
-   under the restored ruleset (new reviewer key issues a receipt; new
-   supervisor key authorizes — using TrustRootUpgradeV1 as the exercise).
+   under the restored ruleset — the new reviewer key issues a receipt for a
+   live candidate (the recovery-closure report PR is a natural vehicle), and
+   the new supervisor key authorizes a protected change under
+   TrustRootUpgradeV1. If no protected change is immediately legitimate, the
+   supervisor exercise rides the next one; the incident report records which
+   vehicle was used and the interim state until it completes.
 8. **Re-certify:** the next ordinary PR based on the new `main` must obtain a
    green `trusted-control-plane` with **no** exception — that run is the
    proof the restored trust plane works end-to-end.
