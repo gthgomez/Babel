@@ -131,6 +131,7 @@ Not every command writes every file. The important contract is predictability:
 - `--lite-only` must refuse truly Full-required work instead of silently widening scope.
 - Provider failures must produce an actionable next step.
 - Verification failure must not be reported as success.
+- Trust/review/certification commands: exit code 0 means the command achieved the requested trusted success state (e.g. `babel review certify` exits 0 only for CERTIFIED) — never merely that the state machine executed without crashing. Rejected reviews, configuration blockers, and receipts awaiting verification exit nonzero with the precise status in the output.
 - Mutation without checkpoint must be refused or explicitly reported as unrecoverable.
 - `babel plan` must succeed without Manual Bridge (`babel apply`, clipboard handoff, or `manual/plan.json`).
 - full `babel run` remains for advanced pipeline controls under `babel advanced`.

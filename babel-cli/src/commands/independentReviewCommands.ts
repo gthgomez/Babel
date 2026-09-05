@@ -42,6 +42,40 @@ function configuredService(name: string): JsonServiceCommand | undefined {
   }
 }
 
+/**
+ * Shell exit code for `babel review certify`.
+ *
+ * Invariant: exit 0 means the command achieved the requested trusted success
+ * state (CERTIFIED) — never merely that the state machine executed without
+ * crashing. A rejected review, a configuration blocker, or a receipt awaiting
+ * verification must all exit nonzero so shell automation can never mistake a
+ * rejected review for success.
+ *
+ * Taxonomy: 0 certified · 2 repair required (reviewer rejected the candidate)
+ * · 3 configuration/external blocker · 4 verification or certification-
+ * lifecycle failure · 1 unknown non-certified terminal state (fail closed).
+ */
+export function resolveReviewCertifyExitCode(status: string): number {
+  switch (status) {
+    case 'CERTIFIED':
+      return 0;
+    case 'REPAIR_REQUIRED':
+      return 2;
+    case 'REVIEWER_CONFIGURATION_REQUIRED':
+    case 'REVIEW_ORCHESTRATOR_REQUIRED':
+    case 'ISSUER_CONFIGURATION_REQUIRED':
+    case 'SUPERVISOR_CONFIGURATION_REQUIRED':
+    case 'STOPPED_EXTERNAL_CAPABILITY':
+    case 'STOPPED_AMBIGUOUS_OBJECTIVE':
+      return 3;
+    case 'CERTIFICATION_RETRY_REQUIRED':
+    case 'READY_FOR_TRUST_VERIFICATION':
+      return 4;
+    default:
+      return 1;
+  }
+}
+
 /** Register review certification. Trusted issuer custody is intentionally not a CLI option. */
 export function registerIndependentReviewCommands(program: Command): void {
   const review = new Command('review').description('Run independent review and trusted certification workflows');
@@ -85,7 +119,7 @@ export function registerIndependentReviewCommands(program: Command): void {
         if (result.verdict) process.stdout.write(`Reviewer verdict: ${result.verdict.verdict}\n`);
         for (const next of result.next) process.stdout.write(`Next: ${next}\n`);
       }
-      process.exitCode = result.status === 'CERTIFIED' || result.status === 'REPAIR_REQUIRED' ? 0 : 1;
+      process.exitCode = resolveReviewCertifyExitCode(result.status);
     });
   program.addCommand(review);
 }

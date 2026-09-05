@@ -162,6 +162,17 @@ numstat digest, posted as a PR comment — plus marking the PR out of draft
   only on TrustRootUpgradeV1 signed authorization** (protected paths). Until
   it merges, every HIGH-tier PR must post review evidence *before* the gate
   runs, and re-trigger the workflow (close/reopen) after the comment lands.
+- **Trust ceremony safety (added 2026-09-05):** ceremony coordinates now come
+  exclusively from the machine-generated manifest (`tools/trust-ceremony.mjs`;
+  digest semantics cross-verified against the gate own
+  Get-AgentProtectedDiffDigest), staleness validation fails closed with
+  precise reasons, and PR-body ceremony sections are marker-delimited
+  generated blocks (#144 body regenerated accordingly; pre-rebase coordinates
+  marked SUPERSEDED - DO NOT SIGN). `babel review certify` now exits 0 only
+  for CERTIFIED (2 = repair required, 3 = configuration/external blocker,
+  4 = verification/lifecycle state), and authority construction is confined
+  to the trusted-service-only services/reviewTrustedAuthority.ts module,
+  enforced by reviewCustody.test.ts.
 - ~~`.agents/rules/10-independent-review-policy.md` is referenced by
   `docs/architecture/TRUST_ROOT_UPGRADE.md` on `main` but is not present~~
   **resolved**: the canonical policy file (with the AUTONOMOUS tier

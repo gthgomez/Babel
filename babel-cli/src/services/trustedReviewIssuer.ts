@@ -1,7 +1,6 @@
 import { createHash, type KeyObject } from 'node:crypto';
 
 import {
-  createIndependentReviewAuthorityV1,
   type IndependentReviewReceiptV2,
   type IndependentReviewerClassV1,
   type IndependentReviewModeV1,
@@ -118,10 +117,10 @@ export function createTrustedReviewIssuer(options: TrustedReviewIssuerOptions): 
   };
 }
 
-/** Build the authority object inside a trusted service process, never in the builder. */
-export function createFileBackedTrustedReviewAuthority(input: Parameters<typeof createIndependentReviewAuthorityV1>[0]): TrustedReviewAuthority {
-  return createIndependentReviewAuthorityV1(input);
-}
+// createFileBackedTrustedReviewAuthority has moved to
+// `./reviewTrustedAuthority.js` — a trusted-service-only module. Authority
+// construction must never be importable from builder-facing code; see
+// `reviewCustody.test.ts` for the architectural enforcement.
 
 export function trustedReviewContractDigest(): string {
   return createHash('sha256').update('babel-independent-review-v1').digest('hex');
