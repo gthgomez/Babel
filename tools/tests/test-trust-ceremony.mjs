@@ -473,6 +473,18 @@ try {
         return { code: error.status, out: String(error.stdout ?? '') };
       }
     };
+    // Entry-point guard: the CLI must actually dispatch on POSIX too. The
+    // historical guard built 'file:///' + argv[1], which silently no-op'd
+    // (exit 0, no output) on Linux absolute paths.
+    const noArgs = (() => {
+      try {
+        return { code: 0, err: execFileSync('node', [toolPath], { encoding: 'utf8' }) };
+      } catch (error) {
+        return { code: error.status, err: String(error.stderr ?? '') };
+      }
+    })();
+    assert.equal(noArgs.code, 1, 'CLI with no arguments must print usage and exit 1');
+    assert.match(noArgs.err, /usage:/);
     // Offline coordinates without --expect-ancestry: ancestry is unknown →
     // fail closed with the deterministic reason (never a silent pass).
     const omitted = run(['--expect-base', manifest.base_sha, '--expect-head', manifest.head_sha]);

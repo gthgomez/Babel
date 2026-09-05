@@ -34,7 +34,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export const MANIFEST_SCHEMA_VERSION = 2;
@@ -489,13 +489,14 @@ function main() {
   handler(parseArgs(rest));
 }
 
-// Run the CLI only when this module is the entry point (exact path match -
-// an endsWith check would also match tools/tests/test-trust-ceremony.mjs and
-// make every test import exit 1 via the usage path).
-const invokedPath = process.argv[1]
-  ? fileURLToPath(new URL('file:///' + process.argv[1].replace(/\\/g, '/')))
-  : '';
-const selfPath = fileURLToPath(import.meta.url);
+// Run the CLI only when this module is the entry point (exact resolved-path
+// match - an endsWith check would also match tools/tests/test-trust-ceremony.mjs
+// and make every test import exit 1 via the usage path). The path MUST be
+// resolved with realpath on both sides: a naive 'file:///' + argv[1] URL
+// construction breaks on POSIX absolute paths (file:////src/...), which made
+// every CLI invocation a silent no-op (exit 0, no output) on Linux.
+const invokedPath = process.argv[1] ? realpathSync(process.argv[1]) : '';
+const selfPath = realpathSync(fileURLToPath(import.meta.url));
 if (invokedPath.toLowerCase() === selfPath.toLowerCase()) {
   main();
 }
