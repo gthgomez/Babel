@@ -25,6 +25,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 export const MANIFEST_SCHEMA_VERSION = 1;
 export const MANIFEST_KIND = 'trust_root_upgrade_ceremony_manifest_v1';
@@ -114,7 +115,7 @@ export function buildManifest(input) {
 export function validateStaleness(manifest, live) {
   const reasons = [];
   if (manifest.repository !== live.repository) reasons.push('repository_mismatch');
-  if (manifest.pr_number !== live.prNumber) reasons.push('pr_number_changed');
+  if (Number(manifest.pr_number) !== Number(live.prNumber)) reasons.push('pr_number_changed');
   if (manifest.base_sha !== live.baseSha) reasons.push('base_sha_changed');
   if (manifest.head_sha !== live.headSha) reasons.push('head_sha_changed');
   const manifestPaths = [...(manifest.protected_paths ?? [])].sort();
@@ -206,7 +207,7 @@ function liveCandidateFromGithub(repository, prNumber) {
   const derived = collectManifestFromGit(repository, prNumber, prData.baseSha, prData.headSha);
   return {
     repository,
-    prNumber,
+    prNumber: Number(prNumber),
     prState: (prData.state ?? '').toUpperCase(),
     baseSha: prData.baseSha,
     headSha: prData.headSha,
@@ -314,6 +315,13 @@ function main() {
   handler(parseArgs(rest));
 }
 
-if (process.argv[1] && process.argv[1].endsWith('trust-ceremony.mjs')) {
+// Run the CLI only when this module is the entry point (exact path match -
+// an endsWith check would also match tools/tests/test-trust-ceremony.mjs and
+// make every test import exit 1 via the usage path).
+const invokedPath = process.argv[1]
+  ? fileURLToPath(new URL('file:///' + process.argv[1].replace(/\\/g, '/')))
+  : '';
+const selfPath = fileURLToPath(import.meta.url);
+if (invokedPath.toLowerCase() === selfPath.toLowerCase()) {
   main();
 }
