@@ -1,0 +1,151 @@
+# Trust Root Recovery (break-glass rekey)
+
+<!--
+status: ACTIVE
+last_verified: 2026-09-05
+-->
+
+Formal lost/compromised-key recovery mode for the Babel trust root. This
+document designs the protocol; it does not execute it. Companion docs:
+[TRUST_SIGNING_CUSTODY.md](./TRUST_SIGNING_CUSTODY.md) (custody design and
+routine rotation), [TRUST_ROOT_UPGRADE.md](./TRUST_ROOT_UPGRADE.md)
+(TrustRootUpgradeV1), [TRUST_CEREMONY_LIFECYCLE.md](./TRUST_CEREMONY_LIFECYCLE.md).
+
+Core principle:
+
+> **Recovery must never become a convenient bypass.** It exists so that a
+> lost key is an inconvenience, not a permanent deadlock — and it must be
+> strictly harder to run than the ceremony it replaces.
+
+## Triggers
+
+| Scenario | Entry state |
+| --- | --- |
+| Reviewer private key lost/unavailable | `AUTHORITY_UNAVAILABLE_DETECTED` |
+| Supervisor private key lost/unavailable | `AUTHORITY_UNAVAILABLE_DETECTED` |
+| Both keys lost | `AUTHORITY_UNAVAILABLE_DETECTED` |
+| Suspected compromise (either key) | `AUTHORITY_UNAVAILABLE_DETECTED` (compromise variant: immediate retire, no overlap window) |
+| Registry corruption (invalid registry on `main`) | `RECOVERY_DECLARED` |
+| Signing service unavailable but keys intact | *not* a recovery trigger — fix or replace the service (custody doc); custody is UNKNOWN, not lost |
+
+## Recovery authentication — what establishes owner authority?
+
+Distinguishing current capability from recommended future capability, without
+inventing capability Babel does not have:
+
+**Current capability (what the protocol may rely on today):**
+
+- GitHub repository-owner authority: the `protect-main` ruleset can only be
+  edited by a repository administrator; that edit is itself authenticated by
+  the GitHub account (platform MFA as configured on that account).
+- Local machine administrator on the single-owner Windows environment.
+- No cryptographic owner identity beyond GitHub/platform accounts; no
+  hardware security credential; no offline recovery secret; no pre-registered
+  emergency key exist today. **The protocol must not pretend otherwise.**
+
+**Recommended future capability (adopt deliberately, not during an incident):**
+
+- Hardware-backed FIDO2 MFA on the GitHub owner account;
+- offline recovery codes in sealed physical storage;
+- an annually *exercised* recovery drill so the owner path is known-good
+  before it is ever needed.
+
+Layered model: GitHub owner authority is the floor; hardware MFA and drilled
+procedure are hardening. The break-glass path authenticates the *repository
+owner*, never the builder.
+
+## State machine
+
+```text
+NORMAL
+  ↓ authority unavailable or compromised detected
+AUTHORITY_UNAVAILABLE_DETECTED
+  ↓ owner declares recovery (explicit owner act, recorded)
+RECOVERY_DECLARED
+  ↓ exact candidate SHA frozen; no unrelated changes permitted
+RECOVERY_CANDIDATE_FROZEN
+  ↓ owner identity confirmed through the layered model above
+OWNER_IDENTITY_CONFIRMED
+  ↓ byte-for-byte ruleset snapshot recorded (required checks + enforcement)
+RULESET_SNAPSHOT
+  ↓ temporary administrative exception, narrowly scoped:
+  ↓   only `trusted-control-plane` may be relaxed, only for this PR
+BOUNDED_EXCEPTION
+  ↓ recovery PR merges (rekey-only candidate, all other checks green)
+REKEY_MERGE
+  ↓ ruleset restored immediately; verified byte-for-byte vs snapshot;
+  ↓ zero bypass actors throughout
+RULESET_RESTORED
+  ↓ new authority exercised end-to-end (challenge → receipt / authorization)
+NEW_AUTHORITY_VERIFIED
+  ↓ next ordinary PR re-certifies the trust plane with no exception
+MANDATORY_RECERTIFICATION
+  ↓ durable incident/recovery report filed
+RECOVERY_CLOSED
+```
+
+Any unexpected mutation (unrelated change in the recovery PR, an additional
+check removed, a bypass actor appearing, snapshot mismatch at restore)
+returns to a safe earlier state — most commonly
+`RECOVERY_CANDIDATE_FROZEN` — and halts until reconciled. Unexpected
+mutations are never "absorbed."
+
+## Recovery candidate constraints
+
+A break-glass rekey PR is restricted to an explicit allowlist:
+
+```text
+config/independent-review-keys.json
+config/trusted-supervisor-keys.json
+required recovery documentation (the incident/recovery report)
+minimal verifier compatibility changes — only if absolutely necessary,
+  justified in the report
+```
+
+No product features. No provider work. No unrelated refactors. The recovery
+PR must reject mixed-purpose changes mechanically (path allowlist check in
+review, and the exact changed-path set recorded in the report).
+
+Replacement registries carry **replacement public keys only** — never private
+material, never operator-identifying metadata.
+
+## Procedure (bounded-exception mechanics)
+
+Modeled on the bounded #138 migration, improved with the following tightenings:
+
+1. **Declare:** owner declares recovery in the incident report (durable,
+   dated, stating trigger and scope).
+2. **Freeze:** exact candidate head SHA for the rekey PR is recorded before
+   any exception is granted; the head may only change by returning to
+   `RECOVERY_CANDIDATE_FROZEN` and re-freezing.
+3. **Snapshot:** the active rulesets are captured byte-for-byte
+   (`GET /repos/{owner}/{repo}/rulesets` for each active ruleset) and stored
+   in the incident report.
+4. **Exception:** remove exactly one required check (`trusted-control-plane`)
+   from exactly the `protect-main` ruleset, for exactly this PR. No bypass
+   actors are added; no other check is touched; the exception window is
+   measured and recorded.
+5. **Merge:** the recovery PR merges only when all remaining required checks
+   are green at the frozen head and the path allowlist holds.
+6. **Restore:** the ruleset is restored immediately after merge and verified
+   byte-for-byte against the snapshot. Any drift is an incident.
+7. **Verify:** the new authority completes one full end-to-end signing cycle
+   under the restored ruleset (new reviewer key issues a receipt; new
+   supervisor key authorizes — using TrustRootUpgradeV1 as the exercise).
+8. **Re-certify:** the next ordinary PR based on the new `main` must obtain a
+   green `trusted-control-plane` with **no** exception — that run is the
+   proof the restored trust plane works end-to-end.
+9. **Close:** the incident/recovery report is completed (timeline, snapshot
+   IDs, exception window, artifacts signed by the new authority) and the
+   state machine returns to `NORMAL`.
+
+## Why this is harder than the ceremony it replaces
+
+- It requires explicit repository-owner action at four separate points
+  (declare, confirm identity, grant exception, confirm restore);
+- it produces a durable public record with exact SHAs and snapshot
+  comparisons;
+- it grants no standing capability — every use starts from
+  `AUTHORITY_UNAVAILABLE_DETECTED` and ends with mandatory re-certification;
+- and routine [rotation](./TRUST_SIGNING_CUSTODY.md), which is strictly
+  easier, removes most of the situations that would ever reach for break-glass.
