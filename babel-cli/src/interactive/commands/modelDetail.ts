@@ -508,7 +508,7 @@ export function renderModelHealthForSnapshot(
   const observations = describeObservations(facts);
   if (observations) {
     lines.push(
-      `    ${muted(padRight('Observed', 14))} ${observations.isWarning ? warning(observations.text) : observations.text}${observations.isWarning ? '' : muted(' (historical)')}`,
+      `    ${muted(padRight('Observed', 14))} ${observations.isWarning ? warning(observations.text) : observations.text}`,
     );
   } else {
     lines.push(
