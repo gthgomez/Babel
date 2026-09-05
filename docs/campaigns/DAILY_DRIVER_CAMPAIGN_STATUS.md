@@ -171,11 +171,10 @@ numstat digest, posted as a PR comment — plus marking the PR out of draft
   image tooling; if a phase needs it, use the documented approval path (`npm install-scripts approve`).
 - Windows full-suite local parallelism flakes (P2 debt, reconciliation report §8) — run
   required suites serially when validating PR-4 locally.
-- Local `smallFix` test failures (8/19) were environmental (provider path
-  needs `OPENROUTER_API_KEY`, absent locally; identical 11/8 split verified
-  on the untouched pre-PR head). This PR converts those cases to explicit
-  skips when the credential is absent, and normalizes line endings in the
-  portable-workflow golden comparison — see "Test-environment classification".
+- Local `smallFix` failures (8/19) and the portable-golden CRLF failure are
+  **fixed at root** in this PR (stale mock fixture; raw-bytes source hash) —
+  see "Test-environment classification" for the corrected analysis and the
+  withdrawn earlier attribution.
 - Evaluation runs (Phase 6) consume paid API quota — use fixed, budget-capped configurations
   and record actual spend in `docs/evals/DAILY_DRIVER_EVAL_V1.md`.
 
@@ -187,10 +186,10 @@ the 2026-09-05 verification rows):
 
 | Class | Symptom | Rule |
 | --- | --- | --- |
-| Live-credential-dependent | `smallFix` suite failures without `OPENROUTER_API_KEY` (provider request path) | Deterministic suites must not silently require live credentials — such tests now skip explicitly when the credential is absent instead of masquerading as regressions |
-| Platform checkout artifact | portable-workflow golden byte-compare fails on CRLF checkouts (green on Linux CI) | Golden comparison normalizes line endings; content drift still fails closed |
+| Stale mock fixture (corrected 2026-09-05) | `smallFix` suite failed 8/19 locally. **Root cause was not missing credentials** (the tests use a fake key and a mocked `fetch`): the mock responses predated the exact-live-route policy and lacked the observed model identity `validateObservedModelId` now requires, so the runner refused the synthetic response. Fixed at root: the fixtures echo the model identity the runner actually sent — **19/19 pass** | Mock fixtures must satisfy the current runner contract; suites not wired into CI drift silently |
+| Platform checkout artifact | portable-workflow golden byte-compare failed on CRLF checkouts. Root cause: the golden manifest hashes `workflow.ts` as raw file bytes, so a CRLF checkout could never reproduce the LF-committed hash. Fixed: hash EOL-normalized canonical content and normalize line endings in the file comparison — content drift still fails closed | Golden comparison pins canonical content, not checkout bytes |
 | Parallel-interference flakiness | 7 suites fail only under full-suite parallelism on Windows, pass serially (documented P2 debt) | Run required suites serially locally; CI ordering is authoritative |
-| Pre-existing-claim rule | "pre-existing" used to excuse failures | **A "pre-existing" claim is only valid when the same failure is reproduced on the appropriate control/base state (or equivalent recorded evidence exists)** — encoded in `CLAUDE.md` |
+| Pre-existing-claim rule | "pre-existing" used to excuse failures | **A "pre-existing" claim is only valid when the same failure is reproduced on the appropriate control/base state (or equivalent recorded evidence exists)** — encoded in `CLAUDE.md`. Applied here: the 11/8 split was reproduced on the untouched pre-PR head before being claimed pre-existing; the earlier "passes in CI" remark was unsupported (the suite is not wired into CI) and is withdrawn |
 
 ## Handoff
 

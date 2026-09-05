@@ -260,7 +260,11 @@ describe('portable workflow manifest and golden synchronization', () => {
       'portable-workflow-v1-valid.json MUST exist',
     );
 
-    // Generate into temp directory and compare byte-for-byte
+    // Generate into temp directory and compare content-for-content.
+    // Line endings are a checkout artifact (core.autocrlf), not canonical
+    // content, so comparison normalizes CRLF → LF; any real content drift
+    // still fails closed.
+    const normalizeEol = (value: string): string => value.replace(/\r\n/g, '\n');
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'babel-golden-check-'));
     try {
       const { files } = generateGoldenArtifacts(tmpDir);
@@ -273,9 +277,9 @@ describe('portable workflow manifest and golden synchronization', () => {
         );
         const committedContent = fs.readFileSync(committedFilePath, 'utf-8');
         assert.equal(
-          committedContent,
-          expectedContent,
-          `Committed golden file '${filename}' must match regenerated canonical artifact byte-for-byte`,
+          normalizeEol(committedContent),
+          normalizeEol(expectedContent),
+          `Committed golden file '${filename}' must match regenerated canonical artifact (line-ending-normalized)`,
         );
       }
     } finally {

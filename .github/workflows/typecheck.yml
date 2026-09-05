@@ -56,6 +56,8 @@ jobs:
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-content-policy.ps1 -RepoRoot .
       - name: Check canonical repository independence
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-canonical-independence.ps1 -RepoRoot .
+      - name: Check campaign status consistency
+        run: node tools/check-campaign-status.mjs
       - name: Public policy runtime matrix
         run: pwsh -NoProfile -ExecutionPolicy Bypass -Command "& './tools/tests/test-public-content-policy-runtime.ps1'"
 
