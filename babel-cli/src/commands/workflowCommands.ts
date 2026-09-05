@@ -120,6 +120,7 @@ import { loadPlanHandoff } from '../agent/planHandoff.js';
 import { runPlanReviewLane } from '../agent/lanes/planReviewLane.js';
 import { resolveFuzzyWorkspaceDirectory } from '../services/pathScanner.js';
 import { preflightRequestedModelPolicy } from './workflowModelPolicy.js';
+import { registerIndependentReviewCommands } from './independentReviewCommands.js';
 
 export { buildSmallFixLitePayload, normalizeSmallFixProvider, resolveSmallFixProviderForCommand };
 export const READ_ONLY_LITE_TOOLS = [
@@ -1745,6 +1746,7 @@ async function handleSmokeCommand(options: { project: string }): Promise<void> {
 }
 
 export function registerWorkflowCommands(program: Command): void {
+  registerIndependentReviewCommands(program);
   const addSessionOptions = (command: Command): Command =>
     command
       .option('-p, --project <name>', 'Target project')

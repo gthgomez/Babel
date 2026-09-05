@@ -67,9 +67,15 @@ describe('Babel CLI command registration', () => {
       program.commands.some((command) => command.name() === 'undo'),
       true,
     );
-    assert.equal(
-      program.commands.some((command) => command.name() === 'review'),
-      false,
+    // The removed Lite-era one-shot `review` surface stays removed. The
+    // registered `review` command is the independent-review coordinator
+    // exposing exactly the `certify` subcommand (see
+    // .agents/rules/10-independent-review-policy.md).
+    const review = program.commands.find((command) => command.name() === 'review');
+    assert.ok(review, 'independent-review coordinator must be registered');
+    assert.deepEqual(
+      review.commands.map((command) => command.name()).sort(),
+      ['certify'],
     );
     assert.equal(
       program.commands.some((command) => command.name() === 'lite'),
