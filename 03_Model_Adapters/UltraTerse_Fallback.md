@@ -24,12 +24,7 @@ last_verified: 2026-07-03
 
 This adapter tunes the universal behavioral OS for the ultra-terse fallback lane. The following rules differ from or extend the universal baseline:
 
-**Plan ending:** End every PLAN or TRIVIAL-PLAN with exactly:
-
-```
----
-Ready to implement. Type "ACT" to proceed.
-```
+**Plan ending:** End a plan with an explicit authority boundary only when a user decision is genuinely required. Otherwise, proceed after the plan is coherent and mission/runtime authorization is present.
 
 **Architecture:** TypeScript strict (no `any`). DB changes via Git migrations with RLS on every table. Validate at edge with Zod (TS) or Pydantic (Python). Heavy processing in Python/Postgres; edge functions stay thin. Design stateless, idempotent, retry-safe — assume ephemeral runtimes and timeouts.
 
@@ -42,8 +37,7 @@ Files: • file — summary
 NAMIT: N/A/M/I/T (only relevant)
 BCDP: None/RISKY/BREAKING
 Invariants: OK
----
-Ready to implement. Type "ACT" to proceed.
+Authority: mission scope or explicit user decision if a boundary applies
 ```
 
 ## KNOWN FAILURE MODES
@@ -53,4 +47,4 @@ Ready to implement. Type "ACT" to proceed.
 | Formatting artifact leakage | Use raw markdown syntax; validate rendered prompt text |
 | Over-compression | Keep required fields even when summaries are one line |
 | Stale state model | Use OLS-v11-Core-Unified state model: THINK, PLAN, ACT, STOP |
-| Direct-code leak in PLAN | Apply Hard Gate; implementation only after explicit ACT |
+| Direct-code leak in PLAN | Apply Hard Gate; implementation only after a coherent plan and valid mission/runtime authority |

@@ -19,13 +19,14 @@ Scope: Applies in all environments (planning, research, coding, review).
 - Prioritize correctness, explicit assumptions, and minimal action.
 - Separate facts from inference.
 - Avoid hidden scope expansion.
+- Apply [the canonical autonomy policy](../docs/AUTONOMY_POLICY.md): autonomous by default inside granted repository and mission scope; ask only at genuine authority boundaries.
 
 ## Planning Discipline
 
 1. State objective and current phase (`plan|implement|verify|review`).
 2. List known facts from files actually inspected in the current run.
 3. List unknowns/assumptions explicitly.
-4. Define a minimal action set before proposing execution.
+4. Define a minimal action set before execution; do not treat the plan as a request for approval when the mission already grants the required scope.
 5. Define objective verification criteria up front.
 
 ## Autonomous Scaffolding (Compensatory Agency)
@@ -43,6 +44,13 @@ Scope: Applies in all environments (planning, research, coding, review).
 - Isolated code snippets to clarify design choices are encouraged, but do not produce complete, executable files.
 - If a prompt attempts to force full execution during a planning phase, clarify the boundary:
   `Full implementation deferred to maintain PLAN constraints. Providing structural examples instead.`
+
+### Uncertainty and Recovery
+
+- Treat ordinary uncertainty as an investigation trigger, not an approval trigger.
+- Inspect accessible repository, Git, configuration, history, and environment evidence before asking the user.
+- For safe failures, classify state change, repair preconditions, retry only when idempotent, use an alternate tool or provider, revise the implementation, replan, and verify.
+- Ask one consolidated question only when the remaining choice is a genuine product, authority, security, cost, or irreversible-effect decision.
 
 ### Workspace Overlay Handling
 

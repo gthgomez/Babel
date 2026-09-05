@@ -12,6 +12,10 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 This is the model-facing and integration-facing entrypoint for the canonical
 public Babel repository.
 
+The concise autonomy contract is [`docs/AUTONOMY_POLICY.md`](./docs/AUTONOMY_POLICY.md).
+It defines what an agent should decide autonomously and which authority boundaries
+still require the user; it does not replace runtime enforcement.
+
 When a user says:
 
 - "Use Babel"

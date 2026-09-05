@@ -2,7 +2,7 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-09-04
+last_verified: 2026-09-05
 -->
 
 # Daily Driver Campaign — Status
@@ -12,15 +12,15 @@ Living status document. Updated at each phase boundary and before any PR is open
 - Campaign: Reconciled Platform → Exceptional Daily Coding Agent
 - Baseline: [DAILY_DRIVER_CAMPAIGN_BASELINE.md](./DAILY_DRIVER_CAMPAIGN_BASELINE.md)
 - Plan: [DAILY_DRIVER_CAMPAIGN_PLAN.md](./DAILY_DRIVER_CAMPAIGN_PLAN.md)
-- Working branch: `agent/daily-driver` (clean worktree from `origin/main`)
 - Baseline SHA: `015c7b374a3b2e67f7a5814508db0bd7f14ed263`
+- Canonical branch: `main` (phase work lands per-phase PR; `agent/daily-driver` merged and retired)
 
 ## Phase Tracker
 
 | Phase | Scope | State | PR | Notes |
 | --- | --- | --- | --- | --- |
 | 0 | Baseline audit | **COMPLETE** (2026-09-04) | — | GitHub state + 5 deep audits reconciled against `main` @ `015c7b3` |
-| 1 | Model Intelligence operator surface | **IN PROGRESS** — correctness repairs landed, validation underway | PR-1 | `/model show\|why\|health`, truthful status bar/header, `/status` provider+fallback rows, `babel models list`; review findings A–E repaired; see Verification Log |
+| 1 | Model Intelligence operator surface | **COMPLETE** (2026-09-05) | PR-1 = [#141](https://github.com/gthgomez/Babel/pull/141), merged as `bc1b4452587c6cd45679ac3a3b1eaca2b7cbaea5` | `/model show\|why\|health`, truthful status bar/header, `/status` provider+fallback rows, `babel models list`; review findings A–E repaired + isolated-review blocking finding fixed; all six required checks green at merge (incl. `trusted-control-plane`, `blockers: []`, AUTONOMOUS tier) |
 | 2 | Provider reliability UX | PENDING | PR-2 | After PR-1 |
 | 3 | Daily Chat/TUI polish | PENDING | PR-3 | After PR-2 |
 | 4 | Windows execution polish | PENDING | PR-4 | Independent lane; before Phase 6 |
@@ -57,6 +57,46 @@ Stop/go: **CAMPAIGN_READY_TO_EXECUTE** (Plan §E).
 | 2026-09-05 | `tools/check-public-content-policy.ps1` | repaired tree | pass |
 | 2026-09-05 | `babel models list` real-output smoke | repaired renderer | pass — the available-models table renders `n/a` for `deepseek-v4-pro-openrouter` (previously fabricated `$0/M`); single-tier route renders `none — single-tier route` |
 | 2026-09-05 | Isolated read-only review round 1 (`autonomous_review_evidence_v1` intake) | full diff `015c7b3...a552107` | **REQUEST_CHANGES — 1 blocking finding, accepted and fixed**: the resolver computes `approximateCostPerRunUsd` from `?? 0` inputs and sets it unconditionally, so `/model show` rendered a fabricated `~$0.0000/run` for models without cost metadata (production shape; the original test masked it with a shape real resolvers never produce). Fix: the per-run estimate renders only when at least one per-M cost is published; regression test uses the production shape; verified via the real resolver for `deepseek-v4-pro-openrouter`. Non-blocking notes adopted: policy path in the snapshot-cache key, `(historical)` markers on failure/last-run rows, `redactSecrets` on rendered error text, reachability wording tightened |
+| 2026-09-05 | GitHub merge record | PR #141 | **MERGED** 2026-09-05T05:27:31Z as `bc1b4452587c6cd45679ac3a3b1eaca2b7cbaea5`; all six required checks green at head `e3872bd` (trusted-control-plane pass, `blockers: []`, AUTONOMOUS review tier, no exception); post-merge `main` Public Release Gate success |
+
+### Trust-plane history correction (verified against GitHub, 2026-09-05)
+
+The first post-#138 trust-plane re-certification was **PR #139** ("feat:
+product/runtime consolidation on the canonical trust plane", head
+`c5d533f04`, based directly on post-#138 main `31e7d7e0e`): its
+`trusted-control-plane` run completed **success** at 2026-09-04T19:33:20Z.
+Earlier campaign notes that described #141 as "the first PR on the new main
+to pass the trust plane end-to-end" were wrong. Accurate distinctions:
+
+- **#139** — first post-#138 ordinary PR proving the upgraded trust plane
+  end-to-end (CERTIFIED-era default path, no evidence comment required under
+  the pre-crash gate behavior).
+- **#141** — later successful reconfirmation during the Daily Driver
+  campaign, notable as the first end-to-end exercise of the **AUTONOMOUS
+  review tier** (isolated read-only reviewer evidence + ready-for-review +
+  close/reopen retrigger) after the evidence-transport crash was diagnosed.
+
+Superlatives (`first`, `only`, `never before`) in canonical records must be
+checked against GitHub history before inclusion — this correction is
+recorded as a standing rule in `CLAUDE.md`.
+
+### Snapshot-cache measurement (2026-09-05)
+
+`resolveModelSnapshot`'s hot path (cache hit: key construction + one
+`statSync` of the policy file) measured **~46 µs/call (~21,800 calls/s)** on
+Windows; cold resolution ~2.3–3.6 ms. Status-bar renders happen at most once
+per turn/keystroke, so the stamp-validation cost is negligible against
+terminal I/O — measured, documented, left unchanged (correctness outranks
+micro-optimization).
+
+### Recovery preservation (2026-09-05)
+
+Unlanded recovery-era work (26 modified + 14 untracked files on the retired
+local checkout) was preserved durably before cleanup and audited against
+current `main`: recovery ref `recovery/unlanded-20260905` @ `f0d38614`
+(stash `0d48c6e9`, base `213e7469`), plus an independent git bundle and
+source archive with SHA256 checksums outside the repository. Full
+classification matrix: [RECOVERY_UNLANDED_20260905_AUDIT.md](../reconciliation/RECOVERY_UNLANDED_20260905_AUDIT.md).
 
 ### Repairs included in PR-1
 
@@ -103,36 +143,54 @@ property access (`agent-pr-gate-common.psm1` `Test-AgentAutonomousReviewEvidence
 robustness bug on `main`'s gate scripts (base-rooted, so it fires for *any*
 HIGH-tier PR without evidence), **not** a PR-#141 regression, and the gate
 scripts are protected trust-root paths — repairing them belongs to the
-trust-plane lane (Phase 5), not this PR. The legitimate closure path for
-#141 is the documented AUTONOMOUS review tier
-(`docs/architecture/TRUST_ROOT_UPGRADE.md`): isolated read-only reviewer
-evidence bound to the exact base/head and diff numstat digest, posted as a PR
-comment — plus marking the PR out of draft (`pr_is_draft` was the second
-blocker). Per the post-#138 re-certification requirement, #141 must obtain a
-green `trusted-control-plane` with no exception.
+trust-plane lane, not this PR. The legitimate closure path for #141 was the
+documented AUTONOMOUS review tier (`docs/architecture/TRUST_ROOT_UPGRADE.md`):
+isolated read-only reviewer evidence bound to the exact base/head and diff
+numstat digest, posted as a PR comment — plus marking the PR out of draft
+(`pr_is_draft` was the second blocker). #141 obtained a green
+`trusted-control-plane` with no exception at head `e3872bd`.
 
 ## Open Risks / Watch Items
 
-- **Trust-plane gate robustness (main, not PR-#141):** the `trusted-control-plane`
-  gate crashes (`pr_gate_exception`) on any HIGH-tier PR that has no review-evidence
-  comment, because the evidence transport writes a `transport_error` stub that the
-  strict-mode evidence validator cannot read. Repairing it requires touching
-  protected trust-root paths (`scripts/agent-pr-gate-common.psm1`) and therefore a
-  dedicated trust-plane PR with the full TrustRootUpgradeV1 path — scheduled for the
-  Phase 5 lane. Until then, every HIGH-tier PR must post review evidence *before*
-  the gate runs, and re-trigger the workflow (e.g. close/reopen) after the comment lands.
-- `.agents/rules/10-independent-review-policy.md` is referenced by
-  `docs/architecture/TRUST_ROOT_UPGRADE.md` on `main` but is not present on `main`.
+- **Trust-plane gate robustness (main):** the `trusted-control-plane` gate
+  crashes (`pr_gate_exception`) on any HIGH-tier PR that has no
+  review-evidence comment, because the evidence transport writes a
+  `transport_error` stub that the strict-mode evidence validator cannot
+  read. The repair (deterministic fail-closed evidence handling + regression
+  matrix + a comment-triggered re-evaluation so the lifecycle no longer
+  needs close/reopen) is engineered in the trust-plane lane and **waits
+  only on TrustRootUpgradeV1 signed authorization** (protected paths). Until
+  it merges, every HIGH-tier PR must post review evidence *before* the gate
+  runs, and re-trigger the workflow (close/reopen) after the comment lands.
+- ~~`.agents/rules/10-independent-review-policy.md` is referenced by
+  `docs/architecture/TRUST_ROOT_UPGRADE.md` on `main` but is not present~~
+  **resolved**: the canonical policy file (with the AUTONOMOUS tier
+  documented) is restored by this PR, together with the `AUTONOMY_POLICY.md`
+  contract and the rules/adapter alignment that reference it.
 - `sharp` install scripts blocked by npm policy locally — only affects optional remote-UI
   image tooling; if a phase needs it, use the documented approval path (`npm install-scripts approve`).
 - Windows full-suite local parallelism flakes (P2 debt, reconciliation report §8) — run
   required suites serially when validating PR-4 locally.
-- Local `smallFix` test failures (8/19) are environmental: the tests drive a provider
-  path that requires `OPENROUTER_API_KEY`, which is not set in the local validation
-  environment. Verified pre-existing on the untouched PR branch (same 11/8 split); the
-  same suite passes in CI (`linux-validation` green at the PR head).
+- Local `smallFix` test failures (8/19) were environmental (provider path
+  needs `OPENROUTER_API_KEY`, absent locally; identical 11/8 split verified
+  on the untouched pre-PR head). This PR converts those cases to explicit
+  skips when the credential is absent, and normalizes line endings in the
+  portable-workflow golden comparison — see "Test-environment classification".
 - Evaluation runs (Phase 6) consume paid API quota — use fixed, budget-capped configurations
   and record actual spend in `docs/evals/DAILY_DRIVER_EVAL_V1.md`.
+
+## Test-environment classification (2026-09-05)
+
+Classification of the recurring local-vs-CI validation noise that interfered
+with trustworthy PR certification during Phase 1 (full detail and evidence in
+the 2026-09-05 verification rows):
+
+| Class | Symptom | Rule |
+| --- | --- | --- |
+| Live-credential-dependent | `smallFix` suite failures without `OPENROUTER_API_KEY` (provider request path) | Deterministic suites must not silently require live credentials — such tests now skip explicitly when the credential is absent instead of masquerading as regressions |
+| Platform checkout artifact | portable-workflow golden byte-compare fails on CRLF checkouts (green on Linux CI) | Golden comparison normalizes line endings; content drift still fails closed |
+| Parallel-interference flakiness | 7 suites fail only under full-suite parallelism on Windows, pass serially (documented P2 debt) | Run required suites serially locally; CI ordering is authoritative |
+| Pre-existing-claim rule | "pre-existing" used to excuse failures | **A "pre-existing" claim is only valid when the same failure is reproduced on the appropriate control/base state (or equivalent recorded evidence exists)** — encoded in `CLAUDE.md` |
 
 ## Handoff
 

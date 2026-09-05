@@ -19,6 +19,7 @@ This is the **public, canonical source** for the Babel coding agent (`gthgomez/B
 | You need… | Look in… |
 |-----------|----------|
 | What is Babel, how to invoke it | `INTEGRATION.md` |
+| Autonomy defaults and user-decision boundaries | `docs/AUTONOMY_POLICY.md` |
 | System topology, contracts, runtime | `PROJECT_CONTEXT.md` |
 | Full catalog of every prompt/skill/rule | `prompt_catalog.yaml` |
 | How the CLI routes tasks (the orchestrator) | `00_System_Router/OLS-v9-Orchestrator.md` |
@@ -94,6 +95,8 @@ For the full layer model description and interpretation rules, see [INTEGRATION.
 
 The TUI provides chat, plan, and deep modes with automatic session tracking, resume, and cost monitoring. For what Babel is and how to launch it, see [INTEGRATION.md](./INTEGRATION.md).
 
+The default engineering stance is [autonomous by default inside granted scope](./docs/AUTONOMY_POLICY.md): investigate and resolve ordinary engineering uncertainty, implement, verify, recover, and continue without repeated approval. Runtime enforcement and explicit authority boundaries remain decisive; this policy does not create capabilities the harness does not implement.
+
 When working on the Babel control plane itself (prompt stack assembly, routing, catalog changes), load the relevant Babel layers per the [Startup Sequence](#startup-sequence) above. Do not improvise the Babel stack from memory.
 
 ## Relationship: This File vs babel-cli/CLAUDE.md
@@ -121,6 +124,9 @@ CI/CD runs on public GitHub Actions workflows. No private infrastructure is refe
 4. **Global breaking changes** — edits to `01_Behavioral_OS/` or `RULES_CORE.md`/`RULES_GUARD.md` affect ALL downstream agents across ALL projects
 5. **`prompt_catalog.yaml`** is the single source of truth for prompt versioning and file paths — no prompt file is canonical unless listed here
 6. **Prompt/runtime co-evolution** — if `babel-cli/src/agentContracts.ts` or any `build*Task` function in `pipeline.ts` is changed, the corresponding prompt file must be updated in the same change set. Runtime-only changes that extend a model contract are incomplete changes.
+7. **Operator-surface epistemic honesty** — user-facing surfaces must never transform uncertainty into plausible certainty. Known is known; historical observations are labeled historical; configured is not healthy; unknown stays unknown. Forbidden transformations (each is regression-tested on the Model Intelligence surfaces, `babel-cli/src/interactive/commands/modelDetail.test.ts`): credential env-var present → valid; configured provider → reachable; configured fallback → ready; missing cost → `$0`; historical upstream → current upstream; model enabled → qualified; missing evidence → false success; missing evidence → program exception instead of a clean blocked state. Details: `docs/architecture/operator-status-taxonomy.md`.
+8. **Historical-superlative discipline** — claims like "first", "only", or "never before" about repository history (which PR did X first, which run was the only one) must be verified against GitHub state before entering a canonical record. (Corrected example: #139, not #141, was the first post-#138 trust-plane re-certification — see `docs/campaigns/DAILY_DRIVER_CAMPAIGN_STATUS.md`.)
+9. **"Pre-existing" claims are evidence-gated** — a failure may only be declared pre-existing (not caused by the change under test) when the same failure is reproduced on the appropriate control/base state, or equivalent recorded evidence exists.
 
 ## High-Risk Zones
 

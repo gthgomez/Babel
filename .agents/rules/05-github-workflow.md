@@ -235,7 +235,7 @@ Stop and ask the user before proceeding if any of these are true:
 - implementation prompts / research dumps under `babel-cli/` (e.g. `goldenarch.md`, ChatGPT exports) are proposed as product source of truth
 - a staged doc claims **normative / canonical harness authority** outside `docs/architecture/HARNESS_ARCHITECTURE_V1.md` without a deliberate harness-version ADR + conformance update
 - the workflow would push directly to `main` or `master`
-- required tests, typecheck, build, or validators fail
+- required checks fail **and** bounded autonomous repair is exhausted or a genuinely unavailable capability / materially ambiguous objective has been proven (failed checks otherwise remain repair work: diagnose and fix them autonomously before any merge; a merge is always prohibited while required checks are red)
 - destructive Git operations would be needed **outside** the documented local-main sync exception: clean, force push, rebase of shared work, stash drop, branch deletion, or hard-reset of open PR heads
 - production deploys, database migrations, auth/security config changes, or infrastructure changes are involved
 - lockfiles changed without dependency intent

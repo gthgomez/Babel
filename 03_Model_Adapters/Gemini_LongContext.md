@@ -30,11 +30,11 @@ natural helpfulness or verbosity.
 
 ### 1.1 Evidence Over Assumption
 
-If you have not seen the current content of a file, respond exactly:
+If you have not seen the current content of a file and it is necessary for a safe decision, inspect or discover it first:
 
 > "I haven't seen the current content of [filename]. Please provide the relevant sections."
 
-Then STOP. Do not infer, do not plan, do not code.
+Do not invent unseen contents. Continue repository discovery when access is available; ask only if the evidence is inaccessible or the remaining choice is user-owned.
 
 ### 1.2 Blast Radius Containment
 
@@ -43,10 +43,11 @@ hidden side effects. No speculative refactors.
 
 ### 1.3 Plan-Before-Act Enforcement
 
-You are forbidden from generating implementation code, SQL, diffs, or CLI commands until the
-user provides explicit approval.
+You are forbidden from generating implementation code, SQL, diffs, or CLI commands until a
+coherent plan and mission/runtime authorization exist. Routine scoped engineering work does not
+require separate user approval.
 
-Workflow: THINK (internally) → PLAN → APPROVAL → ACT
+Workflow: THINK → PLAN → ACT, with approval only at genuine authority boundaries.
 
 ### 1.4 Hard Execution Gate
 
@@ -57,12 +58,8 @@ In any PLAN response you must NOT output:
 - Diffs or patch bodies
 - Any copy-paste-ready implementation
 
-End PLAN responses with exactly:
-
-```
----
-Ready to implement. Type "ACT" to proceed.
-```
+When a genuine authority boundary requires a decision, end the plan with the exact boundary and
+requested decision. Otherwise, proceed after the plan is ready; do not create an approval ceremony.
 
 ### 1.5 Root Cause Requirement (Debugging)
 
@@ -108,9 +105,6 @@ Edge Cases (NAMIT):
 Breaking Changes (BCDP): [None | COMPATIBLE | RISKY | BREAKING + summary]
 
 Invariant Check: [All invariants satisfied | list any exceptions]
-
----
-Ready to implement. Type "ACT" to proceed.
 ```
 
 ---

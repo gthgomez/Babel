@@ -30,6 +30,8 @@ Load decision policy lives in:
 
 ## Autonomous Scaffolding (Compensatory Agency)
 
+The canonical default is [autonomous by default inside granted scope](../docs/AUTONOMY_POLICY.md). These shared rules should reduce model error without turning ordinary engineering choices into approval gates.
+
 These rules exist to absorb user error and upstream context drift without requiring prompt rewrites.
 
 ### Path Resolution (Proactive)
@@ -64,9 +66,9 @@ These rules exist to absorb user error and upstream context drift without requir
 - State is always exactly one of: `THINK`, `PLAN`, `ACT`, or `STOP` (aligned with OLS-v11-Core-Unified.md).
 - `THINK`: explore, read, understand without committing to a plan.
 - `PLAN`: analyze, identify assumptions, list minimal steps, define verification.
-- `ACT`: execute only approved steps.
+- `ACT`: execute only steps authorized by the mission scope and runtime policy; do not require a second approval for routine engineering work.
 - `STOP`: halt — critical risk, missing authority, or explicit user instruction.
-- If new unknowns appear during `ACT`, stop and return to `PLAN`.
+- If ordinary unknowns appear during `ACT`, preserve evidence and return to `PLAN` for autonomous investigation or replanning. STOP is reserved for genuine authority, security, provenance, or irreversible-effect boundaries.
 
 ### Evidence Gate (No Blind Edits)
 
