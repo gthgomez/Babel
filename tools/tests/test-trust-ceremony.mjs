@@ -15,6 +15,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 
 import {
@@ -273,7 +274,11 @@ try {
       targetRefHeadSha: currentTargetHead,
       targetHeadIsAncestorOfCandidate: false,
     }));
-    assert.deepEqual(reasons, ['target_branch_advanced', 'candidate_not_based_on_current_target']);
+    assert.deepEqual(reasons, [
+      'target_branch_advanced',
+      'pr_base_not_current_target',
+      'candidate_not_based_on_current_target',
+    ]);
   });
 
   check('#144/#145 scenario: PR object retains old base while target advances — rejected', () => {
@@ -287,7 +292,39 @@ try {
       targetRefHeadSha: currentTargetHead, // live refs/heads/main advanced
       targetHeadIsAncestorOfCandidate: false,
     }));
-    assert.deepEqual(reasons, ['target_branch_advanced', 'candidate_not_based_on_current_target']);
+    assert.deepEqual(reasons, [
+      'target_branch_advanced',
+      'pr_base_not_current_target',
+      'candidate_not_based_on_current_target',
+    ]);
+  });
+
+  check('manifest whose recorded base is not the current target is rejected (invariant B)', () => {
+    // A manifest generated while the candidate was NOT ceremony-ready (base
+    // T0, target already T1) must never pass a later preflight even after the
+    // candidate is rebased onto T1 and every per-coordinate comparison
+    // matches: the recorded base itself is not the current target head.
+    const notReadyManifest = buildManifest({
+      repository: REPO,
+      prNumber: 144,
+      prState: 'OPEN',
+      baseRef: EXPECTED_BASE_REF,
+      baseSha, // stale recorded base
+      targetRefHeadSha: currentTargetHead,
+      mergeBaseSha: currentTargetHead,
+      headSha: rebasedSha, // candidate contains the target head
+      builderIdentity: 'codex-implementation',
+      protectedPaths: [changedProtected],
+      protectedDiffDigest: expectedDigest,
+      fullDiffNumstatDigest: numstatDigest,
+      nowIso: NOW,
+    });
+    const reasons = validateStaleness(notReadyManifest, liveNow({
+      headSha: rebasedSha,
+      targetRefHeadSha: currentTargetHead,
+      targetHeadIsAncestorOfCandidate: true,
+    }));
+    assert.deepEqual(reasons, ['pr_base_not_current_target']);
   });
 
   check('pre-v2 manifest matching PR metadata exactly is still rejected', () => {
@@ -366,7 +403,11 @@ try {
       artifactTargetHeadSha: generationTargetHead,
       stage: 'review',
     }));
-    assert.deepEqual(reasons, ['target_branch_advanced', 'target_head_changed_after_review']);
+    assert.deepEqual(reasons, [
+      'target_branch_advanced',
+      'pr_base_not_current_target',
+      'target_head_changed_after_review',
+    ]);
   });
 
   check('target branch advancing after supervisor authorization voids the authorization', () => {
@@ -376,7 +417,11 @@ try {
       artifactTargetHeadSha: generationTargetHead,
       stage: 'authorization',
     }));
-    assert.deepEqual(reasons, ['target_branch_advanced', 'target_head_changed_after_authorization']);
+    assert.deepEqual(reasons, [
+      'target_branch_advanced',
+      'pr_base_not_current_target',
+      'target_head_changed_after_authorization',
+    ]);
   });
 
   check('artifact stage binding with an unchanged target head is accepted', () => {
@@ -413,6 +458,34 @@ try {
       fetchCompare: () => ({ status: 'identical' }),
     }), true);
     assert.deepEqual(calls[0], { repo: REPO, base: 'a'.repeat(40), head: 'b'.repeat(40) });
+  });
+
+  // ── Offline CLI mode pins the fail-closed ancestry default ──────────────────
+  check('offline CLI mode fails closed when ancestry is not explicitly stated', () => {
+    const manifestPath = join(dir, 'manifest-offline.json');
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+    const toolPath = fileURLToPath(new URL('../trust-ceremony.mjs', import.meta.url));
+    const run = (extraArgs) => {
+      try {
+        const out = execFileSync('node', [toolPath, 'validate-staleness', '--manifest', manifestPath, ...extraArgs], { encoding: 'utf8' });
+        return { code: 0, out };
+      } catch (error) {
+        return { code: error.status, out: String(error.stdout ?? '') };
+      }
+    };
+    // Offline coordinates without --expect-ancestry: ancestry is unknown →
+    // fail closed with the deterministic reason (never a silent pass).
+    const omitted = run(['--expect-base', manifest.base_sha, '--expect-head', manifest.head_sha]);
+    assert.equal(omitted.code, 1, 'omitted --expect-ancestry must not pass');
+    assert.match(omitted.out, /candidate_not_based_on_current_target/);
+    // A lone --expect-ancestry selects offline mode (all other coordinates
+    // default from the manifest) and must not fall through to the live path.
+    const explicit = run(['--expect-ancestry', 'true']);
+    assert.equal(explicit.code, 0);
+    assert.match(explicit.out, /CEREMONY_MANIFEST_CURRENT/);
+    const falseExplicit = run(['--expect-ancestry', 'false']);
+    assert.equal(falseExplicit.code, 1);
+    assert.match(falseExplicit.out, /candidate_not_based_on_current_target/);
   });
 } finally {
   rmSync(dir, { recursive: true, force: true });

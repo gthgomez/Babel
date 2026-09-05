@@ -1,6 +1,6 @@
 <!---
 status: ACTIVE
-last_verified: 2026-09-04
+last_verified: 2026-09-05
 -->
 
 # TrustRootUpgradeV1 — safe post-bootstrap trust-root upgrades

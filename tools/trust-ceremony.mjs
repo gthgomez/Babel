@@ -105,7 +105,12 @@ function gitExitStatus(args, options = {}) {
     sh('git', args, options);
     return 0;
   } catch (error) {
-    return typeof error.status === 'number' ? error.status : 1;
+    // Numeric statuses are definitive git answers (0 ancestor, 1 not). A
+    // non-numeric failure (git missing, killed by signal) is NOT a definitive
+    // "not an ancestor" — map it to the missing-object path so the caller
+    // falls back to the GitHub compare API instead of mislabeling an
+    // infrastructure failure as ancestry failure.
+    return typeof error.status === 'number' ? error.status : 128;
   }
 }
 
@@ -212,6 +217,10 @@ export function validateStaleness(manifest, live) {
     // Invariant B/D: the live target head must still be the head the manifest
     // bound at generation time.
     if (manifest.target_ref_head_sha !== live.targetRefHeadSha) reasons.push('target_branch_advanced');
+    // Invariant B: the recorded base must BE the current target head, so a
+    // manifest generated for a not-ceremony-ready candidate can never pass a
+    // later preflight even when every per-coordinate comparison matches.
+    if (manifest.base_sha !== live.targetRefHeadSha) reasons.push('pr_base_not_current_target');
     // Invariant C: the candidate must contain the current target head. An
     // undeterminable ancestry (input undefined) fails closed under the same
     // code — a preflight may never pass on unknown ancestry.
@@ -380,8 +389,12 @@ function commandPreflight(options) {
 
 function commandValidateStaleness(options) {
   const manifest = JSON.parse(readFileSync(options.manifest, 'utf8'));
+  // Any explicit --expect-* coordinate selects offline comparison mode; a
+  // lone --expect-ancestry must never be silently ignored by falling through
+  // to the live path.
+  const wantsOffline = Object.keys(options).some((key) => key.startsWith('expect_'));
   let live;
-  if (options.expectBase || options.expectHead) {
+  if (wantsOffline) {
     // Offline comparison against explicitly provided expected coordinates.
     // Ancestry must be stated explicitly (--expect-ancestry true|false);
     // omitted ancestry fails closed for schema-v2 manifests.

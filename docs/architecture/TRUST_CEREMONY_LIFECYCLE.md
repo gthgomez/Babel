@@ -77,6 +77,7 @@ Failure of any invariant invalidates every downstream ceremony artifact.
 | `target_ref_changed` | PR no longer targets the ref the manifest bound |
 | `base_ref_mismatch` | PR does not target the protected branch (`main`) at all |
 | `target_branch_advanced` | live target head differs from the manifest's `target_ref_head_sha` |
+| `pr_base_not_current_target` | manifest's recorded base is not the current target head — a manifest generated for a not-ceremony-ready candidate can never pass a later preflight (invariant B) |
 | `candidate_not_based_on_current_target` | live target head is not an ancestor of the candidate (undeterminable ancestry also fails closed here) |
 | `target_head_changed_after_review` | target head moved after a review artifact recorded its target binding (`--artifact-target-head` + `--stage review`) |
 | `target_head_changed_after_authorization` | same, for a supervisor authorization (`--stage authorization`) |
