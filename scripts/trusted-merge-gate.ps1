@@ -42,6 +42,9 @@ try {
   $args = @(
     '-NoProfile', '-NonInteractive', '-File', (Join-Path $materialized 'agent-pr-gate.ps1'),
     '-PR', $PR, '-RepoRoot', $resolvedRepo, '-ReviewedHeadSha', $ReviewedHeadSha,
+    # The gate reads the protected trust-root inventory from this exact commit,
+    # keeping the protection rules and the gate logic on one immutable base.
+    '-BaseSha', $BaseSha,
     '-IndependentReviewReceiptPath', $IndependentReviewReceiptPath,
     '-ReviewChallengeLedgerPath', $ReviewChallengeLedgerPath,
     '-AutonomousReviewEvidencePath', $AutonomousReviewEvidencePath,

@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "kind": "babel_trust_root_inventory_v1",
+  "description": "Canonical protected trust-root inventory: every repository-controlled component in the trusted authorization execution closure. Governs trust-root change detection in the base-rooted merge gate, ceremony coordinate generation, and boundary tests. Changes to this file are themselves a protected trust-root modification and require TrustRootUpgradeV1 authorization. The inventory that governs a merge is always the one carried by the merge-gate base commit, never the candidate.",
+  "protected_paths": [
+    ".github/workflows/public-pr-metadata.yml",
+    ".github/workflows/trusted-control-plane.yml",
+    ".github/workflows/typecheck.yml",
+    "config/independent-review-keys.json",
+    "config/trust-root-paths.json",
+    "config/trusted-supervisor-keys.json",
+    "scripts/agent-git-common.psm1",
+    "scripts/agent-pr-gate-common.psm1",
+    "scripts/agent-pr-gate.ps1",
+    "scripts/bootstrap-trust-root.ps1",
+    "scripts/materialize-independent-review-receipt.ps1",
+    "scripts/trusted-merge-gate.ps1",
+    "scripts/verify-authority-activation.mjs",
+    "scripts/verify-independent-review.mjs",
+    "scripts/verify-recovery-scope.ps1",
+    "scripts/verify-trust-root-upgrade.mjs",
+    "tools/tests/test-trust-root-boundaries.ps1",
+    "tools/tests/test-trust-root-upgrade.mjs"
+  ],
+  "non_authoritative_allowlist": [
+    {
+      "path": "tools/trust-ceremony.mjs",
+      "reason": "Ceremony coordinate producer only: holds no keys, and every artifact it produces is re-verified and re-digested by the base-rooted gate before any merge decision."
+    },
+    {
+      "path": "tools/tests/test-trust-ceremony.mjs",
+      "reason": "Test suite for ceremony tooling; not part of the trusted authorization execution path."
+    },
+    {
+      "path": "tools/tests/test-agent-pr-gate-evidence.ps1",
+      "reason": "Defense-in-depth regression suite; the authoritative evidence validation lives in the base-rooted gate module, not in this test."
+    },
+    {
+      "path": "tools/tests/test-agent-pr-gate.ps1",
+      "reason": "Test suite for the gate; not part of the trusted authorization execution path."
+    },
+    {
+      "path": "scripts/agent-preflight.ps1",
+      "reason": "Local developer preflight helper; never invoked by the trusted workflow and carries no merge authority."
+    },
+    {
+      "path": "scripts/agent-worktree.ps1",
+      "reason": "Local worktree helper; never invoked by the trusted workflow and carries no merge authority."
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "kind": "babel_canonical_ordering_vectors_v1",
+  "spec": "ordinal bytewise UTF-8 ordering of strings, compared byte by byte; a proper prefix sorts before its extensions",
+  "consumers": [
+    "scripts/agent-pr-gate-common.psm1 (Get-AgentCanonicalOrderUtf8 / Get-AgentCanonicalSortedUtf8)",
+    "tools/trust-ceremony.mjs (compareUtf8 / canonicalSort)",
+    "scripts/verify-trust-root-upgrade.mjs (compareUtf8)"
+  ],
+  "cases": [
+    {
+      "name": "ascii_paths_sort_by_first_byte",
+      "input": ["scripts/gate.ts", ".github/workflows/ci.yml", "config/keys.json", "docs/readme.md"],
+      "expected": [".github/workflows/ci.yml", "config/keys.json", "docs/readme.md", "scripts/gate.ts"]
+    },
+    {
+      "name": "uppercase_sorts_before_lowercase",
+      "input": ["alpha", "Bravo", "alice", "Bob"],
+      "expected": ["Bob", "Bravo", "alice", "alpha"]
+    },
+    {
+      "name": "ascii_punctuation_byte_order",
+      "input": ["a_z.ts", "a-b.ts", "a.b.ts", "ab.ts"],
+      "expected": ["a-b.ts", "a.b.ts", "a_z.ts", "ab.ts"]
+    },
+    {
+      "name": "proper_prefix_before_extension",
+      "input": ["abc.txt", "ab", "ab.txt"],
+      "expected": ["ab", "ab.txt", "abc.txt"]
+    },
+    {
+      "name": "numeric_tie_broken_by_byte_not_magnitude",
+      "input": ["file10.txt", "file2.txt", "file1.txt"],
+      "expected": ["file1.txt", "file10.txt", "file2.txt"]
+    },
+    {
+      "name": "non_ascii_sorts_after_ascii_bytes",
+      "input": ["zeta.txt", "éclair.txt"],
+      "expected": ["zeta.txt", "éclair.txt"]
+    },
+    {
+      "name": "astral_character_sorts_by_utf8_byte_order",
+      "input": ["\uFFFD.txt", "😀.txt"],
+      "expected": ["\uFFFD.txt", "😀.txt"]
+    },
+    {
+      "name": "empty_then_space_then_letter",
+      "input": ["a", " ", ""],
+      "expected": ["", " ", "a"]
+    },
+    {
+      "name": "real_gate_script_paths_hyphen_before_dot",
+      "input": [
+        "scripts/agent-pr-gate.ps1",
+        "scripts/agent-pr-gate-common.psm1",
+        "scripts/agent-git-common.psm1"
+      ],
+      "expected": [
+        "scripts/agent-git-common.psm1",
+        "scripts/agent-pr-gate-common.psm1",
+        "scripts/agent-pr-gate.ps1"
+      ]
+    }
+  ]
+}

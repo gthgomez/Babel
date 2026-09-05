@@ -115,6 +115,48 @@ review, and the exact changed-path set recorded in the report).
 Replacement registries carry **replacement public keys only** — never private
 material, never operator-identifying metadata.
 
+**Machine check.** The path allowlist is enforced mechanically, not by
+reviewer attention. Before staging a recovery PR — and re-run immediately
+before the recovery merge — the operator must run:
+
+```powershell
+pwsh -NoProfile -File scripts/verify-recovery-scope.ps1 -BaseSha <base> -HeadSha <head>
+```
+
+Any changed path outside the allowlist exits non-zero with
+`RECOVERY_SCOPE_VIOLATION` and the candidate is not a legal recovery
+candidate.
+
+## Recovery window (no unrelated merge can ride the exception)
+
+A ruleset's required checks apply to all open PRs targeting `main`, so the
+bounded exception window is repo-wide. The window is therefore mechanically
+bounded, not merely recorded:
+
+1. **Precondition** before any required check is relaxed:
+
+   ```text
+   OPEN_NON_RECOVERY_PRS == 0
+   ```
+
+   If any unrelated PR is open, it must merge through the full ordinary
+   ceremony first, or be closed; the exception is not granted until the
+   condition holds. Record the live PR list in the incident report at this
+   moment.
+
+2. **Re-check immediately before the recovery merge.** If another PR opened
+   or changed after the exception was granted:
+
+   ```text
+   RECOVERY_WINDOW_BLOCKED
+   ```
+
+   The merge is aborted until the window is exclusive again. No unrelated
+   merge can occur while the bounded exception is active.
+
+3. The exception window (grant time, merge time, PR list at both moments) is
+   part of the incident report.
+
 ## Procedure (bounded-exception mechanics)
 
 Modeled on the bounded #138 migration, improved with the following tightenings:
@@ -126,7 +168,9 @@ Modeled on the bounded #138 migration, improved with the following tightenings:
    `RECOVERY_CANDIDATE_FROZEN` and re-freezing.
 3. **Snapshot:** the active rulesets are captured byte-for-byte
    (`GET /repos/{owner}/{repo}/rulesets` for each active ruleset) and stored
-   in the incident report.
+   in the incident report **with a SHA-256 snapshot hash** over the captured
+   JSON (ruleset id, required checks, strictness, enforcement, bypass actors,
+   allowed merge methods, review-thread policy).
 4. **Exception:** remove exactly one required check (`trusted-control-plane`)
    from exactly the `protect-main` ruleset, for exactly this PR. Note the
    platform reality: a ruleset's required checks apply to **all** open PRs
@@ -137,7 +181,14 @@ Modeled on the bounded #138 migration, improved with the following tightenings:
 5. **Merge:** the recovery PR merges only when all remaining required checks
    are green at the frozen head and the path allowlist holds.
 6. **Restore:** the ruleset is restored immediately after merge and verified
-   byte-for-byte against the snapshot. Any drift is an incident.
+   byte-for-byte against the snapshot (recomputed snapshot hash must equal
+   the recorded hash). Any drift is an incident:
+
+   ```text
+   RECOVERY_RULESET_RESTORE_FAILED
+   ```
+
+   The incident stays open until exact equality is restored and verified.
 7. **Verify:** the new authority completes one full end-to-end signing cycle
    under the restored ruleset — the new reviewer key issues a receipt for a
    live candidate (the recovery-closure report PR is a natural vehicle), and

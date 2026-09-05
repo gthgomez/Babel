@@ -78,6 +78,12 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Test trust-ceremony tooling and staleness matrix
         run: node tools/tests/test-trust-ceremony.mjs
+      - name: Test trust-root upgrade verifier
+        run: node tools/tests/test-trust-root-upgrade.mjs
+      - name: Test authority activation (proof-of-possession) verifier
+        run: node tools/tests/test-authority-activation.mjs
+      - name: Test canonical ordering parity (Node)
+        run: node tools/tests/test-canonical-ordering.mjs
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: "22"
@@ -88,6 +94,8 @@ jobs:
         working-directory: babel-cli
       - name: Test gate evidence regression matrix
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/tests/test-agent-pr-gate-evidence.ps1
+      - name: Test canonical ordering parity (PowerShell)
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/tests/test-canonical-ordering.ps1
       - name: Typecheck CLI
         run: npm run typecheck
         working-directory: babel-cli

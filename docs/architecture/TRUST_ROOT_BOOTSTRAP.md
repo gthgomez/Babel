@@ -23,3 +23,25 @@ private counterparts must be provisioned by the repository owner in an
 isolated review/supervisor environment; builder execution must never receive
 either private key. This PR is not merge-certifiable until that custody is
 independently established.
+
+## Custody outcome (2026-09-05 bootstrap-history audit)
+
+The condition this document stated — private counterparts "must be
+provisioned by the repository owner" before the trust root is certifiable —
+was **never verifiably completed**:
+
+- reviewer proof-of-possession history: `NOT_FOUND`;
+- supervisor proof-of-possession history: `NOT_FOUND`;
+- the reviewer key was silently re-keyed (`trusted-reviewer-ed25519-v1` →
+  `trusted-reviewer-ed25519-v2`) on the day both were introduced, with no
+  possession ceremony recorded;
+- no custody-completion record, signing-service configuration, or signed
+  ceremony artifact exists anywhere in repository history.
+
+Both registered public keys are therefore classified
+`LEGACY_UNPROVEN_AUTHORITY` (see
+[TRUST_SIGNING_CUSTODY.md](./TRUST_SIGNING_CUSTODY.md)): registered public
+roots whose private counterparts may exist offline, may never have been
+preserved, or may never have been generated. Only an owner proof-of-possession
+ceremony or the recovery lane can resolve this. Unknown stays unknown until
+evidence changes it.

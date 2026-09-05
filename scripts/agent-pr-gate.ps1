@@ -8,6 +8,12 @@ param(
   [string]$ExpectedRepository = 'gthgomez/Babel',
   [string]$ExpectedBaseBranch = 'main',
   [string]$ReviewedHeadSha = '',
+  # Commit the gate logic itself was materialized from (trusted-merge-gate
+  # forwards its -BaseSha). The protected trust-root inventory is read from
+  # this commit so the code interpreting the inventory and the inventory it
+  # interprets always come from the same immutable revision. Standalone local
+  # runs leave it empty and fall back to the live origin/main.
+  [string]$BaseSha = '',
   [ValidateSet('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')][string]$RiskTier = 'HIGH',
   [string]$IndependentReviewReceiptPath = '',
   [string]$ReviewChallengeLedgerPath = '',
@@ -49,7 +55,8 @@ function Add-AgentCheck {
 function Get-AgentLocalValue {
   param([AllowNull()][object]$Object, [Parameter(Mandatory = $true)][string]$Name)
   if ($null -eq $Object -or $null -eq $Object.PSObject.Properties[$Name]) { return $null }
-  return $Object.PSObject.Properties[$Name].Value
+  # Unary comma: protect returned arrays from pipeline enumeration.
+  return ,($Object.PSObject.Properties[$Name].Value)
 }
 
 function Get-AgentJsonFromGh {
@@ -252,15 +259,39 @@ function Read-AgentAutonomousReviewEvidence {
 function Get-AgentProtectedDiffDigest {
   param([Parameter(Mandatory = $true)][string[]]$ProtectedPaths, [Parameter(Mandatory = $true)][string]$HeadSha)
   $lines = @()
-  foreach ($path in ($ProtectedPaths | Sort-Object)) {
+  foreach ($path in (Get-AgentCanonicalSortedUtf8 -Values $ProtectedPaths)) {
     $blobResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('rev-parse', ('{0}:{1}' -f $HeadSha, $path))
     if ($blobResult.exitCode -ne 0) { return [pscustomobject]@{ available = $false; digest = $null; failedPath = $path; detail = $blobResult.text } }
     $lines += ("{0}`t{1}" -f $path, $blobResult.text.Trim())
   }
-  $canonical = (@($lines | Sort-Object)) -join "`n"
+  $canonical = (Get-AgentCanonicalSortedUtf8 -Values $lines) -join "`n"
   $bytes = [Text.Encoding]::UTF8.GetBytes($canonical)
   $digest = [Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
   return [pscustomobject]@{ available = $true; digest = ([BitConverter]::ToString($digest) -replace '-', '').ToLowerInvariant(); failedPath = $null; detail = $null }
+}
+
+function Get-AgentProtectedTrustRootInventory {
+  # Loads the canonical protected trust-root inventory
+  # (config/trust-root-paths.json) from the inventory base commit. The
+  # candidate can never influence this read: the path set that governs a merge
+  # decision always comes from the same immutable revision the gate logic was
+  # materialized from. Any failure is a deterministic blocker.
+  param([Parameter(Mandatory = $true)][string]$InventoryBaseSha)
+  $empty = [pscustomobject]@{ available = $false; protectedPaths = @(); error = $null }
+  if (-not (Test-AgentShaValue $InventoryBaseSha)) { return [pscustomobject]@{ available = $false; protectedPaths = @(); error = 'trust_root_inventory_base_unavailable' } }
+  $spec = '{0}:config/trust-root-paths.json' -f $InventoryBaseSha
+  $result = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('show', $spec)
+  if ($result.exitCode -ne 0 -or [string]::IsNullOrWhiteSpace($result.text)) { return [pscustomobject]@{ available = $false; protectedPaths = @(); error = 'trust_root_inventory_unavailable' } }
+  try { $inventory = $result.text | ConvertFrom-Json } catch { return [pscustomobject]@{ available = $false; protectedPaths = @(); error = 'trust_root_inventory_malformed' } }
+  $kind = Get-AgentLocalValue -Object $inventory -Name 'kind'
+  $schemaVersion = Get-AgentLocalValue -Object $inventory -Name 'schema_version'
+  $paths = Get-AgentLocalValue -Object $inventory -Name 'protected_paths'
+  if ([string]$kind -ne 'babel_trust_root_inventory_v1' -or [string]$schemaVersion -ne '1' -or -not (Test-AgentJsonArrayShape -Value $paths)) {
+    return [pscustomobject]@{ available = $false; protectedPaths = @(); error = 'trust_root_inventory_schema_invalid' }
+  }
+  $pathList = @($paths | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  if ($pathList.Count -eq 0) { return [pscustomobject]@{ available = $false; protectedPaths = @(); error = 'trust_root_inventory_empty' } }
+  return [pscustomobject]@{ available = $true; protectedPaths = $pathList; error = $null }
 }
 
 function Test-AgentTrustRootUpgradeAuthorization {
@@ -420,18 +451,15 @@ try {
     $diffResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('diff', '--name-only', "$originMain...$reviewedHead")
     if ($diffResult.exitCode -eq 0) { $diffPaths = @($diffResult.output | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) }
   }
-  $protectedTrustRootPaths = @(
-    'config/independent-review-keys.json',
-    'config/trusted-supervisor-keys.json',
-    'scripts/verify-independent-review.mjs',
-    'scripts/verify-trust-root-upgrade.mjs',
-    'scripts/materialize-independent-review-receipt.ps1',
-    'scripts/trusted-merge-gate.ps1',
-    'scripts/bootstrap-trust-root.ps1',
-    'scripts/agent-pr-gate.ps1',
-    'scripts/agent-pr-gate-common.psm1',
-    'scripts/agent-git-common.psm1'
-  )
+  # The protected trust-root set is canonical repository data
+  # (config/trust-root-paths.json), read from the same base commit this gate
+  # logic was materialized from. A missing, malformed, or empty inventory is a
+  # deterministic blocker — protection must never fall back to candidate- or
+  # caller-controlled data.
+  $inventoryBaseSha = if (-not [string]::IsNullOrWhiteSpace($BaseSha)) { $BaseSha } else { $originMain }
+  $trustRootInventory = Get-AgentProtectedTrustRootInventory -InventoryBaseSha $inventoryBaseSha
+  Add-AgentCheck -Name 'TRUST_ROOT_INVENTORY_READABLE' -Passed ([bool]$trustRootInventory.available) -Blocker ([string]$trustRootInventory.error)
+  $protectedTrustRootPaths = @($trustRootInventory.protectedPaths)
   $protectedChangedPaths = @($diffPaths | Where-Object { $protectedTrustRootPaths -contains $_ } | Sort-Object)
   $trustRootChanged = $protectedChangedPaths.Count -gt 0
   # Trust-root modifications are never certifiable by the autonomous review
