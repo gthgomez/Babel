@@ -65,4 +65,75 @@ $workflow = Get-Content -Raw -LiteralPath (Join-Path $RepoRoot '.github/workflow
 if ($workflow -notmatch [regex]::Escape('materialize-independent-review-receipt.ps1')) { throw 'Trusted workflow is missing the evidence transport step.' }
 if ($workflow -notmatch [regex]::Escape('BABEL_REQUIRE_SIGNED_REVIEW')) { throw 'Trusted workflow is missing the signed-review escalation variable.' }
 if ($workflow -match [regex]::Escape('persist-credentials: true')) { throw 'Trusted workflow must not persist credentials.' }
+
+# ── Canonical trust-root inventory (campaign Phases 2-4) ─────────────────────
+$inventoryPath = Join-Path $RepoRoot 'config/trust-root-paths.json'
+if (-not (Test-Path -LiteralPath $inventoryPath -PathType Leaf)) { throw 'Canonical trust-root inventory is missing.' }
+try { $inventory = Get-Content -Raw -LiteralPath $inventoryPath | ConvertFrom-Json } catch { throw 'Canonical trust-root inventory is malformed JSON.' }
+if ([string]$inventory.schema_version -ne '1') { throw 'Trust-root inventory schema_version invalid.' }
+if ([string]$inventory.kind -ne 'babel_trust_root_inventory_v1') { throw 'Trust-root inventory kind invalid.' }
+$inventoryPaths = @($inventory.protected_paths | ForEach-Object { [string]$_ })
+if ($inventoryPaths.Count -eq 0) { throw 'Trust-root inventory protected_paths is empty.' }
+if (@($inventoryPaths | Select-Object -Unique).Count -ne $inventoryPaths.Count) { throw 'Trust-root inventory contains duplicate paths.' }
+if ($inventoryPaths -notcontains 'config/trust-root-paths.json') { throw 'Trust-root inventory must protect itself.' }
+
+# Every authority-bearing component must be protected. Required members are
+# explicit: the trusted workflow, the workflows that produce required checks,
+# the base-materialized gate scripts, the transport, both verifiers plus the
+# activation/recovery verifiers, bootstrap, both key registries, and the two
+# trusted workflow test suites.
+$requiredProtected = @(
+  '.github/workflows/trusted-control-plane.yml',
+  '.github/workflows/typecheck.yml',
+  '.github/workflows/public-pr-metadata.yml',
+  'scripts/agent-pr-gate.ps1',
+  'scripts/agent-pr-gate-common.psm1',
+  'scripts/agent-git-common.psm1',
+  'scripts/trusted-merge-gate.ps1',
+  'scripts/materialize-independent-review-receipt.ps1',
+  'scripts/verify-independent-review.mjs',
+  'scripts/verify-trust-root-upgrade.mjs',
+  'scripts/verify-authority-activation.mjs',
+  'scripts/verify-recovery-scope.ps1',
+  'scripts/bootstrap-trust-root.ps1',
+  'config/independent-review-keys.json',
+  'config/trusted-supervisor-keys.json',
+  'config/trust-root-paths.json',
+  'tools/tests/test-trust-root-boundaries.ps1',
+  'tools/tests/test-trust-root-upgrade.mjs'
+)
+foreach ($required in $requiredProtected) {
+  if ($inventoryPaths -notcontains $required) { throw "Trust-root inventory omits authority-bearing path: $required" }
+}
+
+# Phase 29 mandatory regression: modifying ONLY the trusted workflow must
+# classify the candidate as a trust-root modification. That holds exactly when
+# the workflow file is a protected path, so pin it explicitly here too.
+if ($inventoryPaths -notcontains '.github/workflows/trusted-control-plane.yml') { throw 'Trusted workflow itself is not a protected trust-root path.' }
+
+# Execution-closure completeness: every repository-local file invoked by the
+# trusted workflow must be protected or explicitly allowlisted as
+# non-authoritative. Extract script/tool path tokens mechanically from the
+# workflow YAML so a newly invoked helper cannot silently appear outside the
+# inventory.
+$allowlistPaths = @($inventory.non_authoritative_allowlist | ForEach-Object { [string]$_.path })
+foreach ($entry in @($inventory.non_authoritative_allowlist)) {
+  if ([string]::IsNullOrWhiteSpace([string]$entry.reason)) { throw "Non-authoritative allowlist entry missing reason: $($entry.path)" }
+}
+$tokenMatches = [regex]::Matches($workflow, '(?:scripts|tools)/[A-Za-z0-9_\-./]+')
+foreach ($match in $tokenMatches) {
+  $token = $match.Value.TrimEnd('.', '/')
+  $isProtected = $inventoryPaths -contains $token
+  $isAllowlisted = $allowlistPaths -contains $token
+  if (-not $isProtected -and -not $isAllowlisted) { throw "Trusted workflow invokes unclassified local path: $token" }
+}
+
+# The gate must load the inventory from the base commit and fail closed when
+# it is unavailable, malformed, or schema-invalid.
+foreach ($required in @('config/trust-root-paths.json', 'trust_root_inventory_unavailable', 'trust_root_inventory_malformed', 'trust_root_inventory_schema_invalid', 'Get-AgentProtectedTrustRootInventory', 'TRUST_ROOT_INVENTORY_READABLE')) {
+  if ($gate -notmatch [regex]::Escape($required)) { throw "Gate is missing inventory enforcement: $required" }
+}
+# The launcher must forward its materialization base to the gate so inventory
+# and gate logic come from one immutable revision.
+if ($launcher -notmatch [regex]::Escape("'-BaseSha', `$BaseSha")) { throw 'Trusted launcher does not forward BaseSha to the gate.' }
 Write-Output 'TRUST_ROOT_BOUNDARY_TEST_PASS'

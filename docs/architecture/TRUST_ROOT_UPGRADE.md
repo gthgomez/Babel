@@ -113,12 +113,16 @@ offset-bearing timestamps would fail hash verification.
 Computed by the base-rooted gate over the candidate head tree:
 
 ```text
-lines  = for each changed path in sorted(protected_paths):
+lines  = for each changed path in canonical-order(protected_paths):
            path + "\t" + git rev-parse head_sha:path   (blob SHA)
-digest = SHA256( sorted(lines) joined with "\n" )
+digest = SHA256( canonical-order(lines) joined with "\n" )
 ```
 
-The signer must recompute this identically from an equivalent checkout.
+Canonical ordering is **ordinal bytewise UTF-8** (see
+[Canonical ordering](#canonical-ordering-ordinal-bytewise-utf8)). The signer
+and ceremony tooling must recompute this identically from an equivalent
+checkout; shared test vectors pin parity across the PowerShell gate, Node
+ceremony tooling, and verifiers.
 
 ### Transport
 
@@ -204,6 +208,161 @@ Trust-root changes never accept the AUTONOMOUS tier. The repository owner can
 force the CERTIFIED tier for **all** PRs by setting the repository variable
 `BABEL_REQUIRE_SIGNED_REVIEW=1` (read by the workflow from `vars`), which is
 the supported steady state once signing custody is provisioned to CI.
+
+## Canonical PR review lifecycle
+
+The trusted workflow re-evaluates the gate on `pull_request_target`
+(opened/synchronize/reopened) **and** on `issue_comment` (created) events, so
+the standard lifecycle no longer requires close/reopen:
+
+1. candidate implementation stabilizes; ordinary CI runs;
+2. an isolated read-only reviewer reviews the exact candidate head;
+3. blocking findings are fixed and the reviewer final pass covers the exact
+   final head;
+4. review evidence bound to the exact base/head/`diff_numstat_digest` is
+   posted as a PR comment (transport only, comment bodies are untrusted
+   data, fetched and binding-validated by the base-rooted gate);
+5. the PR transitions to ready for review; the evidence comment (from the
+   repository owner or the PR author) triggers automatic gate re-evaluation;
+6. all gates pass; merge.
+
+Constraints that keep the `issue_comment` trigger safe: only comments on a
+pull request qualify; only the repository owner or the PR author can trigger
+re-evaluation (arbitrary accounts cannot spend Actions minutes); gate
+coordinates are resolved from the live PR state via the API, never from the
+comment; the candidate remains materialized read-only data, and the checkout
+remains the immutable base commit. Close/reopen remains a fallback, not the
+standard flow.
+
+## Missing-evidence semantics (fail closed, never crash)
+
+Untrusted or incomplete evidence must produce a deterministic BLOCKED result,
+never an unhandled strict-mode exception. Required behavior, regression-tested
+by `tools/tests/test-agent-pr-gate-evidence.ps1` (wired into the
+`linux-validation` job):
+
+- no evidence comment: deterministic `autonomous_review_evidence_missing`;
+- transport-error stub (missing or ambiguous): mapped to deterministic
+  BLOCKED reasons, never validated as if it were evidence;
+- empty object, missing/unsupported `schema_version`, missing fields,
+  malformed or non-object JSON: deterministic validation errors;
+- wrong repository/PR/base/head/`diff_numstat_digest`, builder == reviewer,
+  non-APPROVE verdict, blocking findings: deterministic BLOCKED;
+- required assurance fields (`scope`, `blocking_findings`) are REQUIRED with
+  an explicit array shape: missing, null, scalar, and object values each
+  produce distinct fail-closed errors — a missing `blocking_findings` can
+  never silently behave like an attested zero-blocker review, and a
+  non-empty `blocking_findings` array is incompatible with an APPROVE
+  verdict (`autonomous_evidence_has_blocking_findings`);
+- genuine internal implementation failures only: `pr_gate_exception`.
+
+The same required-field semantics apply to the CERTIFIED receipt validator
+(`Test-AgentIndependentReviewReceipt`): `scope`, `blocking_findings`
+(explicit `[]`), `reviewer_class`, and a parseable `reviewed_at` are
+required; `findings` must be an array when present. Unknown cannot become
+empty.
+
+## AUTONOMOUS review assurance: what is verified vs asserted
+
+AUTONOMOUS evidence is evidence accepted under repository policy, not a
+cryptographic certification, and must be described as exactly this:
+
+- **Mechanically verified** by the base-rooted gate: document schema and
+  allowed field set; reviewer id non-empty and != builder id; reviewer class
+  present; verdict APPROVE; no blocking findings; valid `reviewed_at`
+  timestamp; exact base/head SHA binding; `diff_numstat_digest` over
+  `git diff --numstat base...head`; transport via the base-rooted
+  materializer (comment fetched with the gate token, binding re-checked).
+- **Procedurally asserted, not cryptographically verified**: that the reviewer
+  actually executed in an isolated process; that its filesystem access was
+  truly read-only; that it had no hidden channel to the builder; that it held
+  no signing authority. These properties are declared by the evidence
+  `reviewer_class`/`review_mode` and by policy; the gate cannot prove them
+  from the document alone. Documentation and reports must not represent them
+  as verified.
+
+CERTIFIED review carries strictly stronger authority: an ed25519-signed
+receipt bound to a supervisor-signed consumed challenge, verified against
+owner-controlled key registries. Neither tier may be weakened to close a PR.
+
+## Canonical protected trust-root inventory
+
+The protected trust-root path set is canonical repository data:
+`config/trust-root-paths.json` (kind `babel_trust_root_inventory_v1`). It is
+the single source of truth for every repository-controlled component capable
+of changing how a merge is authorized:
+
+- the trusted workflow itself and every workflow that produces a required
+  check (`trusted-control-plane`, `typecheck`/Public Release Gate,
+  `public-pr-metadata`) — a candidate can otherwise neuter its own required
+  checks, because `pull_request` workflows execute from the merge ref;
+- the base-materialized gate scripts (`agent-pr-gate.ps1`,
+  `agent-pr-gate-common.psm1`, `agent-git-common.psm1`) and the trusted
+  launcher (`trusted-merge-gate.ps1`);
+- the evidence transport (`materialize-independent-review-receipt.ps1`);
+- both verifiers plus the authority-activation and recovery-scope verifiers;
+- bootstrap/recovery authority (`bootstrap-trust-root.ps1`);
+- both public key registries;
+- the two trusted-workflow test suites;
+- the inventory itself (self-protecting).
+
+The gate loads the inventory from the **same base commit its logic was
+materialized from** (`-BaseSha`, forwarded by `trusted-merge-gate.ps1`), so
+the protection rules and the code that applies them always come from one
+immutable revision, and the candidate can never influence the path set that
+judges it. A missing, malformed, empty, or schema-invalid inventory is a
+deterministic blocker (`trust_root_inventory_unavailable`,
+`trust_root_inventory_malformed`, `trust_root_inventory_schema_invalid`,
+`trust_root_inventory_empty`); protection never falls back to
+candidate- or caller-controlled data.
+
+Components that are deliberately **not** protected are enumerated in the
+inventory's `non_authoritative_allowlist`, each with the reason it cannot
+affect a merge decision. Boundary tests mechanically derive the set of local
+files the trusted workflow invokes and fail if any of them is neither
+protected nor allowlisted, so a new authority-bearing component cannot
+silently appear outside the inventory. Changing the inventory — or any
+protected path — requires TrustRootUpgradeV1 authorization.
+
+## Review equivalence policy
+
+```text
+patch-id_is_authoritative = false
+head_change_requires_fresh_review = true
+```
+
+`git patch-id --stable` equality is supporting context for humans (it can
+indicate a pure rebase) but is **never** byte-identity proof and **never**
+extends approval to a new head. For trust-root candidates every new head
+requires fresh exact-final-head review:
+
+```text
+HEAD_CHANGED → REVIEW_REQUIRED
+```
+
+A future optimized re-review protocol may only be introduced as a formally
+accepted exact-equivalence scheme (for example: exact changed blob OIDs plus
+a canonical unified-diff SHA-256 plus exact resulting tree IDs for the entire
+protected set, defined in a TrustRootUpgradeV1 change with shared test
+vectors). Until such a protocol exists and is authorized, the rule above is
+total.
+
+## Canonical ordering (ordinal bytewise UTF-8)
+
+All trust digests order strings identically across implementations: compare
+the UTF-8 byte sequences ordinal-wise; a proper prefix sorts before its
+extensions. Implementations:
+
+- PowerShell gate: `Get-AgentCanonicalOrderUtf8` /
+  `Get-AgentCanonicalSortedUtf8` (`scripts/agent-pr-gate-common.psm1`);
+- ceremony tooling: `compareUtf8` / `canonicalSort` (`tools/trust-ceremony.mjs`);
+- upgrade verifier: `compareUtf8` (`scripts/verify-trust-root-upgrade.mjs`).
+
+Shared vectors: `tools/tests/fixtures/canonical-ordering-vectors.json`,
+consumed by both `tools/tests/test-canonical-ordering.mjs` and
+`tools/tests/test-canonical-ordering.ps1`. Never use `Sort-Object`
+(culture-sensitive) or JavaScript's default `Array.sort` (UTF-16 code units
+mis-order astral characters against U+E000..U+FFFF) in a digest path.
 
 ## One-time migration record (this PR)
 

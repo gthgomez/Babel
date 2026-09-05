@@ -59,6 +59,82 @@ construction is confined to a trusted-service-only module
 implementation but never key material. This is a *test-enforced* boundary, not
 an OS boundary — see the threat model below.
 
+## Custody classification vocabulary
+
+Campaign discipline (do not skip states, do not invent knowledge):
+
+- `CUSTODY_DECISION_REQUIRED` — the campaign-level state while the owner has
+  not resolved custody. Used **instead of** `OWNER_UNLOCK_REQUIRED` whenever
+  no evidence establishes that an authority exists and merely needs
+  unlocking: unknown stays unknown until evidence changes it.
+- Custody statuses: `AUTHORITY_AVAILABLE`, `AUTHORITY_LOST`,
+  `AUTHORITY_NEVER_PROVISIONED`, `AUTHORITY_STATUS_UNKNOWN`. Current status
+  for both registered keys: **`AUTHORITY_STATUS_UNKNOWN`** (leaning
+  unprovisioned; see the audit table above).
+- `LEGACY_UNPROVEN_AUTHORITY` — a public key registered **before** the
+  proof-of-possession mechanism existed. No valid proof-of-possession history
+  exists for either registered key (bootstrap-history audit, 2026-09-05), so
+  both keys are classified `LEGACY_UNPROVEN_AUTHORITY` for recovery planning:
+  they are **not** silently grandfathered as fully provisioned authorities.
+  Resolution requires either an owner proof-of-possession ceremony (below) or
+  recovery.
+
+Bootstrap history (Phase 12 audit): reviewer proof-of-possession history =
+`NOT_FOUND`; supervisor proof-of-possession history = `NOT_FOUND`. The
+reviewer key was silently re-keyed v1→v2 the same day it was introduced; no
+possession ceremony, challenge record, or custody-completion artifact exists
+anywhere in history, and the bootstrap documentation itself states private
+counterparts still required owner provisioning after the public keys merged.
+
+## Authority lifecycle states
+
+A committed public key is **not** proof that a usable private authority
+exists. Registries may carry per-key lifecycle metadata (schema v2 draft —
+activates only when an actual activation/recovery writes it; today's
+registries stay schema v1 with `LEGACY_UNPROVEN_AUTHORITY` semantics):
+
+```text
+PROPOSED                    public material drafted, not yet registered
+PROOF_OF_POSSESSION_PENDING challenge issued, signed proof not yet verified
+PROVEN                      valid signed proof-of-possession verified
+ACTIVE                      proven + custody established + end-to-end exercise
+                            completed; may sign artifacts
+ROTATING                    replacement in flight; old key still valid
+RETIRED                     deliberately withdrawn by the owner
+REVOKED                     withdrawn due to compromise or loss
+RECOVERY_REQUIRED           key lost/never provisioned; break-glass lane
+```
+
+Only `ACTIVE` (or `ROTATING` per rotation policy) keys may be treated as
+usable trusted authorities. Gate enforcement of lifecycle metadata is a
+deliberate follow-up: it lands together with the owner custody decision, in
+the same TrustRootUpgradeV1 change that writes lifecycle metadata — enabling
+it now would invalidate the `LEGACY_UNPROVEN_AUTHORITY` keys before a usable
+replacement exists.
+
+## Proof-of-possession (authority activation invariant)
+
+New reviewer/supervisor public keys become authorities only through:
+
+```text
+repository generates challenge (tools/trust-ceremony.mjs activation-challenge)
+        ↓ candidate private authority signs the canonical challenge JSON
+        ↓ scripts/verify-authority-activation.mjs validates against the
+          proposed public key
+        ↓ key becomes PROVEN (and ACTIVE after custody + live exercise)
+```
+
+The private key is never exposed to the repository or the builder. The
+challenge binds `repository`, `role`, `key_id`, `challenge_id`, a 256-bit
+`nonce`, `issued_at`, `expires_at`, and `purpose=authority_activation`; the
+signature covers exactly that canonical challenge document, so arbitrary
+bytes can never be signed into an activation proof. The verifier rejects —
+deterministically, never by crashing — expired challenges, wrong repository,
+wrong key, wrong role, replayed `challenge_id` (via the consumed-challenges
+ledger), malformed signatures, and key-id mismatches. Regression matrix:
+`tools/tests/test-authority-activation.mjs` (includes the RFC 8032
+deterministic vector as a canonicalization canary).
+
 ## Threat model
 
 For each signing authority:
@@ -117,7 +193,8 @@ The builder never receives raw private keys; it receives signed artifacts.
 Narrow interface — allowed operations:
 
 ```text
-sign_independent_review_receipt(candidate_receipt, ceremony_manifest)
+prove_authority_possession(challenge, ceremony_manifest)
+issue_review_receipt(candidate_receipt, ceremony_manifest)
 authorize_trust_root_upgrade(authorization, ceremony_manifest)
 ```
 
@@ -239,18 +316,16 @@ TrustRootUpgradeV1 ceremony — rotation therefore also serves as a recurring
 live exercise of the ceremony, which keeps break-glass from ever being the
 first signing act performed with new custody.
 
-## Canonicalization follow-up (recorded trust concern)
+## Canonicalization (resolved)
 
-Protected-diff ordering currently depends on runtime sort semantics: the gate
-sorts with PowerShell `Sort-Object` (culture-sensitive; pinned to pwsh 7 /
-ICU today), while the ceremony tooling and signer sort in Node (UTF-16 code
-unit order). These coincide for ASCII-only paths and can diverge for non-ASCII
-paths — a real, if narrow, trust concern for digest comparability. The future
-protected change should pin **ordinal bytewise UTF-8 path ordering** in all
-three implementations (PowerShell gate, Node ceremony tooling, signing
-service) with shared canonical test vectors. Do not change #144's trust code
-casually for this; it is a deliberate follow-up under TrustRootUpgradeV1.
-See the parity note in [TRUST_CEREMONY_LIFECYCLE.md](./TRUST_CEREMONY_LIFECYCLE.md).
+Resolved in the PR-C trust change (PR #144): protected-diff and numstat
+ordering is pinned to **ordinal bytewise UTF-8** in all three implementations
+(PowerShell gate `Get-AgentCanonicalOrderUtf8`, Node ceremony tooling
+`compareUtf8`, upgrade verifier `compareUtf8`), with shared canonical test
+vectors in `tools/tests/fixtures/canonical-ordering-vectors.json`. The
+signing service must adopt the same comparison when recomputing digests; the
+shared vectors are its acceptance test. See
+[TRUST_ROOT_UPGRADE.md — Canonical ordering](./TRUST_ROOT_UPGRADE.md#canonical-ordering-ordinal-bytewise-utf8).
 
 ## Non-goals
 

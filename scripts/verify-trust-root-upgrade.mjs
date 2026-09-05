@@ -31,6 +31,22 @@ function sha256Hex(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+// Canonical protected-path ordering: ordinal bytewise UTF-8 (see
+// tools/tests/fixtures/canonical-ordering-vectors.json). Never the default
+// Array.sort: its UTF-16 code-unit ordering mis-orders astral characters
+// against U+E000..U+FFFF.
+const pathEncoder = new TextEncoder();
+function compareUtf8(left, right) {
+  const leftBytes = pathEncoder.encode(left);
+  const rightBytes = pathEncoder.encode(right);
+  const shared = Math.min(leftBytes.length, rightBytes.length);
+  for (let index = 0; index < shared; index++) {
+    if (leftBytes[index] !== rightBytes[index]) return leftBytes[index] < rightBytes[index] ? -1 : 1;
+  }
+  if (leftBytes.length === rightBytes.length) return 0;
+  return leftBytes.length < rightBytes.length ? -1 : 1;
+}
+
 function parseArg(name) {
   const index = process.argv.indexOf(name);
   return index >= 0 ? process.argv[index + 1] : undefined;
@@ -94,8 +110,8 @@ for (const [field, value] of [["base_sha", expected.base_sha], ["head_sha", expe
 if (
   !Array.isArray(authorization.protected_paths) ||
   authorization.protected_paths.length === 0 ||
-  JSON.stringify([...authorization.protected_paths].sort()) !==
-    JSON.stringify([...expected.protected_paths].sort())
+  JSON.stringify([...authorization.protected_paths].sort(compareUtf8)) !==
+    JSON.stringify([...expected.protected_paths].sort(compareUtf8))
 ) {
   errors.push("authorization_protected_paths_mismatch");
 }

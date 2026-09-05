@@ -232,8 +232,11 @@ function Write-AgentResult {
   )
   if ($OutputFormat -eq 'text') {
     $isDictionary = $Result -is [System.Collections.IDictionary]
-    $kind = if ($isDictionary -and $Result.Contains('kind')) { $Result['kind'] } elseif ($Result.PSObject.Properties.Name -contains 'kind') { $Result.kind } else { 'agent_result' }
-    $status = if ($isDictionary -and $Result.Contains('status')) { $Result['status'] } elseif ($isDictionary -and $Result.Contains('ok')) { $Result['ok'] } elseif ($Result.PSObject.Properties.Name -contains 'status') { $Result.status } elseif ($Result.PSObject.Properties.Name -contains 'ok') { $Result.ok } else { 'unknown' }
+    # Pipeline enumeration of property names: `.Name` member enumeration on an
+    # empty property collection throws under strict mode.
+    $resultPropertyNames = @(if ($null -ne $Result) { @($Result.PSObject.Properties | ForEach-Object { $_.Name }) } else { @() })
+    $kind = if ($isDictionary -and $Result.Contains('kind')) { $Result['kind'] } elseif ($resultPropertyNames -contains 'kind') { $Result.kind } else { 'agent_result' }
+    $status = if ($isDictionary -and $Result.Contains('status')) { $Result['status'] } elseif ($isDictionary -and $Result.Contains('ok')) { $Result['ok'] } elseif ($resultPropertyNames -contains 'status') { $Result.status } elseif ($resultPropertyNames -contains 'ok') { $Result.ok } else { 'unknown' }
     Write-Output "kind=$kind status=$status"
     return
   }

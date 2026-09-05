@@ -33,7 +33,7 @@
 // compares coordinates.
 
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -43,6 +43,30 @@ export const MANIFEST_FRESHNESS_HOURS = 24;
 // Invariant A: a trust-root upgrade targets the protected main branch. A PR
 // based on any other ref is not a ceremony candidate.
 export const EXPECTED_BASE_REF = 'main';
+
+const textEncoder = new TextEncoder();
+
+/**
+ * Canonical ordering for trust digests: ordinal bytewise UTF-8 comparison.
+ * Mirrors Get-AgentCanonicalOrderUtf8 in scripts/agent-pr-gate-common.psm1 and
+ * is pinned by tools/tests/fixtures/canonical-ordering-vectors.json. Never use
+ * Array.prototype.sort's default UTF-16 code-unit ordering here: it mis-orders
+ * astral characters (surrogate pairs) against U+E000..U+FFFF.
+ */
+export function compareUtf8(left, right) {
+  const leftBytes = textEncoder.encode(left);
+  const rightBytes = textEncoder.encode(right);
+  const shared = Math.min(leftBytes.length, rightBytes.length);
+  for (let index = 0; index < shared; index++) {
+    if (leftBytes[index] !== rightBytes[index]) return leftBytes[index] < rightBytes[index] ? -1 : 1;
+  }
+  if (leftBytes.length === rightBytes.length) return 0;
+  return leftBytes.length < rightBytes.length ? -1 : 1;
+}
+
+export function canonicalSort(values) {
+  return [...values].sort(compareUtf8);
+}
 
 function sh(command, args, options = {}) {
   return execFileSync(command, args, {
@@ -61,7 +85,9 @@ function sha256Hex(value) {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
-/** Parse the protected trust-root path list out of the base-rooted gate script. */
+/** Parse the protected trust-root path list out of the base-rooted gate script.
+ * Legacy fallback only: used when the merge-gate base predates the canonical
+ * inventory (config/trust-root-paths.json). */
 export function parseProtectedPaths(gateScriptText) {
   const anchor = 'protectedTrustRootPaths';
   const start = gateScriptText.indexOf(`$${anchor}`);
@@ -72,18 +98,48 @@ export function parseProtectedPaths(gateScriptText) {
   const body = gateScriptText.slice(open + 2, close);
   const paths = [...body.matchAll(/'([^']+)'/g)].map((m) => m[1]);
   if (paths.length === 0) throw new Error('protectedTrustRootPaths array is empty');
-  return [...paths].sort();
+  return canonicalSort(paths);
 }
 
-/** Get-AgentNumstatDigest semantics: invariant-sort numstat lines, join \n, sha256. */
+/**
+ * Resolve the protected trust-root path set that governs a candidate: the
+ * canonical inventory carried by the base commit. When the base predates the
+ * inventory, fall back to parsing the base gate script's inline array (legacy
+ * pre-inventory bases only). The candidate tree is never consulted.
+ */
+export function parseProtectedPathsFromBase(baseSha) {
+  const inventorySpec = `${baseSha}:config/trust-root-paths.json`;
+  let inventoryRaw;
+  try {
+    inventoryRaw = gitOrThrow(['show', inventorySpec]);
+  } catch {
+    const gateScript = gitOrThrow(['show', `${baseSha}:scripts/agent-pr-gate.ps1`]);
+    return { protectedPaths: parseProtectedPaths(gateScript), source: 'legacy_gate_script_array' };
+  }
+  const inventory = JSON.parse(inventoryRaw);
+  if (
+    inventory?.schema_version !== 1 ||
+    inventory?.kind !== 'babel_trust_root_inventory_v1' ||
+    !Array.isArray(inventory.protected_paths) ||
+    inventory.protected_paths.length === 0
+  ) {
+    throw new Error('trust-root inventory schema invalid');
+  }
+  return {
+    protectedPaths: canonicalSort(inventory.protected_paths.map((path) => String(path))),
+    source: 'canonical_inventory',
+  };
+}
+
+/** Get-AgentNumstatDigest semantics: canonically sorted numstat lines, join \n, sha256. */
 export function computeNumstatDigest(numstatLines) {
-  const canonical = [...numstatLines].sort().join('\n');
+  const canonical = canonicalSort(numstatLines).join('\n');
   return sha256Hex(canonical);
 }
 
 /** Get-AgentProtectedDiffDigest semantics: sorted "path\tblobhash" lines, join \n, sha256. */
 export function computeProtectedDiffDigest(entries) {
-  const canonical = [...entries].sort().join('\n');
+  const canonical = canonicalSort(entries).join('\n');
   return sha256Hex(canonical);
 }
 
@@ -173,7 +229,7 @@ export function buildManifest(input) {
     merge_base_sha: mergeBaseSha,
     head_sha: headSha,
     builder_identity: builderIdentity,
-    protected_paths: [...protectedPaths].sort(),
+    protected_paths: canonicalSort(protectedPaths),
     protected_diff_digest: protectedDiffDigest,
     full_diff_numstat_digest: fullDiffNumstatDigest,
     generated_at: generatedAt,
@@ -235,8 +291,8 @@ export function validateStaleness(manifest, live) {
         : 'target_head_changed_after_review');
     }
   }
-  const manifestPaths = [...(manifest.protected_paths ?? [])].sort();
-  const livePaths = [...(live.protectedPaths ?? [])].sort();
+  const manifestPaths = canonicalSort(manifest.protected_paths ?? []);
+  const livePaths = canonicalSort(live.protectedPaths ?? []);
   if (JSON.stringify(manifestPaths) !== JSON.stringify(livePaths)) reasons.push('protected_path_set_changed');
   if (manifest.protected_diff_digest !== live.protectedDiffDigest) reasons.push('protected_diff_changed');
   if (live.prState !== undefined && live.prState !== 'OPEN') reasons.push('pr_not_open');
@@ -265,8 +321,8 @@ function ensureCommitPresent(headSha) {
 function collectManifestFromGit(repository, prNumber, baseSha, headSha, nowIso) {
   ensureCommitPresent(baseSha);
   ensureCommitPresent(headSha);
-  const gateScript = gitOrThrow(['show', `${baseSha}:scripts/agent-pr-gate.ps1`]);
-  const protectedPaths = parseProtectedPaths(gateScript);
+  const resolved = parseProtectedPathsFromBase(baseSha);
+  const protectedPaths = resolved.protectedPaths;
   const changedFiles = gitOrThrow(['diff', '--name-only', `${baseSha}...${headSha}`])
     .split('\n')
     .map((entry) => entry.trim())
@@ -428,6 +484,43 @@ function commandBodySection(options) {
   process.stdout.write(renderCeremonySection(manifest));
 }
 
+// Authority activation (proof-of-possession) challenge generation. The
+// challenge binds the repository, role, key identity, freshness, and a
+// 256-bit nonce; the private-key holder signs the canonical challenge JSON
+// out of band and the signed proof is validated by
+// scripts/verify-authority-activation.mjs. This tool never sees private
+// material.
+function commandActivationChallenge(options) {
+  const role = options.role;
+  if (!['reviewer', 'supervisor'].includes(role)) {
+    console.error('--role must be reviewer|supervisor');
+    process.exitCode = 1;
+    return;
+  }
+  const repository = options.repository;
+  const keyId = options.key_id;
+  if (!repository || !keyId) {
+    console.error('--repository and --key-id are required');
+    process.exitCode = 1;
+    return;
+  }
+  const nowIso = options.now ?? new Date().toISOString();
+  const ttlHours = Number(options.ttl_hours ?? 1);
+  const challenge = {
+    schema_version: 1,
+    kind: 'authority_activation_challenge_v1',
+    purpose: 'authority_activation',
+    repository,
+    role,
+    key_id: keyId,
+    challenge_id: `activation-${randomUUID()}`,
+    nonce: randomBytes(32).toString('hex'),
+    issued_at: nowIso,
+    expires_at: new Date(Date.parse(nowIso) + ttlHours * 60 * 60 * 1000).toISOString(),
+  };
+  process.stdout.write(JSON.stringify(challenge, null, 2) + '\n');
+}
+
 export function renderCeremonySection(manifest) {
   const lines = [
     '<!-- babel-trust-root-ceremony-generated -->',
@@ -474,15 +567,22 @@ function parseArgs(argv) {
   return options;
 }
 
-const COMMANDS = { generate: commandGenerate, preflight: commandPreflight, 'validate-staleness': commandValidateStaleness, 'body-section': commandBodySection };
+const COMMANDS = {
+  generate: commandGenerate,
+  preflight: commandPreflight,
+  'validate-staleness': commandValidateStaleness,
+  'body-section': commandBodySection,
+  'activation-challenge': commandActivationChallenge,
+};
 
 function main() {
   const [command, ...rest] = process.argv.slice(2);
   const handler = COMMANDS[command];
   if (!handler) {
-    console.error('usage: node tools/trust-ceremony.mjs <generate|preflight|validate-staleness|body-section> [--repository R] [--pr N] [--manifest F] [--out F] [--builder-identity I] [--now ISO]');
+    console.error('usage: node tools/trust-ceremony.mjs <generate|preflight|validate-staleness|body-section|activation-challenge> [--repository R] [--pr N] [--manifest F] [--out F] [--builder-identity I] [--now ISO]');
     console.error('  validate-staleness offline mode: [--expect-repository R] [--expect-pr N] [--expect-base-ref REF] [--expect-base SHA] [--expect-head SHA] [--expect-target-head SHA] [--expect-ancestry true|false] [--expect-digest D] [--expect-state S]');
     console.error('  artifact stage binding (either mode): [--artifact-target-head SHA] [--stage review|authorization]');
+    console.error('  activation-challenge: [--role reviewer|supervisor] [--key-id ID] [--repository R] [--ttl-hours N] [--now ISO]');
     process.exitCode = 1;
     return;
   }
