@@ -271,7 +271,7 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
     return;
   }
   if (sub === 'health') {
-    console.log(renderModelHealth(ctx.state.model));
+    console.log(renderModelHealth(ctx.state.model, process.env, ctx.lastRunDir));
     return;
   }
   if (sub && sub !== 'clear') {

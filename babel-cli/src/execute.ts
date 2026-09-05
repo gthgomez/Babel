@@ -139,6 +139,8 @@ export interface WaterfallAttemptOutcome {
   error_summary?: string | null;
   provider?: string | null;
   provider_model_id?: string | null;
+  /** Serving upstream the gateway reported for this attempt (null when not exposed). */
+  upstream_provider?: string | null;
   latency_ms?: number | null;
   prompt_tokens?: number | null;
   completion_tokens?: number | null;
@@ -1420,6 +1422,7 @@ function buildAttemptOutcome(
     error_summary: errorSummary,
     provider: metadata?.provider ?? null,
     provider_model_id: metadata?.provider_model_id ?? null,
+    upstream_provider: metadata?.upstream_provider ?? null,
     latency_ms: metadata?.latency_ms ?? null,
     prompt_tokens: metadata?.prompt_tokens ?? null,
     completion_tokens: metadata?.completion_tokens ?? null,

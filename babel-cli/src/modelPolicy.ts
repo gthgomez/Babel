@@ -471,7 +471,7 @@ function resolveVendorAliasKey(config: ModelPolicyConfig, key: string): string {
   return current;
 }
 
-function getPolicyPath(babelRoot = DEFAULT_BABEL_ROOT): string {
+export function getPolicyPath(babelRoot = DEFAULT_BABEL_ROOT): string {
   const explicit = process.env['BABEL_MODEL_POLICY_PATH']?.trim();
   return explicit && explicit.length > 0
     ? resolve(explicit)
