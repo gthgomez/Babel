@@ -45,6 +45,16 @@ last_verified: 2026-08-05
 | [BABEL_PROJECT_SYSTEM_INTEGRATION.md](./BABEL_PROJECT_SYSTEM_INTEGRATION.md) | Babel vs repo-local collaboration systems. |
 | [babel-remote/BABEL_REMOTE_STAGE0_COVERAGE.md](./babel-remote/BABEL_REMOTE_STAGE0_COVERAGE.md) | Babel Remote Stage 0 vendor coverage and GO/NO_GO. |
 
+## Trust plane
+
+| Document | Description |
+| :--- | :--- |
+| [TRUST_ROOT_BOOTSTRAP.md](./TRUST_ROOT_BOOTSTRAP.md) | One-time bootstrap of the public independent-review and supervisor registries. |
+| [TRUST_ROOT_UPGRADE.md](./TRUST_ROOT_UPGRADE.md) | TrustRootUpgradeV1 — cryptographically authorized protected trust-root changes. |
+| [TRUST_CEREMONY_LIFECYCLE.md](./TRUST_CEREMONY_LIFECYCLE.md) | Ceremony state machine, schema-v2 target-branch binding invariants, invalidation rules. |
+| [TRUST_SIGNING_CUSTODY.md](./TRUST_SIGNING_CUSTODY.md) | Signing custody design: owner signing lane, service requirements, deployment options, rotation, audit. |
+| [TRUST_ROOT_RECOVERY.md](./TRUST_ROOT_RECOVERY.md) | Break-glass rekey protocol for lost/compromised authority; bounded-exception mechanics. |
+
 ## Related ADRs
 
 Pipeline and isolation decisions: `docs/adr/ADR-001` through `ADR-004`, `ADR-006`–`ADR-008`, `ADR-010`.
