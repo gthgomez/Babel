@@ -73,3 +73,24 @@ Trust-root modifications never accept the AUTONOMOUS tier. A candidate that
 touches the protected trust-root paths (the `config/` key registries, the
 verifier and gate scripts, or the evidence transport) requires the CERTIFIED
 tier plus a supervisor-signed TrustRootUpgradeV1 authorization.
+
+## Assurance language — what each tier establishes
+
+- **Candidate engineering review** (any reviewer, including isolated AI
+  reviewers during development) is useful assurance but is never trusted
+  authorization and never substitutes for a signed receipt.
+- **AUTONOMOUS review** is mechanically bound evidence accepted under
+  ordinary-PR policy; its process-isolation properties are asserted by policy,
+  not cryptographically proven. Never describe it as a cryptographic
+  certification.
+- **CERTIFIED review** is cryptographically authorized independent review
+  using trusted custody.
+- **TrustRootUpgradeV1** is CERTIFIED review plus supervisor authorization,
+  required for protected trust-root changes.
+
+Trust-root candidates follow the ceremony state machine in
+[`docs/architecture/TRUST_CEREMONY_LIFECYCLE.md`](../../docs/architecture/TRUST_CEREMONY_LIFECYCLE.md):
+coordinates come only from the machine-generated ceremony manifest
+(`tools/trust-ceremony.mjs`), the candidate is frozen before signing, preflight
+must pass immediately before signing, and any candidate mutation invalidates
+all prior ceremony artifacts.
