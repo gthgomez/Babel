@@ -74,6 +74,7 @@ export function buildAcceptanceInputSnapshot(
     patchVisibility: "none",
     taskContractId: input.taskContract.contract_id,
     taskContractHash: input.taskContract.contract_hash,
+    taskRisk: input.taskContract.risk,
     userRequest: input.userRequest ?? input.taskContract.user_request,
     baseline: { ...(input.baseline ?? {}) },
     baselineVerifiers: [...(input.baselineVerifiers ?? [])],
@@ -154,6 +155,7 @@ export function buildExecutableAcceptanceContract(
     snapshotHash: input.snapshot.snapshotHash,
     taskContractId: input.snapshot.taskContractId,
     taskContractHash: input.snapshot.taskContractHash,
+    ...(input.snapshot.taskRisk ? { taskRisk: input.snapshot.taskRisk } : {}),
     createdAt: input.createdAt ?? new Date().toISOString(),
     claims: input.claims.map((claim) => claim),
     compiler: input.compiler ?? {
@@ -246,6 +248,31 @@ export function buildClaimEvidenceLink(
     evidenceId: input.evidenceId,
     ...(input.oracleStepId ? { oracleStepId: input.oracleStepId } : {}),
     producerRole: input.producerRole,
+    ...(input.evidenceInfluence
+      ? { evidenceInfluence: input.evidenceInfluence }
+      : {}),
+    ...(input.patchVisibility
+      ? { patchVisibility: input.patchVisibility }
+      : {}),
+    ...(input.implementationOrigin
+      ? { implementationOrigin: input.implementationOrigin }
+      : {}),
+    ...(input.exactStateBinding
+      ? { exactStateBinding: { ...input.exactStateBinding } }
+      : {}),
+    ...(input.verifierAuthority !== undefined
+      ? { verifierAuthority: input.verifierAuthority }
+      : {}),
+    ...(input.verifierId ? { verifierId: input.verifierId } : {}),
+    ...(input.sourceDiversityKey
+      ? { sourceDiversityKey: input.sourceDiversityKey }
+      : {}),
+    ...(input.restrictedOracle !== undefined
+      ? { restrictedOracle: input.restrictedOracle }
+      : {}),
+    ...(input.oracleIsolation
+      ? { oracleIsolation: input.oracleIsolation }
+      : {}),
     admissible: input.admissible,
     relation: input.relation,
     reason: input.reason,

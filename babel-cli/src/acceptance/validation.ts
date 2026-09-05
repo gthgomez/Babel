@@ -36,6 +36,9 @@ const SnapshotSchema = z
     patchVisibility: z.literal("none"),
     taskContractId: z.string().min(1),
     taskContractHash: z.string().regex(/^[0-9a-f]{32,64}$/),
+    taskRisk: z
+      .enum(["low", "medium", "high", "critical", "unknown"])
+      .optional(),
     userRequest: z.string().min(1),
     baseline: z
       .object({
@@ -139,6 +142,9 @@ const ContractSchema = z
     snapshotHash: z.string().regex(/^[0-9a-f]{64}$/),
     taskContractId: z.string().min(1),
     taskContractHash: z.string().regex(/^[0-9a-f]{32,64}$/),
+    taskRisk: z
+      .enum(["low", "medium", "high", "critical", "unknown"])
+      .optional(),
     createdAt: z.string().datetime(),
     claims: z.array(ClaimSchema).min(1),
     compiler: z
@@ -161,6 +167,15 @@ const OracleStepSchema = z
       "existing_test",
       "hidden_test",
       "property_probe",
+      "boundary_probe",
+      "state_transition",
+      "concurrency_probe",
+      "differential_probe",
+      "metamorphic_probe",
+      "security_probe",
+      "compatibility_probe",
+      "serialization_probe",
+      "failure_recovery_probe",
       "static_probe",
       "runtime_probe",
       "bdns_candidate",
@@ -171,6 +186,22 @@ const OracleStepSchema = z
     independence: z.enum(["implementor", "canonical", "observer", "verifier"]),
     createdBeforePatch: z.boolean(),
     sourceRef: z.string().min(1).optional(),
+    synthesisFamily: z
+      .enum([
+        "boundary_negative",
+        "state_transition",
+        "concurrency",
+        "property",
+        "differential",
+        "metamorphic",
+        "security_policy",
+        "compatibility",
+        "runtime_ui",
+        "serialization_round_trip",
+        "failure_recovery",
+      ])
+      .optional(),
+    rationale: z.string().min(1).optional(),
   })
   .strict();
 
@@ -204,6 +235,43 @@ const LinkSchema = z
     evidenceId: z.string().min(1),
     oracleStepId: z.string().min(1).optional(),
     producerRole: z.enum(["canonical", "observer", "verifier", "implementor"]),
+    evidenceInfluence: z
+      .enum([
+        "EXTERNAL",
+        "CONTROLLER_OWNED",
+        "IMPLEMENTOR_VISIBLE",
+        "IMPLEMENTOR_INFLUENCED",
+        "IMPLEMENTOR_CONTROLLED",
+      ])
+      .optional(),
+    patchVisibility: z
+      .enum(["none", "candidate_visible", "unknown"])
+      .optional(),
+    implementationOrigin: z
+      .enum([
+        "pre_implementation",
+        "during_implementation",
+        "post_implementation",
+        "unknown",
+      ])
+      .optional(),
+    exactStateBinding: z
+      .object({
+        candidateStateDigest: z.string().min(1),
+        contractHash: z.string().regex(/^[0-9a-f]{64}$/),
+        oraclePlanHash: z.string().regex(/^[0-9a-f]{64}$/),
+        verifierId: z.string().min(1),
+        environmentDigest: z.string().min(1).optional(),
+      })
+      .strict()
+      .optional(),
+    verifierAuthority: z.boolean().optional(),
+    verifierId: z.string().min(1).optional(),
+    sourceDiversityKey: z.string().min(1).optional(),
+    restrictedOracle: z.boolean().optional(),
+    oracleIsolation: z
+      .enum(["isolated", "role_separated", "implementor_accessible", "unknown"])
+      .optional(),
     admissible: z.boolean(),
     relation: z.enum(["supports", "contradicts", "inconclusive"]),
     reason: z.string().min(1),
@@ -241,6 +309,19 @@ const SufficiencySchema = z
       })
       .strict(),
     errors: z.array(z.string()),
+    policyProfile: z
+      .object({
+        version: z.literal("sufficiency-v1"),
+        name: z.enum(["normal", "elevated", "high"]),
+        minimumSupportingEvidence: z.number().int().min(1),
+        minimumIndependentEvidence: z.number().int().min(0),
+        minimumDistinctSources: z.number().int().min(1),
+        requireExactStateBinding: z.boolean(),
+        requireExplicitVerifierAuthority: z.boolean(),
+        rejectImplementorControlledSoleSupport: z.boolean(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

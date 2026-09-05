@@ -14,6 +14,14 @@ export const ACCEPTANCE_BUNDLE_MAX_BYTES = 128 * 1024;
 
 export type AcceptanceBundleView = "builder" | "verifier" | "auditor";
 
+export interface AcceptanceOracleIsolationV1 {
+  mode: "role_separation" | "isolated";
+  storage: "outside_implementor_worktree" | "implementor_accessible";
+  implementorCanRead: boolean;
+  implementorCanWrite: boolean;
+  execution: "trusted_runner" | "shared_process";
+}
+
 export interface AcceptanceBundleV1 {
   schema_version: typeof ACCEPTANCE_BUNDLE_SCHEMA_VERSION;
   bundle_id: string;
@@ -21,6 +29,7 @@ export interface AcceptanceBundleV1 {
   contract_hash: string;
   builder_visible: AcceptanceRequirementV1[];
   restricted: AcceptanceRequirementV1[];
+  restricted_boundary?: AcceptanceOracleIsolationV1;
   generator_role: "independent_acceptance_generator";
   created_at: string;
   frozen: true;
@@ -70,6 +79,16 @@ export const AcceptanceBundleV1Schema = z
     contract_hash: z.string().regex(/^[0-9a-f]{32,64}$/),
     builder_visible: z.array(requirementSchema),
     restricted: z.array(requirementSchema),
+    restricted_boundary: z
+      .object({
+        mode: z.enum(["role_separation", "isolated"]),
+        storage: z.enum(["outside_implementor_worktree", "implementor_accessible"]),
+        implementorCanRead: z.boolean(),
+        implementorCanWrite: z.boolean(),
+        execution: z.enum(["trusted_runner", "shared_process"]),
+      })
+      .strict()
+      .optional(),
     generator_role: z.literal("independent_acceptance_generator"),
     created_at: z.string().datetime(),
     frozen: z.literal(true),
@@ -137,6 +156,7 @@ export function buildAcceptanceBundleV1(input: {
   taskContract: TaskContractV1;
   builder_visible?: AcceptanceRequirementV1[];
   restricted?: AcceptanceRequirementV1[];
+  restricted_boundary?: AcceptanceOracleIsolationV1;
   created_at?: string;
 }): AcceptanceBundleV1 {
   assertBoundTaskContract(input.taskContract);
@@ -175,6 +195,20 @@ export function buildAcceptanceBundleV1(input: {
       );
     }
   }
+  if (
+    restricted.length > 0 &&
+    input.restricted_boundary?.mode === "isolated" &&
+    !(
+      input.restricted_boundary.storage === "outside_implementor_worktree" &&
+      input.restricted_boundary.implementorCanRead === false &&
+      input.restricted_boundary.implementorCanWrite === false &&
+      input.restricted_boundary.execution === "trusted_runner"
+    )
+  ) {
+    throw new Error(
+      "Isolated restricted oracles require external storage, no implementor access, and a trusted runner.",
+    );
+  }
   const createdAt = input.created_at ?? new Date().toISOString();
   const base = {
     schema_version: ACCEPTANCE_BUNDLE_SCHEMA_VERSION,
@@ -184,6 +218,9 @@ export function buildAcceptanceBundleV1(input: {
     restricted,
     generator_role: "independent_acceptance_generator" as const,
     created_at: createdAt,
+    ...(input.restricted_boundary
+      ? { restricted_boundary: { ...input.restricted_boundary } }
+      : {}),
   };
   const bundleHash = sha256Canonical(base);
   return deepFreeze({
@@ -192,6 +229,21 @@ export function buildAcceptanceBundleV1(input: {
     frozen: true as const,
     bundle_hash: bundleHash,
   });
+}
+
+/** Return true only when the restricted oracle has a real capability boundary. */
+export function hasIsolatedRestrictedOracle(
+  bundle: AcceptanceBundleV1,
+): boolean {
+  const boundary = bundle.restricted_boundary;
+  return Boolean(
+    bundle.restricted.length > 0 &&
+      boundary?.mode === "isolated" &&
+      boundary.storage === "outside_implementor_worktree" &&
+      boundary.implementorCanRead === false &&
+      boundary.implementorCanWrite === false &&
+      boundary.execution === "trusted_runner",
+  );
 }
 
 /** Project only the view a role is permitted to consume. This is access separation, not secrecy. */
@@ -217,6 +269,11 @@ export function validateAcceptanceBundleV1(value: unknown): string[] {
     ...requirementIds(bundle.restricted),
   ];
   if (new Set(ids).size !== ids.length) errors.push("duplicate_requirement_id");
+  if (bundle.restricted.length > 0 && bundle.restricted_boundary) {
+    const boundary = bundle.restricted_boundary;
+    if (boundary.mode === "isolated" && !hasIsolatedRestrictedOracle(bundle))
+      errors.push("restricted_boundary_not_isolated");
+  }
   const {
     bundle_id: _bundleId,
     bundle_hash: _bundleHash,

@@ -663,13 +663,12 @@ export class DeepInfraApiRunner implements LlmRunner {
             model: this.model,
             ...(this.maxTokens === null ? {} : { max_tokens: this.maxTokens }),
             temperature: this.temperature,
-            messages: [],
           };
       return JSON.stringify({
         ...envelopeBody,
         stream: isStreaming,
         ...this.getRequestBodyExtras(),
-        messages: envelopeBody.messages ?? [
+        messages: ('messages' in envelopeBody ? envelopeBody.messages : undefined) ?? [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: prompt },
         ],

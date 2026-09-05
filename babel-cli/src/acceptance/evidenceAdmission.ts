@@ -44,6 +44,19 @@ function healthBlocksEvidence(
   return health !== undefined && health !== "complete";
 }
 
+function defaultInfluence(
+  input: InterpretedEvidenceV0,
+): NonNullable<InterpretedEvidenceV0["evidenceInfluence"]> {
+  if (input.producerRole === "implementor") return "IMPLEMENTOR_CONTROLLED";
+  if (
+    input.patchVisibility === "candidate_visible" ||
+    input.implementationOrigin === "during_implementation" ||
+    input.implementationOrigin === "post_implementation"
+  )
+    return "IMPLEMENTOR_INFLUENCED";
+  return "IMPLEMENTOR_VISIBLE";
+}
+
 /**
  * Admit an already interpreted evidence/claim relationship.
  *
@@ -62,6 +75,7 @@ export function admitInterpretedEvidence(
     input.oracleStepId,
   );
   const implementor = input.producerRole === "implementor";
+  const evidenceInfluence = input.evidenceInfluence ?? defaultInfluence(input);
   const unhealthy = healthBlocksEvidence(input.evidenceHealth);
   const stale = input.stale === true;
   const invalidRelation = !(
@@ -72,6 +86,23 @@ export function admitInterpretedEvidence(
   if (!stepKnown)
     reasons.push("evidence is not bound to a planned oracle step");
   if (implementor) reasons.push("implementor explanations are not proof");
+  if (input.patchVisibility === "unknown")
+    reasons.push("patch visibility is unknown");
+  if (input.implementationOrigin === "unknown")
+    reasons.push("implementation origin is unknown");
+  if (input.producerRole === "verifier" && input.verifierAuthority === false)
+    reasons.push("verifier authority is explicitly absent");
+  if (
+    input.exactStateBinding &&
+    input.exactStateBinding.contractHash !== options.contract.contractHash
+  )
+    reasons.push("evidence is bound to a different acceptance contract");
+  if (
+    input.exactStateBinding &&
+    options.oraclePlan &&
+    input.exactStateBinding.oraclePlanHash !== options.oraclePlan.planHash
+  )
+    reasons.push("evidence is bound to a different oracle plan");
   if (unhealthy) reasons.push(`evidence health is ${input.evidenceHealth}`);
   if (stale) reasons.push("evidence is stale for the candidate revision");
   if (invalidRelation) reasons.push("evidence relation is invalid");
@@ -82,6 +113,29 @@ export function admitInterpretedEvidence(
     evidenceId: input.evidenceId,
     ...(input.oracleStepId ? { oracleStepId: input.oracleStepId } : {}),
     producerRole: input.producerRole,
+    evidenceInfluence,
+    ...(input.patchVisibility
+      ? { patchVisibility: input.patchVisibility }
+      : {}),
+    ...(input.implementationOrigin
+      ? { implementationOrigin: input.implementationOrigin }
+      : {}),
+    ...(input.exactStateBinding
+      ? { exactStateBinding: input.exactStateBinding }
+      : {}),
+    ...(input.verifierAuthority !== undefined
+      ? { verifierAuthority: input.verifierAuthority }
+      : {}),
+    ...(input.verifierId ? { verifierId: input.verifierId } : {}),
+    ...(input.sourceDiversityKey
+      ? { sourceDiversityKey: input.sourceDiversityKey }
+      : {}),
+    ...(input.restrictedOracle !== undefined
+      ? { restrictedOracle: input.restrictedOracle }
+      : {}),
+    ...(input.oracleIsolation
+      ? { oracleIsolation: input.oracleIsolation }
+      : {}),
     admissible,
     relation,
     reason: boundedReason(
@@ -106,7 +160,11 @@ export function admitRevisionBoundReceipt(
   );
   const commandMatches =
     !step?.command || step.command === input.receipt.command;
-  const authorityKnown = input.receipt.authority !== false;
+  const authorityKnown =
+    input.receipt.authority === true &&
+    typeof input.receipt.authoritySource === "string" &&
+    input.receipt.authoritySource.trim().length > 0 &&
+    input.receipt.authoritySource !== "unknown";
   const relation: EvidenceRelation =
     input.receipt.exitCode === 0 ? "supports" : "contradicts";
   return admitInterpretedEvidence(
@@ -125,6 +183,23 @@ export function admitRevisionBoundReceipt(
       ...(input.oracleStepId ? { oracleStepId: input.oracleStepId } : {}),
       evidenceHealth: "complete",
       stale: input.receipt.stale,
+      evidenceInfluence: authorityKnown
+        ? "CONTROLLER_OWNED"
+        : "IMPLEMENTOR_INFLUENCED",
+      verifierAuthority: authorityKnown,
+      verifierId: input.receipt.authoritySource ?? input.receipt.command,
+      ...(input.options.oraclePlan
+        ? {
+            exactStateBinding: {
+              candidateStateDigest:
+                input.receipt.boundRevision.compositeTreeHash,
+              contractHash: input.options.contract.contractHash,
+              oraclePlanHash: input.options.oraclePlan.planHash,
+              verifierId:
+                input.receipt.authoritySource ?? input.receipt.command,
+            },
+          }
+        : {}),
     },
     input.options,
   );
@@ -184,6 +259,14 @@ export function admitBdnsEvidenceCandidate(
       evidenceHealth: health,
       patchVisibility: input.candidate.patchVisibility,
       implementationOrigin: input.candidate.origin,
+      evidenceInfluence: input.candidate.independence.implementationIndependent
+        ? "EXTERNAL"
+        : input.candidate.patchVisibility === "candidate_visible"
+          ? "IMPLEMENTOR_INFLUENCED"
+          : "IMPLEMENTOR_VISIBLE",
+      sourceDiversityKey: input.candidate.producer.system,
+      restrictedOracle: false,
+      oracleIsolation: "role_separated",
     },
     input.options,
   );

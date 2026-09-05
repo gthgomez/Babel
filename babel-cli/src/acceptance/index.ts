@@ -15,3 +15,4 @@ export * from "./recording.js";
 export * from "./experiment.js";
 export * from "./fixtureAdapter.js";
 export * from "./campaign.js";
+export * from "./escrow.js";
