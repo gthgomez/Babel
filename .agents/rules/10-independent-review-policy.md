@@ -93,4 +93,7 @@ Trust-root candidates follow the ceremony state machine in
 coordinates come only from the machine-generated ceremony manifest
 (`tools/trust-ceremony.mjs`), the candidate is frozen before signing, preflight
 must pass immediately before signing, and any candidate mutation invalidates
-all prior ceremony artifacts.
+all prior ceremony artifacts. Preflight also binds the live target branch
+head: if `main` advanced past the candidate's base (or moved after any
+ceremony artifact was issued), preflight fails closed and the candidate must
+be rebased, re-reviewed, and re-manifested before any signing act.

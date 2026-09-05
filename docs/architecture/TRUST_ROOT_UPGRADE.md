@@ -1,6 +1,6 @@
 <!---
 status: ACTIVE
-last_verified: 2026-09-04
+last_verified: 2026-09-05
 -->
 
 # TrustRootUpgradeV1 — safe post-bootstrap trust-root upgrades
@@ -39,6 +39,44 @@ authorized upgrade protocol while keeping every other protection intact.
 5. **Independent reviewer authority.** A trust-root change also requires a
    signed independent review receipt (never the autonomous review tier).
 6. **No permanent bypasses.** No bypass actors; no reduced required checks.
+7. **Current-target binding** (ceremony manifests schema v2). A frozen PR is
+   not a frozen world: the PR object's `base.sha` is a historical snapshot
+   GitHub never updates when the target branch advances. A trust-root
+   candidate may therefore not be signed unless the live
+   `refs/heads/<base_ref>` head equals the recorded base and is an ancestor
+   of the candidate. See "Current-target binding" below and
+   [TRUST_CEREMONY_LIFECYCLE.md](./TRUST_CEREMONY_LIFECYCLE.md).
+
+## Current-target binding (ceremony preflight, manifest schema v2)
+
+PRs #144/#145 exposed a second-order trust flaw: a ceremony manifest that
+binds only the PR object's `base.sha` can report
+`TRUST_ROOT_PREFLIGHT=PASS` while `main` has advanced past the candidate's
+base, because GitHub keeps `base.sha` at its creation-time snapshot. The
+ceremony tooling (`tools/trust-ceremony.mjs`) now emits schema-v2 manifests
+that additionally bind `base_ref`, the live `target_ref_head_sha` at
+generation, and the effective `merge_base_sha`, and its preflight fails
+closed with deterministic reasons (`target_branch_advanced`,
+`candidate_not_based_on_current_target`, `base_ref_mismatch`,
+`target_ref_changed`, `target_head_changed_after_review`,
+`target_head_changed_after_authorization`) when the candidate no longer
+incorporates the current target head, or when the target moved after a
+review or authorization artifact was issued.
+
+Enforcement is layered: ceremony preflight (mandatory immediately before
+every signing act) plus the base-rooted gate's `BASE_NOT_INVALIDATED` check
+(`pr_base_sha_is_stale`) at merge time. The authorization schema itself is
+unchanged — v1 receipts and authorizations bind base/head/digest as before;
+target binding lives in the ceremony manifest and the preflight discipline,
+so this repair required no protected-path change.
+
+Future work (TrustRootUpgradeV2 candidate, not part of the current schema):
+bind the *prospective integration state* rather than only the delta — a
+`git merge-tree --write-tree` OID of the resulting tree, so an authorization
+certifies the exact integrated tree that will land, immune to merge-order
+drift. Rejected for now: changing the protected verifier schema mid-flight
+would invalidate the existing ceremony chain for marginal benefit over the
+target-head + ancestry binding.
 
 ## Authorization schema (`trust_root_upgrade_authorization_v1`)
 
