@@ -18,7 +18,6 @@ const ALLOWED_AUTHORITY_REFERENCES = new Set(
     'src/evidence/independentReview.ts', // defines createIndependentReviewAuthorityV1 (the authority factory)
     'src/services/reviewTrustedAuthority.ts', // trusted-service-only construction wrapper (definition site)
     'src/services/trustedReviewIssuer.test.ts', // trusted service exercising the wrapper/factory
-    'src/services/reviewTrustedAuthority.test.ts',
     'src/agent/autonomousSweHardening.test.ts', // test-only fixture keys
     'src/services/reviewCustody.test.ts', // this custody test (documents the forbidden symbols)
   ],

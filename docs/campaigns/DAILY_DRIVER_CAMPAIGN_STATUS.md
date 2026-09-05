@@ -164,7 +164,7 @@ numstat digest, posted as a PR comment — plus marking the PR out of draft
   runs, and re-trigger the workflow (close/reopen) after the comment lands.
 - **Trust ceremony safety (added 2026-09-05):** ceremony coordinates now come
   exclusively from the machine-generated manifest (`tools/trust-ceremony.mjs`;
-  digest semantics cross-verified against the gate own
+  digest semantics cross-verified against the gate's own
   Get-AgentProtectedDiffDigest), staleness validation fails closed with
   precise reasons, and PR-body ceremony sections are marker-delimited
   generated blocks (#144 body regenerated accordingly; pre-rebase coordinates

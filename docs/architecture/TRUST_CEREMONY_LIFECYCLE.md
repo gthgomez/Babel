@@ -57,7 +57,7 @@ POST_MERGE_VERIFIED
   fail closed with precise reasons (`STALE_TRUST_ROOT_CEREMONY`), e.g.
   `head_sha_changed`, `base_sha_changed`, `protected_path_set_changed`,
   `protected_diff_changed`, `pr_number_changed`, `repository_mismatch`,
-  `manifest_expired`.
+  `manifest_expired`, `schema_version_changed`, `pr_not_open`.
 - `node tools/trust-ceremony.mjs body-section --manifest FILE` — render the
   marker-delimited PR-body ceremony block
   (`<!-- babel-trust-root-ceremony-generated -->`). PR bodies must never carry
@@ -65,7 +65,11 @@ POST_MERGE_VERIFIED
 
 Digest semantics replicate the base-rooted gate exactly
 (`Get-AgentProtectedDiffDigest`, `Get-AgentNumstatDigest`), so the manifest's
-`protected_diff_digest` is byte-comparable with what the gate verifies.
+`protected_diff_digest` is byte-comparable with what the gate verifies. Parity note: the gate sorts
+with PowerShell `Sort-Object`, whose ordering is runtime-culture-dependent —
+all gate invocations are pinned to pwsh 7 (ICU ordering), which matches this
+tool; a Windows PowerShell 5.1 invocation would order differently (recorded as
+a trust-plane follow-up to pin ordinal sorting in the gate).
 
 ## Review tiers (assurance language)
 
