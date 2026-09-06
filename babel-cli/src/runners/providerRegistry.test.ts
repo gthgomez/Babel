@@ -5,7 +5,7 @@ import {
   getProviderCredentialStatus,
   resolveProviderCredential,
 } from './credentialHub.js'
-import { getProviderSpec, listProviderSpecs } from './providerRegistry.js'
+import { BENCHMARK_PROVIDER_IDS, getProviderSpec, listProviderSpecs } from './providerRegistry.js'
 
 describe('provider credential hub', () => {
   it('covers every supported provider without exposing values in status', () => {
@@ -74,5 +74,9 @@ describe('provider credential hub', () => {
   it('declares operation capabilities independently of credentials', () => {
     assert.equal(getProviderSpec('deepseek').operations.includes('native_tool_stream'), true)
     assert.equal(getProviderSpec('openai').operations.includes('native_tool_stream'), false)
+  })
+
+  it('keeps benchmark provider identities separate from production ProviderId', () => {
+    assert.deepEqual(BENCHMARK_PROVIDER_IDS, ['opencode-go', 'opencode-zen'])
   })
 })
