@@ -2,7 +2,7 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-09-05
+last_verified: 2026-09-06
 -->
 
 # Daily Driver Campaign — Status
@@ -58,6 +58,10 @@ Stop/go: **CAMPAIGN_READY_TO_EXECUTE** (Plan §E).
 | 2026-09-05 | `babel models list` real-output smoke | repaired renderer | pass — the available-models table renders `n/a` for `deepseek-v4-pro-openrouter` (previously fabricated `$0/M`); single-tier route renders `none — single-tier route` |
 | 2026-09-05 | Isolated read-only review round 1 (`autonomous_review_evidence_v1` intake) | full diff `015c7b3...a552107` | **REQUEST_CHANGES — 1 blocking finding, accepted and fixed**: the resolver computes `approximateCostPerRunUsd` from `?? 0` inputs and sets it unconditionally, so `/model show` rendered a fabricated `~$0.0000/run` for models without cost metadata (production shape; the original test masked it with a shape real resolvers never produce). Fix: the per-run estimate renders only when at least one per-M cost is published; regression test uses the production shape; verified via the real resolver for `deepseek-v4-pro-openrouter`. Non-blocking notes adopted: policy path in the snapshot-cache key, `(historical)` markers on failure/last-run rows, `redactSecrets` on rendered error text, reachability wording tightened |
 | 2026-09-05 | GitHub merge record | PR #141 | **MERGED** 2026-09-05T05:27:31Z as `bc1b4452587c6cd45679ac3a3b1eaca2b7cbaea5`; all six required checks green at head `e3872bd` (trusted-control-plane pass, `blockers: []`, AUTONOMOUS review tier, no exception); post-merge `main` Public Release Gate success |
+| 2026-09-06 | Autonomy campaign reconciliation | live GitHub + local repo | `main` `9657344`, PRs [144, 148, 149]; #144 unchanged and blocked on the owner signing-custody boundary; human-touch audit (T1-T14) and doc/policy inventory completed; canonical record: [AUTONOMY_CAMPAIGN_RECORD.md](./AUTONOMY_CAMPAIGN_RECORD.md) |
+| 2026-09-06 | Independent adversarial reviews (round 1) | #148 (`e727f54`), #149 (`34ebd31`) | REQUEST_CHANGES - #148: 2 blocking (classification-vocabulary inconsistency; E11 cited a #144-only test as current coverage); #149: 1 blocking (refusal advertised an unimplemented `-Replace`; `reviewed_at` defeated idempotent skip). All repaired in follow-up commits; non-blocking notes adopted (ASCII-only sources, gh exit-code checks, live draft enforcement, guide wording) |
+| 2026-09-06 | `pwsh tools/tests/test-agent-pr-evidence.ps1` | `agent/pr-evidence-tooling` worktree | **29 passed / 0 failed** (gate-module digest parity, exact binding, fail-closed refusals) |
+| 2026-09-06 | `tools/check-public-content-policy.ps1` + `npx tsc --noEmit` | #148 and #149 trees | pass |
 
 ### Trust-plane history correction (verified against GitHub, 2026-09-05)
 
