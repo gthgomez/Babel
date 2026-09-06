@@ -101,12 +101,11 @@ target-head + ancestry binding.
 The signature covers the canonical JSON (recursively key-sorted) of all
 fields except `signature`, exactly like the independent-review verifier.
 
-Timestamp format constraint: every timestamp that participates in a signed
-artifact hash (`reviewed_at` in receipts) must use `YYYY-MM-DDTHH:mm:ssZ`
-(UTC, no fractional seconds). The base-rooted gate re-serializes parsed JSON
-when recomputing the artifact hash, and PowerShell's JSON round-trip
-normalizes timestamps in exactly that format; fractional-second or
-offset-bearing timestamps would fail hash verification.
+Timestamp constraint: signed receipt and authorization timestamps must be
+valid ISO-8601 values, and expiry must follow issuance. UTC timestamps with
+fractional seconds are valid. Verifiers check the signed canonical payload
+directly; they do not reconstruct the removed V1 `artifact_hash` through a
+PowerShell JSON round-trip.
 
 ### Protected diff digest
 
@@ -193,8 +192,8 @@ PR, and they are fixed without weakening any check:
 Per `.agents/rules/10-independent-review-policy.md`, ordinary PRs satisfy
 independent review with either:
 
-- **CERTIFIED** — a signed `independent_review_receipt_v1` bound to a
-  supervisor-signed consumed challenge (unchanged verification path); or
+- **CERTIFIED** — a signed `independent_review_receipt_v2` bound to a
+  supervisor-signed consumed challenge; or
 - **AUTONOMOUS** — structured `autonomous_review_evidence_v1` from an
   isolated read-only AI reviewer (reviewer ≠ builder, exact base/head,
   `diff_numstat_digest` binding over `git diff --numstat base...head`),

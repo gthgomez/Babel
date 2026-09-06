@@ -7,7 +7,7 @@
 //   node make-independent-review-evidence.mjs <spec-json> <receipt-out> <ledger-out>
 //
 // Spec JSON: {
-//   unsignedReceipt: <receipt object without signature; artifact_hash already set>,
+//   unsignedReceipt: <independent_review_receipt_v2 without signature>,
 //   reviewerPrivateKeyPem: <string>, reviewerKeyId: <string>,
 //   supervisorPrivateKeyPem: <string>, supervisorKeyId: <string>,
 //   challenge: { challenge_id, task_id, run_id, contract_hash, issued_at, expires_at }

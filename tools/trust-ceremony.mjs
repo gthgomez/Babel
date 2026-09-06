@@ -195,7 +195,7 @@ export function buildManifest(input) {
  *   stage                           — 'review' | 'authorization' (labels the
  *                                     artifact binding above)
  */
-export function validateStaleness(manifest, live) {
+export function validateStaleness(manifest, live, now = Date.now()) {
   const reasons = [];
   if (manifest.repository !== live.repository) reasons.push('repository_mismatch');
   if (Number(manifest.pr_number) !== Number(live.prNumber)) reasons.push('pr_number_changed');
@@ -240,7 +240,9 @@ export function validateStaleness(manifest, live) {
   if (JSON.stringify(manifestPaths) !== JSON.stringify(livePaths)) reasons.push('protected_path_set_changed');
   if (manifest.protected_diff_digest !== live.protectedDiffDigest) reasons.push('protected_diff_changed');
   if (live.prState !== undefined && live.prState !== 'OPEN') reasons.push('pr_not_open');
-  if (manifest.expires_at !== undefined && Date.parse(manifest.expires_at) <= Date.now()) {
+  const nowMillis = typeof now === 'string' ? Date.parse(now) : Number(now);
+  if (!Number.isFinite(nowMillis)) throw new Error(`invalid validation time: ${now}`);
+  if (manifest.expires_at !== undefined && Date.parse(manifest.expires_at) <= nowMillis) {
     reasons.push('manifest_expired');
   }
   return reasons;
@@ -378,7 +380,7 @@ function commandPreflight(options) {
     liveCandidateFromGithub(options.repository ?? manifest.repository, options.pr ?? manifest.pr_number),
     options,
   );
-  const reasons = validateStaleness(manifest, live);
+  const reasons = validateStaleness(manifest, live, options.now ?? Date.now());
   if (reasons.length > 0) {
     console.log(`TRUST_ROOT_PREFLIGHT=FAIL stale_reasons=${reasons.join(',')}`);
     process.exitCode = 1;
@@ -414,7 +416,7 @@ function commandValidateStaleness(options) {
     live = liveCandidateFromGithub(options.repository ?? manifest.repository, options.pr ?? manifest.pr_number);
   }
   applyArtifactStageOptions(live, options);
-  const reasons = validateStaleness(manifest, live);
+  const reasons = validateStaleness(manifest, live, options.now ?? Date.now());
   if (reasons.length > 0) {
     console.log(`STALE_TRUST_ROOT_CEREMONY reasons=${reasons.join(',')}`);
     process.exitCode = 1;
@@ -453,7 +455,7 @@ export function renderCeremonySection(manifest) {
     '',
     'Required artifacts (exact schemas enforced by the base-rooted verifiers):',
     '',
-    '1. **Independent review receipt** (`independent_review_receipt_v1`/v2): repository, pr_number, base_sha, head_sha, reviewer_id ≠ builder, verdict APPROVE, no blocking findings, valid supervisor-signed challenge, non-expired, signed by a key registered in `config/independent-review-keys.json`. Transport: PR comment with the `<!-- babel-independent-review-receipt-v2 -->` marker.',
+    '1. **Independent review receipt** (`independent_review_receipt_v2`): repository, pr_number, base_sha, head_sha, reviewer_id ≠ builder, reviewed_scope, verdict APPROVE, no blocking findings, valid supervisor-signed challenge, non-expired, signed by a key registered in `config/independent-review-keys.json`. Transport: PR comment with the `<!-- babel-independent-review-receipt-v2 -->` marker.',
     '2. **Supervisor authorization** (`trust_root_upgrade_authorization_v1`): `intent: "trust_root_upgrade"`, `decision: "AUTHORIZE_TRUST_ROOT_UPGRADE"`, repository/pr_number/base_sha/head_sha/protected_paths/protected_diff_digest exactly as above, `issued_at`/`expires_at` valid, ed25519 `signature` by a key in `config/trusted-supervisor-keys.json`. Transport: PR comment with the `<!-- babel-trust-root-upgrade-authorization-v1 -->` marker.',
     '',
     'Target-branch binding: the manifest binds the live target branch head above. `main` must not move between manifest generation, review, authorization, and the final merge preflight. Preflight (immediately before signing and immediately before merge): `node tools/trust-ceremony.mjs preflight --manifest <file> --repository <repo> --pr <n>` must print `TRUST_ROOT_PREFLIGHT=PASS`. Any coordinate change — including target-branch advancement (`target_branch_advanced`, `candidate_not_based_on_current_target`, `target_head_changed_after_review|authorization`) — invalidates every prior artifact: regenerate, re-review, re-authorize.',

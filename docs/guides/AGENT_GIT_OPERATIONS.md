@@ -17,7 +17,7 @@ Run this before modifying or staging work:
 .\scripts\agent-preflight.ps1
 ```
 
-The command emits JSON with the repository, branch, local and base SHAs, Git and GitHub CLI paths, authentication result, credential-provider result, worktree state, and named readiness checks. It exits nonzero when a required check is blocked. Use `-AllowDirtyWorktree` only for inspection when an existing dirty tree is intentional; that mode does not make the tree mutation- or push-ready.
+The command emits JSON with the repository, branch, local and base SHAs, Git and GitHub CLI paths, authentication result, credential-provider result, worktree state, and named readiness checks. Read its action-scoped fields: `localMutationAllowed`/`mutationReady` govern local work, while `remoteMutationAllowed`/`pushReady` govern remote work. Dirty state is reported for reconciliation and does not revoke local task authority. A GitHub or remote failure reports `STOP_REMOTE` while local edits, tests, and commits continue. `-AllowDirtyWorktree` remains a compatibility flag and is no longer required.
 
 For a compact diagnostic snapshot that does not fetch or call GitHub:
 
@@ -79,7 +79,7 @@ Use `git` for repository state and `gh` for GitHub state:
 
 The normal lifecycle is:
 
-`preflight → fetch → isolated worktree → modify → verify → review diff → commit → clean status → push → verify remote SHA → create/update PR → inspect exact-SHA CI → revalidate → merge → fetch → verify main → post-merge checks`
+`preflight → reconcile dirty work → fetch when remote-ready → isolate only when useful/conflicting → modify → verify → review diff → commit → push → verify remote SHA → create/update PR → inspect exact-SHA CI → repair → revalidate → merge → fetch → verify main → post-merge checks`
 
 Do not infer that green CI belongs to the current work. Bind review, the remote branch, the PR, and the check runs to the same commit SHA immediately before a merge.
 
@@ -88,12 +88,12 @@ Do not infer that green CI belongs to the current work. Bind review, the remote 
 After review and CI are available, run:
 
 ```powershell
-.\scripts\agent-pr-gate.ps1 -PR 110 -ReviewedHeadSha <reviewed-sha> -RiskTier HIGH -IndependentReviewReceiptPath <receipt> -MergeAuthorized
+.\scripts\agent-pr-gate.ps1 -PR 110 -ReviewedHeadSha <reviewed-sha> -RiskTier HIGH -IndependentReviewReceiptPath <receipt>
 
 `-BootstrapRepairAuthorized` is reserved for the documented gate-repair self-gating transition and records its exception; it is not a general check bypass.
 ```
 
-The result is either `MERGE_READY` or `BLOCKED` and includes the reviewed head, PR head, remote branch head, exact-head CI resolutions, PR base, current `origin/main`, active GitHub ruleset policy, independent technical review state, merge-authority state, worktree state, and blockers. Required status contexts are read from the active `protect-main` ruleset rather than assumed locally. HIGH and CRITICAL risk tiers require an exact-head independent review receipt; `-MergeAuthorized` is an explicit current-task authorization and is never inferred from CI or review evidence. Use `-AllowedPath` when an explicit changed-path allowlist is part of the review, and `-RequireIsolatedWorktree` when the gate must reject a canonical checkout.
+The result is either `MERGE_READY` or `BLOCKED` and includes the reviewed head, PR head, remote branch head, exact-head CI resolutions, PR base, current `origin/main`, active GitHub ruleset policy, independent technical review state, worktree state, and blockers. `MERGE_READY` means technical eligibility only; the repository gate neither authenticates nor creates task authority. Required status contexts are read from the active `protect-main` ruleset rather than assumed locally. HIGH and CRITICAL risk tiers require exact-head independent review evidence, and protected trust-root paths force the certified signing tier even if a caller supplies `-RiskTier LOW`. Normal checked merge is a routine transaction inherited from the trusted active shipping task; the legacy `-MergeAuthorized` switch is accepted for compatibility but does not create authority. Use `-AllowedPath` when an explicit changed-path allowlist is part of the review, and `-RequireIsolatedWorktree` when methodological validity requires isolation.
 
 The gate uses `gh pr view` for PR metadata and the commit-scoped check-runs API for CI. It does not merge, delete branches, force-push, or rewrite history.
 

@@ -27,7 +27,7 @@ This repo should be treated as a **runnable public-safe release surface**.
 Canonical public success means a new user can:
 
 1. build `babel-cli` and start the interactive TUI (`node .\babel-cli\dist\index.js interactive`)
-2. send a chat task and watch Babel inspect the repository, edit files with permission, and verify the result
+2. send a chat task and watch Babel inspect the repository, perform task-authorized edits, and verify the result
 3. move to `plan` or `deep` when the task needs stronger gates
 4. validate the catalog and preview a resolved stack/manifest without an API key
 

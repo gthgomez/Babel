@@ -3,7 +3,7 @@ param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$env:GIT_ALLOW_PROTOCOL = 'file'
+$env:GIT_ALLOW_PROTOCOL = 'file:https'
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
@@ -65,7 +65,6 @@ try {
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('remote', 'add', 'origin', 'https://github.com/gthgomez/Babel.git') | Out-Null
   $mappedRemote = 'file:///' + ([IO.Path]::GetFullPath($remote)).Replace('\', '/')
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', "url.$mappedRemote.insteadOf", 'https://github.com/gthgomez/Babel.git') | Out-Null
-  Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', "url.$mappedRemote.insteadOf", 'https://github.com/gthgomez/Babel') | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', 'protocol.file.allow', 'always') | Out-Null
   Invoke-TestGit -WorkingDirectory $remote -Arguments @('update-ref', 'refs/heads/main', $mainSha) | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('switch', '-c', 'agent/fixture') | Out-Null
@@ -75,6 +74,10 @@ try {
   $headSha = Invoke-TestGit -WorkingDirectory $fixture -Arguments @('rev-parse', 'HEAD')
   Copy-Item -Path (Join-Path $fixture '.git\objects\*') -Destination (Join-Path $remote 'objects') -Recurse -Force
   Invoke-TestGit -WorkingDirectory $remote -Arguments @('update-ref', 'refs/heads/agent/fixture', $headSha) | Out-Null
+  # Materialize the local file:// fixture before installing the synthetic gh
+  # helper. Git credential-manager settings are irrelevant to this fetch and
+  # must not make the hermetic test depend on a host gh executable mapping.
+  Invoke-TestGit -WorkingDirectory $fixture -Arguments @('-c', 'credential.helper=', 'fetch', 'origin', '--prune') | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', '--local', '--unset-all', 'credential.helper') -IgnoreFailure | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', '--local', '--add', 'credential.helper', '') | Out-Null
   Invoke-TestGit -WorkingDirectory $fixture -Arguments @('config', '--local', '--add', 'credential.helper', '!gh auth git-credential') | Out-Null
@@ -98,7 +101,7 @@ try {
   )
   Assert-AgentTest ($preflightRun.exitCode -eq 0) "preflight should pass: $($preflightRun.text)"
   $preflight = $preflightRun.text | ConvertFrom-Json
-  Assert-AgentTest ([bool]$preflight.ok) 'preflight result should be ok'
+  Assert-AgentTest ([bool]$preflight.ok) "preflight result should be ok: $($preflightRun.text)"
   Assert-AgentTest ([bool]$preflight.pushReady) 'preflight should be push-ready'
   Assert-AgentTest ([bool]$preflight.checks.AUTH_OK) 'preflight should verify GitHub auth'
   Assert-AgentTest ([bool]$preflight.checks.REMOTE_OK) 'preflight should verify the remote repository'
@@ -113,6 +116,18 @@ try {
   $status = $statusRun.text | ConvertFrom-Json
   Assert-AgentTest (-not [bool]$status.worktree.clean) 'status should identify a dirty worktree'
   Assert-AgentTest (@($status.worktree.dirtyPaths) -contains 'dirty.txt') 'status should report the dirty path'
+  $dirtyPreflightRun = Invoke-TestScript -Script $preflightScript -Arguments @(
+    '-RepoRoot', $fixture,
+    '-GitPath', $git,
+    '-GhPath', $fakeGh,
+    '-ExpectedBranch', 'agent/fixture',
+    '-ExpectedHeadSha', $headSha,
+    '-ExpectedBaseSha', $mainSha
+  )
+  Assert-AgentTest ($dirtyPreflightRun.exitCode -eq 0) "dirty preflight should keep local work available: $($dirtyPreflightRun.text)"
+  $dirtyPreflight = $dirtyPreflightRun.text | ConvertFrom-Json
+  Assert-AgentTest ([bool]$dirtyPreflight.mutationReady) 'dirty coherent work should remain mutation-ready'
+  Assert-AgentTest (@($dirtyPreflight.warnings) -contains 'dirty_worktree_requires_reconciliation_not_approval') 'dirty preflight should request reconciliation, not approval'
   Remove-Item -LiteralPath (Join-Path $fixture 'dirty.txt') -Force
 
   $worktreeScript = Join-Path $repoRoot 'scripts\agent-worktree.ps1'
@@ -145,14 +160,14 @@ try {
 
   $prJson = '{"number":42,"url":"https://github.com/gthgomez/Babel/pull/42","state":"OPEN","isDraft":false,"baseRefName":"main","baseRefOid":"' + $mainSha + '","headRefName":"agent/fixture","headRefOid":"' + $headSha + '","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","reviews":[],"isCrossRepository":false,"headRepositoryOwner":{"login":"gthgomez"},"headRepository":{"nameWithOwner":"gthgomez/Babel"}}'
   $rulesetList = '[{"id":19597161,"name":"protect-main","enforcement":"active"}]'
-  $rulesetDetail = '{"id":19597161,"name":"protect-main","enforcement":"active","rules":[{"type":"pull_request","parameters":{"required_approving_review_count":0,"required_review_thread_resolution":true,"require_code_owner_review":false,"allowed_merge_methods":["merge","squash","rebase"]}},{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":false,"required_status_checks":[{"context":"security"},{"context":"public-content-policy"},{"context":"linux-validation"},{"context":"public-pr-metadata"},{"context":"windows-portability"}]}}],"bypass_actors":[]}'
+  $rulesetDetail = '{"id":19597161,"name":"protect-main","enforcement":"active","rules":[{"type":"pull_request","parameters":{"required_approving_review_count":0,"required_review_thread_resolution":true,"require_code_owner_review":false,"allowed_merge_methods":["merge","squash","rebase"]}},{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":false,"required_status_checks":[{"context":"security","integration_id":15368},{"context":"public-content-policy","integration_id":15368},{"context":"linux-validation","integration_id":15368},{"context":"public-pr-metadata","integration_id":15368},{"context":"windows-portability","integration_id":15368}]}}],"bypass_actors":[]}'
   $graphqlJson = '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
   $checkItems = @()
-  $checkItems += '{"id":101,"name":"security","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"101","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
-  $checkItems += '{"id":102,"name":"public-content-policy","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"102","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
-  $checkItems += '{"id":103,"name":"linux-validation","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"103","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
-  $checkItems += '{"id":104,"name":"public-pr-metadata","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request_target","workflow_name":"Public PR Metadata","workflow_id":"workflow-2","workflow_run_id":"104","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
-  $checkItems += '{"id":105,"name":"windows-portability","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"105","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
+  $checkItems += '{"id":101,"name":"security","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"101","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z","app":{"id":15368}}'
+  $checkItems += '{"id":102,"name":"public-content-policy","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"102","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z","app":{"id":15368}}'
+  $checkItems += '{"id":103,"name":"linux-validation","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"103","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z","app":{"id":15368}}'
+  $checkItems += '{"id":104,"name":"public-pr-metadata","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request_target","workflow_name":"Public PR Metadata","workflow_id":"workflow-2","workflow_run_id":"104","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z","app":{"id":15368}}'
+  $checkItems += '{"id":105,"name":"windows-portability","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"105","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z","app":{"id":15368}}'
   $checkJson = '{"check_runs":[' + ($checkItems -join ',') + ']}'
   @(
     'param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)',
@@ -177,8 +192,7 @@ try {
     '-GitPath', $git,
     '-GhPath', $fakeGh,
     '-ReviewedHeadSha', $headSha,
-    '-RiskTier', 'LOW',
-    '-MergeAuthorized'
+    '-RiskTier', 'LOW'
   )
   Assert-AgentTest ($gateRun.exitCode -eq 0) "PR gate should pass: $($gateRun.text)"
   $gate = $gateRun.text | ConvertFrom-Json
@@ -188,6 +202,9 @@ try {
   Assert-AgentTest ([bool]$gate.checks.CI_HEAD_MATCH) 'PR gate should bind CI to PR head'
   Assert-AgentTest ([bool]$gate.checks.REQUIRED_CHECKS_GREEN) 'PR gate should require all configured checks'
   Assert-AgentTest ([bool]$gate.checks.BASE_NOT_INVALIDATED) 'PR gate should verify the base SHA'
+  Assert-AgentTest ([string]$gate.reviewPolicy.gateScope -eq 'technical_merge_eligibility') 'repository gate must report technical eligibility only'
+  Assert-AgentTest (-not [bool]$gate.reviewPolicy.taskAuthorityEvaluated) 'repository gate must not self-assert task authority'
+  Assert-AgentTest ([string]$gate.reviewPolicy.taskAuthoritySource -eq 'trusted_active_task_outside_repository_gate') 'task authority must remain outside repository-controlled evidence'
 
   $zeroSha = [string]::new('0', 40)
   $blockedRun = Invoke-TestScript -Script $prGateScript -Arguments @(
@@ -196,8 +213,7 @@ try {
     '-GitPath', $git,
     '-GhPath', $fakeGh,
     '-ReviewedHeadSha', $zeroSha,
-    '-RiskTier', 'LOW',
-    '-MergeAuthorized'
+    '-RiskTier', 'LOW'
   )
   Assert-AgentTest ($blockedRun.exitCode -eq 1) 'PR gate should block a reviewed-head mismatch'
   $blocked = $blockedRun.text | ConvertFrom-Json
@@ -209,6 +225,20 @@ try {
     'if ($Arguments.Count -gt 0 -and $Arguments[0] -eq "--version") { Write-Output "gh version 2.97.0"; exit 0 }',
     'if ($Arguments.Count -gt 1 -and $Arguments[0] -eq "auth" -and $Arguments[1] -eq "status") { exit 1 }',
     'exit 1') | Set-Content -LiteralPath $fakeGhAuthFailure -Encoding utf8
+  $remoteDegradedRun = Invoke-TestScript -Script $preflightScript -Arguments @(
+    '-RepoRoot', $fixture,
+    '-GitPath', $git,
+    '-GhPath', $fakeGhAuthFailure,
+    '-ExpectedBranch', 'agent/fixture',
+    '-ExpectedHeadSha', $headSha,
+    '-ExpectedBaseSha', $mainSha
+  )
+  Assert-AgentTest ($remoteDegradedRun.exitCode -eq 0) "remote degradation should not block local work: $($remoteDegradedRun.text)"
+  $remoteDegraded = $remoteDegradedRun.text | ConvertFrom-Json
+  Assert-AgentTest ([bool]$remoteDegraded.localMutationAllowed) 'remote degradation should keep local mutation allowed'
+  Assert-AgentTest (-not [bool]$remoteDegraded.remoteMutationAllowed) 'remote degradation should stop remote mutation'
+  Assert-AgentTest ([string]$remoteDegraded.status -eq 'STOP_REMOTE') 'remote degradation should report STOP_REMOTE'
+  Assert-AgentTest (@($remoteDegraded.remoteBlockers) -contains 'github_auth_failed') 'remote degradation should identify the remote blocker'
   $authFailureRun = Invoke-TestScript -Script $prGateScript -Arguments @(
     '-PR', '42',
     '-RepoRoot', $fixture,

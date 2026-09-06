@@ -26,6 +26,25 @@ function parseArg(name) {
   return index >= 0 ? process.argv[index + 1] : undefined;
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasExactFields(value, allowed, required) {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  return keys.every((key) => allowed.has(key)) && required.every((key) => keys.includes(key));
+}
+
+function isSafeRelativePath(value) {
+  if (typeof value !== "string" || value.length === 0) return false;
+  const normalized = value.replaceAll("\\", "/");
+  return !normalized.startsWith("/") &&
+    !/^[A-Za-z]:/.test(normalized) &&
+    normalized !== ".." &&
+    !normalized.startsWith("../");
+}
+
 const receiptPath = parseArg("--receipt");
 const keysPath = parseArg("--keys");
 const ledgerPath = parseArg("--ledger");
@@ -53,6 +72,79 @@ if (!receipt || !registry || !ledger || !supervisorRegistry) {
   process.exit(1);
 }
 
+const receiptFields = new Set([
+  "schema_version", "kind", "repository", "pr_number", "task_id", "run_id",
+  "contract_hash", "base_sha", "head_sha", "reviewer_id", "reviewer_class",
+  "review_mode", "reviewed_at", "challenge_id", "builder_id", "reviewed_scope",
+  "verdict", "blocking_findings", "authority_provenance", "signature",
+]);
+const receiptRequiredFields = [...receiptFields].filter((field) => field !== "pr_number");
+if (!hasExactFields(receipt, receiptFields, receiptRequiredFields)) {
+  errors.push("review_receipt_schema_invalid");
+} else {
+  if (receipt.schema_version !== 2) errors.push("review_receipt_schema_version_invalid");
+  if (receipt.kind !== "independent_review_receipt_v2") errors.push("review_receipt_kind_invalid");
+  for (const field of [
+    "repository", "task_id", "run_id", "contract_hash", "base_sha", "head_sha",
+    "reviewer_id", "reviewed_at", "challenge_id", "builder_id",
+  ]) {
+    if (typeof receipt[field] !== "string" || receipt[field].length === 0)
+      errors.push(`review_receipt_${field}_invalid`);
+  }
+  if (receipt.pr_number !== undefined && (!Number.isInteger(receipt.pr_number) || receipt.pr_number < 1))
+    errors.push("review_receipt_pr_number_invalid");
+  if (!['independent_readonly', 'independent_breaker'].includes(receipt.reviewer_class))
+    errors.push("review_receipt_reviewer_class_invalid");
+  if (!['exact_head', 'exact_revision'].includes(receipt.review_mode))
+    errors.push("review_receipt_review_mode_invalid");
+  if (!['APPROVE', 'BLOCK', 'UNKNOWN'].includes(receipt.verdict))
+    errors.push("review_receipt_verdict_invalid");
+  if (receipt.reviewer_id === receipt.builder_id)
+    errors.push("review_receipt_reviewer_not_independent");
+  const reviewedAt = Date.parse(receipt.reviewed_at);
+  const now = Date.now();
+  if (!Number.isFinite(reviewedAt) || reviewedAt > now + 5 * 60 * 1000 || reviewedAt < now - 24 * 60 * 60 * 1000)
+    errors.push("review_receipt_reviewed_at_invalid");
+  if (!Array.isArray(receipt.blocking_findings) || receipt.blocking_findings.some((finding) => typeof finding !== "string"))
+    errors.push("review_receipt_blocking_findings_invalid");
+  else if (receipt.verdict === "APPROVE" && receipt.blocking_findings.length > 0)
+    errors.push("review_receipt_approval_has_blocking_findings");
+
+  const scope = receipt.reviewed_scope;
+  if (!isRecord(scope) || !['files', 'repository'].includes(scope.kind)) {
+    errors.push("review_receipt_scope_invalid");
+  } else if (scope.kind === "repository") {
+    if (!hasExactFields(scope, new Set(["kind"]), ["kind"]))
+      errors.push("review_receipt_scope_invalid");
+  } else {
+    if (!hasExactFields(scope, new Set(["kind", "paths"]), ["kind", "paths"]) ||
+        !Array.isArray(scope.paths) || scope.paths.length === 0 ||
+        scope.paths.some((entry) => !isSafeRelativePath(entry))) {
+      errors.push("review_receipt_scope_invalid");
+    } else {
+      const normalized = scope.paths.map((entry) => entry.replaceAll("\\", "/"));
+      if (new Set(normalized).size !== normalized.length)
+        errors.push("review_receipt_scope_duplicate_path");
+    }
+  }
+
+  const authorityFields = new Set(["issuer", "key_id", "challenge_id"]);
+  if (!hasExactFields(receipt.authority_provenance, authorityFields, [...authorityFields]) ||
+      receipt.authority_provenance.issuer !== "supervisor_review_lane" ||
+      typeof receipt.authority_provenance.key_id !== "string" ||
+      receipt.authority_provenance.key_id.length === 0 ||
+      receipt.authority_provenance.challenge_id !== receipt.challenge_id) {
+    errors.push("review_receipt_authority_provenance_invalid");
+  }
+  const signatureFields = new Set(["algorithm", "key_id", "value"]);
+  if (!hasExactFields(receipt.signature, signatureFields, [...signatureFields]) ||
+      receipt.signature.algorithm !== "ed25519" ||
+      typeof receipt.signature.key_id !== "string" || receipt.signature.key_id.length === 0 ||
+      typeof receipt.signature.value !== "string" || receipt.signature.value.length === 0) {
+    errors.push("review_receipt_signature_shape_invalid");
+  }
+}
+
 if (
   ledger.schema_version !== 1 ||
   ledger.kind !== "independent_review_challenge_ledger_v1" ||
@@ -62,8 +154,9 @@ if (
 )
   errors.push("review_challenge_ledger_integrity_invalid");
 
+const challenges = Array.isArray(ledger.challenges) ? ledger.challenges : [];
 const challengeIds = new Set();
-for (const record of ledger.challenges) {
+for (const record of challenges) {
   if (
     !record ||
     typeof record.challenge_id !== "string" ||
@@ -96,7 +189,7 @@ for (const record of ledger.challenges) {
   }
 }
 
-const challenge = ledger.challenges.find(
+const challenge = challenges.find(
   (candidate) => candidate.challenge_id === receipt.challenge_id,
 );
 if (!challenge) errors.push("review_challenge_unknown");

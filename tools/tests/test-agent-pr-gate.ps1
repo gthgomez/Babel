@@ -16,19 +16,19 @@ function New-AgentGateObservation {
     [string]$Name = 'security', [string]$Head = ('a' * 40), [string]$Status = 'completed', [string]$Conclusion = 'success',
     [string]$Event = 'pull_request', [string]$WorkflowName = 'Public Release Gate', [string]$WorkflowId = 'workflow-1',
     [string]$RunId = '100', [string]$RunAttempt = '1', [string]$RunIdForCheck = '', [string]$Started = '2026-08-28T10:00:00Z',
-    [string]$Completed = '2026-08-28T10:01:00Z', [string]$Authority = ''
+    [string]$Completed = '2026-08-28T10:01:00Z', [string]$Authority = '', [string]$AppId = '15368'
   )
   $id = if ([string]::IsNullOrWhiteSpace($RunIdForCheck)) { $RunId } else { $RunIdForCheck }
   return [pscustomobject]@{
     name = $Name; head_sha = $Head; status = $Status; conclusion = $Conclusion; event = $Event
     workflow_name = $WorkflowName; workflow_id = $WorkflowId; workflow_run_id = $RunId; workflow_run_attempt = $RunAttempt
-    check_suite_id = "suite-$RunId"; check_run_id = "check-$id"; started_at = $Started; completed_at = $Completed; authority = $Authority
+    check_suite_id = "suite-$RunId"; check_run_id = "check-$id"; started_at = $Started; completed_at = $Completed; authority = $Authority; app_id = $AppId
   }
 }
 
 $head = 'a' * 40
 $otherHead = 'b' * 40
-$policyArgs = @{ TargetSha = $head; AuthorityEvent = 'pull_request'; AuthorityWorkflowName = 'Public Release Gate' }
+$policyArgs = @{ TargetSha = $head; AuthorityEvent = 'pull_request'; AuthorityWorkflowName = 'Public Release Gate'; AuthorityAppId = [int64]15368 }
 
 try {
   $success = New-AgentGateObservation
@@ -66,6 +66,10 @@ try {
   $case8 = Resolve-AgentRequiredCheck -Observations @($unknownWorkflow) -RequiredName 'security' @policyArgs
   Assert-AgentGateTest ($case8.status -eq 'AMBIGUOUS') 'unknown workflow authority must fail closed'
 
+  $wrongProducer = New-AgentGateObservation -AppId '99999' -RunId '801'
+  $case9 = Resolve-AgentRequiredCheck -Observations @($wrongProducer) -RequiredName 'security' @policyArgs
+  Assert-AgentGateTest ($case9.status -eq 'AMBIGUOUS') 'matching name/workflow from an unbound producer must fail closed'
+
   $permutations = @(
     @($oldSuccess, $newFailure), @($newFailure, $oldSuccess), @($oldFailure, $newSuccess), @($newSuccess, $oldFailure)
   )
@@ -97,33 +101,41 @@ try {
   $malformedThreads = Resolve-AgentReviewThreadPages -Pages @([pscustomobject]@{ nodes = @(); pageInfo = [pscustomobject]@{ hasNextPage = $true; endCursor = '' } })
   Assert-AgentGateTest (-not [bool]$malformedThreads.available -and $malformedThreads.error -eq 'review_threads_pagination_incomplete') 'incomplete review-thread pagination must fail closed'
 
-  $zeroReview = Get-AgentReviewPolicyVerdict -RequiredApprovalCount 0 -ObservedApprovalCount 0 -ThreadsRequired $true -ThreadsResolved $true -IndependentRequired $true -IndependentSatisfied $true -MergeAuthorized $true
+  $zeroReview = Get-AgentReviewPolicyVerdict -RequiredApprovalCount 0 -ObservedApprovalCount 0 -ThreadsRequired $true -ThreadsResolved $true -IndependentRequired $true -IndependentSatisfied $true
   Assert-AgentGateTest ([bool]$zeroReview.github_approval_satisfied) 'zero GitHub approvals must satisfy the GitHub approval dimension'
-  $oneReview = Get-AgentReviewPolicyVerdict -RequiredApprovalCount 1 -ObservedApprovalCount 0 -ThreadsRequired $false -ThreadsResolved $true -IndependentRequired $false -IndependentSatisfied $false -MergeAuthorized $true
+  $oneReview = Get-AgentReviewPolicyVerdict -RequiredApprovalCount 1 -ObservedApprovalCount 0 -ThreadsRequired $false -ThreadsResolved $true -IndependentRequired $false -IndependentSatisfied $false
   Assert-AgentGateTest (-not [bool]$oneReview.github_approval_satisfied) 'one required GitHub approval must remain unsatisfied without approval'
-  $unresolvedThreads = Get-AgentReviewPolicyVerdict -RequiredApprovalCount 0 -ObservedApprovalCount 0 -ThreadsRequired $true -ThreadsResolved $false -IndependentRequired $false -IndependentSatisfied $true -MergeAuthorized $true
+  $unresolvedThreads = Get-AgentReviewPolicyVerdict -RequiredApprovalCount 0 -ObservedApprovalCount 0 -ThreadsRequired $true -ThreadsResolved $false -IndependentRequired $false -IndependentSatisfied $true
   Assert-AgentGateTest (-not [bool]$unresolvedThreads.review_threads_satisfied) 'unresolved review threads must remain a separate blocker'
   Assert-AgentGateTest ([bool]$zeroReview.independent_review_satisfied) 'independent review must remain a separate dimension'
-  Assert-AgentGateTest ([bool]$zeroReview.merge_authority_satisfied) 'merge authority must remain a separate dimension'
 
   $receipt = [pscustomobject][ordered]@{
-    schema_version = 1; kind = 'independent_review_receipt_v1'; repository = 'gthgomez/Babel'; pr_number = 118
+    schema_version = 2; kind = 'independent_review_receipt_v2'; repository = 'gthgomez/Babel'; pr_number = 118
+    task_id = 'task-118'; run_id = 'run-118'; contract_hash = ('0f' * 32)
     base_sha = $otherHead; head_sha = $head; reviewer_id = 'codex-reviewer'; reviewer_class = 'independent_readonly'
-    review_mode = 'exact_head'; reviewed_at = '2026-08-28T10:05:00Z'; scope = @('scripts/agent-pr-gate.ps1')
-    findings = @(); blocking_findings = @(); verdict = 'APPROVE'; artifact_hash = ''; builder_id = 'codex-implementation'
+    review_mode = 'exact_head'; reviewed_at = (Get-Date).ToUniversalTime().ToString('o'); challenge_id = 'challenge-118'
+    builder_id = 'codex-implementation'; reviewed_scope = [pscustomobject][ordered]@{ kind = 'files'; paths = @('scripts/agent-pr-gate.ps1') }
+    verdict = 'APPROVE'; blocking_findings = @()
+    authority_provenance = [pscustomobject][ordered]@{ issuer = 'supervisor_review_lane'; key_id = 'supervisor-key'; challenge_id = 'challenge-118' }
+    signature = [pscustomobject][ordered]@{ algorithm = 'ed25519'; key_id = 'reviewer-key'; value = 'test-signature' }
   }
-  $receipt.artifact_hash = Get-AgentIndependentReviewReceiptHash -Receipt $receipt
   $validReceipt = Test-AgentIndependentReviewReceipt -Receipt $receipt -Repository 'gthgomez/Babel' -PR 118 -BaseSha $otherHead -HeadSha $head -BuilderIdentity 'codex-implementation'
-  Assert-AgentGateTest ([bool]$validReceipt.valid) 'well-formed exact-head independent receipt must validate'
+  Assert-AgentGateTest ([bool]$validReceipt.valid) 'well-formed v2 exact-head independent receipt must validate structurally'
   $wrongHeadReceipt = $receipt | ConvertTo-Json -Depth 20 | ConvertFrom-Json
   $wrongHeadReceipt.head_sha = $otherHead
   $wrongHead = Test-AgentIndependentReviewReceipt -Receipt $wrongHeadReceipt -Repository 'gthgomez/Babel' -PR 118 -BaseSha $otherHead -HeadSha $head -BuilderIdentity 'codex-implementation'
   Assert-AgentGateTest (-not [bool]$wrongHead.valid) 'independent receipt for another head must be rejected'
   $builderReceipt = $receipt | ConvertTo-Json -Depth 20 | ConvertFrom-Json
   $builderReceipt.reviewer_id = 'codex-implementation'
-  $builderReceipt.artifact_hash = Get-AgentIndependentReviewReceiptHash -Receipt $builderReceipt
   $builderReview = Test-AgentIndependentReviewReceipt -Receipt $builderReceipt -Repository 'gthgomez/Babel' -PR 118 -BaseSha $otherHead -HeadSha $head -BuilderIdentity 'codex-implementation'
   Assert-AgentGateTest (-not [bool]$builderReview.valid) 'builder-issued independent review must be rejected'
+  $legacyReceipt = $receipt | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+  $legacyReceipt.schema_version = 1
+  $legacyReceipt.kind = 'independent_review_receipt_v1'
+  $legacyReview = Test-AgentIndependentReviewReceipt -Receipt $legacyReceipt -Repository 'gthgomez/Babel' -PR 118 -BaseSha $otherHead -HeadSha $head -BuilderIdentity 'codex-implementation'
+  Assert-AgentGateTest (-not [bool]$legacyReview.valid) 'legacy v1 receipt must fail closed after the v2 issuer cutover'
+  $malformedReview = Test-AgentIndependentReviewReceipt -Receipt ([pscustomobject]@{}) -Repository 'gthgomez/Babel' -PR 118 -BaseSha $otherHead -HeadSha $head -BuilderIdentity 'codex-implementation'
+  Assert-AgentGateTest (-not [bool]$malformedReview.valid) 'malformed v2 transport data must fail closed without crashing the gate'
 
   Write-Output 'agent-pr-gate: PASS'
   exit 0

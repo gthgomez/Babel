@@ -20,6 +20,7 @@ This is the **public, canonical source** for the Babel coding agent (`gthgomez/B
 |-----------|----------|
 | What is Babel, how to invoke it | `INTEGRATION.md` |
 | Autonomy defaults and user-decision boundaries | `docs/AUTONOMY_POLICY.md` |
+| External agent startup and workspace authority | `docs/architecture/EXTERNAL_AGENT_STARTUP_AND_AUTHORITY.md` |
 | System topology, contracts, runtime | `PROJECT_CONTEXT.md` |
 | Full catalog of every prompt/skill/rule | `prompt_catalog.yaml` |
 | How the CLI routes tasks (the orchestrator) | `00_System_Router/OLS-v9-Orchestrator.md` |
@@ -159,7 +160,7 @@ These are the most frequent tool failures observed across sessions. Follow them 
 2. **Know where you are before `cd babel-cli`.** The npm workspace lives at `<repo-root>/babel-cli/`. `cd babel-cli` fails when the shell is already inside `babel-cli/` or anywhere other than repo root, and produces doubled paths like `babel-cli/babel-cli/src/...`. Prefer absolute paths: `cd <repo-root>/babel-cli`.
 3. **Scope searches — unscoped `rg`/Grep over the repo root times out.** Default to `babel-cli/src/` for runtime code, the specific prompt-layer directory for control-plane work. Never search `runs/`, `artifacts/`, `runtime/`, `node_modules/`, or `dist/`. The `.rgignore` file at repo root enforces these exclusions for ripgrep-based tools.
 4. **Run the File Size Ratchet check before committing** (it is part of CI and fails late otherwise): run `pwsh tools/check-architectural-budget.ps1` before pushing when you touched large files.
-5. **Fanning out subagents that edit files: partition file ownership first.** Concurrent subagents editing the same file (historically `babel-cli/src/agent/chatEngine.ts`) cause "File has been modified since read" errors and merge conflicts. Assign each subagent a disjoint set of files, and confirm the worktree is clean before fan-out.
+5. **Fanning out subagents that edit files: partition file ownership first.** Concurrent subagents editing the same file (historically `babel-cli/src/agent/chatEngine.ts`) cause "File has been modified since read" errors and merge conflicts. Assign each subagent a disjoint set of files, and confirm no live writer overlaps those paths; unrelated coherent dirty work is not a fan-out blocker.
 6. **CI/PR checks via `gh`:** `gh pr view --json statusChecks` is invalid — the field is `statusCheckRollup`. `gh pr checks` exits 8 while checks are *pending*; that is not a failure. A brand-new branch may report "no checks reported" until the first workflow starts — wait and retry rather than diagnosing.
 7. **Scrub config regex escaping**: PowerShell/JSON escaping layers can turn `\\b` (word boundary) into literal `b`. When editing scrub rules, verify regex escaping survives the double-layer (JSON parse → PS string).
 
@@ -235,7 +236,7 @@ After CLI source changes, use the targeted `babel-cli` checks listed in `babel-c
 **Key rules:**
 - Prefer adding indexes, labels, and docs lanes before moving many files.
 - **Documentation Co-Evolution**: When adding `.agents/rules/`, ADRs (`docs/adr/`), or public guides, update `CLAUDE.md` §Quick Traverse and the `README.md` index in the same change set. Internal audits, plans, research, and status ledgers belong outside this public repository. Run `pwsh tools/check-architectural-budget.ps1` before committing.
-- Do not move `AGENTS.md`, `PROJECT_CONTEXT.md`, `INTEGRATION.md`, model adapters, or startup files without explicit approval.
+- Move `AGENTS.md`, `PROJECT_CONTEXT.md`, `INTEGRATION.md`, model adapters, or startup files only when the active task calls for that structural change; update every reference and run the relevant startup/catalog validation in the same change set. Task authorization is sufficient—do not request it twice.
 - Do not delete run evidence, generated artifacts, or snapshots just because they look noisy.
 - Generated paths (`runs/`, `artifacts/`, `runtime/`) can contain important evidence — do not delete or flatten without an explicit cleanup task.
 

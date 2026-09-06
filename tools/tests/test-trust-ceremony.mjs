@@ -26,7 +26,7 @@ import {
   computeProtectedDiffDigest,
   parseProtectedPaths,
   resolveAncestry,
-  validateStaleness,
+  validateStaleness as validateStalenessAt,
 } from '../trust-ceremony.mjs';
 import { createHash } from 'node:crypto';
 
@@ -48,6 +48,7 @@ function git(cwd, ...args) {
 
 const NOW = '2026-09-05T10:00:00.000Z';
 const REPO = 'gthgomez/Babel';
+const validateStaleness = (manifest, live) => validateStalenessAt(manifest, live, NOW);
 
 // ── Digest semantics match the base-rooted gate ──────────────────────────────
 check('numstat digest replicates Get-AgentNumstatDigest', () => {
@@ -467,7 +468,7 @@ try {
     const toolPath = fileURLToPath(new URL('../trust-ceremony.mjs', import.meta.url));
     const run = (extraArgs) => {
       try {
-        const out = execFileSync('node', [toolPath, 'validate-staleness', '--manifest', manifestPath, ...extraArgs], { encoding: 'utf8' });
+        const out = execFileSync('node', [toolPath, 'validate-staleness', '--manifest', manifestPath, '--now', NOW, ...extraArgs], { encoding: 'utf8' });
         return { code: 0, out };
       } catch (error) {
         return { code: error.status, out: String(error.stdout ?? '') };

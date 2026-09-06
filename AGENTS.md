@@ -44,7 +44,7 @@ Expert senior software engineer specializing in TypeScript, Node.js, system arch
 - Running inside Babel, a local coding-agent harness with an inspectable Prompt OS and governed execution
 - Chat mode provides conversational tool access without pipeline overhead
 - Deep mode invokes the full governed pipeline: plan, review, execute
-- All mutations are permission-gated and verifiable
+- Routine mutations inherit authority from the active task and remain verifiable; high-assurance gates are scoped to the affected capability
 - Session identity is composed from multiple files: AGENTS.md (identity), CLAUDE.md (project rules), ENGINEERING.md (coding standards), and PROJECT_CONTEXT.md (system topology)
 
 ## Startup
@@ -63,6 +63,8 @@ If Babel control-plane work is requested (`use Babel`, prompt-stack assembly, ro
 This is the **canonical public source** of Babel — a local coding-agent harness for real software work, with an inspectable Prompt OS underneath. Chat is the default daily lane; Plan and Deep add stronger gates. The Prompt OS assembles the smallest correct instruction stack from behavioral layers, domain architects, skills, adapters, and overlays. This is the independent public source of truth; no separate private source repository is required to build or run Babel.
 
 The concise autonomy contract is [`docs/AUTONOMY_POLICY.md`](./docs/AUTONOMY_POLICY.md). It defines routine agent ownership and genuine user-decision boundaries; runtime enforcement remains authoritative.
+
+For the full workspace inheritance, coordination, remote, Git/CI, provider, and trust-root authority map, see [`docs/architecture/EXTERNAL_AGENT_STARTUP_AND_AUTHORITY.md`](./docs/architecture/EXTERNAL_AGENT_STARTUP_AND_AUTHORITY.md).
 
 **Runtime harness norms** (controllers, completion, isolation, verifiers): [`docs/architecture/HARNESS_ARCHITECTURE_V1.md`](./docs/architecture/HARNESS_ARCHITECTURE_V1.md). Explanatory map: [`docs/architecture/HARNESS_OVERVIEW.md`](./docs/architecture/HARNESS_OVERVIEW.md).
 
@@ -83,10 +85,10 @@ The concise autonomy contract is [`docs/AUTONOMY_POLICY.md`](./docs/AUTONOMY_POL
 If the user says `run the whole GitHub workflow`, `ship this`, `open the PR`, or asks an agent to take local repo work through GitHub, read `.agents/rules/05-github-workflow.md` before staging, committing, pushing, or opening a PR.
 
 Default stance:
-- Autonomous through safe local inspection, verification, intentional staging, focused commit, non-main branch push, and draft PR creation when gates pass
-- Stop before consequential GitHub actions for hard-risk conditions: unrelated dirty-tree changes, secrets, destructive Git operations, direct `main` pushes, production deploys, or mixed unrelated concerns. Failed required checks prohibit merge, but remain repair work; diagnose and fix them autonomously until a genuinely unavailable capability or materially ambiguous objective is proven.
+- Autonomous through local inspection, dirty-work reconciliation, verification, intentional staging, focused commit, non-main branch push, PR creation/update, CI repair, and normal protected merge when the exact-head gate and required checks pass
+- Scope failures to the affected action: secrets are excluded, destructive Git and direct `main` pushes remain exceptional, production operations retain their own boundary, remote failures stop remote mutation only, and failed required checks stop merge while repair continues.
 - **This is the canonical public repo.** Required `protect-main` checks: `security`, `public-content-policy`, `linux-validation`, `public-pr-metadata`, `windows-portability`. Never skip or bypass them.
-- Run `.\scripts\agent-preflight.ps1` before mutation or staging, use `.\scripts\agent-worktree.ps1 -Action create -Name <task>` for substantial isolated work, and use `.\scripts\agent-pr-gate.ps1 -PR <number> -ReviewedHeadSha <sha>` before any merge decision.
+- Run `.\scripts\agent-preflight.ps1` before mutation or staging. Its local and remote readiness fields are action-scoped: a remote failure does not block local edits, builds, tests, or commits. Use `.\scripts\agent-worktree.ps1 -Action create -Name <task>` when an actual overlap or useful isolation boundary exists, and use `.\scripts\agent-pr-gate.ps1 -PR <number> -ReviewedHeadSha <sha>` before any merge decision.
 
 ## How To Work Here
 

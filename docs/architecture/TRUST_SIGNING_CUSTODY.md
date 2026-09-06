@@ -139,7 +139,7 @@ Every operation independently validates, fail-closed:
 6. manifest freshness (not expired, within policy age);
 7. exact protected path set + recomputed protected diff digest;
 8. artifact schema conformance (exact field sets of
-   `independent_review_receipt_v1`/v2 and
+   `independent_review_receipt_v2` and
    `trust_root_upgrade_authorization_v1`);
 9. expected reviewer ≠ builder identities;
 10. artifact expiry windows and authorization intent

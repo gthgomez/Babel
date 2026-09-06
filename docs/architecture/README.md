@@ -11,6 +11,7 @@ last_verified: 2026-08-05
 
 | Document | Description |
 | :--- | :--- |
+| [EXTERNAL_AGENT_STARTUP_AND_AUTHORITY.md](./EXTERNAL_AGENT_STARTUP_AND_AUTHORITY.md) | External-agent authority, startup inheritance, action-scoped stops, Git/CI, provider, and trust-root boundaries. |
 | [**HARNESS_ARCHITECTURE_V1.md**](./HARNESS_ARCHITECTURE_V1.md) | **Normative** runtime harness specification (`harness-v1`). Authority: canonical. |
 | [HARNESS_HARDENING_ROADMAP_V1.md](./HARNESS_HARDENING_ROADMAP_V1.md) | **Canonical implementation roadmap** under harness-v1: H0–H7 sequencing and exit gates. |
 | [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) | **Explanatory** short map — defers to V1. |
@@ -23,6 +24,7 @@ last_verified: 2026-08-05
 
 | Document | Description |
 | :--- | :--- |
+| [EXTERNAL_AGENT_STARTUP_AND_AUTHORITY.md](./EXTERNAL_AGENT_STARTUP_AND_AUTHORITY.md) | Operational authority map for Babel inside a governed workspace; defers to harness-v1 for runtime norms. |
 | [HARNESS_ARCHITECTURE_V1.md](./HARNESS_ARCHITECTURE_V1.md) | **Normative harness contract** (modes, authority, invariants, gaps). |
 | [HARNESS_HARDENING_ROADMAP_V1.md](./HARNESS_HARDENING_ROADMAP_V1.md) | Canonical hardening sequence, research reconciliation, dependencies, and promotion gates. |
 | [BDNS_ARCHITECTURE_V1.md](./BDNS_ARCHITECTURE_V1.md) | Babel Debugging Nervous System contract: bounded independent observation, provenance, privacy, and merge sequence. |

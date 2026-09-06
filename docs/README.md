@@ -23,6 +23,7 @@ architecture underneath.
 
 - [Integration guide](../INTEGRATION.md) — model-facing invocation contract
 - [Autonomy policy](./AUTONOMY_POLICY.md) — canonical autonomous engineering defaults and authority boundaries
+- [External agent startup and authority](./architecture/EXTERNAL_AGENT_STARTUP_AND_AUTHORITY.md) — workspace inheritance, coordination, remote, Git/CI, provider, and trust-root authority map
 - [Autonomy policy changelog](./AUTONOMY_POLICY_CHANGELOG.md) — review record for the policy refactor
 - [Architecture](./architecture/ARCHITECTURE.md) — Prompt OS layers, catalog, V9 pipeline
 - [**Harness architecture v1**](./architecture/HARNESS_ARCHITECTURE_V1.md) — **normative** runtime harness specification (`harness-v1`)

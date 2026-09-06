@@ -12,7 +12,7 @@
 #   2. missing upgrade authorization -> protected_trust_root_modified blocker
 #   3. authorization signed by an unregistered key -> protected_trust_root_modified blocker
 #   4. trust-root change without review evidence -> independent_review_not_satisfied
-#   5. dirty candidate worktree -> dirty_worktree blocker
+#   5. dirty candidate worktree -> warning; remote exact-head audit still passes
 #   6. detached head without RequireIsolatedWorktree -> detached_head blocker
 [CmdletBinding()]
 param(
@@ -142,42 +142,28 @@ try {
 
   # ---- signed independent review receipt + supervisor challenge ledger ----
   $receiptUnsigned = [ordered]@{
-    schema_version = 1
-    kind = 'independent_review_receipt_v1'
+    schema_version = 2
+    kind = 'independent_review_receipt_v2'
     repository = 'gthgomez/Babel'
     pr_number = 4242
+    task_id = 'task-integration'
+    run_id = 'run-integration'
+    contract_hash = '0f' * 32
     base_sha = $baseSha
     head_sha = $headSha
     reviewer_id = 'isolated-reviewer-lane'
     reviewer_class = 'independent_readonly'
-    review_mode = 'exact_diff'
-    reviewed_at = '2026-09-04T00:00:00Z'
-    scope = @('scripts/agent-git-common.psm1', 'feature.txt')
-    findings = @('no blocking findings')
+    review_mode = 'exact_head'
+    reviewed_at = (Get-Date).ToUniversalTime().ToString('o')
+    challenge_id = 'challenge-integration-0001'
+    builder_id = 'codex-implementation'
+    reviewed_scope = [ordered]@{ kind = 'files'; paths = @('scripts/agent-git-common.psm1', 'feature.txt') }
     blocking_findings = @()
     verdict = 'APPROVE'
-    builder_id = 'codex-implementation'
-    challenge_id = 'challenge-integration-0001'
-    task_id = 'task-integration'
-    run_id = 'run-integration'
-    contract_hash = '0f' * 32
-    authority_provenance = [ordered]@{ issuer = 'supervisor_review_lane'; key_id = 'integration-supervisor-v1' }
+    authority_provenance = [ordered]@{ issuer = 'supervisor_review_lane'; key_id = 'integration-supervisor-v1'; challenge_id = 'challenge-integration-0001' }
   }
-  $payload = [ordered]@{}
-  $fieldOrder = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'reviewer_id', 'reviewer_class', 'review_mode', 'reviewed_at', 'scope', 'findings', 'blocking_findings', 'verdict', 'builder_id', 'challenge_id', 'task_id', 'run_id', 'contract_hash', 'authority_provenance')
-  foreach ($fieldName in $fieldOrder) {
-    if ($receiptUnsigned.Contains($fieldName)) {
-      $fieldValue = $receiptUnsigned[$fieldName]
-      if ($fieldName -in @('scope', 'findings', 'blocking_findings')) { $payload[$fieldName] = @($fieldValue) } else { $payload[$fieldName] = $fieldValue }
-    }
-  }
-  $canonical = $payload | ConvertTo-Json -Depth 50 -Compress
-  $artifactHash = ([BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($canonical))) -replace '-', '').ToLowerInvariant()
-  $receiptWithHash = [ordered]@{}
-  foreach ($key in $receiptUnsigned.Keys) { $receiptWithHash[$key] = $receiptUnsigned[$key] }
-  $receiptWithHash['artifact_hash'] = $artifactHash
   $reviewSpec = [ordered]@{
-    unsignedReceipt = $receiptWithHash
+    unsignedReceipt = $receiptUnsigned
     reviewerPrivateKeyPem = (Get-Content -Raw (Join-Path $root 'reviewer-private.pem'))
     reviewerKeyId = 'integration-reviewer-v1'
     supervisorPrivateKeyPem = (Get-Content -Raw (Join-Path $root 'supervisor-private.pem'))
@@ -203,7 +189,7 @@ try {
     id = 19597161; name = 'protect-main'; enforcement = 'active'; bypass_actors = @()
     rules = @(
       [ordered]@{ type = 'pull_request'; parameters = [ordered]@{ required_approving_review_count = 0; required_review_thread_resolution = $true; require_code_owner_review = $false; allowed_merge_methods = @('merge'); } },
-      [ordered]@{ type = 'required_status_checks'; parameters = [ordered]@{ strict_required_status_checks_policy = $false; required_status_checks = @([ordered]@{ context = 'security' }, [ordered]@{ context = 'public-content-policy' }, [ordered]@{ context = 'linux-validation' }, [ordered]@{ context = 'public-pr-metadata' }, [ordered]@{ context = 'windows-portability' }, [ordered]@{ context = 'trusted-control-plane' }) } }
+      [ordered]@{ type = 'required_status_checks'; parameters = [ordered]@{ strict_required_status_checks_policy = $false; required_status_checks = @([ordered]@{ context = 'security'; integration_id = 15368 }, [ordered]@{ context = 'public-content-policy'; integration_id = 15368 }, [ordered]@{ context = 'linux-validation'; integration_id = 15368 }, [ordered]@{ context = 'public-pr-metadata'; integration_id = 15368 }, [ordered]@{ context = 'windows-portability'; integration_id = 15368 }, [ordered]@{ context = 'trusted-control-plane'; integration_id = 15368 }) } }
     )
   }
   $checkRuns = @()
@@ -218,7 +204,7 @@ try {
       workflow_name = if ($peer[1] -eq 'pull_request_target') { 'Public PR Metadata' } else { 'Public Release Gate' }
       workflow_id = [string]$runId; workflow_run_id = [string]$runId; workflow_run_attempt = 1
       details_url = "https://ci.example.test/runs/$runId"
-      app = $null
+      app = [ordered]@{ id = 15368 }
     }
   }
   $runsJson = [ordered]@{ total_count = $checkRuns.Count; check_runs = $checkRuns }
@@ -336,6 +322,17 @@ exit 0
     if ($run.result.blockers -notcontains 'independent_review_not_satisfied') { throw "blockers=$($run.result.blockers -join ',')" }
   }
 
+  # 1c. A caller cannot downgrade protected-path review by claiming LOW risk.
+  Invoke-Step 'trust-change-low-label-still-requires-certified-review' {
+    $run = Invoke-Gate -Label 'low-label-on-trust' -Extra @{
+      '-RiskTier' = 'LOW'; '-AutonomousReviewEvidencePath' = $evidencePath; '-TrustRootUpgradeAuthorizationPath' = $authorizationPath
+    }
+    if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
+    if ($run.result.blockers -notcontains 'independent_review_not_satisfied') { throw "blockers=$($run.result.blockers -join ',')" }
+    if (-not [bool]$run.result.reviewPolicy.independentReviewRequired) { throw 'protected-path review was downgraded by LOW label' }
+    if (-not [bool]$run.result.reviewPolicy.signedReviewRequired) { throw 'protected-path signing was downgraded by LOW label' }
+  }
+
   # 2. missing authorization
   Invoke-Step 'missing-authorization-blocked' {
     $run = Invoke-Gate -Label 'missing-auth' -Extra @{ '-AutonomousReviewEvidencePath' = $evidencePath }
@@ -359,15 +356,16 @@ exit 0
     if ($run.result.blockers -notcontains 'independent_review_not_satisfied') { throw "blockers=$($run.result.blockers -join ',')" }
   }
 
-  # 5. dirty candidate worktree
-  Invoke-Step 'dirty-candidate-blocked' {
+  # 5. dirty local bytes cannot change the exact remote PR-head candidate.
+  Invoke-Step 'dirty-candidate-reconciles-without-invalidating-remote-head' {
     Set-Content -LiteralPath (Join-Path $candidatePath 'feature.txt') -Value 'tampered' -Encoding utf8NoBOM
     try {
       $run = Invoke-Gate -Label 'dirty' -Extra @{
-        '-AutonomousReviewEvidencePath' = $evidencePath; '-TrustRootUpgradeAuthorizationPath' = $authorizationPath
+        '-IndependentReviewReceiptPath' = $signedReceiptPath; '-ReviewChallengeLedgerPath' = $signedLedgerPath; '-TrustRootUpgradeAuthorizationPath' = $authorizationPath
       }
-      if ($run.exitCode -eq 0) { throw 'audit unexpectedly passed' }
-      if ($run.result.blockers -notcontains 'dirty_worktree') { throw "blockers=$($run.result.blockers -join ',')" }
+      if ($run.exitCode -ne 0) { throw "audit unexpectedly failed: blockers=$($run.result.blockers -join ',')" }
+      if ($run.result.warnings -notcontains 'dirty_worktree_does_not_invalidate_remote_exact_head') { throw "warnings=$($run.result.warnings -join ',')" }
+      if (-not [bool]$run.result.checks.NO_UNEXPECTED_DIFF) { throw 'remote exact-head diff was incorrectly invalidated by local dirty bytes' }
     } finally {
       & $git -C $candidatePath checkout -- feature.txt 2>&1 | Out-Null
     }

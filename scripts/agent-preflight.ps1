@@ -22,6 +22,8 @@ Import-Module (Join-Path $PSScriptRoot 'agent-git-common.psm1') -Force
 $resolvedRepoRoot = $null
 $checks = [ordered]@{}
 $blockers = @()
+$localBlockers = @()
+$remoteBlockers = @()
 $warnings = @()
 $statusSnapshot = $null
 $topology = $null
@@ -39,11 +41,13 @@ function Add-AgentCheck {
   param(
     [Parameter(Mandatory = $true)][string]$Name,
     [Parameter(Mandatory = $true)][bool]$Passed,
-    [string]$Blocker = ''
+    [string]$Blocker = '',
+    [ValidateSet('Local', 'Remote')][string]$Scope = 'Local'
   )
   $checks[$Name] = $Passed
   if (-not $Passed -and -not [string]::IsNullOrWhiteSpace($Blocker)) {
     $script:blockers += $Blocker
+    if ($Scope -eq 'Remote') { $script:remoteBlockers += $Blocker } else { $script:localBlockers += $Blocker }
   }
 }
 
@@ -76,18 +80,18 @@ try {
   $remoteUrl = Get-AgentRemoteUrl -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Remote $ExpectedRemote
   $remoteSlug = Get-AgentRemoteSlug -RemoteUrl $remoteUrl
   $remoteMatches = [string]::Equals($remoteSlug, $ExpectedRepository, [StringComparison]::OrdinalIgnoreCase)
-  Add-AgentCheck -Name 'REMOTE_OK' -Passed $remoteMatches -Blocker 'unexpected_origin_repository'
-  Add-AgentCheck -Name 'REMOTE_CREDENTIAL_FREE' -Passed (Test-AgentRemoteCredentialFree -RemoteUrl $remoteUrl) -Blocker 'token_bearing_remote_url'
+  Add-AgentCheck -Name 'REMOTE_OK' -Passed $remoteMatches -Blocker 'unexpected_origin_repository' -Scope Remote
+  Add-AgentCheck -Name 'REMOTE_CREDENTIAL_FREE' -Passed (Test-AgentRemoteCredentialFree -RemoteUrl $remoteUrl) -Blocker 'token_bearing_remote_url' -Scope Remote
 
   $credential = Get-AgentCredentialIsolation -GitPath $GitPath -RepoRoot $resolvedRepoRoot
   $credentialOk = $credential.localGhHelper -and $credential.resetInheritedHelpers
-  Add-AgentCheck -Name 'CREDENTIAL_PROVIDER_GH' -Passed $credentialOk -Blocker 'repo_local_gh_credential_helper_missing'
+  Add-AgentCheck -Name 'CREDENTIAL_PROVIDER_GH' -Passed $credentialOk -Blocker 'repo_local_gh_credential_helper_missing' -Scope Remote
 
   if ([string]::IsNullOrWhiteSpace($ghResolvedPath)) {
     try { $ghResolvedPath = Get-AgentCommandPath -Name 'gh' } catch { $ghResolvedPath = '' }
   }
   $ghAvailable = -not [string]::IsNullOrWhiteSpace($ghResolvedPath) -and (Test-Path -LiteralPath $ghResolvedPath -PathType Leaf)
-  Add-AgentCheck -Name 'GH_EXECUTABLE' -Passed $ghAvailable -Blocker 'gh_executable_unavailable'
+  Add-AgentCheck -Name 'GH_EXECUTABLE' -Passed $ghAvailable -Blocker 'gh_executable_unavailable' -Scope Remote
 
   $ghAuthOk = $false
   $ghRepoOk = $false
@@ -95,11 +99,11 @@ try {
   if ($ghAvailable) {
     $ghVersionResult = Invoke-AgentGh -GhPath $ghResolvedPath -RepoRoot $resolvedRepoRoot -Arguments @('--version')
     if ($ghVersionResult.exitCode -eq 0) { $ghVersion = $ghVersionResult.text.Trim() }
-    Add-AgentCheck -Name 'GH_VERSION' -Passed ($ghVersionResult.exitCode -eq 0) -Blocker 'gh_version_failed'
+    Add-AgentCheck -Name 'GH_VERSION' -Passed ($ghVersionResult.exitCode -eq 0) -Blocker 'gh_version_failed' -Scope Remote
 
     $authResult = Invoke-AgentGh -GhPath $ghResolvedPath -RepoRoot $resolvedRepoRoot -Arguments @('auth', 'status', '--hostname', 'github.com')
     $ghAuthOk = $authResult.exitCode -eq 0
-    Add-AgentCheck -Name 'AUTH_OK' -Passed $ghAuthOk -Blocker 'github_auth_failed'
+    Add-AgentCheck -Name 'AUTH_OK' -Passed $ghAuthOk -Blocker 'github_auth_failed' -Scope Remote
 
     $repoResult = Invoke-AgentGh -GhPath $ghResolvedPath -RepoRoot $resolvedRepoRoot -Arguments @('repo', 'view', $ExpectedRepository, '--json', 'nameWithOwner,defaultBranchRef')
     if ($repoResult.exitCode -eq 0) {
@@ -108,17 +112,17 @@ try {
     $repoNameMatches = $null -ne $repoView -and [string]::Equals($repoView.nameWithOwner, $ExpectedRepository, [StringComparison]::OrdinalIgnoreCase)
     $defaultBranchMatches = $repoNameMatches -and [string]::Equals($repoView.defaultBranchRef.name, $ExpectedBaseBranch, [StringComparison]::OrdinalIgnoreCase)
     $ghRepoOk = $repoResult.exitCode -eq 0 -and $repoNameMatches
-    Add-AgentCheck -Name 'EXPECTED_REPO' -Passed $ghRepoOk -Blocker 'github_repository_metadata_mismatch'
-    Add-AgentCheck -Name 'EXPECTED_BASE_BRANCH' -Passed $defaultBranchMatches -Blocker 'unexpected_default_branch'
+    Add-AgentCheck -Name 'EXPECTED_REPO' -Passed $ghRepoOk -Blocker 'github_repository_metadata_mismatch' -Scope Remote
+    Add-AgentCheck -Name 'EXPECTED_BASE_BRANCH' -Passed $defaultBranchMatches -Blocker 'unexpected_default_branch' -Scope Remote
   } else {
-    Add-AgentCheck -Name 'AUTH_OK' -Passed $false -Blocker 'github_auth_not_checked'
-    Add-AgentCheck -Name 'EXPECTED_REPO' -Passed $false -Blocker 'github_repository_not_checked'
-    Add-AgentCheck -Name 'EXPECTED_BASE_BRANCH' -Passed $false -Blocker 'default_branch_not_checked'
+    Add-AgentCheck -Name 'AUTH_OK' -Passed $false -Blocker 'github_auth_not_checked' -Scope Remote
+    Add-AgentCheck -Name 'EXPECTED_REPO' -Passed $false -Blocker 'github_repository_not_checked' -Scope Remote
+    Add-AgentCheck -Name 'EXPECTED_BASE_BRANCH' -Passed $false -Blocker 'default_branch_not_checked' -Scope Remote
   }
 
   $fetchResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('fetch', $ExpectedRemote, '--prune')
   $fetchOk = $fetchResult.exitCode -eq 0
-  Add-AgentCheck -Name 'FETCH_OK' -Passed $fetchOk -Blocker 'fetch_failed'
+  Add-AgentCheck -Name 'FETCH_OK' -Passed $fetchOk -Blocker 'fetch_failed' -Scope Remote
 
   $head = Get-AgentGitText -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('rev-parse', 'HEAD')
   $headKnown = Test-AgentSha -Value $head
@@ -131,23 +135,23 @@ try {
 
   $originMain = Get-AgentGitText -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('rev-parse', "$ExpectedRemote/$ExpectedBaseBranch")
   $baseKnown = Test-AgentSha -Value $originMain
-  Add-AgentCheck -Name 'EXPECTED_BASE_SHA_AVAILABLE' -Passed $baseKnown -Blocker 'expected_base_sha_unavailable'
+  Add-AgentCheck -Name 'EXPECTED_BASE_SHA_AVAILABLE' -Passed $baseKnown -Blocker 'expected_base_sha_unavailable' -Scope Remote
 
   $lsRemoteResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('ls-remote', $ExpectedRemote, 'HEAD')
   if ($lsRemoteResult.exitCode -eq 0) {
     $remoteHead = (($lsRemoteResult.text -split '\s+')[0]).Trim()
   }
   $remoteReachable = $lsRemoteResult.exitCode -eq 0 -and (Test-AgentSha -Value $remoteHead)
-  Add-AgentCheck -Name 'REMOTE_REACHABLE' -Passed $remoteReachable -Blocker 'remote_unreachable'
+  Add-AgentCheck -Name 'REMOTE_REACHABLE' -Passed $remoteReachable -Blocker 'remote_unreachable' -Scope Remote
 
   $statusSnapshot = Get-AgentStatusSnapshot -GitPath $GitPath -RepoRoot $resolvedRepoRoot
   Add-AgentCheck -Name 'STATUS_READABLE' -Passed $statusSnapshot.commandOk -Blocker 'git_status_failed'
   $worktreeClean = $statusSnapshot.commandOk -and $statusSnapshot.clean
-  if (-not $worktreeClean -and $AllowDirtyWorktree) {
+  if (-not $worktreeClean) {
     Add-AgentCheck -Name 'WORKTREE_CLEAN' -Passed $false
-    Add-AgentWarning -Message 'worktree_dirty_allowed_for_inspection_only'
+    Add-AgentWarning -Message 'dirty_worktree_requires_reconciliation_not_approval'
   } else {
-    Add-AgentCheck -Name 'WORKTREE_CLEAN' -Passed $worktreeClean -Blocker 'unexpected_dirty_worktree'
+    Add-AgentCheck -Name 'WORKTREE_CLEAN' -Passed $true
   }
 
   $topology = Get-AgentWorktreeTopology -GitPath $GitPath -RepoRoot $resolvedRepoRoot
@@ -159,7 +163,7 @@ try {
   }
 
   if (-not [string]::IsNullOrWhiteSpace($ExpectedBaseSha)) {
-    Add-AgentCheck -Name 'EXPECTED_BASE_SHA' -Passed ([string]::Equals($originMain, $ExpectedBaseSha, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'base_sha_mismatch'
+    Add-AgentCheck -Name 'EXPECTED_BASE_SHA' -Passed ([string]::Equals($originMain, $ExpectedBaseSha, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'base_sha_mismatch' -Scope Remote
   } else {
     $checks['EXPECTED_BASE_SHA'] = $true
   }
@@ -170,13 +174,18 @@ try {
     Add-AgentCheck -Name 'EXPECTED_HEAD_SHA' -Passed ([string]::Equals($head, $ExpectedHeadSha, [StringComparison]::OrdinalIgnoreCase)) -Blocker 'head_sha_mismatch'
   }
 
-  $ok = $blockers.Count -eq 0
-  $pushReady = $ok -and $worktreeClean -and $branchKnown -and $headKnown -and $baseKnown -and $remoteReachable
+  $localReady = $localBlockers.Count -eq 0
+  $remoteReady = $localReady -and $remoteBlockers.Count -eq 0
+  $ok = $remoteReady
+  $pushReady = $remoteReady -and $branchKnown -and $headKnown -and $baseKnown -and $remoteReachable
   $result = [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     kind = 'babel_agent_preflight'
+    status = if ($remoteReady) { 'READY' } elseif ($localReady) { 'STOP_REMOTE' } else { 'STOP_LOCAL' }
     ok = $ok
-    mutationReady = $ok -and $worktreeClean
+    mutationReady = $localReady
+    localMutationAllowed = $localReady
+    remoteMutationAllowed = $remoteReady
     pushReady = $pushReady
     repoRole = 'public_canonical'
     repoRoot = $resolvedRepoRoot
@@ -199,17 +208,22 @@ try {
     }
     checks = $checks
     blockers = @($blockers | Select-Object -Unique)
+    localBlockers = @($localBlockers | Select-Object -Unique)
+    remoteBlockers = @($remoteBlockers | Select-Object -Unique)
     warnings = @($warnings | Select-Object -Unique)
   }
   Write-AgentResult -Result $result -OutputFormat $OutputFormat
-  if (-not $ok) { exit 1 }
+  if (-not $localReady) { exit 1 }
   exit 0
 } catch {
   $fallback = [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     kind = 'babel_agent_preflight'
     ok = $false
+    status = 'STOP_LOCAL'
     mutationReady = $false
+    localMutationAllowed = $false
+    remoteMutationAllowed = $false
     pushReady = $false
     repoRole = 'public_canonical'
     repoRoot = $resolvedRepoRoot
@@ -217,6 +231,8 @@ try {
     remote = $ExpectedRemote
     checks = $checks
     blockers = @($blockers + 'preflight_exception' | Select-Object -Unique)
+    localBlockers = @($localBlockers + 'preflight_exception' | Select-Object -Unique)
+    remoteBlockers = @($remoteBlockers | Select-Object -Unique)
     warnings = @($warnings | Select-Object -Unique)
     errorType = $_.Exception.GetType().FullName
   }

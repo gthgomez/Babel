@@ -9,6 +9,7 @@ param(
   [string]$AutonomousReviewEvidencePath = '',
   [string]$TrustRootUpgradeAuthorizationPath = '',
   [string]$BuilderIdentity = 'codex-implementation',
+  [ValidateSet('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')][string]$RiskTier = 'HIGH',
   [switch]$MergeAuthorized,
   [switch]$AuditOnly,
   [switch]$RequireIsolatedWorktree,
@@ -46,7 +47,7 @@ try {
     '-ReviewChallengeLedgerPath', $ReviewChallengeLedgerPath,
     '-AutonomousReviewEvidencePath', $AutonomousReviewEvidencePath,
     '-TrustRootUpgradeAuthorizationPath', $TrustRootUpgradeAuthorizationPath,
-    '-BuilderIdentity', $BuilderIdentity, '-OutputFormat', $OutputFormat
+    '-BuilderIdentity', $BuilderIdentity, '-RiskTier', $RiskTier, '-OutputFormat', $OutputFormat
   )
   if ($MergeAuthorized) { $args += '-MergeAuthorized' }
   if ($AuditOnly) { $args += '-AuditOnly' }

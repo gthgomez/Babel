@@ -59,7 +59,7 @@ an issued receipt awaiting authoritative verification is
 Ordinary (non-trust-root) candidates satisfy independent review through
 either implemented tier:
 
-- **CERTIFIED** — a signed `independent_review_receipt_v1` bound to a
+- **CERTIFIED** — a signed `independent_review_receipt_v2` bound to a
   supervisor-signed consumed challenge, verified by the base-rooted
   verifier against `config/independent-review-keys.json`; or
 - **AUTONOMOUS** — structured `autonomous_review_evidence_v1` from an
