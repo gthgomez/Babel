@@ -100,6 +100,22 @@ try {
     -BaseSha $baseSha -HeadSha $head1 -BuilderIdentity 'codex-implementation' -ExpectedNumstatDigest $expectedDigest
   Assert-AgentEvidence 'gate validator accepts built evidence' ([bool]$gateValidation.valid) (@($gateValidation.errors) -join ',')
 
+  # Transport writes a sparse diagnostic object when no bound review comment
+  # exists. The gate must reject that object as invalid evidence without
+  # throwing under strict mode and masking the actionable blocker.
+  $transportStub = [pscustomobject]@{
+    transport_error = 'autonomous-review_handoff_missing'
+    repository = 'test/fixture'
+    pr_number = 42
+    base_sha = $baseSha
+    head_sha = $head1
+  }
+  $stubValidation = Test-AgentAutonomousReviewEvidence -Evidence $transportStub -Repository 'test/fixture' -PR 42 `
+    -BaseSha $baseSha -HeadSha $head1 -BuilderIdentity 'codex-implementation' -ExpectedNumstatDigest $expectedDigest
+  Assert-AgentEvidence 'sparse transport diagnostic fails closed without exception' (-not [bool]$stubValidation.valid)
+  Assert-AgentEvidence 'sparse transport diagnostic reports schema error' (@($stubValidation.errors) -contains 'autonomous_evidence_schema_version_invalid')
+  Assert-AgentEvidence 'sparse transport diagnostic reports unknown transport field' (@($stubValidation.errors) -contains 'autonomous_evidence_unknown_field:transport_error')
+
   # --- Binding sensitivity: digest changes with the diff ---------------------
 
   $outFile2 = Join-Path $fixture 'evidence-body-2.txt'
