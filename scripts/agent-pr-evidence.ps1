@@ -193,7 +193,8 @@ foreach ($comment in $comments) {
   }
   try { $doc = $jsonText | ConvertFrom-Json } catch { continue }
   if ([string]$doc.base_sha -eq $refs.base -and [string]$doc.head_sha -eq $refs.head) {
-    $bound += [pscustomobject]@{ id = [string]$comment.id; body = $text; doc = $doc }
+    $restCommentId = if ([string]$comment.url -match 'issuecomment-(\d+)') { $Matches[1] } else { '' }
+    $bound += [pscustomobject]@{ id = $restCommentId; body = $text; doc = $doc }
   }
 }
 
@@ -211,10 +212,19 @@ function Test-AgentEvidenceEquivalent {
   return $true
 }
 
+function Invoke-AgentEvidenceRetrigger {
+  & gh pr close $PR -R $ResolvedRepository | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'gh pr close failed during retrigger.' }
+  & gh pr reopen $PR -R $ResolvedRepository | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'gh pr reopen failed during retrigger; REOPEN THE PR MANUALLY - it is currently closed.' }
+  return $true
+}
+
 if ($bound.Count -eq 1) {
   if (Test-AgentEvidenceEquivalent -ExistingDoc $bound[0].doc -NewEvidence $evidence) {
+    $retriggered = if ($Retrigger) { Invoke-AgentEvidenceRetrigger } else { $false }
     Write-Output ([pscustomobject][ordered]@{
-      ok = $true; posted = $false; idempotent_skip = $true
+      ok = $true; posted = $false; idempotent_skip = $true; retriggered = $retriggered
       comment_id = $bound[0].id
       repository = $ResolvedRepository; pr = $PR
       base = $refs.base; head = $refs.head
@@ -223,10 +233,14 @@ if ($bound.Count -eq 1) {
     exit 0
   }
   if ($Replace) {
+    if ([string]::IsNullOrWhiteSpace($bound[0].id)) {
+      Write-AgentEvidenceFail -Errors @('existing_bound_evidence_comment_id_unavailable_for_replace')
+    }
     & gh api "repos/$ResolvedRepository/issues/comments/$($bound[0].id)" -X PATCH -f "body=$body" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'gh api comment PATCH failed.' }
+    $retriggered = if ($Retrigger) { Invoke-AgentEvidenceRetrigger } else { $false }
     Write-Output ([pscustomobject][ordered]@{
-      ok = $true; posted = $true; replaced = $true; comment_id = $bound[0].id
+      ok = $true; posted = $true; replaced = $true; retriggered = $retriggered; comment_id = $bound[0].id
       repository = $ResolvedRepository; pr = $PR
       base = $refs.base; head = $refs.head
       diff_numstat_digest = $expectedDigest; errors = @()
@@ -253,14 +267,7 @@ try {
 }
 $commentId = if ([string]$commentUrl -match 'issuecomment-(\d+)') { $Matches[1] } else { '' }
 
-$retriggered = $false
-if ($Retrigger) {
-  & gh pr close $PR -R $ResolvedRepository | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'gh pr close failed during retrigger.' }
-  & gh pr reopen $PR -R $ResolvedRepository | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'gh pr reopen failed during retrigger; REOPEN THE PR MANUALLY - it is currently closed.' }
-  $retriggered = $true
-}
+$retriggered = if ($Retrigger) { Invoke-AgentEvidenceRetrigger } else { $false }
 
 Write-Output ([pscustomobject][ordered]@{
   ok = $true; posted = $true; retriggered = $retriggered
