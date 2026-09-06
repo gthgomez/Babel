@@ -37,6 +37,7 @@ export interface CellResult {
   harness: Harness
   contract: PairContract
   CONTRACT_DIGEST: string
+  RUNNER_SOURCE_DIGEST?: string
   EFFECTIVE_CAPABILITY_MANIFEST: CapabilityManifest
   CAPABILITY_DIGEST: string
   REQUESTED_PROVIDER: string

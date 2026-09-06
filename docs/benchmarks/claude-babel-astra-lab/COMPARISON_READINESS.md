@@ -26,6 +26,9 @@ generated fixture Git SHA is checked before execution. Each contract binds the
 experiment/pair/task, fixture/base/runner SHA, both harness identities, exact
 provider/model, configuration digests, route and resource envelope. Babel's
 version is a complete Git SHA. Claude's version must come from its executable.
+The runner also checks its actual checkout SHA and the fixture repository base,
+and retains a digest plus snapshot of runner/evaluator source bytes. Dirty state
+does not trigger refusal; the snapshot preserves the exact observed source.
 
 The trusted adapter module exports `adapters`, keyed by `claude-code` and
 `babel-live`, implementing `ComparisonAdapter`. `describe()` observes effective

@@ -9,11 +9,12 @@ import { runComparisonCampaign, type ComparisonAdapter } from './comparison-runn
 import { freezeEvaluator } from './frozen-evaluator.js'
 import { buildNeutralReceipt } from './receipt.js'
 import { aggregateResults } from './comparison-report.js'
+import { runnerIdentity } from './runner-identity.js'
 
 function definition(pairId: string): PairContract {
   const arm = (harness: Harness): ArmIdentity => ({ harness, version: harness === 'babel-live' ? 'd'.repeat(40) : 'fake-observed-v1', configurationDigest: digest(harness), route: 'deterministic-fake/opencode-go', requestedProvider: 'opencode-go', requestedModel: 'mimo-v2.5', capabilities: { filesystem: { read: ['fixture/**'], write: ['fixture/src/**'] }, network: [], process: [], environment: ['deterministic-fixture'], limits: { timeoutMs: 1000, modelCalls: 1, toolCalls: 1, outputTokens: null } }, capabilityEvidence: ['fake-adapter fixed authority'] })
   const verifier = freezeEvaluator('T2')
-  return { schemaVersion: 2, experimentId: 'deterministic-runner', pairId, taskId: 'T2', fixtureSha: '0537fa2a8bf45a338243c2c94f9cf655de5d087f', baseSha: 'b'.repeat(40), runnerSha: 'c'.repeat(40), instructions: fixturePrompt('T2'), verifier: { id: verifier.id, digest: verifier.digest, command: [...verifier.command] }, arms: { 'claude-code': arm('claude-code'), 'babel-live': arm('babel-live') } }
+  return { schemaVersion: 2, experimentId: 'deterministic-runner', pairId, taskId: 'T2', fixtureSha: '0537fa2a8bf45a338243c2c94f9cf655de5d087f', baseSha: '0537fa2a8bf45a338243c2c94f9cf655de5d087f', runnerSha: runnerIdentity().sha, instructions: fixturePrompt('T2'), verifier: { id: verifier.id, digest: verifier.digest, command: [...verifier.command] }, arms: { 'claude-code': arm('claude-code'), 'babel-live': arm('babel-live') } }
 }
 
 function adapter(identity: ArmIdentity, calls: string[], source = 'export function add(a, b) { return a + b; }\n'): ComparisonAdapter {
@@ -31,6 +32,22 @@ function adapter(identity: ArmIdentity, calls: string[], source = 'export functi
     },
   }
 }
+
+test('actual runner and task repository SHAs are checked before provider calls', async () => {
+  const good = definition('actual-source')
+  const wrongRunner = structuredClone(good); wrongRunner.pairId = 'wrong-runner'; wrongRunner.runnerSha = '0'.repeat(40)
+  const wrongBase = structuredClone(good); wrongBase.pairId = 'wrong-base'; wrongBase.baseSha = '0'.repeat(40)
+  const calls: string[] = []
+  const pairs = await runComparisonCampaign([wrongRunner, wrongBase, good], {
+    outputRoot: mkdtempSync(join(tmpdir(), 'astra-source-identity-')),
+    adapters: { 'claude-code': adapter(good.arms['claude-code'], calls), 'babel-live': adapter(good.arms['babel-live'], calls) },
+  })
+  assert.deepEqual(calls, ['actual-source:claude-code', 'actual-source:babel-live'])
+  assert.ok(pairs[0]!.reasons.includes('RUNNER_SHA_MISMATCH'))
+  assert.ok(pairs[1]!.reasons.includes('FIXTURE_OR_INSTRUCTIONS_MISMATCH'))
+  assert.equal(pairs[2]!.PAIR_VERDICT, 'TIE')
+  assert.equal(pairs[2]!.claude.RUNNER_SOURCE_DIGEST, runnerIdentity().sourceDigest)
+})
 
 test('invalid cell does not stop its valid sibling or subsequent valid pair; packets link real independent evidence', async () => {
   const good = definition('good')

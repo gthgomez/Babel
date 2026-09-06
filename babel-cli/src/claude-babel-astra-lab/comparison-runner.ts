@@ -5,6 +5,7 @@ import type { ControlledRun } from './contracts.js'
 import { compareCells, digest, normalizeCapabilities, preflight, type ArmIdentity, type CellResult, type Harness, type PairContract, type PairResult, type Termination } from './comparison-contract.js'
 import { evaluateFrozen, freezeEvaluator } from './frozen-evaluator.js'
 import { writeComparisonReports } from './comparison-report.js'
+import { runnerIdentity } from './runner-identity.js'
 
 export interface ComparisonAdapter {
   /** Must observe effective authority/version; configuration intent alone is insufficient. */
@@ -43,6 +44,10 @@ async function runCell(contract: PairContract, harness: Harness, dir: string, op
     cell.invalidReasons = preflight(contract, harness)
     if (options.signal?.aborted) { cell.termination = { kind: 'RUNNER_CANCELLED', evidence: ['campaign AbortSignal before execution'] }; return cell }
     if (cell.invalidReasons.length) return cell
+    const runner = runnerIdentity()
+    if (runner.sha !== contract.runnerSha) { cell.invalidReasons.push('RUNNER_SHA_MISMATCH'); return cell }
+    cell.RUNNER_SOURCE_DIGEST = runner.sourceDigest
+    writeFileSync(join(dir, 'runner-source.json'), `${JSON.stringify(runner, null, 2)}\n`, { flag: 'wx' })
     const observed = await options.adapters[harness].describe()
     if (digest({ ...observed, capabilities: normalizeCapabilities(observed.capabilities) }) !== digest({ ...contract.arms[harness], capabilities: normalizeCapabilities(contract.arms[harness].capabilities) })) {
       cell.invalidReasons.push('RUNTIME_IDENTITY_OR_CAPABILITY_DRIFT'); return cell
@@ -52,7 +57,7 @@ async function runCell(contract: PairContract, harness: Harness, dir: string, op
     const evaluator = freezeEvaluator(task)
     if (evaluator.digest !== contract.verifier.digest || evaluator.id !== contract.verifier.id || digest(evaluator.command) !== digest(contract.verifier.command)) { cell.invalidReasons.push('INVALID_VERIFIER'); return cell }
     const fixture = createFixture(task)
-    if (fixture.baseSha !== contract.fixtureSha || fixturePrompt(task) !== contract.instructions) { cell.invalidReasons.push('FIXTURE_OR_INSTRUCTIONS_MISMATCH'); return cell }
+    if (fixture.baseSha !== contract.fixtureSha || fixture.baseSha !== contract.baseSha || fixturePrompt(task) !== contract.instructions) { cell.invalidReasons.push('FIXTURE_OR_INSTRUCTIONS_MISMATCH'); return cell }
     // Contract and evaluator are frozen before any contestant code runs.
     const snapshot = structuredClone(contract)
     writeFileSync(join(dir, 'contract.json'), `${JSON.stringify(snapshot, null, 2)}\n`, { flag: 'wx' })
