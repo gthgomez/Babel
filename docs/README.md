@@ -24,6 +24,10 @@ architecture underneath.
 - [Integration guide](../INTEGRATION.md) — model-facing invocation contract
 - [Autonomy policy](./AUTONOMY_POLICY.md) — canonical autonomous engineering defaults and authority boundaries
 - [Autonomy policy changelog](./AUTONOMY_POLICY_CHANGELOG.md) — review record for the policy refactor
+- [Autonomy human-touch ledger](./architecture/AUTONOMY_HUMAN_TOUCH_LEDGER_V1.md) — owner-touch classification, ranked automation debt, metrics
+- [Autonomy threat model](./architecture/AUTONOMY_THREAT_MODEL_V1.md) — threat register and autonomy-increase gate for the autonomous engineering loop
+- [Autonomy eval matrix](./architecture/AUTONOMY_EVAL_MATRIX_V1.md) — adversarial evals E1–E16 with coverage status
+- [Frontier milestone review](./architecture/FRONTIER_MILESTONE_REVIEW_V1.md) — Sol/Astra review packet and adversarial audit process
 - [Architecture](./architecture/ARCHITECTURE.md) — Prompt OS layers, catalog, V9 pipeline
 - [**Harness architecture v1**](./architecture/HARNESS_ARCHITECTURE_V1.md) — **normative** runtime harness specification (`harness-v1`)
 - [Harness hardening roadmap v1](./architecture/HARNESS_HARDENING_ROADMAP_V1.md) — H0–H7 implementation sequence

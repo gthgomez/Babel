@@ -49,6 +49,43 @@ For a failure, Babel should observe, classify, preserve evidence, determine whet
 
 Recovery must be semantic rather than a blind repetition of the same command. After bounded safe recovery paths are exhausted, Babel should report the blocker and the exact authority or evidence needed.
 
+## Risk-tiered missions
+
+Work is classified into tiers that set review depth and human involvement.
+Tiers reconcile with the enforced runtime taxonomy (Classes A–D in
+`babel-cli/src/config/autonomyPolicy.ts`) and the merge-gate
+`-RiskTier` parameter (LOW/MEDIUM/HIGH/CRITICAL); where wording differs,
+those enforced mechanisms remain authoritative. Routine-versus-root
+distinction: ordinary independent review is machine-verified evidence; only
+root-of-trust transitions (trust-root mutation, authority replacement,
+credential recovery) require owner cryptographic action.
+
+| Tier | Work class | Required evidence | Gate risk tier | Owner touches |
+| --- | --- | --- | --- | --- |
+| 0 | Routine / low risk (docs, formatting, non-behavioral cleanup) | deterministic checks; optional cheap review | LOW | 0 |
+| 1 | Ordinary engineering (bug fixes, normal features) | automated tests + independent fresh-context review (AUTONOMOUS tier) + deterministic CI + exact-head validation | MEDIUM–HIGH | 0 |
+| 2 | Significant engineering (large refactor, multi-module feature, API change) | stronger review + independent requirement review + runtime/E2E evidence + exact merge-state validation | HIGH | 0 (milestone audit at Tier 3 may follow) |
+| 3 | Major milestone | full pipeline + coherent frontier review packet + one adversarial frontier audit ([FRONTIER_MILESTONE_REVIEW_V1.md](./architecture/FRONTIER_MILESTONE_REVIEW_V1.md)) | HIGH | ~1 review prompt |
+| 4 | Trust/security-relevant (verifiers, privileged CI, release signing, security boundaries) | base-controlled validation + isolated reviewer + adversarial security review + frontier audit; trust-root path changes additionally require the signed CERTIFIED tier and supervisor authorization | CRITICAL | 1 review prompt; cryptographic ceremony only when root authority itself changes |
+| 5 | Owner-only authority (trust-root replacement, key loss/recovery, new root identities, destructive production operations, spend, legal commitments) | explicit owner decision/action outside the agent loop | n/a | explicit, rare, consolidated |
+
+Tier classification is recorded in the PR body. Large size alone does not
+make a change high tier; blast radius, reversibility, and authority content
+do.
+
+## Human-touch discipline
+
+Owner attention is the scarce resource. Every workflow touch point is
+classified `OWNER_REQUIRED`, `AUTOMATABLE_NOW`, `AUTOMATABLE_LATER`, or
+`INTENTIONALLY_MANUAL` in the
+[Human-Touch Ledger](./architecture/AUTONOMY_HUMAN_TOUCH_LEDGER_V1.md).
+Ask, at any proposed owner interaction: *is the owner providing unique
+authority or judgment here, or is the system merely missing automation?*
+Missing automation is an engineering defect; genuine authority is a
+preserved boundary. Recurring manual tasks are presumed automation debt
+unless a documented authority or safety reason justifies keeping them
+manual.
+
 ## Authority boundaries
 
 User authority is required before:

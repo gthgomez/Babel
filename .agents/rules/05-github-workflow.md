@@ -118,6 +118,20 @@ The managing agent may autonomously:
 
 The managing agent must not merge, deploy, force push, clean, delete branches, rewrite **shared/remote** history, or push directly to `main`/`master` without `EXCEPTION_APPROVAL`.
 
+**Bounded merge authorization (Tier 0–2):** the managing agent MAY merge a non-draft PR without `EXCEPTION_APPROVAL` when every one of these holds and is verifiable at merge time:
+
+- the local gate (`scripts/agent-pr-gate.ps1 -PR <n> -ReviewedHeadSha <sha> -MergeAuthorized`) reports `MERGE_READY` with every required check green at the exact reviewed head;
+- review threads are resolved and the independent-review evidence validates at the tier required for the change (trust-root path changes are never eligible — they require the signed tier and stay `EXCEPTION_APPROVAL`/owner authority);
+- the risk tier recorded in the PR body is 0–2 (Tier 3 milestone merges additionally require the frontier review record; see `docs/architecture/FRONTIER_MILESTONE_REVIEW_V1.md`);
+- the merge uses a normal merge method allowed by the branch ruleset — no protections are disabled, bypassed, or edited.
+
+**Bounded cleanup exception:** after those gates, the agent may also, without `EXCEPTION_APPROVAL`:
+
+- delete the remote `agent/*` branch of a PR whose merge state is MERGED, when the branch work is fully contained in the merge commit history;
+- remove its own task worktree when `git status --porcelain` is clean inside that worktree and the branch is merged or the abandonment is recorded in the task/PR record.
+
+Everything else in the paragraph above still requires `EXCEPTION_APPROVAL` (in particular: branches with open PRs, unmerged work, `backup/*` branches, shared history, and anything under another owner's custody).
+
 **Local sync exception:** when the user asked to sync local with public `main`, the agent MAY run `git reset --hard origin/main` **on the local `main` branch only** after the [sync preconditions](#sync-local-with-originmain) pass. This never force-pushes and never resets open PR heads.
 
 ## Repo Identity

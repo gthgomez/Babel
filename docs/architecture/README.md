@@ -45,6 +45,15 @@ last_verified: 2026-08-05
 | [BABEL_PROJECT_SYSTEM_INTEGRATION.md](./BABEL_PROJECT_SYSTEM_INTEGRATION.md) | Babel vs repo-local collaboration systems. |
 | [babel-remote/BABEL_REMOTE_STAGE0_COVERAGE.md](./babel-remote/BABEL_REMOTE_STAGE0_COVERAGE.md) | Babel Remote Stage 0 vendor coverage and GO/NO_GO. |
 
+## Autonomy plane
+
+| Document | Description |
+| :--- | :--- |
+| [AUTONOMY_HUMAN_TOUCH_LEDGER_V1.md](./AUTONOMY_HUMAN_TOUCH_LEDGER_V1.md) | Owner-touch ledger: classification of every workflow touch point, ranked automation debt, metric definitions, steady-state targets. |
+| [AUTONOMY_THREAT_MODEL_V1.md](./AUTONOMY_THREAT_MODEL_V1.md) | Threat register and autonomy-increase gate for the autonomous engineering loop; non-self-authorizing principles. |
+| [AUTONOMY_EVAL_MATRIX_V1.md](./AUTONOMY_EVAL_MATRIX_V1.md) | Adversarial eval matrix E1–E16 with honest coverage status and run commands. |
+| [FRONTIER_MILESTONE_REVIEW_V1.md](./FRONTIER_MILESTONE_REVIEW_V1.md) | Frontier (Sol/Astra) milestone review packet, routing, and adversarial audit instruction. |
+
 ## Trust plane
 
 | Document | Description |

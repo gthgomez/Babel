@@ -20,6 +20,7 @@ This is the **public, canonical source** for the Babel coding agent (`gthgomez/B
 |-----------|----------|
 | What is Babel, how to invoke it | `INTEGRATION.md` |
 | Autonomy defaults and user-decision boundaries | `docs/AUTONOMY_POLICY.md` |
+| Autonomy risk tiers, human-touch ledger, threat model, evals, frontier review | `docs/AUTONOMY_POLICY.md` §Risk-tiered missions, `docs/architecture/AUTONOMY_*_V1.md`, `docs/architecture/FRONTIER_MILESTONE_REVIEW_V1.md` |
 | System topology, contracts, runtime | `PROJECT_CONTEXT.md` |
 | Full catalog of every prompt/skill/rule | `prompt_catalog.yaml` |
 | How the CLI routes tasks (the orchestrator) | `00_System_Router/OLS-v9-Orchestrator.md` |
