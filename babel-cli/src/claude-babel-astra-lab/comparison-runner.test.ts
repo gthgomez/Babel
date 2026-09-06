@@ -49,6 +49,23 @@ test('actual runner and task repository SHAs are checked before provider calls',
   assert.equal(pairs[2]!.claude.RUNNER_SOURCE_DIGEST, runnerIdentity().sourceDigest)
 })
 
+test('an unsettled process cannot violate the shared single-harness execution limit', async () => {
+  const contract = definition('hang')
+  for (const arm of Object.values(contract.arms)) arm.capabilities.limits.timeoutMs = 1
+  const calls: string[] = []
+  const hung = adapter(contract.arms['claude-code'], calls)
+  hung.execute = async () => { calls.push('hung'); return new Promise(() => {}) }
+  const pairs = await runComparisonCampaign([contract, { ...contract, pairId: 'later' }], {
+    outputRoot: mkdtempSync(join(tmpdir(), 'astra-shared-process-limit-')),
+    adapters: { 'claude-code': hung, 'babel-live': adapter(contract.arms['babel-live'], calls) },
+  })
+  assert.deepEqual(calls, ['hung'])
+  assert.equal(pairs[0]!.claude.termination.kind, 'PROCESS_HANG')
+  assert.ok(pairs[1]!.claude.invalidReasons.includes('ACTIVE_CONTESTANT_UNSETTLED'))
+  assert.equal(pairs[1]!.babel.attempted, false)
+  assert.deepEqual(aggregateResults(pairs).terminationsByProvenance, { PROCESS_HANG: 1 })
+})
+
 test('invalid cell does not stop its valid sibling or subsequent valid pair; packets link real independent evidence', async () => {
   const good = definition('good')
   const bad = definition('bad'); bad.arms['claude-code'].route = ''

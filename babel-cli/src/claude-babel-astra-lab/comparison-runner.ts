@@ -37,11 +37,16 @@ function emptyCell(contract: PairContract, harness: Harness, packet: string): Ce
 }
 const terminations: Termination[] = ['NORMAL', 'PROVIDER_TIMEOUT', 'HARNESS_TIMEOUT', 'RUNNER_TIMEOUT', 'RUNNER_CANCELLED', 'BUDGET_EXCEEDED', 'PROCESS_HANG', 'EXTERNAL_INTERRUPTION', 'UNKNOWN_TIMEOUT', 'UNKNOWN_FAILURE']
 
-async function runCell(contract: PairContract, harness: Harness, dir: string, options: CampaignOptions): Promise<CellResult> {
+async function runCell(contract: PairContract, harness: Harness, dir: string, options: CampaignOptions, unsettledContestant = false): Promise<CellResult> {
   const cell = emptyCell(contract, harness, join(dir, 'cell.json'))
   mkdirSync(dir, { recursive: true })
   try {
     cell.invalidReasons = preflight(contract, harness)
+    if (unsettledContestant) {
+      cell.invalidReasons.push('ACTIVE_CONTESTANT_UNSETTLED')
+      cell.termination = { kind: 'PROCESS_HANG', evidence: ['Earlier contestant remains active; shared single-harness resource limit prevents another execution'] }
+      return cell
+    }
     if (options.signal?.aborted) { cell.termination = { kind: 'RUNNER_CANCELLED', evidence: ['campaign AbortSignal before execution'] }; return cell }
     if (cell.invalidReasons.length) return cell
     const runner = runnerIdentity()
@@ -133,11 +138,14 @@ export async function runComparisonCampaign(contracts: PairContract[], options: 
   if (existsSync(options.outputRoot) && readdirSync(options.outputRoot).length) throw new Error('OUTPUT_ALREADY_EXISTS: choose a fresh directory; historical artifacts are immutable')
   mkdirSync(options.outputRoot, { recursive: true })
   const pairs: PairResult[] = []
+  let unsettledContestant = false
   for (const [i, input] of contracts.entries()) {
     const contract = structuredClone(input)
     const dir = join(options.outputRoot, `pair-${i + 1}`)
-    const claude = await runCell(contract, 'claude-code', join(dir, 'claude'), options)
-    const babel = await runCell(contract, 'babel-live', join(dir, 'babel'), options)
+    const claude = await runCell(contract, 'claude-code', join(dir, 'claude'), options, unsettledContestant)
+    unsettledContestant ||= claude.termination.kind === 'PROCESS_HANG'
+    const babel = await runCell(contract, 'babel-live', join(dir, 'babel'), options, unsettledContestant)
+    unsettledContestant ||= babel.termination.kind === 'PROCESS_HANG'
     pairs.push(compareCells(claude, babel))
   }
   writeComparisonReports(join(options.outputRoot, 'reports'), pairs)

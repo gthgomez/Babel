@@ -29,9 +29,10 @@ export function aggregateResults(pairs: PairResult[]): Record<string, unknown> {
   const cells = pairs.flatMap(p => [p.claude, p.babel])
   const count = (v: PairResult['PAIR_VERDICT']): number => pairs.filter(p => p.PAIR_VERDICT === v).length
   const timeouts: Record<string, number> = {}
-  for (const c of cells) if (c.termination.kind !== 'NORMAL') timeouts[c.termination.kind] = (timeouts[c.termination.kind] ?? 0) + 1
+  for (const c of cells) if (c.attempted && c.termination.kind !== 'NORMAL') timeouts[c.termination.kind] = (timeouts[c.termination.kind] ?? 0) + 1
   return {
     totalCellsAttempted: cells.filter(c => c.attempted).length,
+    unattemptedCells: cells.filter(c => !c.attempted).length,
     validCells: cells.filter(c => c.attempted && cellInvalidReasons(c).length === 0).length,
     matchedValidPairs: pairs.filter(p => p.PAIR_VALIDITY === 'VALID').length,
     invalidComparisons: count('INVALID_COMPARISON'), inconclusiveComparisons: count('INCONCLUSIVE'),

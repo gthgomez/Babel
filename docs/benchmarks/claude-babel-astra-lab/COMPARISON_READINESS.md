@@ -39,8 +39,11 @@ functions support frozen prompts and produce these observations. Adapter code
 is evaluator-owned code, not a contestant-created module or receipt.
 
 The generic runner enforces wall timeout and propagates cancellation. An adapter
-that fails to settle receives PROCESS_HANG and is not evaluated. Each other
-resource limit must be enforced and observed by the adapter; recording an
+that fails to settle receives PROCESS_HANG and is not evaluated. Every scheduled
+cell still gets a report; further execution waits because an active contestant
+would violate the shared single-harness resource limit. Ordinary invalid cells
+do not trigger this resource hold. Other resource limits must be enforced and
+observed by the adapter; recording an
 intended budget alone is insufficient. Do not claim readiness from a fabricated
 `describe()` response. The deterministic tests use explicitly synthetic adapters.
 
