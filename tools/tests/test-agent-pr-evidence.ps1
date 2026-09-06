@@ -3,7 +3,7 @@
 #
 # Hermetic: no gh calls, no network. Builds a fixture git repository, drives
 # the tool through its offline build/validate path (-WhatIfOnly), and checks
-# the produced evidence against the merge gate's own module — the same
+# the produced evidence against the merge gate's own module - the same
 # validator and numstat-digest function the trusted-control-plane gate runs.
 # Negative cases assert the tool fails closed before any transport.
 
@@ -138,11 +138,21 @@ try {
   $run = & pwsh -NoProfile -File $tool -PR 42 -ReviewerId 'isolated-reviewer-test' -Repository 'test/fixture' `
     -BaseSha $baseSha -HeadSha $head1 -RepoRoot $fixture -Scope @('x') -Verdict 'REQUEST_CHANGES' -WhatIfOnly 2>&1
   Assert-AgentEvidence 'non-approve verdict rejected by parameter validation' ($LASTEXITCODE -ne 0)
+
+  $outFile3 = Join-Path $fixture 'evidence-body-3.txt'
+  & pwsh -NoProfile -File $tool -PR 42 -ReviewerId 'isolated-reviewer-test' -Repository 'test/fixture' `
+    -BaseSha $baseSha -HeadSha $head1 -RepoRoot $fixture -Scope @('x') -Replace -WhatIfOnly -OutFile $outFile3 2>&1 | Out-Null
+  Assert-AgentEvidence 'replace parameter binds and builds' ($LASTEXITCODE -eq 0)
+  $run = & pwsh -NoProfile -File $tool -PR 42 -ReviewerId 'isolated-reviewer-test' -Repository 'test/fixture' `
+    -BaseSha 'short' -HeadSha $head1 -RepoRoot $fixture -Scope @('x') -WhatIfOnly 2>&1
+  Assert-AgentEvidence 'malformed SHA refuses' ($LASTEXITCODE -ne 0)
 } finally {
-  # .git object files are read-only on Windows; best-effort cleanup is fine —
+  # .git object files are read-only on Windows; best-effort cleanup is fine -
   # the fixture lives under the OS temp directory either way.
   try {
-    & attrib -R (Join-Path $fixture '*') /S /D 2>$null
+    if (Get-Command attrib -ErrorAction SilentlyContinue) {
+      & attrib -R (Join-Path $fixture '*') /S /D 2>$null
+    }
     Remove-Item -LiteralPath $fixture -Recurse -Force -ErrorAction SilentlyContinue
   } catch { }
 }
