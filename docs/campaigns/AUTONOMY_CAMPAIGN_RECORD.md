@@ -41,7 +41,7 @@ verification log below and in
 
 ## HUMAN_TOUCH_BASELINE
 
-Full ledger: [AUTONOMY_HUMAN_TOUCH_LEDGER_V1.md](../architecture/AUTONOMY_HUMAN_TOUCH_LEDGER_V1.md).
+Full ledger: defined on PR #148 (`AUTONOMY_HUMAN_TOUCH_LEDGER_V1.md`).
 Highest-ranked automation debt at campaign start: hand-built review evidence
 JSON + close/reopen retrigger ritual (per PR, error-prone); no worktree
 lifecycle; no branch cleanup authorization.
@@ -56,7 +56,7 @@ lifecycle; no branch cleanup authorization.
    policy, the ledger, and the threat model.
 3. Independence doctrine: independent evidence channels over reviewer count;
    the autonomy-increase gate in
-   [AUTONOMY_THREAT_MODEL_V1.md](../architecture/AUTONOMY_THREAT_MODEL_V1.md)
+   the threat model defined on PR #148 (`AUTONOMY_THREAT_MODEL_V1.md`)
    defines when a workflow transition may lose its human gate.
 4. Automation increment R1 (evidence tooling) imports the gate module rather
    than copying digest semantics, so gate/tool parity is structural and
@@ -126,7 +126,7 @@ Routine/significant PR: 0 owner touches — branch, implement, verify, PR,
 independent review, evidence (now tooling-assisted), retrigger, gate-green
 merge, cleanup are all agent-executable under the amended rule 05. Milestone:
 ~1 adversarial frontier review prompt
-([FRONTIER_MILESTONE_REVIEW_V1.md](../architecture/FRONTIER_MILESTONE_REVIEW_V1.md)).
+(defined on PR #148 as `FRONTIER_MILESTONE_REVIEW_V1.md`).
 
 ## RESIDUAL_RISKS
 
