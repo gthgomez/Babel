@@ -82,9 +82,13 @@ classified `OWNER_REQUIRED`, `AUTOMATABLE_NOW`, `AUTOMATABLE_LATER`, or
 Ask, at any proposed owner interaction: *is the owner providing unique
 authority or judgment here, or is the system merely missing automation?*
 Missing automation is an engineering defect; genuine authority is a
-preserved boundary. Recurring manual tasks are presumed automation debt
-unless a documented authority or safety reason justifies keeping them
-manual.
+preserved boundary. The ledger classifies each touch point with a state
+(`OWNER_REQUIRED`, `AUTOMATION_DEBT`, `UNNECESSARY_PERMISSION_GATE`,
+`INTENTIONALLY_MANUAL`) and, for debt and permission-gate items, an
+automation disposition (`AUTOMATABLE_NOW`, `AUTOMATABLE_LATER`,
+`KEEP_MANUAL`). Recurring manual tasks are presumed `AUTOMATION_DEBT` with
+disposition `AUTOMATABLE_NOW` unless a documented authority or safety
+reason establishes otherwise.
 
 ## Authority boundaries
 

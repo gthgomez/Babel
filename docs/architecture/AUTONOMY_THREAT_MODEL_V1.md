@@ -101,8 +101,10 @@ in review:
    directly, shared history, credentials, or other owners' work);
 3. a deterministic check or eval (see the eval matrix) covers the failure
    mode that motivated the old human gate;
-4. the residual risk is recorded in this document and accepted in the
-   ledger as `AUTOMATABLE_NOW` rather than silently reclassified.
+4. the residual risk is recorded in this document, and the touched ledger
+   items carry the classification `AUTOMATION_DEBT` (or
+   `UNNECESSARY_PERMISSION_GATE`) with automation disposition
+   `AUTOMATABLE_NOW` — never a silent reclassification.
 
 Anything that cannot satisfy all four stays at its current classification.
 Weakening a security or evidence boundary to reduce owner touches is a
