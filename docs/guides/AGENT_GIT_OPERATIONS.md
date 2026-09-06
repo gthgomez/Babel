@@ -97,6 +97,18 @@ The result is either `MERGE_READY` or `BLOCKED` and includes the reviewed head, 
 
 The gate uses `gh pr view` for PR metadata and the commit-scoped check-runs API for CI. It does not merge, delete branches, force-push, or rewrite history.
 
+## Review evidence transport
+
+HIGH and CRITICAL tier PRs that do not modify protected trust-root paths satisfy the gate's independent-review check with `autonomous_review_evidence_v1` evidence bound to the exact base, head, and diff digest. Build, validate, and post it with the dedicated tool instead of hand-writing the JSON:
+
+```powershell
+.\scripts\agent-pr-evidence.ps1 -PR 147 -ReviewerId <isolated-reviewer-id> `
+  -Scope @('Full diff <base>...<head> (…): <files>') [-Findings @('…')] `
+  [-Retrigger]
+```
+
+The tool derives the repository and PR base/head from live state, computes the numstat digest with the gate's own module, runs the gate-identical validator before posting (failing closed on any error, including blocking findings, a non-`APPROVE` verdict, or a reviewer matching the builder identity), posts the marker-delimited comment the evidence transport expects, keeps the same-head case idempotent (identical bodies skip; differing bodies refuse rather than create ambiguity), and with `-Retrigger` performs the ready → evidence → close/reopen sequence so a fresh `pull_request_target` run re-materializes evidence at execution time. Use `-WhatIfOnly -OutFile <file>` to build and validate offline. After #144's comment-triggered re-evaluation merges, `-Retrigger` becomes a fallback rather than the normal lifecycle.
+
 ## Troubleshooting hangs
 
 If `gh auth status` succeeds but `git push` hangs, Git may be invoking an inherited credential helper such as Git Credential Manager before the GitHub CLI helper. Inspect the repo-local helper state and apply the repository-local reset above. Keep the global helper intact for other repositories. With noninteractive defaults enabled, an unresolved credential or editor problem should fail with a command result rather than waiting for input.
