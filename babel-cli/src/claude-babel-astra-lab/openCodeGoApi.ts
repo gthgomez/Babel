@@ -66,7 +66,7 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
   }
   getLastOpenCodeSessionId(): string | null { return this.currentSessionId; }
   protected override getRequestHeadersExtras(): Record<string, string> { this.currentSessionId = `${this.benchmarkRunId}-${randomUUID()}`; return { 'x-opencode-session': this.currentSessionId }; }
-  protected override validateObservedModelId(observedModelId: string | null): void { if (observedModelId !== null && observedModelId !== this.pinnedModel) throw new OpenCodeGoError('MODEL_ATTRIBUTION_FAILURE', `OpenCode Go returned model "${observedModelId}" for the pinned request.`); }
+  protected override validateObservedModelId(observedModelId: string | null): void { if (observedModelId !== this.pinnedModel) throw new OpenCodeGoError('MODEL_ATTRIBUTION_FAILURE', `OpenCode Go returned model "${observedModelId ?? 'UNKNOWN'}" for the pinned request.`); }
   override getLastInvocationMetadata(): RunnerInvocationMetadata | null { const metadata = super.getLastInvocationMetadata(); return metadata ? { ...metadata, provider: 'opencode-go' } : null; }
   private async withConfiguredTimeout<T>(operation: () => Promise<T>): Promise<T> {
     if (this.requestTimeoutMs === null) return operation();

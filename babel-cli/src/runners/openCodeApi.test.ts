@@ -170,6 +170,18 @@ test('OpenCode Go rejects unknown or substituted models without fallback', async
   assert.equal(calls, 1)
 })
 
+test('OpenCode Go rejects a successful response with missing observed model identity', async () => {
+  let calls = 0
+  globalThis.fetch = (async () => {
+    calls += 1
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), { status: 200 })
+  }) as typeof fetch
+  const runner = new OpenCodeGoApiRunner('deepseek-v4-flash', {}, { credentialSource: 'explicit-test', explicitCredential: 'synthetic-go-key' })
+  await assert.rejects(runner.execute('respond', z.object({ ok: z.literal(true) })),
+    (error: unknown) => error instanceof OpenCodeGoError && error.code === 'MODEL_ATTRIBUTION_FAILURE')
+  assert.equal(calls, 1)
+})
+
 test('OpenCode Go classifies auth and quota failures and never switches provider', async () => {
   process.env['BABEL_DEEPINFRA_REQUEST_MAX_RETRIES'] = '1'
   const statuses = [401, 429]

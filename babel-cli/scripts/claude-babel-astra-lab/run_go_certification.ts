@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
 import { loadBabelCliEnv } from '../../src/config/envBootstrap.js';
@@ -98,13 +98,19 @@ async function certify(model: OpenCodeGoModel, live: boolean): Promise<Certifica
 }
 
 const live = process.argv.includes('--live');
+const models = modelsFromArgs(process.argv.slice(2));
+// Refuse before requesting credentials or spending calls; retained records
+// are evidence and require a fresh destination for another campaign.
+for (const model of models) {
+  if (existsSync(resolve(outputRoot, `${model}.json`))) throw new Error('Certification output already exists; preserve it and use a fresh campaign destination.');
+}
 let failed = false;
-for (const model of modelsFromArgs(process.argv.slice(2))) {
+for (const model of models) {
   const result = await certify(model, live);
   if (live && result.status !== 'GO_MODEL_CERTIFIED') failed = true;
   const path = resolve(outputRoot, `${model}.json`);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+  writeFileSync(path, `${JSON.stringify(result, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 if (failed) process.exitCode = 1;
