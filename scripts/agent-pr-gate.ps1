@@ -74,6 +74,15 @@ function Get-AgentRulesetPolicy {
   if ($pullRules.Count -ne 1 -or $statusRules.Count -ne 1) { return [pscustomobject]@{ available = $false; error = 'active_ruleset_required_rules_ambiguous_or_missing'; id = [string]$candidate.id } }
   $pullRule = $pullRules[0]
   $statusRule = $statusRules[0]
+  $statusParameters = Get-AgentLocalValue -Object $statusRule -Name 'parameters'
+  $statusEntries = Get-AgentLocalValue -Object $statusParameters -Name 'required_status_checks'
+  $requiredStatusCheckPolicies = @($statusEntries | ForEach-Object {
+      $context = Get-AgentLocalValue -Object $_ -Name 'context'
+      $integrationValue = Get-AgentLocalValue -Object $_ -Name 'integration_id'
+      $integrationId = $null
+      if ($null -ne $integrationValue -and [string]$integrationValue -match '^\d+$') { $integrationId = [int64]$integrationValue }
+      [pscustomobject][ordered]@{ context = [string]$context; integration_id = $integrationId }
+    })
   return [pscustomobject][ordered]@{
     available = $true; id = [int64]$detail.id; name = [string]$detail.name; enforcement = [string]$detail.enforcement
     required_approving_review_count = [int]$pullRule.parameters.required_approving_review_count
@@ -81,7 +90,8 @@ function Get-AgentRulesetPolicy {
     require_code_owner_review = [bool]$pullRule.parameters.require_code_owner_review
     allowed_merge_methods = @($pullRule.parameters.allowed_merge_methods | ForEach-Object { [string]$_ })
     strict_required_status_checks_policy = [bool]$statusRule.parameters.strict_required_status_checks_policy
-    required_status_checks = @($statusRule.parameters.required_status_checks | ForEach-Object { [string]$_.context })
+    required_status_checks = @($requiredStatusCheckPolicies | ForEach-Object { [string]$_.context })
+    required_status_check_policies = @($requiredStatusCheckPolicies)
     # GitHub may omit bypass_actors for a token that can read the ruleset
     # definition but cannot enumerate its actor identities. Avoid strict-mode
     # property errors; the live ruleset remains independently captured and
@@ -237,6 +247,8 @@ function Read-AgentAutonomousReviewEvidence {
   if (-not [IO.Path]::IsPathRooted($path)) { $path = Join-Path $resolvedRepoRoot $path }
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return [pscustomobject]@{ path = $path; valid = $false; errors = @('autonomous_review_evidence_missing') } }
   try { $evidence = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json } catch { return [pscustomobject]@{ path = $path; valid = $false; errors = @('autonomous_review_evidence_malformed') } }
+  $transportError = Get-AgentEvidenceTransportError -Document $evidence
+  if ($null -ne $transportError) { return [pscustomobject]@{ path = $path; valid = $false; errors = @($transportError) } }
   $numstatResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('diff', '--numstat', "$BaseSha...$HeadSha")
   if ($numstatResult.exitCode -ne 0) { return [pscustomobject]@{ path = $path; valid = $false; errors = @('autonomous_review_numstat_unavailable') } }
   $expectedDigest = Get-AgentNumstatDigest -NumstatLines @($numstatResult.output)
@@ -394,7 +406,7 @@ try {
   Add-AgentCheck -Name 'MERGE_STATE_CLEAN' -Passed $mergeStateAcceptable -Blocker 'pr_merge_state_not_clean'
 
   $rulesetPolicy = if ($ghAvailable -and $authOk) { Get-AgentRulesetPolicy } else {
-    [pscustomobject]@{ available = $false; error = 'active_ruleset_unreadable'; required_review_thread_resolution = $false; required_approving_review_count = -1; required_status_checks = @(); strict_required_status_checks_policy = $null; id = $null; name = $null; enforcement = $null }
+    [pscustomobject]@{ available = $false; error = 'active_ruleset_unreadable'; required_review_thread_resolution = $false; required_approving_review_count = -1; required_status_checks = @(); required_status_check_policies = @(); strict_required_status_checks_policy = $null; id = $null; name = $null; enforcement = $null }
   }
   Add-AgentCheck -Name 'ACTIVE_RULESET_READABLE' -Passed ([bool]$rulesetPolicy.available) -Blocker 'active_ruleset_unreadable'
   # An empty @() emitted from an if-expression unrolls to $null on assignment,
@@ -402,6 +414,19 @@ try {
   $requiredChecks = @()
   if ($rulesetPolicy.available) { $requiredChecks = @($rulesetPolicy.required_status_checks) }
   if ($requiredChecks.Count -eq 0) { $blockers += 'required_status_checks_unreadable' }
+  $requiredCheckPolicies = @()
+  if ($rulesetPolicy.available) { $requiredCheckPolicies = @($rulesetPolicy.required_status_check_policies) }
+  $producerBindingsComplete = $rulesetPolicy.available -and $requiredChecks.Count -gt 0 -and $requiredCheckPolicies.Count -eq $requiredChecks.Count
+  if ($producerBindingsComplete) {
+    foreach ($required in $requiredChecks) {
+      $matchingPolicies = @($requiredCheckPolicies | Where-Object {
+          [string]::Equals([string]$_.context, [string]$required, [StringComparison]::OrdinalIgnoreCase) -and
+            $null -ne $_.integration_id -and [int64]$_.integration_id -gt 0
+        })
+      if ($matchingPolicies.Count -ne 1) { $producerBindingsComplete = $false; break }
+    }
+  }
+  Add-AgentCheck -Name 'REQUIRED_CHECK_PRODUCERS_BOUND' -Passed $producerBindingsComplete -Blocker 'required_check_producer_binding_incomplete'
   $requiredChecksReady = if ($rulesetPolicy.available -and $authOk -and (Test-AgentShaValue $prHead)) { Wait-AgentRequiredChecksReady -RequiredChecks $requiredChecks -TargetSha $prHead } else { [pscustomobject]@{ ready = $false; attempts = 0; reason = 'required_check_wait_prerequisite_missing' } }
   Add-AgentCheck -Name 'REQUIRED_CHECKS_READY' -Passed ([bool]$requiredChecksReady.ready) -Blocker 'required_check_wait_timeout'
   $githubApprovalCount = if ($rulesetPolicy.available) { [int]$rulesetPolicy.required_approving_review_count } else { -1 }
@@ -462,6 +487,7 @@ try {
   foreach ($run in $checkRuns) {
     $metadata = Get-AgentWorkflowMetadata -CheckRun $run
     $checkSuite = Get-AgentLocalValue -Object $run -Name 'check_suite'
+    $checkApp = Get-AgentLocalValue -Object $run -Name 'app'
     $raw = [pscustomobject][ordered]@{
       name = [string]$run.name; head_sha = [string]$run.head_sha; status = [string]$run.status; conclusion = [string]$run.conclusion
       check_run_id = [string]$run.id; check_suite_id = [string](Get-AgentLocalValue -Object $checkSuite -Name 'id')
@@ -469,6 +495,7 @@ try {
       event = [string](Get-AgentLocalValue -Object $run -Name 'event'); workflow_id = [string](Get-AgentLocalValue -Object $run -Name 'workflow_id')
       workflow_name = [string](Get-AgentLocalValue -Object $run -Name 'workflow_name'); workflow_run_id = [string](Get-AgentLocalValue -Object $run -Name 'workflow_run_id')
       workflow_run_attempt = [string](Get-AgentLocalValue -Object $run -Name 'workflow_run_attempt'); authority = [string](Get-AgentLocalValue -Object $run -Name 'authority')
+      app_id = [string](Get-AgentLocalValue -Object $checkApp -Name 'id'); app_slug = [string](Get-AgentLocalValue -Object $checkApp -Name 'slug'); app_name = [string](Get-AgentLocalValue -Object $checkApp -Name 'name')
     }
     $normalizedRuns += ConvertTo-AgentCheckObservation -Raw $raw -WorkflowMetadata $metadata
   }
@@ -483,9 +510,22 @@ try {
       # all peer checks remain resolved through the normal authoritative path.
       $resolution = [pscustomobject][ordered]@{ status = 'PASS'; reason = 'self_check_deferred_to_current_job_result'; required = $required; selected = $null; candidates = @(); ignored = @() }
     } else {
-      $event = if ([string]::Equals($required, 'public-pr-metadata', [StringComparison]::OrdinalIgnoreCase)) { 'pull_request_target' } else { 'pull_request' }
-      $workflow = if ([string]::Equals($required, 'public-pr-metadata', [StringComparison]::OrdinalIgnoreCase)) { 'Public PR Metadata' } else { 'Public Release Gate' }
-      $resolution = Resolve-AgentRequiredCheck -Observations $normalizedRuns -RequiredName $required -TargetSha $prHead -AuthorityEvent $event -AuthorityWorkflowName $workflow
+      $authority = Get-AgentRequiredCheckAuthority -RequiredName $required
+      if (-not [bool]$authority.configured) {
+        $resolution = [pscustomobject][ordered]@{ status = 'AMBIGUOUS'; reason = [string]$authority.reason; required = $required; selected = $null; candidates = @(); ignored = @() }
+      } else {
+        # The ruleset's GitHub Actions integration ID is part of the producer
+        # binding. A missing binding is represented by an impossible ID so a
+        # same-name check can never satisfy the requirement accidentally.
+        [Nullable[int64]]$authorityAppId = 0
+        $matchingPolicy = @($requiredCheckPolicies | Where-Object {
+            [string]::Equals([string]$_.context, [string]$required, [StringComparison]::OrdinalIgnoreCase)
+          })
+        if ($matchingPolicy.Count -eq 1 -and $null -ne $matchingPolicy[0].integration_id -and [int64]$matchingPolicy[0].integration_id -gt 0) {
+          $authorityAppId = [int64]$matchingPolicy[0].integration_id
+        }
+        $resolution = Resolve-AgentRequiredCheck -Observations $normalizedRuns -RequiredName $required -TargetSha $prHead -AuthorityEvent ([string]$authority.event) -AuthorityWorkflowName ([string]$authority.workflow_name) -AuthorityAppId $authorityAppId
+      }
     }
     if ($resolution.status -ne 'PASS') { $requiredChecksGreen = $false; $ciHeadMatch = $false }
     $selected = Get-AgentLocalValue -Object $resolution -Name 'selected'
@@ -493,7 +533,19 @@ try {
     $ignoredIds = Get-AgentLocalValue -Object $resolution -Name 'ignored'
     $candidateList = if ($null -eq $candidateIds) { @() } else { @($candidateIds) }
     $ignoredList = if ($null -eq $ignoredIds) { @() } else { @($ignoredIds) }
-    $requiredResults += [ordered]@{ name = $required; status = [string]$resolution.status; reason = [string]$resolution.reason; selected = if ($null -ne $selected) { [string]$selected.check_run_id } else { $null }; candidates = $candidateList; ignored = $ignoredList }
+    $selectedProducer = if ($null -ne $selected) {
+      [ordered]@{
+        check_run_id = [string](Get-AgentLocalValue -Object $selected -Name 'check_run_id')
+        event = [string](Get-AgentLocalValue -Object $selected -Name 'event')
+        workflow_name = [string](Get-AgentLocalValue -Object $selected -Name 'workflow_name')
+        workflow_id = [string](Get-AgentLocalValue -Object $selected -Name 'workflow_id')
+        workflow_run_id = [string](Get-AgentLocalValue -Object $selected -Name 'workflow_run_id')
+        app_id = [string](Get-AgentLocalValue -Object $selected -Name 'app_id')
+        app_slug = [string](Get-AgentLocalValue -Object $selected -Name 'app_slug')
+        app_name = [string](Get-AgentLocalValue -Object $selected -Name 'app_name')
+      }
+    } else { $null }
+    $requiredResults += [ordered]@{ name = $required; status = [string]$resolution.status; reason = [string]$resolution.reason; selected = if ($null -ne $selected) { [string]$selected.check_run_id } else { $null }; producer = $selectedProducer; candidates = $candidateList; ignored = $ignoredList }
   }
   Add-AgentCheck -Name 'CI_HEAD_MATCH' -Passed ($ciHeadMatch -and $requiredChecks.Count -gt 0) -Blocker 'ci_not_bound_to_pr_head'
   Add-AgentCheck -Name 'REQUIRED_CHECKS_GREEN' -Passed ($requiredChecksGreen -and $requiredChecks.Count -gt 0) -Blocker 'required_checks_not_green'
@@ -555,7 +607,7 @@ try {
     sha = [ordered]@{ reviewedHead = $reviewedHead; prHead = $prHead; remoteHead = $remotePrHead; ciHead = if ($ciHeadMatch) { $prHead } else { $null }; baseHead = $prBase; currentOriginMain = $originMain }
     branch = [ordered]@{ local = $localBranch; prHead = $prHeadBranch; prBase = $prBaseBranch }
     worktree = [ordered]@{ clean = $status.clean; dirtyPaths = @($status.dirtyPaths); isolated = $topology.isolated }
-    repositoryPolicy = [ordered]@{ source = 'github_ruleset'; rulesetId = if ($rulesetPolicy.available) { $rulesetPolicy.id } else { $null }; name = if ($rulesetPolicy.available) { $rulesetPolicy.name } else { $null }; enforcement = if ($rulesetPolicy.available) { $rulesetPolicy.enforcement } else { $null }; githubRequiredApprovalCount = $githubApprovalCount; requiredReviewThreadResolution = if ($rulesetPolicy.available) { $rulesetPolicy.required_review_thread_resolution } else { $null }; requiredStatusChecks = @($requiredChecks); strictRequiredStatusChecksPolicy = if ($rulesetPolicy.available) { $rulesetPolicy.strict_required_status_checks_policy } else { $null } }
+    repositoryPolicy = [ordered]@{ source = 'github_ruleset'; rulesetId = if ($rulesetPolicy.available) { $rulesetPolicy.id } else { $null }; name = if ($rulesetPolicy.available) { $rulesetPolicy.name } else { $null }; enforcement = if ($rulesetPolicy.available) { $rulesetPolicy.enforcement } else { $null }; githubRequiredApprovalCount = $githubApprovalCount; requiredReviewThreadResolution = if ($rulesetPolicy.available) { $rulesetPolicy.required_review_thread_resolution } else { $null }; requiredStatusChecks = @($requiredChecks); requiredStatusCheckProducers = @($requiredCheckPolicies); requiredStatusCheckProducersBound = [bool]$producerBindingsComplete; strictRequiredStatusChecksPolicy = if ($rulesetPolicy.available) { $rulesetPolicy.strict_required_status_checks_policy } else { $null } }
     reviewPolicy = [ordered]@{ riskTier = $RiskTier; githubApprovalSatisfied = [bool]$reviewPolicy.github_approval_satisfied; observedApprovalCount = $observedApprovalCount; reviewThreadsRequired = if ($rulesetPolicy.available) { [bool]$rulesetPolicy.required_review_thread_resolution } else { $null }; reviewThreadsSatisfied = [bool]$reviewPolicy.review_threads_satisfied; independentReviewRequired = $independentRequired; independentReviewSatisfied = $independentReviewSatisfied; independentReviewTier = $independentReviewTier; signedReviewRequired = [bool]$signedReviewRequired; independentReviewReceipt = $receipt.path; independentReviewReceiptErrors = @($receipt.errors); autonomousReviewEvidence = $autonomousEvidenceResult.path; autonomousReviewEvidenceErrors = @($autonomousEvidenceResult.errors); mergeAuthorityRequired = $true; mergeAuthoritySatisfied = [bool]$MergeAuthorized; mergeAuthoritySource = if ($MergeAuthorized) { 'current_task_explicit_user_authorization' } else { $null }; auditOnly = [bool]$AuditOnly }
     trustRoot = [ordered]@{ protectedPaths = @($protectedTrustRootPaths); protectedPathsChanged = @($protectedChangedPaths); modified = [bool]$trustRootChanged; upgradeAuthorization = [ordered]@{ requested = [bool]$trustRootChanged; valid = [bool]$trustRootUpgrade.valid; keyId = if ($null -ne $trustRootUpgrade.keyId) { [string]$trustRootUpgrade.keyId } else { $null }; source = $trustRootUpgrade.path; errors = @($trustRootUpgrade.errors) } }
     checks = $checks; requiredChecks = @($requiredResults); bootstrapException = $bootstrapException; diff = [ordered]@{ scopeBasis = 'reviewed_head_exact'; paths = @($diffPaths) }; environment = $envState; blockers = @($blockers | Select-Object -Unique); warnings = @($warnings | Select-Object -Unique)

@@ -9,6 +9,12 @@ function Get-AgentPropertyValue {
   return $Object.PSObject.Properties[$Name].Value
 }
 
+function Get-AgentPropertyNames {
+  param([AllowNull()][object]$Object)
+  if ($null -eq $Object) { return @() }
+  return @($Object.PSObject.Properties | ForEach-Object { [string]$_.Name })
+}
+
 function Test-AgentShaValue {
   param([AllowNull()][object]$Value)
   return $null -ne $Value -and [string]$Value -match '^[0-9a-fA-F]{40}$'
@@ -42,7 +48,26 @@ function ConvertTo-AgentCheckObservation {
     started_at = [string](& $get 'started_at')
     completed_at = [string](& $get 'completed_at')
     authority = [string](& $get 'authority')
+    app_id = [string](& $get 'app_id')
+    app_slug = [string](& $get 'app_slug')
+    app_name = [string](& $get 'app_name')
   }
+}
+
+function Get-AgentRequiredCheckAuthority {
+  param([Parameter(Mandatory = $true)][string]$RequiredName)
+
+  $normalizedName = $RequiredName.ToLowerInvariant()
+  if ($normalizedName -eq 'trusted-control-plane') {
+    return [pscustomobject][ordered]@{ configured = $true; event = 'pull_request_target'; workflow_name = 'Trusted Control Plane' }
+  }
+  if ($normalizedName -eq 'public-pr-metadata') {
+    return [pscustomobject][ordered]@{ configured = $true; event = 'pull_request_target'; workflow_name = 'Public PR Metadata' }
+  }
+  if ($normalizedName -in @('security', 'public-content-policy', 'linux-validation', 'windows-portability')) {
+    return [pscustomobject][ordered]@{ configured = $true; event = 'pull_request'; workflow_name = 'Public Release Gate' }
+  }
+  return [pscustomobject][ordered]@{ configured = $false; event = $null; workflow_name = $null; reason = 'required_check_authority_unconfigured' }
 }
 
 function Get-AgentObservationTimestamp {
@@ -61,7 +86,8 @@ function Resolve-AgentRequiredCheck {
     [Parameter(Mandatory = $true)][string]$RequiredName,
     [Parameter(Mandatory = $true)][string]$TargetSha,
     [Parameter(Mandatory = $true)][string]$AuthorityEvent,
-    [Parameter(Mandatory = $true)][string]$AuthorityWorkflowName
+    [Parameter(Mandatory = $true)][string]$AuthorityWorkflowName,
+    [Nullable[int64]]$AuthorityAppId = $null
   )
 
   $matching = @($Observations | Where-Object {
@@ -80,11 +106,13 @@ function Resolve-AgentRequiredCheck {
   foreach ($observation in $exactHead) {
     $eventMatches = [string]::Equals([string]$observation.event, $AuthorityEvent, [StringComparison]::OrdinalIgnoreCase)
     $workflowMatches = [string]::Equals([string]$observation.workflow_name, $AuthorityWorkflowName, [StringComparison]::OrdinalIgnoreCase)
+    $appMatches = $null -eq $AuthorityAppId -or [string]::Equals([string]$observation.app_id, [string]$AuthorityAppId, [StringComparison]::OrdinalIgnoreCase)
     $explicitlyNonAuthoritative = [string]::Equals([string]$observation.authority, 'non_authoritative', [StringComparison]::OrdinalIgnoreCase)
-    if ($eventMatches -and $workflowMatches -and -not $explicitlyNonAuthoritative) { $eligible += $observation } else { $ignored += $observation }
+    if ($eventMatches -and $workflowMatches -and $appMatches -and -not $explicitlyNonAuthoritative) { $eligible += $observation } else { $ignored += $observation }
   }
   if ($eligible.Count -eq 0) {
-    return [pscustomobject][ordered]@{ status = 'AMBIGUOUS'; reason = 'no_authoritative_workflow_observation'; required = $RequiredName; selected = $null; candidates = @($exactHead | ForEach-Object { $_.check_run_id }); ignored = @($ignored | ForEach-Object { $_.check_run_id }) }
+    $reason = if ($null -ne $AuthorityAppId) { 'no_authoritative_producer_observation' } else { 'no_authoritative_workflow_observation' }
+    return [pscustomobject][ordered]@{ status = 'AMBIGUOUS'; reason = $reason; required = $RequiredName; selected = $null; candidates = @($exactHead | ForEach-Object { $_.check_run_id }); ignored = @($ignored | ForEach-Object { $_.check_run_id }) }
   }
 
   $seenIds = @{}
@@ -172,7 +200,7 @@ function Get-AgentIndependentReviewReceiptHash {
 
 function Test-AgentIndependentReviewReceipt {
   param(
-    [Parameter(Mandatory = $true)][object]$Receipt,
+    [Parameter(Mandatory = $true)][AllowNull()][object]$Receipt,
     [Parameter(Mandatory = $true)][string]$Repository,
     [Parameter(Mandatory = $true)][int]$PR,
     [Parameter(Mandatory = $true)][string]$BaseSha,
@@ -208,7 +236,7 @@ function Test-AgentIndependentReviewReceipt {
     if (-not [string]::Equals([string]$artifactHash, $expectedHash, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'independent_review_artifact_hash_mismatch' }
   }
   $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'reviewer_id', 'reviewer_class', 'review_mode', 'reviewed_at', 'scope', 'findings', 'blocking_findings', 'verdict', 'artifact_hash', 'builder_id', 'challenge_id', 'task_id', 'run_id', 'contract_hash', 'authority_provenance', 'signature')
-  foreach ($property in @($Receipt.PSObject.Properties.Name)) {
+  foreach ($property in @(Get-AgentPropertyNames -Object $Receipt)) {
     if ($allowed -notcontains [string]$property) { $errors += "receipt_unknown_field:$property" }
   }
   return [pscustomobject][ordered]@{ valid = $errors.Count -eq 0; errors = @($errors) }
@@ -226,7 +254,7 @@ function Get-AgentNumstatDigest {
 
 function Test-AgentAutonomousReviewEvidence {
   param(
-    [Parameter(Mandatory = $true)][object]$Evidence,
+    [Parameter(Mandatory = $true)][AllowNull()][object]$Evidence,
     [Parameter(Mandatory = $true)][string]$Repository,
     [Parameter(Mandatory = $true)][int]$PR,
     [Parameter(Mandatory = $true)][string]$BaseSha,
@@ -240,26 +268,57 @@ function Test-AgentAutonomousReviewEvidence {
   # protected trust root; trust-root changes always require a signed receipt
   # and a supervisor-signed upgrade authorization.
   $errors = @()
-  if ([string]$Evidence.schema_version -ne '1') { $errors += 'autonomous_evidence_schema_version_invalid' }
-  if (-not [string]::Equals([string]$Evidence.kind, 'autonomous_review_evidence_v1', [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_kind_invalid' }
-  if (-not [string]::Equals([string]$Evidence.repository, $Repository, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_repository_mismatch' }
-  if ([string]$Evidence.pr_number -ne [string]$PR) { $errors += 'autonomous_evidence_pr_mismatch' }
-  if (-not [string]::Equals([string]$Evidence.base_sha, $BaseSha, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_base_mismatch' }
-  if (-not [string]::Equals([string]$Evidence.head_sha, $HeadSha, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_head_mismatch' }
-  $reviewerId = [string]$Evidence.reviewer_id
+  $evidenceObject = if ($null -ne $Evidence -and $Evidence -is [System.Management.Automation.PSCustomObject]) { $Evidence } else { $null }
+  if ($null -eq $evidenceObject) { $errors += 'autonomous_evidence_malformed' }
+  $schemaVersion = Get-AgentPropertyValue -Object $evidenceObject -Name 'schema_version'
+  $kind = Get-AgentPropertyValue -Object $evidenceObject -Name 'kind'
+  $repositoryValue = Get-AgentPropertyValue -Object $evidenceObject -Name 'repository'
+  $prNumber = Get-AgentPropertyValue -Object $evidenceObject -Name 'pr_number'
+  $baseValue = Get-AgentPropertyValue -Object $evidenceObject -Name 'base_sha'
+  $headValue = Get-AgentPropertyValue -Object $evidenceObject -Name 'head_sha'
+  $reviewerId = Get-AgentPropertyValue -Object $evidenceObject -Name 'reviewer_id'
+  $reviewerClass = Get-AgentPropertyValue -Object $evidenceObject -Name 'reviewer_class'
+  $verdict = Get-AgentPropertyValue -Object $evidenceObject -Name 'verdict'
+  $scope = Get-AgentPropertyValue -Object $evidenceObject -Name 'scope'
+  $blockingFindings = Get-AgentPropertyValue -Object $evidenceObject -Name 'blocking_findings'
+  $reviewedAt = Get-AgentPropertyValue -Object $evidenceObject -Name 'reviewed_at'
+  $diffNumstatDigest = Get-AgentPropertyValue -Object $evidenceObject -Name 'diff_numstat_digest'
+  if ([string]$schemaVersion -ne '1') { $errors += 'autonomous_evidence_schema_version_invalid' }
+  if (-not [string]::Equals([string]$kind, 'autonomous_review_evidence_v1', [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_kind_invalid' }
+  if (-not [string]::Equals([string]$repositoryValue, $Repository, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_repository_mismatch' }
+  if ([string]$prNumber -ne [string]$PR) { $errors += 'autonomous_evidence_pr_mismatch' }
+  if (-not [string]::Equals([string]$baseValue, $BaseSha, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_base_mismatch' }
+  if (-not [string]::Equals([string]$headValue, $HeadSha, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_head_mismatch' }
   if ([string]::IsNullOrWhiteSpace($reviewerId) -or [string]::Equals($reviewerId, $BuilderIdentity, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_reviewer_not_independent_from_builder' }
-  if ([string]::IsNullOrWhiteSpace([string]$Evidence.reviewer_class)) { $errors += 'autonomous_evidence_reviewer_class_missing' }
-  if (-not [string]::Equals([string]$Evidence.verdict, 'APPROVE', [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_not_approved' }
-  if (@($Evidence.scope).Count -eq 0) { $errors += 'autonomous_evidence_scope_empty' }
-  if (@($Evidence.blocking_findings).Count -gt 0) { $errors += 'autonomous_evidence_has_blocking_findings' }
+  if ([string]::IsNullOrWhiteSpace([string]$reviewerClass)) { $errors += 'autonomous_evidence_reviewer_class_missing' }
+  if (-not [string]::Equals([string]$verdict, 'APPROVE', [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_not_approved' }
+  if (@($scope).Count -eq 0) { $errors += 'autonomous_evidence_scope_empty' }
+  if (@($blockingFindings).Count -gt 0) { $errors += 'autonomous_evidence_has_blocking_findings' }
   $parsedReviewedAt = [DateTimeOffset]::MinValue
-  if ([string]::IsNullOrWhiteSpace([string]$Evidence.reviewed_at) -or -not [DateTimeOffset]::TryParse([string]$Evidence.reviewed_at, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$parsedReviewedAt)) { $errors += 'autonomous_evidence_reviewed_at_invalid' }
-  if (-not [string]::Equals([string]$Evidence.diff_numstat_digest, $ExpectedNumstatDigest, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_diff_numstat_digest_mismatch' }
+  if ([string]::IsNullOrWhiteSpace([string]$reviewedAt) -or -not [DateTimeOffset]::TryParse([string]$reviewedAt, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$parsedReviewedAt)) { $errors += 'autonomous_evidence_reviewed_at_invalid' }
+  if (-not [string]::Equals([string]$diffNumstatDigest, $ExpectedNumstatDigest, [StringComparison]::OrdinalIgnoreCase)) { $errors += 'autonomous_evidence_diff_numstat_digest_mismatch' }
   $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'reviewer_id', 'reviewer_class', 'review_mode', 'reviewed_at', 'scope', 'findings', 'blocking_findings', 'verdict', 'builder_id', 'diff_numstat_digest')
-  foreach ($property in @($Evidence.PSObject.Properties.Name)) {
+  foreach ($property in @(Get-AgentPropertyNames -Object $evidenceObject)) {
     if ($allowed -notcontains [string]$property) { $errors += "autonomous_evidence_unknown_field:$property" }
   }
   return [pscustomobject][ordered]@{ valid = $errors.Count -eq 0; errors = @($errors) }
+}
+
+function Test-AgentEvidenceTransportStub {
+  param([AllowNull()][object]$Document)
+  if ($null -eq $Document -or $Document -isnot [System.Management.Automation.PSCustomObject]) { return $null }
+  $transportError = Get-AgentPropertyValue -Object $Document -Name 'transport_error'
+  if ($null -eq $transportError) { return $null }
+  if ([string]$transportError -like '*_handoff_ambiguous') { return 'ambiguous' }
+  return 'missing'
+}
+
+function Get-AgentEvidenceTransportError {
+  param([AllowNull()][object]$Document)
+  $disposition = Test-AgentEvidenceTransportStub -Document $Document
+  if ($disposition -eq 'missing') { return 'autonomous_review_evidence_missing' }
+  if ($disposition -eq 'ambiguous') { return 'autonomous_review_evidence_ambiguous' }
+  return $null
 }
 
 function Get-AgentReviewPolicyVerdict {
@@ -280,4 +339,4 @@ function Get-AgentReviewPolicyVerdict {
   }
 }
 
-Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue, Get-AgentNumstatDigest, Test-AgentAutonomousReviewEvidence
+Export-ModuleMember -Function ConvertTo-AgentCheckObservation, Get-AgentObservationTimestamp, Resolve-AgentRequiredCheck, Resolve-AgentReviewThreadPages, Test-AgentIndependentReviewReceipt, Get-AgentIndependentReviewReceiptHash, Get-AgentReviewPolicyVerdict, Test-AgentShaValue, Get-AgentNumstatDigest, Test-AgentAutonomousReviewEvidence, Get-AgentPropertyNames, Get-AgentRequiredCheckAuthority, Test-AgentEvidenceTransportStub, Get-AgentEvidenceTransportError

@@ -203,7 +203,7 @@ try {
     id = 19597161; name = 'protect-main'; enforcement = 'active'; bypass_actors = @()
     rules = @(
       [ordered]@{ type = 'pull_request'; parameters = [ordered]@{ required_approving_review_count = 0; required_review_thread_resolution = $true; require_code_owner_review = $false; allowed_merge_methods = @('merge'); } },
-      [ordered]@{ type = 'required_status_checks'; parameters = [ordered]@{ strict_required_status_checks_policy = $false; required_status_checks = @([ordered]@{ context = 'security' }, [ordered]@{ context = 'public-content-policy' }, [ordered]@{ context = 'linux-validation' }, [ordered]@{ context = 'public-pr-metadata' }, [ordered]@{ context = 'windows-portability' }, [ordered]@{ context = 'trusted-control-plane' }) } }
+      [ordered]@{ type = 'required_status_checks'; parameters = [ordered]@{ strict_required_status_checks_policy = $false; required_status_checks = @([ordered]@{ context = 'security'; integration_id = 15368 }, [ordered]@{ context = 'public-content-policy'; integration_id = 15368 }, [ordered]@{ context = 'linux-validation'; integration_id = 15368 }, [ordered]@{ context = 'public-pr-metadata'; integration_id = 15368 }, [ordered]@{ context = 'windows-portability'; integration_id = 15368 }, [ordered]@{ context = 'trusted-control-plane'; integration_id = 15368 }) } }
     )
   }
   $checkRuns = @()
@@ -218,7 +218,7 @@ try {
       workflow_name = if ($peer[1] -eq 'pull_request_target') { 'Public PR Metadata' } else { 'Public Release Gate' }
       workflow_id = [string]$runId; workflow_run_id = [string]$runId; workflow_run_attempt = 1
       details_url = "https://ci.example.test/runs/$runId"
-      app = $null
+      app = [ordered]@{ id = 15368; slug = 'github-actions'; name = 'GitHub Actions' }
     }
   }
   $runsJson = [ordered]@{ total_count = $checkRuns.Count; check_runs = $checkRuns }

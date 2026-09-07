@@ -75,10 +75,15 @@ For each required context the resolver:
 The result is invariant under GitHub API response permutation. Historical success
 on another SHA is never admissible.
 
-The ordinary validation workflow owns `pull_request`. The privileged metadata
-workflow owns only `pull_request_target`, checks out the default branch, and has a
-distinct workflow name. It does not execute PR-controlled code and does not emit
-misleading skipped twins for ordinary validation contexts.
+The required producer map is explicit: `trusted-control-plane` is produced by
+`pull_request_target / Trusted Control Plane`; `public-pr-metadata` is produced by
+`pull_request_target / Public PR Metadata`; and `security`,
+`public-content-policy`, `linux-validation`, and `windows-portability` are
+produced by `pull_request / Public Release Gate`. Each ruleset entry must also
+retain its GitHub Actions integration identity (currently integration `15368`).
+The ordinary validation workflow owns `pull_request`. The privileged workflows
+check out the default branch, have distinct workflow names, do not execute
+PR-controlled code, and cannot satisfy a differently bound same-name check.
 
 ## Independent technical review receipt
 

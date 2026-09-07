@@ -124,6 +124,8 @@ try {
   $builderReceipt.artifact_hash = Get-AgentIndependentReviewReceiptHash -Receipt $builderReceipt
   $builderReview = Test-AgentIndependentReviewReceipt -Receipt $builderReceipt -Repository 'gthgomez/Babel' -PR 118 -BaseSha $otherHead -HeadSha $head -BuilderIdentity 'codex-implementation'
   Assert-AgentGateTest (-not [bool]$builderReview.valid) 'builder-issued independent review must be rejected'
+  $emptyReceipt = Test-AgentIndependentReviewReceipt -Receipt ([pscustomobject]@{}) -Repository 'gthgomez/Babel' -PR 118 -BaseSha $otherHead -HeadSha $head -BuilderIdentity 'codex-implementation'
+  Assert-AgentGateTest (-not [bool]$emptyReceipt.valid) 'empty independent receipt must fail closed without throwing'
 
   Write-Output 'agent-pr-gate: PASS'
   exit 0
