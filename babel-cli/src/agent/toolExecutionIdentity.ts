@@ -86,6 +86,8 @@ export function countParallelCompletionReorders(
 export function projectDurableToolBatch(input: {
   turnSlice: ReadonlyArray<DurableToolLogRow>
   actions?: ReadonlyArray<Record<string, unknown>>
+  /** Complete executor feedback in request order; never substitute UI detail for a supplied observation. */
+  observationsByActionIndex?: ReadonlyArray<string>
   turn: number
   batchId?: string
   providerToolCallIds?: ReadonlyArray<string | undefined>
@@ -110,7 +112,10 @@ export function projectDurableToolBatch(input: {
     const argsObj: Record<string, unknown> = action
       ? Object.fromEntries(Object.entries(action).filter(([key]) => key !== 'type'))
       : { target: row.target }
-    const content = row.stdout ?? row.stderr ?? row.detail ?? ''
+    const content = input.observationsByActionIndex === undefined
+      ? row.stdout ?? row.stderr ?? row.detail ?? ''
+      : input.observationsByActionIndex[actionIndex]
+    if (typeof content !== 'string') throw new Error('DURABLE_TOOL_OBSERVATION_MISSING')
     const identity: ToolExecutionIdentity = {
       batchId,
       actionIndex,

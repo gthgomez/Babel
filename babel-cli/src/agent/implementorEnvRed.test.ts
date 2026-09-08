@@ -109,13 +109,14 @@ describe('W0.4 env-red honesty', () => {
   test('tool log with pytest missing triggers env_blocked', () => {
     assert.equal(
       detectEnvBlockedFromToolLog([
-        { detail: 'exit 127', error: 'pytest: command not found' },
+        { tool: 'run_command', detail: 'exit 127', error: 'pytest: command not found' },
       ]),
       true,
     );
     assert.equal(
       detectEnvBlockedFromToolLog([
         {
+          tool: 'test_run',
           stderr:
             "ImportError while loading conftest 'C:\\ws\\tests\\conftest.py'\nModuleNotFoundError: No module named 'pkg'",
         },

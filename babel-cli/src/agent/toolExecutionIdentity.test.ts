@@ -85,4 +85,19 @@ describe('toolExecutionIdentity', () => {
     assert.equal(buggy.results[0]?.action_index, 0)
     assert.notEqual(buggy.results[0]?.tool_call_id, providerIds[1])
   })
+
+  test('authoritative observations survive every special tool path and reversed completion order', () => {
+    const names = ['read_range', 'sub_agent', 'web_search', 'web_fetch', 'lsp', 'todo_write', 'await_command', 'str_replace', 'read_file', 'finish']
+    const observations = names.map(name => name === 'finish' ? '' : `full ${name} result including warnings and error context`)
+    const rows = names.map((tool, index) => ({ tool, index, target: `target-${index}`, detail: 'UI summary only', stdout: '', stderr: 'incomplete diagnostic', exit_code: index === 7 ? 1 : 0 })).reverse()
+    const projected = projectDurableToolBatch({ turn: 0, turnSlice: rows, observationsByActionIndex: observations, providerToolCallIds: names.map(name => `native-${name}`), contentHashFor: (_name, content) => content })
+    for (const result of projected.results) {
+      assert.equal(result.content, observations[result.action_index])
+      assert.equal(result.contentHash, observations[result.action_index])
+      assert.equal(result.tool_call_id, `native-${names[result.action_index]}`)
+      assert.equal(result.exit_code, result.action_index === 7 ? 1 : 0)
+    }
+    assert.equal(rows[0]!.detail, 'UI summary only')
+    assert.throws(() => projectDurableToolBatch({ turn: 0, turnSlice: rows, observationsByActionIndex: [] }), /DURABLE_TOOL_OBSERVATION_MISSING/)
+  })
 })

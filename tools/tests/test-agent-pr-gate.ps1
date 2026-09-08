@@ -131,6 +131,12 @@ try {
   Assert-AgentGateTest ((Get-AgentRiskLane -ChangedPaths @('tools/host-review-worker.mts')) -eq 'RED') 'owner-host review worker must be base-derived RED'
   Assert-AgentGateTest ((Get-AgentRiskLane -ChangedPaths @('babel-cli/src/runners/openCodeGoApi.ts')) -eq 'RED') 'OpenCode-Go review adapter must be base-derived RED'
   Assert-AgentGateTest ((Get-AgentRiskLane -ChangedPaths @('scripts/agent-pr-gate.ps1')) -eq 'RED') 'merge-control paths must be base-derived RED'
+  foreach ($reviewPath in @('tools/babel-pr-review.mts', 'tools/babel-chat-review-worker.mts', 'babel-cli/src/services/babelReviewSnapshot.ts', 'babel-cli/src/services/babelReviewChild.ts', 'babel-cli/src/services/babelReviewQueue.ts', 'babel-cli/src/services/babelChatReview.ts', 'babel-cli/src/agent/chatReadOnly.ts')) {
+    Assert-AgentGateTest ((Get-AgentRiskLane -ChangedPaths @($reviewPath)) -eq 'RED') "$reviewPath must require two independent perspectives"
+  }
+  foreach ($boundaryPath in @('babel-cli/src/agent/chatEngine.ts', 'babel-cli/src/agent/chatEngineObservability.ts', 'babel-cli/src/agent/implementorPolicy.ts', 'babel-cli/src/config/chatEngineLimits.ts', 'babel-cli/src/interactive/execution/chatCore.ts')) {
+    Assert-AgentGateTest ((Get-AgentRiskLane -ChangedPaths @($boundaryPath)) -eq 'RED') "$boundaryPath can affect reviewer capability or completion and must be RED"
+  }
 
   Write-Output 'agent-pr-gate: PASS'
   exit 0

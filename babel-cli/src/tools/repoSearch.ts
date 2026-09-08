@@ -1,8 +1,9 @@
-import { readFileSync, existsSync, realpathSync } from 'node:fs';
+import { readFileSync, existsSync, realpathSync, statSync } from 'node:fs';
 import { basename, relative, resolve } from 'node:path';
 
 import { collectTextFiles, type SearchHit } from '../services/indexer.js';
 import { extractFolderTokens } from '../services/pathScanner.js';
+import { isPathInside } from '../services/targetResolver.js';
 import {
   detectRipgrep,
   ripgrep,
@@ -127,6 +128,17 @@ export async function grepContent(
   approvedReadRoots?: string[],
 ): Promise<{ matches: GrepMatch[]; truncated: boolean }> {
   const root = resolve(projectRoot);
+  const allowedRoots = [root, ...(approvedReadRoots ?? [])];
+  let searchPaths = allowedRoots;
+  if (options.path) {
+    // A scope is a literal file or directory, not a glob with '/**' appended
+    // to it. Keep the historical directory/** spelling, including on Windows.
+    const scope = resolve(root, options.path.replace(/\\/g, '/').replace(/\/\*\*$/, ''));
+    const actual = realpathSync(scope);
+    if (!allowedRoots.some(readRoot => isPathInside(realpathSync(readRoot), actual))) throw new Error('Grep scope is outside approved read roots.');
+    if (!statSync(actual).isFile() && !statSync(actual).isDirectory()) throw new Error('Grep scope must be a regular file or directory.');
+    searchPaths = [actual];
+  }
 
   // Try ripgrep first when available (much faster)
   if (detectRipgrep()) {
@@ -136,13 +148,7 @@ export async function grepContent(
       ...(options.ignoreCase !== undefined ? { ignoreCase: options.ignoreCase } : {}),
       ...(options.contextLines !== undefined ? { contextLines: options.contextLines } : {}),
     };
-    if (options.path) {
-      rgOptions.glob = options.path.endsWith('/**') ? options.path : `${options.path}/**`;
-    }
-    rgOptions.paths = [root];
-    if (approvedReadRoots && approvedReadRoots.length > 0) {
-      rgOptions.paths.push(...approvedReadRoots);
-    }
+    rgOptions.paths = searchPaths;
     try {
       const result = await ripgrep(root, rgOptions);
       return {
@@ -161,14 +167,10 @@ export async function grepContent(
   // Pure-JS fallback
   const regex = compileGrepPattern(pattern, options.ignoreCase === true);
   const maxMatches = Math.max(1, options.maxMatches ?? DEFAULT_MAX_GREP_MATCHES);
-  const pathPrefix = options.path?.replace(/\\/g, '/').replace(/^\.\//, '');
   const matches: GrepMatch[] = [];
 
   const task = process.env['BABEL_TASK'] || '';
   const taskTokens = task ? extractFolderTokens(task) : undefined;
-
-  const scanDirs =
-    approvedReadRoots && approvedReadRoots.length > 0 ? [root, ...approvedReadRoots] : root;
 
   const collectOptions: {
     projectRoot: string;
@@ -179,11 +181,13 @@ export async function grepContent(
     ...(taskTokens ? { taskTokens } : {}),
   };
 
-  for (const filePath of await collectTextFiles(scanDirs, [], collectOptions)) {
+  const files: string[] = [];
+  for (const searchPath of searchPaths) {
+    if (statSync(searchPath).isFile()) files.push(searchPath);
+    else files.push(...await collectTextFiles(searchPath, [], collectOptions));
+  }
+  for (const filePath of files) {
     const relativePath = relative(root, filePath).replace(/\\/g, '/');
-    if (pathPrefix && !relativePath.startsWith(pathPrefix)) {
-      continue;
-    }
 
     let content: string;
     try {

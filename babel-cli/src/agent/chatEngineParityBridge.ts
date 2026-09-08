@@ -90,8 +90,9 @@ import {
   LIVE_SESSION_SNAPSHOT_FILENAME,
 } from './liveSessionBridge.js';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync, copyFileSync, renameSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, copyFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { renameCheckpointSync, type AtomicCheckpointRenameOptions } from '../utils/atomicCheckpointFile.js';
 
 
 export interface ParityRuntime {
@@ -988,13 +989,13 @@ export function checkpointParityEventLog(rt: ParityRuntime, runDir: string): voi
  * Failure contract:
  * - Disk primaries restored to pre-checkpoint state (byte-equal or absent)
  * - Session event list + `nextSeq` + `flushedThroughSeq` restored
- * - All batch `.tmp` / `.bak` sidecars removed
+ * - Batch sidecars removed after rollback, retained with journal if rollback is blocked
  * - Receipt is `blocked` with no child artifacts marked `committed`
  */
 export async function checkpointParityEventLogStrict(
   rt: ParityRuntime,
   runDir: string,
-  options?: { injectCommitFailureAfter?: number },
+  options?: { injectCommitFailureAfter?: number; renameOptions?: AtomicCheckpointRenameOptions; unlinkCheckpoint?: typeof unlinkSync },
 ): Promise<PersistenceReceipt> {
   const initialEventsCount = rt.sessionEvents.events.length;
   const initialNextSeq = rt.sessionEvents.nextSeq;
@@ -1002,11 +1003,12 @@ export async function checkpointParityEventLogStrict(
   const batchId = randomUUID();
   const tmpPaths: string[] = [];
   const bakPaths: Array<string | null> = [];
+  let preserveRecoveryArtifacts = false;
 
   const unlinkQuiet = (path: string | null | undefined): void => {
     if (!path) return;
     try {
-      if (existsSync(path)) unlinkSync(path);
+      if (existsSync(path)) (options?.unlinkCheckpoint ?? unlinkSync)(path);
     } catch {
       /* best-effort sidecar cleanup */
     }
@@ -1028,7 +1030,9 @@ export async function checkpointParityEventLogStrict(
   };
 
   try {
-    recoverCheckpointArtifacts(runDir);
+    preserveRecoveryArtifacts = existsSync(join(runDir, CHECKPOINT_JOURNAL_FILENAME));
+    recoverCheckpointArtifacts(runDir, options?.renameOptions);
+    preserveRecoveryArtifacts = false;
     const turnsUsed = rt.sessionEvents.events.filter((event) => event.kind === 'user_submitted').length;
     dualWriteBudgetSnapshot(rt.sessionEvents, rt.turnId, {
       turns_used: turnsUsed,
@@ -1110,6 +1114,7 @@ export async function checkpointParityEventLogStrict(
       backups_ready: true,
       targets: targets.map((target) => target.filename),
     });
+    preserveRecoveryArtifacts = true;
 
     // Step 4: Fixed-order rename. injectCommitFailureAfter === i throws BEFORE rename of index i.
     // Do not mark receipt artifacts committed until the full batch succeeds (honest blocked receipts).
@@ -1121,20 +1126,31 @@ export async function checkpointParityEventLogStrict(
         }
         const targetPath = join(runDir, targets[i]!.filename);
         const tmpPath = tmpPaths[i]!;
-        renameSync(tmpPath, targetPath);
+        renameCheckpointSync(tmpPath, targetPath, options?.renameOptions);
         committedIndices.push(i);
       }
     } catch (commitErr) {
-      // Disk rollback: restore pre-existing primaries; unlink primaries created by this batch.
-      for (let i = 0; i < targets.length; i++) {
+      // Uncommitted primaries remain intact; do not reopen the locked target.
+      // Keep backups until every rollback succeeds, so another sharing lock
+      // cannot destroy the last coherent generation during error cleanup.
+      preserveRecoveryArtifacts = true;
+      for (const i of committedIndices) {
         const targetPath = join(runDir, targets[i]!.filename);
         const bakPath = bakPaths[i];
         if (bakPath && existsSync(bakPath)) {
-          copyFileSync(bakPath, targetPath);
-        } else if (committedIndices.includes(i) && existsSync(targetPath)) {
-          unlinkQuiet(targetPath);
+          copyFileSync(bakPath, tmpPaths[i]!);
+          renameCheckpointSync(tmpPaths[i]!, targetPath, options?.renameOptions);
+        } else if (existsSync(targetPath)) {
+          unlinkSync(targetPath);
         }
       }
+      // A failed journal unlink after sidecar cleanup must never leave a
+      // prepared marker that could mistake restored primaries for new files.
+      writeCheckpointJournal(runDir, {
+        schema_version: 1, batch_id: batchId, status: 'committed',
+        backups_ready: true, targets: targets.map((target) => target.filename),
+      });
+      preserveRecoveryArtifacts = false;
       throw commitErr;
     }
 
@@ -1146,6 +1162,7 @@ export async function checkpointParityEventLogStrict(
       backups_ready: true,
       targets: targets.map((target) => target.filename),
     });
+    preserveRecoveryArtifacts = false;
     cleanupBatchSidecars();
     unlinkQuiet(join(runDir, CHECKPOINT_JOURNAL_FILENAME));
     const maxSeq =
@@ -1164,8 +1181,10 @@ export async function checkpointParityEventLogStrict(
     flushEpisodeStreamBestEffort(rt, runDir, 'checkpoint-strict');
     return { status: 'committed', operation: 'checkpoint', runDir, artifacts };
   } catch (error) {
-    cleanupBatchSidecars();
-    unlinkQuiet(join(runDir, CHECKPOINT_JOURNAL_FILENAME));
+    if (!preserveRecoveryArtifacts) {
+      cleanupBatchSidecars();
+      unlinkQuiet(join(runDir, CHECKPOINT_JOURNAL_FILENAME));
+    }
     restoreMemoryCursors();
     const message = error instanceof Error ? error.message : String(error);
     // Honest blocked receipt: never report partial committed child artifacts after rollback.

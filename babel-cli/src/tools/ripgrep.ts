@@ -4,12 +4,11 @@
  * The riprep wrapper used by repoSearch.ts. Falls back to pure-JS if rg
  * is not installed.
  *
- * Windows path handling: uses cmd.exe /c rg ... (same pattern as sandbox.ts).
+ * Arguments go directly to the executable on every platform, never a shell.
  * Output is capped at 5 MB (same as MAX_SHELL_OUTPUT_BYTES in sandbox.ts).
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
@@ -54,12 +53,11 @@ export function detectRipgrep(): boolean {
     return rgDetected;
   }
   try {
-    const isWin = process.platform === 'win32';
-    const spawnCmd = isWin ? resolveWindowsCommandShell() : 'rg';
-    const spawnArgs = isWin ? ['/d', '/c', 'rg', '--version'] : ['--version'];
-    const result = spawnSync(spawnCmd, spawnArgs, {
+    const result = spawnSync('rg', ['--version'], {
       encoding: 'utf-8',
       timeout: 5000,
+      shell: false,
+      windowsHide: true,
     });
     rgDetected = result.status === 0;
   } catch {
@@ -71,18 +69,6 @@ export function detectRipgrep(): boolean {
 /** Clear the cached ripgrep detection result. Useful in tests. */
 export function resetRipgrepDetection(): void {
   rgDetected = null;
-}
-
-// ─── Windows shell resolution (mirrors sandbox.ts) ──────────────────────────────
-
-function resolveWindowsCommandShell(): string {
-  const comspec = process.env['ComSpec'] ?? process.env['COMSPEC'];
-  if (comspec && existsSync(comspec)) {
-    return comspec;
-  }
-  const systemRoot = process.env['SystemRoot'] ?? process.env['SYSTEMROOT'] ?? 'C:\\Windows';
-  const systemCmd = `${systemRoot}\\System32\\cmd.exe`;
-  return existsSync(systemCmd) ? systemCmd : 'cmd.exe';
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────────
@@ -144,7 +130,8 @@ export async function ripgrep(
     args.push('--type', options.type);
   }
 
-  args.push(options.pattern);
+  // Pattern and path strings are data, including leading '-' and shell syntax.
+  args.push('-e', options.pattern, '--');
 
   if (options.paths && options.paths.length > 0) {
     args.push(...options.paths);
@@ -156,12 +143,10 @@ export async function ripgrep(
 
   const startTime = Date.now();
 
-  const isWin = process.platform === 'win32';
-  const spawnCmd = isWin ? resolveWindowsCommandShell() : 'rg';
-  const spawnArgs = isWin ? ['/d', '/c', 'rg', ...args] : args;
-
-  const result = spawnSync(spawnCmd, spawnArgs, {
+  const result = spawnSync('rg', args, {
     cwd: projectRoot,
+    shell: false,
+    windowsHide: true,
     encoding: 'utf-8',
     maxBuffer: MAX_RIPGREP_OUTPUT_BYTES,
     timeout: DEFAULT_RIPGREP_TIMEOUT_MS,
@@ -171,6 +156,9 @@ export async function ripgrep(
 
   if (result.error && !result.stdout) {
     throw result.error;
+  }
+  if (result.status !== 0 && result.status !== 1) {
+    throw new Error(`ripgrep failed: ${result.stderr?.trim() || result.error?.message || `exit ${result.status}`}`);
   }
 
   const matches: RipgrepMatch[] = [];
@@ -233,20 +221,17 @@ export function rgGlobFiles(
 
   const args: string[] = ['--files', '--glob', globPattern, '--no-ignore-vcs'];
 
-  const isWin = process.platform === 'win32';
-  const spawnCmd = isWin ? resolveWindowsCommandShell() : 'rg';
-  const spawnArgs = isWin ? ['/d', '/c', 'rg', ...args] : args;
-
-  const result = spawnSync(spawnCmd, spawnArgs, {
+  const result = spawnSync('rg', args, {
     cwd: projectRoot,
+    shell: false,
+    windowsHide: true,
     encoding: 'utf-8',
     maxBuffer: MAX_RIPGREP_OUTPUT_BYTES,
     timeout: DEFAULT_RIPGREP_TIMEOUT_MS,
   });
 
-  if (result.error) {
-    throw result.error;
-  }
+  if (result.error) throw result.error;
+  if (result.status !== 0 && result.status !== 1) throw new Error(`ripgrep file listing failed: ${result.stderr?.trim() || `exit ${result.status}`}`);
 
   const stdout = result.stdout ?? '';
   const allLines = stdout
@@ -277,20 +262,17 @@ export function rgListFiles(projectRoot: string, maxDepth?: number): string[] {
     args.push('--max-depth', String(maxDepth));
   }
 
-  const isWin = process.platform === 'win32';
-  const spawnCmd = isWin ? resolveWindowsCommandShell() : 'rg';
-  const spawnArgs = isWin ? ['/d', '/c', 'rg', ...args] : args;
-
-  const result = spawnSync(spawnCmd, spawnArgs, {
+  const result = spawnSync('rg', args, {
     cwd: projectRoot,
+    shell: false,
+    windowsHide: true,
     encoding: 'utf-8',
     maxBuffer: MAX_RIPGREP_OUTPUT_BYTES,
     timeout: DEFAULT_RIPGREP_TIMEOUT_MS,
   });
 
-  if (result.error) {
-    throw result.error;
-  }
+  if (result.error) throw result.error;
+  if (result.status !== 0 && result.status !== 1) throw new Error(`ripgrep file listing failed: ${result.stderr?.trim() || `exit ${result.status}`}`);
 
   const stdout = result.stdout ?? '';
   const allLines = stdout

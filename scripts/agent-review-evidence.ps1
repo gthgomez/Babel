@@ -80,6 +80,26 @@ function Test-AgentAutonomousReviewEvidence {
     $value = Get-AgentPropertyValue $isolation $field
     if ($value -isnot [bool] -or $value -ne $false) { $errors += "autonomous_evidence_isolation_$field" }
   }
+  # Optional for legacy v2 transport, mandatory at the current merge gate.
+  # These fields are controller assertions authenticated by live owner-comment
+  # provenance, not a candidate-authored claim or cryptographic sandbox proof.
+  $harness = Get-AgentPropertyValue $Evidence 'harness'
+  if ($null -ne $Evidence.PSObject.Properties['harness']) {
+    if ($harness -isnot [pscustomobject]) { $errors += 'autonomous_evidence_harness_invalid' }
+    else {
+      $harnessExpected = @{ name = 'babel'; mode = 'chat'; execution_id = [string](Get-AgentPropertyValue $Evidence 'execution_id') }
+      foreach ($field in $harnessExpected.Keys) {
+        if ([string](Get-AgentPropertyValue $harness $field) -cne $harnessExpected[$field]) { $errors += "autonomous_evidence_harness_${field}_mismatch" }
+      }
+      if ([string](Get-AgentPropertyValue $harness 'version') -cnotmatch '^[0-9a-f]{64}$' -or
+          [string](Get-AgentPropertyValue $harness 'source_sha') -cnotmatch '^[0-9a-f]{40}$') { $errors += 'autonomous_evidence_harness_version_invalid' }
+      if ([string](Get-AgentPropertyValue $harness 'source_sha') -ceq $HeadSha) { $errors += 'autonomous_evidence_harness_candidate_self_review' }
+      if ([string](Get-AgentPropertyValue $isolation 'mode') -cne 'readonly_sandbox') { $errors += 'autonomous_evidence_harness_isolation_invalid' }
+      foreach ($field in @(Get-AgentPropertyNames $harness)) {
+        if (@('name', 'mode', 'version', 'source_sha', 'execution_id') -cnotcontains $field) { $errors += "autonomous_evidence_harness_unknown_field:$field" }
+      }
+    }
+  }
   $usage = Get-AgentPropertyValue $Evidence 'usage'
   if ($null -ne $usage) {
     foreach ($field in @(Get-AgentPropertyNames $usage)) {
@@ -90,7 +110,7 @@ function Test-AgentAutonomousReviewEvidence {
       }
     }
   }
-  $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'task_id', 'task_hash', 'builder_id', 'diff_numstat_digest', 'reviewer_id', 'reviewer_class', 'execution_id', 'review_provider', 'reviewer_model', 'review_mode', 'reviewed_at', 'scope', 'verdict', 'findings', 'blocking_findings', 'isolation', 'usage')
+  $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'task_id', 'task_hash', 'builder_id', 'diff_numstat_digest', 'reviewer_id', 'reviewer_class', 'execution_id', 'review_provider', 'reviewer_model', 'review_mode', 'reviewed_at', 'scope', 'verdict', 'findings', 'blocking_findings', 'isolation', 'usage', 'harness')
   foreach ($field in @(Get-AgentPropertyNames $Evidence)) {
     if ($allowed -cnotcontains $field) { $errors += "autonomous_evidence_unknown_field:$field" }
   }
@@ -104,7 +124,7 @@ function Test-AgentControllerReviewEvidenceBundle {
     [Parameter(Mandatory)][string]$BaseSha, [Parameter(Mandatory)][string]$HeadSha,
     [Parameter(Mandatory)][string]$BuilderIdentity, [Parameter(Mandatory)][string]$ExpectedNumstatDigest,
     [Parameter(Mandatory)][int]$MinimumReviewCount, [Parameter(Mandatory)][string]$PublisherId,
-    [string[]]$ExpectedScope = @()
+    [string[]]$ExpectedScope = @(), [switch]$RequireBabelChat
   )
   $errors = @()
   if ($Bundle -isnot [pscustomobject]) { return [pscustomobject]@{ valid = $false; errors = @('controller_review_bundle_malformed'); reviewCount = 0 } }
@@ -124,15 +144,17 @@ function Test-AgentControllerReviewEvidenceBundle {
   }
   $reviews = @((Get-AgentPropertyValue $handoff 'reviews'))
   if ($reviews.Count -lt $MinimumReviewCount -or $reviews.Count -gt 2) { $errors += 'controller_review_bundle_insufficient_or_excess_reviews' }
-  $reviewers = @{}; $executions = @{}
+  $reviewers = @{}; $executions = @{}; $babelChatReviewCount = 0
   foreach ($review in $reviews) {
     $validation = Test-AgentAutonomousReviewEvidence -Evidence $review -Repository $Repository -PR $PR -BaseSha $BaseSha -HeadSha $HeadSha -BuilderIdentity $BuilderIdentity -ExpectedNumstatDigest $ExpectedNumstatDigest -TaskId $taskId -TaskHash $taskHash -ExpectedScope $ExpectedScope
     $errors += @($validation.errors)
+    if ($validation.valid -and $null -ne (Get-AgentPropertyValue $review 'harness')) { $babelChatReviewCount++ }
     $reviewerId = [string](Get-AgentPropertyValue $review 'reviewer_id')
     $executionId = [string](Get-AgentPropertyValue $review 'execution_id')
     if ($reviewers.ContainsKey($reviewerId) -or $executions.ContainsKey($executionId)) { $errors += 'controller_review_bundle_reviewer_or_execution_not_distinct' }
     $reviewers[$reviewerId] = $true; $executions[$executionId] = $true
   }
+  if ($RequireBabelChat -and $babelChatReviewCount -lt 1) { $errors += 'controller_review_bundle_babel_chat_required' }
   $allowed = @('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'publisher_id', 'comment_id', 'handoff')
   foreach ($field in @(Get-AgentPropertyNames $Bundle)) {
     if ($allowed -cnotcontains $field) { $errors += "controller_review_bundle_unknown_field:$field" }
@@ -140,5 +162,5 @@ function Test-AgentControllerReviewEvidenceBundle {
   foreach ($field in @(Get-AgentPropertyNames $handoff)) {
     if (@('schema_version', 'kind', 'repository', 'pr_number', 'base_sha', 'head_sha', 'task_id', 'task_hash', 'controller_run_id', 'reviews') -cnotcontains $field) { $errors += "controller_review_handoff_unknown_field:$field" }
   }
-  return [pscustomobject]@{ valid = $errors.Count -eq 0; errors = @($errors | Select-Object -Unique); reviewCount = $reviews.Count }
+  return [pscustomobject]@{ valid = $errors.Count -eq 0; errors = @($errors | Select-Object -Unique); reviewCount = $reviews.Count; babelChatReviewCount = $babelChatReviewCount }
 }

@@ -3,6 +3,12 @@ param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+$chatReviewController = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '..\babel-pr-review.mts')
+if ($chatReviewController -notmatch [regex]::Escape("gitAt(trustedRoot, ['merge-base', '--is-ancestor', trustedSha, baseSha])") -or
+    $chatReviewController -notmatch 'TRUSTED_REVIEW_SOURCE_NOT_IN_BASE_HISTORY') {
+  throw 'Babel review controller must reject a trusted installation that is not in the PR base history before cache or provider use.'
+}
 $env:GIT_ALLOW_PROTOCOL = 'file'
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
@@ -154,12 +160,48 @@ try {
   $checkItems += '{"app":{"id":15368,"slug":"github-actions","name":"GitHub Actions"},"id":104,"name":"public-pr-metadata","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request_target","workflow_name":"Public PR Metadata","workflow_id":"workflow-2","workflow_run_id":"104","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
   $checkItems += '{"app":{"id":15368,"slug":"github-actions","name":"GitHub Actions"},"id":105,"name":"windows-portability","status":"completed","conclusion":"success","head_sha":"' + $headSha + '","event":"pull_request","workflow_name":"Public Release Gate","workflow_id":"workflow-1","workflow_run_id":"105","started_at":"2026-08-28T10:00:00Z","completed_at":"2026-08-28T10:01:00Z"}'
   $checkJson = '{"check_runs":[' + ($checkItems -join ',') + ']}'
+  # GREEN candidates now need real-shaped owner-controller chat evidence too.
+  # Keep it outside the candidate, bind its actual diff, and use the fixture's
+  # merged base as the independently installed reviewer source.
+  $numstat = Invoke-TestGit -WorkingDirectory $fixture -Arguments @('diff', '--no-ext-diff', '--no-textconv', '--numstat', "$mainSha...$headSha")
+  $canonicalNumstat = (($numstat -split '\r?\n' | Sort-Object) -join "`n")
+  $numstatDigest = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($canonicalNumstat))).ToLowerInvariant()
+  $review = [ordered]@{
+    schema_version = 2; kind = 'autonomous_review_evidence_v2'
+    repository = 'gthgomez/Babel'; pr_number = 42; base_sha = $mainSha; head_sha = $headSha
+    task_id = 'fixture-task-42'; task_hash = ('a' * 64); builder_id = 'codex-implementation'
+    diff_numstat_digest = $numstatDigest; reviewer_id = 'babel-chat-fixture-independent-reviewer'
+    reviewer_class = 'independent_readonly_ai'; execution_id = 'fixture-review-42'
+    review_provider = 'opencode-go'; reviewer_model = 'mimo-v2.5'; review_mode = 'exact_diff'
+    reviewed_at = [DateTimeOffset]::UtcNow.ToString('o'); scope = @('change.txt')
+    verdict = 'APPROVE'; findings = @(); blocking_findings = @()
+    isolation = [ordered]@{ mode = 'readonly_sandbox'; candidate_write = $false; github_mutation = $false; merge = $false; controller_state_access = $false }
+    harness = [ordered]@{ name = 'babel'; mode = 'chat'; version = ('b' * 64); source_sha = $mainSha; execution_id = 'fixture-review-42' }
+  }
+  $handoff = [ordered]@{
+    schema_version = 2; kind = 'host_review_handoff_v2'; repository = 'gthgomez/Babel'; pr_number = 42
+    base_sha = $mainSha; head_sha = $headSha; task_id = 'fixture-task-42'; task_hash = ('a' * 64)
+    controller_run_id = 'fixture-controller-42'; reviews = @($review)
+  }
+  $evidencePath = Join-Path $tempRoot 'pr-42.ai-reviews.json'
+  [ordered]@{
+    schema_version = 2; kind = 'github_host_review_bundle_v2'; repository = 'gthgomez/Babel'; pr_number = 42
+    base_sha = $mainSha; head_sha = $headSha; publisher_id = '91163862'; comment_id = '4242'; handoff = $handoff
+  } | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $evidencePath -Encoding utf8
+  $reviewComment = [ordered]@{
+    id = 4242; user = [ordered]@{ id = 91163862; type = 'User'; login = 'gthgomez' }
+    issue_url = 'https://api.github.com/repos/gthgomez/Babel/issues/42'
+    body = '<!-- babel-controller-ai-reviews-v2 -->' + ($handoff | ConvertTo-Json -Depth 30 -Compress)
+  }
+  $commentsPath = Join-Path $tempRoot 'pr-42-comments.json'
+  ConvertTo-Json -InputObject @($reviewComment) -Depth 40 | Set-Content -LiteralPath $commentsPath -Encoding utf8
   @(
     'param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)',
     'if ($Arguments.Count -gt 0 -and $Arguments[0] -eq "--version") { Write-Output "gh version 2.97.0"; exit 0 }',
     'if ($Arguments.Count -gt 1 -and $Arguments[0] -eq "auth" -and $Arguments[1] -eq "status") { exit 0 }',
     'if ($Arguments.Count -gt 1 -and $Arguments[0] -eq "repo" -and $Arguments[1] -eq "view") { Write-Output ''{"nameWithOwner":"gthgomez/Babel","defaultBranchRef":{"name":"main"}}''; exit 0 }',
-    'if ($Arguments.Count -gt 1 -and $Arguments[0] -eq "api" -and $Arguments[1] -eq "repos/gthgomez/Babel") { Write-Output "gthgomez/Babel"; exit 0 }',
+    'if ($Arguments.Count -gt 1 -and $Arguments[0] -eq "api" -and $Arguments[1] -eq "repos/gthgomez/Babel") { if ($Arguments -contains "--jq") { Write-Output "gthgomez/Babel" } else { Write-Output ''{"full_name":"gthgomez/Babel","owner":{"id":91163862,"type":"User"}}'' }; exit 0 }',
+    "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'api' -and `$Arguments[1] -like 'repos/gthgomez/Babel/issues/42/comments?per_page=*') { Get-Content -Raw -LiteralPath '$($commentsPath -replace "'", "''")'; exit 0 }",
     "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'pr' -and `$Arguments[1] -eq 'view') { Write-Output '$prJson'; exit 0 }",
     "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'api' -and `$Arguments[1] -eq 'graphql') { Write-Output '$graphqlJson'; exit 0 }",
     "if (`$Arguments.Count -gt 1 -and `$Arguments[0] -eq 'api' -and `$Arguments[1] -like '*rulesets/19597161') { Write-Output '$rulesetDetail'; exit 0 }",
@@ -171,7 +213,7 @@ try {
   $fakeCheckRun = Invoke-TestScript -Script $fakeGh -Arguments @('api', 'fixture')
   Assert-AgentTest ($fakeCheckRun.exitCode -eq 0) "fake gh api should pass: $($fakeCheckRun.text)"
   Assert-AgentTest ($null -ne ($fakeCheckRun.text | ConvertFrom-Json).check_runs) 'fake gh api should return check runs'
-  $gateRun = Invoke-TestScript -Script $prGateScript -Arguments @(
+  $gateArguments = @(
     '-PR', '42',
     '-RepoRoot', $fixture,
     '-GitPath', $git,
@@ -179,6 +221,7 @@ try {
     '-ReviewedHeadSha', $headSha,
     '-RiskTier', 'LOW'
   )
+  $gateRun = Invoke-TestScript -Script $prGateScript -Arguments ($gateArguments + @('-AutonomousReviewEvidencePath', $evidencePath))
   Assert-AgentTest ($gateRun.exitCode -eq 0) "PR gate should pass: $($gateRun.text)"
   $gate = $gateRun.text | ConvertFrom-Json
   Assert-AgentTest ([string]$gate.status -eq 'MERGE_READY') 'PR gate should report MERGE_READY'
@@ -187,6 +230,13 @@ try {
   Assert-AgentTest ([bool]$gate.checks.CI_HEAD_MATCH) 'PR gate should bind CI to PR head'
   Assert-AgentTest ([bool]$gate.checks.REQUIRED_CHECKS_GREEN) 'PR gate should require all configured checks'
   Assert-AgentTest ([bool]$gate.checks.BASE_NOT_INVALIDATED) 'PR gate should verify the base SHA'
+  Assert-AgentTest ([bool]$gate.reviewPolicy.independentReviewRequired -and $gate.reviewPolicy.minimumIndependentReviewCount -eq 1) 'GREEN PRs must require independent chat review'
+  Assert-AgentTest ([bool]$gate.reviewPolicy.independentReviewSatisfied -and $gate.reviewPolicy.observedIndependentReviewCount -eq 1) 'PR gate should accept the owner-provenance chat fixture'
+
+  $missingEvidenceRun = Invoke-TestScript -Script $prGateScript -Arguments $gateArguments
+  Assert-AgentTest ($missingEvidenceRun.exitCode -eq 1) 'GREEN PR without evidence must remain blocked'
+  $missingEvidence = $missingEvidenceRun.text | ConvertFrom-Json
+  Assert-AgentTest (@($missingEvidence.blockers) -contains 'independent_review_not_satisfied') 'missing evidence must identify the independent-review blocker'
 
   $zeroSha = [string]::new('0', 40)
   $blockedRun = Invoke-TestScript -Script $prGateScript -Arguments @(
@@ -195,6 +245,7 @@ try {
     '-GitPath', $git,
     '-GhPath', $fakeGh,
     '-ReviewedHeadSha', $zeroSha,
+    '-AutonomousReviewEvidencePath', $evidencePath,
     '-RiskTier', 'LOW'
   )
   Assert-AgentTest ($blockedRun.exitCode -eq 1) 'PR gate should block a reviewed-head mismatch'
@@ -227,5 +278,9 @@ try {
   Write-Error $_
   exit 1
 } finally {
-  if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
+  if (Test-Path -LiteralPath $tempRoot) {
+    $resolvedTempRoot = [IO.Path]::GetFullPath($tempRoot)
+    if ([IO.Path]::GetDirectoryName($resolvedTempRoot) -ne [IO.Path]::GetFullPath($repoRoot) -or [IO.Path]::GetFileName($resolvedTempRoot) -notmatch '^\.tmp-agent-git-readiness-[0-9a-f]{32}$') { throw 'Refusing unexpected readiness fixture cleanup target.' }
+    Remove-Item -LiteralPath $resolvedTempRoot -Recurse -Force
+  }
 }

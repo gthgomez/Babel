@@ -132,6 +132,37 @@ try {
   $redBundle = Test-AgentControllerReviewEvidenceBundle -Bundle $bundle -Repository 'gthgomez/Babel' -PR 152 -BaseSha $base -HeadSha $head -BuilderIdentity 'codex-implementation' -ExpectedNumstatDigest $expectedDigest -MinimumReviewCount 2 -PublisherId '91163862' -ExpectedScope @('scripts/agent-pr-gate.ps1')
   Assert-ClosureGate (-not [bool]$redBundle.valid -and @($redBundle.errors) -contains 'controller_review_bundle_insufficient_or_excess_reviews') 'RED review must require two independent perspectives'
 
+  $chatArgs = @{ Repository = 'gthgomez/Babel'; PR = 152; BaseSha = $base; HeadSha = $head; BuilderIdentity = 'codex-implementation'; ExpectedNumstatDigest = $expectedDigest; MinimumReviewCount = 1; PublisherId = '91163862'; ExpectedScope = @('scripts/agent-pr-gate.ps1'); RequireBabelChat = $true }
+  $noChat = Test-AgentControllerReviewEvidenceBundle -Bundle $bundle @chatArgs
+  Assert-ClosureGate (-not $noChat.valid -and $noChat.errors -contains 'controller_review_bundle_babel_chat_required') 'legacy text-only review cannot satisfy the new chat gate'
+  $chatBundle = $bundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $chatBundle.handoff.reviews[0].isolation.mode = 'readonly_sandbox'
+  $chatBundle.handoff.reviews[0] | Add-Member harness ([pscustomobject]@{ name = 'babel'; mode = 'chat'; version = ('f' * 64); source_sha = $base; execution_id = 'execution-152-a' })
+  $chatResult = Test-AgentControllerReviewEvidenceBundle -Bundle $chatBundle @chatArgs
+  Assert-ClosureGate ($chatResult.valid -and $chatResult.babelChatReviewCount -eq 1) 'one valid Babel chat review must satisfy the ordinary PR floor'
+  foreach ($mutation in @(
+      @{ Field = 'mode'; Value = 'deep' }, @{ Field = 'name'; Value = 'direct-api' },
+      @{ Field = 'version'; Value = 'UNKNOWN' }, @{ Field = 'source_sha'; Value = 'main' },
+      @{ Field = 'source_sha'; Value = $head },
+      @{ Field = 'execution_id'; Value = 'another-execution' }, @{ Field = 'invented'; Value = 'field' }
+    )) {
+    $invalid = $chatBundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    $invalid.handoff.reviews[0].harness | Add-Member -Force $mutation.Field $mutation.Value
+    $invalidResult = Test-AgentControllerReviewEvidenceBundle -Bundle $invalid @chatArgs
+    Assert-ClosureGate (-not $invalidResult.valid -and $invalidResult.babelChatReviewCount -eq 0) "invalid harness $($mutation.Field) must not count as chat evidence"
+  }
+  $invalidIsolation = $chatBundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $invalidIsolation.handoff.reviews[0].isolation.mode = 'text_only_no_tools'
+  Assert-ClosureGate (-not (Test-AgentControllerReviewEvidenceBundle -Bundle $invalidIsolation @chatArgs).valid) 'text-only isolation cannot claim a chat harness run'
+  $missing = $chatBundle | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $missing.handoff.reviews = @()
+  Assert-ClosureGate (-not (Test-AgentControllerReviewEvidenceBundle -Bundle $missing @chatArgs).valid) 'zero reviews must fail even for ordinary GREEN PRs'
+  $second = $validEvidence | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+  $second.execution_id = 'execution-152-b'; $second.reviewer_id = 'second-independent-perspective'
+  $chatBundle.handoff.reviews += $second
+  $chatArgs.MinimumReviewCount = 2
+  Assert-ClosureGate ((Test-AgentControllerReviewEvidenceBundle -Bundle $chatBundle @chatArgs).valid) 'RED may combine one Babel chat review with a distinct independent perspective'
+
   $evidenceCases = @(
     @{ Name = 'null evidence'; Value = $null; Error = 'autonomous_evidence_malformed' }
     @{ Name = 'empty object'; Value = [pscustomobject]@{}; Error = 'autonomous_evidence_schema_version_mismatch' }

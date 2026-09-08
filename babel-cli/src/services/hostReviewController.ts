@@ -35,6 +35,15 @@ export interface HostReviewUsage {
   latency_ms: number | null
 }
 
+/** Trusted executable attribution, distinct from the reviewed candidate. */
+export interface HostReviewHarness {
+  name: 'babel'
+  mode: 'chat'
+  version: string
+  source_sha: string
+  execution_id: string
+}
+
 /** Controller-owned request delivered to a single read-only worker launch. */
 export interface HostReviewExecutionRequest {
   controller_id: string
@@ -63,6 +72,7 @@ export interface HostReviewExecutionResult {
   blocking_findings: string[]
   isolation: HostReviewIsolationProfile
   usage?: HostReviewUsage
+  harness?: HostReviewHarness
 }
 
 /** Adapter implemented by the controller-owned Astra/Codex worker launcher. */
@@ -96,6 +106,7 @@ export interface AutonomousReviewEvidenceV2 {
   blocking_findings: string[]
   isolation: HostReviewIsolationProfile
   usage?: HostReviewUsage
+  harness?: HostReviewHarness
 }
 
 /** One controller-owned review round suitable for a single GitHub handoff comment. */
@@ -217,6 +228,9 @@ function assertResult(record: HostReviewLaunchRecord, controllerId: string, exec
   assertScope(result.scope)
   if (!scopesMatch(result.scope, record.candidate.scope)) throw new Error('Host review result scope does not match the controller request.')
   assertIsolation(result.isolation)
+  if (result.harness && (result.harness.name !== 'babel' || result.harness.mode !== 'chat' || !/^[a-f0-9]{64}$/.test(result.harness.version) || !/^[a-f0-9]{40}$/.test(result.harness.source_sha) || result.harness.execution_id !== executionId || result.isolation.mode !== 'readonly_sandbox')) {
+    throw new Error('Host review harness attribution mismatch.')
+  }
 }
 
 /**
@@ -230,6 +244,7 @@ export function createHostReviewController(input: {
   create_id?: () => string
   now?: () => number
   max_review_age_ms?: number
+  isolation_mode?: HostReviewIsolationProfile['mode']
 }): HostReviewController {
   requireText(input.controller_id, 'controller_id')
   const createId = input.create_id ?? randomUUID
@@ -238,7 +253,7 @@ export function createHostReviewController(input: {
   if (!Number.isSafeInteger(maxReviewAgeMs) || maxReviewAgeMs < 1) throw new Error('Host review max_review_age_ms must be positive.')
   const launches = new Map<string, HostReviewLaunchRecord>()
   const requiredIsolation: HostReviewIsolationProfile = Object.freeze({
-    mode: 'text_only_no_tools',
+    mode: input.isolation_mode ?? 'text_only_no_tools',
     candidate_write: false,
     github_mutation: false,
     merge: false,
@@ -270,6 +285,7 @@ export function createHostReviewController(input: {
           required_isolation: requiredIsolation,
         })
         const result = await input.adapter.launch(request)
+        if (result.isolation?.mode !== requiredIsolation.mode) throw new Error('Host review isolation mode differs from the requested profile.')
         assertResult(record, input.controller_id, executionId, result, now(), maxReviewAgeMs)
         if (reviewerIds.has(result.reviewer_id)) throw new Error('Host review RED lane requires distinct reviewer identities.')
         reviewerIds.add(result.reviewer_id)
@@ -298,6 +314,7 @@ export function createHostReviewController(input: {
           blocking_findings: snapshotScope(result.blocking_findings),
           isolation: snapshotIsolation(result.isolation),
           ...(result.usage ? { usage: snapshotUsage(result.usage) } : {}),
+          ...(result.harness ? { harness: Object.freeze({ ...result.harness }) } : {}),
         }))
       }
       const handoffReviews = (risk === 'RED'

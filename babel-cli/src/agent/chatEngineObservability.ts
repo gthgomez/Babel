@@ -752,6 +752,8 @@ export function isVerifierCollectErrorText(text: string | null | undefined): boo
 /** Pure function: map final session state to honest TerminalOutcome.
  *  Extracted from ChatEngine.buildResult to keep chatEngine.ts under size ratchet. */
 export function computeTerminalOutcome(input: {
+  /** Explicit read-only execution, not an inference from an empty patch. */
+  readOnly?: boolean;
   finalStatus: string;
   budgetExceeded: boolean;
   lastVerifierReceipt?: { exit_code: number; command?: string; summary?: string } | null | undefined;
@@ -771,6 +773,7 @@ export function computeTerminalOutcome(input: {
   }
   switch (input.finalStatus) {
     case 'completed':
+      if (input.readOnly && input.hasAnyWrites === false) return 'NO_CHANGE_REQUIRED';
       return (input.lastVerifierReceipt && input.lastVerifierReceipt.exit_code === 0)
         ? 'VERIFIED_COMPLETE'
         : 'UNVERIFIED_PATCH';

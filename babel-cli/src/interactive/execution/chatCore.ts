@@ -394,6 +394,8 @@ function persistTurnAssistantCells(
  */
 export async function runChatEngineOnce(input: {
   task: string;
+  /** Trusted instructions may come from outside the reviewed source snapshot. */
+  instructionRoot?: string;
   target: AgentTargetContext;
   systemContext?: string;
   model?: string;
@@ -418,7 +420,7 @@ export async function runChatEngineOnce(input: {
 
   // Smallest compiled chat stack (identity / project / safety / provider / verifier)
   const chatStack = compileChatStackForRun({
-    projectRoot: input.target.targetRoot,
+    projectRoot: input.instructionRoot ?? input.target.targetRoot,
     task: input.task,
     ...(input.model !== undefined ? { model: input.model } : {}),
   });
@@ -465,6 +467,7 @@ export async function runChatEngineOnce(input: {
     input.engine ??
     factory({
       task: input.task,
+      ...(input.instructionRoot ? { instructionRoot: input.instructionRoot } : {}),
       projectRoot: input.target.targetRoot,
       ...(stackSystemContext ? { systemContext: stackSystemContext } : {}),
       ...(input.appendSystemPrompt ? { appendSystemPrompt: input.appendSystemPrompt } : {}),
@@ -882,6 +885,7 @@ export function buildChatRunPayload(
     hasAnyWrites: writeCountFromTools > 0,
     emptyPatch: writeCountFromTools === 0,
     legacyAnswerStatus: answerStatus,
+    readOnly: result.outcome === 'NO_CHANGE_REQUIRED',
   });
   payload['env_blocked'] = implementorHarness.env_blocked;
   payload['empty_patch_scoreable'] = implementorHarness.empty_patch_scoreable;
@@ -1080,6 +1084,7 @@ export function scanSessionCheckpoints(convRenderer: ConversationalRenderer): vo
  */
 export async function runCliChatTask(input: {
   task: string;
+  instructionRoot?: string;
   project?: string;
   projectRoot: string;
   workspaceRoot?: string | null;
@@ -1100,8 +1105,8 @@ export async function runCliChatTask(input: {
   });
 
   const systemContext = await loadProjectSessionIdentity(
-    input.projectRoot,
-    input.workspaceRoot ?? target.workspaceRoot,
+    input.instructionRoot ?? input.projectRoot,
+    input.instructionRoot ?? input.workspaceRoot ?? target.workspaceRoot,
   );
 
   const useConversational = shouldUseConversationalRenderer(outputFormat);
@@ -1114,6 +1119,7 @@ export async function runCliChatTask(input: {
 
   const result = await runChatEngineOnce({
     task: input.task,
+    ...(input.instructionRoot ? { instructionRoot: input.instructionRoot } : {}),
     target,
     systemContext,
     taskIntent: resolvedIntent,
