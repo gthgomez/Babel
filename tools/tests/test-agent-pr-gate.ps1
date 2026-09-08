@@ -31,6 +31,25 @@ $otherHead = 'b' * 40
 $policyArgs = @{ TargetSha = $head; AuthorityEvent = 'pull_request'; AuthorityWorkflowName = 'Public Release Gate' }
 
 try {
+  # Expected SHA-256 values come from JavaScript .sort().join('\n') in the worker.
+  $mixedCaseNumstat = @("1`t0`tZ.ts", "1`t0`ta.ts")
+  Assert-AgentGateTest ((Get-AgentNumstatDigest $mixedCaseNumstat) -ceq 'e4b6c598e11f6ff1acc0f3c719385aa1e121381fab46faa7b4810c59b28c4df2') 'numstat ordering must match JavaScript for mixed-case paths'
+  $unicodeNumstat = @(
+    "1`t0`t$([char]0xE000).ts", "1`t0`t$([char]::ConvertFromUtf32(0x1F600)).ts",
+    "1`t0`t$([char]0x00E9).ts", "1`t0`tZ.ts", "1`t0`ta.ts", "1`t0`t-a.ts", "1`t0`t_a.ts", "1`t0`tZ.ts"
+  )
+  $originalNumstat = $unicodeNumstat -join "`n"
+  $originalCulture = [Threading.Thread]::CurrentThread.CurrentCulture
+  try {
+    foreach ($culture in @('en-US', 'tr-TR', 'sv-SE')) {
+      [Threading.Thread]::CurrentThread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo($culture)
+      Assert-AgentGateTest ((Get-AgentNumstatDigest $unicodeNumstat) -ceq 'c583b00c618bd8e81be35339f39ef8b2789b4c1f123c8f708d06bdeb0644fc8c') "numstat digest must retain duplicate lines and ordinal UTF-16 ordering under $culture"
+      Assert-AgentGateTest (($unicodeNumstat -join "`n") -ceq $originalNumstat) 'numstat hashing must not mutate the caller input'
+    }
+  } finally {
+    [Threading.Thread]::CurrentThread.CurrentCulture = $originalCulture
+  }
+
   $success = New-AgentGateObservation
   $skippedTarget = New-AgentGateObservation -Event 'pull_request_target' -WorkflowName 'Public Release Gate' -Conclusion 'skipped' -Authority 'non_authoritative' -RunId '200'
   $case1 = Resolve-AgentRequiredCheck -Observations @($skippedTarget, $success) -RequiredName 'security' @policyArgs
