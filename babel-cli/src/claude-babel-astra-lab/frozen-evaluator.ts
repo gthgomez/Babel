@@ -165,8 +165,8 @@ export function evaluateFrozen(fixtureRoot: string, definition: FrozenEvaluatorD
         cwd: evaluatorRoot, env, encoding: 'utf8', windowsHide: true,
         timeout: definition.timeoutMs, maxBuffer: 1_048_576,
       });
-      // Node's complete suite summary must be present; process.exit(0) from an
-      // imported contestant module cannot itself establish verifier success.
+      // Node's complete suite summary must be present; an imported contestant
+      // module terminating successfully cannot itself establish verifier success.
       const expectedName = definition.taskId === 'T1' ? 'answer is exact'
         : definition.taskId === 'T2' ? semantic ? 'add 0 and 0' : 'add sums two numbers'
           : semantic ? 'format Grace Hopper' : 'formats a name for a directory';
