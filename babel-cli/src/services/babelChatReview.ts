@@ -18,6 +18,12 @@ export function parseBabelChatVerdict(payload: Record<string, unknown>, scope: s
   const answer = payload['answer'] as { answer?: unknown } | undefined;
   if (typeof answer?.answer !== 'string') throw new Error('CHAT_REVIEW_ANSWER_MISSING');
   const verdict = BabelChatVerdict.parse(JSON.parse(answer.answer));
+  // The inert snapshot mounts repository files beneath source/. Accept that
+  // one known wrapper only when it maps to an exact expected repository path.
+  // Real repository paths beginning source/ take precedence; never normalize
+  // traversal, absolute paths, case, or an unknown/missing scope member.
+  verdict.reviewed_files = verdict.reviewed_files.map(path =>
+    scope.includes(path) ? path : path.startsWith('source/') && scope.includes(path.slice(7)) ? path.slice(7) : path);
   if (JSON.stringify([...new Set(verdict.reviewed_files)].sort()) !== JSON.stringify([...scope].sort())) throw new Error('CHAT_REVIEW_SCOPE_MISMATCH');
   if (verdict.uncertain || verdict.blocking_findings.length > 0) verdict.verdict = 'BLOCK';
   return verdict;
@@ -46,6 +52,7 @@ export function babelReviewPrompt(scope: string[]): string {
     'If evidence is insufficient, output BLOCK with uncertain=true. Completion alone is not approval.',
     'Your final answer must be exactly one JSON object (no fences/prose):',
     '{"verdict":"APPROVE"|"BLOCK","uncertain":boolean,"reviewed_files":string[],"findings":string[],"blocking_findings":string[]}',
+    'In reviewed_files use the exact repository-relative paths listed below, not the source/ snapshot mount prefix.',
     'Report the exact reviewed scope: ' + JSON.stringify(scope),
   ].join('\n');
 }

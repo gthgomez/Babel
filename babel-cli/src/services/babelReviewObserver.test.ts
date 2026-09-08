@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { z } from 'zod';
 import type { ToolStreamEvent } from '../runners/base.js';
+import { OpenCodeGoApiRunner } from '../runners/openCodeGoApi.js';
 import { ObservedBabelReviewRunner, validateBabelReviewCalls, type BabelReviewCall } from './babelReviewObserver.js';
 
 test('review telemetry covers all inference paths and records provider failures', async () => {
@@ -201,5 +202,49 @@ test('oversized native buffers fail closed without delivering content or retryin
     await assert.rejects(async () => { for await (const event of runner.executeWithToolsStream([{ role: 'user', content: 'test' }], [])) events.push(event); }, /CHAT_REVIEW_NATIVE_BUFFER_LIMIT/);
     assert.equal(requests, 1); assert.deepEqual(events, []); assert.equal(calls[0]?.status, 'failed');
     assert.equal(calls[0]?.retry_reason, undefined);
+  } finally { globalThis.fetch = original; }
+});
+
+test('reviewer requests non-thinking mode only for MiMo across all four inference paths', async () => {
+  const original = globalThis.fetch;
+  try {
+    for (const model of ['mimo-v2.5', 'longcat-2.0', 'deepseek-v4-flash'] as const) {
+      const bodies: Record<string, unknown>[] = []; const calls: BabelReviewCall[] = [];
+      globalThis.fetch = async (_url, init) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>; bodies.push(body);
+        const usage = { prompt_tokens: 20, completion_tokens: 4, total_tokens: 24 };
+        if (body.stream) return new Response(`data: ${JSON.stringify({ model, choices: [{ delta: { content: '{"ok":true}' }, finish_reason: 'stop' }], usage })}\n\ndata: [DONE]\n\n`);
+        return new Response(JSON.stringify({ model, choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }], usage }));
+      };
+      const runner = new ObservedBabelReviewRunner(model, call => calls.push(call), { credentialSource: 'explicit-test', explicitCredential: 'fixture-only' });
+      await runner.execute('test', z.object({ ok: z.boolean() }));
+      await runner.executeRaw('test');
+      for await (const _event of runner.executeRawStream('test')) { /* consume */ }
+      for await (const _event of runner.executeWithToolsStream([{ role: 'user', content: 'test' }], [])) { /* consume */ }
+      assert.deepEqual(calls.map(call => call.path), ['structured', 'raw', 'raw_stream', 'native_tools']);
+      assert.equal(bodies.length, 4);
+      for (const body of bodies) {
+        assert.equal(body.model, model); assert.equal(body.max_tokens, 8192); assert.equal(body.temperature, 0);
+        if (model === 'mimo-v2.5') assert.deepEqual(body.thinking, { type: 'disabled' });
+        else assert.equal(Object.hasOwn(body, 'thinking'), false);
+      }
+      for (const call of calls) {
+        assert.equal(call.metadata?.provider, 'opencode-go'); assert.equal(call.metadata?.observed_model_id, model);
+        if (model === 'mimo-v2.5') {
+          assert.deepEqual(call.metadata?.requested_thinking, { type: 'disabled' });
+          assert.equal(call.metadata?.thinking_disabled_reason, 'reviewer_missing_reasoning_content_replay');
+          assert.equal(call.metadata?.thinking_mode_evidence, 'request_only_not_upstream_confirmed');
+        } else {
+          assert.equal(call.metadata?.requested_thinking, undefined);
+          assert.equal(call.metadata?.thinking_disabled_reason, undefined);
+          assert.equal(call.metadata?.thinking_mode_evidence, undefined);
+        }
+      }
+      if (model === 'mimo-v2.5') {
+        const transport = new OpenCodeGoApiRunner(model, { maxTokens: 8192, temperature: 0 }, { credentialSource: 'explicit-test', explicitCredential: 'fixture-only' });
+        await transport.executeRaw('test');
+        assert.equal(Object.hasOwn(bodies[4]!, 'thinking'), false, 'ordinary transport defaults must remain unchanged');
+      }
+    }
   } finally { globalThis.fetch = original; }
 });

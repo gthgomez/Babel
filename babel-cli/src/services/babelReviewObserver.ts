@@ -4,7 +4,11 @@ import type { ProviderMessage, ToolDefinition, ToolStreamEvent, RunnerCallbacks,
 import type { ZodType } from 'zod';
 import { randomUUID } from 'node:crypto';
 
-export type BabelReviewCall = { path: string; status: 'completed' | 'failed'; elapsed_ms: number; metadata: RunnerInvocationMetadata | null; request_id?: string; attempt?: number; retry_reason?: 'transient_before_output' };
+type ReviewInvocationMetadata = RunnerInvocationMetadata & {
+  requested_thinking?: { type: 'disabled' };
+  thinking_mode_evidence?: 'request_only_not_upstream_confirmed';
+};
+export type BabelReviewCall = { path: string; status: 'completed' | 'failed'; elapsed_ms: number; metadata: ReviewInvocationMetadata | null; request_id?: string; attempt?: number; retry_reason?: 'transient_before_output' };
 
 /** A recovered request is evidence only when its immediately following attempt succeeded. */
 export function validateBabelReviewCalls(calls: unknown, model: string): void {
@@ -23,6 +27,19 @@ export function validateBabelReviewCalls(calls: unknown, model: string): void {
 export class ObservedBabelReviewRunner extends OpenCodeGoApiRunner {
   constructor(private readonly reviewModel: OpenCodeGoModel, private readonly record: (call: BabelReviewCall) => void, options: OpenCodeGoRunnerOptions = {}) {
     super(reviewModel, { maxTokens: 8192, temperature: 0 }, options);
+  }
+  protected override getRequestBodyExtras(): Record<string, unknown> {
+    const extras = super.getRequestBodyExtras();
+    // MiMo thinking requires reasoning_content on historical tool-call messages.
+    // The current provider-neutral history cannot replay it; use the documented
+    // non-thinking mode here without changing general transport/model defaults.
+    // https://platform.xiaomimimo.com/docs/en-US/usage-guide/passing-back-reasoning_content
+    return this.reviewModel === 'mimo-v2.5' ? { ...extras, thinking: { type: 'disabled' } } : extras;
+  }
+  override getLastInvocationMetadata(): ReviewInvocationMetadata | null {
+    const metadata = super.getLastInvocationMetadata();
+    if (!metadata || this.reviewModel !== 'mimo-v2.5') return metadata;
+    return { ...metadata, requested_thinking: { type: 'disabled' }, thinking_disabled_reason: 'reviewer_missing_reasoning_content_replay', thinking_mode_evidence: 'request_only_not_upstream_confirmed' };
   }
   private finish(path: string, started: number, completed: boolean) {
     this.record({ path, status: completed ? 'completed' : 'failed', elapsed_ms: Date.now() - started, metadata: this.getLastInvocationMetadata() });

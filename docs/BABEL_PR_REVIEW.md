@@ -18,6 +18,21 @@ LongCat 2.0 in separate contexts. DeepSeek V4 Flash is also a canonical supporte
 OpenCode Go model. The model that actually answered is recorded; a configured
 name or fallback assumption is not sufficient attribution.
 
+The review adapter explicitly requests MiMo v2.5's non-thinking mode. MiMo's
+[thinking protocol](https://mimo.mi.com/docs/en-US/api/chat/openai-api)
+documents reasoning-content replay with tool-call history, which the
+current Babel message schema does not implement. This compatibility setting
+does not change the selected model/provider or the other canonical models.
+Invocation metadata records the requested setting, not proof of the upstream's
+effective mode. Full reasoning-history support needs separate implementation
+and comparison testing before enabling it for this lane.
+
+Verdict paths use exact repository-relative scope. A single `source/` snapshot
+mount prefix may be removed only when the result exactly matches that scope;
+real repository paths beginning with `source/` take precedence. Unknown, missing,
+absolute and traversal paths still fail validation. Findings and blockers are
+not rewritten by this path conversion.
+
 Reviews bind repository, PR, exact base/head, task hash, changed-file scope and
 diff digest. A changed base or head invalidates the old approval. All required
 CI checks, review-thread resolution and the immutable-base merge gate must pass.
