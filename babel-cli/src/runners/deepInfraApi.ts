@@ -274,6 +274,9 @@ function getRequestMaxRetries(): number {
   return readPositiveIntEnv('BABEL_DEEPINFRA_REQUEST_MAX_RETRIES', REQUEST_MAX_RETRIES, 10);
 }
 
+/** Node's fetch redirect values, kept local because this project omits DOM lib types. */
+export type FetchRedirectPolicy = 'follow' | 'error' | 'manual';
+
 function getStreamIdleTimeoutMs(): number {
   return readPositiveIntEnv(
     'BABEL_DEEPINFRA_STREAM_IDLE_TIMEOUT_MS',
@@ -622,6 +625,26 @@ export class DeepInfraApiRunner implements LlmRunner {
     return {};
   }
 
+  /** Per-transport request timeout policy. */
+  protected getRequestTimeoutMs(): number {
+    return getRequestTimeoutMs();
+  }
+
+  /** Per-transport HTTP retry policy. */
+  protected getRequestMaxRetries(): number {
+    return getRequestMaxRetries();
+  }
+
+  /** Per-transport stream retry policy. */
+  protected getStreamMaxRetries(): number {
+    return getStreamMaxRetries();
+  }
+
+  /** Per-transport redirect policy; generic API transports retain fetch defaults. */
+  protected getRequestRedirect(): FetchRedirectPolicy {
+    return 'follow';
+  }
+
   // ── Shared request/response logic ──────────────────────────────────────────
   /**
    * Sends the prompt to the API, handles retries, and reads the response
@@ -645,9 +668,9 @@ export class DeepInfraApiRunner implements LlmRunner {
     }
 
     const isStreaming = !!callbacks?.onChunk;
-    const requestMaxRetries = getRequestMaxRetries();
-    const requestTimeoutMs = getRequestTimeoutMs();
-    const streamMaxRetries = isStreaming ? getStreamMaxRetries() : 0;
+    const requestMaxRetries = this.getRequestMaxRetries();
+    const requestTimeoutMs = this.getRequestTimeoutMs();
+    const streamMaxRetries = isStreaming ? this.getStreamMaxRetries() : 0;
     const maxAttempts = requestMaxRetries + streamMaxRetries;
 
     const buildBody = () => {
@@ -905,6 +928,7 @@ export class DeepInfraApiRunner implements LlmRunner {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
         response = await fetch(this.apiUrl, {
           method: 'POST',
+          redirect: this.getRequestRedirect(),
           signal: controller.signal,
           headers: {
             Authorization: `Bearer ${this.apiKey}`,
@@ -1111,6 +1135,7 @@ export class DeepInfraApiRunner implements LlmRunner {
           try {
             response = await fetch(this.apiUrl, {
               method: 'POST',
+              redirect: this.getRequestRedirect(),
               signal: controller.signal,
               headers: {
                 Authorization: `Bearer ${this.apiKey}`,
@@ -1453,8 +1478,8 @@ export class DeepInfraApiRunner implements LlmRunner {
   ): AsyncGenerator<ToolStreamEvent, void, undefined> {
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
-    const requestTimeoutMs = getRequestTimeoutMs();
-    const requestMaxRetries = getRequestMaxRetries();
+    const requestTimeoutMs = this.getRequestTimeoutMs();
+    const requestMaxRetries = this.getRequestMaxRetries();
     const streamIdleTimeoutMs = getStreamIdleTimeoutMs();
     const maxAttempts = requestMaxRetries;
 
@@ -1656,6 +1681,7 @@ export class DeepInfraApiRunner implements LlmRunner {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
         response = await fetch(this.apiUrl, {
           method: 'POST',
+          redirect: this.getRequestRedirect(),
           signal: controller.signal,
           headers: {
             Authorization: `Bearer ${this.apiKey}`,

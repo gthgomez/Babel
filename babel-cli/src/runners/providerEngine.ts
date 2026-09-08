@@ -15,6 +15,8 @@ import { GroqApiRunner } from './groqApi.js'
 import { OllamaApiRunner } from './ollamaApi.js'
 import { OpenAiApiRunner } from './openAiApi.js'
 import { OpenCodeApiRunner } from './openCodeApi.js'
+import { OpenCodeGoApiRunner } from './openCodeGoApi.js'
+import type { OpenCodeGoCredentialSource } from './openCodeGoCredential.js'
 import { OpenRouterApiRunner } from './openRouterApi.js'
 import {
   providerSupportsOperation,
@@ -43,6 +45,14 @@ export interface ProviderEngineOptions {
   sampling?: { maxTokens?: number; temperature?: number }
   apiKeyEnvVar?: string
   explicitCredential?: string
+  /** Explicit credential source for the opt-in OpenCode Go transport. */
+  credentialSource?: OpenCodeGoCredentialSource
+  /** In-memory credential handoff for the opt-in OpenCode Go transport. */
+  resolvedCredential?: string
+  /** Stable provider session identity for the opt-in OpenCode Go transport. */
+  sessionId?: string
+  /** Per-request timeout for the opt-in OpenCode Go transport. */
+  requestTimeoutMs?: number
   env?: NodeJS.ProcessEnv
   /** Optional immutable capability-resolved policy for this invocation lane. */
   executionEnvelope?: ResolvedExecutionEnvelope
@@ -79,6 +89,14 @@ function createAdapter(options: ProviderEngineOptions): RawLlmRunner {
       return new OpenCodeApiRunner(options.modelId, options.sampling, {
         ...(options.apiKeyEnvVar ? { apiKeyEnvVar: options.apiKeyEnvVar } : {}),
         ...credential,
+      })
+    case 'opencode-go':
+      return new OpenCodeGoApiRunner(options.modelId, options.sampling, {
+        ...(options.credentialSource ? { credentialSource: options.credentialSource } : {}),
+        ...(options.explicitCredential ? { explicitCredential: options.explicitCredential } : {}),
+        ...(options.resolvedCredential ? { resolvedCredential: options.resolvedCredential } : {}),
+        ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+        ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }),
       })
     case 'openai':
       return new OpenAiApiRunner(runtimeOptions)

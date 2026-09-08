@@ -61,7 +61,7 @@ export function getProviderCredentialStatus(
   return {
     provider,
     envVar,
-    configured: envVar === null || Boolean(env[envVar]?.trim()),
+    configured: envVar === null ? !spec.requiresCredential : Boolean(env[envVar]?.trim()),
     required: spec.requiresCredential,
   }
 }

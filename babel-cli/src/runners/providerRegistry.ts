@@ -3,6 +3,7 @@ export const PROVIDER_IDS = [
   'deepinfra',
   'deepseek',
   'opencode',
+  'opencode-go',
   'openrouter',
   'openai',
   'anthropic',
@@ -91,6 +92,15 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     protocol: 'openai_compatible',
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
+    authorityConformance: 'untested',
+  },
+  'opencode-go': {
+    id: 'opencode-go',
+    credentialEnvVar: null,
+    protocol: 'openai_compatible',
+    requiresCredential: true,
+    operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
+    // Explicit transport; credentials are resolved by the approved helper.
     authorityConformance: 'untested',
   },
   openai: {
