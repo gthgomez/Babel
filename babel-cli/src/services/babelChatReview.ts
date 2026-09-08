@@ -10,6 +10,12 @@ export const BabelChatVerdict = z.object({
   blocking_findings: z.array(z.string().min(1).max(2000)).max(100),
 }).strict();
 
+/** Normalize only one complete JSON fence; never extract JSON from prose. */
+export function parseBabelReviewJson(answer: string): unknown {
+  const fenced = /^```(?:json)?\r?\n([\s\S]*)\r?\n```$/.exec(answer.trim());
+  return JSON.parse(fenced ? fenced[1]! : answer);
+}
+
 /** A completed CLI turn is not an approval. This separate contract fails closed. */
 export function parseBabelChatVerdict(payload: Record<string, unknown>, scope: string[]) {
   if (payload['mode'] !== 'chat' || payload['terminal_outcome'] !== 'NO_CHANGE_REQUIRED' || payload['write_count'] !== 0) {
@@ -17,7 +23,7 @@ export function parseBabelChatVerdict(payload: Record<string, unknown>, scope: s
   }
   const answer = payload['answer'] as { answer?: unknown } | undefined;
   if (typeof answer?.answer !== 'string') throw new Error('CHAT_REVIEW_ANSWER_MISSING');
-  const verdict = BabelChatVerdict.parse(JSON.parse(answer.answer));
+  const verdict = BabelChatVerdict.parse(parseBabelReviewJson(answer.answer));
   // The inert snapshot mounts repository files beneath source/. Accept that
   // one known wrapper only when it maps to an exact expected repository path.
   // Real repository paths beginning source/ take precedence; never normalize

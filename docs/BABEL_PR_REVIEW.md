@@ -18,14 +18,28 @@ LongCat 2.0 in separate contexts. DeepSeek V4 Flash is also a canonical supporte
 OpenCode Go model. The model that actually answered is recorded; a configured
 name or fallback assumption is not sufficient attribution.
 
-The review adapter explicitly requests MiMo v2.5's non-thinking mode. MiMo's
-[thinking protocol](https://mimo.mi.com/docs/en-US/api/chat/openai-api)
-documents reasoning-content replay with tool-call history, which the
-current Babel message schema does not implement. This compatibility setting
-does not change the selected model/provider or the other canonical models.
-Invocation metadata records the requested setting, not proof of the upstream's
-effective mode. Full reasoning-history support needs separate implementation
-and comparison testing before enabling it for this lane.
+The review/repair adapter explicitly requests `thinking: {type: "disabled"}`
+for all three canonical models, without changing ordinary transport defaults.
+[MiMo's protocol](https://mimo.mi.com/docs/en-US/api/chat/openai-api) documents
+reasoning-content replay; [DeepSeek's thinking/tool protocol](https://api-docs.deepseek.com/guides/thinking_mode/)
+requires it. Babel's current message schema cannot represent that history.
+[LongCat documents the same toggle and thinking-on default](https://longcat.ai/platform/docs/open-code);
+its separate compatibility reason is observed reasoning-only output-budget
+exhaustion, not an established mandatory replay requirement. Invocation metadata
+records the requested setting and model-specific reason, **not proof that the
+OpenCode Go upstream applied it**. Qualification must exercise actual chat tool
+round trips and final JSON before using a profile for PR evidence. Preserve a
+separate reasoning-enabled research lane: implement full history/replay protocol,
+then compare labeled review quality and efficiency against this compatibility
+profile before promoting it. Non-thinking completion alone does not establish
+review quality or approval.
+
+Review and repair parsers accept plain JSON or one whole-document, newline-delimited
+Markdown fence with only an empty or `json` language tag. They remove only that
+wrapper before strict JSON/schema validation; prose, extra fences, unknown tags
+and truncated JSON remain invalid. Raw answers are retained unchanged, as are
+findings, blockers and exact replacement strings. This formatting normalization
+does not relax provider completion, exact scope or independent-review checks.
 
 Verdict paths use exact repository-relative scope. A single `source/` snapshot
 mount prefix may be removed only when the result exactly matches that scope;
@@ -132,6 +146,14 @@ any buffered output is delivered to chat. Failed partial responses are discarded
 from delivery, never executed or treated as completed evidence. Both attempts
 remain recorded; unknown usage is not discarded. Identity, authentication and
 cancellation failures are not retried.
+
+Native responses also require a natural-completion or tool-call finish reason
+and visible text or actual tool calls. Budget exhaustion, filtering, unknown
+termination and reasoning-only/empty final output fail before any buffered
+content reaches chat, including valid-looking but truncated JSON. Failed
+inferences cannot trigger a syntax-only restatement request. Metadata retains
+the provider's original finish reason and unknown usage; no synthetic `OK` is
+accepted as review evidence.
 
 Keep per-run artifacts, tool outcomes, completion classification, requested and
 observed models, installation identity, malformed output and failed attempts in

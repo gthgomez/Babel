@@ -104,6 +104,22 @@ test('rejects binary results and oversized proposals', () => {
   assert.throws(() => parseBabelRepairProposal(payload({ ...proposal, edits: [{ ...proposal.edits[0], new_text: 'x'.repeat(2 * 1024 * 1024) }] }), ['add.ts']), /REPAIR_SIZE_LIMIT/)
 })
 
+test('whole-document repair fences preserve exact replacement strings and all validation', () => {
+  const exact = { summary: 'Preserve replacement data', edits: [{ path: 'add.ts', old_text: '  ```json\r\nold\r\n```  ', new_text: '  ```\nnew\n```\t' }] }
+  for (const language of ['', 'json']) {
+    const answer = `\`\`\`${language}\n${JSON.stringify(exact)}\n\`\`\``
+    const value = { ...payload(exact), answer: { answer } }
+    assert.deepEqual(parseBabelRepairProposal(value, ['add.ts']), exact)
+    assert.equal(value.answer.answer, answer)
+    assert.throws(() => parseBabelRepairProposal(value, ['other.ts']), /REPAIR_PATH_DENIED/)
+    assert.throws(() => parseBabelRepairProposal({ ...value, terminal_outcome: 'ENV_BLOCKED' }, ['add.ts']), /CHAT_REPAIR_NOT_COMPLETED/)
+    for (const invalid of [`Prose\n${answer}`, `${answer}\nDone`, `${answer}\n${answer}`, answer.replace(`\`\`\`${language}\n`, '```javascript\n'), `\`\`\`json\n${JSON.stringify(exact).slice(0, -1)}\n\`\`\``]) {
+      assert.throws(() => parseBabelRepairProposal({ ...value, answer: { answer: invalid } }, ['add.ts']), SyntaxError)
+    }
+  }
+  assert.throws(() => parseBabelRepairProposal({ ...payload(exact), answer: { answer: `\`\`\`json\n${JSON.stringify({ ...exact, approved: true })}\n\`\`\`` } }, ['add.ts']))
+})
+
 const harness = { source_sha: 'a'.repeat(40), version: 'b'.repeat(64), dirty: false }
 
 test('invalid exact replacements cannot become completed cached proposals and a fresh attempt follows', () => {
