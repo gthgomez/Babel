@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -11,7 +11,73 @@ import {
   grepContent,
   searchSymbols,
   handleWorkspaceSymbolSearch,
+  handleGrepTool,
 } from './repoSearch.js';
+import { resetRipgrepDetection } from './ripgrep.js';
+
+for (const fallback of [false, true]) {
+  test(`grep file/directory scopes return exact matches${fallback ? ' without ripgrep' : ''}`, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-grep-scope-'));
+    const priorPath = process.env['PATH'];
+    try {
+      mkdirSync(join(root, 'source/babel-cli/src/runners'), { recursive: true });
+      mkdirSync(join(root, 'source/babel-cli/src/runners-other'), { recursive: true });
+      const file = 'source/babel-cli/src/runners/deepInfraApi.ts';
+      writeFileSync(join(root, file), 'export class DeepInfraApiRunner {}\n');
+      writeFileSync(join(root, 'source/babel-cli/src/runners/with [brackets].ts'), 'export class OtherRunner {}\n');
+      writeFileSync(join(root, 'source/babel-cli/src/runners-other/outside.ts'), 'export class UnrelatedRunner {}\n');
+      if (fallback) { process.env['PATH'] = ''; resetRipgrepDetection(); }
+      for (const scope of [file, file.replace(/\//g, '\\'), join(root, file)]) {
+        const result = await grepContent(root, 'class', { path: scope });
+        assert.equal(result.matches.length, 1);
+        assert.equal(result.matches[0]?.path, file);
+        assert.equal(result.matches[0]?.line, 1);
+        assert.match(result.matches[0]?.text ?? '', /DeepInfraApiRunner/);
+      }
+      for (const scope of ['source/babel-cli/src/runners', 'source/babel-cli/src/runners/', 'source/babel-cli/src/runners/**']) {
+        const result = await grepContent(root, 'class', { path: scope });
+        assert.equal(result.matches.length, 2);
+        assert.ok(result.matches.every(match => !match.path.includes('runners-other')));
+      }
+      assert.equal((await grepContent(root, 'class', { path: 'source/babel-cli/src/runners/with [brackets].ts' })).matches.length, 1);
+      await assert.rejects(grepContent(root, 'class', { path: 'missing.ts' }), /ENOENT/);
+    } finally {
+      if (priorPath === undefined) delete process.env['PATH']; else process.env['PATH'] = priorPath;
+      resetRipgrepDetection();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('grep tool reports missing scope as an error, not a successful empty search', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-grep-missing-'));
+  const previousRoot = process.env['BABEL_PROJECT_ROOT'];
+  try {
+    process.env['BABEL_PROJECT_ROOT'] = root;
+    const result = await handleGrepTool({ path: 'missing.ts', pattern: 'class' });
+    assert.equal(result.exit_code, 1);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /ENOENT/);
+  } finally {
+    if (previousRoot === undefined) delete process.env['BABEL_PROJECT_ROOT']; else process.env['BABEL_PROJECT_ROOT'] = previousRoot;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('explicit grep scopes cannot escape approved roots through paths or links', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-grep-boundary-'));
+  try {
+    mkdirSync(join(root, 'project'));
+    writeFileSync(join(root, 'outside.ts'), 'export class Outside {}\n');
+    await assert.rejects(grepContent(join(root, 'project'), 'class', { path: '../outside.ts' }), /outside approved/);
+    assert.equal((await grepContent(join(root, 'project'), 'class', { path: '../outside.ts' }, [root])).matches.length, 1);
+    try { symlinkSync(root, join(root, 'project/linked-root'), 'junction'); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') { t.diagnostic('Host lacks symlink permission; path boundary verified.'); return; }
+      throw error;
+    }
+    await assert.rejects(grepContent(join(root, 'project'), 'class', { path: 'linked-root/outside.ts' }), /outside approved/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test('grepContent finds bounded matches under project root', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-grep-tool-'));

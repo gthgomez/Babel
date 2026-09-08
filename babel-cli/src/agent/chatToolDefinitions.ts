@@ -459,7 +459,7 @@ export function buildChatSystemPrompt(options: ChatSystemPromptOptions): string 
     '|------|-------------|',
     '| `read_file` | Read a file. `path`: absolute or project-relative path |',
     '| `list_dir` | List directory contents. `path`: directory path |',
-    '| `grep` | Search file contents with regex. `pattern`: regex, `path` (optional): scope directory |',
+    '| `grep` | Search file contents with regex. `pattern`: regex, `path` (optional): scope file or directory |',
     '| `glob` | Find files by glob pattern. `pattern`: eg `"src/**/*.ts"` |',
     '| `semantic_search` | Semantic repo search. `query`: natural language query |',
     '| `git_context` | Git status/diff context. `format`: summary/files/diff, optional `path` |',
@@ -906,12 +906,12 @@ export function buildChatToolDefinitions(): ToolDefinition[] {
       type: 'function',
       function: {
         name: 'grep',
-        description: 'Search file contents using a regular expression pattern, optionally scoped to a directory.',
+        description: 'Search file contents using a regular expression pattern, optionally scoped to a file or directory.',
         parameters: {
           type: 'object',
           properties: {
             pattern: { type: 'string', description: 'Regular expression pattern to search for' },
-            path: { type: 'string', description: 'Optional directory path to scope the search' },
+            path: { type: 'string', description: 'Optional file or directory path to scope the search' },
           },
           required: ['pattern'],
         },

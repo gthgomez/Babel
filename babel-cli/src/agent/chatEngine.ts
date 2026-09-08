@@ -366,7 +366,7 @@ export interface SubmitMessageOptions {
   continueTask?: boolean;
 }
 
-import { deniesReadOnlyChatAction, isReadOnlyChat, resolveChatRangePath } from './chatReadOnly.js';
+import { deniesReadOnlyChatAction, filterReadOnlyChatTools, isReadOnlyChat, resolveChatRangePath } from './chatReadOnly.js';
 
 export interface ChatEngineOptions {
   instructionRoot?: string;
@@ -2008,12 +2008,12 @@ export class ChatEngine {
         }
       } else if (useNativeTools) {
         const nextTools = this.nextTurnToolPolicy();
-        const restrictTools = nextTools.restrict;
-        const toolDefs = restrictTools
+        const restrictTools = nextTools.restrict && !isReadOnlyChat();
+        const toolDefs = filterReadOnlyChatTools(restrictTools
           ? this.services.tools.buildRestrictedDefinitions(
               nextTools.mode === 'full' ? 'act_or_verify' : nextTools.mode,
             )
-          : this.services.tools.buildDefinitions();
+          : this.services.tools.buildDefinitions());
         const nativeActions: ChatToolAction[] = [];
         const nativeToolCallIds: string[] = [];
         let answerText = '';
@@ -5936,12 +5936,12 @@ export class ChatEngine {
     resetOneShotSnapshot(this.logicalTurnToolPolicy);
     if (useNativeTools && typeof runner.executeWithToolsStream === 'function') {
       const nextTools = this.nextTurnToolPolicy();
-      const restrictTools = nextTools.restrict;
-      const toolDefs = restrictTools
+      const restrictTools = nextTools.restrict && !isReadOnlyChat();
+      const toolDefs = filterReadOnlyChatTools(restrictTools
         ? this.services.tools.buildRestrictedDefinitions(
             nextTools.mode === 'full' ? 'act_or_verify' : nextTools.mode,
           )
-        : this.services.tools.buildDefinitions();
+        : this.services.tools.buildDefinitions());
       const nativeActions: ChatToolAction[] = [];
       let answerText = '';
       const systemPrompt = this.getOrBuildSystemPrompt('native');
@@ -6151,6 +6151,9 @@ export class ChatEngine {
       executionFirst: true,
       ...(systemCtx ? { systemContext: systemCtx } : {}),
     });
+    if (isReadOnlyChat()) {
+      systemContent += '\n\nRead-only capability boundary: only read_file, read_range, list_dir, grep and glob are available. Do not request shell commands, writes, subagents or shared memory. If a read/search fails, use another available reading tool or report the missing evidence; unavailable tools cannot work around this boundary.';
+    }
 
     // Text-tools mode: keep the prompt MINIMAL. Small models cannot attend
     // to long system prompts. Skip all the extra context that cloud models use.

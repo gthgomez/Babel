@@ -129,6 +129,43 @@ Aggregate retained observations without publishing raw transcripts:
 node babel-cli/node_modules/tsx/dist/cli.mjs tools/babel-pr-metrics.mts --state-dir <private-non-git-directory>
 ```
 
+Metrics separate pending (`started`, `running`, `cli_completed`), failed and
+unknown-status artifacts. Pending does not prove that a process is still alive.
+Observed token sums and metadata cost estimates exclude missing values; a total
+estimated cost is `null` when any call lacks cost data. Estimates are not bills.
+Generic CLI `usage.totalCostUSD` and `tool_call_count` are not substitutes for
+complete provider metadata or retained `thread_events`; tool-outcome coverage
+remains explicitly unknown until those events are loaded.
+
+Record finding outcomes separately, without altering an approval or merge gate:
+
+```powershell
+node babel-cli/node_modules/tsx/dist/cli.mjs tools/babel-pr-adjudicate.mts --state-dir <private-non-git-directory> --record <private-adjudication-input-json>
+```
+
+The input is a strict JSON object with `execution_id`, an exact `candidate`
+(`repository`, `pr_number`, `base_sha`, `head_sha`), `subject` (`kind`: `finding`
+or `missed_defect`, and a stable SHA-256 `id`), `outcome` (`confirmed`,
+`false_positive`, `missed_defect` or `inconclusive`), and nonempty `evidence`
+references. Each reference has a `kind` (`test`, `reproduction`, `diff`, `review`,
+`merge` or `artifact`) and `ref`: a credential-free GitHub HTTPS URL without a
+query string, `artifact:relative/path`, or `sha256:<digest>`. Do not embed raw
+logs, credentials or transcripts. The command secret-scans the record before
+atomically appending a new UUID file under private `adjudications/` state.
+
+Optional `links` connect `repair_execution_id`, `repair_head_sha`, `test_runs`
+(reference strings), `rereview_execution_ids`, `merge_commit_sha` and `merge_ref`.
+They are operator-recorded claims; the recorder does not fetch or validate
+external test results, reviewer independence or merge state. Corrections append
+another record for the same execution, candidate and subject; summaries use the
+latest timestamp, breaking ties by record ID, while retaining earlier records.
+
+Reported finding precision is only `confirmed / (confirmed + false_positive)`
+over those labeled subjects. Inconclusive and missed-defect labels are excluded
+from that denominator. Unlabeled executions, missing execution links and invalid
+records are reported separately. Recall, total defect coverage and time to a
+verified merge remain unknown; approval counts are never accuracy scores.
+
 A harness failure is useful data, but not a passed review. Reproduce it with a
 small regression test, fix the trusted harness in its own candidate, independently
 review that change, promote its verified installation, and rerun affected PRs.

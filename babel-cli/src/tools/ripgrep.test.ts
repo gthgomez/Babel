@@ -3,11 +3,8 @@
  *
  * Pattern: node:test + node:assert/strict (see chronicleMemory.test.ts).
  *
- * NOTE: In this environment, `rg` is available as a bash function routing
- * through claude.exe rather than as a standalone Windows executable on the
- * system PATH. This means detectRipgrep() correctly returns false, and
- * grepContent/globPaths fall through to the pure-JS fallback. Tests validate
- * both code paths: ripgrep when available, and the pure-JS fallback always.
+ * Standalone rg availability is detected per host. Shell functions/shims are
+ * not invoked; callers use the pure-JS fallback when no executable is present.
  */
 
 import assert from 'node:assert/strict';
@@ -58,6 +55,20 @@ describe('ripgrep detection', () => {
 });
 
 describe('ripgrep wrapper (when available)', () => {
+  it('treats regex alternation, shell metacharacters and leading dashes as data', async t => {
+    if (!detectRipgrep()) { t.skip('Standalone rg unavailable'); return; }
+    const fixture = makeTempFixture();
+    try {
+      const file = path.join(fixture.root, 'src', 'argument [data].ts');
+      writeFileSync(file, 'hello\ngoodbye\n--hidden\nhello & echo not-a-command\n');
+      const alternation = await ripgrep(fixture.root, { pattern: 'hello|goodbye', paths: [file] });
+      assert.equal(alternation.matches.length, 3);
+      assert.equal((await ripgrep(fixture.root, { pattern: '--hidden', paths: [file] })).matches.length, 1);
+      assert.equal((await ripgrep(fixture.root, { pattern: 'hello & echo not-a-command', fixedStrings: true, paths: [file] })).matches.length, 1);
+      await assert.rejects(ripgrep(fixture.root, { pattern: '[', paths: [file] }), /ripgrep failed/);
+      await assert.rejects(ripgrep(fixture.root, { pattern: 'class', paths: [path.join(fixture.root, 'missing.ts')] }), /ripgrep failed/);
+    } finally { fixture.cleanup(); }
+  });
   it('ripgrep basic match — finds known text in source files', async () => {
     if (!detectRipgrep()) {
       return;

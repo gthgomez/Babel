@@ -47,6 +47,7 @@ import {
   type TaskContractV1,
 } from './taskContract.js';
 import type { BabelMode } from '../executor/contracts.js';
+import { renameCheckpointSync, writeCheckpointFileSync, type AtomicCheckpointRenameOptions } from '../utils/atomicCheckpointFile.js';
 
 export const INSTRUCTION_MANIFEST_FILENAME = 'instruction-manifest.json';
 export const TASK_CONTRACT_FILENAME = 'task-contract.json';
@@ -65,15 +66,14 @@ export function writeCheckpointJournal(
   runDir: string,
   journal: CheckpointJournal,
 ): void {
-  writeFileSync(
+  writeCheckpointFileSync(
     join(runDir, CHECKPOINT_JOURNAL_FILENAME),
     JSON.stringify(journal, null, 2),
-    'utf-8',
   );
 }
 
 /** Recover an interrupted multi-artifact checkpoint before reading session state. */
-export function recoverCheckpointArtifacts(runDir: string): void {
+export function recoverCheckpointArtifacts(runDir: string, renameOptions?: AtomicCheckpointRenameOptions): void {
   const journalPath = join(runDir, CHECKPOINT_JOURNAL_FILENAME);
   if (!existsSync(journalPath)) return;
   let journal: CheckpointJournal;
@@ -117,14 +117,27 @@ export function recoverCheckpointArtifacts(runDir: string): void {
       );
     }
   };
+  // Do not consume backups until every primary is restored. A later sharing
+  // failure must leave this entire recovery repeatable, including prior targets.
   for (const filename of journal.targets) {
     const target = join(runDir, filename);
     const tmp = `${target}.${journal.batch_id}.tmp`;
     const bak = `${target}.${journal.batch_id}.bak`;
     if (journal.status === 'prepared' && journal.backups_ready) {
-      if (existsSync(bak)) copyFileSync(bak, target);
+      if (existsSync(bak)) {
+        copyFileSync(bak, tmp);
+        renameCheckpointSync(tmp, target, renameOptions);
+      }
       else if (!existsSync(tmp) && existsSync(target)) remove(target);
     }
+  }
+  // Once restoration is complete, atomically switch to cleanup-only recovery.
+  // A cleanup interruption can no longer mistake a restored primary for a new one.
+  writeCheckpointJournal(runDir, { ...journal, status: 'committed' });
+  for (const filename of journal.targets) {
+    const target = join(runDir, filename);
+    const tmp = `${target}.${journal.batch_id}.tmp`;
+    const bak = `${target}.${journal.batch_id}.bak`;
     remove(tmp);
     remove(bak);
   }

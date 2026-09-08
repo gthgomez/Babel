@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import { writeCheckpointFileSync } from '../utils/atomicCheckpointFile.js';
 
 export const THREAD_EVENT_LOG_VERSION = 1 as const;
 
@@ -578,11 +579,10 @@ export async function persistThreadEventLog(
   runDir: string,
   log: ThreadEventLog,
 ): Promise<string> {
-  const { writeFile, mkdir } = await import('node:fs/promises');
-  const { join } = await import('node:path');
-  await mkdir(runDir, { recursive: true });
   const path = join(runDir, THREAD_EVENT_LOG_FILENAME);
-  await writeFile(path, serializeThreadEventLog(log), 'utf-8');
+  // Complete before returning the Promise: strict multi-artifact checkpoints
+  // must never race an outstanding async writer holding this primary open.
+  writeCheckpointFileSync(path, serializeThreadEventLog(log));
   return path;
 }
 
