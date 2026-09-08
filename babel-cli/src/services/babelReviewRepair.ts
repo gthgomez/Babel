@@ -5,6 +5,7 @@ import { dirname, join, parse, resolve } from 'node:path'
 import { z } from 'zod'
 import { safeReviewPath, secretRiskReviewPath } from './babelReviewSnapshot.js'
 import { atomicReviewJson } from './babelReviewQueue.js'
+import { parseBabelReviewJson } from './babelChatReview.js'
 
 const maximumBytes = 2 * 1024 * 1024
 export const BabelRepairProposal = z.object({
@@ -32,7 +33,7 @@ export function parseBabelRepairProposal(payload: Record<string, unknown>, scope
   if (payload['mode'] !== 'chat' || payload['terminal_outcome'] !== 'NO_CHANGE_REQUIRED') throw new Error('CHAT_REPAIR_NOT_COMPLETED')
   const answer = payload['answer'] as { answer?: unknown } | undefined
   if (typeof answer?.answer !== 'string') throw new Error('CHAT_REPAIR_ANSWER_MISSING')
-  return validateProposal(JSON.parse(answer.answer), scope)
+  return validateProposal(parseBabelReviewJson(answer.answer), scope)
 }
 
 function validateProposal(value: unknown, scope: string[]): BabelRepairProposalValue {

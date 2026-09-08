@@ -6,7 +6,7 @@ import { ChatEngine } from '../babel-cli/src/agent/chatEngine.js';
 import { runCliChatTask } from '../babel-cli/src/interactive/execution/chatCore.js';
 import { isOpenCodeGoModel } from '../babel-cli/src/runners/openCodeGoApi.js';
 import { babelReviewModelPolicy, babelReviewPrompt, parseBabelChatVerdict } from '../babel-cli/src/services/babelChatReview.js';
-import { ObservedBabelReviewRunner, validateBabelReviewCalls } from '../babel-cli/src/services/babelReviewObserver.js';
+import { ObservedBabelReviewRunner, parseObservedBabelReviewAnswer, validateBabelReviewCalls } from '../babel-cli/src/services/babelReviewObserver.js';
 import { babelRepairPrompt, parseBabelRepairProposal } from '../babel-cli/src/services/babelReviewRepair.js';
 
 const source = process.env['BABEL_PROJECT_ROOT'];
@@ -33,7 +33,7 @@ try {
     engineFactory: options => engine ??= new ChatEngine({ ...options, runId: manifest.execution_id, providerRunner: runner, providerPolicy: babelReviewModelPolicy(model, trustedRoot), appendSystemPrompt: 'Integration output contract: this read-only investigation ends with exactly one JSON object matching the requested integration schema. No prose, Markdown fences, or trailing characters. Do not change findings or proposed replacements merely to satisfy formatting.' }),
   });
   const repair = purpose === 'repair_proposal';
-  const parseAnswer = (payload: Record<string, unknown>) => repair ? parseBabelRepairProposal(payload, manifest.scope) : parseBabelChatVerdict(payload, manifest.scope);
+  const parseAnswer = (payload: Record<string, unknown>) => parseObservedBabelReviewAnswer(calls, model, () => repair ? parseBabelRepairProposal(payload, manifest.scope) : parseBabelChatVerdict(payload, manifest.scope));
   let result = await run(repair ? babelRepairPrompt(manifest.scope) : babelReviewPrompt(manifest.scope));
   attempts.push(result.payload);
   persist({ status: 'cli_completed', payload: result.payload, attempts, cli_exit_code: result.exitCode });

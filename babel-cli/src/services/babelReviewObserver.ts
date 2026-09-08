@@ -23,6 +23,12 @@ export function validateBabelReviewCalls(calls: unknown, model: string): void {
   }
 }
 
+/** A failed inference must not become a syntax-only repair request. */
+export function parseObservedBabelReviewAnswer<T>(calls: unknown, model: string, parse: () => T): T {
+  validateBabelReviewCalls(calls, model);
+  return parse();
+}
+
 /** Observe every inference entrypoint, including failed and non-native calls. */
 export class ObservedBabelReviewRunner extends OpenCodeGoApiRunner {
   constructor(private readonly reviewModel: OpenCodeGoModel, private readonly record: (call: BabelReviewCall) => void, options: OpenCodeGoRunnerOptions = {}) {
@@ -30,16 +36,16 @@ export class ObservedBabelReviewRunner extends OpenCodeGoApiRunner {
   }
   protected override getRequestBodyExtras(): Record<string, unknown> {
     const extras = super.getRequestBodyExtras();
-    // MiMo thinking requires reasoning_content on historical tool-call messages.
-    // The current provider-neutral history cannot replay it; use the documented
-    // non-thinking mode here without changing general transport/model defaults.
-    // https://platform.xiaomimimo.com/docs/en-US/usage-guide/passing-back-reasoning_content
-    return this.reviewModel === 'mimo-v2.5' ? { ...extras, thinking: { type: 'disabled' } } : extras;
+    // Explicit review/repair compatibility profile, not a general model default.
+    // MiMo/DeepSeek document reasoning replay that our history cannot represent;
+    // LongCat has measured reasoning-only output exhaustion (replay requirement unknown).
+    // Provider-specific references and qualification limits: docs/BABEL_PR_REVIEW.md.
+    return { ...extras, thinking: { type: 'disabled' } };
   }
   override getLastInvocationMetadata(): ReviewInvocationMetadata | null {
     const metadata = super.getLastInvocationMetadata();
-    if (!metadata || this.reviewModel !== 'mimo-v2.5') return metadata;
-    return { ...metadata, requested_thinking: { type: 'disabled' }, thinking_disabled_reason: 'reviewer_missing_reasoning_content_replay', thinking_mode_evidence: 'request_only_not_upstream_confirmed' };
+    if (!metadata) return metadata;
+    return { ...metadata, requested_thinking: { type: 'disabled' }, thinking_disabled_reason: this.reviewModel === 'longcat-2.0' ? 'reviewer_observed_reasoning_only_output_exhaustion' : 'reviewer_missing_reasoning_content_replay', thinking_mode_evidence: 'request_only_not_upstream_confirmed' };
   }
   private finish(path: string, started: number, completed: boolean) {
     this.record({ path, status: completed ? 'completed' : 'failed', elapsed_ms: Date.now() - started, metadata: this.getLastInvocationMetadata() });
@@ -85,6 +91,17 @@ export class ObservedBabelReviewRunner extends OpenCodeGoApiRunner {
         signal?.throwIfAborted();
         if (!failure && !buffered.some(event => event.type === 'done')) failure = { type: 'error', message: 'CHAT_REVIEW_NATIVE_COMPLETION_MISSING' };
         const metadata = this.getLastInvocationMetadata();
+        // Transport completion is not usable model completion. In particular,
+        // never deliver even valid-looking JSON or tool calls from a length stop.
+        if (!failure && !['NATURAL_COMPLETION', 'TOOL_CALL'].includes(metadata?.normalized_finish_reason ?? '')) {
+          failure = { type: 'error', message: 'CHAT_REVIEW_NATIVE_TERMINATION_INVALID' };
+        }
+        if (!failure && metadata?.normalized_finish_reason === 'TOOL_CALL' && !buffered.some(event => event.type === 'tool_use')) {
+          failure = { type: 'error', message: 'CHAT_REVIEW_NATIVE_TERMINATION_INVALID' };
+        }
+        if (!failure && !buffered.some(event => event.type === 'tool_use' || (event.type === 'text_delta' && event.text.trim().length > 0))) {
+          failure = { type: 'error', message: 'CHAT_REVIEW_NATIVE_OUTPUT_EMPTY' };
+        }
         retry = !!failure && attempt === 1 && metadata?.provider === 'opencode-go' &&
           (metadata.observed_model_id === null || metadata.observed_model_id === this.reviewModel) && (
           /^\[deepInfraApi\] (Network error|request timeout|HTTP 50[234]\b)/i.test(failure.message) ||
