@@ -685,6 +685,14 @@ function collectSpawnFiles(srcRoot: string): string[] {
 
 /** Production (non-test) files that spawn child processes. Update when adding a site. */
 const HOST_PROCESS_SURFACE = new Set([
+  // Evaluator-owned comparison processes and native harness transport.
+  'claude-babel-astra-lab/babelHarness.ts',
+  'claude-babel-astra-lab/claudeHarness.ts',
+  'claude-babel-astra-lab/frozen-evaluator.ts',
+  'claude-babel-astra-lab/runner-identity.ts',
+  'claude-babel-astra-lab/telemetry.ts',
+  'fixtures/claude-babel-astra-lab/fixtures.ts',
+  'services/reviewServiceTransport.ts',
   'agent/backgroundShell.ts',
   'agent/breakerContract.ts',
   'bridge/workspaceChanges.ts',

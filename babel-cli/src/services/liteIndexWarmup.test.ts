@@ -19,7 +19,9 @@ test('startLiteIndexWarmup indexes project root in the background', async () => 
     assert.equal(isSemanticIndexReady(root), false);
     startLiteIndexWarmup(root, (line) => statuses.push(line));
     assert.deepEqual(statuses, ['Indexing…']);
-    for (let attempt = 0; attempt < 40 && !isSemanticIndexReady(root); attempt += 1) {
+    // Readiness can be published before asynchronous pruning finishes and the
+    // completion callback runs. Wait for both independently asserted outcomes.
+    for (let attempt = 0; attempt < 40 && (!isSemanticIndexReady(root) || statuses.at(-1) === 'Indexing…'); attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     assert.equal(isSemanticIndexReady(root), true);

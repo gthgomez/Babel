@@ -46,7 +46,9 @@ function git(cwd, ...args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 }
 
-const NOW = '2026-09-05T10:00:00.000Z';
+// Validation uses the real clock, including in CLI child processes. Anchor
+// fixtures to this run so non-expiry cases cannot expire on a calendar date.
+const NOW = new Date().toISOString();
 const REPO = 'gthgomez/Babel';
 
 // ── Digest semantics match the base-rooted gate ──────────────────────────────
@@ -239,7 +241,7 @@ try {
   });
 
   check('expired manifest is rejected', () => {
-    const expired = { ...manifest, expires_at: '2026-09-05T09:00:00.000Z' };
+    const expired = { ...manifest, expires_at: new Date(Date.parse(NOW) - 3_600_000).toISOString() };
     const reasons = validateStaleness(expired, liveNow());
     assert.deepEqual(reasons, ['manifest_expired']);
   });
@@ -341,7 +343,7 @@ try {
       protected_paths: [changedProtected],
       protected_diff_digest: expectedDigest,
       generated_at: NOW,
-      expires_at: '2026-09-06T10:00:00.000Z',
+      expires_at: new Date(Date.parse(NOW) + 86_400_000).toISOString(),
       review_receipt_required: true,
       supervisor_authorization_required: true,
     };
