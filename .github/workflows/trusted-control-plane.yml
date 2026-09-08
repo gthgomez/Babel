@@ -75,10 +75,14 @@ jobs:
       github.event.comment.user.id == github.event.repository.owner.id &&
       github.event.comment.user.type == 'User' &&
       startsWith(github.event.comment.body, '<!-- babel-controller-ai-reviews-v2 -->')
+    concurrency:
+      group: trusted-control-plane-review-${{ github.event.issue.number }}
+      cancel-in-progress: false
     permissions:
       actions: write
       pull-requests: read
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       # A comment workflow has the default-branch SHA. Rerun the original
       # PR workflow so its result retains the original producer and commit.
@@ -90,6 +94,7 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number }}
         run: |
           $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
           $pr = gh api "repos/$env:GITHUB_REPOSITORY/pulls/$env:PR_NUMBER" | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $pr.state -ne 'open') { throw 'Open PR metadata unavailable.' }
           $head = [string]$pr.head.sha
@@ -98,18 +103,53 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Trusted workflow runs unavailable.' }
           $matching = @($runs.workflow_runs | Where-Object {
             $_.event -eq 'pull_request_target' -and $_.head_sha -eq $head -and
-            @($_.pull_requests | Where-Object { $_.number -eq [int]$env:PR_NUMBER }).Count -eq 1
+            @($_.pull_requests).Count -eq 1 -and $_.pull_requests[0].number -eq [int]$env:PR_NUMBER
           } | Sort-Object id -Descending)
           if ($matching.Count -eq 0) { throw 'No audit run bound to this PR head.' }
           $runId = [string]$matching[0].id
-          for ($attempt = 0; $attempt -lt 36; $attempt++) {
-            $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$runId" | ConvertFrom-Json
-            if ($LASTEXITCODE -ne 0 -or $run.head_sha -ne $head) { throw 'Audit run identity changed.' }
-            if ($run.status -eq 'completed') { break }
-            Start-Sleep -Seconds 5
+          $workflowId = [string]$matching[0].workflow_id
+          if ($runId -notmatch '^[1-9][0-9]*$' -or $workflowId -notmatch '^[1-9][0-9]*$') { throw 'Invalid audit identifiers.' }
+          function Read-MatchingAudit {
+            $value = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$runId" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or [string]$value.id -ne $runId -or
+                [string]$value.workflow_id -ne $workflowId -or $value.event -ne 'pull_request_target' -or $value.head_sha -ne $head -or
+                @($value.pull_requests).Count -ne 1 -or $value.pull_requests[0].number -ne [int]$env:PR_NUMBER) { throw 'Audit run identity changed.' }
+            return $value
           }
-          if ($run.status -ne 'completed') { throw 'Audit still running; controller must retry.' }
-          $fresh = gh api "repos/$env:GITHUB_REPOSITORY/pulls/$env:PR_NUMBER" | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $fresh.state -ne 'open' -or $fresh.head.sha -ne $head) { throw 'PR changed; review again.' }
-          gh api --method POST "repos/$env:GITHUB_REPOSITORY/actions/runs/$runId/rerun"
-          if ($LASTEXITCODE -ne 0) { throw 'Audit rerun request failed.' }
+          function Assert-CurrentPr {
+            $fresh = gh api "repos/$env:GITHUB_REPOSITORY/pulls/$env:PR_NUMBER" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $fresh.state -ne 'open' -or $fresh.head.sha -ne $head) { throw 'PR changed; review again.' }
+          }
+          $run = Read-MatchingAudit
+          $originalAttempt = [int]$run.run_attempt
+          if ($originalAttempt -lt 1) { throw 'Audit attempt unavailable.' }
+          if ($run.status -ne 'completed') {
+            # The active audit may have materialized missing evidence before
+            # waiting for peer CI. Replace only this exact PR audit, not peers.
+            Assert-CurrentPr
+            gh api --method POST "repos/$env:GITHUB_REPOSITORY/actions/runs/$runId/cancel" 2>&1 | Out-Null
+            $cancelExit = $LASTEXITCODE
+            $run = Read-MatchingAudit
+            if ($cancelExit -ne 0 -and $run.status -ne 'completed') { throw 'Audit cancellation failed; no rerun requested.' }
+            # Cancellation addresses a run, not an attempt. A concurrent
+            # manual rerun may have advanced it before our cancel arrived;
+            # settle that observed attempt too, rather than leaving it canceled.
+            $originalAttempt = [int]$run.run_attempt
+            # GitHub cancellation can take up to five minutes. Never force
+            # cancel, and never rerun until this same attempt is terminal.
+            for ($attempt = 0; $attempt -lt 72 -and $run.status -ne 'completed'; $attempt++) {
+              Start-Sleep -Seconds 5
+              $run = Read-MatchingAudit
+              if ([int]$run.run_attempt -gt $originalAttempt) { Write-Output 'Another refresh already advanced the audit.'; return }
+            }
+          }
+          if ($run.status -ne 'completed') { throw 'Audit cancellation did not settle within the bounded wait.' }
+          Assert-CurrentPr
+          $run = Read-MatchingAudit
+          if ([int]$run.run_attempt -gt $originalAttempt -or $run.status -ne 'completed') { Write-Output 'A concurrent audit refresh is already scheduled.'; return }
+          gh api --method POST "repos/$env:GITHUB_REPOSITORY/actions/runs/$runId/rerun" 2>&1 | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            $run = Read-MatchingAudit
+            if ([int]$run.run_attempt -le $originalAttempt -and $run.status -eq 'completed') { throw 'Audit rerun request failed.' }
+            Write-Output 'A concurrent audit refresh was observed; no duplicate rerun requested.'
+          }
